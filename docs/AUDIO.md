@@ -1,5 +1,12 @@
 # Audio Analysis Design
 
+> **Measured on B1 — read [R8](../research/R8-audio-signals.md) alongside this document.**
+> Three of its design assumptions did not survive contact with real footage: the Tier A speech
+> detector is only marginally better than assuming constant speech (F1 0.63 vs 0.56), ASR is
+> cheap enough at 13× realtime that holding it back as Tier B buys nothing, and on B1 audio
+> flags the *non-skiing* footage at twice the density — the opposite of what the brief wants.
+> The sections below are annotated where R8 overrides them.
+
 Audio is the **fast pass**. A one-dimensional signal at 16kHz is trivial to process compared to
 4K video: a whole bin's audio can be characterised in seconds, where the video takes minutes and
 the VLM costs money. So audio runs first, produces a temporal map of *where* things happen, and
@@ -26,6 +33,13 @@ Wind is separable, because it does not look like voice:
 So the useful primitives are **band-limited energy** (speech band, not full band), **spectral
 flatness** as a wind discriminator, and **modulation rate**. Full-band RMS on its own should not
 appear in a scoring function.
+
+> **R8:** each of these three separates speech from non-speech, but only weakly (AUC 0.62–0.65)
+> and they are correlated enough that ANDing them adds little. Measured thresholds are
+> `speech_band > -30 dBFS`, `flatness < 0.10`, `modulation > 0.35` — note the flatness value is
+> 3.5× lower than the guess this document originally implied. The wind branch itself is
+> **untested**: B1's ski footage is shot from a static or slow camera, so nothing in the bin is
+> wind-dominated. The trap is still real for at-speed helmet footage; it just isn't B1.
 
 Note also that wind level is a **quality** signal, not an interest signal — it tells us the
 moment's audio is unusable in the edit, which is a different question from whether the moment is
@@ -58,6 +72,13 @@ The RTX 5080 makes these effectively free.
 
 Start with Tier A + ASR, which is quick to stand up. Add event tagging once we can see what it
 is missing — laughter and whoops are the expected gap.
+
+> **R8:** the tiering is real but the *gating* rationale is not. `large-v3` runs at ~13×
+> realtime on the 5080, so ASR over a whole 3h project is ~14 minutes and there is no reason to
+> spend Tier A signals deciding where to point it. Run ASR over everything; Tier A earns its
+> place as quality metering (wind, silence, clipping, loudness) and onset detection, not as a
+> gate. The predicted gap is confirmed: **event tagging is now the highest-value remaining audio
+> work**, because the non-verbal reactions are what the ski clips actually contain.
 
 ## Output
 
@@ -97,6 +118,15 @@ score should fuse both, and a moment flagged by *either* modality deserves atten
 Practical consequence for the analysis policy: run audio over the whole bin first, then let the
 audio candidate list drive where the contact-sheet/VLM refinement goes. That makes the
 coarse-to-fine approach cheaper and better targeted than a purely visual search.
+
+> **R8 — the important correction.** On B1 that last paragraph is backwards. Letting the audio
+> candidate list *drive* refinement points the expensive pass at the plane, the hotel room and
+> the milk joke (12.3 candidates/min, 87 words/min) and away from the skiing the brief asks for
+> (6.0/min, 23/min). The skiing is quiet because the subject is fifty metres from the mic, not
+> because nothing is happening. So: run audio everywhere and use it as *evidence*, never as the
+> gate on where vision looks. Quiet clips need **more** visual attention, not less. Audio's win
+> on this bin is precision, not coverage — its top hits ("That goes so fucking hard", the "Whoo"
+> over the jump) are genuinely the emotional peaks, and there are only a handful of them.
 
 ## Integration with the review UI
 

@@ -10,6 +10,32 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Audio analysis pass** (`research/tools/audio_analyze.py`, `research/tools/audio_calibrate.py`)
+  and its study, **[R8](research/R8-audio-signals.md)**, run over B1's 17 non-junk clips. Tier A
+  DSP (speech-band level, spectral flatness, low/high ratio, spectral-flux onsets, 4 Hz
+  modulation, silence) plus faster-whisper `large-v3` on the GPU, emitting the AUDIO.md sidecar
+  schema: tracks at 10 Hz, transcript with word timestamps, summary with loudness, and a ranked
+  `candidates` list. CUDA in WSL2 solved without a system toolkit or sudo (pip `nvidia-*` wheels
+  preloaded via `ctypes.CDLL`); ASR runs ~13× realtime.
+
+### Changed
+- **Speech candidates now come from the transcript, not the DSP detector.** R8 measured that
+  detector against ASR at F1 0.63, versus 0.56 for the null rule "assume everyone is always
+  talking" — an edge too thin to spend candidate slots on when the words themselves are
+  available. Thresholds were also measured rather than guessed (`flatness < 0.10`, 3.5× lower
+  than AUDIO.md's design value, which the first grid pinned against its own edge). The DSP
+  tracks stay as quality metering and as the no-ASR fallback.
+- **AUDIO.md's coarse-to-fine premise is reversed for B1.** Audio flags the travel and lodge
+  footage at 12.3 candidates/min against 6.0/min for the on-mountain clips, and four times the
+  word rate — the skiing is quiet because the subject is fifty metres from the microphone. Audio
+  is therefore evidence, never the gate on where the visual pass looks; quiet clips need *more*
+  attention, not less. Documented inline in AUDIO.md and in HANDOFF's do-not-re-litigate list.
+- Onset spikes required `z>8` plus a 97th-percentile floor: at the initial `z>3` the rule fired
+  15.2×/min and attached itself to nearly every candidate, because MAD collapses in steady audio.
+  Interest markers split strong/weak after `yeah` and `dude` — the ambient register of this
+  particular trip — promoted banter to a perfect score. Both defects were found by reading the
+  ranked output, not by a metric; candidate count fell from 130 to 68 and the top of the list
+  became reactions.
 - **Audio analysis design** (docs/AUDIO.md): audio as the *fast pass* — 1D, seconds per bin,
   fully local — producing the temporal map that points the expensive visual stages. Documents
   the wind trap prominently (full-band RMS on ski footage measures wind, not interest, and would

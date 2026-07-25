@@ -1,6 +1,6 @@
 # Handoff — read this first
 
-Last updated: 2026-07-25, end of session 1 (spec + prototype tooling).
+Last updated: 2026-07-25, session 2 (audio analysis pass over B1).
 
 ## Where we are
 
@@ -42,12 +42,20 @@ informative than judging a single artifact).
 
 ## Next actions
 
-1. **Audio analysis first** — per [AUDIO.md](AUDIO.md). Local, GPU. Tier A DSP + faster-whisper.
-   Read the wind section before writing any energy heuristic.
-2. Selection over Copper's 17 non-junk clips, fusing audio candidates with keyframe context.
+1. ~~Audio analysis~~ — **done**, see [R8](../research/R8-audio-signals.md). Sidecars for all 17
+   non-junk clips at `~/work/audio/*.audio.json`; 68 candidates over the bin.
+2. **Selection over Copper's 17 non-junk clips** — next. Read R8's Result 4 first: audio
+   candidate density is *higher* on the travel footage than on the skiing, so audio is evidence,
+   not the gate. Quiet clips need more visual attention, not less.
 3. Assemble → loudness-normalize → render, with throwaway scripts (ffmpeg, no OTIO/SQLite yet).
+   Per-clip `integrated_lufs` is already measured in the sidecars (range −22.1 to −14.6 LUFS,
+   so levels do need matching).
 4. Self-critique against [R6-rubric.md](../research/R6-rubric.md) + technical checks; iterate.
 5. Bring Karl two variants.
+
+**Optional before step 2:** audio event tagging (laughter / cheering / whoops). R8 confirms it
+is the biggest audio gap, and it targets exactly the non-verbal reactions the ski clips contain.
+Skip it if selection can carry the first cut without it — it is an improvement, not a blocker.
 
 ## Findings that must not be re-litigated
 
@@ -63,6 +71,17 @@ These were measured, cost real effort, and are easy to accidentally undo:
 - **Killington is pre-curated** — files are hand-named after their content. Only its nine
   long-form clips are usable, with filenames neutralized. Copper is raw, which is why it's B1.
 - **Full-band audio RMS measures wind, not interest.** See AUDIO.md.
+- **Audio points away from the skiing on B1** (R8 Result 4): 12.3 candidates/min on the
+  travel/lodge footage vs 6.0/min on the on-mountain clips, and 4× the word rate. The skiing is
+  quiet because the subject is far from the mic. Never gate the visual pass on audio interest.
+- **The Tier A DSP speech detector is weak** (F1 0.63 vs 0.56 for "assume constant speech").
+  Speech candidates come from the ASR transcript; the DSP tracks are quality metering and a
+  no-ASR fallback. Don't rebuild it as a selector.
+- **ASR is cheap**: `large-v3` on the 5080 runs ~13× realtime, so a 3h project is ~14 min.
+  Run it over everything. CUDA works via pip `nvidia-*` wheels preloaded with `ctypes.CDLL` —
+  no system CUDA, no sudo.
+- **`yeah` and `dude` are filler in this footage, not reactions.** Scoring them as interest
+  markers put banter at the top of the candidate list. Markers must be surprising to be evidence.
 - **`drawtext` is not compiled into the installed ffmpeg** — do text composition in Pillow.
 
 ## Environment
@@ -100,6 +119,7 @@ later.
 
 | Path | What | Regenerable? |
 |---|---|---|
+| `~/work/audio/*.audio.json` | R8 audio sidecars, 17 clips + `index.json` | yes — `audio_analyze.py`, ~1 min |
 | `~/footage/copper-02-2026` | B1, 26 MP4s, 7.6GB (MP4-only) | yes, from the Windows library |
 | `~/footage/killington-01-2026` | B2, 39 files, 31GB | yes, same |
 | `/mnt/c/Users/karl/Documents/Roughcut Labeling/` | 47 contact sheets + `label.html` per bin, 17MB | yes — `contact_sheet.py` then `make_label_ui.py` |
