@@ -24,11 +24,11 @@ below is designed to be repeated continuously without user prompting.
 4. **Close out.** In one commit: the feature/study, its tests, TASKS.md status → `done`
    (or `done*` if a provisional [R#] threshold was used), CHANGELOG entry. Paste the key
    verification output (test summary, metric numbers) into the commit body.
-5. **Continue.** Return to step 1. Do not stop after one task. Stop only when: (a) every
-   `ready` item is exhausted (all remaining are `blocked` or `DECISION`), (b) you are blocked
-   on input only Karl can give (footage, labels, API key, a DECISION item), or (c) budget
-   guardrails would be exceeded. When stopping, end with a status summary: what closed, what
-   verification proved it, what's blocked and on what.
+5. **Continue.** Return to step 1. Do not stop after one task. Stop only when: (a) you have
+   reached a **checkpoint** (see below), (b) every `ready` item is exhausted (all remaining are
+   `blocked` or `DECISION`), (c) you are blocked on input only Karl can give (footage, labels,
+   API key, a DECISION item), or (d) budget guardrails would be exceeded. When stopping, end
+   with a status summary: what closed, what verification proved it, what's blocked and on what.
 
 ## Commit discipline
 
@@ -59,14 +59,41 @@ below is designed to be repeated continuously without user prompting.
 - VLM passes use the Batch API; per-shot calls use `effort: low`; the S3 skeleton agent uses
   `claude-opus-5`.
 
+## Checkpoints
+
+Four review gates are defined in docs/TASKS.md § Review checkpoints (CP1 after T3, CP2 after
+R7, CP3 after T9, CP4 after T11). At a checkpoint:
+
+1. Stop. Do not start the next phase, even if the next task is `ready`.
+2. Write `docs/notes/CP<n>-<YYYY-MM-DD>.md`: what to look at (specific files, timestamps,
+   outputs), what you concluded, what decision you need, and what you'd do next under each
+   plausible answer.
+3. Report the same summary in chat and end the session.
+
+**CP2 is a go/no-go, not a formality.** If R7 shows the analysis can't reliably surface the
+moments Karl would pick, say so plainly and recommend stopping or rethinking rather than
+proceeding to build T8–T13 on a failed premise.
+
 ## Environment notes
 
-- Windows 11, PowerShell + Git Bash available. Python via `uv`. ffmpeg/ffprobe must be on
-  PATH — if missing, that's a blocker to surface, not to work around.
+- **Linux-first** (WSL2 during prototyping, Linux box in production). Never add Windows-specific
+  code paths, drive letters, or backslash literals — see SPEC §9 for the portability rules that
+  T0b enforces.
+- Python via `uv`. ffmpeg/ffprobe must be on PATH — if missing, that's a blocker to surface,
+  not to work around.
 - Long-running local jobs (transcription, batch renders) run in the background; keep working
   on other `ready` items while they run, then verify.
 - Benchmark footage paths come from `benchmarks/bins/*.json` — never hardcode absolute media
   paths in code or tests.
+- GPU available (RTX 5080, 16GB) for ASR and any local-model experiments.
+
+## Model-version policy
+
+Model IDs are configuration, never architecture. Use the role names from `config.py`
+(`ROLE_SKELETON`, `ROLE_ANALYSIS`, `ROLE_JUDGE`); no model ID literal may appear outside that
+file, and no document should present a specific model version as load-bearing. Model families
+change faster than this project ships — anything that pins one is a maintenance bomb. The same
+applies to attribution: don't record which model authored a change, in commits, docs, or notes.
 
 ## What NOT to do
 

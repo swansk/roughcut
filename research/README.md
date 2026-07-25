@@ -17,6 +17,6 @@ Directed studies that replace assumptions with measurements. Each `RQ:` marker i
 | [R1](R1-vlm-sampling.md) | VLM sampling & model selection (within R7's winning policy) | keyframes/shot or sheet density, resolution, model tier, batch prompt | R7 + T3 shots + labeled subset of B1 | ~$5–20 |
 | [R2](R2-shot-detection.md) | Shot-detection tuning | detector, threshold, T3 F1 target | B1/B2 + human cut lists | $0 |
 | [R3](R3-asr-sizing.md) | ASR model sizing | whisper model, T4 WER target | B1 audio + 10-min reference transcript | $0 |
-| [R4](R4-gate-recall.md) | Cheap-gate recall curve | gate operating point for T5 | B1 highlight labels + T5 signals | $0 |
+| ~~R4~~ | **Deferred** — [gate recall curve](R4-gate-recall.md). Gating is off by default at the 3–5h design scale (SPEC §7): analyzing everything costs < $15, so there's no reason to accept dropped-highlight risk. Revive only if 20h bins appear. | — | — | — |
 | [R5](R5-frame-accuracy.md) | Frame-accuracy harness | how T10 renders are verified | ffmpeg only | $0 |
 | [R6](R6-quality-rubric.md) | Rough-cut quality rubric | how T13 output is judged | Karl's judgment | $0 |

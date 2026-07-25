@@ -1,4 +1,11 @@
-# R4 — Cheap-Gate Recall Curve
+# R4 — Cheap-Gate Recall Curve  *(DEFERRED)*
+
+> **Not scheduled.** Sizing against Karl's real bins put the design target at 3h typical /
+> 5h max, where analyzing every shot costs under $15 (SPEC §7). Gating exists to save money at
+> the cost of recall risk; at this scale that trade is strictly bad, so `gate_discard` is off
+> by default and this study is shelved. The protocol below stays intact for the day 20h bins
+> show up — the tier-0/1 signals it evaluates are still built (T5), just not used to discard.
+
 
 **Question:** Using only tier-0/1 signals (audio RMS, motion, speech density, duration,
 timestamp clustering), how much footage can the gate discard before it starts dropping true

@@ -14,23 +14,41 @@ Rules (enforced by [../CLAUDE.md](../CLAUDE.md)):
 ## Build order (dependency graph)
 
 ```
+T0 ─► T0b (container gate)
 T0 ─► T1 ─► T2 ─► T3 ─► T5 ─► T6 ─► T7 ─► T8 ─► T9 ─► T10 ─► T11 ─► T12 ─► T13
             └──► T4 ──────────┘
 R5 ─────────────────────────────────────────────► (T10)
-R7 ─► R1 ────────────────────────► (T7)   R2►(T3) R3►(T4) R4►(T5) R6►(T13)
+R7 ─► R1 ────────────────────────► (T7)   R2►(T3) R3►(T4) R6►(T13)
+                                          R4 = deferred (gating off by default)
+      ▲CP1 (after T3)   ▲CP2 (after R7)  ▲CP3 (after T9)  ▲CP4 (after T11)
 ```
 Research studies R1–R6 (see [../research/](../research/README.md)) can run in parallel with
 early build tasks once their prerequisite tooling exists; each study page lists what it needs.
 
 ---
 
-## T0 — Project scaffold & CI-less quality gate — `ready`
-Python project skeleton per SPEC §2, uv-managed, with test/lint plumbing.
+## T0 — Project scaffold & quality gate — `ready`
+Python project skeleton per SPEC §2, uv-managed, Linux-native, with test/lint plumbing.
 **DoD:**
 - [ ] `uv run pytest` passes (with at least one real placeholder test importing `roughcut`)
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` clean
 - [ ] `uv run roughcut --help` lists stub subcommands: `ingest`, `analyze`, `skeleton`, `render`, `cost`
-- [ ] `pyproject.toml` pins Python ≥3.12; README updated with setup steps
+- [ ] `pyproject.toml` pins Python ≥3.12; README setup steps verified on a clean WSL2/Linux shell
+- [ ] `roughcut.shell` subprocess wrapper exists (no `shell=True` anywhere) and is used by a
+      smoke test that shells out to `ffprobe -version`
+- [ ] `config.py` exposes model **roles** (`ROLE_SKELETON`, `ROLE_ANALYSIS`, `ROLE_JUDGE`) resolved
+      from env vars with defaults; grep proves no model ID literal outside `config.py`
+
+## T0b — Container image & portability gate — `blocked(T0)`
+Dockerfile + the discipline that keeps prod-portability true, per SPEC §9.
+**DoD:**
+- [ ] `docker build` produces an image with a pinned ffmpeg major version (`ffmpeg -version` in-image asserted)
+- [ ] `docker run <img> pytest` — full suite green inside the container
+- [ ] Portability lint passes: no absolute media paths, no drive letters, no `shell=True`,
+      no `os.sep` assumptions (a test greps the tree for these)
+- [ ] GPU invocation documented (`--gpus all` + `nvidia-container-toolkit`); CPU-only path is
+      what tests exercise, GPU path is documented not asserted
+- [ ] Image builds from a clean checkout with no host state (verified via `docker build --no-cache`)
 
 ## T1 — Media probe → manifest — `blocked(T0)`
 ffprobe wrapper producing `media` rows incl. VFR flag and log-profile detection.
@@ -64,13 +82,16 @@ faster-whisper over proxy audio → `transcript_segments` + FTS.
 - [ ] Word-level timestamps present; segment FTS query returns expected hits in test
 - [ ] Runs on Karl's machine within R3's measured runtime envelope (documented, not asserted)
 
-## T5 — Cheap signals + gate — `blocked(T3, T4)`
-Tier-0/1 signals per shot; gating decision for the VLM pass.
+## T5 — Cheap signals — `blocked(T3, T4)`
+Tier-0/1 signals per shot. **Gating is off by default** (SPEC §7 — at 3–5h scale, analyzing
+everything costs under $15, so we don't take dropped-highlight risk to save pennies). Signals
+still matter: they order the analysis queue and feed scoring and audio-quality flags.
 **DoD:**
 - [ ] `audio_rms`, `motion`, `speech_density`, `audio_flags` populated for 100% of shots on fixtures
 - [ ] Silence/clipping fixtures flagged correctly (constructed test clips)
-- [ ] `[R4]` Gate keeps ≥95% of human-marked highlights on B1 while discarding ≥50% of footage (provisional operating point until R4)
-- [ ] Gate decisions persisted (`gated_out`), reversible without recompute
+- [ ] Ranking function orders shots by combined signal; unit-tested on synthetic signal sets
+- [ ] `gate_discard` defaults to off; when a threshold *is* set, decisions persist in
+      `gated_out` and are reversible without recompute (tested both ways)
 
 ## T6 — Index & query API — `blocked(T0)` (schema can precede T3/T4 data)
 SQLite schema, migrations, typed query helpers.
@@ -136,7 +157,39 @@ The Phase 1 exit test.
 
 ---
 
-## DECISION items (Karl)
-- **D1 — Benchmark footage:** which 2–3 bins to register as B1/B2/B3 (suggest: a ski-trip bin as B1). Needed before R2/R3/R4/R1 measurements and T3+ real-footage DoDs. See [../benchmarks/README.md](../benchmarks/README.md).
-- **D2 — Budget cap:** confirm $50 default / $100 hard fail per project (SPEC §7).
-- **D3 — ASR hardware:** confirm GPU availability on the dev machine for R3 (whisper sizing).
+## Review checkpoints
+
+A checkpoint means: **stop, write a review note in `docs/notes/CP<n>-<date>.md`, and do not
+start the next phase until Karl says go.** The note states what to look at, what the agent
+concluded, and the specific decision being asked for. The point is to catch a wrong turn in
+hour one rather than hour six.
+
+| # | After | What Karl reviews | Why it's a gate |
+|---|---|---|---|
+| **CP1** | T3 (ingest + shot detection on B1) | The shot list for Killington: are the boundaries sane, is anything badly over/under-segmented? | Everything downstream is keyed to shot IDs. Bad shots ⇒ bad everything, silently. |
+| **CP2** | R7 (analysis policy bake-off) | The candidate highlight list vs. your own instinct for that footage | **The thesis gate.** If the analysis can't find the moments you'd pick, T8–T13 are wasted work. This is the checkpoint that can cancel the project. |
+| **CP3** | T9 (first skeleton) | The proposed story structure for a real bin | Cheap to redirect before render machinery is built on top. |
+| **CP4** | T11 (first rendered cut with audio) | The first watchable output | First point where quality is judgeable end-to-end rather than in pieces. |
+
+Agent behavior at a checkpoint is defined in [../CLAUDE.md](../CLAUDE.md) § Checkpoints.
+
+## DECISION items
+
+**Resolved:**
+- **D1 — Benchmark footage:** ✅ **B1 = Killington 01-2026** (largest bin, ~31GB, GoPro with
+  `.LRV` proxies already present). B2 = Copper 02-2026 (has paired `.WAV` files — likely
+  external mic, a useful audio stress case). B3 = Mt. Marcy 02-2025, held out.
+- **D2 — Budget cap:** ✅ Rescaled to **$15 default / $40 hard fail** after the 3h-typical /
+  5h-max sizing (SPEC §7). Gating turned off by default as a consequence.
+- **D3 — ASR hardware:** ✅ RTX 5080 Laptop, 16GB VRAM. `large-v3` is comfortably in reach;
+  R3 tests float16 GPU as the primary path. Also makes a local VLM viable for R7's optional arm.
+- **D4 — Platform:** ✅ Linux-first, developed in WSL2, container-ready from day 1 (SPEC §9).
+
+**Open:**
+- **D5 — Footage location:** copy B1 into the WSL2 ext4 filesystem (~31GB, fast) vs. move the
+  whole library to the Linux SSD box now. Affects only where `benchmarks/bins/B1.json` points.
+- **D6 — Labeling scope:** recommend starting with **highlights only, 30–45 min of B1** to
+  unblock R7/CP2, and expanding to full cut lists + reference transcript only after the thesis
+  gate passes. Full labeling before CP2 risks being wasted effort.
+- **D7 — Git remote:** repo is local-only. Recommend a private GitHub remote before real work
+  starts.

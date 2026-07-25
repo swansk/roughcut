@@ -9,7 +9,28 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Changed
+- **Linux-first, container-ready** (SPEC §9): development moves to WSL2/Linux, production
+  target is a Linux box. Portability rules (no absolute media paths, one subprocess wrapper,
+  pathlib only, env-var config, pinned ffmpeg) plus new task T0b enforcing them via a
+  Dockerfile and an in-container test run.
+- **Design scale reduced to 3h typical / 5h max** (was 20h), measured against the real footage
+  bins. Consequences: budget cap $15 default / $40 hard fail (was $50/$100); cheap-signal
+  **gating disabled by default** — analyzing everything costs less than the recall risk is
+  worth; T5 rescoped from "signals + gate" to "signals"; study R4 deferred with its protocol
+  preserved for a possible 20h future.
+- **Model IDs are configuration, not architecture**: model choices resolve through named roles
+  in `config.py` (`ROLE_SKELETON`/`ROLE_ANALYSIS`/`ROLE_JUDGE`) from env vars; no model ID
+  literal outside that file, no model-version attribution recorded in commits or docs.
+- Benchmark bins registered (D1 resolved): B1 = Killington 01-2026, B2 = Copper 02-2026,
+  B3 = Mt. Marcy 02-2025 held out. Recorded two footage findings: GoPro `.LRV` files may serve
+  as free proxies, and B2's paired `.WAV` files promote external-audio sync from Phase 3
+  speculation to likely Phase 2 work.
+
 ### Added
+- Four review checkpoints (CP1 after ingest, CP2 after R7 as an explicit thesis go/no-go,
+  CP3 after first skeleton, CP4 after first rendered cut), with defined agent stop-and-report
+  behavior in CLAUDE.md.
 - Research study R7 (analysis policy bake-off): tests uniform per-shot sampling against
   Karl's proposed coarse-to-fine adaptive search (contact sheets + recursive deep-dive,
   prototyped via Claude Code CLI sessions) and a hybrid; includes a conditional model-landscape

@@ -98,8 +98,10 @@ every downstream model prompt.
   proxies), duration, timestamp clustering. Also flags unusable audio (clipping, silence).
 - **Tier 1 (cheap, local):** faster-whisper transcription (`RQ: model size → R3`) with word
   timestamps + simple diarization; speech density per shot.
-- **Gate:** shots are ranked by tier-0/1 signals; the bottom fraction is excluded from VLM
-  analysis (`RQ: gate operating point, must keep ≥95% of true highlights → R4`).
+- **Gate (disabled by default — see §7):** at the 3–5h design scale, analyzing everything costs
+  under $15, so the default is no discard. The ranking is still computed and stored (it orders
+  the analysis queue and drives scoring), but `gate_discard` is off unless a project sets a
+  threshold. Re-enabling it for large bins is an R4 decision.
 - **Tier 2 (paid):** VLM analysis of surviving footage. The default hypothesis is K keyframes
   per shot at resolution R, one request per shot via the **Batch API** (50% discount; not
   latency-sensitive). A competing policy — coarse contact-sheet sampling with recursive
@@ -200,8 +202,14 @@ CREATE TABLE cost_ledger (
 
 ## 6. Model usage (Claude API)
 
-- SDK: official `anthropic` Python SDK. Default model **`claude-opus-5`** for the skeleton
-  agent (S3), where judgment quality matters most.
+> **Model IDs are configuration, not architecture.** Every model choice below lives in
+> `config.py` as a named role (`ROLE_SKELETON`, `ROLE_ANALYSIS`, `ROLE_JUDGE`) overridable by
+> environment variable. Model families change faster than this project will ship; no model ID
+> may be hardcoded at a call site, and no document should treat a specific version as load-bearing.
+> The IDs named here are today's defaults, not commitments.
+
+- SDK: official `anthropic` Python SDK. Default for the skeleton agent role (S3), where
+  judgment quality matters most, is the current top-tier Claude model.
 - Tier-2 VLM pass model is an **R1 study output**, comparing `claude-haiku-4-5` /
   `claude-sonnet-5` / `claude-opus-5` on description quality and highlight agreement vs cost.
   R7 additionally holds a conditional arm on whether the *dense* pass (perception) could use a
@@ -217,14 +225,25 @@ CREATE TABLE cost_ledger (
   High-res images cost up to ~4,784 tokens each; downsampled keyframes (~768px) far less —
   keyframe resolution is an explicit R1 variable.
 
-## 7. Cost budget (hard requirement)
+## 7. Cost budget
 
-- **Default cap: $50 inference per 20h project; hard fail at $100.** Configurable per project.
-- Envelope math (to be replaced by R1/R4 measurements): 20h ≈ 2,000–5,000 shots; gate discards
-  ≥50%; ~1,500–2,500 shots × K keyframes ≈ 2–8M input tokens ⇒ $5–40 on Sonnet-tier batch.
-  Naive full-coverage high-res VLM would exceed $1,000 — this is why the hierarchy is mandatory.
+**Design target: 3h typical, 5h maximum per project** (measured against Karl's real bins —
+Killington 01-2026 is the largest at ~31GB). This is far below the 20h figure the pipeline was
+originally sized for, and it changes the economics enough to simplify the design:
+
+- Envelope at 5h: ~500–1,000 shots × ~3 keyframes at 768px ≈ 4M input tokens ⇒ roughly **$8 on
+  Sonnet-tier batch, ~$14 on Opus-tier** — analyzing *every* shot, with no gating at all.
+- **Therefore gating is an optimization, not a requirement** (see §3 S2). Default behavior is
+  to analyze everything; the cheap signals still run because scoring and audio-quality flags
+  need them, but they do not discard footage by default. This removes the gate's
+  dropped-highlight risk entirely at current scale.
+- **Default cap: $15 per project; hard fail at $40.** Configurable. The cap exists to catch
+  runaway loops and misconfiguration, not to force architectural compromises.
 - `roughcut cost report` prints the ledger per stage; the E2E benchmark task (T13) asserts the
   cap held.
+
+If a future use case genuinely brings 20h bins, re-enable gating via R4 — the study and the
+signal plumbing remain available.
 
 ## 8. Verification strategy (feeds every DoD)
 
@@ -238,11 +257,40 @@ CREATE TABLE cost_ledger (
 - **Benchmarks**: quality metrics (shot-detection F1, highlight recall, WER) run against
   human-labeled bins registered per [../benchmarks/README.md](../benchmarks/README.md).
 
-## 9. Dependencies
+## 9. Environment, portability & deployment
 
-Python 3.12+, uv, ffmpeg/ffprobe (system), PySceneDetect, faster-whisper, opentimelineio,
-anthropic, typer, pytest, ruff, jsonschema. Windows-first (Karl's machine), but no
-platform-specific code paths — subprocess calls go through one wrapper.
+**Linux-first from commit 1.** The pipeline is headless Python driving ffmpeg and CUDA — there
+is nothing Windows-specific about it, and the production target is a Linux box. Prototyping on
+Windows and porting later would mean paying a path/shell/CUDA-setup tax twice for no benefit.
+
+**Development environment: WSL2 on the Windows machine.** This is a genuine Linux userland
+(so the code is Linux code from the first commit), while keeping the RTX 5080 available via
+CUDA-on-WSL2 and the footage reachable without an immediate transfer. Copy the working bin
+into the WSL2 ext4 filesystem rather than reading across `/mnt/c` — the 9p bridge is slow
+enough to distort proxy/transcode timings. Moving later to the dedicated Linux SSD box, or
+into a container, is then a no-op rather than a port.
+
+**Container-ready from day 1; containerized at T0b.** Native dev is faster to iterate in, so
+we don't develop inside a container — but the repo carries a Dockerfile and the test suite must
+pass inside it (T0b). That catches works-on-my-machine drift while it's cheap to fix. Rules
+that keep it true:
+
+- No absolute media paths in code, tests, or fixtures — media locations come from
+  `benchmarks/bins/*.json` manifests or CLI arguments only.
+- All external-tool invocation goes through one subprocess wrapper (`roughcut.shell`); no
+  shell-string commands, no `shell=True`.
+- All paths via `pathlib`; no `os.sep` assumptions, no drive letters, no backslash literals.
+- Config and secrets via environment variables (`ANTHROPIC_API_KEY`, `ROUGHCUT_*`); never
+  read from a hardcoded location.
+- ffmpeg is pinned to a known major version in the image, and the version is recorded in run
+  records — ffmpeg behavior differences are a real source of render drift.
+
+**GPU in container** requires `nvidia-container-toolkit` on the host and `--gpus all` at run
+time; the image must therefore be CUDA-base for the ASR stage. T0b's DoD covers the CPU path
+(tests) and documents the GPU invocation without requiring it in tests.
+
+**Dependencies:** Python 3.12+, uv, ffmpeg/ffprobe (system, pinned), PySceneDetect,
+faster-whisper, opentimelineio, anthropic, typer, pytest, ruff, jsonschema.
 
 ## 10. Open research questions (RQ registry)
 
@@ -252,6 +300,6 @@ platform-specific code paths — subprocess calls go through one wrapper.
 | RQ-1 | VLM keyframes/shot (K) or sheet density, resolution (R), model tier — within R7's winning policy | T7 | [R1](../research/R1-vlm-sampling.md) |
 | RQ-2 | Shot-detection detector + threshold on real footage incl. VFR | T3 DoD target | [R2](../research/R2-shot-detection.md) |
 | RQ-3 | Whisper model size vs WER vs runtime on Karl's GPU | T4 DoD target | [R3](../research/R3-asr-sizing.md) |
-| RQ-4 | Cheap-gate operating point (recall vs discard curve) | T5 DoD target | [R4](../research/R4-gate-recall.md) |
+| RQ-4 | ~~Cheap-gate operating point~~ — **deferred**: gating is off by default at 3–5h scale (§7). Revisit only if 20h bins appear. | — | [R4](../research/R4-gate-recall.md) |
 | RQ-5 | Frame-accuracy verification method for FFmpeg renders | T10 DoD | [R5](../research/R5-frame-accuracy.md) |
 | RQ-6 | Human eval rubric for rough-cut quality | T13 DoD | [R6](../research/R6-quality-rubric.md) |

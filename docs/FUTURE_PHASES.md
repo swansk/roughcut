@@ -43,8 +43,13 @@ Requirements accumulated from P1:
 
 ## Phase 3 — Breadth & polish
 
-- **P3.1 Multicam / external audio sync** — audio cross-correlation alignment; new `sync_groups`
-  table. Deferred: none of Karl's benchmark bins are multicam (revisit if that changes).
+- **P3.1 External audio sync — PROMOTED, likely Phase 2.** The Copper bin (B2) has 26 `.WAV`
+  files paired one-to-one with its MP4s, which almost certainly means an external mic. That
+  makes this real rather than hypothetical: a rough cut that uses the camera's wind-noise track
+  when a clean mic recording exists will sound bad regardless of how well shots are chosen.
+  Confirm what the WAVs are at T1 (ffprobe), then schedule audio cross-correlation alignment
+  and a `sync_groups` table alongside P2.2 audio post. True multicam (several cameras, one
+  event) remains unscheduled.
 - **P3.2 Vertical auto-reframe (9:16)** — subject tracking + crop path. The VLM pass could
   cheaply emit a coarse subject-position hint per keyframe; consider adding that field to the
   §5.4 schema *in Phase 1* if R1 shows marginal cost is ~zero. ← flagged during spec writing.
@@ -59,6 +64,7 @@ Requirements accumulated from P1:
   become clip metadata.
 
 ## Parking lot (unscheduled ideas)
-- Tier-1.5 cheap-LLM transcript scorer if R4 shows signal-only gating drops verbal highlights.
+- Re-enable cheap-signal gating (R4) if 20h-scale bins ever appear; deferred at 3–5h scale.
+- Tier-1.5 cheap-LLM transcript scorer, if gating is ever revived and drops verbal highlights.
 - Thumbnail generation from top-interestingness frames.
 - Multi-video projects sharing one index (season/trip archive).
