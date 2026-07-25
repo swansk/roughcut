@@ -1,0 +1,9 @@
+# Linux-first project edited from Windows hosts: normalize to LF in the repo and in
+# working copies, so shell scripts and Dockerfiles stay executable in-container.
+* text=auto eol=lf
+
+# Binary-ish assets that must never be line-ending mangled
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.otio text eol=lf
