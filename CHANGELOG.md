@@ -10,6 +10,15 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Backend problems appear at launch, not 80 seconds into an Ask.** Preflight reports what is
+  knowable for free — which backend and model, a `claude` CLI missing from PATH because the
+  server was started from a non-login shell, an API backend with no key — at startup and in the
+  header. One deliberately tiny call (the cheap per-unit role, in the background, `--no-probe` to
+  skip) answers the part nothing free can see: whether the backend is authenticated. The header
+  pill shows ready / checking / the actual error, and clicking it re-checks. Startup prints now
+  flush, since stdout to a pipe is block-buffered and diagnostics would otherwise sit unseen
+  behind `uvicorn.run` for the life of the process. Measured: the probe replies "OK" in ~5s and
+  bills ~27k tokens on the CLI backend, which is the harness-overhead finding again.
 - **Ask can originate a cut, not only revise one — and it works.** `revise.originate()` is the
   same call addressed to an empty timeline, and `/api/ask` routes to it when there is nothing to
   revise. This removes the hand-authored-EDL prerequisite, the step that most made the app

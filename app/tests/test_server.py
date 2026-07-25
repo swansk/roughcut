@@ -372,6 +372,96 @@ def test_proxy_dirs_do_not_collide_between_bins(tmp_path, project):
         assert server.STATE["proxy_dir"] != first
 
 
+# ------------------------------------------------------------ backend status
+
+def test_preflight_names_the_backend_and_model_without_calling_it(client):
+    from roughcut import inference
+
+    class Exploding:
+        name = "exploding"
+
+        def complete(self, request):
+            raise AssertionError("preflight must not spend a call")
+
+    inference.set_backend(Exploding())
+    try:
+        b = client.get("/api/status").json()["backend"]
+        assert b["backend"] == "claude_cli"
+        assert "claude" in b["model"]
+        assert b["state"] in ("unknown", "ok", "failed", "checking")
+        assert b["budget_usd"] > 0
+    finally:
+        inference.set_backend(None)
+
+
+def test_preflight_catches_a_missing_api_key_before_the_call(client, monkeypatch):
+    """The two failures that are free to detect: no CLI on PATH, no API key. Both
+    used to surface ~80 seconds into an Ask."""
+    import server
+
+    monkeypatch.setenv("ROUGHCUT_BACKEND", "anthropic_api")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert "ANTHROPIC_API_KEY" in " ".join(server.backend_preflight()["problems"])
+
+    monkeypatch.setenv("ROUGHCUT_BACKEND", "claude_cli")
+    monkeypatch.setattr(server.shutil, "which", lambda name: None)
+    problems = " ".join(server.backend_preflight()["problems"])
+    assert "not on PATH" in problems and "login shell" in problems
+
+
+def test_probe_reports_a_working_backend(client):
+    from roughcut import config, inference
+
+    class Fine:
+        name = "fine"
+
+        def complete(self, request):
+            model = config.model_for(request.role)
+            assert request.role == config.ROLE_ANALYSIS, "probe uses the cheap role"
+            return inference.Result(content="OK", input_tokens=2, output_tokens=1,
+                                    backend="fine", model=model, projected_usd=1e-6,
+                                    latency_ms=42, raw="OK")
+
+    inference.set_backend(Fine())
+    inference.reset_spend()
+    try:
+        client.post("/api/backend/probe")
+        b = _await_probe(client)
+        assert b["state"] == "ok" and b["detail"] == "OK" and b["latency_ms"] == 42
+    finally:
+        inference.set_backend(None)
+
+
+def test_probe_surfaces_not_logged_in_at_launch(client):
+    from roughcut import inference
+
+    class LoggedOut:
+        name = "logged_out"
+
+        def complete(self, request):
+            raise inference.InferenceError("claude CLI error: Invalid API key · "
+                                           "Please run /login")
+
+    inference.set_backend(LoggedOut())
+    inference.reset_spend()
+    try:
+        client.post("/api/backend/probe")
+        b = _await_probe(client)
+        assert b["state"] == "failed" and "/login" in b["detail"]
+    finally:
+        inference.set_backend(None)
+
+
+def _await_probe(client, timeout=10.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        b = client.get("/api/status").json()["backend"]
+        if b["state"] not in ("checking",):
+            return b
+        time.sleep(0.05)
+    raise AssertionError("probe never finished")
+
+
 # ------------------------------------------------------------------ analyse
 
 def _stub_analyzer(script: Path, out: Path, stems: list[str]) -> list[str]:

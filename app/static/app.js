@@ -253,6 +253,7 @@ async function refreshStatus() {
     ${missing.length ? `<div style="color:var(--bad)">missing on PATH: ${missing.join(', ')}</div>` : ''}
     <div class="path">${escapeHtml(S.footage)}</div>
     <div class="path">${escapeHtml(S.edl)}${S.edl_created ? ' (new)' : ''}</div>`;
+  paintBackend(S.backend);
   const btn = $('#analyze');
   btn.textContent = S.pending.length
     ? `Analyse ${S.pending.length} clip${S.pending.length > 1 ? 's' : ''}`
@@ -260,6 +261,52 @@ async function refreshStatus() {
   btn.disabled = !S.pending.length || analysing;
   btn.classList.toggle('primary', S.pending.length > 0 && !segs.length);
   return S;
+}
+
+/* Backend status, in the header. Karl's report was that auth problems only appeared
+ * ~80s into an Ask — the worst possible moment. Preflight catches the free cases (no
+ * CLI on PATH, no API key) at launch; one tiny call catches "not logged in", which
+ * nothing free can see. */
+function paintBackend(b) {
+  const el = $('#backend');
+  const short = (b.model || '').replace(/^claude-/, '');
+  el.classList.remove('ok', 'bad');
+  if (b.problems.length) {
+    el.classList.add('bad');
+    el.textContent = `${b.backend} · not usable`;
+    el.title = b.problems.join('\n');
+    return;
+  }
+  if (b.state === 'checking') { el.textContent = `${short} · checking…`; return; }
+  if (b.state === 'failed') {
+    el.classList.add('bad');
+    el.textContent = `${short} · ${(b.detail || 'unreachable').slice(0, 40)}`;
+    el.title = b.detail;
+    return;
+  }
+  if (b.state === 'ok') {
+    el.classList.add('ok');
+    el.textContent = `${short} · ready`;
+    el.title = `${b.backend}, replied in ${(b.latency_ms / 1000).toFixed(1)}s\n` +
+      `$${b.spent_usd} of $${b.budget_usd} projected this run`;
+    return;
+  }
+  el.textContent = `${short} · unchecked`;
+  el.title = 'Click to check the backend with one small call';
+}
+
+function followProbe() {
+  const poll = setInterval(async () => {
+    const b = (await (await fetch('/api/status')).json()).backend;
+    paintBackend(b);
+    if (b.state !== 'checking') { clearInterval(poll); S.backend = b; }
+  }, 1500);
+}
+
+async function probeBackend() {
+  paintBackend({ ...S.backend, state: 'checking' });
+  await fetch('/api/backend/probe', { method: 'POST' });
+  followProbe();
 }
 
 /* The audio pass, in-app. It was step 2 of the five terminal steps between a folder
@@ -485,6 +532,9 @@ async function boot() {
     toast('building proxies in the background — previews appear as they finish', 6000);
     waitForProxies();
   }
+  $('#backend').onclick = probeBackend;
+  // the startup probe may still be in flight; follow it rather than showing "unchecked"
+  if (S.backend.state === 'checking') followProbe();
   $('#analyze').onclick = analyze;
   $('#save').onclick = save;
   $('#snap').onclick = snap;

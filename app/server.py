@@ -44,11 +44,13 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import os
 import re
 import shutil
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -57,7 +59,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 import uvicorn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from roughcut import inference, revise          # noqa: E402  (after sys.path)
+from roughcut import config, inference, revise   # noqa: E402  (after sys.path)
 
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent / "research" / "tools"
@@ -107,16 +109,16 @@ def ensure_proxies(clips: list[str]) -> None:
     pdir.mkdir(parents=True, exist_ok=True)
     todo = [c for c in clips if not (pdir / f"{Path(c).stem}.mp4").exists()]
     if todo:
-        print(f"building {len(todo)} proxies (once per clip)...")
+        print(f"building {len(todo)} proxies (once per clip)...", flush=True)
     for i, clip in enumerate(todo, 1):
         src = STATE["footage"] / clip
         if not src.exists():
-            print(f"  !! missing footage {clip}")
+            print(f"  !! missing footage {clip}", flush=True)
             continue
         build_proxy(src, pdir / f"{Path(clip).stem}.mp4", STATE["orient"])
-        print(f"  [{i}/{len(todo)}] {clip}")
+        print(f"  [{i}/{len(todo)}] {clip}", flush=True)
     STATE["proxies_ready"] = True
-    print("proxies ready")
+    print("proxies ready", flush=True)
 
 
 # ---------------------------------------------------------------- project io
@@ -232,6 +234,7 @@ def api_status() -> JSONResponse:
         "proxies_ready": STATE.get("proxies_ready", False),
         "tools": {t: shutil.which(t) is not None
                   for t in ("ffmpeg", "ffprobe", "uv")},
+        "backend": backend_preflight(),
     })
 
 
@@ -325,6 +328,78 @@ async def api_ask(request: Request) -> JSONResponse:
     except (inference.InferenceError, ValueError) as exc:
         raise HTTPException(502, str(exc)) from exc
     return JSONResponse(plan)
+
+
+# ---------------------------------------------------------------- backend
+
+
+BACKEND: dict = {"state": "unknown", "detail": "", "latency_ms": None}
+
+
+def backend_preflight() -> dict:
+    """What can be known about the backend *without* spending a call.
+
+    Karl's report: backend and auth problems only surfaced ~80 seconds into an Ask,
+    which is the worst possible moment to learn them. Most of the real failures are
+    visible for free — a CLI that is not on PATH because the server was started from a
+    non-login shell, an API backend with no key — so they are checked at launch and
+    shown in the header rather than discovered mid-call.
+    """
+    name = config.backend_name()
+    problems: list[str] = []
+    if name == "claude_cli":
+        if shutil.which("claude") is None:
+            problems.append(
+                "claude CLI not on PATH — it installs to ~/.local/bin, which a "
+                "non-login shell does not pick up. Start from `bash -l`, or set "
+                "ROUGHCUT_BACKEND=anthropic_api.")
+    elif name == "anthropic_api":
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            problems.append("ANTHROPIC_API_KEY is not set.")
+    else:
+        problems.append(f"unknown ROUGHCUT_BACKEND {name!r}")
+    return {
+        "backend": name,
+        "model": config.model_for(config.ROLE_SKELETON),
+        "problems": problems,
+        "budget_usd": config.budget_usd(),
+        "spent_usd": round(inference.spent_usd(), 4),
+        **BACKEND,
+    }
+
+
+def _probe_job() -> None:
+    """One deliberately tiny live call, to answer the question preflight cannot: is
+    this backend actually authenticated?
+
+    It runs on the cheap per-unit role rather than the skeleton role — it is proving
+    the door opens, not that the big model is available — and it is one call, which
+    matters more than its token count on a subscription where the scarce resource is
+    requests per rolling window.
+    """
+    t0 = time.time()
+    try:
+        result = inference.complete("Reply with exactly: OK",
+                                    role=config.ROLE_ANALYSIS)
+    except inference.InferenceError as exc:
+        BACKEND.update(state="failed", detail=str(exc)[:400],
+                       latency_ms=int((time.time() - t0) * 1000))
+        return
+    BACKEND.update(state="ok", detail=str(result.content).strip()[:80],
+                   latency_ms=result.latency_ms)
+
+
+def probe_backend() -> None:
+    if BACKEND["state"] == "checking":
+        return
+    BACKEND.update(state="checking", detail="", latency_ms=None)
+    threading.Thread(target=_probe_job, daemon=True).start()
+
+
+@app.post("/api/backend/probe")
+def api_backend_probe() -> JSONResponse:
+    probe_backend()
+    return JSONResponse(backend_preflight())
 
 
 # ---------------------------------------------------------------- analysis
@@ -562,6 +637,8 @@ def main() -> int:
     ap.add_argument("--work", type=Path, default=Path.home() / "work" / "app")
     ap.add_argument("--port", type=int, default=87 * 100 + 65)   # 8765
     ap.add_argument("--no-proxies", action="store_true")
+    ap.add_argument("--no-probe", action="store_true",
+                    help="skip the one-call backend auth check at startup")
     args = ap.parse_args()
 
     for tool in ("ffmpeg", "ffprobe", "uv"):
@@ -573,11 +650,22 @@ def main() -> int:
     configure(args.edl, args.footage, args.sidecars, args.work,
               proxies=not args.no_proxies, orient=args.orient)
     clips, done = footage_clips(), analysed_stems()
+    # Every print here flushes: stdout to a pipe is block-buffered, so launch
+    # diagnostics would otherwise sit unseen behind uvicorn.run for the life of the
+    # process — which defeats the point of reporting problems at launch.
     print(f"{STATE['footage']}: {len(clips)} clips, "
-          f"{sum(1 for c in clips if Path(c).stem in done)} analysed")
+          f"{sum(1 for c in clips if Path(c).stem in done)} analysed", flush=True)
     if STATE["edl_created"]:
-        print(f"new project: {STATE['edl']}")
-    print(f"cut board on http://localhost:{args.port}  (edl: {STATE['edl'].name})")
+        print(f"new project: {STATE['edl']}", flush=True)
+
+    pre = backend_preflight()
+    print(f"backend: {pre['backend']} · {pre['model']}", flush=True)
+    for problem in pre["problems"]:
+        print(f"  !! {problem}", flush=True)
+    if not args.no_probe and not pre["problems"]:
+        probe_backend()          # one call, in the background; result shows in the UI
+
+    print(f"cut board on http://localhost:{args.port}  (edl: {STATE['edl'].name})", flush=True)
     uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="warning")
     return 0
 

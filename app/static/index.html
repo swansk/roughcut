@@ -89,6 +89,10 @@
   .empty { border: 1px dashed var(--line); border-radius: 10px; padding: 28px 20px;
            text-align: center; color: var(--dim); }
   .empty h3 { color: var(--text); font-size: 15px; margin: 0 0 6px; }
+  .pill { border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px;
+          font-size: 12px; color: var(--dim); cursor: pointer; white-space: nowrap; }
+  .pill.ok { color: var(--good); border-color: #2c4c39; }
+  .pill.bad { color: var(--bad); border-color: #4c2c2c; }
   .bar { height: 5px; background: #131318; border-radius: 3px; margin-top: 8px;
          overflow: hidden; }
   .bar i { display: block; height: 100%; width: 0; background: var(--accent);
@@ -107,6 +111,7 @@
   <h1>Cut board <small id="title"></small></h1>
   <div class="total"><span id="total">—</span><span class="band" id="band"></span></div>
   <div class="grow"></div>
+  <span id="backend" class="pill" title="Backend status — click to re-check">…</span>
   <button id="snap" title="Extend cuts to whole utterances and their replies">Snap to speech</button>
   <button id="undo" title="Undo (u)">Undo</button>
   <button id="save">Save EDL</button>
