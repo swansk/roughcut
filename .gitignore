@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+
+# Env / secrets — never commit API keys
+.env
+.env.*
+
+# Media: source footage, proxies, renders, and analysis artifacts stay out of git.
+# Benchmarks live outside the repo and are referenced by manifest (see benchmarks/README.md).
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.mts
+*.m4v
+*.wav
+*.mp3
+*.flac
+proxies/
+renders/
+artifacts/
+*.db
+*.db-journal
+
+# OS noise
+Thumbs.db
+desktop.ini
+.DS_Store
