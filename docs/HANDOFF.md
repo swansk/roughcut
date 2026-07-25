@@ -2,8 +2,8 @@
 
 Last updated: 2026-07-25, end of session 3 (the app now owns the whole path — folder of
 footage → analyse → **first cut from nothing** → refine → compare versions).
-**The next session starts with a human gate: Karl watches an agent-originated cut. Jump to
-"START HERE NEXT SESSION".**
+**Karl watched the agent-originated cut and preferred it to both hand-selected ones.** The
+ordering defect he named is fixed and re-verified. Jump to "START HERE NEXT SESSION".
 
 ## Where we are
 
@@ -146,48 +146,50 @@ that *"may be a glove or a lift queue"*, and the one clip it would not gamble on
 Session 2 found the milk joke too — but that was a human reading 17 contact sheets and
 transcripts. This was one call from an empty timeline.
 
-## ⇨ START HERE NEXT SESSION: Karl watches the originated cut
+## The verdict on originating: yes (Karl, 2026-07-25)
 
-**This is a human gate, and it outranks everything else in this file.** The whole project
-question is *"can Claude compile a compelling video with good cuts from footage?"*, and the
-version of that question nobody has answered is: **is a cut the agent originated from nothing
-worth anything?** Session 2 answered "can it revise well" (yes). Watch:
+> *"I kind of liked the copper-first-cut.mp4 better than the other ones — I think a large part
+> of that was it just seemed like the cuts worked better / were longer with the right amount of
+> words in it, not cutting off sentences like some of the others. Some weirdness where airport
+> footage was cut seemingly out of order in a way that didn't make sense, but it wasn't too bad,
+> and I feel like I could refine it if I worked with the tool at all."*
 
-- `.../cuts/copper-first-cut.mp4` — **agent-originated, 2:53** ← the new one
-- `.../cuts/copper-variantB-asked.mp4` — hand-selected then agent-revised, 2:09
-- `.../cuts/copper-variantB.mp4` — hand-selected, 2:43
+**The agent-originated cut beat both hand-selected ones.** Three things follow, and none of them
+is what the metrics predicted:
 
-The useful comparison is the first against the other two: same bin, same joke found, one of them
-reached without a human reading a single contact sheet. Notes in plain language are enough —
-the board applies them.
+1. **Do not chase the snap metric.** 12 of 20 out-points landed on an utterance end when
+   originating, against 17 of 18 when revising — and Karl praised the originated cut's
+   boundaries specifically. Longer segments carrying whole thoughts beat tighter snapping. The
+   number was measuring the wrong thing. **Auto-snap on an originated plan is off the list.**
+2. **The chronology defect was real and is fixed.** It was not judgement — the model had never
+   been given a capture time. Clips now carry one, both prompts render it as relative position,
+   and a re-run took in-session backwards cuts **5 → 1**, with the survivor deliberate and
+   declared in its own notes. `.../cuts/copper-first-cut-v2.mp4`, 2:16, unwatched.
+3. **The loop is good enough to work in.** *"I could refine it if I worked with the tool"* is the
+   answer to the question that opened session 3.
 
-Under each plausible answer:
+**D8 decided: stay on `claude_cli`** — Karl, same session, *"we still need to use the cli since
+I am developing locally."*
 
-- **"This is close to the hand cut."** Then the hand-selection loop is optional, and the next
-  work is quality-of-originating: auto-snap (see below), then junk/orientation in-app so a bin
-  nobody has studied can be cut cold.
-- **"It's structurally right but rough."** Then snap-on-originate and the boundary work are the
-  next session, and the answer to "is the pipeline worth building" is probably yes.
-- **"It's flat."** Say why in one sentence — that sentence is worth more than any metric here,
-  and it likely means the visual pass (which does not exist) is the missing half rather than the
-  prompt.
+## ⇨ START HERE NEXT SESSION
 
-### Queued behind that gate
+1. **Karl watches `copper-first-cut-v2.mp4`** (2:16, agent-originated with shot order). Two
+   questions only, both from the model's own notes — it names what it cannot see:
+   - Is the ordering fixed? The travel section should now run in the order it happened.
+   - **GX010496** — 12s placed second-to-last, still the shot it cannot verify (*"if it turns
+     out to be lodge or parking-lot footage rather than a run, drop it and end on the high five
+     into the debrief"*). Ending on Spencer drinking the day-old milk is new; it may be better
+     or may be a shaggy-dog ending.
+2. **Junk and orientation proposed, human confirms** — the last ❌ in the table above, and what
+   stands between the app and a bin nobody has studied. Both are per-bin *measurements*, not
+   model calls: `luma<11` for junk (be conservative — a naive `luma<35` false-positives on the
+   night parking lot and the dim plane interior, both real content), orientation per-clip via a
+   contact sheet the human confirms. This is the work to do if there is no other steer.
+3. Music mode (FUTURE_PHASES P2.6), still unbuilt.
 
-- **Snap an originated plan.** 12 of 20 out-points landed on an utterance end when originating,
-  against 17 of 18 when revising an already-snapped cut. `edl_snap.py` fixes it in one click and
-  nothing runs it automatically on a fresh plan — but "snap everything by default" is exactly
-  the kind of silent rewrite the board avoids elsewhere, so it wants a decision, not a default.
-- **Junk and orientation proposed, human confirms** — the last row of the table still marked ❌,
-  and what stands between the app and a bin nobody has studied. Both are per-bin measurements
-  (`luma<11` for junk; orientation is per-clip and never generalisable), so this is a measuring
-  pass plus a confirm screen, not a model call.
-- **DECISION — make the API backend the app default?** HANDOFF said yes on the CLI overhead
-  finding; the number is now measured on this app's own traffic and is *weaker* than it looked.
-  A tiny probe billed ~27k tokens (all overhead) but a real Ask billed 27,960 input against a
-  ~26k-token prompt — so on coarse calls the overhead is a rounding error, not 95%. It stays
-  claude_cli until Karl decides, since switching means an API key and real per-token cost.
-- Music mode (FUTURE_PHASES P2.6), still unbuilt.
+An honest gap worth naming: **every judgement so far is on B1.** Killington is untouched,
+pre-curated, and the cleaner second test — running originate on it cold is how you find out
+whether any of this generalises or whether the prompts have been fitted to one trip.
 
 Independent work: ~~audio event tagging~~ — **done, and it is a dead end on B1**; see
 [R9](../research/R9-events-and-wind.md). The remaining audio lever is a **prosodic** rather than
@@ -240,9 +242,16 @@ These were measured, cost real effort, and are easy to accidentally undo:
   built the film around it (session 3). The words are the signal; R8 said so and this is the
   strongest evidence yet. It does not follow that the *pictures* are optional — the same call
   could not tell whether its 18s held shot was a run or a glove.
-- **An originated cut is loosely snapped** — 12 of 20 out-points on an utterance end, against
-  17 of 18 when revising an already-snapped cut. The difference is not model quality, it is that
-  the revision inherited hand-snapped boundaries. Anything comparing the two must control for it.
+- **The snap metric disagreed with the human, and the human was right.** An originated cut lands
+  12 of 20 out-points on an utterance end against 17 of 18 for a revision of an already-snapped
+  cut — and Karl preferred the originated one *for its cutting*, praising segments that were
+  "longer with the right amount of words in it". Whole thoughts beat tight boundaries. Do not
+  optimise the boundary count, and do not auto-snap an originated plan.
+- **A model with no capture times will scramble chronology, and it is not a judgement failure.**
+  The first originated cut ran 20:43 → 21:40 → 22:17 → back to 21:04 → back to 20:53 through the
+  travel section, because nothing in the prompt said what "before" meant. Giving it relative shot
+  order took in-session backwards cuts from 5 to 1. Any new prompt path that lists clips must
+  carry it.
 - **Every Claude CLI call carries ~15–21k tokens of harness overhead**, whatever you ask.
   Measured: `claude -p 'Reply with exactly: OK'` billed 2 input + 5,558 cache-creation +
   15,273 cache-read for a four-token reply. A real revision billed 25,146 input against a ~2,100
@@ -291,9 +300,10 @@ WSL2 Ubuntu 24.04, RTX 5080 (16GB, visible to WSL), 953GB free on ext4.
   [github.com/swansk/roughcut](https://github.com/swansk/roughcut), private, `main` tracking it;
   34 commits pushed. The standing risk of three sessions is gone. Media stays out of git and
   stays regenerable from `research/tools/`.
-- **D8** backend default — the app runs on `claude_cli`. Switching it to `anthropic_api` is
-  Karl's call (API key, real per-token cost); the overhead argument that motivated it is weaker
-  on this app's coarse calls than it looked. See the START HERE section.
+- **D8** backend default — **decided 2026-07-25: stay on `claude_cli`.** Karl: *"we still need
+  to use the cli since I am developing locally."* The overhead argument for switching was weaker
+  than it looked anyway — a real Ask bills ~28k input against a ~26k-token prompt, so the harness
+  overhead is a rounding error on calls this coarse, not the 95% it is for per-unit scoring.
 
 **Decided:** the first cut runs on **Copper only** (Karl, 2026-07-25). Killington stays
 untouched — it is pre-curated, and holding it back keeps it available as a cleaner second test
