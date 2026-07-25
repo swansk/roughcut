@@ -51,14 +51,21 @@ informative than judging a single artifact).
    variants verified (18 ms A/V drift, −15.5 LUFS, no black runs).
 4. ~~Self-critique against [R6-rubric.md](../research/R6-rubric.md)~~ — **done**, mean 3.75,
    one iteration applied (pacing). Stopped there on purpose.
-5. **→ Karl watches the two variants.** This is the blocking step; nothing else should start
-   until there are notes to act on.
-   - `/mnt/c/Users/karl/Documents/Roughcut Labeling/cuts/copper-variantA.mp4` — "The trip", 1:54
-   - `.../copper-variantB.mp4` — "The legend", 1:50
+5. ~~Karl watches the two variants~~ — **done, and round 1 of revision is applied.**
+   **Verdict: B is the direction.** Karl: *"you identified the core theme (milk) and then edited
+   well around it"*; the vocal-marker-driven cutting works; what's missing is story, which is
+   the human's half.
+   - `.../cuts/copper-variantB.mp4` — **"The legend", 2:43** ← the one to build on
+   - `.../cuts/copper-variantA.mp4` — "The trip", 2:24 (kept for comparison only)
 
-**After Karl's notes:** revision pass (closed loop — notes in plain language, agent applies
-them). Optional independent work: audio event tagging (laughter / cheering / whoops), which R8
-confirms is the biggest audio gap and targets the non-verbal reactions the ski clips contain.
+**Next:** Karl watches B v2 and gives notes. Then either another revision round, or — more
+valuable now — start on the app affordances, since selection is "on the right track" and the
+remaining gap is human steering. See **FUTURE_PHASES P2.5 and P2.6**, both written from Karl's
+own words this session: an interface to interject/set scene and story, fine-tuning that is *fun
+and easy*, and music-track-driven cutting as an available non-default mode.
+
+Independent work available: audio event tagging (laughter / whoops), and a **prosodic** rather
+than lexical read of excitement markers — see the open thread in the selection note.
 
 ## Findings that must not be re-litigated
 
@@ -93,6 +100,13 @@ These were measured, cost real effort, and are easy to accidentally undo:
 - **`yeah` and `dude` are filler in this footage, not reactions.** Scoring them as interest
   markers put banter at the top of the candidate list. Markers must be surprising to be evidence.
 - **`drawtext` is not compiled into the installed ffmpeg** — do text composition in Pillow.
+- **`-noautorotate` does not stop rotation metadata reaching the output.** It suppresses
+  *applying* the rotation, but the display matrix is still copied to the output stream, and
+  concat with `-c copy` inherits stream properties from the **first part** — so one spurious
+  matrix rotates an entire film. This shipped once (variant A, opening on GX010474's
+  `rotation=-90`, played sideways end to end). Use **`-display_rotation 0`** before `-i`;
+  `-metadata:s:v:0 rotate=0` is a no-op against a display matrix in ffmpeg 7. Six B1 clips carry
+  spurious rotation: 474, 484, 492, 497, 498, 499. `assemble.py` asserts against it now.
 
 ## Environment
 

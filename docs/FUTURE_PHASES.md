@@ -46,6 +46,45 @@ Requirements accumulated from P1:
 - Needs timeline diffing (OTIO→OTIO structural diff) for explainable changes.
 - The agent tools built for S3 (index queries) are reused; add timeline-edit tools.
 
+**Karl, 2026-07-25, after watching the first two cuts — this is what makes the product
+compelling, and the bar is higher than "a revision API exists":**
+
+> *"For the editor to be truly compelling (final product), it should provide an easy to use
+> interface for the human to interject / ask for edits / set the scene and story… What you will
+> need to do when you go to app is make that fine tuning **fun and easy**."*
+
+Three requirements fall out, all of which outrank raw selection quality once selection is
+merely decent:
+
+1. **Interjection, not just review.** The human sets scene and story *before and during* the
+   cut, rather than only reacting to a finished artifact. The agent found the milk thread in B1
+   by accident of thorough review; a human who could have typed "the milk is the running joke"
+   would have got there in five seconds. Cheapest highest-leverage input in the whole system —
+   same argument as the brief itself in the human-in-the-loop map.
+2. **Fine-tuning must be enjoyable.** Nudging a cut point, swapping a take, extending a beat —
+   these have to be immediate and reversible, not a re-run of the pipeline. Implies a
+   persistent timeline the UI mutates and a fast local preview, not a batch render per tweak.
+3. **Story scaffolding is a first-class input.** The gap the agent could not close on its own
+   was *connecting the dots* — B1's cut is a sequence of good moments, not a story. That is
+   where human input goes, and the UI should ask for it explicitly rather than hoping the brief
+   carries it.
+
+### P2.6 Music-driven cutting as an explicit *mode* — Karl, 2026-07-25
+> *"…along with the ability for the human to put in an audio track, which can then be used to
+> cut between the scenes — this is **not the MAIN mode**, but is a mode of editing that should
+> be available to the human."*
+
+Distinct from P2.1 (which frames music as a quality layer over an existing cut). Here the
+supplied track becomes the **cutting grid**: the human drops in a song and the edit is built to
+its beats and sections, with selection choosing what fills each slot. The "not the main mode"
+constraint is a design instruction — it must not distort the default dialogue-and-reaction-driven
+path, so it belongs as an alternative assembly strategy over the same selection output, not a
+fork of the pipeline.
+
+Notes carried over: beat/tempo extraction (librosa) and quantising cuts to the beat grid are
+already sketched in P2.1; what is new is that segment *durations* become slot-driven, which
+changes selection's contract from "pick the good bits" to "fill these N slots of these lengths".
+
 ## Phase 3 — Breadth & polish
 
 - **P3.1 External audio sync — remains unscheduled.** *(Corrected 2026-07-25.)* An earlier note

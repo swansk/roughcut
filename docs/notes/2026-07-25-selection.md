@@ -167,6 +167,83 @@ Stopped after one pass, deliberately. HANDOFF's stated failure mode is iterating
 that satisfies every checkable rule and is still flat; past this point the open questions are
 taste, which is Karl's half of the loop.
 
+## Round 2 — Karl's notes on the first two cuts
+
+Verdict: **B is better than A.** "You identified the core theme (milk) and then edited well
+around it." The marker-driven cutting is working ("the woops and yeahs and excited vocal
+variants you are using to cut footage are working quite well"). What's missing is **story —
+connecting the dots** — and that is explicitly the human's half of the loop, which is why the
+app affordances now recorded in FUTURE_PHASES P2.5/P2.6 matter more than more selection tuning.
+
+### Bug: variant A played fully rotated
+
+Real, and worse than a one-off. `-noautorotate` stops ffmpeg *applying* B1's spurious rotation,
+but the display matrix is still copied to the output stream — and concat with `-c copy` takes
+stream properties from the **first part**. Variant A opened on GX010474 (`rotation=-90`), so the
+entire film played sideways. Variant B opened on a clip with no side data and was fine. The bug
+was therefore invisible to every check I ran and depended entirely on which clip happened to be
+first.
+
+Measured, three approaches:
+
+| approach | output side data |
+|---|---|
+| `-noautorotate` (shipped) | `rotation=-90` — **leaks** |
+| `-display_rotation 0` before `-i` | none — correct |
+| `-metadata:s:v:0 rotate=0` | `rotation=-90` — no-op against a display matrix in ffmpeg 7 |
+
+Fixed with `-display_rotation 0`, plus `assert_no_rotation()` in `assemble.py`, which fails the
+render if any part or the final file carries rotation side data. Verified by decoding a frame
+from the fixed variant A with no flags at all — the way a player would — and looking at it.
+
+Six of B1's 26 clips carry spurious rotation (474, 484, 492, 497, 498, 499), so this would have
+recurred on any cut opening with one of them.
+
+### Cut boundaries now derive from the transcript
+
+Karl: *"you should be more careful to ensure that the cuts have the full conversation, you can
+use context analysis on the transcript to make sure you get closure."*
+
+New tool `research/tools/edl_snap.py` does three passes per segment against the transcript —
+move `in` back if it opens mid-utterance, extend `out` if it would cut a line off mid-delivery,
+then absorb following utterances that begin within `--gap` (1.2s) so an exchange gets its reply.
+Growth is capped at `--max-extend` (6s) because "let it finish" and "keep it tight" genuinely
+conflict, and the cap is where that trade-off is stated rather than buried.
+
+On variant B it adjusted 9 of 20 segments, +25.9s. Examples of what it caught:
+
+- the cold open was cutting "And now… **It's over**" off mid-phrase → extended, which turns out
+  to be a better button on the opening than the line I had chosen
+- `GX010483` was cutting "B-roll right there. Oh no. Spencer is not being a good person" in half
+- `GX010486` opened mid-"He's gone. He's gone. He's on a journey…"
+
+This also answers the length note — the extra dialogue is what carries B from 1:50 to **2:43**,
+inside the 2–3 min brief, without padding.
+
+### B v2, per Karl's structural note
+
+> *"One improvement to B would be starting with the 'I became the milkman today. We created a
+> legend' followed by the rest of the footy."*
+
+Applied. B now cold-opens on GX010495 1.6–13.7 — "It's been a long day… I became the milkman
+today. **We created a legend.** And now… it's over." — then hard-cuts to the airport and earns
+it back. "That goes so fucking hard" moved out of the opening into the final act, where it now
+lands with context rather than as a stray superlative.
+
+| | before | after |
+|---|---|---|
+| A "The trip" | 1:54, rotated | **2:24**, upright |
+| B "The legend" | 1:50 | **2:43** |
+
+Both re-verified: no rotation side data, 18 ms A/V drift, −15.6 / −15.7 LUFS, no black runs.
+
+### Open thread for the next round
+`edl_snap` currently treats every utterance as equally worth keeping. Karl's observation that
+the *excited* vocal markers work well suggests the opposite of what R8 concluded lexically: the
+useful distinction between filler "yeah" and reaction "yeah!" is **prosodic, not lexical** —
+pitch, energy and duration, all of which the Tier A tracks already carry per frame. Worth a
+pass before adding any more words to the marker lexicon.
+
 ## What Karl needs to decide
 
 1. **A or B** — do you want the trip with the milk in it, or the milk story that happens on a

@@ -9,7 +9,38 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Fixed
+- **A rendered cut could play fully rotated.** `-noautorotate` suppresses *applying* B1's
+  spurious rotation but the display matrix is still copied to the output stream, and concat with
+  `-c copy` inherits stream properties from the first part — so one clip's bad metadata rotated
+  an entire film. Variant A opened on `GX010474` (`rotation=-90`) and played sideways end to
+  end; variant B opened on a clip with no side data and was fine, which is why every automated
+  check passed. Fixed with `-display_rotation 0` before each input (`-metadata:s:v:0 rotate=0`
+  was measured and is a no-op against a display matrix in ffmpeg 7), plus `assert_no_rotation()`
+  in `assemble.py`, which fails the render if any part or the final file carries rotation side
+  data. Verified by decoding a frame from the fixed file with no flags — as a player would.
+
 ### Added
+- **`research/tools/edl_snap.py`** — derives cut boundaries from the transcript instead of the
+  sample grid: moves `in` back when a shot opens mid-utterance, extends `out` rather than cutting
+  a line off mid-delivery, and absorbs a following utterance within `--gap` so an exchange gets
+  its reply, bounded by `--max-extend`. On variant B it adjusted 9 of 20 segments (+25.9s) and
+  caught the cold open cutting "And now… it's over" in half. This is also what carries the cut
+  to length without padding.
+- **Phase 2 scope from Karl's review of the first cuts** (FUTURE_PHASES P2.5, new P2.6): an
+  interface for the human to interject, set scene and story, and fine-tune in a way that is *fun
+  and easy*; and human-supplied music as a **non-default** cutting grid, where segment durations
+  become slot-driven — which changes selection's contract from "pick the good bits" to "fill
+  these N slots of these lengths".
+
+### Changed
+- **Variant B recut to Karl's note and is now the direction** ("B is better than A — you
+  identified the core theme (milk) and then edited well around it"). It cold-opens on the title
+  drop — "I became the milkman today. We created a legend. And now… it's over" — then hard-cuts
+  to the airport and earns it back; "that goes so fucking hard" moves to the final act where it
+  has context. With transcript-snapped boundaries and wider dialogue segments it runs **2:43**,
+  inside the 2–3 min brief. Variant A, upright and re-rendered, runs 2:24 and is kept for
+  comparison only.
 - **The first two rough cuts exist.** `research/tools/assemble.py` renders an EDL
   (`research/edl/B1-variant{A,B}.json`) into a finished file, and both variants of the Copper
   edit are cut, rendered and verified: A "The trip" at 1:54, B "The legend" at 1:50. Selection

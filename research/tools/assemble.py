@@ -11,8 +11,17 @@ cheap enough that the waste does not matter.
 
 Two things here are not defaults and must not be "cleaned up":
 
-  * `-noautorotate` before every input. B1's rotation side-data is spurious; honouring
-    it yields sideways frames. This is per-bin and is carried in the EDL's `orient`.
+  * `-display_rotation 0` before every input when the EDL says `orient: none`. B1's
+    rotation side-data is spurious; honouring it yields sideways frames.
+
+    `-noautorotate` is NOT sufficient and shipped a rotated cut once. It stops ffmpeg
+    *applying* the rotation, but the display matrix is still copied to the output
+    stream — and since concat with `-c copy` takes stream properties from the first
+    part, one clip's spurious metadata silently rotates the entire film. Variant A
+    began with GX010474 (rotation=-90) and played sideways end to end; variant B began
+    with a clip carrying no side data and was fine. `-metadata:s:v:0 rotate=0` does not
+    fix it either — it is a no-op against display-matrix side data in ffmpeg 7.
+    `assert_no_rotation` below is the guard that makes this impossible to ship again.
   * Loudness is matched by applying a fixed per-clip gain derived from the integrated
     LUFS already measured in the R8 audio sidecars, rather than running loudnorm per
     segment. A per-segment loudnorm re-levels each cut independently, which pumps
@@ -57,7 +66,7 @@ def cut(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path,
         orient: str) -> None:
     cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin"]
     if orient == "none":
-        cmd.append("-noautorotate")                 # must precede -i
+        cmd += ["-display_rotation", "0"]           # must precede -i; see module docstring
     cmd += [
         "-ss", f"{t_in:.3f}", "-i", str(src), "-t", f"{t_out - t_in:.3f}",
         "-vf", f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
@@ -75,6 +84,28 @@ def cut(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path,
     r = run(cmd)
     if r.returncode != 0:
         raise RuntimeError(f"cut failed {src.name} {t_in}-{t_out}: {r.stderr[-400:]}")
+
+
+def rotation_of(p: Path) -> str:
+    r = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "stream_side_data=rotation", "-of", "csv=p=0", str(p)])
+    return r.stdout.strip().strip(",")
+
+
+def assert_no_rotation(p: Path, orient: str) -> None:
+    """A rendered cut must carry no rotation side data, whatever the source did.
+
+    Under `orient: none` the metadata was spurious and must not survive; under
+    `orient: auto` it was correct and has been baked into the pixels, so a matrix
+    left behind would apply it a second time. Either way its presence is a bug,
+    and it is invisible until someone plays the file — which is how it shipped.
+    """
+    rot = rotation_of(p)
+    if rot:
+        raise RuntimeError(
+            f"{p.name} carries rotation={rot} (orient={orient}). The first segment's "
+            f"display matrix has leaked into the concatenated output; players will "
+            f"rotate the whole cut.")
 
 
 def probe_duration(p: Path) -> float:
@@ -114,6 +145,7 @@ def main() -> int:
             gain = clip_gain(args.sidecars, seg["clip"]) if args.sidecars else 0.0
             dest = workdir / f"part_{i:03d}.mp4"
             cut(src, seg["in"], seg["out"], gain, dest, orient)
+            assert_no_rotation(dest, orient)        # catch it at the part, not the film
             actual = probe_duration(dest)
             parts.append(dest)
             print(f"  {i:02d} {seg['clip']} {seg['in']:6.1f}-{seg['out']:6.1f} "
@@ -128,6 +160,7 @@ def main() -> int:
         if r.returncode != 0:
             raise RuntimeError(f"concat failed: {r.stderr[-400:]}")
 
+        assert_no_rotation(args.out, orient)
         final = probe_duration(args.out)
         drift = final - planned
         print(f"\nwrote {args.out}  {final:.2f}s (planned {planned:.1f}s, "
