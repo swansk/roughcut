@@ -10,6 +10,9 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- Agent operating manual (CLAUDE.md): closed-loop session protocol — pick task → implement →
+  run DoD verification → iterate until green → commit with changelog — plus commit discipline,
+  research-before-assumption rule, and cost guardrails for multi-hour autonomous sessions.
 - Future-phase context tracker (docs/FUTURE_PHASES.md): Phase 2/3 scope with rationale and
   the design hooks Phase 1 leaves for each item; living document updated as scope is deferred.
 - Benchmark registration guide (benchmarks/README.md): bin manifests, label formats, target
