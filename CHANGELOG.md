@@ -10,4 +10,6 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- Phase 1 technical specification (docs/SPEC.md): architecture, pipeline stages S0–S6, SQLite
+  index schema, OTIO conventions, model/cost policy with hard budget cap, RQ registry.
 - Repository scaffold: README with architecture overview, .gitignore (media files excluded), this changelog.
