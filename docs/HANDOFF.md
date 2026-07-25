@@ -171,6 +171,36 @@ is what the metrics predicted:
 **D8 decided: stay on `claude_cli`** — Karl, same session, *"we still need to use the cli since
 I am developing locally."*
 
+**Chronology is a lever, not a rule** (Karl, same session: *"we don't ALWAYS need to go
+chronological"*). The first wording read as a constraint and the cut that came back was almost
+strictly in order. The guidance now says the film's order is a choice, that a strictly
+chronological cut is usually the dullest one available, and that only the *accidental* kind of
+backwards move is a mistake.
+
+## Killington is ready to run, in the app, by hand
+
+```
+uv run app/server.py --footage ~/footage/killington-neutral
+```
+
+Everything the run needs is prepared and verified:
+
+- **`~/footage/killington-neutral/`** — `CLIP_01…12` symlinked in capture order, `mapping.json`
+  beside them. The real filenames are hand-named after their content
+  (`spenny-bigair-begin`, `rockhitmarkers`), and clip names reach the prompt, so running the
+  original folder would not be a blind test — it would be scoring the agent on a human's
+  selection work.
+- 12 clips, 35s–319s, ~44 min. No junk pass needed: every clip is long-form, and the LRV/THM
+  files are filtered by extension already.
+- `--orient auto` is the default and is right here — rotation side data is present and correct
+  (unlike Copper, where it is spurious).
+- Sidecars and proxies are pre-built into the default `--work`, so the launch is instant.
+  Verified end to end on one clip first: analyse → previews → done, ASR at ~13× realtime,
+  proxy served 200.
+
+The interesting question this answers: **does any of this generalise, or have the prompts been
+fitted to one trip?** Every judgement so far is on Copper.
+
 ## ⇨ START HERE NEXT SESSION
 
 1. **Karl watches `copper-first-cut-v2.mp4`** (2:16, agent-originated with shot order). Two
@@ -180,16 +210,16 @@ I am developing locally."*
      out to be lodge or parking-lot footage rather than a run, drop it and end on the high five
      into the debrief"*). Ending on Spencer drinking the day-old milk is new; it may be better
      or may be a shaggy-dog ending.
-2. **Junk and orientation proposed, human confirms** — the last ❌ in the table above, and what
-   stands between the app and a bin nobody has studied. Both are per-bin *measurements*, not
-   model calls: `luma<11` for junk (be conservative — a naive `luma<35` false-positives on the
-   night parking lot and the dim plane interior, both real content), orientation per-clip via a
-   contact sheet the human confirms. This is the work to do if there is no other steer.
-3. Music mode (FUTURE_PHASES P2.6), still unbuilt.
-
-An honest gap worth naming: **every judgement so far is on B1.** Killington is untouched,
-pre-curated, and the cleaner second test — running originate on it cold is how you find out
-whether any of this generalises or whether the prompts have been fitted to one trip.
+2. **Karl runs Killington himself, in the app** — see the section above; it is prepared and
+   verified. What to watch for is not cut quality but whether the *loop* holds on a bin nobody
+   has studied: does it find a spine without a human having read anything, and does the brief
+   he types do the steering.
+3. **Junk and orientation proposed, human confirms** — the last ❌ in the table above. Not needed
+   for Killington (no junk in that bin), which is why it slipped behind the generalisation test.
+   Both are per-bin *measurements*, not model calls: `luma<11` for junk (be conservative — a
+   naive `luma<35` false-positives on the night parking lot and the dim plane interior, both
+   real content), orientation per-clip via a contact sheet the human confirms.
+4. Music mode (FUTURE_PHASES P2.6), still unbuilt.
 
 Independent work: ~~audio event tagging~~ — **done, and it is a dead end on B1**; see
 [R9](../research/R9-events-and-wind.md). The remaining audio lever is a **prosodic** rather than

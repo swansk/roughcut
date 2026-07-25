@@ -81,11 +81,14 @@ Things that are true of this kind of footage, and easy to get wrong from transcr
 * **Give it a shape**: something to establish where we are, a middle that builds, and
   an ending that pays off rather than just stops. Order is yours to choose; the clips
   are not obliged to appear in the order they were shot.
-* **But do not scramble a sequence of events.** Each clip says when it was recorded
-  relative to the others. Reordering for rhythm or theme is fine, and cutting between
-  sessions is fine — going *backwards* inside one continuous stretch is what reads as
-  a mistake, because the same people, place and light return in the wrong order. If
-  you do it, it should be for a reason you can name in the `why`.
+* **Order is a choice, not a record.** Each clip says when it was recorded relative to
+  the others. Use that as information, not as a rule: opening on a moment from late in
+  the trip, holding a reaction back until it pays something off, or grouping by theme
+  rather than by day are all good edits, and a strictly chronological cut is usually
+  the dullest one available. What reads as a *mistake* is only the accidental kind —
+  drifting backwards through one continuous stretch, so the same people, place and
+  light return in the wrong order for no reason. Move things deliberately; just say in
+  the `why` when you have, so the editor can tell the difference.
 * **Spread the load.** A first cut drawn from two clips is a clip reel, not a film.
 * **You cannot see the frame.** A shot may be dark, upside down, pointed at a glove,
   or ruined in a way the words do not reveal. So say what each moment is *for* in its
@@ -186,9 +189,10 @@ def build_prompt(segments: list[dict], clips: dict[str, dict], story: str,
 The full revised edit as an ordered list of segments — not a diff, not only the parts
 you changed. Keep what works; the note tells you what to change. Timestamps are
 seconds within the named clip. Prefer cutting on utterance boundaries visible in the
-transcripts above. Each clip says when it was recorded relative to the others:
-reordering for rhythm or theme is fine, but going backwards inside one continuous
-stretch reads as a mistake unless you can name the reason in the `why`."""
+transcripts above. Each clip says when it was recorded relative to the others — use it
+as information rather than as a rule. Deliberate reordering is good editing; only the
+accidental kind, drifting backwards through one continuous stretch for no reason,
+reads as a mistake. Say in the `why` when a move is deliberate."""
 
 
 def build_first_prompt(clips: dict[str, dict], story: str, note: str,

@@ -309,6 +309,24 @@ def test_both_prompts_carry_the_shot_order():
         assert "backwards" in req.prompt, "and what to do with it"
 
 
+def test_shot_order_is_information_not_a_rule():
+    """Karl, after the fix landed: "note that we don't ALWAYS need to go
+    chronological." The first version of this guidance read as a constraint, and the
+    cut that came back was almost strictly in order — a strictly chronological cut is
+    usually the dullest one available."""
+    b = use(['{"segments":[{"clip":"A.MP4","in":0,"out":2}]}',
+             '{"segments":[{"clip":"A.MP4","in":0,"out":2}]}'])
+    revise.originate(TIMED, story="x", note="")
+    revise.propose(SEGMENTS, TIMED, "x", "tighten it")
+    for req in b.requests:
+        assert "information rather than as a rule" in req.prompt \
+            or "information, not as a rule" in req.prompt
+    first = b.requests[0].prompt
+    assert "Order is a choice, not a record" in first
+    assert "dullest one available" in first
+    assert "accidental" in first, "only the accidental kind is the mistake"
+
+
 # ------------------------------------------------------------------ originate
 
 def test_originate_builds_a_cut_with_nothing_to_revise():

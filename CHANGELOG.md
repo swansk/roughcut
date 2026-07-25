@@ -10,6 +10,18 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Shot order is information, not a rule.** Karl, once the fix landed: *"note that we don't
+  ALWAYS need to go chronological."* The first wording read as a constraint and the cut that came
+  back was almost strictly in order. Rebalanced: the film's order is a choice, a strictly
+  chronological cut is usually the dullest one available, and only the *accidental* kind of
+  backwards move — drifting through one continuous stretch for no reason — is the mistake.
+  Deliberate moves just have to be named in the `why`.
+- **The Killington bin has a neutral view.** Its files are hand-named after their content
+  (`spenny-bigair-begin`, `rockhitmarkers`, `tastytrees`) — those names *are* selection work a
+  human already did, and clip names reach the prompt, so an in-app run would not have been a
+  blind test. `~/footage/killington-neutral/` holds `CLIP_01…12` symlinked in capture order with
+  a mapping file beside them. 12 clips, 35s–319s, ~44 min; rotation side data present and
+  correct on the later clips, so `--orient auto` (the default) is right for this bin.
 - **The model is told when each clip was shot, and the ordering defect goes away.** Karl on the
   first originated cut: *"some weirdness where airport footage was cut seemingly out of order in
   a way that didn't make sense."* He was right, and it was not judgement — the model had never
