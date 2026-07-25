@@ -221,6 +221,57 @@ def test_ask_shows_a_proposal_that_can_be_accepted_or_discarded(page):
         inference.set_backend(None)
 
 
+def test_an_empty_timeline_offers_a_first_cut_and_gets_one(page):
+    """The state every new project starts in. It used to be unreachable — you could
+    not open the board without an EDL — and now it is where everyone begins, so it
+    has to explain itself and lead somewhere."""
+    from roughcut import config, inference
+
+    class Scripted:
+        name = "scripted"
+        seen: list = []
+
+        def complete(self, request):
+            Scripted.seen.append(request)
+            text = json.dumps({
+                "segments": [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 2.0,
+                              "why": "opens on the greeting"},
+                             {"clip": "CLIP_B.MP4", "in": 2.4, "out": 4.0,
+                              "why": "the reply"}],
+                "notes": "read it as a conversation"})
+            model = config.model_for(request.role)
+            return inference.Result(content=text, input_tokens=10, output_tokens=5,
+                                    backend="scripted", model=model,
+                                    projected_usd=0.0001, latency_ms=1, raw=text)
+
+    inference.set_backend(Scripted())
+    inference.reset_spend()
+    try:
+        page.locator(".seg").first.click()
+        page.keyboard.press("x")
+        page.keyboard.press("x")
+        page.wait_for_selector(".empty")
+        assert page.locator(".seg").count() == 0
+        assert "No cut yet" in page.locator(".empty").inner_text()
+        assert page.locator(".step.now").inner_text().endswith("ask for one")
+        # inner_text would come back upper-cased by the panel's text-transform
+        assert page.text_content("#askTitle") == "Ask for a cut"
+
+        page.fill("#story", "")        # an earlier test may have left one behind
+        page.locator("#firstNote").fill("a loose film about two people talking")
+        page.locator("#firstCut").click()
+        page.wait_for_selector("#proposal:visible", timeout=30000)
+        assert "conversation" in page.locator("#proposalNotes").inner_text()
+
+        page.locator("#acceptProposal").click()
+        assert page.locator(".seg").count() == 2
+        # the brief is the human's half of the loop, so it is kept, not thrown away
+        assert page.input_value("#story") == "a loose film about two people talking"
+        assert "There is no edit yet" in Scripted.seen[-1].prompt
+    finally:
+        inference.set_backend(None)
+
+
 def test_ask_failure_is_reported_not_swallowed(page):
     """Until `claude /login` is run, this is exactly what Karl will hit — it has to
     read as an explanation, not a silent no-op."""
@@ -250,9 +301,38 @@ def test_render_from_the_ui_produces_a_playable_file(page):
     page.locator("#render").click()
     page.wait_for_function(
         "document.querySelector('#renderState').textContent === 'done'", timeout=180000)
-    src = page.get_attribute("#preview", "src")
+    page.wait_for_selector("#versions .ver")
+    src = page.get_attribute("#previewA", "src")
     assert src and src.startswith("/media/render/")
-    assert page.locator("#preview").is_visible()
     page.wait_for_function(
-        "document.querySelector('#preview').readyState >= 1", timeout=30000)
-    assert page.evaluate("document.querySelector('#preview').duration") > 0
+        "document.querySelector('#previewA').readyState >= 1", timeout=30000)
+    assert page.evaluate("document.querySelector('#previewA').duration") > 0
+
+
+def test_a_second_render_becomes_a_second_version_to_compare_against(page):
+    """Judging an edit is comparative. The newest render lands in A and the previous
+    one in B, so two versions can be watched against each other without leaving."""
+    before = page.locator("#versions .ver").count()
+    page.locator(".seg").first.click()
+    page.keyboard.press("x")                      # change the edit, so B differs
+    page.locator("#render").click()
+    page.wait_for_function(
+        "document.querySelector('#renderState').textContent === 'done'", timeout=180000)
+    page.wait_for_function(
+        f"document.querySelectorAll('#versions .ver').length > {before}", timeout=30000)
+    a = page.get_attribute("#previewA", "src")
+    b = page.get_attribute("#previewB", "src")
+    assert a and b and a != b
+    page.wait_for_function(
+        "document.querySelector('#previewB').readyState >= 1", timeout=30000)
+    assert page.evaluate("document.querySelector('#previewB').duration") > 0
+
+
+def test_the_steps_strip_says_where_the_project_is(page):
+    """The board was flat — Ask, Snap, Undo, Save and Render as peers, with nothing
+    saying what to do first."""
+    names = page.locator(".step").all_inner_texts()
+    assert [n.split()[1] for n in names] == ["footage", "analyse", "first", "refine",
+                                             "render"]
+    # this project has clips, sidecars and a cut, so the first three are behind us
+    assert page.locator(".step.done").count() >= 3

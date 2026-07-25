@@ -67,7 +67,8 @@ server, and every edit is undoable because fiddling is only fun when it is cheap
 | **Add a moment** | Audio candidates not already in the cut, ranked, one click to insert |
 | **Ask for a change** | Plain-language note → revised timeline, shown as a diff you accept or discard |
 | **Snap to speech** | Runs `edl_snap.py` and shows the result as a proposal — undoable, never silently applied |
-| **Render** | Runs `assemble.py` in the background and plays the result inline |
+| **Steps** | footage · analyse · first cut · refine · render, with the one you are on marked. Read from state, so it cannot drift from the files on disk |
+| **Renders** | Runs `assemble.py` in the background, then keeps every version — newest first, loadable into two players side by side, because judging an edit is comparative |
 
 ### Ask — steering by asking rather than dragging
 
@@ -119,15 +120,16 @@ uv run --with pytest --with fastapi --with uvicorn --with httpx --with playwrigh
     pytest app/tests -q
 ```
 
-**50 tests, ~20s.** The suite builds its own three-clip synthetic project with fabricated
-transcripts, so it is fast, deterministic, and does not depend on `~/footage` — which matters
-for the container target. Model calls run against a scripted backend; there are no live calls.
+**80 tests, ~34s** (65 API + 15 driving real Chromium). The suite builds its own three-clip
+synthetic project with fabricated transcripts, so it is fast, deterministic, and does not depend
+on `~/footage` — which matters for the container target. Model calls run against a scripted
+backend; there are no live calls.
 
 The two layers answer different questions. The API tests prove the endpoints behave. They
 cannot prove that *using* the board works — that trimming updates the total, that undo restores
-exactly, that a preview can seek, that the boundary warnings track reality. Those live in the
-JavaScript and the browser's media stack, so ten tests drive real Chromium against a real
-uvicorn server.
+exactly, that a preview can seek, that the boundary warnings track reality, that an empty
+timeline leads somewhere. Those live in the JavaScript and the browser's media stack, so fifteen
+tests drive real Chromium against a real uvicorn server.
 
 `install_browser_deps.sh` exists because `playwright install --with-deps` needs root and this
 box has no passwordless sudo; it resolves the packages through apt and unpacks them under
@@ -167,6 +169,5 @@ Three real defects were found by writing the tests rather than by using the app:
 - **Music mode (P2.6) is not built.** Karl asked for supplying an audio track and cutting to it
   as an available, non-default mode. The slot-driven contract it implies ("fill these N slots of
   these lengths") is a different selection problem, filed in FUTURE_PHASES.
-- Single project, single EDL per launch; no project picker.
-- The render list is not browsable — the newest render is shown, older ones live on disk.
+- Single project per launch; no project picker, though a bin no longer needs an EDL to open.
 - `complete_many` exists per SPEC §6.1 but nothing batches yet; the CLI backend would just loop.

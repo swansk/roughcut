@@ -10,6 +10,14 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **A sense of order, and renders as versions.** The board was flat — Ask, Snap, Undo, Save and
+  Render as peers with nothing saying what to do first. A five-step strip (footage · analyse ·
+  first cut · refine · render) marks where the project is, read from state rather than tracked,
+  so it cannot drift from the files on disk. `GET /api/renders` lists every version newest-first
+  with duration and shot count, metadata written next to each file so the list survives a
+  restart, and any two load into side-by-side players — the newest into A and the previous into B
+  after each render. Judging an edit is comparative; showing only the newest file meant hunting
+  for mp4s on disk to compare.
 - **Backend problems appear at launch, not 80 seconds into an Ask.** Preflight reports what is
   knowable for free — which backend and model, a `claude` CLI missing from PATH because the
   server was started from a non-login shell, an API backend with no key — at startup and in the

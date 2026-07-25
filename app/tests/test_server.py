@@ -183,6 +183,51 @@ def test_render_produces_a_file_of_the_planned_length(client, project):
     assert client.get(status["url"], headers={"Range": "bytes=0-99"}).status_code == 206
 
 
+def test_renders_are_listed_as_versions_newest_first(client, project):
+    """Judging an edit is comparative: the board used to show only the newest file,
+    so comparing two versions meant hunting for mp4s on disk."""
+    import server
+
+    before = {r["name"] for r in client.get("/api/renders").json()["renders"]}
+    jobs = []
+    for out in (2.5, 3.5):
+        body = {"segments": [{"clip": "CLIP_A.MP4", "in": 0.5, "out": out, "why": "a"}]}
+        jobs.append(client.post("/api/render", json=body).json()["job"])
+        deadline = time.time() + 90
+        while client.get(f"/api/render/{jobs[-1]}").json()["state"] == "running":
+            assert time.time() < deadline, "render timed out"
+            time.sleep(0.5)
+
+    versions = client.get("/api/renders").json()["renders"]
+    fresh = [v for v in versions if v["name"] not in before]
+    assert len(fresh) == 2
+    assert [v["created"] for v in versions] == sorted(
+        (v["created"] for v in versions), reverse=True), "newest first"
+    newest = versions[0]
+    assert newest["name"] == f"cut_{jobs[-1]}.mp4"
+    assert newest["segments"] == 1 and newest["planned_s"] == 3.0
+    assert abs(newest["duration_s"] - 3.0) < 0.25
+    # playable straight from the list
+    assert client.get(newest["url"], headers={"range": "bytes=0-99"}).status_code == 206
+
+
+def test_a_version_survives_a_restart(client, project):
+    """Metadata lives next to the file, not in memory: a versions list that empties
+    when the server restarts is not a versions list."""
+    import server
+
+    body = {"segments": [{"clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0, "why": "b"}]}
+    job = client.post("/api/render", json=body).json()["job"]
+    deadline = time.time() + 90
+    while client.get(f"/api/render/{job}").json()["state"] == "running":
+        assert time.time() < deadline, "render timed out"
+        time.sleep(0.5)
+
+    server.RENDERS.clear()
+    listed = client.get("/api/renders").json()["renders"]
+    assert any(r["name"] == f"cut_{job}.mp4" and r["duration_s"] for r in listed)
+
+
 def test_render_status_404_for_unknown_job(client):
     assert client.get("/api/render/deadbeef").status_code == 404
 

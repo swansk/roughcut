@@ -89,6 +89,20 @@
   .empty { border: 1px dashed var(--line); border-radius: 10px; padding: 28px 20px;
            text-align: center; color: var(--dim); }
   .empty h3 { color: var(--text); font-size: 15px; margin: 0 0 6px; }
+  .ab { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
+  .ab video { width: 100%; border-radius: 6px; background: #000; display: block;
+              aspect-ratio: 16/9; }
+  .ver { border-top: 1px solid var(--line); padding: 7px 0; display: flex;
+         align-items: baseline; gap: 8px; }
+  .ver:first-child { border-top: 0; }
+  .ver .t { flex: 1; font-variant-numeric: tabular-nums; }
+  .ver button { padding: 1px 8px; font-size: 12px; }
+  .steps { display: flex; gap: 6px; flex-wrap: wrap; width: 100%; margin-top: 2px; }
+  .step { font-size: 12px; color: var(--dim); border: 1px solid var(--line);
+          border-radius: 999px; padding: 2px 10px; }
+  .step.done { color: var(--good); border-color: #2c4c39; }
+  .step.now { color: #0b0b0f; background: var(--accent); border-color: transparent;
+              font-weight: 600; }
   .pill { border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px;
           font-size: 12px; color: var(--dim); cursor: pointer; white-space: nowrap; }
   .pill.ok { color: var(--good); border-color: #2c4c39; }
@@ -116,6 +130,7 @@
   <button id="undo" title="Undo (u)">Undo</button>
   <button id="save">Save EDL</button>
   <button id="render" class="primary">Render</button>
+  <div class="steps" id="steps"></div>
 </header>
 
 <main>
@@ -153,9 +168,19 @@
       <p class="hint">The thing the agent is worst at. Typing "the milk is the running joke" here beats an hour of analysis.</p>
     </div>
     <div class="panel">
-      <h2>Render</h2>
+      <h2>Renders</h2>
       <div id="renderState" class="hint">idle</div>
-      <video id="preview" controls style="width:100%;margin-top:8px;border-radius:7px;display:none;background:#000"></video>
+      <div class="ab">
+        <div>
+          <div class="hint"><b>A</b> <span id="labelA">—</span></div>
+          <video id="previewA" controls preload="metadata"></video>
+        </div>
+        <div>
+          <div class="hint"><b>B</b> <span id="labelB">—</span></div>
+          <video id="previewB" controls preload="metadata"></video>
+        </div>
+      </div>
+      <div id="versions" class="lib" style="max-height:26vh;margin-top:8px"></div>
     </div>
     <div class="panel">
       <h2>Add a moment</h2>

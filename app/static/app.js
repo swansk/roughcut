@@ -16,6 +16,7 @@ let S = null;                 // project status: where this bin is in the workfl
 let segs = [];                // working segment list
 let sel = 0;
 let analysing = false;
+let nRenders = 0;
 const undoStack = [];
 
 const $ = (s) => document.querySelector(s);
@@ -210,6 +211,7 @@ function render() {
   const cls = t < lo ? 'under' : t > hi ? 'over' : 'ok';
   $('#total').innerHTML = `<span class="${cls}">${fmt(t)}</span>`;
   $('#band').textContent = `${segs.length} shots · target ${fmt(lo)}–${fmt(hi)}`;
+  paintSteps();
   renderLibrary();
 }
 
@@ -240,6 +242,28 @@ function renderLibrary() {
     };
     lib.appendChild(d);
   });
+}
+
+/* The board was flat: Ask, Snap, Undo, Save and Render were peers, and nothing said
+ * what to do first. This is the smallest honest fix — the five steps a project goes
+ * through, with the one you are on marked. It reads state rather than tracking it, so
+ * it cannot get out of step with the files on disk. */
+function paintSteps() {
+  if (!S) return;
+  const steps = [
+    ['footage', S.clips > 0, `${S.clips} clips`],
+    ['analyse', S.clips > 0 && S.analysed >= S.clips,
+      S.analysed ? `${S.analysed}/${S.clips} analysed` : 'audio pass'],
+    ['first cut', segs.length > 0, segs.length ? `${segs.length} shots` : 'ask for one'],
+    ['refine', segs.length > 0 && nRenders > 0, 'trim · snap · ask'],
+    ['render', nRenders > 0, nRenders ? `${nRenders} version${nRenders > 1 ? 's' : ''}` : ''],
+  ];
+  const current = steps.findIndex(([, done]) => !done);
+  $('#steps').innerHTML = steps.map(([name, done, detail], i) => {
+    const cls = done ? 'done' : i === current ? 'now' : '';
+    return `<span class="step ${cls}">${done ? '✓ ' : `${i + 1} `}${name}` +
+      `${detail ? ` <span style="opacity:.7">${escapeHtml(detail)}</span>` : ''}</span>`;
+  }).join('');
 }
 
 async function refreshStatus() {
@@ -453,6 +477,42 @@ function rejectProposal() {
   toast('discarded');
 }
 
+/* Renders as versions rather than "the newest file". Judging an edit is comparative —
+ * reacting to a choice is faster and more informative than judging one artifact — so
+ * two slots, and every past render stays reachable. */
+function loadVersion(v, slot) {
+  const el = $(`#preview${slot}`);
+  el.src = v.url;
+  el.load();
+  $(`#label${slot}`).textContent =
+    `${fmt(v.duration_s || 0)} · ${v.segments ?? '?'} shots`;
+}
+
+async function refreshVersions() {
+  const { renders } = await (await fetch('/api/renders')).json();
+  nRenders = renders.length;
+  const box = $('#versions');
+  box.innerHTML = renders.length ? '' : '<div class="hint">no renders yet</div>';
+  renders.forEach((v, i) => {
+    const when = new Date(v.created * 1000).toLocaleTimeString([],
+      { hour: '2-digit', minute: '2-digit' });
+    const row = document.createElement('div');
+    row.className = 'ver';
+    row.innerHTML = `<span class="t">${fmt(v.duration_s || 0)}
+      <span class="hint">· ${v.segments ?? '?'} shots · ${when}</span></span>`;
+    ['A', 'B'].forEach((slot) => {
+      const b = document.createElement('button');
+      b.textContent = slot;
+      b.onclick = () => loadVersion(v, slot);
+      row.appendChild(b);
+    });
+    box.appendChild(row);
+    if (i === 0) loadVersion(v, 'A');       // newest is what you just made
+    if (i === 1) loadVersion(v, 'B');       // and the one before it, to compare
+  });
+  paintSteps();
+}
+
 async function doRender() {
   const r = await fetch('/api/render', {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -466,10 +526,8 @@ async function doRender() {
     clearInterval(poll);
     $('#renderState').textContent = s.state === 'done' ? 'done' : 'failed';
     if (s.url) {
-      const v = $('#preview');
-      v.src = s.url;
-      v.style.display = 'block';
-      toast('render ready');
+      await refreshVersions();
+      toast('render ready — A is the new one, B the one before');
     } else {
       toast('render failed — see server log');
     }
@@ -528,6 +586,7 @@ async function boot() {
   $('#story').value = P.story || '';
   document.title = `Cut board — ${P.title}`;
   render();
+  await refreshVersions();
   if (!P.proxies_ready) {
     toast('building proxies in the background — previews appear as they finish', 6000);
     waitForProxies();

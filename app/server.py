@@ -490,17 +490,33 @@ def api_analyze_status(job: str) -> JSONResponse:
     return JSONResponse(ANALYSES[job])
 
 
-def _render_job(job: str, edl_path: Path, out_path: Path) -> None:
+def probe_duration(path: Path) -> float | None:
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                        "-of", "csv=p=0", str(path)], capture_output=True, text=True)
+    try:
+        return round(float(r.stdout.strip().strip(",")), 2)
+    except ValueError:
+        return None
+
+
+def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
     cmd = ["uv", "run", "--quiet", str(TOOLS / "assemble.py"), str(edl_path),
            "--footage", str(STATE["footage"]), "--sidecars", str(STATE["sidecars"]),
            "-o", str(out_path)]
     r = subprocess.run(cmd, capture_output=True, text=True)
+    ok = r.returncode == 0
     RENDERS[job] = {
-        "state": "done" if r.returncode == 0 else "failed",
+        "state": "done" if ok else "failed",
         "log": (r.stdout or "") + (r.stderr or ""),
-        "output": str(out_path) if r.returncode == 0 else None,
-        "url": f"/media/render/{out_path.name}" if r.returncode == 0 else None,
+        "output": str(out_path) if ok else None,
+        "url": f"/media/render/{out_path.name}" if ok else None,
     }
+    if ok:
+        # Written next to the file rather than kept in memory: renders outlive the
+        # process, and a versions list that empties on restart is not a versions list.
+        meta["duration_s"] = probe_duration(out_path)
+        out_path.with_suffix(".json").write_text(json.dumps(meta, indent=1),
+                                                 encoding="utf-8")
 
 
 @app.post("/api/render")
@@ -512,10 +528,41 @@ async def api_render(request: Request) -> JSONResponse:
     edl_path = STATE["work"] / f"render_{job}.json"
     edl_path.write_text(json.dumps(edl, indent=1), encoding="utf-8")
     out_path = STATE["renders"] / f"cut_{job}.mp4"
+    meta = {
+        "job": job, "created": time.time(), "title": edl.get("title", ""),
+        "segments": len(edl["segments"]),
+        "planned_s": round(sum(s["out"] - s["in"] for s in edl["segments"]), 2),
+        "story": (edl.get("story") or "")[:300],
+        "note": (body.get("label") or "")[:120],
+    }
     RENDERS[job] = {"state": "running", "log": "", "output": None, "url": None}
-    threading.Thread(target=_render_job, args=(job, edl_path, out_path),
+    threading.Thread(target=_render_job, args=(job, edl_path, out_path, meta),
                      daemon=True).start()
     return JSONResponse({"job": job})
+
+
+@app.get("/api/renders")
+def api_renders() -> JSONResponse:
+    """Every cut rendered for this project, newest first.
+
+    The board showed only the newest render, so comparing two versions meant finding
+    mp4s on disk — and comparison is how you actually judge an edit. Reacting to a
+    choice is faster and more informative than judging a single artifact.
+    """
+    out = []
+    for mp4 in STATE["renders"].glob("cut_*.mp4"):
+        meta_path = mp4.with_suffix(".json")
+        meta = (json.loads(meta_path.read_text(encoding="utf-8"))
+                if meta_path.exists() else {})
+        out.append({
+            "name": mp4.name, "url": f"/media/render/{mp4.name}",
+            "size": mp4.stat().st_size,
+            "created": meta.get("created", mp4.stat().st_mtime),
+            "duration_s": meta.get("duration_s"), "segments": meta.get("segments"),
+            "planned_s": meta.get("planned_s"), "note": meta.get("note", ""),
+        })
+    out.sort(key=lambda r: r["created"], reverse=True)
+    return JSONResponse({"renders": out})
 
 
 @app.get("/api/render/{job}")
