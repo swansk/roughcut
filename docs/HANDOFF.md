@@ -64,8 +64,9 @@ remaining gap is human steering. See **FUTURE_PHASES P2.5 and P2.6**, both writt
 own words this session: an interface to interject/set scene and story, fine-tuning that is *fun
 and easy*, and music-track-driven cutting as an available non-default mode.
 
-Independent work available: audio event tagging (laughter / whoops), and a **prosodic** rather
-than lexical read of excitement markers — see the open thread in the selection note.
+Independent work: ~~audio event tagging~~ — **done, and it is a dead end on B1**; see
+[R9](../research/R9-events-and-wind.md). The remaining audio lever is a **prosodic** rather than
+lexical read of excitement markers — see the open thread in the selection note.
 
 ## Findings that must not be re-litigated
 
@@ -91,6 +92,15 @@ These were measured, cost real effort, and are easy to accidentally undo:
 - **Audio points away from the skiing on B1** (R8 Result 4): 16.8 candidates/min on the
   travel footage vs 7.4/min on the on-mountain clips, and 4× the word rate. The skiing is
   quiet because the subject is far from the mic. Never gate the visual pass on audio interest.
+- **B1 has no non-verbal reactions to detect** (R9). Best score for Laughter/Whoop/Cheering
+  anywhere in 398s is 0.077, from a model that scores Speech 0.44–0.76 and Wind 0.65 on the same
+  passes. The mic is on the camera and the skiers are 50m away. Don't rebuild this expecting a
+  different answer on Copper; do run it on a bin with crowd or close-mic audio.
+- **B1 *is* windy, and the R8 wind rule never fired once** (R9). Real wind sits at flatness
+  0.17–0.25 against a guessed 0.40 threshold. Now `low > -40 dBFS AND low − speech > 2 dB AND
+  flatness > 0.15` — the absolute term matters because a pure low-vs-speech ratio inflates
+  whenever nobody is talking. Plane-cabin rumble is the trap a dB-only rule falls into: 10.9 dB
+  of low-band dominance at flatness 0.008, because engine hum is tonal and wind is not.
 - **The Tier A DSP speech detector is weak** (F1 0.63 vs 0.56 for "assume constant speech").
   Speech candidates come from the ASR transcript; the DSP tracks are quality metering and a
   no-ASR fallback. Don't rebuild it as a selector.

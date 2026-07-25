@@ -40,6 +40,16 @@ appear in a scoring function.
 > 3.5× lower than the guess this document originally implied. The wind branch itself is
 > **untested**: B1's ski footage is shot from a static or slow camera, so nothing in the bin is
 > wind-dominated. The trap is still real for at-speed helmet footage; it just isn't B1.
+>
+> **[R9](../research/R9-events-and-wind.md) corrects that.** B1 *is* windy — AudioSet scores
+> Wind at 0.65 on the moving POV run — and the reason R8 measured none is that the wind rule
+> never fired at all. Real wind here sits at flatness **0.17–0.25** against a guessed threshold
+> of 0.40, so the conjunction was unsatisfiable. The physics in the table above is nonetheless
+> vindicated: the plane-cabin clips carry *more* low-band dominance (10.9 dB) than most windy
+> clips at flatness 0.008, because engine rumble is tonal where wind is noise-like — flatness is
+> what stops a dB-only rule calling an aircraft interior windy. Measured rule:
+> `low > -40 dBFS AND low − speech > 2 dB AND flatness > 0.15`, with the absolute term needed
+> because a pure ratio inflates whenever nobody is speaking.
 
 Note also that wind level is a **quality** signal, not an interest signal — it tells us the
 moment's audio is unusable in the edit, which is a different question from whether the moment is
@@ -79,6 +89,14 @@ is missing — laughter and whoops are the expected gap.
 > place as quality metering (wind, silence, clipping, loudness) and onset detection, not as a
 > gate. The predicted gap is confirmed: **event tagging is now the highest-value remaining audio
 > work**, because the non-verbal reactions are what the ski clips actually contain.
+>
+> **[R9](../research/R9-events-and-wind.md) retires that last sentence.** Event tagging was
+> built and B1 turns out to contain no detectable non-verbal reactions at all — the best
+> reaction score anywhere in 398s is 0.077, while the same passes score Speech at 0.44–0.76 and
+> Wind at 0.65. The mic is on the camera, the operator is the one talking, and the skiers are
+> fifty metres away; the laughter visible in the contact sheets is not in the audio. The tagger
+> is kept for bins with crowd or close-mic audio, but it will not improve a Copper cut. What it
+> *did* find is that the wind branch below had never fired even once — see the next note.
 
 ## Output
 

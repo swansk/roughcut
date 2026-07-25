@@ -9,7 +9,35 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Added
+- **Tier B audio event tagging** (`research/tools/audio_events.py`, AST/AudioSet on the GPU) and
+  its study, **[R9](research/R9-events-and-wind.md)** — which measured that the feature R8 and
+  AUDIO.md both named "the highest-value remaining audio work" **does not pay off on B1**.
+  The best score for any reaction class (Laughter, Whoop, Cheering, Yell) across the whole 398s
+  bin is **0.077**, from passes that simultaneously score Speech at 0.44–0.76 and Wind at 0.65,
+  so the model is working and discriminating. Window length was ruled out separately (1.5s to
+  10.24s moved Laughter by hundredths). The mic is on the camera, the operator is the one
+  talking, and the skiers are fifty metres away — the laughter visible in the contact sheets is
+  simply not in the audio. The tagger is kept for bins with crowd or close-mic audio; it will
+  not improve a Copper cut.
+
 ### Fixed
+- **The Tier A wind detector had never fired once**, which R8 misread as "B1 isn't windy". The
+  event tagger scores Wind at 0.652 on the moving POV run and 0.541 on the following shot, while
+  R8's `wind_dominant_fraction` reported ≤0.08 on every clip. The broken constant was flatness:
+  real wind here sits at **0.17–0.25** against a guessed threshold of 0.40, making the
+  conjunction unsatisfiable. Flatness is nonetheless the right discriminator — the plane-cabin
+  clips carry *more* low-band dominance (10.9 dB) than most windy clips at flatness 0.008,
+  because engine rumble is tonal where wind is noise-like, so a dB-only rule would call an
+  aircraft interior windy. Recalibrating the ratio alone then broke on silence (an empty speech
+  band makes any hiss look wind-dominant, scoring the silent base-area clip 0.42 against the
+  tagger's 0.00), so the rule now carries an absolute term:
+  `low > -40 dBFS AND low − speech > 2 dB AND flatness > 0.15` — 4 of 5 tagger-positive clips
+  with **0 false positives** on the other 12, where every rule catching all 5 carried at least 5.
+  This matters beyond bookkeeping: the trigger map for P2.2 audio post was previously empty.
+- **`audio_analyze.py` no longer discards `events` when re-run.** Tier A and Tier B write to the
+  same sidecar from different tools, so re-running the cheap pass silently wiped the expensive
+  one.
 - **A rendered cut could play fully rotated.** `-noautorotate` suppresses *applying* B1's
   spurious rotation but the display matrix is still copied to the output stream, and concat with
   `-c copy` inherits stream properties from the first part — so one clip's bad metadata rotated

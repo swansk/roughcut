@@ -65,8 +65,21 @@ FLATNESS_MAX = 0.10         # above this the frame is noise-like
 MOD_MIN = 0.35              # 2-8 Hz share of the envelope spectrum
 SPEECH_SCORE_MIN = 0.5      # speech_score above this counts as speech
 MIN_SPEECH_RUN_S = 0.6
-WIND_DOM_DB = 12.0          # low-band exceeds speech-band by this much
-WIND_DOM_FLAT = 0.40
+# R9: measured against AudioSet wind detections. The shipped pair (12 dB / 0.40)
+# never fired — real wind on this bin sits at flatness 0.17-0.25, so the flatness
+# term alone made the rule dead. Flatness is also what carries the discrimination:
+# the plane-cabin clips show 10 dB of low-band dominance but flatness 0.008,
+# because engine rumble is tonal where wind is noise-like. A dB-only rule would
+# call the aircraft interior windy.
+#
+# The absolute term is not redundant. low-vs-speech is a *ratio*, so an empty
+# speech band makes any ambient hiss look wind-dominant: without WIND_ABS_DB the
+# silent base-area clip scored 0.42 against the tagger's 0.00. Operating point
+# catches 4 of 5 tagger-positive clips with 0 false positives on the other 12;
+# every rule that caught all 5 carried at least 5 false positives.
+WIND_ABS_DB = -40.0         # low band must be loud in absolute terms, not just relatively
+WIND_DOM_DB = 2.0           # and exceed the speech band by this much
+WIND_DOM_FLAT = 0.15        # and be noise-like rather than tonal
 SILENCE_DB = -60.0
 ONSET_Z_MIN = 8.0           # R8: z>3 fires 15x/min on Copper, which is flooding
 ONSET_PCT_FLOOR = 97.0      # and must also be a large flux in absolute terms
@@ -241,7 +254,8 @@ def tier_a(x: np.ndarray) -> Tracks:
                                   sig(FLATNESS_MAX - flatness, 0.03)),
                        sig(mod - MOD_MIN, 0.05))
 
-    wind = (low_db - sp_db > WIND_DOM_DB) & (flatness > WIND_DOM_FLAT)
+    wind = ((low_db > WIND_ABS_DB) & (low_db - sp_db > WIND_DOM_DB)
+            & (flatness > WIND_DOM_FLAT))
     return Tracks(sp_db.astype(np.float32), low_db.astype(np.float32),
                   hi_db.astype(np.float32), flatness.astype(np.float32),
                   onset.astype(np.float32), mod.astype(np.float32),
@@ -405,7 +419,7 @@ def vad_track(transcript: list[dict], n: int) -> np.ndarray:
     return v
 
 
-def analyse(video: Path, asr: Asr | None) -> dict:
+def analyse(video: Path, asr: Asr | None, prior_events: list[dict] | None = None) -> dict:
     t0 = time.time()
     x, lufs = decode(video)
     tr = tier_a(x)
@@ -426,11 +440,14 @@ def analyse(video: Path, asr: Asr | None) -> dict:
         "frame_hz": OUT_HZ,
         "params": {"speech_db_min": SPEECH_DB_MIN, "flatness_max": FLATNESS_MAX,
                    "mod_min": MOD_MIN, "speech_score_min": SPEECH_SCORE_MIN,
-                   "wind_dom_db": WIND_DOM_DB, "onset_z_min": ONSET_Z_MIN,
+                   "wind_abs_db": WIND_ABS_DB, "wind_dom_db": WIND_DOM_DB,
+                   "wind_dom_flat": WIND_DOM_FLAT, "onset_z_min": ONSET_Z_MIN,
                    "onset_pct_floor": ONSET_PCT_FLOOR},
         "tracks": {**tr.as_json(), "vad": vad.tolist()},
         "transcript": transcript,
-        "events": [],                       # Tier B tagging not built yet (laughter/whoops)
+        # Written by audio_events.py, a separate pass — carried through a re-analysis
+        # here so that re-running Tier A does not silently discard Tier B's work.
+        "events": prior_events or [],
         "summary": {
             "speech_fraction": round(float(speech.mean()), 4),
             "asr_speech_fraction": round(float(vad.mean()), 4),
@@ -479,15 +496,19 @@ def main() -> int:
     clips = []
     for video in videos:
         dest = args.out / f"{video.stem}.audio.json"
-        if dest.exists() and not args.force:
-            clips.append(json.loads(dest.read_text(encoding="utf-8")))
-            print(f"{video.name}: cached")
-            continue
+        prior: list[dict] = []
+        if dest.exists():
+            existing = json.loads(dest.read_text(encoding="utf-8"))
+            if not args.force:
+                clips.append(existing)
+                print(f"{video.name}: cached")
+                continue
+            prior = existing.get("events", [])
         if not has_audio(video):
             print(f"skip {video.name}: no audio stream", file=sys.stderr)
             continue
         try:
-            result = analyse(video, asr)
+            result = analyse(video, asr, prior)
         except RuntimeError as exc:
             print(f"skip {video.name}: {exc}", file=sys.stderr)
             continue
