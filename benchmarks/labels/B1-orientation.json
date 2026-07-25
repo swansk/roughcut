@@ -1,0 +1,242 @@
+{
+  "bin": "B1 / copper-02-2026",
+  "reviewed": "2026-07-25",
+  "method": "orient_audit.py sheet, one frame per clip at 15% duration, -noautorotate",
+  "finding": "All judgeable clips are upright as stored; the rotation side-data present on 6 clips (-90, +90, -180) is spurious and must NOT be applied. Do not generalise this to other cameras or bins.",
+  "clips": [
+    {
+      "clip": "GX010474.MP4",
+      "duration_s": 31.57,
+      "rotation_metadata": -90.0,
+      "orient_override": "none",
+      "orient_confidence": "visually_confirmed",
+      "luma_mean": 130.9,
+      "luma_std": 49.2
+    },
+    {
+      "clip": "GX010475.MP4",
+      "duration_s": 21.23,
+      "rotation_metadata": 0.0,
+      "orient_override": "none",
+      "orient_confidence": "visually_confirmed",
+      "luma_mean": 123.8,
+      "luma_std": 48.9
+    },
+    {
+      "clip": "GX010476.MP4",
+      "duration_s": 18.73,
+      "rotation_metadata": 0.0,
+      "orient_override": "none",
+      "orient_confidence": "visually_confirmed",
+      "luma_mean": 112.7,
+      "luma_std": 56.5
+    },
+    {
+      "clip": "GX010477.MP4",
+      "duration_s": 16.68,
+      "rotation_metadata": 0.0,
+      "orient_override": "none",
+      "orient_confidence": "visually_confirmed",
+      "luma_mean": 16.8,
+      "luma_std": 23.8
+    },
+    {
+      "clip": "GX010478.MP4",
+      "duration_s": 11.39,
+      "rotation_metadata": 0.0,
+      "orient_override": "none",
+      "orient_confidence": "visually_confirmed",
+      "luma_mean": 29.6,
+      "luma_std": 31.2
+    },
+    {
+      "clip": "GX010479.MP4",
+      "duration_s": 74.37,
+      "rotation_metadata": 0.0,
+      "orient_override": "none",
+      "orient_confidence": "unverified_too_dark",
+      "luma_mean": 5.3,
+      "luma_std": 8.7
+    },
+    {
+      "clip": "GX010480.MP4",
+      "duration_s": 19.69,
+      "rotation_metadata": 0.0,
+      "orient_override": "none",
+      "orient_confidence": "unverified_too_dark",
+      "luma_mean": 2.9,
+      "luma_std": 6.4
+    },
+    {
+      "clip": "GX010481.MP4",
+      "duration_s": 18.6,
+      "rotation_metadata": 0.0,
+      "orient_override": "none",
+      "orient_confidence": "unverified_too_dark",
+      "luma_mean": 5.7,
+      "luma_std": 10.0
+    },
+    {
+      "clip": "GX010482.MP4",
+      "duration_s": 46.96,
+      "rotation_metadata": 0.0,
+      "orient_override": "none",
+      "orient_confidence": "unverified_too_dark",
+      "luma_mean": 2.7,
+      "luma_std": 4.7
+    },
+    {
+      "clip": "GX010483.MP4",
+      "duration_s": 10.89,
+      "rotation_metadata": 0.0,
+      "orient_override": "none",
+      "orient_confidence": "visually_confirmed",
+      "luma_mean": 92.5,
+      "luma_std": 46.1
+    },
+    {
+      "clip": "GX010484.MP4",
+      "duration_s": 17.35,
+      "rotation_metadata": 90.0,
+      "orient_override": "none",
+      "orient_confidence": "visually_confirmed",
+      "luma_mean": 10.9,
+      "luma_std": 14.6
+    },
+    {
+      "clip": "GX010485.MP4",
+      "duration_s": 17.1,
+      "rotation_metadata": 0.0,
+      "orient_override": "none",
+      "orient_confidence": "visually_confirmed",
+      "luma_mean": 9.0,
+      "luma_std": 14.9
+    },
+    {
+      "clip": "GX010486.MP4",
+      "duration_s": 11.26,
+      "rotation_metadata": 0.0,
+      "orient_override": "none",
+      "orient_confidence": "visually_confirmed",
+      "luma_mean": 23.6,
+      "luma_std": 27.9
+    },
+    {
+      "clip": "GX010487.MP4",
+      "duration_s": 16.81,
+      "rotation_metadata": 0.0,
+      "orient_override": "none",
+      "orient_confidence": "visually_confirmed",
+      "luma_mean": 153.9,
+      "luma_std": 38.6
+    },
+    {
+      "clip": "GX010488.MP4",
+      "duration_s": 15.27,
+      "rotation_metadata": 0.0,
+      "orient_override": "none",
+      "orient_confidence": "visually_confirmed",
+      "luma_mean": 171.2,
+      "luma_std": 48.6
+    },
+    {
+      "clip": "GX010489.MP4",
+      "duration_s": 13.97,
+      "rotation_metadata": 0.0,
+      "orient_override": "none",
+      "orient_confidence": "visually_confirmed",
+      "luma_mean": 158.1,
+      "luma_std": 58.1
+    },
+    {
+      "clip": "GX010490.MP4",
+      "duration_s": 31.49,
+      "rotation_metadata": 0.0,
+      "orient_override": "none",
+      "orient_confidence": "visually_confirmed",
+      "luma_mean": 173.5,
+      "luma_std": 42.9
+    },
+    {
+      "clip": "GX010491.MP4",
+      "duration_s": 5.09,
+      "rotation_metadata": 0.0,
+      "orient_override": "none",
+      "orient_confidence": "visually_confirmed",
+      "luma_mean": 140.3,
+      "luma_std": 70.9
+    },
+    {
+      "clip": "GX010492.MP4",
+      "duration_s": 20.98,
+      "rotation_metadata": -90.0,
+      "orient_override": "none",
+      "orient_confidence": "visually_confirmed",
+      "luma_mean": 119.5,
+      "luma_std": 56.7
+    },
+    {
+      "clip": "GX010493.MP4",
+      "duration_s": 25.82,
+      "rotation_metadata": 0.0,
+      "orient_override": "none",
+      "orient_confidence": "visually_confirmed",
+      "luma_mean": 146.9,
+      "luma_std": 69.2
+    },
+    {
+      "clip": "GX010494.MP4",
+      "duration_s": 41.46,
+      "rotation_metadata": 0.0,
+      "orient_override": "none",
+      "orient_confidence": "visually_confirmed",
+      "luma_mean": 114.9,
+      "luma_std": 60.7
+    },
+    {
+      "clip": "GX010495.MP4",
+      "duration_s": 60.39,
+      "rotation_metadata": 0.0,
+      "orient_override": "none",
+      "orient_confidence": "visually_confirmed",
+      "luma_mean": 129.3,
+      "luma_std": 52.7
+    },
+    {
+      "clip": "GX010496.MP4",
+      "duration_s": 46.42,
+      "rotation_metadata": 0.0,
+      "orient_override": "none",
+      "orient_confidence": "visually_confirmed",
+      "luma_mean": 135.7,
+      "luma_std": 55.0
+    },
+    {
+      "clip": "GX010497.MP4",
+      "duration_s": 25.32,
+      "rotation_metadata": -180.0,
+      "orient_override": "none",
+      "orient_confidence": "unverified_too_dark",
+      "luma_mean": 1.4,
+      "luma_std": 1.4
+    },
+    {
+      "clip": "GX010498.MP4",
+      "duration_s": 25.28,
+      "rotation_metadata": -180.0,
+      "orient_override": "none",
+      "orient_confidence": "unverified_too_dark",
+      "luma_mean": 1.1,
+      "luma_std": 0.5
+    },
+    {
+      "clip": "GX010499.MP4",
+      "duration_s": 17.18,
+      "rotation_metadata": -180.0,
+      "orient_override": "none",
+      "orient_confidence": "unverified_too_dark",
+      "luma_mean": 1.3,
+      "luma_std": 0.9
+    }
+  ]
+}

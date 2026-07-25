@@ -118,14 +118,25 @@ roughcut/
    time, camera metadata, color transfer/primaries (log profile detection), and **rotation
    side-data**. → `media` table.
 
-   > **Rotation is recorded, never trusted.** Measured on B1 (2026-07-25): `GX010474.MP4`
-   > carries `rotation=-90`, and applying it yields a sideways portrait frame, while
-   > `GX010475.MP4` in the same bin carries none — the bin is mixed *and* the metadata is
-   > misleading on at least one clip. Blindly honouring or blindly ignoring the side-data both
-   > corrupt the output. Ingest stores the raw value, applies a per-clip `orient_override`, and
-   > **verifies by looking**: a first-frame thumbnail per clip is emitted for review at CP1.
-   > Phone footage genuinely shot in portrait must keep working, so a global `-noautorotate`
-   > is not the fix.
+   > **Rotation is recorded, never trusted — and correcting it is our job.** Two distinct
+   > problems, both present in real footage:
+   >
+   > 1. *Misleading metadata.* Measured on B1 (2026-07-25): `GX010474.MP4` carries
+   >    `rotation=-90` whose application yields a sideways portrait frame, while `GX010475.MP4`
+   >    in the same bin carries none. The bin is mixed and the metadata is wrong on at least
+   >    one clip.
+   > 2. *Genuinely mis-shot footage* (Karl, 2026-07-25). Some clips are simply rotated the wrong
+   >    way from the start — a camera mounted rotated, pointed sideways — with metadata that is
+   >    absent or unhelpful. **The pipeline is expected to fix these, not merely to pass them
+   >    through.** Orientation is therefore a *derived, corrected property of the content*, not
+   >    a container field to be copied.
+   >
+   > Resolution order: read the side-data → decide from the pixels → persist an
+   > `orient_override` per clip. Deciding from pixels is a vision task the analysis layer is
+   > already good at ("which way up is this frame?" on a single thumbnail is cheap and
+   > reliable), so S2 may assist S0 here; where confidence is low, surface it at CP1 rather than
+   > guessing. A global `-noautorotate` is **not** the fix — portrait phone footage must keep
+   > working.
 2. **Proxy** transcode: 960×540 H.264 CRF 23, audio AAC 128k, **CFR normalized** (VFR phone
    footage is the #1 source of downstream sync bugs — normalize here, once). Preserve a
    source-frame ↔ proxy-frame mapping so timeline decisions made on proxies resolve to exact
@@ -143,10 +154,22 @@ every downstream model prompt.
   proxies), duration, timestamp clustering. Also flags unusable audio (clipping, silence).
 - **Tier 1 (cheap, local):** faster-whisper transcription (`RQ: model size → R3`) with word
   timestamps + simple diarization; speech density per shot.
-- **Gate (disabled by default — see §7):** at the 3–5h design scale, analyzing everything costs
-  under $15, so the default is no discard. The ranking is still computed and stored (it orders
-  the analysis queue and drives scoring), but `gate_discard` is off unless a project sets a
-  threshold. Re-enabling it for large bins is an R4 decision.
+- **Junk detection (on by default) vs. cost gating (off by default)** — two different things
+  that both look like "filtering", and conflating them is a mistake:
+  - **Junk detection is a quality filter and stays on.** Real bins contain long stretches with
+    no usable content at all — a GoPro left recording in a pocket, a lens-down mount, a
+    forgotten camera in a bag (Karl, 2026-07-25: uncommon, but expect it). These are cheap to
+    identify from tier-0 signals — near-zero luminance variance, no scene structure, motion
+    without parallax — and they must be excluded, because a 20-minute pocket recording will
+    otherwise dominate a short bin and waste analysis on darkness. Detection is recorded as
+    `audio_flags`/`usable=false` with the reason, and is always reversible.
+  - **Cost gating is a budget filter and stays off** (see §7). Discarding *plausibly
+    interesting* footage to save money is a bad trade at this scale.
+
+  The ranking is still computed and stored (it orders the analysis queue and drives scoring),
+  but `gate_discard` is off unless a project sets a threshold. Re-enabling it for large bins is
+  an R4 decision. **Don't over-engineer for junk**: it's an expected edge case, not the common
+  path, and the detector should be simple and conservative — when unsure, keep the footage.
 - **Tier 2 (paid):** VLM analysis of surviving footage. The default hypothesis is K keyframes
   per shot at resolution R, one request per shot via the **Batch API** (50% discount; not
   latency-sensitive). A competing policy — coarse contact-sheet sampling with recursive
@@ -162,6 +185,21 @@ A conversation in which the agent, using tools over the index (search transcript
 shots, show keyframes, query by time/entity), proposes a story outline; the user reacts; the
 agreed outline is compiled to `skeleton_v1.otio`. The skeleton is a real timeline whose clips
 reference shot IDs with in/out points — coarse (section-level) but formally valid.
+
+**Ordering: chronological by default, deliberately not always** (Karl, 2026-07-25). Capture
+timestamps (`media.shot_at`) give the default spine, and for trip footage chronology usually
+*is* the story. But when a departure makes a better edit — a cold open on the best moment, a
+setup shot moved ahead of the thing it sets up, two related moments from different days cut
+together — taking it is correct. Two requirements follow:
+
+- Reordering must be **deliberate and explained**, never incidental. Any clip whose timeline
+  position departs from chronological order carries a `roughcut.reorder_rationale` in its
+  metadata, so the choice is visible in review rather than looking like a sorting bug.
+- Chronology must remain *recoverable*: `shot_at` and source order stay in the index, so a
+  reordered timeline can always be explained against, or reverted to, the capture sequence.
+
+This is a place where principle 3 (§0) applies directly — the agent should propose an ordering
+with its reasoning, not ask the user to specify one.
 
 ### S4 — Assembly
 `assemble.py` walks the OTIO timeline and renders from **source files** (not proxies) via

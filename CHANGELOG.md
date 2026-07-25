@@ -10,6 +10,21 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **`research/tools/orient_audit.py`** and the resulting
+  `benchmarks/labels/B1-orientation.json`: one representative frame per clip on a single sheet
+  with rotation metadata labelled, reviewed by eye, decisions committed. Six of B1's 26 clips
+  carry rotation side-data across three values (−90, +90, −180) and **all six are spurious** —
+  every judgeable clip is upright as stored. Clips too dark to judge are recorded as
+  `unverified_too_dark` rather than assumed.
+- **Empirical junk-detection data for B1**: 44% of the bin (290s of 662s) is dark, with a clean
+  separation between real content (luma 92–174) and black (luma 1–11). `GX010479.MP4` is the
+  bin's longest clip at 74s and sits at luma 5.3 — the camera-left-running case, present in the
+  first real bin. Also recorded a naive threshold's false positives on dark-but-real footage,
+  which is why the T5 detector must stay conservative.
+- Ordering, junk, and orientation-correction constraints from Karl recorded in SPEC: chronology
+  is the default spine but deliberate, explained departures are correct (§3 S3); junk detection
+  is a quality filter that stays on, distinct from cost gating which stays off (§3 S2);
+  mis-shot footage must be *corrected*, not passed through (§3 S0).
 - **Product intent as design principles** (SPEC §0), from Karl's framing: human time goes to
   taste and judgment never mechanical work; fast feedback or the human disengages; present
   options rather than demand specifications. Recorded with a self-check — the manual labeling

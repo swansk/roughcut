@@ -53,9 +53,42 @@ removed its boring material, so measuring the analysis against it flatters the r
 26 clips came straight off the camera. Where more material is needed, add Killington's long-form
 clips under the controls below and report the two separately rather than pooling them.
 
+> ⚠️ **Copper is much smaller than a typical project** (Karl, 2026-07-25). At 11 minutes it is
+> convenient for fast iteration but unrepresentative: real bins run hours, and may include long
+> no-context recordings (camera left running in a pocket) that Copper does not exercise. Treat
+> results from it as directional. Anything that only works because the bin is small — loading
+> every frame, holding the whole index in memory, one-shot prompts over all content — is a
+> latent failure, and reviews should look for exactly that.
+
 **Sidecar `.WAV` files are out of scope** (Karl, 2026-07-25) — audio comes from the MP4's
 embedded track. Only MP4s are copied into the working bins. The mic-array opportunity stays
 filed under FUTURE_PHASES P2.2.
+
+### ⚠️ 44% of B1 is dark/unusable — junk is not an edge case here
+
+Measured 2026-07-25 (8 frames per clip, mean luminance and detail):
+
+| Band | Clips | Footage | Character |
+|---|---|---|---|
+| Real content | 14 | ~370s | luma 92–174, detail 38–71 — airport, then the actual skiing |
+| Dark but real | 3 | ~65s | luma 17–30 — night parking lot, dim plane interior. **Keep.** |
+| Confidently junk | 9 | ~228s | luma 1–11, detail 0.5–15 — black or near-black |
+
+`GX010479.MP4` is the **longest clip in the bin** at 74 seconds and sits at luma 5.3. That is
+precisely the camera-left-running case, present in the very first bin rather than as a
+hypothetical.
+
+**Two lessons for the T5 junk detector:**
+1. A naive threshold (`luma<35 and std<30`) **false-positives on real content** — it flags the
+   night parking lot and the dim plane interior, both of which a human would keep. The
+   confident band is much lower, around `luma<11 and std<15`.
+2. So the rule in SPEC §3 S2 stands and is now evidence-based: be conservative, and when unsure
+   keep the footage. Losing a dark-but-real moment is a worse failure than analysing 20 seconds
+   of black.
+
+**Consequence for R7:** B1's *usable* footage is ~6 minutes, not 11. That is thin for measuring
+highlight-finding, and is an argument for adding Killington's long-form clips (under the
+curation controls) as a second, separately-reported dataset.
 
 ### ⚠️ B1 has mixed and misleading rotation metadata
 
@@ -64,10 +97,18 @@ portrait frame**, while `-noautorotate` yields the correct upright 16:9 image �
 eye. `GX010475.MP4` in the same bin carries no rotation at all. So the bin is mixed, and the
 metadata is actively wrong on at least one clip.
 
+**Full audit (2026-07-25):** six of 26 clips carry rotation side-data, across three different
+values — `GX010474` (−90), `GX010484` (+90), `GX010492` (−90), and `GX010497/98/99` (−180).
+Reviewed one frame per clip via `orient_audit.py`: **every judgeable clip is upright as stored**,
+so all six rotation values are spurious and applying any of them corrupts the frame. Decisions
+are committed in [labels/B1-orientation.json](labels/B1-orientation.json), with the clips too
+dark to judge marked `unverified_too_dark` rather than silently assumed.
+
 Consequences: contact sheets for this bin need `--orient none`; ingest must record rotation and
 resolve a per-clip override with visual confirmation (SPEC §3 S0, T1/T2 DoDs). A blanket
 `-noautorotate` is **not** a general fix — phone footage genuinely shot in portrait needs its
-metadata honoured. This is why orientation is verified by looking rather than believed.
+metadata honoured, and Karl has footage that is genuinely mis-shot with no metadata at all. This
+is why orientation is a corrected property of the content, verified by looking.
 
 **Total available footage: ~1 hour.** The *design* target remains 3h typical / 5h max (SPEC §7)
 — that's the workload Karl wants supported, and future trips will supply it. But the benchmark

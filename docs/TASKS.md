@@ -139,6 +139,9 @@ still matter: they order the analysis queue and feed scoring and audio-quality f
 **DoD:**
 - [ ] `audio_rms`, `motion`, `speech_density`, `audio_flags` populated for 100% of shots on fixtures
 - [ ] Silence/clipping fixtures flagged correctly (constructed test clips)
+- [ ] **Junk detection**: a synthetic "camera in pocket" fixture (near-black, low luminance
+      variance, motion without scene structure) is flagged `usable=false` with a reason, and a
+      dim-but-real fixture is *not* — conservative when unsure, per SPEC §3 S2
 - [ ] Ranking function orders shots by combined signal; unit-tested on synthetic signal sets
 - [ ] `gate_discard` defaults to off; when a threshold *is* set, decisions persist in
       `gated_out` and are reversible without recompute (tested both ways)
