@@ -15,6 +15,7 @@ Rules (enforced by [../CLAUDE.md](../CLAUDE.md)):
 
 ```
 T0 ─► T0b (container gate)
+T0 ─► T0c (inference abstraction) ──────────────► (T7, paid studies)
 T0 ─► T1 ─► T2 ─► T3 ─► T5 ─► T6 ─► T7 ─► T8 ─► T9 ─► T10 ─► T11 ─► T12 ─► T13
             └──► T4 ──────────┘
 R5 ─────────────────────────────────────────────► (T10)
@@ -49,6 +50,27 @@ Dockerfile + the discipline that keeps prod-portability true, per SPEC §9.
 - [ ] GPU invocation documented (`--gpus all` + `nvidia-container-toolkit`); CPU-only path is
       what tests exercise, GPU path is documented not asserted
 - [ ] Image builds from a clean checkout with no host state (verified via `docker build --no-cache`)
+
+## T0c — Inference abstraction (two backends) — `blocked(T0)`
+`roughcut.inference` per SPEC §6: one `Backend` protocol, a Claude Code CLI implementation
+(Max subscription, zero marginal cost — the development default) and an Anthropic API
+implementation (per-token, batchable — the production path). Blocks T7 and all paid studies.
+**DoD:**
+- [ ] Isolation grep test: no `import anthropic` and no `claude` subprocess outside
+      `src/roughcut/inference/`
+- [ ] Backend selected by `ROUGHCUT_BACKEND`; unknown value fails with a clear error (tested)
+- [ ] **Contract conformance suite runs against both backends** and asserts identical observable
+      behavior: text completion, image-by-path input, `schema=` returning a validated dict,
+      and a schema violation raising rather than returning junk
+- [ ] CLI backend: schema honored via prompt + validate + bounded retry; a mocked malformed
+      response is retried then raises (tested, retry count asserted)
+- [ ] API backend: schema uses native structured outputs; `complete_many` fans out to the Batch
+      API and returns results keyed to requests **in submission order regardless of arrival order**
+- [ ] Every call writes a `cost_ledger` row with `backend`, tokens, and `projected_usd`;
+      `actual_usd` null on the CLI backend (tested both)
+- [ ] Budget cap enforced on `projected_usd` on both backends; CLI backend additionally enforces
+      the per-run call ceiling (SPEC §7) — both failure paths tested
+- [ ] Live smoke test against each backend documented (≤ 3 calls each), not part of the default suite
 
 ## T1 — Media probe → manifest — `blocked(T0)`
 ffprobe wrapper producing `media` rows incl. VFR flag and log-profile detection.
@@ -101,7 +123,7 @@ SQLite schema, migrations, typed query helpers.
 - [ ] Query helpers: shots by score, by time range, by media; transcript search returning shot joins
 - [ ] `cost_ledger` writes tested via a fake model call
 
-## T7 — VLM analysis pass — `blocked(T5, T6, R7, R1)`
+## T7 — VLM analysis pass — `blocked(T0c, T5, T6, R7, R1)`
 Hierarchical tier-2 pass with structured outputs; concrete design (per-shot batch vs
 adaptive contact-sheet search vs hybrid) is fixed by R7's decision, parameters by R1.
 **DoD:**

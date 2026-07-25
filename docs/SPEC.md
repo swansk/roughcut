@@ -35,8 +35,13 @@ roughcut/
 ├── pyproject.toml            # uv-managed; Python 3.12+
 ├── src/roughcut/
 │   ├── cli.py                # `roughcut <command>` entry points (typer)
-│   ├── config.py             # project paths, budgets, model tier config
-│   ├── costs.py              # API cost ledger — every model call logs tokens+$ here
+│   ├── config.py             # project paths, budgets, model ROLES, backend selection
+│   ├── shell.py              # the only subprocess wrapper (no shell=True anywhere)
+│   ├── costs.py              # cost ledger — every inference call logs tokens + projected $
+│   ├── inference/            # §6 — the ONLY place that talks to a model
+│   │   ├── base.py           # Backend protocol, Request/Result types
+│   │   ├── claude_cli.py     # Claude Code CLI backend (Max subscription)
+│   │   └── anthropic_api.py  # Anthropic API backend (per-token, Batch API)
 │   ├── ingest/
 │   │   ├── probe.py          # ffprobe wrapper → media manifest
 │   │   ├── proxy.py          # proxy transcode (VFR→CFR normalization)
@@ -165,8 +170,12 @@ CREATE TABLE transcript_segments (
 CREATE VIRTUAL TABLE transcript_fts USING fts5(text, content=transcript_segments);
 
 CREATE TABLE cost_ledger (
-  id INTEGER PRIMARY KEY, ts TEXT, stage TEXT, model TEXT,
-  input_tokens INTEGER, output_tokens INTEGER, usd REAL, batch INTEGER);
+  id INTEGER PRIMARY KEY, ts TEXT, stage TEXT, role TEXT, model TEXT,
+  backend TEXT NOT NULL,          -- 'claude_cli' | 'anthropic_api'
+  input_tokens INTEGER, output_tokens INTEGER,
+  actual_usd REAL,                -- null on the subscription backend
+  projected_usd REAL NOT NULL,    -- API-rate equivalent; the cap is enforced on this
+  batch INTEGER, latency_ms INTEGER);
 ```
 
 ### 5.2 Media manifest — the probe output persisted as `media` rows plus `probe_json` raw dump.
@@ -200,30 +209,73 @@ CREATE TABLE cost_ledger (
 | yt-1080 | mp4 | H.264 CRF 18, high@4.2 | AAC 192k | 1920×1080 |
 | yt-4k | mp4 | HEVC CRF 20, main10 | AAC 192k | 3840×2160 |
 
-## 6. Model usage (Claude API)
+## 6. Inference layer
 
-> **Model IDs are configuration, not architecture.** Every model choice below lives in
-> `config.py` as a named role (`ROLE_SKELETON`, `ROLE_ANALYSIS`, `ROLE_JUDGE`) overridable by
-> environment variable. Model families change faster than this project will ship; no model ID
-> may be hardcoded at a call site, and no document should treat a specific version as load-bearing.
-> The IDs named here are today's defaults, not commitments.
+> **Model IDs are configuration, not architecture.** Every model choice lives in `config.py` as
+> a named role (`ROLE_SKELETON`, `ROLE_ANALYSIS`, `ROLE_JUDGE`) overridable by environment
+> variable. No model ID literal may appear at a call site, and no document should treat a
+> specific version as load-bearing.
 
-- SDK: official `anthropic` Python SDK. Default for the skeleton agent role (S3), where
-  judgment quality matters most, is the current top-tier Claude model.
-- Tier-2 VLM pass model is an **R1 study output**, comparing `claude-haiku-4-5` /
-  `claude-sonnet-5` / `claude-opus-5` on description quality and highlight agreement vs cost.
-  R7 additionally holds a conditional arm on whether the *dense* pass (perception) could use a
-  video-native or local model with Claude reserved for judgment — only triggered if the winning
-  policy's cost projection exceeds the §7 envelope, and adopting it is a Karl DECISION.
-  Submit via **Message Batches API** (50% discount, results ≤24h, fits an offline analysis
-  pass). Structured outputs (`output_config.format`) enforce the §5.4 schema.
-- Adaptive thinking defaults; `effort` low for tier-2 scoring calls, high for S3.
-- **Every call goes through `costs.py`** which writes the cost ledger and enforces the project
-  budget cap (§7) — a run that would exceed the cap fails loudly before submitting.
-- Prices (2026-06, for the cost model; verify at study time): Opus 5 $5/$25 per MTok,
-  Sonnet 5 $3/$15 ($2/$10 intro through 2026-08-31), Haiku 4.5 $1/$5. Batch = 50% of those.
-  High-res images cost up to ~4,784 tokens each; downsampled keyframes (~768px) far less —
-  keyframe resolution is an explicit R1 variable.
+### 6.1 Two backends behind one interface
+
+Development runs on a **Claude Max subscription via the Claude Code CLI** (no marginal
+per-token cost); production targets the **Anthropic API** (per-token, batchable). Both sit
+behind `roughcut.inference.Backend`, selected by `ROUGHCUT_BACKEND=claude_cli|anthropic_api`.
+No pipeline code may import `anthropic` directly or shell out to `claude` — T0c enforces this
+with a grep test.
+
+```python
+class Backend(Protocol):
+    def complete(self, *, role: str, prompt: str,
+                 images: Sequence[Path] = (),
+                 schema: dict | None = None) -> Result: ...
+    def complete_many(self, requests: Sequence[Request]) -> list[Result]: ...
+```
+
+`Result` carries `content` (a validated dict when `schema` was given, else text),
+`input_tokens`, `output_tokens`, `backend`, `model`, and `projected_usd` (§7).
+
+**The interface is deliberately a lowest common denominator**, because the backends differ in
+real ways:
+
+| Concern | `claude_cli` (Max plan) | `anthropic_api` |
+|---|---|---|
+| Images | passed **by path**, read from disk | base64 content blocks |
+| Schema enforcement | prompt for JSON, then validate + bounded retry | native strict structured outputs |
+| Batching | none — sequential calls | Message Batches API (50% discount) |
+| Marginal cost | none (subscription) | per-token |
+| Throughput ceiling | subscription rate limits (rolling windows) | API rate limits |
+
+Two rules follow and must not be violated:
+
+1. **Images are addressed by path in the interface, never base64.** Base64 is an API-backend
+   implementation detail.
+2. **A schema is a required *outcome*, not a required *mechanism*.** `complete(schema=…)`
+   returns a validated object or raises; how each backend gets there is its own business.
+   `complete_many` is the only batching surface — the API backend may fan out to the Batch API
+   internally; the CLI backend just loops.
+
+### 6.2 Consequences to design around
+
+- **Sequential per-unit workloads are hostile to the CLI backend.** Per-shot analysis of a 5h
+  bin is ~500–1,000 calls with per-session startup overhead — slow, and a large bite out of a
+  rolling subscription window. Coarse contact-sheet policies (R7 policy B/C) need ~20–50 calls
+  for the same bin. That is a genuine argument in their favor *and* a bias R7 must control for:
+  policies are ranked on tokens and quality, never on how pleasant they are to run on the dev
+  backend.
+- **The CLI backend is for development and prototyping**; the API backend is the production
+  path. The abstraction exists so that swap is a config change, not a rewrite.
+- **Structured-output fidelity is lower on the CLI backend.** Any schema the pipeline depends on
+  must be simple enough to survive prompt-and-validate; if a schema only works with native
+  strict outputs, that is a design smell to fix in the schema.
+- Adaptive thinking defaults; low effort for per-unit scoring calls, high for the S3 skeleton agent.
+
+### 6.3 Reference prices (projection only — verify before quoting)
+
+Per MTok input/output at time of writing: top-tier ≈ $5/$25, mid-tier ≈ $3/$15, small ≈ $1/$5;
+Batch API = 50% of those. A high-resolution image can reach ~4,784 tokens; a 768px keyframe far
+less, which is why keyframe/sheet resolution is an explicit R1 variable. These numbers feed
+`projected_usd` and nothing else — they are not a runtime dependency.
 
 ## 7. Cost budget
 
@@ -241,6 +293,18 @@ originally sized for, and it changes the economics enough to simplify the design
   runaway loops and misconfiguration, not to force architectural compromises.
 - `roughcut cost report` prints the ledger per stage; the E2E benchmark task (T13) asserts the
   cap held.
+
+**Accounting works identically on both backends.** On the Claude Max / CLI backend there is no
+marginal dollar cost, but every call still records `input_tokens`, `output_tokens`, and
+`projected_usd` — what the same work *would* cost through the API at §6.3 rates. The budget cap
+is enforced against `projected_usd` regardless of backend. Without this, developing on a
+subscription would silently destroy the ability to answer "is this affordable in production",
+which is the entire reason the budget discipline exists. `actual_usd` is null on the CLI backend.
+
+A second, backend-specific guardrail: the CLI backend also enforces a **per-run call ceiling**
+(default 500), because a subscription's scarce resource is requests-per-window rather than
+dollars. Exceeding it fails loudly with a pointer to `complete_many` and the coarse-policy
+argument in §6.2.
 
 If a future use case genuinely brings 20h bins, re-enable gating via R4 — the study and the
 signal plumbing remain available.

@@ -54,20 +54,33 @@ the instrument to measure this.
    the same harness (scripted per-shot calls) so cost accounting is comparable.
 3. **Metrics per policy:**
    - Highlight recall@budget: fraction of Karl's labeled highlights overlapped by any
-     candidate segment, at matched dollar budgets (evaluate at ~$1/h and ~$3/h of footage)
+     candidate segment, at **matched token budgets** per hour of footage (evaluate at two
+     levels, roughly 0.3M and 1M input tokens per footage-hour)
    - Brief-highlight recall (labels < 5s long) reported separately — the adaptive failure mode
    - Ranking quality: AUROC of candidate scores vs labels
-   - Measured $ and wall-clock per hour of footage → 20h projection
+   - **Tokens** (input/output) and wall-clock per hour of footage, plus `projected_usd` at API
+     rates → 5h-bin projection. Development runs on the Max subscription where marginal cost is
+     zero, so **tokens are the currency of this study**; dollars are a projection (SPEC §7).
+   - Call count per hour of footage — the scarce resource on the subscription backend, and the
+     axis on which policy A is worst (~500–1,000 sequential calls vs ~20–50 for B/C)
    - Determinism/reproducibility notes (adaptive runs are path-dependent; quantify run-to-run
      variance over 2 repeats)
-4. **Decision rule:** prefer the cheapest policy whose overall recall ≥ 95% AND brief-highlight
-   recall ≥ 90% at the ~$3/h budget; tie-break on wall-clock. If B or C wins, R1's grid
-   variables change from (K, resolution, model) to (sheet density, refinement depth, model) —
-   amend R1 before running it.
-5. **Model-landscape arm (conditional):** if the winner's 20h projection > $60, rerun its
-   coarse pass with (a) Gemini video-input and (b) a local Qwen2.5-VL, keeping Claude for
-   refinement/judgment; compare recall and cost. Adopting a non-Claude dense pass is a
-   DECISION item for Karl (adds a second provider dependency), not an automatic switch.
+4. **Decision rule:** prefer the cheapest policy **by tokens** whose overall recall ≥ 95% AND
+   brief-highlight recall ≥ 90% at the higher budget level; tie-break on wall-clock. If B or C
+   wins, R1's grid variables change from (K, resolution, model) to (sheet density, refinement
+   depth, model) — amend R1 before running it.
+
+   > **Control for dev-backend bias.** Policy A needs ~20× the calls of B/C, which makes it
+   > genuinely unpleasant on a subscription backend — slow, and a large bite out of a rolling
+   > window. That is a production consideration only if it *also* shows up in tokens or quality;
+   > the API backend's Batch support makes raw call count a non-issue in production. Rank on
+   > tokens and recall, report call count separately, and do not let it pick the winner. If A
+   > wins on quality per token, A wins.
+5. **Model-landscape arm (conditional):** if the winner's 5h projection exceeds the SPEC §7 cap
+   ($15), rerun its coarse pass with (a) a video-native model and (b) a local open-weight VLM
+   (the RTX 5080's 16GB fits a 7B-class model), keeping Claude for refinement/judgment; compare
+   recall and tokens. Adopting a non-Claude dense pass is a DECISION for Karl (a second provider
+   dependency), not an automatic switch.
 
 ## Definition of Done
 - [ ] Contact-sheet helper exists with tests (grid layout, timestamp burn-in readable)
@@ -78,4 +91,5 @@ the instrument to measure this.
 - [ ] R1 protocol amended to run inside the winning policy's representation
 - [ ] Model-landscape arm run + reported IF triggered by the cost condition; otherwise a note
       that it wasn't triggered and stays available
-- [ ] Study spend ≤ $25 (log to cost ledger)
+- [ ] Study run on the subscription backend (no marginal spend); token totals and
+      `projected_usd` per policy logged to the cost ledger

@@ -49,15 +49,23 @@ below is designed to be repeated continuously without user prompting.
 - If reality contradicts the SPEC (a library can't do X, a cost estimate is off 5×), update
   the SPEC in the same commit as the discovery — the SPEC must never be knowingly stale.
 
-## Cost guardrails
+## Inference & cost guardrails
 
-- All Claude API calls go through `roughcut.costs` (ledger + cap check). No direct
-  `client.messages.create` outside that wrapper in pipeline code.
-- Development/testing calls: prefer mocked responses; real-API smoke tests use ≤ 10 shots.
-  R1 is the only pre-approved spend > $5 (target < $20). Anything projected beyond that:
-  stop and ask Karl.
-- VLM passes use the Batch API; per-shot calls use `effort: low`; the S3 skeleton agent uses
-  `claude-opus-5`.
+- **All inference goes through `roughcut.inference`** (SPEC §6). No pipeline code imports
+  `anthropic` or shells out to `claude` directly — T0c's grep test enforces this, and defeating
+  it is never the right fix.
+- **Development default is the Claude Code CLI backend** (`ROUGHCUT_BACKEND=claude_cli`), which
+  bills against Karl's Max subscription rather than per token. Treat the scarce resource as
+  **requests per rolling window**, not dollars: prefer `complete_many` and coarse-grained calls
+  over per-item loops, and respect the per-run call ceiling rather than raising it.
+- **Every call still logs tokens and `projected_usd`** — the API-rate equivalent. Budget caps
+  are enforced on `projected_usd` on both backends, so subscription development never loses the
+  ability to answer "is this affordable in production".
+- Tests use mocked backends by default; live smoke tests are ≤ 3 calls and explicitly marked.
+- Anything that would run hundreds of live calls in a single session: stop and confirm with
+  Karl first, regardless of backend.
+- Per-unit scoring calls use low effort; the S3 skeleton agent uses the top-tier role. Model IDs
+  come from `config.py` roles — never literals.
 
 ## Checkpoints
 

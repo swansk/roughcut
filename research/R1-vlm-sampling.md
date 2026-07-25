@@ -31,6 +31,7 @@ SPEC §7 envelope math ($5–40/project), both currently guesses.
 
 ## Definition of Done
 - [ ] All evaluated cells have complete metrics + raw outputs archived under `research/runs/r1/`
-- [ ] Report `R1-report.md` with the metric table, chosen config, and measured $/20h projection
+- [ ] Report `R1-report.md` with the metric table, chosen config, and measured tokens +
+      `projected_usd` for a 5h bin
 - [ ] SPEC §6 + RQ-1 row updated; T7 DoD updated with the measured overlap target
-- [ ] Total study spend recorded (target < $20)
+- [ ] Token totals recorded per cell; projected 5h cost stays under the SPEC §7 cap

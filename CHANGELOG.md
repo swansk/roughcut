@@ -9,7 +9,26 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Added
+- **Inference abstraction with two backends** (SPEC §6, task T0c): a single `Backend` protocol
+  over a Claude Code CLI implementation (Claude Max subscription — the development default,
+  zero marginal cost) and an Anthropic API implementation (per-token, Batch-capable — the
+  production path), selected by `ROUGHCUT_BACKEND`. The interface is a deliberate lowest common
+  denominator: images passed by path rather than base64, and schema conformance defined as a
+  required outcome rather than a required mechanism, so the CLI backend can satisfy it by
+  prompt-and-validate while the API backend uses native structured outputs. A contract
+  conformance suite runs against both backends.
+- Cost ledger records `backend`, tokens, `projected_usd` (API-rate equivalent) and nullable
+  `actual_usd`; **budget caps are enforced on `projected_usd` on both backends**, so developing
+  on a subscription doesn't lose the ability to answer whether the pipeline is affordable in
+  production. The CLI backend adds a per-run call ceiling, since a subscription's scarce
+  resource is requests-per-window rather than dollars.
+
 ### Changed
+- Research studies R1 and R7 now budget and report in **tokens** with dollars as a projection.
+  R7 gains an explicit control for dev-backend bias: policy A needs ~20× the calls of the
+  coarse policies, which is painful on a subscription but a non-issue on the API's Batch
+  endpoint, so policies are ranked on tokens and recall with call count reported separately.
 - **Linux-first, container-ready** (SPEC §9): development moves to WSL2/Linux, production
   target is a Linux box. Portability rules (no absolute media paths, one subprocess wrapper,
   pathlib only, env-var config, pinned ffmpeg) plus new task T0b enforcing them via a
