@@ -41,6 +41,14 @@ def test_all_clips_offered_not_just_used(client):
     assert p["clips"]["CLIP_A.MP4"]["used"] is True
 
 
+def test_clips_carry_a_capture_time(client):
+    """Without it the model cannot know what "before" means — the cause of the
+    out-of-order airport section in the first originated cut."""
+    clips = client.get("/api/project").json()["clips"]
+    stamps = {c: v["captured"] for c, v in clips.items()}
+    assert all(isinstance(t, float) and t > 0 for t in stamps.values()), stamps
+
+
 def test_transcript_and_candidates_exposed(client):
     clip = client.get("/api/project").json()["clips"]["CLIP_A.MP4"]
     assert [u["text"] for u in clip["transcript"]] == ["hello there", "how are you",

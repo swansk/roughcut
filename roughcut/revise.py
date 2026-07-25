@@ -81,6 +81,11 @@ Things that are true of this kind of footage, and easy to get wrong from transcr
 * **Give it a shape**: something to establish where we are, a middle that builds, and
   an ending that pays off rather than just stops. Order is yours to choose; the clips
   are not obliged to appear in the order they were shot.
+* **But do not scramble a sequence of events.** Each clip says when it was recorded
+  relative to the others. Reordering for rhythm or theme is fine, and cutting between
+  sessions is fine — going *backwards* inside one continuous stretch is what reads as
+  a mistake, because the same people, place and light return in the wrong order. If
+  you do it, it should be for a reason you can name in the `why`.
 * **Spread the load.** A first cut drawn from two clips is a clip reel, not a film.
 * **You cannot see the frame.** A shot may be dark, upside down, pointed at a glove,
   or ruined in a way the words do not reveal. So say what each moment is *for* in its
@@ -88,8 +93,53 @@ Things that are true of this kind of footage, and easy to get wrong from transcr
   picture, and it is what any later pass inherits as memory of the choice."""
 
 
-def _clip_block(clip: dict) -> str:
+SESSION_GAP_S = 4 * 3600
+
+
+def shot_timeline(clips: dict[str, dict]) -> dict[str, str]:
+    """When each clip was recorded, relative to the others.
+
+    Karl, watching the first originated cut: *"some weirdness where airport footage
+    was cut seemingly out of order in a way that didn't make sense."* He was right and
+    the cause was not judgement — the model had never been told when anything was
+    shot, so it read a 20:43 clip, a 21:40 clip and a 22:17 clip as interchangeable
+    and cut back to the first after the third.
+
+    Reported as **relative** position rather than wall-clock, deliberately: GoPro
+    writes UTC, the trip was not in UTC, and a time of day that is seven hours out
+    would be worse than no time of day at all. Sessions are inferred from gaps
+    (> 4h starts a new one), which recovers "these are different days" without
+    needing to know the timezone.
+    """
+    stamped = [(c, float(v["captured"])) for c, v in clips.items()
+               if v.get("captured")]
+    if not stamped:
+        return {}
+    stamped.sort(key=lambda cv: cv[1])
+    out: dict[str, str] = {}
+    session, prev = 1, None
+    for i, (clip, when) in enumerate(stamped, 1):
+        gap = None if prev is None else when - prev
+        if gap is not None and gap > SESSION_GAP_S:
+            session += 1
+        if gap is None:
+            rel = "first thing recorded"
+        elif gap > SESSION_GAP_S:
+            rel = f"{gap / 3600:.0f}h later — a different session"
+        elif gap >= 3600:
+            rel = f"{gap / 3600:.1f}h after the previous"
+        else:
+            rel = f"{gap / 60:.0f} min after the previous"
+        out[clip] = f"recorded #{i} of {len(stamped)}, session {session}, {rel}"
+        prev = when
+    return out
+
+
+def _clip_block(clip: dict, timeline: dict[str, str] | None = None) -> str:
     lines = [f"### {clip['clip']}  (duration {clip['duration']:.1f}s)"]
+    when = (timeline or {}).get(clip["clip"])
+    if when:
+        lines.append(when)
     s = clip.get("summary") or {}
     if s:
         lines.append(
@@ -111,7 +161,8 @@ def build_prompt(segments: list[dict], clips: dict[str, dict], story: str,
         f"({s['out'] - s['in']:.1f}s) — {s.get('why', '')}"
         for i, s in enumerate(segments))
     total = sum(s["out"] - s["in"] for s in segments)
-    inventory = "\n\n".join(_clip_block(c) for c in clips.values())
+    timeline = shot_timeline(clips)
+    inventory = "\n\n".join(_clip_block(c, timeline) for c in clips.values())
 
     return f"""The editor is cutting a short film from one bin of footage.
 
@@ -135,13 +186,16 @@ def build_prompt(segments: list[dict], clips: dict[str, dict], story: str,
 The full revised edit as an ordered list of segments — not a diff, not only the parts
 you changed. Keep what works; the note tells you what to change. Timestamps are
 seconds within the named clip. Prefer cutting on utterance boundaries visible in the
-transcripts above."""
+transcripts above. Each clip says when it was recorded relative to the others:
+reordering for rhythm or theme is fine, but going backwards inside one continuous
+stretch reads as a mistake unless you can name the reason in the `why`."""
 
 
 def build_first_prompt(clips: dict[str, dict], story: str, note: str,
                        target: tuple[float, float]) -> str:
     """The originating prompt: no current edit, so the material and the brief carry it."""
-    inventory = "\n\n".join(_clip_block(c) for c in clips.values())
+    timeline = shot_timeline(clips)
+    inventory = "\n\n".join(_clip_block(c, timeline) for c in clips.values())
     total = sum(float(c["duration"]) for c in clips.values())
     brief = story.strip() or (
         "(the editor has not written this yet — infer what this film is about from "

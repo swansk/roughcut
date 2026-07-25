@@ -52,6 +52,7 @@ import sys
 import threading
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -156,6 +157,35 @@ def analysed_stems() -> set[str]:
             for p in STATE["sidecars"].glob("*.audio.json")}
 
 
+def capture_time(clip: str) -> float | None:
+    """When this clip was recorded, as an epoch. Cached — it costs an ffprobe.
+
+    The container's `creation_time` first, the file's mtime as a fallback. Without
+    this the model has no idea what "before" means and will happily cut from a 22:17
+    shot back to a 20:53 one, which is exactly what Karl saw in the airport section of
+    the first originated cut.
+    """
+    cache: dict = STATE.setdefault("capture", {})
+    if clip in cache:
+        return cache[clip]
+    src: Path = STATE["footage"] / clip
+    when: float | None = None
+    if src.exists():
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format_tags=creation_time",
+             "-of", "csv=p=0", str(src)], capture_output=True, text=True)
+        raw = r.stdout.strip().strip(",")
+        if raw:
+            try:
+                when = datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                when = None
+        if when is None:
+            when = src.stat().st_mtime
+    cache[clip] = when
+    return when
+
+
 def load_sidecar(clip: str) -> dict:
     p: Path = STATE["sidecars"] / f"{Path(clip).stem}.audio.json"
     if not p.exists():
@@ -186,6 +216,7 @@ def project_payload() -> dict:
             "duration": d["duration_s"],
             "proxy": f"/media/proxy/{Path(clip).stem}.mp4",
             "transcript": d.get("transcript", []),
+            "captured": capture_time(clip),
             "candidates": d.get("candidates", [])[:12],
             "summary": {k: d["summary"].get(k) for k in
                         ("speech_fraction", "wind_dominant_fraction",
@@ -302,7 +333,8 @@ async def api_ask(request: Request) -> JSONResponse:
 
     payload = project_payload()
     clips = {c: {"clip": c, "duration": v["duration"], "transcript": v["transcript"],
-                 "summary": v["summary"]} for c, v in payload["clips"].items()}
+                 "summary": v["summary"], "captured": v.get("captured")}
+             for c, v in payload["clips"].items()}
     target = payload["target"]
     segments = body.get("segments")
     if segments is None:

@@ -255,6 +255,60 @@ def test_empty_note_is_rejected_without_calling_the_model():
     assert b.requests == []
 
 
+# ------------------------------------------------------------------ chronology
+
+# 20:43, 20:53, 21:40, 22:17 on one day, then one clip a day and a half later —
+# the shape of B1's travel section, which is where the ordering fell over.
+TIMED = {
+    "A.MP4": {"clip": "A.MP4", "duration": 10.0, "summary": {}, "captured": 1770237800,
+              "transcript": [{"start": 1.0, "end": 2.0, "text": "hello"}]},
+    "B.MP4": {"clip": "B.MP4", "duration": 8.0, "summary": {}, "captured": 1770238400,
+              "transcript": []},
+    "C.MP4": {"clip": "C.MP4", "duration": 8.0, "summary": {}, "captured": 1770241200,
+              "transcript": []},
+    "D.MP4": {"clip": "D.MP4", "duration": 8.0, "summary": {}, "captured": 1770369000,
+              "transcript": []},
+}
+
+
+def test_shot_timeline_orders_clips_and_splits_sessions():
+    """Karl on the first originated cut: the airport was cut out of order in a way
+    that made no sense. It was — and the model had never been told when anything was
+    shot, so it could not have known."""
+    tl = revise.shot_timeline(TIMED)
+    assert tl["A.MP4"].startswith("recorded #1 of 4, session 1, first thing")
+    assert "recorded #2 of 4, session 1, 10 min after the previous" == tl["B.MP4"]
+    assert "recorded #3 of 4, session 1" in tl["C.MP4"]
+    assert "session 2" in tl["D.MP4"] and "different session" in tl["D.MP4"]
+
+
+def test_shot_timeline_is_relative_never_wall_clock():
+    """GoPro writes UTC and the trip was not in UTC; a time of day seven hours out
+    would be worse than none. Nothing absolute may appear."""
+    joined = " ".join(revise.shot_timeline(TIMED).values())
+    assert "20:4" not in joined and "2026" not in joined
+    assert ":" not in joined.replace("session", "")
+
+
+def test_clips_without_capture_times_still_work():
+    assert revise.shot_timeline(CLIPS) == {}
+    b = use(['{"segments":[{"clip":"A.MP4","in":0,"out":2}]}'])
+    revise.originate(CLIPS, story="x", note="y")       # must not raise
+    assert "recorded #" not in b.requests[0].prompt
+
+
+def test_both_prompts_carry_the_shot_order():
+    """The revision path had the same blind spot — session 2 flagged that its
+    reorder 'may invent a chronology the footage contradicts'."""
+    b = use(['{"segments":[{"clip":"A.MP4","in":0,"out":2}]}',
+             '{"segments":[{"clip":"A.MP4","in":0,"out":2}]}'])
+    revise.originate(TIMED, story="x", note="")
+    revise.propose(SEGMENTS, TIMED, "x", "tighten it")
+    for req in b.requests:
+        assert "recorded #1 of 4" in req.prompt
+        assert "backwards" in req.prompt, "and what to do with it"
+
+
 # ------------------------------------------------------------------ originate
 
 def test_originate_builds_a_cut_with_nothing_to_revise():

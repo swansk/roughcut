@@ -10,6 +10,22 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The model is told when each clip was shot, and the ordering defect goes away.** Karl on the
+  first originated cut: *"some weirdness where airport footage was cut seemingly out of order in
+  a way that didn't make sense."* He was right, and it was not judgement — the model had never
+  been given a capture time, so it read a 20:43 clip, a 21:40 clip and a 22:17 clip as
+  interchangeable and cut back to the first after the third. Clips now carry `captured` (container
+  `creation_time`, mtime as fallback, cached), and both prompts render it as **relative** position
+  — `recorded #3 of 17, session 1, 47 min after the previous`. Relative on purpose: GoPro writes
+  UTC, the trip was not in UTC, and a time of day seven hours out is worse than none; sessions are
+  inferred from gaps over 4h, which recovers "different day" without knowing the timezone.
+
+  Same bin, same brief, one call: **in-session backwards cuts 5 → 1**, and the survivor is
+  deliberate and declared — it puts the last-shot run before the lodge debrief *"because the
+  debrief is the film's ending and nothing should follow it"*, then names it as one of two things
+  to check first. The travel section is now in order. It also found a payoff the first pass
+  missed: Spencer drinking the day-old milk, so the legend ends on a gag. 19 segments, 136.4s,
+  $0.42. Rendered: 136.71s, no rotation, −15.9 LUFS, no black runs.
 - **D7 closed: the repo has a remote.** `origin` is github.com/swansk/roughcut (private), `main`
   tracking it, 34 commits pushed. Three sessions of work had been sitting on one disk with no
   backup — the only artifact in the project that is not regenerable.
