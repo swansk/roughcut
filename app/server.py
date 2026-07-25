@@ -70,6 +70,7 @@ VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".avi", ".m4v", ".mts", ".webm"}
 app = FastAPI()
 STATE: dict = {}
 RENDERS: dict[str, dict] = {}
+ANALYSES: dict[str, dict] = {}
 
 
 # ---------------------------------------------------------------- proxies
@@ -307,6 +308,94 @@ async def api_ask(request: Request) -> JSONResponse:
     except (inference.InferenceError, ValueError) as exc:
         raise HTTPException(502, str(exc)) from exc
     return JSONResponse(plan)
+
+
+# ---------------------------------------------------------------- analysis
+
+
+def analyze_cmd(skip: list[str], force: bool) -> list[str]:
+    """The audio pass, as a command. A function so the tests can replace it: running
+    faster-whisper for real would mean a GPU, a 3GB model download and minutes per
+    suite — none of which says anything about whether the job plumbing works."""
+    cmd = ["uv", "run", "--quiet", str(TOOLS / "audio_analyze.py"),
+           str(STATE["footage"]), "-o", str(STATE["sidecars"])]
+    if skip:
+        cmd += ["--skip", ",".join(skip)]
+    if force:
+        cmd += ["--force"]
+    return cmd
+
+
+def _analyze_job(job: str, cmd: list[str], wanted: set[str]) -> None:
+    entry = ANALYSES[job]
+    lines: list[str] = []
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, bufsize=1)
+    except OSError as exc:
+        entry.update(state="failed", log=str(exc))
+        return
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        lines.append(line.rstrip())
+        # Progress is counted from the sidecars on disk rather than parsed out of the
+        # tool's chatter: audio_analyze.py writes each one as it finishes, so the
+        # filesystem is the honest progress bar and stays right if the log format moves.
+        entry["done"] = len(wanted & analysed_stems())
+        entry["log"] = "\n".join(lines[-40:])
+    rc = proc.wait()
+    entry["done"] = len(wanted & analysed_stems())
+    entry["log"] = "\n".join(lines[-40:])
+    if rc != 0:
+        entry["state"] = "failed"
+        return
+    if entry["done"]:
+        # Clips only become previewable once they have a proxy, and nothing else in
+        # the app would build one for a clip that did not exist at launch. This runs
+        # *before* the job reports done: a job that says "ready" while the previews
+        # for its own clips are still being written hands the UI a broken <video>,
+        # which stays broken until reload because the element does not retry.
+        entry["stage"] = "previews"
+        STATE["proxies_ready"] = False
+        ensure_proxies(sorted(c for c in footage_clips()
+                              if Path(c).stem in analysed_stems()))
+    entry["stage"] = "done"
+    entry["state"] = "done"
+
+
+@app.post("/api/analyze")
+async def api_analyze(request: Request) -> JSONResponse:
+    """Run the audio pass over the bin, in-app.
+
+    This was step 2 of five terminal steps standing between a folder of footage and
+    the board. It is the cheapest of them to move inside — the tool already writes one
+    sidecar per clip as it goes, so progress is real rather than a spinner.
+    """
+    body = await request.json()
+    if any(a["state"] == "running" for a in ANALYSES.values()):
+        raise HTTPException(409, "an analysis is already running")
+    skip = [str(s).strip() for s in body.get("skip", []) if str(s).strip()]
+    force = bool(body.get("force"))
+    skipped = {s.upper() for s in skip}
+    wanted = {Path(c).stem for c in footage_clips()
+              if Path(c).stem.upper() not in skipped}
+    if not wanted:
+        raise HTTPException(400, "no clips to analyse")
+
+    job = uuid.uuid4().hex[:8]
+    ANALYSES[job] = {"state": "running", "stage": "analysing", "log": "",
+                     "total": len(wanted), "done": len(wanted & analysed_stems())}
+    threading.Thread(target=_analyze_job,
+                     args=(job, analyze_cmd(skip, force), wanted),
+                     daemon=True).start()
+    return JSONResponse({"job": job, "total": len(wanted)})
+
+
+@app.get("/api/analyze/{job}")
+def api_analyze_status(job: str) -> JSONResponse:
+    if job not in ANALYSES:
+        raise HTTPException(404, "no such job")
+    return JSONResponse(ANALYSES[job])
 
 
 def _render_job(job: str, edl_path: Path, out_path: Path) -> None:

@@ -15,6 +15,7 @@ let P = null;                 // project payload
 let S = null;                 // project status: where this bin is in the workflow
 let segs = [];                // working segment list
 let sel = 0;
+let analysing = false;
 const undoStack = [];
 
 const $ = (s) => document.querySelector(s);
@@ -237,7 +238,52 @@ async function refreshStatus() {
     ${missing.length ? `<div style="color:var(--bad)">missing on PATH: ${missing.join(', ')}</div>` : ''}
     <div class="path">${escapeHtml(S.footage)}</div>
     <div class="path">${escapeHtml(S.edl)}${S.edl_created ? ' (new)' : ''}</div>`;
+  const btn = $('#analyze');
+  btn.textContent = S.pending.length
+    ? `Analyse ${S.pending.length} clip${S.pending.length > 1 ? 's' : ''}`
+    : 'Analyse audio';
+  btn.disabled = !S.pending.length || analysing;
+  btn.classList.toggle('primary', S.pending.length > 0 && !segs.length);
   return S;
+}
+
+/* The audio pass, in-app. It was step 2 of the five terminal steps between a folder
+ * of footage and this board, and the only one that takes long enough to need a
+ * progress bar rather than a spinner. */
+async function analyze() {
+  const r = await fetch('/api/analyze', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ skip: [] }),
+  });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    return toast(`analysis failed to start: ${d.detail || r.status}`, 5000);
+  }
+  const { job, total } = await r.json();
+  analysing = true;
+  $('#analyze').disabled = true;
+  $('#analyzeBar').style.display = 'block';
+  const poll = setInterval(async () => {
+    const s = await (await fetch(`/api/analyze/${job}`)).json();
+    $('#analyzeBar').firstElementChild.style.width =
+      `${Math.round(100 * s.done / Math.max(1, s.total))}%`;
+    $('#analyzeState').textContent = s.stage === 'previews'
+      ? 'building previews…' : `${s.done}/${total} analysed`;
+    if (s.state === 'running') return;
+    clearInterval(poll);
+    analysing = false;
+    $('#analyzeBar').style.display = 'none';
+    if (s.state === 'failed') {
+      $('#analyzeState').textContent = 'failed';
+      return toast(`analysis failed — ${s.log.split('\n').slice(-1)[0] || 'see log'}`, 8000);
+    }
+    $('#analyzeState').textContent = '';
+    // Transcripts and candidates only exist now, so the whole project reloads.
+    P = await (await fetch('/api/project')).json();
+    await refreshStatus();
+    render();
+    toast(`${s.done} clip${s.done > 1 ? 's' : ''} analysed — ready to cut`, 5000);
+  }, 2000);
 }
 
 async function save() {
@@ -416,6 +462,7 @@ async function boot() {
     toast('building proxies in the background — previews appear as they finish', 6000);
     waitForProxies();
   }
+  $('#analyze').onclick = analyze;
   $('#save').onclick = save;
   $('#snap').onclick = snap;
   $('#undo').onclick = undo;

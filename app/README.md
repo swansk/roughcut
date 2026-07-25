@@ -60,6 +60,7 @@ server, and every edit is undoable because fiddling is only fun when it is cheap
 
 | | |
 |---|---|
+| **Project** | Where this bin is: clips in the folder, how many analysed, shots in the cut, and the audio pass with a progress bar. Analysis was step 2 of five terminal steps; it runs here now |
 | **Timeline** | One card per segment: preview parked on the in-point, the transcript lines that fall inside the cut, why it was chosen (editable), trim controls, drag to reorder |
 | **Boundary warnings** | A live ⚠ when a cut opens mid-sentence or clips a line off — the defect Karl flagged, surfaced while you trim rather than only when you ask |
 | **Story panel** | Free text saved into the EDL. The thing the agent is worst at; typing "the milk is the running joke" beats an hour of analysis |

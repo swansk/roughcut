@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -320,6 +321,110 @@ def test_proxy_dirs_do_not_collide_between_bins(tmp_path, project):
     other.mkdir()
     with _fresh(tmp_path, {"footage": other}):
         assert server.STATE["proxy_dir"] != first
+
+
+# ------------------------------------------------------------------ analyse
+
+def _stub_analyzer(script: Path, out: Path, stems: list[str]) -> list[str]:
+    """A stand-in for audio_analyze.py that writes sidecars one at a time.
+
+    The real tool means a GPU, a 3GB model download and minutes per run; none of that
+    exercises the thing under test, which is whether the job reports honest progress
+    and picks up the result.
+    """
+    script.write_text(
+        "import json, sys, time\n"
+        "from pathlib import Path\n"
+        "out = Path(sys.argv[1])\n"
+        "for stem in sys.argv[2:]:\n"
+        "    time.sleep(0.15)\n"
+        "    (out / f'{stem}.audio.json').write_text(json.dumps({\n"
+        "        'clip': f'{stem}.MP4', 'duration_s': 6.0,\n"
+        "        'transcript': [], 'candidates': [],\n"
+        "        'summary': {'speech_fraction': 0.0, 'audio_usable': True}}))\n"
+        "    print(f'{stem}.MP4: done', flush=True)\n", encoding="utf-8")
+    return [sys.executable, str(script), str(out), *stems]
+
+
+def _wait(client, job, timeout=20.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        s = client.get(f"/api/analyze/{job}").json()
+        if s["state"] != "running":
+            return s
+        time.sleep(0.1)
+    raise AssertionError(f"analysis did not finish: {s}")
+
+
+def test_analysis_runs_in_app_and_reports_progress(tmp_path, project, monkeypatch):
+    import server
+
+    sidecars = tmp_path / "fresh"
+    sidecars.mkdir()
+    monkeypatch.setattr(server, "analyze_cmd", lambda skip, force: _stub_analyzer(
+        tmp_path / "stub.py", sidecars, ["CLIP_A", "CLIP_B", "CLIP_C"]))
+
+    with _fresh(tmp_path, project, sidecars=sidecars) as c:
+        assert c.get("/api/status").json()["analysed"] == 0
+        start = c.post("/api/analyze", json={"skip": []}).json()
+        assert start["total"] == 3
+        final = _wait(c, start["job"])
+        assert final["state"] == "done" and final["done"] == 3
+        assert "CLIP_C.MP4: done" in final["log"]
+
+        # the clips are usable without a restart: status, project and proxies all
+        # know about them now
+        assert c.get("/api/status").json()["analysed"] == 3
+        assert set(c.get("/api/project").json()["clips"]) == {
+            "CLIP_A.MP4", "CLIP_B.MP4", "CLIP_C.MP4"}
+        assert (server.STATE["proxy_dir"] / "CLIP_A.mp4").exists()
+
+
+def test_analysis_skips_the_junk_it_is_told_to(tmp_path, project, monkeypatch):
+    import server
+
+    sidecars = tmp_path / "skipped"
+    sidecars.mkdir()
+    seen: dict = {}
+
+    def cmd(skip, force):
+        seen["skip"], seen["force"] = skip, force
+        return _stub_analyzer(tmp_path / "stub2.py", sidecars, ["CLIP_A", "CLIP_C"])
+
+    monkeypatch.setattr(server, "analyze_cmd", cmd)
+    with _fresh(tmp_path, project, sidecars=sidecars) as c:
+        start = c.post("/api/analyze", json={"skip": ["CLIP_B"]}).json()
+        assert start["total"] == 2, "the skipped clip is not part of the target"
+        final = _wait(c, start["job"])
+        assert final["state"] == "done" and final["done"] == 2
+    assert seen["skip"] == ["CLIP_B"] and seen["force"] is False
+
+
+def test_a_failed_analysis_is_reported_not_swallowed(tmp_path, project, monkeypatch):
+    import server
+
+    monkeypatch.setattr(server, "analyze_cmd", lambda skip, force: [
+        sys.executable, "-c", "import sys; print('cuda is unavailable'); sys.exit(2)"])
+    with _fresh(tmp_path, project, sidecars=tmp_path / "empty") as c:
+        job = c.post("/api/analyze", json={}).json()["job"]
+        final = _wait(c, job)
+        assert final["state"] == "failed"
+        assert "cuda is unavailable" in final["log"]
+
+
+def test_only_one_analysis_at_a_time(tmp_path, project, monkeypatch):
+    import server
+
+    monkeypatch.setattr(server, "analyze_cmd", lambda skip, force: [
+        sys.executable, "-c", "import time; time.sleep(1.5)"])
+    with _fresh(tmp_path, project, sidecars=tmp_path / "busy") as c:
+        job = c.post("/api/analyze", json={}).json()["job"]
+        assert c.post("/api/analyze", json={}).status_code == 409
+        _wait(c, job)
+
+
+def test_analyze_status_404_for_unknown_job(client):
+    assert client.get("/api/analyze/nope").status_code == 404
 
 
 # ------------------------------------------------------------------ static

@@ -10,6 +10,14 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The audio pass runs in-app, with real progress.** `POST /api/analyze` runs
+  `audio_analyze.py` over the bin in the background and reports `done`/`total` counted from the
+  sidecars on disk — the tool writes one per clip as it finishes, so the filesystem is the honest
+  progress bar and stays right if the log format moves. Proxies for the newly analysed clips are
+  built *before* the job reports done, because a job that says "ready" while its own previews are
+  still being written hands the UI a `<video>` that stays broken until reload. Junk clips can be
+  excluded via `skip`, one analysis runs at a time, and a failure surfaces its log instead of
+  disappearing.
 - **A folder of footage is enough to open the board.** `--edl` and `--sidecars` are now optional:
   a missing EDL is scaffolded (empty segments, title from the bin, `orient` an explicit choice
   because it is per-bin and never generalisable) under `--work`, and sidecars default to a
