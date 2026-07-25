@@ -1,0 +1,30 @@
+{
+ "variant": "B",
+ "title": "The legend",
+ "reading": "The milk running joke is the spine and the skiing is what happens around it. Cold opens on the payoff line with no context, then rewinds to the trip.",
+ "bin": "copper-02-2026",
+ "orient": "none",
+ "segments": [
+  {"clip": "GX010495.MP4", "in": 31.8, "out": 36.8, "act": "tease", "why": "cold open with no context - 'that's fucking unreal' / 'that goes so fucking hard'"},
+
+  {"clip": "GX010474.MP4", "in": 22.7, "out": 27.3, "act": "travel", "why": "airport bar, faces and laughter"},
+  {"clip": "GX010483.MP4", "in": 0.0, "out": 7.5, "act": "travel", "why": "airport walkway with luggage"},
+  {"clip": "GX010476.MP4", "in": 3.1, "out": 8.3, "act": "travel", "why": "plane - 'you need to put that away'"},
+  {"clip": "GX010486.MP4", "in": 1.5, "out": 5.5, "act": "travel", "why": "night arrival at the van"},
+
+  {"clip": "GX010487.MP4", "in": 0.0, "out": 6.0, "act": "mountain", "why": "ridge traverse - establishes the mountain"},
+  {"clip": "GX010488.MP4", "in": 2.6, "out": 9.8, "act": "mountain", "why": "the jug enters the film - 'How's your milk, Spenny?'"},
+  {"clip": "GX010492.MP4", "in": 0.0, "out": 6.5, "act": "mountain", "why": "carrying it onto the chairlift - 'He's so milked'"},
+  {"clip": "GX010490.MP4", "in": 20.0, "out": 25.0, "act": "mountain", "why": "the carve past camera - best pure ski shot"},
+  {"clip": "GX010489.MP4", "in": 1.0, "out": 4.5, "act": "mountain", "why": "'Whoo' then the jump"},
+  {"clip": "GX010493.MP4", "in": 4.0, "out": 14.0, "act": "mountain", "why": "POV following them down"},
+  {"clip": "GX010491.MP4", "in": 0.4, "out": 3.9, "act": "mountain", "why": "'I'm milked out. He's milked out.'"},
+  {"clip": "GX010494.MP4", "in": 16.5, "out": 28.5, "act": "mountain", "why": "POV run through the trees"},
+  {"clip": "GX010494.MP4", "in": 32.5, "out": 37.2, "act": "mountain", "why": "the run ends on the jug held up - 'He's got the milk'"},
+
+  {"clip": "GX010495.MP4", "in": 1.9, "out": 10.0, "act": "payoff", "why": "'I became the milkman today. We created a legend.' - out on the line"},
+  {"clip": "GX010495.MP4", "in": 17.1, "out": 24.0, "act": "payoff", "why": "chugging - 'Jesus Christ' / 'It's Jesus Boris'"},
+  {"clip": "GX010495.MP4", "in": 38.8, "out": 46.0, "act": "payoff", "why": "'it's 100% gone bad' / 'alright Spenny, you can do it' / 'oh, this is so nasty'"},
+  {"clip": "GX010496.MP4", "in": 2.0, "out": 5.5, "act": "payoff", "why": "lounging in the chairs - ends quiet"}
+ ]
+}

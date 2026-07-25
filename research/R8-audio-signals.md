@@ -81,16 +81,19 @@ assumed to be the reason a clip is quiet.
 
 ## Result 4 — audio attention is biased *away* from the skiing
 
-The finding with the most consequence for selection. Splitting the bin by what the contact
-sheets show (7 of 17 sheets reviewed; the split below is provisional pending the visual pass):
+The finding with the most consequence for selection. Split by what the contact sheets show,
+**all 17 reviewed** (a first pass over 7 sheets misclassified the split badly — it put the base
+area and lift clips in "travel" and concluded the bin was mostly non-skiing, which is wrong;
+the corrected figures are below and the direction of the finding is unchanged but sharper):
 
 | | clips | duration | candidates | words |
 |---|---|---|---|---|
-| on-mountain (487, 489, 490, 493, 494) | 5 | 129s | 13 (**6.0/min**) | 50 (**23/min**) |
-| travel / lodge / hangout | 12 | 269s | 55 (**12.3/min**) | 392 (**87/min**) |
+| on-mountain | 10 | 277.0s (**70%**) | 34 (**7.4/min**) | 161 (**34.9/min**) |
+| travel / airport / plane | 7 | 121.2s (30%) | 34 (**16.8/min**) | 281 (**139.1/min**) |
 
-**Audio flags the non-skiing footage at twice the density and four times the word rate.** The
-trip's talking happens on the plane, in the room, and around a running joke about a carton of
+**Audio flags the non-skiing footage at 2.3× the candidate density and 4× the word rate**, and
+splits its candidates 50/50 across a bin that is 70/30 on-mountain by duration. The trip's
+talking happens on the plane, at the airport bar, and around a running joke about a gallon of
 milk; the skiing is quiet, because the people in it are 50 metres from the microphone.
 
 The agreed brief asks for emphasis on the skiing. An audio-led selection would deliver the

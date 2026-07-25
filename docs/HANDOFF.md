@@ -44,18 +44,21 @@ informative than judging a single artifact).
 
 1. ~~Audio analysis~~ — **done**, see [R8](../research/R8-audio-signals.md). Sidecars for all 17
    non-junk clips at `~/work/audio/*.audio.json`; 68 candidates over the bin.
-2. **Selection over Copper's 17 non-junk clips** — next. Read R8's Result 4 first: audio
-   candidate density is *higher* on the travel footage than on the skiing, so audio is evidence,
-   not the gate. Quiet clips need more visual attention, not less.
-3. Assemble → loudness-normalize → render, with throwaway scripts (ffmpeg, no OTIO/SQLite yet).
-   Per-clip `integrated_lufs` is already measured in the sidecars (range −22.1 to −14.6 LUFS,
-   so levels do need matching).
-4. Self-critique against [R6-rubric.md](../research/R6-rubric.md) + technical checks; iterate.
-5. Bring Karl two variants.
+2. ~~Selection~~ — **done**. All 17 sheets reviewed against their transcripts; inventory and
+   reasoning in [notes/2026-07-25-selection.md](notes/2026-07-25-selection.md), EDLs in
+   `research/edl/`.
+3. ~~Assemble → loudness-match → render~~ — **done**. `research/tools/assemble.py`; both
+   variants verified (18 ms A/V drift, −15.5 LUFS, no black runs).
+4. ~~Self-critique against [R6-rubric.md](../research/R6-rubric.md)~~ — **done**, mean 3.75,
+   one iteration applied (pacing). Stopped there on purpose.
+5. **→ Karl watches the two variants.** This is the blocking step; nothing else should start
+   until there are notes to act on.
+   - `/mnt/c/Users/karl/Documents/Roughcut Labeling/cuts/copper-variantA.mp4` — "The trip", 1:54
+   - `.../copper-variantB.mp4` — "The legend", 1:50
 
-**Optional before step 2:** audio event tagging (laughter / cheering / whoops). R8 confirms it
-is the biggest audio gap, and it targets exactly the non-verbal reactions the ski clips contain.
-Skip it if selection can carry the first cut without it — it is an improvement, not a blocker.
+**After Karl's notes:** revision pass (closed loop — notes in plain language, agent applies
+them). Optional independent work: audio event tagging (laughter / cheering / whoops), which R8
+confirms is the biggest audio gap and targets the non-verbal reactions the ski clips contain.
 
 ## Findings that must not be re-litigated
 
@@ -71,8 +74,15 @@ These were measured, cost real effort, and are easy to accidentally undo:
 - **Killington is pre-curated** — files are hand-named after their content. Only its nine
   long-form clips are usable, with filenames neutralized. Copper is raw, which is why it's B1.
 - **Full-band audio RMS measures wind, not interest.** See AUDIO.md.
-- **Audio points away from the skiing on B1** (R8 Result 4): 12.3 candidates/min on the
-  travel/lodge footage vs 6.0/min on the on-mountain clips, and 4× the word rate. The skiing is
+- **B1 is 70% on-mountain** (277s of 398s), not mostly travel. A first pass over 7 of 17 contact
+  sheets concluded the opposite by reading the base-area and chairlift clips as "lodge" from
+  their banter. Classify from the sheet, not the transcript.
+- **There is a running joke about a gallon of milk** and it is the connective tissue of the
+  trip — it appears in 6 transcripts and on screen in 5 clips, from the base area to the
+  chairlift to a 60s payoff in GX010495 ("we created a legend"). Any cut that treats B1 as a
+  pure ski montage throws away the thing the group will actually remember.
+- **Audio points away from the skiing on B1** (R8 Result 4): 16.8 candidates/min on the
+  travel footage vs 7.4/min on the on-mountain clips, and 4× the word rate. The skiing is
   quiet because the subject is far from the mic. Never gate the visual pass on audio interest.
 - **The Tier A DSP speech detector is weak** (F1 0.63 vs 0.56 for "assume constant speech").
   Speech candidates come from the ASR transcript; the DSP tracks are quality metering and a

@@ -1,0 +1,31 @@
+{
+ "variant": "A",
+ "title": "The trip",
+ "reading": "Brief-literal. Travel cold open, then the skiing, with the milk running joke as recurring texture rather than subject.",
+ "bin": "copper-02-2026",
+ "orient": "none",
+ "segments": [
+  {"clip": "GX010474.MP4", "in": 22.7, "out": 27.3, "act": "travel", "why": "cold open on faces and laughter - 'look at these silly guys doing their little program thing'"},
+  {"clip": "GX010475.MP4", "in": 16.9, "out": 20.9, "act": "travel", "why": "'Spencer, welcome' / 'what's up pal' / 'you didn't give me a beer' - the group assembling"},
+  {"clip": "GX010483.MP4", "in": 0.0, "out": 7.5, "act": "travel", "why": "airport walkway, two of them walking at camera with luggage"},
+  {"clip": "GX010476.MP4", "in": 3.1, "out": 8.3, "act": "travel", "why": "plane - 'you need to put that away' / 'I'm consulting right now', the funniest travel beat"},
+  {"clip": "GX010486.MP4", "in": 1.5, "out": 5.5, "act": "travel", "why": "night arrival at the van, closes the travel act"},
+
+  {"clip": "GX010487.MP4", "in": 0.0, "out": 7.0, "act": "mountain", "why": "ridge traverse, wide scenery - establishes the mountain"},
+  {"clip": "GX010492.MP4", "in": 0.0, "out": 6.5, "act": "mountain", "why": "chairlift with the jug in hand"},
+  {"clip": "GX010490.MP4", "in": 20.0, "out": 25.0, "act": "mountain", "why": "the carve past camera - best pure ski shot in the bin; only window without the red pole across frame"},
+  {"clip": "GX010489.MP4", "in": 1.0, "out": 4.5, "act": "mountain", "why": "'Whoo' at 1.2s then the jump at 3.0s - the one clear trick"},
+  {"clip": "GX010493.MP4", "in": 4.0, "out": 12.5, "act": "mountain", "why": "POV following them down the groomer; avoids the glove over the lens at 0-2s and ~20s"},
+  {"clip": "GX010488.MP4", "in": 2.6, "out": 9.8, "act": "mountain", "why": "'How's your milk, Spenny? Let's see if you take a good sip'"},
+  {"clip": "GX010489.MP4", "in": 10.5, "out": 13.9, "act": "mountain", "why": "second rider passes close to the lens"},
+  {"clip": "GX010494.MP4", "in": 16.5, "out": 28.5, "act": "mountain", "why": "the long POV run through the trees"},
+  {"clip": "GX010491.MP4", "in": 0.4, "out": 3.9, "act": "mountain", "why": "'I'm milked out. He's milked out.' - short beat"},
+
+  {"clip": "GX010494.MP4", "in": 32.5, "out": 37.2, "act": "payoff", "why": "run ends on him holding the jug up - 'He's got the milk' / 'yeah, high five'"},
+  {"clip": "GX010495.MP4", "in": 1.9, "out": 10.0, "act": "payoff", "why": "'I became the milkman today. We created a legend.' - out on the line, before the trailing 'and now... it's over'"},
+  {"clip": "GX010495.MP4", "in": 17.1, "out": 24.0, "act": "payoff", "why": "chugging it - 'Jesus Christ' / 'It's Jesus Boris'"},
+  {"clip": "GX010495.MP4", "in": 29.1, "out": 36.8, "act": "payoff", "why": "'that's fucking unreal' / 'that goes so fucking hard' - top-ranked audio candidate in the bin"},
+  {"clip": "GX010495.MP4", "in": 44.4, "out": 46.0, "act": "payoff", "why": "'oh, this is so nasty'"},
+  {"clip": "GX010496.MP4", "in": 2.0, "out": 5.5, "act": "payoff", "why": "lounging in the chairs - lets it land and end quiet"}
+ ]
+}

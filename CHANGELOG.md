@@ -10,6 +10,24 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The first two rough cuts exist.** `research/tools/assemble.py` renders an EDL
+  (`research/edl/B1-variant{A,B}.json`) into a finished file, and both variants of the Copper
+  edit are cut, rendered and verified: A "The trip" at 1:54, B "The legend" at 1:50. Selection
+  reasoning, per-clip inventory and the R6 self-critique are in
+  `docs/notes/2026-07-25-selection.md`. Verified on fresh output: 18 ms A/V drift (under one
+  frame), −15.5 LUFS integrated against a −16 target, no black or frozen runs, planned-vs-actual
+  duration within 0.2s. Two assembly choices are load-bearing rather than incidental:
+  `-noautorotate` on every input, since B1's rotation side-data is spurious, and loudness matched
+  by fixed per-clip gain from the R8 sidecars rather than per-segment `loudnorm` — five
+  consecutive segments come from one clip, and a per-segment normaliser pumps across them.
+- **Visual analysis of all 17 non-junk B1 clips**, read from the contact sheets against each
+  clip's transcript. This corrected two things a partial pass had wrong: B1 is **70% on-mountain**
+  (277s of 398s), not mostly travel — the base-area and chairlift clips had been misread as
+  "lodge" from their banter — and R8's Result 4 table has been updated accordingly (its finding
+  survives and sharpens: audio splits candidates 50/50 across a bin that is 70/30 on-mountain).
+  It also surfaced what no single clip shows: **a running joke about a gallon of milk that runs
+  the length of the trip**, present in 6 transcripts and on screen in 5 clips, which is why
+  there are two variants rather than one.
 - **Audio analysis pass** (`research/tools/audio_analyze.py`, `research/tools/audio_calibrate.py`)
   and its study, **[R8](research/R8-audio-signals.md)**, run over B1's 17 non-junk clips. Tier A
   DSP (speech-band level, spectral flatness, low/high ratio, spectral-flux onsets, 4 Hz
