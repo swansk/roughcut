@@ -1,7 +1,9 @@
 # Handoff — read this first
 
-Last updated: 2026-07-25, end of session 2 (audio analysis → two cuts → the app → live Ask).
-**The next session's job is the app's start-to-finish flow — jump to "START HERE NEXT SESSION".**
+Last updated: 2026-07-25, end of session 3 (the app now owns the whole path — folder of
+footage → analyse → **first cut from nothing** → refine → compare versions).
+**The next session starts with a human gate: Karl watches an agent-originated cut. Jump to
+"START HERE NEXT SESSION".**
 
 ## Where we are
 
@@ -67,18 +69,20 @@ informative than judging a single artifact).
 **The app wrapper is the active workstream.** The cut board is built, tested and running:
 
 ```
-uv run app/server.py --edl research/edl/B1-variantB.json \
-  --footage ~/footage/copper-02-2026 --sidecars ~/work/audio
+uv run app/server.py --footage ~/footage/copper-02-2026
 ```
-→ `http://localhost:8765`. See [app/README.md](../app/README.md) for the design and the
-latency argument behind proxies.
+→ `http://localhost:8765`. A folder of footage is the only required argument; `--edl` and
+`--sidecars` are optional and derived under `--work` when omitted. To open the hand-authored
+variant B instead, pass `--edl research/edl/B1-variantB.json --sidecars ~/work/audio --orient
+none`. See [app/README.md](../app/README.md) for the design and the latency argument behind
+proxies.
 
-29 tests (19 API + 10 driving real Chromium), ~18s, against a synthetic three-clip project so
+80 tests (65 API + 15 driving real Chromium), ~34s, against a synthetic three-clip project so
 they need neither `~/footage` nor a GPU. Browser layer skips cleanly if playwright is absent.
 
 ~~Close the interject loop~~ — **built and proven live.** "Ask for a change" takes a
 plain-language note and returns a revised timeline as an accept/discard diff, through
-`roughcut.inference` (SPEC §6). 55 tests, ~21s.
+`roughcut.inference` (SPEC §6). With an empty timeline the same call **originates** the cut.
 
 **Does asking beat dragging? For structural moves, yes.** One live call on variant B (74s,
 $0.27 projected) took 20 segments/162.5s → 18/129.2s: dropped the luggage walkway with the
@@ -95,51 +99,94 @@ the glove in GX010493) **only because it inherited the `why` fields from the han
 the rationale field is load-bearing memory for a model that cannot see. And its dare → deed →
 reaction reorder may invent a chronology the footage contradicts; that needs eyes, not text.
 
+The originating prompt answers the first caveat as far as text can: it states plainly that the
+model cannot see the frame and that its `why` is what the human checks the reasoning against.
+The live run bore that out — it flagged its own riskiest choice (18s with no transcript, *"may
+be a glove or a lift queue"*) without being asked. It does not answer the second caveat at all.
+
 ---
 
-## ⇨ START HERE NEXT SESSION: the app cannot take you from start to finish
+## Session 3: the app now owns the whole path
 
-Karl, 2026-07-25, after using it: *"App is pretty hard to use right now — unclear how to go from
-start to finish."* This is the active problem, and it outranks any further work on cut quality
-(*"video is ok — human could work with the app to make it better"*).
+Karl, after using the first version: *"App is pretty hard to use right now — unclear how to go
+from start to finish."* The diagnosis was that the app was a refinement tool assuming five
+terminal steps had already happened, the hardest of which was **hand-authoring an EDL**. That is
+closed:
 
-**Diagnosis: the app is a refinement tool that assumes five terminal steps already happened.**
-To reach the cut board at all, someone must already have:
-
-1. copied footage onto ext4,
-2. run `audio_analyze.py` to produce sidecars (ASR, GPU),
-3. known which clips are junk, to pass `--skip` (that list came from a luma study),
-4. **hand-authored an EDL JSON** — the app cannot create one,
-5. launched `server.py` with three path flags.
-
-So the app owns the *middle* of the workflow and none of the ends. There is no "new project",
-no way to go from a folder of footage to a first cut, and no way to finish other than finding an
-mp4 on disk. Everything the app is good at is gated behind a terminal session.
-
-Inside the board it is also flat: Ask, Snap, Undo, Save, Render are peers with no implied order,
-nothing says what to do first, there is no project state or progress, and backend/auth problems
-only surface ~80s into an Ask.
-
-**The shape of the fix — make the app own the whole path:**
-
-| step | today | should be |
+| step | was | now |
 |---|---|---|
-| new project | — | point at a footage folder |
-| analyse | `audio_analyze.py` in a terminal | in-app, with progress (it is ~30s for a bin) |
-| junk / orientation | manual `--skip`, prior study | proposed, human confirms |
-| **first cut** | **hand-authored JSON** | **Ask originates it, not just revises it** |
-| refine | ✅ the board, and it works | ✅ plus a sense of order |
-| render & compare | one file, newest only | versions list, watch A vs B |
+| new project | — | `--footage` alone; a missing EDL is scaffolded ✅ |
+| analyse | `audio_analyze.py` in a terminal | in-app, progress counted from sidecars on disk ✅ |
+| junk / orientation | manual `--skip`, prior study | **still not proposed** ❌ (`--orient` at scaffold, `skip` on the analyse call) |
+| **first cut** | **hand-authored JSON** | **Ask originates it** ✅ |
+| refine | the board, and it works | ✅ plus a five-step strip saying where you are |
+| render & compare | one file, newest only | versions list, A/B players ✅ |
 
-The single highest-value piece is making **Ask able to originate a cut from nothing**, since
-that removes the hand-authored-EDL prerequisite — the step that most makes this "expert only".
-`revise.propose()` already takes segments + clips + story; originating is the same call with an
-empty segment list and a different prompt.
+Also done: **startup preflight + backend status in the header** — a missing CLI on PATH or an
+absent API key is reported for free at launch, and one tiny call (cheap role, background,
+`--no-probe` to skip) answers "is it authenticated", which nothing free can see.
 
-Also queued, both now evidenced rather than guessed:
-- **Startup preflight + backend status in the UI**, so auth failures appear at launch instead of
-  80s into a call.
-- **Make the API backend the app default** (see the CLI overhead finding below).
+80 tests, ~34s (65 API + 15 driving real Chromium), still against the synthetic three-clip
+project, so they need neither `~/footage` nor a GPU.
+
+### What originating produced, live
+
+One call, empty EDL, the agreed brief as the story — a brief that **never mentions milk**:
+
+> 20 segments, 172.7s, 16 of 17 clips, 98s, $0.32 projected (27,960 in / 7,250 out).
+
+It found the milk joke by itself and built *"the day Spenny became the milkman"* as the spine —
+setup indoors (*"How's your milk, Spenny"*), payoff on the hill, *"I'm milked out"* as a chant,
+closing on *"we created a legend — and now it's over."* Travel held to four cuts / ~31s, as the
+brief asked. It declared its own blind spots unprompted: the 18s held shot with no transcript
+that *"may be a glove or a lift queue"*, and the one clip it would not gamble on. Rendered:
+172.97s, 18ms A/V drift, no rotation, −16.1 LUFS, no black runs →
+`Documents\Roughcut Labeling\cuts\copper-first-cut.mp4`.
+
+Session 2 found the milk joke too — but that was a human reading 17 contact sheets and
+transcripts. This was one call from an empty timeline.
+
+## ⇨ START HERE NEXT SESSION: Karl watches the originated cut
+
+**This is a human gate, and it outranks everything else in this file.** The whole project
+question is *"can Claude compile a compelling video with good cuts from footage?"*, and the
+version of that question nobody has answered is: **is a cut the agent originated from nothing
+worth anything?** Session 2 answered "can it revise well" (yes). Watch:
+
+- `.../cuts/copper-first-cut.mp4` — **agent-originated, 2:53** ← the new one
+- `.../cuts/copper-variantB-asked.mp4` — hand-selected then agent-revised, 2:09
+- `.../cuts/copper-variantB.mp4` — hand-selected, 2:43
+
+The useful comparison is the first against the other two: same bin, same joke found, one of them
+reached without a human reading a single contact sheet. Notes in plain language are enough —
+the board applies them.
+
+Under each plausible answer:
+
+- **"This is close to the hand cut."** Then the hand-selection loop is optional, and the next
+  work is quality-of-originating: auto-snap (see below), then junk/orientation in-app so a bin
+  nobody has studied can be cut cold.
+- **"It's structurally right but rough."** Then snap-on-originate and the boundary work are the
+  next session, and the answer to "is the pipeline worth building" is probably yes.
+- **"It's flat."** Say why in one sentence — that sentence is worth more than any metric here,
+  and it likely means the visual pass (which does not exist) is the missing half rather than the
+  prompt.
+
+### Queued behind that gate
+
+- **Snap an originated plan.** 12 of 20 out-points landed on an utterance end when originating,
+  against 17 of 18 when revising an already-snapped cut. `edl_snap.py` fixes it in one click and
+  nothing runs it automatically on a fresh plan — but "snap everything by default" is exactly
+  the kind of silent rewrite the board avoids elsewhere, so it wants a decision, not a default.
+- **Junk and orientation proposed, human confirms** — the last row of the table still marked ❌,
+  and what stands between the app and a bin nobody has studied. Both are per-bin measurements
+  (`luma<11` for junk; orientation is per-clip and never generalisable), so this is a measuring
+  pass plus a confirm screen, not a model call.
+- **DECISION — make the API backend the app default?** HANDOFF said yes on the CLI overhead
+  finding; the number is now measured on this app's own traffic and is *weaker* than it looked.
+  A tiny probe billed ~27k tokens (all overhead) but a real Ask billed 27,960 input against a
+  ~26k-token prompt — so on coarse calls the overhead is a rounding error, not 95%. It stays
+  claude_cli until Karl decides, since switching means an API key and real per-token cost.
 - Music mode (FUTURE_PHASES P2.6), still unbuilt.
 
 Independent work: ~~audio event tagging~~ — **done, and it is a dead end on B1**; see
@@ -188,6 +235,14 @@ These were measured, cost real effort, and are easy to accidentally undo:
 - **`yeah` and `dude` are filler in this footage, not reactions.** Scoring them as interest
   markers put banter at the top of the candidate list. Markers must be surprising to be evidence.
 - **`drawtext` is not compiled into the installed ffmpeg** — do text composition in Pillow.
+- **The transcripts alone are enough to find the spine of a bin.** An originating call with no
+  edit to inherit, and a brief that never says "milk", found the milk joke across six clips and
+  built the film around it (session 3). The words are the signal; R8 said so and this is the
+  strongest evidence yet. It does not follow that the *pictures* are optional — the same call
+  could not tell whether its 18s held shot was a run or a glove.
+- **An originated cut is loosely snapped** — 12 of 20 out-points on an utterance end, against
+  17 of 18 when revising an already-snapped cut. The difference is not model quality, it is that
+  the revision inherited hand-snapped boundaries. Anything comparing the two must control for it.
 - **Every Claude CLI call carries ~15–21k tokens of harness overhead**, whatever you ask.
   Measured: `claude -p 'Reply with exactly: OK'` billed 2 input + 5,558 cache-creation +
   15,273 cache-read for a four-token reply. A real revision billed 25,146 input against a ~2,100
@@ -232,8 +287,12 @@ WSL2 Ubuntu 24.04, RTX 5080 (16GB, visible to WSL), 953GB free on ext4.
 
 - **D5** footage location — resolved in practice (copied to WSL ext4); library still on Windows.
 - **D6** labeling — **deferred**, possibly permanently. Superseded by analysis-first review.
-- **D7** git remote — **still local-only, 19 commits on one disk with no backup.** The single
-  standing risk to the project. Raise it again.
+- **D7** git remote — **still local-only, 24 commits on one disk with no backup.** The single
+  standing risk to the project, unchanged for three sessions and now carrying more work. The
+  media is regenerable; the repo is not. Raise it again, first thing.
+- **D8** backend default — the app runs on `claude_cli`. Switching it to `anthropic_api` is
+  Karl's call (API key, real per-token cost); the overhead argument that motivated it is weaker
+  on this app's coarse calls than it looked. See the START HERE section.
 
 **Decided:** the first cut runs on **Copper only** (Karl, 2026-07-25). Killington stays
 untouched — it is pre-curated, and holding it back keeps it available as a cleaner second test
