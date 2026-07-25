@@ -176,11 +176,25 @@ function emptyState() {
   el.className = 'empty';
   const analysed = S ? S.analysed : 0;
   const clips = S ? S.clips : 0;
-  el.innerHTML = analysed
-    ? `<h3>No cut yet</h3><div>${analysed} clip${analysed > 1 ? 's' : ''} analysed and
-       ready. Write what the film is about in <b>Story</b>, then ask for a first cut.</div>`
-    : `<h3>Nothing analysed yet</h3><div>${clips} clip${clips === 1 ? '' : 's'} in the
-       footage folder. They need an audio pass before anything can be cut.</div>`;
+  if (!analysed) {
+    el.innerHTML = `<h3>Nothing analysed yet</h3><div>${clips}
+      clip${clips === 1 ? '' : 's'} in the footage folder. They need an audio pass
+      before anything can be cut — <b>Analyse audio</b>, on the right.</div>`;
+    return el;
+  }
+  el.innerHTML = `<h3>No cut yet</h3>
+    <div>${analysed} clip${analysed > 1 ? 's' : ''} analysed and ready.
+    Say what this film is about — a sentence is enough — and ask for a first cut.
+    You will get a proposal to accept, discard or take apart by hand.</div>
+    <textarea id="firstNote" style="margin-top:12px;min-height:60px"
+      placeholder="a 2–3 minute edit of the trip for the friends who were there · loose and fun · the people are the point"></textarea>
+    <button id="firstCut" class="primary" style="margin-top:10px">Ask for a first cut</button>
+    <div class="hint" id="firstState" style="margin-top:8px"></div>`;
+  el.querySelector('#firstCut').onclick = () => ask({
+    note: el.querySelector('#firstNote').value.trim(),
+    button: el.querySelector('#firstCut'),
+    state: el.querySelector('#firstState'),
+  });
   return el;
 }
 
@@ -190,6 +204,7 @@ function render() {
   if (!segs.length) tl.appendChild(emptyState());
   segs.forEach((s, i) => tl.appendChild(segCard(s, i)));
 
+  $('#askTitle').textContent = segs.length ? 'Ask for a change' : 'Ask for a cut';
   const t = total();
   const [lo, hi] = P.target;
   const cls = t < lo ? 'under' : t > hi ? 'over' : 'ok';
@@ -339,11 +354,17 @@ function showProposal(plan) {
   $('#proposal').style.display = 'block';
 }
 
-async function ask() {
-  const note = $('#note').value.trim();
-  if (!note) return toast('type what you want changed first');
-  $('#ask').disabled = true;
-  $('#askState').textContent = 'thinking…';
+async function ask(opts = {}) {
+  const button = opts.button || $('#ask');
+  const stateEl = opts.state || $('#askState');
+  const note = opts.note !== undefined ? opts.note : $('#note').value.trim();
+  const first = !segs.length;
+  if (!note && !first) return toast('type what you want changed first');
+  // The brief is the human's half of the loop and the most valuable thing typed into
+  // this app, so a first-cut note becomes the story rather than being thrown away.
+  if (first && note && !$('#story').value.trim()) $('#story').value = note;
+  button.disabled = true;
+  stateEl.textContent = first ? 'building a first cut — about a minute…' : 'thinking…';
   try {
     const r = await fetch('/api/ask', {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -356,14 +377,16 @@ async function ask() {
     const plan = await r.json();
     showProposal(plan);
     const u = plan.usage || {};
-    $('#askState').textContent = u.model
+    const cost = u.model
       ? `${u.model} · ${u.input_tokens}→${u.output_tokens} tok · $${(u.projected_usd || 0).toFixed(4)} projected`
       : '';
+    stateEl.textContent = cost;
+    $('#askState').textContent = cost;
   } catch (e) {
-    $('#askState').textContent = '';
+    stateEl.textContent = '';
     toast(`ask failed: ${e.message}`, 6000);
   } finally {
-    $('#ask').disabled = false;
+    button.disabled = false;
   }
 }
 
@@ -467,7 +490,7 @@ async function boot() {
   $('#snap').onclick = snap;
   $('#undo').onclick = undo;
   $('#render').onclick = doRender;
-  $('#ask').onclick = ask;
+  $('#ask').onclick = () => ask();   // not `ask` — a MouseEvent has a `.button` too
   $('#acceptProposal').onclick = acceptProposal;
   $('#rejectProposal').onclick = rejectProposal;
 }

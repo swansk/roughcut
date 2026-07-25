@@ -1,8 +1,13 @@
-"""Turn a plain-language note into a revised segment list.
+"""Turn a plain-language note into a segment list — a revised one, or the first one.
 
 This is the "interject" half of the human-in-the-loop map. The board already lets a
 human steer by hand; this lets them steer by *asking* — "tighten the intro", "more
 skiing, less airport", "the milk is the running joke, build around it".
+
+`originate` is the same call with nothing to revise. It exists because the app's
+hardest prerequisite was a **hand-authored EDL**: the board could refine an edit but
+never start one, so reaching it at all meant writing JSON in a terminal. Originating
+is not a different capability, it is the same one addressed to an empty timeline.
 
 Two design rules, both learned the hard way earlier in this project:
 
@@ -38,6 +43,49 @@ SYSTEM = (
     "that clip's duration. You favour moments with people, reactions and speech over "
     "empty scenery, and you cut on complete thoughts rather than mid-sentence."
 )
+
+FIRST_SYSTEM = (
+    "You are an assistant film editor building the FIRST rough cut from a single bin "
+    "of raw footage. Nothing has been cut yet. You are given every clip's transcript "
+    "and audio summary, and nothing else — you cannot see the pictures, so the words "
+    "and the shape of the material are your only evidence, and a human will watch "
+    "what you assemble before it goes anywhere. You never invent clips or timestamps: "
+    "every segment must name a clip from the inventory and lie inside that clip's "
+    "duration. You favour moments with people, reactions and speech over empty "
+    "scenery, and you cut on complete thoughts rather than mid-sentence."
+)
+
+# The two traps a first cut walks into on this material, both measured rather than
+# guessed (docs/HANDOFF.md, "findings that must not be re-litigated"):
+#
+#   * transcript density points *away* from the action. On B1 the travel footage
+#     carries 16.8 speech candidates/min against 7.4 on the mountain, and 4x the word
+#     rate, because the camera mic is on the skier's helmet and everyone else is 50m
+#     away. A model ranking clips by how much is said in them builds an airport film.
+#   * the connective tissue is a running joke, not a topic. B1's gallon of milk shows
+#     up in six transcripts and pays off 60s into one clip; a cut that treats the bin
+#     as a montage of the sport throws away the thing the group will remember.
+#
+# Neither is inferable from a single clip, which is why they are stated rather than
+# left to be rediscovered per call.
+FIRST_GUIDANCE = """\
+Things that are true of this kind of footage, and easy to get wrong from transcripts:
+
+* **Quiet does not mean boring.** The camera is usually on the person doing the
+  thing, so the most active footage is often the least spoken over, while standing
+  around talking transcribes densely. Do not rank shots by how much is said in them.
+* **Look for a through-line across clips** — a running joke, a phrase that recurs, a
+  dare and its payoff, a person who keeps appearing. Something that shows up in
+  several transcripts is usually the spine of the film, and it is worth more than any
+  single good line.
+* **Give it a shape**: something to establish where we are, a middle that builds, and
+  an ending that pays off rather than just stops. Order is yours to choose; the clips
+  are not obliged to appear in the order they were shot.
+* **Spread the load.** A first cut drawn from two clips is a clip reel, not a film.
+* **You cannot see the frame.** A shot may be dark, upside down, pointed at a glove,
+  or ruined in a way the words do not reveal. So say what each moment is *for* in its
+  `why` — that sentence is what the human uses to check your reasoning against the
+  picture, and it is what any later pass inherits as memory of the choice."""
 
 
 def _clip_block(clip: dict) -> str:
@@ -90,6 +138,43 @@ seconds within the named clip. Prefer cutting on utterance boundaries visible in
 transcripts above."""
 
 
+def build_first_prompt(clips: dict[str, dict], story: str, note: str,
+                       target: tuple[float, float]) -> str:
+    """The originating prompt: no current edit, so the material and the brief carry it."""
+    inventory = "\n\n".join(_clip_block(c) for c in clips.values())
+    total = sum(float(c["duration"]) for c in clips.values())
+    brief = story.strip() or (
+        "(the editor has not written this yet — infer what this film is about from "
+        "the material, and say what you inferred in your notes so they can correct it)")
+    ask = note.strip() or "(no further direction — use your judgement)"
+
+    return f"""The editor is starting a short film from one bin of footage. There is no \
+edit yet; you are making the first one.
+
+## What this film is about
+{brief}
+
+## The editor's direction
+{ask}
+
+## Target length
+{target[0]:.0f}-{target[1]:.0f} seconds, drawn from {len(clips)} clips totalling \
+{total:.0f}s of material.
+
+## How to read this material
+{FIRST_GUIDANCE}
+
+## Every clip available, with its transcript
+{inventory}
+
+## What to return
+A complete first cut as an ordered list of segments — the order they should play in,
+not the order the clips were shot. Timestamps are seconds within the named clip. Cut
+on utterance boundaries visible in the transcripts above. Every segment needs a `why`:
+one sentence on what that moment is for. In `notes`, say what you decided this film is
+about and what you would look at first if it is wrong."""
+
+
 def validate_plan(payload: Any, clips: dict[str, dict]) -> dict:
     """Strict. A plausible-looking plan that names a clip we do not have, or runs
     past the end of one, is worse than a loud failure — it renders as a crash or,
@@ -121,14 +206,9 @@ def validate_plan(payload: Any, clips: dict[str, dict]) -> dict:
     return {"segments": clean, "notes": str(payload.get("notes", "")).strip()[:1200]}
 
 
-def propose(segments: list[dict], clips: dict[str, dict], story: str, note: str,
-            target: tuple[float, float] = (120.0, 180.0)) -> dict:
-    """Ask for a revision. Returns {'segments', 'notes', 'usage'}."""
-    if not note.strip():
-        raise ValueError("empty note")
-    prompt = build_prompt(segments, clips, story, note, target)
+def _ask(prompt: str, system: str, clips: dict[str, dict]) -> dict:
     result = complete(
-        prompt, role=config.ROLE_SKELETON, schema=PLAN_SCHEMA, system=SYSTEM,
+        prompt, role=config.ROLE_SKELETON, schema=PLAN_SCHEMA, system=system,
         validate=lambda payload: validate_plan(payload, clips), retries=1)
     plan = result.content
     plan["usage"] = {
@@ -137,3 +217,26 @@ def propose(segments: list[dict], clips: dict[str, dict], story: str, note: str,
         "backend": result.backend, "latency_ms": result.latency_ms,
     }
     return plan
+
+
+def propose(segments: list[dict], clips: dict[str, dict], story: str, note: str,
+            target: tuple[float, float] = (120.0, 180.0)) -> dict:
+    """Ask for a revision. Returns {'segments', 'notes', 'usage'}."""
+    if not note.strip():
+        raise ValueError("empty note")
+    return _ask(build_prompt(segments, clips, story, note, target), SYSTEM, clips)
+
+
+def originate(clips: dict[str, dict], story: str, note: str = "",
+              target: tuple[float, float] = (120.0, 180.0)) -> dict:
+    """Ask for a *first* cut. Same return shape as `propose`.
+
+    Neither `story` nor `note` is required. Intent is the human's half of the loop and
+    five minutes of it is the highest-leverage input in the project — but refusing to
+    start without it would make the empty timeline a dead end again, which is the exact
+    problem this removes. With no brief the model is told to infer one and to say what
+    it inferred, so the guess is visible and correctable rather than silent.
+    """
+    if not clips:
+        raise ValueError("no analysed clips to cut from")
+    return _ask(build_first_prompt(clips, story, note, target), FIRST_SYSTEM, clips)

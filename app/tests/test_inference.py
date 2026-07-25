@@ -253,3 +253,59 @@ def test_empty_note_is_rejected_without_calling_the_model():
     with pytest.raises(ValueError):
         revise.propose(SEGMENTS, CLIPS, "", "   ")
     assert b.requests == []
+
+
+# ------------------------------------------------------------------ originate
+
+def test_originate_builds_a_cut_with_nothing_to_revise():
+    """The prerequisite that made the app expert-only was a hand-authored EDL. This
+    is the same call addressed to an empty timeline."""
+    b = use(['{"segments":[{"clip":"B.MP4","in":0,"out":4,"why":"opens on the group"}],'
+             '"notes":"built around the arrival"}'])
+    plan = revise.originate(CLIPS, story="a trip film", note="keep it loose")
+    assert plan["segments"] == [{"clip": "B.MP4", "in": 0.0, "out": 4.0,
+                                 "why": "opens on the group"}]
+    assert plan["usage"]["projected_usd"] > 0
+    prompt = b.requests[0].prompt
+    assert "hello" in prompt and "a trip film" in prompt and "keep it loose" in prompt
+    assert b.requests[0].role == config.ROLE_SKELETON
+
+
+def test_originate_states_the_traps_that_are_not_inferable_from_one_clip():
+    """R8: transcript density points away from the action (16.8 candidates/min on the
+    travel footage vs 7.4 on the mountain), and the connective tissue is a running
+    joke. A model reading clips one at a time cannot rediscover either."""
+    b = use(['{"segments":[{"clip":"A.MP4","in":0,"out":2}]}'])
+    revise.originate(CLIPS, story="", note="")
+    prompt = b.requests[0].prompt
+    assert "Quiet does not mean boring" in prompt
+    assert "through-line" in prompt
+    assert "cannot see the frame" in prompt.lower()
+    # no brief: the model is told to infer one and to say so, not to refuse
+    assert "infer what this film is about" in prompt
+
+
+def test_originate_does_not_pretend_there_is_an_edit():
+    b = use(['{"segments":[{"clip":"A.MP4","in":0,"out":2}]}'])
+    revise.originate(CLIPS, story="x", note="")
+    prompt = b.requests[0].prompt
+    assert "The current edit" not in prompt
+    assert "There is no" in prompt and "first" in prompt.lower()
+    assert "first rough cut" in (b.requests[0].system or "").lower()
+
+
+def test_originate_needs_something_to_cut_from():
+    b = use(['{"segments":[]}'])
+    with pytest.raises(ValueError):
+        revise.originate({}, story="x", note="y")
+    assert b.requests == []
+
+
+def test_originated_plans_are_validated_as_strictly_as_revisions():
+    """A first cut has no prior edit to sanity-check it against, so the validator is
+    the only thing between an invented timestamp and missing footage in a render."""
+    b = use(['{"segments":[{"clip":"NOPE.MP4","in":0,"out":2}]}',
+             '{"segments":[{"clip":"A.MP4","in":0,"out":99}]}'])
+    with pytest.raises(inference.InferenceError):
+        revise.originate(CLIPS, story="x", note="y")
+    assert len(b.requests) == 2, "one bounded re-ask, not an unbounded loop"

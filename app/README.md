@@ -73,6 +73,17 @@ server, and every edit is undoable because fiddling is only fun when it is cheap
 
 "tighten the intro" · "more skiing, less airport" · "build it around the milk joke".
 
+**With an empty timeline the same call originates the cut.** That is deliberately not a separate
+button: "ask for what you want" should not change its name depending on whether anything is on
+screen yet. It is the piece that removes the hand-authored-EDL prerequisite — a bin of analysed
+footage plus a sentence about what the film is for is now enough to get a first cut.
+
+The originating prompt states two things a model reading clips one at a time cannot rediscover,
+both measured in R8/R9 rather than guessed: transcript density points *away* from the action on
+this footage (the camera is on the person doing the thing), and the connective tissue is usually
+a running joke rather than a topic. It is also told plainly that it cannot see the frame, and
+that its `why` is what the human checks the reasoning against.
+
 The model is given every clip's **transcript**, the current edit, the story text and the target
 length, and returns a full revised edit. It arrives as a **proposal**: a diff, with Accept and
 Discard, undoable once applied. A model edit that applied itself is how an editor learns to stop
@@ -146,9 +157,13 @@ Three real defects were found by writing the tests rather than by using the app:
 
 ## Known gaps
 
-- **Ask is unproven against a live model.** The wiring, validation, retry, accounting and UI are
-  all tested against a scripted backend, but no real revision has been generated — the CLI in
-  WSL is not logged in. Whether the proposals are any *good* is unmeasured.
+- **An originated cut is loosely snapped.** 12 of 20 out-points landed on an utterance end in
+  the live first-cut run, against 17 of 18 when revising a cut that had already been snapped by
+  hand. Snap to speech fixes it in one click, but the first proposal reads rougher than a
+  revision does, and nothing yet runs snap automatically on an originated plan.
+- **Junk and orientation are still not proposed.** The app analyses whatever is in the folder;
+  which clips are junk, and whether the bin's rotation metadata should be honoured, are decided
+  outside it (`--orient` at scaffold time, `skip` on the analyse call).
 - **Music mode (P2.6) is not built.** Karl asked for supplying an audio track and cutting to it
   as an available, non-default mode. The slot-driven contract it implies ("fill these N slots of
   these lengths") is a different selection problem, filed in FUTURE_PHASES.

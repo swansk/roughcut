@@ -237,6 +237,55 @@ def test_ask_rejects_an_empty_note(client):
     assert client.post("/api/ask", json={"note": "  "}).status_code == 400
 
 
+def test_ask_originates_when_there_is_nothing_to_revise(client, project):
+    """An empty timeline is the first state of every new project, so Ask has to be
+    able to start a cut, not only change one."""
+    from roughcut import config, inference
+
+    class Scripted:
+        name = "scripted"
+        seen: list = []
+
+        def complete(self, request):
+            Scripted.seen.append(request)
+            text = json.dumps({
+                "segments": [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 2.0,
+                              "why": "opens on the greeting"},
+                             {"clip": "CLIP_B.MP4", "in": 2.4, "out": 4.0,
+                              "why": "the reply"}],
+                "notes": "read it as a conversation"})
+            model = config.model_for(request.role)
+            return inference.Result(content=text, input_tokens=10, output_tokens=5,
+                                    backend="scripted", model=model,
+                                    projected_usd=0.0001, latency_ms=1, raw=text)
+
+    inference.set_backend(Scripted())
+    inference.reset_spend()
+    try:
+        r = client.post("/api/ask", json={"note": "", "segments": [],
+                                          "story": "two people talking"})
+        assert r.status_code == 200, r.text
+        plan = r.json()
+        assert len(plan["segments"]) == 2
+        assert plan["notes"] == "read it as a conversation"
+        prompt = Scripted.seen[0].prompt
+        assert "There is no edit yet" in prompt
+        assert "two people talking" in prompt and "hello there" in prompt
+    finally:
+        inference.set_backend(None)
+
+    # still a proposal, not a write
+    assert json.loads(project["edl"].read_text(encoding="utf-8"))["segments"] != []
+
+
+def test_first_cut_without_any_analysis_says_so(tmp_path, project):
+    """Distinct from a backend failure: there is nothing to cut from yet."""
+    with _fresh(tmp_path, project, sidecars=tmp_path / "none") as c:
+        r = c.post("/api/ask", json={"note": "make me something", "segments": []})
+        assert r.status_code == 400
+        assert "audio pass" in r.json()["detail"]
+
+
 def test_ask_surfaces_backend_failure_as_502(client):
     from roughcut import inference
 

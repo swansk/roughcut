@@ -10,6 +10,22 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Ask can originate a cut, not only revise one — and it works.** `revise.originate()` is the
+  same call addressed to an empty timeline, and `/api/ask` routes to it when there is nothing to
+  revise. This removes the hand-authored-EDL prerequisite, the step that most made the app
+  expert-only. The originating prompt states the two traps a model reading clips one at a time
+  cannot rediscover — transcript density points *away* from the action here, and the connective
+  tissue is usually a running joke rather than a topic — and tells the model plainly that it
+  cannot see the frame.
+
+  Live on Copper, from an empty EDL and the agreed brief (which never mentions milk): 20
+  segments, 172.7s, 16 of 17 clips used, 98s, $0.32 projected. It found the milk joke by itself,
+  built "the day Spenny became the milkman" as the spine with the setup indoors and the payoff on
+  the hill, kept travel to four cuts totalling ~31s as the brief asked, and closed on *"we
+  created a legend — and now it's over"*. It also declared its own blind spots without being
+  asked: the 18s held shot with no transcript that "may be a glove or a lift queue", and the one
+  clip it refused to gamble on. Rendered: 172.97s, 18ms A/V drift, no rotation, −16.1 LUFS, no
+  black runs.
 - **The audio pass runs in-app, with real progress.** `POST /api/analyze` runs
   `audio_analyze.py` over the bin in the background and reports `done`/`total` counted from the
   sidecars on disk — the tool writes one per clip as it finishes, so the filesystem is the honest

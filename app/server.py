@@ -282,27 +282,44 @@ async def api_snap(request: Request) -> JSONResponse:
 
 @app.post("/api/ask")
 async def api_ask(request: Request) -> JSONResponse:
-    """Plain-language note in, revised timeline out — as a proposal, never a write.
+    """Plain-language note in, timeline out — as a proposal, never a write.
 
     The one thing the board could not do before: let the human steer by *asking*
     rather than by dragging. Returned like /api/snap so the UI can show it, keep it
     undoable, and let the human reject it — a revision that applied itself would be
     the opposite of the "fun and easy" this app exists for.
+
+    With an empty timeline the same call *originates* the cut instead of revising one.
+    That is the piece that removes the hand-authored-EDL prerequisite, and it is
+    deliberately not a separate button: "ask for what you want" should not change its
+    name depending on whether there is anything on screen yet.
     """
     body = await request.json()
     note = (body.get("note") or "").strip()
-    if not note:
-        raise HTTPException(400, "empty note")
 
     payload = project_payload()
     clips = {c: {"clip": c, "duration": v["duration"], "transcript": v["transcript"],
                  "summary": v["summary"]} for c, v in payload["clips"].items()}
     target = payload["target"]
+    segments = body.get("segments")
+    if segments is None:
+        segments = payload["segments"]
+    story = body.get("story", payload.get("story", ""))
+    if not note and segments:
+        raise HTTPException(400, "empty note")
+    if not clips:
+        # Distinct from a model failure: nothing has been analysed, so there is
+        # nothing to cut from. The UI can act on that; a 502 would just look broken.
+        raise HTTPException(400, "no analysed clips yet — run the audio pass first")
     try:
-        plan = revise.propose(
-            segments=body.get("segments") or payload["segments"],
-            clips=clips, story=body.get("story", payload.get("story", "")),
-            note=note, target=(float(target[0]), float(target[1])))
+        if segments:
+            plan = revise.propose(
+                segments=segments, clips=clips, story=story, note=note,
+                target=(float(target[0]), float(target[1])))
+        else:
+            plan = revise.originate(
+                clips=clips, story=story, note=note,
+                target=(float(target[0]), float(target[1])))
     except inference.BudgetExceeded as exc:
         raise HTTPException(429, str(exc)) from exc
     except (inference.InferenceError, ValueError) as exc:
