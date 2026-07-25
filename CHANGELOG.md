@@ -10,6 +10,8 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- Task board (docs/TASKS.md): T0–T13 with per-task Definitions of Done and verification
+  commands, dependency graph, and DECISION items for Karl.
 - Phase 1 technical specification (docs/SPEC.md): architecture, pipeline stages S0–S6, SQLite
   index schema, OTIO conventions, model/cost policy with hard budget cap, RQ registry.
 - Repository scaffold: README with architecture overview, .gitignore (media files excluded), this changelog.
