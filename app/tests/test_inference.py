@@ -155,6 +155,84 @@ def test_valid_plan_is_normalised():
     assert plan["usage"]["projected_usd"] > 0
 
 
+# --------------------------------------------------- claude_cli backend shape
+
+# Captured verbatim from a real `claude -p ... --output-format json` invocation, so
+# these tests pin the parsing against the actual contract rather than my memory of it.
+LIVE_SHAPE = {
+    "is_error": False, "num_turns": 1, "session_id": "abc", "total_cost_usd": 0,
+    "usage": {"input_tokens": 12, "cache_creation_input_tokens": 8000,
+              "cache_read_input_tokens": 24000, "output_tokens": 900,
+              "service_tier": "standard"},
+    "result": '{"segments":[{"clip":"A.MP4","in":0,"out":2}]}',
+    "type": "result", "duration_ms": 1726,
+}
+LIVE_ERROR = {**LIVE_SHAPE, "is_error": True,
+              "result": "Not logged in · Please run /login",
+              "usage": {"input_tokens": 0, "output_tokens": 0}}
+
+
+def _cli_with(monkeypatch, payload=None, exc=None):
+    import subprocess as sp
+
+    def fake_run(cmd, **kwargs):
+        if exc is not None:
+            raise exc
+        return sp.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(inference.subprocess, "run", fake_run)
+    return inference.ClaudeCliBackend()
+
+
+def test_cli_counts_cached_input_tokens(monkeypatch):
+    """Reading only `input_tokens` would report 12 tokens for a call that processed
+    32,012 — and a projection of essentially zero."""
+    backend = _cli_with(monkeypatch, LIVE_SHAPE)
+    result = backend.complete(inference.Request(prompt="hi",
+                                                role=config.ROLE_SKELETON))
+    assert result.input_tokens == 12 + 8000 + 24000
+    assert result.output_tokens == 900
+    assert result.projected_usd > 0.05, "a 32k-token opus call is not nearly free"
+
+
+def test_cli_surfaces_not_logged_in(monkeypatch):
+    backend = _cli_with(monkeypatch, LIVE_ERROR)
+    with pytest.raises(inference.InferenceError, match="Not logged in"):
+        backend.complete(inference.Request(prompt="hi"))
+
+
+def test_cli_missing_binary_explains_the_path_problem(monkeypatch):
+    backend = _cli_with(monkeypatch, exc=FileNotFoundError("claude"))
+    with pytest.raises(inference.InferenceError, match=r"not found on PATH"):
+        backend.complete(inference.Request(prompt="hi"))
+
+
+def test_cli_timeout_is_reported_cleanly(monkeypatch):
+    import subprocess as sp
+    backend = _cli_with(monkeypatch, exc=sp.TimeoutExpired("claude", 300))
+    with pytest.raises(inference.InferenceError, match="timed out"):
+        backend.complete(inference.Request(prompt="hi"))
+
+
+def test_cli_passes_images_by_path_never_base64(monkeypatch, tmp_path):
+    """SPEC §6.1 rule 1. Base64 is an API-backend implementation detail."""
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        import subprocess as sp
+        captured["cmd"] = cmd
+        return sp.CompletedProcess(cmd, 0, stdout=json.dumps(LIVE_SHAPE), stderr="")
+
+    monkeypatch.setattr(inference.subprocess, "run", fake_run)
+    img = tmp_path / "sheet.jpg"
+    img.write_bytes(b"\xff\xd8\xff")
+    inference.ClaudeCliBackend().complete(
+        inference.Request(prompt="look", images=(img,)))
+    joined = " ".join(captured["cmd"])
+    assert str(img.resolve()) in joined
+    assert "base64" not in joined.lower()
+
+
 # ------------------------------------------------------------------ prompt
 
 def test_prompt_carries_the_transcript_and_the_note():

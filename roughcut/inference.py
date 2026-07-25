@@ -161,8 +161,22 @@ class ClaudeCliBackend:
             cmd += ["--append-system-prompt", request.system]
 
         t0 = time.time()
-        proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=config.call_timeout_s())
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=config.call_timeout_s())
+        except FileNotFoundError as exc:
+            # The likeliest failure on a fresh machine: `claude` lives in ~/.local/bin
+            # and a non-login shell does not source .bashrc, so a server started the
+            # wrong way sees no CLI at all. Say that, rather than raising a bare
+            # OSError that reaches the UI as an opaque 500.
+            raise InferenceError(
+                "claude CLI not found on PATH. It installs to ~/.local/bin, which a "
+                "non-login shell does not pick up — start the server from a login "
+                "shell (bash -l) or set ROUGHCUT_BACKEND=anthropic_api.") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise InferenceError(
+                f"claude CLI timed out after {config.call_timeout_s()}s "
+                f"(raise ROUGHCUT_CALL_TIMEOUT_S)") from exc
         latency = int((time.time() - t0) * 1000)
         if proc.returncode != 0 and not proc.stdout.strip():
             raise InferenceError(f"claude CLI failed: {proc.stderr.strip()[:300]}")
@@ -179,7 +193,18 @@ class ClaudeCliBackend:
             raise InferenceError(f"claude CLI error: {text[:200]}")
 
         usage = payload.get("usage", {}) or {}
-        in_tok = int(usage.get("input_tokens", 0) or 0)
+        # Cached tokens count. The CLI splits input across `input_tokens`,
+        # `cache_creation_input_tokens` and `cache_read_input_tokens`, and on a prompt
+        # this size most of it lands in the cache fields — reading only the first
+        # would report a near-zero projection for a call that really did process tens
+        # of thousands of tokens. Undercounting is the dangerous direction: the whole
+        # point of `projected_usd` is to answer "is this affordable in production"
+        # while developing on a subscription where nothing is charged (SPEC §7).
+        # Cache reads are billed below full input rate in reality, so this is a
+        # deliberate over-estimate rather than a precise bill.
+        in_tok = sum(int(usage.get(k, 0) or 0) for k in
+                     ("input_tokens", "cache_creation_input_tokens",
+                      "cache_read_input_tokens"))
         out_tok = int(usage.get("output_tokens", 0) or 0)
         return Result(
             content=text, input_tokens=in_tok, output_tokens=out_tok,
