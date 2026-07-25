@@ -42,9 +42,25 @@ invisible to any pure-visual policy — which is why Policy C keeps the tier-0/1
 loop rather than replacing them. The label set from R4 (inclusive highlight marks) is exactly
 the instrument to measure this.
 
+## Dataset integrity controls (non-negotiable)
+
+The study measures whether the analysis *finds* interesting moments. Two ways that measurement
+can be silently faked, both live in the current footage:
+
+- **Pre-curated footage.** B1 (Killington) has already had a human remove boring material and
+  name each file after its highlight. Measuring highlight-finding on it would produce a
+  falsely positive CP2. **Use only its long-form files (190–320s), which still contain boring
+  stretches around the named moment; exclude the 35–40s trimmed clips.** Raw unculled footage,
+  if any becomes available, replaces B1 outright.
+- **Filename leakage.** `bombbeginning.MP4` hands the model the answer. **All policies operate
+  on neutralized copies (`clip_01.mp4`, …)**; the mapping is kept out of the session and
+  restored only when scoring. This applies to directory names and any sidecar metadata too.
+
+Both controls are verified before any policy runs, and the verification is recorded in the report.
+
 ## Method
-1. **Harness: Claude Code CLI, no pipeline code.** Each policy is an agentic session (Sonnet 5
-   or Opus 5 as the session model) given: B1 proxies for a ≥2h slice, ffmpeg/ffprobe, a small
+1. **Harness: Claude Code CLI, no pipeline code.** Each policy is an agentic session given:
+   neutralized B1 long-form clips, ffmpeg/ffprobe, a small
    contact-sheet helper script (`research/tools/contact_sheet.py` — the only code this study
    builds), the brief, and a policy prompt (versioned under `research/prompts/r7/`). The agent
    explores and emits a ranked list of (start_s, end_s, score, rationale) candidate segments.
@@ -83,6 +99,8 @@ the instrument to measure this.
    dependency), not an automatic switch.
 
 ## Definition of Done
+- [ ] Dataset integrity controls verified and recorded: curated short clips excluded, filenames
+      neutralized, mapping withheld from the sessions
 - [ ] Contact-sheet helper exists with tests (grid layout, timestamp burn-in readable)
 - [ ] Policies A/B/C each run on the same ≥2h labeled slice; sessions archived under
       `research/runs/r7/` (transcripts, candidate lists, token usage)

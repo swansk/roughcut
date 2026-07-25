@@ -9,7 +9,12 @@ worth your time only after that gate passes.
 
 ---
 
-## Pass 1 — Highlights (do this now: 30–45 min of B1, ~1 hour of your time)
+## Pass 1 — Highlights (do this now: the 9 long-form B1 clips, ~40 min of footage)
+
+> **Scope, now that B1 is measured:** Killington is 43 minutes total across 12 files, and the
+> nine long-form clips (190–320s each) are the R7 dataset — the three short trimmed clips are
+> excluded as pre-curated. So this pass covers essentially all of the usable bin, not a sample.
+> See [README.md](README.md) for why the curation matters.
 
 **What you're marking:** every moment you would *consider* including in an edit of this trip.
 Not "the best bits" — the candidate pool. If you'd think about it, mark it.
@@ -40,10 +45,15 @@ GX010045.MP4,88.0,120.0,"long clean run, best of the day"
 - `note` is free text and genuinely useful: it's what R7 compares its rationales against.
 - Prefix a note with `brief -` when it's under 5s, so the brief-highlight metric is easy to compute.
 
-**How to work through it:** pick a contiguous 30–45 minutes rather than sampling across the
-whole bin — contiguous footage lets the study measure whether the analysis handles *transitions
-between* interesting and boring stretches, which sampled clips can't show. Scrub at 2–4× and
-mark as you go; don't agonize over exact boundaries.
+**How to work through it:** go through each long-form clip end to end rather than skipping to
+the parts you remember — the study needs the boring stretches labeled as boring, which is only
+meaningful if you actually watched past them. Scrub at 2–4× and mark as you go; don't agonize
+over exact boundaries.
+
+**A note on these particular files:** you named them after what happens in them
+(`bombbeginning`, `tastytrees`, …), so you already know where the good bit is. Label the whole
+clip anyway — a five-minute clip named for one moment usually contains two or three others, and
+those are exactly the cases that separate a good analysis from a lucky one.
 
 **Before you start**, skim [../research/R6-rubric.md](../research/R6-rubric.md). It's the
 rubric for judging finished rough cuts, and reading it first tends to sharpen what you notice

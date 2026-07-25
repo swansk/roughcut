@@ -21,6 +21,11 @@ compression via ffmpeg `sidechaincompress`), room-tone fill. P1 already flags un
 (tier-0), which becomes the trigger map. Biggest perceived-quality lever per effort — schedule
 early in Phase 2.
 
+**Raw mic-array audio is available on GoPro bins:** paired `.WAV` files carry 4-channel 32-bit
+PCM from the camera's mic array (confirmed on B2). Wind is the dominant audio problem in ski
+footage, and beamforming or array-based noise reduction from the raw channels should beat
+post-hoc filtering of the baked stereo AAC track. Worth a study before committing.
+
 ### P2.3 Color correction
 Log→Rec.709 conversion using `media.color_transfer`/`log_profile` from the P1 probe (the
 metadata is captured now precisely so this phase doesn't re-ingest). LUT application via
@@ -43,13 +48,12 @@ Requirements accumulated from P1:
 
 ## Phase 3 — Breadth & polish
 
-- **P3.1 External audio sync — PROMOTED, likely Phase 2.** The Copper bin (B2) has 26 `.WAV`
-  files paired one-to-one with its MP4s, which almost certainly means an external mic. That
-  makes this real rather than hypothetical: a rough cut that uses the camera's wind-noise track
-  when a clean mic recording exists will sound bad regardless of how well shots are chosen.
-  Confirm what the WAVs are at T1 (ffprobe), then schedule audio cross-correlation alignment
-  and a `sync_groups` table alongside P2.2 audio post. True multicam (several cameras, one
-  event) remains unscheduled.
+- **P3.1 External audio sync — remains unscheduled.** *(Corrected 2026-07-25.)* An earlier note
+  promoted this after seeing 26 `.WAV` files paired with B2's MP4s and inferring an external
+  mic. ffprobe says otherwise: `pcm_s32le`, 48kHz, **4 channels**, 32-bit, duration matching the
+  paired MP4 exactly — GoPro's raw mic-array capture, same camera and same clock. There is no
+  sync problem, so this goes back to unscheduled. What the WAVs *do* offer is raw multi-mic data
+  for wind-noise reduction and beamforming, which is filed under P2.2 audio post instead.
 - **P3.2 Vertical auto-reframe (9:16)** — subject tracking + crop path. The VLM pass could
   cheaply emit a coarse subject-position hint per keyframe; consider adding that field to the
   §5.4 schema *in Phase 1* if R1 shows marginal cost is ~zero. ← flagged during spec writing.
