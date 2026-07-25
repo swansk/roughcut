@@ -161,6 +161,10 @@ def build_sheets(video: Path, out_dir: Path, interval: float, cols: int, rows: i
         "rotation_metadata": rotation,
         "orient_mode": orient,
         "thumb_size": [thumb_w, thumb_h],
+        # Geometry so consumers can address a cell inside the sheet without
+        # re-deriving these constants (the label UI uses it for CSS sprites).
+        "cell_geometry": {"pad": PAD, "label_h": LABEL_H,
+                          "cell_w": cell_w, "cell_h": cell_h},
         "n_samples": sum(len(s.cells) for s in sheets),
         "sheets": [asdict(s) for s in sheets],
     }

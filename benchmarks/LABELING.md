@@ -41,18 +41,28 @@ study gets its signal:
   view that sets up what follows
 - Near-misses and failures, which are often better footage than clean runs
 
-**Format** — `benchmarks/labels/B1-highlights.csv`:
+**Workflow: open `label.html` and click frames.** `make_label_ui.py` builds a page over a
+contact-sheet directory where each frame is a clickable cell (CSS sprites into the existing
+sheet JPEGs — no frames re-extracted). Click or drag to mark; contiguous marks merge into
+ranges; timestamps are derived; ranges under 5s are auto-tagged `brief`; marks persist in
+`localStorage`; Export produces the CSV.
+
+This replaced an earlier instruction to read timestamps off images and type them into a
+spreadsheet. That was mechanical work, which SPEC §0 principle 1 classifies as a design bug —
+the fix was tooling, not a better explanation.
+
+**Emitted format** — `benchmarks/labels/B1-highlights.csv`:
 
 ```csv
 file,start_s,end_s,note
-GX010042.MP4,124.5,131.0,"wipeout into powder, someone laughs off-camera"
-GX010042.MP4,402.0,405.5,"brief - good reaction shot"
-GX010045.MP4,88.0,120.0,"long clean run, best of the day"
+GX010494,84.0,96.0,"wipeout into powder, someone laughs off-camera"
+GX010494,402.0,404.0,"brief - good reaction shot"
+clip_03,88.0,120.0,"long clean run, best of the day"
 ```
 
-- Times in seconds from the start of that file. Rough is fine — ±1s doesn't affect the metrics.
+- Times are derived from cell index × sample interval, so they're consistent by construction.
 - `note` is free text and genuinely useful: it's what R7 compares its rationales against.
-- Prefix a note with `brief -` when it's under 5s, so the brief-highlight metric is easy to compute.
+- `brief - ` is prefixed automatically for ranges under 5s.
 
 **How to work through it:** go through every clip, including ones that look like nothing — the
 study needs the boring stretches to actually be labeled boring, and that's only meaningful if
