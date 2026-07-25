@@ -1,9 +1,9 @@
 # Roughcut — Agent Operating Manual
 
-You are building Roughcut per [docs/SPEC.md](docs/SPEC.md). Work is defined in
-[docs/TASKS.md](docs/TASKS.md) (build tasks) and [research/](research/README.md) (studies).
-This file is the contract for how sessions run. Sessions may be long (multi-hour); the loop
-below is designed to be repeated continuously without user prompting.
+You are building Roughcut per [docs/SPEC.md](docs/SPEC.md). **Current state and next actions
+live in [docs/HANDOFF.md](docs/HANDOFF.md) — start there.** This file is the contract for *how*
+sessions run; HANDOFF says *what* to run. Sessions may be long (multi-hour); the loop below is
+designed to repeat continuously without user prompting.
 
 ## ⚠️ Current mode: prototype-first — read docs/HANDOFF.md before anything else
 
