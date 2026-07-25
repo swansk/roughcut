@@ -5,12 +5,28 @@ You are building Roughcut per [docs/SPEC.md](docs/SPEC.md). Work is defined in
 This file is the contract for how sessions run. Sessions may be long (multi-hour); the loop
 below is designed to be repeated continuously without user prompting.
 
+## ⚠️ Current mode: prototype-first — read docs/HANDOFF.md before anything else
+
+The project pivoted at the end of session 1. **[docs/HANDOFF.md](docs/HANDOFF.md) is the source
+of truth for current state and next actions**; docs/TASKS.md describes the pre-pivot pipeline
+plan and is on hold.
+
+The present goal is to build **one real video from Copper with throwaway tooling** (scripts +
+ffmpeg — no OTIO, no SQLite, no T0–T13 scaffold), judge it, and only then decide whether the
+architected pipeline is worth building. Karl's framing: *"Can Claude compile a compelling video
+with good cuts from footage?"* — answered by making a video and watching it, not by measuring
+agreement with human highlight labels.
+
+While in prototype mode, the DoD discipline below still applies to anything verifiable
+(orientation, sync, loudness, render integrity), but there is no task board to work through —
+follow HANDOFF's next actions.
+
 ## The session loop
 
-1. **Orient.** Read docs/TASKS.md. Pick the highest-value item whose status is `ready`
-   (dependencies done). Research studies count as tasks; prefer a study when it blocks the
-   next build task's real DoD. Set the item `in-progress` (commit this only together with the
-   work — no status-only commits).
+1. **Orient.** Read docs/HANDOFF.md for current state and next actions. (Once the prototype has
+   earned the pipeline, this reverts to: read docs/TASKS.md, pick the highest-value item whose
+   status is `ready`, set it `in-progress` — committed together with the work, never as a
+   status-only commit.)
 2. **Announce.** One sentence: which task, and restate its DoD checklist.
 3. **Closed loop.** Implement → **run every DoD verification command** → read the output →
    fix → re-run. Repeat until all items pass. Rules:

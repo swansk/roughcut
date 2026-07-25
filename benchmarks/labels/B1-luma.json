@@ -1,0 +1,158 @@
+[
+  {
+    "clip": "GX010474.MP4",
+    "dur": 31.6,
+    "luma_mean": 130.9,
+    "luma_std": 49.2
+  },
+  {
+    "clip": "GX010475.MP4",
+    "dur": 21.2,
+    "luma_mean": 123.8,
+    "luma_std": 48.9
+  },
+  {
+    "clip": "GX010476.MP4",
+    "dur": 18.7,
+    "luma_mean": 112.7,
+    "luma_std": 56.5
+  },
+  {
+    "clip": "GX010477.MP4",
+    "dur": 16.7,
+    "luma_mean": 16.8,
+    "luma_std": 23.8
+  },
+  {
+    "clip": "GX010478.MP4",
+    "dur": 11.4,
+    "luma_mean": 29.6,
+    "luma_std": 31.2
+  },
+  {
+    "clip": "GX010479.MP4",
+    "dur": 74.4,
+    "luma_mean": 5.3,
+    "luma_std": 8.7
+  },
+  {
+    "clip": "GX010480.MP4",
+    "dur": 19.7,
+    "luma_mean": 2.9,
+    "luma_std": 6.4
+  },
+  {
+    "clip": "GX010481.MP4",
+    "dur": 18.6,
+    "luma_mean": 5.7,
+    "luma_std": 10.0
+  },
+  {
+    "clip": "GX010482.MP4",
+    "dur": 47.0,
+    "luma_mean": 2.7,
+    "luma_std": 4.7
+  },
+  {
+    "clip": "GX010483.MP4",
+    "dur": 10.9,
+    "luma_mean": 92.5,
+    "luma_std": 46.1
+  },
+  {
+    "clip": "GX010484.MP4",
+    "dur": 17.4,
+    "luma_mean": 10.9,
+    "luma_std": 14.6
+  },
+  {
+    "clip": "GX010485.MP4",
+    "dur": 17.1,
+    "luma_mean": 9.0,
+    "luma_std": 14.9
+  },
+  {
+    "clip": "GX010486.MP4",
+    "dur": 11.3,
+    "luma_mean": 23.6,
+    "luma_std": 27.9
+  },
+  {
+    "clip": "GX010487.MP4",
+    "dur": 16.8,
+    "luma_mean": 153.9,
+    "luma_std": 38.6
+  },
+  {
+    "clip": "GX010488.MP4",
+    "dur": 15.3,
+    "luma_mean": 171.2,
+    "luma_std": 48.6
+  },
+  {
+    "clip": "GX010489.MP4",
+    "dur": 14.0,
+    "luma_mean": 158.1,
+    "luma_std": 58.1
+  },
+  {
+    "clip": "GX010490.MP4",
+    "dur": 31.5,
+    "luma_mean": 173.5,
+    "luma_std": 42.9
+  },
+  {
+    "clip": "GX010491.MP4",
+    "dur": 5.1,
+    "luma_mean": 140.3,
+    "luma_std": 70.9
+  },
+  {
+    "clip": "GX010492.MP4",
+    "dur": 21.0,
+    "luma_mean": 119.5,
+    "luma_std": 56.7
+  },
+  {
+    "clip": "GX010493.MP4",
+    "dur": 25.8,
+    "luma_mean": 146.9,
+    "luma_std": 69.2
+  },
+  {
+    "clip": "GX010494.MP4",
+    "dur": 41.5,
+    "luma_mean": 114.9,
+    "luma_std": 60.7
+  },
+  {
+    "clip": "GX010495.MP4",
+    "dur": 60.4,
+    "luma_mean": 129.3,
+    "luma_std": 52.7
+  },
+  {
+    "clip": "GX010496.MP4",
+    "dur": 46.4,
+    "luma_mean": 135.7,
+    "luma_std": 55.0
+  },
+  {
+    "clip": "GX010497.MP4",
+    "dur": 25.3,
+    "luma_mean": 1.4,
+    "luma_std": 1.4
+  },
+  {
+    "clip": "GX010498.MP4",
+    "dur": 25.3,
+    "luma_mean": 1.1,
+    "luma_std": 0.5
+  },
+  {
+    "clip": "GX010499.MP4",
+    "dur": 17.2,
+    "luma_mean": 1.3,
+    "luma_std": 0.9
+  }
+]

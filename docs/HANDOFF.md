@@ -89,6 +89,25 @@ WSL2 Ubuntu 24.04, RTX 5080 (16GB, visible to WSL), 953GB free on ext4.
 
 - **D5** footage location — resolved in practice (copied to WSL ext4); library still on Windows.
 - **D6** labeling — **deferred**, possibly permanently. Superseded by analysis-first review.
-- **D7** git remote — still local-only. Nine sessions of design work on one disk.
-- Whether to run the first cut on Copper (6 min usable, generous 2:1 ratio) or Killington
-  (40 min, forces real discrimination). Karl offered; not yet decided.
+- **D7** git remote — **still local-only, 19 commits on one disk with no backup.** The single
+  standing risk to the project. Raise it again.
+
+**Decided:** the first cut runs on **Copper only** (Karl, 2026-07-25). Killington stays
+untouched — it is pre-curated, and holding it back keeps it available as a cleaner second test
+later.
+
+## Artifacts outside the repo
+
+| Path | What | Regenerable? |
+|---|---|---|
+| `~/footage/copper-02-2026` | B1, 26 MP4s, 7.6GB (MP4-only) | yes, from the Windows library |
+| `~/footage/killington-01-2026` | B2, 39 files, 31GB | yes, same |
+| `/mnt/c/Users/karl/Documents/Roughcut Labeling/` | 47 contact sheets + `label.html` per bin, 17MB | yes — `contact_sheet.py` then `make_label_ui.py` |
+
+None of these are in git (media is gitignored) and none are precious — every one is reproducible
+from the tools in `research/tools/`. The sheets remain useful as **analysis input** even though
+the labeling workflow they were built for is deferred.
+
+**B1's nine junk clips** (excluded from the sheets, and from the cut): `GX010479`, `GX010480`,
+`GX010481`, `GX010482`, `GX010484`, `GX010485`, `GX010497`, `GX010498`, `GX010499`. Per-clip
+measurements in [`../benchmarks/labels/B1-luma.json`](../benchmarks/labels/B1-luma.json).
