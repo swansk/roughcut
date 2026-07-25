@@ -9,12 +9,12 @@ worth your time only after that gate passes.
 
 ---
 
-## Pass 1 — Highlights (do this now: the 9 long-form B1 clips, ~40 min of footage)
+## Pass 1 — Highlights (B1 = Copper, 26 clips, 11 min of footage)
 
-> **Scope, now that B1 is measured:** Killington is 43 minutes total across 12 files, and the
-> nine long-form clips (190–320s each) are the R7 dataset — the three short trimmed clips are
-> excluded as pre-curated. So this pass covers essentially all of the usable bin, not a sample.
-> See [README.md](README.md) for why the curation matters.
+> **Do this from the contact-sheet index, not by scrubbing video.** The index is a set of image
+> grids with a timestamp on every cell; you mark from those and only open the video for cases
+> the stills can't settle. Asking you to scrub 11 minutes of footage manually would violate the
+> product's own first principle (SPEC §0) — the tooling exists so this is a quick visual pass.
 
 **What you're marking:** every moment you would *consider* including in an edit of this trip.
 Not "the best bits" — the candidate pool. If you'd think about it, mark it.
@@ -45,15 +45,15 @@ GX010045.MP4,88.0,120.0,"long clean run, best of the day"
 - `note` is free text and genuinely useful: it's what R7 compares its rationales against.
 - Prefix a note with `brief -` when it's under 5s, so the brief-highlight metric is easy to compute.
 
-**How to work through it:** go through each long-form clip end to end rather than skipping to
-the parts you remember — the study needs the boring stretches labeled as boring, which is only
-meaningful if you actually watched past them. Scrub at 2–4× and mark as you go; don't agonize
-over exact boundaries.
+**How to work through it:** go through every clip, including ones that look like nothing — the
+study needs the boring stretches to actually be labeled boring, and that's only meaningful if
+you looked. Copper is raw off the camera and has never been culled, which is exactly why it's
+the primary bin: nothing has pre-selected the good parts for you or for the analysis.
 
-**A note on these particular files:** you named them after what happens in them
-(`bombbeginning`, `tastytrees`, …), so you already know where the good bit is. Label the whole
-clip anyway — a five-minute clip named for one moment usually contains two or three others, and
-those are exactly the cases that separate a good analysis from a lucky one.
+**If you use Killington (B2) as well**, note that you named those files after what happens in
+them (`bombbeginning`, `tastytrees`, …), so you already know where each good bit is. Label the
+whole clip anyway — a five-minute clip named for one moment usually contains two or three
+others, and those are the cases that separate a good analysis from a lucky one.
 
 **Before you start**, skim [../research/R6-rubric.md](../research/R6-rubric.md). It's the
 rubric for judging finished rough cuts, and reading it first tends to sharpen what you notice

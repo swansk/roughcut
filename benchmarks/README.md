@@ -27,7 +27,8 @@ Manifests and label files ARE committed (they're small text). A checksum list
 (`B1.checksums`) is generated on registration so runs can detect footage drift.
 
 **How to produce labels: [LABELING.md](LABELING.md).** Start with the highlights pass on B1 —
-it is the only labeling needed to reach checkpoint CP2.
+it is the only labeling needed to reach checkpoint CP2, and it should be a fast visual pass over
+a contact-sheet index, not a video-scrubbing session (SPEC §0, principle 1).
 
 ## Label formats
 
@@ -41,17 +42,38 @@ it is the only labeling needed to reach checkpoint CP2.
 
 ## Registered bins (D1 resolved; measured 2026-07-25 with ffprobe)
 
-| ID | Bin | Measured | Format | Notes |
+| ID | Bin | Measured | Format | Role |
 |---|---|---|---|---|
-| **B1** | Killington 01-2026 | **43 min**, 12 MP4 | H.264 4K (3840×2160) 29.97fps | ⚠️ **Curated** — see below. 11 `.LRV` proxies + 16 `.THM` present (counts don't match the MP4s, so the bin is a mix of renamed exports and GoPro originals) |
-| B2 | Copper 02-2026 | **11 min**, 26 MP4 | HEVC 5.3K (5120×2880) 23.976fps | Raw GoPro naming. 26 paired `.WAV` = **4-channel 32-bit PCM mic-array data**, not an external mic (see below) |
-| B3 | Mt. Marcy 02-2025 | **8 min**, 7 MP4 | HEVC 5.3K 23.976fps | Raw GoPro naming; held out from tuning entirely |
+| **B1** | **Copper 02-2026** | **11 min**, 26 MP4 | HEVC 5.3K (5120×2880) 23.976fps | **Prototype / primary.** Raw GoPro naming (`GX0104xx`) — never curated, so highlight-finding measured on it is honest. Short, which limits statistical power |
+| B2 | Killington 01-2026 | **43 min**, 12 MP4 | H.264 4K (3840×2160) 29.97fps | Secondary — ⚠️ **pre-curated**, usable only under the controls below. More footage, less trustworthy |
+| B3 | Mt. Marcy 02-2025 | **8 min**, 7 MP4 | HEVC 5.3K 23.976fps | Held out from tuning entirely |
+
+**B1 is Copper** — raw beats large. Killington has four times the footage but a human already
+removed its boring material, so measuring the analysis against it flatters the result. Copper's
+26 clips came straight off the camera. Where more material is needed, add Killington's long-form
+clips under the controls below and report the two separately rather than pooling them.
+
+**Sidecar `.WAV` files are out of scope** (Karl, 2026-07-25) — audio comes from the MP4's
+embedded track. Only MP4s are copied into the working bins. The mic-array opportunity stays
+filed under FUTURE_PHASES P2.2.
+
+### ⚠️ B1 has mixed and misleading rotation metadata
+
+`GX010474.MP4` carries `rotation=-90`; applying it (ffmpeg's default) produces a **sideways
+portrait frame**, while `-noautorotate` yields the correct upright 16:9 image — verified by
+eye. `GX010475.MP4` in the same bin carries no rotation at all. So the bin is mixed, and the
+metadata is actively wrong on at least one clip.
+
+Consequences: contact sheets for this bin need `--orient none`; ingest must record rotation and
+resolve a per-clip override with visual confirmation (SPEC §3 S0, T1/T2 DoDs). A blanket
+`-noautorotate` is **not** a general fix — phone footage genuinely shot in portrait needs its
+metadata honoured. This is why orientation is verified by looking rather than believed.
 
 **Total available footage: ~1 hour.** The *design* target remains 3h typical / 5h max (SPEC §7)
 — that's the workload Karl wants supported, and future trips will supply it. But the benchmark
 bins are smaller than the design target, which limits R7's statistical power, not the architecture.
 
-### ⚠️ B1 is pre-curated — this compromises its use for R7
+### ⚠️ B2 (Killington) is pre-curated — controls required if used
 
 Killington's files are hand-named after their content: `bombbeginning`, `cleanduckin`,
 `goodliftlineme`, `pocketpizza`, `rockhitmarkers`, `rowdy`, `spencerunderbomb`,
@@ -68,10 +90,10 @@ be an honest go/no-go.** Two mitigations, both required:
 2. **Neutralize filenames.** The study operates on `clip_01.mp4 …` copies; the model must never
    see `bombbeginning.MP4`, which would hand it the answer.
 
-**Better option if it exists:** raw, unculled footage straight off an SD card. If Karl has any
-(other drives, cards, another machine), it should replace B1 for R7.
+**Resolved:** Copper is raw and is now B1, so Killington is only needed if the study wants more
+material than 11 minutes. Use it under both controls above, and report it separately.
 
-### The Copper `.WAV` files are not an external mic
+### Appendix: what the Copper `.WAV` files are (now out of scope)
 
 Probed: `pcm_s32le`, 48kHz, **4 channels**, 32-bit, duration exactly matching the paired MP4.
 That is GoPro's raw mic-array capture, written alongside the video for wind-noise processing —

@@ -4,6 +4,30 @@ Status: **draft v1** — parameters marked `RQ:` are open research questions; do
 values for them from guesswork. Each maps to a study in [../research/](../research/README.md),
 and its resolution is recorded back into this document with a link to the study report.
 
+## 0. Product intent (Karl's framing — this constrains design choices)
+
+> Turn video editing from a very manual, time-consuming task into an AI-forward one, where the
+> human is engaged where they are really needed, in a way that's fun to use.
+
+Three design principles follow, and they are testable rather than decorative:
+
+1. **Human time goes to taste and judgment, never to mechanical work.** Choosing which take is
+   better, what the story is, whether a moment lands — that's the human. Scrubbing, trimming,
+   logging, leveling, transcoding — that's the machine. *If we find ourselves asking the human
+   to do something mechanical, that is a design bug, not a chore to delegate.*
+2. **Fast feedback, or the human disengages.** Nobody has fun waiting on a render. Any loop the
+   human is inside (skeleton, revision, review) must return in seconds-to-a-minute — which is
+   what proxy-based draft renders are for. Slow, correct, final renders happen off the loop.
+3. **Present options, don't demand specifications.** Reacting to three concrete proposals is
+   fast, fun, and plays to human taste. Authoring a spec from a blank page is slow, tiring, and
+   plays to nobody's. The agent should arrive with a proposal and a rationale.
+
+**Applied to our own process, right now:** the labeling pass in
+[../benchmarks/LABELING.md](../benchmarks/LABELING.md) asks Karl to scrub footage manually,
+which is precisely the activity this product exists to eliminate. That is principle 1 being
+violated by the project's own tooling. Mitigation: build the contact-sheet index first so
+labeling is a fast visual pass over an image grid rather than a video-scrubbing session.
+
 ## 1. Scope
 
 **In (Phase 1 — "rough-cut generator"):**
@@ -23,6 +47,12 @@ sync, vertical auto-reframe, skeleton web UI, NLE (Premiere/Resolve) export.
 **Success criterion for Phase 1:** given benchmark bin B1 and a goal, the pipeline runs
 end-to-end unattended and produces a rough cut that a human rates ≥ threshold on the R6 rubric,
 at inference cost within budget (§7).
+
+**Input formats:** the pipeline is format-agnostic by design — anything ffmpeg decodes is
+acceptable, and no stage may assume a container or codec. The prototype exercises MP4
+(H.264 and HEVC) because that is what the benchmark bins contain. Sidecar audio files (e.g.
+GoPro's `.WAV` mic-array captures) are **out of scope**: audio comes from the MP4's embedded
+track. See [FUTURE_PHASES.md](FUTURE_PHASES.md) P2.2 for the deferred mic-array opportunity.
 
 ## 2. Architecture
 
@@ -85,7 +115,17 @@ roughcut/
 
 ### S0 — Ingest & normalization
 1. **Probe** every file with ffprobe: codec, resolution, fps, VFR flag, duration, creation
-   time, camera metadata, color transfer/primaries (log profile detection). → `media` table.
+   time, camera metadata, color transfer/primaries (log profile detection), and **rotation
+   side-data**. → `media` table.
+
+   > **Rotation is recorded, never trusted.** Measured on B1 (2026-07-25): `GX010474.MP4`
+   > carries `rotation=-90`, and applying it yields a sideways portrait frame, while
+   > `GX010475.MP4` in the same bin carries none — the bin is mixed *and* the metadata is
+   > misleading on at least one clip. Blindly honouring or blindly ignoring the side-data both
+   > corrupt the output. Ingest stores the raw value, applies a per-clip `orient_override`, and
+   > **verifies by looking**: a first-frame thumbnail per clip is emitted for review at CP1.
+   > Phone footage genuinely shot in portrait must keep working, so a global `-noautorotate`
+   > is not the fix.
 2. **Proxy** transcode: 960×540 H.264 CRF 23, audio AAC 128k, **CFR normalized** (VFR phone
    footage is the #1 source of downstream sync bugs — normalize here, once). Preserve a
    source-frame ↔ proxy-frame mapping so timeline decisions made on proxies resolve to exact
@@ -154,6 +194,8 @@ assertions against the preset.
 CREATE TABLE media (
   id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, duration_s REAL, fps_num INTEGER,
   fps_den INTEGER, is_vfr INTEGER, width INTEGER, height INTEGER, codec TEXT,
+  rotation REAL DEFAULT 0,        -- container side-data, recorded not trusted (§3 S0)
+  orient_override TEXT,           -- 'auto'|'none'|'cw'|'ccw' after visual verification
   color_transfer TEXT, log_profile TEXT, camera TEXT, shot_at TEXT, probe_json TEXT);
 
 CREATE TABLE shots (

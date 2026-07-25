@@ -100,6 +100,11 @@ ffprobe wrapper producing `media` rows incl. VFR flag and log-profile detection.
 - [ ] `roughcut ingest probe <dir>` populates `media` for all fixtures; VFR fixture has `is_vfr=1`
 - [ ] Probe of an unreadable/corrupt file records an error row and does not abort the batch
 - [ ] Manifest rows validate against schema (jsonschema test on `probe_json` + typed columns)
+- [ ] **Rotation side-data recorded** for every file (B1 has clips both with `rotation=-90` and
+      without — assert both cases from the real bin, not just fixtures)
+- [ ] First-frame thumbnail emitted per clip for orientation review; `orient_override` defaults
+      resolved and persisted (SPEC §3 S0 — the metadata is misleading on B1, so this is a
+      correctness requirement, not a nicety)
 
 ## T2 — Proxy generation — `blocked(T1)`
 540p CFR proxies with source↔proxy frame mapping.
@@ -108,6 +113,8 @@ ffprobe wrapper producing `media` rows incl. VFR flag and log-profile detection.
 - [ ] VFR fixture: proxy is CFR and audio drift < 1 frame over a 10-min synthetic VFR test clip
 - [ ] Frame-mapping function round-trips: source frame → proxy frame → source frame identity on fixtures
 - [ ] Re-running skips existing up-to-date proxies (idempotent; mtime+hash check tested)
+- [ ] Proxy orientation matches the clip's verified `orient_override`, asserted on the real B1
+      clip that carries `rotation=-90` (aspect ratio check catches a silent 90° error)
 
 ## T3 — Shot detection — `blocked(T2)`
 PySceneDetect over proxies → `shots` table.

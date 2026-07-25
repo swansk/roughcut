@@ -10,8 +10,17 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Product intent as design principles** (SPEC §0), from Karl's framing: human time goes to
+  taste and judgment never mechanical work; fast feedback or the human disengages; present
+  options rather than demand specifications. Recorded with a self-check — the manual labeling
+  pass violates principle 1, which is why the contact-sheet index exists.
+- **`research/tools/contact_sheet.py`** — timestamped contact sheets from video (ffmpeg extract
+  + Pillow composite, since static ffmpeg builds ship without `drawtext`). Emits a JSON index
+  that stays authoritative if labels are unreadable, supports `--neutralize` for R7's filename
+  control (writing the real mapping outside the session-visible directory) and `--orient` for
+  rotation handling. Verified on real B1 footage.
 - WSL2 development environment provisioned without sudo: static ffmpeg 7.0.2, uv 0.11.32 and
-  the claude CLI installed to `~/.local/bin`, PATH persisted, B1 copied to ext4.
+  the claude CLI installed to `~/.local/bin`, PATH persisted, both bins copied to ext4.
 - **R7 dataset integrity controls**: exclude pre-curated clips, and neutralize filenames before
   any policy session sees the footage.
 - Draft quality rubric (research/R6-rubric.md): 8 criteria with anchored 1/3/5 descriptions,
@@ -70,6 +79,16 @@ same commit. Releases move entries into a dated version section.
   02-2025 held out. GoPro `.LRV` files may serve as free proxies (to check at T2).
 
 ### Fixed
+- **Caught misleading rotation metadata in B1 before any pipeline code existed.**
+  `GX010474.MP4` carries `rotation=-90`; honouring it (ffmpeg's default) renders a sideways
+  portrait frame, while `-noautorotate` gives the correct upright 16:9 — confirmed visually.
+  `GX010475.MP4` carries none, so the bin is mixed *and* wrong. Added `rotation` and
+  `orient_override` to the media schema, a verify-by-looking requirement at ingest (SPEC §3 S0),
+  and orientation assertions to the T1/T2 DoDs against the real clip. A blanket
+  `-noautorotate` is explicitly rejected — portrait phone footage must keep working.
+- **B1 is now Copper 02-2026** (raw, 11 min), with Killington demoted to B2 (43 min but
+  pre-curated). Raw beats large: highlight-finding measured against pre-culled footage flatters
+  the result at exactly the checkpoint meant to be honest.
 - **Corrected the B2 `.WAV` inference.** ffprobe shows `pcm_s32le` 48kHz **4-channel** 32-bit
   audio with duration matching the paired MP4 — GoPro's raw mic-array capture, same camera and
   clock, not an external mic. External-audio sync returns to unscheduled; the raw array is
