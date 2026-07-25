@@ -11,10 +11,19 @@ worth your time only after that gate passes.
 
 ## Pass 1 — Highlights (B1 = Copper, 26 clips, 11 min of footage)
 
-> **Do this from the contact-sheet index, not by scrubbing video.** The index is a set of image
-> grids with a timestamp on every cell; you mark from those and only open the video for cases
-> the stills can't settle. Asking you to scrub 11 minutes of footage manually would violate the
-> product's own first principle (SPEC §0) — the tooling exists so this is a quick visual pass.
+> **Sheets are generated and waiting at `Documents\Roughcut Labeling\`** (47 sheets, 17MB,
+> generated 2026-07-25). Mark from the image grids; only open the video for cases the stills
+> can't settle. Asking you to scrub footage manually would violate the product's own first
+> principle (SPEC §0) — the tooling exists so this is a quick visual pass.
+>
+> | Bin | Clips | Sheets | Orientation applied |
+> |---|---|---|---|
+> | B1 Copper | 17 (9 junk clips excluded) | 17 | `--orient none` (metadata spurious) |
+> | B2 Killington | 9 long-form, names neutralized | 30 | `--orient auto` (flips the inverted mount) |
+>
+> The Killington filenames are hidden deliberately. It keeps the study honest, and it keeps
+> *your* labels unanchored by the names you gave those clips when you already knew what was in
+> them. The mapping lives outside the labeling folder and is applied at scoring time.
 
 **What you're marking:** every moment you would *consider* including in an edit of this trip.
 Not "the best bits" — the candidate pool. If you'd think about it, mark it.
