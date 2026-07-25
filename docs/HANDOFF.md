@@ -75,10 +75,24 @@ latency argument behind proxies.
 29 tests (19 API + 10 driving real Chromium), ~18s, against a synthetic three-clip project so
 they need neither `~/footage` nor a GPU. Browser layer skips cleanly if playwright is absent.
 
-**Next on the app:** the story panel captures intent but nothing acts on it — the human can
-steer by hand, not yet by *asking*. Closing that loop (story text → re-run selection → new
-proposal the human accepts or rejects) is what makes "interject" literal, and is the natural
-next build. Music mode (FUTURE_PHASES P2.6) is still unbuilt.
+~~Next on the app: close the interject loop~~ — **built.** "Ask for a change" takes a
+plain-language note and returns a revised timeline as an accept/discard diff, through the new
+`roughcut.inference` doorway (SPEC §6) with roles, both backends, and per-call `projected_usd`
+accounting. 50 tests, ~20s.
+
+**⚠ Blocked on Karl, and it is the only thing blocking:** the Claude CLI inside WSL is **not
+logged in**, so Ask has never run against a live model — the wiring is tested end to end against
+a scripted backend, but whether the proposals are any *good* is unmeasured.
+
+```bash
+wsl -d Ubuntu -- claude   # then /login
+```
+
+Or set `ANTHROPIC_API_KEY` and `ROUGHCUT_BACKEND=anthropic_api` to use the API path instead.
+Until then Ask returns a 502 saying exactly that, and the UI shows it.
+
+**After that:** judge a live revision against the R6 rubric — does asking beat dragging? Then
+music mode (FUTURE_PHASES P2.6), still unbuilt.
 
 Independent work: ~~audio event tagging~~ — **done, and it is a dead end on B1**; see
 [R9](../research/R9-events-and-wind.md). The remaining audio lever is a **prosodic** rather than

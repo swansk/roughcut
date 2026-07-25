@@ -49,8 +49,31 @@ server, and every edit is undoable because fiddling is only fun when it is cheap
 | **Boundary warnings** | A live ⚠ when a cut opens mid-sentence or clips a line off — the defect Karl flagged, surfaced while you trim rather than only when you ask |
 | **Story panel** | Free text saved into the EDL. The thing the agent is worst at; typing "the milk is the running joke" beats an hour of analysis |
 | **Add a moment** | Audio candidates not already in the cut, ranked, one click to insert |
+| **Ask for a change** | Plain-language note → revised timeline, shown as a diff you accept or discard |
 | **Snap to speech** | Runs `edl_snap.py` and shows the result as a proposal — undoable, never silently applied |
 | **Render** | Runs `assemble.py` in the background and plays the result inline |
+
+### Ask — steering by asking rather than dragging
+
+"tighten the intro" · "more skiing, less airport" · "build it around the milk joke".
+
+The model is given every clip's **transcript**, the current edit, the story text and the target
+length, and returns a full revised edit. It arrives as a **proposal**: a diff, with Accept and
+Discard, undoable once applied. A model edit that applied itself is how an editor learns to stop
+trusting the tool.
+
+Plans are validated hard before they reach the screen — a segment naming a clip that doesn't
+exist, or running past the end of one, fails and gets one bounded re-ask. An invented timestamp
+that renders as missing footage is worse than a visible error.
+
+All of this goes through `roughcut.inference` (SPEC §6), never directly to a model: roles from
+`config.py`, `ROUGHCUT_BACKEND=claude_cli|anthropic_api`, and every call logged with tokens and
+`projected_usd` — including on the Max subscription, where there is no marginal cost but the
+projection is what answers "would this be affordable in production".
+
+**Requires auth.** The CLI backend needs `claude /login` inside WSL; the API backend needs
+`ANTHROPIC_API_KEY` and `ROUGHCUT_BACKEND=anthropic_api`. Until then Ask returns a 502 that says
+exactly that — the UI surfaces it rather than failing silently.
 
 Keys: `j`/`k` move · `space` play · `[` `]` trim in · `{` `}` trim out · `x` remove · `u` undo ·
 hold `shift` for 1s steps.
@@ -69,9 +92,9 @@ uv run --with pytest --with fastapi --with uvicorn --with httpx --with playwrigh
     pytest app/tests -q
 ```
 
-**29 tests, ~18s.** The suite builds its own three-clip synthetic project with fabricated
+**50 tests, ~20s.** The suite builds its own three-clip synthetic project with fabricated
 transcripts, so it is fast, deterministic, and does not depend on `~/footage` — which matters
-for the container target.
+for the container target. Model calls run against a scripted backend; there are no live calls.
 
 The two layers answer different questions. The API tests prove the endpoints behave. They
 cannot prove that *using* the board works — that trimming updates the total, that undo restores
@@ -107,11 +130,12 @@ Three real defects were found by writing the tests rather than by using the app:
 
 ## Known gaps
 
+- **Ask is unproven against a live model.** The wiring, validation, retry, accounting and UI are
+  all tested against a scripted backend, but no real revision has been generated — the CLI in
+  WSL is not logged in. Whether the proposals are any *good* is unmeasured.
 - **Music mode (P2.6) is not built.** Karl asked for supplying an audio track and cutting to it
   as an available, non-default mode. The slot-driven contract it implies ("fill these N slots of
   these lengths") is a different selection problem, filed in FUTURE_PHASES.
-- **No agent round-trip yet.** The story panel captures intent but nothing re-runs selection
-  from it — the human can currently steer by hand, not by asking. That is the natural next step
-  and the thing that would make "interject" literal.
 - Single project, single EDL per launch; no project picker.
 - The render list is not browsable — the newest render is shown, older ones live on disk.
+- `complete_many` exists per SPEC §6.1 but nothing batches yet; the CLI backend would just loop.

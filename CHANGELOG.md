@@ -10,6 +10,32 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The interject loop: "Ask for a change".** A plain-language note ("tighten the intro", "build
+  it around the milk joke") returns a revised timeline, shown as a **diff you accept or discard**
+  and undoable once applied — a model edit that applied itself is how an editor learns to stop
+  trusting the tool. The model receives every clip's transcript, the current edit, the story text
+  and the target length, because R8/R9 established the words are the strongest signal in this
+  footage; a revision prompt without them asks the model to edit blind. Plans are validated hard
+  (unknown clip, inverted range, timestamp past the end of a clip) with one **bounded** re-ask —
+  an invented timestamp that renders as missing footage is worse than a visible error.
+- **`roughcut.inference` — the single doorway for model calls** (SPEC §6), and `roughcut.config`,
+  the only place a model ID may appear. Both backends behind one interface
+  (`ROUGHCUT_BACKEND=claude_cli|anthropic_api`), images addressed **by path** never base64,
+  schema as a required *outcome* rather than mechanism (prompt-and-validate on the CLI backend,
+  native on the API). Every call is logged with tokens and `projected_usd` **on both backends**,
+  and the budget cap is enforced against the projection *before* the call — on the Max
+  subscription there is no marginal cost, but the projection is what preserves the ability to
+  answer "is this affordable in production", which is the whole reason the discipline exists.
+- **21 more tests (50 total, ~20s)** covering the inference contract and the ask loop against a
+  scripted backend — no live calls, per CLAUDE.md. They pin the guardrails specifically: budget
+  refusal happens *before* the model is called, the retry is bounded at one re-ask rather than
+  looping, an unknown model family is never priced as free, and a failed ask surfaces in the UI
+  instead of failing silently.
+
+### Known
+- **Ask cannot run live yet:** the Claude CLI inside WSL is not logged in (`claude /login`), so
+  a real revision has never been generated and proposal *quality* is unmeasured. The endpoint
+  returns 502 with the actual reason and the UI displays it.
 - **The app wrapper exists** (`app/`) — a local web "cut board" over the EDL, and now the active
   workstream after Karl chose it over hardening the T0–T13 pipeline. CLAUDE.md's "no Phase 2
   features" rule was amended in the same decision rather than quietly ignored. Timeline of

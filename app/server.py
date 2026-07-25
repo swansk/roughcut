@@ -37,6 +37,7 @@ import mimetypes
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import uuid
 from pathlib import Path
@@ -44,6 +45,9 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 import uvicorn
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from roughcut import inference, revise          # noqa: E402  (after sys.path)
 
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent / "research" / "tools"
@@ -201,6 +205,36 @@ async def api_snap(request: Request) -> JSONResponse:
         raise HTTPException(500, f"snap failed: {r.stderr[-300:]}")
     return JSONResponse({"segments": json.loads(tmp_out.read_text())["segments"],
                          "log": r.stdout})
+
+
+@app.post("/api/ask")
+async def api_ask(request: Request) -> JSONResponse:
+    """Plain-language note in, revised timeline out — as a proposal, never a write.
+
+    The one thing the board could not do before: let the human steer by *asking*
+    rather than by dragging. Returned like /api/snap so the UI can show it, keep it
+    undoable, and let the human reject it — a revision that applied itself would be
+    the opposite of the "fun and easy" this app exists for.
+    """
+    body = await request.json()
+    note = (body.get("note") or "").strip()
+    if not note:
+        raise HTTPException(400, "empty note")
+
+    payload = project_payload()
+    clips = {c: {"clip": c, "duration": v["duration"], "transcript": v["transcript"],
+                 "summary": v["summary"]} for c, v in payload["clips"].items()}
+    target = payload["target"]
+    try:
+        plan = revise.propose(
+            segments=body.get("segments") or payload["segments"],
+            clips=clips, story=body.get("story", payload.get("story", "")),
+            note=note, target=(float(target[0]), float(target[1])))
+    except inference.BudgetExceeded as exc:
+        raise HTTPException(429, str(exc)) from exc
+    except (inference.InferenceError, ValueError) as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return JSONResponse(plan)
 
 
 def _render_job(job: str, edl_path: Path, out_path: Path) -> None:

@@ -172,6 +172,80 @@ def test_save_writes_story_and_segments_to_the_edl(page, project):
     assert len(on_disk["segments"]) == 2
 
 
+def test_ask_shows_a_proposal_that_can_be_accepted_or_discarded(page):
+    """The interject loop, end to end in the browser, against a scripted backend.
+
+    The server runs in this process, so installing a backend here reaches it.
+    """
+    from roughcut import config, inference
+
+    class Scripted:
+        name = "scripted"
+
+        def complete(self, request):
+            text = json.dumps({
+                "segments": [{"clip": "CLIP_C.MP4", "in": 0.5, "out": 4.0,
+                              "why": "brought in per the note"}],
+                "notes": "replaced the opening with the unused clip"})
+            model = config.model_for(request.role)
+            return inference.Result(content=text, input_tokens=10, output_tokens=5,
+                                    backend="scripted", model=model,
+                                    projected_usd=0.0001, latency_ms=1, raw=text)
+
+    inference.set_backend(Scripted())
+    inference.reset_spend()
+    try:
+        before = page.evaluate("JSON.stringify(segs)")
+        page.locator("#note").fill("use the clip that isn't in the cut")
+        page.locator("#ask").click()
+        page.wait_for_selector("#proposal:visible", timeout=30000)
+
+        assert "replaced the opening" in page.locator("#proposalNotes").inner_text()
+        assert "CLIP_C" in page.locator("#proposalDiff").inner_text()
+        # a proposal is not an edit until accepted
+        assert page.evaluate("JSON.stringify(segs)") == before
+
+        page.locator("#rejectProposal").click()
+        assert not page.locator("#proposal").is_visible()
+        assert page.evaluate("JSON.stringify(segs)") == before
+
+        page.locator("#ask").click()
+        page.wait_for_selector("#proposal:visible", timeout=30000)
+        page.locator("#acceptProposal").click()
+        assert page.locator(".seg").count() == 1
+        assert "CLIP_C" in page.locator(".seg").first.inner_text()
+
+        page.locator("#undo").click()          # and it stays undoable
+        assert page.evaluate("JSON.stringify(segs)") == before
+    finally:
+        inference.set_backend(None)
+
+
+def test_ask_failure_is_reported_not_swallowed(page):
+    """Until `claude /login` is run, this is exactly what Karl will hit — it has to
+    read as an explanation, not a silent no-op."""
+    from roughcut import inference
+
+    class Broken:
+        name = "broken"
+
+        def complete(self, request):
+            raise inference.InferenceError("claude CLI error: Not logged in")
+
+    inference.set_backend(Broken())
+    try:
+        page.locator("#note").fill("tighten the intro")
+        page.locator("#ask").click()
+        page.wait_for_function(
+            "document.querySelector('#toast').textContent.includes('ask failed')",
+            timeout=30000)
+        assert "Not logged in" in page.locator("#toast").inner_text()
+        assert not page.locator("#proposal").is_visible()
+        assert page.locator("#ask").is_enabled(), "button must not stay disabled"
+    finally:
+        inference.set_backend(None)
+
+
 def test_render_from_the_ui_produces_a_playable_file(page):
     page.locator("#render").click()
     page.wait_for_function(

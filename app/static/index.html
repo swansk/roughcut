@@ -107,6 +107,23 @@
   <section id="timeline"></section>
   <aside>
     <div class="panel">
+      <h2>Ask for a change</h2>
+      <textarea id="note" style="min-height:66px"
+        placeholder="tighten the intro · more skiing, less airport · build it around the milk joke · lose the plane bit"></textarea>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+        <button id="ask" class="primary">Ask</button>
+        <span class="hint" id="askState"></span>
+      </div>
+      <div id="proposal" class="hint" style="display:none;margin-top:10px">
+        <div id="proposalNotes" style="color:var(--text);margin-bottom:8px"></div>
+        <div id="proposalDiff" style="max-height:180px;overflow:auto"></div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button id="acceptProposal" class="primary">Accept</button>
+          <button id="rejectProposal" class="ghost">Discard</button>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
       <h2>Story</h2>
       <textarea id="story" placeholder="What is this cut about? Who's in it, what's the running joke, what should it feel like? Saved into the EDL and read by the agent on the next pass."></textarea>
       <p class="hint">The thing the agent is worst at. Typing "the milk is the running joke" here beats an hour of analysis.</p>

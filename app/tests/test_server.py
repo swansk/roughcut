@@ -183,6 +183,75 @@ def test_render_status_404_for_unknown_job(client):
     assert client.get("/api/render/deadbeef").status_code == 404
 
 
+# ------------------------------------------------------------------ ask
+
+def test_ask_returns_a_proposal_without_writing(client, project):
+    """The interject loop: a note in, a revised timeline out, disk untouched."""
+    import server
+    from roughcut import config, inference
+
+    before = project["edl"].read_text(encoding="utf-8")
+
+    class Scripted:
+        name = "scripted"
+        seen: list = []
+
+        def complete(self, request):
+            Scripted.seen.append(request)
+            text = json.dumps({
+                "segments": [{"clip": "CLIP_C.MP4", "in": 0.5, "out": 4.0,
+                              "why": "per the note"}],
+                "notes": "swapped in the unused clip"})
+            model = config.model_for(request.role)
+            return inference.Result(content=text, input_tokens=10, output_tokens=5,
+                                    backend="scripted", model=model,
+                                    projected_usd=0.0001, latency_ms=1, raw=text)
+
+    inference.set_backend(Scripted())
+    inference.reset_spend()
+    try:
+        r = client.post("/api/ask", json={
+            "note": "use the clip that isn't in the cut",
+            "segments": [{"clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0}],
+            "story": "a test film"})
+        assert r.status_code == 200, r.text
+        plan = r.json()
+        assert plan["segments"] == [{"clip": "CLIP_C.MP4", "in": 0.5, "out": 4.0,
+                                     "why": "per the note"}]
+        assert plan["notes"] == "swapped in the unused clip"
+        assert plan["usage"]["projected_usd"] > 0
+        # the model was given the transcripts and the note
+        prompt = Scripted.seen[0].prompt
+        assert "hello there" in prompt and "use the clip that isn't in the cut" in prompt
+    finally:
+        inference.set_backend(None)
+
+    assert project["edl"].read_text(encoding="utf-8") == before, "ask must not write"
+
+
+def test_ask_rejects_an_empty_note(client):
+    assert client.post("/api/ask", json={"note": "  "}).status_code == 400
+
+
+def test_ask_surfaces_backend_failure_as_502(client):
+    from roughcut import inference
+
+    class Broken:
+        name = "broken"
+
+        def complete(self, request):
+            raise inference.InferenceError("claude CLI error: Not logged in")
+
+    inference.set_backend(Broken())
+    inference.reset_spend()
+    try:
+        r = client.post("/api/ask", json={"note": "tighten it"})
+        assert r.status_code == 502
+        assert "Not logged in" in r.json()["detail"]
+    finally:
+        inference.set_backend(None)
+
+
 # ------------------------------------------------------------------ static
 
 def test_index_and_script_served(client):

@@ -231,6 +231,80 @@ async function snap() {
   toast(`snapped: ${fmt(before)} → ${fmt(total())} (undo with u)`, 4000);
 }
 
+/* Ask — the interject loop. A revision arrives as a *proposal*: shown as a diff,
+ * accepted or discarded, and undoable once accepted. A model edit that applied
+ * itself would be exactly the thing that makes an editor stop trusting the tool. */
+let pendingPlan = null;
+
+function summarise(list) {
+  return list.map((s) => `${s.clip.replace('.MP4', '')} ${s.in.toFixed(1)}-${s.out.toFixed(1)}`);
+}
+
+function showProposal(plan) {
+  pendingPlan = plan;
+  const before = summarise(segs);
+  const after = summarise(plan.segments);
+  const beforeSet = new Set(before);
+  const afterSet = new Set(after);
+  const rows = [];
+  after.forEach((a) => rows.push(
+    `<div style="color:${beforeSet.has(a) ? 'var(--dim)' : 'var(--good)'}">${beforeSet.has(a) ? ' ' : '+'} ${escapeHtml(a)}</div>`));
+  before.filter((b) => !afterSet.has(b)).forEach((b) => rows.push(
+    `<div style="color:var(--bad)">− ${escapeHtml(b)}</div>`));
+
+  const oldTotal = total();
+  const newTotal = plan.segments.reduce((a, s) => a + (s.out - s.in), 0);
+  $('#proposalNotes').textContent = plan.notes || '(no note returned)';
+  $('#proposalDiff').innerHTML =
+    `<div class="hint" style="margin-bottom:6px">${segs.length} shots ${fmt(oldTotal)}
+     → ${plan.segments.length} shots ${fmt(newTotal)}</div>` + rows.join('');
+  $('#proposal').style.display = 'block';
+}
+
+async function ask() {
+  const note = $('#note').value.trim();
+  if (!note) return toast('type what you want changed first');
+  $('#ask').disabled = true;
+  $('#askState').textContent = 'thinking…';
+  try {
+    const r = await fetch('/api/ask', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ note, segments: segs, story: $('#story').value }),
+    });
+    if (!r.ok) {
+      const detail = await r.json().catch(() => ({}));
+      throw new Error(detail.detail || `HTTP ${r.status}`);
+    }
+    const plan = await r.json();
+    showProposal(plan);
+    const u = plan.usage || {};
+    $('#askState').textContent = u.model
+      ? `${u.model} · ${u.input_tokens}→${u.output_tokens} tok · $${(u.projected_usd || 0).toFixed(4)} projected`
+      : '';
+  } catch (e) {
+    $('#askState').textContent = '';
+    toast(`ask failed: ${e.message}`, 6000);
+  } finally {
+    $('#ask').disabled = false;
+  }
+}
+
+function acceptProposal() {
+  if (!pendingPlan) return;
+  pushUndo();
+  segs = pendingPlan.segments.map((s) => ({ ...s }));
+  pendingPlan = null;
+  $('#proposal').style.display = 'none';
+  render();
+  toast('applied — undo with u');
+}
+
+function rejectProposal() {
+  pendingPlan = null;
+  $('#proposal').style.display = 'none';
+  toast('discarded');
+}
+
 async function doRender() {
   const r = await fetch('/api/render', {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -313,5 +387,8 @@ async function boot() {
   $('#snap').onclick = snap;
   $('#undo').onclick = undo;
   $('#render').onclick = doRender;
+  $('#ask').onclick = ask;
+  $('#acceptProposal').onclick = acceptProposal;
+  $('#rejectProposal').onclick = rejectProposal;
 }
 boot();
