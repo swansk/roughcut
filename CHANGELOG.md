@@ -10,6 +10,10 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- Future-phase context tracker (docs/FUTURE_PHASES.md): Phase 2/3 scope with rationale and
+  the design hooks Phase 1 leaves for each item; living document updated as scope is deferred.
+- Benchmark registration guide (benchmarks/README.md): bin manifests, label formats, target
+  bins B1–B3.
 - Research studies R1–R6 (research/): protocols with methods, datasets, decision rules and
   per-study DoDs for VLM sampling/model choice, shot detection, ASR sizing, gate recall,
   frame-accuracy harness, and the rough-cut quality rubric.
