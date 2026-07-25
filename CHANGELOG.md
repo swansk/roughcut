@@ -10,6 +10,9 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- Research studies R1–R6 (research/): protocols with methods, datasets, decision rules and
+  per-study DoDs for VLM sampling/model choice, shot detection, ASR sizing, gate recall,
+  frame-accuracy harness, and the rough-cut quality rubric.
 - Task board (docs/TASKS.md): T0–T13 with per-task Definitions of Done and verification
   commands, dependency graph, and DECISION items for Karl.
 - Phase 1 technical specification (docs/SPEC.md): architecture, pipeline stages S0–S6, SQLite
