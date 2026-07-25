@@ -90,6 +90,22 @@ hypothetical.
 highlight-finding, and is an argument for adding Killington's long-form clips (under the
 curation controls) as a second, separately-reported dataset.
 
+### ⚠️ The two bins need opposite orientation handling
+
+| Bin | Stored pixels | Side-data | `orient_override` | Manifest |
+|---|---|---|---|---|
+| B1 Copper | upright | −90/+90/−180 on 6 of 26 | **`none`** — spurious | [B1-orientation.json](labels/B1-orientation.json) |
+| B2 Killington | **upside down** on 7 of 9 | −180 | **`auto`** — correct | [B2-orientation.json](labels/B2-orientation.json) |
+
+Killington's long-form clips were shot on an inverted mount: the stored frames have snow at the
+top and sky at the bottom, and the `rotation=-180` side-data is what puts them right way up. The
+two clips carrying no metadata are already upright.
+
+**This is the whole argument for verify-by-looking in one table.** Two bins from the same owner,
+same sport, same season, requiring opposite handling. A global rule is wrong on one of them, and
+wrong silently — an upside-down rough cut is not a subtle defect, but nothing in the metadata
+alone tells you which bin you are holding.
+
 ### ⚠️ B1 has mixed and misleading rotation metadata
 
 `GX010474.MP4` carries `rotation=-90`; applying it (ffmpeg's default) produces a **sideways

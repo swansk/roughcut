@@ -131,6 +131,17 @@ roughcut/
    >    through.** Orientation is therefore a *derived, corrected property of the content*, not
    >    a container field to be copied.
    >
+   > **The two bins prove the rule the hard way — they behave in exactly opposite ways:**
+   >
+   > | Bin | Stored pixels | Side-data | Correct action |
+   > |---|---|---|---|
+   > | B1 Copper | upright | −90 / +90 / −180 on 6 of 26 clips | **ignore it** (`none`) — applying it corrupts the frame |
+   > | B2 Killington | **upside down** on 7 of 9 clips | −180 | **apply it** (`auto`) — the metadata is correct |
+   >
+   > Same footage owner, same sport, same season. Any global policy — "always honour rotation",
+   > "always ignore it" — is wrong on one of these two bins. Orientation must be resolved
+   > per clip, from the pixels.
+   >
    > Resolution order: read the side-data → decide from the pixels → persist an
    > `orient_override` per clip. Deciding from pixels is a vision task the analysis layer is
    > already good at ("which way up is this frame?" on a single thumbnail is cheap and

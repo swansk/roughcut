@@ -1,0 +1,80 @@
+{
+  "bin": "B2 / killington-01-2026 (long-form subset)",
+  "reviewed": "2026-07-25",
+  "method": "orient_audit.py sheet, one frame per clip at 15% duration, -noautorotate",
+  "finding": "Stored pixels are UPSIDE DOWN on all 7 clips carrying rotation=-180 (inverted camera mount); the metadata is CORRECT and must be applied. The 2 clips without metadata are already upright. This is the exact inverse of B1/Copper, where the side-data is spurious - proof that orientation cannot be generalised across bins.",
+  "clips": [
+    {
+      "clip": "bombbeginning.MP4",
+      "duration_s": 318.34,
+      "rotation_metadata": -180.0,
+      "orient_override": "auto",
+      "orient_confidence": "visually_confirmed",
+      "note": "stored upside down; -180 metadata corrects it"
+    },
+    {
+      "clip": "cleanduckin.MP4",
+      "duration_s": 318.34,
+      "rotation_metadata": -180.0,
+      "orient_override": "auto",
+      "orient_confidence": "visually_confirmed",
+      "note": "stored upside down; -180 metadata corrects it"
+    },
+    {
+      "clip": "goodliftlineme.MP4",
+      "duration_s": 191.52,
+      "rotation_metadata": -180.0,
+      "orient_override": "auto",
+      "orient_confidence": "visually_confirmed",
+      "note": "stored upside down; -180 metadata corrects it"
+    },
+    {
+      "clip": "rockhitmarkers.MP4",
+      "duration_s": 279.25,
+      "rotation_metadata": -180.0,
+      "orient_override": "auto",
+      "orient_confidence": "visually_confirmed",
+      "note": "stored upside down; -180 metadata corrects it"
+    },
+    {
+      "clip": "rowdy.MP4",
+      "duration_s": 259.48,
+      "rotation_metadata": 0.0,
+      "orient_override": "auto",
+      "orient_confidence": "visually_confirmed",
+      "note": "already upright"
+    },
+    {
+      "clip": "spenny-bigair-begin.MP4",
+      "duration_s": 319.32,
+      "rotation_metadata": -180.0,
+      "orient_override": "auto",
+      "orient_confidence": "visually_confirmed",
+      "note": "stored upside down; -180 metadata corrects it"
+    },
+    {
+      "clip": "streamfall.MP4",
+      "duration_s": 203.8,
+      "rotation_metadata": 0.0,
+      "orient_override": "auto",
+      "orient_confidence": "visually_confirmed",
+      "note": "already upright"
+    },
+    {
+      "clip": "tastytrees.MP4",
+      "duration_s": 263.16,
+      "rotation_metadata": -180.0,
+      "orient_override": "auto",
+      "orient_confidence": "visually_confirmed",
+      "note": "stored upside down; -180 metadata corrects it"
+    },
+    {
+      "clip": "walk.MP4",
+      "duration_s": 319.34,
+      "rotation_metadata": -180.0,
+      "orient_override": "auto",
+      "orient_confidence": "visually_confirmed",
+      "note": "stored upside down; -180 metadata corrects it"
+    }
+  ]
+}

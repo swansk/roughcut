@@ -10,6 +10,12 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **`benchmarks/labels/B2-orientation.json`** — and the finding that settles the orientation
+  design: **B1 and B2 require opposite handling.** Killington's long-form clips were shot on an
+  inverted mount, so 7 of 9 are stored upside down and their `rotation=-180` side-data is
+  *correct and must be applied*; Copper's side-data is *spurious and must be ignored*. Same
+  owner, same sport, same season. Any global policy is silently wrong on one of the two bins,
+  which is the whole case for resolving orientation per clip from the pixels.
 - **`research/tools/orient_audit.py`** and the resulting
   `benchmarks/labels/B1-orientation.json`: one representative frame per clip on a single sheet
   with rotation metadata labelled, reviewed by eye, decisions committed. Six of B1's 26 clips
