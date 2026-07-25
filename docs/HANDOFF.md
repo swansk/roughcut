@@ -1,6 +1,7 @@
 # Handoff — read this first
 
-Last updated: 2026-07-25, session 2 (audio analysis pass over B1).
+Last updated: 2026-07-25, end of session 2 (audio analysis → two cuts → the app → live Ask).
+**The next session's job is the app's start-to-finish flow — jump to "START HERE NEXT SESSION".**
 
 ## Where we are
 
@@ -75,24 +76,71 @@ latency argument behind proxies.
 29 tests (19 API + 10 driving real Chromium), ~18s, against a synthetic three-clip project so
 they need neither `~/footage` nor a GPU. Browser layer skips cleanly if playwright is absent.
 
-~~Next on the app: close the interject loop~~ — **built.** "Ask for a change" takes a
-plain-language note and returns a revised timeline as an accept/discard diff, through the new
-`roughcut.inference` doorway (SPEC §6) with roles, both backends, and per-call `projected_usd`
-accounting. 50 tests, ~20s.
+~~Close the interject loop~~ — **built and proven live.** "Ask for a change" takes a
+plain-language note and returns a revised timeline as an accept/discard diff, through
+`roughcut.inference` (SPEC §6). 55 tests, ~21s.
 
-**⚠ Blocked on Karl, and it is the only thing blocking:** the Claude CLI inside WSL is **not
-logged in**, so Ask has never run against a live model — the wiring is tested end to end against
-a scripted backend, but whether the proposals are any *good* is unmeasured.
+**Does asking beat dragging? For structural moves, yes.** One live call on variant B (74s,
+$0.27 projected) took 20 segments/162.5s → 18/129.2s: dropped the luggage walkway with the
+reason *"no faces"* — the brief's own criterion, applied correctly — dropped the inert lounging
+tag, moved 32s out of the opening into the middle as asked, extended the groomer POV to pick up
+dialogue the hand cut had discarded, and reordered three beats inside GX010495 to build
+dare → deed → reaction. **17 of 18 out-points land exactly on an utterance end**; the one
+exception it declares in its own notes. Rendered and verified: 129.38s, 5ms A/V drift, no
+rotation, −15.6 LUFS, no black runs →
+`Documents\Roughcut Labeling\cuts\copper-variantB-asked.mp4`.
 
-```bash
-wsl -d Ubuntu -- claude   # then /login
-```
+Two caveats worth carrying forward. It stayed clear of visual traps (the red pole in GX010490,
+the glove in GX010493) **only because it inherited the `why` fields from the hand-authored EDL** —
+the rationale field is load-bearing memory for a model that cannot see. And its dare → deed →
+reaction reorder may invent a chronology the footage contradicts; that needs eyes, not text.
 
-Or set `ANTHROPIC_API_KEY` and `ROUGHCUT_BACKEND=anthropic_api` to use the API path instead.
-Until then Ask returns a 502 saying exactly that, and the UI shows it.
+---
 
-**After that:** judge a live revision against the R6 rubric — does asking beat dragging? Then
-music mode (FUTURE_PHASES P2.6), still unbuilt.
+## ⇨ START HERE NEXT SESSION: the app cannot take you from start to finish
+
+Karl, 2026-07-25, after using it: *"App is pretty hard to use right now — unclear how to go from
+start to finish."* This is the active problem, and it outranks any further work on cut quality
+(*"video is ok — human could work with the app to make it better"*).
+
+**Diagnosis: the app is a refinement tool that assumes five terminal steps already happened.**
+To reach the cut board at all, someone must already have:
+
+1. copied footage onto ext4,
+2. run `audio_analyze.py` to produce sidecars (ASR, GPU),
+3. known which clips are junk, to pass `--skip` (that list came from a luma study),
+4. **hand-authored an EDL JSON** — the app cannot create one,
+5. launched `server.py` with three path flags.
+
+So the app owns the *middle* of the workflow and none of the ends. There is no "new project",
+no way to go from a folder of footage to a first cut, and no way to finish other than finding an
+mp4 on disk. Everything the app is good at is gated behind a terminal session.
+
+Inside the board it is also flat: Ask, Snap, Undo, Save, Render are peers with no implied order,
+nothing says what to do first, there is no project state or progress, and backend/auth problems
+only surface ~80s into an Ask.
+
+**The shape of the fix — make the app own the whole path:**
+
+| step | today | should be |
+|---|---|---|
+| new project | — | point at a footage folder |
+| analyse | `audio_analyze.py` in a terminal | in-app, with progress (it is ~30s for a bin) |
+| junk / orientation | manual `--skip`, prior study | proposed, human confirms |
+| **first cut** | **hand-authored JSON** | **Ask originates it, not just revises it** |
+| refine | ✅ the board, and it works | ✅ plus a sense of order |
+| render & compare | one file, newest only | versions list, watch A vs B |
+
+The single highest-value piece is making **Ask able to originate a cut from nothing**, since
+that removes the hand-authored-EDL prerequisite — the step that most makes this "expert only".
+`revise.propose()` already takes segments + clips + story; originating is the same call with an
+empty segment list and a different prompt.
+
+Also queued, both now evidenced rather than guessed:
+- **Startup preflight + backend status in the UI**, so auth failures appear at launch instead of
+  80s into a call.
+- **Make the API backend the app default** (see the CLI overhead finding below).
+- Music mode (FUTURE_PHASES P2.6), still unbuilt.
 
 Independent work: ~~audio event tagging~~ — **done, and it is a dead end on B1**; see
 [R9](../research/R9-events-and-wind.md). The remaining audio lever is a **prosodic** rather than
@@ -140,6 +188,18 @@ These were measured, cost real effort, and are easy to accidentally undo:
 - **`yeah` and `dude` are filler in this footage, not reactions.** Scoring them as interest
   markers put banter at the top of the candidate list. Markers must be surprising to be evidence.
 - **`drawtext` is not compiled into the installed ffmpeg** — do text composition in Pillow.
+- **Every Claude CLI call carries ~15–21k tokens of harness overhead**, whatever you ask.
+  Measured: `claude -p 'Reply with exactly: OK'` billed 2 input + 5,558 cache-creation +
+  15,273 cache-read for a four-token reply. A real revision billed 25,146 input against a ~2,100
+  token prompt. Two consequences: token accounting **must** sum all three input fields or it
+  reports near-zero (fixed in `inference.py`), and per-unit workloads on this backend would be
+  ~95% overhead — which is SPEC §6.2's warning, now with a number, and the argument for making
+  the API backend the app's default.
+- **Prose passed through `wsl -- bash -lc '...'` from Windows is truncated at the first space,
+  and a `;` inside it ends the command.** A live run silently received the one-word note
+  "Tighten" and produced a plausible answer to it — nothing looked wrong. Always use a script
+  file with heredocs (`research/tools/live_ask_b.sh` is the pattern), and echo prose back with a
+  word count so truncation is visible.
 - **`-noautorotate` does not stop rotation metadata reaching the output.** It suppresses
   *applying* the rotation, but the display matrix is still copied to the output stream, and
   concat with `-c copy` inherits stream properties from the **first part** — so one spurious

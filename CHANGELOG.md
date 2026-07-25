@@ -10,6 +10,25 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Ask proven against a live model, and the answer is yes for structural work.** One call on
+  variant B (74s, $0.27 projected) went 20 segments/162.5s → 18/129.2s: dropped the luggage
+  walkway with the reason *"no faces"* (the brief's own criterion, applied correctly), dropped
+  the inert lounging tag, moved 32s from the opening into the middle exactly as the note asked,
+  extended the groomer POV to pick up dialogue the hand cut discarded, and reordered three beats
+  within one clip to build dare → deed → reaction. **17 of 18 out-points land exactly on an
+  utterance end**, and the single exception is declared in its own notes rather than hidden.
+  Rendered and verified: 129.38s, 5ms A/V drift, no rotation, −15.6 LUFS, no black runs. Two
+  caveats recorded in HANDOFF: it avoided the known visual traps only because it inherited the
+  `why` fields from the hand-authored EDL, and its reorder may invent a chronology the footage
+  contradicts — which text cannot settle.
+
+### Known
+- **The app cannot take a user from start to finish** (Karl, after using it). It is a refinement
+  tool that assumes five prior terminal steps — footage copied, sidecars analysed, junk list
+  known, **an EDL hand-authored**, server launched with three path flags — so it owns the middle
+  of the workflow and neither end. Diagnosis and the shape of the fix are in
+  docs/HANDOFF.md; the highest-value single piece is letting Ask *originate* a cut rather than
+  only revise one, which removes the hand-authored-EDL prerequisite.
 - **The interject loop: "Ask for a change".** A plain-language note ("tighten the intro", "build
   it around the milk joke") returns a revised timeline, shown as a **diff you accept or discard**
   and undoable once applied — a model edit that applied itself is how an editor learns to stop
