@@ -11,6 +11,27 @@ Rules (enforced by [../CLAUDE.md](../CLAUDE.md)):
   use the provisional value shown and flag the task `done*` (provisional) — re-verify when the
   study lands.
 
+## ▶ Start here — shortest path to CP2
+
+**Reach the go/no-go before building the pipeline.** CP2 (does the analysis actually find the
+moments Karl would pick?) can cancel this project. R7 is specified as a Claude Code CLI
+prototype with *no pipeline code* — it needs ffmpeg, a contact-sheet script, footage, and
+highlight labels. It does **not** need T0–T6. So run it first, and build the scaffold on a
+validated premise instead of a hoped-for one.
+
+| Step | Owner | Blocking on |
+|---|---|---|
+| 1. WSL2 env: ffmpeg, uv, claude CLI | Karl | — |
+| 2. Copy B1 into WSL2 ext4; register `bins/B1.json` | Karl | D5 |
+| 3. Highlights pass, 30–45 min of B1 → `labels/B1-highlights.csv` | Karl | [LABELING.md](../benchmarks/LABELING.md) |
+| 4. `research/tools/contact_sheet.py` + verification | agent | step 1 |
+| 5. Run R7 policies A/B/C, write report | agent | steps 2–4 |
+| 6. **CP2 review** | Karl | step 5 |
+| 7. *then* T0 → T0b/T0c → T1… | agent | CP2 passing |
+
+R6 (quality rubric) runs alongside and needs no tooling — draft is committed, calibration is
+Karl's 30 minutes whenever convenient.
+
 ## Build order (dependency graph)
 
 ```

@@ -26,6 +26,9 @@ enters git** — bins live on disk and are referenced by manifest.
 Manifests and label files ARE committed (they're small text). A checksum list
 (`B1.checksums`) is generated on registration so runs can detect footage drift.
 
+**How to produce labels: [LABELING.md](LABELING.md).** Start with the highlights pass on B1 —
+it is the only labeling needed to reach checkpoint CP2.
+
 ## Label formats
 
 - **Cuts** (`R2`): CSV `file,frame` — one row per true cut, labeled by scrubbing.

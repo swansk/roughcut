@@ -17,8 +17,14 @@ measurement rather than a vibe — and what threshold constitutes Phase 1 succes
    set relative to where the human edits landed.
 4. Produce a scoring sheet template (`benchmarks/rubric-sheet.md`) usable per run.
 
+**Status: in-progress.** Step 1 done — draft rubric committed as
+[R6-rubric.md](R6-rubric.md) (8 criteria, anchored 1/3/5, provisional pass bar). Steps 2–3
+(calibration against real reference videos, and setting the real pass bar from where those
+score) need Karl and are unblocked whenever he has 30 minutes.
+
 ## Definition of Done
-- [ ] Rubric with anchored 1/3/5 descriptions committed as `R6-rubric.md`
+- [x] Rubric with anchored 1/3/5 descriptions committed as `R6-rubric.md` *(draft — anchors may
+      change during calibration)*
 - [ ] Calibration scores for the reference videos recorded in `R6-report.md`; bad-cut
       separation demonstrated
 - [ ] Phase 1 pass bar defined and written into T13's DoD and SPEC §1 (RQ-6 resolved)

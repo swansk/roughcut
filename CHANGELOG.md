@@ -10,6 +10,15 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- Draft quality rubric (research/R6-rubric.md): 8 criteria with anchored 1/3/5 descriptions,
+  scoped to rough cuts, plus a provisional pass bar pending calibration against real edits.
+- Labeling guide (benchmarks/LABELING.md): the highlights pass needed to reach CP2, with
+  guidance aimed at the failure modes the studies measure (audio-only moments, sub-5s
+  highlights, contiguous rather than sampled footage).
+- **Start-here sequencing in docs/TASKS.md**: run R7 *before* building the pipeline. R7 is a
+  Claude Code CLI prototype needing only ffmpeg, a contact-sheet script, footage and labels —
+  so the thesis go/no-go (CP2) is reachable in a fraction of the work that T0–T6 would cost,
+  and the scaffold gets built on a validated premise.
 - **Inference abstraction with two backends** (SPEC §6, task T0c): a single `Backend` protocol
   over a Claude Code CLI implementation (Claude Max subscription — the development default,
   zero marginal cost) and an Anthropic API implementation (per-token, Batch-capable — the
