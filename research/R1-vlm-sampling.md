@@ -1,5 +1,10 @@
 # R1 — VLM Sampling & Model Selection
 
+> **Sequenced after [R7](R7-analysis-policy.md).** R7 decides the analysis *policy*
+> (per-shot uniform vs coarse-to-fine adaptive vs hybrid). If R7 picks an adaptive/contact-sheet
+> policy, this study's grid variables change from (K keyframes, resolution, model) to
+> (sheet density, refinement depth, model) — amend this protocol per R7's report before running.
+
 **Question:** For the tier-2 per-shot analysis, what combination of (K keyframes per shot,
 keyframe resolution, model tier) gives the best highlight-agreement and description quality per
 dollar — and what does a full 20h project actually cost at that config?

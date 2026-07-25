@@ -100,11 +100,13 @@ every downstream model prompt.
   timestamps + simple diarization; speech density per shot.
 - **Gate:** shots are ranked by tier-0/1 signals; the bottom fraction is excluded from VLM
   analysis (`RQ: gate operating point, must keep ≥95% of true highlights → R4`).
-- **Tier 2 (paid):** Claude vision on surviving shots — K keyframes per shot at resolution R,
-  one request per shot, submitted via the **Batch API** (50% discount; the pass is not
-  latency-sensitive). Output per shot: description, entities/people, action, quality flags,
+- **Tier 2 (paid):** VLM analysis of surviving footage. The default hypothesis is K keyframes
+  per shot at resolution R, one request per shot via the **Batch API** (50% discount; not
+  latency-sensitive). A competing policy — coarse contact-sheet sampling with recursive
+  deep-dive into interesting regions ("binary search for interest") — is under study and may
+  replace or hybridize this design (`RQ: analysis policy → R7`; `RQ: K/density, R, model
+  tier → R1`). Output per analyzed unit: description, entities/people, action, quality flags,
   interestingness 0–100 with rationale, transition-point suitability.
-  (`RQ: K, R, model tier → R1`.)
 - **Aggregate:** `scoring.py` combines tiers into a final per-shot score; all raw outputs are
   persisted so scoring can be re-run without re-paying tier 2.
 
@@ -202,6 +204,9 @@ CREATE TABLE cost_ledger (
   agent (S3), where judgment quality matters most.
 - Tier-2 VLM pass model is an **R1 study output**, comparing `claude-haiku-4-5` /
   `claude-sonnet-5` / `claude-opus-5` on description quality and highlight agreement vs cost.
+  R7 additionally holds a conditional arm on whether the *dense* pass (perception) could use a
+  video-native or local model with Claude reserved for judgment — only triggered if the winning
+  policy's cost projection exceeds the §7 envelope, and adopting it is a Karl DECISION.
   Submit via **Message Batches API** (50% discount, results ≤24h, fits an offline analysis
   pass). Structured outputs (`output_config.format`) enforce the §5.4 schema.
 - Adaptive thinking defaults; `effort` low for tier-2 scoring calls, high for S3.
@@ -243,7 +248,8 @@ platform-specific code paths — subprocess calls go through one wrapper.
 
 | ID | Question | Blocks | Study |
 |---|---|---|---|
-| RQ-1 | VLM keyframes/shot (K), resolution (R), model tier | T7 | [R1](../research/R1-vlm-sampling.md) |
+| RQ-7 | Analysis policy: per-shot uniform vs adaptive coarse-to-fine vs hybrid; frontier-VLM necessity for the dense pass | T7 design, R1 framing | [R7](../research/R7-analysis-policy.md) |
+| RQ-1 | VLM keyframes/shot (K) or sheet density, resolution (R), model tier — within R7's winning policy | T7 | [R1](../research/R1-vlm-sampling.md) |
 | RQ-2 | Shot-detection detector + threshold on real footage incl. VFR | T3 DoD target | [R2](../research/R2-shot-detection.md) |
 | RQ-3 | Whisper model size vs WER vs runtime on Karl's GPU | T4 DoD target | [R3](../research/R3-asr-sizing.md) |
 | RQ-4 | Cheap-gate operating point (recall vs discard curve) | T5 DoD target | [R4](../research/R4-gate-recall.md) |

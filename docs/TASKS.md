@@ -17,7 +17,7 @@ Rules (enforced by [../CLAUDE.md](../CLAUDE.md)):
 T0 ─► T1 ─► T2 ─► T3 ─► T5 ─► T6 ─► T7 ─► T8 ─► T9 ─► T10 ─► T11 ─► T12 ─► T13
             └──► T4 ──────────┘
 R5 ─────────────────────────────────────────────► (T10)
-R1 ──────────────────────────────► (T7)   R2►(T3) R3►(T4) R4►(T5) R6►(T13)
+R7 ─► R1 ────────────────────────► (T7)   R2►(T3) R3►(T4) R4►(T5) R6►(T13)
 ```
 Research studies R1–R6 (see [../research/](../research/README.md)) can run in parallel with
 early build tasks once their prerequisite tooling exists; each study page lists what it needs.
@@ -80,8 +80,9 @@ SQLite schema, migrations, typed query helpers.
 - [ ] Query helpers: shots by score, by time range, by media; transcript search returning shot joins
 - [ ] `cost_ledger` writes tested via a fake model call
 
-## T7 — VLM analysis pass — `blocked(T5, T6, R1)`
-Hierarchical tier-2 pass via Batch API with structured outputs.
+## T7 — VLM analysis pass — `blocked(T5, T6, R7, R1)`
+Hierarchical tier-2 pass with structured outputs; concrete design (per-shot batch vs
+adaptive contact-sheet search vs hybrid) is fixed by R7's decision, parameters by R1.
 **DoD:**
 - [ ] Per-shot request built per R1's chosen config (K keyframes, resolution, model); output validates against SPEC §5.4 schema (retry-on-invalid tested with a mocked API)
 - [ ] Batch submit/poll/collect flow works against the real API on a 10-shot smoke set; results keyed by shot ID regardless of arrival order

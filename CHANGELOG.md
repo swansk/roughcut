@@ -10,6 +10,11 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- Research study R7 (analysis policy bake-off): tests uniform per-shot sampling against
+  Karl's proposed coarse-to-fine adaptive search (contact sheets + recursive deep-dive,
+  prototyped via Claude Code CLI sessions) and a hybrid; includes a conditional model-landscape
+  arm (video-native / local VLM for the dense pass). Sequenced before R1; R1, SPEC (RQ-7),
+  and T7 updated accordingly.
 - Agent operating manual (CLAUDE.md): closed-loop session protocol — pick task → implement →
   run DoD verification → iterate until green → commit with changelog — plus commit discipline,
   research-before-assumption rule, and cost guardrails for multi-hour autonomous sessions.
