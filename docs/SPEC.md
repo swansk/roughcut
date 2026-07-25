@@ -161,10 +161,17 @@ duration, tone, must-include moments, people/subjects of interest. The brief is 
 every downstream model prompt.
 
 ### S2 — Analysis pass (hierarchical; the cost bomb — see §7)
-- **Tier 0 (free, local):** per-shot audio RMS/peak envelope, motion magnitude (frame-diff on
-  proxies), duration, timestamp clustering. Also flags unusable audio (clipping, silence).
-- **Tier 1 (cheap, local):** faster-whisper transcription (`RQ: model size → R3`) with word
-  timestamps + simple diarization; speech density per shot.
+- **Tier 0 (free, local) — audio first.** Audio is one-dimensional and characterises a whole bin
+  in seconds, so it runs before anything touches a frame and produces the temporal map that
+  points the expensive stages. Band-limited speech energy, spectral flatness, onset strength,
+  silence detection, plus motion magnitude and timestamp clustering from the video side.
+  **See [AUDIO.md](AUDIO.md) — and read its wind section before writing any energy heuristic:
+  full-band RMS on ski footage measures wind, not interest, and will rank a windy traverse above
+  the best line anyone said all day.**
+- **Tier 1 (cheap, local, GPU):** faster-whisper transcription with word timestamps — the
+  highest-value audio signal here, since "did you see that" is a direct interest marker no visual
+  analysis finds — plus VAD and audio event tagging (laughter, shouts, cheering), which catch the
+  non-verbal reactions ASR drops.
 - **Junk detection (on by default) vs. cost gating (off by default)** — two different things
   that both look like "filtering", and conflating them is a mistake:
   - **Junk detection is a quality filter and stays on.** Real bins contain long stretches with

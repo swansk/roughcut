@@ -10,6 +10,13 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Audio analysis design** (docs/AUDIO.md): audio as the *fast pass* — 1D, seconds per bin,
+  fully local — producing the temporal map that points the expensive visual stages. Documents
+  the wind trap prominently (full-band RMS on ski footage measures wind, not interest, and would
+  rank a windy traverse above the best line of the day), the DSP/model signal tiers, the output
+  schema with a `candidates` list, and how audio ("when") composes with vision ("what").
+- **docs/HANDOFF.md** — session state, the agreed brief, the human-in-the-loop map, findings that
+  must not be re-litigated, environment setup, and open decisions.
 - **`benchmarks/labels/B2-orientation.json`** — and the finding that settles the orientation
   design: **B1 and B2 require opposite handling.** Killington's long-form clips were shot on an
   inverted mount, so 7 of 9 are stored upside down and their `rotation=-180` side-data is

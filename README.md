@@ -30,6 +30,8 @@ source bin ──► ingest ──► analysis ──► index ──► skeleto
 | File | Purpose |
 |---|---|
 | [docs/SPEC.md](docs/SPEC.md) | Phase 1 technical specification — architecture, schemas, pipeline stages |
+| [docs/AUDIO.md](docs/AUDIO.md) | Audio analysis design — the cheap fast pass that maps *where* things happen |
+| [docs/HANDOFF.md](docs/HANDOFF.md) | **Current state and next actions — read this first in a new session** |
 | [docs/TASKS.md](docs/TASKS.md) | Task board. Every task has a Definition of Done with verification commands |
 | [research/](research/README.md) | Directed research studies (R1–R6) that replace assumptions with measurements |
 | [docs/FUTURE_PHASES.md](docs/FUTURE_PHASES.md) | Phase 2/3 scope, kept current as deferred work is discovered |

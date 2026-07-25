@@ -11,6 +11,12 @@ Rules (enforced by [../CLAUDE.md](../CLAUDE.md)):
   use the provisional value shown and flag the task `done*` (provisional) — re-verify when the
   study lands.
 
+> ⚠️ **This board predates the session-1 pivot. Read [HANDOFF.md](HANDOFF.md) first.**
+> The plan is now: build one real video from Copper with throwaway tooling, judge it, and only
+> then decide whether this architecture is worth building. T0–T13 remain the design for the
+> pipeline *if* the prototype earns it. The labeling-driven CP2 below is superseded by an
+> analysis-first review.
+
 ## ▶ Start here — shortest path to CP2
 
 **Reach the go/no-go before building the pipeline.** CP2 (does the analysis actually find the
