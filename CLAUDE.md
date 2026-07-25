@@ -121,8 +121,13 @@ applies to attribution: don't record which model authored a change, in commits, 
 
 ## What NOT to do
 
-- Don't build Phase 2/3 features (music, color, captions, revision loop, UI) — note ideas in
-  docs/FUTURE_PHASES.md instead.
+- Don't build Phase 2/3 features (music, color, captions) — note ideas in
+  docs/FUTURE_PHASES.md instead. **Exception, decided by Karl 2026-07-25: the app wrapper
+  (FUTURE_PHASES P2.5/P2.6) is now in scope and is the active workstream.** The prototype
+  answered its question — the cut is "on the right track" and the remaining gap is story and
+  steering, which are product problems. The T0–T13 pipeline stays on hold; throwaway tooling
+  proved sufficient to produce a cut Karl endorsed, so hardening it is not what unblocks the
+  project. Revision-by-UI is therefore no longer deferred; revision-by-batch-pipeline still is.
 - Don't store edit state anywhere but OTIO files. Don't bypass the index for shot data.
 - Don't "improve" the rubric, thresholds, or budget caps without a DECISION flag.
 - Don't leave a task `in-progress` at session end without a written handoff note in TASKS.md

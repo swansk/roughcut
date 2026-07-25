@@ -58,11 +58,27 @@ informative than judging a single artifact).
    - `.../cuts/copper-variantB.mp4` — **"The legend", 2:43** ← the one to build on
    - `.../cuts/copper-variantA.mp4` — "The trip", 2:24 (kept for comparison only)
 
-**Next:** Karl watches B v2 and gives notes. Then either another revision round, or — more
-valuable now — start on the app affordances, since selection is "on the right track" and the
-remaining gap is human steering. See **FUTURE_PHASES P2.5 and P2.6**, both written from Karl's
-own words this session: an interface to interject/set scene and story, fine-tuning that is *fun
-and easy*, and music-track-driven cutting as an available non-default mode.
+6. ~~Direction call~~ — **done. Karl chose the app wrapper** (2026-07-25). CLAUDE.md's "no
+   Phase 2 features" rule was amended in the same decision; the T0–T13 pipeline stays on hold,
+   because throwaway tooling produced a cut Karl endorsed and hardening it is not what unblocks
+   the project.
+
+**The app wrapper is the active workstream.** The cut board is built, tested and running:
+
+```
+uv run app/server.py --edl research/edl/B1-variantB.json \
+  --footage ~/footage/copper-02-2026 --sidecars ~/work/audio
+```
+→ `http://localhost:8765`. See [app/README.md](../app/README.md) for the design and the
+latency argument behind proxies.
+
+29 tests (19 API + 10 driving real Chromium), ~18s, against a synthetic three-clip project so
+they need neither `~/footage` nor a GPU. Browser layer skips cleanly if playwright is absent.
+
+**Next on the app:** the story panel captures intent but nothing acts on it — the human can
+steer by hand, not yet by *asking*. Closing that loop (story text → re-run selection → new
+proposal the human accepts or rejects) is what makes "interject" literal, and is the natural
+next build. Music mode (FUTURE_PHASES P2.6) is still unbuilt.
 
 Independent work: ~~audio event tagging~~ — **done, and it is a dead end on B1**; see
 [R9](../research/R9-events-and-wind.md). The remaining audio lever is a **prosodic** rather than

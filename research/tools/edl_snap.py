@@ -75,8 +75,13 @@ def snap(seg: dict, transcript: list[dict], duration: float, gap: float,
                 notes.append(f"tail +{t_out - orig_out:.2f}s to finish '{u['text'][:38]}'")
             break
 
-    # closure — absorb the reply, and the reply to the reply
-    while True:
+    # closure — absorb the reply, and the reply to the reply.
+    # Only for segments that actually carry speech. A shot chosen as a silent beat
+    # (a ski pass, a held landscape) has no conversation to finish, and reaching
+    # forward to the next utterance would grow it into dialogue the editor did not
+    # ask for — found by test_snap_leaves_clean_boundaries_alone.
+    carries_speech = any(u["end"] > t_in and u["start"] < t_out for u in transcript)
+    while carries_speech:
         nxt = next((u for u in transcript if u["start"] >= t_out - PAD_TAIL), None)
         if nxt is None or nxt["start"] - (t_out - PAD_TAIL) > gap:
             break

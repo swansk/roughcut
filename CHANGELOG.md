@@ -10,6 +10,37 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The app wrapper exists** (`app/`) — a local web "cut board" over the EDL, and now the active
+  workstream after Karl chose it over hardening the T0–T13 pipeline. CLAUDE.md's "no Phase 2
+  features" rule was amended in the same decision rather than quietly ignored. Timeline of
+  segment cards with previews parked on the in-point, the transcript lines falling inside each
+  cut, drag-reorder, trim by button or keyboard, a story panel saved into the EDL, one-click
+  insert from ranked audio candidates, Snap-to-speech shown as an undoable proposal, and
+  background render played back inline. It is a *view over the EDL file*, not a new source of
+  truth — the same JSON `assemble.py` renders and `edl_snap.py` rewrites — so hand edits stay
+  scriptable and scripted edits stay visible.
+  - **Latency is the design constraint**, because "fun and easy" reduces to "the loop is tight":
+    the browser never touches the 5.3K masters (7.6 GB of Copper → 85 MB of proxies, ~90×
+    smaller), and media is served with byte ranges, without which a `<video>` cannot seek at all.
+  - **Live boundary warnings** flag a cut that opens mid-sentence or clips a line off — the
+    defect Karl reported — while trimming, not only when asked. The seeded B variant showed 5;
+    Snap cleared all 5.
+- **29 tests for the app** (`app/tests/`) — 19 API plus 10 driving real Chromium via playwright,
+  ~18s, against a synthetic three-clip project with fabricated transcripts so they are fast,
+  deterministic, and independent of `~/footage` and the GPU. `install_browser_deps.sh` makes
+  headless Chromium runnable without sudo, the same pattern already used for ffmpeg and uv.
+
+### Fixed
+- **Proxies were served while still being written** — a `<video>` received a truncated stream
+  and cached the failure until reload. Built to `.part.mp4` and renamed atomically.
+- **`edl_snap.py` grew silent segments.** A shot chosen as a quiet beat (a ski pass, a held
+  landscape) would reach past its own end and absorb the next utterance, turning it into
+  dialogue nobody asked for — the exact "silently rewrites your timeline" behaviour the tool was
+  supposed not to have. Closure now requires the segment to already carry speech. Found by
+  `test_snap_leaves_clean_boundaries_alone`, and re-verified against the real B cut: output is
+  byte-identical, so this closed a latent footgun without changing the current edit.
+- **The proxy filter upscaled sources smaller than the target**, spending bytes on detail that
+  does not exist. Capped by width, so anything under 1280 is passed through untouched.
 - **Tier B audio event tagging** (`research/tools/audio_events.py`, AST/AudioSet on the GPU) and
   its study, **[R9](research/R9-events-and-wind.md)** — which measured that the feature R8 and
   AUDIO.md both named "the highest-value remaining audio work" **does not pay off on B1**.
