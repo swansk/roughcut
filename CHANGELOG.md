@@ -10,6 +10,9 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **D7 closed: the repo has a remote.** `origin` is github.com/swansk/roughcut (private), `main`
+  tracking it, 34 commits pushed. Three sessions of work had been sitting on one disk with no
+  backup — the only artifact in the project that is not regenerable.
 - **A sense of order, and renders as versions.** The board was flat — Ask, Snap, Undo, Save and
   Render as peers with nothing saying what to do first. A five-step strip (footage · analyse ·
   first cut · refine · render) marks where the project is, read from state rather than tracked,

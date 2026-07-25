@@ -287,9 +287,10 @@ WSL2 Ubuntu 24.04, RTX 5080 (16GB, visible to WSL), 953GB free on ext4.
 
 - **D5** footage location — resolved in practice (copied to WSL ext4); library still on Windows.
 - **D6** labeling — **deferred**, possibly permanently. Superseded by analysis-first review.
-- **D7** git remote — **still local-only, 24 commits on one disk with no backup.** The single
-  standing risk to the project, unchanged for three sessions and now carrying more work. The
-  media is regenerable; the repo is not. Raise it again, first thing.
+- **D7** git remote — **resolved 2026-07-25.** `origin` is
+  [github.com/swansk/roughcut](https://github.com/swansk/roughcut), private, `main` tracking it;
+  34 commits pushed. The standing risk of three sessions is gone. Media stays out of git and
+  stays regenerable from `research/tools/`.
 - **D8** backend default — the app runs on `claude_cli`. Switching it to `anthropic_api` is
   Karl's call (API key, real per-token cost); the overhead argument that motivated it is weaker
   on this app's coarse calls than it looked. See the START HERE section.
