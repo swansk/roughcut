@@ -24,9 +24,19 @@ State lives in the EDL JSON on disk — the same file `assemble.py` renders and
 `edl_snap.py` rewrites. The app is a view over that file, not a new source of truth,
 so anything done here stays scriptable and anything scripted stays visible here.
 
+The one required argument is a folder of footage. Karl, after using the first
+version: *"App is pretty hard to use right now — unclear how to go from start to
+finish."* It was a refinement tool that assumed five terminal steps had already
+happened, one of which was hand-authoring the EDL it opens. So a missing EDL is not
+an error here: it is scaffolded, empty, next to the project's other derived files,
+and the app's job is to fill it.
+
 Usage:
-    uv run app/server.py --edl research/edl/B1-variantB.json \
-        --footage ~/footage/copper-02-2026 --sidecars ~/work/audio
+    uv run app/server.py --footage ~/footage/copper-02-2026
+
+    # or against an EDL and sidecars that already exist
+    uv run app/server.py --footage ~/footage/copper-02-2026 \
+        --edl research/edl/B1-variantB.json --sidecars ~/work/audio
 """
 
 from __future__ import annotations
@@ -53,6 +63,9 @@ HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent / "research" / "tools"
 PROXY_W = 1280
 PROXY_CRF = 26
+# Kept in step with audio_analyze.py — the two must agree on what counts as footage,
+# or the "N clips, M analysed" the UI shows would never reach parity.
+VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".avi", ".m4v", ".mts", ".webm"}
 
 app = FastAPI()
 STATE: dict = {}
@@ -108,6 +121,38 @@ def ensure_proxies(clips: list[str]) -> None:
 # ---------------------------------------------------------------- project io
 
 
+def scaffold_edl(path: Path, footage: Path, orient: str) -> dict:
+    """Write an empty project for a bin that has never been cut.
+
+    Deliberately the same shape `assemble.py` and `edl_snap.py` already read, with
+    zero segments — an empty edit is a valid edit, and making the app able to *create*
+    one is what removes the hand-authored-JSON prerequisite. `orient` is a per-clip
+    property that cannot be generalised across bins (B1 Copper's rotation side-data is
+    spurious, B2 Killington's is correct), so it stays an explicit choice rather than
+    something guessed here.
+    """
+    edl = {
+        "variant": "", "title": footage.name, "orient": orient, "story": "",
+        "target_s": [120, 180], "segments": [],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(edl, indent=1), encoding="utf-8")
+    return edl
+
+
+def footage_clips() -> list[str]:
+    footage: Path = STATE["footage"]
+    if not footage.is_dir():
+        return []
+    return sorted(p.name for p in footage.iterdir()
+                  if p.suffix.lower() in VIDEO_SUFFIXES)
+
+
+def analysed_stems() -> set[str]:
+    return {p.name[: -len(".audio.json")]
+            for p in STATE["sidecars"].glob("*.audio.json")}
+
+
 def load_sidecar(clip: str) -> dict:
     p: Path = STATE["sidecars"] / f"{Path(clip).stem}.audio.json"
     if not p.exists():
@@ -160,6 +205,33 @@ def project_payload() -> dict:
 @app.get("/api/project")
 def api_project() -> JSONResponse:
     return JSONResponse(project_payload())
+
+
+@app.get("/api/status")
+def api_status() -> JSONResponse:
+    """Where this project actually is, in terms of the steps it has to go through.
+
+    The board used to answer only "what is in the edit"; a human who had not run the
+    terminal steps got an empty screen with nothing to explain it. This says how many
+    clips exist, how many are analysed, and where the files are.
+    """
+    clips = footage_clips()
+    done = analysed_stems()
+    pending = [c for c in clips if Path(c).stem not in done]
+    return JSONResponse({
+        "footage": str(STATE["footage"]),
+        "footage_exists": STATE["footage"].is_dir(),
+        "sidecars": str(STATE["sidecars"]),
+        "edl": str(STATE["edl"]),
+        "edl_created": STATE["edl_created"],
+        "clips": len(clips),
+        "analysed": len(clips) - len(pending),
+        "pending": pending,
+        "segments": len(read_edl().get("segments", [])),
+        "proxies_ready": STATE.get("proxies_ready", False),
+        "tools": {t: shutil.which(t) is not None
+                  for t in ("ffmpeg", "ffprobe", "uv")},
+    })
 
 
 @app.put("/api/project")
@@ -328,17 +400,35 @@ def appjs() -> Response:
                     media_type="application/javascript")
 
 
-def configure(edl: Path, footage: Path, sidecars: Path, work: Path,
-              proxies: bool = True) -> None:
+def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path,
+              proxies: bool = True, orient: str = "auto") -> None:
     """Point the app at a project. Shared by main() and the test suite, so tests
-    exercise the same wiring the server uses rather than a parallel setup."""
+    exercise the same wiring the server uses rather than a parallel setup.
+
+    `edl` and `sidecars` may be None, in which case they default to derived paths
+    under `work` and the EDL is scaffolded if it does not exist yet. That is the whole
+    "new project" story: a footage folder is enough to open the board.
+    """
     work = work.expanduser().resolve()
+    footage = footage.expanduser().resolve()
+    edl_path = (edl.resolve() if edl is not None
+                else work / "projects" / f"{footage.name}.edl.json")
+    created = not edl_path.exists()
     STATE.update({
-        "edl": edl.resolve(), "footage": footage.expanduser().resolve(),
-        "sidecars": sidecars.expanduser().resolve(),
-        "work": work, "proxy_dir": work / "proxies", "renders": work / "renders",
-        "proxies_ready": False,
+        "edl": edl_path, "footage": footage,
+        "sidecars": (sidecars.expanduser().resolve() if sidecars is not None
+                     else work / "audio" / footage.name),
+        "work": work,
+        # Per-bin, because a footage folder is now something you point at rather than
+        # a single configured project: two bins can hold the same GoPro stem, and a
+        # shared proxy dir would serve one bin's frames for the other's clip.
+        "proxy_dir": work / "proxies" / footage.name,
+        "renders": work / "renders",
+        "proxies_ready": False, "edl_created": created,
     })
+    STATE["sidecars"].mkdir(parents=True, exist_ok=True)
+    if created:
+        scaffold_edl(edl_path, footage, orient)
     STATE["orient"] = read_edl().get("orient", "auto")   # needs STATE["edl"] set first
     STATE["work"].mkdir(parents=True, exist_ok=True)
     STATE["renders"].mkdir(parents=True, exist_ok=True)
@@ -354,9 +444,15 @@ def configure(edl: Path, footage: Path, sidecars: Path, work: Path,
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Roughcut cut board.")
-    ap.add_argument("--edl", type=Path, required=True)
-    ap.add_argument("--footage", type=Path, required=True)
-    ap.add_argument("--sidecars", type=Path, required=True)
+    ap.add_argument("--footage", type=Path, required=True,
+                    help="folder of source clips — the only required argument")
+    ap.add_argument("--edl", type=Path, default=None,
+                    help="existing EDL; omitted, one is scaffolded under --work")
+    ap.add_argument("--sidecars", type=Path, default=None,
+                    help="audio sidecars; omitted, they live under --work per bin")
+    ap.add_argument("--orient", choices=("auto", "none"), default="auto",
+                    help="rotation handling for a *new* project (per-bin, never "
+                         "generalisable — see docs/HANDOFF.md)")
     ap.add_argument("--work", type=Path, default=Path.home() / "work" / "app")
     ap.add_argument("--port", type=int, default=87 * 100 + 65)   # 8765
     ap.add_argument("--no-proxies", action="store_true")
@@ -365,9 +461,16 @@ def main() -> int:
     for tool in ("ffmpeg", "ffprobe", "uv"):
         if shutil.which(tool) is None:
             raise SystemExit(f"error: {tool} not found on PATH")
+    if not args.footage.expanduser().is_dir():
+        raise SystemExit(f"error: no such footage folder: {args.footage}")
 
     configure(args.edl, args.footage, args.sidecars, args.work,
-              proxies=not args.no_proxies)
+              proxies=not args.no_proxies, orient=args.orient)
+    clips, done = footage_clips(), analysed_stems()
+    print(f"{STATE['footage']}: {len(clips)} clips, "
+          f"{sum(1 for c in clips if Path(c).stem in done)} analysed")
+    if STATE["edl_created"]:
+        print(f"new project: {STATE['edl']}")
     print(f"cut board on http://localhost:{args.port}  (edl: {STATE['edl'].name})")
     uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="warning")
     return 0

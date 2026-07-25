@@ -8,6 +8,7 @@ degrades to streaming-from-zero — rather than toward coverage for its own sake
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -144,7 +145,8 @@ def test_media_path_traversal_is_contained(client):
 # ------------------------------------------------------------------ proxies
 
 def test_proxies_built_and_no_partials_left(client, project):
-    pdir = project["work"] / "proxies"
+    import server
+    pdir = server.STATE["proxy_dir"]
     assert {p.name for p in pdir.glob("*.mp4")} >= {"CLIP_A.mp4", "CLIP_B.mp4",
                                                     "CLIP_C.mp4"}
     assert list(pdir.glob("*.part.mp4")) == [], "half-written proxy left at final path"
@@ -152,10 +154,11 @@ def test_proxies_built_and_no_partials_left(client, project):
 
 def test_proxy_carries_no_rotation_metadata(client, project):
     """A proxy that plays sideways in the UI is worse than no proxy."""
+    import server
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
          "stream_side_data=rotation", "-of", "csv=p=0",
-         str(project["work"] / "proxies" / "CLIP_A.mp4")],
+         str(server.STATE["proxy_dir"] / "CLIP_A.mp4")],
         capture_output=True, text=True).stdout.strip().strip(",")
     assert out == ""
 
@@ -250,6 +253,73 @@ def test_ask_surfaces_backend_failure_as_502(client):
         assert "Not logged in" in r.json()["detail"]
     finally:
         inference.set_backend(None)
+
+
+# ------------------------------------------------------------ new project
+
+def _fresh(tmp_path, project, **kw):
+    """Configure the server the way `main()` does for a bin nobody has cut yet."""
+    from fastapi.testclient import TestClient
+    import server
+
+    server.configure(kw.pop("edl", None), project["footage"],
+                     kw.pop("sidecars", None), tmp_path, proxies=False, **kw)
+    return TestClient(server.app)
+
+
+def test_a_footage_folder_is_enough_to_open_the_board(tmp_path, project):
+    """The prerequisite that made this expert-only: without a hand-authored EDL there
+    was no way in at all. A missing EDL is now a new project, not an error."""
+    import server
+
+    with _fresh(tmp_path, project) as c:
+        p = c.get("/api/project").json()
+        assert p["segments"] == []
+        assert p["title"] == project["footage"].name
+
+        s = c.get("/api/status").json()
+        assert s["edl_created"] is True
+        assert s["clips"] == 3 and s["analysed"] == 0 and s["segments"] == 0
+        # derived, not required on the command line, and per-bin
+        assert Path(s["edl"]).parent == tmp_path / "projects"
+        assert Path(s["sidecars"]) == tmp_path / "audio" / project["footage"].name
+
+    on_disk = json.loads(Path(server.STATE["edl"]).read_text(encoding="utf-8"))
+    assert on_disk["segments"] == [] and on_disk["orient"] == "auto"
+
+
+def test_an_existing_project_is_opened_not_overwritten(tmp_path, project):
+    with _fresh(tmp_path, project, edl=project["edl"],
+                sidecars=project["sidecars"]) as c:
+        s = c.get("/api/status").json()
+        assert s["edl_created"] is False
+        assert s["clips"] == 3 and s["analysed"] == 3 and s["segments"] == 2
+        assert s["pending"] == []
+        assert all(s["tools"].values())
+
+
+def test_status_lists_what_still_needs_analysing(tmp_path, project):
+    """The number that tells a human whether they can cut yet."""
+    sidecars = tmp_path / "partial"
+    sidecars.mkdir()
+    shutil.copy(project["sidecars"] / "CLIP_A.audio.json", sidecars)
+    with _fresh(tmp_path, project, sidecars=sidecars) as c:
+        s = c.get("/api/status").json()
+        assert s["analysed"] == 1
+        assert s["pending"] == ["CLIP_B.MP4", "CLIP_C.MP4"]
+
+
+def test_proxy_dirs_do_not_collide_between_bins(tmp_path, project):
+    """Two bins can hold the same GoPro stem; a shared proxy dir would serve one
+    bin's frames for the other's clip."""
+    import server
+
+    with _fresh(tmp_path, project):
+        first = server.STATE["proxy_dir"]
+    other = tmp_path / "other-bin"
+    other.mkdir()
+    with _fresh(tmp_path, {"footage": other}):
+        assert server.STATE["proxy_dir"] != first
 
 
 # ------------------------------------------------------------------ static

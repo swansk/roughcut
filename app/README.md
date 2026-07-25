@@ -9,12 +9,27 @@ The human's half of the loop. Karl, after watching the first two cuts:
 ## Run it
 
 ```
-uv run app/server.py --edl research/edl/B1-variantB.json \
-  --footage ~/footage/copper-02-2026 --sidecars ~/work/audio
+uv run app/server.py --footage ~/footage/copper-02-2026
+```
+
+A folder of footage is the only required argument. If that bin has no EDL yet, one is
+scaffolded empty under `--work` (`~/work/app/projects/<bin>.edl.json`) and sidecars default to
+`~/work/app/audio/<bin>` — so opening the board no longer requires hand-authoring JSON in a
+terminal first.
+
+To open an EDL and sidecars that already exist, name them:
+
+```
+uv run app/server.py --footage ~/footage/copper-02-2026 \
+  --edl research/edl/B1-variantB.json --sidecars ~/work/audio
 ```
 
 Then open `http://localhost:8765`. First launch builds a 720p proxy per clip (a few minutes,
 once); later launches are instant.
+
+`--orient auto|none` applies only when a *new* project is scaffolded. It is per-bin and cannot
+be generalised — Copper's rotation side-data is spurious (`none`), Killington's is correct
+(`auto`) — so it is asked for rather than guessed.
 
 ## What it is, and what it deliberately is not
 

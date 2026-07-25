@@ -12,6 +12,7 @@
  */
 
 let P = null;                 // project payload
+let S = null;                 // project status: where this bin is in the workflow
 let segs = [];                // working segment list
 let sel = 0;
 const undoStack = [];
@@ -166,9 +167,26 @@ function paint() {
     el.classList.toggle('sel', i === sel));
 }
 
+/* The board opened on a hand-authored EDL, so an empty timeline used to be an
+ * impossible state. Now that a project can start from nothing but a footage folder it
+ * is the *first* state, and it has to say what to do next rather than show a blank. */
+function emptyState() {
+  const el = document.createElement('div');
+  el.className = 'empty';
+  const analysed = S ? S.analysed : 0;
+  const clips = S ? S.clips : 0;
+  el.innerHTML = analysed
+    ? `<h3>No cut yet</h3><div>${analysed} clip${analysed > 1 ? 's' : ''} analysed and
+       ready. Write what the film is about in <b>Story</b>, then ask for a first cut.</div>`
+    : `<h3>Nothing analysed yet</h3><div>${clips} clip${clips === 1 ? '' : 's'} in the
+       footage folder. They need an audio pass before anything can be cut.</div>`;
+  return el;
+}
+
 function render() {
   const tl = $('#timeline');
   tl.innerHTML = '';
+  if (!segs.length) tl.appendChild(emptyState());
   segs.forEach((s, i) => tl.appendChild(segCard(s, i)));
 
   const t = total();
@@ -206,6 +224,20 @@ function renderLibrary() {
     };
     lib.appendChild(d);
   });
+}
+
+async function refreshStatus() {
+  S = await (await fetch('/api/status')).json();
+  const missing = Object.entries(S.tools).filter(([, ok]) => !ok).map(([t]) => t);
+  $('#project').innerHTML = `
+    <div class="kv"><span>clips in folder</span><b>${S.clips}</b></div>
+    <div class="kv"><span>analysed</span><b>${S.analysed}</b></div>
+    <div class="kv"><span>shots in the cut</span><b>${S.segments}</b></div>
+    ${S.footage_exists ? '' : '<div style="color:var(--bad)">footage folder not found</div>'}
+    ${missing.length ? `<div style="color:var(--bad)">missing on PATH: ${missing.join(', ')}</div>` : ''}
+    <div class="path">${escapeHtml(S.footage)}</div>
+    <div class="path">${escapeHtml(S.edl)}${S.edl_created ? ' (new)' : ''}</div>`;
+  return S;
 }
 
 async function save() {
@@ -374,8 +406,9 @@ function waitForProxies() {
 
 async function boot() {
   P = await (await fetch('/api/project')).json();
+  await refreshStatus();
   segs = P.segments.map((s) => ({ ...s }));
-  $('#title').textContent = `${P.variant} · ${P.title}`;
+  $('#title').textContent = [P.variant, P.title].filter(Boolean).join(' · ');
   $('#story').value = P.story || '';
   document.title = `Cut board — ${P.title}`;
   render();

@@ -10,6 +10,15 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **A folder of footage is enough to open the board.** `--edl` and `--sidecars` are now optional:
+  a missing EDL is scaffolded (empty segments, title from the bin, `orient` an explicit choice
+  because it is per-bin and never generalisable) under `--work`, and sidecars default to a
+  per-bin path. This removes the hand-authored-JSON prerequisite from *opening* the app; letting
+  Ask originate the cut removes it from *using* the app. New `GET /api/status` reports where the
+  project actually is — clips in the folder, how many are analysed, what is still pending, shots
+  in the cut, tools on PATH — and the UI shows it as a Project panel plus an empty-timeline state
+  that says what to do next instead of showing a blank. Proxy directories are now per-bin, since
+  two bins can hold the same GoPro stem.
 - **Ask proven against a live model, and the answer is yes for structural work.** One call on
   variant B (74s, $0.27 projected) went 20 segments/162.5s → 18/129.2s: dropped the luggage
   walkway with the reason *"no faces"* (the brief's own criterion, applied correctly), dropped
