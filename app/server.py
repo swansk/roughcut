@@ -214,6 +214,21 @@ def load_sidecar(clip: str) -> dict:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+def load_visual(clip: str) -> dict:
+    """The visual pass's sidecar, if anyone has run it over this bin.
+
+    Optional by design: the audio pass is cheap and local, this one costs model calls,
+    so a project may have one and not the other. Nothing here requires it — but the
+    moments it carries are the only record of events nobody narrated.
+    """
+    p: Path = STATE["visual"] / f"{Path(clip).stem}.visual.json"
+    if not p.exists():
+        return {}
+    d = json.loads(p.read_text(encoding="utf-8"))
+    return {"moments": d.get("moments", []), "unusable": d.get("unusable", []),
+            "summary": d.get("summary", "")}
+
+
 def read_edl() -> dict:
     return json.loads(STATE["edl"].read_text(encoding="utf-8"))
 
@@ -237,6 +252,7 @@ def project_payload() -> dict:
             "duration": d["duration_s"],
             "proxy": f"/media/proxy/{Path(clip).stem}.mp4",
             "transcript": d.get("transcript", []),
+            "visual": load_visual(clip),
             "captured": capture_time(clip),
             "candidates": d.get("candidates", [])[:12],
             "summary": {k: d["summary"].get(k) for k in
@@ -389,7 +405,8 @@ async def api_ask(request: Request) -> JSONResponse:
 
     payload = project_payload()
     clips = {c: {"clip": c, "duration": v["duration"], "transcript": v["transcript"],
-                 "summary": v["summary"], "captured": v.get("captured")}
+                 "summary": v["summary"], "captured": v.get("captured"),
+                 "visual": v.get("visual")}
              for c, v in payload["clips"].items()}
     target = payload["target"]
     segments = body.get("segments")
@@ -804,7 +821,8 @@ def appjs() -> Response:
 
 
 def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path,
-              proxies: bool = True, orient: str = "auto") -> None:
+              proxies: bool = True, orient: str = "auto",
+              visual: Path | None = None) -> None:
     """Point the app at a project. Shared by main() and the test suite, so tests
     exercise the same wiring the server uses rather than a parallel setup.
 
@@ -837,6 +855,8 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
         scaffold_edl(edl_path, footage, orient)
     STATE["orient"] = read_edl().get("orient", "auto")   # needs STATE["edl"] set first
     STATE["asks"] = work / "asks" / footage.name
+    STATE["visual"] = (visual.expanduser().resolve() if visual is not None
+                       else Path.home() / "work" / "visual")
     STATE["work"].mkdir(parents=True, exist_ok=True)
     STATE["renders"].mkdir(parents=True, exist_ok=True)
     STATE["proxy_dir"].mkdir(parents=True, exist_ok=True)
@@ -858,6 +878,9 @@ def main() -> int:
                     help="existing EDL; omitted, one is scaffolded under --work")
     ap.add_argument("--sidecars", type=Path, default=None,
                     help="audio sidecars; omitted, they live under --work per bin")
+    ap.add_argument("--visual", type=Path, default=None,
+                    help="visual_pass.py sidecars (default ~/work/visual). Optional — "
+                         "the audio pass is local and cheap, this one costs calls")
     ap.add_argument("--orient", choices=("auto", "none"), default="auto",
                     help="rotation handling for a *new* project (per-bin, never "
                          "generalisable — see docs/HANDOFF.md)")
@@ -875,7 +898,7 @@ def main() -> int:
         raise SystemExit(f"error: no such footage folder: {args.footage}")
 
     configure(args.edl, args.footage, args.sidecars, args.work,
-              proxies=not args.no_proxies, orient=args.orient)
+              proxies=not args.no_proxies, orient=args.orient, visual=args.visual)
     clips, done = footage_clips(), analysed_stems()
     # Every print here flushes: stdout to a pipe is block-buffered, so launch
     # diagnostics would otherwise sit unseen behind uvicorn.run for the life of the

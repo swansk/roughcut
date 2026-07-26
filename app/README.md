@@ -90,6 +90,12 @@ button: "ask for what you want" should not change its name depending on whether 
 screen yet. It is the piece that removes the hand-authored-EDL prerequisite — a bin of analysed
 footage plus a sentence about what the film is for is now enough to get a first cut.
 
+**If a visual pass has been run** (`research/tools/visual_pass.py`, sidecars under `~/work/visual`
+or `--visual`), each clip also arrives with *what is visible* — moments read from sampled frames,
+with the notable ones marked and the unusable stretches flagged. That is the only account the
+model has of things nobody narrated. It is optional: the audio pass is local and cheap, this one
+costs model calls.
+
 The originating prompt states two things a model reading clips one at a time cannot rediscover,
 both measured in R8/R9 rather than guessed: transcript density points *away* from the action on
 this footage (the camera is on the person doing the thing), and the connective tissue is usually

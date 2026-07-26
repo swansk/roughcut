@@ -85,6 +85,21 @@ Notes carried over: beat/tempo extraction (librosa) and quantising cuts to the b
 already sketched in P2.1; what is new is that segment *durations* become slot-driven, which
 changes selection's contract from "pick the good bits" to "fill these N slots of these lengths".
 
+### P2.7 Effects — natural language to pixels — Karl, 2026-07-25
+
+> *"How effects in general will be added to footage… Call of Duty hitmarkers on the video frames
+> with the sound effect too when my skis hit a bunch of rocks, instructed via natural language."*
+
+Design in [docs/EFFECTS.md](EFFECTS.md). The four rules that make it tractable: the model never
+writes ffmpeg (closed vocabulary, validated parameters, renderer owns every string); effects are
+resolution-independent so a proxy preview matches the master; assets come from a local library
+with a manifest the model reads; and frame accuracy comes from narrowing — visual pass (4s) →
+**onset track (100ms, already on disk since R8)** → a frame strip → the human's nudge.
+
+Status: the music bed is built (film-wide render path, ducking). `sfx` and `overlay` with the
+asset manifest are next, then onset snapping, then the board's timeline markers, then the Ask
+path that turns a sentence into effect objects.
+
 ## Phase 3 — Breadth & polish
 
 - **P3.1 External audio sync — remains unscheduled.** *(Corrected 2026-07-25.)* An earlier note

@@ -93,7 +93,18 @@ Things that are true of this kind of footage, and easy to get wrong from transcr
 * **You cannot see the frame.** A shot may be dark, upside down, pointed at a glove,
   or ruined in a way the words do not reveal. So say what each moment is *for* in its
   `why` — that sentence is what the human uses to check your reasoning against the
-  picture, and it is what any later pass inherits as memory of the choice."""
+  picture, and it is what any later pass inherits as memory of the choice.
+"""
+
+# Appended only when some clip actually carries visual moments — telling a model to
+# trust lines that are not there is noise, and noise in a prompt this long is not free.
+VISUAL_GUIDANCE = """
+* **Where a clip lists "what is visible", trust it over the transcript for events.**
+  Those lines come from looking at sampled frames, and they are the only account you
+  have of things that happen without being spoken: a fall, a crash, a landing. People
+  narrate those minutes later if at all, so the words sit nowhere near the moment. A
+  line marked `!` is one the reader thought notable; a stretch listed as unusable is
+  one to cut around, not through."""
 
 
 SESSION_GAP_S = 4 * 3600
@@ -148,6 +159,23 @@ def _clip_block(clip: dict, timeline: dict[str, str] | None = None) -> str:
         lines.append(
             f"speech_fraction={s.get('speech_fraction')} "
             f"wind={s.get('wind_dominant_fraction')} usable={s.get('audio_usable')}")
+
+    # What is visibly happening, when anyone has looked. Karl: the first Killington
+    # cut opened on him *talking about* falling into a river, three minutes after it
+    # happened, from the clip that contains the fall — because a transcript records
+    # people narrating events and never the events. These lines are what fix that.
+    visual = clip.get("visual") or {}
+    if visual.get("moments"):
+        lines.append("what is visible (from sampled frames — no audio):")
+        for m in visual["moments"]:
+            mark = "!" if m.get("notable") else " "
+            lines.append(f" {mark} {m['start']:.1f}-{m['end']:.1f}  "
+                         f"[{m.get('kind', '')}] {m.get('what', '')}")
+    if visual.get("unusable"):
+        lines.append("unusable stretches (do not cut here): " + "; ".join(
+            f"{u['start']:.1f}-{u['end']:.1f} {u.get('why', '')}"
+            for u in visual["unusable"]))
+
     if clip.get("transcript"):
         lines.append("transcript:")
         lines += [f"  {u['start']:.1f}-{u['end']:.1f}  {u['text']}"
@@ -201,6 +229,9 @@ def build_first_prompt(clips: dict[str, dict], story: str, note: str,
     timeline = shot_timeline(clips)
     inventory = "\n\n".join(_clip_block(c, timeline) for c in clips.values())
     total = sum(float(c["duration"]) for c in clips.values())
+    guidance = FIRST_GUIDANCE + (
+        VISUAL_GUIDANCE if any((c.get("visual") or {}).get("moments")
+                               for c in clips.values()) else "")
     brief = story.strip() or (
         "(the editor has not written this yet — infer what this film is about from "
         "the material, and say what you inferred in your notes so they can correct it)")
@@ -220,7 +251,7 @@ edit yet; you are making the first one.
 {total:.0f}s of material.
 
 ## How to read this material
-{FIRST_GUIDANCE}
+{guidance}
 
 ## Every clip available, with its transcript
 {inventory}

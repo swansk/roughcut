@@ -41,6 +41,45 @@ def test_all_clips_offered_not_just_used(client):
     assert p["clips"]["CLIP_A.MP4"]["used"] is True
 
 
+def test_visual_moments_reach_the_model_when_the_pass_has_run(tmp_path, project):
+    """The visual sidecars are optional — they cost model calls — but when they exist
+    the events nobody narrated have to reach the prompt."""
+    from roughcut import config, inference
+
+    vis = tmp_path / "visual"
+    vis.mkdir()
+    (vis / "CLIP_A.visual.json").write_text(json.dumps({
+        "clip": "CLIP_A.MP4",
+        "moments": [{"start": 1.0, "end": 3.0, "kind": "fall", "notable": True,
+                     "what": "rider goes down in deep snow"}],
+        "unusable": [], "summary": "a run"}), encoding="utf-8")
+
+    class Scripted:
+        name = "scripted"
+        seen: list = []
+
+        def complete(self, request):
+            Scripted.seen.append(request)
+            text = json.dumps({"segments": [{"clip": "CLIP_A.MP4", "in": 1.0,
+                                             "out": 3.0, "why": "the fall"}]})
+            model = config.model_for(request.role)
+            return inference.Result(content=text, input_tokens=10, output_tokens=5,
+                                    backend="scripted", model=model,
+                                    projected_usd=1e-4, latency_ms=1, raw=text)
+
+    inference.set_backend(Scripted())
+    inference.reset_spend()
+    try:
+        with _fresh(tmp_path, project, sidecars=project["sidecars"],
+                    visual=vis) as c:
+            assert c.get("/api/project").json()["clips"]["CLIP_A.MP4"]["visual"][
+                "moments"][0]["kind"] == "fall"
+            _ask(c, {"note": "", "segments": [], "story": "a ski film"})
+        assert "rider goes down in deep snow" in Scripted.seen[0].prompt
+    finally:
+        inference.set_backend(None)
+
+
 def test_clips_carry_a_capture_time(client):
     """Without it the model cannot know what "before" means — the cause of the
     out-of-order airport section in the first originated cut."""
@@ -274,6 +313,85 @@ def test_render_status_404_for_unknown_job(client):
     assert client.get("/api/render/deadbeef").status_code == 404
 
 
+# ------------------------------------------------------------------ music
+
+def _loudness(path: Path) -> float:
+    r = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-i", str(path),
+                        "-af", "ebur128=framelog=quiet", "-f", "null", "-"],
+                       capture_output=True, text=True)
+    for line in r.stderr.splitlines():
+        if "I:" in line and "LUFS" in line:
+            return float(line.split("I:")[1].split("LUFS")[0])
+    raise AssertionError(f"no loudness reading for {path.name}")
+
+
+def _frames(path: Path) -> int:
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                        "-count_frames", "-show_entries", "stream=nb_read_frames",
+                        "-of", "csv=p=0", str(path)], capture_output=True, text=True)
+    return int(r.stdout.strip().strip(","))
+
+
+def test_music_bed_is_mixed_under_without_touching_the_picture(project, tmp_path):
+    """The first film-wide effect, and the render path every other one will use
+    (docs/EFFECTS.md). Music runs after the concat with the video stream copied, so a
+    bed costs nothing in picture quality."""
+    tools = Path(__file__).resolve().parents[2] / "research" / "tools"
+    edl = {"variant": "M", "title": "music test", "orient": "none", "target_s": [1, 20],
+           "segments": [{"clip": "CLIP_A.MP4", "in": 0.0, "out": 3.0, "why": "a"},
+                        {"clip": "CLIP_B.MP4", "in": 0.0, "out": 3.0, "why": "b"}]}
+    edl_path = tmp_path / "music.json"
+    edl_path.write_text(json.dumps(edl), encoding="utf-8")
+
+    # A distinct tone — the clips carry 440Hz, so the bed is 900Hz. Mid-band on
+    # purpose: LUFS is K-weighted, and a bass-heavy bed barely moves the number even
+    # when it is plainly audible, which would make this measurement lie.
+    track = tmp_path / "bed.wav"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-f", "lavfi",
+                    "-i", "sine=frequency=900:duration=2", str(track)], check=True)
+
+    def render(out_name, music=None):
+        if music is not None:
+            edl_path.write_text(json.dumps({**edl, "effects_music": music}),
+                                encoding="utf-8")
+        else:
+            edl_path.write_text(json.dumps(edl), encoding="utf-8")
+        out = tmp_path / out_name
+        r = subprocess.run(
+            ["uv", "run", "--quiet", str(tools / "assemble.py"), str(edl_path),
+             "--footage", str(project["footage"]), "--sidecars",
+             str(project["sidecars"]), "-o", str(out)],
+            capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout + r.stderr
+        return out, r.stdout
+
+    plain, _ = render("plain.mp4")
+    flat, flat_log = render("flat.mp4",
+                            {"asset": str(track), "gain_db": 0, "duck": False})
+    ducked, duck_log = render("ducked.mp4",
+                              {"asset": str(track), "gain_db": 0, "duck": True})
+
+    # picture untouched, in both cases — the whole reason music runs after the concat
+    assert _frames(flat) == _frames(plain), "the picture was re-encoded"
+    # a 2s track under a 6s film: looping is what keeps the bed playing throughout
+    assert _duration(flat) == pytest.approx(_duration(plain), abs=0.15)
+    assert rotation_of(flat) == "" and rotation_of(ducked) == ""
+
+    assert "flat" in flat_log and "ducked under speech" in duck_log
+    assert _loudness(flat) > _loudness(plain) + 0.3, "no bed audible in the mix"
+    # These clips are a constant 440Hz tone, so the sidechain key never lets up and the
+    # bed is pushed all the way down. That is ducking working, on a deliberately
+    # pathological input: what it does under real speech-with-gaps is not tested here.
+    assert _loudness(ducked) < _loudness(flat) - 0.3, "the sidechain did nothing"
+
+
+def rotation_of(p: Path) -> str:
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                        "-show_entries", "stream_side_data=rotation", "-of", "csv=p=0",
+                        str(p)], capture_output=True, text=True)
+    return r.stdout.strip().strip(",")
+
+
 # ------------------------------------------------------------------ ask
 
 def _ask_status(client, job, timeout=20.0) -> dict:
@@ -484,7 +602,8 @@ def _fresh(tmp_path, project, **kw):
     import server
 
     server.configure(kw.pop("edl", None), project["footage"],
-                     kw.pop("sidecars", None), tmp_path, proxies=False, **kw)
+                     kw.pop("sidecars", None), tmp_path, proxies=False,
+                     visual=kw.pop("visual", tmp_path / "no-visual"), **kw)
     return TestClient(server.app)
 
 

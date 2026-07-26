@@ -273,6 +273,44 @@ def test_empty_note_is_rejected_without_calling_the_model():
     assert b.requests == []
 
 
+# ------------------------------------------------------------------ visual
+
+SEEN = {
+    "A.MP4": {**CLIPS["A.MP4"], "visual": {
+        "moments": [
+            {"start": 104.0, "end": 108.0, "kind": "fall", "notable": True,
+             "what": "person appears to be down or lying in snow"},
+            {"start": 156.0, "end": 164.0, "kind": "scenery", "notable": False,
+             "what": "chair lifts and tree-lined slopes"}],
+        "unusable": [{"start": 188.0, "end": 192.0, "why": "nearly black"}]}},
+    "B.MP4": CLIPS["B.MP4"],
+}
+
+
+def test_the_prompt_carries_what_is_visible():
+    """The gap this closes: the first Killington cut opened on someone *talking about*
+    falling into a river, three minutes after it happened, from the clip that contains
+    the fall. A transcript never records the event itself."""
+    b = use(['{"segments":[{"clip":"A.MP4","in":0,"out":2}]}'])
+    revise.originate(SEEN, story="x", note="")
+    prompt = b.requests[0].prompt
+    assert "person appears to be down or lying in snow" in prompt
+    assert "! 104.0-108.0" in prompt, "notable moments are marked as such"
+    assert "unusable stretches (do not cut here)" in prompt
+    assert "nearly black" in prompt
+    # and the model is told what to do with it
+    assert "trust it over the transcript for events" in prompt
+
+
+def test_clips_without_a_visual_pass_are_unchanged():
+    """It costs model calls, so a project may have the audio pass and not this one."""
+    b = use(['{"segments":[{"clip":"A.MP4","in":0,"out":2}]}'])
+    revise.originate(CLIPS, story="x", note="")
+    prompt = b.requests[0].prompt
+    assert "what is visible" not in prompt
+    assert "hello" in prompt, "the transcript is still there"
+
+
 # ------------------------------------------------------------------ chronology
 
 # 20:43, 20:53, 21:40, 22:17 on one day, then one clip a day and a half later —

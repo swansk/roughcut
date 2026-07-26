@@ -86,6 +86,57 @@ def cut(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path,
         raise RuntimeError(f"cut failed {src.name} {t_in}-{t_out}: {r.stderr[-400:]}")
 
 
+def music_filter(spec: dict, film_s: float) -> str:
+    """Filter graph for a music bed under the finished film. See docs/EFFECTS.md.
+
+    Ducked by default, and that default matters more than it looks: R8 established
+    that in this footage the *words* carry the film, so a bed at a flat level buries
+    the thing the cut was built around. `sidechaincompress` keyed on the film's own
+    audio pulls the music down under speech and lets it back up in the gaps.
+
+    The music is looped to the length of the film and then hard-trimmed, so a short
+    track does not end the bed early and a long one does not run past the picture.
+    """
+    gain = float(spec.get("gain_db", -18.0))
+    fade_in = max(0.0, float(spec.get("fade_in", 1.5)))
+    fade_out = max(0.0, float(spec.get("fade_out", 4.0)))
+    duck = bool(spec.get("duck", True))
+
+    # [1:a] is the music input; [0:a] the film's own audio.
+    bed = (f"[1:a]aloop=loop=-1:size=2e9,atrim=0:{film_s:.3f},"
+           f"asetpts=N/SR/TB,volume={gain:.2f}dB,"
+           f"afade=t=in:st=0:d={fade_in:.2f},"
+           f"afade=t=out:st={max(0.0, film_s - fade_out):.3f}:d={fade_out:.2f}[bed]")
+    if not duck:
+        return f"{bed};[0:a][bed]amix=inputs=2:normalize=0:duration=first[aout]"
+    # asplit because the film audio is both a mix input and the sidechain key.
+    return (f"{bed};[0:a]asplit=2[dry][key];"
+            f"[bed][key]sidechaincompress=threshold=0.02:ratio=6:attack=15:"
+            f"release=400:makeup=1[ducked];"
+            f"[dry][ducked]amix=inputs=2:normalize=0:duration=first[aout]")
+
+
+def add_music(film: Path, spec: dict, assets: Path | None, out: Path) -> None:
+    """Mix a bed under an already-assembled film.
+
+    The video stream is **copied**, so a music pass costs nothing in picture quality —
+    the reason film-wide effects run after the concat rather than per part.
+    """
+    track = Path(spec["asset"])
+    if not track.is_absolute():
+        track = (assets or Path(".")) / track
+    if not track.exists():
+        raise SystemExit(f"error: music asset not found: {track}")
+    film_s = probe_duration(film)
+    r = run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-i", str(film), "-i", str(track),
+             "-filter_complex", music_filter(spec, film_s),
+             "-map", "0:v:0", "-map", "[aout]", "-c:v", "copy",
+             "-c:a", "aac", "-b:a", "192k", "-ac", "2",
+             "-write_tmcd", "0", "-movflags", "+faststart", str(out)])
+    if r.returncode != 0:
+        raise RuntimeError(f"music pass failed: {r.stderr[-400:]}")
+
+
 def rotation_of(p: Path) -> str:
     r = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
              "stream_side_data=rotation", "-of", "csv=p=0", str(p)])
@@ -121,6 +172,11 @@ def main() -> int:
     ap.add_argument("--sidecars", type=Path, help="R8 audio sidecars, for loudness matching")
     ap.add_argument("-o", "--out", type=Path, required=True)
     ap.add_argument("--keep-parts", action="store_true", help="leave segment files on disk")
+    ap.add_argument("--music", type=Path, default=None,
+                    help="audio track to lay under the film; overrides the EDL's own "
+                         "`effects_music.asset`")
+    ap.add_argument("--assets", type=Path, default=None,
+                    help="root for relative asset paths (see docs/EFFECTS.md)")
     ap.add_argument("--parts-dir", type=Path, default=None,
                     help="write the per-segment parts here instead of a temp dir, so "
                          "a caller can count them as progress")
@@ -173,6 +229,21 @@ def main() -> int:
             raise RuntimeError(f"concat failed: {r.stderr[-400:]}")
 
         assert_no_rotation(args.out, orient)
+
+        # Film-wide effects run here, after the picture is assembled: the video stream
+        # is copied through, so the bed costs no generation of quality.
+        music = (edl.get("effects_music") or {}) if isinstance(edl, dict) else {}
+        if args.music:
+            music = {**music, "asset": str(args.music)}
+        if music.get("asset"):
+            scored = args.out.with_name(args.out.stem + ".scored.mp4")
+            add_music(args.out, music, args.assets, scored)
+            scored.replace(args.out)
+            assert_no_rotation(args.out, orient)
+            print(f"music: {Path(music['asset']).name} at "
+                  f"{music.get('gain_db', -18)}dB, "
+                  f"{'ducked under speech' if music.get('duck', True) else 'flat'}")
+
         final = probe_duration(args.out)
         drift = final - planned
         print(f"\nwrote {args.out}  {final:.2f}s (planned {planned:.1f}s, "

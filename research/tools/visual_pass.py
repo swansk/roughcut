@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -140,9 +141,18 @@ def analyse(video: Path, out_dir: Path, interval: float, cols: int, rows: int,
     with tempfile.TemporaryDirectory(prefix="visual-") as tmp:
         sheets = build_sheets(video, Path(tmp), interval, cols, rows, orient)
         print(f"{video.name}: {len(sheets)} sheet(s)", flush=True)
-        moments, unusable, summaries, spend = [], [], [], 0.0
+        moments, unusable, summaries, failed, spend = [], [], [], [], 0.0
         for s in sheets:
-            got = read_sheet(s["path"], video.name, s["cells"], interval, role)
+            try:
+                got = read_sheet(s["path"], video.name, s["cells"], interval, role)
+            except inference.InferenceError as exc:
+                # One stalled call must not throw away the sheets that already
+                # succeeded, nor the clips after this one. A batch that costs money
+                # per unit has to bank what it has: the first run of this tool died on
+                # a 300s timeout and discarded a sheet that had already been paid for.
+                failed.append({"sheet": s["path"].name, "error": str(exc)[:200]})
+                print(f"  {s['path'].name}: FAILED — {str(exc)[:120]}", flush=True)
+                continue
             moments += got["moments"]
             unusable += got["unusable"]
             summaries.append(got["summary"])
@@ -152,6 +162,8 @@ def analyse(video: Path, out_dir: Path, interval: float, cols: int, rows: int,
     moments.sort(key=lambda m: m["start"])
     return {"clip": video.name, "moments": moments, "unusable": unusable,
             "summary": " ".join(summaries)[:1200], "projected_usd": round(spend, 4),
+            "failed_sheets": failed,
+            "sheets_read": len(sheets) - len(failed), "sheets_total": len(sheets),
             "params": {"interval_s": interval, "cols": cols, "rows": rows,
                        "role": role, "provisional": "RQ-1/RQ-7 unmeasured"}}
 
@@ -165,10 +177,16 @@ def main() -> int:
     ap.add_argument("--rows", type=int, default=5)
     ap.add_argument("--orient", choices=("auto", "none"), default="auto")
     ap.add_argument("--only", default="", help="comma-separated stems to include")
+    ap.add_argument("--force", action="store_true", help="re-read clips already done")
+    ap.add_argument("--timeout", type=int, default=600,
+                    help="per-call seconds. Reading a sheet is slower than a text "
+                         "call — the CLI has to open a ~2000px image — and the 300s "
+                         "default killed the first full run")
     ap.add_argument("--role", default=config.ROLE_ANALYSIS,
                     choices=(config.ROLE_ANALYSIS, config.ROLE_JUDGE,
                              config.ROLE_SKELETON))
     args = ap.parse_args()
+    os.environ.setdefault("ROUGHCUT_CALL_TIMEOUT_S", str(args.timeout))
 
     if args.input.is_dir():
         videos = sorted(p for p in args.input.iterdir()
@@ -185,14 +203,25 @@ def main() -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     total = 0.0
     for video in videos:
-        result = analyse(video, args.out, args.interval, args.cols, args.rows,
-                         args.orient, args.role)
-        (args.out / f"{video.stem}.visual.json").write_text(
-            json.dumps(result, indent=1), encoding="utf-8")
+        dest = args.out / f"{video.stem}.visual.json"
+        if dest.exists() and not args.force:
+            # Cached like the audio pass. These calls cost real money, so re-running
+            # the tool over a bin must not silently re-buy work already on disk.
+            print(f"{video.name}: cached", flush=True)
+            continue
+        try:
+            result = analyse(video, args.out, args.interval, args.cols, args.rows,
+                             args.orient, args.role)
+        except (RuntimeError, OSError) as exc:
+            print(f"{video.name}: SKIPPED — {exc}", file=sys.stderr, flush=True)
+            continue
+        dest.write_text(json.dumps(result, indent=1), encoding="utf-8")
         total += result["projected_usd"]
         notable = [m for m in result["moments"] if m["notable"]]
         print(f"{video.name}: {len(result['moments'])} moments, {len(notable)} notable, "
-              f"{len(result['unusable'])} unusable  (${result['projected_usd']:.4f})")
+              f"{len(result['unusable'])} unusable, "
+              f"{result['sheets_read']}/{result['sheets_total']} sheets  "
+              f"(${result['projected_usd']:.4f})", flush=True)
     print(f"\ntotal projected ${total:.4f}")
     return 0
 

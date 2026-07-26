@@ -10,6 +10,22 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Effects design, and the first one: a music bed.** [docs/EFFECTS.md](docs/EFFECTS.md) sets out
+  how a plain-language note reaches the pixels. Four rules carry it: **the model never writes
+  ffmpeg** (a closed vocabulary of effect kinds with validated parameters — an invented filter
+  string either crashes the render or silently does the wrong thing, and it is executable text
+  arriving by way of a transcript); effects are **resolution-independent** (fractions of frame
+  width, so a 720p proxy preview matches the 5.3K master); **assets are a local library** with a
+  manifest the model reads like the clip inventory; and frame accuracy comes from **narrowing** —
+  the visual pass locates a 4-second window, the R8 **onset track pins the impact to 100ms with
+  no model call**, a frame strip confirms it, the human nudges. That onset track has existed since
+  R8 and had never been read: R9 found it useless for *classifying* events, and nobody noticed it
+  is exactly right for *timing* one you already know about.
+
+  Built: `assemble.py --music` and `effects_music` in the EDL, mixed after the concat with the
+  **video stream copied**, so a bed costs nothing in picture quality. Ducked by default via
+  `sidechaincompress` keyed on the film's own audio — R8 established that the words carry these
+  films, and a bed at a flat level buries them.
 - **A prototype visual pass — and it finds what the transcripts cannot.** Karl, on the first
   Killington cut: *"the analysis missed some critical moments that would have required video
   analysis (and some sound) — like me falling into a river."* The evidence was sharper than the

@@ -105,8 +105,11 @@ def client(project):
 
     # Restore the EDL between tests — several of them save to it on purpose.
     original = project["edl"].read_text(encoding="utf-8")
+    # visual sidecars point at an empty dir on purpose: the suite must not pick up
+    # whatever real bins happen to sit in ~/work/visual on this machine.
     server.configure(project["edl"], project["footage"], project["sidecars"],
-                     project["work"], proxies=False)
+                     project["work"], proxies=False,
+                     visual=project["work"] / "no-visual")
     server.ensure_proxies([f"{s}.MP4" for s in project["stems"]])
     with TestClient(server.app) as c:
         yield c
