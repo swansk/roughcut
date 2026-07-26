@@ -572,6 +572,63 @@ def test_analysis_runs_in_app_and_reports_progress(tmp_path, project, monkeypatc
         assert (server.STATE["proxy_dir"] / "CLIP_A.mp4").exists()
 
 
+def test_progress_advances_even_when_the_tool_says_nothing(tmp_path, project,
+                                                           monkeypatch):
+    """The regression. Progress used to refresh once per line of the child's stdout,
+    and `audio_analyze.py` prints without flushing — a pipe holds all of it until
+    exit, so a real 12-clip bin sat at 0/12 for two and a half minutes and then jumped
+    to done. The count was right and the trigger was wrong, which is indistinguishable
+    from a hung job. This stub writes its sidecars but stays silent until it exits.
+    """
+    import server
+
+    sidecars = tmp_path / "silent"
+    sidecars.mkdir()
+    script = tmp_path / "silent.py"
+    script.write_text(
+        "import json, sys, time\n"
+        "from pathlib import Path\n"
+        "out = Path(sys.argv[1])\n"
+        "for stem in sys.argv[2:]:\n"
+        "    time.sleep(0.4)\n"
+        "    (out / f'{stem}.audio.json').write_text(json.dumps({\n"
+        "        'clip': f'{stem}.MP4', 'duration_s': 6.0, 'transcript': [],\n"
+        "        'candidates': [], 'summary': {'speech_fraction': 0.0}}))\n"
+        "print('all done, at the very end, unflushed')\n", encoding="utf-8")
+    monkeypatch.setattr(server, "PROGRESS_TICK_S", 0.05)
+    monkeypatch.setattr(server, "analyze_cmd", lambda skip, force: [
+        sys.executable, str(script), str(sidecars), "CLIP_A", "CLIP_B", "CLIP_C"])
+
+    with _fresh(tmp_path, project, sidecars=sidecars) as c:
+        job = c.post("/api/analyze", json={}).json()["job"]
+        seen = set()
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            s = c.get(f"/api/analyze/{job}").json()
+            seen.add(s["done"])
+            if s["state"] != "running":
+                break
+            time.sleep(0.05)
+        assert seen & {1, 2}, f"never reported partial progress: saw {sorted(seen)}"
+        assert _wait(c, job)["done"] == 3
+
+
+def test_the_preview_stage_reports_its_own_count(tmp_path, project, monkeypatch):
+    """Encoding proxies takes an order of magnitude longer than the ASR on a real bin
+    (half an hour against two and a half minutes), so it cannot be a bar parked at
+    100% with the word "previews" next to it."""
+    import server
+
+    sidecars = tmp_path / "withproxies"
+    sidecars.mkdir()
+    monkeypatch.setattr(server, "analyze_cmd", lambda skip, force: _stub_analyzer(
+        tmp_path / "stub3.py", sidecars, ["CLIP_A", "CLIP_B", "CLIP_C"]))
+    with _fresh(tmp_path, project, sidecars=sidecars) as c:
+        job = c.post("/api/analyze", json={}).json()["job"]
+        final = _wait(c, job, timeout=90)
+        assert final["proxy_total"] == 3 and final["proxy_done"] == 3
+
+
 def test_analysis_skips_the_junk_it_is_told_to(tmp_path, project, monkeypatch):
     import server
 

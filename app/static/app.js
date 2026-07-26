@@ -351,10 +351,15 @@ async function analyze() {
   $('#analyzeBar').style.display = 'block';
   const poll = setInterval(async () => {
     const s = await (await fetch(`/api/analyze/${job}`)).json();
+    // Two stages with very different lengths — encoding proxies for a long bin takes
+    // an order of magnitude longer than the ASR — so each reports its own count
+    // rather than leaving the bar parked at 100% for half an hour.
+    const previews = s.stage === 'previews';
+    const [at, of] = previews ? [s.proxy_done, s.proxy_total] : [s.done, s.total];
     $('#analyzeBar').firstElementChild.style.width =
-      `${Math.round(100 * s.done / Math.max(1, s.total))}%`;
-    $('#analyzeState').textContent = s.stage === 'previews'
-      ? 'building previews…' : `${s.done}/${total} analysed`;
+      `${Math.round(100 * at / Math.max(1, of))}%`;
+    $('#analyzeState').textContent = previews
+      ? `building previews ${at}/${of}…` : `${s.done}/${total} analysed`;
     if (s.state === 'running') return;
     clearInterval(poll);
     analysing = false;

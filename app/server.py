@@ -105,12 +105,14 @@ def build_proxy(src: Path, dest: Path, orient: str) -> None:
     tmp.replace(dest)
 
 
-def ensure_proxies(clips: list[str]) -> None:
+def ensure_proxies(clips: list[str], progress=None) -> None:
     pdir: Path = STATE["proxy_dir"]
     pdir.mkdir(parents=True, exist_ok=True)
     todo = [c for c in clips if not (pdir / f"{Path(c).stem}.mp4").exists()]
     if todo:
         print(f"building {len(todo)} proxies (once per clip)...", flush=True)
+    if progress:
+        progress(0, len(todo))
     for i, clip in enumerate(todo, 1):
         src = STATE["footage"] / clip
         if not src.exists():
@@ -118,6 +120,8 @@ def ensure_proxies(clips: list[str]) -> None:
             continue
         build_proxy(src, pdir / f"{Path(clip).stem}.mp4", STATE["orient"])
         print(f"  [{i}/{len(todo)}] {clip}", flush=True)
+        if progress:
+            progress(i, len(todo))
     STATE["proxies_ready"] = True
     print("proxies ready", flush=True)
 
@@ -450,24 +454,55 @@ def analyze_cmd(skip: list[str], force: bool) -> list[str]:
     return cmd
 
 
+PROGRESS_TICK_S = 2.0
+
+
+def _ticker(stop: threading.Event, update) -> None:
+    """Call `update` on a clock until told to stop.
+
+    Progress must not depend on the child process saying anything. It used to: the
+    counter was refreshed once per line of stdout, and `audio_analyze.py` prints
+    without flushing, so a pipe holds all of it until exit — a 12-clip bin sat at 0/12
+    for two and a half minutes and then jumped straight to done. The count was right
+    and the trigger was wrong, which looks identical to a hung job.
+    """
+    while not stop.wait(PROGRESS_TICK_S):
+        try:
+            update()
+        except OSError:
+            pass          # a stat that fails must not kill the job it is watching
+
+
 def _analyze_job(job: str, cmd: list[str], wanted: set[str]) -> None:
     entry = ANALYSES[job]
     lines: list[str] = []
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True, bufsize=1)
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            bufsize=1,
+            # So the log streams too, rather than arriving in one lump at exit.
+            env={**os.environ, "PYTHONUNBUFFERED": "1"})
     except OSError as exc:
         entry.update(state="failed", log=str(exc))
         return
     assert proc.stdout is not None
-    for line in proc.stdout:
-        lines.append(line.rstrip())
-        # Progress is counted from the sidecars on disk rather than parsed out of the
-        # tool's chatter: audio_analyze.py writes each one as it finishes, so the
-        # filesystem is the honest progress bar and stays right if the log format moves.
-        entry["done"] = len(wanted & analysed_stems())
-        entry["log"] = "\n".join(lines[-40:])
-    rc = proc.wait()
+
+    # Counted from the sidecars on disk rather than parsed out of the tool's chatter:
+    # audio_analyze.py writes each one as it finishes, so the filesystem is the honest
+    # progress bar and stays right if the log format moves.
+    stop = threading.Event()
+    ticker = threading.Thread(
+        target=_ticker,
+        args=(stop, lambda: entry.__setitem__("done", len(wanted & analysed_stems()))),
+        daemon=True)
+    ticker.start()
+    try:
+        for line in proc.stdout:
+            lines.append(line.rstrip())
+            entry["log"] = "\n".join(lines[-40:])
+        rc = proc.wait()
+    finally:
+        stop.set()
     entry["done"] = len(wanted & analysed_stems())
     entry["log"] = "\n".join(lines[-40:])
     if rc != 0:
@@ -479,10 +514,16 @@ def _analyze_job(job: str, cmd: list[str], wanted: set[str]) -> None:
         # *before* the job reports done: a job that says "ready" while the previews
         # for its own clips are still being written hands the UI a broken <video>,
         # which stays broken until reload because the element does not retry.
+        #
+        # It is also the *longer* of the two stages — encoding 44 minutes of 5.3K
+        # takes about half an hour, against two and a half minutes for the ASR — so it
+        # reports its own count rather than leaving the bar parked at 100%.
         entry["stage"] = "previews"
         STATE["proxies_ready"] = False
-        ensure_proxies(sorted(c for c in footage_clips()
-                              if Path(c).stem in analysed_stems()))
+        ensure_proxies(
+            sorted(c for c in footage_clips() if Path(c).stem in analysed_stems()),
+            progress=lambda done, total: entry.update(proxy_done=done,
+                                                      proxy_total=total))
     entry["stage"] = "done"
     entry["state"] = "done"
 
@@ -508,7 +549,8 @@ async def api_analyze(request: Request) -> JSONResponse:
 
     job = uuid.uuid4().hex[:8]
     ANALYSES[job] = {"state": "running", "stage": "analysing", "log": "",
-                     "total": len(wanted), "done": len(wanted & analysed_stems())}
+                     "total": len(wanted), "done": len(wanted & analysed_stems()),
+                     "proxy_done": 0, "proxy_total": 0}
     threading.Thread(target=_analyze_job,
                      args=(job, analyze_cmd(skip, force), wanted),
                      daemon=True).start()

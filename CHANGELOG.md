@@ -9,6 +9,18 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Fixed
+- **Analysis progress no longer depends on the tool saying anything.** Caught by watching a real
+  12-clip run sit at `0/12` for two and a half minutes and then jump straight to done: the
+  counter was refreshed once per line of the child's stdout, and `audio_analyze.py` prints
+  without flushing, so a pipe held all of it until exit. The count was right and the trigger was
+  wrong — indistinguishable from a hung job, which is the exact confusion this session set out to
+  remove. A ticker now polls the sidecars on its own clock, and the child runs with
+  `PYTHONUNBUFFERED` so the log streams too. The preview stage reports its own `proxy_done` /
+  `proxy_total` as well, because encoding is the *longer* of the two stages on a real bin (about
+  half an hour against two and a half minutes) and a bar parked at 100% for that long says
+  nothing. Both regression tests were confirmed to fail against the old code.
+
 ### Added
 - **Shot order is information, not a rule.** Karl, once the fix landed: *"note that we don't
   ALWAYS need to go chronological."* The first wording read as a constraint and the cut that came
