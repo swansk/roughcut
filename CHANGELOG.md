@@ -9,7 +9,26 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Added
+- **A prototype visual pass — and it finds what the transcripts cannot.** Karl, on the first
+  Killington cut: *"the analysis missed some critical moments that would have required video
+  analysis (and some sound) — like me falling into a river."* The evidence was sharper than the
+  complaint: the cut opened on him **talking about** falling in, three minutes after it happened,
+  from the same clip that contains the fall. `research/tools/visual_pass.py` samples a clip onto
+  contact sheets and asks a model what happens in each, writing `<stem>.visual.json` beside the
+  audio sidecars. On CLIP_01 it reported *"person appears to be down or lying in snow"* at
+  **104–108s**, notable, plus scattered gear at 108–112s — and the frames confirm it: helmet and
+  goggles at the bottom of frame, body buried. It said *snow* rather than *water* because the
+  stream is snow-covered and no water is visible, which is the correct call from the evidence.
+  Sheet density, thumbnail size and model tier are RQ-1/RQ-7 and unmeasured, so every number here
+  is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
+
 ### Fixed
+- **The CLI backend could not actually read an image.** SPEC §6.1's "images by path" rule was
+  never true in practice: `claude -p` answers *"I need your permission to read the image"* and
+  then fails schema validation twice, spending two calls to learn it. It now passes
+  `--allowedTools Read` when, and only when, a request carries images — the narrowest tool that
+  does the job, and never a standing capability on text calls.
 - **The board no longer loses your work on refresh.** Karl: *"I start the project and create some
   cuts — but then it resets the cut board as soon as I refresh the page."* The working edit lived
   in browser memory and only the Save EDL button wrote it, so a reload discarded everything

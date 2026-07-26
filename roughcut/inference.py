@@ -157,6 +157,13 @@ class ClaudeCliBackend:
                        "matching this shape:\n" + json.dumps(request.schema, indent=1))
 
         cmd = ["claude", "-p", prompt, "--output-format", "json", "--model", model]
+        if request.images:
+            # Passing an image by path only works if the CLI is allowed to open it.
+            # Without this it answers "I need your permission to read the image" —
+            # which then fails schema validation twice and costs two calls to learn.
+            # Read is the narrowest tool that does the job; nothing here should be
+            # able to edit or run anything.
+            cmd += ["--allowedTools", "Read"]
         if request.system:
             cmd += ["--append-system-prompt", request.system]
 

@@ -231,6 +231,24 @@ def test_cli_passes_images_by_path_never_base64(monkeypatch, tmp_path):
     joined = " ".join(captured["cmd"])
     assert str(img.resolve()) in joined
     assert "base64" not in joined.lower()
+    # A path the CLI is not allowed to open is not an image. Without this it answers
+    # "I need your permission to read the image" and burns the call finding out.
+    assert "--allowedTools" in captured["cmd"]
+    assert captured["cmd"][captured["cmd"].index("--allowedTools") + 1] == "Read"
+
+
+def test_text_only_calls_grant_no_tools(monkeypatch):
+    """Read is granted to open a contact sheet, never as a standing capability."""
+    captured: dict = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return type("P", (), {"returncode": 0, "stdout": json.dumps(
+            {"result": "ok", "usage": {"output_tokens": 1}}), "stderr": ""})()
+
+    monkeypatch.setattr(inference.subprocess, "run", fake_run)
+    inference.ClaudeCliBackend().complete(inference.Request(prompt="no images here"))
+    assert "--allowedTools" not in captured["cmd"]
 
 
 # ------------------------------------------------------------------ prompt
