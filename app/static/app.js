@@ -278,6 +278,19 @@ async function refreshStatus() {
     <div class="path">${escapeHtml(S.footage)}</div>
     <div class="path">${escapeHtml(S.edl)}${S.edl_created ? ' (new)' : ''}</div>`;
   paintBackend(S.backend);
+  // Previews build in the background for tens of minutes on a long bin. Silence there
+  // reads as "nothing is happening", which is the confusion this panel exists to end.
+  const px = S.proxies || { ready: true, done: 0, total: 0 };
+  if (!px.ready && px.total) {
+    $('#proxyState').style.display = 'block';
+    $('#proxyState').innerHTML =
+      `<div class="kv"><span>building previews</span><b>${px.done}/${px.total}</b></div>
+       <div class="bar"><i style="width:${Math.round(100 * px.done / px.total)}%"></i></div>
+       <div class="hint" style="margin-top:4px">You can ask for a cut now — this only
+       affects the previews on each shot.</div>`;
+  } else {
+    $('#proxyState').style.display = 'none';
+  }
   const btn = $('#analyze');
   btn.textContent = S.pending.length
     ? `Analyse ${S.pending.length} clip${S.pending.length > 1 ? 's' : ''}`
@@ -485,12 +498,18 @@ function rejectProposal() {
 /* Renders as versions rather than "the newest file". Judging an edit is comparative —
  * reacting to a choice is faster and more informative than judging one artifact — so
  * two slots, and every past render stays reachable. */
+/* Renders made before the metadata sidecar existed have no duration or shot count;
+ * "0:00.0 · ? shots" reads as a broken file rather than an old one. */
+function versionLabel(v) {
+  return v.duration_s ? `${fmt(v.duration_s)} · ${v.segments} shots`
+    : `${v.name.replace(/^cut_|\.mp4$/g, '')} · older render`;
+}
+
 function loadVersion(v, slot) {
   const el = $(`#preview${slot}`);
   el.src = v.url;
   el.load();
-  $(`#label${slot}`).textContent =
-    `${fmt(v.duration_s || 0)} · ${v.segments ?? '?'} shots`;
+  $(`#label${slot}`).textContent = versionLabel(v);
 }
 
 async function refreshVersions() {
@@ -503,8 +522,8 @@ async function refreshVersions() {
       { hour: '2-digit', minute: '2-digit' });
     const row = document.createElement('div');
     row.className = 'ver';
-    row.innerHTML = `<span class="t">${fmt(v.duration_s || 0)}
-      <span class="hint">· ${v.segments ?? '?'} shots · ${when}</span></span>`;
+    row.innerHTML = `<span class="t">${escapeHtml(versionLabel(v))}
+      <span class="hint">· ${when}</span></span>`;
     ['A', 'B'].forEach((slot) => {
       const b = document.createElement('button');
       b.textContent = slot;
@@ -569,6 +588,7 @@ function scrollSel() {
 function waitForProxies() {
   const iv = setInterval(async () => {
     const p = await (await fetch('/api/project')).json();
+    await refreshStatus();          // keeps the count in the panel moving, not just a toast
     if (!p.proxies_ready) return;
     clearInterval(iv);
     P.proxies_ready = true;

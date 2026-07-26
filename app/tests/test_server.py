@@ -231,6 +231,9 @@ def test_a_version_survives_a_restart(client, project):
         assert time.time() < deadline, "render timed out"
         time.sleep(0.5)
 
+    # The metadata must already be on disk the moment the job says done: the UI
+    # refreshes its versions list on that signal, and a render announcing itself
+    # before its own metadata exists gets listed as an unlabelled older file.
     server.RENDERS.clear()
     listed = client.get("/api/renders").json()["renders"]
     assert any(r["name"] == f"cut_{job}.mp4" and r["duration_s"] for r in listed)
@@ -410,6 +413,35 @@ def test_status_lists_what_still_needs_analysing(tmp_path, project):
         s = c.get("/api/status").json()
         assert s["analysed"] == 1
         assert s["pending"] == ["CLIP_B.MP4", "CLIP_C.MP4"]
+
+
+def test_renders_are_per_bin_too(tmp_path, project):
+    """A fresh project that opens claiming "1 version" and plays another trip's cut in
+    the A slot is worse than showing nothing — which is what Killington did on its
+    first launch, holding Copper's renders."""
+    import server
+
+    with _fresh(tmp_path, project) as c:
+        first = server.STATE["renders"]
+        assert c.get("/api/renders").json()["renders"] == []
+    other = tmp_path / "another-bin"
+    other.mkdir()
+    with _fresh(tmp_path, {"footage": other}):
+        assert server.STATE["renders"] != first
+
+
+def test_status_reports_preview_building_progress(tmp_path, project):
+    """Encoding runs for tens of minutes in the background on a real bin, and silence
+    there reads as "nothing is happening"."""
+    import server
+
+    with _fresh(tmp_path, project) as c:
+        # nothing built yet, and nothing counted yet
+        assert c.get("/api/status").json()["proxies"]["total"] == 0
+        server.ensure_proxies([f"{s}.MP4" for s in project["stems"]])
+        px = c.get("/api/status").json()["proxies"]
+        assert px["ready"] is True
+        assert px["done"] == px["total"] == 3
 
 
 def test_proxy_dirs_do_not_collide_between_bins(tmp_path, project):

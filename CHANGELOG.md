@@ -10,6 +10,18 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **Renders are per-bin, and preview building is visible.** Both found by Karl opening the app on
+  Killington: it announced *"✓ render 1 version"* and played a **Copper** cut in the A slot,
+  because proxies were per-bin but the renders directory was not. And nothing anywhere said the
+  remaining previews were still encoding — *"need more indication of what is actually going on in
+  the tool UI itself"* — so a half-hour background job looked like an idle app. `/api/status` now
+  reports `proxies: {done, total, ready}`, the Project panel shows a live count with a bar and
+  says the Ask does not wait on it, and renders made before the metadata sidecar existed are
+  labelled "older render" rather than `0:00.0 · ? shots`.
+- **A render announced itself before writing its own metadata.** The UI refreshes the versions
+  list the moment a job reports done, so the new render could be listed unlabelled. Metadata is
+  written first now — the same ordering lesson as the previews stage, found by a test that only
+  failed under full-suite load.
 - **Analysis progress no longer depends on the tool saying anything.** Caught by watching a real
   12-clip run sit at `0/12` for two and a half minutes and then jump straight to done: the
   counter was refreshed once per line of the child's stdout, and `audio_analyze.py` prints

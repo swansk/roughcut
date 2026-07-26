@@ -109,13 +109,26 @@ def build_proxy(src: Path, dest: Path, orient: str) -> None:
 
 
 def ensure_proxies(clips: list[str], progress=None) -> None:
+    """Build the missing 720p proxies, reporting how far along it is.
+
+    Encoding a long bin takes tens of minutes — Killington's 44 minutes of 5.3K is
+    about half an hour — and it happens in a background thread while the board is
+    already usable. Karl, looking at exactly that: *"Need more indication of what is
+    actually going on in the tool UI itself."* So the count lives in STATE where
+    /api/status can read it, not only in a callback the analysis job passes in.
+    """
     pdir: Path = STATE["proxy_dir"]
     pdir.mkdir(parents=True, exist_ok=True)
     todo = [c for c in clips if not (pdir / f"{Path(c).stem}.mp4").exists()]
     if todo:
         print(f"building {len(todo)} proxies (once per clip)...", flush=True)
-    if progress:
-        progress(0, len(todo))
+
+    def report(done: int) -> None:
+        STATE["proxy_done"], STATE["proxy_total"] = done, len(todo)
+        if progress:
+            progress(done, len(todo))
+
+    report(0)
     for i, clip in enumerate(todo, 1):
         src = STATE["footage"] / clip
         if not src.exists():
@@ -123,8 +136,7 @@ def ensure_proxies(clips: list[str], progress=None) -> None:
             continue
         build_proxy(src, pdir / f"{Path(clip).stem}.mp4", STATE["orient"])
         print(f"  [{i}/{len(todo)}] {clip}", flush=True)
-        if progress:
-            progress(i, len(todo))
+        report(i)
     STATE["proxies_ready"] = True
     print("proxies ready", flush=True)
 
@@ -270,6 +282,9 @@ def api_status() -> JSONResponse:
         "pending": pending,
         "segments": len(read_edl().get("segments", [])),
         "proxies_ready": STATE.get("proxies_ready", False),
+        "proxies": {"done": STATE.get("proxy_done", 0),
+                    "total": STATE.get("proxy_total", 0),
+                    "ready": STATE.get("proxies_ready", False)},
         "tools": {t: shutil.which(t) is not None
                   for t in ("ffmpeg", "ffprobe", "uv")},
         "backend": backend_preflight(),
@@ -582,18 +597,22 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
            "-o", str(out_path)]
     r = subprocess.run(cmd, capture_output=True, text=True)
     ok = r.returncode == 0
+    if ok:
+        # Written next to the file rather than kept in memory: renders outlive the
+        # process, and a versions list that empties on restart is not a versions list.
+        #
+        # And written *before* the job reports done, because the UI refreshes the
+        # versions list the moment it sees "done" — a render that announces itself
+        # before its own metadata exists gets listed as an unlabelled older file.
+        meta["duration_s"] = probe_duration(out_path)
+        out_path.with_suffix(".json").write_text(json.dumps(meta, indent=1),
+                                                 encoding="utf-8")
     RENDERS[job] = {
         "state": "done" if ok else "failed",
         "log": (r.stdout or "") + (r.stderr or ""),
         "output": str(out_path) if ok else None,
         "url": f"/media/render/{out_path.name}" if ok else None,
     }
-    if ok:
-        # Written next to the file rather than kept in memory: renders outlive the
-        # process, and a versions list that empties on restart is not a versions list.
-        meta["duration_s"] = probe_duration(out_path)
-        out_path.with_suffix(".json").write_text(json.dumps(meta, indent=1),
-                                                 encoding="utf-8")
 
 
 @app.post("/api/render")
@@ -728,7 +747,10 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
         # a single configured project: two bins can hold the same GoPro stem, and a
         # shared proxy dir would serve one bin's frames for the other's clip.
         "proxy_dir": work / "proxies" / footage.name,
-        "renders": work / "renders",
+        # Per-bin for the same reason as proxies, and because a fresh project that
+        # opens claiming "1 version" and plays another trip's cut in the A slot is
+        # worse than showing nothing.
+        "renders": work / "renders" / footage.name,
         "proxies_ready": False, "edl_created": created,
     })
     STATE["sidecars"].mkdir(parents=True, exist_ok=True)
