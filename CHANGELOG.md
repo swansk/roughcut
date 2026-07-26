@@ -10,6 +10,16 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **Ask is a job, not a two-minute request.** Karl, stuck on `building a first cut — about a
+  minute…` while the model had in fact answered: `/api/ask` was an `async def` running the call
+  synchronously, so a 112-second Killington ask **froze the entire server** — status, media,
+  previews, everything — and the plan existed only in that one HTTP response, so anything that
+  disturbed it spent the call for nothing. (His was recovered from the CLI's own session
+  transcript: 16 segments, 2:56, two runners found cold.) Now: `POST /api/ask` returns a job id,
+  the call runs in a thread, `GET /api/ask/{job}` reports state and **elapsed seconds** so the UI
+  counts up instead of showing a frozen string, and the plan is written to disk *before* the job
+  says done. `GET /api/asks/latest` offers the most recent proposal on load, so a reload or a
+  closed tab costs a click rather than another call.
 - **Renders are per-bin, and preview building is visible.** Both found by Karl opening the app on
   Killington: it announced *"✓ render 1 version"* and played a **Copper** cut in the A slot,
   because proxies were per-bin but the renders directory was not. And nothing anywhere said the

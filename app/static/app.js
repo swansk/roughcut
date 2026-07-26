@@ -443,6 +443,45 @@ function showProposal(plan) {
   $('#proposal').style.display = 'block';
 }
 
+/* An elapsed count, not a frozen string. "building a first cut — about a minute…"
+ * sitting there unchanged is indistinguishable from a hung app, which is exactly how
+ * it read on the first Killington ask. */
+function pollAsk(job, verb, stateEl) {
+  return new Promise((resolve, reject) => {
+    const iv = setInterval(async () => {
+      let s;
+      try {
+        s = await (await fetch(`/api/ask/${job}`)).json();
+      } catch (e) { return; }                 // a blip is not a failure; keep waiting
+      if (s.state === 'running') {
+        const m = Math.floor(s.elapsed_s / 60);
+        const sec = String(Math.floor(s.elapsed_s % 60)).padStart(2, '0');
+        stateEl.textContent = `${verb}… ${m}:${sec}`;
+        return;
+      }
+      clearInterval(iv);
+      if (s.state === 'done') resolve(s.plan);
+      else reject(new Error(s.detail || 'the model call failed'));
+    }, 1000);
+  });
+}
+
+/* The plan is on disk before it is announced, so a reload or a closed tab costs a
+ * click rather than another two-minute call. */
+async function offerLastProposal() {
+  const { record } = await (await fetch('/api/asks/latest')).json();
+  if (!record) return;
+  const mins = Math.round((Date.now() / 1000 - record.created) / 60);
+  const el = $('#lastAsk');
+  el.style.display = 'block';
+  el.innerHTML = `last proposal — ${record.plan.segments.length} shots,
+    ${mins < 1 ? 'just now' : `${mins} min ago`} · <a href="#" id="showLast">show it</a>`;
+  $('#showLast').onclick = (e) => {
+    e.preventDefault();
+    showProposal(record.plan);
+  };
+}
+
 async function ask(opts = {}) {
   const button = opts.button || $('#ask');
   const stateEl = opts.state || $('#askState');
@@ -453,7 +492,8 @@ async function ask(opts = {}) {
   // this app, so a first-cut note becomes the story rather than being thrown away.
   if (first && note && !$('#story').value.trim()) $('#story').value = note;
   button.disabled = true;
-  stateEl.textContent = first ? 'building a first cut — about a minute…' : 'thinking…';
+  const verb = first ? 'building a first cut' : 'thinking';
+  stateEl.textContent = `${verb}…`;
   try {
     const r = await fetch('/api/ask', {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -463,7 +503,11 @@ async function ask(opts = {}) {
       const detail = await r.json().catch(() => ({}));
       throw new Error(detail.detail || `HTTP ${r.status}`);
     }
-    const plan = await r.json();
+    // A job, not a two-minute request. The call used to run inside the request, which
+    // froze the whole server for its duration and left the plan existing only in that
+    // one response — a dropped connection spent the call for nothing.
+    const { job } = await r.json();
+    const plan = await pollAsk(job, verb, stateEl);
     showProposal(plan);
     const u = plan.usage || {};
     const cost = u.model
@@ -612,6 +656,7 @@ async function boot() {
   document.title = `Cut board — ${P.title}`;
   render();
   await refreshVersions();
+  await offerLastProposal();
   if (!P.proxies_ready) {
     toast('building proxies in the background — previews appear as they finish', 6000);
     waitForProxies();

@@ -245,6 +245,27 @@ def test_render_status_404_for_unknown_job(client):
 
 # ------------------------------------------------------------------ ask
 
+def _ask_status(client, job, timeout=20.0) -> dict:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        s = client.get(f"/api/ask/{job}").json()
+        if s["state"] != "running":
+            return s
+        time.sleep(0.05)
+    raise AssertionError(f"ask never finished: {s}")
+
+
+def _ask(client, body) -> dict:
+    """Start an ask and wait for its plan. Asks are jobs, like renders and analyses:
+    a two-minute model call inside the request froze the whole server for its
+    duration and left the plan existing only in that one response."""
+    r = client.post("/api/ask", json=body)
+    assert r.status_code == 200, r.text
+    s = _ask_status(client, r.json()["job"])
+    assert s["state"] == "done", s
+    return s["plan"]
+
+
 def test_ask_returns_a_proposal_without_writing(client, project):
     """The interject loop: a note in, a revised timeline out, disk untouched."""
     import server
@@ -270,12 +291,10 @@ def test_ask_returns_a_proposal_without_writing(client, project):
     inference.set_backend(Scripted())
     inference.reset_spend()
     try:
-        r = client.post("/api/ask", json={
+        plan = _ask(client, {
             "note": "use the clip that isn't in the cut",
             "segments": [{"clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0}],
             "story": "a test film"})
-        assert r.status_code == 200, r.text
-        plan = r.json()
         assert plan["segments"] == [{"clip": "CLIP_C.MP4", "in": 0.5, "out": 4.0,
                                      "why": "per the note"}]
         assert plan["notes"] == "swapped in the unused clip"
@@ -318,10 +337,8 @@ def test_ask_originates_when_there_is_nothing_to_revise(client, project):
     inference.set_backend(Scripted())
     inference.reset_spend()
     try:
-        r = client.post("/api/ask", json={"note": "", "segments": [],
-                                          "story": "two people talking"})
-        assert r.status_code == 200, r.text
-        plan = r.json()
+        plan = _ask(client, {"note": "", "segments": [],
+                             "story": "two people talking"})
         assert len(plan["segments"]) == 2
         assert plan["notes"] == "read it as a conversation"
         prompt = Scripted.seen[0].prompt
@@ -334,6 +351,72 @@ def test_ask_originates_when_there_is_nothing_to_revise(client, project):
     assert json.loads(project["edl"].read_text(encoding="utf-8"))["segments"] != []
 
 
+def test_the_server_stays_responsive_during_an_ask(client):
+    """The defect Karl hit: /api/ask ran the model call inside the request handler, so
+    a 112-second Killington ask froze the whole server — status, media, previews, all
+    of it — and the UI looked hung because it was."""
+    from roughcut import config, inference
+
+    class Slow:
+        name = "slow"
+
+        def complete(self, request):
+            time.sleep(1.5)
+            text = json.dumps({"segments": [{"clip": "CLIP_A.MP4", "in": 0.0,
+                                             "out": 2.0, "why": "x"}]})
+            model = config.model_for(request.role)
+            return inference.Result(content=text, input_tokens=10, output_tokens=5,
+                                    backend="slow", model=model, projected_usd=1e-4,
+                                    latency_ms=1500, raw=text)
+
+    inference.set_backend(Slow())
+    inference.reset_spend()
+    try:
+        job = client.post("/api/ask", json={"note": "tighten it"}).json()["job"]
+        t0 = time.time()
+        assert client.get("/api/status").status_code == 200
+        assert time.time() - t0 < 1.0, "status waited on the model call"
+        assert client.get(f"/api/ask/{job}").json()["state"] == "running"
+        assert _ask_status(client, job)["state"] == "done"
+    finally:
+        inference.set_backend(None)
+
+
+def test_a_plan_survives_the_browser_that_asked_for_it(client, project):
+    """A two-minute call whose only copy is an HTTP response is one dropped connection
+    away from being spent for nothing — which is what happened on the first Killington
+    ask. The plan is on disk before the job says done."""
+    from roughcut import config, inference
+
+    class Scripted:
+        name = "scripted"
+
+        def complete(self, request):
+            text = json.dumps({
+                "segments": [{"clip": "CLIP_B.MP4", "in": 1.0, "out": 3.0,
+                              "why": "recoverable"}],
+                "notes": "kept on disk"})
+            model = config.model_for(request.role)
+            return inference.Result(content=text, input_tokens=10, output_tokens=5,
+                                    backend="scripted", model=model,
+                                    projected_usd=1e-4, latency_ms=1, raw=text)
+
+    inference.set_backend(Scripted())
+    inference.reset_spend()
+    try:
+        _ask(client, {"note": "build it around the milk", "segments": [],
+                      "story": "a test film"})
+    finally:
+        inference.set_backend(None)
+
+    import server
+    server.ASKS.clear()                      # the browser, and the memory of it, gone
+    record = client.get("/api/asks/latest").json()["record"]
+    assert record["plan"]["segments"][0]["why"] == "recoverable"
+    assert record["note"] == "build it around the milk"
+    assert record["created"] > 0
+
+
 def test_first_cut_without_any_analysis_says_so(tmp_path, project):
     """Distinct from a backend failure: there is nothing to cut from yet."""
     with _fresh(tmp_path, project, sidecars=tmp_path / "none") as c:
@@ -342,7 +425,7 @@ def test_first_cut_without_any_analysis_says_so(tmp_path, project):
         assert "audio pass" in r.json()["detail"]
 
 
-def test_ask_surfaces_backend_failure_as_502(client):
+def test_ask_surfaces_backend_failure_on_the_job(client):
     from roughcut import inference
 
     class Broken:
@@ -354,9 +437,10 @@ def test_ask_surfaces_backend_failure_as_502(client):
     inference.set_backend(Broken())
     inference.reset_spend()
     try:
-        r = client.post("/api/ask", json={"note": "tighten it"})
-        assert r.status_code == 502
-        assert "Not logged in" in r.json()["detail"]
+        job = client.post("/api/ask", json={"note": "tighten it"}).json()["job"]
+        s = _ask_status(client, job)
+        assert s["state"] == "failed" and s["code"] == 502
+        assert "Not logged in" in s["detail"]
     finally:
         inference.set_backend(None)
 

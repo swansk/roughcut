@@ -74,6 +74,7 @@ app = FastAPI()
 STATE: dict = {}
 RENDERS: dict[str, dict] = {}
 ANALYSES: dict[str, dict] = {}
+ASKS: dict[str, dict] = {}
 
 
 # ---------------------------------------------------------------- proxies
@@ -336,6 +337,34 @@ async def api_snap(request: Request) -> JSONResponse:
                          "log": r.stdout})
 
 
+def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
+             target: tuple[float, float]) -> None:
+    entry = ASKS[job]
+    try:
+        if segments:
+            plan = revise.propose(segments=segments, clips=clips, story=story,
+                                  note=note, target=target)
+        else:
+            plan = revise.originate(clips=clips, story=story, note=note,
+                                    target=target)
+    except inference.BudgetExceeded as exc:
+        entry.update(state="failed", detail=str(exc), code=429)
+        return
+    except (inference.InferenceError, ValueError) as exc:
+        entry.update(state="failed", detail=str(exc), code=502)
+        return
+    # On disk before it is announced. A two-minute call whose only copy is an HTTP
+    # response is one dropped connection away from being spent for nothing — which is
+    # exactly what happened on the first Killington ask: the model answered, the
+    # browser never showed it, and the plan was only recoverable from the CLI's own
+    # session transcript.
+    record = {"job": job, "created": time.time(), "note": note, "story": story,
+              "plan": plan}
+    path = STATE["asks"] / f"{job}.json"
+    path.write_text(json.dumps(record, indent=1), encoding="utf-8")
+    entry.update(state="done", plan=plan)
+
+
 @app.post("/api/ask")
 async def api_ask(request: Request) -> JSONResponse:
     """Plain-language note in, timeline out — as a proposal, never a write.
@@ -368,20 +397,39 @@ async def api_ask(request: Request) -> JSONResponse:
         # Distinct from a model failure: nothing has been analysed, so there is
         # nothing to cut from. The UI can act on that; a 502 would just look broken.
         raise HTTPException(400, "no analysed clips yet — run the audio pass first")
-    try:
-        if segments:
-            plan = revise.propose(
-                segments=segments, clips=clips, story=story, note=note,
-                target=(float(target[0]), float(target[1])))
-        else:
-            plan = revise.originate(
-                clips=clips, story=story, note=note,
-                target=(float(target[0]), float(target[1])))
-    except inference.BudgetExceeded as exc:
-        raise HTTPException(429, str(exc)) from exc
-    except (inference.InferenceError, ValueError) as exc:
-        raise HTTPException(502, str(exc)) from exc
-    return JSONResponse(plan)
+
+    job = uuid.uuid4().hex[:8]
+    ASKS[job] = {"state": "running", "started": time.time(), "plan": None,
+                 "detail": "", "code": 0,
+                 "kind": "revision" if segments else "first cut"}
+    threading.Thread(
+        target=_ask_job,
+        args=(job, segments, clips, story, note,
+              (float(target[0]), float(target[1]))), daemon=True).start()
+    return JSONResponse({"job": job})
+
+
+@app.get("/api/ask/{job}")
+def api_ask_status(job: str) -> JSONResponse:
+    if job not in ASKS:
+        raise HTTPException(404, "no such job")
+    entry = ASKS[job]
+    return JSONResponse({**entry,
+                         "elapsed_s": round(time.time() - entry["started"], 1)})
+
+
+@app.get("/api/asks/latest")
+def api_ask_latest() -> JSONResponse:
+    """The most recent proposal this project produced, from disk.
+
+    So a reload, a closed tab or a dropped connection costs a click rather than
+    another two-minute call.
+    """
+    files = sorted(STATE["asks"].glob("*.json"),
+                   key=lambda p: p.stat().st_mtime, reverse=True)
+    if not files:
+        return JSONResponse({"record": None})
+    return JSONResponse({"record": json.loads(files[0].read_text(encoding="utf-8"))})
 
 
 # ---------------------------------------------------------------- backend
@@ -757,9 +805,11 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
     if created:
         scaffold_edl(edl_path, footage, orient)
     STATE["orient"] = read_edl().get("orient", "auto")   # needs STATE["edl"] set first
+    STATE["asks"] = work / "asks" / footage.name
     STATE["work"].mkdir(parents=True, exist_ok=True)
     STATE["renders"].mkdir(parents=True, exist_ok=True)
     STATE["proxy_dir"].mkdir(parents=True, exist_ok=True)
+    STATE["asks"].mkdir(parents=True, exist_ok=True)
 
     clips = sorted({p.name.replace(".audio.json", ".MP4")
                     for p in STATE["sidecars"].glob("*.audio.json")})
