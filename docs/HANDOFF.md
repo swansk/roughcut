@@ -3,7 +3,10 @@
 Last updated: 2026-07-25, end of session 3 (the app now owns the whole path — folder of
 footage → analyse → **first cut from nothing** → refine → compare versions).
 **Karl watched the agent-originated cut and preferred it to both hand-selected ones.** The
-ordering defect he named is fixed and re-verified. Jump to "START HERE NEXT SESSION".
+ordering defect he named is fixed and re-verified, and he is running Killington by hand as this
+session closes. Jump to "START HERE NEXT SESSION", then "The roadmap after that".
+
+Repo: [github.com/swansk/roughcut](https://github.com/swansk/roughcut), private, `main`.
 
 ## Where we are
 
@@ -126,8 +129,27 @@ Also done: **startup preflight + backend status in the header** — a missing CL
 absent API key is reported for free at launch, and one tiny call (cheap role, background,
 `--no-probe` to skip) answers "is it authenticated", which nothing free can see.
 
-80 tests, ~34s (65 API + 15 driving real Chromium), still against the synthetic three-clip
+90 tests, ~41s (75 API + 15 driving real Chromium), still against the synthetic three-clip
 project, so they need neither `~/footage` nor a GPU.
+
+### Three defects that only appeared when a human used it
+
+All three were invisible to a green suite, and all three are the same shape — **the tests drive
+stubs that behave better than the real thing**:
+
+- **Progress rode on the child's stdout.** `audio_analyze.py` prints without flushing, so a pipe
+  held everything until exit: a real 12-clip run sat at `0/12` for two and a half minutes and
+  then jumped to done. The count was right, the trigger was wrong, and it is indistinguishable
+  from a hung job. A ticker polls on its own clock now. *(The suite's stub printed per clip,
+  promptly, so it could never have caught this.)*
+- **Renders were not per-bin.** Killington opened announcing *"✓ render 1 version"* and played a
+  **Copper** cut in the A slot. Proxies had been made per-bin; renders had not.
+- **A render announced `done` before writing its metadata**, and the UI refreshes its versions
+  list on exactly that signal — so a fresh cut could appear unlabelled. Same ordering lesson as
+  the previews stage, one place further along.
+
+The pattern is worth more than the three fixes: **run the real thing and watch it.** Each of
+these took one look at real output and none of them would have surfaced from the test suite.
 
 ### What originating produced, live
 
@@ -194,32 +216,61 @@ Everything the run needs is prepared and verified:
   files are filtered by extension already.
 - `--orient auto` is the default and is right here — rotation side data is present and correct
   (unlike Copper, where it is spurious).
-- Sidecars and proxies are pre-built into the default `--work`, so the launch is instant.
-  Verified end to end on one clip first: analyse → previews → done, ASR at ~13× realtime,
-  proxy served 200.
+- **Fully warmed and verified**: 12/12 sidecars, 12/12 proxies in the default `--work`; every
+  proxy decodes and matches its source length. The launch is instant.
+- Run it from a **WSL login shell** — `uv`, `ffmpeg` and `~/footage` all live there, and a
+  non-login shell misses `~/.local/bin`. From Windows:
+  `wsl -d Ubuntu -- bash -lc "cd /mnt/c/Users/karl/Documents/Projects/roughcut && uv run app/server.py --footage ~/footage/killington-neutral"`,
+  then `http://localhost:8765`.
+
+**Karl is running this bin by hand as of the end of session 3.** Whatever he reports is the
+first input of the next session.
 
 The interesting question this answers: **does any of this generalise, or have the prompts been
 fitted to one trip?** Every judgement so far is on Copper.
 
 ## ⇨ START HERE NEXT SESSION
 
-1. **Karl watches `copper-first-cut-v2.mp4`** (2:16, agent-originated with shot order). Two
-   questions only, both from the model's own notes — it names what it cannot see:
-   - Is the ordering fixed? The travel section should now run in the order it happened.
-   - **GX010496** — 12s placed second-to-last, still the shot it cannot verify (*"if it turns
-     out to be lodge or parking-lot footage rather than a run, drop it and end on the high five
-     into the debrief"*). Ending on Spencer drinking the day-old milk is new; it may be better
-     or may be a shaggy-dog ending.
-2. **Karl runs Killington himself, in the app** — see the section above; it is prepared and
-   verified. What to watch for is not cut quality but whether the *loop* holds on a bin nobody
-   has studied: does it find a spine without a human having read anything, and does the brief
-   he types do the steering.
-3. **Junk and orientation proposed, human confirms** — the last ❌ in the table above. Not needed
-   for Killington (no junk in that bin), which is why it slipped behind the generalisation test.
-   Both are per-bin *measurements*, not model calls: `luma<11` for junk (be conservative — a
-   naive `luma<35` false-positives on the night parking lot and the dim plane interior, both
-   real content), orientation per-clip via a contact sheet the human confirms.
-4. Music mode (FUTURE_PHASES P2.6), still unbuilt.
+**Open with Karl's report from his Killington run** (in flight at the end of session 3). It is
+the generalisation test: every judgement in this project so far is on B1/Copper, a bin a human
+had already studied. If the loop holds on a bin nobody has read — it finds a spine, the typed
+brief steers it — that is the first evidence the prompts are not fitted to one trip. If it comes
+back a spineless highlight reel, **do not fix it by hand**; that is the finding.
+
+Also unwatched: `copper-first-cut-v2.mp4` (2:16, originated with shot order). Two questions, both
+from the model's own notes — it names what it cannot see: is the travel section in order now, and
+is **GX010496** (12s, second-to-last) a run or a lift queue? Its own instruction if it is wrong:
+*"drop it and end on the high five into the debrief."*
+
+## The roadmap after that
+
+Ordered by what changes most, not by effort:
+
+1. **The visual pass — the agent still cannot see.** Every cut in this project was chosen from
+   transcripts. Both live originations named a shot they could not verify (*"may be a glove or a
+   lift queue"*), and session 2's caveat was the same defect. This is now the single largest gap
+   between what the tool does and what an editor does, and it is *cheap to prototype*: contact
+   sheets already exist (`contact_sheet.py`), `roughcut.inference` already passes images by path
+   on the CLI backend and base64 on the API, and one call per clip over a sheet would produce the
+   `why`-grade description the prompt currently has to guess. Formally this is **T7** in
+   docs/TASKS.md (blocked on the T0–T6 scaffold), but the prototype version needs none of that.
+   Knock-on effects: junk and orientation both fall out of the same pass, and the rubric
+   self-critique (R6) becomes able to judge pictures rather than words.
+2. **Junk and orientation proposed, human confirms** — the last ❌ in the table above, and all
+   that stands between the app and a bin nobody has studied. Standalone it is a per-bin
+   *measurement*, not a model call: `luma<11` for junk (be conservative — a naive `luma<35`
+   false-positives on the night parking lot and the dim plane interior, both real content),
+   orientation per-clip from a sheet the human confirms. Do it inside (1) if (1) happens first.
+3. **Music mode (P2.6)** — Karl asked for it explicitly: supply a track, cut to it, as a mode
+   rather than a default. It is a genuinely different selection problem ("fill these N slots of
+   these lengths"), which is why it has not been picked up casually.
+4. **Decide the fate of T0–T13.** The pipeline has been on hold for three sessions while
+   throwaway tooling produced cuts Karl endorsed. The honest question is no longer "is the
+   pipeline worth building" but "is *anything* in it worth building that the app does not already
+   do" — and the answer may be a much smaller list than thirteen tasks. Worth an explicit
+   decision rather than indefinite hold.
+
+Smaller, whenever: a project picker (one bin per launch today), and `complete_many` has no caller.
 
 Independent work: ~~audio event tagging~~ — **done, and it is a dead end on B1**; see
 [R9](../research/R9-events-and-wind.md). The remaining audio lever is a **prosodic** rather than
@@ -272,6 +323,11 @@ These were measured, cost real effort, and are easy to accidentally undo:
   built the film around it (session 3). The words are the signal; R8 said so and this is the
   strongest evidence yet. It does not follow that the *pictures* are optional — the same call
   could not tell whether its 18s held shot was a run or a glove.
+- **A green suite says nothing about a tool a human has not used.** Three defects shipped past 85
+  passing tests and appeared within minutes of Karl opening the app: progress that only updated
+  when a child process flushed (it doesn't), renders leaking between bins, and a job announcing
+  itself before writing what the UI reads. Every one was invisible because the tests drive stubs
+  that behave better than the real thing. Run the real thing and watch its output.
 - **The snap metric disagreed with the human, and the human was right.** An originated cut lands
   12 of 20 out-points on an utterance end against 17 of 18 for a revision of an already-snapped
   cut — and Karl preferred the originated one *for its cutting*, praising segments that were
