@@ -126,15 +126,32 @@
   <div class="total"><span id="total">—</span><span class="band" id="band"></span></div>
   <div class="grow"></div>
   <span id="backend" class="pill" title="Backend status — click to re-check">…</span>
-  <button id="snap" title="Extend cuts to whole utterances and their replies">Snap to speech</button>
+  <span class="hint" id="saveState">saved</span>
+  <button id="snap" title="Extend cuts that open mid-sentence or clip a line off, so each shot carries a whole thought">Fix cut points</button>
   <button id="undo" title="Undo (u)">Undo</button>
-  <button id="save">Save EDL</button>
   <button id="render" class="primary">Render</button>
   <div class="steps" id="steps"></div>
 </header>
 
 <main>
-  <section id="timeline"></section>
+  <section>
+    <!-- Both of these belong to the main column, not the sidebar: the recovery offer
+         matters most when the timeline is empty, which is exactly when the sidebar's
+         Ask panel is hidden. -->
+    <div id="lastAsk" class="hint" style="display:none;margin-bottom:10px"></div>
+    <!-- The proposal is the thing you have to read before deciding, so it sits in the
+         main column at full width rather than in a 340px sidebar. -->
+    <div id="proposal" class="panel" style="display:none">
+      <h2>Proposed cut</h2>
+      <div id="proposalNotes" style="margin-bottom:10px"></div>
+      <div id="proposalDiff" style="max-height:340px;overflow:auto"></div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button id="acceptProposal" class="primary">Accept</button>
+        <button id="rejectProposal" class="ghost">Discard</button>
+      </div>
+    </div>
+    <div id="timeline"></div>
+  </section>
   <aside>
     <div class="panel">
       <h2>Project</h2>
@@ -146,22 +163,13 @@
       </div>
       <div class="bar" id="analyzeBar" style="display:none"><i></i></div>
     </div>
-    <div class="panel">
-      <h2 id="askTitle">Ask for a change</h2>
+    <div class="panel" id="askPanel">
+      <h2>Ask for a change</h2>
       <textarea id="note" style="min-height:66px"
         placeholder="tighten the intro · more skiing, less airport · build it around the milk joke · lose the plane bit"></textarea>
       <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
         <button id="ask" class="primary">Ask</button>
         <span class="hint" id="askState"></span>
-      </div>
-      <div id="lastAsk" class="hint" style="display:none;margin-top:8px"></div>
-      <div id="proposal" class="hint" style="display:none;margin-top:10px">
-        <div id="proposalNotes" style="color:var(--text);margin-bottom:8px"></div>
-        <div id="proposalDiff" style="max-height:180px;overflow:auto"></div>
-        <div style="display:flex;gap:8px;margin-top:8px">
-          <button id="acceptProposal" class="primary">Accept</button>
-          <button id="rejectProposal" class="ghost">Discard</button>
-        </div>
       </div>
     </div>
     <div class="panel">
@@ -178,7 +186,7 @@
           <div class="hint"><b>A</b> <span id="labelA">—</span></div>
           <video id="previewA" controls preload="metadata"></video>
         </div>
-        <div>
+        <div id="slotB" style="display:none">
           <div class="hint"><b>B</b> <span id="labelB">—</span></div>
           <video id="previewB" controls preload="metadata"></video>
         </div>

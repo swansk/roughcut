@@ -10,6 +10,21 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **The board no longer loses your work on refresh.** Karl: *"I start the project and create some
+  cuts — but then it resets the cut board as soon as I refresh the page."* The working edit lived
+  in browser memory and only the Save EDL button wrote it, so a reload discarded everything
+  accepted and trimmed — he lost a 16-shot cut that way. Every mutation now autosaves (debounced,
+  immediate on accepting a proposal), the header shows `saved 20:41` rather than a button, and
+  Save EDL is gone because it no longer means anything. The EDL on disk was always meant to be
+  the source of truth; it actually is one now.
+- **The buttons that did not earn their place are gone or renamed.** *Snap to speech* → **Fix 3
+  cut points**, disabled and reading `Cut points OK` when there is nothing to fix. *Analyse audio*
+  hides itself when everything is analysed instead of sitting there greyed out. The header empties
+  on a project with no cut, since nothing in it applies. The B comparison slot appears when
+  there is a second version rather than showing a black rectangle. *Add a moment* leads with what
+  is said instead of a ranking score. The proposal moved out of the 340px sidebar into the main
+  column at full width, listing every shot with the reason it was chosen — and, on an empty
+  timeline, the sidebar Ask panel hides so there are not two boxes asking for the same sentence.
 - **Every long operation now says where it is.** Karl, clicking Render: *"got like no response —
   and just see rendering…"*. `assemble.py` gained `--parts-dir` so the per-shot files it already
   writes land somewhere the server can count, and the render job reports `cutting 7/16` then

@@ -65,7 +65,18 @@ def live_server(project):
 
 
 @pytest.fixture
-def page(live_server):
+def page(live_server, project):
+    # The board autosaves now — an edit reaches the EDL without anyone pressing a
+    # button — so each test has to start from the seeded file rather than from
+    # whatever the previous test left behind.
+    seed = json.dumps({
+        "variant": "T", "title": "test cut", "orient": "none", "story": "",
+        "target_s": [5, 20],
+        "segments": [{"clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0, "why": "first"},
+                     {"clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0, "why": "second"}],
+    }, indent=1)
+    Path(project["edl"]).write_text(seed, encoding="utf-8")
+
     with sync_playwright() as pw:
         browser = pw.chromium.launch()
         pg = browser.new_page(viewport={"width": 1280, "height": 900})
@@ -160,16 +171,35 @@ def test_library_insert_adds_a_shot(page):
     assert page.locator(".seg").count() == before + 1
 
 
-def test_save_writes_story_and_segments_to_the_edl(page, project):
+def test_edits_reach_the_disk_without_being_asked(page, project):
+    """Karl: "I start the project and create some cuts - but then it resets the cut
+    board as soon as I refresh the page." The working edit lived in the browser and
+    only a Save button wrote it, so a refresh threw the work away."""
     page.locator("#story").fill("the milk is the running joke")
     page.locator(".seg").first.click()
-    page.keyboard.press("}")
-    page.locator("#save").click()
+    page.keyboard.press("}")                       # extend the out point
     page.wait_for_function(
-        "document.querySelector('#toast').textContent.includes('saved')", timeout=8000)
+        "document.querySelector('#saveState').textContent.startsWith('saved')",
+        timeout=8000)
+
     on_disk = json.loads(Path(project["edl"]).read_text(encoding="utf-8"))
     assert on_disk["story"] == "the milk is the running joke"
-    assert len(on_disk["segments"]) == 2
+    assert on_disk["segments"][0]["out"] == 3.25
+
+
+def test_the_cut_survives_a_reload(page):
+    """The whole point: what is on screen after F5 is what you left."""
+    page.locator(".seg").first.locator("button", has_text="remove").click()
+    page.wait_for_function(
+        "document.querySelector('#saveState').textContent.startsWith('saved')",
+        timeout=8000)
+    shape = "JSON.stringify(segs.map(s => [s.clip, s.in, s.out]))"
+    before = page.evaluate(shape)
+
+    page.reload()
+    page.wait_for_selector(".seg")
+    assert page.locator(".seg").count() == 1
+    assert page.evaluate(shape) == before
 
 
 def test_ask_shows_a_proposal_that_can_be_accepted_or_discarded(page):
@@ -254,8 +284,9 @@ def test_an_empty_timeline_offers_a_first_cut_and_gets_one(page):
         assert page.locator(".seg").count() == 0
         assert "No cut yet" in page.locator(".empty").inner_text()
         assert page.locator(".step.now").inner_text().endswith("ask for one")
-        # inner_text would come back upper-cased by the panel's text-transform
-        assert page.text_content("#askTitle") == "Ask for a cut"
+        # the sidebar Ask panel hides itself here — the empty state already has a box
+        # for the same sentence, and two inputs for one thing is a UI defect
+        assert not page.locator("#askPanel").is_visible()
 
         page.fill("#story", "")        # an earlier test may have left one behind
         page.locator("#firstNote").fill("a loose film about two people talking")

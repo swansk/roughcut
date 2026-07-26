@@ -38,15 +38,31 @@ function toast(msg, ms = 2200) {
   el._t = setTimeout(() => el.classList.remove('show'), ms);
 }
 
+/* Every mutation goes through here, which makes it the honest place to hang autosave.
+ *
+ * The board used to keep the working edit in memory and write it only when you
+ * pressed Save EDL — so a refresh silently threw away everything you had accepted and
+ * trimmed. Karl lost a 16-shot cut that way. The EDL on disk is supposed to be the
+ * source of truth; it is now actually kept that way. */
 function pushUndo() {
   undoStack.push(JSON.stringify(segs));
   if (undoStack.length > 100) undoStack.shift();
+  touch();
+}
+
+let saveTimer = null;
+
+function touch() {
+  $('#saveState').textContent = 'unsaved…';
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(save, 700);
 }
 
 function undo() {
   if (!undoStack.length) return toast('nothing to undo');
   segs = JSON.parse(undoStack.pop());
   render();
+  touch();                      // undoing is an edit too, and must reach the disk
   toast('undone');
 }
 
@@ -122,7 +138,9 @@ function segCard(seg, i) {
   });
 
   el.querySelector('.why').addEventListener('blur', (ev) => {
+    if (segs[i].why === ev.target.textContent.trim()) return;
     segs[i].why = ev.target.textContent.trim();
+    touch();
   });
 
   el.addEventListener('dragstart', (e) => {
@@ -210,7 +228,23 @@ function render() {
   if (!segs.length) tl.appendChild(emptyState());
   segs.forEach((s, i) => tl.appendChild(segCard(s, i)));
 
-  $('#askTitle').textContent = segs.length ? 'Ask for a change' : 'Ask for a cut';
+  // With an empty timeline the empty state already has its own "what is this film
+  // about" box, so the sidebar panel is a second input for the same thing.
+  $('#askPanel').style.display = segs.length ? 'block' : 'none';
+
+  // Nothing in the header acts on an empty timeline, so nothing in the header shows.
+  ['#snap', '#undo', '#render', '#saveState'].forEach((sel) => {
+    $(sel).style.display = segs.length ? '' : 'none';
+  });
+
+  // "Fix cut points" only means something when there are cut points to fix, and the
+  // count is the reason to press it.
+  const warnings = segs.filter((s) => boundaryWarning(s)).length;
+  const snap = $('#snap');
+  snap.disabled = !warnings;
+  snap.textContent = warnings ? `Fix ${warnings} cut point${warnings > 1 ? 's' : ''}`
+    : 'Cut points OK';
+
   const t = total();
   const [lo, hi] = P.target;
   const cls = t < lo ? 'under' : t > hi ? 'over' : 'ok';
@@ -233,10 +267,11 @@ function renderLibrary() {
   const lib = $('#library');
   lib.innerHTML = '';
   rows.slice(0, 40).forEach((r) => {
+    // The line people read is what is said, not the ranking score that put it here.
     const d = document.createElement('div');
     d.className = 'cand';
-    d.innerHTML = `<span class="t">${r.clip.replace('.MP4', '')} ${r.t.toFixed(1)}s ·
-      ${r.score.toFixed(2)}</span><span class="w">${escapeHtml(r.why)}</span>`;
+    d.innerHTML = `<span class="w">${escapeHtml(r.why)}</span>
+      <span class="t">${r.clip.replace('.MP4', '')} · ${fmt(r.t)}</span>`;
     d.onclick = () => {
       pushUndo();
       const at = sel + 1;
@@ -296,11 +331,14 @@ async function refreshStatus() {
   } else {
     $('#proxyState').style.display = 'none';
   }
+  // A permanently greyed-out button is furniture. It appears when there is something
+  // to analyse and otherwise stays out of the way.
   const btn = $('#analyze');
+  btn.style.display = S.pending.length || analysing ? 'inline-block' : 'none';
   btn.textContent = S.pending.length
     ? `Analyse ${S.pending.length} clip${S.pending.length > 1 ? 's' : ''}`
-    : 'Analyse audio';
-  btn.disabled = !S.pending.length || analysing;
+    : 'Analysing…';
+  btn.disabled = analysing;
   btn.classList.toggle('primary', S.pending.length > 0 && !segs.length);
   return S;
 }
@@ -396,11 +434,18 @@ async function analyze() {
 }
 
 async function save() {
+  clearTimeout(saveTimer);
   const r = await fetch('/api/project', {
     method: 'PUT', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ segments: segs, story: $('#story').value }),
   });
-  toast(r.ok ? 'saved to EDL' : 'save failed');
+  if (!r.ok) {
+    $('#saveState').textContent = 'save failed';
+    return toast('save failed — the edit is still on screen, do not reload', 8000);
+  }
+  const t = new Date();
+  $('#saveState').textContent =
+    `saved ${t.getHours()}:${String(t.getMinutes()).padStart(2, '0')}`;
 }
 
 async function snap() {
@@ -442,10 +487,19 @@ function showProposal(plan) {
   const oldTotal = total();
   const newTotal = plan.segments.reduce((a, s) => a + (s.out - s.in), 0);
   $('#proposalNotes').textContent = plan.notes || '(no note returned)';
+  // Each shot with the reason it was chosen: the `why` is what you check the
+  // reasoning against, and it is the only account of what the agent thinks it saw.
+  const detail = plan.segments.map((s, i) => `<div style="padding:4px 0">
+    <span class="hint">${String(i + 1).padStart(2, '0')} ${escapeHtml(
+      s.clip.replace('.MP4', ''))} ${fmt(s.in)}–${fmt(s.out)}
+    (${(s.out - s.in).toFixed(1)}s)</span><br>${escapeHtml(s.why || '')}</div>`).join('');
   $('#proposalDiff').innerHTML =
     `<div class="hint" style="margin-bottom:6px">${segs.length} shots ${fmt(oldTotal)}
-     → ${plan.segments.length} shots ${fmt(newTotal)}</div>` + rows.join('');
+     → ${plan.segments.length} shots ${fmt(newTotal)}</div>`
+    + rows.join('') + '<hr style="border:0;border-top:1px solid var(--line);margin:10px 0">'
+    + detail;
   $('#proposal').style.display = 'block';
+  $('#proposal').scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
 
 /* An elapsed count, not a frozen string. "building a first cut — about a minute…"
@@ -532,7 +586,9 @@ function acceptProposal() {
   segs = pendingPlan.segments.map((s) => ({ ...s }));
   pendingPlan = null;
   $('#proposal').style.display = 'none';
+  $('#lastAsk').style.display = 'none';
   render();
+  save();                       // straight to disk; a 16-shot cut is not "in progress"
   toast('applied — undo with u');
 }
 
@@ -581,6 +637,9 @@ async function refreshVersions() {
     if (i === 0) loadVersion(v, 'A');       // newest is what you just made
     if (i === 1) loadVersion(v, 'B');       // and the one before it, to compare
   });
+  // An empty black player labelled "B —" is not a feature; the B slot appears when
+  // there is a second version to compare against.
+  $('#slotB').style.display = renders.length > 1 ? 'block' : 'none';
   paintSteps();
 }
 
@@ -680,7 +739,7 @@ async function boot() {
   // the startup probe may still be in flight; follow it rather than showing "unchecked"
   if (S.backend.state === 'checking') followProbe();
   $('#analyze').onclick = analyze;
-  $('#save').onclick = save;
+  $('#story').oninput = touch;
   $('#snap').onclick = snap;
   $('#undo').onclick = undo;
   $('#render').onclick = doRender;
