@@ -121,6 +121,9 @@ def main() -> int:
     ap.add_argument("--sidecars", type=Path, help="R8 audio sidecars, for loudness matching")
     ap.add_argument("-o", "--out", type=Path, required=True)
     ap.add_argument("--keep-parts", action="store_true", help="leave segment files on disk")
+    ap.add_argument("--parts-dir", type=Path, default=None,
+                    help="write the per-segment parts here instead of a temp dir, so "
+                         "a caller can count them as progress")
     args = ap.parse_args()
 
     for tool in ("ffmpeg", "ffprobe"):
@@ -135,7 +138,16 @@ def main() -> int:
     print(f"variant {edl['variant']} — {edl['title']}: {len(segments)} segments, "
           f"{planned:.1f}s planned, orient={orient}")
 
-    workdir = Path(tempfile.mkdtemp(prefix="roughcut-"))
+    if args.parts_dir:
+        # Each part appears as it is cut, so whoever asked for this render can count
+        # files instead of parsing prose — and the count stays right if this output
+        # format changes.
+        workdir = args.parts_dir
+        workdir.mkdir(parents=True, exist_ok=True)
+        for stale in workdir.glob("part_*.mp4"):
+            stale.unlink()
+    else:
+        workdir = Path(tempfile.mkdtemp(prefix="roughcut-"))
     parts: list[Path] = []
     try:
         for i, seg in enumerate(segments):

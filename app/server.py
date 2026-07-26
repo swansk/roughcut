@@ -42,6 +42,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import mimetypes
 import os
@@ -327,7 +328,11 @@ async def api_snap(request: Request) -> JSONResponse:
     edl = read_edl()
     edl["segments"] = body["segments"]
     tmp_in.write_text(json.dumps(edl, indent=1), encoding="utf-8")
-    r = subprocess.run(
+    # Off the event loop: `uv run` alone costs the better part of a second, and an
+    # endpoint that blocks here stalls every other request — status, media, the
+    # progress polls that exist to show the app is alive.
+    r = await asyncio.to_thread(
+        subprocess.run,
         ["uv", "run", "--quiet", str(TOOLS / "edl_snap.py"), str(tmp_in),
          "--sidecars", str(STATE["sidecars"]), "-o", str(tmp_out)],
         capture_output=True, text=True)
@@ -640,10 +645,29 @@ def probe_duration(path: Path) -> float | None:
 
 
 def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
+    entry = RENDERS[job]
+    parts_dir = STATE["work"] / f"parts_{job}"
     cmd = ["uv", "run", "--quiet", str(TOOLS / "assemble.py"), str(edl_path),
            "--footage", str(STATE["footage"]), "--sidecars", str(STATE["sidecars"]),
-           "-o", str(out_path)]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+           "--parts-dir", str(parts_dir), "-o", str(out_path)]
+
+    # Same shape as the audio pass: a ticker counting finished parts on disk, so the
+    # UI can say "cutting 7/16" instead of "rendering…" for two minutes. Karl, on
+    # clicking Render: "got like no response - and just see rendering..."
+    stop = threading.Event()
+
+    def count() -> None:
+        done = len(list(parts_dir.glob("part_*.mp4"))) if parts_dir.exists() else 0
+        entry["done"] = done
+        entry["stage"] = "joining" if done >= entry["total"] else "cutting"
+
+    ticker = threading.Thread(target=_ticker, args=(stop, count), daemon=True)
+    ticker.start()
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True)
+    finally:
+        stop.set()
+        shutil.rmtree(parts_dir, ignore_errors=True)
     ok = r.returncode == 0
     if ok:
         # Written next to the file rather than kept in memory: renders outlive the
@@ -655,12 +679,14 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
         meta["duration_s"] = probe_duration(out_path)
         out_path.with_suffix(".json").write_text(json.dumps(meta, indent=1),
                                                  encoding="utf-8")
-    RENDERS[job] = {
-        "state": "done" if ok else "failed",
-        "log": (r.stdout or "") + (r.stderr or ""),
-        "output": str(out_path) if ok else None,
-        "url": f"/media/render/{out_path.name}" if ok else None,
-    }
+    entry.update(
+        state="done" if ok else "failed",
+        stage="done" if ok else "failed",
+        done=entry["total"] if ok else entry["done"],
+        log=(r.stdout or "") + (r.stderr or ""),
+        output=str(out_path) if ok else None,
+        url=f"/media/render/{out_path.name}" if ok else None,
+    )
 
 
 @app.post("/api/render")
@@ -679,7 +705,9 @@ async def api_render(request: Request) -> JSONResponse:
         "story": (edl.get("story") or "")[:300],
         "note": (body.get("label") or "")[:120],
     }
-    RENDERS[job] = {"state": "running", "log": "", "output": None, "url": None}
+    RENDERS[job] = {"state": "running", "stage": "cutting", "log": "",
+                    "output": None, "url": None, "started": time.time(),
+                    "done": 0, "total": len(edl["segments"])}
     threading.Thread(target=_render_job, args=(job, edl_path, out_path, meta),
                      daemon=True).start()
     return JSONResponse({"job": job})
@@ -713,7 +741,10 @@ def api_renders() -> JSONResponse:
 def api_render_status(job: str) -> JSONResponse:
     if job not in RENDERS:
         raise HTTPException(404, "no such job")
-    return JSONResponse(RENDERS[job])
+    entry = RENDERS[job]
+    return JSONResponse({
+        **entry,
+        "elapsed_s": round(time.time() - entry.get("started", time.time()), 1)})
 
 
 # ---------------------------------------------------------------- media

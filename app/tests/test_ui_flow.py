@@ -300,7 +300,7 @@ def test_ask_failure_is_reported_not_swallowed(page):
 def test_render_from_the_ui_produces_a_playable_file(page):
     page.locator("#render").click()
     page.wait_for_function(
-        "document.querySelector('#renderState').textContent === 'done'", timeout=180000)
+        "document.querySelector('#renderState').textContent.startsWith('done')", timeout=180000)
     page.wait_for_selector("#versions .ver")
     src = page.get_attribute("#previewA", "src")
     assert src and src.startswith("/media/render/")
@@ -317,7 +317,7 @@ def test_a_second_render_becomes_a_second_version_to_compare_against(page):
     page.keyboard.press("x")                      # change the edit, so B differs
     page.locator("#render").click()
     page.wait_for_function(
-        "document.querySelector('#renderState').textContent === 'done'", timeout=180000)
+        "document.querySelector('#renderState').textContent.startsWith('done')", timeout=180000)
     page.wait_for_function(
         f"document.querySelectorAll('#versions .ver').length > {before}", timeout=30000)
     a = page.get_attribute("#previewA", "src")

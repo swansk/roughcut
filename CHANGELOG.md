@@ -10,6 +10,14 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **Every long operation now says where it is.** Karl, clicking Render: *"got like no response —
+  and just see rendering…"*. `assemble.py` gained `--parts-dir` so the per-shot files it already
+  writes land somewhere the server can count, and the render job reports `cutting 7/16` then
+  `joining`, with elapsed time, like the audio pass. Snap moved off the event loop too (`uv run`
+  alone costs the better part of a second, and blocking there stalls every other request). The
+  audit behind this: Ask, analyse, previews, render and snap were the five operations that can
+  outlast a click — all five report state now, and every one shows a clock, because a number that
+  moves is the only difference between "working" and "hung".
 - **Ask is a job, not a two-minute request.** Karl, stuck on `building a first cut — about a
   minute…` while the model had in fact answered: `/api/ask` was an `async def` running the call
   synchronously, so a 112-second Killington ask **froze the entire server** — status, media,

@@ -239,6 +239,37 @@ def test_a_version_survives_a_restart(client, project):
     assert any(r["name"] == f"cut_{job}.mp4" and r["duration_s"] for r in listed)
 
 
+def test_render_reports_which_shot_it_is_on(client, project, monkeypatch):
+    """Karl, on clicking Render: "got like no response - and just see rendering...".
+    Every shot is cut to its own file before they are joined, so this is a real count
+    rather than a spinner. (Ticking faster here only because these clips are 6
+    seconds long; a real render takes minutes per shot.)"""
+    import server
+    monkeypatch.setattr(server, "PROGRESS_TICK_S", 0.05)
+    segs = [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 2.5, "why": "a"},
+            {"clip": "CLIP_B.MP4", "in": 1.0, "out": 2.0, "why": "b"},
+            {"clip": "CLIP_C.MP4", "in": 0.0, "out": 1.5, "why": "c"}]
+    job = client.post("/api/render", json={"segments": segs}).json()["job"]
+
+    stages, counts = set(), set()
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        s = client.get(f"/api/render/{job}").json()
+        stages.add(s["stage"])
+        counts.add(s["done"])
+        assert s["total"] == 3
+        assert s["elapsed_s"] >= 0
+        if s["state"] != "running":
+            break
+        time.sleep(0.05)
+    assert s["state"] == "done", s["log"][-400:]
+    assert "cutting" in stages
+    assert max(counts) > 0, f"never showed progress: {sorted(counts)}"
+    assert s["done"] == s["total"], "a finished render must not read as 0 of 3"
+    # the parts directory is cleaned up behind it
+    assert not list(project["work"].glob("parts_*"))
+
+
 def test_render_status_404_for_unknown_job(client):
     assert client.get("/api/render/deadbeef").status_code == 404
 

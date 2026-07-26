@@ -25,6 +25,11 @@ const fmt = (t) => {
   return `${m}:${s.toFixed(1).padStart(4, '0')}`;
 };
 
+/* m:ss. Every long operation in this app shows one: a number that moves is the
+ * difference between "working" and "hung", and they are otherwise identical. */
+const clock = (s) =>
+  `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
 function toast(msg, ms = 2200) {
   const el = $('#toast');
   el.textContent = msg;
@@ -454,9 +459,7 @@ function pollAsk(job, verb, stateEl) {
         s = await (await fetch(`/api/ask/${job}`)).json();
       } catch (e) { return; }                 // a blip is not a failure; keep waiting
       if (s.state === 'running') {
-        const m = Math.floor(s.elapsed_s / 60);
-        const sec = String(Math.floor(s.elapsed_s % 60)).padStart(2, '0');
-        stateEl.textContent = `${verb}… ${m}:${sec}`;
+        stateEl.textContent = `${verb}… ${clock(s.elapsed_s)}`;
         return;
       }
       clearInterval(iv);
@@ -587,12 +590,24 @@ async function doRender() {
     body: JSON.stringify({ segments: segs }),
   });
   const { job } = await r.json();
-  $('#renderState').textContent = 'rendering…';
+  $('#renderState').textContent = 'starting…';
+  $('#renderBar').style.display = 'block';
   const poll = setInterval(async () => {
     const s = await (await fetch(`/api/render/${job}`)).json();
-    if (s.state === 'running') return;
+    if (s.state === 'running') {
+      // Every shot is cut to its own file before they are joined, so this is a real
+      // count rather than a spinner. "rendering…" for two minutes says nothing.
+      const el = clock(s.elapsed_s);
+      $('#renderState').textContent = s.stage === 'joining'
+        ? `joining ${s.total} shots… ${el}` : `cutting ${s.done}/${s.total}… ${el}`;
+      $('#renderBar').firstElementChild.style.width =
+        `${Math.round(100 * s.done / Math.max(1, s.total))}%`;
+      return;
+    }
     clearInterval(poll);
-    $('#renderState').textContent = s.state === 'done' ? 'done' : 'failed';
+    $('#renderBar').style.display = 'none';
+    $('#renderState').textContent = s.state === 'done'
+      ? `done in ${clock(s.elapsed_s)}` : 'failed';
     if (s.url) {
       await refreshVersions();
       toast('render ready — A is the new one, B the one before');
