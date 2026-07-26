@@ -12,6 +12,17 @@ The human's half of the loop. Karl, after watching the first two cuts:
 uv run app/server.py --footage ~/footage/copper-02-2026
 ```
 
+**Run it inside WSL, from a login shell.** `uv`, `ffmpeg` and `~/footage` all live there;
+PowerShell cannot see any of them, and a non-login shell misses `~/.local/bin`. From Windows:
+
+```
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/Users/karl/Documents/Projects/roughcut && \
+  uv run app/server.py --footage ~/footage/<bin>"
+```
+
+Then open `http://localhost:8765` in Windows — WSL2 forwards localhost, so the browser side needs
+nothing.
+
 A folder of footage is the only required argument. If that bin has no EDL yet, one is
 scaffolded empty under `--work` (`~/work/app/projects/<bin>.edl.json`) and sidecars default to
 `~/work/app/audio/<bin>` — so opening the board no longer requires hand-authoring JSON in a

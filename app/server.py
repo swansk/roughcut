@@ -84,7 +84,10 @@ def build_proxy(src: Path, dest: Path, orient: str) -> None:
     # this thread runs: a half-written file at the final path is handed to a <video>
     # element as a truncated stream, which fails to decode and is then cached as
     # broken until a reload. os.replace is atomic within a filesystem.
-    tmp = dest.with_suffix(".part.mp4")
+    # Unique per process, not just per clip. Work dirs are shared by default now, so
+    # two servers pointed at the same bin — easily done — would otherwise both write
+    # the same .part path and hand the survivor a file interleaved from two encodes.
+    tmp = dest.with_suffix(f".{os.getpid()}.part.mp4")
     cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin"]
     if orient == "none":
         # Same lesson as assemble.py: -noautorotate leaves the display matrix on the
