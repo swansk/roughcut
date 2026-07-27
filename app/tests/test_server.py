@@ -377,7 +377,9 @@ def test_music_bed_is_mixed_under_without_touching_the_picture(project, tmp_path
     assert _duration(flat) == pytest.approx(_duration(plain), abs=0.15)
     assert rotation_of(flat) == "" and rotation_of(ducked) == ""
 
-    assert "flat" in flat_log and "ducked under speech" in duck_log
+    # the render says which key it used; on a project with sidecars that is speech
+    assert "flat" in flat_log
+    assert "keyed on speech" in duck_log, duck_log[-300:]
     assert _loudness(flat) > _loudness(plain) + 0.3, "no bed audible in the mix"
     assert _duration(ducked) == pytest.approx(_duration(plain), abs=0.15)
 
@@ -423,6 +425,37 @@ def test_the_bed_lifts_in_the_gaps_and_drops_under_speech(tmp_path):
     assert in_the_gap > under_speech + 3.0, (
         f"the bed does not lift in the gap: {under_speech:.1f} dB under the tone, "
         f"{in_the_gap:.1f} dB in the silence")
+
+
+@pytest.mark.parametrize("asked", [8.0, 16.0])
+def test_the_duck_depth_knob_is_calibrated(tmp_path, asked):
+    """`duck_db` has to mean dB, or it is a dial with no markings.
+
+    It did not, at first: ratio was exposed as the depth control, and 6 versus 12
+    differed by 2 dB because the key sat 28 dB over the threshold and pinned the
+    compressor either way. Depth comes from the key's level, solved for the requested
+    reduction — so this asserts what was asked for is what comes out.
+    """
+    from roughcut import effects
+
+    film = tmp_path / f"film{asked}.mp4"
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-y", "-nostdin",
+        "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24:duration=6",
+        "-f", "lavfi", "-i", "aevalsrc=if(lt(t\\,3)\\,0.5*sin(2*PI*440*t)\\,0):d=6",
+        "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-shortest", str(film)], check=True)
+    track = tmp_path / f"bed{asked}.wav"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-f", "lavfi",
+                    "-i", "sine=frequency=900:duration=6", str(track)], check=True)
+
+    bed = tmp_path / f"bed{asked}.m4a"
+    effects.add_music(film, {"asset": str(track), "gain_db": -6, "duck": True,
+                             "duck_db": asked, "fade_in": 0, "fade_out": 0},
+                      bed, bed_only=True, speech=[(0.0, 3.0)])
+    measured = _mean_volume(bed, 3.5, 5.5) - _mean_volume(bed, 0.5, 2.5)
+    assert abs(measured - asked) < 4.0, (
+        f"asked for {asked} dB of duck, measured {measured:.1f}")
 
 
 @pytest.mark.parametrize("duck", [True, False])

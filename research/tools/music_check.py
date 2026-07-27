@@ -61,14 +61,31 @@ def main() -> int:
     ap.add_argument("--bed-lufs", type=float, default=effects.TARGET_BED_LUFS,
                     help="where the bed should sit; films here master to -16 LUFS")
     ap.add_argument("--no-duck", action="store_true")
+    ap.add_argument("--edl", type=Path, default=None,
+                    help="the EDL this cut was rendered from. With --sidecars it lets "
+                         "the bed duck on *speech* rather than on amplitude, which is "
+                         "the difference between mixing and pumping")
+    ap.add_argument("--sidecars", type=Path, default=None)
+    ap.add_argument("--duck-db", type=float, default=effects.SPEECH_DUCK_DB,
+                    help="how far the bed drops under a line, in dB. 10-14 is the "
+                         "usual range; past 20 it is a mute, not a duck")
     args = ap.parse_args()
 
     if not args.cut.exists():
         raise SystemExit(f"no such cut: {args.cut}")
     spec = {"asset": str(args.music.expanduser()), "gain_db": args.gain,
-            "bed_lufs": args.bed_lufs, "duck": not args.no_duck}
+            "bed_lufs": args.bed_lufs, "duck": not args.no_duck,
+            "duck_db": args.duck_db}
 
-    applied = effects.add_music(args.cut, spec, args.out)
+    speech = None
+    if args.edl and args.sidecars:
+        import json
+        segments = json.loads(args.edl.read_text(encoding="utf-8"))["segments"]
+        speech = effects.speech_regions(segments, args.sidecars.expanduser())
+        talk = sum(hi - lo for lo, hi in speech)
+        print(f"speech: {len(speech)} regions, {talk:.0f}s of talking")
+
+    applied = effects.add_music(args.cut, spec, args.out, speech=speech)
     measured = applied.get("measured_lufs")
     print(f"track measures {measured} LUFS" if measured is not None
           else "track loudness unmeasurable — falling back to a fixed gain")
@@ -76,26 +93,40 @@ def main() -> int:
           f"{applied['gain_db']}dB → {applied['bed_lufs']} LUFS, "
           f"{'ducked' if applied['duck'] else 'flat'})")
 
+    # Same `speech` as the scored render: measuring an amplitude-keyed bed while
+    # shipping a speech-keyed one would report numbers for a file nobody will hear.
     bed_path = args.out.with_name(args.out.stem + ".bedonly.m4a")
-    effects.add_music(args.cut, spec, bed_path, bed_only=True)
+    effects.add_music(args.cut, spec, bed_path, bed_only=True, speech=speech)
 
     film, bed = frame_db(pcm(args.cut)), frame_db(pcm(bed_path))
     n = min(len(film), len(bed))
     film, bed = film[:n], bed[:n]
 
-    # The film's own loud third is what the sidechain is keying on; its quiet third is
-    # where a working bed should come back up.
-    loud = film >= np.percentile(film, 67)
-    quiet = film <= np.percentile(film, 33)
+    # With speech regions known, compare the bed inside them against outside — the
+    # thing the bed is supposed to get out of the way of. Without them, fall back to
+    # the film's own loud and quiet thirds.
+    if speech:
+        t = np.arange(len(bed)) * WIN
+        loud = np.zeros(len(bed), dtype=bool)
+        for lo, hi in speech:
+            loud |= (t >= lo) & (t < hi)
+        quiet = ~loud
+        label = ("under speech", "between lines")
+    else:
+        loud = film >= np.percentile(film, 67)
+        quiet = film <= np.percentile(film, 33)
+        label = ("under the loud", "in the gaps")
     under_speech, in_gaps = bed[loud].mean(), bed[quiet].mean()
     duck_db = in_gaps - under_speech
 
-    print(f"\nfilm:  loud passages {film[loud].mean():6.1f} dB   "
-          f"quiet {film[quiet].mean():6.1f} dB")
-    print(f"bed:   under the loud  {under_speech:6.1f} dB   "
-          f"in the gaps {in_gaps:6.1f} dB")
-    print(f"\nducking: {duck_db:+.1f} dB — the bed sits {duck_db:.1f} dB lower under "
-          f"the film's loud passages")
+    print(f"\nfilm:  {label[0]:14s}{film[loud].mean():6.1f} dB   "
+          f"{label[1]:14s}{film[quiet].mean():6.1f} dB")
+    print(f"bed:   {label[0]:14s}{under_speech:6.1f} dB   "
+          f"{label[1]:14s}{in_gaps:6.1f} dB")
+    print(f"\nducking: {duck_db:+.1f} dB — the bed sits {duck_db:.1f} dB lower "
+          f"{label[0]}")
+    if duck_db > 20:
+        print("that is a mute, not a duck - try a smaller --duck-db")
     if not spec["duck"]:
         print("(ducking off, so anything much beyond 0 here would be suspicious)")
     elif duck_db < 3:

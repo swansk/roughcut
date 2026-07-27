@@ -189,12 +189,21 @@ def main() -> int:
             music = {**music, "asset": str(args.music)}
         if music.get("asset"):
             scored = args.out.with_name(args.out.stem + ".scored.mp4")
-            applied = effects.add_music(args.out, music, scored, args.assets)
+            # The transcripts know where the talking is; ducking on the film's
+            # amplitude instead makes the bed breathe on every ski scrape.
+            speech = (effects.speech_regions(segments, args.sidecars)
+                      if args.sidecars else None)
+            applied = effects.add_music(args.out, music, scored, args.assets,
+                                        speech=speech)
             scored.replace(args.out)
             assert_no_rotation(args.out, orient)
+            how = "flat"
+            if applied["duck"]:
+                how = f"ducked, keyed on {applied['keyed_on']}"
+                if applied["speech_regions"]:
+                    how += f" ({applied['speech_regions']} speech regions)"
             print(f"music: {Path(applied['asset_path']).name} at "
-                  f"{applied['gain_db']}dB, "
-                  f"{'ducked under speech' if applied['duck'] else 'flat'}")
+                  f"{applied['gain_db']}dB — {how}")
 
         final = probe_duration(args.out)
         drift = final - planned
