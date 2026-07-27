@@ -379,10 +379,50 @@ def test_music_bed_is_mixed_under_without_touching_the_picture(project, tmp_path
 
     assert "flat" in flat_log and "ducked under speech" in duck_log
     assert _loudness(flat) > _loudness(plain) + 0.3, "no bed audible in the mix"
-    # These clips are a constant 440Hz tone, so the sidechain key never lets up and the
-    # bed is pushed all the way down. That is ducking working, on a deliberately
-    # pathological input: what it does under real speech-with-gaps is not tested here.
-    assert _loudness(ducked) < _loudness(flat) - 0.3, "the sidechain did nothing"
+    assert _duration(ducked) == pytest.approx(_duration(plain), abs=0.15)
+
+
+def _mean_volume(path: Path, start: float, end: float) -> float:
+    r = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-i", str(path),
+                        "-af", f"atrim={start}:{end},volumedetect", "-f", "null", "-"],
+                       capture_output=True, text=True)
+    for line in r.stderr.splitlines():
+        if "mean_volume:" in line:
+            return float(line.split("mean_volume:")[1].split("dB")[0])
+    raise AssertionError(f"no volume reading for {path.name} {start}-{end}")
+
+
+def test_the_bed_lifts_in_the_gaps_and_drops_under_speech(tmp_path):
+    """Ducking, measured where it can actually be seen: a film that is loud for three
+    seconds and silent for three.
+
+    The previous version of this test inferred ducking from the *mixed* file's
+    loudness against clips that are a constant tone — no gaps, so nothing to lift into,
+    and the number moved for the wrong reasons. Karl's real bed was inaudible while
+    that test was green.
+    """
+    from roughcut import effects
+
+    film = tmp_path / "halfquiet.mp4"
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-y", "-nostdin",
+        "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24:duration=6",
+        "-f", "lavfi", "-i", "aevalsrc=if(lt(t\\,3)\\,0.5*sin(2*PI*440*t)\\,0):d=6",
+        "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-shortest", str(film)], check=True)
+    track = tmp_path / "bed.wav"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-f", "lavfi",
+                    "-i", "sine=frequency=900:duration=6", str(track)], check=True)
+
+    bed = tmp_path / "bedonly.m4a"
+    effects.add_music(film, {"asset": str(track), "gain_db": -6, "duck": True,
+                             "fade_in": 0, "fade_out": 0}, bed, bed_only=True)
+
+    under_speech = _mean_volume(bed, 0.5, 2.5)
+    in_the_gap = _mean_volume(bed, 3.5, 5.5)
+    assert in_the_gap > under_speech + 3.0, (
+        f"the bed does not lift in the gap: {under_speech:.1f} dB under the tone, "
+        f"{in_the_gap:.1f} dB in the silence")
 
 
 @pytest.mark.parametrize("duck", [True, False])

@@ -55,18 +55,26 @@ def main() -> int:
     ap.add_argument("cut", type=Path, help="an already-rendered film")
     ap.add_argument("--music", type=Path, required=True)
     ap.add_argument("-o", "--out", type=Path, required=True)
-    ap.add_argument("--gain", type=float, default=-18.0)
+    ap.add_argument("--gain", type=float, default=None,
+                    help="explicit dB. Omitted, the gain is computed from the track's "
+                         "measured loudness to land at --bed-lufs")
+    ap.add_argument("--bed-lufs", type=float, default=effects.TARGET_BED_LUFS,
+                    help="where the bed should sit; films here master to -16 LUFS")
     ap.add_argument("--no-duck", action="store_true")
     args = ap.parse_args()
 
     if not args.cut.exists():
         raise SystemExit(f"no such cut: {args.cut}")
     spec = {"asset": str(args.music.expanduser()), "gain_db": args.gain,
-            "duck": not args.no_duck}
+            "bed_lufs": args.bed_lufs, "duck": not args.no_duck}
 
     applied = effects.add_music(args.cut, spec, args.out)
+    measured = applied.get("measured_lufs")
+    print(f"track measures {measured} LUFS" if measured is not None
+          else "track loudness unmeasurable — falling back to a fixed gain")
     print(f"scored {args.out.name}  ({applied['film_s']:.1f}s, bed at "
-          f"{applied['gain_db']}dB, {'ducked' if applied['duck'] else 'flat'})")
+          f"{applied['gain_db']}dB → {applied['bed_lufs']} LUFS, "
+          f"{'ducked' if applied['duck'] else 'flat'})")
 
     bed_path = args.out.with_name(args.out.stem + ".bedonly.m4a")
     effects.add_music(args.cut, spec, bed_path, bed_only=True)
