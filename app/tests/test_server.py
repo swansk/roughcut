@@ -385,6 +385,43 @@ def test_music_bed_is_mixed_under_without_touching_the_picture(project, tmp_path
     assert _loudness(ducked) < _loudness(flat) - 0.3, "the sidechain did nothing"
 
 
+@pytest.mark.parametrize("duck", [True, False])
+def test_the_bed_only_graph_actually_renders(project, tmp_path, duck):
+    """music_check measures ducking by rendering the bed *alone* through the same
+    graph. The first version built that by carving up the mix graph's string and
+    shipped one missing separator — ffmpeg refused it, after the scored render had
+    already succeeded. Asserting the string parses is not enough: it has to render."""
+    from roughcut import effects
+
+    film = tmp_path / f"film_{duck}.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin",
+                    "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24:duration=3",
+                    "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", "-shortest", str(film)], check=True)
+    track = tmp_path / f"bed_{duck}.wav"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-f", "lavfi",
+                    "-i", "sine=frequency=900:duration=2", str(track)], check=True)
+
+    out = tmp_path / f"bedonly_{duck}.m4a"
+    effects.add_music(film, {"asset": str(track), "gain_db": -6, "duck": duck},
+                      out, bed_only=True)
+    assert out.exists() and out.stat().st_size > 0
+    assert _duration(out) == pytest.approx(3.0, abs=0.3)
+
+
+def test_music_gain_is_range_checked():
+    """Parameters are validated the way segment timestamps are: a bed louder than the
+    film is a bug, not a choice."""
+    from roughcut import effects
+
+    with pytest.raises(ValueError):
+        effects.music_spec({"asset": "x.mp3", "gain_db": 40})
+    with pytest.raises(ValueError):
+        effects.music_spec({"gain_db": -12})            # no asset
+    assert effects.music_spec({"asset": "x.mp3"})["duck"] is True
+
+
 def rotation_of(p: Path) -> str:
     r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
                         "-show_entries", "stream_side_data=rotation", "-of", "csv=p=0",

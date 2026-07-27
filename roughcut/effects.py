@@ -47,42 +47,58 @@ def music_spec(raw: dict) -> dict:
     }
 
 
+# One definition, used by the mix and by the measurement, so what gets measured is
+# what gets heard.
+DUCK = ("sidechaincompress=threshold=0.02:ratio=6:attack=15:release=400:makeup=1")
+MIX = "amix=inputs=2:normalize=0:duration=first"
+
+
+def _bed_chain(s: dict, film_s: float) -> str:
+    """`[1:a]` (the music) → `[bed]`, looped and hard-trimmed to the film.
+
+    Looping so a short track does not end the bed early; trimming so a long one does
+    not run past the picture.
+    """
+    return (f"[1:a]aloop=loop=-1:size=2e9,atrim=0:{film_s:.3f},"
+            f"asetpts=N/SR/TB,volume={s['gain_db']:.2f}dB,"
+            f"afade=t=in:st=0:d={s['fade_in']:.2f},"
+            f"afade=t=out:st={max(0.0, film_s - s['fade_out']):.3f}:"
+            f"d={s['fade_out']:.2f}[bed]")
+
+
 def music_filter(spec: dict, film_s: float) -> str:
-    """Filter graph for a bed under the finished film. `[1:a]` is the music.
+    """Filter graph for a bed under the finished film.
 
     Ducked by default, and that default carries weight: R8 established that in this
     footage the *words* are the signal, so a bed at a flat level buries the thing the
     cut was built around. `sidechaincompress` keyed on the film's own audio pulls the
     music down under speech and lets it back up in the gaps.
-
-    The track is looped and hard-trimmed to the film, so a short one does not end the
-    bed early and a long one does not run past the picture.
     """
     s = music_spec(spec)
-    bed = (f"[1:a]aloop=loop=-1:size=2e9,atrim=0:{film_s:.3f},"
-           f"asetpts=N/SR/TB,volume={s['gain_db']:.2f}dB,"
-           f"afade=t=in:st=0:d={s['fade_in']:.2f},"
-           f"afade=t=out:st={max(0.0, film_s - s['fade_out']):.3f}:"
-           f"d={s['fade_out']:.2f}[bed]")
+    bed = _bed_chain(s, film_s)
     if not s["duck"]:
-        return f"{bed};[0:a][bed]amix=inputs=2:normalize=0:duration=first[aout]"
+        return f"{bed};[0:a][bed]{MIX}[aout]"
     # asplit because the film audio is both a mix input and the sidechain key.
     return (f"{bed};[0:a]asplit=2[dry][key];"
-            f"[bed][key]sidechaincompress=threshold=0.02:ratio=6:attack=15:"
-            f"release=400:makeup=1[ducked];"
-            f"[dry][ducked]amix=inputs=2:normalize=0:duration=first[aout]")
+            f"[bed][key]{DUCK}[ducked];[dry][ducked]{MIX}[aout]")
 
 
 def bed_only_filter(spec: dict, film_s: float) -> str:
-    """The bed as it will be heard, without the film under it.
+    """The bed as it will be heard, with the film *not* mixed in under it.
 
-    Only for measurement: comparing the bed's own level during loud passages against
-    quiet ones is how you check ducking objectively, rather than by ear.
+    For measurement: comparing the bed's own level during the film's loud passages
+    against the quiet ones is the only honest check on ducking, because by ear "the
+    sidechain is working" and "the track is quiet just here" are indistinguishable.
+
+    Composed from the same pieces as `music_filter` rather than carved out of its
+    string. The first version did the latter and shipped a graph missing a separator —
+    which is the failure this module exists to prevent, committed by the module itself.
     """
-    graph = music_filter(spec, film_s)
-    if "[ducked]" in graph:
-        return graph.split(";[dry][ducked]")[0] + "[ducked]anull[aout]"
-    return graph.split(";[0:a][bed]")[0] + ";[bed]anull[aout]"
+    s = music_spec(spec)
+    bed = _bed_chain(s, film_s)
+    if not s["duck"]:
+        return f"{bed};[bed]anull[aout]"
+    return f"{bed};[0:a]anull[key];[bed][key]{DUCK}[aout]"
 
 
 def resolve_asset(asset: str, assets_root: Path | None) -> Path:
