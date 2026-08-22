@@ -36,6 +36,10 @@ same commit. Releases move entries into a dated version section.
   render on, with its 80 ms / 900 ms envelope. Karl's note on the first bed — *"fading in and
   out… people are talking and the music is distracting"* — cost a render and a listen per
   attempt to hear; it is a slider and a press of space now.
+- **A render can carry a label, and the versions list shows it.** `POST /api/render` already
+  accepted a `label`; nothing displayed it. Used this session to render a *proposal* without
+  accepting it — the Killington revision, so it could be watched against the current cut before
+  the decision — which is exactly the version that must not read as if it had been the cut.
 - **A monitor: the cut plays from the proxies, without a render.** The loop for judging an
   edit was trim → Render → wait two minutes → watch → repeat, because the board could play one
   shot at a time and nothing else. The main column now opens on a player that runs the whole

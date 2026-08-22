@@ -313,6 +313,20 @@ def test_render_status_404_for_unknown_job(client):
     assert client.get("/api/render/deadbeef").status_code == 404
 
 
+def test_a_render_can_carry_a_label(client, project):
+    """A proposal can be rendered without being accepted, to be watched before the
+    decision — and then the versions list must say that is what it is."""
+    body = {"segments": [{"clip": "CLIP_C.MP4", "in": 0.0, "out": 1.5, "why": "c"}],
+            "label": "proposal abc123 — not accepted"}
+    job = client.post("/api/render", json=body).json()["job"]
+    deadline = time.time() + 90
+    while client.get(f"/api/render/{job}").json()["state"] == "running":
+        assert time.time() < deadline, "render timed out"
+        time.sleep(0.5)
+    listed = {r["name"]: r for r in client.get("/api/renders").json()["renders"]}
+    assert listed[f"cut_{job}.mp4"]["note"] == "proposal abc123 — not accepted"
+
+
 # ------------------------------------------------------------------ music
 
 def _loudness(path: Path) -> float:

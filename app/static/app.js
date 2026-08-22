@@ -1040,7 +1040,9 @@ function rejectProposal() {
 function versionLabel(v) {
   const base = v.duration_s ? `${fmt(v.duration_s)} · ${v.segments} shots`
     : `${v.name.replace(/^cut_|\.mp4$/g, '')} · older render`;
-  return v.music ? `${base} ♪` : base;
+  // A render can carry a label — "proposal, not accepted" is the one that matters, since
+  // a version that was never the cut must not read as if it had been.
+  return (v.music ? `${base} ♪` : base) + (v.note ? ` · ${v.note}` : '');
 }
 
 function loadVersion(v, slot) {

@@ -2,8 +2,10 @@
 
 Last updated: 2026-08-22, end of session 6 (the board became something you can edit in: a
 **monitor** that plays the cut from the proxies, the **visual pass** runnable from the board with
-what it saw on the cards, and **music** under the cut — all verified live on Killington).
-Sessions 4–5 are summarised under "START HERE". Jump there, then "The roadmap after that".
+what it saw on the cards, and **music** under the cut — all verified live on Killington; then, once Karl logged the CLI in
+mid-session, the visual pass ran over all 12 clips from the board and two proposals were made,
+neither applied). Sessions 4–5 are summarised under "START HERE". Jump there, then "The roadmap
+after that".
 
 Repo: [github.com/swansk/roughcut](https://github.com/swansk/roughcut), private, `main`.
 
@@ -250,25 +252,46 @@ rendered by assemble.py. All three were verified live on Killington as well as u
   `effects_music` = `music/whatever.mp3` at 12 dB of duck. Renders in
   `~/work/app/renders/killington-neutral/`: `cut_adf8ce95` (Jul 25, no music) and the one made
   this session with the bed under it, marked ♪ in the versions list.
-- The visual pass has seen **3 of 12** clips — sidecars in `~/work/app/visual/killington-neutral/`
-  (per bin now; copied from the old shared `~/work/visual`, which is left in place). The other 9
-  are one click in the Project panel: *Look at 9 clips · ~$1.08*, about 20 calls.
+- The visual pass has seen **all 12 clips** — the last 9 run from the board's own button after
+  Karl logged in: 22 sheets, 22 read, $1.70 projected against the $1.98 quoted, 20:46 wall
+  clock. Sidecars in `~/work/app/visual/killington-neutral/` (per bin now; the three older ones
+  copied from the old shared `~/work/visual`, which is left in place). Across the bin it found
+  what the transcripts could not: a backflip and a tumbling crash in CLIP_04, sustained airs in
+  CLIP_07, a hard inverted crash in CLIP_09, both CLIP_11 flips and a wipeout, a crash aftermath
+  in CLIP_06 — and the 16-shot cut, chosen from words, used two of them.
 - **The board already found something with what it has.** The cold open, CLIP_01 188.2–199.6
   (*"I fell in and I got completely buried"*), overlaps the pass's unusable stretch 188–196 —
   *"nearly black — lens obstruction"*, *"severely motion-blurred"*. The first shot of the cut is
   mostly unusable picture, chosen for its line: the blind-selection defect, caught on a card
   instead of in a render.
-- The river fall itself (CLIP_01 104–108, `fall`, notable) is the first item under *seen* and is
-  not in the cut yet.
+- **Two proposals exist on disk, neither applied** (`~/work/app/asks/killington-neutral/`):
+  - `c710983b` — a *blind* origination, story only, no note, after all 12 clips were seen: 16
+    shots, 176.9s, $0.58, 199s. It **no longer opens on black** — the confession became a coda
+    at 195.5s, past the blurred stretch; CLIP_02's opener ends "before the black/white frames";
+    the one unusable tail it kept (CLIP_08's last frame) it named and asked to trim the picture
+    under held audio. The middle is built from the events. But it **still left out the river
+    fall**: the frames call 104–108 only "person down in snow", and nothing in the story says
+    that moment matters.
+  - `ed8134bb` — a *revision* of the restored 16-shot cut with a 178-word note naming the fall
+    and the unusable cold open: 20 shots, 178.0s, $0.57, 178s. Opens on the fall itself (CLIP_01
+    92.2–107.0), keeps the confession only on its 3.4s of usable frames as the payoff, drops the
+    20s straight-liner that had been chosen for two lines over undescribed picture, and spends
+    it on the CLIP_04 backflip and crash, CLIP_09's crash with "that was close" as its reaction,
+    the CLIP_11 wipeout out-pointed at exactly 256 to clear the unreadable stretch, and CLIP_07's
+    air by extending the conquistador bit rather than adding a shot. **The board offers this one
+    on open** (*last proposal — 20 shots · show it*). It is rendered as `cut_91e0b993` — labelled
+    *proposal — not accepted* in the versions list — and copied to
+    `Documents\Roughcut Labeling\cuts\killington-revision-proposal.mp4` so it can be watched
+    against `killington-first-cut-music.mp4` before deciding.
 
-**The first thing to do is Karl's, not the agent's:** `claude /login` inside WSL. The header pill
-read *"OAuth session expired and could not be refreshed"* this session, so live Ask and the
-visual pass could not run (everything else could and did). Then, in the board:
+**Karl's next move, in the board** (the CLI is logged in; the pill reads *ready*):
 
-1. Look at the other 9 clips (~$1, ~20 calls; the button says so).
-2. Fix the cold open — the line is right and the picture is not; the *seen* list and the card
-   warnings exist to choose with.
-3. Put the fall in. Press space. Listen to the bed. Ask for changes.
+1. Open it — it offers *last proposal — 20 shots · show it*. Watch `cut_91e0b993` (the
+   proposal) against `cut_29ed8c3f` (the restored cut, with the bed) in the A/B slots, then
+   **Accept or Discard**. Both are also in `Documents\Roughcut Labeling\cuts\`.
+2. Press space. Listen to the bed. Ask for changes — with the visual moments in the prompt every
+   Ask is ~3 minutes and ~$0.55 projected, which is why the call timeout is 600s now.
+3. Decide what the agent should *do* with what it sees beyond showing it (roadmap 1).
 
 Whatever Karl reports is the first input of the next session — same rule as before: if the cut
 is a highlight reel, that is the finding; do not fix it by hand.
@@ -277,11 +300,14 @@ is a highlight reel, that is the finding; do not fix it by hand.
 
 Ordered by what changes most, not by effort:
 
-1. ~~The visual pass~~ — **built, in the board, priced.** Still provisional (sheet density,
-   thumbnail size and model tier are RQ-1/RQ-7, unmeasured), and the board only *shows* it so far:
-   junk and orientation could be proposed from the same sidecars, and the originating prompt
-   already reads the moments. The open question is whether a first cut made *after* looking at
-   all 12 clips still opens on a black frame.
+1. ~~The visual pass~~ — **built, in the board, priced, and run over a whole bin.** Still
+   provisional (sheet density, thumbnail size and model tier are RQ-1/RQ-7, unmeasured), and the
+   board only *shows* it so far: junk and orientation could be proposed from the same sidecars.
+   The open question was whether a first cut made *after* looking at all 12 clips still opens on
+   a black frame — **answered: it does not**, and it builds its middle from the events; what it
+   still misses is the event whose frames are least legible (the river fall), until a note names
+   it. The next lever is therefore not more looking but a frame-level look at the moments the
+   human names — EFFECTS.md's narrowing (sheet → onset track → frame strip) is the same machinery.
 2. **Effects, per docs/EFFECTS.md's build order** — the bed is done; next the `sfx` / `overlay`
    vocabulary with the asset manifest, then onset snapping (100ms, from data already on disk),
    then markers in the board (the monitor and the strip now exist to carry them), then the Ask
@@ -313,6 +339,15 @@ lexical read of excitement markers — see the open thread in the selection note
 
 These were measured, cost real effort, and are easy to accidentally undo:
 
+- **The visual pass is necessary and not sufficient, and the event that mattered most was the
+  least legible one** (session 6). With every Killington clip looked at, a blind first cut
+  stopped opening on black frames and found the backflips and crashes the words-only cut had
+  missed — and still left out the river fall, because sampled frames describe it only as
+  "person down in snow" and the story never said it mattered. A 178-word note fixed that in one
+  revision. Looking is what makes the note *actionable*; it does not replace it (P2.5).
+- **Once clips carry visual moments, every Ask is ~40k tokens in, ~15k out, and 3–4 minutes on
+  the CLI backend.** A 300s call timeout killed a revision with the work unrecoverable (the CLI
+  writes its transcript at the end); the default is 600 now. Do not "tidy" it back down.
 - **Orientation is per-clip and cannot be generalised.** B1/Copper's rotation side-data is
   *spurious* (ignore it, `--orient none`); B2/Killington's is *correct* (apply it, `--orient
   auto`, 7 of 9 clips are stored upside down). Same owner, same sport, opposite handling.
