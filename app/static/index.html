@@ -74,6 +74,19 @@
     border: 1px solid var(--line); border-radius: 7px; padding: 8px; font: inherit;
     resize: vertical;
   }
+  select, input[type=number] {
+    background: #131318; color: var(--text); border: 1px solid var(--line);
+    border-radius: 7px; padding: 5px 8px; font: inherit;
+  }
+  input[type=range] { accent-color: var(--accent); }
+  .tabs { display: flex; gap: 4px; margin-bottom: 6px; }
+  .tab { font-size: 12px; color: var(--dim); border: 1px solid var(--line);
+         border-radius: 999px; padding: 2px 10px; cursor: pointer; }
+  .tab.sel { color: var(--text); border-color: var(--accent); }
+  .kind { font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+          color: var(--dim); border: 1px solid var(--line); border-radius: 4px;
+          padding: 0 4px; margin-right: 5px; font-style: normal; }
+  .kind.hot { color: var(--warn); border-color: #4c4026; }
   .lib { max-height: 46vh; overflow: auto; }
   .cand { border-top: 1px solid var(--line); padding: 7px 0; cursor: pointer; }
   .cand:first-child { border-top: 0; }
@@ -199,6 +212,13 @@
         <span class="hint" id="analyzeState"></span>
       </div>
       <div class="bar" id="analyzeBar" style="display:none"><i></i></div>
+      <!-- The visual pass. Costs model calls, so it is offered with a price and a count
+           and never started on the app's own initiative. -->
+      <div style="display:none;gap:8px;align-items:center;margin-top:9px" id="visualRow">
+        <button id="visual">Look at the footage</button>
+        <span class="hint" id="visualState"></span>
+      </div>
+      <div class="bar" id="visualBar" style="display:none"><i></i></div>
     </div>
     <div class="panel" id="askPanel">
       <h2>Ask for a change</h2>
@@ -213,6 +233,19 @@
       <h2>Story</h2>
       <textarea id="story" placeholder="What is this cut about? Who's in it, what's the running joke, what should it feel like? Saved into the EDL and read by the agent on the next pass."></textarea>
       <p class="hint">The thing the agent is worst at. Typing "the milk is the running joke" here beats an hour of analysis.</p>
+    </div>
+    <div class="panel" id="musicPanel">
+      <h2>Music</h2>
+      <select id="musicTrack" style="width:100%"><option value="">no music</option></select>
+      <div id="musicOpts" style="display:none">
+        <div class="kv" style="margin-top:8px"><span>duck under speech</span><b><span id="duckVal">12</span> dB</b></div>
+        <input type="range" id="duck" min="0" max="24" step="1" value="12" style="width:100%">
+        <div class="hint" style="display:flex;gap:12px;margin-top:6px">
+          <label>fade in <input type="number" id="fadeIn" min="0" max="20" step="0.5" value="1.5" style="width:58px"> s</label>
+          <label>fade out <input type="number" id="fadeOut" min="0" max="20" step="0.5" value="4" style="width:58px"> s</label>
+        </div>
+      </div>
+      <p class="hint" id="musicHint"></p>
     </div>
     <div class="panel">
       <h2>Renders</h2>
@@ -232,7 +265,11 @@
     </div>
     <div class="panel">
       <h2>Add a moment</h2>
-      <div class="hint" style="margin-bottom:6px">Audio candidates not yet in the cut.</div>
+      <div class="tabs" id="libTabs" style="display:none">
+        <span class="tab sel" data-tab="heard">heard</span>
+        <span class="tab" data-tab="seen">seen</span>
+      </div>
+      <div class="hint" id="libHint" style="margin-bottom:6px">Audio candidates not yet in the cut.</div>
       <div class="lib" id="library"></div>
     </div>
     <div class="panel">
@@ -247,6 +284,8 @@
   </aside>
 </main>
 <div id="toast"></div>
+<!-- The music bed, heard under the monitor. -->
+<audio id="bed" loop preload="auto"></audio>
 <script src="/app.js"></script>
 </body>
 </html>

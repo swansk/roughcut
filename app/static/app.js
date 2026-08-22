@@ -98,6 +98,11 @@ function segCard(seg, i) {
   const lines = linesFor(seg).map(
     (u) => `<div><b>${u.start.toFixed(1)}</b> ${escapeHtml(u.text)}</div>`).join('')
     || '<div>(no speech)</div>';
+  // What the visual pass saw inside this shot — the only account of anything nobody said.
+  const seen = seenFor(seg).map(
+    (m) => `<div><b>${m.start.toFixed(1)}</b> ${kindTag(m.kind)}${escapeHtml(m.what)}</div>`).join('');
+  const blind = unusableFor(seg).map(
+    (u) => `unusable ${u.start.toFixed(1)}–${u.end.toFixed(1)}: ${u.why}`).join(' · ');
 
   el.innerHTML = `
     <video preload="metadata" muted playsinline
@@ -108,10 +113,12 @@ function segCard(seg, i) {
         <span class="clip">${seg.clip.replace('.MP4', '')}</span>
         <span class="times">${seg.in.toFixed(2)} → ${seg.out.toFixed(2)}</span>
         ${warn ? `<span style="color:var(--warn)">⚠ ${warn}</span>` : ''}
+        ${blind ? `<span style="color:var(--bad)" class="blind">⚠ ${escapeHtml(blind)}</span>` : ''}
         <span class="dur">${(seg.out - seg.in).toFixed(2)}s</span>
       </div>
       <div class="why" contenteditable data-i="${i}">${escapeHtml(seg.why || '')}</div>
       <div class="lines">${lines}</div>
+      ${seen ? `<div class="lines seen">${seen}</div>` : ''}
       <div class="trim">
         <span>in</span>
         <button data-act="in" data-d="-0.25">−</button>
@@ -236,6 +243,7 @@ function playFrom(i, { single = false } = {}) {
   };
   if (v.readyState >= 1) go(); else v.addEventListener('loadedmetadata', go, { once: true });
   player.playing = true;
+  cueBed(filmStart(i) + (resume ? Math.max(0, v.currentTime - seg.in) : 0));
   schedule();
   paintStrip();
   paintTransport();
@@ -243,6 +251,7 @@ function playFrom(i, { single = false } = {}) {
 
 function pauseCut() {
   player.vids.forEach((v) => v.pause());
+  if (bed.el) bed.el.pause();
   player.playing = false;
   cancelAnimationFrame(player.raf);
   paintTransport();
@@ -259,7 +268,9 @@ function boundary() {
   const seg = segs[player.idx];
   if (!seg) { pauseCut(); return true; }
   const clipT = v.currentTime;
-  paintPos(filmStart(player.idx) + Math.max(0, clipT - seg.in), clipT, seg);
+  const filmT = filmStart(player.idx) + Math.max(0, clipT - seg.in);
+  paintPos(filmT, clipT, seg);
+  bedTick(filmT, clipT, seg);
   if (clipT >= seg.out - 0.04 || v.ended) { advance(); return true; }
   return false;
 }
@@ -276,6 +287,7 @@ function advance() {
   const next = player.idx + 1;
   if (player.single || next >= segs.length) {
     player.playing = false;
+    if (bed.el) bed.el.pause();
     cancelAnimationFrame(player.raf);
     if (!player.single) { sel = 0; player.idx = -1; paint(); }   // the end: space restarts
     paintTransport();
@@ -382,6 +394,11 @@ function emptyState() {
       before anything can be cut — <b>Analyse audio</b>, on the right.</div>`;
     return el;
   }
+  const vz = S && S.visual;
+  const look = vz && vz.pending.length ? `<div class="hint" style="margin-top:12px">Optional, and
+    worth it on footage where things happen: <b>Look at the footage</b> first (Project panel —
+    ${vz.pending.length} clip${vz.pending.length > 1 ? 's' : ''}, ~$${vz.projected_usd.toFixed(2)}),
+    so the first cut knows what happened on screen and not only what was said.</div>` : '';
   el.innerHTML = `<h3>No cut yet</h3>
     <div>${analysed} clip${analysed > 1 ? 's' : ''} analysed and ready.
     Say what this film is about — a sentence is enough — and ask for a first cut.
@@ -389,7 +406,7 @@ function emptyState() {
     <textarea id="firstNote" style="margin-top:12px;min-height:60px"
       placeholder="a 2–3 minute edit of the trip for the friends who were there · loose and fun · the people are the point"></textarea>
     <button id="firstCut" class="primary" style="margin-top:10px">Ask for a first cut</button>
-    <div class="hint" id="firstState" style="margin-top:8px"></div>`;
+    <div class="hint" id="firstState" style="margin-top:8px"></div>${look}`;
   el.querySelector('#firstCut').onclick = () => ask({
     note: el.querySelector('#firstNote').value.trim(),
     button: el.querySelector('#firstCut'),
@@ -431,34 +448,254 @@ function render() {
   renderLibrary();
 }
 
+/* What the visual pass saw inside this shot, and any stretch it said not to use. */
+const HOT = new Set(['fall', 'crash', 'jump', 'reaction']);
+
+function seenFor(seg) {
+  const v = (P.clips[seg.clip] || {}).visual || {};
+  return (v.moments || []).filter((m) => m.end > seg.in && m.start < seg.out);
+}
+
+function unusableFor(seg) {
+  const v = (P.clips[seg.clip] || {}).visual || {};
+  return (v.unusable || []).filter((u) => u.end > seg.in && u.start < seg.out);
+}
+
+function kindTag(kind) {
+  return `<i class="kind${HOT.has(kind) ? ' hot' : ''}">${escapeHtml(kind || 'seen')}</i>`;
+}
+
+/* Two sources of moments to add: what was *heard* (the audio candidates, ranked) and
+ * what was *seen* (the visual pass's notable moments — events first, since a fall
+ * nobody narrated is exactly what the transcripts cannot offer). */
+let libTab = 'heard';
+
 function renderLibrary() {
   const used = new Set(segs.map((s) => `${s.clip}@${Math.round(s.in)}`));
   const rows = [];
+  let anySeen = false;
   for (const clip of Object.values(P.clips)) {
-    for (const c of clip.candidates) {
-      if (used.has(`${clip.clip}@${Math.round(c.t)}`)) continue;
-      rows.push({ clip: clip.clip, ...c });
+    const moments = (clip.visual || {}).moments || [];
+    if (moments.length) anySeen = true;
+    if (libTab === 'seen') {
+      for (const m of moments) {
+        if (!m.notable || m.kind === 'junk') continue;
+        if (used.has(`${clip.clip}@${Math.round(m.start)}`)) continue;
+        rows.push({ clip: clip.clip, t: m.start, end: m.end, why: m.what, kind: m.kind,
+                    score: HOT.has(m.kind) ? 2 : m.kind === 'scenery' ? 0 : 1 });
+      }
+    } else {
+      for (const c of clip.candidates) {
+        if (used.has(`${clip.clip}@${Math.round(c.t)}`)) continue;
+        rows.push({ clip: clip.clip, ...c });
+      }
     }
   }
   rows.sort((a, b) => b.score - a.score);
+  $('#libTabs').style.display = anySeen ? 'flex' : 'none';
+  if (!anySeen) libTab = 'heard';
+  $('#libHint').textContent = libTab === 'seen'
+    ? 'What the visual pass saw, not yet in the cut — events first.'
+    : 'Audio candidates not yet in the cut.';
   const lib = $('#library');
-  lib.innerHTML = '';
+  lib.innerHTML = rows.length ? '' : `<div class="hint">${libTab === 'seen'
+    ? 'nothing left that was seen — or look at more of the footage (Project panel)'
+    : 'nothing left to add'}</div>`;
   rows.slice(0, 40).forEach((r) => {
-    // The line people read is what is said, not the ranking score that put it here.
+    // The line people read is what is said or seen, not the ranking score that put it here.
     const d = document.createElement('div');
     d.className = 'cand';
-    d.innerHTML = `<span class="w">${escapeHtml(r.why)}</span>
-      <span class="t">${r.clip.replace('.MP4', '')} · ${fmt(r.t)}</span>`;
+    d.innerHTML = `<span class="w">${r.kind ? kindTag(r.kind) : ''}${escapeHtml(r.why)}</span>
+      <span class="t">${stem(r.clip)} · ${fmt(r.t)}${r.end ? `–${fmt(r.end)}` : ''}</span>`;
     d.onclick = () => {
       pushUndo();
       const at = sel + 1;
       segs.splice(at, 0, { clip: r.clip, in: r.t, out: r.end ?? r.t + 3, why: r.why });
       sel = at;
       render();
-      toast(`added ${r.clip.replace('.MP4', '')} @ ${r.t.toFixed(1)}s`);
+      toast(`added ${stem(r.clip)} @ ${r.t.toFixed(1)}s`);
     };
     lib.appendChild(d);
   });
+}
+
+/* The visual pass, in-app. Karl: "the analysis missed some critical moments that would
+ * have required video analysis — like me falling into a river." The pass that finds
+ * those existed in a terminal; this runs it with the same honest progress as the audio
+ * pass. It costs model calls, so the button carries the count and the price, and
+ * nothing here starts on its own. */
+let looking = false;
+
+async function lookAtFootage() {
+  const r = await fetch('/api/visual', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+  });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    return toast(`could not start: ${d.detail || r.status}`, 5000);
+  }
+  const { job, total } = await r.json();
+  looking = true;
+  $('#visual').disabled = true;
+  $('#visual').textContent = 'Looking…';
+  $('#visualBar').style.display = 'block';
+  const poll = setInterval(async () => {
+    let s;
+    try { s = await (await fetch(`/api/visual/${job}`)).json(); } catch (e) { return; }
+    $('#visualBar').firstElementChild.style.width =
+      `${Math.round(100 * s.done / Math.max(1, total))}%`;
+    $('#visualState').textContent = `${s.done}/${total} clips seen · ${clock(s.elapsed_s)}`;
+    if (s.state === 'running') return;
+    clearInterval(poll);
+    looking = false;
+    $('#visualBar').style.display = 'none';
+    $('#visualState').textContent = '';
+    // Whatever was written is worth showing, even if a later sheet failed.
+    P = await (await fetch('/api/project')).json();
+    await refreshStatus();
+    if (s.state === 'failed') {
+      render();
+      return toast(`visual pass failed — ${s.log.split('\n').slice(-1)[0] || 'see log'}`, 8000);
+    }
+    libTab = 'seen';
+    document.querySelectorAll('.tab').forEach((x) =>
+      x.classList.toggle('sel', x.dataset.tab === 'seen'));
+    render();
+    toast(`${s.done} clip${s.done === 1 ? '' : 's'} seen — what happened on screen is on the cards now, and under "seen"`, 6000);
+  }, 2000);
+}
+
+/* Music: a bed under the cut. The same `effects_music` the render reads, saved the
+ * moment it changes, and heard in the monitor before anything is rendered. */
+let music = null;             // the EDL's effects_music, or null
+let tracks = [];              // assets/music, from /api/assets
+const bed = { el: null, gain: 0, last: 0 };
+
+async function loadAssets() {
+  try {
+    tracks = (await (await fetch('/api/assets')).json()).music || [];
+  } catch (e) {
+    tracks = [];
+  }
+  $('#musicTrack').innerHTML = '<option value="">no music</option>' + tracks.map((t) =>
+    `<option value="${escapeHtml(t.asset)}">${escapeHtml(t.name)} · ${fmt(t.duration_s || 0)}</option>`).join('');
+  paintMusic();
+}
+
+function trackInfo() {
+  return music ? tracks.find((t) => t.asset === music.asset) : undefined;
+}
+
+function paintMusic() {
+  const sel = $('#musicTrack');
+  sel.value = music ? music.asset : '';
+  if (music && sel.value !== music.asset) {   // the EDL names a track the library lacks
+    sel.insertAdjacentHTML('beforeend',
+      `<option value="${escapeHtml(music.asset)}">${escapeHtml(music.asset)} (not in assets/)</option>`);
+    sel.value = music.asset;
+  }
+  $('#musicOpts').style.display = music ? 'block' : 'none';
+  if (music) {
+    $('#duck').value = music.duck === false ? 0 : (music.duck_db ?? 12);
+    $('#duckVal').textContent = $('#duck').value;
+    $('#fadeIn').value = music.fade_in ?? 1.5;
+    $('#fadeOut').value = music.fade_out ?? 4;
+  }
+  $('#musicHint').textContent = music
+    ? 'Heard under the cut in the monitor; the render mixes it under the film with the picture untouched.'
+    : tracks.length
+      ? 'A bed sits under the cut and ducks where people talk. You hear it in the monitor before you render.'
+      : 'No tracks yet — drop an mp3 or wav into assets/music/ and reload.';
+}
+
+function musicChanged() {
+  const asset = $('#musicTrack').value;
+  if (!asset) {
+    music = null;
+  } else {
+    const duck = parseFloat($('#duck').value);
+    music = { asset, duck: duck > 0, duck_db: duck > 0 ? duck : 12,
+              fade_in: parseFloat($('#fadeIn').value) || 0,
+              fade_out: parseFloat($('#fadeOut').value) || 0 };
+  }
+  paintMusic();
+  cueBed();
+  save();                       // straight to disk: a render reads the EDL, not the screen
+}
+
+/* Where people talk in a clip, padded and merged the way effects.speech_regions does it
+ * for the render — so the duck you hear in the monitor is the duck the render applies. */
+function speechRegions(clip) {
+  const c = P.clips[clip];
+  if (!c) return [];
+  if (c._speech) return c._speech;
+  const raw = (c.transcript || []).map((u) => [u.start - 0.35, u.end + 0.35])
+    .sort((a, b) => a[0] - b[0]);
+  const out = [];
+  for (const [lo, hi] of raw) {
+    const last = out[out.length - 1];
+    if (last && lo - last[1] <= 1.2) last[1] = Math.max(last[1], hi);
+    else out.push([Math.max(0, lo), hi]);
+  }
+  c._speech = out;
+  return out;
+}
+
+/* The bed's level at a moment, as a linear gain for the <audio>: the render's balance
+ * (bed at −24 LUFS under a film at −16) transposed onto the proxy's own loudness, pulled
+ * down by the asked depth while anyone is talking, faded at the ends of the film. */
+function bedGainAt(filmT, clipT, seg) {
+  const t = trackInfo();
+  if (!music || !t || !seg) return 0;
+  const clipLufs = ((P.clips[seg.clip] || {}).summary || {}).integrated_lufs ?? -16;
+  const trackLufs = t.lufs ?? -14;
+  let db = (-24 - trackLufs) - (-16 - clipLufs);
+  if (music.duck && speechRegions(seg.clip).some(([lo, hi]) => clipT >= lo && clipT <= hi)) {
+    db -= music.duck_db;
+  }
+  let g = Math.pow(10, db / 20);
+  const tot = total();
+  if (music.fade_in > 0) g *= Math.min(1, filmT / music.fade_in);
+  if (music.fade_out > 0) g *= Math.min(1, Math.max(0, tot - filmT) / music.fade_out);
+  return Math.max(0, Math.min(1, g));
+}
+
+/* Called every frame while the monitor plays. Fast down, slow up — 80ms / 900ms, the
+ * render's envelope — so the bed reads as mixed rather than pumping. */
+function bedTick(filmT, clipT, seg) {
+  if (!bed.el || !music) return;
+  const target = bedGainAt(filmT, clipT, seg);
+  const now = performance.now();
+  const dt = Math.min(0.2, bed.last ? (now - bed.last) / 1000 : 0.016);
+  bed.last = now;
+  const tau = target < bed.gain ? 0.08 / 3 : 0.9 / 3;
+  bed.gain += (target - bed.gain) * (1 - Math.exp(-dt / tau));
+  bed.el.volume = Math.max(0, Math.min(1, bed.gain));
+}
+
+/* Start (or re-point) the bed at a film time. With no argument, at wherever the monitor
+ * is — used when the track or its settings change mid-play. */
+function cueBed(filmT) {
+  const el = bed.el;
+  if (!el) return;
+  const t = trackInfo();
+  if (!music || !t) {
+    el.pause();
+    if (el.dataset.src) { delete el.dataset.src; el.removeAttribute('src'); el.load(); }
+    return;
+  }
+  if (el.dataset.src !== t.url) { el.dataset.src = t.url; el.src = t.url; el.load(); }
+  if (filmT === undefined) {
+    if (!player.playing || player.idx < 0) return;
+    const seg = segs[player.idx];
+    filmT = filmStart(player.idx) + Math.max(0, liveVideo().currentTime - seg.in);
+  }
+  const seek = () => { el.currentTime = t.duration_s ? filmT % t.duration_s : 0; };
+  if (el.readyState >= 1) seek(); else el.addEventListener('loadedmetadata', seek, { once: true });
+  bed.gain = 0;
+  bed.last = 0;
+  el.volume = 0;
+  el.play().catch(() => {});
 }
 
 /* The board was flat: Ask, Snap, Undo, Save and Render were peers, and nothing said
@@ -486,10 +723,12 @@ function paintSteps() {
 async function refreshStatus() {
   S = await (await fetch('/api/status')).json();
   const missing = Object.entries(S.tools).filter(([, ok]) => !ok).map(([t]) => t);
+  const vz = S.visual || { pending: [], done: 0, total: 0, calls: 0, projected_usd: 0 };
   $('#project').innerHTML = `
     <div class="kv"><span>clips in folder</span><b>${S.clips}</b></div>
     <div class="kv"><span>analysed</span><b>${S.analysed}</b></div>
     <div class="kv"><span>shots in the cut</span><b>${S.segments}</b></div>
+    ${vz.total ? `<div class="kv"><span>looked at</span><b>${vz.done}/${vz.total}</b></div>` : ''}
     ${S.footage_exists ? '' : '<div style="color:var(--bad)">footage folder not found</div>'}
     ${missing.length ? `<div style="color:var(--bad)">missing on PATH: ${missing.join(', ')}</div>` : ''}
     <div class="path">${escapeHtml(S.footage)}</div>
@@ -517,6 +756,17 @@ async function refreshStatus() {
     : 'Analysing…';
   btn.disabled = analysing;
   btn.classList.toggle('primary', S.pending.length > 0 && !segs.length);
+  // The visual pass: offered with its price while there is footage nobody has looked at.
+  const vbtn = $('#visual');
+  $('#visualRow').style.display = vz.pending.length || looking ? 'flex' : 'none';
+  if (!looking) {
+    const n = vz.pending.length;
+    vbtn.disabled = false;
+    vbtn.textContent = `Look at ${n} clip${n === 1 ? '' : 's'} · ~$${vz.projected_usd.toFixed(2)}`;
+    vbtn.title = `Samples frames from each clip and asks a model what happens in them — the `
+      + `only way the agent learns about a fall nobody narrated. ${vz.calls} model call`
+      + `${vz.calls === 1 ? '' : 's'}, about $${vz.projected_usd.toFixed(2)} projected.`;
+  }
   return S;
 }
 
@@ -614,7 +864,7 @@ async function save() {
   clearTimeout(saveTimer);
   const r = await fetch('/api/project', {
     method: 'PUT', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ segments: segs, story: $('#story').value }),
+    body: JSON.stringify({ segments: segs, story: $('#story').value, music }),
   });
   if (!r.ok) {
     $('#saveState').textContent = 'save failed';
@@ -781,8 +1031,9 @@ function rejectProposal() {
 /* Renders made before the metadata sidecar existed have no duration or shot count;
  * "0:00.0 · ? shots" reads as a broken file rather than an old one. */
 function versionLabel(v) {
-  return v.duration_s ? `${fmt(v.duration_s)} · ${v.segments} shots`
+  const base = v.duration_s ? `${fmt(v.duration_s)} · ${v.segments} shots`
     : `${v.name.replace(/^cut_|\.mp4$/g, '')} · older render`;
+  return v.music ? `${base} ♪` : base;
 }
 
 function loadVersion(v, slot) {
@@ -910,8 +1161,11 @@ async function boot() {
     });
   });
   $('#playCut').onclick = toggleCut;
+  bed.el = $('#bed');
   P = await (await fetch('/api/project')).json();
+  music = P.music || null;
   await refreshStatus();
+  await loadAssets();
   segs = P.segments.map((s) => ({ ...s }));
   $('#title').textContent = [P.variant, P.title].filter(Boolean).join(' · ');
   $('#story').value = P.story || '';
@@ -934,5 +1188,18 @@ async function boot() {
   $('#ask').onclick = () => ask();   // not `ask` — a MouseEvent has a `.button` too
   $('#acceptProposal').onclick = acceptProposal;
   $('#rejectProposal').onclick = rejectProposal;
+  $('#visual').onclick = lookAtFootage;
+  $('#libTabs').onclick = (e) => {
+    const t = e.target.closest('.tab');
+    if (!t) return;
+    libTab = t.dataset.tab;
+    document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('sel', x === t));
+    renderLibrary();
+  };
+  $('#musicTrack').onchange = musicChanged;
+  $('#duck').oninput = () => { $('#duckVal').textContent = $('#duck').value; };
+  $('#duck').onchange = musicChanged;
+  $('#fadeIn').onchange = musicChanged;
+  $('#fadeOut').onchange = musicChanged;
 }
 boot();

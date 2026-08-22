@@ -1059,3 +1059,194 @@ def test_index_and_script_served(client):
     js = client.get("/app.js")
     assert js.status_code == 200
     assert "function render" in js.text
+
+
+# ------------------------------------------------------------------ the visual pass
+
+def _stub_looker(script: Path, out: Path, stems: list[str]) -> list[str]:
+    """A stand-in for visual_pass.py that writes one visual sidecar per clip, slowly.
+    The real tool spends a model call per contact sheet; none of that exercises the
+    job plumbing, which is what is under test."""
+    script.write_text(
+        "import json, sys, time\n"
+        "from pathlib import Path\n"
+        "out = Path(sys.argv[1]); out.mkdir(parents=True, exist_ok=True)\n"
+        "for stem in sys.argv[2:]:\n"
+        "    time.sleep(0.15)\n"
+        "    (out / f'{stem}.visual.json').write_text(json.dumps({\n"
+        "        'clip': f'{stem}.MP4',\n"
+        "        'moments': [{'start': 1.0, 'end': 3.0, 'what': 'rider goes down hard',\n"
+        "                     'kind': 'fall', 'notable': True}],\n"
+        "        'unusable': [{'start': 0.0, 'end': 0.5, 'why': 'lens covered'}],\n"
+        "        'summary': 'a run', 'projected_usd': 0.09}))\n"
+        "    print(f'{stem}.MP4: 1 moments', flush=True)\n", encoding="utf-8")
+    return [sys.executable, str(script), str(out), *stems]
+
+
+def _wait_visual(client, job, timeout=20.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        s = client.get(f"/api/visual/{job}").json()
+        if s["state"] != "running":
+            return s
+        time.sleep(0.1)
+    raise AssertionError(f"visual pass did not finish: {s}")
+
+
+def test_the_visual_pass_is_priced_before_it_is_offered(tmp_path, project):
+    """It spends model calls, so the status says what the rest of the bin would cost —
+    and nothing starts on the app's own initiative."""
+    import server
+
+    with _fresh(tmp_path, project, sidecars=project["sidecars"], visual=None) as c:
+        v = c.get("/api/status").json()["visual"]
+        assert v["done"] == 0 and v["total"] == 3
+        assert v["pending"] == ["CLIP_A.MP4", "CLIP_B.MP4", "CLIP_C.MP4"]
+        assert v["calls"] == 3                         # one sheet each, for 6s clips
+        assert v["projected_usd"] == pytest.approx(3 * server.VISUAL_USD_PER_SHEET)
+        assert v["running"] is False
+        # per-bin, like proxies and renders, so two bins' sidecars never mix
+        assert Path(v["dir"]) == tmp_path / "visual" / project["footage"].name
+    assert server.VISUALS == {}
+
+
+def test_the_visual_pass_runs_in_app_and_what_it_saw_reaches_the_board(
+        tmp_path, project, monkeypatch):
+    import server
+
+    monkeypatch.setattr(server, "PROGRESS_TICK_S", 0.05)
+    seen: dict = {}
+
+    def cmd(only, force):
+        seen["only"], seen["force"] = only, force
+        return _stub_looker(tmp_path / "look.py", server.STATE["visual"],
+                            ["CLIP_A", "CLIP_B", "CLIP_C"])
+
+    monkeypatch.setattr(server, "visual_cmd", cmd)
+    with _fresh(tmp_path, project, sidecars=project["sidecars"], visual=None) as c:
+        start = c.post("/api/visual", json={}).json()
+        assert start["total"] == 3
+        counts = set()
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            s = c.get(f"/api/visual/{start['job']}").json()
+            counts.add(s["done"])
+            assert s["elapsed_s"] >= 0
+            if s["state"] != "running":
+                break
+            time.sleep(0.05)
+        assert s["state"] == "done" and s["done"] == 3, s
+        assert counts & {1, 2}, f"never reported partial progress: {sorted(counts)}"
+        assert "CLIP_C.MP4: 1 moments" in s["log"]
+        assert seen["only"] == ["CLIP_A", "CLIP_B", "CLIP_C"] and seen["force"] is False
+
+        # without a restart: the board sees what was seen, and status stops offering it
+        clip = c.get("/api/project").json()["clips"]["CLIP_A.MP4"]
+        assert clip["visual"]["moments"][0]["kind"] == "fall"
+        assert clip["visual"]["unusable"][0]["why"] == "lens covered"
+        v = c.get("/api/status").json()["visual"]
+        assert v["done"] == 3 and v["pending"] == [] and v["projected_usd"] == 0
+        # a second run has nothing to do unless forced
+        assert c.post("/api/visual", json={}).status_code == 400
+
+
+def test_one_visual_pass_at_a_time_and_a_failure_is_reported(tmp_path, project,
+                                                             monkeypatch):
+    import server
+
+    monkeypatch.setattr(server, "visual_cmd", lambda only, force: [
+        sys.executable, "-c",
+        "import sys, time; time.sleep(0.8); print('no sheet could be read'); sys.exit(3)"])
+    with _fresh(tmp_path, project, sidecars=project["sidecars"], visual=None) as c:
+        job = c.post("/api/visual", json={}).json()["job"]
+        assert c.post("/api/visual", json={}).status_code == 409
+        final = _wait_visual(c, job)
+        assert final["state"] == "failed"
+        assert "no sheet could be read" in final["log"]
+        assert c.get("/api/visual/nope").status_code == 404
+
+
+# ------------------------------------------------------------------ music in the board
+
+def _library(tmp_path) -> Path:
+    """An asset library with one 2s track in it."""
+    lib = tmp_path / "assets"
+    (lib / "music").mkdir(parents=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-f", "lavfi",
+                    "-i", "sine=frequency=900:duration=2",
+                    str(lib / "music" / "bed.wav")], check=True)
+    return lib
+
+
+def test_assets_are_listed_with_what_a_bed_needs_to_know(tmp_path, project):
+    """A track's loudness is what sets the bed level — the first music render was
+    inaudible because a raw gain met a track nobody had measured."""
+    lib = _library(tmp_path)
+    with _fresh(tmp_path, project, sidecars=project["sidecars"], assets=lib) as c:
+        a = c.get("/api/assets").json()
+        assert [t["asset"] for t in a["music"]] == ["music/bed.wav"]
+        track = a["music"][0]
+        assert track["duration_s"] == pytest.approx(2.0, abs=0.1)
+        assert isinstance(track["lufs"], float)
+        assert a["sfx"] == [] and a["overlay"] == []
+        # served over the same range-capable route as the proxies, so the board can
+        # play it under the cut
+        assert c.get(track["url"], headers={"Range": "bytes=0-99"}).status_code == 206
+        assert c.get("/media/asset/music/nope.wav").status_code == 404
+        assert c.get("/media/asset/etc/passwd").status_code == 404
+
+
+def test_music_is_saved_into_the_edl_validated_and_rendered(tmp_path, project):
+    """The board writes `effects_music` — the key assemble.py already reads — so a
+    render picks the bed up with nothing else to do. Validated like a segment: an asset
+    that is not in the library, or a gain outside range, is a 400 and the EDL is not
+    touched."""
+    lib = _library(tmp_path)
+    original = project["edl"].read_text(encoding="utf-8")
+    try:
+        with _fresh(tmp_path, project, edl=project["edl"], sidecars=project["sidecars"],
+                    assets=lib) as c:
+            segs = [{"clip": "CLIP_A.MP4", "in": 0.0, "out": 3.0, "why": "a"}]
+            r = c.put("/api/project", json={
+                "segments": segs, "story": "",
+                "music": {"asset": "music/bed.wav", "duck_db": 10,
+                          "fade_in": 0.5, "fade_out": 1.0}})
+            assert r.status_code == 200, r.text
+            on_disk = json.loads(project["edl"].read_text(encoding="utf-8"))
+            music = on_disk["effects_music"]
+            assert music["asset"] == "music/bed.wav" and music["duck"] is True
+            assert music["duck_db"] == 10 and music["fade_in"] == 0.5
+            assert "gain_db" not in music, "left for the render to measure"
+            assert c.get("/api/project").json()["music"]["asset"] == "music/bed.wav"
+
+            # a save that does not mention music leaves it alone
+            c.put("/api/project", json={"segments": segs, "story": "x"})
+            assert "effects_music" in json.loads(project["edl"].read_text(encoding="utf-8"))
+            # and a bad one changes nothing
+            bad = c.put("/api/project", json={"segments": segs, "story": "",
+                                              "music": {"asset": "music/missing.wav"}})
+            assert bad.status_code == 400 and "missing.wav" in bad.json()["detail"]
+            bad = c.put("/api/project", json={"segments": segs, "story": "",
+                                              "music": {"asset": "music/bed.wav",
+                                                        "gain_db": 40}})
+            assert bad.status_code == 400
+            still = json.loads(project["edl"].read_text(encoding="utf-8"))
+            assert still["effects_music"]["asset"] == "music/bed.wav"
+
+            # the render carries the bed, keyed on the transcript's speech
+            job = c.post("/api/render", json={"segments": segs}).json()["job"]
+            deadline = time.time() + 120
+            while (s := c.get(f"/api/render/{job}").json())["state"] == "running":
+                assert time.time() < deadline, "render timed out"
+                time.sleep(0.5)
+            assert s["state"] == "done", s["log"][-600:]
+            assert "music: bed.wav" in s["log"] and "keyed on speech" in s["log"]
+            assert _duration(Path(s["output"])) == pytest.approx(3.0, abs=0.35)
+            assert c.get("/api/renders").json()["renders"][0]["music"] == "music/bed.wav"
+
+            # null takes it out again
+            c.put("/api/project", json={"segments": segs, "story": "", "music": None})
+            assert "effects_music" not in json.loads(
+                project["edl"].read_text(encoding="utf-8"))
+    finally:
+        project["edl"].write_text(original, encoding="utf-8")

@@ -10,6 +10,32 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The visual pass runs from the board, and what it saw is on the board.** Karl, on the first
+  Killington cut: *"the analysis missed some critical moments that would have required video
+  analysis — like me falling into a river."* The pass that finds those has existed since the
+  prototype (`visual_pass.py`) but only in a terminal, and nothing on screen ever showed its
+  output — 3 of Killington's 12 clips had been looked at and the board could not say which.
+  The Project panel now offers **Look at N clips · ~$X**, priced from the clip durations before
+  it runs ($0.09 per 120s sheet, measured on CLIP_01 and provisional like everything about that
+  pass), never started on the app's own initiative, with the same sidecar-counted progress as
+  the audio pass. Once a clip has been seen: every shot card lists what is visible inside it
+  (`FALL 104.0 Person appears to be down…`), a shot overlapping a stretch the pass called
+  unusable says so in red, and *Add a moment* grows a **seen** tab beside **heard** — notable
+  moments only, events first, one click to insert. The empty timeline suggests looking before
+  asking for a first cut, because a first cut that knows about the fall is the point. Visual
+  sidecars are **per bin** under `--work` now, the third time that lesson has applied (proxies,
+  renders, these); Killington's three existing ones were moved across.
+- **Music, in the board.** The bed built last session existed only as `assemble.py --music`.
+  A Music panel lists `assets/music/` (served like the proxies, each track with its measured
+  loudness — the number the first inaudible bed was missing), and the chosen track with its
+  duck depth and fades is saved into the EDL as `effects_music` the moment it changes, so
+  Render picks it up with nothing else to do; versions that carry a bed are marked ♪. And the
+  **monitor plays the bed under the cut** before anything is rendered: the render's balance
+  (−24 LUFS under a −16 film, transposed onto each proxy's own loudness), ducked by the asked
+  depth across the same padded-and-merged speech regions `effects.speech_regions` keys the
+  render on, with its 80 ms / 900 ms envelope. Karl's note on the first bed — *"fading in and
+  out… people are talking and the music is distracting"* — cost a render and a listen per
+  attempt to hear; it is a slider and a press of space now.
 - **A monitor: the cut plays from the proxies, without a render.** The loop for judging an
   edit was trim → Render → wait two minutes → watch → repeat, because the board could play one
   shot at a time and nothing else. The main column now opens on a player that runs the whole
@@ -53,6 +79,12 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Fixed
+- **A save could be observed half-written.** The board autosaves on every edit while its own
+  status polls, the monitor and any render job read the same EDL, and a plain write truncates
+  the file before filling it — a reader landing in that gap got an empty file and a parse
+  error. Found by a new test polling the EDL during a save. Writes go to a temp name and are
+  renamed into place now, the same fix the proxies got; twenty hammered saves are never seen
+  unparseable.
 - **The CLI backend could not actually read an image.** SPEC §6.1's "images by path" rule was
   never true in practice: `claude -p` answers *"I need your permission to read the image"* and
   then fails schema validation twice, spending two calls to learn it. It now passes

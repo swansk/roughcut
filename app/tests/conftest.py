@@ -93,8 +93,16 @@ def project(tmp_path_factory) -> dict:
     }
     edl_path = root / "edl.json"
     edl_path.write_text(json.dumps(edl, indent=1), encoding="utf-8")
+
+    # An asset library with one 2s track, so the music panel has something to offer.
+    assets = root / "assets"
+    (assets / "music").mkdir(parents=True)
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-nostdin", "-f", "lavfi",
+         "-i", "sine=frequency=900:duration=2", str(assets / "music" / "bed.wav")],
+        check=True, capture_output=True)
     return {"root": root, "footage": footage, "sidecars": sidecars,
-            "work": work, "edl": edl_path, "stems": stems}
+            "work": work, "edl": edl_path, "stems": stems, "assets": assets}
 
 
 @pytest.fixture
@@ -109,7 +117,7 @@ def client(project):
     # whatever real bins happen to sit in ~/work/visual on this machine.
     server.configure(project["edl"], project["footage"], project["sidecars"],
                      project["work"], proxies=False,
-                     visual=project["work"] / "no-visual")
+                     visual=project["work"] / "no-visual", assets=project["assets"])
     server.ensure_proxies([f"{s}.MP4" for s in project["stems"]])
     with TestClient(server.app) as c:
         yield c

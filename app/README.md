@@ -72,11 +72,12 @@ server, and every edit is undoable because fiddling is only fun when it is cheap
 | | |
 |---|---|
 | **Monitor** | The whole cut, playing from the proxies — shot after shot, no render. A strip under it shows every shot as a block, width to length, coloured by clip; click one to play from there. `space` plays / pauses from the selected shot, `enter` plays just that shot, and the poster on any card jumps the monitor to it |
-| **Project** | Where this bin is: clips in the folder, how many analysed, shots in the cut, and the audio pass with a progress bar. Analysis was step 2 of five terminal steps; it runs here now |
+| **Project** | Where this bin is: clips in the folder, how many analysed, how many looked at, shots in the cut, and the two analysis passes with progress bars. The audio pass is local and free; the visual pass costs model calls, so it is offered with a count and a price while there is footage nobody has looked at, and never runs on its own |
 | **Timeline** | One card per segment: preview parked on the in-point, the transcript lines that fall inside the cut, why it was chosen (editable), trim controls, drag to reorder |
 | **Boundary warnings** | A live ⚠ when a cut opens mid-sentence or clips a line off — the defect Karl flagged, surfaced while you trim rather than only when you ask |
 | **Story panel** | Free text saved into the EDL. The thing the agent is worst at; typing "the milk is the running joke" beats an hour of analysis |
-| **Add a moment** | Audio candidates not already in the cut, ranked, one click to insert |
+| **Music** | Pick a track from `assets/music/`, set how far it ducks under speech and its fades. Saved into the EDL as `effects_music` the moment it changes, rendered by `assemble.py` with the picture untouched, and heard under the monitor with the same duck before you render |
+| **Add a moment** | Two tabs: **heard** — audio candidates not already in the cut, ranked — and **seen** — what the visual pass found, notable moments only, events first. One click to insert |
 | **Ask for a change** | Plain-language note → revised timeline, shown as a diff you accept or discard |
 | **Snap to speech** | Runs `edl_snap.py` and shows the result as a proposal — undoable, never silently applied |
 | **Steps** | footage · analyse · first cut · refine · render, with the one you are on marked. Read from state, so it cannot drift from the files on disk |
@@ -91,11 +92,13 @@ button: "ask for what you want" should not change its name depending on whether 
 screen yet. It is the piece that removes the hand-authored-EDL prerequisite — a bin of analysed
 footage plus a sentence about what the film is for is now enough to get a first cut.
 
-**If a visual pass has been run** (`research/tools/visual_pass.py`, sidecars under `~/work/visual`
-or `--visual`), each clip also arrives with *what is visible* — moments read from sampled frames,
-with the notable ones marked and the unusable stretches flagged. That is the only account the
-model has of things nobody narrated. It is optional: the audio pass is local and cheap, this one
-costs model calls.
+**If the footage has been looked at** (the Project panel's *Look at the footage*, or
+`research/tools/visual_pass.py`; sidecars per bin under `--work`, or `--visual`), each clip also
+arrives with *what is visible* — moments read from sampled frames, with the notable ones marked
+and the unusable stretches flagged. That is the only account the model has of things nobody
+narrated, and the same moments show on the shot cards and under *Add a moment → seen*. It is
+optional: the audio pass is local and cheap, this one costs model calls, which is why it is
+priced before it is offered.
 
 The originating prompt states two things a model reading clips one at a time cannot rediscover,
 both measured in R8/R9 rather than guessed: transcript density points *away* from the action on
@@ -138,7 +141,7 @@ uv run --with pytest --with fastapi --with uvicorn --with httpx --with playwrigh
     pytest app/tests -q
 ```
 
-**108 tests, ~65s** (89 API + 19 driving real Chromium). The suite builds its own three-clip
+**116 tests, ~60s** (94 API + 22 driving real Chromium). The suite builds its own three-clip
 synthetic project with fabricated transcripts, so it is fast, deterministic, and does not depend
 on `~/footage` — which matters for the container target. Model calls run against a scripted
 backend; there are no live calls.
@@ -146,7 +149,7 @@ backend; there are no live calls.
 The two layers answer different questions. The API tests prove the endpoints behave. They
 cannot prove that *using* the board works — that trimming updates the total, that undo restores
 exactly, that a preview can seek, that the boundary warnings track reality, that an empty
-timeline leads somewhere. Those live in the JavaScript and the browser's media stack, so nineteen
+timeline leads somewhere. Those live in the JavaScript and the browser's media stack, so twenty-two
 tests drive real Chromium against a real uvicorn server.
 
 `install_browser_deps.sh` exists because `playwright install --with-deps` needs root and this
@@ -184,8 +187,9 @@ Three real defects were found by writing the tests rather than by using the app:
 - **Junk and orientation are still not proposed.** The app analyses whatever is in the folder;
   which clips are junk, and whether the bin's rotation metadata should be honoured, are decided
   outside it (`--orient` at scaffold time, `skip` on the analyse call).
-- **Music mode (P2.6) is not built.** Karl asked for supplying an audio track and cutting to it
-  as an available, non-default mode. The slot-driven contract it implies ("fill these N slots of
-  these lengths") is a different selection problem, filed in FUTURE_PHASES.
+- **Music mode (P2.6) is not built.** A bed under the cut is (the Music panel); cutting *to* a
+  track is not. The slot-driven contract it implies ("fill these N slots of these lengths") is a
+  different selection problem, filed in FUTURE_PHASES. Nothing aligns a cut to a beat yet — a
+  cut that lands on one does so by luck.
 - Single project per launch; no project picker, though a bin no longer needs an EDL to open.
 - `complete_many` exists per SPEC §6.1 but nothing batches yet; the CLI backend would just loop.

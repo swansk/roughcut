@@ -44,7 +44,7 @@ def live_server(project):
 
     original = project["edl"].read_text(encoding="utf-8")
     server.configure(project["edl"], project["footage"], project["sidecars"],
-                     project["work"], proxies=False)
+                     project["work"], proxies=False, assets=project["assets"])
     server.ensure_proxies([f"{s}.MP4" for s in project["stems"]])
 
     port = _free_port()
@@ -415,6 +415,9 @@ def test_space_toggles_the_cut_and_enter_plays_one_shot(page):
     page.locator(".seg").first.click()
     page.keyboard.press("Space")
     page.wait_for_function("player.playing", timeout=10000)
+    # let the proxy actually load and run before pausing, or currentTime is still 0
+    page.wait_for_function(
+        "document.querySelector('.screen video.live').currentTime >= 1.0", timeout=10000)
     page.keyboard.press("Space")
     page.wait_for_function("!player.playing", timeout=5000)
     t = page.evaluate("document.querySelector('.screen video.live').currentTime")
@@ -425,3 +428,111 @@ def test_space_toggles_the_cut_and_enter_plays_one_shot(page):
     page.wait_for_function("!player.playing", timeout=15000)
     assert page.evaluate("player.idx") == 0
     assert page.evaluate("document.querySelector('#pv0').currentTime") >= 2.9
+
+
+# ------------------------------------------------------------------ what was seen
+
+def test_what_the_visual_pass_saw_shows_on_the_cards_and_in_the_library(page, project):
+    """Karl: the analysis "missed some critical moments that would have required video
+    analysis — like me falling into a river." Once a clip has been looked at, the fall has
+    to be on the board: as something you can add, and on the shot that contains it."""
+    import server
+
+    vdir = Path(server.STATE["visual"])
+    vdir.mkdir(parents=True, exist_ok=True)
+    sidecar = vdir / "CLIP_C.visual.json"
+    sidecar.write_text(json.dumps({
+        "clip": "CLIP_C.MP4",
+        "moments": [{"start": 1.5, "end": 3.5, "what": "rider goes down in deep snow",
+                     "kind": "fall", "notable": True},
+                    {"start": 4.0, "end": 6.0, "what": "trees", "kind": "scenery",
+                     "notable": False}],
+        "unusable": [{"start": 0.0, "end": 0.6, "why": "lens covered"}],
+        "summary": "a run"}), encoding="utf-8")
+    try:
+        page.reload()
+        page.wait_for_selector(".seg")
+        # the library grows a "seen" tab now that something has been looked at
+        page.locator("#libTabs .tab", has_text="seen").click()
+        cands = page.locator("#library .cand")
+        assert cands.count() == 1, "notable moments only — the scenery is not offered"
+        assert "fall" in cands.first.inner_text().lower()     # the tag renders uppercase
+        assert "rider goes down" in cands.first.inner_text()
+        cands.first.click()
+
+        card = page.locator(".seg", has_text="CLIP_C")
+        assert card.count() == 1
+        assert "rider goes down in deep snow" in card.locator(".lines.seen").inner_text()
+        # 1.5–3.5 is clear of the covered lens at the top of the clip…
+        assert "unusable" not in card.inner_text()
+        # …until the in-point is dragged back into it
+        for _ in range(4):
+            card.locator("button[data-act=in][data-d='-0.25']").click()
+        card = page.locator(".seg", has_text="CLIP_C")
+        assert "unusable 0.0–0.6: lens covered" in card.inner_text()
+    finally:
+        sidecar.unlink(missing_ok=True)
+
+
+# ------------------------------------------------------------------ music
+
+def test_the_music_panel_writes_the_bed_and_the_monitor_plays_it_ducked(page, project):
+    """Music is the EDL key the render reads, and the monitor plays the bed under the
+    cut with the same duck the render applies — so what you hear before rendering is
+    what you get after."""
+    page.select_option("#musicTrack", "music/bed.wav")
+    page.wait_for_function(
+        "document.querySelector('#saveState').textContent.startsWith('saved')",
+        timeout=8000)
+    on_disk = json.loads(Path(project["edl"]).read_text(encoding="utf-8"))
+    assert on_disk["effects_music"]["asset"] == "music/bed.wav"
+    assert on_disk["effects_music"]["duck_db"] == 12
+    assert page.locator("#musicOpts").is_visible()
+
+    # 12 dB lower while someone is talking: clip A is speech from 0.15s (padded) on, so
+    # 0.05s is the one quiet moment. Same film time for both so the fades cancel out.
+    talking = page.evaluate("bedGainAt(2.0, 1.0, segs[0])")
+    quiet = page.evaluate("bedGainAt(2.0, 0.05, segs[0])")
+    assert 0 < talking < quiet
+    assert 3.5 < quiet / talking < 4.5, f"expected ~4x (12 dB), got {quiet / talking:.2f}"
+
+    page.locator("#playCut").click()
+    page.wait_for_function("player.playing", timeout=10000)
+    page.wait_for_function("!document.querySelector('#bed').paused", timeout=8000)
+    assert page.evaluate("document.querySelector('#bed').src").endswith(
+        "/media/asset/music/bed.wav")
+    page.wait_for_function("document.querySelector('#bed').volume > 0", timeout=8000)
+    assert page.evaluate("document.querySelector('#bed').volume") < 0.5
+    page.locator("#playCut").click()
+    page.wait_for_function("document.querySelector('#bed').paused", timeout=5000)
+
+    # "no music" takes the key out again
+    page.select_option("#musicTrack", "")
+    for _ in range(50):
+        on_disk = json.loads(Path(project["edl"]).read_text(encoding="utf-8"))
+        if "effects_music" not in on_disk:
+            break
+        time.sleep(0.1)
+    assert "effects_music" not in on_disk
+
+
+def test_a_save_is_never_observed_half_written(page, project):
+    """The board autosaves while its own polls, the monitor and a render read the EDL.
+    Reading it mid-write used to return an empty file (a plain write truncates first);
+    this hammers the file through twenty saves and must never see anything unparseable."""
+    bad = 0
+    for i in range(20):
+        page.locator("#story").fill(f"draft {i}")
+        page.evaluate("save()")
+        for _ in range(5):
+            text = Path(project["edl"]).read_text(encoding="utf-8")
+            try:
+                json.loads(text)
+            except json.JSONDecodeError:
+                bad += 1
+            time.sleep(0.005)
+    page.wait_for_function(
+        "document.querySelector('#saveState').textContent.startsWith('saved')", timeout=8000)
+    assert bad == 0, f"saw a half-written EDL {bad} time(s)"
+    assert json.loads(Path(project["edl"]).read_text(encoding="utf-8"))["story"] == "draft 19"
+

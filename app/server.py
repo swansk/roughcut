@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import mimetypes
 import os
 import re
@@ -61,7 +62,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 import uvicorn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from roughcut import config, inference, revise   # noqa: E402  (after sys.path)
+from roughcut import config, effects, inference, revise   # noqa: E402  (after sys.path)
 
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent / "research" / "tools"
@@ -76,6 +77,7 @@ STATE: dict = {}
 RENDERS: dict[str, dict] = {}
 ANALYSES: dict[str, dict] = {}
 ASKS: dict[str, dict] = {}
+VISUALS: dict[str, dict] = {}
 
 
 # ---------------------------------------------------------------- proxies
@@ -229,8 +231,63 @@ def load_visual(clip: str) -> dict:
             "summary": d.get("summary", "")}
 
 
+def visual_stems() -> set[str]:
+    return {p.name[: -len(".visual.json")]
+            for p in STATE["visual"].glob("*.visual.json")}
+
+
+# The visual pass costs model calls, so it is priced before it is offered. One sheet is
+# 30 cells at 4s (visual_pass.py's defaults) and measured $0.09 on CLIP_01 (two sheets,
+# $0.18) — provisional like everything about that pass (RQ-1/RQ-7 are unmeasured).
+VISUAL_SHEET_S = 120.0
+VISUAL_USD_PER_SHEET = 0.09
+
+
+def clip_duration(clip: str) -> float | None:
+    """Seconds of footage in a clip: from its audio sidecar when analysed, otherwise
+    one ffprobe, cached either way."""
+    cache: dict = STATE.setdefault("durations", {})
+    if clip in cache:
+        return cache[clip]
+    d = load_sidecar(clip).get("duration_s")
+    if d is None:
+        src: Path = STATE["footage"] / clip
+        d = probe_duration(src) if src.exists() else None
+    cache[clip] = d
+    return d
+
+
+def visual_status() -> dict:
+    """How much of the bin has been looked at, and what looking at the rest would cost.
+
+    Never run on its own: the audio pass is local and free, this one spends a model call
+    per sheet, so the board offers it with a price and a count and the human clicks.
+    """
+    clips = footage_clips()
+    done = visual_stems()
+    pending = [c for c in clips if Path(c).stem not in done]
+    sheets = sum(max(1, math.ceil((clip_duration(c) or 0.0) / VISUAL_SHEET_S))
+                 for c in pending)
+    return {
+        "done": len(clips) - len(pending), "total": len(clips), "pending": pending,
+        "calls": sheets, "projected_usd": round(sheets * VISUAL_USD_PER_SHEET, 2),
+        "running": any(v["state"] == "running" for v in VISUALS.values()),
+        "dir": str(STATE["visual"]),
+    }
+
+
 def read_edl() -> dict:
     return json.loads(STATE["edl"].read_text(encoding="utf-8"))
+
+
+def write_edl(edl: dict) -> None:
+    """Atomically. The board autosaves on every edit while its own status polls, the
+    monitor and any render job read the same file; a plain write truncates first, and a
+    reader landing in that gap sees an empty file and fails to parse it. Found by a test
+    polling the EDL during a save — the same lesson as the proxies, one file over."""
+    tmp = STATE["edl"].with_name(STATE["edl"].name + f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(edl, indent=1), encoding="utf-8")
+    tmp.replace(STATE["edl"])
 
 
 def project_payload() -> dict:
@@ -270,6 +327,7 @@ def project_payload() -> dict:
         "clips": clips,
         "proxies_ready": STATE.get("proxies_ready", False),
         "edl_path": str(STATE["edl"]),
+        "music": edl.get("effects_music"),
     }
 
 
@@ -306,6 +364,7 @@ def api_status() -> JSONResponse:
         "tools": {t: shutil.which(t) is not None
                   for t in ("ffmpeg", "ffprobe", "uv")},
         "backend": backend_preflight(),
+        "visual": visual_status(),
     })
 
 
@@ -326,7 +385,25 @@ async def api_save(request: Request) -> JSONResponse:
                 seg[k] = s[k]
         clean.append(seg)
     edl["segments"] = clean
-    STATE["edl"].write_text(json.dumps(edl, indent=1), encoding="utf-8")
+    # Music is the same `effects_music` key assemble.py reads, validated the way a
+    # segment is: an asset that is not in the library, or a gain outside range, is a 400
+    # and nothing is written. A body that does not mention music leaves it alone; an
+    # explicit null removes it.
+    if "music" in body:
+        music = body["music"]
+        if music:
+            try:
+                spec = effects.music_spec(music)
+                effects.resolve_asset(spec["asset"], STATE["assets"])
+            except (ValueError, FileNotFoundError) as exc:
+                raise HTTPException(400, f"music: {exc}")
+            # gain_db stays unset unless given: the render measures the track and
+            # sets the bed level from its loudness, which is the lesson of the first
+            # inaudible bed.
+            edl["effects_music"] = {k: v for k, v in spec.items() if v is not None}
+        else:
+            edl.pop("effects_music", None)
+    write_edl(edl)
     return JSONResponse({"ok": True, "saved": len(clean)})
 
 
@@ -561,8 +638,14 @@ def _ticker(stop: threading.Event, update) -> None:
             pass          # a stat that fails must not kill the job it is watching
 
 
-def _analyze_job(job: str, cmd: list[str], wanted: set[str]) -> None:
-    entry = ANALYSES[job]
+def _run_counted(entry: dict, cmd: list[str], count) -> int:
+    """Run a tool in the background, streaming its log into `entry` and ticking
+    `entry["done"]` from `count()` on a clock. Returns the exit code (-1: never ran).
+
+    Counted from the sidecars on disk rather than parsed out of the tool's chatter: both
+    passes write one file per clip as they finish, so the filesystem is the honest
+    progress bar and stays right if the log format moves.
+    """
     lines: list[str] = []
     try:
         proc = subprocess.Popen(
@@ -572,16 +655,11 @@ def _analyze_job(job: str, cmd: list[str], wanted: set[str]) -> None:
             env={**os.environ, "PYTHONUNBUFFERED": "1"})
     except OSError as exc:
         entry.update(state="failed", log=str(exc))
-        return
+        return -1
     assert proc.stdout is not None
-
-    # Counted from the sidecars on disk rather than parsed out of the tool's chatter:
-    # audio_analyze.py writes each one as it finishes, so the filesystem is the honest
-    # progress bar and stays right if the log format moves.
     stop = threading.Event()
     ticker = threading.Thread(
-        target=_ticker,
-        args=(stop, lambda: entry.__setitem__("done", len(wanted & analysed_stems()))),
+        target=_ticker, args=(stop, lambda: entry.__setitem__("done", count())),
         daemon=True)
     ticker.start()
     try:
@@ -591,8 +669,14 @@ def _analyze_job(job: str, cmd: list[str], wanted: set[str]) -> None:
         rc = proc.wait()
     finally:
         stop.set()
-    entry["done"] = len(wanted & analysed_stems())
+    entry["done"] = count()
     entry["log"] = "\n".join(lines[-40:])
+    return rc
+
+
+def _analyze_job(job: str, cmd: list[str], wanted: set[str]) -> None:
+    entry = ANALYSES[job]
+    rc = _run_counted(entry, cmd, lambda: len(wanted & analysed_stems()))
     if rc != 0:
         entry["state"] = "failed"
         return
@@ -652,6 +736,68 @@ def api_analyze_status(job: str) -> JSONResponse:
     return JSONResponse(ANALYSES[job])
 
 
+# ---------------------------------------------------------------- the visual pass
+
+
+def visual_cmd(only: list[str], force: bool) -> list[str]:
+    """The visual pass, as a command. A function so the tests can replace it: the real
+    tool spends a model call per contact sheet."""
+    cmd = ["uv", "run", "--quiet", str(TOOLS / "visual_pass.py"), str(STATE["footage"]),
+           "-o", str(STATE["visual"]), "--orient", STATE["orient"]]
+    if only:
+        cmd += ["--only", ",".join(only)]
+    if force:
+        cmd += ["--force"]
+    return cmd
+
+
+def _visual_job(job: str, cmd: list[str], wanted: set[str]) -> None:
+    entry = VISUALS[job]
+    rc = _run_counted(entry, cmd, lambda: len(wanted & visual_stems()))
+    entry["state"] = "done" if rc == 0 else "failed"
+
+
+@app.post("/api/visual")
+async def api_visual(request: Request) -> JSONResponse:
+    """Look at the footage — the visual pass, in-app.
+
+    Karl, on the first Killington cut: *"the analysis missed some critical moments that
+    would have required video analysis — like me falling into a river."* The pass that
+    finds those exists (research/tools/visual_pass.py) but lived in a terminal; this runs
+    it over the bin with the same honest progress as the audio pass, counted from the
+    sidecars it writes. It costs model calls, so it is never started on the app's own
+    initiative — the status carries the price and the board asks.
+    """
+    body = await request.json()
+    if any(v["state"] == "running" for v in VISUALS.values()):
+        raise HTTPException(409, "a visual pass is already running")
+    only = {str(s).strip().upper() for s in body.get("only", []) if str(s).strip()}
+    force = bool(body.get("force"))
+    done = visual_stems()
+    wanted = {Path(c).stem for c in footage_clips()
+              if (not only or Path(c).stem.upper() in only)
+              and (force or Path(c).stem not in done)}
+    if not wanted:
+        raise HTTPException(400, "nothing to look at — every clip has been seen")
+
+    job = uuid.uuid4().hex[:8]
+    VISUALS[job] = {"state": "running", "log": "", "total": len(wanted), "done": 0,
+                    "started": time.time()}
+    threading.Thread(target=_visual_job,
+                     args=(job, visual_cmd(sorted(wanted), force), wanted),
+                     daemon=True).start()
+    return JSONResponse({"job": job, "total": len(wanted)})
+
+
+@app.get("/api/visual/{job}")
+def api_visual_status(job: str) -> JSONResponse:
+    if job not in VISUALS:
+        raise HTTPException(404, "no such job")
+    entry = VISUALS[job]
+    return JSONResponse({**entry,
+                         "elapsed_s": round(time.time() - entry["started"], 1)})
+
+
 def probe_duration(path: Path) -> float | None:
     r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
                         "-of", "csv=p=0", str(path)], capture_output=True, text=True)
@@ -666,6 +812,7 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
     parts_dir = STATE["work"] / f"parts_{job}"
     cmd = ["uv", "run", "--quiet", str(TOOLS / "assemble.py"), str(edl_path),
            "--footage", str(STATE["footage"]), "--sidecars", str(STATE["sidecars"]),
+           "--assets", str(STATE["assets"]),
            "--parts-dir", str(parts_dir), "-o", str(out_path)]
 
     # Same shape as the audio pass: a ticker counting finished parts on disk, so the
@@ -721,6 +868,7 @@ async def api_render(request: Request) -> JSONResponse:
         "planned_s": round(sum(s["out"] - s["in"] for s in edl["segments"]), 2),
         "story": (edl.get("story") or "")[:300],
         "note": (body.get("label") or "")[:120],
+        "music": (edl.get("effects_music") or {}).get("asset"),
     }
     RENDERS[job] = {"state": "running", "stage": "cutting", "log": "",
                     "output": None, "url": None, "started": time.time(),
@@ -749,6 +897,7 @@ def api_renders() -> JSONResponse:
             "created": meta.get("created", mp4.stat().st_mtime),
             "duration_s": meta.get("duration_s"), "segments": meta.get("segments"),
             "planned_s": meta.get("planned_s"), "note": meta.get("note", ""),
+            "music": meta.get("music"),
         })
     out.sort(key=lambda r: r["created"], reverse=True)
     return JSONResponse({"renders": out})
@@ -809,6 +958,55 @@ def media_render(name: str, request: Request) -> Response:
     return ranged_file(STATE["renders"] / Path(name).name, request)
 
 
+# ---------------------------------------------------------------- assets
+
+ASSET_KINDS = ("music", "sfx", "overlay")
+ASSET_SUFFIXES = {
+    "music": {".mp3", ".m4a", ".wav", ".flac", ".aac", ".ogg"},
+    "sfx": {".wav", ".mp3", ".m4a", ".flac"},
+    "overlay": {".png"},
+}
+
+
+def list_assets() -> dict:
+    """What is in the library, described. Tracks carry their measured loudness: a
+    bed level is meaningless without it (the first bed was 25 dB under the film because a
+    raw gain met a loud master). Measured once per file and cached by mtime."""
+    cache: dict = STATE.setdefault("asset_cache", {})
+    root: Path = STATE["assets"]
+    out: dict = {k: [] for k in ASSET_KINDS}
+    for kind in ASSET_KINDS:
+        d = root / kind
+        if not d.is_dir():
+            continue
+        for p in sorted(d.iterdir()):
+            if p.suffix.lower() not in ASSET_SUFFIXES[kind]:
+                continue
+            key = (str(p), p.stat().st_mtime)
+            if key not in cache:
+                info = {"name": p.name, "asset": f"{kind}/{p.name}", "kind": kind,
+                        "url": f"/media/asset/{kind}/{p.name}", "size": p.stat().st_size}
+                if kind in ("music", "sfx"):
+                    info["duration_s"] = probe_duration(p)
+                    lufs = effects.integrated_lufs(p)
+                    info["lufs"] = round(lufs, 1) if lufs is not None else None
+                cache[key] = info
+            out[kind].append(cache[key])
+    return out
+
+
+@app.get("/api/assets")
+def api_assets() -> JSONResponse:
+    return JSONResponse(list_assets())
+
+
+@app.get("/media/asset/{kind}/{name}")
+def media_asset(kind: str, name: str, request: Request) -> Response:
+    if kind not in ASSET_KINDS:
+        raise HTTPException(404, f"no such asset kind: {kind}")
+    return ranged_file(STATE["assets"] / kind / Path(name).name, request)
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
     return HTMLResponse((HERE / "static" / "index.html").read_text(encoding="utf-8"))
@@ -822,7 +1020,7 @@ def appjs() -> Response:
 
 def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path,
               proxies: bool = True, orient: str = "auto",
-              visual: Path | None = None) -> None:
+              visual: Path | None = None, assets: Path | None = None) -> None:
     """Point the app at a project. Shared by main() and the test suite, so tests
     exercise the same wiring the server uses rather than a parallel setup.
 
@@ -855,8 +1053,13 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
         scaffold_edl(edl_path, footage, orient)
     STATE["orient"] = read_edl().get("orient", "auto")   # needs STATE["edl"] set first
     STATE["asks"] = work / "asks" / footage.name
+    # Per-bin like proxies and renders — the third time this lesson has applied. The
+    # earlier default of one shared ~/work/visual would have mixed two bins' sidecars
+    # the moment their stems coincided.
     STATE["visual"] = (visual.expanduser().resolve() if visual is not None
-                       else Path.home() / "work" / "visual")
+                       else work / "visual" / footage.name)
+    STATE["assets"] = (assets.expanduser().resolve() if assets is not None
+                       else HERE.parent / "assets")
     STATE["work"].mkdir(parents=True, exist_ok=True)
     STATE["renders"].mkdir(parents=True, exist_ok=True)
     STATE["proxy_dir"].mkdir(parents=True, exist_ok=True)
@@ -879,8 +1082,12 @@ def main() -> int:
     ap.add_argument("--sidecars", type=Path, default=None,
                     help="audio sidecars; omitted, they live under --work per bin")
     ap.add_argument("--visual", type=Path, default=None,
-                    help="visual_pass.py sidecars (default ~/work/visual). Optional — "
-                         "the audio pass is local and cheap, this one costs calls")
+                    help="visual_pass.py sidecars (default: per bin under --work). "
+                         "Optional — the audio pass is local and cheap, this one "
+                         "costs calls, so the board offers it with a price")
+    ap.add_argument("--assets", type=Path, default=None,
+                    help="asset library root for music/sfx/overlay (default: the "
+                         "repo's assets/)")
     ap.add_argument("--orient", choices=("auto", "none"), default="auto",
                     help="rotation handling for a *new* project (per-bin, never "
                          "generalisable — see docs/HANDOFF.md)")
@@ -898,7 +1105,8 @@ def main() -> int:
         raise SystemExit(f"error: no such footage folder: {args.footage}")
 
     configure(args.edl, args.footage, args.sidecars, args.work,
-              proxies=not args.no_proxies, orient=args.orient, visual=args.visual)
+              proxies=not args.no_proxies, orient=args.orient, visual=args.visual,
+              assets=args.assets)
     clips, done = footage_clips(), analysed_stems()
     # Every print here flushes: stdout to a pipe is block-buffered, so launch
     # diagnostics would otherwise sit unseen behind uvicorn.run for the life of the
