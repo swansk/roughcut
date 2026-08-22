@@ -71,6 +71,7 @@ server, and every edit is undoable because fiddling is only fun when it is cheap
 
 | | |
 |---|---|
+| **Monitor** | The whole cut, playing from the proxies — shot after shot, no render. A strip under it shows every shot as a block, width to length, coloured by clip; click one to play from there. `space` plays / pauses from the selected shot, `enter` plays just that shot, and the poster on any card jumps the monitor to it |
 | **Project** | Where this bin is: clips in the folder, how many analysed, shots in the cut, and the audio pass with a progress bar. Analysis was step 2 of five terminal steps; it runs here now |
 | **Timeline** | One card per segment: preview parked on the in-point, the transcript lines that fall inside the cut, why it was chosen (editable), trim controls, drag to reorder |
 | **Boundary warnings** | A live ⚠ when a cut opens mid-sentence or clips a line off — the defect Karl flagged, surfaced while you trim rather than only when you ask |
@@ -120,8 +121,8 @@ projection is what answers "would this be affordable in production".
 `ANTHROPIC_API_KEY` and `ROUGHCUT_BACKEND=anthropic_api`. Until then Ask returns a 502 that says
 exactly that — the UI surfaces it rather than failing silently.
 
-Keys: `j`/`k` move · `space` play · `[` `]` trim in · `{` `}` trim out · `x` remove · `u` undo ·
-hold `shift` for 1s steps.
+Keys: `j`/`k` move · `space` play / pause the cut from here · `enter` play this shot only ·
+`[` `]` trim in · `{` `}` trim out · `x` remove · `u` undo · hold `shift` for 1s steps.
 
 ## Tests
 
@@ -137,7 +138,7 @@ uv run --with pytest --with fastapi --with uvicorn --with httpx --with playwrigh
     pytest app/tests -q
 ```
 
-**80 tests, ~34s** (65 API + 15 driving real Chromium). The suite builds its own three-clip
+**108 tests, ~65s** (89 API + 19 driving real Chromium). The suite builds its own three-clip
 synthetic project with fabricated transcripts, so it is fast, deterministic, and does not depend
 on `~/footage` — which matters for the container target. Model calls run against a scripted
 backend; there are no live calls.
@@ -145,7 +146,7 @@ backend; there are no live calls.
 The two layers answer different questions. The API tests prove the endpoints behave. They
 cannot prove that *using* the board works — that trimming updates the total, that undo restores
 exactly, that a preview can seek, that the boundary warnings track reality, that an empty
-timeline leads somewhere. Those live in the JavaScript and the browser's media stack, so fifteen
+timeline leads somewhere. Those live in the JavaScript and the browser's media stack, so nineteen
 tests drive real Chromium against a real uvicorn server.
 
 `install_browser_deps.sh` exists because `playwright install --with-deps` needs root and this

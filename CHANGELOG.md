@@ -10,6 +10,19 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **A monitor: the cut plays from the proxies, without a render.** The loop for judging an
+  edit was trim → Render → wait two minutes → watch → repeat, because the board could play one
+  shot at a time and nothing else. The main column now opens on a player that runs the whole
+  timeline shot after shot from the 720p proxies — two `<video>` elements take turns, one
+  playing the current shot while the other is already parked on the next in-point, so a cut
+  costs a swap rather than a file open. Under it, a strip: every shot as a block, width
+  proportional to its length, coloured by clip, with the playhead moving through the live one;
+  click a block to play from there. `space` plays or pauses the cut from the selected shot,
+  `enter` plays only that shot, and clicking a card's poster jumps the monitor to it. The
+  strip, the cards and the monitor share one selection, so trimming while watching acts on the
+  shot you are looking at. Not gapless, and a rough cut does not need to be — but the rhythm of
+  an edit now reads before anything is rendered. Three browser tests drive it: the hand-over
+  between shots, a jump from the strip, and the two keys.
 - **Effects design, and the first one: a music bed.** [docs/EFFECTS.md](docs/EFFECTS.md) sets out
   how a plain-language note reaches the pixels. Four rules carry it: **the model never writes
   ffmpeg** (a closed vocabulary of effect kinds with validated parameters — an invented filter

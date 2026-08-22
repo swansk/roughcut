@@ -78,7 +78,9 @@ def page(live_server, project):
     Path(project["edl"]).write_text(seed, encoding="utf-8")
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch()
+        # The monitor plays with sound from a click or a key; headless Chromium's
+        # autoplay policy would otherwise refuse the play() that follows a keypress.
+        browser = pw.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
         pg = browser.new_page(viewport={"width": 1280, "height": 900})
         pg.goto(live_server)
         pg.wait_for_selector(".seg")
@@ -367,3 +369,59 @@ def test_the_steps_strip_says_where_the_project_is(page):
                                              "render"]
     # this project has clips, sidecars and a cut, so the first three are behind us
     assert page.locator(".step.done").count() >= 3
+
+
+# ------------------------------------------------------------------ the monitor
+
+def _clock(text: str) -> float:
+    m, s = text.split(":")
+    return int(m) * 60 + float(s)
+
+
+def test_the_cut_plays_through_from_the_proxies(page):
+    """The monitor: the whole edit plays from the proxies, shot after shot, with no
+    render. Two shots — A 1.0–3.0 then B 0.0–2.0 — so a hand-over has to happen."""
+    page.locator("#playCut").click()
+    page.wait_for_function("player.playing && player.idx === 0", timeout=10000)
+    assert page.locator("#playCut").inner_text().endswith("Pause")
+    page.wait_for_function("player.idx === 1", timeout=15000)          # handed over to B
+    assert page.evaluate("document.querySelector('.screen video.live').id") == "pv1"
+    assert "2/2 · CLIP_B" in page.locator("#playingWhat").inner_text()
+    page.wait_for_function("!player.playing", timeout=15000)             # ran off the end
+    assert page.evaluate("document.querySelector('#pv1').currentTime") >= 1.8
+    assert _clock(page.locator("#pos").inner_text()) >= 3.7              # of 4.0
+    assert page.locator("#posTotal").inner_text() == "0:04.0"
+    # the end puts the selection back at the top, so space plays again from the start
+    assert page.evaluate("sel") == 0
+
+
+def test_clicking_a_block_in_the_strip_jumps_the_monitor(page):
+    blocks = page.locator("#strip .blk")
+    assert blocks.count() == 2
+    blocks.nth(0).click()
+    page.wait_for_function("player.playing && player.idx === 0", timeout=10000)
+    # shot A starts at 1.0 into its clip, not at the top of the proxy
+    page.wait_for_function(
+        "(() => { const v = document.querySelector('.screen video.live');"
+        " return v.currentTime >= 1.0 && v.currentTime < 2.6; })()", timeout=10000)
+    blocks.nth(1).click()
+    page.wait_for_function("player.playing && player.idx === 1", timeout=10000)
+    assert page.evaluate("sel") == 1, "the strip and the list select together"
+    assert page.locator(".seg.sel .clip").inner_text() == "CLIP_B"
+    assert page.locator("#strip .blk.sel").count() == 1
+
+
+def test_space_toggles_the_cut_and_enter_plays_one_shot(page):
+    page.locator(".seg").first.click()
+    page.keyboard.press("Space")
+    page.wait_for_function("player.playing", timeout=10000)
+    page.keyboard.press("Space")
+    page.wait_for_function("!player.playing", timeout=5000)
+    t = page.evaluate("document.querySelector('.screen video.live').currentTime")
+    assert 1.0 <= t < 3.0, "paused inside shot A"
+    # enter plays only the selected shot: it stops at the out-point, no hand-over
+    page.keyboard.press("Enter")
+    page.wait_for_function("player.playing && player.single", timeout=10000)
+    page.wait_for_function("!player.playing", timeout=15000)
+    assert page.evaluate("player.idx") == 0
+    assert page.evaluate("document.querySelector('#pv0').currentTime") >= 2.9

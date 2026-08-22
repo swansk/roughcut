@@ -126,10 +126,12 @@ function segCard(seg, i) {
 
   el.addEventListener('click', (e) => {
     sel = i;
+    // The poster is the shot; clicking it plays the cut from here, in the monitor.
+    if (e.target.tagName === 'VIDEO') return playFrom(i);
     const b = e.target.closest('button');
     if (!b) { paint(); return; }
     const act = b.dataset.act;
-    if (act === 'play') return playSeg(el.querySelector('video'), seg);
+    if (act === 'play') return playFrom(i, { single: true });
     if (act === 'del') { pushUndo(); segs.splice(i, 1); return render(); }
     pushUndo();
     const d = parseFloat(b.dataset.d) * (e.shiftKey ? 4 : 1);
@@ -171,15 +173,187 @@ function nudge(i, edge, d) {
   seg.out = Math.round(seg.out * 100) / 100;
 }
 
-function playSeg(video, seg) {
-  if (!video) return;
-  video.muted = false;
-  video.currentTime = seg.in;
-  video.play();
-  clearInterval(video._iv);
-  video._iv = setInterval(() => {
-    if (video.currentTime >= seg.out) { video.pause(); clearInterval(video._iv); }
-  }, 60);
+/* The monitor. One place where the cut plays, fed from the proxies, so judging an edit
+ * means pressing play rather than waiting two minutes on a render. Two <video> elements
+ * take turns: while one plays the current shot the other already holds the next one,
+ * parked on its in-point, so a cut costs a swap of which element is visible rather than
+ * the time it takes to open a file. Not gapless — a rough cut does not need to be — but
+ * close enough that the rhythm of the edit reads. */
+const player = { vids: [], cur: 0, idx: -1, playing: false, single: false, raf: 0 };
+
+const stem = (clip) => String(clip).replace(/\.[^.]+$/, '');
+
+function filmStart(i) {
+  let t = 0;
+  for (let k = 0; k < i && k < segs.length; k++) t += segs[k].out - segs[k].in;
+  return t;
+}
+
+function liveVideo() { return player.vids[player.cur]; }
+
+/* Point a buffer at a shot's in-point without playing it. */
+function arm(v, seg) {
+  const src = (P.clips[seg.clip] || {}).proxy || '';
+  if (v.dataset.src !== src) {
+    v.dataset.src = src;
+    v.src = src;
+    v.load();
+  }
+  const park = () => { v.currentTime = seg.in; };
+  if (v.readyState >= 1) park();
+  else v.addEventListener('loadedmetadata', park, { once: true });
+}
+
+function showLive() {
+  player.vids.forEach((v, k) => v.classList.toggle('live', k === player.cur));
+}
+
+function schedule() {
+  cancelAnimationFrame(player.raf);
+  player.raf = requestAnimationFrame(tick);
+}
+
+/* Play from shot i. `single` stops at its out-point instead of carrying on. Playing the
+ * shot that is already paused in the monitor resumes it rather than restarting it. */
+function playFrom(i, { single = false } = {}) {
+  if (!segs.length || !player.vids.length) return;
+  i = Math.max(0, Math.min(segs.length - 1, i));
+  const seg = segs[i];
+  const v = liveVideo();
+  const resume = player.idx === i && !player.playing && !!v.dataset.src
+    && v.currentTime > seg.in && v.currentTime < seg.out - 0.1;
+  player.idx = i;
+  player.single = single;
+  sel = i;
+  paint();
+  if (!resume) arm(v, seg);
+  if (!single && segs[i + 1]) arm(player.vids[1 - player.cur], segs[i + 1]);
+  showLive();
+  v.muted = false;
+  const go = () => {
+    if (!resume) v.currentTime = seg.in;
+    v.play().catch(() => {});
+  };
+  if (v.readyState >= 1) go(); else v.addEventListener('loadedmetadata', go, { once: true });
+  player.playing = true;
+  schedule();
+  paintStrip();
+  paintTransport();
+}
+
+function pauseCut() {
+  player.vids.forEach((v) => v.pause());
+  player.playing = false;
+  cancelAnimationFrame(player.raf);
+  paintTransport();
+}
+
+function toggleCut() {
+  if (player.playing) return pauseCut();
+  playFrom(sel);
+}
+
+/* True when the shot under the playhead ended and the monitor moved on or stopped. */
+function boundary() {
+  const v = liveVideo();
+  const seg = segs[player.idx];
+  if (!seg) { pauseCut(); return true; }
+  const clipT = v.currentTime;
+  paintPos(filmStart(player.idx) + Math.max(0, clipT - seg.in), clipT, seg);
+  if (clipT >= seg.out - 0.04 || v.ended) { advance(); return true; }
+  return false;
+}
+
+function tick() {
+  if (!player.playing) return;
+  if (!boundary()) player.raf = requestAnimationFrame(tick);
+}
+
+/* The shot ended: stop, or hand over to the buffer that is holding the next one. */
+function advance() {
+  const v = liveVideo();
+  v.pause();
+  const next = player.idx + 1;
+  if (player.single || next >= segs.length) {
+    player.playing = false;
+    cancelAnimationFrame(player.raf);
+    if (!player.single) { sel = 0; player.idx = -1; paint(); }   // the end: space restarts
+    paintTransport();
+    return;
+  }
+  player.cur = 1 - player.cur;
+  player.idx = next;
+  sel = next;
+  paint();
+  const nv = liveVideo();
+  arm(nv, segs[next]);          // normally armed already; re-arming survives edits made mid-play
+  nv.muted = false;
+  showLive();
+  const go = () => { nv.currentTime = segs[next].in; nv.play().catch(() => {}); };
+  if (nv.readyState >= 1) go(); else nv.addEventListener('loadedmetadata', go, { once: true });
+  if (segs[next + 1]) arm(v, segs[next + 1]);
+  paintStrip();
+  paintTransport();
+  schedule();
+}
+
+/* Keep the monitor honest against the timeline it is playing: hide it when there is
+ * nothing to play, and re-cue if the shot under the playhead was edited out from under it. */
+function syncPlayer() {
+  $('#player').style.display = segs.length ? '' : 'none';
+  if (player.idx >= segs.length) { pauseCut(); player.idx = -1; }
+  if (player.playing && player.idx >= 0) {
+    const seg = segs[player.idx];
+    const v = liveVideo();
+    const src = (P.clips[seg.clip] || {}).proxy || '';
+    if (v.dataset.src !== src || v.currentTime < seg.in - 0.5 || v.currentTime > seg.out + 0.5) {
+      playFrom(player.idx, { single: player.single });
+    }
+  }
+  paintStrip();
+  paintTransport();
+}
+
+function paintTransport() {
+  $('#playCut').textContent = player.playing ? '❚❚ Pause' : '▶ Play cut';
+  const seg = segs[player.idx];
+  $('#playingWhat').textContent = seg
+    ? `${player.idx + 1}/${segs.length} · ${stem(seg.clip)}${player.single ? ' · this shot only' : ''}`
+    : '';
+}
+
+function paintPos(filmT, clipT, seg) {
+  $('#pos').textContent = fmt(filmT);
+  const blk = document.querySelectorAll('#strip .blk')[player.idx];
+  if (blk && seg) {
+    const frac = Math.max(0, Math.min(1, (clipT - seg.in) / (seg.out - seg.in)));
+    blk.querySelector('.head').style.left = `${(frac * 100).toFixed(2)}%`;
+  }
+}
+
+function hueOf(clip) {
+  let h = 0;
+  for (const c of String(clip)) h = (h * 31 + c.charCodeAt(0)) % 360;
+  return h;
+}
+
+/* The strip: every shot as a block, width proportional to its length, coloured by clip
+ * so a run of cuts from one clip reads as one colour. Click to play from there. */
+function paintStrip() {
+  const strip = $('#strip');
+  strip.innerHTML = '';
+  segs.forEach((s, i) => {
+    const b = document.createElement('div');
+    b.className = 'blk' + (i === sel ? ' sel' : '') + (i === player.idx ? ' live' : '');
+    b.style.flex = `${Math.max(0.2, s.out - s.in)} 0 0`;
+    b.style.background = `hsl(${hueOf(s.clip)} 45% 58%)`;
+    b.title = `${i + 1}. ${stem(s.clip)} ${fmt(s.in)}–${fmt(s.out)} (${(s.out - s.in).toFixed(1)}s)`
+      + (s.why ? `\n${s.why}` : '');
+    b.innerHTML = `<span>${escapeHtml(stem(s.clip))}</span><i class="head"></i>`;
+    b.onclick = () => playFrom(i);
+    strip.appendChild(b);
+  });
+  $('#posTotal').textContent = fmt(total());
 }
 
 function escapeHtml(s) {
@@ -189,6 +363,8 @@ function escapeHtml(s) {
 
 function paint() {
   document.querySelectorAll('.seg').forEach((el, i) =>
+    el.classList.toggle('sel', i === sel));
+  document.querySelectorAll('#strip .blk').forEach((el, i) =>
     el.classList.toggle('sel', i === sel));
 }
 
@@ -227,6 +403,7 @@ function render() {
   tl.innerHTML = '';
   if (!segs.length) tl.appendChild(emptyState());
   segs.forEach((s, i) => tl.appendChild(segCard(s, i)));
+  syncPlayer();
 
   // With an empty timeline the empty state already has its own "what is this film
   // about" box, so the sidebar panel is a second input for the same thing.
@@ -688,11 +865,9 @@ document.addEventListener('keydown', (e) => {
   else if (k === ']') { pushUndo(); nudge(sel, 'in', step); render(); }
   else if (k === '{') { pushUndo(); nudge(sel, 'out', -step); render(); }
   else if (k === '}') { pushUndo(); nudge(sel, 'out', step); render(); }
-  else if (k === ' ') {
-    e.preventDefault();
-    const el = document.querySelectorAll('.seg')[sel];
-    if (el) playSeg(el.querySelector('video'), segs[sel]);
-  } else return;
+  else if (k === ' ') { e.preventDefault(); toggleCut(); }
+  else if (k === 'Enter') { e.preventDefault(); playFrom(sel, { single: true }); }
+  else return;
 });
 
 function scrollSel() {
@@ -722,6 +897,19 @@ function waitForProxies() {
 }
 
 async function boot() {
+  player.vids = [$('#pv0'), $('#pv1')];
+  player.vids.forEach((v) => {
+    // rAF stops in a background tab; timeupdate (4Hz) keeps the cut points honest there
+    v.addEventListener('timeupdate', () => {
+      if (player.playing && v === liveVideo()) boundary();
+    });
+    v.addEventListener('error', () => {
+      if (v !== liveVideo() || !player.playing) return;
+      pauseCut();
+      toast('that preview is not ready yet — previews build in the background', 4000);
+    });
+  });
+  $('#playCut').onclick = toggleCut;
   P = await (await fetch('/api/project')).json();
   await refreshStatus();
   segs = P.segments.map((s) => ({ ...s }));

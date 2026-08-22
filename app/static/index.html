@@ -111,6 +111,27 @@
          overflow: hidden; }
   .bar i { display: block; height: 100%; width: 0; background: var(--accent);
            transition: width .3s; }
+  /* The monitor: one place where the whole cut plays, fed from the proxies. */
+  #player { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+            padding: 10px; margin-bottom: 12px; }
+  .screen { position: relative; background: #000; border-radius: 6px; overflow: hidden;
+            aspect-ratio: 16/9; max-height: 52vh; }
+  .screen video { position: absolute; inset: 0; width: 100%; height: 100%; display: none;
+                  object-fit: contain; }
+  .screen video.live { display: block; }
+  .transport { display: flex; gap: 10px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  .transport .pos { font-variant-numeric: tabular-nums; }
+  .strip { display: flex; gap: 2px; height: 36px; margin-top: 8px; }
+  .blk { position: relative; min-width: 4px; border-radius: 3px; cursor: pointer;
+         overflow: hidden; opacity: .7; }
+  .blk:hover { opacity: .9; }
+  .blk.sel { outline: 2px solid var(--text); opacity: 1; }
+  .blk.live { opacity: 1; }
+  .blk span { position: absolute; left: 4px; top: 3px; right: 2px; font-size: 10px;
+              color: #0b0b0f; white-space: nowrap; overflow: hidden; pointer-events: none; }
+  .blk .head { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff;
+               display: none; pointer-events: none; }
+  .blk.live .head { display: block; }
   #toast {
     position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
     background: var(--card-hi); border: 1px solid var(--line); border-radius: 8px;
@@ -135,6 +156,22 @@
 
 <main>
   <section>
+    <!-- The monitor. The whole edit plays here from the proxies, shot after shot, so a
+         cut is judged by watching it rather than by rendering it first. -->
+    <div id="player" style="display:none">
+      <div class="screen">
+        <video id="pv0" preload="auto" playsinline></video>
+        <video id="pv1" preload="auto" playsinline></video>
+      </div>
+      <div class="transport">
+        <button id="playCut" class="primary">▶ Play cut</button>
+        <span class="pos"><span id="pos">0:00.0</span> / <span id="posTotal">0:00.0</span></span>
+        <span class="hint" id="playingWhat"></span>
+        <div class="grow"></div>
+        <span class="hint">click a shot below to jump · <kbd>space</kbd> play / pause</span>
+      </div>
+      <div class="strip" id="strip"></div>
+    </div>
     <!-- Both of these belong to the main column, not the sidebar: the recovery offer
          matters most when the timeline is empty, which is exactly when the sidebar's
          Ask panel is hidden. -->
@@ -201,7 +238,8 @@
     <div class="panel">
       <h2>Keys</h2>
       <div class="hint">
-        <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>space</kbd> play segment ·
+        <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>space</kbd> play / pause the cut from here ·
+        <kbd>enter</kbd> play this shot only ·
         <kbd>[</kbd><kbd>]</kbd> trim in · <kbd>{</kbd><kbd>}</kbd> trim out ·
         <kbd>x</kbd> remove · <kbd>u</kbd> undo · hold <kbd>shift</kbd> for 1s steps
       </div>
