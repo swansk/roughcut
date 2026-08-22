@@ -1,10 +1,9 @@
 # Handoff — read this first
 
-Last updated: 2026-07-25, end of session 3 (the app now owns the whole path — folder of
-footage → analyse → **first cut from nothing** → refine → compare versions).
-**Karl watched the agent-originated cut and preferred it to both hand-selected ones.** The
-ordering defect he named is fixed and re-verified, and he is running Killington by hand as this
-session closes. Jump to "START HERE NEXT SESSION", then "The roadmap after that".
+Last updated: 2026-08-22, end of session 6 (the board became something you can edit in: a
+**monitor** that plays the cut from the proxies, the **visual pass** runnable from the board with
+what it saw on the cards, and **music** under the cut — all verified live on Killington).
+Sessions 4–5 are summarised under "START HERE". Jump there, then "The roadmap after that".
 
 Repo: [github.com/swansk/roughcut](https://github.com/swansk/roughcut), private, `main`.
 
@@ -223,54 +222,88 @@ Everything the run needs is prepared and verified:
   `wsl -d Ubuntu -- bash -lc "cd /mnt/c/Users/karl/Documents/Projects/roughcut && uv run app/server.py --footage ~/footage/killington-neutral"`,
   then `http://localhost:8765`.
 
-**Karl is running this bin by hand as of the end of session 3.** Whatever he reports is the
-first input of the next session.
+**Karl ran this bin by hand at the end of session 3; what he reported shaped sessions 4–6** —
+see START HERE for where the bin stands now.
 
 The interesting question this answers: **does any of this generalise, or have the prompts been
 fitted to one trip?** Every judgement so far is on Copper.
 
 ## ⇨ START HERE NEXT SESSION
 
-**Open with Karl's report from his Killington run** (in flight at the end of session 3). It is
-the generalisation test: every judgement in this project so far is on B1/Copper, a bin a human
-had already studied. If the loop holds on a bin nobody has read — it finds a spine, the typed
-brief steers it — that is the first evidence the prompts are not fitted to one trip. If it comes
-back a spineless highlight reel, **do not fix it by hand**; that is the finding.
+**Sessions 4–6 (2026-07-25 → 2026-08-22) in one paragraph.** Karl ran Killington in the app,
+and his report drove session 4: Ask became a background job with a clock (a 112s call had frozen
+the whole server), the board autosaves (he lost a 16-shot cut to a refresh — recovered from the
+CLI's transcript into `~/work/app/asks/killington-neutral/recovered.json`), the buttons that meant
+nothing went, and *"the analysis missed… me falling into a river"* produced the prototype visual
+pass, which found the fall at 104–108s of CLIP_01. Session 5 built the music bed and tuned its
+ducking to speech (docs/EFFECTS.md). Session 6 turned the board into something you can edit in:
+a **monitor** that plays the whole cut from the proxies (no render), a **Look at the footage**
+button that runs the visual pass with its price on it and puts what it saw on the shot cards and
+under *Add a moment → seen*, and a **Music** panel whose bed is heard under the monitor and
+rendered by assemble.py. All three were verified live on Killington as well as under the suite
+(116 tests, 94 API + 22 browser). The commits are `3b8caff`, `b77cf0b` and the one after.
 
-Also unwatched: `copper-first-cut-v2.mp4` (2:16, originated with shot order). Two questions, both
-from the model's own notes — it names what it cannot see: is the travel section in order now, and
-is **GX010496** (12s, second-to-last) a run or a lift queue? Its own instruction if it is wrong:
-*"drop it and end on the high five into the debrief."*
+**Where Killington stands, on disk:**
+
+- `~/work/app/projects/killington-neutral.edl.json` — **the 16-shot cut is back** (2:57.4,
+  restored from the recovered proposal through the board's own recovery path), story set,
+  `effects_music` = `music/whatever.mp3` at 12 dB of duck. Renders in
+  `~/work/app/renders/killington-neutral/`: `cut_adf8ce95` (Jul 25, no music) and the one made
+  this session with the bed under it, marked ♪ in the versions list.
+- The visual pass has seen **3 of 12** clips — sidecars in `~/work/app/visual/killington-neutral/`
+  (per bin now; copied from the old shared `~/work/visual`, which is left in place). The other 9
+  are one click in the Project panel: *Look at 9 clips · ~$1.08*, about 20 calls.
+- **The board already found something with what it has.** The cold open, CLIP_01 188.2–199.6
+  (*"I fell in and I got completely buried"*), overlaps the pass's unusable stretch 188–196 —
+  *"nearly black — lens obstruction"*, *"severely motion-blurred"*. The first shot of the cut is
+  mostly unusable picture, chosen for its line: the blind-selection defect, caught on a card
+  instead of in a render.
+- The river fall itself (CLIP_01 104–108, `fall`, notable) is the first item under *seen* and is
+  not in the cut yet.
+
+**The first thing to do is Karl's, not the agent's:** `claude /login` inside WSL. The header pill
+read *"OAuth session expired and could not be refreshed"* this session, so live Ask and the
+visual pass could not run (everything else could and did). Then, in the board:
+
+1. Look at the other 9 clips (~$1, ~20 calls; the button says so).
+2. Fix the cold open — the line is right and the picture is not; the *seen* list and the card
+   warnings exist to choose with.
+3. Put the fall in. Press space. Listen to the bed. Ask for changes.
+
+Whatever Karl reports is the first input of the next session — same rule as before: if the cut
+is a highlight reel, that is the finding; do not fix it by hand.
 
 ## The roadmap after that
 
 Ordered by what changes most, not by effort:
 
-1. **The visual pass — the agent still cannot see.** Every cut in this project was chosen from
-   transcripts. Both live originations named a shot they could not verify (*"may be a glove or a
-   lift queue"*), and session 2's caveat was the same defect. This is now the single largest gap
-   between what the tool does and what an editor does, and it is *cheap to prototype*: contact
-   sheets already exist (`contact_sheet.py`), `roughcut.inference` already passes images by path
-   on the CLI backend and base64 on the API, and one call per clip over a sheet would produce the
-   `why`-grade description the prompt currently has to guess. Formally this is **T7** in
-   docs/TASKS.md (blocked on the T0–T6 scaffold), but the prototype version needs none of that.
-   Knock-on effects: junk and orientation both fall out of the same pass, and the rubric
-   self-critique (R6) becomes able to judge pictures rather than words.
-2. **Junk and orientation proposed, human confirms** — the last ❌ in the table above, and all
+1. ~~The visual pass~~ — **built, in the board, priced.** Still provisional (sheet density,
+   thumbnail size and model tier are RQ-1/RQ-7, unmeasured), and the board only *shows* it so far:
+   junk and orientation could be proposed from the same sidecars, and the originating prompt
+   already reads the moments. The open question is whether a first cut made *after* looking at
+   all 12 clips still opens on a black frame.
+2. **Effects, per docs/EFFECTS.md's build order** — the bed is done; next the `sfx` / `overlay`
+   vocabulary with the asset manifest, then onset snapping (100ms, from data already on disk),
+   then markers in the board (the monitor and the strip now exist to carry them), then the Ask
+   path that turns "hitmarker when my skis hit the rocks" into effect objects.
+3. **Junk and orientation proposed, human confirms** — the last ❌ in the table above, and all
    that stands between the app and a bin nobody has studied. Standalone it is a per-bin
    *measurement*, not a model call: `luma<11` for junk (be conservative — a naive `luma<35`
    false-positives on the night parking lot and the dim plane interior, both real content),
-   orientation per-clip from a sheet the human confirms. Do it inside (1) if (1) happens first.
-3. **Music mode (P2.6)** — Karl asked for it explicitly: supply a track, cut to it, as a mode
-   rather than a default. It is a genuinely different selection problem ("fill these N slots of
-   these lengths"), which is why it has not been picked up casually.
-4. **Decide the fate of T0–T13.** The pipeline has been on hold for three sessions while
-   throwaway tooling produced cuts Karl endorsed. The honest question is no longer "is the
-   pipeline worth building" but "is *anything* in it worth building that the app does not already
-   do" — and the answer may be a much smaller list than thirteen tasks. Worth an explicit
-   decision rather than indefinite hold.
+   orientation per-clip from a sheet the human confirms — or from the visual sidecars, now that
+   they exist.
+4. **Music mode (P2.6)** — a bed is built; *cutting to* a track is not. It is a genuinely
+   different selection problem ("fill these N slots of these lengths"), which is why it has not
+   been picked up casually. Karl's *"a cut that works perfect with a jump and the music"* was
+   luck; nothing aligns a cut to a beat yet.
+5. **Decide the fate of T0–T13.** The pipeline has been on hold for six sessions while throwaway
+   tooling produced cuts Karl endorsed. The honest question is no longer "is the pipeline worth
+   building" but "is *anything* in it worth building that the app does not already do" — and the
+   answer may be a much smaller list than thirteen tasks. Worth an explicit decision rather than
+   indefinite hold.
 
-Smaller, whenever: a project picker (one bin per launch today), and `complete_many` has no caller.
+Smaller, whenever: a project picker (one bin per launch today); scrub-to-trim on the monitor
+instead of ±0.25s buttons; `complete_many` has no caller.
 
 Independent work: ~~audio event tagging~~ — **done, and it is a dead end on B1**; see
 [R9](../research/R9-events-and-wind.md). The remaining audio lever is a **prosodic** rather than
@@ -369,6 +402,13 @@ WSL2 Ubuntu 24.04, RTX 5080 (16GB, visible to WSL), 953GB free on ext4.
 - Sheets + label UI delivered to `/mnt/c/Users/karl/Documents/Roughcut Labeling/`.
 - **Quoting gotcha:** inline `wsl.exe -- bash -c '...'` gets mangled by Git Bash PATH expansion.
   Always write a script file and run `wsl.exe -d Ubuntu -- bash /mnt/c/.../script.sh`.
+- **From Claude Code on Windows (session 6):** the Bash tool also mangles backslashes in inline
+  commands and in heredocs that mix quotes and backticks. Write every script to a file with the
+  Write tool, run it with `MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu -- bash -l /mnt/c/.../script.sh`
+  (`-l` for the login PATH), and patch repo files with a Python script that writes **bytes** —
+  `Path.write_text(newline="\n")` produced CRLF on this host — then check for `\r`. The repo
+  is `* text=auto eol=lf`, so a CRLF file would be rewritten on commit, but the tests run it
+  from /mnt/c before that.
 
 ## Tooling built (all standalone, PEP 723 — `uv run <script>`)
 

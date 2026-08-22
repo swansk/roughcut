@@ -952,14 +952,21 @@ function pollAsk(job, verb, stateEl) {
 
 /* The plan is on disk before it is announced, so a reload or a closed tab costs a
  * click rather than another two-minute call. */
+function ago(seconds) {
+  const m = Math.round(seconds / 60);
+  if (m < 1) return 'just now';
+  if (m < 120) return `${m} min ago`;
+  if (m < 48 * 60) return `${Math.round(m / 60)} h ago`;
+  return `${Math.round(m / 1440)} days ago`;     // "40105 min ago" is not a time
+}
+
 async function offerLastProposal() {
   const { record } = await (await fetch('/api/asks/latest')).json();
   if (!record) return;
-  const mins = Math.round((Date.now() / 1000 - record.created) / 60);
   const el = $('#lastAsk');
   el.style.display = 'block';
   el.innerHTML = `last proposal — ${record.plan.segments.length} shots,
-    ${mins < 1 ? 'just now' : `${mins} min ago`} · <a href="#" id="showLast">show it</a>`;
+    ${ago(Date.now() / 1000 - record.created)} · <a href="#" id="showLast">show it</a>`;
   $('#showLast').onclick = (e) => {
     e.preventDefault();
     showProposal(record.plan);
