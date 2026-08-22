@@ -93,4 +93,9 @@ def ledger_path() -> Path:
 
 
 def call_timeout_s() -> int:
-    return int(os.environ.get("ROUGHCUT_CALL_TIMEOUT_S", "300"))
+    """Per-call wall clock. 600 rather than 300: once every clip carries visual moments
+    the originating prompt is ~39k tokens and a 15k-token plan takes ~200s on the CLI
+    backend; a revision of a 16-shot cut with a long note ran past 300 and was killed
+    with the work unrecoverable. The visual pass tool had raised its own default for the
+    same reason a session earlier."""
+    return int(os.environ.get("ROUGHCUT_CALL_TIMEOUT_S", "600"))

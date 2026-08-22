@@ -79,6 +79,13 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Fixed
+- **A revision with the visual pass behind it ran past the 300s call timeout and was
+  killed.** With every Killington clip looked at, the originating prompt is ~39k tokens and
+  the plan it returns ~15k, which took 199s on the CLI backend; the revision of the 16-shot
+  cut that followed, carrying a 178-word note on top, crossed 300s and the board reported
+  *"claude CLI timed out after 300s"* — the work gone, since the CLI writes its transcript at
+  the end. `visual_pass.py` had already raised its own default to 600 for the same reason.
+  The default in `config.py` is 600 now (`ROUGHCUT_CALL_TIMEOUT_S` still overrides).
 - **A save could be observed half-written.** The board autosaves on every edit while its own
   status polls, the monitor and any render job read the same EDL, and a plain write truncates
   the file before filling it — a reader landing in that gap got an empty file and a parse
