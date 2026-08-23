@@ -393,8 +393,19 @@ class Asr:
         raise RuntimeError(f"could not load whisper: {last}")
 
     def transcribe(self, x: np.ndarray) -> list[dict]:
+        # vad_filter is OFF, deliberately. Silero at its default threshold treats
+        # helmet-mic speech under wind as non-speech and deletes it before Whisper
+        # ever sees it, and what survives is stitched together across the removed
+        # silence — so a segment claims to span 92s and carries six words. Measured
+        # on Killington: with the filter on, CLIP_09's ski-patrol exchange
+        # ("Is there ski patrol?" / "Yo, be careful, there's ski patrol over there",
+        # 109.9-115.8s) is absent from the sidecar entirely, collapsed into one
+        # garbled 16s utterance. With it off the same clip yields 193 words against
+        # 149 and the lines come back. The cost is Whisper inventing text over
+        # silence, which the two filters below already exist to catch — `Thank you.`
+        # and a 0.9 no_speech_prob are exactly the shape of that failure.
         segments, _ = self.model.transcribe(
-            x, language="en", word_timestamps=True, vad_filter=True,
+            x, language="en", word_timestamps=True, vad_filter=False,
             beam_size=5, condition_on_previous_text=False,
         )
         out: list[dict] = []
@@ -405,7 +416,12 @@ class Asr:
             out.append({
                 "start": round(s.start, 2), "end": round(s.end, 2), "text": text,
                 "no_speech_prob": round(float(s.no_speech_prob), 3),
+                # `e` is the word's *end*. The segment `end` is not a substitute:
+                # Whisper routinely closes a segment before its last word has
+                # finished, which is how an out-point copied from a transcript cuts
+                # "pizza" to "pi". Word ends are what boundary polish trims to.
                 "words": [{"w": w.word.strip(), "t": round(w.start, 2),
+                           "e": round(w.end, 2),
                            "p": round(float(w.probability), 2)} for w in (s.words or [])],
             })
         return out

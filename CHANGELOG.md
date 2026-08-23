@@ -83,6 +83,26 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Fixed
+- **The ASR was deleting speech before Whisper ever saw it, and the ski-patrol talk was
+  part of what it deleted.** Karl, on the Killington revision proposal: *"I THINK there were
+  some interesting discussions on running from ski patrol — you also seem to have missed
+  these; ensure the transcript is generated correctly from the original video."* The pass ran
+  faster-whisper with `vad_filter=True`, and Silero at its default threshold treats
+  helmet-mic speech under wind as non-speech: **"Is there ski patrol?" and "Yo, be careful,
+  there's ski patrol over there" (CLIP_09, 109.9-115.8s) were absent from the sidecar
+  entirely**, along with "All right, let's get out of here" at 105.3 — the four seconds that
+  make the following conversation about not antagonising the jump-builders ("they could let
+  someone know down below… four guys coming down wearing a red helmet") legible as what it
+  is. What survived the filter was stitched across the removed silence, so segments claimed
+  spans they did not have: CLIP_07 carried one "utterance" of six words over 92.8 seconds, and
+  `asr_speech_fraction` counted the silence inside it as speech. The filter is off now, which
+  is what the existing `no_speech_prob > 0.6` and hallucination filters were already there to
+  make safe. Re-running the bin (12 clips, 3m02s on the 5080, sidecars backed up to
+  `killington-neutral.bak/`) takes the transcripts from **1,361 words to 1,656** (+21.7%) with
+  11 of 12 clips up or level — and the pass now also records each word's **end** (`e`), not
+  only its start, because the segment end is a decoder artefact and word ends are what a cut
+  point has to respect. One regression, reported rather than hidden: CLIP_06 loses 14 words of
+  overlapping chatter.
 - **A revision with the visual pass behind it ran past the 300s call timeout and was
   killed.** With every Killington clip looked at, the originating prompt is ~39k tokens and
   the plan it returns ~15k, which took 199s on the CLI backend; the revision of the 16-shot
