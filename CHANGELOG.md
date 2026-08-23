@@ -83,6 +83,14 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Fixed
+- **The board served its own code with no cache headers of any kind.** No `Cache-Control`,
+  no `ETag`, no `Last-Modified` — nothing telling a browser either to keep `index.html` and
+  `app.js` or to check them. Chrome does refetch such a response (measured: on a reload both
+  came back 200 from the network, with no conditional headers), but that is a browser's
+  choice rather than a promise, and the two files have to agree with each other: a page
+  holding a monitor that the cached script has never heard of paints a board that will not
+  play, which is the shape of the report this came out of. Both are `no-store` now; they are
+  64 KB over loopback.
 - **A byte range was answered by reading the whole file into memory.** `bytes=0-` is the
   first thing every `<video>` sends, and `fh.read(end - start + 1)` on it pulled an entire
   proxy into RAM before a byte reached the browser — 85 MB for a Killington clip, sixteen of

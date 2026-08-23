@@ -1047,15 +1047,26 @@ def media_asset(kind: str, name: str, request: Request) -> Response:
     return ranged_file(STATE["assets"] / kind / Path(name).name, request)
 
 
+# The board's own code carried no cache headers at all: no Cache-Control, no ETag, no
+# Last-Modified. Chrome refetches such a response — measured, on a reload it came back
+# 200 from the network with no conditional headers — but that is a browser's choice and
+# not a promise, and the page and the script are two files that have to agree with each
+# other. An index.html holding a monitor the cached app.js has never heard of is a board
+# that paints and does not play, which is exactly the report this came out of. They are
+# 64 KB served over loopback; there is nothing to gain by caching them.
+NO_STORE = {"cache-control": "no-store, must-revalidate"}
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
-    return HTMLResponse((HERE / "static" / "index.html").read_text(encoding="utf-8"))
+    return HTMLResponse((HERE / "static" / "index.html").read_text(encoding="utf-8"),
+                        headers=NO_STORE)
 
 
 @app.get("/app.js")
 def appjs() -> Response:
     return Response((HERE / "static" / "app.js").read_text(encoding="utf-8"),
-                    media_type="application/javascript")
+                    media_type="application/javascript", headers=NO_STORE)
 
 
 def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path,

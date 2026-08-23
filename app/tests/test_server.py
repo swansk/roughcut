@@ -1158,6 +1158,16 @@ def test_index_and_script_served(client):
     assert "function render" in js.text
 
 
+def test_the_board_never_serves_its_own_code_from_a_cache(client):
+    """The page and the script have to agree with each other, and they shipped with no
+    Cache-Control, no ETag and no Last-Modified — nothing telling a browser either to
+    keep them or to check. An index.html carrying a monitor that the cached app.js has
+    never heard of paints a board that will not play."""
+    for path in ("/", "/app.js"):
+        cc = client.get(path).headers.get("cache-control", "")
+        assert "no-store" in cc, f"{path}: {cc!r}"
+
+
 # ------------------------------------------------------------------ the visual pass
 
 def _stub_looker(script: Path, out: Path, stems: list[str]) -> list[str]:
