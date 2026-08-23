@@ -83,6 +83,25 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Fixed
+- **Karl's "the video quality seems like there may have been an encoding issue" feeling on the
+  Killington renders was measured, not guessed — and it's real, though not a bug.**
+  `cut_91e0b993.mp4` / `cut_29ed8c3f.mp4` come from 4K sources (3840×2160 — corrected
+  `benchmarks/README.md`'s B2 row below, which recorded a uniform H.264 29.97fps and missed that
+  3 of the 12 clips are actually HEVC 59.94fps) down to `assemble.py`'s fixed 1920×1080 @
+  24000/1001 preview target. On one high-motion 9.9s shot (CLIP_11's ski-jump dare): the `fps`
+  filter drops a clean, regular 20% of frames on the 30fps clips and 60% on the 60fps ones —
+  exact ratios, not erratic ones, because GoPro's `/1001` denominator cancels on both — and the
+  2×/2× downscale is the dominant *visible* loss: a matched-frame crop of fine detail (bare
+  branches, a chairlift cable) is clearly softer at 1080p than at native 4K, while a low-detail
+  snow crop barely differs. `-preset veryfast -crf 20` is a minor contributor by comparison —
+  already near-transparent at its own target size (VMAF 99.2–99.4 against a same-size lossless
+  reference, via the static ffmpeg build's own `libvmaf`). Colour is fine: the sources are 8-bit
+  Rec.709, full-range, not HLG/Log as guessed, and the full→limited range retag `format=yuv420p`
+  performs does not clip anything (matching luma min/max/avg on extracted frames, source vs.
+  render). The concat `-c copy` path and the music mix never touch the video bitstream — re-ran
+  the music pass a second time on both real renders and got byte-identical video MD5s and frame
+  counts. No code defect: the loss is the preview profile's speed/size tradeoff, real and now
+  documented instead of felt.
 - **A revision with the visual pass behind it ran past the 300s call timeout and was
   killed.** With every Killington clip looked at, the originating prompt is ~39k tokens and
   the plan it returns ~15k, which took 199s on the CLI backend; the revision of the 16-shot

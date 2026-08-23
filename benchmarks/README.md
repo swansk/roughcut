@@ -45,7 +45,7 @@ a contact-sheet index, not a video-scrubbing session (SPEC §0, principle 1).
 | ID | Bin | Measured | Format | Role |
 |---|---|---|---|---|
 | **B1** | **Copper 02-2026** | **11 min**, 26 MP4 | HEVC 5.3K (5120×2880) 23.976fps | **Prototype / primary.** Raw GoPro naming (`GX0104xx`) — never curated, so highlight-finding measured on it is honest. Short, which limits statistical power |
-| B2 | Killington 01-2026 | **43 min**, 12 MP4 | H.264 4K (3840×2160) 29.97fps | Secondary — ⚠️ **pre-curated**, usable only under the controls below. More footage, less trustworthy |
+| B2 | Killington 01-2026 | **43 min**, 12 MP4 | 4K (3840×2160), mixed: 9 clips H.264 29.97fps + 3 clips HEVC 59.94fps | Secondary — ⚠️ **pre-curated**, usable only under the controls below. More footage, less trustworthy |
 | B3 | Mt. Marcy 02-2025 | **8 min**, 7 MP4 | HEVC 5.3K 23.976fps | Held out from tuning entirely |
 
 **B1 is Copper** — raw beats large. Killington has four times the footage but a human already
