@@ -154,6 +154,20 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Fixed
+- **The test suite was writing invented spend into the real inference ledger.**
+  `config.ledger_path()` falls back to `~/work/roughcut-ledger.jsonl` — the file the
+  project's cost claims are read out of — and `inference._log()` appends to it after every
+  completion, including the ones returned by the *scripted* backends `test_server.py` and
+  `test_ui_flow.py` install. Only `test_inference.py` ever set `ROUGHCUT_LEDGER`, so one
+  `pytest app/tests` run added **6 rows** of fabricated calls to the ledger (476 → 482 lines,
+  measured before and after on this machine); every run since the scripted backends existed
+  has been quietly diluting the record. A session-scoped autouse fixture in
+  `app/tests/conftest.py` now points the variable at the run's own tmp root — session-scoped
+  because asks and renders run from module-scoped fixtures and from background threads where
+  a per-test patch is no longer in force, and inherited by the tools the server shells out
+  to. Verified by running both suites with no `ROUGHCUT_LEDGER` set and re-counting: 138 API
+  + 28 browser tests pass and the real ledger is byte-identical before and after (same line
+  count, same md5), where the same run previously added 6 lines.
 - **Nothing said which render was the cut on the board.** Karl: *"Cut board doesn't seem to
   reflect the render"* — after watching `cut_91e0b993`, a render of the 20-shot *proposal*,
   against a board holding the 16-shot cut. That render was correctly labelled *proposal

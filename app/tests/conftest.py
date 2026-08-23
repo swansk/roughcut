@@ -26,6 +26,34 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+
+@pytest.fixture(scope="session", autouse=True)
+def ledger(tmp_path_factory):
+    """Keep the suite out of the real inference ledger.
+
+    `config.ledger_path()` reads `ROUGHCUT_LEDGER` on every call and falls back to
+    `~/work/roughcut-ledger.jsonl` — the file the project's spend is judged from —
+    and `inference._log()` appends a line there after *every* completion, including
+    the ones the scripted backends in `test_server.py` and `test_ui_flow.py` return.
+    Those are fake calls but they were real ledger lines: only `test_inference.py`
+    set the variable, so one `pytest app/tests` run wrote 6 rows of invented spend
+    (476 → 482 lines, measured) into a developer's actual ledger.
+
+    Session-scoped and autouse rather than a per-test `monkeypatch`, because the ask
+    and render paths run from module-scoped fixtures and from background threads that
+    outlive the test that started them; a function-scoped patch is not in force when
+    those log. Nothing caches the path — it is re-read per call — so setting the
+    environment once for the session is enough, and it is inherited by the tools the
+    server shells out to. `test_inference.py`'s own `monkeypatch.setenv` still wins
+    inside its tests, which is what it is there for.
+    """
+    mp = pytest.MonkeyPatch()
+    mp.setenv("ROUGHCUT_LEDGER",
+              str(tmp_path_factory.mktemp("ledger") / "roughcut-ledger.jsonl"))
+    yield
+    mp.undo()
+
+
 CLIP_S = 6.0
 
 # Fabricated so that snap's three passes each have something to bite on:
