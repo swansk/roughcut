@@ -4,7 +4,8 @@ Last updated: 2026-08-22, end of session 6 (the board became something you can e
 **monitor** that plays the cut from the proxies, the **visual pass** runnable from the board with
 what it saw on the cards, and **music** under the cut — all verified live on Killington; then, once Karl logged the CLI in
 mid-session, the visual pass ran over all 12 clips from the board and two proposals were made,
-neither applied). Sessions 4–5 are summarised under "START HERE". Jump there, then "The roadmap
+neither applied; Karl then watched the proposal and gave notes, and four agent branches answered
+them — all merged). Sessions 4–5 are summarised under "START HERE". Jump there, then "The roadmap
 after that".
 
 Repo: [github.com/swansk/roughcut](https://github.com/swansk/roughcut), private, `main`.
@@ -284,14 +285,68 @@ rendered by assemble.py. All three were verified live on Killington as well as u
     `Documents\Roughcut Labeling\cuts\killington-revision-proposal.mp4` so it can be watched
     against `killington-first-cut-music.mp4` before deciding.
 
-**Karl's next move, in the board** (the CLI is logged in; the pill reads *ready*):
+**Karl watched the proposal render and gave notes (2026-08-22, evening). Four agent branches
+answered them and are merged into `main`** — `agent/boundaries`, `agent/render`,
+`agent/playback`, `agent/events`; every change has a CHANGELOG bullet. In his order:
 
-1. Open it — it offers *last proposal — 20 shots · show it*. Watch `cut_91e0b993` (the
-   proposal) against `cut_29ed8c3f` (the restored cut, with the bed) in the A/B slots, then
-   **Accept or Discard**. Both are also in `Documents\Roughcut Labeling\cuts\`.
-2. Press space. Listen to the bed. Ask for changes — with the visual moments in the prompt every
-   Ask is ~3 minutes and ~$0.55 projected, which is why the call timeout is 600s now.
-3. Decide what the agent should *do* with what it sees beyond showing it (roadmap 1).
+- *"Missed the ski patrol discussions — ensure the transcript is generated correctly."* **The
+  pipeline was at fault.** `audio_analyze.py` ran faster-whisper with Silero VAD on, which deletes
+  helmet-mic speech under wind before Whisper decodes it. With VAD off, CLIP_09 gains "Is there
+  ski patrol?" / "be careful, there's ski patrol over there" (109.9–115.8s), lines no transcript
+  had, and the bin gains 22% more words (1361 → 1656). Sidecars were re-run (the old ones are in
+  `~/work/app/audio/killington-neutral.bak/`). A blind origination on the corrected transcripts
+  chose "the ski patrol scramble" unprompted (`~/work/retx/live_originate.json`, kept out of the
+  board's asks).
+- *"Clips too long (trailing off) and too short (POCKET PI[ZZA])."* One defect: a transcript
+  timestamp records when a word was decoded, not when its sound stops — measured on eight line
+  ends, a word keeps sounding a median 0.12s (max 0.26s) past its `e`. `roughcut/boundaries.py`
+  now polishes every proposal: out-point inside or within 0.3s after a word → word end + 0.45s;
+  in-point inside a word → word start − 0.25s; more than 1.5s of dead air after the last word →
+  trimmed to last word + 0.45s. Wordless shots, unusable stretches and dead air held on a
+  *notable* visual moment are never touched; moves are capped at 1.2s and recorded as
+  `polished_from` (shown under the shot's `why` in the proposal panel). Not the old snap: nothing
+  reaches for the next utterance. On ed8134bb: 11 of 20 shots adjusted, CLIP_03 18.40–20.90 →
+  18.09–21.23, so "pizza!" finishes.
+- *"The cut board doesn't seem to allow me to play videos."* **Reproduced, two defects.** The
+  monitor sits at the top of the column, so playing from a card far down played correctly
+  off-screen — a play now scrolls the monitor into view. And on the real bin the first frame
+  arrived ~3s after the click (16 card previews each opening an 85 MB proxy ahead of it), so a
+  second press paused a monitor that had not started while the first press's deferred play then
+  ran behind a dead transport — monitor commands are counted now, and a refused play or media
+  error is written on the screen. Ranges stream in 1 MiB chunks (server peak memory 1.15 GB →
+  90 MB); `/` and `/app.js` are `no-store`. Firefox is untested.
+- *"Cut board doesn't reflect the render."* Expected: the watched file was the proposal,
+  rendered but never accepted, against a board holding the cut. The versions list now says
+  **· this cut** on renders that match the EDL and **not accepted** on the proposal, and the
+  board matches its own render to within 4 frames (the renderer's known +0.16s over 16 pieces).
+- *"Quality loss from the raw footage."* Right, and a tradeoff rather than a bug. Killington's
+  sources are true **4K** (3840×2160, 8-bit Rec.709 full-range — `benchmarks/README.md` had it
+  wrong and is fixed: 9 clips H.264 30000/1001, 3 clips HEVC 60000/1001), and the preview
+  profile's 1080p/23.976 target is where the loss is: the 2× downscale is the dominant softening,
+  and the fps conversion drops every 5th (30p) or 3 of 5 (60p) frames in a regular cadence.
+  Encoding is near-transparent (VMAF 99+), and neither the concat nor the music pass re-encodes
+  video (MD5-verified). `assemble.py --profile delivery` — native fps, up to 4K, slow/CRF 18 —
+  is selectable next to Render; a full delivery render of this cut is **~17 minutes**.
+- *"Missed cool jumps — limited keyframe analysis and no sort/priority."* **Half right.** A free
+  motion track (scdet over the 720p proxy at 10 Hz) × the R8 onset track picks candidate
+  windows, and a 1s close look at 23 of them ($1.68) found four events the 4s pass missed. But
+  adjudicating eleven claimed jumps/flips by eye, **none survived as described**: on a helmet or
+  chest mount the horizon sits at 40–45°, so the *camera* is inverted and both passes read it as
+  a person inverted mid-air — three of those were shots the proposal cut on (9, 10, 14). A close
+  look is a good auditor and a poor detector. A fine sheet costs the same as a coarse one
+  (~$0.07 — the prompt is what is paid for), so density is cheap and coverage expensive
+  (whole-bin 1s ≈ $70). Built: `events.json` per bin ranking kind × notable × corroboration ×
+  confirmation × usable; a "## Events, ranked" section before the inventory in both prompts; the
+  seen tab sorted by score with a confirmed/unconfirmed seal; the in-app visual pass as two
+  stages (coarse → scan → close look at 3 windows per clip, priced separately). Study:
+  [research/R10-events-priority.md](../research/R10-events-priority.md).
+
+**Karl's next move, in the board** (the server on 8765 runs the merged code; the pill reads
+*ready*): the proposal on offer (`ed8134bb`) predates the corrected transcripts and the polish.
+**Ask for a fresh revision** — name the ski-patrol beat (CLIP_09 ~105–116) and question the three
+camera-inverted "flips" the proposal built on (its shots 9, 10, 14); it arrives polished, with
+the ranked events in front of it, ~3 minutes and ~$0.6. Watch it in the monitor (it scrolls to
+you now), render with `delivery` when a cut is worth 17 minutes. Then Accept or Discard.
 
 Whatever Karl reports is the first input of the next session — same rule as before: if the cut
 is a highlight reel, that is the finding; do not fix it by hand.
@@ -300,29 +355,37 @@ is a highlight reel, that is the finding; do not fix it by hand.
 
 Ordered by what changes most, not by effort:
 
-1. ~~The visual pass~~ — **built, in the board, priced, and run over a whole bin.** Still
-   provisional (sheet density, thumbnail size and model tier are RQ-1/RQ-7, unmeasured), and the
-   board only *shows* it so far: junk and orientation could be proposed from the same sidecars.
-   The open question was whether a first cut made *after* looking at all 12 clips still opens on
-   a black frame — **answered: it does not**, and it builds its middle from the events; what it
-   still misses is the event whose frames are least legible (the river fall), until a note names
-   it. The next lever is therefore not more looking but a frame-level look at the moments the
-   human names — EFFECTS.md's narrowing (sheet → onset track → frame strip) is the same machinery.
-2. **Effects, per docs/EFFECTS.md's build order** — the bed is done; next the `sfx` / `overlay`
-   vocabulary with the asset manifest, then onset snapping (100ms, from data already on disk),
-   then markers in the board (the monitor and the strip now exist to carry them), then the Ask
-   path that turns "hitmarker when my skis hit the rocks" into effect objects.
-3. **Junk and orientation proposed, human confirms** — the last ❌ in the table above, and all
+1. **Events: audit what the sheets claim, then fit the rank.** R10's first follow-up is one
+   line: spend the close-look windows on the coarse pass's *own claims* (two refuted events still
+   rank 6th and 20th because the motion scan never covered them), not only on motion peaks; and
+   fine-pass positives should not inherit a neutral 1.0. The weights are argued, not fitted —
+   there is no labelled set; nine adjudications measured the failure mode, not a rate. The
+   camera-inverted false positive needs its own guard (horizon angle from the frame, or "is the
+   *ground* at 45°?" in the sheet prompt). Junk and orientation could be proposed from the same
+   sidecars. RQ-1/RQ-7 (sheet density, thumbnail size, model tier) remain unmeasured.
+2. **The board's first frame.** 16 shot cards each `preload="metadata"` an 85 MB proxy plus two
+   150 MB render previews — ~600 MB and 41 requests per page load against Chrome's 6-connection
+   limit; that is the 3-second wait the monitor shows as *opening…*. One JPEG poster per shot
+   would end it. Also untested: Firefox.
+3. **ASR.** A tuned low-threshold VAD might recover the 14 words CLIP_06 lost without losing the
+   patrol lines; CLIP_05 transcribes to zero words at `speech_fraction` 0.52 — that is the weak
+   Tier A detector, not Whisper.
+4. **Effects, per docs/EFFECTS.md's build order** — the bed is done; next the `sfx` / `overlay`
+   vocabulary with the asset manifest, then onset snapping (100ms, from data already on disk —
+   `roughcut/events.py` now reads it), then markers in the board (the monitor and the strip now
+   exist to carry them), then the Ask path that turns "hitmarker when my skis hit the rocks" into
+   effect objects.
+5. **Junk and orientation proposed, human confirms** — the last ❌ in the table above, and all
    that stands between the app and a bin nobody has studied. Standalone it is a per-bin
    *measurement*, not a model call: `luma<11` for junk (be conservative — a naive `luma<35`
    false-positives on the night parking lot and the dim plane interior, both real content),
    orientation per-clip from a sheet the human confirms — or from the visual sidecars, now that
    they exist.
-4. **Music mode (P2.6)** — a bed is built; *cutting to* a track is not. It is a genuinely
+6. **Music mode (P2.6)** — a bed is built; *cutting to* a track is not. It is a genuinely
    different selection problem ("fill these N slots of these lengths"), which is why it has not
    been picked up casually. Karl's *"a cut that works perfect with a jump and the music"* was
    luck; nothing aligns a cut to a beat yet.
-5. **Decide the fate of T0–T13.** The pipeline has been on hold for six sessions while throwaway
+7. **Decide the fate of T0–T13.** The pipeline has been on hold for six sessions while throwaway
    tooling produced cuts Karl endorsed. The honest question is no longer "is the pipeline worth
    building" but "is *anything* in it worth building that the app does not already do" — and the
    answer may be a much smaller list than thirteen tasks. Worth an explicit decision rather than
@@ -357,6 +420,26 @@ These were measured, cost real effort, and are easy to accidentally undo:
   upscaling, preset slow, crf 18 — estimated ~17 minutes for the full 178s Killington cut from
   one shot's measured rate (untested at full length; over the ~10-minute bar for actually running
   one).
+- **Run Whisper without the VAD filter on this footage.** Silero at its default threshold
+  classifies helmet-mic speech under wind as non-speech and deletes it before Whisper decodes
+  anything: the ski-patrol lines in CLIP_09 were absent from every transcript, surviving text
+  was stitched across removed silence (a 6-word, 92.8s "utterance" in CLIP_07), and
+  `asr_speech_fraction` was inflated 4×. With VAD off the bin gains 22% more words and the
+  hallucinations it adds are caught by the existing `no_speech_prob > 0.6` filters. Measured,
+  session 6 (agent/boundaries).
+- **A transcript's end timestamp is early.** A word keeps sounding a median 0.12s (max 0.26s)
+  past the `e` the sidecar gives it — measured band-limited 300–3400 Hz on eight line ends. Cut
+  at word end + 0.45s, never at the decoded end; that is "POCKET PI[ZZA]".
+- **A contact sheet's `kind` is a claim, not evidence.** Eleven claimed jumps/flips on Killington,
+  adjudicated by eye at 1s: none as described — the camera is inverted on a helmet or chest
+  mount, not the person. Corroborate with the motion track and the onset track; use a close look
+  to audit (its junk/unusable calls were all right) rather than to detect. And a sheet costs
+  ~$0.07 whatever it spans, so sampling density is cheap and coverage is expensive (R10).
+- **Killington's sources are 4K 8-bit Rec.709 full-range, 9 clips at 30000/1001 and 3 at
+  60000/1001 — not 5.3K** (B2's manifest row was wrong). The preview render is 1080p/23.976 by
+  choice: the 2× downscale is the visible loss, the fps conversion drops frames in a regular 5:4
+  / 5:2 cadence, the encoder is near-transparent, and nothing after the part encode touches the
+  video. `delivery` exists for the real thing and costs ~17 minutes per 3-minute cut.
 - **The visual pass is necessary and not sufficient, and the event that mattered most was the
   least legible one** (session 6). With every Killington clip looked at, a blind first cut
   stopped opening on black frames and found the backflips and crashes the words-only cut had

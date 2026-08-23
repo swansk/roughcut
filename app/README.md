@@ -71,17 +71,17 @@ server, and every edit is undoable because fiddling is only fun when it is cheap
 
 | | |
 |---|---|
-| **Monitor** | The whole cut, playing from the proxies — shot after shot, no render. A strip under it shows every shot as a block, width to length, coloured by clip; click one to play from there. `space` plays / pauses from the selected shot, `enter` plays just that shot, and the poster on any card jumps the monitor to it |
+| **Monitor** | The whole cut, playing from the proxies — shot after shot, no render. A strip under it shows every shot as a block, width to length, coloured by clip; click one to play from there. `space` plays / pauses from the selected shot, `enter` plays just that shot, and the poster on any card jumps the monitor to it — which scrolls into view, and writes a refused play or a media error on its screen rather than sitting silent |
 | **Project** | Where this bin is: clips in the folder, how many analysed, how many looked at, shots in the cut, and the two analysis passes with progress bars. The audio pass is local and free; the visual pass costs model calls, so it is offered with a count and a price while there is footage nobody has looked at, and never runs on its own |
 | **Timeline** | One card per segment: preview parked on the in-point, the transcript lines that fall inside the cut, why it was chosen (editable), trim controls, drag to reorder |
 | **Boundary warnings** | A live ⚠ when a cut opens mid-sentence or clips a line off — the defect Karl flagged, surfaced while you trim rather than only when you ask |
 | **Story panel** | Free text saved into the EDL. The thing the agent is worst at; typing "the milk is the running joke" beats an hour of analysis |
 | **Music** | Pick a track from `assets/music/`, set how far it ducks under speech and its fades. Saved into the EDL as `effects_music` the moment it changes, rendered by `assemble.py` with the picture untouched, and heard under the monitor with the same duck before you render |
-| **Add a moment** | Two tabs: **heard** — audio candidates not already in the cut, ranked — and **seen** — what the visual pass found, notable moments only, events first. One click to insert |
+| **Add a moment** | Two tabs: **heard** — audio candidates not already in the cut, ranked — and **seen** — what the visual pass found, ranked by the bin's `events.json` (kind × corroboration from the motion and onset tracks × a closer look's confirmation), with unconfirmed claims sealed as such. One click to insert |
 | **Ask for a change** | Plain-language note → revised timeline, shown as a diff you accept or discard |
 | **Snap to speech** | Runs `edl_snap.py` and shows the result as a proposal — undoable, never silently applied |
 | **Steps** | footage · analyse · first cut · refine · render, with the one you are on marked. Read from state, so it cannot drift from the files on disk |
-| **Renders** | Runs `assemble.py` in the background, then keeps every version — newest first, loadable into two players side by side, because judging an edit is comparative |
+| **Renders** | Runs `assemble.py` in the background, then keeps every version — newest first, loadable into two players side by side, because judging an edit is comparative. A select chooses the profile: `preview` (1080p, fast) or `delivery` (native frame rate, up to 4K, slow/CRF 18 — about 17 minutes for a 3-minute cut). Renders that match the cut on the board are marked **this cut**; a proposal rendered without being accepted says so |
 
 ### Ask — steering by asking rather than dragging
 
@@ -141,7 +141,7 @@ uv run --with pytest --with fastapi --with uvicorn --with httpx --with playwrigh
     pytest app/tests -q
 ```
 
-**116 tests, ~60s** (94 API + 22 driving real Chromium). The suite builds its own three-clip
+**166 tests, ~2 min** (138 API + 28 driving real Chromium). The suite builds its own three-clip
 synthetic project with fabricated transcripts, so it is fast, deterministic, and does not depend
 on `~/footage` — which matters for the container target. Model calls run against a scripted
 backend; there are no live calls.
@@ -149,7 +149,7 @@ backend; there are no live calls.
 The two layers answer different questions. The API tests prove the endpoints behave. They
 cannot prove that *using* the board works — that trimming updates the total, that undo restores
 exactly, that a preview can seek, that the boundary warnings track reality, that an empty
-timeline leads somewhere. Those live in the JavaScript and the browser's media stack, so twenty-two
+timeline leads somewhere. Those live in the JavaScript and the browser's media stack, so twenty-eight
 tests drive real Chromium against a real uvicorn server.
 
 `install_browser_deps.sh` exists because `playwright install --with-deps` needs root and this
