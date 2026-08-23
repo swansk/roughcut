@@ -63,6 +63,25 @@ code more than anything else:
   editor that stutters on every scrub is one nobody opens twice.
 - **Byte-range serving.** Not a nicety: without HTTP 206 support a `<video>` element cannot seek
   at all, only stream from zero, so per-segment preview would be useless however small the proxy.
+- **Only the monitor streams.** A browser gives a host about six connections. The shot cards
+  used to be `<video>` elements, so a 16-shot cut opened eighteen streams and the monitor's own
+  request queued behind them: measured from `playFrom(0)` on Killington, the first frame
+  arrived at **6.8–9.5 s** while the audio had already started — Karl saw a blank monitor and
+  heard the cut. Cards are `<img>` posters cut from the proxy at the in-point
+  (`/media/poster/<stem>.jpg?t=<in>`, a few KB each, cached under `--work` and immutable), so a
+  page load moves **93 KB** of media rather than opening nineteen streams.
+- **The monitor fetches the shot, not the top of the file.** Its two elements are
+  `preload="metadata"` and `arm()` puts the in-point in the URL as a `#t=` media fragment. Told
+  to preload everything with no idea where the shot starts, Chrome downloads from byte 0: a
+  shot playing at 188.2 s had `0–15 s` buffered and its seek queued behind that download. Now
+  the buffered range is the shot's, and the first painted frame lands **~0.9 s** after play.
+- **Review copies.** A finished render is the master — `delivery` writes 4K at ~44 Mbps, 987 MB
+  for three minutes — and the A/B players used to stream it: 157 MB pulled in 15 seconds of
+  watching, against 5.3 MB for a 720p copy of the same cut. Every render gets one of those
+  under `--work/reviews/<bin>/`, derived in the background after the render reports done and
+  one at a time. The players play the copy; **Download** on each row serves the master with
+  `content-disposition: attachment` and a name that says which bin, how many shots, how long
+  and at what quality.
 
 Everything else follows: edits are local and instant, only Save / Snap / Render touch the
 server, and every edit is undoable because fiddling is only fun when it is cheap to be wrong.
@@ -74,7 +93,7 @@ server, and every edit is undoable because fiddling is only fun when it is cheap
 | **Progress strip** | One bar under the header that every long operation drives — label, bar, percentage, elapsed, ETA and a line saying what it is doing right now. It holds two at once (a render and an Ask overlap routinely), re-attaches to whatever is still running after a reload, and is not there at all when nothing is. See "One bar for everything" |
 | **Monitor** | The whole cut, playing from the proxies — shot after shot, no render. A strip under it shows every shot as a block, width to length, coloured by clip; click one to play from there. `space` plays / pauses from the selected shot, `enter` plays just that shot, and the poster on any card jumps the monitor to it — which scrolls into view, and writes a refused play or a media error on its screen rather than sitting silent |
 | **Project** | Where this bin is: clips in the folder, how many analysed, how many looked at, shots in the cut, and the two analysis passes with progress bars. The audio pass is local and free; the visual pass costs model calls, so it is offered with a count and a price while there is footage nobody has looked at, and never runs on its own |
-| **Timeline** | One card per segment: preview parked on the in-point, the transcript lines that fall inside the cut, why it was chosen (editable), trim controls, drag to reorder |
+| **Timeline** | One card per segment: a still of the frame at the in-point (a few KB, not a stream — see the latency section), the transcript lines that fall inside the cut, why it was chosen (editable), trim controls, drag to reorder. Trim the in-point and the still follows once the trimming settles |
 | **Boundary warnings** | A live ⚠ when a cut opens mid-sentence or clips a line off — the defect Karl flagged, surfaced while you trim rather than only when you ask |
 | **Story panel** | Free text saved into the EDL. The thing the agent is worst at; typing "the milk is the running joke" beats an hour of analysis |
 | **Music** | Pick a track from `assets/music/`, set how far it ducks under speech and its fades. Saved into the EDL as `effects_music` the moment it changes, rendered by `assemble.py` with the picture untouched, and heard under the monitor with the same duck before you render |
@@ -82,7 +101,7 @@ server, and every edit is undoable because fiddling is only fun when it is cheap
 | **Ask for a change** | Plain-language note → revised timeline, shown as a diff you accept or discard |
 | **Snap to speech** | Runs `edl_snap.py` and shows the result as a proposal — undoable, never silently applied |
 | **Steps** | footage · analyse · first cut · refine · render, with the one you are on marked. Read from state, so it cannot drift from the files on disk |
-| **Renders** | Runs `assemble.py` in the background, then keeps every version — newest first, loadable into two players side by side, because judging an edit is comparative. A select chooses the profile: `preview` (1080p, fast) or `delivery` (native frame rate, up to 4K, slow/CRF 18 — about 17 minutes for a 3-minute cut). Renders that match the cut on the board are marked **this cut**; a proposal rendered without being accepted says so |
+| **Renders** | Runs `assemble.py` in the background, then keeps every version — newest first, loadable into two players side by side, because judging an edit is comparative. A select chooses the profile: `preview` (1080p, fast) or `delivery` (native frame rate, up to 4K, slow/CRF 18 — about 17 minutes for a 3-minute cut). Renders that match the cut on the board are marked **this cut**; a proposal rendered without being accepted says so. Each row states its size and resolution and carries a **↓ download** that saves the master under a real name; the players stream a 720p review copy instead, and say so while one is still being made |
 
 ### Ask — steering by asking rather than dragging
 

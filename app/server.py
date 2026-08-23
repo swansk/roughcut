@@ -399,6 +399,9 @@ def project_payload() -> dict:
             "stem": Path(clip).stem,
             "duration": d["duration_s"],
             "proxy": f"/media/proxy/{Path(clip).stem}.mp4",
+            # The card's picture: this URL plus ?t=<in-point>. A card is a still, not
+            # a stream — see /media/poster for what sixteen streams cost the monitor.
+            "poster": f"/media/poster/{Path(clip).stem}.jpg",
             "transcript": d.get("transcript", []),
             "visual": load_visual(clip),
             "captured": capture_time(clip),
@@ -1237,6 +1240,107 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
         detail=(f"{meta.get('duration_s') or 0:.0f}s of video, "
                 f"{meta.get('profile', 'preview')}" if ok
                 else "the render failed — see the log"))
+    if ok:
+        # Started after the job reports done, never before: deriving a 720p copy of a
+        # 4K master is ~90 s on this box, and a render that has finished should say so
+        # rather than appear to still be going. The versions list carries the copy's
+        # own state, so the wait is visible where it matters.
+        ensure_review(out_path)
+
+
+# ------------------------------------------------------------ review copies
+
+# A finished render is the master: `delivery` writes 4K at ~44 Mbps, and the one Karl
+# watched is 987 MB for 3 minutes. A browser cannot play that off this box — measured,
+# ffmpeg needs 92.8 s of wall clock to walk 181 s of it, half of real time — so the
+# A/B players pointed at it stalled after a few seconds and then sat "loading forever".
+# Karl: *"they seem to get stuck in this loading forever place and also only have
+# played for like 3s before video buffers / pauses."* The file is not broken: frame
+# intervals are a clean 1/29.97 throughout, 5427 of them. It is just heavy. So the
+# players get a 720p copy — the same argument as the source proxies, one directory
+# over — and the master stays untouched for the Download button.
+REVIEW_SLOTS = threading.BoundedSemaphore(1)   # one at a time: a 4K master is minutes
+REVIEW_STATE: dict[str, str] = {}              # render name -> building | ready | failed
+REVIEW_LOCK = threading.Lock()
+
+
+def review_path(name: str) -> Path:
+    return STATE["reviews"] / Path(name).name
+
+
+def build_review(src: Path, dest: Path) -> None:
+    """A 720p, faststart copy of a finished render — same recipe as the proxies."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(f".{os.getpid()}.part.mp4")
+    r = subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-nostdin", "-i", str(src),
+         "-map", "0:v:0", "-map", "0:a:0?", "-dn",
+         # Capped by width, never upscaled: a preview render is already small and
+         # re-encoding it bigger would spend bytes on detail that is not there.
+         "-vf", f"scale=min({PROXY_W}\\,iw):-2", "-c:v", "libx264",
+         "-preset", "veryfast", "-crf", str(PROXY_CRF),
+         "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(tmp)],
+        capture_output=True, text=True)
+    if r.returncode != 0:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"review copy failed for {src.name}: {r.stderr[-300:]}")
+    tmp.replace(dest)
+
+
+def _review_worker(src: Path) -> None:
+    with REVIEW_SLOTS:
+        dest = review_path(src.name)
+        state = "ready"
+        if not dest.exists():
+            try:
+                t0 = time.time()
+                build_review(src, dest)
+                print(f"review copy {src.name} in {time.time() - t0:.1f}s", flush=True)
+            except RuntimeError as exc:
+                print(f"  !! {exc}", flush=True)
+                state = "failed"
+        with REVIEW_LOCK:
+            REVIEW_STATE[src.name] = state
+
+
+def ensure_review(src: Path) -> str:
+    """Where the review copy of this render is up to, starting one if it is missing.
+
+    A failure is remembered rather than retried on every poll — the UI falls back to
+    the master and says so, and a restart tries again.
+    """
+    if review_path(src.name).exists():
+        return "ready"
+    with REVIEW_LOCK:
+        known = REVIEW_STATE.get(src.name)
+        if known in ("building", "failed"):
+            return known
+        REVIEW_STATE[src.name] = "building"
+    threading.Thread(target=_review_worker, args=(src,), daemon=True).start()
+    return "building"
+
+
+def download_name(meta: dict, path: Path, size: tuple[int, int] | None) -> str:
+    """What the file should be called once it leaves the board.
+
+    `cut_110ecb13.mp4` says nothing on a desktop full of downloads. Karl asked for
+    this by name: *"Make it clear how to download the renders."*
+    """
+    bits = [STATE["footage"].name]
+    if meta.get("segments"):
+        bits.append(f"{meta['segments']}shots")
+    dur = meta.get("duration_s")
+    if dur:
+        bits.append(f"{int(dur) // 60}m{int(dur) % 60:02d}")
+    w, h = size or (meta.get("width"), meta.get("height"))
+    if w and w >= 3840:
+        bits.append("4K")
+    elif h:
+        bits.append(f"{h}p")
+    else:
+        bits.append(meta.get("profile", "preview"))
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", "-".join(str(b) for b in bits)).strip("-")
+    return f"{stem or path.stem}.mp4"
 
 
 RENDER_PROFILES = ("preview", "delivery")
@@ -1310,22 +1414,41 @@ def api_renders() -> JSONResponse:
     choice is faster and more informative than judging a single artifact.
     """
     out = []
+    res_cache: dict = STATE.setdefault("render_res_cache", {})
     for mp4 in STATE["renders"].glob("cut_*.mp4"):
         meta_path = mp4.with_suffix(".json")
         meta = (json.loads(meta_path.read_text(encoding="utf-8"))
                 if meta_path.exists() else {})
+        size = mp4.stat().st_size
+        # A row that offers a download has to say how big it is — 987 MB is worth
+        # knowing before you click. Renders made before the profile existed carry no
+        # dimensions, so they are probed once and remembered by path and mtime rather
+        # than left blank: "don't know" reads as a broken file next to one that does.
+        wh = (meta.get("width"), meta.get("height"))
+        if not all(wh):
+            key = (str(mp4), mp4.stat().st_mtime)
+            if key not in res_cache:
+                res_cache[key] = probe_resolution(mp4)
+            wh = res_cache[key] or (None, None)
         out.append({
             "name": mp4.name, "url": f"/media/render/{mp4.name}",
-            "size": mp4.stat().st_size,
+            "size": size,
             "created": meta.get("created", mp4.stat().st_mtime),
             "duration_s": meta.get("duration_s"), "segments": meta.get("segments"),
             "planned_s": meta.get("planned_s"), "note": meta.get("note", ""),
             "music": meta.get("music"), "shots": meta.get("shots"),
-            # Renders made before this profile existed carry neither key — "preview"
+            # Renders made before this profile existed carry no key — "preview"
             # is what they all were, and no width/height reads as "don't know",
             # never as "upscale to 4K".
             "profile": meta.get("profile", "preview"),
-            "width": meta.get("width"), "height": meta.get("height"),
+            "width": wh[0], "height": wh[1],
+            # What the A/B players actually play, and how to get the master out of
+            # the board. The review copy is derived in the background; until it is
+            # there the list says so rather than handing a player a 987 MB file.
+            "review_state": ensure_review(mp4),
+            "review_url": f"/media/review/{mp4.name}",
+            "download_url": f"/media/download/render/{mp4.name}",
+            "download_name": download_name(meta, mp4, wh if all(wh) else None),
         })
     out.sort(key=lambda r: r["created"], reverse=True)
     return JSONResponse({"renders": out})
@@ -1420,6 +1543,112 @@ def media_proxy(name: str, request: Request) -> Response:
 @app.get("/media/render/{name}")
 def media_render(name: str, request: Request) -> Response:
     return ranged_file(STATE["renders"] / Path(name).name, request)
+
+
+@app.get("/media/review/{name}")
+def media_review(name: str, request: Request) -> Response:
+    """The 720p copy of a render, which is what the A/B players play."""
+    return ranged_file(review_path(name), request)
+
+
+@app.get("/media/download/render/{name}")
+def media_render_download(name: str) -> Response:
+    """The master, named for a desktop rather than for a hash.
+
+    Karl: *"Make it clear how to download the renders."* The board had no way to get
+    a finished cut out of it other than knowing where `~/work/app/renders` is, and the
+    one URL it did expose is served inline, so a click played it in a tab instead of
+    saving it. `content-disposition: attachment` and a filename that says which bin,
+    how many shots, how long and at what quality.
+    """
+    path = STATE["renders"] / Path(name).name
+    if not path.exists():
+        raise HTTPException(404, f"not found: {Path(name).name}")
+    meta_path = path.with_suffix(".json")
+    meta = (json.loads(meta_path.read_text(encoding="utf-8"))
+            if meta_path.exists() else {})
+    return FileResponse(path, media_type="video/mp4",
+                        filename=download_name(meta, path, None))
+
+
+# ---------------------------------------------------------------- posters
+
+POSTER_W = 320               # a shot card's picture is 214 px wide; 320 covers a 2x screen
+POSTER_Q = 5                 # mjpeg quality scale, 2 best .. 31 worst
+# ffmpeg is cheap per frame and ruinous in bulk: one page load asks for a poster per
+# card, and this box is often already encoding a delivery render. Three at a time keeps
+# a cold board under a couple of seconds without taking the machine away from that.
+POSTER_SLOTS = threading.BoundedSemaphore(3)
+# Immutable by construction — a poster is one clip's frame at one timestamp, and the
+# only way to change it is to ask for a different timestamp, which is a different URL.
+POSTER_CACHE = {"cache-control": "public, max-age=31536000, immutable"}
+
+
+def poster_path(stem: str, t: float) -> Path:
+    return STATE["posters"] / f"{stem}@{t:09.2f}.jpg"
+
+
+def build_poster(src: Path, dest: Path, t: float) -> None:
+    """One frame out of a proxy, small, on disk.
+
+    `-ss` ahead of `-i` so ffmpeg seeks to the timestamp instead of decoding its way
+    there — 188 s into a Killington proxy is ~80 ms that way and seconds the other.
+    Temp name and rename for the reason build_proxy has one: the server is serving
+    while this runs, and two boards can share a work dir.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part.jpg")
+    err = ""
+    # A trim can park an in-point past the end of a clip that was re-proxied shorter;
+    # a card showing the first frame beats a card showing a broken image.
+    for ss in dict.fromkeys((max(0.0, t), 0.0)):
+        r = subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-nostdin", "-ss", f"{ss:.3f}",
+             "-i", str(src), "-frames:v", "1",
+             "-vf", f"scale=min({POSTER_W}\\,iw):-2", "-q:v", str(POSTER_Q),
+             "-f", "image2", str(tmp)],
+            capture_output=True, text=True)
+        if r.returncode == 0 and tmp.exists() and tmp.stat().st_size:
+            tmp.replace(dest)
+            return
+        err = r.stderr[-200:]
+        tmp.unlink(missing_ok=True)
+    raise RuntimeError(f"poster failed for {src.name} at {t:.2f}s: {err}")
+
+
+@app.get("/media/poster/{name}")
+def media_poster(name: str, t: float = 0.0) -> Response:
+    """A still frame from a proxy, at a shot's in-point.
+
+    The shot cards used to be `<video preload="metadata">` elements pointed at the
+    proxies. Sixteen of those plus two render previews is eighteen streams against
+    Chrome's six-connections-per-host limit, and the monitor's own request queued
+    behind them: measured on the Killington board from `playFrom(0)`, the live element
+    took 6.8–9.5 s to reach readyState 4 and showed black (mean pixel 0.0) the whole
+    time while the audio played — Karl's *"I can hear the videos... but the preview
+    window still shows up blank"*. A card needs a picture, not a stream. This is a few
+    kilobytes, cached on disk under --work and immutable for a given clip and time.
+    """
+    stem = Path(name).stem
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", stem):
+        raise HTTPException(404, f"no such clip: {name}")
+    src = STATE["proxy_dir"] / f"{stem}.mp4"
+    if not src.exists():
+        # Not an error the board should shout about: proxies build in the background,
+        # and the cards retry when /api/status says they are done.
+        raise HTTPException(404, f"no proxy yet: {stem}.mp4")
+    if not math.isfinite(t) or t < 0:
+        t = 0.0
+    t = round(min(t, 86400.0), 2)
+    dest = poster_path(stem, t)
+    if not dest.exists():
+        with POSTER_SLOTS:
+            if not dest.exists():          # another request may have built it while we waited
+                try:
+                    build_poster(src, dest, t)
+                except RuntimeError as exc:
+                    raise HTTPException(500, str(exc)) from exc
+    return FileResponse(dest, media_type="image/jpeg", headers=POSTER_CACHE)
 
 
 # ---------------------------------------------------------------- assets
@@ -1517,10 +1746,18 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
         # a single configured project: two bins can hold the same GoPro stem, and a
         # shared proxy dir would serve one bin's frames for the other's clip.
         "proxy_dir": work / "proxies" / footage.name,
+        # One JPEG per shot card, cut out of the proxy at the shot's in-point. Per-bin
+        # like the proxies they come from, and disposable: every one of them is a
+        # seek and a single frame, rebuilt on demand when the folder is not there.
+        "posters": work / "posters" / footage.name,
         # Per-bin for the same reason as proxies, and because a fresh project that
         # opens claiming "1 version" and plays another trip's cut in the A slot is
         # worse than showing nothing.
         "renders": work / "renders" / footage.name,
+        # 720p copies of the finished renders, for the A/B players. Per-bin like the
+        # renders they come from, and as disposable as the posters: deleting the
+        # folder costs one re-encode per version and nothing else.
+        "reviews": work / "reviews" / footage.name,
         "proxies_ready": False, "edl_created": created,
     })
     STATE["sidecars"].mkdir(parents=True, exist_ok=True)
@@ -1538,6 +1775,12 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
     STATE["work"].mkdir(parents=True, exist_ok=True)
     STATE["renders"].mkdir(parents=True, exist_ok=True)
     STATE["proxy_dir"].mkdir(parents=True, exist_ok=True)
+    STATE["posters"].mkdir(parents=True, exist_ok=True)
+    STATE["reviews"].mkdir(parents=True, exist_ok=True)
+    # Keyed by render filename, so pointing the board at another bin must not carry a
+    # previous project's "failed" over to a file of the same name.
+    with REVIEW_LOCK:
+        REVIEW_STATE.clear()
     STATE["asks"].mkdir(parents=True, exist_ok=True)
 
     clips = sorted({p.name.replace(".audio.json", ".MP4")

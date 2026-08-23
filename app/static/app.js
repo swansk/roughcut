@@ -214,8 +214,46 @@ function boundaryWarning(seg) {
   return bad.join(' · ');
 }
 
+/* The picture on a shot card.
+ *
+ * It used to be a <video preload="metadata"> pointed at the shot's proxy, which is
+ * what made the monitor blank: sixteen cards plus two render previews is eighteen
+ * streams against Chrome's six-connections-per-host limit, so the monitor's own
+ * request queued behind them and the sound arrived seconds before the first frame.
+ * A card only ever showed one frame anyway — clicking it plays the shot in the
+ * monitor — so it is a few-kilobyte JPEG now.
+ *
+ * `posterAt` remembers which frame each shot card is currently showing, keyed by the
+ * segment object itself so it survives the re-render after every edit. Without it,
+ * holding the in-trim button would fetch a new frame every 0.25 s. */
+const posterAt = new WeakMap();
+let posterTimer = 0;
+
+function posterSrc(seg) {
+  if (!posterAt.has(seg)) posterAt.set(seg, seg.in);
+  const base = (P.clips[seg.clip] || {}).poster;
+  return base ? `${base}?t=${Math.max(0, posterAt.get(seg)).toFixed(2)}` : '';
+}
+
+/* Catch the posters up to the in-points, once the trimming stops. A poster that lags
+ * a nudge by half a second is fine; twenty requests for twenty nudges is not. Updates
+ * the <img> in place rather than re-rendering, so it cannot steal focus from the
+ * `why` field somebody is typing in. */
+function refreshPosters() {
+  clearTimeout(posterTimer);
+  posterTimer = setTimeout(() => {
+    document.querySelectorAll('.seg').forEach((el) => {
+      const seg = segs[Number(el.dataset.i)];
+      const img = el.querySelector('.poster');
+      if (!seg || !img) return;
+      posterAt.set(seg, seg.in);
+      const src = posterSrc(seg);
+      if (src && img.getAttribute('src') !== src) img.setAttribute('src', src);
+    });
+  }, 450);
+}
+
 function segCard(seg, i) {
-  const clip = P.clips[seg.clip] || {};
   const el = document.createElement('div');
   el.className = 'seg' + (i === sel ? ' sel' : '');
   el.draggable = true;
@@ -231,9 +269,14 @@ function segCard(seg, i) {
   const blind = unusableFor(seg).map(
     (u) => `unusable ${u.start.toFixed(1)}–${u.end.toFixed(1)}: ${u.why}`).join(' · ');
 
+  // No src at all rather than an empty one for a clip with no sidecar: src="" makes
+  // the browser fetch the page's own URL, which is a request for the whole board.
+  const poster = posterSrc(seg);
   el.innerHTML = `
-    <video preload="metadata" muted playsinline
-           src="${clip.proxy || ''}#t=${seg.in.toFixed(2)}"></video>
+    <img class="poster" draggable="false" loading="lazy" decoding="async"
+         alt="${escapeHtml(stem(seg.clip))} at ${seg.in.toFixed(2)}s"
+         title="play the cut from here"
+         ${poster ? `src="${poster}"` : ''}>
     <div>
       <div class="meta">
         <span class="handle" title="drag to reorder">⋮⋮</span>
@@ -261,7 +304,7 @@ function segCard(seg, i) {
   el.addEventListener('click', (e) => {
     sel = i;
     // The poster is the shot; clicking it plays the cut from here, in the monitor.
-    if (e.target.tagName === 'VIDEO') { revealMonitor(); return playFrom(i); }
+    if (e.target.closest('.poster')) { revealMonitor(); return playFrom(i); }
     const b = e.target.closest('button');
     if (!b) { paint(); return; }
     const act = b.dataset.act;
@@ -305,6 +348,7 @@ function nudge(i, edge, d) {
   else seg.out = Math.max(seg.in + 0.2, Math.min(dur, seg.out + d));
   seg.in = Math.round(seg.in * 100) / 100;
   seg.out = Math.round(seg.out * 100) / 100;
+  if (edge === 'in') refreshPosters();   // debounced: one frame per trim, not per press
 }
 
 /* The monitor. One place where the cut plays, fed from the proxies, so judging an edit
@@ -333,12 +377,25 @@ function filmStart(i) {
 
 function liveVideo() { return player.vids[player.cur]; }
 
-/* Point a buffer at a shot's in-point without playing it. */
+/* Point a buffer at a shot's in-point without playing it.
+ *
+ * The `#t=` is a media fragment, and it is the difference between fetching the shot
+ * and fetching the top of the file. The elements were `preload="auto"` and got their
+ * src before anything told them where the shot starts, so Chrome did the only thing
+ * it could and downloaded from byte 0: measured on the Killington board, a shot
+ * playing at 188.2 s had 0–15 s buffered, and the seek to 188.2 waited its turn
+ * behind that. With `preload="metadata"` on the element and the in-point in the URL,
+ * the first request after the moov lands where the shot is.
+ *
+ * `dataset.src` stays the bare proxy URL — it is how the rest of the monitor asks
+ * "which clip is this buffer holding", and a fragment in it would make every check
+ * miss. Re-arming the same clip at a different in-point is the seek below, not a
+ * reload: the file is already open. */
 function arm(v, seg) {
   const src = (P.clips[seg.clip] || {}).proxy || '';
   if (v.dataset.src !== src) {
     v.dataset.src = src;
-    v.src = src;
+    v.src = src ? `${src}#t=${Math.max(0, seg.in).toFixed(2)}` : src;
     v.load();
   }
   // Deferred, so by the time metadata arrives this buffer may have been pointed at a
@@ -1333,11 +1390,55 @@ function versionLabel(v) {
     + (isThisCut(v) ? ' · this cut' : '');
 }
 
+function human(bytes) {
+  if (!bytes) return '';
+  const mb = bytes / (1024 * 1024);
+  return mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${Math.round(mb)} MB`;
+}
+
+/* What a version player is doing when it is not showing a picture, said under it.
+ * Karl: *"they seem to get stuck in this loading forever place"* — the players had
+ * exactly one way of reporting anything, which was a black rectangle, and three
+ * things behind it: a review copy still encoding, a stalled stream, and a media
+ * error. The monitor learned to say which; these had not.
+ *
+ * `versionSticky` is what the slot says when nothing transient is happening — the
+ * standing warning that this row is playing a heavy master, which must come back
+ * after a `buffering…` rather than being cleared by it. */
+const versionSticky = { A: ['', ''], B: ['', ''] };
+
+function versionMsg(slot, text, kind) {
+  const el = $(`#state${slot}`);
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = `hint${kind ? ` ${kind}` : ''}`;
+}
+
+function versionSettled(slot) {
+  versionMsg(slot, versionSticky[slot][0], versionSticky[slot][1]);
+}
+
+/* The A/B players play the 720p review copy, never the master.
+ *
+ * The delivery render Karl watched is 987 MB of 4K at 43.6 Mbps; ffmpeg needs 92.8 s
+ * of wall clock to walk its 181 s on this box, which is half of real time, so no
+ * browser was ever going to stream it smoothly off loopback. The file is fine — 5427
+ * frames at a clean 1/29.97 — it is just heavy, and "jumping all around the place"
+ * and "3s before video buffers" are both that weight. The master stays for Download. */
 function loadVersion(v, slot) {
   const el = $(`#preview${slot}`);
-  el.src = v.url;
+  const building = v.review_state === 'building';
+  el.src = building ? '' : (v.review_state === 'ready' ? v.review_url : v.url);
+  if (building) el.removeAttribute('src');
   el.load();
   $(`#label${slot}`).textContent = versionLabel(v);
+  versionSticky[slot] = building
+    ? ['making a review copy to play — the download below is ready now', '']
+    : (v.review_state === 'failed'
+      ? [`no review copy — playing the ${human(v.size)} master, expect it to stutter`,
+         'warn']
+      : ['', '']);
+  versionSettled(slot);
 }
 
 /* Rebuilds only the list, never the A/B slots — repainted on every edit so that
@@ -1351,14 +1452,27 @@ function paintVersions() {
       { hour: '2-digit', minute: '2-digit' });
     const row = document.createElement('div');
     row.className = 'ver';
+    // Size and resolution on the row, because the button next to them starts a
+    // download and 987 MB is worth knowing about before it begins.
+    const heft = [human(v.size), v.width ? `${v.width}x${v.height}` : '']
+      .filter(Boolean).join(' · ');
+    const building = v.review_state === 'building' ? ' · review copy building…' : '';
     row.innerHTML = `<span class="t">${escapeHtml(versionLabel(v))}
-      <span class="hint">· ${when}</span></span>`;
+      <span class="hint">· ${when}${heft ? ` · ${heft}` : ''}${building}</span></span>`;
     ['A', 'B'].forEach((slot) => {
       const b = document.createElement('button');
       b.textContent = slot;
       b.onclick = () => loadVersion(v, slot);
       row.appendChild(b);
     });
+    // A plain link, so the browser's own download machinery handles it; the server
+    // sends it as an attachment with a filename worth having.
+    const dl = document.createElement('a');
+    dl.className = 'dl';
+    dl.href = v.download_url;
+    dl.textContent = '↓ download';
+    dl.title = `${v.download_name} · ${human(v.size)}`;
+    row.appendChild(dl);
     box.appendChild(row);
   });
 }
@@ -1374,6 +1488,27 @@ async function refreshVersions() {
   // there is a second version to compare against.
   $('#slotB').style.display = renders.length > 1 ? 'block' : 'none';
   paintSteps();
+  waitForReviews(renders);
+}
+
+/* A review copy is derived after the render says done — ~90 s for a 4K master — so
+ * the list has to come back and pick it up rather than leaving a slot empty until
+ * somebody reloads the page. */
+let reviewPoll = 0;
+function waitForReviews(renders) {
+  const building = renders.some((v) => v.review_state === 'building');
+  if (!building || reviewPoll) return;
+  reviewPoll = setInterval(async () => {
+    const { renders: now } = await (await fetch('/api/renders')).json();
+    if (now.some((v) => v.review_state === 'building')) {
+      renderList = now;
+      paintVersions();
+      return;
+    }
+    clearInterval(reviewPoll);
+    reviewPoll = 0;
+    refreshVersions();
+  }, 4000);
 }
 
 async function doRender() {
@@ -1434,9 +1569,10 @@ function scrollSel() {
   if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
-/* A <video> that 404s while its proxy is still building stays broken until the page
- * is reloaded — the element does not retry on its own. Poll until the server says
- * building is done, then re-point the sources that never loaded. */
+/* A poster that 404s while its proxy is still building stays broken until the page is
+ * reloaded — the <img> does not retry on its own, any more than the <video> it replaced
+ * did. Poll until the server says building is done, then re-point the ones that never
+ * loaded. */
 function waitForProxies() {
   const iv = setInterval(async () => {
     const p = await (await fetch('/api/project')).json();
@@ -1445,10 +1581,10 @@ function waitForProxies() {
     clearInterval(iv);
     P.proxies_ready = true;
     let fixed = 0;
-    document.querySelectorAll('.seg video').forEach((v) => {
-      if (v.readyState >= 1) return;
-      v.src = v.getAttribute('src');   // same URL, fresh load attempt
-      v.load();
+    document.querySelectorAll('.seg .poster').forEach((img) => {
+      const src = img.getAttribute('src');
+      if (!src || img.naturalWidth > 0) return;
+      img.src = src;                       // same URL, fresh load attempt
       fixed++;
     });
     if (fixed) toast(`${fixed} preview${fixed > 1 ? 's' : ''} now available`);
@@ -1480,6 +1616,20 @@ async function boot() {
   // has to be something a person can do, and a monitor you can click to play is what
   // everyone expects anyway.
   $('.screen').onclick = toggleCut;
+  // The version players get the same treatment the monitor got: a stall or an error
+  // said on the screen. Silence there is what "stuck in this loading forever place"
+  // was — a black rectangle with nothing to distinguish encoding, buffering and broken.
+  ['A', 'B'].forEach((slot) => {
+    const el = $(`#preview${slot}`);
+    if (!el) return;
+    el.addEventListener('error', () =>
+      versionMsg(slot, mediaErrorText(el), 'bad'));
+    el.addEventListener('stalled', () =>
+      versionMsg(slot, 'the stream stalled — the board may be busy', 'warn'));
+    el.addEventListener('waiting', () => versionMsg(slot, 'buffering…'));
+    el.addEventListener('playing', () => versionSettled(slot));
+    el.addEventListener('loadeddata', () => versionSettled(slot));
+  });
   bed.el = $('#bed');
   P = await (await fetch('/api/project')).json();
   music = P.music || null;

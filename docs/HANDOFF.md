@@ -363,10 +363,43 @@ Ordered by what changes most, not by effort:
    camera-inverted false positive needs its own guard (horizon angle from the frame, or "is the
    *ground* at 45°?" in the sheet prompt). Junk and orientation could be proposed from the same
    sidecars. RQ-1/RQ-7 (sheet density, thumbnail size, model tier) remain unmeasured.
-2. **The board's first frame.** 16 shot cards each `preload="metadata"` an 85 MB proxy plus two
-   150 MB render previews — ~600 MB and 41 requests per page load against Chrome's 6-connection
-   limit; that is the 3-second wait the monitor shows as *opening…*. One JPEG poster per shot
-   would end it. Also untested: Firefox.
+2. ~~**The board's first frame.**~~ — **done.** Karl: *"I can hear the videos when I click play,
+   but the preview window still shows up blank."* Two faults, both measured on the Killington
+   bin: the cards' 17 `<video preload="metadata">` proxies took every connection Chrome allows,
+   so the monitor's own request queued behind them (first painted frame **6.8–9.5 s** after
+   `playFrom(0)`, mean pixel 0.0 until then, audio playing throughout); and the monitor's own
+   elements were `preload="auto"` and had no in-point in their URL, so Chrome downloaded from
+   byte 0 — buffered `0–15 s` while playing at 188.2 s. Cards are `<img>` posters from
+   `/media/poster/<stem>.jpg?t=<in>` (~6 KB, cached under `--work`, immutable) and the monitor
+   is `preload="metadata"` with a `#t=` fragment. First frame **~0.9 s**, media bytes per page
+   load 93 KB. Still untested: Firefox.
+
+   **Read those numbers with their conditions.** The 6.8–9.5 s was measured on a box that had
+   just finished a 4K delivery render. Re-run back to back on the same warm, idle machine, main
+   paints in 0.74–0.79 s and this branch in 0.89–0.91 s — with the proxies in the page cache and
+   the cores free, seventeen card streams cost nothing and a poster is one extra fetch. Under a
+   render-shaped load (one `libx264 -preset slow` pass over the 4K master) the gap comes back:
+   5.6 / 5.7 / 3.1 s before against 3.2 / 2.6 / 3.6 s after, 19 requests against 15, and 93 KB
+   of media every run against 0.2–2.5 MB. The defect is not "the board is ten times slower", it
+   is that **the first frame used to degrade with whatever else the machine was doing** — which
+   is the machine Karl edits on while it renders. Only the buffered-range fix is
+   condition-independent: main buffers `0–15 s` for a shot at 188.2 s in every condition
+   measured and this branch never does. Anyone re-checking these should say what the box was
+   doing at the time.
+
+   The same weight closed the render complaints in the same pass. Karl, on the finished 4K
+   delivery render: *"jumping all around the place, looks bad"* and *"stuck in this loading
+   forever place... only have played for like 3s before video buffers"*. The file is sound —
+   5427 frames at a clean 1/29.97, no anomalies — but it is 987 MB at 43.6 Mbps and the A/B
+   players streamed it: 157 MB pulled in 15 s of watching, against 5.3 MB for a 720p copy of
+   the same cut. Renders get a review copy under `--work/reviews/<bin>/` now, derived after
+   the render reports done and one at a time; the players play that, each row states its size
+   and resolution, and a Download serves the master as an attachment named for the bin, the
+   shots, the length and the quality. **Caveat worth carrying:** with the cards no longer
+   streaming, the 4K master played 14.5 s of film in 15 s of wall clock with zero dropped
+   frames on this box, so what Karl saw was contention rather than the master being
+   unplayable on its own. The review copy is an 8.6x cut in page traffic and the right fix
+   for the A/B case; it is not a proven cure for a symptom that no longer reproduces alone.
 3. **ASR.** A tuned low-threshold VAD might recover the 14 words CLIP_06 lost without losing the
    patrol lines; CLIP_05 transcribes to zero words at `speech_fraction` 0.52 — that is the weak
    Tier A detector, not Whisper.

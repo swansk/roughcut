@@ -246,6 +246,94 @@ same commit. Releases move entries into a dated version section.
   sat there for the whole join — minutes of it on a 4K delivery render, and exactly the
   "got like no response — and just see rendering…" complaint. Cutting and joining are two
   weighted milestones now (0.75 / 0.25), and no snapshot in state `running` may report 100%.
+- **What the board's playback numbers above depend on, measured properly.** The 6.8–9.5 s first
+  frame that started this was real and reproduced three times, but it was measured on a box that
+  had just finished a 4K delivery render — and a claim that only holds under conditions nobody
+  wrote down is a claim the next session cannot check. Re-run back to back on the same warm,
+  idle machine, main and this branch paint at **0.74–0.79 s** and **0.89–0.91 s**: with 1.4 GB
+  of proxies in the page cache and eight free cores, seventeen card streams cost nothing, and
+  the branch is a hair *slower* because a poster is one more thing to fetch before the monitor
+  is asked for anything. Put the box back under a render-shaped load (one `libx264 -preset slow`
+  encode of the 4K master, ~8 cores) and the difference returns: **5.6 / 5.7 / 3.1 s** before
+  against **3.2 / 2.6 / 3.6 s** after, with the same 19-vs-15 requests and 93 KB of media every
+  single run against 0.2–2.5 MB. So the honest statement is not "the board was ten times
+  slower"; it is that **the cards' streams cost nothing when the machine is idle and seconds
+  when it is not**, and an editor whose first frame degrades with whatever else the box is doing
+  is the defect. The buffered-range fix is the one that holds unconditionally: playing a shot at
+  188.2 s, main buffers `0–15 s` in every condition measured and this branch never does.
+- **The version players streamed the master render, and there was no way to download one.**
+  Karl, watching the finished 4K delivery render on the board: *"it looks like it already
+  crashed.. or at least has an issue with the render - jumping all around the place, looks
+  bad"*, and *"they seem to get stuck in this loading forever place and also only have played
+  for like 3s before video buffers / pauses."* The file is not broken — 3840x2160, 181.11 s,
+  5427 frames whose presentation intervals are a clean 1/29.97 throughout with zero anomalies.
+  It is **987 MB at 43.6 Mbps**, and the A/B players were pointed straight at it. Measured in
+  a player for 15 s: the master pulls **157 MB** (≈84 Mbps demanded) against **5.3 MB** for a
+  720p copy, and with both slots loaded plus the monitor playing, a page on masters moves
+  **199 MB** in 15 s against **23 MB** on review copies, painting its first frame in 243 ms
+  against 187 ms. So a finished render now gets a **720p review copy** — the same argument as
+  the source proxies, one directory over, at `--work/reviews/<bin>/`, built one at a time in
+  the background after the render reports done, never blocking it. The players play that; the
+  master is untouched. The 4K master's copy is 35 MB, built in 70.7 s; the five 1080p ones are
+  ~33 MB and ~30 s each. While a copy is building the row says *review copy building…* and the
+  player says so under itself rather than being handed a 987 MB file; if the copy cannot be
+  made the row falls back to the master and warns that it will stutter, because nothing in the
+  versions list may become unplayable.
+- **A finished cut could not be got off the board.** Karl: *"Make it clear how to download the
+  renders."* The only render URL the board exposed is served inline, so clicking it played the
+  file in a tab, and `cut_110ecb13.mp4` says nothing on a desktop full of downloads. Every
+  version row now carries a **↓ download** control on `/media/download/render/<name>`, served
+  `content-disposition: attachment` as `killington-neutral-17shots-3m01-4K.mp4` — bin, shots,
+  duration, quality — and the row states the size and the resolution next to it (`942 MB ·
+  3840x2160`), because 987 MB is worth knowing about before the click. Renders made before the
+  profile field existed had no dimensions at all and listed as blanks; they are probed off the
+  file now and cached by mtime, so an old preview reads as `1920x1080` and can never read as 4K.
+- **A stalled version player looked exactly like a working one.** The monitor learned to say
+  what it was doing on its own screen; the A/B players had not, so an encoding review copy, a
+  buffering stream and a media error were the same black rectangle — which is what *"stuck in
+  this loading forever place"* was made of. Each slot has a line under it now that names which
+  of those is happening, with the standing warning restored after a transient one rather than
+  cleared by it.
+- **The monitor downloaded the top of the file and then waited to seek.** Its two `<video>`
+  elements were `preload="auto"` and `arm()` set their `src` before anything said where the
+  shot starts, so Chrome did the only thing it could and fetched from byte 0. Measured on the
+  live board: playing a shot that begins at **188.2 s**, the buffered range was **0–15 s** —
+  it was pulling a part of the file nobody was going to watch, and the seek to the in-point
+  queued behind it. The elements are `preload="metadata"` now and `arm()` puts the in-point in
+  the URL as a `#t=` media fragment, so the first request after the header lands on the shot;
+  `dataset.src` deliberately keeps the bare proxy URL, because that is how the rest of the
+  monitor asks which clip a buffer is holding. Buffered after arming is the in-point's range
+  (`184.3–203.8` for the 188.2 s shot) plus at most a couple of seconds of header, against
+  15 s of head before. The two-element hand-over is untouched: `arm` / `playFrom` / `advance`
+  and their browser tests still pass, plus a new one that pins both elements to
+  `preload="metadata"` and asserts the fragment reaches the URL. Together with the shot cards
+  no longer streaming, the first non-black frame after `playFrom(0)` is **1.03 s / 0.82 s /
+  0.96 s** against **6.8 s / 9.5 s / 7.9 s** before — press play, see a frame. 146 API + 32
+  browser tests pass.
+- **The monitor played the sound and showed a black screen, because sixteen shot cards were
+  each streaming an 85 MB proxy.** Karl, on the Killington board: *"I can hear the videos when
+  I click play, but the preview window still shows up blank."* Neither the range serving nor
+  the layout was at fault — `curl` gets exact 206s with correct `content-range` in 3 ms to
+  first byte, five concurrent open-ended requests each deliver all 85 MB in under a second,
+  `.screen` measures 924x520 with the live `<video>` filling it, and the console is clean. It
+  was **starvation in the browser**: every shot card was an autonomous
+  `<video preload="metadata">` pointed at a proxy, so a 17-shot cut opened 17 streams plus two
+  render previews against Chrome's ~6 connections per host, and the monitor's own request
+  queued behind all of them. Timed from `playFrom(0)` against the live bin, reading pixels back
+  off the element into a canvas: the first non-black frame (mean > 5) arrived at **6.8 s /
+  9.5 s / 7.9 s** over three runs — readyState 0 → 1 with a mean pixel of 0.0 until then, while
+  the audio had long since started. A card only ever showed one frame, so it is an `<img>` now.
+  `GET /media/poster/<stem>.jpg?t=<seconds>` cuts a 320 px JPEG out of the proxy with
+  `ffmpeg -ss`, caches it under `--work/posters/<bin>/` keyed by clip and time, and serves it
+  `immutable` — the same containment as the other media routes (the name is a stem inside
+  `proxy_dir`; four traversal shapes 404). Measured: **2–13 KB** per poster, **322 ms** cold and
+  **3 ms** warm, all 17 built in **1.27 s** at six at a time, 180 KB of disk for the bin. One
+  page load now moves **93 KB** of media instead of opening 19 streams, and the first painted
+  frame is under a second. Trimming an in-point moves the poster too, debounced 450 ms, so
+  holding the button costs one frame and not one per press. Verified: 146 API + 32 browser
+  tests pass (was 138 + 28), including a browser test that reads the monitor's pixels back and
+  fails if it is still black 5 s after play, one that a card carries a poster `<img>` and no
+  `<video>` at all, and one that six 0.25 s nudges cost at most two poster requests.
 - **The test suite was writing invented spend into the real inference ledger.**
   `config.ledger_path()` falls back to `~/work/roughcut-ledger.jsonl` — the file the
   project's cost claims are read out of — and `inference._log()` appends to it after every

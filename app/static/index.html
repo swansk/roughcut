@@ -46,8 +46,11 @@
   }
   .seg.sel { border-color: var(--accent); }
   .seg.drag { opacity: .4; }
-  .seg video { width: 100%; border-radius: 6px; background: #000; display: block;
-                aspect-ratio: 16/9; object-fit: cover; }
+  /* The card's picture is a still, not a stream: sixteen live proxies on one board
+     took every connection Chrome had and the monitor played sound over black. */
+  .seg .poster { width: 100%; border-radius: 6px; background: #000; display: block;
+                 aspect-ratio: 16/9; object-fit: cover; cursor: pointer;
+                 -webkit-user-select: none; user-select: none; }
   .meta { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
   .clip { font-weight: 600; }
   .times { color: var(--dim); font-variant-numeric: tabular-nums; }
@@ -110,6 +113,14 @@
   .ver:first-child { border-top: 0; }
   .ver .t { flex: 1; font-variant-numeric: tabular-nums; }
   .ver button { padding: 1px 8px; font-size: 12px; }
+  /* Getting a finished cut off the board was folklore until now: the only URL it
+     exposed is served inline, so a click played the file instead of saving it. */
+  .ver .dl { color: var(--accent); text-decoration: none; font-size: 12px;
+             border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px;
+             white-space: nowrap; }
+  .ver .dl:hover { border-color: var(--accent); }
+  .hint.warn { color: var(--warn); }
+  .hint.bad { color: var(--bad); }
   .steps { display: flex; gap: 6px; flex-wrap: wrap; width: 100%; margin-top: 2px; }
   .step { font-size: 12px; color: var(--dim); border: 1px solid var(--line);
           border-radius: 999px; padding: 2px 10px; }
@@ -221,9 +232,14 @@
     <!-- The monitor. The whole edit plays here from the proxies, shot after shot, so a
          cut is judged by watching it rather than by rendering it first. -->
     <div id="player" style="display:none">
+      <!-- preload="metadata", not "auto": an element told to preload everything starts
+           at byte 0, and the shot it is about to play may start three minutes in. On
+           Killington that meant 0-15s buffered for a shot at 188.2s, with the seek
+           queued behind the download. arm() puts the in-point in the URL as a media
+           fragment, so the first request after the header lands on the shot. -->
       <div class="screen">
-        <video id="pv0" preload="auto" playsinline></video>
-        <video id="pv1" preload="auto" playsinline></video>
+        <video id="pv0" preload="metadata" playsinline></video>
+        <video id="pv1" preload="metadata" playsinline></video>
         <div id="screenMsg" hidden></div>
       </div>
       <div class="transport">
@@ -302,13 +318,18 @@
       <div id="renderState" class="hint">idle</div>
       <div class="bar" id="renderBar" style="display:none"><i></i></div>
       <div class="ab">
+        <!-- These play the 720p review copy, never the master: a delivery render is
+             4K at ~44 Mbps and no browser streams that off this box. What each player
+             is doing when it shows nothing is said in the line under it. -->
         <div>
           <div class="hint"><b>A</b> <span id="labelA">—</span></div>
           <video id="previewA" controls preload="metadata"></video>
+          <div class="hint" id="stateA"></div>
         </div>
         <div id="slotB" style="display:none">
           <div class="hint"><b>B</b> <span id="labelB">—</span></div>
           <video id="previewB" controls preload="metadata"></video>
+          <div class="hint" id="stateB"></div>
         </div>
       </div>
       <div id="versions" class="lib" style="max-height:26vh;margin-top:8px"></div>

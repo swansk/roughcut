@@ -275,6 +275,77 @@ def test_media_path_traversal_is_contained(client):
     assert r.status_code == 404
 
 
+# ------------------------------------------------------------------ posters
+
+def test_poster_is_a_small_jpeg_of_the_frame_at_that_time(client, project):
+    """A shot card gets a picture, not a stream. Sixteen cards each holding open a
+    720p proxy took every connection Chrome allows and the monitor's own request
+    queued behind them: on the Killington board it played sound over a black screen
+    for 6.8-9.5 s. A poster is a few KB."""
+    import server
+    r = client.get("/media/poster/CLIP_A.jpg", params={"t": 2.5})
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/jpeg"
+    assert r.content[:2] == b"\xff\xd8", "not a JPEG"
+    assert len(r.content) < 60_000, f"a card's picture should be small: {len(r.content)}"
+    assert (server.STATE["posters"] / "CLIP_A@000002.50.jpg").exists()
+
+
+def test_poster_at_a_different_time_is_a_different_picture(client):
+    """The card follows the in-point, so the URL has to carry the time."""
+    a = client.get("/media/poster/CLIP_A.jpg", params={"t": 0.5}).content
+    b = client.get("/media/poster/CLIP_A.jpg", params={"t": 4.5}).content
+    assert a and b and a != b
+
+
+def test_poster_is_cached_on_disk_and_declared_immutable(client, project):
+    """One clip at one timestamp is one frame forever, so the browser may keep it and
+    so may the disk — re-rendering the board must not re-run ffmpeg once per card."""
+    import server
+    dest = server.STATE["posters"] / "CLIP_B@000003.00.jpg"
+    dest.unlink(missing_ok=True)
+    r = client.get("/media/poster/CLIP_B.jpg", params={"t": 3.0})
+    assert r.status_code == 200
+    assert dest.exists()
+    stamp = dest.stat().st_mtime_ns
+    cache = r.headers.get("cache-control", "")
+    assert "immutable" in cache and "max-age" in cache, cache
+    again = client.get("/media/poster/CLIP_B.jpg", params={"t": 3.0})
+    assert again.content == r.content
+    assert dest.stat().st_mtime_ns == stamp, "rebuilt a poster it already had"
+
+
+def test_poster_past_the_end_of_a_clip_falls_back_to_its_first_frame(client):
+    """A trim can park an in-point past the end of a clip; a card showing frame one
+    beats a card showing a broken image."""
+    head = client.get("/media/poster/CLIP_A.jpg", params={"t": 0.0})
+    late = client.get("/media/poster/CLIP_A.jpg", params={"t": 9999.0})
+    assert late.status_code == 200
+    assert late.content == head.content
+
+
+def test_poster_for_an_unbuilt_proxy_404s_rather_than_inventing_one(client):
+    assert client.get("/media/poster/NOPE.jpg").status_code == 404
+
+
+def test_poster_path_traversal_is_contained(client):
+    """Same containment as the other media routes: the name names a stem in proxy_dir."""
+    for name in ("..%2F..%2Fetc%2Fpasswd", "%2e%2e%2f%2e%2e%2fCLIP_A.jpg", "....jpg"):
+        assert client.get(f"/media/poster/{name}").status_code == 404
+
+
+def test_poster_time_is_validated(client):
+    """A negative time is clamped rather than handed to ffmpeg; a non-number is a 422."""
+    assert (client.get("/media/poster/CLIP_A.jpg", params={"t": -5}).content
+            == client.get("/media/poster/CLIP_A.jpg", params={"t": 0}).content)
+    assert client.get("/media/poster/CLIP_A.jpg", params={"t": "soon"}).status_code == 422
+
+
+def test_project_offers_a_poster_url_per_clip(client):
+    clips = client.get("/api/project").json()["clips"]
+    assert clips["CLIP_A.MP4"]["poster"] == "/media/poster/CLIP_A.jpg"
+
+
 # ------------------------------------------------------------------ proxies
 
 def test_proxies_built_and_no_partials_left(client, project):
@@ -341,6 +412,123 @@ def test_renders_are_listed_as_versions_newest_first(client, project):
     assert abs(newest["duration_s"] - 3.0) < 0.25
     # playable straight from the list
     assert client.get(newest["url"], headers={"range": "bytes=0-99"}).status_code == 206
+
+
+def _rendered(client, segs) -> dict:
+    """Render and wait, returning the finished row from /api/renders."""
+    job = client.post("/api/render", json={"segments": segs}).json()["job"]
+    deadline = time.time() + 120
+    while client.get(f"/api/render/{job}").json()["state"] == "running":
+        assert time.time() < deadline, "render timed out"
+        time.sleep(0.3)
+    assert client.get(f"/api/render/{job}").json()["state"] == "done"
+    name = f"cut_{job}.mp4"
+    return next(r for r in client.get("/api/renders").json()["renders"]
+                if r["name"] == name)
+
+
+def _review_ready(client, name: str, timeout: float = 120) -> dict:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        row = next(r for r in client.get("/api/renders").json()["renders"]
+                   if r["name"] == name)
+        if row["review_state"] != "building":
+            return row
+        time.sleep(0.3)
+    raise AssertionError(f"review copy for {name} never finished")
+
+
+def test_a_finished_render_gets_a_review_copy_and_the_players_play_that(client, project):
+    """Karl, watching the 4K delivery render in the board: *"they seem to get stuck in
+    this loading forever place and also only have played for like 3s before video
+    buffers / pauses."* The file was fine — 5427 frames at a clean 1/29.97 — it was
+    987 MB of 4K at 43.6 Mbps, which no browser streams off this box: measured, one
+    player pulled 157 MB in 15 s of watching against 5 MB for the review copy. So the
+    players get a 720p copy and the master stays for the download."""
+    import server
+    row = _rendered(client, [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 3.0, "why": "a"}])
+    assert row["review_state"] in ("building", "ready")
+    row = _review_ready(client, row["name"])
+    assert row["review_state"] == "ready"
+    copy = server.review_path(row["name"])
+    assert copy.exists()
+    assert client.get(row["review_url"],
+                      headers={"range": "bytes=0-99"}).status_code == 206
+    # the same cut, capped at the proxy width: a render comes out at 1920x1080 and
+    # the copy the player streams is 1280x720
+    assert _duration(copy) == pytest.approx(2.5, abs=0.35)
+    w, h = server.probe_resolution(copy)
+    assert (w, h) == (1280, 720) and w <= server.PROXY_W
+    assert server.probe_resolution(server.STATE["renders"] / row["name"]) == (1920, 1080)
+    # the master is untouched: it is what the download serves
+    assert (server.STATE["renders"] / row["name"]).exists()
+
+
+def test_a_review_copy_that_cannot_be_made_falls_back_to_the_master(client, project,
+                                                                    monkeypatch):
+    """Nothing in the versions list may become unplayable because a derived file is
+    missing. A failure is reported once and the row keeps its master URL."""
+    import server
+    row = _rendered(client, [{"clip": "CLIP_B.MP4", "in": 0.0, "out": 1.5, "why": "b"}])
+    _review_ready(client, row["name"])
+    server.review_path(row["name"]).unlink(missing_ok=True)
+    with server.REVIEW_LOCK:
+        server.REVIEW_STATE.pop(row["name"], None)
+
+    def explode(src, dest):
+        raise RuntimeError("no ffmpeg for you")
+
+    monkeypatch.setattr(server, "build_review", explode)
+    again = _review_ready(client, row["name"])
+    assert again["review_state"] == "failed"
+    assert again["url"] == f"/media/render/{row['name']}"
+    assert client.get(again["url"], headers={"range": "bytes=0-99"}).status_code == 206
+    # and it is not retried on every poll while it keeps failing
+    assert _review_ready(client, row["name"])["review_state"] == "failed"
+
+
+def test_a_render_can_be_downloaded_under_a_name_worth_having(client, project):
+    """Karl: *"Make it clear how to download the renders."* The board's only render
+    URL is served inline, so clicking it played the file in a tab rather than saving
+    it, and `cut_110ecb13.mp4` says nothing on a desktop full of downloads."""
+    row = _rendered(client, [{"clip": "CLIP_A.MP4", "in": 0.0, "out": 2.0, "why": "a"},
+                             {"clip": "CLIP_B.MP4", "in": 0.0, "out": 1.0, "why": "b"}])
+    r = client.get(row["download_url"], headers={"range": "bytes=0-99"})
+    assert r.status_code == 206
+    disp = r.headers["content-disposition"]
+    assert disp.startswith("attachment;"), disp
+    assert row["download_name"] in disp, (disp, row["download_name"])
+    # bin, shots, duration, quality — enough to know what it is a year later
+    assert row["download_name"].startswith(project["footage"].name)
+    assert "2shots" in row["download_name"]
+    assert "0m03" in row["download_name"]
+    assert row["download_name"].endswith(".mp4")
+    assert r.headers["content-type"] == "video/mp4"
+
+
+def test_download_of_an_unknown_render_404s_and_cannot_escape_the_folder(client):
+    assert client.get("/media/download/render/nope.mp4").status_code == 404
+    assert client.get(
+        "/media/download/render/..%2F..%2Fetc%2Fpasswd").status_code == 404
+    assert client.get("/media/review/..%2F..%2Fetc%2Fpasswd").status_code == 404
+
+
+def test_every_version_says_how_big_it_is_and_at_what_size(client, project):
+    """A row that offers a download has to say what you are about to download; 987 MB
+    is worth knowing before the click. Renders made before the profile field existed
+    carry no dimensions, so they are probed rather than left blank."""
+    import server
+    row = _rendered(client, [{"clip": "CLIP_C.MP4", "in": 0.0, "out": 1.0, "why": "c"}])
+    assert row["size"] > 0
+    assert (row["width"], row["height"]) == (1920, 1080)
+    # an old render with no metadata sidecar at all still reports its size
+    meta = (server.STATE["renders"] / row["name"]).with_suffix(".json")
+    meta.unlink()
+    bare = next(r for r in client.get("/api/renders").json()["renders"]
+                if r["name"] == row["name"])
+    assert (bare["width"], bare["height"]) == (1920, 1080)
+    assert bare["size"] == row["size"]
+    assert bare["download_name"].endswith("1080p.mp4")
 
 
 def test_a_version_survives_a_restart(client, project):
@@ -479,7 +667,11 @@ def test_unknown_render_profile_is_rejected(client, project):
 def test_renders_from_before_the_profile_existed_still_list_cleanly(client, project):
     """Old metadata on disk has neither `profile` nor `width`/`height` — it must
     read as the preview render it always was, never crash the versions list, and
-    never be mistaken for a delivery render."""
+    never be mistaken for a delivery render.
+
+    The dimensions used to come back as null, which was honest but useless once the
+    row started saying what you are about to download. They are probed off the file
+    now — measured, not invented, so an old preview still cannot read as 4K."""
     body = {"segments": [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 1.5, "why": "a"}]}
     job = client.post("/api/render", json=body).json()["job"]
     deadline = time.time() + 90
@@ -494,7 +686,8 @@ def test_renders_from_before_the_profile_existed_still_list_cleanly(client, proj
     listed = {r["name"]: r for r in client.get("/api/renders").json()["renders"]}
     entry = listed[f"cut_{job}.mp4"]
     assert entry["profile"] == "preview"
-    assert entry["width"] is None and entry["height"] is None
+    assert (entry["width"], entry["height"]) == (1920, 1080)
+    assert "1080p" in entry["download_name"] and "4K" not in entry["download_name"]
 
 
 # ------------------------------------------------------------------ music
@@ -1220,15 +1413,17 @@ def test_status_reports_preview_building_progress(tmp_path, project):
 
 def test_proxy_dirs_do_not_collide_between_bins(tmp_path, project):
     """Two bins can hold the same GoPro stem; a shared proxy dir would serve one
-    bin's frames for the other's clip."""
+    bin's frames for the other's clip. Posters are frames out of those proxies, so
+    they carry the same hazard and the same per-bin split."""
     import server
 
     with _fresh(tmp_path, project):
-        first = server.STATE["proxy_dir"]
+        first, first_posters = server.STATE["proxy_dir"], server.STATE["posters"]
     other = tmp_path / "other-bin"
     other.mkdir()
     with _fresh(tmp_path, {"footage": other}):
         assert server.STATE["proxy_dir"] != first
+        assert server.STATE["posters"] != first_posters
 
 
 # ------------------------------------------------------------ backend status
