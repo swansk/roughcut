@@ -27,6 +27,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import config
+from .boundaries import polish_plan
 from .inference import complete
 
 PLAN_SCHEMA = {
@@ -299,7 +300,12 @@ def _ask(prompt: str, system: str, clips: dict[str, dict]) -> dict:
     result = complete(
         prompt, role=config.ROLE_SKELETON, schema=PLAN_SCHEMA, system=system,
         validate=lambda payload: validate_plan(payload, clips), retries=1)
-    plan = result.content
+    # Boundary polish runs on the *validated* plan, so it can assume in/out are
+    # real numbers inside a real clip and worry only about where they land in the
+    # speech. Both callers get it: a first cut has the same clipped words as a
+    # revision, and asking the model to be more careful about a timestamp it read
+    # off a transcript is asking it to do arithmetic the sidecar already knows.
+    plan = polish_plan(result.content, clips)
     plan["usage"] = {
         "input_tokens": result.input_tokens, "output_tokens": result.output_tokens,
         "projected_usd": result.projected_usd, "model": result.model,

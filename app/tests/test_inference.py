@@ -118,7 +118,9 @@ def test_bad_json_gets_one_bounded_reask_then_succeeds():
     b = use(["not json at all",
              '{"segments":[{"clip":"A.MP4","in":0,"out":2}],"notes":"ok"}'])
     plan = revise.propose(SEGMENTS, CLIPS, "", "shorter")
-    assert plan["notes"] == "ok"
+    # startswith, not ==: boundary polish appends a line of its own to the notes.
+    # What this test is about is that the re-ask happened at all.
+    assert plan["notes"].startswith("ok")
     assert len(b.requests) == 2
     assert "could not be parsed" in b.requests[1].prompt
 

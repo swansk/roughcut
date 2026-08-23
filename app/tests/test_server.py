@@ -568,9 +568,14 @@ def test_ask_returns_a_proposal_without_writing(client, project):
             "note": "use the clip that isn't in the cut",
             "segments": [{"clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0}],
             "story": "a test film"})
-        assert plan["segments"] == [{"clip": "CLIP_C.MP4", "in": 0.5, "out": 4.0,
-                                     "why": "per the note"}]
-        assert plan["notes"] == "swapped in the unused clip"
+        # The plan comes back polished: 4.0 is the end of "you", and an out-point
+        # sitting on the last word is heard as cutting through it, so it gains a
+        # tail pad and says where it came from.
+        assert plan["segments"] == [
+            {"clip": "CLIP_C.MP4", "in": 0.5, "out": 4.45, "why": "per the note",
+             "polished_from": [0.5, 4.0],
+             "polish_why": "out +0.45s to finish 'you'"}]
+        assert plan["notes"].startswith("swapped in the unused clip")
         assert plan["usage"]["projected_usd"] > 0
         # the model was given the transcripts and the note
         prompt = Scripted.seen[0].prompt
@@ -613,7 +618,12 @@ def test_ask_originates_when_there_is_nothing_to_revise(client, project):
         plan = _ask(client, {"note": "", "segments": [],
                              "story": "two people talking"})
         assert len(plan["segments"]) == 2
-        assert plan["notes"] == "read it as a conversation"
+        # An originated cut is polished on the same terms as a revision — the
+        # first cut has the same clipped words as every later one — and the
+        # adjustment is declared in the notes rather than applied silently.
+        assert plan["notes"].startswith("read it as a conversation")
+        assert "Boundary polish adjusted 2 of 2 shots" in plan["notes"]
+        assert [s["out"] for s in plan["segments"]] == [2.45, 4.45]
         prompt = Scripted.seen[0].prompt
         assert "There is no edit yet" in prompt
         assert "two people talking" in prompt and "hello there" in prompt
