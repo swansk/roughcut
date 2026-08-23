@@ -339,6 +339,24 @@ lexical read of excitement markers — see the open thread in the selection note
 
 These were measured, cost real effort, and are easy to accidentally undo:
 
+- **The preview render's "quality loss" is real, measured, and not a bug** (2026-08-23, prompted
+  by Karl watching `cut_91e0b993`/`cut_29ed8c3f` and suspecting an encoding problem). Killington
+  is 4K (3840×2160; 9 clips H.264 29.97fps, 3 clips HEVC 59.94fps — `benchmarks/README.md`'s B2
+  row had this wrong, recorded as uniform 29.97fps), and `assemble.py`'s preview profile has
+  always targeted a fixed 1920×1080 @ 24000/1001 for board-refresh speed. On one high-motion 9.9s
+  shot, the dominant *visible* cost is the 2×/2× downscale (a matched-frame crop of fine detail —
+  bare branches, a chairlift cable — is clearly softer at 1080p than at native 4K; a low-detail
+  snow crop barely differs), not the frame-rate conversion (which drops a clean, regular 20%/60%
+  of frames on the 30/60fps clips — exact ratios, since GoPro's `/1001` denominator cancels — not
+  an erratic pattern) and not `-preset veryfast -crf 20` (already near-transparent at its own
+  target size: VMAF 99.2–99.4 against a same-size lossless reference). Colour is fine — 8-bit
+  Rec.709 full-range, not HLG/Log, and the full→limited range retag does not clip. The concat
+  `-c copy` path and the music mix never touch the video bitstream (verified with a second music
+  pass on both real renders: identical MD5 and frame count). `assemble.py --profile delivery`
+  now exists for when the loss matters: the bin's own majority frame rate, up to 4K without
+  upscaling, preset slow, crf 18 — estimated ~17 minutes for the full 178s Killington cut from
+  one shot's measured rate (untested at full length; over the ~10-minute bar for actually running
+  one).
 - **The visual pass is necessary and not sufficient, and the event that mattered most was the
   least legible one** (session 6). With every Killington clip looked at, a blind first cut
   stopped opening on black frames and found the backflips and crashes the words-only cut had

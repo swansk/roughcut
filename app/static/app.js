@@ -1045,9 +1045,14 @@ function rejectProposal() {
 function versionLabel(v) {
   const base = v.duration_s ? `${fmt(v.duration_s)} · ${v.segments} shots`
     : `${v.name.replace(/^cut_|\.mp4$/g, '')} · older render`;
+  // Renders made before the profile existed carry neither field and must read as
+  // the preview they always were — no suffix, not "unknown".
+  const quality = v.profile === 'delivery'
+    ? ` · ${v.width >= 3840 ? '4K' : (v.width ? `${v.width}x${v.height}` : 'delivery')}`
+    : '';
   // A render can carry a label — "proposal, not accepted" is the one that matters, since
   // a version that was never the cut must not read as if it had been.
-  return (v.music ? `${base} ♪` : base) + (v.note ? ` · ${v.note}` : '');
+  return (v.music ? `${base} ♪` : base) + quality + (v.note ? ` · ${v.note}` : '');
 }
 
 function loadVersion(v, slot) {
@@ -1088,7 +1093,7 @@ async function refreshVersions() {
 async function doRender() {
   const r = await fetch('/api/render', {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ segments: segs }),
+    body: JSON.stringify({ segments: segs, profile: $('#renderProfile').value }),
   });
   const { job } = await r.json();
   $('#renderState').textContent = 'starting…';

@@ -807,12 +807,23 @@ def probe_duration(path: Path) -> float | None:
         return None
 
 
+def probe_resolution(path: Path) -> tuple[int, int] | None:
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                        "-show_entries", "stream=width,height", "-of", "csv=p=0",
+                        str(path)], capture_output=True, text=True)
+    try:
+        w, h = r.stdout.strip().split(",")
+        return int(w), int(h)
+    except ValueError:
+        return None
+
+
 def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
     entry = RENDERS[job]
     parts_dir = STATE["work"] / f"parts_{job}"
     cmd = ["uv", "run", "--quiet", str(TOOLS / "assemble.py"), str(edl_path),
            "--footage", str(STATE["footage"]), "--sidecars", str(STATE["sidecars"]),
-           "--assets", str(STATE["assets"]),
+           "--assets", str(STATE["assets"]), "--profile", meta.get("profile", "preview"),
            "--parts-dir", str(parts_dir), "-o", str(out_path)]
 
     # Same shape as the audio pass: a ticker counting finished parts on disk, so the
@@ -841,6 +852,9 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
         # versions list the moment it sees "done" — a render that announces itself
         # before its own metadata exists gets listed as an unlabelled older file.
         meta["duration_s"] = probe_duration(out_path)
+        res = probe_resolution(out_path)
+        if res:
+            meta["width"], meta["height"] = res
         out_path.with_suffix(".json").write_text(json.dumps(meta, indent=1),
                                                  encoding="utf-8")
     entry.update(
@@ -853,9 +867,15 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
     )
 
 
+RENDER_PROFILES = ("preview", "delivery")
+
+
 @app.post("/api/render")
 async def api_render(request: Request) -> JSONResponse:
     body = await request.json()
+    profile = body.get("profile", "preview")
+    if profile not in RENDER_PROFILES:
+        raise HTTPException(400, f"unknown render profile: {profile!r}")
     edl = read_edl()
     edl["segments"] = body["segments"]
     job = uuid.uuid4().hex[:8]
@@ -869,6 +889,7 @@ async def api_render(request: Request) -> JSONResponse:
         "story": (edl.get("story") or "")[:300],
         "note": (body.get("label") or "")[:120],
         "music": (edl.get("effects_music") or {}).get("asset"),
+        "profile": profile,
     }
     RENDERS[job] = {"state": "running", "stage": "cutting", "log": "",
                     "output": None, "url": None, "started": time.time(),
@@ -898,6 +919,11 @@ def api_renders() -> JSONResponse:
             "duration_s": meta.get("duration_s"), "segments": meta.get("segments"),
             "planned_s": meta.get("planned_s"), "note": meta.get("note", ""),
             "music": meta.get("music"),
+            # Renders made before this profile existed carry neither key — "preview"
+            # is what they all were, and no width/height reads as "don't know",
+            # never as "upscale to 4K".
+            "profile": meta.get("profile", "preview"),
+            "width": meta.get("width"), "height": meta.get("height"),
         })
     out.sort(key=lambda r: r["created"], reverse=True)
     return JSONResponse({"renders": out})

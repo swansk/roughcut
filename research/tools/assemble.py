@@ -40,6 +40,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -48,6 +49,19 @@ from roughcut import effects            # noqa: E402  (after sys.path)
 TARGET_LUFS = -16.0
 MAX_GAIN_DB = 12.0          # refuse to amplify near-silence into hiss
 W, H, FPS = 1920, 1080, "24000/1001"
+
+# `preview` is the fast path the board's quick versions use — unchanged from what
+# this file always did. `delivery` trades render time for the two things a 1080p24
+# proxy of the cut throws away: motion resolution (the source's own frame rate,
+# conformed rather than decimated) and detail (up to 4K, never upscaled past what
+# the bin actually shot). `slow`/`crf 18`/`256k` over the preview numbers is a
+# measured call, not a guess — see the commit that introduced this profile for the
+# SSIM/PSNR/VMAF numbers behind it.
+DELIVERY_MAX_W, DELIVERY_MAX_H = 3840, 2160
+PROFILES = {
+    "preview": {"preset": "veryfast", "crf": "20", "audio_bitrate": "192k"},
+    "delivery": {"preset": "slow", "crf": "18", "audio_bitrate": "256k"},
+}
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess:
@@ -66,19 +80,20 @@ def clip_gain(sidecars: Path, clip: str) -> float:
 
 
 def cut(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path,
-        orient: str) -> None:
+        orient: str, video: dict) -> None:
     cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin"]
     if orient == "none":
         cmd += ["-display_rotation", "0"]           # must precede -i; see module docstring
     cmd += [
         "-ss", f"{t_in:.3f}", "-i", str(src), "-t", f"{t_out - t_in:.3f}",
-        "-vf", f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
-               f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,fps={FPS},format=yuv420p",
+        "-vf", f"scale={video['w']}:{video['h']}:force_original_aspect_ratio=decrease,"
+               f"pad={video['w']}:{video['h']}:(ow-iw)/2:(oh-ih)/2,"
+               f"fps={video['fps']},format=yuv420p",
         "-af", f"volume={gain_db:.2f}dB,aresample=48000:first_pts=0",
         "-map", "0:v:0", "-map", "0:a:0", "-dn",    # drop GoPro's telemetry track
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-        "-c:a", "aac", "-b:a", "192k", "-ac", "2",
-        "-video_track_timescale", "24000",
+        "-c:v", "libx264", "-preset", video["preset"], "-crf", video["crf"],
+        "-c:a", "aac", "-b:a", video["audio_bitrate"], "-ac", "2",
+        "-video_track_timescale", str(video["timescale"]),
         # -dn drops the source telemetry stream; -write_tmcd stops the mov muxer
         # from synthesising a fresh timecode track out of the source metadata.
         "-write_tmcd", "0",
@@ -87,6 +102,72 @@ def cut(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path,
     r = run(cmd)
     if r.returncode != 0:
         raise RuntimeError(f"cut failed {src.name} {t_in}-{t_out}: {r.stderr[-400:]}")
+
+
+def probe_video(path: Path) -> tuple[str, int, int]:
+    """(r_frame_rate, width, height) of a clip's first video stream — what the
+    delivery profile conforms a bin to, instead of the preview profile's fixed
+    1920x1080 @ 24000/1001.
+
+    JSON, not `-of csv=p=0`: csv emits fields in ffprobe's own internal stream-dump
+    order, not the order named after `-show_entries`, so unpacking it positionally
+    silently reads the wrong column (this shipped once — width landed in the fps
+    variable and `int()` on a fraction string is how it was caught).
+    """
+    r = run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=r_frame_rate,width,height",
+             "-of", "json", str(path)])
+    s = json.loads(r.stdout)["streams"][0]
+    return s["r_frame_rate"], int(s["width"]), int(s["height"])
+
+
+def bin_profile(footage: Path, segments: list[dict]) -> tuple[str, int, int]:
+    """Majority native fps and resolution across the clips this EDL actually uses.
+
+    `delivery` conforms every segment to one frame rate and one frame size — concat
+    with `-c copy` requires it, same as the preview profile's fixed 1920x1080 @
+    24000/1001 does today — but a fixed constant would either upscale a bin shot
+    smaller than 4K or throw away a majority-60fps bin's own motion in favour of a
+    guess. The majority of what the bin actually *is* stands in for that guess, the
+    same way a mixed 30/60fps bin already forces one rate under the preview profile.
+
+    Measured on Killington (research, 2026-08-23): 9 of 12 clips shoot 30000/1001,
+    3 shoot 60000/1001 — every source r_frame_rate carries GoPro's own /1001 NTSC
+    denominator, so both the existing 30→24 and 60→24 decimations, and delivery's
+    60→30, land on an exact rational ratio (5:4 and 5:2 and 2:1 respectively): a
+    regular drop cadence, not the erratic one a mismatched denominator would give.
+    """
+    clips = sorted({s["clip"] for s in segments})
+    if not clips:
+        raise SystemExit("delivery profile needs at least one segment to probe")
+    probed = [probe_video(footage / c) for c in clips]
+    fps = Counter(f for f, _, _ in probed).most_common(1)[0][0]
+    w, h = Counter((w, h) for _, w, h in probed).most_common(1)[0][0]
+    return fps, w, h
+
+
+def delivery_resolution(native_w: int, native_h: int) -> tuple[int, int]:
+    """Capped at DELIVERY_MAX_W x DELIVERY_MAX_H, never upscaled past the bin's own
+    native size. A source already at or below 4K (Killington is 3840x2160; the test
+    suite's synthetic clips are 320x180) must render at its own resolution, not be
+    stretched up to fill a bigger canvas that carries no more real detail."""
+    scale = min(1.0, DELIVERY_MAX_W / native_w, DELIVERY_MAX_H / native_h)
+    w = max(2, int(native_w * scale) // 2 * 2)      # even dims: yuv420p needs it
+    h = max(2, int(native_h * scale) // 2 * 2)
+    return w, h
+
+
+def resolve_video_profile(name: str, footage: Path, segments: list[dict]) -> dict:
+    """The concrete {w, h, fps, preset, crf, audio_bitrate, timescale} for `cut()`."""
+    base = PROFILES[name]
+    if name == "delivery":
+        fps, native_w, native_h = bin_profile(footage, segments)
+        w, h = delivery_resolution(native_w, native_h)
+    else:
+        fps, w, h = FPS, W, H
+    num, _, den = fps.partition("/")
+    timescale = int(num) if den else int(num) * 1000   # keep sub-frame PTS precision
+    return {**base, "fps": fps, "w": w, "h": h, "timescale": timescale}
 
 
 def rotation_of(p: Path) -> str:
@@ -132,6 +213,11 @@ def main() -> int:
     ap.add_argument("--parts-dir", type=Path, default=None,
                     help="write the per-segment parts here instead of a temp dir, so "
                          "a caller can count them as progress")
+    ap.add_argument("--profile", choices=tuple(PROFILES), default="preview",
+                    help="preview (default): today's fixed 1920x1080 @ 24000/1001, "
+                         "veryfast/crf20 — what the board's quick versions use. "
+                         "delivery: the bin's own majority frame rate and up to 4K "
+                         "resolution (never upscaled), preset slow, crf 18.")
     args = ap.parse_args()
 
     for tool in ("ffmpeg", "ffprobe"):
@@ -143,8 +229,11 @@ def main() -> int:
     segments = edl["segments"]
     orient = edl.get("orient", "auto")
     planned = sum(s["out"] - s["in"] for s in segments)
+    video = resolve_video_profile(args.profile, args.footage, segments)
     print(f"variant {edl['variant']} — {edl['title']}: {len(segments)} segments, "
           f"{planned:.1f}s planned, orient={orient}")
+    print(f"profile {args.profile}: {video['w']}x{video['h']} @ {video['fps']}fps, "
+          f"preset {video['preset']}, crf {video['crf']}, audio {video['audio_bitrate']}")
 
     if args.parts_dir:
         # Each part appears as it is cut, so whoever asked for this render can count
@@ -164,7 +253,7 @@ def main() -> int:
                 raise SystemExit(f"missing footage: {src}")
             gain = clip_gain(args.sidecars, seg["clip"]) if args.sidecars else 0.0
             dest = workdir / f"part_{i:03d}.mp4"
-            cut(src, seg["in"], seg["out"], gain, dest, orient)
+            cut(src, seg["in"], seg["out"], gain, dest, orient, video)
             assert_no_rotation(dest, orient)        # catch it at the part, not the film
             actual = probe_duration(dest)
             parts.append(dest)

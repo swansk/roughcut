@@ -10,6 +10,25 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **`assemble.py --profile preview|delivery`, and the board can ask for either.** `preview` is
+  exactly today's fixed 1920×1080 @ 24000/1001, veryfast/crf 20 — unchanged, still what quick
+  versions use. `delivery` conforms every clip to the bin's own majority frame rate (measured,
+  not guessed: Killington splits 9 clips at 30000/1001 against 3 at 60000/1001) and up to
+  3840×2160, capped so a bin shot smaller than 4K — or the test suite's synthetic 320×180 clips —
+  is never upscaled, at preset slow / crf 18 / 256k audio. The numbers behind those choices are
+  in the research commit just before this one. The Render button gets a `preview` /
+  `delivery (4K)` select next to it (default preview, so nothing already using the board changes
+  behaviour); `/api/render` accepts `profile`, rejects anything else with a 400, and records it
+  plus the rendered resolution in the render's metadata; the versions list shows e.g. "· 4K" for
+  a delivery render. Renders made before this feature carry neither key and still list correctly,
+  as preview. Five new tests: the pure sizing rule (never upscale, cap at 4K), the
+  default-is-preview path, delivery's no-upscale guarantee against the synthetic clips (verified
+  against the file on disk, not just the metadata), an unknown-profile 400, and pre-existing
+  metadata without the new keys. Verified live against the real Killington footage too, mixing a
+  60fps and two 30fps clips through one delivery render: resolved to 3840×2160 @ 30000/1001 as
+  measured, not 24000/1001 or an upscaled canvas. A full delivery render of the 178s cut is
+  estimated at ~17 minutes from one shot's measured rate and was not attempted — over the
+  ~10-minute bar for actually running one.
 - **The visual pass runs from the board, and what it saw is on the board.** Karl, on the first
   Killington cut: *"the analysis missed some critical moments that would have required video
   analysis — like me falling into a river."* The pass that finds those has existed since the
@@ -83,6 +102,25 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Fixed
+- **Karl's "the video quality seems like there may have been an encoding issue" feeling on the
+  Killington renders was measured, not guessed — and it's real, though not a bug.**
+  `cut_91e0b993.mp4` / `cut_29ed8c3f.mp4` come from 4K sources (3840×2160 — corrected
+  `benchmarks/README.md`'s B2 row below, which recorded a uniform H.264 29.97fps and missed that
+  3 of the 12 clips are actually HEVC 59.94fps) down to `assemble.py`'s fixed 1920×1080 @
+  24000/1001 preview target. On one high-motion 9.9s shot (CLIP_11's ski-jump dare): the `fps`
+  filter drops a clean, regular 20% of frames on the 30fps clips and 60% on the 60fps ones —
+  exact ratios, not erratic ones, because GoPro's `/1001` denominator cancels on both — and the
+  2×/2× downscale is the dominant *visible* loss: a matched-frame crop of fine detail (bare
+  branches, a chairlift cable) is clearly softer at 1080p than at native 4K, while a low-detail
+  snow crop barely differs. `-preset veryfast -crf 20` is a minor contributor by comparison —
+  already near-transparent at its own target size (VMAF 99.2–99.4 against a same-size lossless
+  reference, via the static ffmpeg build's own `libvmaf`). Colour is fine: the sources are 8-bit
+  Rec.709, full-range, not HLG/Log as guessed, and the full→limited range retag `format=yuv420p`
+  performs does not clip anything (matching luma min/max/avg on extracted frames, source vs.
+  render). The concat `-c copy` path and the music mix never touch the video bitstream — re-ran
+  the music pass a second time on both real renders and got byte-identical video MD5s and frame
+  counts. No code defect: the loss is the preview profile's speed/size tradeoff, real and now
+  documented instead of felt.
 - **Proposals arrive with their boundaries polished: the word finishes, and the shot stops
   trailing off.** Karl, on the Killington revision proposal: *"Dual issue on clip length,
   both with similar frequency: (A) clip is too long and we trail off on conversation; (B)
