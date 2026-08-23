@@ -1285,11 +1285,66 @@ def test_a_render_is_not_finished_when_the_last_shot_is_cut(client, project,
     # two-shot render of 6-second clips: nothing running ever claims to be finished.
     # What the join is *worth* is asserted exactly in app/tests/test_progress.py.
     assert all(s["pct"] < 100 for s in seen if s["state"] == "running")
-    assert [m["key"] for m in seen[-1]["milestones"]] == ["cutting", "joining"]
+    assert [m["key"] for m in seen[-1]["milestones"]] == \
+        ["cutting", "joining", "review"]
     assert seen[-1]["pct"] == 100.0
     # the old fields the browser still reads are all still there
     assert seen[-1]["done"] == seen[-1]["total"] == 2
     assert seen[-1]["stage"] == "done" and seen[-1]["elapsed_s"] > 0
+
+
+def test_a_render_is_not_finished_until_the_players_have_something_to_play(
+        client, project, monkeypatch):
+    """The two branches met here. The A/B players stream the 720p review copy, and the
+    copy was derived *after* the render reported done — so the top bar said finished
+    while the only thing anyone was waiting for was still being made (~40 s off a
+    1080p master, ~95 s off a 4K one, measured). It is the render's third phase now:
+    the job stays running through it and only reaches 100% once the copy is there."""
+    import server
+    monkeypatch.setattr(server, "PROGRESS_TICK_S", 0.05)
+    body = {"segments": [{"clip": "CLIP_C.MP4", "in": 0.0, "out": 1.5, "why": "c"}]}
+    job = client.post("/api/render", json=body).json()["job"]
+    seen = _watch(client, job, path="/api/render")
+    last = seen[-1]
+    assert last["state"] == "done", last["log"][-400:]
+    # The copy exists by the time the job says so — not "started", finished.
+    assert last["review"] == "ready"
+    assert server.review_path(Path(last["output"]).name).exists()
+    # and the versions list agrees the moment the job does, with no second encode
+    row = next(r for r in client.get("/api/renders").json()["renders"]
+               if r["name"] == Path(last["output"]).name)
+    assert row["review_state"] == "ready"
+    # Nothing that was still building ever claimed to be finished, and the phase is
+    # visible rather than dead air: the job says what it is doing while it runs.
+    assert all(s["pct"] < 100 for s in seen if s["state"] == "running")
+    assert last["milestones"][-1]["key"] == "review"
+    assert all(m["done_at"] for m in last["milestones"])
+
+
+def test_a_render_whose_review_copy_fails_still_finishes_and_says_so(
+        client, project, monkeypatch):
+    """"Only at 100% when the copy is ready" must not mean "never at 100%". A copy
+    that definitively failed ends the phase too — the players fall back to the master,
+    which is what preview's fallback is for, and the job says that is what happened."""
+    import server
+    monkeypatch.setattr(server, "PROGRESS_TICK_S", 0.05)
+
+    def boom(src, dest):
+        raise RuntimeError(f"review copy failed for {src.name}: no")
+
+    monkeypatch.setattr(server, "build_review", boom)
+    body = {"segments": [{"clip": "CLIP_C.MP4", "in": 0.0, "out": 1.0, "why": "c"}]}
+    job = client.post("/api/render", json=body).json()["job"]
+    last = _watch(client, job, path="/api/render")[-1]
+    assert last["state"] == "done", last["log"][-400:]
+    assert last["review"] == "failed"
+    assert "master" in last["detail"]
+    assert last["pct"] == 100.0
+    # the master is still there and still offered — nothing about the render is lost
+    assert Path(last["output"]).exists()
+    row = next(r for r in client.get("/api/renders").json()["renders"]
+               if r["name"] == Path(last["output"]).name)
+    assert row["review_state"] == "failed" and row["download_url"]
 
 
 def test_the_visual_pass_says_which_sheet_it_is_on(client):

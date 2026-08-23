@@ -56,6 +56,7 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, Response,
@@ -1229,23 +1230,32 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
         out_path.with_suffix(".json").write_text(json.dumps(meta, indent=1),
                                                  encoding="utf-8")
     entry.update(
-        stage="done" if ok else "failed",
         done=entry["total"] if ok else entry["done"],
         log=(r.stdout or "") + (r.stderr or ""),
         output=str(out_path) if ok else None,
         url=f"/media/render/{out_path.name}" if ok else None,
     )
-    entry.finish(
-        "done" if ok else "failed",
-        detail=(f"{meta.get('duration_s') or 0:.0f}s of video, "
-                f"{meta.get('profile', 'preview')}" if ok
-                else "the render failed — see the log"))
-    if ok:
-        # Started after the job reports done, never before: deriving a 720p copy of a
-        # 4K master is ~90 s on this box, and a render that has finished should say so
-        # rather than appear to still be going. The versions list carries the copy's
-        # own state, so the wait is visible where it matters.
-        ensure_review(out_path)
+    if not ok:
+        entry["stage"] = "failed"
+        entry.finish("failed", detail="the render failed — see the log")
+        return
+
+    # The review copy is the last phase of the render, not an errand after it. The
+    # A/B players stream the copy and not the master, so a job that reports 100% the
+    # moment ffmpeg exits is telling the truth about the encoder and a lie about the
+    # thing being waited for — which is the whole complaint the top bar exists to
+    # answer. Measured on this box for a 181 s cut: 39.7 s to derive from the 1080p
+    # preview master, 95.4 s from the 4K delivery one.
+    entry["stage"] = "review"
+    entry.complete("joining", detail="making the copy the players stream")
+    review = await_review(out_path, note=entry.note)
+    entry["stage"] = "done"
+    entry["review"] = review
+    tail = {"ready": "", "failed": " — no review copy, the players use the master",
+            "building": " — the review copy is still building"}[review]
+    entry.finish("done",
+                 detail=(f"{meta.get('duration_s') or 0:.0f}s of video, "
+                         f"{meta.get('profile', 'preview')}{tail}"))
 
 
 # ------------------------------------------------------------ review copies
@@ -1287,13 +1297,38 @@ def build_review(src: Path, dest: Path) -> None:
     tmp.replace(dest)
 
 
-def _review_worker(src: Path) -> None:
-    with REVIEW_SLOTS:
+def claim_review(name: str) -> str | None:
+    """Take responsibility for building this copy, or say who already has.
+
+    `None` means the caller owns the build. Anything else is the state to report:
+    a failure is remembered rather than retried on every poll — the UI falls back
+    to the master and says so, and a restart tries again.
+    """
+    if review_path(name).exists():
+        return "ready"
+    with REVIEW_LOCK:
+        known = REVIEW_STATE.get(name)
+        if known in ("building", "failed"):
+            return known
+        REVIEW_STATE[name] = "building"
+    return None
+
+
+def make_review(src: Path, note: Callable[[str], None] | None = None) -> str:
+    """Derive the copy on this thread, one at a time, and record how it went."""
+    waited = not REVIEW_SLOTS.acquire(blocking=False)
+    if waited and note:
+        note("waiting for another review copy to finish")
+    if waited:
+        REVIEW_SLOTS.acquire()
+    try:
         dest = review_path(src.name)
         state = "ready"
         if not dest.exists():
             try:
                 t0 = time.time()
+                if note:
+                    note("making a 720p copy the players can stream")
                 build_review(src, dest)
                 print(f"review copy {src.name} in {time.time() - t0:.1f}s", flush=True)
             except RuntimeError as exc:
@@ -1301,22 +1336,55 @@ def _review_worker(src: Path) -> None:
                 state = "failed"
         with REVIEW_LOCK:
             REVIEW_STATE[src.name] = state
+        return state
+    finally:
+        REVIEW_SLOTS.release()
+
+
+# How long a render waits on a copy somebody else is already building before it gives
+# up and reports done anyway. Only reachable through a narrow race — a `/api/renders`
+# poll landing between the master appearing on disk and the render reaching its review
+# phase — and generous, because the thing it is waiting for is minutes of ffmpeg.
+REVIEW_WAIT_S = 1800.0
+
+
+def await_review(src: Path, note: Callable[[str], None] | None = None,
+                 timeout: float = REVIEW_WAIT_S) -> str:
+    """Don't come back until this render has a review copy, or definitively hasn't.
+
+    Builds it here when nobody else is, waits on whoever is otherwise. Blocking is
+    the point: the render job owns this phase, so the bar keeps moving through it.
+    """
+    claimed = claim_review(src.name)
+    if claimed is None:
+        return make_review(src, note)
+    if claimed != "building":
+        return claimed
+    if note:
+        note("waiting for the review copy already being made")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if review_path(src.name).exists():
+            return "ready"
+        with REVIEW_LOCK:
+            state = REVIEW_STATE.get(src.name)
+        if state in ("ready", "failed"):
+            return state
+        time.sleep(PROGRESS_TICK_S)
+    return "building"
 
 
 def ensure_review(src: Path) -> str:
     """Where the review copy of this render is up to, starting one if it is missing.
 
-    A failure is remembered rather than retried on every poll — the UI falls back to
-    the master and says so, and a restart tries again.
+    The lazy path, for renders nothing is currently rendering: made before the copies
+    existed, or left half-done by a restart. A render made *now* builds its own inside
+    its job, so that the bar covers it.
     """
-    if review_path(src.name).exists():
-        return "ready"
-    with REVIEW_LOCK:
-        known = REVIEW_STATE.get(src.name)
-        if known in ("building", "failed"):
-            return known
-        REVIEW_STATE[src.name] = "building"
-    threading.Thread(target=_review_worker, args=(src,), daemon=True).start()
+    claimed = claim_review(src.name)
+    if claimed is not None:
+        return claimed
+    threading.Thread(target=make_review, args=(src,), daemon=True).start()
     return "building"
 
 
@@ -1355,6 +1423,11 @@ RENDER_S_PER_CUT_S = {"preview": 0.9, "delivery": 6.0}
 # the music mix rather than stream-copying 1080p parts. Provisional, and the reason the
 # join is a milestone at all: the bar used to hit 100% the moment cutting ended.
 RENDER_JOIN_SHARE = {"preview": 0.1, "delivery": 0.3}
+# And what the review copy costs, in the same units, measured on this box against the
+# 181s Killington cut with the box otherwise idle: 39.7s off the 1080p preview master
+# and 95.4s off the 4K delivery one. It is a phase of the render because the players
+# stream it — the render is not usable until it exists.
+REVIEW_S_PER_CUT_S = {"preview": 0.22, "delivery": 0.53}
 
 
 @app.post("/api/render")
@@ -1394,11 +1467,18 @@ async def api_render(request: Request) -> JSONResponse:
     # a delivery render about 6x, with the join a fixed share of it. Not a promise —
     # it is recalibrated off the first milestone — but it is what makes the bar mean
     # something in the first thirty seconds, which is when Karl was looking at it.
+    #
+    # The weights are seconds-of-work per second of cut rather than fractions, so the
+    # three phases keep their real proportions when the review copy is added: on a
+    # preview render it is a fifth of the job, on a delivery render a twelfth.
+    per_s = RENDER_S_PER_CUT_S[profile]
     join = RENDER_JOIN_SHARE[profile]
+    review_s = REVIEW_S_PER_CUT_S[profile]
     RENDERS[job].set_estimate(
-        max(5.0, planned * RENDER_S_PER_CUT_S[profile]),
-        [progress.milestone("cutting", "cutting the shots", 1.0 - join),
-         progress.milestone("joining", "joining and mixing", join)],
+        max(5.0, planned * (per_s + review_s)),
+        [progress.milestone("cutting", "cutting the shots", per_s * (1.0 - join)),
+         progress.milestone("joining", "joining and mixing", per_s * join),
+         progress.milestone("review", "making the review copy", review_s)],
         source="measured")
     threading.Thread(target=_render_job, args=(job, edl_path, out_path, meta),
                      daemon=True).start()

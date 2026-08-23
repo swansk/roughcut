@@ -1491,9 +1491,11 @@ async function refreshVersions() {
   waitForReviews(renders);
 }
 
-/* A review copy is derived after the render says done — ~90 s for a 4K master — so
- * the list has to come back and pick it up rather than leaving a slot empty until
- * somebody reloads the page. */
+/* A render made here derives its copy inside its own job, so by the time it reports
+ * done the copy is ready. This is for the ones that did not: made before the copies
+ * existed, or left half-done by a restart, they are built lazily off the versions
+ * list — ~40 s for a 1080p master and ~95 s for a 4K one — so the list has to come
+ * back and pick them up rather than leaving a slot empty until somebody reloads. */
 let reviewPoll = 0;
 function waitForReviews(renders) {
   const building = renders.some((v) => v.review_state === 'building');
@@ -1524,12 +1526,18 @@ async function doRender() {
     const s = await (await fetch(`/api/render/${job}`)).json();
     if (s.state === 'running') {
       // Every shot is cut to its own file before they are joined, so this is a real
-      // count rather than a spinner. "rendering…" for two minutes says nothing.
+      // count rather than a spinner. "rendering…" for two minutes says nothing — and
+      // neither does "done" while the copy these players stream is still being made,
+      // which is the render's third phase and not an errand after it.
       const el = clock(s.elapsed_s);
-      $('#renderState').textContent = s.stage === 'joining'
-        ? `joining ${s.total} shots… ${el}` : `cutting ${s.done}/${s.total}… ${el}`;
-      $('#renderBar').firstElementChild.style.width =
-        `${Math.round(100 * s.done / Math.max(1, s.total))}%`;
+      $('#renderState').textContent = {
+        joining: `joining ${s.total} shots… ${el}`,
+        review: `making the review copy… ${el}`,
+      }[s.stage] || `cutting ${s.done}/${s.total}… ${el}`;
+      // The job's own percentage, which counts all three phases; the shot count on its
+      // own read 100% from the moment the last part landed on disk.
+      $('#renderBar').firstElementChild.style.width = `${Math.round(
+        s.pct === undefined ? 100 * s.done / Math.max(1, s.total) : s.pct)}%`;
       return;
     }
     clearInterval(poll);

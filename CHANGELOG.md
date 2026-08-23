@@ -217,6 +217,22 @@ same commit. Releases move entries into a dated version section.
   follow-ups.
 
 ### Fixed
+- **A render is only finished when there is something to watch.** Merging the progress work
+  with the preview work exposed a seam neither branch could see alone: the 720p review copy —
+  the file the A/B players actually stream — was derived *after* the render job reported done,
+  so the top bar sat at 100% and said "done" while the thing being waited for was still being
+  made. Measured on this box for a 181s cut, that silence is **39.7 s** off the 1080p preview
+  master and **95.4 s** off the 4K delivery one. The copy is the render's third phase now:
+  `cutting · joining · review`, weighted in seconds-of-work per second of cut (a fifth of a
+  preview render, a twelfth of a delivery one), the job stays `running` through it with its own
+  detail line, and it reaches 100% only when the copy exists **or has definitively failed** —
+  a failure ends the phase too, and says in the job's own words that the players will fall
+  back to the master. The Renders panel's bar now reads the job's `pct` rather than the shot
+  count, which hit 100% the moment the last part landed. Preview's safety net is untouched:
+  the players still fall back to the master, still say "making a review copy to play", and
+  renders made before the copies existed are still built lazily off the versions list — which
+  is also the one path that can now race a render for the same copy, so a render waits on
+  whoever already owns the build instead of starting a second encode.
 - No behaviour change: dropped an import `app/server.py` no longer needs (the Ask's estimate
   goes through `revise.estimate_ask`), and said in `AnthropicApiBackend`'s docstring that it
   ignores `on_partial` on purpose — the progress bar degrades on that backend, the call does not.

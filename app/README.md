@@ -78,8 +78,13 @@ code more than anything else:
 - **Review copies.** A finished render is the master — `delivery` writes 4K at ~44 Mbps, 987 MB
   for three minutes — and the A/B players used to stream it: 157 MB pulled in 15 seconds of
   watching, against 5.3 MB for a 720p copy of the same cut. Every render gets one of those
-  under `--work/reviews/<bin>/`, derived in the background after the render reports done and
-  one at a time. The players play the copy; **Download** on each row serves the master with
+  under `--work/reviews/<bin>/`, one at a time and **as the render's last phase** rather than
+  as an errand after it — the players stream the copy, so a job that reads 100% while the copy
+  is still being made is telling the truth about ffmpeg and a lie about the wait. Measured on
+  a 181 s cut: 39.7 s off the 1080p preview master, 95.4 s off the 4K delivery one, which is a
+  fifth and a twelfth of their renders. Renders from before the copies existed are built lazily
+  off the versions list instead. The players play the copy, fall back to the master and say so
+  when one failed; **Download** on each row serves the master with
   `content-disposition: attachment` and a name that says which bin, how many shots, how long
   and at what quality.
 
@@ -173,8 +178,10 @@ Measured on Killington (12 clips, a 17-shot cut), and the numbers the defaults c
 estimate call is 15–18s and $0.034–0.037 (most of the 28k input tokens are the CLI's own
 prompt, not ours); the Ask itself is 79–118s and $0.38–0.46; the phases split **read 5% ·
 think 72% · shots 19% · notes 3% · polish 1%**, which is why the estimator is told that rather
-than left to guess; a 181s preview render is 0.89× real time with the join 5% of it. The
-analyse, visual and render jobs take **computed** estimates rather than model ones — their
+than left to guess; a 181s preview render is 0.89× real time with the join 5% of it. A render
+is three weighted phases — **cutting, joining, review copy** — and reaches 100% only when the
+copy the players stream exists or has definitively failed. The analyse, visual and render jobs
+take **computed** estimates rather than model ones — their
 length is arithmetic the app already does, so a call there would spend money to be less
 accurate.
 
