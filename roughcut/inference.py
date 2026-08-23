@@ -372,7 +372,13 @@ class ClaudeCliBackend:
 
 
 class AnthropicApiBackend:
-    """Production path. `anthropic` is imported here and nowhere else in the project."""
+    """Production path. `anthropic` is imported here and nowhere else in the project.
+
+    It ignores `on_partial` — the SDK streams, but nothing in this project runs on this
+    backend today and a second untested streaming path would be a liability rather than
+    a feature. A caller that passes one simply never hears from it, which is the
+    contract: the progress bar degrades, the call does not.
+    """
 
     name = "anthropic_api"
 

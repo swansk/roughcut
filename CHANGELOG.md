@@ -54,6 +54,10 @@ same commit. Releases move entries into a dated version section.
   **"12 of ~18 shots decided"**, not a spinner.
 
 ### Fixed
+- No behaviour change: dropped an import `app/server.py` no longer needs (the Ask's estimate
+  goes through `revise.estimate_ask`), and said in `AnthropicApiBackend`'s docstring that it
+  ignores `on_partial` on purpose — the progress bar degrades on that backend, the call does not.
+  `ruff check roughcut app` is back to the two pre-existing findings it has on `main`.
 - **The visual pass's two progress writers stopped overwriting each other.** Found on the first
   live sheet: the useful line — *"reading CLIP_05 — 1 sheet"*, lifted from the tool's own
   chatter — appeared for a second and was then replaced by *"0 of 1 clips seen"* by the

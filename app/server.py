@@ -63,8 +63,8 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, Respons
 import uvicorn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from roughcut import (config, effects, estimate, events,  # noqa: E402
-                      inference, progress, revise)
+from roughcut import (config, effects, events, inference,  # noqa: E402
+                      progress, revise)
 
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent / "research" / "tools"
