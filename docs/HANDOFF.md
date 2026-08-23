@@ -372,9 +372,8 @@ Ordered by what changes most, not by effort:
    byte 0 — buffered `0–15 s` while playing at 188.2 s. Cards are `<img>` posters from
    `/media/poster/<stem>.jpg?t=<in>` (~6 KB, cached under `--work`, immutable) and the monitor
    is `preload="metadata"` with a `#t=` fragment. First frame **~0.9 s**, media bytes per page
-   load 93 KB. Still untested: Firefox. The two 150 MB render previews in the panel are
-   `preload="metadata"` and still cost two requests a load — the next thing to look at if the
-   board ever feels heavy again.
+   load 93 KB. Still untested: Firefox.
+
 3. **ASR.** A tuned low-threshold VAD might recover the 14 words CLIP_06 lost without losing the
    patrol lines; CLIP_05 transcribes to zero words at `speech_fraction` 0.52 — that is the weak
    Tier A detector, not Whisper.

@@ -1233,11 +1233,55 @@ function versionLabel(v) {
     + (isThisCut(v) ? ' · this cut' : '');
 }
 
+function human(bytes) {
+  if (!bytes) return '';
+  const mb = bytes / (1024 * 1024);
+  return mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${Math.round(mb)} MB`;
+}
+
+/* What a version player is doing when it is not showing a picture, said under it.
+ * Karl: *"they seem to get stuck in this loading forever place"* — the players had
+ * exactly one way of reporting anything, which was a black rectangle, and three
+ * things behind it: a review copy still encoding, a stalled stream, and a media
+ * error. The monitor learned to say which; these had not.
+ *
+ * `versionSticky` is what the slot says when nothing transient is happening — the
+ * standing warning that this row is playing a heavy master, which must come back
+ * after a `buffering…` rather than being cleared by it. */
+const versionSticky = { A: ['', ''], B: ['', ''] };
+
+function versionMsg(slot, text, kind) {
+  const el = $(`#state${slot}`);
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = `hint${kind ? ` ${kind}` : ''}`;
+}
+
+function versionSettled(slot) {
+  versionMsg(slot, versionSticky[slot][0], versionSticky[slot][1]);
+}
+
+/* The A/B players play the 720p review copy, never the master.
+ *
+ * The delivery render Karl watched is 987 MB of 4K at 43.6 Mbps; ffmpeg needs 92.8 s
+ * of wall clock to walk its 181 s on this box, which is half of real time, so no
+ * browser was ever going to stream it smoothly off loopback. The file is fine — 5427
+ * frames at a clean 1/29.97 — it is just heavy, and "jumping all around the place"
+ * and "3s before video buffers" are both that weight. The master stays for Download. */
 function loadVersion(v, slot) {
   const el = $(`#preview${slot}`);
-  el.src = v.url;
+  const building = v.review_state === 'building';
+  el.src = building ? '' : (v.review_state === 'ready' ? v.review_url : v.url);
+  if (building) el.removeAttribute('src');
   el.load();
   $(`#label${slot}`).textContent = versionLabel(v);
+  versionSticky[slot] = building
+    ? ['making a review copy to play — the download below is ready now', '']
+    : (v.review_state === 'failed'
+      ? [`no review copy — playing the ${human(v.size)} master, expect it to stutter`,
+         'warn']
+      : ['', '']);
+  versionSettled(slot);
 }
 
 /* Rebuilds only the list, never the A/B slots — repainted on every edit so that
@@ -1251,8 +1295,9 @@ function paintVersions() {
       { hour: '2-digit', minute: '2-digit' });
     const row = document.createElement('div');
     row.className = 'ver';
+    const building = v.review_state === 'building' ? ' · review copy building…' : '';
     row.innerHTML = `<span class="t">${escapeHtml(versionLabel(v))}
-      <span class="hint">· ${when}</span></span>`;
+      <span class="hint">· ${when}${building}</span></span>`;
     ['A', 'B'].forEach((slot) => {
       const b = document.createElement('button');
       b.textContent = slot;
@@ -1274,6 +1319,27 @@ async function refreshVersions() {
   // there is a second version to compare against.
   $('#slotB').style.display = renders.length > 1 ? 'block' : 'none';
   paintSteps();
+  waitForReviews(renders);
+}
+
+/* A review copy is derived after the render says done — ~90 s for a 4K master — so
+ * the list has to come back and pick it up rather than leaving a slot empty until
+ * somebody reloads the page. */
+let reviewPoll = 0;
+function waitForReviews(renders) {
+  const building = renders.some((v) => v.review_state === 'building');
+  if (!building || reviewPoll) return;
+  reviewPoll = setInterval(async () => {
+    const { renders: now } = await (await fetch('/api/renders')).json();
+    if (now.some((v) => v.review_state === 'building')) {
+      renderList = now;
+      paintVersions();
+      return;
+    }
+    clearInterval(reviewPoll);
+    reviewPoll = 0;
+    refreshVersions();
+  }, 4000);
 }
 
 async function doRender() {
@@ -1380,6 +1446,20 @@ async function boot() {
   // has to be something a person can do, and a monitor you can click to play is what
   // everyone expects anyway.
   $('.screen').onclick = toggleCut;
+  // The version players get the same treatment the monitor got: a stall or an error
+  // said on the screen. Silence there is what "stuck in this loading forever place"
+  // was — a black rectangle with nothing to distinguish encoding, buffering and broken.
+  ['A', 'B'].forEach((slot) => {
+    const el = $(`#preview${slot}`);
+    if (!el) return;
+    el.addEventListener('error', () =>
+      versionMsg(slot, mediaErrorText(el), 'bad'));
+    el.addEventListener('stalled', () =>
+      versionMsg(slot, 'the stream stalled — the board may be busy', 'warn'));
+    el.addEventListener('waiting', () => versionMsg(slot, 'buffering…'));
+    el.addEventListener('playing', () => versionSettled(slot));
+    el.addEventListener('loadeddata', () => versionSettled(slot));
+  });
   bed.el = $('#bed');
   P = await (await fetch('/api/project')).json();
   music = P.music || null;

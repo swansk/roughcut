@@ -412,6 +412,79 @@ def test_renders_are_listed_as_versions_newest_first(client, project):
     assert client.get(newest["url"], headers={"range": "bytes=0-99"}).status_code == 206
 
 
+def _rendered(client, segs) -> dict:
+    """Render and wait, returning the finished row from /api/renders."""
+    job = client.post("/api/render", json={"segments": segs}).json()["job"]
+    deadline = time.time() + 120
+    while client.get(f"/api/render/{job}").json()["state"] == "running":
+        assert time.time() < deadline, "render timed out"
+        time.sleep(0.3)
+    assert client.get(f"/api/render/{job}").json()["state"] == "done"
+    name = f"cut_{job}.mp4"
+    return next(r for r in client.get("/api/renders").json()["renders"]
+                if r["name"] == name)
+
+
+def _review_ready(client, name: str, timeout: float = 120) -> dict:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        row = next(r for r in client.get("/api/renders").json()["renders"]
+                   if r["name"] == name)
+        if row["review_state"] != "building":
+            return row
+        time.sleep(0.3)
+    raise AssertionError(f"review copy for {name} never finished")
+
+
+def test_a_finished_render_gets_a_review_copy_and_the_players_play_that(client, project):
+    """Karl, watching the 4K delivery render in the board: *"they seem to get stuck in
+    this loading forever place and also only have played for like 3s before video
+    buffers / pauses."* The file was fine — 5427 frames at a clean 1/29.97 — it was
+    987 MB of 4K at 43.6 Mbps, which no browser streams off this box: measured, one
+    player pulled 157 MB in 15 s of watching against 5 MB for the review copy. So the
+    players get a 720p copy and the master stays for the download."""
+    import server
+    row = _rendered(client, [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 3.0, "why": "a"}])
+    assert row["review_state"] in ("building", "ready")
+    row = _review_ready(client, row["name"])
+    assert row["review_state"] == "ready"
+    copy = server.review_path(row["name"])
+    assert copy.exists()
+    assert client.get(row["review_url"],
+                      headers={"range": "bytes=0-99"}).status_code == 206
+    # the same cut, capped at the proxy width: a render comes out at 1920x1080 and
+    # the copy the player streams is 1280x720
+    assert _duration(copy) == pytest.approx(2.5, abs=0.35)
+    w, h = server.probe_resolution(copy)
+    assert (w, h) == (1280, 720) and w <= server.PROXY_W
+    assert server.probe_resolution(server.STATE["renders"] / row["name"]) == (1920, 1080)
+    # the master is untouched: it is what the download serves
+    assert (server.STATE["renders"] / row["name"]).exists()
+
+
+def test_a_review_copy_that_cannot_be_made_falls_back_to_the_master(client, project,
+                                                                    monkeypatch):
+    """Nothing in the versions list may become unplayable because a derived file is
+    missing. A failure is reported once and the row keeps its master URL."""
+    import server
+    row = _rendered(client, [{"clip": "CLIP_B.MP4", "in": 0.0, "out": 1.5, "why": "b"}])
+    _review_ready(client, row["name"])
+    server.review_path(row["name"]).unlink(missing_ok=True)
+    with server.REVIEW_LOCK:
+        server.REVIEW_STATE.pop(row["name"], None)
+
+    def explode(src, dest):
+        raise RuntimeError("no ffmpeg for you")
+
+    monkeypatch.setattr(server, "build_review", explode)
+    again = _review_ready(client, row["name"])
+    assert again["review_state"] == "failed"
+    assert again["url"] == f"/media/render/{row['name']}"
+    assert client.get(again["url"], headers={"range": "bytes=0-99"}).status_code == 206
+    # and it is not retried on every poll while it keeps failing
+    assert _review_ready(client, row["name"])["review_state"] == "failed"
+
+
 def test_a_version_survives_a_restart(client, project):
     """Metadata lives next to the file, not in memory: a versions list that empties
     when the server restarts is not a versions list."""

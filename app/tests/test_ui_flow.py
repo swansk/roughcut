@@ -376,11 +376,56 @@ def test_render_from_the_ui_produces_a_playable_file(page):
     page.wait_for_function(
         "document.querySelector('#renderState').textContent.startsWith('done')", timeout=180000)
     page.wait_for_selector("#versions .ver")
-    src = page.get_attribute("#previewA", "src")
-    assert src and src.startswith("/media/render/")
+    # The player plays the 720p review copy, which is derived after the render says
+    # done — so it appears a beat later, through the list's own poll.
+    page.wait_for_function(
+        "(document.querySelector('#previewA').getAttribute('src') || '')"
+        ".startsWith('/media/review/')", timeout=60000)
     page.wait_for_function(
         "document.querySelector('#previewA').readyState >= 1", timeout=30000)
     assert page.evaluate("document.querySelector('#previewA').duration") > 0
+
+
+def test_a_version_player_reaches_a_painted_frame(page):
+    """Karl, on the finished delivery render: *"it looks like it already crashed.. or
+    at least has an issue with the render"* and *"they seem to get stuck in this
+    loading forever place"*. The player showed a black rectangle and said nothing. It
+    plays a 720p review copy now, and a black rectangle is a failure the test can see:
+    read the pixels back."""
+    page.locator("#render").click()
+    page.wait_for_function(
+        "document.querySelector('#renderState').textContent.startsWith('done')",
+        timeout=180000)
+    page.wait_for_function(
+        "(document.querySelector('#previewA').getAttribute('src') || '')"
+        ".startsWith('/media/review/')", timeout=60000)
+    page.evaluate("""() => {
+        window.__paint = null;
+        const el = document.querySelector('#previewA');
+        const c = document.createElement('canvas');
+        c.width = 48; c.height = 27;
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        const t0 = performance.now();
+        el.muted = true;
+        const poll = () => {
+            if (el.videoWidth > 0) {
+                ctx.drawImage(el, 0, 0, c.width, c.height);
+                const d = ctx.getImageData(0, 0, c.width, c.height).data;
+                let s = 0;
+                for (let i = 0; i < d.length; i += 4) s += (d[i] + d[i+1] + d[i+2]) / 3;
+                if (s / (c.width * c.height) > 5) {
+                    window.__paint = performance.now() - t0;
+                    return;
+                }
+            }
+            requestAnimationFrame(poll);
+        };
+        el.play().catch((e) => { window.__err = String(e); });
+        requestAnimationFrame(poll);
+    }""")
+    page.wait_for_function("window.__paint !== null", timeout=15000)
+    assert page.evaluate("window.__paint") < 10000
+    assert page.locator("#stateA").inner_text() == "", "a healthy player says nothing"
 
 
 def test_a_second_render_becomes_a_second_version_to_compare_against(page):
@@ -394,6 +439,9 @@ def test_a_second_render_becomes_a_second_version_to_compare_against(page):
         "document.querySelector('#renderState').textContent.startsWith('done')", timeout=180000)
     page.wait_for_function(
         f"document.querySelectorAll('#versions .ver').length > {before}", timeout=30000)
+    page.wait_for_function(
+        "['A', 'B'].every((s) => (document.querySelector('#preview' + s)"
+        ".getAttribute('src') || '').startsWith('/media/review/'))", timeout=60000)
     a = page.get_attribute("#previewA", "src")
     b = page.get_attribute("#previewB", "src")
     assert a and b and a != b

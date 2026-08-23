@@ -989,6 +989,84 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
         output=str(out_path) if ok else None,
         url=f"/media/render/{out_path.name}" if ok else None,
     )
+    if ok:
+        # Started after the job reports done, never before: deriving a 720p copy of a
+        # 4K master is ~90 s on this box, and a render that has finished should say so
+        # rather than appear to still be going. The versions list carries the copy's
+        # own state, so the wait is visible where it matters.
+        ensure_review(out_path)
+
+
+# ------------------------------------------------------------ review copies
+
+# A finished render is the master: `delivery` writes 4K at ~44 Mbps, and the one Karl
+# watched is 987 MB for 3 minutes. A browser cannot play that off this box — measured,
+# ffmpeg needs 92.8 s of wall clock to walk 181 s of it, half of real time — so the
+# A/B players pointed at it stalled after a few seconds and then sat "loading forever".
+# Karl: *"they seem to get stuck in this loading forever place and also only have
+# played for like 3s before video buffers / pauses."* The file is not broken: frame
+# intervals are a clean 1/29.97 throughout, 5427 of them. It is just heavy. So the
+# players get a 720p copy — the same argument as the source proxies, one directory
+# over — and the master stays untouched for the Download button.
+REVIEW_SLOTS = threading.BoundedSemaphore(1)   # one at a time: a 4K master is minutes
+REVIEW_STATE: dict[str, str] = {}              # render name -> building | ready | failed
+REVIEW_LOCK = threading.Lock()
+
+
+def review_path(name: str) -> Path:
+    return STATE["reviews"] / Path(name).name
+
+
+def build_review(src: Path, dest: Path) -> None:
+    """A 720p, faststart copy of a finished render — same recipe as the proxies."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(f".{os.getpid()}.part.mp4")
+    r = subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-nostdin", "-i", str(src),
+         "-map", "0:v:0", "-map", "0:a:0?", "-dn",
+         # Capped by width, never upscaled: a preview render is already small and
+         # re-encoding it bigger would spend bytes on detail that is not there.
+         "-vf", f"scale=min({PROXY_W}\\,iw):-2", "-c:v", "libx264",
+         "-preset", "veryfast", "-crf", str(PROXY_CRF),
+         "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(tmp)],
+        capture_output=True, text=True)
+    if r.returncode != 0:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"review copy failed for {src.name}: {r.stderr[-300:]}")
+    tmp.replace(dest)
+
+
+def _review_worker(src: Path) -> None:
+    with REVIEW_SLOTS:
+        dest = review_path(src.name)
+        state = "ready"
+        if not dest.exists():
+            try:
+                t0 = time.time()
+                build_review(src, dest)
+                print(f"review copy {src.name} in {time.time() - t0:.1f}s", flush=True)
+            except RuntimeError as exc:
+                print(f"  !! {exc}", flush=True)
+                state = "failed"
+        with REVIEW_LOCK:
+            REVIEW_STATE[src.name] = state
+
+
+def ensure_review(src: Path) -> str:
+    """Where the review copy of this render is up to, starting one if it is missing.
+
+    A failure is remembered rather than retried on every poll — the UI falls back to
+    the master and says so, and a restart tries again.
+    """
+    if review_path(src.name).exists():
+        return "ready"
+    with REVIEW_LOCK:
+        known = REVIEW_STATE.get(src.name)
+        if known in ("building", "failed"):
+            return known
+        REVIEW_STATE[src.name] = "building"
+    threading.Thread(target=_review_worker, args=(src,), daemon=True).start()
+    return "building"
 
 
 RENDER_PROFILES = ("preview", "delivery")
@@ -1054,6 +1132,11 @@ def api_renders() -> JSONResponse:
             # never as "upscale to 4K".
             "profile": meta.get("profile", "preview"),
             "width": meta.get("width"), "height": meta.get("height"),
+            # What the A/B players actually play. The review copy is derived in the
+            # background; until it is there the list says so rather than handing a
+            # player a 987 MB file.
+            "review_state": ensure_review(mp4),
+            "review_url": f"/media/review/{mp4.name}",
         })
     out.sort(key=lambda r: r["created"], reverse=True)
     return JSONResponse({"renders": out})
@@ -1151,6 +1234,12 @@ def media_proxy(name: str, request: Request) -> Response:
 @app.get("/media/render/{name}")
 def media_render(name: str, request: Request) -> Response:
     return ranged_file(STATE["renders"] / Path(name).name, request)
+
+
+@app.get("/media/review/{name}")
+def media_review(name: str, request: Request) -> Response:
+    """The 720p copy of a render, which is what the A/B players play."""
+    return ranged_file(review_path(name), request)
 
 
 # ---------------------------------------------------------------- posters
@@ -1336,6 +1425,10 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
         # opens claiming "1 version" and plays another trip's cut in the A slot is
         # worse than showing nothing.
         "renders": work / "renders" / footage.name,
+        # 720p copies of the finished renders, for the A/B players. Per-bin like the
+        # renders they come from, and as disposable as the posters: deleting the
+        # folder costs one re-encode per version and nothing else.
+        "reviews": work / "reviews" / footage.name,
         "proxies_ready": False, "edl_created": created,
     })
     STATE["sidecars"].mkdir(parents=True, exist_ok=True)
@@ -1354,6 +1447,11 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
     STATE["renders"].mkdir(parents=True, exist_ok=True)
     STATE["proxy_dir"].mkdir(parents=True, exist_ok=True)
     STATE["posters"].mkdir(parents=True, exist_ok=True)
+    STATE["reviews"].mkdir(parents=True, exist_ok=True)
+    # Keyed by render filename, so pointing the board at another bin must not carry a
+    # previous project's "failed" over to a file of the same name.
+    with REVIEW_LOCK:
+        REVIEW_STATE.clear()
     STATE["asks"].mkdir(parents=True, exist_ok=True)
 
     clips = sorted({p.name.replace(".audio.json", ".MP4")

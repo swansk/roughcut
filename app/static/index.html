@@ -113,6 +113,8 @@
   .ver:first-child { border-top: 0; }
   .ver .t { flex: 1; font-variant-numeric: tabular-nums; }
   .ver button { padding: 1px 8px; font-size: 12px; }
+  .hint.warn { color: var(--warn); }
+  .hint.bad { color: var(--bad); }
   .steps { display: flex; gap: 6px; flex-wrap: wrap; width: 100%; margin-top: 2px; }
   .step { font-size: 12px; color: var(--dim); border: 1px solid var(--line);
           border-radius: 999px; padding: 2px 10px; }
@@ -274,13 +276,18 @@
       <div id="renderState" class="hint">idle</div>
       <div class="bar" id="renderBar" style="display:none"><i></i></div>
       <div class="ab">
+        <!-- These play the 720p review copy, never the master: a delivery render is
+             4K at ~44 Mbps and no browser streams that off this box. What each player
+             is doing when it shows nothing is said in the line under it. -->
         <div>
           <div class="hint"><b>A</b> <span id="labelA">—</span></div>
           <video id="previewA" controls preload="metadata"></video>
+          <div class="hint" id="stateA"></div>
         </div>
         <div id="slotB" style="display:none">
           <div class="hint"><b>B</b> <span id="labelB">—</span></div>
           <video id="previewB" controls preload="metadata"></video>
+          <div class="hint" id="stateB"></div>
         </div>
       </div>
       <div id="versions" class="lib" style="max-height:26vh;margin-top:8px"></div>

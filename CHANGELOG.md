@@ -154,6 +154,30 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Fixed
+- **The version players streamed the master render, and there was no way to download one.**
+  Karl, watching the finished 4K delivery render on the board: *"it looks like it already
+  crashed.. or at least has an issue with the render - jumping all around the place, looks
+  bad"*, and *"they seem to get stuck in this loading forever place and also only have played
+  for like 3s before video buffers / pauses."* The file is not broken — 3840x2160, 181.11 s,
+  5427 frames whose presentation intervals are a clean 1/29.97 throughout with zero anomalies.
+  It is **987 MB at 43.6 Mbps**, and the A/B players were pointed straight at it. Measured in
+  a player for 15 s: the master pulls **157 MB** (≈84 Mbps demanded) against **5.3 MB** for a
+  720p copy, and with both slots loaded plus the monitor playing, a page on masters moves
+  **199 MB** in 15 s against **23 MB** on review copies, painting its first frame in 243 ms
+  against 187 ms. So a finished render now gets a **720p review copy** — the same argument as
+  the source proxies, one directory over, at `--work/reviews/<bin>/`, built one at a time in
+  the background after the render reports done, never blocking it. The players play that; the
+  master is untouched. The 4K master's copy is 35 MB, built in 70.7 s; the five 1080p ones are
+  ~33 MB and ~30 s each. While a copy is building the row says *review copy building…* and the
+  player says so under itself rather than being handed a 987 MB file; if the copy cannot be
+  made the row falls back to the master and warns that it will stutter, because nothing in the
+  versions list may become unplayable.
+- **A stalled version player looked exactly like a working one.** The monitor learned to say
+  what it was doing on its own screen; the A/B players had not, so an encoding review copy, a
+  buffering stream and a media error were the same black rectangle — which is what *"stuck in
+  this loading forever place"* was made of. Each slot has a line under it now that names which
+  of those is happening, with the standing warning restored after a transient one rather than
+  cleared by it.
 - **The monitor downloaded the top of the file and then waited to seek.** Its two `<video>`
   elements were `preload="auto"` and `arm()` set their `src` before anything said where the
   shot starts, so Chrome did the only thing it could and fetched from byte 0. Measured on the

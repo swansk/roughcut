@@ -75,6 +75,11 @@ code more than anything else:
   to preload everything with no idea where the shot starts, Chrome downloads from byte 0: a
   shot playing at 188.2 s had `0–15 s` buffered and its seek queued behind that download. Now
   the buffered range is the shot's, and the first painted frame lands **~0.9 s** after play.
+- **Review copies.** A finished render is the master — `delivery` writes 4K at ~44 Mbps, 987 MB
+  for three minutes — and the A/B players used to stream it: 157 MB pulled in 15 seconds of
+  watching, against 5.3 MB for a 720p copy of the same cut. Every render gets one of those
+  under `--work/reviews/<bin>/`, derived in the background after the render reports done and
+  one at a time. The players play the copy; the master is untouched on disk.
 
 Everything else follows: edits are local and instant, only Save / Snap / Render touch the
 server, and every edit is undoable because fiddling is only fun when it is cheap to be wrong.
@@ -93,7 +98,7 @@ server, and every edit is undoable because fiddling is only fun when it is cheap
 | **Ask for a change** | Plain-language note → revised timeline, shown as a diff you accept or discard |
 | **Snap to speech** | Runs `edl_snap.py` and shows the result as a proposal — undoable, never silently applied |
 | **Steps** | footage · analyse · first cut · refine · render, with the one you are on marked. Read from state, so it cannot drift from the files on disk |
-| **Renders** | Runs `assemble.py` in the background, then keeps every version — newest first, loadable into two players side by side, because judging an edit is comparative. A select chooses the profile: `preview` (1080p, fast) or `delivery` (native frame rate, up to 4K, slow/CRF 18 — about 17 minutes for a 3-minute cut). Renders that match the cut on the board are marked **this cut**; a proposal rendered without being accepted says so |
+| **Renders** | Runs `assemble.py` in the background, then keeps every version — newest first, loadable into two players side by side, because judging an edit is comparative. A select chooses the profile: `preview` (1080p, fast) or `delivery` (native frame rate, up to 4K, slow/CRF 18 — about 17 minutes for a 3-minute cut). Renders that match the cut on the board are marked **this cut**; a proposal rendered without being accepted says so. The players stream a 720p review copy rather than the master, and each says under itself what it is doing when it shows no picture — a copy still being made, a stall, or a media error |
 
 ### Ask — steering by asking rather than dragging
 
