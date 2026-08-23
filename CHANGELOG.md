@@ -10,6 +10,15 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The changelog rule is checked now, not just written down.** Karl, after a session of agent
+  work: *"Ensure all changes are getting a changelog."* An audit of the session's 20 non-merge
+  commits found 18 carrying an entry and two without - both of them docs commits rewriting
+  `docs/HANDOFF.md` at the end of a long stretch, which this file's own header ("every commit
+  that changes behavior **or** documentation") and CLAUDE.md both require. The two are written
+  up under Changed below, and `.githooks/pre-commit` now refuses any commit that touches
+  something other than the changelog and the hooks without also touching the changelog. Enable
+  it per clone with `git config core.hooksPath .githooks`; if it fires, the fix is an entry,
+  never `--no-verify`. A rule nobody checks is a rule that decays.
 - **[R10](research/R10-events-priority.md) — sorting what was seen, and what a closer look is
   actually worth.** Answering Karl's *"you missed some cool jumps"* with numbers, and finding
   that only half the diagnosis holds. A 1s read of 23 motion-picked windows did surface four
@@ -152,6 +161,18 @@ same commit. Releases move entries into a dated version section.
   stream is snow-covered and no water is visible, which is the correct call from the evidence.
   Sheet density, thumbnail size and model tier are RQ-1/RQ-7 and unmeasured, so every number here
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
+
+### Changed
+- **`docs/HANDOFF.md` was rewritten three times as session 6 ran**, and these are the entries
+  those commits owed. First (`11e8fec`): START HERE replaced with sessions 4-6 in a paragraph,
+  where the Killington bin actually stands on disk, and a roadmap reordered around the monitor,
+  the visual pass and music. Then (`42a763d`): the bin fully seen, the two proposals that
+  followed, and the finding that looking is what makes a note actionable rather than a
+  replacement for one. Last (`e4ef0cb`): Karl's six notes on the proposal render, each with what
+  was found and what changed, five additions to the must-not-relitigate list (Whisper's VAD, the
+  early word-end timestamps, the camera-inverted false flips, the 4K sources behind a 1080p24
+  preview, and the cost shape of a contact sheet), and the roadmap reordered around R10's
+  follow-ups.
 
 ### Fixed
 - **The test suite was writing invented spend into the real inference ledger.**

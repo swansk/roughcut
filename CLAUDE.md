@@ -53,6 +53,10 @@ follow HANDOFF's next actions.
 - Imperative subject with a conventional prefix (`feat:`, `fix:`, `docs:`, `test:`,
   `chore:`, `research:`); body references the task/study ID and includes verification output.
 - CHANGELOG.md gets an `[Unreleased]` entry in every commit that changes behavior or docs.
+  **Enforced**: `.githooks/pre-commit` refuses a commit that touches anything else without it.
+  Enable it once per clone — `git config core.hooksPath .githooks` — and if it fires, the fix is
+  an entry, never `--no-verify`. (Karl, 2026-08-23, after two docs commits slipped through:
+  *"Ensure all changes are getting a changelog."*)
 - Never commit media files, `.env`, or anything in .gitignore. Never use `--no-verify`.
 
 ## Research-before-assumption

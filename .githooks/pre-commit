@@ -1,0 +1,24 @@
+#!/bin/sh
+# Every commit that changes behaviour or documentation carries a CHANGELOG entry.
+#
+# The rule is CLAUDE.md's and the CHANGELOG's own header; it was followed 18 times out of 20
+# in one session and missed twice, both times on a docs commit at the end of a long stretch.
+# A rule nobody checks is a rule that decays, so this checks it.
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$staged" ] && exit 0
+
+# Things that are not behaviour and not documentation: the changelog itself, and the hooks.
+relevant=$(printf '%s\n' "$staged" | grep -v -E '^(CHANGELOG\.md|\.githooks/)' || true)
+[ -z "$relevant" ] && exit 0
+
+printf '%s\n' "$staged" | grep -qx 'CHANGELOG.md' && exit 0
+
+echo "pre-commit: this commit changes files but not CHANGELOG.md." >&2
+echo "" >&2
+printf '  %s\n' $relevant >&2
+echo "" >&2
+echo "Add an [Unreleased] entry in this same commit — what was missing or broken," >&2
+echo "the evidence, and what it is now. See CLAUDE.md, 'Commit discipline'." >&2
+exit 1
