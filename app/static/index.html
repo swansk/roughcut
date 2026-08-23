@@ -46,8 +46,11 @@
   }
   .seg.sel { border-color: var(--accent); }
   .seg.drag { opacity: .4; }
-  .seg video { width: 100%; border-radius: 6px; background: #000; display: block;
-                aspect-ratio: 16/9; object-fit: cover; }
+  /* The card's picture is a still, not a stream: sixteen live proxies on one board
+     took every connection Chrome had and the monitor played sound over black. */
+  .seg .poster { width: 100%; border-radius: 6px; background: #000; display: block;
+                 aspect-ratio: 16/9; object-fit: cover; cursor: pointer;
+                 -webkit-user-select: none; user-select: none; }
   .meta { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
   .clip { font-weight: 600; }
   .times { color: var(--dim); font-variant-numeric: tabular-nums; }

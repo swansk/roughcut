@@ -350,6 +350,9 @@ def project_payload() -> dict:
             "stem": Path(clip).stem,
             "duration": d["duration_s"],
             "proxy": f"/media/proxy/{Path(clip).stem}.mp4",
+            # The card's picture: this URL plus ?t=<in-point>. A card is a still, not
+            # a stream — see /media/poster for what sixteen streams cost the monitor.
+            "poster": f"/media/poster/{Path(clip).stem}.jpg",
             "transcript": d.get("transcript", []),
             "visual": load_visual(clip),
             "captured": capture_time(clip),
@@ -1150,6 +1153,86 @@ def media_render(name: str, request: Request) -> Response:
     return ranged_file(STATE["renders"] / Path(name).name, request)
 
 
+# ---------------------------------------------------------------- posters
+
+POSTER_W = 320               # a shot card's picture is 214 px wide; 320 covers a 2x screen
+POSTER_Q = 5                 # mjpeg quality scale, 2 best .. 31 worst
+# ffmpeg is cheap per frame and ruinous in bulk: one page load asks for a poster per
+# card, and this box is often already encoding a delivery render. Three at a time keeps
+# a cold board under a couple of seconds without taking the machine away from that.
+POSTER_SLOTS = threading.BoundedSemaphore(3)
+# Immutable by construction — a poster is one clip's frame at one timestamp, and the
+# only way to change it is to ask for a different timestamp, which is a different URL.
+POSTER_CACHE = {"cache-control": "public, max-age=31536000, immutable"}
+
+
+def poster_path(stem: str, t: float) -> Path:
+    return STATE["posters"] / f"{stem}@{t:09.2f}.jpg"
+
+
+def build_poster(src: Path, dest: Path, t: float) -> None:
+    """One frame out of a proxy, small, on disk.
+
+    `-ss` ahead of `-i` so ffmpeg seeks to the timestamp instead of decoding its way
+    there — 188 s into a Killington proxy is ~80 ms that way and seconds the other.
+    Temp name and rename for the reason build_proxy has one: the server is serving
+    while this runs, and two boards can share a work dir.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part.jpg")
+    err = ""
+    # A trim can park an in-point past the end of a clip that was re-proxied shorter;
+    # a card showing the first frame beats a card showing a broken image.
+    for ss in dict.fromkeys((max(0.0, t), 0.0)):
+        r = subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-nostdin", "-ss", f"{ss:.3f}",
+             "-i", str(src), "-frames:v", "1",
+             "-vf", f"scale=min({POSTER_W}\\,iw):-2", "-q:v", str(POSTER_Q),
+             "-f", "image2", str(tmp)],
+            capture_output=True, text=True)
+        if r.returncode == 0 and tmp.exists() and tmp.stat().st_size:
+            tmp.replace(dest)
+            return
+        err = r.stderr[-200:]
+        tmp.unlink(missing_ok=True)
+    raise RuntimeError(f"poster failed for {src.name} at {t:.2f}s: {err}")
+
+
+@app.get("/media/poster/{name}")
+def media_poster(name: str, t: float = 0.0) -> Response:
+    """A still frame from a proxy, at a shot's in-point.
+
+    The shot cards used to be `<video preload="metadata">` elements pointed at the
+    proxies. Sixteen of those plus two render previews is eighteen streams against
+    Chrome's six-connections-per-host limit, and the monitor's own request queued
+    behind them: measured on the Killington board from `playFrom(0)`, the live element
+    took 6.8–9.5 s to reach readyState 4 and showed black (mean pixel 0.0) the whole
+    time while the audio played — Karl's *"I can hear the videos... but the preview
+    window still shows up blank"*. A card needs a picture, not a stream. This is a few
+    kilobytes, cached on disk under --work and immutable for a given clip and time.
+    """
+    stem = Path(name).stem
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", stem):
+        raise HTTPException(404, f"no such clip: {name}")
+    src = STATE["proxy_dir"] / f"{stem}.mp4"
+    if not src.exists():
+        # Not an error the board should shout about: proxies build in the background,
+        # and the cards retry when /api/status says they are done.
+        raise HTTPException(404, f"no proxy yet: {stem}.mp4")
+    if not math.isfinite(t) or t < 0:
+        t = 0.0
+    t = round(min(t, 86400.0), 2)
+    dest = poster_path(stem, t)
+    if not dest.exists():
+        with POSTER_SLOTS:
+            if not dest.exists():          # another request may have built it while we waited
+                try:
+                    build_poster(src, dest, t)
+                except RuntimeError as exc:
+                    raise HTTPException(500, str(exc)) from exc
+    return FileResponse(dest, media_type="image/jpeg", headers=POSTER_CACHE)
+
+
 # ---------------------------------------------------------------- assets
 
 ASSET_KINDS = ("music", "sfx", "overlay")
@@ -1245,6 +1328,10 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
         # a single configured project: two bins can hold the same GoPro stem, and a
         # shared proxy dir would serve one bin's frames for the other's clip.
         "proxy_dir": work / "proxies" / footage.name,
+        # One JPEG per shot card, cut out of the proxy at the shot's in-point. Per-bin
+        # like the proxies they come from, and disposable: every one of them is a
+        # seek and a single frame, rebuilt on demand when the folder is not there.
+        "posters": work / "posters" / footage.name,
         # Per-bin for the same reason as proxies, and because a fresh project that
         # opens claiming "1 version" and plays another trip's cut in the A slot is
         # worse than showing nothing.
@@ -1266,6 +1353,7 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
     STATE["work"].mkdir(parents=True, exist_ok=True)
     STATE["renders"].mkdir(parents=True, exist_ok=True)
     STATE["proxy_dir"].mkdir(parents=True, exist_ok=True)
+    STATE["posters"].mkdir(parents=True, exist_ok=True)
     STATE["asks"].mkdir(parents=True, exist_ok=True)
 
     clips = sorted({p.name.replace(".audio.json", ".MP4")

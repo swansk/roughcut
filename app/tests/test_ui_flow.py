@@ -99,11 +99,15 @@ def test_board_renders_the_timeline(page):
 
 
 def test_preview_video_loads_and_can_seek(page):
-    """The whole latency argument for proxies rests on this working."""
+    """The whole latency argument for proxies rests on this working. The element under
+    test is the monitor's, not a card's: the cards are stills now (see
+    test_a_shot_card_carries_a_poster_not_a_video_stream), and the monitor is the only
+    thing on the board that opens a proxy."""
+    page.evaluate("arm(document.querySelector('#pv0'), segs[0])")
     page.wait_for_function(
-        "document.querySelector('.seg video').readyState >= 1", timeout=15000)
+        "document.querySelector('#pv0').readyState >= 1", timeout=15000)
     info = page.evaluate("""() => {
-        const v = document.querySelector('.seg video');
+        const v = document.querySelector('#pv0');
         return {dur: v.duration, w: v.videoWidth, h: v.videoHeight};
     }""")
     assert info["dur"] == pytest.approx(6.0, abs=0.3)
@@ -112,12 +116,49 @@ def test_preview_video_loads_and_can_seek(page):
     assert (info["w"], info["h"]) == (320, 180)
 
     seeked = page.evaluate("""() => new Promise(res => {
-        const v = document.querySelector('.seg video');
+        const v = document.querySelector('#pv0');
         v.onseeked = () => res(v.currentTime);
         v.currentTime = 4.0;
         setTimeout(() => res(-1), 5000);
     })""")
     assert seeked == pytest.approx(4.0, abs=0.5), "seeking failed — range serving broken"
+
+
+def test_a_shot_card_carries_a_poster_not_a_video_stream(page):
+    """Karl, on the Killington board: *"I can hear the videos when I click play, but
+    the preview window still shows up blank."* Sixteen cards each holding open an
+    85 MB proxy, against Chrome's six connections per host, starved the monitor's own
+    request: it reached readyState 4 at ~10 s while the audio had already started. A
+    card only ever showed one frame, so it is an <img> now."""
+    assert page.locator(".seg video").count() == 0, "a card is streaming video again"
+    cards = page.locator(".seg").count()
+    posters = page.locator(".seg img.poster")
+    assert posters.count() == cards
+    src = posters.first.get_attribute("src")
+    assert src.startswith("/media/poster/") and "?t=1.00" in src, src
+    # and it is a real picture, not a broken image
+    page.wait_for_function(
+        "document.querySelector('.seg img.poster').naturalWidth > 0", timeout=15000)
+    assert page.evaluate(
+        "document.querySelector('.seg img.poster').naturalHeight") == 180
+
+
+def test_trimming_the_in_point_moves_the_poster_without_one_frame_per_nudge(page):
+    """A poster that lags a nudge by a moment is fine; one that fetches a frame on
+    every 0.25 s press is not."""
+    asked: list[str] = []
+    page.on("request",
+            lambda r: asked.append(r.url) if "/media/poster/" in r.url else None)
+    card = page.locator(".seg").first
+    for _ in range(6):
+        card.locator("button", has_text="+").first.click()      # in +0.25, six times
+    assert page.evaluate("segs[0].in") == pytest.approx(2.5, abs=0.01)
+    page.wait_for_function(
+        "document.querySelector('.seg img.poster').src.includes('t=2.50')",
+        timeout=10000)
+    page.wait_for_timeout(400)         # any straggler request would have started by now
+    assert any("t=2.50" in u for u in asked), asked
+    assert len(asked) <= 2, f"a frame per press, not per settled trim: {asked}"
 
 
 def test_trim_buttons_change_duration_and_are_undoable(page):
@@ -378,6 +419,43 @@ def _clock(text: str) -> float:
     return int(m) * 60 + float(s)
 
 
+def test_the_monitor_paints_a_frame_soon_after_play_is_pressed(page):
+    """Karl: *"I can hear the videos when I click play, but the preview window still
+    shows up blank."* Audio started while the picture was still black — on Killington
+    the live element did not reach readyState 4 for 6.8–9.5 s from playFrom(0). The
+    only honest test of "shows a picture" is to read the pixels back off the element:
+    a black screen has a mean of 0.0, a decoded frame does not."""
+    page.evaluate("""() => {
+        window.__paint = null;
+        const c = document.createElement('canvas');
+        c.width = 48; c.height = 27;
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        const t0 = performance.now();
+        const poll = () => {
+            const v = document.querySelector('.screen video.live');
+            if (v && v.videoWidth > 0) {
+                ctx.drawImage(v, 0, 0, c.width, c.height);
+                const d = ctx.getImageData(0, 0, c.width, c.height).data;
+                let s = 0;
+                for (let i = 0; i < d.length; i += 4) s += (d[i] + d[i+1] + d[i+2]) / 3;
+                window.__mean = s / (c.width * c.height);
+                if (window.__mean > 5) {
+                    window.__paint = performance.now() - t0;
+                    return;
+                }
+            }
+            requestAnimationFrame(poll);
+        };
+        playFrom(0);
+        requestAnimationFrame(poll);
+    }""")
+    page.wait_for_function("window.__paint !== null", timeout=8000)
+    ms = page.evaluate("window.__paint")
+    assert ms < 5000, f"the monitor was still black {ms:.0f}ms after play"
+    # and it is playing the shot, not the top of the file: shot A starts at 1.0
+    assert page.evaluate("document.querySelector('.screen video.live').currentTime") >= 1.0
+
+
 def test_the_cut_plays_through_from_the_proxies(page):
     """The monitor: the whole edit plays from the proxies, shot after shot, with no
     render. Two shots — A 1.0–3.0 then B 0.0–2.0 — so a hand-over has to happen."""
@@ -514,7 +592,7 @@ def test_playing_from_a_shot_card_brings_the_monitor_into_view(page):
         "(() => { const r = document.querySelector('#player').getBoundingClientRect();"
         " return r.bottom > 0 && r.top < innerHeight; })()"), "monitor should be off-screen"
 
-    page.locator(".seg").last.locator("video").click()
+    page.locator(".seg").last.locator("img.poster").click()
     page.wait_for_function("player.playing && player.idx === 1", timeout=10000)
     page.wait_for_function(
         "(() => { const r = document.querySelector('#player').getBoundingClientRect();"

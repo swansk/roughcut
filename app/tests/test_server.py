@@ -273,6 +273,77 @@ def test_media_path_traversal_is_contained(client):
     assert r.status_code == 404
 
 
+# ------------------------------------------------------------------ posters
+
+def test_poster_is_a_small_jpeg_of_the_frame_at_that_time(client, project):
+    """A shot card gets a picture, not a stream. Sixteen cards each holding open a
+    720p proxy took every connection Chrome allows and the monitor's own request
+    queued behind them: on the Killington board it played sound over a black screen
+    for 6.8-9.5 s. A poster is a few KB."""
+    import server
+    r = client.get("/media/poster/CLIP_A.jpg", params={"t": 2.5})
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/jpeg"
+    assert r.content[:2] == b"\xff\xd8", "not a JPEG"
+    assert len(r.content) < 60_000, f"a card's picture should be small: {len(r.content)}"
+    assert (server.STATE["posters"] / "CLIP_A@000002.50.jpg").exists()
+
+
+def test_poster_at_a_different_time_is_a_different_picture(client):
+    """The card follows the in-point, so the URL has to carry the time."""
+    a = client.get("/media/poster/CLIP_A.jpg", params={"t": 0.5}).content
+    b = client.get("/media/poster/CLIP_A.jpg", params={"t": 4.5}).content
+    assert a and b and a != b
+
+
+def test_poster_is_cached_on_disk_and_declared_immutable(client, project):
+    """One clip at one timestamp is one frame forever, so the browser may keep it and
+    so may the disk — re-rendering the board must not re-run ffmpeg once per card."""
+    import server
+    dest = server.STATE["posters"] / "CLIP_B@000003.00.jpg"
+    dest.unlink(missing_ok=True)
+    r = client.get("/media/poster/CLIP_B.jpg", params={"t": 3.0})
+    assert r.status_code == 200
+    assert dest.exists()
+    stamp = dest.stat().st_mtime_ns
+    cache = r.headers.get("cache-control", "")
+    assert "immutable" in cache and "max-age" in cache, cache
+    again = client.get("/media/poster/CLIP_B.jpg", params={"t": 3.0})
+    assert again.content == r.content
+    assert dest.stat().st_mtime_ns == stamp, "rebuilt a poster it already had"
+
+
+def test_poster_past_the_end_of_a_clip_falls_back_to_its_first_frame(client):
+    """A trim can park an in-point past the end of a clip; a card showing frame one
+    beats a card showing a broken image."""
+    head = client.get("/media/poster/CLIP_A.jpg", params={"t": 0.0})
+    late = client.get("/media/poster/CLIP_A.jpg", params={"t": 9999.0})
+    assert late.status_code == 200
+    assert late.content == head.content
+
+
+def test_poster_for_an_unbuilt_proxy_404s_rather_than_inventing_one(client):
+    assert client.get("/media/poster/NOPE.jpg").status_code == 404
+
+
+def test_poster_path_traversal_is_contained(client):
+    """Same containment as the other media routes: the name names a stem in proxy_dir."""
+    for name in ("..%2F..%2Fetc%2Fpasswd", "%2e%2e%2f%2e%2e%2fCLIP_A.jpg", "....jpg"):
+        assert client.get(f"/media/poster/{name}").status_code == 404
+
+
+def test_poster_time_is_validated(client):
+    """A negative time is clamped rather than handed to ffmpeg; a non-number is a 422."""
+    assert (client.get("/media/poster/CLIP_A.jpg", params={"t": -5}).content
+            == client.get("/media/poster/CLIP_A.jpg", params={"t": 0}).content)
+    assert client.get("/media/poster/CLIP_A.jpg", params={"t": "soon"}).status_code == 422
+
+
+def test_project_offers_a_poster_url_per_clip(client):
+    clips = client.get("/api/project").json()["clips"]
+    assert clips["CLIP_A.MP4"]["poster"] == "/media/poster/CLIP_A.jpg"
+
+
 # ------------------------------------------------------------------ proxies
 
 def test_proxies_built_and_no_partials_left(client, project):
@@ -982,15 +1053,17 @@ def test_status_reports_preview_building_progress(tmp_path, project):
 
 def test_proxy_dirs_do_not_collide_between_bins(tmp_path, project):
     """Two bins can hold the same GoPro stem; a shared proxy dir would serve one
-    bin's frames for the other's clip."""
+    bin's frames for the other's clip. Posters are frames out of those proxies, so
+    they carry the same hazard and the same per-bin split."""
     import server
 
     with _fresh(tmp_path, project):
-        first = server.STATE["proxy_dir"]
+        first, first_posters = server.STATE["proxy_dir"], server.STATE["posters"]
     other = tmp_path / "other-bin"
     other.mkdir()
     with _fresh(tmp_path, {"footage": other}):
         assert server.STATE["proxy_dir"] != first
+        assert server.STATE["posters"] != first_posters
 
 
 # ------------------------------------------------------------ backend status

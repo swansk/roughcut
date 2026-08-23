@@ -63,6 +63,13 @@ code more than anything else:
   editor that stutters on every scrub is one nobody opens twice.
 - **Byte-range serving.** Not a nicety: without HTTP 206 support a `<video>` element cannot seek
   at all, only stream from zero, so per-segment preview would be useless however small the proxy.
+- **Only the monitor streams.** A browser gives a host about six connections. The shot cards
+  used to be `<video>` elements, so a 16-shot cut opened eighteen streams and the monitor's own
+  request queued behind them: measured from `playFrom(0)` on Killington, the first frame
+  arrived at **6.8–9.5 s** while the audio had already started — Karl saw a blank monitor and
+  heard the cut. Cards are `<img>` posters cut from the proxy at the in-point
+  (`/media/poster/<stem>.jpg?t=<in>`, a few KB each, cached under `--work` and immutable), so a
+  page load moves **93 KB** of media rather than opening nineteen streams.
 
 Everything else follows: edits are local and instant, only Save / Snap / Render touch the
 server, and every edit is undoable because fiddling is only fun when it is cheap to be wrong.
@@ -73,7 +80,7 @@ server, and every edit is undoable because fiddling is only fun when it is cheap
 |---|---|
 | **Monitor** | The whole cut, playing from the proxies — shot after shot, no render. A strip under it shows every shot as a block, width to length, coloured by clip; click one to play from there. `space` plays / pauses from the selected shot, `enter` plays just that shot, and the poster on any card jumps the monitor to it — which scrolls into view, and writes a refused play or a media error on its screen rather than sitting silent |
 | **Project** | Where this bin is: clips in the folder, how many analysed, how many looked at, shots in the cut, and the two analysis passes with progress bars. The audio pass is local and free; the visual pass costs model calls, so it is offered with a count and a price while there is footage nobody has looked at, and never runs on its own |
-| **Timeline** | One card per segment: preview parked on the in-point, the transcript lines that fall inside the cut, why it was chosen (editable), trim controls, drag to reorder |
+| **Timeline** | One card per segment: a still of the frame at the in-point (a few KB, not a stream — see the latency section), the transcript lines that fall inside the cut, why it was chosen (editable), trim controls, drag to reorder. Trim the in-point and the still follows once the trimming settles |
 | **Boundary warnings** | A live ⚠ when a cut opens mid-sentence or clips a line off — the defect Karl flagged, surfaced while you trim rather than only when you ask |
 | **Story panel** | Free text saved into the EDL. The thing the agent is worst at; typing "the milk is the running joke" beats an hour of analysis |
 | **Music** | Pick a track from `assets/music/`, set how far it ducks under speech and its fades. Saved into the EDL as `effects_music` the moment it changes, rendered by `assemble.py` with the picture untouched, and heard under the monitor with the same duck before you render |

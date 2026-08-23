@@ -154,6 +154,30 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Fixed
+- **The monitor played the sound and showed a black screen, because sixteen shot cards were
+  each streaming an 85 MB proxy.** Karl, on the Killington board: *"I can hear the videos when
+  I click play, but the preview window still shows up blank."* Neither the range serving nor
+  the layout was at fault — `curl` gets exact 206s with correct `content-range` in 3 ms to
+  first byte, five concurrent open-ended requests each deliver all 85 MB in under a second,
+  `.screen` measures 924x520 with the live `<video>` filling it, and the console is clean. It
+  was **starvation in the browser**: every shot card was an autonomous
+  `<video preload="metadata">` pointed at a proxy, so a 17-shot cut opened 17 streams plus two
+  render previews against Chrome's ~6 connections per host, and the monitor's own request
+  queued behind all of them. Timed from `playFrom(0)` against the live bin, reading pixels back
+  off the element into a canvas: the first non-black frame (mean > 5) arrived at **6.8 s /
+  9.5 s / 7.9 s** over three runs — readyState 0 → 1 with a mean pixel of 0.0 until then, while
+  the audio had long since started. A card only ever showed one frame, so it is an `<img>` now.
+  `GET /media/poster/<stem>.jpg?t=<seconds>` cuts a 320 px JPEG out of the proxy with
+  `ffmpeg -ss`, caches it under `--work/posters/<bin>/` keyed by clip and time, and serves it
+  `immutable` — the same containment as the other media routes (the name is a stem inside
+  `proxy_dir`; four traversal shapes 404). Measured: **2–13 KB** per poster, **322 ms** cold and
+  **3 ms** warm, all 17 built in **1.27 s** at six at a time, 180 KB of disk for the bin. One
+  page load now moves **93 KB** of media instead of opening 19 streams, and the first painted
+  frame is **0.88 s / 0.92 s**. Trimming an in-point moves the poster too, debounced 450 ms, so
+  holding the button costs one frame and not one per press. Verified: 146 API + 32 browser
+  tests pass (was 138 + 28), including a browser test that reads the monitor's pixels back and
+  fails if it is still black 5 s after play, one that a card carries a poster `<img>` and no
+  `<video>` at all, and one that six 0.25 s nudges cost at most two poster requests.
 - **The test suite was writing invented spend into the real inference ledger.**
   `config.ledger_path()` falls back to `~/work/roughcut-ledger.jsonl` — the file the
   project's cost claims are read out of — and `inference._log()` appends to it after every

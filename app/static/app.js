@@ -88,8 +88,46 @@ function boundaryWarning(seg) {
   return bad.join(' · ');
 }
 
+/* The picture on a shot card.
+ *
+ * It used to be a <video preload="metadata"> pointed at the shot's proxy, which is
+ * what made the monitor blank: sixteen cards plus two render previews is eighteen
+ * streams against Chrome's six-connections-per-host limit, so the monitor's own
+ * request queued behind them and the sound arrived seconds before the first frame.
+ * A card only ever showed one frame anyway — clicking it plays the shot in the
+ * monitor — so it is a few-kilobyte JPEG now.
+ *
+ * `posterAt` remembers which frame each shot card is currently showing, keyed by the
+ * segment object itself so it survives the re-render after every edit. Without it,
+ * holding the in-trim button would fetch a new frame every 0.25 s. */
+const posterAt = new WeakMap();
+let posterTimer = 0;
+
+function posterSrc(seg) {
+  if (!posterAt.has(seg)) posterAt.set(seg, seg.in);
+  const base = (P.clips[seg.clip] || {}).poster;
+  return base ? `${base}?t=${Math.max(0, posterAt.get(seg)).toFixed(2)}` : '';
+}
+
+/* Catch the posters up to the in-points, once the trimming stops. A poster that lags
+ * a nudge by half a second is fine; twenty requests for twenty nudges is not. Updates
+ * the <img> in place rather than re-rendering, so it cannot steal focus from the
+ * `why` field somebody is typing in. */
+function refreshPosters() {
+  clearTimeout(posterTimer);
+  posterTimer = setTimeout(() => {
+    document.querySelectorAll('.seg').forEach((el) => {
+      const seg = segs[Number(el.dataset.i)];
+      const img = el.querySelector('.poster');
+      if (!seg || !img) return;
+      posterAt.set(seg, seg.in);
+      const src = posterSrc(seg);
+      if (src && img.getAttribute('src') !== src) img.setAttribute('src', src);
+    });
+  }, 450);
+}
+
 function segCard(seg, i) {
-  const clip = P.clips[seg.clip] || {};
   const el = document.createElement('div');
   el.className = 'seg' + (i === sel ? ' sel' : '');
   el.draggable = true;
@@ -105,9 +143,14 @@ function segCard(seg, i) {
   const blind = unusableFor(seg).map(
     (u) => `unusable ${u.start.toFixed(1)}–${u.end.toFixed(1)}: ${u.why}`).join(' · ');
 
+  // No src at all rather than an empty one for a clip with no sidecar: src="" makes
+  // the browser fetch the page's own URL, which is a request for the whole board.
+  const poster = posterSrc(seg);
   el.innerHTML = `
-    <video preload="metadata" muted playsinline
-           src="${clip.proxy || ''}#t=${seg.in.toFixed(2)}"></video>
+    <img class="poster" draggable="false" loading="lazy" decoding="async"
+         alt="${escapeHtml(stem(seg.clip))} at ${seg.in.toFixed(2)}s"
+         title="play the cut from here"
+         ${poster ? `src="${poster}"` : ''}>
     <div>
       <div class="meta">
         <span class="handle" title="drag to reorder">⋮⋮</span>
@@ -135,7 +178,7 @@ function segCard(seg, i) {
   el.addEventListener('click', (e) => {
     sel = i;
     // The poster is the shot; clicking it plays the cut from here, in the monitor.
-    if (e.target.tagName === 'VIDEO') { revealMonitor(); return playFrom(i); }
+    if (e.target.closest('.poster')) { revealMonitor(); return playFrom(i); }
     const b = e.target.closest('button');
     if (!b) { paint(); return; }
     const act = b.dataset.act;
@@ -179,6 +222,7 @@ function nudge(i, edge, d) {
   else seg.out = Math.max(seg.in + 0.2, Math.min(dur, seg.out + d));
   seg.in = Math.round(seg.in * 100) / 100;
   seg.out = Math.round(seg.out * 100) / 100;
+  if (edge === 'in') refreshPosters();   // debounced: one frame per trim, not per press
 }
 
 /* The monitor. One place where the cut plays, fed from the proxies, so judging an edit
@@ -1276,9 +1320,10 @@ function scrollSel() {
   if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
-/* A <video> that 404s while its proxy is still building stays broken until the page
- * is reloaded — the element does not retry on its own. Poll until the server says
- * building is done, then re-point the sources that never loaded. */
+/* A poster that 404s while its proxy is still building stays broken until the page is
+ * reloaded — the <img> does not retry on its own, any more than the <video> it replaced
+ * did. Poll until the server says building is done, then re-point the ones that never
+ * loaded. */
 function waitForProxies() {
   const iv = setInterval(async () => {
     const p = await (await fetch('/api/project')).json();
@@ -1287,10 +1332,10 @@ function waitForProxies() {
     clearInterval(iv);
     P.proxies_ready = true;
     let fixed = 0;
-    document.querySelectorAll('.seg video').forEach((v) => {
-      if (v.readyState >= 1) return;
-      v.src = v.getAttribute('src');   // same URL, fresh load attempt
-      v.load();
+    document.querySelectorAll('.seg .poster').forEach((img) => {
+      const src = img.getAttribute('src');
+      if (!src || img.naturalWidth > 0) return;
+      img.src = src;                       // same URL, fresh load attempt
       fixed++;
     });
     if (fixed) toast(`${fixed} preview${fixed > 1 ? 's' : ''} now available`);
