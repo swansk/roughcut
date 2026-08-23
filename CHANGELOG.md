@@ -83,6 +83,13 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Fixed
+- **Playing a shot from its card played it in a monitor that was off the screen.** The
+  monitor is at the top of the column and the shot list runs a long way below it; on the
+  16-shot Killington cut, clicking shot 12's poster started playback 3,163 px above the
+  viewport — measured — where nothing about it could be seen. The board played and the page
+  sat still, which is indistinguishable from a board that will not play. A play started from
+  a card, or with <kbd>space</kbd>/<kbd>enter</kbd> from down the list, scrolls the monitor
+  back into view first.
 - **The board served its own code with no cache headers of any kind.** No `Cache-Control`,
   no `ETag`, no `Last-Modified` — nothing telling a browser either to keep `index.html` and
   `app.js` or to check them. Chrome does refetch such a response (measured: on a reload both

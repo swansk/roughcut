@@ -134,11 +134,11 @@ function segCard(seg, i) {
   el.addEventListener('click', (e) => {
     sel = i;
     // The poster is the shot; clicking it plays the cut from here, in the monitor.
-    if (e.target.tagName === 'VIDEO') return playFrom(i);
+    if (e.target.tagName === 'VIDEO') { revealMonitor(); return playFrom(i); }
     const b = e.target.closest('button');
     if (!b) { paint(); return; }
     const act = b.dataset.act;
-    if (act === 'play') return playFrom(i, { single: true });
+    if (act === 'play') { revealMonitor(); return playFrom(i, { single: true }); }
     if (act === 'del') { pushUndo(); segs.splice(i, 1); return render(); }
     pushUndo();
     const d = parseFloat(b.dataset.d) * (e.shiftKey ? 4 : 1);
@@ -223,6 +223,18 @@ function arm(v, seg) {
 
 function showLive() {
   player.vids.forEach((v, k) => v.classList.toggle('live', k === player.cur));
+}
+
+/* The monitor sits at the top of the column and the shot list runs a long way below it.
+ * Clicking shot 12's poster on the Killington cut started playback 3,163 px above the
+ * viewport — measured — where nothing about it could be seen or heard to be about that
+ * shot. A play started from down the list brings the monitor back first. */
+function revealMonitor() {
+  const el = $('#player');
+  if (!el || el.style.display === 'none') return;
+  const r = el.getBoundingClientRect();
+  if (r.top >= 56 && r.bottom <= window.innerHeight) return;
+  window.scrollTo({ top: Math.max(0, window.scrollY + r.top - 64), behavior: 'smooth' });
 }
 
 /* Say on the screen what the monitor is doing when it is not showing a picture. The
@@ -1190,8 +1202,10 @@ document.addEventListener('keydown', (e) => {
   else if (k === ']') { pushUndo(); nudge(sel, 'in', step); render(); }
   else if (k === '{') { pushUndo(); nudge(sel, 'out', -step); render(); }
   else if (k === '}') { pushUndo(); nudge(sel, 'out', step); render(); }
-  else if (k === ' ') { e.preventDefault(); toggleCut(); }
-  else if (k === 'Enter') { e.preventDefault(); playFrom(sel, { single: true }); }
+  else if (k === ' ') { e.preventDefault(); revealMonitor(); toggleCut(); }
+  else if (k === 'Enter') {
+    e.preventDefault(); revealMonitor(); playFrom(sel, { single: true });
+  }
   else return;
 });
 

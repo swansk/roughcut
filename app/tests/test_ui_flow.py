@@ -503,6 +503,24 @@ def test_a_refused_play_is_named_on_the_monitor(page):
     assert page.locator("#playCut").inner_text().startswith("▶")
 
 
+def test_playing_from_a_shot_card_brings_the_monitor_into_view(page):
+    """The monitor is at the top of the column and the shot list runs a long way below
+    it. On the 16-shot Killington cut, clicking shot 12's poster started playback 3,163px
+    above the viewport — the board played, and the person saw a still page."""
+    page.set_viewport_size({"width": 900, "height": 380})
+    page.locator(".seg").last.scroll_into_view_if_needed()
+    page.wait_for_timeout(200)
+    assert not page.evaluate(
+        "(() => { const r = document.querySelector('#player').getBoundingClientRect();"
+        " return r.bottom > 0 && r.top < innerHeight; })()"), "monitor should be off-screen"
+
+    page.locator(".seg").last.locator("video").click()
+    page.wait_for_function("player.playing && player.idx === 1", timeout=10000)
+    page.wait_for_function(
+        "(() => { const r = document.querySelector('#player').getBoundingClientRect();"
+        " return r.top >= 0 && r.bottom <= innerHeight + 1; })()", timeout=5000)
+
+
 # ------------------------------------------------------------------ what was seen
 
 def test_what_the_visual_pass_saw_shows_on_the_cards_and_in_the_library(page, project):
