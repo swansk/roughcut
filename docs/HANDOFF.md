@@ -374,6 +374,19 @@ Ordered by what changes most, not by effort:
    is `preload="metadata"` with a `#t=` fragment. First frame **~0.9 s**, media bytes per page
    load 93 KB. Still untested: Firefox.
 
+   **Read those numbers with their conditions.** The 6.8–9.5 s was measured on a box that had
+   just finished a 4K delivery render. Re-run back to back on the same warm, idle machine, main
+   paints in 0.74–0.79 s and this branch in 0.89–0.91 s — with the proxies in the page cache and
+   the cores free, seventeen card streams cost nothing and a poster is one extra fetch. Under a
+   render-shaped load (one `libx264 -preset slow` pass over the 4K master) the gap comes back:
+   5.6 / 5.7 / 3.1 s before against 3.2 / 2.6 / 3.6 s after, 19 requests against 15, and 93 KB
+   of media every run against 0.2–2.5 MB. The defect is not "the board is ten times slower", it
+   is that **the first frame used to degrade with whatever else the machine was doing** — which
+   is the machine Karl edits on while it renders. Only the buffered-range fix is
+   condition-independent: main buffers `0–15 s` for a shot at 188.2 s in every condition
+   measured and this branch never does. Anyone re-checking these should say what the box was
+   doing at the time.
+
    The same weight closed the render complaints in the same pass. Karl, on the finished 4K
    delivery render: *"jumping all around the place, looks bad"* and *"stuck in this loading
    forever place... only have played for like 3s before video buffers"*. The file is sound —

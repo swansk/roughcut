@@ -154,6 +154,21 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Fixed
+- **What the board's playback numbers above depend on, measured properly.** The 6.8–9.5 s first
+  frame that started this was real and reproduced three times, but it was measured on a box that
+  had just finished a 4K delivery render — and a claim that only holds under conditions nobody
+  wrote down is a claim the next session cannot check. Re-run back to back on the same warm,
+  idle machine, main and this branch paint at **0.74–0.79 s** and **0.89–0.91 s**: with 1.4 GB
+  of proxies in the page cache and eight free cores, seventeen card streams cost nothing, and
+  the branch is a hair *slower* because a poster is one more thing to fetch before the monitor
+  is asked for anything. Put the box back under a render-shaped load (one `libx264 -preset slow`
+  encode of the 4K master, ~8 cores) and the difference returns: **5.6 / 5.7 / 3.1 s** before
+  against **3.2 / 2.6 / 3.6 s** after, with the same 19-vs-15 requests and 93 KB of media every
+  single run against 0.2–2.5 MB. So the honest statement is not "the board was ten times
+  slower"; it is that **the cards' streams cost nothing when the machine is idle and seconds
+  when it is not**, and an editor whose first frame degrades with whatever else the box is doing
+  is the defect. The buffered-range fix is the one that holds unconditionally: playing a shot at
+  188.2 s, main buffers `0–15 s` in every condition measured and this branch never does.
 - **The version players streamed the master render, and there was no way to download one.**
   Karl, watching the finished 4K delivery render on the board: *"it looks like it already
   crashed.. or at least has an issue with the render - jumping all around the place, looks
