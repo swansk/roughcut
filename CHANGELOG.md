@@ -10,6 +10,55 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **One progress model, and a bar up top that every long operation drives.** Karl:
+  *"Several progress bars need help… consider a progress tracking bar up top for anything which
+  may take time to complete — re-use across app."* The board had four long operations and four
+  unrelated notions of progress — the audio pass counted sidecars into `done`/`total`, the visual
+  pass counted two different things into two keys, a render counted parts on disk, and an **Ask
+  counted nothing at all** and showed an elapsed clock next to the word "thinking" — so no single
+  bar could exist. `roughcut/progress.py` is the shape they now share: `kind, label, state,
+  started, elapsed_s, pct, detail, eta_s` and an ordered list of `milestones` with weights and
+  `done_at`. `pct` comes from milestones where an operation has them and from **counted work on
+  disk** where it does not (`_run_counted` is untouched as the source for analyse, visual and
+  render); it never dips (a filesystem count racing a rename can) and never reads 100% before the
+  job is over. `Job` subclasses `dict`, so every existing mutation and status field in
+  `app/server.py` survives verbatim and this is an addition rather than a rewrite. Two new
+  endpoints: `GET /api/jobs` — the heartbeat the top strip polls, payload-free — and
+  `GET /api/job/{id}` for the whole record. The strip sits under the step strip, holds **more
+  than one operation at a time** (a render and an Ask overlap routinely), **re-attaches after a
+  reload** because the registry is server-side, and disappears when everything is idle.
+- **Every AI task now estimates itself before it starts, then reports milestones as it goes.**
+  Karl: *"the first step the AI must complete is an estimate of how long it will take to apply
+  the changes. This will (when estimate is complete) start a progress bar against the AI
+  workflow… The initial assessment must include milestones, which the agent will complete, and
+  then follow back up with the app on."* An Ask opens with one cheap `ROLE_ANALYSIS` call
+  (`roughcut/estimate.py`) returning `{eta_s, milestones}`, validated the way `validate_plan`
+  validates a plan — bounded count, positive finite weights, an ETA inside sane limits, one
+  bounded re-ask — and **the module raises nothing**: a garbage estimate, a timeout, a budget
+  refusal or a logged-out backend all fall back to a measured hard-coded estimate and the work
+  runs anyway. The keys are the app's and the labels and weights are the model's, because a
+  milestone nobody can *observe* completing is a bar that stops moving. Each completed milestone
+  **recalibrates the ETA** from elapsed-vs-expected, trusting measurement more the further in it
+  is, so the bar reports "about 2 min left" and which checkpoint it is on rather than repeating
+  a guess made before anything ran.
+- **Streaming, so a four-minute `claude -p` call can report where it is.** A CLI call returns
+  once, at the end, which is why the board could only ever show a clock. `ClaudeCliBackend` takes
+  an optional `on_partial(kind, text_so_far)` and, when given one, runs
+  `--output-format stream-json --verbose --include-partial-messages` — verified on this machine
+  (CLI 2.1.2) before anything was built on it: the flags are accepted together, `stream_event`
+  lines carry `thinking_delta` and `text_delta`, and the closing `result` object is **identical**
+  to the one `--output-format json` returns, so the ledger, `projected_usd` and the token
+  accounting are the same on both paths. The non-streaming path is untouched, which is what keeps
+  the scripted test backends working. An Ask's plan is a JSON list of segments, so counting the
+  `"clip"` keys written so far is real progress against a real denominator: the bar says
+  **"12 of ~18 shots decided"**, not a spinner.
+
+### Fixed
+- **A render stopped claiming to be finished while it was still joining.** The bar was
+  `done/total` over the shots, so it hit 100% the moment the last part landed on disk and then
+  sat there for the whole join — minutes of it on a 4K delivery render, and exactly the
+  "got like no response — and just see rendering…" complaint. Cutting and joining are two
+  weighted milestones now (0.75 / 0.25), and no snapshot in state `running` may report 100%.
 - **[R10](research/R10-events-priority.md) — sorting what was seen, and what a closer look is
   actually worth.** Answering Karl's *"you missed some cool jumps"* with numbers, and finding
   that only half the diagnosis holds. A 1s read of 23 motion-picked windows did surface four

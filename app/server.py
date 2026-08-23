@@ -63,7 +63,8 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, Respons
 import uvicorn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from roughcut import config, effects, events, inference, revise  # noqa: E402
+from roughcut import (config, effects, estimate, events,  # noqa: E402
+                      inference, progress, revise)
 
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent / "research" / "tools"
@@ -75,10 +76,51 @@ VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".avi", ".m4v", ".mts", ".webm"}
 
 app = FastAPI()
 STATE: dict = {}
-RENDERS: dict[str, dict] = {}
-ANALYSES: dict[str, dict] = {}
-ASKS: dict[str, dict] = {}
-VISUALS: dict[str, dict] = {}
+# Four registries, one job shape. They stay separate because each kind has its own
+# "is one already running" rule and its own status endpoint, and they all hold
+# `progress.Job` — a dict subclass — so every existing reader, mutation and
+# `{**entry}` in this file keeps working while the shared bar reads one shape.
+RENDERS: dict[str, progress.Job] = {}
+ANALYSES: dict[str, progress.Job] = {}
+ASKS: dict[str, progress.Job] = {}
+VISUALS: dict[str, progress.Job] = {}
+
+
+def all_jobs() -> list[progress.Job]:
+    """Every long operation this server knows about, of any kind.
+
+    Karl: *"consider a progress tracking bar up top for anything which may take time
+    to complete — re-use across app."* One list is what makes that one bar possible,
+    and it is what lets a reloaded page re-attach to a render and an Ask that are both
+    still running — which is the state his machine is in as this is written.
+    """
+    return [*ANALYSES.values(), *VISUALS.values(), *ASKS.values(), *RENDERS.values()]
+
+
+# Polled once a second by every open board, so it carries no payloads: a finished Ask
+# holds a 15k-token plan and a render holds ffmpeg's whole log, and neither belongs in
+# a heartbeat. Both stay one fetch away on /api/job/{id}.
+JOB_LIST_OMIT = ("plan",)
+
+
+@app.get("/api/jobs")
+def api_jobs() -> JSONResponse:
+    """What is happening right now. The whole top bar polls this and nothing else."""
+    out = []
+    for snap in progress.live(all_jobs()):
+        row = {k: v for k, v in snap.items() if k not in JOB_LIST_OMIT}
+        if row.get("log"):
+            row["log"] = "\n".join(str(row["log"]).splitlines()[-6:])
+        out.append(row)
+    return JSONResponse({"jobs": out})
+
+
+@app.get("/api/job/{job}")
+def api_job(job: str) -> JSONResponse:
+    for registry in (ANALYSES, VISUALS, ASKS, RENDERS):
+        if job in registry:
+            return JSONResponse(registry[job].snapshot())
+    raise HTTPException(404, "no such job")
 
 
 # ---------------------------------------------------------------- proxies
@@ -270,6 +312,13 @@ VISUAL_USD_PER_SHEET = 0.09
 FINE_WINDOWS_PER_CLIP = 3
 FINE_USD_PER_WINDOW = 0.073
 
+# And how long each of those costs in wall clock, which is what a progress bar needs
+# and the price does not say. Measured on Killington: a coarse sheet ~40s, a fine
+# window ~35s (same prompt, fewer frames), the free motion scan ~6s per 5-minute clip.
+VISUAL_SHEET_READ_S = 40.0
+FINE_WINDOW_READ_S = 35.0
+SCAN_S_PER_CLIP = 8.0
+
 
 def clip_duration(clip: str) -> float | None:
     """Seconds of footage in a clip: from its audio sidecar when analysed, otherwise
@@ -312,7 +361,7 @@ def visual_status(fine: bool = True) -> dict:
         "fine_pending": len(fine_clips), "fine_done": len(clips) - len(fine_clips),
         "projected_usd": round(sheets * VISUAL_USD_PER_SHEET
                                + fine_calls * FINE_USD_PER_WINDOW, 2),
-        "running": any(v["state"] == "running" for v in VISUALS.values()),
+        "running": any(v["state"] not in progress.TERMINAL for v in VISUALS.values()),
         "events": len(events.load(STATE["visual"])),
         "dir": str(STATE["visual"]),
     }
@@ -482,22 +531,67 @@ async def api_snap(request: Request) -> JSONResponse:
                          "log": r.stdout})
 
 
+def _ask_watcher(entry: progress.Job, shots: int):
+    """Turn a half-written answer into a bar that moves.
+
+    A `claude -p` call returns once, at the end. Streaming its deltas is what makes
+    the difference between "thinking… 2:14" and "12 of ~18 shots decided": the plan is
+    a JSON list of segments, so counting the ones written so far is real progress
+    against a real denominator, and each phase boundary snaps the bar forward and
+    re-times the rest from what this call has actually cost so far.
+    """
+    def on_partial(kind: str, text: str) -> None:
+        if kind == "thinking":
+            entry.complete("read")
+            entry.note(f"working out the shape — {len(text) // 100 / 10:.1f}k "
+                       "characters of reasoning" if len(text) > 400
+                       else "working out the shape")
+            return
+        entry.complete("think")
+        written = revise.count_shots(text)
+        if '"notes"' in text:
+            entry.complete("shots", detail="writing its reasoning for the editor")
+            return
+        entry.advance("shots", written / max(1, shots),
+                      detail=f"{written} of ~{shots} shots decided")
+    return on_partial
+
+
 def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
              target: tuple[float, float], ranked: list[dict] | None = None) -> None:
     entry = ASKS[job]
+    # Step one is not the edit, it is the estimate. Karl: *"the first step the AI must
+    # complete is an estimate of how long it will take to apply the changes. This will
+    # (when estimate is complete) start a progress bar."* It is one cheap call on the
+    # per-unit role, it is bounded by its own short timeout, and it cannot fail in a
+    # way that stops the work — a bad estimate falls back to a measured guess.
+    shots = revise.expected_shots(segments, target)
+    est = revise.estimate_ask(clips, segments, note, target, shots=shots)
+    entry.set_estimate(est.eta_s, est.milestones, source=est.source,
+                       detail="reading the footage")
+    entry["estimate"] = {"source": est.source, "eta_s": est.eta_s,
+                         "shots": shots, "why": est.detail,
+                         "usage": est.usage}
+    entry["state"] = "running"
     try:
+        watcher = _ask_watcher(entry, shots)
         if segments:
             plan = revise.propose(segments=segments, clips=clips, story=story,
-                                  note=note, target=target, events=ranked)
+                                  note=note, target=target, events=ranked,
+                                  on_partial=watcher)
         else:
             plan = revise.originate(clips=clips, story=story, note=note,
-                                    target=target, events=ranked)
+                                    target=target, events=ranked,
+                                    on_partial=watcher)
     except inference.BudgetExceeded as exc:
-        entry.update(state="failed", detail=str(exc), code=429)
+        entry.update(code=429)
+        entry.finish("failed", detail=str(exc))
         return
     except (inference.InferenceError, ValueError) as exc:
-        entry.update(state="failed", detail=str(exc), code=502)
+        entry.update(code=502)
+        entry.finish("failed", detail=str(exc))
         return
+    entry.complete("notes", detail="snapping cut points to speech")
     # On disk before it is announced. A two-minute call whose only copy is an HTTP
     # response is one dropped connection away from being spent for nothing — which is
     # exactly what happened on the first Killington ask: the model answered, the
@@ -507,7 +601,9 @@ def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
               "plan": plan}
     path = STATE["asks"] / f"{job}.json"
     path.write_text(json.dumps(record, indent=1), encoding="utf-8")
-    entry.update(state="done", plan=plan)
+    entry["plan"] = plan
+    entry.complete("polish")
+    entry.finish("done", detail=f"{len(plan['segments'])} shots proposed")
 
 
 @app.post("/api/ask")
@@ -545,9 +641,14 @@ async def api_ask(request: Request) -> JSONResponse:
         raise HTTPException(400, "no analysed clips yet — run the audio pass first")
 
     job = uuid.uuid4().hex[:8]
-    ASKS[job] = {"state": "running", "started": time.time(), "plan": None,
-                 "detail": "", "code": 0,
-                 "kind": "revision" if segments else "first cut"}
+    label = "Revising the cut" if segments else "Building the first cut"
+    ASKS[job] = progress.Job(
+        "ask", label, id=job, state="estimating", plan=None, code=0,
+        detail="estimating how long this will take",
+        # `kind` was a human phrase here before the shared model gave the word a job
+        # to do; the phrase is what the UI printed, so it survives under its own name.
+        ask_kind="revision" if segments else "first cut",
+        estimate=None)
     threading.Thread(
         target=_ask_job,
         args=(job, segments, clips, story, note,
@@ -560,9 +661,7 @@ async def api_ask(request: Request) -> JSONResponse:
 def api_ask_status(job: str) -> JSONResponse:
     if job not in ASKS:
         raise HTTPException(404, "no such job")
-    entry = ASKS[job]
-    return JSONResponse({**entry,
-                         "elapsed_s": round(time.time() - entry["started"], 1)})
+    return JSONResponse(ASKS[job].snapshot())
 
 
 @app.get("/api/asks/latest")
@@ -687,7 +786,7 @@ def _ticker(stop: threading.Event, update) -> None:
 
 
 def _run_counted(entry: dict, cmd: list[str], count, key: str = "done",
-                 append: bool = False) -> int:
+                 append: bool = False, on_line=None, on_count=None) -> int:
     """Run a tool in the background, streaming its log into `entry` and ticking
     `entry[key]` from `count()` on a clock. Returns the exit code (-1: never ran).
 
@@ -700,6 +799,11 @@ def _run_counted(entry: dict, cmd: list[str], count, key: str = "done",
     of three the moment the second stage started, which is worse than no progress bar.
     `append` keeps the earlier stage's log in front of this one's, so a job that failed
     in its second stage can still be diagnosed from its first.
+
+    `on_line` and `on_count` are how the shared progress model reads this without
+    changing what it does: the count still comes off the filesystem, and the two hooks
+    turn it into a milestone's `part` and the tool's own chatter into the human line
+    the top bar shows ("reading CLIP_04, sheet 2 of 3").
     """
     lines: list[str] = entry["log"].splitlines() if append and entry.get("log") else []
     try:
@@ -712,29 +816,49 @@ def _run_counted(entry: dict, cmd: list[str], count, key: str = "done",
         entry.update(state="failed", log=str(exc))
         return -1
     assert proc.stdout is not None
+
+    def tick() -> None:
+        entry[key] = count()
+        if on_count is not None:
+            on_count(entry[key])
+
     stop = threading.Event()
-    ticker = threading.Thread(
-        target=_ticker, args=(stop, lambda: entry.__setitem__(key, count())),
-        daemon=True)
+    ticker = threading.Thread(target=_ticker, args=(stop, tick), daemon=True)
     ticker.start()
     try:
         for line in proc.stdout:
-            lines.append(line.rstrip())
+            text = line.rstrip()
+            lines.append(text)
             entry["log"] = "\n".join(lines[-40:])
+            if on_line is not None:
+                on_line(text)
         rc = proc.wait()
     finally:
         stop.set()
-    entry[key] = count()
+    tick()
     entry["log"] = "\n".join(lines[-40:])
     return rc
 
 
+# Measured on Killington: 12 clips, 44 minutes of 5.3K. The ASR is about 12s of wall
+# clock per minute of footage on this GPU, and the proxy encode about 40s per minute —
+# which is why the two stages are weighted so unevenly and why parking the bar at 100%
+# for the second one was the wrong answer.
+ASR_S_PER_FOOTAGE_S = 0.20
+PROXY_S_PER_FOOTAGE_S = 0.67
+
+
 def _analyze_job(job: str, cmd: list[str], wanted: set[str]) -> None:
     entry = ANALYSES[job]
-    rc = _run_counted(entry, cmd, lambda: len(wanted & analysed_stems()))
+    rc = _run_counted(
+        entry, cmd, lambda: len(wanted & analysed_stems()),
+        on_count=lambda n: entry.advance(
+            "listen", n / max(1, entry["total"]),
+            detail=f"{n} of {entry['total']} clips transcribed"))
     if rc != 0:
-        entry["state"] = "failed"
+        entry.finish("failed", detail="the audio pass failed — see the log")
         return
+    entry.complete("listen")
     if entry["done"]:
         # Clips only become previewable once they have a proxy, and nothing else in
         # the app would build one for a clip that did not exist at launch. This runs
@@ -747,12 +871,17 @@ def _analyze_job(job: str, cmd: list[str], wanted: set[str]) -> None:
         # reports its own count rather than leaving the bar parked at 100%.
         entry["stage"] = "previews"
         STATE["proxies_ready"] = False
+
+        def previews(done: int, total: int) -> None:
+            entry.update(proxy_done=done, proxy_total=total)
+            entry.advance("previews", done / max(1, total),
+                          detail=f"building preview {done} of {total}")
+
         ensure_proxies(
             sorted(c for c in footage_clips() if Path(c).stem in analysed_stems()),
-            progress=lambda done, total: entry.update(proxy_done=done,
-                                                      proxy_total=total))
+            progress=previews)
     entry["stage"] = "done"
-    entry["state"] = "done"
+    entry.finish("done", detail=f"{entry['done']} clips analysed")
 
 
 @app.post("/api/analyze")
@@ -764,7 +893,7 @@ async def api_analyze(request: Request) -> JSONResponse:
     sidecar per clip as it goes, so progress is real rather than a spinner.
     """
     body = await request.json()
-    if any(a["state"] == "running" for a in ANALYSES.values()):
+    if any(a["state"] not in progress.TERMINAL for a in ANALYSES.values()):
         raise HTTPException(409, "an analysis is already running")
     skip = [str(s).strip() for s in body.get("skip", []) if str(s).strip()]
     force = bool(body.get("force"))
@@ -775,9 +904,19 @@ async def api_analyze(request: Request) -> JSONResponse:
         raise HTTPException(400, "no clips to analyse")
 
     job = uuid.uuid4().hex[:8]
-    ANALYSES[job] = {"state": "running", "stage": "analysing", "log": "",
-                     "total": len(wanted), "done": len(wanted & analysed_stems()),
-                     "proxy_done": 0, "proxy_total": 0}
+    # Not a model call, so the estimate is arithmetic rather than a question: both
+    # stages have a measured seconds-per-second of footage, and the footage is on disk.
+    footage_s = sum(clip_duration(c) or 0.0 for c in footage_clips()
+                    if Path(c).stem in wanted)
+    ANALYSES[job] = progress.Job(
+        "analyse", "Analysing the audio", id=job, stage="analysing", log="",
+        total=len(wanted), done=len(wanted & analysed_stems()),
+        proxy_done=0, proxy_total=0, detail="listening to the footage")
+    ANALYSES[job].set_estimate(
+        max(10.0, footage_s * (ASR_S_PER_FOOTAGE_S + PROXY_S_PER_FOOTAGE_S)),
+        [progress.milestone("listen", "transcribing", ASR_S_PER_FOOTAGE_S),
+         progress.milestone("previews", "building previews", PROXY_S_PER_FOOTAGE_S)],
+        source="measured")
     threading.Thread(target=_analyze_job,
                      args=(job, analyze_cmd(skip, force), wanted),
                      daemon=True).start()
@@ -788,7 +927,7 @@ async def api_analyze(request: Request) -> JSONResponse:
 def api_analyze_status(job: str) -> JSONResponse:
     if job not in ANALYSES:
         raise HTTPException(404, "no such job")
-    return JSONResponse(ANALYSES[job])
+    return JSONResponse(ANALYSES[job].snapshot())
 
 
 # ---------------------------------------------------------------- the visual pass
@@ -847,28 +986,78 @@ def _visual_job(job: str, cmd: list[str], wanted: set[str], fine: bool,
     """
     entry = VISUALS[job]
     entry["stage"] = "looking"
-    rc = _run_counted(entry, cmd, lambda: len(wanted & visual_stems()))
+    entry["state"] = "running"
+    warn = ""
+    rc = _run_counted(
+        entry, cmd, lambda: len(wanted & visual_stems()),
+        on_line=lambda line: entry.note(_visual_detail(line) or entry["detail"]),
+        on_count=lambda n: entry.advance(
+            "looking", n / max(1, entry["total"]),
+            detail=f"{n} of {entry['total']} clips seen"))
     if rc != 0:
-        entry.update(state="failed", stage="looking")
+        entry["stage"] = "looking"
+        entry.finish("failed", detail="the visual pass failed — see the log")
         return
+    entry.complete("looking")
     if fine:
         entry["stage"] = "scanning"
         windows = STATE["work"] / f"windows_{job}.json"
         stems = sorted(Path(c).stem for c in footage_clips())
+        entry.note("scanning for motion — free, no model calls")
         rc = _run_counted(entry, scan_cmd(stems, windows, windows_per_clip),
                           lambda: len(fine_stems()), key="fine_done", append=True)
+        entry.complete("scan")
         if rc == 0 and windows.exists():
             entry["stage"] = "closer"
-            rc = _run_counted(entry, fine_cmd(windows), lambda: len(fine_stems()),
-                              key="fine_done", append=True)
+            total_fine = max(1, entry.get("fine_total") or len(stems))
+            rc = _run_counted(
+                entry, fine_cmd(windows), lambda: len(fine_stems()),
+                key="fine_done", append=True,
+                on_line=lambda line: entry.note(_visual_detail(line)
+                                                or entry["detail"]),
+                on_count=lambda n: entry.advance(
+                    "closer", n / total_fine,
+                    detail=f"a closer look at {n} of {total_fine} clips"))
         if rc != 0:
             # Not a failure of the job: the clips have been seen, which is what the
             # board needs. The close look is an audit and it can be re-run for free.
-            entry["detail"] = "the close look did not finish; coarse pass is kept"
+            # It rides all the way to the final line rather than being overwritten by
+            # it — a job that quietly dropped half its work and then reported "done,
+            # 3 clips seen" is the shape of every bug this file's comments describe.
+            warn = "the close look did not finish; coarse pass is kept"
+        entry.complete("closer")
         windows.unlink(missing_ok=True)
     entry["stage"] = "ranking"
+    entry.note("ranking what was seen")
     entry["events"] = rebuild_events()
-    entry.update(state="done", stage="done")
+    entry.complete("rank")
+    entry["stage"] = "done"
+    summary = f"{entry['done']} clips seen, {entry['events']} events ranked"
+    entry.finish("done", detail=f"{summary} — {warn}" if warn else summary)
+
+
+# `visual_pass.py` says what it is doing as it does it — "CLIP_04.MP4: 3 sheet(s)",
+# then one line per sheet as each is paid for. That chatter is the only account of
+# where a twenty-minute pass actually is, and it used to reach nothing but a log box
+# nobody opens. Turned into the top bar's human line instead.
+_SHEETS_RE = re.compile(r"^(\S+?):\s*(\d+) sheet")
+_SHEET_DONE_RE = re.compile(r"^\s+(\S+?):\s*(\d+) moments")
+
+
+def _visual_detail(line: str) -> str:
+    m = _SHEETS_RE.match(line)
+    if m:
+        STATE["visual_now"] = {"clip": Path(m.group(1)).stem,
+                               "sheets": int(m.group(2)), "done": 0}
+        return f"reading {STATE['visual_now']['clip']} — {m.group(2)} sheets"
+    if _SHEET_DONE_RE.match(line):
+        now = STATE.get("visual_now")
+        if not now:
+            return ""
+        now["done"] += 1
+        return (f"reading {now['clip']} — sheet {min(now['done'] + 1, now['sheets'])} "
+                f"of {now['sheets']}")
+    return ""
 
 
 @app.post("/api/visual")
@@ -883,7 +1072,7 @@ async def api_visual(request: Request) -> JSONResponse:
     initiative — the status carries the price and the board asks.
     """
     body = await request.json()
-    if any(v["state"] == "running" for v in VISUALS.values()):
+    if any(v["state"] not in progress.TERMINAL for v in VISUALS.values()):
         raise HTTPException(409, "a visual pass is already running")
     only = {str(s).strip().upper() for s in body.get("only", []) if str(s).strip()}
     force = bool(body.get("force"))
@@ -900,9 +1089,35 @@ async def api_visual(request: Request) -> JSONResponse:
         raise HTTPException(400, "nothing to look at — every clip has been seen")
 
     job = uuid.uuid4().hex[:8]
-    VISUALS[job] = {"state": "running", "stage": "looking", "log": "",
-                    "total": len(wanted), "done": 0, "fine_done": 0, "events": 0,
-                    "detail": "", "fine": fine, "started": time.time()}
+    clips = footage_clips()
+    sheets = sum(max(1, math.ceil((clip_duration(c) or 0.0) / VISUAL_SHEET_S))
+                 for c in clips if Path(c).stem in wanted)
+    fine_clips = len([c for c in clips if Path(c).stem not in fine_stems()]) if fine \
+        else 0
+    VISUALS[job] = progress.Job(
+        "visual", "Looking at the footage", id=job, stage="looking", log="",
+        total=len(wanted), done=0, fine_done=0, fine_total=max(1, fine_clips),
+        events=0, fine=fine, sheets=sheets,
+        detail=f"{sheets} contact sheets to read")
+    # The estimate here is arithmetic, not a question: the sheet count comes off the
+    # footage on disk and the per-sheet cost and latency are measured (VISUAL_USD_PER_
+    # SHEET, and ~40s a sheet on this machine). Asking a model to guess a number the
+    # app can compute would cost a call to be *less* accurate — the estimate exists to
+    # be right, not to be a ritual. The Ask, whose length genuinely cannot be computed,
+    # is where the model estimate earns its call.
+    milestones = [progress.milestone("looking", "reading contact sheets",
+                                     max(1.0, sheets * VISUAL_SHEET_READ_S))]
+    eta = max(20.0, sheets * VISUAL_SHEET_READ_S)
+    if fine:
+        milestones.append(progress.milestone("scan", "scanning for motion",
+                                             max(1.0, len(clips) * SCAN_S_PER_CLIP)))
+        milestones.append(progress.milestone(
+            "closer", "a closer look",
+            max(1.0, fine_clips * windows_per_clip * FINE_WINDOW_READ_S)))
+        eta += len(clips) * SCAN_S_PER_CLIP
+        eta += fine_clips * windows_per_clip * FINE_WINDOW_READ_S
+    milestones.append(progress.milestone("rank", "ranking what was seen", 2.0))
+    VISUALS[job].set_estimate(eta + 2.0, milestones, source="measured")
     threading.Thread(target=_visual_job,
                      args=(job, visual_cmd(sorted(wanted), force), wanted, fine,
                            windows_per_clip),
@@ -914,9 +1129,7 @@ async def api_visual(request: Request) -> JSONResponse:
 def api_visual_status(job: str) -> JSONResponse:
     if job not in VISUALS:
         raise HTTPException(404, "no such job")
-    entry = VISUALS[job]
-    return JSONResponse({**entry,
-                         "elapsed_s": round(time.time() - entry["started"], 1)})
+    return JSONResponse(VISUALS[job].snapshot())
 
 
 def probe_duration(path: Path) -> float | None:
@@ -955,7 +1168,16 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
     def count() -> None:
         done = len(list(parts_dir.glob("part_*.mp4"))) if parts_dir.exists() else 0
         entry["done"] = done
-        entry["stage"] = "joining" if done >= entry["total"] else "cutting"
+        joining = done >= entry["total"]
+        entry["stage"] = "joining" if joining else "cutting"
+        if joining:
+            # The old bar sat at 100% here, and joining a 4K delivery render is
+            # minutes of it. A separate milestone means the bar stops at the share
+            # cutting was worth and keeps counting the rest.
+            entry.complete("cutting", detail=f"joining {entry['total']} shots")
+        else:
+            entry.advance("cutting", done / max(1, entry["total"]),
+                          detail=f"cutting shot {done + 1} of {entry['total']}")
 
     ticker = threading.Thread(target=_ticker, args=(stop, count), daemon=True)
     ticker.start()
@@ -979,16 +1201,25 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
         out_path.with_suffix(".json").write_text(json.dumps(meta, indent=1),
                                                  encoding="utf-8")
     entry.update(
-        state="done" if ok else "failed",
         stage="done" if ok else "failed",
         done=entry["total"] if ok else entry["done"],
         log=(r.stdout or "") + (r.stderr or ""),
         output=str(out_path) if ok else None,
         url=f"/media/render/{out_path.name}" if ok else None,
     )
+    entry.finish(
+        "done" if ok else "failed",
+        detail=(f"{meta.get('duration_s') or 0:.0f}s of video, "
+                f"{meta.get('profile', 'preview')}" if ok
+                else "the render failed — see the log"))
 
 
 RENDER_PROFILES = ("preview", "delivery")
+# Seconds of wall clock per second of finished cut. Karl's 17-minute delivery render of
+# a ~2:50 cut is where the second number comes from; the preview profile of the same
+# cut is minutes rather than seconds. Both are starting guesses that the first
+# milestone replaces with measurement.
+RENDER_S_PER_CUT_S = {"preview": 1.4, "delivery": 6.0}
 
 
 @app.post("/api/render")
@@ -1018,9 +1249,22 @@ async def api_render(request: Request) -> JSONResponse:
         "shots": [{"clip": s["clip"], "in": s["in"], "out": s["out"]}
                   for s in edl["segments"]],
     }
-    RENDERS[job] = {"state": "running", "stage": "cutting", "log": "",
-                    "output": None, "url": None, "started": time.time(),
-                    "done": 0, "total": len(edl["segments"])}
+    shots = len(edl["segments"])
+    planned = meta["planned_s"]
+    RENDERS[job] = progress.Job(
+        "render", f"Rendering — {profile}", id=job, stage="cutting", log="",
+        output=None, url=None, done=0, total=shots, profile=profile,
+        planned_s=planned, detail=f"{shots} shots, {planned:.0f}s")
+    # Measured on this machine: preview cuts run about 1.4x real time end to end and
+    # a delivery render about 6x, with the join a fixed share of it. Not a promise —
+    # it is recalibrated off the first milestone — but it is what makes the bar mean
+    # something in the first thirty seconds, which is when Karl was looking at it.
+    per_s = RENDER_S_PER_CUT_S[profile]
+    RENDERS[job].set_estimate(
+        max(5.0, planned * per_s),
+        [progress.milestone("cutting", "cutting the shots", 0.75),
+         progress.milestone("joining", "joining and mixing", 0.25)],
+        source="measured")
     threading.Thread(target=_render_job, args=(job, edl_path, out_path, meta),
                      daemon=True).start()
     return JSONResponse({"job": job})
@@ -1060,10 +1304,7 @@ def api_renders() -> JSONResponse:
 def api_render_status(job: str) -> JSONResponse:
     if job not in RENDERS:
         raise HTTPException(404, "no such job")
-    entry = RENDERS[job]
-    return JSONResponse({
-        **entry,
-        "elapsed_s": round(time.time() - entry.get("started", time.time()), 1)})
+    return JSONResponse(RENDERS[job].snapshot())
 
 
 # ---------------------------------------------------------------- media

@@ -124,6 +124,38 @@
          overflow: hidden; }
   .bar i { display: block; height: 100%; width: 0; background: var(--accent);
            transition: width .3s; }
+
+  /* The progress strip. One place, below the steps, full width, for every long
+     operation in the app — Karl: "consider a progress tracking bar up top for anything
+     which may take time to complete — re-use across app." It holds more than one at a
+     time on purpose: a render and an Ask overlap routinely. */
+  #progress { width: 100%; display: flex; flex-direction: column; gap: 7px;
+              margin-top: 4px; }
+  #progress[hidden] { display: none; }
+  .job { display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+         gap: 4px 10px; align-items: center; }
+  .job .jlabel { font-weight: 600; font-size: 13px; white-space: nowrap;
+                 cursor: pointer; user-select: none; }
+  .job .jlabel .caret { color: var(--dim); font-size: 10px; margin-right: 4px; }
+  .job .jbar { height: 8px; background: #0d0d11; border: 1px solid var(--line);
+               border-radius: 5px; overflow: hidden; }
+  .job .jbar i { display: block; height: 100%; width: 0; background: var(--accent);
+                 transition: width .5s ease; }
+  .job.estimating .jbar i { background: var(--dim); }
+  .job.done .jbar i { background: var(--good); }
+  .job.failed .jbar i { background: var(--bad); }
+  .job .jnums { font-variant-numeric: tabular-nums; color: var(--dim); font-size: 12px;
+                white-space: nowrap; }
+  .job .jdetail { grid-column: 2 / -1; color: var(--dim); font-size: 12px; }
+  .job.failed .jdetail { color: var(--bad); }
+  .job .jmore { grid-column: 2 / -1; background: #131318; border: 1px solid var(--line);
+                border-radius: 7px; padding: 7px 9px; font-size: 12px; }
+  .job .jmore ol { margin: 0; padding-left: 18px; }
+  .job .jmore li { color: var(--dim); }
+  .job .jmore li.at { color: var(--text); }
+  .job .jmore li.was { color: var(--good); }
+  .job .jmore pre { margin: 7px 0 0; white-space: pre-wrap; color: var(--dim);
+                    max-height: 120px; overflow: auto; }
   /* The monitor: one place where the whole cut plays, fed from the proxies. */
   #player { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
             padding: 10px; margin-bottom: 12px; }
@@ -178,6 +210,10 @@
   </select>
   <button id="render" class="primary">Render</button>
   <div class="steps" id="steps"></div>
+  <!-- Every long operation in the app draws itself here: label, bar, percentage,
+       elapsed, ETA and the line saying what it is doing right now. Empty and hidden
+       when nothing is running. -->
+  <div id="progress" hidden></div>
 </header>
 
 <main>

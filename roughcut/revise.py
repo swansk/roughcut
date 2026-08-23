@@ -24,11 +24,13 @@ Two design rules, both learned the hard way earlier in this project:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from . import config
 from .boundaries import polish_plan
+from .estimate import Estimate, estimate
 from .inference import complete
+from .progress import milestone
 
 PLAN_SCHEMA = {
     "segments": [{"clip": "GX010495.MP4", "in": 1.6, "out": 13.7,
@@ -354,10 +356,101 @@ def validate_plan(payload: Any, clips: dict[str, dict]) -> dict:
     return {"segments": clean, "notes": str(payload.get("notes", "")).strip()[:1200]}
 
 
-def _ask(prompt: str, system: str, clips: dict[str, dict]) -> dict:
+# ------------------------------------------------------------------ progress
+#
+# An Ask is one `claude -p` call three to four minutes long, and a call like that
+# returns nothing until it is over — which is why the board could only ever show an
+# elapsed clock next to the word "thinking". These are the five things the app can
+# actually *observe* happening inside it, given the CLI's streamed deltas: they are
+# offered to the estimator as the vocabulary it may weight, and completed from the
+# stream as they really occur. A milestone nobody can observe would be a bar that
+# stops moving, which is the problem, not the fix.
+ASK_CHECKPOINTS = [
+    ("read", "the prompt is sent and the model has begun reasoning — on a bin whose "
+             "inventory runs to tens of thousands of tokens this is not instant"),
+    ("think", "it stops reasoning and starts writing the answer"),
+    ("shots", "it writes the shots, one JSON object each — the long stretch, and the "
+              "one where progress can be counted as they appear"),
+    ("notes", "it writes its closing note to the editor, after the last shot"),
+    ("polish", "the app validates the plan, snaps the cut points to speech and saves "
+               "it — local work, no model call"),
+]
+
+# Measured on this bin, and stated to the estimator rather than left to be guessed:
+# a 20-shot revision of variant B took 74s, and a first cut from a 39k-token inventory
+# ~200s. The fallback is the pessimistic end of that, because a bar that overruns its
+# own estimate is worse than one that finishes early.
+FALLBACK_ETA_S = 210.0
+FALLBACK_WEIGHTS = (("read", "reading the footage", 2.0),
+                    ("think", "working out the shape", 4.0),
+                    ("shots", "choosing the shots", 5.0),
+                    ("notes", "writing its reasoning", 1.0),
+                    ("polish", "snapping cuts to speech", 0.5))
+
+
+def fallback_estimate(eta_s: float = FALLBACK_ETA_S) -> Estimate:
+    """What the bar uses when the estimate call fails. Never optional — the estimate
+    is a nicety and the work is not, so the work must be able to start without one."""
+    return Estimate(eta_s=eta_s,
+                    milestones=[milestone(k, label, w)
+                                for k, label, w in FALLBACK_WEIGHTS],
+                    source="fallback")
+
+
+def count_shots(text: str) -> int:
+    """How many shots the model has written so far, from a half-finished answer.
+
+    Counting `"clip"` rather than parsing: the text is mid-object most of the time, so
+    there is nothing valid to parse, and every segment carries exactly one `clip` key.
+    Wrong only if the model writes the word in its prose, which costs a slightly eager
+    bar and nothing else.
+    """
+    return text.count('"clip"')
+
+
+def expected_shots(segments: list[dict], target: tuple[float, float]) -> int:
+    """A prior for how many shots the answer will have, so "8 of ~18" can be said
+    before the answer exists. The current cut when there is one — a revision keeps most
+    of what works — otherwise the target length over a typical shot."""
+    if segments:
+        return max(1, len(segments))
+    return max(4, round((float(target[0]) + float(target[1])) / 2 / 8.0))
+
+
+def estimate_ask(clips: dict[str, dict], segments: list[dict], note: str,
+                 target: tuple[float, float], *, shots: int | None = None) -> Estimate:
+    """The cheap call that draws the bar, made before the expensive one that fills it."""
+    shots = shots if shots is not None else expected_shots(segments, target)
+    material = sum(float(c.get("duration") or 0.0) for c in clips.values())
+    lines = sum(len(c.get("transcript") or []) for c in clips.values())
+    seen = sum(1 for c in clips.values() if (c.get("visual") or {}).get("moments"))
+    first = not segments
+    what = ("An assistant film editor is about to write the FIRST cut of a short film "
+            "from one bin of raw footage." if first else
+            "An assistant film editor is about to revise a short film in response to "
+            "one note from the editor.")
+    facts = f"""It is a single call to a top-tier model through the Claude Code CLI, with
+thinking enabled, and it must return the whole edit as JSON.
+
+* {len(clips)} clips, {material:.0f}s of material, {lines} transcript lines\
+{f', {seen} clips with a visual pass' if seen else ''}
+* the prompt is roughly {int((lines * 12 + len(clips) * 120 + seen * 400) / 1000)}k tokens
+* the answer will be about {shots} shots, each a JSON object with a one-sentence reason
+* the editor's note is {len(note.split())} words
+* target length {target[0]:.0f}-{target[1]:.0f}s
+* measured on this machine: a 20-shot revision took 74s end to end; a first cut from a
+  39k-token inventory took about 200s. Calls are killed at 600s."""
+    return estimate(what, facts, ASK_CHECKPOINTS,
+                    fallback=fallback_estimate(),
+                    eta_limits=(20.0, float(config.call_timeout_s())))
+
+
+def _ask(prompt: str, system: str, clips: dict[str, dict],
+         on_partial: Callable[[str, str], None] | None = None) -> dict:
     result = complete(
         prompt, role=config.ROLE_SKELETON, schema=PLAN_SCHEMA, system=system,
-        validate=lambda payload: validate_plan(payload, clips), retries=1)
+        validate=lambda payload: validate_plan(payload, clips), retries=1,
+        on_partial=on_partial)
     # Boundary polish runs on the *validated* plan, so it can assume in/out are
     # real numbers inside a real clip and worry only about where they land in the
     # speech. Both callers get it: a first cut has the same clipped words as a
@@ -374,17 +467,19 @@ def _ask(prompt: str, system: str, clips: dict[str, dict]) -> dict:
 
 def propose(segments: list[dict], clips: dict[str, dict], story: str, note: str,
             target: tuple[float, float] = (120.0, 180.0),
-            events: list[dict] | None = None) -> dict:
+            events: list[dict] | None = None,
+            on_partial: Callable[[str, str], None] | None = None) -> dict:
     """Ask for a revision. Returns {'segments', 'notes', 'usage'}."""
     if not note.strip():
         raise ValueError("empty note")
     return _ask(build_prompt(segments, clips, story, note, target, events),
-                SYSTEM, clips)
+                SYSTEM, clips, on_partial)
 
 
 def originate(clips: dict[str, dict], story: str, note: str = "",
               target: tuple[float, float] = (120.0, 180.0),
-              events: list[dict] | None = None) -> dict:
+              events: list[dict] | None = None,
+              on_partial: Callable[[str, str], None] | None = None) -> dict:
     """Ask for a *first* cut. Same return shape as `propose`.
 
     Neither `story` nor `note` is required. Intent is the human's half of the loop and
@@ -396,4 +491,4 @@ def originate(clips: dict[str, dict], story: str, note: str = "",
     if not clips:
         raise ValueError("no analysed clips to cut from")
     return _ask(build_first_prompt(clips, story, note, target, events),
-                FIRST_SYSTEM, clips)
+                FIRST_SYSTEM, clips, on_partial)
