@@ -10,6 +10,20 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **A free motion track, and a visual pass that can look closely at one moment.** The visual
+  pass samples every 4s; a jump lasts one or two seconds, so whether an air is seen at all is a
+  coin toss on phase, and sampling a 44-minute bin at 1s would cost four times as much for
+  frames that are almost all snow. `roughcut/events.py` adds the cheap half of the answer:
+  `scdet`'s frame difference over the 720p proxy at 10 Hz — one ffmpeg pass, ~6s per 5-minute
+  clip, no model call — combined with the 10 Hz onset track every audio sidecar has carried
+  since R8, as robust z-scores so a POV run and a lift cabin are each judged against their own
+  noise floor. Its peaks are **candidate windows**: `research/tools/event_scan.py` writes them
+  out (motion tracks cached beside the visual sidecars), and `visual_pass.py --windows` reads
+  one sheet per window at any interval, writing `<stem>.fine.json` beside the coarse
+  `<stem>.visual.json` and never over it — two paid observations of the same clip, cached per
+  window so a second stage can add three more without re-buying the five already on disk.
+  `contact_sheet.py` grew `--start/--end` to make that possible, and keeps labelling cells in
+  **clip** seconds through the input seek, which is the whole value of a fine read.
 - **The visual pass runs from the board, and what it saw is on the board.** Karl, on the first
   Killington cut: *"the analysis missed some critical moments that would have required video
   analysis — like me falling into a river."* The pass that finds those has existed since the

@@ -68,11 +68,18 @@ def probe_rotation(video: Path) -> float:
 
 
 def extract_frames(video: Path, workdir: Path, interval: float, width: int,
-                   orient: str) -> list[Path]:
+                   orient: str,
+                   window: tuple[float, float] | None = None) -> list[Path]:
     pattern = str(workdir / "f_%05d.jpg")
     cmd = ["ffmpeg", "-v", "error", "-y"]
     if orient == "none":
         cmd.append("-noautorotate")     # must precede -i to affect decoding
+    if window is not None:
+        # Input seeking: a nine-second window costs a seek, not a decode of everything
+        # before it. Output timestamps restart at zero as a result, which is why the
+        # caller adds the window's start back when it labels the cells.
+        cmd += ["-ss", f"{window[0]:.3f}",
+                "-t", f"{max(0.0, window[1] - window[0]):.3f}"]
     cmd += ["-i", str(video), "-vf", f"fps=1/{interval},scale={width}:-2",
             "-q:v", "3", pattern]
     r = run(cmd)
@@ -114,14 +121,19 @@ class Sheet:
 
 
 def build_sheets(video: Path, out_dir: Path, interval: float, cols: int, rows: int,
-                 width: int, label: str | None, orient: str) -> dict:
+                 width: int, label: str | None, orient: str,
+                 window: tuple[float, float] | None = None) -> dict:
     duration = probe_duration(video)
     rotation = probe_rotation(video)
     name = label or video.stem
     out_dir.mkdir(parents=True, exist_ok=True)
+    # A window shifts every timestamp this tool reports; the labels drawn on the sheet
+    # and the JSON index must both stay in *clip* seconds, because that is the only
+    # frame of reference anything downstream — a moment, a segment, an EDL — uses.
+    offset = window[0] if window else 0.0
 
     with tempfile.TemporaryDirectory() as td:
-        frames = extract_frames(video, Path(td), interval, width, orient)
+        frames = extract_frames(video, Path(td), interval, width, orient, window)
         if not frames:
             raise RuntimeError(f"no frames extracted from {video}")
 
@@ -140,7 +152,7 @@ def build_sheets(video: Path, out_dir: Path, interval: float, cols: int, rows: i
 
             for k, frame_path in enumerate(chunk):
                 gi = s_idx + k                      # global frame index
-                t = gi * interval                   # sample timestamp
+                t = offset + gi * interval          # sample timestamp, clip seconds
                 r, c = divmod(k, cols)
                 x, y = c * cell_w + PAD, r * cell_h + PAD
                 canvas.paste(Image.open(frame_path), (x, y))
@@ -158,6 +170,7 @@ def build_sheets(video: Path, out_dir: Path, interval: float, cols: int, rows: i
         "label": name,
         "duration_s": round(duration, 2),
         "interval_s": interval,
+        "window": [round(window[0], 2), round(window[1], 2)] if window else None,
         "rotation_metadata": rotation,
         "orient_mode": orient,
         "thumb_size": [thumb_w, thumb_h],
@@ -180,6 +193,11 @@ def main() -> int:
     ap.add_argument("--width", type=int, default=320, help="thumbnail width in px")
     ap.add_argument("--neutralize", action="store_true",
                     help="label sheets clip_NN instead of the filename (R7 integrity control)")
+    ap.add_argument("--start", type=float, default=None,
+                    help="only sample from this second of each clip (clip seconds)")
+    ap.add_argument("--end", type=float, default=None,
+                    help="stop sampling at this second. With --start this makes a "
+                         "window sheet: same tool, same labels, a slice of one clip")
     ap.add_argument("--orient", choices=("auto", "none"), default="auto",
                     help="'auto' honours container rotation metadata; 'none' ignores it "
                          "(-noautorotate). GoPro bins here need 'none' — their rotation "
@@ -200,12 +218,21 @@ def main() -> int:
         print(f"error: no video files found in {args.input}", file=sys.stderr)
         return 2
 
+    window = None
+    if args.start is not None or args.end is not None:
+        window = (max(0.0, args.start or 0.0),
+                  args.end if args.end is not None else float("inf"))
+
     index = {"interval_s": args.interval, "grid": [args.cols, args.rows], "clips": []}
     for i, video in enumerate(videos, start=1):
         label = f"clip_{i:02d}" if args.neutralize else None
         try:
+            clip_window = window
+            if window is not None and window[1] == float("inf"):
+                clip_window = (window[0], probe_duration(video))
             entry = build_sheets(video, args.out, args.interval, args.cols,
-                                 args.rows, args.width, label, args.orient)
+                                 args.rows, args.width, label, args.orient,
+                                 clip_window)
         except RuntimeError as exc:
             print(f"skip {video.name}: {exc}", file=sys.stderr)
             continue
