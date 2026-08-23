@@ -10,6 +10,25 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **`assemble.py --profile preview|delivery`, and the board can ask for either.** `preview` is
+  exactly today's fixed 1920×1080 @ 24000/1001, veryfast/crf 20 — unchanged, still what quick
+  versions use. `delivery` conforms every clip to the bin's own majority frame rate (measured,
+  not guessed: Killington splits 9 clips at 30000/1001 against 3 at 60000/1001) and up to
+  3840×2160, capped so a bin shot smaller than 4K — or the test suite's synthetic 320×180 clips —
+  is never upscaled, at preset slow / crf 18 / 256k audio. The numbers behind those choices are
+  in the research commit just before this one. The Render button gets a `preview` /
+  `delivery (4K)` select next to it (default preview, so nothing already using the board changes
+  behaviour); `/api/render` accepts `profile`, rejects anything else with a 400, and records it
+  plus the rendered resolution in the render's metadata; the versions list shows e.g. "· 4K" for
+  a delivery render. Renders made before this feature carry neither key and still list correctly,
+  as preview. Five new tests: the pure sizing rule (never upscale, cap at 4K), the
+  default-is-preview path, delivery's no-upscale guarantee against the synthetic clips (verified
+  against the file on disk, not just the metadata), an unknown-profile 400, and pre-existing
+  metadata without the new keys. Verified live against the real Killington footage too, mixing a
+  60fps and two 30fps clips through one delivery render: resolved to 3840×2160 @ 30000/1001 as
+  measured, not 24000/1001 or an upscaled canvas. A full delivery render of the 178s cut is
+  estimated at ~17 minutes from one shot's measured rate and was not attempted — over the
+  ~10-minute bar for actually running one.
 - **The visual pass runs from the board, and what it saw is on the board.** Karl, on the first
   Killington cut: *"the analysis missed some critical moments that would have required video
   analysis — like me falling into a river."* The pass that finds those has existed since the

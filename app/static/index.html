@@ -163,6 +163,11 @@
   <span class="hint" id="saveState">saved</span>
   <button id="snap" title="Extend cuts that open mid-sentence or clip a line off, so each shot carries a whole thought">Fix cut points</button>
   <button id="undo" title="Undo (u)">Undo</button>
+  <select id="renderProfile"
+          title="preview: fast 1920x1080 @ 24fps — what quick versions use. delivery: the bin's own frame rate, up to 4K, never upscaled — slower, bigger, for the final file.">
+    <option value="preview" selected>preview</option>
+    <option value="delivery">delivery (4K)</option>
+  </select>
   <button id="render" class="primary">Render</button>
   <div class="steps" id="steps"></div>
 </header>

@@ -327,6 +327,91 @@ def test_a_render_can_carry_a_label(client, project):
     assert listed[f"cut_{job}.mp4"]["note"] == "proposal abc123 — not accepted"
 
 
+# ------------------------------------------------------------------ render profiles
+
+def _resolution(path: Path) -> tuple[int, int]:
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                        "-show_entries", "stream=width,height", "-of", "csv=p=0",
+                        str(path)], capture_output=True, text=True)
+    w, h = r.stdout.strip().split(",")
+    return int(w), int(h)
+
+
+def test_delivery_resolution_caps_at_4k_and_never_upscales():
+    """The pure sizing rule behind the delivery profile, isolated from ffmpeg: a
+    bin bigger than 4K gets capped; a bin already at or below 4K — Killington's own
+    3840x2160, or the test suite's 320x180 synthetic clips — is left alone rather
+    than stretched up to fill a bigger canvas that carries no more real detail."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "research" / "tools"))
+    import assemble
+    assert assemble.delivery_resolution(3840, 2160) == (3840, 2160)
+    assert assemble.delivery_resolution(5312, 2988) == (3840, 2160)
+    assert assemble.delivery_resolution(320, 180) == (320, 180)
+
+
+def test_render_defaults_to_the_preview_profile(client, project):
+    """No `profile` in the request must behave exactly as it always has — delivery
+    is opt-in, never a silent upgrade for a render already in flight elsewhere."""
+    body = {"segments": [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 2.5, "why": "a"}]}
+    job = client.post("/api/render", json=body).json()["job"]
+    deadline = time.time() + 90
+    while client.get(f"/api/render/{job}").json()["state"] == "running":
+        assert time.time() < deadline, "render timed out"
+        time.sleep(0.5)
+    listed = {r["name"]: r for r in client.get("/api/renders").json()["renders"]}
+    entry = listed[f"cut_{job}.mp4"]
+    assert entry["profile"] == "preview"
+    assert (entry["width"], entry["height"]) == (1920, 1080)   # unchanged fast-path size
+
+
+def test_delivery_profile_never_upscales_a_small_bin(client, project):
+    """The synthetic clips are 320x180, far below the 4K cap. Delivery must render
+    them at their own size — the same rule build_proxy already applies to proxies —
+    and the versions list must be able to say so."""
+    body = {"segments": [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 2.5, "why": "a"}],
+            "profile": "delivery"}
+    job = client.post("/api/render", json=body).json()["job"]
+    deadline = time.time() + 90
+    while client.get(f"/api/render/{job}").json()["state"] == "running":
+        assert time.time() < deadline, "render timed out"
+        time.sleep(0.5)
+    status = client.get(f"/api/render/{job}").json()
+    assert status["state"] == "done", status["log"][-800:]
+    listed = {r["name"]: r for r in client.get("/api/renders").json()["renders"]}
+    entry = listed[f"cut_{job}.mp4"]
+    assert entry["profile"] == "delivery"
+    assert (entry["width"], entry["height"]) == (320, 180), \
+        "delivery must not upscale a bin shot smaller than 4K"
+    assert _resolution(Path(status["output"])) == (320, 180)      # the file agrees
+
+
+def test_unknown_render_profile_is_rejected(client, project):
+    body = {"segments": [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 2.5, "why": "a"}],
+            "profile": "cinema-grade"}
+    assert client.post("/api/render", json=body).status_code == 400
+
+
+def test_renders_from_before_the_profile_existed_still_list_cleanly(client, project):
+    """Old metadata on disk has neither `profile` nor `width`/`height` — it must
+    read as the preview render it always was, never crash the versions list, and
+    never be mistaken for a delivery render."""
+    body = {"segments": [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 1.5, "why": "a"}]}
+    job = client.post("/api/render", json=body).json()["job"]
+    deadline = time.time() + 90
+    while client.get(f"/api/render/{job}").json()["state"] == "running":
+        assert time.time() < deadline, "render timed out"
+        time.sleep(0.5)
+    meta_path = Path(client.get(f"/api/render/{job}").json()["output"]).with_suffix(".json")
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    del meta["profile"], meta["width"], meta["height"]     # simulate a pre-existing render
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+    listed = {r["name"]: r for r in client.get("/api/renders").json()["renders"]}
+    entry = listed[f"cut_{job}.mp4"]
+    assert entry["profile"] == "preview"
+    assert entry["width"] is None and entry["height"] is None
+
+
 # ------------------------------------------------------------------ music
 
 def _loudness(path: Path) -> float:
