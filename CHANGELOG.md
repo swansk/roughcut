@@ -83,6 +83,19 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Fixed
+- **Pressing play twice while a shot was still opening left the monitor playing behind its
+  own transport.** Karl, on Killington: *"the timeline LOOKS good, but I cannot play it
+  seems?"* On the synthetic test project a proxy opens in milliseconds; on a real bin the
+  sixteen shot cards hold every connection the browser gives one origin, and the monitor's
+  first `play()` waits 2–3 seconds on `loadedmetadata` (measured against the live server:
+  first frame 3.0s after the click, with nothing on screen in between). Press play again in
+  that window — the obvious thing to do when a button flips to ❚❚ Pause and nothing happens —
+  and the second press paused a monitor that had not started, after which the first press's
+  deferred callback fired and played the video anyway. Sound came out of a board whose clock
+  read 0:00.0, whose playhead never moved, which never reached the shot's out-point and never
+  handed over to the next one. The monitor counts its commands now; a deferred callback that
+  finds the count moved on does nothing, and a buffer re-pointed at another clip no longer
+  parks the old shot's in-point on the new one.
 - **A revision with the visual pass behind it ran past the 300s call timeout and was
   killed.** With every Killington clip looked at, the originating prompt is ~39k tokens and
   the plan it returns ~15k, which took 199s on the CLI backend; the revision of the 16-shot

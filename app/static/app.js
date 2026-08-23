@@ -186,7 +186,15 @@ function nudge(i, edge, d) {
  * parked on its in-point, so a cut costs a swap of which element is visible rather than
  * the time it takes to open a file. Not gapless — a rough cut does not need to be — but
  * close enough that the rhythm of the edit reads. */
-const player = { vids: [], cur: 0, idx: -1, playing: false, single: false, raf: 0 };
+/* `gen` counts commands to the monitor. Opening a shot is asynchronous — a proxy that
+ * is not in the browser's cache takes seconds to give up its metadata — and until this
+ * counter existed a command issued in that window did not cancel the one before it:
+ * press play, press it again because nothing had happened yet, and the second press
+ * paused a monitor that was not yet playing while the first press's callback fired
+ * afterwards and started the video anyway. The board then believed it was stopped —
+ * no clock, no playhead, no out-point, no next shot — while sound came out of it.
+ * Every command bumps `gen`; a deferred callback that finds it moved on does nothing. */
+const player = { vids: [], cur: 0, idx: -1, playing: false, single: false, raf: 0, gen: 0 };
 
 const stem = (clip) => String(clip).replace(/\.[^.]+$/, '');
 
@@ -206,7 +214,9 @@ function arm(v, seg) {
     v.src = src;
     v.load();
   }
-  const park = () => { v.currentTime = seg.in; };
+  // Deferred, so by the time metadata arrives this buffer may have been pointed at a
+  // different clip; parking the old shot would then seek the new one.
+  const park = () => { if (v.dataset.src === src) v.currentTime = seg.in; };
   if (v.readyState >= 1) park();
   else v.addEventListener('loadedmetadata', park, { once: true });
 }
@@ -229,6 +239,7 @@ function playFrom(i, { single = false } = {}) {
   const v = liveVideo();
   const resume = player.idx === i && !player.playing && !!v.dataset.src
     && v.currentTime > seg.in && v.currentTime < seg.out - 0.1;
+  const g = ++player.gen;
   player.idx = i;
   player.single = single;
   sel = i;
@@ -238,11 +249,12 @@ function playFrom(i, { single = false } = {}) {
   showLive();
   v.muted = false;
   const go = () => {
+    if (g !== player.gen || !player.playing) return;   // pause, or a later command, won
     if (!resume) v.currentTime = seg.in;
     v.play().catch(() => {});
   };
+  player.playing = true;            // before go(), which refuses to start a paused monitor
   if (v.readyState >= 1) go(); else v.addEventListener('loadedmetadata', go, { once: true });
-  player.playing = true;
   cueBed(filmStart(i) + (resume ? Math.max(0, v.currentTime - seg.in) : 0));
   schedule();
   paintStrip();
@@ -250,6 +262,7 @@ function playFrom(i, { single = false } = {}) {
 }
 
 function pauseCut() {
+  player.gen++;                     // any shot still opening must not start behind this
   player.vids.forEach((v) => v.pause());
   if (bed.el) bed.el.pause();
   player.playing = false;
@@ -284,6 +297,7 @@ function tick() {
 function advance() {
   const v = liveVideo();
   v.pause();
+  const g = ++player.gen;           // the shot we are leaving must not restart itself
   const next = player.idx + 1;
   if (player.single || next >= segs.length) {
     player.playing = false;
@@ -301,7 +315,11 @@ function advance() {
   arm(nv, segs[next]);          // normally armed already; re-arming survives edits made mid-play
   nv.muted = false;
   showLive();
-  const go = () => { nv.currentTime = segs[next].in; nv.play().catch(() => {}); };
+  const go = () => {
+    if (g !== player.gen || !player.playing) return;
+    nv.currentTime = segs[next].in;
+    nv.play().catch(() => {});
+  };
   if (nv.readyState >= 1) go(); else nv.addEventListener('loadedmetadata', go, { once: true });
   if (segs[next + 1]) arm(v, segs[next + 1]);
   paintStrip();

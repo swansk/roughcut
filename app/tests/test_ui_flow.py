@@ -430,6 +430,39 @@ def test_space_toggles_the_cut_and_enter_plays_one_shot(page):
     assert page.evaluate("document.querySelector('#pv0').currentTime") >= 2.9
 
 
+def test_pressing_play_twice_while_a_shot_opens_leaves_the_monitor_stopped(page):
+    """Karl, on the Killington bin: *"I cannot play it seems"*.
+
+    On this synthetic project a proxy opens instantly. On a real bin it does not —
+    sixteen shot cards are holding every connection the browser will give the origin,
+    and the monitor's first `play()` waits seconds on `loadedmetadata`. Anyone presses
+    play again in that window, and that used to pause a monitor which had not started,
+    after which the *first* press's callback fired and played the video anyway: sound
+    coming out of a board whose clock read 0:00.0, whose playhead never moved and which
+    never reached the shot's out-point. The deferral is forced here, because it is the
+    window and not the bin that carries the bug."""
+    stuck = page.evaluate("""() => {
+        const v = document.querySelector('#pv0');
+        // the proxy has not opened yet, so playFrom must defer its play()
+        Object.defineProperty(v, 'readyState', {configurable: true, get: () => 0});
+        playFrom(0);                                      // press play
+        pauseCut();                                       // press it again — nothing happened
+        delete v.readyState;
+        v.dispatchEvent(new Event('loadedmetadata'));     // the proxy opens, late
+        return {playing: player.playing, paused: v.paused,
+                transport: document.querySelector('#playCut').textContent};
+    }""")
+    assert stuck["paused"], "the superseded press started a video the board thinks is paused"
+    assert not stuck["playing"]
+    assert stuck["transport"].startswith("▶"), "the transport and the video must agree"
+
+    # and the guard has not broken playing: the next press works normally
+    page.locator("#playCut").click()
+    page.wait_for_function("player.playing && player.idx === 0", timeout=10000)
+    page.wait_for_function(
+        "document.querySelector('.screen video.live').currentTime >= 1.2", timeout=10000)
+
+
 # ------------------------------------------------------------------ what was seen
 
 def test_what_the_visual_pass_saw_shows_on_the_cards_and_in_the_library(page, project):
