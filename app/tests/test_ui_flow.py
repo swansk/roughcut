@@ -521,6 +521,29 @@ def test_playing_from_a_shot_card_brings_the_monitor_into_view(page):
         " return r.top >= 0 && r.bottom <= innerHeight + 1; })()", timeout=5000)
 
 
+def test_the_versions_list_says_which_render_is_the_cut_on_the_board(page, project):
+    """Karl: *"Cut board doesn't seem to reflect the render"* — after watching a rendered
+    proposal that had never been accepted. It was labelled as a proposal, but nothing said
+    which of the renders the board *did* reflect, and their names are hashes."""
+    page.locator("#render").click()
+    page.wait_for_function(
+        "document.querySelectorAll('#versions .ver').length >= 1", timeout=120000)
+    page.wait_for_function(
+        "[...document.querySelectorAll('#versions .ver')]"
+        ".some((r) => r.textContent.includes('this cut'))", timeout=10000)
+
+    # trim the timeline and the render is no longer what is on the board
+    page.locator(".seg").first.locator("button", has_text="+").nth(1).click()
+    assert not page.evaluate(
+        "[...document.querySelectorAll('#versions .ver')]"
+        ".some((r) => r.textContent.includes('this cut'))"), \
+        "an edited timeline is not the rendered one any more"
+    page.locator("#undo").click()
+    page.wait_for_function(
+        "[...document.querySelectorAll('#versions .ver')]"
+        ".some((r) => r.textContent.includes('this cut'))", timeout=5000)
+
+
 # ------------------------------------------------------------------ what was seen
 
 def test_what_the_visual_pass_saw_shows_on_the_cards_and_in_the_library(page, project):

@@ -870,6 +870,12 @@ async def api_render(request: Request) -> JSONResponse:
         "story": (edl.get("story") or "")[:300],
         "note": (body.get("label") or "")[:120],
         "music": (edl.get("effects_music") or {}).get("asset"),
+        # The shot list this file was made from, so the board can say which version is
+        # the cut currently on the timeline. Karl watched a rendered *proposal* and
+        # reported that the board "doesn't seem to reflect the render" — it did not,
+        # and nothing on screen said which of the renders it did reflect.
+        "shots": [{"clip": s["clip"], "in": s["in"], "out": s["out"]}
+                  for s in edl["segments"]],
     }
     RENDERS[job] = {"state": "running", "stage": "cutting", "log": "",
                     "output": None, "url": None, "started": time.time(),
@@ -898,7 +904,7 @@ def api_renders() -> JSONResponse:
             "created": meta.get("created", mp4.stat().st_mtime),
             "duration_s": meta.get("duration_s"), "segments": meta.get("segments"),
             "planned_s": meta.get("planned_s"), "note": meta.get("note", ""),
-            "music": meta.get("music"),
+            "music": meta.get("music"), "shots": meta.get("shots"),
         })
     out.sort(key=lambda r: r["created"], reverse=True)
     return JSONResponse({"renders": out})

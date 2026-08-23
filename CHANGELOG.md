@@ -83,6 +83,18 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Fixed
+- **Nothing said which render was the cut on the board.** Karl: *"Cut board doesn't seem to
+  reflect the render"* — after watching `cut_91e0b993`, a render of the 20-shot *proposal*,
+  against a board holding the 16-shot cut. That render was correctly labelled *proposal
+  ed8134bb — not accepted*, but the versions list is three files whose names are hashes and
+  nothing marked the one the board *did* reflect. Renders record the shot list they were made
+  from now, and a version matching the timeline is labelled **· this cut** — recomputed on
+  every edit, so it disappears the moment the timeline moves away from it. Renders made
+  before this fall back to matching on shot count and total length. (Verified against the two
+  Killington renders: `cut_29ed8c3f` is the 16-shot cut on the board, `cut_91e0b993` is the
+  proposal. Frames extracted from the render at three shot boundaries match the proxies at
+  the EDL's clip times to 0 frames at the head and −4 frames by shot 13 — the render runs
+  0.161 s long over 177.4 s, ~10 ms a shot, already recorded as `planned_s` vs `duration_s`.)
 - **Playing a shot from its card played it in a monitor that was off the screen.** The
   monitor is at the top of the column and the shot list runs a long way below it; on the
   16-shot Killington cut, clicking shot 12's poster started playback 3,163 px above the

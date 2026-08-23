@@ -17,6 +17,7 @@ let segs = [];                // working segment list
 let sel = 0;
 let analysing = false;
 let nRenders = 0;
+let renderList = [];          // the versions list, kept so it can be repainted on edit
 const undoStack = [];
 
 const $ = (s) => document.querySelector(s);
@@ -522,6 +523,7 @@ function render() {
   $('#total').innerHTML = `<span class="${cls}">${fmt(t)}</span>`;
   $('#band').textContent = `${segs.length} shots · target ${fmt(lo)}–${fmt(hi)}`;
   paintSteps();
+  paintVersions();          // so "this cut" follows the timeline rather than the last fetch
   renderLibrary();
 }
 
@@ -1112,6 +1114,26 @@ function rejectProposal() {
 /* Renders as versions rather than "the newest file". Judging an edit is comparative —
  * reacting to a choice is faster and more informative than judging one artifact — so
  * two slots, and every past render stays reachable. */
+
+/* Is this file a render of what is on the timeline right now?
+ *
+ * Karl watched a rendered *proposal* and reported that the board "doesn't seem to
+ * reflect the render". It did not and could not — that proposal was never accepted —
+ * but nothing on screen said which of the renders the board *did* reflect, and with
+ * three files whose names are hashes there was no way to work it out. Renders record
+ * their shot list now; the ones made before that fall back to matching on shot count
+ * and total length, which is weaker but is all they can support. */
+function isThisCut(v) {
+  if (!segs.length) return false;
+  if (v.shots) {
+    return v.shots.length === segs.length && v.shots.every((s, i) =>
+      s.clip === segs[i].clip && Math.abs(s.in - segs[i].in) < 0.005
+      && Math.abs(s.out - segs[i].out) < 0.005);
+  }
+  return v.segments === segs.length && v.planned_s != null
+    && Math.abs(v.planned_s - total()) < 0.05;
+}
+
 /* Renders made before the metadata sidecar existed have no duration or shot count;
  * "0:00.0 · ? shots" reads as a broken file rather than an old one. */
 function versionLabel(v) {
@@ -1119,7 +1141,8 @@ function versionLabel(v) {
     : `${v.name.replace(/^cut_|\.mp4$/g, '')} · older render`;
   // A render can carry a label — "proposal, not accepted" is the one that matters, since
   // a version that was never the cut must not read as if it had been.
-  return (v.music ? `${base} ♪` : base) + (v.note ? ` · ${v.note}` : '');
+  return (v.music ? `${base} ♪` : base) + (v.note ? ` · ${v.note}` : '')
+    + (isThisCut(v) ? ' · this cut' : '');
 }
 
 function loadVersion(v, slot) {
@@ -1129,12 +1152,13 @@ function loadVersion(v, slot) {
   $(`#label${slot}`).textContent = versionLabel(v);
 }
 
-async function refreshVersions() {
-  const { renders } = await (await fetch('/api/renders')).json();
-  nRenders = renders.length;
+/* Rebuilds only the list, never the A/B slots — repainted on every edit so that
+ * "this cut" tracks the timeline instead of going stale the moment anything is trimmed. */
+function paintVersions() {
   const box = $('#versions');
-  box.innerHTML = renders.length ? '' : '<div class="hint">no renders yet</div>';
-  renders.forEach((v, i) => {
+  if (!box) return;
+  box.innerHTML = renderList.length ? '' : '<div class="hint">no renders yet</div>';
+  renderList.forEach((v) => {
     const when = new Date(v.created * 1000).toLocaleTimeString([],
       { hour: '2-digit', minute: '2-digit' });
     const row = document.createElement('div');
@@ -1148,9 +1172,16 @@ async function refreshVersions() {
       row.appendChild(b);
     });
     box.appendChild(row);
-    if (i === 0) loadVersion(v, 'A');       // newest is what you just made
-    if (i === 1) loadVersion(v, 'B');       // and the one before it, to compare
   });
+}
+
+async function refreshVersions() {
+  const { renders } = await (await fetch('/api/renders')).json();
+  nRenders = renders.length;
+  renderList = renders;
+  paintVersions();
+  if (renders[0]) loadVersion(renders[0], 'A');   // newest is what you just made
+  if (renders[1]) loadVersion(renders[1], 'B');   // and the one before it, to compare
   // An empty black player labelled "B —" is not a feature; the B slot appears when
   // there is a second version to compare against.
   $('#slotB').style.display = renders.length > 1 ? 'block' : 'none';
