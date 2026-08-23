@@ -83,6 +83,15 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Fixed
+- **A byte range was answered by reading the whole file into memory.** `bytes=0-` is the
+  first thing every `<video>` sends, and `fh.read(end - start + 1)` on it pulled an entire
+  proxy into RAM before a byte reached the browser — 85 MB for a Killington clip, sixteen of
+  them plus two 150 MB render previews on one load of the board. Measured against the live
+  server: RSS went from 187 MB to 674 MB on a single page load, all-time peak 1.15 GB, for
+  files it only ever had to copy. Ranges stream a megabyte at a time now (taking 2 MB off the
+  front of a 20 MB file costs 2 MB, asserted). In passing: `bytes=-500` meant the *first* 501
+  bytes rather than the last 500 — harmless while every proxy is written `+faststart` and no
+  player has to hunt for a trailing moov atom, and a silently wrong answer the day one does.
 - **The monitor had one way of reporting anything: a black rectangle.** A proxy still
   opening, a proxy that will not open at all, and a browser refusing to start an unmuted
   video looked identical to each other and identical to a broken board — `play()`'s rejection
