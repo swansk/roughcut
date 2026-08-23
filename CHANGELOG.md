@@ -102,6 +102,65 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Fixed
+- **Nothing said which render was the cut on the board.** Karl: *"Cut board doesn't seem to
+  reflect the render"* — after watching `cut_91e0b993`, a render of the 20-shot *proposal*,
+  against a board holding the 16-shot cut. That render was correctly labelled *proposal
+  ed8134bb — not accepted*, but the versions list is three files whose names are hashes and
+  nothing marked the one the board *did* reflect. Renders record the shot list they were made
+  from now, and a version matching the timeline is labelled **· this cut** — recomputed on
+  every edit, so it disappears the moment the timeline moves away from it. Renders made
+  before this fall back to matching on shot count and total length. (Verified against the two
+  Killington renders: `cut_29ed8c3f` is the 16-shot cut on the board, `cut_91e0b993` is the
+  proposal. Frames extracted from the render at three shot boundaries match the proxies at
+  the EDL's clip times to 0 frames at the head and −4 frames by shot 13 — the render runs
+  0.161 s long over 177.4 s, ~10 ms a shot, already recorded as `planned_s` vs `duration_s`.)
+- **Playing a shot from its card played it in a monitor that was off the screen.** The
+  monitor is at the top of the column and the shot list runs a long way below it; on the
+  16-shot Killington cut, clicking shot 12's poster started playback 3,163 px above the
+  viewport — measured — where nothing about it could be seen. The board played and the page
+  sat still, which is indistinguishable from a board that will not play. A play started from
+  a card, or with <kbd>space</kbd>/<kbd>enter</kbd> from down the list, scrolls the monitor
+  back into view first.
+- **The board served its own code with no cache headers of any kind.** No `Cache-Control`,
+  no `ETag`, no `Last-Modified` — nothing telling a browser either to keep `index.html` and
+  `app.js` or to check them. Chrome does refetch such a response (measured: on a reload both
+  came back 200 from the network, with no conditional headers), but that is a browser's
+  choice rather than a promise, and the two files have to agree with each other: a page
+  holding a monitor that the cached script has never heard of paints a board that will not
+  play, which is the shape of the report this came out of. Both are `no-store` now; they are
+  64 KB over loopback.
+- **A byte range was answered by reading the whole file into memory.** `bytes=0-` is the
+  first thing every `<video>` sends, and `fh.read(end - start + 1)` on it pulled an entire
+  proxy into RAM before a byte reached the browser — 85 MB for a Killington clip, sixteen of
+  them plus two 150 MB render previews on one load of the board. Measured against the live
+  server: RSS went from 187 MB to 674 MB on a single page load, all-time peak 1.15 GB, for
+  files it only ever had to copy. Ranges stream a megabyte at a time now (taking 2 MB off the
+  front of a 20 MB file costs 2 MB, asserted). In passing: `bytes=-500` meant the *first* 501
+  bytes rather than the last 500 — harmless while every proxy is written `+faststart` and no
+  player has to hunt for a trailing moov atom, and a silently wrong answer the day one does.
+- **The monitor had one way of reporting anything: a black rectangle.** A proxy still
+  opening, a proxy that will not open at all, and a browser refusing to start an unmuted
+  video looked identical to each other and identical to a broken board — `play()`'s rejection
+  was thrown away by an empty `.catch(() => {})`, and a media error was reported only if it
+  struck the live buffer mid-play, and then only as a guess (*"previews build in the
+  background"*) rather than as what the browser had actually said. The screen carries the
+  answer now: *opening CLIP_04…*, *buffering…*, `CLIP_A: that proxy would not open — it may
+  still be building (code 4)`, or *the browser refused to play — click the monitor, then press
+  play again* — and clicking the monitor does play it, which is what makes that advice
+  followable. Errors also stop the transport instead of leaving it reading ❚❚ Pause.
+- **Pressing play twice while a shot was still opening left the monitor playing behind its
+  own transport.** Karl, on Killington: *"the timeline LOOKS good, but I cannot play it
+  seems?"* On the synthetic test project a proxy opens in milliseconds; on a real bin the
+  sixteen shot cards hold every connection the browser gives one origin, and the monitor's
+  first `play()` waits 2–3 seconds on `loadedmetadata` (measured against the live server:
+  first frame 3.0s after the click, with nothing on screen in between). Press play again in
+  that window — the obvious thing to do when a button flips to ❚❚ Pause and nothing happens —
+  and the second press paused a monitor that had not started, after which the first press's
+  deferred callback fired and played the video anyway. Sound came out of a board whose clock
+  read 0:00.0, whose playhead never moved, which never reached the shot's out-point and never
+  handed over to the next one. The monitor counts its commands now; a deferred callback that
+  finds the count moved on does nothing, and a buffer re-pointed at another clip no longer
+  parks the old shot's in-point on the new one.
 - **Karl's "the video quality seems like there may have been an encoding issue" feeling on the
   Killington renders was measured, not guessed — and it's real, though not a bug.**
   `cut_91e0b993.mp4` / `cut_29ed8c3f.mp4` come from 4K sources (3840×2160 — corrected

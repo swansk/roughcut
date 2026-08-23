@@ -17,6 +17,7 @@ let segs = [];                // working segment list
 let sel = 0;
 let analysing = false;
 let nRenders = 0;
+let renderList = [];          // the versions list, kept so it can be repainted on edit
 const undoStack = [];
 
 const $ = (s) => document.querySelector(s);
@@ -134,11 +135,11 @@ function segCard(seg, i) {
   el.addEventListener('click', (e) => {
     sel = i;
     // The poster is the shot; clicking it plays the cut from here, in the monitor.
-    if (e.target.tagName === 'VIDEO') return playFrom(i);
+    if (e.target.tagName === 'VIDEO') { revealMonitor(); return playFrom(i); }
     const b = e.target.closest('button');
     if (!b) { paint(); return; }
     const act = b.dataset.act;
-    if (act === 'play') return playFrom(i, { single: true });
+    if (act === 'play') { revealMonitor(); return playFrom(i, { single: true }); }
     if (act === 'del') { pushUndo(); segs.splice(i, 1); return render(); }
     pushUndo();
     const d = parseFloat(b.dataset.d) * (e.shiftKey ? 4 : 1);
@@ -186,7 +187,15 @@ function nudge(i, edge, d) {
  * parked on its in-point, so a cut costs a swap of which element is visible rather than
  * the time it takes to open a file. Not gapless — a rough cut does not need to be — but
  * close enough that the rhythm of the edit reads. */
-const player = { vids: [], cur: 0, idx: -1, playing: false, single: false, raf: 0 };
+/* `gen` counts commands to the monitor. Opening a shot is asynchronous — a proxy that
+ * is not in the browser's cache takes seconds to give up its metadata — and until this
+ * counter existed a command issued in that window did not cancel the one before it:
+ * press play, press it again because nothing had happened yet, and the second press
+ * paused a monitor that was not yet playing while the first press's callback fired
+ * afterwards and started the video anyway. The board then believed it was stopped —
+ * no clock, no playhead, no out-point, no next shot — while sound came out of it.
+ * Every command bumps `gen`; a deferred callback that finds it moved on does nothing. */
+const player = { vids: [], cur: 0, idx: -1, playing: false, single: false, raf: 0, gen: 0 };
 
 const stem = (clip) => String(clip).replace(/\.[^.]+$/, '');
 
@@ -206,13 +215,70 @@ function arm(v, seg) {
     v.src = src;
     v.load();
   }
-  const park = () => { v.currentTime = seg.in; };
+  // Deferred, so by the time metadata arrives this buffer may have been pointed at a
+  // different clip; parking the old shot would then seek the new one.
+  const park = () => { if (v.dataset.src === src) v.currentTime = seg.in; };
   if (v.readyState >= 1) park();
   else v.addEventListener('loadedmetadata', park, { once: true });
 }
 
 function showLive() {
   player.vids.forEach((v, k) => v.classList.toggle('live', k === player.cur));
+}
+
+/* The monitor sits at the top of the column and the shot list runs a long way below it.
+ * Clicking shot 12's poster on the Killington cut started playback 3,163 px above the
+ * viewport — measured — where nothing about it could be seen or heard to be about that
+ * shot. A play started from down the list brings the monitor back first. */
+function revealMonitor() {
+  const el = $('#player');
+  if (!el || el.style.display === 'none') return;
+  const r = el.getBoundingClientRect();
+  if (r.top >= 56 && r.bottom <= window.innerHeight) return;
+  window.scrollTo({ top: Math.max(0, window.scrollY + r.top - 64), behavior: 'smooth' });
+}
+
+/* Say on the screen what the monitor is doing when it is not showing a picture. The
+ * monitor had exactly one way of reporting anything — a black rectangle — and three
+ * things it could be doing behind it: opening a proxy, waiting on more of one, or
+ * having been refused permission to play at all, since `play()`'s rejection was thrown
+ * away by an empty `.catch`. All three looked identical, and identical to broken. */
+function screenMsg(text, kind) {
+  const el = $('#screenMsg');
+  if (!el) return;
+  el.hidden = !text;
+  el.className = kind || '';
+  el.textContent = text || '';
+}
+
+/* What a MediaError means, in the terms of this app rather than the spec's. */
+const MEDIA_ERR = {
+  1: 'the load was cancelled',
+  2: 'the connection to the board dropped — is the server still running?',
+  3: 'the browser could not decode it — the proxy may be half-written',
+  4: 'that proxy would not open — it may still be building',
+};
+
+function mediaErrorText(v) {
+  const e = v.error;
+  const name = stem(String(v.dataset.src || v.currentSrc || '').split('/').pop() || 'shot');
+  if (!e) return `${name} would not play`;
+  return `${name}: ${MEDIA_ERR[e.code] || 'unknown media error'} (code ${e.code})`
+    + (e.message ? ` — ${e.message}` : '');
+}
+
+/* A refused play is a fact about the browser, not about the cut, and it has to reach
+ * the person: Chrome will not start an unmuted video without a gesture it recognises,
+ * and the board's own click on a shot card is not always one it counts. */
+function playRefused(err) {
+  const gesture = err && err.name === 'NotAllowedError';
+  const why = gesture
+    ? 'the browser refused to play — click the monitor, then press play again'
+    : `the browser refused to play — ${(err && err.name) || 'error'}`
+      + `${err && err.message ? `: ${err.message}` : ''}`;
+  pauseCut();
+  screenMsg(why, 'bad');
+  toast(why, 8000);
 }
 
 function schedule() {
@@ -229,6 +295,7 @@ function playFrom(i, { single = false } = {}) {
   const v = liveVideo();
   const resume = player.idx === i && !player.playing && !!v.dataset.src
     && v.currentTime > seg.in && v.currentTime < seg.out - 0.1;
+  const g = ++player.gen;
   player.idx = i;
   player.single = single;
   sel = i;
@@ -238,11 +305,13 @@ function playFrom(i, { single = false } = {}) {
   showLive();
   v.muted = false;
   const go = () => {
+    if (g !== player.gen || !player.playing) return;   // pause, or a later command, won
     if (!resume) v.currentTime = seg.in;
-    v.play().catch(() => {});
+    v.play().catch((err) => { if (g === player.gen) playRefused(err); });
   };
+  player.playing = true;            // before go(), which refuses to start a paused monitor
+  screenMsg(v.readyState >= 2 ? '' : `opening ${stem(seg.clip)}…`);
   if (v.readyState >= 1) go(); else v.addEventListener('loadedmetadata', go, { once: true });
-  player.playing = true;
   cueBed(filmStart(i) + (resume ? Math.max(0, v.currentTime - seg.in) : 0));
   schedule();
   paintStrip();
@@ -250,10 +319,12 @@ function playFrom(i, { single = false } = {}) {
 }
 
 function pauseCut() {
+  player.gen++;                     // any shot still opening must not start behind this
   player.vids.forEach((v) => v.pause());
   if (bed.el) bed.el.pause();
   player.playing = false;
   cancelAnimationFrame(player.raf);
+  screenMsg('');       // callers that have something to say set it after this
   paintTransport();
 }
 
@@ -284,11 +355,13 @@ function tick() {
 function advance() {
   const v = liveVideo();
   v.pause();
+  const g = ++player.gen;           // the shot we are leaving must not restart itself
   const next = player.idx + 1;
   if (player.single || next >= segs.length) {
     player.playing = false;
     if (bed.el) bed.el.pause();
     cancelAnimationFrame(player.raf);
+    screenMsg('');
     if (!player.single) { sel = 0; player.idx = -1; paint(); }   // the end: space restarts
     paintTransport();
     return;
@@ -301,7 +374,12 @@ function advance() {
   arm(nv, segs[next]);          // normally armed already; re-arming survives edits made mid-play
   nv.muted = false;
   showLive();
-  const go = () => { nv.currentTime = segs[next].in; nv.play().catch(() => {}); };
+  const go = () => {
+    if (g !== player.gen || !player.playing) return;
+    nv.currentTime = segs[next].in;
+    nv.play().catch((err) => { if (g === player.gen) playRefused(err); });
+  };
+  screenMsg(nv.readyState >= 2 ? '' : `opening ${stem(segs[next].clip)}…`);
   if (nv.readyState >= 1) go(); else nv.addEventListener('loadedmetadata', go, { once: true });
   if (segs[next + 1]) arm(v, segs[next + 1]);
   paintStrip();
@@ -445,6 +523,7 @@ function render() {
   $('#total').innerHTML = `<span class="${cls}">${fmt(t)}</span>`;
   $('#band').textContent = `${segs.length} shots · target ${fmt(lo)}–${fmt(hi)}`;
   paintSteps();
+  paintVersions();          // so "this cut" follows the timeline rather than the last fetch
   renderLibrary();
 }
 
@@ -1040,6 +1119,26 @@ function rejectProposal() {
 /* Renders as versions rather than "the newest file". Judging an edit is comparative —
  * reacting to a choice is faster and more informative than judging one artifact — so
  * two slots, and every past render stays reachable. */
+
+/* Is this file a render of what is on the timeline right now?
+ *
+ * Karl watched a rendered *proposal* and reported that the board "doesn't seem to
+ * reflect the render". It did not and could not — that proposal was never accepted —
+ * but nothing on screen said which of the renders the board *did* reflect, and with
+ * three files whose names are hashes there was no way to work it out. Renders record
+ * their shot list now; the ones made before that fall back to matching on shot count
+ * and total length, which is weaker but is all they can support. */
+function isThisCut(v) {
+  if (!segs.length) return false;
+  if (v.shots) {
+    return v.shots.length === segs.length && v.shots.every((s, i) =>
+      s.clip === segs[i].clip && Math.abs(s.in - segs[i].in) < 0.005
+      && Math.abs(s.out - segs[i].out) < 0.005);
+  }
+  return v.segments === segs.length && v.planned_s != null
+    && Math.abs(v.planned_s - total()) < 0.05;
+}
+
 /* Renders made before the metadata sidecar existed have no duration or shot count;
  * "0:00.0 · ? shots" reads as a broken file rather than an old one. */
 function versionLabel(v) {
@@ -1052,7 +1151,8 @@ function versionLabel(v) {
     : '';
   // A render can carry a label — "proposal, not accepted" is the one that matters, since
   // a version that was never the cut must not read as if it had been.
-  return (v.music ? `${base} ♪` : base) + quality + (v.note ? ` · ${v.note}` : '');
+  return (v.music ? `${base} ♪` : base) + quality + (v.note ? ` · ${v.note}` : '')
+    + (isThisCut(v) ? ' · this cut' : '');
 }
 
 function loadVersion(v, slot) {
@@ -1062,12 +1162,13 @@ function loadVersion(v, slot) {
   $(`#label${slot}`).textContent = versionLabel(v);
 }
 
-async function refreshVersions() {
-  const { renders } = await (await fetch('/api/renders')).json();
-  nRenders = renders.length;
+/* Rebuilds only the list, never the A/B slots — repainted on every edit so that
+ * "this cut" tracks the timeline instead of going stale the moment anything is trimmed. */
+function paintVersions() {
   const box = $('#versions');
-  box.innerHTML = renders.length ? '' : '<div class="hint">no renders yet</div>';
-  renders.forEach((v, i) => {
+  if (!box) return;
+  box.innerHTML = renderList.length ? '' : '<div class="hint">no renders yet</div>';
+  renderList.forEach((v) => {
     const when = new Date(v.created * 1000).toLocaleTimeString([],
       { hour: '2-digit', minute: '2-digit' });
     const row = document.createElement('div');
@@ -1081,9 +1182,16 @@ async function refreshVersions() {
       row.appendChild(b);
     });
     box.appendChild(row);
-    if (i === 0) loadVersion(v, 'A');       // newest is what you just made
-    if (i === 1) loadVersion(v, 'B');       // and the one before it, to compare
   });
+}
+
+async function refreshVersions() {
+  const { renders } = await (await fetch('/api/renders')).json();
+  nRenders = renders.length;
+  renderList = renders;
+  paintVersions();
+  if (renders[0]) loadVersion(renders[0], 'A');   // newest is what you just made
+  if (renders[1]) loadVersion(renders[1], 'B');   // and the one before it, to compare
   // An empty black player labelled "B —" is not a feature; the B slot appears when
   // there is a second version to compare against.
   $('#slotB').style.display = renders.length > 1 ? 'block' : 'none';
@@ -1135,8 +1243,10 @@ document.addEventListener('keydown', (e) => {
   else if (k === ']') { pushUndo(); nudge(sel, 'in', step); render(); }
   else if (k === '{') { pushUndo(); nudge(sel, 'out', -step); render(); }
   else if (k === '}') { pushUndo(); nudge(sel, 'out', step); render(); }
-  else if (k === ' ') { e.preventDefault(); toggleCut(); }
-  else if (k === 'Enter') { e.preventDefault(); playFrom(sel, { single: true }); }
+  else if (k === ' ') { e.preventDefault(); revealMonitor(); toggleCut(); }
+  else if (k === 'Enter') {
+    e.preventDefault(); revealMonitor(); playFrom(sel, { single: true });
+  }
   else return;
 });
 
@@ -1173,13 +1283,24 @@ async function boot() {
     v.addEventListener('timeupdate', () => {
       if (player.playing && v === liveVideo()) boundary();
     });
+    // A media error used to be reported only if it hit the live buffer while playing,
+    // and then only as a guess about proxies still building. It says what actually
+    // failed now, and it says it on the screen and not only in a toast that fades.
     v.addEventListener('error', () => {
-      if (v !== liveVideo() || !player.playing) return;
-      pauseCut();
-      toast('that preview is not ready yet — previews build in the background', 4000);
+      const msg = mediaErrorText(v);
+      if (v === liveVideo()) { pauseCut(); screenMsg(msg, 'bad'); }
+      toast(msg, 8000);
+    });
+    v.addEventListener('playing', () => { if (v === liveVideo()) screenMsg(''); });
+    v.addEventListener('waiting', () => {
+      if (v === liveVideo() && player.playing) screenMsg('buffering…');
     });
   });
   $('#playCut').onclick = toggleCut;
+  // Makes the refusal message actionable: "click the monitor, then press play again"
+  // has to be something a person can do, and a monitor you can click to play is what
+  // everyone expects anyway.
+  $('.screen').onclick = toggleCut;
   bed.el = $('#bed');
   P = await (await fetch('/api/project')).json();
   music = P.music || null;

@@ -430,6 +430,120 @@ def test_space_toggles_the_cut_and_enter_plays_one_shot(page):
     assert page.evaluate("document.querySelector('#pv0').currentTime") >= 2.9
 
 
+def test_pressing_play_twice_while_a_shot_opens_leaves_the_monitor_stopped(page):
+    """Karl, on the Killington bin: *"I cannot play it seems"*.
+
+    On this synthetic project a proxy opens instantly. On a real bin it does not —
+    sixteen shot cards are holding every connection the browser will give the origin,
+    and the monitor's first `play()` waits seconds on `loadedmetadata`. Anyone presses
+    play again in that window, and that used to pause a monitor which had not started,
+    after which the *first* press's callback fired and played the video anyway: sound
+    coming out of a board whose clock read 0:00.0, whose playhead never moved and which
+    never reached the shot's out-point. The deferral is forced here, because it is the
+    window and not the bin that carries the bug."""
+    stuck = page.evaluate("""() => {
+        const v = document.querySelector('#pv0');
+        // the proxy has not opened yet, so playFrom must defer its play()
+        Object.defineProperty(v, 'readyState', {configurable: true, get: () => 0});
+        playFrom(0);                                      // press play
+        pauseCut();                                       // press it again — nothing happened
+        delete v.readyState;
+        v.dispatchEvent(new Event('loadedmetadata'));     // the proxy opens, late
+        return {playing: player.playing, paused: v.paused,
+                transport: document.querySelector('#playCut').textContent};
+    }""")
+    assert stuck["paused"], "the superseded press started a video the board thinks is paused"
+    assert not stuck["playing"]
+    assert stuck["transport"].startswith("▶"), "the transport and the video must agree"
+
+    # and the guard has not broken playing: the next press works normally
+    page.locator("#playCut").click()
+    page.wait_for_function("player.playing && player.idx === 0", timeout=10000)
+    page.wait_for_function(
+        "document.querySelector('.screen video.live').currentTime >= 1.2", timeout=10000)
+
+
+def test_a_media_error_is_shown_on_the_monitor_not_swallowed(page):
+    """The monitor had one way of reporting anything — a black rectangle — and a proxy
+    that will not open looked exactly like one that is merely slow. What the browser
+    actually said has to reach the screen, in this app's terms and with its code."""
+    page.locator("#playCut").click()
+    page.wait_for_function("player.playing && player.idx === 0", timeout=10000)
+    page.evaluate("""() => {
+        const v = document.querySelector('#pv0');
+        v.dataset.src = '/media/proxy/CLIP_A.mp4';
+        v.src = '/media/proxy/NOT_A_CLIP.mp4';        // 404: MEDIA_ERR_SRC_NOT_SUPPORTED
+        v.load();
+    }""")
+    page.wait_for_selector("#screenMsg:not([hidden])", timeout=10000)
+    msg = page.locator("#screenMsg").inner_text()
+    assert "CLIP_A" in msg, msg
+    assert "would not open" in msg and "code 4" in msg, msg
+    assert page.locator("#screenMsg").get_attribute("class") == "bad"
+    assert "code 4" in page.locator("#toast").inner_text()
+    page.wait_for_function("!player.playing", timeout=5000)   # a dead buffer stops it
+    assert page.locator("#playCut").inner_text().startswith("▶")
+
+
+def test_a_refused_play_is_named_on_the_monitor(page):
+    """`play()` returns a promise that Chrome rejects when its autoplay policy will not
+    have an unmuted video, and the board used to throw that rejection away with an empty
+    `.catch` — the one failure mode that cannot be seen from the outside at all."""
+    page.evaluate("""() => {
+        const v = document.querySelector('#pv0');
+        v.play = () => Promise.reject(
+            new DOMException('play() failed because the user did not interact with the '
+                             + 'document first.', 'NotAllowedError'));
+    }""")
+    page.locator("#playCut").click()
+    page.wait_for_selector("#screenMsg:not([hidden])", timeout=10000)
+    assert "refused to play" in page.locator("#screenMsg").inner_text()
+    assert "click the monitor" in page.locator("#toast").inner_text()
+    page.wait_for_function("!player.playing", timeout=5000)
+    assert page.locator("#playCut").inner_text().startswith("▶")
+
+
+def test_playing_from_a_shot_card_brings_the_monitor_into_view(page):
+    """The monitor is at the top of the column and the shot list runs a long way below
+    it. On the 16-shot Killington cut, clicking shot 12's poster started playback 3,163px
+    above the viewport — the board played, and the person saw a still page."""
+    page.set_viewport_size({"width": 900, "height": 380})
+    page.locator(".seg").last.scroll_into_view_if_needed()
+    page.wait_for_timeout(200)
+    assert not page.evaluate(
+        "(() => { const r = document.querySelector('#player').getBoundingClientRect();"
+        " return r.bottom > 0 && r.top < innerHeight; })()"), "monitor should be off-screen"
+
+    page.locator(".seg").last.locator("video").click()
+    page.wait_for_function("player.playing && player.idx === 1", timeout=10000)
+    page.wait_for_function(
+        "(() => { const r = document.querySelector('#player').getBoundingClientRect();"
+        " return r.top >= 0 && r.bottom <= innerHeight + 1; })()", timeout=5000)
+
+
+def test_the_versions_list_says_which_render_is_the_cut_on_the_board(page, project):
+    """Karl: *"Cut board doesn't seem to reflect the render"* — after watching a rendered
+    proposal that had never been accepted. It was labelled as a proposal, but nothing said
+    which of the renders the board *did* reflect, and their names are hashes."""
+    page.locator("#render").click()
+    page.wait_for_function(
+        "document.querySelectorAll('#versions .ver').length >= 1", timeout=120000)
+    page.wait_for_function(
+        "[...document.querySelectorAll('#versions .ver')]"
+        ".some((r) => r.textContent.includes('this cut'))", timeout=10000)
+
+    # trim the timeline and the render is no longer what is on the board
+    page.locator(".seg").first.locator("button", has_text="+").nth(1).click()
+    assert not page.evaluate(
+        "[...document.querySelectorAll('#versions .ver')]"
+        ".some((r) => r.textContent.includes('this cut'))"), \
+        "an edited timeline is not the rendered one any more"
+    page.locator("#undo").click()
+    page.wait_for_function(
+        "[...document.querySelectorAll('#versions .ver')]"
+        ".some((r) => r.textContent.includes('this cut'))", timeout=5000)
+
+
 # ------------------------------------------------------------------ what was seen
 
 def test_what_the_visual_pass_saw_shows_on_the_cards_and_in_the_library(page, project):

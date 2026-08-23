@@ -58,7 +58,8 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, Response,
+                               StreamingResponse)
 import uvicorn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -890,6 +891,12 @@ async def api_render(request: Request) -> JSONResponse:
         "note": (body.get("label") or "")[:120],
         "music": (edl.get("effects_music") or {}).get("asset"),
         "profile": profile,
+        # The shot list this file was made from, so the board can say which version is
+        # the cut currently on the timeline. Karl watched a rendered *proposal* and
+        # reported that the board "doesn't seem to reflect the render" — it did not,
+        # and nothing on screen said which of the renders it did reflect.
+        "shots": [{"clip": s["clip"], "in": s["in"], "out": s["out"]}
+                  for s in edl["segments"]],
     }
     RENDERS[job] = {"state": "running", "stage": "cutting", "log": "",
                     "output": None, "url": None, "started": time.time(),
@@ -918,7 +925,7 @@ def api_renders() -> JSONResponse:
             "created": meta.get("created", mp4.stat().st_mtime),
             "duration_s": meta.get("duration_s"), "segments": meta.get("segments"),
             "planned_s": meta.get("planned_s"), "note": meta.get("note", ""),
-            "music": meta.get("music"),
+            "music": meta.get("music"), "shots": meta.get("shots"),
             # Renders made before this profile existed carry neither key — "preview"
             # is what they all were, and no width/height reads as "don't know",
             # never as "upscale to 4K".
@@ -942,6 +949,48 @@ def api_render_status(job: str) -> JSONResponse:
 # ---------------------------------------------------------------- media
 
 
+RANGE_CHUNK = 1 << 20            # 1 MiB
+
+
+def iter_range(path: Path, start: int, end: int, chunk: int = RANGE_CHUNK):
+    """Yield bytes `start`..`end` inclusive, a chunk at a time.
+
+    The whole point is not to hold them. `fh.read(end - start + 1)` on the open-ended
+    `bytes=0-` that every <video> sends first pulled an entire proxy into memory before
+    a byte reached the browser — 85 MB for a Killington clip, and one page load of the
+    16-shot cut fires sixteen of those plus two render previews of 150 MB each. Measured
+    on the live board: the server went from 187 MB of RSS to 674 MB on a single load,
+    with an all-time peak of 1.15 GB, for files it only ever had to copy.
+    """
+    remaining = end - start + 1
+    with path.open("rb") as fh:
+        fh.seek(start)
+        while remaining > 0:
+            buf = fh.read(min(chunk, remaining))
+            if not buf:
+                return
+            remaining -= len(buf)
+            yield buf
+
+
+def parse_range(rng: str, size: int) -> tuple[int, int] | None:
+    """One byte range against a file of `size`, or None if the header is not one.
+
+    `bytes=-500` means the *last* 500 bytes, which the first version read as 0-500 —
+    harmless while every proxy is written with `+faststart` and no player ever has to
+    hunt for a trailing moov atom, and a silent wrong answer the day one is not.
+    """
+    m = re.fullmatch(r"\s*bytes=\s*(\d*)\s*-\s*(\d*)\s*", rng or "")
+    if not m or not (m.group(1) or m.group(2)):
+        return None                                   # not a single range: ignore it
+    if not m.group(1):
+        start, end = max(0, size - int(m.group(2))), size - 1
+    else:
+        start = int(m.group(1))
+        end = min(int(m.group(2)), size - 1) if m.group(2) else size - 1
+    return (start, end) if start <= end else None
+
+
 def ranged_file(path: Path, request: Request) -> Response:
     """Serve a file with byte-range support.
 
@@ -956,22 +1005,19 @@ def ranged_file(path: Path, request: Request) -> Response:
     if not rng:
         return FileResponse(path, media_type=mime,
                             headers={"accept-ranges": "bytes"})
-    m = re.match(r"bytes=(\d*)-(\d*)", rng)
-    if not m:
-        raise HTTPException(416, "bad range")
-    start = int(m.group(1)) if m.group(1) else 0
-    end = int(m.group(2)) if m.group(2) else size - 1
-    end = min(end, size - 1)
-    if start > end:
-        raise HTTPException(416, "bad range")
-    with path.open("rb") as fh:
-        fh.seek(start)
-        data = fh.read(end - start + 1)
-    return Response(data, status_code=206, media_type=mime, headers={
-        "content-range": f"bytes {start}-{end}/{size}",
-        "accept-ranges": "bytes",
-        "content-length": str(len(data)),
-    })
+    span = parse_range(rng, size)
+    if span is None:
+        # An unparseable or unsatisfiable range: answer with the whole file rather than
+        # a 416, which a media element treats as the file being broken.
+        return FileResponse(path, media_type=mime,
+                            headers={"accept-ranges": "bytes"})
+    start, end = span
+    return StreamingResponse(
+        iter_range(path, start, end), status_code=206, media_type=mime, headers={
+            "content-range": f"bytes {start}-{end}/{size}",
+            "accept-ranges": "bytes",
+            "content-length": str(end - start + 1),
+        })
 
 
 @app.get("/media/proxy/{name}")
@@ -1033,15 +1079,26 @@ def media_asset(kind: str, name: str, request: Request) -> Response:
     return ranged_file(STATE["assets"] / kind / Path(name).name, request)
 
 
+# The board's own code carried no cache headers at all: no Cache-Control, no ETag, no
+# Last-Modified. Chrome refetches such a response — measured, on a reload it came back
+# 200 from the network with no conditional headers — but that is a browser's choice and
+# not a promise, and the page and the script are two files that have to agree with each
+# other. An index.html holding a monitor the cached app.js has never heard of is a board
+# that paints and does not play, which is exactly the report this came out of. They are
+# 64 KB served over loopback; there is nothing to gain by caching them.
+NO_STORE = {"cache-control": "no-store, must-revalidate"}
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
-    return HTMLResponse((HERE / "static" / "index.html").read_text(encoding="utf-8"))
+    return HTMLResponse((HERE / "static" / "index.html").read_text(encoding="utf-8"),
+                        headers=NO_STORE)
 
 
 @app.get("/app.js")
 def appjs() -> Response:
     return Response((HERE / "static" / "app.js").read_text(encoding="utf-8"),
-                    media_type="application/javascript")
+                    media_type="application/javascript", headers=NO_STORE)
 
 
 def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path,

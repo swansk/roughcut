@@ -180,6 +180,89 @@ def test_media_range_past_end_is_clamped(client):
     assert len(r.content) == full
 
 
+def test_media_suffix_range_returns_the_end_of_the_file(client):
+    """`bytes=-500` is the last 500 bytes, not the first 501. Read the wrong way it is
+    a silently wrong answer, and the request a player makes when it has to hunt for a
+    moov atom at the end of a file that was not written with +faststart."""
+    full = client.get("/media/proxy/CLIP_A.mp4").content
+    r = client.get("/media/proxy/CLIP_A.mp4", headers={"Range": "bytes=-500"})
+    assert r.status_code == 206
+    assert r.headers["content-range"] == f"bytes {len(full) - 500}-{len(full) - 1}/{len(full)}"
+    assert r.content == full[-500:]
+
+
+def test_a_large_open_ended_range_is_never_read_whole(client, tmp_path):
+    """`bytes=0-` is the first thing every <video> sends, and answering it with
+    `fh.read(size)` put the whole file in memory before a byte left the server: one load
+    of the 16-shot Killington board took its RSS from 187 MB to 674 MB, for files it only
+    ever had to copy. Twenty megabytes here, produced a megabyte at a time."""
+    import tracemalloc
+    import server
+
+    size = 20 << 20
+    big = tmp_path / "big.bin"
+    with big.open("wb") as fh:
+        for i in range(size >> 20):
+            fh.write(bytes([i % 256]) * (1 << 20))
+
+    # the generator itself: producing the first chunk must not cost the whole file
+    gen = server.iter_range(big, 0, size - 1)
+    tracemalloc.start()
+    first = next(gen)
+    peak = tracemalloc.get_traced_memory()[1]
+    tracemalloc.stop()
+    gen.close()
+    assert len(first) == server.RANGE_CHUNK
+    assert first == bytes([0]) * server.RANGE_CHUNK
+    assert peak < 4 * server.RANGE_CHUNK, \
+        f"{peak / 1e6:.1f} MB to produce the first megabyte of a {size / 1e6:.0f} MB file"
+
+    # and what the route hands back is that stream rather than a body. Asserted on the
+    # response object, not through TestClient, which reassembles the whole body itself
+    # and would measure the harness instead of the server.
+    import asyncio
+
+    from fastapi import Request
+    from fastapi.responses import StreamingResponse
+
+    resp = server.ranged_file(big, Request(
+        {"type": "http", "method": "GET", "path": "/", "query_string": b"",
+         "headers": [(b"range", b"bytes=0-")]}))
+    assert isinstance(resp, StreamingResponse)
+    assert resp.status_code == 206
+    assert resp.headers["content-range"] == f"bytes 0-{size - 1}/{size}"
+    assert resp.headers["content-length"] == str(size)
+
+    async def take_two():
+        out = []
+        async for c in resp.body_iterator:
+            out.append(len(c))
+            if len(out) == 2:
+                break
+        await resp.body_iterator.aclose()
+        return out
+
+    tracemalloc.start()
+    got = asyncio.run(take_two())
+    peak = tracemalloc.get_traced_memory()[1]
+    tracemalloc.stop()
+    assert got == [server.RANGE_CHUNK, server.RANGE_CHUNK]
+    assert peak < 6 * server.RANGE_CHUNK, \
+        f"{peak / 1e6:.1f} MB to take 2 MB off the front of a {size / 1e6:.0f} MB file"
+
+    # end to end, the bytes still have to be right
+    shutil.copy(big, Path(server.STATE["proxy_dir"]) / "BIG.bin")
+    try:
+        r = client.get("/media/proxy/BIG.bin", headers={"Range": "bytes=0-"})
+        assert r.status_code == 206 and len(r.content) == size
+        assert r.content == big.read_bytes()
+        tail = client.get("/media/proxy/BIG.bin",
+                          headers={"Range": f"bytes={size - 3}-"})
+        assert tail.content == bytes([(size >> 20) - 1]) * 3
+    finally:
+        (Path(server.STATE["proxy_dir"]) / "BIG.bin").unlink(missing_ok=True)
+
+
 def test_media_unknown_proxy_404s(client):
     assert client.get("/media/proxy/NOPE.mp4").status_code == 404
 
@@ -1168,6 +1251,16 @@ def test_index_and_script_served(client):
     js = client.get("/app.js")
     assert js.status_code == 200
     assert "function render" in js.text
+
+
+def test_the_board_never_serves_its_own_code_from_a_cache(client):
+    """The page and the script have to agree with each other, and they shipped with no
+    Cache-Control, no ETag and no Last-Modified — nothing telling a browser either to
+    keep them or to check. An index.html carrying a monitor that the cached app.js has
+    never heard of paints a board that will not play."""
+    for path in ("/", "/app.js"):
+        cc = client.get(path).headers.get("cache-control", "")
+        assert "no-store" in cc, f"{path}: {cc!r}"
 
 
 # ------------------------------------------------------------------ the visual pass
