@@ -311,6 +311,59 @@ def test_clips_without_a_visual_pass_are_unchanged():
     assert "hello" in prompt, "the transcript is still there"
 
 
+# ------------------------------------------------------------------ the rank
+
+# Karl, on the revision the visual pass produced: *"You missed some cool jumps — this
+# is likely due to limited keyframe analysis and the lack of a workflow / algorithm
+# that applies sort / priority following a granular keyframe analysis on the first
+# pass."* Forty undifferentiated "what is visible" lines give a reader no way to tell
+# a backflip from a wide shot of a valley.
+RANKED = [
+    {"rank": 1, "clip": "A.MP4", "start": 104.0, "end": 108.0, "kind": "fall",
+     "score": 1.4, "what": "the body goes down in the snow", "source": "close look",
+     "why_ranked": {"confirmation": "confirmed", "corroboration_z": 3.1,
+                    "peak_at": 105.6}},
+    {"rank": 2, "clip": "A.MP4", "start": 8.0, "end": 12.0, "kind": "jump",
+     "score": 0.9, "what": "an air off a roller", "source": "sheet",
+     "why_ranked": {"confirmation": "unseen", "corroboration_z": 0.4, "peak_at": 9.0}},
+    {"rank": 3, "clip": "B.MP4", "start": 2.0, "end": 6.0, "kind": "jump",
+     "score": 0.4, "what": "possibly inverted mid-air", "source": "sheet",
+     "why_ranked": {"confirmation": "contradicted", "corroboration_z": 4.0,
+                    "peak_at": 3.0}},
+]
+
+
+def test_the_ranked_events_come_before_the_inventory_and_carry_the_top_events():
+    """Order is the point. A ranked list arriving after forty clip blocks is a
+    footnote; this one has to be the first thing about the footage that is read."""
+    b = use(['{"segments":[{"clip":"A.MP4","in":0,"out":2}]}'])
+    revise.originate(SEEN, story="x", note="", events=RANKED)
+    prompt = b.requests[0].prompt
+    assert prompt.index("## Events, ranked") < prompt.index("## Every clip available")
+    assert "the body goes down in the snow" in prompt
+    assert "an air off a roller" in prompt
+    # the evidence word travels with the line, because the kind alone is not evidence
+    assert "confirmed" in prompt and "contradicted" in prompt
+    assert "unaudited" in prompt, "'unseen' is jargon; the prompt says what it means"
+    assert "peak at 105.6s" in prompt
+
+
+def test_the_ranked_events_reach_a_revision_too_not_only_a_first_cut():
+    b = use(['{"segments":[{"clip":"A.MP4","in":0,"out":2}]}'])
+    revise.propose(SEGMENTS, SEEN, story="x", note="more air", events=RANKED)
+    prompt = b.requests[0].prompt
+    assert prompt.index("## Events, ranked") < prompt.index("## Every clip available")
+    assert prompt.index("## The editor's note") < prompt.index("## Events, ranked")
+
+
+def test_no_ranked_section_when_nobody_has_looked_at_the_bin():
+    """Noise in a prompt this long is not free: an empty heading teaches nothing and
+    invites the model to wonder what it was supposed to contain."""
+    b = use(['{"segments":[{"clip":"A.MP4","in":0,"out":2}]}'])
+    revise.originate(SEEN, story="x", note="", events=[])
+    assert "Events, ranked" not in b.requests[0].prompt
+
+
 # ------------------------------------------------------------------ chronology
 
 # 20:43, 20:53, 21:40, 22:17 on one day, then one clip a day and a half later —

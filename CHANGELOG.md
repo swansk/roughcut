@@ -10,6 +10,31 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Events, ranked — and the rank believes a second look over a first one.** Karl, on the
+  Killington revision: *"You missed some cool jumps — this is likely due to limited keyframe
+  analysis and the lack of a workflow / algorithm that applies sort / priority following a
+  granular keyframe analysis on the first pass."* Both halves were right and they were
+  different faults. The sort is now real: `roughcut/events.py` scores every moment as **kind ×
+  notable × corroboration × confirmation × usable** and writes the bin's ranked list to one
+  `events.json` beside the visual sidecars — one file per bin, not an `events` key inside each
+  sidecar, because the question ("the twelve biggest things in this footage") is bin-wide,
+  because the sidecars are paid observations and this is derived, and because it can be deleted
+  and rebuilt for nothing. It reaches the Ask as a **`## Events, ranked` section before the clip
+  inventory**, the board's *seen* tab (sorted by that score, junk never offered), and
+  `/api/project`. The load-bearing term is **confirmation**, not kind: [R10](research/R10-events-priority.md)
+  adjudicated eleven claimed events against the frames and *none* survived as described — a 45°
+  helmet-cam horizon reads as "rider inverted mid-air" to both sampling densities — so a claim
+  two independent looks agree on scores ×1.5, one a closer look contradicts scores ×0.35, and
+  `junk` is a floor of zero rather than a low score. The prompt now states that measured trap
+  where it already states the transcript-density one, and every ranked line carries its evidence
+  word so an unaudited `jump` reads as the guess it is.
+- **The visual pass has a second stage, priced like the first.** `POST /api/visual` runs the
+  coarse pass, then the free motion scan, then a close look at the busiest three windows per
+  clip (`fine: false` turns it off, `fine_windows` moves the number), then rebuilds the rank —
+  for free. `/api/status` splits `coarse_calls` and `fine_calls` and totals the price, because a
+  button that silently grew 40% dearer because a default changed is not offering a price. A
+  failed second stage keeps the sheets already paid for and says so; the two stages tick
+  separate counters after ticking both into `done` made a finished job report 0/3.
 - **A free motion track, and a visual pass that can look closely at one moment.** The visual
   pass samples every 4s; a jump lasts one or two seconds, so whether an air is seen at all is a
   coin toss on phase, and sampling a 44-minute bin at 1s would cost four times as much for

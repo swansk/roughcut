@@ -474,6 +474,54 @@ def test_what_the_visual_pass_saw_shows_on_the_cards_and_in_the_library(page, pr
         sidecar.unlink(missing_ok=True)
 
 
+def test_the_seen_tab_is_ordered_by_the_rank_not_by_the_kind(page, project):
+    """Karl: *"the lack of a workflow / algorithm that applies sort / priority."*
+
+    The ordering that matters is not "events before scenery" — it is which of two
+    claimed events to believe. A `jump` a closer look called a glove over the lens has
+    to sit below a `fall` two looks agreed on, and has to say so on the row.
+    """
+    import server
+
+    vdir = Path(server.STATE["visual"])
+    vdir.mkdir(parents=True, exist_ok=True)
+    sidecar = vdir / "CLIP_C.visual.json"
+    sidecar.write_text(json.dumps({
+        "clip": "CLIP_C.MP4",
+        "moments": [{"start": 1.5, "end": 3.5, "what": "rider goes down",
+                     "kind": "fall", "notable": True}],
+        "unusable": [], "summary": "a run"}), encoding="utf-8")
+    ranked = vdir / "events.json"
+    ranked.write_text(json.dumps({"built": 0, "clips": 1, "events": [
+        {"rank": 1, "clip": "CLIP_B.MP4", "start": 4.0, "end": 5.0, "kind": "fall",
+         "notable": True, "score": 1.5, "source": "close look",
+         "what": "the body goes down in the snow",
+         "why_ranked": {"confirmation": "confirmed"}},
+        {"rank": 2, "clip": "CLIP_C.MP4", "start": 1.5, "end": 3.5, "kind": "jump",
+         "notable": True, "score": 0.4, "source": "sheet",
+         "what": "possibly a backflip against the sky",
+         "why_ranked": {"confirmation": "contradicted"}},
+        {"rank": 3, "clip": "CLIP_A.MP4", "start": 0.5, "end": 1.5, "kind": "junk",
+         "notable": True, "score": 0.0, "source": "close look",
+         "what": "a glove over the lens", "why_ranked": {"confirmation": "unseen"}},
+    ]}), encoding="utf-8")
+    try:
+        page.reload()
+        page.wait_for_selector(".seg")
+        page.locator("#libTabs .tab", has_text="seen").click()
+        rows = page.locator("#library .cand")
+        assert rows.count() == 2, "junk is never offered, whatever its kind says"
+        # the tags render uppercase, like the kind tag beside them
+        first = rows.nth(0).inner_text().lower()
+        second = rows.nth(1).inner_text().lower()
+        assert "the body goes down" in first and "confirmed" in first
+        assert "backflip" in second and "unconfirmed" in second
+        assert "events ranked" in page.locator("#project").inner_text()
+    finally:
+        sidecar.unlink(missing_ok=True)
+        ranked.unlink(missing_ok=True)
+
+
 # ------------------------------------------------------------------ music
 
 def test_the_music_panel_writes_the_bed_and_the_monitor_plays_it_ducked(page, project):

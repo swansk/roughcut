@@ -48,16 +48,12 @@ def load_track(proxy: Path, cache_dir: Path, force: bool = False) -> list[float]
     bin (~90s), so it is cached for the same reason the proxies are: nothing about the
     footage changed between two runs of the same scan.
     """
-    cache = cache_dir / f"{proxy.stem}.motion.json"
-    if cache.exists() and not force:
-        d = json.loads(cache.read_text(encoding="utf-8"))
-        if d.get("hz") == events.MOTION_HZ and d.get("mafd"):
-            return d["mafd"]
-    mafd = [round(v, 3) for v in events.motion_track(proxy)]
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps({"clip": proxy.name, "hz": events.MOTION_HZ,
-                                 "width": events.MOTION_WIDTH, "mafd": mafd}),
-                     encoding="utf-8")
+    if not force:
+        cached = events.motion_cache(cache_dir, proxy.stem)
+        if cached:
+            return cached
+    mafd = events.motion_track(proxy)
+    events.write_motion_cache(cache_dir, proxy.stem, proxy.name, mafd)
     return mafd
 
 
@@ -93,6 +89,11 @@ def main() -> int:
     ap.add_argument("--force", action="store_true", help="recompute motion tracks")
     ap.add_argument("--windows-out", type=Path, default=None,
                     help="write the windows as JSON for visual_pass.py --windows")
+    ap.add_argument("--rank", action="store_true",
+                    help="also (re)build the bin's ranked events.json from whatever "
+                         "the visual passes have written so far")
+    ap.add_argument("--top", type=int, default=15,
+                    help="how many ranked events to print with --rank")
     args = ap.parse_args()
 
     if not args.proxies.is_dir():
@@ -108,6 +109,19 @@ def main() -> int:
              for stem, d in found.items() if d["windows"]}, indent=1),
             encoding="utf-8")
         print(f"wrote {args.windows_out}")
+
+    if args.rank:
+        payload = events.build(args.visual, args.sidecars)
+        path = events.write(args.visual, payload)
+        print(f"\nwrote {path} — {len(payload['events'])} events "
+              f"over {payload['clips']} clip(s)\n")
+        print(f"{'#':>3} {'clip':<14} {'when':>13}  {'kind':<9} {'score':>5}  "
+              f"{'evidence':<14} what")
+        for e in payload["events"][:args.top]:
+            w = e["why_ranked"]
+            print(f"{e['rank']:>3} {e['clip']:<14} "
+                  f"{e['start']:6.1f}-{e['end']:<6.1f} {e['kind']:<9} "
+                  f"{e['score']:5.2f}  {w['confirmation']:<14} {e['what'][:70]}")
     return 0
 
 

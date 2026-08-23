@@ -474,28 +474,43 @@ function renderLibrary() {
   const used = new Set(segs.map((s) => `${s.clip}@${Math.round(s.in)}`));
   const rows = [];
   let anySeen = false;
+  /* The ranked events file, when the bin has one: kind x notable x corroboration x
+   * whether a closer look confirmed it, computed once server-side rather than
+   * re-guessed here from the kind alone. Falls back to the old kind ordering for a
+   * bin looked at before the rank existed. */
+  const ranked = P.events || [];
   for (const clip of Object.values(P.clips)) {
     const moments = (clip.visual || {}).moments || [];
     if (moments.length) anySeen = true;
-    if (libTab === 'seen') {
+    if (libTab === 'seen' && !ranked.length) {
       for (const m of moments) {
         if (!m.notable || m.kind === 'junk') continue;
         if (used.has(`${clip.clip}@${Math.round(m.start)}`)) continue;
         rows.push({ clip: clip.clip, t: m.start, end: m.end, why: m.what, kind: m.kind,
                     score: HOT.has(m.kind) ? 2 : m.kind === 'scenery' ? 0 : 1 });
       }
-    } else {
+    } else if (libTab !== 'seen') {
       for (const c of clip.candidates) {
         if (used.has(`${clip.clip}@${Math.round(c.t)}`)) continue;
         rows.push({ clip: clip.clip, ...c });
       }
     }
   }
+  if (libTab === 'seen' && ranked.length) {
+    anySeen = true;
+    for (const e of ranked) {
+      if (!e.notable || e.kind === 'junk') continue;
+      if (used.has(`${e.clip}@${Math.round(e.start)}`)) continue;
+      rows.push({ clip: e.clip, t: e.start, end: e.end, why: e.what, kind: e.kind,
+                  score: e.score, evidence: (e.why_ranked || {}).confirmation });
+    }
+  }
   rows.sort((a, b) => b.score - a.score);
   $('#libTabs').style.display = anySeen ? 'flex' : 'none';
   if (!anySeen) libTab = 'heard';
   $('#libHint').textContent = libTab === 'seen'
-    ? 'What the visual pass saw, not yet in the cut — events first.'
+    ? (ranked.length ? 'What was seen, ranked — events first, confirmed above guessed.'
+                     : 'What the visual pass saw, not yet in the cut — events first.')
     : 'Audio candidates not yet in the cut.';
   const lib = $('#library');
   lib.innerHTML = rows.length ? '' : `<div class="hint">${libTab === 'seen'
@@ -505,7 +520,12 @@ function renderLibrary() {
     // The line people read is what is said or seen, not the ranking score that put it here.
     const d = document.createElement('div');
     d.className = 'cand';
-    d.innerHTML = `<span class="w">${r.kind ? kindTag(r.kind) : ''}${escapeHtml(r.why)}</span>
+    // The evidence word rides with the row: on this footage a `jump` nobody has
+    // checked is often a tilted camera, and the human clicking is the last defence.
+    const seal = r.evidence === 'confirmed' ? '<i class="kind hot">confirmed</i>'
+      : (r.evidence === 'contradicted' || r.evidence === 'unsupported')
+        ? '<i class="kind">unconfirmed</i>' : '';
+    d.innerHTML = `<span class="w">${r.kind ? kindTag(r.kind) : ''}${seal}${escapeHtml(r.why)}</span>
       <span class="t">${stem(r.clip)} · ${fmt(r.t)}${r.end ? `–${fmt(r.end)}` : ''}</span>`;
     d.onclick = () => {
       pushUndo();
@@ -729,6 +749,7 @@ async function refreshStatus() {
     <div class="kv"><span>analysed</span><b>${S.analysed}</b></div>
     <div class="kv"><span>shots in the cut</span><b>${S.segments}</b></div>
     ${vz.total ? `<div class="kv"><span>looked at</span><b>${vz.done}/${vz.total}</b></div>` : ''}
+    ${vz.events ? `<div class="kv"><span>events ranked</span><b>${vz.events}</b></div>` : ''}
     ${S.footage_exists ? '' : '<div style="color:var(--bad)">footage folder not found</div>'}
     ${missing.length ? `<div style="color:var(--bad)">missing on PATH: ${missing.join(', ')}</div>` : ''}
     <div class="path">${escapeHtml(S.footage)}</div>

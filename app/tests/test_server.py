@@ -1109,16 +1109,21 @@ def _wait_visual(client, job, timeout=20.0):
 
 def test_the_visual_pass_is_priced_before_it_is_offered(tmp_path, project):
     """It spends model calls, so the status says what the rest of the bin would cost —
-    and nothing starts on the app's own initiative."""
+    and nothing starts on the app's own initiative. Both stages are priced: a button
+    that silently grew dearer because a default changed is not offering a price."""
     import server
 
     with _fresh(tmp_path, project, sidecars=project["sidecars"], visual=None) as c:
         v = c.get("/api/status").json()["visual"]
         assert v["done"] == 0 and v["total"] == 3
         assert v["pending"] == ["CLIP_A.MP4", "CLIP_B.MP4", "CLIP_C.MP4"]
-        assert v["calls"] == 3                         # one sheet each, for 6s clips
-        assert v["projected_usd"] == pytest.approx(3 * server.VISUAL_USD_PER_SHEET)
-        assert v["running"] is False
+        assert v["coarse_calls"] == 3                  # one sheet each, for 6s clips
+        assert v["fine_calls"] == 3 * server.FINE_WINDOWS_PER_CLIP
+        assert v["calls"] == v["coarse_calls"] + v["fine_calls"]
+        assert v["projected_usd"] == pytest.approx(
+            3 * server.VISUAL_USD_PER_SHEET
+            + v["fine_calls"] * server.FINE_USD_PER_WINDOW, abs=0.005)
+        assert v["running"] is False and v["events"] == 0
         # per-bin, like proxies and renders, so two bins' sidecars never mix
         assert Path(v["dir"]) == tmp_path / "visual" / project["footage"].name
     assert server.VISUALS == {}
@@ -1138,7 +1143,7 @@ def test_the_visual_pass_runs_in_app_and_what_it_saw_reaches_the_board(
 
     monkeypatch.setattr(server, "visual_cmd", cmd)
     with _fresh(tmp_path, project, sidecars=project["sidecars"], visual=None) as c:
-        start = c.post("/api/visual", json={}).json()
+        start = c.post("/api/visual", json={"fine": False}).json()
         assert start["total"] == 3
         counts = set()
         deadline = time.time() + 20
@@ -1159,9 +1164,101 @@ def test_the_visual_pass_runs_in_app_and_what_it_saw_reaches_the_board(
         assert clip["visual"]["moments"][0]["kind"] == "fall"
         assert clip["visual"]["unusable"][0]["why"] == "lens covered"
         v = c.get("/api/status").json()["visual"]
-        assert v["done"] == 3 and v["pending"] == [] and v["projected_usd"] == 0
+        assert v["done"] == 3 and v["pending"] == [] and v["coarse_calls"] == 0
+        # the rank is rebuilt at the end of the pass, for free, without being asked
+        assert v["events"] == 3
+        assert c.get("/api/project").json()["events"][0]["kind"] == "fall"
         # a second run has nothing to do unless forced
         assert c.post("/api/visual", json={}).status_code == 400
+
+
+def _stub_fine(script: Path, out: Path, stems: list[str]) -> list[str]:
+    """A stand-in for `visual_pass.py --windows`: writes one fine sidecar per clip
+    saying the close look found a camera artefact where the coarse pass claimed a fall.
+    That disagreement is the case the ranking exists to handle."""
+    script.write_text(
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        "out = Path(sys.argv[1]); out.mkdir(parents=True, exist_ok=True)\n"
+        "for stem in sys.argv[2:]:\n"
+        "    (out / f'{stem}.fine.json').write_text(json.dumps({\n"
+        "        'clip': f'{stem}.mp4', 'mode': 'fine',\n"
+        "        'windows_read': [[0.5, 4.0]],\n"
+        "        'moments': [{'start': 1.5, 'end': 2.5, 'kind': 'junk',\n"
+        "                     'what': 'a glove over the lens', 'notable': True}],\n"
+        "        'unusable': [], 'summary': 'artefact', 'projected_usd': 0.073}))\n"
+        "    print(f'{stem}.mp4: 1 moments', flush=True)\n", encoding="utf-8")
+    return [sys.executable, str(script), str(out), *stems]
+
+
+def test_the_close_look_is_a_second_stage_that_can_overrule_the_first(
+        tmp_path, project, monkeypatch):
+    """Coarse pass, free scan, close look, rank — and the rank believes the close look.
+
+    Karl, on the revision the coarse pass produced: *"You missed some cool jumps —
+    ... the lack of a workflow / algorithm that applies sort / priority following a
+    granular keyframe analysis on the first pass."* This is that workflow end to end,
+    with the stages stubbed: what must hold is that the second stage runs after the
+    first, that its disagreement demotes the first stage's claim rather than being
+    averaged with it, and that a failure there keeps the sheets already paid for.
+    """
+    import server
+
+    monkeypatch.setattr(server, "PROGRESS_TICK_S", 0.05)
+    stems = ["CLIP_A", "CLIP_B", "CLIP_C"]
+    seen: dict = {}
+    monkeypatch.setattr(server, "visual_cmd", lambda only, force: _stub_looker(
+        tmp_path / "look.py", server.STATE["visual"], stems))
+
+    def scan(only, windows_out, limit):
+        seen["limit"], seen["only"] = limit, only
+        Path(windows_out).write_text(
+            json.dumps({s: [[0.5, 4.0]] for s in stems}), encoding="utf-8")
+        return [sys.executable, "-c", "print('scanned')"]
+
+    monkeypatch.setattr(server, "scan_cmd", scan)
+    monkeypatch.setattr(server, "fine_cmd", lambda windows: _stub_fine(
+        tmp_path / "fine.py", server.STATE["visual"], stems))
+
+    with _fresh(tmp_path, project, sidecars=project["sidecars"], visual=None) as c:
+        job = c.post("/api/visual", json={}).json()["job"]
+        s = _wait_visual(c, job)
+        assert s["state"] == "done" and s["done"] == 3 and s["fine_done"] == 3, s
+        assert seen["limit"] == server.FINE_WINDOWS_PER_CLIP
+        assert "scanned" in s["log"]
+
+        # The coarse "fall 1.0-3.0" sat inside the audited window and the close look
+        # called it a glove, so it must not be near the top of the rank any more.
+        ranked = c.get("/api/project").json()["events"]
+        falls = [e for e in ranked if e["kind"] == "fall"]
+        assert falls, "the coarse claim should survive, demoted, not vanish"
+        assert all(e["why_ranked"]["confirmation"] == "contradicted" for e in falls)
+        assert all(e["score"] < 0.6 for e in falls)
+        # junk is a floor, not a low score: it is never offered as a moment to add
+        assert not [e for e in ranked if e["kind"] == "junk"]
+
+        # and the clip inventory the Ask reads carries the close look, not the claim
+        clip = c.get("/api/project").json()["clips"]["CLIP_A.MP4"]
+        kinds = [m["kind"] for m in clip["visual"]["moments"]]
+        assert kinds == ["junk"], kinds
+
+
+def test_a_failed_close_look_keeps_the_sheets_that_were_paid_for(tmp_path, project,
+                                                                 monkeypatch):
+    import server
+
+    monkeypatch.setattr(server, "PROGRESS_TICK_S", 0.05)
+    stems = ["CLIP_A", "CLIP_B", "CLIP_C"]
+    monkeypatch.setattr(server, "visual_cmd", lambda only, force: _stub_looker(
+        tmp_path / "look.py", server.STATE["visual"], stems))
+    monkeypatch.setattr(server, "scan_cmd", lambda only, out, limit: [
+        sys.executable, "-c", "import sys; sys.exit(4)"])
+    with _fresh(tmp_path, project, sidecars=project["sidecars"], visual=None) as c:
+        s = _wait_visual(c, c.post("/api/visual", json={}).json()["job"])
+        assert s["state"] == "done" and s["done"] == 3
+        assert "close look did not finish" in s["detail"]
+        # the coarse pass still reached the board, and still got ranked
+        assert c.get("/api/project").json()["events"][0]["kind"] == "fall"
 
 
 def test_one_visual_pass_at_a_time_and_a_failure_is_reported(tmp_path, project,
