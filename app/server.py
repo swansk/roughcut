@@ -63,7 +63,7 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, Respons
 import uvicorn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from roughcut import config, effects, inference, revise   # noqa: E402  (after sys.path)
+from roughcut import config, effects, events, inference, revise  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent / "research" / "tools"
@@ -224,12 +224,25 @@ def load_visual(clip: str) -> dict:
     so a project may have one and not the other. Nothing here requires it — but the
     moments it carries are the only record of events nobody narrated.
     """
-    p: Path = STATE["visual"] / f"{Path(clip).stem}.visual.json"
+    stem = Path(clip).stem
+    p: Path = STATE["visual"] / f"{stem}.visual.json"
     if not p.exists():
         return {}
     d = json.loads(p.read_text(encoding="utf-8"))
-    return {"moments": d.get("moments", []), "unusable": d.get("unusable", []),
+    fine = load_fine(stem)
+    # The close look replaces the coarse account of the same seconds rather than
+    # joining it. An inventory that still lists a backflip the 1s read found to be a
+    # glove over the lens teaches the Ask exactly the wrong thing (R10).
+    return {"moments": events.merge_moments(d.get("moments", []), fine),
+            "unusable": d.get("unusable", []) + fine.get("unusable", []),
             "summary": d.get("summary", "")}
+
+
+def load_fine(stem: str) -> dict:
+    p: Path = STATE["visual"] / f"{stem}.fine.json"
+    if not p.exists():
+        return {}
+    return json.loads(p.read_text(encoding="utf-8"))
 
 
 def visual_stems() -> set[str]:
@@ -237,11 +250,25 @@ def visual_stems() -> set[str]:
             for p in STATE["visual"].glob("*.visual.json")}
 
 
+def fine_stems() -> set[str]:
+    return {p.name[: -len(".fine.json")]
+            for p in STATE["visual"].glob("*.fine.json")}
+
+
 # The visual pass costs model calls, so it is priced before it is offered. One sheet is
 # 30 cells at 4s (visual_pass.py's defaults) and measured $0.09 on CLIP_01 (two sheets,
 # $0.18) — provisional like everything about that pass (RQ-1/RQ-7 are unmeasured).
 VISUAL_SHEET_S = 120.0
 VISUAL_USD_PER_SHEET = 0.09
+
+# The second stage: a close look at the few busiest windows in each clip. Priced the
+# same way and from the same kind of evidence — 23 fine sheets over three Killington
+# clips came to $1.68, i.e. $0.073 each, barely under a coarse sheet despite covering
+# eight seconds instead of two minutes, because the prompt and not the image is most of
+# the input. Three windows per clip by default: enough to audit a clip's loudest
+# claims, cheap enough that turning the stage on is not a decision.
+FINE_WINDOWS_PER_CLIP = 3
+FINE_USD_PER_WINDOW = 0.073
 
 
 def clip_duration(clip: str) -> float | None:
@@ -258,21 +285,35 @@ def clip_duration(clip: str) -> float | None:
     return d
 
 
-def visual_status() -> dict:
+def visual_status(fine: bool = True) -> dict:
     """How much of the bin has been looked at, and what looking at the rest would cost.
 
     Never run on its own: the audio pass is local and free, this one spends a model call
     per sheet, so the board offers it with a price and a count and the human clicks.
+
+    Both stages are priced, and the second stage's price is reported separately as well
+    as in the total — a button that silently grew 40% dearer because a default changed
+    is the opposite of offering a price.
     """
     clips = footage_clips()
     done = visual_stems()
     pending = [c for c in clips if Path(c).stem not in done]
     sheets = sum(max(1, math.ceil((clip_duration(c) or 0.0) / VISUAL_SHEET_S))
                  for c in pending)
+    # The close look is per clip, not per pending clip: a clip already read coarsely
+    # but never audited is exactly the one whose loudest claim is unchecked.
+    seen_closely = fine_stems()
+    fine_clips = [c for c in clips if Path(c).stem not in seen_closely]
+    fine_calls = len(fine_clips) * FINE_WINDOWS_PER_CLIP if fine else 0
     return {
         "done": len(clips) - len(pending), "total": len(clips), "pending": pending,
-        "calls": sheets, "projected_usd": round(sheets * VISUAL_USD_PER_SHEET, 2),
+        "calls": sheets + fine_calls,
+        "coarse_calls": sheets, "fine_calls": fine_calls,
+        "fine_pending": len(fine_clips), "fine_done": len(clips) - len(fine_clips),
+        "projected_usd": round(sheets * VISUAL_USD_PER_SHEET
+                               + fine_calls * FINE_USD_PER_WINDOW, 2),
         "running": any(v["state"] == "running" for v in VISUALS.values()),
+        "events": len(events.load(STATE["visual"])),
         "dir": str(STATE["visual"]),
     }
 
@@ -326,6 +367,11 @@ def project_payload() -> dict:
         "target": edl.get("target_s", [120, 180]),
         "segments": segments,
         "clips": clips,
+        # The bin's events in priority order — one list, not one per clip, because the
+        # question is "what are the biggest things in this footage" and that is not a
+        # per-clip question. Capped: the board shows 40 and the Ask reads 14, so a
+        # 400-event bin does not put 400 rows through every poll.
+        "events": events.load(STATE["visual"])[:60],
         "proxies_ready": STATE.get("proxies_ready", False),
         "edl_path": str(STATE["edl"]),
         "music": edl.get("effects_music"),
@@ -437,15 +483,15 @@ async def api_snap(request: Request) -> JSONResponse:
 
 
 def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
-             target: tuple[float, float]) -> None:
+             target: tuple[float, float], ranked: list[dict] | None = None) -> None:
     entry = ASKS[job]
     try:
         if segments:
             plan = revise.propose(segments=segments, clips=clips, story=story,
-                                  note=note, target=target)
+                                  note=note, target=target, events=ranked)
         else:
             plan = revise.originate(clips=clips, story=story, note=note,
-                                    target=target)
+                                    target=target, events=ranked)
     except inference.BudgetExceeded as exc:
         entry.update(state="failed", detail=str(exc), code=429)
         return
@@ -505,7 +551,8 @@ async def api_ask(request: Request) -> JSONResponse:
     threading.Thread(
         target=_ask_job,
         args=(job, segments, clips, story, note,
-              (float(target[0]), float(target[1]))), daemon=True).start()
+              (float(target[0]), float(target[1])), payload["events"]),
+        daemon=True).start()
     return JSONResponse({"job": job})
 
 
@@ -639,15 +686,22 @@ def _ticker(stop: threading.Event, update) -> None:
             pass          # a stat that fails must not kill the job it is watching
 
 
-def _run_counted(entry: dict, cmd: list[str], count) -> int:
+def _run_counted(entry: dict, cmd: list[str], count, key: str = "done",
+                 append: bool = False) -> int:
     """Run a tool in the background, streaming its log into `entry` and ticking
-    `entry["done"]` from `count()` on a clock. Returns the exit code (-1: never ran).
+    `entry[key]` from `count()` on a clock. Returns the exit code (-1: never ran).
 
     Counted from the sidecars on disk rather than parsed out of the tool's chatter: both
     passes write one file per clip as they finish, so the filesystem is the honest
     progress bar and stays right if the log format moves.
+
+    `key` exists because the visual pass has two stages with different units — clips
+    seen, then clips audited. Ticking both into `done` made a finished job report zero
+    of three the moment the second stage started, which is worse than no progress bar.
+    `append` keeps the earlier stage's log in front of this one's, so a job that failed
+    in its second stage can still be diagnosed from its first.
     """
-    lines: list[str] = []
+    lines: list[str] = entry["log"].splitlines() if append and entry.get("log") else []
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -660,7 +714,7 @@ def _run_counted(entry: dict, cmd: list[str], count) -> int:
     assert proc.stdout is not None
     stop = threading.Event()
     ticker = threading.Thread(
-        target=_ticker, args=(stop, lambda: entry.__setitem__("done", count())),
+        target=_ticker, args=(stop, lambda: entry.__setitem__(key, count())),
         daemon=True)
     ticker.start()
     try:
@@ -670,7 +724,7 @@ def _run_counted(entry: dict, cmd: list[str], count) -> int:
         rc = proc.wait()
     finally:
         stop.set()
-    entry["done"] = count()
+    entry[key] = count()
     entry["log"] = "\n".join(lines[-40:])
     return rc
 
@@ -752,10 +806,69 @@ def visual_cmd(only: list[str], force: bool) -> list[str]:
     return cmd
 
 
-def _visual_job(job: str, cmd: list[str], wanted: set[str]) -> None:
+def scan_cmd(only: list[str], windows_out: Path, limit: int) -> list[str]:
+    """The free motion scan, as a command — a function so the tests can replace it.
+    Costs nothing but ffmpeg time, so it runs unconditionally before the close look."""
+    cmd = ["uv", "run", "--quiet", str(TOOLS / "event_scan.py"), str(STATE["proxy_dir"]),
+           "--sidecars", str(STATE["sidecars"]), "--visual", str(STATE["visual"]),
+           "--limit", str(limit), "--windows-out", str(windows_out)]
+    if only:
+        cmd += ["--only", ",".join(only)]
+    return cmd
+
+
+def fine_cmd(windows: Path) -> list[str]:
+    """The close look. Reads the **proxies**, not the masters: the thumbnails are
+    480px either way, the proxy is already oriented, and seeking into a 5.3K HEVC
+    master for an eight-second window costs more than the whole scan."""
+    return ["uv", "run", "--quiet", str(TOOLS / "visual_pass.py"),
+            str(STATE["proxy_dir"]), "-o", str(STATE["visual"]),
+            "--interval", "1", "--cols", "3", "--rows", "5", "--width", "480",
+            "--orient", "auto", "--windows", str(windows)]
+
+
+def rebuild_events() -> int:
+    """Re-derive the bin's ranked events file. Free — no model calls — so it runs after
+    every pass rather than being something a human has to remember."""
+    payload = events.build(STATE["visual"], STATE["sidecars"])
+    events.write(STATE["visual"], payload)
+    return len(payload["events"])
+
+
+def _visual_job(job: str, cmd: list[str], wanted: set[str], fine: bool,
+                windows_per_clip: int) -> None:
+    """Coarse pass, then the free scan, then a close look at the busiest windows.
+
+    Staged rather than merged because the stages have different prices and different
+    failure modes: the coarse pass is what makes a clip "seen" at all, the scan is
+    free, and the close look is the only one that can be skipped without leaving the
+    board blind. A failed second stage keeps the first stage's work — every sheet of
+    it was paid for.
+    """
     entry = VISUALS[job]
+    entry["stage"] = "looking"
     rc = _run_counted(entry, cmd, lambda: len(wanted & visual_stems()))
-    entry["state"] = "done" if rc == 0 else "failed"
+    if rc != 0:
+        entry.update(state="failed", stage="looking")
+        return
+    if fine:
+        entry["stage"] = "scanning"
+        windows = STATE["work"] / f"windows_{job}.json"
+        stems = sorted(Path(c).stem for c in footage_clips())
+        rc = _run_counted(entry, scan_cmd(stems, windows, windows_per_clip),
+                          lambda: len(fine_stems()), key="fine_done", append=True)
+        if rc == 0 and windows.exists():
+            entry["stage"] = "closer"
+            rc = _run_counted(entry, fine_cmd(windows), lambda: len(fine_stems()),
+                              key="fine_done", append=True)
+        if rc != 0:
+            # Not a failure of the job: the clips have been seen, which is what the
+            # board needs. The close look is an audit and it can be re-run for free.
+            entry["detail"] = "the close look did not finish; coarse pass is kept"
+        windows.unlink(missing_ok=True)
+    entry["stage"] = "ranking"
+    entry["events"] = rebuild_events()
+    entry.update(state="done", stage="done")
 
 
 @app.post("/api/visual")
@@ -774,6 +887,11 @@ async def api_visual(request: Request) -> JSONResponse:
         raise HTTPException(409, "a visual pass is already running")
     only = {str(s).strip().upper() for s in body.get("only", []) if str(s).strip()}
     force = bool(body.get("force"))
+    # The close look is on by default and cheap by default: three windows per clip,
+    # priced in /api/status alongside the coarse pass so the button carries the total.
+    fine = bool(body.get("fine", True))
+    windows_per_clip = max(1, min(8, int(body.get("fine_windows",
+                                                  FINE_WINDOWS_PER_CLIP))))
     done = visual_stems()
     wanted = {Path(c).stem for c in footage_clips()
               if (not only or Path(c).stem.upper() in only)
@@ -782,10 +900,12 @@ async def api_visual(request: Request) -> JSONResponse:
         raise HTTPException(400, "nothing to look at — every clip has been seen")
 
     job = uuid.uuid4().hex[:8]
-    VISUALS[job] = {"state": "running", "log": "", "total": len(wanted), "done": 0,
-                    "started": time.time()}
+    VISUALS[job] = {"state": "running", "stage": "looking", "log": "",
+                    "total": len(wanted), "done": 0, "fine_done": 0, "events": 0,
+                    "detail": "", "fine": fine, "started": time.time()}
     threading.Thread(target=_visual_job,
-                     args=(job, visual_cmd(sorted(wanted), force), wanted),
+                     args=(job, visual_cmd(sorted(wanted), force), wanted, fine,
+                           windows_per_clip),
                      daemon=True).start()
     return JSONResponse({"job": job, "total": len(wanted)})
 

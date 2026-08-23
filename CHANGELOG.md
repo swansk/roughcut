@@ -10,6 +10,58 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **[R10](research/R10-events-priority.md) — sorting what was seen, and what a closer look is
+  actually worth.** Answering Karl's *"you missed some cool jumps"* with numbers, and finding
+  that only half the diagnosis holds. A 1s read of 23 motion-picked windows did surface four
+  events at timestamps the 4s pass never mentioned — and then eleven claimed events, checked by
+  eye against the frames, produced **zero that were what either pass said they were**. The
+  mechanism is one thing: on a helmet or chest mount the horizon sits at forty-five degrees, so
+  *the camera* is inverted and both densities read it as *"rider inverted mid-air"*. The three
+  claims the previous proposal cut on — CLIP_04's backflip and crash, CLIP_11's inverted trick —
+  are among them. Two cost facts fall out: a fine sheet costs the same as a coarse one ($0.073
+  vs $0.077) because the prompt and not the image is what is paid for, so **density is cheap and
+  coverage is expensive**; and a close look is a good *auditor* and a poor *detector* — every
+  `junk` call it made was right. The ranking is built on that asymmetry. R8/R9/R10 are now
+  listed in research/README.md, which had only ever carried the planned studies.
+- **Events, ranked — and the rank believes a second look over a first one.** Karl, on the
+  Killington revision: *"You missed some cool jumps — this is likely due to limited keyframe
+  analysis and the lack of a workflow / algorithm that applies sort / priority following a
+  granular keyframe analysis on the first pass."* Both halves were right and they were
+  different faults. The sort is now real: `roughcut/events.py` scores every moment as **kind ×
+  notable × corroboration × confirmation × usable** and writes the bin's ranked list to one
+  `events.json` beside the visual sidecars — one file per bin, not an `events` key inside each
+  sidecar, because the question ("the twelve biggest things in this footage") is bin-wide,
+  because the sidecars are paid observations and this is derived, and because it can be deleted
+  and rebuilt for nothing. It reaches the Ask as a **`## Events, ranked` section before the clip
+  inventory**, the board's *seen* tab (sorted by that score, junk never offered), and
+  `/api/project`. The load-bearing term is **confirmation**, not kind: [R10](research/R10-events-priority.md)
+  adjudicated eleven claimed events against the frames and *none* survived as described — a 45°
+  helmet-cam horizon reads as "rider inverted mid-air" to both sampling densities — so a claim
+  two independent looks agree on scores ×1.5, one a closer look contradicts scores ×0.35, and
+  `junk` is a floor of zero rather than a low score. The prompt now states that measured trap
+  where it already states the transcript-density one, and every ranked line carries its evidence
+  word so an unaudited `jump` reads as the guess it is.
+- **The visual pass has a second stage, priced like the first.** `POST /api/visual` runs the
+  coarse pass, then the free motion scan, then a close look at the busiest three windows per
+  clip (`fine: false` turns it off, `fine_windows` moves the number), then rebuilds the rank —
+  for free. `/api/status` splits `coarse_calls` and `fine_calls` and totals the price, because a
+  button that silently grew 40% dearer because a default changed is not offering a price. A
+  failed second stage keeps the sheets already paid for and says so; the two stages tick
+  separate counters after ticking both into `done` made a finished job report 0/3.
+- **A free motion track, and a visual pass that can look closely at one moment.** The visual
+  pass samples every 4s; a jump lasts one or two seconds, so whether an air is seen at all is a
+  coin toss on phase, and sampling a 44-minute bin at 1s would cost four times as much for
+  frames that are almost all snow. `roughcut/events.py` adds the cheap half of the answer:
+  `scdet`'s frame difference over the 720p proxy at 10 Hz — one ffmpeg pass, ~6s per 5-minute
+  clip, no model call — combined with the 10 Hz onset track every audio sidecar has carried
+  since R8, as robust z-scores so a POV run and a lift cabin are each judged against their own
+  noise floor. Its peaks are **candidate windows**: `research/tools/event_scan.py` writes them
+  out (motion tracks cached beside the visual sidecars), and `visual_pass.py --windows` reads
+  one sheet per window at any interval, writing `<stem>.fine.json` beside the coarse
+  `<stem>.visual.json` and never over it — two paid observations of the same clip, cached per
+  window so a second stage can add three more without re-buying the five already on disk.
+  `contact_sheet.py` grew `--start/--end` to make that possible, and keeps labelling cells in
+  **clip** seconds through the input seek, which is the whole value of a fine read.
 - **`assemble.py --profile preview|delivery`, and the board can ask for either.** `preview` is
   exactly today's fixed 1920×1080 @ 24000/1001, veryfast/crf 20 — unchanged, still what quick
   versions use. `delivery` conforms every clip to the bin's own majority frame rate (measured,

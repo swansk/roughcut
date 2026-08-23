@@ -105,7 +105,57 @@ VISUAL_GUIDANCE = """
   have of things that happen without being spoken: a fall, a crash, a landing. People
   narrate those minutes later if at all, so the words sit nowhere near the moment. A
   line marked `!` is one the reader thought notable; a stretch listed as unusable is
-  one to cut around, not through."""
+  one to cut around, not through.
+* **But "inverted", "upside-down" and "flip" usually describe the camera, not the
+  person.** Measured, not cautionary (R10): every claim of that shape checked against
+  the frames on this bin turned out to be a helmet or chest mount on a POV run, where
+  the horizon sits at forty-five degrees and the trees hang from the top of frame.
+  Treat a trick as real when the ranked events list says a closer look **confirmed**
+  it, and as a guess otherwise — and never write a `why` promising that the picture
+  delivers a trick unless it is confirmed."""
+
+
+# The ranked list, ahead of the inventory. Karl, on the revision this replaces: *"the
+# lack of a workflow / algorithm that applies sort / priority following a granular
+# keyframe analysis on the first pass."* Forty undifferentiated "what is visible" lines
+# per clip give a reader no way to tell a backflip from a wide shot of a valley; this
+# says which ones to look at first, and — as important — how much each one is worth
+# believing.
+EVENTS_HEADER = """## Events, ranked
+
+The biggest things anyone has seen in this footage, in priority order. The score
+combines what kind of event it is, whether the reader marked it notable, whether a
+motion or audio peak corroborates it, and whether a second, closer look agreed.
+
+Read the evidence word, not just the kind:
+
+* `confirmed` — two independent looks at those seconds agreed. This is the only strong
+  evidence available; prefer these.
+* `unaudited` — nobody has looked closely yet. The kind is one reader's guess from
+  frames four seconds apart, and on this footage that guess is often wrong.
+* `unsupported` / `contradicted` — a closer look at 1s found nothing, or found a
+  camera artefact where the first pass claimed an event. Do not build a shot on these.
+
+Timestamps are seconds within the named clip."""
+
+
+def events_section(events: list[dict], top: int = 14) -> str:
+    """The ranked events as prompt text, or "" when nobody has looked at the bin."""
+    if not events:
+        return ""
+    lines = []
+    for e in events[:top]:
+        why = e.get("why_ranked") or {}
+        status = why.get("confirmation", "unseen")
+        status = "unaudited" if status == "unseen" else status
+        corroborated = ""
+        if why.get("corroboration_z", 0) >= 2.0:
+            corroborated = f", peak at {why.get('peak_at')}s"
+        lines.append(
+            f"{e.get('rank', 0):3d}. {e['clip']} {e['start']:.1f}-{e['end']:.1f}  "
+            f"[{e.get('kind', '')}] score {e.get('score', 0):.2f}, {status}"
+            f"{corroborated} — {e.get('what', '')}")
+    return f"{EVENTS_HEADER}\n\n" + "\n".join(lines)
 
 
 SESSION_GAP_S = 4 * 3600
@@ -187,7 +237,8 @@ def _clip_block(clip: dict, timeline: dict[str, str] | None = None) -> str:
 
 
 def build_prompt(segments: list[dict], clips: dict[str, dict], story: str,
-                 note: str, target: tuple[float, float]) -> str:
+                 note: str, target: tuple[float, float],
+                 events: list[dict] | None = None) -> str:
     current = "\n".join(
         f"  {i + 1:2d}. {s['clip']} {s['in']:.2f}-{s['out']:.2f} "
         f"({s['out'] - s['in']:.1f}s) — {s.get('why', '')}"
@@ -195,6 +246,10 @@ def build_prompt(segments: list[dict], clips: dict[str, dict], story: str,
     total = sum(s["out"] - s["in"] for s in segments)
     timeline = shot_timeline(clips)
     inventory = "\n\n".join(_clip_block(c, timeline) for c in clips.values())
+    # Before the inventory, always. A ranked list that arrives after forty clip blocks
+    # is a footnote; the whole point is that it is read first.
+    ranked = events_section(events or [])
+    ranked = f"{ranked}\n\n" if ranked else ""
 
     return f"""The editor is cutting a short film from one bin of footage.
 
@@ -211,7 +266,7 @@ def build_prompt(segments: list[dict], clips: dict[str, dict], story: str,
 ## The editor's note
 {note.strip()}
 
-## Every clip available, with its transcript
+{ranked}## Every clip available, with its transcript
 {inventory}
 
 ## What to return
@@ -225,10 +280,13 @@ reads as a mistake. Say in the `why` when a move is deliberate."""
 
 
 def build_first_prompt(clips: dict[str, dict], story: str, note: str,
-                       target: tuple[float, float]) -> str:
+                       target: tuple[float, float],
+                       events: list[dict] | None = None) -> str:
     """The originating prompt: no current edit, so the material and the brief carry it."""
     timeline = shot_timeline(clips)
     inventory = "\n\n".join(_clip_block(c, timeline) for c in clips.values())
+    ranked = events_section(events or [])
+    ranked = f"{ranked}\n\n" if ranked else ""
     total = sum(float(c["duration"]) for c in clips.values())
     guidance = FIRST_GUIDANCE + (
         VISUAL_GUIDANCE if any((c.get("visual") or {}).get("moments")
@@ -254,7 +312,7 @@ edit yet; you are making the first one.
 ## How to read this material
 {guidance}
 
-## Every clip available, with its transcript
+{ranked}## Every clip available, with its transcript
 {inventory}
 
 ## What to return
@@ -315,15 +373,18 @@ def _ask(prompt: str, system: str, clips: dict[str, dict]) -> dict:
 
 
 def propose(segments: list[dict], clips: dict[str, dict], story: str, note: str,
-            target: tuple[float, float] = (120.0, 180.0)) -> dict:
+            target: tuple[float, float] = (120.0, 180.0),
+            events: list[dict] | None = None) -> dict:
     """Ask for a revision. Returns {'segments', 'notes', 'usage'}."""
     if not note.strip():
         raise ValueError("empty note")
-    return _ask(build_prompt(segments, clips, story, note, target), SYSTEM, clips)
+    return _ask(build_prompt(segments, clips, story, note, target, events),
+                SYSTEM, clips)
 
 
 def originate(clips: dict[str, dict], story: str, note: str = "",
-              target: tuple[float, float] = (120.0, 180.0)) -> dict:
+              target: tuple[float, float] = (120.0, 180.0),
+              events: list[dict] | None = None) -> dict:
     """Ask for a *first* cut. Same return shape as `propose`.
 
     Neither `story` nor `note` is required. Intent is the human's half of the loop and
@@ -334,4 +395,5 @@ def originate(clips: dict[str, dict], story: str, note: str = "",
     """
     if not clips:
         raise ValueError("no analysed clips to cut from")
-    return _ask(build_first_prompt(clips, story, note, target), FIRST_SYSTEM, clips)
+    return _ask(build_first_prompt(clips, story, note, target, events),
+                FIRST_SYSTEM, clips)

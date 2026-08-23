@@ -21,3 +21,14 @@ Directed studies that replace assumptions with measurements. Each `RQ:` marker i
 | ~~R4~~ | **Deferred** — [gate recall curve](R4-gate-recall.md). Gating is off by default at the 3–5h design scale (SPEC §7): analyzing everything costs < $15, so there's no reason to accept dropped-highlight risk. Revive only if 20h bins appear. | — | — | — |
 | [R5](R5-frame-accuracy.md) | Frame-accuracy harness | how T10 renders are verified | ffmpeg only | $0 |
 | [R6](R6-quality-rubric.md) | Rough-cut quality rubric | how T13 output is judged | Karl's judgment | $0 |
+
+## Closed on real bins
+
+Run against footage rather than planned against the SPEC. Their reports are the decision record,
+and they are the studies most likely to be re-litigated.
+
+| ID | Study | Decided | Cost |
+|---|---|---|---|
+| [R8](R8-audio-signals.md) | Audio signals on B1 — what the Tier A DSP is worth | the transcript is the signal; the DSP speech detector is weak and ASR makes it redundant | $0 |
+| [R9](R9-events-and-wind.md) | Audio event tagging, and the wind detector it exposed as dead | no non-verbal reaction signal exists on this footage at any threshold; the wind rule is recalibrated to three terms | $0 |
+| [R10](R10-events-priority.md) | Sorting what was seen, and what a closer look is worth | rank on **confirmation**, not on kind — 11 adjudicated event claims, none survived as described, because a 45° helmet-cam horizon reads as "rider inverted mid-air" at 4s and at 1s alike. Density is not the expensive axis; coverage is | $1.68 |
