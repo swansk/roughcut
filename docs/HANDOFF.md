@@ -1,11 +1,17 @@
 # Handoff — read this first
 
-Last updated: 2026-08-22, end of session 6 (the board became something you can edit in: a
+Last updated: 2026-08-23, session 6 continued — Karl ran a revision with the corrected
+transcripts and **accepted it** (17 shots, 3:01, the ski-patrol beat in it), rendered it at 4K,
+and reported three more things: the progress bars said nothing useful, the monitor showed blank
+while the audio played, and the renders stalled with no way to download them. Two more agent
+branches answered those and are merged.
+
+Earlier the same session: the board became something you can edit in — a
 **monitor** that plays the cut from the proxies, the **visual pass** runnable from the board with
 what it saw on the cards, and **music** under the cut — all verified live on Killington; then, once Karl logged the CLI in
 mid-session, the visual pass ran over all 12 clips from the board and two proposals were made,
 neither applied; Karl then watched the proposal and gave notes, and four agent branches answered
-them — all merged). Sessions 4–5 are summarised under "START HERE". Jump there, then "The roadmap
+them — all merged. Sessions 4–5 are summarised under "START HERE". Jump there, then "The roadmap
 after that".
 
 Repo: [github.com/swansk/roughcut](https://github.com/swansk/roughcut), private, `main`.
@@ -341,15 +347,49 @@ answered them and are merged into `main`** — `agent/boundaries`, `agent/render
   stages (coarse → scan → close look at 3 windows per clip, priced separately). Study:
   [research/R10-events-priority.md](../research/R10-events-priority.md).
 
-**Karl's next move, in the board** (the server on 8765 runs the merged code; the pill reads
-*ready*): the proposal on offer (`ed8134bb`) predates the corrected transcripts and the polish.
-**Ask for a fresh revision** — name the ski-patrol beat (CLIP_09 ~105–116) and question the three
-camera-inverted "flips" the proposal built on (its shots 9, 10, 14); it arrives polished, with
-the ranked events in front of it, ~3 minutes and ~$0.6. Watch it in the monitor (it scrolls to
-you now), render with `delivery` when a cut is worth 17 minutes. Then Accept or Discard.
+**He did that, and it worked.** The revision he asked for was accepted and is the cut on disk:
+**17 shots, 180.98s**, and `CLIP_09 105.3–116.71` is in it — the ski-patrol beat, which no
+transcript in this project contained until the VAD fix earlier the same day. The boundary polish
+shows in the same file (`CLIP_03 18.09–21.23`, so "pizza!" finishes instead of clipping at
+20.90). He rendered it at `delivery`: `cut_110ecb13.mp4`, 3840×2160, 3:01, 987 MB, 17 shots,
+with the bed.
 
-Whatever Karl reports is the first input of the next session — same rule as before: if the cut
-is a highlight reel, that is the finding; do not fix it by hand.
+**Then he reported three things, all now answered** (branches `agent/progress` and
+`agent/preview`, merged; every fix has its CHANGELOG bullet):
+
+- *"Several progress bars need help… when I ask for changes from the AI the first step must be an
+  estimate of how long it will take… milestones… a progress tracking bar up top, re-use across
+  app."* Built. `roughcut/progress.py` is one job shape behind analyse, visual, render and Ask;
+  `roughcut/estimate.py` makes one cheap call before an Ask that returns an ETA and milestones
+  (validated like a plan, one bounded re-ask, and it can never block the work); the CLI backend
+  streams (`--output-format stream-json`) so milestones complete on **real events** — "17 of ~17
+  shots decided" is the plan being parsed as it arrives, not a timer — and the ETA recalibrates
+  at each one. Live: predicted **80s**, actual **79.1s**. One strip under the step strip carries
+  every long operation, draws two at once, and re-attaches after a reload. Analyse, visual and
+  render take *computed* estimates rather than model ones, deliberately: their length is
+  arithmetic the app already does, so a call there would spend $0.03 to be less accurate.
+- *"I can hear the videos when I click play, but the preview window still shows up blank."* Two
+  causes, both fixed. Shot cards were 17 autonomous `<video>` elements each streaming an 85 MB
+  proxy, so the monitor's own request queued behind them (page-load media traffic **0.2–2.5 MB →
+  93 KB**); they are JPEG posters now. And the monitor was `preload="auto"` with the src set
+  before anything said where the shot starts, so Chrome fetched from **byte 0** — playing a shot
+  at 188.2s it buffered 0–15s. It is `preload="metadata"` with a `#t=` fragment now and buffers
+  at the shot. Live after the merge: first painted frame **631 ms**.
+- *"Renders get stuck loading forever… only played for like 3s before video buffers. Make it
+  clear how to download."* See roadmap item 2 below: review copies, the download control, and
+  the render job that no longer claims to be finished before there is something to watch. Also
+  **one render at a time** now — he asked whether clicking Render repeatedly could break the
+  state; it could not corrupt output (every job owns its id, parts dir and file) but nothing
+  stopped two 4K encodes competing for the box, so `/api/render` answers 409 and the control
+  reads *Rendering…*.
+
+**Karl's next move:** open the board (8765 runs the merged code) and watch the cut he accepted —
+in the monitor for the edit, or the A/B players for the renders, which now stream a 720p copy
+and offer `↓ download` for the master. The open question is the film itself: is the 17-shot cut
+good? If it is a highlight reel, that is the finding — do not fix it by hand. Beyond that,
+roadmap item 1 (auditing what the sheets claim) is the biggest lever left.
+
+Whatever Karl reports is the first input of the next session.
 
 ## The roadmap after that
 
@@ -436,8 +476,23 @@ lexical read of excitement markers — see the open thread in the selection note
 
 ## Findings that must not be re-litigated
 
+## Findings that must not be re-litigated
+
 These were measured, cost real effort, and are easy to accidentally undo:
 
+- **A finished render is not a watchable file, and "it looks broken" is usually contention.**
+  Karl's 4K delivery render read as *"jumping all around the place"*; the file is structurally
+  perfect (5427 frames, every interval exactly 1/29.97, no gaps or duplicates) and simply heavy —
+  987 MB at 43.6 Mbps, **92.8 s of CPU to decode 181 s of video** against 16.1 s for the 1080p
+  render on the same box. Packet-order PTS looks non-monotonic on a `preset slow` encode; that is
+  B-frame decode order, not damage — do not chase it. Anything the browser has to *play* gets a
+  720p copy; the master is for downloading.
+- **Say what the box was doing when you measure the UI.** The 6.8–9.5 s first frame that
+  justified the poster work reproduced three times — on a machine that had just finished a 4K
+  render. Idle and warm, the old code was already 0.79 s. Both readings are true and only one is
+  the defect (an editor whose first frame degrades with whatever else the box is doing, which is
+  exactly how Karl works). A number without its conditions is a number the next session cannot
+  check.
 - **The preview render's "quality loss" is real, measured, and not a bug** (2026-08-23, prompted
   by Karl watching `cut_91e0b993`/`cut_29ed8c3f` and suspecting an encoding problem). Killington
   is 4K (3840×2160; 9 clips H.264 29.97fps, 3 clips HEVC 59.94fps — `benchmarks/README.md`'s B2

@@ -217,6 +217,14 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Changed
+- **`docs/HANDOFF.md` records the rest of session 6.** Karl accepted the revision built on the
+  corrected transcripts — 17 shots, 3:01, with the ski-patrol beat that no transcript in this
+  project contained until that morning — rendered it at 4K, and reported three more problems
+  (the progress bars, the blank preview, the stalling renders). START HERE now says what he
+  accepted, what each of those turned out to be, and what is left to judge; two findings join the
+  must-not-relitigate list: a heavy render reads as a broken one (the 4K file is structurally
+  perfect and simply costs 92.8 s of CPU per 181 s of video), and a UI measurement without the
+  machine's condition written next to it cannot be re-checked.
 - **`docs/HANDOFF.md` was rewritten three times as session 6 ran**, and these are the entries
   those commits owed. First (`11e8fec`): START HERE replaced with sessions 4-6 in a paragraph,
   where the Killington bin actually stands on disk, and a roadmap reordered around the monitor,
