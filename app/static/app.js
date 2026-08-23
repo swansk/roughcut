@@ -193,6 +193,29 @@ async function pollJobs() {
   // Gone completely when there is nothing to say. A strip that lingers empty is one
   // more thing on a screen that already has plenty.
   $('#progress').hidden = !jobs.length;
+  // Driven from the server's registry rather than from this tab's own click, so it is
+  // right after a reload and right when the render was started somewhere else. The
+  // pending flag covers the second between the click and the job existing to be seen.
+  setRenderBusy(renderPending
+    || jobs.some((j) => j.kind === 'render' && j.state === 'running'));
+}
+
+/* One render at a time.
+ *
+ * Karl asked whether hitting Render repeatedly can break the state of a render. It
+ * cannot — each job has its own id, parts directory and output file — but two encodes
+ * on one box make both crawl, and his delivery render was ~17 minutes with the machine
+ * otherwise idle. The server refuses the second with a 409; with the strip above now
+ * showing what the render is doing, a control that says it is already rendering is the
+ * honest other half. */
+let renderPending = false;
+function setRenderBusy(busy) {
+  const b = $('#render');
+  if (!b || b.dataset.busy === String(busy)) return;
+  b.dataset.busy = String(busy);
+  b.disabled = busy;
+  b.textContent = busy ? 'Rendering…' : 'Render';
+  b.title = busy ? 'a render is already running — see the bar above' : '';
 }
 
 function linesFor(seg) {
@@ -1514,10 +1537,28 @@ function waitForReviews(renders) {
 }
 
 async function doRender() {
-  const r = await fetch('/api/render', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ segments: segs, profile: $('#renderProfile').value }),
-  });
+  if ($('#render').disabled) return;
+  // Before the request, not after it: the click that matters is the second one, and
+  // it happens long before any response comes back.
+  renderPending = true;
+  setRenderBusy(true);
+  let r;
+  try {
+    r = await fetch('/api/render', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ segments: segs, profile: $('#renderProfile').value }),
+    });
+  } finally {
+    renderPending = false;
+  }
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    toast(body.detail || `render refused (${r.status})`);
+    // A 409 means one really is running and the strip keeps the button busy;
+    // anything else was this request's fault, so give the button back.
+    setRenderBusy(r.status === 409);
+    return;
+  }
   const { job } = await r.json();
   strip.owned.add(job);
   $('#renderState').textContent = 'starting…';
@@ -1542,6 +1583,7 @@ async function doRender() {
     }
     clearInterval(poll);
     $('#renderBar').style.display = 'none';
+    setRenderBusy(false);
     $('#renderState').textContent = s.state === 'done'
       ? `done in ${clock(s.elapsed_s)}` : 'failed';
     if (s.url) {

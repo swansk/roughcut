@@ -10,6 +10,18 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **One render at a time, and a button that says so.** Karl asked whether *"hitting the button
+  multiple times can break the system state of the render"*. It cannot: every job has its own
+  id, its own parts directory and its own output file, so two renders write two files and
+  neither touches the other — nothing was ever at risk of corruption. What was at risk was the
+  clock. His delivery render took ~17 minutes with the machine otherwise idle, and two 4K
+  encodes competing for the same cores make both crawl; nothing stopped a second one from
+  starting. `POST /api/render` now answers **409** naming the job that is running and what it
+  is doing, the same rule `/api/analyze` and `/api/visual` have always had, and the Render
+  control reads *Rendering…* and is disabled while one is going. The control is driven from
+  `/api/jobs` rather than from the click that started it, so it is right after a reload and
+  right when the render was started in another tab — and with the top strip now carrying the
+  render's progress, a disabled button next to a moving bar says the whole thing.
 - **One progress model, and a bar up top that every long operation drives.** Karl:
   *"Several progress bars need help… consider a progress tracking bar up top for anything which
   may take time to complete — re-use across app."* The board had four long operations and four

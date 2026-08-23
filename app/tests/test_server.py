@@ -664,6 +664,48 @@ def test_unknown_render_profile_is_rejected(client, project):
     assert client.post("/api/render", json=body).status_code == 400
 
 
+def _running_renders():
+    import server
+    from roughcut import progress
+    return [j for j in server.RENDERS.values()
+            if j["state"] not in progress.TERMINAL]
+
+
+def _wait_render(client, job, timeout: float = 120):
+    deadline = time.time() + timeout
+    while client.get(f"/api/render/{job}").json()["state"] == "running":
+        assert time.time() < deadline, "render timed out"
+        time.sleep(0.2)
+    return client.get(f"/api/render/{job}").json()
+
+
+def test_only_one_render_at_a_time(client, project):
+    """Karl: "can hitting the button multiple times break the system state of the
+    render?" It cannot corrupt anything — every job has its own id, parts directory
+    and output file, so two renders write two files and neither touches the other.
+    What it does is make both crawl: his delivery render took ~17 minutes with the
+    machine otherwise idle, and two 4K encodes share the same cores. Analyse and the
+    visual pass have refused a second job all along; this is the same rule."""
+    body = {"segments": [{"clip": "CLIP_A.MP4", "in": 0.0, "out": 2.0, "why": "a"}]}
+    plans_before = len(list(project["work"].glob("render_*.json")))
+    job = client.post("/api/render", json=body).json()["job"]
+    second = client.post("/api/render", json=body)
+    assert second.status_code == 409
+    # named, so the refusal points at what is running rather than just scolding
+    assert job in second.json()["detail"], second.json()
+    # and refused before anything was started or written for it
+    assert len(_running_renders()) == 1
+    assert len(list(project["work"].glob("render_*.json"))) == plans_before + 1
+
+    done = _wait_render(client, job)                   # the first one lands untouched
+    assert done["state"] == "done", done["log"][-400:]
+    assert Path(done["output"]).name == f"cut_{job}.mp4"
+    # once it is over the button works again
+    again = client.post("/api/render", json=body)
+    assert again.status_code == 200
+    _wait_render(client, again.json()["job"])
+
+
 def test_renders_from_before_the_profile_existed_still_list_cleanly(client, project):
     """Old metadata on disk has neither `profile` nor `width`/`height` — it must
     read as the preview render it always was, never crash the versions list, and

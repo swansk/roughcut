@@ -975,6 +975,46 @@ def test_the_top_bar_makes_a_render_impossible_to_miss(page, monkeypatch):
         "document.querySelector('#progress').hidden === true", timeout=20000)
 
 
+def test_the_render_control_will_not_fire_a_second_render(page, monkeypatch):
+    """Karl: "can hitting the button multiple times break the system state of the
+    render?" It cannot corrupt anything, but two encodes on one box make both crawl,
+    so the server refuses the second with a 409 and the control says it is already
+    rendering rather than quietly firing again. With the strip above showing the
+    render's progress, a disabled control and a moving bar are the honest pair."""
+    import server
+    from roughcut import progress
+
+    monkeypatch.setattr(progress, "KEEP_FINISHED_S", 1.0)
+    for registry in (server.ASKS, server.RENDERS, server.ANALYSES, server.VISUALS):
+        registry.clear()
+    page.locator("#render").click()
+    page.wait_for_function(
+        "document.querySelector('#render').disabled === true", timeout=20000)
+    assert "Rendering" in page.locator("#render").inner_text()
+
+    # A second press does nothing: a disabled button dispatches no click, so no
+    # second job is started even though the pointer found the same pixels.
+    page.evaluate("document.querySelector('#render').click()")
+    assert len(server.RENDERS) == 1, list(server.RENDERS)
+
+    # and the request behind the button is refused on its own account, by name
+    status, detail = page.evaluate("""async () => {
+      const r = await fetch('/api/render', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ segments: segs }) });
+      return [r.status, (await r.json()).detail];
+    }""")
+    assert status == 409, (status, detail)
+    assert next(iter(server.RENDERS)) in detail, detail
+    assert len(server.RENDERS) == 1
+
+    # when it is over the control comes back on its own, off the job list rather
+    # than off this tab's own click
+    page.wait_for_function(
+        "document.querySelector('#render').disabled === false", timeout=180000)
+    assert page.locator("#render").inner_text().strip() == "Render"
+
+
 def test_a_running_ask_is_picked_back_up_after_a_reload(page):
     """A four-minute call outlives a reload. The job registry is server-side, so the
     page re-attaches to what is still running instead of leaving it unwatched — which

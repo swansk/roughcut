@@ -1433,6 +1433,18 @@ REVIEW_S_PER_CUT_S = {"preview": 0.22, "delivery": 0.53}
 @app.post("/api/render")
 async def api_render(request: Request) -> JSONResponse:
     body = await request.json()
+    # One render at a time, the same rule the audio and visual passes already have.
+    # Karl asked whether "hitting the button multiple times can break the system state
+    # of the render": it cannot — every job has its own id, parts directory and output
+    # file, so nothing is corrupted and nothing overwrites anything. What it does is
+    # make you wait twice as long. His delivery render took ~17 minutes with the
+    # machine otherwise idle; two 4K encodes compete for the same cores and both crawl.
+    running = next((j for j in RENDERS.values()
+                    if j["state"] not in progress.TERMINAL), None)
+    if running is not None:
+        raise HTTPException(
+            409, f"render {running['id']} is already running — "
+                 f"{running.get('detail') or running['label']}")
     profile = body.get("profile", "preview")
     if profile not in RENDER_PROFILES:
         raise HTTPException(400, f"unknown render profile: {profile!r}")
