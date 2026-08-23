@@ -99,3 +99,13 @@ def call_timeout_s() -> int:
     with the work unrecoverable. The visual pass tool had raised its own default for the
     same reason a session earlier."""
     return int(os.environ.get("ROUGHCUT_CALL_TIMEOUT_S", "600"))
+
+
+def estimate_timeout_s() -> int:
+    """Wall clock for the small call that only exists to draw a progress bar.
+
+    Much shorter than a real call on purpose: the estimate runs *before* the work, so
+    every second it spends is a second the bar is not on screen. Measured at ~6s on the
+    per-unit role; 90 is a ceiling, not a target, and hitting it means falling back to
+    the hard-coded estimate rather than waiting out the 600s the work itself gets."""
+    return int(os.environ.get("ROUGHCUT_ESTIMATE_TIMEOUT_S", "90"))

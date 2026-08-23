@@ -20,6 +20,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,6 +44,15 @@ class Request:
     images: Sequence[Path] = ()
     schema: dict | None = None
     system: str | None = None
+    # Per-call wall clock. None means `config.call_timeout_s()`. Set short for calls
+    # whose whole value is being fast — the estimate that draws a progress bar.
+    timeout_s: int | None = None
+    # Called as the answer is produced rather than after it, with the text so far:
+    # `on_partial("thinking" | "text", text_so_far)`. Optional everywhere — a backend
+    # that cannot stream ignores it and behaves exactly as before, which is what keeps
+    # the scripted test backends working. See ClaudeCliBackend.
+    on_partial: Callable[[str, str], None] | None = field(default=None, compare=False,
+                                                          repr=False)
 
 
 @dataclass
@@ -131,6 +141,20 @@ def _candidates(text: str):
 
 # ------------------------------------------------------------------ backends
 
+def _emit(on_partial: Callable[[str, str], None] | None, kind: str, text: str) -> None:
+    """Hand a partial answer to the caller, and never let it break the call.
+
+    The callback belongs to a progress bar. A progress bar that raises must not cost
+    a four-minute model call — the work is worth more than the reporting on it.
+    """
+    if on_partial is None:
+        return
+    try:
+        on_partial(kind, text)
+    except Exception:                                          # pragma: no cover
+        pass
+
+
 class Backend(Protocol):
     name: str
 
@@ -142,6 +166,22 @@ class ClaudeCliBackend:
 
     Images are passed by path (SPEC §6.1 rule 1): the CLI reads them from disk, so
     base64 never enters the interface.
+
+    Two ways to run it, and the difference is only *when* you hear about the answer:
+
+      * `--output-format json` — one JSON object on exit. The original path, unchanged,
+        and still what every call without an `on_partial` uses.
+      * `--output-format stream-json --verbose --include-partial-messages` — one JSON
+        object per line as the answer is produced, ending with the same `result` object
+        the first form returns whole. Verified on this machine (CLI 2.1.2): the flags
+        are accepted together, `stream_event` lines carry `thinking_delta` and
+        `text_delta`, and the closing `result` carries the identical `usage` block —
+        so token accounting and the ledger are unaffected by which path ran.
+
+    Streaming exists for one reason: a `claude -p` call that only returns at the end
+    can report no progress at all, and an Ask is three to four minutes long. With the
+    deltas, the caller can count what the model has actually written — "12 of ~20 shots
+    decided" — which is progress rather than a spinner.
     """
 
     name = "claude_cli"
@@ -156,6 +196,9 @@ class ClaudeCliBackend:
             prompt += ("\n\nRespond with JSON only — no prose, no code fence — "
                        "matching this shape:\n" + json.dumps(request.schema, indent=1))
 
+        if request.on_partial is not None:
+            return self._stream(request, prompt, model)
+
         cmd = ["claude", "-p", prompt, "--output-format", "json", "--model", model]
         if request.images:
             # Passing an image by path only works if the CLI is allowed to open it.
@@ -167,10 +210,11 @@ class ClaudeCliBackend:
         if request.system:
             cmd += ["--append-system-prompt", request.system]
 
+        timeout = request.timeout_s or config.call_timeout_s()
         t0 = time.time()
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True,
-                                  timeout=config.call_timeout_s())
+                                  timeout=timeout)
         except FileNotFoundError as exc:
             # The likeliest failure on a fresh machine: `claude` lives in ~/.local/bin
             # and a non-login shell does not source .bashrc, so a server started the
@@ -182,7 +226,7 @@ class ClaudeCliBackend:
                 "shell (bash -l) or set ROUGHCUT_BACKEND=anthropic_api.") from exc
         except subprocess.TimeoutExpired as exc:
             raise InferenceError(
-                f"claude CLI timed out after {config.call_timeout_s()}s "
+                f"claude CLI timed out after {timeout}s "
                 f"(raise ROUGHCUT_CALL_TIMEOUT_S)") from exc
         latency = int((time.time() - t0) * 1000)
         if proc.returncode != 0 and not proc.stdout.strip():
@@ -192,7 +236,113 @@ class ClaudeCliBackend:
         except json.JSONDecodeError as exc:
             raise InferenceError(
                 f"claude CLI returned non-JSON: {proc.stdout[:300]}") from exc
+        return self._result(payload, model, latency)
 
+    # ------------------------------------------------------------- streaming
+
+    # How often `on_partial` may fire. The CLI emits a delta every few hundred
+    # characters; a UI that repaints on every one of them would be doing nothing else.
+    PARTIAL_TICK_S = 0.4
+
+    def _stream(self, request: Request, prompt: str, model: str) -> Result:
+        cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
+               "--include-partial-messages", "--model", model]
+        if request.images:
+            cmd += ["--allowedTools", "Read"]
+        if request.system:
+            cmd += ["--append-system-prompt", request.system]
+
+        timeout = request.timeout_s or config.call_timeout_s()
+        t0 = time.time()
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, bufsize=1)
+        except FileNotFoundError as exc:
+            raise InferenceError(
+                "claude CLI not found on PATH. It installs to ~/.local/bin, which a "
+                "non-login shell does not pick up — start the server from a login "
+                "shell (bash -l) or set ROUGHCUT_BACKEND=anthropic_api.") from exc
+
+        # A watchdog rather than a read deadline: if the model stalls, no lines arrive
+        # and a per-line check would never run. Killing the child ends the read loop.
+        done = threading.Event()
+        killed = threading.Event()
+        errors: list[str] = []
+
+        def watchdog() -> None:
+            if not done.wait(timeout):
+                killed.set()
+                proc.kill()
+
+        def drain_stderr() -> None:
+            # On its own thread: a full stderr pipe would block the child mid-answer
+            # while this side is busy reading stdout, which is a deadlock that only
+            # shows up on the one call that happens to be chatty.
+            if proc.stderr is not None:
+                errors.append(proc.stderr.read() or "")
+
+        threading.Thread(target=watchdog, daemon=True).start()
+        err_thread = threading.Thread(target=drain_stderr, daemon=True)
+        err_thread.start()
+
+        payload: dict | None = None
+        thinking, text = [], []
+        last_tick = 0.0
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue          # the CLI prints the odd non-JSON line; skip it
+                kind = event.get("type")
+                if kind == "result":
+                    payload = event
+                    continue
+                if kind != "stream_event":
+                    continue
+                delta = (event.get("event") or {}).get("delta") or {}
+                if delta.get("type") == "thinking_delta":
+                    thinking.append(delta.get("thinking") or "")
+                elif delta.get("type") == "text_delta":
+                    text.append(delta.get("text") or "")
+                else:
+                    continue
+                now = time.time()
+                if now - last_tick >= self.PARTIAL_TICK_S:
+                    last_tick = now
+                    _emit(request.on_partial,
+                          "text" if text else "thinking",
+                          "".join(text) if text else "".join(thinking))
+            proc.wait()
+        finally:
+            done.set()
+            err_thread.join(timeout=5)
+            stderr = "".join(errors)
+        # One last flush, so the caller's final count is of the whole answer and not of
+        # whatever the throttle happened to let through.
+        _emit(request.on_partial, "text" if text else "thinking",
+              "".join(text) if text else "".join(thinking))
+
+        latency = int((time.time() - t0) * 1000)
+        if killed.is_set():
+            raise InferenceError(
+                f"claude CLI timed out after {timeout}s "
+                f"(raise ROUGHCUT_CALL_TIMEOUT_S)")
+        if payload is None:
+            raise InferenceError(
+                "claude CLI streamed no result event: "
+                f"{(stderr.strip() or ''.join(text))[:300]}")
+        return self._result(payload, model, latency)
+
+    # --------------------------------------------------------------- shared
+
+    def _result(self, payload: dict, model: str, latency: int) -> Result:
+        """The `result` object, whichever way it arrived. Both output formats end with
+        the same one, so token accounting cannot differ between the two paths."""
         text = payload.get("result", "")
         if payload.get("is_error"):
             # The login prompt arrives this way, and is the most likely failure on a
@@ -222,7 +372,13 @@ class ClaudeCliBackend:
 
 
 class AnthropicApiBackend:
-    """Production path. `anthropic` is imported here and nowhere else in the project."""
+    """Production path. `anthropic` is imported here and nowhere else in the project.
+
+    It ignores `on_partial` — the SDK streams, but nothing in this project runs on this
+    backend today and a second untested streaming path would be a liability rather than
+    a feature. A caller that passes one simply never hears from it, which is the
+    contract: the progress bar degrades, the call does not.
+    """
 
     name = "anthropic_api"
 
@@ -300,17 +456,24 @@ def complete(prompt: str, *, role: str = config.ROLE_ANALYSIS,
              images: Sequence[Path] = (), schema: dict | None = None,
              system: str | None = None,
              validate: Callable[[Any], Any] | None = None,
-             retries: int = 1) -> Result:
+             retries: int = 1, timeout_s: int | None = None,
+             on_partial: Callable[[str, str], None] | None = None) -> Result:
     """One call. Returns validated content when a schema is given, or raises.
 
     `retries` is a *bounded* re-ask on validation failure, which is how the CLI
     backend reaches schema fidelity the API backend gets natively. Bounded because an
     unbounded retry loop against a model that has misunderstood the schema is just a
     slower way to fail, and it spends budget doing it.
+
+    `on_partial(kind, text_so_far)` turns the call from something you wait for into
+    something you can watch: a backend that supports it reports the answer as it is
+    written, and one that does not simply never calls it. `timeout_s` overrides the
+    per-call wall clock for calls whose whole value is being quick.
     """
     backend = get_backend()
     request = Request(prompt=prompt, role=role, images=tuple(images),
-                      schema=schema, system=system)
+                      schema=schema, system=system, timeout_s=timeout_s,
+                      on_partial=on_partial)
 
     last: Exception | None = None
     for attempt in range(retries + 1):
@@ -328,7 +491,8 @@ def complete(prompt: str, *, role: str = config.ROLE_ANALYSIS,
             request = Request(
                 prompt=(request.prompt + "\n\nYour previous reply could not be parsed"
                         f" as the required JSON ({exc}). Reply with JSON only."),
-                role=role, images=tuple(images), schema=schema, system=system)
+                role=role, images=tuple(images), schema=schema, system=system,
+                timeout_s=timeout_s, on_partial=on_partial)
     raise InferenceError(f"schema validation failed after {retries + 1} attempts: {last}")
 
 

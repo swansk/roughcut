@@ -69,6 +69,132 @@ function undo() {
 
 function total() { return segs.reduce((a, s) => a + (s.out - s.in), 0); }
 
+/* ------------------------------------------------------------ the top bar
+ *
+ * One strip under the header that every long operation drives. Karl, on the render:
+ * "got like no response - and just see rendering...", and then: "consider a progress
+ * tracking bar up top for anything which may take time to complete - re-use across
+ * app."
+ *
+ * It reads /api/jobs — the server's own registry — and nothing else, which buys three
+ * things that per-panel bars could not: two operations at once (a render and an Ask
+ * overlap routinely), a reload that re-attaches to whatever is still running instead
+ * of losing it, and one place to fix when the next long operation is added.
+ */
+const strip = { rows: new Map(), open: new Set(), owned: new Set(), seen: new Map() };
+
+/* "about 2 min left". Rounded hard on purpose: a second-by-second countdown on a
+ * four-minute estimate is precision the estimate does not have. */
+function etaText(s) {
+  if (s == null) return '';
+  if (s <= 0) return '';
+  if (s < 45) return `about ${Math.max(5, Math.round(s / 5) * 5)}s left`;
+  if (s < 90) return 'about a minute left';
+  return `about ${Math.round(s / 60)} min left`;
+}
+
+function jobRow(j) {
+  let row = strip.rows.get(j.id);
+  if (!row) {
+    row = document.createElement('div');
+    row.className = 'job';
+    row.dataset.job = j.id;
+    row.dataset.kind = j.kind;
+    row.innerHTML = `<span class="jlabel"><span class="caret">▸</span><span
+      class="jname"></span></span><span class="jbar"><i></i></span>
+      <span class="jnums"></span><span class="jdetail"></span>`;
+    row.querySelector('.jlabel').onclick = () => {
+      if (strip.open.has(j.id)) strip.open.delete(j.id); else strip.open.add(j.id);
+      paintJob(row, strip.seen.get(j.id) || j);
+    };
+    strip.rows.set(j.id, row);
+    $('#progress').appendChild(row);
+  }
+  return row;
+}
+
+function paintJob(row, j) {
+  row.className = `job ${j.state}`;
+  row.querySelector('.jname').textContent = j.label;
+  row.querySelector('.caret').textContent = strip.open.has(j.id) ? '▾' : '▸';
+  row.querySelector('.jbar i').style.width = `${j.pct}%`;
+  const eta = j.state === 'done' || j.state === 'failed' ? '' : etaText(j.eta_s);
+  row.querySelector('.jnums').textContent =
+    [`${Math.round(j.pct)}%`, clock(j.elapsed_s), eta].filter(Boolean).join(' · ');
+  // The milestone is what the operation is *on*; the detail is what it is doing inside
+  // it. Both, because "choosing the shots" without "12 of ~18" is a spinner with words.
+  row.querySelector('.jdetail').textContent =
+    [j.milestone, j.detail].filter(Boolean).join(' — ');
+
+  let more = row.querySelector('.jmore');
+  if (!strip.open.has(j.id)) {
+    if (more) more.remove();
+    return;
+  }
+  if (!more) {
+    more = document.createElement('div');
+    more.className = 'jmore';
+    row.appendChild(more);
+  }
+  const steps = (j.milestones || []).map((m) => {
+    const cls = m.done_at ? 'was' : (m === (j.milestones || []).find((x) => !x.done_at)
+      ? 'at' : '');
+    return `<li class="${cls}">${escapeHtml(m.label)}${m.done_at ? ' ✓' : ''}</li>`;
+  }).join('');
+  const src = j.eta_source === 'measured' ? 'recalibrated from this run'
+    : j.eta_source === 'model' ? 'estimated by the model before it started'
+      : j.eta_source === 'fallback' ? 'estimate call failed — measured fallback' : '';
+  const tail = (j.log || '').split('\n').filter(Boolean).slice(-6).join('\n');
+  more.innerHTML = (steps ? `<ol>${steps}</ol>` : '')
+    + (src ? `<div class="hint" style="margin-top:6px">${src}</div>` : '')
+    + (tail ? `<pre>${escapeHtml(tail)}</pre>` : '');
+}
+
+/* What the page does about a job it did not start itself — the reload case. Its own
+ * pollers already handle the ones it launched, and firing both would toast twice. */
+async function adopt(j) {
+  if (strip.owned.has(j.id)) return;
+  if (j.kind === 'ask' && j.state === 'done') {
+    // The plan is not in the heartbeat — it is 15k tokens of JSON — so fetch it.
+    const full = await (await fetch(`/api/job/${j.id}`)).json();
+    if (!full.plan) return;
+    showProposal(full.plan);
+    toast('the proposal you asked for is ready');
+  } else if (j.kind === 'render' && j.state === 'done') {
+    await refreshVersions();
+  } else if ((j.kind === 'visual' || j.kind === 'analyse') && j.state === 'done') {
+    P = await (await fetch('/api/project')).json();
+    await refreshStatus();
+    render();
+  }
+}
+
+async function pollJobs() {
+  let jobs;
+  try {
+    jobs = (await (await fetch('/api/jobs')).json()).jobs;
+  } catch (e) { return; }                   // a blip is not a reason to blank the bar
+  const live = new Set(jobs.map((j) => j.id));
+  strip.rows.forEach((row, id) => {
+    if (live.has(id)) return;
+    row.remove();
+    strip.rows.delete(id);
+    strip.open.delete(id);
+    strip.seen.delete(id);
+  });
+  for (const j of jobs) {
+    const before = strip.seen.get(j.id);
+    strip.seen.set(j.id, j);
+    paintJob(jobRow(j), j);
+    if (before && before.state !== j.state && (j.state === 'done' || j.state === 'failed')) {
+      await adopt(j);
+    }
+  }
+  // Gone completely when there is nothing to say. A strip that lingers empty is one
+  // more thing on a screen that already has plenty.
+  $('#progress').hidden = !jobs.length;
+}
+
 function linesFor(seg) {
   const clip = P.clips[seg.clip];
   if (!clip) return [];
@@ -634,6 +760,7 @@ async function lookAtFootage() {
     return toast(`could not start: ${d.detail || r.status}`, 5000);
   }
   const { job, total } = await r.json();
+  strip.owned.add(job);
   looking = true;
   $('#visual').disabled = true;
   $('#visual').textContent = 'Looking…';
@@ -929,6 +1056,7 @@ async function analyze() {
     return toast(`analysis failed to start: ${d.detail || r.status}`, 5000);
   }
   const { job, total } = await r.json();
+  strip.owned.add(job);
   analysing = true;
   $('#analyze').disabled = true;
   $('#analyzeBar').style.display = 'block';
@@ -1044,8 +1172,15 @@ function pollAsk(job, verb, stateEl) {
       try {
         s = await (await fetch(`/api/ask/${job}`)).json();
       } catch (e) { return; }                 // a blip is not a failure; keep waiting
+      if (s.state === 'estimating') {
+        stateEl.textContent = 'sizing the job…';
+        return;
+      }
       if (s.state === 'running') {
-        stateEl.textContent = `${verb}… ${clock(s.elapsed_s)}`;
+        // The top bar carries the bar, the percentage and the ETA; this line stays
+        // next to the button that started it and says which shot it is on.
+        stateEl.textContent = s.detail
+          ? `${s.detail} · ${clock(s.elapsed_s)}` : `${verb}… ${clock(s.elapsed_s)}`;
         return;
       }
       clearInterval(iv);
@@ -1078,6 +1213,27 @@ async function offerLastProposal() {
   };
 }
 
+/* A four-minute Ask outlives a reload, and the job lives on the server, so the page
+ * picks it back up rather than leaving it to finish unwatched. Karl reloaded mid-ask
+ * and the only trace left was the recovery link, after the call had already been
+ * spent. */
+async function reattachAsk() {
+  const running = [...strip.seen.values()].find(
+    (j) => j.kind === 'ask' && (j.state === 'running' || j.state === 'estimating'));
+  if (!running) return;
+  strip.owned.add(running.id);
+  $('#ask').disabled = true;
+  $('#askState').textContent = 'picking up where you left off…';
+  try {
+    showProposal(await pollAsk(running.id, 'thinking', $('#askState')));
+  } catch (e) {
+    $('#askState').textContent = '';
+    toast(`the ask that was running failed: ${e.message}`, 6000);
+  } finally {
+    $('#ask').disabled = false;
+  }
+}
+
 async function ask(opts = {}) {
   const button = opts.button || $('#ask');
   const stateEl = opts.state || $('#askState');
@@ -1103,6 +1259,7 @@ async function ask(opts = {}) {
     // froze the whole server for its duration and left the plan existing only in that
     // one response — a dropped connection spent the call for nothing.
     const { job } = await r.json();
+    strip.owned.add(job);        // this page is following it; the strip must not double up
     const plan = await pollAsk(job, verb, stateEl);
     showProposal(plan);
     const u = plan.usage || {};
@@ -1225,6 +1382,7 @@ async function doRender() {
     body: JSON.stringify({ segments: segs, profile: $('#renderProfile').value }),
   });
   const { job } = await r.json();
+  strip.owned.add(job);
   $('#renderState').textContent = 'starting…';
   $('#renderBar').style.display = 'block';
   const poll = setInterval(async () => {
@@ -1334,6 +1492,12 @@ async function boot() {
   render();
   await refreshVersions();
   await offerLastProposal();
+  // The job registry is server-side, so a reload lands on whatever is still going —
+  // a render and an Ask at once, routinely. Paint them before the first tick so the
+  // strip is right on the first frame rather than a second later.
+  await pollJobs();
+  reattachAsk();
+  setInterval(pollJobs, 1000);
   if (!P.proxies_ready) {
     toast('building proxies in the background — previews appear as they finish', 6000);
     waitForProxies();

@@ -698,3 +698,140 @@ def test_a_save_is_never_observed_half_written(page, project):
     assert bad == 0, f"saw a half-written EDL {bad} time(s)"
     assert json.loads(Path(project["edl"]).read_text(encoding="utf-8"))["story"] == "draft 19"
 
+
+
+# ------------------------------------------------------- the progress strip
+
+STREAM_PLAN = json.dumps({
+    "segments": [{"clip": "CLIP_C.MP4", "in": 0.5, "out": 4.0, "why": "one"},
+                 {"clip": "CLIP_A.MP4", "in": 0.5, "out": 2.0, "why": "two"}],
+    "notes": "two shots, streamed"})
+
+STREAM_ESTIMATE = json.dumps({
+    "eta_s": 60,
+    "milestones": [{"key": "read", "label": "reading the footage", "weight": 1},
+                   {"key": "think", "label": "working out the shape", "weight": 2},
+                   {"key": "shots", "label": "choosing the shots", "weight": 4},
+                   {"key": "notes", "label": "writing its reasoning", "weight": 1},
+                   {"key": "polish", "label": "snapping to speech", "weight": 1}]})
+
+
+def _streaming_backend(step=0.35):
+    """A backend that answers the estimate call and then dribbles out the plan, so the
+    browser can be watched tracking a call that is still being written."""
+    from roughcut import config, inference
+
+    class Streaming:
+        name = "scripted-stream"
+
+        def complete(self, request):
+            first = request.role == config.ROLE_ANALYSIS
+            text = STREAM_ESTIMATE if first else STREAM_PLAN
+            time.sleep(step)
+            if request.on_partial is not None:
+                request.on_partial("thinking", "considering it")
+                time.sleep(step)
+                for cut in (55, 120, len(text)):
+                    request.on_partial("text", text[:cut])
+                    time.sleep(step)
+            return inference.Result(
+                content=text, input_tokens=10, output_tokens=5, backend="scripted",
+                model=config.model_for(request.role), projected_usd=1e-4,
+                latency_ms=1, raw=text)
+
+    return Streaming()
+
+
+def test_the_top_bar_tracks_an_ask_and_clears_when_everything_is_idle(page,
+                                                                     monkeypatch):
+    """Karl: "consider a progress tracking bar up top for anything which may take time
+    to complete". For an Ask that means a bar the model's own half-written answer
+    drives — and a strip that is not there at all when nothing is running."""
+    import server
+    from roughcut import inference, progress
+
+    for registry in (server.ASKS, server.RENDERS, server.ANALYSES, server.VISUALS):
+        registry.clear()          # earlier tests' finished jobs still linger briefly
+    page.wait_for_function("document.querySelector('#progress').hidden === true",
+                           timeout=5000)
+
+    row = "#progress .job[data-kind=ask]"
+    text_of = ("(document.querySelector('%s') || {}).textContent || ''")
+    inference.set_backend(_streaming_backend(step=0.6))
+    inference.reset_spend()
+    try:
+        page.locator("#note").fill("tighten the intro")
+        page.locator("#ask").click()
+        page.wait_for_selector(row, timeout=20000)
+        assert "cut" in page.locator(f"{row} .jname").inner_text().lower()
+        # a real bar, moving
+        page.wait_for_function(
+            f"parseFloat((document.querySelector('{row} .jbar i') || {{style:{{}}}})"
+            ".style.width || 0) > 0", timeout=25000)
+        # a milestone line, and the count of shots the model has actually written
+        page.wait_for_function(
+            f"/shots decided/.test({text_of % (row + ' .jdetail')})", timeout=25000)
+        assert "%" in page.locator(f"{row} .jnums").inner_text()
+        # opening it shows the checkpoints the estimate laid out
+        page.locator(f"{row} .jlabel").click()
+        assert "choosing the shots" in page.locator(f"{row} .jmore").inner_text()
+
+        page.wait_for_selector("#proposal:visible", timeout=30000)
+        # and then the strip empties itself
+        monkeypatch.setattr(progress, "KEEP_FINISHED_S", 1.0)
+        page.wait_for_function(
+            "document.querySelector('#progress').hidden === true", timeout=20000)
+    finally:
+        inference.set_backend(None)
+
+
+def test_the_top_bar_makes_a_render_impossible_to_miss(page, monkeypatch):
+    """The original complaint: "got like no response - and just see rendering...".
+    The Renders panel bar is easy to miss; this one is under the header."""
+    import server
+    from roughcut import progress
+
+    monkeypatch.setattr(progress, "KEEP_FINISHED_S", 1.0)
+    for registry in (server.ASKS, server.RENDERS, server.ANALYSES, server.VISUALS):
+        registry.clear()
+    row = "#progress .job[data-kind=render]"
+    page.locator("#render").click()
+    page.wait_for_selector(row, timeout=20000)
+    assert "Rendering" in page.locator(f"{row} .jname").inner_text()
+    page.wait_for_function(
+        f"/cutting|joining/.test(document.querySelector('{row} .jdetail')"
+        ".textContent)", timeout=60000)
+    page.wait_for_function(
+        "document.querySelector('#renderState').textContent.startsWith('done')",
+        timeout=180000)
+    page.wait_for_function(
+        "document.querySelector('#progress').hidden === true", timeout=20000)
+
+
+def test_a_running_ask_is_picked_back_up_after_a_reload(page):
+    """A four-minute call outlives a reload. The job registry is server-side, so the
+    page re-attaches to what is still running instead of leaving it unwatched — which
+    is how a call got spent for nothing on the first Killington ask."""
+    import server
+    from roughcut import inference
+
+    for registry in (server.ASKS, server.RENDERS, server.ANALYSES, server.VISUALS):
+        registry.clear()
+    row = "#progress .job[data-kind=ask]"
+    inference.set_backend(_streaming_backend(step=0.9))
+    inference.reset_spend()
+    try:
+        page.locator("#note").fill("tighten the intro")
+        page.locator("#ask").click()
+        page.wait_for_selector(row, timeout=20000)
+
+        page.reload()
+        page.wait_for_selector(".seg")
+        # still there, on the fresh page, without anyone pressing anything
+        page.wait_for_selector(row, timeout=10000)
+        assert "cut" in page.locator(f"{row} .jname").inner_text().lower()
+        # and the answer arrives on the page that did not ask for it
+        page.wait_for_selector("#proposal:visible", timeout=40000)
+        assert "two shots, streamed" in page.locator("#proposalNotes").inner_text()
+    finally:
+        inference.set_backend(None)

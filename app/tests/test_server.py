@@ -75,7 +75,9 @@ def test_visual_moments_reach_the_model_when_the_pass_has_run(tmp_path, project)
             assert c.get("/api/project").json()["clips"]["CLIP_A.MP4"]["visual"][
                 "moments"][0]["kind"] == "fall"
             _ask(c, {"note": "", "segments": [], "story": "a ski film"})
-        assert "rider goes down in deep snow" in Scripted.seen[0].prompt
+        # seen[-1]: the plan call is the last one, behind the cheap estimate call
+        # that now opens every ask.
+        assert "rider goes down in deep snow" in Scripted.seen[-1].prompt
     finally:
         inference.set_backend(None)
 
@@ -687,10 +689,13 @@ def rotation_of(p: Path) -> str:
 # ------------------------------------------------------------------ ask
 
 def _ask_status(client, job, timeout=20.0) -> dict:
+    """Wait for an ask to stop. It opens in `estimating` — the cheap call that sizes
+    the job runs before the expensive one that does it — so "not running" stopped
+    meaning "finished" the day the shared progress model landed."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         s = client.get(f"/api/ask/{job}").json()
-        if s["state"] != "running":
+        if s["state"] not in ("estimating", "running"):
             return s
         time.sleep(0.05)
     raise AssertionError(f"ask never finished: {s}")
@@ -745,8 +750,9 @@ def test_ask_returns_a_proposal_without_writing(client, project):
              "polish_why": "out +0.45s to finish 'you'"}]
         assert plan["notes"].startswith("swapped in the unused clip")
         assert plan["usage"]["projected_usd"] > 0
-        # the model was given the transcripts and the note
-        prompt = Scripted.seen[0].prompt
+        # the model was given the transcripts and the note (the last call is the
+        # plan; the one before it is the estimate that draws the progress bar)
+        prompt = Scripted.seen[-1].prompt
         assert "hello there" in prompt and "use the clip that isn't in the cut" in prompt
     finally:
         inference.set_backend(None)
@@ -792,7 +798,7 @@ def test_ask_originates_when_there_is_nothing_to_revise(client, project):
         assert plan["notes"].startswith("read it as a conversation")
         assert "Boundary polish adjusted 2 of 2 shots" in plan["notes"]
         assert [s["out"] for s in plan["segments"]] == [2.45, 4.45]
-        prompt = Scripted.seen[0].prompt
+        prompt = Scripted.seen[-1].prompt
         assert "There is no edit yet" in prompt
         assert "two people talking" in prompt and "hello there" in prompt
     finally:
@@ -827,7 +833,8 @@ def test_the_server_stays_responsive_during_an_ask(client):
         t0 = time.time()
         assert client.get("/api/status").status_code == 200
         assert time.time() - t0 < 1.0, "status waited on the model call"
-        assert client.get(f"/api/ask/{job}").json()["state"] == "running"
+        assert client.get(f"/api/ask/{job}").json()["state"] in (
+            "estimating", "running")
         assert _ask_status(client, job)["state"] == "done"
     finally:
         inference.set_backend(None)
@@ -894,6 +901,237 @@ def test_ask_surfaces_backend_failure_on_the_job(client):
         assert "Not logged in" in s["detail"]
     finally:
         inference.set_backend(None)
+
+
+# ------------------------------------------------------- the progress model
+
+PLAN_TEXT = json.dumps({
+    "segments": [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 2.0, "why": "one"},
+                 {"clip": "CLIP_B.MP4", "in": 0.5, "out": 2.0, "why": "two"},
+                 {"clip": "CLIP_C.MP4", "in": 0.5, "out": 2.0, "why": "three"}],
+    "notes": "three shots"})
+
+ESTIMATE_TEXT = json.dumps({
+    "eta_s": 120,
+    "milestones": [{"key": "read", "label": "reading the footage", "weight": 1},
+                   {"key": "think", "label": "working out the shape", "weight": 2},
+                   {"key": "shots", "label": "choosing the shots", "weight": 4},
+                   {"key": "notes", "label": "writing its reasoning", "weight": 1},
+                   {"key": "polish", "label": "snapping to speech", "weight": 1}]})
+
+
+class _Streaming:
+    """A scripted backend that answers the estimate call, then *streams* the plan.
+
+    The point of the stream is that a `claude -p` call otherwise reports nothing until
+    it ends; this fakes the deltas so the job's milestones can be watched advancing
+    without a live call.
+    """
+    name = "scripted-stream"
+
+    def __init__(self, estimate_text=ESTIMATE_TEXT, plan_text=PLAN_TEXT):
+        self.estimate_text, self.plan_text = estimate_text, plan_text
+        self.seen = []
+
+    def complete(self, request):
+        from roughcut import config as cfg, inference
+        self.seen.append(request)
+        first = request.role == cfg.ROLE_ANALYSIS
+        text = self.estimate_text if first else self.plan_text
+        # A real estimate call is seconds, not microseconds, and the state it puts the
+        # job in is one the test is here to observe.
+        time.sleep(0.2 if first else 0.0)
+        if request.on_partial is not None:
+            request.on_partial("thinking", "considering the material")
+            time.sleep(0.15)
+            for cut in (60, 130, 200, len(text)):
+                request.on_partial("text", text[:cut])
+                time.sleep(0.15)
+        model = cfg.model_for(request.role)
+        return inference.Result(content=text, input_tokens=10, output_tokens=5,
+                                backend=self.name, model=model, projected_usd=1e-4,
+                                latency_ms=1, raw=text)
+
+
+def _watch(client, job, path="/api/ask"):
+    """Poll a job to the end, keeping every snapshot."""
+    seen, deadline = [], time.time() + 30
+    while time.time() < deadline:
+        s = client.get(f"{path}/{job}").json()
+        seen.append(s)
+        if s["state"] not in ("estimating", "running"):
+            return seen
+        time.sleep(0.03)
+    raise AssertionError(f"job never finished: {seen[-1]}")
+
+
+def test_an_ask_estimates_itself_then_reports_milestones(client):
+    """Karl: "the first step the AI must complete is an estimate of how long it will
+    take to apply the changes. This will (when estimate is complete) start a progress
+    bar... The initial assessment must include milestones, which the agent will
+    complete, and then follow back up with the app on."
+
+    All of it, end to end: the cheap call goes first, the bar appears with its
+    checkpoints, and the checkpoints are then completed from what the model has
+    actually written rather than from a clock."""
+    from roughcut import inference
+
+    backend = _Streaming()
+    inference.set_backend(backend)
+    inference.reset_spend()
+    try:
+        job = client.post("/api/ask", json={"note": "tighten it"}).json()["job"]
+        seen = _watch(client, job)
+    finally:
+        inference.set_backend(None)
+
+    states = [s["state"] for s in seen]
+    assert states[0] == "estimating", states[:3]
+    assert "running" in states and states[-1] == "done", states
+    # the estimate arrived before the work, and it is the model's
+    final = seen[-1]
+    assert final["estimate"]["source"] == "model"
+    assert final["estimated_s"] == 120.0
+    assert [m["key"] for m in final["milestones"]] == [
+        "read", "think", "shots", "notes", "polish"]
+    assert all(m["done_at"] for m in final["milestones"]), final["milestones"]
+
+    # the bar only ever went forwards, and only reached 100 at the end
+    pcts = [s["pct"] for s in seen]
+    assert pcts == sorted(pcts), pcts
+    assert max(p for s, p in zip(states, pcts) if s != "done") < 100.0
+    assert pcts[-1] == 100.0
+    # and it moved while the model was still writing, which is the whole exercise
+    assert any(0 < p < 100 for p in pcts), pcts
+
+    # the human line said which shot it was on, counted out of a real denominator
+    details = " | ".join(s["detail"] for s in seen)
+    assert "shots decided" in details, details
+    # the ETA is recalibrated off this run rather than repeating the first guess
+    assert final["eta_source"] == "measured"
+    assert final["eta_s"] == 0.0
+
+
+def test_an_unusable_estimate_does_not_stop_the_ask(client):
+    """The safety rule: an estimate is a nicety, the work is not."""
+    from roughcut import inference
+
+    backend = _Streaming(estimate_text="about a minute I should think")
+    inference.set_backend(backend)
+    inference.reset_spend()
+    try:
+        job = client.post("/api/ask", json={"note": "tighten it"}).json()["job"]
+        seen = _watch(client, job)
+    finally:
+        inference.set_backend(None)
+
+    final = seen[-1]
+    assert final["state"] == "done", final
+    assert len(final["plan"]["segments"]) == 3
+    assert final["estimate"]["source"] == "fallback"
+    assert final["estimate"]["why"], "it should record why it fell back"
+    # a fallback estimate is still an estimate: the bar and the checkpoints exist
+    assert final["estimated_s"] > 0 and len(final["milestones"]) == 5
+
+
+def test_every_kind_of_job_shows_up_in_one_list(client, project):
+    """The top bar polls /api/jobs and nothing else, so everything long has to be
+    there — and two at once, because a render and an Ask overlap routinely."""
+    import server
+    from roughcut import inference
+
+    for registry in (server.ASKS, server.RENDERS, server.ANALYSES, server.VISUALS):
+        registry.clear()          # earlier tests' jobs linger in the list for 25s
+    inference.set_backend(_Streaming())
+    inference.reset_spend()
+    try:
+        ask = client.post("/api/ask", json={"note": "tighten it"}).json()["job"]
+        segs = [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 2.5, "why": "a"}]
+        render = client.post("/api/render", json={"segments": segs}).json()["job"]
+
+        kinds, ids = set(), set()
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            jobs = client.get("/api/jobs").json()["jobs"]
+            for j in jobs:
+                kinds.add(j["kind"])
+                ids.add(j["id"])
+                # every row has what a bar needs, whatever kind it is
+                for key in ("label", "state", "pct", "detail", "elapsed_s"):
+                    assert key in j, (j["kind"], key)
+                assert 0 <= j["pct"] <= 100
+                assert "plan" not in j, "the heartbeat must not carry payloads"
+            if {ask, render} <= ids and client.get(
+                    f"/api/render/{render}").json()["state"] != "running":
+                break
+            time.sleep(0.1)
+        assert kinds == {"ask", "render"}, kinds
+        assert {ask, render} <= ids
+
+        # the full record, payload and all, is one fetch away
+        full = client.get(f"/api/job/{ask}").json()
+        assert full["plan"]["segments"]
+        assert client.get("/api/job/deadbeef").status_code == 404
+    finally:
+        inference.set_backend(None)
+
+
+def test_a_render_is_not_finished_when_the_last_shot_is_cut(client, project,
+                                                            monkeypatch):
+    """The old bar hit 100% the moment the parts were on disk and then sat there for
+    the whole join — minutes of it on a delivery render. Joining is its own milestone
+    now, so the bar stops where cutting was actually worth stopping."""
+    import server
+    monkeypatch.setattr(server, "PROGRESS_TICK_S", 0.05)
+    segs = [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 2.5, "why": "a"},
+            {"clip": "CLIP_B.MP4", "in": 1.0, "out": 2.0, "why": "b"}]
+    job = client.post("/api/render", json={"segments": segs}).json()["job"]
+    seen = _watch(client, job, path="/api/render")
+    assert seen[-1]["state"] == "done", seen[-1]["log"][-400:]
+    # The invariant, whether or not the poll happened to land inside the join on a
+    # two-shot render of 6-second clips: nothing running ever claims to be finished.
+    # What the join is *worth* is asserted exactly in app/tests/test_progress.py.
+    assert all(s["pct"] < 100 for s in seen if s["state"] == "running")
+    assert [m["key"] for m in seen[-1]["milestones"]] == ["cutting", "joining"]
+    assert seen[-1]["pct"] == 100.0
+    # the old fields the browser still reads are all still there
+    assert seen[-1]["done"] == seen[-1]["total"] == 2
+    assert seen[-1]["stage"] == "done" and seen[-1]["elapsed_s"] > 0
+
+
+def test_the_visual_pass_says_which_sheet_it_is_on(client):
+    """`visual_pass.py` has always said what it was reading; it said it into a log box
+    nobody opens. That chatter is the top bar's human line now."""
+    import server
+
+    assert server._visual_detail("CLIP_04.MP4: 3 sheet(s)") == \
+        "reading CLIP_04 — 3 sheets"
+    assert server._visual_detail("  sheet_00.jpg: 4 moments ($0.0712)") == \
+        "reading CLIP_04 — sheet 2 of 3"
+    assert server._visual_detail("total projected $1.23") == ""
+    # a clip's own summary line is not a sheet line and must not be read as one —
+    # `visual_pass.py` prints both, and they differ only by their indentation
+    assert server._visual_detail("CLIP_04.MP4: 5 moments, 2 notable, 3/3 sheets") == ""
+
+
+def test_the_count_and_the_sheet_line_do_not_overwrite_each_other(client):
+    """Found on the first live pass: the two-second ticker and the tool's own chatter
+    were writing the same field, so "reading CLIP_05 — 1 sheet" flashed up and was
+    replaced by "0 of 1 clips seen" a second later, over and over. The count answers
+    "how far" and the line answers "on what"; a bar needs both, so they compose."""
+    import server
+    from roughcut import progress
+
+    job = progress.Job("visual", "Looking", id="v", total=3, done=0, now="")
+    assert server._visual_note(job) == "0 of 3 clips seen"
+    server._visual_note(job, "CLIP_04.MP4: 3 sheet(s)")
+    job["done"] = 1
+    assert server._visual_note(job) == \
+        "1 of 3 clips seen — reading CLIP_04 — 3 sheets"
+    assert job["detail"] == "1 of 3 clips seen — reading CLIP_04 — 3 sheets"
+    # one clip reads as one clip
+    solo = progress.Job("visual", "Looking", id="v2", total=1, done=0, now="")
+    assert server._visual_note(solo) == "0 of 1 clip seen"
 
 
 # ------------------------------------------------------------ new project
