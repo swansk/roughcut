@@ -374,6 +374,19 @@ Ordered by what changes most, not by effort:
    is `preload="metadata"` with a `#t=` fragment. First frame **~0.9 s**, media bytes per page
    load 93 KB. Still untested: Firefox.
 
+   The same weight closed the render complaints in the same pass. Karl, on the finished 4K
+   delivery render: *"jumping all around the place, looks bad"* and *"stuck in this loading
+   forever place... only have played for like 3s before video buffers"*. The file is sound —
+   5427 frames at a clean 1/29.97, no anomalies — but it is 987 MB at 43.6 Mbps and the A/B
+   players streamed it: 157 MB pulled in 15 s of watching, against 5.3 MB for a 720p copy of
+   the same cut. Renders get a review copy under `--work/reviews/<bin>/` now, derived after
+   the render reports done and one at a time; the players play that, each row states its size
+   and resolution, and a Download serves the master as an attachment named for the bin, the
+   shots, the length and the quality. **Caveat worth carrying:** with the cards no longer
+   streaming, the 4K master played 14.5 s of film in 15 s of wall clock with zero dropped
+   frames on this box, so what Karl saw was contention rather than the master being
+   unplayable on its own. The review copy is an 8.6x cut in page traffic and the right fix
+   for the A/B case; it is not a proven cure for a symptom that no longer reproduces alone.
 3. **ASR.** A tuned low-threshold VAD might recover the 14 words CLIP_06 lost without losing the
    patrol lines; CLIP_05 transcribes to zero words at `speech_fraction` 0.52 — that is the weak
    Tier A detector, not Whisper.

@@ -485,6 +485,50 @@ def test_a_review_copy_that_cannot_be_made_falls_back_to_the_master(client, proj
     assert _review_ready(client, row["name"])["review_state"] == "failed"
 
 
+def test_a_render_can_be_downloaded_under_a_name_worth_having(client, project):
+    """Karl: *"Make it clear how to download the renders."* The board's only render
+    URL is served inline, so clicking it played the file in a tab rather than saving
+    it, and `cut_110ecb13.mp4` says nothing on a desktop full of downloads."""
+    row = _rendered(client, [{"clip": "CLIP_A.MP4", "in": 0.0, "out": 2.0, "why": "a"},
+                             {"clip": "CLIP_B.MP4", "in": 0.0, "out": 1.0, "why": "b"}])
+    r = client.get(row["download_url"], headers={"range": "bytes=0-99"})
+    assert r.status_code == 206
+    disp = r.headers["content-disposition"]
+    assert disp.startswith("attachment;"), disp
+    assert row["download_name"] in disp, (disp, row["download_name"])
+    # bin, shots, duration, quality — enough to know what it is a year later
+    assert row["download_name"].startswith(project["footage"].name)
+    assert "2shots" in row["download_name"]
+    assert "0m03" in row["download_name"]
+    assert row["download_name"].endswith(".mp4")
+    assert r.headers["content-type"] == "video/mp4"
+
+
+def test_download_of_an_unknown_render_404s_and_cannot_escape_the_folder(client):
+    assert client.get("/media/download/render/nope.mp4").status_code == 404
+    assert client.get(
+        "/media/download/render/..%2F..%2Fetc%2Fpasswd").status_code == 404
+    assert client.get("/media/review/..%2F..%2Fetc%2Fpasswd").status_code == 404
+
+
+def test_every_version_says_how_big_it_is_and_at_what_size(client, project):
+    """A row that offers a download has to say what you are about to download; 987 MB
+    is worth knowing before the click. Renders made before the profile field existed
+    carry no dimensions, so they are probed rather than left blank."""
+    import server
+    row = _rendered(client, [{"clip": "CLIP_C.MP4", "in": 0.0, "out": 1.0, "why": "c"}])
+    assert row["size"] > 0
+    assert (row["width"], row["height"]) == (1920, 1080)
+    # an old render with no metadata sidecar at all still reports its size
+    meta = (server.STATE["renders"] / row["name"]).with_suffix(".json")
+    meta.unlink()
+    bare = next(r for r in client.get("/api/renders").json()["renders"]
+                if r["name"] == row["name"])
+    assert (bare["width"], bare["height"]) == (1920, 1080)
+    assert bare["size"] == row["size"]
+    assert bare["download_name"].endswith("1080p.mp4")
+
+
 def test_a_version_survives_a_restart(client, project):
     """Metadata lives next to the file, not in memory: a versions list that empties
     when the server restarts is not a versions list."""
@@ -621,7 +665,11 @@ def test_unknown_render_profile_is_rejected(client, project):
 def test_renders_from_before_the_profile_existed_still_list_cleanly(client, project):
     """Old metadata on disk has neither `profile` nor `width`/`height` — it must
     read as the preview render it always was, never crash the versions list, and
-    never be mistaken for a delivery render."""
+    never be mistaken for a delivery render.
+
+    The dimensions used to come back as null, which was honest but useless once the
+    row started saying what you are about to download. They are probed off the file
+    now — measured, not invented, so an old preview still cannot read as 4K."""
     body = {"segments": [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 1.5, "why": "a"}]}
     job = client.post("/api/render", json=body).json()["job"]
     deadline = time.time() + 90
@@ -636,7 +684,8 @@ def test_renders_from_before_the_profile_existed_still_list_cleanly(client, proj
     listed = {r["name"]: r for r in client.get("/api/renders").json()["renders"]}
     entry = listed[f"cut_{job}.mp4"]
     assert entry["profile"] == "preview"
-    assert entry["width"] is None and entry["height"] is None
+    assert (entry["width"], entry["height"]) == (1920, 1080)
+    assert "1080p" in entry["download_name"] and "4K" not in entry["download_name"]
 
 
 # ------------------------------------------------------------------ music

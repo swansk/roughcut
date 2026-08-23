@@ -113,6 +113,12 @@
   .ver:first-child { border-top: 0; }
   .ver .t { flex: 1; font-variant-numeric: tabular-nums; }
   .ver button { padding: 1px 8px; font-size: 12px; }
+  /* Getting a finished cut off the board was folklore until now: the only URL it
+     exposed is served inline, so a click played the file instead of saving it. */
+  .ver .dl { color: var(--accent); text-decoration: none; font-size: 12px;
+             border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px;
+             white-space: nowrap; }
+  .ver .dl:hover { border-color: var(--accent); }
   .hint.warn { color: var(--warn); }
   .hint.bad { color: var(--bad); }
   .steps { display: flex; gap: 6px; flex-wrap: wrap; width: 100%; margin-top: 2px; }

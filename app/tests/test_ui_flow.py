@@ -428,6 +428,22 @@ def test_a_version_player_reaches_a_painted_frame(page):
     assert page.locator("#stateA").inner_text() == "", "a healthy player says nothing"
 
 
+def test_a_version_row_offers_a_download_and_says_how_big_it_is(page):
+    """Karl: *"Make it clear how to download the renders."* Getting a finished cut off
+    the board was folklore — you had to know where ~/work/app/renders is."""
+    page.locator("#render").click()
+    page.wait_for_function(
+        "document.querySelector('#renderState').textContent.startsWith('done')",
+        timeout=180000)
+    page.wait_for_selector("#versions .ver a.dl")
+    row = page.locator("#versions .ver").first
+    dl = row.locator("a.dl")
+    assert dl.get_attribute("href").startswith("/media/download/render/cut_")
+    assert dl.get_attribute("title").endswith("MB")
+    assert ".mp4" in dl.get_attribute("title")
+    assert "MB" in row.inner_text() and "x" in row.inner_text()   # size and resolution
+
+
 def test_a_second_render_becomes_a_second_version_to_compare_against(page):
     """Judging an edit is comparative. The newest render lands in A and the previous
     one in B, so two versions can be watched against each other without leaving."""

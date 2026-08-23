@@ -1295,15 +1295,27 @@ function paintVersions() {
       { hour: '2-digit', minute: '2-digit' });
     const row = document.createElement('div');
     row.className = 'ver';
+    // Size and resolution on the row, because the button next to them starts a
+    // download and 987 MB is worth knowing about before it begins.
+    const heft = [human(v.size), v.width ? `${v.width}x${v.height}` : '']
+      .filter(Boolean).join(' · ');
     const building = v.review_state === 'building' ? ' · review copy building…' : '';
     row.innerHTML = `<span class="t">${escapeHtml(versionLabel(v))}
-      <span class="hint">· ${when}${building}</span></span>`;
+      <span class="hint">· ${when}${heft ? ` · ${heft}` : ''}${building}</span></span>`;
     ['A', 'B'].forEach((slot) => {
       const b = document.createElement('button');
       b.textContent = slot;
       b.onclick = () => loadVersion(v, slot);
       row.appendChild(b);
     });
+    // A plain link, so the browser's own download machinery handles it; the server
+    // sends it as an attachment with a filename worth having.
+    const dl = document.createElement('a');
+    dl.className = 'dl';
+    dl.href = v.download_url;
+    dl.textContent = '↓ download';
+    dl.title = `${v.download_name} · ${human(v.size)}`;
+    row.appendChild(dl);
     box.appendChild(row);
   });
 }

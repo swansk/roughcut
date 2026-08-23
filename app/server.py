@@ -1069,6 +1069,29 @@ def ensure_review(src: Path) -> str:
     return "building"
 
 
+def download_name(meta: dict, path: Path, size: tuple[int, int] | None) -> str:
+    """What the file should be called once it leaves the board.
+
+    `cut_110ecb13.mp4` says nothing on a desktop full of downloads. Karl asked for
+    this by name: *"Make it clear how to download the renders."*
+    """
+    bits = [STATE["footage"].name]
+    if meta.get("segments"):
+        bits.append(f"{meta['segments']}shots")
+    dur = meta.get("duration_s")
+    if dur:
+        bits.append(f"{int(dur) // 60}m{int(dur) % 60:02d}")
+    w, h = size or (meta.get("width"), meta.get("height"))
+    if w and w >= 3840:
+        bits.append("4K")
+    elif h:
+        bits.append(f"{h}p")
+    else:
+        bits.append(meta.get("profile", "preview"))
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", "-".join(str(b) for b in bits)).strip("-")
+    return f"{stem or path.stem}.mp4"
+
+
 RENDER_PROFILES = ("preview", "delivery")
 
 
@@ -1116,27 +1139,41 @@ def api_renders() -> JSONResponse:
     choice is faster and more informative than judging a single artifact.
     """
     out = []
+    res_cache: dict = STATE.setdefault("render_res_cache", {})
     for mp4 in STATE["renders"].glob("cut_*.mp4"):
         meta_path = mp4.with_suffix(".json")
         meta = (json.loads(meta_path.read_text(encoding="utf-8"))
                 if meta_path.exists() else {})
+        size = mp4.stat().st_size
+        # A row that offers a download has to say how big it is — 987 MB is worth
+        # knowing before you click. Renders made before the profile existed carry no
+        # dimensions, so they are probed once and remembered by path and mtime rather
+        # than left blank: "don't know" reads as a broken file next to one that does.
+        wh = (meta.get("width"), meta.get("height"))
+        if not all(wh):
+            key = (str(mp4), mp4.stat().st_mtime)
+            if key not in res_cache:
+                res_cache[key] = probe_resolution(mp4)
+            wh = res_cache[key] or (None, None)
         out.append({
             "name": mp4.name, "url": f"/media/render/{mp4.name}",
-            "size": mp4.stat().st_size,
+            "size": size,
             "created": meta.get("created", mp4.stat().st_mtime),
             "duration_s": meta.get("duration_s"), "segments": meta.get("segments"),
             "planned_s": meta.get("planned_s"), "note": meta.get("note", ""),
             "music": meta.get("music"), "shots": meta.get("shots"),
-            # Renders made before this profile existed carry neither key — "preview"
+            # Renders made before this profile existed carry no key — "preview"
             # is what they all were, and no width/height reads as "don't know",
             # never as "upscale to 4K".
             "profile": meta.get("profile", "preview"),
-            "width": meta.get("width"), "height": meta.get("height"),
-            # What the A/B players actually play. The review copy is derived in the
-            # background; until it is there the list says so rather than handing a
-            # player a 987 MB file.
+            "width": wh[0], "height": wh[1],
+            # What the A/B players actually play, and how to get the master out of
+            # the board. The review copy is derived in the background; until it is
+            # there the list says so rather than handing a player a 987 MB file.
             "review_state": ensure_review(mp4),
             "review_url": f"/media/review/{mp4.name}",
+            "download_url": f"/media/download/render/{mp4.name}",
+            "download_name": download_name(meta, mp4, wh if all(wh) else None),
         })
     out.sort(key=lambda r: r["created"], reverse=True)
     return JSONResponse({"renders": out})
@@ -1240,6 +1277,26 @@ def media_render(name: str, request: Request) -> Response:
 def media_review(name: str, request: Request) -> Response:
     """The 720p copy of a render, which is what the A/B players play."""
     return ranged_file(review_path(name), request)
+
+
+@app.get("/media/download/render/{name}")
+def media_render_download(name: str) -> Response:
+    """The master, named for a desktop rather than for a hash.
+
+    Karl: *"Make it clear how to download the renders."* The board had no way to get
+    a finished cut out of it other than knowing where `~/work/app/renders` is, and the
+    one URL it did expose is served inline, so a click played it in a tab instead of
+    saving it. `content-disposition: attachment` and a filename that says which bin,
+    how many shots, how long and at what quality.
+    """
+    path = STATE["renders"] / Path(name).name
+    if not path.exists():
+        raise HTTPException(404, f"not found: {Path(name).name}")
+    meta_path = path.with_suffix(".json")
+    meta = (json.loads(meta_path.read_text(encoding="utf-8"))
+            if meta_path.exists() else {})
+    return FileResponse(path, media_type="video/mp4",
+                        filename=download_name(meta, path, None))
 
 
 # ---------------------------------------------------------------- posters

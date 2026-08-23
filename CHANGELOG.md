@@ -172,6 +172,15 @@ same commit. Releases move entries into a dated version section.
   player says so under itself rather than being handed a 987 MB file; if the copy cannot be
   made the row falls back to the master and warns that it will stutter, because nothing in the
   versions list may become unplayable.
+- **A finished cut could not be got off the board.** Karl: *"Make it clear how to download the
+  renders."* The only render URL the board exposed is served inline, so clicking it played the
+  file in a tab, and `cut_110ecb13.mp4` says nothing on a desktop full of downloads. Every
+  version row now carries a **↓ download** control on `/media/download/render/<name>`, served
+  `content-disposition: attachment` as `killington-neutral-17shots-3m01-4K.mp4` — bin, shots,
+  duration, quality — and the row states the size and the resolution next to it (`942 MB ·
+  3840x2160`), because 987 MB is worth knowing about before the click. Renders made before the
+  profile field existed had no dimensions at all and listed as blanks; they are probed off the
+  file now and cached by mtime, so an old preview reads as `1920x1080` and can never read as 4K.
 - **A stalled version player looked exactly like a working one.** The monitor learned to say
   what it was doing on its own screen; the A/B players had not, so an encoding review copy, a
   buffering stream and a media error were the same black rectangle — which is what *"stuck in
