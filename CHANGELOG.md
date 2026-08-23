@@ -83,6 +83,32 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Fixed
+- **Proposals arrive with their boundaries polished: the word finishes, and the shot stops
+  trailing off.** Karl, on the Killington revision proposal: *"Dual issue on clip length,
+  both with similar frequency: (A) clip is too long and we trail off on conversation; (B)
+  clip is too short and you clip words, like POCKET PI[CLIP] — should finish PIZZA."* Both
+  are the same defect: the model picks its in/out points by reading a transcript, and a
+  transcript timestamp says when a word was *decoded*, not when the sound of it stops.
+  Measured on this bin over eight isolated line-ends, a word's own energy falls 12 dB below
+  its peak a median 0.12s after the end the sidecar gives it, and up to 0.26s — so the gag
+  shot, CLIP_03 18.4–20.9, cut 0.12s past `pizza!` and sounded like a cut through it. A new
+  pure function (`roughcut/boundaries.py`) runs over every validated plan from both
+  `propose()` and `originate()`: an out-point inside a word — or within 0.30s after one —
+  extends to that word's end plus a 0.45s tail pad; an in-point inside a word moves back to
+  its start less 0.25s; and an out-point stranded more than 1.5s past the last word spoken in
+  the shot loses the dead air. Every move is capped at 1.2s, recorded on the segment as
+  `polished_from` plus a one-line reason that the proposal panel shows under the shot's
+  `why`, and summarised in the plan's notes. **This is not auto-snap** — HANDOFF's *do not
+  auto-snap an originated plan* stands; nothing here reaches for the next utterance, which is
+  what made snap swallow whole lines. Three things are never touched: a shot with no speech
+  in it at all (it was chosen for its picture), a boundary that would move into a stretch the
+  visual pass called unusable, and dead air held over a moment the visual pass marked
+  notable. Run over the two proposals on disk: `ed8134bb` 11 of 20 shots adjusted, 178.0s →
+  184.8s, with CLIP_03 18.40–20.90 → **18.09–21.23** (`pizza!` ends at 20.78); `c710983b` 8
+  of 16, 176.9s → 181.7s. The three longest-trailing shots — CLIP_04 261.7–271.0 (7.1s past
+  the last word), CLIP_09 192–200 (6.5s), CLIP_01 92.2–107.0 (5.9s) — are all correctly left
+  alone, because each is holding on a fall or a crash the frames call notable. The EDL on
+  disk is never touched, and `edl_snap.py` is unchanged. 20 new tests.
 - **The ASR was deleting speech before Whisper ever saw it, and the ski-patrol talk was
   part of what it deleted.** Karl, on the Killington revision proposal: *"I THINK there were
   some interesting discussions on running from ski patrol — you also seem to have missed

@@ -916,10 +916,15 @@ function showProposal(plan) {
   $('#proposalNotes').textContent = plan.notes || '(no note returned)';
   // Each shot with the reason it was chosen: the `why` is what you check the
   // reasoning against, and it is the only account of what the agent thinks it saw.
+  // A shot whose boundaries were polished says so and says where it came from —
+  // a cut that silently differs from what the model asked for is one you cannot audit.
   const detail = plan.segments.map((s, i) => `<div style="padding:4px 0">
     <span class="hint">${String(i + 1).padStart(2, '0')} ${escapeHtml(
       s.clip.replace('.MP4', ''))} ${fmt(s.in)}–${fmt(s.out)}
-    (${(s.out - s.in).toFixed(1)}s)</span><br>${escapeHtml(s.why || '')}</div>`).join('');
+    (${(s.out - s.in).toFixed(1)}s)</span><br>${escapeHtml(s.why || '')}${
+    s.polished_from ? `<br><span class="hint">↳ polished from ${
+      s.polished_from[0].toFixed(2)}–${s.polished_from[1].toFixed(2)}: ${
+      escapeHtml(s.polish_why || '')}</span>` : ''}</div>`).join('');
   $('#proposalDiff').innerHTML =
     `<div class="hint" style="margin-bottom:6px">${segs.length} shots ${fmt(oldTotal)}
      → ${plan.segments.length} shots ${fmt(newTotal)}</div>`
