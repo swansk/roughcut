@@ -11,6 +11,7 @@ import json
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -554,29 +555,68 @@ def test_a_version_survives_a_restart(client, project):
 def test_render_reports_which_shot_it_is_on(client, project, monkeypatch):
     """Karl, on clicking Render: "got like no response - and just see rendering...".
     Every shot is cut to its own file before they are joined, so this is a real count
-    rather than a spinner. (Ticking faster here only because these clips are 6
-    seconds long; a real render takes minutes per shot.)"""
+    rather than a spinner.
+
+    Driven, not sampled. This used to poll a real three-shot render every 50 ms and
+    then assert it had *caught* the counting; the shots are 1.5-2 s of 6-second clips,
+    so under load the whole render could land between two polls and the test would see
+    neither "cutting" nor a non-zero count — green five runs out of six. The stand-in
+    for `assemble.py` below cuts its next shot only once the board has been seen
+    reporting the last one, so every state asserted here is waited for instead of
+    raced, and the assertions get stronger rather than weaker: all three counts and
+    all three "cutting shot N of 3" lines, not "at least one of something". The real
+    encoder is what every other render in this file runs.
+    """
     import server
     monkeypatch.setattr(server, "PROGRESS_TICK_S", 0.05)
+    # The lines the board must show, in order, each one a checkpoint the render waits
+    # on. `advance` names the shot it is starting; the last part on disk means joining.
+    wanted = ["cutting shot 2 of 3", "cutting shot 3 of 3", "joining 3 shots"]
+    acked = [threading.Event() for _ in wanted]
+    src = server.STATE["proxy_dir"] / "CLIP_A.mp4"
+    real_run = subprocess.run
+
+    def paced_assemble(cmd, *args, **kw):
+        if "assemble.py" not in " ".join(str(c) for c in cmd):
+            return real_run(cmd, *args, **kw)      # probes and the review copy, for real
+        parts = Path(cmd[cmd.index("--parts-dir") + 1])
+        out = Path(cmd[cmd.index("-o") + 1])
+        parts.mkdir(parents=True, exist_ok=True)
+        for i, ack in enumerate(acked):
+            shutil.copy(src, parts / f"part_{i:03d}.mp4")
+            if not ack.wait(60):
+                return subprocess.CompletedProcess(
+                    cmd, 1, "", f"the board never said {wanted[i]!r}")
+        shutil.copy(src, out)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(server.subprocess, "run", paced_assemble)
     segs = [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 2.5, "why": "a"},
             {"clip": "CLIP_B.MP4", "in": 1.0, "out": 2.0, "why": "b"},
             {"clip": "CLIP_C.MP4", "in": 0.0, "out": 1.5, "why": "c"}]
     job = client.post("/api/render", json={"segments": segs}).json()["job"]
 
-    stages, counts = set(), set()
+    stages, counts, said = set(), set(), set()
     deadline = time.time() + 120
     while time.time() < deadline:
         s = client.get(f"/api/render/{job}").json()
         stages.add(s["stage"])
         counts.add(s["done"])
+        said.add(s["detail"])
         assert s["total"] == 3
         assert s["elapsed_s"] >= 0
+        # Release the next shot only once this one has been read off the API, which
+        # is what makes the states below observations rather than lucky timing.
+        for want, ack in zip(wanted, acked):
+            if s["detail"] == want:
+                ack.set()
         if s["state"] != "running":
             break
-        time.sleep(0.05)
+        time.sleep(0.02)
     assert s["state"] == "done", s["log"][-400:]
     assert "cutting" in stages
-    assert max(counts) > 0, f"never showed progress: {sorted(counts)}"
+    assert set(wanted) <= said, f"never said: {sorted(set(wanted) - said)}"
+    assert {1, 2, 3} <= counts, f"never showed progress: {sorted(counts)}"
     assert s["done"] == s["total"], "a finished render must not read as 0 of 3"
     # the parts directory is cleaned up behind it
     assert not list(project["work"].glob("parts_*"))

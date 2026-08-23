@@ -229,6 +229,19 @@ same commit. Releases move entries into a dated version section.
   follow-ups.
 
 ### Fixed
+- **The render-progress test waits for what it asserts instead of racing it.**
+  `test_render_reports_which_shot_it_is_on` polled a real three-shot render every 50 ms and
+  then asserted it had *caught* the counting. The shots are 1.5–2 s of 6-second clips, so a
+  busy box could finish the whole render between two polls: it failed once under load and then
+  passed five times in a row, which is the worst kind of test — one that reports on the
+  machine's mood. The render is paced now. A stand-in for `assemble.py` writes its next part
+  only once the board has been *seen* reporting the last one through `/api/render/{job}`, so
+  every state the test asserts is one it waited for. The assertions got stronger rather than
+  weaker in the process: all three counts and all three "cutting shot N of 3" lines, where it
+  used to accept "at least one count above zero". It still asserts the two things it existed
+  for — that a render says which shot it is on, and that a finished one does not read as 0 of
+  3 — and every other render in the suite still runs the real encoder end to end. Verified 8/8
+  on an idle box (~3.2 s each, down from a real render) and 4/4 with twelve spinners loading it.
 - **A render is only finished when there is something to watch.** Merging the progress work
   with the preview work exposed a seam neither branch could see alone: the 720p review copy —
   the file the A/B players actually stream — was derived *after* the render job reported done,
