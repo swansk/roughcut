@@ -1109,6 +1109,29 @@ def test_the_visual_pass_says_which_sheet_it_is_on(client):
     assert server._visual_detail("  sheet_00.jpg: 4 moments ($0.0712)") == \
         "reading CLIP_04 — sheet 2 of 3"
     assert server._visual_detail("total projected $1.23") == ""
+    # a clip's own summary line is not a sheet line and must not be read as one —
+    # `visual_pass.py` prints both, and they differ only by their indentation
+    assert server._visual_detail("CLIP_04.MP4: 5 moments, 2 notable, 3/3 sheets") == ""
+
+
+def test_the_count_and_the_sheet_line_do_not_overwrite_each_other(client):
+    """Found on the first live pass: the two-second ticker and the tool's own chatter
+    were writing the same field, so "reading CLIP_05 — 1 sheet" flashed up and was
+    replaced by "0 of 1 clips seen" a second later, over and over. The count answers
+    "how far" and the line answers "on what"; a bar needs both, so they compose."""
+    import server
+    from roughcut import progress
+
+    job = progress.Job("visual", "Looking", id="v", total=3, done=0, now="")
+    assert server._visual_note(job) == "0 of 3 clips seen"
+    server._visual_note(job, "CLIP_04.MP4: 3 sheet(s)")
+    job["done"] = 1
+    assert server._visual_note(job) == \
+        "1 of 3 clips seen — reading CLIP_04 — 3 sheets"
+    assert job["detail"] == "1 of 3 clips seen — reading CLIP_04 — 3 sheets"
+    # one clip reads as one clip
+    solo = progress.Job("visual", "Looking", id="v2", total=1, done=0, now="")
+    assert server._visual_note(solo) == "0 of 1 clip seen"
 
 
 # ------------------------------------------------------------ new project

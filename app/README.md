@@ -71,6 +71,7 @@ server, and every edit is undoable because fiddling is only fun when it is cheap
 
 | | |
 |---|---|
+| **Progress strip** | One bar under the header that every long operation drives — label, bar, percentage, elapsed, ETA and a line saying what it is doing right now. It holds two at once (a render and an Ask overlap routinely), re-attaches to whatever is still running after a reload, and is not there at all when nothing is. See "One bar for everything" |
 | **Monitor** | The whole cut, playing from the proxies — shot after shot, no render. A strip under it shows every shot as a block, width to length, coloured by clip; click one to play from there. `space` plays / pauses from the selected shot, `enter` plays just that shot, and the poster on any card jumps the monitor to it — which scrolls into view, and writes a refused play or a media error on its screen rather than sitting silent |
 | **Project** | Where this bin is: clips in the folder, how many analysed, how many looked at, shots in the cut, and the two analysis passes with progress bars. The audio pass is local and free; the visual pass costs model calls, so it is offered with a count and a price while there is footage nobody has looked at, and never runs on its own |
 | **Timeline** | One card per segment: preview parked on the in-point, the transcript lines that fall inside the cut, why it was chosen (editable), trim controls, drag to reorder |
@@ -124,6 +125,40 @@ projection is what answers "would this be affordable in production".
 `ANTHROPIC_API_KEY` and `ROUGHCUT_BACKEND=anthropic_api`. Until then Ask returns a 502 that says
 exactly that — the UI surfaces it rather than failing silently.
 
+### One bar for everything
+
+Four long operations used to have four unrelated notions of progress, so no single bar could
+exist. They share one now (`roughcut/progress.py`): a job record with `kind, label, state,
+started, elapsed_s, pct, detail, eta_s` and an ordered list of `milestones` carrying weights and
+`done_at`. `pct` comes from milestones where an operation has them and from **counted work on
+disk** where it does not — parts written by `assemble.py`, sidecars written by the two passes —
+because the filesystem is the honest progress bar. It never dips and never reaches 100% before
+the job is over. `GET /api/jobs` is the heartbeat the strip polls; `GET /api/job/{id}` is the
+whole record, plan and log included.
+
+**An Ask sizes itself before it runs.** One cheap `ROLE_ANALYSIS` call returns `{eta_s,
+milestones}` — the checkpoint *keys* are the app's, because a milestone nothing can observe
+completing is a bar that stops moving, and the labels, weights and ETA are the model's. It is
+validated the way a plan is (bounded count, positive weights, sane ETA, one re-ask) and it can
+never block the work: anything that goes wrong falls back to a measured estimate. The state goes
+`estimating → running → done`.
+
+The milestones are then completed from what the model has **actually written**. `claude -p`
+returns once, at the end, so `ClaudeCliBackend` takes an optional `on_partial` and switches to
+`--output-format stream-json --verbose --include-partial-messages`; the closing `result` object
+is identical to the non-streaming one, so the ledger and `projected_usd` are unaffected. A plan
+is a JSON list of segments, so the bar can say "12 of ~18 shots decided". Each completed
+milestone recalibrates the ETA from elapsed-vs-expected.
+
+Measured on Killington (12 clips, a 17-shot cut), and the numbers the defaults come from: the
+estimate call is 15–18s and $0.034–0.037 (most of the 28k input tokens are the CLI's own
+prompt, not ours); the Ask itself is 79–118s and $0.38–0.46; the phases split **read 5% ·
+think 72% · shots 19% · notes 3% · polish 1%**, which is why the estimator is told that rather
+than left to guess; a 181s preview render is 0.89× real time with the join 5% of it. The
+analyse, visual and render jobs take **computed** estimates rather than model ones — their
+length is arithmetic the app already does, so a call there would spend money to be less
+accurate.
+
 Keys: `j`/`k` move · `space` play / pause the cut from here · `enter` play this shot only ·
 `[` `]` trim in · `{` `}` trim out · `x` remove · `u` undo · hold `shift` for 1s steps.
 
@@ -141,7 +176,7 @@ uv run --with pytest --with fastapi --with uvicorn --with httpx --with playwrigh
     pytest app/tests -q
 ```
 
-**166 tests, ~2 min** (138 API + 28 driving real Chromium). The suite builds its own three-clip
+**204 tests, ~2 min** (173 API + 31 driving real Chromium). The suite builds its own three-clip
 synthetic project with fabricated transcripts, so it is fast, deterministic, and does not depend
 on `~/footage` — which matters for the container target. Model calls run against a scripted
 backend; there are no live calls.
@@ -149,7 +184,8 @@ backend; there are no live calls.
 The two layers answer different questions. The API tests prove the endpoints behave. They
 cannot prove that *using* the board works — that trimming updates the total, that undo restores
 exactly, that a preview can seek, that the boundary warnings track reality, that an empty
-timeline leads somewhere. Those live in the JavaScript and the browser's media stack, so twenty-eight
+timeline leads somewhere, that the progress strip tracks a call still being written and picks it
+back up after a reload. Those live in the JavaScript and the browser's media stack, so thirty-one
 tests drive real Chromium against a real uvicorn server.
 
 `install_browser_deps.sh` exists because `playwright install --with-deps` needs root and this
@@ -165,6 +201,13 @@ Driven through a real browser against the real bin, not just unit-tested:
 - Render triggered from the UI produced **162.68s** — identical to the command-line render of
   the same EDL — with no rotation side data and video+audio streams only.
 - Media endpoint returns `206 Partial Content` with a correct `content-range`.
+- Three live Asks on Killington, watched end to end. The last one: estimate 16.1s / $0.0351 /
+  predicted 80s against an actual **79.1s**; the checkpoints landed within four points of the
+  predicted split; the bar ran 0 → 4 → 22 → 66 (the creep cap through the long think) → 78 → 96
+  → 100 without ever going backwards; "17 of ~17 shots decided" against a plan that came back
+  with exactly seventeen; the ETA read 2.6s left with 3.0s actually left. A 17-shot, 181s
+  preview render took 160.8s and produced 181.11s of video (+0.13s drift), and one real visual
+  sheet reported "1 of 1 clip seen — reading CLIP_05 — 1 sheet" the whole way through.
 
 Three real defects were found by writing the tests rather than by using the app:
 

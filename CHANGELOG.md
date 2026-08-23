@@ -54,6 +54,13 @@ same commit. Releases move entries into a dated version section.
   **"12 of ~18 shots decided"**, not a spinner.
 
 ### Fixed
+- **The visual pass's two progress writers stopped overwriting each other.** Found on the first
+  live sheet: the useful line — *"reading CLIP_05 — 1 sheet"*, lifted from the tool's own
+  chatter — appeared for a second and was then replaced by *"0 of 1 clips seen"* by the
+  two-second ticker, over and over, because both wrote the same field. They compose now: the
+  count answers "how far", the line answers "on what", and a bar watching a twenty-minute pass
+  needs both. `app/README.md` gains the section describing the shared model and the measured
+  numbers behind its defaults.
 - **The ETA stopped inflating while the model was thinking, and the estimate's weights are
   measured now.** Both found by watching three real Killington Asks rather than the suite. (1)
   The stream driver calls `complete("read")` on *every* thinking delta — a hundred times in a

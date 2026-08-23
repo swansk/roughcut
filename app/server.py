@@ -990,10 +990,10 @@ def _visual_job(job: str, cmd: list[str], wanted: set[str], fine: bool,
     warn = ""
     rc = _run_counted(
         entry, cmd, lambda: len(wanted & visual_stems()),
-        on_line=lambda line: entry.note(_visual_detail(line) or entry["detail"]),
+        on_line=lambda line: _visual_note(entry, line),
         on_count=lambda n: entry.advance(
             "looking", n / max(1, entry["total"]),
-            detail=f"{n} of {entry['total']} clips seen"))
+            detail=_visual_note(entry)))
     if rc != 0:
         entry["stage"] = "looking"
         entry.finish("failed", detail="the visual pass failed — see the log")
@@ -1001,6 +1001,7 @@ def _visual_job(job: str, cmd: list[str], wanted: set[str], fine: bool,
     entry.complete("looking")
     if fine:
         entry["stage"] = "scanning"
+        entry["now"] = ""            # the coarse pass's last clip is not this stage's
         windows = STATE["work"] / f"windows_{job}.json"
         stems = sorted(Path(c).stem for c in footage_clips())
         entry.note("scanning for motion — free, no model calls")
@@ -1013,11 +1014,13 @@ def _visual_job(job: str, cmd: list[str], wanted: set[str], fine: bool,
             rc = _run_counted(
                 entry, fine_cmd(windows), lambda: len(fine_stems()),
                 key="fine_done", append=True,
-                on_line=lambda line: entry.note(_visual_detail(line)
-                                                or entry["detail"]),
+                on_line=lambda line: _visual_note(entry, line, key="fine_done",
+                                                  total=total_fine,
+                                                  verb="looked closely at"),
                 on_count=lambda n: entry.advance(
                     "closer", n / total_fine,
-                    detail=f"a closer look at {n} of {total_fine} clips"))
+                    detail=_visual_note(entry, key="fine_done", total=total_fine,
+                                        verb="looked closely at")))
         if rc != 0:
             # Not a failure of the job: the clips have been seen, which is what the
             # board needs. The close look is an audit and it can be re-run for free.
@@ -1047,9 +1050,9 @@ _SHEET_DONE_RE = re.compile(r"^\s+(\S+?):\s*(\d+) moments")
 def _visual_detail(line: str) -> str:
     m = _SHEETS_RE.match(line)
     if m:
-        STATE["visual_now"] = {"clip": Path(m.group(1)).stem,
-                               "sheets": int(m.group(2)), "done": 0}
-        return f"reading {STATE['visual_now']['clip']} — {m.group(2)} sheets"
+        n = int(m.group(2))
+        STATE["visual_now"] = {"clip": Path(m.group(1)).stem, "sheets": n, "done": 0}
+        return f"reading {STATE['visual_now']['clip']} — {n} sheet{'' if n == 1 else 's'}"
     if _SHEET_DONE_RE.match(line):
         now = STATE.get("visual_now")
         if not now:
@@ -1058,6 +1061,28 @@ def _visual_detail(line: str) -> str:
         return (f"reading {now['clip']} — sheet {min(now['done'] + 1, now['sheets'])} "
                 f"of {now['sheets']}")
     return ""
+
+
+def _visual_note(entry: progress.Job, line: str | None = None, *, key: str = "done",
+                 total: int | None = None, verb: str = "seen") -> str:
+    """The one line the bar shows for a visual pass: the count, and what it is on.
+
+    Composed rather than raced. The first live run had the two writers overwriting
+    each other — the useful "reading CLIP_05 — 1 sheet" appeared for a second and was
+    then replaced by "0 of 1 clips seen" by the two-second ticker, over and over. The
+    count answers "how far", the log line answers "on what", and a bar needs both.
+    """
+    if line is not None:
+        got = _visual_detail(line)
+        if got:
+            entry["now"] = got
+    done = entry.get(key) or 0
+    of = entry["total"] if total is None else total
+    text = f"{done} of {of} clip{'' if of == 1 else 's'} {verb}"
+    if entry.get("now"):
+        text = f"{text} — {entry['now']}"
+    entry.note(text)
+    return text
 
 
 @app.post("/api/visual")
@@ -1097,8 +1122,8 @@ async def api_visual(request: Request) -> JSONResponse:
     VISUALS[job] = progress.Job(
         "visual", "Looking at the footage", id=job, stage="looking", log="",
         total=len(wanted), done=0, fine_done=0, fine_total=max(1, fine_clips),
-        events=0, fine=fine, sheets=sheets,
-        detail=f"{sheets} contact sheets to read")
+        events=0, fine=fine, sheets=sheets, now="",
+        detail=f"{sheets} contact sheet{'' if sheets == 1 else 's'} to read")
     # The estimate here is arithmetic, not a question: the sheet count comes off the
     # footage on disk and the per-sheet cost and latency are measured (VISUAL_USD_PER_
     # SHEET, and ~40s a sheet on this machine). Asking a model to guess a number the
