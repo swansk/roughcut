@@ -123,18 +123,28 @@ class Job(dict):
         if target is None:
             return False
         now = time.time()
+        changed = False
         for m in self["milestones"]:
             if m is target:
                 break
             if m["done_at"] is None:
                 m["done_at"] = now
                 m["part"] = 1.0
+                changed = True
         if target["done_at"] is None:
             target["done_at"] = now
+            changed = True
         target["part"] = 1.0
         if detail is not None:
             self["detail"] = detail
-        self._recalibrate()
+        # Only when something actually happened. A stream driver calls this on every
+        # delta — `complete("read")` fires on each of a hundred thinking chunks — and
+        # recalibrating each time re-derives "how long the whole job is" from a
+        # fraction that has not moved and an elapsed that has, which inflates the
+        # estimate a little further every second. Measured on a live Ask: the ETA
+        # climbed from 85s to 129s while the call was in fact 20s from finishing.
+        if changed:
+            self._recalibrate()
         return True
 
     def advance(self, key: str, part: float, *, detail: str | None = None) -> bool:
@@ -217,13 +227,19 @@ class Job(dict):
         self["eta_source"] = "measured"
 
     def remaining(self) -> float | None:
-        """Seconds left, as best anyone knows. None when nothing has estimated it."""
+        """Seconds left, as best anyone knows. None when nobody knows.
+
+        Past the estimate with the job still running, nobody does: the estimate was
+        wrong and no milestone has closed since to replace it. Saying so beats
+        "about 5s left" repeated for a minute, and beats 0 — which reads as finished.
+        """
         if self["state"] == "done":
             return 0.0
         total_est = self.get("total_est_s")
         if not total_est or float(total_est) <= 0:
             return None
-        return max(0.0, float(total_est) - self.elapsed())
+        left = float(total_est) - self.elapsed()
+        return left if left > 0 else None
 
     def _time_pct(self) -> float | None:
         """The bar the clock alone would draw."""

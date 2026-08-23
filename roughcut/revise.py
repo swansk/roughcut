@@ -377,15 +377,22 @@ ASK_CHECKPOINTS = [
 ]
 
 # Measured on this bin, and stated to the estimator rather than left to be guessed:
-# a 20-shot revision of variant B took 74s, and a first cut from a 39k-token inventory
-# ~200s. The fallback is the pessimistic end of that, because a bar that overruns its
-# own estimate is worse than one that finishes early.
-FALLBACK_ETA_S = 210.0
-FALLBACK_WEIGHTS = (("read", "reading the footage", 2.0),
-                    ("think", "working out the shape", 4.0),
-                    ("shots", "choosing the shots", 5.0),
-                    ("notes", "writing its reasoning", 1.0),
-                    ("polish", "snapping cuts to speech", 0.5))
+# a 20-shot revision of variant B took 74s, a 17-shot revision of the Killington cut
+# 79s, and a first cut from a 39k-token inventory ~200s.
+FALLBACK_ETA_S = 160.0
+
+# And the *shape* of the call, which matters more to a bar than its length: timed on
+# the Killington revision, the reasoning is nearly three quarters of it and the shots
+# — the only part with a countable denominator — are a fifth. The first estimate the
+# model produced split it 8%/42%/33%/8%/8% and the bar consequently sat at 31% when
+# the model was seconds from writing, so the measured split is now given to the
+# estimator as evidence rather than left to be guessed at.
+PHASE_SHARE = (("read", "reading the footage", 0.05),
+               ("think", "working out the shape", 0.72),
+               ("shots", "choosing the shots", 0.19),
+               ("notes", "writing its reasoning", 0.03),
+               ("polish", "snapping cuts to speech", 0.01))
+FALLBACK_WEIGHTS = PHASE_SHARE
 
 
 def fallback_estimate(eta_s: float = FALLBACK_ETA_S) -> Estimate:
@@ -425,6 +432,7 @@ def estimate_ask(clips: dict[str, dict], segments: list[dict], note: str,
     lines = sum(len(c.get("transcript") or []) for c in clips.values())
     seen = sum(1 for c in clips.values() if (c.get("visual") or {}).get("moments"))
     first = not segments
+    shape = ", ".join(f"{k} {share:.0%}" for k, _label, share in PHASE_SHARE)
     what = ("An assistant film editor is about to write the FIRST cut of a short film "
             "from one bin of raw footage." if first else
             "An assistant film editor is about to revise a short film in response to "
@@ -438,8 +446,13 @@ thinking enabled, and it must return the whole edit as JSON.
 * the answer will be about {shots} shots, each a JSON object with a one-sentence reason
 * the editor's note is {len(note.split())} words
 * target length {target[0]:.0f}-{target[1]:.0f}s
-* measured on this machine: a 20-shot revision took 74s end to end; a first cut from a
-  39k-token inventory took about 200s. Calls are killed at 600s."""
+* measured on this machine: a 20-shot revision took 74s end to end, a 17-shot revision
+  of a 12-clip bin 79s, and a first cut from a 39k-token inventory about 200s. Calls
+  are killed at 600s.
+* measured shape of one such call, wall clock: {shape}. Weight the checkpoints like
+  that unless something about this job says otherwise — the reasoning really is most
+  of it, and a bar that reaches a third of the way while the model is seconds from
+  writing has misled the person watching it."""
     return estimate(what, facts, ASK_CHECKPOINTS,
                     fallback=fallback_estimate(),
                     eta_limits=(20.0, float(config.call_timeout_s())))

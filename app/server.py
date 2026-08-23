@@ -1215,11 +1215,17 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
 
 
 RENDER_PROFILES = ("preview", "delivery")
-# Seconds of wall clock per second of finished cut. Karl's 17-minute delivery render of
-# a ~2:50 cut is where the second number comes from; the preview profile of the same
-# cut is minutes rather than seconds. Both are starting guesses that the first
-# milestone replaces with measurement.
-RENDER_S_PER_CUT_S = {"preview": 1.4, "delivery": 6.0}
+# Seconds of wall clock per second of finished cut. Preview is measured: a 17-shot,
+# 181s cut of the Killington bin rendered in 160.8s while an Ask and a second render
+# shared the machine. Delivery comes from Karl's 17-minute render of a ~2:50 cut and is
+# provisional — nothing here may start one to check. Both are starting guesses that the
+# first milestone replaces with measurement off the run in front of it.
+RENDER_S_PER_CUT_S = {"preview": 0.9, "delivery": 6.0}
+# What share of that the join is worth. Measured at 5% on the preview above (7.9s of
+# 160.8s); given more on delivery, where the join re-encodes at source resolution with
+# the music mix rather than stream-copying 1080p parts. Provisional, and the reason the
+# join is a milestone at all: the bar used to hit 100% the moment cutting ended.
+RENDER_JOIN_SHARE = {"preview": 0.1, "delivery": 0.3}
 
 
 @app.post("/api/render")
@@ -1259,11 +1265,11 @@ async def api_render(request: Request) -> JSONResponse:
     # a delivery render about 6x, with the join a fixed share of it. Not a promise —
     # it is recalibrated off the first milestone — but it is what makes the bar mean
     # something in the first thirty seconds, which is when Karl was looking at it.
-    per_s = RENDER_S_PER_CUT_S[profile]
+    join = RENDER_JOIN_SHARE[profile]
     RENDERS[job].set_estimate(
-        max(5.0, planned * per_s),
-        [progress.milestone("cutting", "cutting the shots", 0.75),
-         progress.milestone("joining", "joining and mixing", 0.25)],
+        max(5.0, planned * RENDER_S_PER_CUT_S[profile]),
+        [progress.milestone("cutting", "cutting the shots", 1.0 - join),
+         progress.milestone("joining", "joining and mixing", join)],
         source="measured")
     threading.Thread(target=_render_job, args=(job, edl_path, out_path, meta),
                      daemon=True).start()

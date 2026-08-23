@@ -109,6 +109,34 @@ def test_the_eta_is_recalibrated_from_what_the_work_actually_cost():
     assert job.snapshot()["eta_source"] == "measured"
 
 
+def test_re_completing_a_milestone_does_not_inflate_the_estimate():
+    """Found live. The Ask's stream driver calls `complete("read")` on every thinking
+    delta — a hundred times in a ninety-second phase — and each call re-derived the
+    total from a fraction that had not moved and an elapsed that had. The ETA climbed
+    from 85s to 129s while the call was twenty seconds from finishing."""
+    job = _job()
+    job.set_estimate(80, [progress.milestone("read", "read", 5),
+                          progress.milestone("think", "think", 95)])
+    job["started"] = time.time() - 20
+    job.complete("read")
+    first = job["total_est_s"]
+    job["started"] = time.time() - 90          # a long way further in, same milestone
+    for _ in range(50):
+        job.complete("read")
+    assert job["total_est_s"] == first
+
+
+def test_past_its_own_estimate_the_eta_says_it_does_not_know():
+    """0 reads as finished and "about 5s left" repeated for a minute reads as a lie."""
+    job = _job()
+    job.set_estimate(60, [progress.milestone("a", "a"), progress.milestone("b", "b")])
+    job["started"] = time.time() - 90
+    assert job.remaining() is None
+    assert job.snapshot()["eta_s"] is None
+    job.finish("done")
+    assert job.snapshot()["eta_s"] == 0.0
+
+
 def test_a_long_milestone_still_moves_the_bar_but_never_overruns_it():
     """Creep on the clock between checkpoints — stopping short, because arriving is
     the milestone's job."""

@@ -54,6 +54,19 @@ same commit. Releases move entries into a dated version section.
   **"12 of ~18 shots decided"**, not a spinner.
 
 ### Fixed
+- **The ETA stopped inflating while the model was thinking, and the estimate's weights are
+  measured now.** Both found by watching three real Killington Asks rather than the suite. (1)
+  The stream driver calls `complete("read")` on *every* thinking delta — a hundred times in a
+  ninety-second phase — and each call re-derived "how long is the whole job" from a fraction
+  that had not moved and an elapsed that had: the ETA **climbed from 85s to 129s while the call
+  was twenty seconds from finishing**. `Job.complete` now recalibrates only when something
+  actually changed. (2) Past its own estimate with nothing new completed, `eta_s` is `null` —
+  "nobody knows" — rather than 0, which reads as finished. (3) The first live estimate split the
+  call 8/42/33/8/8 across its phases when the truth, timed, is **5/72/19/3/1** — the reasoning
+  is nearly three quarters of an Ask — so the bar sat at 31% when the model was seconds from
+  writing. The measured split is given to the estimator as evidence; on the next two runs it
+  adopted it and the checkpoints landed within four points of the timings. Render throughput is
+  measured the same way: a 17-shot, 181s preview took 160.8s (0.89x), not the 1.4x guessed.
 - **A render stopped claiming to be finished while it was still joining.** The bar was
   `done/total` over the shots, so it hit 100% the moment the last part landed on disk and then
   sat there for the whole join — minutes of it on a 4K delivery render, and exactly the
