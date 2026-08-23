@@ -70,6 +70,11 @@ code more than anything else:
   heard the cut. Cards are `<img>` posters cut from the proxy at the in-point
   (`/media/poster/<stem>.jpg?t=<in>`, a few KB each, cached under `--work` and immutable), so a
   page load moves **93 KB** of media rather than opening nineteen streams.
+- **The monitor fetches the shot, not the top of the file.** Its two elements are
+  `preload="metadata"` and `arm()` puts the in-point in the URL as a `#t=` media fragment. Told
+  to preload everything with no idea where the shot starts, Chrome downloads from byte 0: a
+  shot playing at 188.2 s had `0–15 s` buffered and its seek queued behind that download. Now
+  the buffered range is the shot's, and the first painted frame lands **~0.9 s** after play.
 
 Everything else follows: edits are local and instant, only Save / Snap / Render touch the
 server, and every edit is undoable because fiddling is only fun when it is cheap to be wrong.

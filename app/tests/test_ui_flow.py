@@ -456,6 +456,31 @@ def test_the_monitor_paints_a_frame_soon_after_play_is_pressed(page):
     assert page.evaluate("document.querySelector('.screen video.live').currentTime") >= 1.0
 
 
+def test_the_monitor_fetches_the_shot_not_the_top_of_the_file(page):
+    """The monitor's elements were preload="auto" and got their src before anything
+    told them where the shot starts, so Chrome downloaded from byte 0: a shot playing
+    at 188.2 s on Killington had 0–15 s buffered and the seek queued behind it. The
+    in-point goes in the URL as a media fragment now. (The suite's clips are 6 s and
+    a few tens of KB, so the buffered range below cannot tell the two apart — it is a
+    floor. The load-bearing assertions are the element's preload and the fragment in
+    its URL; the 188.2 s measurement lives in CHANGELOG.)"""
+    assert page.evaluate("document.querySelector('#pv0').preload") == "metadata"
+    assert page.evaluate("document.querySelector('#pv1').preload") == "metadata"
+    page.evaluate("playFrom(0)")
+    page.wait_for_function(
+        "document.querySelector('.screen video.live').readyState >= 3", timeout=15000)
+    v = page.evaluate("""() => {
+        const el = document.querySelector('.screen video.live');
+        const r = [];
+        for (let i = 0; i < el.buffered.length; i++)
+            r.push([el.buffered.start(i), el.buffered.end(i)]);
+        return {src: el.getAttribute('src'), ranges: r, t: el.currentTime};
+    }""")
+    assert v["src"].endswith("#t=1.00"), v["src"]
+    assert any(a <= 1.0 <= b for a, b in v["ranges"]), \
+        f"the in-point is not what got buffered: {v['ranges']}"
+
+
 def test_the_cut_plays_through_from_the_proxies(page):
     """The monitor: the whole edit plays from the proxies, shot after shot, with no
     render. Two shots — A 1.0–3.0 then B 0.0–2.0 — so a hand-over has to happen."""

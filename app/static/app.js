@@ -251,12 +251,25 @@ function filmStart(i) {
 
 function liveVideo() { return player.vids[player.cur]; }
 
-/* Point a buffer at a shot's in-point without playing it. */
+/* Point a buffer at a shot's in-point without playing it.
+ *
+ * The `#t=` is a media fragment, and it is the difference between fetching the shot
+ * and fetching the top of the file. The elements were `preload="auto"` and got their
+ * src before anything told them where the shot starts, so Chrome did the only thing
+ * it could and downloaded from byte 0: measured on the Killington board, a shot
+ * playing at 188.2 s had 0–15 s buffered, and the seek to 188.2 waited its turn
+ * behind that. With `preload="metadata"` on the element and the in-point in the URL,
+ * the first request after the moov lands where the shot is.
+ *
+ * `dataset.src` stays the bare proxy URL — it is how the rest of the monitor asks
+ * "which clip is this buffer holding", and a fragment in it would make every check
+ * miss. Re-arming the same clip at a different in-point is the seek below, not a
+ * reload: the file is already open. */
 function arm(v, seg) {
   const src = (P.clips[seg.clip] || {}).proxy || '';
   if (v.dataset.src !== src) {
     v.dataset.src = src;
-    v.src = src;
+    v.src = src ? `${src}#t=${Math.max(0, seg.in).toFixed(2)}` : src;
     v.load();
   }
   // Deferred, so by the time metadata arrives this buffer may have been pointed at a

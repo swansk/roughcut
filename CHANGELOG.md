@@ -154,6 +154,22 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Fixed
+- **The monitor downloaded the top of the file and then waited to seek.** Its two `<video>`
+  elements were `preload="auto"` and `arm()` set their `src` before anything said where the
+  shot starts, so Chrome did the only thing it could and fetched from byte 0. Measured on the
+  live board: playing a shot that begins at **188.2 s**, the buffered range was **0–15 s** —
+  it was pulling a part of the file nobody was going to watch, and the seek to the in-point
+  queued behind it. The elements are `preload="metadata"` now and `arm()` puts the in-point in
+  the URL as a `#t=` media fragment, so the first request after the header lands on the shot;
+  `dataset.src` deliberately keeps the bare proxy URL, because that is how the rest of the
+  monitor asks which clip a buffer is holding. Buffered after arming is the in-point's range
+  (`184.3–203.8` for the 188.2 s shot) plus at most a couple of seconds of header, against
+  15 s of head before. The two-element hand-over is untouched: `arm` / `playFrom` / `advance`
+  and their browser tests still pass, plus a new one that pins both elements to
+  `preload="metadata"` and asserts the fragment reaches the URL. Together with the shot cards
+  no longer streaming, the first non-black frame after `playFrom(0)` is **1.03 s / 0.82 s /
+  0.96 s** against **6.8 s / 9.5 s / 7.9 s** before — press play, see a frame. 146 API + 32
+  browser tests pass.
 - **The monitor played the sound and showed a black screen, because sixteen shot cards were
   each streaming an 85 MB proxy.** Karl, on the Killington board: *"I can hear the videos when
   I click play, but the preview window still shows up blank."* Neither the range serving nor
@@ -173,7 +189,7 @@ same commit. Releases move entries into a dated version section.
   `proxy_dir`; four traversal shapes 404). Measured: **2–13 KB** per poster, **322 ms** cold and
   **3 ms** warm, all 17 built in **1.27 s** at six at a time, 180 KB of disk for the bin. One
   page load now moves **93 KB** of media instead of opening 19 streams, and the first painted
-  frame is **0.88 s / 0.92 s**. Trimming an in-point moves the poster too, debounced 450 ms, so
+  frame is under a second. Trimming an in-point moves the poster too, debounced 450 ms, so
   holding the button costs one frame and not one per press. Verified: 146 API + 32 browser
   tests pass (was 138 + 28), including a browser test that reads the monitor's pixels back and
   fails if it is still black 5 s after play, one that a card carries a poster `<img>` and no

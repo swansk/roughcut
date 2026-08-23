@@ -188,9 +188,14 @@
     <!-- The monitor. The whole edit plays here from the proxies, shot after shot, so a
          cut is judged by watching it rather than by rendering it first. -->
     <div id="player" style="display:none">
+      <!-- preload="metadata", not "auto": an element told to preload everything starts
+           at byte 0, and the shot it is about to play may start three minutes in. On
+           Killington that meant 0-15s buffered for a shot at 188.2s, with the seek
+           queued behind the download. arm() puts the in-point in the URL as a media
+           fragment, so the first request after the header lands on the shot. -->
       <div class="screen">
-        <video id="pv0" preload="auto" playsinline></video>
-        <video id="pv1" preload="auto" playsinline></video>
+        <video id="pv0" preload="metadata" playsinline></video>
+        <video id="pv1" preload="metadata" playsinline></video>
         <div id="screenMsg" hidden></div>
       </div>
       <div class="transport">
