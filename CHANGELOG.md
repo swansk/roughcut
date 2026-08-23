@@ -83,6 +83,16 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Fixed
+- **The monitor had one way of reporting anything: a black rectangle.** A proxy still
+  opening, a proxy that will not open at all, and a browser refusing to start an unmuted
+  video looked identical to each other and identical to a broken board — `play()`'s rejection
+  was thrown away by an empty `.catch(() => {})`, and a media error was reported only if it
+  struck the live buffer mid-play, and then only as a guess (*"previews build in the
+  background"*) rather than as what the browser had actually said. The screen carries the
+  answer now: *opening CLIP_04…*, *buffering…*, `CLIP_A: that proxy would not open — it may
+  still be building (code 4)`, or *the browser refused to play — click the monitor, then press
+  play again* — and clicking the monitor does play it, which is what makes that advice
+  followable. Errors also stop the transport instead of leaving it reading ❚❚ Pause.
 - **Pressing play twice while a shot was still opening left the monitor playing behind its
   own transport.** Karl, on Killington: *"the timeline LOOKS good, but I cannot play it
   seems?"* On the synthetic test project a proxy opens in milliseconds; on a real bin the

@@ -463,6 +463,46 @@ def test_pressing_play_twice_while_a_shot_opens_leaves_the_monitor_stopped(page)
         "document.querySelector('.screen video.live').currentTime >= 1.2", timeout=10000)
 
 
+def test_a_media_error_is_shown_on_the_monitor_not_swallowed(page):
+    """The monitor had one way of reporting anything — a black rectangle — and a proxy
+    that will not open looked exactly like one that is merely slow. What the browser
+    actually said has to reach the screen, in this app's terms and with its code."""
+    page.locator("#playCut").click()
+    page.wait_for_function("player.playing && player.idx === 0", timeout=10000)
+    page.evaluate("""() => {
+        const v = document.querySelector('#pv0');
+        v.dataset.src = '/media/proxy/CLIP_A.mp4';
+        v.src = '/media/proxy/NOT_A_CLIP.mp4';        // 404: MEDIA_ERR_SRC_NOT_SUPPORTED
+        v.load();
+    }""")
+    page.wait_for_selector("#screenMsg:not([hidden])", timeout=10000)
+    msg = page.locator("#screenMsg").inner_text()
+    assert "CLIP_A" in msg, msg
+    assert "would not open" in msg and "code 4" in msg, msg
+    assert page.locator("#screenMsg").get_attribute("class") == "bad"
+    assert "code 4" in page.locator("#toast").inner_text()
+    page.wait_for_function("!player.playing", timeout=5000)   # a dead buffer stops it
+    assert page.locator("#playCut").inner_text().startswith("▶")
+
+
+def test_a_refused_play_is_named_on_the_monitor(page):
+    """`play()` returns a promise that Chrome rejects when its autoplay policy will not
+    have an unmuted video, and the board used to throw that rejection away with an empty
+    `.catch` — the one failure mode that cannot be seen from the outside at all."""
+    page.evaluate("""() => {
+        const v = document.querySelector('#pv0');
+        v.play = () => Promise.reject(
+            new DOMException('play() failed because the user did not interact with the '
+                             + 'document first.', 'NotAllowedError'));
+    }""")
+    page.locator("#playCut").click()
+    page.wait_for_selector("#screenMsg:not([hidden])", timeout=10000)
+    assert "refused to play" in page.locator("#screenMsg").inner_text()
+    assert "click the monitor" in page.locator("#toast").inner_text()
+    page.wait_for_function("!player.playing", timeout=5000)
+    assert page.locator("#playCut").inner_text().startswith("▶")
+
+
 # ------------------------------------------------------------------ what was seen
 
 def test_what_the_visual_pass_saw_shows_on_the_cards_and_in_the_library(page, project):

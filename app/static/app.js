@@ -225,6 +225,49 @@ function showLive() {
   player.vids.forEach((v, k) => v.classList.toggle('live', k === player.cur));
 }
 
+/* Say on the screen what the monitor is doing when it is not showing a picture. The
+ * monitor had exactly one way of reporting anything — a black rectangle — and three
+ * things it could be doing behind it: opening a proxy, waiting on more of one, or
+ * having been refused permission to play at all, since `play()`'s rejection was thrown
+ * away by an empty `.catch`. All three looked identical, and identical to broken. */
+function screenMsg(text, kind) {
+  const el = $('#screenMsg');
+  if (!el) return;
+  el.hidden = !text;
+  el.className = kind || '';
+  el.textContent = text || '';
+}
+
+/* What a MediaError means, in the terms of this app rather than the spec's. */
+const MEDIA_ERR = {
+  1: 'the load was cancelled',
+  2: 'the connection to the board dropped — is the server still running?',
+  3: 'the browser could not decode it — the proxy may be half-written',
+  4: 'that proxy would not open — it may still be building',
+};
+
+function mediaErrorText(v) {
+  const e = v.error;
+  const name = stem(String(v.dataset.src || v.currentSrc || '').split('/').pop() || 'shot');
+  if (!e) return `${name} would not play`;
+  return `${name}: ${MEDIA_ERR[e.code] || 'unknown media error'} (code ${e.code})`
+    + (e.message ? ` — ${e.message}` : '');
+}
+
+/* A refused play is a fact about the browser, not about the cut, and it has to reach
+ * the person: Chrome will not start an unmuted video without a gesture it recognises,
+ * and the board's own click on a shot card is not always one it counts. */
+function playRefused(err) {
+  const gesture = err && err.name === 'NotAllowedError';
+  const why = gesture
+    ? 'the browser refused to play — click the monitor, then press play again'
+    : `the browser refused to play — ${(err && err.name) || 'error'}`
+      + `${err && err.message ? `: ${err.message}` : ''}`;
+  pauseCut();
+  screenMsg(why, 'bad');
+  toast(why, 8000);
+}
+
 function schedule() {
   cancelAnimationFrame(player.raf);
   player.raf = requestAnimationFrame(tick);
@@ -251,9 +294,10 @@ function playFrom(i, { single = false } = {}) {
   const go = () => {
     if (g !== player.gen || !player.playing) return;   // pause, or a later command, won
     if (!resume) v.currentTime = seg.in;
-    v.play().catch(() => {});
+    v.play().catch((err) => { if (g === player.gen) playRefused(err); });
   };
   player.playing = true;            // before go(), which refuses to start a paused monitor
+  screenMsg(v.readyState >= 2 ? '' : `opening ${stem(seg.clip)}…`);
   if (v.readyState >= 1) go(); else v.addEventListener('loadedmetadata', go, { once: true });
   cueBed(filmStart(i) + (resume ? Math.max(0, v.currentTime - seg.in) : 0));
   schedule();
@@ -267,6 +311,7 @@ function pauseCut() {
   if (bed.el) bed.el.pause();
   player.playing = false;
   cancelAnimationFrame(player.raf);
+  screenMsg('');       // callers that have something to say set it after this
   paintTransport();
 }
 
@@ -303,6 +348,7 @@ function advance() {
     player.playing = false;
     if (bed.el) bed.el.pause();
     cancelAnimationFrame(player.raf);
+    screenMsg('');
     if (!player.single) { sel = 0; player.idx = -1; paint(); }   // the end: space restarts
     paintTransport();
     return;
@@ -318,8 +364,9 @@ function advance() {
   const go = () => {
     if (g !== player.gen || !player.playing) return;
     nv.currentTime = segs[next].in;
-    nv.play().catch(() => {});
+    nv.play().catch((err) => { if (g === player.gen) playRefused(err); });
   };
+  screenMsg(nv.readyState >= 2 ? '' : `opening ${stem(segs[next].clip)}…`);
   if (nv.readyState >= 1) go(); else nv.addEventListener('loadedmetadata', go, { once: true });
   if (segs[next + 1]) arm(v, segs[next + 1]);
   paintStrip();
@@ -1181,13 +1228,24 @@ async function boot() {
     v.addEventListener('timeupdate', () => {
       if (player.playing && v === liveVideo()) boundary();
     });
+    // A media error used to be reported only if it hit the live buffer while playing,
+    // and then only as a guess about proxies still building. It says what actually
+    // failed now, and it says it on the screen and not only in a toast that fades.
     v.addEventListener('error', () => {
-      if (v !== liveVideo() || !player.playing) return;
-      pauseCut();
-      toast('that preview is not ready yet — previews build in the background', 4000);
+      const msg = mediaErrorText(v);
+      if (v === liveVideo()) { pauseCut(); screenMsg(msg, 'bad'); }
+      toast(msg, 8000);
+    });
+    v.addEventListener('playing', () => { if (v === liveVideo()) screenMsg(''); });
+    v.addEventListener('waiting', () => {
+      if (v === liveVideo() && player.playing) screenMsg('buffering…');
     });
   });
   $('#playCut').onclick = toggleCut;
+  // Makes the refusal message actionable: "click the monitor, then press play again"
+  // has to be something a person can do, and a monitor you can click to play is what
+  // everyone expects anyway.
+  $('.screen').onclick = toggleCut;
   bed.el = $('#bed');
   P = await (await fetch('/api/project')).json();
   music = P.music || null;
