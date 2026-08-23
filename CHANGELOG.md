@@ -10,6 +10,19 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **[R10](research/R10-events-priority.md) — sorting what was seen, and what a closer look is
+  actually worth.** Answering Karl's *"you missed some cool jumps"* with numbers, and finding
+  that only half the diagnosis holds. A 1s read of 23 motion-picked windows did surface four
+  events at timestamps the 4s pass never mentioned — and then eleven claimed events, checked by
+  eye against the frames, produced **zero that were what either pass said they were**. The
+  mechanism is one thing: on a helmet or chest mount the horizon sits at forty-five degrees, so
+  *the camera* is inverted and both densities read it as *"rider inverted mid-air"*. The three
+  claims the previous proposal cut on — CLIP_04's backflip and crash, CLIP_11's inverted trick —
+  are among them. Two cost facts fall out: a fine sheet costs the same as a coarse one ($0.073
+  vs $0.077) because the prompt and not the image is what is paid for, so **density is cheap and
+  coverage is expensive**; and a close look is a good *auditor* and a poor *detector* — every
+  `junk` call it made was right. The ranking is built on that asymmetry. R8/R9/R10 are now
+  listed in research/README.md, which had only ever carried the planned studies.
 - **Events, ranked — and the rank believes a second look over a first one.** Karl, on the
   Killington revision: *"You missed some cool jumps — this is likely due to limited keyframe
   analysis and the lack of a workflow / algorithm that applies sort / priority following a
