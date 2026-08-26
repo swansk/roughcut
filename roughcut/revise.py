@@ -325,6 +325,97 @@ one sentence on what that moment is for. In `notes`, say what you decided this f
 about and what you would look at first if it is wrong."""
 
 
+SHOT_SYSTEM = (
+    "You are an assistant film editor revising ONE shot of a rough cut in response "
+    "to the editor's note about that shot. You return only that shot's replacement — "
+    "usually one segment, sometimes more if the note asks to split it — drawn from "
+    "the same clip the shot comes from. You never invent timestamps: every segment "
+    "must lie inside that clip's duration. You cut on complete thoughts rather than "
+    "mid-sentence, and you keep the shot's place in the film in mind: what precedes "
+    "and follows it is shown to you.")
+
+# What the bar assumes when a shot-scoped ask starts. Computed, not asked for: the
+# prompt is one clip block instead of a bin inventory, so the call is far shorter than
+# a full Ask, and a model estimate would spend a call to guess a number this small.
+SHOT_FALLBACK_ETA_S = 60.0
+
+
+def build_shot_prompt(segments: list[dict], index: int, clips: dict[str, dict],
+                      story: str, note: str,
+                      target: tuple[float, float]) -> str:
+    """The scoped prompt: the whole film for context, one clip in full detail.
+
+    Deliberately NOT the bin inventory. A full Ask is ~40k tokens and 3-4 minutes on
+    the CLI backend, which is the right price for restructuring a film and the wrong
+    one for "let this line finish". The model sees every shot's place and reason, but
+    the only clip it can cut from is the one the note is about — cross-clip changes
+    are what the full Ask and the finder are for, and the validator enforces it.
+    """
+    seg = segments[index]
+    current = "\n".join(
+        f"  {i + 1:2d}. {s['clip']} {float(s['in']):.2f}-{float(s['out']):.2f} "
+        f"({float(s['out']) - float(s['in']):.1f}s) — {s.get('why', '')}"
+        + ("   ← the shot this note is about" if i == index else "")
+        for i, s in enumerate(segments))
+    total = sum(float(s["out"]) - float(s["in"]) for s in segments)
+    clip = seg["clip"]
+    # No shot_timeline here: relative capture order is chronology *across* clips, and
+    # this call is confined to one.
+    block = _clip_block(clips[clip])
+
+    return f"""The editor is cutting a short film from one bin of footage and has a note \
+about ONE shot of the current edit.
+
+## What this film is about
+{story.strip() or "(the editor has not written this yet)"}
+
+## Target length
+{target[0]:.0f}-{target[1]:.0f} seconds. The current edit is {total:.1f}s over \
+{len(segments)} shots.
+
+## The current edit, in order
+{current}
+
+## The shot the note is about
+Shot {index + 1} of {len(segments)}: {clip} {float(seg['in']):.2f}-{float(seg['out']):.2f} \
+({float(seg['out']) - float(seg['in']):.1f}s)
+Why it is there: {seg.get('why') or '(no reason recorded)'}
+
+## The editor's note about this shot
+{note.strip()}
+
+## The clip this shot comes from
+{block}
+
+## What to return
+The replacement for this one shot only, as `segments` — usually one segment, more if
+the note asks to split it. Every segment must come from {clip}; the rest of the edit
+is not yours to change here. Timestamps are seconds within the clip. Prefer cutting on
+utterance boundaries visible in the transcript, and mind what plays before and after
+this shot. If the note would be best served by removing the shot entirely, return it
+unchanged and say so in `notes` — removing is the editor's own one-click action."""
+
+
+def propose_shot(segments: list[dict], index: int, clips: dict[str, dict],
+                 story: str, note: str,
+                 target: tuple[float, float] = (120.0, 180.0),
+                 on_partial: Callable[[str, str], None] | None = None) -> dict:
+    """Ask for a revision of one shot. Returns {'segments', 'notes', 'usage'} where
+    `segments` is the replacement for that shot alone — the caller splices."""
+    if not note.strip():
+        raise ValueError("empty note")
+    if not segments:
+        raise ValueError("no shots to revise")
+    if not (0 <= index < len(segments)):
+        raise ValueError(f"no shot {index} in a {len(segments)}-shot cut")
+    clip = segments[index]["clip"]
+    if clip not in clips:
+        raise ValueError(f"{clip} has no analysis — run the audio pass first")
+    scoped = {clip: clips[clip]}
+    return _ask(build_shot_prompt(segments, index, clips, story, note, target),
+                SHOT_SYSTEM, scoped, on_partial)
+
+
 def validate_plan(payload: Any, clips: dict[str, dict]) -> dict:
     """Strict. A plausible-looking plan that names a clip we do not have, or runs
     past the end of one, is worse than a loud failure — it renders as a crash or,

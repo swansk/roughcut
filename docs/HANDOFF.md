@@ -14,6 +14,27 @@ were huge, man") — so **the cut on the board is 21 shots, 175.1s**, ending roc
 newest 4K render is one shot stale. Open question unchanged: is the cut good, and what does Karl
 report next? Roadmap item 1 (audit what the sheets claim) is still the biggest lever.
 
+**Session 7 then built the two features Karl asked for** (his words: *"request specific changes
+to individual clips"* and *"use natural language to search for a specific clip through the whole
+thing, and then present options along with their full video"*):
+
+- **✎ ask on every shot card** — a note about one shot runs a *scoped* revision
+  (`revise.propose_shot`: the film for context, only that shot's clip in detail, replacement
+  confined to that clip and spliced server-side into the untouched timeline). Live: 10.7s and
+  $0.15 against a full Ask's 3-4 minutes. Same accept/discard loop as everything else.
+- **Find a moment** (sidebar panel) — free word-level search over transcripts + visual moments
+  answers instantly; *Ask the model* (priced on the button, judge role, `roughcut/find.py`) reads
+  the whole inventory for what word-matching cannot reach. Live: *"me falling into the river"* —
+  words no transcript contains — returned the fall itself (CLIP_01 90-108, agreeing with the
+  visual pass), the confession, and the aftermath, in 25s for $0.19. Every match plays the full
+  clip proxy seeked to the moment, with *+ add to cut*.
+
+Both verified live on the Killington board and under the suite (244 tests). One live-QA residue:
+the *last proposal* banner now offers a discarded shot-ask proposal on the pocket-pizza shot
+(holds 1.6s of reaction after "pizza") — accept it or ignore it, it is only a proposal. The two
+scoped prompts are new surface for the next session's judgement calls: `SHOT_SYSTEM` /
+`build_shot_prompt` and `find.SYSTEM` / `find.build_prompt`.
+
 Previous update: 2026-08-23, session 6 continued — Karl ran a revision with the corrected
 transcripts and **accepted it** (17 shots, 3:01, the ski-patrol beat in it), rendered it at 4K,
 and reported three more things: the progress bars said nothing useful, the monitor showed blank

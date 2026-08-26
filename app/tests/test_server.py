@@ -1178,6 +1178,101 @@ def test_ask_surfaces_backend_failure_on_the_job(client):
         inference.set_backend(None)
 
 
+# ------------------------------------------------------------------ shot-scoped ask
+
+def test_shot_ask_replaces_only_the_focused_shot(client, project):
+    """A note about one shot: the model answers for that shot alone, the server
+    splices, and the proposal the human reads is the whole timeline — every other
+    shot verbatim."""
+    from roughcut import config, inference
+
+    class Scripted:
+        name = "scripted"
+        seen: list = []
+
+        def complete(self, request):
+            Scripted.seen.append(request)
+            text = json.dumps({
+                "segments": [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 2.0,
+                              "why": "starts on the line now"},
+                             {"clip": "CLIP_A.MP4", "in": 5.0, "out": 5.6,
+                              "why": "and the goodbye split out"}],
+                "notes": "split it as asked"})
+            model = config.model_for(request.role)
+            return inference.Result(content=text, input_tokens=10, output_tokens=5,
+                                    backend="scripted", model=model,
+                                    projected_usd=1e-4, latency_ms=1, raw=text)
+
+    inference.set_backend(Scripted())
+    inference.reset_spend()
+    try:
+        plan = _ask(client, {
+            "note": "split this into the line and the goodbye",
+            "segments": [{"clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0, "why": "first"},
+                         {"clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0, "why": "second"}],
+            "story": "a test film", "focus": 0})
+        # the replacement, then the untouched second shot, in order
+        assert [s["clip"] for s in plan["segments"]] == [
+            "CLIP_A.MP4", "CLIP_A.MP4", "CLIP_B.MP4"]
+        assert plan["segments"][2] == {"clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0,
+                                       "why": "second"}
+        assert plan["focus"] == {"index": 0, "clip": "CLIP_A.MP4", "in": 1.0,
+                                 "out": 3.0, "with": 2}
+        # the replacement is polished like any proposal; the untouched shot is not
+        assert plan["segments"][1]["out"] == pytest.approx(5.6 + 0.45, abs=0.06)
+        # one call, no estimate ahead of it — the scoped prompt carries the film,
+        # the note, the focused clip's transcript and the marker
+        assert len(Scripted.seen) == 1
+        prompt = Scripted.seen[-1].prompt
+        assert "split this into the line and the goodbye" in prompt
+        assert "the shot this note is about" in prompt
+        assert "hello there" in prompt
+        assert "Every segment must come from CLIP_A.MP4" in prompt
+    finally:
+        inference.set_backend(None)
+
+
+def test_shot_ask_is_confined_to_the_shots_clip(client):
+    """The scoped call may only cut from the clip the note is about — a model that
+    wanders to another clip fails loudly rather than proposing blind."""
+    from roughcut import config, inference
+
+    class Wandering:
+        name = "scripted"
+
+        def complete(self, request):
+            text = json.dumps({"segments": [
+                {"clip": "CLIP_C.MP4", "in": 0.0, "out": 2.0, "why": "a swap"}]})
+            model = config.model_for(request.role)
+            return inference.Result(content=text, input_tokens=10, output_tokens=5,
+                                    backend="scripted", model=model,
+                                    projected_usd=1e-4, latency_ms=1, raw=text)
+
+    inference.set_backend(Wandering())
+    inference.reset_spend()
+    try:
+        job = client.post("/api/ask", json={
+            "note": "swap this for something better",
+            "segments": [{"clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0}],
+            "focus": 0}).json()["job"]
+        s = _ask_status(client, job)
+        assert s["state"] == "failed" and s["code"] == 502
+        assert "unknown clip" in s["detail"]
+    finally:
+        inference.set_backend(None)
+
+
+def test_shot_ask_rejects_a_bad_focus(client):
+    segs = [{"clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0}]
+    r = client.post("/api/ask", json={"note": "x", "segments": segs, "focus": 5})
+    assert r.status_code == 400 and "no shot 6" in r.json()["detail"]
+    r = client.post("/api/ask", json={"note": "x", "segments": [], "focus": 0})
+    assert r.status_code == 400
+    r = client.post("/api/ask", json={"note": "x", "segments": segs,
+                                      "focus": "not-a-number"})
+    assert r.status_code == 400
+
+
 # ------------------------------------------------------- the progress model
 
 PLAN_TEXT = json.dumps({

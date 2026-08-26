@@ -564,24 +564,52 @@ def _ask_watcher(entry: progress.Job, shots: int):
 
 
 def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
-             target: tuple[float, float], ranked: list[dict] | None = None) -> None:
+             target: tuple[float, float], ranked: list[dict] | None = None,
+             focus: int | None = None) -> None:
     entry = ASKS[job]
     # Step one is not the edit, it is the estimate. Karl: *"the first step the AI must
     # complete is an estimate of how long it will take to apply the changes. This will
     # (when estimate is complete) start a progress bar."* It is one cheap call on the
     # per-unit role, it is bounded by its own short timeout, and it cannot fail in a
     # way that stops the work — a bad estimate falls back to a measured guess.
-    shots = revise.expected_shots(segments, target)
-    est = revise.estimate_ask(clips, segments, note, target, shots=shots)
-    entry.set_estimate(est.eta_s, est.milestones, source=est.source,
-                       detail="reading the footage")
-    entry["estimate"] = {"source": est.source, "eta_s": est.eta_s,
-                         "shots": shots, "why": est.detail,
-                         "usage": est.usage}
+    #
+    # A *shot-scoped* ask skips the estimate call: its prompt is one clip block rather
+    # than a bin inventory, so it is a fraction of a full Ask, and the estimate is
+    # arithmetic the app already knows — the same reasoning as analyse and render.
+    if focus is not None:
+        shots = 2
+        est = revise.fallback_estimate(revise.SHOT_FALLBACK_ETA_S)
+        entry.set_estimate(est.eta_s, est.milestones, source="measured",
+                           detail="reading the clip")
+        entry["estimate"] = {"source": "measured", "eta_s": est.eta_s,
+                             "shots": shots, "why": "shot-scoped — computed",
+                             "usage": {}}
+    else:
+        shots = revise.expected_shots(segments, target)
+        est = revise.estimate_ask(clips, segments, note, target, shots=shots)
+        entry.set_estimate(est.eta_s, est.milestones, source=est.source,
+                           detail="reading the footage")
+        entry["estimate"] = {"source": est.source, "eta_s": est.eta_s,
+                             "shots": shots, "why": est.detail,
+                             "usage": est.usage}
     entry["state"] = "running"
     try:
         watcher = _ask_watcher(entry, shots)
-        if segments:
+        if focus is not None:
+            plan = revise.propose_shot(segments=segments, index=focus, clips=clips,
+                                       story=story, note=note, target=target,
+                                       on_partial=watcher)
+            # The model answered for one shot; the proposal the human reads and
+            # accepts is the whole timeline, so the splice happens here — a record on
+            # disk holding only the replacement would offer "1 shot" as the recovered
+            # cut and eat the film on accept.
+            replaced = segments[focus]
+            plan["focus"] = {"index": focus, "clip": replaced["clip"],
+                             "in": replaced["in"], "out": replaced["out"],
+                             "with": len(plan["segments"])}
+            plan["segments"] = (segments[:focus] + plan["segments"]
+                                + segments[focus + 1:])
+        elif segments:
             plan = revise.propose(segments=segments, clips=clips, story=story,
                                   note=note, target=target, events=ranked,
                                   on_partial=watcher)
@@ -642,19 +670,40 @@ async def api_ask(request: Request) -> JSONResponse:
         # nothing to cut from. The UI can act on that; a 502 would just look broken.
         raise HTTPException(400, "no analysed clips yet — run the audio pass first")
 
+    # A note about ONE shot: same loop, scoped call. Validated here so a stale index
+    # is a 400 the UI can show, not a thread that dies estimating.
+    focus = body.get("focus")
+    if focus is not None:
+        try:
+            focus = int(focus)
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"focus is not a shot index: {focus!r}")
+        if not segments:
+            raise HTTPException(400, "focus needs a cut to point into")
+        if not (0 <= focus < len(segments)):
+            raise HTTPException(400, f"no shot {focus + 1} in a "
+                                     f"{len(segments)}-shot cut")
+        if segments[focus]["clip"] not in clips:
+            raise HTTPException(400, f"{segments[focus]['clip']} has no analysis")
+
     job = uuid.uuid4().hex[:8]
-    label = "Revising the cut" if segments else "Building the first cut"
+    if focus is not None:
+        label = (f"Revising shot {focus + 1} — "
+                 f"{Path(segments[focus]['clip']).stem}")
+    else:
+        label = "Revising the cut" if segments else "Building the first cut"
     ASKS[job] = progress.Job(
         "ask", label, id=job, state="estimating", plan=None, code=0,
         detail="estimating how long this will take",
         # `kind` was a human phrase here before the shared model gave the word a job
         # to do; the phrase is what the UI printed, so it survives under its own name.
-        ask_kind="revision" if segments else "first cut",
+        ask_kind="shot" if focus is not None
+        else "revision" if segments else "first cut",
         estimate=None)
     threading.Thread(
         target=_ask_job,
         args=(job, segments, clips, story, note,
-              (float(target[0]), float(target[1])), payload["events"]),
+              (float(target[0]), float(target[1])), payload["events"], focus),
         daemon=True).start()
     return JSONResponse({"job": job})
 

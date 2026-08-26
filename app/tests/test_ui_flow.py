@@ -371,6 +371,52 @@ def test_ask_failure_is_reported_not_swallowed(page):
         inference.set_backend(None)
 
 
+def test_a_shot_carries_its_own_ask(page):
+    """The per-shot loop, end to end: open the form on one card, ask, read the
+    proposal, accept — and every other shot survives verbatim."""
+    from roughcut import config, inference
+
+    class Scripted:
+        name = "scripted"
+        seen: list = []
+
+        def complete(self, request):
+            Scripted.seen.append(request)
+            text = json.dumps({
+                "segments": [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 2.0,
+                              "why": "starts on the line now"}],
+                "notes": "opened it on the greeting"})
+            model = config.model_for(request.role)
+            return inference.Result(content=text, input_tokens=10, output_tokens=5,
+                                    backend="scripted", model=model,
+                                    projected_usd=0.0001, latency_ms=1, raw=text)
+
+    inference.set_backend(Scripted())
+    inference.reset_spend()
+    try:
+        card = page.locator(".seg").first
+        card.locator("button", has_text="✎ ask").click()
+        page.wait_for_selector(".shotAsk textarea")
+        card.locator(".shotNote").fill("start this on the line instead")
+        card.locator("button", has_text="Ask about this shot").click()
+        page.wait_for_selector("#proposal:visible", timeout=30000)
+
+        # scoped: the panel names the shot, the untouched shot is in the diff
+        notes = page.locator("#proposalNotes").inner_text()
+        assert "shot 1" in notes and "opened it on the greeting" in notes
+        assert "CLIP_B" in page.locator("#proposalDiff").inner_text()
+        # and the prompt was the scoped one, confined to the shot's clip
+        assert "Every segment must come from CLIP_A.MP4" in Scripted.seen[-1].prompt
+
+        page.locator("#acceptProposal").click()
+        assert page.locator(".seg").count() == 2
+        assert page.evaluate("segs[0].in") == pytest.approx(0.5, abs=0.01)
+        assert page.evaluate("JSON.stringify([segs[1].clip, segs[1].in, segs[1].out])") \
+            == '["CLIP_B.MP4",0,2]'
+    finally:
+        inference.set_backend(None)
+
+
 def test_find_a_moment_lists_matches_and_plays_the_whole_clip(page):
     """The finder, free layer: type what you remember, get windows, click one and
     the full clip opens seeked to the moment; add it and it becomes a shot."""

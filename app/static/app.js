@@ -282,6 +282,12 @@ function refreshPosters() {
   }, 450);
 }
 
+/* Per-shot ask state. Keyed by the segment object (like posterAt) so it survives the
+ * re-render after every edit; the draft survives too, because a render can land while
+ * someone is mid-sentence about a shot. */
+const shotAskOpen = new WeakSet();
+const shotAskDraft = new WeakMap();
+
 function segCard(seg, i) {
   const el = document.createElement('div');
   el.className = 'seg' + (i === sel ? ' sel' : '');
@@ -326,8 +332,17 @@ function segCard(seg, i) {
         <button data-act="out" data-d="-0.25">−</button>
         <button data-act="out" data-d="0.25">+</button>
         <button data-act="play">▶ play</button>
+        <button data-act="ask" title="Ask for a change to this one shot — a scoped model call, seconds rather than minutes">✎ ask</button>
         <button data-act="del" class="ghost">remove</button>
       </div>
+      ${shotAskOpen.has(seg) ? `<div class="shotAsk" style="margin-top:8px">
+        <textarea class="shotNote"
+          placeholder="what should change in this shot — start later · hold through the reaction · just keep the punchline">${escapeHtml(shotAskDraft.get(seg) || '')}</textarea>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+          <button data-act="shotgo" class="primary">Ask about this shot</button>
+          <span class="hint shotState"></span>
+        </div>
+      </div>` : ''}
     </div>`;
 
   el.addEventListener('click', (e) => {
@@ -339,6 +354,23 @@ function segCard(seg, i) {
     const act = b.dataset.act;
     if (act === 'play') { revealMonitor(); return playFrom(i, { single: true }); }
     if (act === 'del') { pushUndo(); segs.splice(i, 1); return render(); }
+    if (act === 'ask') {
+      if (shotAskOpen.has(seg)) shotAskOpen.delete(seg); else shotAskOpen.add(seg);
+      render();
+      const box = document.querySelectorAll('.seg')[i];
+      const note = box && box.querySelector('.shotNote');
+      if (note) note.focus();
+      return;
+    }
+    if (act === 'shotgo') {
+      const note = el.querySelector('.shotNote').value.trim();
+      if (!note) return toast('say what should change in this shot');
+      ask({ note, focus: i, button: b, state: el.querySelector('.shotState') });
+      return;
+    }
+    // Anything else in the card is a trim button carrying data-d; a button without
+    // one must not fall through to nudge() with NaN.
+    if (!('d' in b.dataset)) { paint(); return; }
     pushUndo();
     const d = parseFloat(b.dataset.d) * (e.shiftKey ? 4 : 1);
     nudge(i, act, d);
@@ -350,6 +382,11 @@ function segCard(seg, i) {
     segs[i].why = ev.target.textContent.trim();
     touch();
   });
+
+  const shotNote = el.querySelector('.shotNote');
+  if (shotNote) {
+    shotNote.addEventListener('input', () => shotAskDraft.set(seg, shotNote.value));
+  }
 
   el.addEventListener('dragstart', (e) => {
     e.dataTransfer.setData('text/plain', i);
@@ -1227,7 +1264,11 @@ function showProposal(plan) {
 
   const oldTotal = total();
   const newTotal = plan.segments.reduce((a, s) => a + (s.out - s.in), 0);
-  $('#proposalNotes').textContent = plan.notes || '(no note returned)';
+  // A shot-scoped proposal says which shot it is about — the rest of the diff is
+  // the untouched film, and without this line it reads as a whole-cut revision.
+  const scope = plan.focus
+    ? `[shot ${plan.focus.index + 1} · ${stem(plan.focus.clip)}] ` : '';
+  $('#proposalNotes').textContent = scope + (plan.notes || '(no note returned)');
   // Each shot with the reason it was chosen: the `why` is what you check the
   // reasoning against, and it is the only account of what the agent thinks it saw.
   // A shot whose boundaries were polished says so and says where it came from —
@@ -1324,18 +1365,23 @@ async function ask(opts = {}) {
   const button = opts.button || $('#ask');
   const stateEl = opts.state || $('#askState');
   const note = opts.note !== undefined ? opts.note : $('#note').value.trim();
+  const focus = opts.focus;                 // a shot index: revise that one shot only
   const first = !segs.length;
   if (!note && !first) return toast('type what you want changed first');
   // The brief is the human's half of the loop and the most valuable thing typed into
   // this app, so a first-cut note becomes the story rather than being thrown away.
   if (first && note && !$('#story').value.trim()) $('#story').value = note;
   button.disabled = true;
-  const verb = first ? 'building a first cut' : 'thinking';
+  const verb = focus !== undefined ? 'revising this shot'
+    : first ? 'building a first cut' : 'thinking';
   stateEl.textContent = `${verb}…`;
   try {
     const r = await fetch('/api/ask', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ note, segments: segs, story: $('#story').value }),
+      body: JSON.stringify({
+        note, segments: segs, story: $('#story').value,
+        ...(focus !== undefined ? { focus } : {}),
+      }),
     });
     if (!r.ok) {
       const detail = await r.json().catch(() => ({}));

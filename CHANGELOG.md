@@ -10,6 +10,27 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Ask about one shot: a scoped revision on every card, seconds instead of
+  minutes.** Karl asked for "a feature that lets me request specific changes to
+  individual clips". Every shot card carries **✎ ask**, which opens a note box for
+  that shot alone; the call it makes is `revise.propose_shot` — the film's story,
+  the full edit list with the focused shot marked, and the *complete detail of only
+  that shot's clip* (transcript, visual moments, unusable stretches), instead of the
+  whole bin inventory. That scope is the point: a full Ask is ~40k tokens and 3-4
+  minutes, the right price for restructuring a film and the wrong one for "let the
+  line finish" — live on Killington, a note on the pocket-pizza shot came back in
+  **10.7s** at $0.15 projected, holding 1.6s of reaction after "pizza" and arguing
+  it from the transcript. The model may only return segments from the focused
+  shot's clip (the validator enforces it; cross-clip swaps are what the full Ask
+  and the finder are for), its replacement is boundary-polished like any proposal,
+  and the server splices it into the untouched timeline **before** writing the ask
+  record — so the proposal the human reads, the accept, and the on-disk recovery
+  path all see a whole cut, never a one-shot fragment that would eat the film on
+  accept. Same loop as everything else: an accept/discard proposal, undoable, the
+  EDL untouched until the human says so. The estimate ahead of it is computed
+  rather than asked for (a model call to size a 30-60s job would cost more than it
+  informs — the analyse/render rule), and a stale shot index is a 400 the UI shows,
+  not a thread that dies estimating.
 - **Find a moment: natural-language search over the whole bin, with the answer as
   playable video.** Karl asked for a way to "use natural language to search for a
   specific clip through the whole thing, and then present options along with their
