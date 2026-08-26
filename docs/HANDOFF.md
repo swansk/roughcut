@@ -1,6 +1,20 @@
 # Handoff — read this first
 
-Last updated: 2026-08-23, session 6 continued — Karl ran a revision with the corrected
+Last updated: 2026-08-25 (session 7 open). **Karl kept editing on his own on 2026-08-24**, past
+everything below: he hand-added six shots to the accepted 17-shot cut, then asked for a revision
+(note: drop the conquistador bit, find the rocks hit, restore covered-in-snow — ask `a038b42c`,
+$0.57, 170s). The model built a **rocks runner** as the spine ("oh no, I hit one of those
+earlier" → "I hit some rocks at the end there" → "Oh, hello! That's a rock!"), kept three of his
+six adds (dropping the three silent ones as unaudited — say the word to restore them), and Karl
+**accepted the 22-shot plan and rendered it at 4K delivery** (`cut_d25d19d5`, 2:59, ~1.0 GB,
+review copy ready). Then he deleted one more shot by hand — the CLIP_12 debrief closer ("no, you
+were huge, man") — so **the cut on the board is 21 shots, 175.1s**, ending rock! → "it bit!" →
+"that's just showbiz, baby". Session 7 rendered that state as a preview (`cut_c912b763`, 175.33s,
++0.22s drift, marked *· this cut*), so the timeline and the newest 1080p render agree again; the
+newest 4K render is one shot stale. Open question unchanged: is the cut good, and what does Karl
+report next? Roadmap item 1 (audit what the sheets claim) is still the biggest lever.
+
+Previous update: 2026-08-23, session 6 continued — Karl ran a revision with the corrected
 transcripts and **accepted it** (17 shots, 3:01, the ski-patrol beat in it), rendered it at 4K,
 and reported three more things: the progress bars said nothing useful, the monitor showed blank
 while the audio played, and the renders stalled with no way to download them. Two more agent

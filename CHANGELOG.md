@@ -9,6 +9,14 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Documentation
+- **HANDOFF opens on the state Karl actually left, not the state session 6 closed.** He kept
+  editing on 2026-08-24 after the docs were written: ask `a038b42c` accepted (the rocks-runner
+  revision of his six hand-adds), a 22-shot 4K delivery render (`cut_d25d19d5`), then one more
+  hand deletion — so the board holds a 21-shot, 175.1s cut. Session 7 verified the board live,
+  rendered that state as a preview (`cut_c912b763`, +0.22s drift) so *· this cut* has a render
+  again, and rewrote HANDOFF's top block to match.
+
 ### Added
 - **One render at a time, and a button that says so.** Karl asked whether *"hitting the button
   multiple times can break the system state of the render"*. It cannot: every job has its own
