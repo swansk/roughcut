@@ -371,6 +371,33 @@ def test_ask_failure_is_reported_not_swallowed(page):
         inference.set_backend(None)
 
 
+def test_find_a_moment_lists_matches_and_plays_the_whole_clip(page):
+    """The finder, free layer: type what you remember, get windows, click one and
+    the full clip opens seeked to the moment; add it and it becomes a shot."""
+    page.locator("#findQ").fill("goodbye")
+    page.locator("#findGo").click()
+    page.wait_for_selector("#findResults .cand", timeout=15000)
+    rows = page.locator("#findResults .cand")
+    assert rows.count() >= 1
+    assert "goodbye" in rows.first.inner_text()
+
+    rows.first.click()
+    page.wait_for_selector("#findPlayer:visible")
+    page.wait_for_function(
+        "document.querySelector('#findVideo').readyState >= 1", timeout=15000)
+    src = page.evaluate("document.querySelector('#findVideo').src")
+    assert "/media/proxy/" in src and "#t=" in src
+    # seeked to the match, not the top of the file — the full clip stays scrubbable.
+    # It may already be playing (that is the point), so a range rather than a spot.
+    t = page.evaluate("document.querySelector('#findVideo').currentTime")
+    assert 4.4 <= t <= 6.05, f"expected playback at the match (~4.5s), got {t}"
+
+    before = page.locator(".seg").count()
+    page.locator("#findAdd").click()
+    assert page.locator(".seg").count() == before + 1
+    assert "goodbye" in page.locator(".seg").nth(1).inner_text()
+
+
 def test_render_from_the_ui_produces_a_playable_file(page):
     page.locator("#render").click()
     page.wait_for_function(

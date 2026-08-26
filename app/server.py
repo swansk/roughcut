@@ -64,7 +64,7 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, Respons
 import uvicorn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from roughcut import (config, effects, events, inference,  # noqa: E402
+from roughcut import (config, effects, events, find, inference,  # noqa: E402
                       progress, revise)
 
 HERE = Path(__file__).resolve().parent
@@ -85,6 +85,7 @@ RENDERS: dict[str, progress.Job] = {}
 ANALYSES: dict[str, progress.Job] = {}
 ASKS: dict[str, progress.Job] = {}
 VISUALS: dict[str, progress.Job] = {}
+FINDS: dict[str, progress.Job] = {}
 
 
 def all_jobs() -> list[progress.Job]:
@@ -95,13 +96,14 @@ def all_jobs() -> list[progress.Job]:
     and it is what lets a reloaded page re-attach to a render and an Ask that are both
     still running — which is the state his machine is in as this is written.
     """
-    return [*ANALYSES.values(), *VISUALS.values(), *ASKS.values(), *RENDERS.values()]
+    return [*ANALYSES.values(), *VISUALS.values(), *ASKS.values(), *FINDS.values(),
+            *RENDERS.values()]
 
 
 # Polled once a second by every open board, so it carries no payloads: a finished Ask
 # holds a 15k-token plan and a render holds ffmpeg's whole log, and neither belongs in
 # a heartbeat. Both stay one fetch away on /api/job/{id}.
-JOB_LIST_OMIT = ("plan",)
+JOB_LIST_OMIT = ("plan", "found")
 
 
 @app.get("/api/jobs")
@@ -118,7 +120,7 @@ def api_jobs() -> JSONResponse:
 
 @app.get("/api/job/{job}")
 def api_job(job: str) -> JSONResponse:
-    for registry in (ANALYSES, VISUALS, ASKS, RENDERS):
+    for registry in (ANALYSES, VISUALS, ASKS, FINDS, RENDERS):
         if job in registry:
             return JSONResponse(registry[job].snapshot())
     raise HTTPException(404, "no such job")
@@ -627,11 +629,7 @@ async def api_ask(request: Request) -> JSONResponse:
     body = await request.json()
     note = (body.get("note") or "").strip()
 
-    payload = project_payload()
-    clips = {c: {"clip": c, "duration": v["duration"], "transcript": v["transcript"],
-                 "summary": v["summary"], "captured": v.get("captured"),
-                 "visual": v.get("visual")}
-             for c, v in payload["clips"].items()}
+    clips, payload = _ask_clips()
     target = payload["target"]
     segments = body.get("segments")
     if segments is None:
@@ -680,6 +678,119 @@ def api_ask_latest() -> JSONResponse:
     if not files:
         return JSONResponse({"record": None})
     return JSONResponse({"record": json.loads(files[0].read_text(encoding="utf-8"))})
+
+
+# ---------------------------------------------------------------- find a moment
+
+
+# What the bar assumes when a model search starts. The one live-shaped data point so
+# far is the backend probe's ~7s round trip plus a small answer over a big prompt;
+# recalibrated off the run in front of it like every other estimate.
+FIND_ETA_S = 45.0
+FIND_EXPECTED_MATCHES = 6
+
+
+def _ask_clips() -> tuple[dict, dict]:
+    """The clips dict the model-facing calls read, plus the full payload it came
+    from. One shape, built one way — /api/ask grew its own copy of this inline and
+    /api/find needing a second copy is what promoted it to a function."""
+    payload = project_payload()
+    clips = {c: {"clip": c, "duration": v["duration"], "transcript": v["transcript"],
+                 "summary": v["summary"], "captured": v.get("captured"),
+                 "visual": v.get("visual")}
+             for c, v in payload["clips"].items()}
+    return clips, payload
+
+
+def _match_rows(matches: list[dict]) -> list[dict]:
+    """A match, made playable: the row carries the full clip's proxy and a poster at
+    the matched second, so the UI can show the moment and let the human scrub the
+    whole clip around it — a window is somewhere to look, not yet a cut."""
+    out = []
+    for m in matches:
+        stem = Path(m["clip"]).stem
+        out.append({**m,
+                    "proxy": f"/media/proxy/{stem}.mp4",
+                    "poster": f"/media/poster/{stem}.jpg?t={m['start']:.2f}",
+                    "duration": clip_duration(m["clip"])})
+    return out
+
+
+def _find_job(job: str, query: str, clips: dict, ranked: list[dict]) -> None:
+    entry = FINDS[job]
+
+    def on_partial(kind: str, text: str) -> None:
+        if kind == "thinking":
+            entry.complete("read")
+            entry.note("working out where to look")
+            return
+        entry.complete("think")
+        n = text.count('"clip"')
+        entry.advance("write", n / FIND_EXPECTED_MATCHES,
+                      detail=f"{n} match{'es' if n != 1 else ''} written")
+
+    try:
+        found = find.find(query, clips, ranked, on_partial=on_partial)
+    except inference.BudgetExceeded as exc:
+        entry.update(code=429)
+        entry.finish("failed", detail=str(exc))
+        return
+    except (inference.InferenceError, ValueError) as exc:
+        entry.update(code=502)
+        entry.finish("failed", detail=str(exc))
+        return
+    entry["found"] = {"matches": _match_rows(found["matches"]),
+                      "notes": found.get("notes", ""),
+                      "usage": found.get("usage", {})}
+    entry.complete("write")
+    n = len(found["matches"])
+    entry.finish("done", detail=f"{n} match{'es' if n != 1 else ''} found")
+
+
+@app.post("/api/find")
+async def api_find(request: Request) -> JSONResponse:
+    """Find a moment in the bin from a plain-language description.
+
+    Two layers, two prices. The word-level match over the transcripts and the visual
+    sidecars is free and comes back in this response. `deep` starts one model call
+    over the same inventory the Ask reads — for the misses word-matching cannot close
+    (a "river" said as "stream") — and that is a job with a price, started only
+    because the human pressed the button that carries it: the visual pass's rule.
+
+    Either way the answer is windows to look at, never an edit: each match plays from
+    the full clip and only becomes a segment when the human adds it.
+    """
+    body = await request.json()
+    query = (body.get("query") or "").strip()
+    if not query:
+        raise HTTPException(400, "empty query — describe the moment")
+    clips, payload = _ask_clips()
+    if not clips:
+        raise HTTPException(400, "no analysed clips yet — run the audio pass first")
+    matches = find.lexical(query, clips)
+    resp: dict = {"matches": _match_rows(matches), "job": None,
+                  "deep_projected_usd": find.projected_usd(clips)}
+    if body.get("deep"):
+        running = next((f for f in FINDS.values()
+                        if f["state"] not in progress.TERMINAL), None)
+        if running is not None:
+            raise HTTPException(409, "a model search is already running — "
+                                     f"{running.get('detail') or running['label']}")
+        job = uuid.uuid4().hex[:8]
+        FINDS[job] = progress.Job(
+            "find", f"Finding — {query[:48]}", id=job, state="running", found=None,
+            code=0, query=query, detail="reading the bin")
+        FINDS[job].set_estimate(
+            FIND_ETA_S,
+            [progress.milestone("read", "reading the bin", 0.15),
+             progress.milestone("think", "working out where to look", 0.55),
+             progress.milestone("write", "writing the matches", 0.30)],
+            source="measured")
+        threading.Thread(target=_find_job,
+                         args=(job, query, clips, payload["events"]),
+                         daemon=True).start()
+        resp["job"] = job
+    return JSONResponse(resp)
 
 
 # ---------------------------------------------------------------- backend

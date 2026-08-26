@@ -162,6 +162,12 @@ async function adopt(j) {
     toast('the proposal you asked for is ready');
   } else if (j.kind === 'render' && j.state === 'done') {
     await refreshVersions();
+  } else if (j.kind === 'find' && j.state === 'done') {
+    // A model search started before a reload still lands its matches in the panel.
+    const full = await (await fetch(`/api/job/${j.id}`)).json();
+    if (!full.found) return;
+    renderFindResults(full.found.matches, full.found.notes);
+    toast('the model search finished — matches are in Find a moment');
   } else if ((j.kind === 'visual' || j.kind === 'analyse') && j.state === 'done') {
     P = await (await fetch('/api/project')).json();
     await refreshStatus();
@@ -1374,6 +1380,133 @@ function rejectProposal() {
   toast('discarded');
 }
 
+/* Find a moment. Two layers, two prices: the word-level match over the transcripts
+ * and the visual sidecars is free and instant; "Ask the model" is one call over the
+ * same inventory the Ask reads, offered with its price like the visual pass, for the
+ * misses word-matching cannot close — a "river" said as "stream". A match plays the
+ * WHOLE clip, seeked to the moment: a window is somewhere to look, not yet a cut. */
+let findSel = null;              // the match loaded in the finder's player
+
+function paintFindDeepPrice(usd) {
+  if (usd == null) return;
+  $('#findDeep').textContent = `Ask the model · ~$${usd.toFixed(2)}`;
+}
+
+function renderFindResults(rows, note) {
+  const box = $('#findResults');
+  box.innerHTML = '';
+  if (note) box.insertAdjacentHTML('beforeend', `<div class="hint" style="padding:4px 0">${escapeHtml(note)}</div>`);
+  if (!rows.length) {
+    box.insertAdjacentHTML('beforeend',
+      '<div class="hint">nothing found — try other words, or Ask the model</div>');
+    return;
+  }
+  rows.forEach((m) => {
+    const d = document.createElement('div');
+    d.className = 'cand';
+    const tag = m.source === 'model' ? '<i class="kind hot">model</i>'
+      : `<i class="kind">${escapeHtml(m.source || 'match')}</i>`;
+    d.innerHTML = `<span class="w">${tag}${m.kind ? kindTag(m.kind) : ''}${escapeHtml(m.what || '')}</span>
+      ${m.why ? `<span class="hint">${escapeHtml(m.why)}</span>` : ''}
+      <span class="t">${stem(m.clip)} · ${fmt(m.start)}–${fmt(m.end)}</span>`;
+    d.onclick = () => showFindMatch(m);
+    box.appendChild(d);
+  });
+}
+
+function showFindMatch(m) {
+  findSel = m;
+  $('#findPlayer').style.display = 'block';
+  const v = $('#findVideo');
+  // Same media-fragment trick as the monitor: the in-point rides in the URL so the
+  // first request after the moov lands on the moment, not on byte 0.
+  if (v.dataset.src !== m.proxy) {
+    v.dataset.src = m.proxy;
+    v.src = `${m.proxy}#t=${Math.max(0, m.start).toFixed(2)}`;
+    v.load();
+  }
+  const seek = () => { if (v.dataset.src === m.proxy) v.currentTime = m.start; };
+  if (v.readyState >= 1) seek();
+  else v.addEventListener('loadedmetadata', seek, { once: true });
+  v.play().catch(() => {});     // the controls are right there; a refusal costs a click
+  $('#findWhat').textContent = [m.what, m.why].filter(Boolean).join(' — ');
+  $('#findInfo').textContent = `${stem(m.clip)} · match ${fmt(m.start)}–${fmt(m.end)}`
+    + (m.duration ? ` of ${fmt(m.duration)} — the whole clip is loaded, scrub anywhere` : '');
+}
+
+function addFindMatch() {
+  if (!findSel) return;
+  pushUndo();
+  const at = sel + 1;
+  segs.splice(at, 0, {
+    clip: findSel.clip,
+    in: Math.round(findSel.start * 100) / 100,
+    out: Math.round(findSel.end * 100) / 100,
+    why: findSel.what || `found: ${$('#findQ').value.trim()}`,
+  });
+  sel = at;
+  render();
+  toast(`added ${stem(findSel.clip)} @ ${findSel.start.toFixed(1)}s — trim it on its card`);
+}
+
+function followFind(job) {
+  const iv = setInterval(async () => {
+    let s;
+    try { s = await (await fetch(`/api/job/${job}`)).json(); } catch (e) { return; }
+    if (s.state === 'running') {
+      $('#findState').textContent = `${s.detail || 'searching'} · ${clock(s.elapsed_s)}`;
+      return;
+    }
+    clearInterval(iv);
+    $('#findGo').disabled = false;
+    $('#findDeep').disabled = false;
+    if (s.state !== 'done') {
+      $('#findState').textContent = '';
+      return toast(`model search failed: ${s.detail || 'see the bar above'}`, 6000);
+    }
+    const found = s.found || { matches: [], notes: '' };
+    renderFindResults(found.matches, found.notes);
+    const u = found.usage || {};
+    $('#findState').textContent = u.model
+      ? `${found.matches.length} from the model · $${(u.projected_usd || 0).toFixed(2)} projected`
+      : `${found.matches.length} from the model`;
+  }, 1000);
+}
+
+async function doFind(deep = false) {
+  const q = $('#findQ').value.trim();
+  if (!q) return toast('describe the moment you are looking for');
+  $('#findGo').disabled = true;
+  $('#findDeep').disabled = true;
+  $('#findState').textContent = deep ? 'asking the model…' : 'searching…';
+  try {
+    const r = await fetch('/api/find', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query: q, deep }),
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      throw new Error(d.detail || `HTTP ${r.status}`);
+    }
+    const data = await r.json();
+    paintFindDeepPrice(data.deep_projected_usd);
+    renderFindResults(data.matches);
+    $('#findState').textContent = data.matches.length
+      ? `${data.matches.length} match${data.matches.length > 1 ? 'es' : ''} in the words and the frames`
+      : 'no word match — the model may still find it';
+    if (data.job) {
+      strip.owned.add(data.job);    // this page is following it; the strip must not double up
+      followFind(data.job);
+      return;                       // buttons come back when the job settles
+    }
+  } catch (e) {
+    $('#findState').textContent = '';
+    toast(`find failed: ${e.message}`, 6000);
+  }
+  $('#findGo').disabled = false;
+  $('#findDeep').disabled = false;
+}
+
 /* Renders as versions rather than "the newest file". Judging an edit is comparative —
  * reacting to a choice is faster and more informative than judging one artifact — so
  * two slots, and every past render stays reachable. */
@@ -1714,6 +1847,12 @@ async function boot() {
   $('#acceptProposal').onclick = acceptProposal;
   $('#rejectProposal').onclick = rejectProposal;
   $('#visual').onclick = lookAtFootage;
+  $('#findGo').onclick = () => doFind();
+  $('#findDeep').onclick = () => doFind(true);
+  $('#findQ').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); doFind(); }
+  });
+  $('#findAdd').onclick = addFindMatch;
   $('#libTabs').onclick = (e) => {
     const t = e.target.closest('.tab');
     if (!t) return;

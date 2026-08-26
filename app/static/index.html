@@ -77,10 +77,14 @@
     border: 1px solid var(--line); border-radius: 7px; padding: 8px; font: inherit;
     resize: vertical;
   }
-  select, input[type=number] {
+  select, input[type=number], input[type=text] {
     background: #131318; color: var(--text); border: 1px solid var(--line);
     border-radius: 7px; padding: 5px 8px; font: inherit;
   }
+  /* The finder's player shows the WHOLE clip, seeked to the match — a window is
+     somewhere to look, and looking means scrubbing around it. */
+  #findVideo { width: 100%; border-radius: 6px; background: #000; display: block;
+               aspect-ratio: 16/9; }
   input[type=range] { accent-color: var(--accent); }
   .tabs { display: flex; gap: 4px; margin-bottom: 6px; }
   .tab { font-size: 12px; color: var(--dim); border: 1px solid var(--line);
@@ -293,6 +297,26 @@
       <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
         <button id="ask" class="primary">Ask</button>
         <span class="hint" id="askState"></span>
+      </div>
+    </div>
+    <div class="panel" id="findPanel">
+      <h2>Find a moment</h2>
+      <input type="text" id="findQ" style="width:100%"
+             placeholder="where I hit the rocks · the backflip · falling into the river">
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+        <button id="findGo">Find</button>
+        <button id="findDeep"
+                title="One model call reading every transcript and everything the visual pass saw — finds what word-matching cannot (a river said as a stream).">Ask the model</button>
+        <span class="hint" id="findState"></span>
+      </div>
+      <div id="findResults" class="lib" style="max-height:32vh;margin-top:8px"></div>
+      <div id="findPlayer" style="display:none;margin-top:8px">
+        <video id="findVideo" controls preload="metadata" playsinline></video>
+        <div class="hint" id="findWhat" style="margin-top:4px"></div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+          <button id="findAdd">+ add to cut</button>
+          <span class="hint" id="findInfo"></span>
+        </div>
       </div>
     </div>
     <div class="panel">

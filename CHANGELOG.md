@@ -9,6 +9,31 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Added
+- **Find a moment: natural-language search over the whole bin, with the answer as
+  playable video.** Karl asked for a way to "use natural language to search for a
+  specific clip through the whole thing, and then present options along with their
+  full video". Two layers, two prices. `roughcut/find.py`'s **lexical layer** is free
+  and instant: the query word-matched (with just enough stemming for rock/rocks and
+  fall/falling) against every transcript utterance and every visual-pass moment,
+  scored, and merged into windows — a window whose halves answer *different* words of
+  the query ("hit" said here, "rocks" seen here) outranks either alone. Live on
+  Killington, "hit the rocks" puts CLIP_08 270.9s ("I hit some rocks at the end
+  there") first at score 1.0. **"Ask the model"** is one judge-role call over the same
+  inventory the Ask reads, offered with a projected price on the button (the visual
+  pass's rule) for the misses word-matching cannot close: live, "me falling into the
+  river" — words the transcripts never say — returned the fall itself (CLIP_01
+  90-108, agreeing with the visual pass's 104-108 window), the narrated confession at
+  187-199.5, and the aftermath, in 25s for $0.19. Matches are validated as strictly
+  as a plan (unknown clip or out-of-range seconds fail loudly; an *empty* list is a
+  valid answer — "not found" is information). Every result row plays the **full
+  clip's proxy** in the panel's player, seeked to the match by media fragment, so the
+  moment is judged in context and the whole clip is scrubbable; **+ add to cut**
+  inserts it after the selected shot, undoable like any edit. `POST /api/find`
+  answers lexically in-request; the model call is a job (one at a time, 409) with
+  milestones on the top bar and its matches recoverable via `/api/job/{id}` after a
+  reload. Nothing here writes the EDL.
+
 ### Documentation
 - **HANDOFF opens on the state Karl actually left, not the state session 6 closed.** He kept
   editing on 2026-08-24 after the docs were written: ask `a038b42c` accepted (the rocks-runner
