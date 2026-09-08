@@ -38,6 +38,9 @@ same commit. Releases move entries into a dated version section.
   placeholder page. Nothing here spends a model call or touches `segments`.
 
 ### Documentation
+- **M4 checked off in the tracker.** `docs/INTAKE.md` I4.1 and I4.2 carry their commit and the
+  measured numbers; the one thing a tone cannot prove — a spoken sentence coming back — is
+  left to the live verification on Killington (I2.6).
 - **The intake workstream has a tracker.** `docs/INTAKE.md` carries Karl's four decisions, the
   milestones with checkboxes, the lanes in flight and where to pick up after an interruption;
   HANDOFF points at it and roadmap item 8 (telemetry) moved into it. Both design documents are

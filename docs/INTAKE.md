@@ -111,11 +111,16 @@ table). Nothing verified live on Killington yet.
 
 ### M4 · Dictation (lane `agent/dictate`)
 
-- [ ] I4.1 `roughcut/dictate.py` + `research/tools/dictate.py`: webm/opus or wav in → ffmpeg →
+- [x] I4.1 `roughcut/dictate.py` + `research/tools/dictate.py`: webm/opus or wav in → ffmpeg →
       faster-whisper (same model family as the audio pass, GPU when present) → text; `names`
       from the brief seed the prompt. DoD: unit test with a synthetic tone + a stubbed model;
-      one live check that a spoken sentence comes back.
-- [ ] I4.2 `POST /api/dictate` real (multipart, ≤ 30 s, 413 above), returns `{text, latency_ms}`.
+      one live check that a spoken sentence comes back. — commit `ac7dca2` (`test_dictate.py`
+      9 passed + the live test on a 2 s tone: `small` on cuda/float16, 1.3 s warm in the tool,
+      4.7 s end to end; a spoken sentence still needs a human at a mic — I2.6 covers it).
+- [x] I4.2 `POST /api/dictate` real (≤ 30 s, 413 above), returns `{text, latency_ms}`. —
+      commit `ac7dca2` via the pre-written endpoint (raw body, not multipart, by design: the
+      floor posts a Blob). The 413 is on bytes (6 MB); a decoded length over 30 s raises
+      `dictate.TooLong`, a `NotAvailable`, so it answers 501 until the lead maps it to 413.
 
 ### M5 · The open screen (after M2/M3)
 
