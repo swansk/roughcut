@@ -13,6 +13,12 @@
  * proposal is the EDL's word until Keep. Everything else here is ffprobe and file checks.
  * While a run is going the page polls GET /api/index every 2 s; the run lives in the
  * server, so closing the tab changes nothing.
+ *
+ * The bin is something you point at, not a launch argument (INTAKE I5.4): the name in
+ * the header opens a picker over GET /api/projects, and a row (or a path typed in) is
+ * POST /api/projects/open — the server re-points itself, and this page reloads all of
+ * its data for the new bin. A 409 (a job still running) or a 400 (no video there) is
+ * said and the panel stays.
  */
 
 'use strict';
@@ -27,6 +33,14 @@ const POLL_MS = 2000;
 const THEMES_POLL_MS = 500;      // the proposal is one short call; its job is polled closer
 const HOLD_MS = 250;             // V held longer than this in the story field speaks; a tap types
 const ORDER_WORD = { priority: 'most promising first', capture: 'capture order' };
+// The slider's four stops in words (design §2: "sample interval, 4 s to 1 s"). A sheet
+// is 30 frames, so at 4 s one sheet covers two minutes and a jump is a frame or two.
+const INTERVAL_WORD = {
+  4: 'a frame every 4 s · sees the run, misses the moment',
+  3: 'a frame every 3 s · sees the approach',
+  2: 'a frame every 2 s · sees the air',
+  1: 'every 1 s · sees the landing',
+};
 
 const clock = (s) => {
   s = Math.max(0, Math.round(s || 0));
@@ -75,6 +89,7 @@ const O = {
   status: null,            // /api/status — the backend's budget and the look pass's price
   index: null,             // /api/index — the journal's progress, whether a run is going
   order: null,             // the toggle: 'priority' | 'capture'; null until the journal or the human says
+  interval: null,          // the slider: seconds between frames once the human moves it; null = the project's
   job: null,               // the id of the run this page started or found running
   detail: '',              // the running job's own one-liner ("CLIP_07 · look")
   busy: false,             // a POST in flight — the button is disabled meanwhile
@@ -174,15 +189,61 @@ function renderSheet() {
 
 /* ------------------------------------------------- the price and the budget */
 
+// The slider (design §2, Fig. 1): one control, four stops coarse to fine, re-pricing
+// live. `/api/status`'s `visual.by_interval` carries every stop's price for the same
+// pending clips, so a move costs no round trip; the chosen stop rides with POST
+// /api/index as `interval_s` and the server keeps it in the EDL (`look.interval_s`),
+// so after a run the slider shows the project's word, not the page's.
+
+function intervals() {
+  const v = O.status && O.status.visual;
+  return v && v.intervals && v.intervals.length ? v.intervals.map(Number) : [4, 3, 2, 1];
+}
+
+// The project's interval: `/api/index` and `/api/status` both say it (the same EDL field).
+function projectInterval() {
+  if (O.index && O.index.interval_s != null) return Number(O.index.interval_s);
+  const v = O.status && O.status.visual;
+  return v && v.interval_s != null ? Number(v.interval_s) : intervals()[0];
+}
+
+function interval() {
+  return O.interval == null ? projectInterval() : O.interval;
+}
+
+function priceAt(i) {
+  const v = O.status && O.status.visual;
+  if (!v) return null;
+  const by = v.by_interval || {};
+  if (by[String(i)] != null) return by[String(i)];
+  return i === Number(v.interval_s) ? v.projected_usd : null;
+}
+
 function renderControls() {
   const v = O.status.visual, b = O.status.backend;
   const pending = (v.pending || []).length;
+  const stops = intervals(), i = interval();
+  const at = Math.max(0, stops.indexOf(i));
+  const el = $('#interval');
+  el.max = String(stops.length - 1);
+  el.value = String(at);
+  $('#stops').innerHTML = stops.map((s, k) => `<span${k === at ? ' class="on"' : ''}>${s} s</span>`).join('');
+  $('#intervalWord').textContent = pending ? (INTERVAL_WORD[i] || `a frame every ${i} s`) : '';
   $('#priceLine').innerHTML = pending
-    ? `<b>~${usd(v.projected_usd)}</b> for the ${plural(pending, 'clip')} not yet looked at`
+    ? `<b>~${usd(priceAt(i))}</b> for the ${plural(pending, 'clip')} not yet looked at`
     : 'every clip has been looked at — nothing left to buy';
+  // the sheet count is on the wire only for the project's own interval; the other
+  // stops carry their price (by_interval), and the close look is the same at every stop
+  const atProject = i === Number(v.interval_s);
   $('#priceDetail').textContent = pending
-    ? `${plural(v.coarse_calls, 'sheet')} at a frame every 4 s, then a close look at up to ${plural(v.fine_calls, 'window')} across ${plural(v.fine_pending, 'clip')}`
+    ? `${atProject ? plural(v.coarse_calls, 'sheet') : 'sheets'} at a frame every ${i} s, then a close look at up to ${plural(v.fine_calls, 'window')} across ${plural(v.fine_pending, 'clip')}`
     : '';
+  const looked = v.done || 0;
+  $('#sliderHint').textContent = !pending
+    ? `the slider is off — the bin was looked at a frame every ${projectInterval()} s and there is nothing left to re-price`
+    : looked
+      ? `applies to the ${plural(pending, 'clip')} not yet looked at — the ${plural(looked, 'clip')} already looked at stay as they are`
+      : 're-prices live as the thumb moves · the close look after the sheets is the same at every stop';
   $('#budgetLine').textContent = `${usd(b.spent_usd)} of ${usd(b.budget_usd)}`;
   const problems = (b.problems || []).map((p) => `<span class="bad">${escapeHtml(p)}</span>`).join(' ');
   $('#backendLine').innerHTML = `${escapeHtml(b.backend || '')} · ${escapeHtml(b.model || '')}${problems ? ' · ' + problems : ''}`;
@@ -193,7 +254,8 @@ function renderButton() {
   const btn = $('#indexBtn');
   const running = !!(O.index && O.index.running);
   const v = O.status && O.status.visual;
-  const price = v && v.pending.length ? ` · ~${usd(v.projected_usd)}` : '';
+  const pending = !!(v && v.pending && v.pending.length);
+  const price = pending ? ` · ~${usd(priceAt(interval()))}` : '';
   btn.disabled = running || O.busy || !O.status || !O.index;
   if (running) btn.textContent = 'Indexing… runs on its own';
   else if (O.index && O.index.exists) btn.textContent = `Index what isn't done${price}`;
@@ -202,6 +264,9 @@ function renderButton() {
     el.classList.toggle('on', el.dataset.order === order());
     el.disabled = running || O.busy;
   }
+  // the slider is off while a run is going (it is looking at the project's interval) and
+  // once every clip has been looked at (nothing left to re-price)
+  $('#interval').disabled = running || O.busy || !pending;
 }
 
 function order() {
@@ -622,6 +687,129 @@ function onKeyUp(e) {
   dictStop();
 }
 
+/* ---------------------------------------------------------------- picker */
+
+// One bin per launch was the rule; now the header's name is a control. The list is
+// the server's facts on every bin it knows (opened before, or a folder of video next
+// door) — name, clips, and small flags — never a judgement. Opening one is the same
+// configure() main() runs, so everything on this page is reloaded for it.
+
+const P = { open: false, list: null, busy: false };
+
+function binFlags(p) {
+  const out = [];
+  if (!p.exists) out.push('<i class="flag bad">missing</i>');
+  if (p.segments > 0) out.push(`<i class="flag on">cut · ${plural(p.segments, 'shot')}</i>`);
+  if (p.journal) out.push('<i class="flag good">journal</i>');
+  if (p.exists && !(p.segments > 0) && !p.journal) out.push('<i class="flag">new</i>');
+  return out.join('');
+}
+
+function binRow(p) {
+  return `<button type="button" class="prow${p.current ? ' current' : ''}" data-footage="${escapeHtml(p.footage)}" `
+    + `title="${escapeHtml(p.footage)}"${p.current ? ' aria-current="true"' : ''}>`
+    + `<b>${escapeHtml(p.name)}</b><span class="n tnum">${plural(p.clips, 'clip')}</span>`
+    + `<span class="flags">${binFlags(p)}</span>${p.current ? '<span class="cur">open now</span>' : ''}</button>`;
+}
+
+function renderPicker() {
+  const l = P.list;
+  if (!l || !P.open) return;
+  $('#pickerList').innerHTML = l.projects.map(binRow).join('')
+    || '<span class="hint small">no bins known yet — type a folder below</span>';
+  $('#pickerSub').textContent = `${plural(l.projects.length, 'bin')} · opened before, or a folder of video next door`;
+}
+
+async function openPicker() {
+  if (P.open) return;
+  P.open = true;
+  $('#picker').hidden = false;
+  $('#hdBin').setAttribute('aria-expanded', 'true');
+  $('#pickerList').innerHTML = '<span class="hint small">looking…</span>';
+  $('#pickerSub').textContent = '';
+  try {
+    P.list = await getJSON('/api/projects');
+  } catch (e) {
+    $('#pickerList').innerHTML = `<span class="bad small">${escapeHtml(e.message || e)}</span>`;
+    return;
+  }
+  renderPicker();
+  if (P.open) $('#pickerPath').focus();
+}
+
+function closePicker() {
+  if (!P.open) return;
+  P.open = false;
+  $('#picker').hidden = true;
+  $('#hdBin').setAttribute('aria-expanded', 'false');
+  if ($('#picker').contains(document.activeElement)) $('#hdBin').focus();
+}
+
+async function openBin(footage) {
+  const path = String(footage || '').trim();
+  if (!path || P.busy) return;
+  P.busy = true;
+  $('#picker').classList.add('busy');
+  try {
+    const r = await send('POST', '/api/projects/open', { footage: path });
+    closePicker();
+    $('#pickerPath').value = '';
+    toast(`opened ${r.name}${r.edl_created ? ' · new project' : ''}`);
+    await reopen();
+  } catch (e) {
+    toast(String(e.message || e), 5000);          // 409 / 400: the server's word; the panel stays
+  } finally {
+    P.busy = false;
+    $('#picker').classList.remove('busy');
+  }
+}
+
+// The server has re-pointed itself: forget everything this page held about the last
+// bin — a run's id, the story, a proposal being edited, the slider's move — and load
+// the new one the way boot() does.
+async function reopen() {
+  clearTimeout(O.timer);
+  clearTimeout(O.ttimer);
+  dictStop();
+  Object.assign(O, {
+    clips: null, status: null, index: null, order: null, interval: null, job: null, detail: '',
+    busy: false, timer: null, themes: null, proposal: null, tjob: null, tbusy: false,
+    ttimer: null, story: null,
+  });
+  $('#binName').textContent = 'opening the folder…';
+  $('#story').value = '';
+  await load();
+}
+
+function onPickerKey(e) {
+  if (e.key === 'Escape') {
+    if (P.open) { e.preventDefault(); closePicker(); }
+    return;
+  }
+  if ((e.key === 'o' || e.key === 'O') && !e.ctrlKey && !e.metaKey && !e.altKey
+      && !isTyping(document.activeElement)) {
+    e.preventDefault();
+    if (P.open) closePicker(); else openPicker();
+  }
+}
+
+function wirePicker() {
+  $('#hdBin').addEventListener('click', () => { if (P.open) closePicker(); else openPicker(); });
+  $('#pickerList').addEventListener('click', (e) => {
+    const row = e.target.closest('.prow');
+    if (row) openBin(row.dataset.footage);
+  });
+  $('#pickerPath').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    openBin(e.target.value);
+  });
+  document.addEventListener('keydown', onPickerKey);
+  document.addEventListener('pointerdown', (e) => {   // a click anywhere else closes it
+    if (P.open && !e.target.closest('#picker') && !e.target.closest('#hdBin')) closePicker();
+  });
+}
+
 /* --------------------------------------------------------------- actions */
 
 async function startIndex(extra = {}) {
@@ -629,8 +817,11 @@ async function startIndex(extra = {}) {
   O.busy = true;
   renderButton();
   try {
-    const r = await send('POST', '/api/index', { order: order(), ...extra });
+    // the slider's word rides along; the server keeps it in the EDL, so from here the
+    // slider follows the project's interval rather than the page's
+    const r = await send('POST', '/api/index', { order: order(), interval_s: interval(), ...extra });
     O.job = r.job;
+    O.interval = null;
     O.detail = '';
     toast(extra.resume_priced ? 'priced stages resumed — the cap is checked again before each one'
                               : 'indexing — it runs on its own; close the tab and it keeps going');
@@ -746,7 +937,18 @@ async function boot() {
   for (const el of $$('#order button')) {
     el.addEventListener('click', () => { O.order = el.dataset.order; renderButton(); });
   }
+  $('#interval').addEventListener('input', (e) => {
+    O.interval = intervals()[Number(e.target.value)] ?? null;
+    if (O.status) renderControls();
+  });
   wireThemes();
+  wirePicker();
+  await load();
+}
+
+// Everything the page knows about the bin, in one go — at boot and again when the
+// picker points the board at another folder.
+async function load() {
   try {
     await Promise.all([refreshClips(), refreshStatus(), refreshIndex(), refreshThemes()]);
     if (O.index.running) poll();
@@ -756,6 +958,7 @@ async function boot() {
   }
 }
 
-window.sheet = { state: O, refresh: tick, journalWord, order,
-                 renderThemes, proposeThemes, keepThemes, dictSend, dictStart, dictStop };
+window.sheet = { state: O, picker: P, refresh: tick, journalWord, order, interval, renderControls,
+                 renderThemes, proposeThemes, keepThemes, dictSend, dictStart, dictStop,
+                 openPicker, closePicker, openBin, reopen };
 boot();

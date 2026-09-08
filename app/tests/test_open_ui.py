@@ -29,6 +29,7 @@ playwright_api = pytest.importorskip("playwright.sync_api",
                                      reason="playwright not installed")
 from playwright.sync_api import sync_playwright  # noqa: E402
 
+from conftest import _make_clip  # noqa: E402
 from test_index import _stub_tools  # noqa: E402
 
 
@@ -173,8 +174,10 @@ def test_the_look_is_priced_before_the_button_that_buys_it(page):
     # the order defaults to the design's, and capture order is one click away
     assert "on" in page.locator("#order button[data-order=priority]").get_attribute("class")
     assert page.locator("#order button[data-order=capture]").is_enabled()
-    # the slider is not faked: the page says why it is missing
-    assert "not wired yet" in page.locator("#sliderHint").inner_text()
+    # the slider rests on the project's interval — the tool's default, said in words
+    assert page.locator("#interval").is_enabled() and page.locator("#interval").input_value() == "0"
+    assert page.locator("#intervalWord").inner_text() == "a frame every 4 s · sees the run, misses the moment"
+    assert "not wired" not in page.locator("#sliderHint").inner_text()
     # nothing has run: no progress, no table, no pause, nothing for the pass
     for sel in ("#progress", "#index", "#paused"):
         assert page.locator(sel).is_hidden(), sel
@@ -183,11 +186,67 @@ def test_the_look_is_priced_before_the_button_that_buys_it(page):
     assert page.locator("#links a[href='/']").count() == 1
 
 
-def test_index_the_footage_runs_the_journal_and_the_cap_pauses_the_priced_stages(page, bin_server):
+def test_the_slider_reprices_live_from_by_interval_without_a_round_trip(page, monkeypatch):
+    """The design's one control: four stops, coarse to fine, each said in words, and
+    the price re-pricing from `by_interval` as the thumb moves — no fetch per move.
+    The clips are made 100 s long in the live server so the stops differ: a sheet of
+    30 frames covers 120 s at 4 s (one sheet a clip) and 30 s at 1 s (four)."""
+    import server
+    monkeypatch.setattr(server, "clip_duration", lambda clip: 100.0)
+    page.evaluate("sheet.refresh()")
+    page.wait_for_function(
+        "sheet.state.status.visual.by_interval['1'] !== sheet.state.status.visual.by_interval['4']",
+        timeout=10000)
+    v = api(page, "/api/status")["visual"]
+    assert v["intervals"] == [4.0, 3.0, 2.0, 1.0] and v["interval_s"] == 4.0
+    assert v["by_interval"]["1"] > v["by_interval"]["2"] > v["by_interval"]["4"]
+    slider = page.locator("#interval")
+    assert slider.is_enabled() and slider.get_attribute("max") == "3" and slider.input_value() == "0"
+    assert page.locator("#stops span").all_inner_texts() == ["4 s", "3 s", "2 s", "1 s"]
+    assert "on" in page.locator("#stops span").first.get_attribute("class")
+    assert page.locator("#intervalWord").inner_text() == "a frame every 4 s · sees the run, misses the moment"
+    assert f"~${v['by_interval']['4']:.2f}" in page.locator("#priceLine").inner_text()
+    assert "3 sheets at a frame every 4 s" in page.locator("#priceDetail").inner_text()
+    hint = page.locator("#sliderHint").inner_text()
+    assert "re-prices live" in hint and "not wired" not in hint, hint
+    # move the thumb: the words, the price line and the button re-price with no request
+    hits: list[str] = []
+    page.on("request", lambda r: hits.append(r.url) if "/api/" in r.url else None)
+    slider.focus()
+    page.keyboard.press("ArrowRight")                                    # 3 s
+    assert slider.input_value() == "1"
+    assert page.locator("#intervalWord").inner_text() == "a frame every 3 s · sees the approach"
+    assert f"~${v['by_interval']['3']:.2f}" in page.locator("#priceLine").inner_text()
+    page.keyboard.press("End")                                           # 1 s, the far end
+    assert slider.input_value() == "3" and page.evaluate("sheet.interval()") == 1
+    assert page.locator("#intervalWord").inner_text() == "every 1 s · sees the landing"
+    fine = f"~${v['by_interval']['1']:.2f}"
+    assert fine in page.locator("#priceLine").inner_text()
+    assert fine in page.locator("#indexBtn").inner_text()
+    assert "on" in page.locator("#stops span").last.get_attribute("class")
+    detail = page.locator("#priceDetail").inner_text()
+    assert "a frame every 1 s" in detail and f"{v['fine_calls']} windows" in detail, detail
+    assert hits == [], hits
+    page.keyboard.press("Home")
+    assert slider.input_value() == "0" and page.evaluate("sheet.interval()") == 4
+    # a bin the sheets have partly read: the interval applies to the rest, and says so
+    page.evaluate("""() => { const v = sheet.state.status.visual;
+        v.done = 1; v.pending = v.pending.slice(1); sheet.renderControls(); }""")
+    hint = page.locator("#sliderHint").inner_text()
+    assert "applies to the 2 clips not yet looked at" in hint and "1 clip already looked at" in hint, hint
+    assert "2 clips not yet looked at" in page.locator("#priceLine").inner_text()
+
+
+def test_index_the_footage_runs_the_journal_and_the_cap_pauses_the_priced_stages(page, bin_server, project):
     """One click runs a real journal walk (tools stubbed): the free stages finish, the
-    budget cap holds the priced ones, and the screen says so with a way to resume."""
+    budget cap holds the priced ones, and the screen says so with a way to resume.
+    The slider's stop rides with the click and the project keeps it."""
     budget(bin_server, 0.0)
     page.locator("#order button[data-order=capture]").click()
+    page.locator("#interval").focus()
+    page.keyboard.press("ArrowRight")
+    page.keyboard.press("ArrowRight")                                    # 2 s
+    assert page.evaluate("sheet.interval()") == 2
     page.locator("#indexBtn").click()
     page.wait_for_function("document.querySelector('#indexBtn').disabled", timeout=3000)
     page.wait_for_selector("#paused:not([hidden])", timeout=60000)
@@ -198,6 +257,13 @@ def test_index_the_footage_runs_the_journal_and_the_cap_pauses_the_priced_stages
     assert page.locator("#resume").is_enabled()
     ix = api(page, "/api/index")
     assert ix["order"] == "capture" and ix["paused_priced"] is True and ix["released"] == []
+    # the interval went with the POST, the EDL carries it, and the slider shows the
+    # project's word — nothing looked yet, so it is still the human's to move
+    assert ix["interval_s"] == 2.0
+    assert edl(bin_server, project)["look"] == {"interval_s": 2.0}
+    assert page.evaluate("sheet.state.interval") is None
+    assert page.locator("#interval").input_value() == "2" and page.locator("#interval").is_enabled()
+    assert page.locator("#intervalWord").inner_text() == "a frame every 2 s · sees the air"
     # the table: every clip's free stages done, the priced ones queued, in capture order
     table = rows(page)
     assert [r["clip"] for r in table] == ["CLIP_A", "CLIP_B", "CLIP_C"]
@@ -246,8 +312,12 @@ def test_resume_priced_stages_releases_every_clip_and_opens_the_pass(page, bin_s
     assert page.locator(".card .badge.released").count() == 3
     flags = page.locator(".card .flags").first.inner_text()
     assert "looked" in flags and "released" in flags, flags
-    # and the price line has nothing left to sell
+    # and the price line has nothing left to sell: the slider is off and says why
     assert "nothing left to buy" in page.locator("#priceLine").inner_text()
+    assert page.locator("#interval").is_disabled()
+    hint = page.locator("#sliderHint").inner_text()
+    assert "nothing left to re-price" in hint and "every 2 s" in hint, hint
+    assert page.locator("#intervalWord").inner_text() == ""
     assert sorted(api(page, "/api/index")["released"]) == ["CLIP_A.MP4", "CLIP_B.MP4", "CLIP_C.MP4"]
 
 
@@ -490,3 +560,126 @@ def test_holding_V_in_the_story_dictates_into_it_and_a_tap_types(page, monkeypat
     assert "0.8 s" in page.locator("#dictState").inner_text()
     assert page.locator("#mic").is_visible()
     wait_edl(bin_server, project, lambda d: d.get("story") == "v my friends and me skiing")
+
+
+# ------------------------------------------------------------ the picker (I5.4)
+#
+# Opening another bin re-points the module's live server (the same configure() main()
+# runs), so these come last and the second one puts the server back the way the
+# fixture had it. The other bin is a sibling of the project's footage folder — the
+# server lists the folders of video next door on its own.
+
+def other_bin(project, name: str):
+    folder = project["footage"].parent / name
+    folder.mkdir(exist_ok=True)
+    if not (folder / "GX01.MP4").exists():
+        _make_clip(folder / "GX01.MP4")
+    return folder
+
+
+def picker_rows(page) -> list[dict]:
+    return page.evaluate("""() => Array.from(document.querySelectorAll('#pickerList .prow')).map(b => ({
+        name: b.querySelector('b').textContent, clips: b.querySelector('.n').textContent,
+        flags: Array.from(b.querySelectorAll('.flag')).map(f => f.textContent), path: b.title,
+        current: b.classList.contains('current')}))""")
+
+
+def open_picker(page) -> None:
+    page.wait_for_selector("#picker:not([hidden])", timeout=3000)
+    page.wait_for_function("document.querySelectorAll('#pickerList .prow').length > 0", timeout=5000)
+
+
+def test_the_bin_name_opens_a_picker_and_a_running_job_refuses_the_switch(page, project):
+    import server
+    from roughcut import progress
+    other = other_bin(project, "picker-bin")
+    name = page.locator("#hdBin")
+    assert name.inner_text() == project["footage"].name
+    assert page.locator("#picker").is_hidden()
+    page.keyboard.press("o")                              # the key, outside any field
+    open_picker(page)
+    assert name.get_attribute("aria-expanded") == "true"
+    table = picker_rows(page)
+    assert table[0]["name"] == project["footage"].name and table[0]["current"]
+    assert table[0]["clips"] == "3 clips" and table[0]["path"] == str(project["footage"])
+    assert table[0]["flags"] == (["journal"] if api(page, "/api/index")["exists"] else ["new"])
+    by = {r["name"]: r for r in table}
+    assert by["picker-bin"] == {"name": "picker-bin", "clips": "1 clip", "flags": ["new"],
+                                "path": str(other), "current": False}
+    assert "sidecars" not in by, "a folder without video is not a bin"
+    text = page.locator("#picker").inner_text()
+    assert "no browsing dialog" in text and "open a folder" in page.locator("#pickerPath").get_attribute("placeholder")
+    # Esc closes it; the name reopens it
+    page.keyboard.press("Escape")
+    assert page.locator("#picker").is_hidden() and name.get_attribute("aria-expanded") == "false"
+    name.click()
+    open_picker(page)
+    # a folder with no video: the server's 400, said, and the panel stays
+    page.locator("#pickerPath").fill(str(project["sidecars"]))
+    page.locator("#pickerPath").press("Enter")
+    page.wait_for_function("document.querySelector('#toast').textContent.includes('no video')", timeout=5000)
+    assert page.locator("#picker").is_visible()
+    # a job still running: the 409, said, and the bin unchanged
+    server.INDEXES["stuck"] = progress.Job("index", "Indexing", id="stuck", state="running")
+    try:
+        page.locator("#pickerList .prow", has_text="picker-bin").click()
+        page.wait_for_function(
+            "document.querySelector('#toast').textContent.includes('still running')", timeout=5000)
+    finally:
+        server.INDEXES.clear()
+    assert page.locator("#picker").is_visible()
+    assert name.inner_text() == project["footage"].name
+    assert page.locator(".card").count() == 3
+    assert api(page, "/api/status")["footage"] == str(project["footage"])
+
+
+def test_opening_another_bin_reloads_the_whole_page_for_it(page, project, bin_server):
+    """A row is POST /api/projects/open; on 200 the page reloads everything — header,
+    sheet, themes, index — for the new bin, and the way back is a path typed in."""
+    import server
+    other = other_bin(project, "picker-bin")
+    try:
+        page.locator("#hdBin").click()
+        open_picker(page)
+        page.locator("#pickerList .prow", has_text="picker-bin").click()
+        page.wait_for_function(
+            "document.querySelector('#toast').textContent.includes('opened picker-bin')", timeout=10000)
+        assert "new project" in page.locator("#toast").inner_text()
+        page.wait_for_function(
+            "sheet.state.clips && sheet.state.clips.footage.endsWith('picker-bin')"
+            " && sheet.state.status && sheet.state.index && sheet.state.themes", timeout=10000)
+        assert page.locator("#picker").is_hidden()
+        assert page.locator("#hdBin").inner_text() == "picker-bin"
+        assert page.locator("#binName").inner_text() == "picker-bin"
+        assert "1 clip" in page.locator("#binMeta").inner_text()
+        cards = page.locator(".card")
+        assert cards.count() == 1 and cards.first.locator(".cap b").inner_text() == "GX01"
+        assert "not yet" in cards.first.locator(".flags").inner_text()     # nobody has listened here
+        assert page.locator(".badge").count() == 0                          # and there is no journal
+        for sel in ("#index", "#progress", "#paused", "#themesKept", "#themesEdit"):
+            assert page.locator(sel).is_hidden(), sel
+        assert page.locator("#stepPass").get_attribute("aria-disabled") == "true"
+        assert page.locator("#story").input_value() == ""
+        assert "has not listened yet" in page.locator("#themesPrice").inner_text()
+        assert "1 clip not yet looked at" in page.locator("#priceLine").inner_text()
+        assert page.locator("#interval").is_enabled()
+        assert "Index the footage" in page.locator("#indexBtn").inner_text()
+        s = api(page, "/api/status")
+        assert s["footage"] == str(other) and s["clips"] == 1
+        assert page.locator("#stepPass").get_attribute("href") == "/floor"
+        # and back, by its path typed into the field: the first bin's own EDL, not a new one
+        page.keyboard.press("o")
+        open_picker(page)
+        assert [r["name"] for r in picker_rows(page)][0] == "picker-bin"
+        page.locator("#pickerPath").fill(str(project["footage"]))
+        page.locator("#pickerPath").press("Enter")
+        page.wait_for_function(
+            f"document.querySelector('#toast').textContent === 'opened {project['footage'].name}'", timeout=10000)
+        page.wait_for_function("sheet.state.clips && sheet.state.clips.clips.length === 3", timeout=10000)
+        assert page.locator("#hdBin").inner_text() == project["footage"].name
+        assert page.locator(".card").count() == 3
+        assert api(page, "/api/status")["footage"] == str(project["footage"])
+    finally:
+        server.INDEXES.clear()
+        server.configure(None, project["footage"], project["sidecars"], bin_server["work"],
+                         proxies=False, visual=None)

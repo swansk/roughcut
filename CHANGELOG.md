@@ -10,6 +10,29 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **INTAKE ticks I5.3's slider and I5.4** — the tracker names the commits and their
+  verification (`621925a` the slider, `aaf43df` the picker; `test_open_ui.py` 15 passed,
+  suite 362 passed, 1 skipped).
+- **`/open` — the project picker (INTAKE I5.4, the screen).** The bin's name in the header
+  is a control: click it (or press `O`) for a panel over `GET /api/projects` — the current
+  bin first, then the rest by last opened — each row its name, `N clips`, and the facts as
+  small flags (`cut · 17 shots`, `journal`, `new`, `missing`), the folder path in the
+  tooltip. A row is `POST /api/projects/open {footage}`; on 200 the page reloads everything
+  for the new bin (sheet, themes, index state, the slider) and toasts `opened <name>`
+  (`· new project` when the EDL was scaffolded); a 409 (a job still running) or a 400 (no
+  video there) is toasted and the panel stays. A field at the bottom takes a folder path
+  typed or pasted — there is no browsing dialog in a page, and the hint says so. `Esc`
+  closes; a click anywhere else closes. `test_open_ui.py` 15 passed.
+- **`/open` — the granularity slider (INTAKE I5.3, the other half).** The "not wired yet"
+  hint in **Look — how closely?** is now the design's one control: a four-stop slider
+  (4 · 3 · 2 · 1 s, coarse to fine, resting on the project's `interval_s`), each stop said in
+  words under it (`a frame every 4 s · sees the run, misses the moment` … `every 1 s · sees
+  the landing`), and the price line — and the button's price — re-pricing from
+  `/api/status`'s `by_interval` as the thumb moves, with no request per move. **Index the
+  footage** (and Resume) send the chosen `interval_s` with `POST /api/index`; the EDL keeps
+  it, so after a run the slider shows the project's word. When some clips have been looked
+  at the hint says the interval applies to the rest and the ones done stay as they are; when
+  every clip has, the slider is off and says so. `test_open_ui.py` 13 passed.
 - **The look interval and the project picker, server side (INTAKE I5.3's slider, I5.4).**
   The open screen's one slider now has something to move: `look.interval_s` in the EDL (a
   project setting, so a resumed index looks at the rest of the bin the same way), read by
