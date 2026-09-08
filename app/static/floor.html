@@ -56,7 +56,7 @@
   #picture { position: relative; display: flex; align-items: center; justify-content: center;
              background: #050507; min-width: 0; min-height: 0; }
   #frame { position: relative; max-width: 100%; max-height: 100%; aspect-ratio: 16 / 9;
-           width: min(100%, calc((100vh - 300px) * 16 / 9)); background: #000; border-radius: 4px;
+           width: min(100%, calc((100vh - 320px) * 16 / 9)); background: #000; border-radius: 4px;
            overflow: hidden; }
   #pic { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
   #stamp { position: absolute; left: 26px; top: 22px; z-index: 6; font: 800 34px var(--display);
@@ -72,6 +72,16 @@
                font: 600 11px var(--mono); color: var(--dim); pointer-events: none; }
   #screenMsg.bad { color: var(--bad); }
   #screenMsg.warn { color: var(--warn); }
+
+  /* the legend: what the tape's marks mean, the words next to the colours */
+  #legend { line-height: 1.9; }
+  #legend span { white-space: nowrap; margin-right: 7px; }
+  .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; background: #3a3a48;
+        vertical-align: -1px; margin-right: 4px; }
+  .sw.now { background: rgba(110,168,254,.25); border: 1.5px solid #fff; }
+  .sw.pick { background: var(--good); }
+  .sw.later { background: var(--warn); }
+  .sw.lens { width: 15px; background: rgba(207,214,228,.1); border: 1px solid rgba(207,214,228,.5); }
 
   /* seals: three states, colour AND the word */
   .seal { display: flex; flex-direction: column; gap: 1px; font: 500 10.5px var(--mono);
@@ -99,25 +109,44 @@
   #why { color: var(--text); }
   #conflict { color: var(--bad-soft); font-size: 10.5px; }
 
-  /* ---- the two-tier strip ---- */
+  /* ---- the two-tier strip ----
+   * The tape is the whole clip: a ruler, every pick as a mark (this one as a bright bracket),
+   * and a lens showing exactly the seconds the closer strip holds. The closer strip is ±8 s
+   * around the playhead with the green band — the clip — drawn on it; its handles and its
+   * middle are the trim. Both take a pointer: a click seeks, a drag scrubs. */
   .strip-lbl { position: absolute; left: 12px; top: 5px; font: 600 9px var(--mono); color: #8f8fa3;
                letter-spacing: .08em; z-index: 4; pointer-events: none; }
   .strip-lbl.right { left: auto; right: 12px; color: #cfd6e4; font-size: 10px; }
-  #tape { position: relative; height: 44px; background: #0b0b0f; border-top: 1px solid #26262f;
-          flex: none; cursor: crosshair; }
-  #tapeWave { position: absolute; left: 0; right: 0; top: 30px; height: 10px;
+  #tape { position: relative; height: 62px; background: #0b0b0f; border-top: 1px solid #26262f;
+          flex: none; cursor: crosshair; touch-action: none; user-select: none; }
+  #tapeWave { position: absolute; left: 0; right: 0; top: 53px; height: 8px;
               background: linear-gradient(90deg, #20202a, #262632 30%, #1c1c26 60%, #262632); opacity: .8; }
-  #tapeTrace { position: absolute; inset: 0; width: 100%; height: 100%; }
-  #tapeMarks span { position: absolute; top: 22px; height: 14px; min-width: 6px; border-radius: 2px;
+  #tapeTrace { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  #tapeRuler span { position: absolute; top: 17px; height: 14px; border-left: 1px solid #3a3a48;
+                    padding-left: 3px; font: 8.5px/14px var(--mono); color: #6c6c80; white-space: nowrap;
+                    pointer-events: none; }
+  #tapeLens { position: absolute; top: 15px; bottom: 3px; background: rgba(207,214,228,.07);
+              border: 1px solid rgba(207,214,228,.4); border-radius: 3px; pointer-events: none; z-index: 1; }
+  #tapeMarks span { position: absolute; top: 35px; height: 14px; min-width: 6px; border-radius: 2px;
                     background: #3a3a48; }
   #tapeMarks span.pick { background: var(--good); }
   #tapeMarks span.reject { background: #26262f; }
   #tapeMarks span.later { background: var(--warn); }
   #tapeMarks span.hero { background: var(--gold); }
-  #tapeMarks span.now { background: var(--accent); outline: 2px solid #fff; z-index: 2; }
-  #tapeHead { position: absolute; top: 0; bottom: 0; width: 1px; background: #fff; opacity: .7; z-index: 3; }
+  /* this pick is a bracket over its window; it takes no pointer, so a click on it reaches a
+   * mark beneath it, or the tape */
+  #tapeMarks span.now { background: rgba(110,168,254,.22); border: 2px solid #fff; border-bottom: none;
+                        border-radius: 3px 3px 0 0; top: 31px; height: 21px; min-width: 8px; z-index: 2;
+                        pointer-events: none; }
+  #tapeMarks span.jump { cursor: pointer; }
+  #tapeMarks span.jump:hover { outline: 1px solid #cfd6e4; }
+  #tapeHead { position: absolute; top: 0; bottom: 0; width: 1px; background: #fff; opacity: .7; z-index: 3;
+              pointer-events: none; }
   #zoom { position: relative; height: 78px; background: #0d0d12; border-top: 1px solid #26262f;
-          border-bottom: 1px solid #26262f; overflow: hidden; flex: none; }
+          border-bottom: 1px solid #26262f; overflow: hidden; flex: none; cursor: crosshair;
+          touch-action: none; user-select: none; }
+  #zoom.drag-in, #zoom.drag-out { cursor: ew-resize; }
+  #zoom.drag-slide, #zoom.drag-slide #zoomKeep { cursor: grabbing; }
   #zoomInner { position: absolute; top: 0; bottom: 0; left: 0; will-change: transform; }
   #zoomInner .w { position: absolute; top: 30px; font-size: 11px; color: #8f8fa3; white-space: nowrap;
                   transform: translateX(-50%); }
@@ -127,19 +156,26 @@
   #zoomInner .sb i { position: absolute; left: 4px; top: 10px; font: 10px var(--display); color: #6c6c80;
                      white-space: nowrap; font-style: normal; }
   #zoomInner .snap { position: absolute; top: 50px; width: 2px; height: 12px; background: var(--accent); }
+  #zoomInner .snap.start { height: 8px; top: 54px; opacity: .7; }
   #zoomInner .snap.word { height: 6px; top: 56px; width: 1px; background: #4a6a96; }
+  #zoomInner .snap.lit { background: #fff; opacity: 1; box-shadow: 0 0 6px var(--accent); }
   #zoomInner .felt { position: absolute; top: 14px; transform: translateX(-50%); font-size: 10px;
                      color: var(--tele); white-space: nowrap; }
   #zoomKeep { position: absolute; top: 22px; height: 34px; background: rgba(100,208,138,.14);
               border-top: 1px solid rgba(100,208,138,.7); border-bottom: 1px solid rgba(100,208,138,.7);
-              pointer-events: none; }
-  .handle { position: absolute; top: 18px; height: 42px; width: 8px; margin-left: -4px; background: #cfd6e4;
-            border-radius: 3px; opacity: .8; pointer-events: none; }
-  .handle.active { background: #fff; opacity: 1; box-shadow: 0 0 0 1px var(--accent); }
+              cursor: grab; }
+  /* a handle is a 14 px hit area (touch-sized) with the 8 px bar drawn inside it */
+  .handle { position: absolute; top: 18px; height: 42px; width: 14px; margin-left: -7px; cursor: ew-resize;
+            z-index: 2; }
+  .handle::after { content: ""; position: absolute; left: 3px; right: 3px; top: 0; bottom: 0; background: #cfd6e4;
+                   border-radius: 3px; opacity: .8; }
+  .handle.active::after { background: #fff; opacity: 1; box-shadow: 0 0 0 1px var(--accent); }
   #zoomHead { position: absolute; left: 50%; top: 16px; height: 46px; width: 2px; background: #fff; z-index: 3;
               pointer-events: none; }
   #zoomHint { position: absolute; bottom: 3px; font: 600 9px var(--mono); color: var(--accent);
-              transform: translateX(-50%); white-space: nowrap; pointer-events: none; }
+              transform: translateX(-50%); white-space: nowrap; pointer-events: none; z-index: 4; }
+  #zoomHint.drag { color: #fff; font-size: 10px; background: rgba(8,8,11,.85); padding: 1px 6px;
+                   border-radius: 3px; }
 
   /* ---- key line ---- */
   #keys { display: flex; gap: 14px; align-items: center; padding: 6px 14px; background: var(--panel);
@@ -151,7 +187,7 @@
   #overlay { position: fixed; inset: 0; z-index: 30; background: rgba(4,4,6,.72); display: flex;
              align-items: center; justify-content: center; padding: 24px; }
   /* an id selector outranks the UA's [hidden] rule, so say it explicitly */
-  #overlay[hidden], #stamp[hidden], #screenMsg[hidden], #noteEdit[hidden], .handle[hidden] { display: none; }
+  #overlay[hidden], #stamp[hidden], #screenMsg[hidden], #noteEdit[hidden], #legend[hidden], .handle[hidden] { display: none; }
   #overlay .box { background: #12121a; border: 1px solid #2a2a36; border-radius: 14px; padding: 22px 26px;
                   max-width: 820px; width: 100%; max-height: 90vh; overflow: auto; }
   #overlay h2 { margin: 0 0 12px; font: 800 22px var(--display); }
@@ -197,10 +233,13 @@
     <aside id="left">
       <div><div class="lbl">Clip</div><b id="ctxClip" style="font-size:12px"></b> <span id="ctxClipMeta" class="hint"></span></div>
       <div><div class="lbl">This pick</div><span id="ctxPick" class="tnum"></span><br><span id="ctxOthers" class="hint"></span></div>
+      <div id="legend" class="hint small"><div class="lbl">On the tape</div>
+        <span><i class="sw now"></i>this</span><span><i class="sw pick"></i>picked</span><span><i class="sw later"></i>later</span><span><i class="sw"></i>undecided</span><br>
+        <span><i class="sw lens"></i>the lens: what CLOSER shows</span></div>
       <div><div class="lbl">Keeping</div><span id="ctxKeep" class="tnum good"></span><br>
            <span id="ctxSnap" class="hint"></span><br><span id="ctxExtend" class="hint"></span></div>
       <div class="grow"></div>
-      <div id="ctxHint" class="hint small">hold <span class="key">space</span> to keep watching · what you watch is what you keep</div>
+      <div id="ctxHint" class="hint small">the green band is the clip — drag its edges · hold <span class="key">space</span> to watch past it</div>
     </aside>
     <div id="picture">
       <div id="frame">
@@ -229,40 +268,32 @@
 
   <div id="tape">
     <span class="strip-lbl" id="tapeLbl"></span>
+    <span class="strip-lbl right">click to seek · a mark is a pick — click one to jump to it</span>
     <div id="tapeWave"></div>
-    <svg id="tapeTrace" viewBox="0 0 1000 44" preserveAspectRatio="none" aria-hidden="true"></svg>
+    <svg id="tapeTrace" viewBox="0 0 1000 62" preserveAspectRatio="none" aria-hidden="true"></svg>
+    <div id="tapeRuler"></div>
+    <div id="tapeLens"></div>
     <div id="tapeMarks"></div>
     <div id="tapeHead"></div>
   </div>
   <div id="zoom">
-    <span class="strip-lbl">ZOOMED · ±8 s AROUND THE PLAYHEAD · words where they fit, sentence bars where they don't</span>
+    <span class="strip-lbl">CLOSER · ±8 s AROUND THE PLAYHEAD · the green band is the clip — drag its edges to trim, its middle to slide</span>
     <span id="zoomInfo" class="strip-lbl right tnum"></span>
     <div id="zoomInner"></div>
     <div id="zoomKeep"></div>
-    <div id="handleIn" class="handle"></div>
-    <div id="handleOut" class="handle active"></div>
+    <div id="handleIn" class="handle" title="the in-point — drag to trim"></div>
+    <div id="handleOut" class="handle active" title="the out-point — drag to trim"></div>
     <div id="zoomHint"></div>
     <div id="zoomHead"></div>
   </div>
 
   <div id="keys">
-    <span><span class="key">P</span> pick</span>
-    <span><span class="key">X</span> reject</span>
-    <span><span class="key">U</span> later</span>
-    <span><span class="key">1</span> hero</span>
-    <span><span class="key">⇧X</span> reject the rest of this clip</span>
-    <span><span class="key">⌘Z</span> undo</span>
+    <span><span class="key">P</span> pick · <span class="key">X</span> reject · <span class="key">U</span> later</span>
     <span class="sep">|</span>
-    <span><span class="key">J</span><span class="key">K</span><span class="key">L</span> shuttle · K pauses</span>
-    <span><span class="key">space</span> hold to keep watching</span>
-    <span><span class="key">[</span><span class="key">]</span> <span class="key">{</span><span class="key">}</span> in / out to the previous / next sentence</span>
-    <span><span class="key">←</span><span class="key">→</span> frame at the edge</span>
-    <span><span class="key">↵</span> next</span>
-    <span class="sep">|</span>
-    <span class="speak"><span class="key">V</span> hold to speak</span>
-    <span><span class="key">N</span> note</span>
-    <span><span class="key">E</span> evidence</span>
-    <span><span class="key">.</span> more</span>
+    <span><span class="key">space</span> hold to watch on</span>
+    <span><span class="key">[</span><span class="key">]</span> <span class="key">{</span><span class="key">}</span> in / out by sentence</span>
+    <span class="speak"><span class="key">V</span> hold to speak a note</span>
+    <span><span class="key">?</span> every key</span>
     <span class="grow"></span>
     <a href="/" class="hint">← the cut board</a>
   </div>

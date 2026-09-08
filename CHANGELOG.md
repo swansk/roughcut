@@ -93,6 +93,52 @@ same commit. Releases move entries into a dated version section.
   `test_index.py` with the tools stubbed: a full unattended run releasing every clip, resume
   after a simulated crash without re-buying CLIP_A's sheets, footage added after a run, the
   budget cap pausing priced stages only, and a scan with nothing to look at.
+- **I2.7 ticked in docs/INTAKE.md** with its three commits (`a822b6b`, `4036b6a`, `46ee3d4`),
+  the verification counts, and what Karl's second look should check on Killington.
+- **The strips explain themselves, and less is on screen (docs/INTAKE.md I2.7, moves 3 and
+  4).** "It's not clear how it fits into the bigger picture, or what the markers are above in
+  the whole clip." The tape now carries a time ruler (a tick and a time every second on a
+  short clip, every 30 s on a five-minute one — no more than a dozen labels), this pick as a
+  bright bracket over its window, the other picks as marks with a **legend** in the left
+  margin (this · picked · later · undecided, swatches with words) and a tooltip with the
+  rank, the state and the reason, and a **lens**: a translucent frame showing exactly the
+  seconds the zoomed strip holds, moving with the playhead — so the two tiers visibly relate,
+  and the legend says so ("the lens: what CLOSER shows"). The strips are labelled for what
+  they are: `WHOLE CLIP · name · length` with "click to seek · a mark is a pick — click one to
+  jump to it", and `CLOSER · ±8 s around the playhead · the green band is the clip — drag its
+  edges to trim, its middle to slide`. The key line collapses to the six things that matter —
+  `P X U · space · [ ] { } · V · ?` — and the full map, now with a line for the mouse, stays
+  behind `?`. The caption line and the transcript are as they were. Browser tests: the ruler,
+  lens, legend and labels are there; the lens tracks a seek on either strip; the key line has
+  ten keys and none of the words the map still has.
+- **Playing never changes the selection (docs/INTAKE.md I2.7, move 2).** The green band used
+  to follow the furthest point watched — "watching the green bar increase as I play … it's
+  fairly nonintuitive", and it looked like the tool deciding. Now the band is the pick's
+  preview when the pick loads, snapped outward to the sentence as before (decision 1's intent —
+  never the machine's whole window blind — still holds, because the preview is the default),
+  and it moves only by hand: a drag, `[ ] { } ← →`, or `}` to the next line. Holding space
+  just keeps watching. Karl's open question — should hold-space extend the band visibly, with
+  a dashed follow that commits on release? — is answered **never** by default, the simplest
+  rule; flipping it is one place, `tick()`, where the watched extent used to be recorded. The
+  "Keeping" margin no longer says "what you've watched": it shows the band and where it came
+  from (the preview as offered · the preview snapped out to a line · trimmed by hand). Two
+  browser tests that encoded the old rule are rewritten to the new one: hold space past the
+  preview, press P, and the range on disk is the preview, snapped.
+- **Trim by drag on the floor (docs/INTAKE.md I2.7, move 1).** Karl's first report on the
+  pass: trimming by keys and by watching was "fairly nonintuitive". The green band on the
+  zoomed strip is now the thing you handle: drag either handle to trim (a magnet within 10 px
+  takes the sentence start − 0.25, the sentence end + 0.45 or a word start — the same places
+  the keys go — the tick lights while it holds, the time reads out under the handle, and the
+  picture parks on the edge frame); drag the band's middle to slide the whole range, length
+  kept, clamped to the clip; click either strip to seek (playing stays playing, paused stays
+  parked), drag to scrub; click a mark on the tape to jump to that pick. Marks in this round's
+  queue jump, decided or not, so a verdict can be revisited; a pick decided in an earlier
+  round is drawn but says so in its tooltip and stays put, because the queue is frozen and
+  only undo puts a pick back. While a pointer is down the zoomed strip stops following the
+  playhead, otherwise every park would slide it out from under the finger. Handles are 14 px
+  hit areas; this pick's own mark takes no pointer, so a mark it overlaps is still reachable.
+  The keys `[ ] { } ← →` are unchanged. Browser tests: a handle drag lands on the EDL
+  snapped, a band drag slides it, a mark jumps, a click seeks.
 - **The server's side of M1 (docs/INTAKE.md I1.1–I1.4 wired).** An Ask passes the EDL's
   `selects` through, so a first cut is asked *from the bin* — heroes must appear, keeps are
   bounds — and a revision reads it as context; a keep made on the floor records its clip's

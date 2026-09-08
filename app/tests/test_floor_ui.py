@@ -1,15 +1,16 @@
 """The pass, driven in a real browser (docs/INTAKE.md M2).
 
 Everything that matters on the floor lives in the browser's media stack and in the
-JavaScript: that the preview plays from the moment, that the kept range is what was
-watched and snaps to the sentence, that one key writes a verdict to the EDL, that undo
-puts it back. So, like test_ui_flow.py, this drives Chromium against the live server
-and asserts on the EDL on disk.
+JavaScript: that the preview plays from the moment, that the kept range is the pick's
+preview snapped to the sentence and moves only by hand (a drag, a key), that one key
+writes a verdict to the EDL, that undo puts it back. So, like test_ui_flow.py, this
+drives Chromium against the live server and asserts on the EDL on disk.
 
 The synthetic bin (conftest.py) yields one pick per clip: the two candidates at 0.5 and
 5.0 merge (2.0 s apart, under MERGE_GAP_S), so each pick is 0-6 s and previews whole.
 The transcript is "hello there" 0.5-2.0, "how are you" 2.4-4.0, "goodbye" 5.0-5.6, so
-an end watched inside the first line snaps to 2.45 (end + PAD_TAIL).
+a preview cut to end at 1.2 s (inside the first line) snaps to 2.45 (end + PAD_TAIL) —
+the tests that need the snap to have something to do cut it that way.
 
 Skipped, not failed, when playwright is absent:
 
@@ -141,11 +142,23 @@ def test_the_floor_lists_the_picks_and_starts_on_the_first(page):
     assert seals.count() >= 1
     assert "HEARD" in seals.first.inner_text()
     assert "hello there" in page.locator("#why").inner_text()
-    # the zoomed strip carries words (they fit at 80 px/s) and snap ticks at line ends
+    # the zoomed strip carries words (they fit at 80 px/s) and snap ticks at line ends,
+    # line starts and word starts — where the keys and a dragged handle land
     assert page.locator("#zoomInner .w").count() == 6
-    assert page.locator("#zoomInner .snap:not(.word)").count() == 3
-    # the tape marks this clip's picks, the current one outlined
+    assert page.locator("#zoomInner .snap.end").count() == 3
+    assert page.locator("#zoomInner .snap.start").count() == 3
+    assert page.locator("#zoomInner .snap.word").count() == 6
+    # the tape marks this clip's picks, the current one as a bracket, with a ruler (every
+    # second on a 6 s clip), a lens, and a legend in the margin that names the marks
     assert page.locator("#tapeMarks span.now").count() == 1
+    assert page.locator("#tapeRuler span").count() == 7
+    assert page.locator("#tapeRuler span").first.inner_text() == "0:00"
+    assert page.locator("#tapeLens").is_visible()
+    legend = page.locator("#legend").inner_text()
+    for word in ("this", "picked", "later", "undecided", "lens"):
+        assert word in legend
+    assert "WHOLE CLIP" in page.locator("#tapeLbl").inner_text()
+    assert "CLOSER" in page.locator("#zoom").inner_text()
     assert page.locator("#tapeTrace path").count() == 0, "no felt witness, no trace"
     # and it is playing, from the top of the preview
     playing_at(page, 0.3)
@@ -155,15 +168,42 @@ def test_no_buttons_in_the_flow(page):
     assert page.locator("#app button").count() == 0
 
 
+def test_the_key_line_shows_six_things_and_the_map_has_the_rest(page):
+    """I2.7 move 4: P X U · space · [ ] { } · V · ? on the line; everything else behind ?."""
+    keys = page.locator("#keys")
+    assert keys.locator(".key").count() == 10
+    line = keys.inner_text()
+    for word in ("shuttle", "hero", "undo", "frame", "evidence", "more"):
+        assert word not in line, word
+    page.keyboard.press("?")
+    page.wait_for_selector("#overlay[data-kind=keymap]")
+    full = page.locator("#overlayBox").inner_text()
+    for word in ("shuttle", "hero", "undo", "frame step", "evidence", "drag"):
+        assert word in full, word
+
+
 # --------------------------------------------------------------- verdicts
 
-def test_P_keeps_what_you_watched_snapped_to_the_sentence_and_advances(page, project):
+def preview_to(page, end: float):
+    """Cut the current pick's preview to `end` and reload it: it plays from 0 and stops
+    there on its own."""
+    page.evaluate(f"floor.current().preview[1] = {end}; floor.show(0)")
+    page.wait_for_function(
+        f"document.querySelector('#pic').paused && document.querySelector('#pic').currentTime >= {end - 0.1}",
+        timeout=10000)
+
+
+def test_P_keeps_the_preview_snapped_to_the_sentence_and_advances(page, project):
+    """I2.7 move 2: the band is the pick's preview when it loads, snapped outward to the
+    sentence, and P writes exactly that. The preview is cut to 1.2 s — inside "hello
+    there" — so the snap has something to do."""
     page.evaluate("floor.setAuto(true)")
-    playing_at(page, 0.8)
-    t = paused_at(page)
-    assert 0.5 < t < 2.0, f"expected to pause inside 'hello there', got {t}"
-    # the margin says what will be kept before the key is pressed
-    assert "will snap" in page.locator("#ctxSnap").inner_text()
+    preview_to(page, 1.2)
+    assert page.evaluate("floor.keepRange().snapped") == [0.0, 2.45]
+    # the margin says what will be kept before the key is pressed, and where it came from
+    assert page.locator("#ctxKeep").inner_text().startswith("0:00.0–0:02.5")
+    assert "the preview 0:00.0–0:01.2, snapped out" in page.locator("#ctxSnap").inner_text()
+    assert "watched" not in page.locator("#left").inner_text()
     page.keyboard.press("p")
     d = wait_edl(project, lambda d: len(d.get("selects", [])) == 1)
     s = d["selects"][0]
@@ -220,9 +260,8 @@ def test_the_verdict_carries_the_typed_note(page, project):
 # ------------------------------------------------------------------ trimming
 
 def test_trim_keys_snap_to_sentences_and_arrows_step_frames_at_the_edge(page, project):
-    playing_at(page, 0.8)
-    t = paused_at(page)
-    assert t < 2.0
+    preview_to(page, 1.2)                            # the band starts as 0-2.45
+    assert page.evaluate("floor.keepRange().snapped[1]") == 2.45
     # } extends the out-point to the next line's end: 2.45 -> 4.45 ("how are you")
     page.keyboard.press("}")
     assert page.evaluate("floor.keepRange().snapped[1]") == 4.45
@@ -253,31 +292,162 @@ def test_trim_keys_snap_to_sentences_and_arrows_step_frames_at_the_edge(page, pr
     assert (d["selects"][0]["start"], d["selects"][0]["end"]) == (0.0, 4.42)
 
 
-def test_holding_space_keeps_watching_past_the_preview(page, project):
-    """Decision 1 end to end: the preview stops on its own, space holds it open, and
-    what was watched is what is kept."""
-    page.evaluate("floor.current().preview[1] = 1.2; floor.show(0)")
-    page.wait_for_function(
-        "document.querySelector('#pic').paused && document.querySelector('#pic').currentTime >= 1.1",
-        timeout=10000)
+def test_holding_space_keeps_watching_but_never_moves_the_band(page, project):
+    """I2.7 move 2, end to end: the preview stops on its own, space holds it open, and
+    the band stays the preview — watching is not keeping. Karl's open question (should
+    hold-space extend the band visibly?) is answered "never" here; extending is `}` or a
+    drag of the out handle."""
+    preview_to(page, 1.2)
     assert page.evaluate("document.querySelector('#pic').currentTime") < 1.6
+    assert page.evaluate("floor.keepRange().snapped") == [0.0, 2.45]
     page.keyboard.down("Space")
     playing_at(page, 2.6)                          # inside "how are you"
     page.keyboard.up("Space")
     page.wait_for_function("document.querySelector('#pic').paused", timeout=3000)
     t = page.evaluate("document.querySelector('#pic').currentTime")
     assert 2.6 <= t < 4.0
+    assert page.evaluate("floor.keepRange().snapped") == [0.0, 2.45], "watching is not keeping"
+    assert "watched" not in page.locator("#left").inner_text() + page.locator("#zoomInfo").inner_text()
     page.keyboard.press("p")
     d = wait_edl(project, lambda d: len(d.get("selects", [])) == 1)
-    assert d["selects"][0]["end"] == 4.45, "watched into the second line: snapped to its end"
+    assert d["selects"][0]["end"] == 2.45, "the preview, snapped — not the second line"
+
+
+# ------------------------------------------------------- direct manipulation (I2.7)
+
+def center(page, sel):
+    page.wait_for_timeout(50)            # a frame, so the box is where the last paint put it
+    b = page.locator(sel).bounding_box()
+    return b["x"] + b["width"] / 2, b["y"] + b["height"] / 2
+
+
+def test_dragging_a_handle_trims_with_a_magnet_and_dragging_the_band_slides_it(page, project):
+    """I2.7 move 1. The closer strip is 80 px/s at this width. The out handle dragged to
+    4.5 s takes the sentence-end tick at 4.45; the in handle dragged to 1.15 s takes the
+    word "there" at 1.2; the band's middle then slides the range, length kept, clamped."""
+    playing_at(page, 0.3)
+    paused_at(page)
+    assert page.evaluate("floor.keepRange().snapped") == [0.0, 6.0]
+    x, y = center(page, "#handleOut")
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x - 60, y, steps=4)
+    page.mouse.move(x - 120, y, steps=4)                    # 6.0 - 1.5 = 4.5 s
+    # while the pointer is down: the tick it took lights, the time reads out under the
+    # handle, the picture is parked on the edge frame
+    lit = page.locator("#zoomInner .snap.lit")
+    assert lit.count() == 1 and lit.get_attribute("data-t") == "4.45"
+    assert "sentence end" in page.locator("#zoomHint").inner_text()
+    assert page.evaluate("document.querySelector('#pic').paused")
+    assert page.evaluate("document.querySelector('#pic').currentTime") == pytest.approx(4.45, abs=0.1)
+    page.mouse.up()
+    assert page.evaluate("floor.keepRange().snapped") == [0.0, 4.45]
+    assert page.locator("#zoomInner .snap.lit").count() == 0
+    assert page.evaluate("floor.state.keep.edge") == "out"
+    # the in handle, dragged to 1.15 s, takes the word at 1.2 and becomes the edge
+    x, y = center(page, "#handleIn")
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + 92, y, steps=6)
+    assert page.locator("#zoomInner .snap.lit").get_attribute("data-t") == "1.2"
+    page.mouse.up()
+    assert page.evaluate("floor.keepRange().snapped") == [1.2, 4.45]
+    assert page.evaluate("floor.state.keep.edge") == "in"
+    # the band's middle slides the range: +0.5 s, then more than the clip has
+    x, y = center(page, "#zoomKeep")
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + 40, y, steps=4)
+    assert page.evaluate("floor.keepRange().snapped") == [1.7, 4.95]
+    page.mouse.move(x + 400, y, steps=4)
+    page.mouse.up()
+    assert page.evaluate("floor.keepRange().snapped") == [2.75, 6.0]
+    page.keyboard.press("p")
+    d = wait_edl(project, lambda d: len(d.get("selects", [])) == 1)
+    assert (d["selects"][0]["start"], d["selects"][0]["end"]) == (2.75, 6.0)
+
+
+def test_clicking_a_mark_on_the_tape_jumps_to_that_pick(page, project):
+    """The synthetic bin has one pick per clip, so a second pick in CLIP_A is put in the
+    page's queue by hand: the tape then shows two marks, and the one that is not this
+    pick takes a click."""
+    page.evaluate("""() => {
+        const q = JSON.parse(JSON.stringify(floor.state.queue[0]));
+        Object.assign(q, { id: 'made-up', start: 4, end: 6, preview: [4, 6], rank: 9,
+                           why: 'a second pick, made up for the test' });
+        floor.state.picks.push(q);
+        floor.state.queue.push(q);
+        floor.show(0, { autoplay: false });
+    }""")
+    assert page.locator("#tapeMarks span").count() == 2
+    mark = page.locator("#tapeMarks span.jump")
+    assert mark.count() == 1
+    assert "made up for the test" in mark.get_attribute("title")
+    assert "click to jump" in mark.get_attribute("title")
+    mark.click()
+    page.wait_for_function("floor.state.i === 3", timeout=5000)
+    assert "pick 4 of 4" in page.locator("#hudPos").inner_text()
+    assert page.locator("#ctxPick").inner_text().startswith("0:04.0 → 0:06.0")
+    assert page.locator("#tapeMarks span.now").count() == 1
+    playing_at(page, 4.2)                            # it plays from its preview, as ↵ would
+    wait_edl(project, lambda d: d.get("floor", {}).get("position", {}).get("index") == 3)
+    # and back: now the first pick's mark is the one that jumps
+    page.locator("#tapeMarks span.jump").click()
+    page.wait_for_function("floor.state.i === 0", timeout=5000)
+    assert page.locator("#ctxPick").inner_text().startswith("0:00.0 → 0:06.0")
+
+
+def lens(page) -> tuple[float, float]:
+    """The lens's left and width on the tape, in percent of the clip."""
+    return tuple(page.evaluate(
+        "[parseFloat(document.querySelector('#tapeLens').style.left),"
+        " parseFloat(document.querySelector('#tapeLens').style.width)]"))
+
+
+def lens_at(page, left: float, width: float, tol=0.3):
+    """The lens is painted on the frame after a seek, so wait for it rather than for
+    currentTime — under a loaded machine one frame is enough to read it early."""
+    page.wait_for_function(
+        f"Math.abs(parseFloat(document.querySelector('#tapeLens').style.left) - {left}) < {tol}"
+        f" && Math.abs(parseFloat(document.querySelector('#tapeLens').style.width) - {width}) < {tol}",
+        timeout=5000)
+    assert lens(page) == pytest.approx((left, width), abs=tol)
+
+
+def test_clicking_a_strip_seeks_the_playhead_and_the_lens_tracks_it(page):
+    """Paused stays parked, playing stays playing; the lens on the tape is the ±8 s the
+    closer strip shows. On a 6 s clip that is always the whole tape, so the clip is told
+    it is 40 s long — the picture still only has 6, and every seek here stays inside them.
+    The closer strip is 80 px/s with the playhead at its centre."""
+    page.evaluate("floor.current().duration = 40; floor.show(0, { autoplay: false })")
+    page.wait_for_function("document.querySelector('#pic').paused")
+    lens_at(page, 0.0, 20.0)                                                # 0-8 of 40
+    tb = page.locator("#tape").bounding_box()
+    page.mouse.click(tb["x"] + tb["width"] * 3 / 40, tb["y"] + 8)          # 3.0 s
+    page.wait_for_function("Math.abs(document.querySelector('#pic').currentTime - 3) < 0.1")
+    assert page.evaluate("document.querySelector('#pic').paused")
+    lens_at(page, 0.0, 27.5)                                                # 0-11 of 40
+    assert float(page.evaluate("document.querySelector('#tapeHead').style.left")[:-1]) == pytest.approx(7.5, abs=0.3)
+    zb = page.locator("#zoom").bounding_box()
+    page.mouse.click(zb["x"] + zb["width"] / 2 + 80, zb["y"] + 10)          # a second right
+    page.wait_for_function("Math.abs(document.querySelector('#pic').currentTime - 4) < 0.1")
+    assert page.evaluate("document.querySelector('#pic').paused")
+    lens_at(page, 0.0, 30.0)                                                # 0-12 of 40
+    # playing: the playhead moves and the picture goes on, the lens with it
+    page.keyboard.press("l")
+    playing_at(page, 4.2)
+    page.mouse.click(tb["x"] + tb["width"] / 40, tb["y"] + 8)               # back to 1.0 s
+    page.wait_for_function("document.querySelector('#pic').currentTime < 2")
+    assert not page.evaluate("document.querySelector('#pic').paused")
+    playing_at(page, 1.3)
+    assert 22.0 < lens(page)[1] < 26.0                                      # 0-(9..10) of 40
 
 
 # --------------------------------------------------------------------- undo
 
 def test_ctrl_z_restores_the_verdict_with_its_trim_and_note(page, project):
     page.evaluate("floor.setAuto(true)")
-    playing_at(page, 0.8)
-    paused_at(page)
+    preview_to(page, 1.2)
     page.keyboard.press("}")
     keep_before = page.locator("#ctxKeep").inner_text()
     page.keyboard.press("n")
