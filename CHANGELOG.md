@@ -9,6 +9,26 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Changed
+- **The audio note works in a browser (INTAKE I2.8, 1a).** Karl: *"the audio note doesn't
+  work"* — and the server was fine (a real recording came back in 4 s). The browser flow
+  in `floor.js` was the failure: Chrome's first-time permission prompt let V come up before
+  the stream arrived, and the stream was then thrown away in silence; a refused microphone
+  toasted `NotAllowedError` and dropped into the typed editor as if that were the feature.
+  Now the permission is learned at boot (`navigator.permissions`) and the hint under the
+  note says what V will do — *V will ask for the microphone the first time*, or *microphone
+  blocked for this site — allow it in the address bar, or N to type* — with the V key
+  coloured by the state; a stream that lands after the key is up is kept and announced
+  (*microphone ready — hold V and speak*), the editor left closed; one stream stays open
+  for the page (tracks stop on hide/unload), so the second note never asks again and
+  records at once; a hold under 0.4 s is dropped with *held too briefly — hold V while you
+  speak*; the failures are told apart — a 501 is *dictation is not installed on the server*
+  and the only case that opens the typed editor, anything else shows the server's reason
+  and leaves the note as it was; `#dictState` reads listening… → transcribing… → landed.
+  Three browser tests: the blocked microphone (named, editor closed, never asked twice),
+  the late stream (kept, next hold records on it, too-brief hold dropped), and the 501
+  path rewritten to the new words plus the boot hint after a reload.
+
 ### Added
 - **Themes proposed from the transcripts (INTAKE I5.2, the data side).** Listen first, then
   propose: `POST /api/themes/propose` is one judge-role call over the audio pass's transcripts

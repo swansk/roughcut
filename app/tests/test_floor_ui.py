@@ -596,9 +596,11 @@ def test_more_opens_the_whole_clip_and_says_what_is_not_built(page):
 # ----------------------------------------------------------------- dictation
 
 def test_holding_V_records_posts_and_falls_back_to_N_on_501(page, monkeypatch):
-    """I2.5 when dictation is unavailable: the recording is made and sent; the 501 is
-    said once and the typed note takes over. Dictation is real on this tree (M4), so its
-    absence is simulated — the server runs in this process."""
+    """I2.5 when dictation is unavailable: the recording is made and sent; the 501 says
+    only that the recogniser is not installed, and — the recogniser being genuinely absent
+    (I2.8: the one case that may open the editor) — the typed note takes over. Dictation
+    is real on this tree (M4), so its absence is simulated — the server runs in this
+    process. A reload then says so in the hint before any key is held."""
     from roughcut import dictate
     monkeypatch.setattr(dictate, "available", lambda: False)
     hits: list[int] = []
@@ -607,18 +609,147 @@ def test_holding_V_records_posts_and_falls_back_to_N_on_501(page, monkeypatch):
     page.keyboard.down("v")
     page.wait_for_function("document.querySelector('#pic').volume < 0.2", timeout=3000)
     assert "listening" in page.locator("#dictState").inner_text()
-    page.wait_for_timeout(700)
+    page.wait_for_timeout(1000)
     page.keyboard.up("v")
     page.wait_for_function("document.querySelector('#pic').volume > 0.9", timeout=3000)
     page.wait_for_function(
-        "document.querySelector('#toast').textContent.includes('dictation not built yet')",
+        "document.querySelector('#toast').textContent.includes('dictation is not installed on the server')",
         timeout=10000)
-    assert "N to type" in page.locator("#toast").inner_text()
+    assert page.locator("#toast").inner_text() == "dictation is not installed on the server"
     assert hits == [501], hits
     page.wait_for_selector("#noteEdit:visible")
+    hint = page.locator("#dictHint")
+    assert "not installed" in hint.inner_text() and "N" in hint.inner_text()
+    assert hint.get_attribute("data-mic") == "absent"
     page.keyboard.type("typed instead")
     page.keyboard.press("Enter")
     assert "typed instead" in page.locator("#noteText").inner_text()
+    # from a fresh load /api/picks says `dictation: false`: the hint says so at boot, and
+    # V goes straight to the editor without recording anything
+    page.reload()
+    page.wait_for_function("window.floor && floor.state.queue.length > 0", timeout=15000)
+    assert page.evaluate("floor.state.dictation") is False
+    assert "dictation is not installed on the server" in page.locator("#dictHint").inner_text()
+    page.keyboard.down("v")
+    page.wait_for_selector("#noteEdit:visible")
+    page.keyboard.up("v")
+    assert hits == [501], "no second recording was sent"
+
+
+MIC_STUB = """
+  // The microphone, scripted: the permission the browser reports, a getUserMedia whose
+  // answer the test controls, and a MediaRecorder that hands back a blob on stop.
+  window.__mic = { calls: 0, grant: null, refuse: null, recs: 0 };
+  navigator.permissions.query = async () => ({ state: %(perm)s, onchange: null });
+  navigator.mediaDevices.getUserMedia = () => new Promise((res, rej) => {
+    window.__mic.calls += 1;
+    const stream = { getTracks: () => [{ readyState: 'live', stop() { this.readyState = 'ended'; } }] };
+    window.__mic.grant = () => res(stream);
+    window.__mic.refuse = () => rej(new DOMException('Permission denied', 'NotAllowedError'));
+    if (%(answer)s === 'refuse') window.__mic.refuse();
+    if (%(answer)s === 'grant') window.__mic.grant();
+  });
+  class FakeRecorder {
+    constructor() { this.state = 'inactive'; window.__mic.recs += 1; }
+    static isTypeSupported() { return true; }
+    start() { this.state = 'recording'; }
+    stop() {
+      this.state = 'inactive';
+      if (this.ondataavailable) this.ondataavailable({ data: new Blob([new Uint8Array(64)], { type: 'audio/webm' }) });
+      if (this.onstop) this.onstop();
+    }
+  }
+  window.MediaRecorder = FakeRecorder;
+"""
+
+
+def mic_page(page, perm: str, answer: str):
+    """Reload the floor with the microphone scripted: `perm` is what the permission query
+    says at boot; `answer` is what getUserMedia does — 'refuse' at once, 'grant' at once,
+    or 'wait' for the test to call window.__mic.grant() (the permission prompt, up)."""
+    page.add_init_script(MIC_STUB % {"perm": json.dumps(perm), "answer": json.dumps(answer)})
+    page.reload()
+    page.wait_for_function("window.floor && floor.state.queue.length > 0", timeout=15000)
+
+
+def test_a_blocked_microphone_is_named_and_never_opens_the_editor(page):
+    """I2.8 1a. The hint says what V will do before it is held; a refused microphone is
+    said by name, the note is left alone, and the next hold goes straight to the message
+    without asking the browser again."""
+    mic_page(page, "prompt", "refuse")
+    hint = page.locator("#dictHint")
+    assert "V will ask for the microphone the first time" in hint.inner_text()
+    assert hint.get_attribute("data-mic") == "prompt"
+    playing_at(page, 0.3)
+    page.keyboard.down("v")
+    page.wait_for_function(
+        "document.querySelector('#toast').textContent.includes('microphone blocked for this site')",
+        timeout=5000)
+    page.keyboard.up("v")
+    assert "allow it in the address bar" in page.locator("#toast").inner_text()
+    assert page.locator("#noteEdit").is_hidden(), "an error never opens the typed editor"
+    assert page.locator("#dictState").inner_text() == ""
+    assert "microphone blocked for this site" in hint.inner_text()
+    assert hint.get_attribute("data-mic") == "denied"
+    assert page.evaluate("document.querySelector('#pic').volume") > 0.9
+    assert page.evaluate("window.__mic.calls") == 1
+    page.keyboard.down("v")
+    page.keyboard.up("v")
+    page.wait_for_function(
+        "document.querySelector('#toast').textContent.includes('microphone blocked for this site')")
+    assert page.evaluate("window.__mic.calls") == 1, "denied is remembered; nobody is asked twice"
+    assert page.locator("#noteEdit").is_hidden()
+
+
+def test_a_microphone_granted_after_V_was_released_is_kept_and_the_next_hold_records(page, project):
+    """I2.8 1a, the Chrome path: the first hold raises the permission prompt, V comes up
+    while it is up, and the stream lands afterwards. It is kept and announced, the
+    editor stays closed, and the next hold records at once on the same stream — one
+    getUserMedia for the page — and its text lands as the note. A hold under 0.4 s is
+    dropped and said."""
+    mic_page(page, "prompt", "wait")
+    playing_at(page, 0.3)
+    page.keyboard.down("v")
+    page.wait_for_function("document.querySelector('#pic').volume < 0.2", timeout=3000)
+    assert "listening" in page.locator("#dictState").inner_text()
+    page.keyboard.up("v")                              # the prompt is still up
+    page.wait_for_function("document.querySelector('#pic').volume > 0.9", timeout=3000)
+    assert page.locator("#dictState").inner_text() == ""
+    page.evaluate("window.__mic.grant()")
+    page.wait_for_function(
+        "document.querySelector('#toast').textContent === 'microphone ready — hold V and speak'",
+        timeout=5000)
+    assert page.locator("#noteEdit").is_hidden()
+    assert page.evaluate("window.__mic.recs") == 0, "nothing was recorded from a released key"
+    assert page.locator("#dictHint").get_attribute("data-mic") == "granted"
+    assert "ducks while you speak" in page.locator("#dictHint").inner_text()
+    # too brief: dropped, said, nothing posted
+    hits: list[int] = []
+    page.on("request", lambda r: hits.append(r.method) if "/api/dictate" in r.url else None)
+    page.keyboard.down("v")
+    page.keyboard.up("v")
+    page.wait_for_function(
+        "document.querySelector('#toast').textContent.includes('held too briefly')", timeout=5000)
+    assert page.evaluate("window.__mic.recs") == 1
+    assert hits == []
+    # the second hold records on the stream already open and its text lands
+    page.evaluate("""() => {
+        const real = window.fetch.bind(window);
+        window.fetch = (url, opts) => url === '/api/dictate'
+            ? Promise.resolve(new Response(JSON.stringify({text: 'landed on his back', latency_ms: 600}),
+                                           {status: 200, headers: {'content-type': 'application/json'}}))
+            : real(url, opts);
+    }""")
+    page.keyboard.down("v")
+    page.wait_for_function("document.querySelector('#dictState').textContent.includes('listening')")
+    page.wait_for_timeout(600)
+    page.keyboard.up("v")
+    page.wait_for_function(
+        "document.querySelector('#noteText').textContent.includes('landed on his back')", timeout=5000)
+    assert "landed" in page.locator("#dictState").inner_text()
+    assert page.evaluate("window.__mic.calls") == 1, "one stream for the page — never re-asked"
+    assert page.evaluate("window.__mic.recs") == 2
+    assert page.evaluate("floor.mic.stream !== null"), "the stream stays open for the next note"
 
 
 def test_a_dictated_note_lands_in_the_slot_and_on_a_decided_pick(page, project):

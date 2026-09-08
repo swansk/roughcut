@@ -458,7 +458,6 @@ function paintNote(meta) {
   $('#noteSlot').classList.toggle('empty', !text);
   $('#noteText').textContent = text ? `“${text}”` : 'no note yet';
   $('#noteMeta').textContent = text ? `· ${meta ? `${meta} · ` : ''}N edit` : '';
-  $('#dictHint').hidden = F.dictation === false && F.dictWarned;
 }
 
 function paintCaption() {
@@ -1084,56 +1083,148 @@ async function setNote(text, meta) {
   }
 }
 
-/* --------------------------------------------------------------- dictation */
+/* --------------------------------------------------------------- dictation
+ *
+ * Hold V, speak, let go: the note lands. What went wrong the first time (Karl, 2026-09-08:
+ * "the audio note doesn't work") was all on this side of the wire — the server transcribed
+ * a real recording in 4 s. In Chrome the first hold raises the permission prompt, V is
+ * released while it is up, and the stream that then arrived was thrown away in silence;
+ * a refused microphone fell into the typed editor as if that were the feature. So: the
+ * permission state is learned at boot and said in the hint; a stream that arrives after
+ * the key is up is kept and announced; one stream stays open for the page, so the second
+ * note starts at once and never asks again; a hold too short to hold a word is dropped
+ * and said; and no failure opens the typed editor — only a recogniser the server says it
+ * does not have. On any other error the note stays as it was and the toast says why.
+ */
 
-const dict = { rec: null, stream: null, chunks: [], held: false, vol: null };
+const MIN_NOTE_S = 0.4;          // shorter than this is a slip of the finger, not a note
 
-function dictFallback(why) {
+const dict = {
+  rec: null, stream: null, chunks: [], held: false, vol: null,
+  perm: null,                    // prompt | granted | denied, as the browser last said
+  t0: 0,                         // when the recorder started
+  landed: null,                  // the timer that clears "landed"
+};
+
+function dictState(text, live) {
+  const el = $('#dictState');
+  el.textContent = text || '';
+  el.className = `hint small${live ? ' live' : ''}`;
+}
+
+/* The one word the hint and the V key are painted from. */
+function micState() {
+  if (F.dictation === false) return 'absent';
+  return dict.perm || 'unknown';
+}
+
+function paintDictHint() {
+  const el = $('#dictHint');
+  const state = micState();
+  el.dataset.mic = state;
+  const key = `<span class="key" data-mic="${state}" title="microphone: ${state}">V</span>`;
+  const n = '<span class="key">N</span> to type';
+  el.innerHTML = state === 'absent'
+    ? `dictation is not installed on the server — ${n} a note`
+    : state === 'denied'
+      ? `microphone blocked for this site — allow it in the address bar, or ${n}`
+      : state === 'prompt'
+        ? `hold ${key} · V will ask for the microphone the first time · ${n}`
+        : `hold ${key} · clip audio ducks while you speak · text lands when you let go · ${n}`;
+}
+
+/* Ask the browser what it will do when V is held, and keep listening for a change — the
+ * user allowing the site from the address bar repaints the hint without a reload. */
+async function learnMic() {
+  try {
+    if (navigator.permissions && navigator.permissions.query) {
+      const st = await navigator.permissions.query({ name: 'microphone' });
+      dict.perm = st.state;
+      st.onchange = () => { dict.perm = st.state; paintDictHint(); };
+    }
+  } catch (e) { /* a browser that cannot say — the hint stays neutral */ }
+  paintDictHint();
+}
+
+function liveStream() {
+  const s = dict.stream;
+  return s && s.getTracks().some((t) => t.readyState === 'live') ? s : null;
+}
+
+/* The page is leaving or hidden: let the microphone go. Nothing else stops the tracks. */
+function releaseMic() {
+  try { if (dict.rec && dict.rec.state !== 'inactive') dict.rec.stop(); } catch (e) { /* gone already */ }
+  if (dict.stream) dict.stream.getTracks().forEach((t) => t.stop());
+  dict.stream = null;
+  dict.rec = null;
+}
+
+/* The recogniser is not on the server: typing is the note. The only path into the editor
+ * that a hold of V may take. */
+function dictAbsent() {
   if (!F.dictWarned) {
-    toast(`${why} — N to type`, 4000);
+    toast('dictation is not installed on the server', 4000);
     F.dictWarned = true;
   }
-  $('#dictState').textContent = '';
-  $('#dictState').className = 'hint small';
+  F.dictation = false;
+  paintDictHint();
+  dictState('');
   paintNote();
   editNote();
 }
 
+/* Anything else: say why, and leave the note as it was. */
+function dictFail(msg, ms = 5000) {
+  dictState('');
+  toast(msg, ms);
+}
+
+const MIC_BLOCKED = 'microphone blocked for this site — allow it in the address bar, or N to type';
+
 async function dictStart() {
   if (dict.held || F.mode !== 'pass') return;
+  if (F.dictation === false) return dictAbsent();
+  if (dict.perm === 'denied') return dictFail(MIC_BLOCKED);
+  if (!navigator.mediaDevices || !window.MediaRecorder) return dictFail('no microphone in this browser — N to type');
   dict.held = true;
   const v = pic();
   dict.vol = v.volume;
   v.volume = 0.1;                                  // the clip ducks while you speak
-  $('#dictState').textContent = 'listening…';
-  $('#dictState').className = 'hint small live';
-  if (!navigator.mediaDevices || !window.MediaRecorder) {
-    dictStop();
-    return dictFallback('no microphone in this browser');
+  dictState('listening…', true);
+  let stream = liveStream();
+  if (!stream) {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      const blocked = !!e && e.name === 'NotAllowedError';
+      if (blocked) { dict.perm = 'denied'; paintDictHint(); }
+      dictStop();
+      return dictFail(blocked ? MIC_BLOCKED : `no microphone — ${(e && e.name) || e}`);
+    }
+    dict.stream = stream;
+    if (dict.perm !== 'granted') { dict.perm = 'granted'; paintDictHint(); }
+    if (!dict.held) {                              // released while the prompt was up
+      dictState('');
+      return toast('microphone ready — hold V and speak', 3500);
+    }
   }
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch (e) {
-    dictStop();
-    return dictFallback(`no microphone — ${e.name || e}`);
-  }
-  if (!dict.held) {                                // released before the mic answered
-    stream.getTracks().forEach((t) => t.stop());
-    return;
-  }
-  const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : '';
-  dict.stream = stream;
+  dictRecord(stream);
+}
+
+function dictRecord(stream) {
+  const mime = MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus' : '';
   dict.chunks = [];
   dict.rec = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
   dict.rec.ondataavailable = (e) => { if (e.data && e.data.size) dict.chunks.push(e.data); };
   dict.rec.onstop = () => {
+    const held = (performance.now() - dict.t0) / 1000;
     const blob = new Blob(dict.chunks, { type: mime || 'audio/webm' });
-    stream.getTracks().forEach((t) => t.stop());
     dict.rec = null;
-    dict.stream = null;
+    if (held < MIN_NOTE_S) return dictFail('held too briefly — hold V while you speak', 3000);
     dictSend(blob);
   };
+  dict.t0 = performance.now();
   dict.rec.start();
 }
 
@@ -1143,34 +1234,35 @@ function dictStop() {
   const v = pic();
   if (dict.vol != null) v.volume = dict.vol;
   dict.vol = null;
-  if (dict.rec && dict.rec.state !== 'inactive') dict.rec.stop();
-  else {
-    $('#dictState').textContent = '';
-    $('#dictState').className = 'hint small';
-  }
+  if (dict.rec && dict.rec.state !== 'inactive') {
+    try { dict.rec.stop(); } catch (e) { dict.rec = null; dictFail(`the recording failed — ${e.name || e}`); }
+  } else dictState('');
 }
 
 async function dictSend(blob) {
-  $('#dictState').textContent = 'transcribing…';
-  $('#dictState').className = 'hint small';
+  dictState('transcribing…');
   let r;
   try {
     r = await fetch('/api/dictate', {
       method: 'POST', headers: { 'content-type': blob.type || 'audio/webm' }, body: blob,
     });
   } catch (e) {
-    return dictFallback('dictation unreachable');
+    return dictFail('dictation unreachable — the board did not answer');
   }
-  if (r.status === 501) return dictFallback('dictation not built yet');
+  if (r.status === 501) return dictAbsent();
   if (!r.ok) {
     const d = await r.json().catch(() => ({}));
-    $('#dictState').textContent = '';
-    return toast(`dictation failed: ${d.detail || r.status}`, 5000);
+    return dictFail(`dictation failed: ${d.detail || `HTTP ${r.status}`}`);
   }
   const d = await r.json();
-  $('#dictState').textContent = '';
-  if (!d.text) return toast('heard nothing — N to type', 3000);
-  await setNote(d.text, `${((d.latency_ms || 0) / 1000).toFixed(1)} s`);
+  if (!d.text) return dictFail('heard nothing — hold V while you speak', 3000);
+  const secs = `${((d.latency_ms || 0) / 1000).toFixed(1)} s`;
+  await setNote(d.text, secs);
+  dictState(`landed · ${secs}`);
+  clearTimeout(dict.landed);
+  dict.landed = setTimeout(() => {
+    if ($('#dictState').textContent.startsWith('landed')) dictState('');
+  }, 2500);
 }
 
 /* ---------------------------------------------------------------- overlays */
@@ -1489,6 +1581,9 @@ async function boot() {
   });
   ta.addEventListener('blur', () => { if (!ta.hidden) { const t = ta.value; closeNote(); setNote(t); } });
   window.addEventListener('resize', () => { zoom.built = ''; buildZoom(); paintKeep(true); });
+  window.addEventListener('pagehide', releaseMic);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseMic(); });
+  learnMic();
   requestAnimationFrame(tick);
 
   let picks;
@@ -1511,15 +1606,14 @@ async function boot() {
   if (!F.queue.length) { paintHud(); return closingCard(); }
   const at = Math.min(pos.index || 0, F.queue.length - 1);
   show(at);
-  if (F.dictation === false) $('#dictHint').innerHTML =
-    'dictation not built yet — <span class="key">N</span> to type a note';
+  paintDictHint();
 }
 
 /* What the tests reach for; nothing else should. */
 window.floor = {
   state: F, current: cur, keepRange, show, advance, undo, playBin, seek,
   setAuto: (on) => { F.auto = !!on; paintAuto(); },
-  dictSend, snapStart, snapEnd, words, utterances,
+  dictSend, mic: dict, snapStart, snapEnd, words, utterances,
 };
 
 boot();

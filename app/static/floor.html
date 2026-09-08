@@ -102,6 +102,12 @@
               resize: vertical; }
   #dictState { min-height: 14px; }
   #dictState.live { color: var(--bad-soft); }
+  /* the V key wears the microphone's state: green once allowed, amber while the browser
+   * will still ask, red when the site is blocked */
+  .key[data-mic="granted"] { color: var(--good-soft); border-color: #2c4c39; }
+  .key[data-mic="prompt"] { color: #ffe9b8; border-color: #4c4026; }
+  .key[data-mic="denied"] { color: var(--bad-soft); border-color: #6a2c2c; }
+  #dictHint[data-mic="denied"] { color: var(--bad-soft); }
 
   /* ---- caption line ---- */
   #caption { display: flex; align-items: baseline; gap: 10px; padding: 7px 14px; background: #0c0c10;
@@ -256,7 +262,7 @@
       <div id="noteSlot" class="empty"><span id="noteText"></span> <span id="noteMeta" class="hint"></span>
         <textarea id="noteEdit" hidden placeholder="what you see — Enter to keep it, Esc to cancel"></textarea></div>
       <div id="dictState" class="hint small"></div>
-      <div id="dictHint" class="hint" style="font-size:9.5px">hold <span class="key">V</span> · clip audio ducks while you speak · text lands when you let go · <span class="key">N</span> to type</div>
+      <div id="dictHint" class="hint" style="font-size:9.5px" data-mic="unknown">hold <span class="key" data-mic="unknown">V</span> · clip audio ducks while you speak · text lands when you let go · <span class="key">N</span> to type</div>
     </aside>
   </div>
 
