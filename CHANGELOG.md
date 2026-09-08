@@ -10,6 +10,10 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Tracker: M1 on `agent/bin` is built.** docs/INTAKE.md ticks I1.4 with its commit; I1.1,
+  I1.3 and I1.4 are done on the lane, I1.2 and the three server call-sites (`selects=` in
+  `_ask_job`, `relink` in `GET /api/selects`, `clip_duration=` in the verdict endpoint) are
+  the lead's, named on their lines.
 - **Relink: a select survives its clip being renamed or moved (docs/INTAKE.md I1.4).** A
   select now records its clip's length at creation (`clip_duration`, via
   `new_select(..., clip_duration=)`, `apply_verdict(..., clip_duration=)` and
