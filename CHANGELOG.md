@@ -547,6 +547,12 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Changed
+- **Space is play / pause on the pass** (Karl, 2026-09-08: "space needs to be play / pause").
+  It was hold-to-watch-on. Now a press pauses a playing picture and plays a paused one; when
+  playback has stopped on its own at the green band's end, the next press watches on past it
+  (the whole clip opens, as `.` O does) instead of rewinding. The band still never moves on its
+  own — watching is not keeping; extending is `}` or a drag of the out handle. Hints, the key
+  line and the map say so; the hold-space test is rewritten as the toggle test.
 - **Session 9 close-out (docs).** INTAKE's "Where we are" reflects the merged open and
   floor2 lanes (`6ba1ec0`, `bc090e0`), the lanes table marks every lane merged with its
   worktree removed, the verification log records the 348-test run and the live checks of

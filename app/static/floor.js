@@ -89,7 +89,6 @@ const F = {
   gen: 0,                  // play commands; a deferred callback that finds it moved does nothing
   playing: false,
   whole: false,            // `.` opened the whole clip: no stop at the preview end
-  spaceHeld: false,
   shuttle: 0,              // J: negative rate driven by the tick; L: positive playbackRate
   bin: null,               // {list, k} while the closing card plays the bin
   writes: 0,               // completed writes — the tests wait on this
@@ -261,8 +260,20 @@ function resume() {
   F.shuttle = 0;
   v.playbackRate = 1;
   const stop = stopAt();
-  if (v.currentTime >= stop - 0.05 && !F.whole && !F.spaceHeld) v.currentTime = p.preview[0];
+  if (v.currentTime >= stop - 0.05 && !F.whole) v.currentTime = p.preview[0];
   v.play().catch((err) => { if (g === F.gen) playRefused(err); });
+}
+
+/* Space. Playing → pause. Paused → play; and if playback had stopped on its own at the
+ * band's end, play on past it (the whole clip opens) rather than rewinding — watching is
+ * still not keeping: the band does not move. */
+function togglePlay() {
+  const v = pic();
+  const p = cur();
+  if (!p) return;
+  if (F.playing && !v.paused) return pause();
+  if (F.mode === 'pass' && !F.whole && v.currentTime >= stopAt() - 0.05) F.whole = true;
+  resume();
 }
 
 function pause() {
@@ -283,13 +294,14 @@ function park(t) {
   if (v.readyState >= 1) v.currentTime = Math.max(0, Math.min(p.duration || t, t));
 }
 
-/* Where playback stops on its own: the preview end, unless space is held or the whole
- * clip was opened; in the bin, the select's end. */
+/* Where playback stops on its own: the preview end, unless the whole clip was opened
+ * (`.` O, a seek outside the band, or space pressed again at the band's end); in the bin,
+ * the select's end. */
 function stopAt() {
   const p = cur();
   if (!p) return 0;
   if (F.mode === 'bin') return p.end;
-  if (F.whole || F.spaceHeld) return p.duration || Infinity;
+  if (F.whole) return p.duration || Infinity;
   return p.preview[1];
 }
 
@@ -367,7 +379,7 @@ function paintContext() {
       ? ` · preview ${fmt(p.preview[0])} → ${fmt(p.preview[1])}` : '');
   $('#ctxOthers').innerHTML = `${others} other pick${others === 1 ? '' : 's'} in this clip`
     + ` · <span class="key">.</span> open the clip`;
-  $('#ctxHint').innerHTML = 'the green band is the clip — drag its edges · hold <span class="key">space</span> to watch past it';
+  $('#ctxHint').innerHTML = 'the green band is the clip — drag its edges · <span class="key">space</span> plays and pauses · at the band’s end it watches on';
   paintKeep(true);
 }
 
@@ -696,7 +708,6 @@ function show(i, { autoplay = true } = {}) {
   F.base = [p.preview[0], p.preview[1]];
   F.note = p.note || '';
   F.whole = false;
-  F.spaceHeld = false;
   if (p.verdict) stamp(p.verdict, p.hero && p.verdict === 'pick');
   paintAll();
   if (autoplay) play(p.preview[0]); else park(p.preview[0]);
@@ -1204,7 +1215,7 @@ function keymapHtml() {
     ['U', 'later — the pile the closing card offers back'], ['1', 'hero — must appear in the first cut'],
     ['⇧X', 'reject the rest of this clip’s picks'], ['⌘Z', 'undo the last verdict, with its trim and note'],
     ['Caps', 'auto-advance after a verdict'], ['J K L', 'shuttle — K pauses'],
-    ['space', 'hold to keep watching past the preview'], ['[ ]', 'in-point to the previous / next sentence'],
+    ['space', 'play / pause — pressed again where the band ended, it watches on past it'], ['[ ]', 'in-point to the previous / next sentence'],
     ['{ }', 'out-point likewise — } extends to the reaction'], ['← →', 'frame step at the active edge (⇧ for a word)'],
     ['↵', 'next pick · ⌫ previous'], ['V', 'hold to speak a note; N edits it'],
     ['E', 'evidence drawer'], ['.', 'more: open the whole clip · look closer · find like this'],
@@ -1421,9 +1432,7 @@ document.addEventListener('keydown', (e) => {
     case ' ':
       e.preventDefault();
       if (e.repeat) return;
-      F.spaceHeld = true;
-      if (!F.playing || pic().paused) resume();
-      return;
+      return togglePlay();
     case '[': return setIn(before(sentenceStarts(cur()), keepRange().snapped[0]) ?? 0);
     case ']': return setIn(after(sentenceStarts(cur()), keepRange().snapped[0]) ?? keepRange().snapped[0]);
     case '{': return setOut(before(sentenceEnds(cur()), keepRange().snapped[1]) ?? keepRange().snapped[1]);
@@ -1442,11 +1451,7 @@ document.addEventListener('keydown', (e) => {
 
 document.addEventListener('keyup', (e) => {
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-  if (k === ' ') {
-    F.spaceHeld = false;
-    const p = cur();
-    if (F.mode === 'pass' && p && F.playing && !F.whole && pic().currentTime > p.preview[1]) pause();
-  } else if (k === 'v') {
+  if (k === 'v') {
     dictStop();
   }
 });

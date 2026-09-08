@@ -292,17 +292,27 @@ def test_trim_keys_snap_to_sentences_and_arrows_step_frames_at_the_edge(page, pr
     assert (d["selects"][0]["start"], d["selects"][0]["end"]) == (0.0, 4.42)
 
 
-def test_holding_space_keeps_watching_but_never_moves_the_band(page, project):
-    """I2.7 move 2, end to end: the preview stops on its own, space holds it open, and
-    the band stays the preview — watching is not keeping. Karl's open question (should
-    hold-space extend the band visibly?) is answered "never" here; extending is `}` or a
-    drag of the out handle."""
-    preview_to(page, 1.2)
+def test_space_plays_and_pauses_and_at_the_bands_end_watches_on_without_moving_it(page, project):
+    """Karl, 2026-09-08: "space needs to be play / pause". So: space pauses a playing
+    picture and plays a paused one. When playback has stopped on its own at the band's end,
+    space plays on past it — the whole clip opens — and the band stays the preview: watching
+    is still not keeping (I2.7 move 2). Extending is `}` or a drag of the out handle."""
+    playing_at(page, 0.2)
+    page.keyboard.press("Space")
+    page.wait_for_function("document.querySelector('#pic').paused", timeout=3000)
+    t0 = page.evaluate("document.querySelector('#pic').currentTime")
+    page.keyboard.press("Space")
+    page.wait_for_function("!document.querySelector('#pic').paused", timeout=3000)
+    playing_at(page, t0 + 0.2)
+    assert page.evaluate("floor.state.whole") is False
+
+    preview_to(page, 1.2)                          # stops on its own at the band's end
     assert page.evaluate("document.querySelector('#pic').currentTime") < 1.6
     assert page.evaluate("floor.keepRange().snapped") == [0.0, 2.45]
-    page.keyboard.down("Space")
+    page.keyboard.press("Space")                   # not a rewind: it watches on
     playing_at(page, 2.6)                          # inside "how are you"
-    page.keyboard.up("Space")
+    assert page.evaluate("floor.state.whole") is True
+    page.keyboard.press("Space")
     page.wait_for_function("document.querySelector('#pic').paused", timeout=3000)
     t = page.evaluate("document.querySelector('#pic').currentTime")
     assert 2.6 <= t < 4.0
