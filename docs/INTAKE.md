@@ -187,7 +187,11 @@ to explain themselves. That is I2.7 and it is the next item — before I3.2.**
 
 - [ ] I5.1 Contact sheet of the folder with free flags (junk band, side-data, telemetry
       present), sessions by the 4 h rule.
-- [ ] I5.2 Themes proposed from transcripts (one judge-role call), chips + dictation.
+- [~] I5.2 Themes proposed from transcripts (one judge-role call), chips + dictation. — the
+      data side is done (the I5.2 commit, see log): `roughcut/themes.py`,
+      `POST /api/themes/propose` (job, priced), `GET/PUT /api/themes` (`themes` + `names` in the
+      EDL, read by picks and the priority score). **Open:** the chips + dictation UI on the open
+      screen — a follow-up for the open lane once I5.1/I5.3 land.
 - [ ] I5.3 Granularity slider re-pricing live; workers + cap in settings; "Index" starts the
       journal.
 - [ ] I5.4 Project picker (one bin per launch today) — the "smaller, whenever" item, lands here.

@@ -65,7 +65,7 @@ import uvicorn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from roughcut import (config, dictate, effects, events, find, inference,  # noqa: E402
-                      journal, picks, progress, revise, selects)
+                      journal, picks, progress, revise, selects, themes)
 
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent / "research" / "tools"
@@ -97,13 +97,13 @@ def all_jobs() -> list[progress.Job]:
     still running — which is the state his machine is in as this is written.
     """
     return [*ANALYSES.values(), *VISUALS.values(), *INDEXES.values(), *ASKS.values(),
-            *FINDS.values(), *RENDERS.values()]
+            *FINDS.values(), *THEMES.values(), *RENDERS.values()]
 
 
 # Polled once a second by every open board, so it carries no payloads: a finished Ask
 # holds a 15k-token plan and a render holds ffmpeg's whole log, and neither belongs in
 # a heartbeat. Both stay one fetch away on /api/job/{id}.
-JOB_LIST_OMIT = ("plan", "found", "journal")
+JOB_LIST_OMIT = ("plan", "found", "journal", "proposal")
 
 
 @app.get("/api/jobs")
@@ -120,7 +120,7 @@ def api_jobs() -> JSONResponse:
 
 @app.get("/api/job/{job}")
 def api_job(job: str) -> JSONResponse:
-    for registry in (ANALYSES, VISUALS, INDEXES, ASKS, FINDS, RENDERS):
+    for registry in (ANALYSES, VISUALS, INDEXES, ASKS, FINDS, THEMES, RENDERS):
         if job in registry:
             return JSONResponse(registry[job].snapshot())
     raise HTTPException(404, "no such job")
@@ -1573,6 +1573,109 @@ def api_visual_status(job: str) -> JSONResponse:
     if job not in VISUALS:
         raise HTTPException(404, "no such job")
     return JSONResponse(VISUALS[job].snapshot())
+
+
+# ---------------------------------------------------------------- themes
+#
+# Listen first, then propose (design §2, INTAKE I5.2): after the free audio pass one
+# cheap call reads the transcripts and proposes what the film might be about, as chips
+# with clip counts. The editor confirms, edits, dictates, or ignores; what they keep is
+# written to the EDL as `themes` (and `names`, which seed dictation). Themes rank picks
+# and never change what the sheets see, so changing them later costs nothing.
+
+THEMES: dict[str, progress.Job] = {}
+THEMES_ETA_S = 30.0
+
+
+def _themes_job(job: str, clips: dict, story: str) -> None:
+    entry = THEMES[job]
+
+    def on_partial(kind: str, text: str) -> None:
+        if kind == "thinking":
+            entry.complete("read")
+            entry.note("reading the transcripts")
+            return
+        entry.complete("think")
+        n = text.count('"theme"')
+        entry.advance("write", n / 6.0, detail=f"{n} theme{'s' if n != 1 else ''} so far")
+
+    try:
+        proposal = themes.propose(clips, story, on_partial=on_partial)
+    except inference.BudgetExceeded as exc:
+        entry.update(code=429)
+        entry.finish("failed", detail=str(exc))
+        return
+    except (inference.InferenceError, ValueError) as exc:
+        entry.update(code=502)
+        entry.finish("failed", detail=str(exc))
+        return
+    entry["proposal"] = proposal
+    entry.complete("write")
+    n = len(proposal["themes"])
+    entry.finish("done", detail=f"{n} theme{'s' if n != 1 else ''} proposed")
+
+
+@app.get("/api/themes")
+def api_themes() -> JSONResponse:
+    """What the EDL says the film is about, and what proposing more would cost."""
+    edl = read_edl()
+    clips, _payload = _ask_clips()
+    running = next((t for t in THEMES.values() if t["state"] not in progress.TERMINAL), None)
+    return JSONResponse({
+        "themes": [t for t in (edl.get("themes") or []) if isinstance(t, str)],
+        "names": [n for n in (edl.get("names") or []) if isinstance(n, str)],
+        "story": edl.get("story", ""),
+        "projected_usd": themes.projected_usd(clips) if clips else None,
+        "analysed": len(clips), "job": running["id"] if running else None,
+    })
+
+
+@app.post("/api/themes/propose")
+async def api_themes_propose(request: Request) -> JSONResponse:
+    """One judge-role call over the transcripts, as a job with a price shown first."""
+    if any(t["state"] not in progress.TERMINAL for t in THEMES.values()):
+        raise HTTPException(409, "a themes proposal is already running")
+    clips, payload = _ask_clips()
+    if not clips:
+        raise HTTPException(400, "no analysed clips yet — run the audio pass first")
+    body = await request.json() if int(request.headers.get("content-length") or 0) else {}
+    story = str(body.get("story") or payload.get("story") or "")
+    job = uuid.uuid4().hex[:8]
+    THEMES[job] = progress.Job(
+        "themes", "Proposing themes from the transcripts", id=job, state="running",
+        proposal=None, code=0, detail="reading the transcripts")
+    THEMES[job].set_estimate(
+        THEMES_ETA_S,
+        [progress.milestone("read", "reading the transcripts", 0.2),
+         progress.milestone("think", "finding what recurs", 0.5),
+         progress.milestone("write", "writing the themes", 0.3)],
+        source="measured")
+    threading.Thread(target=_themes_job, args=(job, clips, story), daemon=True).start()
+    return JSONResponse({"job": job})
+
+
+@app.put("/api/themes")
+async def api_themes_put(request: Request) -> JSONResponse:
+    """The editor's word: the themes and names to keep. Written to the EDL; picks and the
+    priority score read them from there. An empty list is a valid answer."""
+    body = await request.json()
+    edl = read_edl()
+    for key, cap in (("themes", themes.MAX_THEMES), ("names", themes.MAX_NAMES)):
+        if key in body:
+            raw = body[key]
+            if not isinstance(raw, list):
+                raise HTTPException(400, f"{key} must be a list of strings")
+            clean: list[str] = []
+            for x in raw:
+                s = str(x).strip()[:60]
+                if s and s.lower() not in {c.lower() for c in clean}:
+                    clean.append(s)
+            edl[key] = clean[:cap]
+    if "story" in body:
+        edl["story"] = str(body["story"])
+    write_edl(edl)
+    return JSONResponse({"ok": True, "themes": edl.get("themes", []),
+                         "names": edl.get("names", [])})
 
 
 # ---------------------------------------------------------------- the index

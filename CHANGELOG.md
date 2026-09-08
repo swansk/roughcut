@@ -10,6 +10,16 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Themes proposed from the transcripts (INTAKE I5.2, the data side).** Listen first, then
+  propose: `POST /api/themes/propose` is one judge-role call over the audio pass's transcripts
+  — no sheets, no moments — that returns three to eight themes as phrases the editor would
+  recognise ("hitting rocks", not "skiing"), each with the clips that carry it, a quoted line
+  and a sentence on why it might be the spine, plus the names people are called by (they seed
+  dictation). Validated like a plan: a theme citing a clip not in the bin fails the job. Nothing
+  is the EDL's word until the editor keeps it: `PUT /api/themes` writes `themes` and `names`
+  (deduplicated, capped), `GET /api/themes` reads them with the price of proposing more. The
+  picks tag and lift what matches, and the journal's priority counts `theme_hits`, from that
+  moment on. `roughcut/themes.py`; five tests. The chips UI lands on the open screen.
 - **Telemetry is wired on R11's terms (INTAKE I6.2).** The index's `telemetry` stage runs
   `research/tools/telemetry.py` on clips that carry a `gpmd` stream and skips — honestly, with
   the reason — on clips that don't (a phone clip loses nothing). From the summary, two things
