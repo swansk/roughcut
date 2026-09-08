@@ -613,6 +613,8 @@ same commit. Releases move entries into a dated version section.
   with `themes`) and Discard (new `POST /api/themes/discard`) are the two answers to a
   proposal; either makes the server forget it, so a reload after Discard asks afresh instead
   of offering the discarded chips again. One browser test covers the round trip.
+  The proposal is also written to `--work/themes/<bin>.proposal.json` when it lands, so a
+  server restart does not lose what was paid for (the first live one was lost exactly so).
 - **Docs:** INTAKE's I3.2 note and HANDOFF's session-6 paragraph no longer say the old Analyse /
   Look buttons are still on the board — lane `agent/board` retired them (merge `6c4d249`).
 - **`GET /api/themes` carries `last` and `dictation`** — the last finished proposal (id +

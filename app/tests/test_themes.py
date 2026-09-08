@@ -109,6 +109,14 @@ def test_themes_are_proposed_by_one_call_and_kept_by_the_editor(client, project)
     assert after["themes"] == [] and after["job"] is None
     assert after["last"]["id"] == r.json()["job"] and after["last"]["proposal"]["names"] == ["Spenny"]
     assert isinstance(after["dictation"], bool)
+    # and on disk, so a restart does not lose what was paid for; Discard removes it
+    import server
+    assert json.loads(server.proposal_path().read_text(encoding="utf-8"))["id"] == r.json()["job"]
+    server.THEMES.clear()                          # a restart, in effect
+    assert client.get("/api/themes").json()["last"]["proposal"]["names"] == ["Spenny"]
+    assert client.post("/api/themes/discard").status_code == 200
+    assert client.get("/api/themes").json()["last"] is None
+    assert not server.proposal_path().exists()
     r = client.put("/api/themes", json={"themes": ["the greeting", " The Greeting ", "goodbye"],
                                         "names": ["Spenny", "Eric"]})
     assert r.status_code == 200 and r.json()["themes"] == ["the greeting", "goodbye"]

@@ -1653,6 +1653,14 @@ def _themes_job(job: str, clips: dict, story: str) -> None:
         entry.finish("failed", detail=str(exc))
         return
     entry["proposal"] = proposal
+    # On disk too: a proposal cost money, and a server restart must not lose it before
+    # the editor has answered it.
+    try:
+        proposal_path().parent.mkdir(parents=True, exist_ok=True)
+        proposal_path().write_text(json.dumps({"id": job, "proposal": proposal}, indent=1),
+                                   encoding="utf-8")
+    except OSError:
+        pass
     entry.complete("write")
     n = len(proposal["themes"])
     entry.finish("done", detail=f"{n} theme{'s' if n != 1 else ''} proposed")
@@ -1668,6 +1676,11 @@ def api_themes() -> JSONResponse:
     # chips instead of asking to pay again. The open screen asked for this.
     done = [t for t in THEMES.values() if t["state"] == "done" and t.get("proposal")]
     last = done[-1] if done else None
+    if last is None and proposal_path().exists():        # from before a restart
+        try:
+            last = json.loads(proposal_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            last = None
     return JSONResponse({
         "themes": [t for t in (edl.get("themes") or []) if isinstance(t, str)],
         "names": [n for n in (edl.get("names") or []) if isinstance(n, str)],
@@ -1734,6 +1747,11 @@ def _forget_proposals() -> None:
     Keep and Discard are the two answers to a proposal; either one ends it."""
     for k in [k for k, t in THEMES.items() if t["state"] in progress.TERMINAL]:
         del THEMES[k]
+    proposal_path().unlink(missing_ok=True)
+
+
+def proposal_path() -> Path:
+    return STATE["work"] / "themes" / f"{STATE['footage'].name}.proposal.json"
 
 
 @app.post("/api/themes/discard")
