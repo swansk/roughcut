@@ -42,10 +42,6 @@
   #hudBar i { position: absolute; top: 0; bottom: 0; }
   #hudDone { left: 0; background: var(--good); }
   #hudNow { background: var(--accent); }
-  .pill { font: 600 9.5px var(--mono); border: 1px solid var(--line); border-radius: 999px;
-          padding: 1px 8px; color: var(--faint); letter-spacing: .04em; }
-  .pill.on { color: var(--good-soft); border-color: #2c4c39; }
-
   /* ---- stage: margins + picture ---- */
   #stage { display: grid; grid-template-columns: 200px 1fr 240px; flex: 1 1 auto; min-height: 0;
            background: var(--bg); }
@@ -242,7 +238,6 @@
     <div id="hudBar"><i id="hudDone"></i><i id="hudNow"></i></div>
     <span id="hudBin" class="hint tnum small"></span>
     <span class="grow"></span>
-    <span id="hudAuto" class="pill" title="Caps Lock toggles auto-advance after a verdict">CAPS · AUTO-ADVANCE</span>
     <span class="key" title="key map">?</span>
   </div>
 

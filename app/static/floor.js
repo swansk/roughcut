@@ -13,8 +13,10 @@
  *      machine's whole window blind — and it moves only by hand: a drag, the trim keys, or
  *      `}` to the next line. Playing never changes it (I2.7: the band that grew while he
  *      watched looked like the tool deciding).
- *   2. P / X / U / 1, J-K-L intact with K = pause, Caps Lock = auto-advance, ⌘Z undoes
- *      the verdict with its trim and note.
+ *   2. P / X / U / 1, J-K-L intact with K = pause, ⌘Z undoes the verdict with its trim and
+ *      note. A verdict moves on (Karl, 2026-09-08: "when I pick, reject, or later a clip,
+ *      it should move on to the next one") — there is no switch for it; ↵ skips for now,
+ *      ⌫ goes back, and a decided pick revisited shows its stamp and can be re-decided.
  *   3. the queue is frozen for a round of 40; what arrives lands at the round boundary.
  *   4. verdicts are ranges on clip time, so nothing here depends on a pick id surviving.
  *
@@ -78,9 +80,7 @@ const F = {
   roundSize: 40,
   summary: null,           // counts, never a verdict on sufficiency
   dictation: null,         // what /api/picks said about the recogniser
-  dictWarned: false,       // "not built yet" is said once
-  auto: false,             // Caps Lock: advance after a verdict
-  caps: false,             // the lamp as last seen on a key event
+  dictWarned: false,       // "not installed" is said once
   mode: 'pass',            // pass | card | bin
   keep: { manualStart: null, manualEnd: null, edge: 'out' },
   base: [0, 0],            // the range the pick loaded with: its preview
@@ -333,11 +333,6 @@ function tick(now) {
 
 /* ------------------------------------------------------------------ paint */
 
-function paintAuto() {
-  $('#hudAuto').classList.toggle('on', F.auto);
-  $('#hudAuto').textContent = F.auto ? 'CAPS · AUTO-ADVANCE' : 'CAPS OFF · ↵ ADVANCES';
-}
-
 function paintHud() {
   const n = F.queue.length;
   const done = F.queue.filter((p) => p.verdict).length;
@@ -351,7 +346,6 @@ function paintHud() {
   $('#hudBin').innerHTML = `bin <b class="good">${s.moments || 0} moment${s.moments === 1 ? '' : 's'}</b>`
     + ` · ${s.heroes || 0} hero · if strung out <b>${fmt(s.strung_out_s || 0)}</b>`
     + (s.later ? ` · ${s.later} later` : '');
-  paintAuto();
 }
 
 function paintContext() {
@@ -784,7 +778,8 @@ async function verdict(kind, { hero = false } = {}) {
   paintHud();
   paintTape();
   savePosition();
-  if (F.auto) setTimeout(() => { if (cur() === p && F.mode === 'pass') advance(); }, STAMP_MS);
+  // the stamp lands, then the next undecided pick — always; the card after the last one
+  setTimeout(() => { if (cur() === p && F.mode === 'pass') advance(); }, STAMP_MS);
 }
 
 /* ⇧X: the rest of this clip's undecided picks in the queue, from here on, in one undo. */
@@ -817,7 +812,7 @@ async function rejectRest() {
   paintHud();
   paintTape();
   toast(`rejected ${entry.items.length} pick${entry.items.length === 1 ? '' : 's'} in ${stem(p.clip)}`);
-  // past the ones just rejected, whatever the auto-advance state: that was the point
+  // past the ones just rejected: that was the point
   const next = F.queue.findIndex((q, k) => k > F.i && !entry.items.some((it) => it.p === q));
   setTimeout(() => {
     if (F.mode !== 'pass') return;
@@ -1322,10 +1317,11 @@ function keymapHtml() {
     ['P', 'pick — to the bin, with the reason and any note'], ['X', 'reject — stays on the floor'],
     ['U', 'later — the pile the closing card offers back'], ['1', 'hero — must appear in the first cut'],
     ['⇧X', 'reject the rest of this clip’s picks'], ['⌘Z', 'undo the last verdict, with its trim and note'],
-    ['Caps', 'auto-advance after a verdict'], ['J K L', 'shuttle — K pauses'],
+    ['J K L', 'shuttle — K pauses'],
     ['space', 'play / pause — pressed again where the band ended, it watches on past it'], ['[ ]', 'in-point to the previous / next sentence'],
     ['{ }', 'out-point likewise — } extends to the reaction'], ['← →', 'frame step at the active edge (⇧ for a word)'],
-    ['↵', 'next pick · ⌫ previous'], ['V', 'hold to speak a note; N edits it'],
+    ['↵', 'skip for now — the next pick without a verdict · ⌫ back to the previous, decided or not'],
+    ['V', 'hold to speak a note; N edits it'],
     ['E', 'evidence drawer'], ['.', 'more: open the whole clip · look closer · find like this'],
     ['?', 'this map'],
     ['drag', 'the green band’s edges trim it, its middle slides it · click a strip to seek, drag to scrub · click a mark on the tape to jump to that pick'],
@@ -1497,11 +1493,6 @@ function shuttle(key) {
 }
 
 document.addEventListener('keydown', (e) => {
-  // Caps Lock is the auto-advance switch. The lamp is read on every key and a change
-  // in it flips the setting — so a Caps that is already on when the page opens counts
-  // from the first key, and nothing else about the keyboard has to be trusted.
-  const caps = !!(e.getModifierState && e.getModifierState('CapsLock'));
-  if (caps !== F.caps) { F.caps = caps; F.auto = caps; paintAuto(); }
   if (['INPUT', 'TEXTAREA'].includes(e.target.tagName) || e.target.isContentEditable) return;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); undo(); return; }
@@ -1628,7 +1619,6 @@ async function boot() {
 /* What the tests reach for; nothing else should. */
 window.floor = {
   state: F, current: cur, keepRange, show, advance, undo, playBin, seek,
-  setAuto: (on) => { F.auto = !!on; paintAuto(); },
   dictSend, mic: dict, snapStart, snapEnd, words, utterances,
 };
 

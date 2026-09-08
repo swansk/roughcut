@@ -10,6 +10,16 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Changed
+- **A verdict moves on — always (INTAKE I2.8, 1c).** Karl: *"when I pick, reject, or later
+  a clip, it should move on to the next one. Right now, I'm not sure how you move on"*. Until
+  now a verdict advanced only with Caps Lock on ("CAPS · AUTO-ADVANCE" in the HUD) and ↵
+  otherwise. Auto-advance is now the only behaviour: after the stamp lands, P / X / U / 1
+  go to the next pick, and to the closing card after the last; the Caps Lock switch, its
+  HUD pill and its map row are gone. ↵ still skips for now (the next pick without a
+  verdict), ⌫ goes back, and a decided pick revisited by ⌫ or a mark click shows its stamp
+  and can be re-decided, which moves on again. Tests that pressed ↵ after a verdict or read
+  the CAPS text rewritten; one added: X, U, P in a row with nothing else pressed land on
+  the closing card with the right counts.
 - **Where the subclip sits in the whole clip is painted, bridged and said (INTAKE I2.8,
   1b).** Karl: *"it is unclear where the subclip is within the whole clip timeline on the
   pass"*. The tape now carries the kept range as a solid green band — the closer strip's

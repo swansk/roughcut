@@ -197,7 +197,6 @@ def test_P_keeps_the_preview_snapped_to_the_sentence_and_advances(page, project)
     """I2.7 move 2: the band is the pick's preview when it loads, snapped outward to the
     sentence, and P writes exactly that. The preview is cut to 1.2 s — inside "hello
     there" — so the snap has something to do."""
-    page.evaluate("floor.setAuto(true)")
     preview_to(page, 1.2)
     assert page.evaluate("floor.keepRange().snapped") == [0.0, 2.45]
     # the margin says what will be kept before the key is pressed, and where it came from
@@ -229,9 +228,7 @@ def test_X_rejects_the_picks_own_range_and_1_marks_a_hero(page, project):
     assert v["verdict"] == "reject" and v["clip"] == "CLIP_A.MP4"
     assert (v["start"], v["end"]) == (0.0, 6.0)
     stamped(page, "REJECTED")
-    # without auto-advance the stamped pick stays; ↵ moves on
-    assert page.locator("#ctxClip").inner_text() == "CLIP_A"
-    page.keyboard.press("Enter")
+    # the stamp lands, then the pass moves on by itself (I2.8 1c) — no ↵
     page.wait_for_function("document.querySelector('#ctxClip').textContent === 'CLIP_B'")
     playing_at(page, 0.8)
     paused_at(page)
@@ -512,7 +509,6 @@ def test_the_kept_range_is_a_green_band_on_the_tape_and_the_panel_says_where_it_
 # --------------------------------------------------------------------- undo
 
 def test_ctrl_z_restores_the_verdict_with_its_trim_and_note(page, project):
-    page.evaluate("floor.setAuto(true)")
     preview_to(page, 1.2)
     page.keyboard.press("}")
     keep_before = page.locator("#ctxKeep").inner_text()
@@ -535,26 +531,49 @@ def test_ctrl_z_restores_the_verdict_with_its_trim_and_note(page, project):
 
 
 def test_undo_reinstates_the_verdict_that_was_there_before(page, project):
-    """A pick that was `later` and then picked goes back to `later`, not to nothing."""
+    """A pick that was `later` and then picked goes back to `later`, not to nothing. The
+    `later` moves the pass on (I2.8 1c); ⌫ brings the decided pick back with its stamp,
+    and re-deciding it moves on again."""
     playing_at(page, 0.6)
     paused_at(page)
     page.keyboard.press("u")
     wait_edl(project, lambda d: d.get("floor", {}).get("verdicts"))
-    stamped(page, "LATER")
+    page.wait_for_function("document.querySelector('#ctxClip').textContent === 'CLIP_B'")
+    page.keyboard.press("Backspace")
+    page.wait_for_function("document.querySelector('#ctxClip').textContent === 'CLIP_A'")
+    stamped(page, "LATER")                   # revisited: the stamp is shown again
     page.keyboard.press("p")
     wait_edl(project, lambda d: len(d.get("selects", [])) == 1
              and not d["floor"]["verdicts"])
-    stamped(page, "PICKED")
+    page.wait_for_function("document.querySelector('#ctxClip').textContent === 'CLIP_B'")
     page.keyboard.press("Control+z")
     d = wait_edl(project, lambda d: d.get("selects") == [] and d["floor"]["verdicts"])
     assert d["floor"]["verdicts"][0]["verdict"] == "later"
+    page.wait_for_function("document.querySelector('#ctxClip').textContent === 'CLIP_A'")
     stamped(page, "LATER")
 
 
 # ------------------------------------------------------- rounds and the card
 
+def test_three_verdicts_in_a_row_with_no_enter_land_on_the_closing_card(page, project):
+    """I2.8 1c, Karl: "when I pick, reject, or later a clip, it should move on to the next
+    one. Right now, I'm not sure how you move on". X, U, P — nothing else pressed — and
+    the round is done."""
+    for key, word in (("x", "REJECTED"), ("u", "LATER"), ("p", "PICKED")):
+        page.wait_for_function("floor.state.mode === 'pass' && !floor.current().verdict", timeout=5000)
+        page.keyboard.press(key)
+        stamped(page, word)
+    page.wait_for_selector("#overlay[data-kind=card]", timeout=5000)
+    card = page.locator("#overlayBox").inner_text()
+    assert "3 picks · 3 decided · 3 clips" in card
+    assert "1 moment" in card and "1 later · 1 rejected" in card
+    d = edl(project)
+    assert len(d["selects"]) == 1 and d["selects"][0]["clip"] == "CLIP_C.MP4"
+    assert {v["verdict"] for v in d["floor"]["verdicts"]} == {"reject", "later"}
+    assert page.locator("#hud").inner_text().count("CAPS") == 0, "no switch to find"
+
+
 def test_the_closing_card_appears_after_the_last_pick_and_plays_the_bin(page, project):
-    page.evaluate("floor.setAuto(true)")
     for clip in ("CLIP_A", "CLIP_B", "CLIP_C"):
         page.wait_for_function(
             f"document.querySelector('#ctxClip').textContent === '{clip}'", timeout=5000)
@@ -585,7 +604,6 @@ def test_the_closing_card_appears_after_the_last_pick_and_plays_the_bin(page, pr
 
 
 def test_the_position_resumes_after_a_reload(page, project, live_server):
-    page.evaluate("floor.setAuto(true)")
     playing_at(page, 0.6)
     paused_at(page)
     page.keyboard.press("p")
@@ -625,7 +643,8 @@ def test_the_evidence_drawer_opens_and_any_verdict_closes_it(page, project):
     assert page.locator("#overlay").is_hidden()
     page.keyboard.press("?")
     page.wait_for_selector("#overlay[data-kind=keymap]")
-    assert "auto-advance" in page.locator("#overlayBox").inner_text()
+    keymap = page.locator("#overlayBox").inner_text()
+    assert "skip for now" in keymap and "auto-advance" not in keymap and "Caps" not in keymap
     page.keyboard.press("Escape")
     assert page.locator("#overlay").is_hidden()
     page.keyboard.press("e")
@@ -810,11 +829,15 @@ def test_a_microphone_granted_after_V_was_released_is_kept_and_the_next_hold_rec
 
 def test_a_dictated_note_lands_in_the_slot_and_on_a_decided_pick(page, project):
     """The success path, with the recogniser's answer scripted in the page — the real
-    one is M4's — and a decided pick, so the note goes straight to the EDL."""
+    one is M4's — and a decided pick, so the note goes straight to the EDL. The `later`
+    moves on; ⌫ comes back to the decided pick."""
     playing_at(page, 0.6)
     paused_at(page)
     page.keyboard.press("u")
     wait_edl(project, lambda d: d.get("floor", {}).get("verdicts"))
+    page.wait_for_function("document.querySelector('#ctxClip').textContent === 'CLIP_B'")
+    page.keyboard.press("Backspace")
+    page.wait_for_function("document.querySelector('#ctxClip').textContent === 'CLIP_A'")
     stamped(page, "LATER")                   # the page knows the pick is decided
     page.evaluate("""() => {
         const real = window.fetch.bind(window);
