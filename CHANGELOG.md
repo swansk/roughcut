@@ -130,6 +130,11 @@ same commit. Releases move entries into a dated version section.
   placeholder page. Nothing here spends a model call or touches `segments`.
 
 ### Documentation
+- **Karl's first report on the pass, recorded as the next item (I2.7).** Trimming must be
+  click-and-drag rather than keys; the green band must not grow while he watches; the tape's
+  markers and the zoom strip's relation to it must explain themselves; less on screen. The
+  transcript stays. The tracker carries the four-move plan, the DoD, and one open question
+  (should hold-space ever extend the band). HANDOFF's opener names it as next.
 - **Session 8 closed out in the tracker.** All five intake lanes are merged on `main`;
   `docs/INTAKE.md` records the live verification of `/floor` on Killington (I2.6: 92 picks,
   a verdict written and undone, Karl's EDL left as found), the lane table, the verification

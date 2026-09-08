@@ -52,8 +52,9 @@ I2.1–I2.3 + I2.5 (the pass is live at `/floor`), I3.1 (journal module), M4 (di
 take clusters in `picks.py` first), I3.2/I3.3 (wire the journal into the server — the lead's
 next item; `journal.released_clips()` should replace `released_clips()`), M5 (the open screen),
 I6.2 (telemetry witness with R11's rule: freefall `< 0.5 g ≥ 0.25 s` as a capped corroboration
-term, impacts and tilt as numbers). Karl has not yet used the floor himself — his report is the
-first input of the next session, exactly as with every screen before it.
+term, impacts and tilt as numbers). **Karl used the floor and reported (2026-09-07, bedtime):
+trimming must be click-and-drag, the green band must not grow while playing, the strips need
+to explain themselves. That is I2.7 and it is the next item — before I3.2.**
 
 ## Milestones
 
@@ -104,6 +105,35 @@ first input of the next session, exactly as with every screen before it.
 - [x] I2.3 Rounds of 40 with frozen queue, closing card (counts, "if strung out", arrivals since
       round start; free default ↵ = play the bin; Assemble on `A` with the price). Resume from
       `floor.position` — same commit. The unlooked-stretch warning is omitted this round.
+- [ ] **I2.7 — NEXT. Trim by drag, and make the strips legible** (Karl's first report on the
+      pass, 2026-09-07, bedtime): *"It would be easier if I could adjust the start and end of
+      the clips by clicking and dragging rather than adjusting with keys, like the arrow keys,
+      or watching the green bar … increase as I play. It's fairly nonintuitive and needs to be
+      simpler … I like the transcript. And I like the idea of the green bar, which should show
+      the part that will be turned into a clip. But it's not clear how it fits into the bigger
+      picture, or what the markers are above in the whole clip."*
+      The read: trimming is key-only and the band grows while he watches, so the tool looks
+      like it is deciding; the tape's markers and the zoom strip's relation to the tape are
+      unexplained; too much is on screen. Four moves, in this order:
+      1. **Direct manipulation is the primary path.** The green band is the clip: drag either
+         edge to trim (snap to sentence ends / word starts with the tick lighting up, picture
+         parked on the edge frame, a time readout on the handle), drag the middle to slide the
+         range, click on either strip to seek, click a tape marker to jump to that pick. Keys
+         stay as accelerators.
+      2. **Playing never silently changes the selection.** The band = the preview when the
+         pick loads (decision 1's intent — never keep the machine's whole window blind — still
+         holds); extending is explicit: drag the end or `}`; hold-space only watches.
+         *Decision for Karl, one line: should hold-space also extend the band visibly (a dashed
+         follow that commits on release), or never? Recommendation: never — simplest.*
+      3. **Legible strips.** A time ruler on the tape; this pick as a bright bracket; the other
+         picks in the clip as small markers with a legend in the margin (this · picked · later ·
+         undecided), hover for the reason; a **lens** drawn on the tape showing exactly the
+         seconds the zoomed strip shows, so the two tiers visibly relate.
+      4. **Less on screen.** The key line collapses to the six keys that matter (P X U · space ·
+         [ ] { } · V · ?); the full map stays behind `?`. The transcript stays as it is.
+      DoD: browser tests — pointer down/move/up on a handle changes the kept range on disk and
+      snaps; dragging the middle slides it; clicking a marker jumps picks; the lens tracks the
+      playhead; the band does not change during plain playback. Then a second look by Karl.
 - [ ] I2.4 Compare takes (Survey view) for clustered picks; batch reject via filter.
 - [x] I2.5 Dictation UI: hold `V` → MediaRecorder → `POST /api/dictate` → note attached; clip
       audio ducked while held; `N` edits — same commit, against the 501 stub (falls back to
