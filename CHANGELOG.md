@@ -10,6 +10,17 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The ask reads the bin (docs/INTAKE.md M1).** `revise.originate` and `revise.propose` take
+  `selects=` (the EDL's bin) and the prompt gains a **"## The editor's selects"** section ahead
+  of the ranked events and the inventory — one line per keep with its reason, the editor's
+  note quoted, and `HERO` on the ones that must appear. For a first cut the section is the
+  contract: heroes must appear (the model may trim inside a hero's range, never drop one
+  silently), keeps are bounds to trim inside, the rest of the inventory is connective tissue
+  only; `validate_plan(..., heroes=)` rejects a plan in which no single shot covers half of a
+  hero unless `notes` names that hero's clip, so a dropped hero is always explained and the
+  bounded re-ask tells the model which one. In a revision the same section is context, not a
+  constraint, and the prompt says so. The server does not pass `selects` through yet (one
+  keyword in `_ask_job`, the lead's file); the tests wire it the same way to prove the 502.
 - **The floor's foundations: picks, the bin in the EDL, and every floor endpoint.** The intake
   design (docs/design/cutting-room-floor.html, tracked in docs/INTAKE.md) needs three things
   before any screen exists. `roughcut/picks.py` derives **picks** — windows with witnesses —

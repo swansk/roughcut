@@ -24,6 +24,7 @@ Two design rules, both learned the hard way earlier in this project:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Callable
 
 from . import config
@@ -160,6 +161,74 @@ def events_section(events: list[dict], top: int = 14) -> str:
     return f"{EVENTS_HEADER}\n\n" + "\n".join(lines)
 
 
+# The bin, ahead of the events and the inventory. The design (docs/design/
+# cutting-room-floor.html §5): the first cut is asked *from the bin* — "build the film
+# from these 14 moments, in this spirit" — which is a different and better prompt than
+# "here is 44 minutes, find the film." Heroes are fixed, keeps are bounds the model may
+# trim inside, and the rest of the inventory is there for connective tissue only.
+SELECTS_HEADER = "## The editor's selects"
+
+SELECTS_FIRST_GUIDANCE = """\
+The editor has watched the footage and kept these moments. They are the film's raw
+material, and this section outranks everything below it.
+
+* A line marked **HERO** must appear in the cut. You may trim inside a hero's range;
+  you may never drop one silently. If you truly cannot place a hero, name its clip in
+  `notes` and say why — a plan that drops a hero without saying so is rejected.
+* Every other keep is a bound: build the cut from these ranges, trimming inside them
+  as the rhythm asks, and do not reach outside a keep for more of the same moment. You
+  may leave a keep out; say which in `notes` when you do.
+* The rest of the inventory below is for connective tissue only — an establishing
+  beat, a bridge, a reaction that pays a keep off — never a substitute for what the
+  editor kept.
+* The editor's note on a moment is the closest thing you have to being in the room.
+  Read each one against its moment."""
+
+SELECTS_REVISION_GUIDANCE = """\
+The editor kept these moments when they culled the footage, with their notes. In a
+revision they are context, not constraints: the current edit and the note above are
+what you answer to. Use them to know what the editor valued — a keep that is not in
+the edit is a good place to look when the note asks for more, and a shot that drops a
+line marked **HERO** deserves a word in `notes`."""
+
+
+def selects_section(selects: list[dict] | None, clips: dict[str, dict], *,
+                    first: bool) -> str:
+    """The bin as prompt text, or "" when the editor has kept nothing.
+
+    One line per keep — `clip start-end (dur) — why — editor's note: "..." — HERO` —
+    the words `HERO` and `editor's note` spelled the same way the guidance uses them,
+    so the model can find them. A keep whose clip is not in the inventory (never
+    analysed, or its footage missing) is left out: the model could not cut it anyway,
+    and a hero it cannot see must not be a constraint it cannot satisfy.
+    """
+    rows = [s for s in (selects or [])
+            if s.get("clip") in clips and not s.get("missing")]
+    if not rows:
+        return ""
+    lines = []
+    for s in sorted(rows, key=lambda s: (str(s["clip"]), float(s["start"]))):
+        start, end = float(s["start"]), float(s["end"])
+        parts = [f"{s['clip']} {start:.1f}-{end:.1f} ({end - start:.1f}s)"]
+        if s.get("why"):
+            parts.append(str(s["why"]).strip())
+        if s.get("note"):
+            parts.append(f"editor's note: \"{str(s['note']).strip()}\"")
+        if s.get("hero"):
+            parts.append("HERO")
+        lines.append(" — ".join(parts))
+    guidance = SELECTS_FIRST_GUIDANCE if first else SELECTS_REVISION_GUIDANCE
+    return f"{SELECTS_HEADER}\n\n{guidance}\n\n" + "\n".join(lines)
+
+
+def heroes_of(selects: list[dict] | None, clips: dict[str, dict]) -> list[dict]:
+    """The hero ranges the validator holds a first cut to — only those the prompt
+    actually showed (same filter as `selects_section`)."""
+    return [{"clip": s["clip"], "start": float(s["start"]), "end": float(s["end"])}
+            for s in (selects or [])
+            if s.get("hero") and s.get("clip") in clips and not s.get("missing")]
+
+
 SESSION_GAP_S = 4 * 3600
 
 
@@ -240,7 +309,8 @@ def _clip_block(clip: dict, timeline: dict[str, str] | None = None) -> str:
 
 def build_prompt(segments: list[dict], clips: dict[str, dict], story: str,
                  note: str, target: tuple[float, float],
-                 events: list[dict] | None = None) -> str:
+                 events: list[dict] | None = None,
+                 selects: list[dict] | None = None) -> str:
     current = "\n".join(
         f"  {i + 1:2d}. {s['clip']} {s['in']:.2f}-{s['out']:.2f} "
         f"({s['out'] - s['in']:.1f}s) — {s.get('why', '')}"
@@ -249,7 +319,10 @@ def build_prompt(segments: list[dict], clips: dict[str, dict], story: str,
     timeline = shot_timeline(clips)
     inventory = "\n\n".join(_clip_block(c, timeline) for c in clips.values())
     # Before the inventory, always. A ranked list that arrives after forty clip blocks
-    # is a footnote; the whole point is that it is read first.
+    # is a footnote; the whole point is that it is read first. The bin, when there is
+    # one, goes ahead of even that: it is what the editor chose, not what a pass found.
+    kept = selects_section(selects, clips, first=False)
+    kept = f"{kept}\n\n" if kept else ""
     ranked = events_section(events or [])
     ranked = f"{ranked}\n\n" if ranked else ""
 
@@ -268,7 +341,7 @@ def build_prompt(segments: list[dict], clips: dict[str, dict], story: str,
 ## The editor's note
 {note.strip()}
 
-{ranked}## Every clip available, with its transcript
+{kept}{ranked}## Every clip available, with its transcript
 {inventory}
 
 ## What to return
@@ -283,10 +356,14 @@ reads as a mistake. Say in the `why` when a move is deliberate."""
 
 def build_first_prompt(clips: dict[str, dict], story: str, note: str,
                        target: tuple[float, float],
-                       events: list[dict] | None = None) -> str:
-    """The originating prompt: no current edit, so the material and the brief carry it."""
+                       events: list[dict] | None = None,
+                       selects: list[dict] | None = None) -> str:
+    """The originating prompt: no current edit, so the material and the brief carry it
+    — and the bin, when the editor has culled, which then outranks both."""
     timeline = shot_timeline(clips)
     inventory = "\n\n".join(_clip_block(c, timeline) for c in clips.values())
+    kept = selects_section(selects, clips, first=True)
+    kept = f"{kept}\n\n" if kept else ""
     ranked = events_section(events or [])
     ranked = f"{ranked}\n\n" if ranked else ""
     total = sum(float(c["duration"]) for c in clips.values())
@@ -314,7 +391,7 @@ edit yet; you are making the first one.
 ## How to read this material
 {guidance}
 
-{ranked}## Every clip available, with its transcript
+{kept}{ranked}## Every clip available, with its transcript
 {inventory}
 
 ## What to return
@@ -322,7 +399,8 @@ A complete first cut as an ordered list of segments — the order they should pl
 not the order the clips were shot. Timestamps are seconds within the named clip. Cut
 on utterance boundaries visible in the transcripts above. Every segment needs a `why`:
 one sentence on what that moment is for. In `notes`, say what you decided this film is
-about and what you would look at first if it is wrong."""
+about and what you would look at first if it is wrong\
+{" — and name any of the editor's selects you left out, heroes first." if kept else "."}"""
 
 
 SHOT_SYSTEM = (
@@ -416,10 +494,48 @@ def propose_shot(segments: list[dict], index: int, clips: dict[str, dict],
                 SHOT_SYSTEM, scoped, on_partial)
 
 
-def validate_plan(payload: Any, clips: dict[str, dict]) -> dict:
+# A hero counts as placed when one shot covers at least this much of its range — the
+# model may trim inside a hero, and half of it is still the moment.
+HERO_MIN_OVERLAP = 0.5
+
+
+def _overlap(a: tuple[float, float], b: tuple[float, float]) -> float:
+    return max(0.0, min(a[1], b[1]) - max(a[0], b[0]))
+
+
+def _names_clip(notes: str, clip: str) -> bool:
+    """Whether `notes` mentions the clip — by file name or by stem, since a model that
+    writes "left CLIP_06 out" has explained itself as well as one that writes the
+    extension."""
+    text = notes.lower()
+    return clip.lower() in text or Path(clip).stem.lower() in text
+
+
+def dropped_heroes(segments: list[dict], heroes: list[dict]) -> list[dict]:
+    """The heroes no single segment covers to HERO_MIN_OVERLAP of their length."""
+    out = []
+    for h in heroes:
+        span = (float(h["start"]), float(h["end"]))
+        length = max(1e-6, span[1] - span[0])
+        best = max((_overlap(span, (float(s["in"]), float(s["out"])))
+                    for s in segments if s.get("clip") == h.get("clip")), default=0.0)
+        if best / length < HERO_MIN_OVERLAP:
+            out.append(h)
+    return out
+
+
+def validate_plan(payload: Any, clips: dict[str, dict],
+                  heroes: list[dict] | None = None) -> dict:
     """Strict. A plausible-looking plan that names a clip we do not have, or runs
     past the end of one, is worse than a loud failure — it renders as a crash or,
-    worse, as silently missing footage."""
+    worse, as silently missing footage.
+
+    `heroes` — ranges `{clip, start, end}` the editor marked must-appear — extends the
+    contract: a plan that covers less than half of a hero with any one shot is rejected
+    unless `notes` names that hero's clip. The model may drop a hero; it must say so,
+    because "hero = must appear, model may trim inside" (docs/INTAKE.md, defaults) is
+    only honest if a dropped one is visible to the editor rather than quietly gone.
+    """
     if not isinstance(payload, dict) or "segments" not in payload:
         raise ValueError("expected an object with a 'segments' list")
     segments = payload["segments"]
@@ -444,7 +560,15 @@ def validate_plan(payload: Any, clips: dict[str, dict]) -> dict:
         clean.append({"clip": clip, "in": round(t_in, 2),
                       "out": round(min(t_out, duration), 2),
                       "why": str(seg.get("why", "")).strip()[:200]})
-    return {"segments": clean, "notes": str(payload.get("notes", "")).strip()[:1200]}
+    notes = str(payload.get("notes", "")).strip()[:1200]
+    for h in dropped_heroes(clean, heroes or []):
+        if not _names_clip(notes, str(h["clip"])):
+            raise ValueError(
+                f"the plan drops the editor's hero {h['clip']} "
+                f"{float(h['start']):.1f}-{float(h['end']):.1f} without saying why: "
+                f"keep it (trimming inside its range is fine) or name {h['clip']} "
+                f"in notes and explain")
+    return {"segments": clean, "notes": notes}
 
 
 # ------------------------------------------------------------------ progress
@@ -550,10 +674,11 @@ thinking enabled, and it must return the whole edit as JSON.
 
 
 def _ask(prompt: str, system: str, clips: dict[str, dict],
-         on_partial: Callable[[str, str], None] | None = None) -> dict:
+         on_partial: Callable[[str, str], None] | None = None,
+         heroes: list[dict] | None = None) -> dict:
     result = complete(
         prompt, role=config.ROLE_SKELETON, schema=PLAN_SCHEMA, system=system,
-        validate=lambda payload: validate_plan(payload, clips), retries=1,
+        validate=lambda payload: validate_plan(payload, clips, heroes), retries=1,
         on_partial=on_partial)
     # Boundary polish runs on the *validated* plan, so it can assume in/out are
     # real numbers inside a real clip and worry only about where they land in the
@@ -572,18 +697,24 @@ def _ask(prompt: str, system: str, clips: dict[str, dict],
 def propose(segments: list[dict], clips: dict[str, dict], story: str, note: str,
             target: tuple[float, float] = (120.0, 180.0),
             events: list[dict] | None = None,
-            on_partial: Callable[[str, str], None] | None = None) -> dict:
-    """Ask for a revision. Returns {'segments', 'notes', 'usage'}."""
+            on_partial: Callable[[str, str], None] | None = None,
+            selects: list[dict] | None = None) -> dict:
+    """Ask for a revision. Returns {'segments', 'notes', 'usage'}.
+
+    `selects` — the bin (`edl["selects"]`) — is context here, not a constraint: the
+    editor has already accepted a cut, and the note is what they are steering by now.
+    """
     if not note.strip():
         raise ValueError("empty note")
-    return _ask(build_prompt(segments, clips, story, note, target, events),
+    return _ask(build_prompt(segments, clips, story, note, target, events, selects),
                 SYSTEM, clips, on_partial)
 
 
 def originate(clips: dict[str, dict], story: str, note: str = "",
               target: tuple[float, float] = (120.0, 180.0),
               events: list[dict] | None = None,
-              on_partial: Callable[[str, str], None] | None = None) -> dict:
+              on_partial: Callable[[str, str], None] | None = None,
+              selects: list[dict] | None = None) -> dict:
     """Ask for a *first* cut. Same return shape as `propose`.
 
     Neither `story` nor `note` is required. Intent is the human's half of the loop and
@@ -591,8 +722,12 @@ def originate(clips: dict[str, dict], story: str, note: str = "",
     start without it would make the empty timeline a dead end again, which is the exact
     problem this removes. With no brief the model is told to infer one and to say what
     it inferred, so the guess is visible and correctable rather than silent.
+
+    `selects` — the bin (`edl["selects"]`) — turns this from "find the film in 44
+    minutes" into "build the film from these moments": heroes are held to by the
+    validator, keeps are bounds, the inventory is connective tissue.
     """
     if not clips:
         raise ValueError("no analysed clips to cut from")
-    return _ask(build_first_prompt(clips, story, note, target, events),
-                FIRST_SYSTEM, clips, on_partial)
+    return _ask(build_first_prompt(clips, story, note, target, events, selects),
+                FIRST_SYSTEM, clips, on_partial, heroes=heroes_of(selects, clips))
