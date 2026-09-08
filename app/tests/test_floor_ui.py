@@ -453,6 +453,62 @@ def test_clicking_a_strip_seeks_the_playhead_and_the_lens_tracks_it(page):
     assert 22.0 < lens(page)[1] < 26.0                                      # 0-(9..10) of 40
 
 
+def tape_keep(page) -> tuple[float, float]:
+    """The kept range's band on the tape: left and width in percent of the clip."""
+    return tuple(page.evaluate(
+        "[parseFloat(document.querySelector('#tapeKeep').style.left),"
+        " parseFloat(document.querySelector('#tapeKeep').style.width)]"))
+
+
+def test_the_kept_range_is_a_green_band_on_the_tape_and_the_panel_says_where_it_sits(page):
+    """I2.8 1b. Karl: "it is unclear where the subclip is within the whole clip timeline".
+    The tape carries the kept range as a solid band inside this pick's bracket, following
+    the handles while the pointer is down; the bridge between the strips fans the lens
+    out to the closer strip's full width and carries the playhead across; and the panel
+    says it in words. The clip is told it is 40 s long so the numbers are not all 0 and
+    100 — the picture still has 6."""
+    page.evaluate("floor.current().duration = 40; floor.show(0, { autoplay: false })")
+    page.wait_for_function("document.querySelector('#pic').paused")
+    assert page.evaluate("floor.keepRange().snapped") == [0.0, 6.0]
+    assert tape_keep(page) == pytest.approx((0.0, 15.0), abs=0.05)              # 0-6 of 40
+    assert page.locator("#tapeMarks span.now").count() == 1, "the bracket stays"
+    assert page.locator("#ctxWhere").inner_text() == "0:00 → 0:06 of 0:40 · 0 % in"
+    assert "the clip you keep" in page.locator("#legend").inner_text()
+    # the bridge: the lens's edges (0-8 of 40) fan out to the strip's full width, and the
+    # playhead's line runs from its place on the tape to the strip's centre
+    lens_at(page, 0.0, 20.0)
+    assert page.get_attribute("#bridgeLens", "points") == "0.0,0 200.0,0 1000,16 0,16"
+    assert page.get_attribute("#bridgeHead", "x1") == "0.0"
+    assert page.get_attribute("#bridgeHead", "x2") == "500.0"
+    page.evaluate("floor.seek(3)")
+    page.wait_for_function("document.querySelector('#bridgeHead').getAttribute('x1') === '75.0'")
+    assert page.get_attribute("#bridgeLens", "points") == "0.0,0 275.0,0 1000,16 0,16"
+    # the out handle dragged to 4.5 s takes the tick at 4.45: the tape's band follows while
+    # the pointer is still down
+    x, y = center(page, "#handleOut")
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x - 60, y, steps=4)
+    page.mouse.move(x - 120, y, steps=4)
+    assert page.evaluate("floor.keepRange().snapped") == [0.0, 4.45]
+    assert tape_keep(page) == pytest.approx((0.0, 11.12), abs=0.05)
+    page.mouse.up()
+    assert tape_keep(page) == pytest.approx((0.0, 11.12), abs=0.05)
+    # the in handle to "there" at 1.2: the band's left edge moves and the words follow
+    x, y = center(page, "#handleIn")
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + 92, y, steps=6)
+    page.mouse.up()
+    assert page.evaluate("floor.keepRange().snapped") == [1.2, 4.45]
+    assert tape_keep(page) == pytest.approx((3.0, 8.12), abs=0.05)
+    assert page.locator("#ctxWhere").inner_text() == "0:01 → 0:04 of 0:40 · 3 % in"
+    # the same green on both strips
+    tape_bg = page.evaluate("getComputedStyle(document.querySelector('#tapeKeep')).backgroundColor")
+    zoom_bg = page.evaluate("getComputedStyle(document.querySelector('#zoomKeep')).backgroundColor")
+    assert tape_bg.startswith("rgba(100, 208, 138") and zoom_bg.startswith("rgba(100, 208, 138")
+
+
 # --------------------------------------------------------------------- undo
 
 def test_ctrl_z_restores_the_verdict_with_its_trim_and_note(page, project):

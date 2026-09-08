@@ -364,6 +364,7 @@ function paintContext() {
     $('#ctxClip').textContent = stem(p.clip);
     $('#ctxClipMeta').textContent = `· ${fmt(dur)}`;
     $('#ctxPick').textContent = `${fmt(p.start)} → ${fmt(p.end)}`;
+    $('#ctxWhere').textContent = `${clock(p.start)} → ${clock(p.end)} of ${clock(dur)} · ${Math.round(100 * p.start / (dur || 1))} % in`;
     $('#ctxOthers').textContent = `playing the bin · ${F.bin.k + 1} of ${F.bin.list.length} · Esc stops`;
     $('#ctxKeep').textContent = p.hero ? 'HERO' : 'kept';
     $('#ctxSnap').textContent = p.why || '';
@@ -408,6 +409,12 @@ function paintKeep(force) {
     ? `<span class="key">}</span> extend to the next line: "${escapeHtml(nxt.text || '')}" at ${fmt(nxt.start)}`
     : '';
   $('#zoomInfo').textContent = `keeping ${fmt(a)} → ${fmt(b)} · ${(b - a).toFixed(1)} s`;
+  // the same range on the tape, solid, and in words: where the clip sits in the whole clip
+  // (Karl, 2026-09-08: "unclear where the subclip is within the whole clip timeline")
+  const dur = p.duration || 1;
+  $('#tapeKeep').style.left = `${(100 * a / dur).toFixed(2)}%`;
+  $('#tapeKeep').style.width = `${(100 * (b - a) / dur).toFixed(2)}%`;
+  $('#ctxWhere').textContent = `${clock(a)} → ${clock(b)} of ${clock(dur)} · ${Math.round(100 * a / dur)} % in`;
   // words inside the keep light up
   $('#zoomInner').querySelectorAll('.w, .sb').forEach((el) => {
     const t0 = parseFloat(el.dataset.t0), t1 = parseFloat(el.dataset.t1);
@@ -612,9 +619,18 @@ function paintHead(t) {
   // strip out from under the finger.
   const x0 = zoom.lock != null ? zoom.lock : width / 2 - t * zoom.pps;
   $('#zoomInner').style.transform = `translateX(${x0.toFixed(1)}px)`;
-  $('#zoomHead').style.left = zoom.lock != null ? `${(x0 + t * zoom.pps).toFixed(1)}px` : '50%';
+  const headPx = zoom.lock != null ? x0 + t * zoom.pps : width / 2;
+  $('#zoomHead').style.left = zoom.lock != null ? `${headPx.toFixed(1)}px` : '50%';
+  // the bridge: the lens's edges on the tape fan out to the closer strip's full width, and
+  // the playhead runs from where it is on the tape to where it is on the strip
+  $('#bridgeLens').setAttribute('points',
+    `${(1000 * l0 / dur).toFixed(1)},0 ${(1000 * l1 / dur).toFixed(1)},0 1000,16 0,16`);
+  const bh = $('#bridgeHead');
+  bh.setAttribute('x1', (1000 * Math.min(1, t / dur)).toFixed(1));
+  bh.setAttribute('x2', (1000 * headPx / width).toFixed(1));
   if (F.mode !== 'pass') {
     $('#zoomKeep').style.width = '0';
+    $('#tapeKeep').style.width = '0';
     $('#handleIn').hidden = $('#handleOut').hidden = true;
     $('#zoomHint').textContent = '';
     return;

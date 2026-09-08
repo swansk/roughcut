@@ -56,7 +56,7 @@
   #picture { position: relative; display: flex; align-items: center; justify-content: center;
              background: #050507; min-width: 0; min-height: 0; }
   #frame { position: relative; max-width: 100%; max-height: 100%; aspect-ratio: 16 / 9;
-           width: min(100%, calc((100vh - 320px) * 16 / 9)); background: #000; border-radius: 4px;
+           width: min(100%, calc((100vh - 336px) * 16 / 9)); background: #000; border-radius: 4px;
            overflow: hidden; }
   #pic { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
   #stamp { position: absolute; left: 26px; top: 22px; z-index: 6; font: 800 34px var(--display);
@@ -82,6 +82,7 @@
   .sw.pick { background: var(--good); }
   .sw.later { background: var(--warn); }
   .sw.lens { width: 15px; background: rgba(207,214,228,.1); border: 1px solid rgba(207,214,228,.5); }
+  .sw.keep { background: rgba(100,208,138,.72); border: 1px solid var(--good); }
 
   /* seals: three states, colour AND the word */
   .seal { display: flex; flex-direction: column; gap: 1px; font: 500 10.5px var(--mono);
@@ -146,8 +147,18 @@
                         pointer-events: none; }
   #tapeMarks span.jump { cursor: pointer; }
   #tapeMarks span.jump:hover { outline: 1px solid #cfd6e4; }
+  /* the kept range on the tape: the same green as the closer strip's band, solid, inside the
+   * bracket — so where the clip sits in the whole clip is never a guess (I2.8 1b) */
+  #tapeKeep { position: absolute; top: 35px; height: 14px; background: rgba(100,208,138,.72);
+              border-top: 1px solid var(--good); border-bottom: 1px solid var(--good); z-index: 1;
+              pointer-events: none; }
   #tapeHead { position: absolute; top: 0; bottom: 0; width: 1px; background: #fff; opacity: .7; z-index: 3;
               pointer-events: none; }
+  #bridge { position: relative; height: 16px; background: #0b0b0f; flex: none; }
+  #bridgeSvg { display: block; width: 100%; height: 16px; }
+  #bridgeLens { fill: rgba(207,214,228,.07); stroke: rgba(207,214,228,.4); stroke-width: 1;
+                vector-effect: non-scaling-stroke; }
+  #bridgeHead { stroke: #fff; stroke-width: 1; opacity: .7; vector-effect: non-scaling-stroke; }
   #zoom { position: relative; height: 78px; background: #0d0d12; border-top: 1px solid #26262f;
           border-bottom: 1px solid #26262f; overflow: hidden; flex: none; cursor: crosshair;
           touch-action: none; user-select: none; }
@@ -238,9 +249,10 @@
   <div id="stage">
     <aside id="left">
       <div><div class="lbl">Clip</div><b id="ctxClip" style="font-size:12px"></b> <span id="ctxClipMeta" class="hint"></span></div>
-      <div><div class="lbl">This pick</div><span id="ctxPick" class="tnum"></span><br><span id="ctxOthers" class="hint"></span></div>
+      <div><div class="lbl">This pick</div><span id="ctxPick" class="tnum"></span><br>
+           <span id="ctxWhere" class="tnum good"></span><br><span id="ctxOthers" class="hint"></span></div>
       <div id="legend" class="hint small"><div class="lbl">On the tape</div>
-        <span><i class="sw now"></i>this</span><span><i class="sw pick"></i>picked</span><span><i class="sw later"></i>later</span><span><i class="sw"></i>undecided</span><br>
+        <span><i class="sw keep"></i>the clip you keep</span><span><i class="sw now"></i>this pick</span><span><i class="sw pick"></i>picked</span><span><i class="sw later"></i>later</span><span><i class="sw"></i>undecided</span><br>
         <span><i class="sw lens"></i>the lens: what CLOSER shows</span></div>
       <div><div class="lbl">Keeping</div><span id="ctxKeep" class="tnum good"></span><br>
            <span id="ctxSnap" class="hint"></span><br><span id="ctxExtend" class="hint"></span></div>
@@ -280,7 +292,16 @@
     <div id="tapeRuler"></div>
     <div id="tapeLens"></div>
     <div id="tapeMarks"></div>
+    <div id="tapeKeep" title="the kept range — the clip — where it sits in the whole clip"></div>
     <div id="tapeHead"></div>
+  </div>
+  <!-- the bridge: the lens's edges on the tape fan out to the closer strip's full width, and
+       the playhead runs from the one to the other, so the eye reads "these seconds of that clip" -->
+  <div id="bridge" aria-hidden="true">
+    <svg id="bridgeSvg" viewBox="0 0 1000 16" preserveAspectRatio="none">
+      <polygon id="bridgeLens" points="0,0 1000,0 1000,16 0,16"></polygon>
+      <line id="bridgeHead" x1="0" y1="0" x2="500" y2="16"></line>
+    </svg>
   </div>
   <div id="zoom">
     <span class="strip-lbl">CLOSER · ±8 s AROUND THE PLAYHEAD · the green band is the clip — drag its edges to trim, its middle to slide</span>

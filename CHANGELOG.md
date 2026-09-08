@@ -10,6 +10,17 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Changed
+- **Where the subclip sits in the whole clip is painted, bridged and said (INTAKE I2.8,
+  1b).** Karl: *"it is unclear where the subclip is within the whole clip timeline on the
+  pass"*. The tape now carries the kept range as a solid green band — the closer strip's
+  green, the same edges, following the handles while a drag is in progress — inside the
+  hollow bracket that still marks this pick's full window; a 16 px bridge between the two
+  strips fans the lens's edges on the tape out to the closer strip's full width and runs
+  the playhead's line from its place on the tape to its place on the strip, so the eye
+  reads "these 16 s of that 5 min"; and the THIS PICK panel says it in words: `2:20 → 2:27
+  of 5:18 · 44 % in`. The legend names the band. One browser test: the band's left and
+  width follow `keepRange()` through a drag of each handle, the bridge follows the lens and
+  the playhead, the words read right.
 - **The audio note works in a browser (INTAKE I2.8, 1a).** Karl: *"the audio note doesn't
   work"* — and the server was fine (a real recording came back in 4 s). The browser flow
   in `floor.js` was the failure: Chrome's first-time permission prompt let V come up before
