@@ -18,6 +18,7 @@ Skipped, not failed, when playwright is absent:
 
 from __future__ import annotations
 
+import json
 import socket
 import threading
 import time
@@ -70,11 +71,16 @@ def bin_server(project, tmp_path_factory):
 @pytest.fixture
 def page(bin_server):
     with sync_playwright() as pw:
-        browser = pw.chromium.launch()
+        # a fake microphone, so holding the mic (or V) records — the floor's arrangement
+        browser = pw.chromium.launch(args=[
+            "--use-fake-ui-for-media-stream",
+            "--use-fake-device-for-media-stream",
+        ])
         pg = browser.new_page(viewport={"width": 1280, "height": 900})
         pg.goto(f"{bin_server['url']}/open")
         pg.wait_for_function(
-            "window.sheet && sheet.state.clips && sheet.state.status && sheet.state.index",
+            "window.sheet && sheet.state.clips && sheet.state.status && sheet.state.index"
+            " && sheet.state.themes",
             timeout=15000)
         yield pg
         browser.close()
@@ -259,3 +265,228 @@ def test_a_second_run_while_one_is_going_is_refused_not_doubled(page):
     page.wait_for_function(
         "document.querySelector('#toast').textContent.includes('already running')", timeout=5000)
     assert page.locator("#indexBtn").is_enabled()
+
+
+# ----------------------------------------------------------- the themes (I5.2)
+#
+# The proposal is one judge-role call, so the backend is scripted the way test_themes.py
+# scripts it — the live server runs in this process, so `inference`'s module state is
+# shared with it. Every write goes to the EDL that configure(None, …) scaffolded under
+# the work dir; the tests read that file, never the page's word on it.
+
+PROPOSAL = {
+    "themes": [{"theme": "the greeting", "why": "every clip opens on it",
+                "clips": ["CLIP_A.MP4", "CLIP_B.MP4"], "lines": ["hello there"]},
+               {"theme": "saying goodbye", "why": "a payoff", "clips": ["CLIP_C.MP4"],
+                "lines": ["goodbye"]}],
+    "names": ["Spenny"], "notes": "people meeting and parting",
+}
+
+
+def scripted(payload: dict, delay: float = 0.0):
+    """A backend that answers `payload` after `delay` seconds and remembers the request."""
+    from roughcut import config, inference
+
+    class Scripted:
+        name = "scripted"
+        seen: list = []
+
+        def complete(self, request):
+            Scripted.seen.append(request)
+            time.sleep(delay)
+            text = json.dumps(payload)
+            return inference.Result(content=text, input_tokens=10, output_tokens=5,
+                                    backend="scripted", model=config.model_for(request.role),
+                                    projected_usd=1e-4, latency_ms=1, raw=text)
+
+    return Scripted
+
+
+def edl(bin_server, project) -> dict:
+    path = bin_server["work"] / "projects" / f"{project['footage'].name}.edl.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def wait_edl(bin_server, project, pred, timeout=8.0) -> dict:
+    deadline = time.time() + timeout
+    while True:
+        d = edl(bin_server, project)
+        if pred(d):
+            return d
+        if time.time() > deadline:
+            raise AssertionError(f"EDL never satisfied the predicate: {json.dumps(d)[:800]}")
+        time.sleep(0.05)
+
+
+def chips(page, sel: str) -> list[dict]:
+    return page.evaluate(f"""() => Array.from(document.querySelectorAll('{sel} .chip')).map(c => ({{
+        text: c.textContent.trim(), on: c.getAttribute('aria-checked') === 'true'}}))""")
+
+
+def test_the_proposal_is_priced_before_the_button_and_themes_never_score(page):
+    t = api(page, "/api/themes")
+    assert t["analysed"] == 3 and t["themes"] == [] and t["job"] is None
+    price = page.locator("#themesPrice").inner_text()
+    assert f"~${t['projected_usd']:.2f}" in price and "one call over the transcripts" in price, price
+    assert page.locator("#proposeBtn").is_enabled()
+    assert page.locator("#mic").is_visible()
+    assert page.locator("#story").get_attribute("placeholder") == "what is this film about? (optional)"
+    hint = page.locator("#themesHint").inner_text()
+    assert "never score" in hint and "order the index" in hint and "lift and tag" in hint, hint
+    for sel in ("#themesEdit", "#themesKept", "#themesRunning"):
+        assert page.locator(sel).is_hidden(), sel
+    assert "done" not in page.locator("[data-step=themes]").get_attribute("class")
+    # a bin the audio pass has not heard: the section says so and the button is disabled
+    page.evaluate("() => { sheet.state.themes.analysed = 0; sheet.renderThemes(); }")
+    assert "has not listened yet" in page.locator("#themesPrice").inner_text()
+    assert page.locator("#proposeBtn").is_disabled()
+
+
+def test_a_discarded_proposal_writes_nothing(page, bin_server, project):
+    from roughcut import inference
+    S = scripted(PROPOSAL)
+    inference.set_backend(S())
+    inference.reset_spend()
+    try:
+        page.locator("#proposeBtn").click()
+        page.wait_for_selector("#themesEdit:not([hidden])", timeout=15000)
+        assert len(chips(page, "#chips")) == 2
+        page.locator("#chips .chip").first.click()        # untick one, add one, then throw it all away
+        page.locator("#addTheme").fill("ski patrol")
+        page.locator("#addTheme").press("Enter")
+        assert len(chips(page, "#chips")) == 3
+        page.locator("#discardBtn").click()
+    finally:
+        inference.set_backend(None)
+    page.wait_for_function("document.querySelector('#toast').textContent.includes('nothing was written')")
+    assert page.locator("#themesEdit").is_hidden() and page.locator("#themesAsk").is_visible()
+    assert page.locator("#themesKept").is_hidden()
+    d = edl(bin_server, project)
+    assert not d.get("themes") and not d.get("names"), d
+    assert api(page, "/api/themes")["themes"] == []
+
+
+def test_propose_shows_chips_with_counts_and_keep_writes_exactly_the_ticked_ones(page, bin_server, project):
+    from roughcut import inference
+    S = scripted(PROPOSAL, delay=1.0)                    # long enough for "listening…" to show
+    inference.set_backend(S())
+    inference.reset_spend()
+    try:
+        page.locator("#story").fill("two people talking")
+        page.locator("#proposeBtn").click()
+        page.wait_for_selector("#themesRunning:not([hidden])", timeout=5000)
+        assert "listening" in page.locator("#themesRunning").inner_text()
+        assert page.locator("#themesAsk").is_hidden()
+        page.wait_for_selector("#themesEdit:not([hidden])", timeout=20000)
+    finally:
+        inference.set_backend(None)
+    assert len(S.seen) == 1 and "two people talking" in S.seen[0].prompt
+    assert chips(page, "#chips") == [{"text": "✓ the greeting · 2 clips", "on": True},
+                                     {"text": "✓ saying goodbye · 1 clip", "on": True}]
+    names = page.locator("#nameChips")
+    assert "people" in names.inner_text()
+    assert chips(page, "#nameChips") == [{"text": "✓ Spenny", "on": True}]
+    assert "people meeting and parting" in page.locator("#themesNotes").inner_text()
+    # hover: the quoted line and the why
+    page.locator("#chips .chip").nth(1).hover()
+    why = page.locator("#themeWhy").inner_text()
+    assert "goodbye" in why and "a payoff" in why, why
+    # untick one, add one of your own; nothing has reached the EDL yet
+    page.locator("#chips .chip").nth(1).click()
+    page.locator("#addTheme").fill("the milk joke")
+    page.locator("#addTheme").press("Enter")
+    assert chips(page, "#chips") == [{"text": "✓ the greeting · 2 clips", "on": True},
+                                     {"text": "+ saying goodbye · 1 clip", "on": False},
+                                     {"text": "✓ the milk joke", "on": True}]
+    assert page.locator("#addTheme").input_value() == ""
+    assert "nothing reaches the EDL until Keep" in page.locator("#keepHint").inner_text()
+    assert not edl(bin_server, project).get("themes")
+    page.locator("#keepBtn").click()
+    page.wait_for_selector("#themesKept:not([hidden])", timeout=5000)
+    d = edl(bin_server, project)
+    assert d["themes"] == ["the greeting", "the milk joke"], d["themes"]
+    assert d["names"] == ["Spenny"] and d["story"] == "two people talking"
+    # the resting state: the kept chips, change, propose again with its price
+    assert [c["text"] for c in chips(page, "#keptChips")] == ["✓ the greeting", "✓ the milk joke"]
+    assert [c["text"] for c in chips(page, "#keptNames")] == ["✓ Spenny"]
+    assert "~$" in page.locator("#againBtn").inner_text()
+    assert page.locator("#changeBtn").is_visible()
+    assert "done" in page.locator("[data-step=themes]").get_attribute("class")
+    assert api(page, "/api/themes")["themes"] == ["the greeting", "the milk joke"]
+
+
+def test_change_reopens_the_kept_chips_and_keep_writes_what_is_left_ticked(page, bin_server, project):
+    page.wait_for_selector("#themesKept:not([hidden])", timeout=5000)
+    page.locator("#changeBtn").click()
+    page.wait_for_selector("#themesEdit:not([hidden])", timeout=3000)
+    assert chips(page, "#chips") == [{"text": "✓ the greeting", "on": True},
+                                     {"text": "✓ the milk joke", "on": True}]
+    page.locator("#chips .chip").first.click()
+    page.locator("#discardBtn").click()               # a change discarded changes nothing
+    page.wait_for_selector("#themesKept:not([hidden])", timeout=3000)
+    assert edl(bin_server, project)["themes"] == ["the greeting", "the milk joke"]
+    page.locator("#changeBtn").click()
+    page.locator("#chips .chip").first.click()
+    page.locator("#keepBtn").click()
+    page.wait_for_selector("#themesKept:not([hidden])", timeout=5000)
+    d = edl(bin_server, project)
+    assert d["themes"] == ["the milk joke"] and d["names"] == ["Spenny"], d
+    assert [c["text"] for c in chips(page, "#keptChips")] == ["✓ the milk joke"]
+
+
+# ----------------------------------------------------------------- dictation
+
+def test_the_mic_hides_on_a_501_and_typing_stays(page, monkeypatch, bin_server, project):
+    """Dictation is real on this tree (M4), so its absence is simulated — the server runs
+    in this process. The hold records and posts; the 501 hides the mic; V is a letter."""
+    from roughcut import dictate
+    monkeypatch.setattr(dictate, "available", lambda: False)
+    hits: list[int] = []
+    page.on("response", lambda r: hits.append(r.status) if "/api/dictate" in r.url else None)
+    mic = page.locator("#mic")
+    assert mic.is_visible()
+    box = mic.bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.wait_for_function(
+        "document.querySelector('#dictState').textContent.includes('listening')", timeout=3000)
+    page.wait_for_timeout(700)
+    page.mouse.up()
+    page.wait_for_function(
+        "document.querySelector('#toast').textContent.includes('dictation not built yet')",
+        timeout=10000)
+    assert hits == [501], hits
+    assert mic.is_hidden()
+    assert page.evaluate("sheet.state.dictation") is False
+    # typing stays, v included, and the story is saved when the field settles
+    page.locator("#story").fill("")                   # the field opens on the EDL's story
+    page.locator("#story").click()
+    page.keyboard.type("very silly skiing")
+    assert page.locator("#story").input_value() == "very silly skiing"
+    page.evaluate("document.querySelector('#story').blur()")
+    wait_edl(bin_server, project, lambda d: d.get("story") == "very silly skiing")
+
+
+def test_holding_V_in_the_story_dictates_into_it_and_a_tap_types(page, monkeypatch, bin_server, project):
+    """The success path with the recogniser stubbed on the server: the recording goes
+    through POST /api/dictate for real and the stub's text lands in the field."""
+    from roughcut import dictate
+    monkeypatch.setattr(dictate, "available", lambda: True)
+    monkeypatch.setattr(dictate, "transcribe", lambda path, names=None: {
+        "text": "my friends and me skiing", "latency_ms": 800, "model": "stub", "duration_s": 0.7})
+    story = page.locator("#story")
+    story.fill("")
+    story.click()
+    page.keyboard.press("v")                          # a tap types the letter
+    assert story.input_value() == "v"
+    page.keyboard.down("v")                           # a hold speaks
+    page.wait_for_function(
+        "document.querySelector('#dictState').textContent.includes('listening')", timeout=3000)
+    page.wait_for_timeout(700)
+    page.keyboard.up("v")
+    page.wait_for_function(
+        "document.querySelector('#story').value.includes('my friends and me skiing')", timeout=10000)
+    assert story.input_value() == "v my friends and me skiing"
+    assert "0.8 s" in page.locator("#dictState").inner_text()
+    assert page.locator("#mic").is_visible()
+    wait_edl(bin_server, project, lambda d: d.get("story") == "v my friends and me skiing")

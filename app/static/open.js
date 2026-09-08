@@ -6,10 +6,13 @@
  * word on every clip while the index runs. Framework-free like app.js and floor.js,
  * served from disk; it borrows their patterns by copy.
  *
- * One action spends money: **Index the footage** → POST /api/index (decision 3: unattended,
- * resumable, priority-ordered, releasing clips whole). Everything else here is ffprobe
- * and file checks. While a run is going the page polls GET /api/index every 2 s; the run
- * lives in the server, so closing the tab changes nothing.
+ * Two actions spend money. **Index the footage** → POST /api/index (decision 3: unattended,
+ * resumable, priority-ordered, releasing clips whole). **Propose themes** → POST
+ * /api/themes/propose (INTAKE I5.2): one judge-role call over the transcripts, priced
+ * before the button, whose answer is chips the editor keeps or discards — nothing from a
+ * proposal is the EDL's word until Keep. Everything else here is ffprobe and file checks.
+ * While a run is going the page polls GET /api/index every 2 s; the run lives in the
+ * server, so closing the tab changes nothing.
  */
 
 'use strict';
@@ -21,6 +24,8 @@ const STAGES = ['probe', 'telemetry', 'asr', 'proxy', 'look', 'close', 'picks'];
 const STAGE_LABEL = { telemetry: 'tele' };
 const SETTLED = new Set(['done', 'skipped']);
 const POLL_MS = 2000;
+const THEMES_POLL_MS = 500;      // the proposal is one short call; its job is polled closer
+const HOLD_MS = 250;             // V held longer than this in the story field speaks; a tap types
 const ORDER_WORD = { priority: 'most promising first', capture: 'capture order' };
 
 const clock = (s) => {
@@ -75,6 +80,13 @@ const O = {
   busy: false,             // a POST in flight — the button is disabled meanwhile
   timer: null,
   polls: 0,                // how many times the page has asked while a run was going
+  themes: null,            // /api/themes — the EDL's kept themes + names, the story, the price of proposing
+  proposal: null,          // a proposal being edited: {themes:[{theme, why, clips, lines, kept}], names:[{name, kept}]}
+  tjob: null,              // the id of the proposal job this page started or found running
+  tbusy: false,            // a themes POST/PUT in flight
+  ttimer: null,
+  story: null,             // the story as last saved to the EDL; null until /api/themes has answered
+  dictation: null,         // null until tried; false once the recogniser said 501 (the mic hides)
 };
 
 /* ------------------------------------------------------------ the sheet */
@@ -269,6 +281,347 @@ function renderIndex() {
     `<div><b>${escapeHtml(timeOf(e.at))}</b>${escapeHtml(e.what)}</div>`).join('');
 }
 
+/* ---------------------------------------------------------------- themes */
+
+// Listen first, then propose (design §2, Fig. 1). The story is the brief the proposal
+// reads; the chips are its answer — one per theme with its clip count, the quoted line
+// and the why on hover — and each is a toggle the editor keeps or not. Themes are a brief
+// and a filter (INTAKE Decisions): the pass lifts and tags picks that match them and the
+// journal's priority counts theme hits; they never score. Nothing from a proposal
+// reaches the EDL until Keep, which is one PUT of exactly the ticked ones.
+
+function themePrice() {
+  const p = O.themes && O.themes.projected_usd;
+  return p == null ? '' : `~${usd(p)}`;
+}
+
+function whyOf(t) {
+  if (t.clips === null) return t.own ? 'your own — the pass tags what matches it' : 'kept — change to edit';
+  const line = (t.lines || [])[0];
+  return `${line ? `“${line}” — ` : ''}${t.why || `in ${plural(t.clips.length, 'clip')}`}`;
+}
+
+function chipHtml(t, i, cls, attr) {
+  const n = t.clips ? ` <span class="n">· ${plural(t.clips.length, 'clip')}</span>` : '';
+  return `<button type="button" class="chip${t.kept ? ' on' : ''}${cls ? ` ${cls}` : ''}" ${attr}="${i}" role="checkbox" `
+    + `aria-checked="${!!t.kept}" title="${escapeHtml(whyOf(t))}">${t.kept ? '✓' : '+'} ${escapeHtml(t.theme)}${n}</button>`;
+}
+
+function nameChips(names, keptOnly) {
+  const list = keptOnly ? names.filter((n) => n.kept) : names;
+  if (!list.length) return '';
+  return '<span class="who">people:</span>' + list.map((n, i) =>
+    `<button type="button" class="chip${n.kept ? ' on' : ''}${keptOnly ? ' static' : ''}" data-n="${names.indexOf(n)}" `
+    + `role="checkbox" aria-checked="${!!n.kept}">${n.kept ? '✓' : '+'} ${escapeHtml(n.name)}</button>`).join('');
+}
+
+function renderChips() {
+  const p = O.proposal;
+  if (!p) return;
+  $('#chips').innerHTML = p.themes.map((t, i) => chipHtml(t, i, '', 'data-i')).join('')
+    || '<span class="hint small">nothing proposed — add your own, or discard</span>';
+  $('#nameChips').innerHTML = nameChips(p.names, false);
+  $('#themesNotes').textContent = p.notes ? `the transcripts' one sentence: ${p.notes}` : '';
+  $('#themesNotes').hidden = !p.notes;
+  $('#themeWhy').textContent = '';
+}
+
+function renderThemes() {
+  const t = O.themes;
+  if (!t) return;
+  if (O.story === null) {                        // first answer: the EDL's story fills the field
+    O.story = t.story || '';
+    $('#story').value = O.story;
+  }
+  const analysed = (t.analysed || 0) > 0;
+  const kept = t.themes.length > 0 || t.names.length > 0;
+  const running = !!O.tjob;
+  const editing = !!O.proposal;
+  $('#themesRunning').hidden = !running;
+  $('#themesEdit').hidden = running || !editing;
+  $('#themesKept').hidden = running || editing || !kept;
+  $('#themesAsk').hidden = running || editing || kept;
+  $('#themesSub').textContent = editing ? (O.proposal.proposed ? 'the transcripts suggest —' : 'editing')
+    : kept ? 'kept' : '';
+  $('#themesPrice').innerHTML = analysed
+    ? `<b>${themePrice()}</b> · one call over the transcripts of ${plural(t.analysed, 'clip')}`
+    : 'the audio pass has not listened yet — themes are proposed from the transcripts once it has';
+  $('#proposeBtn').disabled = !analysed || O.tbusy;
+  $('#againBtn').textContent = `propose again ${themePrice()}`;
+  $('#againBtn').disabled = !analysed || O.tbusy;
+  $('#keepBtn').disabled = O.tbusy;
+  $('#keptChips').innerHTML = t.themes.map((theme, i) =>
+    chipHtml({ theme, kept: true, clips: null }, i, 'static', 'data-k')).join('')
+    || '<span class="hint small">no themes kept — picks rank on their own</span>';
+  $('#keptNames').innerHTML = nameChips(t.names.map((name) => ({ name, kept: true })), true);
+  $('[data-step=themes]').classList.toggle('done', kept);
+}
+
+function openProposal(p) {
+  O.proposal = {
+    themes: (p.themes || []).map((x) => ({ theme: x.theme, why: x.why || '', clips: x.clips || [],
+                                           lines: x.lines || [], kept: true, own: false })),
+    names: (p.names || []).map((name) => ({ name, kept: true })),
+    notes: p.notes || '', usage: p.usage || null, proposed: true,
+  };
+  renderChips();
+  renderThemes();
+}
+
+// "change": the kept ones come back as chips, ticked, with no counts — the counts were
+// the proposal's and the EDL keeps only the words.
+function openKept() {
+  const t = O.themes;
+  O.proposal = {
+    themes: t.themes.map((theme) => ({ theme, why: '', clips: null, lines: [], kept: true, own: false })),
+    names: t.names.map((name) => ({ name, kept: true })),
+    notes: '', usage: null, proposed: false,
+  };
+  renderChips();
+  renderThemes();
+}
+
+async function proposeThemes() {
+  if (O.tjob || O.tbusy) return;
+  O.tbusy = true;
+  renderThemes();
+  try {
+    await saveStory();
+    const r = await send('POST', '/api/themes/propose', { story: $('#story').value });
+    O.tjob = r.job;
+    O.proposal = null;
+    $('#themesRunning').textContent = 'listening… reading the transcripts';
+  } catch (e) {
+    toast(String(e.message || e), 5000);
+  } finally {
+    O.tbusy = false;
+    renderThemes();
+  }
+  if (O.tjob) pollThemes();
+}
+
+async function pollThemes() {
+  clearTimeout(O.ttimer);
+  if (!O.tjob) return;
+  let s;
+  try {
+    s = await getJSON(`/api/job/${O.tjob}`);
+  } catch (e) {
+    O.tjob = null;
+    renderThemes();
+    return toast(`the proposal was lost: ${e.message}`, 5000);
+  }
+  if (s.state === 'running') {
+    $('#themesRunning').textContent = `listening… ${s.detail || ''}`;
+    O.ttimer = setTimeout(pollThemes, THEMES_POLL_MS);
+    return;
+  }
+  O.tjob = null;
+  if (s.state === 'done' && s.proposal) {
+    openProposal(s.proposal);
+    const u = s.proposal.usage || {};
+    toast(`${plural(O.proposal.themes.length, 'theme')} proposed${u.projected_usd != null ? ` · ${usd(u.projected_usd)}` : ''} — keep what fits`);
+  } else {
+    toast(`no themes: ${s.detail || s.state}`, 6000);
+    renderThemes();
+  }
+}
+
+async function keepThemes() {
+  const p = O.proposal;
+  if (!p || O.tbusy) return;
+  O.tbusy = true;
+  renderThemes();
+  const body = {
+    themes: p.themes.filter((t) => t.kept).map((t) => t.theme),
+    names: p.names.filter((n) => n.kept).map((n) => n.name),
+    story: $('#story').value,
+  };
+  try {
+    const r = await send('PUT', '/api/themes', body);
+    O.themes.themes = r.themes || [];
+    O.themes.names = r.names || [];
+    O.story = body.story;
+    O.proposal = null;
+    toast(r.themes.length ? `kept ${plural(r.themes.length, 'theme')} — the pass lifts and tags what matches`
+                          : 'no themes kept — picks rank on their own');
+  } catch (e) {
+    toast(`could not keep the themes: ${e.message}`, 5000);
+  } finally {
+    O.tbusy = false;
+    renderThemes();
+  }
+}
+
+function discardThemes() {
+  if (!O.proposal) return;
+  O.proposal = null;
+  renderThemes();
+  toast('discarded — nothing was written');
+}
+
+function addTheme(text) {
+  const s = String(text || '').trim().slice(0, 60);
+  if (!s || !O.proposal) return;
+  const p = O.proposal;
+  const had = p.themes.find((t) => t.theme.toLowerCase() === s.toLowerCase());
+  if (had) had.kept = true;
+  else p.themes.push({ theme: s, why: '', clips: null, lines: [], kept: true, own: true });
+  renderChips();
+}
+
+// The story is the EDL's brief (the ask reads it too); it is saved on its own when the
+// field settles, so a brief typed and never proposed on survives a reload.
+async function saveStory() {
+  const s = $('#story').value;
+  if (O.story === null || s === O.story) return;
+  try {
+    await send('PUT', '/api/themes', { story: s });
+    O.story = s;
+  } catch (e) {
+    toast(`could not save the story: ${e.message}`, 4000);
+  }
+}
+
+function landStory(text) {
+  const el = $('#story');
+  const cur = el.value.trim();
+  el.value = cur ? `${cur} ${text}` : text;
+  saveStory();
+}
+
+/* --------------------------------------------------------------- dictation */
+
+// The floor's pattern (I2.5), by copy: hold → MediaRecorder → POST /api/dictate with the
+// Blob as the body → the text lands in the field on release. A 501 hides the mic and
+// leaves typing; a 413 is said in a toast.
+
+const dict = { rec: null, stream: null, chunks: [], held: false, pending: null };
+
+function dictSay(text, live) {
+  $('#dictState').textContent = text;
+  $('#dictState').className = live ? 'hint small live' : 'hint small';
+  $('#mic').classList.toggle('live', !!live);
+  $('#story').classList.toggle('live', !!live);
+}
+
+function dictGone(why) {
+  O.dictation = false;
+  $('#mic').hidden = true;
+  dictSay('');
+  toast(`${why} — type instead`, 4000);
+}
+
+async function dictStart() {
+  if (dict.held || O.dictation === false) return;
+  dict.held = true;
+  dictSay('listening…', true);
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    dictStop();
+    return dictGone('no microphone in this browser');
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    dictStop();
+    return dictGone(`no microphone — ${e.name || e}`);
+  }
+  if (!dict.held) {                                // released before the mic answered
+    stream.getTracks().forEach((t) => t.stop());
+    return;
+  }
+  const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : '';
+  dict.stream = stream;
+  dict.chunks = [];
+  dict.rec = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
+  dict.rec.ondataavailable = (e) => { if (e.data && e.data.size) dict.chunks.push(e.data); };
+  dict.rec.onstop = () => {
+    const blob = new Blob(dict.chunks, { type: mime || 'audio/webm' });
+    stream.getTracks().forEach((t) => t.stop());
+    dict.rec = null;
+    dict.stream = null;
+    dictSend(blob);
+  };
+  dict.rec.start();
+}
+
+function dictStop() {
+  if (!dict.held) return;
+  dict.held = false;
+  if (dict.rec && dict.rec.state !== 'inactive') dict.rec.stop();
+  else dictSay('');
+}
+
+async function dictSend(blob) {
+  dictSay('transcribing…');
+  let r;
+  try {
+    r = await fetch('/api/dictate', {
+      method: 'POST', headers: { 'content-type': blob.type || 'audio/webm' }, body: blob,
+    });
+  } catch (e) {
+    return dictGone('dictation unreachable');
+  }
+  if (r.status === 501) return dictGone('dictation not built yet');
+  const d = await r.json().catch(() => ({}));
+  if (r.status === 413) {
+    dictSay('');
+    return toast(`too long — ${d.detail || 'a brief is at most 30 s'}`, 5000);
+  }
+  if (!r.ok) {
+    dictSay('');
+    return toast(`dictation failed: ${d.detail || r.status}`, 5000);
+  }
+  if (!d.text) {
+    dictSay('');
+    return toast('heard nothing — type instead', 3000);
+  }
+  landStory(d.text);
+  dictSay(`heard in ${((d.latency_ms || 0) / 1000).toFixed(1)} s`);
+  clearTimeout(dict.said);
+  dict.said = setTimeout(() => { if (!dict.held) dictSay(''); }, 3000);
+}
+
+// V: held anywhere outside an input it speaks, like the floor. In the story field a tap
+// types the letter and a hold speaks — "very" must still be typeable.
+function typeInStory(ch) {
+  const el = $('#story');
+  el.setRangeText(ch, el.selectionStart, el.selectionEnd, 'end');
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function isTyping(el) {
+  return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA');
+}
+
+function onKeyDown(e) {
+  if (e.key !== 'v' || e.ctrlKey || e.metaKey || e.altKey) return;
+  const el = document.activeElement;
+  const inStory = el === $('#story');
+  if (isTyping(el) && !inStory) return;
+  if (O.dictation === false) return;               // the mic is gone: v is a letter again
+  e.preventDefault();
+  if (e.repeat) return;
+  if (inStory) {
+    clearTimeout(dict.pending);
+    dict.pending = setTimeout(() => { dict.pending = null; dictStart(); }, HOLD_MS);
+  } else {
+    dictStart();
+  }
+}
+
+function onKeyUp(e) {
+  if (e.key !== 'v' && e.key !== 'V') return;
+  if (dict.pending) {
+    clearTimeout(dict.pending);
+    dict.pending = null;
+    if (document.activeElement === $('#story')) typeInStory('v');
+    return;
+  }
+  dictStop();
+}
+
 /* --------------------------------------------------------------- actions */
 
 async function startIndex(extra = {}) {
@@ -303,6 +656,15 @@ async function refreshStatus() {
   renderControls();
 }
 
+async function refreshThemes() {
+  O.themes = await getJSON('/api/themes');
+  if (O.themes.job && !O.tjob) {                   // a proposal started elsewhere: pick it up
+    O.tjob = O.themes.job;
+    pollThemes();
+  }
+  renderThemes();
+}
+
 async function refreshIndex() {
   O.index = await getJSON('/api/index');
   if (O.index.job) O.job = O.index.job;
@@ -321,12 +683,61 @@ function poll() {
 async function tick() {
   O.polls++;
   try {
-    await Promise.all([refreshIndex(), refreshClips(), refreshStatus()]);
+    // themes too: the price of proposing grows as the asr stage hears more clips
+    await Promise.all([refreshIndex(), refreshClips(), refreshStatus(), refreshThemes()]);
   } catch (e) {
     toast(String(e.message || e), 4000);
   }
   if (O.index && O.index.running) poll();
   else if (O.detail) $('#indexDetail').textContent = O.detail;
+}
+
+function wireThemes() {
+  $('#proposeBtn').addEventListener('click', proposeThemes);
+  $('#againBtn').addEventListener('click', proposeThemes);
+  $('#keepBtn').addEventListener('click', keepThemes);
+  $('#discardBtn').addEventListener('click', discardThemes);
+  $('#changeBtn').addEventListener('click', openKept);
+  $('#chips').addEventListener('click', (e) => {
+    const c = e.target.closest('.chip');
+    if (!c || !O.proposal) return;
+    const t = O.proposal.themes[Number(c.dataset.i)];
+    if (!t) return;
+    t.kept = !t.kept;
+    renderChips();
+  });
+  $('#chips').addEventListener('mouseover', (e) => {
+    const c = e.target.closest('.chip');
+    if (!c || !O.proposal) return;
+    const t = O.proposal.themes[Number(c.dataset.i)];
+    if (t) $('#themeWhy').textContent = whyOf(t);
+  });
+  $('#chips').addEventListener('focusin', (e) => {
+    const c = e.target.closest('.chip');
+    const t = c && O.proposal && O.proposal.themes[Number(c.dataset.i)];
+    if (t) $('#themeWhy').textContent = whyOf(t);
+  });
+  $('#nameChips').addEventListener('click', (e) => {
+    const c = e.target.closest('.chip');
+    if (!c || !O.proposal) return;
+    const n = O.proposal.names[Number(c.dataset.n)];
+    if (!n) return;
+    n.kept = !n.kept;
+    renderChips();
+  });
+  $('#addTheme').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    addTheme(e.target.value);
+    e.target.value = '';
+  });
+  $('#story').addEventListener('change', saveStory);
+  const mic = $('#mic');
+  mic.addEventListener('pointerdown', (e) => { e.preventDefault(); dictStart(); });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) mic.addEventListener(ev, dictStop);
+  document.addEventListener('keydown', onKeyDown);
+  document.addEventListener('keyup', onKeyUp);
+  window.addEventListener('blur', () => { clearTimeout(dict.pending); dict.pending = null; dictStop(); });
 }
 
 async function boot() {
@@ -335,8 +746,9 @@ async function boot() {
   for (const el of $$('#order button')) {
     el.addEventListener('click', () => { O.order = el.dataset.order; renderButton(); });
   }
+  wireThemes();
   try {
-    await Promise.all([refreshClips(), refreshStatus(), refreshIndex()]);
+    await Promise.all([refreshClips(), refreshStatus(), refreshIndex(), refreshThemes()]);
     if (O.index.running) poll();
   } catch (e) {
     $('#binName').textContent = 'could not open the folder';
@@ -344,5 +756,6 @@ async function boot() {
   }
 }
 
-window.sheet = { state: O, refresh: tick, journalWord, order };
+window.sheet = { state: O, refresh: tick, journalWord, order,
+                 renderThemes, proposeThemes, keepThemes, dictSend, dictStart, dictStop };
 boot();
