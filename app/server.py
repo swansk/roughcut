@@ -614,12 +614,16 @@ def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
             plan["segments"] = (segments[:focus] + plan["segments"]
                                 + segments[focus + 1:])
         elif segments:
+            # The bin rides along: context for a revision, the contract for a first cut
+            # (heroes must appear, keeps are bounds) — docs/INTAKE.md I1.1.
             plan = revise.propose(segments=segments, clips=clips, story=story,
                                   note=note, target=target, events=ranked,
+                                  selects=read_edl().get("selects"),
                                   on_partial=watcher)
         else:
             plan = revise.originate(clips=clips, story=story, note=note,
                                     target=target, events=ranked,
+                                    selects=read_edl().get("selects"),
                                     on_partial=watcher)
     except inference.BudgetExceeded as exc:
         entry.update(code=429)
@@ -628,6 +632,13 @@ def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
     except (inference.InferenceError, ValueError) as exc:
         entry.update(code=502)
         entry.finish("failed", detail=str(exc))
+        return
+    except Exception as exc:  # noqa: BLE001 — deliberately total
+        # Anything else that escapes the call must still end the job. A thread that
+        # dies with the job still `running` is a zombie: every board polling /api/jobs
+        # sees an ask in flight forever and disables its own Ask button to match.
+        entry.update(code=500)
+        entry.finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
         return
     entry.complete("notes", detail="snapping cut points to speech")
     # On disk before it is announced. A two-minute call whose only copy is an HTTP
@@ -929,7 +940,9 @@ async def api_floor_verdict(request: Request) -> JSONResponse:
             edl, clip, start, end, verdict, why=str(body.get("why") or ""),
             note=str(body.get("note") or ""), hero=bool(body.get("hero")),
             witnesses=body.get("witnesses"), tags=body.get("tags"),
-            source=str(body.get("source") or "floor"))
+            source=str(body.get("source") or "floor"),
+            # The keep's fingerprint, so relink can find its footage after a rename.
+            clip_duration=clip_duration(clip))
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     selects.used_in(edl)
@@ -972,6 +985,13 @@ async def api_floor_position(request: Request) -> JSONResponse:
 def api_selects() -> JSONResponse:
     edl = selects.ensure(read_edl())
     selects.used_in(edl)
+    # A select whose clip left the folder is flagged, never dropped; one whose clip came
+    # back under another name is re-pointed by its recorded length. Persisted only when
+    # something actually changed, so a plain read never rewrites the EDL.
+    before = json.dumps(edl["selects"], sort_keys=True)
+    selects.relink(edl, {c: {"duration": clip_duration(c)} for c in footage_clips()})
+    if json.dumps(edl["selects"], sort_keys=True) != before:
+        write_edl(edl)
     return JSONResponse({"selects": edl["selects"], "floor": edl["floor"],
                          "summary": selects.summary(edl)})
 

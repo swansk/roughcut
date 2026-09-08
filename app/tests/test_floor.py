@@ -331,6 +331,73 @@ def test_relink_leaves_an_ambiguous_match_missing_rather_than_guess():
     assert s["clip"] == "b.mp4" and "missing" not in s
 
 
+# ------------------------------------------------- the server's side of M1
+
+def test_a_floor_keep_records_its_clip_length_and_the_bin_relinks_on_read(client, project):
+    client.post("/api/floor/verdict", json={
+        "clip": "CLIP_A.MP4", "start": 1.0, "end": 3.0, "verdict": "pick"})
+    on_disk = json.loads(project["edl"].read_text(encoding="utf-8"))
+    assert on_disk["selects"][0]["clip_duration"] == pytest.approx(6.0, abs=0.1)
+    # a keep whose clip left the folder is flagged on the next read, and persisted
+    on_disk["selects"].append({**on_disk["selects"][0], "id": "k_gone",
+                               "clip": "GONE.MP4", "clip_duration": 99.0})
+    project["edl"].write_text(json.dumps(on_disk), encoding="utf-8")
+    got = client.get("/api/selects").json()["selects"]
+    gone = next(s for s in got if s["id"] == "k_gone")
+    assert gone["missing"] is True
+    assert next(s for s in got if s["id"] != "k_gone").get("missing") is None
+    again = json.loads(project["edl"].read_text(encoding="utf-8"))
+    assert any(s.get("missing") for s in again["selects"]), "the flag is written back"
+    # and a missing select survives the bin editor's save
+    r = client.put("/api/selects", json={"selects": got})
+    assert r.status_code == 200 and r.json()["summary"]["moments"] == 2
+    assert client.put("/api/selects", json={"selects": [
+        {"clip": "GONE.MP4", "start": 0, "end": 1}]}).status_code == 400, \
+        "an unknown clip without the flag is still a mistake"
+
+
+def test_an_ask_carries_the_bin_into_the_prompt(client, project):
+    """The server passes `selects` through, so the first cut is asked *from the bin*."""
+    import time as _time
+    from roughcut import config, inference
+
+    client.post("/api/floor/verdict", json={
+        "clip": "CLIP_C.MP4", "start": 0.5, "end": 4.0, "verdict": "pick", "hero": True,
+        "note": "the one the whole film is about"})
+
+    class Scripted:
+        name = "scripted"
+        seen: list = []
+
+        def complete(self, request):
+            Scripted.seen.append(request)
+            text = json.dumps({"segments": [{"clip": "CLIP_C.MP4", "in": 0.5, "out": 4.0,
+                                             "why": "the hero"}],
+                               "notes": "built from the bin"})
+            model = config.model_for(request.role)
+            return inference.Result(content=text, input_tokens=10, output_tokens=5,
+                                    backend="scripted", model=model,
+                                    projected_usd=1e-4, latency_ms=1, raw=text)
+
+    inference.set_backend(Scripted())
+    inference.reset_spend()
+    try:
+        job = client.post("/api/ask", json={"note": "", "segments": [],
+                                            "story": "a film"}).json()["job"]
+        deadline = _time.time() + 20
+        while _time.time() < deadline:
+            s = client.get(f"/api/ask/{job}").json()
+            if s["state"] not in ("estimating", "running"):
+                break
+            _time.sleep(0.05)
+        assert s["state"] == "done", s
+        prompt = Scripted.seen[-1].prompt
+        assert "## The editor's selects" in prompt
+        assert "the one the whole film is about" in prompt and "HERO" in prompt
+    finally:
+        inference.set_backend(None)
+
+
 def test_relink_leaves_a_present_clip_untouched_and_clears_a_stale_flag():
     edl = {"segments": []}
     selects.apply_verdict(edl, "CLIP_A.MP4", 1.0, 3.0, "pick", clip_duration=6.0)

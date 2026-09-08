@@ -46,10 +46,11 @@ until R11.
 
 ## Where we are
 
-_2026-09-07, session 8._ Foundations laid on `main`: the data model (`selects` + `floor` in
-the EDL), the picks engine (`roughcut/picks.py`), the selects module, every floor endpoint,
-and the `/floor` route with a placeholder page. Five lanes spawned in worktrees (see the
-table). Nothing verified live on Killington yet.
+_2026-09-07, session 8, later._ On `main`: foundations (M0), the bin (M1, merged + wired),
+the journal module (I3.1, merged), dictation (M4, merged). The telemetry study (I6.1) is done
+on its lane and merging next; the floor UI (M2) is still building on `agent/floor`. Nothing
+verified live on Killington yet — I2.6 is the next thing that needs a human at the board.
+Next after the floor merges: I3.2 (wire the journal into the server), then M5.
 
 ## Milestones
 
@@ -71,21 +72,21 @@ table). Nothing verified live on Killington yet.
 - [x] I1.1 `revise.originate` reads the bin: "## The editor's selects" — heroes fixed, keep
       ranges as bounds the model may trim inside, notes quoted per moment; the rest of the
       inventory for connective tissue only. Validation: a proposal that drops a hero must name it
-      in `notes`. DoD: prompt test + validation test. — commit `a88763a` (`agent/bin`).
-      **Lead:** `_ask_job` must pass `selects=read_edl().get("selects")` to `revise.originate`
-      (and `revise.propose`) — see the lane report.
-- [ ] I1.2 `used_in` maintained on accept (server: when segments are saved, recompute) and
-      surfaced in `/api/selects`. DoD: API test.
+      in `notes`. DoD: prompt test + validation test. — commit `a88763a` (`agent/bin`);
+      server passes `selects=` through in the M1 wiring commit (test: an ask carries the bin
+      into the prompt).
+- [x] I1.2 `used_in` maintained on accept (server: when segments are saved, recompute) and
+      surfaced in `/api/selects`. DoD: API test. — `selects.sync_timeline` on every save
+      since `2810e61`; the API path is tested in `9b8846a`'s I1.3 tests.
 - [x] I1.3 Hand-added shots become keeps (a saved segment with no overlapping select creates
       one, `source: "hand"`). DoD: API test. — commit `9b8846a` (`agent/bin`).
 - [x] I1.4 Relink: a select whose clip is missing is flagged `missing: true`, matched back by
       duration + first-MB hash when a file reappears under another name. DoD: unit test.
       — commit `437a4c9` (`agent/bin`: `selects.relink` + `clip_duration` on creation, duration match only —
       the first-MB hash needs file reads and belongs with the journal's probe stage, M3;
-      a `missing` select cannot be PUT back through `/api/selects` until `validate_selects`
-      tolerates it — the lead's call. **Lead:** call
-      `selects.relink(edl, {c: {"duration": clip_duration(c)} for c in footage_clips()})` in
-      `GET /api/selects` and pass `clip_duration=clip_duration(clip)` in `api_floor_verdict`.)
+      a `missing` select now round-trips through `PUT /api/selects` untouched). Server side
+      wired in the M1 wiring commit: `relink` on every `GET /api/selects` (written back only
+      when something changed), `clip_duration` recorded on floor keeps.
 
 ### M2 · The pass (lane `agent/floor`)
 
@@ -160,11 +161,11 @@ weight until measured, and until then numbers only, never event names.
 
 | lane | branch / worktree | scope | state |
 |---|---|---|---|
-| bin | `agent/bin` · `../roughcut-wt/bin` | M1 | spawned 2026-09-07 |
-| floor | `agent/floor` · `../roughcut-wt/floor` | M2.1–2.5 | spawned 2026-09-07 |
-| journal | `agent/journal` · `../roughcut-wt/journal` | M3.1 | spawned 2026-09-07 |
-| dictate | `agent/dictate` · `../roughcut-wt/dictate` | M4 | spawned 2026-09-07 |
-| telemetry | `agent/telemetry` · `../roughcut-wt/telemetry` | M6.1 | spawned 2026-09-07 |
+| bin | `agent/bin` · `../roughcut-wt/bin` | M1 | **merged** `2d7182c` + lead wiring; worktree can be removed |
+| floor | `agent/floor` · `../roughcut-wt/floor` | M2.1–2.5 | running 2026-09-07 |
+| journal | `agent/journal` · `../roughcut-wt/journal` | M3.1 | **merged** `53a2578`; worktree can be removed |
+| dictate | `agent/dictate` · `../roughcut-wt/dictate` | M4 | **merged** `50899d0`; worktree can be removed |
+| telemetry | `agent/telemetry` · `../roughcut-wt/telemetry` | M6.1 | done on the lane (`f806e13`, `296fede`) — merge pending |
 
 Lanes touch disjoint files by design: `bin` → `revise.py`, `selects.py`, tests; `floor` →
 `app/static/floor.*`, `test_floor_ui.py`; `journal` → `journal.py`, `test_journal.py`;

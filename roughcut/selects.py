@@ -271,12 +271,20 @@ def validate_selects(payload, clips: dict[str, dict]) -> list[dict]:
         if not isinstance(s, dict):
             raise ValueError(f"select {i} is not an object")
         clip = s.get("clip")
-        if clip not in clips:
-            raise ValueError(f"select {i} names unknown clip {clip!r}")
         try:
             start, end = float(s["start"]), float(s["end"])
         except (KeyError, TypeError, ValueError):
             raise ValueError(f"select {i} has non-numeric start/end") from None
+        if clip not in clips:
+            # A select whose footage is currently missing round-trips untouched: the
+            # bin editor must be able to save without losing the keep whose file
+            # wandered. Anything else naming an unknown clip is a mistake.
+            if s.get("missing") is True and 0.0 <= start < end:
+                kept = dict(s)
+                kept["start"], kept["end"] = round(start, 2), round(end, 2)
+                clean.append(kept)
+                continue
+            raise ValueError(f"select {i} names unknown clip {clip!r}")
         duration = float(clips[clip].get("duration") or 0.0)
         if not (0.0 <= start < end <= (duration + 0.05 if duration else end)):
             raise ValueError(f"select {i} range {start}-{end} outside {clip}")

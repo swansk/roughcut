@@ -2337,20 +2337,14 @@ def test_a_first_cut_that_drops_a_hero_must_say_so_in_notes(client):
 
 def test_the_server_reports_a_dropped_hero_as_a_502_naming_the_clip(client, project,
                                                                      monkeypatch):
-    """End to end, wired the way `_ask_job` will pass the bin — a plan that drops a
+    """End to end — the server passes the bin to the ask itself — a plan that drops a
     hero silently fails the job with the clip in the detail, not a silent proposal."""
-    import server
-    from roughcut import inference, revise
+    from roughcut import inference
 
     r = client.put("/api/selects", json={"selects": [
         {"clip": "CLIP_A.MP4", "start": 0.5, "end": 2.0, "why": "the greeting",
          "hero": True}]})
     assert r.status_code == 200
-    real = revise.originate
-
-    def wired(**kw):
-        return real(selects=server.read_edl().get("selects"), **kw)
-    monkeypatch.setattr(revise, "originate", wired)
 
     inference.set_backend(_scripted({
         "segments": [{"clip": "CLIP_B.MP4", "in": 2.4, "out": 4.0, "why": "x"}],

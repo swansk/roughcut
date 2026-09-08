@@ -10,6 +10,14 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The server's side of M1 (docs/INTAKE.md I1.1–I1.4 wired).** An Ask passes the EDL's
+  `selects` through, so a first cut is asked *from the bin* — heroes must appear, keeps are
+  bounds — and a revision reads it as context; a keep made on the floor records its clip's
+  length (`clip_duration`) so `relink` can find its footage after a rename; `GET /api/selects`
+  relinks on every read and writes back only when something changed; and a select flagged
+  `missing` round-trips through `PUT /api/selects` instead of failing validation, so the bin
+  editor's save never drops a keep whose file wandered. I1.2 (`used_in` on every save) was
+  already `sync_timeline` in the foundations.
 - **The index is a journal, not a job (INTAKE I3.1).** `roughcut/journal.py` is the pure model
   behind decision 3 — unattended, resumable, priority-ordered, released per clip — and
   decision 4 — clips added at any time. Per clip, seven stages (probe, telemetry, asr, proxy,
