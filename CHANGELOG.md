@@ -37,6 +37,9 @@ same commit. Releases move entries into a dated version section.
   overlaps are one pick already, speech needs the shared theme.
 
 ### Changed
+- **INTAKE I2.4 ticked** — take clusters (`7719b72`) and the Survey view (`be992ea`), the
+  cluster rule and the 90 s spelled out, the filter half of the item left with the filter,
+  the `selects.py` one-liner that would put a reject's reason in the EDL, the next look.
 - **INTAKE I2.8 ticked** — Karl's second look at the pass, his three sentences quoted, the
   three commits that answer them (`b58e2c8`, `1a2815c`, `911b8b7`) and what to look at next.
 - **A verdict moves on — always (INTAKE I2.8, 1c).** Karl: *"when I pick, reject, or later

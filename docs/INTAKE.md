@@ -172,7 +172,27 @@ priced stages are still paused** (9 close looks, ~$2) — Karl's call, from the 
       **Next human look:** on Killington, hold V once in Chrome and read the hint before
       and after the prompt; find CLIP_11's backflip on the tape without reading a number;
       P three picks in a row and watch the pass carry you.
-- [ ] I2.4 Compare takes (Survey view) for clustered picks; batch reject via filter.
+- [x] I2.4 Compare takes (Survey view) for clustered picks; batch reject via filter.
+      — two commits on `agent/takes`: `7719b72` take clusters in `picks.py` (same clip, same
+      kind, no overlap, at most `TAKE_GAP_S` = 90 s apart — the hike back up to a kicker is
+      one to two minutes, a fall and its replay are seconds; speech clusters only on a
+      shared theme tag; `take: {id, n, of, others}` on every pick in a cluster, `null`
+      elsewhere; computed after verdicts re-attach, rank and order untouched) and
+      `be992ea` the Survey view on the floor (THIS PICK says `take n of N · T to compare`;
+      `T` lays the takes out in time order — still, range, kind, strongest witness, felt
+      numbers, verdict, `★` on this pick, an earlier round's greyed with the reason;
+      `← →` choose, `↵` or a click goes there, `P` keeps one and rejects the cluster's other
+      undecided takes one POST each with `why: other take of <cluster>` in one undo entry,
+      `X` rejects the chosen take only, `Esc` closes; `T` row in the `?` map). The
+      batch-reject-via-filter half of the item is not built: there is no filter on the
+      floor yet (kind / source / theme) — it goes with the filter when one exists.
+      `test_picks.py` 12 passed (3 new) · `test_floor_ui.py` 25 passed (1 new) · suite 356
+      passed, 1 skipped. **Gap for the bin lane:** `selects.apply_verdict` keeps only `note`
+      on a reject/later, so the reject's reason is on the wire but not in the EDL — one
+      line in `selects.py` (`"why": str(why)[:300]` in the verdict dict) closes it.
+      **Next human look:** on Killington, find a clip with two jumps under 90 s apart
+      (CLIP_06 or CLIP_11), read `take n of N` in the panel, press T, keep the one that
+      landed with P, ⌘Z, and check both verdicts come back.
 - [x] I2.5 Dictation UI: hold `V` → MediaRecorder → `POST /api/dictate` → note attached; clip
       audio ducked while held; `N` edits — same commit, against the 501 stub (falls back to
       `N`); the success path is tested with the recogniser's answer scripted in the page.
