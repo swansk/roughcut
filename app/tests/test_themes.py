@@ -43,10 +43,14 @@ def test_validate_rejects_an_invented_clip_and_dedupes():
     assert ok["names"] == ["Spenny", "Eric"] and ok["notes"] == "a milk film"
 
 
-def test_the_price_is_a_fraction_of_the_finders():
-    from roughcut import find
-    c = _clips()
-    assert 0 < themes.projected_usd(c) < find.projected_usd(c) + 0.01
+def test_the_price_is_calibrated_on_the_live_run():
+    """Killington, 2026-09-08: 12 clips, 323 capped lines -> $0.20 billed. The estimate
+    must land near that, not at the $0.09 it first said."""
+    clips = {f"C{i}.MP4": {"clip": f"C{i}.MP4", "duration": 200.0,
+                           "transcript": [{"start": j, "end": j + 1, "text": "a line of talk"}
+                                          for j in range(27)]} for i in range(12)}
+    assert 0.16 <= themes.projected_usd(clips) <= 0.26
+    assert 0 < themes.projected_usd(_clips()) < 0.2
 
 
 # ------------------------------------------------------------------ endpoints

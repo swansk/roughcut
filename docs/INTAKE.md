@@ -344,3 +344,12 @@ them. Every lane adds its own CHANGELOG bullet; integration keeps all of them.
   band, the P X U · space · [ ] { } · V · ? key line, the tape legend and lens, and the kept
   range (`2:20.7 → 2:27.3 · 6.7 s` on CLIP_11's backflip) unchanged after three seconds of
   playback. Old lane worktrees removed.
+- 2026-09-08 · I5.2 live on Killington (board restarted on `f93ac80`): the themes section
+  shows Karl's story from the EDL and the price; one live proposal ($0.20, 50 s, sonnet on
+  the judge role) returned six themes — *hitting rocks, blaming the skis* (2 clips), *crashes
+  played for laughs* (5), *"send it" / hit it callouts* (6), *chasing the clean footy* (6),
+  *the "baby" bit* (3), *"rowdy" trail of the day* (1) — each with a quoted line, and twelve
+  names (Spencer / Spencey / Spats, Eric, Carl, Jason, Seth, Mike, Jack, Luke, Ray, JCV).
+  **Not kept** — the chips are on the screen for Karl to keep, edit or discard; the EDL's
+  `themes` is still empty. The quoted price undershot by 2× and is recalibrated (see
+  CHANGELOG · Fixed).

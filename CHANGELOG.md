@@ -633,6 +633,12 @@ same commit. Releases move entries into a dated version section.
   follow-ups.
 
 ### Fixed
+- **The themes price was the wrong side of honest.** The first live proposal on Killington
+  (12 clips, 323 capped lines) was quoted at $0.09 and billed $0.20 — 42.8k tokens in, 4.4k
+  out: the judge role's harness overhead is nearer 36k than the finder's 18k, and the answer
+  (six themes with quoted lines, twelve names, a sentence) is four times the first guess.
+  `themes.projected_usd` is recalibrated on that run; its test pins the Killington shape to
+  $0.16–0.26.
 - **The render-progress test waits for what it asserts instead of racing it.**
   `test_render_reports_which_shot_it_is_on` polled a real three-shot render every 50 ms and
   then asserted it had *caught* the counting. The shots are 1.5–2 s of 6-second clips, so a

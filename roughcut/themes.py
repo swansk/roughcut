@@ -117,13 +117,18 @@ def validate_proposal(payload: Any, clips: dict[str, dict]) -> dict:
 
 
 def projected_usd(clips: dict[str, dict]) -> float:
-    """Transcripts only — no sheets, no moments — so a fraction of the finder's call.
-    The CLI backend's ~18k-token harness overhead is most of it on a small bin."""
+    """Transcripts only — no sheets, no moments.
+
+    Calibrated against the one live run there is: Killington (12 clips, 323 capped
+    lines) billed 42.8k in / 4.4k out for a projected $0.09 against a $0.20 call — the
+    wrong side of honest. The judge role's harness overhead is nearer 36k tokens than
+    the 18k the finder sees, and the answer (six themes with quoted lines, twelve
+    names, a sentence) is four times the 1.2k first guessed."""
     lines = sum(min(len(c.get("transcript") or []), MAX_LINES_PER_CLIP)
                 for c in clips.values())
-    tokens_in = lines * 14 + len(clips) * 60 + 18000 + 500
+    tokens_in = lines * 20 + len(clips) * 60 + 36000
     pin, pout = config.price_per_mtok(config.model_for(config.ROLE_JUDGE))
-    return round(tokens_in / 1e6 * pin + 1200 / 1e6 * pout, 2)
+    return round(tokens_in / 1e6 * pin + 4400 / 1e6 * pout, 2)
 
 
 def propose(clips: dict[str, dict], story: str = "",
