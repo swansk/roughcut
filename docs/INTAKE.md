@@ -207,11 +207,17 @@ priced stages are still paused** (9 close looks, ~$2) — Karl's call, from the 
       has one, a legend. The junk band and the rotation side-data are not on the wire yet
       (`/api/clips` carries neither) — flags shown are the free facts it does carry.
       `test_open_ui.py` 2 passed; suite 332 passed, 1 skipped.
-- [~] I5.2 Themes proposed from transcripts (one judge-role call), chips + dictation. — the
-      data side is done (the I5.2 commit, see log): `roughcut/themes.py`,
-      `POST /api/themes/propose` (job, priced), `GET/PUT /api/themes` (`themes` + `names` in the
-      EDL, read by picks and the priority score). **Open:** the chips + dictation UI on the open
-      screen — a follow-up for the open lane once I5.1/I5.3 land.
+- [x] I5.2 Themes proposed from transcripts (one judge-role call), chips + dictation. — the
+      data side `fc26979`: `roughcut/themes.py`, `POST /api/themes/propose` (job, priced),
+      `GET/PUT /api/themes` (`themes` + `names` in the EDL, read by picks and the priority
+      score). The screen `cce429c` (`agent/open2`): on `/open`, at the top of the right column
+      as Fig. 1 — the story field with hold-to-speak (the mic, or `V` held in the field; a tap
+      types), the price before **Propose**, "listening…" while the job runs, chips with clip
+      counts (line + why on hover) and names as toggles, **+ add**, **Keep** = one PUT of
+      exactly the ticked ones, **Discard** writes nothing; kept themes rest as chips with
+      **change** and **propose again ~$X**; a bin not yet heard says so. `test_open_ui.py`
+      12 passed; suite 354 passed, 1 skipped. Not built: the mic only learns the recogniser is
+      absent from a 501 (no cheap endpoint on `/open` carries `dictate.available()`).
 - [x] I5.3 Granularity slider re-pricing live; workers + cap in settings; "Index" starts the
       journal. — commit `a147cbd` (`agent/open`): the right column — price before the
       button (`visual.projected_usd`), budget line, order toggle, **Index the footage** →

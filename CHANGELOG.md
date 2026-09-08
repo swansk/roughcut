@@ -32,6 +32,7 @@ same commit. Releases move entries into a dated version section.
   untick + add + Keep writes exactly the kept ones to the EDL on disk, Discard writes
   nothing, change re-opens and re-keeps, the mic hides on a 501 with `V` typing again, and a
   hold of `V` with the recogniser stubbed on the server lands its text in the field.
+  INTAKE I5.2 ticked (`cce429c`).
 - **Themes proposed from the transcripts (INTAKE I5.2, the data side).** Listen first, then
   propose: `POST /api/themes/propose` is one judge-role call over the audio pass's transcripts
   — no sheets, no moments — that returns three to eight themes as phrases the editor would
