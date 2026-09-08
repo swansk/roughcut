@@ -10,6 +10,16 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **R11 — telemetry measured (research/R11-telemetry.md, research/tools/telemetry.py).** Every
+  Killington clip carries a GPMF stream (HERO9: ACCL/GYRO 198.5 Hz, GPS5 18 Hz, GRAV/CORI/IORI);
+  a dependency-free parser recovers it in 7 s for the bin. The design's thresholds were wrong
+  both ways — freefall at 0.3 g never fires, impacts at 3 g fire six times a minute — and the
+  largest accelerations in the bin are hands on the camera. A loosened freefall run (< 0.5 g
+  for ≥ 0.25 s) is clean (10 of 10 checked by eye were real motion, six visible airs) and may
+  carry a small corroboration weight; impact peaks stay numbers only. The camera's orientation
+  agrees with the nine labelled mounts and shows the body never rolled past 30° in R10's
+  "camera-inverted" windows — and a 6.7 g peak inside one of them turned out to be a fall R10
+  had missed. Per-clip summaries in `benchmarks/labels/B2-telemetry.json`.
 - **The floor's foundations: picks, the bin in the EDL, and every floor endpoint.** The intake
   design (docs/design/cutting-room-floor.html, tracked in docs/INTAKE.md) needs three things
   before any screen exists. `roughcut/picks.py` derives **picks** — windows with witnesses —

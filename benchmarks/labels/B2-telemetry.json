@@ -1,0 +1,7772 @@
+{
+ "bin": "B2 / killington-neutral",
+ "tool": "research/tools/telemetry.py",
+ "study": "R11",
+ "hz": 10.0,
+ "thresholds": {
+  "freefall_g": 0.3,
+  "freefall_min_s": 0.25,
+  "impact_g": 3.0,
+  "impact_prominence_g": 1.0,
+  "gps_min_fix": 2,
+  "gps_max_dop100": 500
+ },
+ "clips": [
+  {
+   "clip": "CLIP_01",
+   "file": "/home/karl/footage/killington-01-2026/streamfall.MP4",
+   "duration_s": 203.804,
+   "hz": 10.0,
+   "gpmd": true,
+   "device": "HERO9 Black",
+   "packets": 204,
+   "packet_hz": 1.001,
+   "streams": {
+    "ACCL": {
+     "name": "Accelerometer",
+     "unit": "m/s\u00b2",
+     "orin": "ZXY",
+     "scal": 417,
+     "samples": 40423,
+     "rate_hz": 198.35,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.0
+    },
+    "GYRO": {
+     "name": "Gyroscope",
+     "unit": "rad/s",
+     "orin": "ZXY",
+     "scal": 939,
+     "samples": 40423,
+     "rate_hz": 198.35,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.0
+    },
+    "SHUT": {
+     "name": "Exposure time (shutter speed)",
+     "unit": "s",
+     "orin": null,
+     "scal": null,
+     "samples": 6108,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WBAL": {
+     "name": "White Balance temperature (Kelvin)",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2036,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WRGB": {
+     "name": "White Balance RGB gains",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2036,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "ISOE": {
+     "name": "Sensor ISO",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 6108,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "UNIF": {
+     "name": "Image uniformity",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2036,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "GPS5": {
+     "name": "GPS (Lat., Long., Alt., 2D speed, 3D speed)",
+     "unit": "degdegm\u0000\u0000m/sm/s",
+     "orin": null,
+     "scal": [
+      10000000,
+      10000000,
+      1000,
+      1000,
+      100
+     ],
+     "samples": 3705,
+     "rate_hz": 18.19,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.018
+    },
+    "CORI": {
+     "name": "CameraOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 12215,
+     "rate_hz": 59.94,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.001
+    },
+    "IORI": {
+     "name": "ImageOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 12215,
+     "rate_hz": 59.94,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.001
+    },
+    "GRAV": {
+     "name": "Gravity Vector",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 12215,
+     "rate_hz": 59.94,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.001
+    },
+    "WNDM": {
+     "name": "Wind Processing[wind_enable, meter_value(0 - 100)]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2038,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.003
+    },
+    "MWET": {
+     "name": "Microphone Wet[mic_wet, all_mics, confidence]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2038,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.003
+    },
+    "AALP": {
+     "name": "AGC audio level[rms_level ,peak_level]",
+     "unit": "dBFS",
+     "orin": null,
+     "scal": null,
+     "samples": 2038,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.003
+    },
+    "MSKP": {
+     "name": "MRV Frame Skip",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 12215,
+     "rate_hz": 59.94,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.001
+    }
+   },
+   "freefall": [],
+   "freefall_loose": [],
+   "impacts": [
+    {
+     "at": 78.15,
+     "value": 10.316,
+     "unit": "g",
+     "prominence": 9.688,
+     "z": 50.15
+    },
+    {
+     "at": 58.05,
+     "value": 7.017,
+     "unit": "g",
+     "prominence": 6.351,
+     "z": 32.13
+    },
+    {
+     "at": 56.85,
+     "value": 5.283,
+     "unit": "g",
+     "prominence": 1.547,
+     "z": 22.66
+    },
+    {
+     "at": 52.65,
+     "value": 4.935,
+     "unit": "g",
+     "prominence": 4.123,
+     "z": 20.75
+    },
+    {
+     "at": 70.45,
+     "value": 4.816,
+     "unit": "g",
+     "prominence": 3.834,
+     "z": 20.1
+    },
+    {
+     "at": 109.35,
+     "value": 4.599,
+     "unit": "g",
+     "prominence": 3.845,
+     "z": 18.92
+    },
+    {
+     "at": 20.35,
+     "value": 4.305,
+     "unit": "g",
+     "prominence": 3.638,
+     "z": 17.31
+    },
+    {
+     "at": 102.75,
+     "value": 4.063,
+     "unit": "g",
+     "prominence": 3.212,
+     "z": 15.99
+    },
+    {
+     "at": 79.85,
+     "value": 4.031,
+     "unit": "g",
+     "prominence": 3.07,
+     "z": 15.82
+    },
+    {
+     "at": 83.85,
+     "value": 3.868,
+     "unit": "g",
+     "prominence": 3.008,
+     "z": 14.93
+    }
+   ],
+   "orientation": {
+    "convention": {
+     "vertical": 0,
+     "lateral": 1,
+     "forward": 2,
+     "note": "ACCL data order per ORIN; vertical/lateral/forward assignment is an input, checked empirically in R11"
+    },
+    "median_up_vector": [
+     0.939,
+     -0.04,
+     0.194
+    ],
+    "mount": "upright",
+    "mount_sign": 1,
+    "fraction_level": 0.62,
+    "fraction_tilted_30_90": 0.376,
+    "fraction_past_horizontal": 0.004,
+    "fraction_abs_roll_over_30": 0.127,
+    "fraction_abs_roll_over_45": 0.065
+   },
+   "accel": {
+    "median_g": 1.024,
+    "p99_g": 2.662,
+    "max_g": 10.316,
+    "min_g": 0.032
+   },
+   "grav": {
+    "median_vector": [
+     -0.039,
+     0.937,
+     0.169
+    ],
+    "corr_accl_x_grav": [
+     [
+      0.058,
+      0.887,
+      -0.302
+     ],
+     [
+      0.818,
+      0.032,
+      -0.026
+     ],
+     [
+      -0.134,
+      -0.357,
+      0.924
+     ]
+    ]
+   },
+   "gyro": {
+    "median_rads": 0.722,
+    "max_rads": 21.567
+   },
+   "stops": [
+    {
+     "at": 72.4,
+     "from_ms": 4.27,
+     "to_ms": 0.76,
+     "within_s": 2.1
+    },
+    {
+     "at": 188.2,
+     "from_ms": 6.53,
+     "to_ms": 0.81,
+     "within_s": 3.0
+    }
+   ],
+   "gps": {
+    "source": "GPS5",
+    "fix_fraction": 0.995,
+    "samples_with_fix": 3687,
+    "max_speed_ms": 11.41,
+    "median_speed_ms": 0.72,
+    "fix_values": [
+     0,
+     3
+    ]
+   },
+   "peaks": [
+    {
+     "at": 20.35,
+     "value": 4.305,
+     "unit": "g"
+    },
+    {
+     "at": 49.95,
+     "value": 3.189,
+     "unit": "g"
+    },
+    {
+     "at": 52.65,
+     "value": 4.935,
+     "unit": "g"
+    },
+    {
+     "at": 56.85,
+     "value": 5.283,
+     "unit": "g"
+    },
+    {
+     "at": 58.05,
+     "value": 7.017,
+     "unit": "g"
+    },
+    {
+     "at": 60.75,
+     "value": 3.299,
+     "unit": "g"
+    },
+    {
+     "at": 70.45,
+     "value": 4.816,
+     "unit": "g"
+    },
+    {
+     "at": 73.25,
+     "value": 3.722,
+     "unit": "g"
+    },
+    {
+     "at": 78.15,
+     "value": 10.316,
+     "unit": "g"
+    },
+    {
+     "at": 79.85,
+     "value": 4.031,
+     "unit": "g"
+    },
+    {
+     "at": 80.55,
+     "value": 3.35,
+     "unit": "g"
+    },
+    {
+     "at": 83.85,
+     "value": 3.868,
+     "unit": "g"
+    },
+    {
+     "at": 102.75,
+     "value": 4.063,
+     "unit": "g"
+    },
+    {
+     "at": 109.35,
+     "value": 4.599,
+     "unit": "g"
+    },
+    {
+     "at": 119.75,
+     "value": 3.13,
+     "unit": "g"
+    },
+    {
+     "at": 120.35,
+     "value": 3.572,
+     "unit": "g"
+    },
+    {
+     "at": 124.55,
+     "value": 3.337,
+     "unit": "g"
+    }
+   ],
+   "impacts_over_3g": [
+    {
+     "at": 20.35,
+     "value": 4.305,
+     "unit": "g",
+     "prominence": 3.638,
+     "z": 17.31
+    },
+    {
+     "at": 49.95,
+     "value": 3.189,
+     "unit": "g",
+     "prominence": 2.436,
+     "z": 11.22
+    },
+    {
+     "at": 52.65,
+     "value": 4.935,
+     "unit": "g",
+     "prominence": 4.123,
+     "z": 20.75
+    },
+    {
+     "at": 56.85,
+     "value": 5.283,
+     "unit": "g",
+     "prominence": 1.547,
+     "z": 22.66
+    },
+    {
+     "at": 58.05,
+     "value": 7.017,
+     "unit": "g",
+     "prominence": 6.351,
+     "z": 32.13
+    },
+    {
+     "at": 60.75,
+     "value": 3.299,
+     "unit": "g",
+     "prominence": 2.323,
+     "z": 11.82
+    },
+    {
+     "at": 70.45,
+     "value": 4.816,
+     "unit": "g",
+     "prominence": 3.834,
+     "z": 20.1
+    },
+    {
+     "at": 73.25,
+     "value": 3.722,
+     "unit": "g",
+     "prominence": 2.7,
+     "z": 14.13
+    },
+    {
+     "at": 78.15,
+     "value": 10.316,
+     "unit": "g",
+     "prominence": 9.688,
+     "z": 50.15
+    },
+    {
+     "at": 79.85,
+     "value": 4.031,
+     "unit": "g",
+     "prominence": 3.07,
+     "z": 15.82
+    },
+    {
+     "at": 80.55,
+     "value": 3.35,
+     "unit": "g",
+     "prominence": 2.228,
+     "z": 12.1
+    },
+    {
+     "at": 83.85,
+     "value": 3.868,
+     "unit": "g",
+     "prominence": 3.008,
+     "z": 14.93
+    },
+    {
+     "at": 102.75,
+     "value": 4.063,
+     "unit": "g",
+     "prominence": 3.212,
+     "z": 15.99
+    },
+    {
+     "at": 109.35,
+     "value": 4.599,
+     "unit": "g",
+     "prominence": 3.845,
+     "z": 18.92
+    },
+    {
+     "at": 119.75,
+     "value": 3.13,
+     "unit": "g",
+     "prominence": 1.974,
+     "z": 10.9
+    },
+    {
+     "at": 120.35,
+     "value": 3.572,
+     "unit": "g",
+     "prominence": 2.756,
+     "z": 13.31
+    },
+    {
+     "at": 124.55,
+     "value": 3.337,
+     "unit": "g",
+     "prominence": 2.493,
+     "z": 12.03
+    }
+   ]
+  },
+  {
+   "clip": "CLIP_02",
+   "file": "/home/karl/footage/killington-01-2026/rowdy.MP4",
+   "duration_s": 259.476,
+   "hz": 10.0,
+   "gpmd": true,
+   "device": "HERO9 Black",
+   "packets": 260,
+   "packet_hz": 1.002,
+   "streams": {
+    "ACCL": {
+     "name": "Accelerometer",
+     "unit": "m/s\u00b2",
+     "orin": "ZXY",
+     "scal": 417,
+     "samples": 51501,
+     "rate_hz": 198.49,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.003
+    },
+    "GYRO": {
+     "name": "Gyroscope",
+     "unit": "rad/s",
+     "orin": "ZXY",
+     "scal": 939,
+     "samples": 51501,
+     "rate_hz": 198.49,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.003
+    },
+    "SHUT": {
+     "name": "Exposure time (shutter speed)",
+     "unit": "s",
+     "orin": null,
+     "scal": null,
+     "samples": 7776,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WBAL": {
+     "name": "White Balance temperature (Kelvin)",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2592,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WRGB": {
+     "name": "White Balance RGB gains",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2592,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "ISOE": {
+     "name": "Sensor ISO",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 7776,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "UNIF": {
+     "name": "Image uniformity",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2592,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "GPS5": {
+     "name": "GPS (Lat., Long., Alt., 2D speed, 3D speed)",
+     "unit": "degdegm\u0000\u0000m/sm/s",
+     "orin": null,
+     "scal": [
+      10000000,
+      10000000,
+      1000,
+      1000,
+      100
+     ],
+     "samples": 4715,
+     "rate_hz": 18.18,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.038
+    },
+    "CORI": {
+     "name": "CameraOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 15552,
+     "rate_hz": 59.94,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.002
+    },
+    "IORI": {
+     "name": "ImageOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 15552,
+     "rate_hz": 59.94,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.002
+    },
+    "GRAV": {
+     "name": "Gravity Vector",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 15552,
+     "rate_hz": 59.94,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.002
+    },
+    "WNDM": {
+     "name": "Wind Processing[wind_enable, meter_value(0 - 100)]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2595,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.041
+    },
+    "MWET": {
+     "name": "Microphone Wet[mic_wet, all_mics, confidence]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2595,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.041
+    },
+    "AALP": {
+     "name": "AGC audio level[rms_level ,peak_level]",
+     "unit": "dBFS",
+     "orin": null,
+     "scal": null,
+     "samples": 2595,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.041
+    },
+    "MSKP": {
+     "name": "MRV Frame Skip",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 15552,
+     "rate_hz": 59.94,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.002
+    }
+   },
+   "freefall": [
+    {
+     "start": 201.05,
+     "end": 201.21,
+     "dur": 0.16,
+     "min_g": 0.043
+    }
+   ],
+   "freefall_loose": [
+    {
+     "start": 13.14,
+     "end": 13.29,
+     "dur": 0.15,
+     "min_g": 0.012
+    },
+    {
+     "start": 72.86,
+     "end": 73.08,
+     "dur": 0.22,
+     "min_g": 0.236
+    },
+    {
+     "start": 75.48,
+     "end": 75.67,
+     "dur": 0.19,
+     "min_g": 0.21
+    },
+    {
+     "start": 84.29,
+     "end": 84.45,
+     "dur": 0.16,
+     "min_g": 0.317
+    },
+    {
+     "start": 93.56,
+     "end": 93.82,
+     "dur": 0.25,
+     "min_g": 0.315
+    },
+    {
+     "start": 95.89,
+     "end": 96.08,
+     "dur": 0.19,
+     "min_g": 0.098
+    },
+    {
+     "start": 102.13,
+     "end": 102.47,
+     "dur": 0.34,
+     "min_g": 0.06
+    },
+    {
+     "start": 122.44,
+     "end": 122.62,
+     "dur": 0.18,
+     "min_g": 0.12
+    },
+    {
+     "start": 137.36,
+     "end": 137.63,
+     "dur": 0.27,
+     "min_g": 0.205
+    },
+    {
+     "start": 139.85,
+     "end": 140.08,
+     "dur": 0.23,
+     "min_g": 0.15
+    },
+    {
+     "start": 151.23,
+     "end": 151.48,
+     "dur": 0.25,
+     "min_g": 0.302
+    },
+    {
+     "start": 196.05,
+     "end": 196.21,
+     "dur": 0.16,
+     "min_g": 0.398
+    },
+    {
+     "start": 201.02,
+     "end": 201.27,
+     "dur": 0.26,
+     "min_g": 0.043
+    },
+    {
+     "start": 201.81,
+     "end": 202.0,
+     "dur": 0.2,
+     "min_g": 0.114
+    },
+    {
+     "start": 225.08,
+     "end": 225.26,
+     "dur": 0.18,
+     "min_g": 0.363
+    }
+   ],
+   "impacts": [
+    {
+     "at": 12.25,
+     "value": 13.818,
+     "unit": "g",
+     "prominence": 13.289,
+     "z": 49.43
+    },
+    {
+     "at": 11.65,
+     "value": 13.584,
+     "unit": "g",
+     "prominence": 12.997,
+     "z": 48.51
+    },
+    {
+     "at": 11.15,
+     "value": 12.112,
+     "unit": "g",
+     "prominence": 11.355,
+     "z": 42.77
+    },
+    {
+     "at": 17.65,
+     "value": 11.121,
+     "unit": "g",
+     "prominence": 10.239,
+     "z": 38.91
+    },
+    {
+     "at": 13.35,
+     "value": 10.054,
+     "unit": "g",
+     "prominence": 9.113,
+     "z": 34.74
+    },
+    {
+     "at": 10.05,
+     "value": 10.037,
+     "unit": "g",
+     "prominence": 9.337,
+     "z": 34.68
+    },
+    {
+     "at": 16.95,
+     "value": 9.791,
+     "unit": "g",
+     "prominence": 7.605,
+     "z": 33.72
+    },
+    {
+     "at": 76.55,
+     "value": 8.967,
+     "unit": "g",
+     "prominence": 8.615,
+     "z": 30.5
+    },
+    {
+     "at": 220.95,
+     "value": 7.624,
+     "unit": "g",
+     "prominence": 7.215,
+     "z": 25.27
+    },
+    {
+     "at": 7.15,
+     "value": 6.989,
+     "unit": "g",
+     "prominence": 6.064,
+     "z": 22.79
+    }
+   ],
+   "orientation": {
+    "convention": {
+     "vertical": 0,
+     "lateral": 1,
+     "forward": 2,
+     "note": "ACCL data order per ORIN; vertical/lateral/forward assignment is an input, checked empirically in R11"
+    },
+    "median_up_vector": [
+     0.877,
+     -0.032,
+     0.375
+    ],
+    "mount": "upright",
+    "mount_sign": 1,
+    "fraction_level": 0.537,
+    "fraction_tilted_30_90": 0.441,
+    "fraction_past_horizontal": 0.022,
+    "fraction_abs_roll_over_30": 0.114,
+    "fraction_abs_roll_over_45": 0.051
+   },
+   "accel": {
+    "median_g": 1.027,
+    "p99_g": 3.323,
+    "max_g": 13.818,
+    "min_g": 0.012
+   },
+   "grav": {
+    "median_vector": [
+     -0.036,
+     0.872,
+     0.385
+    ],
+    "corr_accl_x_grav": [
+     [
+      -0.04,
+      0.806,
+      0.135
+     ],
+     [
+      0.654,
+      0.183,
+      -0.042
+     ],
+     [
+      -0.161,
+      0.073,
+      0.84
+     ]
+    ]
+   },
+   "gyro": {
+    "median_rads": 0.918,
+    "max_rads": 29.587
+   },
+   "stops": [],
+   "gps": {
+    "source": "GPS5",
+    "fix_fraction": 0.0,
+    "samples_with_fix": 0,
+    "max_speed_ms": null,
+    "median_speed_ms": null,
+    "fix_values": [
+     0
+    ]
+   },
+   "peaks": [
+    {
+     "at": 7.15,
+     "value": 6.989,
+     "unit": "g"
+    },
+    {
+     "at": 10.05,
+     "value": 10.037,
+     "unit": "g"
+    },
+    {
+     "at": 11.15,
+     "value": 12.112,
+     "unit": "g"
+    },
+    {
+     "at": 11.65,
+     "value": 13.584,
+     "unit": "g"
+    },
+    {
+     "at": 12.25,
+     "value": 13.818,
+     "unit": "g"
+    },
+    {
+     "at": 13.35,
+     "value": 10.054,
+     "unit": "g"
+    },
+    {
+     "at": 14.15,
+     "value": 3.733,
+     "unit": "g"
+    },
+    {
+     "at": 16.95,
+     "value": 9.791,
+     "unit": "g"
+    },
+    {
+     "at": 17.65,
+     "value": 11.121,
+     "unit": "g"
+    },
+    {
+     "at": 23.15,
+     "value": 5.319,
+     "unit": "g"
+    },
+    {
+     "at": 25.95,
+     "value": 5.001,
+     "unit": "g"
+    },
+    {
+     "at": 26.75,
+     "value": 3.909,
+     "unit": "g"
+    },
+    {
+     "at": 76.55,
+     "value": 8.967,
+     "unit": "g"
+    },
+    {
+     "at": 78.85,
+     "value": 3.573,
+     "unit": "g"
+    },
+    {
+     "at": 102.95,
+     "value": 4.874,
+     "unit": "g"
+    },
+    {
+     "at": 108.15,
+     "value": 4.077,
+     "unit": "g"
+    },
+    {
+     "at": 121.75,
+     "value": 5.011,
+     "unit": "g"
+    },
+    {
+     "at": 124.85,
+     "value": 3.095,
+     "unit": "g"
+    },
+    {
+     "at": 141.45,
+     "value": 3.379,
+     "unit": "g"
+    },
+    {
+     "at": 159.05,
+     "value": 3.234,
+     "unit": "g"
+    },
+    {
+     "at": 202.55,
+     "value": 3.46,
+     "unit": "g"
+    },
+    {
+     "at": 204.05,
+     "value": 3.055,
+     "unit": "g"
+    },
+    {
+     "at": 206.65,
+     "value": 4.222,
+     "unit": "g"
+    },
+    {
+     "at": 207.55,
+     "value": 6.319,
+     "unit": "g"
+    },
+    {
+     "at": 208.55,
+     "value": 4.161,
+     "unit": "g"
+    },
+    {
+     "at": 213.35,
+     "value": 4.264,
+     "unit": "g"
+    },
+    {
+     "at": 214.35,
+     "value": 4.693,
+     "unit": "g"
+    },
+    {
+     "at": 220.35,
+     "value": 5.333,
+     "unit": "g"
+    },
+    {
+     "at": 220.95,
+     "value": 7.624,
+     "unit": "g"
+    },
+    {
+     "at": 231.65,
+     "value": 6.06,
+     "unit": "g"
+    },
+    {
+     "at": 232.75,
+     "value": 5.384,
+     "unit": "g"
+    }
+   ],
+   "impacts_over_3g": [
+    {
+     "at": 7.15,
+     "value": 6.989,
+     "unit": "g",
+     "prominence": 6.064,
+     "z": 22.79
+    },
+    {
+     "at": 10.05,
+     "value": 10.037,
+     "unit": "g",
+     "prominence": 9.337,
+     "z": 34.68
+    },
+    {
+     "at": 11.15,
+     "value": 12.112,
+     "unit": "g",
+     "prominence": 11.355,
+     "z": 42.77
+    },
+    {
+     "at": 11.65,
+     "value": 13.584,
+     "unit": "g",
+     "prominence": 12.997,
+     "z": 48.51
+    },
+    {
+     "at": 12.25,
+     "value": 13.818,
+     "unit": "g",
+     "prominence": 13.289,
+     "z": 49.43
+    },
+    {
+     "at": 13.35,
+     "value": 10.054,
+     "unit": "g",
+     "prominence": 9.113,
+     "z": 34.74
+    },
+    {
+     "at": 14.15,
+     "value": 3.733,
+     "unit": "g",
+     "prominence": 2.634,
+     "z": 10.08
+    },
+    {
+     "at": 16.95,
+     "value": 9.791,
+     "unit": "g",
+     "prominence": 7.605,
+     "z": 33.72
+    },
+    {
+     "at": 17.65,
+     "value": 11.121,
+     "unit": "g",
+     "prominence": 10.239,
+     "z": 38.91
+    },
+    {
+     "at": 23.15,
+     "value": 5.319,
+     "unit": "g",
+     "prominence": 4.535,
+     "z": 16.27
+    },
+    {
+     "at": 25.95,
+     "value": 5.001,
+     "unit": "g",
+     "prominence": 4.104,
+     "z": 15.03
+    },
+    {
+     "at": 26.75,
+     "value": 3.909,
+     "unit": "g",
+     "prominence": 2.837,
+     "z": 10.77
+    },
+    {
+     "at": 76.55,
+     "value": 8.967,
+     "unit": "g",
+     "prominence": 8.615,
+     "z": 30.5
+    },
+    {
+     "at": 78.85,
+     "value": 3.573,
+     "unit": "g",
+     "prominence": 2.605,
+     "z": 9.46
+    },
+    {
+     "at": 102.95,
+     "value": 4.874,
+     "unit": "g",
+     "prominence": 4.333,
+     "z": 14.54
+    },
+    {
+     "at": 108.15,
+     "value": 4.077,
+     "unit": "g",
+     "prominence": 3.456,
+     "z": 11.43
+    },
+    {
+     "at": 121.75,
+     "value": 5.011,
+     "unit": "g",
+     "prominence": 4.69,
+     "z": 15.07
+    },
+    {
+     "at": 124.85,
+     "value": 3.095,
+     "unit": "g",
+     "prominence": 2.728,
+     "z": 7.6
+    },
+    {
+     "at": 141.45,
+     "value": 3.379,
+     "unit": "g",
+     "prominence": 3.071,
+     "z": 8.7
+    },
+    {
+     "at": 159.05,
+     "value": 3.234,
+     "unit": "g",
+     "prominence": 2.799,
+     "z": 8.14
+    },
+    {
+     "at": 202.55,
+     "value": 3.46,
+     "unit": "g",
+     "prominence": 2.668,
+     "z": 9.02
+    },
+    {
+     "at": 204.05,
+     "value": 3.055,
+     "unit": "g",
+     "prominence": 2.225,
+     "z": 7.44
+    },
+    {
+     "at": 206.65,
+     "value": 4.222,
+     "unit": "g",
+     "prominence": 2.721,
+     "z": 11.99
+    },
+    {
+     "at": 207.55,
+     "value": 6.319,
+     "unit": "g",
+     "prominence": 5.743,
+     "z": 20.17
+    },
+    {
+     "at": 208.55,
+     "value": 4.161,
+     "unit": "g",
+     "prominence": 3.324,
+     "z": 11.75
+    },
+    {
+     "at": 213.35,
+     "value": 4.264,
+     "unit": "g",
+     "prominence": 3.465,
+     "z": 12.16
+    },
+    {
+     "at": 214.35,
+     "value": 4.693,
+     "unit": "g",
+     "prominence": 3.897,
+     "z": 13.83
+    },
+    {
+     "at": 220.35,
+     "value": 5.333,
+     "unit": "g",
+     "prominence": 3.932,
+     "z": 16.33
+    },
+    {
+     "at": 220.95,
+     "value": 7.624,
+     "unit": "g",
+     "prominence": 7.215,
+     "z": 25.27
+    },
+    {
+     "at": 231.65,
+     "value": 6.06,
+     "unit": "g",
+     "prominence": 5.319,
+     "z": 19.16
+    },
+    {
+     "at": 232.75,
+     "value": 5.384,
+     "unit": "g",
+     "prominence": 3.381,
+     "z": 16.52
+    }
+   ]
+  },
+  {
+   "clip": "CLIP_03",
+   "file": "/home/karl/footage/killington-01-2026/pocketpizza.MP4",
+   "duration_s": 40.324,
+   "hz": 10.0,
+   "gpmd": true,
+   "device": "HERO9 Black",
+   "packets": 41,
+   "packet_hz": 1.017,
+   "streams": {
+    "ACCL": {
+     "name": "Accelerometer",
+     "unit": "m/s\u00b2",
+     "orin": "ZXY",
+     "scal": 417,
+     "samples": 7999,
+     "rate_hz": 198.49,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.02
+    },
+    "GYRO": {
+     "name": "Gyroscope",
+     "unit": "rad/s",
+     "orin": "ZXY",
+     "scal": 939,
+     "samples": 7999,
+     "rate_hz": 198.49,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.02
+    },
+    "SHUT": {
+     "name": "Exposure time (shutter speed)",
+     "unit": "s",
+     "orin": null,
+     "scal": null,
+     "samples": 1208,
+     "rate_hz": 29.98,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WBAL": {
+     "name": "White Balance temperature (Kelvin)",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 403,
+     "rate_hz": 10.02,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WRGB": {
+     "name": "White Balance RGB gains",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 403,
+     "rate_hz": 10.02,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "ISOE": {
+     "name": "Sensor ISO",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 1208,
+     "rate_hz": 29.98,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "UNIF": {
+     "name": "Image uniformity",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 403,
+     "rate_hz": 10.02,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "GPS5": {
+     "name": "GPS (Lat., Long., Alt., 2D speed, 3D speed)",
+     "unit": "degdegm\u0000\u0000m/sm/s",
+     "orin": null,
+     "scal": [
+      10000000,
+      10000000,
+      1000,
+      1000,
+      100
+     ],
+     "samples": 732,
+     "rate_hz": 18.2,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.055
+    },
+    "CORI": {
+     "name": "CameraOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 2416,
+     "rate_hz": 59.96,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.015
+    },
+    "IORI": {
+     "name": "ImageOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 2416,
+     "rate_hz": 59.96,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.015
+    },
+    "GRAV": {
+     "name": "Gravity Vector",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 2416,
+     "rate_hz": 59.96,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.015
+    },
+    "WNDM": {
+     "name": "Wind Processing[wind_enable, meter_value(0 - 100)]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 403,
+     "rate_hz": 10.03,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.04
+    },
+    "MWET": {
+     "name": "Microphone Wet[mic_wet, all_mics, confidence]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 403,
+     "rate_hz": 10.03,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.04
+    },
+    "AALP": {
+     "name": "AGC audio level[rms_level ,peak_level]",
+     "unit": "dBFS",
+     "orin": null,
+     "scal": null,
+     "samples": 403,
+     "rate_hz": 10.03,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.04
+    },
+    "MSKP": {
+     "name": "MRV Frame Skip",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2416,
+     "rate_hz": 59.96,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.015
+    }
+   },
+   "freefall": [],
+   "freefall_loose": [],
+   "impacts": [
+    {
+     "at": 10.65,
+     "value": 4.876,
+     "unit": "g",
+     "prominence": 4.058,
+     "z": 62.86
+    },
+    {
+     "at": 10.15,
+     "value": 2.051,
+     "unit": "g",
+     "prominence": 0.65,
+     "z": 16.39
+    },
+    {
+     "at": 11.45,
+     "value": 1.601,
+     "unit": "g",
+     "prominence": 0.592,
+     "z": 8.99
+    },
+    {
+     "at": 37.35,
+     "value": 1.591,
+     "unit": "g",
+     "prominence": 0.789,
+     "z": 8.82
+    },
+    {
+     "at": 34.45,
+     "value": 1.553,
+     "unit": "g",
+     "prominence": 0.568,
+     "z": 8.2
+    },
+    {
+     "at": 8.05,
+     "value": 1.448,
+     "unit": "g",
+     "prominence": 0.461,
+     "z": 6.47
+    },
+    {
+     "at": 32.85,
+     "value": 1.435,
+     "unit": "g",
+     "prominence": 0.532,
+     "z": 6.26
+    },
+    {
+     "at": 21.15,
+     "value": 1.359,
+     "unit": "g",
+     "prominence": 0.447,
+     "z": 5.0
+    },
+    {
+     "at": 0.95,
+     "value": 1.349,
+     "unit": "g",
+     "prominence": 0.32,
+     "z": 4.84
+    },
+    {
+     "at": 5.25,
+     "value": 1.307,
+     "unit": "g",
+     "prominence": 0.299,
+     "z": 4.15
+    }
+   ],
+   "orientation": {
+    "convention": {
+     "vertical": 0,
+     "lateral": 1,
+     "forward": 2,
+     "note": "ACCL data order per ORIN; vertical/lateral/forward assignment is an input, checked empirically in R11"
+    },
+    "median_up_vector": [
+     0.981,
+     0.117,
+     0.122
+    ],
+    "mount": "upright",
+    "mount_sign": 1,
+    "fraction_level": 0.745,
+    "fraction_tilted_30_90": 0.255,
+    "fraction_past_horizontal": 0.0,
+    "fraction_abs_roll_over_30": 0.0,
+    "fraction_abs_roll_over_45": 0.0
+   },
+   "accel": {
+    "median_g": 1.007,
+    "p99_g": 1.393,
+    "max_g": 4.876,
+    "min_g": 0.565
+   },
+   "grav": {
+    "median_vector": [
+     0.119,
+     0.982,
+     0.097
+    ],
+    "corr_accl_x_grav": [
+     [
+      -0.515,
+      0.974,
+      -0.916
+     ],
+     [
+      0.867,
+      -0.582,
+      0.518
+     ],
+     [
+      0.52,
+      -0.946,
+      0.988
+     ]
+    ]
+   },
+   "gyro": {
+    "median_rads": 0.249,
+    "max_rads": 8.419
+   },
+   "stops": [],
+   "gps": {
+    "source": "GPS5",
+    "fix_fraction": 0.18,
+    "samples_with_fix": 132,
+    "max_speed_ms": 4.88,
+    "median_speed_ms": 3.89,
+    "fix_values": [
+     0,
+     2,
+     3
+    ]
+   },
+   "peaks": [
+    {
+     "at": 10.65,
+     "value": 4.876,
+     "unit": "g"
+    }
+   ],
+   "impacts_over_3g": [
+    {
+     "at": 10.65,
+     "value": 4.876,
+     "unit": "g",
+     "prominence": 4.058,
+     "z": 62.86
+    }
+   ]
+  },
+  {
+   "clip": "CLIP_04",
+   "file": "/home/karl/footage/killington-01-2026/spenny-bigair-begin.MP4",
+   "duration_s": 319.319,
+   "hz": 10.0,
+   "gpmd": true,
+   "device": "HERO9 Black",
+   "packets": 319,
+   "packet_hz": 0.999,
+   "streams": {
+    "ACCL": {
+     "name": "Accelerometer",
+     "unit": "m/s\u00b2",
+     "orin": "ZXY",
+     "scal": 417,
+     "samples": 63382,
+     "rate_hz": 198.49,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.001
+    },
+    "GYRO": {
+     "name": "Gyroscope",
+     "unit": "rad/s",
+     "orin": "ZXY",
+     "scal": 939,
+     "samples": 63382,
+     "rate_hz": 198.49,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.001
+    },
+    "SHUT": {
+     "name": "Exposure time (shutter speed)",
+     "unit": "s",
+     "orin": null,
+     "scal": null,
+     "samples": 9570,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WBAL": {
+     "name": "White Balance temperature (Kelvin)",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3190,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WRGB": {
+     "name": "White Balance RGB gains",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3190,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "ISOE": {
+     "name": "Sensor ISO",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 9570,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "YAVG": {
+     "name": "Average luminance",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3190,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "UNIF": {
+     "name": "Image uniformity",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3190,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "GPS5": {
+     "name": "GPS (Lat., Long., Alt., 2D speed, 3D speed)",
+     "unit": "degdegm\u0000\u0000m/sm/s",
+     "orin": null,
+     "scal": [
+      10000000,
+      10000000,
+      1000,
+      1000,
+      100
+     ],
+     "samples": 5806,
+     "rate_hz": 18.18,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.044
+    },
+    "CORI": {
+     "name": "CameraOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 9570,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "IORI": {
+     "name": "ImageOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 9570,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "GRAV": {
+     "name": "Gravity Vector",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 9570,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WNDM": {
+     "name": "Wind Processing[wind_enable, meter_value(0 - 100)]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3193,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.018
+    },
+    "MWET": {
+     "name": "Microphone Wet[mic_wet, all_mics, confidence]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3193,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.018
+    },
+    "AALP": {
+     "name": "AGC audio level[rms_level ,peak_level]",
+     "unit": "dBFS",
+     "orin": null,
+     "scal": null,
+     "samples": 3193,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.018
+    },
+    "MSKP": {
+     "name": "MRV Frame Skip",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 9570,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "LSKP": {
+     "name": "LRV Frame Skip",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 9570,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    }
+   },
+   "freefall": [
+    {
+     "start": 318.46,
+     "end": 318.69,
+     "dur": 0.23,
+     "min_g": 0.056
+    }
+   ],
+   "freefall_loose": [
+    {
+     "start": 27.22,
+     "end": 27.45,
+     "dur": 0.24,
+     "min_g": 0.231
+    },
+    {
+     "start": 89.25,
+     "end": 89.41,
+     "dur": 0.16,
+     "min_g": 0.153
+    },
+    {
+     "start": 91.29,
+     "end": 91.58,
+     "dur": 0.29,
+     "min_g": 0.098
+    },
+    {
+     "start": 95.63,
+     "end": 95.8,
+     "dur": 0.17,
+     "min_g": 0.119
+    },
+    {
+     "start": 100.52,
+     "end": 100.7,
+     "dur": 0.17,
+     "min_g": 0.086
+    },
+    {
+     "start": 107.04,
+     "end": 107.25,
+     "dur": 0.21,
+     "min_g": 0.112
+    },
+    {
+     "start": 123.89,
+     "end": 124.11,
+     "dur": 0.23,
+     "min_g": 0.097
+    },
+    {
+     "start": 124.92,
+     "end": 125.08,
+     "dur": 0.16,
+     "min_g": 0.206
+    },
+    {
+     "start": 128.43,
+     "end": 128.61,
+     "dur": 0.18,
+     "min_g": 0.179
+    },
+    {
+     "start": 150.28,
+     "end": 150.47,
+     "dur": 0.19,
+     "min_g": 0.207
+    },
+    {
+     "start": 152.22,
+     "end": 152.37,
+     "dur": 0.15,
+     "min_g": 0.149
+    },
+    {
+     "start": 152.75,
+     "end": 152.92,
+     "dur": 0.17,
+     "min_g": 0.329
+    },
+    {
+     "start": 158.55,
+     "end": 158.7,
+     "dur": 0.16,
+     "min_g": 0.171
+    },
+    {
+     "start": 180.59,
+     "end": 180.74,
+     "dur": 0.15,
+     "min_g": 0.098
+    },
+    {
+     "start": 185.36,
+     "end": 185.51,
+     "dur": 0.15,
+     "min_g": 0.223
+    },
+    {
+     "start": 190.66,
+     "end": 190.93,
+     "dur": 0.27,
+     "min_g": 0.226
+    },
+    {
+     "start": 224.59,
+     "end": 224.87,
+     "dur": 0.28,
+     "min_g": 0.099
+    },
+    {
+     "start": 282.95,
+     "end": 283.17,
+     "dur": 0.22,
+     "min_g": 0.249
+    },
+    {
+     "start": 312.18,
+     "end": 312.36,
+     "dur": 0.18,
+     "min_g": 0.349
+    },
+    {
+     "start": 313.23,
+     "end": 313.46,
+     "dur": 0.24,
+     "min_g": 0.021
+    },
+    {
+     "start": 318.4,
+     "end": 318.7,
+     "dur": 0.3,
+     "min_g": 0.056
+    }
+   ],
+   "impacts": [
+    {
+     "at": 87.15,
+     "value": 9.543,
+     "unit": "g",
+     "prominence": 9.154,
+     "z": 52.41
+    },
+    {
+     "at": 289.85,
+     "value": 9.253,
+     "unit": "g",
+     "prominence": 8.905,
+     "z": 50.61
+    },
+    {
+     "at": 225.45,
+     "value": 7.691,
+     "unit": "g",
+     "prominence": 7.25,
+     "z": 40.93
+    },
+    {
+     "at": 105.75,
+     "value": 7.148,
+     "unit": "g",
+     "prominence": 6.728,
+     "z": 37.57
+    },
+    {
+     "at": 89.55,
+     "value": 5.895,
+     "unit": "g",
+     "prominence": 5.447,
+     "z": 29.8
+    },
+    {
+     "at": 292.95,
+     "value": 5.303,
+     "unit": "g",
+     "prominence": 4.32,
+     "z": 26.14
+    },
+    {
+     "at": 269.85,
+     "value": 5.012,
+     "unit": "g",
+     "prominence": 4.48,
+     "z": 24.33
+    },
+    {
+     "at": 188.65,
+     "value": 4.693,
+     "unit": "g",
+     "prominence": 4.279,
+     "z": 22.35
+    },
+    {
+     "at": 88.45,
+     "value": 4.634,
+     "unit": "g",
+     "prominence": 4.155,
+     "z": 21.99
+    },
+    {
+     "at": 86.05,
+     "value": 4.598,
+     "unit": "g",
+     "prominence": 3.836,
+     "z": 21.77
+    }
+   ],
+   "orientation": {
+    "convention": {
+     "vertical": 0,
+     "lateral": 1,
+     "forward": 2,
+     "note": "ACCL data order per ORIN; vertical/lateral/forward assignment is an input, checked empirically in R11"
+    },
+    "median_up_vector": [
+     -0.955,
+     -0.074,
+     -0.155
+    ],
+    "mount": "inverted",
+    "mount_sign": -1,
+    "fraction_level": 0.901,
+    "fraction_tilted_30_90": 0.099,
+    "fraction_past_horizontal": 0.0,
+    "fraction_abs_roll_over_30": 0.001,
+    "fraction_abs_roll_over_45": 0.0
+   },
+   "accel": {
+    "median_g": 1.009,
+    "p99_g": 3.016,
+    "max_g": 9.543,
+    "min_g": 0.021
+   },
+   "grav": {
+    "median_vector": [
+     -0.064,
+     -0.951,
+     -0.14
+    ],
+    "corr_accl_x_grav": [
+     [
+      -0.107,
+      0.532,
+      -0.321
+     ],
+     [
+      0.362,
+      -0.111,
+      0.133
+     ],
+     [
+      0.084,
+      -0.438,
+      0.904
+     ]
+    ]
+   },
+   "gyro": {
+    "median_rads": 0.615,
+    "max_rads": 31.615
+   },
+   "stops": [
+    {
+     "at": 134.6,
+     "from_ms": 5.92,
+     "to_ms": 0.84,
+     "within_s": 3.0
+    },
+    {
+     "at": 197.1,
+     "from_ms": 4.5,
+     "to_ms": 0.8,
+     "within_s": 2.3
+    },
+    {
+     "at": 231.9,
+     "from_ms": 4.67,
+     "to_ms": 0.96,
+     "within_s": 3.0
+    },
+    {
+     "at": 289.4,
+     "from_ms": 5.68,
+     "to_ms": 0.88,
+     "within_s": 3.0
+    }
+   ],
+   "gps": {
+    "source": "GPS5",
+    "fix_fraction": 0.875,
+    "samples_with_fix": 5078,
+    "max_speed_ms": 9.51,
+    "median_speed_ms": 1.45,
+    "fix_values": [
+     3
+    ]
+   },
+   "peaks": [
+    {
+     "at": 5.95,
+     "value": 3.057,
+     "unit": "g"
+    },
+    {
+     "at": 61.05,
+     "value": 3.015,
+     "unit": "g"
+    },
+    {
+     "at": 82.15,
+     "value": 3.108,
+     "unit": "g"
+    },
+    {
+     "at": 83.65,
+     "value": 3.308,
+     "unit": "g"
+    },
+    {
+     "at": 85.25,
+     "value": 3.105,
+     "unit": "g"
+    },
+    {
+     "at": 86.05,
+     "value": 4.598,
+     "unit": "g"
+    },
+    {
+     "at": 87.15,
+     "value": 9.543,
+     "unit": "g"
+    },
+    {
+     "at": 88.45,
+     "value": 4.634,
+     "unit": "g"
+    },
+    {
+     "at": 89.55,
+     "value": 5.895,
+     "unit": "g"
+    },
+    {
+     "at": 91.75,
+     "value": 3.123,
+     "unit": "g"
+    },
+    {
+     "at": 95.85,
+     "value": 3.721,
+     "unit": "g"
+    },
+    {
+     "at": 96.75,
+     "value": 3.127,
+     "unit": "g"
+    },
+    {
+     "at": 98.15,
+     "value": 3.332,
+     "unit": "g"
+    },
+    {
+     "at": 99.45,
+     "value": 3.032,
+     "unit": "g"
+    },
+    {
+     "at": 100.85,
+     "value": 3.781,
+     "unit": "g"
+    },
+    {
+     "at": 105.75,
+     "value": 7.148,
+     "unit": "g"
+    },
+    {
+     "at": 106.55,
+     "value": 3.133,
+     "unit": "g"
+    },
+    {
+     "at": 107.45,
+     "value": 3.902,
+     "unit": "g"
+    },
+    {
+     "at": 124.35,
+     "value": 3.633,
+     "unit": "g"
+    },
+    {
+     "at": 125.45,
+     "value": 3.987,
+     "unit": "g"
+    },
+    {
+     "at": 132.15,
+     "value": 3.211,
+     "unit": "g"
+    },
+    {
+     "at": 146.35,
+     "value": 3.319,
+     "unit": "g"
+    },
+    {
+     "at": 147.75,
+     "value": 3.552,
+     "unit": "g"
+    },
+    {
+     "at": 150.65,
+     "value": 4.123,
+     "unit": "g"
+    },
+    {
+     "at": 151.65,
+     "value": 3.047,
+     "unit": "g"
+    },
+    {
+     "at": 152.45,
+     "value": 3.571,
+     "unit": "g"
+    },
+    {
+     "at": 159.45,
+     "value": 3.224,
+     "unit": "g"
+    },
+    {
+     "at": 160.45,
+     "value": 3.802,
+     "unit": "g"
+    },
+    {
+     "at": 168.45,
+     "value": 4.256,
+     "unit": "g"
+    },
+    {
+     "at": 171.55,
+     "value": 3.432,
+     "unit": "g"
+    },
+    {
+     "at": 178.25,
+     "value": 3.453,
+     "unit": "g"
+    },
+    {
+     "at": 180.15,
+     "value": 3.541,
+     "unit": "g"
+    },
+    {
+     "at": 180.85,
+     "value": 4.364,
+     "unit": "g"
+    },
+    {
+     "at": 181.45,
+     "value": 3.879,
+     "unit": "g"
+    },
+    {
+     "at": 182.65,
+     "value": 3.737,
+     "unit": "g"
+    },
+    {
+     "at": 188.65,
+     "value": 4.693,
+     "unit": "g"
+    },
+    {
+     "at": 189.35,
+     "value": 3.203,
+     "unit": "g"
+    },
+    {
+     "at": 193.35,
+     "value": 3.512,
+     "unit": "g"
+    },
+    {
+     "at": 194.05,
+     "value": 4.378,
+     "unit": "g"
+    },
+    {
+     "at": 224.15,
+     "value": 3.2,
+     "unit": "g"
+    },
+    {
+     "at": 225.45,
+     "value": 7.691,
+     "unit": "g"
+    },
+    {
+     "at": 226.55,
+     "value": 3.783,
+     "unit": "g"
+    },
+    {
+     "at": 227.65,
+     "value": 4.341,
+     "unit": "g"
+    },
+    {
+     "at": 234.25,
+     "value": 3.512,
+     "unit": "g"
+    },
+    {
+     "at": 236.75,
+     "value": 3.117,
+     "unit": "g"
+    },
+    {
+     "at": 268.25,
+     "value": 4.31,
+     "unit": "g"
+    },
+    {
+     "at": 269.85,
+     "value": 5.012,
+     "unit": "g"
+    },
+    {
+     "at": 270.55,
+     "value": 4.142,
+     "unit": "g"
+    },
+    {
+     "at": 271.45,
+     "value": 3.935,
+     "unit": "g"
+    },
+    {
+     "at": 282.65,
+     "value": 3.153,
+     "unit": "g"
+    },
+    {
+     "at": 283.75,
+     "value": 3.056,
+     "unit": "g"
+    },
+    {
+     "at": 284.65,
+     "value": 3.106,
+     "unit": "g"
+    },
+    {
+     "at": 285.75,
+     "value": 3.543,
+     "unit": "g"
+    },
+    {
+     "at": 289.85,
+     "value": 9.253,
+     "unit": "g"
+    },
+    {
+     "at": 292.95,
+     "value": 5.303,
+     "unit": "g"
+    },
+    {
+     "at": 313.65,
+     "value": 3.673,
+     "unit": "g"
+    },
+    {
+     "at": 316.25,
+     "value": 3.061,
+     "unit": "g"
+    },
+    {
+     "at": 316.95,
+     "value": 4.221,
+     "unit": "g"
+    },
+    {
+     "at": 318.15,
+     "value": 3.216,
+     "unit": "g"
+    },
+    {
+     "at": 319.05,
+     "value": 3.863,
+     "unit": "g"
+    }
+   ],
+   "impacts_over_3g": [
+    {
+     "at": 5.95,
+     "value": 3.057,
+     "unit": "g",
+     "prominence": 2.133,
+     "z": 12.21
+    },
+    {
+     "at": 61.05,
+     "value": 3.015,
+     "unit": "g",
+     "prominence": 2.34,
+     "z": 11.96
+    },
+    {
+     "at": 82.15,
+     "value": 3.108,
+     "unit": "g",
+     "prominence": 2.493,
+     "z": 12.53
+    },
+    {
+     "at": 83.65,
+     "value": 3.308,
+     "unit": "g",
+     "prominence": 2.56,
+     "z": 13.77
+    },
+    {
+     "at": 85.25,
+     "value": 3.105,
+     "unit": "g",
+     "prominence": 1.986,
+     "z": 12.51
+    },
+    {
+     "at": 86.05,
+     "value": 4.598,
+     "unit": "g",
+     "prominence": 3.836,
+     "z": 21.77
+    },
+    {
+     "at": 87.15,
+     "value": 9.543,
+     "unit": "g",
+     "prominence": 9.154,
+     "z": 52.41
+    },
+    {
+     "at": 88.45,
+     "value": 4.634,
+     "unit": "g",
+     "prominence": 4.155,
+     "z": 21.99
+    },
+    {
+     "at": 89.55,
+     "value": 5.895,
+     "unit": "g",
+     "prominence": 5.447,
+     "z": 29.8
+    },
+    {
+     "at": 91.75,
+     "value": 3.123,
+     "unit": "g",
+     "prominence": 2.537,
+     "z": 12.63
+    },
+    {
+     "at": 95.85,
+     "value": 3.721,
+     "unit": "g",
+     "prominence": 3.293,
+     "z": 16.33
+    },
+    {
+     "at": 96.75,
+     "value": 3.127,
+     "unit": "g",
+     "prominence": 2.204,
+     "z": 12.65
+    },
+    {
+     "at": 98.15,
+     "value": 3.332,
+     "unit": "g",
+     "prominence": 2.619,
+     "z": 13.92
+    },
+    {
+     "at": 99.45,
+     "value": 3.032,
+     "unit": "g",
+     "prominence": 2.106,
+     "z": 12.06
+    },
+    {
+     "at": 100.85,
+     "value": 3.781,
+     "unit": "g",
+     "prominence": 3.049,
+     "z": 16.7
+    },
+    {
+     "at": 105.75,
+     "value": 7.148,
+     "unit": "g",
+     "prominence": 6.728,
+     "z": 37.57
+    },
+    {
+     "at": 106.55,
+     "value": 3.133,
+     "unit": "g",
+     "prominence": 1.713,
+     "z": 12.69
+    },
+    {
+     "at": 107.45,
+     "value": 3.902,
+     "unit": "g",
+     "prominence": 3.442,
+     "z": 17.45
+    },
+    {
+     "at": 124.35,
+     "value": 3.633,
+     "unit": "g",
+     "prominence": 2.871,
+     "z": 15.78
+    },
+    {
+     "at": 125.45,
+     "value": 3.987,
+     "unit": "g",
+     "prominence": 3.544,
+     "z": 17.98
+    },
+    {
+     "at": 132.15,
+     "value": 3.211,
+     "unit": "g",
+     "prominence": 2.607,
+     "z": 13.17
+    },
+    {
+     "at": 146.35,
+     "value": 3.319,
+     "unit": "g",
+     "prominence": 2.644,
+     "z": 13.84
+    },
+    {
+     "at": 147.75,
+     "value": 3.552,
+     "unit": "g",
+     "prominence": 3.101,
+     "z": 15.29
+    },
+    {
+     "at": 150.65,
+     "value": 4.123,
+     "unit": "g",
+     "prominence": 3.682,
+     "z": 18.82
+    },
+    {
+     "at": 151.65,
+     "value": 3.047,
+     "unit": "g",
+     "prominence": 2.477,
+     "z": 12.16
+    },
+    {
+     "at": 152.45,
+     "value": 3.571,
+     "unit": "g",
+     "prominence": 3.044,
+     "z": 15.4
+    },
+    {
+     "at": 159.45,
+     "value": 3.224,
+     "unit": "g",
+     "prominence": 2.394,
+     "z": 13.25
+    },
+    {
+     "at": 160.45,
+     "value": 3.802,
+     "unit": "g",
+     "prominence": 3.034,
+     "z": 16.84
+    },
+    {
+     "at": 168.45,
+     "value": 4.256,
+     "unit": "g",
+     "prominence": 3.799,
+     "z": 19.65
+    },
+    {
+     "at": 171.55,
+     "value": 3.432,
+     "unit": "g",
+     "prominence": 2.598,
+     "z": 14.54
+    },
+    {
+     "at": 178.25,
+     "value": 3.453,
+     "unit": "g",
+     "prominence": 2.797,
+     "z": 14.67
+    },
+    {
+     "at": 180.15,
+     "value": 3.541,
+     "unit": "g",
+     "prominence": 2.936,
+     "z": 15.22
+    },
+    {
+     "at": 180.85,
+     "value": 4.364,
+     "unit": "g",
+     "prominence": 4.006,
+     "z": 20.31
+    },
+    {
+     "at": 181.45,
+     "value": 3.879,
+     "unit": "g",
+     "prominence": 2.581,
+     "z": 17.31
+    },
+    {
+     "at": 182.65,
+     "value": 3.737,
+     "unit": "g",
+     "prominence": 3.082,
+     "z": 16.43
+    },
+    {
+     "at": 188.65,
+     "value": 4.693,
+     "unit": "g",
+     "prominence": 4.279,
+     "z": 22.35
+    },
+    {
+     "at": 189.35,
+     "value": 3.203,
+     "unit": "g",
+     "prominence": 2.555,
+     "z": 13.12
+    },
+    {
+     "at": 193.35,
+     "value": 3.512,
+     "unit": "g",
+     "prominence": 3.007,
+     "z": 15.04
+    },
+    {
+     "at": 194.05,
+     "value": 4.378,
+     "unit": "g",
+     "prominence": 3.922,
+     "z": 20.41
+    },
+    {
+     "at": 224.15,
+     "value": 3.2,
+     "unit": "g",
+     "prominence": 2.659,
+     "z": 13.1
+    },
+    {
+     "at": 225.45,
+     "value": 7.691,
+     "unit": "g",
+     "prominence": 7.25,
+     "z": 40.93
+    },
+    {
+     "at": 226.55,
+     "value": 3.783,
+     "unit": "g",
+     "prominence": 3.065,
+     "z": 16.72
+    },
+    {
+     "at": 227.65,
+     "value": 4.341,
+     "unit": "g",
+     "prominence": 3.768,
+     "z": 20.18
+    },
+    {
+     "at": 234.25,
+     "value": 3.512,
+     "unit": "g",
+     "prominence": 2.625,
+     "z": 15.04
+    },
+    {
+     "at": 236.75,
+     "value": 3.117,
+     "unit": "g",
+     "prominence": 2.122,
+     "z": 12.59
+    },
+    {
+     "at": 268.25,
+     "value": 4.31,
+     "unit": "g",
+     "prominence": 3.552,
+     "z": 19.98
+    },
+    {
+     "at": 269.85,
+     "value": 5.012,
+     "unit": "g",
+     "prominence": 4.48,
+     "z": 24.33
+    },
+    {
+     "at": 270.55,
+     "value": 4.142,
+     "unit": "g",
+     "prominence": 3.095,
+     "z": 18.94
+    },
+    {
+     "at": 271.45,
+     "value": 3.935,
+     "unit": "g",
+     "prominence": 3.172,
+     "z": 17.66
+    },
+    {
+     "at": 282.65,
+     "value": 3.153,
+     "unit": "g",
+     "prominence": 2.571,
+     "z": 12.81
+    },
+    {
+     "at": 283.75,
+     "value": 3.056,
+     "unit": "g",
+     "prominence": 2.485,
+     "z": 12.21
+    },
+    {
+     "at": 284.65,
+     "value": 3.106,
+     "unit": "g",
+     "prominence": 2.273,
+     "z": 12.52
+    },
+    {
+     "at": 285.75,
+     "value": 3.543,
+     "unit": "g",
+     "prominence": 2.606,
+     "z": 15.23
+    },
+    {
+     "at": 289.85,
+     "value": 9.253,
+     "unit": "g",
+     "prominence": 8.905,
+     "z": 50.61
+    },
+    {
+     "at": 292.95,
+     "value": 5.303,
+     "unit": "g",
+     "prominence": 4.32,
+     "z": 26.14
+    },
+    {
+     "at": 313.65,
+     "value": 3.673,
+     "unit": "g",
+     "prominence": 3.127,
+     "z": 16.04
+    },
+    {
+     "at": 316.25,
+     "value": 3.061,
+     "unit": "g",
+     "prominence": 2.513,
+     "z": 12.24
+    },
+    {
+     "at": 316.95,
+     "value": 4.221,
+     "unit": "g",
+     "prominence": 3.77,
+     "z": 19.43
+    },
+    {
+     "at": 318.15,
+     "value": 3.216,
+     "unit": "g",
+     "prominence": 2.377,
+     "z": 13.2
+    },
+    {
+     "at": 319.05,
+     "value": 3.863,
+     "unit": "g",
+     "prominence": 2.701,
+     "z": 17.21
+    }
+   ]
+  },
+  {
+   "clip": "CLIP_05",
+   "file": "/home/karl/footage/killington-01-2026/spenny-me-air.MP4",
+   "duration_s": 35.269,
+   "hz": 10.0,
+   "gpmd": true,
+   "device": "HERO9 Black",
+   "packets": 36,
+   "packet_hz": 1.021,
+   "streams": {
+    "ACCL": {
+     "name": "Accelerometer",
+     "unit": "m/s\u00b2",
+     "orin": "ZXY",
+     "scal": 417,
+     "samples": 7006,
+     "rate_hz": 198.67,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "GYRO": {
+     "name": "Gyroscope",
+     "unit": "rad/s",
+     "orin": "ZXY",
+     "scal": 939,
+     "samples": 7006,
+     "rate_hz": 198.67,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "SHUT": {
+     "name": "Exposure time (shutter speed)",
+     "unit": "s",
+     "orin": null,
+     "scal": null,
+     "samples": 1058,
+     "rate_hz": 30.02,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WBAL": {
+     "name": "White Balance temperature (Kelvin)",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 352,
+     "rate_hz": 10.01,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WRGB": {
+     "name": "White Balance RGB gains",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 352,
+     "rate_hz": 10.01,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "ISOE": {
+     "name": "Sensor ISO",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 1058,
+     "rate_hz": 30.02,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "YAVG": {
+     "name": "Average luminance",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 353,
+     "rate_hz": 10.03,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "UNIF": {
+     "name": "Image uniformity",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 352,
+     "rate_hz": 10.01,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "GPS5": {
+     "name": "GPS (Lat., Long., Alt., 2D speed, 3D speed)",
+     "unit": "degdegm\u0000\u0000m/sm/s",
+     "orin": null,
+     "scal": [
+      10000000,
+      10000000,
+      1000,
+      1000,
+      100
+     ],
+     "samples": 642,
+     "rate_hz": 18.23,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.003
+    },
+    "CORI": {
+     "name": "CameraOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 1057,
+     "rate_hz": 30.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "IORI": {
+     "name": "ImageOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 1057,
+     "rate_hz": 30.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "GRAV": {
+     "name": "Gravity Vector",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 1057,
+     "rate_hz": 30.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WNDM": {
+     "name": "Wind Processing[wind_enable, meter_value(0 - 100)]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 353,
+     "rate_hz": 10.04,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.035
+    },
+    "MWET": {
+     "name": "Microphone Wet[mic_wet, all_mics, confidence]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 353,
+     "rate_hz": 10.04,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.035
+    },
+    "AALP": {
+     "name": "AGC audio level[rms_level ,peak_level]",
+     "unit": "dBFS",
+     "orin": null,
+     "scal": null,
+     "samples": 353,
+     "rate_hz": 10.04,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.035
+    },
+    "MSKP": {
+     "name": "MRV Frame Skip",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 1057,
+     "rate_hz": 30.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "LSKP": {
+     "name": "LRV Frame Skip",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 1057,
+     "rate_hz": 30.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    }
+   },
+   "freefall": [],
+   "freefall_loose": [
+    {
+     "start": 2.12,
+     "end": 2.34,
+     "dur": 0.22,
+     "min_g": 0.158
+    },
+    {
+     "start": 5.93,
+     "end": 6.11,
+     "dur": 0.17,
+     "min_g": 0.053
+    },
+    {
+     "start": 17.97,
+     "end": 18.27,
+     "dur": 0.3,
+     "min_g": 0.031
+    },
+    {
+     "start": 21.32,
+     "end": 21.56,
+     "dur": 0.24,
+     "min_g": 0.057
+    }
+   ],
+   "impacts": [
+    {
+     "at": 10.35,
+     "value": 8.521,
+     "unit": "g",
+     "prominence": 8.133,
+     "z": 14.48
+    },
+    {
+     "at": 17.65,
+     "value": 8.331,
+     "unit": "g",
+     "prominence": 7.741,
+     "z": 14.09
+    },
+    {
+     "at": 13.35,
+     "value": 6.121,
+     "unit": "g",
+     "prominence": 5.482,
+     "z": 9.63
+    },
+    {
+     "at": 0.25,
+     "value": 4.225,
+     "unit": "g",
+     "prominence": 3.284,
+     "z": 5.8
+    },
+    {
+     "at": 21.75,
+     "value": 4.193,
+     "unit": "g",
+     "prominence": 3.523,
+     "z": 5.73
+    },
+    {
+     "at": 20.65,
+     "value": 4.015,
+     "unit": "g",
+     "prominence": 3.642,
+     "z": 5.37
+    },
+    {
+     "at": 9.65,
+     "value": 3.64,
+     "unit": "g",
+     "prominence": 3.01,
+     "z": 4.62
+    },
+    {
+     "at": 22.45,
+     "value": 3.633,
+     "unit": "g",
+     "prominence": 2.511,
+     "z": 4.6
+    },
+    {
+     "at": 2.45,
+     "value": 3.38,
+     "unit": "g",
+     "prominence": 2.955,
+     "z": 4.09
+    },
+    {
+     "at": 11.15,
+     "value": 3.354,
+     "unit": "g",
+     "prominence": 2.324,
+     "z": 4.04
+    }
+   ],
+   "orientation": {
+    "convention": {
+     "vertical": 0,
+     "lateral": 1,
+     "forward": 2,
+     "note": "ACCL data order per ORIN; vertical/lateral/forward assignment is an input, checked empirically in R11"
+    },
+    "median_up_vector": [
+     -0.985,
+     -0.049,
+     -0.077
+    ],
+    "mount": "inverted",
+    "mount_sign": -1,
+    "fraction_level": 0.921,
+    "fraction_tilted_30_90": 0.062,
+    "fraction_past_horizontal": 0.017,
+    "fraction_abs_roll_over_30": 0.023,
+    "fraction_abs_roll_over_45": 0.02
+   },
+   "accel": {
+    "median_g": 1.057,
+    "p99_g": 3.529,
+    "max_g": 8.52,
+    "min_g": 0.031
+   },
+   "grav": {
+    "median_vector": [
+     -0.018,
+     -0.98,
+     -0.065
+    ],
+    "corr_accl_x_grav": [
+     [
+      -0.281,
+      0.841,
+      -0.71
+     ],
+     [
+      0.363,
+      -0.055,
+      0.243
+     ],
+     [
+      0.427,
+      -0.634,
+      0.924
+     ]
+    ]
+   },
+   "gyro": {
+    "median_rads": 0.797,
+    "max_rads": 15.712
+   },
+   "stops": [],
+   "gps": {
+    "source": "GPS5",
+    "fix_fraction": 0.763,
+    "samples_with_fix": 490,
+    "max_speed_ms": 16.09,
+    "median_speed_ms": 11.16,
+    "fix_values": [
+     3
+    ]
+   },
+   "peaks": [
+    {
+     "at": 0.25,
+     "value": 4.225,
+     "unit": "g"
+    },
+    {
+     "at": 2.45,
+     "value": 3.38,
+     "unit": "g"
+    },
+    {
+     "at": 9.65,
+     "value": 3.64,
+     "unit": "g"
+    },
+    {
+     "at": 10.35,
+     "value": 8.521,
+     "unit": "g"
+    },
+    {
+     "at": 11.15,
+     "value": 3.354,
+     "unit": "g"
+    },
+    {
+     "at": 13.35,
+     "value": 6.121,
+     "unit": "g"
+    },
+    {
+     "at": 17.65,
+     "value": 8.331,
+     "unit": "g"
+    },
+    {
+     "at": 18.55,
+     "value": 3.049,
+     "unit": "g"
+    },
+    {
+     "at": 20.15,
+     "value": 3.152,
+     "unit": "g"
+    },
+    {
+     "at": 20.65,
+     "value": 4.015,
+     "unit": "g"
+    },
+    {
+     "at": 21.75,
+     "value": 4.193,
+     "unit": "g"
+    },
+    {
+     "at": 22.45,
+     "value": 3.633,
+     "unit": "g"
+    },
+    {
+     "at": 23.05,
+     "value": 3.28,
+     "unit": "g"
+    }
+   ],
+   "impacts_over_3g": [
+    {
+     "at": 0.25,
+     "value": 4.225,
+     "unit": "g",
+     "prominence": 3.284,
+     "z": 5.8
+    },
+    {
+     "at": 2.45,
+     "value": 3.38,
+     "unit": "g",
+     "prominence": 2.955,
+     "z": 4.09
+    },
+    {
+     "at": 9.65,
+     "value": 3.64,
+     "unit": "g",
+     "prominence": 3.01,
+     "z": 4.62
+    },
+    {
+     "at": 10.35,
+     "value": 8.521,
+     "unit": "g",
+     "prominence": 8.133,
+     "z": 14.48
+    },
+    {
+     "at": 11.15,
+     "value": 3.354,
+     "unit": "g",
+     "prominence": 2.324,
+     "z": 4.04
+    },
+    {
+     "at": 13.35,
+     "value": 6.121,
+     "unit": "g",
+     "prominence": 5.482,
+     "z": 9.63
+    },
+    {
+     "at": 17.65,
+     "value": 8.331,
+     "unit": "g",
+     "prominence": 7.741,
+     "z": 14.09
+    },
+    {
+     "at": 18.55,
+     "value": 3.049,
+     "unit": "g",
+     "prominence": 2.259,
+     "z": 3.42
+    },
+    {
+     "at": 20.15,
+     "value": 3.152,
+     "unit": "g",
+     "prominence": 2.038,
+     "z": 3.63
+    },
+    {
+     "at": 20.65,
+     "value": 4.015,
+     "unit": "g",
+     "prominence": 3.642,
+     "z": 5.37
+    },
+    {
+     "at": 21.75,
+     "value": 4.193,
+     "unit": "g",
+     "prominence": 3.523,
+     "z": 5.73
+    },
+    {
+     "at": 22.45,
+     "value": 3.633,
+     "unit": "g",
+     "prominence": 2.511,
+     "z": 4.6
+    },
+    {
+     "at": 23.05,
+     "value": 3.28,
+     "unit": "g",
+     "prominence": 2.405,
+     "z": 3.89
+    }
+   ]
+  },
+  {
+   "clip": "CLIP_06",
+   "file": "/home/karl/footage/killington-01-2026/walk.MP4",
+   "duration_s": 319.339,
+   "hz": 10.0,
+   "gpmd": true,
+   "device": "HERO9 Black",
+   "packets": 319,
+   "packet_hz": 0.999,
+   "streams": {
+    "ACCL": {
+     "name": "Accelerometer",
+     "unit": "m/s\u00b2",
+     "orin": "ZXY",
+     "scal": 417,
+     "samples": 63369,
+     "rate_hz": 198.46,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.035
+    },
+    "GYRO": {
+     "name": "Gyroscope",
+     "unit": "rad/s",
+     "orin": "ZXY",
+     "scal": 939,
+     "samples": 63369,
+     "rate_hz": 198.46,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.035
+    },
+    "SHUT": {
+     "name": "Exposure time (shutter speed)",
+     "unit": "s",
+     "orin": null,
+     "scal": null,
+     "samples": 9569,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "WBAL": {
+     "name": "White Balance temperature (Kelvin)",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3190,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WRGB": {
+     "name": "White Balance RGB gains",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3190,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "ISOE": {
+     "name": "Sensor ISO",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 9569,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "YAVG": {
+     "name": "Average luminance",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3189,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.1
+    },
+    "UNIF": {
+     "name": "Image uniformity",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3190,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "GPS5": {
+     "name": "GPS (Lat., Long., Alt., 2D speed, 3D speed)",
+     "unit": "degdegm\u0000\u0000m/sm/s",
+     "orin": null,
+     "scal": [
+      10000000,
+      10000000,
+      1000,
+      1000,
+      100
+     ],
+     "samples": 5804,
+     "rate_hz": 18.18,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.064
+    },
+    "CORI": {
+     "name": "CameraOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 9570,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "IORI": {
+     "name": "ImageOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 9570,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "GRAV": {
+     "name": "Gravity Vector",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 9570,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "WNDM": {
+     "name": "Wind Processing[wind_enable, meter_value(0 - 100)]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3193,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.018
+    },
+    "MWET": {
+     "name": "Microphone Wet[mic_wet, all_mics, confidence]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3193,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.018
+    },
+    "AALP": {
+     "name": "AGC audio level[rms_level ,peak_level]",
+     "unit": "dBFS",
+     "orin": null,
+     "scal": null,
+     "samples": 3193,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.018
+    },
+    "MSKP": {
+     "name": "MRV Frame Skip",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 9570,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "LSKP": {
+     "name": "LRV Frame Skip",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 9570,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    }
+   },
+   "freefall": [],
+   "freefall_loose": [
+    {
+     "start": 30.17,
+     "end": 30.5,
+     "dur": 0.32,
+     "min_g": 0.064
+    },
+    {
+     "start": 46.85,
+     "end": 47.13,
+     "dur": 0.28,
+     "min_g": 0.115
+    }
+   ],
+   "impacts": [
+    {
+     "at": 214.55,
+     "value": 5.508,
+     "unit": "g",
+     "prominence": 5.269,
+     "z": 27.19
+    },
+    {
+     "at": 0.65,
+     "value": 4.93,
+     "unit": "g",
+     "prominence": 3.91,
+     "z": 23.62
+    },
+    {
+     "at": 75.25,
+     "value": 4.72,
+     "unit": "g",
+     "prominence": 4.175,
+     "z": 22.32
+    },
+    {
+     "at": 47.25,
+     "value": 4.235,
+     "unit": "g",
+     "prominence": 3.5,
+     "z": 19.32
+    },
+    {
+     "at": 33.65,
+     "value": 3.882,
+     "unit": "g",
+     "prominence": 3.448,
+     "z": 17.14
+    },
+    {
+     "at": 93.75,
+     "value": 3.663,
+     "unit": "g",
+     "prominence": 3.111,
+     "z": 15.78
+    },
+    {
+     "at": 102.15,
+     "value": 3.438,
+     "unit": "g",
+     "prominence": 2.677,
+     "z": 14.39
+    },
+    {
+     "at": 7.65,
+     "value": 3.361,
+     "unit": "g",
+     "prominence": 2.373,
+     "z": 13.91
+    },
+    {
+     "at": 49.05,
+     "value": 3.338,
+     "unit": "g",
+     "prominence": 2.408,
+     "z": 13.77
+    },
+    {
+     "at": 76.75,
+     "value": 3.322,
+     "unit": "g",
+     "prominence": 2.692,
+     "z": 13.67
+    }
+   ],
+   "orientation": {
+    "convention": {
+     "vertical": 0,
+     "lateral": 1,
+     "forward": 2,
+     "note": "ACCL data order per ORIN; vertical/lateral/forward assignment is an input, checked empirically in R11"
+    },
+    "median_up_vector": [
+     -0.905,
+     -0.005,
+     -0.347
+    ],
+    "mount": "inverted",
+    "mount_sign": -1,
+    "fraction_level": 0.744,
+    "fraction_tilted_30_90": 0.25,
+    "fraction_past_horizontal": 0.005,
+    "fraction_abs_roll_over_30": 0.007,
+    "fraction_abs_roll_over_45": 0.006
+   },
+   "accel": {
+    "median_g": 1.01,
+    "p99_g": 2.025,
+    "max_g": 5.508,
+    "min_g": 0.054
+   },
+   "grav": {
+    "median_vector": [
+     -0.011,
+     -0.887,
+     -0.368
+    ],
+    "corr_accl_x_grav": [
+     [
+      -0.095,
+      0.889,
+      -0.367
+     ],
+     [
+      0.681,
+      -0.079,
+      0.004
+     ],
+     [
+      0.045,
+      -0.372,
+      0.982
+     ]
+    ]
+   },
+   "gyro": {
+    "median_rads": 0.513,
+    "max_rads": 10.314
+   },
+   "stops": [],
+   "gps": {
+    "source": "GPS5",
+    "fix_fraction": 0.768,
+    "samples_with_fix": 4457,
+    "max_speed_ms": 15.6,
+    "median_speed_ms": 1.05,
+    "fix_values": [
+     0,
+     2,
+     3
+    ]
+   },
+   "peaks": [
+    {
+     "at": 0.65,
+     "value": 4.93,
+     "unit": "g"
+    },
+    {
+     "at": 7.65,
+     "value": 3.361,
+     "unit": "g"
+    },
+    {
+     "at": 33.65,
+     "value": 3.882,
+     "unit": "g"
+    },
+    {
+     "at": 46.45,
+     "value": 3.184,
+     "unit": "g"
+    },
+    {
+     "at": 47.25,
+     "value": 4.235,
+     "unit": "g"
+    },
+    {
+     "at": 49.05,
+     "value": 3.338,
+     "unit": "g"
+    },
+    {
+     "at": 73.85,
+     "value": 3.143,
+     "unit": "g"
+    },
+    {
+     "at": 75.25,
+     "value": 4.72,
+     "unit": "g"
+    },
+    {
+     "at": 76.75,
+     "value": 3.322,
+     "unit": "g"
+    },
+    {
+     "at": 93.75,
+     "value": 3.663,
+     "unit": "g"
+    },
+    {
+     "at": 102.15,
+     "value": 3.438,
+     "unit": "g"
+    },
+    {
+     "at": 214.55,
+     "value": 5.508,
+     "unit": "g"
+    }
+   ],
+   "impacts_over_3g": [
+    {
+     "at": 0.65,
+     "value": 4.93,
+     "unit": "g",
+     "prominence": 3.91,
+     "z": 23.62
+    },
+    {
+     "at": 7.65,
+     "value": 3.361,
+     "unit": "g",
+     "prominence": 2.373,
+     "z": 13.91
+    },
+    {
+     "at": 33.65,
+     "value": 3.882,
+     "unit": "g",
+     "prominence": 3.448,
+     "z": 17.14
+    },
+    {
+     "at": 46.45,
+     "value": 3.184,
+     "unit": "g",
+     "prominence": 2.474,
+     "z": 12.82
+    },
+    {
+     "at": 47.25,
+     "value": 4.235,
+     "unit": "g",
+     "prominence": 3.5,
+     "z": 19.32
+    },
+    {
+     "at": 49.05,
+     "value": 3.338,
+     "unit": "g",
+     "prominence": 2.408,
+     "z": 13.77
+    },
+    {
+     "at": 73.85,
+     "value": 3.143,
+     "unit": "g",
+     "prominence": 2.389,
+     "z": 12.56
+    },
+    {
+     "at": 75.25,
+     "value": 4.72,
+     "unit": "g",
+     "prominence": 4.175,
+     "z": 22.32
+    },
+    {
+     "at": 76.75,
+     "value": 3.322,
+     "unit": "g",
+     "prominence": 2.692,
+     "z": 13.67
+    },
+    {
+     "at": 93.75,
+     "value": 3.663,
+     "unit": "g",
+     "prominence": 3.111,
+     "z": 15.78
+    },
+    {
+     "at": 102.15,
+     "value": 3.438,
+     "unit": "g",
+     "prominence": 2.677,
+     "z": 14.39
+    },
+    {
+     "at": 214.55,
+     "value": 5.508,
+     "unit": "g",
+     "prominence": 5.269,
+     "z": 27.19
+    }
+   ]
+  },
+  {
+   "clip": "CLIP_07",
+   "file": "/home/karl/footage/killington-01-2026/cleanduckin.MP4",
+   "duration_s": 318.336,
+   "hz": 10.0,
+   "gpmd": true,
+   "device": "HERO9 Black",
+   "packets": 318,
+   "packet_hz": 0.999,
+   "streams": {
+    "ACCL": {
+     "name": "Accelerometer",
+     "unit": "m/s\u00b2",
+     "orin": "ZXY",
+     "scal": 417,
+     "samples": 63180,
+     "rate_hz": 198.5,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.036
+    },
+    "GYRO": {
+     "name": "Gyroscope",
+     "unit": "rad/s",
+     "orin": "ZXY",
+     "scal": 939,
+     "samples": 63180,
+     "rate_hz": 198.5,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.036
+    },
+    "SHUT": {
+     "name": "Exposure time (shutter speed)",
+     "unit": "s",
+     "orin": null,
+     "scal": null,
+     "samples": 9539,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "WBAL": {
+     "name": "White Balance temperature (Kelvin)",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3180,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WRGB": {
+     "name": "White Balance RGB gains",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3180,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "ISOE": {
+     "name": "Sensor ISO",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 9539,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "YAVG": {
+     "name": "Average luminance",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3179,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.1
+    },
+    "UNIF": {
+     "name": "Image uniformity",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3180,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "GPS5": {
+     "name": "GPS (Lat., Long., Alt., 2D speed, 3D speed)",
+     "unit": "degdegm\u0000\u0000m/sm/s",
+     "orin": null,
+     "scal": [
+      10000000,
+      10000000,
+      1000,
+      1000,
+      100
+     ],
+     "samples": 5786,
+     "rate_hz": 18.18,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.055
+    },
+    "CORI": {
+     "name": "CameraOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 9540,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "IORI": {
+     "name": "ImageOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 9540,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "GRAV": {
+     "name": "Gravity Vector",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 9540,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "WNDM": {
+     "name": "Wind Processing[wind_enable, meter_value(0 - 100)]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3183,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.017
+    },
+    "MWET": {
+     "name": "Microphone Wet[mic_wet, all_mics, confidence]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3183,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.017
+    },
+    "AALP": {
+     "name": "AGC audio level[rms_level ,peak_level]",
+     "unit": "dBFS",
+     "orin": null,
+     "scal": null,
+     "samples": 3183,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.017
+    },
+    "MSKP": {
+     "name": "MRV Frame Skip",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 9540,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "LSKP": {
+     "name": "LRV Frame Skip",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 9540,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    }
+   },
+   "freefall": [],
+   "freefall_loose": [
+    {
+     "start": 116.39,
+     "end": 116.57,
+     "dur": 0.18,
+     "min_g": 0.112
+    },
+    {
+     "start": 149.32,
+     "end": 149.47,
+     "dur": 0.15,
+     "min_g": 0.046
+    },
+    {
+     "start": 282.91,
+     "end": 283.08,
+     "dur": 0.16,
+     "min_g": 0.266
+    },
+    {
+     "start": 284.56,
+     "end": 284.71,
+     "dur": 0.15,
+     "min_g": 0.238
+    }
+   ],
+   "impacts": [
+    {
+     "at": 125.15,
+     "value": 4.969,
+     "unit": "g",
+     "prominence": 4.587,
+     "z": 38.45
+    },
+    {
+     "at": 66.55,
+     "value": 4.539,
+     "unit": "g",
+     "prominence": 3.915,
+     "z": 34.2
+    },
+    {
+     "at": 288.85,
+     "value": 4.043,
+     "unit": "g",
+     "prominence": 3.633,
+     "z": 29.31
+    },
+    {
+     "at": 124.35,
+     "value": 3.982,
+     "unit": "g",
+     "prominence": 2.646,
+     "z": 28.7
+    },
+    {
+     "at": 194.75,
+     "value": 3.981,
+     "unit": "g",
+     "prominence": 3.51,
+     "z": 28.7
+    },
+    {
+     "at": 149.55,
+     "value": 3.495,
+     "unit": "g",
+     "prominence": 2.956,
+     "z": 23.9
+    },
+    {
+     "at": 206.95,
+     "value": 3.21,
+     "unit": "g",
+     "prominence": 2.429,
+     "z": 21.09
+    },
+    {
+     "at": 291.15,
+     "value": 3.112,
+     "unit": "g",
+     "prominence": 2.22,
+     "z": 20.12
+    },
+    {
+     "at": 150.85,
+     "value": 3.104,
+     "unit": "g",
+     "prominence": 2.512,
+     "z": 20.04
+    },
+    {
+     "at": 116.65,
+     "value": 2.975,
+     "unit": "g",
+     "prominence": 2.355,
+     "z": 18.76
+    }
+   ],
+   "orientation": {
+    "convention": {
+     "vertical": 0,
+     "lateral": 1,
+     "forward": 2,
+     "note": "ACCL data order per ORIN; vertical/lateral/forward assignment is an input, checked empirically in R11"
+    },
+    "median_up_vector": [
+     -0.915,
+     -0.002,
+     -0.386
+    ],
+    "mount": "inverted",
+    "mount_sign": -1,
+    "fraction_level": 0.796,
+    "fraction_tilted_30_90": 0.204,
+    "fraction_past_horizontal": 0.0,
+    "fraction_abs_roll_over_30": 0.003,
+    "fraction_abs_roll_over_45": 0.002
+   },
+   "accel": {
+    "median_g": 1.005,
+    "p99_g": 1.963,
+    "max_g": 4.969,
+    "min_g": 0.046
+   },
+   "grav": {
+    "median_vector": [
+     -0.007,
+     -0.907,
+     -0.402
+    ],
+    "corr_accl_x_grav": [
+     [
+      -0.16,
+      0.788,
+      -0.646
+     ],
+     [
+      0.565,
+      -0.117,
+      0.127
+     ],
+     [
+      0.194,
+      -0.635,
+      0.942
+     ]
+    ]
+   },
+   "gyro": {
+    "median_rads": 0.387,
+    "max_rads": 10.948
+   },
+   "stops": [
+    {
+     "at": 214.7,
+     "from_ms": 5.11,
+     "to_ms": 0.96,
+     "within_s": 3.0
+    },
+    {
+     "at": 300.1,
+     "from_ms": 4.71,
+     "to_ms": 0.97,
+     "within_s": 3.0
+    }
+   ],
+   "gps": {
+    "source": "GPS5",
+    "fix_fraction": 0.887,
+    "samples_with_fix": 5130,
+    "max_speed_ms": 12.1,
+    "median_speed_ms": 1.36,
+    "fix_values": [
+     3
+    ]
+   },
+   "peaks": [
+    {
+     "at": 66.55,
+     "value": 4.539,
+     "unit": "g"
+    },
+    {
+     "at": 124.35,
+     "value": 3.982,
+     "unit": "g"
+    },
+    {
+     "at": 125.15,
+     "value": 4.969,
+     "unit": "g"
+    },
+    {
+     "at": 149.55,
+     "value": 3.495,
+     "unit": "g"
+    },
+    {
+     "at": 150.85,
+     "value": 3.104,
+     "unit": "g"
+    },
+    {
+     "at": 194.75,
+     "value": 3.981,
+     "unit": "g"
+    },
+    {
+     "at": 206.95,
+     "value": 3.21,
+     "unit": "g"
+    },
+    {
+     "at": 288.85,
+     "value": 4.043,
+     "unit": "g"
+    },
+    {
+     "at": 291.15,
+     "value": 3.112,
+     "unit": "g"
+    }
+   ],
+   "impacts_over_3g": [
+    {
+     "at": 66.55,
+     "value": 4.539,
+     "unit": "g",
+     "prominence": 3.915,
+     "z": 34.2
+    },
+    {
+     "at": 124.35,
+     "value": 3.982,
+     "unit": "g",
+     "prominence": 2.646,
+     "z": 28.7
+    },
+    {
+     "at": 125.15,
+     "value": 4.969,
+     "unit": "g",
+     "prominence": 4.587,
+     "z": 38.45
+    },
+    {
+     "at": 149.55,
+     "value": 3.495,
+     "unit": "g",
+     "prominence": 2.956,
+     "z": 23.9
+    },
+    {
+     "at": 150.85,
+     "value": 3.104,
+     "unit": "g",
+     "prominence": 2.512,
+     "z": 20.04
+    },
+    {
+     "at": 194.75,
+     "value": 3.981,
+     "unit": "g",
+     "prominence": 3.51,
+     "z": 28.7
+    },
+    {
+     "at": 206.95,
+     "value": 3.21,
+     "unit": "g",
+     "prominence": 2.429,
+     "z": 21.09
+    },
+    {
+     "at": 288.85,
+     "value": 4.043,
+     "unit": "g",
+     "prominence": 3.633,
+     "z": 29.31
+    },
+    {
+     "at": 291.15,
+     "value": 3.112,
+     "unit": "g",
+     "prominence": 2.22,
+     "z": 20.12
+    }
+   ]
+  },
+  {
+   "clip": "CLIP_08",
+   "file": "/home/karl/footage/killington-01-2026/rockhitmarkers.MP4",
+   "duration_s": 279.246,
+   "hz": 10.0,
+   "gpmd": true,
+   "device": "HERO9 Black",
+   "packets": 279,
+   "packet_hz": 0.999,
+   "streams": {
+    "ACCL": {
+     "name": "Accelerometer",
+     "unit": "m/s\u00b2",
+     "orin": "ZXY",
+     "scal": 417,
+     "samples": 55435,
+     "rate_hz": 198.52,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "GYRO": {
+     "name": "Gyroscope",
+     "unit": "rad/s",
+     "orin": "ZXY",
+     "scal": 939,
+     "samples": 55435,
+     "rate_hz": 198.52,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "SHUT": {
+     "name": "Exposure time (shutter speed)",
+     "unit": "s",
+     "orin": null,
+     "scal": null,
+     "samples": 8370,
+     "rate_hz": 29.98,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WBAL": {
+     "name": "White Balance temperature (Kelvin)",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2790,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WRGB": {
+     "name": "White Balance RGB gains",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2790,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "ISOE": {
+     "name": "Sensor ISO",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 8370,
+     "rate_hz": 29.98,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "YAVG": {
+     "name": "Average luminance",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2790,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "UNIF": {
+     "name": "Image uniformity",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2790,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "GPS5": {
+     "name": "GPS (Lat., Long., Alt., 2D speed, 3D speed)",
+     "unit": "degdegm\u0000\u0000m/sm/s",
+     "orin": null,
+     "scal": [
+      10000000,
+      10000000,
+      1000,
+      1000,
+      100
+     ],
+     "samples": 5078,
+     "rate_hz": 18.19,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.041
+    },
+    "CORI": {
+     "name": "CameraOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 8369,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "IORI": {
+     "name": "ImageOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 8369,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "GRAV": {
+     "name": "Gravity Vector",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 8369,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WNDM": {
+     "name": "Wind Processing[wind_enable, meter_value(0 - 100)]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2793,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.022
+    },
+    "MWET": {
+     "name": "Microphone Wet[mic_wet, all_mics, confidence]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2793,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.022
+    },
+    "AALP": {
+     "name": "AGC audio level[rms_level ,peak_level]",
+     "unit": "dBFS",
+     "orin": null,
+     "scal": null,
+     "samples": 2793,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.022
+    },
+    "MSKP": {
+     "name": "MRV Frame Skip",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 8369,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "LSKP": {
+     "name": "LRV Frame Skip",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 8369,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    }
+   },
+   "freefall": [
+    {
+     "start": 82.91,
+     "end": 83.07,
+     "dur": 0.16,
+     "min_g": 0.097
+    }
+   ],
+   "freefall_loose": [
+    {
+     "start": 31.0,
+     "end": 31.34,
+     "dur": 0.35,
+     "min_g": 0.102
+    },
+    {
+     "start": 31.96,
+     "end": 32.26,
+     "dur": 0.3,
+     "min_g": 0.068
+    },
+    {
+     "start": 61.1,
+     "end": 61.36,
+     "dur": 0.26,
+     "min_g": 0.163
+    },
+    {
+     "start": 61.7,
+     "end": 61.87,
+     "dur": 0.17,
+     "min_g": 0.076
+    },
+    {
+     "start": 75.02,
+     "end": 75.2,
+     "dur": 0.18,
+     "min_g": 0.108
+    },
+    {
+     "start": 75.98,
+     "end": 76.46,
+     "dur": 0.48,
+     "min_g": 0.129
+    },
+    {
+     "start": 78.92,
+     "end": 79.1,
+     "dur": 0.18,
+     "min_g": 0.188
+    },
+    {
+     "start": 81.12,
+     "end": 81.36,
+     "dur": 0.24,
+     "min_g": 0.07
+    },
+    {
+     "start": 82.87,
+     "end": 83.13,
+     "dur": 0.26,
+     "min_g": 0.097
+    },
+    {
+     "start": 84.34,
+     "end": 84.56,
+     "dur": 0.23,
+     "min_g": 0.096
+    },
+    {
+     "start": 118.17,
+     "end": 118.39,
+     "dur": 0.22,
+     "min_g": 0.135
+    },
+    {
+     "start": 120.44,
+     "end": 120.75,
+     "dur": 0.31,
+     "min_g": 0.176
+    },
+    {
+     "start": 162.77,
+     "end": 162.93,
+     "dur": 0.16,
+     "min_g": 0.16
+    },
+    {
+     "start": 191.25,
+     "end": 191.43,
+     "dur": 0.19,
+     "min_g": 0.126
+    },
+    {
+     "start": 209.22,
+     "end": 209.52,
+     "dur": 0.3,
+     "min_g": 0.076
+    },
+    {
+     "start": 214.77,
+     "end": 214.93,
+     "dur": 0.16,
+     "min_g": 0.161
+    },
+    {
+     "start": 214.95,
+     "end": 215.11,
+     "dur": 0.16,
+     "min_g": 0.077
+    },
+    {
+     "start": 221.28,
+     "end": 221.56,
+     "dur": 0.28,
+     "min_g": 0.159
+    },
+    {
+     "start": 231.51,
+     "end": 231.7,
+     "dur": 0.2,
+     "min_g": 0.123
+    }
+   ],
+   "impacts": [
+    {
+     "at": 229.85,
+     "value": 8.811,
+     "unit": "g",
+     "prominence": 8.398,
+     "z": 39.14
+    },
+    {
+     "at": 214.55,
+     "value": 7.918,
+     "unit": "g",
+     "prominence": 7.604,
+     "z": 34.6
+    },
+    {
+     "at": 76.75,
+     "value": 5.807,
+     "unit": "g",
+     "prominence": 5.494,
+     "z": 23.86
+    },
+    {
+     "at": 209.65,
+     "value": 5.564,
+     "unit": "g",
+     "prominence": 5.035,
+     "z": 22.63
+    },
+    {
+     "at": 191.55,
+     "value": 5.456,
+     "unit": "g",
+     "prominence": 5.101,
+     "z": 22.08
+    },
+    {
+     "at": 215.35,
+     "value": 5.1,
+     "unit": "g",
+     "prominence": 4.782,
+     "z": 20.27
+    },
+    {
+     "at": 218.45,
+     "value": 4.961,
+     "unit": "g",
+     "prominence": 4.107,
+     "z": 19.56
+    },
+    {
+     "at": 228.65,
+     "value": 4.855,
+     "unit": "g",
+     "prominence": 4.355,
+     "z": 19.02
+    },
+    {
+     "at": 41.05,
+     "value": 4.784,
+     "unit": "g",
+     "prominence": 4.407,
+     "z": 18.66
+    },
+    {
+     "at": 35.05,
+     "value": 4.719,
+     "unit": "g",
+     "prominence": 4.173,
+     "z": 18.33
+    }
+   ],
+   "orientation": {
+    "convention": {
+     "vertical": 0,
+     "lateral": 1,
+     "forward": 2,
+     "note": "ACCL data order per ORIN; vertical/lateral/forward assignment is an input, checked empirically in R11"
+    },
+    "median_up_vector": [
+     -0.958,
+     -0.082,
+     -0.141
+    ],
+    "mount": "inverted",
+    "mount_sign": -1,
+    "fraction_level": 0.879,
+    "fraction_tilted_30_90": 0.121,
+    "fraction_past_horizontal": 0.0,
+    "fraction_abs_roll_over_30": 0.0,
+    "fraction_abs_roll_over_45": 0.0
+   },
+   "accel": {
+    "median_g": 1.013,
+    "p99_g": 3.04,
+    "max_g": 8.811,
+    "min_g": 0.036
+   },
+   "grav": {
+    "median_vector": [
+     -0.067,
+     -0.956,
+     -0.111
+    ],
+    "corr_accl_x_grav": [
+     [
+      -0.196,
+      0.453,
+      -0.338
+     ],
+     [
+      0.409,
+      -0.167,
+      0.272
+     ],
+     [
+      0.346,
+      -0.368,
+      0.912
+     ]
+    ]
+   },
+   "gyro": {
+    "median_rads": 0.642,
+    "max_rads": 13.815
+   },
+   "stops": [
+    {
+     "at": 44.5,
+     "from_ms": 6.1,
+     "to_ms": 0.96,
+     "within_s": 3.0
+    },
+    {
+     "at": 88.6,
+     "from_ms": 5.13,
+     "to_ms": 0.88,
+     "within_s": 3.0
+    },
+    {
+     "at": 125.7,
+     "from_ms": 5.3,
+     "to_ms": 0.85,
+     "within_s": 3.0
+    },
+    {
+     "at": 170.5,
+     "from_ms": 4.26,
+     "to_ms": 0.86,
+     "within_s": 3.0
+    }
+   ],
+   "gps": {
+    "source": "GPS5",
+    "fix_fraction": 1.0,
+    "samples_with_fix": 5078,
+    "max_speed_ms": 16.84,
+    "median_speed_ms": 2.57,
+    "fix_values": [
+     3
+    ]
+   },
+   "peaks": [
+    {
+     "at": 27.85,
+     "value": 4.629,
+     "unit": "g"
+    },
+    {
+     "at": 31.55,
+     "value": 3.32,
+     "unit": "g"
+    },
+    {
+     "at": 35.05,
+     "value": 4.719,
+     "unit": "g"
+    },
+    {
+     "at": 35.85,
+     "value": 4.056,
+     "unit": "g"
+    },
+    {
+     "at": 36.95,
+     "value": 4.281,
+     "unit": "g"
+    },
+    {
+     "at": 38.15,
+     "value": 3.37,
+     "unit": "g"
+    },
+    {
+     "at": 39.75,
+     "value": 3.442,
+     "unit": "g"
+    },
+    {
+     "at": 40.25,
+     "value": 3.526,
+     "unit": "g"
+    },
+    {
+     "at": 41.05,
+     "value": 4.784,
+     "unit": "g"
+    },
+    {
+     "at": 61.95,
+     "value": 3.632,
+     "unit": "g"
+    },
+    {
+     "at": 70.15,
+     "value": 3.515,
+     "unit": "g"
+    },
+    {
+     "at": 75.75,
+     "value": 3.368,
+     "unit": "g"
+    },
+    {
+     "at": 76.75,
+     "value": 5.807,
+     "unit": "g"
+    },
+    {
+     "at": 77.55,
+     "value": 3.808,
+     "unit": "g"
+    },
+    {
+     "at": 78.75,
+     "value": 4.625,
+     "unit": "g"
+    },
+    {
+     "at": 80.05,
+     "value": 4.588,
+     "unit": "g"
+    },
+    {
+     "at": 83.95,
+     "value": 3.184,
+     "unit": "g"
+    },
+    {
+     "at": 84.65,
+     "value": 4.201,
+     "unit": "g"
+    },
+    {
+     "at": 85.15,
+     "value": 3.676,
+     "unit": "g"
+    },
+    {
+     "at": 117.75,
+     "value": 3.848,
+     "unit": "g"
+    },
+    {
+     "at": 120.95,
+     "value": 3.765,
+     "unit": "g"
+    },
+    {
+     "at": 121.85,
+     "value": 3.989,
+     "unit": "g"
+    },
+    {
+     "at": 129.45,
+     "value": 3.596,
+     "unit": "g"
+    },
+    {
+     "at": 163.05,
+     "value": 3.538,
+     "unit": "g"
+    },
+    {
+     "at": 163.65,
+     "value": 3.262,
+     "unit": "g"
+    },
+    {
+     "at": 165.15,
+     "value": 3.498,
+     "unit": "g"
+    },
+    {
+     "at": 188.95,
+     "value": 3.141,
+     "unit": "g"
+    },
+    {
+     "at": 190.85,
+     "value": 3.33,
+     "unit": "g"
+    },
+    {
+     "at": 191.55,
+     "value": 5.456,
+     "unit": "g"
+    },
+    {
+     "at": 206.05,
+     "value": 3.9,
+     "unit": "g"
+    },
+    {
+     "at": 208.55,
+     "value": 3.054,
+     "unit": "g"
+    },
+    {
+     "at": 209.65,
+     "value": 5.564,
+     "unit": "g"
+    },
+    {
+     "at": 210.65,
+     "value": 3.804,
+     "unit": "g"
+    },
+    {
+     "at": 211.85,
+     "value": 3.369,
+     "unit": "g"
+    },
+    {
+     "at": 212.55,
+     "value": 4.65,
+     "unit": "g"
+    },
+    {
+     "at": 213.75,
+     "value": 3.283,
+     "unit": "g"
+    },
+    {
+     "at": 214.55,
+     "value": 7.918,
+     "unit": "g"
+    },
+    {
+     "at": 215.35,
+     "value": 5.1,
+     "unit": "g"
+    },
+    {
+     "at": 218.45,
+     "value": 4.961,
+     "unit": "g"
+    },
+    {
+     "at": 219.15,
+     "value": 3.956,
+     "unit": "g"
+    },
+    {
+     "at": 220.85,
+     "value": 4.046,
+     "unit": "g"
+    },
+    {
+     "at": 221.65,
+     "value": 4.035,
+     "unit": "g"
+    },
+    {
+     "at": 225.15,
+     "value": 3.19,
+     "unit": "g"
+    },
+    {
+     "at": 226.05,
+     "value": 3.302,
+     "unit": "g"
+    },
+    {
+     "at": 228.65,
+     "value": 4.855,
+     "unit": "g"
+    },
+    {
+     "at": 229.85,
+     "value": 8.811,
+     "unit": "g"
+    },
+    {
+     "at": 230.75,
+     "value": 3.414,
+     "unit": "g"
+    },
+    {
+     "at": 232.15,
+     "value": 3.781,
+     "unit": "g"
+    }
+   ],
+   "impacts_over_3g": [
+    {
+     "at": 27.85,
+     "value": 4.629,
+     "unit": "g",
+     "prominence": 4.024,
+     "z": 17.87
+    },
+    {
+     "at": 31.55,
+     "value": 3.32,
+     "unit": "g",
+     "prominence": 2.964,
+     "z": 11.21
+    },
+    {
+     "at": 35.05,
+     "value": 4.719,
+     "unit": "g",
+     "prominence": 4.173,
+     "z": 18.33
+    },
+    {
+     "at": 35.85,
+     "value": 4.056,
+     "unit": "g",
+     "prominence": 3.153,
+     "z": 14.96
+    },
+    {
+     "at": 36.95,
+     "value": 4.281,
+     "unit": "g",
+     "prominence": 3.575,
+     "z": 16.1
+    },
+    {
+     "at": 38.15,
+     "value": 3.37,
+     "unit": "g",
+     "prominence": 2.274,
+     "z": 11.47
+    },
+    {
+     "at": 39.75,
+     "value": 3.442,
+     "unit": "g",
+     "prominence": 2.734,
+     "z": 11.84
+    },
+    {
+     "at": 40.25,
+     "value": 3.526,
+     "unit": "g",
+     "prominence": 2.274,
+     "z": 12.26
+    },
+    {
+     "at": 41.05,
+     "value": 4.784,
+     "unit": "g",
+     "prominence": 4.407,
+     "z": 18.66
+    },
+    {
+     "at": 61.95,
+     "value": 3.632,
+     "unit": "g",
+     "prominence": 3.231,
+     "z": 12.8
+    },
+    {
+     "at": 70.15,
+     "value": 3.515,
+     "unit": "g",
+     "prominence": 3.115,
+     "z": 12.21
+    },
+    {
+     "at": 75.75,
+     "value": 3.368,
+     "unit": "g",
+     "prominence": 2.82,
+     "z": 11.46
+    },
+    {
+     "at": 76.75,
+     "value": 5.807,
+     "unit": "g",
+     "prominence": 5.494,
+     "z": 23.86
+    },
+    {
+     "at": 77.55,
+     "value": 3.808,
+     "unit": "g",
+     "prominence": 2.866,
+     "z": 13.7
+    },
+    {
+     "at": 78.75,
+     "value": 4.625,
+     "unit": "g",
+     "prominence": 4.012,
+     "z": 17.85
+    },
+    {
+     "at": 80.05,
+     "value": 4.588,
+     "unit": "g",
+     "prominence": 4.089,
+     "z": 17.66
+    },
+    {
+     "at": 83.95,
+     "value": 3.184,
+     "unit": "g",
+     "prominence": 2.866,
+     "z": 10.52
+    },
+    {
+     "at": 84.65,
+     "value": 4.201,
+     "unit": "g",
+     "prominence": 3.855,
+     "z": 15.7
+    },
+    {
+     "at": 85.15,
+     "value": 3.676,
+     "unit": "g",
+     "prominence": 2.2,
+     "z": 13.03
+    },
+    {
+     "at": 117.75,
+     "value": 3.848,
+     "unit": "g",
+     "prominence": 3.189,
+     "z": 13.9
+    },
+    {
+     "at": 120.95,
+     "value": 3.765,
+     "unit": "g",
+     "prominence": 2.473,
+     "z": 13.48
+    },
+    {
+     "at": 121.85,
+     "value": 3.989,
+     "unit": "g",
+     "prominence": 3.583,
+     "z": 14.62
+    },
+    {
+     "at": 129.45,
+     "value": 3.596,
+     "unit": "g",
+     "prominence": 2.942,
+     "z": 12.62
+    },
+    {
+     "at": 163.05,
+     "value": 3.538,
+     "unit": "g",
+     "prominence": 3.116,
+     "z": 12.32
+    },
+    {
+     "at": 163.65,
+     "value": 3.262,
+     "unit": "g",
+     "prominence": 2.096,
+     "z": 10.92
+    },
+    {
+     "at": 165.15,
+     "value": 3.498,
+     "unit": "g",
+     "prominence": 3.061,
+     "z": 12.12
+    },
+    {
+     "at": 188.95,
+     "value": 3.141,
+     "unit": "g",
+     "prominence": 2.201,
+     "z": 10.3
+    },
+    {
+     "at": 190.85,
+     "value": 3.33,
+     "unit": "g",
+     "prominence": 2.548,
+     "z": 11.27
+    },
+    {
+     "at": 191.55,
+     "value": 5.456,
+     "unit": "g",
+     "prominence": 5.101,
+     "z": 22.08
+    },
+    {
+     "at": 206.05,
+     "value": 3.9,
+     "unit": "g",
+     "prominence": 3.292,
+     "z": 14.16
+    },
+    {
+     "at": 208.55,
+     "value": 3.054,
+     "unit": "g",
+     "prominence": 2.297,
+     "z": 9.86
+    },
+    {
+     "at": 209.65,
+     "value": 5.564,
+     "unit": "g",
+     "prominence": 5.035,
+     "z": 22.63
+    },
+    {
+     "at": 210.65,
+     "value": 3.804,
+     "unit": "g",
+     "prominence": 3.183,
+     "z": 13.68
+    },
+    {
+     "at": 211.85,
+     "value": 3.369,
+     "unit": "g",
+     "prominence": 2.473,
+     "z": 11.47
+    },
+    {
+     "at": 212.55,
+     "value": 4.65,
+     "unit": "g",
+     "prominence": 4.031,
+     "z": 17.98
+    },
+    {
+     "at": 213.75,
+     "value": 3.283,
+     "unit": "g",
+     "prominence": 1.651,
+     "z": 11.03
+    },
+    {
+     "at": 214.55,
+     "value": 7.918,
+     "unit": "g",
+     "prominence": 7.604,
+     "z": 34.6
+    },
+    {
+     "at": 215.35,
+     "value": 5.1,
+     "unit": "g",
+     "prominence": 4.782,
+     "z": 20.27
+    },
+    {
+     "at": 218.45,
+     "value": 4.961,
+     "unit": "g",
+     "prominence": 4.107,
+     "z": 19.56
+    },
+    {
+     "at": 219.15,
+     "value": 3.956,
+     "unit": "g",
+     "prominence": 2.33,
+     "z": 14.45
+    },
+    {
+     "at": 220.85,
+     "value": 4.046,
+     "unit": "g",
+     "prominence": 3.192,
+     "z": 14.91
+    },
+    {
+     "at": 221.65,
+     "value": 4.035,
+     "unit": "g",
+     "prominence": 3.369,
+     "z": 14.85
+    },
+    {
+     "at": 225.15,
+     "value": 3.19,
+     "unit": "g",
+     "prominence": 1.926,
+     "z": 10.55
+    },
+    {
+     "at": 226.05,
+     "value": 3.302,
+     "unit": "g",
+     "prominence": 2.509,
+     "z": 11.12
+    },
+    {
+     "at": 228.65,
+     "value": 4.855,
+     "unit": "g",
+     "prominence": 4.355,
+     "z": 19.02
+    },
+    {
+     "at": 229.85,
+     "value": 8.811,
+     "unit": "g",
+     "prominence": 8.398,
+     "z": 39.14
+    },
+    {
+     "at": 230.75,
+     "value": 3.414,
+     "unit": "g",
+     "prominence": 1.746,
+     "z": 11.69
+    },
+    {
+     "at": 232.15,
+     "value": 3.781,
+     "unit": "g",
+     "prominence": 3.133,
+     "z": 13.56
+    }
+   ]
+  },
+  {
+   "clip": "CLIP_09",
+   "file": "/home/karl/footage/killington-01-2026/tastytrees.MP4",
+   "duration_s": 263.163,
+   "hz": 10.0,
+   "gpmd": true,
+   "device": "HERO9 Black",
+   "packets": 263,
+   "packet_hz": 0.999,
+   "streams": {
+    "ACCL": {
+     "name": "Accelerometer",
+     "unit": "m/s\u00b2",
+     "orin": "ZXY",
+     "scal": 417,
+     "samples": 52242,
+     "rate_hz": 198.55,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.037
+    },
+    "GYRO": {
+     "name": "Gyroscope",
+     "unit": "rad/s",
+     "orin": "ZXY",
+     "scal": 939,
+     "samples": 52242,
+     "rate_hz": 198.55,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.037
+    },
+    "SHUT": {
+     "name": "Exposure time (shutter speed)",
+     "unit": "s",
+     "orin": null,
+     "scal": null,
+     "samples": 7887,
+     "rate_hz": 29.98,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "WBAL": {
+     "name": "White Balance temperature (Kelvin)",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2629,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WRGB": {
+     "name": "White Balance RGB gains",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2629,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "ISOE": {
+     "name": "Sensor ISO",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 7887,
+     "rate_hz": 29.98,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "YAVG": {
+     "name": "Average luminance",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2629,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "UNIF": {
+     "name": "Image uniformity",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2629,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "GPS5": {
+     "name": "GPS (Lat., Long., Alt., 2D speed, 3D speed)",
+     "unit": "degdegm\u0000\u0000m/sm/s",
+     "orin": null,
+     "scal": [
+      10000000,
+      10000000,
+      1000,
+      1000,
+      100
+     ],
+     "samples": 4785,
+     "rate_hz": 18.19,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.004
+    },
+    "CORI": {
+     "name": "CameraOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 7887,
+     "rate_hz": 29.98,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "IORI": {
+     "name": "ImageOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 7887,
+     "rate_hz": 29.98,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "GRAV": {
+     "name": "Gravity Vector",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 7887,
+     "rate_hz": 29.98,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "WNDM": {
+     "name": "Wind Processing[wind_enable, meter_value(0 - 100)]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2631,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.062
+    },
+    "MWET": {
+     "name": "Microphone Wet[mic_wet, all_mics, confidence]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 2631,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.062
+    },
+    "AALP": {
+     "name": "AGC audio level[rms_level ,peak_level]",
+     "unit": "dBFS",
+     "orin": null,
+     "scal": null,
+     "samples": 2631,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.062
+    },
+    "MSKP": {
+     "name": "MRV Frame Skip",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 7887,
+     "rate_hz": 29.98,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "LSKP": {
+     "name": "LRV Frame Skip",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 7887,
+     "rate_hz": 29.98,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    }
+   },
+   "freefall": [],
+   "freefall_loose": [
+    {
+     "start": 69.29,
+     "end": 69.44,
+     "dur": 0.15,
+     "min_g": 0.22
+    },
+    {
+     "start": 71.54,
+     "end": 71.71,
+     "dur": 0.17,
+     "min_g": 0.087
+    },
+    {
+     "start": 176.62,
+     "end": 176.85,
+     "dur": 0.23,
+     "min_g": 0.311
+    },
+    {
+     "start": 180.07,
+     "end": 180.22,
+     "dur": 0.15,
+     "min_g": 0.401
+    }
+   ],
+   "impacts": [
+    {
+     "at": 150.85,
+     "value": 5.707,
+     "unit": "g",
+     "prominence": 5.34,
+     "z": 72.16
+    },
+    {
+     "at": 151.85,
+     "value": 5.086,
+     "unit": "g",
+     "prominence": 4.529,
+     "z": 62.54
+    },
+    {
+     "at": 65.45,
+     "value": 4.782,
+     "unit": "g",
+     "prominence": 4.228,
+     "z": 57.83
+    },
+    {
+     "at": 220.65,
+     "value": 4.436,
+     "unit": "g",
+     "prominence": 3.497,
+     "z": 52.48
+    },
+    {
+     "at": 69.85,
+     "value": 4.119,
+     "unit": "g",
+     "prominence": 3.646,
+     "z": 47.57
+    },
+    {
+     "at": 15.85,
+     "value": 3.875,
+     "unit": "g",
+     "prominence": 2.904,
+     "z": 43.78
+    },
+    {
+     "at": 72.15,
+     "value": 3.689,
+     "unit": "g",
+     "prominence": 3.127,
+     "z": 40.91
+    },
+    {
+     "at": 169.65,
+     "value": 3.354,
+     "unit": "g",
+     "prominence": 2.793,
+     "z": 35.71
+    },
+    {
+     "at": 66.95,
+     "value": 3.334,
+     "unit": "g",
+     "prominence": 2.708,
+     "z": 35.41
+    },
+    {
+     "at": 154.15,
+     "value": 3.328,
+     "unit": "g",
+     "prominence": 2.583,
+     "z": 35.31
+    }
+   ],
+   "orientation": {
+    "convention": {
+     "vertical": 0,
+     "lateral": 1,
+     "forward": 2,
+     "note": "ACCL data order per ORIN; vertical/lateral/forward assignment is an input, checked empirically in R11"
+    },
+    "median_up_vector": [
+     -0.903,
+     -0.06,
+     -0.374
+    ],
+    "mount": "inverted",
+    "mount_sign": -1,
+    "fraction_level": 0.692,
+    "fraction_tilted_30_90": 0.308,
+    "fraction_past_horizontal": 0.0,
+    "fraction_abs_roll_over_30": 0.0,
+    "fraction_abs_roll_over_45": 0.0
+   },
+   "accel": {
+    "median_g": 1.003,
+    "p99_g": 2.24,
+    "max_g": 5.707,
+    "min_g": 0.022
+   },
+   "grav": {
+    "median_vector": [
+     -0.057,
+     -0.895,
+     -0.385
+    ],
+    "corr_accl_x_grav": [
+     [
+      -0.173,
+      0.701,
+      -0.521
+     ],
+     [
+      0.355,
+      -0.086,
+      -0.0
+     ],
+     [
+      0.126,
+      -0.483,
+      0.966
+     ]
+    ]
+   },
+   "gyro": {
+    "median_rads": 0.407,
+    "max_rads": 9.955
+   },
+   "stops": [
+    {
+     "at": 89.4,
+     "from_ms": 4.19,
+     "to_ms": 0.83,
+     "within_s": 2.1
+    }
+   ],
+   "gps": {
+    "source": "GPS5",
+    "fix_fraction": 0.966,
+    "samples_with_fix": 4621,
+    "max_speed_ms": 10.87,
+    "median_speed_ms": 1.08,
+    "fix_values": [
+     3
+    ]
+   },
+   "peaks": [
+    {
+     "at": 15.85,
+     "value": 3.875,
+     "unit": "g"
+    },
+    {
+     "at": 62.95,
+     "value": 3.19,
+     "unit": "g"
+    },
+    {
+     "at": 65.45,
+     "value": 4.782,
+     "unit": "g"
+    },
+    {
+     "at": 66.95,
+     "value": 3.334,
+     "unit": "g"
+    },
+    {
+     "at": 69.85,
+     "value": 4.119,
+     "unit": "g"
+    },
+    {
+     "at": 72.15,
+     "value": 3.689,
+     "unit": "g"
+    },
+    {
+     "at": 150.85,
+     "value": 5.707,
+     "unit": "g"
+    },
+    {
+     "at": 151.85,
+     "value": 5.086,
+     "unit": "g"
+    },
+    {
+     "at": 154.15,
+     "value": 3.328,
+     "unit": "g"
+    },
+    {
+     "at": 169.65,
+     "value": 3.354,
+     "unit": "g"
+    },
+    {
+     "at": 174.95,
+     "value": 3.139,
+     "unit": "g"
+    },
+    {
+     "at": 220.65,
+     "value": 4.436,
+     "unit": "g"
+    }
+   ],
+   "impacts_over_3g": [
+    {
+     "at": 15.85,
+     "value": 3.875,
+     "unit": "g",
+     "prominence": 2.904,
+     "z": 43.78
+    },
+    {
+     "at": 62.95,
+     "value": 3.19,
+     "unit": "g",
+     "prominence": 2.48,
+     "z": 33.18
+    },
+    {
+     "at": 65.45,
+     "value": 4.782,
+     "unit": "g",
+     "prominence": 4.228,
+     "z": 57.83
+    },
+    {
+     "at": 66.95,
+     "value": 3.334,
+     "unit": "g",
+     "prominence": 2.708,
+     "z": 35.41
+    },
+    {
+     "at": 69.85,
+     "value": 4.119,
+     "unit": "g",
+     "prominence": 3.646,
+     "z": 47.57
+    },
+    {
+     "at": 72.15,
+     "value": 3.689,
+     "unit": "g",
+     "prominence": 3.127,
+     "z": 40.91
+    },
+    {
+     "at": 150.85,
+     "value": 5.707,
+     "unit": "g",
+     "prominence": 5.34,
+     "z": 72.16
+    },
+    {
+     "at": 151.85,
+     "value": 5.086,
+     "unit": "g",
+     "prominence": 4.529,
+     "z": 62.54
+    },
+    {
+     "at": 154.15,
+     "value": 3.328,
+     "unit": "g",
+     "prominence": 2.583,
+     "z": 35.31
+    },
+    {
+     "at": 169.65,
+     "value": 3.354,
+     "unit": "g",
+     "prominence": 2.793,
+     "z": 35.71
+    },
+    {
+     "at": 174.95,
+     "value": 3.139,
+     "unit": "g",
+     "prominence": 2.356,
+     "z": 32.38
+    },
+    {
+     "at": 220.65,
+     "value": 4.436,
+     "unit": "g",
+     "prominence": 3.497,
+     "z": 52.48
+    }
+   ]
+  },
+  {
+   "clip": "CLIP_10",
+   "file": "/home/karl/footage/killington-01-2026/spencerunderbomb.MP4",
+   "duration_s": 40.407,
+   "hz": 10.0,
+   "gpmd": true,
+   "device": "HERO9 Black",
+   "packets": 41,
+   "packet_hz": 1.015,
+   "streams": {
+    "ACCL": {
+     "name": "Accelerometer",
+     "unit": "m/s\u00b2",
+     "orin": "ZXY",
+     "scal": 417,
+     "samples": 8027,
+     "rate_hz": 198.67,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "GYRO": {
+     "name": "Gyroscope",
+     "unit": "rad/s",
+     "orin": "ZXY",
+     "scal": 939,
+     "samples": 8027,
+     "rate_hz": 198.67,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "SHUT": {
+     "name": "Exposure time (shutter speed)",
+     "unit": "s",
+     "orin": null,
+     "scal": null,
+     "samples": 1212,
+     "rate_hz": 30.02,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.0
+    },
+    "WBAL": {
+     "name": "White Balance temperature (Kelvin)",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 404,
+     "rate_hz": 10.02,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WRGB": {
+     "name": "White Balance RGB gains",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 404,
+     "rate_hz": 10.02,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "ISOE": {
+     "name": "Sensor ISO",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 1212,
+     "rate_hz": 30.02,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.0
+    },
+    "YAVG": {
+     "name": "Average luminance",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 404,
+     "rate_hz": 10.02,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "UNIF": {
+     "name": "Image uniformity",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 404,
+     "rate_hz": 10.02,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "GPS5": {
+     "name": "GPS (Lat., Long., Alt., 2D speed, 3D speed)",
+     "unit": "degdegm\u0000\u0000m/sm/s",
+     "orin": null,
+     "scal": [
+      10000000,
+      10000000,
+      1000,
+      1000,
+      100
+     ],
+     "samples": 735,
+     "rate_hz": 18.21,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.002
+    },
+    "CORI": {
+     "name": "CameraOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 1211,
+     "rate_hz": 29.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "IORI": {
+     "name": "ImageOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 1211,
+     "rate_hz": 29.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "GRAV": {
+     "name": "Gravity Vector",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 1211,
+     "rate_hz": 29.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WNDM": {
+     "name": "Wind Processing[wind_enable, meter_value(0 - 100)]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 404,
+     "rate_hz": 10.03,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.04
+    },
+    "MWET": {
+     "name": "Microphone Wet[mic_wet, all_mics, confidence]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 404,
+     "rate_hz": 10.03,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.04
+    },
+    "AALP": {
+     "name": "AGC audio level[rms_level ,peak_level]",
+     "unit": "dBFS",
+     "orin": null,
+     "scal": null,
+     "samples": 404,
+     "rate_hz": 10.03,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.04
+    },
+    "MSKP": {
+     "name": "MRV Frame Skip",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 1211,
+     "rate_hz": 29.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "LSKP": {
+     "name": "LRV Frame Skip",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 1211,
+     "rate_hz": 29.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    }
+   },
+   "freefall": [],
+   "freefall_loose": [],
+   "impacts": [
+    {
+     "at": 26.45,
+     "value": 1.645,
+     "unit": "g",
+     "prominence": 0.66,
+     "z": 45.71
+    },
+    {
+     "at": 40.35,
+     "value": 1.568,
+     "unit": "g",
+     "prominence": 0.55,
+     "z": 40.09
+    },
+    {
+     "at": 38.15,
+     "value": 1.468,
+     "unit": "g",
+     "prominence": 0.474,
+     "z": 32.85
+    },
+    {
+     "at": 36.25,
+     "value": 1.442,
+     "unit": "g",
+     "prominence": 0.39,
+     "z": 30.93
+    },
+    {
+     "at": 36.95,
+     "value": 1.426,
+     "unit": "g",
+     "prominence": 0.327,
+     "z": 29.77
+    },
+    {
+     "at": 37.55,
+     "value": 1.39,
+     "unit": "g",
+     "prominence": 0.232,
+     "z": 27.19
+    },
+    {
+     "at": 34.45,
+     "value": 1.305,
+     "unit": "g",
+     "prominence": 0.32,
+     "z": 21.04
+    },
+    {
+     "at": 28.95,
+     "value": 1.203,
+     "unit": "g",
+     "prominence": 0.209,
+     "z": 13.61
+    },
+    {
+     "at": 29.65,
+     "value": 1.184,
+     "unit": "g",
+     "prominence": 0.12,
+     "z": 12.21
+    },
+    {
+     "at": 28.45,
+     "value": 1.161,
+     "unit": "g",
+     "prominence": 0.156,
+     "z": 10.57
+    }
+   ],
+   "orientation": {
+    "convention": {
+     "vertical": 0,
+     "lateral": 1,
+     "forward": 2,
+     "note": "ACCL data order per ORIN; vertical/lateral/forward assignment is an input, checked empirically in R11"
+    },
+    "median_up_vector": [
+     -0.274,
+     -0.015,
+     -0.962
+    ],
+    "mount": "inverted",
+    "mount_sign": -1,
+    "fraction_level": 0.249,
+    "fraction_tilted_30_90": 0.751,
+    "fraction_past_horizontal": 0.0,
+    "fraction_abs_roll_over_30": 0.0,
+    "fraction_abs_roll_over_45": 0.0
+   },
+   "accel": {
+    "median_g": 0.999,
+    "p99_g": 1.23,
+    "max_g": 1.645,
+    "min_g": 0.551
+   },
+   "grav": {
+    "median_vector": [
+     -0.015,
+     -0.273,
+     -0.962
+    ],
+    "corr_accl_x_grav": [
+     [
+      0.44,
+      0.994,
+      -0.975
+     ],
+     [
+      0.976,
+      0.401,
+      -0.311
+     ],
+     [
+      -0.339,
+      -0.974,
+      0.997
+     ]
+    ]
+   },
+   "gyro": {
+    "median_rads": 0.048,
+    "max_rads": 5.64
+   },
+   "stops": [],
+   "gps": {
+    "source": "GPS5",
+    "fix_fraction": 0.902,
+    "samples_with_fix": 663,
+    "max_speed_ms": 1.27,
+    "median_speed_ms": 0.58,
+    "fix_values": [
+     3
+    ]
+   },
+   "peaks": [],
+   "impacts_over_3g": []
+  },
+  {
+   "clip": "CLIP_11",
+   "file": "/home/karl/footage/killington-01-2026/bombbeginning.MP4",
+   "duration_s": 318.336,
+   "hz": 10.0,
+   "gpmd": true,
+   "device": "HERO9 Black",
+   "packets": 318,
+   "packet_hz": 0.999,
+   "streams": {
+    "ACCL": {
+     "name": "Accelerometer",
+     "unit": "m/s\u00b2",
+     "orin": "ZXY",
+     "scal": 417,
+     "samples": 63183,
+     "rate_hz": 198.5,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.032
+    },
+    "GYRO": {
+     "name": "Gyroscope",
+     "unit": "rad/s",
+     "orin": "ZXY",
+     "scal": 939,
+     "samples": 63183,
+     "rate_hz": 198.5,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.032
+    },
+    "SHUT": {
+     "name": "Exposure time (shutter speed)",
+     "unit": "s",
+     "orin": null,
+     "scal": null,
+     "samples": 9539,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "WBAL": {
+     "name": "White Balance temperature (Kelvin)",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3180,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WRGB": {
+     "name": "White Balance RGB gains",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3180,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "ISOE": {
+     "name": "Sensor ISO",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 9539,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "YAVG": {
+     "name": "Average luminance",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3180,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "UNIF": {
+     "name": "Image uniformity",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3180,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "GPS5": {
+     "name": "GPS (Lat., Long., Alt., 2D speed, 3D speed)",
+     "unit": "degdegm\u0000\u0000m/sm/s",
+     "orin": null,
+     "scal": [
+      10000000,
+      10000000,
+      1000,
+      1000,
+      100
+     ],
+     "samples": 5787,
+     "rate_hz": 18.18,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.002
+    },
+    "CORI": {
+     "name": "CameraOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 9540,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "IORI": {
+     "name": "ImageOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 9540,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "GRAV": {
+     "name": "Gravity Vector",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 9540,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "WNDM": {
+     "name": "Wind Processing[wind_enable, meter_value(0 - 100)]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3183,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.017
+    },
+    "MWET": {
+     "name": "Microphone Wet[mic_wet, all_mics, confidence]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 3183,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.017
+    },
+    "AALP": {
+     "name": "AGC audio level[rms_level ,peak_level]",
+     "unit": "dBFS",
+     "orin": null,
+     "scal": null,
+     "samples": 3183,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.017
+    },
+    "MSKP": {
+     "name": "MRV Frame Skip",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 9540,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "LSKP": {
+     "name": "LRV Frame Skip",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 9540,
+     "rate_hz": 29.97,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    }
+   },
+   "freefall": [],
+   "freefall_loose": [
+    {
+     "start": 59.6,
+     "end": 59.9,
+     "dur": 0.3,
+     "min_g": 0.153
+    },
+    {
+     "start": 62.95,
+     "end": 63.11,
+     "dur": 0.16,
+     "min_g": 0.151
+    },
+    {
+     "start": 95.18,
+     "end": 95.35,
+     "dur": 0.17,
+     "min_g": 0.216
+    },
+    {
+     "start": 142.63,
+     "end": 142.81,
+     "dur": 0.19,
+     "min_g": 0.318
+    },
+    {
+     "start": 152.97,
+     "end": 153.12,
+     "dur": 0.15,
+     "min_g": 0.211
+    },
+    {
+     "start": 217.5,
+     "end": 217.67,
+     "dur": 0.17,
+     "min_g": 0.151
+    }
+   ],
+   "impacts": [
+    {
+     "at": 288.95,
+     "value": 7.263,
+     "unit": "g",
+     "prominence": 6.911,
+     "z": 69.49
+    },
+    {
+     "at": 144.35,
+     "value": 6.714,
+     "unit": "g",
+     "prominence": 6.341,
+     "z": 63.33
+    },
+    {
+     "at": 289.45,
+     "value": 6.502,
+     "unit": "g",
+     "prominence": 5.135,
+     "z": 60.96
+    },
+    {
+     "at": 71.05,
+     "value": 6.058,
+     "unit": "g",
+     "prominence": 5.655,
+     "z": 55.98
+    },
+    {
+     "at": 143.15,
+     "value": 5.872,
+     "unit": "g",
+     "prominence": 5.143,
+     "z": 53.89
+    },
+    {
+     "at": 64.45,
+     "value": 5.128,
+     "unit": "g",
+     "prominence": 4.256,
+     "z": 45.55
+    },
+    {
+     "at": 77.85,
+     "value": 4.732,
+     "unit": "g",
+     "prominence": 3.947,
+     "z": 41.1
+    },
+    {
+     "at": 259.55,
+     "value": 4.612,
+     "unit": "g",
+     "prominence": 3.732,
+     "z": 39.76
+    },
+    {
+     "at": 69.75,
+     "value": 4.607,
+     "unit": "g",
+     "prominence": 3.568,
+     "z": 39.7
+    },
+    {
+     "at": 65.95,
+     "value": 4.375,
+     "unit": "g",
+     "prominence": 3.354,
+     "z": 37.11
+    }
+   ],
+   "orientation": {
+    "convention": {
+     "vertical": 0,
+     "lateral": 1,
+     "forward": 2,
+     "note": "ACCL data order per ORIN; vertical/lateral/forward assignment is an input, checked empirically in R11"
+    },
+    "median_up_vector": [
+     -0.883,
+     -0.063,
+     -0.424
+    ],
+    "mount": "inverted",
+    "mount_sign": -1,
+    "fraction_level": 0.538,
+    "fraction_tilted_30_90": 0.455,
+    "fraction_past_horizontal": 0.007,
+    "fraction_abs_roll_over_30": 0.033,
+    "fraction_abs_roll_over_45": 0.013
+   },
+   "accel": {
+    "median_g": 1.006,
+    "p99_g": 2.587,
+    "max_g": 7.263,
+    "min_g": 0.017
+   },
+   "grav": {
+    "median_vector": [
+     -0.059,
+     -0.872,
+     -0.436
+    ],
+    "corr_accl_x_grav": [
+     [
+      -0.094,
+      0.939,
+      -0.708
+     ],
+     [
+      0.545,
+      -0.083,
+      0.263
+     ],
+     [
+      0.316,
+      -0.68,
+      0.967
+     ]
+    ]
+   },
+   "gyro": {
+    "median_rads": 0.568,
+    "max_rads": 20.856
+   },
+   "stops": [],
+   "gps": {
+    "source": "GPS5",
+    "fix_fraction": 0.987,
+    "samples_with_fix": 5713,
+    "max_speed_ms": 16.81,
+    "median_speed_ms": 0.5,
+    "fix_values": [
+     3
+    ]
+   },
+   "peaks": [
+    {
+     "at": 54.35,
+     "value": 4.299,
+     "unit": "g"
+    },
+    {
+     "at": 55.15,
+     "value": 3.522,
+     "unit": "g"
+    },
+    {
+     "at": 56.65,
+     "value": 3.238,
+     "unit": "g"
+    },
+    {
+     "at": 57.25,
+     "value": 3.155,
+     "unit": "g"
+    },
+    {
+     "at": 59.35,
+     "value": 3.422,
+     "unit": "g"
+    },
+    {
+     "at": 59.95,
+     "value": 3.142,
+     "unit": "g"
+    },
+    {
+     "at": 64.45,
+     "value": 5.128,
+     "unit": "g"
+    },
+    {
+     "at": 65.95,
+     "value": 4.375,
+     "unit": "g"
+    },
+    {
+     "at": 66.85,
+     "value": 4.063,
+     "unit": "g"
+    },
+    {
+     "at": 67.65,
+     "value": 4.033,
+     "unit": "g"
+    },
+    {
+     "at": 69.75,
+     "value": 4.607,
+     "unit": "g"
+    },
+    {
+     "at": 71.05,
+     "value": 6.058,
+     "unit": "g"
+    },
+    {
+     "at": 71.75,
+     "value": 3.425,
+     "unit": "g"
+    },
+    {
+     "at": 72.25,
+     "value": 4.298,
+     "unit": "g"
+    },
+    {
+     "at": 75.25,
+     "value": 3.858,
+     "unit": "g"
+    },
+    {
+     "at": 77.35,
+     "value": 3.257,
+     "unit": "g"
+    },
+    {
+     "at": 77.85,
+     "value": 4.732,
+     "unit": "g"
+    },
+    {
+     "at": 79.45,
+     "value": 3.002,
+     "unit": "g"
+    },
+    {
+     "at": 82.85,
+     "value": 3.612,
+     "unit": "g"
+    },
+    {
+     "at": 86.95,
+     "value": 3.086,
+     "unit": "g"
+    },
+    {
+     "at": 143.15,
+     "value": 5.872,
+     "unit": "g"
+    },
+    {
+     "at": 144.35,
+     "value": 6.714,
+     "unit": "g"
+    },
+    {
+     "at": 180.25,
+     "value": 3.913,
+     "unit": "g"
+    },
+    {
+     "at": 218.95,
+     "value": 3.435,
+     "unit": "g"
+    },
+    {
+     "at": 221.75,
+     "value": 3.616,
+     "unit": "g"
+    },
+    {
+     "at": 259.55,
+     "value": 4.612,
+     "unit": "g"
+    },
+    {
+     "at": 280.15,
+     "value": 3.001,
+     "unit": "g"
+    },
+    {
+     "at": 288.95,
+     "value": 7.263,
+     "unit": "g"
+    },
+    {
+     "at": 289.45,
+     "value": 6.502,
+     "unit": "g"
+    },
+    {
+     "at": 302.65,
+     "value": 3.877,
+     "unit": "g"
+    },
+    {
+     "at": 304.45,
+     "value": 3.92,
+     "unit": "g"
+    }
+   ],
+   "impacts_over_3g": [
+    {
+     "at": 54.35,
+     "value": 4.299,
+     "unit": "g",
+     "prominence": 3.649,
+     "z": 36.25
+    },
+    {
+     "at": 55.15,
+     "value": 3.522,
+     "unit": "g",
+     "prominence": 1.932,
+     "z": 27.54
+    },
+    {
+     "at": 56.65,
+     "value": 3.238,
+     "unit": "g",
+     "prominence": 2.114,
+     "z": 24.35
+    },
+    {
+     "at": 57.25,
+     "value": 3.155,
+     "unit": "g",
+     "prominence": 1.801,
+     "z": 23.42
+    },
+    {
+     "at": 59.35,
+     "value": 3.422,
+     "unit": "g",
+     "prominence": 2.419,
+     "z": 26.41
+    },
+    {
+     "at": 59.95,
+     "value": 3.142,
+     "unit": "g",
+     "prominence": 2.729,
+     "z": 23.28
+    },
+    {
+     "at": 64.45,
+     "value": 5.128,
+     "unit": "g",
+     "prominence": 4.256,
+     "z": 45.55
+    },
+    {
+     "at": 65.95,
+     "value": 4.375,
+     "unit": "g",
+     "prominence": 3.354,
+     "z": 37.11
+    },
+    {
+     "at": 66.85,
+     "value": 4.063,
+     "unit": "g",
+     "prominence": 2.732,
+     "z": 33.6
+    },
+    {
+     "at": 67.65,
+     "value": 4.033,
+     "unit": "g",
+     "prominence": 2.086,
+     "z": 33.27
+    },
+    {
+     "at": 69.75,
+     "value": 4.607,
+     "unit": "g",
+     "prominence": 3.568,
+     "z": 39.7
+    },
+    {
+     "at": 71.05,
+     "value": 6.058,
+     "unit": "g",
+     "prominence": 5.655,
+     "z": 55.98
+    },
+    {
+     "at": 71.75,
+     "value": 3.425,
+     "unit": "g",
+     "prominence": 1.909,
+     "z": 26.45
+    },
+    {
+     "at": 72.25,
+     "value": 4.298,
+     "unit": "g",
+     "prominence": 2.93,
+     "z": 36.24
+    },
+    {
+     "at": 75.25,
+     "value": 3.858,
+     "unit": "g",
+     "prominence": 2.832,
+     "z": 31.31
+    },
+    {
+     "at": 77.35,
+     "value": 3.257,
+     "unit": "g",
+     "prominence": 2.001,
+     "z": 24.56
+    },
+    {
+     "at": 77.85,
+     "value": 4.732,
+     "unit": "g",
+     "prominence": 3.947,
+     "z": 41.1
+    },
+    {
+     "at": 79.45,
+     "value": 3.002,
+     "unit": "g",
+     "prominence": 1.911,
+     "z": 21.7
+    },
+    {
+     "at": 82.85,
+     "value": 3.612,
+     "unit": "g",
+     "prominence": 2.881,
+     "z": 28.54
+    },
+    {
+     "at": 86.95,
+     "value": 3.086,
+     "unit": "g",
+     "prominence": 2.24,
+     "z": 22.65
+    },
+    {
+     "at": 143.15,
+     "value": 5.872,
+     "unit": "g",
+     "prominence": 5.143,
+     "z": 53.89
+    },
+    {
+     "at": 144.35,
+     "value": 6.714,
+     "unit": "g",
+     "prominence": 6.341,
+     "z": 63.33
+    },
+    {
+     "at": 180.25,
+     "value": 3.913,
+     "unit": "g",
+     "prominence": 3.413,
+     "z": 31.93
+    },
+    {
+     "at": 218.95,
+     "value": 3.435,
+     "unit": "g",
+     "prominence": 2.781,
+     "z": 26.56
+    },
+    {
+     "at": 221.75,
+     "value": 3.616,
+     "unit": "g",
+     "prominence": 2.79,
+     "z": 28.6
+    },
+    {
+     "at": 259.55,
+     "value": 4.612,
+     "unit": "g",
+     "prominence": 3.732,
+     "z": 39.76
+    },
+    {
+     "at": 280.15,
+     "value": 3.001,
+     "unit": "g",
+     "prominence": 2.017,
+     "z": 21.7
+    },
+    {
+     "at": 288.95,
+     "value": 7.263,
+     "unit": "g",
+     "prominence": 6.911,
+     "z": 69.49
+    },
+    {
+     "at": 289.45,
+     "value": 6.502,
+     "unit": "g",
+     "prominence": 5.135,
+     "z": 60.96
+    },
+    {
+     "at": 302.65,
+     "value": 3.877,
+     "unit": "g",
+     "prominence": 2.837,
+     "z": 31.52
+    },
+    {
+     "at": 304.45,
+     "value": 3.92,
+     "unit": "g",
+     "prominence": 2.925,
+     "z": 32.0
+    }
+   ]
+  },
+  {
+   "clip": "CLIP_12",
+   "file": "/home/karl/footage/killington-01-2026/goodliftlineme.MP4",
+   "duration_s": 191.525,
+   "hz": 10.0,
+   "gpmd": true,
+   "device": "HERO9 Black",
+   "packets": 192,
+   "packet_hz": 1.002,
+   "streams": {
+    "ACCL": {
+     "name": "Accelerometer",
+     "unit": "m/s\u00b2",
+     "orin": "ZXY",
+     "scal": 417,
+     "samples": 38016,
+     "rate_hz": 198.53,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.032
+    },
+    "GYRO": {
+     "name": "Gyroscope",
+     "unit": "rad/s",
+     "orin": "ZXY",
+     "scal": 939,
+     "samples": 38016,
+     "rate_hz": 198.53,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.032
+    },
+    "SHUT": {
+     "name": "Exposure time (shutter speed)",
+     "unit": "s",
+     "orin": null,
+     "scal": null,
+     "samples": 5740,
+     "rate_hz": 29.98,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "WBAL": {
+     "name": "White Balance temperature (Kelvin)",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 1913,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "WRGB": {
+     "name": "White Balance RGB gains",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 1913,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "ISOE": {
+     "name": "Sensor ISO",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 5740,
+     "rate_hz": 29.98,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "YAVG": {
+     "name": "Average luminance",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 1913,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.1
+    },
+    "UNIF": {
+     "name": "Image uniformity",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 1913,
+     "rate_hz": 9.99,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.0
+    },
+    "GPS5": {
+     "name": "GPS (Lat., Long., Alt., 2D speed, 3D speed)",
+     "unit": "degdegm\u0000\u0000m/sm/s",
+     "orin": null,
+     "scal": [
+      10000000,
+      10000000,
+      1000,
+      1000,
+      100
+     ],
+     "samples": 3482,
+     "rate_hz": 18.19,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.001
+    },
+    "CORI": {
+     "name": "CameraOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 5740,
+     "rate_hz": 29.98,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "IORI": {
+     "name": "ImageOrientation",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 5740,
+     "rate_hz": 29.98,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "GRAV": {
+     "name": "Gravity Vector",
+     "unit": null,
+     "orin": null,
+     "scal": 32767,
+     "samples": 5740,
+     "rate_hz": 29.98,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "WNDM": {
+     "name": "Wind Processing[wind_enable, meter_value(0 - 100)]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 1915,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.009
+    },
+    "MWET": {
+     "name": "Microphone Wet[mic_wet, all_mics, confidence]",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 1915,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.009
+    },
+    "AALP": {
+     "name": "AGC audio level[rms_level ,peak_level]",
+     "unit": "dBFS",
+     "orin": null,
+     "scal": null,
+     "samples": 1915,
+     "rate_hz": 10.0,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": 0.009
+    },
+    "MSKP": {
+     "name": "MRV Frame Skip",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 5740,
+     "rate_hz": 29.98,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    },
+    "LSKP": {
+     "name": "LRV Frame Skip",
+     "unit": null,
+     "orin": null,
+     "scal": null,
+     "samples": 5740,
+     "rate_hz": 29.98,
+     "timing": "STMP",
+     "stmp_minus_pts_drift_s": -0.033
+    }
+   },
+   "freefall": [
+    {
+     "start": 46.85,
+     "end": 47.0,
+     "dur": 0.16,
+     "min_g": 0.032
+    }
+   ],
+   "freefall_loose": [
+    {
+     "start": 46.62,
+     "end": 47.01,
+     "dur": 0.39,
+     "min_g": 0.032
+    },
+    {
+     "start": 50.63,
+     "end": 50.91,
+     "dur": 0.28,
+     "min_g": 0.064
+    },
+    {
+     "start": 55.51,
+     "end": 55.7,
+     "dur": 0.19,
+     "min_g": 0.038
+    },
+    {
+     "start": 57.1,
+     "end": 57.27,
+     "dur": 0.17,
+     "min_g": 0.122
+    },
+    {
+     "start": 58.46,
+     "end": 58.68,
+     "dur": 0.22,
+     "min_g": 0.15
+    },
+    {
+     "start": 119.73,
+     "end": 119.99,
+     "dur": 0.26,
+     "min_g": 0.139
+    }
+   ],
+   "impacts": [
+    {
+     "at": 51.05,
+     "value": 7.746,
+     "unit": "g",
+     "prominence": 7.52,
+     "z": 68.7
+    },
+    {
+     "at": 153.95,
+     "value": 6.674,
+     "unit": "g",
+     "prominence": 6.256,
+     "z": 57.66
+    },
+    {
+     "at": 153.25,
+     "value": 5.218,
+     "unit": "g",
+     "prominence": 4.561,
+     "z": 42.66
+    },
+    {
+     "at": 164.25,
+     "value": 5.144,
+     "unit": "g",
+     "prominence": 4.325,
+     "z": 41.91
+    },
+    {
+     "at": 45.15,
+     "value": 5.141,
+     "unit": "g",
+     "prominence": 4.628,
+     "z": 41.87
+    },
+    {
+     "at": 119.25,
+     "value": 5.023,
+     "unit": "g",
+     "prominence": 4.524,
+     "z": 40.66
+    },
+    {
+     "at": 170.85,
+     "value": 4.831,
+     "unit": "g",
+     "prominence": 4.099,
+     "z": 38.68
+    },
+    {
+     "at": 49.75,
+     "value": 4.48,
+     "unit": "g",
+     "prominence": 4.148,
+     "z": 35.07
+    },
+    {
+     "at": 157.95,
+     "value": 4.463,
+     "unit": "g",
+     "prominence": 3.576,
+     "z": 34.89
+    },
+    {
+     "at": 48.85,
+     "value": 4.287,
+     "unit": "g",
+     "prominence": 3.067,
+     "z": 33.08
+    }
+   ],
+   "orientation": {
+    "convention": {
+     "vertical": 0,
+     "lateral": 1,
+     "forward": 2,
+     "note": "ACCL data order per ORIN; vertical/lateral/forward assignment is an input, checked empirically in R11"
+    },
+    "median_up_vector": [
+     -0.908,
+     -0.066,
+     -0.364
+    ],
+    "mount": "inverted",
+    "mount_sign": -1,
+    "fraction_level": 0.698,
+    "fraction_tilted_30_90": 0.302,
+    "fraction_past_horizontal": 0.0,
+    "fraction_abs_roll_over_30": 0.0,
+    "fraction_abs_roll_over_45": 0.0
+   },
+   "accel": {
+    "median_g": 1.01,
+    "p99_g": 3.009,
+    "max_g": 7.746,
+    "min_g": 0.032
+   },
+   "grav": {
+    "median_vector": [
+     -0.051,
+     -0.899,
+     -0.375
+    ],
+    "corr_accl_x_grav": [
+     [
+      -0.157,
+      0.592,
+      -0.505
+     ],
+     [
+      0.334,
+      -0.173,
+      0.186
+     ],
+     [
+      0.281,
+      -0.5,
+      0.933
+     ]
+    ]
+   },
+   "gyro": {
+    "median_rads": 0.538,
+    "max_rads": 13.906
+   },
+   "stops": [
+    {
+     "at": 125.5,
+     "from_ms": 4.95,
+     "to_ms": 0.99,
+     "within_s": 3.0
+    }
+   ],
+   "gps": {
+    "source": "GPS5",
+    "fix_fraction": 1.0,
+    "samples_with_fix": 3482,
+    "max_speed_ms": 16.93,
+    "median_speed_ms": 0.54,
+    "fix_values": [
+     3
+    ]
+   },
+   "peaks": [
+    {
+     "at": 44.35,
+     "value": 3.539,
+     "unit": "g"
+    },
+    {
+     "at": 45.15,
+     "value": 5.141,
+     "unit": "g"
+    },
+    {
+     "at": 47.35,
+     "value": 4.027,
+     "unit": "g"
+    },
+    {
+     "at": 48.15,
+     "value": 4.256,
+     "unit": "g"
+    },
+    {
+     "at": 48.85,
+     "value": 4.287,
+     "unit": "g"
+    },
+    {
+     "at": 49.75,
+     "value": 4.48,
+     "unit": "g"
+    },
+    {
+     "at": 51.05,
+     "value": 7.746,
+     "unit": "g"
+    },
+    {
+     "at": 52.35,
+     "value": 4.099,
+     "unit": "g"
+    },
+    {
+     "at": 52.85,
+     "value": 3.793,
+     "unit": "g"
+    },
+    {
+     "at": 53.35,
+     "value": 3.43,
+     "unit": "g"
+    },
+    {
+     "at": 54.45,
+     "value": 3.355,
+     "unit": "g"
+    },
+    {
+     "at": 56.45,
+     "value": 3.392,
+     "unit": "g"
+    },
+    {
+     "at": 57.75,
+     "value": 3.824,
+     "unit": "g"
+    },
+    {
+     "at": 58.35,
+     "value": 3.33,
+     "unit": "g"
+    },
+    {
+     "at": 58.95,
+     "value": 4.153,
+     "unit": "g"
+    },
+    {
+     "at": 61.95,
+     "value": 3.168,
+     "unit": "g"
+    },
+    {
+     "at": 63.65,
+     "value": 3.201,
+     "unit": "g"
+    },
+    {
+     "at": 117.85,
+     "value": 3.904,
+     "unit": "g"
+    },
+    {
+     "at": 118.55,
+     "value": 3.101,
+     "unit": "g"
+    },
+    {
+     "at": 119.25,
+     "value": 5.023,
+     "unit": "g"
+    },
+    {
+     "at": 120.65,
+     "value": 3.02,
+     "unit": "g"
+    },
+    {
+     "at": 121.15,
+     "value": 3.198,
+     "unit": "g"
+    },
+    {
+     "at": 122.15,
+     "value": 3.362,
+     "unit": "g"
+    },
+    {
+     "at": 153.25,
+     "value": 5.218,
+     "unit": "g"
+    },
+    {
+     "at": 153.95,
+     "value": 6.674,
+     "unit": "g"
+    },
+    {
+     "at": 157.95,
+     "value": 4.463,
+     "unit": "g"
+    },
+    {
+     "at": 160.45,
+     "value": 3.373,
+     "unit": "g"
+    },
+    {
+     "at": 162.05,
+     "value": 4.184,
+     "unit": "g"
+    },
+    {
+     "at": 162.55,
+     "value": 3.649,
+     "unit": "g"
+    },
+    {
+     "at": 164.25,
+     "value": 5.144,
+     "unit": "g"
+    },
+    {
+     "at": 165.25,
+     "value": 4.181,
+     "unit": "g"
+    },
+    {
+     "at": 165.85,
+     "value": 3.581,
+     "unit": "g"
+    },
+    {
+     "at": 166.35,
+     "value": 4.086,
+     "unit": "g"
+    },
+    {
+     "at": 167.65,
+     "value": 3.559,
+     "unit": "g"
+    },
+    {
+     "at": 170.85,
+     "value": 4.831,
+     "unit": "g"
+    }
+   ],
+   "impacts_over_3g": [
+    {
+     "at": 44.35,
+     "value": 3.539,
+     "unit": "g",
+     "prominence": 2.905,
+     "z": 25.38
+    },
+    {
+     "at": 45.15,
+     "value": 5.141,
+     "unit": "g",
+     "prominence": 4.628,
+     "z": 41.87
+    },
+    {
+     "at": 47.35,
+     "value": 4.027,
+     "unit": "g",
+     "prominence": 3.123,
+     "z": 30.4
+    },
+    {
+     "at": 48.15,
+     "value": 4.256,
+     "unit": "g",
+     "prominence": 2.903,
+     "z": 32.76
+    },
+    {
+     "at": 48.85,
+     "value": 4.287,
+     "unit": "g",
+     "prominence": 3.067,
+     "z": 33.08
+    },
+    {
+     "at": 49.75,
+     "value": 4.48,
+     "unit": "g",
+     "prominence": 4.148,
+     "z": 35.07
+    },
+    {
+     "at": 51.05,
+     "value": 7.746,
+     "unit": "g",
+     "prominence": 7.52,
+     "z": 68.7
+    },
+    {
+     "at": 52.35,
+     "value": 4.099,
+     "unit": "g",
+     "prominence": 3.425,
+     "z": 31.14
+    },
+    {
+     "at": 52.85,
+     "value": 3.793,
+     "unit": "g",
+     "prominence": 3.062,
+     "z": 28.0
+    },
+    {
+     "at": 53.35,
+     "value": 3.43,
+     "unit": "g",
+     "prominence": 2.77,
+     "z": 24.26
+    },
+    {
+     "at": 54.45,
+     "value": 3.355,
+     "unit": "g",
+     "prominence": 2.415,
+     "z": 23.48
+    },
+    {
+     "at": 56.45,
+     "value": 3.392,
+     "unit": "g",
+     "prominence": 2.894,
+     "z": 23.86
+    },
+    {
+     "at": 57.75,
+     "value": 3.824,
+     "unit": "g",
+     "prominence": 3.354,
+     "z": 28.31
+    },
+    {
+     "at": 58.35,
+     "value": 3.33,
+     "unit": "g",
+     "prominence": 2.193,
+     "z": 23.23
+    },
+    {
+     "at": 58.95,
+     "value": 4.153,
+     "unit": "g",
+     "prominence": 3.591,
+     "z": 31.71
+    },
+    {
+     "at": 61.95,
+     "value": 3.168,
+     "unit": "g",
+     "prominence": 2.369,
+     "z": 21.56
+    },
+    {
+     "at": 63.65,
+     "value": 3.201,
+     "unit": "g",
+     "prominence": 2.469,
+     "z": 21.9
+    },
+    {
+     "at": 117.85,
+     "value": 3.904,
+     "unit": "g",
+     "prominence": 3.224,
+     "z": 29.14
+    },
+    {
+     "at": 118.55,
+     "value": 3.101,
+     "unit": "g",
+     "prominence": 2.478,
+     "z": 20.87
+    },
+    {
+     "at": 119.25,
+     "value": 5.023,
+     "unit": "g",
+     "prominence": 4.524,
+     "z": 40.66
+    },
+    {
+     "at": 120.65,
+     "value": 3.02,
+     "unit": "g",
+     "prominence": 1.137,
+     "z": 20.04
+    },
+    {
+     "at": 121.15,
+     "value": 3.198,
+     "unit": "g",
+     "prominence": 2.139,
+     "z": 21.86
+    },
+    {
+     "at": 122.15,
+     "value": 3.362,
+     "unit": "g",
+     "prominence": 2.659,
+     "z": 23.55
+    },
+    {
+     "at": 153.25,
+     "value": 5.218,
+     "unit": "g",
+     "prominence": 4.561,
+     "z": 42.66
+    },
+    {
+     "at": 153.95,
+     "value": 6.674,
+     "unit": "g",
+     "prominence": 6.256,
+     "z": 57.66
+    },
+    {
+     "at": 157.95,
+     "value": 4.463,
+     "unit": "g",
+     "prominence": 3.576,
+     "z": 34.89
+    },
+    {
+     "at": 160.45,
+     "value": 3.373,
+     "unit": "g",
+     "prominence": 2.389,
+     "z": 23.67
+    },
+    {
+     "at": 162.05,
+     "value": 4.184,
+     "unit": "g",
+     "prominence": 3.146,
+     "z": 32.02
+    },
+    {
+     "at": 162.55,
+     "value": 3.649,
+     "unit": "g",
+     "prominence": 2.436,
+     "z": 26.51
+    },
+    {
+     "at": 164.25,
+     "value": 5.144,
+     "unit": "g",
+     "prominence": 4.325,
+     "z": 41.91
+    },
+    {
+     "at": 165.25,
+     "value": 4.181,
+     "unit": "g",
+     "prominence": 2.602,
+     "z": 31.99
+    },
+    {
+     "at": 165.85,
+     "value": 3.581,
+     "unit": "g",
+     "prominence": 1.923,
+     "z": 25.81
+    },
+    {
+     "at": 166.35,
+     "value": 4.086,
+     "unit": "g",
+     "prominence": 2.919,
+     "z": 31.01
+    },
+    {
+     "at": 167.65,
+     "value": 3.559,
+     "unit": "g",
+     "prominence": 2.231,
+     "z": 25.58
+    },
+    {
+     "at": 170.85,
+     "value": 4.831,
+     "unit": "g",
+     "prominence": 4.099,
+     "z": 38.68
+    }
+   ]
+  }
+ ]
+}
