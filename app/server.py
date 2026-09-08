@@ -1723,8 +1723,25 @@ async def api_themes_put(request: Request) -> JSONResponse:
     if "story" in body:
         edl["story"] = str(body["story"])
     write_edl(edl)
+    if "themes" in body:
+        _forget_proposals()          # kept (or emptied): the proposal has been answered
     return JSONResponse({"ok": True, "themes": edl.get("themes", []),
                          "names": edl.get("names", [])})
+
+
+def _forget_proposals() -> None:
+    """Drop finished proposal jobs so `GET /api/themes` stops offering them as `last`.
+    Keep and Discard are the two answers to a proposal; either one ends it."""
+    for k in [k for k, t in THEMES.items() if t["state"] in progress.TERMINAL]:
+        del THEMES[k]
+
+
+@app.post("/api/themes/discard")
+def api_themes_discard() -> JSONResponse:
+    """The editor's other answer: the proposal is thrown away, nothing written, and a
+    reload no longer brings it back."""
+    _forget_proposals()
+    return JSONResponse({"ok": True})
 
 
 # ---------------------------------------------------------------- the index

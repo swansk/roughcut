@@ -436,6 +436,40 @@ def test_a_discarded_proposal_writes_nothing(page, bin_server, project):
     assert api(page, "/api/themes")["themes"] == []
 
 
+def test_a_finished_proposal_survives_a_reload_and_an_absent_recogniser_hides_the_mic(
+        page, bin_server, project, monkeypatch):
+    """GET /api/themes carries `last` (the last finished proposal) and `dictation`: a page
+    reloaded after the call answered shows the chips instead of pricing again, and the
+    mic never appears when the server says the recogniser is absent — no hold, no 501."""
+    from roughcut import dictate, inference
+    S = scripted(PROPOSAL)
+    inference.set_backend(S())
+    inference.reset_spend()
+    try:
+        page.locator("#proposeBtn").click()
+        page.wait_for_selector("#themesEdit:not([hidden])", timeout=15000)
+        n = len(chips(page, "#chips"))
+        assert n == 2
+        monkeypatch.setattr(dictate, "available", lambda: False)
+        page.reload()
+        page.wait_for_function("window.sheet && sheet.state.themes", timeout=15000)
+        page.wait_for_selector("#themesEdit:not([hidden])", timeout=5000)
+        assert len(chips(page, "#chips")) == n, "the last proposal came back as chips"
+        assert page.evaluate("sheet.state.dictation") is False
+        assert page.locator("#mic").is_hidden()
+        assert api(page, "/api/themes")["themes"] == [], "still not the EDL's word"
+        page.locator("#discardBtn").click()
+        page.wait_for_function("document.querySelector('#toast').textContent.includes('nothing was written')")
+        # Discard is the proposal's other answer: the server forgets it, a reload asks afresh
+        page.wait_for_function("fetch('/api/themes').then(r => r.json()).then(d => d.last === null)",
+                               timeout=5000)
+        page.reload()
+        page.wait_for_function("window.sheet && sheet.state.themes", timeout=15000)
+        assert page.locator("#proposeBtn").is_visible() and page.locator("#themesEdit").is_hidden()
+    finally:
+        inference.set_backend(None)
+
+
 def test_propose_shows_chips_with_counts_and_keep_writes_exactly_the_ticked_ones(page, bin_server, project):
     from roughcut import inference
     S = scripted(PROPOSAL, delay=1.0)                    # long enough for "listening…" to show

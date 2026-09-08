@@ -102,6 +102,7 @@ const O = {
   ttimer: null,
   story: null,             // the story as last saved to the EDL; null until /api/themes has answered
   dictation: null,         // null until tried; false once the recogniser said 501 (the mic hides)
+  seenLast: null,          // the last finished proposal's id this page has already shown
 };
 
 /* ------------------------------------------------------------ the sheet */
@@ -523,6 +524,8 @@ function discardThemes() {
   O.proposal = null;
   renderThemes();
   toast('discarded — nothing was written');
+  // and the server forgets it, so a reload does not offer it again
+  send('POST', '/api/themes/discard', {}).catch(() => {});
 }
 
 function addTheme(text) {
@@ -852,6 +855,20 @@ async function refreshThemes() {
   if (O.themes.job && !O.tjob) {                   // a proposal started elsewhere: pick it up
     O.tjob = O.themes.job;
     pollThemes();
+  }
+  // The server says whether the recogniser is installed: hide the mic before the first
+  // hold rather than on a 501. And a proposal that answered before this page loaded
+  // (a reload, another tab) comes back as `last`: show its chips instead of pricing
+  // again — it is still not the EDL's word until Keep.
+  if (O.themes.dictation === false && O.dictation !== false) {
+    O.dictation = false;
+    $('#mic').hidden = true;
+  }
+  if (O.themes.last && O.themes.last.proposal && !O.proposal && !O.tjob
+      && !(O.themes.themes || []).length && O.seenLast !== O.themes.last.id) {
+    O.seenLast = O.themes.last.id;
+    openProposal(O.themes.last.proposal);
+    return;
   }
   renderThemes();
 }

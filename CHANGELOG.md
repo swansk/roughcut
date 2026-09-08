@@ -607,6 +607,12 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Changed
+- **A proposal survives a reload until it is answered.** The open screen shows
+  `GET /api/themes`'s `last` proposal as chips when the page loads with no themes kept, and
+  hides the mic outright when the server's `dictation` flag is false. Keep (`PUT /api/themes`
+  with `themes`) and Discard (new `POST /api/themes/discard`) are the two answers to a
+  proposal; either makes the server forget it, so a reload after Discard asks afresh instead
+  of offering the discarded chips again. One browser test covers the round trip.
 - **Docs:** INTAKE's I3.2 note and HANDOFF's session-6 paragraph no longer say the old Analyse /
   Look buttons are still on the board — lane `agent/board` retired them (merge `6c4d249`).
 - **`GET /api/themes` carries `last` and `dictation`** — the last finished proposal (id +
