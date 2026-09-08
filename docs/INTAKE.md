@@ -80,18 +80,21 @@ table). Nothing verified live on Killington yet.
 
 ### M2 · The pass (lane `agent/floor`)
 
-- [ ] I2.1 `/floor` page: HUD, picture with margins (context left, witnesses right), reason
+- [x] I2.1 `/floor` page: HUD, picture with margins (context left, witnesses right), reason
       line with conflicts, whole-clip tape (picks, waveform placeholder, telemetry trace when
       present), zoomed strip with words / sentence bars, kept-range = watched, snapping via the
-      sidecar word spans, stamps, key line. DoD: browser tests (`test_floor_ui.py`).
-- [ ] I2.2 Keys per decision 2, including `⇧X` (reject the rest of this clip), hold-space,
-      `[ ] { }` snapping, `← →` frame step at the active edge, `E` evidence drawer, `.` more.
-- [ ] I2.3 Rounds of 40 with frozen queue, closing card (counts, "if strung out", arrivals since
-      round start, unlooked stretch warning; free default ↵ = play the bin; Assemble on `A` with
-      the price). Resume from `floor.position`.
+      sidecar word spans, stamps, key line. DoD: browser tests (`test_floor_ui.py`) — branch
+      `agent/floor`, commit `feat: the pass` (hash in the docs commit that follows it).
+- [x] I2.2 Keys per decision 2, including `⇧X` (reject the rest of this clip), hold-space,
+      `[ ] { }` snapping, `← →` frame step at the active edge, `E` evidence drawer, `.` more —
+      same commit. (`⇧X` is untested on the synthetic bin, which has one pick per clip.)
+- [x] I2.3 Rounds of 40 with frozen queue, closing card (counts, "if strung out", arrivals since
+      round start; free default ↵ = play the bin; Assemble on `A` with the price). Resume from
+      `floor.position` — same commit. The unlooked-stretch warning is omitted this round.
 - [ ] I2.4 Compare takes (Survey view) for clustered picks; batch reject via filter.
-- [ ] I2.5 Dictation UI: hold `V` → MediaRecorder → `POST /api/dictate` → note attached; clip
-      audio ducked while held; `N` edits.
+- [x] I2.5 Dictation UI: hold `V` → MediaRecorder → `POST /api/dictate` → note attached; clip
+      audio ducked while held; `N` edits — same commit, against the 501 stub (falls back to
+      `N`); the success path is tested with the recogniser's answer scripted in the page.
 - [ ] I2.6 Live verification on Killington: open `/floor`, cull a round, notes land in the EDL,
       accept nothing by accident. Record numbers here.
 

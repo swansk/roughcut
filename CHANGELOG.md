@@ -10,6 +10,29 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The pass: `/floor` is a screen now.** `app/static/floor.html` + `floor.js` (framework-free,
+  like the board) build the cull exactly as the design's §4 draws it: the pick's proxy plays
+  large from the moment (`preload="metadata"`, `#t=` fragment), context in the left margin,
+  witnesses as seals in the right — three states, colour *and* the word (CLAIMED / AUDITED /
+  CONTRADICTED; FELT shows numbers only) — the reason on a caption line with any conflict in
+  red, the whole clip as a tape with every pick marked (a telemetry trace only when a `felt`
+  witness exists), and a zoomed strip ±8 s around the playhead with words where they fit and
+  sentence bars where they don't. **Keep = what you watched**: the contiguous extent from the
+  preview start to the furthest frame reached, snapped outward to sentence ends with
+  `boundaries.py`'s pads (start −0.25, end +0.45) and shown as a green band with snap ticks;
+  `[ ] { }` move an edge to the previous/next sentence (`}` extends to the reaction), `← →`
+  step a frame at the active edge and park the picture on it. Every action is a key and there
+  are no buttons in the flow: P / X / U / 1 (a stamp on the picture that fades), `⇧X` rejects
+  the rest of the clip, `⌘Z` undoes the verdict with its trim and note (re-instating whatever
+  verdict was there before), J-K-L with K = pause, hold `space` to keep watching, `V` hold to
+  speak (MediaRecorder → `POST /api/dictate`, the clip ducked; a 501 says "not built yet — N
+  to type" once and opens the typed note), `N` note, `E` evidence drawer, `.` more, `?` map,
+  Caps Lock = auto-advance, `↵` next. Rounds of 40 from released clips with the queue frozen
+  for the round; the position is saved on every verdict and resumed on load; the closing card
+  shows counts only (never "enough"), what arrived since the round started, and offers `↵`
+  play the bin (every select in order in the same picture), next round, by clip, revisit
+  later, and Assemble with its price on `A`. `app/tests/test_floor_ui.py` drives all of it in
+  real Chromium (with a fake microphone for `V`) and asserts the kept ranges on the EDL on disk.
 - **The floor's foundations: picks, the bin in the EDL, and every floor endpoint.** The intake
   design (docs/design/cutting-room-floor.html, tracked in docs/INTAKE.md) needs three things
   before any screen exists. `roughcut/picks.py` derives **picks** — windows with witnesses —
