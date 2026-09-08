@@ -1664,12 +1664,18 @@ def api_themes() -> JSONResponse:
     edl = read_edl()
     clips, _payload = _ask_clips()
     running = next((t for t in THEMES.values() if t["state"] not in progress.TERMINAL), None)
+    # The last finished proposal, so a page reloaded after the call answered shows the
+    # chips instead of asking to pay again. The open screen asked for this.
+    done = [t for t in THEMES.values() if t["state"] == "done" and t.get("proposal")]
+    last = done[-1] if done else None
     return JSONResponse({
         "themes": [t for t in (edl.get("themes") or []) if isinstance(t, str)],
         "names": [n for n in (edl.get("names") or []) if isinstance(n, str)],
         "story": edl.get("story", ""),
         "projected_usd": themes.projected_usd(clips) if clips else None,
         "analysed": len(clips), "job": running["id"] if running else None,
+        "last": {"id": last["id"], "proposal": last["proposal"]} if last else None,
+        "dictation": dictate.available(),
     })
 
 

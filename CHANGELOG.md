@@ -584,6 +584,10 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Changed
+- **`GET /api/themes` carries `last` and `dictation`** — the last finished proposal (id +
+  proposal), so the open screen reloaded after the call answered shows the chips instead of
+  pricing again, and whether the recogniser is installed, so the mic can hide before the
+  first hold rather than on a 501. Asked for by the open lane.
 - **Space is play / pause on the pass** (Karl, 2026-09-08: "space needs to be play / pause").
   It was hold-to-watch-on. Now a press pauses a playing picture and plays a paused one; when
   playback has stopped on its own at the green band's end, the next press watches on past it

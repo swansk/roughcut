@@ -99,8 +99,12 @@ def test_themes_are_proposed_by_one_call_and_kept_by_the_editor(client, project)
     finally:
         inference.set_backend(None)
 
-    # the proposal is not the EDL's word until the editor keeps it
-    assert client.get("/api/themes").json()["themes"] == []
+    # the proposal is not the EDL's word until the editor keeps it — but it survives a
+    # reload: the last finished proposal rides along with the endpoint
+    after = client.get("/api/themes").json()
+    assert after["themes"] == [] and after["job"] is None
+    assert after["last"]["id"] == r.json()["job"] and after["last"]["proposal"]["names"] == ["Spenny"]
+    assert isinstance(after["dictation"], bool)
     r = client.put("/api/themes", json={"themes": ["the greeting", " The Greeting ", "goodbye"],
                                         "names": ["Spenny", "Eric"]})
     assert r.status_code == 200 and r.json()["themes"] == ["the greeting", "goodbye"]
