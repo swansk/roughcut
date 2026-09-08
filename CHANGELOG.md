@@ -10,6 +10,13 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **`GET /api/clips` — the folder as a contact sheet would show it (INTAKE I5.1's data).**
+  Every clip with the free facts: length, when it was shot and which session that makes it
+  (the 4-hour-gap rule), what exists for it on disk (proxy, audio sidecar, coarse look, close
+  look), whether the file carries a GoPro `gpmd` telemetry stream (one ffprobe, cached — a fact
+  shown, never assumed, per Karl's rule), whether the floor may show it, and the journal's word
+  on it once the bin has been indexed (priority, stage states, parked). No model calls. The
+  open screen (M5) is built on this.
 - **The index runs unattended: `POST /api/index` drives the journal (INTAKE I3.2, I3.3).**
   One thread walks `journal.next()` and runs each (clip, stage) with the tools the two old
   buttons already drove — probe (ffprobe, all clips first so the audio pass can run as one

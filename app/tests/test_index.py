@@ -178,6 +178,36 @@ def test_the_budget_cap_pauses_the_priced_stages_only(tmp_path, project, monkeyp
         assert c.get("/api/index").json()["paused_priced"] is False
 
 
+def test_the_folder_reads_as_a_contact_sheet(client, project):
+    """GET /api/clips: the free facts per clip, no journal yet on this bin."""
+    d = client.get("/api/clips").json()
+    assert d["journal"] is False and d["paused_priced"] is False
+    assert [c["clip"] for c in d["clips"]] == ["CLIP_A.MP4", "CLIP_B.MP4", "CLIP_C.MP4"]
+    a = d["clips"][0]
+    assert a["duration"] == pytest.approx(6.0, abs=0.1)
+    assert a["proxy"] and a["analysed"] and not a["looked"] and not a["closed"]
+    assert a["telemetry"] is False, "the synthetic clips carry no gpmd stream"
+    assert a["released"] is True
+    assert a["journal"] is None and a["poster"].startswith("/media/poster/CLIP_A.jpg")
+    # three files written seconds apart are one session
+    assert d["sessions"] == 1 and {c["session"] for c in d["clips"]} == {1}
+    assert d["total_s"] == pytest.approx(18.0, abs=0.3)
+
+
+def test_the_contact_sheet_carries_the_journals_word_once_indexed(tmp_path, project,
+                                                                  monkeypatch):
+    import server
+
+    with _fresh(tmp_path, project, sidecars=project["sidecars"], visual=None) as c:
+        _stub_tools(server, monkeypatch, tmp_path)
+        _wait_index(c, c.post("/api/index", json={}).json()["job"])
+        d = c.get("/api/clips").json()
+        assert d["journal"] is True
+        a = d["clips"][0]["journal"]
+        assert a["stages"]["telemetry"] == "skipped" and a["stages"]["close"] == "done"
+        assert a["priority"] is not None and a["parked"] is None
+
+
 def test_a_scan_with_nothing_to_look_at_skips_the_close_look(tmp_path, project, monkeypatch):
     import server
 

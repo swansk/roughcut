@@ -1068,6 +1068,24 @@ def floor_page() -> HTMLResponse:
                         headers=NO_STORE)
 
 
+@app.get("/open", response_class=HTMLResponse)
+def open_page() -> HTMLResponse:
+    """The open screen (INTAKE M5): the folder as a contact sheet, and the index."""
+    p = HERE / "static" / "open.html"
+    if not p.exists():
+        raise HTTPException(404, "the open screen is not built yet — see docs/INTAKE.md M5")
+    return HTMLResponse(p.read_text(encoding="utf-8"), headers=NO_STORE)
+
+
+@app.get("/open.js")
+def open_js() -> Response:
+    p = HERE / "static" / "open.js"
+    if not p.exists():
+        raise HTTPException(404, "the open screen's script is not built yet")
+    return Response(p.read_text(encoding="utf-8"),
+                    media_type="application/javascript", headers=NO_STORE)
+
+
 @app.get("/floor.js")
 def floor_js() -> Response:
     p = HERE / "static" / "floor.js"
@@ -1790,6 +1808,76 @@ def _index_job(job: str, order: str) -> None:
     if parked:
         tail += f" — {parked} clip{'s' if parked != 1 else ''} parked"
     entry.finish("done", detail=f"{prog.get('released', 0)} of {n} clips released{tail}")
+
+
+SESSION_GAP_S = 4 * 3600      # revise.shot_timeline's rule: a 4 h gap starts a new session
+
+
+def has_telemetry(clip: str) -> bool | None:
+    """Whether the file carries a GoPro `gpmd` stream (R11). One ffprobe, cached; None
+    when the footage is missing. Presence is a fact shown to the human, never assumed —
+    Karl's rule: the pipeline runs identically without it."""
+    cache: dict = STATE.setdefault("telemetry", {})
+    if clip in cache:
+        return cache[clip]
+    src: Path = STATE["footage"] / clip
+    if not src.exists():
+        return None
+    r = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "d", "-show_entries",
+         "stream=codec_tag_string", "-of", "csv=p=0", str(src)],
+        capture_output=True, text=True)
+    cache[clip] = "gpmd" in (r.stdout or "")
+    return cache[clip]
+
+
+@app.get("/api/clips")
+def api_clips() -> JSONResponse:
+    """The folder as a contact sheet would show it (design §2): every clip with the
+    free facts — length, when it was shot and which session that makes it, what exists
+    for it on disk, whether it carries telemetry — and the journal's word on it when
+    the bin has been indexed. Nothing here costs a model call."""
+    clips = footage_clips()
+    stamped = sorted(((capture_time(c) or 0.0), c) for c in clips)
+    session, prev, session_of = 0, None, {}
+    for when, clip in stamped:
+        if prev is None or when - prev > SESSION_GAP_S:
+            session += 1
+        session_of[clip] = session
+        prev = when
+    j = None
+    if journal_path().exists():
+        try:
+            j = load_journal()
+        except journal.JournalError:
+            j = None
+    released = set(released_clips())
+    out = []
+    for clip in clips:
+        stem = Path(clip).stem
+        rec = j.clips.get(clip) if j else None
+        out.append({
+            "clip": clip, "stem": stem,
+            "duration": clip_duration(clip),
+            "captured": capture_time(clip),
+            "session": session_of.get(clip),
+            "proxy": (STATE["proxy_dir"] / f"{stem}.mp4").exists(),
+            "poster": f"/media/poster/{stem}.jpg?t=0.00",
+            "analysed": stem in analysed_stems(),
+            "looked": stem in visual_stems(),
+            "closed": stem in fine_stems(),
+            "telemetry": has_telemetry(clip),
+            "released": clip in released,
+            "journal": None if rec is None else {
+                "priority": rec.get("priority"), "missing": bool(rec.get("missing")),
+                "parked": rec.get("parked"),
+                "stages": {s: rec["stages"][s]["state"] for s in journal.STAGES}},
+        })
+    return JSONResponse({"clips": out, "sessions": session,
+                         "footage": str(STATE["footage"]),
+                         "total_s": round(sum(c["duration"] or 0.0 for c in out), 2),
+                         "journal": journal_path().exists(),
+                         "paused_priced": bool(j and j.paused_priced)})
 
 
 @app.post("/api/index")
