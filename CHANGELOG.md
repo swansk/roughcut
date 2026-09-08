@@ -19,7 +19,8 @@ same commit. Releases move entries into a dated version section.
   carry a small corroboration weight; impact peaks stay numbers only. The camera's orientation
   agrees with the nine labelled mounts and shows the body never rolled past 30° in R10's
   "camera-inverted" windows — and a 6.7 g peak inside one of them turned out to be a fall R10
-  had missed. Per-clip summaries in `benchmarks/labels/B2-telemetry.json`.
+  had missed. Per-clip summaries in `benchmarks/labels/B2-telemetry.json`. INTAKE I6.1 closed
+  on commit `f806e13`.
 - **The floor's foundations: picks, the bin in the EDL, and every floor endpoint.** The intake
   design (docs/design/cutting-room-floor.html, tracked in docs/INTAKE.md) needs three things
   before any screen exists. `roughcut/picks.py` derives **picks** — windows with witnesses —

@@ -134,10 +134,16 @@ visual and audio passes** as a corroboration term in the existing `events.py` ra
 detector of its own; **be very careful not to over-index — it could be noisy or bad** — so no
 weight until measured, and until then numbers only, never event names.
 
-- [ ] I6.1 R11 study: confirm GPMF streams in the Killington files; extract ACCL/GYRO/GPS with a
+- [x] I6.1 R11 study: confirm GPMF streams in the Killington files; extract ACCL/GYRO/GPS with a
       standalone tool (`research/tools/telemetry.py`, PEP 723); compute freefall runs, impact
       peaks, speed; score against the nine adjudicated events AND random windows; report in
-      `research/R11-telemetry.md`. No pipeline integration in this item.
+      `research/R11-telemetry.md`. No pipeline integration in this item. — commit `f806e13`:
+      GPMF present 12/12 (HERO9, 198.5 Hz IMU, 18 Hz GPS); the 0.3 g freefall rule never fires
+      and 3 g impacts fire 6/min, but a < 0.5 g / ≥ 0.25 s freefall run is clean (10 of 10 by
+      eye were real motion) and impact peaks are mostly hands on the camera; orientation matches
+      the 9 labelled mounts and refuted every "camera inverted" reading (body roll ≤ 30°); one
+      6.7 g peak was a fall R10 had missed. Recommendation: freefall may carry a capped
+      corroboration weight; impacts and tilt stay numbers on the witness.
 - [ ] I6.2 Only if R11 lands: `felt` witness in picks (numbers only), corroboration term in
       `events.py` with a fitted weight, gyro orientation as a check on `seen` flip claims.
 
