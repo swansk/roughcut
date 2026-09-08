@@ -30,6 +30,8 @@ same commit. Releases move entries into a dated version section.
   is faked. Browser tests run a real journal walk with the index's tools stubbed
   (`test_index._stub_tools`): the cap at $0 pauses the priced stages and the notice
   appears, resume releases all three clips and enables the link, the 409 is said.
+  INTAKE M5 ticked for I5.1 and I5.3 with the slider deferred and the settings drawer
+  not built.
 - **`/open` — the folder as a contact sheet, before anything is spent (INTAKE I5.1).**
   `app/static/open.html` + `open.js`, on `GET /api/clips`: the bin's name and its line
   (clips · total length · sessions · telemetry x/N), one grid per session in capture order
