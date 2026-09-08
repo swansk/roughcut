@@ -46,18 +46,23 @@ until R11.
 
 ## Where we are
 
-_2026-09-08, end of session 9._ Merged on `main`: M0, M1, M2 except I2.4 (the pass at
-`/floor`, now with **I2.7** — trim by drag, the band never grows on its own, legible strips —
-merge `bc090e0`), M3 (I3.1–I3.3: the journal runs the index unattended and resumable), M4,
-**M5 except I5.4 and the I5.2 chips** (`/open` — contact sheet + index controls, merge
-`6ba1ec0`; themes have their data side, `fc26979`), M6 (I6.1 R11, I6.2 telemetry on the
-floor). Suite: 348 passed, 1 skipped. Both screens verified live on Killington (see the
-verification log). **Next:** Karl's second look at the pass (what to check is under I2.7);
-then, in order: the I5.2 chips + dictation on `/open`, retire the old Analyse / Look buttons on
-`/` in favour of `/open`, the granularity slider plumbing (the visual pass's sample interval
-through `POST /api/index`), I2.4 (needs take clusters in `picks.py`), I5.4. **Killington's
-priced stages are still paused** (9 close looks, ~$2) — Karl's call, from the open screen's
-**Resume priced stages** button or `POST /api/index {"resume_priced": true}`.
+_2026-09-08, end of session 10._ **Every milestone item M0–M6 is ticked** except what the
+lines themselves say is deferred (I2.4's "batch reject via filter" — no filter exists on the
+floor yet; I5.3's workers + cap in settings — the cap is shown from config). Merged this
+session, in order: space = play/pause (`67c6ac3`), the look interval and picker API
+(`d889db1`), the themes chips + story with dictation on `/open` (`378ed84`), the old
+Analyse / Look buttons retired for `/open` (`6c4d249`), the slider + picker on `/open`
+(`4b4c441`), the last proposal surviving reload and restart until Keep or Discard (`020dadf`,
+`62214b0`), **Karl's three pass fixes (I2.8) and compare takes (I2.4)** (`1e9f83e`), a reject
+keeping its reason (`190e1a9`). Suite: **372 passed, 1 skipped**. All of it verified live on
+Killington (verification log). **Next: Karl's third look at the pass** — the I2.8 line says
+what to check (hold V once in Chrome and read the hint before and after the prompt; find the
+backflip on the tape without reading a number; P three picks in a row; a clip with two jumps
+under 90 s apart → `take n of N`, T, keep the one that landed, ⌘Z) — and on `/open`, **seven
+proposed themes wait for Keep or Discard** ($0.18, on disk). After that the intake is in
+Karl's hands; what remains is his feedback, the two deferred halves above, and the
+editing-room roadmap in HANDOFF. **Killington's priced stages are still paused** (9 close
+looks, ~$2) — the open screen's **Resume priced stages** button.
 
 ## Milestones
 
@@ -274,8 +279,8 @@ priced stages are still paused** (9 close looks, ~$2) — Karl's call, from the 
       **Index**, the project's word shown after a run, disabled with a reason once every
       clip has been looked at (`test_open_ui.py` 13 passed; suite 360 passed, 1 skipped);
       workers + cap in settings are not built (the cap is shown, from config). The two
-      old buttons on `/` are still there — retiring them is the lead's (`app/static/index.html`,
-      `app.js`). `test_open_ui.py` 6 passed; suite 336 passed, 1 skipped.
+      old buttons on `/` were retired by lane `agent/board` (`6c4d249`). `test_open_ui.py` 6
+      passed; suite 336 passed, 1 skipped.
 - [x] I5.4 Project picker (one bin per launch today) — the "smaller, whenever" item, lands here.
       — **server side** (the lead's I5.3/I5.4 commit, `d889db1`): `GET /api/projects`
       (known bins from the `--work/projects.json` registry + folders of video next door, with
@@ -329,6 +334,10 @@ weight until measured, and until then numbers only, never event names.
 | dictate | `agent/dictate` · `../roughcut-wt/dictate` | M4 | **merged** `50899d0`; worktree removed |
 | telemetry | `agent/telemetry` · `../roughcut-wt/telemetry` | M6.1 | **merged** `394556f`; worktree removed |
 | floor2 | `agent/floor2` · `../roughcut-wt/floor2` | I2.7 | **merged** `bc090e0`; worktree removed |
+| open2 | `agent/open2` | I5.2 UI | **merged** `378ed84`; worktree removed |
+| board | `agent/board` | retire the old buttons | **merged** `6c4d249`; worktree removed |
+| open3 | `agent/open3` | I5.3 slider, I5.4 picker | **merged** `4b4c441`; worktree removed |
+| takes | `agent/takes` | I2.8, I2.4 | **merged** `1e9f83e`; worktree removed |
 | open | `agent/open` · `../roughcut-wt/open` | I5.1, I5.3 | **merged** `6ba1ec0`; worktree removed |
 
 Lanes touch disjoint files by design: `bin` → `revise.py`, `selects.py`, tests; `floor` →
@@ -405,3 +414,15 @@ them. Every lane adds its own CHANGELOG bullet; integration keeps all of them.
   **Not kept** — the chips are on the screen for Karl to keep, edit or discard; the EDL's
   `themes` is still empty. The quoted price undershot by 2× and is recalibrated (see
   CHANGELOG · Fixed).
+- 2026-09-08 · session 10 · + open2 `378ed84`, board `6c4d249`, open3 `4b4c441`, takes
+  `1e9f83e` and the lead's commits · **372 passed, 1 skipped** (205.40 s). Live on
+  Killington (board restarted on `190e1a9`): `/` has no Analyse / Look buttons and links
+  to `/open`; `/open` shows the themes section with Karl's story, the slider (off — every
+  clip was looked at at 4 s), the picker listing killington-neutral · copper-02-2026 (26
+  clips) · killington-01-2026; a second live proposal (`b588acd5`, $0.18) — *hitting rocks
+  with their skis · the wipeouts · do something sick, send it · the rowdiest trail of the
+  day · getting the clean footy · naming jumps after conquistadors · dodging ski patrol* —
+  is on the screen and on disk, not kept; `/floor` shows the kept range as a green band on
+  the tape with the bridge to the closer strip and `0:01 → 0:14 of 5:19 · 0 % in`, no Caps
+  toggle, the microphone hint reading the permission state, and 20 picks in take clusters
+  (`CLIP_11.MP4:jump:1` is 4 takes). Space is play / pause.
