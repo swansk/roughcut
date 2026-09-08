@@ -41,6 +41,12 @@ MERGE_GAP_S = 3.0
 # shorter of the two ranges.
 REATTACH_MIN_OVERLAP = 0.5
 ROUND_SIZE = 40
+# Takes (INTAKE I2.4): two or more picks in one clip, of one kind, that do not overlap
+# and sit at most this far apart are attempts at one thing — the survey view shows them
+# side by side. 90 s: a run of attempts at one kicker is minutes end to end but the hike
+# back up between two hits is one to two of them, a fall and its replay are seconds, and
+# two jumps ten minutes apart in a long clip are not takes of each other.
+TAKE_GAP_S = 90.0
 
 # What each witness kind is worth on its own, before corroboration. Seen events arrive
 # with the events.py score (kind × notable × corroboration × confirmation), which already
@@ -263,7 +269,7 @@ def build(clips: dict[str, dict], events: list[dict], *,
     out.sort(key=lambda p: (-p["score"], p["clip"], p["start"]))
     for i, p in enumerate(out, 1):
         p["rank"] = i
-    return attach_verdicts(out, verdicts or [], selects or [])
+    return takes(attach_verdicts(out, verdicts or [], selects or []))
 
 
 def attach_verdicts(picks: list[dict], verdicts: list[dict],
@@ -296,6 +302,64 @@ def attach_verdicts(picks: list[dict], verdicts: list[dict],
                 p["verdict"] = v.get("verdict")
                 p["note"] = str(v.get("note", ""))
                 break
+    return picks
+
+
+# ---------------------------------------------------------------------- takes
+
+
+def _same_take(a: dict, b: dict) -> bool:
+    """Whether two picks of one clip, `a` before `b` by time, are attempts at one thing:
+    the same kind, no overlap, a gap of at most TAKE_GAP_S. Speech is the exception —
+    two lines in one clip are not takes of anything unless they share a theme: it is the
+    theme that says what the thing is."""
+    if a["kind"] != b["kind"]:
+        return False
+    if b["start"] < a["end"]:
+        return False
+    if b["start"] - a["end"] > TAKE_GAP_S:
+        return False
+    if a["kind"] == "speech":
+        return bool(set(a.get("tags") or []) & set(b.get("tags") or []))
+    return True
+
+
+def takes(picks: list[dict]) -> list[dict]:
+    """Mark take clusters on every pick, in place, and return the list unchanged in order.
+
+    A cluster is a chain: per clip, picks sorted by time, each joined to the previous of
+    its kind when `_same_take` says so. Every pick in a cluster of two or more gets
+    `take: {id: "<clip>:<kind>:<n>", n, of, others}` — `n` is its 1-based place by time,
+    `id`'s `n` the cluster's place among the clip's clusters of that kind; a pick outside
+    any cluster gets `take: None`. Rank and order are untouched: takes never score.
+    """
+    for p in picks:
+        p["take"] = None
+    by_clip: dict[str, list[dict]] = {}
+    for p in picks:
+        by_clip.setdefault(p["clip"], []).append(p)
+    for clip, mine in by_clip.items():
+        chains: list[list[dict]] = []
+        last: dict[str, list[dict]] = {}          # kind -> the open chain of that kind
+        for p in sorted(mine, key=lambda q: (q["start"], q["end"])):
+            chain = last.get(p["kind"])
+            if chain and _same_take(chain[-1], p):
+                chain.append(p)
+            else:
+                chain = [p]
+                chains.append(chain)
+                last[p["kind"]] = chain
+        counted: dict[str, int] = {}
+        for chain in chains:
+            if len(chain) < 2:
+                continue
+            kind = chain[0]["kind"]
+            counted[kind] = counted.get(kind, 0) + 1
+            cid = f"{clip}:{kind}:{counted[kind]}"
+            ids = [q["id"] for q in chain]
+            for n, q in enumerate(chain, 1):
+                q["take"] = {"id": cid, "n": n, "of": len(chain),
+                             "others": [i for i in ids if i != q["id"]]}
     return picks
 
 

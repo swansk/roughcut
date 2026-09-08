@@ -9,6 +9,21 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Added
+- **Take clusters in the picks (INTAKE I2.4, the data side).** The design's Survey view
+  ("three takes of the same jump, side by side — keep the one that landed") needs the picks
+  to know they are takes. `picks.takes()` marks them: per clip, picks of one kind that do
+  not overlap and sit at most `TAKE_GAP_S` = 90 s apart chain into a cluster — 90 s because
+  the hike back up between two hits at a kicker is one to two minutes, a fall and its
+  replay are seconds, and two jumps ten minutes apart in a long clip are not takes of each
+  other. Speech is the exception: two lines in one clip are not takes of anything unless
+  they share a theme tag — the theme says what the thing is. Every pick in a cluster of two
+  or more carries `take: {id: "<clip>:<kind>:<n>", n, of, others}`; every other pick
+  `take: null`. Computed after the verdicts re-attach; rank and order are untouched, takes
+  never score. `/api/picks` carries it through unchanged. Three tests: a cluster forms and
+  a gap over the limit splits it (and opens a second), different kinds never cluster and
+  overlaps are one pick already, speech needs the shared theme.
+
 ### Changed
 - **INTAKE I2.8 ticked** — Karl's second look at the pass, his three sentences quoted, the
   three commits that answer them (`b58e2c8`, `1a2815c`, `911b8b7`) and what to look at next.
