@@ -26,6 +26,18 @@ same commit. Releases move entries into a dated version section.
   0.10, telemetry 0.05 — the telemetry term can never outweigh one theme hit or two speech
   candidates, per Karl's rule. `progress()` reports counts, cost, and an ETA from rolling-mean
   measured durations only. No server wiring yet (I3.2); tracked in `docs/INTAKE.md` M3.
+- **Dictation is real: hold V, speak, and the note comes back as text.** `roughcut/dictate.py`
+  now answers `available()` and `transcribe(path, names=)` for real, so `POST /api/dictate`
+  stops saying 501. The recogniser is `research/tools/dictate.py` (PEP 723): ffmpeg turns the
+  recording — MediaRecorder's webm/opus or a wav — into 16 kHz mono, faster-whisper `small`
+  (the audio pass's family, chosen for latency: a note is a few words the editor can fix with
+  N) transcribes it on the GPU without a system CUDA install, and the brief's `names` seed
+  `initial_prompt` so "Spenny" survives. The server never imports faster-whisper: the module
+  shells to the tool with `uv run`, and every failure — undecodable bytes, a missing model, a
+  timeout, output that is not JSON — is one `NotAvailable` for one note, never the app; a
+  recording over 30 s is refused before the model loads (`TooLong`, a `NotAvailable`). Measured
+  on the RTX 5080: 1.3 s for the tool warm, 4.7 s end to end through the module. A recording
+  over 30 s answers 413 from the endpoint; the `live` pytest marker is registered in conftest.
 - **The floor's foundations: picks, the bin in the EDL, and every floor endpoint.** The intake
   design (docs/design/cutting-room-floor.html, tracked in docs/INTAKE.md) needs three things
   before any screen exists. `roughcut/picks.py` derives **picks** — windows with witnesses —
@@ -43,6 +55,9 @@ same commit. Releases move entries into a dated version section.
   placeholder page. Nothing here spends a model call or touches `segments`.
 
 ### Documentation
+- **M4 checked off in the tracker.** `docs/INTAKE.md` I4.1 and I4.2 carry their commit and the
+  measured numbers; the one thing a tone cannot prove — a spoken sentence coming back — is
+  left to the live verification on Killington (I2.6).
 - **The intake workstream has a tracker.** `docs/INTAKE.md` carries Karl's four decisions, the
   milestones with checkboxes, the lanes in flight and where to pick up after an interruption;
   HANDOFF points at it and roadmap item 8 (telemetry) moved into it. Both design documents are

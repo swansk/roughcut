@@ -1431,8 +1431,14 @@ def test_every_kind_of_job_shows_up_in_one_list(client, project):
                     assert key in j, (j["kind"], key)
                 assert 0 <= j["pct"] <= 100
                 assert "plan" not in j, "the heartbeat must not carry payloads"
-            if {ask, render} <= ids and client.get(
-                    f"/api/render/{render}").json()["state"] != "running":
+            # Both jobs settled, not just the render: the streaming ask is paced and
+            # routinely outlives a 6 s synthetic render, and the plan asserted below
+            # only exists once it is done. Waiting on the render alone was a race
+            # that lost whenever the box was busy.
+            if ({ask, render} <= ids
+                    and client.get(f"/api/render/{render}").json()["state"] != "running"
+                    and client.get(f"/api/ask/{ask}").json()["state"]
+                    not in ("estimating", "running")):
                 break
             time.sleep(0.1)
         assert kinds == {"ask", "render"}, kinds

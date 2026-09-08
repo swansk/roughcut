@@ -153,9 +153,58 @@ def test_the_bin_can_be_replaced_wholesale_and_is_validated(client):
         {"clip": "CLIP_C.MP4", "start": 5.0, "end": 99.0}]}).status_code == 400
 
 
-def test_dictation_says_it_is_not_built_yet(client):
+def test_dictation_returns_the_text_the_tool_heard(client, project, tmp_path, monkeypatch):
+    """The endpoint hands the recording to roughcut.dictate and returns its text, with the
+    EDL's names on the way in. The recogniser is stubbed through the command builder: a real
+    run means a GPU and a model download, and neither says anything about the plumbing."""
+    import subprocess
+    from roughcut import dictate
+
+    script = tmp_path / "dictate_stub.py"
+    script.write_text(
+        "import json\n"
+        "print(json.dumps({'text': ' hold on his face after ', 'latency_ms': 900,\n"
+        "                  'model': 'small', 'duration_s': 1.0, 'device': 'cuda/float16'}))\n",
+        encoding="utf-8")
+    seen: dict = {}
+
+    def stub_cmd(path, names):
+        seen["names"], seen["suffix"] = names, Path(path).suffix
+        return [sys.executable, str(script), str(path)]
+
+    monkeypatch.setattr(dictate, "dictate_cmd", stub_cmd)
+    edl = json.loads(project["edl"].read_text(encoding="utf-8"))
+    edl["names"] = ["Spenny", "Karl"]
+    project["edl"].write_text(json.dumps(edl), encoding="utf-8")   # the client fixture restores it
+    wav = subprocess.run(
+        ["ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi",
+         "-i", "sine=frequency=440:duration=1", "-ar", "16000", "-ac", "1", "-f", "wav", "pipe:1"],
+        check=True, capture_output=True).stdout
+
+    r = client.post("/api/dictate", content=wav, headers={"content-type": "audio/wav"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["text"] == "hold on his face after" and body["model"] == "small"
+    assert isinstance(body["latency_ms"], int) and body["duration_s"] == 1.0
+    assert seen == {"names": ["Spenny", "Karl"], "suffix": ".wav"}
+    assert not list(project["work"].glob("dictate_*")), "the recording is removed after use"
+
+    # bytes that are not a recording are one failed note, not a crash
     r = client.post("/api/dictate", content=b"\x00\x01", headers={"content-type": "audio/webm"})
-    assert r.status_code == 501 and "INTAKE" in r.json()["detail"]
+    assert r.status_code == 501 and "could not be decoded" in r.json()["detail"]
+    assert client.post("/api/dictate", content=b"",
+                       headers={"content-type": "audio/wav"}).status_code == 400
+
+
+def test_a_recording_over_thirty_seconds_is_refused_with_413(client, monkeypatch):
+    from roughcut import dictate
+
+    def too_long(path, *, names=None):
+        raise dictate.TooLong("recording is 31.0 s — notes are at most 30 s")
+
+    monkeypatch.setattr(dictate, "transcribe", too_long)
+    r = client.post("/api/dictate", content=b"RIFF....", headers={"content-type": "audio/wav"})
+    assert r.status_code == 413 and "30 s" in r.json()["detail"]
 
 
 def test_the_floor_page_is_served(client):

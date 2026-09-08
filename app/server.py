@@ -1011,6 +1011,8 @@ async def api_dictate(request: Request) -> JSONResponse:
     names = [t for t in (read_edl().get("names") or []) if isinstance(t, str)]
     try:
         result = await asyncio.to_thread(dictate.transcribe, path, names=names)
+    except dictate.TooLong as exc:
+        raise HTTPException(413, str(exc))
     except dictate.NotAvailable as exc:
         raise HTTPException(501, str(exc))
     finally:

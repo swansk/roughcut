@@ -27,6 +27,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
+def pytest_configure(config):
+    # There is no pyproject/pytest.ini, so the marker for tests that need a real model
+    # (skipped unless ROUGHCUT_LIVE=1) is registered here rather than warned about.
+    config.addinivalue_line("markers", "live: needs the real model; run with ROUGHCUT_LIVE=1")
+
+
 @pytest.fixture(scope="session", autouse=True)
 def ledger(tmp_path_factory):
     """Keep the suite out of the real inference ledger.
