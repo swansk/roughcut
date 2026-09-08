@@ -547,6 +547,11 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Changed
+- **Session 9 close-out (docs).** INTAKE's "Where we are" reflects the merged open and
+  floor2 lanes (`6ba1ec0`, `bc090e0`), the lanes table marks every lane merged with its
+  worktree removed, the verification log records the 348-test run and the live checks of
+  `/open` and `/floor` on Killington; HANDOFF's opener points at Karl's second look at the
+  pass as the next step.
 - **`docs/HANDOFF.md` records the rest of session 6.** Karl accepted the revision built on the
   corrected transcripts — 17 shots, 3:01, with the ski-patrol beat that no transcript in this
   project contained until that morning — rendered it at 4K, and reported three more problems

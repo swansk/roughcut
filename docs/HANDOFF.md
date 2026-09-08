@@ -1,11 +1,11 @@
 # Handoff — read this first
 
-**Active workstream (2026-09-07): the intake — tracked in [docs/INTAKE.md](INTAKE.md).** Read
+**Active workstream (2026-09-08): the intake — tracked in [docs/INTAKE.md](INTAKE.md).** Read
 that file first; it carries the decisions, the milestones with their checkboxes, the lanes in
-flight and where to pick up. The design it implements is in `docs/design/`. **Next up is
-I2.7** — Karl's first report on the pass: trim by drag, the band must not grow while playing,
-the strips must explain themselves. Everything below this line is the history that led there,
-and the editing-room roadmap.
+flight and where to pick up. The design it implements is in `docs/design/`. **State:** the pass
+(`/floor`, with I2.7's drag-trim), the open screen (`/open`) and the unattended index are all
+live; **next is Karl's second look at the pass**, then the items listed under INTAKE's "Where
+we are". Everything below this line is the history that led there, and the editing-room roadmap.
 
 Last updated: 2026-08-25 (session 7 open). **Karl kept editing on his own on 2026-08-24**, past
 everything below: he hand-added six shots to the accepted 17-shot cut, then asked for a revision

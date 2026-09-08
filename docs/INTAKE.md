@@ -46,15 +46,18 @@ until R11.
 
 ## Where we are
 
-_2026-09-07, end of session 8._ All five lanes are merged on `main`: M0, M1 (+ server wiring),
-I2.1–I2.3 + I2.5 (the pass is live at `/floor`), I3.1 (journal module), M4 (dictation), I6.1
-(R11). The floor was verified live on Killington (I2.6). **Open:** I2.4 (compare takes needs
-take clusters in `picks.py` first), I3.2/I3.3 (wire the journal into the server — the lead's
-next item; `journal.released_clips()` should replace `released_clips()`), M5 (the open screen),
-I6.2 (telemetry witness with R11's rule: freefall `< 0.5 g ≥ 0.25 s` as a capped corroboration
-term, impacts and tilt as numbers). **Karl used the floor and reported (2026-09-07, bedtime):
-trimming must be click-and-drag, the green band must not grow while playing, the strips need
-to explain themselves. That is I2.7 and it is the next item — before I3.2.**
+_2026-09-08, end of session 9._ Merged on `main`: M0, M1, M2 except I2.4 (the pass at
+`/floor`, now with **I2.7** — trim by drag, the band never grows on its own, legible strips —
+merge `bc090e0`), M3 (I3.1–I3.3: the journal runs the index unattended and resumable), M4,
+**M5 except I5.4 and the I5.2 chips** (`/open` — contact sheet + index controls, merge
+`6ba1ec0`; themes have their data side, `fc26979`), M6 (I6.1 R11, I6.2 telemetry on the
+floor). Suite: 348 passed, 1 skipped. Both screens verified live on Killington (see the
+verification log). **Next:** Karl's second look at the pass (what to check is under I2.7);
+then, in order: the I5.2 chips + dictation on `/open`, retire the old Analyse / Look buttons on
+`/` in favour of `/open`, the granularity slider plumbing (the visual pass's sample interval
+through `POST /api/index`), I2.4 (needs take clusters in `picks.py`), I5.4. **Killington's
+priced stages are still paused** (9 close looks, ~$2) — Karl's call, from the open screen's
+**Resume priced stages** button or `POST /api/index {"resume_priced": true}`.
 
 ## Milestones
 
@@ -256,12 +259,13 @@ weight until measured, and until then numbers only, never event names.
 
 | lane | branch / worktree | scope | state |
 |---|---|---|---|
-| bin | `agent/bin` · `../roughcut-wt/bin` | M1 | **merged** `2d7182c` + lead wiring; worktree can be removed |
-| floor | `agent/floor` · `../roughcut-wt/floor` | M2.1–2.5 | **merged** `782f24a`; worktree can be removed |
-| journal | `agent/journal` · `../roughcut-wt/journal` | M3.1 | **merged** `53a2578`; worktree can be removed |
-| dictate | `agent/dictate` · `../roughcut-wt/dictate` | M4 | **merged** `50899d0`; worktree can be removed |
+| bin | `agent/bin` · `../roughcut-wt/bin` | M1 | **merged** `2d7182c` + lead wiring; worktree removed |
+| floor | `agent/floor` · `../roughcut-wt/floor` | M2.1–2.5 | **merged** `782f24a`; worktree removed |
+| journal | `agent/journal` · `../roughcut-wt/journal` | M3.1 | **merged** `53a2578`; worktree removed |
+| dictate | `agent/dictate` · `../roughcut-wt/dictate` | M4 | **merged** `50899d0`; worktree removed |
 | telemetry | `agent/telemetry` · `../roughcut-wt/telemetry` | M6.1 | **merged** `394556f`; worktree removed |
-| floor2 | `agent/floor2` · `../roughcut-wt/floor2` | I2.7 | running 2026-09-08 |
+| floor2 | `agent/floor2` · `../roughcut-wt/floor2` | I2.7 | **merged** `bc090e0`; worktree removed |
+| open | `agent/open` · `../roughcut-wt/open` | I5.1, I5.3 | **merged** `6ba1ec0`; worktree removed |
 
 Lanes touch disjoint files by design: `bin` → `revise.py`, `selects.py`, tests; `floor` →
 `app/static/floor.*`, `test_floor_ui.py`; `journal` → `journal.py`, `test_journal.py`;
@@ -319,3 +323,10 @@ them. Every lane adds its own CHANGELOG bullet; integration keeps all of them.
   numbers only — CLIP_11's backflip window carries `5.9 g` / `6.7 g`, silent CLIP_05 a
   `0.3 s freefall at 0.03 g` beside 8 g bumps. Priced stages still paused; 12 clips released
   under the paused rule.
+- 2026-09-08 · + open `6ba1ec0` + floor2 `bc090e0` · **348 passed, 1 skipped** (173.75 s).
+  Live on Killington: `/open` shows 12 clips · 43:08 · 2 sessions · telemetry 12/12, the
+  paused notice with the lead's reason and the Resume button, the per-clip stage table
+  (3 released · 9 queued under the paused rule); `/floor` shows two drag handles on the
+  band, the P X U · space · [ ] { } · V · ? key line, the tape legend and lens, and the kept
+  range (`2:20.7 → 2:27.3 · 6.7 s` on CLIP_11's backflip) unchanged after three seconds of
+  playback. Old lane worktrees removed.
