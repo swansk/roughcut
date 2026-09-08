@@ -404,6 +404,148 @@ def test_clicking_a_mark_on_the_tape_jumps_to_that_pick(page, project):
     assert page.locator("#ctxPick").inner_text().startswith("0:00.0 → 0:06.0")
 
 
+# ------------------------------------------------------------ compare takes (I2.4)
+
+def inject_takes(page):
+    """A take cluster in CLIP_A, put into the page by hand: the synthetic bin yields one
+    pick per clip (every candidate inside 6 s merges, and speech takes need a shared
+    theme), so the sidecar route cannot make one. The real pick is cut to 0-3 s; a second
+    take 4-6 s joins this round's queue; a third, 3.2-3.8 s, was rejected in an earlier
+    round and is in the picks but not the queue."""
+    page.evaluate("""() => {
+        const a = floor.state.queue[0];
+        const b = JSON.parse(JSON.stringify(a));
+        const c = JSON.parse(JSON.stringify(a));
+        Object.assign(a, { end: 3, preview: [0, 3] });
+        Object.assign(b, { id: 'made-up', start: 4, end: 6, preview: [4, 6], rank: 9,
+                           why: 'the second attempt', witnesses: [{ kind: 'heard', start: 5, end: 5.6, at: 5,
+                           text: 'goodbye', score: 0.8 }, { kind: 'felt', start: 4.5, end: 5.5, at: 5, text: '6.7 g', score: 0 }] });
+        Object.assign(c, { id: 'old-take', start: 3.2, end: 3.8, preview: [3.2, 3.8], rank: 12,
+                           why: 'an earlier attempt', verdict: 'reject' });
+        a.take = { id: 'CLIP_A.MP4:speech:1', n: 1, of: 3, others: ['old-take', 'made-up'] };
+        c.take = { id: 'CLIP_A.MP4:speech:1', n: 2, of: 3, others: [a.id, 'made-up'] };
+        b.take = { id: 'CLIP_A.MP4:speech:1', n: 3, of: 3, others: [a.id, 'old-take'] };
+        floor.state.picks.push(c, b);
+        floor.state.queue.push(b);
+        floor.show(0, { autoplay: false });
+    }""")
+    page.wait_for_function("document.querySelector('#pic').paused")
+
+
+def survey_cards(page):
+    return page.locator("#overlay[data-kind=survey] .take")
+
+
+def test_T_compares_the_takes_and_P_keeps_one_and_rejects_the_rest_in_one_undo(page, project):
+    """I2.4 on the floor. The panel says the pick is a take; T lays the cluster out in
+    time order with a still, the range, the kind, the witness line, the felt numbers and
+    any verdict; ← → and ↵ move the pass; P on a take keeps it and rejects the cluster's
+    other undecided takes, one POST each, then moves on — and ⌘Z takes all of it back."""
+    inject_takes(page)
+    assert "take 1 of 3" in page.locator("#ctxOthers").inner_text()
+    assert "T to compare" in page.locator("#ctxOthers").inner_text()
+    page.keyboard.press("t")
+    page.wait_for_selector("#overlay[data-kind=survey]")
+    cards = survey_cards(page)
+    assert cards.count() == 3
+    assert "3 takes of one speech" in page.locator("#overlayBox h2").inner_text()
+    first, old, second = cards.nth(0), cards.nth(1), cards.nth(2)
+    assert "★" in first.inner_text() and "cursor" in first.get_attribute("class")
+    assert "0:00.0–0:03.0" in first.inner_text() and "speech" in first.inner_text()
+    assert "“goodbye”" in first.inner_text(), "the strongest witness's line (0.8 over 0.55)"
+    assert "0:04.0–0:06.0" in second.inner_text() and "felt 6.7 g" in second.inner_text()
+    assert "REJECTED · decided in an earlier round" in old.inner_text()
+    assert "gone" in old.get_attribute("class")
+    for k in range(3):
+        src = cards.nth(k).locator("img").get_attribute("src")
+        assert src.startswith("/media/poster/CLIP_A.jpg?t="), src
+    # → twice lands on the earlier round's take: ↵ says why it will not go there
+    page.keyboard.press("ArrowRight")
+    page.keyboard.press("ArrowRight")
+    assert "cursor" in second.get_attribute("class")
+    page.keyboard.press("ArrowLeft")
+    assert "cursor" in old.get_attribute("class")
+    page.keyboard.press("Enter")
+    page.wait_for_function("document.querySelector('#toast').textContent.includes('earlier round')")
+    assert page.locator("#overlay").is_visible()
+    # → then ↵ goes to the second take, as a mark click would; T there stars it
+    page.keyboard.press("ArrowRight")
+    page.keyboard.press("Enter")
+    page.wait_for_function("floor.state.i === 3", timeout=5000)
+    assert page.locator("#overlay").is_hidden()
+    assert page.locator("#ctxPick").inner_text().startswith("0:04.0 → 0:06.0")
+    assert "take 3 of 3" in page.locator("#ctxOthers").inner_text()
+    page.keyboard.press("t")
+    page.wait_for_selector("#overlay[data-kind=survey]")
+    assert "★" in survey_cards(page).nth(2).inner_text()
+    assert "cursor" in survey_cards(page).nth(2).get_attribute("class")
+    # a click on the first take goes back to it
+    survey_cards(page).nth(0).click()
+    page.wait_for_function("floor.state.i === 0", timeout=5000)
+    # P on the second take from the first: the second is kept (its preview, snapped), the
+    # first — undecided, in the queue — is rejected as the other take, the earlier round's
+    # is left alone; then the pass moves on past both to CLIP_B
+    posted: list[dict] = []
+    page.on("request", lambda r: posted.append(r.post_data_json)
+            if r.method == "POST" and r.url.endswith("/api/floor/verdict") else None)
+    page.keyboard.press("t")
+    page.wait_for_selector("#overlay[data-kind=survey]")
+    page.keyboard.press("ArrowRight")
+    page.keyboard.press("ArrowRight")
+    page.keyboard.press("p")
+    d = wait_edl(project, lambda d: len(d.get("selects", [])) == 1
+                 and len(d.get("floor", {}).get("verdicts", [])) == 1)
+    s = d["selects"][0]
+    assert s["clip"] == "CLIP_A.MP4" and (s["start"], s["end"]) == (4.0, 6.0)
+    assert s["why"] == "the second attempt"
+    v = d["floor"]["verdicts"][0]
+    assert v["verdict"] == "reject" and (v["start"], v["end"]) == (0.0, 3.0)
+    # one POST per verdict, in time order, the reject carrying its reason (selects.py
+    # keeps a reject's note, not its why, so the reason is proved on the wire). The
+    # request events are pumped by playwright calls, so give them a moment to land.
+    for _ in range(100):
+        if len(posted) >= 2:
+            break
+        page.wait_for_timeout(50)
+    assert [(b["verdict"], b["start"], b["end"]) for b in posted] == [("pick", 4.0, 6.0), ("reject", 0.0, 3.0)]
+    assert posted[1]["why"] == "other take of CLIP_A.MP4:speech:1"
+    assert page.locator("#overlay").is_hidden()
+    page.wait_for_function("document.querySelector('#ctxClip').textContent === 'CLIP_B'", timeout=5000)
+    assert "kept take 3 of 3" in page.locator("#toast").inner_text()
+    assert "rejected 1 other take" in page.locator("#toast").inner_text()
+    # ⌘Z: both verdicts come back off the EDL, and the kept take is in front of you
+    page.keyboard.press("Control+z")
+    wait_edl(project, lambda d: d.get("selects") == [] and not d["floor"]["verdicts"])
+    page.wait_for_function("floor.state.i === 3", timeout=5000)
+    assert page.evaluate("floor.state.queue[0].verdict") is None
+    assert page.evaluate("floor.current().verdict") is None
+    assert page.locator("#ctxPick").inner_text().startswith("0:04.0 → 0:06.0")
+    # X in the survey rejects the chosen take only, and the pass stays put
+    page.keyboard.press("t")
+    page.wait_for_selector("#overlay[data-kind=survey]")
+    page.keyboard.press("ArrowLeft")
+    page.keyboard.press("ArrowLeft")
+    assert "cursor" in survey_cards(page).nth(0).get_attribute("class")
+    page.keyboard.press("x")
+    d = wait_edl(project, lambda d: d.get("floor", {}).get("verdicts"))
+    assert (d["floor"]["verdicts"][0]["start"], d["floor"]["verdicts"][0]["end"]) == (0.0, 3.0)
+    assert d["selects"] == []
+    page.wait_for_function("document.querySelector('#overlay[data-kind=survey] .take .t4.reject') !== null")
+    assert page.evaluate("floor.state.i") == 3
+    page.keyboard.press("Escape")
+    assert page.locator("#overlay").is_hidden()
+    # the map has the T row; a pick that is not a take says so
+    page.keyboard.press("?")
+    page.wait_for_selector("#overlay[data-kind=keymap]")
+    assert "compare takes" in page.locator("#overlayBox").inner_text()
+    page.keyboard.press("Escape")
+    page.evaluate("floor.show(1, { autoplay: false })")
+    assert "T to compare" not in page.locator("#ctxOthers").inner_text()
+    page.keyboard.press("t")
+    page.wait_for_function("document.querySelector('#toast').textContent.includes('not a take')")
+    assert page.locator("#overlay").is_hidden()
+
+
 def lens(page) -> tuple[float, float]:
     """The lens's left and width on the tape, in percent of the clip."""
     return tuple(page.evaluate(

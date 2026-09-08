@@ -10,6 +10,18 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Compare takes on the floor — the Survey view (INTAKE I2.4).** When the pick is one of
+  a cluster the THIS PICK panel says `take n of N · T to compare`. `T` opens the takes side
+  by side in time order — a still at the anchor (the poster the open screen uses), the
+  range, the kind, the strongest witness's line, the felt numbers, any verdict, `★` on this
+  pick; a take decided in an earlier round shows greyed with the reason, like the tape's
+  marks. `←` `→` choose, `↵` or a click goes to that pick (the mark-jump path), `P` keeps
+  the chosen take and rejects the cluster's other undecided takes — one POST per verdict
+  in time order, each reject's reason `other take of <cluster>`, then the pass moves on
+  past everything just decided — `X` rejects the chosen take only, `Esc` closes. `⌘Z` after
+  a P takes every verdict it wrote back off the EDL in one step: the batch is one undo
+  entry. The `?` map has a `T` row; the key line keeps its six things. One browser test,
+  the cluster injected through `floor.state` (the synthetic bin cannot form one).
 - **Take clusters in the picks (INTAKE I2.4, the data side).** The design's Survey view
   ("three takes of the same jump, side by side — keep the one that landed") needs the picks
   to know they are takes. `picks.takes()` marks them: per clip, picks of one kind that do

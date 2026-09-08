@@ -224,6 +224,26 @@
   .menu div { padding: 8px 4px; border-bottom: 1px solid #1a1a22; font-size: 12.5px; }
   .menu div .hint { margin-left: 8px; }
 
+  /* the survey: takes side by side, the cursor's outlined, this pick starred, an earlier
+   * round's greyed */
+  #overlay[data-kind="survey"] .box { max-width: 1160px; }
+  .takes { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+  .take { background: #0f0f14; border: 1px solid #2a2a36; border-radius: 8px; padding: 8px; cursor: pointer;
+          font-size: 11.5px; min-width: 0; }
+  .take.cursor { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .take.here { background: #12161a; }
+  .take.gone { opacity: .45; cursor: default; }
+  .take img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: #000;
+              border-radius: 4px; margin-bottom: 6px; }
+  .take .t1 { color: var(--text); }
+  .take .t1 .star { color: var(--gold); }
+  .take .t2 { color: var(--dim); margin-top: 3px; overflow: hidden; text-overflow: ellipsis;
+              display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+  .take .t3 { color: var(--tele); font: 10.5px var(--mono); margin-top: 3px; }
+  .take .t4 { font: 600 9.5px var(--mono); letter-spacing: .1em; margin-top: 5px; color: #8f8fa3; }
+  .take .t4.pick { color: var(--good-soft); }
+  .take .t4.later { color: var(--warn); }
+
   #toast { position: fixed; left: 50%; bottom: 150px; transform: translateX(-50%); background: #1e1e25;
            color: var(--text); border: 1px solid #3a3a48; border-radius: 8px; padding: 8px 14px; font-size: 12px;
            opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 40; max-width: 70vw; }

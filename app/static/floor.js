@@ -373,6 +373,7 @@ function paintContext() {
     + (p.preview[0] > p.start || p.preview[1] < p.end
       ? ` · preview ${fmt(p.preview[0])} → ${fmt(p.preview[1])}` : '');
   $('#ctxOthers').innerHTML = `${others} other pick${others === 1 ? '' : 's'} in this clip`
+    + (p.take ? ` · <b>take ${p.take.n} of ${p.take.of}</b> · <span class="key">T</span> to compare` : '')
     + ` · <span class="key">.</span> open the clip`;
   $('#ctxHint').innerHTML = 'the green band is the clip — drag its edges · <span class="key">space</span> plays and pauses · at the band’s end it watches on';
   paintKeep(true);
@@ -735,6 +736,16 @@ function back() {
   savePosition();
 }
 
+/* Jump the pass to a pick — a mark on the tape, a take in the survey. Only this round's
+ * queue is reachable (rule 3); a pick decided in an earlier round says so and stays put. */
+function jumpTo(q) {
+  const at = F.queue.indexOf(q);
+  if (at < 0) return toast('decided in an earlier round — not in this queue', 3000);
+  if (at === F.i) return closeOverlay();
+  show(at);
+  savePosition();
+}
+
 /* ----------------------------------------------------------------- verdicts */
 
 function verdictBody(p, kind, range, hero, note) {
@@ -1032,8 +1043,8 @@ function tapeDown(e) {
   if (!p || F.mode !== 'pass' || e.button !== 0) return;
   const m = e.target.closest ? e.target.closest('#tapeMarks span') : null;
   if (m && m.classList.contains('jump')) {
-    const at = F.queue.findIndex((q) => String(q.id) === m.dataset.id);
-    if (at >= 0 && at !== F.i) { show(at); savePosition(); return; }
+    const q = F.queue.find((x) => String(x.id) === m.dataset.id);
+    if (q && q !== p) { jumpTo(q); return; }
   }
   Object.assign(tapeDrag, { on: true, moved: false, x: e.clientX });
   $('#tape').setPointerCapture(e.pointerId);
@@ -1276,6 +1287,180 @@ async function dictSend(blob) {
   }, 2500);
 }
 
+/* ------------------------------------------------------------ the survey
+ *
+ * Compare takes (I2.4, docs/design §4.3: "three takes of the same jump, side by side —
+ * keep the one that landed"). picks.py clusters the attempts (`take` on the pick); T lays
+ * them out in time order with a still, the range, the kind, the strongest witness, the
+ * felt numbers and any verdict. ← → choose, ↵ or a click goes there, P keeps the chosen
+ * take and rejects the cluster's other undecided takes — one POST each, one undo entry
+ * for the lot — X rejects the chosen take only. Takes decided in an earlier round show
+ * greyed with the reason, like the tape's marks: the queue is frozen.
+ */
+
+const survey = { k: 0 };
+
+function takesOf(p) {
+  const ids = new Set([p.id].concat((p.take && p.take.others) || []));
+  return F.picks.filter((q) => ids.has(q.id)).sort((a, b) => a.start - b.start);
+}
+
+/* The strongest witness's line: what was heard, or what the sheet claimed and a closer
+ * look did not contradict. */
+function witnessLine(q) {
+  const ws = (q.witnesses || []).filter((w) => w.kind === 'heard' || (w.kind === 'seen' && w.state !== 'contradicted'));
+  const best = ws.slice().sort((a, b) => (b.score || 0) - (a.score || 0))[0];
+  if (!best) return q.why || '';
+  return best.kind === 'heard' ? `“${best.text || ''}”` : String(best.text || '');
+}
+
+const STAMP_WORD = { pick: 'PICKED', reject: 'REJECTED', later: 'LATER' };
+
+function surveyHtml() {
+  const p = cur();
+  const list = takesOf(p);
+  const cards = list.map((q, k) => {
+    const inQueue = F.queue.indexOf(q) >= 0;
+    const felt = (q.witnesses || []).filter((w) => w.kind === 'felt').map((w) => w.text).join(' · ');
+    const word = q.verdict ? (q.hero ? 'HERO' : STAMP_WORD[q.verdict] || q.verdict) : '';
+    return `<div class="take${k === survey.k ? ' cursor' : ''}${q === p ? ' here' : ''}${inQueue ? '' : ' gone'}" data-id="${escapeHtml(q.id)}" data-k="${k}" title="${inQueue ? 'click to go to it' : 'decided in an earlier round — not in this queue'}">
+      <img src="${escapeHtml(q.poster || '')}" alt="">
+      <div class="t1"><b>take ${k + 1}</b>${q === p ? ' <span class="star">★</span>' : ''} · <span class="tnum">${fmt(q.start)}–${fmt(q.end)}</span> · ${escapeHtml(q.kind || '')}</div>
+      <div class="t2">${escapeHtml(witnessLine(q))}</div>
+      ${felt ? `<div class="t3">felt ${escapeHtml(felt)}</div>` : ''}
+      ${word ? `<div class="t4 ${escapeHtml(q.verdict)}">${escapeHtml(word)}${inQueue ? '' : ' · decided in an earlier round — not in this queue'}</div>` : ''}
+    </div>`;
+  }).join('');
+  return `<h2>Compare takes <span class="hint">${escapeHtml(stem(p.clip))} · ${list.length} takes of one ${escapeHtml(p.kind || 'moment')} · ${escapeHtml(p.take.id)}</span></h2>
+    <div class="takes">${cards}</div>
+    <div class="hint small" style="margin-top:10px"><span class="key">←</span><span class="key">→</span> choose · <span class="key">↵</span> or a click goes to it · <span class="key">P</span> keep it and reject the cluster’s other undecided takes · <span class="key">X</span> reject it only · <span class="key">Esc</span> close</div>`;
+}
+
+function wireSurvey() {
+  $('#overlayBox').querySelectorAll('.take').forEach((el) => {
+    el.onclick = () => { survey.k = Number(el.dataset.k); surveyGo(); };
+  });
+}
+
+function openSurvey() {
+  const p = cur();
+  if (!p || F.mode !== 'pass') return;
+  if (F.overlay === 'survey') return closeOverlay();
+  if (!p.take) return toast('not a take — nothing else in this clip tries the same thing', 3000);
+  survey.k = Math.max(0, takesOf(p).indexOf(p));
+  openOverlay('survey', surveyHtml());
+  wireSurvey();
+}
+
+function repaintSurvey() {
+  if (F.overlay !== 'survey') return;
+  $('#overlayBox').innerHTML = surveyHtml();
+  wireSurvey();
+}
+
+function surveyCursor() {
+  return takesOf(cur())[survey.k] || null;
+}
+
+function surveyMove(d) {
+  const n = takesOf(cur()).length;
+  survey.k = Math.max(0, Math.min(n - 1, survey.k + d));
+  $('#overlayBox').querySelectorAll('.take').forEach((el) =>
+    el.classList.toggle('cursor', Number(el.dataset.k) === survey.k));
+}
+
+function surveyGo() {
+  const q = surveyCursor();
+  if (q) jumpTo(q);
+}
+
+/* What P keeps of a take never watched here: its preview, snapped outward to the sentence
+ * — rule 1, as the band would have shown it. The current pick keeps its band. */
+function keepOf(t) {
+  if (t === cur()) return keepRange().snapped;
+  return [r2(snapStart(t, t.preview[0])), r2(snapEnd(t, t.preview[1]))];
+}
+
+const NO_KEEP = { manualStart: null, manualEnd: null, edge: 'out' };
+
+/* P in the survey: keep the chosen take, reject the cluster's other undecided takes — one
+ * POST per verdict, in time order, one undo entry for all of them — then move on past
+ * everything just decided, as a verdict does. */
+async function surveyPick() {
+  const p = cur();
+  const q = surveyCursor();
+  if (!p || !q || F.mode !== 'pass') return;
+  if (F.queue.indexOf(q) < 0) return toast('decided in an earlier round — not in this queue', 3000);
+  const cid = p.take.id;
+  const cluster = takesOf(p);
+  closeOverlay();
+  pause();
+  const noteOf = (t) => (t === p ? F.note : t.note || '');
+  const plan = [{ t: q, kind: 'pick', range: keepOf(q), why: q.why || '' }].concat(
+    cluster.filter((t) => t !== q && !t.verdict && F.queue.indexOf(t) >= 0)
+      .map((t) => ({ t, kind: 'reject', range: [r2(t.start), r2(t.end)], why: `other take of ${cid}` })));
+  const entry = { i: F.i, items: [], keep: q === p ? { ...F.keep } : { ...NO_KEEP }, note: noteOf(q) };
+  for (const step of plan) {
+    const hero = step.kind === 'pick' && !!step.t.hero && step.t.verdict === 'pick';
+    const body = { ...verdictBody(step.t, step.kind, step.range, hero, noteOf(step.t)), why: step.why };
+    let data;
+    try {
+      data = await send('POST', '/api/floor/verdict', body);
+    } catch (e) {
+      toast(`the verdict did not land: ${e.message}`, 6000);
+      break;
+    }
+    F.summary = data.summary;
+    entry.items.push({ p: step.t, prev: snapshot(step.t), sent: step.range });
+    step.t.verdict = step.kind;
+    step.t.hero = hero;
+    step.t.note = noteOf(step.t);
+    step.t.sent = step.range;
+  }
+  if (!entry.items.length) return;
+  F.undo.push(entry);
+  if (F.undo.length > 100) F.undo.shift();
+  const rejected = entry.items.length - 1;
+  if (p.verdict) stamp(p.verdict, p.hero && p.verdict === 'pick', p.verdict === 'reject' ? '· other take' : '');
+  paintHud();
+  paintTape();
+  savePosition();
+  toast(`kept take ${survey.k + 1} of ${cluster.length}`
+    + (rejected ? ` · rejected ${rejected} other take${rejected === 1 ? '' : 's'}` : ''), 3500);
+  const next = F.queue.findIndex((t, k) => k > F.i && !entry.items.some((it) => it.p === t));
+  setTimeout(() => {
+    if (F.mode !== 'pass') return;
+    if (next < 0) closingCard(); else { show(next); savePosition(); }
+  }, STAMP_MS);
+}
+
+/* X in the survey: the chosen take only. On the current pick it is the plain verdict;
+ * on another it lands, the survey repaints, and the pass stays where it is. */
+async function surveyReject() {
+  const p = cur();
+  const q = surveyCursor();
+  if (!p || !q || F.mode !== 'pass') return;
+  if (q === p) { closeOverlay(); return verdict('reject'); }
+  if (F.queue.indexOf(q) < 0) return toast('decided in an earlier round — not in this queue', 3000);
+  const range = [r2(q.start), r2(q.end)];
+  let data;
+  try {
+    data = await send('POST', '/api/floor/verdict', verdictBody(q, 'reject', range, false, q.note || ''));
+  } catch (e) {
+    return toast(`reject did not land: ${e.message}`, 6000);
+  }
+  F.summary = data.summary;
+  F.undo.push({ i: F.i, items: [{ p: q, prev: snapshot(q), sent: range }], keep: { ...NO_KEEP }, note: q.note || '' });
+  if (F.undo.length > 100) F.undo.shift();
+  q.verdict = 'reject';
+  q.hero = false;
+  q.sent = range;
+  paintHud();
+  paintTape();
+  repaintSurvey();
+  toast(`rejected take ${survey.k + 1}`);
+}
+
 /* ---------------------------------------------------------------- overlays */
 
 function openOverlay(kind, html) {
@@ -1323,6 +1508,7 @@ function keymapHtml() {
     ['↵', 'skip for now — the next pick without a verdict · ⌫ back to the previous, decided or not'],
     ['V', 'hold to speak a note; N edits it'],
     ['E', 'evidence drawer'], ['.', 'more: open the whole clip · look closer · find like this'],
+    ['T', 'compare takes — this clip’s other attempts at the same thing, side by side; P keeps one and rejects the rest'],
     ['?', 'this map'],
     ['drag', 'the green band’s edges trim it, its middle slides it · click a strip to seek, drag to scrub · click a mark on the tape to jump to that pick'],
   ];
@@ -1521,6 +1707,13 @@ document.addEventListener('keydown', (e) => {
   }
   if (F.overlay && (k === 'Escape' || (k === 'e' && F.overlay === 'evidence'))) return closeOverlay();
   if (!cur()) return undefined;
+  if (F.overlay === 'survey') {
+    if (k === 'ArrowLeft' || k === 'ArrowRight') { e.preventDefault(); return surveyMove(k === 'ArrowLeft' ? -1 : 1); }
+    if (k === 'Enter') { e.preventDefault(); return surveyGo(); }
+    if (k === 'p') return surveyPick();
+    if (k === 'x' && !e.shiftKey) return surveyReject();
+    if (k === 't') return closeOverlay();
+  }
 
   switch (k) {
     case 'p': return verdict('pick');
@@ -1541,6 +1734,7 @@ document.addEventListener('keydown', (e) => {
     case 'v': if (!e.repeat) dictStart(); return;
     case 'n': e.preventDefault(); return editNote();
     case 'e': return toggleOverlay('evidence', evidenceHtml);
+    case 't': return openSurvey();
     case '.': return toggleOverlay('more', moreHtml);
     case 'Enter': e.preventDefault(); return advance();
     case 'Backspace': e.preventDefault(); return back();
