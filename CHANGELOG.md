@@ -10,6 +10,17 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Dictation is real: hold V, speak, and the note comes back as text.** `roughcut/dictate.py`
+  now answers `available()` and `transcribe(path, names=)` for real, so `POST /api/dictate`
+  stops saying 501. The recogniser is `research/tools/dictate.py` (PEP 723): ffmpeg turns the
+  recording — MediaRecorder's webm/opus or a wav — into 16 kHz mono, faster-whisper `small`
+  (the audio pass's family, chosen for latency: a note is a few words the editor can fix with
+  N) transcribes it on the GPU without a system CUDA install, and the brief's `names` seed
+  `initial_prompt` so "Spenny" survives. The server never imports faster-whisper: the module
+  shells to the tool with `uv run`, and every failure — undecodable bytes, a missing model, a
+  timeout, output that is not JSON — is one `NotAvailable` for one note, never the app; a
+  recording over 30 s is refused before the model loads (`TooLong`, a `NotAvailable`). Measured
+  on the RTX 5080: 1.3 s for the tool warm, 4.7 s end to end through the module.
 - **The floor's foundations: picks, the bin in the EDL, and every floor endpoint.** The intake
   design (docs/design/cutting-room-floor.html, tracked in docs/INTAKE.md) needs three things
   before any screen exists. `roughcut/picks.py` derives **picks** — windows with witnesses —
