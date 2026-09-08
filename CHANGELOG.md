@@ -9,6 +9,15 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Documentation
+- **Roadmap item 8: telemetry (accel/gyro/GPS) as an optional, weighted, never-trusted-alone
+  witness.** Karl's backlog note, recorded with his three rules: it is not always present, so the
+  pipeline must run identically without it; when present the AI weights it alongside the visual
+  and audio passes; and *be very careful not to over-index — it could be noisy or bad*, so it
+  gets no weight until a study (R11) measures it against the adjudicated events, and until then
+  it corroborates and never promotes. GPMF is in the GoPro files today and dropped unread by
+  `assemble.py -dn`.
+
 ### Added
 - **Ask about one shot: a scoped revision on every card, seconds instead of
   minutes.** Karl asked for "a feature that lets me request specific changes to
