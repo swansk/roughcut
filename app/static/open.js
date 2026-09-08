@@ -13,6 +13,12 @@
  * proposal is the EDL's word until Keep. Everything else here is ffprobe and file checks.
  * While a run is going the page polls GET /api/index every 2 s; the run lives in the
  * server, so closing the tab changes nothing.
+ *
+ * The bin is something you point at, not a launch argument (INTAKE I5.4): the name in
+ * the header opens a picker over GET /api/projects, and a row (or a path typed in) is
+ * POST /api/projects/open — the server re-points itself, and this page reloads all of
+ * its data for the new bin. A 409 (a job still running) or a 400 (no video there) is
+ * said and the panel stays.
  */
 
 'use strict';
@@ -681,6 +687,129 @@ function onKeyUp(e) {
   dictStop();
 }
 
+/* ---------------------------------------------------------------- picker */
+
+// One bin per launch was the rule; now the header's name is a control. The list is
+// the server's facts on every bin it knows (opened before, or a folder of video next
+// door) — name, clips, and small flags — never a judgement. Opening one is the same
+// configure() main() runs, so everything on this page is reloaded for it.
+
+const P = { open: false, list: null, busy: false };
+
+function binFlags(p) {
+  const out = [];
+  if (!p.exists) out.push('<i class="flag bad">missing</i>');
+  if (p.segments > 0) out.push(`<i class="flag on">cut · ${plural(p.segments, 'shot')}</i>`);
+  if (p.journal) out.push('<i class="flag good">journal</i>');
+  if (p.exists && !(p.segments > 0) && !p.journal) out.push('<i class="flag">new</i>');
+  return out.join('');
+}
+
+function binRow(p) {
+  return `<button type="button" class="prow${p.current ? ' current' : ''}" data-footage="${escapeHtml(p.footage)}" `
+    + `title="${escapeHtml(p.footage)}"${p.current ? ' aria-current="true"' : ''}>`
+    + `<b>${escapeHtml(p.name)}</b><span class="n tnum">${plural(p.clips, 'clip')}</span>`
+    + `<span class="flags">${binFlags(p)}</span>${p.current ? '<span class="cur">open now</span>' : ''}</button>`;
+}
+
+function renderPicker() {
+  const l = P.list;
+  if (!l || !P.open) return;
+  $('#pickerList').innerHTML = l.projects.map(binRow).join('')
+    || '<span class="hint small">no bins known yet — type a folder below</span>';
+  $('#pickerSub').textContent = `${plural(l.projects.length, 'bin')} · opened before, or a folder of video next door`;
+}
+
+async function openPicker() {
+  if (P.open) return;
+  P.open = true;
+  $('#picker').hidden = false;
+  $('#hdBin').setAttribute('aria-expanded', 'true');
+  $('#pickerList').innerHTML = '<span class="hint small">looking…</span>';
+  $('#pickerSub').textContent = '';
+  try {
+    P.list = await getJSON('/api/projects');
+  } catch (e) {
+    $('#pickerList').innerHTML = `<span class="bad small">${escapeHtml(e.message || e)}</span>`;
+    return;
+  }
+  renderPicker();
+  if (P.open) $('#pickerPath').focus();
+}
+
+function closePicker() {
+  if (!P.open) return;
+  P.open = false;
+  $('#picker').hidden = true;
+  $('#hdBin').setAttribute('aria-expanded', 'false');
+  if ($('#picker').contains(document.activeElement)) $('#hdBin').focus();
+}
+
+async function openBin(footage) {
+  const path = String(footage || '').trim();
+  if (!path || P.busy) return;
+  P.busy = true;
+  $('#picker').classList.add('busy');
+  try {
+    const r = await send('POST', '/api/projects/open', { footage: path });
+    closePicker();
+    $('#pickerPath').value = '';
+    toast(`opened ${r.name}${r.edl_created ? ' · new project' : ''}`);
+    await reopen();
+  } catch (e) {
+    toast(String(e.message || e), 5000);          // 409 / 400: the server's word; the panel stays
+  } finally {
+    P.busy = false;
+    $('#picker').classList.remove('busy');
+  }
+}
+
+// The server has re-pointed itself: forget everything this page held about the last
+// bin — a run's id, the story, a proposal being edited, the slider's move — and load
+// the new one the way boot() does.
+async function reopen() {
+  clearTimeout(O.timer);
+  clearTimeout(O.ttimer);
+  dictStop();
+  Object.assign(O, {
+    clips: null, status: null, index: null, order: null, interval: null, job: null, detail: '',
+    busy: false, timer: null, themes: null, proposal: null, tjob: null, tbusy: false,
+    ttimer: null, story: null,
+  });
+  $('#binName').textContent = 'opening the folder…';
+  $('#story').value = '';
+  await load();
+}
+
+function onPickerKey(e) {
+  if (e.key === 'Escape') {
+    if (P.open) { e.preventDefault(); closePicker(); }
+    return;
+  }
+  if ((e.key === 'o' || e.key === 'O') && !e.ctrlKey && !e.metaKey && !e.altKey
+      && !isTyping(document.activeElement)) {
+    e.preventDefault();
+    if (P.open) closePicker(); else openPicker();
+  }
+}
+
+function wirePicker() {
+  $('#hdBin').addEventListener('click', () => { if (P.open) closePicker(); else openPicker(); });
+  $('#pickerList').addEventListener('click', (e) => {
+    const row = e.target.closest('.prow');
+    if (row) openBin(row.dataset.footage);
+  });
+  $('#pickerPath').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    openBin(e.target.value);
+  });
+  document.addEventListener('keydown', onPickerKey);
+  document.addEventListener('pointerdown', (e) => {   // a click anywhere else closes it
+    if (P.open && !e.target.closest('#picker') && !e.target.closest('#hdBin')) closePicker();
+  });
+}
+
 /* --------------------------------------------------------------- actions */
 
 async function startIndex(extra = {}) {
@@ -813,6 +942,13 @@ async function boot() {
     if (O.status) renderControls();
   });
   wireThemes();
+  wirePicker();
+  await load();
+}
+
+// Everything the page knows about the bin, in one go — at boot and again when the
+// picker points the board at another folder.
+async function load() {
   try {
     await Promise.all([refreshClips(), refreshStatus(), refreshIndex(), refreshThemes()]);
     if (O.index.running) poll();
@@ -822,6 +958,7 @@ async function boot() {
   }
 }
 
-window.sheet = { state: O, refresh: tick, journalWord, order, interval, renderControls,
-                 renderThemes, proposeThemes, keepThemes, dictSend, dictStart, dictStop };
+window.sheet = { state: O, picker: P, refresh: tick, journalWord, order, interval, renderControls,
+                 renderThemes, proposeThemes, keepThemes, dictSend, dictStart, dictStop,
+                 openPicker, closePicker, openBin, reopen };
 boot();

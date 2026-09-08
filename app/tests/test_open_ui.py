@@ -29,6 +29,7 @@ playwright_api = pytest.importorskip("playwright.sync_api",
                                      reason="playwright not installed")
 from playwright.sync_api import sync_playwright  # noqa: E402
 
+from conftest import _make_clip  # noqa: E402
 from test_index import _stub_tools  # noqa: E402
 
 
@@ -559,3 +560,126 @@ def test_holding_V_in_the_story_dictates_into_it_and_a_tap_types(page, monkeypat
     assert "0.8 s" in page.locator("#dictState").inner_text()
     assert page.locator("#mic").is_visible()
     wait_edl(bin_server, project, lambda d: d.get("story") == "v my friends and me skiing")
+
+
+# ------------------------------------------------------------ the picker (I5.4)
+#
+# Opening another bin re-points the module's live server (the same configure() main()
+# runs), so these come last and the second one puts the server back the way the
+# fixture had it. The other bin is a sibling of the project's footage folder — the
+# server lists the folders of video next door on its own.
+
+def other_bin(project, name: str):
+    folder = project["footage"].parent / name
+    folder.mkdir(exist_ok=True)
+    if not (folder / "GX01.MP4").exists():
+        _make_clip(folder / "GX01.MP4")
+    return folder
+
+
+def picker_rows(page) -> list[dict]:
+    return page.evaluate("""() => Array.from(document.querySelectorAll('#pickerList .prow')).map(b => ({
+        name: b.querySelector('b').textContent, clips: b.querySelector('.n').textContent,
+        flags: Array.from(b.querySelectorAll('.flag')).map(f => f.textContent), path: b.title,
+        current: b.classList.contains('current')}))""")
+
+
+def open_picker(page) -> None:
+    page.wait_for_selector("#picker:not([hidden])", timeout=3000)
+    page.wait_for_function("document.querySelectorAll('#pickerList .prow').length > 0", timeout=5000)
+
+
+def test_the_bin_name_opens_a_picker_and_a_running_job_refuses_the_switch(page, project):
+    import server
+    from roughcut import progress
+    other = other_bin(project, "picker-bin")
+    name = page.locator("#hdBin")
+    assert name.inner_text() == project["footage"].name
+    assert page.locator("#picker").is_hidden()
+    page.keyboard.press("o")                              # the key, outside any field
+    open_picker(page)
+    assert name.get_attribute("aria-expanded") == "true"
+    table = picker_rows(page)
+    assert table[0]["name"] == project["footage"].name and table[0]["current"]
+    assert table[0]["clips"] == "3 clips" and table[0]["path"] == str(project["footage"])
+    assert table[0]["flags"] == (["journal"] if api(page, "/api/index")["exists"] else ["new"])
+    by = {r["name"]: r for r in table}
+    assert by["picker-bin"] == {"name": "picker-bin", "clips": "1 clip", "flags": ["new"],
+                                "path": str(other), "current": False}
+    assert "sidecars" not in by, "a folder without video is not a bin"
+    text = page.locator("#picker").inner_text()
+    assert "no browsing dialog" in text and "open a folder" in page.locator("#pickerPath").get_attribute("placeholder")
+    # Esc closes it; the name reopens it
+    page.keyboard.press("Escape")
+    assert page.locator("#picker").is_hidden() and name.get_attribute("aria-expanded") == "false"
+    name.click()
+    open_picker(page)
+    # a folder with no video: the server's 400, said, and the panel stays
+    page.locator("#pickerPath").fill(str(project["sidecars"]))
+    page.locator("#pickerPath").press("Enter")
+    page.wait_for_function("document.querySelector('#toast').textContent.includes('no video')", timeout=5000)
+    assert page.locator("#picker").is_visible()
+    # a job still running: the 409, said, and the bin unchanged
+    server.INDEXES["stuck"] = progress.Job("index", "Indexing", id="stuck", state="running")
+    try:
+        page.locator("#pickerList .prow", has_text="picker-bin").click()
+        page.wait_for_function(
+            "document.querySelector('#toast').textContent.includes('still running')", timeout=5000)
+    finally:
+        server.INDEXES.clear()
+    assert page.locator("#picker").is_visible()
+    assert name.inner_text() == project["footage"].name
+    assert page.locator(".card").count() == 3
+    assert api(page, "/api/status")["footage"] == str(project["footage"])
+
+
+def test_opening_another_bin_reloads_the_whole_page_for_it(page, project, bin_server):
+    """A row is POST /api/projects/open; on 200 the page reloads everything — header,
+    sheet, themes, index — for the new bin, and the way back is a path typed in."""
+    import server
+    other = other_bin(project, "picker-bin")
+    try:
+        page.locator("#hdBin").click()
+        open_picker(page)
+        page.locator("#pickerList .prow", has_text="picker-bin").click()
+        page.wait_for_function(
+            "document.querySelector('#toast').textContent.includes('opened picker-bin')", timeout=10000)
+        assert "new project" in page.locator("#toast").inner_text()
+        page.wait_for_function(
+            "sheet.state.clips && sheet.state.clips.footage.endsWith('picker-bin')"
+            " && sheet.state.status && sheet.state.index && sheet.state.themes", timeout=10000)
+        assert page.locator("#picker").is_hidden()
+        assert page.locator("#hdBin").inner_text() == "picker-bin"
+        assert page.locator("#binName").inner_text() == "picker-bin"
+        assert "1 clip" in page.locator("#binMeta").inner_text()
+        cards = page.locator(".card")
+        assert cards.count() == 1 and cards.first.locator(".cap b").inner_text() == "GX01"
+        assert "not yet" in cards.first.locator(".flags").inner_text()     # nobody has listened here
+        assert page.locator(".badge").count() == 0                          # and there is no journal
+        for sel in ("#index", "#progress", "#paused", "#themesKept", "#themesEdit"):
+            assert page.locator(sel).is_hidden(), sel
+        assert page.locator("#stepPass").get_attribute("aria-disabled") == "true"
+        assert page.locator("#story").input_value() == ""
+        assert "has not listened yet" in page.locator("#themesPrice").inner_text()
+        assert "1 clip not yet looked at" in page.locator("#priceLine").inner_text()
+        assert page.locator("#interval").is_enabled()
+        assert "Index the footage" in page.locator("#indexBtn").inner_text()
+        s = api(page, "/api/status")
+        assert s["footage"] == str(other) and s["clips"] == 1
+        assert page.locator("#stepPass").get_attribute("href") == "/floor"
+        # and back, by its path typed into the field: the first bin's own EDL, not a new one
+        page.keyboard.press("o")
+        open_picker(page)
+        assert [r["name"] for r in picker_rows(page)][0] == "picker-bin"
+        page.locator("#pickerPath").fill(str(project["footage"]))
+        page.locator("#pickerPath").press("Enter")
+        page.wait_for_function(
+            f"document.querySelector('#toast').textContent === 'opened {project['footage'].name}'", timeout=10000)
+        page.wait_for_function("sheet.state.clips && sheet.state.clips.clips.length === 3", timeout=10000)
+        assert page.locator("#hdBin").inner_text() == project["footage"].name
+        assert page.locator(".card").count() == 3
+        assert api(page, "/api/status")["footage"] == str(project["footage"])
+    finally:
+        server.INDEXES.clear()
+        server.configure(None, project["footage"], project["sidecars"], bin_server["work"],
+                         proxies=False, visual=None)

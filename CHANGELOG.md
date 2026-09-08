@@ -10,6 +10,16 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **`/open` — the project picker (INTAKE I5.4, the screen).** The bin's name in the header
+  is a control: click it (or press `O`) for a panel over `GET /api/projects` — the current
+  bin first, then the rest by last opened — each row its name, `N clips`, and the facts as
+  small flags (`cut · 17 shots`, `journal`, `new`, `missing`), the folder path in the
+  tooltip. A row is `POST /api/projects/open {footage}`; on 200 the page reloads everything
+  for the new bin (sheet, themes, index state, the slider) and toasts `opened <name>`
+  (`· new project` when the EDL was scaffolded); a 409 (a job still running) or a 400 (no
+  video there) is toasted and the panel stays. A field at the bottom takes a folder path
+  typed or pasted — there is no browsing dialog in a page, and the hint says so. `Esc`
+  closes; a click anywhere else closes. `test_open_ui.py` 15 passed.
 - **`/open` — the granularity slider (INTAKE I5.3, the other half).** The "not wired yet"
   hint in **Look — how closely?** is now the design's one control: a four-stop slider
   (4 · 3 · 2 · 1 s, coarse to fine, resting on the project's `interval_s`), each stop said in
