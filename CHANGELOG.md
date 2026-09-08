@@ -737,6 +737,9 @@ same commit. Releases move entries into a dated version section.
   follow-ups.
 
 ### Fixed
+- **A reject keeps its reason.** `selects.apply_verdict` stored only the note on a reject or
+  later, so the Survey's batch reject (`other take of <cluster>`) was on the wire and never in
+  the EDL. The verdict record now carries `why`. Found by the takes lane; one assertion added.
 - **The themes price was the wrong side of honest.** The first live proposal on Killington
   (12 clips, 323 capped lines) was quoted at $0.09 and billed $0.20 — 42.8k tokens in, 4.4k
   out: the judge role's harness overhead is nearer 36k than the finder's 18k, and the answer

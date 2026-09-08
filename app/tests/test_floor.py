@@ -17,8 +17,9 @@ from roughcut import selects  # noqa: E402
 
 def test_pick_merges_overlapping_keeps_and_clears_a_reject_on_those_seconds():
     edl = {"segments": []}
-    selects.apply_verdict(edl, "CLIP_A.MP4", 1.0, 3.0, "reject")
+    selects.apply_verdict(edl, "CLIP_A.MP4", 1.0, 3.0, "reject", why="other take of CLIP_A.MP4:jump:1")
     assert edl["floor"]["verdicts"][0]["verdict"] == "reject"
+    assert edl["floor"]["verdicts"][0]["why"] == "other take of CLIP_A.MP4:jump:1"
     selects.apply_verdict(edl, "CLIP_A.MP4", 1.0, 3.0, "pick", why="first", note="one")
     assert edl["floor"]["verdicts"] == [], "a keep on rejected seconds wins"
     selects.apply_verdict(edl, "CLIP_A.MP4", 2.0, 5.0, "pick", note="two", hero=True)

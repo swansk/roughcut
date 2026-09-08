@@ -132,8 +132,12 @@ def apply_verdict(edl: dict, clip: str, start: float, end: float, verdict: str, 
         edl["selects"].append(merged)
         edl["selects"].sort(key=lambda s: (s["clip"], s["start"]))
     elif verdict in ("reject", "later"):
+        # `why` is kept on a reject too: the Survey's batch reject says "other take of
+        # <cluster>", and a floor that cannot say why it rejected something is a floor
+        # that cannot be revisited.
         floor["verdicts"].append({"clip": clip, "start": round(start, 2),
                                   "end": round(end, 2), "verdict": verdict,
+                                  "why": str(why)[:300],
                                   "note": str(note)[:600], "at": round(time.time(), 3)})
     return edl
 
