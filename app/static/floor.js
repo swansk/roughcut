@@ -17,6 +17,11 @@
  *
  * No buttons in the flow: every action is a key, and the only buttons live on the
  * closing card. Nothing here spends a model call.
+ *
+ * The strips take a pointer (I2.7, Karl's first report): the green band on the closer
+ * strip is the clip — drag a handle to trim it, its middle to slide it; click either strip
+ * to seek, drag to scrub; click a mark on the tape to jump to that pick. The keys stay as
+ * accelerators.
  */
 
 'use strict';
@@ -31,6 +36,8 @@ const NEAR_WORD = 0.30;          // an end this soon after a line is heard as in
 const FRAME = 1 / 30;
 const ZOOM_HALF_S = 8;           // the zoomed strip shows ±8 s around the playhead
 const MIN_WORD_PX = 14;          // words closer than this become a sentence bar
+const SNAP_PX = 10;              // a dragged edge this close to a tick takes the tick
+const DRAG_PX = 3;               // less movement than this is a click
 const MIN_KEEP_S = 0.5;          // a keep shorter than this is nothing watched
 const STAMP_MS = 350;            // the stamp lands before the next pick begins
 const SECONDS_PER_PICK = 7;      // the design's "about seven seconds" — for the round ETA
@@ -455,15 +462,23 @@ function paintTape() {
   const felt = mine.flatMap((q) => (q.witnesses || []).filter((w) => w.kind === 'felt'));
   $('#tapeLbl').textContent = `${stem(p.clip).toUpperCase()} · WHOLE CLIP ${fmt(dur)} · picks as markers`
     + (felt.length ? ' · telemetry' : '');
+  // One mark per pick. A mark in this round's queue jumps there on a click — decided or
+  // not, so a verdict can be revisited; a pick decided in an earlier round is shown but
+  // not reachable, because the queue is frozen (rule 3) and only undo may put a pick back.
   const marks = $('#tapeMarks');
   marks.innerHTML = '';
   mine.forEach((q) => {
     const s = document.createElement('span');
-    const cls = q.id === p.id ? 'now' : q.verdict === 'pick' ? (q.hero ? 'hero' : 'pick') : (q.verdict || '');
-    s.className = cls;
+    const here = q.id === p.id;
+    const inQueue = F.queue.indexOf(q) >= 0;
+    const cls = here ? 'now' : q.verdict === 'pick' ? (q.hero ? 'hero' : 'pick') : (q.verdict || '');
+    s.className = `${cls}${inQueue && !here ? ' jump' : ''}`;
+    s.dataset.id = String(q.id);
     s.style.left = `${(100 * q.start / dur).toFixed(2)}%`;
     s.style.width = `${(100 * (q.end - q.start) / dur).toFixed(2)}%`;
-    s.title = `${fmt(q.start)}–${fmt(q.end)} · ${q.verdict || 'undecided'}${q.why ? `\n${q.why}` : ''}`;
+    const state = here ? 'this pick' : q.hero ? 'hero' : q.verdict === 'pick' ? 'picked' : q.verdict || 'undecided';
+    s.title = `${fmt(q.start)}–${fmt(q.end)} · rank ${q.rank} · ${state}${q.why ? `\n${q.why}` : ''}`
+      + (here ? '' : inQueue ? '\nclick to jump to it' : '\ndecided in an earlier round — not in this queue');
     marks.appendChild(s);
   });
   // A telemetry trace only when a `felt` witness exists — numbers, never event names.
@@ -525,18 +540,20 @@ function buildZoom() {
       b.innerHTML = `<i>${escapeHtml(String(u.text || '').slice(0, 40))}</i>`;
       inner.appendChild(b);
     }
-    // snap ticks: the sentence end + 0.45, and every word start
-    const tick = document.createElement('span');
-    tick.className = 'snap';
-    tick.style.left = `${((u.end + PAD_TAIL) * zoom.pps).toFixed(1)}px`;
-    tick.title = `sentence end + ${PAD_TAIL}`;
-    inner.appendChild(tick);
-    mine.forEach((w) => {
-      const wt = document.createElement('span');
-      wt.className = 'snap word';
-      wt.style.left = `${(w.t * zoom.pps).toFixed(1)}px`;
-      inner.appendChild(wt);
-    });
+    // snap ticks — what the keys and a dragged handle land on: the sentence end + 0.45,
+    // the sentence start − 0.25, and every word start. Each carries its time so a drag
+    // can light the one it took.
+    const tick = (cls, t, title) => {
+      const el = document.createElement('span');
+      el.className = `snap ${cls}`;
+      el.style.left = `${(t * zoom.pps).toFixed(1)}px`;
+      el.dataset.t = r2(t);
+      if (title) el.title = title;
+      inner.appendChild(el);
+    };
+    tick('end', u.end + PAD_TAIL, `sentence end + ${PAD_TAIL}`);
+    tick('start', Math.max(0, u.start - PAD_HEAD), `sentence start − ${PAD_HEAD}`);
+    mine.forEach((w) => tick('word', w.t));
   });
   (p.witnesses || []).filter((w) => w.kind === 'felt').forEach((w) => {
     const f = document.createElement('span');
@@ -555,8 +572,12 @@ function paintHead(t) {
   const dur = p.duration || 1;
   $('#tapeHead').style.left = `${(100 * Math.min(1, t / dur)).toFixed(2)}%`;
   const width = $('#zoom').clientWidth || 1000;
-  const x0 = width / 2 - t * zoom.pps;              // px of clip time 0
+  // px of clip time 0: the strip follows the playhead — except while a pointer is down,
+  // when it holds still and the playhead moves instead, or every park would slide the
+  // strip out from under the finger.
+  const x0 = zoom.lock != null ? zoom.lock : width / 2 - t * zoom.pps;
   $('#zoomInner').style.transform = `translateX(${x0.toFixed(1)}px)`;
+  $('#zoomHead').style.left = zoom.lock != null ? `${(x0 + t * zoom.pps).toFixed(1)}px` : '50%';
   if (F.mode !== 'pass') {
     $('#zoomKeep').style.width = '0';
     $('#handleIn').hidden = $('#handleOut').hidden = true;
@@ -572,8 +593,13 @@ function paintHead(t) {
   $('#handleOut').style.left = `${(x0 + b * zoom.pps).toFixed(1)}px`;
   const edgeT = F.keep.edge === 'in' ? a : b;
   const raw = F.keep.edge === 'in' ? k.raw[0] : k.raw[1];
-  $('#zoomHint').style.left = `${(x0 + edgeT * zoom.pps).toFixed(1)}px`;
-  $('#zoomHint').textContent = Math.abs(edgeT - raw) > 0.01
+  const hint = $('#zoomHint');
+  hint.style.left = `${(x0 + edgeT * zoom.pps).toFixed(1)}px`;
+  const dragging = drag.kind === 'in' || drag.kind === 'out' || drag.kind === 'slide';
+  hint.classList.toggle('drag', dragging);
+  // while a handle moves, the time reads out under it, with the tick it took
+  if (dragging) hint.textContent = `${fmt(edgeT)}${drag.snap ? ` · ${drag.snap}` : ''}`;
+  else hint.textContent = Math.abs(edgeT - raw) > 0.01
     ? (F.keep.edge === 'in' ? 'snap ◂ sentence start − 0.25' : `sentence end + ${PAD_TAIL} ▸`) : '';
 }
 
@@ -839,6 +865,151 @@ function stepEdge(dir, byWord) {
   if (edge === 'in') setIn(t); else setOut(t);
 }
 
+/* ------------------------------------------------------------------- pointer */
+
+/* One pointer listener per strip. On the closer strip a handle trims its edge, the band's
+ * middle slides the whole range, and anything else scrubs the playhead — a plain click
+ * seeks. On the tape a mark in the queue jumps to its pick; anything else scrubs or seeks.
+ * `setPointerCapture` keeps the gesture when the pointer leaves the strip. */
+const drag = { kind: null, moved: false, x: 0, t0: 0, a: 0, b: 0, snap: '' };
+const tapeDrag = { on: false, moved: false, x: 0 };
+
+const clampT = (p, t) => Math.max(0, Math.min(p.duration || t, t));
+
+/* Where an edge may land by magnet: the same places the keys go. */
+function snapTargets(p, edge) {
+  const lines = edge === 'in'
+    ? sentenceStarts(p).map((t) => ({ t, why: `sentence start − ${PAD_HEAD}` }))
+    : sentenceEnds(p).map((t) => ({ t, why: `sentence end + ${PAD_TAIL}` }));
+  return lines.concat(words(p).map((w) => ({ t: w.t, why: `"${w.w}"` })));
+}
+
+function magnet(p, t, edge) {
+  let best = null;
+  for (const c of snapTargets(p, edge)) {
+    const d = Math.abs(c.t - t) * zoom.pps;
+    if (d <= SNAP_PX && (!best || d < best.d)) best = { ...c, d };
+  }
+  return best;
+}
+
+function lightTick(t) {
+  $('#zoomInner').querySelectorAll('.snap').forEach((el) => {
+    el.classList.toggle('lit', t != null && Math.abs(parseFloat(el.dataset.t) - t) < 0.005);
+  });
+}
+
+function zoomTime(clientX) {
+  const r = $('#zoom').getBoundingClientRect();
+  const x0 = zoom.lock != null ? zoom.lock : r.width / 2 - (pic().currentTime || 0) * zoom.pps;
+  return (clientX - r.left - x0) / zoom.pps;
+}
+
+function tapeTime(clientX) {
+  const r = $('#tape').getBoundingClientRect();
+  return (clientX - r.left) / r.width * ((cur() || {}).duration || 0);
+}
+
+/* Move the playhead. Playing stays playing, paused stays parked. Outside the preview the
+ * whole clip is open, so playback does not stop at a preview end behind you and space does
+ * not rewind to a preview start you left on purpose. */
+function seek(t) {
+  const p = cur();
+  if (!p) return;
+  t = clampT(p, t);
+  if (F.mode === 'pass' && (t < p.preview[0] - 0.01 || t > p.preview[1] + 0.01)) F.whole = true;
+  if (F.playing && !pic().paused) play(t); else park(t);
+}
+
+function dragEdge(edge, t) {
+  const p = cur();
+  const m = magnet(p, t, edge);
+  drag.snap = m ? m.why : '';
+  lightTick(m ? m.t : null);
+  if (edge === 'in') setIn(m ? m.t : clampT(p, t)); else setOut(m ? m.t : clampT(p, t));
+}
+
+/* Slide: the range as it was on pointer-down, moved by the pointer's travel, its length
+ * kept, clamped to the clip. */
+function slideTo(dt) {
+  const p = cur();
+  const len = drag.b - drag.a;
+  const a = Math.max(0, Math.min((p.duration || drag.b) - len, drag.a + dt));
+  F.keep.manualStart = r2(a);
+  F.keep.manualEnd = r2(a + len);
+  drag.snap = `${len.toFixed(1)} s, sliding`;
+  park(F.keep.edge === 'in' ? a : a + len);
+  paintKeep(true);
+}
+
+function zoomDown(e) {
+  const p = cur();
+  if (!p || F.mode !== 'pass' || e.button !== 0) return;
+  const id = e.target.id;
+  const kind = id === 'handleIn' ? 'in' : id === 'handleOut' ? 'out' : id === 'zoomKeep' ? 'slide' : 'seek';
+  const r = $('#zoom').getBoundingClientRect();
+  zoom.lock = r.width / 2 - (pic().currentTime || 0) * zoom.pps;
+  const k = keepRange();
+  Object.assign(drag, { kind, moved: false, x: e.clientX, t0: zoomTime(e.clientX), a: k.snapped[0], b: k.snapped[1], snap: '' });
+  $('#zoom').setPointerCapture(e.pointerId);
+  $('#zoom').classList.add(`drag-${kind}`);
+  if (kind === 'in' || kind === 'out') {         // taking a handle makes it the edge and shows its frame
+    F.keep.edge = kind;
+    park(kind === 'in' ? k.snapped[0] : k.snapped[1]);
+  }
+  paintKeep(true);
+  e.preventDefault();
+}
+
+function zoomMove(e) {
+  if (!drag.kind) return;
+  if (!drag.moved && Math.abs(e.clientX - drag.x) < DRAG_PX) return;
+  drag.moved = true;
+  const t = zoomTime(e.clientX);
+  if (drag.kind === 'in' || drag.kind === 'out') dragEdge(drag.kind, t);
+  else if (drag.kind === 'slide') slideTo(t - drag.t0);
+  else park(clampT(cur(), t));
+}
+
+function zoomUp(e, cancelled) {
+  if (!drag.kind) return;
+  const kind = drag.kind;
+  const t = zoomTime(e.clientX);
+  drag.kind = null;
+  drag.snap = '';
+  zoom.lock = null;
+  lightTick(null);
+  $('#zoom').classList.remove('drag-in', 'drag-out', 'drag-slide', 'drag-seek');
+  if (!cancelled && (kind === 'seek' || (kind === 'slide' && !drag.moved))) seek(t);
+  paintKeep(true);
+}
+
+function tapeDown(e) {
+  const p = cur();
+  if (!p || F.mode !== 'pass' || e.button !== 0) return;
+  const m = e.target.closest ? e.target.closest('#tapeMarks span') : null;
+  if (m && m.classList.contains('jump')) {
+    const at = F.queue.findIndex((q) => String(q.id) === m.dataset.id);
+    if (at >= 0 && at !== F.i) { show(at); savePosition(); return; }
+  }
+  Object.assign(tapeDrag, { on: true, moved: false, x: e.clientX });
+  $('#tape').setPointerCapture(e.pointerId);
+  e.preventDefault();
+}
+
+function tapeMove(e) {
+  if (!tapeDrag.on) return;
+  if (!tapeDrag.moved && Math.abs(e.clientX - tapeDrag.x) < DRAG_PX) return;
+  tapeDrag.moved = true;
+  park(clampT(cur(), tapeTime(e.clientX)));
+}
+
+function tapeUp(e, cancelled) {
+  if (!tapeDrag.on) return;
+  tapeDrag.on = false;
+  if (!cancelled) seek(tapeTime(e.clientX));
+}
+
 /* ------------------------------------------------------------------- notes */
 
 function editNote() {
@@ -1016,6 +1187,7 @@ function keymapHtml() {
     ['↵', 'next pick · ⌫ previous'], ['V', 'hold to speak a note; N edits it'],
     ['E', 'evidence drawer'], ['.', 'more: open the whole clip · look closer · find like this'],
     ['?', 'this map'],
+    ['drag', 'the green band’s edges trim it, its middle slides it · click a strip to seek, drag to scrub · click a mark on the tape to jump to that pick'],
   ];
   return `<h2>The keys</h2><div class="keymap">${rows.map(([k, t]) =>
     `<div><span class="key">${escapeHtml(k)}</span><span>${escapeHtml(t)}</span></div>`).join('')}</div>`;
@@ -1275,13 +1447,15 @@ async function boot() {
       F.watch.end = Math.max(F.watch.end, v.currentTime);
     }
   });
-  $('#tape').addEventListener('click', (e) => {
-    const p = cur();
-    if (!p || F.mode !== 'pass') return;
-    const r = e.currentTarget.getBoundingClientRect();
-    F.whole = true;
-    play(Math.max(0, Math.min(p.duration || 0, (e.clientX - r.left) / r.width * (p.duration || 0))));
-  });
+  const tape = $('#tape'), zoomEl = $('#zoom');
+  tape.addEventListener('pointerdown', tapeDown);
+  tape.addEventListener('pointermove', tapeMove);
+  tape.addEventListener('pointerup', (e) => tapeUp(e, false));
+  tape.addEventListener('pointercancel', (e) => tapeUp(e, true));
+  zoomEl.addEventListener('pointerdown', zoomDown);
+  zoomEl.addEventListener('pointermove', zoomMove);
+  zoomEl.addEventListener('pointerup', (e) => zoomUp(e, false));
+  zoomEl.addEventListener('pointercancel', (e) => zoomUp(e, true));
   $('#frame').addEventListener('click', () => {
     if (F.mode === 'card') return;
     if (F.playing && !pic().paused) pause(); else resume();
@@ -1322,7 +1496,7 @@ async function boot() {
 
 /* What the tests reach for; nothing else should. */
 window.floor = {
-  state: F, current: cur, keepRange, show, advance, undo, playBin,
+  state: F, current: cur, keepRange, show, advance, undo, playBin, seek,
   setAuto: (on) => { F.auto = !!on; paintAuto(); },
   dictSend, snapStart, snapEnd, words, utterances,
 };

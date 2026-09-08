@@ -141,9 +141,12 @@ def test_the_floor_lists_the_picks_and_starts_on_the_first(page):
     assert seals.count() >= 1
     assert "HEARD" in seals.first.inner_text()
     assert "hello there" in page.locator("#why").inner_text()
-    # the zoomed strip carries words (they fit at 80 px/s) and snap ticks at line ends
+    # the zoomed strip carries words (they fit at 80 px/s) and snap ticks at line ends,
+    # line starts and word starts — where the keys and a dragged handle land
     assert page.locator("#zoomInner .w").count() == 6
-    assert page.locator("#zoomInner .snap:not(.word)").count() == 3
+    assert page.locator("#zoomInner .snap.end").count() == 3
+    assert page.locator("#zoomInner .snap.start").count() == 3
+    assert page.locator("#zoomInner .snap.word").count() == 6
     # the tape marks this clip's picks, the current one outlined
     assert page.locator("#tapeMarks span.now").count() == 1
     assert page.locator("#tapeTrace path").count() == 0, "no felt witness, no trace"
@@ -270,6 +273,112 @@ def test_holding_space_keeps_watching_past_the_preview(page, project):
     page.keyboard.press("p")
     d = wait_edl(project, lambda d: len(d.get("selects", [])) == 1)
     assert d["selects"][0]["end"] == 4.45, "watched into the second line: snapped to its end"
+
+
+# ------------------------------------------------------- direct manipulation (I2.7)
+
+def center(page, sel):
+    page.wait_for_timeout(50)            # a frame, so the box is where the last paint put it
+    b = page.locator(sel).bounding_box()
+    return b["x"] + b["width"] / 2, b["y"] + b["height"] / 2
+
+
+def test_dragging_a_handle_trims_with_a_magnet_and_dragging_the_band_slides_it(page, project):
+    """I2.7 move 1. The closer strip is 80 px/s at this width. The out handle dragged to
+    4.5 s takes the sentence-end tick at 4.45; the in handle dragged to 1.15 s takes the
+    word "there" at 1.2; the band's middle then slides the range, length kept, clamped."""
+    playing_at(page, 0.3)
+    paused_at(page)
+    assert page.evaluate("floor.keepRange().snapped") == [0.0, 6.0]
+    x, y = center(page, "#handleOut")
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x - 60, y, steps=4)
+    page.mouse.move(x - 120, y, steps=4)                    # 6.0 - 1.5 = 4.5 s
+    # while the pointer is down: the tick it took lights, the time reads out under the
+    # handle, the picture is parked on the edge frame
+    lit = page.locator("#zoomInner .snap.lit")
+    assert lit.count() == 1 and lit.get_attribute("data-t") == "4.45"
+    assert "sentence end" in page.locator("#zoomHint").inner_text()
+    assert page.evaluate("document.querySelector('#pic').paused")
+    assert page.evaluate("document.querySelector('#pic').currentTime") == pytest.approx(4.45, abs=0.1)
+    page.mouse.up()
+    assert page.evaluate("floor.keepRange().snapped") == [0.0, 4.45]
+    assert page.locator("#zoomInner .snap.lit").count() == 0
+    assert page.evaluate("floor.state.keep.edge") == "out"
+    # the in handle, dragged to 1.15 s, takes the word at 1.2 and becomes the edge
+    x, y = center(page, "#handleIn")
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + 92, y, steps=6)
+    assert page.locator("#zoomInner .snap.lit").get_attribute("data-t") == "1.2"
+    page.mouse.up()
+    assert page.evaluate("floor.keepRange().snapped") == [1.2, 4.45]
+    assert page.evaluate("floor.state.keep.edge") == "in"
+    # the band's middle slides the range: +0.5 s, then more than the clip has
+    x, y = center(page, "#zoomKeep")
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + 40, y, steps=4)
+    assert page.evaluate("floor.keepRange().snapped") == [1.7, 4.95]
+    page.mouse.move(x + 400, y, steps=4)
+    page.mouse.up()
+    assert page.evaluate("floor.keepRange().snapped") == [2.75, 6.0]
+    page.keyboard.press("p")
+    d = wait_edl(project, lambda d: len(d.get("selects", [])) == 1)
+    assert (d["selects"][0]["start"], d["selects"][0]["end"]) == (2.75, 6.0)
+
+
+def test_clicking_a_mark_on_the_tape_jumps_to_that_pick(page, project):
+    """The synthetic bin has one pick per clip, so a second pick in CLIP_A is put in the
+    page's queue by hand: the tape then shows two marks, and the one that is not this
+    pick takes a click."""
+    page.evaluate("""() => {
+        const q = JSON.parse(JSON.stringify(floor.state.queue[0]));
+        Object.assign(q, { id: 'made-up', start: 4, end: 6, preview: [4, 6], rank: 9,
+                           why: 'a second pick, made up for the test' });
+        floor.state.picks.push(q);
+        floor.state.queue.push(q);
+        floor.show(0, { autoplay: false });
+    }""")
+    assert page.locator("#tapeMarks span").count() == 2
+    mark = page.locator("#tapeMarks span.jump")
+    assert mark.count() == 1
+    assert "made up for the test" in mark.get_attribute("title")
+    assert "click to jump" in mark.get_attribute("title")
+    mark.click()
+    page.wait_for_function("floor.state.i === 3", timeout=5000)
+    assert "pick 4 of 4" in page.locator("#hudPos").inner_text()
+    assert page.locator("#ctxPick").inner_text().startswith("0:04.0 → 0:06.0")
+    assert page.locator("#tapeMarks span.now").count() == 1
+    playing_at(page, 4.2)                            # it plays from its preview, as ↵ would
+    wait_edl(project, lambda d: d.get("floor", {}).get("position", {}).get("index") == 3)
+    # and back: now the first pick's mark is the one that jumps
+    page.locator("#tapeMarks span.jump").click()
+    page.wait_for_function("floor.state.i === 0", timeout=5000)
+    assert page.locator("#ctxPick").inner_text().startswith("0:00.0 → 0:06.0")
+
+
+def test_clicking_a_strip_seeks_the_playhead(page):
+    """Paused stays parked, playing stays playing. The tape is the whole 6 s clip; the
+    closer strip is 80 px/s with the playhead at its centre."""
+    page.evaluate("floor.show(0, { autoplay: false })")
+    page.wait_for_function("document.querySelector('#pic').paused")
+    tb = page.locator("#tape").bounding_box()
+    page.mouse.click(tb["x"] + tb["width"] * 0.5, tb["y"] + 8)             # 3.0 s
+    page.wait_for_function("Math.abs(document.querySelector('#pic').currentTime - 3) < 0.1")
+    assert page.evaluate("document.querySelector('#pic').paused")
+    zb = page.locator("#zoom").bounding_box()
+    page.mouse.click(zb["x"] + zb["width"] / 2 + 80, zb["y"] + 10)          # a second right
+    page.wait_for_function("Math.abs(document.querySelector('#pic').currentTime - 4) < 0.1")
+    assert page.evaluate("document.querySelector('#pic').paused")
+    # playing: the playhead moves and the picture goes on
+    page.keyboard.press("l")
+    playing_at(page, 4.2)
+    page.mouse.click(tb["x"] + tb["width"] / 6, tb["y"] + 8)                # back to 1.0 s
+    page.wait_for_function("document.querySelector('#pic').currentTime < 2")
+    assert not page.evaluate("document.querySelector('#pic').paused")
+    playing_at(page, 1.3)
 
 
 # --------------------------------------------------------------------- undo

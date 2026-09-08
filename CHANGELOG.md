@@ -10,6 +10,21 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Trim by drag on the floor (docs/INTAKE.md I2.7, move 1).** Karl's first report on the
+  pass: trimming by keys and by watching was "fairly nonintuitive". The green band on the
+  zoomed strip is now the thing you handle: drag either handle to trim (a magnet within 10 px
+  takes the sentence start − 0.25, the sentence end + 0.45 or a word start — the same places
+  the keys go — the tick lights while it holds, the time reads out under the handle, and the
+  picture parks on the edge frame); drag the band's middle to slide the whole range, length
+  kept, clamped to the clip; click either strip to seek (playing stays playing, paused stays
+  parked), drag to scrub; click a mark on the tape to jump to that pick. Marks in this round's
+  queue jump, decided or not, so a verdict can be revisited; a pick decided in an earlier
+  round is drawn but says so in its tooltip and stays put, because the queue is frozen and
+  only undo puts a pick back. While a pointer is down the zoomed strip stops following the
+  playhead, otherwise every park would slide it out from under the finger. Handles are 14 px
+  hit areas; this pick's own mark takes no pointer, so a mark it overlaps is still reachable.
+  The keys `[ ] { } ← →` are unchanged. Browser tests: a handle drag lands on the EDL
+  snapped, a band drag slides it, a mark jumps, a click seeks.
 - **The server's side of M1 (docs/INTAKE.md I1.1–I1.4 wired).** An Ask passes the EDL's
   `selects` through, so a first cut is asked *from the bin* — heroes must appear, keeps are
   bounds — and a revision reads it as context; a keep made on the floor records its clip's

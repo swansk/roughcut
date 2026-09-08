@@ -99,25 +99,34 @@
   #why { color: var(--text); }
   #conflict { color: var(--bad-soft); font-size: 10.5px; }
 
-  /* ---- the two-tier strip ---- */
+  /* ---- the two-tier strip ----
+   * Both strips take a pointer: a click seeks, a drag scrubs. On the zoomed strip the green
+   * band is the clip — its handles trim, its middle slides. */
   .strip-lbl { position: absolute; left: 12px; top: 5px; font: 600 9px var(--mono); color: #8f8fa3;
                letter-spacing: .08em; z-index: 4; pointer-events: none; }
   .strip-lbl.right { left: auto; right: 12px; color: #cfd6e4; font-size: 10px; }
   #tape { position: relative; height: 44px; background: #0b0b0f; border-top: 1px solid #26262f;
-          flex: none; cursor: crosshair; }
+          flex: none; cursor: crosshair; touch-action: none; user-select: none; }
   #tapeWave { position: absolute; left: 0; right: 0; top: 30px; height: 10px;
               background: linear-gradient(90deg, #20202a, #262632 30%, #1c1c26 60%, #262632); opacity: .8; }
-  #tapeTrace { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #tapeTrace { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   #tapeMarks span { position: absolute; top: 22px; height: 14px; min-width: 6px; border-radius: 2px;
                     background: #3a3a48; }
   #tapeMarks span.pick { background: var(--good); }
   #tapeMarks span.reject { background: #26262f; }
   #tapeMarks span.later { background: var(--warn); }
   #tapeMarks span.hero { background: var(--gold); }
-  #tapeMarks span.now { background: var(--accent); outline: 2px solid #fff; z-index: 2; }
-  #tapeHead { position: absolute; top: 0; bottom: 0; width: 1px; background: #fff; opacity: .7; z-index: 3; }
+  /* this pick's mark takes no pointer: a click on it reaches a mark beneath, or the tape */
+  #tapeMarks span.now { background: var(--accent); outline: 2px solid #fff; z-index: 2; pointer-events: none; }
+  #tapeMarks span.jump { cursor: pointer; }
+  #tapeMarks span.jump:hover { outline: 1px solid #cfd6e4; }
+  #tapeHead { position: absolute; top: 0; bottom: 0; width: 1px; background: #fff; opacity: .7; z-index: 3;
+              pointer-events: none; }
   #zoom { position: relative; height: 78px; background: #0d0d12; border-top: 1px solid #26262f;
-          border-bottom: 1px solid #26262f; overflow: hidden; flex: none; }
+          border-bottom: 1px solid #26262f; overflow: hidden; flex: none; cursor: crosshair;
+          touch-action: none; user-select: none; }
+  #zoom.drag-in, #zoom.drag-out { cursor: ew-resize; }
+  #zoom.drag-slide, #zoom.drag-slide #zoomKeep { cursor: grabbing; }
   #zoomInner { position: absolute; top: 0; bottom: 0; left: 0; will-change: transform; }
   #zoomInner .w { position: absolute; top: 30px; font-size: 11px; color: #8f8fa3; white-space: nowrap;
                   transform: translateX(-50%); }
@@ -127,19 +136,26 @@
   #zoomInner .sb i { position: absolute; left: 4px; top: 10px; font: 10px var(--display); color: #6c6c80;
                      white-space: nowrap; font-style: normal; }
   #zoomInner .snap { position: absolute; top: 50px; width: 2px; height: 12px; background: var(--accent); }
+  #zoomInner .snap.start { height: 8px; top: 54px; opacity: .7; }
   #zoomInner .snap.word { height: 6px; top: 56px; width: 1px; background: #4a6a96; }
+  #zoomInner .snap.lit { background: #fff; opacity: 1; box-shadow: 0 0 6px var(--accent); }
   #zoomInner .felt { position: absolute; top: 14px; transform: translateX(-50%); font-size: 10px;
                      color: var(--tele); white-space: nowrap; }
   #zoomKeep { position: absolute; top: 22px; height: 34px; background: rgba(100,208,138,.14);
               border-top: 1px solid rgba(100,208,138,.7); border-bottom: 1px solid rgba(100,208,138,.7);
-              pointer-events: none; }
-  .handle { position: absolute; top: 18px; height: 42px; width: 8px; margin-left: -4px; background: #cfd6e4;
-            border-radius: 3px; opacity: .8; pointer-events: none; }
-  .handle.active { background: #fff; opacity: 1; box-shadow: 0 0 0 1px var(--accent); }
+              cursor: grab; }
+  /* a handle is a 14 px hit area (touch-sized) with the 8 px bar drawn inside it */
+  .handle { position: absolute; top: 18px; height: 42px; width: 14px; margin-left: -7px; cursor: ew-resize;
+            z-index: 2; }
+  .handle::after { content: ""; position: absolute; left: 3px; right: 3px; top: 0; bottom: 0; background: #cfd6e4;
+                   border-radius: 3px; opacity: .8; }
+  .handle.active::after { background: #fff; opacity: 1; box-shadow: 0 0 0 1px var(--accent); }
   #zoomHead { position: absolute; left: 50%; top: 16px; height: 46px; width: 2px; background: #fff; z-index: 3;
               pointer-events: none; }
   #zoomHint { position: absolute; bottom: 3px; font: 600 9px var(--mono); color: var(--accent);
-              transform: translateX(-50%); white-space: nowrap; pointer-events: none; }
+              transform: translateX(-50%); white-space: nowrap; pointer-events: none; z-index: 4; }
+  #zoomHint.drag { color: #fff; font-size: 10px; background: rgba(8,8,11,.85); padding: 1px 6px;
+                   border-radius: 3px; }
 
   /* ---- key line ---- */
   #keys { display: flex; gap: 14px; align-items: center; padding: 6px 14px; background: var(--panel);
@@ -239,8 +255,8 @@
     <span id="zoomInfo" class="strip-lbl right tnum"></span>
     <div id="zoomInner"></div>
     <div id="zoomKeep"></div>
-    <div id="handleIn" class="handle"></div>
-    <div id="handleOut" class="handle active"></div>
+    <div id="handleIn" class="handle" title="the in-point — drag to trim"></div>
+    <div id="handleOut" class="handle active" title="the out-point — drag to trim"></div>
     <div id="zoomHint"></div>
     <div id="zoomHead"></div>
   </div>
