@@ -143,6 +143,35 @@
   a.btn[aria-disabled="true"] { background: var(--card-hi); color: var(--faint); pointer-events: none; }
   #links .hint { text-align: center; }
 
+  /* ---- themes (Fig. 1, "what is this film about?"): the story, the mic, the chips ---- */
+  #themes .lbl .sub { color: #d0a8ff; text-transform: none; letter-spacing: 0; font-weight: 500; margin-left: 4px; }
+  #storyRow { display: flex; gap: 6px; align-items: stretch; }
+  #story { flex: 1; min-width: 0; resize: vertical; min-height: 44px; font: inherit; font-size: 11.5px; color: #c9c9d6;
+           background: #101014; border: 1px solid #2e2e38; border-radius: 6px; padding: 7px 9px; }
+  #story:focus { outline: none; border-color: var(--accent); }
+  #story.live { border-color: var(--bad-soft); }
+  #mic { padding: 0 9px; font-size: 10.5px; white-space: nowrap; user-select: none; -webkit-user-select: none;
+         touch-action: none; }
+  #mic.live { border-color: var(--bad-soft); color: var(--bad-soft); }
+  #dictState { min-height: 14px; }
+  #dictState.live { color: var(--bad-soft); }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+  .chip { font: inherit; font-size: 10.5px; border: 1px solid #3a3a48; border-radius: 999px; padding: 2px 9px;
+          background: transparent; color: #a0a0b0; cursor: pointer; text-align: left; }
+  .chip.on { border-color: var(--accent); color: var(--text); }
+  .chip.static { cursor: default; border-color: #2f4a70; }
+  .chip .n { color: var(--dim); }
+  .chips.names .chip { font-size: 9.5px; padding: 1px 7px; }
+  .chips .who { font-size: 9.5px; color: var(--dim); }
+  #addTheme { font: inherit; font-size: 10.5px; color: var(--text); background: #101014; border: 1px dashed #3a3a48;
+              border-radius: 999px; padding: 2px 9px; width: 160px; }
+  #addTheme:focus { outline: none; border-color: var(--accent); }
+  #themeWhy { min-height: 14px; font-style: italic; }
+  #themesRunning { color: var(--accent); }
+  #themes .acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  #themes a.act { cursor: pointer; font-size: 11px; }
+  #themesPrice b { color: var(--warn); }
+
   #toast { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); background: #1e1e25;
            color: var(--text); border: 1px solid #3a3a48; border-radius: 8px; padding: 8px 14px; font-size: 12px;
            opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 40; max-width: 70vw; }
@@ -157,7 +186,7 @@
     <span id="steps">
       <span class="step now" data-step="open">1 open</span>
       <span class="step" data-step="listen">2 listen</span>
-      <span class="step" data-step="themes" title="themes are INTAKE I5.2 — not built yet">3 themes</span>
+      <span class="step" data-step="themes">3 themes</span>
       <span class="step" data-step="index">4 index</span>
       <a class="step link" data-step="pass" id="stepPass" href="/floor" aria-disabled="true">5 the pass</a>
       <a class="step link" data-step="bin" href="/">6 the cut board</a>
@@ -199,6 +228,42 @@
     </div>
 
     <aside id="side">
+      <div id="themes" class="box">
+        <div class="lbl">What is this film about? <span id="themesSub" class="sub"></span></div>
+        <div id="storyRow">
+          <textarea id="story" rows="2" placeholder="what is this film about? (optional)" spellcheck="false"></textarea>
+          <button type="button" id="mic" title="hold to speak — or hold V in the field; a tap of V types the letter">🎙 hold to speak</button>
+        </div>
+        <div id="dictState" class="hint small"></div>
+        <div id="themesAsk">
+          <div id="themesPrice" class="hint small tnum">pricing the proposal…</div>
+          <button type="button" id="proposeBtn" class="priced" disabled>Propose themes from the transcripts</button>
+        </div>
+        <div id="themesRunning" class="hint small" hidden>listening…</div>
+        <div id="themesEdit" hidden>
+          <div id="themesNotes" class="hint small"></div>
+          <div id="chips" class="chips"></div>
+          <div id="nameChips" class="chips names"></div>
+          <div id="themeWhy" class="hint small"></div>
+          <div class="acts">
+            <input id="addTheme" type="text" placeholder="+ add a theme of your own" spellcheck="false">
+          </div>
+          <div class="acts">
+            <button type="button" id="keepBtn" class="primary">Keep</button>
+            <button type="button" id="discardBtn">Discard</button>
+          </div>
+          <div id="keepHint" class="hint small">nothing reaches the EDL until Keep — Discard leaves it untouched</div>
+        </div>
+        <div id="themesKept" hidden>
+          <div id="keptChips" class="chips"></div>
+          <div id="keptNames" class="chips names"></div>
+          <div class="acts">
+            <a id="changeBtn" class="act">change</a>
+            <button type="button" id="againBtn" class="priced">propose again</button>
+          </div>
+        </div>
+        <div id="themesHint" class="hint small">a brief and a filter: themes lift and tag picks on the pass and order the index; they never score.</div>
+      </div>
       <div class="box">
         <div class="lbl">Look — how closely?</div>
         <div id="priceLine" class="tnum">pricing the bin…</div>

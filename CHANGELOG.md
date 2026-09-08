@@ -24,6 +24,29 @@ same commit. Releases move entries into a dated version section.
   `main()` uses — per-bin paths re-derived, per-clip caches dropped, 409 while any job runs.
   `test_projects.py` 5 tests. The two screens' UI for both lands with the open screen's next
   lane.
+- **`/open` — themes as chips, and the story with dictation (INTAKE I5.2, the screen).**
+  The right column opens on Fig. 1's question, above the look's price: **what is this film
+  about?** — a story field that is the EDL's brief (saved when it settles; the proposal and
+  the ask both read it) with a **hold-to-speak** mic — hold the button, or hold `V` in the
+  field (a tap of `V` still types the letter; held anywhere outside an input it speaks, like
+  the floor) → MediaRecorder → `POST /api/dictate` → the text lands in the field on release;
+  a 501 hides the mic and leaves typing, a 413 is said. Under it the price before the button
+  (`/api/themes`' `projected_usd` — "~$X · one call over the transcripts of N clips"), and
+  **Propose themes** → `POST /api/themes/propose` → a "listening…" line with the job's own
+  detail → **chips**: one per theme with its clip count, the quoted line and the why on hover,
+  each a toggle that starts kept; the names in a smaller row ("people: Spenny"), also toggles;
+  the transcripts' one-sentence read; a **+ add** input for a theme of the editor's own.
+  **Keep** is one `PUT /api/themes` of exactly the ticked ones (with the story); **Discard**
+  writes nothing, and the section says so. Kept themes are the resting state — chips, with
+  **change** (they come back as toggles, no counts: the counts were the proposal's) and
+  **propose again ~$X**. A bin the audio pass has not heard says so with the button disabled.
+  One hint line: themes lift and tag picks on the pass and order the index; they never score.
+  The step strip's `3 themes` is done once the EDL has themes. Browser tests with the backend
+  scripted the way `test_themes.py` scripts it: the price before the click, chips with counts,
+  untick + add + Keep writes exactly the kept ones to the EDL on disk, Discard writes
+  nothing, change re-opens and re-keeps, the mic hides on a 501 with `V` typing again, and a
+  hold of `V` with the recogniser stubbed on the server lands its text in the field.
+  INTAKE I5.2 ticked (`cce429c`).
 - **Themes proposed from the transcripts (INTAKE I5.2, the data side).** Listen first, then
   propose: `POST /api/themes/propose` is one judge-role call over the audio pass's transcripts
   — no sheets, no moments — that returns three to eight themes as phrases the editor would
