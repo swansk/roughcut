@@ -10,6 +10,19 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Playing never changes the selection (docs/INTAKE.md I2.7, move 2).** The green band used
+  to follow the furthest point watched — "watching the green bar increase as I play … it's
+  fairly nonintuitive", and it looked like the tool deciding. Now the band is the pick's
+  preview when the pick loads, snapped outward to the sentence as before (decision 1's intent —
+  never the machine's whole window blind — still holds, because the preview is the default),
+  and it moves only by hand: a drag, `[ ] { } ← →`, or `}` to the next line. Holding space
+  just keeps watching. Karl's open question — should hold-space extend the band visibly, with
+  a dashed follow that commits on release? — is answered **never** by default, the simplest
+  rule; flipping it is one place, `tick()`, where the watched extent used to be recorded. The
+  "Keeping" margin no longer says "what you've watched": it shows the band and where it came
+  from (the preview as offered · the preview snapped out to a line · trimmed by hand). Two
+  browser tests that encoded the old rule are rewritten to the new one: hold space past the
+  preview, press P, and the range on disk is the preview, snapped.
 - **Trim by drag on the floor (docs/INTAKE.md I2.7, move 1).** Karl's first report on the
   pass: trimming by keys and by watching was "fairly nonintuitive". The green band on the
   zoomed strip is now the thing you handle: drag either handle to trim (a magnet within 10 px

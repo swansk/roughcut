@@ -1,15 +1,16 @@
 """The pass, driven in a real browser (docs/INTAKE.md M2).
 
 Everything that matters on the floor lives in the browser's media stack and in the
-JavaScript: that the preview plays from the moment, that the kept range is what was
-watched and snaps to the sentence, that one key writes a verdict to the EDL, that undo
-puts it back. So, like test_ui_flow.py, this drives Chromium against the live server
-and asserts on the EDL on disk.
+JavaScript: that the preview plays from the moment, that the kept range is the pick's
+preview snapped to the sentence and moves only by hand (a drag, a key), that one key
+writes a verdict to the EDL, that undo puts it back. So, like test_ui_flow.py, this
+drives Chromium against the live server and asserts on the EDL on disk.
 
 The synthetic bin (conftest.py) yields one pick per clip: the two candidates at 0.5 and
 5.0 merge (2.0 s apart, under MERGE_GAP_S), so each pick is 0-6 s and previews whole.
 The transcript is "hello there" 0.5-2.0, "how are you" 2.4-4.0, "goodbye" 5.0-5.6, so
-an end watched inside the first line snaps to 2.45 (end + PAD_TAIL).
+a preview cut to end at 1.2 s (inside the first line) snaps to 2.45 (end + PAD_TAIL) —
+the tests that need the snap to have something to do cut it that way.
 
 Skipped, not failed, when playwright is absent:
 
@@ -160,13 +161,26 @@ def test_no_buttons_in_the_flow(page):
 
 # --------------------------------------------------------------- verdicts
 
-def test_P_keeps_what_you_watched_snapped_to_the_sentence_and_advances(page, project):
+def preview_to(page, end: float):
+    """Cut the current pick's preview to `end` and reload it: it plays from 0 and stops
+    there on its own."""
+    page.evaluate(f"floor.current().preview[1] = {end}; floor.show(0)")
+    page.wait_for_function(
+        f"document.querySelector('#pic').paused && document.querySelector('#pic').currentTime >= {end - 0.1}",
+        timeout=10000)
+
+
+def test_P_keeps_the_preview_snapped_to_the_sentence_and_advances(page, project):
+    """I2.7 move 2: the band is the pick's preview when it loads, snapped outward to the
+    sentence, and P writes exactly that. The preview is cut to 1.2 s — inside "hello
+    there" — so the snap has something to do."""
     page.evaluate("floor.setAuto(true)")
-    playing_at(page, 0.8)
-    t = paused_at(page)
-    assert 0.5 < t < 2.0, f"expected to pause inside 'hello there', got {t}"
-    # the margin says what will be kept before the key is pressed
-    assert "will snap" in page.locator("#ctxSnap").inner_text()
+    preview_to(page, 1.2)
+    assert page.evaluate("floor.keepRange().snapped") == [0.0, 2.45]
+    # the margin says what will be kept before the key is pressed, and where it came from
+    assert page.locator("#ctxKeep").inner_text().startswith("0:00.0–0:02.5")
+    assert "the preview 0:00.0–0:01.2, snapped out" in page.locator("#ctxSnap").inner_text()
+    assert "watched" not in page.locator("#left").inner_text()
     page.keyboard.press("p")
     d = wait_edl(project, lambda d: len(d.get("selects", [])) == 1)
     s = d["selects"][0]
@@ -223,9 +237,8 @@ def test_the_verdict_carries_the_typed_note(page, project):
 # ------------------------------------------------------------------ trimming
 
 def test_trim_keys_snap_to_sentences_and_arrows_step_frames_at_the_edge(page, project):
-    playing_at(page, 0.8)
-    t = paused_at(page)
-    assert t < 2.0
+    preview_to(page, 1.2)                            # the band starts as 0-2.45
+    assert page.evaluate("floor.keepRange().snapped[1]") == 2.45
     # } extends the out-point to the next line's end: 2.45 -> 4.45 ("how are you")
     page.keyboard.press("}")
     assert page.evaluate("floor.keepRange().snapped[1]") == 4.45
@@ -256,23 +269,25 @@ def test_trim_keys_snap_to_sentences_and_arrows_step_frames_at_the_edge(page, pr
     assert (d["selects"][0]["start"], d["selects"][0]["end"]) == (0.0, 4.42)
 
 
-def test_holding_space_keeps_watching_past_the_preview(page, project):
-    """Decision 1 end to end: the preview stops on its own, space holds it open, and
-    what was watched is what is kept."""
-    page.evaluate("floor.current().preview[1] = 1.2; floor.show(0)")
-    page.wait_for_function(
-        "document.querySelector('#pic').paused && document.querySelector('#pic').currentTime >= 1.1",
-        timeout=10000)
+def test_holding_space_keeps_watching_but_never_moves_the_band(page, project):
+    """I2.7 move 2, end to end: the preview stops on its own, space holds it open, and
+    the band stays the preview — watching is not keeping. Karl's open question (should
+    hold-space extend the band visibly?) is answered "never" here; extending is `}` or a
+    drag of the out handle."""
+    preview_to(page, 1.2)
     assert page.evaluate("document.querySelector('#pic').currentTime") < 1.6
+    assert page.evaluate("floor.keepRange().snapped") == [0.0, 2.45]
     page.keyboard.down("Space")
     playing_at(page, 2.6)                          # inside "how are you"
     page.keyboard.up("Space")
     page.wait_for_function("document.querySelector('#pic').paused", timeout=3000)
     t = page.evaluate("document.querySelector('#pic').currentTime")
     assert 2.6 <= t < 4.0
+    assert page.evaluate("floor.keepRange().snapped") == [0.0, 2.45], "watching is not keeping"
+    assert "watched" not in page.locator("#left").inner_text() + page.locator("#zoomInfo").inner_text()
     page.keyboard.press("p")
     d = wait_edl(project, lambda d: len(d.get("selects", [])) == 1)
-    assert d["selects"][0]["end"] == 4.45, "watched into the second line: snapped to its end"
+    assert d["selects"][0]["end"] == 2.45, "the preview, snapped — not the second line"
 
 
 # ------------------------------------------------------- direct manipulation (I2.7)
@@ -385,8 +400,7 @@ def test_clicking_a_strip_seeks_the_playhead(page):
 
 def test_ctrl_z_restores_the_verdict_with_its_trim_and_note(page, project):
     page.evaluate("floor.setAuto(true)")
-    playing_at(page, 0.8)
-    paused_at(page)
+    preview_to(page, 1.2)
     page.keyboard.press("}")
     keep_before = page.locator("#ctxKeep").inner_text()
     page.keyboard.press("n")

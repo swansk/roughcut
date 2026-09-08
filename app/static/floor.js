@@ -9,7 +9,10 @@
  * that says what it is doing when it is not showing a picture.
  *
  * Four rules from Karl's decisions (docs/INTAKE.md), none of which this file bends:
- *   1. keep = what you actually watched, snapped outward to sentence ends; `}` extends.
+ *   1. keep = the pick's preview as it loaded, snapped outward to sentence ends — never the
+ *      machine's whole window blind — and it moves only by hand: a drag, the trim keys, or
+ *      `}` to the next line. Playing never changes it (I2.7: the band that grew while he
+ *      watched looked like the tool deciding).
  *   2. P / X / U / 1, J-K-L intact with K = pause, Caps Lock = auto-advance, ⌘Z undoes
  *      the verdict with its trim and note.
  *   3. the queue is frozen for a round of 40; what arrives lands at the round boundary.
@@ -38,7 +41,6 @@ const ZOOM_HALF_S = 8;           // the zoomed strip shows ±8 s around the play
 const MIN_WORD_PX = 14;          // words closer than this become a sentence bar
 const SNAP_PX = 10;              // a dragged edge this close to a tick takes the tick
 const DRAG_PX = 3;               // less movement than this is a click
-const MIN_KEEP_S = 0.5;          // a keep shorter than this is nothing watched
 const STAMP_MS = 350;            // the stamp lands before the next pick begins
 const SECONDS_PER_PICK = 7;      // the design's "about seven seconds" — for the round ETA
 
@@ -81,7 +83,7 @@ const F = {
   caps: false,             // the lamp as last seen on a key event
   mode: 'pass',            // pass | card | bin
   keep: { manualStart: null, manualEnd: null, edge: 'out' },
-  watch: { start: 0, end: 0 },   // the contiguous extent watched from the preview start
+  base: [0, 0],            // the range the pick loaded with: its preview
   note: '',                // the note for the current pick, sent with its verdict
   undo: [],
   gen: 0,                  // play commands; a deferred callback that finds it moved does nothing
@@ -176,15 +178,14 @@ function sentenceEnds(p) { return utterances(p).map((u) => Math.min(p.duration |
 const before = (list, t) => list.filter((x) => x < t - 0.01).pop();
 const after = (list, t) => list.find((x) => x > t + 0.01);
 
-/* The kept range: what was watched (or the edges the keys set), and what it snaps to. */
+/* The kept range: the preview the pick loaded with (`F.base`), or the edges a drag or a
+ * key set, and what it snaps to. Playing never moves it — only a hand does. */
 function keepRange() {
   const p = cur();
   if (!p) return { raw: [0, 0], snapped: [0, 0] };
-  const dur = p.duration || Math.max(p.end, F.watch.end);
-  let start = F.keep.manualStart != null ? F.keep.manualStart : F.watch.start;
-  let end = F.keep.manualEnd != null ? F.keep.manualEnd : F.watch.end;
-  // Nothing watched yet: the preview the machine offered, not its whole window.
-  if (F.keep.manualEnd == null && end - start < MIN_KEEP_S) end = Math.max(end, p.preview[1]);
+  const dur = p.duration || Math.max(p.end, F.base[1]);
+  const start = F.keep.manualStart != null ? F.keep.manualStart : F.base[0];
+  const end = F.keep.manualEnd != null ? F.keep.manualEnd : F.base[1];
   let a = F.keep.manualStart != null ? start : snapStart(p, start);
   let b = F.keep.manualEnd != null ? end : snapEnd(p, end);
   a = Math.max(0, Math.min(a, dur));
@@ -306,7 +307,6 @@ function tick(now) {
     }
     const t = v.currentTime;
     if (F.playing && !v.paused) {
-      if (F.mode === 'pass' && t >= F.watch.start) F.watch.end = Math.max(F.watch.end, t);
       if (t >= stopAt() - 0.04 || v.ended) {
         v.pause();
         F.playing = false;
@@ -366,7 +366,7 @@ function paintContext() {
       ? ` · preview ${fmt(p.preview[0])} → ${fmt(p.preview[1])}` : '');
   $('#ctxOthers').innerHTML = `${others} other pick${others === 1 ? '' : 's'} in this clip`
     + ` · <span class="key">.</span> open the clip`;
-  $('#ctxHint').innerHTML = 'hold <span class="key">space</span> to keep watching · what you watch is what you keep';
+  $('#ctxHint').innerHTML = 'the green band is the clip — drag its edges · hold <span class="key">space</span> to watch past it';
   paintKeep(true);
 }
 
@@ -379,20 +379,23 @@ function paintKeep(force) {
   const key = `${k.raw}|${k.snapped}|${F.keep.edge}|${F.keep.manualStart}|${F.keep.manualEnd}`;
   if (key === keepKey && !force) return;
   keepKey = key;
+  // The margin says what the band is and where it came from — the preview as offered,
+  // the preview snapped out to a line, or a hand — never what was watched.
   const manual = F.keep.manualStart != null || F.keep.manualEnd != null;
-  $('#ctxKeep').textContent = (manual ? 'trimmed: ' : "what you've watched: ")
-    + `${fmt(k.raw[0])}–${fmt(k.raw[1])}`;
-  const moved = k.snapped[0] !== k.raw[0] || k.snapped[1] !== k.raw[1];
-  $('#ctxSnap').textContent = moved
-    ? `will snap → ${fmt(k.snapped[0])}–${fmt(k.snapped[1])} (sentence end + ${PAD_TAIL})`
-    : `keeps ${fmt(k.snapped[0])}–${fmt(k.snapped[1])} · ${(k.snapped[1] - k.snapped[0]).toFixed(1)} s`;
-  const nxt = utterances(p).find((u) => u.end + PAD_TAIL > k.snapped[1] + 0.01);
+  const [a, b] = k.snapped;
+  $('#ctxKeep').textContent = `${fmt(a)}–${fmt(b)} · ${(b - a).toFixed(1)} s`;
+  const moved = a !== k.raw[0] || b !== k.raw[1];
+  $('#ctxSnap').textContent = manual
+    ? 'trimmed by hand · the green band is the clip'
+    : moved
+      ? `the preview ${fmt(k.raw[0])}–${fmt(k.raw[1])}, snapped out to the sentence (start − ${PAD_HEAD} / end + ${PAD_TAIL})`
+      : 'the preview as offered · the green band is the clip — drag its edges';
+  const nxt = utterances(p).find((u) => u.end + PAD_TAIL > b + 0.01);
   $('#ctxExtend').innerHTML = nxt
     ? `<span class="key">}</span> extend to the next line: "${escapeHtml(nxt.text || '')}" at ${fmt(nxt.start)}`
     : '';
-  $('#zoomInfo').textContent = `${fmt(k.snapped[0])} → ${fmt(k.snapped[1])} · ${(F.watch.end - F.watch.start).toFixed(1)} s watched`;
+  $('#zoomInfo').textContent = `keeping ${fmt(a)} → ${fmt(b)} · ${(b - a).toFixed(1)} s`;
   // words inside the keep light up
-  const [a, b] = k.snapped;
   $('#zoomInner').querySelectorAll('.w, .sb').forEach((el) => {
     const t0 = parseFloat(el.dataset.t0), t1 = parseFloat(el.dataset.t1);
     el.classList.toggle('in', t1 > a && t0 < b);
@@ -669,7 +672,7 @@ function show(i, { autoplay = true } = {}) {
   clearStamp();
   if (!p) return closingCard();
   F.keep = { manualStart: null, manualEnd: null, edge: 'out' };
-  F.watch = { start: p.preview[0], end: p.preview[0] };
+  F.base = [p.preview[0], p.preview[1]];
   F.note = p.note || '';
   F.whole = false;
   F.spaceHeld = false;
@@ -715,7 +718,7 @@ async function verdict(kind, { hero = false } = {}) {
   const heroNow = hero || (isPick && !!p.hero && p.verdict === 'pick');
   const entry = {
     i: F.i, items: [{ p, prev: snapshot(p), sent: range }],
-    keep: { ...F.keep }, watch: { ...F.watch }, note: F.note,
+    keep: { ...F.keep }, note: F.note,
   };
   let data;
   try {
@@ -745,9 +748,7 @@ async function rejectRest() {
   pause();
   const items = F.queue.slice(F.i).filter((q) => q.clip === p.clip && !q.verdict);
   if (!items.length) return toast('nothing left undecided in this clip');
-  const entry = {
-    i: F.i, items: [], keep: { ...F.keep }, watch: { ...F.watch }, note: F.note,
-  };
+  const entry = { i: F.i, items: [], keep: { ...F.keep }, note: F.note };
   for (const q of items) {
     const range = [r2(q.start), r2(q.end)];
     try {
@@ -814,7 +815,7 @@ async function undo() {
   }
   F.i = at;
   F.keep = { ...entry.keep };
-  F.watch = { ...entry.watch };
+  F.base = [first.preview[0], first.preview[1]];
   F.note = entry.note;
   F.whole = false;
   clearStamp();
@@ -1441,12 +1442,6 @@ async function boot() {
   });
   v.addEventListener('playing', () => screenMsg(''));
   v.addEventListener('waiting', () => { if (F.playing) screenMsg('buffering…'); });
-  v.addEventListener('timeupdate', () => {        // rAF stops in a background tab
-    const p = cur();
-    if (F.mode === 'pass' && p && F.playing && v.currentTime >= F.watch.start) {
-      F.watch.end = Math.max(F.watch.end, v.currentTime);
-    }
-  });
   const tape = $('#tape'), zoomEl = $('#zoom');
   tape.addEventListener('pointerdown', tapeDown);
   tape.addEventListener('pointermove', tapeMove);
