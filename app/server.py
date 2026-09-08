@@ -64,8 +64,8 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, Respons
 import uvicorn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from roughcut import (config, effects, events, find, inference,  # noqa: E402
-                      progress, revise)
+from roughcut import (config, dictate, effects, events, find, inference,  # noqa: E402
+                      picks, progress, revise, selects)
 
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent / "research" / "tools"
@@ -505,6 +505,10 @@ async def api_save(request: Request) -> JSONResponse:
             edl["effects_music"] = {k: v for k, v in spec.items() if v is not None}
         else:
             edl.pop("effects_music", None)
+    # The bin learns from the timeline on every save: which keeps became shots, and
+    # (once the bin lane lands) which shots were added by hand without a keep.
+    if edl.get("selects") is not None or edl.get("floor") is not None:
+        selects.sync_timeline(edl)
     write_edl(edl)
     return JSONResponse({"ok": True, "saved": len(clean)})
 
@@ -840,6 +844,193 @@ async def api_find(request: Request) -> JSONResponse:
                          daemon=True).start()
         resp["job"] = job
     return JSONResponse(resp)
+
+
+# ---------------------------------------------------------------- the floor
+#
+# The cutting room floor (docs/INTAKE.md): picks are derived from the sidecars and the
+# events file on every read; the human's verdicts and notes live in the EDL as ranges on
+# clip time (`selects`, `floor`). Nothing here spends a model call.
+
+
+def released_clips() -> list[str]:
+    """Clips the floor may show: listened to and previewable. The journal (INTAKE M3)
+    will tighten this to "every stage done"; until then a clip with a sidecar and a
+    proxy is releasable, because those are the two things a pick needs to play."""
+    out = []
+    for clip in footage_clips():
+        stem = Path(clip).stem
+        if stem in analysed_stems() and (STATE["proxy_dir"] / f"{stem}.mp4").exists():
+            out.append(clip)
+    return out
+
+
+def _pick_rows(rows: list[dict]) -> list[dict]:
+    """A pick, made playable: the full clip's proxy and a poster at the anchor."""
+    out = []
+    for p in rows:
+        stem = Path(p["clip"]).stem
+        out.append({**p, "proxy": f"/media/proxy/{stem}.mp4",
+                    "poster": f"/media/poster/{stem}.jpg?t={p['anchor']:.2f}",
+                    "duration": clip_duration(p["clip"])})
+    return out
+
+
+def _clip_range(body: dict) -> tuple[str, float, float]:
+    clip = str(body.get("clip") or "")
+    if clip not in {c for c in footage_clips()} and clip not in project_payload()["clips"]:
+        raise HTTPException(400, f"unknown clip {clip!r}")
+    try:
+        start, end = float(body["start"]), float(body["end"])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(400, "start and end must be numbers")
+    if not (0.0 <= start < end):
+        raise HTTPException(400, f"{start}-{end} is not a range")
+    return clip, start, end
+
+
+@app.get("/api/picks")
+def api_picks(order: str = "rank") -> JSONResponse:
+    """Every pick in the bin with stored verdicts re-attached, best first or by clip."""
+    if order not in ("rank", "clip"):
+        raise HTTPException(400, f"unknown order {order!r}")
+    # The full project payload, not the Ask's slimmer clip shape: picks need the R8
+    # candidates, which the Ask never reads.
+    payload = project_payload()
+    edl = selects.ensure(read_edl())
+    released = set(released_clips())
+    themes = edl.get("themes") or []
+    rows = picks.build(payload["clips"], payload["events"], themes=themes,
+                       verdicts=edl["floor"]["verdicts"], selects=edl["selects"])
+    for p in rows:
+        p["released"] = p["clip"] in released
+    ordered = picks.order(rows, order)
+    return JSONResponse({
+        "picks": _pick_rows(ordered),
+        "rounds": len(picks.rounds([p for p in ordered if p["released"]])),
+        "round_size": picks.ROUND_SIZE,
+        "released": sorted(released),
+        "summary": selects.summary(edl),
+        "position": edl["floor"]["position"],
+        "themes": themes,
+        "dictation": dictate.available(),
+    })
+
+
+@app.post("/api/floor/verdict")
+async def api_floor_verdict(request: Request) -> JSONResponse:
+    """One verdict on one range: pick / reject / later / clear. Writes the EDL."""
+    body = await request.json()
+    clip, start, end = _clip_range(body)
+    verdict = str(body.get("verdict") or "")
+    edl = read_edl()
+    try:
+        selects.apply_verdict(
+            edl, clip, start, end, verdict, why=str(body.get("why") or ""),
+            note=str(body.get("note") or ""), hero=bool(body.get("hero")),
+            witnesses=body.get("witnesses"), tags=body.get("tags"),
+            source=str(body.get("source") or "floor"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    selects.used_in(edl)
+    write_edl(edl)
+    return JSONResponse({"ok": True, "summary": selects.summary(edl)})
+
+
+@app.post("/api/floor/note")
+async def api_floor_note(request: Request) -> JSONResponse:
+    """A note on a range — the human's reason, typed or dictated."""
+    body = await request.json()
+    clip, start, end = _clip_range(body)
+    edl = read_edl()
+    selects.note(edl, clip, start, end, str(body.get("text") or ""))
+    write_edl(edl)
+    return JSONResponse({"ok": True, "summary": selects.summary(edl)})
+
+
+@app.put("/api/floor/position")
+async def api_floor_position(request: Request) -> JSONResponse:
+    """Where the pass is, so quitting mid-round costs nothing."""
+    body = await request.json()
+    edl = selects.ensure(read_edl())
+    pos = edl["floor"]["position"]
+    for k in ("round", "index"):
+        if k in body:
+            try:
+                pos[k] = max(0, int(body[k]))
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"{k} must be an integer")
+    if "order" in body:
+        if body["order"] not in ("rank", "clip"):
+            raise HTTPException(400, f"unknown order {body['order']!r}")
+        pos["order"] = body["order"]
+    write_edl(edl)
+    return JSONResponse({"ok": True, "position": pos})
+
+
+@app.get("/api/selects")
+def api_selects() -> JSONResponse:
+    edl = selects.ensure(read_edl())
+    selects.used_in(edl)
+    return JSONResponse({"selects": edl["selects"], "floor": edl["floor"],
+                         "summary": selects.summary(edl)})
+
+
+@app.put("/api/selects")
+async def api_selects_put(request: Request) -> JSONResponse:
+    """Replace the whole bin — the bin editor's save. Validated like a plan."""
+    body = await request.json()
+    clips, _payload = _ask_clips()
+    edl = selects.ensure(read_edl())
+    try:
+        edl["selects"] = selects.validate_selects(body.get("selects"), clips)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    selects.used_in(edl)
+    write_edl(edl)
+    return JSONResponse({"ok": True, "summary": selects.summary(edl)})
+
+
+DICTATE_MAX_BYTES = 6 * 1024 * 1024        # ~30 s of webm/opus with room to spare
+
+
+@app.post("/api/dictate")
+async def api_dictate(request: Request) -> JSONResponse:
+    """A spoken note in, its text out. The body is the recording itself (webm/opus or
+    wav), not a form — no multipart dependency, and the floor posts a Blob directly."""
+    if not dictate.available():
+        raise HTTPException(501, "dictation is not built yet — see docs/INTAKE.md M4")
+    raw = await request.body()
+    if not raw:
+        raise HTTPException(400, "empty recording")
+    if len(raw) > DICTATE_MAX_BYTES:
+        raise HTTPException(413, "recording too long — notes are at most 30 s")
+    suffix = ".wav" if "wav" in (request.headers.get("content-type") or "") else ".webm"
+    path = STATE["work"] / f"dictate_{uuid.uuid4().hex[:8]}{suffix}"
+    path.write_bytes(raw)
+    names = [t for t in (read_edl().get("names") or []) if isinstance(t, str)]
+    try:
+        result = await asyncio.to_thread(dictate.transcribe, path, names=names)
+    except dictate.NotAvailable as exc:
+        raise HTTPException(501, str(exc))
+    finally:
+        path.unlink(missing_ok=True)
+    return JSONResponse(result)
+
+
+@app.get("/floor", response_class=HTMLResponse)
+def floor_page() -> HTMLResponse:
+    return HTMLResponse((HERE / "static" / "floor.html").read_text(encoding="utf-8"),
+                        headers=NO_STORE)
+
+
+@app.get("/floor.js")
+def floor_js() -> Response:
+    p = HERE / "static" / "floor.js"
+    if not p.exists():
+        raise HTTPException(404, "the floor's script is not built yet")
+    return Response(p.read_text(encoding="utf-8"),
+                    media_type="application/javascript", headers=NO_STORE)
 
 
 # ---------------------------------------------------------------- backend

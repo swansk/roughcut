@@ -1,0 +1,937 @@
+<title>Reframing the Cut Board</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Source+Serif+4:opsz,ital,wght@8..60,0,400;8..60,0,600;8..60,1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  /* ------------------------------------------------------------------ tokens
+     Dark-first by design: the subject is a dark editing app, and judging its
+     mockups on a bright ground distorts every contrast call. Light theme is
+     fully provided and honest. */
+  :root {
+    --bg: #0f0f14;
+    --surface: #16161d;
+    --surface2: #1d1d26;
+    --line: #2a2a36;
+    --line-soft: #22222c;
+    --text: #eaeaf1;
+    --dim: #9a9aac;
+    --faint: #6c6c80;
+    --accent: #6ea8fe;
+    --accent-ink: #0b0b0f;
+    --amber: #e0b050;
+    --good: #5ecf8b;
+    --bad: #e06a6a;
+    --prose-serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --display: "Bricolage Grotesque", "Arial Narrow", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", "Consolas", monospace;
+    --ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f1f1f5;
+      --surface: #fafafc;
+      --surface2: #ffffff;
+      --line: #d8d8e2;
+      --line-soft: #e4e4ec;
+      --text: #1b1b26;
+      --dim: #585870;
+      --faint: #8a8a9e;
+      --accent: #2e63c4;
+      --accent-ink: #ffffff;
+      --amber: #9a6a0c;
+      --good: #1d7a4b;
+      --bad: #b23a3a;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f1f1f5;
+    --surface: #fafafc;
+    --surface2: #ffffff;
+    --line: #d8d8e2;
+    --line-soft: #e4e4ec;
+    --text: #1b1b26;
+    --dim: #585870;
+    --faint: #8a8a9e;
+    --accent: #2e63c4;
+    --accent-ink: #ffffff;
+    --amber: #9a6a0c;
+    --good: #1d7a4b;
+    --bad: #b23a3a;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 17px/1.65 var(--prose-serif);
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ------------------------------------------------------------------ chrome */
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 0 28px; }
+  .prose { max-width: 72ch; }
+
+  nav {
+    position: sticky; top: 0; z-index: 40;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  nav .wrap { display: flex; gap: 20px; align-items: baseline; padding-top: 12px; padding-bottom: 12px; flex-wrap: wrap; }
+  nav .brand { font: 700 15px var(--display); letter-spacing: .01em; }
+  nav a.jump { font: 500 12px var(--mono); color: var(--dim); letter-spacing: .04em; }
+  nav a.jump:hover { color: var(--text); text-decoration: none; }
+  nav a.jump b { color: var(--accent); font-weight: 600; }
+
+  header.hero { padding: 72px 0 40px; }
+  .eyebrow {
+    font: 600 12px var(--mono); letter-spacing: .14em; text-transform: uppercase;
+    color: var(--accent);
+  }
+  h1 {
+    font: 800 clamp(38px, 5.4vw, 62px)/1.04 var(--display);
+    letter-spacing: -0.015em; margin: 14px 0 18px; text-wrap: balance;
+  }
+  .standfirst { font-size: 20px; line-height: 1.6; color: var(--dim); max-width: 62ch; }
+  .standfirst b { color: var(--text); font-weight: 600; }
+
+  section { padding: 44px 0 8px; }
+  h2 {
+    font: 700 clamp(24px, 3vw, 32px)/1.15 var(--display);
+    letter-spacing: -0.01em; margin: 8px 0 16px; text-wrap: balance;
+  }
+  h3 { font: 700 19px/1.3 var(--display); margin: 28px 0 8px; }
+  p { margin: 0 0 16px; }
+  .sec-eyebrow { display: flex; align-items: baseline; gap: 12px; border-top: 1px solid var(--line); padding-top: 18px; }
+  .sec-eyebrow .no { font: 600 12px var(--mono); color: var(--faint); }
+
+  ul.tight { margin: 0 0 16px; padding-left: 20px; }
+  ul.tight li { margin-bottom: 8px; }
+  ul.tight li::marker { color: var(--faint); }
+
+  .pull {
+    border-left: 3px solid var(--accent);
+    padding: 4px 0 4px 18px; margin: 24px 0;
+    font-style: italic; color: var(--dim); font-size: 18px;
+  }
+  .pull .who { display: block; font: 500 12px var(--mono); font-style: normal; color: var(--faint); margin-top: 6px; }
+
+  code, .m { font: 500 0.85em var(--mono); color: var(--text); background: var(--surface2); border: 1px solid var(--line-soft); border-radius: 5px; padding: 1px 5px; white-space: nowrap; }
+
+  /* stat band */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin: 26px 0; }
+  .stat { background: var(--surface); padding: 16px 16px 14px; }
+  .stat .v { font: 700 26px/1 var(--display); letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+  .stat .v small { font-size: 15px; color: var(--dim); font-weight: 500; }
+  .stat .k { font: 500 11.5px var(--mono); color: var(--dim); margin-top: 7px; line-height: 1.45; }
+  .stat.hot .v { color: var(--amber); }
+
+  /* keep / break twin lists */
+  .twin { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 24px 0; }
+  @media (max-width: 900px) { .twin { grid-template-columns: 1fr; } }
+  .twin .col { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; }
+  .twin h4 { margin: 0 0 10px; font: 700 13px var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+  .twin .col.keep h4 { color: var(--good); }
+  .twin .col.fix h4 { color: var(--amber); }
+  .twin ul { margin: 0; padding-left: 18px; font-size: 15.5px; }
+  .twin li { margin-bottom: 7px; color: var(--dim); }
+  .twin li b { color: var(--text); font-weight: 600; }
+
+  /* ------------------------------------------------------------------ exhibits */
+  .exhibit { margin: 30px 0 10px; }
+  .exhibit .cap { display: flex; gap: 10px; align-items: baseline; margin: 10px 2px 0; font: 400 14px var(--prose-serif); color: var(--dim); }
+  .exhibit .cap .fig { font: 600 11px var(--mono); letter-spacing: .1em; color: var(--accent); text-transform: uppercase; white-space: nowrap; }
+  .shell { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #0c0c10; box-shadow: 0 20px 60px -30px rgba(0,0,0,.55); }
+  .shell .bar { display: flex; align-items: center; gap: 8px; padding: 9px 14px; background: #14141a; border-bottom: 1px solid #24242e; }
+  .shell .dot { width: 10px; height: 10px; border-radius: 50%; background: #2e2e3a; }
+  .shell .url { font: 500 11px var(--mono); color: #7d7d92; background: #0e0e13; border: 1px solid #24242e; border-radius: 6px; padding: 3px 10px; margin-left: 6px; }
+  .scroller { overflow-x: auto; }
+
+  /* Every mock is a fixed dark canvas — deliberately theme-independent: these are
+     screens of a dark app, framed like stills. All colors inside are literals. */
+  .mock { min-width: 1180px; background: #101013; color: #e8e8ee; font: 12px/1.4 var(--ui); position: relative; }
+  .mock * { box-sizing: border-box; }
+  .mock .hd { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: #17171c; border-bottom: 1px solid #2e2e38; }
+  .mock .hd .ttl { font-weight: 600; font-size: 13px; }
+  .mock .hd .ttl small { color: #9a9aa8; font-weight: 400; }
+  .mock .grow { flex: 1; }
+  .mock .pill { border: 1px solid #2c4c39; color: #64d08a; border-radius: 999px; padding: 2px 9px; font-size: 10.5px; white-space: nowrap; }
+  .mock .btn { background: #1e1e25; border: 1px solid #2e2e38; color: #e8e8ee; border-radius: 6px; padding: 4px 10px; font-size: 11px; white-space: nowrap; }
+  .mock .btn.primary { background: #6ea8fe; color: #0b0b0f; border-color: transparent; font-weight: 600; }
+  .mock .hint { color: #9a9aa8; }
+  .mock .tnum { font-variant-numeric: tabular-nums; }
+  .mock .kind { font-size: 8.5px; text-transform: uppercase; letter-spacing: .05em; color: #9a9aa8; border: 1px solid #2e2e38; border-radius: 3px; padding: 0 3px; margin-right: 4px; }
+  .mock .kind.hot { color: #e0b050; border-color: #4c4026; }
+
+  /* the stand-in frame: an abstract slope, honest about being a placeholder */
+  .frame { position: relative; background: linear-gradient(180deg, #23283a 0%, #2c3350 46%, #dfe4ee 46.5%, #b9c2d6 100%); overflow: hidden; }
+  .frame::after { content: ""; position: absolute; inset: 0; background: radial-gradient(120% 90% at 50% 30%, transparent 55%, rgba(8,8,14,.55) 100%); }
+  .frame svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .frame .tc { position: absolute; left: 8px; bottom: 6px; z-index: 2; font: 600 10px var(--mono); color: #fff; background: rgba(8,8,12,.55); padding: 1px 6px; border-radius: 4px; }
+  .frame .tag { position: absolute; right: 8px; top: 6px; z-index: 2; font: 600 9px var(--mono); color: #cfd6e4; background: rgba(8,8,12,.5); padding: 1px 6px; border-radius: 4px; letter-spacing: .06em; }
+
+  /* numbered callouts */
+  .callout { position: absolute; z-index: 5; width: 22px; height: 22px; border-radius: 50%; background: var(--amber); color: #14100a; font: 700 12px/22px var(--display); text-align: center; box-shadow: 0 0 0 3px rgba(224,176,80,.25); }
+  .callout-list { counter-reset: co; margin: 18px 0 6px; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 10px 26px; }
+  .callout-list li { counter-increment: co; position: relative; padding-left: 34px; font-size: 15px; color: var(--dim); line-height: 1.5; }
+  .callout-list li::before { content: counter(co); position: absolute; left: 0; top: 1px; width: 22px; height: 22px; border-radius: 50%; background: var(--amber); color: #14100a; font: 700 12px/22px var(--display); text-align: center; }
+  .callout-list li b { color: var(--text); font-weight: 600; }
+
+  /* option header cards */
+  .opt-head { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+  .opt-letter { font: 800 46px/1 var(--display); color: var(--accent); letter-spacing: -0.02em; }
+  .opt-meta { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { font: 600 11px var(--mono); letter-spacing: .05em; border: 1px solid var(--line); color: var(--dim); border-radius: 999px; padding: 3px 11px; white-space: nowrap; }
+  .chip.risk-low { border-color: color-mix(in srgb, var(--good) 45%, var(--line)); color: var(--good); }
+  .chip.risk-med { border-color: color-mix(in srgb, var(--amber) 45%, var(--line)); color: var(--amber); }
+  .chip.risk-high { border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); color: var(--bad); }
+
+  .verdict-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 22px 0; }
+  @media (max-width: 900px) { .verdict-grid { grid-template-columns: 1fr; } }
+  .verdict-grid .col { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; font-size: 15px; }
+  .verdict-grid h4 { margin: 0 0 8px; font: 700 12px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+  .verdict-grid ul { margin: 0; padding-left: 18px; color: var(--dim); }
+  .verdict-grid li { margin-bottom: 6px; }
+  .verdict-grid li b { color: var(--text); }
+
+  /* compare table */
+  .cmp-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; margin: 24px 0; }
+  table.cmp { border-collapse: collapse; width: 100%; min-width: 880px; font-size: 14px; background: var(--surface); }
+  .cmp th, .cmp td { padding: 11px 14px; text-align: left; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  .cmp thead th { font: 600 11.5px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--dim); background: var(--surface2); position: sticky; top: 0; }
+  .cmp tbody th { font: 600 13.5px var(--ui); color: var(--text); white-space: nowrap; width: 200px; }
+  .cmp td { color: var(--dim); }
+  .cmp td b { color: var(--text); font-weight: 600; }
+  .cmp .best { color: var(--good); font-weight: 600; }
+  .cmp .worst { color: var(--bad); }
+  .cmp tr:last-child th, .cmp tr:last-child td { border-bottom: 0; }
+
+  .rec {
+    background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, var(--surface)), var(--surface));
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+    border-radius: 14px; padding: 26px 30px; margin: 30px 0;
+  }
+  .rec h3 { margin-top: 0; }
+
+  footer { padding: 40px 0 60px; color: var(--faint); font-size: 13.5px; border-top: 1px solid var(--line-soft); margin-top: 60px; }
+  footer .wrap { display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+</style>
+
+<nav>
+  <div class="wrap">
+    <span class="brand">Reframing the Cut Board</span>
+    <a class="jump" href="#today">TODAY</a>
+    <a class="jump" href="#principles">PRINCIPLES</a>
+    <a class="jump" href="#a"><b>A</b>·REFIT</a>
+    <a class="jump" href="#b"><b>B</b>·CUTTING ROOM</a>
+    <a class="jump" href="#c"><b>C</b>·DIRECTOR'S CONSOLE</a>
+    <a class="jump" href="#compare">COMPARE</a>
+    <a class="jump" href="#rec">CALL</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">Roughcut · UI review · 2026-08-25 · no code changed</div>
+    <h1>The board outgrew its page.</h1>
+    <p class="standfirst">The cut board's <b>bones are right</b> — shots that carry their evidence, proposals you accept or discard, prices before spending — but its <b>geometry is wrong</b>: it lays an editing console out like a document. On the current Killington cut that document is <b>5,928&nbsp;px tall</b>, the monitor scrolls away, and five separate text boxes talk to the AI. This review measures the problem, states what a good AI-first editing UI needs, and pitches three directions — <b>A</b> a refit, <b>B</b> a monitor-first overhaul, <b>C</b> a conversation-first rethink — each with a render. My call: <b>B</b>, staged, stealing the best organ from each of the others.</p>
+  </div>
+</header>
+
+<!-- ================================================================ TODAY -->
+<section id="today">
+  <div class="wrap">
+    <div class="sec-eyebrow"><span class="no">§1</span><span class="eyebrow">The board today</span></div>
+    <h2>Measured, not felt</h2>
+    <div class="prose">
+      <p>These numbers come from the live board on <code>killington-neutral</code> — 21 shots, 2:55 of cut — in a 1280×720 viewport:</p>
+    </div>
+
+    <div class="stats">
+      <div class="stat hot"><div class="v">8.2<small> screens</small></div><div class="k">page height 5,928 px ÷ 720 px viewport</div></div>
+      <div class="stat hot"><div class="v">241<small> px</small></div><div class="k">average shot card (max 316) — 21 cards ≈ 5,000 px of list</div></div>
+      <div class="stat hot"><div class="v">1,997<small> px</small></div><div class="k">sidebar: 8 stacked panels; "sticky" cannot hold 2.8 screens</div></div>
+      <div class="stat hot"><div class="v">~600<small> px</small></div><div class="k">scroll depth at which the monitor — the judging surface — is gone</div></div>
+      <div class="stat hot"><div class="v">5+21</div><div class="k">text inputs talking to the system: 5 AI boxes + 21 editable whys</div></div>
+      <div class="stat hot"><div class="v">12<small> clicks</small></div><div class="k">to trim one edge by 3s at ±0.25s per press (4 with shift)</div></div>
+    </div>
+
+    <div class="prose">
+      <p>The layout has already produced real defects, in Karl's own reports. <em>"The cut board doesn't seem to allow me to play videos"</em> turned out to be, in part, playback starting <em>3,163&nbsp;px above the viewport</em> — the monitor was playing correctly, off-screen. The fix that shipped (<code>revealMonitor()</code> scrolls it back) treats the symptom; the layout that loses the monitor is the disease. Likewise <em>"unclear how to go from start to finish"</em> (session 3) was answered with the steps strip — good — but the inputs it points at are still scattered down 2,000&nbsp;px of sidebar.</p>
+    </div>
+
+    <div class="exhibit">
+      <div class="shell">
+        <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">localhost:8765 — killington-neutral · 21 shots · as shipped today</span></div>
+        <div class="scroller">
+          <div class="mock" style="display:grid;grid-template-columns:1fr 300px;min-height:620px">
+            <!-- ===== left: what the viewport actually shows, annotated ===== -->
+            <div style="border-right:1px solid #2e2e38;position:relative">
+              <div class="hd">
+                <span class="ttl">Cut board <small>killington-neutral</small></span>
+                <span class="tnum" style="font-size:13px">2:55.1 <span class="hint" style="font-size:10px">21 shots · target 2:00–3:00</span></span>
+                <span class="grow"></span>
+                <span class="pill">opus-5 · ready</span>
+                <span class="btn">Fix cut points</span><span class="btn">Undo</span><span class="btn primary">Render</span>
+              </div>
+              <div style="display:flex;gap:5px;padding:6px 14px;border-bottom:1px solid #26262f;background:#17171c">
+                <span style="font-size:10px;color:#64d08a;border:1px solid #2c4c39;border-radius:999px;padding:1px 8px">✓ footage</span>
+                <span style="font-size:10px;color:#64d08a;border:1px solid #2c4c39;border-radius:999px;padding:1px 8px">✓ analyse</span>
+                <span style="font-size:10px;color:#64d08a;border:1px solid #2c4c39;border-radius:999px;padding:1px 8px">✓ first cut</span>
+                <span style="font-size:10px;color:#64d08a;border:1px solid #2c4c39;border-radius:999px;padding:1px 8px">✓ refine</span>
+                <span style="font-size:10px;color:#64d08a;border:1px solid #2c4c39;border-radius:999px;padding:1px 8px">✓ render · 9 versions</span>
+              </div>
+              <div style="padding:10px 14px;position:relative">
+                <div class="callout" style="top:18px;right:22px">1</div>
+                <div class="frame" style="height:250px;border-radius:6px">
+                  <svg viewBox="0 0 400 120" preserveAspectRatio="none" aria-hidden="true"><path d="M0 78 L90 40 L150 66 L230 30 L310 62 L400 44 L400 120 L0 120 Z" fill="#f2f4f9" opacity=".9"/><path d="M0 96 L120 70 L240 88 L400 72 L400 120 L0 120 Z" fill="#dde3ef"/><circle cx="238" cy="52" r="5" fill="#1d2233"/><path d="M238 57 l-7 14 M238 57 l6 15 M231 63 l14 -3" stroke="#1d2233" stroke-width="2.4" fill="none" stroke-linecap="round"/></svg>
+                  <span class="tag">STAND-IN FRAME</span><span class="tc">0:00.0 / 2:55.1</span>
+                </div>
+                <div style="display:flex;gap:10px;align-items:center;margin-top:7px">
+                  <span class="btn primary">▶ Play cut</span><span class="tnum hint">0:00.0 / 2:55.1</span>
+                  <span class="grow"></span><span class="hint" style="font-size:10px">click a shot below to jump · space play/pause</span>
+                </div>
+                <div style="display:flex;gap:2px;height:26px;margin-top:7px;position:relative">
+                  <div class="callout" style="top:-8px;left:210px">3</div>
+                  <div style="flex:11.8" title="CLIP_01"><div style="height:100%;background:hsl(210 45% 58%);border-radius:3px;opacity:.75"></div></div>
+                  <div style="flex:4.4"><div style="height:100%;background:hsl(210 45% 58%);border-radius:3px;opacity:.75"></div></div>
+                  <div style="flex:8.1"><div style="height:100%;background:hsl(210 45% 58%);border-radius:3px;opacity:.75"></div></div>
+                  <div style="flex:6.4"><div style="height:100%;background:hsl(160 45% 52%);border-radius:3px;opacity:.75"></div></div>
+                  <div style="flex:11.5"><div style="height:100%;background:hsl(160 45% 52%);border-radius:3px;opacity:.75"></div></div>
+                  <div style="flex:5.8"><div style="height:100%;background:hsl(160 45% 52%);border-radius:3px;opacity:.75"></div></div>
+                  <div style="flex:6.4"><div style="height:100%;background:hsl(160 45% 52%);border-radius:3px;opacity:.75"></div></div>
+                  <div style="flex:3.1"><div style="height:100%;background:hsl(40 55% 58%);border-radius:3px;opacity:.9;outline:2px solid #fff"></div></div>
+                  <div style="flex:5.4"><div style="height:100%;background:hsl(280 40% 60%);border-radius:3px;opacity:.75"></div></div>
+                  <div style="flex:21.3"><div style="height:100%;background:hsl(0 45% 62%);border-radius:3px;opacity:.75"></div></div>
+                  <div style="flex:3.1"><div style="height:100%;background:hsl(95 40% 55%);border-radius:3px;opacity:.75"></div></div>
+                  <div style="flex:13.9"><div style="height:100%;background:hsl(330 45% 60%);border-radius:3px;opacity:.75"></div></div>
+                  <div style="flex:10.3"><div style="height:100%;background:hsl(330 45% 60%);border-radius:3px;opacity:.75"></div></div>
+                  <div style="flex:11.4"><div style="height:100%;background:hsl(25 55% 58%);border-radius:3px;opacity:.75"></div></div>
+                  <div style="flex:3.3"><div style="height:100%;background:hsl(55 45% 55%);border-radius:3px;opacity:.75"></div></div>
+                  <div style="flex:6.3"><div style="height:100%;background:hsl(55 45% 55%);border-radius:3px;opacity:.75"></div></div>
+                  <div style="flex:28.4"><div style="height:100%;background:hsl(55 45% 55%);border-radius:3px;opacity:.75"></div></div>
+                  <div style="flex:8.1"><div style="height:100%;background:hsl(55 45% 55%);border-radius:3px;opacity:.75"></div></div>
+                  <div style="flex:2.8"><div style="height:100%;background:hsl(185 40% 55%);border-radius:3px;opacity:.75"></div></div>
+                  <div style="flex:2.0"><div style="height:100%;background:hsl(95 40% 55%);border-radius:3px;opacity:.75"></div></div>
+                  <div style="flex:1.6"><div style="height:100%;background:hsl(95 40% 55%);border-radius:3px;opacity:.75"></div></div>
+                </div>
+                <!-- first card, then the fold -->
+                <div style="display:grid;grid-template-columns:150px 1fr;gap:10px;background:#1e1e25;border:1px solid #2e2e38;border-radius:8px;padding:8px;margin-top:10px;position:relative">
+                  <div class="callout" style="top:12px;left:-11px">2</div>
+                  <div class="frame" style="border-radius:5px;aspect-ratio:16/9"><span class="tc" style="font-size:8px">188.20</span></div>
+                  <div>
+                    <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">
+                      <b>CLIP_01</b><span class="hint tnum">188.20 → 199.97</span>
+                      <span style="color:#e0b050;font-size:10.5px">⚠ opens mid-sentence</span>
+                      <span style="color:#e06a6a;font-size:10.5px">⚠ unusable 188.0–196.0: nearly black — lens obstruction</span>
+                      <span class="tnum" style="margin-left:auto">11.77s</span>
+                    </div>
+                    <div class="hint" style="margin:3px 0">Cold open on the solo confession — "I fell in and I got completely buried…" — kept as the teaser before we meet anyone.</div>
+                    <div style="background:#131318;border-radius:5px;padding:4px 7px;font-size:10.5px;color:#9a9aa8"><b style="color:#e8e8ee">187.3</b> brother i fell into the stream i told you i told you…<br><b style="color:#e8e8ee">195.4</b> bruh like i i have to dig myself out can't say i didn't warn you</div>
+                    <div style="display:flex;gap:5px;margin-top:6px;font-size:10px">
+                      <span class="hint">in</span><span class="btn" style="padding:1px 6px">−</span><span class="btn" style="padding:1px 6px">+</span>
+                      <span class="hint">out</span><span class="btn" style="padding:1px 6px">−</span><span class="btn" style="padding:1px 6px">+</span>
+                      <span class="btn" style="padding:1px 6px">▶ play</span><span class="btn" style="padding:1px 6px">✎ ask</span><span class="btn" style="padding:1px 6px;color:#9a9aa8">remove</span>
+                    </div>
+                  </div>
+                </div>
+                <div style="margin-top:10px;border:1px dashed #3a3a48;border-radius:8px;padding:10px 14px;color:#8a8a9e;font-size:11px;background:repeating-linear-gradient(-45deg,#15151b,#15151b 8px,#17171d 8px,#17171d 16px)">
+                  ▼ the fold — <b style="color:#c9c9d6">20 more cards · ≈4,800 px</b> continue below the viewport. Dragging shot 21 to position 2 crosses all of it.
+                </div>
+              </div>
+            </div>
+            <!-- ===== right: sidebar column, then scroll map ===== -->
+            <div style="display:grid;grid-template-columns:172px 1fr">
+              <div style="padding:8px;border-right:1px solid #26262f;position:relative">
+                <div class="callout" style="top:6px;right:-4px">4</div>
+                <div style="font-size:9px;letter-spacing:.08em;color:#8a8a9e;margin-bottom:4px">SIDEBAR — 1,997 px OF PANELS</div>
+                <div style="display:flex;flex-direction:column;gap:4px;font-size:10px">
+                  <div style="background:#17171c;border:1px solid #2e2e38;border-radius:6px;padding:5px 8px;height:44px">PROJECT<br><span class="hint" style="font-size:9px">12 clips · 21 shots · looked at 12/12</span></div>
+                  <div style="background:#17171c;border:1px solid #2e2e38;border-radius:6px;padding:5px 8px;height:38px;position:relative">ASK FOR A CHANGE<div class="callout" style="top:8px;left:-11px;width:18px;height:18px;line-height:18px;font-size:10px">5</div><span class="hint" style="font-size:9px">textarea + Ask</span></div>
+                  <div style="background:#17171c;border:1px solid #2e2e38;border-radius:6px;padding:5px 8px;height:34px">FIND A MOMENT<br><span class="hint" style="font-size:9px">input + 2 buttons</span></div>
+                  <div style="background:#17171c;border:1px solid #2e2e38;border-radius:6px;padding:5px 8px;height:44px">STORY<br><span class="hint" style="font-size:9px">textarea</span></div>
+                  <div style="background:#17171c;border:1px solid #2e2e38;border-radius:6px;padding:5px 8px;height:46px">MUSIC<br><span class="hint" style="font-size:9px">track · duck · fades</span></div>
+                  <div style="background:#17171c;border:1px solid #2e2e38;border-radius:6px;padding:5px 8px;height:74px;position:relative">RENDERS<div class="callout" style="top:8px;left:-11px;width:18px;height:18px;line-height:18px;font-size:10px">6</div><span class="hint" style="font-size:9px">A/B players 160 px wide · 9 versions</span></div>
+                  <div style="background:#17171c;border:1px solid #2e2e38;border-radius:6px;padding:5px 8px;height:80px">ADD A MOMENT<br><span class="hint" style="font-size:9px">heard | seen · 40 rows</span></div>
+                  <div style="background:#17171c;border:1px solid #2e2e38;border-radius:6px;padding:5px 8px;height:24px">KEYS</div>
+                </div>
+              </div>
+              <div style="padding:8px 10px;position:relative">
+                <div style="font-size:9px;letter-spacing:.08em;color:#8a8a9e;margin-bottom:4px">SCROLL MAP — 5,928 px AT 1:12</div>
+                <div style="position:relative;width:84px;height:494px;background:#0c0c10;border:1px solid #26262f;border-radius:5px">
+                  <div style="position:absolute;inset:2px 2px auto 2px;height:8px;background:#22222c;border-radius:2px" title="header"></div>
+                  <div style="position:absolute;top:11px;left:2px;right:2px;height:40px;background:#2b3a55;border-radius:2px" title="monitor"></div>
+                  <div style="position:absolute;top:53px;left:2px;right:2px;bottom:2px;background:repeating-linear-gradient(180deg,#1e1e25 0,#1e1e25 18px,#16161c 18px,#16161c 20px);border-radius:2px" title="21 cards"></div>
+                  <div style="position:absolute;top:2px;left:2px;right:2px;height:58px;border:2px solid #6ea8fe;border-radius:3px;box-shadow:0 0 0 3px rgba(110,168,254,.18)"></div>
+                  <div style="position:absolute;top:64px;right:-6px;width:12px;height:2px;background:#e0b050"></div>
+                </div>
+                <div style="font-size:9.5px;color:#9a9aa8;margin-top:6px;line-height:1.5"><span style="color:#6ea8fe">▣</span> viewport<br><span style="color:#e0b050">—</span> monitor lost here<br>everything below is reached by scrolling</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap"><span class="fig">Fig. 1</span>The board as shipped: the visible screen (left), the full sidebar stack and the 5,928 px scroll map (right). Callouts keyed below.</div>
+    </div>
+
+    <ol class="callout-list">
+      <li><b>The monitor is a guest on its own board.</b> 483 px of judging surface that scrolls away at ~600 px — the one component every decision depends on has no permanent home. <code>revealMonitor()</code> scrolls it back after the fact.</li>
+      <li><b>The timeline is a stack of paragraphs.</b> Cards average 241 px because every shot always shows its transcript, its seen-moments and its trim buttons — evidence you need for <em>one</em> shot at a time, paid for on all 21.</li>
+      <li><b>The strip is the right idea, demoted.</b> A true miniature timeline — width∝duration, colored by clip — but 36 px tall and click-to-play only. No trim, no drag, no zoom. It should be the protagonist.</li>
+      <li><b>Eight panels, all always open.</b> Ask, Find, Story, Music, Renders, library, keys — 1,997 px of permanently-expanded chrome for inputs used at very different frequencies.</li>
+      <li><b>Five ways to talk to the AI.</b> First-cut box, Ask panel, per-shot ✎, Find, Story — same act, different scopes, scattered surfaces with no shared history of what was asked and what changed.</li>
+      <li><b>Judging renders happens in a 160 px window.</b> Version comparison — the activity the whole project's method rests on — gets the smallest players on the page.</li>
+    </ol>
+
+    <div class="twin">
+      <div class="col keep">
+        <h4>Load-bearing — keep at any cost</h4>
+        <ul>
+          <li><b>Shots carry their argument.</b> The <code>why</code>, transcript lines, seen-moments, unusable warnings and polish provenance are the audit trail for a model that cannot see. No conventional NLE has this.</li>
+          <li><b>Proposals, never writes.</b> Accept/Discard with a readable diff; the EDL on disk stays the single source of truth.</li>
+          <li><b>Prices and progress are honest.</b> Cost on the button before spending; one top strip with real milestones; jobs survive reloads.</li>
+          <li><b>Posters, not streams.</b> The connection-starvation lesson is paid for; any redesign keeps cards as stills.</li>
+          <li><b>Autosave + undo</b>, and boundary warnings computed live.</li>
+        </ul>
+      </div>
+      <div class="col fix">
+        <h4>Geometry problems — the redesign target</h4>
+        <ul>
+          <li><b>Vertical time.</b> Length, trim and motion are spatial ideas; a vertical card list makes them arithmetic.</li>
+          <li><b>No permanent monitor,</b> no source/program separation — Find's player, the monitor and the A/B players are three unrelated screens.</li>
+          <li><b>Input sprawl</b> — five AI surfaces, eight panels, no session history.</li>
+          <li><b>No lanes.</b> Music is a form; sfx/overlays (EFFECTS.md), markers and beat grids have nowhere to land.</li>
+          <li><b>Trim ergonomics:</b> ±0.25 s buttons instead of dragging an edge that could snap to utterances the sidecars already know.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ PRINCIPLES -->
+<section id="principles">
+  <div class="wrap">
+    <div class="sec-eyebrow"><span class="no">§2</span><span class="eyebrow">Principles</span></div>
+    <h2>What a good editing UI does — and what an AI-first one adds</h2>
+    <div class="verdict-grid">
+      <div class="col">
+        <h4>Fifty years of cutting rooms agree</h4>
+        <ul>
+          <li><b>Two permanent surfaces:</b> the monitor and the timeline. Everything else — inspectors, bins, effects — is summonable and dismissible. Neither ever scrolls away.</li>
+          <li><b>Time runs horizontal.</b> Duration is width; trimming is dragging an edge; moving is dragging a block; a swap is a drop. Direct manipulation with snapping beats any number of nudge buttons.</li>
+          <li><b>Source vs program.</b> Material you're <em>considering</em> plays somewhere that isn't the film. Roughcut already has three accidental source monitors (Find's player, the library, the A/B renders) — they are one concept asking to be unified.</li>
+          <li><b>Keyboard first:</b> J-K-L shuttle, in/out marks, ripple by default. The board's j/k/[/] keys are the right instinct.</li>
+          <li><b>An inspector,</b> one consistent place where the selected thing's detail lives — instead of detail-everywhere.</li>
+        </ul>
+      </div>
+      <div class="col">
+        <h4>New rules for an AI-first editor</h4>
+        <ul>
+          <li><b>The unit is the argued shot.</b> Evidence must stay one gesture away from every clip — but on demand (inspector), not always-on (card sprawl).</li>
+          <li><b>One conversation, many scopes.</b> Whole-cut ask (~$0.60 · minutes), shot ask (~$0.15 · seconds), find (~$0.14 · seconds) are the same act at different scope and price. One input with a scope control and the price visible beats five boxes.</li>
+          <li><b>Proposals are diffs, not chat.</b> Review means seeing current vs proposed <em>on the timeline</em> and playing either — eventually accepting per-change, not only wholesale.</li>
+          <li><b>Provenance is trust.</b> Which shots the model placed, which were hand-cut, which were modified after accept — visible state, like the ⚠ warnings already are.</li>
+          <li><b>Smart snapping is the AI dividend.</b> The sidecars know every word boundary, onset and unusable stretch; a dragged edge that snaps to "the end of the sentence" is something Premiere cannot do. Manual editing here should be <em>better</em> than a traditional NLE, not a lesser copy of one.</li>
+          <li><b>High-leverage, low-frequency inputs</b> (story, target, orientation) live in a drawer — set rarely, never spending permanent pixels.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ OPTION A -->
+<section id="a">
+  <div class="wrap">
+    <div class="sec-eyebrow"><span class="no">§3</span><span class="eyebrow">Option A</span></div>
+    <div class="opt-head">
+      <span class="opt-letter">A</span>
+      <h2 style="margin:0">The Refit</h2>
+      <span class="opt-meta"><span class="chip risk-low">RISK LOW</span><span class="chip">EFFORT ~1 SESSION</span><span class="chip">KEEPS THE DOM</span></span>
+    </div>
+    <div class="prose">
+      <p>Keep today's architecture — vertical shot list, right sidebar — and fix the four worst costs inside it. Nothing about the mental model changes; a person who knows the board today knows it after.</p>
+      <ul class="tight">
+        <li><b>The monitor docks.</b> Scroll past it and it shrinks to a corner picture-in-picture (~280 px) instead of leaving. It is never not on screen; <code>revealMonitor()</code> retires.</li>
+        <li><b>Cards get a density toggle.</b> Default row is one line (~48 px): poster chip, clip, times, duration, warning ticks. The <em>selected</em> shot expands to today's full evidence card. 21 shots ≈ 1,200 px instead of 5,000.</li>
+        <li><b>The sidebar becomes four tabs</b> — <b>Cut</b> (one unified ask/find input), <b>Media</b> (library + find results), <b>Mix</b> (music, later sfx), <b>Out</b> (renders) — with Story and project facts in a header drawer, and Keys behind <code>?</code>. The sidebar always fits the viewport.</li>
+        <li><b>The strip earns drag and trim:</b> reorder by dragging blocks, trim by dragging edges with utterance snapping, double-click to zoom.</li>
+      </ul>
+    </div>
+
+    <div class="exhibit">
+      <div class="shell">
+        <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">option A — refit · mid-scroll state: nothing important has left the screen</span></div>
+        <div class="scroller">
+          <div class="mock" style="min-height:600px">
+            <div class="hd">
+              <span class="ttl">Cut board <small>killington-neutral</small></span>
+              <span class="tnum" style="font-size:13px">2:55.1</span>
+              <span class="btn" style="border-color:#3a3a48">Story ▾</span>
+              <span class="grow"></span>
+              <span class="pill">opus-5 · ready</span>
+              <span class="btn">Undo</span><span class="btn primary">Render</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 340px;min-height:560px">
+              <div style="padding:10px 14px;border-right:1px solid #26262f;position:relative">
+                <!-- docked mini monitor -->
+                <div style="position:absolute;top:10px;right:14px;width:280px;z-index:3;border:1px solid #3a3a48;border-radius:8px;overflow:hidden;box-shadow:0 12px 30px rgba(0,0,0,.5)">
+                  <div class="frame" style="aspect-ratio:16/9">
+                    <svg viewBox="0 0 400 120" preserveAspectRatio="none" aria-hidden="true"><path d="M0 74 L110 38 L190 64 L290 26 L400 58 L400 120 L0 120 Z" fill="#eef1f7"/><circle cx="205" cy="48" r="4.4" fill="#1d2233"/><path d="M205 52 l-6 13 M205 52 l5 14" stroke="#1d2233" stroke-width="2.2" fill="none" stroke-linecap="round"/></svg>
+                    <span class="tc">0:42.3</span><span class="tag">DOCKED</span>
+                  </div>
+                  <div style="display:flex;gap:8px;align-items:center;background:#17171c;padding:4px 8px;font-size:10px">
+                    <span>❚❚</span><span class="tnum hint">8/21 · CLIP_03</span><span class="grow"></span><span class="hint">⤢ full size</span>
+                  </div>
+                </div>
+                <!-- strip with handles -->
+                <div style="display:flex;gap:2px;height:34px;margin:2px 290px 10px 0">
+                  <div style="flex:12;background:hsl(210 45% 58%);border-radius:3px;opacity:.8"></div>
+                  <div style="flex:4;background:hsl(210 45% 58%);border-radius:3px;opacity:.8"></div>
+                  <div style="flex:8;background:hsl(210 45% 58%);border-radius:3px;opacity:.8"></div>
+                  <div style="flex:6;background:hsl(160 45% 52%);border-radius:3px;opacity:.8"></div>
+                  <div style="flex:12;background:hsl(160 45% 52%);border-radius:3px;opacity:.8"></div>
+                  <div style="flex:6;background:hsl(160 45% 52%);border-radius:3px;opacity:.8"></div>
+                  <div style="flex:6;background:hsl(160 45% 52%);border-radius:3px;opacity:.8"></div>
+                  <div style="flex:3.2;background:hsl(40 55% 58%);border-radius:3px;position:relative;outline:2px solid #e8e8ee">
+                    <span style="position:absolute;left:-3px;top:0;bottom:0;width:6px;background:#fff;border-radius:2px;cursor:ew-resize"></span>
+                    <span style="position:absolute;right:-3px;top:0;bottom:0;width:6px;background:#fff;border-radius:2px;cursor:ew-resize"></span>
+                  </div>
+                  <div style="flex:5.4;background:hsl(280 40% 60%);border-radius:3px;opacity:.8"></div>
+                  <div style="flex:21;background:hsl(0 45% 62%);border-radius:3px;opacity:.8"></div>
+                  <div style="flex:14;background:hsl(330 45% 60%);border-radius:3px;opacity:.8"></div>
+                  <div style="flex:29;background:hsl(55 45% 55%);border-radius:3px;opacity:.8"></div>
+                  <div style="flex:7;background:hsl(185 40% 55%);border-radius:3px;opacity:.8"></div>
+                </div>
+                <div class="hint" style="font-size:9.5px;margin:-4px 290px 8px 0">drag a block to move it · drag an edge to trim — snaps to the end of a sentence</div>
+                <!-- compact rows -->
+                <div style="display:flex;flex-direction:column;gap:3px;font-size:11px">
+                  <div style="display:flex;gap:8px;align-items:center;background:#1a1a21;border:1px solid #26262f;border-radius:6px;padding:4px 8px"><span style="width:52px;height:29px;border-radius:3px" class="frame"></span><b style="width:64px">CLIP_01</b><span class="hint tnum" style="width:110px">188.20 → 199.97</span><span style="color:#e0b050">⚠⚠</span><span class="hint" style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Cold open on the solo confession — "I fell in and I got completely buried…"</span><span class="tnum">11.8s</span></div>
+                  <div style="display:flex;gap:8px;align-items:center;background:#1a1a21;border:1px solid #26262f;border-radius:6px;padding:4px 8px"><span style="width:52px;height:29px;border-radius:3px" class="frame"></span><b style="width:64px">CLIP_01</b><span class="hint tnum" style="width:110px">66.00 → 70.40</span><span style="width:22px"></span><span class="hint" style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Faces caked in snow right after the stream, landing on "Oh God"</span><span class="tnum">4.4s</span></div>
+                  <!-- selected, expanded -->
+                  <div style="background:#1e1e25;border:1px solid #6ea8fe;border-radius:8px;padding:8px">
+                    <div style="display:flex;gap:8px;align-items:center"><span style="width:52px;height:29px;border-radius:3px" class="frame"></span><b style="width:64px">CLIP_03</b><span class="hint tnum" style="width:110px">18.09 → 21.23</span><span class="hint" style="flex:1">A two-second nonsense gag ("pocket pizza!") keeps the silliness running</span><span class="tnum">3.14s</span></div>
+                    <div style="background:#131318;border-radius:5px;padding:4px 7px;font-size:10.5px;color:#9a9aa8;margin-top:6px"><b style="color:#e8e8ee">18.4</b> pocket pizza! &nbsp;<span class="kind">seen</span>close-up, goggles up, laughing group behind</div>
+                    <div style="display:flex;gap:5px;margin-top:6px;font-size:10px">
+                      <span class="hint">in</span><span class="btn" style="padding:1px 6px">−</span><span class="btn" style="padding:1px 6px">+</span>
+                      <span class="hint">out</span><span class="btn" style="padding:1px 6px">−</span><span class="btn" style="padding:1px 6px">+</span>
+                      <span class="btn" style="padding:1px 6px">▶ play</span><span class="btn" style="padding:1px 6px">✎ ask</span><span class="btn" style="padding:1px 6px;color:#9a9aa8">remove</span>
+                      <span class="hint" style="margin-left:auto">polished from 18.40–20.90 · out +0.33s to finish "pizza!"</span>
+                    </div>
+                  </div>
+                  <div style="display:flex;gap:8px;align-items:center;background:#1a1a21;border:1px solid #26262f;border-radius:6px;padding:4px 8px"><span style="width:52px;height:29px;border-radius:3px" class="frame"></span><b style="width:64px">CLIP_06</b><span class="hint tnum" style="width:110px">11.20 → 16.60</span><span style="width:22px"></span><span class="hint" style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">"With speed, boys. With speed." — the turn from talking to sending</span><span class="tnum">5.4s</span></div>
+                  <div style="display:flex;gap:8px;align-items:center;background:#1a1a21;border:1px solid #26262f;border-radius:6px;padding:4px 8px"><span style="width:52px;height:29px;border-radius:3px" class="frame"></span><b style="width:64px">CLIP_04</b><span class="hint tnum" style="width:110px">72.70 → 93.99</span><span style="width:22px"></span><span class="hint" style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">First full run — "more of a straight liner" out to "go fucking back feet!"</span><span class="tnum">21.3s</span></div>
+                  <div style="display:flex;gap:8px;align-items:center;background:#1a1a21;border:1px solid #26262f;border-radius:6px;padding:4px 8px"><span style="width:52px;height:29px;border-radius:3px" class="frame"></span><b style="width:64px">CLIP_10</b><span class="hint tnum" style="width:110px">5.60 → 8.67</span><span style="width:22px"></span><span class="hint" style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">"Jason, how's my angle?" / "Pretty good" — the filming-a-movie runner</span><span class="tnum">3.1s</span></div>
+                  <div class="hint" style="text-align:center;font-size:10px;padding:2px">… 15 more rows · whole cut ≈ 1,200 px</div>
+                </div>
+              </div>
+              <!-- tabbed sidebar -->
+              <div style="padding:10px 12px">
+                <div style="display:flex;gap:4px;margin-bottom:8px">
+                  <span style="font-size:11px;border:1px solid #6ea8fe;color:#e8e8ee;border-radius:999px;padding:2px 12px">Cut</span>
+                  <span style="font-size:11px;border:1px solid #2e2e38;color:#9a9aa8;border-radius:999px;padding:2px 12px">Media</span>
+                  <span style="font-size:11px;border:1px solid #2e2e38;color:#9a9aa8;border-radius:999px;padding:2px 12px">Mix</span>
+                  <span style="font-size:11px;border:1px solid #2e2e38;color:#9a9aa8;border-radius:999px;padding:2px 12px">Out</span>
+                </div>
+                <div style="background:#17171c;border:1px solid #2e2e38;border-radius:8px;padding:10px">
+                  <div style="font-size:10px;letter-spacing:.06em;color:#9a9aa8;margin-bottom:6px">ASK OR FIND</div>
+                  <div style="display:flex;gap:4px;margin-bottom:6px">
+                    <span style="font-size:10px;border:1px solid #6ea8fe;border-radius:999px;padding:1px 8px">whole cut · ~$0.60 · ~3 min</span>
+                    <span style="font-size:10px;border:1px solid #2e2e38;color:#9a9aa8;border-radius:999px;padding:1px 8px">shot 8</span>
+                    <span style="font-size:10px;border:1px solid #2e2e38;color:#9a9aa8;border-radius:999px;padding:1px 8px">find</span>
+                  </div>
+                  <div style="background:#131318;border:1px solid #2e2e38;border-radius:6px;padding:7px;color:#6c6c80;font-size:11px;min-height:44px">tighten the middle · find the backflip · hold the reaction on shot 12…</div>
+                  <div style="display:flex;gap:6px;margin-top:7px"><span class="btn primary" style="font-size:10.5px">Ask</span><span class="hint" style="font-size:10px;align-self:center">last: "hold a beat longer after pizza" · 10.7s · $0.15</span></div>
+                </div>
+                <div style="background:#17171c;border:1px solid #2e2e38;border-radius:8px;padding:10px;margin-top:8px">
+                  <div style="font-size:10px;letter-spacing:.06em;color:#9a9aa8;margin-bottom:6px">LAST PROPOSAL</div>
+                  <div style="font-size:11px" class="hint">shot 8 · CLIP_03 — holds 1.6s of reaction after "pizza" <span style="color:#64d08a">· show it</span></div>
+                </div>
+                <div class="hint" style="font-size:10px;margin-top:10px">Story · target · orientation moved to the <b style="color:#c9c9d6">Story ▾</b> drawer in the header. Keys on <b style="color:#c9c9d6">?</b></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap"><span class="fig">Fig. 2</span>Option A mid-scroll: docked monitor top-right, one-line shot rows with the selection expanded, strip with trim handles, sidebar as four tabs with one unified ask/find input.</div>
+    </div>
+
+    <div class="verdict-grid">
+      <div class="col"><h4>What it buys</h4><ul>
+        <li>Page drops from ~5,900 px to <b>~1,600 px</b>; the monitor is never lost.</li>
+        <li>One AI input with scope chips; sidebar always fits the viewport.</li>
+        <li>Ships incrementally — each of the four moves is its own commit, tests mostly survive.</li>
+      </ul></div>
+      <div class="col"><h4>What it doesn't</h4><ul>
+        <li>Still a vertical list wearing a horizontal strip as an accessory — <b>two representations of the same cut</b>, and editing splits across them.</li>
+        <li>No lanes: music, sfx, markers and beat grids still have nowhere to live.</li>
+        <li>The tabbed sidebar is <b>throwaway against B</b> — A-then-B rebuilds this work.</li>
+      </ul></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ OPTION B -->
+<section id="b">
+  <div class="wrap">
+    <div class="sec-eyebrow"><span class="no">§4</span><span class="eyebrow">Option B — recommended</span></div>
+    <div class="opt-head">
+      <span class="opt-letter">B</span>
+      <h2 style="margin:0">The Cutting Room</h2>
+      <span class="opt-meta"><span class="chip risk-med">RISK MEDIUM</span><span class="chip">EFFORT ~3–4 SESSIONS, STAGEABLE</span><span class="chip">VIEW-LAYER ONLY — API &amp; EDL UNCHANGED</span></span>
+    </div>
+    <div class="prose">
+      <p>A monitor-first console: everything on one screen, no page scroll at all. Two monitors up top — <b>Source</b> (what you're considering: find results, the library, past renders) and <b>Program</b> (the cut) — a single <b>command bar</b> between them, and below, the strip promoted to a real <b>horizontal, multi-lane timeline</b>. The evidence that today inflates every card moves into an <b>inspector</b> that shows it for the selection. This is the classic cutting-room geometry, but with the three AI dividends built in: edges snap to sentences, the command bar prices its scopes, and proposal review happens as a ghost lane on the timeline itself.</p>
+    </div>
+
+    <div class="exhibit">
+      <div class="shell">
+        <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">option B — cutting room · the whole app on one screen, no page scroll</span></div>
+        <div class="scroller">
+          <div class="mock" style="min-height:660px;display:flex;flex-direction:column">
+            <div class="hd">
+              <span class="ttl">Roughcut <small>killington-neutral · 21 shots</small></span>
+              <span class="tnum" style="font-size:13px">2:55.1 <span class="hint" style="font-size:10px">target 2:00–3:00</span></span>
+              <span class="btn" style="border-color:#3a3a48;font-size:10px">Story ▾</span>
+              <span class="grow"></span>
+              <span class="pill">opus-5 · ready · $1.24 of $15</span>
+              <span class="btn" style="font-size:10px">History</span>
+              <span class="btn primary">Render ▾</span>
+            </div>
+            <!-- monitors row -->
+            <div style="display:grid;grid-template-columns:5fr 6fr 300px;gap:1px;background:#26262f;flex:0 0 auto">
+              <!-- source -->
+              <div style="background:#101013;padding:8px 10px">
+                <div style="display:flex;gap:4px;margin-bottom:6px;align-items:center">
+                  <span style="font-size:10px;letter-spacing:.08em;color:#8a8a9e">SOURCE</span>
+                  <span style="font-size:10px;border:1px solid #6ea8fe;border-radius:999px;padding:0 8px">Find</span>
+                  <span style="font-size:10px;border:1px solid #2e2e38;color:#9a9aa8;border-radius:999px;padding:0 8px">Library</span>
+                  <span style="font-size:10px;border:1px solid #2e2e38;color:#9a9aa8;border-radius:999px;padding:0 8px">Versions</span>
+                </div>
+                <div class="frame" style="aspect-ratio:16/9;border-radius:6px">
+                  <svg viewBox="0 0 400 120" preserveAspectRatio="none" aria-hidden="true"><path d="M0 84 L80 52 L170 74 L260 40 L360 70 L400 58 L400 120 L0 120 Z" fill="#eef1f7"/><circle cx="120" cy="66" r="4.6" fill="#1d2233"/><path d="M120 71 l-6 13 M120 71 l5 14 M114 77 l12 -2" stroke="#1d2233" stroke-width="2.2" fill="none" stroke-linecap="round"/></svg>
+                  <span class="tc">CLIP_08 · 4:30.9</span><span class="tag">FULL CLIP · SCRUB ANYWHERE</span>
+                  <span style="position:absolute;left:34%;bottom:0;width:5%;height:4px;background:#6ea8fe;z-index:2"></span>
+                </div>
+                <div style="display:flex;gap:6px;margin-top:6px;align-items:center">
+                  <span class="btn" style="padding:2px 8px">▶</span>
+                  <span class="hint" style="font-size:10px;flex:1">"I hit some rocks at the end there" · match 4:30.9–4:36.3</span>
+                  <span class="btn" style="font-size:10px">⌄ insert after shot 8</span>
+                </div>
+                <div style="margin-top:6px;font-size:10.5px;display:flex;flex-direction:column;gap:2px">
+                  <div style="background:#1a1a21;border:1px solid #6ea8fe;border-radius:5px;padding:3px 7px"><span class="kind">heard</span>all right that's good for me yeah i hit some rocks at the end there <span class="hint tnum" style="float:right">CLIP_08 4:30</span></div>
+                  <div style="background:#1a1a21;border:1px solid #26262f;border-radius:5px;padding:3px 7px"><span class="kind hot">model</span>The rocks run itself — "oh no, I hit one of those earlier" <span class="hint tnum" style="float:right">CLIP_08 2:36</span></div>
+                  <div style="background:#1a1a21;border:1px solid #26262f;border-radius:5px;padding:3px 7px"><span class="kind">seen</span>"Oh, hello! That's a rock!" <span class="hint tnum" style="float:right">CLIP_12 1:03</span></div>
+                </div>
+              </div>
+              <!-- program -->
+              <div style="background:#101013;padding:8px 10px">
+                <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+                  <span style="font-size:10px;letter-spacing:.08em;color:#8a8a9e">PROGRAM</span>
+                  <span class="hint" style="font-size:10px">8/21 · CLIP_03 · pocket pizza</span>
+                </div>
+                <div class="frame" style="aspect-ratio:16/9;border-radius:6px">
+                  <svg viewBox="0 0 400 120" preserveAspectRatio="none" aria-hidden="true"><path d="M0 70 L100 34 L180 60 L280 22 L400 54 L400 120 L0 120 Z" fill="#f2f4f9"/><path d="M0 96 L140 74 L280 92 L400 78 L400 120 L0 120 Z" fill="#dde3ef"/><circle cx="235" cy="44" r="5.4" fill="#1d2233"/><path d="M235 49 l-7 15 M235 49 l6 16 M227 56 l16 -3" stroke="#1d2233" stroke-width="2.6" fill="none" stroke-linecap="round"/></svg>
+                  <span class="tc">0:42.3 / 2:55.1</span>
+                </div>
+                <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
+                  <span class="btn" style="padding:2px 8px">⏮</span><span class="btn primary" style="padding:2px 10px">❚❚</span><span class="btn" style="padding:2px 8px">⏭</span>
+                  <span class="hint tnum" style="font-size:10px">J · K · L shuttle</span>
+                  <span class="grow"></span>
+                  <span class="hint" style="font-size:10px">♪ whatever.mp3 · duck −12 dB</span>
+                </div>
+              </div>
+              <!-- inspector -->
+              <div style="background:#14141a;padding:8px 10px;font-size:10.5px">
+                <div style="font-size:10px;letter-spacing:.08em;color:#8a8a9e;margin-bottom:6px">INSPECTOR — SHOT 8 · CLIP_03</div>
+                <div class="tnum" style="margin-bottom:4px">18.09 → 21.23 · 3.14s</div>
+                <div style="color:#c9c9d6;font-style:italic;border-left:2px solid #6ea8fe;padding-left:7px;margin-bottom:6px">A two-second nonsense gag ("pocket pizza!") keeps the silliness running between the intro and the first real riding. <span class="hint">✎</span></div>
+                <div style="background:#101014;border-radius:5px;padding:4px 7px;color:#9a9aa8;margin-bottom:4px"><b style="color:#e8e8ee">18.4</b> pocket pizza!</div>
+                <div style="background:#101014;border-radius:5px;padding:4px 7px;color:#9a9aa8;margin-bottom:6px"><span class="kind">seen</span>close-up, goggles up, laughing group behind</div>
+                <div class="hint" style="margin-bottom:8px">↳ polished from 18.40–20.90 — out +0.33s to finish "pizza!"</div>
+                <div style="display:flex;gap:5px;flex-wrap:wrap">
+                  <span class="btn" style="font-size:10px">✎ ask about this shot</span>
+                  <span class="btn" style="font-size:10px">▶ solo</span>
+                  <span class="btn" style="font-size:10px;color:#9a9aa8">remove</span>
+                </div>
+                <div style="margin-top:8px;border-top:1px solid #26262f;padding-top:6px" class="hint">placed by <b style="color:#c9c9d6">model</b> (ask ed8134bb) · untouched since accept</div>
+              </div>
+            </div>
+            <!-- command bar -->
+            <div style="display:flex;gap:8px;align-items:center;padding:7px 12px;background:#17171c;border-top:1px solid #26262f;border-bottom:1px solid #26262f">
+              <span style="font-size:10px;border:1px solid #6ea8fe;border-radius:999px;padding:1px 9px;white-space:nowrap">Shot 8 ▾</span>
+              <div style="flex:1;background:#101014;border:1px solid #2e2e38;border-radius:6px;padding:5px 9px;color:#6c6c80">hold a beat longer after "pizza" so the gag lands…</div>
+              <span class="hint" style="font-size:10px;white-space:nowrap">≈ $0.15 · ~15 s</span>
+              <span class="btn primary" style="font-size:10.5px">Ask ↵</span>
+            </div>
+            <!-- timeline band -->
+            <div style="flex:1;background:#0d0d11;padding:8px 12px 10px">
+              <div style="display:flex;gap:10px;align-items:center;margin-bottom:4px">
+                <span style="font-size:10px;letter-spacing:.08em;color:#8a8a9e">TIMELINE</span>
+                <span class="hint" style="font-size:10px">ripple on · snap: sentences ⊙ onsets ⊙</span>
+                <span class="grow"></span>
+                <span class="hint" style="font-size:10px">zoom ────●──</span>
+              </div>
+              <!-- ruler -->
+              <div style="display:flex;justify-content:space-between;font:500 9px var(--mono);color:#6c6c80;border-bottom:1px solid #22222c;padding-bottom:2px;margin-bottom:4px">
+                <span>0:00</span><span>0:30</span><span>1:00</span><span>1:30</span><span>2:00</span><span>2:30</span><span>2:55</span>
+              </div>
+              <div style="position:relative">
+                <!-- playhead -->
+                <div style="position:absolute;left:24%;top:-6px;bottom:0;width:2px;background:#fff;z-index:4"></div>
+                <div style="position:absolute;left:24%;top:-6px;margin-left:-4px;border:5px solid transparent;border-top-color:#fff;z-index:4"></div>
+                <!-- V1 -->
+                <div style="display:flex;gap:2px;height:52px;margin-bottom:3px">
+                  <div style="flex:11.8;position:relative;border-radius:4px;overflow:hidden;background:hsl(210 40% 40%)"><span class="frame" style="position:absolute;inset:0;opacity:.55"></span><span style="position:absolute;left:4px;top:2px;font-size:9px;font-weight:600;z-index:2">CLIP_01</span><span style="position:absolute;left:4px;bottom:2px;font-size:8px;color:#ffd9d9;z-index:2">▍unusable head</span></div>
+                  <div style="flex:4.4;position:relative;border-radius:4px;overflow:hidden;background:hsl(210 40% 44%)"><span class="frame" style="position:absolute;inset:0;opacity:.55"></span></div>
+                  <div style="flex:8.1;position:relative;border-radius:4px;overflow:hidden;background:hsl(210 40% 48%)"><span class="frame" style="position:absolute;inset:0;opacity:.55"></span></div>
+                  <div style="flex:6.4;position:relative;border-radius:4px;overflow:hidden;background:hsl(160 35% 40%)"><span class="frame" style="position:absolute;inset:0;opacity:.55"></span><span style="position:absolute;left:4px;top:2px;font-size:9px;font-weight:600;z-index:2">CLIP_02</span></div>
+                  <div style="flex:11.5;position:relative;border-radius:4px;overflow:hidden;background:hsl(160 35% 44%)"><span class="frame" style="position:absolute;inset:0;opacity:.55"></span></div>
+                  <div style="flex:5.8;background:hsl(160 35% 40%);border-radius:4px"></div>
+                  <div style="flex:6.4;background:hsl(160 35% 44%);border-radius:4px"></div>
+                  <div style="flex:3.1;position:relative;border-radius:4px;background:hsl(40 55% 52%);outline:2px solid #e8e8ee;z-index:3">
+                    <span style="position:absolute;left:-3px;top:0;bottom:0;width:6px;background:#fff;border-radius:2px;cursor:ew-resize"></span>
+                    <span style="position:absolute;right:-3px;top:0;bottom:0;width:6px;background:#fff;border-radius:2px;cursor:ew-resize"></span>
+                    <span style="position:absolute;left:4px;top:2px;font-size:9px;font-weight:700;color:#14100a">C03</span>
+                    <span style="position:absolute;right:-52px;top:-22px;background:#e8e8ee;color:#0b0b0f;font-size:9px;font-weight:600;border-radius:4px;padding:1px 6px;z-index:5">out → "pizza!" +0.45</span>
+                  </div>
+                  <div style="flex:5.4;background:hsl(280 35% 50%);border-radius:4px;position:relative"><span style="position:absolute;left:4px;top:2px;font-size:9px;font-weight:600">C06</span></div>
+                  <div style="flex:21.3;position:relative;border-radius:4px;overflow:hidden;background:hsl(0 40% 50%)"><span class="frame" style="position:absolute;inset:0;opacity:.55"></span><span style="position:absolute;left:4px;top:2px;font-size:9px;font-weight:600;z-index:2">CLIP_04 · backflip + crash</span></div>
+                  <div style="flex:3.1;background:hsl(95 35% 45%);border-radius:4px"></div>
+                  <div style="flex:13.9;background:hsl(330 40% 50%);border-radius:4px;position:relative"><span style="position:absolute;left:4px;top:2px;font-size:9px;font-weight:600">CLIP_11</span></div>
+                  <div style="flex:10.3;background:hsl(330 40% 54%);border-radius:4px"></div>
+                  <div style="flex:11.4;background:hsl(25 45% 50%);border-radius:4px;position:relative"><span style="position:absolute;left:4px;top:2px;font-size:9px;font-weight:600">CLIP_09 · ski patrol</span><span style="position:absolute;left:4px;bottom:2px;font-size:8px;color:#ffe9b8">⚠ opens mid-sentence</span></div>
+                  <div style="flex:31;position:relative;border-radius:4px;overflow:hidden;background:hsl(55 40% 45%)"><span class="frame" style="position:absolute;inset:0;opacity:.55"></span><span style="position:absolute;left:4px;top:2px;font-size:9px;font-weight:600;z-index:2">CLIP_08 · the rocks run</span></div>
+                  <div style="flex:12;background:hsl(55 40% 49%);border-radius:4px"></div>
+                  <div style="flex:6.5;background:hsl(185 35% 45%);border-radius:4px"></div>
+                </div>
+                <!-- A1 music -->
+                <div style="position:relative;height:24px;background:#12151c;border:1px solid #1e2430;border-radius:4px;margin-bottom:3px;overflow:hidden">
+                  <svg viewBox="0 0 1000 24" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%" aria-hidden="true">
+                    <path d="M0 12 Q10 4 20 12 T40 12 T60 12 T80 12 Q90 8 100 12 T120 12 T140 12 L150 12 Q160 18 170 17 T190 17 L210 17 Q220 6 230 12 T250 12 T270 12 Q280 16 290 17 T310 17 T330 17 L350 17 Q360 5 370 12 T390 12 T410 12 T430 12 Q440 17 450 17 T470 17 L490 17 Q500 6 510 12 T530 12 T550 12 T570 12 Q580 16 590 17 T610 17 L640 17 Q650 5 660 12 T680 12 T700 12 Q710 17 720 17 T740 17 L770 17 Q780 6 790 12 T810 12 T830 12 T850 12 Q860 16 870 17 T890 17 L920 17 Q930 6 940 12 T960 12 T980 12 L1000 12" stroke="#4a6a9e" stroke-width="1.6" fill="none"/>
+                  </svg>
+                  <span style="position:absolute;left:6px;top:3px;font-size:8.5px;color:#8fa8cc;z-index:2">♪ whatever.mp3 · −17.2 dB · ducks under speech</span>
+                </div>
+                <!-- markers lane -->
+                <div style="position:relative;height:16px;background:#111015;border:1px solid #221f2a;border-radius:4px">
+                  <span style="position:absolute;left:6px;top:1px;font-size:8.5px;color:#8a8a9e">events</span>
+                  <span title="confirmed backflip" style="position:absolute;left:36%;top:3px;width:9px;height:9px;background:#e0b050;transform:rotate(45deg)"></span>
+                  <span title="confirmed crash" style="position:absolute;left:41%;top:3px;width:9px;height:9px;background:#e0b050;transform:rotate(45deg)"></span>
+                  <span title="unconfirmed air" style="position:absolute;left:55%;top:3px;width:9px;height:9px;border:1.5px solid #9a9aa8;transform:rotate(45deg)"></span>
+                  <span title="confirmed wipeout" style="position:absolute;left:62%;top:3px;width:9px;height:9px;background:#e0b050;transform:rotate(45deg)"></span>
+                  <span title="unusable stretch" style="position:absolute;left:2.5%;top:2px;width:4.5%;height:11px;background:repeating-linear-gradient(-45deg,#5a2e2e,#5a2e2e 3px,transparent 3px,transparent 6px);border-radius:2px"></span>
+                  <span title="unconfirmed" style="position:absolute;left:83%;top:3px;width:9px;height:9px;border:1.5px solid #9a9aa8;transform:rotate(45deg)"></span>
+                </div>
+                <div class="hint" style="font-size:9.5px;margin-top:5px">lanes are the future-feature shelf: <b style="color:#c9c9d6">sfx</b> and <b style="color:#c9c9d6">overlays</b> land as A2/V2, a <b style="color:#c9c9d6">beat grid</b> lands on A1, proposal review renders as a <b style="color:#c9c9d6">ghost lane</b> under V1 — play either, accept per-change</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap"><span class="fig">Fig. 3</span>Option B: source + program monitors and inspector on top, one priced command bar, and the promoted timeline — V1 with poster-filled shot blocks and trim handles snapping to "pizza!", the music bed with its ducks visible, and an events/markers lane.</div>
+    </div>
+
+    <div class="verdict-grid">
+      <div class="col"><h4>What it buys</h4><ul>
+        <li><b>Zero page scroll.</b> Monitor, timeline, inspector and the AI input are all permanent; nothing important can leave the screen.</li>
+        <li><b>Manual editing becomes spatial</b> — trim by dragging edges that snap to sentence ends and onsets, move by dragging, swap by dropping; the ±0.25 s buttons survive in the inspector for fine work.</li>
+        <li><b>One command bar</b> with scope + price replaces five inputs; Find and the library become the Source monitor's tabs, which also gives version review a real screen.</li>
+        <li><b>Lanes make the roadmap cheap:</b> sfx/overlay vocabulary, onset markers, beat-cutting, junk/orientation flags — every planned feature has an obvious home.</li>
+        <li><b>Nothing below the view layer changes.</b> The EDL schema, every endpoint, the job system and all 15 modules of reasoning survive; this is an <code>app.js</code>/<code>index.html</code> rebuild.</li>
+      </ul></div>
+      <div class="col"><h4>Costs and risks</h4><ul>
+        <li>The browser test layer (22 tests) is written against today's DOM and gets rewritten with the layout.</li>
+        <li>A horizontal timeline needs real interaction code: drag, snap, zoom, minimap — the largest single piece of new JS in the project. Stageable (see the call, §7).</li>
+        <li>Small screens need care: the three-up top row wants ≥1200 px width; below that the inspector overlays.</li>
+        <li>Card lovers lose the all-cards-open reading view — worth keeping as a "read the cut" mode if it's missed.</li>
+      </ul></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ OPTION C -->
+<section id="c">
+  <div class="wrap">
+    <div class="sec-eyebrow"><span class="no">§5</span><span class="eyebrow">Option C</span></div>
+    <div class="opt-head">
+      <span class="opt-letter">C</span>
+      <h2 style="margin:0">The Director's Console</h2>
+      <span class="opt-meta"><span class="chip risk-high">RISK HIGH — NOVEL</span><span class="chip">EFFORT ~4+ SESSIONS</span><span class="chip">NEEDS BEAT STRUCTURE IN THE EDL</span></span>
+    </div>
+    <div class="prose">
+      <p>The radical reading of how this project actually works: on Killington, nearly every structural change came from an Ask, and hand edits were deletions and nudges. So make the conversation the primary instrument. The film becomes a <b>storyboard of beats</b> (cold open → the crew → the runs → the rocks → the button) — each beat a row of shots you can drag between beats or ask about as a unit. The right column is <b>the session</b>: a persistent, replayable log of asks, proposals, accepts and renders — the project memory that today evaporates into <code>~/work/app/asks/</code>. Manual trim demotes to a popover on each shot; lanes and mixing defer to a separate view.</p>
+    </div>
+
+    <div class="exhibit">
+      <div class="shell">
+        <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">option C — director's console · the film as beats, the session as the instrument</span></div>
+        <div class="scroller">
+          <div class="mock" style="min-height:640px;display:grid;grid-template-columns:1fr 330px">
+            <div style="border-right:1px solid #26262f;display:flex;flex-direction:column">
+              <div class="hd">
+                <span class="ttl">Roughcut <small>killington-neutral</small></span>
+                <span class="tnum" style="font-size:13px">2:55.1</span>
+                <span class="grow"></span>
+                <span class="pill">opus-5 · ready</span>
+                <span class="btn primary">Render ▾</span>
+              </div>
+              <!-- monitor + filmstrip -->
+              <div style="display:flex;gap:10px;padding:10px 14px;border-bottom:1px solid #26262f">
+                <div class="frame" style="width:300px;aspect-ratio:16/9;border-radius:6px;flex:none">
+                  <svg viewBox="0 0 400 120" preserveAspectRatio="none" aria-hidden="true"><path d="M0 72 L110 36 L200 62 L300 26 L400 56 L400 120 L0 120 Z" fill="#f0f2f8"/><circle cx="150" cy="50" r="5" fill="#1d2233"/><path d="M150 55 l-7 14 M150 55 l6 15" stroke="#1d2233" stroke-width="2.4" fill="none" stroke-linecap="round"/></svg>
+                  <span class="tc">0:42.3 / 2:55.1</span>
+                </div>
+                <div style="flex:1">
+                  <div style="font-size:10px;letter-spacing:.08em;color:#8a8a9e;margin-bottom:5px">FILMSTRIP</div>
+                  <div style="display:flex;gap:3px;flex-wrap:wrap">
+                    <span class="frame" style="width:56px;height:32px;border-radius:3px"></span><span class="frame" style="width:56px;height:32px;border-radius:3px"></span><span class="frame" style="width:56px;height:32px;border-radius:3px"></span><span class="frame" style="width:56px;height:32px;border-radius:3px"></span><span class="frame" style="width:56px;height:32px;border-radius:3px;outline:2px solid #e8e8ee"></span><span class="frame" style="width:56px;height:32px;border-radius:3px"></span><span class="frame" style="width:56px;height:32px;border-radius:3px"></span><span class="frame" style="width:56px;height:32px;border-radius:3px"></span><span class="frame" style="width:56px;height:32px;border-radius:3px"></span><span class="frame" style="width:56px;height:32px;border-radius:3px"></span><span class="frame" style="width:56px;height:32px;border-radius:3px"></span><span class="frame" style="width:56px;height:32px;border-radius:3px"></span>
+                  </div>
+                  <div class="hint" style="font-size:10px;margin-top:5px">every shot, one thumb — click to play, drag to reorder</div>
+                </div>
+              </div>
+              <!-- storyboard -->
+              <div style="flex:1;padding:10px 14px;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;align-content:start">
+                <div style="background:#15151b;border:1px solid #26262f;border-radius:8px;padding:8px">
+                  <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:6px"><b style="font-size:11px">COLD OPEN</b><span class="hint tnum" style="font-size:9px">3 shots · 0:24</span><span class="hint" style="margin-left:auto;font-size:10px">✎</span></div>
+                  <div style="display:flex;flex-direction:column;gap:4px">
+                    <div style="display:flex;gap:6px;align-items:center"><span class="frame" style="width:64px;height:36px;border-radius:3px;flex:none"></span><span class="hint" style="font-size:9.5px">"I fell in and got completely buried" — the teaser</span></div>
+                    <div style="display:flex;gap:6px;align-items:center"><span class="frame" style="width:64px;height:36px;border-radius:3px;flex:none"></span><span class="hint" style="font-size:9.5px">faces caked in snow — "Oh God"</span></div>
+                    <div style="display:flex;gap:6px;align-items:center"><span class="frame" style="width:64px;height:36px;border-radius:3px;flex:none"></span><span class="hint" style="font-size:9.5px">"I've fallen into a stream"</span></div>
+                  </div>
+                </div>
+                <div style="background:#15151b;border:1px solid #26262f;border-radius:8px;padding:8px">
+                  <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:6px"><b style="font-size:11px">THE CREW</b><span class="hint tnum" style="font-size:9px">5 shots · 0:33</span><span class="hint" style="margin-left:auto;font-size:10px">✎</span></div>
+                  <div style="display:flex;flex-direction:column;gap:4px">
+                    <div style="display:flex;gap:6px;align-items:center"><span class="frame" style="width:64px;height:36px;border-radius:3px;flex:none"></span><span class="hint" style="font-size:9.5px">"Devil's Fiddle — let's get it"</span></div>
+                    <div style="display:flex;gap:6px;align-items:center"><span class="frame" style="width:64px;height:36px;border-radius:3px;flex:none"></span><span class="hint" style="font-size:9.5px">the roll call · "look at the cinematography"</span></div>
+                    <div style="display:flex;gap:6px;align-items:center;outline:1px dashed #6ea8fe;border-radius:4px;padding:1px"><span class="frame" style="width:64px;height:36px;border-radius:3px;flex:none"></span><span class="hint" style="font-size:9.5px">"They're rowdy / I'm rowdy" <b style="color:#6ea8fe">← dragging</b></span></div>
+                  </div>
+                </div>
+                <div style="background:#15151b;border:1px solid #26262f;border-radius:8px;padding:8px">
+                  <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:6px"><b style="font-size:11px">THE ROCKS RUNNER</b><span class="hint tnum" style="font-size:9px">7 shots · 1:12</span><span class="hint" style="margin-left:auto;font-size:10px">✎</span></div>
+                  <div style="display:flex;flex-direction:column;gap:4px">
+                    <div style="display:flex;gap:6px;align-items:center"><span class="frame" style="width:64px;height:36px;border-radius:3px;flex:none"></span><span class="hint" style="font-size:9.5px">"what's the one you want to hit, Spencer?"</span></div>
+                    <div style="display:flex;gap:6px;align-items:center"><span class="frame" style="width:64px;height:36px;border-radius:3px;flex:none"></span><span class="hint" style="font-size:9.5px">the rocks run — "oh no, I hit one of those"</span></div>
+                    <div style="display:flex;gap:6px;align-items:center"><span class="frame" style="width:64px;height:36px;border-radius:3px;flex:none"></span><span class="hint" style="font-size:9.5px">"I hit some rocks at the end there"</span></div>
+                  </div>
+                </div>
+                <div style="background:#15151b;border:1px solid #26262f;border-radius:8px;padding:8px">
+                  <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:6px"><b style="font-size:11px">THE BUTTON</b><span class="hint tnum" style="font-size:9px">3 shots · 0:08</span><span class="hint" style="margin-left:auto;font-size:10px">✎</span></div>
+                  <div style="display:flex;flex-direction:column;gap:4px">
+                    <div style="display:flex;gap:6px;align-items:center"><span class="frame" style="width:64px;height:36px;border-radius:3px;flex:none"></span><span class="hint" style="font-size:9.5px">"Oh, hello! That's a rock!"</span></div>
+                    <div style="display:flex;gap:6px;align-items:center"><span class="frame" style="width:64px;height:36px;border-radius:3px;flex:none"></span><span class="hint" style="font-size:9.5px">"Oh my god, it bit!"</span></div>
+                    <div style="display:flex;gap:6px;align-items:center"><span class="frame" style="width:64px;height:36px;border-radius:3px;flex:none"></span><span class="hint" style="font-size:9.5px">"that's just showbiz, baby"</span></div>
+                  </div>
+                </div>
+              </div>
+              <div class="hint" style="font-size:10px;padding:0 14px 10px">a shot's trim/evidence opens as a popover on its card · beats map to the EDL's existing <code style="font-size:9px">act</code> field</div>
+            </div>
+            <!-- session column -->
+            <div style="display:flex;flex-direction:column;background:#111116">
+              <div style="padding:9px 12px;border-bottom:1px solid #26262f;font-size:10px;letter-spacing:.08em;color:#8a8a9e">THE SESSION</div>
+              <div style="padding:8px 10px;border-bottom:1px solid #26262f;background:#15151d">
+                <div style="font-size:9.5px;color:#8a8a9e;margin-bottom:3px">STORY — pinned</div>
+                <div style="font-size:10.5px;color:#c9c9d6;font-style:italic">"My friends and me skiing Killington, being silly, and hitting some rocks with our skis." <span class="hint">✎</span></div>
+              </div>
+              <div style="flex:1;padding:10px;display:flex;flex-direction:column;gap:8px;font-size:10.5px;overflow:hidden">
+                <div style="align-self:flex-end;max-width:88%;background:#24304a;border-radius:8px 8px 2px 8px;padding:6px 9px">added several clips… conquistador is not interesting, remove that; find the rocks hit; add back covered-in-snow</div>
+                <div style="background:#1a1a21;border:1px solid #2e2e38;border-radius:8px;padding:6px 9px">
+                  <b>Proposal · 22 shots · 2:59</b> <span style="color:#64d08a">· accepted</span><br>
+                  <span class="hint">rocks runner built as the spine; kept 3 of your 6 adds, dropped 3 silent ones (unaudited) — "say the word and I'll put any back"</span>
+                </div>
+                <div style="background:#1a1a21;border:1px solid #2e2e38;border-radius:8px;padding:6px 9px"><b>Render · 4K delivery</b> <span class="hint">· cut_d25d19d5 · 2:59 · ▶ review</span></div>
+                <div style="align-self:flex-end;max-width:88%;background:#24304a;border-radius:8px 8px 2px 8px;padding:6px 9px"><span class="kind" style="border-color:#3a4a68;color:#8fa8cc">shot 8</span>hold a beat longer after "pizza" so the gag lands</div>
+                <div style="background:#1a1a21;border:1px solid #2e2e38;border-radius:8px;padding:6px 9px">
+                  <b>Proposal · shot 8</b> <span class="hint">· discarded</span><br>
+                  <span class="hint">out 21.23 → 22.40 — 1.6s of held reaction after the line · $0.15 · 10.7s</span>
+                </div>
+                <div style="align-self:flex-end;max-width:88%;background:#24304a;border-radius:8px 8px 2px 8px;padding:6px 9px"><span class="kind" style="border-color:#3a4a68;color:#8fa8cc">find</span>me falling into the river</div>
+                <div style="background:#1a1a21;border:1px solid #2e2e38;border-radius:8px;padding:6px 9px"><b>3 matches</b> <span class="hint">· the fall itself CLIP_01 90–108 · the confession · the aftermath · $0.19</span></div>
+              </div>
+              <div style="padding:9px 10px;border-top:1px solid #26262f;display:flex;gap:6px;align-items:center">
+                <span style="font-size:9.5px;border:1px solid #6ea8fe;border-radius:999px;padding:1px 8px;white-space:nowrap">whole cut ▾</span>
+                <div style="flex:1;background:#101014;border:1px solid #2e2e38;border-radius:6px;padding:5px 8px;color:#6c6c80;font-size:10.5px">direct the edit…</div>
+                <span class="btn primary" style="font-size:10px">↵</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap"><span class="fig">Fig. 4</span>Option C: monitor + filmstrip up top, the cut as four draggable beats, and the session — story pinned, every ask/proposal/render as a permanent, replayable decision log.</div>
+    </div>
+
+    <div class="verdict-grid">
+      <div class="col"><h4>What it buys</h4><ul>
+        <li><b>Story structure becomes visible and manipulable</b> — beats are how Karl already talks about the film ("the conquistador bit", "the rocks"), and beat-level asks ("tighten the middle act") map to how the model actually revises.</li>
+        <li><b>The session log is genuinely missing today:</b> what was asked, what changed, what it cost, what was declined — currently unrecoverable without reading JSON. Provenance for free.</li>
+        <li>The EDL already carries an optional <code>act</code> field per segment — the data hook exists.</li>
+      </ul></div>
+      <div class="col"><h4>Costs and risks</h4><ul>
+        <li><b>Manual editing gets slower,</b> and the brief explicitly says basic tools still matter: trim/move/swap through popovers is more clicks than either A or B.</li>
+        <li>Beats must be inferred or authored before the view works at all; a cut with no acts renders as one long beat.</li>
+        <li>Tracks/mix live in a second view — the multi-lane future gets harder, not easier.</li>
+        <li>Most novel = least proven; if the metaphor misses, the rebuild cost is B's without B's certainty.</li>
+      </ul></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ COMPARE -->
+<section id="compare">
+  <div class="wrap">
+    <div class="sec-eyebrow"><span class="no">§6</span><span class="eyebrow">Side by side</span></div>
+    <h2>The three, against the brief</h2>
+    <div class="cmp-wrap">
+      <table class="cmp">
+        <thead><tr><th></th><th>Today</th><th>A · Refit</th><th>B · Cutting Room</th><th>C · Director's Console</th></tr></thead>
+        <tbody>
+          <tr><th>Page scroll (21 shots)</th><td class="worst">5,928 px / 8.2 screens</td><td>~1,600 px</td><td class="best">none — one screen</td><td class="best">none — one screen</td></tr>
+          <tr><th>Monitor persistence</th><td class="worst">lost at ~600 px</td><td>docked PiP</td><td class="best">permanent, + source monitor</td><td>permanent, smaller</td></tr>
+          <tr><th>Trim / extend</th><td class="worst">±0.25 s buttons</td><td>strip edge-drag + buttons</td><td class="best">edge-drag with sentence/onset snap</td><td>popover buttons</td></tr>
+          <tr><th>Move / swap</th><td class="worst">4,800 px card drags</td><td>strip drag</td><td class="best">timeline drag &amp; drop-swap</td><td>storyboard drag (beat-aware)</td></tr>
+          <tr><th>Tracks / lanes</th><td class="worst">none — music is a form</td><td>none (Mix tab)</td><td class="best">V1 + A1 + markers now; V2/A2/beat grid later</td><td>deferred to a Mix view</td></tr>
+          <tr><th>AI inputs</th><td class="worst">5 scattered boxes</td><td>1 input, scope chips</td><td class="best">1 command bar, scoped &amp; priced</td><td class="best">1 conversation, scoped, with history</td></tr>
+          <tr><th>Proposal review</th><td>full-column diff panel</td><td>same panel</td><td class="best">ghost lane on the timeline — play either</td><td>diff cards in the log</td></tr>
+          <tr><th>Session history / provenance</th><td class="worst">evaporates</td><td>last-ask line</td><td>History drawer (stolen from C)</td><td class="best">first-class log</td></tr>
+          <tr><th>Evidence per shot</th><td>always open (241 px × 21)</td><td>expand-on-select</td><td class="best">inspector</td><td>popover</td></tr>
+          <tr><th>Future features fit</th><td class="worst">nowhere to land</td><td>tabs absorb some</td><td class="best">lanes + source tabs absorb all listed</td><td>beats absorb story tools; mix does not</td></tr>
+          <tr><th>Carries over</th><td>—</td><td class="best">~90% of app.js</td><td>all endpoints/EDL/jobs; ~40% of app.js</td><td>all endpoints; needs act-inference too</td></tr>
+          <tr><th>Effort / risk</th><td>—</td><td class="best">~1 session · low</td><td>~3–4 sessions · medium, stageable</td><td>~4+ sessions · high, novel</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p><b>Future features, mapped.</b> The roadmap already on file: sfx + overlay vocabulary and onset snapping (EFFECTS.md), markers in the board, "hitmarker when my skis hit the rocks" asks, cutting <em>to</em> music (P2.6), junk/orientation proposals, the events audit, a project picker, delivery review. In B every one lands on an existing surface — lanes, the source monitor's tabs, or the command bar. In A most land in tabs but the lane-shaped ones (beat grid, sfx, markers) have no geometry to land on. In C the story-shaped ones land beautifully and the mix-shaped ones fight the metaphor.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ RECOMMENDATION -->
+<section id="rec">
+  <div class="wrap">
+    <div class="sec-eyebrow"><span class="no">§7</span><span class="eyebrow">The call</span></div>
+    <div class="rec">
+      <h3>Pick B, build it in three stages, steal one organ each from A and C.</h3>
+      <p style="max-width:72ch">B is the only option where every requirement in the brief — basic tools that feel good, AI as the main instrument, inputs organized, tracks someday, no scrolling — lands on a surface that already wants it. It changes only the view layer: the EDL, all sixteen endpoints, the job system and the test-project fixtures survive untouched. And it doesn't have to ship at once:</p>
+      <ul class="tight" style="max-width:72ch">
+        <li><b>B1 — the geometry.</b> Dock the monitor, promote the strip to the full-width timeline with drag + snap-trim, demote cards to the inspector. This alone deletes ~4,700 px of scroll and is independently shippable.</li>
+        <li><b>B2 — the inputs.</b> The command bar with scope chips and prices (A's one good idea, absorbed); Find, library and versions become the Source monitor's tabs.</li>
+        <li><b>B3 — the lanes + the log.</b> Music lane with visible ducks, events/markers lane, and a History drawer — C's session log as a panel rather than a paradigm. Proposal-as-ghost-lane rides in here.</li>
+      </ul>
+      <p style="max-width:72ch;margin-bottom:0">What I'd avoid: shipping A first (its tabbed sidebar is rebuilt two weeks later), and betting the board on C (its best ideas — beats and the session log — retrofit cleanly into B once B exists; the reverse is not true). Whichever letter you pick, the keep-list in §1 is non-negotiable: argued shots, proposals-not-writes, honest prices, posters-not-streams.</p>
+    </div>
+    <div class="prose">
+      <p style="color:var(--dim);font-size:15px">Per the brief, nothing was changed: the repo is untouched, no branches, no commits. Every number in §1 was measured on the live board this session; the renders are design targets, not screenshots.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Roughcut UI review · session 7 · 2026-08-25</span>
+    <span>Measurements: killington-neutral, 21 shots, 1280×720 viewport</span>
+  </div>
+</footer>
+

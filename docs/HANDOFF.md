@@ -1,5 +1,10 @@
 # Handoff — read this first
 
+**Active workstream (2026-09-07): the intake — tracked in [docs/INTAKE.md](INTAKE.md).** Read
+that file first; it carries the decisions, the milestones with their checkboxes, the lanes in
+flight and where to pick up. The design it implements is in `docs/design/`. Everything below
+this line is the history that led there, and the editing-room roadmap.
+
 Last updated: 2026-08-25 (session 7 open). **Karl kept editing on his own on 2026-08-24**, past
 everything below: he hand-added six shots to the accepted 17-shot cut, then asked for a revision
 (note: drop the conquistador bit, find the rocks hit, restore covered-in-snow — ask `a038b42c`,
@@ -501,24 +506,8 @@ Ordered by what changes most, not by effort:
    building" but "is *anything* in it worth building that the app does not already do" — and the
    answer may be a much smaller list than thirteen tasks. Worth an explicit decision rather than
    indefinite hold.
-8. **Telemetry as a witness — optional, weighted, never trusted alone** (Karl, 2026-09-07). GoPro
-   clips can carry a GPMF stream (accelerometer, gyro, GPS/speed); `assemble.py` drops it with
-   `-dn` and nothing has ever read it. Big accelerative changes may mean jumps or falls, speed
-   changes may mark interesting moments — *may*. The rules Karl set, in order:
-   - **It is not always present.** Phones, other cameras and re-encoded files carry nothing. The
-     pipeline must work identically without it; presence is a per-clip fact, shown, never assumed.
-   - **When it is present, the AI should use it — as one signal weighted with the visual and
-     audio passes** (the `events.py` rank already combines kind × notable × corroboration ×
-     confirmation; telemetry is a corroboration term, not a new list).
-   - **Be very careful not to over-index. It could be noisy or bad.** So: no weight until
-     measured — a study (R11) scores extracted peaks against the nine adjudicated Killington
-     events *and* against random windows, and the weight is fitted to that, not argued. Until
-     then it corroborates and never promotes: a telemetry peak with no heard/seen witness ranks
-     no higher than the seen-only claims R10 found to be wrong most of the time. Same lesson as
-     the contact sheets: a claim, not evidence, until something independent agrees.
-   - One place it may be *decisive*: the gyro says whether the **camera** is inverted, which is
-     the known false-positive source for every claimed flip in R10 — worth testing first because
-     it is a check on another signal rather than a detector of its own.
+8. **Telemetry** — moved to [docs/INTAKE.md](INTAKE.md) M6, with Karl's rules (optional,
+   weighted with the other passes, never over-indexed; numbers only until R11 measures it).
 
 Smaller, whenever: a project picker (one bin per launch today); scrub-to-trim on the monitor
 instead of ±0.25s buttons; `complete_many` has no caller.

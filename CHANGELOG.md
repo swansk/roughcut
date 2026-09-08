@@ -9,7 +9,28 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Added
+- **The floor's foundations: picks, the bin in the EDL, and every floor endpoint.** The intake
+  design (docs/design/cutting-room-floor.html, tracked in docs/INTAKE.md) needs three things
+  before any screen exists. `roughcut/picks.py` derives **picks** — windows with witnesses —
+  from the R8 speech candidates, the ranked events file (each event's confirmation becoming a
+  witness *state*: claimed / audited / contradicted, a contradiction kept as `conflict` rather
+  than resolved into the reason), optional telemetry peaks (numbers only, never able to promote
+  a pick alone) and the editor's themes; overlapping witnesses merge into one moment with a
+  corroboration bonus; a pick under 8 s plays whole, a longer one previews its anchor ±3 s.
+  `roughcut/selects.py` puts the human's selection in the EDL as ranges on clip time —
+  `selects` (keeps, merging overlaps, hero, note, `used_in` recomputed from the timeline) and
+  `floor` (rejects, laters, the pass position) — so a finer index never orphans a verdict
+  (`picks.attach_verdicts` re-attaches by overlap, keeps winning over rejects). The server gains
+  `GET /api/picks`, `POST /api/floor/verdict`, `POST /api/floor/note`, `PUT /api/floor/position`,
+  `GET/PUT /api/selects`, `POST /api/dictate` (501 until M4) and the `/floor` route with a
+  placeholder page. Nothing here spends a model call or touches `segments`.
+
 ### Documentation
+- **The intake workstream has a tracker.** `docs/INTAKE.md` carries Karl's four decisions, the
+  milestones with checkboxes, the lanes in flight and where to pick up after an interruption;
+  HANDOFF points at it and roadmap item 8 (telemetry) moved into it. Both design documents are
+  now in `docs/design/`.
 - **Roadmap item 8: telemetry (accel/gyro/GPS) as an optional, weighted, never-trusted-alone
   witness.** Karl's backlog note, recorded with his three rules: it is not always present, so the
   pipeline must run identically without it; when present the AI weights it alongside the visual

@@ -1,0 +1,774 @@
+<title>The Cutting Room Floor</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Source+Serif+4:opsz,ital,wght@8..60,0,400;8..60,0,600;8..60,1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --bg: #0f0f14; --surface: #16161d; --surface2: #1d1d26; --line: #2a2a36; --line-soft: #22222c;
+    --text: #eaeaf1; --dim: #9a9aac; --faint: #6c6c80;
+    --accent: #6ea8fe; --accent-ink: #0b0b0f; --amber: #e0b050; --good: #5ecf8b; --bad: #e06a6a;
+    --prose-serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --display: "Bricolage Grotesque", "Arial Narrow", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", "Consolas", monospace;
+    --ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f1f1f5; --surface: #fafafc; --surface2: #ffffff; --line: #d8d8e2; --line-soft: #e4e4ec;
+      --text: #1b1b26; --dim: #585870; --faint: #8a8a9e;
+      --accent: #2e63c4; --accent-ink: #ffffff; --amber: #9a6a0c; --good: #1d7a4b; --bad: #b23a3a;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f1f1f5; --surface: #fafafc; --surface2: #ffffff; --line: #d8d8e2; --line-soft: #e4e4ec;
+    --text: #1b1b26; --dim: #585870; --faint: #8a8a9e;
+    --accent: #2e63c4; --accent-ink: #ffffff; --amber: #9a6a0c; --good: #1d7a4b; --bad: #b23a3a;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 17px/1.65 var(--prose-serif); }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 0 28px; }
+  .prose { max-width: 72ch; }
+  nav { position: sticky; top: 0; z-index: 40; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line-soft); }
+  nav .wrap { display: flex; gap: 18px; align-items: baseline; padding-top: 12px; padding-bottom: 12px; flex-wrap: wrap; }
+  nav .brand { font: 700 15px var(--display); }
+  nav a.jump { font: 500 12px var(--mono); color: var(--dim); letter-spacing: .04em; }
+  nav a.jump:hover { color: var(--text); text-decoration: none; }
+  header.hero { padding: 72px 0 40px; }
+  .eyebrow { font: 600 12px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
+  h1 { font: 800 clamp(38px, 5.4vw, 62px)/1.04 var(--display); letter-spacing: -0.015em; margin: 14px 0 18px; text-wrap: balance; }
+  .standfirst { font-size: 20px; line-height: 1.6; color: var(--dim); max-width: 62ch; }
+  .standfirst b { color: var(--text); font-weight: 600; }
+  section { padding: 44px 0 8px; }
+  h2 { font: 700 clamp(24px, 3vw, 32px)/1.15 var(--display); letter-spacing: -0.01em; margin: 8px 0 16px; text-wrap: balance; }
+  h3 { font: 700 19px/1.3 var(--display); margin: 28px 0 8px; }
+  p { margin: 0 0 16px; }
+  .sec-eyebrow { display: flex; align-items: baseline; gap: 12px; border-top: 1px solid var(--line); padding-top: 18px; }
+  .sec-eyebrow .no { font: 600 12px var(--mono); color: var(--faint); }
+  ul.tight { margin: 0 0 16px; padding-left: 20px; } ul.tight li { margin-bottom: 8px; } ul.tight li::marker { color: var(--faint); }
+  code { font: 500 0.85em var(--mono); color: var(--text); background: var(--surface2); border: 1px solid var(--line-soft); border-radius: 5px; padding: 1px 5px; white-space: nowrap; }
+  kbd { font: 600 11px var(--mono); background: var(--surface2); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; color: var(--text); }
+  .decided { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; margin: 22px 0; }
+  .decided .d { background: color-mix(in srgb, var(--good) 8%, var(--surface)); border: 1px solid color-mix(in srgb, var(--good) 40%, var(--line)); border-radius: 10px; padding: 12px 14px; font-size: 14.5px; color: var(--dim); }
+  .decided .d b { display: block; color: var(--text); font: 700 14px var(--display); margin-bottom: 4px; }
+  .decided .d .q { font: 600 10.5px var(--mono); letter-spacing: .08em; color: var(--good); text-transform: uppercase; display: block; margin-bottom: 4px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 22px 0; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 22px 0; }
+  @media (max-width: 960px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; font-size: 15px; }
+  .card h4 { margin: 0 0 8px; font: 700 12px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+  .card h4.good { color: var(--good); } .card h4.amber { color: var(--amber); } .card h4.accent { color: var(--accent); }
+  .card ul { margin: 0; padding-left: 18px; color: var(--dim); } .card li { margin-bottom: 6px; } .card li b, .card p b { color: var(--text); font-weight: 600; }
+  .card p { color: var(--dim); margin: 0 0 8px; }
+  .ideas { counter-reset: idea; list-style: none; margin: 20px 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 960px) { .ideas { grid-template-columns: 1fr; } }
+  .ideas li { counter-increment: idea; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px 14px 52px; position: relative; font-size: 15px; color: var(--dim); }
+  .ideas li::before { content: counter(idea, decimal-leading-zero); position: absolute; left: 16px; top: 15px; font: 700 15px var(--display); color: var(--accent); }
+  .ideas li b { color: var(--text); font-weight: 600; display: block; margin-bottom: 3px; font-size: 15.5px; }
+  .ideas li .tag { display: inline-block; margin-top: 7px; font: 600 10.5px var(--mono); letter-spacing: .06em; border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; color: var(--faint); }
+  .ideas li .tag.free { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, var(--line)); }
+  .ideas li .tag.priced { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, var(--line)); }
+  .ideas li .tag.rq { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+  .exhibit { margin: 30px 0 10px; }
+  .exhibit .cap { display: flex; gap: 10px; align-items: baseline; margin: 10px 2px 0; font: 400 14px var(--prose-serif); color: var(--dim); }
+  .exhibit .cap .fig { font: 600 11px var(--mono); letter-spacing: .1em; color: var(--accent); text-transform: uppercase; white-space: nowrap; }
+  .shell { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #0c0c10; box-shadow: 0 20px 60px -30px rgba(0,0,0,.55); }
+  .shell .bar { display: flex; align-items: center; gap: 8px; padding: 9px 14px; background: #14141a; border-bottom: 1px solid #24242e; }
+  .shell .dot { width: 10px; height: 10px; border-radius: 50%; background: #2e2e3a; }
+  .shell .url { font: 500 11px var(--mono); color: #7d7d92; background: #0e0e13; border: 1px solid #24242e; border-radius: 6px; padding: 3px 10px; margin-left: 6px; }
+  .scroller { overflow-x: auto; }
+  .mock { min-width: 1180px; background: #101013; color: #e8e8ee; font: 12px/1.4 var(--ui); position: relative; }
+  .mock * { box-sizing: border-box; }
+  .mock .hd { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: #17171c; border-bottom: 1px solid #2e2e38; }
+  .mock .hd .ttl { font-weight: 600; font-size: 13px; } .mock .hd .ttl small { color: #9a9aa8; font-weight: 400; }
+  .mock .grow { flex: 1; }
+  .mock .pill { border: 1px solid #2c4c39; color: #64d08a; border-radius: 999px; padding: 2px 9px; font-size: 10.5px; white-space: nowrap; }
+  .mock .btn { background: #1e1e25; border: 1px solid #2e2e38; color: #e8e8ee; border-radius: 6px; padding: 4px 10px; font-size: 11px; white-space: nowrap; }
+  .mock .btn.primary { background: #6ea8fe; color: #0b0b0f; border-color: transparent; font-weight: 600; }
+  .mock .hint { color: #a0a0b0; } .mock .tnum { font-variant-numeric: tabular-nums; }
+  .mock .kind { font-size: 8.5px; text-transform: uppercase; letter-spacing: .05em; color: #a0a0b0; border: 1px solid #2e2e38; border-radius: 3px; padding: 0 3px; margin-right: 4px; }
+  .mock .kind.hot { color: #e0b050; border-color: #4c4026; } .mock .kind.tele { color: #8fd0ff; border-color: #2a4c60; } .mock .kind.theme { color: #d0a8ff; border-color: #4a3560; }
+  .mock .lbl { font-size: 10px; letter-spacing: .08em; color: #8f8fa3; }
+  .mock .step { font-size: 10.5px; color: #a0a0b0; border: 1px solid #2e2e38; border-radius: 999px; padding: 2px 10px; }
+  .mock .step.done { color: #64d08a; border-color: #2c4c39; } .mock .step.now { color: #0b0b0f; background: #6ea8fe; border-color: transparent; font-weight: 600; }
+  .mock .bar1 { height: 6px; background: #0d0d11; border: 1px solid #2e2e38; border-radius: 4px; overflow: hidden; } .mock .bar1 i { display: block; height: 100%; background: #6ea8fe; }
+  .mock .key { display: inline-block; font: 600 9.5px var(--mono); color: #e8e8ee; background: #1e1e25; border: 1px solid #3a3a48; border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; min-width: 16px; text-align: center; }
+  .mock .stg { display: inline-block; font: 600 9px var(--mono); border-radius: 3px; padding: 0 5px; margin-right: 3px; border: 1px solid #2e2e38; color: #6c6c80; }
+  .mock .stg.ok { color: #b8f0cc; border-color: #2c4c39; } .mock .stg.run { color: #6ea8fe; border-color: #2f4a70; } .mock .stg.bad { color: #f0b8b8; border-color: #6a3a3a; }
+  .frame { position: relative; background: linear-gradient(180deg, #23283a 0%, #2c3350 46%, #dfe4ee 46.5%, #b9c2d6 100%); overflow: hidden; }
+  .frame::after { content: ""; position: absolute; inset: 0; background: radial-gradient(120% 90% at 50% 30%, transparent 55%, rgba(8,8,14,.55) 100%); }
+  .frame svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .frame .tc { position: absolute; left: 8px; bottom: 6px; z-index: 2; font: 600 10px var(--mono); color: #fff; background: rgba(8,8,12,.55); padding: 1px 6px; border-radius: 4px; }
+  .frame .tag { position: absolute; right: 8px; top: 6px; z-index: 2; font: 600 9px var(--mono); color: #cfd6e4; background: rgba(8,8,12,.5); padding: 1px 6px; border-radius: 4px; letter-spacing: .06em; }
+  .frame.dim { filter: saturate(.3) brightness(.55); }
+  .mock .seal { display: flex; flex-direction: column; gap: 1px; font: 600 9.5px var(--mono); letter-spacing: .03em; color: #cfd6e4; background: #14141a; border: 1px solid #2a2a36; border-left-width: 3px; border-radius: 6px; padding: 5px 8px; }
+  .mock .seal .s { font-size: 8.5px; letter-spacing: .1em; color: #8f8fa3; }
+  .mock .seal.aud { border-left-color: #64d08a; } .mock .seal.aud .s { color: #b8f0cc; }
+  .mock .seal.claim { border-left-color: #8f8fa3; }
+  .mock .seal.contra { border-left-color: #e06a6a; } .mock .seal.contra .s { color: #ffb8b8; }
+  .mock .seal.tele { border-left-color: #8fd0ff; } .mock .seal.tele .s { color: #8fd0ff; }
+  .mock .seal.heard { border-left-color: #e8e8ee; }
+  .mock .stamp { position: absolute; z-index: 6; font: 800 34px var(--display); letter-spacing: .06em; color: #64d08a; border: 3px solid #64d08a; border-radius: 8px; padding: 2px 14px; transform: rotate(-8deg); opacity: .9; background: rgba(8,12,10,.35); }
+  .mock .tape { position: relative; height: 44px; background: #0b0b0f; border-top: 1px solid #26262f; }
+  .mock .zoom { position: relative; height: 74px; background: #0d0d12; border-top: 1px solid #26262f; border-bottom: 1px solid #26262f; overflow: hidden; }
+  .mock .zoom .w { position: absolute; top: 30px; font-size: 11px; color: #8f8fa3; white-space: nowrap; transform: translateX(-50%); }
+  .mock .zoom .w.in { color: #e8e8ee; }
+  .mock .zoom .sb { position: absolute; top: 33px; height: 8px; border-radius: 2px; background: #2e2e3a; }
+  .mock .zoom .snap { position: absolute; top: 48px; width: 2px; height: 12px; background: #6ea8fe; }
+  .eval { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 18px 0; }
+  @media (max-width: 960px) { .eval { grid-template-columns: 1fr; } }
+  .eval .f { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font-size: 14.5px; color: var(--dim); }
+  .eval .f b { color: var(--text); display: block; margin-bottom: 3px; }
+  .eval .f .fix { color: var(--good); font-size: 13.5px; margin-top: 5px; } .eval .f .fix::before { content: "→ "; color: var(--faint); }
+  .keymap { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 8px 22px; margin: 16px 0; font-size: 14.5px; color: var(--dim); }
+  .keymap div { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid var(--line-soft); }
+  .keymap kbd { min-width: 26px; text-align: center; } .keymap b { color: var(--text); font-weight: 600; }
+  .flow { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin: 24px 0; }
+  @media (max-width: 960px) { .flow { grid-template-columns: repeat(2, 1fr); } }
+  .flow .st { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 12px 10px; }
+  .flow .st.hot { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+  .flow .st .n { font: 800 22px/1 var(--display); color: var(--accent); }
+  .flow .st .t { font: 700 14px var(--display); margin: 6px 0 4px; }
+  .flow .st .d { font-size: 12.5px; color: var(--dim); line-height: 1.45; }
+  .flow .st .c { margin-top: 8px; font: 600 10.5px var(--mono); letter-spacing: .05em; }
+  .flow .st .c.free { color: var(--good); } .flow .st .c.priced { color: var(--amber); } .flow .st .c.human { color: var(--accent); }
+  .cmp-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; margin: 24px 0; }
+  table.cmp { border-collapse: collapse; width: 100%; min-width: 760px; font-size: 14px; background: var(--surface); }
+  .cmp th, .cmp td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  .cmp thead th { font: 600 11.5px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--dim); background: var(--surface2); }
+  .cmp tbody th { font: 600 13.5px var(--ui); color: var(--text); white-space: nowrap; }
+  .cmp td { color: var(--dim); } .cmp td b { color: var(--text); }
+  .cmp td.ok { color: var(--good); } .cmp td.mod { color: var(--amber); } .cmp td.no { color: var(--bad); }
+  .cmp tr:last-child th, .cmp tr:last-child td { border-bottom: 0; }
+  .rec { background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, var(--surface)), var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); border-radius: 14px; padding: 26px 30px; margin: 30px 0; }
+  .rec h3 { margin-top: 0; }
+  footer { padding: 40px 0 60px; color: var(--faint); font-size: 13.5px; border-top: 1px solid var(--line-soft); margin-top: 60px; }
+  footer .wrap { display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+</style>
+
+<nav>
+  <div class="wrap">
+    <span class="brand">The Cutting Room Floor</span>
+    <a class="jump" href="#decided">DECIDED</a>
+    <a class="jump" href="#flow">THE FLOW</a>
+    <a class="jump" href="#open">OPEN</a>
+    <a class="jump" href="#index">INDEX</a>
+    <a class="jump" href="#floor">THE PASS</a>
+    <a class="jump" href="#bin">THE BIN</a>
+    <a class="jump" href="#ideas">AI IDEAS</a>
+    <a class="jump" href="#review">REVIEW RECORD</a>
+    <a class="jump" href="#build">BUILD</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">Roughcut · intake design · final proposal · companion to <a href="https://claude.ai/code/artifact/4a250a90-e6b0-4d55-b886-453603882400">Reframing the Cut Board</a> · no code changed</div>
+    <h1>Before the first cut, the floor.</h1>
+    <p class="standfirst">Option B gives the editing a room. This is the door: <b>open a folder → index it, unattended and resumable → walk the cutting room floor → fill the bin → assemble.</b> The intake is where an AI-first editor earns its name — not by cutting for you, but by <b>watching everything so you don't have to</b>, showing what it found as a film rather than a list, and letting you keep or reject at the speed of a photo cull. This version incorporates an independent review by a video-editing UI designer (§9) and four decisions from Karl (§0).</p>
+  </div>
+</header>
+
+<!-- ============================================================ DECIDED -->
+<section id="decided">
+  <div class="wrap">
+    <div class="sec-eyebrow"><span class="no">§0</span><span class="eyebrow">Decided</span></div>
+    <h2>Four answers that shaped everything below</h2>
+    <div class="decided">
+      <div class="d"><span class="q">Keep = ?</span><b>What you actually watched</b>The kept range is the extent you saw — the preview, or more if you held to keep watching — snapped outward to sentence ends. Extending past that is a deliberate key. Windows stay honest; the bin's length means something.</div>
+      <div class="d"><span class="q">Keys</span><b>P / X / U, JKL intact</b>Pick, reject, unflag-as-later; <kbd>1</kbd> for hero. Shuttle is J-K-L exactly as in every NLE — K is pause, never a verdict. Auto-advance is a Caps Lock toggle, Lightroom's pattern.</div>
+      <div class="d"><span class="q">Index cadence</span><b>Unattended, resumable, priority-ordered, released per clip</b>Not "edit after four minutes." The index runs on its own with progress tracked and survives a crash. Clips are indexed in a priority order and handed to the floor <em>fully</em> indexed, one by one, while the rest continues.</div>
+      <div class="d"><span class="q">Footage cadence</span><b>Once at home — but clips may be added at any time</b>One project for the trip; a friend's clip or a forgotten file can arrive later, several at once. Appending is a first-class path, robust by construction.</div>
+    </div>
+    <div class="prose"><p>Two consequences fall out immediately. The <b>trailer is gone</b> — it existed to give you something to watch at minute four, which is no longer a goal, and "play the bin" does its sanity-check job better and for free. And the <b>index is a journal, not a job</b>: per-clip stages on disk, a priority queue, and a resume path, so both "it crashed" and "I added three clips" are the same operation — index what isn't done.</p></div>
+  </div>
+</section>
+
+<!-- ============================================================ FLOW -->
+<section id="flow">
+  <div class="wrap">
+    <div class="sec-eyebrow"><span class="no">§1</span><span class="eyebrow">The flow</span></div>
+    <h2>Six stages, three prices</h2>
+    <div class="flow">
+      <div class="st"><div class="n">1</div><div class="t">Open</div><div class="d">Pick a folder — or add clips to one. See what's in it before spending: clips, sessions, junk flags, totals, one granularity slider with its price.</div><div class="c free">FREE · SECONDS</div></div>
+      <div class="st"><div class="n">2</div><div class="t">Listen</div><div class="d">Probe, telemetry and ASR over every clip, in capture order. Fast and free; produces the priority order for the rest.</div><div class="c free">FREE · ~15 MIN / 3 h</div></div>
+      <div class="st"><div class="n">3</div><div class="t">Themes</div><div class="d">The transcripts propose what the film is about. Confirm, edit, dictate, or skip. Themes rank picks; they never change what the sheets see.</div><div class="c human">HUMAN · 1 MIN</div></div>
+      <div class="st"><div class="n">4</div><div class="t">Index</div><div class="d">Per clip, in priority order: proxy → look → close look → picks → <b>released to the floor</b>. Unattended, journaled, resumable.</div><div class="c priced">PRICED · $2–$70 · UNATTENDED</div></div>
+      <div class="st hot"><div class="n">5</div><div class="t">The Pass</div><div class="d">Picks from released clips, played large, judged on P / X / U, trimmed by what you watched, annotated by voice. Rounds, with an honest closing card.</div><div class="c human">HUMAN · THE TIME THAT MATTERS</div></div>
+      <div class="st"><div class="n">6</div><div class="t">The Bin → Assemble</div><div class="d">Your keeps with their reasons and notes. Play it, string it out, or ask for a first cut from it. Then B's cutting room.</div><div class="c priced">FREE · then ~$0.60</div></div>
+    </div>
+    <div class="prose">
+      <p>Three things distinguish this from the current in-app sequence (Analyse audio → Look at the footage → Ask for a first cut). <b>Listening comes before deciding what to look for</b> — the transcripts alone found the spine of every bin so far. <b>The index is a background process with a front door</b>: clips arrive on the floor fully indexed, in the order most likely to matter, and the floor never shows a half-indexed clip. And <b>selection is a first-class artifact</b>: the bin is a real thing in the EDL, anchored to clip time, that survives re-indexing and added footage.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ OPEN -->
+<section id="open">
+  <div class="wrap">
+    <div class="sec-eyebrow"><span class="no">§2</span><span class="eyebrow">Stages 1–3</span></div>
+    <h2>Open: know the bin before you pay for it</h2>
+    <div class="prose">
+      <p>The open screen is a <b>contact sheet of the folder</b> — first frame, duration, capture time grouped into sessions (the 4-hour-gap rule already in <code>shot_timeline</code>), and the free flags: <b>junk</b> (the conservative <code>luma&lt;11</code> band), <b>rotation side-data</b> (per bin, confirmed once), <b>telemetry present</b>. That is the roadmap's "junk and orientation proposed, human confirms," done at the door.</p>
+      <p>The review was right that the first draft's four-tier granularity ladder was a form, and non-monotonic. It is now <b>one slider</b> — sample interval, 4 s to 1 s, with price and clock reading out live and the default detent at coarse-plus-close-look. <b>Workers</b> is a setting in a drawer (it is a machine property, not a per-run decision), defaulting to the measured sweet spot once the request-rate study runs. Closer looks are bought per pick on the floor, at $0.07 each, where they're worth it.</p>
+      <p><b>Adding footage</b> is the same screen: drop files into the folder or press <em>Add clips</em>. New stems are detected against the journal, listened to immediately, and queued for indexing behind nothing; their picks reach the floor as a <em>new material</em> round. Existing verdicts, notes and keeps are untouched, because they are anchored to clip time, not to pick numbers.</p>
+    </div>
+
+    <div class="exhibit">
+      <div class="shell">
+        <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">open — ~/footage/killington-neutral · listened, not yet looked · 2 clips just added</span></div>
+        <div class="scroller">
+          <div class="mock" style="min-height:600px;display:grid;grid-template-columns:1fr 380px">
+            <div style="border-right:1px solid #26262f;display:flex;flex-direction:column">
+              <div class="hd">
+                <span class="ttl">Roughcut <small>killington-neutral</small></span>
+                <span class="grow"></span>
+                <span class="step done">1 open</span><span class="step done">2 listen</span><span class="step now">3 themes</span><span class="step">4 index</span><span class="step">5 the pass</span><span class="step">6 bin</span>
+              </div>
+              <div style="padding:10px 14px;display:flex;gap:10px;align-items:baseline;border-bottom:1px solid #26262f">
+                <b style="font-size:13px">killington-neutral</b>
+                <span class="hint tnum">14 clips · 49:40 · 4K · 2 sessions · 33 GB</span>
+                <span class="grow"></span>
+                <span class="hint">telemetry ✓ 12/14 · rotation side-data: correct here (confirmed)</span>
+                <span class="btn" style="font-size:10px">+ Add clips</span>
+              </div>
+              <div style="padding:10px 14px;flex:1">
+                <div class="lbl" style="margin-bottom:6px">SESSION 1 · JAN 10 · 9 CLIPS</div>
+                <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:7px;margin-bottom:10px">
+                  <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px"><span class="tc" style="font-size:8px">5:19</span></div><div style="font-size:10px;margin-top:3px"><b>CLIP_01</b> <span class="hint">listened</span></div></div>
+                  <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px"><span class="tc" style="font-size:8px">1:47</span></div><div style="font-size:10px;margin-top:3px"><b>CLIP_02</b> <span class="hint">listened</span></div></div>
+                  <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px"><span class="tc" style="font-size:8px">0:35</span></div><div style="font-size:10px;margin-top:3px"><b>CLIP_03</b> <span class="hint">listened</span></div></div>
+                  <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px"><span class="tc" style="font-size:8px">5:19</span><span class="tag" style="color:#8fd0ff">▲ 3 AIRS</span></div><div style="font-size:10px;margin-top:3px"><b>CLIP_04</b> <span class="hint">listened</span></div></div>
+                  <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px"><span class="tc" style="font-size:8px">2:10</span><span class="tag" style="color:#cfd6e4">NO WORDS</span></div><div style="font-size:10px;margin-top:3px"><b>CLIP_05</b> <span class="hint">listened · silent</span></div></div>
+                  <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px"><span class="tc" style="font-size:8px">5:19</span></div><div style="font-size:10px;margin-top:3px"><b>CLIP_06</b> <span class="hint">listened</span></div></div>
+                  <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px"><span class="tc" style="font-size:8px">5:18</span></div><div style="font-size:10px;margin-top:3px"><b>CLIP_07</b> <span class="hint">listened</span></div></div>
+                  <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px"><span class="tc" style="font-size:8px">4:39</span><span class="tag" style="color:#8fd0ff">▼ 4.2 g</span></div><div style="font-size:10px;margin-top:3px"><b>CLIP_08</b> <span class="hint">listened</span></div></div>
+                  <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px"><span class="tc" style="font-size:8px">3:22</span></div><div style="font-size:10px;margin-top:3px"><b>CLIP_09</b> <span class="hint">listened</span></div></div>
+                </div>
+                <div class="lbl" style="margin-bottom:6px">SESSION 2 · JAN 11 · 3 CLIPS <span style="color:#6ea8fe">+ 2 ADDED JUST NOW</span></div>
+                <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:7px;margin-bottom:10px">
+                  <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px"><span class="tc" style="font-size:8px">0:52</span></div><div style="font-size:10px;margin-top:3px"><b>CLIP_10</b> <span class="hint">listened</span></div></div>
+                  <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px"><span class="tc" style="font-size:8px">4:31</span><span class="tag" style="color:#8fd0ff">▲ 2 AIRS</span></div><div style="font-size:10px;margin-top:3px"><b>CLIP_11</b> <span class="hint">listened</span></div></div>
+                  <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px"><span class="tc" style="font-size:8px">2:04</span></div><div style="font-size:10px;margin-top:3px"><b>CLIP_12</b> <span class="hint">listened</span></div></div>
+                  <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px;outline:1px solid #6ea8fe"><span class="tc" style="font-size:8px">3:12</span><span class="tag">NO TELEMETRY</span></div><div style="font-size:10px;margin-top:3px"><b>ERIC_IMG_4471</b> <span style="color:#6ea8fe">listening…</span></div></div>
+                  <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px;outline:1px solid #6ea8fe"><span class="tc" style="font-size:8px">2:16</span><span class="tag">NO TELEMETRY</span></div><div style="font-size:10px;margin-top:3px"><b>ERIC_IMG_4472</b> <span style="color:#6ea8fe">queued</span></div></div>
+                  <div style="border:1px dashed #3a3a48;border-radius:4px;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;font-size:9.5px;color:#8f8fa3;text-align:center;padding:4px">junk pass: 0 clips<br>to skip (luma &lt; 11)</div>
+                </div>
+                <div class="hint" style="font-size:10.5px">Flags are free measurements you confirm: <span style="color:#8fd0ff">▲ airs / ▼ impacts</span> read straight off the telemetry as numbers, <span style="color:#cfd6e4">no words</span> from the audio pass. A silent clip is not a dim clip — the skiing is silent. Eric's phone clips carry no telemetry and index exactly the same way without it.</div>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;background:#111116">
+              <div style="padding:12px 14px;border-bottom:1px solid #26262f">
+                <div class="lbl" style="margin-bottom:6px">WHAT IS THIS FILM ABOUT? <span style="color:#d0a8ff">the transcripts suggest —</span></div>
+                <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px">
+                  <span style="font-size:10.5px;border:1px solid #6ea8fe;border-radius:999px;padding:2px 9px">✓ hitting rocks <span class="hint">· 3 clips</span></span>
+                  <span style="font-size:10.5px;border:1px solid #6ea8fe;border-radius:999px;padding:2px 9px">✓ falling into the stream</span>
+                  <span style="font-size:10.5px;border:1px solid #6ea8fe;border-radius:999px;padding:2px 9px">✓ "look at the cinematography"</span>
+                  <span style="font-size:10.5px;border:1px solid #3a3a48;color:#a0a0b0;border-radius:999px;padding:2px 9px">+ ski patrol</span>
+                  <span style="font-size:10.5px;border:1px solid #3a3a48;color:#a0a0b0;border-radius:999px;padding:2px 9px">+ Spencer's dares</span>
+                </div>
+                <div style="background:#101014;border:1px solid #2e2e38;border-radius:6px;padding:7px 9px;font-size:11px;color:#c9c9d6;min-height:44px">My friends and me skiing Killington, being silly, and hitting some rocks with our skis. Faces and reactions over scenery. <span class="hint">· hold <span class="key">V</span> to dictate</span></div>
+                <div class="hint" style="font-size:10px;margin-top:6px">A brief, not a taxonomy: themes rank picks and tag them as filters. They never change what the sheets see, so changing them later is free.</div>
+              </div>
+              <div style="padding:12px 14px;border-bottom:1px solid #26262f">
+                <div class="lbl" style="margin-bottom:10px">LOOK — HOW CLOSELY?</div>
+                <div style="position:relative;height:26px;margin:0 6px">
+                  <div style="position:absolute;left:0;right:0;top:11px;height:4px;background:#2e2e38;border-radius:2px"></div>
+                  <div style="position:absolute;left:0;width:22%;top:11px;height:4px;background:#6ea8fe;border-radius:2px"></div>
+                  <span style="position:absolute;left:22%;top:4px;width:18px;height:18px;margin-left:-9px;border-radius:50%;background:#fff;box-shadow:0 0 0 3px rgba(110,168,254,.35)"></span>
+                  <span style="position:absolute;left:0;top:26px;font-size:9px;color:#8f8fa3">4 s</span>
+                  <span style="position:absolute;left:22%;top:26px;font-size:9px;color:#e8e8ee;transform:translateX(-50%)">4 s + close look ●</span>
+                  <span style="position:absolute;left:60%;top:26px;font-size:9px;color:#8f8fa3;transform:translateX(-50%)">2 s</span>
+                  <span style="position:absolute;right:0;top:26px;font-size:9px;color:#8f8fa3">1 s</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;margin-top:20px;font-size:11px"><span class="hint">a frame every 4 s, then a 1 s look at the 3 busiest windows per clip</span><b class="tnum" style="color:#e0b050">$5.30 · ~28 min</b></div>
+                <div class="hint" style="font-size:10px;margin-top:4px">the slider re-prices live · every second, everywhere is the far end: ~$70 on this bin (R10) · closer looks are $0.07 per pick on the floor</div>
+                <div class="hint" style="font-size:10px;margin-top:8px">workers: <b style="color:#c9c9d6">2</b> · budget cap: <b style="color:#c9c9d6">$15 / project</b> · <span style="color:#6ea8fe">settings ▾</span></div>
+              </div>
+              <div style="padding:12px 14px;flex:1;display:flex;flex-direction:column;justify-content:flex-end">
+                <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:10px"><span class="hint">spent so far this project</span><span class="tnum hint">$1.24 of $15</span></div>
+                <span class="btn primary" style="text-align:center;font-size:12px;padding:8px">Index the footage · $5.30 · runs on its own</span>
+                <div class="hint" style="font-size:10px;margin-top:6px;text-align:center">or <span style="color:#c9c9d6">open the floor without looking</span> — picks from words and telemetry only</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap"><span class="fig">Fig. 1</span>Open, after the free listen pass, with two of Eric's phone clips just added: the folder as a contact sheet with free flags, themes proposed from the transcripts, and one granularity slider re-pricing live. Workers and the budget cap live in settings.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ INDEX -->
+<section id="index">
+  <div class="wrap">
+    <div class="sec-eyebrow"><span class="no">§3</span><span class="eyebrow">Stage 4</span></div>
+    <h2>Index: unattended, resumable, released per clip</h2>
+    <div class="prose">
+      <p>Karl's instruction, verbatim in spirit: the index should run on its own with progress tracked, survive a crash, work through the clips in a priority order, and hand each clip to the floor the moment it is <em>fully</em> indexed — while the rest continues. Not "start editing at minute four," which is tempting for iterating on the app and wrong for the person using it. The design is therefore a <b>journal</b> and a <b>queue</b>:</p>
+      <ul class="tight">
+        <li><b>The journal</b> is one file per project under <code>--work</code>: for every clip, the state of each stage — probe, telemetry, ASR, proxy, look, close look, picks — as <em>done / running / failed / queued</em>, with attempts and cost, plus the settings the run was made with. The sidecars on disk stay the source of truth (the pipeline already counts progress from them); the journal is the plan. On restart the two are reconciled and every stage that isn't done is re-queued. A crash mid-sheet costs one sheet; nothing already paid for is re-bought.</li>
+        <li><b>The priority order</b> comes from the free stages. Once every clip is listened to, each gets a score — speech candidates, interest markers, telemetry peaks, theme hits if themes were given, with a small weight for duration — and the priced stages run in that order. The clips most likely to carry the film reach the floor first; ties fall back to capture order. It's a default: <em>capture order</em> is one click away for a chronological cull.</li>
+        <li><b>Release is per clip and all-or-nothing.</b> A clip appears on the floor only when its proxy, sheets, close look and picks all exist. The floor never shows a clip whose picture can't play or whose picks might still change. The remaining clips keep indexing behind it, with the same bar and the same cost meter.</li>
+        <li><b>Added footage is the same path.</b> New stems not in the journal go through the free stages immediately and join the queue; nothing about existing clips re-runs. Removed or renamed files are matched by duration and content hash; a keep whose footage is missing is flagged, never deleted.</li>
+        <li><b>Failure is a state, not a stop.</b> A rate-limited sheet backs off and retries; a clip that fails a stage three times is parked with the reason and the rest continues; hitting the budget cap pauses the priced stages only, and the floor opens on what's released.</li>
+      </ul>
+    </div>
+
+    <div class="exhibit">
+      <div class="shell">
+        <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">index — running unattended · resumed after a crash at 14:02 · 6 of 14 clips released</span></div>
+        <div class="scroller">
+          <div class="mock" style="min-height:560px">
+            <div class="hd">
+              <span class="ttl">Roughcut <small>killington-neutral</small></span>
+              <span class="grow"></span>
+              <span class="step done">1 open</span><span class="step done">2 listen</span><span class="step done">3 themes</span><span class="step now">4 index</span><span class="step" style="border-color:#6ea8fe;color:#e8e8ee">5 the pass · 6 clips · 22 picks ready →</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 340px;gap:1px;background:#26262f">
+              <div style="background:#101013;padding:12px 14px">
+                <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+                  <b style="font-size:12px">Indexing · priority order</b>
+                  <span class="hint tnum" style="font-size:11px">6 released · 2 indexing · 6 queued</span>
+                  <span class="grow"></span>
+                  <span class="hint" style="font-size:10.5px">order: <span style="color:#e8e8ee">most promising first</span> · capture order</span>
+                </div>
+                <div style="display:grid;grid-template-columns:110px 1fr 84px 120px;gap:0 10px;font-size:10.5px;align-items:center;row-gap:5px">
+                  <span class="lbl">CLIP</span><span class="lbl">STAGES</span><span class="lbl">PRIORITY</span><span class="lbl">STATE</span>
+                  <b>CLIP_08</b><span><span class="stg ok">probe</span><span class="stg ok">tele</span><span class="stg ok">asr</span><span class="stg ok">proxy</span><span class="stg ok">look 3/3</span><span class="stg ok">close 3/3</span><span class="stg ok">picks 6</span></span><span class="tnum">0.92</span><span style="color:#b8f0cc">released</span>
+                  <b>CLIP_01</b><span><span class="stg ok">probe</span><span class="stg ok">tele</span><span class="stg ok">asr</span><span class="stg ok">proxy</span><span class="stg ok">look 3/3</span><span class="stg ok">close 3/3</span><span class="stg ok">picks 5</span></span><span class="tnum">0.88</span><span style="color:#b8f0cc">released</span>
+                  <b>CLIP_04</b><span><span class="stg ok">probe</span><span class="stg ok">tele</span><span class="stg ok">asr</span><span class="stg ok">proxy</span><span class="stg ok">look 3/3</span><span class="stg ok">close 3/3</span><span class="stg ok">picks 4</span></span><span class="tnum">0.85</span><span style="color:#b8f0cc">released</span>
+                  <b>CLIP_02</b><span><span class="stg ok">probe</span><span class="stg ok">tele</span><span class="stg ok">asr</span><span class="stg ok">proxy</span><span class="stg ok">look 1/1</span><span class="stg ok">close 3/3</span><span class="stg ok">picks 3</span></span><span class="tnum">0.71</span><span style="color:#b8f0cc">released</span>
+                  <b>CLIP_11</b><span><span class="stg ok">probe</span><span class="stg ok">tele</span><span class="stg ok">asr</span><span class="stg ok">proxy</span><span class="stg ok">look 3/3</span><span class="stg ok">close 3/3</span><span class="stg ok">picks 3</span></span><span class="tnum">0.69</span><span style="color:#b8f0cc">released</span>
+                  <b>CLIP_09</b><span><span class="stg ok">probe</span><span class="stg ok">tele</span><span class="stg ok">asr</span><span class="stg ok">proxy</span><span class="stg ok">look 2/2</span><span class="stg ok">close 3/3</span><span class="stg ok">picks 1</span></span><span class="tnum">0.62</span><span style="color:#b8f0cc">released</span>
+                  <b>CLIP_07</b><span><span class="stg ok">probe</span><span class="stg ok">tele</span><span class="stg ok">asr</span><span class="stg ok">proxy</span><span class="stg run">look 2/3</span><span class="stg">close</span><span class="stg">picks</span></span><span class="tnum">0.58</span><span style="color:#6ea8fe">reading sheet 3 · resumed</span>
+                  <b>CLIP_06</b><span><span class="stg ok">probe</span><span class="stg ok">tele</span><span class="stg ok">asr</span><span class="stg run">proxy 61%</span><span class="stg">look</span><span class="stg">close</span><span class="stg">picks</span></span><span class="tnum">0.55</span><span style="color:#6ea8fe">encoding preview</span>
+                  <b>CLIP_12</b><span><span class="stg ok">probe</span><span class="stg ok">tele</span><span class="stg ok">asr</span><span class="stg">proxy</span><span class="stg">look</span><span class="stg">close</span><span class="stg">picks</span></span><span class="tnum">0.44</span><span class="hint">queued</span>
+                  <b>ERIC_IMG_4471</b><span><span class="stg ok">probe</span><span class="stg" style="color:#8f8fa3">no tele</span><span class="stg ok">asr</span><span class="stg">proxy</span><span class="stg">look</span><span class="stg">close</span><span class="stg">picks</span></span><span class="tnum">0.41</span><span class="hint">queued · added 14:05</span>
+                  <b>CLIP_03</b><span><span class="stg ok">probe</span><span class="stg ok">tele</span><span class="stg ok">asr</span><span class="stg">proxy</span><span class="stg">look</span><span class="stg">close</span><span class="stg">picks</span></span><span class="tnum">0.33</span><span class="hint">queued</span>
+                  <b>CLIP_05</b><span><span class="stg ok">probe</span><span class="stg ok">tele</span><span class="stg ok">asr · silent</span><span class="stg bad">proxy ✕ 2</span><span class="stg">look</span><span class="stg">close</span><span class="stg">picks</span></span><span class="tnum">0.30</span><span style="color:#f0b8b8">retrying · encode failed twice</span>
+                  <span class="hint" style="grid-column:1/-1;font-size:10px;padding-top:3px">… CLIP_10, ERIC_IMG_4472 queued</span>
+                </div>
+              </div>
+              <div style="background:#111116;padding:12px 14px;display:flex;flex-direction:column;gap:10px">
+                <div>
+                  <div style="display:flex;justify-content:space-between;font-size:11px"><b>Overall</b><span class="tnum">6 / 14 released</span></div>
+                  <div class="bar1" style="margin-top:6px"><i style="width:43%"></i></div>
+                  <div class="hint" style="font-size:10px;margin-top:5px">about 19 min left · <span style="color:#e0b050">$2.41 of $5.30</span> · workers 2</div>
+                </div>
+                <div style="background:#0f0f14;border:1px solid #2a2a36;border-radius:8px;padding:9px 11px;font-size:10.5px">
+                  <div class="lbl" style="margin-bottom:4px">JOURNAL</div>
+                  <div class="hint">~/work/app/index/killington-neutral.json</div>
+                  <div class="hint" style="margin-top:4px">crashed 14:02 during CLIP_07 sheet 3 · resumed 14:04 · 1 sheet re-read ($0.09), nothing else re-bought</div>
+                  <div class="hint" style="margin-top:4px">2 clips added 14:05 · listened · queued by priority</div>
+                </div>
+                <div style="background:#0f0f14;border:1px solid #2a2a36;border-radius:8px;padding:9px 11px;font-size:10.5px">
+                  <div class="lbl" style="margin-bottom:4px">RELEASED SO FAR</div>
+                  <div>6 clips · 26:13 of footage · <b>22 picks</b> · 2 already flagged by telemetry numbers</div>
+                </div>
+                <span class="btn primary" style="text-align:center;font-size:11.5px;padding:7px">Open the pass on 6 clips</span>
+                <div class="hint" style="font-size:10px;text-align:center">the rest keep indexing; new clips join as a round when they're released</div>
+                <div style="flex:1"></div>
+                <div class="hint" style="font-size:10px">close the app: the index keeps running in the server; reopen anywhere and the journal picks up.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap"><span class="fig">Fig. 2</span>The index as a journal: per-clip stages in priority order, released clips green, one clip resumed after a crash, one retrying an encode failure, two added clips queued — and the pass openable on what is released while the rest continues.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ THE PASS -->
+<section id="floor">
+  <div class="wrap">
+    <div class="sec-eyebrow"><span class="no">§4</span><span class="eyebrow">Stage 5 — where the time goes</span></div>
+    <h2>The pass: cull, don't browse</h2>
+    <div class="prose">
+      <p>The mental model is <b>photo culling</b>: Lightroom made a thousand frames an hour's work by giving every frame the same keys and always showing the picture big. The pass does that with <b>picks</b> — windows the index proposed, each with a reason and its witnesses — played large, judged on one key, trimmed by what you watched, annotated by voice. This is the third draft of the screen; the second was evaluated by an independent reviewer (§9) and its faults are this draft's spec.</p>
+    </div>
+
+    <h3>4.1 One pick, in about seven seconds</h3>
+    <div class="prose"><p>The picture fills the centre and starts on the moment. The pillarbox margins that a 16:9 picture leaves anyway carry the chrome: the clip's context on the left, the witnesses on the right — <em>nothing is painted on the picture except the verdict stamp</em>. Below the picture, the machine's reason in one line, generated only from the witnesses that agree; when they disagree, the line says so. Under that, the two-tier strip: the whole clip as a tape with every pick marked, and a zoomed strip that follows the playhead. You press <kbd>P</kbd> — or hold <kbd>V</kbd> and say why first — a stamp lands, and the next pick begins.</p></div>
+
+    <div class="exhibit">
+      <div class="shell">
+        <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">the pass — round 1 · pick 12 of 38 · a note just dictated · witnesses disagree</span></div>
+        <div class="scroller">
+          <div class="mock" style="min-height:740px;display:flex;flex-direction:column;background:#08080b">
+            <!-- HUD -->
+            <div style="display:flex;align-items:center;gap:14px;padding:8px 14px;background:#0f0f13;border-bottom:1px solid #1e1e26">
+              <span style="font-weight:700;font-size:12px;letter-spacing:.06em">THE PASS</span>
+              <span class="hint tnum">round 1 · pick <b style="color:#e8e8ee">12</b> of 38 · queue frozen for this round</span>
+              <div style="flex:1;max-width:380px;height:6px;background:#17171d;border-radius:3px;overflow:hidden;position:relative"><i style="position:absolute;left:0;top:0;bottom:0;width:29%;background:#64d08a"></i><i style="position:absolute;left:29%;top:0;bottom:0;width:3%;background:#6ea8fe"></i></div>
+              <span class="hint tnum" style="font-size:11px">bin <b style="color:#b8f0cc">8 moments</b> · 1 hero · if strung out <b style="color:#e8e8ee">1:04</b></span>
+              <span class="grow"></span>
+              <span style="font:600 9.5px var(--mono);color:#b8f0cc;border:1px solid #2c4c39;border-radius:999px;padding:1px 8px">CAPS · AUTO-ADVANCE</span>
+              <span class="key">?</span>
+            </div>
+            <!-- STAGE: margins + picture -->
+            <div style="display:grid;grid-template-columns:200px 1fr 230px;gap:0;flex:none;height:410px;background:#08080b">
+              <!-- left margin: context -->
+              <div style="padding:12px 12px;display:flex;flex-direction:column;gap:8px;font-size:10.5px;border-right:1px solid #141419">
+                <div><div class="lbl">CLIP</div><b style="font-size:12px">CLIP_04</b> <span class="hint">· 5:19 · session 1</span></div>
+                <div><div class="lbl">THIS PICK</div><span class="tnum">1:16.0 → 1:22.6</span><br><span class="hint">3 other picks in this clip · <span class="key">.</span> open the clip</span></div>
+                <div><div class="lbl">KEEPING</div><span style="color:#b8f0cc" class="tnum">what you've watched: 1:16.0–1:22.6</span><br><span class="hint">will snap → 1:15.6–1:23.1 (sentence end + 0.45)</span><br><span class="hint"><span class="key">}</span> extend to the next line: "go back feet! / yeah!" at 1:31.8</span></div>
+                <div style="flex:1"></div>
+                <div class="hint" style="font-size:10px">hold <span class="key">space</span> to keep watching · what you watch is what you keep</div>
+              </div>
+              <!-- picture -->
+              <div style="position:relative;display:flex;align-items:center;justify-content:center;background:#050507">
+                <div class="frame" style="width:100%;max-width:728px;aspect-ratio:16/9;border-radius:4px">
+                  <svg viewBox="0 0 400 120" preserveAspectRatio="none" aria-hidden="true"><path d="M0 80 L90 44 L160 68 L240 26 L330 62 L400 50 L400 120 L0 120 Z" fill="#f2f4f9"/><path d="M0 100 L140 78 L280 94 L400 82 L400 120 L0 120 Z" fill="#dde3ef"/><circle cx="236" cy="40" r="5.6" fill="#1d2233"/><path d="M236 45 l-8 14 M236 45 l7 15 M228 52 l16 -3" stroke="#1d2233" stroke-width="2.6" fill="none" stroke-linecap="round"/></svg>
+                  <div class="stamp" style="left:26px;top:22px;opacity:.22;font-size:22px">PICKED</div>
+                </div>
+              </div>
+              <!-- right margin: witnesses -->
+              <div style="padding:12px 12px;display:flex;flex-direction:column;gap:6px;border-left:1px solid #141419">
+                <div class="lbl">WITNESSES</div>
+                <div class="seal contra"><span class="s">SEEN · CLAIMED "BACKFLIP" · CONTRADICTED</span><span>close look at 1:17–1:22: airborne, upright; transcript says "straight liner"</span></div>
+                <div class="seal tele"><span class="s">FELT · NUMBERS ONLY</span><span>1.1 s freefall at 1:18.2 · 4.2 g at 1:19.3 · gyro: camera upright</span></div>
+                <div class="seal heard"><span class="s">HEARD</span><span>1:14.2 "more of a straight liner" · 1:31.8 "go back feet! / yeah!"</span></div>
+                <div class="seal claim"><span class="s">THEME · BEING SILLY</span><span>from the reaction line</span></div>
+                <div style="flex:1"></div>
+                <div class="lbl">YOUR NOTE</div>
+                <div style="background:#14141a;border:1px solid #4a2c2c;border-radius:6px;padding:6px 8px;font-size:10.5px;color:#e8e8ee">"this is the one where Spenny finally sends it — hold on his face after" <span class="hint">· 0.8 s · <span class="key">N</span> edit</span></div>
+                <div class="hint" style="font-size:9.5px">hold <span class="key">V</span> · clip audio ducks while you speak · text lands when you let go</div>
+              </div>
+            </div>
+            <!-- caption line -->
+            <div style="display:flex;align-items:baseline;gap:10px;padding:7px 14px;background:#0c0c10;border-top:1px solid #141419;font-size:12.5px">
+              <span style="color:#8f8fa3;font:600 9.5px var(--mono);letter-spacing:.08em">WHY</span>
+              <i style="color:#e8e8ee">A big air and a hard landing, with the crew's reaction twelve seconds later.</i>
+              <span style="color:#ffb8b8;font-size:10.5px">· the sheet called it a backflip; the close look and the words say straight air — shown as a conflict, not resolved for you</span>
+              <span class="grow"></span>
+              <span class="hint" style="font-size:10.5px">rank 4 · <span class="key">E</span> evidence in full</span>
+            </div>
+            <!-- TAPE: whole clip -->
+            <div class="tape">
+              <span style="position:absolute;left:12px;top:5px;font:600 9px var(--mono);color:#8f8fa3;letter-spacing:.08em">CLIP_04 · WHOLE CLIP 5:19 · picks as markers · waveform · speed / g</span>
+              <svg viewBox="0 0 1000 44" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%" aria-hidden="true">
+                <path d="M0 34 L30 33 L60 30 L90 34 L120 28 L150 33 L180 25 L210 32 L240 34 L270 29 L300 22 L330 31 L360 34 L390 27 L420 33 L450 30 L480 34 L510 26 L540 32 L570 34 L600 28 L630 33 L660 24 L690 31 L720 34 L750 27 L780 33 L810 29 L840 34 L870 26 L900 32 L930 34 L960 30 L1000 33 L1000 44 L0 44 Z" fill="#20202a"/>
+                <path d="M0 40 L100 39 L200 36 L235 30 L245 20 L250 24 L262 38 L300 36 L400 37 L520 34 L600 38 L700 36 L780 33 L820 39 L900 37 L1000 38" stroke="#4a86b8" stroke-width="1.4" fill="none"/>
+              </svg>
+              <span style="position:absolute;left:13.5%;top:22px;width:6px;height:14px;background:#64d08a;border-radius:2px" title="pick · picked"></span>
+              <span style="position:absolute;left:24.1%;top:22px;width:6px;height:14px;background:#6ea8fe;border-radius:2px;outline:2px solid #fff" title="this pick"></span>
+              <span style="position:absolute;left:41%;top:22px;width:6px;height:14px;background:#3a3a48;border-radius:2px" title="pick · undecided"></span>
+              <span style="position:absolute;left:72%;top:22px;width:6px;height:14px;background:#3a3a48;border-radius:2px" title="pick · undecided"></span>
+              <div style="position:absolute;left:24.6%;top:0;bottom:0;width:1px;background:#fff;opacity:.7"></div>
+            </div>
+            <!-- ZOOM strip -->
+            <div class="zoom">
+              <span style="position:absolute;left:12px;top:5px;font:600 9px var(--mono);color:#8f8fa3;letter-spacing:.08em">ZOOMED · ±8 s AROUND THE PLAYHEAD · words where they fit, sentence bars where they don't</span>
+              <span style="position:absolute;right:12px;top:5px;font:600 10px var(--mono);color:#cfd6e4">1:16.0 → 1:22.6 · 6.6 s watched</span>
+              <!-- kept range = watched -->
+              <div style="position:absolute;left:30%;width:41%;top:22px;height:34px;background:rgba(100,208,138,.14);border-top:1px solid rgba(100,208,138,.7);border-bottom:1px solid rgba(100,208,138,.7)"></div>
+              <div style="position:absolute;left:30%;top:18px;height:42px;width:8px;margin-left:-4px;background:#fff;border-radius:3px;cursor:ew-resize"></div>
+              <div style="position:absolute;left:71%;top:18px;height:42px;width:8px;margin-left:-4px;background:#fff;border-radius:3px;cursor:ew-resize"></div>
+              <!-- snap targets after handles -->
+              <span style="position:absolute;left:27.6%;top:62px;transform:translateX(-50%);font:600 9px var(--mono);color:#6ea8fe">snap ◂ sentence end</span>
+              <span style="position:absolute;left:74%;top:62px;transform:translateX(-50%);font:600 9px var(--mono);color:#6ea8fe">sentence end + 0.45 ▸</span>
+              <!-- words / sentence bars -->
+              <span class="w" style="left:8%">so</span><span class="w in" style="left:14%">more</span><span class="w in" style="left:18%">of a</span><span class="w in" style="left:23%">straight</span><span class="w in" style="left:27%">liner</span>
+              <span class="sb" style="left:33%;width:36%" title="no speech — the run"></span>
+              <span style="position:absolute;left:51%;top:30px;transform:translateX(-50%);font-size:10px;color:#8fd0ff">▲ 1.1 s &nbsp;▼ 4.2 g</span>
+              <span class="w in" style="left:79%">go</span><span class="w in" style="left:84%">back feet!</span><span class="w in" style="left:92%">yeah!</span>
+              <span class="snap" style="left:27.6%"></span><span class="snap" style="left:74%"></span><span class="snap" style="left:95%"></span>
+              <!-- playhead -->
+              <div style="position:absolute;left:52%;top:16px;height:46px;width:2px;background:#fff;z-index:3"></div>
+            </div>
+            <!-- KEY LINE -->
+            <div style="display:flex;gap:16px;align-items:center;padding:7px 14px;background:#0f0f13;border-top:1px solid #1e1e26;font-size:10.5px;color:#a0a0b0;flex-wrap:wrap">
+              <span><span class="key">P</span> pick</span>
+              <span><span class="key">X</span> reject</span>
+              <span><span class="key">U</span> later</span>
+              <span><span class="key">1</span> hero</span>
+              <span><span class="key">⌘Z</span> undo</span>
+              <span style="color:#3a3a48">|</span>
+              <span><span class="key">J</span><span class="key">K</span><span class="key">L</span> shuttle · K pauses</span>
+              <span><span class="key">space</span> hold to keep watching</span>
+              <span><span class="key">[</span><span class="key">]</span> <span class="key">{</span><span class="key">}</span> in / out to the previous / next sentence or onset</span>
+              <span><span class="key">←</span><span class="key">→</span> frame at the edge</span>
+              <span style="color:#3a3a48">|</span>
+              <span style="color:#ffb8b8"><span class="key">V</span> hold to speak</span>
+              <span><span class="key">E</span> evidence</span>
+              <span><span class="key">.</span> more</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap"><span class="fig">Fig. 3</span>The pass, third draft: the picture untouched except the fading stamp; context and witnesses in the margins; a reason built from the agreeing witnesses with the conflict stated; the whole-clip tape with picks, waveform and telemetry trace; the zoomed strip with the kept range equal to what was watched, snapping shown; a dictated note already attached.</div>
+    </div>
+
+    <h3>4.2 What changed from the second draft, and why</h3>
+    <div class="eval">
+      <div class="f"><b>Seals told you "confirmed" about a claim the transcript contradicted.</b> The reviewer caught the second draft's own render doing it: caption "backflip", seal CONFIRMED, slider text "straight liner". That is R10's failure reproduced.<div class="fix">Three states per witness — claimed / audited / contradicted — and a conflict is rendered as a conflict. The felt seal shows numbers only until R11 calibrates.</div></div>
+      <div class="f"><b>You were asked to keep 21 s having watched 6.</b> The verdict was on the preview, the artifact was the machine's window.<div class="fix">Decided: what you watch is what you keep, snapped outward to sentence ends. <kbd>}</kbd> extends to the next line, which makes "extend to the reaction" the default gesture rather than a feature.</div></div>
+      <div class="f"><b>K was keep, and K is pause in every NLE.</b><div class="fix">Decided: P / X / U with JKL intact, <kbd>1</kbd> for hero, Caps Lock for auto-advance.</div></div>
+      <div class="f"><b>"Enough for a first cut" was the machine judging sufficiency</b>, from a ratio built on machine windows — and the counts drifted between figures.<div class="fix">Report moments, heroes, sessions touched, and "if strung out: 1:04". The closing card says you <em>could</em> assemble; it never says enough.</div></div>
+      <div class="f"><b>The queue mutated under your eye</b> — streaming, re-rank and rounds all edited the same list.<div class="fix">The queue freezes at round start. New clips and re-ranks arrive at the round boundary, and the closing card says how many outrank what you saw.</div></div>
+      <div class="f"><b>The word-line couldn't hold real speech</b> (2.5–3 words/s at 39 px/s overlap), couldn't show a window over 30 s, and was empty on silent clips.<div class="fix">Two tiers: the whole clip as a tape (picks, waveform, speed/g) and a zoomed strip that follows the playhead with words where they fit and sentence bars where they don't. Waveform and telemetry are the snap sources when there are no words.</div></div>
+      <div class="f"><b>Trimming had no picture.</b><div class="fix">Any trim gesture parks the picture on the edge frame; <kbd>←</kbd> <kbd>→</kbd> step frames at the active edge.</div></div>
+      <div class="f"><b>Chrome was painted over the picture</b> — seals, ID chip, caption gradient, dictation pill.<div class="fix">Everything moves to the pillarbox margins; only the verdict stamp touches the picture, and it fades.</div></div>
+      <div class="f"><b>Dictation captioned live over playing audio.</b> Batch Whisper can't caption live, and the clip's wind was going into the mic.<div class="fix">Clip audio ducks 20 dB on <kbd>V</kbd>-down; the note lands ~1 s after release with an edit key; the brief's names seed the recogniser so "Spenny" survives.</div></div>
+      <div class="f"><b>The filmstrip was 52 px of thumbnails you couldn't use</b>, and the trailer was a second reel from a partial index.<div class="fix">Both cut. Progress is the HUD bar; the sanity check is "play the bin".</div></div>
+    </div>
+
+    <h3>4.3 Rounds, order, and long films</h3>
+    <div class="prose">
+      <p>Cull time is bounded by the target, not the footage. Picks are taken from <em>released</em> clips, 40 to a round, and the queue is frozen for the round. A round ends with a card that says what the bin holds and what arrived meanwhile. You stop when you have the moments you need, not when the footage runs out; the footage past that is where the machine's ranking earns its keep by never showing it to you.</p>
+      <ul class="tight">
+        <li><b>Preview rule.</b> A pick under ~8 s plays whole. A longer one plays the moment ±3 s; hold <kbd>space</kbd> to keep watching. What you watch is what you keep.</li>
+        <li><b>Order.</b> <em>Rank</em> (default) or <em>by clip</em> (chronological, guarantees coverage — Resolve's source-tape idea). By-session is by-clip with headers; by-theme is a filter on rank. Two modes at launch.</li>
+        <li><b>Batch verdicts.</b> <kbd>⇧X</kbd> rejects the rest of this clip's picks; a filter (kind, source, theme) plus <kbd>⇧X</kbd> rejects everything shown. A 3-hour bin's 150 picks are not 150 decisions when 40 are the same scenery.</li>
+        <li><b>Compare takes.</b> Picks the index clustered as takes of one thing (same clip, same place, minutes apart, similar telemetry shape) open side by side — Lightroom's Survey view — with <kbd>P</kbd> on one and the rest rejected together.</li>
+        <li><b>Overlap.</b> Two keeps in one clip whose ranges overlap merge into one keep in the bin with both notes; a string-out never plays footage twice.</li>
+        <li><b>Undo.</b> <kbd>⌘Z</kbd> reverses the last verdict <em>with</em> its trim and note, across round boundaries, and after resume. The pass position, later pile and rejects are all in the EDL, so quitting mid-round costs nothing.</li>
+        <li><b>Re-index and added footage.</b> Verdicts and notes are ranges on clip time. A finer look produces new picks; existing verdicts re-attach by overlap, and a pick that contradicts an old verdict is shown as such. Added clips arrive as their own round.</li>
+      </ul>
+    </div>
+    <div class="cmp-wrap">
+      <table class="cmp">
+        <thead><tr><th>Bin</th><th>Footage</th><th>Picks (≈0.85 / min)</th><th>Rounds to a working bin</th><th>Cull time</th><th>Index runs unattended for</th></tr></thead>
+        <tbody>
+          <tr><th>Killington</th><td>44 min</td><td>38</td><td><b>1</b></td><td><b>~5 min</b></td><td>~28 min · first clip released at ~4 min</td></tr>
+          <tr><th>A long day</th><td>3 h</td><td>~150</td><td><b>2</b> — rank order usually fills it in 80</td><td><b>~10 min</b></td><td>~2 h · first clips released within 10 min</td></tr>
+          <tr><th>A whole trip</th><td>8 h · 3 days</td><td>~400</td><td><b>3–4</b> — one per session for the spine</td><td><b>~20 min</b></td><td>~5 h · overnight; resumes if it stops</td></tr>
+          <tr><th>Scrubbing by hand</th><td>3 h</td><td>—</td><td>—</td><td>3 h at 1×, ~45 min at 4× with no notes</td><td>—</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="exhibit">
+      <div class="shell">
+        <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">round 1 done — the closing card</span></div>
+        <div class="scroller">
+          <div class="mock" style="min-height:300px;display:flex;align-items:center;justify-content:center;background:#08080b">
+            <div style="width:780px;background:#12121a;border:1px solid #2a2a36;border-radius:14px;padding:22px 26px">
+              <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:12px">
+                <span style="font:800 22px var(--display)">Round 1 done</span>
+                <span class="hint tnum">38 picks · 4 min 40 s · 6 clips</span>
+                <span class="grow"></span>
+                <span style="font:600 10px var(--mono);color:#a0a0b0;letter-spacing:.08em">YOU COULD ASSEMBLE NOW — YOUR CALL</span>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px">
+                <div style="background:#0f0f14;border-radius:8px;padding:10px 12px"><div style="font:700 20px var(--display);color:#b8f0cc">14 moments</div><div class="hint" style="font-size:10.5px">2 hero · 5 later · 19 rejected</div></div>
+                <div style="background:#0f0f14;border-radius:8px;padding:10px 12px"><div style="font:700 20px var(--display)">2:07</div><div class="hint" style="font-size:10.5px">if strung out · target 2:30</div></div>
+                <div style="background:#0f0f14;border-radius:8px;padding:10px 12px"><div style="font:700 20px var(--display)">9 notes</div><div class="hint" style="font-size:10.5px">dictated · attached to their moments</div></div>
+                <div style="background:#0f0f14;border-radius:8px;padding:10px 12px"><div style="font:700 20px var(--display)">1 / 2</div><div class="hint" style="font-size:10.5px">sessions touched · Jan 11 not yet released</div></div>
+              </div>
+              <div class="hint" style="font-size:11px;margin-bottom:4px"><span style="color:#6ea8fe">◆</span> since this round started: <b style="color:#e8e8ee">3 clips released, 11 new picks</b> — 4 of them outrank things you saw</div>
+              <div class="hint" style="font-size:11px;margin-bottom:12px"><span style="color:#e0b050">⚠</span> CLIP_07 2:10–5:18 has no picks — <span style="color:#c9c9d6">look closer · $0.21</span> or leave it</div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <span class="btn primary" style="font-size:11.5px;padding:7px 14px">▶ Play the bin <span class="key" style="margin-left:6px">↵</span></span>
+                <span class="btn" style="font-size:11px">Next round · 40 · ~5 min</span>
+                <span class="btn" style="font-size:11px">By clip ▾</span>
+                <span class="btn" style="font-size:11px">Revisit 5 later</span>
+                <span class="grow"></span>
+                <span class="btn" style="font-size:11px;border-color:#4c4026;color:#ffe9b8">Assemble · $0.60 <span class="key" style="margin-left:6px">A</span></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap"><span class="fig">Fig. 3b</span>The closing card: counts, not a verdict; what arrived during the round; one honest warning; the free default is playing the bin, and the priced action has its own key with the price on it.</div>
+    </div>
+
+    <h3>4.4 Dictation: the note that trains the next ask</h3>
+    <div class="prose">
+      <p>The project's most durable finding is that <em>a one-line human note is the lever</em>. Notes only get written when writing is free, so the pass makes the note a <b>push-to-talk gesture</b>: hold <kbd>V</kbd>, say what you see, release. The clip's audio ducks while you hold, the same Whisper that transcribed the footage transcribes you on the GPU, and the text lands in the margin about a second after you let go, with <kbd>N</kbd> to edit it. The brief's names seed the recogniser.</p>
+      <p>Where it goes is the point. A note is a <b>range comment on clip time</b> — Frame.io's pattern — so it survives re-indexing and added footage, shows as a marker on B's events lane, rides into the bin with the machine's reason, and reaches the model per moment: "the editor said: hold on his face after." Later asks inherit it through the segment's <code>why</code>, the memory the revision loop already depends on. Keys stay authoritative — the note is annotation, <kbd>P</kbd> is the verdict; parsing intent from speech is a follow-up, not a launch feature. <kbd>1</kbd> marks a <b>hero</b>: it must appear in the first cut; the model may trim inside its range but never drop it without saying why.</p>
+    </div>
+
+    <h3>4.5 The keys</h3>
+    <div class="keymap">
+      <div><kbd>P</kbd><span><b>pick</b> — to the bin, with the reason and any note</span></div>
+      <div><kbd>X</kbd><span><b>reject</b> — stays on the floor, filtered out</span></div>
+      <div><kbd>U</kbd><span><b>later</b> — the pile the closing card offers back</span></div>
+      <div><kbd>1</kbd><span><b>hero</b> — must appear in the first cut</span></div>
+      <div><kbd>⇧X</kbd><span><b>reject the rest</b> of this clip's picks (or everything shown by a filter)</span></div>
+      <div><kbd>⌘Z</kbd><span><b>undo</b> the last verdict, with its trim and note</span></div>
+      <div><kbd>Caps</kbd><span><b>auto-advance</b> toggle after a verdict</span></div>
+      <div><kbd>J</kbd> <kbd>K</kbd> <kbd>L</kbd><span><b>shuttle</b>, exactly as every NLE — K pauses</span></div>
+      <div><kbd>space</kbd><span><b>hold</b> to keep watching past the preview</span></div>
+      <div><kbd>[</kbd> <kbd>]</kbd><span><b>in-point</b> to the previous / next sentence end or onset</span></div>
+      <div><kbd>{</kbd> <kbd>}</kbd><span><b>out-point</b> the same way — <kbd>}</kbd> is "extend to the reaction"</span></div>
+      <div><kbd>←</kbd> <kbd>→</kbd><span><b>frame step</b> at the active edge (⇧ for a word)</span></div>
+      <div><kbd>V</kbd><span><b>hold to speak</b> a note; <kbd>N</kbd> edits it</span></div>
+      <div><kbd>E</kbd><span><b>evidence</b> drawer; any verdict closes it</span></div>
+      <div><kbd>.</kbd><span><b>more</b>: open the whole clip · look closer ($0.07) · find like this (B's Find, prefilled)</span></div>
+      <div><kbd>?</kbd><span><b>this map</b></span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ THE BIN -->
+<section id="bin">
+  <div class="wrap">
+    <div class="sec-eyebrow"><span class="no">§5</span><span class="eyebrow">Stage 6</span></div>
+    <h2>The bin: selection as a first-class artifact, with a round trip</h2>
+    <div class="prose">
+      <p>The bin lives in the EDL as <code>selects</code> beside <code>segments</code>: each keep is a clip-time range with the machine's reason, your note, its witnesses, its hero flag, and — after assembly — <code>used_in</code>, the segment ids it became. That last field is what the reviewer found missing: without it, a bin can't show what the film used, and the next ask from the bin can't know what you've already placed. So the bin has three filters, <b>unused / used / rejected</b>, a shot added by hand in B's cutting room becomes a keep automatically, and a keep whose footage went missing is flagged rather than dropped.</p>
+      <p>The first cut is asked <em>from the bin</em>: "build the film from these 14 moments, in this spirit" — the heroes fixed, the keeps' ranges as bounds the model may trim inside, the rest of the inventory available only for connective tissue. That is a different and better prompt than "here is 44 minutes, find the film." Two variants from one bin belong to the cutting room's Versions tab, which already exists in B.</p>
+    </div>
+
+    <div class="exhibit">
+      <div class="shell">
+        <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">the bin — 14 moments · 2 hero · if strung out 2:07</span></div>
+        <div class="scroller">
+          <div class="mock" style="min-height:380px;display:grid;grid-template-columns:1fr 340px">
+            <div style="padding:12px 14px;border-right:1px solid #26262f">
+              <div style="display:flex;gap:10px;align-items:baseline;margin-bottom:10px">
+                <b style="font-size:13px">The bin</b>
+                <span class="hint tnum">14 moments · 2 hero · 9 notes · if strung out 2:07 · target 2:30</span>
+                <span class="grow"></span>
+                <span style="font-size:10px;border:1px solid #6ea8fe;border-radius:999px;padding:1px 8px">unused 14</span>
+                <span style="font-size:10px;border:1px solid #2e2e38;color:#a0a0b0;border-radius:999px;padding:1px 8px">used 0</span>
+                <span style="font-size:10px;border:1px solid #2e2e38;color:#a0a0b0;border-radius:999px;padding:1px 8px">rejected 19</span>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:7px">
+                <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px"><span class="tc" style="font-size:8px">7.5s</span><span class="tag" style="color:#ffe9b8">★ HERO</span></div><div style="font-size:9.5px;margin-top:3px;color:#a0a0b0"><b style="color:#e8e8ee">the stream fall</b> · CLIP_01 · <span style="color:#ffb8b8">♪ note</span></div></div>
+                <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px"><span class="tc" style="font-size:8px">4.4s</span></div><div style="font-size:9.5px;margin-top:3px;color:#a0a0b0"><b style="color:#e8e8ee">faces caked in snow</b> · CLIP_01</div></div>
+                <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px"><span class="tc" style="font-size:8px">11.5s</span></div><div style="font-size:9.5px;margin-top:3px;color:#a0a0b0"><b style="color:#e8e8ee">the roll call</b> · CLIP_02 · <span style="color:#ffb8b8">♪ note</span></div></div>
+                <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px"><span class="tc" style="font-size:8px">7.1s</span><span class="tag" style="color:#ffe9b8">★ HERO</span></div><div style="font-size:9.5px;margin-top:3px;color:#a0a0b0"><b style="color:#e8e8ee">big air + landing</b> · CLIP_04 · <span style="color:#ffb8b8">♪ note</span></div></div>
+                <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px"><span class="tc" style="font-size:8px">11.4s</span></div><div style="font-size:9.5px;margin-top:3px;color:#a0a0b0"><b style="color:#e8e8ee">ski patrol</b> · CLIP_09</div></div>
+                <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px"><span class="tc" style="font-size:8px">14.2s</span></div><div style="font-size:9.5px;margin-top:3px;color:#a0a0b0"><b style="color:#e8e8ee">the rocks run</b> · CLIP_08 · <span style="color:#ffb8b8">♪ note</span></div></div>
+                <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px"><span class="tc" style="font-size:8px">8.1s</span></div><div style="font-size:9.5px;margin-top:3px;color:#a0a0b0"><b style="color:#e8e8ee">rocks payoff</b> · CLIP_08</div></div>
+                <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px"><span class="tc" style="font-size:8px">6.8s</span></div><div style="font-size:9.5px;margin-top:3px;color:#a0a0b0"><b style="color:#e8e8ee">best of 3 takes</b> · CLIP_11</div></div>
+                <div><div class="frame" style="aspect-ratio:16/9;border-radius:4px"><span class="tc" style="font-size:8px">3.1s</span></div><div style="font-size:9.5px;margin-top:3px;color:#a0a0b0"><b style="color:#e8e8ee">pocket pizza</b> · CLIP_03</div></div>
+                <div><div class="frame dim" style="aspect-ratio:16/9;border-radius:4px;outline:1px dashed #6a3a3a"><span class="tc" style="font-size:8px">5.0s</span><span class="tag" style="color:#ffb8b8">FOOTAGE MISSING</span></div><div style="font-size:9.5px;margin-top:3px;color:#a0a0b0"><b style="color:#e8e8ee">"it bit!"</b> · CLIP_06 · <span class="hint">relink</span></div></div>
+                <div style="border:1px dashed #3a3a48;border-radius:4px;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;font-size:9.5px;color:#8f8fa3;text-align:center;padding:4px">+ 4 more</div>
+                <div style="border:1px dashed #3a3a48;border-radius:4px;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;font-size:9.5px;color:#8f8fa3;text-align:center;padding:4px">rejects stay on the floor</div>
+              </div>
+              <div class="hint" style="font-size:10px;margin-top:10px">Every moment: its range on clip time, the machine's reason, your note, its witnesses, hero or not, and — once assembled — which segments it became. In B this is the Source monitor's Library tab, with the same three filters.</div>
+            </div>
+            <div style="background:#111116;padding:12px 14px;display:flex;flex-direction:column;gap:8px">
+              <div class="lbl">NEXT</div>
+              <div style="background:#1a1a21;border:1px solid #6ea8fe;border-radius:8px;padding:9px 11px">
+                <b style="font-size:11.5px">▶ Play the bin</b>
+                <div class="hint" style="font-size:10px;margin-top:3px">Your moments, in order, from the proxies. Free. The sanity check before spending.</div>
+              </div>
+              <div style="background:#1a1a21;border:1px solid #2e2e38;border-radius:8px;padding:9px 11px">
+                <b style="font-size:11.5px">String it out</b>
+                <div class="hint" style="font-size:10px;margin-top:3px">Every moment on the timeline in capture order — the selects reel. Free, instant, a fine place to cut by hand.</div>
+              </div>
+              <div style="background:#1a1a21;border:1px solid #4c4026;border-radius:8px;padding:9px 11px">
+                <b style="font-size:11.5px">Ask for a first cut from the bin</b>
+                <div class="hint" style="font-size:10px;margin-top:3px">Heroes fixed; keeps as bounds the model may trim inside; the inventory only for connective tissue; your notes read per moment. Comes back as a proposal.</div>
+                <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px"><span class="hint">~$0.60 · ~3 min</span><span class="btn" style="font-size:10px;border-color:#4c4026;color:#ffe9b8">Ask · $0.60</span></div>
+              </div>
+              <div class="hint" style="font-size:10px;margin-top:auto">Then the cutting room (B). Two variants from the same bin live in its Versions tab.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap"><span class="fig">Fig. 4</span>The bin with its three filters, hero and note marks, one moment whose footage went missing (flagged, relinkable), and the three ways forward with the free ones first.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ IDEAS -->
+<section id="ideas">
+  <div class="wrap">
+    <div class="sec-eyebrow"><span class="no">§6</span><span class="eyebrow">Thinking harder</span></div>
+    <h2>Twelve ways the intake uses AI — and the machine — better</h2>
+    <ol class="ideas">
+      <li><b>Read the telemetry track — as numbers, weighted, never alone</b>Every GoPro clip carries GPMF; nothing has ever read it. Freefall gives airtime, spikes give impacts, GPS gives the fast runs, the gyro says whether the <em>camera</em> is inverted. Per Karl's rule and roadmap item 8: optional, a corroboration term in the existing rank, no weight until R11 measures it, and shown as numbers rather than event names until then.<span class="tag free">FREE</span> <span class="tag rq">NEEDS R11</span></li>
+      <li><b>Listen first, then propose themes</b>The audio pass is free and fast; run it before asking anything. One cheap call proposes theme chips with clip counts; you confirm, edit or dictate. Themes rank picks — they never change what the sheets see, so changing them later is free.<span class="tag priced">~$0.05</span></li>
+      <li><b>Priority-ordered, journaled indexing</b>The free stages score every clip; the priced stages run most-promising-first and release clips whole. A journal makes crash, restart and added footage the same operation.<span class="tag free">FREE</span></li>
+      <li><b>Cull with keys, watch as a reel</b>P / X / U on picks played large, auto-advance on Caps Lock. Photo-culling speed for video — the single biggest time saving on the floor.<span class="tag free">FREE</span></li>
+      <li><b>Keep what you watched</b>The kept range is the watched extent, snapped outward to sentence ends; <kbd>}</kbd> reaches for the reaction. Honest windows, no blind keeps.<span class="tag free">FREE</span></li>
+      <li><b>Witnesses with three states</b>Claimed, audited, contradicted — and a conflict rendered as one. The reason line is built only from what agrees. Trust that survives being wrong once.<span class="tag free">FREE</span></li>
+      <li><b>Look closer, per pick, priced</b>One fine sheet on one window, $0.07, to settle a claim. R10's finding as a key: the close look is an auditor, not a detector.<span class="tag priced">$0.07</span></li>
+      <li><b>Dictate the why</b>Hold <kbd>V</kbd> with the audio ducked; Whisper writes the note; it lives as a range comment on clip time and reaches the model per moment. The most valuable metadata in the project, made free to produce.<span class="tag free">FREE</span></li>
+      <li><b>Takes, clustered</b>Attempts at the same thing (same clip, same place, minutes apart, similar telemetry shape) open side by side; pick one, the rest go together.<span class="tag free">FREE</span> <span class="tag rq">TELEMETRY</span></li>
+      <li><b>Re-rank at the round boundary</b>After a round, source and kind weights fit to your verdicts re-sort what's left — never mid-round, so the queue stays stable.<span class="tag free">FREE</span></li>
+      <li><b>Coverage, not just findings</b>Where in each clip nobody has looked, on the tape and on the closing card, so the bin isn't biased to wherever the sheets landed.<span class="tag free">FREE</span></li>
+      <li><b>Play the bin</b>Your moments as a reel before spending on assembly — the sanity check the trailer pretended to be, for free.<span class="tag free">FREE</span></li>
+    </ol>
+  </div>
+</section>
+
+<!-- ============================================================ COST -->
+<section>
+  <div class="wrap">
+    <div class="sec-eyebrow"><span class="no">§7</span><span class="eyebrow">What it costs</span></div>
+    <div class="cmp-wrap">
+      <table class="cmp">
+        <thead><tr><th>Pass</th><th>Killington · 12 clips · 44 min</th><th>A 3-hour bin</th><th>Basis</th></tr></thead>
+        <tbody>
+          <tr><th>Listen (ASR, GPU)</th><td><b>~3.5 min</b> · free</td><td><b>~14 min</b> · free</td><td>13× realtime measured on the 5080</td></tr>
+          <tr><th>Telemetry</th><td>seconds · free</td><td>seconds · free</td><td>reading a metadata stream; needs R11</td></tr>
+          <tr><th>Previews (proxies)</th><td>~30 min at 1 worker · <b>~10 min at 3</b></td><td>~2 h at 1 worker · <b>~40 min at 3</b></td><td>~40 s per minute of footage, measured; CPU-parallel; the long pole</td></tr>
+          <tr><th>Look — 4 s + close look (default)</th><td>22 sheets + 36 windows · <b>$4.60</b> · ~25 min</td><td>90 + ~130 · <b>~$18</b> · ~90 min</td><td>$0.09 / sheet, $0.073 / window, measured</td></tr>
+          <tr><th>Look — every second</th><td><b>~$70</b> · ~2 h</td><td><b>~$290</b> · ~8 h</td><td>R10's whole-bin estimate, scaled</td></tr>
+          <tr><th>Themes proposal</th><td>~$0.05</td><td>~$0.10</td><td>one judge-role call over transcripts</td></tr>
+          <tr><th>First cut from the bin</th><td>~$0.60 · ~3 min</td><td>~$0.80 · ~4 min</td><td>a full Ask, measured</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose"><p>Because the index runs unattended, wall clock matters less than it did — but on a big bin the <b>proxies remain the long pole</b> and parallelize on cores you already have. Workers apply to previews first, sheets second; the CLI backend's request-rate ceiling is the sheet limit and should be measured once.</p></div>
+  </div>
+</section>
+
+<!-- ============================================================ REVIEW RECORD -->
+<section id="review">
+  <div class="wrap">
+    <div class="sec-eyebrow"><span class="no">§9</span><span class="eyebrow">Review record</span></div>
+    <h2>What the independent review found, and what was done with it</h2>
+    <div class="prose"><p>A second designer — briefed as a video-editing UI specialist with the project's goals and hard-won findings, no stake in the proposal — reviewed the second draft in full. Its verdict: direction right, skeleton worth keeping, would not ship as drawn. Each finding was checked against what this project has measured before being accepted.</p></div>
+    <div class="cmp-wrap">
+      <table class="cmp">
+        <thead><tr><th>Finding</th><th>Disposition</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><th>Seals launder claims as "confirmed"; the mock's own transcript contradicts its caption</th><td class="ok">Accepted</td><td>It is R10's finding reproduced in the design. Three-state witnesses; conflicts shown; felt = numbers only pre-R11 (Karl's rule).</td></tr>
+          <tr><th>Keeping 21 s having watched 6</th><td class="ok">Accepted — Karl decided</td><td>Keep what you watched, snapped outward; <kbd>}</kbd> extends.</td></tr>
+          <tr><th>K = keep collides with K = pause</th><td class="ok">Accepted — Karl decided</td><td>P / X / U, JKL intact, Caps Lock auto-advance.</td></tr>
+          <tr><th>"Start culling at minute 4" is false on big bins; pick-scoped proxies</th><td class="mod">Superseded — Karl decided differently</td><td>The goal is not a 4-minute edit. The index runs unattended and resumable, releases clips whole in priority order. Pick-scoped proxies are unnecessary; per-clip release is simpler and higher fidelity.</td></tr>
+          <tr><th>The ratio and "enough" are the machine judging sufficiency; counts drifted</th><td class="ok">Accepted</td><td>"Is it compelling" is the human's. Counts, heroes, sessions, "if strung out"; "you could assemble."</td></tr>
+          <tr><th>Queue mutates mid-round</th><td class="ok">Accepted</td><td>Frozen per round; arrivals and re-ranks at the boundary.</td></tr>
+          <tr><th>Word-line density, length, silent clips</th><td class="ok">Accepted</td><td>Two-tier strip; sentence bars; waveform + telemetry as snap sources.</td></tr>
+          <tr><th>Trimming with no picture; nudge is modal</th><td class="ok">Accepted</td><td>Park on the edge frame; frame step at the active edge.</td></tr>
+          <tr><th>Chrome painted over the picture</th><td class="ok">Accepted</td><td>Margins carry everything; only the stamp touches the picture.</td></tr>
+          <tr><th>Dictation over playing audio; live caption impossible</th><td class="ok">Accepted</td><td>Duck on V-down; caption after release; names seeded.</td></tr>
+          <tr><th>Bin has no round trip (used/unused, hand-adds, hero contract)</th><td class="ok">Accepted</td><td><code>used_in</code>, three filters, hand-adds become keeps, hero = must appear / may trim.</td></tr>
+          <tr><th>Open screen is a form; workers per-run; unmeasured tier priced</th><td class="mod">Accepted with modification</td><td>Karl asked for granularity and workers explicitly. They stay: one slider re-pricing live, workers in settings.</td></tr>
+          <tr><th>Enter on the closing card spends $0.60</th><td class="ok">Accepted</td><td>Free default; the priced action has its own key with the price on it.</td></tr>
+          <tr><th>Cut the trailer, the filmstrip, mid-round re-rank, four order modes, pace setting, theme-coverage meter, two variants on the floor</th><td class="ok">Accepted</td><td>Trailer's job is done by "play the bin"; themes are a brief, not a score; two variants belong to B's Versions.</td></tr>
+          <tr><th>Missing: overlap merge, re-index anchoring, batch verdicts, compare takes, undo semantics, resume, failure states, whole-clip context</th><td class="ok">Accepted</td><td>All added (§3, §4.3). Resume and added footage are Karl's requirements too.</td></tr>
+          <tr><th>Missing: speaker diarization "for free"</th><td class="no">Deferred</td><td>Not in the stack and not free — it needs a model. Worth a study later; the brief is about people.</td></tr>
+          <tr><th>Missing: orientation conflict between side-data and gyro</th><td class="mod">Clarified</td><td>Different facts: rotation side-data orients the file for display; the gyro says whether the mount was inverted, which only informs event claims. Both shown; neither overrides the other.</td></tr>
+          <tr><th>Accessibility: 9.5 px mono at #6c6c80 on near-black fails AA</th><td class="ok">Accepted</td><td>Small type lifted to ≥ #8f8fa3; seals carry words, not only colour.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ BUILD -->
+<section id="build">
+  <div class="wrap">
+    <div class="sec-eyebrow"><span class="no">§10</span><span class="eyebrow">Build order</span></div>
+    <div class="rec">
+      <h3>Six steps, the pass before the door</h3>
+      <ul class="tight" style="max-width:76ch">
+        <li><b>1 · The bin in the EDL.</b> <code>selects</code> with clip-time ranges, reason, note, witnesses, hero, <code>used_in</code>; rejects and later as a <code>floor</code> list. Non-breaking; <code>assemble.py</code> ignores it. The first-cut prompt taught to read it.</li>
+        <li><b>2 · The pass.</b> P / X / U, keep-what-you-watched with outward snap, the two-tier strip, three-state witnesses, dictation with ducking, rounds with the closing card. This is where the time and the fun are; it can run today on the existing sidecars and events file.</li>
+        <li><b>3 · The journal.</b> Per-clip stages, priority scoring from the free passes, resume on restart, per-clip release, failure states. Turns the three existing buttons into one unattended index.</li>
+        <li><b>4 · Added footage.</b> Detect new stems against the journal, listen immediately, queue by priority, deliver as a round; relink by hash for moved files.</li>
+        <li><b>5 · The open screen.</b> Contact sheet with free flags, themes proposed from transcripts, the granularity slider, settings for workers and cap.</li>
+        <li><b>6 · R11, then telemetry.</b> Confirm GPMF in these files, extract, score against the adjudicated events and random windows; only then give the felt witness a weight and a vocabulary.</li>
+      </ul>
+      <p style="max-width:76ch;margin-bottom:0">Nothing was changed: no code, no branches. Prices and times are the repo's measured numbers where they exist and are marked where they are estimates. The renders are design targets.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Roughcut intake design · final proposal · 2026-09-07</span>
+    <span>Companion to <a href="https://claude.ai/code/artifact/4a250a90-e6b0-4d55-b886-453603882400">Reframing the Cut Board</a></span>
+  </div>
+</footer>
