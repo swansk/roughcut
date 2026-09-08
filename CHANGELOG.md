@@ -33,6 +33,7 @@ same commit. Releases move entries into a dated version section.
   play the bin (every select in order in the same picture), next round, by clip, revisit
   later, and Assemble with its price on `A`. `app/tests/test_floor_ui.py` drives all of it in
   real Chromium (with a fake microphone for `V`) and asserts the kept ranges on the EDL on disk.
+  (Commit `bed7a9c`; the tracker's M2 boxes point at it.)
 - **The floor's foundations: picks, the bin in the EDL, and every floor endpoint.** The intake
   design (docs/design/cutting-room-floor.html, tracked in docs/INTAKE.md) needs three things
   before any screen exists. `roughcut/picks.py` derives **picks** — windows with witnesses —

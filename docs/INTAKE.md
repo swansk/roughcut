@@ -84,7 +84,7 @@ table). Nothing verified live on Killington yet.
       line with conflicts, whole-clip tape (picks, waveform placeholder, telemetry trace when
       present), zoomed strip with words / sentence bars, kept-range = watched, snapping via the
       sidecar word spans, stamps, key line. DoD: browser tests (`test_floor_ui.py`) — branch
-      `agent/floor`, commit `feat: the pass` (hash in the docs commit that follows it).
+      `agent/floor`, commit `bed7a9c` (suite: 281 passed).
 - [x] I2.2 Keys per decision 2, including `⇧X` (reject the rest of this clip), hold-space,
       `[ ] { }` snapping, `← →` frame step at the active edge, `E` evidence drawer, `.` more —
       same commit. (`⇧X` is untested on the synthetic bin, which has one pick per clip.)
