@@ -208,6 +208,45 @@ def test_the_contact_sheet_carries_the_journals_word_once_indexed(tmp_path, proj
         assert a["priority"] is not None and a["parked"] is None
 
 
+def test_telemetry_is_a_stage_that_skips_without_a_stream_and_feeds_the_picks(
+        tmp_path, project, monkeypatch):
+    """R11 wired (I6.2): the tool runs only on clips with a gpmd stream; its loose freefall
+    runs and > 5 g peaks become `felt` witnesses — numbers only — and the journal's
+    telemetry_peaks fact counts exactly those."""
+    import server
+
+    with _fresh(tmp_path, project, sidecars=project["sidecars"], visual=None) as c:
+        _stub_tools(server, monkeypatch, tmp_path)
+        monkeypatch.setattr(server, "has_telemetry", lambda clip: clip == "CLIP_A.MP4")
+        script = tmp_path / "tele.py"
+        script.write_text(
+            "import json, sys\n"
+            "from pathlib import Path\n"
+            "out = Path(sys.argv[1]); out.mkdir(parents=True, exist_ok=True)\n"
+            "(out / 'CLIP_A.telemetry.json').write_text(json.dumps({\n"
+            "  'clip': 'CLIP_A', 'gpmd': True,\n"
+            "  'freefall_loose': [{'start': 0.6, 'end': 0.9, 'dur': 0.3, 'min_g': 0.03},\n"
+            "                     {'start': 3.0, 'end': 3.1, 'dur': 0.1, 'min_g': 0.4}],\n"
+            "  'impacts': [{'at': 1.2, 'value': 6.7, 'unit': 'g'},\n"
+            "              {'at': 4.0, 'value': 3.2, 'unit': 'g'}],\n"
+            "  'orientation': {'mount': 'upright'}}))\n", encoding="utf-8")
+        monkeypatch.setattr(server, "telemetry_cmd",
+                            lambda stem: [sys.executable, str(script), str(server.telemetry_dir())])
+        s = _wait_index(c, c.post("/api/index", json={}).json()["job"])
+        assert s["state"] == "done" and s["detail"].startswith("3 of 3")
+        j = journal.Journal.load(server.journal_path())
+        assert j.state("CLIP_A.MP4", "telemetry") == "done"
+        assert j.state("CLIP_B.MP4", "telemetry") == "skipped"
+        assert j.clips["CLIP_B.MP4"]["stages"]["telemetry"]["last_error"].startswith("no telemetry")
+        # the 0.1 s run and the 3.2 g bump are below R11's floors: two peaks, not four
+        assert j.clips["CLIP_A.MP4"]["facts"]["telemetry_peaks"] == 2
+        picks_a = [p for p in c.get("/api/picks").json()["picks"] if p["clip"] == "CLIP_A.MP4"]
+        felt = [w for p in picks_a for w in p["witnesses"] if w["kind"] == "felt"]
+        assert {w["text"] for w in felt} == {"0.3 s freefall at 0.03 g", "6.7 g"}
+        assert all(w["state"] is None for w in felt), "numbers only, never a state"
+        assert c.get("/api/clips").json()["clips"][0]["telemetry"] is True
+
+
 def test_a_scan_with_nothing_to_look_at_skips_the_close_look(tmp_path, project, monkeypatch):
     import server
 

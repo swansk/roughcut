@@ -210,8 +210,17 @@ weight until measured, and until then numbers only, never event names.
       the 9 labelled mounts and refuted every "camera inverted" reading (body roll ≤ 30°); one
       6.7 g peak was a fall R10 had missed. Recommendation: freefall may carry a capped
       corroboration weight; impacts and tilt stay numbers on the witness.
-- [ ] I6.2 Only if R11 lands: `felt` witness in picks (numbers only), corroboration term in
+- [x] I6.2 Only if R11 lands: `felt` witness in picks (numbers only), corroboration term in
       `events.py` with a fitted weight, gyro orientation as a check on `seen` flip claims.
+      — the I6.2 commit (see log): telemetry as an index stage (skips without a `gpmd`
+      stream), freefall runs ≥ 0.25 s under 0.5 g and impacts > 5 g as `felt` witnesses with
+      numbers only, freefall as the one shape that may corroborate (the picks bonus, capped
+      like R10's motion term), `telemetry_peaks` counted on R11's floors. **Not done, on
+      purpose:** a weight inside `events.py` (R11 said "capped at the motion track's" and the
+      picks bonus already is that; fitting more needs a labelled set — R11 names the 24
+      freefall runs as the place to start one) and orientation on the `seen` witness as a
+      number (needs the events file to carry per-window tilt; a follow-up once the 9 unlooked
+      Killington clips have their close look).
 
 ## Lanes in flight
 
@@ -273,3 +282,10 @@ them. Every lane adds its own CHANGELOG bullet; integration keeps all of them.
   (17,019,121 bytes, identical to the original), left the priced stages paused, and the floor
   showed 12 clips / 92 picks again. Cost of the whole exercise: three in-flight sheet calls,
   ~$0.08. `test_index.py` 5 passed; suite 328 passed, 1 skipped.
+- 2026-09-08 · I6.2 live on Killington: the index reopened the 12 stale "not integrated"
+  telemetry skips and ran the stage (the R11 tool's cache made it seconds, $0); telemetry
+  `done` 12/12; `telemetry_peaks` facts 0–22 per clip (CLIP_02's 22 saturates the term at
+  its 0.05 cap — the point of the cap); the floor shows **55 felt witnesses** over 90 picks,
+  numbers only — CLIP_11's backflip window carries `5.9 g` / `6.7 g`, silent CLIP_05 a
+  `0.3 s freefall at 0.03 g` beside 8 g bumps. Priced stages still paused; 12 clips released
+  under the paused rule.

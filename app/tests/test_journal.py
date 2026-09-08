@@ -439,3 +439,22 @@ def test_progress_leaves_unmeasured_stages_out_of_the_eta_and_says_so(tmp_path):
     _run(j, "A.MP4", "telemetry", t=7.0, dur=1.0)
     _run(j, "A.MP4", "proxy", t=8.0, dur=20.0)
     assert j.progress(now=30.0)["eta_s"] is None, "priced stages unmeasured: still none"
+
+
+def test_reopen_puts_a_skipped_stage_back_in_the_queue(tmp_path):
+    """A skip recorded before a stage existed is not a fact about the clip: reopened,
+    it runs again from zero attempts; a running stage cannot be reopened."""
+    j = _journal(tmp_path, "A.MP4")
+    _run(j, "A.MP4", "probe", t=0.0, dur=1.0)
+    j.skip("A.MP4", "telemetry", "not integrated yet", now=1.0)
+    assert j.state("A.MP4", "telemetry") == "skipped"
+    j.reopen("A.MP4", "telemetry", now=2.0)
+    assert j.state("A.MP4", "telemetry") == "queued"
+    assert j.clips["A.MP4"]["stages"]["telemetry"]["last_error"] is None
+    assert j.next(now=2.0) == ("A.MP4", "telemetry")
+    j.start("A.MP4", "telemetry", now=2.0)
+    with pytest.raises(J.JournalError):
+        j.reopen("A.MP4", "telemetry", now=3.0)
+    j.finish("A.MP4", "telemetry", now=3.0)
+    assert j.state("A.MP4", "telemetry") == "done"
+    assert any("reopened" in e["what"] for e in j.data["log"])

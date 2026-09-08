@@ -98,6 +98,22 @@ def test_a_telemetry_peak_alone_is_never_a_pick_but_joins_one():
     assert "telemetry: 1.1 s freefall" in p["why"]
 
 
+def test_a_freefall_run_corroborates_but_an_impact_is_a_number_only():
+    """R11's rule: a freefall run under 0.5 g for 0.25 s may carry a small corroboration
+    weight; an impact peak is shown and never moves the rank."""
+    clips = {"CLIP_A.MP4": _clip(candidates=[])}
+    evs = [_event(20.0, 24.0, "unseen")]
+    plain = picks.build(clips, evs)[0]
+    fall = picks.build(clips, evs, telemetry={"CLIP_A.MP4": {"peaks": [
+        {"at": 21.0, "value": 0.3, "unit": "s freefall at 0.03 g"}]}})[0]
+    hit = picks.build(clips, evs, telemetry={"CLIP_A.MP4": {"peaks": [
+        {"at": 21.0, "value": 6.7, "unit": "g"}]}})[0]
+    assert fall["score"] == pytest.approx(plain["score"] + picks.CORROBORATION_BONUS)
+    assert hit["score"] == pytest.approx(plain["score"]), "an impact does not move the rank"
+    assert "6.7 g" in hit["why"]
+    assert all(w["state"] is None for w in hit["witnesses"] if w["kind"] == "felt")
+
+
 def test_themes_tag_and_lift_matching_picks():
     clips = {"CLIP_A.MP4": _clip()}
     plain = picks.build(clips, [])[0]

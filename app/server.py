@@ -934,6 +934,7 @@ def api_picks(order: str = "rank") -> JSONResponse:
     released = set(released_clips())
     themes = edl.get("themes") or []
     rows = picks.build(payload["clips"], payload["events"], themes=themes,
+                       telemetry=bin_telemetry(),
                        verdicts=edl["floor"]["verdicts"], selects=edl["selects"])
     for p in rows:
         p["released"] = p["clip"] in released
@@ -1611,6 +1612,7 @@ def index_files() -> dict[str, dict[str, bool]]:
         # No `probe` key: nothing on disk records a probe, so the journal's own word
         # is the truth for it — reporting False would re-queue it on every restart.
         out[clip] = {
+            "telemetry": (telemetry_dir() / f"{stem.upper()}.telemetry.json").exists(),
             "asr": stem in analysed_stems(),
             "proxy": (STATE["proxy_dir"] / f"{stem}.mp4").exists(),
             "look": vis.exists(),
@@ -1631,8 +1633,10 @@ def index_facts(clip: str) -> dict:
     themes = [t for t in (read_edl().get("themes") or []) if isinstance(t, str)]
     text = " ".join(str(u.get("text", "")) for u in transcript)
     hits = sum(1 for t in themes if find._tokens(t) and find._matched(find._tokens(t), text))
+    tele = telemetry_peaks(clip)
     return {"words": int(words or 0), "candidates": len(d.get("candidates") or []),
-            "telemetry_peaks": 0, "theme_hits": hits,
+            # R11: loose freefall runs and > 5 g peaks, never 3 g — the least-weighted term
+            "telemetry_peaks": len(tele["peaks"]) if tele else 0, "theme_hits": hits,
             "duration_s": float(d.get("duration_s") or clip_duration(clip) or 0.0)}
 
 
@@ -1654,6 +1658,17 @@ def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
         if clip_duration(clip) is None:
             raise RuntimeError("ffprobe could not read the clip")
         j.set_captured(clip, capture_time(clip))
+        return 0.0
+    if stage == "telemetry":
+        # Optional by Karl's rule: a clip without a gpmd stream skips, never fails.
+        if not has_telemetry(clip):
+            raise _Skip("no telemetry stream in the file")
+        _run_tool(telemetry_cmd(stem))
+        d = load_telemetry(clip)
+        if not d:
+            raise RuntimeError("the telemetry tool wrote no summary")
+        if d.get("error") or not d.get("gpmd"):
+            raise _Skip(str(d.get("error") or "no usable gpmd stream")[:120])
         return 0.0
     if stage == "asr":
         # One tool run over every clip still waiting on it, not one per clip: the
@@ -1702,9 +1717,7 @@ def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
             found = json.loads(windows.read_text(encoding="utf-8")) if windows.exists() else {}
             spans = found.get(stem) if isinstance(found, dict) else found
             if not spans:
-                # Nothing unusual enough to pay for a closer look at. `skip` is set by
-                # the caller when we return None-equivalent: signal with a sentinel.
-                raise _NothingToLookAt()
+                raise _Skip("nothing worth a closer look")
             _run_tool(fine_cmd(windows))
         finally:
             windows.unlink(missing_ok=True)
@@ -1717,8 +1730,9 @@ def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
     raise RuntimeError(f"no runner for stage {stage!r}")
 
 
-class _NothingToLookAt(Exception):
-    """The motion scan found no window worth a close look — the stage is skipped."""
+class _Skip(Exception):
+    """A stage that does not apply to this clip — no telemetry stream, nothing worth a
+    close look. The journal records it as `skipped`, which counts as done."""
 
 
 def _over_budget(next_usd: float) -> bool:
@@ -1742,6 +1756,14 @@ def _index_job(job: str, order: str) -> None:
     for clip in present:
         if j.state(clip, "asr") == "done" and j.priority(clip) is None:
             j.set_facts(clip, index_facts(clip))
+        # A telemetry skip recorded before the stage existed ("not integrated") is not
+        # a fact about the clip. Reopen it where the file has a gpmd stream; the tool's
+        # own cache makes the re-run free.
+        st = j.clips[clip]["stages"]["telemetry"]
+        if (st["state"] == "skipped"
+                and str(st.get("last_error") or "").startswith("not integrated")
+                and has_telemetry(clip)):
+            j.reopen(clip, "telemetry")
     # Probes first, all of them: they are one ffprobe each, and with every probe settled
     # the audio pass can run as one batch over every clip instead of reloading its
     # model per clip as the priority walk would otherwise make it.
@@ -1771,11 +1793,6 @@ def _index_job(job: str, order: str) -> None:
             break
         clip, stage = nxt
         stem = Path(clip).stem
-        if stage == "telemetry":
-            # R11 said what the sensor may say; wiring it is I6.2. Until then the stage
-            # is not applicable, never silently "done".
-            j.skip(clip, stage, "not integrated yet — INTAKE I6.2")
-            continue
         if stage in journal.PRICED:
             est = (VISUAL_USD_PER_SHEET if stage == "look"
                    else FINE_WINDOWS_PER_CLIP * FINE_USD_PER_WINDOW)
@@ -1787,8 +1804,8 @@ def _index_job(job: str, order: str) -> None:
         report(f"{stem} · {stage}")
         try:
             cost = _index_stage(j, clip, stage)
-        except _NothingToLookAt:
-            j.skip(clip, stage, "nothing worth a closer look")
+        except _Skip as why:
+            j.skip(clip, stage, str(why))
         except Exception as exc:  # noqa: BLE001 — a failed stage is a state, not a stop
             state = j.fail(clip, stage, str(exc)[:200],
                            retry_after_s=30.0 if "rate" in str(exc).lower() else None)
@@ -1796,6 +1813,11 @@ def _index_job(job: str, order: str) -> None:
             continue
         else:
             j.finish(clip, stage, cost)
+            # The priority facts read the telemetry summary; on a bin whose sidecars
+            # already existed they were computed at reconcile time, before this stage
+            # ran, so they are refreshed once the sensor has spoken.
+            if stage == "telemetry" and j.state(clip, "asr") in journal.SETTLED:
+                j.set_facts(clip, index_facts(clip))
         if j.released(clip):
             report(f"{stem} released")
     prog = j.progress()
@@ -1829,6 +1851,73 @@ def has_telemetry(clip: str) -> bool | None:
         capture_output=True, text=True)
     cache[clip] = "gpmd" in (r.stdout or "")
     return cache[clip]
+
+
+# Telemetry, on R11's terms (research/R11-telemetry.md, INTAKE M6): a freefall run under
+# 0.5 g for at least 0.25 s is clean evidence of motion and may corroborate; an impact peak
+# is a number on the witness and nothing more, and only above 5 g is it worth showing —
+# at 3 g the rule fires six times a minute on this footage, mostly hands on the camera.
+FREEFALL_MIN_S = 0.25
+IMPACT_SHOW_G = 5.0
+
+
+def telemetry_dir() -> Path:
+    return STATE["work"] / "telemetry" / STATE["footage"].name
+
+
+def telemetry_cmd(stem: str) -> list[str]:
+    """R11's tool over one clip — a function so the tests can replace it. Free: ffmpeg
+    and pure Python, no model call."""
+    return ["uv", "run", "--quiet", str(TOOLS / "telemetry.py"), str(STATE["footage"]),
+            "-o", str(telemetry_dir()), "--only", stem]
+
+
+def load_telemetry(clip: str) -> dict | None:
+    p = telemetry_dir() / f"{Path(clip).stem.upper()}.telemetry.json"
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return None
+
+
+def telemetry_peaks(clip: str) -> dict | None:
+    """The `felt` witnesses for a clip — numbers only: loose freefall runs of at least
+    FREEFALL_MIN_S, and impact peaks above IMPACT_SHOW_G. None when the clip has no
+    telemetry summary, so a phone clip contributes nothing and loses nothing."""
+    d = load_telemetry(clip)
+    if not d or not d.get("gpmd"):
+        return None
+    peaks = []
+    for run in d.get("freefall_loose") or []:
+        try:
+            if float(run["dur"]) >= FREEFALL_MIN_S:
+                peaks.append({"at": round(float(run["start"]), 2),
+                              "value": round(float(run["dur"]), 2),
+                              "unit": f"s freefall at {float(run.get('min_g') or 0):.2f} g",
+                              "kind": "freefall"})
+        except (KeyError, TypeError, ValueError):
+            continue
+    for p in d.get("impacts") or []:
+        try:
+            if float(p["value"]) >= IMPACT_SHOW_G:
+                peaks.append({"at": round(float(p["at"]), 2),
+                              "value": round(float(p["value"]), 1), "unit": "g",
+                              "kind": "impact"})
+        except (KeyError, TypeError, ValueError):
+            continue
+    peaks.sort(key=lambda x: x["at"])
+    return {"peaks": peaks, "orientation": d.get("orientation")}
+
+
+def bin_telemetry() -> dict[str, dict]:
+    out = {}
+    for clip in footage_clips():
+        t = telemetry_peaks(clip)
+        if t:
+            out[clip] = t
+    return out
 
 
 @app.get("/api/clips")

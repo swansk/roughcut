@@ -190,7 +190,12 @@ def _pick_from(clip: str, group: list[dict], duration: float,
         base = max(w["score"] for w in contradicted) * CONTRADICTED_FACTOR
     heard_best = max((w["score"] for w in heard), default=0.0) * HEARD_GAIN
     score = max(base, heard_best)
-    kinds_present = {w["kind"] for w in group}
+    # Corroboration across kinds. The felt witness counts only as a *freefall run* (R11:
+    # the one telemetry shape clean enough to carry a small weight); an impact peak is a
+    # number shown on the witness and never moves the rank.
+    kinds_present = {w["kind"] for w in group if w["kind"] != "felt"}
+    if any(w["kind"] == "felt" and "freefall" in str(w.get("text", "")) for w in felt):
+        kinds_present.add("felt")
     score += CORROBORATION_BONUS * max(0, len(kinds_present) - 1)
     hits = theme_hits(themes or [], group)
     if hits:

@@ -330,6 +330,24 @@ class Journal:
         st["finished"] = now
         self._touch()
 
+    def reopen(self, clip: str, stage: str, *, now: float | None = None) -> None:
+        """Put a settled or skipped stage back in the queue — a skip that turned out
+        not to be a fact about the clip (a stage that did not exist yet when it was
+        recorded), or a human asking for a stage to run again. Attempts start over;
+        cost already recorded stays recorded. Not for a running stage."""
+        now = time.time() if now is None else now
+        st = self._stage(clip, stage)
+        if st["state"] == "running":
+            raise JournalError(f"{clip} {stage} is running; finish or fail it first")
+        st["state"] = "queued"
+        st["attempts"] = 0
+        st["last_error"] = None
+        st["started"] = None
+        st["finished"] = None
+        st["not_before"] = None
+        self._log(now, f"{clip} {stage} reopened")
+        self._touch()
+
     def unpark(self, clip: str, *, now: float | None = None) -> None:
         """A human looked, and wants another three tries."""
         now = time.time() if now is None else now

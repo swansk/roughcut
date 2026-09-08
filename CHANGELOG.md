@@ -10,6 +10,16 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Telemetry is wired on R11's terms (INTAKE I6.2).** The index's `telemetry` stage runs
+  `research/tools/telemetry.py` on clips that carry a `gpmd` stream and skips — honestly, with
+  the reason — on clips that don't (a phone clip loses nothing). From the summary, two things
+  and only two reach the floor as `felt` witnesses, numbers only and never a state: loose
+  freefall runs of at least 0.25 s under 0.5 g (`0.30 s freefall at 0.03 g`) and impact peaks
+  above 5 g (`6.7 g`) — not the 3 g the design guessed, which fires six times a minute on
+  this footage. A freefall run may add the small cross-kind corroboration bonus to a pick
+  that already has a heard or seen witness; an impact moves nothing. The journal's
+  `telemetry_peaks` priority fact counts exactly those, and is refreshed once the sensor has
+  spoken on a bin whose sidecars already existed. Nothing here can make a pick alone.
 - **`GET /api/clips` — the folder as a contact sheet would show it (INTAKE I5.1's data).**
   Every clip with the free facts: length, when it was shot and which session that makes it
   (the 4-hour-gap rule), what exists for it on disk (proxy, audio sidecar, coarse look, close
