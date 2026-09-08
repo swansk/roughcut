@@ -65,7 +65,7 @@ import uvicorn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from roughcut import (config, dictate, effects, events, find, inference,  # noqa: E402
-                      picks, progress, revise, selects)
+                      journal, picks, progress, revise, selects)
 
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent / "research" / "tools"
@@ -96,14 +96,14 @@ def all_jobs() -> list[progress.Job]:
     and it is what lets a reloaded page re-attach to a render and an Ask that are both
     still running — which is the state his machine is in as this is written.
     """
-    return [*ANALYSES.values(), *VISUALS.values(), *ASKS.values(), *FINDS.values(),
-            *RENDERS.values()]
+    return [*ANALYSES.values(), *VISUALS.values(), *INDEXES.values(), *ASKS.values(),
+            *FINDS.values(), *RENDERS.values()]
 
 
 # Polled once a second by every open board, so it carries no payloads: a finished Ask
 # holds a 15k-token plan and a render holds ffmpeg's whole log, and neither belongs in
 # a heartbeat. Both stay one fetch away on /api/job/{id}.
-JOB_LIST_OMIT = ("plan", "found")
+JOB_LIST_OMIT = ("plan", "found", "journal")
 
 
 @app.get("/api/jobs")
@@ -120,7 +120,7 @@ def api_jobs() -> JSONResponse:
 
 @app.get("/api/job/{job}")
 def api_job(job: str) -> JSONResponse:
-    for registry in (ANALYSES, VISUALS, ASKS, FINDS, RENDERS):
+    for registry in (ANALYSES, VISUALS, INDEXES, ASKS, FINDS, RENDERS):
         if job in registry:
             return JSONResponse(registry[job].snapshot())
     raise HTTPException(404, "no such job")
@@ -865,9 +865,31 @@ async def api_find(request: Request) -> JSONResponse:
 
 
 def released_clips() -> list[str]:
-    """Clips the floor may show: listened to and previewable. The journal (INTAKE M3)
-    will tighten this to "every stage done"; until then a clip with a sidecar and a
-    proxy is releasable, because those are the two things a pick needs to play."""
+    """Clips the floor may show.
+
+    With a journal (a bin indexed by POST /api/index) this is decision 3 exactly: every
+    applicable stage done — the floor never shows a clip whose picture can't play or
+    whose picks might still change. A bin indexed before journals existed has no
+    journal, and for it a clip with a sidecar and a proxy is releasable, because those
+    are the two things a pick needs to play.
+    """
+    if journal_path().exists():
+        try:
+            present = set(footage_clips())
+            j = load_journal()
+            if not j.paused_priced:
+                return [c for c in j.released_clips() if c in present]
+            # The budget cap pauses the priced stages; it must not take the floor away.
+            # The design's own fallback is "picks from words and telemetry only", so
+            # while paused a clip whose *free* stages are settled is released — its picks
+            # come from the transcript and whatever coarse look it already has.
+            return [c for c in j.ordered() if c in present
+                    and not j.clips[c].get("missing")
+                    and all(j.state(c, s) in journal.SETTLED
+                            for s in journal.STAGES
+                            if s not in journal.PRICED and s != "picks")]
+        except journal.JournalError:
+            pass                          # an unreadable journal must not blank the floor
     out = []
     for clip in footage_clips():
         stem = Path(clip).stem
@@ -1532,6 +1554,291 @@ def api_visual_status(job: str) -> JSONResponse:
     if job not in VISUALS:
         raise HTTPException(404, "no such job")
     return JSONResponse(VISUALS[job].snapshot())
+
+
+# ---------------------------------------------------------------- the index
+#
+# Decision 3 (docs/INTAKE.md): the index runs unattended and resumable, in a priority
+# order, and releases clips whole. `roughcut/journal.py` is the plan; this is the hand
+# that runs it — one thread walking `journal.next()` and running each (clip, stage) with
+# the tools the two old buttons already drove, reporting back with start / finish / fail.
+# Killing the server mid-stage costs that stage: the next POST /api/index reconciles the
+# journal against the sidecars on disk and carries on. Adding footage is the same path.
+
+INDEXES: dict[str, progress.Job] = {}
+
+
+def journal_path() -> Path:
+    return STATE["work"] / "index" / f"{STATE['footage'].name}.json"
+
+
+def load_journal() -> journal.Journal:
+    return journal.Journal.load(journal_path(), bin=STATE["footage"].name)
+
+
+def index_files() -> dict[str, dict[str, bool]]:
+    """What exists on disk per clip, for `journal.reconcile` — files are the truth.
+
+    `picks` are derived, never written (INTAKE Discovered): they count as done when the
+    events file is at least as new as everything it was built from.
+    """
+    events_file = STATE["visual"] / events.EVENTS_FILE
+    events_at = events_file.stat().st_mtime if events_file.exists() else None
+    out: dict[str, dict[str, bool]] = {}
+    for clip in footage_clips():
+        stem = Path(clip).stem
+        vis = STATE["visual"] / f"{stem}.visual.json"
+        fine = STATE["visual"] / f"{stem}.fine.json"
+        newest = max((p.stat().st_mtime for p in (vis, fine) if p.exists()), default=None)
+        # No `probe` key: nothing on disk records a probe, so the journal's own word
+        # is the truth for it — reporting False would re-queue it on every restart.
+        out[clip] = {
+            "asr": stem in analysed_stems(),
+            "proxy": (STATE["proxy_dir"] / f"{stem}.mp4").exists(),
+            "look": vis.exists(),
+            "close": fine.exists(),
+            "picks": bool(events_at and newest and events_at >= newest),
+        }
+    return out
+
+
+def index_facts(clip: str) -> dict:
+    """The free-stage facts the priority score reads, from the audio sidecar."""
+    d = load_sidecar(clip)
+    transcript = d.get("transcript") or []
+    words = (d.get("summary") or {}).get("n_words")
+    if words is None:
+        words = sum(len(u.get("words") or str(u.get("text", "")).split())
+                    for u in transcript)
+    themes = [t for t in (read_edl().get("themes") or []) if isinstance(t, str)]
+    text = " ".join(str(u.get("text", "")) for u in transcript)
+    hits = sum(1 for t in themes if find._tokens(t) and find._matched(find._tokens(t), text))
+    return {"words": int(words or 0), "candidates": len(d.get("candidates") or []),
+            "telemetry_peaks": 0, "theme_hits": hits,
+            "duration_s": float(d.get("duration_s") or clip_duration(clip) or 0.0)}
+
+
+def _run_tool(cmd: list[str]) -> str:
+    r = subprocess.run(cmd, capture_output=True, text=True,
+                       env={**os.environ, "PYTHONUNBUFFERED": "1"})
+    if r.returncode != 0:
+        tail = (r.stderr or r.stdout or "").strip().splitlines()
+        raise RuntimeError(tail[-1][:200] if tail else f"exit {r.returncode}")
+    return r.stdout
+
+
+def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
+    """Run one stage for one clip with the existing tools. Returns the cost in USD.
+    Raises on failure; the caller records it and the journal decides on retries."""
+    stem = Path(clip).stem
+    src = STATE["footage"] / clip
+    if stage == "probe":
+        if clip_duration(clip) is None:
+            raise RuntimeError("ffprobe could not read the clip")
+        j.set_captured(clip, capture_time(clip))
+        return 0.0
+    if stage == "asr":
+        # One tool run over every clip still waiting on it, not one per clip: the
+        # audio pass loads a 3 GB model per run, and it walks the folder anyway.
+        wanted = [c for c in footage_clips()
+                  if c == clip or (j.state(c, "asr") in journal.RETRYABLE
+                                   and j.state(c, "probe") in journal.SETTLED)]
+        skip = [Path(c).stem for c in footage_clips() if c not in wanted]
+        for other in wanted:
+            if other != clip:
+                j.start(other, "asr")
+        try:
+            _run_tool(analyze_cmd(skip, False))
+        except RuntimeError as exc:
+            for other in wanted:
+                if other != clip:
+                    j.fail(other, "asr", str(exc))
+            raise
+        for other in wanted:
+            if other == clip:
+                continue
+            if Path(other).stem in analysed_stems():
+                j.set_facts(other, index_facts(other))
+                j.finish(other, "asr")
+            else:
+                j.fail(other, "asr", "no sidecar written")
+        if stem not in analysed_stems():
+            raise RuntimeError("no sidecar written")
+        j.set_facts(clip, index_facts(clip))
+        return 0.0
+    if stage == "proxy":
+        build_proxy(src, STATE["proxy_dir"] / f"{stem}.mp4", STATE["orient"])
+        STATE["proxies_ready"] = all(
+            (STATE["proxy_dir"] / f"{Path(c).stem}.mp4").exists() for c in footage_clips())
+        return 0.0
+    if stage == "look":
+        _run_tool(visual_cmd([stem], False))
+        if not (STATE["visual"] / f"{stem}.visual.json").exists():
+            raise RuntimeError("the visual pass wrote no sidecar")
+        sheets = max(1, math.ceil((clip_duration(clip) or 0.0) / VISUAL_SHEET_S))
+        return sheets * VISUAL_USD_PER_SHEET
+    if stage == "close":
+        windows = STATE["work"] / f"windows_{stem}.json"
+        try:
+            _run_tool(scan_cmd([stem], windows, FINE_WINDOWS_PER_CLIP))
+            found = json.loads(windows.read_text(encoding="utf-8")) if windows.exists() else {}
+            spans = found.get(stem) if isinstance(found, dict) else found
+            if not spans:
+                # Nothing unusual enough to pay for a closer look at. `skip` is set by
+                # the caller when we return None-equivalent: signal with a sentinel.
+                raise _NothingToLookAt()
+            _run_tool(fine_cmd(windows))
+        finally:
+            windows.unlink(missing_ok=True)
+        if not (STATE["visual"] / f"{stem}.fine.json").exists():
+            raise RuntimeError("the close look wrote no sidecar")
+        return len(spans) * FINE_USD_PER_WINDOW
+    if stage == "picks":
+        rebuild_events()
+        return 0.0
+    raise RuntimeError(f"no runner for stage {stage!r}")
+
+
+class _NothingToLookAt(Exception):
+    """The motion scan found no window worth a close look — the stage is skipped."""
+
+
+def _over_budget(next_usd: float) -> bool:
+    return inference.spent_usd() + next_usd > config.budget_usd()
+
+
+def _index_job(job: str, order: str) -> None:
+    entry = INDEXES[job]
+    j = load_journal()
+    present = footage_clips()
+    j.add_clips(present, captured={c: capture_time(c) for c in present})
+    gone = [c for c in j.clips if c not in present]
+    if gone:
+        j.remove_missing(gone)
+    if order in journal.ORDERS:
+        j.set_order(order)
+    changes = j.reconcile(index_files())
+    if changes["requeued"] or changes["lost"]:
+        entry.note("resumed — " + ", ".join(
+            f"{Path(c).stem} {s}" for c, s in changes["requeued"] + changes["lost"]))
+    for clip in present:
+        if j.state(clip, "asr") == "done" and j.priority(clip) is None:
+            j.set_facts(clip, index_facts(clip))
+    # Probes first, all of them: they are one ffprobe each, and with every probe settled
+    # the audio pass can run as one batch over every clip instead of reloading its
+    # model per clip as the priority walk would otherwise make it.
+    for clip in present:
+        if j.state(clip, "probe") in journal.RETRYABLE:
+            j.start(clip, "probe")
+            try:
+                _index_stage(j, clip, "probe")
+            except Exception as exc:  # noqa: BLE001
+                j.fail(clip, "probe", str(exc)[:200])
+            else:
+                j.finish(clip, "probe")
+    entry["state"] = "running"
+
+    def report(detail: str) -> None:
+        prog = j.progress()
+        entry["journal"] = prog
+        entry["released"] = prog.get("released", 0)
+        entry["cost_usd"] = prog.get("cost_usd", 0.0)
+        entry.advance("index", max(0.0, min(1.0, float(prog.get("pct") or 0.0) / 100.0)),
+                      detail=detail)
+
+    report("reading the journal")
+    while True:
+        nxt = j.next()
+        if nxt is None:
+            break
+        clip, stage = nxt
+        stem = Path(clip).stem
+        if stage == "telemetry":
+            # R11 said what the sensor may say; wiring it is I6.2. Until then the stage
+            # is not applicable, never silently "done".
+            j.skip(clip, stage, "not integrated yet — INTAKE I6.2")
+            continue
+        if stage in journal.PRICED:
+            est = (VISUAL_USD_PER_SHEET if stage == "look"
+                   else FINE_WINDOWS_PER_CLIP * FINE_USD_PER_WINDOW)
+            if _over_budget(est):
+                j.pause_priced(f"budget cap ${config.budget_usd():.2f} reached")
+                report(f"budget cap reached — priced stages paused; {stem} waits")
+                continue
+        j.start(clip, stage)
+        report(f"{stem} · {stage}")
+        try:
+            cost = _index_stage(j, clip, stage)
+        except _NothingToLookAt:
+            j.skip(clip, stage, "nothing worth a closer look")
+        except Exception as exc:  # noqa: BLE001 — a failed stage is a state, not a stop
+            state = j.fail(clip, stage, str(exc)[:200],
+                           retry_after_s=30.0 if "rate" in str(exc).lower() else None)
+            report(f"{stem} · {stage} failed ({state}): {str(exc)[:80]}")
+            continue
+        else:
+            j.finish(clip, stage, cost)
+        if j.released(clip):
+            report(f"{stem} released")
+    prog = j.progress()
+    entry["journal"] = prog
+    entry.complete("index")
+    n = len([c for c in j.clips if not j.clips[c].get("missing")])
+    tail = (f" — priced stages paused: {j.data.get('paused_reason') or 'budget cap'}"
+            if j.paused_priced else "")
+    parked = prog.get("parked", 0)
+    if parked:
+        tail += f" — {parked} clip{'s' if parked != 1 else ''} parked"
+    entry.finish("done", detail=f"{prog.get('released', 0)} of {n} clips released{tail}")
+
+
+@app.post("/api/index")
+async def api_index(request: Request) -> JSONResponse:
+    """Start — or resume — the unattended index. One at a time; the journal on disk is
+    the state, so a second call after a crash is a resume and a call after new footage
+    is dropped into the folder is "index what isn't done"."""
+    body = await request.json() if int(request.headers.get("content-length") or 0) else {}
+    if any(x["state"] not in progress.TERMINAL for x in INDEXES.values()):
+        raise HTTPException(409, "the index is already running")
+    if not footage_clips():
+        raise HTTPException(400, "no footage to index")
+    order = str(body.get("order") or "")
+    if order and order not in journal.ORDERS:
+        raise HTTPException(400, f"order must be one of {journal.ORDERS}")
+    # The human's say on the priced stages, since the cap pauses them on its own:
+    # `resume_priced` lifts the pause (the cap is checked again before each priced
+    # stage), `pause_priced` holds them for this run.
+    if body.get("resume_priced"):
+        load_journal().resume_priced()
+    elif body.get("pause_priced"):
+        load_journal().pause_priced("paused by the editor")
+    job = uuid.uuid4().hex[:8]
+    INDEXES[job] = progress.Job(
+        "index", "Indexing the footage", id=job, state="running", journal=None,
+        released=0, cost_usd=0.0, detail="opening the journal")
+    INDEXES[job].set_estimate(
+        60.0, [progress.milestone("index", "indexing, clip by clip", 1.0)],
+        source="measured")
+    threading.Thread(target=_index_job, args=(job, order), daemon=True).start()
+    return JSONResponse({"job": job})
+
+
+@app.get("/api/index")
+def api_index_status() -> JSONResponse:
+    """Where the index is: the journal's own progress (per-clip rows, counts, cost,
+    released), whether a run is going, and the last run's id."""
+    path = journal_path()
+    running = next((x for x in INDEXES.values()
+                    if x["state"] not in progress.TERMINAL), None)
+    if not path.exists():
+        return JSONResponse({"exists": False, "running": running is not None,
+                             "job": running["id"] if running else None})
+    j = load_journal()
+    return JSONResponse({"exists": True, "path": str(path), "order": j.order,
+                         "paused_priced": j.paused_priced,
+                         "progress": j.progress(), "released": j.released_clips(),
+                         "running": running is not None,
+                         "job": running["id"] if running else None})
 
 
 def probe_duration(path: Path) -> float | None:

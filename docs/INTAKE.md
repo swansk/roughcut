@@ -159,12 +159,16 @@ to explain themselves. That is I2.7 and it is the next item — before I3.2.**
       score from the free stages; `released(clip)` = every stage done. DoD: unit tests incl. a
       simulated crash mid-stage and an added clip. — commit `f7555a2` on `agent/journal`
       (`test_journal.py` 18 passed; suite 283 passed)
-- [ ] I3.2 Wire into the server: one `POST /api/index` (start/resume) replacing the two
+- [x] I3.2 Wire into the server: one `POST /api/index` (start/resume) replacing the two
       buttons' orchestration; per-clip release feeding `/api/picks`'s `released`; failure states
       (backoff on rate limit, park after 3 failures, cap pauses priced stages). DoD: API tests
       with stubbed tools, then a live unattended run on Killington with a kill mid-run.
-- [ ] I3.3 Added footage: new stems → free stages → queued → delivered as a round; relink by
-      hash. DoD: API test adding a clip mid-run.
+      — the I3.2 commit (see log; `test_index.py` 5 passed). The two old buttons stay for
+      now; the open screen (M5) retires them. Live kill-and-resume: see the verification log.
+- [x] I3.3 Added footage: new stems → free stages → queued → delivered as a round; relink by
+      hash. DoD: API test adding a clip mid-run. — same commit (`CLIP_D` copied in after a
+      run is indexed and released; the floor picks it up at the next round boundary). The
+      first-MB hash relink is deferred to the probe stage — see Discovered.
 
 ### M4 · Dictation (lane `agent/dictate`)
 
@@ -217,7 +221,8 @@ weight until measured, and until then numbers only, never event names.
 | floor | `agent/floor` · `../roughcut-wt/floor` | M2.1–2.5 | **merged** `782f24a`; worktree can be removed |
 | journal | `agent/journal` · `../roughcut-wt/journal` | M3.1 | **merged** `53a2578`; worktree can be removed |
 | dictate | `agent/dictate` · `../roughcut-wt/dictate` | M4 | **merged** `50899d0`; worktree can be removed |
-| telemetry | `agent/telemetry` · `../roughcut-wt/telemetry` | M6.1 | **merged** `394556f`; worktree can be removed |
+| telemetry | `agent/telemetry` · `../roughcut-wt/telemetry` | M6.1 | **merged** `394556f`; worktree removed |
+| floor2 | `agent/floor2` · `../roughcut-wt/floor2` | I2.7 | running 2026-09-08 |
 
 Lanes touch disjoint files by design: `bin` → `revise.py`, `selects.py`, tests; `floor` →
 `app/static/floor.*`, `test_floor_ui.py`; `journal` → `journal.py`, `test_journal.py`;
@@ -244,6 +249,14 @@ them. Every lane adds its own CHANGELOG bullet; integration keeps all of them.
   stage (I3.2), not in `selects.py`.
 - **A zombie ask** (a thread dying with the job still `running`) disabled every board's Ask
   button; `_ask_job` now fails loudly on any exception. Found by two UI tests failing together.
+- **Killington is not "fully indexed" by decision 3's definition**: the old close look ran on
+  3 clips, so 9 clips still have `close` queued in the journal (~27 model calls, ~$2). The
+  lead paused the priced stages after the live resume test rather than spend that without
+  Karl. **To finish the bin:** `POST /api/index {"resume_priced": true}` (or the open screen,
+  once M5 exists). While paused, the floor releases clips whose free stages are done — picks
+  from the words and the coarse look — so nothing disappeared.
+- **The old Analyse / Look buttons and `POST /api/index` coexist** until M5 retires the two
+  buttons; running both on one bin is safe (files are truth) but pointless.
 
 ## Verification log
 
@@ -253,3 +266,10 @@ them. Every lane adds its own CHANGELOG bullet; integration keeps all of them.
 - 2026-09-07 · + bin & wiring `9c7bcb4` · 307 passed, 1 skipped (live dictation)
 - 2026-09-07 · + telemetry `394556f` + floor `782f24a` · see the integration commit's body
 - 2026-09-07 · live on Killington · I2.6 above
+- 2026-09-08 · I3.2 live kill-and-resume on Killington: CLIP_03's proxy moved aside,
+  `POST /api/index` started (probes 12/12, reconcile marked every existing sidecar done,
+  telemetry skipped, CLIP_02's close look started), the server killed mid-stage; on restart
+  the journal read `reconciled: CLIP_02.MP4 close re-queued`, rebuilt CLIP_03's proxy
+  (17,019,121 bytes, identical to the original), left the priced stages paused, and the floor
+  showed 12 clips / 92 picks again. Cost of the whole exercise: three in-flight sheet calls,
+  ~$0.08. `test_index.py` 5 passed; suite 328 passed, 1 skipped.

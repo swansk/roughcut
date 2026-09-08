@@ -10,6 +10,26 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The index runs unattended: `POST /api/index` drives the journal (INTAKE I3.2, I3.3).**
+  One thread walks `journal.next()` and runs each (clip, stage) with the tools the two old
+  buttons already drove — probe (ffprobe, all clips first so the audio pass can run as one
+  batch), asr (`audio_analyze.py` over every clip still waiting), proxy (`build_proxy`), look
+  (`visual_pass.py --only`), close (the motion scan, then the close look, or `skipped` when
+  the scan finds no window worth paying for), picks (`rebuild_events`) — reporting back with
+  `start` / `finish` / `fail`, cost recorded per priced stage. Telemetry is `skipped` as
+  "not integrated yet" (I6.2), never silently done. Before every priced stage the budget cap
+  is checked and the priced stages pause while the free ones finish. A second POST after a
+  crash is a resume: the journal is reconciled against the sidecars on disk (files are truth;
+  a stage found running with no output re-queues with its attempts kept; nothing paid for is
+  bought twice) and the walk continues. Footage dropped into the folder later is the same
+  path — new clips join the queue by priority and are released whole. `GET /api/index`
+  returns the journal's own progress (per-clip rows for the Fig. 2 table, counts, cost,
+  released list, paused state). `released_clips()` — what the floor may show — now comes
+  from the journal on a journaled bin (decision 3 exactly: every applicable stage done) and
+  keeps the sidecar-plus-proxy rule for bins indexed before journals existed. Five tests in
+  `test_index.py` with the tools stubbed: a full unattended run releasing every clip, resume
+  after a simulated crash without re-buying CLIP_A's sheets, footage added after a run, the
+  budget cap pausing priced stages only, and a scan with nothing to look at.
 - **The server's side of M1 (docs/INTAKE.md I1.1–I1.4 wired).** An Ask passes the EDL's
   `selects` through, so a first cut is asked *from the bin* — heroes must appear, keeps are
   bounds — and a revision reads it as context; a keep made on the floor records its clip's
