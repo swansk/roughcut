@@ -30,6 +30,42 @@ same commit. Releases move entries into a dated version section.
   that already has a heard or seen witness; an impact moves nothing. The journal's
   `telemetry_peaks` priority fact counts exactly those, and is refreshed once the sensor has
   spoken on a bin whose sidecars already existed. Nothing here can make a pick alone.
+- **`/open` — the index controls: one button, priced, unattended (INTAKE I5.3).** The
+  open screen's right column, as Fig. 1: the price before the button (`/api/status`'s
+  `visual.projected_usd` — "~$X for the N clips not yet looked at", with the sheet and
+  window counts under it), the budget line (spent of cap), the order toggle (most
+  promising first / capture order), and **Index the footage** → `POST /api/index` —
+  disabled while a run is going, "Index what isn't done" once the bin has a journal, a
+  409 said in a toast and never doubled. When the cap has paused the priced stages the
+  screen says so with the journal's reason and **Resume priced stages** (→ `resume_priced`).
+  While a run is going the page polls `GET /api/index` every 2 s and shows the journal's
+  own numbers: the overall bar, released n of N, cost, ETA (or "once a stage has been
+  timed" — never a guess), the journal's path and its last log lines, the running job's
+  one-liner, and — above the grids, as Fig. 2 — the per-clip table: clip · the seven
+  stages as chips (done / running / failed ✕ n / skipped / queued) · priority · state
+  (released · indexing · queued · retrying with the error · parked with the reason ·
+  missing). **Open the pass →** enables on the first released clip and says how many;
+  the cut board is one link away. The granularity slider is deferred and the page says
+  why — the visual pass's sample interval is not plumbed through the index yet; nothing
+  is faked. Browser tests run a real journal walk with the index's tools stubbed
+  (`test_index._stub_tools`): the cap at $0 pauses the priced stages and the notice
+  appears, resume releases all three clips and enables the link, the 409 is said.
+  INTAKE M5 ticked for I5.1 and I5.3 with the slider deferred and the settings drawer
+  not built.
+- **`/open` — the folder as a contact sheet, before anything is spent (INTAKE I5.1).**
+  `app/static/open.html` + `open.js`, on `GET /api/clips`: the bin's name and its line
+  (clips · total length · sessions · telemetry x/N), one grid per session in capture order
+  (the 4-hour-gap rule), a card per clip with its first frame (a placeholder until the proxy
+  exists — never a broken image), its length, and the free flags: `listened` / `not yet`
+  (the audio pass has heard it; the sidecar's candidates are not on the wire, so "no words"
+  waits), `telemetry` / `no telemetry` (the `gpmd` stream, a fact shown), `looked`,
+  `released`. Once the bin has a journal, its word sits on the picture — released ·
+  indexing · queued · retrying · parked (with the reason on hover) · missing — derived from
+  the stage states the way `journal.progress()` derives a row's state, so the card and the
+  index table cannot disagree. A legend says what every flag is and is not ("a silent clip
+  is not a dim clip"). The six-step strip from the design heads the page: listen is done
+  when every clip is heard, the pass opens on what is released. No model calls. Tested in a
+  real browser (`test_open_ui.py`, playwright) on the synthetic bin.
 - **`GET /api/clips` — the folder as a contact sheet would show it (INTAKE I5.1's data).**
   Every clip with the free facts: length, when it was shot and which session that makes it
   (the 4-hour-gap rule), what exists for it on disk (proxy, audio sidecar, coarse look, close

@@ -185,15 +185,30 @@ to explain themselves. That is I2.7 and it is the next item — before I3.2.**
 
 ### M5 · The open screen (after M2/M3)
 
-- [ ] I5.1 Contact sheet of the folder with free flags (junk band, side-data, telemetry
-      present), sessions by the 4 h rule.
+- [x] I5.1 Contact sheet of the folder with free flags (junk band, side-data, telemetry
+      present), sessions by the 4 h rule. — commit `5036e44` (`agent/open`): `/open` on
+      `GET /api/clips` — bin line, one grid per session in capture order, a card per clip
+      (first frame or a placeholder, length, `listened` / `not yet`, `telemetry` /
+      `no telemetry`, `looked`, `released`), the journal's word on the picture once the bin
+      has one, a legend. The junk band and the rotation side-data are not on the wire yet
+      (`/api/clips` carries neither) — flags shown are the free facts it does carry.
+      `test_open_ui.py` 2 passed; suite 332 passed, 1 skipped.
 - [~] I5.2 Themes proposed from transcripts (one judge-role call), chips + dictation. — the
       data side is done (the I5.2 commit, see log): `roughcut/themes.py`,
       `POST /api/themes/propose` (job, priced), `GET/PUT /api/themes` (`themes` + `names` in the
       EDL, read by picks and the priority score). **Open:** the chips + dictation UI on the open
       screen — a follow-up for the open lane once I5.1/I5.3 land.
-- [ ] I5.3 Granularity slider re-pricing live; workers + cap in settings; "Index" starts the
-      journal.
+- [x] I5.3 Granularity slider re-pricing live; workers + cap in settings; "Index" starts the
+      journal. — commit `a147cbd` (`agent/open`): the right column — price before the
+      button (`visual.projected_usd`), budget line, order toggle, **Index the footage** →
+      `POST /api/index` (409 said, never doubled), the paused notice with the reason and
+      **Resume priced stages**, progress from the journal polled every 2 s (bar, released
+      n of N, cost, ETA, log) and the Fig. 2 per-clip table, **Open the pass →** on the
+      first released clip. **The granularity slider is deferred** until the visual pass's
+      sample interval is plumbed through the index — the page says so in a hint, nothing is
+      faked; workers + cap in settings are not built (the cap is shown, from config). The two
+      old buttons on `/` are still there — retiring them is the lead's (`app/static/index.html`,
+      `app.js`). `test_open_ui.py` 6 passed; suite 336 passed, 1 skipped.
 - [ ] I5.4 Project picker (one bin per launch today) — the "smaller, whenever" item, lands here.
 
 ### M6 · Telemetry (lane `agent/telemetry`, research only until R11 says otherwise)

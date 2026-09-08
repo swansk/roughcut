@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Roughcut — open</title>
+<style>
+  /* The open screen (docs/design/cutting-room-floor.html §2–§3): the folder as a contact
+   * sheet before anything is spent, the price before the button, and the index's own
+   * progress while it runs. The floor's palette, on a page that scrolls — a bin can be a
+   * hundred cards. */
+  :root {
+    --bg: #101013; --panel: #17171c; --card: #14141a; --card-hi: #1e1e25;
+    --line: #26262f; --line-soft: #1c1c24; --text: #e8e8ee; --dim: #9a9aa8; --faint: #6c6c80;
+    --accent: #6ea8fe; --good: #64d08a; --good-soft: #b8f0cc; --warn: #e0b050; --bad: #e06a6a;
+    --bad-soft: #f0b8b8; --tele: #8fd0ff;
+    --mono: ui-monospace, "IBM Plex Mono", Consolas, monospace;
+    --display: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 var(--display); }
+  a { color: var(--accent); text-decoration: none; }
+  b { font-weight: 600; }
+  .hint { color: var(--dim); }
+  .small { font-size: 10.5px; }
+  .tnum { font-variant-numeric: tabular-nums; }
+  .grow { flex: 1; }
+  .good { color: var(--good-soft); }
+  .bad { color: var(--bad-soft); }
+  .warn { color: var(--warn); }
+  .lbl { font: 600 9.5px var(--mono); letter-spacing: .1em; color: #8f8fa3; text-transform: uppercase; }
+  .key { display: inline-block; font: 600 9.5px var(--mono); color: var(--text); background: #1e1e25;
+         border: 1px solid #3a3a48; border-bottom-width: 2px; border-radius: 4px; padding: 0 5px;
+         min-width: 16px; text-align: center; line-height: 14px; vertical-align: 1px; }
+  [hidden] { display: none !important; }
+  button { font: inherit; font-size: 11.5px; background: var(--card-hi); color: var(--text);
+           border: 1px solid #3a3a48; border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+  button.primary { background: var(--accent); color: #0b0b0f; border-color: transparent; font-weight: 600; }
+  button.priced { border-color: #4c4026; color: #ffe9b8; }
+  button:disabled { opacity: .45; cursor: default; }
+
+  /* ---- header: the brand and the six steps ---- */
+  #hd { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 12px;
+        padding: 8px 14px; background: var(--panel); border-bottom: 1px solid #2e2e38; }
+  #hd .brand { font-weight: 700; font-size: 12px; letter-spacing: .06em; }
+  #hd .brand small { color: var(--dim); font-weight: 400; letter-spacing: 0; margin-left: 8px; }
+  .step { font-size: 10.5px; color: #a0a0b0; border: 1px solid #2e2e38; border-radius: 999px;
+          padding: 2px 10px; white-space: nowrap; }
+  .step.done { color: var(--good); border-color: #2c4c39; }
+  .step.now { color: #0b0b0f; background: var(--accent); border-color: transparent; font-weight: 600; }
+  .step.link { border-color: var(--accent); color: var(--text); }
+  .step.link[aria-disabled="true"] { border-color: #2e2e38; color: var(--faint); pointer-events: none; }
+
+  /* ---- the sheet ---- */
+  #main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; min-height: calc(100vh - 38px); }
+  @media (max-width: 980px) { #main { grid-template-columns: minmax(0, 1fr); } }
+  #sheet { display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--line); }
+  #binLine { display: flex; gap: 10px; align-items: baseline; padding: 10px 14px;
+             border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  #binLine b { font-size: 13px; }
+  #sessions { padding: 10px 14px; flex: 1; }
+  .session { margin-bottom: 14px; }
+  .session .lbl { margin-bottom: 6px; display: flex; gap: 8px; align-items: baseline; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+  .card { min-width: 0; }
+  .card .frame { position: relative; aspect-ratio: 16 / 9; border-radius: 4px; overflow: hidden;
+                 background: #0b0b0f; border: 1px solid var(--line-soft); }
+  .card .frame img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .card .ph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+              font: 600 9px var(--mono); letter-spacing: .08em; color: var(--faint); text-transform: uppercase;
+              background: repeating-linear-gradient(135deg, #0e0e13 0 8px, #101016 8px 16px); }
+  .card .tc { position: absolute; left: 5px; bottom: 4px; font: 600 9px var(--mono); color: #e8e8ee;
+              background: rgba(8,8,14,.72); border-radius: 3px; padding: 0 4px; }
+  .card .badge { position: absolute; right: 5px; top: 4px; font: 600 8.5px var(--mono); letter-spacing: .06em;
+                 text-transform: uppercase; border-radius: 3px; padding: 1px 5px; background: rgba(8,8,14,.78);
+                 color: var(--dim); border: 1px solid #2e2e38; }
+  .card .badge.released { color: var(--good-soft); border-color: #2c4c39; }
+  .card .badge.indexing { color: var(--accent); border-color: #2f4a70; }
+  .card .badge.retrying { color: var(--bad-soft); border-color: #6a3a3a; }
+  .card .badge.parked, .card .badge.missing { color: var(--bad-soft); border-color: #6a3a3a; }
+  .card.indexing .frame { outline: 1px solid var(--accent); }
+  .card.missing .frame { opacity: .5; }
+  .card .cap { font-size: 10.5px; margin-top: 3px; display: flex; gap: 6px; align-items: baseline;
+               flex-wrap: wrap; min-width: 0; }
+  .card .cap b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .flags { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+  .flag { font: 500 9px var(--mono); color: var(--faint); font-style: normal; white-space: nowrap; }
+  .flag.on { color: #cfd6e4; }
+  .flag.off { color: var(--warn); }
+  .flag.tele { color: var(--tele); }
+  .flag.good { color: var(--good-soft); }
+  #legend { padding: 8px 14px 14px; border-top: 1px solid var(--line-soft); line-height: 1.7; }
+  #legend .flag { font-size: 9.5px; }
+  #empty { padding: 40px 14px; color: var(--dim); }
+
+  /* ---- the index table (Fig. 2), above the grids once the bin has a journal ---- */
+  #index { padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  #indexHead { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; font-size: 11px; }
+  #indexHead b { font-size: 12px; }
+  #rows { display: grid; grid-template-columns: minmax(90px, 130px) 1fr 64px minmax(120px, 200px);
+          gap: 5px 10px; font-size: 10.5px; align-items: center; }
+  #rows .lbl { font-size: 9px; }
+  #rows .clip { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #rows .st { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #rows .st.released { color: var(--good-soft); }
+  #rows .st.indexing { color: var(--accent); }
+  #rows .st.queued { color: var(--dim); }
+  #rows .st.parked, #rows .st.missing { color: var(--bad-soft); }
+  .stg { display: inline-block; font: 600 9px var(--mono); border-radius: 3px; padding: 0 5px; margin-right: 3px;
+         border: 1px solid #2e2e38; color: #6c6c80; white-space: nowrap; }
+  .stg.ok { color: var(--good-soft); border-color: #2c4c39; }
+  .stg.run { color: var(--accent); border-color: #2f4a70; }
+  .stg.bad { color: var(--bad-soft); border-color: #6a3a3a; }
+  .stg.skip { color: #8f8fa3; border-style: dashed; }
+
+  /* ---- the right column (Fig. 1): price, order, the button, progress ---- */
+  #side { display: flex; flex-direction: column; background: #111116; min-width: 0; }
+  #side .box { padding: 12px 14px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+  #side .box .lbl { margin-bottom: 2px; }
+  #side .row { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; font-size: 11px; }
+  #priceLine { font-size: 13px; }
+  #priceLine b { color: var(--warn); }
+  .toggle { display: inline-flex; border: 1px solid #3a3a48; border-radius: 8px; overflow: hidden; }
+  .toggle button { border: 0; border-radius: 0; background: transparent; color: var(--dim); padding: 5px 10px; font-size: 11px; }
+  .toggle button + button { border-left: 1px solid #3a3a48; }
+  .toggle button.on { background: var(--card-hi); color: var(--text); font-weight: 600; }
+  #paused { background: #1a1610; border-left: 3px solid var(--warn); }
+  #paused .lbl { color: var(--warn); }
+  #indexBtn { width: 100%; padding: 9px 12px; font-size: 12px; }
+  #resume { align-self: flex-start; }
+  .bar1 { height: 6px; background: #0d0d11; border: 1px solid #2e2e38; border-radius: 4px; overflow: hidden; }
+  .bar1 i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .4s; }
+  #progress.running .bar1 i { background: var(--accent); }
+  #progress.done .bar1 i { background: var(--good); }
+  .journal { background: #0f0f14; border: 1px solid #2a2a36; border-radius: 8px; padding: 8px 10px; font-size: 10.5px;
+             display: flex; flex-direction: column; gap: 3px; }
+  .journal .path { font: 10px var(--mono); color: var(--faint); word-break: break-all; }
+  .journal .log div { color: var(--dim); }
+  .journal .log b { color: var(--faint); font-weight: 500; font-family: var(--mono); font-size: 9.5px; margin-right: 5px; }
+  #links { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; align-items: stretch; margin-top: auto; }
+  a.btn { display: block; text-align: center; background: var(--accent); color: #0b0b0f; font-weight: 600; border-radius: 8px;
+          padding: 8px 12px; font-size: 12px; }
+  a.btn[aria-disabled="true"] { background: var(--card-hi); color: var(--faint); pointer-events: none; }
+  #links .hint { text-align: center; }
+
+  #toast { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); background: #1e1e25;
+           color: var(--text); border: 1px solid #3a3a48; border-radius: 8px; padding: 8px 14px; font-size: 12px;
+           opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 40; max-width: 70vw; }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hd">
+    <span class="brand">ROUGHCUT <small id="hdBin"></small></span>
+    <span class="grow"></span>
+    <span id="steps">
+      <span class="step now" data-step="open">1 open</span>
+      <span class="step" data-step="listen">2 listen</span>
+      <span class="step" data-step="themes" title="themes are INTAKE I5.2 — not built yet">3 themes</span>
+      <span class="step" data-step="index">4 index</span>
+      <a class="step link" data-step="pass" id="stepPass" href="/floor" aria-disabled="true">5 the pass</a>
+      <a class="step link" data-step="bin" href="/">6 the cut board</a>
+    </span>
+  </div>
+
+  <div id="main">
+    <div id="sheet">
+      <div id="binLine">
+        <b id="binName">opening the folder…</b>
+        <span id="binMeta" class="hint tnum"></span>
+        <span class="grow"></span>
+        <span id="binTele" class="hint tnum"></span>
+      </div>
+      <div id="index" hidden>
+        <div id="indexHead">
+          <b id="indexTitle"></b>
+          <span id="indexCounts" class="hint tnum"></span>
+          <span class="grow"></span>
+          <span id="indexDetail" class="hint small"></span>
+        </div>
+        <div id="rows"></div>
+      </div>
+      <div id="sessions"></div>
+      <div id="empty" hidden>No footage in this folder yet — drop clips in and reload.</div>
+      <div id="legend" class="hint small">
+        <span class="lbl">Flags</span> are free facts, never a judgement:
+        <i class="flag on">listened</i> the audio pass has heard it ·
+        <i class="flag off">not yet</i> it has not ·
+        <i class="flag tele">telemetry</i> / <i class="flag">no telemetry</i> a GoPro sensor stream is in the file (a fact shown, never assumed; clips without it index the same way) ·
+        <i class="flag on">looked</i> the sheets have been read ·
+        <i class="flag good">released</i> every stage done — the pass may show it.
+        <br>
+        <span class="lbl">On the picture</span>, once the bin has a journal:
+        <i class="flag good">released</i> · <i class="flag" style="color:var(--accent)">indexing</i> · <i class="flag">queued</i> ·
+        <i class="flag bad">retrying</i> · <i class="flag bad">parked</i> (failed three times, with the reason) · <i class="flag bad">missing</i> (the file is gone).
+        A silent clip is not a dim clip — the skiing is silent.
+      </div>
+    </div>
+
+    <aside id="side">
+      <div class="box">
+        <div class="lbl">Look — how closely?</div>
+        <div id="priceLine" class="tnum">pricing the bin…</div>
+        <div id="priceDetail" class="hint small"></div>
+        <div id="sliderHint" class="hint small">The design's one slider — a frame every 4 s down to every 1 s, re-pricing live — is not wired yet: the visual pass's sample interval is not plumbed through the index. Until it is, the index runs the pass at its default and this is the price of that.</div>
+      </div>
+      <div class="box">
+        <div class="lbl">Order</div>
+        <div id="order" class="toggle" role="radiogroup">
+          <button type="button" data-order="priority" class="on" title="speech candidates + telemetry peaks + theme hits, ties by capture time">most promising first</button>
+          <button type="button" data-order="capture" title="a chronological cull">capture order</button>
+        </div>
+        <div class="hint small">the priced stages run in this order; clips are released whole as they finish</div>
+      </div>
+      <div id="paused" class="box" hidden>
+        <div class="lbl">Priced stages paused</div>
+        <div id="pausedWhy"></div>
+        <div class="hint small">the free stages ran and the pass shows what they released — picks from the words. Resuming checks the cap again before every priced stage.</div>
+        <button type="button" id="resume" class="priced">Resume priced stages</button>
+      </div>
+      <div class="box">
+        <div class="row"><span class="hint">spent so far this project</span><span id="budgetLine" class="tnum hint">…</span></div>
+        <div id="backendLine" class="hint small"></div>
+        <button type="button" id="indexBtn" class="primary" disabled>Index the footage</button>
+        <div id="indexHint" class="hint small" style="text-align:center">runs on its own · survives a crash · releases clips whole while the rest continues</div>
+      </div>
+      <div id="progress" class="box" hidden>
+        <div class="row"><b id="progTitle">Overall</b><span id="progCount" class="tnum"></span></div>
+        <div class="bar1"><i id="progBar"></i></div>
+        <div id="progMeta" class="hint small tnum"></div>
+        <div class="journal">
+          <div class="lbl">Journal</div>
+          <div id="journalPath" class="path"></div>
+          <div id="journalLog" class="log"></div>
+        </div>
+      </div>
+      <div id="links">
+        <a id="openPass" class="btn" href="/floor" aria-disabled="true">Open the pass →</a>
+        <span id="passHint" class="hint small">nothing released yet</span>
+        <a href="/" class="hint">← the cut board</a>
+        <span class="hint small">close this tab: the index keeps running in the server; reopen anywhere and the journal picks up.</span>
+      </div>
+    </aside>
+  </div>
+</div>
+<div id="toast"></div>
+<script src="/open.js"></script>
+</body>
+</html>
