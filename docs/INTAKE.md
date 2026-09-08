@@ -46,11 +46,14 @@ until R11.
 
 ## Where we are
 
-_2026-09-07, session 8, later._ On `main`: foundations (M0), the bin (M1, merged + wired),
-the journal module (I3.1, merged), dictation (M4, merged). The telemetry study (I6.1) is done
-on its lane and merging next; the floor UI (M2) is still building on `agent/floor`. Nothing
-verified live on Killington yet — I2.6 is the next thing that needs a human at the board.
-Next after the floor merges: I3.2 (wire the journal into the server), then M5.
+_2026-09-07, end of session 8._ All five lanes are merged on `main`: M0, M1 (+ server wiring),
+I2.1–I2.3 + I2.5 (the pass is live at `/floor`), I3.1 (journal module), M4 (dictation), I6.1
+(R11). The floor was verified live on Killington (I2.6). **Open:** I2.4 (compare takes needs
+take clusters in `picks.py` first), I3.2/I3.3 (wire the journal into the server — the lead's
+next item; `journal.released_clips()` should replace `released_clips()`), M5 (the open screen),
+I6.2 (telemetry witness with R11's rule: freefall `< 0.5 g ≥ 0.25 s` as a capped corroboration
+term, impacts and tilt as numbers). Karl has not yet used the floor himself — his report is the
+first input of the next session, exactly as with every screen before it.
 
 ## Milestones
 
@@ -105,8 +108,18 @@ Next after the floor merges: I3.2 (wire the journal into the server), then M5.
 - [x] I2.5 Dictation UI: hold `V` → MediaRecorder → `POST /api/dictate` → note attached; clip
       audio ducked while held; `N` edits — same commit, against the 501 stub (falls back to
       `N`); the success path is tested with the recogniser's answer scripted in the page.
-- [ ] I2.6 Live verification on Killington: open `/floor`, cull a round, notes land in the EDL,
-      accept nothing by accident. Record numbers here.
+- [x] I2.6 Live verification on Killington (2026-09-07, integrated `main` `782f24a`, board
+      restarted on it): `/api/picks` → **92 picks over all 12 clips, 3 rounds**, kinds
+      crash 3 · jump 17 · fall 6 · faces 8 · action 8 · reaction 1 · speech 45; 120 heard
+      witnesses, 53 seen-claimed, 7 seen-contradicted, **0 audited** — correct, the bin's
+      `events.json` holds no `confirmed` event (121 unseen · 8 unsupported · 5 contradicted);
+      7 picks carry a `conflict`. The river fall (CLIP_01 84–108) ranks 6th with a heard and a
+      seen witness. `/floor` rendered round 1 · pick 1 of 40 with reason, seals, zero buttons in
+      the flow; CLIP_06's proxy opened at the anchor (`#t=212`), played its 6 s preview and
+      paused. **P** stamped PICKED and wrote `CLIP_06 212.0–219.08` to `selects` — the watched
+      extent, `clip_duration` 319.34 recorded, both witnesses attached; HUD "1 moment · if strung
+      out 0:07.1". **Ctrl+Z** removed it; Karl's EDL left as found (21 shots). Not exercised
+      live: dictation with a real voice (needs a human at a mic), `⇧X`, the closing card.
 
 ### M3 · The journal (lane `agent/journal`, pure module first)
 
@@ -133,8 +146,8 @@ Next after the floor merges: I3.2 (wire the journal into the server), then M5.
       4.7 s end to end; a spoken sentence still needs a human at a mic — I2.6 covers it).
 - [x] I4.2 `POST /api/dictate` real (≤ 30 s, 413 above), returns `{text, latency_ms}`. —
       commit `ac7dca2` via the pre-written endpoint (raw body, not multipart, by design: the
-      floor posts a Blob). The 413 is on bytes (6 MB); a decoded length over 30 s raises
-      `dictate.TooLong`, a `NotAvailable`, so it answers 501 until the lead maps it to 413.
+      floor posts a Blob). The 413 is on bytes (6 MB) and on decoded length: `dictate.TooLong`
+      answers 413 since the dictate merge (`50899d0`).
 
 ### M5 · The open screen (after M2/M3)
 
@@ -171,10 +184,10 @@ weight until measured, and until then numbers only, never event names.
 | lane | branch / worktree | scope | state |
 |---|---|---|---|
 | bin | `agent/bin` · `../roughcut-wt/bin` | M1 | **merged** `2d7182c` + lead wiring; worktree can be removed |
-| floor | `agent/floor` · `../roughcut-wt/floor` | M2.1–2.5 | running 2026-09-07 |
+| floor | `agent/floor` · `../roughcut-wt/floor` | M2.1–2.5 | **merged** `782f24a`; worktree can be removed |
 | journal | `agent/journal` · `../roughcut-wt/journal` | M3.1 | **merged** `53a2578`; worktree can be removed |
 | dictate | `agent/dictate` · `../roughcut-wt/dictate` | M4 | **merged** `50899d0`; worktree can be removed |
-| telemetry | `agent/telemetry` · `../roughcut-wt/telemetry` | M6.1 | done on the lane (`f806e13`, `296fede`) — merge pending |
+| telemetry | `agent/telemetry` · `../roughcut-wt/telemetry` | M6.1 | **merged** `394556f`; worktree can be removed |
 
 Lanes touch disjoint files by design: `bin` → `revise.py`, `selects.py`, tests; `floor` →
 `app/static/floor.*`, `test_floor_ui.py`; `journal` → `journal.py`, `test_journal.py`;
@@ -184,8 +197,29 @@ them. Every lane adds its own CHANGELOG bullet; integration keeps all of them.
 
 ## Discovered
 
-- (none yet)
+- **The Killington events file has no `confirmed` event at all** (121 unseen · 8 unsupported ·
+  5 contradicted; the 7 close-look moments never agreed with a hot coarse claim). So the floor
+  shows no `audited` seal on this bin — honest, and a reminder that roadmap item 1 (audit what
+  the sheets claim) is still the biggest lever on the visual side.
+- **GoPro's GPMF carries its own 10 Hz wind meter (`WNDM`), a wet-mic flag and an audio level**
+  (telemetry lane, R11). Relevant to R8/R9's never-validated wind detector; not used yet.
+- **R11 corrected an R10 label:** CLIP_11 144.3 s is a real fall (6.7 g, skis against the sky at
+  145 s) that R10 had called "the horizon rolls, the rider does not". Recorded in R11.
+- **The design's telemetry thresholds were wrong both ways** (freefall `< 0.3 g` never fires;
+  `> 3 g` fires 6×/min). R11's rule replaces them; the journal's `telemetry_peaks` input should
+  count freefall runs and `> 5 g` peaks, not `> 3 g`.
+- **A `picks` sidecar does not exist** — picks are derived per read. I3.2 must either write one
+  per clip (`<stem>.picks.json`) or treat `picks` as done when `look`/`close` are.
+- **A first-MB content hash for relink** needs file reads; it belongs with the journal's probe
+  stage (I3.2), not in `selects.py`.
+- **A zombie ask** (a thread dying with the job still `running`) disabled every board's Ask
+  button; `_ask_job` now fails loudly on any exception. Found by two UI tests failing together.
 
 ## Verification log
 
-- 2026-09-07 · foundations · suite: see the I0 commits' bodies.
+- 2026-09-07 · foundations `2810e61` · 265 passed
+- 2026-09-07 · + journal `53a2578` · 283 passed
+- 2026-09-07 · + dictate `50899d0` · 293 (one race in the job-list test fixed, 3/3)
+- 2026-09-07 · + bin & wiring `9c7bcb4` · 307 passed, 1 skipped (live dictation)
+- 2026-09-07 · + telemetry `394556f` + floor `782f24a` · see the integration commit's body
+- 2026-09-07 · live on Killington · I2.6 above

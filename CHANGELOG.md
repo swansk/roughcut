@@ -130,6 +130,12 @@ same commit. Releases move entries into a dated version section.
   placeholder page. Nothing here spends a model call or touches `segments`.
 
 ### Documentation
+- **Session 8 closed out in the tracker.** All five intake lanes are merged on `main`;
+  `docs/INTAKE.md` records the live verification of `/floor` on Killington (I2.6: 92 picks,
+  a verdict written and undone, Karl's EDL left as found), the lane table, the verification
+  log, and six discoveries — among them that the bin's events file holds no confirmed event,
+  that GPMF carries a wind meter, and that R11 corrected an R10 label. The floor's dictation
+  fallback test now simulates dictation being unavailable, since it is real on this tree.
 - **M4 checked off in the tracker.** `docs/INTAKE.md` I4.1 and I4.2 carry their commit and the
   measured numbers; the one thing a tone cannot prove — a spoken sentence coming back — is
   left to the live verification on Killington (I2.6).

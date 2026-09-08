@@ -415,9 +415,12 @@ def test_more_opens_the_whole_clip_and_says_what_is_not_built(page):
 
 # ----------------------------------------------------------------- dictation
 
-def test_holding_V_records_posts_and_falls_back_to_N_on_501(page):
-    """I2.5 against the stub: the recording is made and sent; the 501 is said once and
-    the typed note takes over."""
+def test_holding_V_records_posts_and_falls_back_to_N_on_501(page, monkeypatch):
+    """I2.5 when dictation is unavailable: the recording is made and sent; the 501 is
+    said once and the typed note takes over. Dictation is real on this tree (M4), so its
+    absence is simulated — the server runs in this process."""
+    from roughcut import dictate
+    monkeypatch.setattr(dictate, "available", lambda: False)
     hits: list[int] = []
     page.on("response", lambda r: hits.append(r.status) if "/api/dictate" in r.url else None)
     playing_at(page, 0.3)
