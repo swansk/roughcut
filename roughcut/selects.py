@@ -149,9 +149,30 @@ def used_in(edl: dict) -> dict:
 def sync_timeline(edl: dict) -> dict:
     """Everything the bin must learn from a saved timeline. Called on every save.
 
-    Today: recompute `used_in`. The bin lane (docs/INTAKE.md, I1.3) extends this so a
-    shot added by hand with no keep under it becomes a keep with `source: "hand"`.
+    Two things. `used_in` is recomputed. Then any shot on the timeline that no keep
+    covers becomes a keep with `source: "hand"` — the shot's own range and `why`, no
+    note — so a shot placed by hand in the cutting room is in the bin like any other,
+    and the next ask from the bin knows about it (docs/INTAKE.md I1.3; design §5).
+
+    "Covers" is `used_in`'s test — the shot and the keep share half of the shorter one
+    — so a shot that already counts as a keep's use is never adopted twice, and a shot
+    that trimmed inside a keep stays that keep's use rather than becoming a second one.
+    Adoption goes through `apply_verdict("pick")`: placing seconds in the film outranks
+    a reject or a later on them. Idempotent — the adopted keep covers its shot exactly.
     """
+    used_in(edl)
+    for seg in list(edl.get("segments") or []):
+        try:
+            clip = seg["clip"]
+            start, end = float(seg["in"]), float(seg["out"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (0.0 <= start < end):
+            continue
+        if any(_touching(s, clip, start, end) for s in edl["selects"]):
+            continue
+        apply_verdict(edl, clip, start, end, "pick", why=str(seg.get("why") or ""),
+                      source="hand")
     return used_in(edl)
 
 

@@ -10,6 +10,12 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Hand-added shots become keeps (docs/INTAKE.md I1.3).** The bin has its round trip from the
+  timeline: `selects.sync_timeline` (already called on every save) now adopts any shot no keep
+  covers — no select sharing half of the shorter range — as a keep with `source: "hand"`, the
+  shot's own range and `why`, no note, clearing a reject or later on those seconds. A shot
+  placed by hand in the cutting room is in the bin like any other and the next ask knows it;
+  idempotent, and a shot trimmed inside a keep stays that keep's use rather than a second keep.
 - **The ask reads the bin (docs/INTAKE.md M1).** `revise.originate` and `revise.propose` take
   `selects=` (the EDL's bin) and the prompt gains a **"## The editor's selects"** section ahead
   of the ranked events and the inventory — one line per keep with its reason, the editor's

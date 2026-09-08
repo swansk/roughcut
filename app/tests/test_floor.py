@@ -162,3 +162,55 @@ def test_the_floor_page_is_served(client):
     r = client.get("/floor")
     assert r.status_code == 200 and "floor" in r.text.lower()
     assert r.headers["cache-control"].startswith("no-store")
+
+
+# ------------------------------------------------- hand-added shots become keeps (I1.3)
+
+def test_sync_timeline_adopts_a_hand_added_shot_as_a_keep_idempotently():
+    edl = {"segments": [{"id": "s0", "clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0,
+                         "why": "first"},
+                        {"clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0, "why": "by hand"}]}
+    selects.apply_verdict(edl, "CLIP_A.MP4", 1.0, 3.0, "pick", why="the floor's")
+    selects.sync_timeline(edl)
+    assert [s["clip"] for s in edl["selects"]] == ["CLIP_A.MP4", "CLIP_B.MP4"]
+    floor_keep, hand = edl["selects"]
+    assert floor_keep["source"] == "floor" and floor_keep["used_in"] == ["s0"]
+    assert hand["source"] == "hand" and hand["why"] == "by hand" and hand["note"] == ""
+    assert (hand["start"], hand["end"]) == (0.0, 2.0)
+    assert hand["used_in"] == ["s1"], "an id-less segment is counted by position"
+    # again: nothing new, nothing duplicated, the ids hold
+    ids = [s["id"] for s in edl["selects"]]
+    selects.sync_timeline(edl)
+    assert [s["id"] for s in edl["selects"]] == ids
+    # a shot that a keep already covers is a use, not a hand-add — even trimmed
+    edl["segments"][0] = {"id": "s0", "clip": "CLIP_A.MP4", "in": 1.4, "out": 2.6}
+    selects.sync_timeline(edl)
+    assert len(edl["selects"]) == 2 and edl["selects"][0]["used_in"] == ["s0"]
+
+
+def test_a_hand_added_shot_on_rejected_seconds_is_the_human_changing_their_mind():
+    edl = {"segments": []}
+    selects.apply_verdict(edl, "CLIP_C.MP4", 1.0, 4.0, "reject", note="nah")
+    edl["segments"] = [{"clip": "CLIP_C.MP4", "in": 1.5, "out": 3.5}]
+    selects.sync_timeline(edl)
+    assert edl["floor"]["verdicts"] == [], "placing it in the film outranks the reject"
+    assert edl["selects"][0]["source"] == "hand"
+    assert selects.summary(edl)["used"] == 1
+
+
+def test_a_saved_timeline_grows_the_bin_by_its_hand_added_shots(client, project):
+    """The API path: once the bin exists, every save teaches it which shots were
+    placed by hand — a keep with `source: "hand"` and its `used_in`."""
+    client.post("/api/floor/verdict", json={
+        "clip": "CLIP_A.MP4", "start": 1.0, "end": 3.0, "verdict": "pick"})
+    r = client.put("/api/project", json={"segments": [
+        {"clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0, "why": "first"},
+        {"clip": "CLIP_C.MP4", "in": 1.5, "out": 4.25, "why": "new one"}], "story": ""})
+    assert r.status_code == 200
+    bin_ = client.get("/api/selects").json()
+    hands = [s for s in bin_["selects"] if s["source"] == "hand"]
+    assert len(hands) == 1 and hands[0]["clip"] == "CLIP_C.MP4"
+    assert hands[0]["why"] == "new one" and hands[0]["used_in"] == ["s1"]
+    assert bin_["summary"]["moments"] == 2 and bin_["summary"]["used"] == 2
+    on_disk = json.loads(project["edl"].read_text(encoding="utf-8"))
+    assert [s["source"] for s in on_disk["selects"]] == ["floor", "hand"]

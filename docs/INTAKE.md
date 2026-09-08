@@ -70,9 +70,9 @@ table). Nothing verified live on Killington yet.
 - [x] I1.1 `revise.originate` reads the bin: "## The editor's selects" — heroes fixed, keep
       ranges as bounds the model may trim inside, notes quoted per moment; the rest of the
       inventory for connective tissue only. Validation: a proposal that drops a hero must name it
-      in `notes`. DoD: prompt test + validation test. — commit on `agent/bin` (I1.1; hash filled
-      in by the next commit). **Lead:** `_ask_job` must pass `selects=read_edl().get("selects")`
-      to `revise.originate` (and `revise.propose`) — see the lane report.
+      in `notes`. DoD: prompt test + validation test. — commit `a88763a` (`agent/bin`).
+      **Lead:** `_ask_job` must pass `selects=read_edl().get("selects")` to `revise.originate`
+      (and `revise.propose`) — see the lane report.
 - [ ] I1.2 `used_in` maintained on accept (server: when segments are saved, recompute) and
       surfaced in `/api/selects`. DoD: API test.
 - [ ] I1.3 Hand-added shots become keeps (a saved segment with no overlapping select creates
