@@ -224,18 +224,26 @@ priced stages are still paused** (9 close looks, ~$2) — Karl's call, from the 
       `POST /api/index` (409 said, never doubled), the paused notice with the reason and
       **Resume priced stages**, progress from the journal polled every 2 s (bar, released
       n of N, cost, ETA, log) and the Fig. 2 per-clip table, **Open the pass →** on the
-      first released clip. **The granularity slider is deferred** until the visual pass's
-      sample interval is plumbed through the index — the page says so in a hint, nothing is
-      faked; workers + cap in settings are not built (the cap is shown, from config). The two
+      first released clip. **The slider** landed later, on `agent/open3` (`621925a`): four
+      stops 4 · 3 · 2 · 1 s each said in words, the price line and the button re-pricing
+      from `by_interval` as the thumb moves (no request per move), `interval_s` sent with
+      **Index**, the project's word shown after a run, disabled with a reason once every
+      clip has been looked at (`test_open_ui.py` 13 passed; suite 360 passed, 1 skipped);
+      workers + cap in settings are not built (the cap is shown, from config). The two
       old buttons on `/` are still there — retiring them is the lead's (`app/static/index.html`,
       `app.js`). `test_open_ui.py` 6 passed; suite 336 passed, 1 skipped.
-- [~] I5.4 Project picker (one bin per launch today) — the "smaller, whenever" item, lands here.
-      — **server side done** (the lead's I5.3/I5.4 commit, see log): `GET /api/projects`
+- [x] I5.4 Project picker (one bin per launch today) — the "smaller, whenever" item, lands here.
+      — **server side** (the lead's I5.3/I5.4 commit, `d889db1`): `GET /api/projects`
       (known bins from the `--work/projects.json` registry + folders of video next door, with
       facts), `POST /api/projects/open {footage}` (re-points through `configure()`, 409 while
-      a job runs). **Open:** the picker on `/open` — the open lane's next item. The slider's
-      server side landed in the same commit: `look.interval_s` in the EDL, `by_interval`
-      prices on `/api/status`, `POST /api/index {interval_s}`.
+      a job runs). The slider's server side landed in the same commit: `look.interval_s` in
+      the EDL, `by_interval` prices on `/api/status`, `POST /api/index {interval_s}`.
+      **The screen** on `agent/open3` (`aaf43df`): the bin's name in the header is the control (click or
+      `O`) → a panel of the bins with `N clips` and flags (`cut · N shots` · `journal` · `new`
+      · `missing`), a row or a typed path → `POST /api/projects/open` → the page reloads
+      everything for the new bin and toasts `opened <name>`; 409/400 said, panel stays;
+      `Esc` closes. No browsing dialog (a page has none — the hint says so).
+      `test_open_ui.py` 15 passed; suite 362 passed, 1 skipped.
 
 ### M6 · Telemetry (lane `agent/telemetry`, research only until R11 says otherwise)
 

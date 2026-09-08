@@ -10,6 +10,9 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **INTAKE ticks I5.3's slider and I5.4** — the tracker names the commits and their
+  verification (`621925a` the slider, `aaf43df` the picker; `test_open_ui.py` 15 passed,
+  suite 362 passed, 1 skipped).
 - **`/open` — the project picker (INTAKE I5.4, the screen).** The bin's name in the header
   is a control: click it (or press `O`) for a panel over `GET /api/projects` — the current
   bin first, then the rest by last opened — each row its name, `N clips`, and the facts as
