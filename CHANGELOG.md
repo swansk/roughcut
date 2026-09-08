@@ -584,6 +584,8 @@ same commit. Releases move entries into a dated version section.
   is provisional. Cost at 4s sampling: $0.18 for a 204s clip.
 
 ### Changed
+- **Docs:** INTAKE's I3.2 note and HANDOFF's session-6 paragraph no longer say the old Analyse /
+  Look buttons are still on the board — lane `agent/board` retired them (merge `6c4d249`).
 - **`GET /api/themes` carries `last` and `dictation`** — the last finished proposal (id +
   proposal), so the open screen reloaded after the call answered shows the chips instead of
   pricing again, and whether the recogniser is installed, so the mic can hide before the

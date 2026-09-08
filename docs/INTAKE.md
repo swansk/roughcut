@@ -177,8 +177,8 @@ priced stages are still paused** (9 close looks, ~$2) — Karl's call, from the 
       buttons' orchestration; per-clip release feeding `/api/picks`'s `released`; failure states
       (backoff on rate limit, park after 3 failures, cap pauses priced stages). DoD: API tests
       with stubbed tools, then a live unattended run on Killington with a kill mid-run.
-      — the I3.2 commit (see log; `test_index.py` 5 passed). The two old buttons stay for
-      now; the open screen (M5) retires them. Live kill-and-resume: see the verification log.
+      — the I3.2 commit (see log; `test_index.py` 5 passed). The two old buttons were
+      retired by lane `agent/board` (merge `6c4d249`). Live kill-and-resume: see the verification log.
 - [x] I3.3 Added footage: new stems → free stages → queued → delivered as a round; relink by
       hash. DoD: API test adding a clip mid-run. — same commit (`CLIP_D` copied in after a
       run is indexed and released; the floor picks it up at the next round boundary). The

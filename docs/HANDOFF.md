@@ -289,8 +289,8 @@ nothing went, and *"the analysis missed… me falling into a river"* produced th
 pass, which found the fall at 104–108s of CLIP_01. Session 5 built the music bed and tuned its
 ducking to speech (docs/EFFECTS.md). Session 6 turned the board into something you can edit in:
 a **monitor** that plays the whole cut from the proxies (no render), a **Look at the footage**
-button that runs the visual pass with its price on it and puts what it saw on the shot cards and
-under *Add a moment → seen*, and a **Music** panel whose bed is heard under the monitor and
+button (since retired for `/open`'s one Index button, 2026-09-08) that ran the visual pass with
+its price on it and put what it saw on the shot cards and under *Add a moment → seen*, and a **Music** panel whose bed is heard under the monitor and
 rendered by assemble.py. All three were verified live on Killington as well as under the suite
 (116 tests, 94 API + 22 browser). The commits are `3b8caff`, `b77cf0b` and the one after.
 
