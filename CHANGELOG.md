@@ -10,6 +10,20 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **`/open` — the folder as a contact sheet, before anything is spent (INTAKE I5.1).**
+  `app/static/open.html` + `open.js`, on `GET /api/clips`: the bin's name and its line
+  (clips · total length · sessions · telemetry x/N), one grid per session in capture order
+  (the 4-hour-gap rule), a card per clip with its first frame (a placeholder until the proxy
+  exists — never a broken image), its length, and the free flags: `listened` / `not yet`
+  (the audio pass has heard it; the sidecar's candidates are not on the wire, so "no words"
+  waits), `telemetry` / `no telemetry` (the `gpmd` stream, a fact shown), `looked`,
+  `released`. Once the bin has a journal, its word sits on the picture — released ·
+  indexing · queued · retrying · parked (with the reason on hover) · missing — derived from
+  the stage states the way `journal.progress()` derives a row's state, so the card and the
+  index table cannot disagree. A legend says what every flag is and is not ("a silent clip
+  is not a dim clip"). The six-step strip from the design heads the page: listen is done
+  when every clip is heard, the pass opens on what is released. No model calls. Tested in a
+  real browser (`test_open_ui.py`, playwright) on the synthetic bin.
 - **`GET /api/clips` — the folder as a contact sheet would show it (INTAKE I5.1's data).**
   Every clip with the free facts: length, when it was shot and which session that makes it
   (the 4-hour-gap rule), what exists for it on disk (proxy, audio sidecar, coarse look, close

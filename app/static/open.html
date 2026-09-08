@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Roughcut — open</title>
+<style>
+  /* The open screen (docs/design/cutting-room-floor.html §2–§3): the folder as a contact
+   * sheet before anything is spent, and the index's own progress while it runs. The
+   * floor's palette, on a page that scrolls — a bin can be a hundred cards. */
+  :root {
+    --bg: #101013; --panel: #17171c; --card: #14141a; --card-hi: #1e1e25;
+    --line: #26262f; --line-soft: #1c1c24; --text: #e8e8ee; --dim: #9a9aa8; --faint: #6c6c80;
+    --accent: #6ea8fe; --good: #64d08a; --good-soft: #b8f0cc; --warn: #e0b050; --bad: #e06a6a;
+    --bad-soft: #f0b8b8; --tele: #8fd0ff;
+    --mono: ui-monospace, "IBM Plex Mono", Consolas, monospace;
+    --display: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 var(--display); }
+  a { color: var(--accent); text-decoration: none; }
+  b { font-weight: 600; }
+  .hint { color: var(--dim); }
+  .small { font-size: 10.5px; }
+  .tnum { font-variant-numeric: tabular-nums; }
+  .grow { flex: 1; }
+  .good { color: var(--good-soft); }
+  .bad { color: var(--bad-soft); }
+  .lbl { font: 600 9.5px var(--mono); letter-spacing: .1em; color: #8f8fa3; text-transform: uppercase; }
+  .key { display: inline-block; font: 600 9.5px var(--mono); color: var(--text); background: #1e1e25;
+         border: 1px solid #3a3a48; border-bottom-width: 2px; border-radius: 4px; padding: 0 5px;
+         min-width: 16px; text-align: center; line-height: 14px; vertical-align: 1px; }
+  [hidden] { display: none !important; }
+
+  /* ---- header: the brand and the six steps ---- */
+  #hd { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 12px;
+        padding: 8px 14px; background: var(--panel); border-bottom: 1px solid #2e2e38; }
+  #hd .brand { font-weight: 700; font-size: 12px; letter-spacing: .06em; }
+  #hd .brand small { color: var(--dim); font-weight: 400; letter-spacing: 0; margin-left: 8px; }
+  .step { font-size: 10.5px; color: #a0a0b0; border: 1px solid #2e2e38; border-radius: 999px;
+          padding: 2px 10px; white-space: nowrap; }
+  .step.done { color: var(--good); border-color: #2c4c39; }
+  .step.now { color: #0b0b0f; background: var(--accent); border-color: transparent; font-weight: 600; }
+  .step.link { border-color: var(--accent); color: var(--text); }
+  .step.link[aria-disabled="true"] { border-color: #2e2e38; color: var(--faint); pointer-events: none; }
+
+  /* ---- the sheet ---- */
+  #main { display: grid; grid-template-columns: minmax(0, 1fr); min-height: calc(100vh - 38px); }
+  #sheet { display: flex; flex-direction: column; min-width: 0; }
+  #binLine { display: flex; gap: 10px; align-items: baseline; padding: 10px 14px;
+             border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  #binLine b { font-size: 13px; }
+  #sessions { padding: 10px 14px; flex: 1; }
+  .session { margin-bottom: 14px; }
+  .session .lbl { margin-bottom: 6px; display: flex; gap: 8px; align-items: baseline; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+  .card { min-width: 0; }
+  .card .frame { position: relative; aspect-ratio: 16 / 9; border-radius: 4px; overflow: hidden;
+                 background: #0b0b0f; border: 1px solid var(--line-soft); }
+  .card .frame img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .card .ph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+              font: 600 9px var(--mono); letter-spacing: .08em; color: var(--faint); text-transform: uppercase;
+              background: repeating-linear-gradient(135deg, #0e0e13 0 8px, #101016 8px 16px); }
+  .card .tc { position: absolute; left: 5px; bottom: 4px; font: 600 9px var(--mono); color: #e8e8ee;
+              background: rgba(8,8,14,.72); border-radius: 3px; padding: 0 4px; }
+  .card .badge { position: absolute; right: 5px; top: 4px; font: 600 8.5px var(--mono); letter-spacing: .06em;
+                 text-transform: uppercase; border-radius: 3px; padding: 1px 5px; background: rgba(8,8,14,.78);
+                 color: var(--dim); border: 1px solid #2e2e38; }
+  .card .badge.released { color: var(--good-soft); border-color: #2c4c39; }
+  .card .badge.indexing { color: var(--accent); border-color: #2f4a70; }
+  .card .badge.retrying { color: var(--bad-soft); border-color: #6a3a3a; }
+  .card .badge.parked, .card .badge.missing { color: var(--bad-soft); border-color: #6a3a3a; }
+  .card.indexing .frame { outline: 1px solid var(--accent); }
+  .card.missing .frame { opacity: .5; }
+  .card .cap { font-size: 10.5px; margin-top: 3px; display: flex; gap: 6px; align-items: baseline;
+               flex-wrap: wrap; min-width: 0; }
+  .card .cap b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .flags { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+  .flag { font: 500 9px var(--mono); color: var(--faint); font-style: normal; white-space: nowrap; }
+  .flag.on { color: #cfd6e4; }
+  .flag.off { color: var(--warn); }
+  .flag.tele { color: var(--tele); }
+  .flag.good { color: var(--good-soft); }
+  #legend { padding: 8px 14px 14px; border-top: 1px solid var(--line-soft); line-height: 1.7; }
+  #legend .flag { font-size: 9.5px; }
+  #empty { padding: 40px 14px; color: var(--dim); }
+
+  #toast { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); background: #1e1e25;
+           color: var(--text); border: 1px solid #3a3a48; border-radius: 8px; padding: 8px 14px; font-size: 12px;
+           opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 40; max-width: 70vw; }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hd">
+    <span class="brand">ROUGHCUT <small id="hdBin"></small></span>
+    <span class="grow"></span>
+    <span id="steps">
+      <span class="step now" data-step="open">1 open</span>
+      <span class="step" data-step="listen">2 listen</span>
+      <span class="step" data-step="themes" title="themes are INTAKE I5.2 — not built yet">3 themes</span>
+      <span class="step" data-step="index">4 index</span>
+      <a class="step link" data-step="pass" id="stepPass" href="/floor" aria-disabled="true">5 the pass</a>
+      <a class="step link" data-step="bin" href="/">6 the cut board</a>
+    </span>
+  </div>
+
+  <div id="main">
+    <div id="sheet">
+      <div id="binLine">
+        <b id="binName">opening the folder…</b>
+        <span id="binMeta" class="hint tnum"></span>
+        <span class="grow"></span>
+        <span id="binTele" class="hint tnum"></span>
+      </div>
+      <div id="sessions"></div>
+      <div id="empty" hidden>No footage in this folder yet — drop clips in and reload.</div>
+      <div id="legend" class="hint small">
+        <span class="lbl">Flags</span> are free facts, never a judgement:
+        <i class="flag on">listened</i> the audio pass has heard it ·
+        <i class="flag off">not yet</i> it has not ·
+        <i class="flag tele">telemetry</i> / <i class="flag">no telemetry</i> a GoPro sensor stream is in the file (a fact shown, never assumed; clips without it index the same way) ·
+        <i class="flag on">looked</i> the sheets have been read ·
+        <i class="flag good">released</i> every stage done — the pass may show it.
+        <br>
+        <span class="lbl">On the picture</span>, once the bin has a journal:
+        <i class="flag good">released</i> · <i class="flag" style="color:var(--accent)">indexing</i> · <i class="flag">queued</i> ·
+        <i class="flag bad">retrying</i> · <i class="flag bad">parked</i> (failed three times, with the reason) · <i class="flag bad">missing</i> (the file is gone).
+        A silent clip is not a dim clip — the skiing is silent.
+      </div>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+<script src="/open.js"></script>
+</body>
+</html>
