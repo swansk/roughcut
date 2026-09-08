@@ -588,6 +588,18 @@ same commit. Releases move entries into a dated version section.
   proposal), so the open screen reloaded after the call answered shows the chips instead of
   pricing again, and whether the recogniser is installed, so the mic can hide before the
   first hold rather than on a 501. Asked for by the open lane.
+- **The cut board's two old buttons are retired in favour of `/open`** (INTAKE decision 3:
+  the index is one unattended, resumable run started from the open screen). **Analyse
+  audio** and **Look at the footage** — with their state lines, progress bars, click
+  handlers and the polling of `/api/analyze/{job}` and `/api/visual/{job}` — are gone from
+  `/`; two ways to spend money on one bin was one too many. In their place, one line in the
+  Project panel reads the journal's own word from `GET /api/index` (`indexed · 12 of 12
+  released`, `indexing · 3 of 12 released · $0.03`, `index paused · 9 clips wait`, `not
+  indexed yet`), polled every 3 s while a run is going and repainted only when the words
+  change, with **open the footage →** to `/open`. The empty-timeline hints point there
+  too, and the header gains a small `open · pass · board` nav in the open screen's pill
+  style. The "looked at" and "events ranked" counts stay. `POST /api/analyze` and
+  `POST /api/visual` are untouched — tests and tools use them. One browser test.
 - **Space is play / pause on the pass** (Karl, 2026-09-08: "space needs to be play / pause").
   It was hold-to-watch-on. Now a press pauses a playing picture and plays a paused one; when
   playback has stopped on its own at the green band's end, the next press watches on past it

@@ -15,7 +15,6 @@ let P = null;                 // project payload
 let S = null;                 // project status: where this bin is in the workflow
 let segs = [];                // working segment list
 let sel = 0;
-let analysing = false;
 let nRenders = 0;
 let renderList = [];          // the versions list, kept so it can be repainted on edit
 const undoStack = [];
@@ -168,12 +167,19 @@ async function adopt(j) {
     if (!full.found) return;
     renderFindResults(full.found.matches, full.found.notes);
     toast('the model search finished — matches are in Find a moment');
-  } else if ((j.kind === 'visual' || j.kind === 'analyse') && j.state === 'done') {
+  } else if ((j.kind === 'visual' || j.kind === 'analyse' || j.kind === 'index')
+             && j.state === 'done') {
+    // Nothing on this board starts these any more (the open screen runs the index;
+    // the two passes are API-only), but whatever finished wrote transcripts, sidecars
+    // or picks, so the whole project reloads.
     P = await (await fetch('/api/project')).json();
     await refreshStatus();
+    await refreshIndex();
     render();
   }
 }
+
+let jobTicks = 0;             // pollJobs ticks so far — the first one is the boot paint
 
 async function pollJobs() {
   let jobs;
@@ -194,8 +200,16 @@ async function pollJobs() {
     paintJob(jobRow(j), j);
     if (before && before.state !== j.state && (j.state === 'done' || j.state === 'failed')) {
       await adopt(j);
+    } else if (!before && jobTicks && j.kind === 'index') {
+      // An index started on the open screen is news to the Project panel's line the
+      // moment its job shows up. One that ran to done between two ticks arrives already
+      // finished, so a first sighting after boot is a transition too — otherwise the
+      // line would sit on "not indexed yet" with the journal saying every clip is out.
+      if (j.state === 'done') await adopt(j);
+      else await refreshIndex();
     }
   }
+  jobTicks += 1;
   // Gone completely when there is nothing to say. A strip that lingers empty is one
   // more thing on a screen that already has plenty.
   $('#progress').hidden = !jobs.length;
@@ -716,16 +730,18 @@ function emptyState() {
   const analysed = S ? S.analysed : 0;
   const clips = S ? S.clips : 0;
   if (!analysed) {
-    el.innerHTML = `<h3>Nothing analysed yet</h3><div>${clips}
-      clip${clips === 1 ? '' : 's'} in the footage folder. They need an audio pass
-      before anything can be cut — <b>Analyse audio</b>, on the right.</div>`;
+    el.innerHTML = `<h3>Nothing indexed yet</h3><div>${clips}
+      clip${clips === 1 ? '' : 's'} in the footage folder. They need indexing before
+      anything can be cut — <a href="/open">open the footage →</a> and start the index
+      there; it runs unattended and you can come back while it goes.</div>`;
     return el;
   }
   const vz = S && S.visual;
-  const look = vz && vz.pending.length ? `<div class="hint" style="margin-top:12px">Optional, and
-    worth it on footage where things happen: <b>Look at the footage</b> first (Project panel —
-    ${vz.pending.length} clip${vz.pending.length > 1 ? 's' : ''}, ~$${vz.projected_usd.toFixed(2)}),
-    so the first cut knows what happened on screen and not only what was said.</div>` : '';
+  const look = vz && vz.pending.length ? `<div class="hint" style="margin-top:12px">
+    ${vz.pending.length} clip${vz.pending.length > 1 ? 's' : ''} nobody has looked at yet
+    (~$${vz.projected_usd.toFixed(2)}) — the index does that from
+    <a href="/open">the open screen</a>, so a first cut asked for afterwards knows what
+    happened on screen and not only what was said.</div>` : '';
   el.innerHTML = `<h3>No cut yet</h3>
     <div>${analysed} clip${analysed > 1 ? 's' : ''} analysed and ready.
     Say what this film is about — a sentence is enough — and ask for a first cut.
@@ -865,53 +881,6 @@ function renderLibrary() {
     };
     lib.appendChild(d);
   });
-}
-
-/* The visual pass, in-app. Karl: "the analysis missed some critical moments that would
- * have required video analysis — like me falling into a river." The pass that finds
- * those existed in a terminal; this runs it with the same honest progress as the audio
- * pass. It costs model calls, so the button carries the count and the price, and
- * nothing here starts on its own. */
-let looking = false;
-
-async function lookAtFootage() {
-  const r = await fetch('/api/visual', {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
-  });
-  if (!r.ok) {
-    const d = await r.json().catch(() => ({}));
-    return toast(`could not start: ${d.detail || r.status}`, 5000);
-  }
-  const { job, total } = await r.json();
-  strip.owned.add(job);
-  looking = true;
-  $('#visual').disabled = true;
-  $('#visual').textContent = 'Looking…';
-  $('#visualBar').style.display = 'block';
-  const poll = setInterval(async () => {
-    let s;
-    try { s = await (await fetch(`/api/visual/${job}`)).json(); } catch (e) { return; }
-    $('#visualBar').firstElementChild.style.width =
-      `${Math.round(100 * s.done / Math.max(1, total))}%`;
-    $('#visualState').textContent = `${s.done}/${total} clips seen · ${clock(s.elapsed_s)}`;
-    if (s.state === 'running') return;
-    clearInterval(poll);
-    looking = false;
-    $('#visualBar').style.display = 'none';
-    $('#visualState').textContent = '';
-    // Whatever was written is worth showing, even if a later sheet failed.
-    P = await (await fetch('/api/project')).json();
-    await refreshStatus();
-    if (s.state === 'failed') {
-      render();
-      return toast(`visual pass failed — ${s.log.split('\n').slice(-1)[0] || 'see log'}`, 8000);
-    }
-    libTab = 'seen';
-    document.querySelectorAll('.tab').forEach((x) =>
-      x.classList.toggle('sel', x.dataset.tab === 'seen'));
-    render();
-    toast(`${s.done} clip${s.done === 1 ? '' : 's'} seen — what happened on screen is on the cards now, and under "seen"`, 6000);
-  }, 2000);
 }
 
 /* Music: a bed under the cut. The same `effects_music` the render reads, saved the
@@ -1097,27 +1066,45 @@ async function refreshStatus() {
   } else {
     $('#proxyState').style.display = 'none';
   }
-  // A permanently greyed-out button is furniture. It appears when there is something
-  // to analyse and otherwise stays out of the way.
-  const btn = $('#analyze');
-  btn.style.display = S.pending.length || analysing ? 'inline-block' : 'none';
-  btn.textContent = S.pending.length
-    ? `Analyse ${S.pending.length} clip${S.pending.length > 1 ? 's' : ''}`
-    : 'Analysing…';
-  btn.disabled = analysing;
-  btn.classList.toggle('primary', S.pending.length > 0 && !segs.length);
-  // The visual pass: offered with its price while there is footage nobody has looked at.
-  const vbtn = $('#visual');
-  $('#visualRow').style.display = vz.pending.length || looking ? 'flex' : 'none';
-  if (!looking) {
-    const n = vz.pending.length;
-    vbtn.disabled = false;
-    vbtn.textContent = `Look at ${n} clip${n === 1 ? '' : 's'} · ~$${vz.projected_usd.toFixed(2)}`;
-    vbtn.title = `Samples frames from each clip and asks a model what happens in them — the `
-      + `only way the agent learns about a fall nobody narrated. ${vz.calls} model call`
-      + `${vz.calls === 1 ? '' : 's'}, about $${vz.projected_usd.toFixed(2)} projected.`;
-  }
   return S;
+}
+
+/* The bin's index, in one line under the Project counts: the journal's own word from
+ * GET /api/index — released n of N, the cost so far, paused or not — and a link to the
+ * screen that runs it. This replaced the Analyse audio / Look at the footage buttons:
+ * the index is one unattended, resumable run started from /open (INTAKE decision 3),
+ * and two ways to spend money on one bin was one too many. The endpoints those
+ * buttons used still exist for tests and tools; nothing here starts anything. */
+let indexPoll = null;
+
+function indexLine(ix) {
+  if (!ix.exists) return ix.running ? 'indexing · opening the journal' : 'not indexed yet';
+  const p = ix.progress;
+  const n = p.clips - p.missing;
+  const released = `${p.released} of ${n} released`;
+  const cost = p.cost_usd ? ` · $${Number(p.cost_usd).toFixed(2)}` : '';
+  const parked = p.parked ? ` · ${p.parked} parked` : '';
+  if (ix.running) return `indexing · ${released}${cost}${parked}`;
+  if (p.paused_priced) {
+    const wait = Math.max(0, n - p.released - p.parked);
+    return `index paused · ${wait} clip${wait === 1 ? '' : 's'} wait${cost}${parked}`;
+  }
+  if (p.released >= n) return `indexed · ${released}${cost}${parked}`;
+  return `index stopped · ${released}${cost}${parked}`;
+}
+
+async function refreshIndex() {
+  let ix;
+  try { ix = await (await fetch('/api/index')).json(); } catch (e) { return; }
+  const el = $('#indexState');
+  const line = indexLine(ix);
+  // Only touch the DOM when the words change: a poll every 3 s must not flicker.
+  if (el.textContent !== line) el.textContent = line;
+  const title = ix.exists && ix.progress.paused_reason ? ix.progress.paused_reason : (ix.path || '');
+  if (el.title !== title) el.title = title;
+  if (ix.running && !indexPoll) indexPoll = setInterval(refreshIndex, 3000);
+  if (!ix.running && indexPoll) { clearInterval(indexPoll); indexPoll = null; }
+  return ix;
 }
 
 /* Backend status, in the header. Karl's report was that auth problems only appeared
@@ -1164,51 +1151,6 @@ async function probeBackend() {
   paintBackend({ ...S.backend, state: 'checking' });
   await fetch('/api/backend/probe', { method: 'POST' });
   followProbe();
-}
-
-/* The audio pass, in-app. It was step 2 of the five terminal steps between a folder
- * of footage and this board, and the only one that takes long enough to need a
- * progress bar rather than a spinner. */
-async function analyze() {
-  const r = await fetch('/api/analyze', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ skip: [] }),
-  });
-  if (!r.ok) {
-    const d = await r.json().catch(() => ({}));
-    return toast(`analysis failed to start: ${d.detail || r.status}`, 5000);
-  }
-  const { job, total } = await r.json();
-  strip.owned.add(job);
-  analysing = true;
-  $('#analyze').disabled = true;
-  $('#analyzeBar').style.display = 'block';
-  const poll = setInterval(async () => {
-    const s = await (await fetch(`/api/analyze/${job}`)).json();
-    // Two stages with very different lengths — encoding proxies for a long bin takes
-    // an order of magnitude longer than the ASR — so each reports its own count
-    // rather than leaving the bar parked at 100% for half an hour.
-    const previews = s.stage === 'previews';
-    const [at, of] = previews ? [s.proxy_done, s.proxy_total] : [s.done, s.total];
-    $('#analyzeBar').firstElementChild.style.width =
-      `${Math.round(100 * at / Math.max(1, of))}%`;
-    $('#analyzeState').textContent = previews
-      ? `building previews ${at}/${of}…` : `${s.done}/${total} analysed`;
-    if (s.state === 'running') return;
-    clearInterval(poll);
-    analysing = false;
-    $('#analyzeBar').style.display = 'none';
-    if (s.state === 'failed') {
-      $('#analyzeState').textContent = 'failed';
-      return toast(`analysis failed — ${s.log.split('\n').slice(-1)[0] || 'see log'}`, 8000);
-    }
-    $('#analyzeState').textContent = '';
-    // Transcripts and candidates only exist now, so the whole project reloads.
-    P = await (await fetch('/api/project')).json();
-    await refreshStatus();
-    render();
-    toast(`${s.done} clip${s.done > 1 ? 's' : ''} analysed — ready to cut`, 5000);
-  }, 2000);
 }
 
 async function save() {
@@ -1863,6 +1805,7 @@ async function boot() {
   P = await (await fetch('/api/project')).json();
   music = P.music || null;
   await refreshStatus();
+  await refreshIndex();
   await loadAssets();
   segs = P.segments.map((s) => ({ ...s }));
   $('#title').textContent = [P.variant, P.title].filter(Boolean).join(' · ');
@@ -1884,7 +1827,6 @@ async function boot() {
   $('#backend').onclick = probeBackend;
   // the startup probe may still be in flight; follow it rather than showing "unchecked"
   if (S.backend.state === 'checking') followProbe();
-  $('#analyze').onclick = analyze;
   $('#story').oninput = touch;
   $('#snap').onclick = snap;
   $('#undo').onclick = undo;
@@ -1892,7 +1834,6 @@ async function boot() {
   $('#ask').onclick = () => ask();   // not `ask` — a MouseEvent has a `.button` too
   $('#acceptProposal').onclick = acceptProposal;
   $('#rejectProposal').onclick = rejectProposal;
-  $('#visual').onclick = lookAtFootage;
   $('#findGo').onclick = () => doFind();
   $('#findDeep').onclick = () => doFind(true);
   $('#findQ').addEventListener('keydown', (e) => {

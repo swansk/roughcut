@@ -132,6 +132,15 @@
   .step.done { color: var(--good); border-color: #2c4c39; }
   .step.now { color: #0b0b0f; background: var(--accent); border-color: transparent;
               font-weight: 600; }
+  /* the screens nav in the header — the same pills as open.html's six-step strip */
+  #screens { display: flex; gap: 6px; align-items: center; }
+  .jump { font-size: 11px; color: var(--dim); border: 1px solid var(--line);
+          border-radius: 999px; padding: 2px 10px; white-space: nowrap; text-decoration: none; }
+  a.jump.link { border-color: var(--accent); color: var(--text); }
+  a.jump.link:hover { background: var(--card-hi); }
+  .jump.now { color: #0b0b0f; background: var(--accent); border-color: transparent; font-weight: 600; }
+  #indexLine a { color: var(--accent); text-decoration: none; }
+  #indexLine a:hover { text-decoration: underline; }
   .pill { border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px;
           font-size: 12px; color: var(--dim); cursor: pointer; white-space: nowrap; }
   .pill.ok { color: var(--good); border-color: #2c4c39; }
@@ -213,6 +222,13 @@
 <body>
 <header>
   <h1>Cut board <small id="title"></small></h1>
+  <!-- The three screens, the way the open screen's strip links them: the board is
+       the last of them, and the way back to the other two lives here. -->
+  <nav id="screens" aria-label="screens">
+    <a class="jump link" href="/open">open</a>
+    <a class="jump link" href="/floor">pass</a>
+    <span class="jump now" aria-current="page">board</span>
+  </nav>
   <div class="total"><span id="total">—</span><span class="band" id="band"></span></div>
   <div class="grow"></div>
   <span id="backend" class="pill" title="Backend status — click to re-check">…</span>
@@ -278,18 +294,15 @@
       <h2>Project</h2>
       <div id="project" class="hint">loading…</div>
       <div id="proxyState" class="hint" style="display:none;margin-top:8px"></div>
-      <div style="display:flex;gap:8px;align-items:center;margin-top:9px">
-        <button id="analyze">Analyse audio</button>
-        <span class="hint" id="analyzeState"></span>
+      <!-- The index is one unattended, resumable run started from the open screen
+           (INTAKE decision 3). The board only says where it is — the journal's own
+           word from GET /api/index — and points at the screen that runs it. The two
+           buttons that used to live here (Analyse audio, Look at the footage) are gone;
+           their endpoints stay for tests and tools. -->
+      <div class="hint" id="indexLine" style="margin-top:9px">
+        <span id="indexState">…</span> ·
+        <a id="openFootage" href="/open">open the footage →</a>
       </div>
-      <div class="bar" id="analyzeBar" style="display:none"><i></i></div>
-      <!-- The visual pass. Costs model calls, so it is offered with a price and a count
-           and never started on the app's own initiative. -->
-      <div style="display:none;gap:8px;align-items:center;margin-top:9px" id="visualRow">
-        <button id="visual">Look at the footage</button>
-        <span class="hint" id="visualState"></span>
-      </div>
-      <div class="bar" id="visualBar" style="display:none"><i></i></div>
     </div>
     <div class="panel" id="askPanel">
       <h2>Ask for a change</h2>

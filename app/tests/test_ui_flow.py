@@ -1115,3 +1115,83 @@ def test_a_running_ask_is_picked_back_up_after_a_reload(page):
         assert "two shots, streamed" in page.locator("#proposalNotes").inner_text()
     finally:
         inference.set_backend(None)
+
+
+# ------------------------------------------------------------ the index line
+
+def test_the_old_buttons_are_gone_and_the_index_line_reads_the_journals_word(
+        page, project, monkeypatch, tmp_path):
+    """INTAKE decision 3: the index is one unattended run started from the open screen.
+    The board used to carry the two buttons that predate it — Analyse audio and Look at
+    the footage — which were a second way to spend money on the same bin. Now it says
+    where the index is, in the journal's own words, and points at the screen that runs
+    it. The run here is real (tools stubbed the way test_index.py stubs them), started
+    the way the open screen starts it."""
+    import server
+    from roughcut import inference
+    from test_index import _stub_tools
+
+    # gone, not hidden
+    for gone in ("#analyze", "#visual", "#analyzeBar", "#visualBar", "#visualRow"):
+        assert page.locator(gone).count() == 0, gone
+    seen = page.locator("body").inner_text()      # what a person reads, not the source
+    assert "Analyse audio" not in seen
+    assert "Look at the footage" not in seen
+    # the link, and the header's way to the other two screens
+    link = page.locator("#openFootage")
+    assert link.get_attribute("href") == "/open"
+    assert "open the footage" in link.inner_text()
+    assert page.locator("#screens a[href='/open']").count() == 1
+    assert page.locator("#screens a[href='/floor']").count() == 1
+    # nothing has been indexed on this bin, and the line says so before any run
+    page.wait_for_function(
+        "document.querySelector('#indexState').textContent === 'not indexed yet'",
+        timeout=5000)
+
+    _stub_tools(server, monkeypatch, tmp_path)
+    # the cap the index checks before every priced stage is on projected spend, and
+    # earlier tests' stub backends have been spending into the same counter
+    inference.reset_spend()
+    before = {d: set(Path(server.STATE[d]).glob("*"))
+              for d in ("visual", "sidecars") if server.STATE.get(d)}
+
+    def line_reads(pattern: str, timeout: int) -> None:
+        """Wait for the index line to match, and say what it said if it never does."""
+        try:
+            page.wait_for_function(
+                f"{pattern}.test(document.querySelector('#indexState').textContent)",
+                timeout=timeout)
+        except playwright_api.TimeoutError:
+            ix = page.evaluate("fetch('/api/index').then(r => r.json())")
+            raise AssertionError(
+                f"index line never matched {pattern}: it reads "
+                f"{page.locator('#indexState').inner_text()!r}; /api/index says "
+                f"running={ix.get('running')} "
+                f"progress={ {k: v for k, v in (ix.get('progress') or {}).items() if k in ('clips', 'released', 'parked', 'missing', 'paused_priced', 'paused_reason', 'cost_usd')} } "
+                f"rows={[(r['clip'], r['state'], r.get('error')) for r in (ix.get('progress') or {}).get('rows', [])]}"
+            ) from None
+
+    try:
+        started = page.evaluate(
+            "fetch('/api/index', {method: 'POST', headers: {'content-type': 'application/json'},"
+            " body: JSON.stringify({order: 'priority'})}).then(r => r.json())")
+        assert "job" in started, started
+        # while it runs, the line polls the journal and says so; once it is done, the
+        # journal's own count of released clips is the line — no "click here", no bar
+        line_reads(r"/^(indexing|indexed) · \d+ of \d+ released/", 30000)
+        line_reads(r"/^indexed · /", 60000)
+        ix = page.evaluate("fetch('/api/index').then(r => r.json())")
+        assert ix["exists"] and not ix["running"]
+        n = ix["progress"]["clips"] - ix["progress"]["missing"]
+        line = page.locator("#indexState").inner_text()
+        assert line.startswith(f"indexed · {ix['progress']['released']} of {n} released"), line
+        assert ix["progress"]["released"] == n == len(project["stems"])
+    finally:
+        # leave the module's server as this test found it: no journal, no index job in
+        # the strip, none of the sidecars the stubbed tools wrote
+        server.INDEXES.clear()
+        server.journal_path().unlink(missing_ok=True)
+        for d, had in before.items():
+            for f in Path(server.STATE[d]).glob("*"):
+                if f not in had and f.is_file():
+                    f.unlink()

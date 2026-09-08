@@ -310,8 +310,10 @@ them. Every lane adds its own CHANGELOG bullet; integration keeps all of them.
   Karl. **To finish the bin:** `POST /api/index {"resume_priced": true}` (or the open screen,
   once M5 exists). While paused, the floor releases clips whose free stages are done — picks
   from the words and the coarse look — so nothing disappeared.
-- **The old Analyse / Look buttons and `POST /api/index` coexist** until M5 retires the two
-  buttons; running both on one bin is safe (files are truth) but pointless.
+- **The old Analyse / Look buttons are retired** (lane `agent/board`): `/` now shows the
+  journal's word from `GET /api/index` and a link to `/open` where the two buttons were.
+  `POST /api/analyze` and `POST /api/visual` stay — tests and tools use them — so running
+  a pass by API alongside the index is still safe (files are truth) but pointless.
 
 ## Verification log
 
