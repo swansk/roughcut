@@ -25,7 +25,7 @@ same commit. Releases move entries into a dated version section.
   score is documented in the module: candidates 0.40, theme hits 0.30, words 0.15, duration
   0.10, telemetry 0.05 — the telemetry term can never outweigh one theme hit or two speech
   candidates, per Karl's rule. `progress()` reports counts, cost, and an ETA from rolling-mean
-  measured durations only. No server wiring yet (I3.2).
+  measured durations only. No server wiring yet (I3.2); tracked in `docs/INTAKE.md` M3.
 - **The floor's foundations: picks, the bin in the EDL, and every floor endpoint.** The intake
   design (docs/design/cutting-room-floor.html, tracked in docs/INTAKE.md) needs three things
   before any screen exists. `roughcut/picks.py` derives **picks** — windows with witnesses —

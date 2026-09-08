@@ -97,11 +97,12 @@ table). Nothing verified live on Killington yet.
 
 ### M3 · The journal (lane `agent/journal`, pure module first)
 
-- [ ] I3.1 `roughcut/journal.py`: per-clip stages (probe, telemetry, asr, proxy, look, close,
+- [x] I3.1 `roughcut/journal.py`: per-clip stages (probe, telemetry, asr, proxy, look, close,
       picks) with done/running/failed/queued, attempts, cost; reconcile with sidecars on disk
       (files are truth, the journal is the plan); resume = re-queue what isn't done; priority
       score from the free stages; `released(clip)` = every stage done. DoD: unit tests incl. a
-      simulated crash mid-stage and an added clip.
+      simulated crash mid-stage and an added clip. — commit `f7555a2` on `agent/journal`
+      (`test_journal.py` 18 passed; suite 283 passed)
 - [ ] I3.2 Wire into the server: one `POST /api/index` (start/resume) replacing the two
       buttons' orchestration; per-clip release feeding `/api/picks`'s `released`; failure states
       (backoff on rate limit, park after 3 failures, cap pauses priced stages). DoD: API tests
