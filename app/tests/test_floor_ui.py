@@ -148,8 +148,17 @@ def test_the_floor_lists_the_picks_and_starts_on_the_first(page):
     assert page.locator("#zoomInner .snap.end").count() == 3
     assert page.locator("#zoomInner .snap.start").count() == 3
     assert page.locator("#zoomInner .snap.word").count() == 6
-    # the tape marks this clip's picks, the current one outlined
+    # the tape marks this clip's picks, the current one as a bracket, with a ruler (every
+    # second on a 6 s clip), a lens, and a legend in the margin that names the marks
     assert page.locator("#tapeMarks span.now").count() == 1
+    assert page.locator("#tapeRuler span").count() == 7
+    assert page.locator("#tapeRuler span").first.inner_text() == "0:00"
+    assert page.locator("#tapeLens").is_visible()
+    legend = page.locator("#legend").inner_text()
+    for word in ("this", "picked", "later", "undecided", "lens"):
+        assert word in legend
+    assert "WHOLE CLIP" in page.locator("#tapeLbl").inner_text()
+    assert "CLOSER" in page.locator("#zoom").inner_text()
     assert page.locator("#tapeTrace path").count() == 0, "no felt witness, no trace"
     # and it is playing, from the top of the preview
     playing_at(page, 0.3)
@@ -157,6 +166,20 @@ def test_the_floor_lists_the_picks_and_starts_on_the_first(page):
 
 def test_no_buttons_in_the_flow(page):
     assert page.locator("#app button").count() == 0
+
+
+def test_the_key_line_shows_six_things_and_the_map_has_the_rest(page):
+    """I2.7 move 4: P X U · space · [ ] { } · V · ? on the line; everything else behind ?."""
+    keys = page.locator("#keys")
+    assert keys.locator(".key").count() == 10
+    line = keys.inner_text()
+    for word in ("shuttle", "hero", "undo", "frame", "evidence", "more"):
+        assert word not in line, word
+    page.keyboard.press("?")
+    page.wait_for_selector("#overlay[data-kind=keymap]")
+    full = page.locator("#overlayBox").inner_text()
+    for word in ("shuttle", "hero", "undo", "frame step", "evidence", "drag"):
+        assert word in full, word
 
 
 # --------------------------------------------------------------- verdicts
@@ -374,26 +397,50 @@ def test_clicking_a_mark_on_the_tape_jumps_to_that_pick(page, project):
     assert page.locator("#ctxPick").inner_text().startswith("0:00.0 → 0:06.0")
 
 
-def test_clicking_a_strip_seeks_the_playhead(page):
-    """Paused stays parked, playing stays playing. The tape is the whole 6 s clip; the
-    closer strip is 80 px/s with the playhead at its centre."""
-    page.evaluate("floor.show(0, { autoplay: false })")
+def lens(page) -> tuple[float, float]:
+    """The lens's left and width on the tape, in percent of the clip."""
+    return tuple(page.evaluate(
+        "[parseFloat(document.querySelector('#tapeLens').style.left),"
+        " parseFloat(document.querySelector('#tapeLens').style.width)]"))
+
+
+def lens_at(page, left: float, width: float, tol=0.3):
+    """The lens is painted on the frame after a seek, so wait for it rather than for
+    currentTime — under a loaded machine one frame is enough to read it early."""
+    page.wait_for_function(
+        f"Math.abs(parseFloat(document.querySelector('#tapeLens').style.left) - {left}) < {tol}"
+        f" && Math.abs(parseFloat(document.querySelector('#tapeLens').style.width) - {width}) < {tol}",
+        timeout=5000)
+    assert lens(page) == pytest.approx((left, width), abs=tol)
+
+
+def test_clicking_a_strip_seeks_the_playhead_and_the_lens_tracks_it(page):
+    """Paused stays parked, playing stays playing; the lens on the tape is the ±8 s the
+    closer strip shows. On a 6 s clip that is always the whole tape, so the clip is told
+    it is 40 s long — the picture still only has 6, and every seek here stays inside them.
+    The closer strip is 80 px/s with the playhead at its centre."""
+    page.evaluate("floor.current().duration = 40; floor.show(0, { autoplay: false })")
     page.wait_for_function("document.querySelector('#pic').paused")
+    lens_at(page, 0.0, 20.0)                                                # 0-8 of 40
     tb = page.locator("#tape").bounding_box()
-    page.mouse.click(tb["x"] + tb["width"] * 0.5, tb["y"] + 8)             # 3.0 s
+    page.mouse.click(tb["x"] + tb["width"] * 3 / 40, tb["y"] + 8)          # 3.0 s
     page.wait_for_function("Math.abs(document.querySelector('#pic').currentTime - 3) < 0.1")
     assert page.evaluate("document.querySelector('#pic').paused")
+    lens_at(page, 0.0, 27.5)                                                # 0-11 of 40
+    assert float(page.evaluate("document.querySelector('#tapeHead').style.left")[:-1]) == pytest.approx(7.5, abs=0.3)
     zb = page.locator("#zoom").bounding_box()
     page.mouse.click(zb["x"] + zb["width"] / 2 + 80, zb["y"] + 10)          # a second right
     page.wait_for_function("Math.abs(document.querySelector('#pic').currentTime - 4) < 0.1")
     assert page.evaluate("document.querySelector('#pic').paused")
-    # playing: the playhead moves and the picture goes on
+    lens_at(page, 0.0, 30.0)                                                # 0-12 of 40
+    # playing: the playhead moves and the picture goes on, the lens with it
     page.keyboard.press("l")
     playing_at(page, 4.2)
-    page.mouse.click(tb["x"] + tb["width"] / 6, tb["y"] + 8)                # back to 1.0 s
+    page.mouse.click(tb["x"] + tb["width"] / 40, tb["y"] + 8)               # back to 1.0 s
     page.wait_for_function("document.querySelector('#pic').currentTime < 2")
     assert not page.evaluate("document.querySelector('#pic').paused")
     playing_at(page, 1.3)
+    assert 22.0 < lens(page)[1] < 26.0                                      # 0-(9..10) of 40
 
 
 # --------------------------------------------------------------------- undo

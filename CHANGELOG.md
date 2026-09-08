@@ -10,6 +10,22 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The strips explain themselves, and less is on screen (docs/INTAKE.md I2.7, moves 3 and
+  4).** "It's not clear how it fits into the bigger picture, or what the markers are above in
+  the whole clip." The tape now carries a time ruler (a tick and a time every second on a
+  short clip, every 30 s on a five-minute one — no more than a dozen labels), this pick as a
+  bright bracket over its window, the other picks as marks with a **legend** in the left
+  margin (this · picked · later · undecided, swatches with words) and a tooltip with the
+  rank, the state and the reason, and a **lens**: a translucent frame showing exactly the
+  seconds the zoomed strip holds, moving with the playhead — so the two tiers visibly relate,
+  and the legend says so ("the lens: what CLOSER shows"). The strips are labelled for what
+  they are: `WHOLE CLIP · name · length` with "click to seek · a mark is a pick — click one to
+  jump to it", and `CLOSER · ±8 s around the playhead · the green band is the clip — drag its
+  edges to trim, its middle to slide`. The key line collapses to the six things that matter —
+  `P X U · space · [ ] { } · V · ?` — and the full map, now with a line for the mouse, stays
+  behind `?`. The caption line and the transcript are as they were. Browser tests: the ruler,
+  lens, legend and labels are there; the lens tracks a seek on either strip; the key line has
+  ten keys and none of the words the map still has.
 - **Playing never changes the selection (docs/INTAKE.md I2.7, move 2).** The green band used
   to follow the furthest point watched — "watching the green bar increase as I play … it's
   fairly nonintuitive", and it looked like the tool deciding. Now the band is the pick's

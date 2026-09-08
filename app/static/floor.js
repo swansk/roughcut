@@ -347,6 +347,7 @@ function paintContext() {
   if (!p) return;
   const c = clipOf(p);
   const dur = p.duration || c.duration || 0;
+  $('#legend').hidden = F.mode === 'bin';
   if (F.mode === 'bin') {
     $('#ctxClip').textContent = stem(p.clip);
     $('#ctxClipMeta').textContent = `· ${fmt(dur)}`;
@@ -457,14 +458,30 @@ function paintCaption() {
     : `rank ${p.rank} · ${p.kind || ''} · <span class="key">E</span> evidence in full`;
 }
 
+/* The ruler's step: the smallest that puts no more than a dozen labels on the tape — every
+ * second on a 6 s clip, every 30 s on a five-minute one. */
+function rulerStep(dur) {
+  return [1, 2, 5, 10, 15, 30, 60, 120, 300, 600].find((s) => dur / s <= 12) || 600;
+}
+
 function paintTape() {
   const p = cur();
   if (!p) return;
   const dur = p.duration || 1;
   const mine = F.picks.filter((q) => q.clip === p.clip);
   const felt = mine.flatMap((q) => (q.witnesses || []).filter((w) => w.kind === 'felt'));
-  $('#tapeLbl').textContent = `${stem(p.clip).toUpperCase()} · WHOLE CLIP ${fmt(dur)} · picks as markers`
+  $('#tapeLbl').textContent = `WHOLE CLIP · ${stem(p.clip).toUpperCase()} · ${fmt(dur)}`
     + (felt.length ? ' · telemetry' : '');
+  const ruler = $('#tapeRuler');
+  ruler.innerHTML = '';
+  const step = rulerStep(dur);
+  for (let t = 0; t <= dur + 1e-6; t += step) {
+    const x = 100 * t / dur;
+    const s = document.createElement('span');
+    s.style.left = `${x.toFixed(2)}%`;
+    if (x < 96) s.textContent = clock(t);              // a label at the right edge would spill
+    ruler.appendChild(s);
+  }
   // One mark per pick. A mark in this round's queue jumps there on a click — decided or
   // not, so a verdict can be revisited; a pick decided in an earlier round is shown but
   // not reachable, because the queue is frozen (rule 3) and only undo may put a pick back.
@@ -490,12 +507,12 @@ function paintTape() {
   if (felt.length) {
     const vals = felt.map((w) => ({ at: w.at, v: parseFloat(String(w.text)) || 1 }));
     const vmax = Math.max(...vals.map((x) => x.v), 1e-6);
-    const pts = [[0, 40]];
+    const pts = [[0, 58]];                             // the baseline sits on the wave row
     vals.sort((a, b) => a.at - b.at).forEach((x) => {
       const px = 1000 * x.at / dur;
-      pts.push([px - 6, 40], [px, 40 - 30 * x.v / vmax], [px + 6, 40]);
+      pts.push([px - 6, 58], [px, 58 - 30 * x.v / vmax], [px + 6, 58]);
     });
-    pts.push([1000, 40]);
+    pts.push([1000, 58]);
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.setAttribute('d', pts.map((q, k) => `${k ? 'L' : 'M'}${q[0].toFixed(1)} ${q[1].toFixed(1)}`).join(' '));
     path.setAttribute('stroke', '#4a86b8');
@@ -574,6 +591,10 @@ function paintHead(t) {
   if (!p) return;
   const dur = p.duration || 1;
   $('#tapeHead').style.left = `${(100 * Math.min(1, t / dur)).toFixed(2)}%`;
+  // the lens: exactly the seconds the closer strip shows, so the two tiers visibly relate
+  const l0 = Math.max(0, t - ZOOM_HALF_S), l1 = Math.min(dur, t + ZOOM_HALF_S);
+  $('#tapeLens').style.left = `${(100 * l0 / dur).toFixed(2)}%`;
+  $('#tapeLens').style.width = `${(100 * Math.max(0, l1 - l0) / dur).toFixed(2)}%`;
   const width = $('#zoom').clientWidth || 1000;
   // px of clip time 0: the strip follows the playhead — except while a pointer is down,
   // when it holds still and the playhead moves instead, or every park would slide the
