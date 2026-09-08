@@ -4,13 +4,19 @@ Selection is a first-class artifact here rather than a note the model reconstruc
 EDL gains two keys beside `segments`, both ignored by `assemble.py`:
 
     "selects": [ {id, clip, start, end, why, note, hero, witnesses, tags,
-                  source, created, used_in: [segment ids]} ]
+                  source, created, used_in: [segment ids],
+                  clip_duration?, missing?} ]
     "floor":   { "verdicts": [ {clip, start, end, verdict: reject|later, note, at} ],
                  "position": {round, index, order},
                  "order": "rank" }
 
 Every entry is a **range on clip time**. Picks come and go as the index gets finer;
 these survive, and picks.attach_verdicts re-attaches them by overlap.
+
+`clip_duration` is the clip's length when it was known at creation — the fingerprint
+`relink` uses to find a select's footage again after a rename (decision 4: clips may be
+added, and moved, at any time). `missing: True` marks a select whose clip is not in the
+folder right now; it is never deleted, only flagged.
 
 Pure functions over the EDL dict. The server reads, applies, writes atomically.
 """
@@ -24,6 +30,11 @@ import time
 # merge; a string-out must never play footage twice.
 MERGE_MIN_OVERLAP = 0.5
 VERDICTS = ("pick", "reject", "later", "clear")
+# Two clips whose lengths differ by less than this are the same footage for relinking:
+# GoPro files are cut on GOP boundaries, so a copy or a rename keeps the length to the
+# frame, and two genuinely different clips of the same length to 50 ms are rare enough
+# that "exactly one match" is the rule and anything else stays missing.
+RELINK_TOLERANCE_S = 0.05
 
 
 def _overlap(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -58,27 +69,35 @@ def ensure(edl: dict) -> dict:
 def new_select(clip: str, start: float, end: float, *, why: str = "", note: str = "",
                hero: bool = False, witnesses: list | None = None,
                tags: list | None = None, source: str = "floor",
-               created: float | None = None) -> dict:
+               created: float | None = None,
+               clip_duration: float | None = None) -> dict:
+    """One select. `clip_duration` is recorded when the caller knows it (the server
+    does; a pure caller may not) — it is what `relink` matches on later."""
     if not (0.0 <= float(start) < float(end)):
         raise ValueError(f"select range {start}-{end} is not a range")
     created = time.time() if created is None else float(created)
-    return {"id": select_id(clip, float(start), float(end), created), "clip": clip,
+    item = {"id": select_id(clip, float(start), float(end), created), "clip": clip,
             "start": round(float(start), 2), "end": round(float(end), 2),
             "why": str(why)[:300], "note": str(note)[:600], "hero": bool(hero),
             "witnesses": list(witnesses or [])[:12], "tags": list(tags or [])[:8],
             "source": source, "created": round(created, 3), "used_in": []}
+    if clip_duration is not None and float(clip_duration) > 0:
+        item["clip_duration"] = round(float(clip_duration), 3)
+    return item
 
 
 def apply_verdict(edl: dict, clip: str, start: float, end: float, verdict: str, *,
                   why: str = "", note: str = "", hero: bool = False,
                   witnesses: list | None = None, tags: list | None = None,
-                  source: str = "floor") -> dict:
+                  source: str = "floor", clip_duration: float | None = None) -> dict:
     """One verdict on one range. Mutates and returns `edl`.
 
     `pick` adds a select, merging any keep in the same clip that overlaps it (union of
     the ranges, notes joined, hero if either was) and clearing any reject/later on those
     seconds. `reject` / `later` record the verdict and remove an overlapping select — a
     later reject of kept seconds is the human changing their mind. `clear` removes both.
+    `clip_duration`, when the caller knows it, is recorded on the keep for `relink`; a
+    merge keeps whichever side knew it.
     """
     if verdict not in VERDICTS:
         raise ValueError(f"unknown verdict {verdict!r}")
@@ -95,11 +114,14 @@ def apply_verdict(edl: dict, clip: str, start: float, end: float, verdict: str, 
 
     if verdict == "pick":
         merged = new_select(clip, start, end, why=why, note=note, hero=hero,
-                            witnesses=witnesses, tags=tags, source=source)
+                            witnesses=witnesses, tags=tags, source=source,
+                            clip_duration=clip_duration)
         for s in overlapping:
             merged["start"] = min(merged["start"], float(s["start"]))
             merged["end"] = max(merged["end"], float(s["end"]))
             merged["hero"] = merged["hero"] or bool(s.get("hero"))
+            if "clip_duration" not in merged and s.get("clip_duration"):
+                merged["clip_duration"] = s["clip_duration"]
             if s.get("note") and s["note"] not in merged["note"]:
                 merged["note"] = " / ".join(x for x in (merged["note"], s["note"]) if x)
             if not merged["why"] and s.get("why"):
@@ -149,10 +171,72 @@ def used_in(edl: dict) -> dict:
 def sync_timeline(edl: dict) -> dict:
     """Everything the bin must learn from a saved timeline. Called on every save.
 
-    Today: recompute `used_in`. The bin lane (docs/INTAKE.md, I1.3) extends this so a
-    shot added by hand with no keep under it becomes a keep with `source: "hand"`.
+    Two things. `used_in` is recomputed. Then any shot on the timeline that no keep
+    covers becomes a keep with `source: "hand"` — the shot's own range and `why`, no
+    note — so a shot placed by hand in the cutting room is in the bin like any other,
+    and the next ask from the bin knows about it (docs/INTAKE.md I1.3; design §5).
+
+    "Covers" is `used_in`'s test — the shot and the keep share half of the shorter one
+    — so a shot that already counts as a keep's use is never adopted twice, and a shot
+    that trimmed inside a keep stays that keep's use rather than becoming a second one.
+    Adoption goes through `apply_verdict("pick")`: placing seconds in the film outranks
+    a reject or a later on them. Idempotent — the adopted keep covers its shot exactly.
     """
+    used_in(edl)
+    for seg in list(edl.get("segments") or []):
+        try:
+            clip = seg["clip"]
+            start, end = float(seg["in"]), float(seg["out"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (0.0 <= start < end):
+            continue
+        if any(_touching(s, clip, start, end) for s in edl["selects"]):
+            continue
+        apply_verdict(edl, clip, start, end, "pick", why=str(seg.get("why") or ""),
+                      source="hand")
     return used_in(edl)
+
+
+def relink(edl: dict, clips: dict[str, dict]) -> dict:
+    """Find each select's footage in the folder as it is now. Mutates and returns `edl`.
+
+    `clips` is `{clip: {"duration": seconds}}` for what is on disk. A select whose clip is
+    there is left alone (a `missing` flag from an earlier pass is cleared, and a select
+    that never learned its clip's length learns it now, so it can be relinked later). A
+    select whose clip is not there is flagged `missing: True` — never dropped: a keep is
+    the editor's work, the file is the thing that wandered. If exactly one clip on disk
+    is within RELINK_TOLERANCE_S of the select's recorded `clip_duration`, the select is
+    re-pointed at that clip and `missing` cleared; no match or several leaves it missing,
+    because guessing between two same-length clips would silently put the wrong footage
+    in the film. `used_in` and the id are kept: it is the same select, found again.
+    """
+    ensure(edl)
+    durations = {}
+    for clip, info in (clips or {}).items():
+        try:
+            d = float((info or {}).get("duration") or 0.0)
+        except (TypeError, ValueError):
+            d = 0.0
+        durations[clip] = d
+    for s in edl["selects"]:
+        if s.get("clip") in durations:
+            s.pop("missing", None)
+            if "clip_duration" not in s and durations[s["clip"]] > 0:
+                s["clip_duration"] = round(durations[s["clip"]], 3)
+            continue
+        want = s.get("clip_duration")
+        matches = []
+        if want:
+            matches = [c for c, d in durations.items()
+                       if d > 0 and abs(d - float(want)) <= RELINK_TOLERANCE_S]
+        if len(matches) == 1:
+            s["clip"] = matches[0]
+            s.pop("missing", None)
+        else:
+            s["missing"] = True
+    edl["selects"].sort(key=lambda s: (s["clip"], s["start"]))
+    return edl
 
 
 def strung_out_s(edl: dict) -> float:
@@ -200,7 +284,7 @@ def validate_selects(payload, clips: dict[str, dict]) -> list[dict]:
                           why=s.get("why", ""), note=s.get("note", ""),
                           hero=bool(s.get("hero")), witnesses=s.get("witnesses"),
                           tags=s.get("tags"), source=str(s.get("source", "floor")),
-                          created=s.get("created"))
+                          created=s.get("created"), clip_duration=duration or None)
         if s.get("id"):
             item["id"] = str(s["id"])[:40]
         item["used_in"] = list(s.get("used_in") or [])

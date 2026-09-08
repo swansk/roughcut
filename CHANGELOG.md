@@ -38,6 +38,38 @@ same commit. Releases move entries into a dated version section.
   recording over 30 s is refused before the model loads (`TooLong`, a `NotAvailable`). Measured
   on the RTX 5080: 1.3 s for the tool warm, 4.7 s end to end through the module. A recording
   over 30 s answers 413 from the endpoint; the `live` pytest marker is registered in conftest.
+- **Tracker: M1 on `agent/bin` is built.** docs/INTAKE.md ticks I1.4 with its commit; I1.1,
+  I1.3 and I1.4 are done on the lane, I1.2 and the three server call-sites (`selects=` in
+  `_ask_job`, `relink` in `GET /api/selects`, `clip_duration=` in the verdict endpoint) are
+  the lead's, named on their lines.
+- **Relink: a select survives its clip being renamed or moved (docs/INTAKE.md I1.4).** A
+  select now records its clip's length at creation (`clip_duration`, via
+  `new_select(..., clip_duration=)`, `apply_verdict(..., clip_duration=)` and
+  `validate_selects`, which knows it). `selects.relink(edl, clips)` — `clips` being
+  `{clip: {"duration"}}` for the folder as it is now — flags a select whose clip is gone
+  `missing: True` rather than dropping it (the keep is the editor's work; the file wandered),
+  and when exactly one clip on disk is within 0.05 s of the recorded length re-points the
+  select at it and clears the flag, id and `used_in` intact. No match or several stays
+  missing: guessing between two same-length clips would put the wrong footage in the film.
+  A select whose clip is present is untouched, and one that never learned its length learns
+  it. Pure; the server is not wired yet (`GET /api/selects` is the place, the lead's file).
+- **Hand-added shots become keeps (docs/INTAKE.md I1.3).** The bin has its round trip from the
+  timeline: `selects.sync_timeline` (already called on every save) now adopts any shot no keep
+  covers — no select sharing half of the shorter range — as a keep with `source: "hand"`, the
+  shot's own range and `why`, no note, clearing a reject or later on those seconds. A shot
+  placed by hand in the cutting room is in the bin like any other and the next ask knows it;
+  idempotent, and a shot trimmed inside a keep stays that keep's use rather than a second keep.
+- **The ask reads the bin (docs/INTAKE.md M1).** `revise.originate` and `revise.propose` take
+  `selects=` (the EDL's bin) and the prompt gains a **"## The editor's selects"** section ahead
+  of the ranked events and the inventory — one line per keep with its reason, the editor's
+  note quoted, and `HERO` on the ones that must appear. For a first cut the section is the
+  contract: heroes must appear (the model may trim inside a hero's range, never drop one
+  silently), keeps are bounds to trim inside, the rest of the inventory is connective tissue
+  only; `validate_plan(..., heroes=)` rejects a plan in which no single shot covers half of a
+  hero unless `notes` names that hero's clip, so a dropped hero is always explained and the
+  bounded re-ask tells the model which one. In a revision the same section is context, not a
+  constraint, and the prompt says so. The server does not pass `selects` through yet (one
+  keyword in `_ask_job`, the lead's file); the tests wire it the same way to prove the 502.
 - **The floor's foundations: picks, the bin in the EDL, and every floor endpoint.** The intake
   design (docs/design/cutting-room-floor.html, tracked in docs/INTAKE.md) needs three things
   before any screen exists. `roughcut/picks.py` derives **picks** — windows with witnesses —

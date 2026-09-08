@@ -211,3 +211,134 @@ def test_the_floor_page_is_served(client):
     r = client.get("/floor")
     assert r.status_code == 200 and "floor" in r.text.lower()
     assert r.headers["cache-control"].startswith("no-store")
+
+
+# ------------------------------------------------- hand-added shots become keeps (I1.3)
+
+def test_sync_timeline_adopts_a_hand_added_shot_as_a_keep_idempotently():
+    edl = {"segments": [{"id": "s0", "clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0,
+                         "why": "first"},
+                        {"clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0, "why": "by hand"}]}
+    selects.apply_verdict(edl, "CLIP_A.MP4", 1.0, 3.0, "pick", why="the floor's")
+    selects.sync_timeline(edl)
+    assert [s["clip"] for s in edl["selects"]] == ["CLIP_A.MP4", "CLIP_B.MP4"]
+    floor_keep, hand = edl["selects"]
+    assert floor_keep["source"] == "floor" and floor_keep["used_in"] == ["s0"]
+    assert hand["source"] == "hand" and hand["why"] == "by hand" and hand["note"] == ""
+    assert (hand["start"], hand["end"]) == (0.0, 2.0)
+    assert hand["used_in"] == ["s1"], "an id-less segment is counted by position"
+    # again: nothing new, nothing duplicated, the ids hold
+    ids = [s["id"] for s in edl["selects"]]
+    selects.sync_timeline(edl)
+    assert [s["id"] for s in edl["selects"]] == ids
+    # a shot that a keep already covers is a use, not a hand-add — even trimmed
+    edl["segments"][0] = {"id": "s0", "clip": "CLIP_A.MP4", "in": 1.4, "out": 2.6}
+    selects.sync_timeline(edl)
+    assert len(edl["selects"]) == 2 and edl["selects"][0]["used_in"] == ["s0"]
+
+
+def test_a_hand_added_shot_on_rejected_seconds_is_the_human_changing_their_mind():
+    edl = {"segments": []}
+    selects.apply_verdict(edl, "CLIP_C.MP4", 1.0, 4.0, "reject", note="nah")
+    edl["segments"] = [{"clip": "CLIP_C.MP4", "in": 1.5, "out": 3.5}]
+    selects.sync_timeline(edl)
+    assert edl["floor"]["verdicts"] == [], "placing it in the film outranks the reject"
+    assert edl["selects"][0]["source"] == "hand"
+    assert selects.summary(edl)["used"] == 1
+
+
+def test_a_saved_timeline_grows_the_bin_by_its_hand_added_shots(client, project):
+    """The API path: once the bin exists, every save teaches it which shots were
+    placed by hand — a keep with `source: "hand"` and its `used_in`."""
+    client.post("/api/floor/verdict", json={
+        "clip": "CLIP_A.MP4", "start": 1.0, "end": 3.0, "verdict": "pick"})
+    r = client.put("/api/project", json={"segments": [
+        {"clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0, "why": "first"},
+        {"clip": "CLIP_C.MP4", "in": 1.5, "out": 4.25, "why": "new one"}], "story": ""})
+    assert r.status_code == 200
+    bin_ = client.get("/api/selects").json()
+    hands = [s for s in bin_["selects"] if s["source"] == "hand"]
+    assert len(hands) == 1 and hands[0]["clip"] == "CLIP_C.MP4"
+    assert hands[0]["why"] == "new one" and hands[0]["used_in"] == ["s1"]
+    assert bin_["summary"]["moments"] == 2 and bin_["summary"]["used"] == 2
+    on_disk = json.loads(project["edl"].read_text(encoding="utf-8"))
+    assert [s["source"] for s in on_disk["selects"]] == ["floor", "hand"]
+
+
+# ------------------------------------------------------------------- relink (I1.4)
+
+def test_a_select_records_its_clips_duration_when_known():
+    s = selects.new_select("CLIP_A.MP4", 1.0, 3.0, clip_duration=12.5004)
+    assert s["clip_duration"] == 12.5
+    assert "clip_duration" not in selects.new_select("CLIP_A.MP4", 1.0, 3.0)
+    assert "clip_duration" not in selects.new_select("CLIP_A.MP4", 1.0, 3.0, clip_duration=0)
+    edl = {"segments": []}
+    selects.apply_verdict(edl, "CLIP_A.MP4", 1.0, 3.0, "pick", clip_duration=12.5)
+    selects.apply_verdict(edl, "CLIP_A.MP4", 2.0, 5.0, "pick")
+    assert edl["selects"][0]["clip_duration"] == 12.5, "a merge keeps the side that knew"
+    ok = selects.validate_selects([{"clip": "CLIP_A.MP4", "start": 1, "end": 2}],
+                                  {"CLIP_A.MP4": {"duration": 6.0}})
+    assert ok[0]["clip_duration"] == 6.0
+
+
+def test_relink_flags_a_select_whose_clip_is_gone_and_never_drops_it():
+    edl = {"segments": []}
+    selects.apply_verdict(edl, "GOPR0001.MP4", 1.0, 3.0, "pick", why="the drop",
+                          clip_duration=12.5)
+    before = dict(edl["selects"][0])
+    selects.relink(edl, {"CLIP_A.MP4": {"duration": 6.0}, "CLIP_B.MP4": {"duration": 40.0}})
+    s = edl["selects"][0]
+    assert s["missing"] is True and s["clip"] == "GOPR0001.MP4" and s["id"] == before["id"]
+    assert s["why"] == "the drop" and s["clip_duration"] == 12.5
+    # a select that never learned its clip's length is missing too, and never guessed
+    edl2 = {"segments": []}
+    selects.apply_verdict(edl2, "GOPR0002.MP4", 0.0, 1.0, "pick")
+    selects.relink(edl2, {"ONLY.MP4": {"duration": 12.5}})
+    assert edl2["selects"][0]["missing"] is True and edl2["selects"][0]["clip"] == "GOPR0002.MP4"
+
+
+def test_relink_repoints_a_select_at_the_one_clip_of_the_same_length():
+    edl = {"segments": [{"id": "s0", "clip": "GOPR0001.MP4", "in": 1.0, "out": 3.0}]}
+    selects.apply_verdict(edl, "GOPR0001.MP4", 1.0, 3.0, "pick", note="keep", hero=True,
+                          clip_duration=12.5)
+    selects.used_in(edl)
+    ident = edl["selects"][0]["id"]
+    selects.relink(edl, {"CLIP_A.MP4": {"duration": 6.0},
+                         "renamed-drop.mp4": {"duration": 12.54}})
+    s = edl["selects"][0]
+    assert s["clip"] == "renamed-drop.mp4" and "missing" not in s
+    assert s["id"] == ident and s["used_in"] == ["s0"] and s["hero"] and s["note"] == "keep"
+    assert s["clip_duration"] == 12.5, "the fingerprint is the recorded length, not the new one"
+    # found again: a second pass with the same folder changes nothing
+    again = json.dumps(edl["selects"], sort_keys=True)
+    selects.relink(edl, {"CLIP_A.MP4": {"duration": 6.0}, "renamed-drop.mp4": {"duration": 12.54}})
+    assert json.dumps(edl["selects"], sort_keys=True) == again
+    # 0.06 s off is not the same footage
+    edl3 = {"segments": []}
+    selects.apply_verdict(edl3, "GOPR0001.MP4", 1.0, 3.0, "pick", clip_duration=12.5)
+    selects.relink(edl3, {"near.mp4": {"duration": 12.56}})
+    assert edl3["selects"][0]["missing"] is True
+
+
+def test_relink_leaves_an_ambiguous_match_missing_rather_than_guess():
+    edl = {"segments": []}
+    selects.apply_verdict(edl, "GOPR0001.MP4", 1.0, 3.0, "pick", clip_duration=12.5)
+    selects.relink(edl, {"a.mp4": {"duration": 12.5}, "b.mp4": {"duration": 12.52}})
+    s = edl["selects"][0]
+    assert s["missing"] is True and s["clip"] == "GOPR0001.MP4"
+    # once only one of them remains the select finds its footage
+    selects.relink(edl, {"b.mp4": {"duration": 12.52}})
+    assert s["clip"] == "b.mp4" and "missing" not in s
+
+
+def test_relink_leaves_a_present_clip_untouched_and_clears_a_stale_flag():
+    edl = {"segments": []}
+    selects.apply_verdict(edl, "CLIP_A.MP4", 1.0, 3.0, "pick", clip_duration=6.0)
+    selects.apply_verdict(edl, "CLIP_B.MP4", 1.0, 3.0, "pick")
+    before = json.dumps(edl["selects"][0], sort_keys=True)
+    edl["selects"][1]["missing"] = True          # flagged on an earlier pass
+    selects.relink(edl, {"CLIP_A.MP4": {"duration": 6.0}, "CLIP_B.MP4": {"duration": 6.0}})
+    assert json.dumps(edl["selects"][0], sort_keys=True) == before
+    b = edl["selects"][1]
+    assert "missing" not in b, "the file is back under its own name"
+    assert b["clip_duration"] == 6.0, "and a select that never knew its length learns it"

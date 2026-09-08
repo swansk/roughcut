@@ -2220,3 +2220,172 @@ def test_music_is_saved_into_the_edl_validated_and_rendered(tmp_path, project):
                 project["edl"].read_text(encoding="utf-8"))
     finally:
         project["edl"].write_text(original, encoding="utf-8")
+
+
+# ------------------------------------------------------------ the bin in the ask
+#
+# docs/INTAKE.md I1.1. The first cut is asked *from the bin*: heroes fixed, keeps as
+# bounds the model may trim inside, the inventory for connective tissue. The server
+# does not yet pass `selects` through to `revise.originate`, so these drive `revise`
+# directly with a scripted backend; the one end-to-end test wires the call the way
+# `_ask_job` will (`selects=read_edl().get("selects")`).
+
+def _scripted(plan: dict):
+    """A backend that answers every plan call with `plan` and records what it saw."""
+    from roughcut import config, inference
+
+    class Scripted:
+        name = "scripted"
+        seen: list = []
+
+        def complete(self, request):
+            Scripted.seen.append(request)
+            text = json.dumps(plan)
+            model = config.model_for(request.role)
+            return inference.Result(content=text, input_tokens=10, output_tokens=5,
+                                    backend="scripted", model=model,
+                                    projected_usd=1e-4, latency_ms=1, raw=text)
+    return Scripted
+
+
+def _bin() -> list[dict]:
+    from roughcut import selects
+    return [selects.new_select("CLIP_A.MP4", 0.5, 2.0, why="the greeting",
+                               note="open on this, hold the smile", hero=True,
+                               created=1.0),
+            selects.new_select("CLIP_B.MP4", 2.4, 4.0, why="the reply", created=2.0)]
+
+
+_EVENT = {"rank": 1, "clip": "CLIP_C.MP4", "start": 1.0, "end": 3.0, "kind": "fall",
+          "score": 0.9, "what": "rider goes down", "notable": True,
+          "why_ranked": {"confirmation": "confirmed"}}
+
+
+def test_originate_reads_the_bin_ahead_of_the_events_and_the_inventory(client):
+    import server
+    from roughcut import inference, revise
+
+    clips, _ = server._ask_clips()
+    Scripted = _scripted({
+        "segments": [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 2.0, "why": "opens"},
+                     {"clip": "CLIP_B.MP4", "in": 2.4, "out": 4.0, "why": "answers"}],
+        "notes": "built from the two keeps"})
+    inference.set_backend(Scripted())
+    inference.reset_spend()
+    try:
+        plan = revise.originate(clips, "two people talking", events=[_EVENT],
+                                selects=_bin())
+        assert len(plan["segments"]) == 2
+        prompt = Scripted.seen[-1].prompt
+        assert "## The editor's selects" in prompt
+        assert ("CLIP_A.MP4 0.5-2.0 (1.5s) — the greeting — editor's note: "
+                "\"open on this, hold the smile\" — HERO") in prompt
+        assert "CLIP_B.MP4 2.4-4.0 (1.6s) — the reply\n" in prompt
+        assert prompt.count("HERO") >= 2, "the marker on the line and in the guidance"
+        # the bin before the ranked events, both before the inventory
+        assert (prompt.index("## The editor's selects") < prompt.index("## Events, ranked")
+                < prompt.index("## Every clip available"))
+        assert "connective tissue" in prompt and "trim inside" in prompt
+        # and the same call without a bin says nothing about one
+        Scripted.seen.clear()
+        revise.originate(clips, "two people talking")
+        assert "The editor's selects" not in Scripted.seen[-1].prompt
+    finally:
+        inference.set_backend(None)
+
+
+def test_a_first_cut_that_drops_a_hero_must_say_so_in_notes(client):
+    import server
+    from roughcut import inference, revise
+
+    clips, _ = server._ask_clips()
+    silent = {"segments": [{"clip": "CLIP_B.MP4", "in": 2.4, "out": 4.0, "why": "x"}],
+              "notes": "went with the reply alone"}
+    Scripted = _scripted(silent)
+    inference.set_backend(Scripted())
+    inference.reset_spend()
+    try:
+        with pytest.raises(inference.InferenceError, match="CLIP_A.MP4"):
+            revise.originate(clips, "a test film", selects=_bin())
+        # one bounded re-ask, told what was wrong, before it gives up
+        assert len(Scripted.seen) == 2
+        assert "hero CLIP_A.MP4 0.5-2.0" in Scripted.seen[-1].prompt
+    finally:
+        inference.set_backend(None)
+
+    # the same plan, explained, is accepted — the editor sees why in the notes
+    explained = dict(silent, notes="CLIP_A is too dark to open on, so I left it out")
+    inference.set_backend(_scripted(explained)())
+    try:
+        plan = revise.originate(clips, "a test film", selects=_bin())
+        assert plan["notes"].startswith("CLIP_A is too dark")
+    finally:
+        inference.set_backend(None)
+
+    # trimming inside the hero is fine; keeping a sliver of it is dropping it
+    heroes = [{"clip": "CLIP_A.MP4", "start": 0.5, "end": 2.0}]
+    ok = revise.validate_plan({"segments": [{"clip": "CLIP_A.MP4", "in": 0.9, "out": 2.0}]},
+                              clips, heroes)
+    assert ok["segments"][0]["in"] == 0.9
+    with pytest.raises(ValueError, match="hero CLIP_A.MP4"):
+        revise.validate_plan({"segments": [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 1.0}]},
+                             clips, heroes)
+    # and a hero on a clip the inventory does not have is not a constraint
+    stale = [dict(_bin()[0], clip="GONE.MP4")]
+    assert revise.heroes_of(stale, clips) == []
+
+
+def test_the_server_reports_a_dropped_hero_as_a_502_naming_the_clip(client, project,
+                                                                     monkeypatch):
+    """End to end, wired the way `_ask_job` will pass the bin — a plan that drops a
+    hero silently fails the job with the clip in the detail, not a silent proposal."""
+    import server
+    from roughcut import inference, revise
+
+    r = client.put("/api/selects", json={"selects": [
+        {"clip": "CLIP_A.MP4", "start": 0.5, "end": 2.0, "why": "the greeting",
+         "hero": True}]})
+    assert r.status_code == 200
+    real = revise.originate
+
+    def wired(**kw):
+        return real(selects=server.read_edl().get("selects"), **kw)
+    monkeypatch.setattr(revise, "originate", wired)
+
+    inference.set_backend(_scripted({
+        "segments": [{"clip": "CLIP_B.MP4", "in": 2.4, "out": 4.0, "why": "x"}],
+        "notes": "the reply alone"})())
+    inference.reset_spend()
+    try:
+        job = client.post("/api/ask", json={"note": "", "segments": [],
+                                            "story": "a test film"}).json()["job"]
+        s = _ask_status(client, job)
+        assert s["state"] == "failed" and s["code"] == 502
+        assert "hero CLIP_A.MP4" in s["detail"]
+    finally:
+        inference.set_backend(None)
+
+
+def test_a_revision_reads_the_bin_as_context_not_constraint(client):
+    import server
+    from roughcut import inference, revise
+
+    clips, _ = server._ask_clips()
+    Scripted = _scripted({
+        "segments": [{"clip": "CLIP_C.MP4", "in": 0.5, "out": 4.0, "why": "per the note"}],
+        "notes": "swapped in the unused clip"})
+    inference.set_backend(Scripted())
+    inference.reset_spend()
+    try:
+        plan = revise.propose([{"clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0}], clips,
+                              "a test film", "use the clip that isn't in the cut",
+                              selects=_bin())
+        # the hero is gone and unmentioned, and that is allowed in a revision
+        assert plan["segments"][0]["clip"] == "CLIP_C.MP4"
+        prompt = Scripted.seen[-1].prompt
+        assert "## The editor's selects" in prompt
+        assert "context, not constraints" in prompt
+        assert "— HERO" in prompt
+        assert prompt.index("## The editor's selects") < prompt.index("## Every clip available")
+    finally:
+        inference.set_backend(None)
