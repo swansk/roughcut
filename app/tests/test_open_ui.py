@@ -173,8 +173,10 @@ def test_the_look_is_priced_before_the_button_that_buys_it(page):
     # the order defaults to the design's, and capture order is one click away
     assert "on" in page.locator("#order button[data-order=priority]").get_attribute("class")
     assert page.locator("#order button[data-order=capture]").is_enabled()
-    # the slider is not faked: the page says why it is missing
-    assert "not wired yet" in page.locator("#sliderHint").inner_text()
+    # the slider rests on the project's interval — the tool's default, said in words
+    assert page.locator("#interval").is_enabled() and page.locator("#interval").input_value() == "0"
+    assert page.locator("#intervalWord").inner_text() == "a frame every 4 s · sees the run, misses the moment"
+    assert "not wired" not in page.locator("#sliderHint").inner_text()
     # nothing has run: no progress, no table, no pause, nothing for the pass
     for sel in ("#progress", "#index", "#paused"):
         assert page.locator(sel).is_hidden(), sel
@@ -183,11 +185,67 @@ def test_the_look_is_priced_before_the_button_that_buys_it(page):
     assert page.locator("#links a[href='/']").count() == 1
 
 
-def test_index_the_footage_runs_the_journal_and_the_cap_pauses_the_priced_stages(page, bin_server):
+def test_the_slider_reprices_live_from_by_interval_without_a_round_trip(page, monkeypatch):
+    """The design's one control: four stops, coarse to fine, each said in words, and
+    the price re-pricing from `by_interval` as the thumb moves — no fetch per move.
+    The clips are made 100 s long in the live server so the stops differ: a sheet of
+    30 frames covers 120 s at 4 s (one sheet a clip) and 30 s at 1 s (four)."""
+    import server
+    monkeypatch.setattr(server, "clip_duration", lambda clip: 100.0)
+    page.evaluate("sheet.refresh()")
+    page.wait_for_function(
+        "sheet.state.status.visual.by_interval['1'] !== sheet.state.status.visual.by_interval['4']",
+        timeout=10000)
+    v = api(page, "/api/status")["visual"]
+    assert v["intervals"] == [4.0, 3.0, 2.0, 1.0] and v["interval_s"] == 4.0
+    assert v["by_interval"]["1"] > v["by_interval"]["2"] > v["by_interval"]["4"]
+    slider = page.locator("#interval")
+    assert slider.is_enabled() and slider.get_attribute("max") == "3" and slider.input_value() == "0"
+    assert page.locator("#stops span").all_inner_texts() == ["4 s", "3 s", "2 s", "1 s"]
+    assert "on" in page.locator("#stops span").first.get_attribute("class")
+    assert page.locator("#intervalWord").inner_text() == "a frame every 4 s · sees the run, misses the moment"
+    assert f"~${v['by_interval']['4']:.2f}" in page.locator("#priceLine").inner_text()
+    assert "3 sheets at a frame every 4 s" in page.locator("#priceDetail").inner_text()
+    hint = page.locator("#sliderHint").inner_text()
+    assert "re-prices live" in hint and "not wired" not in hint, hint
+    # move the thumb: the words, the price line and the button re-price with no request
+    hits: list[str] = []
+    page.on("request", lambda r: hits.append(r.url) if "/api/" in r.url else None)
+    slider.focus()
+    page.keyboard.press("ArrowRight")                                    # 3 s
+    assert slider.input_value() == "1"
+    assert page.locator("#intervalWord").inner_text() == "a frame every 3 s · sees the approach"
+    assert f"~${v['by_interval']['3']:.2f}" in page.locator("#priceLine").inner_text()
+    page.keyboard.press("End")                                           # 1 s, the far end
+    assert slider.input_value() == "3" and page.evaluate("sheet.interval()") == 1
+    assert page.locator("#intervalWord").inner_text() == "every 1 s · sees the landing"
+    fine = f"~${v['by_interval']['1']:.2f}"
+    assert fine in page.locator("#priceLine").inner_text()
+    assert fine in page.locator("#indexBtn").inner_text()
+    assert "on" in page.locator("#stops span").last.get_attribute("class")
+    detail = page.locator("#priceDetail").inner_text()
+    assert "a frame every 1 s" in detail and f"{v['fine_calls']} windows" in detail, detail
+    assert hits == [], hits
+    page.keyboard.press("Home")
+    assert slider.input_value() == "0" and page.evaluate("sheet.interval()") == 4
+    # a bin the sheets have partly read: the interval applies to the rest, and says so
+    page.evaluate("""() => { const v = sheet.state.status.visual;
+        v.done = 1; v.pending = v.pending.slice(1); sheet.renderControls(); }""")
+    hint = page.locator("#sliderHint").inner_text()
+    assert "applies to the 2 clips not yet looked at" in hint and "1 clip already looked at" in hint, hint
+    assert "2 clips not yet looked at" in page.locator("#priceLine").inner_text()
+
+
+def test_index_the_footage_runs_the_journal_and_the_cap_pauses_the_priced_stages(page, bin_server, project):
     """One click runs a real journal walk (tools stubbed): the free stages finish, the
-    budget cap holds the priced ones, and the screen says so with a way to resume."""
+    budget cap holds the priced ones, and the screen says so with a way to resume.
+    The slider's stop rides with the click and the project keeps it."""
     budget(bin_server, 0.0)
     page.locator("#order button[data-order=capture]").click()
+    page.locator("#interval").focus()
+    page.keyboard.press("ArrowRight")
+    page.keyboard.press("ArrowRight")                                    # 2 s
+    assert page.evaluate("sheet.interval()") == 2
     page.locator("#indexBtn").click()
     page.wait_for_function("document.querySelector('#indexBtn').disabled", timeout=3000)
     page.wait_for_selector("#paused:not([hidden])", timeout=60000)
@@ -198,6 +256,13 @@ def test_index_the_footage_runs_the_journal_and_the_cap_pauses_the_priced_stages
     assert page.locator("#resume").is_enabled()
     ix = api(page, "/api/index")
     assert ix["order"] == "capture" and ix["paused_priced"] is True and ix["released"] == []
+    # the interval went with the POST, the EDL carries it, and the slider shows the
+    # project's word — nothing looked yet, so it is still the human's to move
+    assert ix["interval_s"] == 2.0
+    assert edl(bin_server, project)["look"] == {"interval_s": 2.0}
+    assert page.evaluate("sheet.state.interval") is None
+    assert page.locator("#interval").input_value() == "2" and page.locator("#interval").is_enabled()
+    assert page.locator("#intervalWord").inner_text() == "a frame every 2 s · sees the air"
     # the table: every clip's free stages done, the priced ones queued, in capture order
     table = rows(page)
     assert [r["clip"] for r in table] == ["CLIP_A", "CLIP_B", "CLIP_C"]
@@ -246,8 +311,12 @@ def test_resume_priced_stages_releases_every_clip_and_opens_the_pass(page, bin_s
     assert page.locator(".card .badge.released").count() == 3
     flags = page.locator(".card .flags").first.inner_text()
     assert "looked" in flags and "released" in flags, flags
-    # and the price line has nothing left to sell
+    # and the price line has nothing left to sell: the slider is off and says why
     assert "nothing left to buy" in page.locator("#priceLine").inner_text()
+    assert page.locator("#interval").is_disabled()
+    hint = page.locator("#sliderHint").inner_text()
+    assert "nothing left to re-price" in hint and "every 2 s" in hint, hint
+    assert page.locator("#intervalWord").inner_text() == ""
     assert sorted(api(page, "/api/index")["released"]) == ["CLIP_A.MP4", "CLIP_B.MP4", "CLIP_C.MP4"]
 
 

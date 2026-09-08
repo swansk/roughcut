@@ -10,6 +10,16 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **`/open` — the granularity slider (INTAKE I5.3, the other half).** The "not wired yet"
+  hint in **Look — how closely?** is now the design's one control: a four-stop slider
+  (4 · 3 · 2 · 1 s, coarse to fine, resting on the project's `interval_s`), each stop said in
+  words under it (`a frame every 4 s · sees the run, misses the moment` … `every 1 s · sees
+  the landing`), and the price line — and the button's price — re-pricing from
+  `/api/status`'s `by_interval` as the thumb moves, with no request per move. **Index the
+  footage** (and Resume) send the chosen `interval_s` with `POST /api/index`; the EDL keeps
+  it, so after a run the slider shows the project's word. When some clips have been looked
+  at the hint says the interval applies to the rest and the ones done stay as they are; when
+  every clip has, the slider is off and says so. `test_open_ui.py` 13 passed.
 - **The look interval and the project picker, server side (INTAKE I5.3's slider, I5.4).**
   The open screen's one slider now has something to move: `look.interval_s` in the EDL (a
   project setting, so a resumed index looks at the rest of the bin the same way), read by
