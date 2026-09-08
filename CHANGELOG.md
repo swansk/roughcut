@@ -10,6 +10,22 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The index is a journal, not a job (INTAKE I3.1).** `roughcut/journal.py` is the pure model
+  behind decision 3 — unattended, resumable, priority-ordered, released per clip — and
+  decision 4 — clips added at any time. Per clip, seven stages (probe, telemetry, asr, proxy,
+  look, close, picks) each queued / running / done / failed / skipped / parked with attempts,
+  cost and timings, persisted as one JSON per bin written atomically. `reconcile(files)` bends
+  the plan to the disk (files are truth: a sidecar that exists is done, a stage found running
+  with no output is a crash and re-queues with its attempts kept, cost only ever recorded on
+  `finish` so nothing is double-counted); `next()` walks clips in priority order and stages in
+  pipeline order — so the top clip releases whole before the second starts — honouring
+  dependencies (picks wait for the close look too), per-pool worker limits (proxies and sheets
+  separately), backoffs and the priced pause; three failures park the clip with its reason
+  while the rest continues; `released(clip)` is every applicable stage done. The priority
+  score is documented in the module: candidates 0.40, theme hits 0.30, words 0.15, duration
+  0.10, telemetry 0.05 — the telemetry term can never outweigh one theme hit or two speech
+  candidates, per Karl's rule. `progress()` reports counts, cost, and an ETA from rolling-mean
+  measured durations only. No server wiring yet (I3.2).
 - **The floor's foundations: picks, the bin in the EDL, and every floor endpoint.** The intake
   design (docs/design/cutting-room-floor.html, tracked in docs/INTAKE.md) needs three things
   before any screen exists. `roughcut/picks.py` derives **picks** — windows with witnesses —
