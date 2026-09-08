@@ -10,6 +10,26 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **`/open` — the index controls: one button, priced, unattended (INTAKE I5.3).** The
+  open screen's right column, as Fig. 1: the price before the button (`/api/status`'s
+  `visual.projected_usd` — "~$X for the N clips not yet looked at", with the sheet and
+  window counts under it), the budget line (spent of cap), the order toggle (most
+  promising first / capture order), and **Index the footage** → `POST /api/index` —
+  disabled while a run is going, "Index what isn't done" once the bin has a journal, a
+  409 said in a toast and never doubled. When the cap has paused the priced stages the
+  screen says so with the journal's reason and **Resume priced stages** (→ `resume_priced`).
+  While a run is going the page polls `GET /api/index` every 2 s and shows the journal's
+  own numbers: the overall bar, released n of N, cost, ETA (or "once a stage has been
+  timed" — never a guess), the journal's path and its last log lines, the running job's
+  one-liner, and — above the grids, as Fig. 2 — the per-clip table: clip · the seven
+  stages as chips (done / running / failed ✕ n / skipped / queued) · priority · state
+  (released · indexing · queued · retrying with the error · parked with the reason ·
+  missing). **Open the pass →** enables on the first released clip and says how many;
+  the cut board is one link away. The granularity slider is deferred and the page says
+  why — the visual pass's sample interval is not plumbed through the index yet; nothing
+  is faked. Browser tests run a real journal walk with the index's tools stubbed
+  (`test_index._stub_tools`): the cap at $0 pauses the priced stages and the notice
+  appears, resume releases all three clips and enables the link, the 409 is said.
 - **`/open` — the folder as a contact sheet, before anything is spent (INTAKE I5.1).**
   `app/static/open.html` + `open.js`, on `GET /api/clips`: the bin's name and its line
   (clips · total length · sessions · telemetry x/N), one grid per session in capture order
