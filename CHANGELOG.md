@@ -10,6 +10,8 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **I2.7 ticked in docs/INTAKE.md** with its three commits (`a822b6b`, `4036b6a`, `46ee3d4`),
+  the verification counts, and what Karl's second look should check on Killington.
 - **The strips explain themselves, and less is on screen (docs/INTAKE.md I2.7, moves 3 and
   4).** "It's not clear how it fits into the bigger picture, or what the markers are above in
   the whole clip." The tape now carries a time ruler (a tick and a time every second on a

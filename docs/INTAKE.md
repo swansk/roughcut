@@ -105,7 +105,7 @@ to explain themselves. That is I2.7 and it is the next item — before I3.2.**
 - [x] I2.3 Rounds of 40 with frozen queue, closing card (counts, "if strung out", arrivals since
       round start; free default ↵ = play the bin; Assemble on `A` with the price). Resume from
       `floor.position` — same commit. The unlooked-stretch warning is omitted this round.
-- [ ] **I2.7 — NEXT. Trim by drag, and make the strips legible** (Karl's first report on the
+- [x] **I2.7 — Trim by drag, and make the strips legible** (Karl's first report on the
       pass, 2026-09-07, bedtime): *"It would be easier if I could adjust the start and end of
       the clips by clicking and dragging rather than adjusting with keys, like the arrow keys,
       or watching the green bar … increase as I play. It's fairly nonintuitive and needs to be
@@ -134,6 +134,17 @@ to explain themselves. That is I2.7 and it is the next item — before I3.2.**
       DoD: browser tests — pointer down/move/up on a handle changes the kept range on disk and
       snaps; dragging the middle slides it; clicking a marker jumps picks; the lens tracks the
       playhead; the band does not change during plain playback. Then a second look by Karl.
+      — **done on `agent/floor2`**, one commit per move: `a822b6b` (drag handles with a magnet
+      to the ticks, the band slides, click either strip to seek, click a mark to jump — marks
+      in this round's queue only, decided or not; earlier rounds' marks say so and stay put),
+      `4036b6a` (the band is the preview until a hand moves it; hold-space never extends it,
+      the recommendation taken; the two tests that encoded the old rule rewritten), `46ee3d4`
+      (ruler, bracket, legend, lens, labels, the key line down to six things).
+      `test_floor_ui.py` 20 passed · suite 327 passed, 1 skipped. **Next human look:** on
+      Killington, load a pick whose preview starts mid-sentence and confirm the band shows the
+      snapped preview before any hand touches it and stays put while space is held; drag a
+      handle and watch the tick light; check the ruler and lens read right on a five-minute
+      tape, and that a mark from an earlier round says why it will not jump.
 - [ ] I2.4 Compare takes (Survey view) for clustered picks; batch reject via filter.
 - [x] I2.5 Dictation UI: hold `V` → MediaRecorder → `POST /api/dictate` → note attached; clip
       audio ducked while held; `N` edits — same commit, against the 501 stub (falls back to
