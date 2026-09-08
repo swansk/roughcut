@@ -13,8 +13,10 @@
  *      machine's whole window blind — and it moves only by hand: a drag, the trim keys, or
  *      `}` to the next line. Playing never changes it (I2.7: the band that grew while he
  *      watched looked like the tool deciding).
- *   2. P / X / U / 1, J-K-L intact with K = pause, Caps Lock = auto-advance, ⌘Z undoes
- *      the verdict with its trim and note.
+ *   2. P / X / U / 1, J-K-L intact with K = pause, ⌘Z undoes the verdict with its trim and
+ *      note. A verdict moves on (Karl, 2026-09-08: "when I pick, reject, or later a clip,
+ *      it should move on to the next one") — there is no switch for it; ↵ skips for now,
+ *      ⌫ goes back, and a decided pick revisited shows its stamp and can be re-decided.
  *   3. the queue is frozen for a round of 40; what arrives lands at the round boundary.
  *   4. verdicts are ranges on clip time, so nothing here depends on a pick id surviving.
  *
@@ -78,9 +80,7 @@ const F = {
   roundSize: 40,
   summary: null,           // counts, never a verdict on sufficiency
   dictation: null,         // what /api/picks said about the recogniser
-  dictWarned: false,       // "not built yet" is said once
-  auto: false,             // Caps Lock: advance after a verdict
-  caps: false,             // the lamp as last seen on a key event
+  dictWarned: false,       // "not installed" is said once
   mode: 'pass',            // pass | card | bin
   keep: { manualStart: null, manualEnd: null, edge: 'out' },
   base: [0, 0],            // the range the pick loaded with: its preview
@@ -333,11 +333,6 @@ function tick(now) {
 
 /* ------------------------------------------------------------------ paint */
 
-function paintAuto() {
-  $('#hudAuto').classList.toggle('on', F.auto);
-  $('#hudAuto').textContent = F.auto ? 'CAPS · AUTO-ADVANCE' : 'CAPS OFF · ↵ ADVANCES';
-}
-
 function paintHud() {
   const n = F.queue.length;
   const done = F.queue.filter((p) => p.verdict).length;
@@ -351,7 +346,6 @@ function paintHud() {
   $('#hudBin').innerHTML = `bin <b class="good">${s.moments || 0} moment${s.moments === 1 ? '' : 's'}</b>`
     + ` · ${s.heroes || 0} hero · if strung out <b>${fmt(s.strung_out_s || 0)}</b>`
     + (s.later ? ` · ${s.later} later` : '');
-  paintAuto();
 }
 
 function paintContext() {
@@ -364,6 +358,7 @@ function paintContext() {
     $('#ctxClip').textContent = stem(p.clip);
     $('#ctxClipMeta').textContent = `· ${fmt(dur)}`;
     $('#ctxPick').textContent = `${fmt(p.start)} → ${fmt(p.end)}`;
+    $('#ctxWhere').textContent = `${clock(p.start)} → ${clock(p.end)} of ${clock(dur)} · ${Math.round(100 * p.start / (dur || 1))} % in`;
     $('#ctxOthers').textContent = `playing the bin · ${F.bin.k + 1} of ${F.bin.list.length} · Esc stops`;
     $('#ctxKeep').textContent = p.hero ? 'HERO' : 'kept';
     $('#ctxSnap').textContent = p.why || '';
@@ -378,6 +373,7 @@ function paintContext() {
     + (p.preview[0] > p.start || p.preview[1] < p.end
       ? ` · preview ${fmt(p.preview[0])} → ${fmt(p.preview[1])}` : '');
   $('#ctxOthers').innerHTML = `${others} other pick${others === 1 ? '' : 's'} in this clip`
+    + (p.take ? ` · <b>take ${p.take.n} of ${p.take.of}</b> · <span class="key">T</span> to compare` : '')
     + ` · <span class="key">.</span> open the clip`;
   $('#ctxHint').innerHTML = 'the green band is the clip — drag its edges · <span class="key">space</span> plays and pauses · at the band’s end it watches on';
   paintKeep(true);
@@ -408,6 +404,12 @@ function paintKeep(force) {
     ? `<span class="key">}</span> extend to the next line: "${escapeHtml(nxt.text || '')}" at ${fmt(nxt.start)}`
     : '';
   $('#zoomInfo').textContent = `keeping ${fmt(a)} → ${fmt(b)} · ${(b - a).toFixed(1)} s`;
+  // the same range on the tape, solid, and in words: where the clip sits in the whole clip
+  // (Karl, 2026-09-08: "unclear where the subclip is within the whole clip timeline")
+  const dur = p.duration || 1;
+  $('#tapeKeep').style.left = `${(100 * a / dur).toFixed(2)}%`;
+  $('#tapeKeep').style.width = `${(100 * (b - a) / dur).toFixed(2)}%`;
+  $('#ctxWhere').textContent = `${clock(a)} → ${clock(b)} of ${clock(dur)} · ${Math.round(100 * a / dur)} % in`;
   // words inside the keep light up
   $('#zoomInner').querySelectorAll('.w, .sb').forEach((el) => {
     const t0 = parseFloat(el.dataset.t0), t1 = parseFloat(el.dataset.t1);
@@ -458,7 +460,6 @@ function paintNote(meta) {
   $('#noteSlot').classList.toggle('empty', !text);
   $('#noteText').textContent = text ? `“${text}”` : 'no note yet';
   $('#noteMeta').textContent = text ? `· ${meta ? `${meta} · ` : ''}N edit` : '';
-  $('#dictHint').hidden = F.dictation === false && F.dictWarned;
 }
 
 function paintCaption() {
@@ -613,9 +614,18 @@ function paintHead(t) {
   // strip out from under the finger.
   const x0 = zoom.lock != null ? zoom.lock : width / 2 - t * zoom.pps;
   $('#zoomInner').style.transform = `translateX(${x0.toFixed(1)}px)`;
-  $('#zoomHead').style.left = zoom.lock != null ? `${(x0 + t * zoom.pps).toFixed(1)}px` : '50%';
+  const headPx = zoom.lock != null ? x0 + t * zoom.pps : width / 2;
+  $('#zoomHead').style.left = zoom.lock != null ? `${headPx.toFixed(1)}px` : '50%';
+  // the bridge: the lens's edges on the tape fan out to the closer strip's full width, and
+  // the playhead runs from where it is on the tape to where it is on the strip
+  $('#bridgeLens').setAttribute('points',
+    `${(1000 * l0 / dur).toFixed(1)},0 ${(1000 * l1 / dur).toFixed(1)},0 1000,16 0,16`);
+  const bh = $('#bridgeHead');
+  bh.setAttribute('x1', (1000 * Math.min(1, t / dur)).toFixed(1));
+  bh.setAttribute('x2', (1000 * headPx / width).toFixed(1));
   if (F.mode !== 'pass') {
     $('#zoomKeep').style.width = '0';
+    $('#tapeKeep').style.width = '0';
     $('#handleIn').hidden = $('#handleOut').hidden = true;
     $('#zoomHint').textContent = '';
     return;
@@ -726,6 +736,16 @@ function back() {
   savePosition();
 }
 
+/* Jump the pass to a pick — a mark on the tape, a take in the survey. Only this round's
+ * queue is reachable (rule 3); a pick decided in an earlier round says so and stays put. */
+function jumpTo(q) {
+  const at = F.queue.indexOf(q);
+  if (at < 0) return toast('decided in an earlier round — not in this queue', 3000);
+  if (at === F.i) return closeOverlay();
+  show(at);
+  savePosition();
+}
+
 /* ----------------------------------------------------------------- verdicts */
 
 function verdictBody(p, kind, range, hero, note) {
@@ -769,7 +789,8 @@ async function verdict(kind, { hero = false } = {}) {
   paintHud();
   paintTape();
   savePosition();
-  if (F.auto) setTimeout(() => { if (cur() === p && F.mode === 'pass') advance(); }, STAMP_MS);
+  // the stamp lands, then the next undecided pick — always; the card after the last one
+  setTimeout(() => { if (cur() === p && F.mode === 'pass') advance(); }, STAMP_MS);
 }
 
 /* ⇧X: the rest of this clip's undecided picks in the queue, from here on, in one undo. */
@@ -802,7 +823,7 @@ async function rejectRest() {
   paintHud();
   paintTape();
   toast(`rejected ${entry.items.length} pick${entry.items.length === 1 ? '' : 's'} in ${stem(p.clip)}`);
-  // past the ones just rejected, whatever the auto-advance state: that was the point
+  // past the ones just rejected: that was the point
   const next = F.queue.findIndex((q, k) => k > F.i && !entry.items.some((it) => it.p === q));
   setTimeout(() => {
     if (F.mode !== 'pass') return;
@@ -1022,8 +1043,8 @@ function tapeDown(e) {
   if (!p || F.mode !== 'pass' || e.button !== 0) return;
   const m = e.target.closest ? e.target.closest('#tapeMarks span') : null;
   if (m && m.classList.contains('jump')) {
-    const at = F.queue.findIndex((q) => String(q.id) === m.dataset.id);
-    if (at >= 0 && at !== F.i) { show(at); savePosition(); return; }
+    const q = F.queue.find((x) => String(x.id) === m.dataset.id);
+    if (q && q !== p) { jumpTo(q); return; }
   }
   Object.assign(tapeDrag, { on: true, moved: false, x: e.clientX });
   $('#tape').setPointerCapture(e.pointerId);
@@ -1084,56 +1105,148 @@ async function setNote(text, meta) {
   }
 }
 
-/* --------------------------------------------------------------- dictation */
+/* --------------------------------------------------------------- dictation
+ *
+ * Hold V, speak, let go: the note lands. What went wrong the first time (Karl, 2026-09-08:
+ * "the audio note doesn't work") was all on this side of the wire — the server transcribed
+ * a real recording in 4 s. In Chrome the first hold raises the permission prompt, V is
+ * released while it is up, and the stream that then arrived was thrown away in silence;
+ * a refused microphone fell into the typed editor as if that were the feature. So: the
+ * permission state is learned at boot and said in the hint; a stream that arrives after
+ * the key is up is kept and announced; one stream stays open for the page, so the second
+ * note starts at once and never asks again; a hold too short to hold a word is dropped
+ * and said; and no failure opens the typed editor — only a recogniser the server says it
+ * does not have. On any other error the note stays as it was and the toast says why.
+ */
 
-const dict = { rec: null, stream: null, chunks: [], held: false, vol: null };
+const MIN_NOTE_S = 0.4;          // shorter than this is a slip of the finger, not a note
 
-function dictFallback(why) {
+const dict = {
+  rec: null, stream: null, chunks: [], held: false, vol: null,
+  perm: null,                    // prompt | granted | denied, as the browser last said
+  t0: 0,                         // when the recorder started
+  landed: null,                  // the timer that clears "landed"
+};
+
+function dictState(text, live) {
+  const el = $('#dictState');
+  el.textContent = text || '';
+  el.className = `hint small${live ? ' live' : ''}`;
+}
+
+/* The one word the hint and the V key are painted from. */
+function micState() {
+  if (F.dictation === false) return 'absent';
+  return dict.perm || 'unknown';
+}
+
+function paintDictHint() {
+  const el = $('#dictHint');
+  const state = micState();
+  el.dataset.mic = state;
+  const key = `<span class="key" data-mic="${state}" title="microphone: ${state}">V</span>`;
+  const n = '<span class="key">N</span> to type';
+  el.innerHTML = state === 'absent'
+    ? `dictation is not installed on the server — ${n} a note`
+    : state === 'denied'
+      ? `microphone blocked for this site — allow it in the address bar, or ${n}`
+      : state === 'prompt'
+        ? `hold ${key} · V will ask for the microphone the first time · ${n}`
+        : `hold ${key} · clip audio ducks while you speak · text lands when you let go · ${n}`;
+}
+
+/* Ask the browser what it will do when V is held, and keep listening for a change — the
+ * user allowing the site from the address bar repaints the hint without a reload. */
+async function learnMic() {
+  try {
+    if (navigator.permissions && navigator.permissions.query) {
+      const st = await navigator.permissions.query({ name: 'microphone' });
+      dict.perm = st.state;
+      st.onchange = () => { dict.perm = st.state; paintDictHint(); };
+    }
+  } catch (e) { /* a browser that cannot say — the hint stays neutral */ }
+  paintDictHint();
+}
+
+function liveStream() {
+  const s = dict.stream;
+  return s && s.getTracks().some((t) => t.readyState === 'live') ? s : null;
+}
+
+/* The page is leaving or hidden: let the microphone go. Nothing else stops the tracks. */
+function releaseMic() {
+  try { if (dict.rec && dict.rec.state !== 'inactive') dict.rec.stop(); } catch (e) { /* gone already */ }
+  if (dict.stream) dict.stream.getTracks().forEach((t) => t.stop());
+  dict.stream = null;
+  dict.rec = null;
+}
+
+/* The recogniser is not on the server: typing is the note. The only path into the editor
+ * that a hold of V may take. */
+function dictAbsent() {
   if (!F.dictWarned) {
-    toast(`${why} — N to type`, 4000);
+    toast('dictation is not installed on the server', 4000);
     F.dictWarned = true;
   }
-  $('#dictState').textContent = '';
-  $('#dictState').className = 'hint small';
+  F.dictation = false;
+  paintDictHint();
+  dictState('');
   paintNote();
   editNote();
 }
 
+/* Anything else: say why, and leave the note as it was. */
+function dictFail(msg, ms = 5000) {
+  dictState('');
+  toast(msg, ms);
+}
+
+const MIC_BLOCKED = 'microphone blocked for this site — allow it in the address bar, or N to type';
+
 async function dictStart() {
   if (dict.held || F.mode !== 'pass') return;
+  if (F.dictation === false) return dictAbsent();
+  if (dict.perm === 'denied') return dictFail(MIC_BLOCKED);
+  if (!navigator.mediaDevices || !window.MediaRecorder) return dictFail('no microphone in this browser — N to type');
   dict.held = true;
   const v = pic();
   dict.vol = v.volume;
   v.volume = 0.1;                                  // the clip ducks while you speak
-  $('#dictState').textContent = 'listening…';
-  $('#dictState').className = 'hint small live';
-  if (!navigator.mediaDevices || !window.MediaRecorder) {
-    dictStop();
-    return dictFallback('no microphone in this browser');
+  dictState('listening…', true);
+  let stream = liveStream();
+  if (!stream) {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      const blocked = !!e && e.name === 'NotAllowedError';
+      if (blocked) { dict.perm = 'denied'; paintDictHint(); }
+      dictStop();
+      return dictFail(blocked ? MIC_BLOCKED : `no microphone — ${(e && e.name) || e}`);
+    }
+    dict.stream = stream;
+    if (dict.perm !== 'granted') { dict.perm = 'granted'; paintDictHint(); }
+    if (!dict.held) {                              // released while the prompt was up
+      dictState('');
+      return toast('microphone ready — hold V and speak', 3500);
+    }
   }
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch (e) {
-    dictStop();
-    return dictFallback(`no microphone — ${e.name || e}`);
-  }
-  if (!dict.held) {                                // released before the mic answered
-    stream.getTracks().forEach((t) => t.stop());
-    return;
-  }
-  const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : '';
-  dict.stream = stream;
+  dictRecord(stream);
+}
+
+function dictRecord(stream) {
+  const mime = MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus' : '';
   dict.chunks = [];
   dict.rec = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
   dict.rec.ondataavailable = (e) => { if (e.data && e.data.size) dict.chunks.push(e.data); };
   dict.rec.onstop = () => {
+    const held = (performance.now() - dict.t0) / 1000;
     const blob = new Blob(dict.chunks, { type: mime || 'audio/webm' });
-    stream.getTracks().forEach((t) => t.stop());
     dict.rec = null;
-    dict.stream = null;
+    if (held < MIN_NOTE_S) return dictFail('held too briefly — hold V while you speak', 3000);
     dictSend(blob);
   };
+  dict.t0 = performance.now();
   dict.rec.start();
 }
 
@@ -1143,34 +1256,209 @@ function dictStop() {
   const v = pic();
   if (dict.vol != null) v.volume = dict.vol;
   dict.vol = null;
-  if (dict.rec && dict.rec.state !== 'inactive') dict.rec.stop();
-  else {
-    $('#dictState').textContent = '';
-    $('#dictState').className = 'hint small';
-  }
+  if (dict.rec && dict.rec.state !== 'inactive') {
+    try { dict.rec.stop(); } catch (e) { dict.rec = null; dictFail(`the recording failed — ${e.name || e}`); }
+  } else dictState('');
 }
 
 async function dictSend(blob) {
-  $('#dictState').textContent = 'transcribing…';
-  $('#dictState').className = 'hint small';
+  dictState('transcribing…');
   let r;
   try {
     r = await fetch('/api/dictate', {
       method: 'POST', headers: { 'content-type': blob.type || 'audio/webm' }, body: blob,
     });
   } catch (e) {
-    return dictFallback('dictation unreachable');
+    return dictFail('dictation unreachable — the board did not answer');
   }
-  if (r.status === 501) return dictFallback('dictation not built yet');
+  if (r.status === 501) return dictAbsent();
   if (!r.ok) {
     const d = await r.json().catch(() => ({}));
-    $('#dictState').textContent = '';
-    return toast(`dictation failed: ${d.detail || r.status}`, 5000);
+    return dictFail(`dictation failed: ${d.detail || `HTTP ${r.status}`}`);
   }
   const d = await r.json();
-  $('#dictState').textContent = '';
-  if (!d.text) return toast('heard nothing — N to type', 3000);
-  await setNote(d.text, `${((d.latency_ms || 0) / 1000).toFixed(1)} s`);
+  if (!d.text) return dictFail('heard nothing — hold V while you speak', 3000);
+  const secs = `${((d.latency_ms || 0) / 1000).toFixed(1)} s`;
+  await setNote(d.text, secs);
+  dictState(`landed · ${secs}`);
+  clearTimeout(dict.landed);
+  dict.landed = setTimeout(() => {
+    if ($('#dictState').textContent.startsWith('landed')) dictState('');
+  }, 2500);
+}
+
+/* ------------------------------------------------------------ the survey
+ *
+ * Compare takes (I2.4, docs/design §4.3: "three takes of the same jump, side by side —
+ * keep the one that landed"). picks.py clusters the attempts (`take` on the pick); T lays
+ * them out in time order with a still, the range, the kind, the strongest witness, the
+ * felt numbers and any verdict. ← → choose, ↵ or a click goes there, P keeps the chosen
+ * take and rejects the cluster's other undecided takes — one POST each, one undo entry
+ * for the lot — X rejects the chosen take only. Takes decided in an earlier round show
+ * greyed with the reason, like the tape's marks: the queue is frozen.
+ */
+
+const survey = { k: 0 };
+
+function takesOf(p) {
+  const ids = new Set([p.id].concat((p.take && p.take.others) || []));
+  return F.picks.filter((q) => ids.has(q.id)).sort((a, b) => a.start - b.start);
+}
+
+/* The strongest witness's line: what was heard, or what the sheet claimed and a closer
+ * look did not contradict. */
+function witnessLine(q) {
+  const ws = (q.witnesses || []).filter((w) => w.kind === 'heard' || (w.kind === 'seen' && w.state !== 'contradicted'));
+  const best = ws.slice().sort((a, b) => (b.score || 0) - (a.score || 0))[0];
+  if (!best) return q.why || '';
+  return best.kind === 'heard' ? `“${best.text || ''}”` : String(best.text || '');
+}
+
+const STAMP_WORD = { pick: 'PICKED', reject: 'REJECTED', later: 'LATER' };
+
+function surveyHtml() {
+  const p = cur();
+  const list = takesOf(p);
+  const cards = list.map((q, k) => {
+    const inQueue = F.queue.indexOf(q) >= 0;
+    const felt = (q.witnesses || []).filter((w) => w.kind === 'felt').map((w) => w.text).join(' · ');
+    const word = q.verdict ? (q.hero ? 'HERO' : STAMP_WORD[q.verdict] || q.verdict) : '';
+    return `<div class="take${k === survey.k ? ' cursor' : ''}${q === p ? ' here' : ''}${inQueue ? '' : ' gone'}" data-id="${escapeHtml(q.id)}" data-k="${k}" title="${inQueue ? 'click to go to it' : 'decided in an earlier round — not in this queue'}">
+      <img src="${escapeHtml(q.poster || '')}" alt="">
+      <div class="t1"><b>take ${k + 1}</b>${q === p ? ' <span class="star">★</span>' : ''} · <span class="tnum">${fmt(q.start)}–${fmt(q.end)}</span> · ${escapeHtml(q.kind || '')}</div>
+      <div class="t2">${escapeHtml(witnessLine(q))}</div>
+      ${felt ? `<div class="t3">felt ${escapeHtml(felt)}</div>` : ''}
+      ${word ? `<div class="t4 ${escapeHtml(q.verdict)}">${escapeHtml(word)}${inQueue ? '' : ' · decided in an earlier round — not in this queue'}</div>` : ''}
+    </div>`;
+  }).join('');
+  return `<h2>Compare takes <span class="hint">${escapeHtml(stem(p.clip))} · ${list.length} takes of one ${escapeHtml(p.kind || 'moment')} · ${escapeHtml(p.take.id)}</span></h2>
+    <div class="takes">${cards}</div>
+    <div class="hint small" style="margin-top:10px"><span class="key">←</span><span class="key">→</span> choose · <span class="key">↵</span> or a click goes to it · <span class="key">P</span> keep it and reject the cluster’s other undecided takes · <span class="key">X</span> reject it only · <span class="key">Esc</span> close</div>`;
+}
+
+function wireSurvey() {
+  $('#overlayBox').querySelectorAll('.take').forEach((el) => {
+    el.onclick = () => { survey.k = Number(el.dataset.k); surveyGo(); };
+  });
+}
+
+function openSurvey() {
+  const p = cur();
+  if (!p || F.mode !== 'pass') return;
+  if (F.overlay === 'survey') return closeOverlay();
+  if (!p.take) return toast('not a take — nothing else in this clip tries the same thing', 3000);
+  survey.k = Math.max(0, takesOf(p).indexOf(p));
+  openOverlay('survey', surveyHtml());
+  wireSurvey();
+}
+
+function repaintSurvey() {
+  if (F.overlay !== 'survey') return;
+  $('#overlayBox').innerHTML = surveyHtml();
+  wireSurvey();
+}
+
+function surveyCursor() {
+  return takesOf(cur())[survey.k] || null;
+}
+
+function surveyMove(d) {
+  const n = takesOf(cur()).length;
+  survey.k = Math.max(0, Math.min(n - 1, survey.k + d));
+  $('#overlayBox').querySelectorAll('.take').forEach((el) =>
+    el.classList.toggle('cursor', Number(el.dataset.k) === survey.k));
+}
+
+function surveyGo() {
+  const q = surveyCursor();
+  if (q) jumpTo(q);
+}
+
+/* What P keeps of a take never watched here: its preview, snapped outward to the sentence
+ * — rule 1, as the band would have shown it. The current pick keeps its band. */
+function keepOf(t) {
+  if (t === cur()) return keepRange().snapped;
+  return [r2(snapStart(t, t.preview[0])), r2(snapEnd(t, t.preview[1]))];
+}
+
+const NO_KEEP = { manualStart: null, manualEnd: null, edge: 'out' };
+
+/* P in the survey: keep the chosen take, reject the cluster's other undecided takes — one
+ * POST per verdict, in time order, one undo entry for all of them — then move on past
+ * everything just decided, as a verdict does. */
+async function surveyPick() {
+  const p = cur();
+  const q = surveyCursor();
+  if (!p || !q || F.mode !== 'pass') return;
+  if (F.queue.indexOf(q) < 0) return toast('decided in an earlier round — not in this queue', 3000);
+  const cid = p.take.id;
+  const cluster = takesOf(p);
+  closeOverlay();
+  pause();
+  const noteOf = (t) => (t === p ? F.note : t.note || '');
+  const plan = [{ t: q, kind: 'pick', range: keepOf(q), why: q.why || '' }].concat(
+    cluster.filter((t) => t !== q && !t.verdict && F.queue.indexOf(t) >= 0)
+      .map((t) => ({ t, kind: 'reject', range: [r2(t.start), r2(t.end)], why: `other take of ${cid}` })));
+  const entry = { i: F.i, items: [], keep: q === p ? { ...F.keep } : { ...NO_KEEP }, note: noteOf(q) };
+  for (const step of plan) {
+    const hero = step.kind === 'pick' && !!step.t.hero && step.t.verdict === 'pick';
+    const body = { ...verdictBody(step.t, step.kind, step.range, hero, noteOf(step.t)), why: step.why };
+    let data;
+    try {
+      data = await send('POST', '/api/floor/verdict', body);
+    } catch (e) {
+      toast(`the verdict did not land: ${e.message}`, 6000);
+      break;
+    }
+    F.summary = data.summary;
+    entry.items.push({ p: step.t, prev: snapshot(step.t), sent: step.range });
+    step.t.verdict = step.kind;
+    step.t.hero = hero;
+    step.t.note = noteOf(step.t);
+    step.t.sent = step.range;
+  }
+  if (!entry.items.length) return;
+  F.undo.push(entry);
+  if (F.undo.length > 100) F.undo.shift();
+  const rejected = entry.items.length - 1;
+  if (p.verdict) stamp(p.verdict, p.hero && p.verdict === 'pick', p.verdict === 'reject' ? '· other take' : '');
+  paintHud();
+  paintTape();
+  savePosition();
+  toast(`kept take ${survey.k + 1} of ${cluster.length}`
+    + (rejected ? ` · rejected ${rejected} other take${rejected === 1 ? '' : 's'}` : ''), 3500);
+  const next = F.queue.findIndex((t, k) => k > F.i && !entry.items.some((it) => it.p === t));
+  setTimeout(() => {
+    if (F.mode !== 'pass') return;
+    if (next < 0) closingCard(); else { show(next); savePosition(); }
+  }, STAMP_MS);
+}
+
+/* X in the survey: the chosen take only. On the current pick it is the plain verdict;
+ * on another it lands, the survey repaints, and the pass stays where it is. */
+async function surveyReject() {
+  const p = cur();
+  const q = surveyCursor();
+  if (!p || !q || F.mode !== 'pass') return;
+  if (q === p) { closeOverlay(); return verdict('reject'); }
+  if (F.queue.indexOf(q) < 0) return toast('decided in an earlier round — not in this queue', 3000);
+  const range = [r2(q.start), r2(q.end)];
+  let data;
+  try {
+    data = await send('POST', '/api/floor/verdict', verdictBody(q, 'reject', range, false, q.note || ''));
+  } catch (e) {
+    return toast(`reject did not land: ${e.message}`, 6000);
+  }
+  F.summary = data.summary;
+  F.undo.push({ i: F.i, items: [{ p: q, prev: snapshot(q), sent: range }], keep: { ...NO_KEEP }, note: q.note || '' });
+  if (F.undo.length > 100) F.undo.shift();
+  q.verdict = 'reject';
+  q.hero = false;
+  q.sent = range;
+  paintHud();
+  paintTape();
+  repaintSurvey();
+  toast(`rejected take ${survey.k + 1}`);
 }
 
 /* ---------------------------------------------------------------- overlays */
@@ -1214,11 +1502,13 @@ function keymapHtml() {
     ['P', 'pick — to the bin, with the reason and any note'], ['X', 'reject — stays on the floor'],
     ['U', 'later — the pile the closing card offers back'], ['1', 'hero — must appear in the first cut'],
     ['⇧X', 'reject the rest of this clip’s picks'], ['⌘Z', 'undo the last verdict, with its trim and note'],
-    ['Caps', 'auto-advance after a verdict'], ['J K L', 'shuttle — K pauses'],
+    ['J K L', 'shuttle — K pauses'],
     ['space', 'play / pause — pressed again where the band ended, it watches on past it'], ['[ ]', 'in-point to the previous / next sentence'],
     ['{ }', 'out-point likewise — } extends to the reaction'], ['← →', 'frame step at the active edge (⇧ for a word)'],
-    ['↵', 'next pick · ⌫ previous'], ['V', 'hold to speak a note; N edits it'],
+    ['↵', 'skip for now — the next pick without a verdict · ⌫ back to the previous, decided or not'],
+    ['V', 'hold to speak a note; N edits it'],
     ['E', 'evidence drawer'], ['.', 'more: open the whole clip · look closer · find like this'],
+    ['T', 'compare takes — this clip’s other attempts at the same thing, side by side; P keeps one and rejects the rest'],
     ['?', 'this map'],
     ['drag', 'the green band’s edges trim it, its middle slides it · click a strip to seek, drag to scrub · click a mark on the tape to jump to that pick'],
   ];
@@ -1389,11 +1679,6 @@ function shuttle(key) {
 }
 
 document.addEventListener('keydown', (e) => {
-  // Caps Lock is the auto-advance switch. The lamp is read on every key and a change
-  // in it flips the setting — so a Caps that is already on when the page opens counts
-  // from the first key, and nothing else about the keyboard has to be trusted.
-  const caps = !!(e.getModifierState && e.getModifierState('CapsLock'));
-  if (caps !== F.caps) { F.caps = caps; F.auto = caps; paintAuto(); }
   if (['INPUT', 'TEXTAREA'].includes(e.target.tagName) || e.target.isContentEditable) return;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); undo(); return; }
@@ -1422,6 +1707,13 @@ document.addEventListener('keydown', (e) => {
   }
   if (F.overlay && (k === 'Escape' || (k === 'e' && F.overlay === 'evidence'))) return closeOverlay();
   if (!cur()) return undefined;
+  if (F.overlay === 'survey') {
+    if (k === 'ArrowLeft' || k === 'ArrowRight') { e.preventDefault(); return surveyMove(k === 'ArrowLeft' ? -1 : 1); }
+    if (k === 'Enter') { e.preventDefault(); return surveyGo(); }
+    if (k === 'p') return surveyPick();
+    if (k === 'x' && !e.shiftKey) return surveyReject();
+    if (k === 't') return closeOverlay();
+  }
 
   switch (k) {
     case 'p': return verdict('pick');
@@ -1442,6 +1734,7 @@ document.addEventListener('keydown', (e) => {
     case 'v': if (!e.repeat) dictStart(); return;
     case 'n': e.preventDefault(); return editNote();
     case 'e': return toggleOverlay('evidence', evidenceHtml);
+    case 't': return openSurvey();
     case '.': return toggleOverlay('more', moreHtml);
     case 'Enter': e.preventDefault(); return advance();
     case 'Backspace': e.preventDefault(); return back();
@@ -1489,6 +1782,9 @@ async function boot() {
   });
   ta.addEventListener('blur', () => { if (!ta.hidden) { const t = ta.value; closeNote(); setNote(t); } });
   window.addEventListener('resize', () => { zoom.built = ''; buildZoom(); paintKeep(true); });
+  window.addEventListener('pagehide', releaseMic);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseMic(); });
+  learnMic();
   requestAnimationFrame(tick);
 
   let picks;
@@ -1511,15 +1807,13 @@ async function boot() {
   if (!F.queue.length) { paintHud(); return closingCard(); }
   const at = Math.min(pos.index || 0, F.queue.length - 1);
   show(at);
-  if (F.dictation === false) $('#dictHint').innerHTML =
-    'dictation not built yet — <span class="key">N</span> to type a note';
+  paintDictHint();
 }
 
 /* What the tests reach for; nothing else should. */
 window.floor = {
   state: F, current: cur, keepRange, show, advance, undo, playBin, seek,
-  setAuto: (on) => { F.auto = !!on; paintAuto(); },
-  dictSend, snapStart, snapEnd, words, utterances,
+  dictSend, mic: dict, snapStart, snapEnd, words, utterances,
 };
 
 boot();

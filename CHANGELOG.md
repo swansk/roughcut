@@ -70,6 +70,79 @@ same commit. Releases move entries into a dated version section.
   nothing, change re-opens and re-keeps, the mic hides on a 501 with `V` typing again, and a
   hold of `V` with the recogniser stubbed on the server lands its text in the field.
   INTAKE I5.2 ticked (`cce429c`).
+- **Compare takes on the floor — the Survey view (INTAKE I2.4).** When the pick is one of
+  a cluster the THIS PICK panel says `take n of N · T to compare`. `T` opens the takes side
+  by side in time order — a still at the anchor (the poster the open screen uses), the
+  range, the kind, the strongest witness's line, the felt numbers, any verdict, `★` on this
+  pick; a take decided in an earlier round shows greyed with the reason, like the tape's
+  marks. `←` `→` choose, `↵` or a click goes to that pick (the mark-jump path), `P` keeps
+  the chosen take and rejects the cluster's other undecided takes — one POST per verdict
+  in time order, each reject's reason `other take of <cluster>`, then the pass moves on
+  past everything just decided — `X` rejects the chosen take only, `Esc` closes. `⌘Z` after
+  a P takes every verdict it wrote back off the EDL in one step: the batch is one undo
+  entry. The `?` map has a `T` row; the key line keeps its six things. One browser test,
+  the cluster injected through `floor.state` (the synthetic bin cannot form one).
+- **Take clusters in the picks (INTAKE I2.4, the data side).** The design's Survey view
+  ("three takes of the same jump, side by side — keep the one that landed") needs the picks
+  to know they are takes. `picks.takes()` marks them: per clip, picks of one kind that do
+  not overlap and sit at most `TAKE_GAP_S` = 90 s apart chain into a cluster — 90 s because
+  the hike back up between two hits at a kicker is one to two minutes, a fall and its
+  replay are seconds, and two jumps ten minutes apart in a long clip are not takes of each
+  other. Speech is the exception: two lines in one clip are not takes of anything unless
+  they share a theme tag — the theme says what the thing is. Every pick in a cluster of two
+  or more carries `take: {id: "<clip>:<kind>:<n>", n, of, others}`; every other pick
+  `take: null`. Computed after the verdicts re-attach; rank and order are untouched, takes
+  never score. `/api/picks` carries it through unchanged. Three tests: a cluster forms and
+  a gap over the limit splits it (and opens a second), different kinds never cluster and
+  overlaps are one pick already, speech needs the shared theme.
+
+### Changed
+- **INTAKE I2.4 ticked** — take clusters (`7719b72`) and the Survey view (`be992ea`), the
+  cluster rule and the 90 s spelled out, the filter half of the item left with the filter,
+  the `selects.py` one-liner that would put a reject's reason in the EDL, the next look.
+- **INTAKE I2.8 ticked** — Karl's second look at the pass, his three sentences quoted, the
+  three commits that answer them (`b58e2c8`, `1a2815c`, `911b8b7`) and what to look at next.
+- **A verdict moves on — always (INTAKE I2.8, 1c).** Karl: *"when I pick, reject, or later
+  a clip, it should move on to the next one. Right now, I'm not sure how you move on"*. Until
+  now a verdict advanced only with Caps Lock on ("CAPS · AUTO-ADVANCE" in the HUD) and ↵
+  otherwise. Auto-advance is now the only behaviour: after the stamp lands, P / X / U / 1
+  go to the next pick, and to the closing card after the last; the Caps Lock switch, its
+  HUD pill and its map row are gone. ↵ still skips for now (the next pick without a
+  verdict), ⌫ goes back, and a decided pick revisited by ⌫ or a mark click shows its stamp
+  and can be re-decided, which moves on again. Tests that pressed ↵ after a verdict or read
+  the CAPS text rewritten; one added: X, U, P in a row with nothing else pressed land on
+  the closing card with the right counts.
+- **Where the subclip sits in the whole clip is painted, bridged and said (INTAKE I2.8,
+  1b).** Karl: *"it is unclear where the subclip is within the whole clip timeline on the
+  pass"*. The tape now carries the kept range as a solid green band — the closer strip's
+  green, the same edges, following the handles while a drag is in progress — inside the
+  hollow bracket that still marks this pick's full window; a 16 px bridge between the two
+  strips fans the lens's edges on the tape out to the closer strip's full width and runs
+  the playhead's line from its place on the tape to its place on the strip, so the eye
+  reads "these 16 s of that 5 min"; and the THIS PICK panel says it in words: `2:20 → 2:27
+  of 5:18 · 44 % in`. The legend names the band. One browser test: the band's left and
+  width follow `keepRange()` through a drag of each handle, the bridge follows the lens and
+  the playhead, the words read right.
+- **The audio note works in a browser (INTAKE I2.8, 1a).** Karl: *"the audio note doesn't
+  work"* — and the server was fine (a real recording came back in 4 s). The browser flow
+  in `floor.js` was the failure: Chrome's first-time permission prompt let V come up before
+  the stream arrived, and the stream was then thrown away in silence; a refused microphone
+  toasted `NotAllowedError` and dropped into the typed editor as if that were the feature.
+  Now the permission is learned at boot (`navigator.permissions`) and the hint under the
+  note says what V will do — *V will ask for the microphone the first time*, or *microphone
+  blocked for this site — allow it in the address bar, or N to type* — with the V key
+  coloured by the state; a stream that lands after the key is up is kept and announced
+  (*microphone ready — hold V and speak*), the editor left closed; one stream stays open
+  for the page (tracks stop on hide/unload), so the second note never asks again and
+  records at once; a hold under 0.4 s is dropped with *held too briefly — hold V while you
+  speak*; the failures are told apart — a 501 is *dictation is not installed on the server*
+  and the only case that opens the typed editor, anything else shows the server's reason
+  and leaves the note as it was; `#dictState` reads listening… → transcribing… → landed.
+  Three browser tests: the blocked microphone (named, editor closed, never asked twice),
+  the late stream (kept, next hold records on it, too-brief hold dropped), and the 501
+  path rewritten to the new words plus the boot hint after a reload.
+
+### Added
 - **Themes proposed from the transcripts (INTAKE I5.2, the data side).** Listen first, then
   propose: `POST /api/themes/propose` is one judge-role call over the audio pass's transcripts
   — no sheets, no moments — that returns three to eight themes as phrases the editor would

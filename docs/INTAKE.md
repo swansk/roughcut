@@ -148,7 +148,51 @@ priced stages are still paused** (9 close looks, ~$2) — Karl's call, from the 
       snapped preview before any hand touches it and stays put while space is held; drag a
       handle and watch the tick light; check the ruler and lens read right on a five-minute
       tape, and that a mark from an earlier round says why it will not jump.
-- [ ] I2.4 Compare takes (Survey view) for clustered picks; batch reject via filter.
+- [x] **I2.8 — Karl's second look at the pass (2026-09-08).** Three sentences: *"the audio
+      note doesn't work"*; *"it is unclear where the subclip is within the whole clip
+      timeline on the pass"*; *"when I pick, reject, or later a clip, it should move on to
+      the next one. Right now, I'm not sure how you move on"*. One commit each, on
+      `agent/takes`:
+      1. `b58e2c8` — the audio note. The server was fine (a real recording came back in
+         4 s); the browser flow was not: Chrome's first-time permission prompt let V come
+         up before the stream arrived and the stream was dropped in silence, and a refused
+         microphone fell into the typed editor. Now the permission is learned at boot and
+         said in the hint (prompt / blocked / absent, the V key coloured by it), a late
+         stream is kept and announced, one stream stays open for the page, a hold under
+         0.4 s is dropped and said, the failures are told apart, and only a 501 — the
+         recogniser genuinely absent — opens the typed editor.
+      2. `1a2815c` — where the subclip is. The kept range is a solid green band on the tape
+         inside the bracket, live under a drag; a bridge between the strips fans the lens
+         out to the closer strip and carries the playhead across; THIS PICK says
+         `2:20 → 2:27 of 5:18 · 44 % in`.
+      3. `911b8b7` — a verdict moves on, always. Caps Lock, the HUD pill and `F.auto` are
+         gone; ↵ skips for now, ⌫ goes back, a revisited pick shows its stamp and can be
+         re-decided.
+      `test_floor_ui.py` 24 passed (three new, five rewritten) · suite 352 passed, 1 skipped.
+      **Next human look:** on Killington, hold V once in Chrome and read the hint before
+      and after the prompt; find CLIP_11's backflip on the tape without reading a number;
+      P three picks in a row and watch the pass carry you.
+- [x] I2.4 Compare takes (Survey view) for clustered picks; batch reject via filter.
+      — two commits on `agent/takes`: `7719b72` take clusters in `picks.py` (same clip, same
+      kind, no overlap, at most `TAKE_GAP_S` = 90 s apart — the hike back up to a kicker is
+      one to two minutes, a fall and its replay are seconds; speech clusters only on a
+      shared theme tag; `take: {id, n, of, others}` on every pick in a cluster, `null`
+      elsewhere; computed after verdicts re-attach, rank and order untouched) and
+      `be992ea` the Survey view on the floor (THIS PICK says `take n of N · T to compare`;
+      `T` lays the takes out in time order — still, range, kind, strongest witness, felt
+      numbers, verdict, `★` on this pick, an earlier round's greyed with the reason;
+      `← →` choose, `↵` or a click goes there, `P` keeps one and rejects the cluster's other
+      undecided takes one POST each with `why: other take of <cluster>` in one undo entry,
+      `X` rejects the chosen take only, `Esc` closes; `T` row in the `?` map). The
+      batch-reject-via-filter half of the item is not built: there is no filter on the
+      floor yet (kind / source / theme) — it goes with the filter when one exists.
+      `test_picks.py` 12 passed (3 new) · `test_floor_ui.py` 25 passed (1 new) · suite 356
+      passed, 1 skipped. **Gap for the bin lane:** `selects.apply_verdict` keeps only `note`
+      on a reject/later, so the reject's reason is on the wire but not in the EDL — one
+      line in `selects.py` (`"why": str(why)[:300]` in the verdict dict) closes it.
+      **Next human look:** on Killington, find a clip with two jumps under 90 s apart
+      (CLIP_06 or CLIP_11), read `take n of N` in the panel, press T, keep the one that
+      landed with P, ⌘Z, and check both verdicts come back.
 - [x] I2.5 Dictation UI: hold `V` → MediaRecorder → `POST /api/dictate` → note attached; clip
       audio ducked while held; `N` edits — same commit, against the 501 stub (falls back to
       `N`); the success path is tested with the recogniser's answer scripted in the page.

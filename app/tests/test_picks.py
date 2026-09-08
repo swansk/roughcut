@@ -136,6 +136,68 @@ def test_stored_verdicts_reattach_by_overlap_and_keeps_win():
     assert picks.build(clips, [], verdicts=[reject])[0]["verdict"] == "reject"
 
 
+def test_takes_cluster_same_kind_picks_within_the_gap_and_never_move_the_rank():
+    """INTAKE I2.4: two jumps 56 s apart in one clip are attempts at one kicker; the
+    third, 116 s further on, is its own thing. Verdicts are attached before the clusters
+    are read, and a cluster changes neither rank nor order."""
+    clips = {"CLIP_A.MP4": _clip(candidates=[], duration=600.0)}
+    evs = [_event(20.0, 24.0, "confirmed", rank=1, score=0.9),
+           _event(80.0, 84.0, "unseen", rank=2, score=0.5),
+           _event(200.0, 204.0, "unseen", rank=3, score=0.4)]
+    keep = {"id": "k_1", "clip": "CLIP_A.MP4", "start": 80.0, "end": 84.0}
+    out = picks.build(clips, evs, selects=[keep])
+    by_start = {p["start"]: p for p in out}
+    first, second, third = by_start[20.0], by_start[80.0], by_start[200.0]
+    assert first["take"] == {"id": "CLIP_A.MP4:jump:1", "n": 1, "of": 2, "others": [second["id"]]}
+    assert second["take"] == {"id": "CLIP_A.MP4:jump:1", "n": 2, "of": 2, "others": [first["id"]]}
+    assert second["verdict"] == "pick", "the keep was attached before the cluster was read"
+    assert third["take"] is None, "116 s past the last attempt is not a take of it"
+    assert [p["rank"] for p in out] == [1, 2, 3]
+    plain = picks.build(clips, evs)
+    assert [p["id"] for p in plain] == [p["id"] for p in out], "takes never reorder"
+    assert [p["score"] for p in plain] == [p["score"] for p in out], "takes never score"
+    # a fourth attempt inside the gap of the third opens a second cluster of that kind
+    evs.append(_event(260.0, 264.0, "unseen", rank=4, score=0.3))
+    again = {p["start"]: p for p in picks.build(clips, evs)}
+    assert again[200.0]["take"]["id"] == "CLIP_A.MP4:jump:2" and again[260.0]["take"]["n"] == 2
+    assert again[20.0]["take"]["id"] == "CLIP_A.MP4:jump:1"
+
+
+def test_takes_need_one_kind_and_overlaps_are_one_pick_already():
+    """Different kinds never cluster, however close; overlapping windows are one pick by
+    the merge rule, so they are nothing to compare."""
+    clips = {"CLIP_A.MP4": _clip(candidates=[], duration=600.0)}
+    mixed = picks.build(clips, [_event(20.0, 24.0, kind="jump", rank=1),
+                                _event(30.0, 34.0, kind="crash", what="down hard", rank=2)])
+    assert len(mixed) == 2 and all(p["take"] is None for p in mixed)
+    merged = picks.build(clips, [_event(20.0, 24.0, rank=1),
+                                 _event(23.0, 27.0, what="the landing", rank=2)])
+    assert len(merged) == 1 and merged[0]["take"] is None
+    # and clusters never cross clips
+    two = picks.build({"CLIP_A.MP4": _clip(candidates=[], duration=600.0),
+                       "CLIP_B.MP4": {**_clip(candidates=[], duration=600.0), "clip": "CLIP_B.MP4"}},
+                      [_event(20.0, 24.0, rank=1), _event(40.0, 44.0, clip="CLIP_B.MP4", rank=2)])
+    assert all(p["take"] is None for p in two)
+
+
+def test_speech_takes_need_a_shared_theme():
+    """Two lines in one clip are not takes of anything unless a theme says what the thing
+    is: the same gag told twice clusters; the same two lines with no themes do not."""
+    transcript = [{"start": 10.0, "end": 12.0, "text": "pocket pizza"},
+                  {"start": 50.0, "end": 52.0, "text": "pizza in the pocket again"},
+                  {"start": 70.0, "end": 72.0, "text": "go back feet yeah"}]
+    cands = [{"t": 10.0, "end": 12.0, "why": "gag", "score": 0.7},
+             {"t": 50.0, "end": 52.0, "why": "gag again", "score": 0.6},
+             {"t": 70.0, "end": 72.0, "why": "reaction", "score": 0.5}]
+    clips = {"CLIP_A.MP4": _clip(candidates=cands, transcript=transcript, duration=600.0)}
+    themed = {p["start"]: p for p in picks.build(clips, [], themes=["the pizza gag"])}
+    assert themed[9.5]["take"]["id"] == "CLIP_A.MP4:speech:1" and themed[9.5]["take"]["of"] == 2
+    assert themed[49.5]["take"]["n"] == 2
+    assert themed[69.5]["take"] is None, "no pizza in it: not a take of the gag"
+    plain = picks.build(clips, [])
+    assert all(p["take"] is None for p in plain), "without a theme, lines are just lines"
+
+
 def test_order_and_rounds():
     clips = {"CLIP_B.MP4": {**_clip(), "clip": "CLIP_B.MP4"},
              "CLIP_A.MP4": _clip(candidates=[{"t": 50.0, "end": 52.0, "why": "x",

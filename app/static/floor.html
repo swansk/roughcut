@@ -42,10 +42,6 @@
   #hudBar i { position: absolute; top: 0; bottom: 0; }
   #hudDone { left: 0; background: var(--good); }
   #hudNow { background: var(--accent); }
-  .pill { font: 600 9.5px var(--mono); border: 1px solid var(--line); border-radius: 999px;
-          padding: 1px 8px; color: var(--faint); letter-spacing: .04em; }
-  .pill.on { color: var(--good-soft); border-color: #2c4c39; }
-
   /* ---- stage: margins + picture ---- */
   #stage { display: grid; grid-template-columns: 200px 1fr 240px; flex: 1 1 auto; min-height: 0;
            background: var(--bg); }
@@ -56,7 +52,7 @@
   #picture { position: relative; display: flex; align-items: center; justify-content: center;
              background: #050507; min-width: 0; min-height: 0; }
   #frame { position: relative; max-width: 100%; max-height: 100%; aspect-ratio: 16 / 9;
-           width: min(100%, calc((100vh - 320px) * 16 / 9)); background: #000; border-radius: 4px;
+           width: min(100%, calc((100vh - 336px) * 16 / 9)); background: #000; border-radius: 4px;
            overflow: hidden; }
   #pic { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
   #stamp { position: absolute; left: 26px; top: 22px; z-index: 6; font: 800 34px var(--display);
@@ -82,6 +78,7 @@
   .sw.pick { background: var(--good); }
   .sw.later { background: var(--warn); }
   .sw.lens { width: 15px; background: rgba(207,214,228,.1); border: 1px solid rgba(207,214,228,.5); }
+  .sw.keep { background: rgba(100,208,138,.72); border: 1px solid var(--good); }
 
   /* seals: three states, colour AND the word */
   .seal { display: flex; flex-direction: column; gap: 1px; font: 500 10.5px var(--mono);
@@ -102,6 +99,12 @@
               resize: vertical; }
   #dictState { min-height: 14px; }
   #dictState.live { color: var(--bad-soft); }
+  /* the V key wears the microphone's state: green once allowed, amber while the browser
+   * will still ask, red when the site is blocked */
+  .key[data-mic="granted"] { color: var(--good-soft); border-color: #2c4c39; }
+  .key[data-mic="prompt"] { color: #ffe9b8; border-color: #4c4026; }
+  .key[data-mic="denied"] { color: var(--bad-soft); border-color: #6a2c2c; }
+  #dictHint[data-mic="denied"] { color: var(--bad-soft); }
 
   /* ---- caption line ---- */
   #caption { display: flex; align-items: baseline; gap: 10px; padding: 7px 14px; background: #0c0c10;
@@ -140,8 +143,18 @@
                         pointer-events: none; }
   #tapeMarks span.jump { cursor: pointer; }
   #tapeMarks span.jump:hover { outline: 1px solid #cfd6e4; }
+  /* the kept range on the tape: the same green as the closer strip's band, solid, inside the
+   * bracket — so where the clip sits in the whole clip is never a guess (I2.8 1b) */
+  #tapeKeep { position: absolute; top: 35px; height: 14px; background: rgba(100,208,138,.72);
+              border-top: 1px solid var(--good); border-bottom: 1px solid var(--good); z-index: 1;
+              pointer-events: none; }
   #tapeHead { position: absolute; top: 0; bottom: 0; width: 1px; background: #fff; opacity: .7; z-index: 3;
               pointer-events: none; }
+  #bridge { position: relative; height: 16px; background: #0b0b0f; flex: none; }
+  #bridgeSvg { display: block; width: 100%; height: 16px; }
+  #bridgeLens { fill: rgba(207,214,228,.07); stroke: rgba(207,214,228,.4); stroke-width: 1;
+                vector-effect: non-scaling-stroke; }
+  #bridgeHead { stroke: #fff; stroke-width: 1; opacity: .7; vector-effect: non-scaling-stroke; }
   #zoom { position: relative; height: 78px; background: #0d0d12; border-top: 1px solid #26262f;
           border-bottom: 1px solid #26262f; overflow: hidden; flex: none; cursor: crosshair;
           touch-action: none; user-select: none; }
@@ -211,6 +224,26 @@
   .menu div { padding: 8px 4px; border-bottom: 1px solid #1a1a22; font-size: 12.5px; }
   .menu div .hint { margin-left: 8px; }
 
+  /* the survey: takes side by side, the cursor's outlined, this pick starred, an earlier
+   * round's greyed */
+  #overlay[data-kind="survey"] .box { max-width: 1160px; }
+  .takes { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+  .take { background: #0f0f14; border: 1px solid #2a2a36; border-radius: 8px; padding: 8px; cursor: pointer;
+          font-size: 11.5px; min-width: 0; }
+  .take.cursor { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .take.here { background: #12161a; }
+  .take.gone { opacity: .45; cursor: default; }
+  .take img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: #000;
+              border-radius: 4px; margin-bottom: 6px; }
+  .take .t1 { color: var(--text); }
+  .take .t1 .star { color: var(--gold); }
+  .take .t2 { color: var(--dim); margin-top: 3px; overflow: hidden; text-overflow: ellipsis;
+              display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+  .take .t3 { color: var(--tele); font: 10.5px var(--mono); margin-top: 3px; }
+  .take .t4 { font: 600 9.5px var(--mono); letter-spacing: .1em; margin-top: 5px; color: #8f8fa3; }
+  .take .t4.pick { color: var(--good-soft); }
+  .take .t4.later { color: var(--warn); }
+
   #toast { position: fixed; left: 50%; bottom: 150px; transform: translateX(-50%); background: #1e1e25;
            color: var(--text); border: 1px solid #3a3a48; border-radius: 8px; padding: 8px 14px; font-size: 12px;
            opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 40; max-width: 70vw; }
@@ -225,16 +258,16 @@
     <div id="hudBar"><i id="hudDone"></i><i id="hudNow"></i></div>
     <span id="hudBin" class="hint tnum small"></span>
     <span class="grow"></span>
-    <span id="hudAuto" class="pill" title="Caps Lock toggles auto-advance after a verdict">CAPS · AUTO-ADVANCE</span>
     <span class="key" title="key map">?</span>
   </div>
 
   <div id="stage">
     <aside id="left">
       <div><div class="lbl">Clip</div><b id="ctxClip" style="font-size:12px"></b> <span id="ctxClipMeta" class="hint"></span></div>
-      <div><div class="lbl">This pick</div><span id="ctxPick" class="tnum"></span><br><span id="ctxOthers" class="hint"></span></div>
+      <div><div class="lbl">This pick</div><span id="ctxPick" class="tnum"></span><br>
+           <span id="ctxWhere" class="tnum good"></span><br><span id="ctxOthers" class="hint"></span></div>
       <div id="legend" class="hint small"><div class="lbl">On the tape</div>
-        <span><i class="sw now"></i>this</span><span><i class="sw pick"></i>picked</span><span><i class="sw later"></i>later</span><span><i class="sw"></i>undecided</span><br>
+        <span><i class="sw keep"></i>the clip you keep</span><span><i class="sw now"></i>this pick</span><span><i class="sw pick"></i>picked</span><span><i class="sw later"></i>later</span><span><i class="sw"></i>undecided</span><br>
         <span><i class="sw lens"></i>the lens: what CLOSER shows</span></div>
       <div><div class="lbl">Keeping</div><span id="ctxKeep" class="tnum good"></span><br>
            <span id="ctxSnap" class="hint"></span><br><span id="ctxExtend" class="hint"></span></div>
@@ -256,7 +289,7 @@
       <div id="noteSlot" class="empty"><span id="noteText"></span> <span id="noteMeta" class="hint"></span>
         <textarea id="noteEdit" hidden placeholder="what you see — Enter to keep it, Esc to cancel"></textarea></div>
       <div id="dictState" class="hint small"></div>
-      <div id="dictHint" class="hint" style="font-size:9.5px">hold <span class="key">V</span> · clip audio ducks while you speak · text lands when you let go · <span class="key">N</span> to type</div>
+      <div id="dictHint" class="hint" style="font-size:9.5px" data-mic="unknown">hold <span class="key" data-mic="unknown">V</span> · clip audio ducks while you speak · text lands when you let go · <span class="key">N</span> to type</div>
     </aside>
   </div>
 
@@ -274,7 +307,16 @@
     <div id="tapeRuler"></div>
     <div id="tapeLens"></div>
     <div id="tapeMarks"></div>
+    <div id="tapeKeep" title="the kept range — the clip — where it sits in the whole clip"></div>
     <div id="tapeHead"></div>
+  </div>
+  <!-- the bridge: the lens's edges on the tape fan out to the closer strip's full width, and
+       the playhead runs from the one to the other, so the eye reads "these seconds of that clip" -->
+  <div id="bridge" aria-hidden="true">
+    <svg id="bridgeSvg" viewBox="0 0 1000 16" preserveAspectRatio="none">
+      <polygon id="bridgeLens" points="0,0 1000,0 1000,16 0,16"></polygon>
+      <line id="bridgeHead" x1="0" y1="0" x2="500" y2="16"></line>
+    </svg>
   </div>
   <div id="zoom">
     <span class="strip-lbl">CLOSER · ±8 s AROUND THE PLAYHEAD · the green band is the clip — drag its edges to trim, its middle to slide</span>
