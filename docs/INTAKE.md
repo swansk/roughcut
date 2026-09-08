@@ -75,10 +75,16 @@ table). Nothing verified live on Killington yet.
       (and `revise.propose`) — see the lane report.
 - [ ] I1.2 `used_in` maintained on accept (server: when segments are saved, recompute) and
       surfaced in `/api/selects`. DoD: API test.
-- [ ] I1.3 Hand-added shots become keeps (a saved segment with no overlapping select creates
-      one, `source: "hand"`). DoD: API test.
-- [ ] I1.4 Relink: a select whose clip is missing is flagged `missing: true`, matched back by
+- [x] I1.3 Hand-added shots become keeps (a saved segment with no overlapping select creates
+      one, `source: "hand"`). DoD: API test. — commit `9b8846a` (`agent/bin`).
+- [~] I1.4 Relink: a select whose clip is missing is flagged `missing: true`, matched back by
       duration + first-MB hash when a file reappears under another name. DoD: unit test.
+      (`agent/bin`: `selects.relink` + `clip_duration` on creation, duration match only —
+      the first-MB hash needs file reads and belongs with the journal's probe stage, M3;
+      a `missing` select cannot be PUT back through `/api/selects` until `validate_selects`
+      tolerates it — the lead's call. **Lead:** call
+      `selects.relink(edl, {c: {"duration": clip_duration(c)} for c in footage_clips()})` in
+      `GET /api/selects` and pass `clip_duration=clip_duration(clip)` in `api_floor_verdict`.)
 
 ### M2 · The pass (lane `agent/floor`)
 

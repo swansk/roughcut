@@ -10,6 +10,17 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Relink: a select survives its clip being renamed or moved (docs/INTAKE.md I1.4).** A
+  select now records its clip's length at creation (`clip_duration`, via
+  `new_select(..., clip_duration=)`, `apply_verdict(..., clip_duration=)` and
+  `validate_selects`, which knows it). `selects.relink(edl, clips)` — `clips` being
+  `{clip: {"duration"}}` for the folder as it is now — flags a select whose clip is gone
+  `missing: True` rather than dropping it (the keep is the editor's work; the file wandered),
+  and when exactly one clip on disk is within 0.05 s of the recorded length re-points the
+  select at it and clears the flag, id and `used_in` intact. No match or several stays
+  missing: guessing between two same-length clips would put the wrong footage in the film.
+  A select whose clip is present is untouched, and one that never learned its length learns
+  it. Pure; the server is not wired yet (`GET /api/selects` is the place, the lead's file).
 - **Hand-added shots become keeps (docs/INTAKE.md I1.3).** The bin has its round trip from the
   timeline: `selects.sync_timeline` (already called on every save) now adopts any shot no keep
   covers — no select sharing half of the shorter range — as a keep with `source: "hand"`, the

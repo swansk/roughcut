@@ -214,3 +214,82 @@ def test_a_saved_timeline_grows_the_bin_by_its_hand_added_shots(client, project)
     assert bin_["summary"]["moments"] == 2 and bin_["summary"]["used"] == 2
     on_disk = json.loads(project["edl"].read_text(encoding="utf-8"))
     assert [s["source"] for s in on_disk["selects"]] == ["floor", "hand"]
+
+
+# ------------------------------------------------------------------- relink (I1.4)
+
+def test_a_select_records_its_clips_duration_when_known():
+    s = selects.new_select("CLIP_A.MP4", 1.0, 3.0, clip_duration=12.5004)
+    assert s["clip_duration"] == 12.5
+    assert "clip_duration" not in selects.new_select("CLIP_A.MP4", 1.0, 3.0)
+    assert "clip_duration" not in selects.new_select("CLIP_A.MP4", 1.0, 3.0, clip_duration=0)
+    edl = {"segments": []}
+    selects.apply_verdict(edl, "CLIP_A.MP4", 1.0, 3.0, "pick", clip_duration=12.5)
+    selects.apply_verdict(edl, "CLIP_A.MP4", 2.0, 5.0, "pick")
+    assert edl["selects"][0]["clip_duration"] == 12.5, "a merge keeps the side that knew"
+    ok = selects.validate_selects([{"clip": "CLIP_A.MP4", "start": 1, "end": 2}],
+                                  {"CLIP_A.MP4": {"duration": 6.0}})
+    assert ok[0]["clip_duration"] == 6.0
+
+
+def test_relink_flags_a_select_whose_clip_is_gone_and_never_drops_it():
+    edl = {"segments": []}
+    selects.apply_verdict(edl, "GOPR0001.MP4", 1.0, 3.0, "pick", why="the drop",
+                          clip_duration=12.5)
+    before = dict(edl["selects"][0])
+    selects.relink(edl, {"CLIP_A.MP4": {"duration": 6.0}, "CLIP_B.MP4": {"duration": 40.0}})
+    s = edl["selects"][0]
+    assert s["missing"] is True and s["clip"] == "GOPR0001.MP4" and s["id"] == before["id"]
+    assert s["why"] == "the drop" and s["clip_duration"] == 12.5
+    # a select that never learned its clip's length is missing too, and never guessed
+    edl2 = {"segments": []}
+    selects.apply_verdict(edl2, "GOPR0002.MP4", 0.0, 1.0, "pick")
+    selects.relink(edl2, {"ONLY.MP4": {"duration": 12.5}})
+    assert edl2["selects"][0]["missing"] is True and edl2["selects"][0]["clip"] == "GOPR0002.MP4"
+
+
+def test_relink_repoints_a_select_at_the_one_clip_of_the_same_length():
+    edl = {"segments": [{"id": "s0", "clip": "GOPR0001.MP4", "in": 1.0, "out": 3.0}]}
+    selects.apply_verdict(edl, "GOPR0001.MP4", 1.0, 3.0, "pick", note="keep", hero=True,
+                          clip_duration=12.5)
+    selects.used_in(edl)
+    ident = edl["selects"][0]["id"]
+    selects.relink(edl, {"CLIP_A.MP4": {"duration": 6.0},
+                         "renamed-drop.mp4": {"duration": 12.54}})
+    s = edl["selects"][0]
+    assert s["clip"] == "renamed-drop.mp4" and "missing" not in s
+    assert s["id"] == ident and s["used_in"] == ["s0"] and s["hero"] and s["note"] == "keep"
+    assert s["clip_duration"] == 12.5, "the fingerprint is the recorded length, not the new one"
+    # found again: a second pass with the same folder changes nothing
+    again = json.dumps(edl["selects"], sort_keys=True)
+    selects.relink(edl, {"CLIP_A.MP4": {"duration": 6.0}, "renamed-drop.mp4": {"duration": 12.54}})
+    assert json.dumps(edl["selects"], sort_keys=True) == again
+    # 0.06 s off is not the same footage
+    edl3 = {"segments": []}
+    selects.apply_verdict(edl3, "GOPR0001.MP4", 1.0, 3.0, "pick", clip_duration=12.5)
+    selects.relink(edl3, {"near.mp4": {"duration": 12.56}})
+    assert edl3["selects"][0]["missing"] is True
+
+
+def test_relink_leaves_an_ambiguous_match_missing_rather_than_guess():
+    edl = {"segments": []}
+    selects.apply_verdict(edl, "GOPR0001.MP4", 1.0, 3.0, "pick", clip_duration=12.5)
+    selects.relink(edl, {"a.mp4": {"duration": 12.5}, "b.mp4": {"duration": 12.52}})
+    s = edl["selects"][0]
+    assert s["missing"] is True and s["clip"] == "GOPR0001.MP4"
+    # once only one of them remains the select finds its footage
+    selects.relink(edl, {"b.mp4": {"duration": 12.52}})
+    assert s["clip"] == "b.mp4" and "missing" not in s
+
+
+def test_relink_leaves_a_present_clip_untouched_and_clears_a_stale_flag():
+    edl = {"segments": []}
+    selects.apply_verdict(edl, "CLIP_A.MP4", 1.0, 3.0, "pick", clip_duration=6.0)
+    selects.apply_verdict(edl, "CLIP_B.MP4", 1.0, 3.0, "pick")
+    before = json.dumps(edl["selects"][0], sort_keys=True)
+    edl["selects"][1]["missing"] = True          # flagged on an earlier pass
+    selects.relink(edl, {"CLIP_A.MP4": {"duration": 6.0}, "CLIP_B.MP4": {"duration": 6.0}})
+    assert json.dumps(edl["selects"][0], sort_keys=True) == before
+    b = edl["selects"][1]
+    assert "missing" not in b, "the file is back under its own name"
+    assert b["clip_duration"] == 6.0, "and a select that never knew its length learns it"
