@@ -223,7 +223,13 @@ priced stages are still paused** (9 close looks, ~$2) — Karl's call, from the 
       faked; workers + cap in settings are not built (the cap is shown, from config). The two
       old buttons on `/` are still there — retiring them is the lead's (`app/static/index.html`,
       `app.js`). `test_open_ui.py` 6 passed; suite 336 passed, 1 skipped.
-- [ ] I5.4 Project picker (one bin per launch today) — the "smaller, whenever" item, lands here.
+- [~] I5.4 Project picker (one bin per launch today) — the "smaller, whenever" item, lands here.
+      — **server side done** (the lead's I5.3/I5.4 commit, see log): `GET /api/projects`
+      (known bins from the `--work/projects.json` registry + folders of video next door, with
+      facts), `POST /api/projects/open {footage}` (re-points through `configure()`, 409 while
+      a job runs). **Open:** the picker on `/open` — the open lane's next item. The slider's
+      server side landed in the same commit: `look.interval_s` in the EDL, `by_interval`
+      prices on `/api/status`, `POST /api/index {interval_s}`.
 
 ### M6 · Telemetry (lane `agent/telemetry`, research only until R11 says otherwise)
 

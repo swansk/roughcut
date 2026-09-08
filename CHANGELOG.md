@@ -10,6 +10,20 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The look interval and the project picker, server side (INTAKE I5.3's slider, I5.4).**
+  The open screen's one slider now has something to move: `look.interval_s` in the EDL (a
+  project setting, so a resumed index looks at the rest of the bin the same way), read by
+  `visual_cmd` (`--interval`) and by the look stage's cost; `/api/status`'s `visual` carries
+  `interval_s`, the allowed `intervals` (4 · 3 · 2 · 1 s) and `by_interval` — every
+  interval's price for the same pending clips, so the slider re-prices without a round trip;
+  `POST /api/index {interval_s}` sets it (anything off the slider is 400). And a bin is
+  something you point at without a relaunch: `GET /api/projects` lists every bin this board
+  has opened (a small registry under `--work`) and every folder of video next to the current
+  one, with clip counts, whether it has been cut and whether it has a journal;
+  `POST /api/projects/open {footage}` re-points the board through the same `configure()`
+  `main()` uses — per-bin paths re-derived, per-clip caches dropped, 409 while any job runs.
+  `test_projects.py` 5 tests. The two screens' UI for both lands with the open screen's next
+  lane.
 - **Themes proposed from the transcripts (INTAKE I5.2, the data side).** Listen first, then
   propose: `POST /api/themes/propose` is one judge-role call over the audio pass's transcripts
   — no sheets, no moments — that returns three to eight themes as phrases the editor would

@@ -303,7 +303,17 @@ def fine_stems() -> set[str]:
 # The visual pass costs model calls, so it is priced before it is offered. One sheet is
 # 30 cells at 4s (visual_pass.py's defaults) and measured $0.09 on CLIP_01 (two sheets,
 # $0.18) — provisional like everything about that pass (RQ-1/RQ-7 are unmeasured).
-VISUAL_SHEET_S = 120.0
+VISUAL_INTERVAL_S = 4.0            # visual_pass.py's default: one frame every 4 s
+VISUAL_INTERVALS = (4.0, 3.0, 2.0, 1.0)   # the open screen's slider, coarse to fine
+VISUAL_CELLS = 30                  # 6 cols x 5 rows per sheet, the tool's default
+
+
+def sheet_seconds(interval: float) -> float:
+    """How much footage one contact sheet covers at a sample interval."""
+    return VISUAL_CELLS * float(interval)
+
+
+VISUAL_SHEET_S = sheet_seconds(VISUAL_INTERVAL_S)   # 120 s at the default
 VISUAL_USD_PER_SHEET = 0.09
 
 # The second stage: a close look at the few busiest windows in each clip. Priced the
@@ -337,7 +347,32 @@ def clip_duration(clip: str) -> float | None:
     return d
 
 
-def visual_status(fine: bool = True) -> dict:
+def look_interval() -> float:
+    """The sample interval the look pass runs at for this project — the open screen's one
+    slider. Kept in the EDL (`look.interval_s`) because it is a property of the project,
+    not of a run: a resumed index must look at the rest of the bin the way it looked at
+    the first half."""
+    try:
+        v = float((read_edl().get("look") or {}).get("interval_s"))
+    except (TypeError, ValueError):
+        return VISUAL_INTERVAL_S
+    return v if v in VISUAL_INTERVALS else VISUAL_INTERVAL_S
+
+
+def set_look_interval(interval: float) -> None:
+    edl = read_edl()
+    look = dict(edl.get("look") or {})
+    look["interval_s"] = float(interval)
+    edl["look"] = look
+    write_edl(edl)
+
+
+def sheets_for(clip: str, interval: float | None = None) -> int:
+    return max(1, math.ceil((clip_duration(clip) or 0.0)
+                            / sheet_seconds(interval or look_interval())))
+
+
+def visual_status(fine: bool = True, interval: float | None = None) -> dict:
     """How much of the bin has been looked at, and what looking at the rest would cost.
 
     Never run on its own: the audio pass is local and free, this one spends a model call
@@ -350,8 +385,8 @@ def visual_status(fine: bool = True) -> dict:
     clips = footage_clips()
     done = visual_stems()
     pending = [c for c in clips if Path(c).stem not in done]
-    sheets = sum(max(1, math.ceil((clip_duration(c) or 0.0) / VISUAL_SHEET_S))
-                 for c in pending)
+    interval = float(interval or look_interval())
+    sheets = sum(sheets_for(c, interval) for c in pending)
     # The close look is per clip, not per pending clip: a clip already read coarsely
     # but never audited is exactly the one whose loudest claim is unchecked.
     seen_closely = fine_stems()
@@ -364,6 +399,14 @@ def visual_status(fine: bool = True) -> dict:
         "fine_pending": len(fine_clips), "fine_done": len(clips) - len(fine_clips),
         "projected_usd": round(sheets * VISUAL_USD_PER_SHEET
                                + fine_calls * FINE_USD_PER_WINDOW, 2),
+        # The slider re-prices without a round trip: every interval's coarse price for
+        # the same pending clips (the close look does not depend on it).
+        "interval_s": interval,
+        "intervals": list(VISUAL_INTERVALS),
+        "by_interval": {f"{i:g}": round(sum(sheets_for(c, i) for c in pending)
+                                        * VISUAL_USD_PER_SHEET
+                                        + fine_calls * FINE_USD_PER_WINDOW, 2)
+                        for i in VISUAL_INTERVALS},
         "running": any(v["state"] not in progress.TERMINAL for v in VISUALS.values()),
         "events": len(events.load(STATE["visual"])),
         "dir": str(STATE["visual"]),
@@ -1355,7 +1398,8 @@ def visual_cmd(only: list[str], force: bool) -> list[str]:
     """The visual pass, as a command. A function so the tests can replace it: the real
     tool spends a model call per contact sheet."""
     cmd = ["uv", "run", "--quiet", str(TOOLS / "visual_pass.py"), str(STATE["footage"]),
-           "-o", str(STATE["visual"]), "--orient", STATE["orient"]]
+           "-o", str(STATE["visual"]), "--orient", STATE["orient"],
+           "--interval", f"{look_interval():g}"]
     if only:
         cmd += ["--only", ",".join(only)]
     if force:
@@ -1533,8 +1577,7 @@ async def api_visual(request: Request) -> JSONResponse:
 
     job = uuid.uuid4().hex[:8]
     clips = footage_clips()
-    sheets = sum(max(1, math.ceil((clip_duration(c) or 0.0) / VISUAL_SHEET_S))
-                 for c in clips if Path(c).stem in wanted)
+    sheets = sum(sheets_for(c) for c in clips if Path(c).stem in wanted)
     fine_clips = len([c for c in clips if Path(c).stem not in fine_stems()]) if fine \
         else 0
     VISUALS[job] = progress.Job(
@@ -1811,8 +1854,7 @@ def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
         _run_tool(visual_cmd([stem], False))
         if not (STATE["visual"] / f"{stem}.visual.json").exists():
             raise RuntimeError("the visual pass wrote no sidecar")
-        sheets = max(1, math.ceil((clip_duration(clip) or 0.0) / VISUAL_SHEET_S))
-        return sheets * VISUAL_USD_PER_SHEET
+        return sheets_for(clip) * VISUAL_USD_PER_SHEET
     if stage == "close":
         windows = STATE["work"] / f"windows_{stem}.json"
         try:
@@ -2085,6 +2127,14 @@ async def api_index(request: Request) -> JSONResponse:
     order = str(body.get("order") or "")
     if order and order not in journal.ORDERS:
         raise HTTPException(400, f"order must be one of {journal.ORDERS}")
+    if body.get("interval_s") is not None:
+        try:
+            interval = float(body["interval_s"])
+        except (TypeError, ValueError):
+            raise HTTPException(400, "interval_s must be a number")
+        if interval not in VISUAL_INTERVALS:
+            raise HTTPException(400, f"interval_s must be one of {list(VISUAL_INTERVALS)}")
+        set_look_interval(interval)
     # The human's say on the priced stages, since the cap pauses them on its own:
     # `resume_priced` lifts the pause (the cap is checked again before each priced
     # stage), `pause_priced` holds them for this run.
@@ -2112,10 +2162,12 @@ def api_index_status() -> JSONResponse:
                     if x["state"] not in progress.TERMINAL), None)
     if not path.exists():
         return JSONResponse({"exists": False, "running": running is not None,
+                             "interval_s": look_interval(),
                              "job": running["id"] if running else None})
     j = load_journal()
     return JSONResponse({"exists": True, "path": str(path), "order": j.order,
                          "paused_priced": j.paused_priced,
+                         "interval_s": look_interval(),
                          "progress": j.progress(), "released": j.released_clips(),
                          "running": running is not None,
                          "job": running["id"] if running else None})
@@ -2774,6 +2826,109 @@ def appjs() -> Response:
                     media_type="application/javascript", headers=NO_STORE)
 
 
+PROJECTS_FILE = "projects.json"       # under --work: {name: {footage, edl, opened}}
+
+
+def projects_path() -> Path:
+    return STATE["work"] / PROJECTS_FILE
+
+
+def remember_project(footage: Path, edl_path: Path) -> None:
+    """Every bin the board has been pointed at, so the picker can offer it again. The
+    EDL does not carry its footage path (it never needed to — the folder was the
+    argument), so this small registry does."""
+    try:
+        known = json.loads(projects_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        known = {}
+    if not isinstance(known, dict):
+        known = {}
+    known[footage.name] = {"footage": str(footage), "edl": str(edl_path),
+                           "opened": time.time()}
+    projects_path().parent.mkdir(parents=True, exist_ok=True)
+    tmp = projects_path().with_suffix(".tmp")
+    tmp.write_text(json.dumps(known, indent=1), encoding="utf-8")
+    tmp.replace(projects_path())
+
+
+def _count_videos(folder: Path) -> int:
+    try:
+        return sum(1 for q in folder.iterdir() if q.suffix.lower() in VIDEO_SUFFIXES)
+    except OSError:
+        return 0
+
+
+def list_projects() -> dict:
+    """The bins this board knows: every one it has opened (the registry) and every
+    folder of video next to the current one (a trip's footage usually sits in one
+    parent, one folder per bin). Facts only — clip counts, whether it has been cut,
+    whether it has a journal — never a judgement."""
+    current: Path = STATE["footage"]
+    try:
+        known = json.loads(projects_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        known = {}
+    rows: dict[str, dict] = {}
+    for name, rec in (known.items() if isinstance(known, dict) else []):
+        if not isinstance(rec, dict) or not rec.get("footage"):
+            continue
+        folder = Path(rec["footage"])
+        rows[str(folder)] = {"name": name, "footage": str(folder), "known": True,
+                             "opened": rec.get("opened")}
+    for folder in sorted(current.parent.iterdir()) if current.parent.is_dir() else []:
+        if folder.is_dir() and str(folder) not in rows and _count_videos(folder):
+            rows[str(folder)] = {"name": folder.name, "footage": str(folder),
+                                 "known": False, "opened": None}
+    out = []
+    for r in rows.values():
+        folder = Path(r["footage"])
+        edl_path = STATE["work"] / "projects" / f"{folder.name}.edl.json"
+        segments = 0
+        if edl_path.exists():
+            try:
+                segments = len(json.loads(edl_path.read_text(encoding="utf-8"))
+                               .get("segments") or [])
+            except (OSError, ValueError):
+                segments = 0
+        out.append({**r, "exists": folder.is_dir(), "clips": _count_videos(folder),
+                    "cut": edl_path.exists(), "segments": segments,
+                    "journal": (STATE["work"] / "index" / f"{folder.name}.json").exists(),
+                    "current": folder == current})
+    out.sort(key=lambda r: (not r["current"], -(r["opened"] or 0), r["name"]))
+    return {"current": {"name": current.name, "footage": str(current),
+                        "edl": str(STATE["edl"]), "clips": len(footage_clips())},
+            "projects": out}
+
+
+@app.get("/api/projects")
+def api_projects() -> JSONResponse:
+    return JSONResponse(list_projects())
+
+
+@app.post("/api/projects/open")
+async def api_projects_open(request: Request) -> JSONResponse:
+    """Point the board at another bin without a relaunch (INTAKE I5.4). Refused while
+    any job is running: a render or an index mid-flight belongs to the bin it started
+    on. Everything per-bin is re-derived by `configure()`, the same path `main()` takes."""
+    body = await request.json()
+    raw = body.get("footage") if isinstance(body, dict) else None
+    if not isinstance(raw, str) or not raw.strip():
+        raise HTTPException(400, "footage: a folder path is required")
+    folder = Path(raw).expanduser()
+    if not folder.is_dir():
+        raise HTTPException(400, f"no such folder: {folder}")
+    if not _count_videos(folder):
+        raise HTTPException(400, f"no video in {folder}")
+    if any(j["state"] not in progress.TERMINAL for j in all_jobs()):
+        raise HTTPException(409, "a job is still running — wait for it before switching bins")
+    for reg in (ANALYSES, VISUALS, INDEXES, ASKS, FINDS, THEMES, RENDERS):
+        reg.clear()
+    configure(None, folder, None, STATE["work"],
+              proxies=STATE.get("proxies_enabled", True), orient="auto")
+    return JSONResponse({**list_projects()["current"],
+                         "edl_created": STATE["edl_created"]})
+
+
 def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path,
               proxies: bool = True, orient: str = "auto",
               visual: Path | None = None, assets: Path | None = None) -> None:
@@ -2833,6 +2988,12 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
     # previous project's "failed" over to a file of the same name.
     with REVIEW_LOCK:
         REVIEW_STATE.clear()
+    # Per-clip caches are keyed by clip name, and two bins can share a GoPro stem: a
+    # re-point must not serve the last bin's durations or capture times for this one.
+    for key in ("capture", "durations", "telemetry", "render_res_cache"):
+        STATE.pop(key, None)
+    STATE["proxies_enabled"] = proxies
+    remember_project(footage, edl_path)
     STATE["asks"].mkdir(parents=True, exist_ok=True)
 
     clips = sorted({p.name.replace(".audio.json", ".MP4")
