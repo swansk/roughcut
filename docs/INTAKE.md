@@ -55,23 +55,18 @@ until R11.
 
 ## Where we are
 
-_2026-09-08, end of session 10._ **Every milestone item M0–M6 is ticked** except what the
-lines themselves say is deferred (I2.4's "batch reject via filter" — no filter exists on the
-floor yet; I5.3's workers + cap in settings — the cap is shown from config). Merged this
-session, in order: space = play/pause (`67c6ac3`), the look interval and picker API
-(`d889db1`), the themes chips + story with dictation on `/open` (`378ed84`), the old
-Analyse / Look buttons retired for `/open` (`6c4d249`), the slider + picker on `/open`
-(`4b4c441`), the last proposal surviving reload and restart until Keep or Discard (`020dadf`,
-`62214b0`), **Karl's three pass fixes (I2.8) and compare takes (I2.4)** (`1e9f83e`), a reject
-keeping its reason (`190e1a9`). Suite: **372 passed, 1 skipped**. All of it verified live on
-Killington (verification log). **Next: Karl's third look at the pass** — the I2.8 line says
-what to check (hold V once in Chrome and read the hint before and after the prompt; find the
-backflip on the tape without reading a number; P three picks in a row; a clip with two jumps
-under 90 s apart → `take n of N`, T, keep the one that landed, ⌘Z) — and on `/open`, **seven
-proposed themes wait for Keep or Discard** ($0.18, on disk). After that the intake is in
-Karl's hands; what remains is his feedback, the two deferred halves above, and the
-editing-room roadmap in HANDOFF. **Killington's priced stages are still paused** (9 close
-looks, ~$2) — the open screen's **Resume priced stages** button.
+_2026-09-08, end of session 11._ **M0–M7 all ticked.** Session 11 answered Karl's third
+report: the contact-sheet prompt is version 2 (the camera named, frames cited, hedges and
+28-second jumps demoted — `c43cd30`, `e95493f`), CLIP_04 re-read live and installed, the
+frames flow to the pass, and the floor shows `LOOKED · 80 frames · every 4 s · 3 sheets`,
+frame chips that park the picture, `0` / `⇧0` (merge `7ba33b6`). Decision 5 (start/end
+adjustable after effects) is recorded. Suite: **382 passed, 1 skipped**. Board live on
+`7ba33b6`. **Waiting on Karl:** (1) his look at the pass — the I7.2/I7.3 lines say what to
+check, and CLIP_04's jump at 3:44 is the one to open first; (2) Keep / Discard on the seven
+proposed themes on `/open`; (3) whether to **re-look the other 11 Killington clips with the
+new prompt** (~22 sheets ≈ $2 — the old sidecars still carry the glove-as-person claims on
+CLIP_07 and others; the pass shows them as `claimed`) and whether to resume the paused close
+looks (~$2). Deferred halves unchanged: I2.4's batch-reject filter, I5.3's workers + cap.
 
 ## Milestones
 
@@ -342,7 +337,7 @@ helps to debug / determine why it is good. The indexed keyframes should be refer
 why and timestamps should be jumpable. Add a restart from beginning of clip in the pass."*
 (The start/end-after-effects point is Decision 5.)
 
-- [~] I7.1 **The sheet prompt lies; find out why and fix it.** Adjudicated against the rebuilt
+- [x] I7.1 **The sheet prompt lies; find out why and fix it.** Adjudicated against the rebuilt
       sheets (`contact_sheet.py`, same params): CLIP_04 0:04 "person in dark clothing appears
       to be inverted or airborne" is **the wearer's glove over the lens**; CLIP_04 4:12 "person
       performs aerial flip or backflip; captured inverted mid-air" is **a ski binding across
@@ -408,6 +403,7 @@ why and timestamps should be jumpable. Add a restart from beginning of clip in t
 | board | `agent/board` | retire the old buttons | **merged** `6c4d249`; worktree removed |
 | open3 | `agent/open3` | I5.3 slider, I5.4 picker | **merged** `4b4c441`; worktree removed |
 | takes | `agent/takes` | I2.8, I2.4 | **merged** `1e9f83e`; worktree removed |
+| floor4 | `agent/floor4` | I7.2, I7.3 | **merged** `7ba33b6`; worktree removed |
 | open | `agent/open` · `../roughcut-wt/open` | I5.1, I5.3 | **merged** `6ba1ec0`; worktree removed |
 
 Lanes touch disjoint files by design: `bin` → `revise.py`, `selects.py`, tests; `floor` →
@@ -507,3 +503,11 @@ them. Every lane adds its own CHANGELOG bullet; integration keeps all of them.
   frame shows (no other person in it). The old prompt had missed it. Events rebuilt: CLIP_04
   now carries three notable events (close-look fall 22–23, the jump with frames, faces
   12–20) against the old eight. Suite 380 passed, 1 skipped.
+- 2026-09-08 · session 11 · + floor4 `7ba33b6` · **382 passed, 1 skipped** (213.04 s). Live
+  on Killington (board restarted on `7ba33b6`, checked headlessly — the in-app browser pane
+  hung): CLIP_04's jump pick is first in the queue; the tape says `LOOKED · 80 frames · every
+  4 s · 3 sheets`; WHY reads "Skier clearly airborne mid-jump … (frames 3:44.0 · 3:48.0) —
+  telemetry: 0.28 s freefall at 0.10 g, 7.7 g" with both times as chips; the witness line
+  says `frames 3:44 · 3:48 · high confidence`; clicking the first chip parks the picture at
+  224.0 s paused; `0` from 100 s → 1.1 s playing with the whole clip open; `⇧0` → 224.3 s
+  inside the band `223.59–228` with the stop at 228.

@@ -1,14 +1,16 @@
 # Handoff — read this first
 
 **Active workstream (2026-09-08): the intake — tracked in [docs/INTAKE.md](INTAKE.md).** Read
-that file first; it carries the decisions, the milestones with their checkboxes, the lanes and
-where to pick up. The design it implements is in `docs/design/`. **State:** every milestone
-item is ticked (two halves deferred, named in their lines); `/open` (contact sheet, themes,
-slider, picker, one Index button), `/floor` (the pass with drag-trim, a verdict that moves
-on, compare takes) and the unattended index are live on Killington. **Next is Karl's third
-look at the pass and his Keep / Discard on the seven proposed themes** — INTAKE's "Where we
-are" says exactly what to check. Everything below this line is the history that led there,
-and the editing-room roadmap.
+that file first; it carries the decisions (five now — the fifth: a clip's start and end stay
+adjustable after effects), the milestones M0–M7 with their checkboxes, the lanes and where to
+pick up. The design it implements is in `docs/design/`. **State:** everything is ticked and
+live on Killington: `/open` (contact sheet, themes, slider, picker, one Index button),
+`/floor` (the pass: drag-trim, a verdict that moves on, compare takes, keyframe ticks and
+jumpable frames, `0` restarts), the unattended index, and a contact-sheet prompt that no
+longer calls a glove a backflip. **Next is Karl:** his look at the pass, Keep / Discard on the
+seven proposed themes, and whether to re-look the other 11 clips with the new prompt (~$2) —
+INTAKE's "Where we are" has the exact list. Everything below this line is the history that
+led there, and the editing-room roadmap.
 
 Last updated: 2026-08-25 (session 7 open). **Karl kept editing on his own on 2026-08-24**, past
 everything below: he hand-added six shots to the accepted 17-shot cut, then asked for a revision

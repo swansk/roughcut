@@ -144,6 +144,10 @@ same commit. Releases move entries into a dated version section.
   overlaps are one pick already, speech needs the shared theme.
 
 ### Changed
+- **Session 11 close-out (docs).** INTAKE M7 ticked in full (I7.1 with the live CLIP_04
+  re-read, I7.2/I7.3 from lane `agent/floor4`, I7.4 Decision 5), "Where we are" names what
+  waits on Karl (his look, the themes, the ~$2 re-look of the other 11 clips), the lanes
+  table and verification log carry floor4 and the 382-test run; HANDOFF's opener updated.
 - **Session 10 close-out (docs).** INTAKE's "Where we are" says every milestone item is
   ticked and names the two deferred halves; the lanes table lists open2, board, open3 and
   takes as merged; the verification log records the 372-test run and the live checks of
