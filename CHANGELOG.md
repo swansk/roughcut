@@ -9,6 +9,29 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Added
+- **One bin, several cuts — open, switch, save a copy** (Karl, 2026-09-08: *"work on
+  multiple projects at the same time … switching easily between projects, and saving copies
+  so we can try different things"*). The header of every screen now carries the bin **and the
+  cut** it is on; click it (or `O`) for one panel that lists the bin's cuts and the bins the
+  board knows. *Save copy* writes the whole project file under a name — timeline, story,
+  music and the pass's picks, so nothing ever merges and `assemble.py` renders a copy exactly
+  as it renders the original — and moves to it, or stays where you are as a checkpoint
+  (*work on the copy* unticked); a row opens a cut; *rename* keeps the file where it is (the
+  name lives inside it); *delete* moves it to the bin's `trash/`, never the one on the board.
+  Copies live under `projects/<bin>/<slug>.edl.json`; the bin's own file stays where it was.
+  The board flushes its autosave before any switch, so a trim made in the last 700 ms lands
+  in the cut it was made on. The registry now *reads* the cut each bin was last on — a cut
+  named with `--edl` was written to it and never read back, so it was forgotten the moment
+  you switched bins — and the picker's rows say which cut a bin is on and how many it has.
+  Renders record their cut and the download name carries it. `GET /api/cuts`,
+  `POST /api/cuts/{copy,open,rename,delete}`, `edl` on `POST /api/projects/open`, `cut` on
+  `/api/status`, `/api/project` and `/api/projects`. The control is `app/static/switcher.js`,
+  shared by `/open`, `/floor` and `/`; the open screen's own picker moved into it, and the
+  pass's "no buttons in the flow" rule exempts it (it is the way out of the flow, on `O` and
+  `Esc`, keys the pass does not use). Seven API tests and two browser tests: a copy saved from the open screen, the way back and its
+  deletion; the board's flush before a copy, the reload onto the copy, and the way back.
+
 ### Fixed
 - **The contact-sheet prompt claimed things that were not there** (Karl, 2026-09-08: CLIP_04
   "person in dark clothing appears to be inverted or airborne"; CLIP_07 too). Adjudicated

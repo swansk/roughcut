@@ -1155,6 +1155,7 @@ async function probeBackend() {
 
 async function save() {
   clearTimeout(saveTimer);
+  saveTimer = null;
   const r = await fetch('/api/project', {
     method: 'PUT', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ segments: segs, story: $('#story').value, music }),
@@ -1853,4 +1854,11 @@ async function boot() {
   $('#fadeIn').onchange = musicChanged;
   $('#fadeOut').onchange = musicChanged;
 }
+
+/* The switcher's hook (/switcher.js): before the server re-points itself at another
+ * cut or another bin, anything the autosave timer is still holding must reach the
+ * file it belongs to — otherwise a trim made in the last 700 ms would land in the
+ * copy, or in the next bin's cut. The board has no in-place reload; the switcher
+ * reloads the page and boot() reads the new cut. */
+window.roughcutFlush = async () => { if (saveTimer) await save(); };
 boot();

@@ -95,6 +95,7 @@ server, and every edit is undoable because fiddling is only fun when it is cheap
 
 | | |
 |---|---|
+| **Bin · cut** | The header's name, on every screen: which bin the board is on and which cut of it. Click it (or `O`) for one panel — the cuts of this bin, and the bins the board knows (opened before, or a folder of video next door; a path typed in opens any other). **Save copy** writes the whole project file under a name — timeline, story, music and the pass's picks, so nothing ever merges and `assemble.py` renders a copy exactly as it renders the original — and moves to it, or stays where you are as a checkpoint. A row opens a cut; *rename* keeps the file where it is (the name lives inside it); *delete* moves it to the bin's `trash/`, never the one on the board. Copies live under `--work/projects/<bin>/`; the bin's own file stays where it was. The board flushes its autosave before any switch, a bin reopens on the cut it was left on, and a switch is refused while a job runs — a render or an Ask belongs to the cut it started on. Renders record their cut and the download name carries it. The control is `switcher.js`, shared by the three screens |
 | **Progress strip** | One bar under the header that every long operation drives — label, bar, percentage, elapsed, ETA and a line saying what it is doing right now. It holds two at once (a render and an Ask overlap routinely), re-attaches to whatever is still running after a reload, and is not there at all when nothing is. See "One bar for everything" |
 | **Monitor** | The whole cut, playing from the proxies — shot after shot, no render. A strip under it shows every shot as a block, width to length, coloured by clip; click one to play from there. `space` plays / pauses from the selected shot, `enter` plays just that shot, and the poster on any card jumps the monitor to it — which scrolls into view, and writes a refused play or a media error on its screen rather than sitting silent |
 | **Project** | Where this bin is: clips in the folder, how many analysed, how many looked at, shots in the cut, and the two analysis passes with progress bars. The audio pass is local and free; the visual pass costs model calls, so it is offered with a count and a price while there is footage nobody has looked at, and never runs on its own |
@@ -260,5 +261,8 @@ Three real defects were found by writing the tests rather than by using the app:
   track is not. The slot-driven contract it implies ("fill these N slots of these lengths") is a
   different selection problem, filed in FUTURE_PHASES. Nothing aligns a cut to a beat yet — a
   cut that lands on one does so by luck.
-- Single project per launch; no project picker, though a bin no longer needs an EDL to open.
+- **A cut is the whole EDL, and the pass's verdicts live in it.** Keeps, rejects and notes made
+  on the floor while on one cut are that cut's; another cut of the same bin does not see them.
+  Right for "try different things", and a seam if the floor is ever worked on across cuts — the
+  fix then is to move `selects` / `floor` / `look` into a per-bin file, not to merge on switch.
 - `complete_many` exists per SPEC §6.1 but nothing batches yet; the CLI backend would just loop.

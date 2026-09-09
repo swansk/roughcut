@@ -165,7 +165,12 @@ def test_the_floor_lists_the_picks_and_starts_on_the_first(page):
 
 
 def test_no_buttons_in_the_flow(page):
-    assert page.locator("#app button").count() == 0
+    """The pass is keys, not buttons. The one exception is the header's bin·cut
+    switcher (/switcher.js), which is the way to another bin or cut, not part of the
+    flow — and it must not take a key the pass uses (it takes `O` and `Esc`)."""
+    assert page.locator("#app button:not(#hdBin)").count() == 0
+    assert page.locator("#hud #hdBin").count() == 1
+    assert page.locator("#hdBin .cutname").inner_text() == "edl"   # the fixture's --edl file
 
 
 def test_the_key_line_shows_six_things_and_the_map_has_the_rest(page):
