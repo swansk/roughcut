@@ -50,40 +50,78 @@ from roughcut import config, inference   # noqa: E402  (after sys.path)
 HERE = Path(__file__).resolve().parent
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".avi", ".m4v", ".mts", ".webm"}
 
+PROMPT_VERSION = 2   # bumped whenever the prompts or the validation rules change
+
 SYSTEM = (
     "You are a video assistant looking at a contact sheet: frames sampled from one "
     "clip at a fixed interval, in reading order, each labelled with its timestamp in "
-    "the clip. You report what is visibly happening and when. You are precise about "
-    "time and conservative about certainty: you say what you can see, and you say so "
-    "when a frame is too dark, too blurred or too close to read."
+    "the clip. The clip is from an action camera worn on the skier's helmet or chest, "
+    "pointing where they look. The wearer is never in frame; their gloves, poles, ski "
+    "tips and bindings are, often close to the lens and often filling it, and the "
+    "horizon tilts and rolls with their head. None of that is an event. Other people "
+    "appear small and far unless they are standing next to the wearer. You report what "
+    "is visibly happening and when, naming the frames that show it. You are conservative: "
+    "an ordinary frame is the normal answer, and \"nothing notable\" is a good one."
 )
+
+# Words that mark a guess. A notable claim written with one of these is not a claim.
+HEDGES = ("appear", "appears", "seem", "seems", "suggest", "suggests", "suggesting",
+          "possibly", "possible", "likely", "may ", "might", "perhaps", "could be",
+          "unclear", "hard to tell", "or ")
+# Kinds a sheet can only claim with a person visibly in the air or on the ground.
+EVENT_KINDS = ("jump", "fall", "crash")
+# An airborne moment lasts under two seconds; a fall a few. At the coarse interval a
+# real one shows in at most this many consecutive sampled frames.
+MAX_EVENT_FRAMES = 2
 
 SCHEMA = {
     "moments": [{"start": 12.0, "end": 20.0, "what": "one sentence on what happens",
                  "kind": "action | fall | crash | jump | reaction | faces | scenery | "
-                         "junk", "notable": True}],
+                         "pov-gear | junk",
+                 "frames": [12.0, 16.0],
+                 "confidence": "high | medium | low",
+                 "notable": True}],
     "unusable": [{"start": 0.0, "end": 4.0, "why": "black / lens covered / unreadable"}],
     "summary": "two sentences on what this clip is, as footage",
 }
 
 PROMPT = """This contact sheet is {n} frames from {clip}, sampled every {interval:g}s, \
 covering {start:.0f}s to {end:.0f}s of the clip. Frames read left to right, top to \
-bottom, and each is labelled with its timestamp.
+bottom, and each is labelled with its timestamp. The frame timestamps are: {stamps}.
 
-Report what happens, as moments with start and end times in **clip seconds**.
+Report what happens, as moments with start and end times in **clip seconds**, and for
+every moment the `frames` — the labelled timestamps of the frames that show it. A moment
+you cannot point at a frame for does not exist. Start and end are frame timestamps; there
+is nothing between two frames that you can see.
 
 What matters most, in order:
-1. **Events** — someone falling, crashing, jumping, going into water, losing gear.
-   These are the moments a transcript cannot see: people narrate them later, if at
-   all, and the words never land at the time the thing happened.
+1. **Events** — someone falling, crashing, jumping, going into water, losing gear. These
+   are the moments a transcript cannot see. But read the rules below before claiming one.
 2. **People and reactions** — faces, someone filming someone else, a group together.
 3. **Sustained action** — a continuous run or ride, worth keeping whole.
+
+The rules for an event (`jump`, `fall`, `crash`):
+- It needs **another person** visibly in the air, or visibly down on the snow, in a frame
+  you name — or the wearer's own ski tips clearly off the snow with the ground far below.
+  A tilted or sky-filled frame is the wearer's head moving, not anyone airborne.
+- **Dark shapes close to the lens are the wearer's glove, pole, ski or binding.** Call
+  them `pov-gear`, never a person, never `inverted`, never `airborne`.
+- A jump is in the air for under two seconds and a fall is over in a few, so at this
+  interval a real one shows in one frame, at most two. A person "airborne across several
+  consecutive frames" is standing on a slope shot from below. Do not claim it.
+- A person standing, walking, or hiking is `action` with `notable: false`.
+- Write the claim as what the frame shows ("skier at 3:36 mid-air, skis level, landing
+  slope below"), never as a guess. If you would write *appears*, *seems*, *suggests*,
+  *possibly* or *or*, the moment is not an event: give it `confidence: "low"`, kind
+  `action` or `scenery`, and `notable: false`.
+
+`confidence` is `high` only when the frames you name show the thing plainly. `notable`
+is for events and for people; scenery and pov-gear are never notable.
 
 Also flag anything **unusable**: black frames, a lens covered by a glove, a shot so
 blurred or close that nothing reads.
 
-Be conservative. If consecutive frames only imply an event rather than show it, say so
-in `what` rather than asserting it. Do not invent a timestamp you cannot point at."""
+A sheet of ordinary skiing with nothing notable is a correct answer. Say so."""
 
 # The close look. Same schema, same conservatism, different question: the coarse pass
 # has already said "something is happening around here" and the only thing worth
@@ -91,23 +129,32 @@ in `what` rather than asserting it. Do not invent a timestamp you cannot point a
 FINE_PROMPT = """This contact sheet is {n} frames from {clip}, sampled every \
 {interval:g}s, covering {start:.0f}s to {end:.0f}s of the clip — a close look at one \
 short window that a motion and audio scan flagged as unusual. Frames read left to \
-right, top to bottom, and each is labelled with its timestamp.
+right, top to bottom, and each is labelled with its timestamp. The frame timestamps are: \
+{stamps}.
 
 Something changes sharply somewhere in this window. Say what it is, as moments with
-start and end times in **clip seconds**, tight to what you can actually see: a jump
-that leaves the ground at 105 and lands at 107 is `105-107`, not `104-112`.
+start and end times in **clip seconds** and the `frames` that show it, tight to what you
+can actually see: a jump that leaves the ground at 105 and lands at 107 is `105-107`, not
+`104-112`.
 
 The scan cannot tell an event from an artefact, so the useful answers include the
 boring ones:
 
-1. **An event** — a jump, a fall, a crash, someone going down, gear coming off. Give
-   it the tightest start and end the frames support, and say in `what` which frame
-   shows the peak of it (the highest point, the impact).
-2. **A camera artefact** — a whip pan, a lens wipe, a glove, a whiteout, the camera
-   being picked up or put down. Mark these `junk` and list the stretch as unusable.
-   A window that turns out to be nothing is a useful answer, not a failed one.
+1. **An event** — a jump, a fall, a crash, someone going down, gear coming off. It needs
+   another person visibly in the air or down on the snow in a frame you name (or the
+   wearer's ski tips clearly off the snow with the ground far below). Give it the
+   tightest start and end the frames support, and say in `what` which frame shows the
+   peak of it (the highest point, the impact).
+2. **A camera artefact** — a whip pan, a lens wipe, the wearer's glove, pole, ski or
+   binding across the lens (`pov-gear`), a whiteout, the camera being picked up or put
+   down. Mark these `junk` or `pov-gear` and list the stretch as unusable. A window that
+   turns out to be nothing is a useful answer, not a failed one. A tilted or sky-filled
+   frame is the wearer's head moving.
 3. **Nothing in particular** — ordinary riding, standing around, scenery. Say that
    plainly with `notable: false` rather than promoting it.
+
+Write claims as what the frame shows, never as a guess: *appears*, *seems*, *suggests*,
+*possibly* or *or* make a moment `confidence: "low"` and not notable.
 
 Do not report a moment outside {start:.0f}-{end:.0f}s; you cannot see outside it."""
 
@@ -136,11 +183,13 @@ def read_sheet(sheet: Path, clip: str, cells: list[dict], interval: float,
     times = [float(c["t"]) for c in cells]
     frames = cells
     prompt = template.format(n=len(frames), clip=clip, interval=interval,
-                             start=min(times), end=max(times))
+                             start=min(times), end=max(times),
+                             stamps=", ".join(f"{t:g}" for t in times))
     result = inference.complete(
         prompt, role=role, images=[sheet], schema=SCHEMA, system=SYSTEM,
-        validate=lambda p: validate(p, min(times), max(times) + interval))
+        validate=lambda p: validate(p, min(times), max(times) + interval, times))
     out = result.content
+    out["frames_sampled"] = times
     out["usage"] = {"input_tokens": result.input_tokens,
                     "output_tokens": result.output_tokens,
                     "projected_usd": result.projected_usd, "model": result.model,
@@ -148,12 +197,34 @@ def read_sheet(sheet: Path, clip: str, cells: list[dict], interval: float,
     return out
 
 
-def validate(payload, lo: float, hi: float) -> dict:
+def _hedged(text: str) -> bool:
+    t = f" {text.lower()} "
+    return any(h in t for h in HEDGES)
+
+
+def _snap(t: float, times: list[float]) -> float:
+    """The nearest sampled frame — there is nothing between two frames to point at."""
+    return min(times, key=lambda x: abs(x - t)) if times else t
+
+
+def validate(payload, lo: float, hi: float, times: list[float] | None = None) -> dict:
+    """Strict about time, and about what a sheet can claim.
+
+    Adjudicated on Killington (2026-09-08): the sheet called the wearer's glove at 0:04
+    "a person in dark clothing inverted or airborne", a binding at 4:12 "a backflip
+    captured inverted mid-air", and two people standing on a slope shot from below
+    "airborne across 8 consecutive frames". So a notable event now needs named frames,
+    plain wording and a span a real event can have; anything else is kept but demoted
+    to `notable: false` with the reason in `demoted`, so the ranker never lifts it and
+    the pass can still show what the sheet said.
+    """
     if not isinstance(payload, dict):
         raise ValueError("expected an object")
     moments = payload.get("moments")
     if not isinstance(moments, list):
         raise ValueError("'moments' must be a list")
+    times = sorted(times or [])
+    step = (times[1] - times[0]) if len(times) > 1 else 0.0
     clean = []
     for i, m in enumerate(moments):
         try:
@@ -164,10 +235,46 @@ def validate(payload, lo: float, hi: float) -> dict:
         # model placed where it could not have seen anything is worse than no moment.
         if not (lo - 2.0 <= start <= end <= hi + 2.0):
             raise ValueError(f"moment {i} {start}-{end} outside this sheet ({lo}-{hi})")
-        clean.append({"start": round(start, 1), "end": round(end, 1),
-                      "what": str(m.get("what", ""))[:300],
-                      "kind": str(m.get("kind", ""))[:24],
-                      "notable": bool(m.get("notable", False))})
+        kind = str(m.get("kind", "")).strip().lower()[:24]
+        what = str(m.get("what", ""))[:300]
+        notable = bool(m.get("notable", False))
+        confidence = str(m.get("confidence", "")).strip().lower()
+        if confidence not in ("high", "medium", "low"):
+            confidence = "medium"
+        frames = []
+        for f in (m.get("frames") or []) if isinstance(m.get("frames"), list) else []:
+            try:
+                frames.append(_snap(float(f), times) if times else float(f))
+            except (TypeError, ValueError):
+                continue
+        frames = sorted(set(frames))
+        if times:
+            # A moment lives on frames: snap its edges to sampled times, and a span
+            # shorter than the interval (the "1.0-1.1" kind) becomes one frame.
+            start, end = _snap(start, times), max(_snap(end, times), _snap(start, times))
+            if not frames:
+                frames = [t for t in times if start <= t <= end]
+        demoted = ""
+        if notable:
+            if kind in ("scenery", "junk", "pov-gear"):
+                demoted = f"{kind} is never notable"
+            elif _hedged(what):
+                demoted = "hedged wording — a guess, not a claim"
+            elif confidence != "high":
+                demoted = f"confidence {confidence}"
+            elif kind in EVENT_KINDS and not frames:
+                demoted = "no frame named for an event"
+            elif kind in EVENT_KINDS and step and len(frames) > MAX_EVENT_FRAMES:
+                demoted = (f"{len(frames)} consecutive frames at {step:g} s is not a "
+                           f"{kind} — nothing is airborne that long")
+        if demoted:
+            notable = False
+        row = {"start": round(start, 1), "end": round(end, 1), "what": what,
+               "kind": kind, "notable": notable, "confidence": confidence,
+               "frames": [round(f, 1) for f in frames]}
+        if demoted:
+            row["demoted"] = demoted
+        clean.append(row)
     unusable = [{"start": float(u["start"]), "end": float(u["end"]),
                  "why": str(u.get("why", ""))[:120]}
                 for u in payload.get("unusable", []) if isinstance(u, dict)]
@@ -198,6 +305,7 @@ def analyse(video: Path, out_dir: Path, interval: float, cols: int, rows: int,
         print(f"{video.name}: {len(sheets)} sheet(s)", flush=True)
         moments, unusable, summaries, failed, spend = [], [], [], [], 0.0
         read: list[list[float]] = []
+        sampled: list[float] = []
         for s in sheets:
             try:
                 got = read_sheet(s["path"], video.name, s["cells"], interval, role,
@@ -217,6 +325,7 @@ def analyse(video: Path, out_dir: Path, interval: float, cols: int, rows: int,
                 read.append(s["window"])
             moments += got["moments"]
             unusable += got["unusable"]
+            sampled += got.get("frames_sampled", [])
             summaries.append(got["summary"])
             spend += got["usage"]["projected_usd"]
             print(f"  {s['path'].name}: {len(got['moments'])} moments "
@@ -226,8 +335,10 @@ def analyse(video: Path, out_dir: Path, interval: float, cols: int, rows: int,
            "summary": " ".join(summaries)[:1200], "projected_usd": round(spend, 4),
            "failed_sheets": failed,
            "sheets_read": len(sheets) - len(failed), "sheets_total": len(sheets),
+           "frames_sampled": sorted(set(sampled)),
            "params": {"interval_s": interval, "cols": cols, "rows": rows,
                       "width": width, "role": role,
+                      "prompt_version": PROMPT_VERSION,
                       "provisional": "RQ-1/RQ-7 unmeasured"}}
     if windows:
         out["mode"] = "fine"
@@ -255,6 +366,8 @@ def merge_fine(previous: dict, fresh: dict) -> dict:
                                    + fresh.get("projected_usd", 0.0), 4),
             "failed_sheets": (previous.get("failed_sheets", [])
                               + fresh.get("failed_sheets", [])),
+            "frames_sampled": sorted(set(previous.get("frames_sampled", [])
+                                         + fresh.get("frames_sampled", []))),
             "sheets_read": previous.get("sheets_read", 0) + fresh["sheets_read"],
             "sheets_total": previous.get("sheets_total", 0) + fresh["sheets_total"],
             "windows_read": (previous.get("windows_read", [])

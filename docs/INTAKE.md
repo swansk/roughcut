@@ -36,6 +36,15 @@ Karl, 2026-09-07, from the review round:
    "edit after four minutes"; it is unblocking first steps with full fidelity.
 4. **Footage is cut once at home, but clips may be added at any time**, several at once. Added
    footage is the same path as resume: index what isn't done.
+5. **A clip's start and end stay adjustable after effects and editing** (Karl, 2026-09-08:
+   *"one big value add is always being able to adjust the start / end of clips, even after we
+   start applying effects / editing"*). The EDL's segments' `in`/`out` are the only place a
+   range lives; every effect is derived from them at render time and never bakes a range in.
+   Today's one effect, the music bed (`effects_music`), already works that way — speech
+   ducking is recomputed from the segments on every render. Any future effect (speed ramps,
+   titles, transitions, overlays) must be keyed to a segment id and expressed in that
+   segment's own clip seconds, so a trim never invalidates it; and the board must offer the
+   trim at every stage, not only before effects.
 
 Defaults chosen in the design, overridable without redesign: workers and budget cap in
 settings; themes are a brief and a filter, never a coverage score; hero = must appear, model
@@ -324,6 +333,46 @@ weight until measured, and until then numbers only, never event names.
       number (needs the events file to carry per-window tilt; a follow-up once the 9 unlooked
       Killington clips have their close look).
 
+### M7 · Karl's third report (2026-09-08)
+
+*"Evaluate the prompt for image evaluation, several clips, e.g. CLIP_04 say things that are
+not true like 'person in dark clothing appears to be inverted or airborne'. CLIP_07 too.
+Identify what is wrong and fix it. Indicate how much of the clip was indexed by keyframe —
+helps to debug / determine why it is good. The indexed keyframes should be referenced in the
+why and timestamps should be jumpable. Add a restart from beginning of clip in the pass."*
+(The start/end-after-effects point is Decision 5.)
+
+- [~] I7.1 **The sheet prompt lies; find out why and fix it.** Adjudicated against the rebuilt
+      sheets (`contact_sheet.py`, same params): CLIP_04 0:04 "person in dark clothing appears
+      to be inverted or airborne" is **the wearer's glove over the lens**; CLIP_04 4:12 "person
+      performs aerial flip or backflip; captured inverted mid-air" is **a ski binding across
+      the lens**; CLIP_04 4:24 "person tumbling or falling" is **a glove**; CLIP_07 2:48–3:16
+      "person airborne in sustained jump sequence across 8 consecutive frames" is **two people
+      standing on a slope shot from below**, while the real jump at 3:36 was called "standing
+      or walking". Also sub-second moments (`1.0–1.1`) at 4 s sampling. Four causes: the prompt
+      never said the camera is a helmet POV whose wearer's gloves, poles, ski tips and bindings
+      fill the frame; it primed for events and accepted hedged wording as `notable`; it asked
+      for no frame references, so nothing pinned a claim; it stated no physical bound (nothing
+      is airborne for 28 s). Fix: `visual_pass.py` `PROMPT_VERSION` 2 — SYSTEM names the
+      camera and the wearer's gear; the prompts list the frame timestamps and require
+      `frames` per moment, `confidence`, plain wording, the one-or-two-frames rule for an
+      event, `pov-gear` as a kind; `validate()` snaps edges to sampled frames, and demotes
+      to `notable: false` (reason in `demoted`) any notable moment that is hedged, not high
+      confidence, scenery/junk/pov-gear, an event without a frame, or an event spanning more
+      than two frames. The sidecar records `frames_sampled` and the prompt version.
+      `test_visual_pass.py` 7 tests. **Live check on CLIP_04 with the new prompt:** see the
+      verification log. **Open:** the other 11 Killington clips still carry version-1
+      sidecars; a re-look is ~22 sheets ≈ $2 (`POST /api/visual {"force": true}`, or delete
+      the `.visual.json` files and Index again) — Karl's call.
+- [ ] I7.2 What was looked at, and jumpable frames — lane `agent/floor4`. Data side (the
+      lead): `/api/picks` carries `looked` per clip (`interval_s`, `frames`, `sheets`,
+      `prompt_version`; frames re-derived for old sidecars), `seen` witnesses carry `frames`
+      + `confidence` + `demoted`, the reason cites them as `m:ss.s` (`picks.stamp`).
+- [ ] I7.3 Restart from the beginning of the clip (`0` / Home; `⇧0` the band) — lane
+      `agent/floor4`.
+- [x] I7.4 Decision 5 recorded (start/end adjustable after effects) and checked against the
+      one effect that exists.
+
 ## Lanes in flight
 
 | lane | branch / worktree | scope | state |
@@ -426,3 +475,14 @@ them. Every lane adds its own CHANGELOG bullet; integration keeps all of them.
   the tape with the bridge to the closer strip and `0:01 → 0:14 of 5:19 · 0 % in`, no Caps
   toggle, the microphone hint reading the permission state, and 20 picks in take clusters
   (`CLIP_11.MP4:jump:1` is 4 takes). Space is play / pause.
+- 2026-09-08 · I7.1 live: CLIP_04 re-read with prompt version 2 (3 sheets, $0.26, 80 frames
+  sampled). Old sidecar backed up to the session scratchpad. Result: the 0:04 glove is now
+  `unusable · lens covered by glove`; a hedged "possibly airborne" at 3:20 was **demoted by
+  the rule** (`hedged wording`); the 3:52 pole is `pov-gear`; the 4:12 binding and 4:24 glove
+  are inside "continuous skiing run", not a backflip and a fall; the summary says "no crashes,
+  falls, or jumps observed" apart from **one notable jump 3:44–3:48 (frames 224 · 228)** —
+  the wearer's own view going off a rise, which telemetry corroborates (0.28 s freefall at
+  224.6, 7.7 g at 225.4) though the wording "skier clearly airborne" overstates what the
+  frame shows (no other person in it). The old prompt had missed it. Events rebuilt: CLIP_04
+  now carries three notable events (close-look fall 22–23, the jump with frames, faces
+  12–20) against the old eight. Suite 380 passed, 1 skipped.

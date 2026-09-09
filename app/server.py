@@ -965,6 +965,31 @@ def _clip_range(body: dict) -> tuple[str, float, float]:
     return clip, start, end
 
 
+def looked_at(clip: str) -> dict | None:
+    """What the look pass sampled on this clip — the frames it actually read — so the
+    pass can show how much of a clip was indexed by keyframe and which frames a claim
+    rests on. None when the clip was never looked at. A sidecar written before the
+    frames were recorded gets them re-derived from its interval and the duration."""
+    stem = Path(clip).stem
+    p: Path = STATE["visual"] / f"{stem}.visual.json"
+    if not p.exists():
+        return None
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    params = d.get("params") or {}
+    interval = float(params.get("interval_s") or VISUAL_INTERVAL_S)
+    frames = [float(f) for f in (d.get("frames_sampled") or [])]
+    if not frames:
+        dur = clip_duration(clip) or 0.0
+        n = int(dur // interval) + 1 if dur else 0
+        frames = [round(i * interval, 2) for i in range(n)]
+    return {"interval_s": interval, "frames": frames,
+            "sheets": int(d.get("sheets_read") or 0),
+            "prompt_version": int(params.get("prompt_version") or 1)}
+
+
 @app.get("/api/picks")
 def api_picks(order: str = "rank") -> JSONResponse:
     """Every pick in the bin with stored verdicts re-attached, best first or by clip."""
@@ -991,6 +1016,7 @@ def api_picks(order: str = "rank") -> JSONResponse:
         "position": edl["floor"]["position"],
         "themes": themes,
         "dictation": dictate.available(),
+        "looked": {c: looked_at(c) for c in footage_clips()},
     })
 
 

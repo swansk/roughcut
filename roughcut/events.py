@@ -336,6 +336,9 @@ def rank_clip(clip: str, coarse: dict, fine: dict | None = None,
         out.append({"clip": clip, "start": m["start"], "end": m["end"],
                     "what": m.get("what", ""), "notable": bool(m.get("notable")),
                     "source": "sheet",
+                    "frames": [float(f) for f in (m.get("frames") or [])],
+                    "confidence": m.get("confidence", ""),
+                    "demoted": m.get("demoted", ""),
                     **score_moment(m, track=track, hz=hz, unusable=unusable,
                                    status=status)})
     for m in fine.get("moments", []):
@@ -348,6 +351,9 @@ def rank_clip(clip: str, coarse: dict, fine: dict | None = None,
         out.append({"clip": clip, "start": m["start"], "end": m["end"],
                     "what": m.get("what", ""), "notable": bool(m.get("notable")),
                     "source": "close look",
+                    "frames": [float(f) for f in (m.get("frames") or [])],
+                    "confidence": m.get("confidence", ""),
+                    "demoted": m.get("demoted", ""),
                     **score_moment(m, track=track, hz=hz, unusable=unusable,
                                    status="confirmed" if agrees else "unseen")})
     return [e for e in out if e["score"] > 0.0]

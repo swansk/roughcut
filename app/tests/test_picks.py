@@ -61,6 +61,24 @@ def test_seen_witnesses_carry_three_states_and_a_contradiction_is_kept_visible()
     assert contra["score"] < by_start[20.0]["score"] * 0.5
 
 
+def test_a_seen_witness_carries_the_frames_it_rests_on_and_the_why_cites_them():
+    """Karl, 2026-09-08: "the indexed keyframes should be referenced in the why and
+    timestamps should be jumpable". The frames a sheet named ride on the witness and are
+    written into the reason as m:ss.s, which the floor turns into links."""
+    clips = {"CLIP_A.MP4": _clip(candidates=[])}
+    ev = _event(20.0, 24.0, "confirmed", what="skier mid-air, skis level")
+    ev["frames"] = [20.0, 24.0]
+    ev["confidence"] = "high"
+    out = picks.build(clips, [ev])
+    w = out[0]["witnesses"][0]
+    assert w["frames"] == [20.0, 24.0] and w["confidence"] == "high" and w["demoted"] == ""
+    assert out[0]["why"] == "skier mid-air, skis level (frames 0:20.0 · 0:24.0)"
+    # an event from an older sidecar has no frames and the reason reads as before
+    old = picks.build(clips, [_event(20.0, 24.0, "confirmed", what="airborne")])
+    assert old[0]["witnesses"][0]["frames"] == [] and old[0]["why"] == "airborne"
+    assert picks.stamp(144.25) == "2:24.2" and picks.stamp(0) == "0:00.0"
+
+
 def test_overlapping_witnesses_merge_into_one_pick_with_corroboration():
     clips = {"CLIP_A.MP4": _clip(candidates=[
         {"t": 30.0, "end": 33.0, "why": "reaction", "score": 0.6}])}

@@ -9,7 +9,28 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Fixed
+- **The contact-sheet prompt claimed things that were not there** (Karl, 2026-09-08: CLIP_04
+  "person in dark clothing appears to be inverted or airborne"; CLIP_07 too). Adjudicated
+  against the rebuilt sheets: the "inverted person" is the wearer's glove over the lens, the
+  "backflip captured inverted mid-air" a ski binding, the "28-second airborne sequence" two
+  people standing on a slope shot from below. The prompt never said the camera is a helmet
+  POV, primed for events, accepted hedges as notable and asked for no frame references.
+  `visual_pass.py` prompt version 2: the camera and the wearer's gear are named, every moment
+  must cite the sampled `frames` that show it with a `confidence`, an event needs another
+  person visibly in the air or down in a named frame and can span at most two frames,
+  `pov-gear` is a kind, and hedged wording is a guess. `validate()` snaps moment edges to the
+  sampled frames (no more `1.0–1.1`) and demotes any notable claim that breaks a rule, with
+  the reason in `demoted`. The sidecar records `frames_sampled` and `prompt_version`.
+  Seven tests; the live re-read of CLIP_04 is in INTAKE's verification log.
+
 ### Added
+- **The frames a claim rests on, all the way to the pass.** Events carry `frames`,
+  `confidence` and `demoted` from the sheet; `seen` witnesses carry them; the pick's reason
+  cites the frames as `m:ss.s` (`picks.stamp`), which the floor turns into links; and
+  `/api/picks` carries `looked` per clip — the sample times the look pass read, the sheet
+  count and the prompt version — so the pass can show how much of a clip was indexed by
+  keyframe. Decision 5 in INTAKE: a clip's start and end stay adjustable after effects.
 - **INTAKE ticks I5.3's slider and I5.4** — the tracker names the commits and their
   verification (`621925a` the slider, `aaf43df` the picker; `test_open_ui.py` 15 passed,
   suite 362 passed, 1 skipped).

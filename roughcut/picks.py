@@ -111,6 +111,12 @@ def heard_witnesses(clip: str, c: dict) -> list[dict]:
     return out
 
 
+def stamp(t: float) -> str:
+    """`m:ss.s` — the form the floor turns into a link."""
+    t = max(0.0, float(t))
+    return f"{int(t // 60)}:{t % 60:04.1f}"
+
+
 def seen_witnesses(clip: str, events: Iterable[dict]) -> list[dict]:
     """The ranked events as witnesses, each carrying the state its confirmation earned."""
     out = []
@@ -125,7 +131,13 @@ def seen_witnesses(clip: str, events: Iterable[dict]) -> list[dict]:
                     "end": float(e["end"]), "at": round(float(at), 2),
                     "text": str(e.get("what", "")).strip(), "state": state,
                     "event_kind": str(e.get("kind", "")), "notable": bool(e.get("notable")),
-                    "score": float(e.get("score") or 0.0), "rank": e.get("rank")})
+                    "score": float(e.get("score") or 0.0), "rank": e.get("rank"),
+                    # The sampled frames the sheet named for this claim (Karl: "the
+                    # indexed keyframes should be referenced in the why"); empty on a
+                    # sidecar written before the pass cited frames.
+                    "frames": [round(float(f), 2) for f in (e.get("frames") or [])],
+                    "confidence": str(e.get("confidence") or ""),
+                    "demoted": str(e.get("demoted") or "")})
     return out
 
 
@@ -211,7 +223,9 @@ def _pick_from(clip: str, group: list[dict], duration: float,
     parts = []
     if agreeing_seen:
         best = max(agreeing_seen, key=lambda w: w["score"])
-        parts.append(best["text"])
+        cited = best.get("frames") or []
+        parts.append(best["text"] + (f" (frames {' · '.join(stamp(f) for f in cited)})"
+                                     if cited else ""))
     if heard:
         parts.append(f"\"{heard[0]['text']}\"")
     if felt:
