@@ -222,6 +222,10 @@
 <body>
 <header>
   <h1>Cut board <small id="title"></small></h1>
+  <!-- The bin and the cut this board is on; click it (or O) to switch either, or to
+       save a copy of the cut. The control itself is /switcher.js, shared by every
+       screen. -->
+  <button type="button" id="hdBin" title="switch bins or cuts, save a copy · O"></button>
   <!-- The three screens, the way the open screen's strip links them: the board is
        the last of them, and the way back to the other two lives here. -->
   <nav id="screens" aria-label="screens">
@@ -395,6 +399,7 @@
 <div id="toast"></div>
 <!-- The music bed, heard under the monitor. -->
 <audio id="bed" loop preload="auto"></audio>
+<script src="/switcher.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

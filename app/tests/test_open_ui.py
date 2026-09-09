@@ -22,6 +22,7 @@ import json
 import socket
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -596,6 +597,62 @@ def test_holding_V_in_the_story_dictates_into_it_and_a_tap_types(page, monkeypat
     wait_edl(bin_server, project, lambda d: d.get("story") == "v my friends and me skiing")
 
 
+# ------------------------------------------------------------ the cuts
+#
+# The same control the picker lives behind lists the bin's cuts and saves a copy of
+# the one on the board (/switcher.js, shared with the pass and the board). The copy
+# is deleted again at the end so the picker tests below see the bin as they expect.
+
+def cut_rows(page) -> list[dict]:
+    return page.evaluate("""() => Array.from(document.querySelectorAll('#cutList .crow')).map(r => ({
+        name: r.querySelector('b').textContent, facts: r.querySelector('.n').textContent,
+        flags: Array.from(r.querySelectorAll('.flag')).map(f => f.textContent),
+        acts: Array.from(r.querySelectorAll('.act')).map(a => a.dataset.act),
+        current: r.classList.contains('current')}))""")
+
+
+def test_a_copy_of_the_cut_is_saved_from_the_header_and_the_page_moves_to_it(page, project):
+    page.locator("#hdBin").click()
+    open_picker(page)
+    assert page.locator("#copyName").evaluate("el => document.activeElement === el")
+    assert cut_rows(page) == [{"name": "main", "facts": "empty", "flags": [],
+                               "acts": ["rename"], "current": True}]
+    assert "whole project file" in page.locator("#picker").inner_text()
+    page.locator("#copyName").fill("try the river first")
+    page.locator("#copyGo").click()
+    page.wait_for_function(
+        "document.querySelector('#toast').textContent.includes('saved a copy as try the river first')",
+        timeout=10000)
+    page.wait_for_function(
+        "document.querySelector('#hdBin .cutname').textContent === 'try the river first'", timeout=10000)
+    assert page.locator("#picker").is_hidden()
+    assert api(page, "/api/status")["cut"] == "try the river first"
+    copy_path = api(page, "/api/cuts")["current"]["path"]
+    assert Path(copy_path).parent.name == project["footage"].name
+    # the list has two now, the one on the board first, and the copy says where it came from
+    page.keyboard.press("o")
+    open_picker(page)
+    rows = cut_rows(page)
+    assert [r["name"] for r in rows] == ["try the river first", "main"]
+    assert rows[0]["current"] and rows[0]["flags"][0] == "from main" and rows[0]["acts"] == ["rename"]
+    assert rows[1]["acts"] == ["rename", "delete"]
+    # back to main by its row (the one not on the board — "from main" is on the copy's
+    # row too); then the copy to the trash (a confirm, accepted)
+    page.locator("#cutList .crow:not(.current)").click()
+    page.wait_for_function(
+        "document.querySelector('#hdBin .cutname').textContent === 'main'", timeout=10000)
+    assert api(page, "/api/status")["cut"] == "main"
+    page.keyboard.press("o")
+    open_picker(page)
+    page.once("dialog", lambda d: d.accept())
+    page.locator("#cutList .crow", has_text="try the river first").locator(".act[data-act=delete]").click()
+    page.wait_for_function("document.querySelectorAll('#cutList .crow').length === 1", timeout=10000)
+    assert not Path(copy_path).exists()
+    assert (Path(copy_path).parent / "trash").is_dir()
+    page.keyboard.press("Escape")
+    assert page.locator("#picker").is_hidden()
+
+
 # ------------------------------------------------------------ the picker (I5.4)
 #
 # Opening another bin re-points the module's live server (the same configure() main()
@@ -628,8 +685,9 @@ def test_the_bin_name_opens_a_picker_and_a_running_job_refuses_the_switch(page, 
     from roughcut import progress
     other = other_bin(project, "picker-bin")
     name = page.locator("#hdBin")
-    assert name.inner_text() == project["footage"].name
-    assert page.locator("#picker").is_hidden()
+    assert page.locator("#hdBin b").inner_text() == project["footage"].name
+    assert page.locator("#hdBin .cutname").inner_text() == "main"     # the cut it is on
+    assert page.locator("#picker").count() == 0 or page.locator("#picker").is_hidden()
     page.keyboard.press("o")                              # the key, outside any field
     open_picker(page)
     assert name.get_attribute("aria-expanded") == "true"
@@ -662,7 +720,7 @@ def test_the_bin_name_opens_a_picker_and_a_running_job_refuses_the_switch(page, 
     finally:
         server.INDEXES.clear()
     assert page.locator("#picker").is_visible()
-    assert name.inner_text() == project["footage"].name
+    assert page.locator("#hdBin b").inner_text() == project["footage"].name
     assert page.locator(".card").count() == 3
     assert api(page, "/api/status")["footage"] == str(project["footage"])
 
@@ -683,7 +741,8 @@ def test_opening_another_bin_reloads_the_whole_page_for_it(page, project, bin_se
             "sheet.state.clips && sheet.state.clips.footage.endsWith('picker-bin')"
             " && sheet.state.status && sheet.state.index && sheet.state.themes", timeout=10000)
         assert page.locator("#picker").is_hidden()
-        assert page.locator("#hdBin").inner_text() == "picker-bin"
+        assert page.locator("#hdBin b").inner_text() == "picker-bin"
+        assert page.locator("#hdBin .cutname").inner_text() == "main"
         assert page.locator("#binName").inner_text() == "picker-bin"
         assert "1 clip" in page.locator("#binMeta").inner_text()
         cards = page.locator(".card")
@@ -708,9 +767,10 @@ def test_opening_another_bin_reloads_the_whole_page_for_it(page, project, bin_se
         page.locator("#pickerPath").fill(str(project["footage"]))
         page.locator("#pickerPath").press("Enter")
         page.wait_for_function(
-            f"document.querySelector('#toast').textContent === 'opened {project['footage'].name}'", timeout=10000)
+            f"document.querySelector('#toast').textContent === 'opened {project['footage'].name} · main'",
+            timeout=10000)
         page.wait_for_function("sheet.state.clips && sheet.state.clips.clips.length === 3", timeout=10000)
-        assert page.locator("#hdBin").inner_text() == project["footage"].name
+        assert page.locator("#hdBin b").inner_text() == project["footage"].name
         assert page.locator(".card").count() == 3
         assert api(page, "/api/status")["footage"] == str(project["footage"])
     finally:

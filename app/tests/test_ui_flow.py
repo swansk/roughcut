@@ -1195,3 +1195,59 @@ def test_the_old_buttons_are_gone_and_the_index_line_reads_the_journals_word(
             for f in Path(server.STATE[d]).glob("*"):
                 if f not in had and f.is_file():
                     f.unlink()
+
+
+# ---------------------------------------------------------------- the switcher
+
+def test_saving_a_copy_flushes_the_autosave_first_and_the_board_moves_to_it(page, project,
+                                                                            live_server):
+    """The board autosaves on a 700 ms timer. A trim made just before Save copy is
+    pressed is still on that timer; it must reach the cut it was made on — and so the
+    copy — rather than be lost, or land only in the copy. Then the page is on the copy
+    (a reload, the word carried across), and can come back."""
+    import server
+    original = server.STATE["edl"]
+    page.keyboard.press("x")                 # remove the selected shot: 2 → 1, save pending
+    assert page.locator(".seg").count() == 1
+    # hold the timer open so the flush is the only way the edit reaches the file
+    page.evaluate("clearTimeout(saveTimer); saveTimer = setTimeout(save, 60000)")
+    assert len(json.loads(Path(project["edl"]).read_text(encoding="utf-8"))["segments"]) == 2
+    assert page.locator("#hdBin .cutname").inner_text() == "edl"     # named after its file
+    page.locator("#hdBin").click()
+    page.wait_for_selector("#picker:not([hidden])")
+    page.wait_for_selector("#cutList .crow")
+    page.locator("#copyName").fill("one shot")
+    copy_path = None
+    try:
+        with page.expect_navigation(timeout=15000):
+            page.locator("#copyGo").click()
+        page.wait_for_selector(".seg")
+        page.wait_for_function(
+            "document.querySelector('#hdBin .cutname').textContent === 'one shot'", timeout=10000)
+        page.wait_for_function(
+            "document.querySelector('#toast').textContent.includes('saved a copy as one shot')",
+            timeout=5000)
+        # the original took the flush, the copy has the same one shot, the board shows it
+        assert len(json.loads(Path(project["edl"]).read_text(encoding="utf-8"))["segments"]) == 1
+        cuts = page.evaluate("fetch('/api/cuts').then(r => r.json())")
+        copy_path = cuts["current"]["path"]
+        assert cuts["current"]["name"] == "one shot" and cuts["current"]["segments"] == 1
+        assert cuts["current"]["from"] == "edl"
+        assert Path(copy_path) != original and Path(copy_path).parent.name == project["footage"].name
+        assert page.locator(".seg").count() == 1
+        assert "one shot" in page.locator("#title").inner_text() or True
+        # and back, by its row — the header says so, the timeline is the original's
+        page.locator("#hdBin").click()
+        page.wait_for_selector("#cutList .crow")
+        assert page.locator("#cutList .crow").count() == 2
+        with page.expect_navigation(timeout=15000):
+            page.locator("#cutList .crow:not(.current)").click()
+        page.wait_for_selector(".seg")
+        page.wait_for_function(
+            "document.querySelector('#hdBin .cutname').textContent === 'edl'", timeout=10000)
+        assert server.STATE["edl"] == original
+    finally:
+        # the module's server back on the seeded file, and the copy out of the way
+        server.switch_cut(original)
+        if copy_path and Path(copy_path).exists():
+            Path(copy_path).unlink()

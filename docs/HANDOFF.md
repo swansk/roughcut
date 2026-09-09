@@ -12,6 +12,19 @@ seven proposed themes, and whether to re-look the other 11 clips with the new pr
 INTAKE's "Where we are" has the exact list. Everything below this line is the history that
 led there, and the editing-room roadmap.
 
+**Session 12 (2026-09-08, evening) — the first of Karl's new features: cuts.** *"Work on
+multiple projects at the same time … switching easily between projects, and saving copies so
+we can try different things."* Built and verified (suite green, both browser flows driven):
+every screen's header carries **bin · cut**; click it (or `O`) for the bins the board knows
+and the cuts of this bin; *Save copy* snapshots the whole project file under a name and moves
+to it (or stays, as a checkpoint); rows open, rename, delete-to-trash. The board flushes its
+autosave before any switch. The registry now honours the cut a bin was last on (a `--edl` cut
+used to be forgotten on switching bins). Details: the CHANGELOG entry and
+[app/README.md](../app/README.md) → *Bin · cut*. Seam worth knowing: a cut is the **entire**
+EDL, so the pass's verdicts made while on one cut are that cut's; if that ever bites, the fix
+is to move `selects`/`floor`/`look` out of the EDL into a per-bin file, not to merge on switch.
+**Not yet live-checked on Killington** — open the board and try it there first.
+
 Last updated: 2026-08-25 (session 7 open). **Karl kept editing on his own on 2026-08-24**, past
 everything below: he hand-added six shots to the accepted 17-shot cut, then asked for a revision
 (note: drop the conquistador bit, find the rocks hit, restore covered-in-snow — ask `a038b42c`,

@@ -472,6 +472,7 @@ def project_payload() -> dict:
         "events": events.load(STATE["visual"])[:60],
         "proxies_ready": STATE.get("proxies_ready", False),
         "edl_path": str(STATE["edl"]),
+        "cut": cut_name_of(edl, STATE["edl"]),
         "music": edl.get("effects_music"),
     }
 
@@ -498,6 +499,7 @@ def api_status() -> JSONResponse:
         "sidecars": str(STATE["sidecars"]),
         "edl": str(STATE["edl"]),
         "edl_created": STATE["edl_created"],
+        "cut": cut_name_of(read_edl(), STATE["edl"]),
         "clips": len(clips),
         "analysed": len(clips) - len(pending),
         "pending": pending,
@@ -2474,6 +2476,10 @@ def download_name(meta: dict, path: Path, size: tuple[int, int] | None) -> str:
     this by name: *"Make it clear how to download the renders."*
     """
     bits = [STATE["footage"].name]
+    # A copy's name too — two cuts of one bin downloaded with the same name is the
+    # confusion the name exists to prevent. The bin's first cut stays as it was.
+    if meta.get("cut") and meta["cut"] != DEFAULT_CUT_NAME:
+        bits.append(cut_slug(meta["cut"]))
     if meta.get("segments"):
         bits.append(f"{meta['segments']}shots")
     dur = meta.get("duration_s")
@@ -2541,6 +2547,8 @@ async def api_render(request: Request) -> JSONResponse:
         "note": (body.get("label") or "")[:120],
         "music": (edl.get("effects_music") or {}).get("asset"),
         "profile": profile,
+        # Which cut of the bin this came from, now that a bin can have several.
+        "cut": cut_name_of(edl, STATE["edl"]),
         # The shot list this file was made from, so the board can say which version is
         # the cut currently on the timeline. Karl watched a rendered *proposal* and
         # reported that the board "doesn't seem to reflect the render" — it did not,
@@ -2893,7 +2901,258 @@ def appjs() -> Response:
                     media_type="application/javascript", headers=NO_STORE)
 
 
-PROJECTS_FILE = "projects.json"       # under --work: {name: {footage, edl, opened}}
+@app.get("/switcher.js")
+def switcherjs() -> Response:
+    """The bin-and-cut switcher every screen's header carries; one file, three pages."""
+    return Response((HERE / "static" / "switcher.js").read_text(encoding="utf-8"),
+                    media_type="application/javascript", headers=NO_STORE)
+
+
+# ------------------------------------------------------------------------ cuts
+#
+# One bin, several cuts. The EDL has always been the whole project file — the
+# timeline, the story, the music bed and, since the intake, the pass's picks — and the
+# board has always edited exactly one of them per bin. "Saving copies so we can try
+# different things" (Karl, 2026-09-08) is a second file of the same shape. A copy is a
+# snapshot of the *entire* file, never a partial one, so switching between cuts never
+# merges anything and nothing about the file's shape changes: `assemble.py` renders a
+# copy exactly as it renders the original. Everything that belongs to the bin rather
+# than to a cut — proxies, sidecars, the visual pass, the journal, renders — is keyed
+# by the footage folder and shared by every cut of it.
+#
+# On disk: the bin's first cut stays where it always was (`projects/<bin>.edl.json`,
+# so nothing that exists moves), copies live beside it under
+# `projects/<bin>/<slug>.edl.json`, and a deleted copy goes to `projects/<bin>/trash/`
+# rather than away. The registry remembers which cut each bin was last open on, so
+# opening a bin again lands on the cut you left it on — including one named with
+# `--edl` on the command line, which used to be forgotten the moment you switched bins.
+
+DEFAULT_CUT_NAME = "main"
+CUT_SUFFIX = ".edl.json"
+
+
+def cuts_dir(bin_name: str | None = None) -> Path:
+    return STATE["work"] / "projects" / (bin_name or STATE["footage"].name)
+
+
+def default_cut_path(bin_name: str | None = None) -> Path:
+    return STATE["work"] / "projects" / f"{bin_name or STATE['footage'].name}{CUT_SUFFIX}"
+
+
+def cut_slug(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", name.strip()).strip("-.").lower()[:60]
+
+
+def cut_name_of(edl: dict, path: Path, bin_name: str | None = None) -> str:
+    """What a cut is called: the name written into it when it was copied or renamed,
+    else `main` for the bin's own file, else the file's stem (a cut named with --edl)."""
+    meta = edl.get("cut") if isinstance(edl.get("cut"), dict) else {}
+    if meta.get("name"):
+        return str(meta["name"])
+    if path == default_cut_path(bin_name):
+        return DEFAULT_CUT_NAME
+    name = path.name
+    return name[:-len(CUT_SUFFIX)] if name.endswith(CUT_SUFFIX) else path.stem
+
+
+def _registry() -> dict:
+    try:
+        known = json.loads(projects_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return known if isinstance(known, dict) else {}
+
+
+def _cut_paths(bin_name: str) -> list[Path]:
+    """Every cut file a bin has: its own, the copies beside it, and any cut named on
+    the command line that the registry saw for this bin (kept so a `--edl` cut stays
+    reachable after a copy of it is opened)."""
+    paths: list[Path] = []
+    if default_cut_path(bin_name).exists():
+        paths.append(default_cut_path(bin_name))
+    if cuts_dir(bin_name).is_dir():
+        paths.extend(sorted(p for p in cuts_dir(bin_name).glob(f"*{CUT_SUFFIX}")
+                            if p.is_file()))
+    rec = _registry().get(bin_name)
+    for raw in (rec.get("cuts") or []) if isinstance(rec, dict) else []:
+        p = Path(raw)
+        if p.is_file() and p not in paths:
+            paths.append(p)
+    return paths
+
+
+def _cut_row(path: Path) -> dict | None:
+    try:
+        edl = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(edl, dict):
+        return None
+    meta = edl.get("cut") if isinstance(edl.get("cut"), dict) else {}
+    segs = [s for s in (edl.get("segments") or []) if isinstance(s, dict)]
+    try:
+        duration = round(sum(float(s["out"]) - float(s["in"]) for s in segs), 2)
+    except (KeyError, TypeError, ValueError):
+        duration = 0.0
+    try:
+        modified = path.stat().st_mtime
+    except OSError:
+        modified = None
+    return {
+        "name": cut_name_of(edl, path), "path": str(path),
+        "segments": len(segs), "duration_s": duration,
+        "story": (edl.get("story") or "")[:120],
+        "music": bool(edl.get("effects_music")),
+        "created": meta.get("created"), "from": meta.get("from"),
+        "modified": modified,
+        "current": path == STATE["edl"], "default": path == default_cut_path(),
+    }
+
+
+def list_cuts() -> dict:
+    """The cuts of the current bin, the one on the board first. Facts only."""
+    paths = _cut_paths(STATE["footage"].name)
+    if STATE["edl"] not in paths:           # named on the command line, wherever it lives
+        paths.insert(0, STATE["edl"])
+    rows = [r for r in (_cut_row(p) for p in paths) if r is not None]
+    rows.sort(key=lambda r: (not r["current"], not r["default"],
+                             -(r["created"] or 0), r["name"].lower()))
+    return {"bin": STATE["footage"].name, "footage": str(STATE["footage"]),
+            "current": next((r for r in rows if r["current"]), None), "cuts": rows}
+
+
+def _known_cut(raw) -> Path:
+    """The cut a request names, if it is one of this bin's — never an arbitrary file."""
+    if not isinstance(raw, str) or not raw.strip():
+        raise HTTPException(400, "path: which cut")
+    want = Path(raw).expanduser()
+    for r in list_cuts()["cuts"]:
+        if Path(r["path"]) == want:
+            return want
+    raise HTTPException(404, f"not a cut of {STATE['footage'].name}: {raw}")
+
+
+def _cut_name_from(body) -> str:
+    name = body.get("name") if isinstance(body, dict) else None
+    if not isinstance(name, str) or not name.strip():
+        raise HTTPException(400, "name: what to call the cut")
+    name = " ".join(name.split())[:60]
+    if not cut_slug(name):
+        raise HTTPException(400, f"name: nothing usable in {name!r}")
+    return name
+
+
+def _refuse_while_running(what: str) -> None:
+    """The same rule bins have: a render or an Ask mid-flight belongs to the cut it
+    started on, and an index writes into the EDL it was started against."""
+    if any(j["state"] not in progress.TERMINAL for j in all_jobs()):
+        raise HTTPException(409, f"a job is still running — wait for it before {what}")
+
+
+def _write_cut(path: Path, edl: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(edl, indent=1), encoding="utf-8")
+    tmp.replace(path)
+
+
+def switch_cut(path: Path) -> None:
+    """Point the board at another cut of the same bin. Everything per-bin stays as it
+    is; only what the EDL itself carries is re-read."""
+    STATE["edl"] = path
+    STATE["edl_created"] = False
+    STATE["orient"] = read_edl().get("orient", "auto")
+    remember_project(STATE["footage"], path)
+
+
+@app.get("/api/cuts")
+def api_cuts() -> JSONResponse:
+    return JSONResponse(list_cuts())
+
+
+@app.post("/api/cuts/copy")
+async def api_cuts_copy(request: Request) -> JSONResponse:
+    """Save a copy of the cut on the board under a name — and, unless told otherwise,
+    work on the copy from here on. `open: false` is the other use: a checkpoint you
+    can come back to while you keep editing what you have."""
+    body = await request.json()
+    name = _cut_name_from(body)
+    open_it = bool(body.get("open", True)) if isinstance(body, dict) else True
+    listing = list_cuts()
+    if name.lower() in {r["name"].lower() for r in listing["cuts"]}:
+        raise HTTPException(409, f"there is already a cut called {name!r}")
+    dest = cuts_dir() / f"{cut_slug(name)}{CUT_SUFFIX}"
+    if dest.exists():
+        raise HTTPException(409, f"{dest.name} already exists")
+    if open_it:
+        _refuse_while_running("switching cuts")
+    edl = read_edl()
+    edl["cut"] = {"name": name, "created": time.time(),
+                  "from": cut_name_of(edl, STATE["edl"])}
+    _write_cut(dest, edl)
+    if open_it:
+        switch_cut(dest)
+    out = list_cuts()
+    out["copy"] = next(r for r in out["cuts"] if Path(r["path"]) == dest)
+    return JSONResponse(out)
+
+
+@app.post("/api/cuts/open")
+async def api_cuts_open(request: Request) -> JSONResponse:
+    body = await request.json()
+    path = _known_cut(body.get("path") if isinstance(body, dict) else None)
+    if path != STATE["edl"]:
+        _refuse_while_running("switching cuts")
+        switch_cut(path)
+    return JSONResponse(list_cuts())
+
+
+@app.post("/api/cuts/rename")
+async def api_cuts_rename(request: Request) -> JSONResponse:
+    """The name lives inside the file, so renaming never moves anything and nothing
+    that points at the file (the registry, a render's metadata) goes stale."""
+    body = await request.json()
+    path = _known_cut(body.get("path") if isinstance(body, dict) else None)
+    name = _cut_name_from(body)
+    others = {r["name"].lower() for r in list_cuts()["cuts"] if Path(r["path"]) != path}
+    if name.lower() in others:
+        raise HTTPException(409, f"there is already a cut called {name!r}")
+    try:
+        edl = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(500, f"could not read {path.name}: {exc}")
+    meta = edl.get("cut") if isinstance(edl.get("cut"), dict) else {}
+    meta["name"] = name
+    edl["cut"] = meta
+    _write_cut(path, edl)
+    return JSONResponse(list_cuts())
+
+
+@app.post("/api/cuts/delete")
+async def api_cuts_delete(request: Request) -> JSONResponse:
+    """Never the cut on the board, and never actually gone: the file moves to the
+    bin's `trash/` with a timestamp, where a hand can get it back."""
+    body = await request.json()
+    path = _known_cut(body.get("path") if isinstance(body, dict) else None)
+    if path == STATE["edl"]:
+        raise HTTPException(409, "that is the cut on the board — open another one first")
+    trash = cuts_dir() / "trash"
+    trash.mkdir(parents=True, exist_ok=True)
+    stem = path.name[:-len(CUT_SUFFIX)] if path.name.endswith(CUT_SUFFIX) else path.stem
+    dest = trash / f"{stem}.{int(time.time())}{CUT_SUFFIX}"
+    try:
+        path.replace(dest)
+    except OSError:                      # a --edl cut on another filesystem
+        shutil.move(str(path), str(dest))
+    known = _registry()
+    rec = known.get(STATE["footage"].name)
+    if isinstance(rec, dict) and rec.get("cuts"):
+        rec["cuts"] = [c for c in rec["cuts"] if Path(c) != path]
+        _write_registry(known)
+    return JSONResponse({**list_cuts(), "trashed": str(dest)})
+
+
+PROJECTS_FILE = "projects.json"       # under --work: {name: {footage, edl, opened, cuts}}
 
 
 def projects_path() -> Path:
@@ -2904,14 +3163,21 @@ def remember_project(footage: Path, edl_path: Path) -> None:
     """Every bin the board has been pointed at, so the picker can offer it again. The
     EDL does not carry its footage path (it never needed to — the folder was the
     argument), so this small registry does."""
-    try:
-        known = json.loads(projects_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        known = {}
-    if not isinstance(known, dict):
-        known = {}
+    known = _registry()
+    rec = known.get(footage.name) if isinstance(known.get(footage.name), dict) else {}
+    # `edl` is the cut the bin was last open on; `cuts` remembers the ones that live
+    # outside `projects/` (named with --edl), which nothing else would list.
+    extra = [c for c in (rec.get("cuts") or []) if isinstance(c, str)]
+    under = STATE["work"] / "projects"
+    if edl_path != default_cut_path(footage.name) and edl_path.parent != cuts_dir(footage.name) \
+            and str(edl_path) not in extra and under not in edl_path.parents:
+        extra.append(str(edl_path))
     known[footage.name] = {"footage": str(footage), "edl": str(edl_path),
-                           "opened": time.time()}
+                           "opened": time.time(), "cuts": extra}
+    _write_registry(known)
+
+
+def _write_registry(known: dict) -> None:
     projects_path().parent.mkdir(parents=True, exist_ok=True)
     tmp = projects_path().with_suffix(".tmp")
     tmp.write_text(json.dumps(known, indent=1), encoding="utf-8")
@@ -2931,39 +3197,50 @@ def list_projects() -> dict:
     parent, one folder per bin). Facts only — clip counts, whether it has been cut,
     whether it has a journal — never a judgement."""
     current: Path = STATE["footage"]
-    try:
-        known = json.loads(projects_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        known = {}
+    known = _registry()
     rows: dict[str, dict] = {}
-    for name, rec in (known.items() if isinstance(known, dict) else []):
+    for name, rec in known.items():
         if not isinstance(rec, dict) or not rec.get("footage"):
             continue
         folder = Path(rec["footage"])
         rows[str(folder)] = {"name": name, "footage": str(folder), "known": True,
-                             "opened": rec.get("opened")}
+                             "opened": rec.get("opened"), "_edl": rec.get("edl")}
     for folder in sorted(current.parent.iterdir()) if current.parent.is_dir() else []:
         if folder.is_dir() and str(folder) not in rows and _count_videos(folder):
             rows[str(folder)] = {"name": folder.name, "footage": str(folder),
-                                 "known": False, "opened": None}
+                                 "known": False, "opened": None, "_edl": None}
     out = []
     for r in rows.values():
         folder = Path(r["footage"])
-        edl_path = STATE["work"] / "projects" / f"{folder.name}.edl.json"
-        segments = 0
+        remembered = r.pop("_edl")
+        # The cut this bin would open on: the one it was last on if it still exists,
+        # else its own file; the row reports that cut's shots and how many cuts the
+        # bin has, so the picker can say "cut · 21 shots · 3 cuts".
+        edl_path = default_cut_path(folder.name)
+        if folder == current:
+            edl_path = STATE["edl"]
+        elif remembered and Path(remembered).is_file():
+            edl_path = Path(remembered)
+        segments, cut_name = 0, None
         if edl_path.exists():
             try:
-                segments = len(json.loads(edl_path.read_text(encoding="utf-8"))
-                               .get("segments") or [])
+                edl = json.loads(edl_path.read_text(encoding="utf-8"))
+                segments = len(edl.get("segments") or [])
+                cut_name = cut_name_of(edl, edl_path, folder.name)
             except (OSError, ValueError):
                 segments = 0
+        n_cuts = len(_cut_paths(folder.name))
+        if folder == current and STATE["edl"] not in _cut_paths(folder.name):
+            n_cuts += 1
         out.append({**r, "exists": folder.is_dir(), "clips": _count_videos(folder),
                     "cut": edl_path.exists(), "segments": segments,
+                    "cut_name": cut_name, "cuts": n_cuts,
                     "journal": (STATE["work"] / "index" / f"{folder.name}.json").exists(),
                     "current": folder == current})
     out.sort(key=lambda r: (not r["current"], -(r["opened"] or 0), r["name"]))
     return {"current": {"name": current.name, "footage": str(current),
-                        "edl": str(STATE["edl"]), "clips": len(footage_clips())},
+                        "edl": str(STATE["edl"]), "clips": len(footage_clips()),
+                        "cut": cut_name_of(read_edl(), STATE["edl"])},
             "projects": out}
 
 
@@ -2986,11 +3263,24 @@ async def api_projects_open(request: Request) -> JSONResponse:
         raise HTTPException(400, f"no such folder: {folder}")
     if not _count_videos(folder):
         raise HTTPException(400, f"no video in {folder}")
-    if any(j["state"] not in progress.TERMINAL for j in all_jobs()):
-        raise HTTPException(409, "a job is still running — wait for it before switching bins")
+    _refuse_while_running("switching bins")
+    folder = folder.resolve()
+    # Which cut to land on: the one asked for (it must be one of the bin's), else the
+    # one the bin was last open on, else the bin's own file — scaffolded if new.
+    raw_edl = body.get("edl")
+    edl: Path | None = None
+    if isinstance(raw_edl, str) and raw_edl.strip():
+        edl = Path(raw_edl).expanduser()
+        if edl not in _cut_paths(folder.name):
+            raise HTTPException(400, f"not a cut of {folder.name}: {raw_edl}")
+    else:
+        rec = _registry().get(folder.name)
+        if isinstance(rec, dict) and rec.get("edl") and Path(rec["edl"]).is_file() \
+                and Path(rec.get("footage", "")) == folder:
+            edl = Path(rec["edl"])
     for reg in (ANALYSES, VISUALS, INDEXES, ASKS, FINDS, THEMES, RENDERS):
         reg.clear()
-    configure(None, folder, None, STATE["work"],
+    configure(edl, folder, None, STATE["work"],
               proxies=STATE.get("proxies_enabled", True), orient="auto")
     return JSONResponse({**list_projects()["current"],
                          "edl_created": STATE["edl_created"]})
