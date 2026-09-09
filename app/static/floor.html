@@ -79,6 +79,16 @@
   .sw.later { background: var(--warn); }
   .sw.lens { width: 15px; background: rgba(207,214,228,.1); border: 1px solid rgba(207,214,228,.5); }
   .sw.keep { background: rgba(100,208,138,.72); border: 1px solid var(--good); }
+  .sw.looked { width: 2px; height: 5px; background: #5a5a70; border-radius: 0; vertical-align: 0; margin-right: 6px; }
+  .sw.cited { width: 2px; height: 9px; background: #cfd6e4; border-radius: 0; vertical-align: -2px; margin-right: 6px; }
+  #legendLooked[hidden] { display: none; }
+
+  /* a timestamp is a link (I7.2): in WHY, on a witness, in the evidence drawer — click to
+   * park the picture on that frame; hovering lights the frame's tick on the tape */
+  .chip { display: inline-block; font: 600 10px var(--mono); color: var(--accent); background: #12121a;
+          border: 1px solid #2a3a50; border-radius: 3px; padding: 0 4px; line-height: 14px; cursor: pointer;
+          vertical-align: 1px; white-space: nowrap; font-style: normal; }
+  .chip:hover { border-color: var(--accent); color: #fff; }
 
   /* seals: three states, colour AND the word */
   .seal { display: flex; flex-direction: column; gap: 1px; font: 500 10.5px var(--mono);
@@ -128,6 +138,14 @@
   #tapeRuler span { position: absolute; top: 17px; height: 14px; border-left: 1px solid #3a3a48;
                     padding-left: 3px; font: 8.5px/14px var(--mono); color: #6c6c80; white-space: nowrap;
                     pointer-events: none; }
+  /* what the look pass read (I7.2): a tick under the ruler at every sampled frame, neutral;
+   * a frame a `seen` witness of this pick cites is brighter and taller; the one a chip is
+   * hovered or clicked for lights up. No pointer — a click goes through to the tape. */
+  #tapeLooked span { position: absolute; top: 31px; width: 1px; height: 3px; background: #5a5a70;
+                     pointer-events: none; }
+  #tapeLooked span.cited { top: 28px; height: 7px; width: 2px; margin-left: -1px; background: #cfd6e4; }
+  #tapeLooked span.lit { top: 26px; height: 9px; width: 2px; margin-left: -1px; background: #fff;
+                         box-shadow: 0 0 6px var(--accent); z-index: 2; }
   #tapeLens { position: absolute; top: 15px; bottom: 3px; background: rgba(207,214,228,.07);
               border: 1px solid rgba(207,214,228,.4); border-radius: 3px; pointer-events: none; z-index: 1; }
   #tapeMarks span { position: absolute; top: 35px; height: 14px; min-width: 6px; border-radius: 2px;
@@ -268,7 +286,8 @@
            <span id="ctxWhere" class="tnum good"></span><br><span id="ctxOthers" class="hint"></span></div>
       <div id="legend" class="hint small"><div class="lbl">On the tape</div>
         <span><i class="sw keep"></i>the clip you keep</span><span><i class="sw now"></i>this pick</span><span><i class="sw pick"></i>picked</span><span><i class="sw later"></i>later</span><span><i class="sw"></i>undecided</span><br>
-        <span><i class="sw lens"></i>the lens: what CLOSER shows</span></div>
+        <span><i class="sw lens"></i>the lens: what CLOSER shows</span>
+        <span id="legendLooked" hidden><br><i class="sw looked"></i>a frame the look pass read <i class="sw cited"></i>one a witness cites · a time in WHY is a link</span></div>
       <div><div class="lbl">Keeping</div><span id="ctxKeep" class="tnum good"></span><br>
            <span id="ctxSnap" class="hint"></span><br><span id="ctxExtend" class="hint"></span></div>
       <div class="grow"></div>
@@ -301,10 +320,11 @@
 
   <div id="tape">
     <span class="strip-lbl" id="tapeLbl"></span>
-    <span class="strip-lbl right">click to seek · a mark is a pick — click one to jump to it</span>
+    <span class="strip-lbl right">click to seek · a mark is a pick — click one to jump to it · <span class="key">0</span> restarts the clip · <span class="key">⇧0</span> the band</span>
     <div id="tapeWave"></div>
     <svg id="tapeTrace" viewBox="0 0 1000 62" preserveAspectRatio="none" aria-hidden="true"></svg>
     <div id="tapeRuler"></div>
+    <div id="tapeLooked"></div>
     <div id="tapeLens"></div>
     <div id="tapeMarks"></div>
     <div id="tapeKeep" title="the kept range — the clip — where it sits in the whole clip"></div>

@@ -73,6 +73,8 @@ function toast(msg, ms = 2200) {
 const F = {
   P: null,                 // /api/project — transcripts with word timings, per clip
   picks: [],               // every pick the last fetch returned, verdicts attached
+  looked: null,            // /api/picks `looked`: per clip, the frames the look pass read
+                           // (null per clip = never looked at); null here = not on the wire
   queue: [],               // this round's picks, frozen when the round started
   i: 0,                    // where we are in the queue
   round: 1,
@@ -89,6 +91,7 @@ const F = {
   gen: 0,                  // play commands; a deferred callback that finds it moved does nothing
   playing: false,
   whole: false,            // `.` opened the whole clip: no stop at the preview end
+  until: null,             // ⇧0 replays the band: playback stops here instead of the preview end
   shuttle: 0,              // J: negative rate driven by the tick; L: positive playbackRate
   bin: null,               // {list, k} while the closing card plays the bin
   writes: 0,               // completed writes — the tests wait on this
@@ -191,6 +194,103 @@ function keepRange() {
   b = Math.max(a + 0.1, Math.min(b, dur));
   return { raw: [r2(start), r2(end)], snapped: [r2(a), r2(b)] };
 }
+
+/* ------------------------------------------------------ what was looked at
+ *
+ * I7.2 (Karl, 2026-09-08: "indicate how much of the clip was indexed by keyframe … the
+ * indexed keyframes should be referenced in the why and timestamps should be jumpable").
+ * `/api/picks` says per clip which sample times the look pass actually read; a `seen`
+ * witness says which of them show its claim. The tape draws them, WHY and the witnesses
+ * turn every timestamp into a chip that parks the picture there, and the evidence drawer
+ * says how many frames sit under this pick's window. A pick without any of it renders as
+ * it did before.
+ */
+
+const TS_RE = /\b(\d{1,3}):(\d\d(?:\.\d+)?)\b/g;      // m:ss or m:ss.s, as WHY writes them
+
+/* What the look pass read of this pick's clip: undefined when the wire does not say (the
+ * old contract), null when the clip was never looked at, else {interval_s, frames, …}. */
+function lookedOf(p) {
+  if (!F.looked || !p) return undefined;
+  const l = F.looked[p.clip];
+  return l === undefined ? undefined : l;
+}
+
+/* The frames this pick's `seen` witnesses cite, as a set of rounded clip seconds. */
+function citedFrames(p) {
+  const s = new Set();
+  (p.witnesses || []).forEach((w) => {
+    if (w.kind === 'seen') (w.frames || []).forEach((t) => { if (Number.isFinite(t)) s.add(r2(t)); });
+  });
+  return s;
+}
+
+const fmtFrame = (t) => (Number.isInteger(t) ? clock(t) : fmt(t));
+
+function chipHtml(t, label) {
+  return `<span class="chip" data-t="${r2(t)}" title="click to park the picture at ${fmt(t)}">${escapeHtml(label)}</span>`;
+}
+
+/* Every m:ss.s in already-escaped text becomes a chip — inside the clip only, so a ratio
+ * or a score that happens to look like a time past the end stays plain text. */
+function chips(escaped, p) {
+  const dur = (p && p.duration) || Infinity;
+  return String(escaped).replace(TS_RE, (m, mm, ss) => {
+    const t = Number(mm) * 60 + Number(ss);
+    return t <= dur ? chipHtml(t, m) : m;
+  });
+}
+
+const frameChips = (frames) => frames.map((t) => chipHtml(t, fmtFrame(t))).join(' · ');
+
+/* A witness's line after its text: the frames it cites, and how sure the pass was. */
+function witnessExtra(w) {
+  const frames = (w.kind === 'seen' ? w.frames || [] : []).filter(Number.isFinite);
+  return (frames.length ? ` · frames ${frameChips(frames)}` : '')
+    + (w.confidence ? ` · <span class="hint">${escapeHtml(w.confidence)} confidence</span>` : '');
+}
+
+/* One line for the evidence drawer: how much of this pick's window the sampled frames
+ * cover — "N of M": the frames that fall in it, of the M the interval would put there —
+ * so a claim with no frame under it reads as what it is. */
+function coverageLine(p) {
+  const l = lookedOf(p);
+  if (l === undefined) return '';
+  if (l === null) return 'this window: not looked at yet — no frame under any claim here';
+  const frames = (l.frames || []).filter((t) => Number.isFinite(t) && t >= p.start - 1e-6 && t <= p.end + 1e-6);
+  const iv = Number(l.interval_s) || 0;
+  const grid = iv ? Math.max(0, Math.floor((p.end - 1e-6) / iv) - Math.ceil((p.start - 1e-6) / iv) + 1) : frames.length;
+  const of = Math.max(grid, frames.length);
+  if (!of) return `this window: no frame falls in it — ${(p.end - p.start).toFixed(1)} s between frames every ${iv} s · nothing under the claim`;
+  if (!frames.length) return `this window: 0 of ${of} frames looked at — nothing under the claim`;
+  return `this window: ${frames.length} of ${of} frame${of === 1 ? '' : 's'} looked at`
+    + (iv ? ` · every ${iv} s` : '') + ` · ${frameChips(frames)}`;
+}
+
+/* The lit tick on the tape: the frame a chip is hovered for, and the last one clicked. */
+const lit = { hover: null, hit: null };
+
+function paintLookedLit() {
+  $('#tapeLooked').querySelectorAll('span').forEach((el) => {
+    const t = parseFloat(el.dataset.t);
+    el.classList.toggle('lit', [lit.hover, lit.hit].some((x) => x != null && Math.abs(x - t) < 0.05));
+  });
+}
+
+/* A chip clicked: park the picture on that frame — paused, the strip re-centred, the whole
+ * clip open if it lies outside the preview (seek does that) so playback will not stop
+ * behind you — and light its tick. From the drawer the drawer closes, so the frame shows. */
+function goFrame(t) {
+  const p = cur();
+  if (!p || F.mode !== 'pass' || !Number.isFinite(t)) return;
+  if (F.overlay && F.overlay !== 'card') closeOverlay();
+  pause();
+  seek(t);
+  lit.hit = r2(t);
+  paintLookedLit();
+}
+
+const chipAt = (e) => (e.target && e.target.closest ? e.target.closest('.chip') : null);
 
 /* ---------------------------------------------------------------- picture */
 
@@ -295,13 +395,14 @@ function park(t) {
 }
 
 /* Where playback stops on its own: the preview end, unless the whole clip was opened
- * (`.` O, a seek outside the band, or space pressed again at the band's end); in the bin,
- * the select's end. */
+ * (`.` O, `0`, a seek outside the band, or space pressed again at the band's end) or ⇧0
+ * is replaying the band (its end); in the bin, the select's end. */
 function stopAt() {
   const p = cur();
   if (!p) return 0;
   if (F.mode === 'bin') return p.end;
   if (F.whole) return p.duration || Infinity;
+  if (F.until != null) return F.until;
   return p.preview[1];
 }
 
@@ -448,7 +549,8 @@ function paintSeals() {
     d.className = `seal ${sealClass(w)}`;
     const when = w.kind === 'theme' ? '' : `${fmt(w.at != null ? w.at : w.start)} `;
     const text = w.kind === 'theme' ? 'from this pick’s words' : (w.text || '');
-    d.innerHTML = `<span class="s">${escapeHtml(sealLabel(w))}</span><span>${escapeHtml(when)}${escapeHtml(text)}</span>`;
+    d.innerHTML = `<span class="s">${escapeHtml(sealLabel(w))}</span>`
+      + `<span>${chips(escapeHtml(when), p)}${chips(escapeHtml(text), p)}${witnessExtra(w)}</span>`;
     box.appendChild(d);
   });
   paintNote();
@@ -465,7 +567,8 @@ function paintNote(meta) {
 function paintCaption() {
   const p = cur();
   if (!p) return;
-  $('#why').textContent = p.why || (F.mode === 'bin' ? '' : '(no reason — the witnesses did not agree)');
+  // every m:ss.s in the reason is a chip: click it and the picture parks there (I7.2)
+  $('#why').innerHTML = chips(escapeHtml(p.why || (F.mode === 'bin' ? '' : '(no reason — the witnesses did not agree)')), p);
   $('#conflict').textContent = p.conflict ? `· ${p.conflict}` : '';
   $('#rank').innerHTML = F.mode === 'bin' ? ''
     : `rank ${p.rank} · ${p.kind || ''} · <span class="key">E</span> evidence in full`;
@@ -483,8 +586,33 @@ function paintTape() {
   const dur = p.duration || 1;
   const mine = F.picks.filter((q) => q.clip === p.clip);
   const felt = mine.flatMap((q) => (q.witnesses || []).filter((w) => w.kind === 'felt'));
+  // What the look pass read (I7.2): a tick per sampled frame under the ruler, the ones a
+  // `seen` witness of this pick cites brighter and taller, and the count in the label. A
+  // clip never looked at says so; a wire that does not say leaves the tape as it was.
+  const looked = $('#tapeLooked');
+  looked.innerHTML = '';
+  const l = lookedOf(p);
+  let lookedLbl = '';
+  if (l === null) lookedLbl = ' · not looked at yet';
+  else if (l) {
+    const frames = (l.frames || []).filter(Number.isFinite);
+    const cited = citedFrames(p);
+    frames.forEach((t) => {
+      const s = document.createElement('span');
+      s.dataset.t = r2(t);
+      s.style.left = `${(100 * t / dur).toFixed(2)}%`;
+      if (cited.has(r2(t))) s.className = 'cited';
+      looked.appendChild(s);
+    });
+    const iv = Number(l.interval_s);
+    lookedLbl = ` · LOOKED · ${frames.length} frame${frames.length === 1 ? '' : 's'}`
+      + (iv ? ` · every ${iv} s` : '')
+      + (l.sheets != null ? ` · ${l.sheets} sheet${l.sheets === 1 ? '' : 's'}` : '');
+  }
+  $('#legendLooked').hidden = !l;
+  paintLookedLit();
   $('#tapeLbl').textContent = `WHOLE CLIP · ${stem(p.clip).toUpperCase()} · ${fmt(dur)}`
-    + (felt.length ? ' · telemetry' : '');
+    + (felt.length ? ' · telemetry' : '') + lookedLbl;
   const ruler = $('#tapeRuler');
   ruler.innerHTML = '';
   const step = rulerStep(dur);
@@ -718,6 +846,8 @@ function show(i, { autoplay = true } = {}) {
   F.base = [p.preview[0], p.preview[1]];
   F.note = p.note || '';
   F.whole = false;
+  F.until = null;
+  lit.hit = null;
   if (p.verdict) stamp(p.verdict, p.hero && p.verdict === 'pick');
   paintAll();
   if (autoplay) play(p.preview[0]); else park(p.preview[0]);
@@ -871,6 +1001,7 @@ async function undo() {
   F.base = [first.preview[0], first.preview[1]];
   F.note = entry.note;
   F.whole = false;
+  F.until = null;
   clearStamp();
   if (first.verdict) stamp(first.verdict, first.hero);
   paintAll();
@@ -971,6 +1102,7 @@ function seek(t) {
   const p = cur();
   if (!p) return;
   t = clampT(p, t);
+  F.until = null;                              // a hand-seek ends a band replay: the preview end governs again
   if (F.mode === 'pass' && (t < p.preview[0] - 0.01 || t > p.preview[1] + 0.01)) F.whole = true;
   if (F.playing && !pic().paused) play(t); else park(t);
 }
@@ -1485,14 +1617,17 @@ function toggleOverlay(kind, html) {
 
 function evidenceHtml() {
   const p = cur();
+  // the same chips as WHY and the witness lines (I7.2): every time is a link
   const rows = (p.witnesses || []).map((w) => `<div class="ev">
     <span class="s seal ${sealClass(w)}" style="display:inline-block;padding:2px 8px">${escapeHtml(sealLabel(w))}</span>
-    <div style="margin-top:4px">${escapeHtml(fmt(w.start))}–${escapeHtml(fmt(w.end))}${w.at != null ? ` · at ${fmt(w.at)}` : ''}
+    <div style="margin-top:4px">${chipHtml(w.start, fmt(w.start))}–${chipHtml(w.end, fmt(w.end))}${w.at != null ? ` · at ${chipHtml(w.at, fmt(w.at))}` : ''}
       ${w.score != null ? ` · score ${Number(w.score).toFixed(2)}` : ''}${w.notable ? ' · notable' : ''}</div>
-    <div>${escapeHtml(w.text || '')}</div>
+    <div>${chips(escapeHtml(w.text || ''), p)}${witnessExtra(w)}</div>
     <pre>${escapeHtml(JSON.stringify(w, null, 1))}</pre></div>`).join('');
+  const cover = coverageLine(p);
   return `<h2>Evidence <span class="hint">${escapeHtml(stem(p.clip))} ${fmt(p.start)}–${fmt(p.end)} · rank ${p.rank} · score ${Number(p.score || 0).toFixed(2)}</span></h2>
-    <div class="hint" style="margin-bottom:8px">${escapeHtml(p.why || '')}${p.conflict ? `<div class="bad">${escapeHtml(p.conflict)}</div>` : ''}</div>
+    <div class="hint" style="margin-bottom:8px">${chips(escapeHtml(p.why || ''), p)}${p.conflict ? `<div class="bad">${escapeHtml(p.conflict)}</div>` : ''}</div>
+    ${cover ? `<div id="evCover" class="hint" style="margin-bottom:8px;font:600 10.5px var(--mono)">${cover}</div>` : ''}
     ${rows || '<div class="hint">no witnesses</div>'}
     <div class="hint small" style="margin-top:10px">any verdict key closes this · <span class="key">E</span> / <span class="key">Esc</span> close</div>`;
 }
@@ -1503,7 +1638,9 @@ function keymapHtml() {
     ['U', 'later — the pile the closing card offers back'], ['1', 'hero — must appear in the first cut'],
     ['⇧X', 'reject the rest of this clip’s picks'], ['⌘Z', 'undo the last verdict, with its trim and note'],
     ['J K L', 'shuttle — K pauses'],
-    ['space', 'play / pause — pressed again where the band ended, it watches on past it'], ['[ ]', 'in-point to the previous / next sentence'],
+    ['space', 'play / pause — pressed again where the band ended, it watches on past it'],
+    ['0', 'restart the clip: play the whole clip from 0 (Home too) · ⇧0 restarts the band — from its start, stopping at its end'],
+    ['[ ]', 'in-point to the previous / next sentence'],
     ['{ }', 'out-point likewise — } extends to the reaction'], ['← →', 'frame step at the active edge (⇧ for a word)'],
     ['↵', 'skip for now — the next pick without a verdict · ⌫ back to the previous, decided or not'],
     ['V', 'hold to speak a note; N edits it'],
@@ -1511,6 +1648,7 @@ function keymapHtml() {
     ['T', 'compare takes — this clip’s other attempts at the same thing, side by side; P keeps one and rejects the rest'],
     ['?', 'this map'],
     ['drag', 'the green band’s edges trim it, its middle slides it · click a strip to seek, drag to scrub · click a mark on the tape to jump to that pick'],
+    ['a time', 'a timestamp in WHY, on a witness or in the evidence drawer is a link — click it to park the picture on that frame; the ticks under the tape’s ruler are every frame the look pass read'],
   ];
   return `<h2>The keys</h2><div class="keymap">${rows.map(([k, t]) =>
     `<div><span class="key">${escapeHtml(k)}</span><span>${escapeHtml(t)}</span></div>`).join('')}</div>`;
@@ -1525,9 +1663,31 @@ function moreHtml() {
 }
 
 function openWhole() {
+  restartClip();
+}
+
+/* `0` / Home (I7.3, Karl: "add a restart from beginning of clip in the pass"): from
+ * anywhere on the pass, the whole clip from 0 — the same as `.` O — with no stop at the
+ * preview end behind you. */
+function restartClip() {
+  const p = cur();
+  if (!p || F.mode !== 'pass') return;
   closeOverlay();
+  F.until = null;
   F.whole = true;
   play(0);
+}
+
+/* ⇧0: the band instead — from the kept range's start, stopping at its end (not the
+ * preview's, which a trim may have left elsewhere). The band itself does not move. */
+function restartBand() {
+  const p = cur();
+  if (!p || F.mode !== 'pass') return;
+  closeOverlay();
+  const [a, b] = keepRange().snapped;
+  F.whole = false;
+  F.until = b;
+  play(a);
 }
 
 /* ------------------------------------------------------------ the closing card */
@@ -1544,6 +1704,7 @@ async function closingCard() {
   }
   F.summary = d.summary;
   F.dictation = d.dictation;
+  if (d.looked) F.looked = d.looked;
   const seen = new Set(F.queue.map((p) => p.id));
   const fresh = undecided(d.picks);
   const arrivals = fresh.filter((p) => !seen.has(p.id));
@@ -1615,6 +1776,7 @@ async function switchOrder() {
     return toast(`could not re-read the bin: ${e.message}`, 5000);
   }
   F.card = { ...(F.card || {}), picks: d.picks };
+  if (d.looked) F.looked = d.looked;
   await nextRound();
 }
 
@@ -1714,6 +1876,12 @@ document.addEventListener('keydown', (e) => {
     if (k === 'x' && !e.shiftKey) return surveyReject();
     if (k === 't') return closeOverlay();
   }
+  // 0 / Home restart the clip, ⇧0 the band — from anywhere on the pass, any overlay open.
+  // By the physical key: ⇧0 arrives as ")" on a US layout and as something else elsewhere.
+  if (e.code === 'Digit0' || e.code === 'Numpad0' || k === '0' || k === 'Home') {
+    e.preventDefault();
+    return e.shiftKey ? restartBand() : restartClip();
+  }
 
   switch (k) {
     case 'p': return verdict('pick');
@@ -1774,6 +1942,22 @@ async function boot() {
     if (F.mode === 'card') return;
     if (F.playing && !pic().paused) pause(); else resume();
   });
+  // a timestamp chip anywhere — WHY, a witness, the drawer — parks the picture on its
+  // frame; hovering one lights its tick on the tape (I7.2)
+  document.addEventListener('click', (e) => {
+    const c = chipAt(e);
+    if (!c) return;
+    e.preventDefault();
+    e.stopPropagation();
+    goFrame(parseFloat(c.dataset.t));
+  });
+  document.addEventListener('mouseover', (e) => {
+    const c = chipAt(e);
+    if (c) { lit.hover = parseFloat(c.dataset.t); paintLookedLit(); }
+  });
+  document.addEventListener('mouseout', (e) => {
+    if (chipAt(e)) { lit.hover = null; paintLookedLit(); }
+  });
   const ta = $('#noteEdit');
   ta.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); const t = ta.value; closeNote(); setNote(t); }
@@ -1798,6 +1982,7 @@ async function boot() {
   F.order = pos.order === 'clip' ? 'clip' : 'rank';
   if (F.order === 'clip') picks = await getJSON('/api/picks?order=clip');
   F.picks = picks.picks;
+  F.looked = picks.looked || null;
   F.roundSize = picks.round_size || F.roundSize;
   F.summary = picks.summary;
   F.dictation = picks.dictation;
@@ -1813,7 +1998,7 @@ async function boot() {
 /* What the tests reach for; nothing else should. */
 window.floor = {
   state: F, current: cur, keepRange, show, advance, undo, playBin, seek,
-  dictSend, mic: dict, snapStart, snapEnd, words, utterances,
+  dictSend, mic: dict, snapStart, snapEnd, words, utterances, coverageLine, lit,
 };
 
 boot();

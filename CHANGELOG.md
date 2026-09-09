@@ -33,6 +33,30 @@ same commit. Releases move entries into a dated version section.
   keyframe. Decision 5 in INTAKE: a clip's start and end stay adjustable after effects.
   A claim the sheet's own rules demoted reaches the pass with no event kind and its reason
   on the line (`— not a claim: hedged wording`), so it lifts nothing and says why.
+- **INTAKE M7 — I7.2 and I7.3 ticked** with the commits that prove them (`df0e2d2` the
+  looked-at ticks and jumpable times, `453e43c` the restart keys; `test_floor_ui.py` 27
+  passed, suite 374 passed, 1 skipped) and the next human look on Killington.
+- **`0` restarts the clip on the pass; `⇧0` restarts the band (INTAKE I7.3).** Karl's
+  third report: *"add a restart from beginning of clip in the pass /floor."* From anywhere
+  on the pass — any overlay open — `0` (and `Home`) plays the whole clip from 0 with no
+  stop at the preview end behind you (the same as `.` O); `⇧0` plays the kept range from
+  its start and stops at its end, wherever a trim left it, and never moves the band. Both
+  in the `?` map; the tape's label mentions `0`; the six-key line is unchanged.
+  `test_floor_ui.py` 27 passed (1 new).
+- **The pass shows what the look pass read, and every time is a link (INTAKE I7.2).**
+  Karl's third report: *"indicate how much of the clip was indexed by keyframe … the
+  indexed keyframes should be referenced in the why and timestamps should be jumpable."*
+  On the WHOLE CLIP tape a thin tick under the ruler at every frame the look pass sampled
+  (`/api/picks` `looked` per clip), the frames a `seen` witness of this pick cites brighter
+  and taller, the count in the tape's label (`LOOKED · 80 frames · every 4 s · 3 sheets`,
+  or `not looked at yet`) and a line in the margin legend. In WHY, on each witness line
+  and in the evidence drawer every `m:ss.s` — and a witness's cited `frames` (`· frames
+  2:20 · 2:24`, with its `confidence`) — is a chip: click it and the picture parks on that
+  frame (paused, the strip re-centred, the whole clip opened if it lies outside the
+  preview), hover it and its tick lights on the tape. The drawer adds one line per pick:
+  `this window: 4 of 4 frames looked at`, so a claim with no frame under it reads as
+  what it is. A pick without `looked` or `frames` renders as before. `test_floor_ui.py`
+  26 passed (1 new).
 - **INTAKE ticks I5.3's slider and I5.4** — the tracker names the commits and their
   verification (`621925a` the slider, `aaf43df` the picker; `test_open_ui.py` 15 passed,
   suite 362 passed, 1 skipped).

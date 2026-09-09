@@ -810,6 +810,169 @@ def test_more_opens_the_whole_clip_and_says_what_is_not_built(page):
     playing_at(page, 1.5)                            # past the preview end, still going
 
 
+# ------------------------------------------------ what was looked at (I7.2)
+
+LOOKED = {"interval_s": 2, "frames": [0, 2, 4], "sheets": 1, "prompt_version": 2}
+
+
+def inject_looked(page, looked=LOOKED, frames=(2, 4),
+                  why="a skier leaves the lip at 0:02.0 and lands at 0:04.0"):
+    """The look pass's word on the synthetic bin, put into the page by hand: the bin has
+    no visual sidecar, so `/api/picks` cannot say it. CLIP_A was read every 2 s (three
+    frames), CLIP_B never; CLIP_A's pick gains a `seen` witness citing two of the frames
+    and a reason that names two times."""
+    page.evaluate("""([looked, frames, why]) => {
+        floor.state.looked = { 'CLIP_A.MP4': looked, 'CLIP_B.MP4': null };
+        const p = floor.state.queue[0];
+        p.why = why;
+        p.witnesses = p.witnesses.filter((w) => w.kind !== 'seen');
+        p.witnesses.push({ kind: 'seen', start: 1.0, end: 5.0, at: 2.0, text: 'a skier leaves the lip',
+                           state: 'claimed', event_kind: 'jump', score: 0.7, frames, confidence: 'high' });
+        floor.show(0, { autoplay: false });
+    }""", [looked, list(frames), why])
+    page.wait_for_function("document.querySelector('#pic').paused")
+
+
+def looked_ticks(page) -> list[tuple[float, str]]:
+    return [tuple(x) for x in page.evaluate(
+        "[...document.querySelectorAll('#tapeLooked span')]"
+        ".map((s) => [parseFloat(s.style.left), s.className])")]
+
+
+def lit_ticks(page) -> list[str]:
+    return page.evaluate("[...document.querySelectorAll('#tapeLooked span.lit')].map((s) => s.dataset.t)")
+
+
+def test_the_tape_shows_what_was_looked_at_and_every_time_is_a_link(page):
+    """I7.2, Karl's third report: "indicate how much of the clip was indexed by keyframe …
+    the indexed keyframes should be referenced in the why and timestamps should be
+    jumpable". The tape carries a tick per sampled frame, the two a witness cites brighter;
+    the label counts them; WHY and the witness line turn every time into a chip that parks
+    the picture on that frame and lights its tick; the drawer says how many frames sit
+    under this pick's window. A clip never looked at says so; a wire that does not say
+    leaves the tape as it was."""
+    # before anything is injected: the old contract — no ticks, no label, no legend line
+    assert page.locator("#tapeLooked span").count() == 0
+    assert "LOOKED" not in page.locator("#tapeLbl").inner_text()
+    assert page.locator("#legendLooked").is_hidden()
+    assert page.locator("#why .chip").count() == 0
+    inject_looked(page)
+    # three ticks at 0, 2 and 4 of 6 s; the ones a witness cites are marked
+    assert looked_ticks(page) == [(0.0, ""), (33.33, "cited"), (66.67, "cited")]
+    assert "LOOKED · 3 frames · every 2 s · 1 sheet" in page.locator("#tapeLbl").inner_text()
+    assert page.locator("#legendLooked").is_visible()
+    assert "look pass" in page.locator("#legend").inner_text()
+    # WHY: the two times are chips
+    why_chips = page.locator("#why .chip")
+    assert why_chips.count() == 2
+    assert [why_chips.nth(k).inner_text() for k in range(2)] == ["0:02.0", "0:04.0"]
+    # the witness line: its frames after the text, and how sure the pass was
+    seal = page.locator("#seals .seal", has_text="SEEN")
+    assert seal.count() == 1
+    assert "frames" in seal.inner_text() and "high confidence" in seal.inner_text()
+    frame_chips = seal.locator(".chip")
+    assert [frame_chips.nth(k).get_attribute("data-t") for k in range(frame_chips.count())] == ["2", "2", "4"]
+    assert frame_chips.nth(1).inner_text() == "0:02" and frame_chips.nth(2).inner_text() == "0:04"
+    # a chip clicked: parked on that frame, paused, its tick lit
+    why_chips.nth(1).click()
+    page.wait_for_function("Math.abs(document.querySelector('#pic').currentTime - 4) < 0.1")
+    assert page.evaluate("document.querySelector('#pic').paused")
+    assert lit_ticks(page) == ["4"]
+    assert page.evaluate("floor.state.whole") is False, "4 s is inside the preview"
+    # hovering a chip lights its tick too, and unlights it when the pointer leaves
+    why_chips.nth(0).hover()
+    assert sorted(lit_ticks(page)) == ["2", "4"]
+    page.mouse.move(5, 5)
+    assert lit_ticks(page) == ["4"]
+    # the evidence drawer: the same chips, and how much of this window was looked at —
+    # the frames at 0, 2 and 4 of the three the 2 s interval puts in 0–6
+    page.keyboard.press("e")
+    page.wait_for_selector("#overlay[data-kind=evidence]")
+    cover = page.locator("#evCover")
+    assert cover.inner_text().startswith("this window: 3 of 3 frames looked at · every 2 s")
+    assert cover.locator(".chip").count() == 3
+    assert page.locator("#overlayBox .chip").count() >= 3 + 2 + 3   # cover + WHY + the witness's
+    # a chip in the drawer closes it and parks the picture, so the frame can be seen
+    cover.locator(".chip").nth(1).click()
+    assert page.locator("#overlay").is_hidden()
+    page.wait_for_function("Math.abs(document.querySelector('#pic').currentTime - 2) < 0.1")
+    assert lit_ticks(page) == ["2"]
+    # a window the grid reaches but no sampled frame does, and one the grid skips: the
+    # drawer says nothing is under the claim either way
+    assert page.evaluate("floor.coverageLine({ clip: 'CLIP_A.MP4', start: 5.5, end: 6.5 })") \
+        == "this window: 0 of 1 frames looked at — nothing under the claim"
+    assert page.evaluate("floor.coverageLine({ clip: 'CLIP_A.MP4', start: 2.5, end: 3.5 })").startswith(
+        "this window: no frame falls in it")
+    # CLIP_B was never looked at: the tape and the drawer say so
+    page.evaluate("floor.show(1, { autoplay: false })")
+    assert page.locator("#tapeLooked span").count() == 0
+    assert "not looked at yet" in page.locator("#tapeLbl").inner_text()
+    assert page.locator("#legendLooked").is_hidden()
+    page.keyboard.press("e")
+    page.wait_for_selector("#overlay[data-kind=evidence]")
+    assert "this window: not looked at yet" in page.locator("#evCover").inner_text()
+    page.keyboard.press("Escape")
+    # the map says a time is a link
+    page.keyboard.press("?")
+    page.wait_for_selector("#overlay[data-kind=keymap]")
+    assert "click it to park the picture" in page.locator("#overlayBox").inner_text()
+
+
+# --------------------------------------------- restart from the beginning (I7.3)
+
+def test_0_restarts_the_clip_and_shift_0_restarts_the_band(page):
+    """I7.3, Karl: "add a restart from beginning of clip in the pass". `0` (and Home)
+    from mid-clip: the whole clip plays from 0 — no stop at the preview end behind you.
+    `⇧0`: the band instead — trimmed by hand to 2.15–4.45, it plays from 2.15 and stops
+    at 4.45 on its own, not at the preview's 6.0 — and the band does not move."""
+    playing_at(page, 1.0)
+    page.keyboard.press("0")
+    page.wait_for_function(
+        "document.querySelector('#pic').currentTime < 0.3 && !document.querySelector('#pic').paused",
+        timeout=5000)
+    assert page.evaluate("floor.state.whole") is True
+    playing_at(page, 0.8)
+    page.keyboard.press("Home")
+    page.wait_for_function(
+        "document.querySelector('#pic').currentTime < 0.3 && !document.querySelector('#pic').paused",
+        timeout=5000)
+    # the band: in to the second line's start, out to the first line's end
+    paused_at(page)
+    page.keyboard.press("]")
+    page.keyboard.press("]")
+    page.keyboard.press("{")
+    assert page.evaluate("floor.keepRange().snapped") == [2.15, 4.45]
+    page.keyboard.press("Shift+0")
+    page.wait_for_function(
+        "document.querySelector('#pic').currentTime >= 2.1 && document.querySelector('#pic').currentTime < 2.9"
+        " && !document.querySelector('#pic').paused", timeout=5000)
+    assert page.evaluate("floor.state.whole") is False
+    page.wait_for_function("document.querySelector('#pic').paused", timeout=8000)
+    t = page.evaluate("document.querySelector('#pic').currentTime")
+    assert 4.3 <= t < 4.7, "stopped at the band's end, not the preview's"
+    assert page.evaluate("floor.keepRange().snapped") == [2.15, 4.45], "replaying is not trimming"
+    # space at the band's end watches on, as it does at the preview's
+    page.keyboard.press("Space")
+    playing_at(page, 4.8)
+    assert page.evaluate("floor.state.whole") is True
+    # from the evidence drawer too: 0 closes it and restarts
+    paused_at(page)
+    page.keyboard.press("e")
+    page.wait_for_selector("#overlay[data-kind=evidence]")
+    page.keyboard.press("0")
+    assert page.locator("#overlay").is_hidden()
+    page.wait_for_function(
+        "document.querySelector('#pic').currentTime < 0.3 && !document.querySelector('#pic').paused",
+        timeout=5000)
+    # the hint by the strips and the map say so; the six-key line is untouched
+    assert "restarts the clip" in page.locator("#tape .strip-lbl.right").inner_text()
+    assert page.locator("#keys .key").count() == 10
+    page.keyboard.press("?")
+    page.wait_for_selector("#overlay[data-kind=keymap]")
+    full = page.locator("#overlayBox").inner_text()
+    assert "restart the clip" in full and "⇧0 restarts the band" in full
+
+
 # ----------------------------------------------------------------- dictation
 
 def test_holding_V_records_posts_and_falls_back_to_N_on_501(page, monkeypatch):
