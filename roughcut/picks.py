@@ -127,17 +127,25 @@ def seen_witnesses(clip: str, events: Iterable[dict]) -> list[dict]:
         status = why.get("confirmation", "unseen")
         state = STATE_BY_CONFIRMATION.get(status, "claimed")
         at = why.get("peak_at") if why.get("corroboration_z", 0) >= 2.0 else e["start"]
+        demoted = str(e.get("demoted") or "")
+        text = str(e.get("what", "")).strip()
+        # A claim the sheet's own rules demoted (hedged, no frame, too long for a jump)
+        # is shown, but it is not an event: no kind to lift a pick by, and the reason
+        # on the line so the pass can say why it does not count.
+        if demoted:
+            text = f"{text} — not a claim: {demoted}"
         out.append({"kind": "seen", "clip": clip, "start": float(e["start"]),
                     "end": float(e["end"]), "at": round(float(at), 2),
-                    "text": str(e.get("what", "")).strip(), "state": state,
-                    "event_kind": str(e.get("kind", "")), "notable": bool(e.get("notable")),
+                    "text": text, "state": state,
+                    "event_kind": "" if demoted else str(e.get("kind", "")),
+                    "notable": bool(e.get("notable")),
                     "score": float(e.get("score") or 0.0), "rank": e.get("rank"),
                     # The sampled frames the sheet named for this claim (Karl: "the
                     # indexed keyframes should be referenced in the why"); empty on a
                     # sidecar written before the pass cited frames.
                     "frames": [round(float(f), 2) for f in (e.get("frames") or [])],
                     "confidence": str(e.get("confidence") or ""),
-                    "demoted": str(e.get("demoted") or "")})
+                    "demoted": demoted})
     return out
 
 
@@ -247,7 +255,7 @@ def _pick_from(clip: str, group: list[dict], duration: float,
     else:
         preview = [round(max(start, anchor - PREVIEW_HALF_S), 2),
                    round(min(end, anchor + PREVIEW_HALF_S), 2)]
-    kind = (max(agreeing_seen, key=lambda w: w["score"])["event_kind"]
+    kind = ((max(agreeing_seen, key=lambda w: w["score"])["event_kind"] or "seen")
             if agreeing_seen else "speech" if heard else "felt" if felt else "seen")
     return {
         "id": pick_id(clip, start, end), "clip": clip,

@@ -77,6 +77,14 @@ def test_a_seen_witness_carries_the_frames_it_rests_on_and_the_why_cites_them():
     old = picks.build(clips, [_event(20.0, 24.0, "confirmed", what="airborne")])
     assert old[0]["witnesses"][0]["frames"] == [] and old[0]["why"] == "airborne"
     assert picks.stamp(144.25) == "2:24.2" and picks.stamp(0) == "0:00.0"
+    # a claim the sheet's rules demoted is shown with its reason and lifts nothing
+    dem = _event(30.0, 30.0, "unseen", what="skier possibly airborne", score=0.1)
+    dem.update({"frames": [30.0], "confidence": "low", "notable": False,
+                "demoted": "hedged wording — a guess, not a claim"})
+    out = picks.build(clips, [dem])
+    w = out[0]["witnesses"][0]
+    assert w["event_kind"] == "" and w["text"].endswith("not a claim: hedged wording — a guess, not a claim")
+    assert out[0]["kind"] == "seen", "no event kind to lift the pick by"
 
 
 def test_overlapping_witnesses_merge_into_one_pick_with_corroboration():

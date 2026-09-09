@@ -31,6 +31,8 @@ same commit. Releases move entries into a dated version section.
   `/api/picks` carries `looked` per clip — the sample times the look pass read, the sheet
   count and the prompt version — so the pass can show how much of a clip was indexed by
   keyframe. Decision 5 in INTAKE: a clip's start and end stay adjustable after effects.
+  A claim the sheet's own rules demoted reaches the pass with no event kind and its reason
+  on the line (`— not a claim: hedged wording`), so it lifts nothing and says why.
 - **INTAKE ticks I5.3's slider and I5.4** — the tracker names the commits and their
   verification (`621925a` the slider, `aaf43df` the picker; `test_open_ui.py` 15 passed,
   suite 362 passed, 1 skipped).
