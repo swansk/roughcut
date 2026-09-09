@@ -10,6 +10,13 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **`0` restarts the clip on the pass; `⇧0` restarts the band (INTAKE I7.3).** Karl's
+  third report: *"add a restart from beginning of clip in the pass /floor."* From anywhere
+  on the pass — any overlay open — `0` (and `Home`) plays the whole clip from 0 with no
+  stop at the preview end behind you (the same as `.` O); `⇧0` plays the kept range from
+  its start and stops at its end, wherever a trim left it, and never moves the band. Both
+  in the `?` map; the tape's label mentions `0`; the six-key line is unchanged.
+  `test_floor_ui.py` 27 passed (1 new).
 - **The pass shows what the look pass read, and every time is a link (INTAKE I7.2).**
   Karl's third report: *"indicate how much of the clip was indexed by keyframe … the
   indexed keyframes should be referenced in the why and timestamps should be jumpable."*

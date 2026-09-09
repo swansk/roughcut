@@ -91,6 +91,7 @@ const F = {
   gen: 0,                  // play commands; a deferred callback that finds it moved does nothing
   playing: false,
   whole: false,            // `.` opened the whole clip: no stop at the preview end
+  until: null,             // ⇧0 replays the band: playback stops here instead of the preview end
   shuttle: 0,              // J: negative rate driven by the tick; L: positive playbackRate
   bin: null,               // {list, k} while the closing card plays the bin
   writes: 0,               // completed writes — the tests wait on this
@@ -394,13 +395,14 @@ function park(t) {
 }
 
 /* Where playback stops on its own: the preview end, unless the whole clip was opened
- * (`.` O, a seek outside the band, or space pressed again at the band's end); in the bin,
- * the select's end. */
+ * (`.` O, `0`, a seek outside the band, or space pressed again at the band's end) or ⇧0
+ * is replaying the band (its end); in the bin, the select's end. */
 function stopAt() {
   const p = cur();
   if (!p) return 0;
   if (F.mode === 'bin') return p.end;
   if (F.whole) return p.duration || Infinity;
+  if (F.until != null) return F.until;
   return p.preview[1];
 }
 
@@ -844,6 +846,7 @@ function show(i, { autoplay = true } = {}) {
   F.base = [p.preview[0], p.preview[1]];
   F.note = p.note || '';
   F.whole = false;
+  F.until = null;
   lit.hit = null;
   if (p.verdict) stamp(p.verdict, p.hero && p.verdict === 'pick');
   paintAll();
@@ -998,6 +1001,7 @@ async function undo() {
   F.base = [first.preview[0], first.preview[1]];
   F.note = entry.note;
   F.whole = false;
+  F.until = null;
   clearStamp();
   if (first.verdict) stamp(first.verdict, first.hero);
   paintAll();
@@ -1098,6 +1102,7 @@ function seek(t) {
   const p = cur();
   if (!p) return;
   t = clampT(p, t);
+  F.until = null;                              // a hand-seek ends a band replay: the preview end governs again
   if (F.mode === 'pass' && (t < p.preview[0] - 0.01 || t > p.preview[1] + 0.01)) F.whole = true;
   if (F.playing && !pic().paused) play(t); else park(t);
 }
@@ -1633,7 +1638,9 @@ function keymapHtml() {
     ['U', 'later — the pile the closing card offers back'], ['1', 'hero — must appear in the first cut'],
     ['⇧X', 'reject the rest of this clip’s picks'], ['⌘Z', 'undo the last verdict, with its trim and note'],
     ['J K L', 'shuttle — K pauses'],
-    ['space', 'play / pause — pressed again where the band ended, it watches on past it'], ['[ ]', 'in-point to the previous / next sentence'],
+    ['space', 'play / pause — pressed again where the band ended, it watches on past it'],
+    ['0', 'restart the clip: play the whole clip from 0 (Home too) · ⇧0 restarts the band — from its start, stopping at its end'],
+    ['[ ]', 'in-point to the previous / next sentence'],
     ['{ }', 'out-point likewise — } extends to the reaction'], ['← →', 'frame step at the active edge (⇧ for a word)'],
     ['↵', 'skip for now — the next pick without a verdict · ⌫ back to the previous, decided or not'],
     ['V', 'hold to speak a note; N edits it'],
@@ -1656,9 +1663,31 @@ function moreHtml() {
 }
 
 function openWhole() {
+  restartClip();
+}
+
+/* `0` / Home (I7.3, Karl: "add a restart from beginning of clip in the pass"): from
+ * anywhere on the pass, the whole clip from 0 — the same as `.` O — with no stop at the
+ * preview end behind you. */
+function restartClip() {
+  const p = cur();
+  if (!p || F.mode !== 'pass') return;
   closeOverlay();
+  F.until = null;
   F.whole = true;
   play(0);
+}
+
+/* ⇧0: the band instead — from the kept range's start, stopping at its end (not the
+ * preview's, which a trim may have left elsewhere). The band itself does not move. */
+function restartBand() {
+  const p = cur();
+  if (!p || F.mode !== 'pass') return;
+  closeOverlay();
+  const [a, b] = keepRange().snapped;
+  F.whole = false;
+  F.until = b;
+  play(a);
 }
 
 /* ------------------------------------------------------------ the closing card */
@@ -1846,6 +1875,12 @@ document.addEventListener('keydown', (e) => {
     if (k === 'p') return surveyPick();
     if (k === 'x' && !e.shiftKey) return surveyReject();
     if (k === 't') return closeOverlay();
+  }
+  // 0 / Home restart the clip, ⇧0 the band — from anywhere on the pass, any overlay open.
+  // By the physical key: ⇧0 arrives as ")" on a US layout and as something else elsewhere.
+  if (e.code === 'Digit0' || e.code === 'Numpad0' || k === '0' || k === 'Home') {
+    e.preventDefault();
+    return e.shiftKey ? restartBand() : restartClip();
   }
 
   switch (k) {

@@ -918,6 +918,61 @@ def test_the_tape_shows_what_was_looked_at_and_every_time_is_a_link(page):
     assert "click it to park the picture" in page.locator("#overlayBox").inner_text()
 
 
+# --------------------------------------------- restart from the beginning (I7.3)
+
+def test_0_restarts_the_clip_and_shift_0_restarts_the_band(page):
+    """I7.3, Karl: "add a restart from beginning of clip in the pass". `0` (and Home)
+    from mid-clip: the whole clip plays from 0 — no stop at the preview end behind you.
+    `⇧0`: the band instead — trimmed by hand to 2.15–4.45, it plays from 2.15 and stops
+    at 4.45 on its own, not at the preview's 6.0 — and the band does not move."""
+    playing_at(page, 1.0)
+    page.keyboard.press("0")
+    page.wait_for_function(
+        "document.querySelector('#pic').currentTime < 0.3 && !document.querySelector('#pic').paused",
+        timeout=5000)
+    assert page.evaluate("floor.state.whole") is True
+    playing_at(page, 0.8)
+    page.keyboard.press("Home")
+    page.wait_for_function(
+        "document.querySelector('#pic').currentTime < 0.3 && !document.querySelector('#pic').paused",
+        timeout=5000)
+    # the band: in to the second line's start, out to the first line's end
+    paused_at(page)
+    page.keyboard.press("]")
+    page.keyboard.press("]")
+    page.keyboard.press("{")
+    assert page.evaluate("floor.keepRange().snapped") == [2.15, 4.45]
+    page.keyboard.press("Shift+0")
+    page.wait_for_function(
+        "document.querySelector('#pic').currentTime >= 2.1 && document.querySelector('#pic').currentTime < 2.9"
+        " && !document.querySelector('#pic').paused", timeout=5000)
+    assert page.evaluate("floor.state.whole") is False
+    page.wait_for_function("document.querySelector('#pic').paused", timeout=8000)
+    t = page.evaluate("document.querySelector('#pic').currentTime")
+    assert 4.3 <= t < 4.7, "stopped at the band's end, not the preview's"
+    assert page.evaluate("floor.keepRange().snapped") == [2.15, 4.45], "replaying is not trimming"
+    # space at the band's end watches on, as it does at the preview's
+    page.keyboard.press("Space")
+    playing_at(page, 4.8)
+    assert page.evaluate("floor.state.whole") is True
+    # from the evidence drawer too: 0 closes it and restarts
+    paused_at(page)
+    page.keyboard.press("e")
+    page.wait_for_selector("#overlay[data-kind=evidence]")
+    page.keyboard.press("0")
+    assert page.locator("#overlay").is_hidden()
+    page.wait_for_function(
+        "document.querySelector('#pic').currentTime < 0.3 && !document.querySelector('#pic').paused",
+        timeout=5000)
+    # the hint by the strips and the map say so; the six-key line is untouched
+    assert "restarts the clip" in page.locator("#tape .strip-lbl.right").inner_text()
+    assert page.locator("#keys .key").count() == 10
+    page.keyboard.press("?")
+    page.wait_for_selector("#overlay[data-kind=keymap]")
+    full = page.locator("#overlayBox").inner_text()
+    assert "restart the clip" in full and "⇧0 restarts the band" in full
+
+
 # ----------------------------------------------------------------- dictation
 
 def test_holding_V_records_posts_and_falls_back_to_N_on_501(page, monkeypatch):
