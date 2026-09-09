@@ -10,6 +10,9 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **INTAKE M7 — I7.2 and I7.3 ticked** with the commits that prove them (`df0e2d2` the
+  looked-at ticks and jumpable times, `453e43c` the restart keys; `test_floor_ui.py` 27
+  passed, suite 374 passed, 1 skipped) and the next human look on Killington.
 - **`0` restarts the clip on the pass; `⇧0` restarts the band (INTAKE I7.3).** Karl's
   third report: *"add a restart from beginning of clip in the pass /floor."* From anywhere
   on the pass — any overlay open — `0` (and `Home`) plays the whole clip from 0 with no

@@ -324,6 +324,36 @@ weight until measured, and until then numbers only, never event names.
       number (needs the events file to carry per-window tilt; a follow-up once the 9 unlooked
       Killington clips have their close look).
 
+### M7 · Karl's third look at the pass (2026-09-08)
+
+- [x] **I7.2 — what was looked at, and jumpable frames.** Karl: *"Indicate how much of the
+      clip was indexed by keyframe — helps to debug / determine why it is good. The indexed
+      keyframes should be referenced in the why and timestamps should be jumpable."* — commit
+      `df0e2d2` (lane `agent/floor4`): on the WHOLE CLIP tape a tick under the ruler at every
+      frame the look pass read (`/api/picks` `looked[clip].frames`), the ones a `seen` witness
+      of this pick cites brighter and taller, the count in the tape's label (`LOOKED · N frames
+      · every 4 s · 3 sheets`, or `not looked at yet`), a legend line only when there is one;
+      every `m:ss.s` in WHY, on a witness line and in the evidence drawer is a chip — click
+      parks the picture on that frame through `seek` (paused, strip re-centred, whole clip
+      opened outside the preview) and lights its tick, hover lights it; a `seen` witness shows
+      its `frames` (`· frames 2:20 · 2:24`) and `confidence`; the drawer says `this window: N of
+      M frames looked at` (`0 of M — nothing under the claim` / `no frame falls in it` / `not
+      looked at yet`). A response without `looked` renders as before. Built against the lead's
+      contract by injecting `floor.state.looked` and witness `frames` (the synthetic bin has no
+      visual sidecar). Two calls where the brief was silent: the witness line's own leading
+      time is a chip too, and a chip clicked inside the drawer closes the drawer so the frame
+      shows. `test_floor_ui.py` 26 passed (1 new) · suite 373 passed, 1 skipped.
+- [x] **I7.3 — restart from the beginning of the clip.** Karl: *"add a restart from beginning
+      of clip in the pass /floor."* — commit `453e43c`: `0` (and `Home`), from anywhere on the
+      pass with any overlay open, plays the whole clip from 0 with `F.whole` set (the `.` O
+      path); `⇧0` replays the band — from the kept range's start, stopping at its end via a new
+      `F.until` that `stopAt` honours, cleared by `show`, `undo` and any hand-seek — and never
+      moves it. Matched on `e.code` (`Digit0` / `Numpad0`) since ⇧0 arrives as `)`. Both in the
+      `?` map; the tape's label mentions `0`; the six-key line is untouched. `test_floor_ui.py`
+      27 passed (1 new) · suite 374 passed, 1 skipped. **Next human look:** on Killington,
+      open CLIP_11's backflip, read the LOOKED count on the tape and see whether the frames the
+      witness cites sit under the jump; click a time in WHY; press `0` mid-clip, then `⇧0`.
+
 ## Lanes in flight
 
 | lane | branch / worktree | scope | state |
