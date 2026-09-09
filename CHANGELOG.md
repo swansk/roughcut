@@ -10,6 +10,20 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The pass shows what the look pass read, and every time is a link (INTAKE I7.2).**
+  Karl's third report: *"indicate how much of the clip was indexed by keyframe … the
+  indexed keyframes should be referenced in the why and timestamps should be jumpable."*
+  On the WHOLE CLIP tape a thin tick under the ruler at every frame the look pass sampled
+  (`/api/picks` `looked` per clip), the frames a `seen` witness of this pick cites brighter
+  and taller, the count in the tape's label (`LOOKED · 80 frames · every 4 s · 3 sheets`,
+  or `not looked at yet`) and a line in the margin legend. In WHY, on each witness line
+  and in the evidence drawer every `m:ss.s` — and a witness's cited `frames` (`· frames
+  2:20 · 2:24`, with its `confidence`) — is a chip: click it and the picture parks on that
+  frame (paused, the strip re-centred, the whole clip opened if it lies outside the
+  preview), hover it and its tick lights on the tape. The drawer adds one line per pick:
+  `this window: 4 of 4 frames looked at`, so a claim with no frame under it reads as
+  what it is. A pick without `looked` or `frames` renders as before. `test_floor_ui.py`
+  26 passed (1 new).
 - **INTAKE ticks I5.3's slider and I5.4** — the tracker names the commits and their
   verification (`621925a` the slider, `aaf43df` the picker; `test_open_ui.py` 15 passed,
   suite 362 passed, 1 skipped).
