@@ -246,6 +246,10 @@ same commit. Releases move entries into a dated version section.
   overlaps are one pick already, speech needs the shared theme.
 
 ### Changed
+- **Session 13 close-out (docs).** INTAKE M8 ticked in full (I8.1 the bin on the board, I8.2
+  the filter, I8.3 settings, I8.4 the cuts live check), "Where we are" says nothing is
+  deferred and names what waits on Karl and the design's stage two; the lanes table and the
+  verification log carry the four lanes and the 404-test run; HANDOFF's opener updated.
 - **Docs:** INTAKE's verification log records the 401-test run and the filter's live check on
   Killington.
 - **Settings defaults say the code's default.** `GET /api/settings`'s `defaults.budget_usd` echoed

@@ -55,18 +55,19 @@ until R11.
 
 ## Where we are
 
-_2026-09-08, end of session 11._ **M0–M7 all ticked.** Session 11 answered Karl's third
-report: the contact-sheet prompt is version 2 (the camera named, frames cited, hedges and
-28-second jumps demoted — `c43cd30`, `e95493f`), CLIP_04 re-read live and installed, the
-frames flow to the pass, and the floor shows `LOOKED · 80 frames · every 4 s · 3 sheets`,
-frame chips that park the picture, `0` / `⇧0` (merge `7ba33b6`). Decision 5 (start/end
-adjustable after effects) is recorded. Suite: **382 passed, 1 skipped**. Board live on
-`7ba33b6`. **Waiting on Karl:** (1) his look at the pass — the I7.2/I7.3 lines say what to
-check, and CLIP_04's jump at 3:44 is the one to open first; (2) Keep / Discard on the seven
-proposed themes on `/open`; (3) whether to **re-look the other 11 Killington clips with the
-new prompt** (~22 sheets ≈ $2 — the old sidecars still carry the glove-as-person claims on
-CLIP_07 and others; the pass shows them as `claimed`) and whether to resume the paused close
-looks (~$2). Deferred halves unchanged: I2.4's batch-reject filter, I5.3's workers + cap.
+_2026-09-13, end of session 13._ **M0–M8 all ticked, nothing deferred.** Session 13 answered
+Karl's "the cut board looks exactly the same as before": the bin is on the board (`kept`
+tab, the Project line, **Cut from the bin** — merge `4e6ab8a`), the pass has a filter with
+batch reject through it (`88cc105`), and the settings drawer with the budget cap and workers
+is on `/open` (`6dd9b51`, server `e28c231`); session 12's cuts control was checked live.
+Suite: **404 passed, 1 skipped**. Board live on `4e6ab8a`. **Karl has been using it:** the
+Killington bin holds 43 keeps and 50 rejects, 21 keeps are in the cut, the pass is on round 3,
+and he saved a cut of his own (`killington-future`). **Waiting on Karl:** his next numbered
+feature (item 2 — item 1 was cuts); whether to re-look the other 11 clips with the fixed
+sheet prompt (~$2); the paused close looks (~$2); the seven proposed themes on `/open`
+(Keep / Discard). **The next milestone the design already names:** Option B's stage two —
+the promoted timeline (drag-trim on the strip, lanes) and the Source/Program monitors — is
+the remaining part of the agreed editing-room redesign; it starts when Karl says so.
 
 ## Milestones
 
@@ -489,6 +490,10 @@ the two halves the tracker had deferred.
 | open3 | `agent/open3` | I5.3 slider, I5.4 picker | **merged** `4b4c441`; worktree removed |
 | takes | `agent/takes` | I2.8, I2.4 | **merged** `1e9f83e`; worktree removed |
 | floor4 | `agent/floor4` | I7.2, I7.3 | **merged** `7ba33b6`; worktree removed |
+| cuts | `agent/cuts` | Karl's feature 1 | **merged** `a4ea6bf` (session 12) |
+| settings | `agent/settings` | I8.3 UI | **merged** `6dd9b51`; worktree removed |
+| filter | `agent/filter` | I8.2 | **merged** `88cc105`; worktree removed |
+| binboard | `agent/binboard` | I8.1 | **merged** `4e6ab8a`; worktree removed |
 | open | `agent/open` · `../roughcut-wt/open` | I5.1, I5.3 | **merged** `6ba1ec0`; worktree removed |
 
 Lanes touch disjoint files by design: `bin` → `revise.py`, `selects.py`, tests; `floor` →
@@ -604,3 +609,9 @@ them. Every lane adds its own CHANGELOG bullet; integration keeps all of them.
   · clip CLIP_01 1 · CLIP_04 1` on the round in progress (round 3, two picks left — Karl has
   been culling); *claimed only* → HUD `2 of 2 match`, 7 tape marks dimmed, ↵ steps to the
   next matching pick, Esc clears. No verdict written.
+- 2026-09-13 · + binboard `4e6ab8a` · **404 passed, 1 skipped** (223.64 s). The bin live on
+  the board (headless, board on `4e6ab8a`): `GET /api/selects` says 43 moments · 0 heroes ·
+  50 rejected · 21 used · 5:11 strung out; the board opens on the `kept` tab with 43 rows
+  (`CLIP_01 · 0:37.6 → 0:44.3 · 6.7 s` …), 21 of them `in the cut · shot N` and 22 with
+  `+ add to cut`; the Project line reads `bin · 43 moments · 0 heroes · 5:11 if strung out ·
+  the pass →`; **Cut from the bin** is enabled. Nothing added, nothing asked.

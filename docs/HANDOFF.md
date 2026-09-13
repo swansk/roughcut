@@ -1,16 +1,18 @@
 # Handoff — read this first
 
-**Active workstream (2026-09-08): the intake — tracked in [docs/INTAKE.md](INTAKE.md).** Read
-that file first; it carries the decisions (five now — the fifth: a clip's start and end stay
-adjustable after effects), the milestones M0–M7 with their checkboxes, the lanes and where to
-pick up. The design it implements is in `docs/design/`. **State:** everything is ticked and
-live on Killington: `/open` (contact sheet, themes, slider, picker, one Index button),
-`/floor` (the pass: drag-trim, a verdict that moves on, compare takes, keyframe ticks and
-jumpable frames, `0` restarts), the unattended index, and a contact-sheet prompt that no
-longer calls a glove a backflip. **Next is Karl:** his look at the pass, Keep / Discard on the
-seven proposed themes, and whether to re-look the other 11 clips with the new prompt (~$2) —
-INTAKE's "Where we are" has the exact list. Everything below this line is the history that
-led there, and the editing-room roadmap.
+**Active workstream (2026-09-13): the intake and the editing room — tracked in
+[docs/INTAKE.md](INTAKE.md).** Read that file first; it carries the five decisions, the
+milestones M0–M8 with their checkboxes (all ticked, nothing deferred), the lanes and where to
+pick up. **State:** `/open` (contact sheet, themes, slider, picker, settings drawer, one Index
+button), `/floor` (the pass: drag-trim, verdicts that move on, compare takes, keyframe ticks,
+jumpable frames, `0` restarts, a filter with batch reject), the cut board with the **bin on
+it** (`kept` tab, Cut from the bin), the bin · cut switcher on every screen, the unattended
+index, and a sheet prompt that cites its frames — all live on Killington, where Karl has 43
+keeps and a cut of his own. **Next is Karl:** his numbered feature 2 (feature 1 was cuts),
+and the three spends waiting on his word (re-look 11 clips ~$2, close looks ~$2, the
+themes Keep/Discard). The remaining agreed design is Option B's stage two (promoted
+timeline, monitors) — INTAKE's "Where we are" says so. Everything below this line is the
+history that led there, and the editing-room roadmap.
 
 **Session 12 (2026-09-08, evening) — the first of Karl's new features: cuts.** *"Work on
 multiple projects at the same time … switching easily between projects, and saving copies so
