@@ -33,6 +33,29 @@ same commit. Releases move entries into a dated version section.
   `budget_cap()`: the environment's `ROUGHCUT_BUDGET_USD` if set, else the saved setting, else
   the default — so a production pin still wins. Workers apply to the journal at the next run.
   `test_settings.py` 3 tests. The drawer on `/open` lands with the settings lane.
+- **A filter on the pass, and batch reject through it** (I2.4's other half: *"batch reject
+  via filter"* — a round of 40 on Killington carries ten silent scenery claims and six
+  unaudited sheet claims an editor wants gone in one gesture, not forty). `/` opens a
+  filter line under the HUD: chips for every **kind** in this round with its count (jump ·
+  fall · speech · …), four **states** (*undecided* · *claimed only* = a sheet claim nobody
+  audited and nobody heard · *has words* · *has telemetry*), the **clips** in the round, and a
+  box for a word that matches the reason and every witness's text, case-insensitively.
+  Chips of one group OR, groups AND. While a filter is on the HUD says `12 of 40 match`, the
+  tape dims the marks outside it, `↵` / `⌫` step only through what matches (the queue is
+  never changed — the round stays frozen), and the pass moves to the first matching
+  undecided pick when this one falls outside. `⇧X` then asks once in the HUD (`reject 12
+  picks? ⇧X again · Esc`) and rejects every undecided matching pick — one `POST
+  /api/floor/verdict` per pick in queue order with `why: filtered out: <the filter in
+  words>`, one undo entry for the lot, so one `⌘Z` brings them all back and lands on the
+  first — then clears the filter and moves on to the next undecided pick. `⇧U` does the
+  same with `later`. Without a filter `⇧X` keeps its meaning (the rest of this clip) and
+  `⇧U` gains the same for `later`. `Esc` clears the filter; the six-key line is untouched
+  and the map gains `/`, `⇧U` and `⇧X`'s second meaning. Four browser tests: a kind narrows
+  the count, the marks and the stepping; the box matches a witness line and the terms AND
+  together; `⇧X` with a filter asks, writes exactly the matching undecided verdicts with the
+  reason, leaves decided and non-matching picks alone, one `⌘Z` restores all, `⇧U` likewise;
+  `⇧X` without a filter still rejects the rest of the clip. (`262e301`; INTAKE I2.4 amended
+  and I8.2 ticked under M8.)
 - **One bin, several cuts — open, switch, save a copy** (Karl, 2026-09-08: *"work on
   multiple projects at the same time … switching easily between projects, and saving copies
   so we can try different things"*). The header of every screen now carries the bin **and the

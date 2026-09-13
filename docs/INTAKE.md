@@ -193,8 +193,9 @@ looks (~$2). Deferred halves unchanged: I2.4's batch-reject filter, I5.3's worke
       `← →` choose, `↵` or a click goes there, `P` keeps one and rejects the cluster's other
       undecided takes one POST each with `why: other take of <cluster>` in one undo entry,
       `X` rejects the chosen take only, `Esc` closes; `T` row in the `?` map). The
-      batch-reject-via-filter half of the item is not built: there is no filter on the
-      floor yet (kind / source / theme) — it goes with the filter when one exists.
+      batch-reject-via-filter half was built later, in session 12 — see I8.2 under M8
+      (`262e301` on `agent/filter`: `/` opens the filter line, `⇧X` / `⇧U` reject / later
+      every undecided pick that matches, one undo entry).
       `test_picks.py` 12 passed (3 new) · `test_floor_ui.py` 25 passed (1 new) · suite 356
       passed, 1 skipped. **Gap for the bin lane:** `selects.apply_verdict` keeps only `note`
       on a reject/later, so the reject's reason is on the wire but not in the EDL — one
@@ -399,8 +400,34 @@ the two halves the tracker had deferred.
 
 - [ ] I8.1 The `kept` tab on the board's "Add a moment" + **Cut from the bin** — lane
       `agent/binboard`.
-- [ ] I8.2 Batch reject via a filter on the pass (`/`, `⇧X` / `⇧U` over the filtered set, one
-      undo entry) — lane `agent/filter`.
+- [x] **I8.2 — I2.4's other half: batch reject via a filter on the pass.** — commit
+      `262e301` on `agent/filter`. `/` opens a filter line under the HUD (the six-key line
+      untouched): chips for every kind in this round with its count, four states
+      (*undecided* · *claimed only* = a `seen` witness with no audited state and no heard
+      witness · *has words* · *has telemetry*), the clips in the round, and a box for a word
+      matched case-insensitively against the reason, the conflict, every witness's text and
+      the tags (no tokeniser exists on the floor to reuse). Chips of one group OR, groups
+      AND. With a filter on: the HUD says `N of M match`, the tape dims the marks outside
+      it, `↵` / `⌫` step only through what matches (the queue is never changed — rule 3),
+      and the pass parks on the first matching undecided pick when this one falls outside.
+      `⇧X` asks once in the HUD (`reject N picks? ⇧X again · Esc`), then one `POST
+      /api/floor/verdict` per undecided matching pick in queue order with `why: filtered
+      out: <the filter in words>` (e.g. `filtered out: kind jump · claimed only`), one undo
+      entry for the lot (`⌘Z` brings every one back and lands on the first), the filter
+      clears, the pass moves on to the next undecided pick. `⇧U` likewise with `later`.
+      Without a filter `⇧X` keeps its meaning (the rest of this clip) and `⇧U` gains the
+      same for `later`. Map rows for `/`, `⇧U`, `⇧X` (both meanings). Decisions where the
+      spec was silent: a filter's own move parks rather than plays; `↵` past the last match
+      toasts and stays (the card is for a finished round); the first `Esc` drops a pending
+      confirm, the next clears the filter; a modifier key on its own never drops the
+      confirm; the switcher's `Esc` is honoured first. Tests inject two more picks through
+      `floor.state` as the takes lane did (a claimed-only `jump` in CLIP_A, a `fall` with a
+      felt number in CLIP_B), the real A and B picks cut short so no two picks in a clip
+      share seconds — `apply_verdict` replaces whatever was said about a range's seconds.
+      `test_floor_ui.py` 31 passed (4 new) · suite 395 passed, 1 skipped. **Next human
+      look:** on Killington, press `/`, click *claimed only*, read the count against the
+      round, `↵` through a few, then `⇧X` twice and `⌘Z` once — every one should come back
+      and the pass land on the first.
 - [x] I8.3 Workers + cap in settings — **server side** the lead's `e28c231` (`GET/PUT
       /api/settings`, `budget_cap()`, workers applied at the next index run). **The drawer**
       on `/open`, `c06f360` (lane `agent/settings`): a gear next to **Index the footage**
