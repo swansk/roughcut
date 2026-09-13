@@ -56,6 +56,39 @@ same commit. Releases move entries into a dated version section.
   reason, leaves decided and non-matching picks alone, one `⌘Z` restores all, `⇧U` likewise;
   `⇧X` without a filter still rejects the rest of the clip. (`262e301`; INTAKE I2.4 amended
   and I8.2 ticked under M8.)
+- **INTAKE M8 · I8.1 ticked** — the pass visibly feeds the cut board (Option B, stage 1):
+  commits `39fbfe4` (the `kept` tab, the Project line, `N heroes waiting`) and `2d71140`
+  (*Cut from the bin*), with the two calls made where the brief was silent and the next
+  human look on Killington. Docs only.
+- **Cut from the bin** — a second button under the Ask's note, and beside *Ask for a first
+  cut* when the timeline is empty (the panel is hidden there, and it is where someone
+  arriving from the pass lands). The same Ask with a fixed note — *build the cut from the
+  editor's selects: every hero must appear, use the other keeps where they serve the story,
+  and take nothing else unless it is needed to make a keep land* — and the current story,
+  then the usual proposal / accept / discard loop; the prompt already carries the bin
+  (`revise.py`'s *The editor's selects*), so this is the one click that asks for exactly
+  that instead of a sentence somebody has to know to type. Disabled with a hint while the
+  bin is empty. The fixed note is the app's words, not the editor's, so unlike a typed
+  first-cut note it never becomes the story. `test_ui_flow.py` 45 passed (1 new).
+- **The bin on the board — a `kept` tab under "Add a moment"** (Karl, 2026-09-08, after
+  using the pass: *"what should I expect going from the pass to the cut board here? Cut
+  board looks exactly the same as before."*). The pass wrote keeps into the EDL's `selects`
+  and the board showed nothing of it — the bin reached the cut only through the Ask's
+  prompt. Option B's Source panel, first stage, on the board as it is: **kept** is the first
+  tab and the one the library opens on when the bin has keeps — one row per keep, heroes
+  first then by clip and start, a still at its start, `CLIP_04 · 3:44.0 → 3:48.2 · 4.2 s`,
+  `★ HERO`, the pass's reason (with its `(frames …)`) and the editor's note in quotes, and
+  either *in the cut · shot N* (click selects the shot) or *+ add to cut*, which inserts a
+  shot with the keep's range and reason after the selected one, the way the heard/seen rows
+  do, and saves straight away so the bin learns the use. *In the cut* is decided on the
+  board against the live timeline with `used_in`'s own rule (half the shorter range), so a
+  row flips the moment a keep is added and un-flips when its shot is removed. A keep whose
+  footage left says so and cannot be added; an empty bin says *nothing kept yet — the pass
+  is where you keep things* with a link to `/floor`. The Project panel gets one line from
+  the server's summary — `bin · 7 moments · 2 heroes · 1:12 if strung out` — and the Steps
+  strip's *first cut* says `N heroes waiting` while a hero the pass kept is not in the cut.
+  The bin is re-read when the tab is shown and after every save while it is up.
+  `test_ui_flow.py` 44 passed (2 new) · suite 393 passed, 1 skipped.
 - **One bin, several cuts — open, switch, save a copy** (Karl, 2026-09-08: *"work on
   multiple projects at the same time … switching easily between projects, and saving copies
   so we can try different things"*). The header of every screen now carries the bin **and the

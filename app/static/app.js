@@ -17,6 +17,7 @@ let segs = [];                // working segment list
 let sel = 0;
 let nRenders = 0;
 let renderList = [];          // the versions list, kept so it can be repainted on edit
+let bin = null;               // GET /api/selects — what the pass kept, and its summary
 const undoStack = [];
 
 const $ = (s) => document.querySelector(s);
@@ -749,10 +750,18 @@ function emptyState() {
     <textarea id="firstNote" style="margin-top:12px;min-height:60px"
       placeholder="a 2–3 minute edit of the trip for the friends who were there · loose and fun · the people are the point"></textarea>
     <button id="firstCut" class="primary" style="margin-top:10px">Ask for a first cut</button>
+    <button id="firstFromBin" style="margin-top:10px;margin-left:8px;display:none"
+      title="One Ask with a fixed note: every hero appears, the other keeps serve the story, nothing else unless a keep needs it — a proposal to accept or discard">Cut from the bin</button>
     <div class="hint" id="firstState" style="margin-top:8px"></div>${look}`;
   el.querySelector('#firstCut').onclick = () => ask({
     note: el.querySelector('#firstNote').value.trim(),
     button: el.querySelector('#firstCut'),
+    state: el.querySelector('#firstState'),
+  });
+  // The Ask panel is hidden here, and here is where someone arriving from the pass
+  // lands — so the bin's button lives in the empty state too (shown when there is a bin).
+  el.querySelector('#firstFromBin').onclick = () => cutFromBin({
+    button: el.querySelector('#firstFromBin'),
     state: el.querySelector('#firstState'),
   });
   return el;
@@ -790,6 +799,7 @@ function render() {
   paintSteps();
   paintVersions();          // so "this cut" follows the timeline rather than the last fetch
   renderLibrary();
+  paintCutFromBin();        // the empty state is rebuilt above; its bin button follows
 }
 
 /* What the visual pass saw inside this shot, and any stretch it said not to use. */
@@ -850,13 +860,18 @@ function renderLibrary() {
     }
   }
   rows.sort((a, b) => b.score - a.score);
-  $('#libTabs').style.display = anySeen ? 'flex' : 'none';
-  if (!anySeen) libTab = 'heard';
+  // kept is always there — an empty bin has something to say — and seen only once
+  // something has been looked at.
+  $('#libTabs .tab[data-tab=seen]').style.display = anySeen ? '' : 'none';
+  if (!anySeen && libTab === 'seen') libTab = 'heard';
+  document.querySelectorAll('#libTabs .tab').forEach((x) =>
+    x.classList.toggle('sel', x.dataset.tab === libTab));
+  const lib = $('#library');
+  if (libTab === 'kept') { renderKept(lib); return; }
   $('#libHint').textContent = libTab === 'seen'
     ? (ranked.length ? 'What was seen, ranked — events first, confirmed above guessed.'
                      : 'What the visual pass saw, not yet in the cut — events first.')
     : 'Audio candidates not yet in the cut.';
-  const lib = $('#library');
   lib.innerHTML = rows.length ? '' : `<div class="hint">${libTab === 'seen'
     ? 'nothing left that was seen — or look at more of the footage (Project panel)'
     : 'nothing left to add'}</div>`;
@@ -881,6 +896,180 @@ function renderLibrary() {
     };
     lib.appendChild(d);
   });
+}
+
+/* The bin on the board — Option B's Source panel, first stage, on the board as it is.
+ *
+ * Karl, 2026-09-08, after using the pass: "what should I expect going from the pass to
+ * the cut board here? Cut board looks exactly the same as before." The pass wrote keeps
+ * into the EDL's `selects` and the board showed nothing of it — the bin reached the cut
+ * only through the Ask's prompt. Now it is the first tab under "Add a moment": one row
+ * per keep, a still, the pass's reason and the editor's note, and either where the keep
+ * is in the cut or the one click that puts it there.
+ *
+ * "In the cut" is decided here, against the live timeline, with the same rule the
+ * server's `selects.used_in` applies on save (the shot and the keep share half of the
+ * shorter one) — so a row flips the moment a keep is added, before the autosave lands,
+ * and un-flips the moment its shot is removed. */
+function overlapRatio(a, b) {
+  const shorter = Math.max(1e-6, Math.min(a[1] - a[0], b[1] - b[0]));
+  return Math.max(0, Math.min(a[1], b[1]) - Math.max(a[0], b[0])) / shorter;
+}
+
+function shotOf(s) {
+  return segs.findIndex((g) => g.clip === s.clip
+    && overlapRatio([s.start, s.end], [g.in, g.out]) >= 0.5);
+}
+
+/* The keeps the board can act on: footage present, and in the folder this board knows. */
+function keepsUsable() {
+  return ((bin && bin.selects) || []).filter((s) => !s.missing && P && P.clips[s.clip]);
+}
+
+function heroesWaiting() {
+  return keepsUsable().filter((s) => s.hero && shotOf(s) < 0);
+}
+
+/* Bin order: heroes first, then by clip and start — the order the prompt reads them in. */
+function binOrder(list) {
+  return [...list].sort((a, b) => (b.hero ? 1 : 0) - (a.hero ? 1 : 0)
+    || String(a.clip).localeCompare(String(b.clip)) || a.start - b.start);
+}
+
+function keepRow(s) {
+  const d = document.createElement('div');
+  d.className = 'keep' + (s.missing ? ' missing' : '');
+  const clip = P.clips[s.clip] || {};
+  const known = !s.missing && !!P.clips[s.clip];
+  const still = clip.poster ? `${clip.poster}?t=${Math.max(0, s.start).toFixed(2)}` : '';
+  const at = known ? shotOf(s) : -1;
+  const use = s.missing
+    ? '<span class="gone">footage missing — cannot be added until the clip is back</span>'
+    : !known
+      ? '<span class="gone">clip not analysed — cannot be added</span>'
+      : at >= 0
+        ? `<a href="#" class="use" data-shot="${at}" title="scroll to the shot">in the cut · shot ${at + 1}</a>`
+        : '<button class="use add">+ add to cut</button>';
+  d.innerHTML = `
+    ${still ? `<img class="still" loading="lazy" decoding="async" draggable="false"
+                   alt="${escapeHtml(stem(s.clip))} at ${s.start.toFixed(1)}s" src="${still}">`
+            : '<div class="still"></div>'}
+    <div>
+      <div class="t">${escapeHtml(stem(s.clip))} · ${fmt(s.start)} → ${fmt(s.end)}
+        · ${(s.end - s.start).toFixed(1)} s${s.hero ? '<span class="hero">★ HERO</span>' : ''}</div>
+      ${s.why ? `<span class="w">${escapeHtml(s.why)}</span>` : ''}
+      ${s.note ? `<span class="w note">“${escapeHtml(s.note)}”</span>` : ''}
+      ${use}
+    </div>`;
+  const link = d.querySelector('a.use');
+  if (link) {
+    link.onclick = (e) => {
+      e.preventDefault();
+      sel = Number(link.dataset.shot);
+      paint();
+      scrollSel();
+    };
+  }
+  const add = d.querySelector('button.add');
+  if (add) add.onclick = () => addKeep(s);
+  return d;
+}
+
+/* Insert a keep the way the heard/seen rows insert — after the selected shot, with the
+ * keep's own range and reason — then straight to disk, so the bin learns the use and
+ * the tab re-reads it. */
+function addKeep(s) {
+  pushUndo();
+  const at = sel + 1;
+  segs.splice(at, 0, { clip: s.clip, in: s.start, out: s.end, why: s.why || s.note || '' });
+  sel = at;
+  render();
+  toast(`added ${stem(s.clip)} @ ${s.start.toFixed(1)}s from the bin`);
+  save();                       // the kept tab is up, so save() re-reads the bin after
+}
+
+function renderKept(lib) {
+  const keeps = binOrder((bin && bin.selects) || []);
+  $('#libHint').textContent = keeps.length
+    ? 'What the pass kept — heroes first. One click to put a keep in the cut.'
+    : '';
+  lib.innerHTML = '';
+  if (!keeps.length) {
+    lib.innerHTML = `<div class="hint">nothing kept yet — the pass is where you keep
+      things · <a href="/floor" style="color:var(--accent)">the pass →</a></div>`;
+    return;
+  }
+  keeps.forEach((s) => lib.appendChild(keepRow(s)));
+}
+
+/* The Project panel's one line about the bin, from the server's own summary. */
+function paintBinLine() {
+  const el = $('#binLine');
+  if (!el) return;
+  const sm = bin && bin.summary;
+  if (!sm) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  const counts = sm.moments
+    ? [`${sm.moments} moment${sm.moments === 1 ? '' : 's'}`,
+       `${sm.heroes} hero${sm.heroes === 1 ? '' : 'es'}`,
+       `${clock(sm.strung_out_s || 0)} if strung out`]
+    : ['nothing kept yet'];
+  el.innerHTML = `bin · ${counts.join(' · ')} · <a href="/floor">the pass →</a>`;
+}
+
+async function fetchBin() {
+  try {
+    return await (await fetch('/api/selects')).json();
+  } catch (e) {
+    return null;                    // a blip must not blank the tab it already painted
+  }
+}
+
+/* Cut from the bin: the same Ask, with a fixed note. The prompt already carries the bin
+ * (revise.py's "The editor's selects": heroes fixed, keeps as bounds); this is the
+ * button that asks for exactly that, so going from the pass to a cut is one click and
+ * not a sentence somebody has to know to type. The usual proposal / accept / discard
+ * loop follows. */
+const BIN_NOTE = "Build the cut from the editor's selects: every hero must appear, use "
+  + 'the other keeps where they serve the story, and take nothing else unless it is '
+  + 'needed to make a keep land.';
+
+function cutFromBin(opts = {}) {
+  if (!keepsUsable().length) return toast('nothing kept yet — the pass is where you keep things');
+  return ask({ note: BIN_NOTE, fixed: true, button: opts.button, state: opts.state });
+}
+
+/* The control is only worth pressing when there is a bin to cut from. Two places: the
+ * Ask panel, and the empty state — which is where the panel is hidden, and exactly
+ * where someone arriving from the pass lands. */
+function paintCutFromBin() {
+  const n = keepsUsable().length;
+  const b = $('#cutFromBin');
+  const h = $('#cutFromBinHint');
+  if (b && h) {
+    b.disabled = !n;
+    if (!n) {
+      h.textContent = 'nothing kept yet — the pass is where you keep things';
+      h.dataset.empty = '1';
+    } else if (h.dataset.empty) {   // only clear what this painted, never a running ask
+      h.textContent = '';
+      delete h.dataset.empty;
+    }
+  }
+  const f = $('#firstFromBin');
+  if (f) f.style.display = n ? '' : 'none';
+}
+
+/* Re-read the bin — when the tab is shown, after an insert, after a save while the tab
+ * is up — and repaint everything that reads it. Never a full render(): that rebuilds
+ * the cards and would steal the focus from a `why` somebody is typing in. */
+async function refreshBin() {
+  const fresh = await fetchBin();
+  if (fresh) bin = fresh;
+  paintBinLine();
+  paintSteps();
+  renderLibrary();
+  paintCutFromBin();
 }
 
 /* Music: a bed under the cut. The same `effects_music` the render reads, saved the
@@ -1022,11 +1211,18 @@ function cueBed(filmT) {
  * it cannot get out of step with the files on disk. */
 function paintSteps() {
   if (!S) return;
+  // A hero the pass kept that is not in the cut is the step's unfinished business,
+  // whether or not a cut exists yet: the bin is what a first cut is built from.
+  const waiting = heroesWaiting().length;
+  const heroes = waiting ? `${waiting} hero${waiting > 1 ? 'es' : ''} waiting` : '';
+  const firstCut = segs.length
+    ? [`${segs.length} shots`, heroes].filter(Boolean).join(' · ')
+    : (heroes || 'ask for one');
   const steps = [
     ['footage', S.clips > 0, `${S.clips} clips`],
     ['analyse', S.clips > 0 && S.analysed >= S.clips,
       S.analysed ? `${S.analysed}/${S.clips} analysed` : 'audio pass'],
-    ['first cut', segs.length > 0, segs.length ? `${segs.length} shots` : 'ask for one'],
+    ['first cut', segs.length > 0, firstCut],
     ['refine', segs.length > 0 && nRenders > 0, 'trim · snap · ask'],
     ['render', nRenders > 0, nRenders ? `${nRenders} version${nRenders > 1 ? 's' : ''}` : ''],
   ];
@@ -1167,6 +1363,9 @@ async function save() {
   const t = new Date();
   $('#saveState').textContent =
     `saved ${t.getHours()}:${String(t.getMinutes()).padStart(2, '0')}`;
+  // A save is where the bin learns from the timeline (which keeps became shots, and
+  // which shots were placed by hand). While the tab is up, it must show that.
+  if (libTab === 'kept') refreshBin();
 }
 
 async function snap() {
@@ -1313,10 +1512,12 @@ async function ask(opts = {}) {
   if (!note && !first) return toast('type what you want changed first');
   // The brief is the human's half of the loop and the most valuable thing typed into
   // this app, so a first-cut note becomes the story rather than being thrown away.
-  if (first && note && !$('#story').value.trim()) $('#story').value = note;
+  // A fixed note (Cut from the bin) is the app's words, not theirs, and never does.
+  if (first && note && !opts.fixed && !$('#story').value.trim()) $('#story').value = note;
   button.disabled = true;
   const verb = focus !== undefined ? 'revising this shot'
-    : first ? 'building a first cut' : 'thinking';
+    : opts.fixed ? 'cutting from the bin'
+      : first ? 'building a first cut' : 'thinking';
   stateEl.textContent = `${verb}…`;
   try {
     const r = await fetch('/api/ask', {
@@ -1809,10 +2010,15 @@ async function boot() {
   await refreshIndex();
   await loadAssets();
   segs = P.segments.map((s) => ({ ...s }));
+  // The bin, before the first paint: when the pass has kept things, the library opens
+  // on them — that is what going from the pass to the board should look like.
+  bin = await fetchBin();
+  if (keepsUsable().length) libTab = 'kept';
   $('#title').textContent = [P.variant, P.title].filter(Boolean).join(' · ');
   $('#story').value = P.story || '';
   document.title = `Cut board — ${P.title}`;
   render();
+  paintBinLine();
   await refreshVersions();
   await offerLastProposal();
   // The job registry is server-side, so a reload lands on whatever is still going —
@@ -1833,6 +2039,9 @@ async function boot() {
   $('#undo').onclick = undo;
   $('#render').onclick = doRender;
   $('#ask').onclick = () => ask();   // not `ask` — a MouseEvent has a `.button` too
+  $('#cutFromBin').onclick = () => cutFromBin({
+    button: $('#cutFromBin'), state: $('#cutFromBinHint'),
+  });
   $('#acceptProposal').onclick = acceptProposal;
   $('#rejectProposal').onclick = rejectProposal;
   $('#findGo').onclick = () => doFind();
@@ -1847,6 +2056,8 @@ async function boot() {
     libTab = t.dataset.tab;
     document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('sel', x === t));
     renderLibrary();
+    // Verdicts happen elsewhere (the pass, another tab): showing the bin re-reads it.
+    if (libTab === 'kept') refreshBin();
   };
   $('#musicTrack').onchange = musicChanged;
   $('#duck').oninput = () => { $('#duckVal').textContent = $('#duck').value; };
