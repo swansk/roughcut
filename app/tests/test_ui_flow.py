@@ -1208,11 +1208,85 @@ def test_an_empty_bin_says_where_to_keep_things(page):
     assert "the pass is where you keep things" in box.inner_text()
     assert box.locator("a").get_attribute("href") == "/floor"
     assert "nothing kept yet" in page.locator("#binLine").inner_text()
+    # and there is nothing to cut from: the control says so rather than firing an Ask
+    assert page.locator("#cutFromBin").is_disabled()
+    assert "nothing kept yet" in page.locator("#cutFromBinHint").inner_text()
     # with no keeps the board opens on heard, as before
     page.reload()
     page.wait_for_selector(".seg")
     assert "sel" in page.locator("#libTabs .tab", has_text="heard").get_attribute("class")
     assert page.locator("#library .cand").count() >= 1
+
+
+BIN_NOTE = ("Build the cut from the editor's selects: every hero must appear, use the "
+            "other keeps where they serve the story, and take nothing else unless it is "
+            "needed to make a keep land.")
+
+
+def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
+    """The prompt already carries the bin (revise.py's "The editor's selects"); this is
+    the button that asks for exactly that, from the Ask panel when there is a cut and
+    from the empty state when there is not — and the proposal loop is the usual one."""
+    from roughcut import config, inference
+
+    class Scripted:
+        name = "scripted"
+        seen: list = []
+
+        def complete(self, request):
+            Scripted.seen.append(request)
+            text = json.dumps({
+                "segments": [{"clip": "CLIP_C.MP4", "in": 0.5, "out": 4.0,
+                              "why": "the hero, whole"}],
+                "notes": "built from the bin"})
+            model = config.model_for(request.role)
+            return inference.Result(content=text, input_tokens=10, output_tokens=5,
+                                    backend="scripted", model=model,
+                                    projected_usd=0.0001, latency_ms=1, raw=text)
+
+    _put_selects(page, [{"clip": "CLIP_C.MP4", "start": 0.5, "end": 4.0, "hero": True,
+                         "why": "the whole take", "note": "this is the film"}])
+    page.reload()
+    page.wait_for_selector("#library .keep")
+    inference.set_backend(Scripted())
+    inference.reset_spend()
+    try:
+        # with a cut on the board: the Ask panel's button, a revision
+        assert page.locator("#cutFromBin").is_enabled()
+        assert page.locator("#cutFromBinHint").inner_text() == ""
+        before = page.evaluate("JSON.stringify(segs)")
+        page.locator("#cutFromBin").click()
+        page.wait_for_selector("#proposal:visible", timeout=30000)
+        prompt = Scripted.seen[-1].prompt
+        assert "The editor's selects" in prompt
+        assert BIN_NOTE in prompt
+        assert "HERO" in prompt and "editor's note: \"this is the film\"" in prompt
+        assert "built from the bin" in page.locator("#proposalNotes").inner_text()
+        assert page.evaluate("JSON.stringify(segs)") == before   # a proposal, not an edit
+        page.locator("#rejectProposal").click()
+
+        # with no cut: the panel is hidden and the empty state carries the button; the
+        # fixed note is the app's words and must not become the story
+        page.fill("#story", "")
+        page.locator(".seg").first.click()
+        page.keyboard.press("x")
+        page.keyboard.press("x")
+        page.wait_for_selector(".empty")
+        assert not page.locator("#askPanel").is_visible()
+        assert page.locator("#firstFromBin").is_visible()
+        page.locator("#firstFromBin").click()
+        page.wait_for_selector("#proposal:visible", timeout=30000)
+        prompt = Scripted.seen[-1].prompt
+        assert "There is no edit yet" in prompt and BIN_NOTE in prompt
+        assert "The editor's selects" in prompt
+        assert page.input_value("#story") == ""
+        page.locator("#acceptProposal").click()
+        assert page.locator(".seg").count() == 1
+        assert page.locator("#library .keep", has_text="CLIP_C").locator("a.use").inner_text() \
+            == "in the cut · shot 1"
+        assert "waiting" not in page.locator(".step", has_text="first").inner_text()
+    finally:
+        inference.set_backend(None)
 
 
 # ------------------------------------------------------------ the index line

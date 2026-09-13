@@ -10,6 +10,16 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Cut from the bin** — a second button under the Ask's note, and beside *Ask for a first
+  cut* when the timeline is empty (the panel is hidden there, and it is where someone
+  arriving from the pass lands). The same Ask with a fixed note — *build the cut from the
+  editor's selects: every hero must appear, use the other keeps where they serve the story,
+  and take nothing else unless it is needed to make a keep land* — and the current story,
+  then the usual proposal / accept / discard loop; the prompt already carries the bin
+  (`revise.py`'s *The editor's selects*), so this is the one click that asks for exactly
+  that instead of a sentence somebody has to know to type. Disabled with a hint while the
+  bin is empty. The fixed note is the app's words, not the editor's, so unlike a typed
+  first-cut note it never becomes the story. `test_ui_flow.py` 45 passed (1 new).
 - **The bin on the board — a `kept` tab under "Add a moment"** (Karl, 2026-09-08, after
   using the pass: *"what should I expect going from the pass to the cut board here? Cut
   board looks exactly the same as before."*). The pass wrote keeps into the EDL's `selects`

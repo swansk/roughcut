@@ -750,10 +750,18 @@ function emptyState() {
     <textarea id="firstNote" style="margin-top:12px;min-height:60px"
       placeholder="a 2–3 minute edit of the trip for the friends who were there · loose and fun · the people are the point"></textarea>
     <button id="firstCut" class="primary" style="margin-top:10px">Ask for a first cut</button>
+    <button id="firstFromBin" style="margin-top:10px;margin-left:8px;display:none"
+      title="One Ask with a fixed note: every hero appears, the other keeps serve the story, nothing else unless a keep needs it — a proposal to accept or discard">Cut from the bin</button>
     <div class="hint" id="firstState" style="margin-top:8px"></div>${look}`;
   el.querySelector('#firstCut').onclick = () => ask({
     note: el.querySelector('#firstNote').value.trim(),
     button: el.querySelector('#firstCut'),
+    state: el.querySelector('#firstState'),
+  });
+  // The Ask panel is hidden here, and here is where someone arriving from the pass
+  // lands — so the bin's button lives in the empty state too (shown when there is a bin).
+  el.querySelector('#firstFromBin').onclick = () => cutFromBin({
+    button: el.querySelector('#firstFromBin'),
     state: el.querySelector('#firstState'),
   });
   return el;
@@ -791,6 +799,7 @@ function render() {
   paintSteps();
   paintVersions();          // so "this cut" follows the timeline rather than the last fetch
   renderLibrary();
+  paintCutFromBin();        // the empty state is rebuilt above; its bin button follows
 }
 
 /* What the visual pass saw inside this shot, and any stretch it said not to use. */
@@ -1016,6 +1025,41 @@ async function fetchBin() {
   }
 }
 
+/* Cut from the bin: the same Ask, with a fixed note. The prompt already carries the bin
+ * (revise.py's "The editor's selects": heroes fixed, keeps as bounds); this is the
+ * button that asks for exactly that, so going from the pass to a cut is one click and
+ * not a sentence somebody has to know to type. The usual proposal / accept / discard
+ * loop follows. */
+const BIN_NOTE = "Build the cut from the editor's selects: every hero must appear, use "
+  + 'the other keeps where they serve the story, and take nothing else unless it is '
+  + 'needed to make a keep land.';
+
+function cutFromBin(opts = {}) {
+  if (!keepsUsable().length) return toast('nothing kept yet — the pass is where you keep things');
+  return ask({ note: BIN_NOTE, fixed: true, button: opts.button, state: opts.state });
+}
+
+/* The control is only worth pressing when there is a bin to cut from. Two places: the
+ * Ask panel, and the empty state — which is where the panel is hidden, and exactly
+ * where someone arriving from the pass lands. */
+function paintCutFromBin() {
+  const n = keepsUsable().length;
+  const b = $('#cutFromBin');
+  const h = $('#cutFromBinHint');
+  if (b && h) {
+    b.disabled = !n;
+    if (!n) {
+      h.textContent = 'nothing kept yet — the pass is where you keep things';
+      h.dataset.empty = '1';
+    } else if (h.dataset.empty) {   // only clear what this painted, never a running ask
+      h.textContent = '';
+      delete h.dataset.empty;
+    }
+  }
+  const f = $('#firstFromBin');
+  if (f) f.style.display = n ? '' : 'none';
+}
+
 /* Re-read the bin — when the tab is shown, after an insert, after a save while the tab
  * is up — and repaint everything that reads it. Never a full render(): that rebuilds
  * the cards and would steal the focus from a `why` somebody is typing in. */
@@ -1025,6 +1069,7 @@ async function refreshBin() {
   paintBinLine();
   paintSteps();
   renderLibrary();
+  paintCutFromBin();
 }
 
 /* Music: a bed under the cut. The same `effects_music` the render reads, saved the
@@ -1467,10 +1512,12 @@ async function ask(opts = {}) {
   if (!note && !first) return toast('type what you want changed first');
   // The brief is the human's half of the loop and the most valuable thing typed into
   // this app, so a first-cut note becomes the story rather than being thrown away.
-  if (first && note && !$('#story').value.trim()) $('#story').value = note;
+  // A fixed note (Cut from the bin) is the app's words, not theirs, and never does.
+  if (first && note && !opts.fixed && !$('#story').value.trim()) $('#story').value = note;
   button.disabled = true;
   const verb = focus !== undefined ? 'revising this shot'
-    : first ? 'building a first cut' : 'thinking';
+    : opts.fixed ? 'cutting from the bin'
+      : first ? 'building a first cut' : 'thinking';
   stateEl.textContent = `${verb}…`;
   try {
     const r = await fetch('/api/ask', {
@@ -1992,6 +2039,9 @@ async function boot() {
   $('#undo').onclick = undo;
   $('#render').onclick = doRender;
   $('#ask').onclick = () => ask();   // not `ask` — a MouseEvent has a `.button` too
+  $('#cutFromBin').onclick = () => cutFromBin({
+    button: $('#cutFromBin'), state: $('#cutFromBinHint'),
+  });
   $('#acceptProposal').onclick = acceptProposal;
   $('#rejectProposal').onclick = rejectProposal;
   $('#findGo').onclick = () => doFind();
