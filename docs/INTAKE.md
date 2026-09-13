@@ -403,8 +403,13 @@ the two halves the tracker had deferred.
 - [~] I8.3 Workers + cap in settings — **server side done** (the lead's settings commit, see
       log: `GET/PUT /api/settings`, `budget_cap()`, workers applied at the next index run);
       the drawer on `/open` is lane `agent/settings`.
-- [ ] I8.4 Live check of session 12's cuts (bin · cut switcher, save a copy) on Killington —
-      the lead.
+- [x] I8.4 Live check of session 12's cuts (bin · cut switcher, save a copy) on Killington —
+      2026-09-13, headless (the in-app pane is unreliable on localhost): the header reads
+      `killington-neutral · main`; the panel lists `CUTS of killington-neutral · 2 cuts` —
+      `main` and **`killington-future`, a copy Karl had already saved himself** — and `BINS
+      3 bins`; `POST /api/cuts/open` on the main cut returns the board to it. The script's
+      own Save-copy click did not land a name (the field guess was wrong); Karl's copy is
+      the proof of that path. Nothing left behind.
 
 ## Lanes in flight
 
@@ -528,3 +533,5 @@ them. Every lane adds its own CHANGELOG bullet; integration keeps all of them.
   says `frames 3:44 · 3:48 · high confidence`; clicking the first chip parks the picture at
   224.0 s paused; `0` from 100 s → 1.1 s playing with the whole clip open; `⇧0` → 224.3 s
   inside the band `223.59–228` with the stop at 228.
+- 2026-09-13 · session 13 · settings endpoint `e28c231` · **394 passed, 1 skipped** (215.38 s).
+  Cuts live on Killington: see I8.4.

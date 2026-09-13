@@ -174,6 +174,8 @@ same commit. Releases move entries into a dated version section.
   overlaps are one pick already, speech needs the shared theme.
 
 ### Changed
+- **Docs:** INTAKE I8.4 records the live check of the cuts control on Killington (Karl had
+  already saved a copy of his own, `killington-future`).
 - **Session 11 close-out (docs).** INTAKE M7 ticked in full (I7.1 with the live CLIP_04
   re-read, I7.2/I7.3 from lane `agent/floor4`, I7.4 Decision 5), "Where we are" names what
   waits on Karl (his look, the themes, the ~$2 re-look of the other 11 clips), the lanes
