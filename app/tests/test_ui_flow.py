@@ -1117,6 +1117,104 @@ def test_a_running_ask_is_picked_back_up_after_a_reload(page):
         inference.set_backend(None)
 
 
+# ------------------------------------------------------------------ the bin
+
+def _put_selects(page, selects: list[dict]) -> dict:
+    """The bin, written the way the bin editor writes it (PUT /api/selects)."""
+    out = page.evaluate("""(selects) => fetch('/api/selects', {
+        method: 'PUT', headers: {'content-type': 'application/json'},
+        body: JSON.stringify({selects})}).then(r => r.json())""", selects)
+    assert out.get("ok"), out
+    return out
+
+
+def test_the_kept_tab_shows_the_bin_and_puts_a_keep_in_the_cut(page):
+    """Karl, after using the pass: *"what should I expect going from the pass to the
+    cut board here? Cut board looks exactly the same as before."* The pass wrote keeps
+    into the EDL and the board showed nothing of it. Now the library opens on them."""
+    _put_selects(page, [
+        {"clip": "CLIP_A.MP4", "start": 4.0, "end": 5.5, "why": "the goodbye",
+         "note": "end on this", "hero": False},
+        {"clip": "CLIP_C.MP4", "start": 0.5, "end": 4.0, "hero": True,
+         "why": "the whole take (frames 0:00 · 0:04)"},
+        {"clip": "GONE.MP4", "start": 0.0, "end": 2.0, "why": "a keep whose file left",
+         "missing": True},
+    ])
+    page.reload()
+    page.wait_for_selector("#library .keep")
+    # kept is the first tab and the one the board opened on
+    tabs = page.locator("#libTabs .tab")
+    assert tabs.first.inner_text() == "kept"
+    assert "sel" in tabs.first.get_attribute("class")
+    rows = page.locator("#library .keep")
+    assert rows.count() == 3
+    # hero first, then by clip and start; each row says what it is
+    hero = rows.nth(0)
+    assert "★ HERO" in hero.inner_text()
+    assert "CLIP_C · 0:00.5 → 0:04.0 · 3.5 s" in hero.inner_text()
+    assert "(frames 0:00 · 0:04)" in hero.inner_text()
+    assert hero.locator("img.still").get_attribute("src") == "/media/poster/CLIP_C.jpg?t=0.50"
+    plain = rows.nth(1)
+    assert "CLIP_A" in plain.inner_text() and "“end on this”" in plain.inner_text()
+    assert "HERO" not in plain.inner_text()
+    assert plain.locator("button.add").count() == 1
+    gone = rows.nth(2)
+    assert "footage missing" in gone.inner_text()
+    assert gone.locator("button.add").count() == 0, "a missing keep cannot be added"
+    # the Project panel reads the server's summary, and the step names the hero
+    line = page.locator("#binLine").inner_text()
+    assert "bin · 3 moments · 1 hero · 0:07 if strung out" in line, line
+    assert page.locator("#binLine a").get_attribute("href") == "/floor"
+    assert "1 hero waiting" in page.locator(".step", has_text="first").inner_text()
+
+    # + add to cut: a shot with the keep's range and reason, after the selected shot
+    hero.locator("button.add").click()
+    assert page.locator(".seg").count() == 3
+    added = page.evaluate("JSON.stringify([segs[1].clip, segs[1].in, segs[1].out, segs[1].why])")
+    assert added == '["CLIP_C.MP4",0.5,4,"the whole take (frames 0:00 · 0:04)"]'
+    # …and the row flips at once, before the autosave lands
+    hero = page.locator("#library .keep", has_text="CLIP_C")
+    assert hero.locator("a.use").inner_text() == "in the cut · shot 2"
+    assert hero.locator("button.add").count() == 0
+    assert "waiting" not in page.locator(".step", has_text="first").inner_text()
+    page.wait_for_function(
+        "document.querySelector('#saveState').textContent.startsWith('saved')", timeout=8000)
+    # the save told the bin; re-read from the server it still says the same, and the
+    # two seeded shots have been adopted as hand keeps like any other
+    page.wait_for_function(
+        "[...document.querySelectorAll('#library .keep')].length >= 5", timeout=8000)
+    on_server = page.evaluate("fetch('/api/selects').then(r => r.json())")
+    hero_row = next(s for s in on_server["selects"] if s["clip"] == "CLIP_C.MP4")
+    assert hero_row["used_in"], hero_row
+    assert page.locator("#library .keep", has_text="CLIP_C").locator("a.use").inner_text() \
+        == "in the cut · shot 2"
+    # the link selects the shot
+    page.locator(".seg").first.click()
+    page.locator("#library .keep", has_text="CLIP_C").locator("a.use").click()
+    assert page.evaluate("sel") == 1
+    assert page.locator(".seg.sel .clip").inner_text() == "CLIP_C"
+    # removing the shot un-flips the row
+    page.keyboard.press("x")
+    assert page.locator("#library .keep", has_text="CLIP_C").locator("button.add").count() == 1
+    assert "1 hero waiting" in page.locator(".step", has_text="first").inner_text()
+
+
+def test_an_empty_bin_says_where_to_keep_things(page):
+    page.locator("#libTabs .tab", has_text="kept").click()
+    box = page.locator("#library")
+    page.wait_for_function(
+        "document.querySelector('#library').textContent.includes('nothing kept yet')",
+        timeout=5000)
+    assert "the pass is where you keep things" in box.inner_text()
+    assert box.locator("a").get_attribute("href") == "/floor"
+    assert "nothing kept yet" in page.locator("#binLine").inner_text()
+    # with no keeps the board opens on heard, as before
+    page.reload()
+    page.wait_for_selector(".seg")
+    assert "sel" in page.locator("#libTabs .tab", has_text="heard").get_attribute("class")
+    assert page.locator("#library .cand").count() >= 1
+
+
 # ------------------------------------------------------------ the index line
 
 def test_the_old_buttons_are_gone_and_the_index_line_reads_the_journals_word(
