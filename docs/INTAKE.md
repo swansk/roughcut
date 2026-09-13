@@ -572,3 +572,9 @@ them. Every lane adds its own CHANGELOG bullet; integration keeps all of them.
   inside the band `223.59–228` with the stop at 228.
 - 2026-09-13 · session 13 · settings endpoint `e28c231` · **394 passed, 1 skipped** (215.38 s).
   Cuts live on Killington: see I8.4.
+- 2026-09-13 · + settings drawer `6dd9b51` + filter `88cc105` · **401 passed, 1 skipped**
+  (225.23 s). Filter live on Killington (headless, board on `88cc105`): `/` opens `Filter ·
+  kind faces 1 · seen 1 · state undecided 2 · claimed only 2 · has words 0 · has telemetry 1
+  · clip CLIP_01 1 · CLIP_04 1` on the round in progress (round 3, two picks left — Karl has
+  been culling); *claimed only* → HUD `2 of 2 match`, 7 tape marks dimmed, ↵ steps to the
+  next matching pick, Esc clears. No verdict written.

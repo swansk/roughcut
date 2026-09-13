@@ -213,6 +213,8 @@ same commit. Releases move entries into a dated version section.
   overlaps are one pick already, speech needs the shared theme.
 
 ### Changed
+- **Docs:** INTAKE's verification log records the 401-test run and the filter's live check on
+  Killington.
 - **Settings defaults say the code's default.** `GET /api/settings`'s `defaults.budget_usd` echoed
   the environment's pin when one was set, so Reset could never show the real default; it is
   15.0 now. Tests that force a pause pin `server.budget_cap`, not `config.budget_usd`, since a
