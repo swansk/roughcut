@@ -11,7 +11,7 @@ same commit. Releases move entries into a dated version section.
 
 ### Added
 - **The settings drawer on `/open` — workers and the budget cap (INTAKE I5.3's other half,
-  the screen; I8.3).** A gear next to **Index the footage** (or `,` outside a field) opens a
+  the screen; I8.3, `c06f360`).** A gear next to **Index the footage** (or `,` outside a field) opens a
   drawer in the right column, as Fig. 1's "workers 2 · cap $15 · settings ▾"; `Esc` or the
   gear closes it. The **budget cap** is a dollar field with the spend beside it (`$0.03
   spent`) and where the cap comes from in a hint — when `ROUGHCUT_BUDGET_USD` is set the

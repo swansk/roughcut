@@ -401,9 +401,9 @@ the two halves the tracker had deferred.
       `agent/binboard`.
 - [ ] I8.2 Batch reject via a filter on the pass (`/`, `⇧X` / `⇧U` over the filtered set, one
       undo entry) — lane `agent/filter`.
-- [~] I8.3 Workers + cap in settings — **server side done** (the lead's settings commit, see
-      log: `GET/PUT /api/settings`, `budget_cap()`, workers applied at the next index run).
-      **The drawer** on `/open` (lane `agent/settings`): a gear next to **Index the footage**
+- [x] I8.3 Workers + cap in settings — **server side** the lead's `e28c231` (`GET/PUT
+      /api/settings`, `budget_cap()`, workers applied at the next index run). **The drawer**
+      on `/open`, `c06f360` (lane `agent/settings`): a gear next to **Index the footage**
       (or `,`) opens it, `Esc` closes — the cap in dollars with the spend beside it and its
       source in a hint (disabled, "the environment wins", when `ROUGHCUT_BUDGET_USD` is set),
       one stepper per stage 1–8 with a one-line hint in words, **Save** = one PUT (the toast
@@ -411,7 +411,8 @@ the two halves the tracker had deferred.
       defaults** fills the form, "changes apply to the next run" while the index runs. Not
       built: nothing on `/floor` or `/` reads settings (the cap shows on `/open` only), and
       the hints are static words, not re-said per count. `test_open_ui.py` 20 passed (3
-      new); the module's `budget()` helper pins `server.budget_cap` now. Hash on the tick.
+      new; suite 397 passed, 1 skipped); the module's `budget()` helper pins
+      `server.budget_cap` now.
 - [x] I8.4 Live check of session 12's cuts (bin · cut switcher, save a copy) on Killington —
       2026-09-13, headless (the in-app pane is unreliable on localhost): the header reads
       `killington-neutral · main`; the panel lists `CUTS of killington-neutral · 2 cuts` —
