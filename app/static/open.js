@@ -19,6 +19,12 @@
  * POST /api/projects/open — the server re-points itself, and this page reloads all of
  * its data for the new bin. A 409 (a job still running) or a 400 (no video there) is
  * said and the panel stays.
+ *
+ * Workers and the budget cap live in settings (design §2 Fig. 1: "workers 2 · cap $15 ·
+ * settings ▾"), behind the gear next to the Index button (or `,`): GET/PUT /api/settings.
+ * The cap is the line the index pauses its priced stages at; a cap from the environment
+ * (ROUGHCUT_BUDGET_USD) wins over the one saved here, so the field is disabled when the
+ * server says so. Workers are one small stepper per stage, 1–8, applied to the next run.
  */
 
 'use strict';
@@ -41,6 +47,18 @@ const INTERVAL_WORD = {
   2: 'a frame every 2 s · sees the air',
   1: 'every 1 s · sees the landing',
 };
+// The stages a worker count applies to, in the order the index runs them, and why the
+// default is what it is — in words, one line each (design §3: "workers apply to previews
+// first, sheets second; the CLI backend's request-rate ceiling is the sheet limit").
+const WORKER_STAGES = ['probe', 'asr', 'proxy', 'sheet', 'picks'];
+const WORKER_WORD = {
+  probe: 'two — ffprobe is quick; more just contend for the disk',
+  asr: 'one — the model loads once per run and walks the folder',
+  proxy: 'one — two 4K encodes share the same cores',
+  sheet: 'two sheets in flight at once — more spends faster, not better',
+  picks: 'one — a call per released clip; the sheet limit is the ceiling that matters',
+};
+const WORKERS_MIN = 1, WORKERS_MAX = 8;
 
 const clock = (s) => {
   s = Math.max(0, Math.round(s || 0));
@@ -103,6 +121,10 @@ const O = {
   story: null,             // the story as last saved to the EDL; null until /api/themes has answered
   dictation: null,         // null until tried; false once the recogniser said 501 (the mic hides)
   seenLast: null,          // the last finished proposal's id this page has already shown
+  settings: null,          // /api/settings — the cap, the spend, the workers, the defaults, the cap's source
+  sgone: false,            // the server answered the settings GET with an error (no endpoint yet)
+  sopen: false,            // the drawer is open
+  sbusy: false,            // a settings PUT in flight
 };
 
 /* ------------------------------------------------------------ the sheet */
@@ -344,6 +366,224 @@ function renderIndex() {
   $('#journalPath').textContent = ix.path || '';
   $('#journalLog').innerHTML = (p.log || []).slice(-5).map((e) =>
     `<div><b>${escapeHtml(timeOf(e.at))}</b>${escapeHtml(e.what)}</div>`).join('');
+  renderSettingsRunning();
+}
+
+/* --------------------------------------------------------------- settings */
+
+// The drawer behind the gear (Fig. 1's "settings ▾"): the budget cap with the spend
+// beside it and where the cap comes from, and one stepper per stage. Nothing here is
+// written until Save — one PUT of the whole form — and the budget line in the index
+// controls re-reads from /api/status afterwards, so the two never disagree. A server
+// without the endpoint (an older tree) is said in the drawer, never a broken form.
+
+const clampWorkers = (v) => {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) ? Math.max(WORKERS_MIN, Math.min(WORKERS_MAX, n)) : WORKERS_MIN;
+};
+
+function buildWorkers() {
+  $('#workers').innerHTML = WORKER_STAGES.map((st) => `<div class="wrow" data-stage="${st}">
+    <div class="top"><span class="wname">${st}</span>
+      <span class="stepper"><button type="button" data-d="-1" aria-label="fewer ${st} workers" title="fewer">−</button>
+      <input type="number" data-stage="${st}" min="${WORKERS_MIN}" max="${WORKERS_MAX}" step="1" inputmode="numeric" aria-label="${st} workers">
+      <button type="button" data-d="1" aria-label="more ${st} workers" title="more">+</button></span></div>
+    <div class="whint hint small">${escapeHtml(WORKER_WORD[st] || '')}</div>
+  </div>`).join('');
+}
+
+function workerField(st) {
+  return $(`#workers input[data-stage=${st}]`);
+}
+
+// The form from a settings-shaped object — the server's answer, or its `defaults`.
+function fillSettingsForm(v) {
+  const s = O.settings;
+  if (!s) return;
+  if (s.source.budget_usd !== 'env' && v.budget_usd != null) $('#capField').value = String(v.budget_usd);
+  for (const st of WORKER_STAGES) {
+    const f = workerField(st);
+    if (f && v.workers && v.workers[st] != null) f.value = String(clampWorkers(v.workers[st]));
+  }
+}
+
+function settingsErr(text) {
+  const el = $('#settingsErr');
+  el.textContent = text || '';
+  el.hidden = !text;
+}
+
+function renderSettingsRunning() {
+  $('#settingsRunning').hidden = !(O.sopen && O.index && O.index.running);
+}
+
+function renderSettingsButtons() {
+  const s = O.settings;
+  $('#settingsSave').disabled = O.sbusy || !s;
+  $('#settingsReset').disabled = O.sbusy || !s || !s.defaults;
+}
+
+function renderSettings() {
+  const s = O.settings;
+  $('#settingsBtn').setAttribute('aria-expanded', String(O.sopen));
+  $('#settings').hidden = !O.sopen;
+  $('#settingsLine').textContent = s
+    ? `cap ${usd(s.budget_usd)} · workers ${WORKER_STAGES.map((st) => `${st} ${s.workers[st]}`).join(' · ')}`
+    : '';
+  renderSettingsRunning();
+  if (!O.sopen) return;
+  $('#settingsGone').hidden = !O.sgone;
+  $('#settingsForm').hidden = !s;
+  renderSettingsButtons();
+  if (!s) return;
+  const src = (s.source || {}).budget_usd;
+  const env = src === 'env';
+  const f = $('#capField');
+  f.disabled = env;
+  f.value = String(s.budget_usd);                  // the environment's number too, so the field says what holds
+  $('#capSpent').textContent = `${usd(s.spent_usd)} spent`;
+  $('#capHint').textContent = env
+    ? 'from the environment — ROUGHCUT_BUDGET_USD wins over this'
+    : src === 'settings'
+      ? 'set here — the index pauses its priced stages at this line and says so'
+      : 'the default — the index pauses its priced stages at this line and says so';
+  fillSettingsForm(s);
+  $('#settingsState').textContent = '';
+}
+
+async function refreshSettings() {
+  try {
+    O.settings = await getJSON('/api/settings');
+    O.sgone = false;
+  } catch (e) {
+    O.settings = null;                             // an older server: the drawer says so
+    O.sgone = true;
+  }
+  renderSettings();
+}
+
+async function openSettings() {
+  O.sopen = true;
+  settingsErr('');
+  renderSettings();                                // the last answer first, then a fresh one
+  await refreshSettings();
+  const first = $('#capField').disabled ? workerField(WORKER_STAGES[0]) : $('#capField');
+  if (first && O.settings) first.focus();
+}
+
+function closeSettings() {
+  if (!O.sopen) return;
+  O.sopen = false;
+  renderSettings();
+  if (isTyping(document.activeElement) && $('#settings').contains(document.activeElement)) {
+    document.activeElement.blur();
+  }
+}
+
+function toggleSettings() {
+  if (O.sopen) closeSettings(); else openSettings();
+}
+
+// What Save changed, in words: "cap $15.00 → $5.00 · sheet workers 2 → 4".
+function settingsChanges(before, after) {
+  const out = [];
+  if (before && Number(before.budget_usd) !== Number(after.budget_usd)) {
+    out.push(`cap ${usd(before.budget_usd)} → ${usd(after.budget_usd)}`);
+  }
+  for (const st of WORKER_STAGES) {
+    const a = before && before.workers ? before.workers[st] : undefined;
+    const b = after.workers ? after.workers[st] : undefined;
+    if (a !== b) out.push(`${st} workers ${a == null ? '?' : a} → ${b}`);
+  }
+  return out;
+}
+
+// One PUT of the whole form; `body` given explicitly is sent as it is (the tests send a
+// bad one on purpose to see the server's 400 said).
+async function saveSettings(body) {
+  if (O.sbusy) return null;
+  const before = O.settings;
+  if (!body) {
+    if (!before) return null;
+    body = { workers: {} };
+    for (const st of WORKER_STAGES) {
+      const f = workerField(st);
+      const n = clampWorkers(f.value);
+      f.value = String(n);
+      body.workers[st] = n;
+    }
+    if (before.source.budget_usd !== 'env') {
+      const cap = Number($('#capField').value);
+      if (!(cap > 0)) {
+        settingsErr('the cap must be more than $0');
+        return null;
+      }
+      body.budget_usd = cap;
+    }
+  }
+  O.sbusy = true;
+  renderSettingsButtons();
+  try {
+    const r = await send('PUT', '/api/settings', body);
+    O.settings = r;
+    O.sgone = false;
+    settingsErr('');
+    renderSettings();
+    const changes = settingsChanges(before, r);
+    toast(changes.length ? `saved · ${changes.join(' · ')}` : 'saved — nothing changed', 4000);
+    // the budget line in the index controls re-reads the cap
+    try { await refreshStatus(); } catch (e) { /* the next poll will */ }
+    return r;
+  } catch (e) {
+    settingsErr(`not saved: ${e.message || e}`);
+    toast(`settings not saved: ${e.message || e}`, 5000);
+    return null;
+  } finally {
+    O.sbusy = false;
+    renderSettingsButtons();
+  }
+}
+
+// Reset fills the form from the server's `defaults`; Save is still the word that writes.
+function resetSettings() {
+  const s = O.settings;
+  if (!s || !s.defaults) return;
+  fillSettingsForm(s.defaults);
+  settingsErr('');
+  $('#settingsState').textContent = 'the defaults are filled in — Save applies them';
+}
+
+function onSettingsKey(e) {
+  if (e.key === 'Escape') {
+    if (O.sopen) { e.preventDefault(); closeSettings(); }
+    return;
+  }
+  if (e.key === ',' && !e.ctrlKey && !e.metaKey && !e.altKey && !isTyping(document.activeElement)) {
+    e.preventDefault();
+    toggleSettings();
+  }
+}
+
+function wireSettings() {
+  buildWorkers();
+  $('#settingsBtn').addEventListener('click', toggleSettings);
+  $('#settingsSave').addEventListener('click', () => saveSettings());
+  $('#settingsReset').addEventListener('click', resetSettings);
+  $('#workers').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-d]');
+    if (!b) return;
+    const f = b.closest('.wrow').querySelector('input');
+    f.value = String(clampWorkers(Number(f.value) + Number(b.dataset.d)));
+    settingsErr('');
+  });
+  // a number typed out of range is clamped when the field settles (1–8, whole)
+  $('#workers').addEventListener('change', (e) => {
+    if (e.target.matches('input[data-stage]')) e.target.value = String(clampWorkers(e.target.value));
+  });
+  $('#settings').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.matches('input')) { e.preventDefault(); saveSettings(); }
+  });
+  document.addEventListener('keydown', onSettingsKey);
 }
 
 /* ---------------------------------------------------------------- themes */
@@ -705,7 +945,7 @@ async function reopen() {
   Object.assign(O, {
     clips: null, status: null, index: null, order: null, interval: null, job: null, detail: '',
     busy: false, timer: null, themes: null, proposal: null, tjob: null, tbusy: false,
-    ttimer: null, story: null,
+    ttimer: null, story: null, sopen: false,
   });
   $('#binName').textContent = 'opening the folder…';
   $('#story').value = '';
@@ -859,14 +1099,16 @@ async function boot() {
     if (O.status) renderControls();
   });
   wireThemes();
+  wireSettings();
   await load();
 }
 
 // Everything the page knows about the bin, in one go — at boot and again when the
-// picker points the board at another folder.
+// picker points the board at another folder. The settings never fail the load — an
+// older server without the endpoint is said in the drawer instead.
 async function load() {
   try {
-    await Promise.all([refreshClips(), refreshStatus(), refreshIndex(), refreshThemes()]);
+    await Promise.all([refreshClips(), refreshStatus(), refreshIndex(), refreshThemes(), refreshSettings()]);
     if (O.index.running) poll();
   } catch (e) {
     $('#binName').textContent = 'could not open the folder';
@@ -875,5 +1117,6 @@ async function load() {
 }
 
 window.sheet = { state: O, refresh: tick, journalWord, order, interval, renderControls,
-                 renderThemes, proposeThemes, keepThemes, dictSend, dictStart, dictStop, reopen };
+                 renderThemes, proposeThemes, keepThemes, dictSend, dictStart, dictStop, reopen,
+                 openSettings, closeSettings, saveSettings, resetSettings, refreshSettings };
 boot();

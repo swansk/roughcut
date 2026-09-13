@@ -10,6 +10,22 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The settings drawer on `/open` — workers and the budget cap (INTAKE I5.3's other half,
+  the screen; I8.3, `c06f360`).** A gear next to **Index the footage** (or `,` outside a field) opens a
+  drawer in the right column, as Fig. 1's "workers 2 · cap $15 · settings ▾"; `Esc` or the
+  gear closes it. The **budget cap** is a dollar field with the spend beside it (`$0.03
+  spent`) and where the cap comes from in a hint — when `ROUGHCUT_BUDGET_USD` is set the
+  field is disabled and says the environment wins. **Workers** are one stepper per stage
+  (probe · asr · proxy · sheet · picks), 1–8, clamped in the UI, each with a one-line hint in
+  words (asr: *one — the model loads once per run and walks the folder*; sheet: *two sheets
+  in flight at once — more spends faster, not better*; proxy: *one — two 4K encodes share the
+  same cores*). **Save** is one `PUT /api/settings`; the toast says what changed (`cap $15.00
+  → $5.00 · sheet workers 2 → 3`), the budget line in the index controls re-reads, and the
+  server's 400 is said on the drawer. **Reset to defaults** fills the form from `defaults` —
+  Save still applies it. While the index is running the drawer says changes apply to the
+  next run; a line under the button always reads the cap and the workers. `test_open_ui.py`
+  20 passed (3 new), and its `budget()` helper now pins `server.budget_cap` — the pause rule
+  reads that, not `config.budget_usd`, once a cap is saved.
 - **Settings: the budget cap and the index's workers (INTAKE I5.3's other half, server
   side).** `GET /api/settings` reads them and `PUT /api/settings` writes them to
   `--work/settings.json`, validated (a positive cap; 1–8 workers on a stage the journal
