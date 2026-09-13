@@ -1199,7 +1199,7 @@ def backend_preflight() -> dict:
         "backend": name,
         "model": config.model_for(config.ROLE_SKELETON),
         "problems": problems,
-        "budget_usd": config.budget_usd(),
+        "budget_usd": budget_cap(),
         "spent_usd": round(inference.spent_usd(), 4),
         **BACKEND,
     }
@@ -1799,6 +1799,106 @@ def api_themes_discard() -> JSONResponse:
 # Killing the server mid-stage costs that stage: the next POST /api/index reconciles the
 # journal against the sidecars on disk and carries on. Adding footage is the same path.
 
+# ------------------------------------------------------------------ settings
+# The two knobs the design's settings drawer names (cutting-room-floor §3, Fig. 1): the
+# budget cap and the index's workers. Kept under --work, not in the EDL — they are how
+# this machine runs, not what the film is — and the environment still wins for the cap,
+# so a production deployment can pin it.
+
+SETTINGS_FILE = "settings.json"
+WORKER_RANGE = (1, 8)
+
+
+def settings_path() -> Path:
+    return STATE["work"] / SETTINGS_FILE
+
+
+def load_settings() -> dict:
+    try:
+        d = json.loads(settings_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def save_settings(d: dict) -> None:
+    settings_path().parent.mkdir(parents=True, exist_ok=True)
+    tmp = settings_path().with_suffix(".tmp")
+    tmp.write_text(json.dumps(d, indent=1), encoding="utf-8")
+    tmp.replace(settings_path())
+
+
+def budget_cap() -> float:
+    """The cap the index and the status line honour: the environment if it is set (the
+    production pin), else the saved setting, else the code's default."""
+    if os.environ.get("ROUGHCUT_BUDGET_USD"):
+        return config.budget_usd()
+    saved = load_settings().get("budget_usd")
+    try:
+        return float(saved) if saved is not None else config.budget_usd()
+    except (TypeError, ValueError):
+        return config.budget_usd()
+
+
+def settings_payload() -> dict:
+    saved = load_settings()
+    return {
+        "budget_usd": budget_cap(),
+        "spent_usd": inference.spent_usd(),
+        "workers": {**journal.DEFAULT_WORKERS, **(saved.get("workers") or {})},
+        "defaults": {"budget_usd": float(os.environ.get("ROUGHCUT_BUDGET_USD") or 15.0)
+                     if os.environ.get("ROUGHCUT_BUDGET_USD") else 15.0,
+                     "workers": dict(journal.DEFAULT_WORKERS)},
+        "source": {"budget_usd": ("env" if os.environ.get("ROUGHCUT_BUDGET_USD")
+                                  else "settings" if saved.get("budget_usd") is not None
+                                  else "default")},
+    }
+
+
+@app.get("/api/settings")
+def api_settings() -> JSONResponse:
+    return JSONResponse(settings_payload())
+
+
+@app.put("/api/settings")
+async def api_settings_put(request: Request) -> JSONResponse:
+    """Validated like everything else that changes how money is spent: a cap must be
+    positive, a worker count 1–8 on a stage the journal knows. Workers apply at the next
+    index run; the cap applies at the next priced stage."""
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "expected an object")
+    saved = load_settings()
+    if "budget_usd" in body:
+        try:
+            cap = float(body["budget_usd"])
+        except (TypeError, ValueError):
+            raise HTTPException(400, "budget_usd must be a number")
+        if not cap > 0:
+            raise HTTPException(400, "budget_usd must be positive")
+        saved["budget_usd"] = round(cap, 2)
+    if "workers" in body:
+        raw = body["workers"]
+        if not isinstance(raw, dict):
+            raise HTTPException(400, "workers must be an object of stage: count")
+        clean = dict(saved.get("workers") or {})
+        for stage, n in raw.items():
+            if stage not in journal.DEFAULT_WORKERS:
+                raise HTTPException(400, f"unknown stage {stage!r}; "
+                                         f"stages are {sorted(journal.DEFAULT_WORKERS)}")
+            try:
+                n = int(n)
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"workers.{stage} must be an integer")
+            if not WORKER_RANGE[0] <= n <= WORKER_RANGE[1]:
+                raise HTTPException(400, f"workers.{stage} must be between "
+                                         f"{WORKER_RANGE[0]} and {WORKER_RANGE[1]}")
+            clean[stage] = n
+        saved["workers"] = clean
+    save_settings(saved)
+    return JSONResponse(settings_payload())
+
+
 INDEXES: dict[str, progress.Job] = {}
 
 
@@ -1950,12 +2050,15 @@ class _Skip(Exception):
 
 
 def _over_budget(next_usd: float) -> bool:
-    return inference.spent_usd() + next_usd > config.budget_usd()
+    return inference.spent_usd() + next_usd > budget_cap()
 
 
 def _index_job(job: str, order: str) -> None:
     entry = INDEXES[job]
     j = load_journal()
+    workers = (load_settings().get("workers") or {})
+    if workers:
+        j.set_workers(workers)
     present = footage_clips()
     j.add_clips(present, captured={c: capture_time(c) for c in present})
     gone = [c for c in j.clips if c not in present]
@@ -2011,7 +2114,7 @@ def _index_job(job: str, order: str) -> None:
             est = (VISUAL_USD_PER_SHEET if stage == "look"
                    else FINE_WINDOWS_PER_CLIP * FINE_USD_PER_WINDOW)
             if _over_budget(est):
-                j.pause_priced(f"budget cap ${config.budget_usd():.2f} reached")
+                j.pause_priced(f"budget cap ${budget_cap():.2f} reached")
                 report(f"budget cap reached — priced stages paused; {stem} waits")
                 continue
         j.start(clip, stage)

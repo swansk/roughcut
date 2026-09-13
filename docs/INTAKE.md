@@ -389,6 +389,23 @@ why and timestamps should be jumpable. Add a restart from beginning of clip in t
 - [x] I7.4 Decision 5 recorded (start/end adjustable after effects) and checked against the
       one effect that exists.
 
+### M8 · Session 13 (2026-09-13): the pass feeds the board, and the two deferred halves
+
+Karl, 2026-09-08: *"what should I expect going from the pass to the cut board here? Cut
+board looks exactly the same as before."* — the bin was reaching the cut only through the
+Ask's prompt. This milestone makes it visible (Option B's Source panel, stage one) and closes
+the two halves the tracker had deferred.
+
+- [ ] I8.1 The `kept` tab on the board's "Add a moment" + **Cut from the bin** — lane
+      `agent/binboard`.
+- [ ] I8.2 Batch reject via a filter on the pass (`/`, `⇧X` / `⇧U` over the filtered set, one
+      undo entry) — lane `agent/filter`.
+- [~] I8.3 Workers + cap in settings — **server side done** (the lead's settings commit, see
+      log: `GET/PUT /api/settings`, `budget_cap()`, workers applied at the next index run);
+      the drawer on `/open` is lane `agent/settings`.
+- [ ] I8.4 Live check of session 12's cuts (bin · cut switcher, save a copy) on Killington —
+      the lead.
+
 ## Lanes in flight
 
 | lane | branch / worktree | scope | state |

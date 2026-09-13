@@ -10,6 +10,13 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Settings: the budget cap and the index's workers (INTAKE I5.3's other half, server
+  side).** `GET /api/settings` reads them and `PUT /api/settings` writes them to
+  `--work/settings.json`, validated (a positive cap; 1–8 workers on a stage the journal
+  knows). The cap the index pauses on and the status line shows now comes from one
+  `budget_cap()`: the environment's `ROUGHCUT_BUDGET_USD` if set, else the saved setting, else
+  the default — so a production pin still wins. Workers apply to the journal at the next run.
+  `test_settings.py` 3 tests. The drawer on `/open` lands with the settings lane.
 - **One bin, several cuts — open, switch, save a copy** (Karl, 2026-09-08: *"work on
   multiple projects at the same time … switching easily between projects, and saving copies
   so we can try different things"*). The header of every screen now carries the bin **and the
