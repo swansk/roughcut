@@ -389,6 +389,37 @@ why and timestamps should be jumpable. Add a restart from beginning of clip in t
 - [x] I7.4 Decision 5 recorded (start/end adjustable after effects) and checked against the
       one effect that exists.
 
+### M8 · The pass feeds the board (Option B, stage 1)
+
+- [x] **I8.1 — the bin visibly feeds the cut board.** Karl, 2026-09-08, after using the
+      pass: *"what should I expect going from the pass to the cut board here? Cut board looks
+      exactly the same as before."* — lane `agent/binboard`, two commits on the board as it
+      is (no layout overhaul). `39fbfe4`: **kept**, a third tab under *Add a moment*, first in
+      the row and the one the library opens on when the bin has keeps — one row per keep in
+      bin order (heroes first, then clip and start): a still at its start, `CLIP · m:ss.s →
+      m:ss.s · d s`, `★ HERO`, the pass's `why` (with its `(frames …)`), the note in quotes,
+      and either *in the cut · shot N* (click selects the shot) or *+ add to cut* (a shot
+      with the keep's range and reason after the selected one, saved straight away so the
+      bin learns the use); a `missing` keep says so and cannot be added; the empty state
+      points at `/floor`; the Project panel reads `bin · N moments · N heroes · m:ss if
+      strung out` from `GET /api/selects` `summary`; the Steps strip's *first cut* says `N
+      heroes waiting` while a kept hero is not in the cut; re-read when the tab is shown and
+      after every save while it is up. `2d71140`: **Cut from the bin** — under the Ask's
+      note, and beside *Ask for a first cut* in the empty state (the panel is hidden there,
+      and it is where someone arriving from the pass lands) — `POST /api/ask` with the fixed
+      note *"Build the cut from the editor's selects: every hero must appear, use the other
+      keeps where they serve the story, and take nothing else unless it is needed to make a
+      keep land."* and the current story, then the usual proposal loop; disabled with a hint
+      while the bin is empty; the fixed note never becomes the story. Two calls where the
+      brief was silent: *in the cut* is decided on the board against the live timeline with
+      `used_in`'s own rule (half the shorter range), so a row flips before the autosave
+      lands and un-flips when its shot is removed; and the bin button is doubled into the
+      empty state because the Ask panel the brief named is hidden exactly when the timeline
+      is empty. `test_ui_flow.py` 45 passed (3 new) · suite 394 passed, 1 skipped.
+      **Next human look:** on Killington, open the board after the pass — the library should
+      open on *kept* with CLIP_04's jump first; press *+ add to cut* on one, then *Cut from
+      the bin*.
+
 ## Lanes in flight
 
 | lane | branch / worktree | scope | state |

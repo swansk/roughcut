@@ -10,6 +10,10 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **INTAKE M8 · I8.1 ticked** — the pass visibly feeds the cut board (Option B, stage 1):
+  commits `39fbfe4` (the `kept` tab, the Project line, `N heroes waiting`) and `2d71140`
+  (*Cut from the bin*), with the two calls made where the brief was silent and the next
+  human look on Killington. Docs only.
 - **Cut from the bin** — a second button under the Ask's note, and beside *Ask for a first
   cut* when the timeline is empty (the panel is hidden there, and it is where someone
   arriving from the pass lands). The same Ask with a fixed note — *build the cut from the
