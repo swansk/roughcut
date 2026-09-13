@@ -135,8 +135,34 @@
   .toggle button.on { background: var(--card-hi); color: var(--text); font-weight: 600; }
   #paused { background: #1a1610; border-left: 3px solid var(--warn); }
   #paused .lbl { color: var(--warn); }
-  #indexBtn { width: 100%; padding: 9px 12px; font-size: 12px; }
+  #indexRow { display: flex; gap: 6px; align-items: stretch; }
+  #indexBtn { flex: 1; min-width: 0; padding: 9px 12px; font-size: 12px; }
+  /* the gear (Fig. 1's "settings ▾"): workers and the cap live behind it, not on the form */
+  #settingsBtn { padding: 0 10px; font-size: 14px; line-height: 1; }
+  #settingsBtn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+  #settingsLine { text-align: center; min-height: 14px; }
   #resume { align-self: flex-start; }
+
+  /* ---- the settings drawer: the budget cap and one stepper per stage ---- */
+  #settings { background: #0f0f14; border-left: 3px solid var(--accent); }
+  #settings .lbl { margin-top: 4px; }
+  #settings .money { display: inline-flex; align-items: center; gap: 2px; color: var(--dim); font-size: 12px; }
+  #settings input[type=number] { font: inherit; font-size: 12px; color: var(--text); background: #101014;
+           border: 1px solid #3a3a48; border-radius: 6px; padding: 4px 6px; width: 72px; }
+  #settings input[type=number]:focus { outline: none; border-color: var(--accent); }
+  #settings input[type=number]:disabled { opacity: .5; }
+  #settingsRunning { color: var(--warn); }
+  .wrow { display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; }
+  .wrow .top { display: flex; align-items: center; gap: 8px; }
+  .wrow .wname { width: 40px; font: 600 10px var(--mono); letter-spacing: .06em; color: #c9c9d6; }
+  .stepper { display: inline-flex; align-items: center; border: 1px solid #3a3a48; border-radius: 6px; overflow: hidden; }
+  .stepper button { border: 0; border-radius: 0; padding: 2px 9px; font-size: 13px; line-height: 16px; background: var(--card-hi); }
+  .stepper input[type=number] { width: 40px; text-align: center; border: 0; border-radius: 0; border-left: 1px solid #3a3a48;
+           border-right: 1px solid #3a3a48; -moz-appearance: textfield; appearance: textfield; padding: 3px 0; }
+  .stepper input::-webkit-outer-spin-button, .stepper input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .wrow .whint { padding-left: 48px; }
+  #settingsErr { min-height: 0; }
+  #settings .acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
   .bar1 { height: 6px; background: #0d0d11; border: 1px solid #2e2e38; border-radius: 4px; overflow: hidden; }
   .bar1 i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .4s; }
   #progress.running .bar1 i { background: var(--accent); }
@@ -300,8 +326,34 @@
       <div class="box">
         <div class="row"><span class="hint">spent so far this project</span><span id="budgetLine" class="tnum hint">…</span></div>
         <div id="backendLine" class="hint small"></div>
-        <button type="button" id="indexBtn" class="primary" disabled>Index the footage</button>
+        <div id="indexRow">
+          <button type="button" id="indexBtn" class="primary" disabled>Index the footage</button>
+          <button type="button" id="settingsBtn" title="settings — workers and the budget cap · ," aria-label="settings — workers and the budget cap"
+                  aria-haspopup="dialog" aria-controls="settings" aria-expanded="false">⚙</button>
+        </div>
+        <div id="settingsLine" class="hint small"></div>
         <div id="indexHint" class="hint small" style="text-align:center">runs on its own · survives a crash · releases clips whole while the rest continues</div>
+      </div>
+      <div id="settings" class="box" role="dialog" aria-labelledby="settingsTitle" hidden>
+        <div class="row"><span class="lbl" id="settingsTitle">Settings</span><span class="hint small"><span class="key">Esc</span> closes</span></div>
+        <div id="settingsRunning" class="hint small" hidden>the index is running — changes apply to the next run</div>
+        <div id="settingsGone" class="hint small" hidden>this server has no settings endpoint yet — the cap and the workers are what the environment says</div>
+        <div id="settingsForm">
+          <div class="lbl">Budget cap</div>
+          <div class="row" style="justify-content:flex-start">
+            <label class="money" for="capField">$<input id="capField" type="number" min="0.01" step="0.5" inputmode="decimal" aria-label="budget cap in dollars"></label>
+            <span id="capSpent" class="hint tnum"></span>
+          </div>
+          <div id="capHint" class="hint small"></div>
+          <div class="lbl">Workers</div>
+          <div id="workers"></div>
+          <div id="settingsErr" class="bad small" role="alert" hidden></div>
+          <div class="acts">
+            <button type="button" id="settingsSave" class="primary">Save</button>
+            <button type="button" id="settingsReset">Reset to defaults</button>
+            <span id="settingsState" class="hint small"></span>
+          </div>
+        </div>
       </div>
       <div id="progress" class="box" hidden>
         <div class="row"><b id="progTitle">Overall</b><span id="progCount" class="tnum"></span></div>

@@ -89,9 +89,12 @@ def page(bin_server):
 
 
 def budget(bin_server, usd: float) -> None:
-    """The cap the index checks before every priced stage, for this module's server."""
-    from roughcut import config
-    bin_server["mp"].setattr(config, "budget_usd", lambda: usd)
+    """The cap the index checks before every priced stage, for this module's server.
+    `server.budget_cap()` is what the pause rule and the status line read — the
+    environment, else the setting saved under --work, else the default — so pinning
+    `config.budget_usd` alone would be ignored once the settings tests have saved one."""
+    import server
+    bin_server["mp"].setattr(server, "budget_cap", lambda: usd)
 
 
 def api(page, path: str) -> dict:
@@ -236,6 +239,171 @@ def test_the_slider_reprices_live_from_by_interval_without_a_round_trip(page, mo
     hint = page.locator("#sliderHint").inner_text()
     assert "applies to the 2 clips not yet looked at" in hint and "1 clip already looked at" in hint, hint
     assert "2 clips not yet looked at" in page.locator("#priceLine").inner_text()
+
+
+# ------------------------------------- settings: workers + the cap (I5.3's other half)
+#
+# The drawer behind the gear next to the Index button, against the real `GET/PUT
+# /api/settings`. These run before the index tests: the cap they save is the one
+# `/api/status` shows until `budget()` pins `server.budget_cap` for the run, and they
+# leave the workers and the cap at the defaults.
+
+STAGES_WITH_WORKERS = ["probe", "asr", "proxy", "sheet", "picks"]
+
+
+def worker_fields(page) -> dict[str, str]:
+    return page.evaluate("""() => Object.fromEntries(Array.from(
+        document.querySelectorAll('#workers input[data-stage]')).map(f => [f.dataset.stage, f.value]))""")
+
+
+def open_settings(page) -> dict:
+    """Open the drawer and wait for the server's answer to be on it."""
+    page.wait_for_selector("#settings:not([hidden])", timeout=3000)
+    page.wait_for_function("sheet.state.settings && !document.querySelector('#settingsForm').hidden",
+                           timeout=5000)
+    return page.evaluate("sheet.state.settings")
+
+
+def test_the_gear_or_comma_opens_settings_and_a_saved_cap_moves_the_budget_line(page):
+    assert page.locator("#settings").is_hidden()
+    gear = page.locator("#settingsBtn")
+    assert gear.get_attribute("aria-expanded") == "false"
+    page.keyboard.press(",")                              # the key, outside any field
+    s = open_settings(page)
+    assert gear.get_attribute("aria-expanded") == "true"
+    # the current values, straight from GET /api/settings
+    got = api(page, "/api/settings")
+    assert got["budget_usd"] == s["budget_usd"] and got["workers"] == s["workers"]
+    assert set(got["workers"]) == set(STAGES_WITH_WORKERS)
+    assert got["source"]["budget_usd"] in ("settings", "default")
+    cap = page.locator("#capField")
+    assert cap.is_enabled() and float(cap.input_value()) == got["budget_usd"]
+    assert page.locator("#capSpent").inner_text() == f"${got['spent_usd']:.2f} spent"
+    assert "ROUGHCUT_BUDGET_USD" not in page.locator("#capHint").inner_text()
+    assert worker_fields(page) == {k: str(v) for k, v in got["workers"].items()}
+    assert page.locator("#workers .wrow").count() == 5
+    hints = page.locator("#workers .whint").all_inner_texts()
+    assert any("model loads once" in h for h in hints) and any("spends faster, not better" in h for h in hints)
+    assert any("4K encodes" in h for h in hints), hints
+    assert page.locator("#settingsRunning").is_hidden()           # nothing is running
+    assert page.locator("#settingsGone").is_hidden()
+    # Esc closes; the gear opens it again; the gear again closes it
+    page.keyboard.press("Escape")
+    assert page.locator("#settings").is_hidden() and gear.get_attribute("aria-expanded") == "false"
+    gear.click()
+    open_settings(page)
+    gear.click()
+    assert page.locator("#settings").is_hidden()
+    # a cap of 5, saved: the toast says what changed, the budget line re-reads, the
+    # server keeps it and says it came from settings
+    page.keyboard.press(",")
+    open_settings(page)
+    before = float(cap.input_value())
+    cap.fill("5")
+    page.locator("#settingsSave").click()
+    page.wait_for_function("document.querySelector('#toast').textContent.startsWith('saved')", timeout=5000)
+    toast = page.locator("#toast").inner_text()
+    assert f"cap ${before:.2f} → $5.00" in toast, toast
+    page.wait_for_function("document.querySelector('#budgetLine').textContent.endsWith('of $5.00')", timeout=5000)
+    got = api(page, "/api/settings")
+    assert got["budget_usd"] == 5.0 and got["source"]["budget_usd"] == "settings"
+    assert api(page, "/api/status")["backend"]["budget_usd"] == 5.0
+    assert "cap $5.00" in page.locator("#settingsLine").inner_text()
+    assert "set here" in page.locator("#capHint").inner_text()
+    assert page.locator("#settings").is_visible(), "saving leaves the drawer open"
+    # nothing else changed, and saving again says so
+    assert got["workers"] == s["workers"]
+    page.locator("#settingsSave").click()
+    page.wait_for_function("document.querySelector('#toast').textContent.includes('nothing changed')", timeout=5000)
+    page.keyboard.press("Escape")
+
+
+def test_a_worker_count_is_clamped_in_the_ui_and_a_bad_one_sent_on_purpose_shows_the_400(page):
+    page.locator("#settingsBtn").click()
+    s = open_settings(page)
+    sheet = page.locator("#workers input[data-stage=sheet]")
+    row = page.locator("#workers .wrow[data-stage=sheet]")
+    # typed out of range: clamped when the field settles; the steppers stop at the ends
+    sheet.fill("12")
+    sheet.press("Tab")
+    assert sheet.input_value() == "8"
+    row.locator("button[data-d='1']").click()
+    assert sheet.input_value() == "8"
+    sheet.fill("0")
+    sheet.press("Tab")
+    assert sheet.input_value() == "1"
+    row.locator("button[data-d='-1']").click()
+    assert sheet.input_value() == "1"
+    row.locator("button[data-d='1']").click()
+    row.locator("button[data-d='1']").click()
+    assert sheet.input_value() == "3"
+    page.locator("#settingsSave").click()
+    page.wait_for_function("document.querySelector('#toast').textContent.includes('sheet workers')", timeout=5000)
+    assert f"sheet workers {s['workers']['sheet']} → 3" in page.locator("#toast").inner_text()
+    assert api(page, "/api/settings")["workers"]["sheet"] == 3
+    # a bad value the UI would never send, sent on purpose: the server's 400, said on the
+    # drawer, and nothing written
+    statuses: list[int] = []
+    page.on("response", lambda r: statuses.append(r.status) if r.url.endswith("/api/settings") and r.request.method == "PUT" else None)
+    for bad in ({"workers": {"sheet": 12}}, {"workers": {"grade": 1}}, {"budget_usd": 0}):
+        statuses.clear()
+        assert page.evaluate("(b) => sheet.saveSettings(b)", bad) is None
+        page.wait_for_selector("#settingsErr:not([hidden])", timeout=5000)
+        err = page.locator("#settingsErr").inner_text()
+        assert err.startswith("not saved:") and len(err) > len("not saved: "), err
+        assert statuses == [400], (bad, statuses)
+    got = api(page, "/api/settings")
+    assert got["workers"]["sheet"] == 3 and got["budget_usd"] == 5.0
+    # the UI never sends the bad one: a stepper at 8 stays 8 through Save
+    sheet.fill("8")
+    page.locator("#settingsSave").click()
+    page.wait_for_function("document.querySelector('#toast').textContent.includes('3 → 8')", timeout=5000)
+    assert page.locator("#settingsErr").is_hidden()
+    assert api(page, "/api/settings")["workers"]["sheet"] == 8
+    page.keyboard.press("Escape")
+
+
+def test_a_cap_from_the_environment_disables_the_field_and_reset_fills_the_defaults(page, monkeypatch):
+    """ROUGHCUT_BUDGET_USD in the live server's process wins over the saved cap: the
+    field is disabled with the reason, the budget line shows the environment's number,
+    and Save still writes the workers. Reset fills the defaults in; Save applies them."""
+    monkeypatch.setenv("ROUGHCUT_BUDGET_USD", "7.5")
+    page.keyboard.press(",")
+    s = open_settings(page)
+    assert s["source"]["budget_usd"] == "env" and s["budget_usd"] == 7.5
+    cap = page.locator("#capField")
+    assert cap.is_disabled() and float(cap.input_value()) == 7.5
+    hint = page.locator("#capHint").inner_text()
+    assert "ROUGHCUT_BUDGET_USD" in hint and "wins" in hint, hint
+    page.evaluate("sheet.refresh()")
+    page.wait_for_function("document.querySelector('#budgetLine').textContent.endsWith('of $7.50')", timeout=5000)
+    # Reset: the defaults fill the form, the hint says Save applies them, nothing written yet
+    page.locator("#settingsReset").click()
+    assert worker_fields(page) == {k: str(v) for k, v in s["defaults"]["workers"].items()}
+    assert "Save applies" in page.locator("#settingsState").inner_text()
+    assert api(page, "/api/settings")["workers"]["sheet"] == 8
+    page.locator("#settingsSave").click()
+    page.wait_for_function("document.querySelector('#toast').textContent.includes('sheet workers 8 → 2')", timeout=5000)
+    got = api(page, "/api/settings")
+    assert got["workers"] == s["defaults"]["workers"]
+    assert got["budget_usd"] == 7.5 and got["source"]["budget_usd"] == "env", "the cap was not sent"
+    page.keyboard.press("Escape")
+    # the environment gone, the saved cap is the word again
+    monkeypatch.delenv("ROUGHCUT_BUDGET_USD")
+    got = api(page, "/api/settings")
+    assert got["budget_usd"] == 5.0 and got["source"]["budget_usd"] == "settings"
+    # and the cap back to its default for the tests that follow, through the form — the
+    # drawer re-reads on opening, so `defaults` is the server's word with no environment
+    page.keyboard.press(",")
+    s = open_settings(page)
+    assert s["source"]["budget_usd"] == "settings" and s["defaults"]["budget_usd"] == 15.0
+    assert page.locator("#capField").is_enabled()
+    page.locator("#settingsReset").click()
+    assert float(page.locator("#capField").input_value()) == 15.0
+    page.locator("#settingsSave").click()
+    page.wait_for_function("document.querySelector('#toast').textContent.includes('cap $5.00 → $15.00')", timeout=5000)
+    assert api(page, "/api/settings")["budget_usd"] == 15.0
+    page.keyboard.press("Escape")
 
 
 def test_index_the_footage_runs_the_journal_and_the_cap_pauses_the_priced_stages(page, bin_server, project):
