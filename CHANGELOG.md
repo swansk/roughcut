@@ -190,6 +190,10 @@ same commit. Releases move entries into a dated version section.
   overlaps are one pick already, speech needs the shared theme.
 
 ### Changed
+- **Settings defaults say the code's default.** `GET /api/settings`'s `defaults.budget_usd` echoed
+  the environment's pin when one was set, so Reset could never show the real default; it is
+  15.0 now. Tests that force a pause pin `server.budget_cap`, not `config.budget_usd`, since a
+  saved cap sits between the two.
 - **Docs:** INTAKE I8.4 records the live check of the cuts control on Killington (Karl had
   already saved a copy of his own, `killington-future`).
 - **Session 11 close-out (docs).** INTAKE M7 ticked in full (I7.1 with the live CLIP_04

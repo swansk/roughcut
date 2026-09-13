@@ -152,11 +152,10 @@ def test_footage_added_later_is_indexed_and_released(tmp_path, project, monkeypa
 
 def test_the_budget_cap_pauses_the_priced_stages_only(tmp_path, project, monkeypatch):
     import server
-    from roughcut import config
 
     with _fresh(tmp_path, project, sidecars=project["sidecars"], visual=None) as c:
         _stub_tools(server, monkeypatch, tmp_path)
-        monkeypatch.setattr(config, "budget_usd", lambda: 0.0)
+        monkeypatch.setattr(server, "budget_cap", lambda: 0.0)
         s = _wait_index(c, c.post("/api/index", json={}).json()["job"])
         assert s["state"] == "done"
         assert "budget cap" in s["detail"]
@@ -173,7 +172,7 @@ def test_the_budget_cap_pauses_the_priced_stages_only(tmp_path, project, monkeyp
         # the editor lifts the pause; the cap is checked again and holds
         s = _wait_index(c, c.post("/api/index", json={"resume_priced": True}).json()["job"])
         assert "budget cap" in s["detail"]
-        monkeypatch.setattr(config, "budget_usd", lambda: 15.0)
+        monkeypatch.setattr(server, "budget_cap", lambda: 15.0)
         s = _wait_index(c, c.post("/api/index", json={"resume_priced": True}).json()["job"])
         assert s["state"] == "done" and s["detail"].startswith("3 of 3 clips released")
         assert c.get("/api/index").json()["paused_priced"] is False

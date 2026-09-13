@@ -1846,9 +1846,7 @@ def settings_payload() -> dict:
         "budget_usd": budget_cap(),
         "spent_usd": inference.spent_usd(),
         "workers": {**journal.DEFAULT_WORKERS, **(saved.get("workers") or {})},
-        "defaults": {"budget_usd": float(os.environ.get("ROUGHCUT_BUDGET_USD") or 15.0)
-                     if os.environ.get("ROUGHCUT_BUDGET_USD") else 15.0,
-                     "workers": dict(journal.DEFAULT_WORKERS)},
+        "defaults": {"budget_usd": 15.0, "workers": dict(journal.DEFAULT_WORKERS)},
         "source": {"budget_usd": ("env" if os.environ.get("ROUGHCUT_BUDGET_USD")
                                   else "settings" if saved.get("budget_usd") is not None
                                   else "default")},
