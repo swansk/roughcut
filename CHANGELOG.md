@@ -31,7 +31,8 @@ same commit. Releases move entries into a dated version section.
   the count, the marks and the stepping; the box matches a witness line and the terms AND
   together; `⇧X` with a filter asks, writes exactly the matching undecided verdicts with the
   reason, leaves decided and non-matching picks alone, one `⌘Z` restores all, `⇧U` likewise;
-  `⇧X` without a filter still rejects the rest of the clip.
+  `⇧X` without a filter still rejects the rest of the clip. (`262e301`; INTAKE I2.4 amended
+  and I8.2 ticked under M8.)
 - **One bin, several cuts — open, switch, save a copy** (Karl, 2026-09-08: *"work on
   multiple projects at the same time … switching easily between projects, and saving copies
   so we can try different things"*). The header of every screen now carries the bin **and the
