@@ -551,6 +551,277 @@ def test_T_compares_the_takes_and_P_keeps_one_and_rejects_the_rest_in_one_undo(p
     assert page.locator("#overlay").is_hidden()
 
 
+# ------------------------------------------------- the filter and batch reject (I2.4)
+
+def inject_kinds(page):
+    """Two more picks of other kinds, put into the page by hand as the takes are: the
+    synthetic bin has no visual sidecar and no telemetry, so every real pick is `speech`
+    with two heard lines. A `jump` in CLIP_A at 4-6 s carries one unaudited sheet claim
+    and nothing else (a *claimed only* pick); a `fall` in CLIP_B at 3-6 s carries a sheet
+    claim and a felt number. The real A and B picks are cut to 0-3 and 0-2.5 s so no two
+    picks in a clip share seconds — a verdict on a range replaces whatever was said about
+    those seconds. The round's queue becomes A·speech, B·speech, C·speech, A·jump, B·fall
+    — five picks, three clips, three kinds."""
+    page.evaluate("""() => {
+        const j = JSON.parse(JSON.stringify(floor.state.queue[0]));
+        const f = JSON.parse(JSON.stringify(floor.state.queue[1]));
+        Object.assign(floor.state.queue[0], { end: 3, preview: [0, 3] });
+        Object.assign(floor.state.queue[1], { end: 2.5, preview: [0, 2.5] });
+        Object.assign(j, { id: 'jump-a', start: 4, end: 6, preview: [4, 6], rank: 8, kind: 'jump', tags: [],
+                           why: 'a skier leaves the lip', take: null,
+                           witnesses: [{ kind: 'seen', start: 4, end: 6, at: 5, text: 'a skier leaves the lip',
+                                         state: 'claimed', event_kind: 'jump', score: 0.6 }] });
+        Object.assign(f, { id: 'fall-b', start: 3, end: 6, preview: [3, 6], rank: 9, kind: 'fall', tags: [],
+                           why: 'a skier goes down hard — telemetry: 6.7 g', take: null,
+                           witnesses: [{ kind: 'seen', start: 3, end: 6, at: 4, text: 'a skier goes down hard',
+                                         state: 'claimed', event_kind: 'fall', score: 0.5 },
+                                       { kind: 'felt', start: 3.5, end: 4.5, at: 4, text: '6.7 g', score: 0 }] });
+        floor.state.picks.push(j, f);
+        floor.state.queue.push(j, f);
+        floor.show(0, { autoplay: false });
+    }""")
+    page.wait_for_function("document.querySelector('#pic').paused")
+    assert page.evaluate("floor.state.queue.length") == 5
+
+
+def chip(page, group: str, value: str):
+    return page.locator(f"#filter .fchip[data-group={group}][data-v='{value}']")
+
+
+def chip_count(page, group: str, value: str) -> int:
+    return int(chip(page, group, value).locator("i").inner_text())
+
+
+def dimmed(page) -> list[str]:
+    return page.evaluate("[...document.querySelectorAll('#tapeMarks span.dim')].map((s) => s.dataset.id)")
+
+
+def test_slash_opens_a_filter_and_a_kind_narrows_the_count_and_the_stepping(page, project):
+    """I2.4's other half. `/` opens a line of chips — every kind in this round with its
+    count, four states, the clips — and a box. A kind chosen: the HUD says how many
+    match, the tape dims the marks outside it, the pass goes to the first matching
+    undecided pick, and ↵ / ⌫ step only through what matches; the queue is not changed.
+    Esc clears it and the round reads whole again."""
+    inject_kinds(page)
+    assert page.locator("#filter").is_hidden()
+    assert "match" not in page.locator("#hudPos").inner_text()
+    page.keyboard.press("/")
+    page.wait_for_selector("#filter:visible")
+    assert page.evaluate("document.activeElement.id") == "filterText"
+    assert chip_count(page, "kinds", "speech") == 3
+    assert chip_count(page, "kinds", "jump") == 1
+    assert chip_count(page, "kinds", "fall") == 1
+    assert chip_count(page, "states", "undecided") == 5
+    assert chip_count(page, "states", "claimed") == 2, "the jump and the fall: a sheet claim, unaudited, unheard"
+    assert chip_count(page, "states", "words") == 3
+    assert chip_count(page, "states", "telemetry") == 1
+    assert chip_count(page, "clips", "CLIP_A") == 2 and chip_count(page, "clips", "CLIP_B") == 2
+    assert chip_count(page, "clips", "CLIP_C") == 1
+    assert "5 in this round" in page.locator("#filterCount").inner_text()
+    assert page.locator("#app button:not(#hdBin)").count() == 0, "chips, not buttons"
+    # kind = jump: one match; this pick (A·speech) is outside it, so the pass moves to the
+    # jump — the queue is still five long and the position is saved
+    chip(page, "kinds", "jump").click()
+    page.wait_for_function("floor.state.i === 3", timeout=5000)
+    assert "1 of 5 match" in page.locator("#hudPos").inner_text()
+    assert "queue frozen" in page.locator("#hudPos").inner_text()
+    assert "1 of 5 match" in page.locator("#filterCount").inner_text()
+    assert "on" in chip(page, "kinds", "jump").get_attribute("class")
+    assert page.evaluate("floor.state.queue.length") == 5
+    assert page.locator("#ctxPick").inner_text().startswith("0:04.0 → 0:06.0")
+    assert page.locator("#tapeMarks span").count() == 2
+    assert page.locator("#tapeMarks span.now").count() == 1
+    assert len(dimmed(page)) == 1, "A's speech mark dims; this pick's bracket does not"
+    assert page.evaluate("floor.filterWords()") == "kind jump"
+    wait_edl(project, lambda d: d.get("floor", {}).get("position", {}).get("index") == 3)
+    # + fall (chips of one group OR): two match; ↵ steps to the fall and no further, ⌫ back
+    chip(page, "kinds", "fall").click()
+    page.wait_for_function("document.querySelector('#hudPos').textContent.includes('2 of 5 match')")
+    assert page.evaluate("floor.state.i") == 3, "this pick still matches: the pass stays"
+    assert page.evaluate("floor.filterWords()") == "kind jump / fall"
+    page.keyboard.press("Enter")
+    page.wait_for_function("floor.state.i === 4", timeout=5000)
+    assert page.locator("#ctxClip").inner_text() == "CLIP_B"
+    assert dimmed(page) == [page.evaluate("floor.state.queue[1].id")], "B's speech mark dims"
+    page.keyboard.press("Enter")
+    page.wait_for_function("document.querySelector('#toast').textContent.includes('no later pick matches')")
+    assert page.evaluate("floor.state.i") == 4
+    assert page.locator("#overlay").is_hidden(), "not the closing card: the round is not done"
+    page.keyboard.press("Backspace")
+    page.wait_for_function("floor.state.i === 3", timeout=5000)
+    page.keyboard.press("Backspace")
+    page.wait_for_function("document.querySelector('#toast').textContent.includes('no earlier pick matches')")
+    assert page.evaluate("floor.state.i") == 3
+    # a chip clicked again drops its term
+    chip(page, "kinds", "fall").click()
+    page.wait_for_function("document.querySelector('#hudPos').textContent.includes('1 of 5 match')")
+    # Esc: the filter goes, the line closes, nothing dims, the position stays
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#filter", state="hidden")
+    assert page.evaluate("floor.state.filter") is None
+    assert "match" not in page.locator("#hudPos").inner_text()
+    assert dimmed(page) == []
+    assert page.evaluate("floor.state.i") == 3
+    page.keyboard.press("Enter")                               # ↵ steps the whole queue again
+    page.wait_for_function("floor.state.i === 4", timeout=5000)
+    # the map has the / and ⇧U rows and ⇧X's second meaning; the six-key line is untouched
+    assert page.locator("#keys .key").count() == 10
+    page.keyboard.press("?")
+    page.wait_for_selector("#overlay[data-kind=keymap]")
+    full = page.locator("#overlayBox").inner_text()
+    assert "filter the round" in full and "every undecided pick that matches" in full
+    assert "the same, marked later" in full
+
+
+def test_the_filters_free_text_matches_a_witness_line_and_the_terms_and_together(page, project):
+    """The box matches the reason and every witness's text, case-insensitively; a state
+    chip and a clip chip narrow further; terms of different groups AND together."""
+    inject_kinds(page)
+    page.keyboard.press("/")
+    page.wait_for_selector("#filter:visible")
+    page.keyboard.type("GOODBYE")                              # a heard line on the three speech picks
+    page.wait_for_function("document.querySelector('#hudPos').textContent.includes('3 of 5 match')")
+    assert page.evaluate("floor.state.i") == 0, "this pick matches: the pass stays"
+    assert dimmed(page) == ["jump-a"], "A's jump, outside the filter, dims on A's tape"
+    assert page.evaluate("floor.filterWords()") == '"goodbye"'
+    page.keyboard.press("Control+a")
+    page.keyboard.type("leaves the lip")                       # a seen witness's text, on the jump only
+    page.wait_for_function("document.querySelector('#hudPos').textContent.includes('1 of 5 match')")
+    page.wait_for_function("floor.state.i === 3", timeout=5000)
+    assert page.evaluate("document.querySelector('#pic').paused"), "a filter's move parks; it does not play"
+    # ↵ in the box hands the keys back to the pass; the filter stays
+    page.keyboard.press("Enter")
+    assert page.evaluate("document.activeElement.id") != "filterText"
+    assert page.evaluate("floor.state.filter.text") == "leaves the lip"
+    page.keyboard.press("Control+a")                           # nothing typed: the box has no focus
+    assert page.evaluate("floor.state.filter.text") == "leaves the lip"
+    # the state chips: telemetry is the fall alone; claimed only is the jump and the fall;
+    # with the text still on, claimed only AND "leaves the lip" is the jump alone
+    chip(page, "states", "telemetry").click()
+    page.wait_for_function("document.querySelector('#hudPos').textContent.includes('0 of 5 match')")
+    assert page.evaluate("floor.state.i") == 3, "nothing matches: the pass stays where it is"
+    chip(page, "states", "telemetry").click()
+    chip(page, "states", "claimed").click()
+    page.wait_for_function("document.querySelector('#hudPos').textContent.includes('1 of 5 match')")
+    assert page.evaluate("floor.filterWords()") == 'claimed only · "leaves the lip"'
+    # the text dropped: claimed only is two; + clip CLIP_B is the fall alone
+    page.locator("#filterText").fill("")
+    page.wait_for_function("document.querySelector('#hudPos').textContent.includes('2 of 5 match')")
+    chip(page, "clips", "CLIP_B").click()
+    page.wait_for_function("document.querySelector('#hudPos').textContent.includes('1 of 5 match')")
+    page.wait_for_function("floor.state.i === 4", timeout=5000)
+    assert page.evaluate("floor.filterWords()") == "claimed only · CLIP_B"
+    # every term dropped: the line stays open, nothing is narrowed, the HUD says no count
+    chip(page, "clips", "CLIP_B").click()
+    chip(page, "states", "claimed").click()
+    page.wait_for_function("!document.querySelector('#hudPos').textContent.includes('match')")
+    assert page.locator("#filter").is_visible()
+    assert "nothing chosen" in page.locator("#filterCount").inner_text()
+    page.evaluate("document.querySelector('#filterText').blur()")
+    page.keyboard.press("Enter")                               # steps the whole queue: nothing is on
+    page.wait_for_selector("#overlay[data-kind=card]", timeout=5000)
+
+
+def test_shift_X_with_a_filter_asks_once_then_rejects_the_matching_undecided_picks_in_one_undo(page, project):
+    """kind = speech, one of them already `later`. ⇧X asks in the HUD and writes nothing;
+    Esc drops the question; ⇧X ⇧X rejects the two undecided speech picks — one POST each,
+    in queue order, `why: filtered out: kind speech` — leaves the later'd one and the jump
+    and the fall alone, clears the filter and moves on to the next undecided pick; one ⌘Z
+    brings both back and lands on the first. Then ⇧U does the same with `later`."""
+    inject_kinds(page)
+    page.keyboard.press("/")
+    page.wait_for_selector("#filter:visible")
+    chip(page, "kinds", "speech").click()
+    page.wait_for_function("document.querySelector('#hudPos').textContent.includes('3 of 5 match')")
+    page.keyboard.press("u")                                   # A·speech: later; the pass steps to B·speech
+    wait_edl(project, lambda d: d.get("floor", {}).get("verdicts"))
+    page.wait_for_function("floor.state.i === 1", timeout=5000)
+    assert page.locator("#filter").is_visible(), "a verdict does not clear the filter"
+    posted: list[dict] = []
+    page.on("request", lambda r: posted.append(r.post_data_json)
+            if r.method == "POST" and r.url.endswith("/api/floor/verdict") else None)
+    page.keyboard.press("Shift+X")
+    page.wait_for_selector("#hudAsk:visible")
+    assert page.locator("#hudAsk").inner_text() == "reject 2 picks? ⇧X again · Esc"
+    page.wait_for_timeout(200)
+    assert posted == [], "asked, not done"
+    assert len(edl(project)["floor"]["verdicts"]) == 1
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#hudAsk", state="hidden")
+    assert page.locator("#filter").is_visible(), "the first Esc drops the question, not the filter"
+    page.keyboard.press("Shift+X")
+    page.wait_for_selector("#hudAsk:visible")
+    page.keyboard.press("Shift+X")
+    d = wait_edl(project, lambda d: len(d.get("floor", {}).get("verdicts", [])) == 3)
+    vs = sorted(d["floor"]["verdicts"], key=lambda v: (v["clip"], v["start"]))
+    assert [(v["clip"], v["verdict"]) for v in vs] == [("CLIP_A.MP4", "later"), ("CLIP_B.MP4", "reject"), ("CLIP_C.MP4", "reject")]
+    assert vs[1]["why"] == "filtered out: kind speech" and vs[2]["why"] == "filtered out: kind speech"
+    assert d["selects"] == []
+    for _ in range(100):
+        if len(posted) >= 2:
+            break
+        page.wait_for_timeout(50)
+    assert [(b["clip"], b["verdict"], b["why"]) for b in posted] == [
+        ("CLIP_B.MP4", "reject", "filtered out: kind speech"),
+        ("CLIP_C.MP4", "reject", "filtered out: kind speech")], "one POST per pick, in queue order"
+    assert page.evaluate("[floor.state.queue[3].verdict, floor.state.queue[4].verdict]") == [None, None]
+    stamped(page, "REJECTED ×2")
+    page.wait_for_selector("#filter", state="hidden")
+    assert page.evaluate("floor.state.filter") is None
+    assert "rejected 2 picks · kind speech" in page.locator("#toast").inner_text()
+    page.wait_for_function("floor.state.i === 3", timeout=5000)            # the next undecided: the jump
+    assert page.evaluate("floor.state.queue.length") == 5
+    # one ⌘Z: both come back, the later stays, and the pass lands on the first of them
+    page.keyboard.press("Control+z")
+    d = wait_edl(project, lambda d: len(d.get("floor", {}).get("verdicts", [])) == 1)
+    assert d["floor"]["verdicts"][0]["verdict"] == "later"
+    page.wait_for_function("floor.state.i === 1", timeout=5000)
+    assert page.evaluate("[floor.state.queue[1].verdict, floor.state.queue[2].verdict]") == [None, None]
+    assert page.locator("#ctxClip").inner_text() == "CLIP_B"
+    # ⇧U with a filter: the same, marked later — claimed only is the jump and the fall
+    page.keyboard.press("/")
+    page.wait_for_selector("#filter:visible")
+    chip(page, "states", "claimed").click()
+    page.wait_for_function("document.querySelector('#hudPos').textContent.includes('2 of 5 match')")
+    page.keyboard.press("Shift+U")
+    page.wait_for_selector("#hudAsk:visible")
+    assert page.locator("#hudAsk").inner_text() == "mark later 2 picks? ⇧U again · Esc"
+    page.keyboard.press("Shift+X")                              # a different key drops the question
+    page.wait_for_selector("#hudAsk:visible")
+    assert page.locator("#hudAsk").inner_text() == "reject 2 picks? ⇧X again · Esc"
+    page.keyboard.press("Shift+U")
+    page.wait_for_selector("#hudAsk:visible")
+    page.keyboard.press("Shift+U")
+    d = wait_edl(project, lambda d: len(d.get("floor", {}).get("verdicts", [])) == 3)
+    laters = [v for v in d["floor"]["verdicts"] if v["why"].startswith("filtered out")]
+    assert [(v["clip"], v["start"], v["verdict"], v["why"]) for v in sorted(laters, key=lambda v: v["clip"])] == [
+        ("CLIP_A.MP4", 4.0, "later", "filtered out: claimed only"),
+        ("CLIP_B.MP4", 3.0, "later", "filtered out: claimed only")]
+    stamped(page, "LATER ×2")
+    # nothing undecided after the jump: the next undecided from the top is B·speech
+    page.wait_for_function("floor.state.i === 1", timeout=5000)
+
+
+def test_shift_X_without_a_filter_still_rejects_the_rest_of_the_clip(page, project):
+    """The old meaning, kept: from A·speech, ⇧X rejects this clip's undecided picks from
+    here on — the speech and the jump — with their own reasons, and moves on to B."""
+    inject_kinds(page)
+    page.keyboard.press("Shift+X")
+    d = wait_edl(project, lambda d: len(d.get("floor", {}).get("verdicts", [])) == 2)
+    vs = sorted(d["floor"]["verdicts"], key=lambda v: v["start"])
+    assert [(v["clip"], v["start"], v["end"], v["verdict"]) for v in vs] == [
+        ("CLIP_A.MP4", 0.0, 3.0, "reject"), ("CLIP_A.MP4", 4.0, 6.0, "reject")]
+    assert vs[1]["why"] == "a skier leaves the lip", "the pick's own reason — no filter to name"
+    assert not any(v["why"].startswith("filtered out") for v in vs)
+    stamped(page, "REJECTED ×2")
+    assert page.locator("#hudAsk").is_hidden(), "no filter, no question"
+    page.wait_for_function("document.querySelector('#ctxClip').textContent === 'CLIP_B'", timeout=5000)
+    assert page.evaluate("[floor.state.queue[1].verdict, floor.state.queue[2].verdict, floor.state.queue[4].verdict]") == [None, None, None]
+    page.keyboard.press("Control+z")
+    wait_edl(project, lambda d: not d["floor"]["verdicts"])
+    page.wait_for_function("floor.state.i === 0", timeout=5000)
+
+
 def lens(page) -> tuple[float, float]:
     """The lens's left and width on the tape, in percent of the clip."""
     return tuple(page.evaluate(

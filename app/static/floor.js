@@ -98,6 +98,9 @@ const F = {
   pending: 0,
   card: null,              // what the closing card learned
   overlay: null,           // evidence | keymap | more | card
+  filter: null,            // the filter line's terms while one is on: {kinds, states, clips, text}
+  filterOpen: false,       // the filter line is showing (`/`)
+  ask: null,               // a batch verdict waiting for its second ⇧X / ⇧U: {kind, n}
 };
 
 /* ----------------------------------------------------------------- helpers */
@@ -437,9 +440,18 @@ function tick(now) {
 function paintHud() {
   const n = F.queue.length;
   const done = F.queue.filter((p) => p.verdict).length;
+  const match = F.filter && !filterIsEmpty(F.filter) ? F.queue.filter(matches).length : null;
   $('#hudPos').innerHTML = n
-    ? `round ${F.round} · pick <b>${F.i + 1}</b> of ${n} · queue frozen for this round`
+    ? `round ${F.round} · pick <b>${F.i + 1}</b> of ${n}`
+      + (match != null ? ` · <b>${match}</b> of ${n} match` : '') + ' · queue frozen for this round'
     : `round ${F.round} · nothing to cull`;
+  const ask = $('#hudAsk');
+  ask.hidden = !F.ask;
+  if (F.ask) {
+    const key = F.ask.kind === 'reject' ? '⇧X' : '⇧U';
+    ask.textContent = `${F.ask.kind === 'reject' ? 'reject' : 'mark later'} ${F.ask.n} pick${F.ask.n === 1 ? '' : 's'}? ${key} again · Esc`;
+  }
+  paintFilter();
   $('#hudDone').style.width = n ? `${(100 * done / n).toFixed(1)}%` : '0';
   $('#hudNow').style.left = n ? `${(100 * done / n).toFixed(1)}%` : '0';
   $('#hudNow').style.width = n ? `${(100 / n).toFixed(1)}%` : '0';
@@ -633,7 +645,8 @@ function paintTape() {
     const here = q.id === p.id;
     const inQueue = F.queue.indexOf(q) >= 0;
     const cls = here ? 'now' : q.verdict === 'pick' ? (q.hero ? 'hero' : 'pick') : (q.verdict || '');
-    s.className = `${cls}${inQueue && !here ? ' jump' : ''}`;
+    // outside the filter a mark dims, so the tape shows what the round is narrowed to
+    s.className = `${cls}${inQueue && !here ? ' jump' : ''}${filterOn() && !matches(q) ? ' dim' : ''}`;
     s.dataset.id = String(q.id);
     s.style.left = `${(100 * q.start / dur).toFixed(2)}%`;
     s.style.width = `${(100 * (q.end - q.start) / dur).toFixed(2)}%`;
@@ -855,6 +868,12 @@ function show(i, { autoplay = true } = {}) {
 
 function advance() {
   if (F.mode !== 'pass') return;
+  if (filterOn()) {                            // only through what matches; the queue is not changed
+    const next = F.queue.findIndex((q, k) => k > F.i && matches(q));
+    if (next < 0) return toast('no later pick matches the filter — Esc clears it', 3000);
+    show(next);
+    return savePosition();
+  }
   if (F.i + 1 >= F.queue.length) return closingCard();
   show(F.i + 1);
   savePosition();
@@ -862,6 +881,13 @@ function advance() {
 
 function back() {
   if (F.mode !== 'pass' || F.i === 0) return;
+  if (filterOn()) {
+    let prev = -1;
+    F.queue.forEach((q, k) => { if (k < F.i && matches(q)) prev = k; });
+    if (prev < 0) return toast('no earlier pick matches the filter — Esc clears it', 3000);
+    show(prev);
+    return savePosition();
+  }
   show(F.i - 1);
   savePosition();
 }
@@ -923,8 +949,9 @@ async function verdict(kind, { hero = false } = {}) {
   setTimeout(() => { if (cur() === p && F.mode === 'pass') advance(); }, STAMP_MS);
 }
 
-/* ⇧X: the rest of this clip's undecided picks in the queue, from here on, in one undo. */
-async function rejectRest() {
+/* ⇧X / ⇧U without a filter: the rest of this clip's undecided picks in the queue, from
+ * here on, rejected (or marked later) in one undo. */
+async function restOfClip(kind) {
   const p = cur();
   if (!p || F.mode !== 'pass') return;
   closeOverlay();
@@ -936,23 +963,25 @@ async function rejectRest() {
     const range = [r2(q.start), r2(q.end)];
     try {
       const data = await send('POST', '/api/floor/verdict',
-        verdictBody(q, 'reject', range, false, q === p ? F.note : ''));
+        verdictBody(q, kind, range, false, q === p ? F.note : ''));
       F.summary = data.summary;
     } catch (e) {
-      toast(`reject did not land: ${e.message}`, 6000);
+      toast(`${kind} did not land: ${e.message}`, 6000);
       break;
     }
     entry.items.push({ p: q, prev: snapshot(q), sent: range });
-    q.verdict = 'reject';
+    q.verdict = kind;
     q.hero = false;
     q.sent = range;
   }
   if (!entry.items.length) return;
   F.undo.push(entry);
-  stamp('reject', false, entry.items.length > 1 ? `×${entry.items.length}` : '');
+  if (F.undo.length > 100) F.undo.shift();
+  stamp(kind, false, entry.items.length > 1 ? `×${entry.items.length}` : '');
   paintHud();
   paintTape();
-  toast(`rejected ${entry.items.length} pick${entry.items.length === 1 ? '' : 's'} in ${stem(p.clip)}`);
+  const n = entry.items.length;
+  toast(`${kind === 'reject' ? 'rejected' : 'marked later'} ${n} pick${n === 1 ? '' : 's'} in ${stem(p.clip)}`);
   // past the ones just rejected: that was the point
   const next = F.queue.findIndex((q, k) => k > F.i && !entry.items.some((it) => it.p === q));
   setTimeout(() => {
@@ -1593,6 +1622,214 @@ async function surveyReject() {
   toast(`rejected take ${survey.k + 1}`);
 }
 
+/* ------------------------------------------------------------ the filter
+ *
+ * I2.4's other half: batch reject via a filter on the pass. A round of 40 on a bin like
+ * Killington carries ten silent scenery claims and six unaudited sheet claims an editor
+ * wants gone in one gesture, not forty. `/` opens a line of chips — the kinds present in
+ * this round, four states, the clips — and a box for a word; the terms AND together
+ * (chips of one group OR). While a filter is on the HUD counts the matches, the tape dims
+ * the marks outside it, ↵ / ⌫ step only through what matches, and the pass shows the first
+ * matching undecided pick. The queue itself is never changed: rule 3, the round is frozen.
+ * ⇧X (⇧U) then rejects (marks later) every undecided matching pick — after one confirm in
+ * the HUD — one POST per pick in queue order, `why: filtered out: <the filter in words>`,
+ * one undo entry for the lot; then the filter clears and the pass moves on.
+ */
+
+const STATES = [
+  ['undecided', 'undecided', (p) => !p.verdict],
+  ['claimed', 'claimed only', (p) => {                     // a sheet claim nobody audited or heard
+    const ws = p.witnesses || [];
+    const seen = ws.filter((w) => w.kind === 'seen');
+    return seen.length > 0 && !seen.some((w) => w.state === 'audited') && !ws.some((w) => w.kind === 'heard');
+  }],
+  ['words', 'has words', (p) => (p.witnesses || []).some((w) => w.kind === 'heard')],
+  ['telemetry', 'has telemetry', (p) => (p.witnesses || []).some((w) => w.kind === 'felt')],
+];
+
+const stateOf = (key) => STATES.find((x) => x[0] === key);
+
+const emptyFilter = () => ({ kinds: new Set(), states: new Set(), clips: new Set(), text: '' });
+
+const filterIsEmpty = (f) => !f.kinds.size && !f.states.size && !f.clips.size && !f.text;
+
+/* A filter is on when it has a term — an open line with nothing chosen narrows nothing. */
+const filterOn = () => !!(F.filter && !filterIsEmpty(F.filter));
+
+/* The words the free text searches: the reason, the conflict, every witness's text, the
+ * theme tags — lower-cased, matched as a substring. */
+function haystack(p) {
+  return [p.why, p.conflict].concat((p.witnesses || []).map((w) => w.text), p.tags || [])
+    .filter(Boolean).join('\n').toLowerCase();
+}
+
+function matches(p) {
+  const f = F.filter;
+  if (!f) return true;
+  if (f.kinds.size && !f.kinds.has(p.kind || 'seen')) return false;
+  if (f.states.size && ![...f.states].some((s) => { const st = stateOf(s); return st && st[2](p); })) return false;
+  if (f.clips.size && !f.clips.has(stem(p.clip))) return false;
+  if (f.text && !haystack(p).includes(f.text)) return false;
+  return true;
+}
+
+/* The filter in words — what a batch verdict's `why` says: `filtered out: kind jump ·
+ * claimed only · CLIP_04 · "glove"`. */
+function filterWords(f = F.filter) {
+  if (!f) return '';
+  const parts = [];
+  if (f.kinds.size) parts.push(`kind ${[...f.kinds].join(' / ')}`);
+  if (f.states.size) parts.push([...f.states].map((s) => (stateOf(s) || [s, s])[1]).join(' / '));
+  if (f.clips.size) parts.push([...f.clips].join(' / '));
+  if (f.text) parts.push(`"${f.text}"`);
+  return parts.join(' · ');
+}
+
+function openFilter() {
+  if (F.mode !== 'pass') return;
+  closeOverlay();
+  F.filterOpen = true;
+  if (!F.filter) F.filter = emptyFilter();
+  $('#filter').hidden = false;
+  paintFilter();
+  $('#filterText').focus();
+}
+
+/* Esc (or `/` again): the filter goes, the line closes, the round reads whole again. */
+function clearFilter() {
+  const was = filterOn();
+  F.filter = null;
+  F.filterOpen = false;
+  F.ask = null;
+  $('#filterText').value = '';
+  $('#filterText').blur();
+  $('#filter').hidden = true;
+  paintHud();
+  paintTape();
+  if (was) toast('filter cleared');
+}
+
+/* A term changed: recount, repaint, and if this pick fell outside the filter go to the
+ * first matching undecided pick — the queue is untouched, only where we stand moves. */
+function filterChanged() {
+  if (!F.filter) return;
+  F.ask = null;
+  paintHud();
+  paintTape();
+  const p = cur();
+  if (!p || !filterOn() || matches(p)) return;
+  let at = F.queue.findIndex((q) => matches(q) && !q.verdict);
+  if (at < 0) at = F.queue.findIndex(matches);
+  if (at < 0) return;
+  show(at, { autoplay: false });
+  savePosition();
+}
+
+function toggleTerm(group, value) {
+  if (!F.filter) F.filter = emptyFilter();
+  const set = F.filter[group];
+  if (!set) return;
+  if (set.has(value)) set.delete(value); else set.add(value);
+  filterChanged();
+}
+
+function termChip(group, value, label, n, on) {
+  return `<span class="fchip${on ? ' on' : ''}" data-group="${escapeHtml(group)}" data-v="${escapeHtml(value)}" title="${on ? 'click to drop this term' : 'click to add this term'}">${escapeHtml(label)}<i>${n}</i></span>`;
+}
+
+function paintFilter() {
+  if ($('#filter').hidden) return;
+  const f = F.filter || emptyFilter();
+  const q = F.queue;
+  const count = (fn) => q.filter(fn).length;
+  const kinds = [...new Set(q.map((p) => p.kind || 'seen'))].sort();
+  $('#filterKinds').innerHTML = kinds.map((k) =>
+    termChip('kinds', k, k, count((p) => (p.kind || 'seen') === k), f.kinds.has(k))).join('');
+  $('#filterStates').innerHTML = STATES.map(([k, label, fn]) =>
+    termChip('states', k, label, count(fn), f.states.has(k))).join('');
+  const clips = [...new Set(q.map((p) => stem(p.clip)))].sort();
+  $('#filterClips').innerHTML = clips.map((c) =>
+    termChip('clips', c, c, count((p) => stem(p.clip) === c), f.clips.has(c))).join('');
+  $('#filterCount').textContent = filterIsEmpty(f)
+    ? `${q.length} in this round · nothing chosen yet`
+    : `${count(matches)} of ${q.length} match`;
+}
+
+/* ⇧X / ⇧U with a filter on: every undecided matching pick. The first press asks in the
+ * HUD; the second does it. */
+async function batchVerdict(kind) {
+  const p = cur();
+  if (!p || F.mode !== 'pass' || !filterOn()) return;
+  closeOverlay();
+  const items = F.queue.filter((q) => matches(q) && !q.verdict);
+  if (!items.length) { F.ask = null; paintHud(); return toast('nothing undecided matches the filter'); }
+  if (!F.ask || F.ask.kind !== kind) {
+    F.ask = { kind, n: items.length };
+    paintHud();
+    return;
+  }
+  F.ask = null;
+  pause();
+  const words = filterWords();
+  const why = `filtered out: ${words}`;
+  const entry = { i: F.i, items: [], keep: { ...F.keep }, note: F.note };
+  for (const q of items) {
+    const range = [r2(q.start), r2(q.end)];
+    try {
+      const data = await send('POST', '/api/floor/verdict',
+        { ...verdictBody(q, kind, range, false, q === p ? F.note : ''), why });
+      F.summary = data.summary;
+    } catch (e) {
+      toast(`${kind} did not land: ${e.message}`, 6000);
+      break;
+    }
+    entry.items.push({ p: q, prev: snapshot(q), sent: range });
+    q.verdict = kind;
+    q.hero = false;
+    q.sent = range;
+  }
+  if (!entry.items.length) { paintHud(); return; }
+  F.undo.push(entry);
+  if (F.undo.length > 100) F.undo.shift();
+  const n = entry.items.length;
+  F.filter = null;
+  F.filterOpen = false;
+  $('#filterText').value = '';
+  $('#filter').hidden = true;
+  stamp(kind, false, n > 1 ? `×${n}` : '');
+  paintHud();
+  paintTape();
+  savePosition();
+  toast(`${kind === 'reject' ? 'rejected' : 'marked later'} ${n} pick${n === 1 ? '' : 's'} · ${words} · ⌘Z brings them back`, 4000);
+  // then the next undecided pick: after this one, else from the top, else the card
+  let next = F.queue.findIndex((q, k) => k > F.i && !q.verdict);
+  if (next < 0) next = F.queue.findIndex((q) => !q.verdict);
+  setTimeout(() => {
+    if (F.mode !== 'pass') return;
+    if (next < 0) closingCard(); else { show(next); savePosition(); }
+  }, STAMP_MS);
+}
+
+function wireFilter() {
+  $('#filter').addEventListener('click', (e) => {
+    const c = e.target.closest ? e.target.closest('.fchip') : null;
+    if (!c) return;
+    e.preventDefault();
+    toggleTerm(c.dataset.group, c.dataset.v);
+  });
+  const box = $('#filterText');
+  box.addEventListener('input', () => {
+    if (!F.filter) F.filter = emptyFilter();
+    F.filter.text = box.value.trim().toLowerCase();
+    filterChanged();
+  });
+  box.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); box.blur(); }
+    else if (e.key === 'Escape') { e.preventDefault(); clearFilter(); }
+    e.stopPropagation();
+  });
+}
+
 /* ---------------------------------------------------------------- overlays */
 
 function openOverlay(kind, html) {
@@ -1636,7 +1873,10 @@ function keymapHtml() {
   const rows = [
     ['P', 'pick — to the bin, with the reason and any note'], ['X', 'reject — stays on the floor'],
     ['U', 'later — the pile the closing card offers back'], ['1', 'hero — must appear in the first cut'],
-    ['⇧X', 'reject the rest of this clip’s picks'], ['⌘Z', 'undo the last verdict, with its trim and note'],
+    ['⇧X', 'reject the rest of this clip’s picks · with a filter on: reject every undecided pick that matches, after one confirm'],
+    ['⇧U', 'the same, marked later'],
+    ['/', 'filter the round — by kind, state, clip or a word in the reason or a witness; ↵ ⌫ step through what matches, the tape dims the rest; Esc clears it'],
+    ['⌘Z', 'undo the last verdict, with its trim and note'],
     ['J K L', 'shuttle — K pauses'],
     ['space', 'play / pause — pressed again where the band ended, it watches on past it'],
     ['0', 'restart the clip: play the whole clip from 0 (Home too) · ⇧0 restarts the band — from its start, stopping at its end'],
@@ -1868,7 +2108,21 @@ document.addEventListener('keydown', (e) => {
     if (k === 'Escape' || k === '.') return closeOverlay();
   }
   if (F.overlay && (k === 'Escape' || (k === 'e' && F.overlay === 'evidence'))) return closeOverlay();
+  // Esc on the pass itself: a pending batch verdict is dropped; else the filter is cleared.
+  // (The header's switcher takes Esc first, on capture, and prevents it when it closes.)
+  if (k === 'Escape' && !e.defaultPrevented) {
+    if (F.ask) { F.ask = null; paintHud(); return; }
+    if (F.filter) return clearFilter();
+  }
   if (!cur()) return undefined;
+  // any key but the one that asked drops a pending batch verdict (a modifier on its own
+  // is not a key: ⇧ goes down before the X it belongs to)
+  if (F.ask && !['Shift', 'Control', 'Alt', 'Meta', 'CapsLock'].includes(k)
+      && !(e.shiftKey && ((k === 'x' && F.ask.kind === 'reject') || (k === 'u' && F.ask.kind === 'later')))) {
+    F.ask = null;
+    paintHud();
+  }
+  if (k === '/') { e.preventDefault(); return F.filterOpen ? clearFilter() : openFilter(); }
   if (F.overlay === 'survey') {
     if (k === 'ArrowLeft' || k === 'ArrowRight') { e.preventDefault(); return surveyMove(k === 'ArrowLeft' ? -1 : 1); }
     if (k === 'Enter') { e.preventDefault(); return surveyGo(); }
@@ -1885,8 +2139,8 @@ document.addEventListener('keydown', (e) => {
 
   switch (k) {
     case 'p': return verdict('pick');
-    case 'x': return e.shiftKey ? rejectRest() : verdict('reject');
-    case 'u': return verdict('later');
+    case 'x': return e.shiftKey ? (filterOn() ? batchVerdict('reject') : restOfClip('reject')) : verdict('reject');
+    case 'u': return e.shiftKey ? (filterOn() ? batchVerdict('later') : restOfClip('later')) : verdict('later');
     case '1': return verdict('pick', { hero: true });
     case 'j': case 'k': case 'l': return shuttle(k);
     case ' ':
@@ -1965,6 +2219,7 @@ async function boot() {
     e.stopPropagation();
   });
   ta.addEventListener('blur', () => { if (!ta.hidden) { const t = ta.value; closeNote(); setNote(t); } });
+  wireFilter();
   window.addEventListener('resize', () => { zoom.built = ''; buildZoom(); paintKeep(true); });
   window.addEventListener('pagehide', releaseMic);
   document.addEventListener('visibilitychange', () => { if (document.hidden) releaseMic(); });
@@ -1999,6 +2254,7 @@ async function boot() {
 window.floor = {
   state: F, current: cur, keepRange, show, advance, undo, playBin, seek,
   dictSend, mic: dict, snapStart, snapEnd, words, utterances, coverageLine, lit,
+  matches, filterWords,
 };
 
 boot();

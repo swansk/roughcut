@@ -42,6 +42,26 @@
   #hudBar i { position: absolute; top: 0; bottom: 0; }
   #hudDone { left: 0; background: var(--good); }
   #hudNow { background: var(--accent); }
+  /* a batch verdict asks once, here, before it lands */
+  #hudAsk { color: var(--warn); font-weight: 600; }
+  #hudAsk[hidden] { display: none; }
+
+  /* ---- the filter line (I2.4): chips for kind · state · clip, a box for a word ---- */
+  #filter { display: flex; align-items: center; gap: 12px; padding: 5px 14px; background: #0c0c10;
+            border-bottom: 1px solid var(--line); flex: none; font-size: 11px; flex-wrap: wrap; }
+  #filter[hidden] { display: none; }
+  #filter .fgroup { display: inline-flex; align-items: center; gap: 4px; }
+  #filter .fgroup .lbl { margin-right: 3px; }
+  .fchip { display: inline-block; cursor: pointer; border: 1px solid #2a2a36; border-radius: 10px;
+           padding: 0 7px; line-height: 16px; color: var(--dim); white-space: nowrap; user-select: none; }
+  .fchip:hover { border-color: #4a4a5c; color: var(--text); }
+  .fchip.on { border-color: var(--accent); color: #fff; background: #12121a; }
+  .fchip i { font-style: normal; color: var(--faint); margin-left: 4px; font-size: 9.5px; }
+  .fchip.on i { color: var(--accent); }
+  #filterText { background: #0e0e13; color: var(--text); border: 1px solid #2a2a36; border-radius: 6px;
+                padding: 2px 8px; font: inherit; width: 210px; }
+  #filterText:focus { outline: none; border-color: var(--accent); }
+  #filterCount { color: var(--text); }
   /* ---- stage: margins + picture ---- */
   #stage { display: grid; grid-template-columns: 200px 1fr 240px; flex: 1 1 auto; min-height: 0;
            background: var(--bg); }
@@ -154,6 +174,8 @@
   #tapeMarks span.reject { background: #26262f; }
   #tapeMarks span.later { background: var(--warn); }
   #tapeMarks span.hero { background: var(--gold); }
+  /* outside the filter: dimmed, still there — the queue is frozen, only the eye narrows */
+  #tapeMarks span.dim { opacity: .25; }
   /* this pick is a bracket over its window; it takes no pointer, so a click on it reaches a
    * mark beneath it, or the tape */
   #tapeMarks span.now { background: rgba(110,168,254,.22); border: 2px solid #fff; border-bottom: none;
@@ -275,8 +297,21 @@
     <span id="hudPos" class="hint tnum">loading the bin…</span>
     <div id="hudBar"><i id="hudDone"></i><i id="hudNow"></i></div>
     <span id="hudBin" class="hint tnum small"></span>
+    <span id="hudAsk" class="tnum" hidden></span>
     <span class="grow"></span>
     <span class="key" title="key map">?</span>
+  </div>
+  <!-- the filter line (I2.4): `/` opens it, Esc clears it. Chips, not buttons — the pass
+       has no buttons in the flow; a chip is a term, like a mark on the tape is a pick. -->
+  <div id="filter" hidden>
+    <span class="lbl">Filter</span>
+    <span class="fgroup"><span class="lbl">kind</span><span id="filterKinds"></span></span>
+    <span class="fgroup"><span class="lbl">state</span><span id="filterStates"></span></span>
+    <span class="fgroup"><span class="lbl">clip</span><span id="filterClips"></span></span>
+    <input id="filterText" type="text" placeholder="a word in the reason or a witness" spellcheck="false" autocomplete="off">
+    <span id="filterCount" class="tnum"></span>
+    <span class="grow"></span>
+    <span class="hint small"><span class="key">↵</span><span class="key">⌫</span> step through what matches · <span class="key">⇧X</span> reject them · <span class="key">⇧U</span> later · <span class="key">Esc</span> clears</span>
   </div>
 
   <div id="stage">
