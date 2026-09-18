@@ -556,10 +556,6 @@ and effects derive from it at render.
       the edge was taken (the foundation's seek moves it while parking); cut points are a
       roll's targets only.
 
-- [ ] I9.2 **Trims + snapping (lane `agent/tl-trim`):** ripple / roll / slip by drag, the
-      magnet (cuts, playhead, sentences, onsets; `S` toggles; snap line), `,`/`.` nudges.
-- [ ] I9.3 **Keyboard editing (lane `agent/tl-keys`):** JKL, `↑`/`↓`, `Home`/`End`, `I`/`O` +
-      insert, `C` razor, `Q`/`W`, `X` ripple delete, `⌘Z`/`⌘⇧Z`, the `?` map on the board.
 - [x] I9.4 **Lanes + drag and drop (lane `agent/tl-lanes`, commits `4d52440` the lanes,
       `8d2f69d` drag and drop; `test_timeline_lanes.py` 6 tests, with `test_timeline_ui.py`
       19 passed, suite 427 passed):** `app/static/timeline-lanes.js` + rules appended to
