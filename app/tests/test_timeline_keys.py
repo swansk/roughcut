@@ -256,7 +256,7 @@ def test_c_splits_at_the_playhead_and_both_halves_survive_the_save(page, project
     # too close to an edge is refused, and is not an edit
     page.evaluate("tl.seek(0.05)")
     page.keyboard.press("c")
-    assert page.locator(".seg").count() == 4
+    assert page.locator("#tl .blk").count() == 4
     page.wait_for_function(
         "document.querySelector('#toast').textContent.includes('too close')", timeout=3000)
 
@@ -294,7 +294,7 @@ def test_x_removes_the_whole_selection_and_one_undo_restores_it(page):
     assert page.locator("#tl .blk").count() == 0
     page.keyboard.press("Control+z")
     assert ids(page) == [a, b]
-    assert page.locator(".seg").count() == 2
+    assert page.locator("#tl .blk").count() == 2
     # the shot that takes the place is selected; Delete and Backspace do the same
     page.locator("#library .cand").first.click()        # a third shot, after app.js's index
     assert page.evaluate("segs.length") == 3
@@ -342,7 +342,7 @@ def test_escape_clears_the_selection(page):
     page.keyboard.press("Escape")
     assert page.evaluate("tl.state.sel.size") == 0
     assert page.evaluate("tl.state.anchor") is None
-    assert page.locator(".seg.sel").count() == 0
+    assert "select a shot on the timeline" in page.locator("#inspector").inner_text()
 
 
 # ------------------------------------------------------------------ marks on a clip
@@ -442,6 +442,6 @@ def test_keys_are_ignored_while_typing(page):
     page.keyboard.press("x")
     page.keyboard.press("Delete")
     assert page.evaluate("segs.length") == 2
-    page.locator(".seg").first.locator(".why").focus()
+    page.locator("#inspector .why").focus()
     page.keyboard.press("c")
     assert page.evaluate("segs.length") == 2

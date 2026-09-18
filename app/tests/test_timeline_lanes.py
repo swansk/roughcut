@@ -418,7 +418,7 @@ def test_dragging_a_shots_body_past_the_next_one_reorders_and_the_ids_travel(pag
     assert shots(page) == [["CLIP_B.MP4", 0.0, 2.0], ["CLIP_A.MP4", 1.0, 3.0]]
     assert page.locator("#tl .blk.dragging").count() == 0
     assert page.locator("#undo").get_attribute("title").startswith("undo: move")
-    assert page.locator(".seg").first.locator(".clip").inner_text() == "CLIP_B"
+    assert page.locator("#tl .blk").first.locator(".name").inner_text() == "CLIP_B"
     wait_saved(page)
     assert [(s["id"], s["clip"]) for s in on_disk(project)] == [(b, "CLIP_B.MP4"), (a, "CLIP_A.MP4")]
     page.keyboard.press("Control+z")

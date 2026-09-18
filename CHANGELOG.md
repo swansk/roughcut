@@ -458,6 +458,25 @@ same commit. Releases move entries into a dated version section.
   overlaps are one pick already, speech needs the shared theme.
 
 ### Changed
+- **The inspector's tests and docs (INTAKE M9, I9.5; lane `agent/inspector`).**
+  `test_ui_flow.py`: the fixture waits for `#tl .blk`; every test that read `.seg` cards
+  reads the timeline's blocks and `#inspector` instead (the poster test, the settle test,
+  the trim / undo tests, the boundary-warning test now checks the inspector's header and
+  the *Fix cut points* button, remove and reload, the proposal tests, the scoped ask — now
+  *the inspector asks about the selected shot* — Find's insert, the monitor's block-click
+  and space / enter tests, playing from the inspector with the monitor scrolled off, the
+  versions list, what the visual pass saw, the reattached ask, the kept tab, the empty bin,
+  cut from the bin and the switcher); a `select_shot` helper selects by id without playing.
+  Five new tests: selecting a block fills the header and the why (and ↑ follows), editing
+  the why saves to the EDL and repaints the block's tooltip, the ±0.25 s buttons are one
+  undo entry each (⇧ a second; three ⌘Z walk back in order), the kept tab's *in the cut ·
+  shot N* selects the block and the inspector from a cleared selection, and the empty state
+  after Esc plus the multi-selection with remove for all. `test_timeline_ui.py` (a block
+  click and the index both way, the ruler click, the split / move / remove counts, the
+  shared undo stack), `test_timeline_keys.py` (the razor count, ⌘A+X undo, Esc, keys while
+  typing in the why) and `test_timeline_lanes.py` (the drag's first block) where a selector
+  named a card. README: the *Shot cards* row is *Inspector*; the monitor row and the
+  visual-pass paragraph say where the moments show now.
 - **The inspector replaces the shot cards (INTAKE M9, I9.5; lane `agent/inspector`).**
   `#inspector`, under the timeline in the DOM place the card list had: for the anchor shot,
   `SHOT n of N · CLIP_04 · 3:44.0 → 3:48.2 · 4.2 s` (the exact clip seconds in the tooltip),

@@ -83,7 +83,7 @@ def page(live_server, project):
         browser = pw.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
         pg = browser.new_page(viewport={"width": 1280, "height": 900})
         pg.goto(live_server)
-        pg.wait_for_selector(".seg")
+        pg.wait_for_selector("#tl .blk")
         yield pg
         browser.close()
 
@@ -92,16 +92,22 @@ def total_text(page) -> str:
     return page.locator("#total").inner_text()
 
 
+def select_shot(page, i: int) -> None:
+    """Select shot i on the timeline by id, without playing it (a click on a block also
+    plays the cut from there). The inspector follows the selection."""
+    page.evaluate(f"tl.select([tl.idAt({i})])")
+
+
 def test_board_renders_the_timeline(page):
-    assert page.locator(".seg").count() == 2
+    assert page.locator("#tl .blk").count() == 2
     assert "test cut" in page.locator("#title").inner_text()
     assert page.locator("#total").inner_text() == "0:04.0"   # (3.0-1.0) + (2.0-0.0)
 
 
 def test_preview_video_loads_and_can_seek(page):
     """The whole latency argument for proxies rests on this working. The element under
-    test is the monitor's, not a card's: the cards are stills now (see
-    test_a_shot_card_carries_a_poster_not_a_video_stream), and the monitor is the only
+    test is the monitor's, not the inspector's: the inspector shows a still (see
+    test_the_inspector_carries_a_poster_not_a_video_stream), and the monitor is the only
     thing on the board that opens a proxy."""
     page.evaluate("arm(document.querySelector('#pv0'), segs[0])")
     page.wait_for_function(
@@ -124,37 +130,36 @@ def test_preview_video_loads_and_can_seek(page):
     assert seeked == pytest.approx(4.0, abs=0.5), "seeking failed — range serving broken"
 
 
-def test_a_shot_card_carries_a_poster_not_a_video_stream(page):
+def test_the_inspector_carries_a_poster_not_a_video_stream(page):
     """Karl, on the Killington board: *"I can hear the videos when I click play, but
     the preview window still shows up blank."* Sixteen cards each holding open an
     85 MB proxy, against Chrome's six connections per host, starved the monitor's own
-    request: it reached readyState 4 at ~10 s while the audio had already started. A
-    card only ever showed one frame, so it is an <img> now."""
-    assert page.locator(".seg video").count() == 0, "a card is streaming video again"
-    cards = page.locator(".seg").count()
-    posters = page.locator(".seg img.poster")
-    assert posters.count() == cards
+    request: it reached readyState 4 at ~10 s while the audio had already started. The
+    inspector shows one frame of the selected shot, and it is an <img>."""
+    assert page.locator("#inspector video").count() == 0, "the inspector is streaming video"
+    posters = page.locator("#inspector img.poster")
+    assert posters.count() == 1                       # shot 1 is selected at boot
     src = posters.first.get_attribute("src")
     assert src.startswith("/media/poster/") and "?t=1.00" in src, src
     # and it is a real picture, not a broken image
     page.wait_for_function(
-        "document.querySelector('.seg img.poster').naturalWidth > 0", timeout=15000)
+        "document.querySelector('#inspector img.poster').naturalWidth > 0", timeout=15000)
     assert page.evaluate(
-        "document.querySelector('.seg img.poster').naturalHeight") == 180
+        "document.querySelector('#inspector img.poster').naturalHeight") == 180
 
 
 def test_trimming_the_in_point_moves_the_poster_without_one_frame_per_nudge(page):
     """A poster that lags a nudge by a moment is fine; one that fetches a frame on
-    every 0.25 s press is not."""
+    every 0.25 s press is not. (The timeline's block catches up on the same settle,
+    so two requests for the one frame is the ceiling.)"""
     asked: list[str] = []
     page.on("request",
             lambda r: asked.append(r.url) if "/media/poster/" in r.url else None)
-    card = page.locator(".seg").first
     for _ in range(6):
-        card.locator("button", has_text="+").first.click()      # in +0.25, six times
+        page.locator("#inspector button[data-act=in][data-d='0.25']").click()   # in +0.25
     assert page.evaluate("segs[0].in") == pytest.approx(2.5, abs=0.01)
     page.wait_for_function(
-        "document.querySelector('.seg img.poster').src.includes('t=2.50')",
+        "document.querySelector('#inspector img.poster').src.includes('t=2.50')",
         timeout=10000)
     page.wait_for_timeout(400)         # any straggler request would have started by now
     assert any("t=2.50" in u for u in asked), asked
@@ -163,14 +168,14 @@ def test_trimming_the_in_point_moves_the_poster_without_one_frame_per_nudge(page
 
 def test_trim_buttons_change_duration_and_are_undoable(page):
     before = total_text(page)
-    page.locator(".seg").first.locator("button", has_text="+").nth(1).click()  # out +0.25
+    page.locator("#inspector button[data-act=out][data-d='0.25']").click()   # out +0.25
     assert total_text(page) != before
     page.locator("#undo").click()
     assert total_text(page) == before
 
 
 def test_keyboard_trim_matches_button_trim(page):
-    page.locator(".seg").first.click()
+    select_shot(page, 0)
     before = total_text(page)
     page.keyboard.press("}")                       # extend out by 0.25
     after_key = total_text(page)
@@ -180,15 +185,17 @@ def test_keyboard_trim_matches_button_trim(page):
 
 
 def test_boundary_warning_appears_and_snap_clears_it(page):
-    """The defect Karl flagged, surfaced live and then fixed by the tool."""
-    warned = page.locator(".seg", has_text="⚠").count()
-    assert warned >= 1, "seeded EDL cuts mid-utterance; warning should show"
+    """The defect Karl flagged, surfaced live and then fixed by the tool. Shot 1 (the
+    boot selection) opens mid-sentence: the inspector says so, and the header's button
+    counts it; after the snap neither does."""
+    assert "⚠" in page.locator("#inspector .meta").inner_text(), \
+        "seeded EDL cuts mid-utterance; warning should show"
+    assert page.locator("#snap").inner_text().startswith("Fix ")
     page.locator("#snap").click()
     page.wait_for_function(
-        "document.querySelectorAll('.seg').length && "
-        "![...document.querySelectorAll('.seg')].some(s => s.innerHTML.includes('⚠'))",
-        timeout=15000)
-    assert page.locator(".seg", has_text="⚠").count() == 0
+        "document.querySelector('#snap').textContent === 'Cut points OK'", timeout=15000)
+    assert "⚠" not in page.locator("#inspector .meta").inner_text()
+    assert page.locator("#tl .blk .warn:not([hidden])").count() == 0
 
 
 def test_undo_restores_exact_state_after_snap(page):
@@ -200,18 +207,21 @@ def test_undo_restores_exact_state_after_snap(page):
     assert page.evaluate("JSON.stringify(segs)") == before
 
 
-def test_remove_and_reorder_change_the_timeline(page):
-    assert page.locator(".seg").count() == 2
-    first_clip = page.locator(".seg").first.locator(".clip").inner_text()
-    page.locator(".seg").first.locator("button", has_text="remove").click()
-    assert page.locator(".seg").count() == 1
-    assert page.locator(".seg").first.locator(".clip").inner_text() != first_clip
+def test_remove_from_the_inspector_takes_the_shot_out_and_moves_on(page):
+    """remove in the inspector is tl.remove: the shot goes, the one that takes its place
+    is selected, and the inspector shows that one."""
+    assert page.locator("#tl .blk").count() == 2
+    first_clip = page.locator("#inspector .clip").inner_text()
+    page.locator("#inspector button[data-act=del]").click()
+    assert page.locator("#tl .blk").count() == 1
+    assert page.locator("#inspector .clip").inner_text() != first_clip
+    assert page.locator("#undo").get_attribute("title").startswith("undo: remove")
 
 
 def test_library_insert_adds_a_shot(page):
-    before = page.locator(".seg").count()
+    before = page.locator("#tl .blk").count()
     page.locator("#library .cand").first.click()
-    assert page.locator(".seg").count() == before + 1
+    assert page.locator("#tl .blk").count() == before + 1
 
 
 def test_edits_reach_the_disk_without_being_asked(page, project):
@@ -219,7 +229,8 @@ def test_edits_reach_the_disk_without_being_asked(page, project):
     board as soon as I refresh the page." The working edit lived in the browser and
     only a Save button wrote it, so a refresh threw the work away."""
     page.locator("#story").fill("the milk is the running joke")
-    page.locator(".seg").first.click()
+    page.evaluate("document.activeElement.blur()")   # the keys are the board's, not the story's
+    select_shot(page, 0)
     page.keyboard.press("}")                       # extend the out point
     page.wait_for_function(
         "document.querySelector('#saveState').textContent.startsWith('saved')",
@@ -232,7 +243,7 @@ def test_edits_reach_the_disk_without_being_asked(page, project):
 
 def test_the_cut_survives_a_reload(page):
     """The whole point: what is on screen after F5 is what you left."""
-    page.locator(".seg").first.locator("button", has_text="remove").click()
+    page.locator("#inspector button[data-act=del]").click()
     page.wait_for_function(
         "document.querySelector('#saveState').textContent.startsWith('saved')",
         timeout=8000)
@@ -240,8 +251,8 @@ def test_the_cut_survives_a_reload(page):
     before = page.evaluate(shape)
 
     page.reload()
-    page.wait_for_selector(".seg")
-    assert page.locator(".seg").count() == 1
+    page.wait_for_selector("#tl .blk")
+    assert page.locator("#tl .blk").count() == 1
     assert page.evaluate(shape) == before
 
 
@@ -285,8 +296,8 @@ def test_ask_shows_a_proposal_that_can_be_accepted_or_discarded(page):
         page.locator("#ask").click()
         page.wait_for_selector("#proposal:visible", timeout=30000)
         page.locator("#acceptProposal").click()
-        assert page.locator(".seg").count() == 1
-        assert "CLIP_C" in page.locator(".seg").first.inner_text()
+        assert page.locator("#tl .blk").count() == 1
+        assert page.locator("#inspector .clip").inner_text() == "CLIP_C"
 
         page.locator("#undo").click()          # and it stays undoable
         assert page.evaluate("JSON.stringify(segs)") == before
@@ -320,11 +331,11 @@ def test_an_empty_timeline_offers_a_first_cut_and_gets_one(page):
     inference.set_backend(Scripted())
     inference.reset_spend()
     try:
-        page.locator(".seg").first.click()
+        select_shot(page, 0)
         page.keyboard.press("x")
         page.keyboard.press("x")
-        page.wait_for_selector(".empty")
-        assert page.locator(".seg").count() == 0
+        page.wait_for_selector("#inspector .empty")
+        assert page.locator("#tl .blk").count() == 0
         assert "No cut yet" in page.locator(".empty").inner_text()
         assert page.locator(".step.now").inner_text().endswith("ask for one")
         # the sidebar Ask panel hides itself here — the empty state already has a box
@@ -338,7 +349,7 @@ def test_an_empty_timeline_offers_a_first_cut_and_gets_one(page):
         assert "conversation" in page.locator("#proposalNotes").inner_text()
 
         page.locator("#acceptProposal").click()
-        assert page.locator(".seg").count() == 2
+        assert page.locator("#tl .blk").count() == 2
         # the brief is the human's half of the loop, so it is kept, not thrown away
         assert page.input_value("#story") == "a loose film about two people talking"
         assert "There is no edit yet" in Scripted.seen[-1].prompt
@@ -371,8 +382,8 @@ def test_ask_failure_is_reported_not_swallowed(page):
         inference.set_backend(None)
 
 
-def test_a_shot_carries_its_own_ask(page):
-    """The per-shot loop, end to end: open the form on one card, ask, read the
+def test_the_inspector_asks_about_the_selected_shot(page):
+    """The per-shot loop, end to end: open the form in the inspector, ask, read the
     proposal, accept — and every other shot survives verbatim."""
     from roughcut import config, inference
 
@@ -394,11 +405,12 @@ def test_a_shot_carries_its_own_ask(page):
     inference.set_backend(Scripted())
     inference.reset_spend()
     try:
-        card = page.locator(".seg").first
-        card.locator("button", has_text="✎ ask").click()
-        page.wait_for_selector(".shotAsk textarea")
-        card.locator(".shotNote").fill("start this on the line instead")
-        card.locator("button", has_text="Ask about this shot").click()
+        insp = page.locator("#inspector")
+        assert insp.locator(".shotAsk").is_hidden()
+        insp.locator("button[data-act=ask]").click()
+        page.wait_for_selector("#inspector .shotAsk:visible")
+        insp.locator(".shotNote").fill("start this on the line instead")
+        insp.locator("button[data-act=shotgo]").click()
         page.wait_for_selector("#proposal:visible", timeout=30000)
 
         # scoped: the panel names the shot, the untouched shot is in the diff
@@ -409,7 +421,7 @@ def test_a_shot_carries_its_own_ask(page):
         assert "Every segment must come from CLIP_A.MP4" in Scripted.seen[-1].prompt
 
         page.locator("#acceptProposal").click()
-        assert page.locator(".seg").count() == 2
+        assert page.locator("#tl .blk").count() == 2
         assert page.evaluate("segs[0].in") == pytest.approx(0.5, abs=0.01)
         assert page.evaluate("JSON.stringify([segs[1].clip, segs[1].in, segs[1].out])") \
             == '["CLIP_B.MP4",0,2]'
@@ -438,10 +450,12 @@ def test_find_a_moment_lists_matches_and_plays_the_whole_clip(page):
     t = page.evaluate("document.querySelector('#findVideo').currentTime")
     assert 4.4 <= t <= 6.05, f"expected playback at the match (~4.5s), got {t}"
 
-    before = page.locator(".seg").count()
+    before = page.locator("#tl .blk").count()
     page.locator("#findAdd").click()
-    assert page.locator(".seg").count() == before + 1
-    assert "goodbye" in page.locator(".seg").nth(1).inner_text()
+    assert page.locator("#tl .blk").count() == before + 1
+    # inserted after the selected shot, selected, and in the inspector with its line
+    assert page.evaluate("sel") == 1
+    assert "goodbye" in page.locator("#inspector .why").inner_text()
 
 
 def test_render_from_the_ui_produces_a_playable_file(page):
@@ -521,7 +535,7 @@ def test_a_second_render_becomes_a_second_version_to_compare_against(page):
     """Judging an edit is comparative. The newest render lands in A and the previous
     one in B, so two versions can be watched against each other without leaving."""
     before = page.locator("#versions .ver").count()
-    page.locator(".seg").first.click()
+    select_shot(page, 0)
     page.keyboard.press("x")                      # change the edit, so B differs
     page.locator("#render").click()
     page.wait_for_function(
@@ -547,6 +561,127 @@ def test_the_steps_strip_says_where_the_project_is(page):
                                              "render"]
     # this project has clips, sidecars and a cut, so the first three are behind us
     assert page.locator(".step.done").count() >= 3
+
+
+# ---------------------------------------------------------------- the inspector
+#
+# INTAKE M9, I9.5: the list of one card per shot is gone; one inspector under the
+# timeline holds what a card held, for the anchor shot.
+
+def _on_disk(project) -> list[dict]:
+    return json.loads(Path(project["edl"]).read_text(encoding="utf-8"))["segments"]
+
+
+def test_selecting_a_block_fills_the_inspectors_header_and_why(page):
+    assert page.locator(".seg").count() == 0, "the card list is gone"
+    insp = page.locator("#inspector")
+    # shot 1 is the anchor at boot
+    assert "SHOT 1 of 2" in insp.locator(".meta").inner_text()
+    page.locator("#tl .blk").nth(1).click()
+    page.evaluate("pauseCut()")                   # a click on a block also plays from it
+    head = insp.locator(".meta").inner_text()
+    assert "SHOT 2 of 2" in head and "CLIP_B" in head, head
+    assert "0:00.0 → 0:02.0" in head and "2.0 s" in head, head
+    assert "starts at 0:02.0 of the film" in head, head
+    assert "⚠" not in head, "CLIP_B 0.0–2.0 ends with 'hello there', on its edge"
+    assert insp.locator(".why").inner_text() == "second"
+    assert "hello there" in insp.locator(".lines").first.inner_text()
+    assert insp.locator("img.poster").get_attribute("src") == "/media/poster/CLIP_B.jpg?t=0.00"
+    assert insp.locator(".lines.seen").is_hidden(), "nothing was seen on this bin"
+    # ↑ goes back to the previous cut and the inspector follows
+    page.keyboard.press("ArrowUp")
+    assert "SHOT 1 of 2" in insp.locator(".meta").inner_text()
+    assert insp.locator(".clip").inner_text() == "CLIP_A"
+    assert insp.locator(".why").inner_text() == "first"
+    assert "⚠ opens mid-sentence · cuts a line off" in insp.locator(".meta").inner_text()
+
+
+def test_editing_why_in_the_inspector_saves_to_the_edl(page, project):
+    why = page.locator("#inspector .why")
+    why.click()
+    page.keyboard.press("Control+a")
+    page.keyboard.type("opens on the greeting")
+    assert page.evaluate("segs[0].why") == "first", "not written until the field is left"
+    page.locator("#story").click()                # leave the field
+    assert page.evaluate("segs[0].why") == "opens on the greeting"
+    page.wait_for_function(
+        "document.querySelector('#saveState').textContent.startsWith('saved')", timeout=8000)
+    assert _on_disk(project)[0]["why"] == "opens on the greeting"
+    # the timeline's own tooltip carries the new why too
+    assert "opens on the greeting" in page.locator("#tl .blk").first.get_attribute("title")
+
+
+def test_the_inspectors_trim_buttons_are_one_undo_entry_each(page, project):
+    insp = page.locator("#inspector")
+    insp.locator("button[data-act=out][data-d='0.25']").click()
+    assert page.evaluate("[segs[0].in, segs[0].out]") == [1.0, 3.25]
+    assert "0:01.0 → 0:03.3" in insp.locator(".meta").inner_text()
+    assert insp.locator(".times").get_attribute("title") == "1.00 → 3.25 s of CLIP_A.MP4"
+    assert "2.3 s" in insp.locator(".meta").inner_text()
+    assert page.locator("#total").inner_text() == "0:04.3"
+    assert page.locator("#undo").get_attribute("title").startswith("undo: trim")
+    insp.locator("button[data-act=in][data-d='-0.25']").click()
+    assert page.evaluate("[segs[0].in, segs[0].out]") == [0.75, 3.25]
+    # ⇧ makes it a second
+    insp.locator("button[data-act=in][data-d='0.25']").click(modifiers=["Shift"])
+    assert page.evaluate("[segs[0].in, segs[0].out]") == [1.75, 3.25]
+    page.wait_for_function(
+        "document.querySelector('#saveState').textContent.startsWith('saved')", timeout=8000)
+    first = _on_disk(project)[0]
+    assert (first["in"], first["out"]) == (1.75, 3.25)
+    # one ⌘Z per press, in order
+    page.keyboard.press("Control+z")
+    assert page.evaluate("[segs[0].in, segs[0].out]") == [0.75, 3.25]
+    page.keyboard.press("Control+z")
+    assert page.evaluate("[segs[0].in, segs[0].out]") == [1.0, 3.25]
+    page.keyboard.press("Control+z")
+    assert page.evaluate("[segs[0].in, segs[0].out]") == [1.0, 3.0]
+    assert "0:01.0 → 0:03.0" in insp.locator(".meta").inner_text()
+    assert page.locator("#total").inner_text() == "0:04.0"
+
+
+def test_the_kept_tabs_in_the_cut_link_selects_the_block_and_the_inspector_shows_it(page):
+    _put_selects(page, [{"clip": "CLIP_B.MP4", "start": 0.0, "end": 2.0, "hero": True,
+                         "why": "the reply"}])
+    page.reload()
+    page.wait_for_selector("#library .keep")
+    link = page.locator("#library .keep", has_text="CLIP_B").locator("a.use")
+    assert link.inner_text() == "in the cut · shot 2"
+    # from a cleared selection too — the link goes by id through the timeline
+    page.keyboard.press("Escape")
+    assert page.evaluate("tl.state.anchor") is None
+    link.click()
+    assert page.evaluate("sel") == 1
+    assert page.locator("#tl .blk.sel").get_attribute("data-id") == page.evaluate("segs[1].id")
+    assert page.locator("#inspector .clip").inner_text() == "CLIP_B"
+    assert "SHOT 2 of 2" in page.locator("#inspector .meta").inner_text()
+    assert not page.evaluate("player.playing"), "a link selects; it does not play"
+
+
+def test_the_inspector_says_so_when_nothing_or_several_are_selected(page):
+    insp = page.locator("#inspector")
+    page.keyboard.press("Escape")
+    assert page.evaluate("tl.state.anchor") is None
+    text = insp.inner_text()
+    assert "select a shot on the timeline" in text and "↑" in text and "↓" in text, text
+    assert "2 shots · 0:04.0 · target 0:05.0–0:20.0" in text, text
+    assert insp.locator(".why").count() == 0
+    # a multi-selection: the count and the length, and remove for all of them
+    page.keyboard.press("Control+a")
+    assert page.evaluate("tl.state.sel.size") == 2
+    text = insp.inner_text()
+    assert "2 shots selected · 4.0 s" in text, text
+    assert insp.locator(".why").count() == 0
+    insp.locator("button[data-act=delall]").click()
+    assert page.evaluate("segs.length") == 0
+    assert page.locator("#tl .blk").count() == 0
+    assert "No cut yet" in insp.locator(".empty").inner_text()
+    page.keyboard.press("Control+z")               # one entry for both
+    assert page.evaluate("segs.length") == 2
+    assert page.locator("#tl .blk").count() == 2
+    assert insp.locator(".empty").count() == 0
+    select_shot(page, 0)
+    assert "SHOT 1 of 2" in insp.locator(".meta").inner_text()
 
 
 # ------------------------------------------------------------------ the monitor
@@ -646,13 +781,13 @@ def test_clicking_a_block_in_the_strip_jumps_the_monitor(page):
         " return v.currentTime >= 1.0 && v.currentTime < 2.6; })()", timeout=10000)
     blocks.nth(1).click()
     page.wait_for_function("player.playing && player.idx === 1", timeout=10000)
-    assert page.evaluate("sel") == 1, "the strip and the list select together"
-    assert page.locator(".seg.sel .clip").inner_text() == "CLIP_B"
+    assert page.evaluate("sel") == 1, "the strip and the inspector select together"
+    assert page.locator("#inspector .clip").inner_text() == "CLIP_B"
     assert page.locator("#tl .blk.sel").count() == 1
 
 
 def test_space_toggles_the_cut_and_enter_plays_one_shot(page):
-    page.locator(".seg").first.click()
+    select_shot(page, 0)
     page.keyboard.press("Space")
     page.wait_for_function("player.playing", timeout=10000)
     # let the proxy actually load and run before pausing, or currentTime is still 0
@@ -743,18 +878,22 @@ def test_a_refused_play_is_named_on_the_monitor(page):
     assert page.locator("#playCut").inner_text().startswith("▶")
 
 
-def test_playing_from_a_shot_card_brings_the_monitor_into_view(page):
-    """The monitor is at the top of the column and the shot list runs a long way below
-    it. On the 16-shot Killington cut, clicking shot 12's poster started playback 3,163px
-    above the viewport — the board played, and the person saw a still page."""
+def test_playing_from_the_inspector_brings_the_monitor_into_view(page):
+    """The monitor is at the top of the column. When the shot list ran a long way below
+    it, clicking shot 12's poster on the 16-shot Killington cut started playback 3,163px
+    above the viewport — the board played, and the person saw a still page. The
+    inspector sits right under the timeline, but a short window can still have it on
+    screen with the monitor scrolled off; a play from its still brings the monitor back."""
     page.set_viewport_size({"width": 900, "height": 380})
-    page.locator(".seg").last.scroll_into_view_if_needed()
+    select_shot(page, 1)
+    page.evaluate("document.querySelector('#inspector').scrollIntoView({block: 'start'})")
     page.wait_for_timeout(200)
     assert not page.evaluate(
         "(() => { const r = document.querySelector('#player').getBoundingClientRect();"
         " return r.bottom > 0 && r.top < innerHeight; })()"), "monitor should be off-screen"
 
-    page.locator(".seg").last.locator("img.poster").click()
+    # the sticky header covers the top of the viewport, so the click is the element's own
+    page.evaluate("document.querySelector('#inspector img.poster').click()")
     page.wait_for_function("player.playing && player.idx === 1", timeout=10000)
     page.wait_for_function(
         "(() => { const r = document.querySelector('#player').getBoundingClientRect();"
@@ -773,7 +912,7 @@ def test_the_versions_list_says_which_render_is_the_cut_on_the_board(page, proje
         ".some((r) => r.textContent.includes('this cut'))", timeout=10000)
 
     # trim the timeline and the render is no longer what is on the board
-    page.locator(".seg").first.locator("button", has_text="+").nth(1).click()
+    page.locator("#inspector button[data-act=out][data-d='0.25']").click()
     assert not page.evaluate(
         "[...document.querySelectorAll('#versions .ver')]"
         ".some((r) => r.textContent.includes('this cut'))"), \
@@ -786,10 +925,11 @@ def test_the_versions_list_says_which_render_is_the_cut_on_the_board(page, proje
 
 # ------------------------------------------------------------------ what was seen
 
-def test_what_the_visual_pass_saw_shows_on_the_cards_and_in_the_library(page, project):
+def test_what_the_visual_pass_saw_shows_in_the_inspector_and_in_the_library(page, project):
     """Karl: the analysis "missed some critical moments that would have required video
     analysis — like me falling into a river." Once a clip has been looked at, the fall has
-    to be on the board: as something you can add, and on the shot that contains it."""
+    to be on the board: as something you can add, and in the inspector of the shot that
+    contains it."""
     import server
 
     vdir = Path(server.STATE["visual"])
@@ -805,7 +945,7 @@ def test_what_the_visual_pass_saw_shows_on_the_cards_and_in_the_library(page, pr
         "summary": "a run"}), encoding="utf-8")
     try:
         page.reload()
-        page.wait_for_selector(".seg")
+        page.wait_for_selector("#tl .blk")
         # the library grows a "seen" tab now that something has been looked at
         page.locator("#libTabs .tab", has_text="seen").click()
         cands = page.locator("#library .cand")
@@ -814,16 +954,16 @@ def test_what_the_visual_pass_saw_shows_on_the_cards_and_in_the_library(page, pr
         assert "rider goes down" in cands.first.inner_text()
         cands.first.click()
 
-        card = page.locator(".seg", has_text="CLIP_C")
-        assert card.count() == 1
-        assert "rider goes down in deep snow" in card.locator(".lines.seen").inner_text()
+        # the insert selects the new shot, so the inspector is on it
+        insp = page.locator("#inspector")
+        assert insp.locator(".clip").inner_text() == "CLIP_C"
+        assert "rider goes down in deep snow" in insp.locator(".lines.seen").inner_text()
         # 1.5–3.5 is clear of the covered lens at the top of the clip…
-        assert "unusable" not in card.inner_text()
+        assert "unusable" not in insp.inner_text()
         # …until the in-point is dragged back into it
         for _ in range(4):
-            card.locator("button[data-act=in][data-d='-0.25']").click()
-        card = page.locator(".seg", has_text="CLIP_C")
-        assert "unusable 0.0–0.6: lens covered" in card.inner_text()
+            insp.locator("button[data-act=in][data-d='-0.25']").click()
+        assert "unusable 0.0–0.6: lens covered" in insp.inner_text()
     finally:
         sidecar.unlink(missing_ok=True)
 
@@ -861,7 +1001,7 @@ def test_the_seen_tab_is_ordered_by_the_rank_not_by_the_kind(page, project):
     ]}), encoding="utf-8")
     try:
         page.reload()
-        page.wait_for_selector(".seg")
+        page.wait_for_selector("#tl .blk")
         page.locator("#libTabs .tab", has_text="seen").click()
         rows = page.locator("#library .cand")
         assert rows.count() == 2, "junk is never offered, whatever its kind says"
@@ -1106,7 +1246,7 @@ def test_a_running_ask_is_picked_back_up_after_a_reload(page):
         page.wait_for_selector(row, timeout=20000)
 
         page.reload()
-        page.wait_for_selector(".seg")
+        page.wait_for_selector("#tl .blk")
         # still there, on the fresh page, without anyone pressing anything
         page.wait_for_selector(row, timeout=10000)
         assert "cut" in page.locator(f"{row} .jname").inner_text().lower()
@@ -1169,7 +1309,7 @@ def test_the_kept_tab_shows_the_bin_and_puts_a_keep_in_the_cut(page):
 
     # + add to cut: a shot with the keep's range and reason, after the selected shot
     hero.locator("button.add").click()
-    assert page.locator(".seg").count() == 3
+    assert page.locator("#tl .blk").count() == 3
     added = page.evaluate("JSON.stringify([segs[1].clip, segs[1].in, segs[1].out, segs[1].why])")
     assert added == '["CLIP_C.MP4",0.5,4,"the whole take (frames 0:00 · 0:04)"]'
     # …and the row flips at once, before the autosave lands
@@ -1189,10 +1329,10 @@ def test_the_kept_tab_shows_the_bin_and_puts_a_keep_in_the_cut(page):
     assert page.locator("#library .keep", has_text="CLIP_C").locator("a.use").inner_text() \
         == "in the cut · shot 2"
     # the link selects the shot
-    page.locator(".seg").first.click()
+    select_shot(page, 0)
     page.locator("#library .keep", has_text="CLIP_C").locator("a.use").click()
     assert page.evaluate("sel") == 1
-    assert page.locator(".seg.sel .clip").inner_text() == "CLIP_C"
+    assert page.locator("#inspector .clip").inner_text() == "CLIP_C"
     # removing the shot un-flips the row
     page.keyboard.press("x")
     assert page.locator("#library .keep", has_text="CLIP_C").locator("button.add").count() == 1
@@ -1213,7 +1353,7 @@ def test_an_empty_bin_says_where_to_keep_things(page):
     assert "nothing kept yet" in page.locator("#cutFromBinHint").inner_text()
     # with no keeps the board opens on heard, as before
     page.reload()
-    page.wait_for_selector(".seg")
+    page.wait_for_selector("#tl .blk")
     assert "sel" in page.locator("#libTabs .tab", has_text="heard").get_attribute("class")
     assert page.locator("#library .cand").count() >= 1
 
@@ -1268,10 +1408,11 @@ def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
         # with no cut: the panel is hidden and the empty state carries the button; the
         # fixed note is the app's words and must not become the story
         page.fill("#story", "")
-        page.locator(".seg").first.click()
+        page.evaluate("document.activeElement.blur()")
+        select_shot(page, 0)
         page.keyboard.press("x")
         page.keyboard.press("x")
-        page.wait_for_selector(".empty")
+        page.wait_for_selector("#inspector .empty")
         assert not page.locator("#askPanel").is_visible()
         assert page.locator("#firstFromBin").is_visible()
         page.locator("#firstFromBin").click()
@@ -1281,7 +1422,7 @@ def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
         assert "The editor's selects" in prompt
         assert page.input_value("#story") == ""
         page.locator("#acceptProposal").click()
-        assert page.locator(".seg").count() == 1
+        assert page.locator("#tl .blk").count() == 1
         assert page.locator("#library .keep", has_text="CLIP_C").locator("a.use").inner_text() \
             == "in the cut · shot 1"
         assert "waiting" not in page.locator(".step", has_text="first").inner_text()
@@ -1380,7 +1521,7 @@ def test_saving_a_copy_flushes_the_autosave_first_and_the_board_moves_to_it(page
     import server
     original = server.STATE["edl"]
     page.keyboard.press("x")                 # remove the selected shot: 2 → 1, save pending
-    assert page.locator(".seg").count() == 1
+    assert page.locator("#tl .blk").count() == 1
     # hold the timer open so the flush is the only way the edit reaches the file
     page.evaluate("clearTimeout(saveTimer); saveTimer = setTimeout(save, 60000)")
     assert len(json.loads(Path(project["edl"]).read_text(encoding="utf-8"))["segments"]) == 2
@@ -1393,7 +1534,7 @@ def test_saving_a_copy_flushes_the_autosave_first_and_the_board_moves_to_it(page
     try:
         with page.expect_navigation(timeout=15000):
             page.locator("#copyGo").click()
-        page.wait_for_selector(".seg")
+        page.wait_for_selector("#tl .blk")
         page.wait_for_function(
             "document.querySelector('#hdBin .cutname').textContent === 'one shot'", timeout=10000)
         page.wait_for_function(
@@ -1406,7 +1547,7 @@ def test_saving_a_copy_flushes_the_autosave_first_and_the_board_moves_to_it(page
         assert cuts["current"]["name"] == "one shot" and cuts["current"]["segments"] == 1
         assert cuts["current"]["from"] == "edl"
         assert Path(copy_path) != original and Path(copy_path).parent.name == project["footage"].name
-        assert page.locator(".seg").count() == 1
+        assert page.locator("#tl .blk").count() == 1
         assert "one shot" in page.locator("#title").inner_text() or True
         # and back, by its row — the header says so, the timeline is the original's
         page.locator("#hdBin").click()
@@ -1414,7 +1555,7 @@ def test_saving_a_copy_flushes_the_autosave_first_and_the_board_moves_to_it(page
         assert page.locator("#cutList .crow").count() == 2
         with page.expect_navigation(timeout=15000):
             page.locator("#cutList .crow:not(.current)").click()
-        page.wait_for_selector(".seg")
+        page.wait_for_selector("#tl .blk")
         page.wait_for_function(
             "document.querySelector('#hdBin .cutname').textContent === 'edl'", timeout=10000)
         assert server.STATE["edl"] == original

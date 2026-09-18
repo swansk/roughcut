@@ -161,7 +161,7 @@ def test_plus_doubles_the_zoom_and_backslash_fits(page):
 
 # ------------------------------------------------------------------ selection
 
-def test_a_click_on_a_block_selects_it_and_its_card_and_the_card_selects_the_block(page):
+def test_a_click_on_a_block_selects_it_and_the_inspector_and_the_index_selects_the_block(page):
     page.locator("#tl .blk").nth(1).click()
     page.evaluate("pauseCut()")                 # the click also plays from there
     second = ids(page)[1]
@@ -169,12 +169,13 @@ def test_a_click_on_a_block_selects_it_and_its_card_and_the_card_selects_the_blo
     assert page.locator("#tl .blk.sel").get_attribute("data-id") == second
     assert page.evaluate("[...tl.state.sel]") == [second]
     assert page.evaluate("sel") == 1, "app.js's index follows the timeline's id"
-    assert page.locator(".seg.sel .clip").inner_text() == "CLIP_B"
-    # the other way: a card click selects the block
-    page.locator(".seg").first.locator(".clip").click()
+    assert page.locator("#inspector .clip").inner_text() == "CLIP_B"
+    # the other way: app.js moving its index (playback, a kept row's link) selects the block
+    page.evaluate("sel = 0; paint()")
     assert page.evaluate("sel") == 0
     assert page.locator("#tl .blk.sel").get_attribute("data-id") == ids(page)[0]
     assert page.evaluate("tl.state.anchor") == ids(page)[0]
+    assert page.locator("#inspector .clip").inner_text() == "CLIP_A"
 
 
 def test_shift_click_selects_the_range_and_cmd_click_toggles(page):
@@ -190,11 +191,11 @@ def test_shift_click_selects_the_range_and_cmd_click_toggles(page):
     blocks.nth(1).click(modifiers=["Control"])          # toggle the middle one out
     assert page.locator("#tl .blk.sel").count() == 2
     assert page.evaluate("[...tl.state.sel].sort()") == sorted([ids(page)[0], ids(page)[2]])
-    # a click on the empty ruler clears the selection, on the timeline and the cards
+    # a click on the empty ruler clears the selection, on the timeline and in the inspector
     page.locator("#tl .tl-ruler").click(position={"x": 4, "y": 6})
     assert page.locator("#tl .blk.sel").count() == 0
     assert page.evaluate("tl.state.anchor") is None
-    assert page.locator(".seg.sel").count() == 0
+    assert "select a shot on the timeline" in page.locator("#inspector").inner_text()
 
 
 # ------------------------------------------------------------------ scrub and playhead
@@ -275,7 +276,7 @@ def test_a_split_makes_two_shots_that_survive_a_save_with_distinct_ids(page, pro
     assert page.evaluate("segs.map(s => [s.clip, s.in, s.out])") == [
         ["CLIP_A.MP4", 1.0, 2.0], ["CLIP_A.MP4", 2.0, 3.0], ["CLIP_B.MP4", 0.0, 2.0]]
     assert block_ids(page) == [first, new, second]
-    assert page.locator(".seg").count() == 3
+    assert page.locator("#tl .blk").count() == 3
     # the save strips the temporary id, the server mints one, the board re-keys
     page.wait_for_function("segs.every(s => s.id && s.id.startsWith('g'))", timeout=8000)
     after = ids(page)
@@ -286,7 +287,7 @@ def test_a_split_makes_two_shots_that_survive_a_save_with_distinct_ids(page, pro
     assert page.evaluate(f"tl.indexOf('{new}')") == 1
     # too close to an edge is refused, and is not an edit
     assert page.evaluate(f"tl.split('{first}', 0.1)") is None
-    assert page.locator(".seg").count() == 3
+    assert page.locator("#tl .blk").count() == 3
     # one undo takes the split back — with the real ids on the shot that stays
     page.keyboard.press("Control+z")
     assert page.evaluate("segs.map(s => [s.clip, s.in, s.out])") == [
@@ -300,7 +301,7 @@ def test_move_reorders_and_the_ids_travel_with_the_shots(page, project):
     assert ids(page) == [b, a]
     assert page.evaluate("segs.map(s => s.clip)") == ["CLIP_B.MP4", "CLIP_A.MP4"]
     assert block_ids(page) == [b, a]
-    assert page.locator(".seg").first.locator(".clip").inner_text() == "CLIP_B"
+    assert page.locator("#tl .blk").first.locator(".name").inner_text() == "CLIP_B"
     wait_saved(page)
     assert [(s["id"], s["clip"]) for s in on_disk(project)] == [
         (b, "CLIP_B.MP4"), (a, "CLIP_A.MP4")]
@@ -315,7 +316,7 @@ def test_remove_and_insert_keep_the_board_and_the_bin_in_step(page):
     a, b = ids(page)
     page.evaluate(f"tl.remove(['{a}'])")
     assert ids(page) == [b]
-    assert page.locator(".seg").count() == 1
+    assert page.locator("#tl .blk").count() == 1
     assert page.evaluate("tl.state.anchor") == b
     new = page.evaluate("tl.insert({clip: 'CLIP_C.MP4', in: 1.0, out: 2.5, why: 'third'}, null)")
     assert new.startswith("tmp-")
@@ -335,10 +336,10 @@ def test_snaps_for_resolves_with_the_clips_sentences_and_is_cached(page):
     assert page.evaluate("tl.snapsFor('CLIP_A.MP4') === tl.snapsFor('CLIP_A.MP4')")
 
 
-def test_the_cards_edits_share_the_stack_with_the_timeline(page):
-    """pushUndo() in app.js is the module's begin/commit now: a card's trim button and a
+def test_the_inspectors_edits_share_the_stack_with_the_timeline(page):
+    """The inspector's trim button is the module's begin/setRange/commit: it and a
     timeline edit undo in one order, and the tooltip says which is next."""
-    page.locator(".seg").first.locator("button", has_text="+").nth(1).click()   # out +0.25
+    page.locator("#inspector button[data-act=out][data-d='0.25']").click()   # out +0.25
     first = ids(page)[0]
     page.evaluate(f"tl.move(['{first}'], null)")
     assert page.evaluate("segs.map(s => s.clip)") == ["CLIP_B.MP4", "CLIP_A.MP4"]
