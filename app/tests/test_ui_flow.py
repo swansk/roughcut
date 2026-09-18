@@ -636,7 +636,7 @@ def test_the_cut_plays_through_from_the_proxies(page):
 
 
 def test_clicking_a_block_in_the_strip_jumps_the_monitor(page):
-    blocks = page.locator("#strip .blk")
+    blocks = page.locator("#tl .blk")
     assert blocks.count() == 2
     blocks.nth(0).click()
     page.wait_for_function("player.playing && player.idx === 0", timeout=10000)
@@ -648,7 +648,7 @@ def test_clicking_a_block_in_the_strip_jumps_the_monitor(page):
     page.wait_for_function("player.playing && player.idx === 1", timeout=10000)
     assert page.evaluate("sel") == 1, "the strip and the list select together"
     assert page.locator(".seg.sel .clip").inner_text() == "CLIP_B"
-    assert page.locator("#strip .blk.sel").count() == 1
+    assert page.locator("#tl .blk.sel").count() == 1
 
 
 def test_space_toggles_the_cut_and_enter_plays_one_shot(page):

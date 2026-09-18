@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Roughcut — cut board</title>
+<link rel="stylesheet" href="/timeline/timeline.css">
 <style>
   :root {
     --bg: #101013; --panel: #17171c; --card: #1e1e25; --card-hi: #26262f;
@@ -220,17 +221,7 @@
   #screenMsg[hidden] { display: none; }
   .transport { display: flex; gap: 10px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
   .transport .pos { font-variant-numeric: tabular-nums; }
-  .strip { display: flex; gap: 2px; height: 36px; margin-top: 8px; }
-  .blk { position: relative; min-width: 4px; border-radius: 3px; cursor: pointer;
-         overflow: hidden; opacity: .7; }
-  .blk:hover { opacity: .9; }
-  .blk.sel { outline: 2px solid var(--text); opacity: 1; }
-  .blk.live { opacity: 1; }
-  .blk span { position: absolute; left: 4px; top: 3px; right: 2px; font-size: 10px;
-              color: #0b0b0f; white-space: nowrap; overflow: hidden; pointer-events: none; }
-  .blk .head { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff;
-               display: none; pointer-events: none; }
-  .blk.live .head { display: block; }
+  /* the timeline under the transport is styled by /timeline/timeline.css */
   #toast {
     position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
     background: var(--card-hi); border: 1px solid var(--line); border-radius: 8px;
@@ -260,6 +251,7 @@
   <span class="hint" id="saveState">saved</span>
   <button id="snap" title="Extend cuts that open mid-sentence or clip a line off, so each shot carries a whole thought">Fix cut points</button>
   <button id="undo" title="Undo (u)">Undo</button>
+  <button id="redo" title="Redo (⌘⇧Z)">Redo</button>
   <select id="renderProfile"
           title="preview: fast 1920x1080 @ 24fps — what quick versions use. delivery: the bin's own frame rate, up to 4K, never upscaled — slower, bigger, for the final file.">
     <option value="preview" selected>preview</option>
@@ -293,9 +285,13 @@
         <span class="pos"><span id="pos">0:00.0</span> / <span id="posTotal">0:00.0</span></span>
         <span class="hint" id="playingWhat"></span>
         <div class="grow"></div>
-        <span class="hint">click a shot below to jump · <kbd>space</kbd> play / pause</span>
+        <span class="hint">click a shot below to jump · <kbd>space</kbd> play / pause ·
+          <kbd>+</kbd><kbd>−</kbd> zoom · <kbd>\</kbd> fit · <kbd>⇧</kbd>wheel pan</span>
       </div>
-      <div class="strip" id="strip"></div>
+      <!-- The timeline: a ruler, the V1 lane of shot blocks by film time, the playhead
+           across the whole cut. The module is /timeline/timeline.js (window.tl); app.js
+           mounts it here once the project has loaded. -->
+      <div id="tl"></div>
     </div>
     <!-- Both of these belong to the main column, not the sidebar: the recovery offer
          matters most when the timeline is empty, which is exactly when the sidebar's
@@ -426,7 +422,8 @@
         <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>space</kbd> play / pause the cut from here ·
         <kbd>enter</kbd> play this shot only ·
         <kbd>[</kbd><kbd>]</kbd> trim in · <kbd>{</kbd><kbd>}</kbd> trim out ·
-        <kbd>x</kbd> remove · <kbd>u</kbd> undo · hold <kbd>shift</kbd> for 1s steps
+        <kbd>x</kbd> remove · <kbd>u</kbd> undo · hold <kbd>shift</kbd> for 1s steps ·
+        <kbd>⌘z</kbd> undo · <kbd>⌘⇧z</kbd> redo · <kbd>+</kbd><kbd>−</kbd> zoom · <kbd>\</kbd> fit
       </div>
     </div>
   </aside>
@@ -435,6 +432,7 @@
 <!-- The music bed, heard under the monitor. -->
 <audio id="bed" loop preload="auto"></audio>
 <script src="/switcher.js"></script>
+<script src="/timeline/timeline.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

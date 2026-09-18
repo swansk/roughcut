@@ -1,0 +1,83 @@
+/* The promoted timeline (INTAKE M9) — mounted in #tl, under the monitor, where the strip
+   was. Colours come from the board's :root tokens; the clip's hue rides on each block as
+   --hue (the same hash the strip used, so a run of cuts from one clip reads as one colour). */
+#tl {
+  --tl-ruler: 22px;
+  --tl-lane: 72px;
+  position: relative;
+  margin-top: 8px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+#tl.tl-empty { display: none; }
+/* a short window gets a shorter lane, so the monitor and its timeline still fit under
+   the sticky header when a play from far down the list brings the monitor back */
+@media (max-height: 560px) { #tl { --tl-lane: 48px; } }
+#tl .tl-view {
+  position: relative;
+  height: calc(var(--tl-ruler) + var(--tl-lane) + 10px);
+  overflow-x: auto; overflow-y: hidden;
+  background: #0d0d11; border: 1px solid var(--line); border-radius: 6px;
+  scrollbar-width: thin;
+}
+#tl .tl-canvas { position: relative; height: 100%; min-width: 100%; }
+
+/* the ruler: labelled ticks whose step follows the zoom; click or drag to scrub */
+#tl .tl-ruler {
+  position: absolute; left: 0; right: 0; top: 0; height: var(--tl-ruler);
+  background: #131318; border-bottom: 1px solid var(--line); cursor: ew-resize;
+  touch-action: none;
+}
+#tl .tick { position: absolute; bottom: 0; width: 1px; height: 5px; background: #33333f;
+            pointer-events: none; }
+#tl .tick.major { height: 9px; background: #55556a; }
+#tl .tick.major label { position: absolute; left: 3px; bottom: 7px; font-size: 10px;
+                        color: var(--dim); white-space: nowrap;
+                        font-variant-numeric: tabular-nums; }
+#tl .tl-end { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed #3e3e4c;
+              pointer-events: none; z-index: 2; }
+/* the film's total, on the lane row just past the end line — never on top of a tick label */
+#tl .tl-end label { position: absolute; left: 5px; top: calc(var(--tl-ruler) + 8px);
+                    font-size: 10px; color: var(--dim); white-space: nowrap;
+                    font-variant-numeric: tabular-nums; }
+
+/* V1: shot blocks positioned by film time */
+#tl .tl-lane { position: absolute; left: 0; right: 0; top: calc(var(--tl-ruler) + 5px);
+               height: var(--tl-lane); touch-action: none; }
+#tl .blk {
+  position: absolute; top: 0; bottom: 0; min-width: 3px; box-sizing: border-box;
+  display: flex; gap: 6px; align-items: stretch; padding: 3px 4px 3px 5px;
+  border-radius: 4px; overflow: hidden; cursor: pointer; opacity: .82; z-index: 1;
+  background: hsl(var(--hue) 30% 22%);
+  border: 1px solid hsl(var(--hue) 35% 34%);
+  border-left: 3px solid hsl(var(--hue) 45% 58%);
+}
+#tl .blk:hover { opacity: 1; }
+#tl .blk.live { opacity: 1; border-color: hsl(var(--hue) 45% 58%); }
+#tl .blk.sel { outline: 2px solid var(--text); outline-offset: -2px; opacity: 1; }
+#tl .blk .poster { height: 100%; aspect-ratio: 16/9; object-fit: cover; border-radius: 3px;
+                   background: #000; flex: none; pointer-events: none; }
+#tl .blk.narrow .poster { display: none; }
+#tl .blk .txt { min-width: 0; overflow: hidden; font-size: 11px; line-height: 1.3;
+                color: var(--text); pointer-events: none; }
+#tl .blk.tiny .txt { display: none; }
+#tl .blk .name { font-weight: 600; margin-right: 6px; }
+#tl .blk .dur { color: var(--dim); font-variant-numeric: tabular-nums; }
+#tl .blk .line { color: var(--dim); white-space: nowrap; overflow: hidden;
+                 text-overflow: ellipsis; margin-top: 2px; }
+/* a boundary warning is a small mark on the edge it concerns */
+#tl .blk .warn { position: absolute; top: 0; width: 0; height: 0; border-style: solid;
+                 pointer-events: auto; }
+#tl .blk .warn.in { left: 0; border-width: 9px 9px 0 0;
+                    border-color: var(--warn) transparent transparent transparent; }
+#tl .blk .warn.out { right: 0; border-width: 0 9px 9px 0;
+                     border-color: transparent var(--warn) transparent transparent; }
+#tl .blk .warn[hidden] { display: none; }
+
+/* the playhead: one line across the ruler and every lane, at its film time */
+#tl .tl-head { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px;
+               background: #fff; pointer-events: none; z-index: 4; }
+#tl .tl-head::before { content: ''; position: absolute; top: 0; left: -5px;
+                       border: 6px solid transparent; border-top: 8px solid #fff;
+                       border-bottom: 0; }
+

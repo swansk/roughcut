@@ -18,7 +18,6 @@ let sel = 0;
 let nRenders = 0;
 let renderList = [];          // the versions list, kept so it can be repainted on edit
 let bin = null;               // GET /api/selects — what the pass kept, and its summary
-const undoStack = [];
 
 const $ = (s) => document.querySelector(s);
 const fmt = (t) => {
@@ -44,11 +43,15 @@ function toast(msg, ms = 2200) {
  * The board used to keep the working edit in memory and write it only when you
  * pressed Save EDL — so a refresh silently threw away everything you had accepted and
  * trimmed. Karl lost a 16-shot cut that way. The EDL on disk is supposed to be the
- * source of truth; it is now actually kept that way. */
-function pushUndo() {
-  undoStack.push(JSON.stringify(segs));
-  if (undoStack.length > 100) undoStack.shift();
-  touch();
+ * source of truth; it is now actually kept that way.
+ *
+ * The stack itself lives in the timeline module now (INTAKE M9): one stack, with redo,
+ * serving the cards, the keys and the timeline's own edits. Callers here mutate `segs`
+ * right after this call, synchronously, so the entry is closed on the microtask that
+ * follows — one entry per gesture, and touch() rides on the commit as before. */
+function pushUndo(label = 'edit') {
+  tl.begin(label);
+  queueMicrotask(() => tl.commit());
 }
 
 let saveTimer = null;
@@ -59,13 +62,7 @@ function touch() {
   saveTimer = setTimeout(save, 700);
 }
 
-function undo() {
-  if (!undoStack.length) return toast('nothing to undo');
-  segs = JSON.parse(undoStack.pop());
-  render();
-  touch();                      // undoing is an edit too, and must reach the disk
-  toast('undone');
-}
+function undo() { tl.undo(); }
 
 function total() { return segs.reduce((a, s) => a + (s.out - s.in), 0); }
 
@@ -305,7 +302,7 @@ const shotAskDraft = new WeakMap();
 
 function segCard(seg, i) {
   const el = document.createElement('div');
-  el.className = 'seg' + (i === sel ? ' sel' : '');
+  el.className = 'seg' + (i === sel && tl.state.anchor != null ? ' sel' : '');
   el.draggable = true;
   el.dataset.i = i;
 
@@ -368,7 +365,7 @@ function segCard(seg, i) {
     if (!b) { paint(); return; }
     const act = b.dataset.act;
     if (act === 'play') { revealMonitor(); return playFrom(i, { single: true }); }
-    if (act === 'del') { pushUndo(); segs.splice(i, 1); return render(); }
+    if (act === 'del') { pushUndo('remove'); segs.splice(i, 1); return render(); }
     if (act === 'ask') {
       if (shotAskOpen.has(seg)) shotAskOpen.delete(seg); else shotAskOpen.add(seg);
       render();
@@ -386,7 +383,7 @@ function segCard(seg, i) {
     // Anything else in the card is a trim button carrying data-d; a button without
     // one must not fall through to nudge() with NaN.
     if (!('d' in b.dataset)) { paint(); return; }
-    pushUndo();
+    pushUndo('trim');
     const d = parseFloat(b.dataset.d) * (e.shiftKey ? 4 : 1);
     nudge(i, act, d);
     render();
@@ -413,7 +410,7 @@ function segCard(seg, i) {
     e.preventDefault();
     const from = parseInt(e.dataTransfer.getData('text/plain'), 10);
     if (Number.isNaN(from) || from === i) return;
-    pushUndo();
+    pushUndo('reorder');
     const [m] = segs.splice(from, 1);
     segs.splice(i, 0, m);
     sel = i;
@@ -499,7 +496,11 @@ function revealMonitor() {
   if (!el || el.style.display === 'none') return;
   const r = el.getBoundingClientRect();
   if (r.top >= 56 && r.bottom <= window.innerHeight) return;
-  window.scrollTo({ top: Math.max(0, window.scrollY + r.top - 64), behavior: 'smooth' });
+  // The timeline made the monitor taller; in a short window it may not fit under the
+  // sticky header with room to spare, and then its bottom — the transport and the
+  // timeline — wins over the top of the picture.
+  const gap = Math.max(8, Math.min(64, window.innerHeight - r.height - 8));
+  window.scrollTo({ top: Math.max(0, window.scrollY + r.top - gap), behavior: 'smooth' });
 }
 
 /* Say on the screen what the monitor is doing when it is not showing a picture. The
@@ -576,10 +577,35 @@ function playFrom(i, { single = false } = {}) {
   player.playing = true;            // before go(), which refuses to start a paused monitor
   screenMsg(v.readyState >= 2 ? '' : `opening ${stem(seg.clip)}…`);
   if (v.readyState >= 1) go(); else v.addEventListener('loadedmetadata', go, { once: true });
-  cueBed(filmStart(i) + (resume ? Math.max(0, v.currentTime - seg.in) : 0));
+  const filmT = filmStart(i) + (resume ? Math.max(0, v.currentTime - seg.in) : 0);
+  cueBed(filmT);
+  tl.setPlayhead(filmT);            // the playhead jumps with the click, not on the first tick
   schedule();
-  paintStrip();
+  tl.render();
   paintTransport();
+}
+
+/* Park the monitor on shot i at clip time clipT, paused — the timeline's scrub. The
+ * next space resumes from there: playFrom's resume rule sees the same shot, stopped,
+ * inside its range. */
+function cueAt(i, clipT) {
+  if (!segs[i] || !player.vids.length) return;
+  pauseCut();
+  const seg = segs[i];
+  const v = liveVideo();
+  player.idx = i;
+  sel = i;
+  paint();
+  arm(v, seg);
+  const src = v.dataset.src;
+  const at = Math.max(seg.in, Math.min(seg.out, clipT));
+  const park = () => { if (v.dataset.src === src) v.currentTime = at; };
+  if (v.readyState >= 1) park(); else v.addEventListener('loadedmetadata', park, { once: true });
+  if (segs[i + 1]) arm(player.vids[1 - player.cur], segs[i + 1]);
+  showLive();
+  paintPos(filmStart(i) + Math.max(0, at - seg.in), at, seg);
+  paintTransport();
+  tl.render();
 }
 
 function pauseCut() {
@@ -646,7 +672,7 @@ function advance() {
   screenMsg(nv.readyState >= 2 ? '' : `opening ${stem(segs[next].clip)}…`);
   if (nv.readyState >= 1) go(); else nv.addEventListener('loadedmetadata', go, { once: true });
   if (segs[next + 1]) arm(v, segs[next + 1]);
-  paintStrip();
+  tl.render();
   paintTransport();
   schedule();
 }
@@ -664,7 +690,8 @@ function syncPlayer() {
       playFrom(player.idx, { single: player.single });
     }
   }
-  paintStrip();
+  tl.render();
+  $('#posTotal').textContent = fmt(total());
   paintTransport();
 }
 
@@ -676,38 +703,11 @@ function paintTransport() {
     : '';
 }
 
+/* The playhead is the timeline's, in film time (the strip used to carry it as a
+ * percentage inside one block). */
 function paintPos(filmT, clipT, seg) {
   $('#pos').textContent = fmt(filmT);
-  const blk = document.querySelectorAll('#strip .blk')[player.idx];
-  if (blk && seg) {
-    const frac = Math.max(0, Math.min(1, (clipT - seg.in) / (seg.out - seg.in)));
-    blk.querySelector('.head').style.left = `${(frac * 100).toFixed(2)}%`;
-  }
-}
-
-function hueOf(clip) {
-  let h = 0;
-  for (const c of String(clip)) h = (h * 31 + c.charCodeAt(0)) % 360;
-  return h;
-}
-
-/* The strip: every shot as a block, width proportional to its length, coloured by clip
- * so a run of cuts from one clip reads as one colour. Click to play from there. */
-function paintStrip() {
-  const strip = $('#strip');
-  strip.innerHTML = '';
-  segs.forEach((s, i) => {
-    const b = document.createElement('div');
-    b.className = 'blk' + (i === sel ? ' sel' : '') + (i === player.idx ? ' live' : '');
-    b.style.flex = `${Math.max(0.2, s.out - s.in)} 0 0`;
-    b.style.background = `hsl(${hueOf(s.clip)} 45% 58%)`;
-    b.title = `${i + 1}. ${stem(s.clip)} ${fmt(s.in)}–${fmt(s.out)} (${(s.out - s.in).toFixed(1)}s)`
-      + (s.why ? `\n${s.why}` : '');
-    b.innerHTML = `<span>${escapeHtml(stem(s.clip))}</span><i class="head"></i>`;
-    b.onclick = () => playFrom(i);
-    strip.appendChild(b);
-  });
-  $('#posTotal').textContent = fmt(total());
+  tl.setPlayhead(filmT);
 }
 
 function escapeHtml(s) {
@@ -715,11 +715,13 @@ function escapeHtml(s) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
+/* `sel` is an index here and a set of ids in the timeline; the module maps the two at
+ * this boundary (tl.syncSel adopts a moved index; a click on a block sets it). A cleared
+ * timeline selection — a click on its empty lane — leaves no card marked either. */
 function paint() {
+  tl.syncSel();
   document.querySelectorAll('.seg').forEach((el, i) =>
-    el.classList.toggle('sel', i === sel));
-  document.querySelectorAll('#strip .blk').forEach((el, i) =>
-    el.classList.toggle('sel', i === sel));
+    el.classList.toggle('sel', i === sel && tl.state.anchor != null));
 }
 
 /* The board opened on a hand-authored EDL, so an empty timeline used to be an
@@ -779,7 +781,7 @@ function render() {
   $('#askPanel').style.display = segs.length ? 'block' : 'none';
 
   // Nothing in the header acts on an empty timeline, so nothing in the header shows.
-  ['#snap', '#undo', '#render', '#saveState'].forEach((sel) => {
+  ['#snap', '#undo', '#redo', '#render', '#saveState'].forEach((sel) => {
     $(sel).style.display = segs.length ? '' : 'none';
   });
 
@@ -887,7 +889,7 @@ function renderLibrary() {
     d.innerHTML = `<span class="w">${r.kind ? kindTag(r.kind) : ''}${seal}${escapeHtml(r.why)}</span>
       <span class="t">${stem(r.clip)} · ${fmt(r.t)}${r.end ? `–${fmt(r.end)}` : ''}</span>`;
     d.onclick = () => {
-      pushUndo();
+      pushUndo('insert');
       const at = sel + 1;
       segs.splice(at, 0, { clip: r.clip, in: r.t, out: r.end ?? r.t + 3, why: r.why });
       sel = at;
@@ -979,7 +981,7 @@ function keepRow(s) {
  * keep's own range and reason — then straight to disk, so the bin learns the use and
  * the tab re-reads it. */
 function addKeep(s) {
-  pushUndo();
+  pushUndo('insert');
   const at = sel + 1;
   segs.splice(at, 0, { clip: s.clip, in: s.start, out: s.end, why: s.why || s.note || '' });
   sel = at;
@@ -1354,7 +1356,7 @@ async function save() {
   saveTimer = null;
   const r = await fetch('/api/project', {
     method: 'PUT', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ segments: segs, story: $('#story').value, music }),
+    body: JSON.stringify({ segments: tl.forSave(), story: $('#story').value, music }),
   });
   if (!r.ok) {
     $('#saveState').textContent = 'save failed';
@@ -1366,6 +1368,12 @@ async function save() {
   // A save is where the bin learns from the timeline (which keeps became shots, and
   // which shots were placed by hand). While the tab is up, it must show that.
   if (libTab === 'kept') refreshBin();
+  // A shot made on the board (a split, an insert) has a temporary id until the server
+  // mints one; the save's reply does not carry segments, so read them back and re-key.
+  if (tl.needsRekey()) {
+    const p = await (await fetch('/api/project')).json();
+    tl.afterSave(p.segments);
+  }
 }
 
 async function snap() {
@@ -1376,7 +1384,7 @@ async function snap() {
   });
   if (!r.ok) return toast('snap failed');
   const data = await r.json();
-  pushUndo();
+  pushUndo('snap');
   const before = total();
   segs = data.segments;
   render();
@@ -1554,7 +1562,7 @@ async function ask(opts = {}) {
 
 function acceptProposal() {
   if (!pendingPlan) return;
-  pushUndo();
+  pushUndo('proposal');
   segs = pendingPlan.segments.map((s) => ({ ...s }));
   pendingPlan = null;
   $('#proposal').style.display = 'none';
@@ -1626,7 +1634,7 @@ function showFindMatch(m) {
 
 function addFindMatch() {
   if (!findSel) return;
-  pushUndo();
+  pushUndo('insert');
   const at = sel + 1;
   segs.splice(at, 0, {
     clip: findSel.clip,
@@ -1925,11 +1933,11 @@ document.addEventListener('keydown', (e) => {
   if (k === 'j') { sel = Math.min(segs.length - 1, sel + 1); paint(); scrollSel(); }
   else if (k === 'k') { sel = Math.max(0, sel - 1); paint(); scrollSel(); }
   else if (k === 'u') undo();
-  else if (k === 'x') { pushUndo(); segs.splice(sel, 1); render(); }
-  else if (k === '[') { pushUndo(); nudge(sel, 'in', -step); render(); }
-  else if (k === ']') { pushUndo(); nudge(sel, 'in', step); render(); }
-  else if (k === '{') { pushUndo(); nudge(sel, 'out', -step); render(); }
-  else if (k === '}') { pushUndo(); nudge(sel, 'out', step); render(); }
+  else if (k === 'x') { pushUndo('remove'); segs.splice(sel, 1); render(); }
+  else if (k === '[') { pushUndo('trim'); nudge(sel, 'in', -step); render(); }
+  else if (k === ']') { pushUndo('trim'); nudge(sel, 'in', step); render(); }
+  else if (k === '{') { pushUndo('trim'); nudge(sel, 'out', -step); render(); }
+  else if (k === '}') { pushUndo('trim'); nudge(sel, 'out', step); render(); }
   else if (k === ' ') { e.preventDefault(); revealMonitor(); toggleCut(); }
   else if (k === 'Enter') {
     e.preventDefault(); revealMonitor(); playFrom(sel, { single: true });
@@ -2017,6 +2025,27 @@ async function boot() {
   $('#title').textContent = [P.variant, P.title].filter(Boolean).join(' · ');
   $('#story').value = P.story || '';
   document.title = `Cut board — ${P.title}`;
+  // The timeline (INTAKE M9): it reads and mutates `segs` in place, maps its id
+  // selection onto `sel`, drives the monitor through cueAt / playFrom, and owns the
+  // undo / redo stack that pushUndo() now feeds.
+  tl.mount('#tl', {
+    segs: () => segs,
+    setSegs: (list) => { segs = list; },
+    clips: () => P.clips,
+    sel: () => sel,
+    setSel: (i) => { sel = i; },
+    live: () => player.idx,
+    cue: cueAt,
+    play: (i) => playFrom(i),
+    touch,
+    render,
+    toast,
+  });
+  tl.on('select', (ev) => {
+    if (ev.source === 'app') return;          // paint() already ran; it told the module
+    paint();
+    if (ev.source === 'click') scrollSel();   // a click on a block brings its card up
+  });
   render();
   paintBinLine();
   await refreshVersions();
