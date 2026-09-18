@@ -268,6 +268,10 @@ same commit. Releases move entries into a dated version section.
   deletion; the board's flush before a copy, the reload onto the copy, and the way back.
 
 ### Fixed
+- **Esc mid-drag cancels the trim again.** The keyboard lane's window-level Esc (clear the
+  selection and the marks) ran first and stopped the event, so the trim lane's Esc never saw a
+  drag in progress once both were on the board — found by the trim test in the merged suite.
+  Esc now yields to a drag (`tl.trim.dragging`) the way it yields to the switcher's picker.
 - **The contact-sheet prompt claimed things that were not there** (Karl, 2026-09-08: CLIP_04
   "person in dark clothing appears to be inverted or airborne"; CLIP_07 too). Adjudicated
   against the rebuilt sheets: the "inverted person" is the wearer's glove over the lens, the

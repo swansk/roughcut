@@ -582,7 +582,9 @@
         case 'q': handled = trimTo('in'); break;
         case 'w': handled = trimTo('out'); break;
         case 'x': case 'Delete': case 'Backspace': handled = rippleDelete(); break;
-        case 'Escape': handled = pickerOpen() ? false : clearAll(); break;   // the switcher closes its picker first
+        case 'Escape':                     // the switcher's picker and a trim drag in progress come first
+          handled = (pickerOpen() || (window.tl && tl.trim && tl.trim.dragging)) ? false : clearAll();
+          break;
         case '?': handled = showMap(); break;
         case ' ': settle(); break;                          // space is app.js's: play at 1×
         default: break;
