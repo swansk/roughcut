@@ -255,18 +255,25 @@ function boundaryWarning(seg) {
   return bad.join(' · ');
 }
 
-/* The picture on a shot card.
+/* ------------------------------------------------------------ the inspector
  *
- * It used to be a <video preload="metadata"> pointed at the shot's proxy, which is
- * what made the monitor blank: sixteen cards plus two render previews is eighteen
- * streams against Chrome's six-connections-per-host limit, so the monitor's own
- * request queued behind them and the sound arrived seconds before the first frame.
- * A card only ever showed one frame anyway — clicking it plays the shot in the
- * monitor — so it is a few-kilobyte JPEG now.
+ * One panel under the timeline for the selection (INTAKE M9, I9.5), holding what a
+ * shot card held — for the anchor shot only: the still at the in-point, the header,
+ * the transcript lines and what was seen inside the cut, the editable why, the trim
+ * buttons, the scoped ask and remove. The list of one card per shot is gone: the
+ * timeline is the editing surface now, and a card per shot was a second one that ran
+ * a long way below it (shot 12's card on the Killington cut sat 3,163 px under the
+ * monitor). `sel` stays an index here, as the foundation expects; the inspector reads
+ * the timeline's anchor and re-renders on its `select` and `change` events and from
+ * paint() — cheaply, one element updated in place, so a scrub or a shot advance never
+ * rebuilds it and never steals the focus from a `why` somebody is typing in.
  *
- * `posterAt` remembers which frame each shot card is currently showing, keyed by the
- * segment object itself so it survives the re-render after every edit. Without it,
- * holding the in-trim button would fetch a new frame every 0.25 s. */
+ * The still is a few-kilobyte JPEG, never a stream: the cards used to be <video>
+ * elements, and sixteen of them plus two render previews was eighteen streams against
+ * Chrome's six connections per host, so the monitor's own request queued behind them
+ * and the sound arrived seconds before the first frame. `posterAt` remembers which
+ * frame the still shows, keyed by the segment object so it survives every re-render;
+ * without it, holding the in-trim button would fetch a new frame every 0.25 s. */
 const posterAt = new WeakMap();
 let posterTimer = 0;
 
@@ -276,21 +283,18 @@ function posterSrc(seg) {
   return base ? `${base}?t=${Math.max(0, posterAt.get(seg)).toFixed(2)}` : '';
 }
 
-/* Catch the posters up to the in-points, once the trimming stops. A poster that lags
- * a nudge by half a second is fine; twenty requests for twenty nudges is not. Updates
- * the <img> in place rather than re-rendering, so it cannot steal focus from the
- * `why` field somebody is typing in. */
+/* Catch the still up to the in-point, once the trimming stops — the timeline's rule and
+ * the same 450 ms. A frame that lags a nudge by half a second is fine; twenty requests
+ * for twenty nudges is not. Updates the <img> in place, never a re-render. */
 function refreshPosters() {
   clearTimeout(posterTimer);
   posterTimer = setTimeout(() => {
-    document.querySelectorAll('.seg').forEach((el) => {
-      const seg = segs[Number(el.dataset.i)];
-      const img = el.querySelector('.poster');
-      if (!seg || !img) return;
-      posterAt.set(seg, seg.in);
-      const src = posterSrc(seg);
-      if (src && img.getAttribute('src') !== src) img.setAttribute('src', src);
-    });
+    const seg = inspected();
+    const img = document.querySelector('#inspector img.poster');
+    if (!seg || !img) return;
+    posterAt.set(seg, seg.in);
+    const src = posterSrc(seg);
+    if (src && img.getAttribute('src') !== src) img.setAttribute('src', src);
   }, 450);
 }
 
@@ -300,125 +304,241 @@ function refreshPosters() {
 const shotAskOpen = new WeakSet();
 const shotAskDraft = new WeakMap();
 
-function segCard(seg, i) {
+/* The shot the inspector is about: the timeline's anchor, or null. */
+function inspected() {
+  return tl.state.anchor == null ? null : tl.byId(tl.state.anchor);
+}
+
+/* What the inspector is currently built for: a segment object, or one of the words
+ * 'multi' / 'none' / 'empty'. The DOM is rebuilt only when this changes; everything
+ * else is filled in place. A segment keeps its object across a trim, a re-key after a
+ * save and a re-render, so typing in its why is never interrupted. */
+let inspecting = null;
+
+/* A why being typed when the inspector moves on (playback advanced, a proposal landed)
+ * must reach the segment before the field is thrown away — Chrome does not blur an
+ * element that leaves the DOM. */
+function commitWhy(box) {
+  const why = box.querySelector('.why');
+  if (!why || document.activeElement !== why) return;
+  if (!inspecting || typeof inspecting !== 'object') return;
+  const text = why.textContent.trim();
+  if (inspecting.why === text) return;
+  inspecting.why = text;
+  touch();
+  tl.render();                  // the block's tooltip and fallback line carry the why
+}
+
+function buildShot(seg) {
   const el = document.createElement('div');
-  el.className = 'seg' + (i === sel && tl.state.anchor != null ? ' sel' : '');
-  el.draggable = true;
-  el.dataset.i = i;
-
-  const warn = boundaryWarning(seg);
-  const lines = linesFor(seg).map(
-    (u) => `<div><b>${u.start.toFixed(1)}</b> ${escapeHtml(u.text)}</div>`).join('')
-    || '<div>(no speech)</div>';
-  // What the visual pass saw inside this shot — the only account of anything nobody said.
-  const seen = seenFor(seg).map(
-    (m) => `<div><b>${m.start.toFixed(1)}</b> ${kindTag(m.kind)}${escapeHtml(m.what)}</div>`).join('');
-  const blind = unusableFor(seg).map(
-    (u) => `unusable ${u.start.toFixed(1)}–${u.end.toFixed(1)}: ${u.why}`).join(' · ');
-
-  // No src at all rather than an empty one for a clip with no sidecar: src="" makes
-  // the browser fetch the page's own URL, which is a request for the whole board.
-  const poster = posterSrc(seg);
+  el.className = 'shot';
   el.innerHTML = `
-    <img class="poster" draggable="false" loading="lazy" decoding="async"
-         alt="${escapeHtml(stem(seg.clip))} at ${seg.in.toFixed(2)}s"
-         title="play the cut from here"
-         ${poster ? `src="${poster}"` : ''}>
+    <img class="poster" draggable="false" decoding="async" title="play the cut from here">
     <div>
       <div class="meta">
-        <span class="handle" title="drag to reorder">⋮⋮</span>
-        <span class="clip">${seg.clip.replace('.MP4', '')}</span>
-        <span class="times">${seg.in.toFixed(2)} → ${seg.out.toFixed(2)}</span>
-        ${warn ? `<span style="color:var(--warn)">⚠ ${warn}</span>` : ''}
-        ${blind ? `<span style="color:var(--bad)" class="blind">⚠ ${escapeHtml(blind)}</span>` : ''}
-        <span class="dur">${(seg.out - seg.in).toFixed(2)}s</span>
+        <span class="head"><span class="n"></span> · <span class="clip"></span> ·
+          <span class="times"></span> · <span class="dur"></span></span>
+        <span class="warn" style="color:var(--warn)" hidden></span>
+        <span class="blind" style="color:var(--bad)" hidden></span>
+        <span class="at hint"></span>
       </div>
-      <div class="why" contenteditable data-i="${i}">${escapeHtml(seg.why || '')}</div>
-      <div class="lines">${lines}</div>
-      ${seen ? `<div class="lines seen">${seen}</div>` : ''}
+      <div class="why" contenteditable title="why this shot — edited here, saved with the cut"></div>
+      <div class="lines"></div>
+      <div class="lines seen" hidden></div>
+      <div class="polish hint" hidden></div>
       <div class="trim">
         <span>in</span>
-        <button data-act="in" data-d="-0.25">−</button>
-        <button data-act="in" data-d="0.25">+</button>
+        <button data-act="in" data-d="-0.25" title="in-point 0.25 s earlier (⇧ 1 s)">−</button>
+        <button data-act="in" data-d="0.25" title="in-point 0.25 s later (⇧ 1 s)">+</button>
         <span>out</span>
-        <button data-act="out" data-d="-0.25">−</button>
-        <button data-act="out" data-d="0.25">+</button>
-        <button data-act="play">▶ play</button>
-        <button data-act="ask" title="Ask for a change to this one shot — a scoped model call, seconds rather than minutes">✎ ask</button>
-        <button data-act="del" class="ghost">remove</button>
+        <button data-act="out" data-d="-0.25" title="out-point 0.25 s earlier (⇧ 1 s)">−</button>
+        <button data-act="out" data-d="0.25" title="out-point 0.25 s later (⇧ 1 s)">+</button>
+        <button data-act="play" title="play this shot only, then stop">▶ play</button>
+        <button data-act="ask" title="Ask for a change to this one shot — a scoped model call, seconds rather than minutes">✎ ask about this shot</button>
+        <button data-act="del" class="ghost" title="remove this shot from the cut (undoable)">remove</button>
       </div>
-      ${shotAskOpen.has(seg) ? `<div class="shotAsk" style="margin-top:8px">
+      <div class="shotAsk" hidden>
         <textarea class="shotNote"
-          placeholder="what should change in this shot — start later · hold through the reaction · just keep the punchline">${escapeHtml(shotAskDraft.get(seg) || '')}</textarea>
+          placeholder="what should change in this shot — start later · hold through the reaction · just keep the punchline"></textarea>
         <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
-          <button data-act="shotgo" class="primary">Ask about this shot</button>
+          <button data-act="shotgo" class="primary">Ask</button>
           <span class="hint shotState"></span>
         </div>
-      </div>` : ''}
+      </div>
+      <div class="prov hint" hidden></div>
     </div>`;
-
-  el.addEventListener('click', (e) => {
-    sel = i;
-    // The poster is the shot; clicking it plays the cut from here, in the monitor.
-    if (e.target.closest('.poster')) { revealMonitor(); return playFrom(i); }
-    const b = e.target.closest('button');
-    if (!b) { paint(); return; }
-    const act = b.dataset.act;
-    if (act === 'play') { revealMonitor(); return playFrom(i, { single: true }); }
-    if (act === 'del') { pushUndo('remove'); segs.splice(i, 1); return render(); }
-    if (act === 'ask') {
-      if (shotAskOpen.has(seg)) shotAskOpen.delete(seg); else shotAskOpen.add(seg);
-      render();
-      const box = document.querySelectorAll('.seg')[i];
-      const note = box && box.querySelector('.shotNote');
-      if (note) note.focus();
-      return;
-    }
-    if (act === 'shotgo') {
-      const note = el.querySelector('.shotNote').value.trim();
-      if (!note) return toast('say what should change in this shot');
-      ask({ note, focus: i, button: b, state: el.querySelector('.shotState') });
-      return;
-    }
-    // Anything else in the card is a trim button carrying data-d; a button without
-    // one must not fall through to nudge() with NaN.
-    if (!('d' in b.dataset)) { paint(); return; }
-    pushUndo('trim');
-    const d = parseFloat(b.dataset.d) * (e.shiftKey ? 4 : 1);
-    nudge(i, act, d);
-    render();
-  });
-
   el.querySelector('.why').addEventListener('blur', (ev) => {
-    if (segs[i].why === ev.target.textContent.trim()) return;
-    segs[i].why = ev.target.textContent.trim();
+    const text = ev.target.textContent.trim();
+    if (seg.why === text) return;
+    seg.why = text;
     touch();
+    tl.render();                // the block's tooltip and fallback line carry the why
   });
-
-  const shotNote = el.querySelector('.shotNote');
-  if (shotNote) {
-    shotNote.addEventListener('input', () => shotAskDraft.set(seg, shotNote.value));
-  }
-
-  el.addEventListener('dragstart', (e) => {
-    e.dataTransfer.setData('text/plain', i);
-    el.classList.add('drag');
-  });
-  el.addEventListener('dragend', () => el.classList.remove('drag'));
-  el.addEventListener('dragover', (e) => e.preventDefault());
-  el.addEventListener('drop', (e) => {
-    e.preventDefault();
-    const from = parseInt(e.dataTransfer.getData('text/plain'), 10);
-    if (Number.isNaN(from) || from === i) return;
-    pushUndo('reorder');
-    const [m] = segs.splice(from, 1);
-    segs.splice(i, 0, m);
-    sel = i;
-    render();
+  el.querySelector('.shotNote').addEventListener('input', (ev) => {
+    shotAskDraft.set(seg, ev.target.value);
   });
   return el;
 }
 
+function buildMulti() {
+  const el = document.createElement('div');
+  el.className = 'multi';
+  el.innerHTML = `<span class="count"></span>
+    <button data-act="delall" class="ghost" title="remove every selected shot (one undo entry)">remove</button>`;
+  return el;
+}
+
+function buildNone() {
+  const el = document.createElement('div');
+  el.className = 'none';
+  el.innerHTML = `<span>select a shot on the timeline — or press <kbd>↑</kbd> / <kbd>↓</kbd></span>
+    <span class="totals"></span>`;
+  return el;
+}
+
+/* Fill the shot inspector from the segment, touching only what changed. */
+function fillShot(box, seg) {
+  const q = (s) => box.querySelector(s);
+  const i = tl.indexOf(seg.id);
+  q('.n').textContent = `SHOT ${i + 1} of ${segs.length}`;
+  q('.clip').textContent = stem(seg.clip);
+  const times = q('.times');
+  times.textContent = `${fmt(seg.in)} → ${fmt(seg.out)}`;
+  times.title = `${seg.in.toFixed(2)} → ${seg.out.toFixed(2)} s of ${seg.clip}`;
+  q('.dur').textContent = `${(seg.out - seg.in).toFixed(1)} s`;
+  const warn = boundaryWarning(seg);
+  q('.warn').textContent = warn ? `⚠ ${warn}` : '';
+  q('.warn').hidden = !warn;
+  const blind = unusableFor(seg).map(
+    (u) => `unusable ${u.start.toFixed(1)}–${u.end.toFixed(1)}: ${u.why}`).join(' · ');
+  q('.blind').textContent = blind ? `⚠ ${blind}` : '';
+  q('.blind').hidden = !blind;
+  const start = tl.filmStart(seg.id);
+  q('.at').textContent = start >= 0 ? `starts at ${fmt(start)} of the film` : '';
+
+  const why = q('.why');
+  if (document.activeElement !== why && why.textContent !== (seg.why || '')) {
+    why.textContent = seg.why || '';
+  }
+
+  const lines = linesFor(seg).map(
+    (u) => `<div><b>${u.start.toFixed(1)}</b> ${escapeHtml(u.text)}</div>`).join('')
+    || '<div>(no speech)</div>';
+  if (q('.lines:not(.seen)').innerHTML !== lines) q('.lines:not(.seen)').innerHTML = lines;
+  // What the visual pass saw inside this shot — the only account of anything nobody said.
+  const seen = seenFor(seg).map(
+    (m) => `<div><b>${m.start.toFixed(1)}</b> ${kindTag(m.kind)}${escapeHtml(m.what)}</div>`).join('');
+  const seenEl = q('.lines.seen');
+  if (seenEl.innerHTML !== seen) seenEl.innerHTML = seen;
+  seenEl.hidden = !seen;
+
+  // Only what the segment actually carries: a proposal's polish (polished_from /
+  // polish_why ride on the plan's segments until the next reload; the save keeps clip,
+  // in, out, act, why and id) and the act it belongs to.
+  const pf = Array.isArray(seg.polished_from) && seg.polished_from.length === 2
+    ? seg.polished_from : null;
+  const polish = pf
+    ? `↳ polished from ${Number(pf[0]).toFixed(2)}–${Number(pf[1]).toFixed(2)}`
+      + (seg.polish_why ? ` · ${seg.polish_why}` : '')
+    : '';
+  q('.polish').textContent = polish;
+  q('.polish').hidden = !polish;
+  const prov = seg.act ? `act · ${seg.act}` : '';
+  q('.prov').textContent = prov;
+  q('.prov').hidden = !prov;
+
+  // The still: at the in-point when the shot arrives, and catching up to a trimmed
+  // in-point once the trimming settles — never a frame per nudge.
+  const img = q('img.poster');
+  img.alt = `${stem(seg.clip)} at ${seg.in.toFixed(2)}s`;
+  if (!posterAt.has(seg)) {
+    const src = posterSrc(seg);
+    // No src at all rather than an empty one for a clip with no sidecar: src="" makes
+    // the browser fetch the page's own URL, which is a request for the whole board.
+    if (src) img.setAttribute('src', src); else img.removeAttribute('src');
+  } else if (posterAt.get(seg) !== seg.in) {
+    refreshPosters();
+  } else if (!img.getAttribute('src')) {
+    const src = posterSrc(seg);
+    if (src) img.setAttribute('src', src);
+  }
+
+  const askBox = q('.shotAsk');
+  askBox.hidden = !shotAskOpen.has(seg);
+  const note = q('.shotNote');
+  if (document.activeElement !== note) note.value = shotAskDraft.get(seg) || '';
+}
+
+function renderInspector() {
+  const box = $('#inspector');
+  if (!box) return;
+  if (!segs.length) {
+    if (inspecting !== 'empty') { inspecting = 'empty'; box.replaceChildren(emptyState()); }
+    return;
+  }
+  const selIds = [...tl.state.sel].filter((id) => tl.indexOf(id) >= 0);
+  const seg = selIds.length > 1 ? null : inspected();
+  const want = selIds.length > 1 ? 'multi' : seg || 'none';
+  if (inspecting !== want) {
+    commitWhy(box);
+    inspecting = want;
+    box.replaceChildren(want === 'multi' ? buildMulti() : want === 'none' ? buildNone()
+      : buildShot(seg));
+  }
+  if (want === 'multi') {
+    const d = selIds.reduce((a, id) => { const s = tl.byId(id); return a + (s ? s.out - s.in : 0); }, 0);
+    box.querySelector('.count').textContent = `${selIds.length} shots selected · ${d.toFixed(1)} s`;
+  } else if (want === 'none') {
+    const [lo, hi] = P.target;
+    box.querySelector('.totals').textContent =
+      `${segs.length} shot${segs.length === 1 ? '' : 's'} · ${fmt(total())} · target ${fmt(lo)}–${fmt(hi)}`;
+  } else {
+    fillShot(box, seg);
+  }
+}
+
+/* The inspector's controls, delegated once. Every edit goes through the timeline's API,
+ * so it is one undo entry, repaints the board and reaches the autosave as before. */
+function onInspectorClick(e) {
+  const b = e.target.closest('button');
+  if (e.target.closest('img.poster')) {
+    // The still is the shot; clicking it plays the cut from here, in the monitor.
+    const seg = inspected();
+    if (seg) { revealMonitor(); playFrom(tl.indexOf(seg.id)); }
+    return;
+  }
+  if (!b) return;
+  const act = b.dataset.act;
+  if (act === 'delall') { tl.remove([...tl.state.sel]); return; }
+  const seg = inspected();
+  if (!seg) return;
+  const i = tl.indexOf(seg.id);
+  if (act === 'play') { revealMonitor(); playFrom(i, { single: true }); return; }
+  if (act === 'del') { tl.remove([seg.id]); return; }
+  if (act === 'ask') {
+    if (shotAskOpen.has(seg)) shotAskOpen.delete(seg); else shotAskOpen.add(seg);
+    renderInspector();
+    const note = $('#inspector .shotNote');
+    if (note && shotAskOpen.has(seg)) note.focus();
+    return;
+  }
+  if (act === 'shotgo') {
+    const note = $('#inspector .shotNote').value.trim();
+    if (!note) return toast('say what should change in this shot');
+    ask({ note, focus: i, button: b, state: $('#inspector .shotState') });
+    return;
+  }
+  // Anything else is a trim button carrying data-d; a button without one must not
+  // fall through with NaN.
+  if (!('d' in b.dataset)) return;
+  const d = parseFloat(b.dataset.d) * (e.shiftKey ? 4 : 1);
+  tl.begin('trim');
+  if (act === 'in') tl.setRange(seg.id, seg.in + d, null);
+  else tl.setRange(seg.id, null, seg.out + d);
+  tl.commit();
+}
+
+/* The `[` `]` `{` `}` keys' nudge; the inspector's buttons go through tl.setRange. */
 function nudge(i, edge, d) {
   const seg = segs[i];
   const dur = (P.clips[seg.clip] || {}).duration ?? 1e9;
@@ -487,10 +607,12 @@ function showLive() {
   player.vids.forEach((v, k) => v.classList.toggle('live', k === player.cur));
 }
 
-/* The monitor sits at the top of the column and the shot list runs a long way below it.
- * Clicking shot 12's poster on the Killington cut started playback 3,163 px above the
- * viewport — measured — where nothing about it could be seen or heard to be about that
- * shot. A play started from down the list brings the monitor back first. */
+/* The monitor sits at the top of the column. When the shot list ran a long way below
+ * it, clicking shot 12's poster on the Killington cut started playback 3,163 px above
+ * the viewport — measured — where nothing about it could be seen or heard to be about
+ * that shot. The inspector sits right under the timeline now, but a short window can
+ * still have it on screen with the monitor scrolled off, so a play started from it (or
+ * from the keys) brings the monitor back first. */
 function revealMonitor() {
   const el = $('#player');
   if (!el || el.style.display === 'none') return;
@@ -716,12 +838,12 @@ function escapeHtml(s) {
 }
 
 /* `sel` is an index here and a set of ids in the timeline; the module maps the two at
- * this boundary (tl.syncSel adopts a moved index; a click on a block sets it). A cleared
- * timeline selection — a click on its empty lane — leaves no card marked either. */
+ * this boundary (tl.syncSel adopts a moved index; a click on a block sets it). The
+ * inspector follows the anchor: a cleared timeline selection — a click on its empty
+ * lane, Esc — leaves it saying so. */
 function paint() {
   tl.syncSel();
-  document.querySelectorAll('.seg').forEach((el, i) =>
-    el.classList.toggle('sel', i === sel && tl.state.anchor != null));
+  renderInspector();
 }
 
 /* The board opened on a hand-authored EDL, so an empty timeline used to be an
@@ -770,11 +892,11 @@ function emptyState() {
 }
 
 function render() {
-  const tl = $('#timeline');
-  tl.innerHTML = '';
-  if (!segs.length) tl.appendChild(emptyState());
-  segs.forEach((s, i) => tl.appendChild(segCard(s, i)));
+  // The empty state is rebuilt on every render — it reads the project's status, which
+  // the reload after an index or a pass can change; the inspector fills in place.
+  if (!segs.length) { inspecting = 'empty'; $('#inspector').replaceChildren(emptyState()); }
   syncPlayer();
+  renderInspector();
 
   // With an empty timeline the empty state already has its own "what is this film
   // about" box, so the sidebar panel is a second input for the same thing.
@@ -950,7 +1072,7 @@ function keepRow(s) {
     : !known
       ? '<span class="gone">clip not analysed — cannot be added</span>'
       : at >= 0
-        ? `<a href="#" class="use" data-shot="${at}" title="scroll to the shot">in the cut · shot ${at + 1}</a>`
+        ? `<a href="#" class="use" data-shot="${at}" title="select the shot on the timeline">in the cut · shot ${at + 1}</a>`
         : '<button class="use add">+ add to cut</button>';
   d.innerHTML = `
     ${still ? `<img class="still" loading="lazy" decoding="async" draggable="false"
@@ -967,8 +1089,11 @@ function keepRow(s) {
   if (link) {
     link.onclick = (e) => {
       e.preventDefault();
-      sel = Number(link.dataset.shot);
-      paint();
+      // By id through the timeline, not by nudging the index: a cleared selection
+      // leaves the index where it was, and syncSel would see nothing to adopt.
+      const id = tl.idAt(Number(link.dataset.shot));
+      if (id == null) return;
+      tl.select([id]);            // sets sel, emits select → paint() → the inspector
       scrollSel();
     };
   }
@@ -1644,7 +1769,7 @@ function addFindMatch() {
   });
   sel = at;
   render();
-  toast(`added ${stem(findSel.clip)} @ ${findSel.start.toFixed(1)}s — trim it on its card`);
+  toast(`added ${stem(findSel.clip)} @ ${findSel.start.toFixed(1)}s — trim it in the inspector`);
 }
 
 function followFind(job) {
@@ -1945,9 +2070,13 @@ document.addEventListener('keydown', (e) => {
   else return;
 });
 
+/* Bring the selected shot's block into view — on the page and inside the timeline's
+ * own scroll. The inspector sits right under it. */
 function scrollSel() {
-  const el = document.querySelectorAll('.seg')[sel];
-  if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  const id = tl.idAt(sel);
+  const blk = id == null ? null
+    : document.querySelector(`#tl .blk[data-id="${CSS.escape(String(id))}"]`);
+  if (blk) blk.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
 }
 
 /* A poster that 404s while its proxy is still building stays broken until the page is
@@ -1962,7 +2091,7 @@ function waitForProxies() {
     clearInterval(iv);
     P.proxies_ready = true;
     let fixed = 0;
-    document.querySelectorAll('.seg .poster').forEach((img) => {
+    document.querySelectorAll('#inspector img.poster, #tl .blk img.poster').forEach((img) => {
       const src = img.getAttribute('src');
       if (!src || img.naturalWidth > 0) return;
       img.src = src;                       // same URL, fresh load attempt
@@ -2043,9 +2172,10 @@ async function boot() {
   });
   tl.on('select', (ev) => {
     if (ev.source === 'app') return;          // paint() already ran; it told the module
-    paint();
-    if (ev.source === 'click') scrollSel();   // a click on a block brings its card up
+    paint();                                  // the inspector follows the anchor
   });
+  tl.on('change', renderInspector);           // a trim changes the header; an undo the why
+  $('#inspector').addEventListener('click', onInspectorClick);
   render();
   paintBinLine();
   await refreshVersions();

@@ -458,6 +458,55 @@ same commit. Releases move entries into a dated version section.
   overlaps are one pick already, speech needs the shared theme.
 
 ### Changed
+- **Docs:** I9.5 ticked in INTAKE (M9, the inspector) with the two commits (`ac404db`,
+  `f6ed711`), the counts (5 new tests; 91 across the five timeline + flow files; suite 452
+  with the two music tests passing alone) and the lane's decisions: `m:ss.s` header times
+  with the exact seconds in the tooltip, the scoped ask's send button reading `Ask`, no
+  invented provenance, and the one convenience the foundation could add (`tl.reveal`).
+- **The inspector's tests and docs (INTAKE M9, I9.5; lane `agent/inspector`).**
+  `test_ui_flow.py`: the fixture waits for `#tl .blk`; every test that read `.seg` cards
+  reads the timeline's blocks and `#inspector` instead (the poster test, the settle test,
+  the trim / undo tests, the boundary-warning test now checks the inspector's header and
+  the *Fix cut points* button, remove and reload, the proposal tests, the scoped ask — now
+  *the inspector asks about the selected shot* — Find's insert, the monitor's block-click
+  and space / enter tests, playing from the inspector with the monitor scrolled off, the
+  versions list, what the visual pass saw, the reattached ask, the kept tab, the empty bin,
+  cut from the bin and the switcher); a `select_shot` helper selects by id without playing.
+  Five new tests: selecting a block fills the header and the why (and ↑ follows), editing
+  the why saves to the EDL and repaints the block's tooltip, the ±0.25 s buttons are one
+  undo entry each (⇧ a second; three ⌘Z walk back in order), the kept tab's *in the cut ·
+  shot N* selects the block and the inspector from a cleared selection, and the empty state
+  after Esc plus the multi-selection with remove for all. `test_timeline_ui.py` (a block
+  click and the index both way, the ruler click, the split / move / remove counts, the
+  shared undo stack), `test_timeline_keys.py` (the razor count, ⌘A+X undo, Esc, keys while
+  typing in the why) and `test_timeline_lanes.py` (the drag's first block) where a selector
+  named a card. README: the *Shot cards* row is *Inspector*; the monitor row and the
+  visual-pass paragraph say where the moments show now.
+- **The inspector replaces the shot cards (INTAKE M9, I9.5; lane `agent/inspector`).**
+  `#inspector`, under the timeline in the DOM place the card list had: for the anchor shot,
+  `SHOT n of N · CLIP_04 · 3:44.0 → 3:48.2 · 4.2 s` (the exact clip seconds in the tooltip),
+  the boundary warning and any unusable stretch, where it starts in the film; the still at
+  the in-point (the same poster URL, catching up to a trimmed in-point on the 450 ms settle,
+  never a frame per nudge); the transcript lines and what the visual pass saw inside the
+  cut; the why as the same contenteditable, saved on blur and the block's tooltip repainted;
+  `↳ polished from a–b · why` and `act · …` only when the segment carries them — nothing is
+  invented, and the save keeps only clip / in / out / act / why / id, so a proposal's polish
+  shows until the next reload; the ±0.25 s trims (⇧ for 1 s) through `tl.begin('trim')` /
+  `tl.setRange` / `tl.commit()` so each press is one undo entry; *▶ play* this shot only;
+  *✎ ask about this shot* — the scoped ask unchanged, its send button now reads `Ask`;
+  *remove* through `tl.remove`. A multi-selection shows `N shots selected · d s` and remove
+  for all; no selection says *select a shot on the timeline — or press ↑ / ↓* with the cut's
+  totals; no cut shows the board's empty state as before. It is one element built once per
+  shot and filled in place on the timeline's `select` and `change` and from `paint()`, so a
+  scrub or a shot advance never rebuilds it or steals the focus from a why being typed — and
+  a why still being typed when the inspector moves on is committed first, because Chrome does
+  not blur an element that leaves the DOM. `render()` no longer builds cards; the kept tab's
+  *in the cut · shot N* selects by id through `tl.select` (a cleared selection left the index
+  where it was and `syncSel` had nothing to adopt); `scrollSel` brings the shot's block into
+  view; `waitForProxies` re-points the inspector's and the blocks' posters; the card's own
+  drag-to-reorder is gone (the timeline moves shots). `index.html`: the `.seg` styles become
+  the inspector's, `#timeline` is `#inspector`. Decided by the lane: header times in the
+  ruler's `m:ss.s` per the brief, with two-decimal clip seconds in the tooltip for trimming.
 - **Docs:** INTAKE's lanes table and verification log carry the three timeline lanes merged,
   the two merge-only fixes, and the live check of the timeline on Killington.
 - **Docs:** INTAKE M9's four lane lines are the ticked ones only, after the lanes merge
