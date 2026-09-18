@@ -10,6 +10,30 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The timeline's lanes (INTAKE M9, I9.4, part 1).** `app/static/timeline-lanes.js`, built
+  on the foundation's API and hung inside `#tl` beside V1 (V1 moves down / the view grows
+  through `--tl-above` / `--tl-below`, rules appended to `timeline.css`): **A1**, the music
+  bed when `effects_music` is set — the track's name, a bar the length of the film, the
+  fades as ramps, a dip under every speech region in the cut (the same padded, merged
+  regions the monitor ducks by, the depth the asked dB as a gain ratio) and the monitor's
+  own `bedGainAt` curve on top; a click scrolls the music panel in, nothing here edits
+  (decision 5). **Markers**, a thin lane above V1: `★` at every hero keep in the cut (clip
+  + overlap ≥ 0.5, the kept tab's rule), a tick per ranked event inside a shot (kind-
+  coloured, tooltip = what + rank), a legend at the left; and a **bin** lane below with
+  the pass's keeps not in the cut as faint `available` outlines after the last shot of
+  their clip (else after the end), width to length. **The proposal ghost lane** while the
+  diff panel is up: the proposed timeline under V1 by its own film time — unchanged
+  shots dim, added ones green, moved ones with an arrow from where they are now, removed
+  ones struck out on V1 (matched by id when the plan carries one, else clip + overlap);
+  click a ghost → the monitor plays *that* range (a shot that need not be in the cut,
+  without playing the cut); `play proposal` / `play cut` at the lane's left; the panel's
+  own Accept / Discard stay, and the lane goes when it closes. Lane labels stick to the
+  viewport's left edge as the canvas scrolls. `test_timeline_lanes.py`: three playwright
+  tests — the A1 lane's bar, dips, fades and curve against the seed's speech; a hero
+  star, an event tick and an available outline at the right x (and following the zoom);
+  a scripted proposal's ghosts wear the right classes, a click cues the monitor to the
+  ghost's clip and time, the toggle hands the monitor back, discard clears, and a
+  proposal that drops a shot strikes it out.
 - **The timeline's three lane files are loaded by the board** (`timeline-trim.js`,
   `timeline-keys.js`, `timeline-lanes.js`, after the foundation) — served by name at
   `/timeline/{name}`, a 404 until each lane lands, so the tags cost nothing before then.
