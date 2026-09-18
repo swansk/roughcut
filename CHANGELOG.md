@@ -10,6 +10,9 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The timeline's three lane files are loaded by the board** (`timeline-trim.js`,
+  `timeline-keys.js`, `timeline-lanes.js`, after the foundation) — served by name at
+  `/timeline/{name}`, a 404 until each lane lands, so the tags cost nothing before then.
 - **Docs for the promoted timeline (INTAKE M9, I9.1).** `app/README.md` gains a *Timeline*
   row (the ruler, the V1 blocks, scrub, zoom, the one undo / redo stack, the module's API
   as the next lanes' contract); the row that described the cards is now *Shot cards*, and
