@@ -10,6 +10,8 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **I9.2 ticked in INTAKE (M9, lane `agent/tl-trim`)** with the two commits, the counts
+  and the lane's decisions.
 - **The magnet — snapping while an edge or a cut is dragged (INTAKE M9, I9.2; lane
   `agent/tl-trim`).** Within 8 px, in priority: another cut point (for a roll — on a
   ripple every other cut either lies on the far side of the block or moves with the film

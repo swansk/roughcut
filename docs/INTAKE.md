@@ -530,8 +530,18 @@ and effects derive from it at render.
       on a block also plays from there (the strip's promise, and what keeps `test_ui_flow.py`'s
       monitor test unchanged); a lane-background click clears the selection and no card is
       marked until the next selection.
-- [ ] I9.2 **Trims + snapping (lane `agent/tl-trim`):** ripple / roll / slip by drag, the
-      magnet (cuts, playhead, sentences, onsets; `S` toggles; snap line), `,`/`.` nudges.
+- [x] I9.2 **Trims + snapping (lane `agent/tl-trim`, commits `a1f1c58` trims, `4334b35` the
+      magnet; `test_timeline_trim.py` 9 tests, with `test_timeline_ui.py` 22 passed, suite
+      429 passed):** `app/static/timeline-trim.js` on the foundation's API — edge handles
+      ripple-trim, a zone over every cut rolls, ⌥-drag slips; one undo entry per drag, Esc
+      cancels, the monitor parks on the dragged edge; `,`/`.` nudge the active edge (⇧ a
+      second); the magnet snaps a dragged edge or cut within 8 px to a cut (roll), the
+      playhead, a sentence `cut_in`/`cut_out`, a word, an onset, with a labelled snap line,
+      ticks inside the dragged block, `S` to toggle (persisted) and ⌘/ctrl to suspend.
+      Decided by the lane: the pointer maps to seconds at the zoom of pointerdown (the
+      foundation refits until someone zooms); the playhead target is where it stood when
+      the edge was taken (the foundation's seek moves it while parking); cut points are a
+      roll's targets only.
 - [ ] I9.3 **Keyboard editing (lane `agent/tl-keys`):** JKL, `↑`/`↓`, `Home`/`End`, `I`/`O` +
       insert, `C` razor, `Q`/`W`, `X` ripple delete, `⌘Z`/`⌘⇧Z`, the `?` map on the board.
 - [ ] I9.4 **Lanes + drag and drop (lane `agent/tl-lanes`):** A1 music with ducks, the
