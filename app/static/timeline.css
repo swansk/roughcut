@@ -81,3 +81,32 @@
                        border: 6px solid transparent; border-top: 8px solid #fff;
                        border-bottom: 0; }
 
+
+/* ---- keys (I9.3) */
+/* the I / O marks on the clip in Find: two ticks on a small bar beside the transport's
+   position, with the range between them once both are set */
+.transport .tl-marks { display: inline-flex; align-items: center; gap: 8px; margin-left: 12px;
+                       font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums;
+                       white-space: nowrap; }
+.transport .tl-marks[hidden] { display: none; }
+.transport .tl-marks .bar { position: relative; display: inline-block; width: 72px; height: 6px;
+                            border-radius: 3px; background: #26262e; border: 1px solid var(--line);
+                            flex: none; }
+.transport .tl-marks .range { position: absolute; top: 0; bottom: 0;
+                              background: rgba(110, 168, 254, .35); }
+.transport .tl-marks .tick { position: absolute; top: -3px; bottom: -3px; width: 2px;
+                             margin-left: -1px; background: var(--accent); }
+.transport .tl-marks .range[hidden], .transport .tl-marks .tick[hidden] { display: none; }
+
+/* the Timeline section of the Keys panel, rendered from the table in timeline-keys.js */
+#tlKeys { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+#tlKeys h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+             color: var(--dim); margin: 0 0 6px; font-weight: 600; }
+#tlKeys .row { display: grid; grid-template-columns: 92px 1fr; gap: 8px; padding: 2px 0;
+               font-size: 12px; color: var(--dim); align-items: baseline; }
+#tlKeys .row .k { white-space: nowrap; }
+#tlKeys .row .w em { font-style: normal; color: #6f6f80; }
+/* ? brings the panel up and flashes it once */
+.panel.tl-flash { animation: tl-flash 1.2s ease-out; }
+@keyframes tl-flash { 0% { box-shadow: 0 0 0 2px var(--accent); }
+                      100% { box-shadow: 0 0 0 0 transparent; } }
