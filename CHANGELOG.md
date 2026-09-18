@@ -10,6 +10,20 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **`test_timeline_ui.py` — the promoted timeline in a real browser (INTAKE M9, I9.1).**
+  Thirteen playwright tests against the synthetic bin: the ruler's labels and end mark
+  agree with the seed EDL and `#posTotal`; blocks carry the ids the page was handed and
+  the first save persists, and at the fit zoom the two 2 s shots share the viewport
+  equally; `+` doubles the px/s and `\` fits; a click selects the block and its card
+  (and a card click selects the block), ⇧-click ranges, ⌘-click toggles, the empty ruler
+  clears; a click on the ruler at 3 s parks the monitor on shot 2 at 1.0 s, paused, with
+  the playhead at 3 s and space resuming from there; the playhead follows playback;
+  `tl.setRange` through `begin`/`commit` reaches the disk inside the autosave debounce
+  and ⌘Z / ⌘⇧Z walk it back and forth on disk, clamped as nudge clamps; `tl.split`
+  makes two shots that survive a save with distinct server ids (the old `tmp-` id still
+  resolves); `tl.move` reorders with the ids travelling; `remove` / `insert` keep the
+  cards in step; `tl.snapsFor` resolves with the clip's sentences and is cached; a card's
+  trim and a timeline move share one stack, in order, with the label in the tooltip.
 - **The promoted timeline — the foundation (INTAKE M9, I9.1; lane `agent/timeline`).**
   The proportional strip under the monitor is a real timeline: `app/static/timeline.js`
   (`window.tl`) and `timeline.css`, mounted in `#tl` by app.js once the project loads. A
