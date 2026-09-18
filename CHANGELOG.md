@@ -301,6 +301,8 @@ same commit. Releases move entries into a dated version section.
   overlaps are one pick already, speech needs the shared theme.
 
 ### Changed
+- **Docs:** INTAKE's lanes table and verification log carry M9's foundation merge and the
+  three timeline lanes in flight; the board is live on the foundation.
 - **Session 13 close-out (docs).** INTAKE M8 ticked in full (I8.1 the bin on the board, I8.2
   the filter, I8.3 settings, I8.4 the cuts live check), "Where we are" says nothing is
   deferred and names what waits on Karl and the design's stage two; the lanes table and the

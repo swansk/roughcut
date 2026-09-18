@@ -560,6 +560,10 @@ and effects derive from it at render.
 | settings | `agent/settings` | I8.3 UI | **merged** `6dd9b51`; worktree removed |
 | filter | `agent/filter` | I8.2 | **merged** `88cc105`; worktree removed |
 | binboard | `agent/binboard` | I8.1 | **merged** `4e6ab8a`; worktree removed |
+| timeline | `agent/timeline` | I9.1 foundation | **merged** `139e171`; worktree removed |
+| tl-trim | `agent/tl-trim` · `../roughcut-wt/tl-trim` | I9.2 | running 2026-09-18 |
+| tl-keys | `agent/tl-keys` · `../roughcut-wt/tl-keys` | I9.3 | running 2026-09-18 |
+| tl-lanes | `agent/tl-lanes` · `../roughcut-wt/tl-lanes` | I9.4 | running 2026-09-18 |
 | open | `agent/open` · `../roughcut-wt/open` | I5.1, I5.3 | **merged** `6ba1ec0`; worktree removed |
 
 Lanes touch disjoint files by design: `bin` → `revise.py`, `selects.py`, tests; `floor` →
@@ -681,3 +685,8 @@ them. Every lane adds its own CHANGELOG bullet; integration keeps all of them.
   (`CLIP_01 · 0:37.6 → 0:44.3 · 6.7 s` …), 21 of them `in the cut · shot N` and 22 with
   `+ add to cut`; the Project line reads `bin · 43 moments · 0 heroes · 5:11 if strung out ·
   the pass →`; **Cut from the bin** is enabled. Nothing added, nothing asked.
+- 2026-09-18 · M9 · I9.0 `c6cdc8d` (suite 407) · I9.1 foundation merged `139e171` (lane's
+  own run: `test_timeline_ui.py` 13 passed, suite 421 passed) · board restarted on `da30663`:
+  `/timeline/timeline.js` and `.css` served, 21 shots on Killington all carrying server ids.
+  `POST /api/snap` keeps ids (`edl_snap.py` copies each segment whole) — the foundation's
+  question, answered. Three lanes running: tl-trim, tl-keys, tl-lanes.
