@@ -10,6 +10,8 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **I9.4 ticked in INTAKE** (lane `agent/tl-lanes`): the two commits, the counts, the
+  decisions the brief left to the lane, and what the foundation lacked.
 - **Drag and drop on the timeline (INTAKE M9, I9.4, part 2).** In `timeline-lanes.js`:
   **move by drag** on V1 — a pointer-drag on a block's body (not within 8 px of an edge
   and without alt, which are the trim lane's) carries the block, or the whole selection

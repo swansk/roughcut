@@ -534,9 +534,28 @@ and effects derive from it at render.
       magnet (cuts, playhead, sentences, onsets; `S` toggles; snap line), `,`/`.` nudges.
 - [ ] I9.3 **Keyboard editing (lane `agent/tl-keys`):** JKL, `↑`/`↓`, `Home`/`End`, `I`/`O` +
       insert, `C` razor, `Q`/`W`, `X` ripple delete, `⌘Z`/`⌘⇧Z`, the `?` map on the board.
-- [ ] I9.4 **Lanes + drag and drop (lane `agent/tl-lanes`):** A1 music with ducks, the
-      markers lane, the proposal ghost lane; move by drag with a drop line, multi-move, drop
-      a keep or a Find result onto the timeline.
+- [x] I9.4 **Lanes + drag and drop (lane `agent/tl-lanes`, commits `4d52440` the lanes,
+      `8d2f69d` drag and drop; `test_timeline_lanes.py` 6 tests, with `test_timeline_ui.py`
+      19 passed, suite 427 passed):** `app/static/timeline-lanes.js` + rules appended to
+      `timeline.css`, built on the foundation's API and hung inside `#tl` (V1 moves down /
+      the view grows through `--tl-above` / `--tl-below`). A1 music with the bed, the fades
+      as ramps, a dip per speech region in the cut and the monitor's `bedGainAt` curve (a
+      click scrolls the music panel in; it draws, never edits); the markers lane above V1
+      (`★` per hero keep in the cut, a tick per ranked event inside a shot, a legend) and a
+      bin lane below (the pass's keeps not in the cut as faint `available` outlines after
+      the last shot of their clip, else the end); the proposal ghost lane while the diff
+      panel is up (unchanged dim, added green, moved with an arrow, removed struck out on
+      V1; click a ghost → the monitor plays that range; `play proposal` / `play cut`);
+      move by drag on V1 with a drop line snapping to cut points, the whole selection
+      together, under 4 px a click; kept rows, Find rows and `available` outlines drag onto
+      the timeline as `application/x-roughcut-shot` and insert at the drop line, past the
+      end they append. Decided by the lane: outlines that anchor at the same point lay end
+      to end; a matched ghost with a different range wears `trimmed`; moved vs unchanged is
+      a longest increasing subsequence over the matched shots; the lanes hold still from a
+      press on an outline until its drag ends (Chromium ends a drag whose source is rebuilt).
+      The foundation lacked a mounted hook, a render event and a play-a-range hook — all
+      worked around inside the lane's file (tl.mount / tl.render wrapped, a 500 ms identity
+      poll, the monitor's globals driven by name); nothing in the foundation was edited.
 - [ ] I9.5 **Inspector:** the selected shot's card content beside the timeline; the card list
       retired (after I9.1–I9.4 land).
 - [ ] I9.6 Live on Killington: Karl's look.
