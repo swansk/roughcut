@@ -1,14 +1,17 @@
-"""INTAKE M9 I9.2 — trims by drag, driven in a real browser.
+"""INTAKE M9 I9.2 — trims by drag and the magnet, driven in a real browser.
 
 The module under test is `app/static/timeline-trim.js`, built on the foundation
 (`timeline.js`, `window.tl`): ripple trims by an edge handle, rolls by the zone over a
-cut, slips by ⌥-drag, `,` / `.` nudges of the active edge. The gestures are real pointer
+cut, slips by ⌥-drag, `,` / `.` nudges of the active edge, and the magnet — snapping to
+the playhead, a sentence's padded cut point, a word start, with a snap line that says
+what it took, `S` to turn it off, ⌘/ctrl to suspend it. The gestures are real pointer
 events through playwright's mouse; the assertions are made against app.js's `segs`, the
 EDL on disk, the transport's total and the undo stack — not the module's word for it.
 
 Same fixture pattern as test_timeline_ui.py: the real uvicorn server on a real port,
-the synthetic three-clip bin, the EDL re-seeded per test (two shots, 2 s each). Skipped
-when playwright is absent.
+the synthetic three-clip bin (utterances at 0.5–2.0, 2.4–4.0, 5.0–5.6 with the cut pads
+0.25 / 0.45, so a sentence `cut_out` sits at 2.45, 4.45 and 6.0), the EDL re-seeded per
+test (two shots, 2 s each). Skipped when playwright is absent.
 """
 
 from __future__ import annotations
@@ -81,7 +84,7 @@ def page(live_server, project):
         pg.add_style_tag(content="#progress { display: none !important; }")
         pg.wait_for_selector("#tl .blk .tl-h.out")          # the lane has decorated the blocks
         pg.wait_for_selector("#tl .tl-roll")
-        # the clips' lengths come from the snaps payload, fetched at mount: wait for it
+        # the magnet's points are fetched at mount; wait for the server's answer
         pg.evaluate("Promise.all(segs.map(s => tl.snapsFor(s.clip)))")
         yield pg
         browser.close()
@@ -256,6 +259,83 @@ def test_a_press_on_a_handle_without_travel_is_a_click_and_esc_cancels_a_drag(pa
     page.mouse.up()
     assert ranges(page) == [[1.0, 3.0], [0.0, 2.0]]
     assert page.locator("#undo").is_disabled()
+
+
+# ------------------------------------------------------------------ the magnet
+
+def test_a_drag_ending_near_a_sentence_cut_out_snaps_to_it_exactly(page):
+    """CLIP_A's second utterance ends at 4.0; with the 0.45 s tail pad its `cut_out` is
+    4.45. An out handle released 4 px short of it lands on 4.45 exactly, the snap line
+    across the timeline says `sentence`, and the tooltip says what it took."""
+    z = zoom(page)
+    drag(page, out_handle(page, 0), 1.45 * z - 4, release=False)
+    page.wait_for_selector("#tl .tl-snapline:not([hidden])", timeout=3000)
+    assert page.locator("#tl .tl-snapline label").inner_text() == "sentence"
+    assert page.evaluate("parseFloat(document.querySelector('#tl .tl-snapline').style.left)") \
+        == pytest.approx(page.evaluate("tl.timeToX(3.45)"), abs=0.5)     # film 0 + (4.45 − 1.0)
+    assert "snap: sentence" in page.locator("#tl .tl-tip").inner_text()
+    # the dragged block shows its clip's sentence points as ticks
+    assert page.locator("#tl .blk").nth(0).locator(".tl-tick.sentence").count() >= 2
+    page.mouse.up()
+    assert page.evaluate("segs[0].out") == 4.45
+    assert page.locator("#tl .tl-snapline").is_hidden()
+    assert page.locator("#tl .blk .tl-tick").count() == 0
+    page.keyboard.press("Control+z")
+    assert page.evaluate("segs[0].out") == 3.0
+
+
+def test_the_magnets_priority_is_the_playhead_then_sentences_then_words(page):
+    z = zoom(page)
+    # the playhead at 3.2 s of film is 4.2 s into CLIP_A: an out released 3 px off it
+    page.evaluate("tl.setPlayhead(3.2)")
+    drag(page, out_handle(page, 0), 1.2 * z + 3, release=False)
+    page.wait_for_selector("#tl .tl-snapline:not([hidden])", timeout=3000)
+    assert page.locator("#tl .tl-snapline label").inner_text() == "playhead"
+    page.mouse.up()
+    assert page.evaluate("segs[0].out") == 4.2
+    page.keyboard.press("Control+z")
+    # a word starts at 3.5: nothing else within 8 px, so the word takes it
+    page.evaluate("tl.setPlayhead(0)")
+    drag(page, out_handle(page, 0), 0.5 * z + 3, release=False)
+    page.wait_for_selector("#tl .tl-snapline:not([hidden])", timeout=3000)
+    assert page.locator("#tl .tl-snapline label").inner_text() == "word"
+    page.mouse.up()
+    assert page.evaluate("segs[0].out") == 3.5
+    page.keyboard.press("Control+z")
+    # an in edge snaps to a sentence's cut_in (2.4 − 0.25 = 2.15), not its cut_out
+    drag(page, in_handle(page, 0), 1.15 * z + 4, release=False)
+    page.wait_for_selector("#tl .tl-snapline:not([hidden])", timeout=3000)
+    assert page.locator("#tl .tl-snapline label").inner_text() == "sentence"
+    page.mouse.up()
+    assert page.evaluate("segs[0].in") == 2.15
+
+
+def test_s_turns_the_magnet_off_and_ctrl_suspends_it(page):
+    z = zoom(page)
+    ind = page.locator("#tl .tl-magnet")
+    assert ind.inner_text() == "magnet · on"
+    page.keyboard.press("s")
+    assert ind.inner_text() == "magnet · off"
+    assert page.evaluate("localStorage.getItem('roughcut.tl.magnet')") == "0"
+    drag(page, out_handle(page, 0), 1.45 * z - 4, release=False)
+    page.wait_for_function("segs[0].out > 4.3", timeout=3000)
+    assert page.locator("#tl .tl-snapline").is_hidden()
+    page.mouse.up()
+    out = page.evaluate("segs[0].out")
+    assert out != 4.45 and out == pytest.approx(4.45 - 4 / z, abs=0.011)
+    page.keyboard.press("Control+z")
+    page.keyboard.press("S")
+    assert ind.inner_text() == "magnet · on"
+    assert page.evaluate("localStorage.getItem('roughcut.tl.magnet')") == "1"
+    # ⌘/ctrl held while dragging suspends it for that drag only
+    drag(page, out_handle(page, 0), 1.45 * z - 4, modifiers=["Control"])
+    out = page.evaluate("segs[0].out")
+    assert out != 4.45 and out == pytest.approx(4.45 - 4 / z, abs=0.011)
+    assert ind.inner_text() == "magnet · on"
+    # the indicator is a button too
+    reveal(page)
+    ind.click()
+    assert ind.inner_text() == "magnet · off"
 
 
 # ------------------------------------------------------------------ nudges

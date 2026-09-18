@@ -107,6 +107,28 @@
 #tl .tl-lane.tl-drag-trim { cursor: ew-resize; }
 #tl .tl-lane.tl-drag-roll { cursor: col-resize; }
 #tl .tl-lane.tl-drag-slip { cursor: grabbing; }
+/* what there is to snap to, inside the block being dragged */
+#tl .blk .tl-ticks { position: absolute; left: 0; right: 0; bottom: 0; height: 100%;
+                     pointer-events: none; }
+#tl .blk .tl-ticks[hidden] { display: none; }
+#tl .blk .tl-tick { position: absolute; bottom: 0; width: 1px; height: 10px;
+                    background: var(--accent); opacity: .55; }
+#tl .blk .tl-tick.onset { height: 6px; background: var(--warn); opacity: .5; }
+/* the snap line across the ruler and the lanes, with what it took */
+#tl .tl-snapline { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px solid var(--accent);
+                   z-index: 5; pointer-events: none; }
+#tl .tl-snapline[hidden] { display: none; }
+#tl .tl-snapline label { position: absolute; left: 3px; top: 2px; font-size: 9px; line-height: 1;
+                         padding: 2px 4px; border-radius: 3px; background: var(--accent);
+                         color: #0b0b0f; white-space: nowrap; }
+#tl .tl-snapline.playhead { border-color: #fff; }
+#tl .tl-snapline.playhead label { background: #fff; }
+#tl .tl-snapline.word { border-color: #8fb4e8; }
+#tl .tl-snapline.word label { background: #8fb4e8; }
+#tl .tl-snapline.onset { border-color: var(--warn); }
+#tl .tl-snapline.onset label { background: var(--warn); }
+#tl .tl-snapline.cut { border-color: var(--good); }
+#tl .tl-snapline.cut label { background: var(--good); }
 /* the tooltip: the new time and length, over the lane at the edge */
 #tl .tl-tip { position: absolute; top: calc(var(--tl-ruler) - 4px); transform: translate(-50%, -100%);
               font-size: 10px; line-height: 1; padding: 3px 6px; border-radius: 3px;
@@ -114,3 +136,9 @@
               white-space: nowrap; z-index: 6; pointer-events: none;
               font-variant-numeric: tabular-nums; }
 #tl .tl-tip[hidden] { display: none; }
+/* the magnet, by the ruler's right end */
+#tl .tl-magnet { position: absolute; top: 3px; right: 6px; z-index: 7; font-size: 10px;
+                 line-height: 1; padding: 2px 6px; border-radius: 3px; cursor: pointer;
+                 background: #1c1c24; color: var(--accent); border: 1px solid var(--line); }
+#tl .tl-magnet.off { color: var(--dim); }
+#tl .tl-magnet:hover { border-color: var(--accent); }
