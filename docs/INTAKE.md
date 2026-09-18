@@ -769,4 +769,8 @@ them. Every lane adds its own CHANGELOG bullet; integration keeps all of them.
   Timeline section, `#redo` present, no page errors, undo stack untouched.
 - 2026-09-18 · + inspector `e3a2c60` · **452 passed, 1 skipped** (287.77 s) with the two
   music tests timing out under load (pass alone, 4.24 s in the lane's run). Inspector live on
-  Killington: see the session's close-out note in HANDOFF.
+  Killington (headless, board serving `e3a2c60`'s files): no `.seg` cards left; selecting a
+  block fills `SHOT 3 of 21 · CLIP_01 · 1:31.5 → 1:44.4 · 12.9 s` with its still, eight
+  transcript / seen lines and the ± trims, ▶ play, ✎ ask, remove; three blocks → `3 shots
+  selected · 41.4 s`; Esc → `select a shot on the timeline — or press ↑ / ↓`; undo stack
+  untouched, no page errors.

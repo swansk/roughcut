@@ -458,6 +458,7 @@ same commit. Releases move entries into a dated version section.
   overlaps are one pick already, speech needs the shared theme.
 
 ### Changed
+- **Docs:** INTAKE's verification log records the inspector's live check on Killington.
 - **Session 14 close-out (docs).** INTAKE M9 ticked through I9.5 with the merge hashes,
   "Where we are" names Karl's look as the next step and the three items deferred from the
   lanes' reports; the lanes table and verification log carry the inspector merge and the
