@@ -402,6 +402,8 @@ same commit. Releases move entries into a dated version section.
   overlaps are one pick already, speech needs the shared theme.
 
 ### Changed
+- **Docs:** INTAKE M9's I9.2 and I9.3 lines are the ticked ones only — the keep-both merge had
+  left the unticked placeholders beside them.
 - **Docs:** INTAKE's lanes table and verification log carry M9's foundation merge and the
   three timeline lanes in flight; the board is live on the foundation.
 - **Session 13 close-out (docs).** INTAKE M8 ticked in full (I8.1 the bin on the board, I8.2

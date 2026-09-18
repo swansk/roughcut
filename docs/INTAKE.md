@@ -530,8 +530,7 @@ and effects derive from it at render.
       on a block also plays from there (the strip's promise, and what keeps `test_ui_flow.py`'s
       monitor test unchanged); a lane-background click clears the selection and no card is
       marked until the next selection.
-- [ ] I9.2 **Trims + snapping (lane `agent/tl-trim`):** ripple / roll / slip by drag, the
-      magnet (cuts, playhead, sentences, onsets; `S` toggles; snap line), `,`/`.` nudges.
+
 - [x] I9.3 **Keyboard editing (lane `agent/tl-keys`, commits `6801ae3` transport + navigation +
       marks, `7505826` editing keys; `test_timeline_keys.py` 13 tests, with `test_timeline_ui.py`
       and `test_ui_flow.py` 71 passed):** `app/static/timeline-keys.js` — JKL shuttle (L stacks
@@ -556,8 +555,7 @@ and effects derive from it at render.
       foundation refits until someone zooms); the playhead target is where it stood when
       the edge was taken (the foundation's seek moves it while parking); cut points are a
       roll's targets only.
-- [ ] I9.3 **Keyboard editing (lane `agent/tl-keys`):** JKL, `↑`/`↓`, `Home`/`End`, `I`/`O` +
-      insert, `C` razor, `Q`/`W`, `X` ripple delete, `⌘Z`/`⌘⇧Z`, the `?` map on the board.
+
 - [ ] I9.4 **Lanes + drag and drop (lane `agent/tl-lanes`):** A1 music with ducks, the
       markers lane, the proposal ghost lane; move by drag with a drop line, multi-move, drop
       a keep or a Find result onto the timeline.
