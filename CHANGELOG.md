@@ -10,6 +10,11 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Docs for the promoted timeline (INTAKE M9, I9.1).** `app/README.md` gains a *Timeline*
+  row (the ruler, the V1 blocks, scrub, zoom, the one undo / redo stack, the module's API
+  as the next lanes' contract); the row that described the cards is now *Shot cards*, and
+  the *Monitor* row no longer describes the strip it lost. `docs/INTAKE.md` ticks I9.1 with
+  the commits and the counts.
 - **`test_timeline_ui.py` — the promoted timeline in a real browser (INTAKE M9, I9.1).**
   Thirteen playwright tests against the synthetic bin: the ruler's labels and end mark
   agree with the seed EDL and `#posTotal`; blocks carry the ids the page was handed and
