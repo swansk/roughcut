@@ -10,6 +10,27 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Keyboard editing on the timeline, 2 of 2 — the editing keys (INTAKE M9, I9.3; lane
+  `agent/tl-keys`).** In `timeline-keys.js`: `C` razor — `tl.split` at the playhead on the
+  selected shot when the playhead is inside it, else the shot under the playhead, both
+  halves selected with the anchor on the first, a toast when the cut point is within
+  0.2 s of an edge; `Q` / `W` trim the selected shot's in / out to the playhead through
+  `tl.setRange` (Premiere's trim-to-playhead), the playhead then parked on the new edge,
+  a toast and no edit when the playhead is outside the shot or the trim would leave less
+  than 0.2 s; `X` / `Delete` / `Backspace` ripple-delete the whole selection through
+  `tl.remove` (app.js's `x` removed one — it is taken over), the shot that takes the
+  place selected; `⌘A` selects every shot; `⌘D` duplicates the selection after itself as
+  one undo entry (`tl.begin('duplicate')` … `tl.insert` per shot … `tl.commit`), the copies
+  selected and re-keyed by the next save; `Esc` clears the selection as well as the
+  marks; ⌘Z / ⌘⇧Z stay the foundation's, bound once. The map's table gains the rows.
+  `test_timeline_keys.py` grows to thirteen: `C` at 1 s into shot 1 makes two shots whose
+  lengths sum to 2.0 and the EDL on disk has three distinct ids after the save, an
+  unselected cut goes to the shot under the playhead, an edge cut is refused; `Q` then
+  `W` trim to the playhead with `undo: trim` in the tooltip and a toast outside the shot;
+  `⌘A` + `X` empties the cut and one ⌘Z brings both back, Delete / Backspace hand the
+  selection to the heir; `⌘D` duplicates one and then a pair as a single undo entry;
+  `Esc` clears the selection; the map lists every editing key; `c` / `x` / Delete typed
+  into an input, the story and a card's why do nothing to the cut.
 - **Keyboard editing on the timeline, 1 of 2 — transport and navigation (INTAKE M9, I9.3;
   lane `agent/tl-keys`).** `app/static/timeline-keys.js`, loaded after the foundation and
   registered by wrapping `tl.mount` (the foundation has no mounted event); a keydown

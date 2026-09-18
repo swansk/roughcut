@@ -21,13 +21,18 @@
  *   I O          mark in / out on the clip in Find while it plays; ↵ inserts the range as
  *                a shot after the selected one, with the clip's transcript line as why;
  *                ⌥I ⌥O clear. Playing the cut: a toast says to open a clip.
- *   Esc          clear the marks.
+ *   C            razor at the playhead (the selected shot, else the shot under it).
+ *   Q W          the selected shot's in / out to the playhead.
+ *   X ⌫ Del      ripple delete the selection (multi-select included).
+ *   ⌘A  ⌘D  Esc  select every shot · duplicate the selection after itself · clear the
+ *                selection and the marks.
  *   ⌘Z ⌘⇧Z       the foundation's — not bound twice here.
  *   ?            the map.
  *
- * What app.js used to do with `j` / `k` (move the card selection) is `↑` / `↓` now. The
- * board's static Keys hint said "j/k move"; this file rewrites that one phrase in place so
- * the panel does not lie, since index.html is not this lane's to edit.
+ * What app.js used to do with `j` / `k` (move the card selection) is `↑` / `↓` now, and
+ * its `x` is taken over so a multi-selection goes in one press. The board's static Keys
+ * hint said "j/k move"; this file rewrites that one phrase in place so the panel does not
+ * lie, since index.html is not this lane's to edit.
  *
  * Whole-clip playback on the board is the Find panel's `#findVideo` (a kept row has no
  * play of its own), so that is the clip the I / O marks belong to; the marks show as two
@@ -50,8 +55,13 @@
     ['← →', 'one frame (⇧ one second) — the playhead only'],
     ['I O', 'mark in / out on the clip in Find while it plays · ⌥I ⌥O clear'],
     ['↵', 'with both marks: insert that range as a shot after the selected one'],
+    ['C', 'razor at the playhead — the selected shot, else the shot under it'],
+    ['Q W', 'the selected shot’s in / out to the playhead'],
+    ['X ⌫ Del', 'ripple delete the selection'],
     ['⌘Z ⌘⇧Z', 'undo / redo', 'foundation'],
-    ['Esc', 'clear the marks'],
+    ['⌘A', 'select every shot'],
+    ['⌘D', 'duplicate the selection after itself'],
+    ['Esc', 'clear the selection and the marks'],
     [', .', 'nudge the active edge a frame (⇧ a second)', 'trim'],
     ['S', 'the magnet on / off', 'trim'],
     ['+ − \\', 'zoom in / out · fit', 'foundation'],
@@ -398,8 +408,90 @@
     return true;
   }
 
-  /* ------------------------------------------------------------ marks, cleared */
+  /* ------------------------------------------------------------ editing */
+  function inside(id, ph) {
+    const seg = tl.byId(id);
+    if (!seg) return false;
+    const start = tl.filmStart(id);
+    return ph >= start - 1e-6 && ph <= start + (seg.out - seg.in) + 1e-6;
+  }
+
+  function razor() {
+    const list = segs();
+    if (!list.length) return true;
+    const ph = tl.state.playhead;
+    let id = tl.state.anchor;
+    if (id != null) {
+      const seg = tl.byId(id), start = tl.filmStart(id);
+      if (!(ph > start && ph < start + (seg.out - seg.in))) id = null;
+    }
+    if (id == null) { const at = tl.shotAt(ph); id = at ? at.id : null; }
+    if (id == null) return true;
+    const second = tl.split(id, ph);
+    if (second == null) { say(`too close to a cut point to split (${MIN_LEN} s minimum)`); return true; }
+    tl.select([second, id]);         // both halves; the anchor stays on the first
+    say(`split ${stem(tl.byId(id).clip)} at ${tl.fmt(ph)}`);
+    return true;
+  }
+
+  function trimTo(edge) {
+    const id = tl.state.anchor;
+    const key = edge === 'in' ? 'Q' : 'W';
+    if (id == null) { say(`select a shot — ${key} trims its ${edge} to the playhead`); return true; }
+    const seg = tl.byId(id);
+    const ph = tl.state.playhead;
+    if (!inside(id, ph)) {
+      say(`the playhead is outside the selected shot — ${key} trims its ${edge} to the playhead`);
+      return true;
+    }
+    const clipT = round2(seg.in + (ph - tl.filmStart(id)));
+    if (edge === 'in' && clipT > seg.out - MIN_LEN) {
+      say(`too close to the out point — a shot keeps ${MIN_LEN} s`); return true;
+    }
+    if (edge === 'out' && clipT < seg.in + MIN_LEN) {
+      say(`too close to the in point — a shot keeps ${MIN_LEN} s`); return true;
+    }
+    const changed = edge === 'in' ? tl.setRange(id, clipT, null) : tl.setRange(id, null, clipT);
+    if (!changed) { say(`the ${edge} point is already at the playhead`); return true; }
+    const now = tl.byId(id), start = tl.filmStart(id);
+    park(edge === 'in' ? start : start + (now.out - now.in));
+    say(`${edge} → ${tl.fmt(clipT)} on ${stem(now.clip)}`);
+    return true;
+  }
+
+  function rippleDelete() {
+    const ids = [...tl.state.sel];
+    if (!ids.length) { say('nothing selected'); return true; }
+    tl.remove(ids);                  // the foundation selects the shot that takes the place
+    say(`removed ${ids.length} shot${ids.length > 1 ? 's' : ''} — ⌘Z brings ${ids.length > 1 ? 'them' : 'it'} back`);
+    return true;
+  }
+
+  function selectAll() {
+    const list = segs();
+    if (!list.length) return true;
+    tl.select(list.map((s) => s.id));
+    return true;
+  }
+
+  function duplicate() {
+    const chosen = segs().filter((s) => tl.state.sel.has(s.id));
+    if (!chosen.length) { say('nothing selected'); return true; }
+    tl.begin('duplicate');
+    let after = chosen[chosen.length - 1].id;
+    const made = [];
+    for (const s of chosen) {
+      const id = tl.insert({ clip: s.clip, in: s.in, out: s.out, why: s.why }, after);
+      if (id != null) { made.push(id); after = id; }
+    }
+    tl.commit();
+    tl.select(made);
+    say(`duplicated ${made.length} shot${made.length > 1 ? 's' : ''}`);
+    return true;
+  }
+
   function clearAll() {
+    tl.select([]);
     clearMarks();
     return true;
   }
@@ -462,6 +554,8 @@
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     let handled = false;
     if (mod && !e.altKey) {
+      if (k === 'a') handled = selectAll();
+      else if (k === 'd') handled = duplicate();
       // ⌘Z / ⌘⇧Z are the foundation's; they are not bound twice
     } else if (e.altKey && !mod) {
       if (e.code === 'KeyI') handled = clearMark('in');       // ⌥I is a dead key on a Mac: by code
@@ -484,6 +578,10 @@
         // then it is the out mark, and the switcher does not see it
         case 'o': handled = clipPlayer() ? mark('out') : false; break;
         case 'Enter': handled = insertMarked(); break;     // false: app.js plays this shot only
+        case 'c': handled = razor(); break;
+        case 'q': handled = trimTo('in'); break;
+        case 'w': handled = trimTo('out'); break;
+        case 'x': case 'Delete': case 'Backspace': handled = rippleDelete(); break;
         case 'Escape': handled = pickerOpen() ? false : clearAll(); break;   // the switcher closes its picker first
         case '?': handled = showMap(); break;
         case ' ': settle(); break;                          // space is app.js's: play at 1×

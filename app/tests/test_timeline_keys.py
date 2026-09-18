@@ -2,7 +2,8 @@
 
 The module under test is `app/static/timeline-keys.js`: JKL shuttle on the monitor,
 ↑/↓ to the previous / next cut, Home / End, the arrow frame steps, I / O marks on the
-clip in Find with ↵ inserting the range, and the Timeline section of the Keys panel
+clip in Find with ↵ inserting the range, C razor, Q / W trim-to-playhead, X ripple
+delete of the whole selection, ⌘A, ⌘D, Esc, and the Timeline section of the Keys panel
 rendered from the module's own table. The assertions are made against the monitor's
 <video>, app.js's `segs` / `sel` / `player`, and the EDL on disk — not the module's word.
 
@@ -229,8 +230,119 @@ def test_arrows_step_the_playhead_and_leave_the_selection_alone(page):
     assert page.evaluate("tl.state.playhead") == 0, "clamped at the top"
 
 
+# ------------------------------------------------------------------ editing
+
+def test_c_splits_at_the_playhead_and_both_halves_survive_the_save(page, project):
+    a, b = ids(page)
+    page.evaluate(f"tl.select(['{a}'])")
+    page.evaluate("tl.seek(1.0)")           # 1 s into shot 1 = 2.0 s into CLIP_A
+    page.keyboard.press("c")
+    assert ranges(page) == [["CLIP_A.MP4", 1.0, 2.0], ["CLIP_A.MP4", 2.0, 3.0],
+                            ["CLIP_B.MP4", 0.0, 2.0]]
+    halves = page.evaluate("segs.slice(0, 2).map(s => s.out - s.in)")
+    assert sum(halves) == pytest.approx(2.0)
+    assert page.evaluate("tl.state.sel.size") == 2, "both halves selected"
+    assert page.evaluate("tl.state.anchor") == a
+    assert page.locator("#tl .blk.sel").count() == 2
+    page.wait_for_function("segs.every(s => s.id && s.id.startsWith('g'))", timeout=8000)
+    disk = on_disk(project)
+    assert len(disk) == 3 and len({s["id"] for s in disk}) == 3
+    assert [s["id"] for s in disk] == ids(page)
+    # nothing selected: the shot under the playhead is cut
+    page.evaluate("tl.select([])")
+    page.evaluate("tl.seek(3.0)")
+    page.keyboard.press("c")
+    assert ranges(page)[2:] == [["CLIP_B.MP4", 0.0, 1.0], ["CLIP_B.MP4", 1.0, 2.0]]
+    # too close to an edge is refused, and is not an edit
+    page.evaluate("tl.seek(0.05)")
+    page.keyboard.press("c")
+    assert page.locator(".seg").count() == 4
+    page.wait_for_function(
+        "document.querySelector('#toast').textContent.includes('too close')", timeout=3000)
 
 
+def test_q_and_w_trim_the_selected_shot_to_the_playhead(page):
+    a, b = ids(page)
+    page.evaluate(f"tl.select(['{a}'])")
+    page.evaluate("tl.seek(0.5)")           # 1.5 s into CLIP_A
+    page.keyboard.press("q")
+    assert page.evaluate("[segs[0].in, segs[0].out]") == [1.5, 3.0]
+    assert page.evaluate("tl.state.playhead") == pytest.approx(0.0, abs=0.01), \
+        "the playhead sits on the new in-point"
+    assert page.locator("#undo").get_attribute("title").startswith("undo: trim")
+    page.evaluate("tl.seek(1.0)")           # 2.5 s into CLIP_A now
+    page.keyboard.press("w")
+    assert page.evaluate("[segs[0].in, segs[0].out]") == [1.5, 2.5]
+    assert page.evaluate("tl.state.playhead") == pytest.approx(1.0, abs=0.01)
+    assert page.locator("#tl .tl-total").inner_text() == "0:03.0"
+    # the playhead outside the selected shot: a toast, not a trim
+    page.evaluate("tl.seek(2.5)")
+    page.keyboard.press("q")
+    assert page.evaluate("[segs[0].in, segs[0].out]") == [1.5, 2.5]
+    page.wait_for_function(
+        "document.querySelector('#toast').textContent.includes('outside')", timeout=3000)
+    page.keyboard.press("Control+z")
+    assert page.evaluate("[segs[0].in, segs[0].out]") == [1.5, 3.0]
+
+
+def test_x_removes_the_whole_selection_and_one_undo_restores_it(page):
+    a, b = ids(page)
+    page.keyboard.press("Control+a")
+    assert page.evaluate("tl.state.sel.size") == 2
+    page.keyboard.press("x")
+    assert page.evaluate("segs.length") == 0
+    assert page.locator("#tl .blk").count() == 0
+    page.keyboard.press("Control+z")
+    assert ids(page) == [a, b]
+    assert page.locator(".seg").count() == 2
+    # the shot that takes the place is selected; Delete and Backspace do the same
+    page.locator("#library .cand").first.click()        # a third shot, after app.js's index
+    assert page.evaluate("segs.length") == 3
+    page.evaluate(f"tl.select(['{a}'])")
+    page.keyboard.press("Delete")
+    assert page.evaluate("segs.length") == 2
+    assert a not in ids(page)
+    heir = page.evaluate("segs[0].id")
+    assert page.evaluate("[...tl.state.sel]") == [heir]
+    assert page.evaluate("sel") == 0
+    page.keyboard.press("Backspace")
+    assert page.evaluate("segs.length") == 1
+    assert heir not in ids(page)
+    assert page.evaluate("[...tl.state.sel]") == ids(page), "the last one left is selected"
+
+
+def test_cmd_d_duplicates_the_selection_after_itself(page, project):
+    a, b = ids(page)
+    page.evaluate(f"tl.select(['{a}'])")
+    page.keyboard.press("Control+d")
+    assert ranges(page) == [["CLIP_A.MP4", 1.0, 3.0], ["CLIP_A.MP4", 1.0, 3.0],
+                            ["CLIP_B.MP4", 0.0, 2.0]]
+    new = page.evaluate("segs[1].id")
+    assert new.startswith("tmp-") and new != a
+    assert page.evaluate("[...tl.state.sel]") == [new]
+    assert page.evaluate("segs[1].why") == "first"
+    assert page.locator("#undo").get_attribute("title").startswith("undo: duplicate")
+    page.wait_for_function("segs.every(s => s.id && s.id.startsWith('g'))", timeout=8000)
+    assert len({s["id"] for s in on_disk(project)}) == 3
+    # a two-shot selection lands as two shots after the last of them, in order
+    page.keyboard.press("Control+z")
+    assert ids(page) == [a, b]
+    page.keyboard.press("Control+a")
+    page.keyboard.press("Control+d")
+    assert [r[0] for r in ranges(page)] == ["CLIP_A.MP4", "CLIP_B.MP4", "CLIP_A.MP4", "CLIP_B.MP4"]
+    assert page.evaluate("tl.state.sel.size") == 2
+    page.keyboard.press("Control+z")        # one entry for the pair
+    assert ids(page) == [a, b]
+
+
+def test_escape_clears_the_selection(page):
+    a, b = ids(page)
+    page.keyboard.press("Control+a")
+    assert page.evaluate("tl.state.sel.size") == 2
+    page.keyboard.press("Escape")
+    assert page.evaluate("tl.state.sel.size") == 0
+    assert page.evaluate("tl.state.anchor") is None
+    assert page.locator(".seg.sel").count() == 0
 
 
 # ------------------------------------------------------------------ marks on a clip
@@ -304,11 +416,11 @@ def test_i_o_and_enter_on_a_playing_clip_insert_the_marked_range(page):
 def test_the_keys_panel_lists_the_timeline_keys_from_the_table(page):
     keys = page.evaluate(
         "[...document.querySelectorAll('#tlKeys kbd')].map(k => k.textContent)")
-    for k in ["J", "K", "L", "↑", "↓", "Home", "End", "←", "→", "I", "O", "↵",
-              "⌘Z", "⌘⇧Z", "Esc", ",", ".", "S", "+", "−", "\\", "?"]:
+    for k in ["J", "K", "L", "↑", "↓", "Home", "End", "←", "→", "I", "O", "↵", "C", "Q", "W",
+              "X", "⌘Z", "⌘⇧Z", "⌘A", "⌘D", "Esc", ",", ".", "S", "+", "−", "\\", "?"]:
         assert k in keys, f"{k} missing from the map"
     text = page.locator("#tlKeys").inner_text()
-    assert "shuttle" in text and "magnet" in text
+    assert "shuttle" in text and "razor" in text and "magnet" in text
     assert page.evaluate("tlKeys.KEYS.length") == \
         page.locator("#tlKeys .row").count(), "rendered from the table, row for row"
     # the board's own line no longer says j/k move the selection
@@ -323,12 +435,13 @@ def test_keys_are_ignored_while_typing(page):
     a, b = ids(page)
     page.locator("#findQ").fill("")
     page.locator("#findQ").focus()
-    page.keyboard.type("jl")
-    assert not page.evaluate("player.playing")
-    assert page.locator("#findQ").input_value() == "jl"
+    page.keyboard.type("cx")
+    assert page.evaluate("segs.length") == 2
+    assert page.locator("#findQ").input_value() == "cx"
     page.locator("#story").focus()
-    page.keyboard.press("ArrowDown")
-    assert page.evaluate("tl.state.playhead") == 0
+    page.keyboard.press("x")
+    page.keyboard.press("Delete")
+    assert page.evaluate("segs.length") == 2
     page.locator(".seg").first.locator(".why").focus()
-    page.keyboard.press("l")
-    assert not page.evaluate("player.playing")
+    page.keyboard.press("c")
+    assert page.evaluate("segs.length") == 2
