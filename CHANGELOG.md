@@ -10,6 +10,10 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **I9.3 ticked in INTAKE (M9, keyboard editing)** with the two commits (`6801ae3`,
+  `7505826`), the counts (13 tests; 71 with the foundation's and the flow suite) and the
+  lane's decisions: the `window`-capture listener, `o` left to the switcher until a clip
+  is open in Find, `j`/`k` no longer moving the card selection.
 - **Keyboard editing on the timeline, 2 of 2 — the editing keys (INTAKE M9, I9.3; lane
   `agent/tl-keys`).** In `timeline-keys.js`: `C` razor — `tl.split` at the playhead on the
   selected shot when the playhead is inside it, else the shot under the playhead, both

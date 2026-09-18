@@ -532,8 +532,18 @@ and effects derive from it at render.
       marked until the next selection.
 - [ ] I9.2 **Trims + snapping (lane `agent/tl-trim`):** ripple / roll / slip by drag, the
       magnet (cuts, playhead, sentences, onsets; `S` toggles; snap line), `,`/`.` nudges.
-- [ ] I9.3 **Keyboard editing (lane `agent/tl-keys`):** JKL, `↑`/`↓`, `Home`/`End`, `I`/`O` +
-      insert, `C` razor, `Q`/`W`, `X` ripple delete, `⌘Z`/`⌘⇧Z`, the `?` map on the board.
+- [x] I9.3 **Keyboard editing (lane `agent/tl-keys`, commits `6801ae3` transport + navigation +
+      marks, `7505826` editing keys; `test_timeline_keys.py` 13 tests, with `test_timeline_ui.py`
+      and `test_ui_flow.py` 71 passed):** `app/static/timeline-keys.js` — JKL shuttle (L stacks
+      to 8× across the hand-over, J reverses by rAF across cuts, K pauses, K-held combos),
+      `↑`/`↓` previous / next cut, `Home`/`End`, `←`/`→` a frame (`⇧` a second) — the playhead
+      only, so the trim lane's `,`/`.` stay the edge nudges; `I`/`O` on the clip in Find + `↵`
+      inserts the range with the transcript line as why (ticks beside `#pos`); `C` razor,
+      `Q`/`W` trim to the playhead, `X`/`⌫`/`Del` ripple delete the selection, `⌘A`, `⌘D`,
+      `Esc`; `⌘Z`/`⌘⇧Z` left to the foundation; a Timeline section in the Keys panel rendered
+      from the module's one table, `?` brings it up. Decided by the lane: the listener is on
+      `window` (capture) because the switcher's `o` is capture on `document`, and `o` stays
+      the switcher's until a clip is open in Find; `j`/`k` no longer move the card selection.
 - [ ] I9.4 **Lanes + drag and drop (lane `agent/tl-lanes`):** A1 music with ducks, the
       markers lane, the proposal ghost lane; move by drag with a drop line, multi-move, drop
       a keep or a Find result onto the timeline.
