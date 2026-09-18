@@ -458,6 +458,10 @@ same commit. Releases move entries into a dated version section.
   overlaps are one pick already, speech needs the shared theme.
 
 ### Changed
+- **Session 14 close-out (docs).** INTAKE M9 ticked through I9.5 with the merge hashes,
+  "Where we are" names Karl's look as the next step and the three items deferred from the
+  lanes' reports; the lanes table and verification log carry the inspector merge and the
+  452-test run; HANDOFF's opener describes the cutting room.
 - **Docs:** I9.5 ticked in INTAKE (M9, the inspector) with the two commits (`ac404db`,
   `f6ed711`), the counts (5 new tests; 91 across the five timeline + flow files; suite 452
   with the two music tests passing alone) and the lane's decisions: `m:ss.s` header times

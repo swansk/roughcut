@@ -55,19 +55,25 @@ until R11.
 
 ## Where we are
 
-_2026-09-13, end of session 13._ **M0–M8 all ticked, nothing deferred.** Session 13 answered
-Karl's "the cut board looks exactly the same as before": the bin is on the board (`kept`
-tab, the Project line, **Cut from the bin** — merge `4e6ab8a`), the pass has a filter with
-batch reject through it (`88cc105`), and the settings drawer with the budget cap and workers
-is on `/open` (`6dd9b51`, server `e28c231`); session 12's cuts control was checked live.
-Suite: **404 passed, 1 skipped**. Board live on `4e6ab8a`. **Karl has been using it:** the
-Killington bin holds 43 keeps and 50 rejects, 21 keeps are in the cut, the pass is on round 3,
-and he saved a cut of his own (`killington-future`). **Waiting on Karl:** his next numbered
-feature (item 2 — item 1 was cuts); whether to re-look the other 11 clips with the fixed
-sheet prompt (~$2); the paused close looks (~$2); the seven proposed themes on `/open`
-(Keep / Discard). **The next milestone the design already names:** Option B's stage two —
-the promoted timeline (drag-trim on the strip, lanes) and the Source/Program monitors — is
-the remaining part of the agreed editing-room redesign; it starts when Karl says so.
+_2026-09-18, end of session 14._ **M9, the promoted timeline, is built: I9.0–I9.5 ticked;
+I9.6 is Karl's look.** Karl's feature 2 (*"improve the timeline, review what features in tools
+like Premiere Pro make timeline editing a breeze and add all of these"*) — the review is at
+the top of M9; everything on its list is on the board: a real timeline with a ruler, zoom and
+scrub (`139e171`); ripple / roll / slip by drag with the magnet to cuts, the playhead,
+sentences, words and onsets (`1a33b0e`); JKL, `↑`/`↓`, I/O + insert, C, Q/W, X, ⌘A, ⌘D, the
+map (`034551b`); lanes — markers, the music bed with its ducks, the bin's available keeps,
+the proposal ghost — and drag-move with a drop line, drops from the bin and Find (`9ff755d`);
+stable shot ids and snap points on the server (`c6cdc8d`); the inspector in place of the
+card list (`e3a2c60`). Two merge-only collisions fixed (`db94f5e`, `f1411c5`). Suite: **452
+passed, 1 skipped**, plus three tests that time out only under full-suite load and pass alone
+(`test_0_restarts…`, the two music-lane tests). Board live on `e3a2c60`. **Next: Karl's look
+at the timeline (I9.6)** — trim a shot by its edge and watch the snap line, roll a cut, press
+`/`-free keys: `J K L`, `↑ ↓`, `C`, `Q`/`W`, drag a keep from the kept tab onto the timeline,
+ask for a change and read the ghost lane, and say what feels wrong. After that: his feature 3;
+the three small spends still waiting (re-look 11 clips ~$2, close looks ~$2, the themes
+Keep/Discard). Deferred from M9, named in the lanes' reports: a `tl.on('mount')` and
+`tl.on('render')` event and a `tl.reveal(id)` on the foundation (the lanes worked around
+them); a pre-ask price for "Cut from the bin".
 
 ## Milestones
 
@@ -625,7 +631,7 @@ and effects derive from it at render.
 | tl-trim | `agent/tl-trim` | I9.2 | **merged** `1a33b0e`; worktree removed |
 | tl-keys | `agent/tl-keys` | I9.3 | **merged** `034551b`; worktree removed |
 | tl-lanes | `agent/tl-lanes` | I9.4 | **merged** `9ff755d`; worktree removed |
-| inspector | `agent/inspector` · `../roughcut-wt/inspector` | I9.5 | running 2026-09-18 |
+| inspector | `agent/inspector` | I9.5 | **merged** `e3a2c60`; worktree removed |
 | open | `agent/open` · `../roughcut-wt/open` | I5.1, I5.3 | **merged** `6ba1ec0`; worktree removed |
 
 Lanes touch disjoint files by design: `bin` → `revise.py`, `selects.py`, tests; `floor` →
@@ -761,3 +767,6 @@ them. Every lane adds its own CHANGELOG bullet; integration keeps all of them.
   ghost (hidden, no proposal) · A1 (Karl's bed) · bin (23 available keeps), `magnet · on`,
   `+` doubles the zoom and `\` fits (4.51 px/s), L L → 4× and K pauses, the `?` map has the
   Timeline section, `#redo` present, no page errors, undo stack untouched.
+- 2026-09-18 · + inspector `e3a2c60` · **452 passed, 1 skipped** (287.77 s) with the two
+  music tests timing out under load (pass alone, 4.24 s in the lane's run). Inspector live on
+  Killington: see the session's close-out note in HANDOFF.
