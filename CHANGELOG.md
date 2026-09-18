@@ -111,6 +111,53 @@ same commit. Releases move entries into a dated version section.
   ⌥-drag slips with the length kept and clamps to the clip; a press without travel is a
   click and Esc cancels a drag with nothing on the stack; `,` / `.` / `⇧.` / `⇧,` nudge,
   the dragged edge becomes the active one, and an input keeps its own keys.
+- **I9.4 ticked in INTAKE** (lane `agent/tl-lanes`): the two commits, the counts, the
+  decisions the brief left to the lane, and what the foundation lacked.
+- **Drag and drop on the timeline (INTAKE M9, I9.4, part 2).** In `timeline-lanes.js`:
+  **move by drag** on V1 — a pointer-drag on a block's body (not within 8 px of an edge
+  and without alt, which are the trim lane's) carries the block, or the whole selection
+  when the block is in it, with a **drop line** at the cut point it will land on (the
+  nearest one, snapping), the film closing up behind it through `tl.begin('move')` →
+  `tl.move` → `tl.commit()` — one undo entry, ids travelling; under 4 px it is the
+  foundation's click. **Drop from outside**: the kept tab's rows, Find's result rows and
+  the bin lane's `available` outlines are draggable and carry
+  `application/x-roughcut-shot` = `{clip, start, end, why}`; dropped anywhere on the
+  timeline they insert at the same drop line (`tl.insert`, then `tl.move` before the
+  shot at the line — one `insert` entry), past the end of the film they append. The
+  lanes hold still from the press on an outline until its drag ends, since Chromium
+  ends a drag whose source is rebuilt out of the DOM. Kept rows and Find rows carry
+  their data only in app.js closures, so a kept row is read as the n-th of
+  `binOrder(bin.selects)` and a Find row is loaded the way its click loads it and read
+  from `findSel`. `test_timeline_lanes.py` gains three tests: a body drag past the next
+  shot flips the order in the EDL on disk with the ids travelling (a 2 px move stays a
+  click, a whole-selection drag moves together); an available outline dropped between
+  the shots becomes the third shot with the keep's range and stops being available; a
+  kept row dropped at the top becomes shot 1 and past the end appends, and a Find row's
+  payload is what its drop inserts.
+- **The timeline's lanes (INTAKE M9, I9.4, part 1).** `app/static/timeline-lanes.js`, built
+  on the foundation's API and hung inside `#tl` beside V1 (V1 moves down / the view grows
+  through `--tl-above` / `--tl-below`, rules appended to `timeline.css`): **A1**, the music
+  bed when `effects_music` is set — the track's name, a bar the length of the film, the
+  fades as ramps, a dip under every speech region in the cut (the same padded, merged
+  regions the monitor ducks by, the depth the asked dB as a gain ratio) and the monitor's
+  own `bedGainAt` curve on top; a click scrolls the music panel in, nothing here edits
+  (decision 5). **Markers**, a thin lane above V1: `★` at every hero keep in the cut (clip
+  + overlap ≥ 0.5, the kept tab's rule), a tick per ranked event inside a shot (kind-
+  coloured, tooltip = what + rank), a legend at the left; and a **bin** lane below with
+  the pass's keeps not in the cut as faint `available` outlines after the last shot of
+  their clip (else after the end), width to length. **The proposal ghost lane** while the
+  diff panel is up: the proposed timeline under V1 by its own film time — unchanged
+  shots dim, added ones green, moved ones with an arrow from where they are now, removed
+  ones struck out on V1 (matched by id when the plan carries one, else clip + overlap);
+  click a ghost → the monitor plays *that* range (a shot that need not be in the cut,
+  without playing the cut); `play proposal` / `play cut` at the lane's left; the panel's
+  own Accept / Discard stay, and the lane goes when it closes. Lane labels stick to the
+  viewport's left edge as the canvas scrolls. `test_timeline_lanes.py`: three playwright
+  tests — the A1 lane's bar, dips, fades and curve against the seed's speech; a hero
+  star, an event tick and an available outline at the right x (and following the zoom);
+  a scripted proposal's ghosts wear the right classes, a click cues the monitor to the
+  ghost's clip and time, the toggle hands the monitor back, discard clears, and a
+  proposal that drops a shot strikes it out.
 - **The timeline's three lane files are loaded by the board** (`timeline-trim.js`,
   `timeline-keys.js`, `timeline-lanes.js`, after the foundation) — served by name at
   `/timeline/{name}`, a 404 until each lane lands, so the tags cost nothing before then.
