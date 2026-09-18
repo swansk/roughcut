@@ -589,6 +589,9 @@
   }
 
   function onDragStart(e) {
+    // A row's mousedown also selects its shot, and the board smooth-scrolls to the card;
+    // a page that scrolls under a drag in flight lands the drop somewhere else. Freeze it.
+    window.scrollTo({ top: window.scrollY, left: window.scrollX, behavior: 'instant' });
     const t = e.target instanceof Element ? e.target : null;
     const row = t && t.closest('#library .keep, #findResults .cand, #tl .avail');
     if (!row) return;
@@ -637,7 +640,7 @@
   }
 
   function onDragLeave(e) {
-    if (e.relatedTarget && tl.el.view.contains(e.relatedTarget)) return;
+    if (e.relatedTarget && tl.el.root.contains(e.relatedTarget)) return;
     hideDrop();
   }
 
@@ -710,11 +713,14 @@
       if (item) playRange(item.seg, item.start, null);
     });
 
-    // drop from outside
-    const view = tl.el.view;
-    view.addEventListener('dragover', onDragOver);
-    view.addEventListener('dragleave', onDragLeave);
-    view.addEventListener('drop', onDrop);
+    // drop from outside — bound on the timeline's root, not the scrolling view, so an
+    // absolutely placed child (the trim lane's magnet button sits top-right of #tl) is
+    // drop-transparent: dragover on it bubbles here and is accepted, and the film time
+    // comes from clientX whatever the target was.
+    const root = tl.el.root;
+    root.addEventListener('dragover', onDragOver);
+    root.addEventListener('dragleave', onDragLeave);
+    root.addEventListener('drop', onDrop);
     for (const sel of ['#library', '#findResults', '#tl']) {
       const box = q(sel);
       if (box) box.addEventListener('dragstart', onDragStart);

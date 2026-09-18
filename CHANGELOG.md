@@ -315,6 +315,11 @@ same commit. Releases move entries into a dated version section.
   deletion; the board's flush before a copy, the reload onto the copy, and the way back.
 
 ### Fixed
+- **A drop past the end of the cut landed on the magnet button and was lost** once the trim
+  lane's button sat top-right of the timeline and a row's mousedown had smooth-scrolled the
+  page under the drag. Drops are accepted on the timeline's root now (any child is
+  drop-transparent, the film time comes from the pointer), and a drag from a kept or Find row
+  freezes the page scroll first. Found by the lanes test in the merged suite.
 - **Esc mid-drag cancels the trim again.** The keyboard lane's window-level Esc (clear the
   selection and the marks) ran first and stopped the event, so the trim lane's Esc never saw a
   drag in progress once both were on the board — found by the trim test in the merged suite.
