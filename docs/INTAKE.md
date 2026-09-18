@@ -578,8 +578,28 @@ and effects derive from it at render.
       The foundation lacked a mounted hook, a render event and a play-a-range hook — all
       worked around inside the lane's file (tl.mount / tl.render wrapped, a 500 ms identity
       poll, the monitor's globals driven by name); nothing in the foundation was edited.
-- [ ] I9.5 **Inspector:** the selected shot's card content beside the timeline; the card list
-      retired (after I9.1–I9.4 land).
+- [x] I9.5 **Inspector (lane `agent/inspector`, commits `ac404db` the inspector + the card
+      list retired, `f6ed711` tests + docs; `test_ui_flow.py` 5 new tests, the five timeline +
+      flow files 91 passed, suite 452 passed + the two music tests passing alone):**
+      `#inspector` under the timeline, in the DOM place the card list had — for the anchor
+      shot: `SHOT n of N · CLIP · in → out · d s`, the boundary warning and any unusable
+      stretch, where it starts in the film, the still at the in-point on the 450 ms settle,
+      the transcript lines and what was seen inside the cut, the why as the same
+      contenteditable, `↳ polished from …` and `act · …` only when the segment carries them,
+      ±0.25 s trims through `tl.begin` / `tl.setRange` / `tl.commit` (one undo entry each),
+      ▶ play this shot, ✎ ask about this shot (the scoped ask, unchanged), remove through
+      `tl.remove`; a multi-selection shows `N shots selected · d s` with remove for all; no
+      selection says *select a shot on the timeline — or press ↑ / ↓* with the cut's totals.
+      One element, built per shot and filled in place on `select` / `change` / `paint()`, so
+      a scrub or playback never rebuilds it or steals a why being typed. `render()` builds no
+      cards; the kept tab's link selects by id through `tl.select`; `scrollSel` brings the
+      block into view; the card's drag-to-reorder is gone. Decided by the lane: header times
+      in `m:ss.s` with the exact clip seconds in the tooltip; the scoped ask's send button
+      reads `Ask` (distinct from the toggle); nothing is invented for provenance — the save
+      keeps only clip / in / out / act / why / id, so a proposal's polish shows until the next
+      reload. The foundation lacked nothing the inspector needed; one convenience noted only:
+      a `tl.reveal(id)` (the module's own keepInView for a block) would let `scrollSel` avoid
+      `scrollIntoView` on the page.
 - [ ] I9.6 Live on Killington: Karl's look.
 
 ## Lanes in flight

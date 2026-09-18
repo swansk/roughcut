@@ -458,6 +458,11 @@ same commit. Releases move entries into a dated version section.
   overlaps are one pick already, speech needs the shared theme.
 
 ### Changed
+- **Docs:** I9.5 ticked in INTAKE (M9, the inspector) with the two commits (`ac404db`,
+  `f6ed711`), the counts (5 new tests; 91 across the five timeline + flow files; suite 452
+  with the two music tests passing alone) and the lane's decisions: `m:ss.s` header times
+  with the exact seconds in the tooltip, the scoped ask's send button reading `Ask`, no
+  invented provenance, and the one convenience the foundation could add (`tl.reveal`).
 - **The inspector's tests and docs (INTAKE M9, I9.5; lane `agent/inspector`).**
   `test_ui_flow.py`: the fixture waits for `#tl .blk`; every test that read `.seg` cards
   reads the timeline's blocks and `#inspector` instead (the poster test, the settle test,
