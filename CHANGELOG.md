@@ -10,6 +10,27 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Drag and drop on the timeline (INTAKE M9, I9.4, part 2).** In `timeline-lanes.js`:
+  **move by drag** on V1 — a pointer-drag on a block's body (not within 8 px of an edge
+  and without alt, which are the trim lane's) carries the block, or the whole selection
+  when the block is in it, with a **drop line** at the cut point it will land on (the
+  nearest one, snapping), the film closing up behind it through `tl.begin('move')` →
+  `tl.move` → `tl.commit()` — one undo entry, ids travelling; under 4 px it is the
+  foundation's click. **Drop from outside**: the kept tab's rows, Find's result rows and
+  the bin lane's `available` outlines are draggable and carry
+  `application/x-roughcut-shot` = `{clip, start, end, why}`; dropped anywhere on the
+  timeline they insert at the same drop line (`tl.insert`, then `tl.move` before the
+  shot at the line — one `insert` entry), past the end of the film they append. The
+  lanes hold still from the press on an outline until its drag ends, since Chromium
+  ends a drag whose source is rebuilt out of the DOM. Kept rows and Find rows carry
+  their data only in app.js closures, so a kept row is read as the n-th of
+  `binOrder(bin.selects)` and a Find row is loaded the way its click loads it and read
+  from `findSel`. `test_timeline_lanes.py` gains three tests: a body drag past the next
+  shot flips the order in the EDL on disk with the ids travelling (a 2 px move stays a
+  click, a whole-selection drag moves together); an available outline dropped between
+  the shots becomes the third shot with the keep's range and stops being available; a
+  kept row dropped at the top becomes shot 1 and past the end appends, and a Find row's
+  payload is what its drop inserts.
 - **The timeline's lanes (INTAKE M9, I9.4, part 1).** `app/static/timeline-lanes.js`, built
   on the foundation's API and hung inside `#tl` beside V1 (V1 moves down / the view grows
   through `--tl-above` / `--tl-below`, rules appended to `timeline.css`): **A1**, the music

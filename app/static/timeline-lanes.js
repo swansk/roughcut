@@ -1,4 +1,4 @@
-/* Roughcut — the timeline's lanes (INTAKE M9, I9.4, part 1).
+/* Roughcut — the timeline's lanes and drag and drop (INTAKE M9, I9.4).
  *
  * Built ON the foundation (timeline.js, `window.tl`): nothing here edits the foundation
  * or app.js. The lane hangs its own elements inside `tl.el.canvas` beside V1 and moves
@@ -9,7 +9,10 @@
  *
  *   markers   a thin lane ABOVE V1: `★` at every hero keep that is in the cut, a tick per
  *             ranked event (`P.events`, top 60) that falls inside a shot, and the legend.
- *   V1        the foundation's.
+ *   V1        the foundation's. This file owns the BODY drag: a pointerdown on a block
+ *             that is not on a handle, not within 8 px of an edge and has no alt key is a
+ *             move (the trim lane owns edges and alt-drag). A drop line shows where the
+ *             shot(s) land, snapping to cut points; under 4 px it is the foundation's click.
  *   ghost     while a proposal is pending (the diff panel is up): the proposed timeline
  *             under V1 aligned by ITS film time — unchanged shots dim, added ones green,
  *             moved ones with an arrow from where they are now, removed ones struck out on
@@ -20,7 +23,12 @@
  *             the monitor ducks by) and the monitor's own `bedGainAt` curve on top. It
  *             draws, never edits (INTAKE decision 5): a click scrolls the music panel in.
  *   bin       the pass's keeps NOT in the cut as faint outlines after the last shot of
- *             their clip (else after the end), width to length.
+ *             their clip (else after the end), width to length — drag one onto V1.
+ *
+ * Drop from outside: a kept row, a Find result or an `available` outline dragged onto
+ * the timeline carries `application/x-roughcut-shot` = `{clip, start, end, why}` and
+ * lands at the drop line (`tl.insert`, then `tl.move` before the shot at the line — one
+ * `insert` entry). Past the end of the film it appends.
  *
  * Reaching the board: app.js's top-level `let`s and functions (`bin`, `music`,
  * `pendingPlan`, `P`, `speechRegions`, `bedGainAt`, `shotOf`, `keepsUsable`, `binOrder`,
@@ -36,13 +44,19 @@
   const tl = window.tl;
   if (!tl) return;
 
+  const MIME = 'application/x-roughcut-shot';
+  const EDGE = 8;                      // px at a block's edge that belong to the trim lane
+  const CLICK = 4;                     // px under which a pointer drag is the foundation's click
   const EVENTS_TOP = 60;
   const POLL_MS = 500;
   const HOT = new Set(['fall', 'crash', 'jump', 'reaction']);
   const H = { markers: 16, ghost: 40, a1: 30, bin: 22, gap: 4 };
 
-  const el = { markers: null, ghost: null, a1: null, bin: null, over: null, arrows: null };
+  const el = { markers: null, ghost: null, a1: null, bin: null, over: null, arrows: null, drop: null };
   let mounted = false;
+  let drag = null;                     // the body drag on V1, from pointerdown to pointerup
+  let holdRedraw = false;              // an outline is pressed or dragged: rebuilding would end the drag
+  let dragActive = false;              // a native drag from one of the lanes is in flight
   let raf = 0;                         // one redraw per frame, however many triggers
   let rangeGen = 0;                    // proposal playback token
   let mode = 'cut';                    // the ghost lane's toggle
@@ -93,7 +107,7 @@
   }
 
   function redraw() {
-    if (!mounted) return;
+    if (!mounted || holdRedraw) return;
     const a = app();
     if (!a) return;
     drawMarkers(a);
@@ -170,11 +184,12 @@
       const at = cursor.has(anchor) ? cursor.get(anchor) : anchor;
       const len = Math.max(0, k.end - k.start);
       const d = div('avail');
+      d.draggable = true;
       d.style.left = px(tl.timeToX(at));
       d.style.width = px(Math.max(6, len * z));
       d.style.setProperty('--hue', tl.hueOf(k.clip));
       d.textContent = `${stemOf(k.clip)} ${len.toFixed(1)}s${k.hero ? ' ★' : ''}`;
-      d.title = `available: ${stemOf(k.clip)} ${tl.fmt(k.start)}–${tl.fmt(k.end)}`
+      d.title = `available: ${stemOf(k.clip)} ${tl.fmt(k.start)}–${tl.fmt(k.end)} — drag onto V1 to add it`
         + (k.why ? `\n${k.why}` : '');
       d._keep = k;
       el.bin.appendChild(d);
@@ -458,6 +473,184 @@
     return playRange(g.seg, g.start, () => playPlan(k + 1));
   }
 
+  /* ------------------------------------------------------------ drop slots */
+  /* The cut point nearest a film time, skipping the shots being moved: `{t, beforeId}`
+   * — the shot the drop lands before, or null for the end of the film. */
+  function slotAt(t, excluded) {
+    const list = tl.state.segs;
+    let best = null, start = 0;
+    const consider = (tt, beforeId, index) => {
+      const d = Math.abs(tt - t);
+      if (!best || d < best.d) best = { d, t: tt, beforeId, index };
+    };
+    list.forEach((s, i) => {
+      if (!excluded || !excluded.has(s.id)) consider(start, s.id, i);
+      start += s.out - s.in;
+    });
+    consider(start, null, list.length);
+    return best;
+  }
+
+  function showDrop(t) {
+    el.drop.style.left = px(tl.timeToX(t));
+    el.drop.style.display = 'block';
+  }
+  function hideDrop() { el.drop.style.display = 'none'; }
+
+  /* One undo entry: append, then move before the shot at the line. */
+  function insertAt(shot, beforeId) {
+    if (!shot || !shot.clip || !(shot.end > shot.start)) return null;
+    tl.begin('insert');
+    const id = tl.insert({ clip: shot.clip, in: round2(shot.start), out: round2(shot.end), why: shot.why || '' }, null);
+    if (id != null && beforeId != null) tl.move([id], beforeId);
+    tl.commit();
+    const toast = fn('toast');
+    if (toast) toast(`added ${stemOf(shot.clip)} @ ${Number(shot.start).toFixed(1)}s`);
+    return id;
+  }
+
+  /* ------------------------------------------------------------ the body drag on V1 */
+  function onDown(e) {
+    if (e.button !== 0 || e.altKey || drag) return;
+    const b = e.target.closest('.blk');
+    if (!b || e.target.closest('[class*="handle"]')) return;
+    const r = b.getBoundingClientRect();
+    if (e.clientX - r.left < EDGE || r.right - e.clientX < EDGE) return;   // the trim lane's zone
+    drag = { id: b.dataset.id, x: e.clientX, y: e.clientY, pid: e.pointerId, live: false, ids: null, slot: null };
+  }
+
+  function onMove(e) {
+    if (!drag || e.pointerId !== drag.pid) return;
+    if (!drag.live) {
+      if (Math.abs(e.clientX - drag.x) <= CLICK && Math.abs(e.clientY - drag.y) <= CLICK) return;
+      drag.live = true;
+      const sel = tl.state.sel;
+      drag.ids = sel.has(drag.id) && sel.size > 1
+        ? tl.state.segs.filter((s) => sel.has(s.id)).map((s) => s.id)
+        : [drag.id];
+      if (!sel.has(drag.id)) tl.select([drag.id], { source: 'api' });
+      try { tl.el.lanes.V1.setPointerCapture(drag.pid); } catch (err) { /* not pointer-capable */ }
+      for (const id of drag.ids) {
+        const b = tl.el.lanes.V1.querySelector(`.blk[data-id="${id}"]`);
+        if (b) b.classList.add('dragging');
+      }
+    }
+    drag.slot = slotAt(tl.eventTime(e), new Set(drag.ids));
+    showDrop(drag.slot.t);
+  }
+
+  function endDrag(e, apply) {
+    const d = drag;
+    if (!d || (e && e.pointerId !== d.pid)) return;
+    drag = null;
+    hideDrop();
+    if (!d.live) return;                                   // under 4 px: the foundation's click
+    tl.el.lanes.V1.querySelectorAll('.blk.dragging').forEach((b) => b.classList.remove('dragging'));
+    try { tl.el.lanes.V1.releasePointerCapture(d.pid); } catch (err) { /* already released */ }
+    if (!apply || !d.slot) return;
+    tl.begin('move');
+    tl.move(d.ids, d.slot.beforeId);
+    tl.commit();
+  }
+
+  /* ------------------------------------------------------------ drop from outside */
+  const carries = (e) => {
+    const types = e.dataTransfer && e.dataTransfer.types;
+    return !!types && Array.prototype.includes.call(types, MIME);
+  };
+
+  /* What a draggable row stands for. Kept rows and Find rows carry their data only in
+   * app.js closures: a kept row is the n-th of binOrder(bin.selects) (renderKept's own
+   * order); a Find row is loaded the way its click loads it, then read from `findSel`. */
+  function shotFor(row) {
+    const a = app();
+    if (!a) return null;
+    if (row.classList.contains('avail') && row._keep) {
+      const k = row._keep;
+      return { clip: k.clip, start: k.start, end: k.end, why: k.why || k.note || '' };
+    }
+    if (row.classList.contains('keep')) {
+      const rows = [...document.querySelectorAll('#library .keep')];
+      const binOrder = fn('binOrder');
+      const list = binOrder ? binOrder((a.bin && a.bin.selects) || []) : [];
+      const k = list[rows.indexOf(row)];
+      if (!k || k.missing || !a.P || !a.P.clips[k.clip]) return null;
+      return { clip: k.clip, start: k.start, end: k.end, why: k.why || k.note || '' };
+    }
+    if (row.classList.contains('cand') && row.closest('#findResults')) {
+      if (typeof row.onclick === 'function') row.onclick();
+      const m = app().findSel;
+      if (!m || !m.clip) return null;
+      const qEl = q('#findQ');
+      return { clip: m.clip, start: m.start, end: m.end,
+               why: m.what || `found: ${qEl ? qEl.value.trim() : ''}` };
+    }
+    return null;
+  }
+
+  function onDragStart(e) {
+    const t = e.target instanceof Element ? e.target : null;
+    const row = t && t.closest('#library .keep, #findResults .cand, #tl .avail');
+    if (!row) return;
+    const shot = shotFor(row);
+    if (!shot) return;
+    e.dataTransfer.setData(MIME, JSON.stringify(shot));
+    e.dataTransfer.effectAllowed = 'copyMove';
+    row.classList.add('tl-dragsrc');
+    // A redraw replaces the bin lane's outlines, and Chromium ends a drag whose source
+    // leaves the DOM — so the lanes hold still until the drag is over.
+    holdRedraw = true;
+    dragActive = true;
+    row.addEventListener('dragend', () => {
+      row.classList.remove('tl-dragsrc');
+      dragActive = false;
+      holdRedraw = false;
+      schedule();
+    }, { once: true });
+  }
+
+  /* The drag source is decided at the press: an outline rebuilt between pointerdown
+   * and the first move is a detached node and the drag never starts. Hold from the
+   * press; a release without a drag lets the lanes go again. */
+  function holdWhilePressed(e) {
+    if (e.button !== 0 || !e.target.closest('.avail')) return;
+    holdRedraw = true;
+    document.addEventListener('pointerup', () => {
+      if (dragActive) return;                       // dragend releases instead
+      holdRedraw = false;
+      schedule();
+    }, { once: true });
+  }
+
+  function markDraggable() {
+    document.querySelectorAll('#library .keep').forEach((row) => {
+      row.draggable = !!row.querySelector('button.add, a.use');
+    });
+    document.querySelectorAll('#findResults .cand').forEach((row) => { row.draggable = true; });
+  }
+
+  function onDragOver(e) {
+    if (!carries(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    showDrop(slotAt(tl.eventTime(e)).t);
+  }
+
+  function onDragLeave(e) {
+    if (e.relatedTarget && tl.el.view.contains(e.relatedTarget)) return;
+    hideDrop();
+  }
+
+  function onDrop(e) {
+    if (!carries(e)) return;
+    e.preventDefault();
+    hideDrop();
+    let shot = null;
+    try { shot = JSON.parse(e.dataTransfer.getData(MIME)); } catch (err) { shot = null; }
+    if (!shot) return;
+    insertAt(shot, slotAt(tl.eventTime(e)).beforeId);
+  }
+
   /* ------------------------------------------------------------ mount */
   function lane(name, h, legend) {
     const d = div('tl-xlane');
@@ -487,7 +680,16 @@
     el.over = div('tl-over');
     el.arrows = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     el.arrows.setAttribute('class', 'tl-arrows');
-    for (const x of [el.markers, el.ghost, el.a1, el.bin, el.over, el.arrows]) canvas.appendChild(x);
+    el.drop = div('tl-dropline');
+    el.drop.style.display = 'none';
+    for (const x of [el.markers, el.ghost, el.a1, el.bin, el.over, el.arrows, el.drop]) canvas.appendChild(x);
+
+    // V1: the body drag
+    const v1 = tl.el.lanes.V1;
+    v1.addEventListener('pointerdown', onDown);
+    v1.addEventListener('pointermove', onMove);
+    v1.addEventListener('pointerup', (e) => endDrag(e, true));
+    v1.addEventListener('pointercancel', (e) => endDrag(e, false));
 
     // the lanes' own clicks
     el.a1.addEventListener('click', () => {
@@ -508,8 +710,19 @@
       if (item) playRange(item.seg, item.start, null);
     });
 
+    // drop from outside
+    const view = tl.el.view;
+    view.addEventListener('dragover', onDragOver);
+    view.addEventListener('dragleave', onDragLeave);
+    view.addEventListener('drop', onDrop);
+    for (const sel of ['#library', '#findResults', '#tl']) {
+      const box = q(sel);
+      if (box) box.addEventListener('dragstart', onDragStart);
+    }
+    el.bin.addEventListener('pointerdown', holdWhilePressed);
+    markDraggable();
     if (typeof MutationObserver !== 'undefined') {
-      const mo = new MutationObserver(schedule);
+      const mo = new MutationObserver(() => { markDraggable(); schedule(); });
       for (const sel of ['#library', '#findResults']) {
         const box = q(sel);
         if (box) mo.observe(box, { childList: true });
@@ -538,7 +751,7 @@
   if (tl.el && tl.el.canvas) setup();
 
   window.tlLanes = {
-    redraw, playRange, playPlan,
+    redraw, slotAt, playRange, playPlan, insertAt, MIME,
     ghost: () => ghost,
     mode: () => mode,
   };

@@ -151,10 +151,18 @@
 #tl .tl-arrows line.arrow { stroke: var(--accent); stroke-width: 1.5; }
 #tl .tl-arrows marker path { fill: var(--accent); }
 
-/* bin: the pass's keeps not in the cut, faint */
+/* bin: the pass's keeps not in the cut, faint, draggable onto V1 */
 #tl .tl-xlane[data-lane=bin] .avail { position: absolute; top: 2px; bottom: 2px; box-sizing: border-box;
                                       border: 1px dashed hsl(var(--hue) 35% 48%); border-radius: 3px;
                                       background: hsl(var(--hue) 20% 14%); opacity: .5; cursor: grab;
                                       font-size: 10px; line-height: 16px; padding: 0 5px; color: var(--dim);
                                       white-space: nowrap; overflow: hidden; }
 #tl .tl-xlane[data-lane=bin] .avail:hover { opacity: .95; }
+
+/* drag and drop: the line where a shot will land, and what is being moved */
+#tl .tl-dropline { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px;
+                   background: var(--good); z-index: 5; pointer-events: none; }
+#tl .tl-dropline::before { content: ''; position: absolute; top: 0; left: -4px;
+                           border: 5px solid transparent; border-top: 6px solid var(--good); border-bottom: 0; }
+#tl .blk.dragging { opacity: .35; }
+.keep.tl-dragsrc, .cand.tl-dragsrc, #tl .avail.tl-dragsrc { opacity: .5; }

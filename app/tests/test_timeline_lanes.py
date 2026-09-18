@@ -1,10 +1,12 @@
-"""INTAKE M9 I9.4 — the timeline's lanes, driven in a real browser.
+"""INTAKE M9 I9.4 — the timeline's lanes and drag and drop, driven in a real browser.
 
 The module under test is `app/static/timeline-lanes.js`, built on the foundation
 (`timeline.js`, `window.tl`): the A1 music lane with the bed, its fades and a dip under
 every speech region in the cut; the markers lane (`★` per hero keep in the cut, a tick
 per ranked event inside a shot) and the bin lane (the pass's keeps not in the cut as
-faint outlines); and the proposal ghost lane while a proposal is pending. Assertions are made against the EDL on disk, the monitor's element and
+faint outlines); the proposal ghost lane while a proposal is pending; the body drag on
+V1 with a drop line; and the HTML5 drop of a kept row, a Find result or an available
+outline onto V1. Assertions are made against the EDL on disk, the monitor's element and
 app.js's own `segs`, not against the module's word for it.
 
 Same fixture pattern as test_timeline_ui.py: the real uvicorn server on a real port, the
@@ -121,6 +123,36 @@ def _put_selects(page, selects: list[dict]) -> dict:
     return out
 
 
+def view_x(page, film_t: float) -> float:
+    """Viewport x of a film time: the canvas x less the view's scroll, plus its left."""
+    return page.evaluate(
+        f"(() => {{ const v = document.querySelector('#tl .tl-view');"
+        f" return v.getBoundingClientRect().left + tl.timeToX({film_t}) - v.scrollLeft; }})()")
+
+
+def drag_to(page, source: str, tx: float, ty: float) -> None:
+    """A native HTML5 drag from `source` to a viewport point: press, move in steps
+    (Chromium only begins a drag on real movement — `page.drag_and_drop`'s single move
+    never starts one), release. The source point is near its left edge, which is the
+    part of a wide outline that is on screen."""
+    box = page.locator(source).first.bounding_box()
+    sx, sy = box["x"] + min(20, box["width"] / 2), box["y"] + box["height"] / 2
+    page.mouse.move(sx, sy)
+    page.mouse.down()
+    page.mouse.move(sx + 12, sy + 6, steps=4)
+    page.mouse.move(tx, ty, steps=12)
+    page.mouse.up()
+
+
+def drag_to_v1(page, source: str, film_t: float) -> None:
+    """Drop `source` on V1 at a film time. The timeline is scrolled into view first: a
+    drag is in viewport coordinates, and what the earlier tests leave above the timeline
+    (a "last proposal" line, job rows) can push the lower lanes under the fold."""
+    page.locator("#tl").scroll_into_view_if_needed()
+    lane = page.locator("#tl .tl-lane[data-lane=V1]").bounding_box()
+    drag_to(page, source, view_x(page, film_t), lane["y"] + lane["height"] / 2)
+
+
 # ------------------------------------------------------------------ the lanes
 
 def test_the_music_lane_draws_the_bed_its_fades_and_a_dip_per_speech_region(page):
@@ -219,6 +251,7 @@ def test_the_markers_lane_stars_a_hero_in_the_cut_ticks_an_event_and_shelves_the
         assert page.locator(avail).count() == 1
         assert left(page, avail) == pytest.approx(x_of(page, 4.0), abs=0.5)
         assert width(page, avail) == pytest.approx(3.5 * zoom, abs=0.5)
+        assert page.locator(avail).get_attribute("draggable") == "true"
         assert "CLIP_C" in page.locator(avail).inner_text()
         # the lane follows the zoom
         page.keyboard.press("+")
@@ -326,3 +359,168 @@ def test_a_pending_proposal_is_a_ghost_lane_you_can_play_either_side_of(page):
         page.locator("#rejectProposal").click()
     finally:
         inference.set_backend(None)
+
+
+# ------------------------------------------------------------------ drag and drop
+
+def test_dragging_a_shots_body_past_the_next_one_reorders_and_the_ids_travel(page, project):
+    """Pointer-drag shot 1 by its body to the end of the film: a drop line at the cut
+    point it will land on while dragging, then `tl.move` — one `move` undo entry, ids
+    travelling with the shots, the EDL on disk in the new order. A 2 px move is a click."""
+    a, b = ids(page)
+    box = page.locator("#tl .blk").nth(0).bounding_box()
+    box2 = page.locator("#tl .blk").nth(1).bounding_box()
+    cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+
+    # under 4 px it is the foundation's click: select and play, no reorder
+    page.mouse.move(cx, cy)
+    page.mouse.down()
+    page.mouse.move(cx + 2, cy + 1)
+    page.mouse.up()
+    # (the click's other half, playing from there, is the foundation's promise and its
+    # own test's business — a wait on the monitor starting is what stalls under load)
+    page.wait_for_function(f"tl.state.sel.has('{a}')", timeout=5000)
+    page.evaluate("pauseCut()")
+    assert ids(page) == [a, b]
+    assert page.evaluate("[...tl.state.sel]") == [a]
+
+    # a click on a block plays from it, and that smooth-scrolls the page twice (app.js's
+    # revealMonitor and scrollSel); on the taller page a full suite leaves behind, the
+    # timeline can settle outside the viewport, where a press hits nothing. Let the
+    # scrolls finish, bring the timeline back, measure, and check the press point is
+    # really the block before pressing.
+    def settled_boxes():
+        page.wait_for_function("""() => new Promise((ok) => {
+            const y = window.scrollY;
+            setTimeout(() => ok(window.scrollY === y), 250); })""", timeout=5000)
+        page.locator("#tl").scroll_into_view_if_needed()
+        b0 = page.locator("#tl .blk").nth(0).bounding_box()
+        b1 = page.locator("#tl .blk").nth(1).bounding_box()
+        x, y = b0["x"] + b0["width"] / 2, b0["y"] + b0["height"] / 2
+        under = page.evaluate(
+            f"(() => {{ const e = document.elementFromPoint({x}, {y});"
+            f" return e ? (e.closest('.blk') || e).className : null; }})()")
+        assert under and under.startswith("blk"), (under, b0, page.evaluate("window.scrollY"))
+        return b0, b1, x, y
+
+    box, box2, cx, cy = settled_boxes()
+    page.mouse.move(cx, cy)
+    page.mouse.down()
+    page.mouse.move(cx + 40, cy, steps=4)
+    page.mouse.move(box2["x"] + box2["width"] - 12, cy, steps=6)
+    # the drop line is up, at the end of the film (the nearest cut point)
+    assert page.evaluate("document.querySelector('#tl .tl-dropline').style.display") == "block"
+    assert left(page, "#tl .tl-dropline") == pytest.approx(x_of(page, 4.0), abs=1)
+    assert "dragging" in page.locator("#tl .blk").nth(0).get_attribute("class")
+    page.mouse.up()
+    assert page.evaluate("document.querySelector('#tl .tl-dropline').style.display") == "none"
+    assert ids(page) == [b, a]
+    assert shots(page) == [["CLIP_B.MP4", 0.0, 2.0], ["CLIP_A.MP4", 1.0, 3.0]]
+    assert page.locator("#tl .blk.dragging").count() == 0
+    assert page.locator("#undo").get_attribute("title").startswith("undo: move")
+    assert page.locator(".seg").first.locator(".clip").inner_text() == "CLIP_B"
+    wait_saved(page)
+    assert [(s["id"], s["clip"]) for s in on_disk(project)] == [(b, "CLIP_B.MP4"), (a, "CLIP_A.MP4")]
+    page.keyboard.press("Control+z")
+    assert ids(page) == [a, b]
+
+    # the whole selection moves together: ⇧-select both, drag the first to the end → no-op
+    page.locator("#tl .blk").nth(0).click()
+    page.evaluate("pauseCut()")
+    page.locator("#tl .blk").nth(1).click(modifiers=["Shift"])
+    assert page.evaluate("tl.state.sel.size") == 2
+    box, box2, cx, cy = settled_boxes()
+    page.mouse.move(cx, cy)
+    page.mouse.down()
+    page.mouse.move(box2["x"] + box2["width"] - 12, cy, steps=8)
+    assert page.locator("#tl .blk.dragging").count() == 2
+    page.mouse.up()
+    assert ids(page) == [a, b]
+    # the move was undone above and a no-op drag pushes nothing: the stack is empty
+    assert page.locator("#undo").get_attribute("title") == "nothing to undo"
+
+
+def test_dropping_an_available_outline_on_v1_inserts_that_range_at_the_drop_line(page):
+    """A keep not in the cut is an `available` outline; dragged onto V1 between the two
+    shots it becomes the third shot with the keep's range and reason, and stops being
+    available. HTML5 drag and drop, end to end."""
+    _put_selects(page, [{"clip": "CLIP_C.MP4", "start": 0.5, "end": 4.0, "hero": False,
+                         "why": "the whole take"}])
+    page.reload()
+    page.wait_for_selector("#tl .blk")
+    avail = "#tl .tl-xlane[data-lane=bin] .avail"
+    page.wait_for_selector(avail, timeout=8000)
+    drag_to_v1(page, avail, 2.0)
+    page.wait_for_function("segs.length === 3", timeout=8000)
+    assert shots(page) == [["CLIP_A.MP4", 1.0, 3.0], ["CLIP_C.MP4", 0.5, 4.0],
+                           ["CLIP_B.MP4", 0.0, 2.0]]
+    assert page.evaluate("segs[1].why") == "the whole take"
+    assert page.locator("#undo").get_attribute("title").startswith("undo: insert")
+    assert page.evaluate("[...tl.state.sel]") == [page.evaluate("segs[1].id")]
+    assert page.locator("#tl .blk").count() == 3
+    page.wait_for_function(f"document.querySelectorAll('{avail}').length === 0", timeout=5000)
+    assert page.evaluate("document.querySelector('#tl .tl-dropline').style.display") == "none"
+    # one undo takes the whole drop back
+    page.keyboard.press("Control+z")
+    assert page.evaluate("segs.length") == 2
+
+
+def test_a_kept_row_or_a_find_result_dropped_on_v1_inserts_there(page, project):
+    """The kept tab's rows are draggable; one dropped at the top of the film becomes shot
+    1, one dropped past the end appends. A Find result carries the same payload."""
+    _put_selects(page, [{"clip": "CLIP_A.MP4", "start": 4.0, "end": 5.5, "hero": True,
+                         "why": "the goodbye"}])
+    # the kept tab is a long way down the sidebar: a viewport tall enough to hold the
+    # row and the timeline at once, since a drag cannot scroll the page for itself
+    page.set_viewport_size({"width": 1280, "height": 2400})
+    page.reload()
+    page.wait_for_selector("#library .keep")
+    page.wait_for_function(
+        "document.querySelector('#library .keep').getAttribute('draggable') === 'true'", timeout=5000)
+    row = page.locator("#library .keep").first.bounding_box()
+    assert row["y"] + row["height"] <= 2400, "the fixture's viewport must show the row"
+    # dropped at the very start → before shot 1
+    drag_to_v1(page, "#library .keep", 0.05)
+    page.wait_for_function("segs.length === 3", timeout=8000)
+    assert shots(page) == [["CLIP_A.MP4", 4.0, 5.5], ["CLIP_A.MP4", 1.0, 3.0],
+                           ["CLIP_B.MP4", 0.0, 2.0]]
+    assert page.evaluate("segs[0].why") == "the goodbye"
+    # the row flipped to "in the cut" and is still draggable: past the end → appended
+    page.wait_for_function(
+        "document.querySelector('#library .keep a.use') !== null", timeout=8000)
+    ruler = page.locator("#tl .tl-ruler").bounding_box()
+    drag_to(page, "#library .keep", view_x(page, page.evaluate("tl.total()")) + 30,
+            ruler["y"] + ruler["height"] / 2)
+    page.wait_for_function("segs.length === 4", timeout=8000)
+    assert shots(page)[3] == ["CLIP_A.MP4", 4.0, 5.5]
+    wait_saved(page)
+    assert [(s["clip"], s["in"]) for s in on_disk(project)] == [
+        ("CLIP_A.MP4", 4.0), ("CLIP_A.MP4", 1.0), ("CLIP_B.MP4", 0.0), ("CLIP_A.MP4", 4.0)]
+
+    # a Find result carries the same payload — the row is loaded (its own click) and read
+    page.locator("#findQ").fill("goodbye")
+    page.locator("#findGo").click()
+    page.wait_for_selector("#findResults .cand", timeout=15000)
+    assert page.locator("#findResults .cand").first.get_attribute("draggable") == "true"
+    payload = page.evaluate("""() => {
+        const row = document.querySelector('#findResults .cand');
+        const dt = new DataTransfer();
+        row.dispatchEvent(new DragEvent('dragstart', {bubbles: true, dataTransfer: dt}));
+        return JSON.parse(dt.getData(tlLanes.MIME)); }""")
+    assert payload["clip"] == "CLIP_A.MP4"
+    assert payload["start"] == pytest.approx(5.0, abs=0.6)
+    assert payload["end"] > payload["start"]
+    # …and a synthetic drop of it lands at the drop line, like the rows above
+    before = page.evaluate("segs.length")
+    page.evaluate("""(p) => {
+        const dt = new DataTransfer();
+        dt.setData(tlLanes.MIME, JSON.stringify(p));
+        const v = document.querySelector('#tl .tl-view');
+        const r = v.getBoundingClientRect();
+        const x = r.left + tl.timeToX(0.02);
+        v.dispatchEvent(new DragEvent('dragover', {bubbles: true, dataTransfer: dt, clientX: x, clientY: r.top + 40}));
+        v.dispatchEvent(new DragEvent('drop', {bubbles: true, dataTransfer: dt, clientX: x, clientY: r.top + 40}));
+    }""", payload)
+    assert page.evaluate("segs.length") == before + 1
+    assert page.evaluate("segs[0].clip") == "CLIP_A.MP4"
+    assert page.evaluate("segs[0].in") == pytest.approx(payload["start"], abs=0.01)
