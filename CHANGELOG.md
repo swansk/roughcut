@@ -458,6 +458,8 @@ same commit. Releases move entries into a dated version section.
   overlaps are one pick already, speech needs the shared theme.
 
 ### Changed
+- **Docs:** INTAKE's lanes table and verification log carry the three timeline lanes merged,
+  the two merge-only fixes, and the live check of the timeline on Killington.
 - **Docs:** INTAKE M9's four lane lines are the ticked ones only, after the lanes merge
   brought the placeholders back.
 - **Docs:** INTAKE M9's I9.2 and I9.3 lines are the ticked ones only — the keep-both merge had

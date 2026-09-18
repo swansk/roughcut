@@ -602,9 +602,10 @@ and effects derive from it at render.
 | filter | `agent/filter` | I8.2 | **merged** `88cc105`; worktree removed |
 | binboard | `agent/binboard` | I8.1 | **merged** `4e6ab8a`; worktree removed |
 | timeline | `agent/timeline` | I9.1 foundation | **merged** `139e171`; worktree removed |
-| tl-trim | `agent/tl-trim` · `../roughcut-wt/tl-trim` | I9.2 | running 2026-09-18 |
-| tl-keys | `agent/tl-keys` · `../roughcut-wt/tl-keys` | I9.3 | running 2026-09-18 |
-| tl-lanes | `agent/tl-lanes` · `../roughcut-wt/tl-lanes` | I9.4 | running 2026-09-18 |
+| tl-trim | `agent/tl-trim` | I9.2 | **merged** `1a33b0e`; worktree removed |
+| tl-keys | `agent/tl-keys` | I9.3 | **merged** `034551b`; worktree removed |
+| tl-lanes | `agent/tl-lanes` | I9.4 | **merged** `9ff755d`; worktree removed |
+| inspector | `agent/inspector` · `../roughcut-wt/inspector` | I9.5 | running 2026-09-18 |
 | open | `agent/open` · `../roughcut-wt/open` | I5.1, I5.3 | **merged** `6ba1ec0`; worktree removed |
 
 Lanes touch disjoint files by design: `bin` → `revise.py`, `selects.py`, tests; `floor` →
@@ -731,3 +732,12 @@ them. Every lane adds its own CHANGELOG bullet; integration keeps all of them.
   `/timeline/timeline.js` and `.css` served, 21 shots on Killington all carrying server ids.
   `POST /api/snap` keeps ids (`edl_snap.py` copies each segment whole) — the foundation's
   question, answered. Three lanes running: tl-trim, tl-keys, tl-lanes.
+- 2026-09-18 · M9 · keys `034551b`, trim `1a33b0e`, lanes `9ff755d` merged; two collisions
+  found only in the merged suite and fixed: Esc mid-drag (`db94f5e`) and a drop past the end
+  landing on the magnet button (`f1411c5`). Timeline files together: **41 passed**; full
+  suite **447 passed, 1 skipped**, plus two music tests that time out under full-suite load
+  and pass alone (4.37 s). **Live on Killington** (headless, board serving `f1411c5`'s
+  files): 21 shots on V1 with ids, 42 trim handles, 20 roll zones, lanes V1 · markers ·
+  ghost (hidden, no proposal) · A1 (Karl's bed) · bin (23 available keeps), `magnet · on`,
+  `+` doubles the zoom and `\` fits (4.51 px/s), L L → 4× and K pauses, the `?` map has the
+  Timeline section, `#redo` present, no page errors, undo stack untouched.
