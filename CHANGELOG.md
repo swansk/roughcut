@@ -10,6 +10,50 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Docs for the promoted timeline (INTAKE M9, I9.1).** `app/README.md` gains a *Timeline*
+  row (the ruler, the V1 blocks, scrub, zoom, the one undo / redo stack, the module's API
+  as the next lanes' contract); the row that described the cards is now *Shot cards*, and
+  the *Monitor* row no longer describes the strip it lost. `docs/INTAKE.md` ticks I9.1 with
+  the commits and the counts.
+- **`test_timeline_ui.py` — the promoted timeline in a real browser (INTAKE M9, I9.1).**
+  Thirteen playwright tests against the synthetic bin: the ruler's labels and end mark
+  agree with the seed EDL and `#posTotal`; blocks carry the ids the page was handed and
+  the first save persists, and at the fit zoom the two 2 s shots share the viewport
+  equally; `+` doubles the px/s and `\` fits; a click selects the block and its card
+  (and a card click selects the block), ⇧-click ranges, ⌘-click toggles, the empty ruler
+  clears; a click on the ruler at 3 s parks the monitor on shot 2 at 1.0 s, paused, with
+  the playhead at 3 s and space resuming from there; the playhead follows playback;
+  `tl.setRange` through `begin`/`commit` reaches the disk inside the autosave debounce
+  and ⌘Z / ⌘⇧Z walk it back and forth on disk, clamped as nudge clamps; `tl.split`
+  makes two shots that survive a save with distinct server ids (the old `tmp-` id still
+  resolves); `tl.move` reorders with the ids travelling; `remove` / `insert` keep the
+  cards in step; `tl.snapsFor` resolves with the clip's sentences and is cached; a card's
+  trim and a timeline move share one stack, in order, with the label in the tooltip.
+- **The promoted timeline — the foundation (INTAKE M9, I9.1; lane `agent/timeline`).**
+  The proportional strip under the monitor is a real timeline: `app/static/timeline.js`
+  (`window.tl`) and `timeline.css`, mounted in `#tl` by app.js once the project loads. A
+  ruler with labelled ticks whose step follows the zoom (1/2/5/10/15/30/60 s, minor ticks
+  between), a scrollable viewport, a V1 lane of shot blocks placed by film time — poster at
+  the in-point (lazy, one frame per settled trim, never one per nudge), the clip's hue, the
+  stem, the duration and the shot's strongest line, a mark on any edge that opens
+  mid-sentence or cuts a line off — and the playhead as one line across the whole cut at its
+  film time. `+`/`-` zoom (⌘/ctrl + wheel around the cursor), `\` fits, ⇧ + wheel pans.
+  Blocks carry the server's `data-id`, never an index; the module's selection is a set of
+  ids mapped onto app.js's index `sel` at the boundary (click selects and plays from there,
+  ⇧-click ranges, ⌘-click toggles, a click on the empty ruler or lane clears — the cards
+  follow both ways). Click or drag on the ruler scrubs: the monitor parks on the shot under
+  that film time at the right offset, paused, and space resumes from it. One undo / **redo**
+  stack for the whole board: `tl.begin(label)` / `tl.commit()` make one entry however many
+  mutations sit between them, `pushUndo()` is a thin wrapper over it, ⌘Z / ⌘⇧Z (`u` kept)
+  and the header's **Undo** / new **Redo** buttons carry the label in their tooltip
+  (`undo: trim`). The edit API the other lanes build on — `setRange` (clamped as nudge
+  clamps), `move`, `split`, `remove`, `insert`, `select`, `seek`, `zoomTo`, `fit`,
+  `snapsFor` (cached `GET /api/snaps/{clip}`), `on(change|select|playhead|zoom)` — is the
+  comment block at the top of `timeline.js`. A shot the board makes before a save carries a
+  `tmp-` id, stripped on save and re-keyed from the reply; every mutation goes through
+  `touch()`, so autosave and `roughcutFlush` behave exactly as before. The old `.strip` /
+  `.blk` rules left the inline style; `test_ui_flow.py` names `#tl .blk` where it named
+  `#strip .blk`.
 - **The promoted timeline's server side (INTAKE M9, I9.0).** Shots have stable ids: minted
   once at open for a cut written before ids existed, kept through every `PUT /api/project`
   (a duplicate or missing id gets a fresh one), so the bin's `used_in`, undo, reorder and a

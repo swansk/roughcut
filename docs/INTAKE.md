@@ -518,11 +518,18 @@ and effects derive from it at render.
       and minted once for segments without one; `used_in` by id; `GET /api/snaps/{clip}` —
       sentence starts/ends (with the cut pads), word starts, onset peaks — for the magnet;
       static routes for `timeline.js` / `timeline.css` / `timeline-*.js`.
-- [ ] I9.1 **Foundation (lane `agent/timeline`):** `app/static/timeline.js` + `timeline.css` —
-      the ruler, zoom, scroll, global playhead + scrub, V1 blocks with posters, selection
-      (click, ⇧ range, ⌘ toggle), stable ids on the board, an undo/**redo** stack, a small
-      edit API (`tl.apply`) the other lanes build on; replaces `paintStrip` in `app.js`; the
-      monitor and autosave unchanged.
+- [x] I9.1 **Foundation (lane `agent/timeline`, commits `cdcbf46` module + mount, `76bba69`
+      tests; `test_timeline_ui.py` 13 tests, with `test_ui_flow.py` 58 passed, suite 421 passed):**
+      `app/static/timeline.js` + `timeline.css` — the ruler, zoom, scroll, global playhead +
+      scrub, V1 blocks with posters, selection (click, ⇧ range, ⌘ toggle), stable ids on the
+      board (`tmp-` until the save re-keys), one undo/**redo** stack for the whole board, and
+      the edit API the other lanes build on (`tl.begin`/`commit`, `setRange`, `move`, `split`,
+      `remove`, `insert`, `select`, `seek`, `zoomTo`, `fit`, `snapsFor`, `on` — the comment
+      block at the top of `timeline.js` is the contract); replaces `paintStrip` in `app.js`;
+      the monitor and autosave unchanged. Not in the brief, decided by the lane: a plain click
+      on a block also plays from there (the strip's promise, and what keeps `test_ui_flow.py`'s
+      monitor test unchanged); a lane-background click clears the selection and no card is
+      marked until the next selection.
 - [ ] I9.2 **Trims + snapping (lane `agent/tl-trim`):** ripple / roll / slip by drag, the
       magnet (cuts, playhead, sentences, onsets; `S` toggles; snap line), `,`/`.` nudges.
 - [ ] I9.3 **Keyboard editing (lane `agent/tl-keys`):** JKL, `↑`/`↓`, `Home`/`End`, `I`/`O` +
