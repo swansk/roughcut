@@ -40,33 +40,48 @@
          padding: 16px; align-items: start; }
   @media (max-width: 1100px) { main { grid-template-columns: minmax(0,1fr); } }
 
-  .seg {
+  /* The inspector (INTAKE M9, I9.5): one panel under the timeline for the selected
+     shot, holding what a shot card held. The list of one card per shot is gone — the
+     timeline is the editing surface. */
+  #inspector { margin-bottom: 10px; }
+  #inspector .shot {
     display: grid; grid-template-columns: 214px minmax(0,1fr); gap: 14px;
-    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
-    padding: 10px; margin-bottom: 10px;
+    background: var(--card); border: 1px solid var(--accent); border-radius: 10px;
+    padding: 10px;
   }
-  .seg.sel { border-color: var(--accent); }
-  .seg.drag { opacity: .4; }
-  /* The card's picture is a still, not a stream: sixteen live proxies on one board
-     took every connection Chrome had and the monitor played sound over black. */
-  .seg .poster { width: 100%; border-radius: 6px; background: #000; display: block;
-                 aspect-ratio: 16/9; object-fit: cover; cursor: pointer;
-                 -webkit-user-select: none; user-select: none; }
+  #inspector .none, #inspector .multi {
+    display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 14px; color: var(--dim);
+  }
+  #inspector .multi .count { color: var(--text); font-variant-numeric: tabular-nums; }
+  #inspector .none .totals { margin-left: auto; font-variant-numeric: tabular-nums; }
+  /* The picture is a still, not a stream: sixteen live proxies on one board took every
+     connection Chrome had and the monitor played sound over black. */
+  #inspector .poster { width: 100%; border-radius: 6px; background: #000; display: block;
+                       aspect-ratio: 16/9; object-fit: cover; cursor: pointer;
+                       -webkit-user-select: none; user-select: none; }
   .meta { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .meta .n { font-size: 11px; letter-spacing: .08em; color: var(--dim); }
+  .meta .at { margin-left: auto; }
   .clip { font-weight: 600; }
   .times { color: var(--dim); font-variant-numeric: tabular-nums; }
-  .dur { margin-left: auto; font-variant-numeric: tabular-nums; }
-  .why { color: var(--dim); margin: 6px 0; }
+  .dur { font-variant-numeric: tabular-nums; }
+  .why { color: var(--dim); margin: 6px 0; min-height: 1.4em; }
   .why[contenteditable]:focus { outline: 1px solid var(--accent); border-radius: 4px;
                                 color: var(--text); }
+  .why[contenteditable]:empty::before { content: "why this shot — click to write";
+                                        opacity: .5; }
   .lines { margin: 6px 0 0; padding: 6px 8px; background: #131318; border-radius: 6px;
            max-height: 92px; overflow: auto; }
   .lines div { color: var(--dim); }
   .lines b { color: var(--text); font-weight: 500; }
+  .polish { margin-top: 6px; }
   .trim { display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
   .trim span { color: var(--dim); font-size: 12px; }
   .trim button { padding: 3px 8px; font-size: 12px; }
-  .handle { cursor: grab; color: var(--dim); user-select: none; }
+  .shotAsk { margin-top: 8px; }
+  .prov { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
 
   aside { position: sticky; top: 64px; }
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
@@ -285,7 +300,7 @@
         <span class="pos"><span id="pos">0:00.0</span> / <span id="posTotal">0:00.0</span></span>
         <span class="hint" id="playingWhat"></span>
         <div class="grow"></div>
-        <span class="hint">click a shot below to jump · <kbd>space</kbd> play / pause ·
+        <span class="hint">click a shot below to jump · the inspector under it holds its why and trims · <kbd>space</kbd> play / pause ·
           <kbd>+</kbd><kbd>−</kbd> zoom · <kbd>\</kbd> fit · <kbd>⇧</kbd>wheel pan</span>
       </div>
       <!-- The timeline: a ruler, the V1 lane of shot blocks by film time, the playhead
@@ -308,7 +323,10 @@
         <button id="rejectProposal" class="ghost">Discard</button>
       </div>
     </div>
-    <div id="timeline"></div>
+    <!-- The inspector: the selected shot's still, header, lines, why, trims and scoped
+         ask — one panel for the timeline's anchor, where the list of one card per shot
+         used to be. The board's empty state (no cut yet) renders here too. -->
+    <div id="inspector"></div>
   </section>
   <aside>
     <div class="panel">
