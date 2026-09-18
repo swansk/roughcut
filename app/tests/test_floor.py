@@ -118,8 +118,9 @@ def test_a_verdict_is_written_to_the_edl_and_reattaches(client, project):
     mine = next(p for p in again if p["id"] == first["id"])
     assert mine["verdict"] == "pick" and mine["hero"] and mine["note"] == "love this"
     assert client.get("/api/selects").json()["summary"]["heroes"] == 1
-    # the timeline is untouched: a keep is not a shot
-    assert on_disk["segments"] == before["segments"]
+    # the timeline is untouched: a keep is not a shot (ids are minted on first read — M9)
+    strip = lambda segs: [{k: v for k, v in s.items() if k != "id"} for s in segs]
+    assert strip(on_disk["segments"]) == strip(before["segments"])
 
 
 def test_verdict_endpoint_validates(client):
@@ -260,7 +261,8 @@ def test_a_saved_timeline_grows_the_bin_by_its_hand_added_shots(client, project)
     bin_ = client.get("/api/selects").json()
     hands = [s for s in bin_["selects"] if s["source"] == "hand"]
     assert len(hands) == 1 and hands[0]["clip"] == "CLIP_C.MP4"
-    assert hands[0]["why"] == "new one" and hands[0]["used_in"] == ["s1"]
+    second = client.get("/api/project").json()["segments"][1]["id"]
+    assert hands[0]["why"] == "new one" and hands[0]["used_in"] == [second]
     assert bin_["summary"]["moments"] == 2 and bin_["summary"]["used"] == 2
     on_disk = json.loads(project["edl"].read_text(encoding="utf-8"))
     assert [s["source"] for s in on_disk["selects"]] == ["floor", "hand"]

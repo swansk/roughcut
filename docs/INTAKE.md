@@ -475,6 +475,65 @@ the two halves the tracker had deferred.
       own Save-copy click did not land a name (the field guess was wrong); Karl's copy is
       the proof of that path. Nothing left behind.
 
+### M9 · The promoted timeline (Option B, stage two) — Karl, 2026-09-18
+
+*"Let's improve the timeline, review what features in tools like Premiere Pro make timeline
+editing a breeze and add all of these in the app."*
+
+**The review.** What makes a Premiere / Resolve / Final Cut timeline a breeze is a short list,
+and most of it is one idea: the cut is a spatial thing you move with your hands, and every
+move snaps to something meaningful. In order of how much each buys an editor:
+
+1. **A real timeline with a global time scale** — a ruler, zoom (`+`/`-`, fit, wheel), scroll,
+   the playhead against the whole film, click and drag to scrub. Today's strip is a
+   proportional flex row with the playhead computed inside one block.
+2. **Trim by dragging edges** — ripple (the film closes up), roll (drag the cut point between
+   two shots, one grows as the other shrinks), slip (drag the middle to shift in/out together
+   keeping the length). With visible handles, a tooltip of the new time, and the film total
+   updating live.
+3. **Snapping with a magnet** — to other cut points, the playhead, and Roughcut's own dividend:
+   sentence starts and ends and audio onsets. A snap line shows what it took; `S` toggles.
+4. **Keyboard-first editing** — JKL shuttle with speed stacking, `↑`/`↓` to the previous/next
+   cut, `Home`/`End`, `I`/`O` mark in and out while a full clip plays and `,` inserts it,
+   `C` razor at the playhead, `Q`/`W` trim the selected shot's in/out to the playhead, `X`
+   ripple delete, `⌘Z`/`⌘⇧Z` undo and redo, `,`/`.` nudge a frame (`⇧` a second).
+5. **Drag and drop with a drop line** — move a shot with the film closing up behind it,
+   multi-select and move together, drag a keep from the bin tab or a Find result onto the
+   timeline at a time.
+6. **Lanes** — V1 shots as poster-filled blocks with the strongest witness line, A1 the music
+   bed with its ducks drawn under speech, a markers lane (heroes, events, the pass's keeps not
+   yet in the cut as faint "available" shapes), and a **proposal ghost lane**: a pending
+   proposal drawn under V1 aligned by time, play either, accept.
+7. **Stable identity** — every shot has an id that survives reorder, undo, proposals and the
+   bin's `used_in`, so nothing is positional any more.
+8. **An inspector for the selection** — the card's content (still, transcript, why, ask about
+   this shot) for the selected shot only; the card list stops being the editing surface.
+
+Not taken: a source/program pair of monitors (the one monitor stays and plays either the cut
+or a clip), nested sequences, multicam, keyframed effects — none of them is what a rough cut
+needs. Decision 5 holds throughout: every edit is a change to a segment's `in`/`out`/order,
+and effects derive from it at render.
+
+- [x] I9.0 **Server side (the lead, commit: see log — `test_timeline_api.py` 4 tests, suite 407 passed):** stable segment ids persisted through `PUT /api/project`
+      and minted once for segments without one; `used_in` by id; `GET /api/snaps/{clip}` —
+      sentence starts/ends (with the cut pads), word starts, onset peaks — for the magnet;
+      static routes for `timeline.js` / `timeline.css` / `timeline-*.js`.
+- [ ] I9.1 **Foundation (lane `agent/timeline`):** `app/static/timeline.js` + `timeline.css` —
+      the ruler, zoom, scroll, global playhead + scrub, V1 blocks with posters, selection
+      (click, ⇧ range, ⌘ toggle), stable ids on the board, an undo/**redo** stack, a small
+      edit API (`tl.apply`) the other lanes build on; replaces `paintStrip` in `app.js`; the
+      monitor and autosave unchanged.
+- [ ] I9.2 **Trims + snapping (lane `agent/tl-trim`):** ripple / roll / slip by drag, the
+      magnet (cuts, playhead, sentences, onsets; `S` toggles; snap line), `,`/`.` nudges.
+- [ ] I9.3 **Keyboard editing (lane `agent/tl-keys`):** JKL, `↑`/`↓`, `Home`/`End`, `I`/`O` +
+      insert, `C` razor, `Q`/`W`, `X` ripple delete, `⌘Z`/`⌘⇧Z`, the `?` map on the board.
+- [ ] I9.4 **Lanes + drag and drop (lane `agent/tl-lanes`):** A1 music with ducks, the
+      markers lane, the proposal ghost lane; move by drag with a drop line, multi-move, drop
+      a keep or a Find result onto the timeline.
+- [ ] I9.5 **Inspector:** the selected shot's card content beside the timeline; the card list
+      retired (after I9.1–I9.4 land).
+- [ ] I9.6 Live on Killington: Karl's look.
+
 ## Lanes in flight
 
 | lane | branch / worktree | scope | state |

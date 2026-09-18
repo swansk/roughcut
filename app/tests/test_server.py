@@ -104,8 +104,9 @@ def test_save_round_trips_to_disk(client, project):
             "story": "the milk is the running joke"}
     assert client.put("/api/project", json=body).json()["saved"] == 1
     on_disk = json.loads(project["edl"].read_text(encoding="utf-8"))
-    assert on_disk["segments"] == [{"clip": "CLIP_C.MP4", "in": 1.5, "out": 4.25,
-                                    "why": "new one"}]
+    assert [{k: v for k, v in s.items() if k != "id"} for s in on_disk["segments"]] == [
+        {"clip": "CLIP_C.MP4", "in": 1.5, "out": 4.25, "why": "new one"}]
+    assert on_disk["segments"][0]["id"].startswith("g"), "a shot keeps an id (M9)"
     assert on_disk["story"] == "the milk is the running joke"
     # and the reload shows what was written, since the file is the source of truth
     assert client.get("/api/project").json()["segments"][0]["clip"] == "CLIP_C.MP4"

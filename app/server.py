@@ -427,11 +427,26 @@ def write_edl(edl: dict) -> None:
     tmp.replace(STATE["edl"])
 
 
+def segment_id() -> str:
+    return "g" + uuid.uuid4().hex[:10]
+
+
+def ensure_segment_ids(edl: dict) -> bool:
+    """Every segment carries a stable id (INTAKE M9 I9.0): minted once here for a cut
+    written before ids existed, kept through every save after. Returns True when
+    something was minted, so the caller can persist the migration."""
+    changed = False
+    for seg in edl.get("segments") or []:
+        if not isinstance(seg.get("id"), str) or not seg["id"]:
+            seg["id"] = segment_id()
+            changed = True
+    return changed
+
+
 def project_payload() -> dict:
     edl = read_edl()
-    segments = []
-    for i, s in enumerate(edl["segments"]):
-        segments.append({"id": s.get("id") or f"s{i}", **s})
+    ensure_segment_ids(edl)               # persisted at open (configure) and on every save;
+    segments = [dict(s) for s in edl["segments"]]   # a read never writes
 
     clips: dict[str, dict] = {}
     referenced = {s["clip"] for s in segments}
@@ -521,6 +536,7 @@ async def api_save(request: Request) -> JSONResponse:
     edl = read_edl()
     edl["story"] = body.get("story", edl.get("story", ""))
     clean = []
+    seen_ids: set[str] = set()
     for s in body["segments"]:
         seg = {k: s[k] for k in ("clip", "in", "out") if k in s}
         seg["in"] = round(float(seg["in"]), 2)
@@ -530,6 +546,14 @@ async def api_save(request: Request) -> JSONResponse:
         for k in ("act", "why"):
             if s.get(k):
                 seg[k] = s[k]
+        # The id round-trips (I9.0): a shot keeps its identity across reorder, undo and a
+        # proposal; a duplicate (a copied shot) or a missing one gets a fresh id.
+        sid = s.get("id")
+        if isinstance(sid, str) and 0 < len(sid) <= 40 and sid not in seen_ids:
+            seg["id"] = sid
+        else:
+            seg["id"] = segment_id()
+        seen_ids.add(seg["id"])
         clean.append(seg)
     edl["segments"] = clean
     # Music is the same `effects_music` key assemble.py reads, validated the way a
@@ -2996,10 +3020,91 @@ def index() -> HTMLResponse:
                         headers=NO_STORE)
 
 
+SNAP_PAD_HEAD_S = 0.25      # a cut opens a beat before the sentence (the floor's rule)
+SNAP_PAD_TAIL_S = 0.45      # and closes after the last word lands (transcript ends run early)
+ONSET_MIN_GAP_S = 0.5
+
+
+def onset_peaks(sidecar: dict, *, top: int = 120) -> list[float]:
+    """The strongest audio onsets in a clip, as times — a local maximum above the track's
+    mean + one standard deviation, at least half a second apart, the strongest `top`."""
+    tracks = sidecar.get("tracks") or {}
+    track = tracks.get("onset") or []
+    hz = float(sidecar.get("frame_hz") or 10.0)
+    if len(track) < 3 or hz <= 0:
+        return []
+    vals = [float(v) for v in track]
+    mean = sum(vals) / len(vals)
+    sd = (sum((v - mean) ** 2 for v in vals) / len(vals)) ** 0.5
+    floor = mean + sd
+    peaks = [(vals[i], i / hz) for i in range(1, len(vals) - 1)
+             if vals[i] >= floor and vals[i] >= vals[i - 1] and vals[i] > vals[i + 1]]
+    peaks.sort(reverse=True)
+    out: list[float] = []
+    for _v, t in peaks:
+        if all(abs(t - u) >= ONSET_MIN_GAP_S for u in out):
+            out.append(round(t, 2))
+        if len(out) >= top:
+            break
+    return sorted(out)
+
+
+def snap_points(clip: str) -> dict:
+    """What a cut can snap to in this clip (INTAKE M9): sentence starts and ends — raw,
+    and padded the way the floor and edl_snap cut them — word starts, and onset peaks.
+    Free; from the audio sidecar alone. A clip without one snaps to nothing."""
+    d = load_sidecar(clip)
+    duration = clip_duration(clip) or 0.0
+    sentences = []
+    words = []
+    for u in d.get("transcript") or []:
+        try:
+            a, b = float(u["start"]), float(u["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        sentences.append({"start": round(a, 2), "end": round(b, 2),
+                          "cut_in": round(max(0.0, a - SNAP_PAD_HEAD_S), 2),
+                          "cut_out": round(min(duration, b + SNAP_PAD_TAIL_S) if duration
+                                           else b + SNAP_PAD_TAIL_S, 2),
+                          "text": str(u.get("text", ""))[:80]})
+        for w in u.get("words") or []:
+            try:
+                words.append(round(float(w["t"]), 2))
+            except (KeyError, TypeError, ValueError):
+                continue
+    return {"clip": clip, "duration": duration, "sentences": sentences,
+            "words": sorted(set(words)), "onsets": onset_peaks(d),
+            "pads": {"head": SNAP_PAD_HEAD_S, "tail": SNAP_PAD_TAIL_S}}
+
+
+@app.get("/api/snaps/{clip}")
+def api_snaps(clip: str) -> JSONResponse:
+    if clip not in footage_clips():
+        raise HTTPException(404, f"unknown clip {clip!r}")
+    return JSONResponse(snap_points(clip))
+
+
 @app.get("/app.js")
 def appjs() -> Response:
     return Response((HERE / "static" / "app.js").read_text(encoding="utf-8"),
                     media_type="application/javascript", headers=NO_STORE)
+
+
+TIMELINE_FILES = {"timeline.js", "timeline.css", "timeline-trim.js", "timeline-keys.js",
+                  "timeline-lanes.js"}
+
+
+@app.get("/timeline/{name}")
+def timeline_static(name: str) -> Response:
+    """The promoted timeline's module and its lanes (INTAKE M9): one route, a fixed list —
+    the board is served by name, never by directory listing."""
+    if name not in TIMELINE_FILES:
+        raise HTTPException(404, "no such timeline file")
+    p = HERE / "static" / name
+    if not p.exists():
+        raise HTTPException(404, f"{name} is not built yet")
+    media = "text/css" if name.endswith(".css") else "application/javascript"
+    return Response(p.read_text(encoding="utf-8"), media_type=media, headers=NO_STORE)
 
 
 @app.get("/switcher.js")
@@ -3429,6 +3534,11 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
     if created:
         scaffold_edl(edl_path, footage, orient)
     STATE["orient"] = read_edl().get("orient", "auto")   # needs STATE["edl"] set first
+    # A cut written before shots had ids gets them once, here at open — the one write a
+    # read path never makes (INTAKE M9 I9.0).
+    _edl = read_edl()
+    if ensure_segment_ids(_edl):
+        write_edl(_edl)
     STATE["asks"] = work / "asks" / footage.name
     # Per-bin like proxies and renders — the third time this lesson has applied. The
     # earlier default of one shared ~/work/visual would have mixed two bins' sidecars

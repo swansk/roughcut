@@ -199,12 +199,13 @@ def test_a_copy_is_the_whole_file_and_the_board_moves_to_it(tmp_path, project):
                                       / "rocks-runner.edl.json")
         assert server.STATE["edl"] == Path(copy["path"]) and server.STATE["edl_created"] is False
         on_disk = json.loads(Path(copy["path"]).read_text(encoding="utf-8"))
-        assert on_disk["segments"] == [shot] and on_disk["story"] == "the milk"
+        no_ids = lambda segs: [{k: v for k, v in s.items() if k != "id"} for s in segs]
+        assert no_ids(on_disk["segments"]) == [shot] and on_disk["story"] == "the milk"
         assert on_disk["cut"]["name"] == "Rocks runner" and on_disk["cut"]["from"] == "main"
         assert on_disk["orient"] == "auto" and on_disk["title"] == project["footage"].name
         # editing the copy leaves the original alone, and the name survives a save
         assert c.put("/api/project", json={"segments": [], "story": "the milk"}).status_code == 200
-        assert json.loads(original.read_text(encoding="utf-8"))["segments"] == [shot]
+        assert no_ids(json.loads(original.read_text(encoding="utf-8"))["segments"]) == [shot]
         assert json.loads(Path(copy["path"]).read_text(encoding="utf-8"))["cut"]["name"] == "Rocks runner"
         assert c.get("/api/status").json()["cut"] == "Rocks runner"
         assert c.get("/api/project").json()["cut"] == "Rocks runner"

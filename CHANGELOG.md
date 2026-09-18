@@ -10,6 +10,14 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The promoted timeline's server side (INTAKE M9, I9.0).** Shots have stable ids: minted
+  once at open for a cut written before ids existed, kept through every `PUT /api/project`
+  (a duplicate or missing id gets a fresh one), so the bin's `used_in`, undo, reorder and a
+  proposal can name a shot instead of a position. `GET /api/snaps/{clip}` gives the magnet
+  what a cut can snap to — sentence starts and ends raw and padded the way the floor cuts
+  them (−0.25 s / +0.45 s), word starts, and the strongest audio onsets (local maxima above
+  the track's mean + one standard deviation, half a second apart). `/timeline/{name}` serves
+  the module's files by name. Four tests; three existing tests now ignore the minted ids.
 - **The settings drawer on `/open` — workers and the budget cap (INTAKE I5.3's other half,
   the screen; I8.3, `c06f360`).** A gear next to **Index the footage** (or `,` outside a field) opens a
   drawer in the right column, as Fig. 1's "workers 2 · cap $15 · settings ▾"; `Esc` or the
