@@ -10,6 +10,33 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Trims by drag on the timeline (INTAKE M9, I9.2; lane `agent/tl-trim`).**
+  `app/static/timeline-trim.js`, built on the foundation's API and never editing it: every
+  V1 block wears two 8 px edge handles (`ew-resize`) — drag one and the shot's `in` or `out`
+  moves with the film closing up behind it (ripple), a tooltip over the edge giving the new
+  clip time and the shot's new length while the ruler and the total follow live; a 10 px
+  zone straddling every cut (`col-resize`) rolls it — the left shot's `out` and the right
+  shot's `in` move together, the film's length unchanged; ⌥/alt + drag on a block's body
+  slips it — `in` and `out` together, the length kept, clamped to the clip. One
+  `tl.begin` on pointerdown, `setRange` per move (rAF-throttled; the posters' settle rule
+  is the foundation's), one `tl.commit` on pointerup — a whole drag is one undo entry —
+  `tl.cancel` on Esc mid-drag; pointer capture; less than 3 px of travel is a click
+  (selects, does not play, does not trim); clamped to the clip and the 0.2 s minimum; the
+  monitor parks on the edge being dragged through `tl.seek` (an out edge a hair inside
+  its own shot, since a film time on a cut belongs to the next shot). `,` / `.` nudge the
+  *active edge* — the last one dragged, else the selected shot's out — by a frame
+  (1/30 s, at the foundation's 0.01 s), `⇧,` / `⇧.` by a second; these two keys are this
+  lane's. The pointer maps to seconds at the zoom of pointerdown, deliberately: the
+  foundation refits the cut after every change until someone zooms. The clip's length
+  comes from the snaps payload (warmed per clip at mount), since app.js's clips are not
+  on the foundation's API. `timeline.css` gains the handles, the roll zones and the
+  tooltip under a `/* ---- trim (I9.2) */` banner. `test_timeline_trim.py`: six playwright
+  tests — an out-handle drag trims, the totals and the EDL on disk follow, one ⌘Z
+  restores; an in-handle drag closes the film up and cannot cross the out; a boundary
+  drag rolls with the film length held (and stops where a shot would begin before 0);
+  ⌥-drag slips with the length kept and clamps to the clip; a press without travel is a
+  click and Esc cancels a drag with nothing on the stack; `,` / `.` / `⇧.` / `⇧,` nudge,
+  the dragged edge becomes the active one, and an input keeps its own keys.
 - **The timeline's three lane files are loaded by the board** (`timeline-trim.js`,
   `timeline-keys.js`, `timeline-lanes.js`, after the foundation) — served by name at
   `/timeline/{name}`, a 404 until each lane lands, so the tags cost nothing before then.

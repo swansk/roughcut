@@ -81,3 +81,36 @@
                        border: 6px solid transparent; border-top: 8px solid #fff;
                        border-bottom: 0; }
 
+
+/* ---- trim (I9.2) */
+/* Handles, roll zones, the snap line, the tooltip, the magnet — timeline-trim.js lays
+   these over the foundation's blocks; nothing above this banner changes for them. */
+#tl .blk .tl-h { position: absolute; top: 0; bottom: 0; width: 8px; cursor: ew-resize;
+                 z-index: 2; pointer-events: auto; }
+#tl .blk .tl-h.in { left: 0; }
+#tl .blk .tl-h.out { right: 0; }
+/* an interior edge leaves the cut's own 10 px to the roll zone */
+#tl .blk:not(:first-of-type) .tl-h.in { left: 5px; }
+#tl .blk:not(:last-of-type) .tl-h.out { right: 5px; }
+#tl .blk .tl-h::after { content: ''; position: absolute; top: 25%; bottom: 25%; width: 2px;
+                        background: var(--text); opacity: 0; border-radius: 1px;
+                        transition: opacity .12s; }
+#tl .blk .tl-h.in::after { left: 2px; }
+#tl .blk .tl-h.out::after { right: 2px; }
+#tl .blk:hover .tl-h::after, #tl .blk.sel .tl-h::after { opacity: .45; }
+#tl .blk .tl-h:hover::after { opacity: 1; background: var(--accent); }
+#tl .tl-roll { position: absolute; top: 0; bottom: 0; cursor: col-resize; z-index: 3; }
+#tl .tl-roll::after { content: ''; position: absolute; left: 4px; top: 30%; bottom: 30%;
+                      width: 2px; background: var(--accent); opacity: 0; transition: opacity .12s; }
+#tl .tl-roll:hover::after { opacity: .9; }
+#tl .tl-lane.tl-dragging .blk { cursor: inherit; }
+#tl .tl-lane.tl-drag-trim { cursor: ew-resize; }
+#tl .tl-lane.tl-drag-roll { cursor: col-resize; }
+#tl .tl-lane.tl-drag-slip { cursor: grabbing; }
+/* the tooltip: the new time and length, over the lane at the edge */
+#tl .tl-tip { position: absolute; top: calc(var(--tl-ruler) - 4px); transform: translate(-50%, -100%);
+              font-size: 10px; line-height: 1; padding: 3px 6px; border-radius: 3px;
+              background: #1c1c24; color: var(--text); border: 1px solid var(--line);
+              white-space: nowrap; z-index: 6; pointer-events: none;
+              font-variant-numeric: tabular-nums; }
+#tl .tl-tip[hidden] { display: none; }
