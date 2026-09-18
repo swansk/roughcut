@@ -61,6 +61,56 @@ same commit. Releases move entries into a dated version section.
   frame steps leave the selection alone; I / O / ↵ on the Find clip insert `[1.0, 2.5]`
   with "hello there" as why while `o` without a clip opens the picker and Esc closes it;
   the map lists JKL row for row from the table; keys are ignored while typing).
+- **I9.2 ticked in INTAKE (M9, lane `agent/tl-trim`)** with the two commits, the counts
+  and the lane's decisions.
+- **The magnet — snapping while an edge or a cut is dragged (INTAKE M9, I9.2; lane
+  `agent/tl-trim`).** Within 8 px, in priority: another cut point (for a roll — on a
+  ripple every other cut either lies on the far side of the block or moves with the film
+  as it closes up), the playhead (where it stood when the edge was taken: parking the
+  monitor on the dragged edge goes through the foundation's seek, which moves the
+  playhead with it), a sentence `cut_in` for an in edge / `cut_out` for an out edge, a
+  word start, an onset — the clip's points from `tl.snapsFor`, so Roughcut's own dividend
+  is what the hand lands on. A vertical snap line across the ruler and the lanes at the
+  taken point, labelled `sentence` / `word` / `onset` / `cut` / `playhead`, and the
+  tooltip says what it took. `S` toggles the magnet (a `magnet · on/off` indicator by the
+  ruler's right end, also a button; kept in `localStorage`); ⌘/ctrl held while dragging
+  suspends it for that drag. The block being dragged shows its clip's sentence cut points
+  and onsets as faint ticks inside it, mapped to film time and re-laid as its in point
+  moves, so the editor sees what there is to snap to. `timeline.css` gains the ticks,
+  the snap line and the indicator under the same `/* ---- trim (I9.2) */` banner.
+  `test_timeline_trim.py` grows to nine: an out handle released 4 px short of a
+  sentence `cut_out` (4.45 s) lands on it exactly with the line saying `sentence`, the
+  ticks drawn, and one ⌘Z back; the playhead is taken before a sentence and a word
+  before nothing, and an in edge takes a `cut_in`; `S` turns the magnet off (the
+  indicator, the store, no line, the raw value) and on again, ⌘/ctrl suspends one drag,
+  and the indicator's click toggles too.
+- **Trims by drag on the timeline (INTAKE M9, I9.2; lane `agent/tl-trim`).**
+  `app/static/timeline-trim.js`, built on the foundation's API and never editing it: every
+  V1 block wears two 8 px edge handles (`ew-resize`) — drag one and the shot's `in` or `out`
+  moves with the film closing up behind it (ripple), a tooltip over the edge giving the new
+  clip time and the shot's new length while the ruler and the total follow live; a 10 px
+  zone straddling every cut (`col-resize`) rolls it — the left shot's `out` and the right
+  shot's `in` move together, the film's length unchanged; ⌥/alt + drag on a block's body
+  slips it — `in` and `out` together, the length kept, clamped to the clip. One
+  `tl.begin` on pointerdown, `setRange` per move (rAF-throttled; the posters' settle rule
+  is the foundation's), one `tl.commit` on pointerup — a whole drag is one undo entry —
+  `tl.cancel` on Esc mid-drag; pointer capture; less than 3 px of travel is a click
+  (selects, does not play, does not trim); clamped to the clip and the 0.2 s minimum; the
+  monitor parks on the edge being dragged through `tl.seek` (an out edge a hair inside
+  its own shot, since a film time on a cut belongs to the next shot). `,` / `.` nudge the
+  *active edge* — the last one dragged, else the selected shot's out — by a frame
+  (1/30 s, at the foundation's 0.01 s), `⇧,` / `⇧.` by a second; these two keys are this
+  lane's. The pointer maps to seconds at the zoom of pointerdown, deliberately: the
+  foundation refits the cut after every change until someone zooms. The clip's length
+  comes from the snaps payload (warmed per clip at mount), since app.js's clips are not
+  on the foundation's API. `timeline.css` gains the handles, the roll zones and the
+  tooltip under a `/* ---- trim (I9.2) */` banner. `test_timeline_trim.py`: six playwright
+  tests — an out-handle drag trims, the totals and the EDL on disk follow, one ⌘Z
+  restores; an in-handle drag closes the film up and cannot cross the out; a boundary
+  drag rolls with the film length held (and stops where a shot would begin before 0);
+  ⌥-drag slips with the length kept and clamps to the clip; a press without travel is a
+  click and Esc cancels a drag with nothing on the stack; `,` / `.` / `⇧.` / `⇧,` nudge,
+  the dragged edge becomes the active one, and an input keeps its own keys.
 - **The timeline's three lane files are loaded by the board** (`timeline-trim.js`,
   `timeline-keys.js`, `timeline-lanes.js`, after the foundation) — served by name at
   `/timeline/{name}`, a 404 until each lane lands, so the tags cost nothing before then.
