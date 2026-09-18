@@ -10,6 +10,32 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Keyboard editing on the timeline, 1 of 2 — transport and navigation (INTAKE M9, I9.3;
+  lane `agent/tl-keys`).** `app/static/timeline-keys.js`, loaded after the foundation and
+  registered by wrapping `tl.mount` (the foundation has no mounted event); a keydown
+  listener on `window` in the capture phase that stops only the keys it owns, so space,
+  `u`, the brackets, the foundation's `+ - \` / ⌘Z / ⌘⇧Z and the switcher's `o` keep
+  their owners; nothing fires while typing. **JKL** shuttle on the monitor: `L` plays,
+  again for 2× / 4× / 8× (`playbackRate` and `defaultPlaybackRate` on both buffers, so the
+  hand-over at a cut keeps the speed); `J` reverses by driving `currentTime` from rAF as
+  the pass does, stacking to −8×, parking on the previous shot's out-point at a cut and
+  holding until the reload's park has run; `K` pauses; K held with L or J plays at 1× while
+  held; space or a click after a shuttle plays at 1×. `↑` / `↓` previous / next cut (the
+  playhead to the boundary, that shot selected — what `j` / `k` used to do on the cards),
+  `Home` / `End`, `←` / `→` one frame (`⇧` one second) — the playhead only, so the trim
+  lane's `,` / `.` stay the edge nudges. `I` / `O` mark in / out on the clip in Find (the
+  board's only whole-clip player) shown as two ticks on a bar beside the transport's
+  position; `↵` with both marks inserts the range after the selected shot with the clip's
+  transcript line as why; `⌥I` / `⌥O` and `Esc` clear; playing the cut, `I` says to open
+  a clip and `O` stays the switcher's. A **Timeline** section in the Keys panel rendered
+  from the module's one table, with the trim lane's `,` `.` `S` and the foundation's
+  `+ − \`; `?` brings it up. `timeline.css` gains the marks bar and the map's rules.
+  `test_timeline_keys.py`: eight playwright tests (L stacks to 8× and K resets both
+  buffers; J moves `currentTime` back over 300 ms, stacks, crosses the cut onto CLIP_A's
+  out-point; K+L; `↓` from shot 1 lands at 2.0 s with shot 2 selected, `↑` / Home / End;
+  frame steps leave the selection alone; I / O / ↵ on the Find clip insert `[1.0, 2.5]`
+  with "hello there" as why while `o` without a clip opens the picker and Esc closes it;
+  the map lists JKL row for row from the table; keys are ignored while typing).
 - **The timeline's three lane files are loaded by the board** (`timeline-trim.js`,
   `timeline-keys.js`, `timeline-lanes.js`, after the foundation) — served by name at
   `/timeline/{name}`, a 404 until each lane lands, so the tags cost nothing before then.
