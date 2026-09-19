@@ -55,8 +55,12 @@ until R11.
 
 ## Where we are
 
-_2026-09-18, end of session 14._ **M9, the promoted timeline, is built: I9.0–I9.5 ticked;
-I9.6 is Karl's look.** **After it, the next priority is M10 (colour: correct, match, look)** — researched and lab-tested in session 15, items I10.0–I10.6 below, nothing built yet. Karl's feature 2 (*"improve the timeline, review what features in tools
+_2026-09-18, end of session 14 (late)._ **M9, the promoted timeline, is built: I9.0–I9.5 and
+I9.7 ticked; I9.6 is Karl's look.** I9.7 answered Karl's *"extend a clip while offsetting the
+next instead of cutting into the next … top of the clip extends, bottom cuts in"*: every cut has
+an edge column whose top half extends or shortens the shot and moves the rest, and whose bottom
+half rolls; ⇧ flips; the half under the pointer lights up with a ghost of the pushed shot and a
+one-line hint (`e8818aa`). **M10 (colour) is planned** in this file as the priority after I9.6. **After it, the next priority is M10 (colour: correct, match, look)** — researched and lab-tested in session 15, items I10.0–I10.6 below, nothing built yet. Karl's feature 2 (*"improve the timeline, review what features in tools
 like Premiere Pro make timeline editing a breeze and add all of these"*) — the review is at
 the top of M9; everything on its list is on the board: a real timeline with a ruler, zoom and
 scrub (`139e171`); ripple / roll / slip by drag with the magnet to cuts, the playhead,
@@ -792,6 +796,7 @@ frames, `out/sheet_looks2.jpg` (16 frames × original/balanced/crisp/alpine/film
 | tl-keys | `agent/tl-keys` | I9.3 | **merged** `034551b`; worktree removed |
 | tl-lanes | `agent/tl-lanes` | I9.4 | **merged** `9ff755d`; worktree removed |
 | inspector | `agent/inspector` | I9.5 | **merged** `e3a2c60`; worktree removed |
+| tl-edges | `agent/tl-edges` | I9.7 | **merged** `e8818aa`; worktree removed |
 | open | `agent/open` · `../roughcut-wt/open` | I5.1, I5.3 | **merged** `6ba1ec0`; worktree removed |
 
 Lanes touch disjoint files by design: `bin` → `revise.py`, `selects.py`, tests; `floor` →
@@ -934,3 +939,10 @@ them. Every lane adds its own CHANGELOG bullet; integration keeps all of them.
   transcript / seen lines and the ± trims, ▶ play, ✎ ask, remove; three blocks → `3 shots
   selected · 41.4 s`; Esc → `select a shot on the timeline — or press ↑ / ↓`; undo stack
   untouched, no page errors.
+- 2026-09-18 · + tl-edges `e8818aa` · **459 passed, 1 skipped** (286.45 s) with the music
+  panel test timing out under load (passes alone). Edge columns live on Killington (headless):
+  20 columns for 21 shots, `EDGE_PX` 16; hovering the top-left quadrant of a cut lights
+  `tl-edge lit top left ext` with the ghost strip and the hint *"top edge · extend or shorten
+  this shot, the rest moves · bottom edge · roll the cut into the next · ⇧ flips"*; the bottom
+  quadrant lights `roll` with no ghost; ⇧ flips it to `ext`; the `?` map has the edge rows;
+  no page errors, undo untouched.

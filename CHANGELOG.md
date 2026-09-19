@@ -469,6 +469,8 @@ same commit. Releases move entries into a dated version section.
   overlaps are one pick already, speech needs the shared theme.
 
 ### Changed
+- **Docs:** INTAKE records I9.7 merged and checked live on Killington, and names M10 as the
+  priority after Karl's look.
 - **Docs:** I9.7 ticked in INTAKE (M9, extend vs roll by height) with the two commits
   (`60bbb0b` the zones, `f85bca0` the cues), the counts (15 tests; 47 across the four
   timeline files; suite 459 passed with the music-lane test passing alone) and the lane's
