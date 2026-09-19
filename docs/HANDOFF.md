@@ -6,11 +6,17 @@ where to pick up. **State:** everything through M9 is built and live on Killingt
 board is now a cutting room: a real timeline (ruler, zoom, scrub), trims by drag with a magnet
 to sentences and onsets, JKL and the rest of the keyboard, lanes (markers, music ducks, the
 bin's keeps, a proposal ghost), drag-and-drop, and an inspector for the selected shot in place
-of the old card list. Shots carry stable ids. **Next is Karl's look at the timeline (I9.6)**,
-then **M10, colour** (correct every shot from its snow, match shots to a hero, one look over
-the film — researched and lab-tested on both bins in session 15, plan and numbers in INTAKE M10,
-nothing built yet), then his numbered feature 3 (1 = cuts, 2 = the timeline), and the three
-small spends waiting on his word. Everything below this line is the history that led there, and the older roadmap.
+of the old card list. Shots carry stable ids. **M10, colour, is built through I10.4 (2026-09-19):** every
+clip is measured from its proxy, every shot balances from its white reference (clamped,
+off when there is no evidence), one look over the film at a strength, per-shot overrides
+and matching, the monitor shows the grade in WebGL (`G` compares), the inspector's Colour
+block controls it, and the render bakes one LUT per part. An HDR (iPhone HLG) clip is
+normalised into its proxy and its parts before anything else. **A missing `colour` block
+renders as the auto** — to get yesterday's picture, set the film row to *off*. **Next is
+Karl's look at the timeline (I9.6) and at the grade (I10.6)** — the Killington cut is
+already rendered both ways in `Projects/roughcut-lab/out/` — then I10.5 (the Ask reaches
+colour), then his numbered feature 3 (1 = cuts, 2 = the timeline), and the three small
+spends waiting on his word. Everything below this line is the history that led there, and the older roadmap.
 
 **Session 12 (2026-09-08, evening) — the first of Karl's new features: cuts.** *"Work on
 multiple projects at the same time … switching easily between projects, and saving copies so

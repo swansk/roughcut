@@ -10,6 +10,10 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **`/grade.js` served (INTAKE M10, I10.4)** — the one route the UI lane could not add
+  (`server.py` is the lead's): mirrors `/switcher.js`. I10.3 and I10.4 ticked in INTAKE
+  with the lanes' hashes; M10 is built through I10.4, I10.5 (the Ask) and I10.6 (Karl's
+  look) remain.
 - **I10.1 ticked in INTAKE** with the lane's hashes and the live Killington check: the
   21-shot cut rendered as shot (106 s) and auto + alpine 0.5 (114 s), every shot balanced
   from its snow, film YAVG 144.8 → 164.2, comparison sheet kept in `roughcut-lab/out/`.

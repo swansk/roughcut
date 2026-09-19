@@ -3313,6 +3313,13 @@ def switcherjs() -> Response:
                     media_type="application/javascript", headers=NO_STORE)
 
 
+@app.get("/grade.js")
+def gradejs() -> Response:
+    """The monitor's grade (INTAKE M10, I10.4): the WebGL LUT over the live video."""
+    return Response((HERE / "static" / "grade.js").read_text(encoding="utf-8"),
+                    media_type="application/javascript", headers=NO_STORE)
+
+
 # ------------------------------------------------------------------------ cuts
 #
 # One bin, several cuts. The EDL has always been the whole project file — the

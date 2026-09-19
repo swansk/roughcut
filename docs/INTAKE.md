@@ -60,7 +60,7 @@ I9.7 ticked; I9.6 is Karl's look.** I9.7 answered Karl's *"extend a clip while o
 next instead of cutting into the next … top of the clip extends, bottom cuts in"*: every cut has
 an edge column whose top half extends or shortens the shot and moves the rest, and whose bottom
 half rolls; ⇧ flips; the half under the pointer lights up with a ghost of the pushed shot and a
-one-line hint (`e8818aa`). **M10 (colour) is planned** in this file as the priority after I9.6. **After it, the next priority is M10 (colour: correct, match, look)** — researched and lab-tested in session 15, items I10.0–I10.6 below, nothing built yet. Karl's feature 2 (*"improve the timeline, review what features in tools
+one-line hint (`e8818aa`). **M10 (colour) is planned** in this file as the priority after I9.6. **M10 (colour: correct, match, look) is built through I10.4** (2026-09-19, session 16: foundation `d84082d`, lanes `agent/colour-render` `5155662` and `agent/colour-ui` `0e959c0` merged, grey-scene rule `1e7f75c`); I10.5 (the Ask) and I10.6 (Karl's look — the Killington cut is rendered both ways in `roughcut-lab/out/`) remain. Karl's feature 2 (*"improve the timeline, review what features in tools
 like Premiere Pro make timeline editing a breeze and add all of these"*) — the review is at
 the top of M9; everything on its list is on the board: a real timeline with a ruler, zoom and
 scrub (`139e171`); ripple / roll / slip by drag with the magnet to cuts, the playhead,
@@ -789,11 +789,21 @@ below must honour:
       (`crisp`, `alpine`, `filmic`) as parameter sets, `.cube` files accepted with the same
       manifest entry; strength blends toward identity inside the bake; film-level
       `colour.look` + per-shot override. Test: strength 0 equals balance-only.
-- [ ] I10.3 **Match.** `colour.match_params(samples, reference_samples)` — Lab means,
+- [x] I10.3 (`colour.match_params` in `d84082d`; render half in `5155662`; the buttons in
+      `0e959c0`) **Match.** Lab-tested on Killington frames, not yet judged live — the
+      Killington cut is one overcast day and every shot balances to the same place, so a
+      match there is a no-op; Copper (sun and shade, lift and slope) is where it earns
+      its keep. Original item: `colour.match_params(samples, reference_samples)` — Lab means,
       spread clamped 0.85–1.15 — toward `colour.reference` (a segment id; default the
       hero, else the first shot); per-shot *match to previous*. Test: a shifted copy of the
       reference matches back to within 1 L\* / 0.5 a\*b\*.
-- [ ] I10.4 **The monitor and the inspector.** `app/static/grade.js`: WebGL LUT over
+- [x] I10.4 (lane `agent/colour-ui` `0e959c0`, merged `e480045`; `/grade.js` route in the
+      commit after) **The monitor and the inspector.** Lane decisions kept: the canvas is
+      `#gradeCanvas` (a `<canvas id="grade">` would shadow `window.grade`), the LUT cache
+      drops on every save (a trim re-derives the auto), a 404 from `/api/lut` is the
+      identity, colour is not on the undo stack (like music), match buttons and *set as
+      reference* toggle off on a second click, the transport keys line clips with an
+      ellipsis so `g` fits. 8 browser tests. Original item: `app/static/grade.js`: WebGL LUT over
       `#pv0`/`#pv1` fed by `GET /api/lut/{segment_id}` (17³, the same bake), `G` toggles
       the grade to compare, `requestVideoFrameCallback` drives the upload; the inspector
       gains a *Colour* block — auto on/off, look + strength, warm/cool and brighter/darker
