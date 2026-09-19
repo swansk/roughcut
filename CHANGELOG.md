@@ -10,6 +10,10 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **I10.0 ticked in INTAKE (`d84082d`)** with the decision that colour has no journal stage
+  (measured right after each proxy; files are the truth), and the looks library's first
+  manifest: `assets/looks/manifest.json` with `soft`, `punchy` and `cold` beside the three
+  formula looks in the code; `assets/README.md` says how a `.cube` joins it.
 - **The colour core and its server wiring (INTAKE M10, I10.0 and the contract for
   I10.1–I10.4).** `roughcut/colour.py`: the probe (pixel format, bit depth, transfer,
   primaries, range, rotation, camera family from the tags), `normalise_vf` (HLG/PQ → SDR

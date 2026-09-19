@@ -1,0 +1,17 @@
+[
+  {
+    "name": "soft",
+    "description": "Barely there: a gentle curve and a little highlight cleanup, for footage that already looks right and only wants finishing.",
+    "params": {"contrast": 0.12, "vibrance": 0.08, "hl_desat": 0.2, "knee": 0.88}
+  },
+  {
+    "name": "punchy",
+    "description": "More contrast and vibrance than crisp, highlights still protected. For sunny days and bright colours that should read from across the room.",
+    "params": {"contrast": 0.34, "vibrance": 0.26, "hl_desat": 0.3, "knee": 0.84}
+  },
+  {
+    "name": "cold",
+    "description": "Cooler overall with lifted, blue-leaning shadows: the storm-day look, overcast and quiet rather than warmed up.",
+    "params": {"contrast": 0.2, "vibrance": 0.1, "hl_desat": 0.3, "split": 3.0, "warm": -2.5, "knee": 0.85}
+  }
+]

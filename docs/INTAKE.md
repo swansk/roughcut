@@ -754,7 +754,13 @@ below must honour:
   synthetic project gains one HLG clip (`-color_trc arib-std-b67`) so the chain is
   exercised without iPhone footage on disk.
 
-- [ ] I10.0 **Measure, at index time.** `roughcut/colour.py` `probe_colour(clip)` (camera, transfer, primaries, range, bit depth → the normalise step) and `measure(frame)` → luma
+- [x] I10.0 (`d84082d`) **Measure, at index time.** Built as `colour.probe` + `measure_clip`;
+      **no new journal stage** — the colour file is written right after each proxy (the
+      proxy stage and `ensure_proxies`), which is the same moment and keeps the journal's
+      release rule and its 40 tests untouched; files are the truth, a missing file is
+      measured on the next open. The same commit carries the server contract the lanes
+      build against (`GET /api/colour`, `GET /api/lut/{id}`, `colour` on save,
+      `--colour-dir` to assemble.py). 25 tests. Original item: `roughcut/colour.py` `probe_colour(clip)` (camera, transfer, primaries, range, bit depth → the normalise step) and `measure(frame)` → luma
       percentiles, clip fraction (≥ 98 %), mean chroma, the white reference (fraction,
       L\*, a\*, b\*, mean RGB) — the lab's `measure()`; `sample(clip, every_s=5)` reads the
       **proxy** (statistics do not need 4K) and writes `<stem>.colour.json`; journal stage
