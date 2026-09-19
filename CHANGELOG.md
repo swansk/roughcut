@@ -469,6 +469,64 @@ same commit. Releases move entries into a dated version section.
   overlaps are one pick already, speech needs the shared theme.
 
 ### Changed
+- **Docs:** I9.7 ticked in INTAKE (M9, extend vs roll by height) with the two commits
+  (`60bbb0b` the zones, `f85bca0` the cues), the counts (15 tests; 47 across the four
+  timeline files; suite 459 passed with the music-lane test passing alone) and the lane's
+  decisions: the ⇧ flip as cancel + begin under the new label, the tooltip's signed length
+  change and `the end moves`, the ghost for a right-hand in, the hint's editor-level count
+  and its overlay placement, the cursors, film-order `.tl-first` / `.tl-last`.
+- **Extend vs roll by height, 2 of 2 — the cues (INTAKE M9, I9.7; lane `agent/tl-edges`).**
+  The "seamless" part: what a press would do, shown before the hand commits. Hovering an
+  edge column lights the half under the pointer — classes `.lit .top|.bot .left|.right
+  .ext|.roll` on the column, drawn by the CSS banner at the end of `timeline.css`: an
+  extend in the shot's own hue on its side of the line with `⟶` / `⟵` pointing into the
+  neighbour, a roll as a neutral bar across the cut with `⇄`; `col-resize` for both.
+  Behind an extend a ghost strip (`.tl-edge-ghost`, in the canvas over the lane) outlines
+  the first shot that would move, 0.5 s later — or, when nothing follows the shot, a strip
+  past its out for the film's end — so "the rest moves" is visible before the drag; it
+  goes during the drag, when the real blocks move. A one-line hint (`.tl-hint`, appended
+  inside `#tl` and overlaid in the gap the monitor card leaves under it — its padding and
+  margin — so it costs no layout: a first cut reserved a line, and
+  `test_playing_from_the_inspector_brings_the_monitor_into_view` at 900×380 showed the
+  monitor-plus-timeline fit is a budget those 17 px broke) reads `top edge ·
+  extend or shorten this shot, the rest moves · bottom edge · roll the cut into the next ·
+  ⇧ flips` — at once for the first five cut hovers, counted in `localStorage`
+  `roughcut.tl.edgeHintSeen` (the editor's count, not the page load's), then only after a
+  600 ms dwell. ⇧ while hovering flips the cue live, and during a drag the column follows
+  the drag's mode, so a flip shows on the column as well as in the tooltip. The `?` map's
+  Timeline section gains three rows through the keys lane's table (`tlKeys.KEYS`, then its
+  `renderMap()`): `▲ edge`, `▼ edge`, `⇧ drag`. `tl.trim` gains `HINT_KEY` and a `hover`
+  getter. `test_timeline_trim.py`: a `hover` helper; one test added — the lit classes per
+  half and side, the ghost's left and width against shot 2's block, `.end` on the right
+  quadrant, no ghost on a roll, ⇧ flipping the cue, the hint's text and counter, nothing
+  lit off the column, the dwell after five; the flip test also reads the column's cue.
+  15 tests; the four timeline files 47 passed.
+- **Extend vs roll by height, 1 of 2 — the zones (INTAKE M9, I9.7; lane `agent/tl-edges`).**
+  Karl (2026-09-18): *"extend a clip while offsetting the next instead of cutting into the
+  next … maybe if I do it at the top of the video clip it extends, bottom cuts in?"* Until
+  now which gesture a drag got hung on a few pixels: the block's 8 px edge handle rippled,
+  the 10 px zone over the cut rolled. In `timeline-trim.js` both fold into one edge column
+  per interior cut — `EDGE_PX` 16, centred on the cut line, the lane's full height, four
+  quadrant hit targets (`.tl-edge > .q.t|b.l|r`). Top half: extend or shorten, the rest
+  moves — left of the line the left shot's `out`, right of it the right shot's `in`, a
+  ripple trim through `tl.setRange` so the shot changes length and everything after it
+  slides, one entry labelled `trim`; tooltip `out 3.30s · +0.30s · the rest moves` (`the
+  end moves` when nothing follows; the signed number is the change in the shot's length).
+  Bottom half: today's roll, both `setRange`s in one entry, the film's length held;
+  tooltip `roll · CLIP_A out 3.30s · CLIP_B in 0.70s`. ⇧ flips the mode before or during
+  the drag without letting go: the entry is cancelled (`tl.cancel`) and begun again under
+  the other label, the travel so far re-applied, so the one undo entry says what the drag
+  ended as. The film's first in and last out keep the block's own full-height handle
+  (`.tl-first` / `.tl-last`, set by the module in film order; the interior handles are
+  hidden by CSS). The magnet in both modes, Esc, the 3 px click rule, the `,`/`.` nudges,
+  the monitor's park and pointer capture are unchanged; `tl.trim` gains `EDGE_PX`.
+  `test_timeline_trim.py`: the helpers `out_handle` / `in_handle` resolve an interior edge
+  to the column's top quadrant (the outer edges to the block's handle), `roll_zone` is the
+  column's bottom half, the fixture waits for `.tl-h.in` and `.tl-edge .q.t.l`; five tests
+  added — the top half extends and pushes (shot 2's range untouched, its film start slides,
+  one ⌘Z restores), the bottom half rolls, ⇧ before and during a drag with the labels
+  following, the last out over the whole height with `the end moves`, the tooltips (`+`
+  and `−`). 14 tests; the four timeline files 46 passed.
 - **Docs:** INTAKE's verification log records the inspector's live check on Killington.
 - **Session 14 close-out (docs).** INTAKE M9 ticked through I9.5 with the merge hashes,
   "Where we are" names Karl's look as the next step and the three items deferred from the

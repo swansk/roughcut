@@ -111,15 +111,17 @@
 @keyframes tl-flash { 0% { box-shadow: 0 0 0 2px var(--accent); }
                       100% { box-shadow: 0 0 0 0 transparent; } }
 /* ---- trim (I9.2) */
-/* Handles, roll zones, the snap line, the tooltip, the magnet — timeline-trim.js lays
-   these over the foundation's blocks; nothing above this banner changes for them. */
+/* Handles, the snap line, the tooltip, the magnet — timeline-trim.js lays these over the
+   foundation's blocks; nothing above this banner changes for them. The edge columns over
+   the interior cuts (I9.7) are the banner at the end of this file. */
 #tl .blk .tl-h { position: absolute; top: 0; bottom: 0; width: 8px; cursor: ew-resize;
                  z-index: 2; pointer-events: auto; }
 #tl .blk .tl-h.in { left: 0; }
 #tl .blk .tl-h.out { right: 0; }
-/* an interior edge leaves the cut's own 10 px to the roll zone */
-#tl .blk:not(:first-of-type) .tl-h.in { left: 5px; }
-#tl .blk:not(:last-of-type) .tl-h.out { right: 5px; }
+/* an interior edge is the edge column's (I9.7): a block's own handle shows only at the
+   film's first in and last out — `.tl-first` / `.tl-last`, set by the module in film order */
+#tl .blk:not(.tl-first) .tl-h.in { display: none; }
+#tl .blk:not(.tl-last) .tl-h.out { display: none; }
 #tl .blk .tl-h::after { content: ''; position: absolute; top: 25%; bottom: 25%; width: 2px;
                         background: var(--text); opacity: 0; border-radius: 1px;
                         transition: opacity .12s; }
@@ -127,14 +129,11 @@
 #tl .blk .tl-h.out::after { right: 2px; }
 #tl .blk:hover .tl-h::after, #tl .blk.sel .tl-h::after { opacity: .45; }
 #tl .blk .tl-h:hover::after { opacity: 1; background: var(--accent); }
-#tl .tl-roll { position: absolute; top: 0; bottom: 0; cursor: col-resize; z-index: 3; }
-#tl .tl-roll::after { content: ''; position: absolute; left: 4px; top: 30%; bottom: 30%;
-                      width: 2px; background: var(--accent); opacity: 0; transition: opacity .12s; }
-#tl .tl-roll:hover::after { opacity: .9; }
 #tl .tl-lane.tl-dragging .blk { cursor: inherit; }
 #tl .tl-lane.tl-drag-trim { cursor: ew-resize; }
 #tl .tl-lane.tl-drag-roll { cursor: col-resize; }
 #tl .tl-lane.tl-drag-slip { cursor: grabbing; }
+#tl .tl-lane.tl-drag-edge { cursor: col-resize; }   /* a drag taken from an edge column, either mode */
 /* what there is to snap to, inside the block being dragged */
 #tl .blk .tl-ticks { position: absolute; left: 0; right: 0; bottom: 0; height: 100%;
                      pointer-events: none; }
@@ -254,3 +253,52 @@
                            border: 5px solid transparent; border-top: 6px solid var(--good); border-bottom: 0; }
 #tl .blk.dragging { opacity: .35; }
 .keep.tl-dragsrc, .cand.tl-dragsrc, #tl .avail.tl-dragsrc { opacity: .5; }
+
+/* ---- edges (I9.7) */
+/* The edge column over every interior cut (timeline-trim.js): EDGE_PX wide, centred on the
+   cut line, the lane's full height, split at half — the top half extends or shortens the
+   shot (the rest moves), the bottom half rolls the cut, ⇧ flips. Four quadrants are the hit
+   targets; the cue is drawn on the column from the classes the module sets —
+   `.lit .top|.bot .left|.right .ext|.roll`. --hue-l / --hue-r are the two shots' hues. */
+#tl .tl-edge { position: absolute; top: 0; bottom: 0; z-index: 3; cursor: col-resize; }
+#tl .tl-edge .q { position: absolute; width: 50%; height: 50%; cursor: col-resize; }
+#tl .tl-edge .q.t { top: 0; }
+#tl .tl-edge .q.b { top: 50%; }
+#tl .tl-edge .q.l { left: 0; }
+#tl .tl-edge .q.r { left: 50%; }
+/* the cut line itself, faint until the column is lit */
+#tl .tl-edge::before { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 0;
+                       border-left: 1px solid rgba(255, 255, 255, .14); pointer-events: none; }
+#tl .tl-edge.lit::before { border-left-color: var(--accent); }
+/* the lit half */
+#tl .tl-edge::after { display: none; position: absolute; height: 50%; box-sizing: border-box;
+                      pointer-events: none; font-size: 11px; line-height: 1; color: var(--text);
+                      align-items: center; justify-content: center; }
+#tl .tl-edge.lit::after { display: flex; }
+#tl .tl-edge.lit.top::after { top: 0; }
+#tl .tl-edge.lit.bot::after { top: 50%; }
+/* extend: the shot's own hue on its side of the line, the arrow pointing into the neighbour */
+#tl .tl-edge.lit.ext.left::after { content: '⟶'; right: 50%; width: 18px; border-radius: 3px 0 0 3px;
+                                   background: hsl(var(--hue-l) 45% 58% / .6); }
+#tl .tl-edge.lit.ext.right::after { content: '⟵'; left: 50%; width: 18px; border-radius: 0 3px 3px 0;
+                                    background: hsl(var(--hue-r) 45% 58% / .6); }
+/* roll: a neutral bar across the cut */
+#tl .tl-edge.lit.roll::after { content: '⇄'; left: -4px; right: -4px; border-radius: 3px;
+                               background: rgba(255, 255, 255, .22); border: 1px solid rgba(255, 255, 255, .5); }
+/* the ghost: the first shot an extend would push, drawn GHOST_S later, over the lane;
+   `.end` when nothing follows the shot — the film's end moving instead */
+#tl .tl-edge-ghost { position: absolute; top: calc(var(--tl-ruler) + 5px + var(--tl-above));
+                     height: var(--tl-lane); box-sizing: border-box; border-radius: 4px;
+                     border: 1px dashed hsl(var(--hue) 45% 65% / .75);
+                     background: hsl(var(--hue) 45% 58% / .1); pointer-events: none; z-index: 4; }
+#tl .tl-edge-ghost.end { border-style: dotted; }
+#tl .tl-edge-ghost[hidden] { display: none; }
+/* the one-line hint under the timeline: an overlay in the gap the monitor card leaves under
+   #tl (its 10 px padding, its 12 px margin), never a line of its own — the monitor and its
+   timeline fitting a short window is a budget, and a reserved line broke it at 380 px */
+#tl .tl-hint { position: absolute; left: 0; right: 0; top: calc(100% + 11px); height: 12px;
+               font-size: 10px; line-height: 12px; color: var(--dim); white-space: nowrap;
+               overflow: hidden; text-overflow: ellipsis; visibility: hidden; pointer-events: none;
+               z-index: 8; }
+#tl .tl-hint.on { visibility: visible; }
+#tl .tl-hint b { color: var(--text); font-weight: 600; }
