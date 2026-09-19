@@ -196,6 +196,7 @@ def from_lab(lab: np.ndarray) -> np.ndarray:
 
 WHITE_L, WHITE_C = 62.0, 14.0       # bright and near-neutral: snow, sky, a wall, sand
 WHITE_MIN_FRAC = 0.20               # Karl: outdoor evidence, not one bright patch
+GREY_MAX_CHROMA = 10.0              # the grey-world fallback needs a nearly-grey scene
 CLIP_LEVEL = 0.98
 
 
@@ -250,7 +251,12 @@ def summarise(samples: list[dict]) -> dict:
                         "b": float(np.median([w["b"] for w in whites])),
                         "rgb": [float(np.median([w["rgb"][i] for w in whites])) for i in range(3)]}
         out["white_source"] = "surface"
-    elif out["y_mid"] is not None and out["y_mid"] >= 0.12 and any("grey_rgb" in s for s in samples):
+    elif (out["y_mid"] is not None and out["y_mid"] >= 0.12
+          and out["chroma"] is not None and out["chroma"] < GREY_MAX_CHROMA
+          and any("grey_rgb" in s for s in samples)):
+        # Grey-world only for a scene that is nearly grey already. Copper's airport bar
+        # (chroma 16–26) averaged warm and the fallback cooled it by the whole half-clamp;
+        # a colourful scene gives the auto no evidence, so it stays as shot.
         greys = [s["grey_rgb"] for s in samples if "grey_rgb" in s]
         out["grey_rgb"] = [float(np.median([g[i] for g in greys])) for i in range(3)]
         out["white_source"] = "grey"

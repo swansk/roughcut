@@ -55,6 +55,12 @@ def test_summary_needs_a_white_in_most_samples():
     assert colour.summarise([with_w, without, without])["white_source"] == "grey"
     dark = colour.measure(_frame([0.02, 0.02, 0.02]))
     assert colour.summarise([dark, dark])["white_source"] is None
+    # A colourful scene with no white surface gives the auto no evidence: Copper's
+    # airport bar averaged warm and the grey-world fallback cooled it. Stays as shot.
+    warm = colour.measure(_frame([0.55, 0.40, 0.25]))
+    assert "grey_rgb" in warm and warm["chroma"] > colour.GREY_MAX_CHROMA
+    assert colour.summarise([warm, warm])["white_source"] is None
+    assert colour.balance_params(colour.summarise([warm, warm]), "gopro") is None
 
 
 # ------------------------------------------------------------------ balance

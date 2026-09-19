@@ -10,6 +10,12 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The grey-world fallback needs a nearly-grey scene (INTAKE M10, `colour.GREY_MAX_CHROMA`
+  = 10).** Measured on Copper: the ski clips find a snow white reference and the auto nudges
+  them ×0.99–1.16; the night and indoor clips stay as shot; but the daylight airport-bar
+  clips (chroma 16–26) fell to the grey-world fallback and were cooled by the whole
+  half-clamp — Karl's "auto WB fails indoors" case. A colourful scene now gives the auto no
+  evidence and renders as shot. One test added (a warm frame → no balance).
 - **I10.0 ticked in INTAKE (`d84082d`)** with the decision that colour has no journal stage
   (measured right after each proxy; files are the truth), and the looks library's first
   manifest: `assets/looks/manifest.json` with `soft`, `punchy` and `cold` beside the three
