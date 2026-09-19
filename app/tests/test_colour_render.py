@@ -96,6 +96,14 @@ def colour_dir(project, tmp_path_factory) -> Path:
         p = project["footage"] / f"{stem}.MP4"
         cc = colour.measure_clip(p, every_s=0.5, width=64, clip_probe=colour.probe(p))
         cc["clip"] = f"{stem}.MP4"
+        # The test pattern is colourful with no white surface, so the auto would have
+        # no evidence (`colour.GREY_MAX_CHROMA`) and stay as shot. Give every sample the
+        # facts of an overcast snow frame instead — a bright, slightly blue white
+        # reference — so the balance is the real thing (`surface`) at the sample times
+        # the clip actually has.
+        snow = colour.measure(np.full((36, 64, 3), [0.62, 0.64, 0.72], np.float32))
+        cc["samples"] = [{**snow, "t": s["t"]} for s in cc["samples"]]
+        cc["summary"] = colour.summarise(cc["samples"])
         (d / f"{stem}.colour.json").write_text(json.dumps(cc), encoding="utf-8")
     return d
 
@@ -117,7 +125,7 @@ def test_auto_with_a_look_bakes_a_cube_and_moves_the_picture(project, colour_dir
     log = _render(_edl(TWO_SHOTS, {"mode": "auto", "look": "alpine", "strength": 0.5}),
                   tmp_path / "graded.json", graded, project, colour_dir, parts)
     assert (parts / "part_000.cube").exists() and (parts / "part_001.cube").exists()
-    assert "balance grey" in log and "look alpine 0.50" in log, log
+    assert "balance surface" in log and "look alpine 0.50" in log, log
     assert _duration(graded) == pytest.approx(4.0, abs=0.15)
 
     off = tmp_path / "off.mp4"
@@ -128,7 +136,11 @@ def test_auto_with_a_look_bakes_a_cube_and_moves_the_picture(project, colour_dir
             project, colour_dir, tmp_path / "parts_balance")
 
     y_off, y_bal, y_graded = _yavg(off), _yavg(balance), _yavg(graded)
-    assert abs(y_bal - y_off) > 1, (y_bal, y_off)            # the balance reached the pixels
+    # The balance reached the pixels: on the bright test pattern the exposure lift
+    # and the shoulder nearly cancel in mean luma (measured: −0.77), so the pixel
+    # hash carries the claim and luma only has to move at all.
+    assert _video_md5(balance) != _video_md5(off)
+    assert abs(y_bal - y_off) > 0.3, (y_bal, y_off)
     assert abs(y_graded - y_bal) > 1, (y_graded, y_bal)      # the look did too
     sat_off = float(np.mean(_stat(off, "SATAVG")))
     sat_graded = float(np.mean(_stat(graded, "SATAVG")))

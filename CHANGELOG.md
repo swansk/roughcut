@@ -10,6 +10,11 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **`test_colour_render.py` measures a real balance.** After the grey-scene rule the test
+  pattern (colourful, no white surface) gave the auto no evidence, so the fixture now
+  stamps every sample with the facts of an overcast snow frame; the balance is `surface`
+  and the pixel hash carries the "reached the pixels" claim (mean luma moves only 0.77
+  on the bright pattern because the shoulder and the lift nearly cancel).
 - **The grey-world fallback needs a nearly-grey scene (INTAKE M10, `colour.GREY_MAX_CHROMA`
   = 10).** Measured on Copper: the ski clips find a snow white reference and the auto nudges
   them ×0.99–1.16; the night and indoor clips stay as shot; but the daylight airport-bar
