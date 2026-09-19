@@ -458,6 +458,12 @@ same commit. Releases move entries into a dated version section.
   overlaps are one pick already, speech needs the shared theme.
 
 ### Changed
+- **Docs:** I9.7 ticked in INTAKE (M9, extend vs roll by height) with the two commits
+  (`60bbb0b` the zones, `f85bca0` the cues), the counts (15 tests; 47 across the four
+  timeline files; suite 459 passed with the music-lane test passing alone) and the lane's
+  decisions: the ⇧ flip as cancel + begin under the new label, the tooltip's signed length
+  change and `the end moves`, the ghost for a right-hand in, the hint's editor-level count
+  and its overlay placement, the cursors, film-order `.tl-first` / `.tl-last`.
 - **Extend vs roll by height, 2 of 2 — the cues (INTAKE M9, I9.7; lane `agent/tl-edges`).**
   The "seamless" part: what a press would do, shown before the hand commits. Hovering an
   edge column lights the half under the pointer — classes `.lit .top|.bot .left|.right

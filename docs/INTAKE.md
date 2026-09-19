@@ -607,16 +607,33 @@ and effects derive from it at render.
       a `tl.reveal(id)` (the module's own keepInView for a block) would let `scrollSel` avoid
       `scrollIntoView` on the page.
 - [ ] I9.6 Live on Killington: Karl's look.
-- [ ] I9.7 **Extend vs roll by height (lane `agent/tl-edges`; Karl, 2026-09-18: *"extend a
-      clip while offsetting the next instead of cutting into the next … maybe if I do it at
-      the top of the video clip it extends, bottom cuts in?"*):** at every interior cut one
-      edge column, 16 px centred on the cut line, the lane's full height, split at half —
-      the top half extends or shortens the shot and the rest of the film moves (left of the
-      line the left shot's out, right of it the right shot's in), the bottom half rolls the
-      cut into the neighbour, ⇧ flips before or during the drag; the film's first in and
-      last out keep a full-height handle; the hover cue (the shot's hue and an arrow, or a
-      bar across the cut), the ghost of the pushed shot, the one-line hint under the
-      timeline. Two commits: the zones, the cues.
+- [x] I9.7 **Extend vs roll by height (lane `agent/tl-edges`, commits `60bbb0b` the zones,
+      `f85bca0` the cues; `test_timeline_trim.py` 15 tests, the four timeline files 47
+      passed, suite 459 passed + the music-lane test passing alone; Karl, 2026-09-18:
+      *"extend a clip while offsetting the next instead of cutting into the next … maybe if
+      I do it at the top of the video clip it extends, bottom cuts in?"*):** at every
+      interior cut one edge column in `timeline-trim.js`, 16 px centred on the cut line, the
+      lane's full height, split at half — the top half extends or shortens the shot and the
+      rest of the film moves (left of the line the left shot's out, right of it the right
+      shot's in; `tl.setRange`, entry `trim`, tooltip `out 3.30s · +0.30s · the rest
+      moves`), the bottom half rolls the cut into the neighbour (entry `roll`, tooltip
+      `roll · CLIP_A out 3.30s · CLIP_B in 0.70s`), ⇧ flips before or during the drag; the
+      film's first in and last out keep the block's full-height handle; hovering lights the
+      half under the pointer (the shot's hue with an arrow into the neighbour, or a neutral
+      bar across the cut), a ghost of the first shot that would move sits 0.5 s later, a
+      one-line hint under the timeline names the halves (at once for five cut hovers, then
+      on a 600 ms dwell); the `?` map gains `▲ edge`, `▼ edge`, `⇧ drag`. Decided by the
+      lane: a ⇧ flip cancels the entry and begins it again under the other label, so the one
+      undo entry says what the drag ended as; the tooltip's signed number is the change in
+      the shot's length (`+` extended, `−` shortened) and reads `the end moves` when nothing
+      follows the shot; the tooltips keep the module's `3.30s` spelling; for the right
+      shot's in the ghost is the shot after it, or the film's end; the hint's count is the
+      editor's (localStorage), not the page load's; the hint overlays the gap the monitor
+      card leaves under `#tl` instead of taking a line — a reserved line broke the
+      short-window fit of the monitor and its timeline (`test_ui_flow`, 900×380); the outer
+      handles keep `ew-resize`, a column drag `col-resize`. The foundation lacked nothing
+      this needed; the interior handles are hidden by CSS on `.tl-first` / `.tl-last`
+      classes the module sets in film order (`data-i`), never by DOM order.
 
 ## Lanes in flight
 
