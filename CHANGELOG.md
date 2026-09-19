@@ -20,6 +20,22 @@ same commit. Releases move entries into a dated version section.
   (measured right after each proxy; files are the truth), and the looks library's first
   manifest: `assets/looks/manifest.json` with `soft`, `punchy` and `cold` beside the three
   formula looks in the code; `assets/README.md` says how a `.cube` joins it.
+- **The grade reaches the render (INTAKE M10, I10.1 + the render half of I10.3).**
+  `research/tools/assemble.py` resolves every shot's colour the way the board's inspector
+  does (`colour.resolve_shot` over `--colour-dir/<stem>.colour.json`, the film's
+  `colour.reference` shot first, else the first measured shot; `previous` for `match`),
+  bakes one 33³ `part_NNN.cube` per graded shot next to its part and applies it with the
+  explicit-range `lut_vf` chain inside the part's own `-vf` — no extra generation. An HDR
+  source (iPhone HLG) is tone mapped to SDR 709 *before* the scale whatever `colour.mode`
+  says (normalising is not a grade); every part is tagged `tv`/bt709 so the concat sees
+  identical streams (verified pixel-identical on ffmpeg 7.0.2); the render log gets one
+  `colour:` line per part (`balance grey ×1.03 · look alpine 0.50`, `as shot`,
+  `· normalised hlg`). `--colour-dir` absent or a clip unmeasured → look only, no balance.
+  Script deps gain numpy. Tests: `test_colour_render.py` (5): auto + alpine bakes cubes and
+  moves luma per stage and saturation overall; `mode: off` is byte-identical to the pre-M10
+  render (no block + no colour dir) while no block *with* colour files is the auto
+  (decision 5); an HLG shot under `mode: off` lands bt709/tv with YMAX ≤ 235; a per-shot
+  look override bakes only that shot; a `.cube` look from a manifest inverts the picture.
 - **The colour core and its server wiring (INTAKE M10, I10.0 and the contract for
   I10.1–I10.4).** `roughcut/colour.py`: the probe (pixel format, bit depth, transfer,
   primaries, range, rotation, camera family from the tags), `normalise_vf` (HLG/PQ → SDR
