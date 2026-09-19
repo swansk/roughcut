@@ -210,6 +210,9 @@ def main() -> int:
                          "`effects_music.asset`")
     ap.add_argument("--assets", type=Path, default=None,
                     help="root for relative asset paths (see docs/EFFECTS.md)")
+    ap.add_argument("--colour-dir", type=Path, default=None,
+                    help="per-clip colour files (<stem>.colour.json, INTAKE M10); the "
+                         "EDL's `colour` block is resolved against them per shot")
     ap.add_argument("--parts-dir", type=Path, default=None,
                     help="write the per-segment parts here instead of a temp dir, so "
                          "a caller can count them as progress")

@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["fastapi>=0.115", "uvicorn>=0.30"]
+# dependencies = ["fastapi>=0.115", "uvicorn>=0.30", "numpy>=2"]
 # ///
 """Roughcut cut board — the human's half of the loop, as a local web app.
 
@@ -126,6 +126,171 @@ def api_job(job: str) -> JSONResponse:
     raise HTTPException(404, "no such job")
 
 
+# ---------------------------------------------------------------- colour (INTAKE M10)
+#
+# Per-clip colour files live under work/colour/<bin>/<stem>.colour.json — per bin like
+# the proxies, because colour state is per project (Karl) and never carried over. They
+# are measured from the proxy right after it is built (statistics do not need 4K), so
+# there is no new journal stage: files are the truth, `measure_colour` is idempotent.
+
+from roughcut import colour as colourmod
+
+COLOUR_EVERY_S = 5.0
+
+
+def colour_dir() -> Path:
+    d = STATE.get("colour_dir") or (STATE["work"] / "colour" / STATE["footage"].name)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def colour_file(clip: str) -> Path:
+    return colour_dir() / f"{Path(clip).stem}.colour.json"
+
+
+def clip_probe(clip: str) -> dict | None:
+    """The colour tags of a source clip, cached per process: ffprobe once, not once
+    per poll."""
+    cache = STATE.setdefault("probes", {})
+    if clip not in cache:
+        src = STATE["footage"] / clip
+        try:
+            cache[clip] = colourmod.probe(src) if src.exists() else None
+        except RuntimeError:
+            cache[clip] = None
+    return cache[clip]
+
+
+def measure_colour(clip: str, force: bool = False) -> dict | None:
+    """Write (or read) the clip's colour file. Reads the proxy when it exists — it is
+    SDR already, `build_proxy` normalised an HDR source — and the master otherwise,
+    with the normalise applied on the way in."""
+    out = colour_file(clip)
+    if out.exists() and not force:
+        try:
+            return json.loads(out.read_text(encoding="utf-8"))
+        except ValueError:
+            pass
+    p = clip_probe(clip)
+    src = STATE["footage"] / clip
+    proxy = STATE["proxy_dir"] / f"{Path(clip).stem}.mp4"
+    if proxy.exists():
+        d = colourmod.measure_clip(proxy, COLOUR_EVERY_S, clip_probe=p, normalise=None)
+    elif src.exists():
+        d = colourmod.measure_clip(src, COLOUR_EVERY_S, clip_probe=p,
+                                   normalise=colourmod.normalise_vf(p or {}))
+    else:
+        return None
+    d["clip"] = clip
+    tmp = out.with_suffix(f".{os.getpid()}.part.json")
+    tmp.write_text(json.dumps(d), encoding="utf-8")
+    tmp.replace(out)
+    return d
+
+
+def load_colour(clip: str) -> dict | None:
+    p = colour_file(clip)
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except ValueError:
+        return None
+
+
+def looks_library() -> dict[str, dict]:
+    return colourmod.load_looks(STATE.get("assets"))
+
+
+def resolve_colour(edl: dict) -> list[dict]:
+    """Every shot's resolved colour, in film order, without the callable — what the
+    inspector shows and what `/api/lut` bakes. The reference shot is the film's
+    `colour.reference`, else the first shot; `match: previous` sees the shot before."""
+    looks = looks_library()
+    segs = edl.get("segments", [])
+    ref_id = (edl.get("colour") or {}).get("reference")
+    order = list(segs)
+    if ref_id:
+        order.sort(key=lambda s: 0 if s.get("id") == ref_id else 1)   # reference first
+    resolved: dict[str, dict] = {}
+    reference = previous = None
+    for s in order:
+        res = colourmod.resolve_shot(edl, s, load_colour(s["clip"]), looks,
+                                     reference=reference, previous=previous)
+        ctx = colourmod.shot_context(res)
+        if reference is None and ctx:
+            reference = ctx
+        previous = ctx or previous
+        resolved[s.get("id") or ""] = res
+    out = []
+    for s in segs:
+        res = resolved.get(s.get("id") or "")
+        if not res:
+            continue
+        summ = res.get("summary") or {}
+        out.append({k: res[k] for k in ("id", "balance", "match", "look", "strength",
+                                        "family", "identity")}
+                   | {"clip": s["clip"],
+                      "witness": {"white_source": summ.get("white_source"),
+                                  "white": summ.get("white"), "clip": summ.get("clip"),
+                                  "y_mid": summ.get("y_mid"), "chroma": summ.get("chroma"),
+                                  "n": summ.get("n", 0)}})
+    return out
+
+
+def shot_fn(edl: dict, sid: str):
+    """The composed mapping for one shot id, or None when the id is not in the cut."""
+    looks = looks_library()
+    segs = edl.get("segments", [])
+    ref_id = (edl.get("colour") or {}).get("reference")
+    reference = previous = None
+    for s in sorted(segs, key=lambda s: 0 if ref_id and s.get("id") == ref_id else 1):
+        res = colourmod.resolve_shot(edl, s, load_colour(s["clip"]), looks,
+                                     reference=reference, previous=previous)
+        if s.get("id") == sid:
+            return res
+        ctx = colourmod.shot_context(res)
+        if reference is None and ctx:
+            reference = ctx
+        previous = ctx or previous
+    return None
+
+
+@app.get("/api/colour")
+def api_colour() -> JSONResponse:
+    edl = read_edl()
+    ensure_segment_ids(edl)
+    looks = looks_library()
+    return JSONResponse({
+        "film": edl.get("colour") or {},
+        "looks": [{"name": k, "kind": v["kind"], "description": v.get("description", ""),
+                   **({"error": v["error"]} if v.get("error") else {})}
+                  for k, v in looks.items()],
+        "shots": resolve_colour(edl),
+        "clips": {c: {"measured": colour_file(c).exists(),
+                      "family": (clip_probe(c) or {}).get("family"),
+                      "hdr": (clip_probe(c) or {}).get("hdr")}
+                  for c in footage_clips()},
+    })
+
+
+@app.get("/api/lut/{sid}")
+def api_lut(sid: str, n: int = 17) -> JSONResponse:
+    """The shot's LUT as a flat float table in .cube order (red fastest), for the
+    monitor's WebGL shader. 17³ is within 0.1 dB of 33³ (the lab); the render bakes
+    its own 33³ from the same function."""
+    n = max(2, min(int(n), 33))
+    edl = read_edl()
+    ensure_segment_ids(edl)
+    res = shot_fn(edl, sid)
+    if res is None:
+        raise HTTPException(404, f"no shot {sid}")
+    table = colourmod.cube_table(res["fn"], n)
+    return JSONResponse({"id": sid, "size": n, "identity": res["identity"],
+                         "look": res["look"], "strength": res["strength"],
+                         "table": [round(float(v), 5) for v in table.reshape(-1)]})
+
+
 # ---------------------------------------------------------------- proxies
 
 
@@ -143,11 +308,21 @@ def build_proxy(src: Path, dest: Path, orient: str) -> None:
         # Same lesson as assemble.py: -noautorotate leaves the display matrix on the
         # output, and a proxy that plays sideways in the UI is worse than no proxy.
         cmd += ["-display_rotation", "0"]
+    # An HDR source (an iPhone shooting HLG by default) is tone mapped to SDR 709 on
+    # the way into the proxy, from its own tags: an HLG proxy plays dark and washed in
+    # the monitor, and every measurement downstream expects SDR (INTAKE M10).
+    try:
+        norm = colourmod.normalise_vf(colourmod.probe(src))
+    except RuntimeError:
+        norm = None
+    vf = f"scale=min({PROXY_W}\\,iw):-2"
+    if norm:
+        vf = f"{norm},{vf}"
     cmd += [
         "-i", str(src), "-map", "0:v:0", "-map", "0:a:0", "-dn",
         # Capped by width so a source smaller than the target is left alone rather
         # than upscaled into a bigger file that carries no more detail.
-        "-vf", f"scale=min({PROXY_W}\\,iw):-2", "-c:v", "libx264", "-preset", "veryfast",
+        "-vf", vf, "-c:v", "libx264", "-preset", "veryfast",
         "-crf", str(PROXY_CRF), "-c:a", "aac", "-b:a", "128k",
         "-write_tmcd", "0", "-movflags", "+faststart", str(tmp),
     ]
@@ -189,6 +364,14 @@ def ensure_proxies(clips: list[str], progress=None) -> None:
         report(i)
     STATE["proxies_ready"] = True
     print("proxies ready", flush=True)
+    # Colour is measured from the proxies once they exist — a couple of seconds per
+    # clip at 720p — so a bin opened before M10 gets its colour files on first open.
+    for clip in clips:
+        if not colour_file(clip).exists():
+            try:
+                measure_colour(clip)
+            except RuntimeError as exc:
+                print(f"  !! colour: {clip}: {exc}", flush=True)
 
 
 # ---------------------------------------------------------------- project io
@@ -489,6 +672,8 @@ def project_payload() -> dict:
         "edl_path": str(STATE["edl"]),
         "cut": cut_name_of(edl, STATE["edl"]),
         "music": edl.get("effects_music"),
+        # The film's colour block (INTAKE M10); the per-shot resolution is /api/colour.
+        "colour": edl.get("colour") or {},
     }
 
 
@@ -560,6 +745,18 @@ async def api_save(request: Request) -> JSONResponse:
     # segment is: an asset that is not in the library, or a gain outside range, is a 400
     # and nothing is written. A body that does not mention music leaves it alone; an
     # explicit null removes it.
+    # Colour (INTAKE M10) is validated the same way: an unknown mode or look, an
+    # override outside the vocabulary, is a 400 and nothing is written. Absent leaves
+    # it alone; an explicit null or empty object removes it.
+    if "colour" in body:
+        try:
+            spec = colourmod.validate_colour(body["colour"], looks_library())
+        except ValueError as exc:
+            raise HTTPException(400, f"colour: {exc}")
+        if spec:
+            edl["colour"] = spec
+        else:
+            edl.pop("colour", None)
     if "music" in body:
         music = body["music"]
         if music:
@@ -2038,6 +2235,7 @@ def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
         return 0.0
     if stage == "proxy":
         build_proxy(src, STATE["proxy_dir"] / f"{stem}.mp4", STATE["orient"])
+        measure_colour(clip, force=True)      # the proxy is the colour file's source
         STATE["proxies_ready"] = all(
             (STATE["proxy_dir"] / f"{Path(c).stem}.mp4").exists() for c in footage_clips())
         return 0.0
@@ -2393,6 +2591,7 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
     cmd = ["uv", "run", "--quiet", str(TOOLS / "assemble.py"), str(edl_path),
            "--footage", str(STATE["footage"]), "--sidecars", str(STATE["sidecars"]),
            "--assets", str(STATE["assets"]), "--profile", meta.get("profile", "preview"),
+           "--colour-dir", str(colour_dir()),
            "--parts-dir", str(parts_dir), "-o", str(out_path)]
 
     # Same shape as the audio pass: a ticker counting finished parts on disk, so the
@@ -3520,6 +3719,8 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
         # like the proxies they come from, and disposable: every one of them is a
         # seek and a single frame, rebuilt on demand when the folder is not there.
         "posters": work / "posters" / footage.name,
+        # Per-clip colour files (INTAKE M10): per bin, because colour is per project.
+        "colour_dir": work / "colour" / footage.name,
         # Per-bin for the same reason as proxies, and because a fresh project that
         # opens claiming "1 version" and plays another trip's cut in the A slot is
         # worse than showing nothing.
@@ -3529,6 +3730,7 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
         # folder costs one re-encode per version and nothing else.
         "reviews": work / "reviews" / footage.name,
         "proxies_ready": False, "edl_created": created,
+        "probes": {},                        # clip_probe's cache: per bin, like the rest
     })
     STATE["sidecars"].mkdir(parents=True, exist_ok=True)
     if created:

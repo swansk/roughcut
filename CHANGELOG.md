@@ -10,6 +10,26 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The colour core and its server wiring (INTAKE M10, I10.0 and the contract for
+  I10.1–I10.4).** `roughcut/colour.py`: the probe (pixel format, bit depth, transfer,
+  primaries, range, rotation, camera family from the tags), `normalise_vf` (HLG/PQ → SDR
+  709 limited by zscale + Hable, input tags stated), `sample_frames` / `measure` /
+  `summarise` / `measure_clip` (luma percentiles, clipped fraction, chroma, the white
+  reference — bright near-neutral ≥ 20 % of the frame — or the shades-of-grey fallback),
+  `balance_params` clamped per camera family with the shoulder that never adds clipping,
+  `match_params` (Lab means toward a reference, spread clamped 0.85–1.15), three formula
+  looks + `load_looks` over `assets/looks/manifest.json` (`.cube` drop-ins, broken entries
+  reported not raised), `bake_grid` / `cube_table` / `write_cube` / `read_cube` /
+  `apply_cube`, `lut_vf` (the explicit-range chain that passes the grey self-test),
+  `validate_colour` (the EDL's `colour` block: mode, look, strength, reference, per-shot
+  overrides keyed by id) and `resolve_shot` (balance → match → look at strength, one
+  callable per shot). Server: per-clip colour files under `work/colour/<bin>/` measured
+  from each proxy as it is built (no new journal stage — files are the truth), an HDR
+  source normalised into its proxy, `GET /api/colour` (looks, every shot resolved with its
+  witness), `GET /api/lut/{id}` (a 17³ table for the monitor), `PUT /api/project` accepting
+  `colour` validated like music, `--colour-dir` passed to assemble.py. Tests:
+  `test_colour.py` (20, the lab's numbers pinned: 45 dB lut3d parity, grey 128 → 126, an
+  HLG lavfi clip normalised to SDR) and `test_colour_api.py` (5). numpy joins the deps.
 - **INTAKE M10 takes Karl's two constraints:** colour state is per project (per-clip
   measurements, per-shot auto, look/reference in the EDL, a white reference that does
   not assume snow with a shades-of-grey fallback, clamps per camera family), and mixed

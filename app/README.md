@@ -195,13 +195,13 @@ Keys: `j`/`k` move · `space` play / pause the cut from here · `enter` play thi
 
 ```
 # API layer — no browser needed, runs anywhere
-uv run --with pytest --with fastapi --with uvicorn --with httpx pytest app/tests -q
+uv run --with pytest --with fastapi --with uvicorn --with httpx --with numpy pytest app/tests -q
 
 # plus the browser layer (skipped automatically if playwright is absent)
 uv run --with playwright playwright install chromium
 bash app/tests/install_browser_deps.sh     # no-sudo system libs, one-off
 source app/tests/browser_env.sh
-uv run --with pytest --with fastapi --with uvicorn --with httpx --with playwright \
+uv run --with pytest --with fastapi --with uvicorn --with httpx --with numpy --with playwright \
     pytest app/tests -q
 ```
 
