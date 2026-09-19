@@ -357,6 +357,38 @@ function buildShot(seg) {
         <button data-act="ask" title="Ask for a change to this one shot — a scoped model call, seconds rather than minutes">✎ ask about this shot</button>
         <button data-act="del" class="ghost" title="remove this shot from the cut (undoable)">remove</button>
       </div>
+      <div class="colour">
+        <div class="crow">
+          <span class="clabel">colour</span>
+          <span class="witness"></span>
+        </div>
+        <div class="crow">
+          <label title="the auto balance for this shot (unchecked: as shot)"><input type="checkbox" class="cauto"> auto</label>
+          <select class="clook" title="this shot's look — the film's unless set here"></select>
+          <input type="range" class="cstrength" min="0" max="1" step="0.05" title="look strength for this shot">
+          <span class="cstrengthVal"></span>
+        </div>
+        <div class="crow">
+          <button data-act="cwarm" title="warmer: red gain +2 %, blue −2 % on the shot's balance">warmer</button>
+          <button data-act="ccool" title="cooler: red gain −2 %, blue +2 %">cooler</button>
+          <button data-act="cbright" title="exposure +0.05">brighter</button>
+          <button data-act="cdark" title="exposure −0.05">darker</button>
+          <button data-act="creset" class="ghost" title="drop the hand balance — back to the auto">reset</button>
+          <button data-act="cmatchprev" title="match this shot's colour to the shot before it (again: off)">match ← previous</button>
+          <button data-act="cmatchref" title="match this shot's colour to the film's reference shot (again: off)">match ← reference</button>
+          <button data-act="csetref" title="make this the shot others match to (again: none)">set as reference</button>
+        </div>
+        <div class="crow film">
+          <span class="clabel">film</span>
+          <select class="cmode" title="auto: every shot balanced from its white reference · off: the camera's picture">
+            <option value="auto">auto</option>
+            <option value="off">off</option>
+          </select>
+          <select class="cfilmlook" title="the look over the whole film"></select>
+          <input type="range" class="cfilmstrength" min="0" max="1" step="0.05" title="the film look's strength">
+          <span class="cfilmstrengthVal"></span>
+        </div>
+      </div>
       <div class="shotAsk" hidden>
         <textarea class="shotNote"
           placeholder="what should change in this shot — start later · hold through the reaction · just keep the punchline"></textarea>
@@ -377,6 +409,7 @@ function buildShot(seg) {
   el.querySelector('.shotNote').addEventListener('input', (ev) => {
     shotAskDraft.set(seg, ev.target.value);
   });
+  bindColour(el, seg);
   return el;
 }
 
@@ -467,6 +500,8 @@ function fillShot(box, seg) {
   askBox.hidden = !shotAskOpen.has(seg);
   const note = q('.shotNote');
   if (document.activeElement !== note) note.value = shotAskDraft.get(seg) || '';
+
+  fillColour(box, seg);
 }
 
 function renderInspector() {
@@ -528,6 +563,7 @@ function onInspectorClick(e) {
     ask({ note, focus: i, button: b, state: $('#inspector .shotState') });
     return;
   }
+  if (act && act.startsWith('c') && onColourAct(act, seg)) return;
   // Anything else is a trim button carrying data-d; a button without one must not
   // fall through with NaN.
   if (!('d' in b.dataset)) return;
@@ -547,6 +583,238 @@ function nudge(i, edge, d) {
   seg.in = Math.round(seg.in * 100) / 100;
   seg.out = Math.round(seg.out * 100) / 100;
   if (edge === 'in') refreshPosters();   // debounced: one frame per trim, not per press
+}
+
+/* ------------------------------------------------------------ colour (INTAKE M10, I10.4)
+ *
+ * The film's `colour` block is the EDL's, kept here and sent with every save — the same
+ * body as the segments, the story and the music; there is no second save path. What the
+ * inspector shows for a shot (the witness numbers, the resolved balance, look and
+ * strength) is the server's word from GET /api/colour, refetched after every save,
+ * because a trim re-derives the auto and a nudge changes what the monitor's LUT bakes.
+ * `colour` itself is never overwritten from the server: the server normalises the block
+ * (fills look: null, strength 0.5) but does not change its meaning, and a change made
+ * while a save was in flight must not be lost to the reply.
+ *
+ * Nothing here is on the undo stack: like the music, a colour change is a setting, not
+ * an edit of the cut, and `reset` is one click. */
+let colour = {};              // the EDL's colour block: {mode, look, strength, reference, shots}
+let C = null;                 // GET /api/colour: {film, looks, shots, clips}
+
+/* /grade.js's API, or null when it did not load. Checked by shape, not by truthiness:
+ * an element with an id is reachable as window.<id>, so a bare `window.grade` can be
+ * an element rather than the module — and the board must paint without the grade. */
+function gradeApi() {
+  const g = window.grade;
+  return g && typeof g.setShot === 'function' ? g : null;
+}
+
+const NUDGE_GAIN = 0.02, NUDGE_EXPOSURE = 0.05;
+const DEFAULT_BALANCE = { gain: [1, 1, 1], exposure: 1, knee: 0.8, lift: 0 };
+
+function colourShot(id) {
+  return C && C.shots ? C.shots.find((s) => s.id === id) : undefined;
+}
+
+function shotOverride(id, create = false) {
+  if (!colour.shots) { if (!create) return undefined; colour.shots = {}; }
+  if (!colour.shots[id] && create) colour.shots[id] = {};
+  return colour.shots[id];
+}
+
+/* Drop empty overrides so the saved block says only what was set. */
+function tidyColour() {
+  if (colour.shots) {
+    for (const [id, o] of Object.entries(colour.shots)) {
+      if (!o || !Object.keys(o).length) delete colour.shots[id];
+    }
+    if (!Object.keys(colour.shots).length) delete colour.shots;
+  }
+}
+
+async function refreshColour() {
+  try {
+    C = await (await fetch('/api/colour')).json();
+  } catch (e) { return; }
+  const box = $('#inspector');
+  const seg = inspecting && typeof inspecting === 'object' ? inspecting : null;   // boot: nothing mounted yet
+  if (seg && box.querySelector('.colour')) fillColour(box, seg);
+  const g = gradeApi();
+  if (g) g.invalidate();
+}
+
+/* One change to the block: keep the block tidy, save through the one path (touch's
+ * debounce coalesces a slider's steps), and show the change at once — the witness and
+ * the monitor catch up when the save's refetch lands. */
+function colourChanged() {
+  tidyColour();
+  const seg = inspected();
+  if (seg) fillColour($('#inspector'), seg);
+  touch();
+}
+
+const fmtGain = (g) => `${g >= 1 ? '+' : ''}${Math.round((g - 1) * 100)}%`;
+
+/* The witness: what the auto saw and what it did — or that a hand did it instead. */
+function witnessLine(shot) {
+  if (!shot) return 'not measured · as shot';
+  const w = shot.witness || {};
+  const bal = shot.balance;
+  const parts = [];
+  if (bal && bal.source === 'hand') {
+    parts.push('hand-set',
+      `gain r ${fmtGain(bal.gain[0])} b ${fmtGain(bal.gain[2])}`,
+      `×${Number(bal.exposure).toFixed(2)}`);
+  } else if (!w.n) {
+    parts.push('not measured', 'as shot');
+  } else if (w.white_source === 'surface' && w.white) {
+    parts.push('white: surface', `L ${Math.round(w.white.L)}`,
+      `cast b ${w.white.b >= 0 ? '+' : '−'}${Math.abs(w.white.b).toFixed(1)}`);
+    parts.push(bal ? `auto ×${Number(bal.exposure).toFixed(2)}` : 'as shot');
+  } else if (w.white_source === 'grey') {
+    parts.push('white: grey-world');
+    parts.push(bal ? `auto ×${Number(bal.exposure).toFixed(2)}` : 'as shot');
+  } else {
+    parts.push('no white reference', 'as shot');
+  }
+  if (w.clip > 0.005) parts.push(`clipped ${(w.clip * 100).toFixed(1)}%`);
+  if (shot.match) {
+    const o = shotOverride(shot.id) || {};
+    parts.push(`matched ← ${o.match || 'reference'}`);
+  }
+  return parts.join(' · ');
+}
+
+/* The look select's options: the first is the fallback (the film's look for a shot;
+ * "no look" for the film), a shot also gets "none" to switch its look off alone, then
+ * every look in the library — a broken manifest entry disabled with its reason. */
+function lookOptions(sel, firstLabel, withNone) {
+  const looks = (C && C.looks) || [];
+  const key = firstLabel + '|' + looks.map((l) => `${l.name}:${l.kind}`).join(',');
+  if (sel.dataset.key === key) return;
+  sel.dataset.key = key;
+  sel.innerHTML = `<option value="">${escapeHtml(firstLabel)}</option>`
+    + (withNone ? '<option value="none">none</option>' : '')
+    + looks.map((l) => l.kind === 'broken'
+      ? `<option value="${escapeHtml(l.name)}" disabled title="${escapeHtml(l.error || 'broken')}">${escapeHtml(l.name)} — broken: ${escapeHtml(l.error || '')}</option>`
+      : `<option value="${escapeHtml(l.name)}" title="${escapeHtml(l.description || '')}">${escapeHtml(l.name)}</option>`).join('');
+}
+
+const setIfIdle = (el, v) => { if (document.activeElement !== el && el.value !== String(v)) el.value = v; };
+
+/* Fill the shot's Colour block in place — nothing here rebuilds the inspector, so a why
+ * being typed is not interrupted. */
+function fillColour(box, seg) {
+  const q = (s) => box.querySelector(s);
+  const blk = q('.colour');
+  if (!blk) return;
+  const id = seg.id;
+  const shot = colourShot(id);
+  const over = shotOverride(id) || {};
+  const w = q('.witness');
+  w.textContent = witnessLine(shot);
+  w.classList.toggle('hand', !!(shot && shot.balance && shot.balance.source === 'hand'));
+
+  const auto = q('.cauto');
+  auto.checked = over.auto !== false;
+  auto.disabled = colour.mode === 'off' || !!over.balance;
+  auto.title = colour.mode === 'off' ? 'the film is off: no auto on any shot'
+    : over.balance ? 'a hand balance is set — reset it to go back to the auto'
+      : 'the auto balance for this shot (unchecked: as shot)';
+
+  const filmLook = colour.look ? colour.look : 'none';
+  lookOptions(q('.clook'), `— film's (${filmLook})`, true);
+  setIfIdle(q('.clook'), 'look' in over ? (over.look || 'none') : '');
+  const strength = 'strength' in over ? over.strength
+    : shot ? shot.strength : (colour.strength ?? 0.5);
+  setIfIdle(q('.cstrength'), strength);
+  q('.cstrengthVal').textContent = Number(strength).toFixed(2);
+
+  q('[data-act="cmatchprev"]').classList.toggle('on', over.match === 'previous');
+  q('[data-act="cmatchref"]').classList.toggle('on', over.match === 'reference');
+  const isRef = colour.reference === id;
+  const refBtn = q('[data-act="csetref"]');
+  refBtn.classList.toggle('on', isRef);
+  refBtn.textContent = isRef ? 'the reference' : 'set as reference';
+  q('[data-act="cmatchref"]').disabled = isRef;
+  q('[data-act="creset"]').disabled = !over.balance;
+
+  setIfIdle(q('.cmode'), colour.mode || 'auto');
+  lookOptions(q('.cfilmlook'), 'no look', false);
+  setIfIdle(q('.cfilmlook'), colour.look || '');
+  const fs = colour.strength ?? 0.5;
+  setIfIdle(q('.cfilmstrength'), fs);
+  q('.cfilmstrengthVal').textContent = Number(fs).toFixed(2);
+}
+
+/* The nudges start from the balance the shot resolves to today — the auto's numbers
+ * when the auto is on, the hand's when one is set — so "warmer" is a step from what the
+ * monitor shows, never from a blank. */
+function nudgeBalance(id, fn) {
+  const shot = colourShot(id);
+  const base = (shotOverride(id) || {}).balance || (shot && shot.balance) || DEFAULT_BALANCE;
+  const b = { gain: [...base.gain], exposure: base.exposure, knee: base.knee ?? 0.8,
+              lift: base.lift ?? 0 };
+  fn(b);
+  b.gain = b.gain.map((g) => Math.round(g * 10000) / 10000);
+  b.exposure = Math.round(b.exposure * 10000) / 10000;
+  shotOverride(id, true).balance = b;
+}
+
+/* The block's buttons; the selects and sliders have their own listeners in buildShot. */
+function onColourAct(act, seg) {
+  const id = seg.id;
+  if (act === 'cwarm') nudgeBalance(id, (b) => { b.gain[0] += NUDGE_GAIN; b.gain[2] -= NUDGE_GAIN; });
+  else if (act === 'ccool') nudgeBalance(id, (b) => { b.gain[0] -= NUDGE_GAIN; b.gain[2] += NUDGE_GAIN; });
+  else if (act === 'cbright') nudgeBalance(id, (b) => { b.exposure += NUDGE_EXPOSURE; });
+  else if (act === 'cdark') nudgeBalance(id, (b) => { b.exposure -= NUDGE_EXPOSURE; });
+  else if (act === 'creset') { const o = shotOverride(id); if (o) delete o.balance; }
+  else if (act === 'cmatchprev' || act === 'cmatchref') {
+    const want = act === 'cmatchprev' ? 'previous' : 'reference';
+    const o = shotOverride(id, true);
+    if (o.match === want) delete o.match; else o.match = want;   // again: off
+  } else if (act === 'csetref') {
+    colour.reference = colour.reference === id ? null : id;
+  } else return false;
+  colourChanged();
+  return true;
+}
+
+function bindColour(el, seg) {
+  const q = (s) => el.querySelector(s);
+  q('.cauto').addEventListener('change', (ev) => {
+    const o = shotOverride(seg.id, true);
+    if (ev.target.checked) delete o.auto; else o.auto = false;
+    colourChanged();
+  });
+  q('.clook').addEventListener('change', (ev) => {
+    const o = shotOverride(seg.id, true);
+    const v = ev.target.value;
+    if (v === '') delete o.look; else o.look = v === 'none' ? null : v;
+    colourChanged();
+  });
+  q('.cstrength').addEventListener('input', (ev) => {
+    q('.cstrengthVal').textContent = Number(ev.target.value).toFixed(2);
+  });
+  q('.cstrength').addEventListener('change', (ev) => {
+    shotOverride(seg.id, true).strength = parseFloat(ev.target.value);
+    colourChanged();
+  });
+  q('.cmode').addEventListener('change', (ev) => {
+    colour.mode = ev.target.value === 'off' ? 'off' : 'auto';
+    colourChanged();
+  });
+  q('.cfilmlook').addEventListener('change', (ev) => {
+    colour.look = ev.target.value || null;
+    colourChanged();
+  });
+  q('.cfilmstrength').addEventListener('input', (ev) => {
+    q('.cfilmstrengthVal').textContent = Number(ev.target.value).toFixed(2);
+  });
+  q('.cfilmstrength').addEventListener('change', (ev) => {
+    colour.strength = parseFloat(ev.target.value);
+    colourChanged();
+  });
 }
 
 /* The monitor. One place where the cut plays, fed from the proxies, so judging an edit
@@ -605,6 +873,9 @@ function arm(v, seg) {
 
 function showLive() {
   player.vids.forEach((v, k) => v.classList.toggle('live', k === player.cur));
+  // The grade follows the monitor (INTAKE M10): the live video's shot picks the LUT.
+  const g = gradeApi();
+  if (g) g.setShot(segs[player.idx] ? segs[player.idx].id : null);
 }
 
 /* The monitor sits at the top of the column. When the shot list ran a long way below
@@ -1481,12 +1752,16 @@ async function save() {
   saveTimer = null;
   const r = await fetch('/api/project', {
     method: 'PUT', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ segments: tl.forSave(), story: $('#story').value, music }),
+    // The colour block rides the same body (INTAKE M10): an empty object removes it.
+    body: JSON.stringify({ segments: tl.forSave(), story: $('#story').value, music, colour }),
   });
   if (!r.ok) {
     $('#saveState').textContent = 'save failed';
     return toast('save failed — the edit is still on screen, do not reload', 8000);
   }
+  // A save can change every shot's resolved colour — a trim re-derives the auto, a
+  // nudge is a new LUT — so the inspector's witness and the monitor's LUT refetch.
+  refreshColour();
   const t = new Date();
   $('#saveState').textContent =
     `saved ${t.getHours()}:${String(t.getMinutes()).padStart(2, '0')}`;
@@ -2067,6 +2342,13 @@ document.addEventListener('keydown', (e) => {
   else if (k === 'Enter') {
     e.preventDefault(); revealMonitor(); playFrom(sel, { single: true });
   }
+  else if (k === 'g' || k === 'G') {
+    // The grade's before / after (INTAKE M10): the monitor with the LUT, or the camera's picture.
+    const g = gradeApi();
+    if (!g) return toast('the grade did not load — /grade.js is missing');
+    const on = g.toggle();
+    toast(on ? 'grade on — the monitor shows the colour' : 'grade off — the camera\'s picture');
+  }
   else return;
 });
 
@@ -2143,6 +2425,8 @@ async function boot() {
   bed.el = $('#bed');
   P = await (await fetch('/api/project')).json();
   music = P.music || null;
+  colour = P.colour || {};
+  await refreshColour();          // the looks and every shot's resolved colour, before the first paint
   await refreshStatus();
   await refreshIndex();
   await loadAssets();
