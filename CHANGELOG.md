@@ -10,6 +10,35 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The monitor shows the grade, the inspector controls it (INTAKE M10, I10.4; decision
+  4).** `app/static/grade.js` (new): a `<canvas>` over the monitor's live `<video>`,
+  drawn on every frame (`requestVideoFrameCallback`, rAF fallback, plus a redraw on
+  seek so a parked monitor is graded too) through a WebGL shader that applies the shot's
+  17³ LUT from `GET /api/lut/{id}` — a `sampler3D` on WebGL2, the flat .cube table as an
+  n × n² 2D texture with the blue slices interpolated by hand on WebGL1 — cached by id,
+  dropped on every save. The videos are never replaced: audio, the clock and the cut
+  points are untouched; an identity LUT, a shot outside the cut and a missing WebGL all
+  show the raw video. `G` toggles it with a toast (before / after); the keys line under
+  the monitor and the Keys panel say so, and the transport's keys line now clips with an
+  ellipsis rather than wrapping so a short window still fits the whole monitor. The
+  inspector gains a Colour block between the trims and the scoped ask: the witness line
+  (`white: surface · L 72 · cast b −1.8 · auto ×1.21`, `no white reference · as shot`,
+  `hand-set`, `clipped 1.5 %`), the per-shot auto checkbox, look select (the film's,
+  none, every library look — a broken manifest entry disabled with its reason) and
+  strength, warmer / cooler (gain r ±0.02, b ∓0.02 from the balance the shot resolves
+  to), brighter / darker (exposure ±0.05), reset, match ← previous / reference, set as
+  reference, and the film row (mode, look, strength). Every change rides the one save
+  body (`colour` beside `segments`, `story`, `music`), then `/api/colour` is refetched
+  and the block refills in place — a why being typed is never interrupted — and the
+  monitor's LUT is invalidated. `app/tests/test_colour_ui.py` (8 browser tests): the
+  canvas and `G`, the LUT the monitor holds is the server's, the block and its looks,
+  a per-shot look and strength saved by id and baked by `/api/lut`, film `off` making
+  every shot the identity, warmer / brighter / reset on the balance override, match and
+  reference by id, and a trim keeping the block. Not on the undo stack, like the music.
+  `server.py` needs a one-line `GET /grade.js` route mirroring `/switcher.js` (this
+  lane does not own the server file; the test registers a stand-in). A named-element
+  trap found on the way: a `<canvas id="grade">` is `window.grade`, so app.js checks
+  the module by shape and the board paints without it.
 - **The colour core and its server wiring (INTAKE M10, I10.0 and the contract for
   I10.1–I10.4).** `roughcut/colour.py`: the probe (pixel format, bit depth, transfer,
   primaries, range, rotation, camera family from the tags), `normalise_vf` (HLG/PQ → SDR
