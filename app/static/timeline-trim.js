@@ -22,6 +22,12 @@
  *                 ⇧ flips the two, before or during the drag, so a hand that landed on the
  *                 wrong half never has to let go: the entry begun at pointerdown is cancelled
  *                 and begun again under the other label, one undo entry either way.
+ *                 Before the press, the half under the pointer lights up — the shot's own hue
+ *                 with an arrow into the neighbour and a ghost of the first shot that would
+ *                 move (GHOST_S later) for an extend; a neutral bar across the cut with ⇄
+ *                 for a roll — and a one-line hint under the timeline says which is which:
+ *                 at once the first HINT_FREE times a cut is hovered (counted in
+ *                 localStorage), after that on a HINT_DWELL_MS dwell.
  *   Ripple trim   the film's first in and last out have no neighbour: the block's own
  *                 full-height handle (8 px, `ew-resize`) extends or shortens the shot.
  *   Slip          ⌥/alt + drag a block's body: `in` and `out` move together, the length
@@ -55,19 +61,27 @@
   const SNAP_PX = 8;               // an edge this close to a snap point takes it
   const CLICK_PX = 3;              // less travel than this is a click, not a trim
   const EDGE_PX = 16;              // the column over an interior cut: 8 px each side of the line
+  const GHOST_S = 0.5;             // s — how far the hover ghost shows the pushed shot moved
+  const HINT_FREE = 5;             // cut hovers that show the hint at once, ever...
+  const HINT_DWELL_MS = 600;       // ...after that, a dwell this long
   const MIN_LEN = 0.2;             // s — the foundation's shortest shot
   const FRAME = 1 / 30;            // s — one nudge
   const MAGNET_KEY = 'roughcut.tl.magnet';
+  const HINT_KEY = 'roughcut.tl.edgeHintSeen';
   const CATS = ['cut', 'playhead', 'sentence', 'word', 'onset'];   // snap priority
   const TIP_FLASH_MS = 900;
+  const HINT_HTML = '<b>top edge</b> · extend or shorten this shot, the rest moves · '
+    + '<b>bottom edge</b> · roll the cut into the next · <b>⇧</b> flips';
 
   let tl = null, lane = null, canvas = null, root = null;
   let drag = null;                 // the gesture in flight (see onDown)
   let active = null;               // {id, edge} — the edge `,`/`.` move
+  let hover = null;                // {col, row, side} — the edge column under the pointer
+  let shift = false;               // ⇧ as last seen, for the hover cue
   let magnet = true;
-  const ui = { line: null, lineLabel: null, tip: null, magnet: null };
+  const ui = { line: null, lineLabel: null, tip: null, magnet: null, ghost: null, hint: null };
   const snaps = new Map();         // clip -> resolved /api/snaps payload
-  let stepRaf = 0, layoutRaf = 0, tipTimer = 0;
+  let stepRaf = 0, layoutRaf = 0, tipTimer = 0, hintTimer = 0;
   let mo = null;
 
   const round2 = (x) => Math.round(x * 100) / 100;
@@ -123,6 +137,10 @@
     ui.lineLabel = el('label', '', ui.line);
     ui.tip = el('div', 'tl-tip', canvas);
     ui.tip.hidden = true;
+    ui.ghost = el('div', 'tl-edge-ghost', canvas);
+    ui.ghost.hidden = true;
+    ui.hint = el('div', 'tl-hint', root);
+    ui.hint.innerHTML = HINT_HTML;
     ui.magnet = el('button', 'tl-magnet', root);
     ui.magnet.type = 'button';
     ui.magnet.addEventListener('click', () => setMagnet(!magnet));
@@ -159,7 +177,7 @@
     el('div', 'tl-ticks', b);
   }
 
-  /* An edge column: four quadrants, the hit targets. */
+  /* An edge column: four quadrants, hit targets only — the cue is drawn on the column. */
   function makeColumn() {
     const c = el('i', 'tl-edge', lane);
     for (const row of ['t', 'b']) {
@@ -200,6 +218,7 @@
       c.style.setProperty('--hue-r', n.style.getPropertyValue('--hue'));
     }
     if (drag && drag.moved) { paintTicks(); paintTip(); paintLine(); }
+    else if (hover) paintCue();    // the blocks moved under a hover: the ghost follows
     if (mo) mo.takeRecords();      // our own edits are not a reason to lay out again
   }
 
@@ -308,6 +327,79 @@
     const fs = tl.filmStart(id);
     if (fs < 0) return;
     tl.seek(edge === 'in' ? fs : Math.max(fs, fs + (seg.out - seg.in) - 0.03));
+  }
+
+  /* ---------------------------------------------------------------- the cues (I9.7) */
+  /* Hover, before the press: which column, which half, which side — and the cue for it. */
+  function trackHover(e) {
+    const q = e.target && e.target.closest ? e.target.closest('.tl-edge > .q') : null;
+    if (!q) { clearHover(); return; }
+    const col = q.parentElement;
+    shift = !!e.shiftKey;
+    if (!hover || hover.col !== col) hintOnEnter();
+    hover = { col, row: q.dataset.row, side: q.dataset.side };
+    paintCue();
+  }
+
+  function clearHover() {
+    if (!hover) return;
+    hover = null;
+    clearTimeout(hintTimer);
+    ui.hint.classList.remove('on');
+    paintCue();
+  }
+
+  /* The lit half, as classes on the column — `.lit .top|.bot .left|.right .ext|.roll` —
+   * that the CSS draws: the shot's hue and an arrow into the neighbour for an extend, a
+   * neutral bar across the cut for a roll. During a drag the column follows the drag's
+   * mode, so a ⇧ flip shows on the column as well as in the tooltip. */
+  function paintCue() {
+    let col = null, row = null, side = null, mode = null;
+    if (drag && drag.col) { col = drag.col; row = drag.row; side = drag.side; mode = drag.kind; }
+    else if (hover) { col = hover.col; row = hover.row; side = hover.side; mode = modeFor(row, shift); }
+    for (const c of lane.querySelectorAll(':scope > .tl-edge')) {
+      if (c !== col) { c.className = 'tl-edge'; continue; }
+      c.className = `tl-edge lit ${row === 't' ? 'top' : 'bot'} ${side === 'l' ? 'left' : 'right'}`
+        + ` ${mode === 'trim' ? 'ext' : 'roll'}`;
+    }
+    paintGhost(col, side, mode);
+  }
+
+  /* Before an extend: a faint outline of the first shot that would move, GHOST_S later —
+   * the "rest moves" reading, visible before the hand commits. Nothing after the shot: a
+   * strip past its out, the film's end moving. Gone during the drag, when the real blocks
+   * move (the foundation re-renders on every setRange). */
+  function paintGhost(col, side, mode) {
+    if (!col || drag || mode !== 'trim') { ui.ghost.hidden = true; return; }
+    const id = side === 'l' ? col.dataset.left : col.dataset.right;   // the shot being extended
+    const i = tl.indexOf(id);
+    const b = i < 0 ? null : blockOf(id);
+    if (!b) { ui.ghost.hidden = true; return; }
+    const next = tl.idAt(i + 1);
+    const nb = next ? blockOf(next) : null;
+    const z = tl.state.zoom;
+    if (nb) {
+      ui.ghost.style.left = `${parseFloat(nb.style.left) + GHOST_S * z}px`;
+      ui.ghost.style.width = nb.style.width;
+    } else {
+      ui.ghost.style.left = `${parseFloat(b.style.left) + parseFloat(b.style.width)}px`;
+      ui.ghost.style.width = `${GHOST_S * z}px`;
+    }
+    ui.ghost.style.setProperty('--hue', (nb || b).style.getPropertyValue('--hue'));
+    ui.ghost.classList.toggle('end', !nb);
+    ui.ghost.hidden = false;
+  }
+
+  /* The hint under the timeline: at once while the editor is new to the columns, then
+   * only when the hand rests on one. The count lives in localStorage, so it is the
+   * editor's, not the page load's. */
+  function hintOnEnter() {
+    clearTimeout(hintTimer);
+    let seen = 0;
+    try { seen = parseInt(localStorage.getItem(HINT_KEY), 10) || 0; } catch (err) { seen = 0; }
+    try { localStorage.setItem(HINT_KEY, String(seen + 1)); } catch (err) { /* private mode */ }
+    if (seen < HINT_FREE) ui.hint.classList.add('on');
+    else hintTimer = setTimeout(() => { if (hover) ui.hint.classList.add('on'); }, HINT_DWELL_MS);
   }
 
   /* ---------------------------------------------------------------- the magnet */
@@ -419,6 +511,7 @@
     lane.classList.add('tl-dragging');
     if (d.col) lane.classList.add('tl-drag-edge');
     enter(d);
+    paintCue();
   }
 
   /* Take the edge: the cursor class, the entry under the mode's label, the active edge,
@@ -457,6 +550,7 @@
     drag = Object.assign({ col, row, side, L, R, pointerId, x0, zoom, p0, moved, dt, suspend, dirty,
                            snapped: null }, params);
     enter(drag);
+    paintCue();
     if (drag.moved) schedule();
   }
 
@@ -468,7 +562,7 @@
   }
 
   function onMove(e) {
-    if (!drag) return;
+    if (!drag) { trackHover(e); return; }
     if (e.pointerId !== drag.pointerId) return;
     e.stopPropagation();
     if (drag.col) flip(e.shiftKey);          // a no-op while the mode already matches
@@ -537,6 +631,8 @@
     clearTicks(); hideTip();
     ui.line.hidden = true;
     if (cancelled) tl.cancel(); else tl.commit();
+    clearHover();                  // the next move over a column lights it again
+    paintCue();
   }
 
   /* ---------------------------------------------------------------- nudges and keys */
@@ -567,7 +663,8 @@
 
   function onKey(e) {
     if (e.key === 'Shift') {       // before the input guard: a drag runs wherever focus is
-      if (drag) flip(true);
+      shift = true;
+      if (drag) flip(true); else if (hover) paintCue();
       return;
     }
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName) || e.target.isContentEditable) return;
@@ -585,7 +682,28 @@
 
   function onKeyUp(e) {
     if (e.key !== 'Shift') return;
-    if (drag) flip(false);
+    shift = false;
+    if (drag) flip(false); else if (hover) paintCue();
+  }
+
+  /* ---------------------------------------------------------------- the map */
+  /* The `?` map's Timeline section is rendered from the keys lane's one table
+   * (`window.tlKeys.KEYS`, timeline-keys.js): the two modes and the flip go in before its
+   * `?` row and the section is re-rendered. The keys script loads after this one, so the
+   * table is looked for at mount — after both have loaded — and once more a tick later. */
+  function mapRows(retry) {
+    const K = window.tlKeys && window.tlKeys.KEYS;
+    if (!Array.isArray(K)) { if (!retry) setTimeout(() => mapRows(true), 0); return; }
+    if (K.some((r) => r[2] === 'edges')) return;
+    const rows = [
+      ['▲ edge', 'drag a cut’s top half: extend or shorten the shot, the rest moves', 'edges'],
+      ['▼ edge', 'drag a cut’s bottom half: roll the cut into the next, the length held', 'edges'],
+      ['⇧ drag', 'flips extend ↔ roll, before or during the drag', 'edges'],
+    ];
+    let at = K.findIndex((r) => r[0] === '?');
+    if (at < 0) at = K.length;
+    K.splice(at, 0, ...rows);
+    if (typeof window.tlKeys.renderMap === 'function') window.tlKeys.renderMap();
   }
 
   /* ---------------------------------------------------------------- mount */
@@ -600,20 +718,24 @@
     lane.addEventListener('pointermove', onMove, true);
     lane.addEventListener('pointerup', onUp, true);
     lane.addEventListener('pointercancel', onCancel, true);
+    lane.addEventListener('pointerleave', () => { if (!drag) clearHover(); });
     document.addEventListener('keydown', onKey);
     document.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', () => { shift = false; });
     mo = new MutationObserver(scheduleLayout);
     mo.observe(lane, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
     tl.on('change', warm);
     tl.on('zoom', scheduleLayout);
     warm();
     layout();
+    mapRows();
     tl.trim = {
-      SNAP_PX, FRAME, EDGE_PX,
+      SNAP_PX, FRAME, EDGE_PX, HINT_KEY,
       get magnet() { return magnet; },
       setMagnet,
       get active() { return active; },
       get dragging() { return drag ? drag.kind : null; },
+      get hover() { return hover ? { row: hover.row, side: hover.side, mode: modeFor(hover.row, shift) } : null; },
       nudge,
     };
   }

@@ -7,7 +7,7 @@ cut line, the lane's full height, split by height — the top half extends or sh
 shot and the rest of the film moves (a ripple trim), the bottom half rolls the cut into the
 neighbour, ⇧ flips the two before or during the drag; the film's first in and last out
 keep a full-height handle of their own; slips by ⌥-drag; `,` / `.` nudges of the active
-edge; and the magnet —
+edge; the hover cue, the ghost of the pushed shot and the one-line hint; and the magnet —
 snapping to the playhead, a sentence's padded cut point, a word start, with a snap line
 that says what it took, `S` to turn it off, ⌘/ctrl to suspend it. The gestures are real
 pointer events through playwright's mouse; the assertions are made against app.js's
@@ -149,6 +149,15 @@ def drag(page, loc, dx: float, modifiers=(), release=True) -> tuple[float, float
         for m in modifiers:
             page.keyboard.up(m)
     return x + dx, y
+
+
+def hover(page, loc) -> tuple[float, float]:
+    """The pointer over the middle of an element, nothing pressed."""
+    reveal(page)
+    box = loc.bounding_box()
+    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    page.mouse.move(x, y)
+    return x, y
 
 
 def edge(page, i: int):
@@ -356,8 +365,8 @@ def test_the_bottom_half_rolls_the_cut(page):
 def test_shift_flips_extend_and_roll_before_and_during_a_drag(page):
     """⇧ on the top half rolls; ⇧ on the bottom half extends. Mid-drag, ⇧ pressed turns
     the extend in flight into a roll — the cut back as the press found it, the travel so
-    far re-applied — and released turns it back; the tooltip follows; the one undo entry
-    is labelled by what the drag ended as."""
+    far re-applied — and released turns it back; the column's cue and the tooltip follow;
+    the one undo entry is labelled by what the drag ended as."""
     z = zoom(page)
     drag(page, quadrant(page, 0, "t", "l"), 0.4 * z, modifiers=["Shift"])
     r = ranges(page)
@@ -374,20 +383,24 @@ def test_shift_flips_extend_and_roll_before_and_during_a_drag(page):
     page.keyboard.press("Control+z")
     assert ranges(page) == [[1.0, 3.0], [0.0, 2.0]]
     # mid-drag: an extend in flight...
+    col = page.locator("#tl .tl-edge").first
     drag(page, quadrant(page, 0, "t", "l"), 0.4 * z, release=False)
     page.wait_for_function("Math.abs(segs[0].out - 3.4) < 0.02 && segs[1].in === 0", timeout=3000)
     assert page.evaluate("tl.trim.dragging") == "trim"
     assert "the rest moves" in page.locator("#tl .tl-tip").inner_text()
+    assert col.get_attribute("class") == "tl-edge lit top left ext"
     # ...becomes a roll when ⇧ goes down, without letting go
     page.keyboard.down("Shift")
     page.wait_for_function("Math.abs(segs[1].in - 0.4) < 0.02", timeout=3000)
     assert page.evaluate("tl.trim.dragging") == "roll"
     assert film_total(page) == pytest.approx(4.0, abs=1e-9)
     assert page.locator("#tl .tl-tip").inner_text().startswith("roll")
+    assert col.get_attribute("class") == "tl-edge lit top left roll"
     # ...and an extend again when it comes up
     page.keyboard.up("Shift")
     page.wait_for_function("segs[1].in === 0 && Math.abs(segs[0].out - 3.4) < 0.02", timeout=3000)
     assert page.evaluate("tl.trim.dragging") == "trim"
+    assert col.get_attribute("class") == "tl-edge lit top left ext"
     page.mouse.up()
     assert ranges(page)[1] == [0.0, 2.0]
     assert film_total(page) == pytest.approx(4.4, abs=0.02)
@@ -422,6 +435,68 @@ def test_the_last_out_extends_over_the_whole_height(page):
     assert page.evaluate("segs[1].out") == pytest.approx(2.5, abs=0.02)
     assert film_total(page) == pytest.approx(4.5, abs=0.02)
     assert page.locator("#undo").get_attribute("title").startswith("undo: trim")
+
+
+def test_hovering_a_cut_lights_the_half_shows_the_ghost_and_the_hint(page):
+    """Top half, left of the line: the column wears the lit extend cue for shot 1, the
+    ghost of shot 2 sits 0.5 s later, the hint under the timeline is up and the counter
+    in localStorage says one. Right of the line it is shot 2's in, with nothing after
+    shot 2 to push — the ghost is the film's end, moving. Bottom half: the roll bar, no
+    ghost. ⇧ while hovering flips the cue. Off the column: nothing lit, the hint gone.
+    After five cut hovers the hint waits for a 600 ms dwell."""
+    z = zoom(page)
+    col = page.locator("#tl .tl-edge").first
+    ghost = page.locator("#tl .tl-edge-ghost")
+    hint = page.locator("#tl .tl-hint")
+    assert col.get_attribute("class") == "tl-edge"
+    assert ghost.is_hidden() and hint.is_hidden()
+    assert page.evaluate("localStorage.getItem('roughcut.tl.edgeHintSeen')") is None
+    hover(page, quadrant(page, 0, "t", "l"))
+    assert col.get_attribute("class") == "tl-edge lit top left ext"
+    assert page.evaluate("tl.trim.hover") == {"row": "t", "side": "l", "mode": "trim"}
+    assert ghost.is_visible()
+    b1 = page.evaluate("(() => { const b = document.querySelectorAll('#tl .blk')[1];"
+                       " return [parseFloat(b.style.left), parseFloat(b.style.width)]; })()")
+    assert page.evaluate("parseFloat(document.querySelector('#tl .tl-edge-ghost').style.left)") \
+        == pytest.approx(b1[0] + 0.5 * z, abs=0.5), "shot 2, 0.5 s later"
+    assert page.evaluate("parseFloat(document.querySelector('#tl .tl-edge-ghost').style.width)") \
+        == pytest.approx(b1[1], abs=0.5)
+    assert "end" not in ghost.get_attribute("class")
+    assert hint.is_visible()
+    text = hint.inner_text()
+    assert "top edge" in text and "extend or shorten" in text and "the rest moves" in text, text
+    assert "bottom edge" in text and "roll the cut" in text and "⇧ flips" in text, text
+    assert page.evaluate("localStorage.getItem('roughcut.tl.edgeHintSeen')") == "1"
+    assert page.evaluate("getComputedStyle(document.querySelector('#tl .tl-edge .q.t.l')).cursor") \
+        == "col-resize"
+    # right of the line: shot 2's in — the film's end is what moves
+    hover(page, quadrant(page, 0, "t", "r"))
+    assert col.get_attribute("class") == "tl-edge lit top right ext"
+    assert ghost.is_visible() and "end" in ghost.get_attribute("class")
+    assert page.evaluate("localStorage.getItem('roughcut.tl.edgeHintSeen')") == "1", \
+        "the same column, one hover"
+    # the bottom half: a roll, no ghost
+    hover(page, quadrant(page, 0, "b", "l"))
+    assert col.get_attribute("class") == "tl-edge lit bot left roll"
+    assert ghost.is_hidden()
+    assert page.evaluate("tl.trim.hover")["mode"] == "roll"
+    # ⇧ flips the cue where the hand is
+    page.keyboard.down("Shift")
+    assert col.get_attribute("class") == "tl-edge lit bot left ext"
+    assert ghost.is_visible()
+    page.keyboard.up("Shift")
+    assert col.get_attribute("class") == "tl-edge lit bot left roll"
+    # off the column: unlit, the hint gone
+    hover(page, page.locator("#tl .blk").nth(0))
+    assert col.get_attribute("class") == "tl-edge"
+    assert ghost.is_hidden() and hint.is_hidden()
+    assert page.evaluate("tl.trim.hover") is None
+    # after five, a dwell: the next hover shows nothing at once, then the hint at 600 ms
+    page.evaluate("localStorage.setItem('roughcut.tl.edgeHintSeen', '5')")
+    hover(page, quadrant(page, 0, "t", "l"))
+    assert hint.is_hidden()
+    page.wait_for_selector("#tl .tl-hint.on", timeout=2000)
+    assert page.evaluate("localStorage.getItem('roughcut.tl.edgeHintSeen')") == "6"
 
 
 def test_the_tooltip_says_the_rest_moves_on_an_extend_and_roll_on_a_roll(page):
