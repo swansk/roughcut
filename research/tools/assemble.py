@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12"
-# dependencies = []
+# dependencies = ["numpy>=2"]
 # ///
 """Cut an EDL into a rendered video. Throwaway prototype tooling — no OTIO, no index.
 
@@ -8,6 +8,15 @@ Each segment is extracted and re-encoded to identical parameters, then concatena
 with the concat demuxer. Re-encoding every segment is wasteful but it is the only
 way to get frame-accurate cuts across GOP boundaries, and a 2-minute rough cut is
 cheap enough that the waste does not matter.
+
+The grade rides on that re-encode (INTAKE M10): each shot's colour is resolved the
+way the board's inspector resolves it (`roughcut.colour.resolve_shot` over the clip's
+`<stem>.colour.json` from `--colour-dir`), baked to one 33³ `.cube` next to the part
+and applied with `lut3d` inside the part's own `-vf`, so it costs no generation of
+quality. An HDR source (iPhone HLG) is tone mapped to SDR 709 *before* the scale,
+grade or no grade — normalising is not a grade, and an HLG part must never reach the
+concat un-tone-mapped. Every part is tagged limited-range bt709 so concat sees
+identical stream properties; the picture was always limited 709, just untagged.
 
 Two things here are not defaults and must not be "cleaned up":
 
@@ -44,7 +53,7 @@ from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from roughcut import effects            # noqa: E402  (after sys.path)
+from roughcut import colour, effects    # noqa: E402  (after sys.path)
 
 TARGET_LUFS = -16.0
 MAX_GAIN_DB = 12.0          # refuse to amplify near-silence into hiss
@@ -79,19 +88,42 @@ def clip_gain(sidecars: Path, clip: str) -> float:
     return max(-MAX_GAIN_DB, min(MAX_GAIN_DB, TARGET_LUFS - float(lufs)))
 
 
+# Every part is tagged as what it is — limited-range BT.709 — so the concat (which
+# copies stream properties from the first part) sees identical streams whether or
+# not a part went through the LUT chain. Verified not to touch a single pixel on
+# ffmpeg 7.0.2: the tagged and untagged encodes of the same source hash identical.
+COLOUR_TAGS = ["-color_range", "tv", "-colorspace", "bt709",
+               "-color_primaries", "bt709", "-color_trc", "bt709"]
+
+
+def video_filter(video: dict, normalise: str | None = None,
+                 lut: str | None = None) -> str:
+    """The part's `-vf`: normalise (HDR → SDR 709, before anything sees the frame),
+    the scale/pad/fps conform, then either the LUT chain — which states the range on
+    both sides and ends in its own `format=yuv420p` — or the plain `format=yuv420p`."""
+    chain = []
+    if normalise:
+        chain.append(normalise)
+    chain += [f"scale={video['w']}:{video['h']}:force_original_aspect_ratio=decrease",
+              f"pad={video['w']}:{video['h']}:(ow-iw)/2:(oh-ih)/2",
+              f"fps={video['fps']}"]
+    chain.append(lut if lut else "format=yuv420p")
+    return ",".join(chain)
+
+
 def cut(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path,
-        orient: str, video: dict) -> None:
+        orient: str, video: dict, normalise: str | None = None,
+        lut: str | None = None) -> None:
     cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin"]
     if orient == "none":
         cmd += ["-display_rotation", "0"]           # must precede -i; see module docstring
     cmd += [
         "-ss", f"{t_in:.3f}", "-i", str(src), "-t", f"{t_out - t_in:.3f}",
-        "-vf", f"scale={video['w']}:{video['h']}:force_original_aspect_ratio=decrease,"
-               f"pad={video['w']}:{video['h']}:(ow-iw)/2:(oh-ih)/2,"
-               f"fps={video['fps']},format=yuv420p",
+        "-vf", video_filter(video, normalise, lut),
         "-af", f"volume={gain_db:.2f}dB,aresample=48000:first_pts=0",
         "-map", "0:v:0", "-map", "0:a:0", "-dn",    # drop GoPro's telemetry track
         "-c:v", "libx264", "-preset", video["preset"], "-crf", video["crf"],
+        *COLOUR_TAGS,
         "-c:a", "aac", "-b:a", video["audio_bitrate"], "-ac", "2",
         "-video_track_timescale", str(video["timescale"]),
         # -dn drops the source telemetry stream; -write_tmcd stops the mov muxer
@@ -198,6 +230,77 @@ def probe_duration(p: Path) -> float:
     return float(r.stdout.strip()) if r.stdout.strip() else 0.0
 
 
+# ------------------------------------------------------------------ colour (M10)
+
+def load_colour_file(colour_dir: Path | None, clip: str) -> dict | None:
+    """The clip's `<stem>.colour.json` from `--colour-dir`, or None: unmeasured, or
+    no colour dir at all. Either way the shot still takes the film's look; it just
+    gets no balance (`colour.resolve_shot` reads None as "the camera's picture")."""
+    if colour_dir is None:
+        return None
+    p = colour_dir / f"{Path(clip).stem}.colour.json"
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except ValueError:
+        return None
+
+
+def resolve_all(edl: dict, segments: list[dict], colour_dir: Path | None,
+                looks: dict[str, dict]) -> list[tuple[dict, dict | None]]:
+    """Every shot resolved, indexed like `segments`, in the order the board's
+    `server.resolve_colour` uses: the film's `colour.reference` shot first (else the
+    first shot with a summary becomes the reference), `previous` the shot resolved
+    before. Keyed by index rather than id so segments without ids (older EDLs) never
+    collapse onto one another. Returns `(res, clip_colour)` per shot."""
+    ref_id = (edl.get("colour") or {}).get("reference")
+    order = sorted(range(len(segments)),
+                   key=lambda i: 0 if ref_id and segments[i].get("id") == ref_id else 1)
+    out: list = [None] * len(segments)
+    reference = previous = None
+    for i in order:
+        seg = segments[i]
+        cc = load_colour_file(colour_dir, seg["clip"])
+        res = colour.resolve_shot(edl, seg, cc, looks, reference=reference,
+                                  previous=previous)
+        ctx = colour.shot_context(res)
+        if reference is None and ctx:
+            reference = ctx
+        previous = ctx or previous
+        out[i] = (res, cc)
+    return out
+
+
+def shot_probe(src: Path, clip_colour: dict | None, cache: dict) -> dict:
+    """The clip's colour tags: the colour file's own probe when it carries one, else
+    ffprobe once per clip. Needed for every part, graded or not — the normalise
+    step and the LUT's input range both come from it."""
+    if clip_colour and clip_colour.get("probe"):
+        return clip_colour["probe"]
+    if src not in cache:
+        cache[src] = colour.probe(src)
+    return cache[src]
+
+
+def describe_colour(res: dict, normalise: str | None, probe: dict) -> str:
+    """One line for the render log: what the part got, in the colourist's order."""
+    bits = []
+    b = res.get("balance")
+    if b:
+        bits.append(f"balance {b.get('source', 'auto')} ×{float(b['exposure']):.2f}")
+    m = res.get("match")
+    if m:
+        bits.append(f"match dL{m['dL']:+.1f} da{m['da']:+.1f} db{m['db']:+.1f}")
+    if res.get("look"):
+        bits.append(f"look {res['look']} {res['strength']:.2f}")
+    if not bits:
+        bits.append("as shot")
+    if normalise:
+        bits.append(f"normalised {probe.get('hdr') or 'hdr'}")
+    return " · ".join(bits)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Render an EDL to a video file.")
     ap.add_argument("edl", type=Path)
@@ -244,24 +347,43 @@ def main() -> int:
         # format changes.
         workdir = args.parts_dir
         workdir.mkdir(parents=True, exist_ok=True)
-        for stale in workdir.glob("part_*.mp4"):
+        for stale in list(workdir.glob("part_*.mp4")) + list(workdir.glob("part_*.cube")):
             stale.unlink()
     else:
         workdir = Path(tempfile.mkdtemp(prefix="roughcut-"))
     parts: list[Path] = []
+    for s in segments:
+        if not (args.footage / s["clip"]).exists():
+            raise SystemExit(f"missing footage: {args.footage / s['clip']}")
+    # The grade, resolved for every shot before any part is cut: the reference shot
+    # may sit later in the film than the shots that match to it.
+    looks = colour.load_looks(args.assets)
+    resolved = resolve_all(edl, segments, args.colour_dir, looks)
+    probes: dict = {}
     try:
         for i, seg in enumerate(segments):
             src = args.footage / seg["clip"]
-            if not src.exists():
-                raise SystemExit(f"missing footage: {src}")
             gain = clip_gain(args.sidecars, seg["clip"]) if args.sidecars else 0.0
             dest = workdir / f"part_{i:03d}.mp4"
-            cut(src, seg["in"], seg["out"], gain, dest, orient, video)
+            res, clip_colour = resolved[i]
+            probe = shot_probe(src, clip_colour, probes)
+            # Normalise always, grade optionally: an HLG source is tone mapped to SDR
+            # 709 whatever `colour.mode` says. After it the LUT's input is limited.
+            normalise = colour.normalise_vf(probe)
+            lut = None
+            if not res["identity"]:
+                cube = colour.write_cube(colour.cube_table(res["fn"], 33),
+                                         workdir / f"part_{i:03d}.cube",
+                                         title=f"roughcut {seg.get('id') or i}")
+                lut = colour.lut_vf(cube, colour.in_range(probe))
+            cut(src, seg["in"], seg["out"], gain, dest, orient, video,
+                normalise=normalise, lut=lut)
             assert_no_rotation(dest, orient)        # catch it at the part, not the film
             actual = probe_duration(dest)
             parts.append(dest)
             print(f"  {i:02d} {seg['clip']} {seg['in']:6.1f}-{seg['out']:6.1f} "
                   f"({actual:5.2f}s, {gain:+5.1f}dB)  {seg['why'][:56]}")
+            print(f"      colour: {describe_colour(res, normalise, probe)}")
 
         listfile = workdir / "concat.txt"
         listfile.write_text("".join(f"file '{p}'\n" for p in parts), encoding="utf-8")
