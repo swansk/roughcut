@@ -10,6 +10,11 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **INTAKE M10 takes Karl's two constraints:** colour state is per project (per-clip
+  measurements, per-shot auto, look/reference in the EDL, a white reference that does
+  not assume snow with a shades-of-grey fallback, clamps per camera family), and mixed
+  GoPro + iPhone bins normalise first (iPhone HLG 10-bit → SDR 709 from the probe's
+  tags, proxies included, one synthetic HLG clip in the test project).
 - **INTAKE M10 — colour: correct, match, look — planned as the next priority after I9.6.**
   Session 15 researched what colourists do with GoPro footage and ran a local lab on
   both bins (16 frames, numpy/OpenCV, ffmpeg 7.0): a snow-referenced auto-balance with

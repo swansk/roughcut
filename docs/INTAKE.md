@@ -728,7 +728,33 @@ goes under Discovered if Karl ever shoots Flat), per-frame auto (flickers), qual
 windows, tracking, grain and halation (a `deband` on the delivery encode is the one 8-bit
 concession worth making, as an option), GPU filters.
 
-- [ ] I10.0 **Measure, at index time.** `roughcut/colour.py` `measure(frame)` → luma
+**Karl, 2026-09-18, after reading the plan:** *"every new project will need new color
+grading and some projects will contain gopro + iphone footage."* Two constraints the items
+below must honour:
+
+- **Colour state is per project, never carried over.** Measurements are per clip
+  (`<stem>.colour.json`), the auto is per shot, and `colour.mode` / `colour.look` /
+  `colour.reference` live in the EDL, so a new bin starts at its own auto with nothing
+  inherited; only the looks library is global. The white reference must not assume snow:
+  it is "bright, near-neutral, â¥ 20 % of the frame" (snow, sky, walls, sand), with a
+  shades-of-grey fallback at half the clamp when no such surface exists, and *off* when
+  neither is trustworthy. The clamps are per camera family, not one set for all.
+- **Mixed cameras normalise first.** iPhone video is HEVC 10-bit HLG BT.2020 (Dolby
+  Vision 8.4) by default and 8-bit 709 only with HDR off; GoPro is 8-bit full-range 709.
+  Nothing in M10 runs on HLG. I10.0 records `camera`, `pix_fmt`, `color_transfer`,
+  `color_primaries`, `color_range` per clip from the probe (the fields FUTURE_PHASES P2.3
+  said the probe keeps for exactly this) and derives a per-clip **normalise** step: HLG/PQ
+  â SDR 709 by `zscale` tone mapping (`tonemap=hable`, tagged input so zscale accepts it),
+  limited vs full range read from the tag rather than assumed, 10-bit kept in the float
+  chain. The **proxies get the same normalise** â an HLG proxy plays dark and washed in the
+  monitor today, so `build_proxy` gains the step and the journal re-queues proxies whose
+  normalise changed. The balance then sees every clip as SDR 709 and the *match* item is
+  where GoPro-vs-iPhone in the same light is reconciled (different WB, saturation, tone);
+  the reference shot defaults to the camera with the most screen time. Test bin: the
+  synthetic project gains one HLG clip (`-color_trc arib-std-b67`) so the chain is
+  exercised without iPhone footage on disk.
+
+- [ ] I10.0 **Measure, at index time.** `roughcut/colour.py` `probe_colour(clip)` (camera, transfer, primaries, range, bit depth → the normalise step) and `measure(frame)` → luma
       percentiles, clip fraction (≥ 98 %), mean chroma, the white reference (fraction,
       L\*, a\*, b\*, mean RGB) — the lab's `measure()`; `sample(clip, every_s=5)` reads the
       **proxy** (statistics do not need 4K) and writes `<stem>.colour.json`; journal stage
