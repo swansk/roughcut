@@ -766,7 +766,17 @@ below must honour:
       **proxy** (statistics do not need 4K) and writes `<stem>.colour.json`; journal stage
       `colour` after `proxy`, free, part of the released-whole rule. Tests on the synthetic
       project: a grey frame measures neutral, a blue-cast frame reports b\* < 0.
-- [ ] I10.1 **Balance and bake, in the render.** `colour.balance_params(samples)` (the
+- [x] I10.1 (lane `agent/colour-render` `5155662`, merged `875a5c0`; fixture fix `014d785`)
+      **Balance and bake, in the render.** Live on Killington (2026-09-19): the 21-shot,
+      205 s cut rendered at preview twice — `mode: off` in 106 s, `auto` + `alpine` 0.5 in
+      114 s (+8 %); every shot found its snow (`balance surface ×1.16–1.30`), film YAVG
+      144.8 → 164.2, SATAVG 3.1 → 4.0, sheet at `roughcut-lab/out/killington_off_vs_alpine.jpg`
+      (snow white, sky kept, nothing blown). Lane decisions kept: a missing `colour` block
+      is the auto (decision 4 needs the monitor and the master to agree), every part is
+      tagged limited bt709 (verified pixel-identical to untagged on 7.0.2), an HDR source
+      is normalised whatever the mode. Copper measured too: ski clips ×0.99–1.16, night and
+      indoor as shot; the daylight bar clips exposed the grey-world failure → `GREY_MAX_CHROMA`
+      (`1e7f75c`). Original item: `colour.balance_params(samples)` (the
       lab's clamps; `None` without a white reference), `colour.bake_cube(fn, path, n=33)`,
       `colour.apply_chain(cube)` returning the explicit-range `-vf` fragment;
       `assemble.py` derives each part's LUT from the segment's samples (inside in/out, else

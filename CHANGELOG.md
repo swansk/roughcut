@@ -10,6 +10,9 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **I10.1 ticked in INTAKE** with the lane's hashes and the live Killington check: the
+  21-shot cut rendered as shot (106 s) and auto + alpine 0.5 (114 s), every shot balanced
+  from its snow, film YAVG 144.8 → 164.2, comparison sheet kept in `roughcut-lab/out/`.
 - **`test_colour_render.py` measures a real balance.** After the grey-scene rule the test
   pattern (colourful, no white surface) gave the auto no evidence, so the fixture now
   stamps every sample with the facts of an overcast snow frame; the balance is `surface`
