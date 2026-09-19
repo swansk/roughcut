@@ -458,6 +458,32 @@ same commit. Releases move entries into a dated version section.
   overlaps are one pick already, speech needs the shared theme.
 
 ### Changed
+- **Extend vs roll by height, 1 of 2 — the zones (INTAKE M9, I9.7; lane `agent/tl-edges`).**
+  Karl (2026-09-18): *"extend a clip while offsetting the next instead of cutting into the
+  next … maybe if I do it at the top of the video clip it extends, bottom cuts in?"* Until
+  now which gesture a drag got hung on a few pixels: the block's 8 px edge handle rippled,
+  the 10 px zone over the cut rolled. In `timeline-trim.js` both fold into one edge column
+  per interior cut — `EDGE_PX` 16, centred on the cut line, the lane's full height, four
+  quadrant hit targets (`.tl-edge > .q.t|b.l|r`). Top half: extend or shorten, the rest
+  moves — left of the line the left shot's `out`, right of it the right shot's `in`, a
+  ripple trim through `tl.setRange` so the shot changes length and everything after it
+  slides, one entry labelled `trim`; tooltip `out 3.30s · +0.30s · the rest moves` (`the
+  end moves` when nothing follows; the signed number is the change in the shot's length).
+  Bottom half: today's roll, both `setRange`s in one entry, the film's length held;
+  tooltip `roll · CLIP_A out 3.30s · CLIP_B in 0.70s`. ⇧ flips the mode before or during
+  the drag without letting go: the entry is cancelled (`tl.cancel`) and begun again under
+  the other label, the travel so far re-applied, so the one undo entry says what the drag
+  ended as. The film's first in and last out keep the block's own full-height handle
+  (`.tl-first` / `.tl-last`, set by the module in film order; the interior handles are
+  hidden by CSS). The magnet in both modes, Esc, the 3 px click rule, the `,`/`.` nudges,
+  the monitor's park and pointer capture are unchanged; `tl.trim` gains `EDGE_PX`.
+  `test_timeline_trim.py`: the helpers `out_handle` / `in_handle` resolve an interior edge
+  to the column's top quadrant (the outer edges to the block's handle), `roll_zone` is the
+  column's bottom half, the fixture waits for `.tl-h.in` and `.tl-edge .q.t.l`; five tests
+  added — the top half extends and pushes (shot 2's range untouched, its film start slides,
+  one ⌘Z restores), the bottom half rolls, ⇧ before and during a drag with the labels
+  following, the last out over the whole height with `the end moves`, the tooltips (`+`
+  and `−`). 14 tests; the four timeline files 46 passed.
 - **Docs:** INTAKE's verification log records the inspector's live check on Killington.
 - **Session 14 close-out (docs).** INTAKE M9 ticked through I9.5 with the merge hashes,
   "Where we are" names Karl's look as the next step and the three items deferred from the

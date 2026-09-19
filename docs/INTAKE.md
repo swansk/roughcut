@@ -607,6 +607,16 @@ and effects derive from it at render.
       a `tl.reveal(id)` (the module's own keepInView for a block) would let `scrollSel` avoid
       `scrollIntoView` on the page.
 - [ ] I9.6 Live on Killington: Karl's look.
+- [ ] I9.7 **Extend vs roll by height (lane `agent/tl-edges`; Karl, 2026-09-18: *"extend a
+      clip while offsetting the next instead of cutting into the next … maybe if I do it at
+      the top of the video clip it extends, bottom cuts in?"*):** at every interior cut one
+      edge column, 16 px centred on the cut line, the lane's full height, split at half —
+      the top half extends or shortens the shot and the rest of the film moves (left of the
+      line the left shot's out, right of it the right shot's in), the bottom half rolls the
+      cut into the neighbour, ⇧ flips before or during the drag; the film's first in and
+      last out keep a full-height handle; the hover cue (the shot's hue and an arrow, or a
+      bar across the cut), the ghost of the pushed shot, the one-line hint under the
+      timeline. Two commits: the zones, the cues.
 
 ## Lanes in flight
 

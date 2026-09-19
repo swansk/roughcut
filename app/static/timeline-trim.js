@@ -1,4 +1,5 @@
-/* Roughcut — trims by drag, and the magnet (INTAKE M9, I9.2; lane agent/tl-trim).
+/* Roughcut — trims by drag, the magnet, and the edge columns (INTAKE M9, I9.2 + I9.7;
+ * lanes agent/tl-trim, agent/tl-edges).
  *
  * Built ON the foundation (timeline.js, `window.tl`) and never edits it: everything here
  * hangs on the DOM the foundation exposes (`tl.el`) and goes through its edit API — one
@@ -7,12 +8,22 @@
  * `tl.commit` on pointerup, `tl.cancel` on Esc. A drag is one undo entry, however many
  * moves it took.
  *
- *   Ripple trim   drag a block's in or out handle (8 px, `ew-resize`): the shot's `in` or
- *                 `out` moves; the film closes up behind it, because that is what a change
- *                 to a segment's range does on a film-time-derived timeline.
- *   Roll          drag the 10 px zone straddling the cut between two adjacent blocks
- *                 (`col-resize`): the left shot's `out` and the right shot's `in` move
- *                 together — the film's length does not change.
+ *   The edge column at every interior cut: EDGE_PX wide, centred on the cut line, the full
+ *   (I9.7)        height of the lane, split at half its height — Karl's rule, "at the top
+ *                 of the clip it extends, bottom cuts in".
+ *                 TOP half — extend or shorten the shot, the rest moves (a ripple trim):
+ *                 left of the line it takes the left shot's `out`, right of it the right
+ *                 shot's `in`. The shot changes length and everything after it slides,
+ *                 because that is what a change to a segment's range does on a film-time
+ *                 timeline. The tooltip says so: `out 3.30s · +0.30s · the rest moves`.
+ *                 BOTTOM half — roll: the left shot's `out` and the right shot's `in` move
+ *                 together, the film's length held. `roll · CLIP_A out 3.30s · CLIP_B in
+ *                 0.70s`.
+ *                 ⇧ flips the two, before or during the drag, so a hand that landed on the
+ *                 wrong half never has to let go: the entry begun at pointerdown is cancelled
+ *                 and begun again under the other label, one undo entry either way.
+ *   Ripple trim   the film's first in and last out have no neighbour: the block's own
+ *                 full-height handle (8 px, `ew-resize`) extends or shortens the shot.
  *   Slip          ⌥/alt + drag a block's body: `in` and `out` move together, the length
  *                 kept, clamped to the clip.
  *   Nudge         `,` / `.` move the *active edge* — the last one dragged, or the selected
@@ -43,7 +54,7 @@
 
   const SNAP_PX = 8;               // an edge this close to a snap point takes it
   const CLICK_PX = 3;              // less travel than this is a click, not a trim
-  const ROLL_PX = 10;              // the zone straddling a cut that rolls it
+  const EDGE_PX = 16;              // the column over an interior cut: 8 px each side of the line
   const MIN_LEN = 0.2;             // s — the foundation's shortest shot
   const FRAME = 1 / 30;            // s — one nudge
   const MAGNET_KEY = 'roughcut.tl.magnet';
@@ -62,6 +73,10 @@
   const round2 = (x) => Math.round(x * 100) / 100;
   const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
   const secs = (t) => `${t.toFixed(2)}s`;
+  const signed = (x) => `${x < 0 ? '−' : '+'}${Math.abs(x).toFixed(2)}s`;
+  const stem = (clip) => String(clip).replace(/\.[^.]+$/, '');
+  /* Karl's rule — the top half extends, the bottom rolls — and ⇧ flips it. */
+  const modeFor = (row, shiftHeld) => ((row === 't') !== !!shiftHeld) ? 'trim' : 'roll';
 
   /* The clip's length bounds a slip and a roll. app.js keeps the clips on a script-local
    * `P` the foundation reads through its hooks and does not expose, so the length comes
@@ -130,9 +145,11 @@
     if (drag && drag.moved) schedule();
   }
 
-  /* Handles on every block and a roll zone over every interior cut. Blocks are the
-   * foundation's, created and moved by its render; a MutationObserver on the lane sees
-   * both and this lays the lane's own elements over them, one frame later. */
+  /* Handles on every block (the CSS shows them only at the film's first in and last out —
+   * `.tl-first` / `.tl-last`, set below in film order) and an edge column over every
+   * interior cut. Blocks are the foundation's, created and moved by its render; a
+   * MutationObserver on the lane sees both and this lays the lane's own elements over
+   * them, one frame later. */
   function decorate(b) {
     if (b.querySelector(':scope > .tl-h.in')) return;
     const hin = el('i', 'tl-h in', b);
@@ -142,25 +159,45 @@
     el('div', 'tl-ticks', b);
   }
 
+  /* An edge column: four quadrants, the hit targets. */
+  function makeColumn() {
+    const c = el('i', 'tl-edge', lane);
+    for (const row of ['t', 'b']) {
+      for (const side of ['l', 'r']) {
+        const q = el('i', `q ${row} ${side}`, c);
+        q.dataset.row = row;
+        q.dataset.side = side;
+      }
+    }
+    return c;
+  }
+
+  function blockOf(id) {
+    return lane.querySelector(`:scope > .blk[data-id="${CSS.escape(id)}"]`);
+  }
+
   function layout() {
     layoutRaf = 0;
-    const blocks = [...lane.querySelectorAll(':scope > .blk')];
-    blocks.forEach(decorate);
-    const rolls = [...lane.querySelectorAll(':scope > .tl-roll')];
+    const blocks = [...lane.querySelectorAll(':scope > .blk')]
+      .sort((a, b) => (+a.dataset.i || 0) - (+b.dataset.i || 0));   // film order, not DOM order
+    blocks.forEach((b, i) => {
+      decorate(b);
+      b.classList.toggle('tl-first', i === 0);
+      b.classList.toggle('tl-last', i === blocks.length - 1);
+    });
+    const cols = [...lane.querySelectorAll(':scope > .tl-edge')];
     const want = Math.max(0, blocks.length - 1);
-    while (rolls.length > want) rolls.pop().remove();
-    while (rolls.length < want) {
-      const r = el('i', 'tl-roll', lane);
-      r.title = 'drag: roll the cut (one shot grows as the other shrinks)';
-      rolls.push(r);
-    }
+    while (cols.length > want) cols.pop().remove();
+    while (cols.length < want) cols.push(makeColumn());
     for (let i = 0; i < want; i++) {
-      const b = blocks[i], r = rolls[i];
-      const right = parseFloat(b.style.left) + parseFloat(b.style.width);
-      r.style.left = `${right - ROLL_PX / 2}px`;
-      r.style.width = `${ROLL_PX}px`;
-      r.dataset.left = b.dataset.id;
-      r.dataset.right = blocks[i + 1].dataset.id;
+      const b = blocks[i], n = blocks[i + 1], c = cols[i];
+      const cut = parseFloat(b.style.left) + parseFloat(b.style.width);
+      c.style.left = `${cut - EDGE_PX / 2}px`;
+      c.style.width = `${EDGE_PX}px`;
+      c.dataset.left = b.dataset.id;
+      c.dataset.right = n.dataset.id;
+      c.style.setProperty('--hue-l', b.style.getPropertyValue('--hue'));
+      c.style.setProperty('--hue-r', n.style.getPropertyValue('--hue'));
     }
     if (drag && drag.moved) { paintTicks(); paintTip(); paintLine(); }
     if (mo) mo.takeRecords();      // our own edits are not a reason to lay out again
@@ -176,7 +213,7 @@
   function paintTicks() {
     if (!drag) return;
     for (const id of drag.ids) {
-      const b = lane.querySelector(`:scope > .blk[data-id="${CSS.escape(id)}"]`);
+      const b = blockOf(id);
       const seg = tl.byId(id);
       if (!b || !seg) continue;
       const box = b.querySelector(':scope > .tl-ticks');
@@ -224,6 +261,10 @@
     tipTimer = setTimeout(() => { if (!drag) ui.tip.hidden = true; }, TIP_FLASH_MS);
   }
 
+  /* The trim tip carries the change in the shot's LENGTH, signed — `+` extended, `−`
+   * shortened — which is what an edge drag is for; on an in edge that is the opposite sign
+   * of the hand's travel. And what else moves: the shots after this one, or, when there
+   * are none, the film's end. */
   function paintTip() {
     if (!drag || !drag.moved) { ui.tip.hidden = true; return; }
     const took = drag.snapped ? ` · snap: ${drag.snapped.cat}` : '';
@@ -231,12 +272,15 @@
       const seg = tl.byId(drag.id);
       if (!seg) return;
       const t = drag.edge === 'in' ? seg.in : seg.out;
-      showTip(edgeFilm(drag.id, drag.edge), `${drag.edge} ${secs(t)} · ${secs(seg.out - seg.in)} long${took}`);
+      const grew = drag.edge === 'in' ? drag.in0 - seg.in : seg.out - drag.out0;
+      const after = tl.idAt(tl.indexOf(drag.id) + 1);
+      showTip(edgeFilm(drag.id, drag.edge),
+        `${drag.edge} ${secs(t)} · ${signed(grew)} · ${after ? 'the rest moves' : 'the end moves'}${took}`);
     } else if (drag.kind === 'roll') {
       const L = tl.byId(drag.left), R = tl.byId(drag.right);
       if (!L || !R) return;
       showTip(tl.filmStart(drag.right),
-        `cut ${secs(L.out)} | ${secs(R.in)} · ${secs(L.out - L.in)} + ${secs(R.out - R.in)}${took}`);
+        `roll · ${stem(L.clip)} out ${secs(L.out)} · ${stem(R.clip)} in ${secs(R.in)}${took}`);
     } else {
       const seg = tl.byId(drag.id);
       if (!seg) return;
@@ -315,31 +359,48 @@
   }
 
   /* ---------------------------------------------------------------- the gesture */
+  function trimParams(seg, edge) {
+    return { kind: 'trim', id: seg.id, ids: [seg.id], edge, clip: seg.clip, in0: seg.in, out0: seg.out,
+             fs0: tl.filmStart(seg.id), dur: clipDur(seg.clip) };
+  }
+
+  function rollParams(L, R) {
+    const durL = clipDur(L.clip);
+    return {
+      kind: 'roll', left: L.id, right: R.id, ids: [L.id, R.id],
+      clipL: L.clip, clipR: R.clip, outL0: L.out, inR0: R.in,
+      b0: tl.filmStart(R.id),
+      lo: Math.max(L.in + MIN_LEN - L.out, -R.in),
+      hi: Math.min(durL - L.out, R.out - MIN_LEN - R.in),
+      cuts: cutPoints(),
+    };
+  }
+
+  /* An edge column's gesture in one of its two modes. The side of the line picks the
+   * shot an extend takes: the left shot's out, the right shot's in. */
+  function columnParams(d, kind) {
+    const L = tl.byId(d.L), R = tl.byId(d.R);
+    if (!L || !R) return {};
+    if (kind === 'roll') return rollParams(L, R);
+    return d.side === 'l' ? trimParams(L, 'out') : trimParams(R, 'in');
+  }
+
   function onDown(e) {
     if (e.button !== 0 || drag || !tl.state.segs.length) return;
-    const roll = e.target.closest('.tl-roll');
+    const q = e.target.closest('.tl-edge > .q');
     const h = e.target.closest('.tl-h');
     const blk = e.target.closest('.blk');
     let d = null;
-    if (roll && roll.dataset.left && roll.dataset.right) {
-      const L = tl.byId(roll.dataset.left), R = tl.byId(roll.dataset.right);
-      if (!L || !R) return;
-      const durL = clipDur(L.clip);
-      d = {
-        kind: 'roll', left: L.id, right: R.id, ids: [L.id, R.id],
-        clipL: L.clip, clipR: R.clip, outL0: L.out, inR0: R.in,
-        b0: tl.filmStart(R.id),
-        lo: Math.max(L.in + MIN_LEN - L.out, -R.in),
-        hi: Math.min(durL - L.out, R.out - MIN_LEN - R.in),
-        cuts: cutPoints(),
-      };
+    if (q) {
+      const col = q.parentElement;
+      if (!col.dataset.left || !col.dataset.right) return;
+      d = { col, row: q.dataset.row, side: q.dataset.side, L: col.dataset.left, R: col.dataset.right };
+      Object.assign(d, columnParams(d, modeFor(d.row, e.shiftKey)));
+      if (!d.kind) return;
     } else if (h && blk) {
       const seg = tl.byId(blk.dataset.id);
       if (!seg) return;
-      d = {
-        kind: 'trim', id: seg.id, ids: [seg.id], edge: h.classList.contains('in') ? 'in' : 'out',
-        clip: seg.clip, in0: seg.in, out0: seg.out, fs0: tl.filmStart(seg.id), dur: clipDur(seg.clip),
-      };
+      d = trimParams(seg, h.classList.contains('in') ? 'in' : 'out');
     } else if (blk && e.altKey) {
       const seg = tl.byId(blk.dataset.id);
       if (!seg) return;
@@ -355,7 +416,16 @@
                        moved: false, dt: 0, suspend: false, snapped: null, dirty: false });
     drag = d;
     try { lane.setPointerCapture(e.pointerId); } catch (err) { /* not pointer-capable */ }
-    lane.classList.add('tl-dragging', `tl-drag-${d.kind}`);
+    lane.classList.add('tl-dragging');
+    if (d.col) lane.classList.add('tl-drag-edge');
+    enter(d);
+  }
+
+  /* Take the edge: the cursor class, the entry under the mode's label, the active edge,
+   * the selection and the monitor's park. At pointerdown, and again on a ⇧ flip. */
+  function enter(d) {
+    lane.classList.remove('tl-drag-trim', 'tl-drag-roll', 'tl-drag-slip');
+    lane.classList.add(`tl-drag-${d.kind}`);
     tl.begin(d.kind);
     d.ids.forEach((id) => { const s = tl.byId(id); if (s) load(s.clip); });
     if (d.kind === 'trim') {
@@ -371,6 +441,25 @@
     }
   }
 
+  /* ⇧ pressed or released during an edge column's drag: the other mode, without letting
+   * go. The entry begun at pointerdown is cancelled — the cut back as it was — and begun
+   * again under the new label, so the one undo entry says what the drag ended as; the
+   * pointer's travel so far is re-applied in the new mode. */
+  function flip(shiftHeld) {
+    const d = drag;
+    if (!d || !d.col) return;
+    const kind = modeFor(d.row, shiftHeld);
+    if (kind === d.kind) return;
+    tl.cancel();
+    const params = columnParams(d, kind);
+    if (!params.kind) { finish(true); return; }
+    const { col, row, side, L, R, pointerId, x0, zoom, p0, moved, dt, suspend, dirty } = d;
+    drag = Object.assign({ col, row, side, L, R, pointerId, x0, zoom, p0, moved, dt, suspend, dirty,
+                           snapped: null }, params);
+    enter(drag);
+    if (drag.moved) schedule();
+  }
+
   function cutPoints() {
     const pts = [0];
     let t = 0;
@@ -379,8 +468,10 @@
   }
 
   function onMove(e) {
-    if (!drag || e.pointerId !== drag.pointerId) return;
+    if (!drag) return;
+    if (e.pointerId !== drag.pointerId) return;
     e.stopPropagation();
+    if (drag.col) flip(e.shiftKey);          // a no-op while the mode already matches
     const dx = e.clientX - drag.x0;
     if (!drag.moved && Math.abs(dx) < CLICK_PX) return;
     drag.moved = true;
@@ -442,7 +533,7 @@
     drag = null;
     cancelAnimationFrame(stepRaf); stepRaf = 0;
     try { lane.releasePointerCapture(d.pointerId); } catch (err) { /* already released */ }
-    lane.classList.remove('tl-dragging', 'tl-drag-trim', 'tl-drag-roll', 'tl-drag-slip');
+    lane.classList.remove('tl-dragging', 'tl-drag-trim', 'tl-drag-roll', 'tl-drag-slip', 'tl-drag-edge');
     clearTicks(); hideTip();
     ui.line.hidden = true;
     if (cancelled) tl.cancel(); else tl.commit();
@@ -475,6 +566,10 @@
   }
 
   function onKey(e) {
+    if (e.key === 'Shift') {       // before the input guard: a drag runs wherever focus is
+      if (drag) flip(true);
+      return;
+    }
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName) || e.target.isContentEditable) return;
     const k = e.key;
     if (k === 'Escape') {
@@ -486,6 +581,11 @@
     if (!tl.state.segs.length || drag) return;
     if (k === ',' || k === '<') { e.preventDefault(); nudge(-1, e.shiftKey || k === '<'); }
     else if (k === '.' || k === '>') { e.preventDefault(); nudge(1, e.shiftKey || k === '>'); }
+  }
+
+  function onKeyUp(e) {
+    if (e.key !== 'Shift') return;
+    if (drag) flip(false);
   }
 
   /* ---------------------------------------------------------------- mount */
@@ -501,6 +601,7 @@
     lane.addEventListener('pointerup', onUp, true);
     lane.addEventListener('pointercancel', onCancel, true);
     document.addEventListener('keydown', onKey);
+    document.addEventListener('keyup', onKeyUp);
     mo = new MutationObserver(scheduleLayout);
     mo.observe(lane, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
     tl.on('change', warm);
@@ -508,7 +609,7 @@
     warm();
     layout();
     tl.trim = {
-      SNAP_PX, FRAME,
+      SNAP_PX, FRAME, EDGE_PX,
       get magnet() { return magnet; },
       setMagnet,
       get active() { return active; },

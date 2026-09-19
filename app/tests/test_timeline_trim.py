@@ -1,12 +1,18 @@
-"""INTAKE M9 I9.2 — trims by drag and the magnet, driven in a real browser.
+"""INTAKE M9 I9.2 + I9.7 — trims by drag, the magnet, and the edge columns, driven in a
+real browser.
 
 The module under test is `app/static/timeline-trim.js`, built on the foundation
-(`timeline.js`, `window.tl`): ripple trims by an edge handle, rolls by the zone over a
-cut, slips by ⌥-drag, `,` / `.` nudges of the active edge, and the magnet — snapping to
-the playhead, a sentence's padded cut point, a word start, with a snap line that says
-what it took, `S` to turn it off, ⌘/ctrl to suspend it. The gestures are real pointer
-events through playwright's mouse; the assertions are made against app.js's `segs`, the
-EDL on disk, the transport's total and the undo stack — not the module's word for it.
+(`timeline.js`, `window.tl`). At every interior cut an edge column, 16 px centred on the
+cut line, the lane's full height, split by height — the top half extends or shortens the
+shot and the rest of the film moves (a ripple trim), the bottom half rolls the cut into the
+neighbour, ⇧ flips the two before or during the drag; the film's first in and last out
+keep a full-height handle of their own; slips by ⌥-drag; `,` / `.` nudges of the active
+edge; and the magnet —
+snapping to the playhead, a sentence's padded cut point, a word start, with a snap line
+that says what it took, `S` to turn it off, ⌘/ctrl to suspend it. The gestures are real
+pointer events through playwright's mouse; the assertions are made against app.js's
+`segs`, the EDL on disk, the transport's total and the undo stack — not the module's word
+for it.
 
 Same fixture pattern as test_timeline_ui.py: the real uvicorn server on a real port,
 the synthetic three-clip bin (utterances at 0.5–2.0, 2.4–4.0, 5.0–5.6 with the cut pads
@@ -82,8 +88,8 @@ def page(live_server, project):
         # mouse, which works in viewport coordinates, lands on it instead of the lane.
         # Nothing here is about jobs: the strip is hidden for these tests.
         pg.add_style_tag(content="#progress { display: none !important; }")
-        pg.wait_for_selector("#tl .blk .tl-h.out")          # the lane has decorated the blocks
-        pg.wait_for_selector("#tl .tl-roll")
+        pg.wait_for_selector("#tl .blk .tl-h.in")           # the lane has decorated the blocks
+        pg.wait_for_selector("#tl .tl-edge .q.t.l")         # and laid the column over the cut
         # the magnet's points are fetched at mount; wait for the server's answer
         pg.evaluate("Promise.all(segs.map(s => tl.snapsFor(s.clip)))")
         yield pg
@@ -145,22 +151,52 @@ def drag(page, loc, dx: float, modifiers=(), release=True) -> tuple[float, float
     return x + dx, y
 
 
+def edge(page, i: int):
+    """The edge column over the cut after shot i (I9.7)."""
+    return page.locator("#tl .tl-edge").nth(i)
+
+
+def quadrant(page, i: int, row: str, side: str):
+    """One hit target of an edge column: row `t` (extend) or `b` (roll), side `l` / `r`
+    of the cut line."""
+    return edge(page, i).locator(f".q.{row}.{side}")
+
+
 def out_handle(page, i: int):
-    return page.locator("#tl .blk").nth(i).locator(".tl-h.out")
+    """Shot i's out: the block's own full-height handle at the film's last out, else the
+    top-left quadrant of the column over the cut (I9.7 folded the interior handles in)."""
+    if i == page.locator("#tl .blk").count() - 1:
+        return page.locator("#tl .blk").nth(i).locator(".tl-h.out")
+    return quadrant(page, i, "t", "l")
 
 
 def in_handle(page, i: int):
-    return page.locator("#tl .blk").nth(i).locator(".tl-h.in")
+    """Shot i's in: the block's own handle at the film's first in, else the top-right
+    quadrant of the column over the cut before it."""
+    if i == 0:
+        return page.locator("#tl .blk").nth(i).locator(".tl-h.in")
+    return quadrant(page, i - 1, "t", "r")
+
+
+def roll_zone(page, i: int):
+    """The bottom half of the column over the cut after shot i — either side rolls."""
+    return quadrant(page, i, "b", "l")
 
 
 # ------------------------------------------------------------------ ripple, roll, slip
 
 def test_dragging_the_out_handle_ripple_trims_and_one_undo_restores(page, project):
-    """0.3 s of pointer travel on shot 1's out handle: its out moves 3.0 → 3.3, the film
-    closes up (the total is 4.3 s on the ruler and the transport), the EDL on disk
-    follows, and the whole drag is one undo entry labelled `trim`."""
+    """0.3 s of pointer travel on shot 1's out — the top-left quadrant of the column over
+    the cut: its out moves 3.0 → 3.3, shot 2 is untouched and slides later (the total is
+    4.3 s on the ruler and the transport), the EDL on disk follows, and the whole drag is
+    one undo entry labelled `trim`. The block's own out handle is hidden: an interior
+    edge belongs to the column; the film's first in keeps its handle."""
     z = zoom(page)
-    assert page.locator("#tl .blk").nth(0).locator(".tl-h").count() == 2
+    blk = page.locator("#tl .blk").nth(0)
+    assert blk.locator(".tl-h.in").is_visible(), "the film's first in keeps its handle"
+    assert blk.locator(".tl-h.out").is_hidden(), "an interior out is the edge column's"
+    assert page.locator("#tl .tl-edge").count() == 1
+    assert page.locator("#tl .tl-edge .q").count() == 4
     drag(page, out_handle(page, 0), 0.3 * z)
     assert page.evaluate("segs[0].out") == pytest.approx(3.3, abs=0.02)
     assert page.evaluate("segs[0].in") == 1.0
@@ -197,12 +233,13 @@ def test_dragging_the_in_handle_moves_the_in_point_and_the_film_closes_up(page):
 
 
 def test_a_boundary_drag_rolls_the_cut_and_the_film_length_holds(page):
-    """The zone over the cut between shots 1 and 2: 0.4 s to the right gives shot 1's
-    out and shot 2's in the same 0.4 s; the sum of the lengths is still 4.0 s."""
+    """The bottom half of the column over the cut between shots 1 and 2: 0.4 s to the
+    right gives shot 1's out and shot 2's in the same 0.4 s; the sum of the lengths is
+    still 4.0 s."""
     z = zoom(page)
-    roll = page.locator("#tl .tl-roll")
-    assert roll.count() == 1
-    assert page.evaluate("getComputedStyle(document.querySelector('#tl .tl-roll')).cursor") \
+    roll = roll_zone(page, 0)
+    assert page.locator("#tl .tl-edge").count() == 1
+    assert page.evaluate("getComputedStyle(document.querySelector('#tl .tl-edge .q.b.l')).cursor") \
         == "col-resize"
     drag(page, roll, 0.4 * z)
     r = ranges(page)
@@ -259,6 +296,157 @@ def test_a_press_on_a_handle_without_travel_is_a_click_and_esc_cancels_a_drag(pa
     page.mouse.up()
     assert ranges(page) == [[1.0, 3.0], [0.0, 2.0]]
     assert page.locator("#undo").is_disabled()
+
+
+# ------------------------------------------------------------------ the edge columns (I9.7)
+
+def test_the_top_half_of_a_cut_extends_the_shot_and_pushes_the_rest(page):
+    """The column over the cut between shots 1 and 2: 16 px centred on the line, the
+    lane's full height, split at half. Its top-left quadrant is shot 1's out — +0.3 s
+    grows the shot, shot 2's range is untouched and its film start slides by 0.3, the
+    total grows by 0.3, one ⌘Z restores. The top-right quadrant is shot 2's in."""
+    z = zoom(page)
+    col, blk = edge(page, 0).bounding_box(), page.locator("#tl .blk").nth(0).bounding_box()
+    assert col["width"] == pytest.approx(16, abs=0.5)
+    assert col["height"] == pytest.approx(blk["height"], abs=0.5)
+    assert col["x"] + 8 == pytest.approx(blk["x"] + blk["width"], abs=0.5), "centred on the cut"
+    q = quadrant(page, 0, "t", "l").bounding_box()
+    assert q["width"] == pytest.approx(8, abs=0.5) and q["height"] == pytest.approx(col["height"] / 2, abs=0.5)
+    assert q["y"] == pytest.approx(col["y"], abs=0.5), "the top half"
+    drag(page, quadrant(page, 0, "t", "l"), 0.3 * z)
+    assert page.evaluate("segs[0].out") == pytest.approx(3.3, abs=0.02)
+    assert page.evaluate("segs[0].in") == 1.0
+    assert ranges(page)[1] == [0.0, 2.0], "the neighbour's range is untouched"
+    total = film_total(page)
+    assert total == pytest.approx(4.3, abs=0.02)
+    assert page.locator("#tl .tl-total").inner_text() == f"0:{total:04.1f}"
+    assert page.evaluate("tl.filmStart(segs[1].id)") == pytest.approx(2.3, abs=0.02), "shot 2 slid later"
+    assert page.locator("#undo").get_attribute("title").startswith("undo: trim")
+    page.keyboard.press("Control+z")
+    assert ranges(page) == [[1.0, 3.0], [0.0, 2.0]]
+    assert page.locator("#undo").is_disabled(), "one entry for the drag"
+    # right of the line, the top half is shot 2's in: +0.4 s shortens shot 2, shot 1 holds
+    drag(page, quadrant(page, 0, "t", "r"), 0.4 * z)
+    r = ranges(page)
+    assert r[0] == [1.0, 3.0]
+    assert r[1][0] == pytest.approx(0.4, abs=0.02) and r[1][1] == 2.0
+    assert film_total(page) == pytest.approx(3.6, abs=0.02)
+    page.keyboard.press("Control+z")
+    assert ranges(page) == [[1.0, 3.0], [0.0, 2.0]]
+
+
+def test_the_bottom_half_rolls_the_cut(page):
+    """Either bottom quadrant rolls: shot 1's out and shot 2's in take the same delta, the
+    sum of the lengths holds, the entry is `roll`."""
+    z = zoom(page)
+    q = quadrant(page, 0, "b", "r").bounding_box()
+    col = edge(page, 0).bounding_box()
+    assert q["y"] == pytest.approx(col["y"] + col["height"] / 2, abs=0.5), "the bottom half"
+    drag(page, quadrant(page, 0, "b", "r"), 0.4 * z)
+    r = ranges(page)
+    assert r[0][1] == pytest.approx(3.4, abs=0.02)
+    assert r[1][0] == pytest.approx(0.4, abs=0.02)
+    assert r[1][0] == pytest.approx(r[0][1] - 3.0, abs=1e-9)
+    assert film_total(page) == pytest.approx(4.0, abs=1e-9)
+    assert page.locator("#undo").get_attribute("title").startswith("undo: roll")
+    page.keyboard.press("Control+z")
+    assert ranges(page) == [[1.0, 3.0], [0.0, 2.0]]
+
+
+def test_shift_flips_extend_and_roll_before_and_during_a_drag(page):
+    """⇧ on the top half rolls; ⇧ on the bottom half extends. Mid-drag, ⇧ pressed turns
+    the extend in flight into a roll — the cut back as the press found it, the travel so
+    far re-applied — and released turns it back; the tooltip follows; the one undo entry
+    is labelled by what the drag ended as."""
+    z = zoom(page)
+    drag(page, quadrant(page, 0, "t", "l"), 0.4 * z, modifiers=["Shift"])
+    r = ranges(page)
+    assert r[0][1] == pytest.approx(3.4, abs=0.02) and r[1][0] == pytest.approx(0.4, abs=0.02)
+    assert film_total(page) == pytest.approx(4.0, abs=1e-9)
+    assert page.locator("#undo").get_attribute("title").startswith("undo: roll")
+    page.keyboard.press("Control+z")
+    assert ranges(page) == [[1.0, 3.0], [0.0, 2.0]]
+    drag(page, quadrant(page, 0, "b", "l"), 0.3 * z, modifiers=["Shift"])
+    assert page.evaluate("segs[0].out") == pytest.approx(3.3, abs=0.02)
+    assert ranges(page)[1] == [0.0, 2.0]
+    assert film_total(page) == pytest.approx(4.3, abs=0.02)
+    assert page.locator("#undo").get_attribute("title").startswith("undo: trim")
+    page.keyboard.press("Control+z")
+    assert ranges(page) == [[1.0, 3.0], [0.0, 2.0]]
+    # mid-drag: an extend in flight...
+    drag(page, quadrant(page, 0, "t", "l"), 0.4 * z, release=False)
+    page.wait_for_function("Math.abs(segs[0].out - 3.4) < 0.02 && segs[1].in === 0", timeout=3000)
+    assert page.evaluate("tl.trim.dragging") == "trim"
+    assert "the rest moves" in page.locator("#tl .tl-tip").inner_text()
+    # ...becomes a roll when ⇧ goes down, without letting go
+    page.keyboard.down("Shift")
+    page.wait_for_function("Math.abs(segs[1].in - 0.4) < 0.02", timeout=3000)
+    assert page.evaluate("tl.trim.dragging") == "roll"
+    assert film_total(page) == pytest.approx(4.0, abs=1e-9)
+    assert page.locator("#tl .tl-tip").inner_text().startswith("roll")
+    # ...and an extend again when it comes up
+    page.keyboard.up("Shift")
+    page.wait_for_function("segs[1].in === 0 && Math.abs(segs[0].out - 3.4) < 0.02", timeout=3000)
+    assert page.evaluate("tl.trim.dragging") == "trim"
+    page.mouse.up()
+    assert ranges(page)[1] == [0.0, 2.0]
+    assert film_total(page) == pytest.approx(4.4, abs=0.02)
+    assert page.locator("#undo").get_attribute("title").startswith("undo: trim")
+    page.keyboard.press("Control+z")
+    assert ranges(page) == [[1.0, 3.0], [0.0, 2.0]]
+    assert page.locator("#undo").is_disabled(), "the flips left nothing else on the stack"
+
+
+def test_the_last_out_extends_over_the_whole_height(page):
+    """The film's last out has no neighbour to roll into: shot 2's out keeps the block's
+    own full-height handle — a press at its bottom extends too — and no column sits past
+    the end. The tooltip says what moves: the end."""
+    z = zoom(page)
+    h = out_handle(page, 1)
+    blk = page.locator("#tl .blk").nth(1).bounding_box()
+    box = h.bounding_box()
+    assert box["height"] == pytest.approx(blk["height"], abs=3), "the whole height"
+    assert box["x"] + box["width"] == pytest.approx(blk["x"] + blk["width"], abs=2), "flush with the edge"
+    assert page.locator("#tl .tl-edge").count() == 1
+    reveal(page)
+    box = h.bounding_box()
+    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] - 3
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + 0.5 * z, y, steps=6)
+    page.wait_for_function("Math.abs(segs[1].out - 2.5) < 0.02", timeout=3000)
+    tip = page.locator("#tl .tl-tip").inner_text()
+    assert tip.startswith("out 2.5") and "+0.5" in tip and "the end moves" in tip, tip
+    page.mouse.up()
+    assert ranges(page)[0] == [1.0, 3.0]
+    assert page.evaluate("segs[1].out") == pytest.approx(2.5, abs=0.02)
+    assert film_total(page) == pytest.approx(4.5, abs=0.02)
+    assert page.locator("#undo").get_attribute("title").startswith("undo: trim")
+
+
+def test_the_tooltip_says_the_rest_moves_on_an_extend_and_roll_on_a_roll(page):
+    z = zoom(page)
+    drag(page, quadrant(page, 0, "t", "l"), 0.3 * z, release=False)
+    page.wait_for_function("Math.abs(segs[0].out - 3.3) < 0.02", timeout=3000)
+    tip = page.locator("#tl .tl-tip").inner_text()
+    assert tip.startswith("out 3.3") and "+0.3" in tip and "the rest moves" in tip, tip
+    page.keyboard.press("Escape")
+    page.mouse.up()
+    drag(page, quadrant(page, 0, "b", "l"), 0.4 * z, release=False)
+    page.wait_for_function("Math.abs(segs[1].in - 0.4) < 0.02", timeout=3000)
+    tip = page.locator("#tl .tl-tip").inner_text()
+    assert tip.startswith("roll · CLIP_A out 3.4") and "CLIP_B in 0.4" in tip, tip
+    page.keyboard.press("Escape")
+    page.mouse.up()
+    assert ranges(page) == [[1.0, 3.0], [0.0, 2.0]]
+    # shortening reads as a minus
+    drag(page, quadrant(page, 0, "t", "l"), -0.3 * z, release=False)
+    page.wait_for_function("Math.abs(segs[0].out - 2.7) < 0.02", timeout=3000)
+    tip = page.locator("#tl .tl-tip").inner_text()
+    assert tip.startswith("out 2.7") and "−0.3" in tip and "the rest moves" in tip, tip
+    page.keyboard.press("Escape")
+    page.mouse.up()
+    assert ranges(page) == [[1.0, 3.0], [0.0, 2.0]]
 
 
 # ------------------------------------------------------------------ the magnet
