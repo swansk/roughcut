@@ -10,6 +10,17 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **INTAKE M10 — colour: correct, match, look — planned as the next priority after I9.6.**
+  Session 15 researched what colourists do with GoPro footage and ran a local lab on
+  both bins (16 frames, numpy/OpenCV, ffmpeg 7.0): a snow-referenced auto-balance with
+  clamped gains, exposure and a soft shoulder brings Killington's blue-grey snow to
+  white and adds no clipping on any frame; one 33³ `.cube` per shot applied with
+  `lut3d` reproduces numpy at 45 dB; the full→limited range trap is measured and the
+  explicit-range chain fixed; the grade costs +20 % on a preview encode and +33 % on
+  delivery; Reinhard matching must clamp the spread. Six decisions (closed vocabulary,
+  keyed to segment ids, one LUT per part on the existing re-encode, WebGL preview on the
+  monitor, an auto that can only nudge, looks as a library) and items I10.0–I10.6.
+  HANDOFF points at it. Lab artefacts kept outside the repo in `Projects/roughcut-lab/`.
 - **I9.3 ticked in INTAKE (M9, keyboard editing)** with the two commits (`6801ae3`,
   `7505826`), the counts (13 tests; 71 with the foundation's and the flow suite) and the
   lane's decisions: the `window`-capture listener, `o` left to the switcher until a clip

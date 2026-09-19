@@ -7,8 +7,10 @@ board is now a cutting room: a real timeline (ruler, zoom, scrub), trims by drag
 to sentences and onsets, JKL and the rest of the keyboard, lanes (markers, music ducks, the
 bin's keeps, a proposal ghost), drag-and-drop, and an inspector for the selected shot in place
 of the old card list. Shots carry stable ids. **Next is Karl's look at the timeline (I9.6)**,
-then his numbered feature 3 (1 = cuts, 2 = the timeline), and the three small spends waiting on
-his word. Everything below this line is the history that led there, and the older roadmap.
+then **M10, colour** (correct every shot from its snow, match shots to a hero, one look over
+the film — researched and lab-tested on both bins in session 15, plan and numbers in INTAKE M10,
+nothing built yet), then his numbered feature 3 (1 = cuts, 2 = the timeline), and the three
+small spends waiting on his word. Everything below this line is the history that led there, and the older roadmap.
 
 **Session 12 (2026-09-08, evening) — the first of Karl's new features: cuts.** *"Work on
 multiple projects at the same time … switching easily between projects, and saving copies so

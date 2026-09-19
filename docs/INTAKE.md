@@ -56,7 +56,7 @@ until R11.
 ## Where we are
 
 _2026-09-18, end of session 14._ **M9, the promoted timeline, is built: I9.0–I9.5 ticked;
-I9.6 is Karl's look.** Karl's feature 2 (*"improve the timeline, review what features in tools
+I9.6 is Karl's look.** **After it, the next priority is M10 (colour: correct, match, look)** — researched and lab-tested in session 15, items I10.0–I10.6 below, nothing built yet. Karl's feature 2 (*"improve the timeline, review what features in tools
 like Premiere Pro make timeline editing a breeze and add all of these"*) — the review is at
 the top of M9; everything on its list is on the board: a real timeline with a ruler, zoom and
 scrub (`139e171`); ripple / roll / slip by drag with the magnet to cuts, the playhead,
@@ -607,6 +607,139 @@ and effects derive from it at render.
       a `tl.reveal(id)` (the module's own keepInView for a block) would let `scrollSel` avoid
       `scrollIntoView` on the page.
 - [ ] I9.6 Live on Killington: Karl's look.
+
+### M10 · Colour: correct, match, look — the next priority after I9.6 (2026-09-18)
+
+**Why now.** Every render so far is the camera's picture untouched: HERO9 GoPro Color,
+8-bit HEVC, full-range 4:2:0 tagged bt709, no log profile on this model (firmware
+`HD9.01.01.72.00` on both bins; `ffprobe` + the udta strings, session 15). On Killington
+(overcast) the snow sits at L\* 66–78 with a blue cast of b\* −1 to −3.7 and a mean chroma of
+2–5: grey, cold, flat. On Copper (bluebird) chroma is 8–25 and 1–11 % of the pixels in the
+sunny frames are at or above 98 % — the sky is clipped in camera and nothing brings it back.
+A grade is the single largest visible-quality lever left that costs no model call.
+
+**The review — what a colourist does with GoPro footage** (research, session 15; the
+sources are in the lab notes at `Projects/roughcut-lab/`): normalise first (a Flat/Log →
+709 transform when the profile needs one; HERO9 GoPro Color needs none), then primaries in
+a fixed order — exposure, white balance, contrast, saturation — then secondaries, then the
+look, and *grade under the look* so the look stays fixed while shots are balanced beneath
+it. Snow: expose so it sits at 85–95 IRE with texture, never 100; blue shade is lit by
+sky, so warm the shadows rather than the whole frame; skin 40–70 IRE on the +I line
+(123° ± 10 on the vectorscope). Shot matching in Resolve/Premiere/FCP is statistics
+matching on normalised clips (means and spreads of the colour distribution), and it fails
+the same way everywhere: it cannot restore clipped detail and it splits the difference on
+large lighting gaps. Creative LUTs are applied at 40–60 % strength, 33³ is the right size
+for a 709 input, and 8-bit skies need dither or deband before the final encode. Everything
+a pro touches for a three-minute ski edit is: balance per shot, match to a hero, one look
+over the film, protect the highlights.
+
+**What the lab proved on this footage** (`grade_lab*.py`, 16 frames across both bins,
+numpy/OpenCV in WSL, ffmpeg 7.0 static):
+
+- *Auto-balance from the snow.* Pixels with L\* > 62 and chroma < 14 are the white
+  reference; per-channel gains from its mean (clamped ± 15 %), exposure so its luma lands at
+  0.86 (clamped 0.75–1.5), a soft shoulder at 0.80 so exposure never adds clipping, blacks
+  moved half-way to 3 % (clamped ± 4 %). On Killington that is ×1.16–1.33 exposure with gains
+  within ± 3 %; pixels ≥ 98 % go to **0.000 on every frame** (before: up to 0.108 on Copper's
+  sun); snow reads white instead of blue-grey. Copper's sunny frames barely move — the auto
+  leaves a good picture alone. *Failure found:* the white reference picked an airport
+  ceiling and cooled a warm indoor scene — the reference must require outdoor evidence
+  (≥ 20 % of the frame, bright, near-neutral) and every shot gets an *off* switch.
+- *One LUT per shot, applied by ffmpeg, is exact enough.* A 33³ `.cube` baked from the numpy
+  function and applied with `lut3d=interp=tetrahedral` reproduces numpy at **45 dB PSNR**
+  (mean error 1/255); 17³ is within 0.1 dB of 33³, so the browser texture can be small.
+- *The range trap is real and measured.* `lut3d,format=yuv420p` straight from `yuvj420p`
+  moved the frame's YAVG 146.8 → 141.5 — a silent full→limited squeeze. The grey self-test
+  (a full-range 128 grey must read 126 after an explicit limited conversion) passes through
+  `scale=in_range=full:out_range=limited` and `format=yuv420p`; `zscale` refuses untagged
+  input, so swscale does the range work. Today's renders are already tv-range tagged
+  (`color_range=tv` on `cut_110ecb13`), so a graded render must land there too.
+- *Cost.* 4 s of 4K60 source: preview 1.9 → 2.3 s (+20 %), delivery 11.0 → 14.6 s (+33 %) —
+  all x264 CPU; no GPU needed.
+- *Shot match.* Reinhard in Lab (mean and spread) moved a cold, dark trees shot toward the
+  reference's balance; matching the *spread* with the ratio clamped at 0.75 flattened the
+  trees. Match means; clamp spread to 0.85–1.15 or leave it alone.
+- *Looks.* Three formula looks (crisp: S-curve 0.22 + vibrance; alpine: + cool-shadow /
+  warm-highlight split tone; filmic: softer curve, sat 0.92, warmer, highlights
+  desaturated) read as subtle at 480 px and as a definite improvement at 800 px on the
+  overcast frames, as a look at ≤ 60 % should. A creative LUT is nothing more than one of
+  these baked; the `.cube` drop-in is the same code path.
+
+**Decisions this milestone takes (same rules as EFFECTS.md and decision 5):**
+
+1. **The model never writes filter strings.** Colour is a closed vocabulary with clamped
+   numbers: `balance` (gain r/g/b, exposure, knee, lift — the auto fills them, the human
+   nudges), `match` (a reference segment id), `look` (a name from the looks library and a
+   strength 0–1). The renderer owns every ffmpeg string; the LUT is baked from validated
+   parameters, never loaded from a note.
+2. **Colour is keyed to a segment id and expressed in parameters, never ranges.** A trim
+   re-derives the auto from the samples inside the new in/out; nothing bakes a range in.
+   Film-level defaults (`colour.mode`, `colour.look`, `colour.reference`) apply to every
+   shot without an override.
+3. **One 33³ `.cube` per shot, applied on the part encode.** `assemble.py` re-encodes every
+   part already, so the grade costs no generation of quality; the chain is decode →
+   `scale=in_range=full:out_range=full` → `format=gbrpf32le` → `lut3d` → `scale=…
+   out_range=limited` → `format=yuv420p`, and the grey self-test is a unit test.
+4. **The monitor shows the grade without a render.** A WebGL shader over the monitor's two
+   `<video>` elements applies the shot's LUT per frame (17³ texture, fetched per segment);
+   one key compares before/after. The board previews on the proxy and the render bakes the
+   same LUT on the master, so the two agree by construction (EFFECTS.md rule 2).
+5. **The auto can only nudge.** Every parameter is clamped to the lab's ranges; it computes
+   once per shot from sampled frames (a fixed LUT cannot flicker); it is *on* by default
+   for outdoor shots with a white reference and *off* when it cannot find one; the human's
+   off switch beats it.
+6. **Looks are a library, not a prompt.** `assets/looks/manifest.json` describes each look
+   (the three formula presets and any `.cube` Karl drops in) the way the asset manifest
+   describes a hitmarker; the Ask chooses by description and strength.
+
+Not taken: HDR/log pipelines (nothing on the HERO9 produces them — a Flat-profile detector
+goes under Discovered if Karl ever shoots Flat), per-frame auto (flickers), qualifiers,
+windows, tracking, grain and halation (a `deband` on the delivery encode is the one 8-bit
+concession worth making, as an option), GPU filters.
+
+- [ ] I10.0 **Measure, at index time.** `roughcut/colour.py` `measure(frame)` → luma
+      percentiles, clip fraction (≥ 98 %), mean chroma, the white reference (fraction,
+      L\*, a\*, b\*, mean RGB) — the lab's `measure()`; `sample(clip, every_s=5)` reads the
+      **proxy** (statistics do not need 4K) and writes `<stem>.colour.json`; journal stage
+      `colour` after `proxy`, free, part of the released-whole rule. Tests on the synthetic
+      project: a grey frame measures neutral, a blue-cast frame reports b\* < 0.
+- [ ] I10.1 **Balance and bake, in the render.** `colour.balance_params(samples)` (the
+      lab's clamps; `None` without a white reference), `colour.bake_cube(fn, path, n=33)`,
+      `colour.apply_chain(cube)` returning the explicit-range `-vf` fragment;
+      `assemble.py` derives each part's LUT from the segment's samples (inside in/out, else
+      the clip's) when the EDL's `colour.mode` is `auto`, honouring a per-segment override
+      keyed by id; `server.py` validates `colour` the way `effects_music` is validated.
+      Tests: grey self-test 128 → 126 through the chain; parity numpy vs `lut3d` ≥ 40 dB on a
+      synthetic gradient; a trim changes the derived exposure on a frame-split synthetic
+      clip; `mode: off` reproduces today's render byte-for-byte.
+- [ ] I10.2 **Looks library.** `assets/looks/manifest.json` + the three formula looks
+      (`crisp`, `alpine`, `filmic`) as parameter sets, `.cube` files accepted with the same
+      manifest entry; strength blends toward identity inside the bake; film-level
+      `colour.look` + per-shot override. Test: strength 0 equals balance-only.
+- [ ] I10.3 **Match.** `colour.match_params(samples, reference_samples)` — Lab means,
+      spread clamped 0.85–1.15 — toward `colour.reference` (a segment id; default the
+      hero, else the first shot); per-shot *match to previous*. Test: a shifted copy of the
+      reference matches back to within 1 L\* / 0.5 a\*b\*.
+- [ ] I10.4 **The monitor and the inspector.** `app/static/grade.js`: WebGL LUT over
+      `#pv0`/`#pv1` fed by `GET /api/lut/{segment_id}` (17³, the same bake), `G` toggles
+      the grade to compare, `requestVideoFrameCallback` drives the upload; the inspector
+      gains a *Colour* block — auto on/off, look + strength, warm/cool and brighter/darker
+      nudges (± steps on the clamped parameters), *reference* / *match to previous*, and
+      the numbers as the witness (snow L\*, cast a\*/b\*, clipped %). Browser test: the
+      canvas draws, `G` flips it, a nudge PUTs the override keyed by id.
+- [ ] I10.5 **The Ask reaches colour.** A note ("warmer", "less blue", "make it pop",
+      "match the lift shot to the summit") → parameters from the vocabulary and the looks
+      manifest, as a proposal on the ghost lane; Accept/Discard as ever; the scoped shot
+      ask carries a colour clause. Test: an invented look name fails validation.
+- [ ] I10.6 **Live on Killington: Karl's look.** The 21-shot cut rendered at preview with
+      `mode: auto` + `alpine` at 0.5 beside today's render; his verdict decides the default
+      look and whether the auto stays on by default.
+
+**Lab artefacts** (outside the repo, kept): `Projects/roughcut-lab/` — `grade_lab.py`
+(measure, balance, looks, bake, parity), `grade_lab2.py` (shoulder balance, range test,
+timing, match), `grade_lab3.py` (zoom sheet, grey self-test), the two research reports, the
+frames, `out/sheet_looks2.jpg` (16 frames × original/balanced/crisp/alpine/filmic),
+`out/sheet_zoom.jpg`, `out/sheet_match.jpg`, `out/kill_CLIP_07.alpine.cube`.
 
 ## Lanes in flight
 
