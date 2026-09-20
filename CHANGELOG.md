@@ -83,6 +83,79 @@ same commit. Releases move entries into a dated version section.
   0.2 bed came back as eight impacts; a flat window now has none. Tests: `test_fx.py` — the
   validation edges, the onset peaks on a synthetic track, the synth read back (frequency by
   FFT, the -60 dB decay, the click, the filters, the sweep, the ceiling).
+- **Live nudging on the monitor (INTAKE M12, lane fx-ui, 4 of 4)** — EFFECTS.md, rule
+  4: *"Two clicks beats any amount of inference."* A hit clicked on its card is
+  selected (the row lights, the card says `hit 2 selected · click the monitor (paused)
+  to move it there`) and the monitor parks on its frame; a click on the paused
+  monitor then moves that hit's anchor to the click — `PUT /api/fx/{id}` with the
+  changed events, fractions of the frame with the picture's letterbox subtracted, the
+  server clearing the checklist — and the overlay draws it where it went. The
+  listener is capture-phase on the screen, so the screen's own click (play / pause)
+  does not fire for a move; with nothing selected, or while playing, the click stays
+  the screen's. The same hit clicked again deselects. Tested with a real click at
+  (0.25, 0.60): the server's copy moves within 0.03, the other hit and the time stay,
+  the sprite's alpha is found at the new anchor, playback did not start, and the two
+  pass-through cases still play and pause.
+- **Draw a reference — the sketch on the frame (INTAKE M12, lane fx-ui, 3 of 4)** —
+  Karl: *"options for human to draw references on a keyframe."* Draw a reference in
+  the FX tool pauses the monitor (parking it on the selected shot when it is
+  elsewhere) and hands `#fxCanvas` the pointer (`.sketch`, crosshair): strokes are
+  drawn as a 3-px accent line on screen whatever the proxy's size, several of them,
+  ⌫ undoes the last and Esc cancels — on window, capture, registered at load, so
+  while drawing neither reaches the timeline's ripple delete or the dock's overlay —
+  and the tool shows a small toolbar: the stroke count, a goal text (`the skis — put
+  the markers here`), Use it / Cancel. A stroke's points are fractions of the frame
+  (the picture is object-fit: contain inside the screen, so the letterbox is
+  subtracted), each stroke's centroid is a mark, and Use it builds `{t: the live clip
+  time, goal, strokes, marks, png}` — the png a data URL of the frame drawn into an
+  offscreen canvas at the video's own size with the strokes on it — which the design
+  box shows as `reference · 2 marks at 0:01.5 · the skis…` (with a ✕ to forget it)
+  until the next Design carries it; the server keeps the marks as the anchors, no
+  placing call. Clicks on the monitor while drawing do not start playback. Tests draw
+  with the mouse on the real canvas and check the marks against the drag's midpoints,
+  the fractions, the PNG, the ⌫ and Esc paths, and the designed effect's anchors.
+- **The monitor shows and sounds the effects (INTAKE M12, lane fx-ui, 2 of 4)** —
+  `#fxCanvas`, a 2D canvas over the monitor's live video (the grade.js pattern:
+  `requestVideoFrameCallback` on the live element, re-armed when it changes; a parked
+  video draws on `seeked`), draws every accepted or proposed effect of the live shot
+  at the live clip time from the same JSON the render draws from, sized to the proxy's
+  `videoWidth × videoHeight` so the same fractions land the same way on the master:
+  the sprite box is `overlay.size × width` px square, centred on (x·width, y·height)
+  plus (dx·width, dy·width), shapes in -1..1 across the box (a coordinate × half the
+  box; a stroke `width` and a text `h` × the box), `poseAt(overlay, t)` — the same
+  rules as `fx.pose_at`, checked against it in the browser at nine times — scales,
+  fades, rotates and offsets the whole sprite, `flash` tints the whole frame for its
+  duration, and an event draws only while `t ≤ clipT < t + duration` and only inside
+  the shot's range. The sound: one `Audio` per effect from `/api/fx/{id}/sound.wav`,
+  started when the live clip time crosses an event's `t` while playing, once per
+  event per pass (reset on seek and on play; two hits inside one WAV overlap through
+  a clone). Effects always show — no toggle. Tests park the monitor on a hit and read
+  the canvas's pixels back: the sprite's alpha at the anchor, the flash's 15 % in a
+  corner, nothing a frame earlier, not live on a shot without effects; Preview plays
+  the shot and the sound starts twice for two hits, once more after a seek.
+- **The FX tool on the board (INTAKE M12, lane fx-ui, 1 of 4)** — `app/static/fx.js`
+  fills the dock's FX tool (`#fx`) for the selected shot (`tl.state.anchor`, followed
+  through `tl.on('select')`): a header `FX · shot 1 · CLIP_A`, the shot's effects as
+  cards — name, `n hits`, a `proposed` (amber) / `accepted` (green) chip, the note and
+  the why, the events as `0:01.5 · x 0.50 y 0.70` rows with ◀ ▶ one-frame nudges
+  (`PUT /api/fx/{id}` with the changed events; the server's copy is what the card
+  shows back), the machine's checklist when Verify ran (✓ / ✗ / – per check with its
+  detail), and Preview (the shot plays in the monitor, this shot only) / Verify /
+  Iterate (a one-line box, Enter or Go → `POST /api/fx/revise`) / Accept / Discard for a
+  proposal, Remove for an accepted one — and the design box: a textarea, a `place on
+  the frames` checkbox whose label carries the price from `GET /api/fx/price?place=1`
+  (`≈ $0.21 · 8 frames`), Draw a reference and Design (`POST /api/fx/design`). Jobs
+  (`kind: fx`) are followed on the same `/api/jobs` registry the strip paints; a job
+  that finishes — including one seen finished for the first time after a reload —
+  refetches `GET /api/fx` and repaints, and the tool repaints only when what it is
+  built from changed, so a poll never interrupts typing. The rail badge counts the
+  shot's effects. Accept is the human's click; nothing here writes the EDL except
+  through the endpoints. `app/static/fx.css` styles it from the page's tokens.
+  `app/tests/test_fx_ui.py` drives it in a real browser with `fx.design` / `revise` /
+  `synth_sound` / `part_graph` / `verify` monkeypatched for the module (the render
+  lane's Python is not on this branch) and a FakeBackend on `roughcut.inference`; the
+  EDL seed carries fixed shot ids because a read mints ids in memory and never writes
+  them, and the fx endpoints look a shot up by id in the file.
 - **Effects foundation (INTAKE M12, I12.0)** — AI-designed video + audio effects, the
   contract and the loop. Karl, 2026-09-20: *"Add call of duty hit markers where my skis
   are with the sound effect … AI then goes and adds separate overlaid video with the

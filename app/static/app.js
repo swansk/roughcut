@@ -159,6 +159,9 @@ async function adopt(j) {
     toast('the proposal you asked for is ready');
   } else if (j.kind === 'render' && j.state === 'done') {
     await refreshVersions();
+  } else if (j.kind === 'fx' && j.state === 'done') {
+    // An effect designed, revised or verified (INTAKE M12): the FX tool repaints.
+    if (window.fx && typeof fx.refresh === 'function') fx.refresh();
   } else if (j.kind === 'find' && j.state === 'done') {
     // A model search started before a reload still lands its matches in the panel.
     const full = await (await fetch(`/api/job/${j.id}`)).json();
