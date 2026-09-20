@@ -10,6 +10,15 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The range bar's drag holds (INTAKE M12)** — Karl: *"the drag select for the effect
+  is not working / doesn't move much after I click on it to drag, seems like playhead
+  moving / jumping clip is glitching the tool itself."* Every move rebuilt the tool's
+  DOM (and so the handle being held), and each parked playhead rebuilt it again. The
+  bar, the inputs, the label and the timeline band now update in place while a handle
+  is held, the tool never repaints during a drag and repaints once on release, and the
+  moves are read on the window so a fast drag that leaves the 12-px handle still
+  counts. `test_fx_ui.py` drags the right handle to the middle across eight moves and
+  checks the handle is the same element, the window landed, the monitor is parked.
 - **Effects for everything, not hit markers on skis (INTAKE M12, I12.8)** — Karl,
   2026-09-20: *"ensure that the tool also does not overindex on just putting hit
   markers on skis, we will use this FOR ALL EFFECTS."* The vocabulary's limits let a

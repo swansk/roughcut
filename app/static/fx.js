@@ -500,11 +500,21 @@
       try { h.setPointerCapture(ev.pointerId); } catch (e) { /* fine */ }
       setWindowEnd(S.drag.end, t);
       parkSoon(t);
-      const move = (e2) => { const tt = barT(e2); if (tt != null) { setWindowEnd(S.drag.end, tt); parkSoon(tt); } };
-      const up = () => { h.removeEventListener('pointermove', move); S.drag = null; paint(true); };
-      h.addEventListener('pointermove', move);
-      h.addEventListener('pointerup', up, { once: true });
-      h.addEventListener('pointercancel', up, { once: true });
+      const move = (e2) => {
+        if (!S.drag) return;
+        const tt = barT(e2);
+        if (tt != null) { setWindowEnd(S.drag.end, tt); parkSoon(tt); }
+      };
+      const up = () => {
+        window.removeEventListener('pointermove', move, true);
+        window.removeEventListener('pointerup', up, true);
+        window.removeEventListener('pointercancel', up, true);
+        S.drag = null;
+        paint(true);
+      };
+      window.addEventListener('pointermove', move, true);
+      window.addEventListener('pointerup', up, true);
+      window.addEventListener('pointercancel', up, true);
       return;
     }
     park(t);
@@ -551,7 +561,28 @@
     const v = Number(value);
     if (!Number.isFinite(v)) return;
     S.window = which === 't0' ? { t0: v, t1: cur.t1 } : { t0: cur.t0, t1: v };
-    paint(true);
+    if (S.drag) updateBarDom(); else paint(true);
+  }
+
+  /* The bar, the inputs, the label and the timeline band follow the window without a
+   * rebuild — what a drag needs. */
+  function updateBarDom() {
+    const r = shotRange(S.shot);
+    if (!r) return;
+    const w = S.window || r;
+    const span = Math.max(0.001, r.t1 - r.t0);
+    const pct = (t) => Math.max(0, Math.min(100, ((t - r.t0) / span) * 100));
+    const win = $('#fxBar .win');
+    if (win) {
+      win.style.left = `${pct(w.t0).toFixed(2)}%`;
+      win.style.width = `${Math.max(0, pct(w.t1) - pct(w.t0)).toFixed(2)}%`;
+    }
+    const f = $('#fxFrom'), t = $('#fxTo');
+    if (f && document.activeElement !== f) f.value = Number(w.t0).toFixed(2);
+    if (t && document.activeElement !== t) t.value = Number(w.t1).toFixed(2);
+    const lbl = $('#fx .fxwhole');
+    if (lbl) lbl.textContent = windowFor(S.shot) ? `${fmtT(w.t0)}–${fmtT(w.t1)}` : 'the whole shot';
+    paintBand();
   }
 
   function sketchHtml() {
@@ -568,7 +599,7 @@
       S.shot, S.effects, S.sel, S.price,
       S.reference && [S.reference.t, S.reference.marks.length, S.reference.goal],
       S.window && [S.window.t0, S.window.t1],
-      S.peaks.length, S.drag && S.drag.end,
+      S.peaks.length,
       S.sketch && [S.sketch.strokes.length, S.sketch.goal], [...S.iterOpen], S.place,
       S.busy && [S.busy.id, S.busy.state, S.busy.detail, S.busy.milestone],
     ]);
@@ -579,6 +610,12 @@
   function paint(force) {
     const el = $('#fx');
     if (!el) return;
+    // While a bar handle is held, nothing rebuilds the tool: the first live version
+    // rebuilt it on every move and every parked playhead, which destroyed the handle
+    // being dragged after a few pixels (Karl: "doesn't move much after I click on it
+    // to drag … playhead moving / jumping clip is glitching the tool"). The bar
+    // updates in place (updateBarDom) and the tool repaints on release.
+    if (S.drag) return;
     const sig = signature();
     if (!force && sig === S.sig) return;
     S.sig = sig;

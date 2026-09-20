@@ -266,6 +266,35 @@ def wait_effect(page, fx_id: str, pred_js: str, timeout: float = 10.0) -> dict:
 
 # ---------------------------------------------------------------- the FX tool
 
+def test_the_range_bar_drag_survives_the_parked_playhead(page):
+    """Karl, 2026-09-20: the handle "doesn't move much after I click on it to drag".
+    A drag from the right handle to the middle of the bar moves the window's end to
+    the middle, the handle is the same element throughout (no rebuild), the monitor
+    is parked (paused) on the frame, and the band on the timeline follows."""
+    open_fx(page)
+    page.wait_for_selector("#fxBar .h1")
+    bar = page.locator("#fxBar").bounding_box()
+    h1 = page.locator("#fxBar .h1").bounding_box()
+    page.evaluate("document.querySelector('#fxBar .h1').dataset.mark = 'held'")
+    y = h1["y"] + h1["height"] / 2
+    page.mouse.move(h1["x"] + h1["width"] / 2, y)
+    page.mouse.down()
+    for k in range(1, 9):
+        page.mouse.move(h1["x"] + h1["width"] / 2 - k * (bar["width"] * 0.5 / 8), y)
+        page.wait_for_timeout(40)
+    assert page.evaluate("document.querySelector('#fxBar .h1').dataset.mark") == "held"   # never rebuilt
+    page.mouse.up()
+    page.wait_for_timeout(300)
+    seg = page.evaluate("segs[0]")
+    w = page.evaluate("fx.state.window")
+    assert w is not None
+    mid = seg["in"] + (seg["out"] - seg["in"]) * 0.5
+    assert abs(w["t1"] - mid) < 0.15 * (seg["out"] - seg["in"]), (w, seg)
+    assert page.evaluate("!player.playing") is True
+    assert "the whole shot" not in page.locator("#fx .fxwhole").inner_text()
+    assert page.locator("#tl .fx-tlband").count() == 1
+
+
 def test_the_tool_follows_the_selected_shot_and_prices_the_button(page):
     """The header names the shot; the design box is under it; the placing checkbox
     carries the price from GET /api/fx/price before anything is pressed."""
