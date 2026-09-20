@@ -875,6 +875,54 @@ grid, transitions.
       remembered per browser, double-click resets; icons and labels on the rail; the
       panel's controls tidied. `test_dock_ui.py` 9 tests.
 
+### M12 · Effects the model designs and the machine verifies — Karl, 2026-09-20
+
+**The ask.** *"Implement AI-generated video+audio effects control. E.g I have a clip that
+shows me hitting rocks with my skis, and I tell the AI 'Add call of duty hit markers where
+my skis are with the sound effect'. AI then goes and adds separate overlaid video with the
+effect (which it also generates itself) and the audio. Human can iterate with the AI to
+make it better, but AI also tests / verifies that the DoD is complete, e.g audio goes at
+same time as hit markers, is on the appropriate keyframes. Also include options for human
+to draw references on a keyframe for you, the AI to establish as an effect — with text
+description of effect goals. Consider the best ways to do this, implement one, and include
+HTML proposal with others (incl. online tools / other AI tools, ideally free)."*
+
+**Decisions.**
+1. **The asset is generated, not fetched** (EFFECTS.md Rule 4 turned inside out; Rules 1–3
+   hold). The model writes an *effect program* in a closed vocabulary — a procedural
+   sprite (shapes in a unit box, keyframed scale / opacity / rotate / offset, a flash) and
+   a procedural synth patch (tone / noise / click / sweep layers with envelopes) — and
+   code draws both: PIL + numpy for the master, a 2D canvas + WebAudio for the monitor,
+   from one JSON. No download, no licence, and "make it red and bigger" changes numbers.
+2. **An effect keys to a shot and sits at clip seconds**, like a witness: a rock strike is
+   a moment in the footage; trimming the in-point does not move it; an event outside the
+   shot is not drawn; a shot leaving the cut takes its effects with it.
+3. **Precision by narrowing** (Rule 3): the note locates the window, `onset_peaks` (the 10
+   Hz onset track already in every sidecar) finds the impacts, a *priced* frame-strip
+   call places the anchor on the skis, the human nudges. A drawn reference's marks are
+   the anchors directly — no call.
+4. **Proposals, never writes**: a design is a file under `work/fx/<bin>/`; Accept moves it
+   into the EDL's `effects`; the render reads only the EDL.
+5. **The DoD is a checklist the machine runs**, not a claim: every event in the shot,
+   every anchor in the frame, sound and overlay starting together, each event on an
+   onset peak (when the note names an impact), and — after a proof render of the one
+   shot on the proxy — a measured audio rise and a measured picture change at each
+   event. A priced sixth check asks the model whether the marker sits on the skis.
+
+- [x] I12.0 **Foundation** (lead): `roughcut/fx.py` (vocabulary, validation, pure helpers,
+      lane signatures), the `/api/fx` loop and jobs, the FX rail tool and `#fxCanvas`,
+      `/fx.js` + `/fx.css` stubs, `test_fx_api.py` (9).
+- [ ] I12.1 **The renderer, the model calls, the checks** (lane `agent/fx-core`): synth,
+      rasteriser, `part_graph`, assemble.py integration, the prompts, `design` /
+      `revise`, `verify` with its measurements; `test_fx.py`, `test_fx_render.py`.
+- [ ] I12.2 **The FX tool, the monitor overlay, the sketch** (lane `agent/fx-ui`): cards
+      with the checklist, Preview / Verify / Iterate / Accept / Discard / Remove, the
+      design box with the price, Draw a reference, live nudging; `test_fx_ui.py`.
+- [ ] I12.3 **The proposal page**: the ways considered, the one built, the alternatives
+      (online and other AI tools, free where possible) — `docs/design/effects-directions.html`.
+- [ ] I12.4 Live on Killington: the rocks shot, hit markers with the sound, verified.
+- [ ] I12.5 Karl's look.
+
 ## Lanes in flight
 
 | lane | branch / worktree | scope | state |

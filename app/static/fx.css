@@ -1,0 +1,4 @@
+/* Roughcut — the FX tool's styles (INTAKE M12). Filled by lane agent/fx-ui; the page's
+   tokens (--panel --card --card-hi --line --text --dim --accent --good --warn --bad)
+   are the palette. */
+#fx { min-height: 40px; }

@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <title>Roughcut — cut board</title>
 <link rel="stylesheet" href="/timeline/timeline.css">
+<link rel="stylesheet" href="/fx.css">
 <style>
   :root {
     --bg: #101013; --panel: #17171c; --card: #1e1e25; --card-hi: #26262f;
@@ -350,6 +351,12 @@
                          display: none; object-fit: contain; z-index: 1;
                          pointer-events: none; }
   .screen canvas#gradeCanvas.on { display: block; }
+  .screen canvas#fxCanvas { position: absolute; inset: 0; width: 100%; height: 100%;
+                            display: none; object-fit: contain; z-index: 3;
+                            pointer-events: none; }
+  .screen canvas#fxCanvas.live { display: block; }
+  .screen canvas#fxCanvas.sketch { display: block; pointer-events: auto; cursor: crosshair;
+                                   z-index: 4; }
   /* Whatever the monitor is doing that is not showing a picture — opening a proxy,
      buffering, or being refused permission to play — said on the screen itself. A black
      rectangle that never moves reads as a broken board, and that is what it was taken for. */
@@ -438,6 +445,11 @@
         <!-- The grade: /grade.js draws the live video through the shot's LUT here
              (INTAKE M10). Hidden while the shot's LUT is the identity or G is off. -->
         <canvas id="gradeCanvas"></canvas>
+        <!-- The effects over the live video (INTAKE M12): /fx.js draws every effect
+             of the live shot here at the live time — `.live` while there is something
+             to draw; `.sketch` while the human draws a reference on the frame, when
+             it takes the pointer. -->
+        <canvas id="fxCanvas"></canvas>
         <div id="screenMsg" hidden></div>
       </div>
       <div class="transport">
@@ -486,6 +498,7 @@
       <button type="button" class="tool on" data-tool="bin" title="the bin — what the pass kept, and Find"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 7l2-4h14l2 4"/><path d="M9 12h6"/></svg><span>Bin</span><b class="badge"></b></button>
       <button type="button" class="tool" data-tool="ask" title="ask for a change · the story"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="M15 8l.7 1.8 1.8.7-1.8.7L15 13l-.7-1.8-1.8-.7 1.8-.7z" fill="currentColor" stroke="none"/></svg><span>Ask</span></button>
       <button type="button" class="tool" data-tool="sound" title="the music bed"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10v4h4l5 4V6L8 10z"/><path d="M16 9a4 4 0 0 1 0 6"/><path d="M18.5 6.5a8 8 0 0 1 0 11"/></svg><span>Sound</span></button>
+      <button type="button" class="tool" data-tool="fx" title="effects — designed by the model, checked by the machine, accepted by you"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2.5l1.9 4.9 4.9 1.9-4.9 1.9L12 16.1l-1.9-4.9-4.9-1.9 4.9-1.9z"/><path d="M5 15l.9 2.3 2.3.9-2.3.9L5 21.4l-.9-2.3-2.3-.9 2.3-.9z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg><span>FX</span><b class="badge"></b></button>
       <button type="button" class="tool" data-tool="out" title="renders and versions"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/><path d="M12 3v12"/><path d="M7 8l5-5 5 5"/></svg><span>Out</span><b class="badge"></b></button>
     </nav>
     <div id="tools">
@@ -562,6 +575,12 @@
         </div>
       </section>
 
+      <!-- FX — effects the model designs and the machine verifies (INTAKE M12). The
+           tool's whole body is drawn by /fx.js into #fx. -->
+      <section data-tool="fx" hidden>
+        <div id="fx"><div class="hint">effects load with /fx.js</div></div>
+      </section>
+
       <!-- OUT — renders: the A/B review players and every version. -->
       <section data-tool="out" hidden>
         <div class="panel flat" id="outPanel">
@@ -621,6 +640,8 @@
 <!-- The grade over the monitor (INTAKE M10): loaded before app.js, which calls into
      window.grade when the monitor moves and after a colour save. -->
 <script src="/grade.js"></script>
+<!-- The effects (INTAKE M12): the FX tool, the monitor overlay, the sketch. -->
+<script src="/fx.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

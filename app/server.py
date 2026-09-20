@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import json
 import math
 import mimetypes
@@ -64,7 +65,7 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, Respons
 import uvicorn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from roughcut import (config, dictate, effects, events, find, inference,  # noqa: E402
+from roughcut import (config, dictate, effects, events, find, fx, inference,  # noqa: E402
                       journal, picks, progress, revise, selects, themes)
 
 HERE = Path(__file__).resolve().parent
@@ -86,6 +87,7 @@ ANALYSES: dict[str, progress.Job] = {}
 ASKS: dict[str, progress.Job] = {}
 VISUALS: dict[str, progress.Job] = {}
 FINDS: dict[str, progress.Job] = {}
+FX: dict[str, progress.Job] = {}          # effects: design, revise, verify (INTAKE M12)
 
 
 def all_jobs() -> list[progress.Job]:
@@ -97,7 +99,7 @@ def all_jobs() -> list[progress.Job]:
     still running — which is the state his machine is in as this is written.
     """
     return [*ANALYSES.values(), *VISUALS.values(), *INDEXES.values(), *ASKS.values(),
-            *FINDS.values(), *THEMES.values(), *RENDERS.values()]
+            *FINDS.values(), *THEMES.values(), *FX.values(), *RENDERS.values()]
 
 
 # Polled once a second by every open board, so it carries no payloads: a finished Ask
@@ -120,7 +122,7 @@ def api_jobs() -> JSONResponse:
 
 @app.get("/api/job/{job}")
 def api_job(job: str) -> JSONResponse:
-    for registry in (ANALYSES, VISUALS, INDEXES, ASKS, FINDS, THEMES, RENDERS):
+    for registry in (ANALYSES, VISUALS, INDEXES, ASKS, FINDS, THEMES, FX, RENDERS):
         if job in registry:
             return JSONResponse(registry[job].snapshot())
     raise HTTPException(404, "no such job")
@@ -674,6 +676,8 @@ def project_payload() -> dict:
         "music": edl.get("effects_music"),
         # The film's colour block (INTAKE M10); the per-shot resolution is /api/colour.
         "colour": edl.get("colour") or {},
+        # The accepted effects (INTAKE M12); proposals are /api/fx.
+        "effects": edl.get("effects") or [],
     }
 
 
@@ -757,6 +761,17 @@ async def api_save(request: Request) -> JSONResponse:
             edl["colour"] = spec
         else:
             edl.pop("colour", None)
+    # Effects (INTAKE M12): every entry re-validated against the shots it names; a bad
+    # one is a 400 and nothing is written. Absent leaves them alone.
+    if "effects" in body:
+        raw = body["effects"] or []
+        if not isinstance(raw, list):
+            raise HTTPException(400, "effects is not a list")
+        try:
+            edl["effects"] = [fx.validate_effect(e, edl.get("segments") or [])
+                              for e in raw]
+        except ValueError as exc:
+            raise HTTPException(400, f"effects: {exc}")
     if "music" in body:
         music = body["music"]
         if music:
@@ -3304,6 +3319,405 @@ def timeline_static(name: str) -> Response:
         raise HTTPException(404, f"{name} is not built yet")
     media = "text/css" if name.endswith(".css") else "application/javascript"
     return Response(p.read_text(encoding="utf-8"), media_type=media, headers=NO_STORE)
+
+
+
+# ---------------------------------------------------------------- effects (INTAKE M12)
+#
+# AI-designed video + audio effects. Karl, 2026-09-20: *"Add call of duty hit markers
+# where my skis are with the sound effect … AI then goes and adds separate overlaid
+# video with the effect (which it also generates itself) and the audio. Human can
+# iterate with the AI … but AI also tests / verifies that the DoD is complete."*
+#
+# The vocabulary, the model calls, the renderer and the checks are `roughcut.fx`. This
+# is the loop around them, the same shape as Ask: a job designs a *proposal* into
+# `work/fx/<bin>/<id>.json` (never the EDL); the human previews it on the monitor,
+# iterates, verifies (a proof render of the one shot on the proxy, then the measured
+# checklist), and Accept moves it into the EDL's `effects`, where the render reads it.
+
+def fx_home() -> Path:
+    return fx.fx_dir(STATE["work"], STATE["footage"].name)
+
+
+def _fx_segments() -> list[dict]:
+    return read_edl().get("segments") or []
+
+
+def _fx_seg(shot: str) -> dict:
+    seg = next((s for s in _fx_segments() if str(s.get("id")) == str(shot)), None)
+    if seg is None:
+        raise HTTPException(400, f"no shot {shot!r} in the cut")
+    return seg
+
+
+def _fx_proxy(clip: str) -> Path | None:
+    """The clip's proxy — what the monitor plays and what a proof renders from — or
+    the source when there is none yet."""
+    p = STATE["proxy_dir"] / f"{Path(clip).stem}.mp4"
+    if p.exists():
+        return p
+    src = STATE["footage"] / clip
+    return src if src.exists() else None
+
+
+def _fx_urls(e: dict) -> dict:
+    d = fx_home() / e["id"]
+    out = dict(e)
+    for key, name in (("sound_url", "sound.wav"), ("proof_url", "proof.mp4"),
+                      ("base_url", "base.mp4"), ("strip_url", "strip.jpg"),
+                      ("ref_url", "ref.png")):
+        if (d / name).exists():
+            out[key] = f"/api/fx/{e['id']}/{name}"
+    return out
+
+
+def _fx_all() -> list[dict]:
+    edl = read_edl()
+    accepted = list(edl.get("effects") or [])
+    ids = {e.get("id") for e in accepted}
+    proposed = []
+    for p in sorted(fx_home().glob("fx_*.json")):
+        try:
+            e = json.loads(p.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+        if e.get("id") in ids or e.get("status") != "proposed":
+            continue
+        proposed.append(e)
+    return [_fx_urls(e) for e in accepted + proposed]
+
+
+def _fx_get(fx_id: str) -> dict:
+    for e in read_edl().get("effects") or []:
+        if e.get("id") == fx_id:
+            return e
+    e = fx.load(fx_home(), fx_id)
+    if e is None:
+        raise HTTPException(404, f"no effect {fx_id}")
+    return e
+
+
+def _fx_put(e: dict) -> None:
+    """Write an effect back where it lives: the EDL when accepted, the fx dir always
+    (the dir is the home of its files either way)."""
+    fx.save(fx_home(), e)
+    if e.get("status") == "accepted":
+        edl = read_edl()
+        lst = list(edl.get("effects") or [])
+        for i, x in enumerate(lst):
+            if x.get("id") == e["id"]:
+                lst[i] = e
+                break
+        else:
+            lst.append(e)
+        edl["effects"] = lst
+        write_edl(edl)
+
+
+def _fx_sound(e: dict) -> None:
+    if e.get("sound"):
+        d = fx_home() / e["id"]
+        d.mkdir(parents=True, exist_ok=True)
+        fx.synth_sound(e["sound"], d / "sound.wav")
+
+
+def _fx_reference(fx_id: str, reference: dict | None) -> dict | None:
+    """The human's drawing on a frame: the PNG to disk, the marks (fractions of the
+    frame) and the goal text kept with the effect."""
+    if not reference or not isinstance(reference, dict):
+        return None
+    d = fx_home() / fx_id
+    d.mkdir(parents=True, exist_ok=True)
+    png = reference.get("png") or ""
+    if isinstance(png, str) and png.startswith("data:image/png;base64,"):
+        try:
+            (d / "ref.png").write_bytes(base64.b64decode(png.split(",", 1)[1]))
+        except (ValueError, IndexError):
+            pass
+    marks = []
+    for m in reference.get("marks") or []:
+        try:
+            x, y = float(m[0]), float(m[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        marks.append([round(min(1, max(0, x)), 4), round(min(1, max(0, y)), 4)])
+    out = {"goal": str(reference.get("goal") or "")[:400], "marks": marks[:fx.MAX_EVENTS]}
+    try:
+        out["t"] = round(float(reference.get("t")), 3)
+    except (TypeError, ValueError):
+        pass
+    strokes = reference.get("strokes")
+    if isinstance(strokes, list):
+        out["strokes"] = strokes[:64]
+    return out
+
+
+def _fx_impact(e: dict) -> bool:
+    words = ("hit", "impact", "crash", "rock", "strike", "bang", "land", "smack", "slam")
+    text = f"{e.get('note', '')} {e.get('name', '')}".lower()
+    return any(w in text for w in words)
+
+
+def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict | None) -> None:
+    entry = FX[job]
+    try:
+        edl = read_edl()
+        segments = edl.get("segments") or []
+        seg = next(s for s in segments if str(s.get("id")) == str(shot))
+        clips, _ = _ask_clips()
+        clip = clips.get(seg["clip"]) or {"clip": seg["clip"]}
+        fx_id = fx.new_id()
+        ref = _fx_reference(fx_id, reference)
+        entry.note("designing the effect" + (" from your drawing" if ref else ""))
+        e = fx.design(note, seg, clip, load_sidecar(seg["clip"]), reference=ref,
+                      place=bool(place), proxy=_fx_proxy(seg["clip"]) if place else None,
+                      workdir=fx_home() / fx_id, segments=segments, clips=clips)
+        e["id"] = fx_id
+        e["status"] = "proposed"
+        if ref:
+            e["reference"] = ref
+        e = fx.validate_effect(e, segments, clips)
+        fx.save(fx_home(), e)
+        _fx_sound(e)
+        entry["result"] = {"id": fx_id}
+        entry.finish("done", detail=f"{e['name']} — {len(e['events'])} hit(s), a proposal")
+    except Exception as exc:  # noqa: BLE001 — the job reports, the server lives
+        entry.finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
+
+
+def _fx_revise_job(job: str, fx_id: str, note: str) -> None:
+    entry = FX[job]
+    try:
+        e = _fx_get(fx_id)
+        segments = _fx_segments()
+        clips, _ = _ask_clips()
+        entry.note("revising the effect")
+        new = fx.revise(e, note, segments, clips)
+        new["id"] = fx_id
+        new["status"] = "proposed"          # an iteration is a proposal again
+        for k in ("reference",):
+            if e.get(k) is not None:
+                new[k] = e[k]
+        new.pop("verify", None)
+        new = fx.validate_effect(new, segments, clips)
+        fx.save(fx_home(), new)
+        _fx_sound(new)
+        if e.get("status") == "accepted":
+            # the accepted one stays in the EDL until this proposal is accepted over it
+            pass
+        entry["result"] = {"id": fx_id}
+        entry.finish("done", detail=f"{new['name']} — revised, a proposal")
+    except Exception as exc:  # noqa: BLE001
+        entry.finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
+
+
+PROOF_W, PROOF_H, PROOF_FPS = 1280, 720, 24
+
+
+def _fx_proof(e: dict, seg: dict) -> tuple[Path, Path]:
+    """The one shot rendered from its proxy at 720p, with the effect (`proof.mp4`) and
+    without (`base.mp4`), so the checks can measure a difference and the human can
+    watch the result in seconds rather than after a whole render."""
+    d = fx_home() / e["id"]
+    d.mkdir(parents=True, exist_ok=True)
+    src = _fx_proxy(seg["clip"])
+    if src is None:
+        raise RuntimeError(f"no proxy or source for {seg['clip']}")
+    dur = float(seg["out"]) - float(seg["in"])
+    vf = (f"scale={PROOF_W}:{PROOF_H}:force_original_aspect_ratio=decrease,"
+          f"pad={PROOF_W}:{PROOF_H}:(ow-iw)/2:(oh-ih)/2,fps={PROOF_FPS},format=yuv420p")
+    af = "aresample=48000:first_pts=0,aformat=channel_layouts=stereo"
+    head = ["ffmpeg", "-v", "error", "-y", "-nostdin", "-ss", f"{float(seg['in']):.3f}",
+            "-i", str(src)]
+    tail = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-movflags", "+faststart"]
+    base, proof = d / "base.mp4", d / "proof.mp4"
+    r = subprocess.run(head + ["-t", f"{dur:.3f}", "-vf", vf, "-af", af,
+                               "-map", "0:v:0", "-map", "0:a:0?", "-dn"] + tail + [str(base)],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"base render failed: {r.stderr[-300:]}")
+    evs = fx.events_in_shot(e, seg)
+    extra, graph, vout, aout = fx.part_graph([(e, evs)], PROOF_W, PROOF_H, PROOF_FPS, d)
+    fc = f"[0:v]{vf}[vbase];[0:a]{af}[abase]" + (";" + graph if graph else "")
+    # the extra inputs sit between the source and `-t`: after `-i` a `-t` is an input
+    # option for the NEXT input, and the sprites must not be cut short
+    r = subprocess.run(head + extra + ["-t", f"{dur:.3f}", "-filter_complex", fc,
+                                       "-map", f"[{vout}]", "-map", f"[{aout}]", "-dn"]
+                       + tail + [str(proof)], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"proof render failed: {r.stderr[-300:]}")
+    return proof, base
+
+
+def _fx_verify_job(job: str, fx_id: str) -> None:
+    entry = FX[job]
+    try:
+        e = _fx_get(fx_id)
+        seg = _fx_seg(e["shot"])
+        sc = load_sidecar(e["clip"])
+        onset = (sc.get("tracks") or {}).get("onset") or None
+        hz = float(sc.get("frame_hz") or fx.ONSET_HZ)
+        entry.note("rendering a proof of the shot")
+        proof, base = _fx_proof(e, seg)
+        entry.note("measuring the proof")
+        v = fx.verify(e, seg, onset=onset, hz=hz, part=proof, base=base, impact=_fx_impact(e))
+        e["verify"] = v
+        _fx_put(e)
+        entry["result"] = {"id": fx_id, "ok": bool(v.get("ok"))}
+        failed = [c["label"] for c in v.get("checks", []) if c.get("ok") is False]
+        entry.finish("done", detail="every check passed" if v.get("ok")
+                     else "failed: " + ", ".join(failed)[:200])
+    except Exception as exc:  # noqa: BLE001
+        entry.finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
+
+
+def _fx_job(kind: str, label: str, target, *args) -> JSONResponse:
+    job = uuid.uuid4().hex[:8]
+    FX[job] = progress.Job("fx", label, id=job, state="running", fx_kind=kind)
+    threading.Thread(target=target, args=(job, *args), daemon=True).start()
+    return JSONResponse({"job": job})
+
+
+@app.get("/api/fx")
+def api_fx_list() -> JSONResponse:
+    return JSONResponse({"effects": _fx_all()})
+
+
+@app.get("/api/fx/price")
+def api_fx_price(place: int = 0, shot: str = "") -> JSONResponse:
+    """The cost on the button before it is pressed: the design call, plus a frame per
+    candidate impact when the model is asked to place the anchors by looking."""
+    frames = 0
+    if place and shot:
+        seg = _fx_seg(shot)
+        sc = load_sidecar(seg["clip"])
+        peaks = fx.onset_peaks((sc.get("tracks") or {}).get("onset") or [],
+                               float(sc.get("frame_hz") or fx.ONSET_HZ),
+                               float(seg["in"]), float(seg["out"]))
+        frames = max(1, len(peaks))
+    return JSONResponse({"usd": fx.price(place_frames=frames), "frames": frames})
+
+
+@app.post("/api/fx/design")
+async def api_fx_design(request: Request) -> JSONResponse:
+    body = await request.json()
+    shot = str(body.get("shot") or "")
+    note = (body.get("note") or "").strip()
+    if not note:
+        raise HTTPException(400, "say what the effect is")
+    seg = _fx_seg(shot)
+    clips, _ = _ask_clips()
+    if seg["clip"] not in clips:
+        raise HTTPException(400, f"{seg['clip']} has no analysis yet")
+    return _fx_job("design", f"Designing an effect — {Path(seg['clip']).stem}",
+                   _fx_design_job, shot, note, bool(body.get("place")), body.get("reference"))
+
+
+@app.post("/api/fx/revise")
+async def api_fx_revise(request: Request) -> JSONResponse:
+    body = await request.json()
+    fx_id = str(body.get("id") or "")
+    note = (body.get("note") or "").strip()
+    if not note:
+        raise HTTPException(400, "say what to change")
+    e = _fx_get(fx_id)
+    return _fx_job("revise", f"Revising {e.get('name', 'the effect')}", _fx_revise_job, fx_id, note)
+
+
+@app.post("/api/fx/verify")
+async def api_fx_verify(request: Request) -> JSONResponse:
+    body = await request.json()
+    fx_id = str(body.get("id") or "")
+    e = _fx_get(fx_id)
+    _fx_seg(e["shot"])
+    return _fx_job("verify", f"Verifying {e.get('name', 'the effect')}", _fx_verify_job, fx_id)
+
+
+@app.post("/api/fx/accept")
+async def api_fx_accept(request: Request) -> JSONResponse:
+    body = await request.json()
+    e = _fx_get(str(body.get("id") or ""))
+    segments = _fx_segments()
+    e["status"] = "accepted"
+    e = fx.validate_effect(e, segments)
+    _fx_put(e)
+    return JSONResponse({"ok": True, "effect": _fx_urls(e)})
+
+
+@app.post("/api/fx/discard")
+async def api_fx_discard(request: Request) -> JSONResponse:
+    body = await request.json()
+    fx_id = str(body.get("id") or "")
+    e = fx.load(fx_home(), fx_id)
+    if e is None:
+        raise HTTPException(404, f"no proposal {fx_id}")
+    if e.get("status") == "accepted" or any(x.get("id") == fx_id for x in read_edl().get("effects") or []):
+        raise HTTPException(400, "that effect is accepted — remove it instead")
+    (fx_home() / f"{fx_id}.json").unlink(missing_ok=True)
+    shutil.rmtree(fx_home() / fx_id, ignore_errors=True)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/fx/remove")
+async def api_fx_remove(request: Request) -> JSONResponse:
+    body = await request.json()
+    fx_id = str(body.get("id") or "")
+    edl = read_edl()
+    before = list(edl.get("effects") or [])
+    after = [x for x in before if x.get("id") != fx_id]
+    if len(after) == len(before):
+        raise HTTPException(404, f"no accepted effect {fx_id}")
+    edl["effects"] = after
+    write_edl(edl)
+    (fx_home() / f"{fx_id}.json").unlink(missing_ok=True)
+    shutil.rmtree(fx_home() / fx_id, ignore_errors=True)
+    return JSONResponse({"ok": True})
+
+
+@app.put("/api/fx/{fx_id}")
+async def api_fx_update(fx_id: str, request: Request) -> JSONResponse:
+    """The human's edits: a nudged event, a moved anchor, a changed spec. Validated
+    like everything else; the checklist is cleared because it no longer describes
+    this effect."""
+    body = await request.json()
+    e = _fx_get(fx_id)
+    merged = dict(e)
+    for k in ("events", "overlay", "sound", "name", "note"):
+        if k in body:
+            merged[k] = body[k]
+    merged.pop("verify", None)
+    try:
+        new = fx.validate_effect(merged, _fx_segments())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    _fx_put(new)
+    if body.get("sound") is not None:
+        _fx_sound(new)
+    return JSONResponse(_fx_urls(new))
+
+
+@app.get("/api/fx/{fx_id}/{name}")
+def api_fx_file(fx_id: str, name: str, request: Request) -> Response:
+    if name not in ("sound.wav", "proof.mp4", "base.mp4", "strip.jpg", "ref.png"):
+        raise HTTPException(404, "no such file")
+    p = fx_home() / fx_id / name
+    if not p.exists():
+        raise HTTPException(404, f"{name} is not there yet")
+    return ranged_file(p, request)
+
+
+@app.get("/fx.js")
+def fxjs() -> Response:
+    """The FX tool, the monitor overlay and the sketch (INTAKE M12)."""
+    return Response((HERE / "static" / "fx.js").read_text(encoding="utf-8"),
+                    media_type="application/javascript", headers=NO_STORE)
+
+
+@app.get("/fx.css")
+def fxcss() -> Response:
+    return Response((HERE / "static" / "fx.css").read_text(encoding="utf-8"),
+                    media_type="text/css", headers=NO_STORE)
 
 
 @app.get("/switcher.js")

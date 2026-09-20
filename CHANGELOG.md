@@ -10,6 +10,27 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Effects foundation (INTAKE M12, I12.0)** — AI-designed video + audio effects, the
+  contract and the loop. Karl, 2026-09-20: *"Add call of duty hit markers where my skis
+  are with the sound effect … AI then goes and adds separate overlaid video with the
+  effect (which it also generates itself) and the audio … AI also tests / verifies that
+  the DoD is complete … options for human to draw references on a keyframe."*
+  `roughcut/fx.py` is the vocabulary (a procedural sprite — shapes in a unit box with
+  keyframed scale / opacity / rotate / offset and a flash — and a procedural synth patch
+  — tone / noise / click / sweep layers with envelopes — both drawn by code from one
+  JSON; Rule 1 and Rule 2 of EFFECTS.md hold, Rule 4 turns inside out: the asset is
+  generated, never fetched), the validation, the pure helpers (`onset_peaks`,
+  `pose_at`, `events_in_shot`, `price`) and the signatures the two lanes fill (render,
+  synth, `part_graph`, the model calls, `verify`). Effects key to a **shot** and sit at
+  clip seconds. The server: `GET /api/fx`, `POST /api/fx/design|revise|verify` as jobs
+  (`kind: fx`), `accept` / `discard` / `remove`, `PUT /api/fx/{id}` for the human's
+  nudges, the files an effect owns (`sound.wav`, `proof.mp4`, `base.mp4`, `strip.jpg`,
+  `ref.png`), `GET /api/fx/price`, `effects` on the project GET and re-validated on
+  PUT; a proposal lives in `work/fx/<bin>/` and reaches the EDL only on Accept; Verify
+  renders the one shot from its proxy with and without the effect (`_fx_proof`) and
+  runs the checklist. The board: an FX rail tool, `#fxCanvas` over the monitor,
+  `/fx.js` + `/fx.css` (stubs until lane fx-ui). `test_fx_api.py` (9) drives the loop
+  with the model and the renderer stubbed.
 - **The dock resizes and wears icons (INTAKE M11, I11.6)** — drag the dock's left edge
   to set its width (300–720 px; the main column and the timeline re-fit; remembered per
   browser; double-click resets; `dock.width()`), an icon and a label on every rail tool,
