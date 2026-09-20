@@ -295,6 +295,36 @@ def test_the_range_bar_drag_survives_the_parked_playhead(page):
     assert page.locator("#tl .fx-tlband").count() == 1
 
 
+def test_the_range_bar_is_the_video(page):
+    """Karl: "it's not clear how it connects to the current video / playhead." The bar is
+    a filmstrip of the shot; a labelled playhead on it follows the monitor; a drag on
+    the strip scrubs the monitor; the line under it says where the monitor is."""
+    open_fx(page)
+    page.wait_for_selector("#fxBar .strip img")
+    assert page.locator("#fxBar .strip img").count() == 8
+    srcs = page.evaluate("[...document.querySelectorAll('#fxBar .strip img')].map(i => i.getAttribute('src'))")
+    assert all("/media/poster/" in s and "?t=" in s for s in srcs)
+    # park the monitor at 1.5 s of the clip through the timeline: the bar's playhead follows
+    page.evaluate("tl.seek(tl.filmStart(segs[0].id) + 0.5)")
+    page.wait_for_function("!document.querySelector('#fxBar .ph').hidden && document.querySelector('#fxBar .ph b').textContent === '0:01.5'")
+    assert "the monitor is at" in page.locator("#fxBarLine").inner_text()
+    # a drag on the strip scrubs: the monitor ends near the pointer's time, paused
+    bar = page.locator("#fxBar").bounding_box()
+    y = bar["y"] + bar["height"] / 2
+    page.mouse.move(bar["x"] + bar["width"] * 0.2, y)
+    page.mouse.down()
+    page.mouse.move(bar["x"] + bar["width"] * 0.75, y, steps=6)
+    page.wait_for_timeout(250)
+    page.mouse.up()
+    page.wait_for_timeout(300)
+    seg = page.evaluate("segs[0]")
+    want = seg["in"] + (seg["out"] - seg["in"]) * 0.75
+    page.wait_for_function(f"Math.abs(liveVideo().currentTime - {want}) < 0.3", timeout=5000)
+    assert page.evaluate("!player.playing") is True
+    assert page.evaluate("fx.state.window") is None          # a scrub is not a window
+    assert page.locator("#fxBar .h1 span").inner_text() != ""   # the handles carry their times
+
+
 def test_the_tool_follows_the_selected_shot_and_prices_the_button(page):
     """The header names the shot; the design box is under it; the placing checkbox
     carries the price from GET /api/fx/price before anything is pressed."""

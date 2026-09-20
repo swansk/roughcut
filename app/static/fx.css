@@ -77,21 +77,35 @@
 #fx .fxev .del:hover { opacity: 1; background: var(--card); }
 
 /* the range bar */
-#fx .fxbar { position: relative; height: 34px; margin: 8px 0 2px; background: #131318;
-             border: 1px solid var(--line); border-radius: 6px; cursor: crosshair; user-select: none; }
-#fx .fxbar .win { position: absolute; top: 0; bottom: 0; background: rgba(110,168,254,.18);
-                  border-left: 2px solid var(--accent); border-right: 2px solid var(--accent); }
-#fx .fxbar .h { position: absolute; top: -3px; bottom: -3px; width: 12px; cursor: ew-resize; }
-#fx .fxbar .h0 { left: -7px; } #fx .fxbar .h1 { right: -7px; }
-#fx .fxbar .h::after { content: ""; position: absolute; left: 4px; top: 8px; bottom: 8px; width: 4px;
-                       border-radius: 2px; background: var(--accent); }
-#fx .fxbar .pk { position: absolute; bottom: 4px; width: 2px; height: 12px; background: var(--dim); pointer-events: none; }
-#fx .fxbar .hit { position: absolute; top: 3px; width: 3px; height: 12px; background: var(--good); border-radius: 1px; pointer-events: none; }
+#fx .fxbar { position: relative; height: 54px; margin: 22px 0 2px; background: #0d0d11;
+             border: 1px solid var(--line); border-radius: 6px; cursor: ew-resize; user-select: none;
+             overflow: visible; }
+#fx .fxbar .strip { position: absolute; inset: 0; display: flex; border-radius: 5px; overflow: hidden; }
+#fx .fxbar .strip img { flex: 1 1 0; min-width: 0; height: 100%; object-fit: cover; opacity: .9; }
+#fx .fxbar .dim { position: absolute; top: 0; bottom: 0; background: rgba(8,8,12,.62); pointer-events: none; }
+#fx .fxbar .d0 { left: 0; } #fx .fxbar .d1 { right: 0; }
+#fx .fxbar .win { position: absolute; top: 0; bottom: 0; box-shadow: inset 0 0 0 2px var(--accent); border-radius: 3px; }
+#fx .fxbar .h { position: absolute; top: -4px; bottom: -4px; width: 14px; cursor: ew-resize; }
+#fx .fxbar .h0 { left: -8px; } #fx .fxbar .h1 { right: -8px; }
+#fx .fxbar .h::after { content: ""; position: absolute; left: 4px; top: 4px; bottom: 4px; width: 6px;
+                       border-radius: 3px; background: var(--accent); box-shadow: 0 0 0 1px #0b0b0f; }
+#fx .fxbar .h span { position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-size: 10px;
+                     color: var(--accent); background: rgba(16,16,19,.85); padding: 0 4px; border-radius: 3px;
+                     white-space: nowrap; font-variant-numeric: tabular-nums; }
+#fx .fxbar .pk { position: absolute; bottom: 3px; width: 2px; height: 9px; background: #fff; opacity: .6; pointer-events: none; }
+#fx .fxbar .hit { position: absolute; top: 2px; width: 3px; height: 14px; background: var(--good); border-radius: 1px;
+                  box-shadow: 0 0 0 1px #0b0b0f; pointer-events: none; }
 #fx .fxbar .hit.proposed { background: var(--warn); }
-#fx .fxbar .ph { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff; opacity: .8; pointer-events: none; }
+#fx .fxbar .ph { position: absolute; top: -6px; bottom: -6px; width: 2px; background: #fff; pointer-events: none;
+                 box-shadow: 0 0 0 1px rgba(0,0,0,.6); }
+#fx .fxbar .ph[hidden] { display: none; }
+#fx .fxbar .ph b { position: absolute; top: -16px; left: 50%; transform: translateX(-50%); font-size: 10px; font-weight: 600;
+                   color: #0b0b0f; background: #fff; padding: 0 4px; border-radius: 3px; white-space: nowrap;
+                   font-variant-numeric: tabular-nums; }
 #fx .fxbar .lbl { position: absolute; bottom: -15px; font-size: 10px; color: var(--dim); font-variant-numeric: tabular-nums; }
 #fx .fxbar .l0 { left: 0; } #fx .fxbar .l1 { right: 0; }
-#fx .fxwhere + .fxbar { margin-bottom: 18px; }
+#fx .fxbarline { margin-top: 18px; font-size: 11.5px; }
+#fx .fxbarline b { color: var(--text); font-variant-numeric: tabular-nums; }
 #fx .fxprice { font-weight: 400; opacity: .8; margin-left: 4px; }
 #fx button.primary .fxprice { color: #0b0b0f; opacity: .75; }
 #fx .fxrefimg { display: block; width: 100%; border-radius: 6px; border: 1px solid var(--line); margin-top: 6px; }

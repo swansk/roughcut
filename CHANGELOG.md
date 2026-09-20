@@ -10,6 +10,12 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The range bar is the video (INTAKE M12)** — Karl: *"it's not clear how it connects
+  to the current video / playhead."* The bar is now a filmstrip of the shot (eight
+  stills from the proxy), the window is the lit part with the rest dimmed, each handle
+  carries its time, a white labelled playhead on the strip follows the monitor on every
+  frame, a drag on the strip scrubs the monitor (paused) and a line under the bar says
+  where the monitor is — or that it is on another shot and a click brings it here.
 - **The range bar's drag holds (INTAKE M12)** — Karl: *"the drag select for the effect
   is not working / doesn't move much after I click on it to drag, seems like playhead
   moving / jumping clip is glitching the tool itself."* Every move rebuilt the tool's

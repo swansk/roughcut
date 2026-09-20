@@ -452,20 +452,78 @@
    * monitor on that frame — it never plays — and a click anywhere on the bar parks it
    * too. Karl, 2026-09-20: "It is very hard to select the start / end time frame …
    * the video plays when you click on the clip." */
+  const STRIP_N = 8;                        // stills across the bar: the shot as a filmstrip
+  function clipPoster(clip) {
+    try {
+      const c = (typeof P !== 'undefined' && P && P.clips) ? P.clips[clip] : null;   // eslint-disable-line no-undef
+      return c && c.poster ? c.poster : null;
+    } catch (e) { return null; }
+  }
+
   function barHtml(r, w) {
+    const sg = seg(S.shot);
     const span = Math.max(0.001, r.t1 - r.t0);
-    const pct = (t) => `${Math.max(0, Math.min(100, ((t - r.t0) / span) * 100)).toFixed(2)}%`;
+    const pctN = (t) => Math.max(0, Math.min(100, ((t - r.t0) / span) * 100));
+    const pct = (t) => `${pctN(t).toFixed(2)}%`;
+    const poster = sg ? clipPoster(sg.clip) : null;
+    const strip = poster
+      ? `<div class="strip">${Array.from({ length: STRIP_N }, (_, k) => {
+          const t = r.t0 + (k + 0.5) * span / STRIP_N;
+          return `<img src="${poster}?t=${t.toFixed(2)}" alt="" loading="lazy" decoding="async" draggable="false">`;
+        }).join('')}</div>`
+      : '';
     const peaks = (S.peaks || []).map((p) =>
-      `<i class="pk" style="left:${pct(p.t)};opacity:${(0.35 + 0.65 * (p.strength || 0.5)).toFixed(2)}" title="onset peak ${fmtT(p.t)}"></i>`).join('');
+      `<i class="pk" style="left:${pct(p.t)};opacity:${(0.35 + 0.65 * (p.strength || 0.5)).toFixed(2)}" title="sharp moment ${fmtT(p.t)}"></i>`).join('');
     const hits = activeForShot(S.shot).flatMap((e) => (e.events || []).map((ev) =>
       `<i class="hit${e.status === 'proposed' ? ' proposed' : ''}" style="left:${pct(ev.t)}" title="${esc(e.name)} · ${fmtT(ev.t)}"></i>`)).join('');
     const t = liveClipTime();
-    const ph = t != null ? `<i class="ph" style="left:${pct(t)}"></i>` : '';
-    return `<div class="fxbar" id="fxBar" title="click to park the monitor there · drag a handle to set the window">`
-      + `<div class="win" style="left:${pct(w.t0)};width:${(((w.t1 - w.t0) / span) * 100).toFixed(2)}%">`
-      + `<b class="h h0" data-end="t0" title="from — drag"></b><b class="h h1" data-end="t1" title="to — drag"></b></div>`
-      + peaks + hits + ph
-      + `<span class="lbl l0">${fmtT(r.t0)}</span><span class="lbl l1">${fmtT(r.t1)}</span></div>`;
+    return `<div class="fxbar" id="fxBar" title="the shot, frame by frame · drag on it to scrub the monitor · drag a handle to set the window">`
+      + strip
+      + `<div class="dim d0" style="width:${pct(w.t0)}"></div><div class="dim d1" style="left:${pct(w.t1)}"></div>`
+      + `<div class="win" style="left:${pct(w.t0)};width:${Math.max(0, pctN(w.t1) - pctN(w.t0)).toFixed(2)}%">`
+      + `<b class="h h0" data-end="t0" title="from — drag"><span>${fmtT(w.t0)}</span></b>`
+      + `<b class="h h1" data-end="t1" title="to — drag"><span>${fmtT(w.t1)}</span></b></div>`
+      + peaks + hits
+      + `<i class="ph"${t == null ? ' hidden' : ''} style="left:${pct(t == null ? r.t0 : t)}"><b>${t == null ? '' : fmtT(t)}</b></i>`
+      + `<span class="lbl l0">${fmtT(r.t0)}</span><span class="lbl l1">${fmtT(r.t1)}</span></div>`
+      + `<div class="fxbarline hint" id="fxBarLine">${barLine()}</div>`;
+  }
+
+  /* What the bar and the monitor have to do with each other, in one line. */
+  function barLine() {
+    const t = liveClipTime();
+    if (t != null) return `▮ the monitor is at <b>${fmtT(t)}</b> of this shot · drag on the strip to scrub · <kbd>space</kbd> plays`;
+    const p = PLAYER();
+    const other = p && p.idx != null ? SEGS()[p.idx] : null;
+    return other
+      ? `the monitor is on shot ${p.idx + 1} — click the strip to bring it here`
+      : `click the strip to park the monitor on this shot`;
+  }
+
+  /* The playhead on the bar and the line under it follow the monitor on every frame —
+   * a DOM update, never a repaint. */
+  function updatePlayheadDom() {
+    const bar = $('#fxBar');
+    if (!bar) return;
+    const r = shotRange(S.shot);
+    if (!r) return;
+    const t = liveClipTime();
+    const ph = bar.querySelector('.ph');
+    if (ph) {
+      if (t == null) ph.hidden = true;
+      else {
+        ph.hidden = false;
+        const span = Math.max(0.001, r.t1 - r.t0);
+        ph.style.left = `${Math.max(0, Math.min(100, ((t - r.t0) / span) * 100)).toFixed(2)}%`;
+        const b = ph.querySelector('b');
+        if (b) b.textContent = fmtT(t);
+      }
+    }
+    const line = $('#fxBarLine');
+    if (line) {
+      const html = barLine();
+      if (line.dataset.last !== html) { line.innerHTML = html; line.dataset.last = html; }
+    }
   }
 
   function barT(ev) {
@@ -517,8 +575,20 @@
       window.addEventListener('pointercancel', up, true);
       return;
     }
+    // the bar body: a scrub — the monitor follows the pointer while it is held
+    S.drag = { end: null };
     park(t);
-    paint(true);
+    const move = (e2) => { const tt = barT(e2); if (tt != null) parkSoon(tt); };
+    const up = () => {
+      window.removeEventListener('pointermove', move, true);
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('pointercancel', up, true);
+      S.drag = null;
+      paint(true);
+    };
+    window.addEventListener('pointermove', move, true);
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('pointercancel', up, true);
   }
 
   /* ------------------------------------------------------------ the timeline band */
@@ -576,7 +646,13 @@
     if (win) {
       win.style.left = `${pct(w.t0).toFixed(2)}%`;
       win.style.width = `${Math.max(0, pct(w.t1) - pct(w.t0)).toFixed(2)}%`;
+      const l0 = win.querySelector('.h0 span'), l1 = win.querySelector('.h1 span');
+      if (l0) l0.textContent = fmtT(w.t0);
+      if (l1) l1.textContent = fmtT(w.t1);
     }
+    const d0 = $('#fxBar .d0'), d1 = $('#fxBar .d1');
+    if (d0) d0.style.width = `${pct(w.t0).toFixed(2)}%`;
+    if (d1) d1.style.left = `${pct(w.t1).toFixed(2)}%`;
     const f = $('#fxFrom'), t = $('#fxTo');
     if (f && document.activeElement !== f) f.value = Number(w.t0).toFixed(2);
     if (t && document.activeElement !== t) t.value = Number(w.t1).toFixed(2);
@@ -937,6 +1013,7 @@
       S.prevT = t;
     }
     draw();
+    updatePlayheadDom();
   }
 
   /* Follow the live video: a new frame → step. Re-armed whenever the live element
@@ -1284,7 +1361,7 @@
     setInterval(onSelect, 500);          // playback moves the anchor without a select event
     if (t && typeof t.on === 'function') {
       t.on('zoom', paintBand);
-      t.on('playhead', () => { paintBand(); if (!S.drag) paint(); });   // the bar's playhead line
+      t.on('playhead', () => { paintBand(); updatePlayheadDom(); if (!S.drag) paint(); });
     }
     setInterval(paintBand, 700);         // the dock's tool changes without an event
     mountOverlay();
