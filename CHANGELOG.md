@@ -10,6 +10,12 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Effects live on Killington (INTAKE M12, I12.4)** — the two lanes merged (`a1d9b14`,
+  the UI merge after it): on the rocks shot the model designed six hit markers with the
+  tick, the proof rendered in seconds and every check passed; the FX tool, the monitor
+  overlay and the sketch work on the live board. INTAKE M12 ticked through I12.4, HANDOFF
+  and the README's screen table updated; app.js's job strip refreshes the FX tool when an
+  fx job finishes; `test_dock_ui.py` counts five rail tools.
 - **Effects directions (INTAKE M12, I12.3)** — `docs/design/effects-directions.html`: the
   seven ways an effect could be made (a program the model writes, generative image /
   video, generative audio, an asset library, model-written code rendered headless,

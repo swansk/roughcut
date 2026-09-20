@@ -912,16 +912,30 @@ HTML proposal with others (incl. online tools / other AI tools, ideally free)."*
 - [x] I12.0 **Foundation** (lead): `roughcut/fx.py` (vocabulary, validation, pure helpers,
       lane signatures), the `/api/fx` loop and jobs, the FX rail tool and `#fxCanvas`,
       `/fx.js` + `/fx.css` stubs, `test_fx_api.py` (9).
-- [ ] I12.1 **The renderer, the model calls, the checks** (lane `agent/fx-core`): synth,
+- [x] I12.1 **The renderer, the model calls, the checks** (lane `agent/fx-core`, merged
+      `a1d9b14`; commits `c2ba681`…`94a7e49`; `test_fx.py` + `test_fx_render.py` 33): synth,
       rasteriser, `part_graph`, assemble.py integration, the prompts, `design` /
       `revise`, `verify` with its measurements; `test_fx.py`, `test_fx_render.py`.
-- [ ] I12.2 **The FX tool, the monitor overlay, the sketch** (lane `agent/fx-ui`): cards
+- [x] I12.2 **The FX tool, the monitor overlay, the sketch** (lane `agent/fx-ui`, merged;
+      commits `f8b3934`…`cf8c2d9`; `test_fx_ui.py` 12): cards
       with the checklist, Preview / Verify / Iterate / Accept / Discard / Remove, the
       design box with the price, Draw a reference, live nudging; `test_fx_ui.py`.
 - [x] I12.3 **The proposal page**: the ways considered, the one built, the alternatives
       (online and other AI tools, free where possible) — `docs/design/effects-directions.html`;
       EFFECTS.md's Rule 4 addendum.
-- [ ] I12.4 Live on Killington: the rocks shot, hit markers with the sound, verified.
+- [x] I12.4 **Live on Killington** (2026-09-20, headless + two real model calls): on shot
+      17 (CLIP_08 156.0–175.6 s, the rocks run) *"Add Call of Duty hit markers where my
+      skis hit the rocks, with the sound effect"* → without placing, the model designed
+      six markers on the six onset peaks (a four-tick white X, scale 1.4→1.0, a 15 % red
+      flash, a 1.8 kHz square tick + a high-passed noise burst); the proof rendered in
+      seconds and all six checks passed (audio rises +13 to +28 dB, a picture change at
+      every anchor). With placing (≈ $0.17) the model kept one hit. Both proposals are
+      on disk (`work/fx/killington-neutral/`), neither accepted. Honest residue: the
+      placed run's kept hit at 175.1 s is a glove bumping the camera, not a rock — the
+      onset rule finds transients, not rocks (the R11 finding again), which is what the
+      drawn reference and the human's Accept are for. The FX tool, the overlay on the
+      monitor (the same X and flash as the proof) and the sketch all work on the live
+      board; no page errors.
 - [ ] I12.5 Karl's look.
 
 ## Lanes in flight

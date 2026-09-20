@@ -1,5 +1,17 @@
 # Handoff — read this first
 
+**2026-09-20, later — INTAKE M12, effects the model designs and the machine verifies, is
+BUILT and live; next is Karl's look (I12.5), then I11.5 / I9.6 / I10.6.** The FX rail tool:
+say what the effect is on the selected shot (or draw a reference on the paused frame),
+Design (≈ $0.05, + placing on the frames priced on the button), preview it on the monitor
+with its sound, nudge a hit by a frame or click the paused monitor to move an anchor,
+Iterate ("red and bigger"), Verify (a proof render of the one shot + the six-check DoD),
+Accept. `roughcut/fx.py` is the vocabulary and the checks, `/api/fx` the loop, `/fx.js`
+the board's side, `assemble.py` bakes accepted effects into the shot's part. The ways
+considered and the free alternatives: `docs/design/effects-directions.html`. Live on
+Killington's rocks shot: see INTAKE M12 I12.4, including what the onset rule gets wrong.
+The dock (M11) also resizes by its edge and wears icons now (I11.6).
+
 **2026-09-20 — the dock (INTAKE M11) is built; next is Karl's look at it.** The board's
 right column was eight panels 2,900 px tall beside a 900 px viewport, with the bin seventh.
 Karl chose, from a ranked page of three layouts, *the Dock, and stop there*: a rail of tools

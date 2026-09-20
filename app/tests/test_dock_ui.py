@@ -159,7 +159,7 @@ def test_the_dock_resizes_by_its_left_edge_and_the_timeline_refits(page):
     assert page.evaluate("dock.width()") == w0
     # the icons and labels are on the rail
     assert page.locator("#rail .tool svg").count() == page.locator("#rail .tool").count() == 5
-    assert [t.strip().lower() for t in page.locator("#rail .tool span").all_inner_texts()] == ["bin", "ask", "sound", "out"]
+    assert [t.strip().lower() for t in page.locator("#rail .tool span").all_inner_texts()] == ["bin", "ask", "sound", "fx", "out"]
 
 
 def test_the_rail_opens_one_tool_at_a_time_and_remembers_it(page):
