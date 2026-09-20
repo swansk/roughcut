@@ -93,6 +93,7 @@
 #fx .fxbar .l0 { left: 0; } #fx .fxbar .l1 { right: 0; }
 #fx .fxwhere + .fxbar { margin-bottom: 18px; }
 #fx .fxprice { font-weight: 400; opacity: .8; margin-left: 4px; }
+#fx button.primary .fxprice { color: #0b0b0f; opacity: .75; }
 #fx .fxrefimg { display: block; width: 100%; border-radius: 6px; border: 1px solid var(--line); margin-top: 6px; }
 
 /* the window and the hits on the timeline itself, while the FX tool is open */

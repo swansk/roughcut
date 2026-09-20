@@ -23,7 +23,8 @@ same commit. Releases move entries into a dated version section.
   shot in order; `GET /api/fx/peaks`, `POST /api/fx/restore|revert`. (4) The sketch is
   visible: amber strokes over a dark halo with a numbered dot per mark, a HUD on the
   monitor itself (count, goal, Use it, Cancel) instead of controls a screen away, and
-  the reference as a thumbnail in the design box and on the card. Tests:
+  the reference as a thumbnail in the design box and on the card; the price on the Design
+  button reads on its blue. Tests:
   `test_fx_api.py` remove / restore / previous / revert / peaks.
 - **The window is the human's, a hit can be deleted, the tick is clicky (INTAKE M12,
   I12.6)** — Karl, after the first live effect: *"you added hit markers across the full
