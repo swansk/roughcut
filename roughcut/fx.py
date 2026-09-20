@@ -80,8 +80,8 @@ MAX_SHAPES = 24
 MAX_LAYERS = 6
 MAX_KEYS = 16                # keyframes per track
 MAX_TEXT = 24
-MIN_DURATION, MAX_DURATION = 0.05, 3.0
-MIN_SIZE, MAX_SIZE = 0.02, 0.6          # of the frame width
+MIN_DURATION, MAX_DURATION = 0.05, 30.0         # a tick, or a title that holds
+MIN_SIZE, MAX_SIZE = 0.02, 1.6          # of the frame width; 1.6 covers the frame
 MIN_GAIN_DB, MAX_GAIN_DB = -30.0, 6.0
 NUDGE_S = 1 / 24                        # one frame at 24 fps — the human's step
 ONSET_HZ = 10                           # the audio sidecar's frame_hz
@@ -206,7 +206,7 @@ def validate_overlay(raw: Any) -> dict:
             raise ValueError("overlay.flash is not an object")
         out["flash"] = {"color": _colour(f.get("color", "#ff0000"), "flash.color"),
                         "opacity": _num(f.get("opacity", 0.15), "flash.opacity", 0, 0.6),
-                        "duration": _num(f.get("duration", 0.08), "flash.duration", 0.02, 1.0)}
+                        "duration": _num(f.get("duration", 0.08), "flash.duration", 0.02, MAX_DURATION)}
     return out
 
 
@@ -886,11 +886,42 @@ _EXAMPLE_EFFECT = {
 }
 
 
+_EXAMPLE_TITLE = {
+    "name": "SEND IT title",
+    "why": "one title over the drop-in, held for the run-up, gone before the landing",
+    "events": [{"t": 40.2, "x": 0.5, "y": 0.22, "label": "the drop-in"}],
+    "overlay": {
+        "duration": 1.8, "size": 0.9,
+        "shapes": [
+            {"type": "rect", "at": [0, 0], "w": 2.0, "h": 0.5, "fill": True, "color": "#0b0b0f", "opacity": 0.55},
+            {"type": "text", "text": "SEND IT", "at": [0, 0], "h": 0.34, "bold": True, "color": "#ffffff"}],
+        "anim": {"scale": [[0, 1.25], [0.12, 1.0]],
+                 "opacity": [[0, 0], [0.1, 1], [1.5, 1], [1.8, 0]],
+                 "dy": [[0, 0.02], [0.12, 0]]}},
+    "sound": {
+        "duration": 0.9, "gain_db": -8,
+        "layers": [{"type": "sweep", "wave": "sine", "freq": 300, "freq_end": 2400, "attack": 0.05, "decay": 0.6, "gain": 0.5},
+                   {"type": "noise", "color": "pink", "hp": 800, "attack": 0.08, "decay": 0.5, "gain": 0.45}]},
+}
+
+
 def _vocabulary() -> str:
     """The closed vocabulary with its ranges, from the constants above, so the system
     text can never drift from what `validate_effect` accepts."""
-    return f"""You design one small video + audio effect for a ski film, as JSON in a closed vocabulary.
+    return f"""You design one video + audio effect for a ski film, as JSON in a closed vocabulary.
 The renderer draws it from the numbers; you never write ffmpeg, filenames or pixels.
+An effect can be anything the vocabulary can say: a marker on an impact, a title or a
+caption, a tint or a vignette over the whole frame, a ring or a glow on a thing, a
+flash on a cut, a stamp that holds for seconds — with a tick, a whoosh, a riser, a
+thud, or no sound at all. The note decides; the examples below are two of many.
+- An INSTANT effect (a marker, a flash, a stamp) has one event per moment, a short
+  duration, and often sits on an impact the audio found.
+- A CONTINUOUS effect (a title, a tint, a vignette, a caption) has ONE event at the
+  moment it should start, a duration that covers how long it holds (up to
+  {MAX_DURATION:g} s), and its anchor is where it sits — the centre (0.5, 0.5) with a
+  size of 1.6 covers the frame.
+- A FOLLOWING effect (a ring on a skier, a glow on a thing) is one event with dx / dy
+  keyframes that track the thing across the frame over its duration.
 
 COORDINATES
 - The frame: (0, 0) is the top-left corner, (1, 1) the bottom-right. An event's anchor
@@ -932,9 +963,13 @@ def _system_design() -> str:
             "red flash for 80 ms; its sound the clicky tick — an impulse, a 3.2 kHz triangle ping "
             "decaying in 35 ms and a breath of high noise for 20 ms, 90 ms in all, at -4 dB — not a "
             "beep:\n" + json.dumps(_EXAMPLE_EFFECT, indent=1)
+            + "\n\nA SECOND EXAMPLE — a title: 'SEND IT' over a dark bar at the top of the frame, "
+              "held 1.8 s with a quick settle and a fade, a rising whoosh under it:\n"
+            + json.dumps(_EXAMPLE_TITLE, indent=1)
             + "\n\nMark only the moments the note names, inside the window the editor gave when there "
-              "is one; when in doubt, fewer hits. A transient is not a hit unless the note's event "
-              "could have made it.")
+              "is one; when in doubt, fewer events. The audio's impacts are candidates for INSTANT "
+              "effects only; a continuous effect starts where the note says and ignores them. A "
+              "transient is not the note's event unless that event could have made it.")
 
 
 def _transcript_in(transcript: list[dict] | None, t0: float, t1: float) -> list[dict]:
@@ -973,11 +1008,12 @@ def build_design_prompt(note: str, seg: dict, clip: dict, *, peaks: list[dict],
         lines += ["", "SAID IN THE SHOT:"]
         lines += [f"  {float(l.get('start', 0)):.1f}s  {str(l.get('text')).strip()}" for l in said[:12]]
     if peaks:
-        lines += ["", "IMPACTS THE AUDIO FOUND (onset peaks, seconds in the clip, strength 0..1) — "
-                      "put events on these when the note names a hit:"]
+        lines += ["", "SHARP MOMENTS THE AUDIO FOUND (onset peaks, seconds in the clip, strength 0..1) — "
+                      "candidates for an instant effect when the note names an impact; a continuous "
+                      "effect starts where the note says:"]
         lines += [f"  t={p['t']:.2f}  strength={p.get('strength', 0):.2f}" for p in peaks]
     else:
-        lines += ["", "The audio found no clear impacts in the shot; place events by the note and the shot's range."]
+        lines += ["", "The audio found no sharp moments in the shot; place events by the note and the shot's range."]
     if reference and reference.get("marks"):
         marks = ", ".join(f"({m[0]:.3f}, {m[1]:.3f})" for m in reference["marks"])
         lines += ["", "THE HUMAN DREW A REFERENCE on a frame"
@@ -1004,9 +1040,10 @@ def build_place_prompt(note: str, effect: dict, candidates: list[dict], strip: P
     for i, c in enumerate(candidates):
         lines.append(f"  [{i}] t={float(c['t']):.2f}s")
     lines += ["",
-              "For EACH frame answer: is the impact the note describes visible in it (\"hit\"), "
+              "For EACH frame answer: is the moment the note describes visible in it (\"hit\"), "
               "and where in that frame is the thing the note names (x, y as fractions of the "
-              "frame — the point the marker should sit on)? Keep t exactly as labelled.",
+              "frame — the point the effect should sit on; the centre if it belongs to the whole "
+              "frame)? Keep t exactly as labelled.",
               "",
               'Answer: {"events": [{"t": seconds, "x": 0..1, "y": 0..1, "hit": true|false, '
               '"why": "a few words"}, …]} — one entry per frame, JSON only.']
@@ -1292,7 +1329,7 @@ def verify(effect: dict, seg: dict, *, onset: list[float] | None = None,
 
     # in_shot
     outside = [ev["t"] for ev in events if not (t0 <= ev["t"] < t1)]
-    add("in_shot", "every hit inside the shot",
+    add("in_shot", "every event inside the shot",
         not outside and bool(events),
         (f"{len(events)} event(s) within {t0:.2f}–{t1:.2f}s" if not outside and events
          else f"outside the shot: {', '.join(f'{t:.2f}s' for t in outside)}" if outside
@@ -1311,18 +1348,18 @@ def verify(effect: dict, seg: dict, *, onset: list[float] | None = None,
             if not (0 <= cx <= 1 and 0 <= cy <= 1):
                 bad.append(f"{ev['t']:.2f}s at ({cx:.2f}, {cy:.2f})")
                 break
-    add("in_frame", "every marker inside the frame", not bad,
+    add("in_frame", "every anchor inside the frame", not bad,
         "every anchor inside 0..1 with the box no more than half off" if not bad
         else "off the frame: " + ", ".join(bad))
 
     # sync
     if sound:
         over = float(sound["duration"]) - (float(overlay.get("duration", 0)) + 0.25)
-        add("sync", "the sound and the marker start together", over <= 0,
-            f"sound {sound['duration']:.2f}s, marker {overlay.get('duration', 0):.2f}s, one t per event"
-            if over <= 0 else f"the sound runs {over:.2f}s past the marker + 0.25s")
+        add("sync", "the sound and the picture start together", over <= 0,
+            f"sound {sound['duration']:.2f}s, picture {overlay.get('duration', 0):.2f}s, one t per event"
+            if over <= 0 else f"the sound runs {over:.2f}s past the picture + 0.25s")
     else:
-        add("sync", "the sound and the marker start together", None, "skipped: no sound")
+        add("sync", "the sound and the picture start together", None, "skipped: no sound")
 
     # on_onset
     if impact and onset:
@@ -1333,11 +1370,11 @@ def verify(effect: dict, seg: dict, *, onset: list[float] | None = None,
             if near is None or near > ONSET_TOL_S:
                 snapped = nearest_onset(onset, hz, ev["t"])
                 off.append(f"{ev['t']:.2f}s" + (f" (nearest sample {snapped:.2f}s)" if snapped is not None else ""))
-        add("on_onset", "each hit on an onset peak", not off,
+        add("on_onset", "each impact on an onset peak", not off,
             f"every event within {ONSET_TOL_S * 1000:.0f} ms of a peak" if not off
             else "not on a peak: " + ", ".join(off))
     else:
-        add("on_onset", "each hit on an onset peak", None,
+        add("on_onset", "each impact on an onset peak", None,
             "skipped: " + ("the note names no impact" if not impact else "no onset track"))
 
     # audio_landed / picture_landed

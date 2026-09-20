@@ -948,6 +948,12 @@ HTML proposal with others (incl. online tools / other AI tools, ideally free)."*
       band on the timeline for the window and the hits; Remove keeps for Restore, Accept
       keeps the previous version for Revert, effects stack per shot; the sketch shows
       (amber over a halo, numbered marks, a HUD on the monitor, thumbnails).
+- [x] I12.8 **For all effects** (Karl, 2026-09-20: *"does not overindex on just putting hit
+      markers on skis, we will use this FOR ALL EFFECTS"*): decision 7 — the hit marker is
+      the first example, never the shape of the tool. Limits widened (30 s, a frame-sized
+      sprite), the prompt names instant / continuous / following effects with a title as
+      the second example, the peaks are candidates for instant effects only, checks and
+      copy say event / anchor / picture / moment.
 - [ ] I12.5 Karl's look — with the window set to where the rocks are, and the tick by ear.
 
 ## Lanes in flight

@@ -10,6 +10,19 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Effects for everything, not hit markers on skis (INTAKE M12, I12.8)** — Karl,
+  2026-09-20: *"ensure that the tool also does not overindex on just putting hit
+  markers on skis, we will use this FOR ALL EFFECTS."* The vocabulary's limits let a
+  title hold for seconds and a tint cover the frame (`MAX_DURATION` 30 s, `MAX_SIZE`
+  1.6, a flash as long as the effect); the system text says what an effect can be —
+  instant (a marker, a flash, a stamp), continuous (a title, a tint, a vignette, a
+  caption: one event at the start, a duration that holds, the centre at size 1.6 for the
+  whole frame), following (a ring or a glow with dx / dy keyframes) — and carries a
+  second worked example, a SEND IT title with a rising whoosh; the audio's peaks are
+  offered as candidates for instant effects only; the placing call asks where the
+  effect sits, the centre when it belongs to the whole frame; the checks say event,
+  anchor and picture rather than hit and marker; the tool's copy follows (moments, a
+  placeholder with five kinds of effect, "one stroke per place").
 - **Effects, round two (INTAKE M12, I12.7)** — Karl's four points, 2026-09-20. (1) *Place
   on the frames* is gone as a choice: Design always places (the price is on the Design
   button) and a drawn reference skips the call because its marks are the anchors. (2)

@@ -295,7 +295,7 @@ def test_design_makes_a_proposal_card_and_never_touches_the_edl(page):
     card = page.locator("#fx .fxcard")
     assert card.count() == 1
     text = card.inner_text()
-    assert "hit markers" in text and "2 hits" in text
+    assert "hit markers" in text and "2 moments" in text
     assert card.locator(".fxchip").text_content() == "proposed"   # uppercased by CSS
     assert "hit markers where my skis hit the rocks" in text
     rows = card.locator(".fxev")
@@ -654,7 +654,7 @@ def test_a_click_on_the_paused_monitor_moves_the_selected_hit(page):
     page.wait_for_function(
         "Math.abs(document.querySelector('.screen video.live').currentTime - 2.4) < 0.02", timeout=10000)
     assert "sel" in card.locator(".fxev").nth(1).get_attribute("class")
-    assert "hit 2 selected" in card.locator(".fxpick").inner_text()
+    assert "moment 2 selected" in card.locator(".fxpick").inner_text()
     assert page.evaluate("player.playing") is False
     r = screen_rect(page)
     page.mouse.click(r["x"] + 0.25 * r["w"], r["y"] + 0.60 * r["h"])

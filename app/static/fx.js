@@ -329,13 +329,13 @@
     const n = (e.events || []).length;
     const sel = S.sel && S.sel.id === e.id ? S.sel.i : -1;
     const events = (e.events || []).map((ev, i) =>
-      `<li class="fxev${i === sel ? ' sel' : ''}" data-i="${i}" title="click: park the monitor on this hit, then click the monitor to move it">`
+      `<li class="fxev${i === sel ? ' sel' : ''}" data-i="${i}" title="click: park the monitor on this moment, then click the monitor to move it">`
       + `<button class="nudge" data-d="-1" title="one frame earlier">◀</button>`
       + `<span class="t">${fmtT(ev.t)}</span>`
       + `<span class="xy">x ${Number(ev.x).toFixed(2)} y ${Number(ev.y).toFixed(2)}</span>`
       + (ev.label ? `<span class="hint">${esc(ev.label)}</span>` : '')
       + `<button class="nudge" data-d="1" title="one frame later">▶</button>`
-      + `<button class="nudge del" data-act="delevent" title="not a hit — take it out">✕</button></li>`).join('');
+      + `<button class="nudge del" data-act="delevent" title="not one — take it out">✕</button></li>`).join('');
     const v = e.verify;
     const checks = v && Array.isArray(v.checks) && v.checks.length
       ? `<div class="fxverify ${v.ok ? 'ok' : 'bad'}"><div class="fxvhead">${v.ok ? '✓ verified' : '✗ not yet'}`
@@ -360,7 +360,7 @@
             + (prev ? `<button data-act="revert" title="back to the version accepted before this one (${prev} kept)">Revert</button>` : ''))
         + `</div>`;
     const iter = S.iterOpen.has(e.id)
-      ? `<div class="fxiter"><input type="text" placeholder="make them red and bigger · one hit only, the big one" value="${esc(S.iter[e.id] || '')}">`
+      ? `<div class="fxiter"><input type="text" placeholder="red and bigger · hold it a second longer · only the big one · no sound" value="${esc(S.iter[e.id] || '')}">`
         + `<button data-act="revise" class="primary">Go</button></div>`
       : '';
     const extras = [];
@@ -370,11 +370,11 @@
     if (e.strip_url) extras.push(`<a href="${esc(e.strip_url)}" target="_blank" rel="noopener">strip</a>`);
     return `<div class="fxcard ${esc(e.status)}" data-id="${esc(e.id)}">`
       + `<div class="fxhead"><b class="fxname">${esc(e.name || 'effect')}</b>`
-      + `<span class="fxn">${n} hit${n === 1 ? '' : 's'}</span>${chip(e)}</div>`
+      + `<span class="fxn">${n} moment${n === 1 ? '' : 's'}</span>${chip(e)}</div>`
       + (e.note ? `<div class="fxnote">${esc(e.note)}</div>` : '')
       + (e.why ? `<div class="fxwhy hint">${esc(e.why)}</div>` : '')
       + `<ul class="fxevents">${events}</ul>`
-      + (sel >= 0 ? `<div class="fxpick hint">hit ${sel + 1} selected · click the monitor (paused) to move it there</div>` : '')
+      + (sel >= 0 ? `<div class="fxpick hint">moment ${sel + 1} selected · click the monitor (paused) to move it there</div>` : '')
       + checks
       + (extras.length ? `<div class="fxextras hint">${extras.join(' · ')}</div>` : '')
       + (e.ref_url ? `<img class="fxrefimg" src="${esc(e.ref_url)}" alt="the reference drawn on the frame" title="the frame you drew on — the marks are the anchors">` : '')
@@ -396,11 +396,11 @@
     const sk = S.sketch ? sketchHtml() : '';
     return `<div class="fxdesign">`
       + `<div class="fxdhead hint">design an effect for this shot</div>`
-      + `<textarea id="fxNote" placeholder="hit markers where my skis hit the rocks, with the sound" rows="3">${esc(S.note)}</textarea>`
+      + `<textarea id="fxNote" placeholder="hit markers with the tick where my skis hit the rocks · a SEND IT title as we drop in · a slow red vignette when I crash · a whoosh and a flash on the jump · a ring that follows Jason down" rows="3">${esc(S.note)}</textarea>`
       + whereHtml()
       + ref + sk
-      + `<div class="fxbtns"><button id="fxSketch"${S.sketch ? ' disabled' : ''} title="pause the monitor and draw on the frame: where the markers go — the marks become the anchors, no placing call">Draw a reference</button>`
-      + `<div class="grow"></div><button id="fxDesign" class="primary"${designing ? ' disabled' : ''} title="${S.reference ? 'one design call; your marks are the anchors' : 'one design call, then a look at a frame around each impact to put the marker on the thing you named'}">${designing ? 'Designing…' : `Design${S.reference ? ' <span class="fxprice">≈ $0.05</span>' : price}`}</button></div>`
+      + `<div class="fxbtns"><button id="fxSketch"${S.sketch ? ' disabled' : ''} title="pause the monitor and draw on the frame: where the effect goes — the marks become the anchors, no placing call">Draw a reference</button>`
+      + `<div class="grow"></div><button id="fxDesign" class="primary"${designing ? ' disabled' : ''} title="${S.reference ? 'one design call; your marks are the anchors' : 'one design call, then a look at a frame around each moment to put the effect on the thing you named'}">${designing ? 'Designing…' : `Design${S.reference ? ' <span class="fxprice">≈ $0.05</span>' : price}`}</button></div>`
       + (busy ? `<div class="fxstate hint">${esc(busy.label)}${busy.detail ? ` — ${esc(busy.detail)}` : ''}</div>` : '')
       + `</div>`;
   }
@@ -558,7 +558,7 @@
     const n = S.sketch.strokes.length;
     return `<div class="fxsketch">`
       + `<div class="hint">draw on the monitor · <span class="fxstrokes">${n} stroke${n === 1 ? '' : 's'}</span> · <kbd>⌫</kbd> undoes the last · <kbd>esc</kbd> cancels</div>`
-      + `<input type="text" id="fxGoal" placeholder="the skis — put the markers here" value="${esc(S.sketch.goal || '')}">`
+      + `<input type="text" id="fxGoal" placeholder="what the marks mean — the skis, the jump, where the title sits" value="${esc(S.sketch.goal || '')}">`
       + `<div class="fxbtns"><button id="fxUse" class="primary"${n ? '' : ' disabled'}>Use it</button><button id="fxCancel">Cancel</button></div>`
       + `</div>`;
   }
@@ -626,7 +626,7 @@
         const li = btn.closest('.fxev');
         const i = Number(li.dataset.i);
         const events = (eff.events || []).filter((_, k) => k !== i);
-        if (!events.length) { say('the last hit — remove or discard the effect instead'); return; }
+        if (!events.length) { say('the last moment — remove or discard the effect instead'); return; }
         if (S.sel && S.sel.id === eff.id) S.sel = null;
         put(eff.id, { events });
         return;
@@ -1002,9 +1002,9 @@
     const hud = document.createElement('div');
     hud.id = 'fxHud';
     hud.innerHTML = `<span class="fxhudn">0 strokes</span>`
-      + `<input type="text" id="fxHudGoal" placeholder="the skis — put the markers here" title="what the marks mean">`
+      + `<input type="text" id="fxHudGoal" placeholder="what the marks mean — the skis, the jump, where the title sits" title="what the marks mean">`
       + `<button id="fxHudUse" class="primary" disabled>Use it</button><button id="fxHudCancel">Cancel</button>`
-      + `<span class="hint">one stroke per hit · <kbd>⌫</kbd> undoes · <kbd>esc</kbd> cancels</span>`;
+      + `<span class="hint">one stroke per place · <kbd>⌫</kbd> undoes · <kbd>esc</kbd> cancels</span>`;
     hud.addEventListener('pointerdown', (ev) => ev.stopPropagation());
     hud.addEventListener('click', (ev) => {
       ev.stopPropagation();
