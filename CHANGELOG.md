@@ -10,6 +10,21 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The window is the human's, a hit can be deleted, the tick is clicky (INTAKE M12,
+  I12.6)** — Karl, after the first live effect: *"you added hit markers across the full
+  footage — during most of which I was not hitting rocks, it was just part at the end …
+  selection / human annotation must be part of the tool"* and *"the hit noise is not the
+  clicky one from COD."* The FX tool's design box has a **where** row — from / to in clip
+  seconds, each end set from the playhead while the monitor is parked on the moment,
+  the whole shot by default; the onset search and the model are confined to it
+  (`fx.design(window=)`, `POST /api/fx/design {window}` validated inside the shot), hits
+  outside are dropped, and the window travels with the effect (`window`, shown on the
+  card). Every hit on a card has a ✕ (not a hit — take it out; the last one says to
+  remove the effect instead). The worked example's sound is the Call-of-Duty tick — an
+  impulse, a 3.2 kHz triangle ping decaying in 35 ms and a breath of high noise, 90 ms —
+  not a 1.8 kHz beep, and the system text says to mark only what the note names, fewer
+  when in doubt. Tests: `test_fx_api.py` the window (confined, refused outside the
+  shot, kept through accept and a nudge).
 - **Effects live on Killington (INTAKE M12, I12.4)** — the two lanes merged (`a1d9b14`,
   the UI merge after it): on the rocks shot the model designed six hit markers with the
   tick, the proof rendered in seconds and every check passed; the FX tool, the monitor

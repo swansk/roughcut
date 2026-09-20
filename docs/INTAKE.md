@@ -936,7 +936,14 @@ HTML proposal with others (incl. online tools / other AI tools, ideally free)."*
       drawn reference and the human's Accept are for. The FX tool, the overlay on the
       monitor (the same X and flash as the proof) and the sketch all work on the live
       board; no page errors.
-- [ ] I12.5 Karl's look.
+- [x] I12.6 **Karl's first feedback, answered** (2026-09-20): *"you added hit markers across
+      the full footage … it was just part at the end … selection / human annotation must be
+      part of the tool"*; *"the hit noise is not the clicky one from COD."* Decision 6: **the
+      window is the human's** — a from / to on the design box (each end from the playhead),
+      the onset search and the model confined to it, hits outside dropped, the window kept
+      on the effect; a ✕ on every hit; the default tick is a click + a 3.2 kHz ping, 90 ms.
+      The sound stays his to judge by ear through Iterate on the card.
+- [ ] I12.5 Karl's look — with the window set to where the rocks are, and the tick by ear.
 
 ## Lanes in flight
 

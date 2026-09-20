@@ -308,7 +308,7 @@ def validate_effect(raw: Any, segments: list[dict], clips: dict[str, dict] | Non
         "status": status,
     }
     if keep_meta:
-        for k in ("created", "reference", "verify", "history"):
+        for k in ("created", "reference", "verify", "history", "window"):
             if raw.get(k) is not None:
                 out[k] = raw[k]
     return out
@@ -876,9 +876,13 @@ _EXAMPLE_EFFECT = {
                  "opacity": [[0, 1], [0.23, 1], [0.35, 0]]},
         "flash": {"color": "#ff0000", "opacity": 0.15, "duration": 0.08}},
     "sound": {
-        "duration": 0.18, "gain_db": -6,
-        "layers": [{"type": "tone", "wave": "square", "freq": 1800, "attack": 0.001, "decay": 0.06, "gain": 0.6},
-                   {"type": "noise", "color": "white", "hp": 1500, "attack": 0.001, "decay": 0.09, "gain": 0.5}]},
+        # the Call-of-Duty tick is a click, not a beep: an impulse, a very short high
+        # ping and a breath of high noise, 90 ms in all (Karl, 2026-09-20: "the hit
+        # noise is not the clicky one from COD")
+        "duration": 0.09, "gain_db": -4,
+        "layers": [{"type": "click", "attack": 0.0, "decay": 0.03, "gain": 0.9},
+                   {"type": "tone", "wave": "triangle", "freq": 3200, "attack": 0.001, "decay": 0.035, "gain": 0.5},
+                   {"type": "noise", "color": "white", "hp": 4000, "attack": 0.0, "decay": 0.02, "gain": 0.35}]},
 }
 
 
@@ -925,9 +929,12 @@ The answer is JSON only — one object, no prose, no code fence."""
 def _system_design() -> str:
     return (_vocabulary() + "\n\nWORKED EXAMPLE — a Call-of-Duty hit marker: four short white lines in an X with a "
             "gap in the middle, scale 1.4 → 1.0 in 60 ms, opacity to 0 over the last 120 ms, a 15 % "
-            "red flash for 80 ms; its sound a 1.8 kHz square tone decaying in 60 ms plus a white "
-            "noise burst through a 1.5 kHz high-pass decaying in 90 ms, at -6 dB:\n"
-            + json.dumps(_EXAMPLE_EFFECT, indent=1))
+            "red flash for 80 ms; its sound the clicky tick — an impulse, a 3.2 kHz triangle ping "
+            "decaying in 35 ms and a breath of high noise for 20 ms, 90 ms in all, at -4 dB — not a "
+            "beep:\n" + json.dumps(_EXAMPLE_EFFECT, indent=1)
+            + "\n\nMark only the moments the note names, inside the window the editor gave when there "
+              "is one; when in doubt, fewer hits. A transient is not a hit unless the note's event "
+              "could have made it.")
 
 
 def _transcript_in(transcript: list[dict] | None, t0: float, t1: float) -> list[dict]:
@@ -1050,18 +1057,29 @@ def _reference_events(reference: dict, peaks: list[dict], onset: list[float], hz
 def design(note: str, seg: dict, clip: dict, sidecar: dict | None, *,
            reference: dict | None = None, place: bool = False,
            proxy: Path | None = None, workdir: Path | None = None,
-           segments: list[dict] | None = None, clips: dict | None = None) -> dict:
+           segments: list[dict] | None = None, clips: dict | None = None,
+           window: tuple[float, float] | None = None) -> dict:
     """The whole design step, through `roughcut.inference` (judge role): candidate
-    impacts from `onset_peaks` over the shot's range (or the reference's marks when
-    there is one), the design call, validation, and — when `place` and a proxy are
-    given — `frames_for` at the candidates, `contact_strip`, the placing call, and the
-    events re-anchored from its answer (dropping candidates the model says are not
-    hits, keeping at least one). Returns a validated effect with `status: proposed`,
-    `created` set, and `history: [{"note", "at"}]`."""
+    impacts from `onset_peaks` over the shot's range — or over `window`, the human's
+    own (t0, t1) in clip seconds, when given: Karl's first live effect put markers
+    across a 20 s shot whose rocks were only at the end, because nothing let him say
+    so — (or the reference's marks when there is one), the design call, validation,
+    and — when `place` and a proxy are given — `frames_for` at the candidates,
+    `contact_strip`, the placing call, and the events re-anchored from its answer
+    (dropping candidates the model says are not hits, keeping at least one). Events
+    outside the window are dropped (at least one stays). Returns a validated effect
+    with `status: proposed`, `created` set, `window` when given, and
+    `history: [{"note", "at"}]`."""
     sidecar = sidecar or {}
     onset = list((sidecar.get("tracks") or {}).get("onset") or [])
     hz = float(sidecar.get("frame_hz") or ONSET_HZ)
     t0, t1 = float(seg["in"]), float(seg["out"])
+    if window is not None:
+        w0, w1 = max(t0, float(window[0])), min(t1, float(window[1]))
+        if w1 > w0:
+            t0, t1 = w0, w1
+            note = (f"{note}\n\nOnly between {t0:.2f}s and {t1:.2f}s of the clip: the editor marked "
+                    f"that window, and there are no hits outside it.")
     peaks = onset_peaks(onset, hz, t0, t1)
     has_marks = bool(reference and reference.get("marks"))
     transcript = (clip or {}).get("transcript")
@@ -1093,7 +1111,13 @@ def design(note: str, seg: dict, clip: dict, sidecar: dict | None, *,
         "events": events, "overlay": answer.get("overlay"), "sound": answer.get("sound"),
         "status": "proposed",
     }
+    if window is not None:
+        inside = [e for e in events if isinstance(e, dict) and e.get("t") is not None
+                  and t0 <= float(e["t"]) <= t1]
+        effect["events"] = inside or [{"t": max(t0, min(t1, float(events[0]["t"]))), "x": 0.5, "y": 0.5}] if events else effect["events"]
     effect = validate_effect(effect, segments or [seg], clips, keep_meta=False)
+    if window is not None:
+        effect["window"] = [round(t0, 3), round(t1, 3)]
     if place and proxy is not None and not has_marks:
         wd = Path(workdir) if workdir else Path(tempfile.mkdtemp(prefix="fx_place_"))
         wd.mkdir(parents=True, exist_ok=True)

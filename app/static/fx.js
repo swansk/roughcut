@@ -81,6 +81,7 @@
     price: null,             // {usd, frames} for `place` on this shot
     priceFor: null,
     reference: null,         // the sketch's reference, sent with the next Design
+    window: null,            // {t0, t1} clip seconds — the human's window on the shot, or null
     iter: {},                // id → the iterate box's text
     iterOpen: new Set(),
     jobs: new Map(),         // fx job id → state last seen
@@ -237,6 +238,8 @@
     if (!note) { say('say what the effect is'); return; }
     const body = { shot, note, place: !!S.place };
     if (S.reference) body.reference = S.reference;
+    const w = windowFor(shot);
+    if (w) body.window = [w.t0, w.t1];
     try {
       await api('POST', '/api/fx/design', body);
     } catch (err) {
@@ -303,7 +306,8 @@
       + `<span class="t">${fmtT(ev.t)}</span>`
       + `<span class="xy">x ${Number(ev.x).toFixed(2)} y ${Number(ev.y).toFixed(2)}</span>`
       + (ev.label ? `<span class="hint">${esc(ev.label)}</span>` : '')
-      + `<button class="nudge" data-d="1" title="one frame later">▶</button></li>`).join('');
+      + `<button class="nudge" data-d="1" title="one frame later">▶</button>`
+      + `<button class="nudge del" data-act="delevent" title="not a hit — take it out">✕</button></li>`).join('');
     const v = e.verify;
     const checks = v && Array.isArray(v.checks) && v.checks.length
       ? `<div class="fxverify ${v.ok ? 'ok' : 'bad'}"><div class="fxvhead">${v.ok ? '✓ verified' : '✗ not yet'}`
@@ -325,6 +329,7 @@
         + `<button data-act="revise" class="primary">Go</button></div>`
       : '';
     const extras = [];
+    if (Array.isArray(e.window) && e.window.length === 2) extras.push(`window · ${fmtT(e.window[0])}–${fmtT(e.window[1])}`);
     if (e.reference) extras.push(`reference · ${(e.reference.marks || []).length} marks${e.reference.goal ? ` · ${esc(e.reference.goal)}` : ''}`);
     if (e.proof_url) extras.push(`<a href="${esc(e.proof_url)}" target="_blank" rel="noopener">proof</a>`);
     if (e.strip_url) extras.push(`<a href="${esc(e.strip_url)}" target="_blank" rel="noopener">strip</a>`);
@@ -355,12 +360,63 @@
     return `<div class="fxdesign">`
       + `<div class="fxdhead hint">design an effect for this shot</div>`
       + `<textarea id="fxNote" placeholder="hit markers where my skis hit the rocks, with the sound" rows="3">${esc(S.note)}</textarea>`
+      + whereHtml()
       + `<label class="fxplace" title="a priced model call looks at a frame around each impact and puts the marker on the thing you named"><input type="checkbox" id="fxPlace"${S.place ? ' checked' : ''}> place on the frames${price}</label>`
       + ref + sk
       + `<div class="fxbtns"><button id="fxSketch"${S.sketch ? ' disabled' : ''} title="pause the monitor and draw on the frame: where the markers go">Draw a reference</button>`
       + `<div class="grow"></div><button id="fxDesign" class="primary"${designing ? ' disabled' : ''}>${designing ? 'Designing…' : 'Design'}</button></div>`
       + (busy ? `<div class="fxstate hint">${esc(busy.label)}${busy.detail ? ` — ${esc(busy.detail)}` : ''}</div>` : '')
       + `</div>`;
+  }
+
+  /* The window: where in the shot the effect belongs, in clip seconds. Karl's first
+   * live effect put markers across a 20 s shot whose rocks were only at the end,
+   * because nothing let him say so. Defaults to the whole shot; each end can be set
+   * from the playhead while the monitor is parked on the moment. */
+  function shotRange(id) {
+    const s = seg(id);
+    return s ? { t0: Number(s.in), t1: Number(s.out) } : null;
+  }
+  function windowFor(id) {
+    const r = shotRange(id);
+    if (!r || !S.window) return null;
+    const t0 = Math.max(r.t0, Math.min(r.t1, Number(S.window.t0)));
+    const t1 = Math.max(r.t0, Math.min(r.t1, Number(S.window.t1)));
+    if (!(t1 > t0)) return null;
+    if (Math.abs(t0 - r.t0) < 0.01 && Math.abs(t1 - r.t1) < 0.01) return null;   // the whole shot
+    return { t0: round4(t0), t1: round4(t1) };
+  }
+  function liveClipTime() {
+    const p = PLAYER(), v = live();
+    if (!p || !v || p.idx == null) return null;
+    const s = SEGS()[p.idx];
+    if (!s || String(s.id) !== String(S.shot)) return null;
+    return v.currentTime;
+  }
+  function whereHtml() {
+    const r = shotRange(S.shot);
+    if (!r) return '';
+    const w = S.window || r;
+    const whole = !windowFor(S.shot);
+    return `<div class="fxwhere" title="only between these clip times — set each end from the playhead while the monitor is parked on the moment">`
+      + `<span class="hint">where</span>`
+      + `<input type="text" id="fxFrom" value="${Number(w.t0).toFixed(2)}" size="7">`
+      + `<button class="ghost" id="fxFromHead" title="from the playhead">◀ playhead</button>`
+      + `<span class="hint">to</span>`
+      + `<input type="text" id="fxTo" value="${Number(w.t1).toFixed(2)}" size="7">`
+      + `<button class="ghost" id="fxToHead" title="to the playhead">◀ playhead</button>`
+      + `<span class="hint fxwhole">${whole ? 'the whole shot' : `${fmtT(w.t0)}–${fmtT(w.t1)}`}</span>`
+      + (whole ? '' : `<button class="ghost" id="fxWholeShot" title="the whole shot again">✕</button>`)
+      + `</div>`;
+  }
+  function setWindowEnd(which, value) {
+    const r = shotRange(S.shot);
+    if (!r) return;
+    const cur = S.window || { t0: r.t0, t1: r.t1 };
+    const v = Number(value);
+    if (!Number.isFinite(v)) return;
+    S.window = which === 't0' ? { t0: v, t1: cur.t1 } : { t0: cur.t0, t1: v };
+    paint(true);
   }
 
   function sketchHtml() {
@@ -376,6 +432,7 @@
     return JSON.stringify([
       S.shot, S.effects, S.sel, S.price,
       S.reference && [S.reference.t, S.reference.marks.length, S.reference.goal],
+      S.window && [S.window.t0, S.window.t1],
       S.sketch && [S.sketch.strokes.length, S.sketch.goal], [...S.iterOpen], S.place,
       S.busy && [S.busy.id, S.busy.state, S.busy.detail, S.busy.milestone],
     ]);
@@ -412,9 +469,25 @@
       if (btn.id === 'fxUse') { useSketch(); return; }
       if (btn.id === 'fxCancel') { cancelSketch(); return; }
       if (btn.dataset.act === 'clearref') { S.reference = null; paint(); return; }
+      if (btn.id === 'fxFromHead' || btn.id === 'fxToHead') {
+        const t = liveClipTime();
+        if (t == null) { say('park the monitor on this shot first'); return; }
+        setWindowEnd(btn.id === 'fxFromHead' ? 't0' : 't1', t);
+        return;
+      }
+      if (btn.id === 'fxWholeShot') { S.window = null; paint(true); return; }
       const card = btn.closest('.fxcard');
       const eff = card ? byId(card.dataset.id) : null;
       if (!eff) return;
+      if (btn.dataset.act === 'delevent') {
+        const li = btn.closest('.fxev');
+        const i = Number(li.dataset.i);
+        const events = (eff.events || []).filter((_, k) => k !== i);
+        if (!events.length) { say('the last hit — remove or discard the effect instead'); return; }
+        if (S.sel && S.sel.id === eff.id) S.sel = null;
+        put(eff.id, { events });
+        return;
+      }
       if (btn.classList.contains('nudge')) {
         const li = btn.closest('.fxev');
         nudge(eff, Number(li.dataset.i), Number(btn.dataset.d));
@@ -434,6 +507,14 @@
     const t = e.target;
     if (t.id === 'fxNote') S.note = t.value;
     else if (t.id === 'fxPlace') S.place = !!t.checked;
+    else if (t.id === 'fxFrom' || t.id === 'fxTo') {
+      const v = Number(t.value);
+      if (Number.isFinite(v)) {
+        const r = shotRange(S.shot) || { t0: 0, t1: 0 };
+        const cur = S.window || { t0: r.t0, t1: r.t1 };
+        S.window = t.id === 'fxFrom' ? { t0: v, t1: cur.t1 } : { t0: cur.t0, t1: v };
+      }
+    }
     else if (t.id === 'fxGoal') { if (S.sketch) S.sketch.goal = t.value; }
     else if (t.closest('.fxiter')) {
       const card = t.closest('.fxcard');

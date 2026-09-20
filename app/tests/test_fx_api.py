@@ -58,11 +58,13 @@ def stubbed(monkeypatch, project):
     """The model designs HIT for any note (a revise note 'red' turns it red), the
     synth writes silence, the proof is the base copied, verify is the pure checks."""
     def design(note, seg, clip, sidecar, *, reference=None, place=False, proxy=None,
-               workdir=None, segments=None, clips=None):
+               workdir=None, segments=None, clips=None, window=None):
         e = json.loads(json.dumps(HIT))
         e["shot"] = seg["id"]
         e["clip"] = seg["clip"]
         e["note"] = note
+        if window is not None:      # what the real design does: only hits inside
+            e["events"] = [ev for ev in e["events"] if window[0] <= ev["t"] <= window[1]] or e["events"][:1]
         if reference and reference.get("marks"):
             e["events"] = [{"t": float(reference.get("t") or 1.5), "x": m[0], "y": m[1]}
                            for m in reference["marks"]]
@@ -242,6 +244,29 @@ def test_a_drawn_reference_places_the_hits_and_is_kept(stubbed, client):
     assert e["reference"]["goal"] == "the skis — markers here" and e["reference"]["marks"] == [[0.42, 0.66], [0.61, 0.7]]
     assert e["ref_url"] == f"/api/fx/{fx_id}/ref.png"
     assert client.get(e["ref_url"]).status_code == 200
+
+
+def test_the_window_is_the_humans_and_confines_the_hits(stubbed, client):
+    """Karl, after the first live effect: the markers went across the whole shot; the
+    rocks were only at the end. The window is his to give, and it travels with the
+    effect."""
+    shot = _seed(stubbed, client)
+    job = client.post("/api/fx/design", json={"shot": shot, "note": "hit markers", "window": [2.0, 3.0]}).json()["job"]
+    fx_id = _wait(client, job)["result"]["id"]
+    e = next(x for x in client.get("/api/fx").json()["effects"] if x["id"] == fx_id)
+    assert e["window"] == [2.0, 3.0]
+    assert [ev["t"] for ev in e["events"]] == [2.4]
+    # a window outside the shot, or backwards, is refused with a sentence
+    r = client.post("/api/fx/design", json={"shot": shot, "note": "hit", "window": [0.5, 2.0]})
+    assert r.status_code == 400 and "not inside the shot" in r.json()["detail"]
+    r = client.post("/api/fx/design", json={"shot": shot, "note": "hit", "window": [2.5, 2.0]})
+    assert r.status_code == 400
+    r = client.post("/api/fx/design", json={"shot": shot, "note": "hit", "window": "later"})
+    assert r.status_code == 400
+    # the window survives an accept and a nudge
+    assert client.post("/api/fx/accept", json={"id": fx_id}).status_code == 200
+    r = client.put(f"/api/fx/{fx_id}", json={"events": [{"t": 2.5, "x": 0.4, "y": 0.6}]})
+    assert r.status_code == 200 and r.json()["window"] == [2.0, 3.0]
 
 
 def test_the_price_is_on_the_button_before_the_call(stubbed, client):

@@ -3458,7 +3458,23 @@ def _fx_impact(e: dict) -> bool:
     return any(w in text for w in words)
 
 
-def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict | None) -> None:
+def _fx_window(raw, seg: dict) -> tuple[float, float] | None:
+    """The human's window on the shot, clip seconds, or None for the whole shot. A window
+    that is not two numbers inside the shot, in order, is a 400."""
+    if raw is None:
+        return None
+    try:
+        t0, t1 = float(raw[0]), float(raw[1])
+    except (TypeError, ValueError, IndexError):
+        raise HTTPException(400, "window is not [from, to] in clip seconds")
+    lo, hi = float(seg["in"]), float(seg["out"])
+    if not (lo <= t0 < t1 <= hi + 1e-6):
+        raise HTTPException(400, f"window {t0:.2f}–{t1:.2f} is not inside the shot {lo:.2f}–{hi:.2f}")
+    return (round(t0, 3), round(min(t1, hi), 3))
+
+
+def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict | None,
+                   window: tuple[float, float] | None = None) -> None:
     entry = FX[job]
     try:
         edl = read_edl()
@@ -3471,7 +3487,10 @@ def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict 
         entry.note("designing the effect" + (" from your drawing" if ref else ""))
         e = fx.design(note, seg, clip, load_sidecar(seg["clip"]), reference=ref,
                       place=bool(place), proxy=_fx_proxy(seg["clip"]) if place else None,
-                      workdir=fx_home() / fx_id, segments=segments, clips=clips)
+                      workdir=fx_home() / fx_id, segments=segments, clips=clips,
+                      window=window)
+        if window is not None:
+            e["window"] = [window[0], window[1]]
         e["id"] = fx_id
         e["status"] = "proposed"
         if ref:
@@ -3610,8 +3629,10 @@ async def api_fx_design(request: Request) -> JSONResponse:
     clips, _ = _ask_clips()
     if seg["clip"] not in clips:
         raise HTTPException(400, f"{seg['clip']} has no analysis yet")
+    window = _fx_window(body.get("window"), seg)
     return _fx_job("design", f"Designing an effect — {Path(seg['clip']).stem}",
-                   _fx_design_job, shot, note, bool(body.get("place")), body.get("reference"))
+                   _fx_design_job, shot, note, bool(body.get("place")), body.get("reference"),
+                   window)
 
 
 @app.post("/api/fx/revise")

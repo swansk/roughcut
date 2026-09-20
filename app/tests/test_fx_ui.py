@@ -74,7 +74,7 @@ def stubbed_fx():
     NotImplementedError on this branch, and the server calls them from a job thread
     of this process."""
     def design(note, seg, clip, sidecar, *, reference=None, place=False, proxy=None,
-               workdir=None, segments=None, clips=None):
+               workdir=None, segments=None, clips=None, window=None):
         e = json.loads(json.dumps(HIT))
         e["shot"] = seg["id"]
         e["clip"] = seg["clip"]

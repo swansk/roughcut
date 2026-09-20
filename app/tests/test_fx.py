@@ -438,7 +438,7 @@ def test_design_prompt_carries_the_evidence_and_the_system_the_vocabulary():
     assert "t=1.50" in prompt and "t=2.40" in prompt
     for token in (f"{fx.MIN_SIZE}", f"{fx.MAX_SIZE}", f"{fx.MAX_EVENTS}", f"{fx.MAX_SHAPES}",
                   f"{fx.MIN_DURATION}", f"{fx.MAX_DURATION}", "top-left", "-1 to 1", "JSON only",
-                  "1800", "square", "#ff0000", '"hp": 1500'):
+                  "3200", "triangle", "click", "#ff0000", '"hp": 4000'):
         assert token in system, token
     for kind in fx.SHAPES + fx.LAYERS + fx.TRACKS:
         assert f'"{kind}"' in system, kind

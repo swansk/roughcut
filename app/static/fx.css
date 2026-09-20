@@ -69,6 +69,13 @@
 #fx .fxref button { padding: 0 6px; font-size: 11px; line-height: 18px; }
 #fx .fxstate { margin-top: 6px; }
 
+/* the window */
+#fx .fxwhere { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-top: 6px; font-size: 12px; }
+#fx .fxwhere input { width: 64px; padding: 3px 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
+#fx .fxwhere button { padding: 1px 6px; font-size: 11px; }
+#fx .fxev .del { color: var(--bad); opacity: .7; }
+#fx .fxev .del:hover { opacity: 1; background: var(--card); }
+
 /* the sketch's toolbar */
 #fx .fxsketch { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 8px; }
 #fx .fxsketch input { width: 100%; margin-top: 6px; }
