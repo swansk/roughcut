@@ -1,5 +1,14 @@
 # Handoff — read this first
 
+**2026-09-20 — the dock (INTAKE M11) is built; next is Karl's look at it.** The board's
+right column was eight panels 2,900 px tall beside a 900 px viewport, with the bin seventh.
+Karl chose, from a ranked page of three layouts, *the Dock, and stop there*: a rail of tools
+(Bin · Ask · Sound · Out) and one panel the height of the viewport; the bin as a labelled
+grid with the pass's labels as filter chips and Find as its search box; adding at the
+playhead; keys behind `?`, project facts behind *Project ▾*. Details and his other answers
+are in INTAKE M11. `test_dock_ui.py` covers it; the other browser tests open a tool before
+reaching into it (`dock.open('ask')`). Everything below still stands.
+
 **Active workstream (2026-09-18): the editing room — tracked in [docs/INTAKE.md](INTAKE.md).**
 Read that file first: the five decisions, milestones M0–M9 with their checkboxes, the lanes and
 where to pick up. **State:** everything through M9 is built and live on Killington. The cut

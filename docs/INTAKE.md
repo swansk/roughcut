@@ -55,6 +55,13 @@ until R11.
 
 ## Where we are
 
+_2026-09-20._ **M11, the dock, is built (I11.0–I11.4).** Karl answered the board-directions
+review (three ranked layouts, an interactive page) with *the Dock, and stop there*: the
+sidebar's eight panels are a rail of four tools and one viewport-high panel; the bin is a
+labelled grid with the pass's labels as filter chips and Find as its search; adding lands at
+the playhead; keys on `?`, project facts in a popover. Next: his look at it (I11.5), then
+I9.6 / I10.6 as below.
+
 _2026-09-18, end of session 14 (late)._ **M9, the promoted timeline, is built: I9.0–I9.5 and
 I9.7 ticked; I9.6 is Karl's look.** I9.7 answered Karl's *"extend a clip while offsetting the
 next instead of cutting into the next … top of the clip extends, bottom cuts in"*: every cut has
@@ -823,6 +830,47 @@ below must honour:
 timing, match), `grade_lab3.py` (zoom sheet, grey self-test), the two research reports, the
 frames, `out/sheet_looks2.jpg` (16 frames × original/balanced/crisp/alpine/filmic),
 `out/sheet_zoom.jpg`, `out/sheet_match.jpg`, `out/kill_CLIP_07.alpine.cube`.
+
+### M11 · The dock — Karl's board-directions call (2026-09-20)
+
+**Why.** Measured on the live Killington board at 1440×900 (2026-09-19): the sidebar was
+eight panels, 2,943 px tall, "sticky" beside a 900 px viewport — sticky only holds a column
+shorter than the screen, so Renders, the bin and Keys were reached by scrolling the monitor
+away; the bin was panel 7 of 8 and a drag from a keep to V1 was ≈1,900 px (the lanes freeze
+page scroll under a drag for exactly that reason). Three directions were put to Karl as an
+interactive page — the Dock, the Shelf, the Cutting Room, ranked by how little breaks — and
+his answers were: **the Dock, and stop there** · renders a tool on the board · Find is the
+bin's search box · labels are what the pass gave (hero + tags + themes) · a grid with filter
+chips · adding inserts at the playhead · the tools he expects next: effects, titles, a beat
+grid, transitions.
+
+**Decisions.**
+1. The right column is a rail plus one viewport-high panel; the page never scrolls for it.
+   A tool is one rail button and one `<section data-tool>`; the rail is the shelf for what
+   comes next. Inner ids are unchanged, so app.js and the tests keep their names.
+2. The bin is a labelled grid; the labels are data the picks already carry — `hero`, `tags`,
+   and the kinds of its `witnesses` (heard / seen / felt; Killington's keeps carry no tags
+   or heroes yet, so the kinds are its labels today) — never a new field.
+3. Adding lands at the playhead, everywhere, through the lanes' `slotAt` / `insertAt` — one
+   rule, one undo entry, the same as a drop.
+4. Keys → an overlay on `?`; project facts → a header popover; the story lives with the Ask.
+
+- [x] I11.0 **The dock** (`app/static/dock.js`, served at `/dock.js`; `index.html`): the
+      rail Bin · Ask · Sound · Out with badges, the open tool remembered per browser,
+      `--hd` kept from the header's height, `dock.open` / `reveal` / `badge` for the
+      other modules; the lanes reveal the Sound tool on a music-lane click.
+- [x] I11.1 **The bin as a labelled grid**: a card per keep with chips, the filter row with
+      counts, the search box filtering as you type (Find one keypress on), click to
+      select, `enter` adds, `space` / double-click plays the clip in the bin's player.
+- [x] I11.2 **Insert at the playhead** for the bin's button and Enter, heard / seen rows and
+      Find matches — the lanes' rule, the same undo entry as a drop.
+- [x] I11.3 **Keys overlay and project popover**; the timeline's map renders into the
+      overlay (it finds the `Keys` heading as before).
+- [x] I11.4 Tests: `test_dock_ui.py` (8) — the dock fits the viewport, the rail, the empty
+      Ask tool, the grid and its filters, insert at the playhead (button, Enter, a heard
+      row), space plays in the bin, the overlay, the popover; the browser tests that reach
+      into a closed tool open it first (`dock.open`).
+- [ ] I11.5 Live on Killington: Karl's look at the dock.
 
 ## Lanes in flight
 

@@ -215,7 +215,10 @@ def test_a_click_on_the_ruler_cues_the_monitor_paused_at_that_film_time(page):
         "Math.abs(document.querySelector('.screen video.live').currentTime - 1.0) < 0.1",
         timeout=10000)
     head = page.evaluate("parseFloat(document.querySelector('#tl .tl-head').style.left)")
-    assert head == pytest.approx(x, abs=1.5)
+    # drawn where the playhead is — not where the click was asked for: the click lands
+    # on a whole pixel and the magnet may take it a few ms, and both depend on the
+    # column's width (the dock, INTAKE M11, changed it)
+    assert head == pytest.approx(page.evaluate("tl.timeToX(tl.state.playhead)"), abs=1.5)
     page.keyboard.press("Space")
     page.wait_for_function("player.playing && player.idx === 1", timeout=10000)
     page.wait_for_function(

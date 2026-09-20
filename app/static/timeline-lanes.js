@@ -569,6 +569,13 @@
       const k = row._keep;
       return { clip: k.clip, start: k.start, end: k.end, why: k.why || k.note || '' };
     }
+    if (row.classList.contains('keep') && row._keep) {
+      // The dock's bin (INTAKE M11) filters its rows, so a row's position says nothing
+      // about which keep it is; the row carries the keep itself.
+      const k = row._keep;
+      if (k.missing || !a.P || !a.P.clips[k.clip]) return null;
+      return { clip: k.clip, start: k.start, end: k.end, why: k.why || k.note || '' };
+    }
     if (row.classList.contains('keep')) {
       const rows = [...document.querySelectorAll('#library .keep')];
       const binOrder = fn('binOrder');
@@ -697,6 +704,7 @@
     // the lanes' own clicks
     el.a1.addEventListener('click', () => {
       const p = q('#musicPanel');
+      if (window.dock) window.dock.reveal(p);      // the panel is a tool in the dock (M11)
       if (p) p.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     });
     el.ghost.addEventListener('click', (e) => {

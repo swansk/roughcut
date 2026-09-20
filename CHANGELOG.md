@@ -10,6 +10,27 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The dock (INTAKE M11)** — the board's right column is a rail of tools and one
+  panel the height of the viewport that scrolls inside itself (`index.html`, `/dock.js`),
+  in place of eight panels stacked 2,900 px tall beside a 900 px viewport. Karl's calls
+  (2026-09-20, from the board-directions review): the Dock and stop there; renders a tool
+  on the board; Find as the bin's search box; the pass's labels; a grid with filter chips;
+  adding inserts at the playhead. Tools: **Bin** (the default — a card per keep with its
+  still, range, reason, note and the pass's labels as chips — hero, its tags, and the kinds
+  of evidence its witnesses carry (heard / seen / felt, the only labels Killington's keeps
+  have today); the same chips as a filter
+  with counts plus hero / in the cut / not yet; the search box filters as you type with
+  Find and Ask the model one keypress on; click selects, `enter` adds at the playhead,
+  `space` or a double-click plays the clip in the bin's own player; heard / seen as
+  before), **Ask** (the ask, Cut from the bin, the story), **Sound** (music), **Out**
+  (renders and versions); badges count keeps and versions; the open tool is remembered.
+  Adding — the bin's button, its Enter, a heard / seen row, a Find match, a drop — lands at
+  the cut point nearest the playhead through the lanes' `insertAt` (one undo entry each).
+  Project facts are a header popover, the keys an overlay on `?` that the timeline's map
+  renders into, and the header keeps `--hd` current so the dock's height follows the
+  steps and progress strips. The lanes read a keep off its row (`row._keep`) now that the
+  grid filters, and a click on the music lane reveals the Sound tool. Tests:
+  `test_dock_ui.py` (8); the browser tests that reach into a closed tool open it first.
 - **`/grade.js` served (INTAKE M10, I10.4)** — the one route the UI lane could not add
   (`server.py` is the lead's): mirrors `/switcher.js`. I10.3 and I10.4 ticked in INTAKE
   with the lanes' hashes; M10 is built through I10.4, I10.5 (the Ask) and I10.6 (Karl's

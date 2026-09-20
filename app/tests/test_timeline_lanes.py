@@ -163,6 +163,7 @@ def test_the_music_lane_draws_the_bed_its_fades_and_a_dip_per_speech_region(page
     second one from 2.15 s of film (CLIP_B's speech starts at 0.15 s) to the end."""
     a1 = "#tl .tl-xlane[data-lane=A1]"
     assert page.evaluate(f"document.querySelector('{a1}').hidden") is True
+    page.evaluate("dock.open('sound')")   # the dock's tool (INTAKE M11)
     page.select_option("#musicTrack", "music/bed.wav")
     page.wait_for_function(f"!document.querySelector('{a1}').hidden", timeout=8000)
     page.wait_for_function(f"document.querySelectorAll('{a1} .duck').length === 2", timeout=8000)
@@ -294,6 +295,7 @@ def test_a_pending_proposal_is_a_ghost_lane_you_can_play_either_side_of(page):
     try:
         before = page.evaluate("JSON.stringify(segs)")
         assert page.evaluate(f"document.querySelector('{ghost}').hidden") is True
+        page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
         page.locator("#note").fill("swap the opening, close on the unused clip")
         page.locator("#ask").click()
         page.wait_for_selector("#proposal:visible", timeout=30000)

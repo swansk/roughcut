@@ -630,6 +630,7 @@ def test_comma_and_period_nudge_the_active_edge_by_a_frame_or_a_second(page):
     page.keyboard.press("Control+z")
     assert page.evaluate("segs[0].in") == dragged
     # inside an input the keys are the input's
+    page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
     page.locator("#story").fill("")
     page.locator("#story").press(",")
     assert page.evaluate("segs[0].in") == dragged

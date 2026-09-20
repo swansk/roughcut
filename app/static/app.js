@@ -1172,6 +1172,8 @@ function render() {
   // With an empty timeline the empty state already has its own "what is this film
   // about" box, so the sidebar panel is a second input for the same thing.
   $('#askPanel').style.display = segs.length ? 'block' : 'none';
+  const askEmpty = $('#askEmpty');
+  if (askEmpty) askEmpty.hidden = !!segs.length;
 
   // Nothing in the header acts on an empty timeline, so nothing in the header shows.
   ['#snap', '#undo', '#redo', '#render', '#saveState'].forEach((sel) => {
@@ -1262,6 +1264,9 @@ function renderLibrary() {
   document.querySelectorAll('#libTabs .tab').forEach((x) =>
     x.classList.toggle('sel', x.dataset.tab === libTab));
   const lib = $('#library');
+  lib.classList.toggle('grid', libTab === 'kept');
+  const bf = $('#binFilter');
+  if (bf) bf.hidden = libTab !== 'kept';
   if (libTab === 'kept') { renderKept(lib); return; }
   $('#libHint').textContent = libTab === 'seen'
     ? (ranked.length ? 'What was seen, ranked — events first, confirmed above guessed.'
@@ -1282,12 +1287,7 @@ function renderLibrary() {
     d.innerHTML = `<span class="w">${r.kind ? kindTag(r.kind) : ''}${seal}${escapeHtml(r.why)}</span>
       <span class="t">${stem(r.clip)} · ${fmt(r.t)}${r.end ? `–${fmt(r.end)}` : ''}</span>`;
     d.onclick = () => {
-      pushUndo('insert');
-      const at = sel + 1;
-      segs.splice(at, 0, { clip: r.clip, in: r.t, out: r.end ?? r.t + 3, why: r.why });
-      sel = at;
-      render();
-      toast(`added ${stem(r.clip)} @ ${r.t.toFixed(1)}s`);
+      insertShot({ clip: r.clip, start: r.t, end: r.end ?? r.t + 3, why: r.why });
     };
     lib.appendChild(d);
   });
@@ -1331,9 +1331,97 @@ function binOrder(list) {
     || String(a.clip).localeCompare(String(b.clip)) || a.start - b.start);
 }
 
+/* The bin's selection and filter (INTAKE M11). A keep is selected by a click on its
+ * card; Enter adds it at the playhead, space plays it in the bin's own player. The
+ * filter is one chip — hero, a label the pass gave, in the cut, not yet — plus the
+ * words typed in the search box, which filter as you type. */
+let binSel = null;            // keepKey() of the selected keep
+let binChip = null;           // 'hero' | 'in' | 'out' | 'tag:<label>' | null
+const keepKey = (s) => (s.id != null ? String(s.id) : `${s.clip}@${s.start}`);
+
+/* The kinds of evidence a keep rests on — heard, seen, felt — from its witnesses; the
+ * pass's own labels for a bin whose picks carry no themes yet (Killington's do not). */
+function keepKinds(s) {
+  const kinds = [];
+  for (const w of s.witnesses || []) {
+    if (w && w.kind && !kinds.includes(w.kind)) kinds.push(w.kind);
+  }
+  return kinds;
+}
+
+function keepChips(s) {
+  const out = [];
+  if (s.hero) out.push('<span class="chip hero" data-chip="hero">★ hero</span>');
+  for (const t of (s.tags || []).slice(0, 6)) {
+    out.push(`<span class="chip" data-chip="tag:${escapeHtml(t)}">${escapeHtml(t)}</span>`);
+  }
+  for (const k of keepKinds(s)) {
+    out.push(`<span class="chip" data-chip="kind:${escapeHtml(k)}">${escapeHtml(k)}</span>`);
+  }
+  return out.join('');
+}
+
+function keepMatches(s, text) {
+  if (binChip === 'hero' && !s.hero) return false;
+  if (binChip === 'in' || binChip === 'out') {
+    const at = (!s.missing && P.clips[s.clip]) ? shotOf(s) : -1;
+    if (binChip === 'in' && at < 0) return false;
+    if (binChip === 'out' && at >= 0) return false;
+  }
+  if (binChip && binChip.startsWith('tag:') && !(s.tags || []).includes(binChip.slice(4))) return false;
+  if (binChip && binChip.startsWith('kind:') && !keepKinds(s).includes(binChip.slice(5))) return false;
+  if (text) {
+    const hay = [stem(s.clip), s.why, s.note].concat(s.tags || []).join(' ').toLowerCase();
+    if (!hay.includes(text)) return false;
+  }
+  return true;
+}
+
+/* The chips above the grid: the labels the bin actually carries, with counts. */
+function paintBinFilter(keeps) {
+  const el = $('#binFilter');
+  if (!el) return;
+  const tags = new Map();
+  keeps.forEach((s) => (s.tags || []).forEach((t) => tags.set(t, (tags.get(t) || 0) + 1)));
+  const inCut = keeps.filter((s) => !s.missing && P.clips[s.clip] && shotOf(s) >= 0).length;
+  const heroes = keeps.filter((s) => s.hero).length;
+  const chips = [];
+  if (heroes) chips.push(['hero', `★ hero ${heroes}`, 'hero']);
+  [...tags.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12)
+    .forEach(([t, n]) => chips.push([`tag:${t}`, `${t} ${n}`, '']));
+  const kinds = new Map();
+  keeps.forEach((s) => keepKinds(s).forEach((k) => kinds.set(k, (kinds.get(k) || 0) + 1)));
+  [...kinds.entries()].sort((a, b) => b[1] - a[1])
+    .forEach(([k, n]) => chips.push([`kind:${k}`, `${k} ${n}`, '']));
+  chips.push(['in', `in the cut ${inCut}`, 'in'], ['out', `not yet ${keeps.length - inCut}`, '']);
+  el.innerHTML = chips.map(([k, label, cls]) =>
+    `<span class="chip ${cls}${binChip === k ? ' on' : ''}" data-chip="${escapeHtml(k)}"
+           title="${binChip === k ? 'click to clear the filter' : 'show only these'}">${escapeHtml(label)}</span>`).join('');
+  el.hidden = !keeps.length;
+}
+
+function selectKeep(s, row) {
+  binSel = keepKey(s);
+  document.querySelectorAll('#library .keep').forEach((r) => r.classList.toggle('sel', r._keep === s));
+  if (row && document.activeElement !== row) row.focus({ preventScroll: true });
+}
+
+/* Play a keep where it lives — the bin's player, the whole clip seeked to the keep —
+ * so the monitor stays on the cut while you look. */
+function playKeep(s) {
+  const clip = P.clips[s.clip];
+  if (!clip || !clip.proxy) return toast('no proxy for this clip yet');
+  showFindMatch({ clip: s.clip, proxy: clip.proxy, start: s.start, end: s.end,
+                  what: s.why || s.note || '', duration: clip.duration });
+  const fp = $('#findPlayer');
+  if (fp) fp.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
 function keepRow(s) {
   const d = document.createElement('div');
-  d.className = 'keep' + (s.missing ? ' missing' : '');
+  d.className = 'keep' + (s.missing ? ' missing' : '') + (binSel === keepKey(s) ? ' sel' : '');
+  d._keep = s;                  // the lanes read the keep off its row, whatever the filter shows
+  d.tabIndex = 0;
   const clip = P.clips[s.clip] || {};
   const known = !s.missing && !!P.clips[s.clip];
   const still = clip.poster ? `${clip.poster}?t=${Math.max(0, s.start).toFixed(2)}` : '';
@@ -1344,18 +1432,27 @@ function keepRow(s) {
       ? '<span class="gone">clip not analysed — cannot be added</span>'
       : at >= 0
         ? `<a href="#" class="use" data-shot="${at}" title="select the shot on the timeline">in the cut · shot ${at + 1}</a>`
-        : '<button class="use add">+ add to cut</button>';
+        : '<button class="use add" title="add it at the playhead · enter">+ add</button>';
   d.innerHTML = `
     ${still ? `<img class="still" loading="lazy" decoding="async" draggable="false"
                    alt="${escapeHtml(stem(s.clip))} at ${s.start.toFixed(1)}s" src="${still}">`
             : '<div class="still"></div>'}
-    <div>
+    <div class="body">
       <div class="t">${escapeHtml(stem(s.clip))} · ${fmt(s.start)} → ${fmt(s.end)}
         · ${(s.end - s.start).toFixed(1)} s${s.hero ? '<span class="hero">★ HERO</span>' : ''}</div>
       ${s.why ? `<span class="w">${escapeHtml(s.why)}</span>` : ''}
       ${s.note ? `<span class="w note">“${escapeHtml(s.note)}”</span>` : ''}
+      <div class="chips">${keepChips(s)}</div>
       ${use}
     </div>`;
+  d.addEventListener('click', (e) => {
+    if (e.target.closest('a.use, button.use, .chip')) return;
+    selectKeep(s, d);
+  });
+  d.addEventListener('dblclick', (e) => {
+    if (e.target.closest('a.use, button.use, .chip')) return;
+    playKeep(s);
+  });
   const link = d.querySelector('a.use');
   if (link) {
     link.onclick = (e) => {
@@ -1376,25 +1473,54 @@ function keepRow(s) {
 /* Insert a keep the way the heard/seen rows insert — after the selected shot, with the
  * keep's own range and reason — then straight to disk, so the bin learns the use and
  * the tab re-reads it. */
-function addKeep(s) {
+/* Where a new shot goes — Karl, 2026-09-20: at the playhead. The cut point nearest the
+ * playhead, by the lanes' own slot rule, so the bin's button, its Enter key, a Find
+ * match, a heard / seen row and a drop all land the same way and make the same one
+ * undo entry. Falls back to after the selection when the lanes are not loaded. */
+function insertShot(shot) {
+  const L = window.tlLanes;
+  if (L && window.tl && tl.state) {
+    const slot = L.slotAt(tl.state.playhead);
+    const id = L.insertAt(shot, slot ? slot.beforeId : null);
+    if (id != null) {
+      const i = tl.indexOf(id);
+      if (i >= 0) { sel = i; tl.select([id]); }
+    }
+    render();                   // the total, the steps and the bin's "in the cut" follow
+    return id;
+  }
   pushUndo('insert');
   const at = sel + 1;
-  segs.splice(at, 0, { clip: s.clip, in: s.start, out: s.end, why: s.why || s.note || '' });
+  segs.splice(at, 0, { clip: shot.clip, in: shot.start, out: shot.end, why: shot.why || '' });
   sel = at;
   render();
-  toast(`added ${stem(s.clip)} @ ${s.start.toFixed(1)}s from the bin`);
+  toast(`added ${stem(shot.clip)} @ ${shot.start.toFixed(1)}s`);
+  return null;
+}
+
+function addKeep(s) {
+  insertShot({ clip: s.clip, start: s.start, end: s.end, why: s.why || s.note || '' });
   save();                       // the kept tab is up, so save() re-reads the bin after
 }
 
 function renderKept(lib) {
-  const keeps = binOrder((bin && bin.selects) || []);
-  $('#libHint').textContent = keeps.length
-    ? 'What the pass kept — heroes first. One click to put a keep in the cut.'
-    : '';
+  const all = binOrder((bin && bin.selects) || []);
+  const q = $('#findQ');
+  const text = (q ? q.value : '').trim().toLowerCase();
+  const keeps = all.filter((s) => keepMatches(s, text));
+  paintBinFilter(all);
+  $('#libHint').textContent = !all.length ? ''
+    : keeps.length === all.length
+      ? 'What the pass kept — heroes first. Click to select · + or enter adds it at the playhead · drag it onto V1 · double-click plays it here.'
+      : `${keeps.length} of ${all.length} keeps match`;
   lib.innerHTML = '';
-  if (!keeps.length) {
+  if (!all.length) {
     lib.innerHTML = `<div class="hint">nothing kept yet — the pass is where you keep
       things · <a href="/floor" style="color:var(--accent)">the pass →</a></div>`;
+    return;
+  }
+  if (!keeps.length) {
+    lib.innerHTML = '<div class="hint">no keep matches — clear the chip or the words above</div>';
     return;
   }
   keeps.forEach((s) => lib.appendChild(keepRow(s)));
@@ -1402,6 +1528,7 @@ function renderKept(lib) {
 
 /* The Project panel's one line about the bin, from the server's own summary. */
 function paintBinLine() {
+  if (window.dock) dock.badge('bin', keepsUsable().length);
   const el = $('#binLine');
   if (!el) return;
   const sm = bin && bin.summary;
@@ -2034,17 +2161,12 @@ function showFindMatch(m) {
 
 function addFindMatch() {
   if (!findSel) return;
-  pushUndo('insert');
-  const at = sel + 1;
-  segs.splice(at, 0, {
+  insertShot({
     clip: findSel.clip,
-    in: Math.round(findSel.start * 100) / 100,
-    out: Math.round(findSel.end * 100) / 100,
+    start: Math.round(findSel.start * 100) / 100,
+    end: Math.round(findSel.end * 100) / 100,
     why: findSel.what || `found: ${$('#findQ').value.trim()}`,
   });
-  sel = at;
-  render();
-  toast(`added ${stem(findSel.clip)} @ ${findSel.start.toFixed(1)}s — trim it in the inspector`);
 }
 
 function followFind(job) {
@@ -2198,6 +2320,7 @@ function loadVersion(v, slot) {
 /* Rebuilds only the list, never the A/B slots — repainted on every edit so that
  * "this cut" tracks the timeline instead of going stale the moment anything is trimmed. */
 function paintVersions() {
+  if (window.dock) dock.badge('out', (renderList || []).length);
   const box = $('#versions');
   if (!box) return;
   box.innerHTML = renderList.length ? '' : '<div class="hint">no renders yet</div>';
@@ -2493,6 +2616,38 @@ async function boot() {
     if (e.key === 'Enter') { e.preventDefault(); doFind(); }
   });
   $('#findAdd').onclick = addFindMatch;
+  // The same box filters the bin as you type (the kept tab) — Find is one keypress on.
+  let filterTimer = null;
+  $('#findQ').addEventListener('input', () => {
+    if (libTab !== 'kept') return;
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(renderLibrary, 120);
+  });
+  // A chip, on the grid or on a card, is the filter; the same chip again clears it.
+  document.addEventListener('click', (e) => {
+    const c = e.target.closest('#binFilter .chip, #library .keep .chip');
+    if (!c) return;
+    e.stopPropagation();
+    const k = c.dataset.chip;
+    binChip = binChip === k ? null : k;
+    renderLibrary();
+  });
+  // Keys inside the bin: enter adds the focused keep at the playhead (or selects its
+  // shot when it is already in the cut), space plays it in the bin's player. Stopped
+  // here so the board's own enter / space (play the shot, play the cut) stay out of it.
+  $('#library').addEventListener('keydown', (e) => {
+    const row = e.target.closest('.keep');
+    if (!row || !row._keep) return;
+    if (e.key === 'Enter') {
+      e.preventDefault(); e.stopPropagation();
+      const add = row.querySelector('button.add');
+      const use = row.querySelector('a.use');
+      if (add) addKeep(row._keep); else if (use) use.click();
+    } else if (e.key === ' ') {
+      e.preventDefault(); e.stopPropagation();
+      playKeep(row._keep);
+    }
+  });
   $('#libTabs').onclick = (e) => {
     const t = e.target.closest('.tab');
     if (!t) return;

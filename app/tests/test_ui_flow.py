@@ -228,6 +228,7 @@ def test_edits_reach_the_disk_without_being_asked(page, project):
     """Karl: "I start the project and create some cuts - but then it resets the cut
     board as soon as I refresh the page." The working edit lived in the browser and
     only a Save button wrote it, so a refresh threw the work away."""
+    page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
     page.locator("#story").fill("the milk is the running joke")
     page.evaluate("document.activeElement.blur()")   # the keys are the board's, not the story's
     select_shot(page, 0)
@@ -280,6 +281,7 @@ def test_ask_shows_a_proposal_that_can_be_accepted_or_discarded(page):
     inference.reset_spend()
     try:
         before = page.evaluate("JSON.stringify(segs)")
+        page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
         page.locator("#note").fill("use the clip that isn't in the cut")
         page.locator("#ask").click()
         page.wait_for_selector("#proposal:visible", timeout=30000)
@@ -342,6 +344,7 @@ def test_an_empty_timeline_offers_a_first_cut_and_gets_one(page):
         # for the same sentence, and two inputs for one thing is a UI defect
         assert not page.locator("#askPanel").is_visible()
 
+        page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
         page.fill("#story", "")        # an earlier test may have left one behind
         page.locator("#firstNote").fill("a loose film about two people talking")
         page.locator("#firstCut").click()
@@ -370,6 +373,7 @@ def test_ask_failure_is_reported_not_swallowed(page):
 
     inference.set_backend(Broken())
     try:
+        page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
         page.locator("#note").fill("tighten the intro")
         page.locator("#ask").click()
         page.wait_for_function(
@@ -451,9 +455,10 @@ def test_find_a_moment_lists_matches_and_plays_the_whole_clip(page):
     assert 4.4 <= t <= 6.05, f"expected playback at the match (~4.5s), got {t}"
 
     before = page.locator("#tl .blk").count()
+    page.evaluate("tl.seek(1.5)")      # adding lands at the playhead (INTAKE M11): the cut nearest 1.5 s is 2.0
     page.locator("#findAdd").click()
     assert page.locator("#tl .blk").count() == before + 1
-    # inserted after the selected shot, selected, and in the inspector with its line
+    # inserted at the playhead's cut, selected, and in the inspector with its line
     assert page.evaluate("sel") == 1
     assert "goodbye" in page.locator("#inspector .why").inner_text()
 
@@ -462,6 +467,7 @@ def test_render_from_the_ui_produces_a_playable_file(page):
     page.locator("#render").click()
     page.wait_for_function(
         "document.querySelector('#renderState').textContent.startsWith('done')", timeout=180000)
+    page.evaluate("dock.open('out')")   # the dock's tool (INTAKE M11)
     page.wait_for_selector("#versions .ver")
     # The player plays the 720p review copy, which is derived after the render says
     # done — so it appears a beat later, through the list's own poll.
@@ -522,6 +528,7 @@ def test_a_version_row_offers_a_download_and_says_how_big_it_is(page):
     page.wait_for_function(
         "document.querySelector('#renderState').textContent.startsWith('done')",
         timeout=180000)
+    page.evaluate("dock.open('out')")   # the dock's tool (INTAKE M11)
     page.wait_for_selector("#versions .ver a.dl")
     row = page.locator("#versions .ver").first
     dl = row.locator("a.dl")
@@ -602,6 +609,7 @@ def test_editing_why_in_the_inspector_saves_to_the_edl(page, project):
     page.keyboard.press("Control+a")
     page.keyboard.type("opens on the greeting")
     assert page.evaluate("segs[0].why") == "first", "not written until the field is left"
+    page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
     page.locator("#story").click()                # leave the field
     assert page.evaluate("segs[0].why") == "opens on the greeting"
     page.wait_for_function(
@@ -1022,6 +1030,7 @@ def test_the_music_panel_writes_the_bed_and_the_monitor_plays_it_ducked(page, pr
     """Music is the EDL key the render reads, and the monitor plays the bed under the
     cut with the same duck the render applies — so what you hear before rendering is
     what you get after."""
+    page.evaluate("dock.open('sound')")   # the dock's tool (INTAKE M11)
     page.select_option("#musicTrack", "music/bed.wav")
     page.wait_for_function(
         "document.querySelector('#saveState').textContent.startsWith('saved')",
@@ -1064,6 +1073,7 @@ def test_a_save_is_never_observed_half_written(page, project):
     this hammers the file through twenty saves and must never see anything unparseable."""
     bad = 0
     for i in range(20):
+        page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
         page.locator("#story").fill(f"draft {i}")
         page.evaluate("save()")
         for _ in range(5):
@@ -1140,6 +1150,7 @@ def test_the_top_bar_tracks_an_ask_and_clears_when_everything_is_idle(page,
     inference.set_backend(_streaming_backend(step=0.6))
     inference.reset_spend()
     try:
+        page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
         page.locator("#note").fill("tighten the intro")
         page.locator("#ask").click()
         page.wait_for_selector(row, timeout=20000)
@@ -1241,6 +1252,7 @@ def test_a_running_ask_is_picked_back_up_after_a_reload(page):
     inference.set_backend(_streaming_backend(step=0.9))
     inference.reset_spend()
     try:
+        page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
         page.locator("#note").fill("tighten the intro")
         page.locator("#ask").click()
         page.wait_for_selector(row, timeout=20000)
@@ -1308,6 +1320,7 @@ def test_the_kept_tab_shows_the_bin_and_puts_a_keep_in_the_cut(page):
     assert "1 hero waiting" in page.locator(".step", has_text="first").inner_text()
 
     # + add to cut: a shot with the keep's range and reason, after the selected shot
+    page.evaluate("tl.seek(1.5)")            # adding lands at the playhead (INTAKE M11): the cut nearest 1.5 s is 2.0, so shot 2
     hero.locator("button.add").click()
     assert page.locator("#tl .blk").count() == 3
     added = page.evaluate("JSON.stringify([segs[1].clip, segs[1].in, segs[1].out, segs[1].why])")
@@ -1392,6 +1405,7 @@ def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
     inference.reset_spend()
     try:
         # with a cut on the board: the Ask panel's button, a revision
+        page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
         assert page.locator("#cutFromBin").is_enabled()
         assert page.locator("#cutFromBinHint").inner_text() == ""
         before = page.evaluate("JSON.stringify(segs)")

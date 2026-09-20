@@ -75,7 +75,9 @@ def page(live_server, project):
         pg = browser.new_page(viewport={"width": 1280, "height": 900})
         pg.goto(live_server)
         pg.wait_for_selector("#tl .blk")
-        pg.wait_for_selector("#tlKeys")             # the keys module has mounted
+        # the keys module has mounted — its map lives in the `?` overlay now (INTAKE M11),
+        # so attached, not visible
+        pg.wait_for_selector("#tlKeys", state="attached")
         yield pg
         browser.close()
 
@@ -296,7 +298,8 @@ def test_x_removes_the_whole_selection_and_one_undo_restores_it(page):
     assert ids(page) == [a, b]
     assert page.locator("#tl .blk").count() == 2
     # the shot that takes the place is selected; Delete and Backspace do the same
-    page.locator("#library .cand").first.click()        # a third shot, after app.js's index
+    page.evaluate("tl.seek(tl.total())")               # adding lands at the playhead (INTAKE M11): at the end, so it appends
+    page.locator("#library .cand").first.click()        # a third shot, after the other two
     assert page.evaluate("segs.length") == 3
     page.evaluate(f"tl.select(['{a}'])")
     page.keyboard.press("Delete")
@@ -438,6 +441,7 @@ def test_keys_are_ignored_while_typing(page):
     page.keyboard.type("cx")
     assert page.evaluate("segs.length") == 2
     assert page.locator("#findQ").input_value() == "cx"
+    page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
     page.locator("#story").focus()
     page.keyboard.press("x")
     page.keyboard.press("Delete")

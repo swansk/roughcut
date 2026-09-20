@@ -3313,6 +3313,13 @@ def switcherjs() -> Response:
                     media_type="application/javascript", headers=NO_STORE)
 
 
+@app.get("/dock.js")
+def dockjs() -> Response:
+    """The board's dock (INTAKE M11): the rail of tools, the keys overlay, the popover."""
+    return Response((HERE / "static" / "dock.js").read_text(encoding="utf-8"),
+                    media_type="application/javascript", headers=NO_STORE)
+
+
 @app.get("/grade.js")
 def gradejs() -> Response:
     """The monitor's grade (INTAKE M10, I10.4): the WebGL LUT over the live video."""
