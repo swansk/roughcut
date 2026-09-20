@@ -53,10 +53,18 @@ until their lane lands.
 from __future__ import annotations
 
 import json
+import math
 import re
+import shutil
+import subprocess
+import tempfile
 import uuid
+import wave
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 # ---------------------------------------------------------------- the vocabulary
 
@@ -351,6 +359,10 @@ def onset_peaks(onset: list[float], hz: float, t0: float, t1: float, *,
     if floor is None:
         mean = sum(win) / len(win)
         var = sum((v - mean) ** 2 for v in win) / len(win)
+        if var ** 0.5 < 1e-6:
+            # a flat window has no peaks: with floor == mean every sample would
+            # be "≥ the floor and ≥ both neighbours" and the whole bed came back
+            return []
         floor = mean + var ** 0.5
     cands = []
     for i in range(1, len(win) - 1):
@@ -409,6 +421,127 @@ def price(*, design: bool = True, place_frames: int = 0, look_frames: int = 0) -
 # ---------------------------------------------------------------- lane: fx-core
 # The functions below are the render lane's. Their signatures are the contract; the
 # server and the board are written against them.
+#
+# Conventions the two renderers share (this file and /fx.js):
+#   * the frame is (0,0) top-left, x right, y down; anchors are fractions of it
+#   * the sprite's box is `size × frame width` pixels square, centred on the anchor
+#     plus the pose's (dx, dy) — both fractions of the frame *width*
+#   * shapes are in -1..1 across the box; `rotate` is degrees, clockwise positive
+#     (a canvas `ctx.rotate` with y down); a line's `width` is a fraction of the box
+#   * a text's `h` is in box units (h = 0.5 is a quarter of the box high)
+#   * one PNG per frame, `ceil(duration × fps)` of them, the first at t = 0
+
+_DEJAVU = ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "DejaVuSans-Bold.ttf")
+_DEJAVU_REGULAR = ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "DejaVuSans.ttf")
+_SUPER = 2                                  # draw at 2×, downsample with LANCZOS
+
+
+def _fps_value(fps: Any) -> float:
+    """`24`, `23.976` or `"24000/1001"` → frames per second as a float. The part's
+    profile carries its rate as a fraction string; the proof passes an int."""
+    if isinstance(fps, str) and "/" in fps:
+        num, _, den = fps.partition("/")
+        return float(num) / float(den)
+    return float(fps)
+
+
+def _font(px: int, bold: bool = True):
+    from PIL import ImageFont
+    px = max(4, int(px))
+    for candidate in (_DEJAVU if bold else _DEJAVU_REGULAR) + _DEJAVU:
+        try:
+            return ImageFont.truetype(candidate, px)
+        except OSError:
+            continue
+    try:
+        return ImageFont.load_default(size=px)
+    except TypeError:                                  # Pillow < 10.1
+        return ImageFont.load_default()
+
+
+def _rgba(colour: str, opacity: float) -> tuple[int, int, int, int]:
+    c = colour.lstrip("#")
+    return (int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16),
+            int(round(255 * max(0.0, min(1.0, opacity)))))
+
+
+def _draw_shape(layer, shape: dict, c: float, unit: float) -> None:
+    """One shape onto its own transparent layer: `c` is the layer's centre (px), `unit`
+    the pixels per box unit (half the box side, already supersampled)."""
+    import math
+    from PIL import ImageDraw
+
+    d = ImageDraw.Draw(layer)
+    colour = _rgba(shape["color"], shape["opacity"])
+
+    def px(p):
+        return (c + p[0] * unit, c + p[1] * unit)
+
+    width = max(1, int(round(shape.get("width", 0.08) * 2 * unit)))   # fraction of the box
+    kind = shape["type"]
+    if kind == "line":
+        a, b = px(shape["from"]), px(shape["to"])
+        d.line([a, b], fill=colour, width=width)
+        r = width / 2
+        for (x, y) in (a, b):                                  # round caps
+            d.ellipse([x - r, y - r, x + r, y + r], fill=colour)
+    elif kind == "circle":
+        x, y = px((shape["x"], shape["y"]))
+        r = shape["r"] * unit
+        if shape.get("fill", True):
+            d.ellipse([x - r, y - r, x + r, y + r], fill=colour)
+        else:
+            d.ellipse([x - r, y - r, x + r, y + r], outline=colour, width=width)
+    elif kind == "ring":
+        x, y = px((shape["x"], shape["y"]))
+        r, r2 = shape["r"] * unit, shape["r2"] * unit
+        d.ellipse([x - r, y - r, x + r, y + r], fill=colour)
+        if r2 > 0:
+            d.ellipse([x - r2, y - r2, x + r2, y + r2], fill=(0, 0, 0, 0))
+    elif kind in ("rect", "polygon"):
+        if kind == "rect":
+            hw, hh = shape["w"] / 2, shape["h"] / 2
+            a = math.radians(shape.get("rotate", 0.0))
+            ca, sa = math.cos(a), math.sin(a)
+            pts = []
+            for (u, v) in ((-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)):
+                pts.append(px((shape["x"] + u * ca - v * sa, shape["y"] + u * sa + v * ca)))
+        else:
+            pts = [px(p) for p in shape["points"]]
+        if shape.get("fill", False):
+            d.polygon(pts, fill=colour)
+        else:
+            d.polygon(pts, outline=colour, width=width)
+    elif kind == "text":
+        font = _font(int(shape["h"] * unit), shape.get("bold", True))
+        x, y = px((shape["x"], shape["y"]))
+        d.text((x, y), shape["text"], fill=colour, font=font, anchor="mm")
+
+
+def _sprite_image(overlay: dict, box_px: float, pose: dict):
+    """The sprite at one pose as an RGBA image (already downsampled), plus the offset
+    of its centre inside it. `box_px` is the unscaled box side in output pixels."""
+    from PIL import Image
+
+    half = box_px * pose["scale"] / 2                         # output px per box unit
+    ext = int(math.ceil(half * 2.6 + 3))                      # ±1.5 units, rotated, plus caps
+    side = 2 * ext
+    canvas = Image.new("RGBA", (side * _SUPER, side * _SUPER), (0, 0, 0, 0))
+    c = ext * _SUPER
+    unit = half * _SUPER
+    if unit >= 0.5:
+        for shape in overlay["shapes"]:
+            layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+            _draw_shape(layer, shape, c, unit)
+            canvas.alpha_composite(layer)
+        if pose["rotate"]:
+            canvas = canvas.rotate(-pose["rotate"], resample=Image.BICUBIC, center=(c, c))
+    sprite = canvas.resize((side, side), Image.LANCZOS)
+    if pose["opacity"] < 1.0:
+        a = sprite.getchannel("A").point(lambda v: int(v * pose["opacity"]))
+        sprite.putalpha(a)
+    return sprite, ext
+
 
 def render_overlay_frames(overlay: dict, w: int, h: int, fps: float, out_dir: Path,
                           *, anchor: tuple[float, float] = (0.5, 0.5)) -> list[Path]:
@@ -418,14 +551,148 @@ def render_overlay_frames(overlay: dict, w: int, h: int, fps: float, out_dir: Pa
     `overlay.size × w` pixels square; shapes are in -1..1 across it; `pose_at(t)`
     scales, fades, rotates and offsets it. A `flash` tints the whole frame for its
     duration. PIL, anti-aliased (draw at 2× and downsample)."""
-    raise NotImplementedError("lane fx-core")
+    from PIL import Image
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rate = _fps_value(fps)
+    n = max(1, int(math.ceil(overlay["duration"] * rate - 1e-6)))
+    box_px = overlay["size"] * w
+    flash = overlay.get("flash")
+    paths: list[Path] = []
+    for i in range(n):
+        t = i / rate
+        pose = pose_at(overlay, t)
+        if flash and t < flash["duration"]:
+            frame = Image.new("RGBA", (w, h), _rgba(flash["color"], flash["opacity"]))
+        else:
+            frame = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        if pose["opacity"] > 0 and pose["scale"] > 0:
+            sprite, ext = _sprite_image(overlay, box_px, pose)
+            cx = anchor[0] * w + pose["dx"] * w
+            cy = anchor[1] * h + pose["dy"] * w
+            x0, y0 = int(round(cx)) - ext, int(round(cy)) - ext
+            # clip the sprite to the frame: alpha_composite needs a non-negative dest
+            left, top = max(0, -x0), max(0, -y0)
+            right = min(sprite.width, w - x0)
+            bottom = min(sprite.height, h - y0)
+            if right > left and bottom > top:
+                part = sprite.crop((left, top, right, bottom))
+                frame.alpha_composite(part, dest=(x0 + left, y0 + top))
+        p = out_dir / f"f_{i:04d}.png"
+        frame.save(p, "PNG", compress_level=1)
+        paths.append(p)
+    return paths
 
 
 def render_overlay_mov(overlay: dict, w: int, h: int, fps: float, out: Path,
                        *, anchor: tuple[float, float] = (0.5, 0.5)) -> Path:
     """The frames above as one `.mov` with alpha (`-c:v png` or `qtrle`) so a part's
     ffmpeg graph can `overlay` it with `enable=between(t, …)`. Returns `out`."""
-    raise NotImplementedError("lane fx-core")
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    frames_dir = Path(tempfile.mkdtemp(prefix=out.stem + "_frames_", dir=out.parent))
+    try:
+        render_overlay_frames(overlay, w, h, fps, frames_dir, anchor=anchor)
+        r = subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-nostdin", "-framerate", str(fps),
+             "-start_number", "0", "-i", str(frames_dir / "f_%04d.png"),
+             "-c:v", "png", "-pix_fmt", "rgba", str(out)],
+            capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"overlay mov failed: {r.stderr[-300:]}")
+    finally:
+        shutil.rmtree(frames_dir, ignore_errors=True)
+    return out
+
+
+# ---- the synth
+
+def _one_pole(x, coef: float, gain: float):
+    """y[n] = coef·y[n-1] + gain·x[n], in blocks: the closed form over a block is a
+    cumulative sum scaled by powers of `coef`, carried in from the block before, so
+    a three-second patch does not mean a 144k-iteration Python loop."""
+    n = len(x)
+    y = np.empty(n)
+    if coef <= 0.0:
+        y[:] = gain * x
+        return y
+    # a^-k must stay finite: block so that a^-(B-1) ≤ 1e12
+    B = max(1, min(4096, int(12 * math.log(10) / -math.log(coef)) if coef < 1 else 4096))
+    ks = np.arange(B)
+    a_neg = coef ** -ks.astype(float)             # a^-k
+    a_pos = coef ** (ks + 1).astype(float)        # a^(k+1), for the carry
+    carry = 0.0
+    for s in range(0, n, B):
+        xb = gain * x[s:s + B]
+        m = len(xb)
+        acc = np.cumsum(xb * a_neg[:m]) * (coef ** ks[:m].astype(float))
+        yb = acc + carry * a_pos[:m]
+        y[s:s + m] = yb
+        carry = yb[-1]
+    return y
+
+
+def _lowpass(x, fc: float, sr: int):
+    a = math.exp(-2 * math.pi * fc / sr)
+    return _one_pole(x, a, 1 - a)
+
+
+def _highpass(x, fc: float, sr: int):
+    return x - _lowpass(x, fc, sr)
+
+
+def _envelope(t, attack: float, decay: float):
+    """Linear attack to 1, then an exponential decay reaching -60 dB at `decay`
+    seconds after the attack ends."""
+    env = np.ones_like(t)
+    if attack > 0:
+        env = np.minimum(1.0, t / attack)
+    after = np.clip(t - attack, 0, None)
+    env = env * np.exp(-math.log(1000.0) * after / max(decay, 1e-4))
+    return env
+
+
+def _wave(phase, wave: str):
+    """`phase` in cycles."""
+    frac = phase - np.floor(phase)
+    if wave == "square":
+        return np.where(frac < 0.5, 1.0, -1.0)
+    if wave == "saw":
+        return 2.0 * frac - 1.0
+    if wave == "triangle":
+        return 2.0 * np.abs(2.0 * frac - 1.0) - 1.0
+    return np.sin(2 * np.pi * phase)
+
+
+def _layer_signal(layer: dict, t, sr: int, rng) -> Any:
+    kind = layer["type"]
+    if kind == "tone":
+        return _wave(layer["freq"] * t, layer["wave"])
+    if kind == "sweep":
+        f0, f1 = layer["freq"], layer["freq_end"]
+        dur = max(float(t[-1]), 1e-4) if len(t) else 1e-4
+        ratio = f1 / f0
+        if abs(ratio - 1.0) < 1e-6:
+            phase = f0 * t
+        else:                                       # ∫ f0·ratio^(t/D) dt
+            phase = f0 * dur / math.log(ratio) * (ratio ** (t / dur) - 1.0)
+        return _wave(phase, layer["wave"])
+    if kind == "noise":
+        white = rng.uniform(-1.0, 1.0, len(t))
+        if layer["color"] == "pink":
+            # Paul Kellet's economy pink: three one-poles summed (≈ -3 dB/octave)
+            b0 = _one_pole(white, 0.99765, 0.0990460)
+            b1 = _one_pole(white, 0.96300, 0.2965164)
+            b2 = _one_pole(white, 0.57000, 1.0526913)
+            pink = b0 + b1 + b2 + white * 0.1848
+            return pink / 4.0
+        return white
+    # click: a one-sample impulse — the envelope alone is what is heard
+    sig = np.zeros(len(t))
+    if len(sig):
+        sig[0] = 1.0
+    return sig
 
 
 def synth_sound(sound: dict, out: Path, *, sr: int = 48000) -> Path:
@@ -434,8 +701,40 @@ def synth_sound(sound: dict, out: Path, *, sr: int = 48000) -> Path:
     noise (white / pink) or a click (one-sample impulse through the decay), summed with
     its gain, optional one-pole hp/lp, then `gain_db`, peak-limited to -1 dBFS. numpy
     only. Returns `out`."""
-    raise NotImplementedError("lane fx-core")
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    n = max(1, int(round(sound["duration"] * sr)))
+    t = np.arange(n) / sr
+    rng = np.random.default_rng(1234)              # the same patch renders the same bytes
+    mix = np.zeros(n)
+    for layer in sound["layers"]:
+        sig = _layer_signal(layer, t, sr, rng)
+        if layer["type"] == "click":
+            # the impulse *through* the decay: a step that dies at -60 dB by `decay`
+            sig = np.exp(-math.log(1000.0) * t / max(layer["decay"], 1e-4))
+        else:
+            sig = sig * _envelope(t, layer["attack"], layer["decay"])
+        if layer.get("hp"):
+            sig = _highpass(sig, layer["hp"], sr)
+        if layer.get("lp"):
+            sig = _lowpass(sig, layer["lp"], sr)
+        mix += layer["gain"] * sig
+    mix *= 10 ** (sound["gain_db"] / 20)
+    limit = 10 ** (-1 / 20)                        # -1 dBFS
+    peak = float(np.max(np.abs(mix))) if n else 0.0
+    if peak > limit:
+        mix *= limit / peak
+    pcm = (np.clip(mix, -1, 1) * 32767).astype("<i2")
+    stereo = np.repeat(pcm, 2)                     # the same signal both sides
+    with wave.open(str(out), "wb") as wf:
+        wf.setnchannels(2)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(stereo.tobytes())
+    return out
 
+
+# ---- the part's graph
 
 def part_graph(effects: list[tuple[dict, list[dict]]], w: int, h: int, fps: float,
                workdir: Path, *, vin: str = "vbase", ain: str = "abase") -> tuple[list[str], str, str, str]:
@@ -447,19 +746,200 @@ def part_graph(effects: list[tuple[dict, list[dict]]], w: int, h: int, fps: floa
     `t_part` and `enable=between(t, t_part, t_part + duration)`, an `adelay` per
     event and one `amix` (`normalize=0`) — and the two output labels. Input indexes
     start at 1 (the part's source is input 0). No effects → `([], "", vin, ain)`."""
-    raise NotImplementedError("lane fx-core")
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    extra: list[str] = []
+    vparts: list[str] = []
+    aparts: list[str] = []
+    mix_inputs: list[str] = []
+    cur = vin
+    idx = 1
+    rate = _fps_value(fps)
+    for effect, events in effects:
+        if not events:
+            continue
+        overlay = effect["overlay"]
+        eid = str(effect.get("id") or "fx")
+        for j, ev in enumerate(events):
+            t0 = float(ev["t_part"])
+            mov = workdir / f"{eid}_ev{j:02d}.mov"
+            render_overlay_mov(overlay, w, h, rate, mov, anchor=(ev["x"], ev["y"]))
+            extra += ["-i", str(mov)]
+            lab = f"fxv{idx}"
+            nxt = f"fxo{idx}"
+            vparts.append(f"[{idx}:v]setpts=PTS-STARTPTS+{t0:.4f}/TB[{lab}]")
+            vparts.append(f"[{cur}][{lab}]overlay=0:0:eof_action=pass"
+                          f":enable='between(t,{t0:.4f},{t0 + overlay['duration']:.4f})'[{nxt}]")
+            cur = nxt
+            idx += 1
+        if effect.get("sound"):
+            wav = workdir / f"{eid}_sound.wav"
+            synth_sound(effect["sound"], wav)
+            extra += ["-i", str(wav)]
+            # one WAV per effect, split to one delayed copy per event; amix wants
+            # every input at one rate and layout
+            conv = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo"
+            if len(events) > 1:
+                outs = "".join(f"[fxs{idx}_{j}]" for j in range(len(events)))
+                aparts.append(f"[{idx}:a]{conv},asplit={len(events)}{outs}")
+                heads = [f"[fxs{idx}_{j}]" for j in range(len(events))]
+                chain = ""
+            else:
+                heads = [f"[{idx}:a]"]
+                chain = conv + ","
+            for j, ev in enumerate(events):
+                samples = int(round(float(ev["t_part"]) * 48000))
+                lab = f"fxa{idx}_{j}"
+                aparts.append(f"{heads[j]}{chain}adelay={samples}S|{samples}S[{lab}]")
+                mix_inputs.append(f"[{lab}]")
+            idx += 1
+    if not vparts and not aparts:
+        return [], "", vin, ain
+    vout, aout = vin, ain
+    if vparts:
+        # rename the last overlay's label to the fixed output label
+        vparts[-1] = vparts[-1][: vparts[-1].rfind("[")] + "[vout]"
+        vout = "vout"
+    if mix_inputs:
+        aparts.append(f"[{ain}]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[fxabase]")
+        aparts.append(f"[fxabase]{''.join(mix_inputs)}amix=inputs={len(mix_inputs) + 1}"
+                      f":normalize=0:duration=first[aout]")
+        aout = "aout"
+    return extra, ";".join(vparts + aparts), vout, aout
 
+
+# ---- frames and strips for the model's eyes
 
 def frames_for(proxy: Path, times: list[float], out_dir: Path, *, width: int = 640) -> list[Path]:
     """One JPEG per time from the proxy (`ffmpeg -ss t -i proxy -frames:v 1`), `width`
     px wide, named `t_<seconds>.jpg`. Returns the paths in the order of `times`."""
-    raise NotImplementedError("lane fx-core")
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for t in times:
+        p = out_dir / f"t_{float(t):.2f}.jpg"
+        r = subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-nostdin", "-ss", f"{float(t):.3f}",
+             "-i", str(proxy), "-frames:v", "1", "-vf", f"scale={int(width)}:-2",
+             "-q:v", "3", str(p)], capture_output=True, text=True)
+        if r.returncode != 0 or not p.exists():
+            raise RuntimeError(f"frame at {t:.2f}s failed: {r.stderr[-300:]}")
+        paths.append(p)
+    return paths
 
 
 def contact_strip(frames: list[Path], labels: list[str], out: Path, *, cols: int = 4) -> Path:
     """The frames tiled with their labels burnt in (PIL), for a placing call and for
     the proof look. Returns `out`."""
-    raise NotImplementedError("lane fx-core")
+    from PIL import Image, ImageDraw
+
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    images = [Image.open(p).convert("RGB") for p in frames]
+    if not images:
+        raise ValueError("contact_strip needs at least one frame")
+    cw = max(im.width for im in images)
+    ch = max(im.height for im in images)
+    cols = max(1, min(cols, len(images)))
+    rows = (len(images) + cols - 1) // cols
+    pad = 4
+    sheet = Image.new("RGB", (cols * (cw + pad) + pad, rows * (ch + pad) + pad), (18, 18, 18))
+    font = _font(max(12, ch // 16))
+    for i, (im, label) in enumerate(zip(images, labels + [""] * (len(images) - len(labels)))):
+        x = pad + (i % cols) * (cw + pad)
+        y = pad + (i // cols) * (ch + pad)
+        sheet.paste(im, (x, y))
+        d = ImageDraw.Draw(sheet)
+        text = str(label)
+        if text:
+            bbox = d.textbbox((x + 6, y + 4), text, font=font)
+            d.rectangle([bbox[0] - 4, bbox[1] - 2, bbox[2] + 4, bbox[3] + 2], fill=(0, 0, 0))
+            d.text((x + 6, y + 4), text, fill=(255, 255, 255), font=font)
+    sheet.save(out, "JPEG", quality=85)
+    return out
+
+
+# ---- the model calls
+
+_EXAMPLE_EFFECT = {
+    "name": "hit markers",
+    "why": "a Call-of-Duty hit marker on each rock strike the onset track found",
+    "events": [{"t": 152.34, "x": 0.52, "y": 0.68, "strength": 0.9, "label": "first rock"}],
+    "overlay": {
+        "duration": 0.35, "size": 0.12,
+        "shapes": [
+            {"type": "line", "from": [-1, -1], "to": [-0.3, -0.3], "width": 0.1, "color": "#ffffff"},
+            {"type": "line", "from": [1, -1], "to": [0.3, -0.3], "width": 0.1, "color": "#ffffff"},
+            {"type": "line", "from": [-1, 1], "to": [-0.3, 0.3], "width": 0.1, "color": "#ffffff"},
+            {"type": "line", "from": [1, 1], "to": [0.3, 0.3], "width": 0.1, "color": "#ffffff"}],
+        "anim": {"scale": [[0, 1.4], [0.06, 1.0]],
+                 "opacity": [[0, 1], [0.23, 1], [0.35, 0]]},
+        "flash": {"color": "#ff0000", "opacity": 0.15, "duration": 0.08}},
+    "sound": {
+        "duration": 0.18, "gain_db": -6,
+        "layers": [{"type": "tone", "wave": "square", "freq": 1800, "attack": 0.001, "decay": 0.06, "gain": 0.6},
+                   {"type": "noise", "color": "white", "hp": 1500, "attack": 0.001, "decay": 0.09, "gain": 0.5}]},
+}
+
+
+def _vocabulary() -> str:
+    """The closed vocabulary with its ranges, from the constants above, so the system
+    text can never drift from what `validate_effect` accepts."""
+    return f"""You design one small video + audio effect for a ski film, as JSON in a closed vocabulary.
+The renderer draws it from the numbers; you never write ffmpeg, filenames or pixels.
+
+COORDINATES
+- The frame: (0, 0) is the top-left corner, (1, 1) the bottom-right. An event's anchor
+  x, y are fractions of the frame (0..1).
+- The sprite's box: a square, `size` × the frame width across (size {MIN_SIZE}–{MAX_SIZE}),
+  centred on the anchor. Inside it shapes use x and y from -1 to 1 across the box
+  (y down); a shape may poke a little past (±1.5) but never across the frame.
+- Times are seconds in the source clip; a `duration` is seconds.
+
+EFFECT = {{"name": "≤40 chars", "why": "one sentence", "events": [...], "overlay": {{...}}, "sound": {{...}} | null}}
+
+EVENTS (1–{MAX_EVENTS}): {{"t": seconds, "x": 0..1, "y": 0..1, "strength": 0..1 (optional), "label": "≤40 chars" (optional)}}
+
+OVERLAY: {{"duration": {MIN_DURATION}–{MAX_DURATION} s, "size": {MIN_SIZE}–{MAX_SIZE}, "shapes": [1–{MAX_SHAPES}], "anim": {{...}}, "flash": {{...}} | null}}
+  shapes (all take "color": "#rrggbb" and "opacity": 0..1; "width" 0–0.5 is a fraction of the box):
+    {{"type": "line", "from": [x, y], "to": [x, y], "width"}}
+    {{"type": "circle", "at": [x, y], "r": 0.01–1.5, "fill": true|false, "width"}}
+    {{"type": "ring", "at": [x, y], "r": 0.01–1.5, "r2": 0–r (the hole)}}
+    {{"type": "rect", "at": [x, y], "w": 0.01–3, "h": 0.01–3, "rotate": degrees, "fill", "width"}}
+    {{"type": "polygon", "points": [[x, y] × 3–32], "fill", "width"}}
+    {{"type": "text", "text": "≤{MAX_TEXT} chars", "at": [x, y], "h": 0.05–1.5 (box units), "bold": true|false}}
+  anim: keyframe tracks, each `[[t, value], …]` (1–{MAX_KEYS} keys, t within 0..duration, linear between keys):
+    "scale" 0–6 (1 = the box), "opacity" 0–1, "rotate" degrees (clockwise), "dx" / "dy" -1..1 (fractions of the frame width)
+  flash: {{"color": "#rrggbb", "opacity": 0–0.6, "duration": 0.02–1.0}} — tints the whole frame briefly
+
+SOUND (or null for a silent effect): {{"duration": {MIN_DURATION}–{MAX_DURATION} s, "gain_db": {MIN_GAIN_DB:g}–{MAX_GAIN_DB:g}, "layers": [1–{MAX_LAYERS}]}}
+  every layer: "gain" 0–1, "attack" 0–1 s (linear), "decay" 0.005–3 s (exponential, to -60 dB), optional "hp" / "lp" 20–20000 Hz (one-pole)
+    {{"type": "tone", "wave": "sine"|"square"|"saw"|"triangle", "freq": 20–12000}}
+    {{"type": "sweep", "wave": …, "freq": 20–12000, "freq_end": 20–12000}}  (exponential glide)
+    {{"type": "noise", "color": "white"|"pink"}}
+    {{"type": "click"}}  (a one-sample impulse through the decay)
+
+The answer is JSON only — one object, no prose, no code fence."""
+
+
+def _system_design() -> str:
+    return (_vocabulary() + "\n\nWORKED EXAMPLE — a Call-of-Duty hit marker: four short white lines in an X with a "
+            "gap in the middle, scale 1.4 → 1.0 in 60 ms, opacity to 0 over the last 120 ms, a 15 % "
+            "red flash for 80 ms; its sound a 1.8 kHz square tone decaying in 60 ms plus a white "
+            "noise burst through a 1.5 kHz high-pass decaying in 90 ms, at -6 dB:\n"
+            + json.dumps(_EXAMPLE_EFFECT, indent=1))
+
+
+def _transcript_in(transcript: list[dict] | None, t0: float, t1: float) -> list[dict]:
+    out = []
+    for line in transcript or []:
+        try:
+            s, e = float(line.get("start", 0)), float(line.get("end", 0))
+        except (TypeError, ValueError):
+            continue
+        if e >= t0 and s <= t1 and str(line.get("text") or "").strip():
+            out.append(line)
+    return out
 
 
 def build_design_prompt(note: str, seg: dict, clip: dict, *, peaks: list[dict],
@@ -476,7 +956,30 @@ def build_design_prompt(note: str, seg: dict, clip: dict, *, peaks: list[dict],
     to 0 over the last 120 ms, a 15 % red flash for 80 ms; a sound of a 1.8 kHz
     square tone decaying in 60 ms plus a white noise burst with a 1.5 kHz high-pass
     decaying in 90 ms, -6 dB)."""
-    raise NotImplementedError("lane fx-core")
+    t0, t1 = float(seg["in"]), float(seg["out"])
+    lines = [f"THE NOTE: {note.strip()}", "",
+             f"THE SHOT: clip {seg.get('clip')} from {t0:.2f}s to {t1:.2f}s"
+             + (f" (clip length {float(clip['duration']):.1f}s)" if clip and clip.get("duration") else "")
+             + (f" — why it is in the cut: {seg['why']}" if seg.get("why") else "")]
+    said = _transcript_in(transcript if transcript is not None else (clip or {}).get("transcript"), t0, t1)
+    if said:
+        lines += ["", "SAID IN THE SHOT:"]
+        lines += [f"  {float(l.get('start', 0)):.1f}s  {str(l.get('text')).strip()}" for l in said[:12]]
+    if peaks:
+        lines += ["", "IMPACTS THE AUDIO FOUND (onset peaks, seconds in the clip, strength 0..1) — "
+                      "put events on these when the note names a hit:"]
+        lines += [f"  t={p['t']:.2f}  strength={p.get('strength', 0):.2f}" for p in peaks]
+    else:
+        lines += ["", "The audio found no clear impacts in the shot; place events by the note and the shot's range."]
+    if reference and reference.get("marks"):
+        marks = ", ".join(f"({m[0]:.3f}, {m[1]:.3f})" for m in reference["marks"])
+        lines += ["", "THE HUMAN DREW A REFERENCE on a frame"
+                      + (f" at {float(reference['t']):.2f}s" if reference.get("t") is not None else "")
+                      + (f": \"{reference['goal']}\"" if reference.get("goal") else "")
+                      + f". The marks' centres, as fractions of the frame: {marks}. These ARE the anchors: "
+                        "one event per mark at those x, y — design the look and the sound, do not move them."]
+    lines += ["", "Every event's t must lie inside the shot. Answer with one JSON effect object only."]
+    return _system_design(), "\n".join(lines)
 
 
 def build_place_prompt(note: str, effect: dict, candidates: list[dict], strip: Path) -> tuple[str, str]:
@@ -484,13 +987,64 @@ def build_place_prompt(note: str, effect: dict, candidates: list[dict], strip: P
     candidate time, labelled), the note, and the question — for each frame, is the
     impact visible, and where in the frame (x, y as fractions) is the thing the note
     names (the skis)? Answers `{"events": [{"t", "x", "y", "hit": bool, "why"}]}`."""
-    raise NotImplementedError("lane fx-core")
+    system = ("You place a video effect by looking at frames from a ski film. Coordinates are "
+              "fractions of the frame: (0, 0) top-left, (1, 1) bottom-right. Answer JSON only.")
+    lines = [f"THE NOTE: {note.strip()}",
+             f"THE EFFECT: {effect.get('name', 'effect')} — {effect.get('why', '')}".rstrip(" —"),
+             "",
+             f"The image is a contact strip of {len(candidates)} frames, each labelled with its "
+             "index and its time in the clip, in reading order:"]
+    for i, c in enumerate(candidates):
+        lines.append(f"  [{i}] t={float(c['t']):.2f}s")
+    lines += ["",
+              "For EACH frame answer: is the impact the note describes visible in it (\"hit\"), "
+              "and where in that frame is the thing the note names (x, y as fractions of the "
+              "frame — the point the marker should sit on)? Keep t exactly as labelled.",
+              "",
+              'Answer: {"events": [{"t": seconds, "x": 0..1, "y": 0..1, "hit": true|false, '
+              '"why": "a few words"}, …]} — one entry per frame, JSON only.']
+    return system, "\n".join(lines)
 
 
 def build_revise_prompt(effect: dict, note: str) -> tuple[str, str]:
     """`(system, prompt)` for an iteration: the current effect JSON and the note ("make
     them red and bigger", "one hit only, the big one"). Same answer shape as design."""
-    raise NotImplementedError("lane fx-core")
+    current = {k: effect.get(k) for k in ("name", "why", "events", "overlay", "sound")}
+    prompt = ("THE CURRENT EFFECT:\n" + json.dumps(current, indent=1)
+              + f"\n\nTHE NOTE: {note.strip()}\n\n"
+              "Return the whole effect again with the note applied — the same shape (name, why, "
+              "events, overlay, sound). Keep every event's t, x and y unless the note asks to "
+              "move, add or drop events. Answer with one JSON object only.")
+    return _system_design(), prompt
+
+
+def _now() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _ask(system: str, prompt: str, images: list[Path] | None = None) -> Any:
+    from roughcut import config, inference
+    r = inference.complete(prompt, role=config.ROLE_JUDGE, images=list(images or ()), system=system)
+    return inference.extract_json(r.raw or str(r.content))
+
+
+def _reference_events(reference: dict, peaks: list[dict], onset: list[float], hz: float,
+                      seg: dict) -> list[dict]:
+    """The human's marks as events: x, y from the marks; t the nearest onset peak to the
+    reference frame's time (within a second), else the frame's time itself."""
+    t0, t1 = float(seg["in"]), float(seg["out"])
+    t_ref = reference.get("t")
+    t = float(t_ref) if t_ref is not None else (t0 + t1) / 2
+    if peaks:
+        nearest = min(peaks, key=lambda p: abs(p["t"] - t))
+        if abs(nearest["t"] - t) <= 1.0:
+            t = nearest["t"]
+    elif onset:
+        snapped = nearest_onset(onset, hz, t)
+        if snapped is not None:
+            t = snapped
+    t = min(max(t, t0), max(t0, t1 - NUDGE_S))
+    return [{"t": round(t, 3), "x": float(m[0]), "y": float(m[1])} for m in reference["marks"]]
 
 
 def design(note: str, seg: dict, clip: dict, sidecar: dict | None, *,
@@ -504,27 +1058,190 @@ def design(note: str, seg: dict, clip: dict, sidecar: dict | None, *,
     events re-anchored from its answer (dropping candidates the model says are not
     hits, keeping at least one). Returns a validated effect with `status: proposed`,
     `created` set, and `history: [{"note", "at"}]`."""
-    raise NotImplementedError("lane fx-core")
+    sidecar = sidecar or {}
+    onset = list((sidecar.get("tracks") or {}).get("onset") or [])
+    hz = float(sidecar.get("frame_hz") or ONSET_HZ)
+    t0, t1 = float(seg["in"]), float(seg["out"])
+    peaks = onset_peaks(onset, hz, t0, t1)
+    has_marks = bool(reference and reference.get("marks"))
+    transcript = (clip or {}).get("transcript")
+    if transcript is None:
+        transcript = sidecar.get("transcript")
+    system, prompt = build_design_prompt(note, seg, clip, peaks=peaks, transcript=transcript,
+                                         reference=reference if has_marks else None)
+    answer = _ask(system, prompt)
+    if not isinstance(answer, dict):
+        raise ValueError("the design answer is not an object")
+    events = answer.get("events") if isinstance(answer.get("events"), list) else []
+    if has_marks:
+        # the drawing is the strongest signal: its marks are the anchors, the model
+        # only designed the look
+        anchored = _reference_events(reference, peaks, onset, hz, seg)
+        for a, e in zip(anchored, events):
+            if isinstance(e, dict):
+                for k in ("strength", "label"):
+                    if e.get(k) is not None:
+                        a[k] = e[k]
+        events = anchored
+    elif not events:
+        events = ([{"t": p["t"], "x": 0.5, "y": 0.5, "strength": p["strength"]} for p in peaks[:3]]
+                  or [{"t": round((t0 + t1) / 2, 3), "x": 0.5, "y": 0.5}])
+    effect = {
+        "id": new_id(), "shot": seg.get("id"), "clip": seg["clip"],
+        "name": answer.get("name") or "effect", "note": note,
+        "why": answer.get("why") or "",
+        "events": events, "overlay": answer.get("overlay"), "sound": answer.get("sound"),
+        "status": "proposed",
+    }
+    effect = validate_effect(effect, segments or [seg], clips, keep_meta=False)
+    if place and proxy is not None and not has_marks:
+        wd = Path(workdir) if workdir else Path(tempfile.mkdtemp(prefix="fx_place_"))
+        wd.mkdir(parents=True, exist_ok=True)
+        times = [ev["t"] for ev in effect["events"]]
+        frames = frames_for(Path(proxy), times, wd / "frames")
+        labels = [f"[{i}] t={t:.2f}s" for i, t in enumerate(times)]
+        strip = contact_strip(frames, labels, wd / "strip.jpg")
+        psys, pprompt = build_place_prompt(note, effect, effect["events"], strip)
+        placed = _ask(psys, pprompt, images=[strip])
+        rows = placed.get("events") if isinstance(placed, dict) else None
+        if isinstance(rows, list) and rows:
+            kept = []
+            for ev in effect["events"]:
+                row = min((r for r in rows if isinstance(r, dict) and r.get("t") is not None),
+                          key=lambda r: abs(float(r["t"]) - ev["t"]), default=None)
+                if row is None or abs(float(row["t"]) - ev["t"]) > 0.5:
+                    kept.append(ev)                       # unanswered: leave it as designed
+                    continue
+                new = dict(ev)
+                try:
+                    new["x"] = min(1.0, max(0.0, float(row.get("x", ev["x"]))))
+                    new["y"] = min(1.0, max(0.0, float(row.get("y", ev["y"]))))
+                except (TypeError, ValueError):
+                    pass
+                if isinstance(row.get("why"), str) and row["why"].strip() and not new.get("label"):
+                    new["label"] = row["why"].strip()[:40]
+                if row.get("hit") is False:
+                    new["_drop"] = True
+                kept.append(new)
+            survivors = [e for e in kept if not e.get("_drop")]
+            if not survivors:                             # keep at least one: the strongest
+                survivors = [max(kept, key=lambda e: e.get("strength") or 0.0)]
+            for e in survivors:
+                e.pop("_drop", None)
+            effect["events"] = survivors
+            effect = validate_effect(effect, segments or [seg], clips, keep_meta=False)
+    created = _now()
+    effect["created"] = created
+    effect["history"] = [{"note": note, "at": created}]
+    return effect
 
 
 def revise(effect: dict, note: str, segments: list[dict], clips: dict | None = None) -> dict:
     """One iteration: the revise call, validated, id and events kept unless the note
     changed them, `history` appended. Returns the new proposed effect."""
-    raise NotImplementedError("lane fx-core")
+    system, prompt = build_revise_prompt(effect, note)
+    answer = _ask(system, prompt)
+    if not isinstance(answer, dict):
+        raise ValueError("the revise answer is not an object")
+    new = {k: v for k, v in effect.items() if k != "verify"}
+    for k in ("name", "why", "overlay"):
+        if answer.get(k) is not None:
+            new[k] = answer[k]
+    if "sound" in answer:
+        new["sound"] = answer["sound"]
+    if isinstance(answer.get("events"), list) and answer["events"]:
+        new["events"] = answer["events"]
+    new["status"] = "proposed"
+    new["note"] = note
+    new = validate_effect(new, segments, clips)
+    new["history"] = list(effect.get("history") or []) + [{"note": note, "at": _now()}]
+    return new
+
+
+# ---- the checks
+
+def _decode_audio(part: Path):
+    r = subprocess.run(
+        ["ffmpeg", "-v", "error", "-nostdin", "-i", str(part), "-map", "0:a:0", "-vn",
+         "-f", "s16le", "-ac", "1", "-ar", "48000", "-"], capture_output=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"audio decode failed: {r.stderr.decode(errors='replace')[-300:]}")
+    return np.frombuffer(r.stdout, dtype="<i2").astype(np.float64) / 32768.0
+
+
+def _rms_db(x) -> float:
+    if len(x) == 0:
+        return -120.0
+    rms = float(np.sqrt(np.mean(x * x)))
+    return round(20 * math.log10(max(rms, 1e-6)), 2)
 
 
 def audio_transient_at(part: Path, t: float, *, win_s: float = 0.04) -> dict:
     """Decode the part's audio around `t` (ffmpeg → s16le → numpy) and return
     `{"peak_db": …, "before_db": …, "rise_db": …}`: the RMS in ±win_s around t against
     the RMS of the 300 ms before it. A sound effect that landed shows as a rise."""
-    raise NotImplementedError("lane fx-core")
+    sr = 48000
+    x = _decode_audio(Path(part))
+    c = int(round(t * sr))
+    w = max(1, int(round(win_s * sr)))
+    at = x[max(0, c - w):c + w]
+    before = x[max(0, c - w - int(0.3 * sr)):max(0, c - w)]
+    # the peak is the loudest 5 ms inside the window, not the window's mean: a click
+    # that dies in 60 ms is a transient, and averaging it over 80 ms with the silence
+    # before it is how a hit that clearly landed reads as "no rise"
+    sub, hop = int(0.005 * sr), int(0.001 * sr)
+    peak_db = max((_rms_db(at[i:i + sub]) for i in range(0, max(1, len(at) - sub + 1), hop)),
+                  default=_rms_db(at))
+    before_db = _rms_db(before)
+    return {"peak_db": peak_db, "before_db": before_db, "rise_db": round(peak_db - before_db, 2)}
+
+
+def _probe_wh(path: Path) -> tuple[int, int]:
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                        "stream=width,height", "-of", "json", str(path)],
+                       capture_output=True, text=True)
+    s = json.loads(r.stdout)["streams"][0]
+    return int(s["width"]), int(s["height"])
+
+
+def _decode_frame(path: Path, t: float, w: int, h: int):
+    r = subprocess.run(
+        ["ffmpeg", "-v", "error", "-nostdin", "-ss", f"{t:.4f}", "-i", str(path),
+         "-map", "0:v:0", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+        capture_output=True)
+    need = w * h * 3
+    if r.returncode != 0 or len(r.stdout) < need:
+        raise RuntimeError(f"frame decode failed at {t:.2f}s: {r.stderr.decode(errors='replace')[-300:]}")
+    return np.frombuffer(r.stdout[:need], dtype=np.uint8).reshape(h, w, 3)
 
 
 def frame_change_at(part: Path, base: Path, t: float) -> dict:
     """Decode one frame from each at `t` and return `{"changed": fraction of pixels
     that differ by > 24/255 in any channel, "bbox": [x0, y0, x1, y1] fractions}`. An
     overlay that drew shows as a change; its bbox says where."""
-    raise NotImplementedError("lane fx-core")
+    w, h = _probe_wh(Path(part))
+    a = _decode_frame(Path(part), t, w, h).astype(np.int16)
+    bw, bh = _probe_wh(Path(base))
+    b = _decode_frame(Path(base), t, bw, bh).astype(np.int16)
+    if (bw, bh) != (w, h):
+        raise ValueError(f"part {w}x{h} and base {bw}x{bh} differ in size")
+    mask = np.any(np.abs(a - b) > 24, axis=2)
+    changed = float(mask.mean())
+    if not mask.any():
+        return {"changed": 0.0, "bbox": None}
+    # the bbox is of the *dense* change — pixels whose four neighbours changed too —
+    # so a few stray pixels of encode noise on a sharp edge do not stretch it across
+    # the frame; only when nothing is dense does the raw mask stand in
+    core = (mask[1:-1, 1:-1] & mask[:-2, 1:-1] & mask[2:, 1:-1]
+            & mask[1:-1, :-2] & mask[1:-1, 2:])
+    if core.any():
+        ys, xs = np.nonzero(core)
+        ys, xs = ys + 1, xs + 1
+    else:
+        ys, xs = np.nonzero(mask)
+    bbox = [round(float(xs.min()) / w, 4), round(float(ys.min()) / h, 4),
+            round(float(xs.max() + 1) / w, 4), round(float(ys.max() + 1) / h, 4)]
+    return {"changed": round(changed, 6), "bbox": bbox}
 
 
 def verify(effect: dict, seg: dict, *, onset: list[float] | None = None,
@@ -540,7 +1257,104 @@ def verify(effect: dict, seg: dict, *, onset: list[float] | None = None,
     `audio_landed` and `picture_landed` (when `part` and `base` are given: a rise of
     ≥ 6 dB at each event and a change of ≥ 0.02 % of the frame at each event whose
     bbox contains the anchor). `ok` is every non-skipped check passing."""
-    raise NotImplementedError("lane fx-core")
+    checks: list[dict] = []
+    events = effect.get("events") or []
+    overlay = effect.get("overlay") or {}
+    sound = effect.get("sound")
+    t0, t1 = float(seg["in"]), float(seg["out"])
+
+    def add(key: str, label: str, ok: bool | None, detail: str) -> None:
+        checks.append({"key": key, "label": label, "ok": ok, "detail": detail})
+
+    # in_shot
+    outside = [ev["t"] for ev in events if not (t0 <= ev["t"] < t1)]
+    add("in_shot", "every hit inside the shot",
+        not outside and bool(events),
+        (f"{len(events)} event(s) within {t0:.2f}–{t1:.2f}s" if not outside and events
+         else f"outside the shot: {', '.join(f'{t:.2f}s' for t in outside)}" if outside
+         else "no events"))
+
+    # in_frame: the box is centred on the anchor + the pose's offset; dy is a width
+    # fraction, so it is scaled by the 16:9 aspect to compare with y
+    anim = overlay.get("anim") or {}
+    sample_ts = {0.0} | {k[0] for tr in ("dx", "dy") for k in (anim.get(tr) or [])}
+    bad = []
+    for ev in events:
+        for ts in sample_ts:
+            pose = pose_at(overlay, ts)
+            cx = ev["x"] + pose["dx"]
+            cy = ev["y"] + pose["dy"] * 16 / 9
+            if not (0 <= cx <= 1 and 0 <= cy <= 1):
+                bad.append(f"{ev['t']:.2f}s at ({cx:.2f}, {cy:.2f})")
+                break
+    add("in_frame", "every marker inside the frame", not bad,
+        "every anchor inside 0..1 with the box no more than half off" if not bad
+        else "off the frame: " + ", ".join(bad))
+
+    # sync
+    if sound:
+        over = float(sound["duration"]) - (float(overlay.get("duration", 0)) + 0.25)
+        add("sync", "the sound and the marker start together", over <= 0,
+            f"sound {sound['duration']:.2f}s, marker {overlay.get('duration', 0):.2f}s, one t per event"
+            if over <= 0 else f"the sound runs {over:.2f}s past the marker + 0.25s")
+    else:
+        add("sync", "the sound and the marker start together", None, "skipped: no sound")
+
+    # on_onset
+    if impact and onset:
+        peaks = onset_peaks(onset, hz, t0 - 0.5, t1 + 0.5, top=MAX_EVENTS)
+        off = []
+        for ev in events:
+            near = min((abs(p["t"] - ev["t"]) for p in peaks), default=None)
+            if near is None or near > ONSET_TOL_S:
+                snapped = nearest_onset(onset, hz, ev["t"])
+                off.append(f"{ev['t']:.2f}s" + (f" (nearest sample {snapped:.2f}s)" if snapped is not None else ""))
+        add("on_onset", "each hit on an onset peak", not off,
+            f"every event within {ONSET_TOL_S * 1000:.0f} ms of a peak" if not off
+            else "not on a peak: " + ", ".join(off))
+    else:
+        add("on_onset", "each hit on an onset peak", None,
+            "skipped: " + ("the note names no impact" if not impact else "no onset track"))
+
+    # audio_landed / picture_landed
+    if part is not None and base is not None and Path(part).exists() and Path(base).exists():
+        evs = events_in_shot(effect, seg)
+        if sound:
+            # two rises, either counts: the part against its own 300 ms before (a
+            # transient is there) and the part against the base at the same instant
+            # (the transient is *ours* — the footage's own rock strike does not fool it)
+            low, seen = [], []
+            for ev in evs:
+                m = audio_transient_at(Path(part), ev["t_part"])
+                b = audio_transient_at(Path(base), ev["t_part"])
+                vs_base = round(m["peak_db"] - b["peak_db"], 2)
+                seen.append(f"{ev['t']:.2f}s +{m['rise_db']:.1f}/{vs_base:+.1f} dB")
+                if max(m["rise_db"], vs_base) < 6.0:
+                    low.append(seen[-1])
+            add("audio_landed", "the sound is in the proof", not low,
+                f"≥ 6 dB rise at every event ({len(evs)}): " + ", ".join(seen) if not low
+                else "no rise (vs before / vs base): " + ", ".join(low))
+        else:
+            add("audio_landed", "the sound is in the proof", None, "skipped: no sound")
+        miss = []
+        dur = float(overlay.get("duration", MIN_DURATION))
+        for ev in evs:
+            ts = ev["t_part"] + min(0.1, dur * 0.4)
+            m = frame_change_at(Path(part), Path(base), ts)
+            bb = m["bbox"]
+            inside = bool(bb) and (bb[0] - 0.01 <= ev["x"] <= bb[2] + 0.01) and (bb[1] - 0.01 <= ev["y"] <= bb[3] + 0.01)
+            if m["changed"] < 0.0002 or not inside:
+                miss.append(f"{ev['t']:.2f}s changed {m['changed'] * 100:.3f}%"
+                            + (f" bbox {bb}" if bb else " nothing drawn"))
+        add("picture_landed", "the marker is in the proof", not miss,
+            f"a change at every event's anchor ({len(evs)})" if not miss
+            else "not drawn where expected: " + ", ".join(miss))
+    else:
+        add("audio_landed", "the sound is in the proof", None, "skipped: no proof render")
+        add("picture_landed", "the marker is in the proof", None, "skipped: no proof render")
+
+    ok = all(c["ok"] is not False for c in checks)
+    return {"ok": ok, "at": _now(), "checks": checks}
 
 
 # ---------------------------------------------------------------- files on disk

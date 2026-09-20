@@ -17,6 +17,72 @@ same commit. Releases move entries into a dated version section.
   machine runs it, the alternatives with the free online / AI tools that fit each and
   what each would change in the vocabulary, and the costs per step. EFFECTS.md gains
   the 2026-09-20 addendum: Rule 4 turned inside out — the asset is generated, not fetched.
+- **Effects in the render (INTAKE M12, lane fx-core)** — `assemble.py` folds a shot's
+  accepted effects into its own part: `cut_with_effects` puts `[0:v]<video_filter>[vbase]`
+  and `[0:a]volume,aresample[abase]` plus `part_graph`'s fragment in one `-filter_complex`,
+  the sprite inputs between the source `-i` and `-t` (after an `-i`, a `-t` is an input
+  option for the next input and would cut the sprites short), and everything else about the
+  part identical, so the concat still copies. A proposal is not rendered; an event outside
+  the shot is not drawn; the log says `fx: <name> × n at …`. Script deps gain pillow. Tests:
+  `test_fx_render.py` — a two-shot EDL with one accepted and one proposed effect rendered
+  through `assemble.py` twice (with / without): the first part rises ≥ 6 dB at each event
+  and changes at each anchor, the second is untouched, the parts share stream properties,
+  the film probes at 4.0 s with no drift warning.
+- **The checks (INTAKE M12, lane fx-core)** — `fx.verify` runs the definition of done as a
+  checklist: `in_shot`, `in_frame` (the box no more than half off, with the pose's offsets),
+  `sync`, `on_onset` (skipped when the note names no impact or there is no track), and with
+  a proof render `audio_landed` and `picture_landed`, measured through ffmpeg pipes into
+  numpy: `audio_transient_at` (the loudest 5 ms inside ±40 ms against the 300 ms before; a
+  rise ≥ 6 dB either against the part's own before or against the base at the same instant)
+  and `frame_change_at` (pixels differing by > 24/255, the bbox of the *dense* change so
+  encode noise cannot stretch it, the anchor inside it). A skipped check is `ok: None`;
+  `ok` is every measured check passing. Tests: a 320×180 proof of the synthetic clip
+  rendered through `part_graph` — +12 dB at each event, none between, the marker's bbox on
+  the anchor, the flash across the frame — the whole checklist green on it, and each check
+  failing on the effect that should fail it.
+- **The model calls (INTAKE M12, lane fx-core)** — `fx.design` and `fx.revise` through
+  `roughcut.inference` (judge role; never `anthropic`, never `claude`). The design prompt
+  carries the note, the shot, the transcript lines inside it, the onset peaks as candidate
+  impact times and — when the human drew one — the reference's goal and marks, which then
+  *are* the anchors (t the nearest peak to the reference frame); the system text states the
+  vocabulary with its ranges from the constants, the frame's (0,0) top-left, the -1..1 box,
+  JSON only, and the worked hit-marker example. `place=True` cuts `frames_for` at the
+  candidates, tiles a `contact_strip` (labels burnt in) to `workdir/strip.jpg`, asks where
+  the skis are in each frame, re-anchors the events and drops the frames the model says are
+  not hits (keeping at least one). The answer is validated, never trusted. Tests on a
+  scripted backend: the evidence in the prompt and the vocabulary in the system, the
+  proposal's shape, the reference anchors, placing by looking, and a revise that keeps id
+  and events unless the note moves them.
+- **The part graph (INTAKE M12, lane fx-core)** — `fx.part_graph` renders one sprite `.mov`
+  per event and one `.wav` per effect into the workdir and returns the extra `-i`s plus a
+  `filter_complex` fragment: `setpts=PTS-STARTPTS+t/TB` delays each sprite to its clip
+  second in the part, `overlay=0:0:eof_action=pass:enable='between(t,…)'` draws it, the WAV
+  is resampled and formatted to 48 kHz stereo float, `asplit` to one `adelay=<samples>S`
+  per event, and one `amix=normalize=0:duration=first` mixes them under the base; labels
+  `[vout]` / `[aout]`; a silent effect passes `[abase]` through; no events → nothing. The
+  fps may be the profile's `24000/1001` string. Tests: the strings, the input counts, the
+  pass-through cases.
+- **The sprite rasteriser (INTAKE M12, lane fx-core)** — `fx.render_overlay_frames` draws a
+  sprite's shapes (line with round caps, circle, ring, rect with its own rotate, polygon,
+  text in DejaVu Sans Bold when present) in the unit box at 2× and downsamples with LANCZOS
+  into full-frame RGBA PNGs, one per frame for `ceil(duration × fps)`: the box `size × w`
+  square on the anchor, `pose_at` scaling, fading, rotating (clockwise positive, as a
+  canvas) and offsetting it, a `flash` tinting the whole frame. `render_overlay_mov` wraps
+  them as a PNG-coded `.mov` with alpha and cleans the frames up. Nothing in pixels: the
+  same overlay on a 640- and a 1280-wide frame is the same fraction of it. Tests: the alpha
+  mass sits on the anchor at the box size, dx / rotate / scale / opacity each move it as
+  they should, the flash's corner pixel, text and shapes, the mov's codec / pix_fmt / frames.
+- **The synth (INTAKE M12, lane fx-core)** — `fx.synth_sound` renders a patch to a 16-bit
+  stereo WAV with numpy alone: tone (sine / square / saw / triangle), sweep (an exponential
+  glide freq → freq_end), noise (white; pink through Kellet's three-pole approximation) and
+  click (a one-sample impulse through the decay) layers, each under a linear attack and an
+  exponential decay to -60 dB at `decay`, an optional one-pole hp / lp, summed with their
+  gains, then `gain_db` and a -1 dBFS peak limit; the same samples both sides; the noise is
+  seeded so a patch renders the same bytes twice. Fixed on the way: `onset_peaks` returned
+  every sample of a flat window as a peak (floor == mean over zero variance) — the suite's
+  0.2 bed came back as eight impacts; a flat window now has none. Tests: `test_fx.py` — the
+  validation edges, the onset peaks on a synthetic track, the synth read back (frequency by
+  FFT, the -60 dB decay, the click, the filters, the sweep, the ceiling).
 - **Effects foundation (INTAKE M12, I12.0)** — AI-designed video + audio effects, the
   contract and the loop. Karl, 2026-09-20: *"Add call of duty hit markers where my skis
   are with the sound effect … AI then goes and adds separate overlaid video with the

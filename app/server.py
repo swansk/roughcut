@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["fastapi>=0.115", "uvicorn>=0.30", "numpy>=2"]
+# dependencies = ["fastapi>=0.115", "uvicorn>=0.30", "numpy>=2", "pillow>=10"]
 # ///
 """Roughcut cut board — the human's half of the loop, as a local web app.
 
