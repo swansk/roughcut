@@ -421,6 +421,127 @@ def price(*, design: bool = True, place_frames: int = 0, look_frames: int = 0) -
 # ---------------------------------------------------------------- lane: fx-core
 # The functions below are the render lane's. Their signatures are the contract; the
 # server and the board are written against them.
+#
+# Conventions the two renderers share (this file and /fx.js):
+#   * the frame is (0,0) top-left, x right, y down; anchors are fractions of it
+#   * the sprite's box is `size × frame width` pixels square, centred on the anchor
+#     plus the pose's (dx, dy) — both fractions of the frame *width*
+#   * shapes are in -1..1 across the box; `rotate` is degrees, clockwise positive
+#     (a canvas `ctx.rotate` with y down); a line's `width` is a fraction of the box
+#   * a text's `h` is in box units (h = 0.5 is a quarter of the box high)
+#   * one PNG per frame, `ceil(duration × fps)` of them, the first at t = 0
+
+_DEJAVU = ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "DejaVuSans-Bold.ttf")
+_DEJAVU_REGULAR = ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "DejaVuSans.ttf")
+_SUPER = 2                                  # draw at 2×, downsample with LANCZOS
+
+
+def _fps_value(fps: Any) -> float:
+    """`24`, `23.976` or `"24000/1001"` → frames per second as a float. The part's
+    profile carries its rate as a fraction string; the proof passes an int."""
+    if isinstance(fps, str) and "/" in fps:
+        num, _, den = fps.partition("/")
+        return float(num) / float(den)
+    return float(fps)
+
+
+def _font(px: int, bold: bool = True):
+    from PIL import ImageFont
+    px = max(4, int(px))
+    for candidate in (_DEJAVU if bold else _DEJAVU_REGULAR) + _DEJAVU:
+        try:
+            return ImageFont.truetype(candidate, px)
+        except OSError:
+            continue
+    try:
+        return ImageFont.load_default(size=px)
+    except TypeError:                                  # Pillow < 10.1
+        return ImageFont.load_default()
+
+
+def _rgba(colour: str, opacity: float) -> tuple[int, int, int, int]:
+    c = colour.lstrip("#")
+    return (int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16),
+            int(round(255 * max(0.0, min(1.0, opacity)))))
+
+
+def _draw_shape(layer, shape: dict, c: float, unit: float) -> None:
+    """One shape onto its own transparent layer: `c` is the layer's centre (px), `unit`
+    the pixels per box unit (half the box side, already supersampled)."""
+    import math
+    from PIL import ImageDraw
+
+    d = ImageDraw.Draw(layer)
+    colour = _rgba(shape["color"], shape["opacity"])
+
+    def px(p):
+        return (c + p[0] * unit, c + p[1] * unit)
+
+    width = max(1, int(round(shape.get("width", 0.08) * 2 * unit)))   # fraction of the box
+    kind = shape["type"]
+    if kind == "line":
+        a, b = px(shape["from"]), px(shape["to"])
+        d.line([a, b], fill=colour, width=width)
+        r = width / 2
+        for (x, y) in (a, b):                                  # round caps
+            d.ellipse([x - r, y - r, x + r, y + r], fill=colour)
+    elif kind == "circle":
+        x, y = px((shape["x"], shape["y"]))
+        r = shape["r"] * unit
+        if shape.get("fill", True):
+            d.ellipse([x - r, y - r, x + r, y + r], fill=colour)
+        else:
+            d.ellipse([x - r, y - r, x + r, y + r], outline=colour, width=width)
+    elif kind == "ring":
+        x, y = px((shape["x"], shape["y"]))
+        r, r2 = shape["r"] * unit, shape["r2"] * unit
+        d.ellipse([x - r, y - r, x + r, y + r], fill=colour)
+        if r2 > 0:
+            d.ellipse([x - r2, y - r2, x + r2, y + r2], fill=(0, 0, 0, 0))
+    elif kind in ("rect", "polygon"):
+        if kind == "rect":
+            hw, hh = shape["w"] / 2, shape["h"] / 2
+            a = math.radians(shape.get("rotate", 0.0))
+            ca, sa = math.cos(a), math.sin(a)
+            pts = []
+            for (u, v) in ((-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)):
+                pts.append(px((shape["x"] + u * ca - v * sa, shape["y"] + u * sa + v * ca)))
+        else:
+            pts = [px(p) for p in shape["points"]]
+        if shape.get("fill", False):
+            d.polygon(pts, fill=colour)
+        else:
+            d.polygon(pts, outline=colour, width=width)
+    elif kind == "text":
+        font = _font(int(shape["h"] * unit), shape.get("bold", True))
+        x, y = px((shape["x"], shape["y"]))
+        d.text((x, y), shape["text"], fill=colour, font=font, anchor="mm")
+
+
+def _sprite_image(overlay: dict, box_px: float, pose: dict):
+    """The sprite at one pose as an RGBA image (already downsampled), plus the offset
+    of its centre inside it. `box_px` is the unscaled box side in output pixels."""
+    from PIL import Image
+
+    half = box_px * pose["scale"] / 2                         # output px per box unit
+    ext = int(math.ceil(half * 2.6 + 3))                      # ±1.5 units, rotated, plus caps
+    side = 2 * ext
+    canvas = Image.new("RGBA", (side * _SUPER, side * _SUPER), (0, 0, 0, 0))
+    c = ext * _SUPER
+    unit = half * _SUPER
+    if unit >= 0.5:
+        for shape in overlay["shapes"]:
+            layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+            _draw_shape(layer, shape, c, unit)
+            canvas.alpha_composite(layer)
+        if pose["rotate"]:
+            canvas = canvas.rotate(-pose["rotate"], resample=Image.BICUBIC, center=(c, c))
+    sprite = canvas.resize((side, side), Image.LANCZOS)
+    if pose["opacity"] < 1.0:
+        a = sprite.getchannel("A").point(lambda v: int(v * pose["opacity"]))
+        sprite.putalpha(a)
+    return sprite, ext
+
 
 def render_overlay_frames(overlay: dict, w: int, h: int, fps: float, out_dir: Path,
                           *, anchor: tuple[float, float] = (0.5, 0.5)) -> list[Path]:
@@ -430,16 +551,59 @@ def render_overlay_frames(overlay: dict, w: int, h: int, fps: float, out_dir: Pa
     `overlay.size × w` pixels square; shapes are in -1..1 across it; `pose_at(t)`
     scales, fades, rotates and offsets it. A `flash` tints the whole frame for its
     duration. PIL, anti-aliased (draw at 2× and downsample)."""
-    raise NotImplementedError("lane fx-core")
+    from PIL import Image
 
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rate = _fps_value(fps)
+    n = max(1, int(math.ceil(overlay["duration"] * rate - 1e-6)))
+    box_px = overlay["size"] * w
+    flash = overlay.get("flash")
+    paths: list[Path] = []
+    for i in range(n):
+        t = i / rate
+        pose = pose_at(overlay, t)
+        if flash and t < flash["duration"]:
+            frame = Image.new("RGBA", (w, h), _rgba(flash["color"], flash["opacity"]))
+        else:
+            frame = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        if pose["opacity"] > 0 and pose["scale"] > 0:
+            sprite, ext = _sprite_image(overlay, box_px, pose)
+            cx = anchor[0] * w + pose["dx"] * w
+            cy = anchor[1] * h + pose["dy"] * w
+            x0, y0 = int(round(cx)) - ext, int(round(cy)) - ext
+            # clip the sprite to the frame: alpha_composite needs a non-negative dest
+            left, top = max(0, -x0), max(0, -y0)
+            right = min(sprite.width, w - x0)
+            bottom = min(sprite.height, h - y0)
+            if right > left and bottom > top:
+                part = sprite.crop((left, top, right, bottom))
+                frame.alpha_composite(part, dest=(x0 + left, y0 + top))
+        p = out_dir / f"f_{i:04d}.png"
+        frame.save(p, "PNG", compress_level=1)
+        paths.append(p)
+    return paths
 
 
 def render_overlay_mov(overlay: dict, w: int, h: int, fps: float, out: Path,
                        *, anchor: tuple[float, float] = (0.5, 0.5)) -> Path:
     """The frames above as one `.mov` with alpha (`-c:v png` or `qtrle`) so a part's
     ffmpeg graph can `overlay` it with `enable=between(t, …)`. Returns `out`."""
-    raise NotImplementedError("lane fx-core")
-
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    frames_dir = Path(tempfile.mkdtemp(prefix=out.stem + "_frames_", dir=out.parent))
+    try:
+        render_overlay_frames(overlay, w, h, fps, frames_dir, anchor=anchor)
+        r = subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-nostdin", "-framerate", str(fps),
+             "-start_number", "0", "-i", str(frames_dir / "f_%04d.png"),
+             "-c:v", "png", "-pix_fmt", "rgba", str(out)],
+            capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"overlay mov failed: {r.stderr[-300:]}")
+    finally:
+        shutil.rmtree(frames_dir, ignore_errors=True)
+    return out
 
 
 # ---- the synth

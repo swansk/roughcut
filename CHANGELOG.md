@@ -10,6 +10,16 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The sprite rasteriser (INTAKE M12, lane fx-core)** — `fx.render_overlay_frames` draws a
+  sprite's shapes (line with round caps, circle, ring, rect with its own rotate, polygon,
+  text in DejaVu Sans Bold when present) in the unit box at 2× and downsamples with LANCZOS
+  into full-frame RGBA PNGs, one per frame for `ceil(duration × fps)`: the box `size × w`
+  square on the anchor, `pose_at` scaling, fading, rotating (clockwise positive, as a
+  canvas) and offsetting it, a `flash` tinting the whole frame. `render_overlay_mov` wraps
+  them as a PNG-coded `.mov` with alpha and cleans the frames up. Nothing in pixels: the
+  same overlay on a 640- and a 1280-wide frame is the same fraction of it. Tests: the alpha
+  mass sits on the anchor at the box size, dx / rotate / scale / opacity each move it as
+  they should, the flash's corner pixel, text and shapes, the mov's codec / pix_fmt / frames.
 - **The synth (INTAKE M12, lane fx-core)** — `fx.synth_sound` renders a patch to a 16-bit
   stereo WAV with numpy alone: tone (sine / square / saw / triangle), sweep (an exponential
   glide freq → freq_end), noise (white; pink through Kellet's three-pole approximation) and

@@ -102,6 +102,93 @@ def test_onset_peaks_find_the_two_impacts_and_nearest_snaps():
     assert fx.events_in_shot(e, {"in": 2.0, "out": 3.0}) [0]["t"] == 2.4
 
 
+# ------------------------------------------------------------ the rasteriser
+
+def _alpha(p: Path) -> np.ndarray:
+    from PIL import Image
+    return np.asarray(Image.open(p).convert("RGBA"))[:, :, 3]
+
+
+def _mass(alpha: np.ndarray) -> tuple[float, float, int, int]:
+    """(cx, cy, width, height) of the opaque pixels."""
+    ys, xs = np.nonzero(alpha > 128)
+    return float(xs.mean()), float(ys.mean()), int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1)
+
+
+def test_sprite_sits_on_the_anchor_at_the_box_size(tmp_path):
+    overlay = fx.validate_overlay({"duration": 0.1, "size": 0.1,
+                                   "shapes": [{"type": "circle", "at": [0, 0], "r": 1, "fill": True}]})
+    frames = fx.render_overlay_frames(overlay, 640, 360, 24, tmp_path / "a", anchor=(0.25, 0.5))
+    assert len(frames) == 3 and frames[0].name == "f_0000.png"
+    a = _alpha(frames[0])
+    assert a.shape == (360, 640)
+    cx, cy, wd, ht = _mass(a)
+    assert abs(cx - 160) < 1.5 and abs(cy - 180) < 1.5        # 0.25 × 640, 0.5 × 360
+    assert abs(wd - 64) <= 3 and abs(ht - 64) <= 3             # r = 1 unit = the box, 0.1 × 640
+    assert a[0, 0] == 0 and a[359, 639] == 0                   # transparent elsewhere
+    # the same effect on a wider frame is the same fraction of it
+    big = fx.render_overlay_frames(overlay, 1280, 720, 24, tmp_path / "b", anchor=(0.25, 0.5))
+    bx, by, bw, bh = _mass(_alpha(big[0]))
+    assert abs(bx - 320) < 2 and abs(by - 360) < 2 and abs(bw - 128) <= 4
+
+
+def test_pose_offsets_scales_rotates_and_fades(tmp_path):
+    line = [{"type": "line", "from": [-1, 0], "to": [1, 0], "width": 0.05}]
+    # dx moves the sprite by a fraction of the frame width
+    moved = fx.validate_overlay({"duration": 0.05, "size": 0.1, "shapes": line, "anim": {"dx": [[0, 0.1]]}})
+    cx, _, wd, ht = _mass(_alpha(fx.render_overlay_frames(moved, 640, 360, 24, tmp_path / "dx")[0]))
+    assert abs(cx - (320 + 64)) < 2 and wd > ht * 3
+    # rotate 90° turns the line vertical (clockwise positive, like a canvas)
+    turned = fx.validate_overlay({"duration": 0.05, "size": 0.1, "shapes": line, "anim": {"rotate": [[0, 90]]}})
+    _, _, wd, ht = _mass(_alpha(fx.render_overlay_frames(turned, 640, 360, 24, tmp_path / "rot")[0]))
+    assert ht > wd * 3
+    # scale 2 doubles the extent
+    scaled = fx.validate_overlay({"duration": 0.05, "size": 0.1, "shapes": line, "anim": {"scale": [[0, 2.0]]}})
+    _, _, wd2, _ = _mass(_alpha(fx.render_overlay_frames(scaled, 640, 360, 24, tmp_path / "sc")[0]))
+    _, _, wd1, _ = _mass(_alpha(fx.render_overlay_frames(turned, 640, 360, 24, tmp_path / "one")[0]))
+    assert abs(wd2 - 2 * ht) <= 6
+    # opacity fades the alpha, keyframed
+    fade = fx.validate_overlay({"duration": 0.1, "size": 0.1, "shapes": line,
+                                "anim": {"opacity": [[0, 1], [0.1, 0]]}})
+    frames = fx.render_overlay_frames(fade, 640, 360, 24, tmp_path / "fade")
+    first, last = _alpha(frames[0]).max(), _alpha(frames[-1]).max()
+    assert first >= 250 and 20 < last < 80                       # t = 2/24 → opacity ≈ 0.17
+
+
+def test_flash_tints_the_whole_frame_for_its_duration(tmp_path):
+    overlay = fx.validate_overlay({"duration": 0.2, "size": 0.1, "shapes": X_LINES,
+                                   "flash": {"color": "#ff0000", "opacity": 0.2, "duration": 0.05}})
+    frames = fx.render_overlay_frames(overlay, 320, 180, 24, tmp_path / "fl")
+    assert len(frames) == 5
+    from PIL import Image
+    corner0 = Image.open(frames[0]).convert("RGBA").getpixel((2, 2))
+    corner2 = Image.open(frames[2]).convert("RGBA").getpixel((2, 2))
+    assert corner0 == (255, 0, 0, 51)                            # 0.2 × 255, frames at 0 and 1/24
+    assert corner2[3] == 0                                       # 2/24 s is past 50 ms
+
+
+def test_text_and_shapes_draw_and_the_mov_carries_alpha(tmp_path):
+    overlay = fx.validate_overlay({
+        "duration": 0.35, "size": 0.2,
+        "shapes": [{"type": "text", "text": "HIT", "at": [0, -1.2], "h": 0.5, "color": "#ffdd00"},
+                   {"type": "ring", "at": [0, 0], "r": 1, "r2": 0.8, "color": "#ff0000"},
+                   {"type": "rect", "at": [0, 0], "w": 0.4, "h": 0.4, "rotate": 45, "fill": True},
+                   {"type": "polygon", "points": [[-1, 1], [1, 1], [0, 1.3]], "fill": True, "opacity": 0.5}]})
+    frame = fx.render_overlay_frames(overlay, 640, 360, 24, tmp_path / "t")[0]
+    a = _alpha(frame)
+    assert a[180, 320] > 200                                     # the filled rect at the centre
+    assert a[180, 320 - 64] > 200 and a[180, 320 - 50] < 20      # the ring: r = 64 px, its hole
+    assert a[180 - int(1.2 * 64), 320] > 100                     # the text above
+    mov = fx.render_overlay_mov(overlay, 640, 360, 24, tmp_path / "s.mov", anchor=(0.9, 0.9))
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                        "stream=codec_name,pix_fmt,nb_frames,width,height", "-of", "json", str(mov)],
+                       capture_output=True, text=True)
+    s = json.loads(r.stdout)["streams"][0]
+    assert (s["codec_name"], s["pix_fmt"], s["width"], s["height"]) == ("png", "rgba", 640, 360)
+    assert int(s["nb_frames"]) == 9                              # ceil(0.35 × 24)
+    assert not list(tmp_path.glob("s_frames_*"))                 # the frames were cleaned up
+
+
 # ------------------------------------------------------------ the synth
 
 def _read_wav(p: Path) -> tuple[np.ndarray, int]:
