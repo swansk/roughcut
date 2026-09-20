@@ -1,4 +1,76 @@
-/* Roughcut — the FX tool's styles (INTAKE M12). Filled by lane agent/fx-ui; the page's
-   tokens (--panel --card --card-hi --line --text --dim --accent --good --warn --bad)
-   are the palette. */
+/* Roughcut — the FX tool's styles (INTAKE M12). The page's tokens (--panel --card
+   --card-hi --line --text --dim --accent --good --warn --bad) are the palette. */
 #fx { min-height: 40px; }
+#fx .fxtitle { font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+               color: var(--dim); margin: 0 0 8px; }
+#fx .fxempty { margin: 4px 0 10px; }
+
+/* one effect */
+#fx .fxcard { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+              padding: 10px 12px; margin-bottom: 10px; }
+#fx .fxcard.accepted { border-color: #2c4c39; }
+#fx .fxhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+#fx .fxname { font-size: 13px; }
+#fx .fxn { color: var(--dim); font-size: 12px; }
+#fx .fxchip { margin-left: auto; font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+              border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
+#fx .fxchip.proposed { color: var(--warn); border-color: #4c4026; }
+#fx .fxchip.accepted { color: var(--good); border-color: #2c4c39; }
+#fx .fxnote { font-size: 12px; margin-top: 6px; }
+#fx .fxwhy { margin-top: 2px; }
+
+/* the hits */
+#fx .fxevents { list-style: none; margin: 8px 0 0; padding: 0; }
+#fx .fxev { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 6px;
+            font-size: 12px; font-variant-numeric: tabular-nums; cursor: pointer; }
+#fx .fxev:hover { background: var(--card-hi); }
+#fx .fxev.sel { background: var(--card-hi); outline: 1px solid var(--accent); }
+#fx .fxev .t { min-width: 44px; }
+#fx .fxev .xy { color: var(--dim); }
+#fx .fxev .nudge { padding: 0 6px; font-size: 10px; line-height: 18px; border-radius: 6px;
+                   border-color: transparent; color: var(--dim); }
+#fx .fxev .nudge:hover { color: var(--text); background: var(--card); }
+#fx .fxpick { margin-top: 4px; color: var(--accent); }
+
+/* the machine's checklist */
+#fx .fxverify { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
+#fx .fxvhead { font-size: 12px; }
+#fx .fxverify.ok .fxvhead { color: var(--good); }
+#fx .fxverify.bad .fxvhead { color: var(--bad); }
+#fx .fxchecks { list-style: none; margin: 4px 0 0; padding: 0; }
+#fx .fxchecks li { display: flex; gap: 6px; align-items: baseline; font-size: 12px; padding: 1px 0; }
+#fx .fxchecks li .mark { width: 12px; text-align: center; flex: none; }
+#fx .fxchecks li.ok .mark { color: var(--good); }
+#fx .fxchecks li.bad .mark { color: var(--bad); }
+#fx .fxchecks li.skip .mark, #fx .fxchecks li.skip .lbl { color: var(--dim); }
+#fx .fxchecks li .hint { margin-left: auto; text-align: right; max-width: 55%; }
+#fx .fxextras { margin-top: 6px; }
+#fx .fxextras a { color: var(--dim); }
+
+/* the buttons */
+#fx .fxbtns { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+#fx .fxbtns button { padding: 4px 10px; font-size: 12px; }
+#fx .fxbtns .grow { flex: 1; }
+#fx .fxiter { display: flex; gap: 6px; margin-top: 6px; }
+#fx .fxiter input { flex: 1; min-width: 0; }
+#fx .fxiter input:focus { outline: none; border-color: var(--accent); }
+
+/* the design box */
+#fx .fxdesign { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+                padding: 10px 12px; margin-top: 4px; }
+#fx .fxdhead { margin-bottom: 6px; }
+#fx .fxdesign textarea { min-height: 64px; }
+#fx .fxplace { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-top: 6px;
+               cursor: pointer; }
+#fx .fxplace input { accent-color: var(--accent); }
+#fx .fxref { margin-top: 8px; font-size: 12px; color: var(--accent); display: flex;
+             align-items: center; gap: 4px; flex-wrap: wrap; }
+#fx .fxref i { color: var(--text); font-style: italic; }
+#fx .fxref button { padding: 0 6px; font-size: 11px; line-height: 18px; }
+#fx .fxstate { margin-top: 6px; }
+
+/* the sketch's toolbar */
+#fx .fxsketch { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 8px; }
+#fx .fxsketch input { width: 100%; margin-top: 6px; }
+#fx .fxsketch input:focus { outline: none; border-color: var(--accent); }
+#fx .fxsketch .fxstrokes { color: var(--text); }

@@ -10,6 +10,29 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The FX tool on the board (INTAKE M12, lane fx-ui, 1 of 4)** — `app/static/fx.js`
+  fills the dock's FX tool (`#fx`) for the selected shot (`tl.state.anchor`, followed
+  through `tl.on('select')`): a header `FX · shot 1 · CLIP_A`, the shot's effects as
+  cards — name, `n hits`, a `proposed` (amber) / `accepted` (green) chip, the note and
+  the why, the events as `0:01.5 · x 0.50 y 0.70` rows with ◀ ▶ one-frame nudges
+  (`PUT /api/fx/{id}` with the changed events; the server's copy is what the card
+  shows back), the machine's checklist when Verify ran (✓ / ✗ / – per check with its
+  detail), and Preview (the shot plays in the monitor, this shot only) / Verify /
+  Iterate (a one-line box, Enter or Go → `POST /api/fx/revise`) / Accept / Discard for a
+  proposal, Remove for an accepted one — and the design box: a textarea, a `place on
+  the frames` checkbox whose label carries the price from `GET /api/fx/price?place=1`
+  (`≈ $0.21 · 8 frames`), Draw a reference and Design (`POST /api/fx/design`). Jobs
+  (`kind: fx`) are followed on the same `/api/jobs` registry the strip paints; a job
+  that finishes — including one seen finished for the first time after a reload —
+  refetches `GET /api/fx` and repaints, and the tool repaints only when what it is
+  built from changed, so a poll never interrupts typing. The rail badge counts the
+  shot's effects. Accept is the human's click; nothing here writes the EDL except
+  through the endpoints. `app/static/fx.css` styles it from the page's tokens.
+  `app/tests/test_fx_ui.py` drives it in a real browser with `fx.design` / `revise` /
+  `synth_sound` / `part_graph` / `verify` monkeypatched for the module (the render
+  lane's Python is not on this branch) and a FakeBackend on `roughcut.inference`; the
+  EDL seed carries fixed shot ids because a read mints ids in memory and never writes
+  them, and the fx endpoints look a shot up by id in the file.
 - **Effects foundation (INTAKE M12, I12.0)** — AI-designed video + audio effects, the
   contract and the loop. Karl, 2026-09-20: *"Add call of duty hit markers where my skis
   are with the sound effect … AI then goes and adds separate overlaid video with the
