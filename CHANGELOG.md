@@ -10,6 +10,17 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The synth (INTAKE M12, lane fx-core)** — `fx.synth_sound` renders a patch to a 16-bit
+  stereo WAV with numpy alone: tone (sine / square / saw / triangle), sweep (an exponential
+  glide freq → freq_end), noise (white; pink through Kellet's three-pole approximation) and
+  click (a one-sample impulse through the decay) layers, each under a linear attack and an
+  exponential decay to -60 dB at `decay`, an optional one-pole hp / lp, summed with their
+  gains, then `gain_db` and a -1 dBFS peak limit; the same samples both sides; the noise is
+  seeded so a patch renders the same bytes twice. Fixed on the way: `onset_peaks` returned
+  every sample of a flat window as a peak (floor == mean over zero variance) — the suite's
+  0.2 bed came back as eight impacts; a flat window now has none. Tests: `test_fx.py` — the
+  validation edges, the onset peaks on a synthetic track, the synth read back (frequency by
+  FFT, the -60 dB decay, the click, the filters, the sweep, the ceiling).
 - **Effects foundation (INTAKE M12, I12.0)** — AI-designed video + audio effects, the
   contract and the loop. Karl, 2026-09-20: *"Add call of duty hit markers where my skis
   are with the sound effect … AI then goes and adds separate overlaid video with the

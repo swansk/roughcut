@@ -53,10 +53,18 @@ until their lane lands.
 from __future__ import annotations
 
 import json
+import math
 import re
+import shutil
+import subprocess
+import tempfile
 import uuid
+import wave
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 # ---------------------------------------------------------------- the vocabulary
 
@@ -351,6 +359,10 @@ def onset_peaks(onset: list[float], hz: float, t0: float, t1: float, *,
     if floor is None:
         mean = sum(win) / len(win)
         var = sum((v - mean) ** 2 for v in win) / len(win)
+        if var ** 0.5 < 1e-6:
+            # a flat window has no peaks: with floor == mean every sample would
+            # be "≥ the floor and ≥ both neighbours" and the whole bed came back
+            return []
         floor = mean + var ** 0.5
     cands = []
     for i in range(1, len(win) - 1):
@@ -421,11 +433,102 @@ def render_overlay_frames(overlay: dict, w: int, h: int, fps: float, out_dir: Pa
     raise NotImplementedError("lane fx-core")
 
 
+
 def render_overlay_mov(overlay: dict, w: int, h: int, fps: float, out: Path,
                        *, anchor: tuple[float, float] = (0.5, 0.5)) -> Path:
     """The frames above as one `.mov` with alpha (`-c:v png` or `qtrle`) so a part's
     ffmpeg graph can `overlay` it with `enable=between(t, …)`. Returns `out`."""
     raise NotImplementedError("lane fx-core")
+
+
+
+# ---- the synth
+
+def _one_pole(x, coef: float, gain: float):
+    """y[n] = coef·y[n-1] + gain·x[n], in blocks: the closed form over a block is a
+    cumulative sum scaled by powers of `coef`, carried in from the block before, so
+    a three-second patch does not mean a 144k-iteration Python loop."""
+    n = len(x)
+    y = np.empty(n)
+    if coef <= 0.0:
+        y[:] = gain * x
+        return y
+    # a^-k must stay finite: block so that a^-(B-1) ≤ 1e12
+    B = max(1, min(4096, int(12 * math.log(10) / -math.log(coef)) if coef < 1 else 4096))
+    ks = np.arange(B)
+    a_neg = coef ** -ks.astype(float)             # a^-k
+    a_pos = coef ** (ks + 1).astype(float)        # a^(k+1), for the carry
+    carry = 0.0
+    for s in range(0, n, B):
+        xb = gain * x[s:s + B]
+        m = len(xb)
+        acc = np.cumsum(xb * a_neg[:m]) * (coef ** ks[:m].astype(float))
+        yb = acc + carry * a_pos[:m]
+        y[s:s + m] = yb
+        carry = yb[-1]
+    return y
+
+
+def _lowpass(x, fc: float, sr: int):
+    a = math.exp(-2 * math.pi * fc / sr)
+    return _one_pole(x, a, 1 - a)
+
+
+def _highpass(x, fc: float, sr: int):
+    return x - _lowpass(x, fc, sr)
+
+
+def _envelope(t, attack: float, decay: float):
+    """Linear attack to 1, then an exponential decay reaching -60 dB at `decay`
+    seconds after the attack ends."""
+    env = np.ones_like(t)
+    if attack > 0:
+        env = np.minimum(1.0, t / attack)
+    after = np.clip(t - attack, 0, None)
+    env = env * np.exp(-math.log(1000.0) * after / max(decay, 1e-4))
+    return env
+
+
+def _wave(phase, wave: str):
+    """`phase` in cycles."""
+    frac = phase - np.floor(phase)
+    if wave == "square":
+        return np.where(frac < 0.5, 1.0, -1.0)
+    if wave == "saw":
+        return 2.0 * frac - 1.0
+    if wave == "triangle":
+        return 2.0 * np.abs(2.0 * frac - 1.0) - 1.0
+    return np.sin(2 * np.pi * phase)
+
+
+def _layer_signal(layer: dict, t, sr: int, rng) -> Any:
+    kind = layer["type"]
+    if kind == "tone":
+        return _wave(layer["freq"] * t, layer["wave"])
+    if kind == "sweep":
+        f0, f1 = layer["freq"], layer["freq_end"]
+        dur = max(float(t[-1]), 1e-4) if len(t) else 1e-4
+        ratio = f1 / f0
+        if abs(ratio - 1.0) < 1e-6:
+            phase = f0 * t
+        else:                                       # ∫ f0·ratio^(t/D) dt
+            phase = f0 * dur / math.log(ratio) * (ratio ** (t / dur) - 1.0)
+        return _wave(phase, layer["wave"])
+    if kind == "noise":
+        white = rng.uniform(-1.0, 1.0, len(t))
+        if layer["color"] == "pink":
+            # Paul Kellet's economy pink: three one-poles summed (≈ -3 dB/octave)
+            b0 = _one_pole(white, 0.99765, 0.0990460)
+            b1 = _one_pole(white, 0.96300, 0.2965164)
+            b2 = _one_pole(white, 0.57000, 1.0526913)
+            pink = b0 + b1 + b2 + white * 0.1848
+            return pink / 4.0
+        return white
+    # click: a one-sample impulse — the envelope alone is what is heard
+    sig = np.zeros(len(t))
+    if len(sig):
+        sig[0] = 1.0
+    return sig
 
 
 def synth_sound(sound: dict, out: Path, *, sr: int = 48000) -> Path:
@@ -434,7 +537,37 @@ def synth_sound(sound: dict, out: Path, *, sr: int = 48000) -> Path:
     noise (white / pink) or a click (one-sample impulse through the decay), summed with
     its gain, optional one-pole hp/lp, then `gain_db`, peak-limited to -1 dBFS. numpy
     only. Returns `out`."""
-    raise NotImplementedError("lane fx-core")
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    n = max(1, int(round(sound["duration"] * sr)))
+    t = np.arange(n) / sr
+    rng = np.random.default_rng(1234)              # the same patch renders the same bytes
+    mix = np.zeros(n)
+    for layer in sound["layers"]:
+        sig = _layer_signal(layer, t, sr, rng)
+        if layer["type"] == "click":
+            # the impulse *through* the decay: a step that dies at -60 dB by `decay`
+            sig = np.exp(-math.log(1000.0) * t / max(layer["decay"], 1e-4))
+        else:
+            sig = sig * _envelope(t, layer["attack"], layer["decay"])
+        if layer.get("hp"):
+            sig = _highpass(sig, layer["hp"], sr)
+        if layer.get("lp"):
+            sig = _lowpass(sig, layer["lp"], sr)
+        mix += layer["gain"] * sig
+    mix *= 10 ** (sound["gain_db"] / 20)
+    limit = 10 ** (-1 / 20)                        # -1 dBFS
+    peak = float(np.max(np.abs(mix))) if n else 0.0
+    if peak > limit:
+        mix *= limit / peak
+    pcm = (np.clip(mix, -1, 1) * 32767).astype("<i2")
+    stereo = np.repeat(pcm, 2)                     # the same signal both sides
+    with wave.open(str(out), "wb") as wf:
+        wf.setnchannels(2)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(stereo.tobytes())
+    return out
 
 
 def part_graph(effects: list[tuple[dict, list[dict]]], w: int, h: int, fps: float,
@@ -450,16 +583,19 @@ def part_graph(effects: list[tuple[dict, list[dict]]], w: int, h: int, fps: floa
     raise NotImplementedError("lane fx-core")
 
 
+
 def frames_for(proxy: Path, times: list[float], out_dir: Path, *, width: int = 640) -> list[Path]:
     """One JPEG per time from the proxy (`ffmpeg -ss t -i proxy -frames:v 1`), `width`
     px wide, named `t_<seconds>.jpg`. Returns the paths in the order of `times`."""
     raise NotImplementedError("lane fx-core")
 
 
+
 def contact_strip(frames: list[Path], labels: list[str], out: Path, *, cols: int = 4) -> Path:
     """The frames tiled with their labels burnt in (PIL), for a placing call and for
     the proof look. Returns `out`."""
     raise NotImplementedError("lane fx-core")
+
 
 
 def build_design_prompt(note: str, seg: dict, clip: dict, *, peaks: list[dict],
@@ -479,6 +615,7 @@ def build_design_prompt(note: str, seg: dict, clip: dict, *, peaks: list[dict],
     raise NotImplementedError("lane fx-core")
 
 
+
 def build_place_prompt(note: str, effect: dict, candidates: list[dict], strip: Path) -> tuple[str, str]:
     """`(system, prompt)` for the placing call: the strip image (frames at each
     candidate time, labelled), the note, and the question — for each frame, is the
@@ -487,10 +624,12 @@ def build_place_prompt(note: str, effect: dict, candidates: list[dict], strip: P
     raise NotImplementedError("lane fx-core")
 
 
+
 def build_revise_prompt(effect: dict, note: str) -> tuple[str, str]:
     """`(system, prompt)` for an iteration: the current effect JSON and the note ("make
     them red and bigger", "one hit only, the big one"). Same answer shape as design."""
     raise NotImplementedError("lane fx-core")
+
 
 
 def design(note: str, seg: dict, clip: dict, sidecar: dict | None, *,
@@ -507,10 +646,12 @@ def design(note: str, seg: dict, clip: dict, sidecar: dict | None, *,
     raise NotImplementedError("lane fx-core")
 
 
+
 def revise(effect: dict, note: str, segments: list[dict], clips: dict | None = None) -> dict:
     """One iteration: the revise call, validated, id and events kept unless the note
     changed them, `history` appended. Returns the new proposed effect."""
     raise NotImplementedError("lane fx-core")
+
 
 
 def audio_transient_at(part: Path, t: float, *, win_s: float = 0.04) -> dict:
@@ -520,11 +661,13 @@ def audio_transient_at(part: Path, t: float, *, win_s: float = 0.04) -> dict:
     raise NotImplementedError("lane fx-core")
 
 
+
 def frame_change_at(part: Path, base: Path, t: float) -> dict:
     """Decode one frame from each at `t` and return `{"changed": fraction of pixels
     that differ by > 24/255 in any channel, "bbox": [x0, y0, x1, y1] fractions}`. An
     overlay that drew shows as a change; its bbox says where."""
     raise NotImplementedError("lane fx-core")
+
 
 
 def verify(effect: dict, seg: dict, *, onset: list[float] | None = None,
@@ -541,6 +684,7 @@ def verify(effect: dict, seg: dict, *, onset: list[float] | None = None,
     ≥ 6 dB at each event and a change of ≥ 0.02 % of the frame at each event whose
     bbox contains the anchor). `ok` is every non-skipped check passing."""
     raise NotImplementedError("lane fx-core")
+
 
 
 # ---------------------------------------------------------------- files on disk
