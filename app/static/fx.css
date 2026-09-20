@@ -76,6 +76,43 @@
 #fx .fxev .del { color: var(--bad); opacity: .7; }
 #fx .fxev .del:hover { opacity: 1; background: var(--card); }
 
+/* the range bar */
+#fx .fxbar { position: relative; height: 34px; margin: 8px 0 2px; background: #131318;
+             border: 1px solid var(--line); border-radius: 6px; cursor: crosshair; user-select: none; }
+#fx .fxbar .win { position: absolute; top: 0; bottom: 0; background: rgba(110,168,254,.18);
+                  border-left: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+#fx .fxbar .h { position: absolute; top: -3px; bottom: -3px; width: 12px; cursor: ew-resize; }
+#fx .fxbar .h0 { left: -7px; } #fx .fxbar .h1 { right: -7px; }
+#fx .fxbar .h::after { content: ""; position: absolute; left: 4px; top: 8px; bottom: 8px; width: 4px;
+                       border-radius: 2px; background: var(--accent); }
+#fx .fxbar .pk { position: absolute; bottom: 4px; width: 2px; height: 12px; background: var(--dim); pointer-events: none; }
+#fx .fxbar .hit { position: absolute; top: 3px; width: 3px; height: 12px; background: var(--good); border-radius: 1px; pointer-events: none; }
+#fx .fxbar .hit.proposed { background: var(--warn); }
+#fx .fxbar .ph { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff; opacity: .8; pointer-events: none; }
+#fx .fxbar .lbl { position: absolute; bottom: -15px; font-size: 10px; color: var(--dim); font-variant-numeric: tabular-nums; }
+#fx .fxbar .l0 { left: 0; } #fx .fxbar .l1 { right: 0; }
+#fx .fxwhere + .fxbar { margin-bottom: 18px; }
+#fx .fxprice { font-weight: 400; opacity: .8; margin-left: 4px; }
+#fx .fxrefimg { display: block; width: 100%; border-radius: 6px; border: 1px solid var(--line); margin-top: 6px; }
+
+/* the window and the hits on the timeline itself, while the FX tool is open */
+#tl .fx-tlband { position: absolute; top: 0; bottom: 0; z-index: 3; pointer-events: none;
+                 background: rgba(110,168,254,.14); border-left: 2px solid var(--accent);
+                 border-right: 2px solid var(--accent); }
+#tl .fx-tlband.whole { border-style: dashed; background: rgba(110,168,254,.07); }
+#tl .fx-tlband i { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--warn); }
+#tl .fx-tlband span { position: absolute; left: 4px; top: 2px; font: 600 10px ui-sans-serif, system-ui, sans-serif;
+                      color: var(--accent); background: rgba(16,16,19,.7); padding: 0 5px; border-radius: 4px;
+                      white-space: nowrap; }
+
+/* the sketch's HUD on the monitor */
+#fxHud { position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 6; display: flex;
+         gap: 8px; align-items: center; flex-wrap: wrap; background: rgba(16,16,19,.85);
+         border: 1px solid var(--warn); border-radius: 8px; padding: 6px 10px; font-size: 12px; }
+#fxHud .fxhudn { color: var(--warn); font-weight: 600; min-width: 64px; }
+#fxHud input { flex: 1; min-width: 160px; padding: 4px 8px; font-size: 12px; }
+#fxHud button { padding: 4px 10px; font-size: 12px; }
+
 /* the sketch's toolbar */
 #fx .fxsketch { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 8px; }
 #fx .fxsketch input { width: 100%; margin-top: 6px; }

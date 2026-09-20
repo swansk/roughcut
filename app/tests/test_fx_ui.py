@@ -371,12 +371,21 @@ def test_verify_iterate_accept_and_remove(page):
     assert card.locator("button[data-act=remove]").is_visible()
     assert card.locator("button[data-act=accept]").count() == 0
     assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == "1"
-    # remove
+    # remove keeps it (Karl: reversible), out of the cut, with Restore; Delete is for good
     card.locator("button[data-act=remove]").click()
-    page.wait_for_function("document.querySelectorAll('#fx .fxcard').length === 0")
+    page.wait_for_function("document.querySelector('#fx .fxcard .fxchip.removed') !== null")
     assert api(page, "/api/project")["effects"] == []
-    assert effects(page) == []
     assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == ""
+    assert card.locator("button[data-act=restore]").is_visible()
+    card.locator("button[data-act=restore]").click()
+    page.wait_for_function("document.querySelector('#fx .fxcard .fxchip.accepted') !== null")
+    assert len(api(page, "/api/project")["effects"]) == 1
+    assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == "1"
+    card.locator("button[data-act=remove]").click()
+    page.wait_for_function("document.querySelector('#fx .fxcard .fxchip.removed') !== null")
+    card.locator("button[data-act=discard]").click()
+    page.wait_for_function("document.querySelectorAll('#fx .fxcard').length === 0")
+    assert effects(page) == []
 
 
 def test_discard_drops_the_proposal(page):

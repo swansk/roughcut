@@ -10,6 +10,21 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Effects, round two (INTAKE M12, I12.7)** — Karl's four points, 2026-09-20. (1) *Place
+  on the frames* is gone as a choice: Design always places (the price is on the Design
+  button) and a drawn reference skips the call because its marks are the anchors. (2)
+  Picking the window no longer fights the timeline: a **range bar** under the where row
+  shows the shot with the onset peaks, the hits and the playhead, its two handles drag the
+  window and **park** the monitor on the frame (never play), a click on it parks too; and
+  while the FX tool is open the window and the hits are drawn **on the timeline** as a
+  band with ticks. (3) Reversible for good: **Remove** keeps the effect (status
+  `removed`, files intact) with **Restore**; **Accept** over an accepted version keeps
+  the old one under `previous` (five deep) with **Revert**; several effects stack on one
+  shot in order; `GET /api/fx/peaks`, `POST /api/fx/restore|revert`. (4) The sketch is
+  visible: amber strokes over a dark halo with a numbered dot per mark, a HUD on the
+  monitor itself (count, goal, Use it, Cancel) instead of controls a screen away, and
+  the reference as a thumbnail in the design box and on the card. Tests:
+  `test_fx_api.py` remove / restore / previous / revert / peaks.
 - **The window is the human's, a hit can be deleted, the tick is clicky (INTAKE M12,
   I12.6)** — Karl, after the first live effect: *"you added hit markers across the full
   footage — during most of which I was not hitting rocks, it was just part at the end …

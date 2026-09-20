@@ -73,7 +73,7 @@ TRACKS = ("scale", "opacity", "rotate", "dx", "dy")
 LAYERS = ("tone", "noise", "click", "sweep")
 WAVES = ("sine", "square", "saw", "triangle")
 NOISES = ("white", "pink")
-STATUSES = ("proposed", "accepted")
+STATUSES = ("proposed", "accepted", "removed")   # removed: out of the cut, kept for Restore
 
 MAX_EVENTS = 24
 MAX_SHAPES = 24
@@ -308,7 +308,7 @@ def validate_effect(raw: Any, segments: list[dict], clips: dict[str, dict] | Non
         "status": status,
     }
     if keep_meta:
-        for k in ("created", "reference", "verify", "history", "window"):
+        for k in ("created", "reference", "verify", "history", "window", "previous"):
             if raw.get(k) is not None:
                 out[k] = raw[k]
     return out

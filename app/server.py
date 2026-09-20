@@ -3381,9 +3381,11 @@ def _fx_all() -> list[dict]:
             e = json.loads(p.read_text(encoding="utf-8"))
         except ValueError:
             continue
-        if e.get("id") in ids or e.get("status") != "proposed":
+        if e.get("id") in ids or e.get("status") not in ("proposed", "removed"):
             continue
         proposed.append(e)
+    # accepted first, then proposals, then what was removed (kept for Restore)
+    proposed.sort(key=lambda e: e.get("status") == "removed")
     return [_fx_urls(e) for e in accepted + proposed]
 
 
@@ -3655,15 +3657,83 @@ async def api_fx_verify(request: Request) -> JSONResponse:
     return _fx_job("verify", f"Verifying {e.get('name', 'the effect')}", _fx_verify_job, fx_id)
 
 
+FX_SPEC_KEYS = ("name", "why", "events", "overlay", "sound", "window")
+MAX_PREVIOUS = 5
+
+
+def _fx_snapshot(e: dict) -> dict:
+    return {k: e.get(k) for k in FX_SPEC_KEYS if e.get(k) is not None}
+
+
 @app.post("/api/fx/accept")
 async def api_fx_accept(request: Request) -> JSONResponse:
+    """Into the cut. An accepted version already there (this is a revised proposal
+    over it) is kept under `previous`, so Accept is reversible: Revert brings it back.
+    Karl, 2026-09-20: *"make sure that when effects are applied long term they are
+    reversable / we can add more on top of them."*"""
     body = await request.json()
-    e = _fx_get(str(body.get("id") or ""))
+    fx_id = str(body.get("id") or "")
+    e = fx.load(fx_home(), fx_id) or _fx_get(fx_id)
     segments = _fx_segments()
+    current = next((x for x in read_edl().get("effects") or [] if x.get("id") == fx_id), None)
+    if current is not None and _fx_snapshot(current) != _fx_snapshot(e):
+        prev = list(current.get("previous") or [])
+        prev.append({**_fx_snapshot(current), "at": current.get("verify", {}).get("at") or current.get("created")})
+        e["previous"] = prev[-MAX_PREVIOUS:]
+    elif current is not None and current.get("previous"):
+        e["previous"] = current["previous"]
     e["status"] = "accepted"
     e = fx.validate_effect(e, segments)
     _fx_put(e)
     return JSONResponse({"ok": True, "effect": _fx_urls(e)})
+
+
+@app.post("/api/fx/revert")
+async def api_fx_revert(request: Request) -> JSONResponse:
+    """Back to the version accepted before this one."""
+    body = await request.json()
+    e = _fx_get(str(body.get("id") or ""))
+    prev = list(e.get("previous") or [])
+    if not prev:
+        raise HTTPException(400, "nothing to revert to")
+    last = prev.pop()
+    for k in FX_SPEC_KEYS:
+        if k in last:
+            e[k] = last[k]
+        elif k in e and k not in ("name", "events", "overlay"):
+            e.pop(k, None)
+    e["previous"] = prev
+    e.pop("verify", None)
+    e = fx.validate_effect(e, _fx_segments())
+    _fx_put(e)
+    _fx_sound(e)
+    return JSONResponse({"ok": True, "effect": _fx_urls(e)})
+
+
+@app.post("/api/fx/restore")
+async def api_fx_restore(request: Request) -> JSONResponse:
+    """A removed effect back into the cut, as it was."""
+    body = await request.json()
+    fx_id = str(body.get("id") or "")
+    e = fx.load(fx_home(), fx_id)
+    if e is None or e.get("status") != "removed":
+        raise HTTPException(404, f"no removed effect {fx_id}")
+    e["status"] = "accepted"
+    e = fx.validate_effect(e, _fx_segments())
+    _fx_put(e)
+    return JSONResponse({"ok": True, "effect": _fx_urls(e)})
+
+
+@app.get("/api/fx/peaks")
+def api_fx_peaks(shot: str = "") -> JSONResponse:
+    """The onset peaks inside a shot — the candidate impacts the design starts from —
+    so the FX tool can draw them on its range bar."""
+    seg = _fx_seg(shot)
+    sc = load_sidecar(seg["clip"])
+    peaks = fx.onset_peaks((sc.get("tracks") or {}).get("onset") or [],
+                           float(sc.get("frame_hz") or fx.ONSET_HZ),
+                           float(seg["in"]), float(seg["out"]), top=fx.MAX_EVENTS)
+    return JSONResponse({"peaks": peaks, "in": seg["in"], "out": seg["out"]})
 
 
 @app.post("/api/fx/discard")
@@ -3675,6 +3745,7 @@ async def api_fx_discard(request: Request) -> JSONResponse:
         raise HTTPException(404, f"no proposal {fx_id}")
     if e.get("status") == "accepted" or any(x.get("id") == fx_id for x in read_edl().get("effects") or []):
         raise HTTPException(400, "that effect is accepted — remove it instead")
+    # a proposal, or a removed effect: gone for good, files and all
     (fx_home() / f"{fx_id}.json").unlink(missing_ok=True)
     shutil.rmtree(fx_home() / fx_id, ignore_errors=True)
     return JSONResponse({"ok": True})
@@ -3691,9 +3762,12 @@ async def api_fx_remove(request: Request) -> JSONResponse:
         raise HTTPException(404, f"no accepted effect {fx_id}")
     edl["effects"] = after
     write_edl(edl)
-    (fx_home() / f"{fx_id}.json").unlink(missing_ok=True)
-    shutil.rmtree(fx_home() / fx_id, ignore_errors=True)
-    return JSONResponse({"ok": True})
+    # out of the cut, not gone: the file and its renders stay, marked removed, so
+    # Restore puts it back exactly as it was; Discard is what deletes for good
+    gone = next(x for x in before if x.get("id") == fx_id)
+    gone["status"] = "removed"
+    fx.save(fx_home(), gone)
+    return JSONResponse({"ok": True, "effect": _fx_urls(gone)})
 
 
 @app.put("/api/fx/{fx_id}")

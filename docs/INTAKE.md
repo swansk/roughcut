@@ -943,6 +943,11 @@ HTML proposal with others (incl. online tools / other AI tools, ideally free)."*
       the onset search and the model confined to it, hits outside dropped, the window kept
       on the effect; a ✕ on every hit; the default tick is a click + a 3.2 kHz ping, 90 ms.
       The sound stays his to judge by ear through Iterate on the card.
+- [x] I12.7 **Karl's second feedback, answered** (2026-09-20): placing is not a choice (always,
+      priced on Design; a reference skips it); a range bar that parks the monitor and a
+      band on the timeline for the window and the hits; Remove keeps for Restore, Accept
+      keeps the previous version for Revert, effects stack per shot; the sketch shows
+      (amber over a halo, numbered marks, a HUD on the monitor, thumbnails).
 - [ ] I12.5 Karl's look — with the window set to where the rocks are, and the tick by ear.
 
 ## Lanes in flight

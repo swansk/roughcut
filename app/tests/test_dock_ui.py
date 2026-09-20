@@ -259,7 +259,8 @@ def test_adding_from_the_bin_lands_at_the_playhead(page):
     assert shots(page) == [["CLIP_A.MP4", 1.0, 3.0], ["CLIP_C.MP4", 0.5, 2.0],
                            ["CLIP_B.MP4", 0.0, 2.0]]
     assert page.locator("#undo").get_attribute("title").startswith("undo: insert")
-    assert page.evaluate("[...tl.state.sel]") == [page.evaluate("segs[1].id")]
+    # one evaluate: the autosave may re-key the new shot between two round trips
+    assert page.evaluate("[...tl.state.sel][0] === segs[1].id") is True
     # the card flipped to where it is in the cut, before any save landed
     assert "in the cut · shot 2" in page.locator("#library .keep", has_text="CLIP_C").inner_text()
     assert page.locator("#total").inner_text() == "0:05.5"

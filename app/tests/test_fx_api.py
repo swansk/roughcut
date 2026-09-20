@@ -216,8 +216,52 @@ def test_accept_moves_it_into_the_edl_and_remove_takes_it_out(stubbed, client):
     assert client.post("/api/fx/remove", json={"id": fx_id}).status_code == 200
     edl = json.loads(project["edl"].read_text(encoding="utf-8"))
     assert edl["effects"] == []
-    assert client.get("/api/fx").json()["effects"] == []
+    # removed, not gone: listed as such for Restore; Discard is what deletes for good
+    lst = client.get("/api/fx").json()["effects"]
+    assert [(x["id"], x["status"]) for x in lst] == [(fx_id, "removed")]
     assert client.post("/api/fx/remove", json={"id": fx_id}).status_code == 404
+    assert client.post("/api/fx/discard", json={"id": fx_id}).status_code == 200
+    assert client.get("/api/fx").json()["effects"] == []
+
+
+def test_remove_keeps_the_effect_for_restore_and_accept_keeps_the_previous_for_revert(stubbed, client):
+    """Karl: effects applied long term must be reversible, and more can go on top."""
+    project = stubbed
+    shot = _seed(project, client)
+    job = client.post("/api/fx/design", json={"shot": shot, "note": "hit markers"}).json()["job"]
+    a = _wait(client, job)["result"]["id"]
+    job = client.post("/api/fx/design", json={"shot": shot, "note": "a flash too"}).json()["job"]
+    b = _wait(client, job)["result"]["id"]
+    assert client.post("/api/fx/accept", json={"id": a}).status_code == 200
+    assert client.post("/api/fx/accept", json={"id": b}).status_code == 200
+    edl = json.loads(project["edl"].read_text(encoding="utf-8"))
+    assert [e["id"] for e in edl["effects"]] == [a, b]          # two on one shot, in order
+    # remove keeps it: listed as removed, out of the EDL, files intact
+    r = client.post("/api/fx/remove", json={"id": a})
+    assert r.status_code == 200 and r.json()["effect"]["status"] == "removed"
+    edl = json.loads(project["edl"].read_text(encoding="utf-8"))
+    assert [e["id"] for e in edl["effects"]] == [b]
+    lst = {e["id"]: e for e in client.get("/api/fx").json()["effects"]}
+    assert lst[a]["status"] == "removed" and lst[a]["sound_url"]
+    # restore puts it back as it was
+    assert client.post("/api/fx/restore", json={"id": a}).status_code == 200
+    edl = json.loads(project["edl"].read_text(encoding="utf-8"))
+    assert sorted(e["id"] for e in edl["effects"]) == sorted([a, b])
+    assert client.post("/api/fx/restore", json={"id": a}).status_code == 404
+    # a revision accepted over an accepted one keeps the old version; revert restores it
+    job = client.post("/api/fx/revise", json={"id": a, "note": "make them red"}).json()["job"]
+    _wait(client, job)
+    assert client.post("/api/fx/accept", json={"id": a}).status_code == 200
+    e = next(x for x in client.get("/api/fx").json()["effects"] if x["id"] == a)
+    assert {s["color"] for s in e["overlay"]["shapes"]} == {"#ff0000"}
+    assert len(e["previous"]) == 1 and e["previous"][0]["overlay"]["shapes"][0]["color"] == "#ffffff"
+    assert client.post("/api/fx/revert", json={"id": a}).status_code == 200
+    e = next(x for x in client.get("/api/fx").json()["effects"] if x["id"] == a)
+    assert {s["color"] for s in e["overlay"]["shapes"]} == {"#ffffff"} and e["previous"] == []
+    assert client.post("/api/fx/revert", json={"id": a}).status_code == 400
+    # the peaks the design starts from are readable
+    r = client.get(f"/api/fx/peaks?shot={shot}")
+    assert r.status_code == 200 and isinstance(r.json()["peaks"], list)
 
 
 def test_discard_drops_a_proposal_and_its_files(stubbed, client):

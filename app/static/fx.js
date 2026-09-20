@@ -82,6 +82,9 @@
     priceFor: null,
     reference: null,         // the sketch's reference, sent with the next Design
     window: null,            // {t0, t1} clip seconds — the human's window on the shot, or null
+    peaks: [],               // GET /api/fx/peaks for the shot — the candidate impacts, drawn on the bar
+    peaksFor: null,
+    drag: null,              // {end: 't0'|'t1'} while a bar handle is dragged
     iter: {},                // id → the iterate box's text
     iterOpen: new Set(),
     jobs: new Map(),         // fx job id → state last seen
@@ -127,14 +130,28 @@
   }
   function seg(id) { return SEGS().find((s) => String(s.id) === String(id)) || null; }
   function forShot(id) { return id == null ? [] : S.effects.filter((e) => String(e.shot) === String(id)); }
+  /* the ones that draw, sound and count: not the removed (kept for Restore) */
+  function activeForShot(id) { return forShot(id).filter((e) => e.status !== 'removed'); }
   function shotIndex(id) { return SEGS().findIndex((s) => String(s.id) === String(id)); }
 
   function badge() {
-    if (window.dock && typeof dock.badge === 'function') dock.badge('fx', forShot(S.shot).length);
+    if (window.dock && typeof dock.badge === 'function') dock.badge('fx', activeForShot(S.shot).length);
+  }
+
+  async function fetchPeaks(id) {
+    if (!id) { S.peaks = []; return; }
+    S.peaksFor = id;
+    try {
+      const d = await api('GET', `/api/fx/peaks?shot=${encodeURIComponent(id)}`);
+      if (S.peaksFor === id) { S.peaks = Array.isArray(d.peaks) ? d.peaks : []; paint(true); }
+    } catch (e) {
+      if (S.peaksFor === id) S.peaks = [];
+    }
   }
 
   async function fetchPrice(id) {
-    if (!id) { S.price = null; return; }
+    if (!id) { S.price = null; S.peaks = []; return; }
+    fetchPeaks(id);
     S.priceFor = id;
     try {
       const d = await api('GET', `/api/fx/price?place=1&shot=${encodeURIComponent(id)}`);
@@ -223,7 +240,15 @@
         await refresh();
       } else if (name === 'remove') {
         await api('POST', '/api/fx/remove', { id: e.id });
-        say(`${e.name}: removed from the cut`);
+        say(`${e.name}: out of the cut — Restore puts it back`);
+        await refresh();
+      } else if (name === 'restore') {
+        await api('POST', '/api/fx/restore', { id: e.id });
+        say(`${e.name}: back in the cut`);
+        await refresh();
+      } else if (name === 'revert') {
+        await api('POST', '/api/fx/revert', { id: e.id });
+        say(`${e.name}: the previous version is back`);
         await refresh();
       }
     } catch (err) {
@@ -236,7 +261,10 @@
     const note = (S.note || '').trim();
     if (!shot) { say('select a shot on the timeline first'); return; }
     if (!note) { say('say what the effect is'); return; }
-    const body = { shot, note, place: !!S.place };
+    // placing is not optional: without it the anchor is the frame's centre, which is
+    // never what anyone asked for (Karl, 2026-09-20). A drawn reference carries the
+    // anchors itself and skips the call.
+    const body = { shot, note, place: !S.reference };
     if (S.reference) body.reference = S.reference;
     const w = windowFor(shot);
     if (w) body.window = [w.t0, w.t1];
@@ -315,15 +343,22 @@
         + `</div><ul class="fxchecks">${v.checks.map(checkRow).join('')}</ul></div>`
       : '';
     const proposed = e.status === 'proposed';
-    const btns = `<div class="fxbtns">`
-      + `<button data-act="preview" title="play this shot in the monitor with the effect drawn and heard">Preview</button>`
-      + `<button data-act="verify" title="render a proof of the shot and run the checklist">Verify</button>`
-      + `<button data-act="iterate" title="tell the model what to change">Iterate</button>`
-      + (proposed
-        ? `<button data-act="accept" class="primary" title="into the cut — the render draws it">Accept</button>`
-          + `<button data-act="discard" title="drop the proposal and its files">Discard</button>`
-        : `<button data-act="remove" title="out of the cut">Remove</button>`)
-      + `</div>`;
+    const removed = e.status === 'removed';
+    const prev = Array.isArray(e.previous) ? e.previous.length : 0;
+    const btns = removed
+      ? `<div class="fxbtns"><span class="hint">out of the cut — kept as it was</span><div class="grow"></div>`
+        + `<button data-act="restore" class="primary" title="back into the cut, exactly as it was">Restore</button>`
+        + `<button data-act="discard" title="delete it for good, files and all">Delete</button></div>`
+      : `<div class="fxbtns">`
+        + `<button data-act="preview" title="play this shot in the monitor with the effect drawn and heard">Preview</button>`
+        + `<button data-act="verify" title="render a proof of the shot and run the checklist">Verify</button>`
+        + `<button data-act="iterate" title="tell the model what to change">Iterate</button>`
+        + (proposed
+          ? `<button data-act="accept" class="primary" title="into the cut — the render draws it">Accept</button>`
+            + `<button data-act="discard" title="drop the proposal and its files">Discard</button>`
+          : `<button data-act="remove" title="out of the cut — kept, so Restore can put it back">Remove</button>`
+            + (prev ? `<button data-act="revert" title="back to the version accepted before this one (${prev} kept)">Revert</button>` : ''))
+        + `</div>`;
     const iter = S.iterOpen.has(e.id)
       ? `<div class="fxiter"><input type="text" placeholder="make them red and bigger · one hit only, the big one" value="${esc(S.iter[e.id] || '')}">`
         + `<button data-act="revise" class="primary">Go</button></div>`
@@ -342,6 +377,7 @@
       + (sel >= 0 ? `<div class="fxpick hint">hit ${sel + 1} selected · click the monitor (paused) to move it there</div>` : '')
       + checks
       + (extras.length ? `<div class="fxextras hint">${extras.join(' · ')}</div>` : '')
+      + (e.ref_url ? `<img class="fxrefimg" src="${esc(e.ref_url)}" alt="the reference drawn on the frame" title="the frame you drew on — the marks are the anchors">` : '')
       + btns + iter + `</div>`;
   }
 
@@ -355,16 +391,16 @@
       ? `<div class="fxref">reference · ${S.reference.marks.length} mark${S.reference.marks.length === 1 ? '' : 's'} at ${fmtT(S.reference.t)}`
         + (S.reference.goal ? ` · <i>${esc(S.reference.goal)}</i>` : '')
         + ` <button class="ghost" data-act="clearref" title="forget the drawing">✕</button></div>`
+        + (S.reference.png ? `<img class="fxrefimg" src="${S.reference.png}" alt="the reference" title="the frame with your marks — goes with the next Design">` : '')
       : '';
     const sk = S.sketch ? sketchHtml() : '';
     return `<div class="fxdesign">`
       + `<div class="fxdhead hint">design an effect for this shot</div>`
       + `<textarea id="fxNote" placeholder="hit markers where my skis hit the rocks, with the sound" rows="3">${esc(S.note)}</textarea>`
       + whereHtml()
-      + `<label class="fxplace" title="a priced model call looks at a frame around each impact and puts the marker on the thing you named"><input type="checkbox" id="fxPlace"${S.place ? ' checked' : ''}> place on the frames${price}</label>`
       + ref + sk
-      + `<div class="fxbtns"><button id="fxSketch"${S.sketch ? ' disabled' : ''} title="pause the monitor and draw on the frame: where the markers go">Draw a reference</button>`
-      + `<div class="grow"></div><button id="fxDesign" class="primary"${designing ? ' disabled' : ''}>${designing ? 'Designing…' : 'Design'}</button></div>`
+      + `<div class="fxbtns"><button id="fxSketch"${S.sketch ? ' disabled' : ''} title="pause the monitor and draw on the frame: where the markers go — the marks become the anchors, no placing call">Draw a reference</button>`
+      + `<div class="grow"></div><button id="fxDesign" class="primary"${designing ? ' disabled' : ''} title="${S.reference ? 'one design call; your marks are the anchors' : 'one design call, then a look at a frame around each impact to put the marker on the thing you named'}">${designing ? 'Designing…' : `Design${S.reference ? ' <span class="fxprice">≈ $0.05</span>' : price}`}</button></div>`
       + (busy ? `<div class="fxstate hint">${esc(busy.label)}${busy.detail ? ` — ${esc(busy.detail)}` : ''}</div>` : '')
       + `</div>`;
   }
@@ -407,7 +443,106 @@
       + `<button class="ghost" id="fxToHead" title="to the playhead">◀ playhead</button>`
       + `<span class="hint fxwhole">${whole ? 'the whole shot' : `${fmtT(w.t0)}–${fmtT(w.t1)}`}</span>`
       + (whole ? '' : `<button class="ghost" id="fxWholeShot" title="the whole shot again">✕</button>`)
-      + `</div>`;
+      + `</div>` + barHtml(r, w);
+  }
+
+  /* The range bar: the shot from its in to its out, the onset peaks as ticks (the
+   * candidate impacts the design starts from), the shot's hits as marks, the window
+   * as a band with two handles, the playhead as a line. Dragging a handle parks the
+   * monitor on that frame — it never plays — and a click anywhere on the bar parks it
+   * too. Karl, 2026-09-20: "It is very hard to select the start / end time frame …
+   * the video plays when you click on the clip." */
+  function barHtml(r, w) {
+    const span = Math.max(0.001, r.t1 - r.t0);
+    const pct = (t) => `${Math.max(0, Math.min(100, ((t - r.t0) / span) * 100)).toFixed(2)}%`;
+    const peaks = (S.peaks || []).map((p) =>
+      `<i class="pk" style="left:${pct(p.t)};opacity:${(0.35 + 0.65 * (p.strength || 0.5)).toFixed(2)}" title="onset peak ${fmtT(p.t)}"></i>`).join('');
+    const hits = activeForShot(S.shot).flatMap((e) => (e.events || []).map((ev) =>
+      `<i class="hit${e.status === 'proposed' ? ' proposed' : ''}" style="left:${pct(ev.t)}" title="${esc(e.name)} · ${fmtT(ev.t)}"></i>`)).join('');
+    const t = liveClipTime();
+    const ph = t != null ? `<i class="ph" style="left:${pct(t)}"></i>` : '';
+    return `<div class="fxbar" id="fxBar" title="click to park the monitor there · drag a handle to set the window">`
+      + `<div class="win" style="left:${pct(w.t0)};width:${(((w.t1 - w.t0) / span) * 100).toFixed(2)}%">`
+      + `<b class="h h0" data-end="t0" title="from — drag"></b><b class="h h1" data-end="t1" title="to — drag"></b></div>`
+      + peaks + hits + ph
+      + `<span class="lbl l0">${fmtT(r.t0)}</span><span class="lbl l1">${fmtT(r.t1)}</span></div>`;
+  }
+
+  function barT(ev) {
+    const bar = $('#fxBar'), r = shotRange(S.shot);
+    if (!bar || !r) return null;
+    const b = bar.getBoundingClientRect();
+    const f = Math.max(0, Math.min(1, (ev.clientX - b.left) / Math.max(1, b.width)));
+    return round4(r.t0 + f * (r.t1 - r.t0));
+  }
+
+  let parkTimer = null;
+  function park(t) {
+    const tl = TL(), sg = seg(S.shot);
+    if (!tl || !sg) return;
+    pause();
+    const start = tl.filmStart(sg.id);
+    if (start >= 0) tl.seek(start + (t - sg.in));
+  }
+  function parkSoon(t) {
+    clearTimeout(parkTimer);
+    parkTimer = setTimeout(() => park(t), 90);
+  }
+
+  function onBarDown(ev) {
+    if (ev.button !== 0) return;
+    const h = ev.target.closest('.fxbar .h');
+    const t = barT(ev);
+    if (t == null) return;
+    ev.preventDefault();
+    if (h) {
+      S.drag = { end: h.dataset.end };
+      try { h.setPointerCapture(ev.pointerId); } catch (e) { /* fine */ }
+      setWindowEnd(S.drag.end, t);
+      parkSoon(t);
+      const move = (e2) => { const tt = barT(e2); if (tt != null) { setWindowEnd(S.drag.end, tt); parkSoon(tt); } };
+      const up = () => { h.removeEventListener('pointermove', move); S.drag = null; paint(true); };
+      h.addEventListener('pointermove', move);
+      h.addEventListener('pointerup', up, { once: true });
+      h.addEventListener('pointercancel', up, { once: true });
+      return;
+    }
+    park(t);
+    paint(true);
+  }
+
+  /* ------------------------------------------------------------ the timeline band */
+  /* The window and the hits, drawn on the timeline itself while the FX tool is open:
+   * a translucent band over the film time the window covers, a tick per hit. The
+   * timeline's canvas is the positioned box its lanes and drop line live in. */
+  function paintBand() {
+    const tl = TL();
+    const canvas = tl && tl.el && tl.el.canvas;
+    let band = document.querySelector('#tl .fx-tlband');
+    const open = !!(window.dock && typeof dock.current === 'function' && dock.current() === 'fx');
+    const sg = S.shot != null ? seg(S.shot) : null;
+    if (!canvas || !open || !sg || typeof tl.timeToX !== 'function' || typeof tl.filmStart !== 'function') {
+      if (band) band.remove();
+      return;
+    }
+    const start = tl.filmStart(sg.id);
+    if (!(start >= 0)) { if (band) band.remove(); return; }
+    const r = shotRange(S.shot);
+    const w = windowFor(S.shot) || r;
+    if (!band) {
+      band = document.createElement('div');
+      band.className = 'fx-tlband';
+      canvas.appendChild(band);
+    }
+    const x0 = tl.timeToX(start + (w.t0 - sg.in)), x1 = tl.timeToX(start + (w.t1 - sg.in));
+    band.style.left = `${x0}px`;
+    band.style.width = `${Math.max(2, x1 - x0)}px`;
+    band.classList.toggle('whole', !windowFor(S.shot));
+    const ticks = activeForShot(S.shot).flatMap((e) => (e.events || [])
+      .filter((ev) => ev.t >= sg.in && ev.t < sg.out)
+      .map((ev) => tl.timeToX(start + (ev.t - sg.in)) - x0));
+    band.innerHTML = ticks.map((x) => `<i style="left:${x.toFixed(1)}px"></i>`).join('')
+      + `<span>${esc(windowFor(S.shot) ? `fx · ${fmtT(w.t0)}–${fmtT(w.t1)}` : 'fx · the whole shot')}</span>`;
   }
   function setWindowEnd(which, value) {
     const r = shotRange(S.shot);
@@ -433,6 +568,7 @@
       S.shot, S.effects, S.sel, S.price,
       S.reference && [S.reference.t, S.reference.marks.length, S.reference.goal],
       S.window && [S.window.t0, S.window.t1],
+      S.peaks.length, S.drag && S.drag.end,
       S.sketch && [S.sketch.strokes.length, S.sketch.goal], [...S.iterOpen], S.place,
       S.busy && [S.busy.id, S.busy.state, S.busy.detail, S.busy.milestone],
     ]);
@@ -448,6 +584,7 @@
     S.sig = sig;
     const sg = S.shot != null ? seg(S.shot) : null;
     if (!sg) {
+      paintBand();
       el.innerHTML = `<div class="fxtitle">FX</div>`
         + `<div class="hint">select a shot on the timeline — its effects and the design box appear here</div>`
         + (S.effects.length ? `<div class="hint" style="margin-top:6px">${S.effects.length} effect${S.effects.length === 1 ? '' : 's'} in this cut</div>` : '');
@@ -459,9 +596,15 @@
       + (list.length ? list.map(cardHtml).join('')
         : `<div class="hint fxempty">no effects on this shot yet</div>`)
       + designHtml();
+    paintBand();
+  }
+
+  function onToolPointerDown(e) {
+    if (e.target.closest('#fxBar')) onBarDown(e);
   }
 
   function onToolClick(e) {
+    if (e.target.closest('#fxBar')) return;           // the bar is pointerdown's
     const btn = e.target.closest('button');
     if (btn) {
       if (btn.id === 'fxDesign') { design(); return; }
@@ -684,7 +827,7 @@
     if (!c || !O.ctx) return;
     const v = live();
     const sg = liveShot();
-    const effs = sg ? forShot(sg.id) : [];
+    const effs = sg ? activeForShot(sg.id) : [];
     const on = !!(v && effs.length);
     c.classList.toggle('live', on);
     if (!on && !S.sketch) return;
@@ -747,7 +890,7 @@
       // a hand-over lands the new element at the shot's in-point: a hit right there counts
       if (prev == null && Math.abs(t - sg.in) < 0.25) prev = Math.min(t, sg.in);
       if (prev != null && !v.paused && t > prev) {
-        for (const e of forShot(sg.id)) {
+        for (const e of activeForShot(sg.id)) {
           (e.events || []).forEach((ev, i) => {
             if (ev.t >= sg.in && ev.t < sg.out && ev.t >= prev && ev.t < t) sound(e, i);
           });
@@ -845,13 +988,49 @@
       O.canvas.height = v.videoHeight;
     }
     O.canvas.classList.add('sketch');
+    mountHud();
     draw();
     paint();
+  }
+
+  /* The sketch's controls on the monitor itself — the goal, Use it, Cancel, the count —
+   * so the drawing and its buttons are in the same place (the tool's own copy sat a
+   * screen away: Karl could delete strokes but not see what he had drawn). */
+  function mountHud() {
+    const sc = $('.screen');
+    if (!sc || $('#fxHud')) return;
+    const hud = document.createElement('div');
+    hud.id = 'fxHud';
+    hud.innerHTML = `<span class="fxhudn">0 strokes</span>`
+      + `<input type="text" id="fxHudGoal" placeholder="the skis — put the markers here" title="what the marks mean">`
+      + `<button id="fxHudUse" class="primary" disabled>Use it</button><button id="fxHudCancel">Cancel</button>`
+      + `<span class="hint">one stroke per hit · <kbd>⌫</kbd> undoes · <kbd>esc</kbd> cancels</span>`;
+    hud.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+    hud.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const b = ev.target.closest('button');
+      if (!b) return;
+      if (b.id === 'fxHudUse') useSketch();
+      else if (b.id === 'fxHudCancel') cancelSketch();
+    });
+    hud.addEventListener('input', (ev) => { if (ev.target.id === 'fxHudGoal' && S.sketch) S.sketch.goal = ev.target.value; });
+    hud.addEventListener('keydown', (ev) => { ev.stopPropagation(); if (ev.key === 'Enter') useSketch(); });
+    sc.appendChild(hud);
+    updateHud();
+  }
+  function updateHud() {
+    const hud = $('#fxHud');
+    if (!hud || !S.sketch) return;
+    const n = S.sketch.strokes.length;
+    hud.querySelector('.fxhudn').textContent = `${n} stroke${n === 1 ? '' : 's'}`;
+    hud.querySelector('#fxHudUse').disabled = !n;
   }
 
   function endSketch() {
     S.sketch = null;
     if (O.canvas) O.canvas.classList.remove('sketch');
+    const hud = $('#fxHud');
+    if (hud) hud.remove();
     draw();
     paint(true);
   }
@@ -923,30 +1102,36 @@
       const r = O.canvas.getBoundingClientRect();
       scale = Math.min(r.width / W, r.height / H) || 1;
     } catch (e) { scale = 1; }
+    // amber over a dark halo: a 3-px accent line was invisible on snow
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
-    ctx.strokeStyle = accent();
-    ctx.fillStyle = accent();
-    ctx.lineWidth = Math.max(1.5, 3 / scale);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    for (const s of list) {
-      if (!s.length) continue;
+    const path = (s) => {
       ctx.beginPath();
       ctx.moveTo(s[0].x * W, s[0].y * H);
       for (let k = 1; k < s.length; k++) ctx.lineTo(s[k].x * W, s[k].y * H);
       if (s.length === 1) ctx.lineTo(s[0].x * W + 0.01, s[0].y * H);
-      ctx.stroke();
-    }
-    for (const s of sk.strokes) {
+    };
+    for (const s of list) {
       if (!s.length) continue;
-      const [cx, cy] = centroid(s);
-      ctx.beginPath();
-      ctx.arc(cx * W, cy * H, Math.max(2, 4 / scale), 0, Math.PI * 2);
-      ctx.fill();
+      path(s); ctx.strokeStyle = 'rgba(10,10,14,.75)'; ctx.lineWidth = Math.max(4, 10 / scale); ctx.stroke();
+      path(s); ctx.strokeStyle = '#e0b050'; ctx.lineWidth = Math.max(2, 5 / scale); ctx.stroke();
     }
+    sk.strokes.forEach((s, i) => {
+      if (!s.length) return;
+      const [cx, cy] = centroid(s);
+      const rad = Math.max(5, 11 / scale);
+      ctx.beginPath(); ctx.arc(cx * W, cy * H, rad + 2, 0, Math.PI * 2); ctx.fillStyle = 'rgba(10,10,14,.8)'; ctx.fill();
+      ctx.beginPath(); ctx.arc(cx * W, cy * H, rad, 0, Math.PI * 2); ctx.fillStyle = '#e0b050'; ctx.fill();
+      ctx.fillStyle = '#14100a';
+      ctx.font = `bold ${Math.max(9, 14 / scale)}px system-ui, sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(String(i + 1), cx * W, cy * H + 0.5);
+    });
     ctx.restore();
+    updateHud();
   }
 
   function onSketchDown(ev) {
@@ -1050,6 +1235,7 @@
     const el = $('#fx');
     if (!el) return;
     el.addEventListener('click', onToolClick);
+    el.addEventListener('pointerdown', onToolPointerDown);
     el.addEventListener('input', onToolInput);
     el.addEventListener('change', onToolInput);
     el.addEventListener('keydown', onToolKey);
@@ -1059,6 +1245,11 @@
       t.on('change', () => { onSelect(); paint(); badge(); });
     }
     setInterval(onSelect, 500);          // playback moves the anchor without a select event
+    if (t && typeof t.on === 'function') {
+      t.on('zoom', paintBand);
+      t.on('playhead', () => { paintBand(); if (!S.drag) paint(); });   // the bar's playhead line
+    }
+    setInterval(paintBand, 700);         // the dock's tool changes without an event
     mountOverlay();
     mountSketch();
     mountNudge();
