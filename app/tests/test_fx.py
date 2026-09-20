@@ -253,3 +253,26 @@ def test_synth_filters_sweep_noise_and_the_ceiling(tmp_path):
     z, _ = _read_wav(fx.synth_sound(loud, tmp_path / "loud.wav"))
     peak_db = 20 * np.log10(np.abs(z).max())
     assert -1.05 < peak_db <= -0.99                              # limited to -1 dBFS, not clipped
+
+
+# ------------------------------------------------------------ the part graph
+
+def test_part_graph_strings_one_overlay_per_event_and_one_amix(tmp_path):
+    e = _effect()
+    evs = fx.events_in_shot(e, SEG)
+    extra, graph, vout, aout = fx.part_graph([(e, evs)], 320, 180, 24, tmp_path)
+    assert (vout, aout) == ("vout", "aout")
+    assert extra[::2] == ["-i"] * 3 and len(extra) == 6           # two sprites + one wav
+    assert Path(extra[1]).suffix == ".mov" and Path(extra[5]).suffix == ".wav"
+    assert graph.count("overlay=0:0") == 2 and graph.count("amix=") == 1
+    assert "setpts=PTS-STARTPTS+0.5000/TB" in graph and "between(t,1.4000,1.7500)" in graph
+    assert "adelay=24000S|24000S" in graph and "adelay=67200S|67200S" in graph
+    assert "amix=inputs=3:normalize=0:duration=first[aout]" in graph
+    assert graph.startswith("[1:v]") and "[vbase]" in graph and "[abase]" in graph
+    # silent effect: the audio passes straight through
+    silent = _effect(sound=None)
+    extra2, graph2, vout2, aout2 = fx.part_graph([(silent, evs)], 320, 180, 24, tmp_path / "s")
+    assert (vout2, aout2) == ("vout", "abase") and "amix" not in graph2 and len(extra2) == 4
+    # nothing in the shot: nothing to do
+    assert fx.part_graph([(e, [])], 320, 180, 24, tmp_path / "n") == ([], "", "vbase", "abase")
+    assert fx.part_graph([], 320, 180, 24, tmp_path / "n") == ([], "", "vbase", "abase")

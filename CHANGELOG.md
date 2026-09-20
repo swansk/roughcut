@@ -10,6 +10,15 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The part graph (INTAKE M12, lane fx-core)** — `fx.part_graph` renders one sprite `.mov`
+  per event and one `.wav` per effect into the workdir and returns the extra `-i`s plus a
+  `filter_complex` fragment: `setpts=PTS-STARTPTS+t/TB` delays each sprite to its clip
+  second in the part, `overlay=0:0:eof_action=pass:enable='between(t,…)'` draws it, the WAV
+  is resampled and formatted to 48 kHz stereo float, `asplit` to one `adelay=<samples>S`
+  per event, and one `amix=normalize=0:duration=first` mixes them under the base; labels
+  `[vout]` / `[aout]`; a silent effect passes `[abase]` through; no events → nothing. The
+  fps may be the profile's `24000/1001` string. Tests: the strings, the input counts, the
+  pass-through cases.
 - **The sprite rasteriser (INTAKE M12, lane fx-core)** — `fx.render_overlay_frames` draws a
   sprite's shapes (line with round caps, circle, ring, rect with its own rotate, polygon,
   text in DejaVu Sans Bold when present) in the unit box at 2× and downsamples with LANCZOS

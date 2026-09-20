@@ -734,6 +734,8 @@ def synth_sound(sound: dict, out: Path, *, sr: int = 48000) -> Path:
     return out
 
 
+# ---- the part's graph
+
 def part_graph(effects: list[tuple[dict, list[dict]]], w: int, h: int, fps: float,
                workdir: Path, *, vin: str = "vbase", ain: str = "abase") -> tuple[list[str], str, str, str]:
     """For one part: `effects` is `[(effect, events_in_shot(effect, seg)), …]`. Renders
@@ -744,8 +746,66 @@ def part_graph(effects: list[tuple[dict, list[dict]]], w: int, h: int, fps: floa
     `t_part` and `enable=between(t, t_part, t_part + duration)`, an `adelay` per
     event and one `amix` (`normalize=0`) — and the two output labels. Input indexes
     start at 1 (the part's source is input 0). No effects → `([], "", vin, ain)`."""
-    raise NotImplementedError("lane fx-core")
-
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    extra: list[str] = []
+    vparts: list[str] = []
+    aparts: list[str] = []
+    mix_inputs: list[str] = []
+    cur = vin
+    idx = 1
+    rate = _fps_value(fps)
+    for effect, events in effects:
+        if not events:
+            continue
+        overlay = effect["overlay"]
+        eid = str(effect.get("id") or "fx")
+        for j, ev in enumerate(events):
+            t0 = float(ev["t_part"])
+            mov = workdir / f"{eid}_ev{j:02d}.mov"
+            render_overlay_mov(overlay, w, h, rate, mov, anchor=(ev["x"], ev["y"]))
+            extra += ["-i", str(mov)]
+            lab = f"fxv{idx}"
+            nxt = f"fxo{idx}"
+            vparts.append(f"[{idx}:v]setpts=PTS-STARTPTS+{t0:.4f}/TB[{lab}]")
+            vparts.append(f"[{cur}][{lab}]overlay=0:0:eof_action=pass"
+                          f":enable='between(t,{t0:.4f},{t0 + overlay['duration']:.4f})'[{nxt}]")
+            cur = nxt
+            idx += 1
+        if effect.get("sound"):
+            wav = workdir / f"{eid}_sound.wav"
+            synth_sound(effect["sound"], wav)
+            extra += ["-i", str(wav)]
+            # one WAV per effect, split to one delayed copy per event; amix wants
+            # every input at one rate and layout
+            conv = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo"
+            if len(events) > 1:
+                outs = "".join(f"[fxs{idx}_{j}]" for j in range(len(events)))
+                aparts.append(f"[{idx}:a]{conv},asplit={len(events)}{outs}")
+                heads = [f"[fxs{idx}_{j}]" for j in range(len(events))]
+                chain = ""
+            else:
+                heads = [f"[{idx}:a]"]
+                chain = conv + ","
+            for j, ev in enumerate(events):
+                samples = int(round(float(ev["t_part"]) * 48000))
+                lab = f"fxa{idx}_{j}"
+                aparts.append(f"{heads[j]}{chain}adelay={samples}S|{samples}S[{lab}]")
+                mix_inputs.append(f"[{lab}]")
+            idx += 1
+    if not vparts and not aparts:
+        return [], "", vin, ain
+    vout, aout = vin, ain
+    if vparts:
+        # rename the last overlay's label to the fixed output label
+        vparts[-1] = vparts[-1][: vparts[-1].rfind("[")] + "[vout]"
+        vout = "vout"
+    if mix_inputs:
+        aparts.append(f"[{ain}]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[fxabase]")
+        aparts.append(f"[fxabase]{''.join(mix_inputs)}amix=inputs={len(mix_inputs) + 1}"
+                      f":normalize=0:duration=first[aout]")
+        aout = "aout"
+    return extra, ";".join(vparts + aparts), vout, aout
 
 
 def frames_for(proxy: Path, times: list[float], out_dir: Path, *, width: int = 640) -> list[Path]:
