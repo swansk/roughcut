@@ -133,6 +133,35 @@ def test_the_dock_fits_the_viewport_and_never_asks_the_page_to_scroll(page):
     assert page.evaluate("getComputedStyle(document.querySelector('#tools')).overflowY") == "auto"
 
 
+def test_the_dock_resizes_by_its_left_edge_and_the_timeline_refits(page):
+    """Drag the dock's left edge: the dock takes the width, the main column and the
+    timeline's view take the rest, the width is remembered; double-click resets."""
+    w0 = page.evaluate("dock.width()")
+    view0 = page.evaluate("document.querySelector('#tl .tl-view').getBoundingClientRect().width")
+    hb = page.locator("#dockHandle").bounding_box()
+    x = hb["x"] + hb["width"] / 2
+    y = hb["y"] + 200
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x - 60, y, steps=4)
+    page.mouse.move(x - 120, y, steps=4)
+    page.mouse.up()
+    w1 = page.evaluate("dock.width()")
+    assert w1 == pytest.approx(w0 + 120, abs=3), (w0, w1)
+    assert page.evaluate("document.querySelector('#dock').getBoundingClientRect().width") == pytest.approx(w1, abs=2)
+    page.wait_for_function(
+        f"document.querySelector('#tl .tl-view').getBoundingClientRect().width < {view0} - 100")
+    assert page.locator("#tl .blk").count() == 2       # the timeline re-fit, nothing lost
+    page.reload()
+    page.wait_for_selector("#tl .blk")
+    assert page.evaluate("dock.width()") == w1          # remembered
+    page.locator("#dockHandle").dblclick()
+    assert page.evaluate("dock.width()") == w0
+    # the icons and labels are on the rail
+    assert page.locator("#rail .tool svg").count() == 4
+    assert [t.strip().lower() for t in page.locator("#rail .tool span").all_inner_texts()] == ["bin", "ask", "sound", "out"]
+
+
 def test_the_rail_opens_one_tool_at_a_time_and_remembers_it(page):
     assert page.evaluate("dock.current()") == "bin"
     assert page.locator("#library").is_visible()

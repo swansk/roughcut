@@ -10,6 +10,12 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The dock resizes and wears icons (INTAKE M11, I11.6)** — drag the dock's left edge
+  to set its width (300–720 px; the main column and the timeline re-fit; remembered per
+  browser; double-click resets; `dock.width()`), an icon and a label on every rail tool,
+  accent badges, rounded controls and a filled selected tab in the panel. Karl,
+  2026-09-20: *"make it so we can drag / change the size of the right tool area … icons
+  for bin ask, sound, out."* One more `test_dock_ui.py` test drives the drag.
 - **The dock (INTAKE M11)** — the board's right column is a rail of tools and one
   panel the height of the viewport that scrolls inside itself (`index.html`, `/dock.js`),
   in place of eight panels stacked 2,900 px tall beside a 900 px viewport. Karl's calls

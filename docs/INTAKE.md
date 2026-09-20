@@ -871,6 +871,9 @@ grid, transitions.
       row), space plays in the bin, the overlay, the popover; the browser tests that reach
       into a closed tool open it first (`dock.open`).
 - [ ] I11.5 Live on Killington: Karl's look at the dock.
+- [x] I11.6 **Resize and icons** (Karl, 2026-09-20): the dock's left edge drags its width,
+      remembered per browser, double-click resets; icons and labels on the rail; the
+      panel's controls tidied. `test_dock_ui.py` 9 tests.
 
 ## Lanes in flight
 

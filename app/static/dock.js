@@ -105,6 +105,7 @@
     if (!want || !open(want, { remember: false })) open('bin', { remember: false });
 
     fit();
+    initResize();
     const h = $('header');
     if (h && 'ResizeObserver' in window) new ResizeObserver(fit).observe(h);
     window.addEventListener('resize', fit);
@@ -134,7 +135,48 @@
     }, true);
   }
 
-  window.dock = { open, reveal, badge, keys, project, fit, current: () => cur };
+  /* ------------------------------------------------------------ the width */
+  const WKEY = 'roughcut.dock.width';
+  const MIN_W = 300, MAX_W = 720;
+  function width(px) {
+    if (px == null) {
+      const v = getComputedStyle(document.documentElement).getPropertyValue('--dock-w');
+      return parseFloat(v) || 0;
+    }
+    const w = Math.round(Math.max(MIN_W, Math.min(MAX_W, px)));
+    document.documentElement.style.setProperty('--dock-w', `${w}px`);
+    return w;
+  }
+  function resetWidth() {
+    document.documentElement.style.removeProperty('--dock-w');
+    try { localStorage.removeItem(WKEY); } catch (e) { /* fine */ }
+  }
+  function initResize() {
+    const h = $('#dockHandle'), dock = $('#dock');
+    if (!h || !dock) return;
+    let saved = null;
+    try { saved = Number(localStorage.getItem(WKEY)); } catch (e) { saved = null; }
+    if (saved && saved >= MIN_W && saved <= MAX_W) width(saved);
+    h.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      h.setPointerCapture(e.pointerId);
+      document.body.classList.add('dock-resizing');
+      const right = dock.getBoundingClientRect().right;
+      const move = (ev) => { width(right - ev.clientX); };
+      const up = () => {
+        h.removeEventListener('pointermove', move);
+        document.body.classList.remove('dock-resizing');
+        try { localStorage.setItem(WKEY, String(width())); } catch (err) { /* fine */ }
+      };
+      h.addEventListener('pointermove', move);
+      h.addEventListener('pointerup', up, { once: true });
+      h.addEventListener('pointercancel', up, { once: true });
+    });
+    h.addEventListener('dblclick', resetWidth);
+  }
+
+  window.dock = { open, reveal, badge, keys, project, fit, width, resetWidth, current: () => cur };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
 })();
