@@ -1158,20 +1158,90 @@ def revise(effect: dict, note: str, segments: list[dict], clips: dict | None = N
     return new
 
 
+# ---- the checks
+
+def _decode_audio(part: Path):
+    r = subprocess.run(
+        ["ffmpeg", "-v", "error", "-nostdin", "-i", str(part), "-map", "0:a:0", "-vn",
+         "-f", "s16le", "-ac", "1", "-ar", "48000", "-"], capture_output=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"audio decode failed: {r.stderr.decode(errors='replace')[-300:]}")
+    return np.frombuffer(r.stdout, dtype="<i2").astype(np.float64) / 32768.0
+
+
+def _rms_db(x) -> float:
+    if len(x) == 0:
+        return -120.0
+    rms = float(np.sqrt(np.mean(x * x)))
+    return round(20 * math.log10(max(rms, 1e-6)), 2)
+
+
 def audio_transient_at(part: Path, t: float, *, win_s: float = 0.04) -> dict:
     """Decode the part's audio around `t` (ffmpeg → s16le → numpy) and return
     `{"peak_db": …, "before_db": …, "rise_db": …}`: the RMS in ±win_s around t against
     the RMS of the 300 ms before it. A sound effect that landed shows as a rise."""
-    raise NotImplementedError("lane fx-core")
+    sr = 48000
+    x = _decode_audio(Path(part))
+    c = int(round(t * sr))
+    w = max(1, int(round(win_s * sr)))
+    at = x[max(0, c - w):c + w]
+    before = x[max(0, c - w - int(0.3 * sr)):max(0, c - w)]
+    # the peak is the loudest 5 ms inside the window, not the window's mean: a click
+    # that dies in 60 ms is a transient, and averaging it over 80 ms with the silence
+    # before it is how a hit that clearly landed reads as "no rise"
+    sub, hop = int(0.005 * sr), int(0.001 * sr)
+    peak_db = max((_rms_db(at[i:i + sub]) for i in range(0, max(1, len(at) - sub + 1), hop)),
+                  default=_rms_db(at))
+    before_db = _rms_db(before)
+    return {"peak_db": peak_db, "before_db": before_db, "rise_db": round(peak_db - before_db, 2)}
 
+
+def _probe_wh(path: Path) -> tuple[int, int]:
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                        "stream=width,height", "-of", "json", str(path)],
+                       capture_output=True, text=True)
+    s = json.loads(r.stdout)["streams"][0]
+    return int(s["width"]), int(s["height"])
+
+
+def _decode_frame(path: Path, t: float, w: int, h: int):
+    r = subprocess.run(
+        ["ffmpeg", "-v", "error", "-nostdin", "-ss", f"{t:.4f}", "-i", str(path),
+         "-map", "0:v:0", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+        capture_output=True)
+    need = w * h * 3
+    if r.returncode != 0 or len(r.stdout) < need:
+        raise RuntimeError(f"frame decode failed at {t:.2f}s: {r.stderr.decode(errors='replace')[-300:]}")
+    return np.frombuffer(r.stdout[:need], dtype=np.uint8).reshape(h, w, 3)
 
 
 def frame_change_at(part: Path, base: Path, t: float) -> dict:
     """Decode one frame from each at `t` and return `{"changed": fraction of pixels
     that differ by > 24/255 in any channel, "bbox": [x0, y0, x1, y1] fractions}`. An
     overlay that drew shows as a change; its bbox says where."""
-    raise NotImplementedError("lane fx-core")
-
+    w, h = _probe_wh(Path(part))
+    a = _decode_frame(Path(part), t, w, h).astype(np.int16)
+    bw, bh = _probe_wh(Path(base))
+    b = _decode_frame(Path(base), t, bw, bh).astype(np.int16)
+    if (bw, bh) != (w, h):
+        raise ValueError(f"part {w}x{h} and base {bw}x{bh} differ in size")
+    mask = np.any(np.abs(a - b) > 24, axis=2)
+    changed = float(mask.mean())
+    if not mask.any():
+        return {"changed": 0.0, "bbox": None}
+    # the bbox is of the *dense* change — pixels whose four neighbours changed too —
+    # so a few stray pixels of encode noise on a sharp edge do not stretch it across
+    # the frame; only when nothing is dense does the raw mask stand in
+    core = (mask[1:-1, 1:-1] & mask[:-2, 1:-1] & mask[2:, 1:-1]
+            & mask[1:-1, :-2] & mask[1:-1, 2:])
+    if core.any():
+        ys, xs = np.nonzero(core)
+        ys, xs = ys + 1, xs + 1
+    else:
+        ys, xs = np.nonzero(mask)
+    bbox = [round(float(xs.min()) / w, 4), round(float(ys.min()) / h, 4),
+            round(float(xs.max() + 1) / w, 4), round(float(ys.max() + 1) / h, 4)]
+    return {"changed": round(changed, 6), "bbox": bbox}
 
 
 def verify(effect: dict, seg: dict, *, onset: list[float] | None = None,
@@ -1187,8 +1257,104 @@ def verify(effect: dict, seg: dict, *, onset: list[float] | None = None,
     `audio_landed` and `picture_landed` (when `part` and `base` are given: a rise of
     ≥ 6 dB at each event and a change of ≥ 0.02 % of the frame at each event whose
     bbox contains the anchor). `ok` is every non-skipped check passing."""
-    raise NotImplementedError("lane fx-core")
+    checks: list[dict] = []
+    events = effect.get("events") or []
+    overlay = effect.get("overlay") or {}
+    sound = effect.get("sound")
+    t0, t1 = float(seg["in"]), float(seg["out"])
 
+    def add(key: str, label: str, ok: bool | None, detail: str) -> None:
+        checks.append({"key": key, "label": label, "ok": ok, "detail": detail})
+
+    # in_shot
+    outside = [ev["t"] for ev in events if not (t0 <= ev["t"] < t1)]
+    add("in_shot", "every hit inside the shot",
+        not outside and bool(events),
+        (f"{len(events)} event(s) within {t0:.2f}–{t1:.2f}s" if not outside and events
+         else f"outside the shot: {', '.join(f'{t:.2f}s' for t in outside)}" if outside
+         else "no events"))
+
+    # in_frame: the box is centred on the anchor + the pose's offset; dy is a width
+    # fraction, so it is scaled by the 16:9 aspect to compare with y
+    anim = overlay.get("anim") or {}
+    sample_ts = {0.0} | {k[0] for tr in ("dx", "dy") for k in (anim.get(tr) or [])}
+    bad = []
+    for ev in events:
+        for ts in sample_ts:
+            pose = pose_at(overlay, ts)
+            cx = ev["x"] + pose["dx"]
+            cy = ev["y"] + pose["dy"] * 16 / 9
+            if not (0 <= cx <= 1 and 0 <= cy <= 1):
+                bad.append(f"{ev['t']:.2f}s at ({cx:.2f}, {cy:.2f})")
+                break
+    add("in_frame", "every marker inside the frame", not bad,
+        "every anchor inside 0..1 with the box no more than half off" if not bad
+        else "off the frame: " + ", ".join(bad))
+
+    # sync
+    if sound:
+        over = float(sound["duration"]) - (float(overlay.get("duration", 0)) + 0.25)
+        add("sync", "the sound and the marker start together", over <= 0,
+            f"sound {sound['duration']:.2f}s, marker {overlay.get('duration', 0):.2f}s, one t per event"
+            if over <= 0 else f"the sound runs {over:.2f}s past the marker + 0.25s")
+    else:
+        add("sync", "the sound and the marker start together", None, "skipped: no sound")
+
+    # on_onset
+    if impact and onset:
+        peaks = onset_peaks(onset, hz, t0 - 0.5, t1 + 0.5, top=MAX_EVENTS)
+        off = []
+        for ev in events:
+            near = min((abs(p["t"] - ev["t"]) for p in peaks), default=None)
+            if near is None or near > ONSET_TOL_S:
+                snapped = nearest_onset(onset, hz, ev["t"])
+                off.append(f"{ev['t']:.2f}s" + (f" (nearest sample {snapped:.2f}s)" if snapped is not None else ""))
+        add("on_onset", "each hit on an onset peak", not off,
+            f"every event within {ONSET_TOL_S * 1000:.0f} ms of a peak" if not off
+            else "not on a peak: " + ", ".join(off))
+    else:
+        add("on_onset", "each hit on an onset peak", None,
+            "skipped: " + ("the note names no impact" if not impact else "no onset track"))
+
+    # audio_landed / picture_landed
+    if part is not None and base is not None and Path(part).exists() and Path(base).exists():
+        evs = events_in_shot(effect, seg)
+        if sound:
+            # two rises, either counts: the part against its own 300 ms before (a
+            # transient is there) and the part against the base at the same instant
+            # (the transient is *ours* — the footage's own rock strike does not fool it)
+            low, seen = [], []
+            for ev in evs:
+                m = audio_transient_at(Path(part), ev["t_part"])
+                b = audio_transient_at(Path(base), ev["t_part"])
+                vs_base = round(m["peak_db"] - b["peak_db"], 2)
+                seen.append(f"{ev['t']:.2f}s +{m['rise_db']:.1f}/{vs_base:+.1f} dB")
+                if max(m["rise_db"], vs_base) < 6.0:
+                    low.append(seen[-1])
+            add("audio_landed", "the sound is in the proof", not low,
+                f"≥ 6 dB rise at every event ({len(evs)}): " + ", ".join(seen) if not low
+                else "no rise (vs before / vs base): " + ", ".join(low))
+        else:
+            add("audio_landed", "the sound is in the proof", None, "skipped: no sound")
+        miss = []
+        dur = float(overlay.get("duration", MIN_DURATION))
+        for ev in evs:
+            ts = ev["t_part"] + min(0.1, dur * 0.4)
+            m = frame_change_at(Path(part), Path(base), ts)
+            bb = m["bbox"]
+            inside = bool(bb) and (bb[0] - 0.01 <= ev["x"] <= bb[2] + 0.01) and (bb[1] - 0.01 <= ev["y"] <= bb[3] + 0.01)
+            if m["changed"] < 0.0002 or not inside:
+                miss.append(f"{ev['t']:.2f}s changed {m['changed'] * 100:.3f}%"
+                            + (f" bbox {bb}" if bb else " nothing drawn"))
+        add("picture_landed", "the marker is in the proof", not miss,
+            f"a change at every event's anchor ({len(evs)})" if not miss
+            else "not drawn where expected: " + ", ".join(miss))
+    else:
+        add("audio_landed", "the sound is in the proof", None, "skipped: no proof render")
+        add("picture_landed", "the marker is in the proof", None, "skipped: no proof render")
+
+    ok = all(c["ok"] is not False for c in checks)
+    return {"ok": ok, "at": _now(), "checks": checks}
 
 
 # ---------------------------------------------------------------- files on disk

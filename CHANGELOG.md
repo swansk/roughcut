@@ -10,6 +10,18 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The checks (INTAKE M12, lane fx-core)** — `fx.verify` runs the definition of done as a
+  checklist: `in_shot`, `in_frame` (the box no more than half off, with the pose's offsets),
+  `sync`, `on_onset` (skipped when the note names no impact or there is no track), and with
+  a proof render `audio_landed` and `picture_landed`, measured through ffmpeg pipes into
+  numpy: `audio_transient_at` (the loudest 5 ms inside ±40 ms against the 300 ms before; a
+  rise ≥ 6 dB either against the part's own before or against the base at the same instant)
+  and `frame_change_at` (pixels differing by > 24/255, the bbox of the *dense* change so
+  encode noise cannot stretch it, the anchor inside it). A skipped check is `ok: None`;
+  `ok` is every measured check passing. Tests: a 320×180 proof of the synthetic clip
+  rendered through `part_graph` — +12 dB at each event, none between, the marker's bbox on
+  the anchor, the flash across the frame — the whole checklist green on it, and each check
+  failing on the effect that should fail it.
 - **The model calls (INTAKE M12, lane fx-core)** — `fx.design` and `fx.revise` through
   `roughcut.inference` (judge role; never `anthropic`, never `claude`). The design prompt
   carries the note, the shot, the transcript lines inside it, the onset peaks as candidate

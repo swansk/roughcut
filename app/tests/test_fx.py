@@ -278,6 +278,107 @@ def test_part_graph_strings_one_overlay_per_event_and_one_amix(tmp_path):
     assert fx.part_graph([], 320, 180, 24, tmp_path / "n") == ([], "", "vbase", "abase")
 
 
+# ------------------------------------------------------------ the checks on a proof
+
+def _render_part(src: Path, seg: dict, effect: dict | None, dest: Path, w=320, h=180, fps=24) -> Path:
+    """The proof render the server does, in miniature: base or part."""
+    vf = (f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,"
+          f"fps={fps},format=yuv420p")
+    af = "aresample=48000:first_pts=0"
+    dur = seg["out"] - seg["in"]
+    head = ["ffmpeg", "-v", "error", "-y", "-nostdin", "-ss", f"{seg['in']:.3f}", "-i", str(src)]
+    tail = ["-dn", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-c:a", "aac", "-b:a", "128k",
+            "-ac", "2", str(dest)]
+    if effect is None:
+        cmd = head + ["-t", f"{dur:.3f}", "-vf", vf, "-af", af, "-map", "0:v:0", "-map", "0:a:0"] + tail
+    else:
+        evs = fx.events_in_shot(effect, seg)
+        extra, graph, vout, aout = fx.part_graph([(effect, evs)], w, h, fps, dest.parent / "wd")
+        fc = f"[0:v]{vf}[vbase];[0:a]{af}[abase];{graph}"
+        cmd = head + extra + ["-t", f"{dur:.3f}", "-filter_complex", fc, "-map", f"[{vout}]", "-map", f"[{aout}]"] + tail
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[-500:]
+    return dest
+
+
+@pytest.fixture(scope="module")
+def parts(project, tmp_path_factory) -> dict:
+    d = tmp_path_factory.mktemp("parts")
+    src = project["footage"] / "CLIP_A.MP4"
+    e = _effect()
+    return {"effect": e, "base": _render_part(src, SEG, None, d / "base.mp4"),
+            "part": _render_part(src, SEG, e, d / "part.mp4")}
+
+
+def test_part_renders_with_the_sound_and_the_marker_measured(parts):
+    part, base = parts["part"], parts["base"]
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type,nb_frames",
+                        "-of", "json", str(part)], capture_output=True, text=True)
+    info = json.loads(r.stdout)
+    assert abs(float(info["format"]["duration"]) - 2.0) < 0.1
+    assert int(next(s for s in info["streams"] if s["codec_type"] == "video")["nb_frames"]) == 48
+    # the sound: a transient at each event in the part, none in the base
+    for t_part in (0.5, 1.4):
+        m = fx.audio_transient_at(part, t_part)
+        b = fx.audio_transient_at(base, t_part)
+        assert m["rise_db"] >= 6.0, m
+        assert m["peak_db"] - b["peak_db"] >= 6.0, (m, b)
+        assert abs(b["rise_db"]) < 2.0, b
+    assert abs(fx.audio_transient_at(part, 1.0)["rise_db"]) < 2.0     # between the events: nothing
+    # the picture: a change at the anchor while the marker shows, none before it
+    m = fx.frame_change_at(part, base, 0.5 + 0.1)
+    assert m["changed"] >= 0.0002 and m["bbox"] is not None
+    x0, y0, x1, y1 = m["bbox"]
+    assert x0 <= 0.5 <= x1 and y0 <= 0.7 <= y1
+    # before the event only x264's own noise between two encodes remains (measured
+    # ~0.3 % on testsrc2's random blocks at 320x180); the marker is well above it
+    before = fx.frame_change_at(part, base, 0.25)
+    assert before["changed"] < 0.01 and m["changed"] > 2 * before["changed"], (m, before)
+    # the flash: the first frame of the event differs across the whole frame
+    flash = fx.frame_change_at(part, base, 0.5)
+    assert flash["changed"] > 0.5
+
+
+def test_verify_runs_every_check_on_the_proof(parts):
+    e = parts["effect"]
+    v = fx.verify(e, SEG, onset=ONSET, hz=10, part=parts["part"], base=parts["base"], impact=True)
+    keys = [c["key"] for c in v["checks"]]
+    assert keys == ["in_shot", "in_frame", "sync", "on_onset", "audio_landed", "picture_landed"]
+    assert v["ok"] is True, v
+    assert all(c["ok"] is True for c in v["checks"]), v
+    assert v["at"][:4] == "2026" or len(v["at"]) >= 19
+
+
+def test_verify_skips_what_it_cannot_measure_and_fails_what_it_can():
+    e = _effect()
+    v = fx.verify(e, SEG, onset=None, impact=True)
+    by = {c["key"]: c for c in v["checks"]}
+    assert v["ok"] is True
+    assert by["on_onset"]["ok"] is None and by["on_onset"]["detail"].startswith("skipped:")
+    assert by["audio_landed"]["ok"] is None and by["picture_landed"]["ok"] is None
+    assert by["sync"]["ok"] is True
+    # not an impact: on_onset is skipped even with a track
+    assert {c["key"]: c["ok"] for c in fx.verify(e, SEG, onset=ONSET, impact=False)["checks"]}["on_onset"] is None
+    # off the peaks
+    off = _effect(events=[{"t": 1.9, "x": 0.5, "y": 0.5}])
+    v = fx.verify(off, SEG, onset=ONSET, hz=10)
+    assert v["ok"] is False and {c["key"]: c["ok"] for c in v["checks"]}["on_onset"] is False
+    # outside the shot
+    out = _effect(events=[{"t": 4.0, "x": 0.5, "y": 0.5}])
+    assert {c["key"]: c["ok"] for c in fx.verify(out, SEG)["checks"]}["in_shot"] is False
+    # a sound that outlasts the marker
+    long = _effect(sound={"duration": 1.0, "layers": [{"type": "click"}]})
+    assert {c["key"]: c["ok"] for c in fx.verify(long, SEG)["checks"]}["sync"] is False
+    # an offset that pushes the box off the frame
+    away = _effect(events=[{"t": 1.5, "x": 0.9, "y": 0.5}],
+                   overlay={"shapes": X_LINES, "anim": {"dx": [[0, 0], [0.3, 0.5]]}})
+    assert {c["key"]: c["ok"] for c in fx.verify(away, SEG)["checks"]}["in_frame"] is False
+    # a silent effect: sync and audio are skipped, not failed
+    silent = _effect(sound=None)
+    by = {c["key"]: c for c in fx.verify(silent, SEG)["checks"]}
+    assert by["sync"]["ok"] is None and by["audio_landed"]["ok"] is None
+
+
 # ------------------------------------------------------------ frames and strips
 
 def test_frames_for_and_contact_strip(project, tmp_path):
