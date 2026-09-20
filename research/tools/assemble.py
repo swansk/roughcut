@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["numpy>=2"]
+# dependencies = ["numpy>=2", "pillow>=10"]
 # ///
 """Cut an EDL into a rendered video. Throwaway prototype tooling — no OTIO, no index.
 
@@ -53,7 +53,7 @@ from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from roughcut import colour, effects    # noqa: E402  (after sys.path)
+from roughcut import colour, effects, fx    # noqa: E402  (after sys.path)
 
 TARGET_LUFS = -16.0
 MAX_GAIN_DB = 12.0          # refuse to amplify near-silence into hiss
@@ -134,6 +134,40 @@ def cut(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path,
     r = run(cmd)
     if r.returncode != 0:
         raise RuntimeError(f"cut failed {src.name} {t_in}-{t_out}: {r.stderr[-400:]}")
+
+
+def cut_with_effects(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path,
+                     orient: str, video: dict, shot_effects: list[tuple[dict, list[dict]]],
+                     workdir: Path, normalise: str | None = None,
+                     lut: str | None = None) -> None:
+    """`cut()` for a part that carries effects (INTAKE M12): the same conform and the
+    same encode, but through one `-filter_complex` — `[0:v]<video_filter>[vbase]` and
+    `[0:a]volume,aresample[abase]`, then `fx.part_graph`'s fragment (a sprite `.mov`
+    per event overlaid at its clip second, the effect's synth `.wav` delayed and mixed)
+    — mapped from its `[vout]`/`[aout]`. Everything about the part that the concat
+    relies on (codec, tags, timescale, `-dn`, `-write_tmcd 0`) is identical, so the
+    film still copies. The sprite inputs go between the source `-i` and `-t`: after an
+    `-i`, a `-t` is an input option for the NEXT input and would cut the sprites short."""
+    extra, graph, vout, aout = fx.part_graph(shot_effects, video["w"], video["h"],
+                                             video["fps"], workdir)
+    if not graph:
+        return cut(src, t_in, t_out, gain_db, dest, orient, video, normalise, lut)
+    fc = (f"[0:v]{video_filter(video, normalise, lut)}[vbase];"
+          f"[0:a]volume={gain_db:.2f}dB,aresample=48000:first_pts=0[abase];{graph}")
+    cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin"]
+    if orient == "none":
+        cmd += ["-display_rotation", "0"]           # must precede -i; see module docstring
+    cmd += ["-ss", f"{t_in:.3f}", "-i", str(src), *extra, "-t", f"{t_out - t_in:.3f}",
+            "-filter_complex", fc, "-map", f"[{vout}]", "-map", f"[{aout}]", "-dn",
+            "-c:v", "libx264", "-preset", video["preset"], "-crf", video["crf"],
+            *COLOUR_TAGS,
+            "-c:a", "aac", "-b:a", video["audio_bitrate"], "-ac", "2",
+            "-video_track_timescale", str(video["timescale"]),
+            "-write_tmcd", "0",
+            "-movflags", "+faststart", str(dest)]
+    r = run(cmd)
+    if r.returncode != 0:
+        raise RuntimeError(f"cut with effects failed {src.name} {t_in}-{t_out}: {r.stderr[-400:]}")
 
 
 def probe_video(path: Path) -> tuple[str, int, int]:
@@ -376,14 +410,26 @@ def main() -> int:
                                          workdir / f"part_{i:03d}.cube",
                                          title=f"roughcut {seg.get('id') or i}")
                 lut = colour.lut_vf(cube, colour.in_range(probe))
-            cut(src, seg["in"], seg["out"], gain, dest, orient, video,
-                normalise=normalise, lut=lut)
+            # The shot's accepted effects (INTAKE M12) fold into this same encode;
+            # an event outside the shot's range is simply not drawn.
+            shot_effects = [(e, fx.events_in_shot(e, seg)) for e in fx.effects_for_shot(edl, seg)]
+            shot_effects = [(e, evs) for e, evs in shot_effects if evs]
+            if shot_effects:
+                cut_with_effects(src, seg["in"], seg["out"], gain, dest, orient, video,
+                                 shot_effects, workdir / f"part_{i:03d}_fx",
+                                 normalise=normalise, lut=lut)
+            else:
+                cut(src, seg["in"], seg["out"], gain, dest, orient, video,
+                    normalise=normalise, lut=lut)
             assert_no_rotation(dest, orient)        # catch it at the part, not the film
             actual = probe_duration(dest)
             parts.append(dest)
             print(f"  {i:02d} {seg['clip']} {seg['in']:6.1f}-{seg['out']:6.1f} "
                   f"({actual:5.2f}s, {gain:+5.1f}dB)  {seg['why'][:56]}")
             print(f"      colour: {describe_colour(res, normalise, probe)}")
+            for e, evs in shot_effects:
+                print(f"      fx: {e.get('name', 'effect')} × {len(evs)} at "
+                      + ", ".join(f"{ev['t_part']:.2f}s" for ev in evs))
 
         listfile = workdir / "concat.txt"
         listfile.write_text("".join(f"file '{p}'\n" for p in parts), encoding="utf-8")

@@ -10,6 +10,17 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Effects in the render (INTAKE M12, lane fx-core)** — `assemble.py` folds a shot's
+  accepted effects into its own part: `cut_with_effects` puts `[0:v]<video_filter>[vbase]`
+  and `[0:a]volume,aresample[abase]` plus `part_graph`'s fragment in one `-filter_complex`,
+  the sprite inputs between the source `-i` and `-t` (after an `-i`, a `-t` is an input
+  option for the next input and would cut the sprites short), and everything else about the
+  part identical, so the concat still copies. A proposal is not rendered; an event outside
+  the shot is not drawn; the log says `fx: <name> × n at …`. Script deps gain pillow. Tests:
+  `test_fx_render.py` — a two-shot EDL with one accepted and one proposed effect rendered
+  through `assemble.py` twice (with / without): the first part rises ≥ 6 dB at each event
+  and changes at each anchor, the second is untouched, the parts share stream properties,
+  the film probes at 4.0 s with no drift warning.
 - **The checks (INTAKE M12, lane fx-core)** — `fx.verify` runs the definition of done as a
   checklist: `in_shot`, `in_frame` (the box no more than half off, with the pose's offsets),
   `sync`, `on_onset` (skipped when the note names no impact or there is no track), and with
