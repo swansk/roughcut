@@ -714,11 +714,222 @@
   }
 
   /* ------------------------------------------------------------ the sketch */
-  // (part 3)
-  function startSketch() { say('the sketch is not built yet'); }
-  function useSketch() {}
-  function cancelSketch() {}
-  function drawStrokes() {}
+  /* Karl: *"options for human to draw references on a keyframe."* Draw a reference
+   * pauses the monitor and hands `#fxCanvas` the pointer (`.sketch`); strokes are
+   * fractions of the frame from the first point, and each stroke's centroid is a mark.
+   * Use it builds `{t, goal, strokes, marks, png}` — the png is the frame with the
+   * strokes drawn, at the video's own size — and the next Design carries it; the
+   * server keeps the marks as the anchors, no placing call needed. */
+  const K = { accent: null };
+
+  function accent() {
+    if (K.accent) return K.accent;
+    let v = '';
+    try { v = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(); } catch (e) { v = ''; }
+    K.accent = v || '#f5c542';
+    return K.accent;
+  }
+
+  /* Where a pointer event lands on the picture, as fractions of the frame. `el` fills
+   * the screen and its picture (W × H) sits inside it object-fit: contain — a
+   * letterboxed rect of the element's box — for the canvas and the video alike. */
+  function frameXY(ev, el, W, H) {
+    if (!el || !W || !H) return null;
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    const scale = Math.min(r.width / W, r.height / H);
+    const dw = W * scale, dh = H * scale;
+    const ox = r.left + (r.width - dw) / 2, oy = r.top + (r.height - dh) / 2;
+    return {
+      x: Math.min(1, Math.max(0, (ev.clientX - ox) / dw)),
+      y: Math.min(1, Math.max(0, (ev.clientY - oy) / dh)),
+      scale,
+    };
+  }
+
+  function startSketch() {
+    if (!S.shot) { say('select a shot on the timeline first'); return; }
+    if (!O.canvas || !O.ctx) { say('no canvas to draw on'); return; }
+    pause();
+    const sg = liveShot();
+    const t = TL();
+    if ((!sg || String(sg.id) !== String(S.shot)) && t) {
+      const start = t.filmStart(S.shot);
+      if (start >= 0) t.seek(start);          // the monitor parks on the shot's first frame
+    }
+    S.sketch = { strokes: [], cur: null, goal: '' };
+    const v = live();
+    if (v && v.videoWidth && (O.canvas.width !== v.videoWidth || O.canvas.height !== v.videoHeight)) {
+      O.canvas.width = v.videoWidth;
+      O.canvas.height = v.videoHeight;
+    }
+    O.canvas.classList.add('sketch');
+    draw();
+    paint();
+  }
+
+  function endSketch() {
+    S.sketch = null;
+    if (O.canvas) O.canvas.classList.remove('sketch');
+    draw();
+    paint(true);
+  }
+
+  function cancelSketch() {
+    if (!S.sketch) return;
+    endSketch();
+  }
+
+  function undoStroke() {
+    if (!S.sketch) return false;
+    if (S.sketch.cur) { S.sketch.cur = null; draw(); return true; }
+    if (!S.sketch.strokes.length) return true;
+    S.sketch.strokes.pop();
+    draw();
+    paint();
+    return true;
+  }
+
+  function centroid(stroke) {
+    let x = 0, y = 0;
+    for (const p of stroke) { x += p.x; y += p.y; }
+    return [round4(x / stroke.length), round4(y / stroke.length)];
+  }
+
+  function framePng(v) {
+    try {
+      const W = v && v.videoWidth ? v.videoWidth : (O.canvas.width || 1280);
+      const H = v && v.videoHeight ? v.videoHeight : (O.canvas.height || 720);
+      const c = document.createElement('canvas');
+      c.width = W;
+      c.height = H;
+      const ctx = c.getContext('2d');
+      if (v && v.videoWidth) ctx.drawImage(v, 0, 0, W, H);
+      else { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H); }
+      drawStrokes(ctx, W, H);
+      return c.toDataURL('image/png');
+    } catch (e) {
+      return null;                                 // a tainted or empty frame: the marks still go
+    }
+  }
+
+  function useSketch() {
+    if (!S.sketch) return;
+    const strokes = S.sketch.strokes.filter((s) => s.length);
+    if (!strokes.length) { say('draw something on the monitor first'); return; }
+    const v = live();
+    const png = framePng(v);
+    S.reference = {
+      t: round4(v ? v.currentTime : 0),
+      goal: (S.sketch.goal || '').trim(),
+      strokes: strokes.map((s) => s.map((p) => ({ x: p.x, y: p.y }))),
+      marks: strokes.map(centroid),
+    };
+    if (png) S.reference.png = png;
+    endSketch();
+    if (window.dock && typeof dock.reveal === 'function') dock.reveal('#fx');
+    say(`reference: ${S.reference.marks.length} mark${S.reference.marks.length === 1 ? '' : 's'} at ${fmtT(S.reference.t)} — goes with the next Design`);
+  }
+
+  /* The strokes (and the one being drawn) as a 3-px accent line on screen, whatever
+   * the bitmap's size, and a dot at each mark. */
+  function drawStrokes(ctx, W, H) {
+    const sk = S.sketch;
+    if (!sk) return;
+    const list = sk.strokes.concat(sk.cur ? [sk.cur] : []);
+    let scale = 1;
+    try {
+      const r = O.canvas.getBoundingClientRect();
+      scale = Math.min(r.width / W, r.height / H) || 1;
+    } catch (e) { scale = 1; }
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = accent();
+    ctx.fillStyle = accent();
+    ctx.lineWidth = Math.max(1.5, 3 / scale);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (const s of list) {
+      if (!s.length) continue;
+      ctx.beginPath();
+      ctx.moveTo(s[0].x * W, s[0].y * H);
+      for (let k = 1; k < s.length; k++) ctx.lineTo(s[k].x * W, s[k].y * H);
+      if (s.length === 1) ctx.lineTo(s[0].x * W + 0.01, s[0].y * H);
+      ctx.stroke();
+    }
+    for (const s of sk.strokes) {
+      if (!s.length) continue;
+      const [cx, cy] = centroid(s);
+      ctx.beginPath();
+      ctx.arc(cx * W, cy * H, Math.max(2, 4 / scale), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function onSketchDown(ev) {
+    if (!S.sketch || ev.button !== 0) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const p = frameXY(ev, O.canvas, O.canvas.width, O.canvas.height);
+    if (!p) return;
+    try { O.canvas.setPointerCapture(ev.pointerId); } catch (e) { /* fine */ }
+    S.sketch.cur = [{ x: round4(p.x), y: round4(p.y) }];
+    draw();
+  }
+
+  function onSketchMove(ev) {
+    if (!S.sketch || !S.sketch.cur) return;
+    ev.preventDefault();
+    const p = frameXY(ev, O.canvas, O.canvas.width, O.canvas.height);
+    if (!p) return;
+    const cur = S.sketch.cur, last = cur[cur.length - 1];
+    if (Math.hypot(p.x - last.x, p.y - last.y) < 0.002) return;
+    cur.push({ x: round4(p.x), y: round4(p.y) });
+    draw();
+  }
+
+  function onSketchUp(ev) {
+    if (!S.sketch || !S.sketch.cur) return;
+    ev.stopPropagation();
+    S.sketch.strokes.push(S.sketch.cur);
+    S.sketch.cur = null;
+    draw();
+    paint();
+  }
+
+  function mountSketch() {
+    const c = O.canvas;
+    if (!c) return;
+    c.addEventListener('pointerdown', onSketchDown);
+    c.addEventListener('pointermove', onSketchMove);
+    c.addEventListener('pointerup', onSketchUp);
+    c.addEventListener('pointercancel', onSketchUp);
+    // the screen's own click plays the cut; not while drawing on it
+    c.addEventListener('click', (ev) => { if (S.sketch) { ev.preventDefault(); ev.stopPropagation(); } });
+  }
+
+  function inField(t) {
+    return !!t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable);
+  }
+
+  // On window, capture, and registered now — at load, before dock.js's Esc (registered
+  // on DOMContentLoaded) and before timeline-keys.js's ⌫ (ripple delete, registered
+  // when the timeline mounts): while a reference is being drawn, ⌫ is the last
+  // stroke and Esc is the sketch, and nothing else hears them.
+  window.addEventListener('keydown', (e) => {
+    if (!S.sketch) return;
+    if (e.key === 'Escape') {
+      cancelSketch();
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    } else if ((e.key === 'Backspace' || e.key === 'Delete') && !inField(e.target)) {
+      undoStroke();
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }
+  }, true);
 
   /* ------------------------------------------------------------ mount */
   function mount() {
@@ -735,6 +946,7 @@
     }
     setInterval(onSelect, 500);          // playback moves the anchor without a select event
     mountOverlay();
+    mountSketch();
     paint(true);
     refresh().then(pollJobs);
     setInterval(pollJobs, POLL_MS);
@@ -754,6 +966,8 @@
     poseAt,
     draw,
     audio: (id) => { const a = S.audio.get(id); return a && a.el ? a.el : null; },
+    sketch: { start: startSketch, use: useSketch, cancel: cancelSketch, undo: undoStroke },
+    frameXY,
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
   else mount();

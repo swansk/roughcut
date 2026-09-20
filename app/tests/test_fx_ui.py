@@ -472,3 +472,117 @@ def test_preview_plays_the_shot_and_sounds_each_hit_once_per_pass(page):
     page.wait_for_function("fx.state.sounded === 3", timeout=10000)
     page.wait_for_function("player.playing === false", timeout=10000)
     assert page.evaluate("fx.state.sounded") == 3
+
+
+# ---------------------------------------------------------------- the sketch
+
+def screen_rect(page) -> dict:
+    return page.evaluate("""() => {
+        const b = document.querySelector('#fxCanvas').getBoundingClientRect();
+        return {x: b.x, y: b.y, w: b.width, h: b.height}; }""")
+
+
+def drag(page, r: dict, x0: float, y0: float, x1: float, y1: float, steps: int = 6) -> None:
+    """One stroke on the monitor, from and to fractions of the picture."""
+    page.mouse.move(r["x"] + x0 * r["w"], r["y"] + y0 * r["h"])
+    page.mouse.down()
+    page.mouse.move(r["x"] + x1 * r["w"], r["y"] + y1 * r["h"], steps=steps)
+    page.mouse.up()
+
+
+def test_draw_a_reference_makes_marks_from_strokes_and_the_design_uses_them(page):
+    """Draw a reference pauses the monitor and hands the canvas the pointer; strokes
+    are fractions of the frame, each one's centroid a mark; ⌫ undoes the last; Use it
+    builds the reference (t = the live clip time, the goal, the strokes, the marks, a
+    PNG of the frame with the strokes on it) and the design box says so until the
+    next Design carries it — and then the server keeps the marks as the anchors."""
+    open_fx(page, 0)
+    page.evaluate("tl.seek(0.5)")                            # shot 1 parked at clip 1.5
+    page.wait_for_function(
+        "Math.abs(document.querySelector('.screen video.live').currentTime - 1.5) < 0.02", timeout=10000)
+    page.locator("#fxSketch").click()
+    page.wait_for_function("document.querySelector('#fxCanvas').classList.contains('sketch')")
+    assert page.evaluate("player.playing") is False
+    assert page.evaluate("getComputedStyle(document.querySelector('#fxCanvas')).pointerEvents") == "auto"
+    assert "0 strokes" in page.locator("#fx .fxsketch").inner_text()
+    assert page.locator("#fxUse").is_disabled()
+    assert page.locator("#fxSketch").is_disabled()
+    r = screen_rect(page)
+    drag(page, r, 0.30, 0.60, 0.40, 0.70)                    # centroid ≈ (0.35, 0.65)
+    page.wait_for_function("fx.state.sketch && fx.state.sketch.strokes.length === 1")
+    drag(page, r, 0.60, 0.60, 0.70, 0.80)                    # centroid ≈ (0.65, 0.70)
+    page.wait_for_function("fx.state.sketch.strokes.length === 2")
+    assert "2 strokes" in page.locator("#fx .fxsketch").inner_text()
+    assert page.locator("#fxUse").is_enabled()
+    # the clicks on the monitor did not start playback (the screen's own click would)
+    assert page.evaluate("player.playing") is False
+    # ⌫ undoes the last stroke — and does not ripple-delete the selected shot
+    page.keyboard.press("Backspace")
+    page.wait_for_function("fx.state.sketch.strokes.length === 1")
+    assert "1 stroke" in page.locator("#fx .fxsketch").inner_text()
+    assert page.evaluate("segs.length") == 2
+    drag(page, r, 0.60, 0.60, 0.70, 0.80)
+    page.wait_for_function("fx.state.sketch.strokes.length === 2")
+    # the strokes are drawn on the canvas in the accent colour, 3 px on screen
+    assert page.evaluate(PIXELS, [0.35, 0.65, 6]) > 0
+    page.locator("#fxGoal").fill("the skis — put the markers here")
+    page.locator("#fxUse").click()
+    page.wait_for_function("!document.querySelector('#fxCanvas').classList.contains('sketch')")
+    assert page.evaluate("fx.state.sketch") is None
+    ref = page.evaluate("fx.state.reference")
+    assert ref["t"] == pytest.approx(1.5, abs=0.02)
+    assert ref["goal"] == "the skis — put the markers here"
+    assert len(ref["strokes"]) == 2 and len(ref["marks"]) == 2
+    assert ref["marks"][0][0] == pytest.approx(0.35, abs=0.03)
+    assert ref["marks"][0][1] == pytest.approx(0.65, abs=0.03)
+    assert ref["marks"][1][0] == pytest.approx(0.65, abs=0.03)
+    assert ref["marks"][1][1] == pytest.approx(0.70, abs=0.03)
+    for stroke in ref["strokes"]:
+        assert len(stroke) >= 2
+        for p in stroke:
+            assert 0 <= p["x"] <= 1 and 0 <= p["y"] <= 1        # fractions, never pixels
+    assert ref["png"].startswith("data:image/png;base64,")
+    line = page.locator("#fx .fxref").inner_text()
+    assert "reference · 2 marks at 0:01.5" in line and "the skis" in line
+    # the next Design carries it; the server keeps the marks as the anchors
+    page.locator("#fxNote").fill("hit markers on the skis")
+    page.locator("#fxDesign").click()
+    page.wait_for_selector("#fx .fxcard", timeout=20000)
+    e = effects(page)[-1]
+    assert [(ev["x"], ev["y"]) for ev in e["events"]] == [tuple(m) for m in ref["marks"]]
+    assert e["events"][0]["t"] == pytest.approx(1.5, abs=0.02)
+    assert e["reference"]["goal"] == "the skis — put the markers here"
+    assert e["reference"]["marks"] == ref["marks"]
+    assert e["ref_url"] == f"/api/fx/{e['id']}/ref.png"
+    assert page.evaluate(f"fetch('{e['ref_url']}').then(r => r.status)") == 200
+    # used: the line is gone
+    assert page.locator("#fx .fxref").count() == 0
+    assert page.evaluate("fx.state.reference") is None
+
+
+def test_esc_cancels_the_sketch_and_the_clear_button_forgets_a_reference(page):
+    open_fx(page, 0)
+    page.evaluate("tl.seek(0.5)")
+    page.wait_for_function(
+        "Math.abs(document.querySelector('.screen video.live').currentTime - 1.5) < 0.02", timeout=10000)
+    page.locator("#fxSketch").click()
+    page.wait_for_function("document.querySelector('#fxCanvas').classList.contains('sketch')")
+    r = screen_rect(page)
+    drag(page, r, 0.2, 0.2, 0.3, 0.3)
+    page.wait_for_function("fx.state.sketch.strokes.length === 1")
+    page.keyboard.press("Escape")
+    page.wait_for_function("!document.querySelector('#fxCanvas').classList.contains('sketch')")
+    assert page.evaluate("fx.state.sketch") is None
+    assert page.evaluate("fx.state.reference") is None
+    assert page.locator("#fx .fxref").count() == 0
+    assert page.evaluate("segs.length") == 2 and page.evaluate("[...tl.state.sel].length") == 1
+    # a used reference can be forgotten before Design
+    page.locator("#fxSketch").click()
+    page.wait_for_function("document.querySelector('#fxCanvas').classList.contains('sketch')")
+    drag(page, r, 0.2, 0.2, 0.3, 0.3)
+    page.wait_for_function("fx.state.sketch.strokes.length === 1")
+    page.locator("#fxUse").click()
+    page.wait_for_selector("#fx .fxref")
+    page.locator("#fx .fxref button[data-act=clearref]").click()
+    page.wait_for_function("document.querySelectorAll('#fx .fxref').length === 0")
+    assert page.evaluate("fx.state.reference") is None

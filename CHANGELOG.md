@@ -10,6 +10,24 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Draw a reference — the sketch on the frame (INTAKE M12, lane fx-ui, 3 of 4)** —
+  Karl: *"options for human to draw references on a keyframe."* Draw a reference in
+  the FX tool pauses the monitor (parking it on the selected shot when it is
+  elsewhere) and hands `#fxCanvas` the pointer (`.sketch`, crosshair): strokes are
+  drawn as a 3-px accent line on screen whatever the proxy's size, several of them,
+  ⌫ undoes the last and Esc cancels — on window, capture, registered at load, so
+  while drawing neither reaches the timeline's ripple delete or the dock's overlay —
+  and the tool shows a small toolbar: the stroke count, a goal text (`the skis — put
+  the markers here`), Use it / Cancel. A stroke's points are fractions of the frame
+  (the picture is object-fit: contain inside the screen, so the letterbox is
+  subtracted), each stroke's centroid is a mark, and Use it builds `{t: the live clip
+  time, goal, strokes, marks, png}` — the png a data URL of the frame drawn into an
+  offscreen canvas at the video's own size with the strokes on it — which the design
+  box shows as `reference · 2 marks at 0:01.5 · the skis…` (with a ✕ to forget it)
+  until the next Design carries it; the server keeps the marks as the anchors, no
+  placing call. Clicks on the monitor while drawing do not start playback. Tests draw
+  with the mouse on the real canvas and check the marks against the drag's midpoints,
+  the fractions, the PNG, the ⌫ and Esc paths, and the designed effect's anchors.
 - **The monitor shows and sounds the effects (INTAKE M12, lane fx-ui, 2 of 4)** —
   `#fxCanvas`, a 2D canvas over the monitor's live video (the grade.js pattern:
   `requestVideoFrameCallback` on the live element, re-armed when it changes; a parked
