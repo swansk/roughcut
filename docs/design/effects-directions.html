@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Effects Directions</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Source+Serif+4:opsz,ital,wght@8..60,0,400;8..60,0,600;8..60,1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --bg: #0f1014; --surface: #171820; --surface2: #1e1f29; --line: #2b2c38; --line-soft: #22232d;
+    --text: #e9e9f0; --dim: #9a9cae; --faint: #6c6e82;
+    --accent: #6ea8fe; --amber: #e0b050; --good: #5ecf8b; --bad: #e06a6a;
+    --serif: "Source Serif 4", Georgia, serif; --display: "Bricolage Grotesque", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", Consolas, monospace; --ui: ui-sans-serif, system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f2f2f6; --surface: #fbfbfd; --surface2: #ffffff; --line: #d7d7e1; --line-soft: #e4e4ec;
+      --text: #1b1b26; --dim: #585870; --faint: #8a8a9e; --accent: #2e63c4; --amber: #9a6a0c; --good: #1d7a4b; --bad: #b23a3a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 17px/1.62 var(--serif); }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding-inline: 24px; }
+  .prose { max-width: 70ch; }
+  header.hero { padding: 56px 0 24px; }
+  .eyebrow { font: 600 12px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
+  h1 { font: 800 clamp(32px, 4.8vw, 54px)/1.05 var(--display); letter-spacing: -.015em; margin: 12px 0 16px; text-wrap: balance; }
+  .standfirst { font-size: 19px; color: var(--dim); max-width: 64ch; } .standfirst b { color: var(--text); }
+  section { padding: 36px 0 8px; }
+  .sec { display: flex; align-items: baseline; gap: 12px; border-top: 1px solid var(--line); padding-top: 16px; }
+  .sec .no { font: 600 12px var(--mono); color: var(--faint); }
+  h2 { font: 700 clamp(23px, 2.8vw, 30px)/1.15 var(--display); margin: 6px 0 14px; text-wrap: balance; }
+  h3 { font: 700 18px/1.3 var(--display); margin: 22px 0 8px; }
+  p { margin: 0 0 14px; }
+  ul.tight { margin: 0 0 14px; padding-left: 20px; } ul.tight li { margin-bottom: 7px; }
+  code { font: 500 .85em var(--mono); background: var(--surface2); border: 1px solid var(--line-soft); border-radius: 5px; padding: 1px 5px; }
+  pre { font: 12.5px/1.5 var(--mono); background: var(--surface2); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; overflow-x: auto; color: var(--dim); }
+  pre b { color: var(--text); font-weight: 600; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin: 18px 0; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; font-size: 15px; }
+  .card h4 { margin: 0 0 6px; font: 700 16px var(--display); display: flex; gap: 10px; align-items: baseline; }
+  .card h4 .tag { font: 600 10.5px var(--mono); letter-spacing: .08em; border-radius: 999px; padding: 2px 8px; border: 1px solid var(--line); color: var(--dim); }
+  .card h4 .tag.built { border-color: color-mix(in srgb, var(--good) 45%, var(--line)); color: var(--good); }
+  .card h4 .tag.next { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); color: var(--accent); }
+  .card h4 .tag.later { border-color: color-mix(in srgb, var(--amber) 45%, var(--line)); color: var(--amber); }
+  .card p { color: var(--dim); margin: 0 0 8px; }
+  .card ul { margin: 0; padding-left: 18px; color: var(--dim); } .card li { margin-bottom: 4px; } .card li b { color: var(--text); font-weight: 600; }
+  table { border-collapse: collapse; width: 100%; font: 14px/1.45 var(--ui); margin: 14px 0; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  th { font: 600 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+  td.y { color: var(--good); } td.n { color: var(--bad); } td.m { color: var(--amber); }
+  .scroll { overflow-x: auto; }
+  .flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; margin: 16px 0; }
+  .step { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font-size: 14px; }
+  .step .n { font: 600 11px var(--mono); color: var(--accent); letter-spacing: .1em; }
+  .step b { display: block; font: 700 15px var(--display); margin: 3px 0 5px; }
+  .step p { color: var(--dim); margin: 0; font-size: 13.5px; }
+  .check { font: 13px/1.6 var(--mono); }
+  .check .ok { color: var(--good); } .check .skip { color: var(--faint); } .check .no { color: var(--bad); }
+  footer { padding: 28px 0 60px; color: var(--faint); font: 500 12px var(--mono); }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="hero">
+  <div class="eyebrow">Roughcut · effects · design note · 2026-09-20 · INTAKE M12</div>
+  <h1>Effects the model designs and the machine verifies.</h1>
+  <p class="standfirst">Karl's ask: tell the AI <b>"add Call of Duty hit markers where my skis hit the rocks, with the sound effect"</b>, have it generate the overlay and the sound itself, iterate with it, and have it prove the definition of done — the sound lands with the marker, on the right frames — with a way to <b>draw a reference on a frame</b>. This note lists the ways that were considered, says which one was built and why, and lays out the alternatives, with the free online and AI tools that fit each.</p>
+</header>
+
+<section id="ways">
+  <div class="sec"><span class="no">01</span><h2>Seven ways to make an effect appear</h2></div>
+  <p class="prose">The question splits in three: how the <em>picture</em> of the effect is made, how its <em>sound</em> is made, and how both are <em>anchored</em> to the right frame and the right place. Every approach below answers at least one of the three; most answer one well and the others badly.</p>
+  <div class="grid">
+    <div class="card"><h4>A · A program the model writes <span class="tag built">BUILT</span></h4>
+      <p>The model does not produce pixels or samples. It writes a small <em>effect program</em> in a closed vocabulary — a sprite of shapes in a unit box with keyframed scale, opacity, rotation and offset, plus a synth patch of tone, noise, click and sweep layers with envelopes — and Roughcut's own code draws both, on the master (PIL + numpy) and on the monitor (canvas + WebAudio), from one JSON.</p>
+      <ul><li><b>Free, deterministic, resolution-independent</b>, no licence, no GPU, seconds to render.</li><li><b>Iterable by numbers</b>: "red and bigger" changes two fields, not a file.</li><li><b>Verifiable</b>: the machine can read what it drew.</li><li>Limits: no photoreal smoke or sampled real-world sound; the look is graphic, like a game HUD — which is what a hit marker is.</li></ul></div>
+    <div class="card"><h4>B · Generative image and video models <span class="tag later">LATER</span></h4>
+      <p>A diffusion model makes the overlay: a transparent sprite (SDXL or FLUX in ComfyUI with a LayerDiffuse or matting node) or a short clip (Stable Video Diffusion, AnimateDiff, Wan 2.x). Hosted: Runway, Pika, Luma, Kling.</p>
+      <ul><li><b>Rich visuals</b> — sparks, dust, a lens crack.</li><li>Alpha is the hard part: most models emit an opaque frame; matting after the fact is where it breaks.</li><li>Non-deterministic, GPU-hungry, and the checklist cannot read intent from pixels.</li></ul></div>
+    <div class="card"><h4>C · Generative audio <span class="tag next">NEXT, OPTIONAL</span></h4>
+      <p>A text-to-sound model makes the sample: Stable Audio Open (local, free weights), Meta AudioCraft / AudioGen (local, free), ElevenLabs Sound Effects (hosted, free tier).</p>
+      <ul><li><b>Real-sounding impacts</b> where the synth patch is too clean.</li><li>Fits the built loop as one more layer type — <code>sample</code> — verified the same way (the transient still has to land).</li><li>Local weights keep it free; hosted has quotas.</li></ul></div>
+    <div class="card"><h4>D · A library of assets</h4>
+      <p>EFFECTS.md's original Rule 4: the model picks from files in <code>assets/</code> described by a manifest. Sources: Freesound (CC), Pixabay, Mixkit, OpenGameArt.</p>
+      <ul><li><b>Real recordings</b>, instantly.</li><li>Licensing bookkeeping is the human's; search quality is the ceiling; nothing is ever "generated by the AI".</li><li>Still supported: a <code>sample</code> layer can point at a library file as well as a generated one.</li></ul></div>
+    <div class="card"><h4>E · Code the model writes, rendered headless</h4>
+      <p>The model writes a Remotion / Motion Canvas / p5.js sketch or a Manim scene; a headless browser renders frames.</p>
+      <ul><li><b>Unlimited expressiveness.</b></li><li>Executable code from a model, arriving by way of a transcript — the injection path EFFECTS.md Rule 1 exists to close. Needs a sandbox and a heavier stack.</li></ul></div>
+    <div class="card"><h4>F · Vision tracking for anchoring <span class="tag next">NEXT</span></h4>
+      <p>Track the skis through the shot so the marker follows them: CoTracker or SAM 2 (local, free), or OpenCV optical flow.</p>
+      <ul><li><b>The anchor moves with the thing</b>, not just sits where a frame was placed.</li><li>Fits the vocabulary as-is: the tracker writes <code>dx/dy</code> keyframes.</li></ul></div>
+    <div class="card"><h4>G · Do it in an NLE</h4>
+      <p>DaVinci Resolve (free) Fusion templates, CapCut (free) effects, After Effects with Firefly.</p>
+      <ul><li>Off the board, hand-placed, no verification, no conversation. Kept here as the baseline the built path has to beat.</li></ul></div>
+  </div>
+</section>
+
+<section id="built">
+  <div class="sec"><span class="no">02</span><h2>What was built: A, with the human's drawing as the strongest signal</h2></div>
+  <p class="prose">The four rules of <code>docs/EFFECTS.md</code> hold, with one turned inside out: the model never writes ffmpeg (Rule 1), nothing is in pixels (Rule 2), precision comes from narrowing (Rule 3), and the asset is <em>generated, not fetched</em> (Rule 4, inverted). The vocabulary, the validation and the loop live in <code>roughcut/fx.py</code> and <code>/api/fx</code>; the board draws the same JSON on the monitor.</p>
+  <div class="flow">
+    <div class="step"><span class="n">1 · SAY</span><b>The note</b><p>"hit markers where my skis hit the rocks, with the sound" — in the FX tool, on the selected shot. Or draw on the frame first.</p></div>
+    <div class="step"><span class="n">2 · NARROW</span><b>Find the impacts</b><p>The onset track (10 Hz, already in every audio sidecar) gives the candidate strikes inside the shot. No model call.</p></div>
+    <div class="step"><span class="n">3 · DESIGN</span><b>The program</b><p>One text call: the sprite and the synth patch, in the vocabulary, validated hard. A drawn reference's marks become the anchors directly.</p></div>
+    <div class="step"><span class="n">4 · PLACE</span><b>Where the skis are</b><p>Optional, priced on the button: a strip of frames at each candidate, one call, x/y per hit. Or two clicks on the monitor.</p></div>
+    <div class="step"><span class="n">5 · PREVIEW</span><b>On the monitor</b><p>The same JSON drawn live over the proxy with its sound. Nudge a hit by a frame; move an anchor by a click.</p></div>
+    <div class="step"><span class="n">6 · VERIFY</span><b>The checklist</b><p>A proof render of the one shot, with and without; the machine measures. Iterate with the model until it passes.</p></div>
+    <div class="step"><span class="n">7 · ACCEPT</span><b>Into the EDL</b><p>Only the human's click writes <code>effects</code>. The render bakes the overlay and the mix into that shot's part.</p></div>
+  </div>
+  <h3>The vocabulary, in one example</h3>
+  <pre>{"name": "hit markers", "shot": "gd6a5fe3527", "clip": "CLIP_08.MP4",
+ "events": [{"t": 268.8, "x": 0.52, "y": 0.71}, {"t": 271.1, "x": 0.49, "y": 0.73}],
+ "overlay": {"duration": 0.35, "size": 0.12,
+   "shapes": [{"type": "line", "from": [-1,-1], "to": [-0.3,-0.3], "width": 0.1}, … four ticks in an X …],
+   "anim": {"scale": [[0,1.4],[0.06,1.0]], "opacity": [[0,1],[0.23,1],[0.35,0]]},
+   "flash": {"color": "#ff0000", "opacity": 0.15, "duration": 0.08}},
+ "sound": {"duration": 0.18, "gain_db": -6,
+   "layers": [{"type": "tone", "freq": 1800, "wave": "square", "decay": 0.06},
+              {"type": "noise", "color": "white", "hp": 1500, "decay": 0.09}]}}</pre>
+  <p class="prose">Times are clip seconds, anchors are fractions of the frame, the sprite's box is a fraction of the frame width. The same JSON draws on the 720p proxy in the monitor and on the 4K master. A "make them red and bigger" is a revise call that returns the same shape with two numbers changed.</p>
+  <h3>The definition of done, as the machine runs it</h3>
+  <div class="check card">
+    <div><span class="ok">✓</span> in_shot · every hit inside the shot's range</div>
+    <div><span class="ok">✓</span> in_frame · every anchor inside the frame, the sprite not more than half off an edge</div>
+    <div><span class="ok">✓</span> sync · the sound and the overlay share every t; the sound is not longer than the overlay + 0.25 s</div>
+    <div><span class="ok">✓</span> on_onset · each hit within 150 ms of an onset peak (when the note names an impact)</div>
+    <div><span class="ok">✓</span> audio_landed · the proof's audio rises ≥ 6 dB at each hit against the 300 ms before it</div>
+    <div><span class="ok">✓</span> picture_landed · the proof's frame differs from the base at each hit, and the change's box contains the anchor</div>
+    <div><span class="skip">–</span> on_the_skis · priced: the model looks at the proof's frames and says whether the marker sits on the skis</div>
+  </div>
+  <p class="prose">The first four are free and instant. The two measured ones need the proof render — seconds on the proxy, the one shot only — and they are what makes "verified" a fact rather than a sentence: the machine decodes the part's audio and frames and reads what it put there. The sixth costs a call and is the human's to spend.</p>
+  <h3>Drawing a reference</h3>
+  <p class="prose">Pause the monitor on the frame, press <em>Draw a reference</em>, mark the skis (one stroke per hit), write the goal ("markers here, when the skis hit"), press <em>Use it</em>. The frame with the marks is saved as a PNG next to the effect; the marks' centroids become the anchors; the frame's time snaps to the nearest onset peak; the model is asked only for the look. Two strokes beat any amount of inference, and the reference stays with the effect as its provenance.</p>
+</section>
+
+<section id="tools">
+  <div class="sec"><span class="no">03</span><h2>The alternatives, and the free tools that fit them</h2></div>
+  <p class="prose">Where the built path stops, these pick up. Each entry says what it would add to the loop, what it costs, and what changes in the vocabulary — which is the honest measure of "easy to add". Free tiers and licences are as of September 2026 and change; check before relying on one.</p>
+  <div class="scroll"><table>
+    <tr><th>Tool</th><th>What it adds</th><th>Runs</th><th>Free?</th><th>Alpha / sync</th><th>Fit with the loop</th></tr>
+    <tr><td><b>Stable Audio Open</b> (Stability AI)</td><td>Text → a real-sounding sample: "sharp metallic click, short"</td><td>Local, GPU</td><td class="y">Yes, open weights</td><td class="y">Audio only; the transient is measurable</td><td>A <code>sample</code> sound layer; the same <code>audio_landed</code> check</td></tr>
+    <tr><td><b>AudioCraft / AudioGen</b> (Meta)</td><td>Text → sound effects, a few seconds</td><td>Local, GPU</td><td class="y">Yes, open weights</td><td class="y">Audio only</td><td>Same as above; slower, older</td></tr>
+    <tr><td><b>ElevenLabs Sound Effects</b></td><td>Text → sound effect, hosted, fast</td><td>Hosted API</td><td class="m">Free tier with quotas</td><td class="y">Audio only</td><td>Same layer, plus an API key and a quota to watch</td></tr>
+    <tr><td><b>Freesound</b> · <b>Pixabay</b> · <b>Mixkit</b></td><td>Recorded sounds, searchable</td><td>Web</td><td class="y">CC / royalty-free, read each</td><td class="y">Audio only</td><td>EFFECTS.md's library path: drop a file in <code>assets/sfx</code>, the manifest describes it</td></tr>
+    <tr><td><b>ComfyUI + SDXL / FLUX</b> with LayerDiffuse or matting</td><td>A still sprite with alpha ("a stylised impact spark")</td><td>Local, GPU</td><td class="y">Yes</td><td class="m">Alpha via LayerDiffuse or a matting pass; not always clean</td><td>An <code>image</code> shape type pointing at the PNG; animation stays keyframed</td></tr>
+    <tr><td><b>Stable Video Diffusion</b> · <b>AnimateDiff</b> · <b>Wan 2.x</b></td><td>A short generated clip as the overlay</td><td>Local, GPU (heavy)</td><td class="y">Yes</td><td class="n">Opaque; needs chroma or matting; timing is not controllable to the frame</td><td>A <code>clip</code> overlay kind with a matte; the checks still work on the proof</td></tr>
+    <tr><td><b>Runway Gen-4</b> · <b>Pika</b> · <b>Luma Dream Machine</b> · <b>Kling</b></td><td>Hosted video generation, higher quality</td><td>Hosted</td><td class="m">Limited free credits</td><td class="n">Opaque, slow, quotas</td><td>Same <code>clip</code> kind; a downloaded file, never fetched by the tool</td></tr>
+    <tr><td><b>CoTracker</b> · <b>SAM 2</b> (Meta)</td><td>Track the skis through the shot; the marker follows</td><td>Local, GPU</td><td class="y">Yes, open weights</td><td class="y">Writes <code>dx/dy</code> keyframes per event</td><td>The biggest dividend after the built path: anchors that move</td></tr>
+    <tr><td><b>OpenCV</b> optical flow</td><td>The same, coarser, no GPU</td><td>Local, CPU</td><td class="y">Yes</td><td class="y">Keyframes</td><td>Cheaper first step towards tracking</td></tr>
+    <tr><td><b>Remotion</b> · <b>Motion Canvas</b> · <b>p5.js</b> · <b>Manim</b></td><td>Anything code can draw</td><td>Local, headless browser</td><td class="y">Yes</td><td class="y">Frames with alpha</td><td>Model-written code: only behind a sandbox and a review step; not before</td></tr>
+    <tr><td><b>Lottie / Rive</b> files</td><td>Designer-made animated vector effects</td><td>Local renderer</td><td class="y">Many free packs (LottieFiles)</td><td class="y">Alpha native</td><td>A <code>lottie</code> overlay kind; the model picks and parameterises, does not author</td></tr>
+    <tr><td><b>DaVinci Resolve</b> (Fusion) · <b>CapCut</b></td><td>Hand-placed effects in an NLE</td><td>Desktop</td><td class="y">Free</td><td class="y">Native</td><td>The baseline: export the cut, do it there, no loop</td></tr>
+  </table></div>
+  <h3>The order that pays</h3>
+  <ul class="tight prose">
+    <li><b>Tracking (F)</b> next: the one thing a hit marker visibly lacks when the skis move during the 350 ms is following them. CoTracker on the proof frames, writing <code>dx/dy</code> keyframes — the vocabulary already has the fields.</li>
+    <li><b>A sampled sound layer (C)</b> when the synth is too clean for a given effect: Stable Audio Open locally, a <code>sample</code> layer, the same check. The library path (D) comes for free with it.</li>
+    <li><b>Image sprites (B, stills only)</b> for effects that want a texture the shapes cannot draw: a PNG with alpha from ComfyUI, an <code>image</code> shape, animation still keyframed and verifiable.</li>
+    <li><b>Generated clips (B, video)</b> and <b>model-written code (E)</b> last, and only with a matte step and a sandbox respectively. Both cost more than they add for a HUD-style effect, which is most of what a ski film wants.</li>
+  </ul>
+</section>
+
+<section id="costs">
+  <div class="sec"><span class="no">04</span><h2>What it costs, and what it does not</h2></div>
+  <div class="scroll"><table>
+    <tr><th>Step</th><th>Calls</th><th>Money</th><th>Time</th></tr>
+    <tr><td>Find the impacts (onset peaks)</td><td>0</td><td>$0</td><td>instant</td></tr>
+    <tr><td>Design the program</td><td>1 text</td><td>≈ $0.05</td><td>10–20 s</td></tr>
+    <tr><td>Place on the frames (optional)</td><td>1 with a strip</td><td>≈ $0.02 a frame</td><td>15–30 s</td></tr>
+    <tr><td>Revise ("red and bigger")</td><td>1 text</td><td>≈ $0.05</td><td>10 s</td></tr>
+    <tr><td>Preview on the monitor</td><td>0</td><td>$0</td><td>live</td></tr>
+    <tr><td>Verify: the proof render + six checks</td><td>0</td><td>$0</td><td>seconds</td></tr>
+    <tr><td>The model's look at the proof (optional)</td><td>1 with frames</td><td>≈ $0.05–0.15</td><td>20 s</td></tr>
+    <tr><td>The final render</td><td>0</td><td>$0</td><td>the part re-encodes anyway</td></tr>
+  </table></div>
+  <p class="prose">The price is on every button before it is pressed, the way Find and the visual pass already work, and nothing spends without a click.</p>
+</section>
+
+<footer>Roughcut · effects directions · 2026-09-20 · INTAKE M12 · the built path is `roughcut/fx.py`, `/api/fx`, `/fx.js`.</footer>
+</div>
+</body>
+</html>

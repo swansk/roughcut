@@ -10,6 +10,13 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Effects directions (INTAKE M12, I12.3)** — `docs/design/effects-directions.html`: the
+  seven ways an effect could be made (a program the model writes, generative image /
+  video, generative audio, an asset library, model-written code rendered headless,
+  vision tracking, an NLE), the one built and why, the loop and the checklist as the
+  machine runs it, the alternatives with the free online / AI tools that fit each and
+  what each would change in the vocabulary, and the costs per step. EFFECTS.md gains
+  the 2026-09-20 addendum: Rule 4 turned inside out — the asset is generated, not fetched.
 - **Effects foundation (INTAKE M12, I12.0)** — AI-designed video + audio effects, the
   contract and the loop. Karl, 2026-09-20: *"Add call of duty hit markers where my skis
   are with the sound effect … AI then goes and adds separate overlaid video with the

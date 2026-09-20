@@ -152,3 +152,20 @@ Identical in shape to Ask, because that shape works:
 5. **Natural language → effects** — the Ask path, once the first four make a proposal checkable.
 
 Nothing here needs the T0–T13 pipeline, and nothing here should wait for it.
+
+## 2026-09-20 — Rule 4, turned inside out (INTAKE M12)
+
+Karl: *"AI then goes and adds separate overlaid video with the effect (which it also
+generates itself) and the audio."* Rule 4 said the model cannot invent a hitmarker PNG. It
+can invent a hitmarker **program**: `roughcut/fx.py` is a closed vocabulary for a
+procedural sprite (shapes in a unit box, keyframed scale / opacity / rotate / offset, a
+flash) and a procedural synth patch (tone / noise / click / sweep layers with envelopes),
+and code draws both — PIL + numpy on the master, a canvas + WebAudio on the monitor —
+from one JSON. Rules 1–3 hold exactly as written: the model still never writes ffmpeg,
+nothing is in pixels, and precision still comes from narrowing (the onset track finds the
+strikes, a priced frame strip places the anchor, the human nudges — or draws a reference
+on the frame, whose marks are the anchors with no call at all). The library path stays
+for recorded material; the generated one needs no licence and iterates by numbers. The
+definition of done is a checklist the machine runs after a proof render of the one shot
+(`fx.verify`). The ways considered, the one built and the alternatives with free tools
+are in `docs/design/effects-directions.html`.

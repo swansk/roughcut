@@ -918,8 +918,9 @@ HTML proposal with others (incl. online tools / other AI tools, ideally free)."*
 - [ ] I12.2 **The FX tool, the monitor overlay, the sketch** (lane `agent/fx-ui`): cards
       with the checklist, Preview / Verify / Iterate / Accept / Discard / Remove, the
       design box with the price, Draw a reference, live nudging; `test_fx_ui.py`.
-- [ ] I12.3 **The proposal page**: the ways considered, the one built, the alternatives
-      (online and other AI tools, free where possible) — `docs/design/effects-directions.html`.
+- [x] I12.3 **The proposal page**: the ways considered, the one built, the alternatives
+      (online and other AI tools, free where possible) — `docs/design/effects-directions.html`;
+      EFFECTS.md's Rule 4 addendum.
 - [ ] I12.4 Live on Killington: the rocks shot, hit markers with the sound, verified.
 - [ ] I12.5 Karl's look.
 
