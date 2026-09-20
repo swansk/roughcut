@@ -176,6 +176,10 @@ def live_server(project):
     srv.should_exit = True
     thread.join(timeout=10)
     project["edl"].write_text(original, encoding="utf-8")
+    # finished fx jobs stay on /api/jobs for 12 s and would put the progress strip in
+    # the header of the next module's pages (test_dock_ui measures the header)
+    server.FX.clear()
+    shutil.rmtree(server.fx_home(), ignore_errors=True)
 
 
 @pytest.fixture
@@ -194,6 +198,10 @@ def page(live_server, project):
     Path(project["edl"]).write_text(seed, encoding="utf-8")
     # proposals from an earlier test would still be on disk
     shutil.rmtree(server.fx_home(), ignore_errors=True)
+    # and its finished fx jobs would still be on /api/jobs for 12 s: ten of them make
+    # the header's progress strip 585 px tall (measured), and the monitor no longer
+    # fits under it in the 900 px viewport the pointer tests need it in
+    server.FX.clear()
     with sync_playwright() as pw:
         browser = pw.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
         pg = browser.new_page(viewport={"width": 1280, "height": 900})
@@ -239,13 +247,21 @@ def design(page, note: str = "hit markers where my skis hit the rocks, with the 
     return lst[-1]
 
 
-def wait_effect(page, fx_id: str, pred_js: str, timeout: int = 10000) -> dict:
-    """Wait until the server's copy of the effect satisfies `pred_js` (an `e =>` arrow)."""
-    page.wait_for_function(
-        f"fetch('/api/fx').then(r => r.json()).then(d => {{"
-        f" const e = d.effects.find(x => x.id === '{fx_id}'); return !!e && ({pred_js})(e); }})",
-        timeout=timeout)
-    return next(e for e in effects(page) if e["id"] == fx_id)
+def wait_effect(page, fx_id: str, pred_js: str, timeout: float = 10.0) -> dict:
+    """Wait until the server's copy of the effect satisfies `pred_js` (an `e =>` arrow).
+    Polled from here with `evaluate` (which awaits the fetch) — `wait_for_function`
+    does not await a returned Promise and would pass on the first tick."""
+    t0 = time.time()
+    last = None
+    while time.time() - t0 < timeout:
+        last = page.evaluate(
+            f"fetch('/api/fx').then(r => r.json()).then(d => {{"
+            f" const e = d.effects.find(x => x.id === '{fx_id}');"
+            f" return {{e, ok: !!e && ({pred_js})(e)}}; }})")
+        if last["ok"]:
+            return last["e"]
+        time.sleep(0.05)
+    raise AssertionError(f"the effect never satisfied {pred_js}: {last}")
 
 
 # ---------------------------------------------------------------- the FX tool
@@ -477,9 +493,23 @@ def test_preview_plays_the_shot_and_sounds_each_hit_once_per_pass(page):
 # ---------------------------------------------------------------- the sketch
 
 def screen_rect(page) -> dict:
-    return page.evaluate("""() => {
+    """The picture's box on screen, after putting the whole screen in the viewport
+    under the sticky header: with the progress strip in the header (the earlier
+    tests' finished jobs stay on it 12 s) the header is tall and the monitor's lower
+    half sits below 900 px — a pointer event on either lands on the strip or on
+    nothing. Asserted, so a miss is loud rather than a 30 s wait."""
+    r = page.evaluate("""async () => {
+        const hd = document.querySelector('header').getBoundingClientRect().bottom;
+        const s = document.querySelector('.screen').getBoundingClientRect();
+        window.scrollBy(0, s.top - hd - 8);
+        // two frames: the rect is right at once, but a pointer event dispatched in the
+        // same tick is hit-tested against the pre-scroll page
+        await new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
         const b = document.querySelector('#fxCanvas').getBoundingClientRect();
-        return {x: b.x, y: b.y, w: b.width, h: b.height}; }""")
+        return {x: b.x, y: b.y, w: b.width, h: b.height, vh: window.innerHeight,
+                hd: document.querySelector('header').getBoundingClientRect().bottom}; }""")
+    assert r["hd"] <= r["y"] and r["y"] + r["h"] <= r["vh"] + 1, r
+    return r
 
 
 def drag(page, r: dict, x0: float, y0: float, x1: float, y1: float, steps: int = 6) -> None:
@@ -586,3 +616,64 @@ def test_esc_cancels_the_sketch_and_the_clear_button_forgets_a_reference(page):
     page.locator("#fx .fxref button[data-act=clearref]").click()
     page.wait_for_function("document.querySelectorAll('#fx .fxref').length === 0")
     assert page.evaluate("fx.state.reference") is None
+
+
+# ---------------------------------------------------------------- live nudging
+
+SPRITE_ALPHA = """([x, y]) => {
+    const c = document.querySelector('#fxCanvas');
+    if (!c.width) return -1;
+    // the -1,-1 → -0.3,-0.3 line of the X at scale 1.4 in a 38 px box: ~12 px up-left
+    const px = Math.round(x * c.width) - 12, py = Math.round(y * c.height) - 12;
+    let best = 0;
+    for (let dx = -4; dx <= 4; dx++) for (let dy = -4; dy <= 4; dy++) {
+        best = Math.max(best, c.getContext('2d').getImageData(px + dx, py + dy, 1, 1).data[3]);
+    }
+    return best;
+}"""
+
+
+def test_a_click_on_the_paused_monitor_moves_the_selected_hit(page):
+    """EFFECTS.md: "Two clicks beats any amount of inference." Click the hit on its
+    card — the monitor parks on its frame — then click the monitor: the anchor moves
+    there (PUT, fractions of the frame), the other hit and the time stay, the sprite
+    draws at the new place, and playback did not start. With nothing selected, or
+    while playing, the click is the screen's own."""
+    e = design(page)
+    card = page.locator("#fx .fxcard")
+    card.locator(".fxev").nth(1).click()                     # hit 2, at clip 2.4
+    page.wait_for_function(
+        "Math.abs(document.querySelector('.screen video.live').currentTime - 2.4) < 0.02", timeout=10000)
+    assert "sel" in card.locator(".fxev").nth(1).get_attribute("class")
+    assert "hit 2 selected" in card.locator(".fxpick").inner_text()
+    assert page.evaluate("player.playing") is False
+    r = screen_rect(page)
+    page.mouse.click(r["x"] + 0.25 * r["w"], r["y"] + 0.60 * r["h"])
+    got = wait_effect(page, e["id"], "e => Math.abs(e.events[1].x - 0.25) < 0.03")
+    assert got["events"][1]["y"] == pytest.approx(0.60, abs=0.03)
+    assert got["events"][1]["t"] == 2.4
+    assert (got["events"][0]["x"], got["events"][0]["y"], got["events"][0]["t"]) == (0.5, 0.7, 1.5)
+    assert "verify" not in got
+    assert page.evaluate("player.playing") is False           # the click was ours, not the screen's
+    page.wait_for_function(
+        "document.querySelectorAll('#fx .fxev .xy')[1].textContent.startsWith('x 0.2')")
+    # the monitor draws it where it went
+    page.wait_for_function(f"({SPRITE_ALPHA})([{got['events'][1]['x']}, {got['events'][1]['y']}]) > 200",
+                           timeout=10000)
+    # the same hit again deselects; a click on the monitor is then the screen's own
+    card.locator(".fxev").nth(1).click()
+    page.wait_for_function("fx.state.sel === null")
+    page.mouse.click(r["x"] + 0.75 * r["w"], r["y"] + 0.30 * r["h"])
+    page.wait_for_function("player.playing === true", timeout=10000)
+    page.evaluate("pauseCut()")
+    assert next(x for x in effects(page) if x["id"] == e["id"])["events"][1]["x"] == got["events"][1]["x"]
+    # selected but playing: the click pauses, it does not move
+    page.evaluate(f"fx.select('{e['id']}', 1)")
+    page.wait_for_function("fx.state.sel && fx.state.sel.i === 1")
+    page.evaluate("playFrom(0)")
+    page.wait_for_function("player.playing === true", timeout=10000)
+    page.mouse.click(r["x"] + 0.75 * r["w"], r["y"] + 0.30 * r["h"])
+    page.wait_for_function("player.playing === false", timeout=10000)
+    assert next(x for x in effects(page) if x["id"] == e["id"])["events"][1]["x"] == got["events"][1]["x"]
+
+

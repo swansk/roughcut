@@ -931,6 +931,39 @@
     }
   }, true);
 
+  /* ------------------------------------------------------------ live nudging */
+  /* EFFECTS.md, rule 4: *"Two clicks beats any amount of inference."* A hit selected
+   * on its card parks the monitor on its frame; a click on the paused monitor then
+   * moves its anchor there — a PUT in fractions of the frame, the checklist cleared
+   * by the server because it no longer describes this effect. Capture, on the screen,
+   * so the screen's own click (play / pause) does not fire for it; while playing, or
+   * with nothing selected, the click stays the screen's. */
+  function onScreenClick(ev) {
+    if (S.sketch || !S.sel || ev.button !== 0) return;
+    const p = PLAYER();
+    if (p && p.playing) return;
+    const e = byId(S.sel.id);
+    const sg = e && seg(e.shot);
+    const lv = liveShot();
+    if (!e || !sg) return;
+    if (!lv || String(lv.id) !== String(sg.id)) { say('park the monitor on that shot first — click the hit on its card'); return; }
+    const v = live();
+    if (!v || !v.videoWidth) return;
+    const f = frameXY(ev, ev.currentTarget, v.videoWidth, v.videoHeight);
+    if (!f) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const i = S.sel.i;
+    moveEvent(e, i, f.x, f.y).then((n) => {
+      if (n && n.events[i]) say(`hit ${i + 1} moved to x ${n.events[i].x.toFixed(2)} y ${n.events[i].y.toFixed(2)}`);
+    });
+  }
+
+  function mountNudge() {
+    const sc = $('.screen');
+    if (sc) sc.addEventListener('click', onScreenClick, true);
+  }
+
   /* ------------------------------------------------------------ mount */
   function mount() {
     const el = $('#fx');
@@ -947,6 +980,7 @@
     setInterval(onSelect, 500);          // playback moves the anchor without a select event
     mountOverlay();
     mountSketch();
+    mountNudge();
     paint(true);
     refresh().then(pollJobs);
     setInterval(pollJobs, POLL_MS);

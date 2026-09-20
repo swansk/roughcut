@@ -10,6 +10,19 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Live nudging on the monitor (INTAKE M12, lane fx-ui, 4 of 4)** — EFFECTS.md, rule
+  4: *"Two clicks beats any amount of inference."* A hit clicked on its card is
+  selected (the row lights, the card says `hit 2 selected · click the monitor (paused)
+  to move it there`) and the monitor parks on its frame; a click on the paused
+  monitor then moves that hit's anchor to the click — `PUT /api/fx/{id}` with the
+  changed events, fractions of the frame with the picture's letterbox subtracted, the
+  server clearing the checklist — and the overlay draws it where it went. The
+  listener is capture-phase on the screen, so the screen's own click (play / pause)
+  does not fire for a move; with nothing selected, or while playing, the click stays
+  the screen's. The same hit clicked again deselects. Tested with a real click at
+  (0.25, 0.60): the server's copy moves within 0.03, the other hit and the time stay,
+  the sprite's alpha is found at the new anchor, playback did not start, and the two
+  pass-through cases still play and pause.
 - **Draw a reference — the sketch on the frame (INTAKE M12, lane fx-ui, 3 of 4)** —
   Karl: *"options for human to draw references on a keyframe."* Draw a reference in
   the FX tool pauses the monitor (parking it on the selected shot when it is
