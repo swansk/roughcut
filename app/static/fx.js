@@ -465,15 +465,260 @@
   }
 
   /* ------------------------------------------------------------ the monitor overlay */
-  // (part 2 — the overlay and the sound)
-  function syncAudio() { /* filled with the overlay */ }
-  function draw() { /* filled with the overlay */ }
+  /* Every accepted or proposed effect of the live shot, drawn at the live time from
+   * the same JSON the render draws from, on a 2D canvas over the monitor's live video
+   * (the grade.js pattern: follow the video's frames with requestVideoFrameCallback,
+   * re-armed when the live element changes; a parked video draws on `seeked`).
+   *
+   * The geometry is fx.py's, in the frame's own pixels (the canvas is videoWidth ×
+   * videoHeight, so the same fractions land the same way on the proxy and the master):
+   * the sprite box is `overlay.size × width` px square, centred on (x·width, y·height)
+   * plus (dx·width, dy·width); shapes are in -1..1 across the box (a coordinate × half
+   * the box); a stroke `width` and a text `h` are × the box; `poseAt` scales, fades,
+   * rotates and offsets the whole sprite; `flash` tints the whole frame for its
+   * duration. An event draws while `t ≤ clipT < t + duration` and only when it is
+   * inside the shot's range. */
+  const O = { canvas: null, ctx: null, frameGen: 0, armedFor: null };
+
+  function sampleTrack(track, t, dflt) {
+    if (!track || !track.length) return dflt;
+    if (t <= track[0][0]) return track[0][1];
+    for (let k = 0; k + 1 < track.length; k++) {
+      const t0 = track[k][0], v0 = track[k][1], t1 = track[k + 1][0], v1 = track[k + 1][1];
+      if (t0 <= t && t <= t1) return t1 === t0 ? v1 : v0 + (v1 - v0) * (t - t0) / (t1 - t0);
+    }
+    return track[track.length - 1][1];
+  }
+
+  /* fx.pose_at, the same rules: linear between keyframes, the first value before the
+   * first key, the last after the last, a missing track its default. */
+  function poseAt(overlay, t) {
+    const a = (overlay && overlay.anim) || {};
+    return {
+      scale: sampleTrack(a.scale, t, 1.0),
+      opacity: sampleTrack(a.opacity, t, 1.0),
+      rotate: sampleTrack(a.rotate, t, 0.0),
+      dx: sampleTrack(a.dx, t, 0.0),
+      dy: sampleTrack(a.dy, t, 0.0),
+    };
+  }
+
+  function drawShape(ctx, s, B) {
+    const h = B / 2;
+    ctx.strokeStyle = s.color || '#ffffff';
+    ctx.fillStyle = s.color || '#ffffff';
+    ctx.lineWidth = Math.max(0.5, (s.width == null ? 0.08 : s.width) * B);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    const x = (s.x || 0) * h, y = (s.y || 0) * h;
+    switch (s.type) {
+      case 'line':
+        ctx.beginPath();
+        ctx.moveTo(s.from[0] * h, s.from[1] * h);
+        ctx.lineTo(s.to[0] * h, s.to[1] * h);
+        ctx.stroke();
+        break;
+      case 'circle':
+        ctx.beginPath();
+        ctx.arc(x, y, Math.max(0.5, (s.r == null ? 0.5 : s.r) * h), 0, Math.PI * 2);
+        if (s.fill !== false) ctx.fill(); else ctx.stroke();
+        break;
+      case 'ring': {
+        const r = (s.r == null ? 0.5 : s.r) * h, r2 = (s.r2 == null ? r * 0.7 : s.r2 * h);
+        ctx.beginPath();
+        ctx.arc(x, y, Math.max(0.5, r), 0, Math.PI * 2);
+        ctx.arc(x, y, Math.max(0, Math.min(r2, r)), 0, Math.PI * 2, true);
+        ctx.fill('evenodd');
+        break;
+      }
+      case 'rect': {
+        const w = (s.w == null ? 1 : s.w) * h, hh = (s.h == null ? 1 : s.h) * h;
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate((s.rotate || 0) * Math.PI / 180);
+        if (s.fill) ctx.fillRect(-w / 2, -hh / 2, w, hh); else ctx.strokeRect(-w / 2, -hh / 2, w, hh);
+        ctx.restore();
+        break;
+      }
+      case 'polygon': {
+        const pts = s.points || [];
+        if (pts.length < 2) break;
+        ctx.beginPath();
+        ctx.moveTo(pts[0][0] * h, pts[0][1] * h);
+        for (let k = 1; k < pts.length; k++) ctx.lineTo(pts[k][0] * h, pts[k][1] * h);
+        ctx.closePath();
+        if (s.fill) ctx.fill(); else ctx.stroke();
+        break;
+      }
+      case 'text': {
+        const px = Math.max(1, (s.h == null ? 0.5 : s.h) * B);
+        ctx.font = `${s.bold === false ? '' : 'bold '}${px}px system-ui, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(s.text || ''), x, y);
+        break;
+      }
+      default: break;
+    }
+  }
+
+  function drawEffect(ctx, e, sg, t, W, H) {
+    const ov = e.overlay;
+    if (!ov || !Array.isArray(ov.shapes)) return;
+    const B = (ov.size || 0.12) * W;
+    const dur = ov.duration || 0.35;
+    for (const ev of e.events || []) {
+      if (!(ev.t >= sg.in && ev.t < sg.out)) continue;
+      const dt = t - ev.t;
+      if (dt < 0 || dt >= dur) continue;
+      if (ov.flash && dt < (ov.flash.duration || 0)) {
+        ctx.save();
+        ctx.globalAlpha = ov.flash.opacity == null ? 0.15 : ov.flash.opacity;
+        ctx.fillStyle = ov.flash.color || '#ff0000';
+        ctx.fillRect(0, 0, W, H);
+        ctx.restore();
+      }
+      const pose = poseAt(ov, dt);
+      ctx.save();
+      ctx.translate(ev.x * W + pose.dx * W, ev.y * H + pose.dy * W);
+      ctx.rotate(pose.rotate * Math.PI / 180);
+      ctx.scale(pose.scale, pose.scale);
+      for (const s of ov.shapes) {
+        ctx.globalAlpha = Math.max(0, Math.min(1, pose.opacity * (s.opacity == null ? 1 : s.opacity)));
+        drawShape(ctx, s, B);
+      }
+      ctx.restore();
+    }
+  }
+
+  /* The shot the monitor is on and the element playing it. */
+  function liveShot() {
+    const p = PLAYER();
+    const list = SEGS();
+    return p && p.idx >= 0 && list[p.idx] ? list[p.idx] : null;
+  }
+
+  function draw() {
+    const c = O.canvas;
+    if (!c || !O.ctx) return;
+    const v = live();
+    const sg = liveShot();
+    const effs = sg ? forShot(sg.id) : [];
+    const on = !!(v && effs.length);
+    c.classList.toggle('live', on);
+    if (!on && !S.sketch) return;
+    if (!v || !v.videoWidth || !v.videoHeight) return;   // no frame yet; the next one draws
+    if (c.width !== v.videoWidth || c.height !== v.videoHeight) {
+      c.width = v.videoWidth;
+      c.height = v.videoHeight;
+    }
+    const ctx = O.ctx, W = c.width, H = c.height;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.clearRect(0, 0, W, H);
+    if (sg) for (const e of effs) drawEffect(ctx, e, sg, v.currentTime, W, H);
+    if (S.sketch) drawStrokes(ctx, W, H);
+  }
+
+  /* ------------------------------------------------------------ the sound */
+  /* One Audio per effect from its sound.wav, started when the live clip time crosses
+   * an event's t while playing; each event fires once per pass (reset on seek and on
+   * play), so a frame callback that lands twice inside one hit does not double it. */
+  function syncAudio() {
+    const keep = new Set();
+    for (const e of S.effects) {
+      if (!e.sound_url) continue;
+      keep.add(e.id);
+      const key = `${e.sound_url}|${JSON.stringify(e.sound || null)}|${(e.history || []).length}`;
+      const cur = S.audio.get(e.id);
+      if (cur && cur.key === key) continue;
+      let el = null;
+      try {
+        el = new Audio(`${e.sound_url}?v=${Date.now().toString(36)}`);
+        el.preload = 'auto';
+      } catch (err) { el = null; }
+      S.audio.set(e.id, { key, el });
+    }
+    for (const id of [...S.audio.keys()]) if (!keep.has(id)) S.audio.delete(id);
+  }
+
+  function sound(e, i) {
+    const k = `${e.id}:${i}`;
+    if (S.fired.has(k)) return;
+    S.fired.add(k);
+    const a = S.audio.get(e.id);
+    if (!a || !a.el) return;
+    S.sounded += 1;
+    try {
+      const el = a.el.paused || a.el.ended ? a.el : a.el.cloneNode();   // two hits inside one WAV overlap
+      el.currentTime = 0;
+      const p = el.play();
+      if (p && typeof p.catch === 'function') p.catch(() => { /* no gesture yet: the picture still draws */ });
+    } catch (err) { /* fine */ }
+  }
+
+  function step() {
+    const v = live();
+    const sg = liveShot();
+    if (v && sg) {
+      const t = v.currentTime;
+      let prev = S.prevV === v ? S.prevT : null;
+      // a hand-over lands the new element at the shot's in-point: a hit right there counts
+      if (prev == null && Math.abs(t - sg.in) < 0.25) prev = Math.min(t, sg.in);
+      if (prev != null && !v.paused && t > prev) {
+        for (const e of forShot(sg.id)) {
+          (e.events || []).forEach((ev, i) => {
+            if (ev.t >= sg.in && ev.t < sg.out && ev.t >= prev && ev.t < t) sound(e, i);
+          });
+        }
+      }
+      S.prevV = v;
+      S.prevT = t;
+    }
+    draw();
+  }
+
+  /* Follow the live video: a new frame → step. Re-armed whenever the live element
+   * changes; a callback from an element no longer live simply stops. */
+  function armFrames() {
+    const v = live();
+    const gen = ++O.frameGen;
+    O.armedFor = v;
+    if (!v) return;
+    const again = () => {
+      if (gen !== O.frameGen || v !== live()) return;
+      step();
+      if ('requestVideoFrameCallback' in v) v.requestVideoFrameCallback(again);
+      else requestAnimationFrame(again);
+    };
+    if ('requestVideoFrameCallback' in v) v.requestVideoFrameCallback(again);
+    else requestAnimationFrame(again);
+  }
+
+  function mountOverlay() {
+    const c = $('#fxCanvas');
+    if (!c) return;
+    O.canvas = c;
+    try { O.ctx = c.getContext('2d'); } catch (e) { O.ctx = null; }
+    if (!O.ctx) return;
+    const vids = [$('#pv0'), $('#pv1')].filter(Boolean);
+    vids.forEach((v) => {
+      v.addEventListener('seeked', () => { S.fired.clear(); S.prevV = v; S.prevT = v.currentTime; step(); });
+      v.addEventListener('play', () => { S.fired.clear(); S.prevV = v; S.prevT = v.currentTime; armFrames(); step(); });
+      ['loadeddata', 'timeupdate', 'pause'].forEach((ev) => v.addEventListener(ev, step));
+    });
+    const t = TL();
+    if (t && typeof t.on === 'function') t.on('playhead', () => { if (live() !== O.armedFor) armFrames(); });
+    setInterval(() => { if (live() !== O.armedFor) armFrames(); }, 250);
+    armFrames();
+  }
 
   /* ------------------------------------------------------------ the sketch */
   // (part 3)
   function startSketch() { say('the sketch is not built yet'); }
   function useSketch() {}
   function cancelSketch() {}
+  function drawStrokes() {}
 
   /* ------------------------------------------------------------ mount */
   function mount() {
@@ -489,6 +734,7 @@
       t.on('change', () => { onSelect(); paint(); badge(); });
     }
     setInterval(onSelect, 500);          // playback moves the anchor without a select event
+    mountOverlay();
     paint(true);
     refresh().then(pollJobs);
     setInterval(pollJobs, POLL_MS);
@@ -505,6 +751,9 @@
     nudge: (id, i, frames) => { const e = byId(id); return e ? nudge(e, i, frames) : Promise.resolve(null); },
     move: (id, i, x, y) => { const e = byId(id); return e ? moveEvent(e, i, x, y) : Promise.resolve(null); },
     fmtT,
+    poseAt,
+    draw,
+    audio: (id) => { const a = S.audio.get(id); return a && a.el ? a.el : null; },
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
   else mount();

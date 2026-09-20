@@ -381,3 +381,94 @@ def test_a_reload_lands_on_a_proposal_made_before_it(page):
     page.wait_for_selector("#fx .fxcard")
     assert page.locator("#fx .fxcard").get_attribute("data-id") == e["id"]
 
+
+
+# ---------------------------------------------------------------- the monitor overlay
+
+def test_poseAt_follows_the_python_rules(page):
+    """`fx.poseAt` in the browser is `fx.pose_at` in Python: linear between keys, the
+    first value before the first key, the last after the last, defaults for a missing
+    track. Sampled at times on, between and beyond the keys."""
+    overlay = json.loads(json.dumps(HIT["overlay"]))
+    overlay["anim"]["rotate"] = [[0.05, -20], [0.2, 40]]
+    overlay["anim"]["dx"] = [[0, 0.1]]
+    overlay = fx.validate_overlay(overlay)
+    for t in (0, 0.03, 0.06, 0.1, 0.2, 0.23, 0.3, 0.35, 0.5):
+        want = fx.pose_at(overlay, t)
+        got = page.evaluate("([o, t]) => fx.poseAt(o, t)", [overlay, t])
+        for k in ("scale", "opacity", "rotate", "dx", "dy"):
+            assert got[k] == pytest.approx(want[k], abs=1e-6), (t, k, got, want)
+
+
+PIXELS = """([x, y, half]) => {
+    const c = document.querySelector('#fxCanvas');
+    if (!c.width || !c.height) return -1;
+    const ctx = c.getContext('2d');
+    const x0 = Math.max(0, Math.round(x * c.width) - half), y0 = Math.max(0, Math.round(y * c.height) - half);
+    const d = ctx.getImageData(x0, y0, half * 2, half * 2).data;
+    let n = 0;
+    for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++;
+    return n;
+}"""
+
+
+def test_the_monitor_draws_the_effect_at_its_hit_and_only_then(page):
+    """Park the monitor on the first hit (shot 1 = CLIP_A 1.0–3.0, the hit at clip
+    1.5 = film 0.5): the canvas is live, sized to the proxy, and has paint around the
+    anchor (x 0.5, y 0.7) and the flash's tint in a corner. Parked a frame before the
+    hit there is nothing on it; on the other shot the canvas is not live at all."""
+    design(page)
+    page.evaluate("tl.seek(0.5)")
+    page.wait_for_function("document.querySelector('#fxCanvas').classList.contains('live')")
+    page.wait_for_function(
+        "Math.abs(document.querySelector('.screen video.live').currentTime - 1.5) < 0.02", timeout=10000)
+    page.wait_for_function(f"({PIXELS})([0.5, 0.7, 30]) > 0", timeout=10000)
+    assert page.evaluate("[document.querySelector('#fxCanvas').width, document.querySelector('#fxCanvas').height]") == [320, 180]
+    # the sprite: four lines in an X around the anchor, none of it at the far corner
+    # (the flash tints the whole frame at 15 %, so the corner has alpha but the sprite
+    # region has much more of it)
+    around = page.evaluate(PIXELS, [0.5, 0.7, 30])
+    corner = page.evaluate(PIXELS, [0.05, 0.1, 30])
+    assert around == 60 * 60 and corner == 60 * 60          # the flash covers everything
+    alpha_corner = page.evaluate("""() => {
+        const c = document.querySelector('#fxCanvas');
+        return c.getContext('2d').getImageData(10, 10, 1, 1).data[3]; }""")
+    assert 30 <= alpha_corner <= 45                          # 15 % red, and nothing else there
+    alpha_sprite = page.evaluate("""() => {
+        const c = document.querySelector('#fxCanvas');
+        // the -1,-1 → -0.3,-0.3 line at scale 1.4 in a 38 px box: ~ -17 px from the anchor
+        const x = Math.round(0.5 * c.width) - 12, y = Math.round(0.7 * c.height) - 12;
+        let best = 0;
+        for (let dx = -4; dx <= 4; dx++) for (let dy = -4; dy <= 4; dy++) {
+            best = Math.max(best, c.getContext('2d').getImageData(x + dx, y + dy, 1, 1).data[3]);
+        }
+        return best; }""")
+    assert alpha_sprite > 200, alpha_sprite
+    # a frame before the hit: nothing drawn
+    page.evaluate("tl.seek(0.4)")
+    page.wait_for_function(
+        "Math.abs(document.querySelector('.screen video.live').currentTime - 1.4) < 0.02", timeout=10000)
+    page.wait_for_function(f"({PIXELS})([0.5, 0.7, 30]) === 0", timeout=10000)
+    # the other shot has no effects: the canvas is not live
+    page.evaluate("tl.seek(2.5)")
+    page.wait_for_function("!document.querySelector('#fxCanvas').classList.contains('live')")
+
+
+def test_preview_plays_the_shot_and_sounds_each_hit_once_per_pass(page):
+    """Preview plays this shot only; the effect's sound (one Audio from its sound.wav)
+    starts as the clip time crosses each hit — twice for two hits, not more, however
+    many frames land inside one — and a seek resets the guard for the next pass."""
+    e = design(page)
+    src = page.evaluate(f"fx.audio('{e['id']}').src")
+    assert f"/api/fx/{e['id']}/sound.wav" in src
+    page.locator("#fx .fxcard button[data-act=preview]").click()
+    page.wait_for_function("player.playing === true && player.single === true")
+    page.wait_for_function("fx.state.sounded === 2", timeout=10000)
+    page.wait_for_function("player.playing === false", timeout=10000)   # the shot ended
+    assert page.evaluate("fx.state.sounded") == 2
+    # another pass from before the second hit: one more
+    page.evaluate("tl.seek(1.0)")                            # clip 2.0 of shot 1
+    page.locator("#fx .fxcard button[data-act=preview]").click()
+    page.wait_for_function("fx.state.sounded === 3", timeout=10000)
+    page.wait_for_function("player.playing === false", timeout=10000)
+    assert page.evaluate("fx.state.sounded") == 3

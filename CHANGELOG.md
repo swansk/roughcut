@@ -10,6 +10,25 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The monitor shows and sounds the effects (INTAKE M12, lane fx-ui, 2 of 4)** —
+  `#fxCanvas`, a 2D canvas over the monitor's live video (the grade.js pattern:
+  `requestVideoFrameCallback` on the live element, re-armed when it changes; a parked
+  video draws on `seeked`), draws every accepted or proposed effect of the live shot
+  at the live clip time from the same JSON the render draws from, sized to the proxy's
+  `videoWidth × videoHeight` so the same fractions land the same way on the master:
+  the sprite box is `overlay.size × width` px square, centred on (x·width, y·height)
+  plus (dx·width, dy·width), shapes in -1..1 across the box (a coordinate × half the
+  box; a stroke `width` and a text `h` × the box), `poseAt(overlay, t)` — the same
+  rules as `fx.pose_at`, checked against it in the browser at nine times — scales,
+  fades, rotates and offsets the whole sprite, `flash` tints the whole frame for its
+  duration, and an event draws only while `t ≤ clipT < t + duration` and only inside
+  the shot's range. The sound: one `Audio` per effect from `/api/fx/{id}/sound.wav`,
+  started when the live clip time crosses an event's `t` while playing, once per
+  event per pass (reset on seek and on play; two hits inside one WAV overlap through
+  a clone). Effects always show — no toggle. Tests park the monitor on a hit and read
+  the canvas's pixels back: the sprite's alpha at the anchor, the flash's 15 % in a
+  corner, nothing a frame earlier, not live on a shot without effects; Preview plays
+  the shot and the sound starts twice for two hits, once more after a seek.
 - **The FX tool on the board (INTAKE M12, lane fx-ui, 1 of 4)** — `app/static/fx.js`
   fills the dock's FX tool (`#fx`) for the selected shot (`tl.state.anchor`, followed
   through `tl.on('select')`): a header `FX · shot 1 · CLIP_A`, the shot's effects as
