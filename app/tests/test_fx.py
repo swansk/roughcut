@@ -276,3 +276,139 @@ def test_part_graph_strings_one_overlay_per_event_and_one_amix(tmp_path):
     # nothing in the shot: nothing to do
     assert fx.part_graph([(e, [])], 320, 180, 24, tmp_path / "n") == ([], "", "vbase", "abase")
     assert fx.part_graph([], 320, 180, 24, tmp_path / "n") == ([], "", "vbase", "abase")
+
+
+# ------------------------------------------------------------ frames and strips
+
+def test_frames_for_and_contact_strip(project, tmp_path):
+    from PIL import Image
+    proxy = project["footage"] / "CLIP_A.MP4"
+    frames = fx.frames_for(proxy, [1.5, 2.4], tmp_path / "f", width=320)
+    assert [p.name for p in frames] == ["t_1.50.jpg", "t_2.40.jpg"]
+    assert Image.open(frames[0]).size == (320, 180)
+    strip = fx.contact_strip(frames, ["[0] t=1.50s", "[1] t=2.40s"], tmp_path / "strip.jpg", cols=4)
+    im = Image.open(strip)
+    assert im.format == "JPEG" and im.width > 640 and im.height >= 180
+
+
+# ------------------------------------------------------------ the model calls
+
+class Scripted:
+    """A backend that answers from a queue and keeps every request."""
+    name = "scripted"
+
+    def __init__(self, *answers):
+        self.answers = list(answers)
+        self.seen: list = []
+
+    def complete(self, request):
+        self.seen.append(request)
+        text = json.dumps(self.answers.pop(0) if len(self.answers) > 1 else self.answers[0])
+        return inference.Result(content=text, input_tokens=10, output_tokens=5, backend="scripted",
+                                model=config.model_for(request.role), projected_usd=1e-4,
+                                latency_ms=1, raw="```json\n" + text + "\n```")
+
+
+DESIGNED = {k: HIT[k] for k in ("name", "why", "events", "overlay", "sound")}
+TRANSCRIPT = [{"start": 0.5, "end": 2.0, "text": "hello there"},
+              {"start": 2.4, "end": 4.0, "text": "how are you"},
+              {"start": 5.0, "end": 5.6, "text": "goodbye"}]
+SIDECAR = {"frame_hz": 10, "tracks": {"onset": ONSET}, "transcript": TRANSCRIPT}
+CLIP = {"clip": "CLIP_A.MP4", "duration": 6.0, "transcript": TRANSCRIPT}
+
+
+@pytest.fixture
+def scripted():
+    def install(*answers):
+        b = Scripted(*answers)
+        inference.set_backend(b)
+        inference.reset_spend()
+        return b
+    yield install
+    inference.set_backend(None)
+
+
+def test_design_prompt_carries_the_evidence_and_the_system_the_vocabulary():
+    peaks = fx.onset_peaks(ONSET, 10, 1.0, 3.0)
+    system, prompt = fx.build_design_prompt("hit markers where my skis hit the rocks", SEG, CLIP, peaks=peaks)
+    assert "hit markers where my skis hit the rocks" in prompt
+    assert "CLIP_A.MP4" in prompt and "1.00s" in prompt and "3.00s" in prompt and "first" in prompt
+    assert "hello there" in prompt and "how are you" in prompt and "goodbye" not in prompt
+    assert "t=1.50" in prompt and "t=2.40" in prompt
+    for token in (f"{fx.MIN_SIZE}", f"{fx.MAX_SIZE}", f"{fx.MAX_EVENTS}", f"{fx.MAX_SHAPES}",
+                  f"{fx.MIN_DURATION}", f"{fx.MAX_DURATION}", "top-left", "-1 to 1", "JSON only",
+                  "1800", "square", "#ff0000", '"hp": 1500'):
+        assert token in system, token
+    for kind in fx.SHAPES + fx.LAYERS + fx.TRACKS:
+        assert f'"{kind}"' in system, kind
+    ref = {"goal": "the skis", "marks": [[0.3, 0.6]], "t": 1.55}
+    _, p2 = fx.build_design_prompt("hit markers", SEG, CLIP, peaks=peaks, reference=ref)
+    assert "DREW A REFERENCE" in p2 and "(0.300, 0.600)" in p2 and "the skis" in p2
+    _, p3 = fx.build_place_prompt("hit markers", HIT, [{"t": 1.5}, {"t": 2.4}], Path("strip.jpg"))
+    assert "[0] t=1.50s" in p3 and "[1] t=2.40s" in p3 and '"hit"' in p3
+    s4, p4 = fx.build_revise_prompt(HIT, "make them red")
+    assert "make them red" in p4 and '"hit markers"' in p4 and "WORKED EXAMPLE" in s4
+
+
+def test_design_makes_a_validated_proposal_through_the_judge_role(scripted):
+    b = scripted(DESIGNED)
+    e = fx.design("hit markers where my skis hit the rocks", SEG, CLIP, SIDECAR, segments=SEGS, clips=CLIPS)
+    assert len(b.seen) == 1 and b.seen[0].role == config.ROLE_JUDGE
+    assert b.seen[0].system and "WORKED EXAMPLE" in b.seen[0].system and b.seen[0].images == ()
+    assert e["status"] == "proposed" and e["shot"] == "s1" and e["clip"] == "CLIP_A.MP4"
+    assert [ev["t"] for ev in e["events"]] == [1.5, 2.4]
+    assert e["name"] == "hit markers" and e["note"].startswith("hit markers where")
+    assert e["created"] and e["history"] == [{"note": "hit markers where my skis hit the rocks", "at": e["created"]}]
+    assert e["overlay"]["flash"]["color"] == "#ff0000" and e["sound"]["layers"][1]["hp"] == 1500
+    # the model's answer is validated, not trusted: an invented shape fails loudly
+    scripted({**DESIGNED, "overlay": {"shapes": [{"type": "sparkle"}]}})
+    with pytest.raises(ValueError, match="unknown shape type"):
+        fx.design("hit markers", SEG, CLIP, SIDECAR, segments=SEGS, clips=CLIPS)
+
+
+def test_design_takes_the_anchors_from_a_reference(scripted):
+    scripted(DESIGNED)
+    ref = {"goal": "the skis", "marks": [[0.3, 0.6], [0.7, 0.65]], "t": 1.58}
+    e = fx.design("hit markers on the skis", SEG, CLIP, SIDECAR, reference=ref, segments=SEGS, clips=CLIPS)
+    # the marks are the anchors; t is the onset peak nearest the reference frame
+    assert [(ev["t"], ev["x"], ev["y"]) for ev in e["events"]] == [(1.5, 0.3, 0.6), (1.5, 0.7, 0.65)]
+
+
+def test_design_places_by_looking_and_drops_what_is_not_a_hit(scripted, project, tmp_path):
+    placed = {"events": [{"t": 1.5, "x": 0.31, "y": 0.62, "hit": True, "why": "skis on the rock"},
+                         {"t": 2.4, "x": 0.5, "y": 0.5, "hit": False, "why": "just snow"}]}
+    b = scripted(DESIGNED, placed)
+    wd = tmp_path / "fx_x"
+    e = fx.design("hit markers where my skis hit the rocks", SEG, CLIP, SIDECAR, place=True,
+                  proxy=project["footage"] / "CLIP_A.MP4", workdir=wd, segments=SEGS, clips=CLIPS)
+    assert len(b.seen) == 2
+    assert (wd / "strip.jpg").exists() and sorted(p.name for p in (wd / "frames").iterdir()) == ["t_1.50.jpg", "t_2.40.jpg"]
+    assert list(b.seen[1].images) == [wd / "strip.jpg"] and "[1] t=2.40s" in b.seen[1].prompt
+    assert [(ev["t"], ev["x"], ev["y"]) for ev in e["events"]] == [(1.5, 0.31, 0.62)]
+    assert e["events"][0]["label"] == "skis on the rock"
+    # every candidate refused: the strongest one is kept rather than none
+    scripted(DESIGNED, {"events": [{"t": 1.5, "x": 0.3, "y": 0.6, "hit": False},
+                                   {"t": 2.4, "x": 0.5, "y": 0.5, "hit": False}]})
+    e2 = fx.design("hit markers", SEG, CLIP, SIDECAR, place=True, proxy=project["footage"] / "CLIP_A.MP4",
+                   workdir=tmp_path / "fx_y", segments=SEGS, clips=CLIPS)
+    assert len(e2["events"]) == 1
+
+
+def test_revise_keeps_id_and_events_unless_the_note_moves_them(scripted):
+    e = _effect()
+    red = json.loads(json.dumps(DESIGNED))
+    for s in red["overlay"]["shapes"]:
+        s["color"] = "#ff0000"
+    red.pop("events")                                            # the model left them alone
+    b = scripted(red)
+    e["history"] = [{"note": "hit markers", "at": "2026-09-20T12:00:00"}]
+    new = fx.revise(e, "make them red", SEGS, CLIPS)
+    assert b.seen[0].role == config.ROLE_JUDGE and "make them red" in b.seen[0].prompt
+    assert new["id"] == e["id"] and new["events"] == e["events"]
+    assert all(s["color"] == "#ff0000" for s in new["overlay"]["shapes"])
+    assert new["status"] == "proposed" and new["note"] == "make them red"
+    assert [h["note"] for h in new["history"]] == ["hit markers", "make them red"]
+    one = {**DESIGNED, "events": [{"t": 1.5, "x": 0.5, "y": 0.7}]}
+    scripted(one)
+    fewer = fx.revise(new, "one hit only, the big one", SEGS, CLIPS)
+    assert [ev["t"] for ev in fewer["events"]] == [1.5] and len(fewer["history"]) == 3

@@ -808,18 +808,138 @@ def part_graph(effects: list[tuple[dict, list[dict]]], w: int, h: int, fps: floa
     return extra, ";".join(vparts + aparts), vout, aout
 
 
+# ---- frames and strips for the model's eyes
+
 def frames_for(proxy: Path, times: list[float], out_dir: Path, *, width: int = 640) -> list[Path]:
     """One JPEG per time from the proxy (`ffmpeg -ss t -i proxy -frames:v 1`), `width`
     px wide, named `t_<seconds>.jpg`. Returns the paths in the order of `times`."""
-    raise NotImplementedError("lane fx-core")
-
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for t in times:
+        p = out_dir / f"t_{float(t):.2f}.jpg"
+        r = subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-nostdin", "-ss", f"{float(t):.3f}",
+             "-i", str(proxy), "-frames:v", "1", "-vf", f"scale={int(width)}:-2",
+             "-q:v", "3", str(p)], capture_output=True, text=True)
+        if r.returncode != 0 or not p.exists():
+            raise RuntimeError(f"frame at {t:.2f}s failed: {r.stderr[-300:]}")
+        paths.append(p)
+    return paths
 
 
 def contact_strip(frames: list[Path], labels: list[str], out: Path, *, cols: int = 4) -> Path:
     """The frames tiled with their labels burnt in (PIL), for a placing call and for
     the proof look. Returns `out`."""
-    raise NotImplementedError("lane fx-core")
+    from PIL import Image, ImageDraw
 
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    images = [Image.open(p).convert("RGB") for p in frames]
+    if not images:
+        raise ValueError("contact_strip needs at least one frame")
+    cw = max(im.width for im in images)
+    ch = max(im.height for im in images)
+    cols = max(1, min(cols, len(images)))
+    rows = (len(images) + cols - 1) // cols
+    pad = 4
+    sheet = Image.new("RGB", (cols * (cw + pad) + pad, rows * (ch + pad) + pad), (18, 18, 18))
+    font = _font(max(12, ch // 16))
+    for i, (im, label) in enumerate(zip(images, labels + [""] * (len(images) - len(labels)))):
+        x = pad + (i % cols) * (cw + pad)
+        y = pad + (i // cols) * (ch + pad)
+        sheet.paste(im, (x, y))
+        d = ImageDraw.Draw(sheet)
+        text = str(label)
+        if text:
+            bbox = d.textbbox((x + 6, y + 4), text, font=font)
+            d.rectangle([bbox[0] - 4, bbox[1] - 2, bbox[2] + 4, bbox[3] + 2], fill=(0, 0, 0))
+            d.text((x + 6, y + 4), text, fill=(255, 255, 255), font=font)
+    sheet.save(out, "JPEG", quality=85)
+    return out
+
+
+# ---- the model calls
+
+_EXAMPLE_EFFECT = {
+    "name": "hit markers",
+    "why": "a Call-of-Duty hit marker on each rock strike the onset track found",
+    "events": [{"t": 152.34, "x": 0.52, "y": 0.68, "strength": 0.9, "label": "first rock"}],
+    "overlay": {
+        "duration": 0.35, "size": 0.12,
+        "shapes": [
+            {"type": "line", "from": [-1, -1], "to": [-0.3, -0.3], "width": 0.1, "color": "#ffffff"},
+            {"type": "line", "from": [1, -1], "to": [0.3, -0.3], "width": 0.1, "color": "#ffffff"},
+            {"type": "line", "from": [-1, 1], "to": [-0.3, 0.3], "width": 0.1, "color": "#ffffff"},
+            {"type": "line", "from": [1, 1], "to": [0.3, 0.3], "width": 0.1, "color": "#ffffff"}],
+        "anim": {"scale": [[0, 1.4], [0.06, 1.0]],
+                 "opacity": [[0, 1], [0.23, 1], [0.35, 0]]},
+        "flash": {"color": "#ff0000", "opacity": 0.15, "duration": 0.08}},
+    "sound": {
+        "duration": 0.18, "gain_db": -6,
+        "layers": [{"type": "tone", "wave": "square", "freq": 1800, "attack": 0.001, "decay": 0.06, "gain": 0.6},
+                   {"type": "noise", "color": "white", "hp": 1500, "attack": 0.001, "decay": 0.09, "gain": 0.5}]},
+}
+
+
+def _vocabulary() -> str:
+    """The closed vocabulary with its ranges, from the constants above, so the system
+    text can never drift from what `validate_effect` accepts."""
+    return f"""You design one small video + audio effect for a ski film, as JSON in a closed vocabulary.
+The renderer draws it from the numbers; you never write ffmpeg, filenames or pixels.
+
+COORDINATES
+- The frame: (0, 0) is the top-left corner, (1, 1) the bottom-right. An event's anchor
+  x, y are fractions of the frame (0..1).
+- The sprite's box: a square, `size` × the frame width across (size {MIN_SIZE}–{MAX_SIZE}),
+  centred on the anchor. Inside it shapes use x and y from -1 to 1 across the box
+  (y down); a shape may poke a little past (±1.5) but never across the frame.
+- Times are seconds in the source clip; a `duration` is seconds.
+
+EFFECT = {{"name": "≤40 chars", "why": "one sentence", "events": [...], "overlay": {{...}}, "sound": {{...}} | null}}
+
+EVENTS (1–{MAX_EVENTS}): {{"t": seconds, "x": 0..1, "y": 0..1, "strength": 0..1 (optional), "label": "≤40 chars" (optional)}}
+
+OVERLAY: {{"duration": {MIN_DURATION}–{MAX_DURATION} s, "size": {MIN_SIZE}–{MAX_SIZE}, "shapes": [1–{MAX_SHAPES}], "anim": {{...}}, "flash": {{...}} | null}}
+  shapes (all take "color": "#rrggbb" and "opacity": 0..1; "width" 0–0.5 is a fraction of the box):
+    {{"type": "line", "from": [x, y], "to": [x, y], "width"}}
+    {{"type": "circle", "at": [x, y], "r": 0.01–1.5, "fill": true|false, "width"}}
+    {{"type": "ring", "at": [x, y], "r": 0.01–1.5, "r2": 0–r (the hole)}}
+    {{"type": "rect", "at": [x, y], "w": 0.01–3, "h": 0.01–3, "rotate": degrees, "fill", "width"}}
+    {{"type": "polygon", "points": [[x, y] × 3–32], "fill", "width"}}
+    {{"type": "text", "text": "≤{MAX_TEXT} chars", "at": [x, y], "h": 0.05–1.5 (box units), "bold": true|false}}
+  anim: keyframe tracks, each `[[t, value], …]` (1–{MAX_KEYS} keys, t within 0..duration, linear between keys):
+    "scale" 0–6 (1 = the box), "opacity" 0–1, "rotate" degrees (clockwise), "dx" / "dy" -1..1 (fractions of the frame width)
+  flash: {{"color": "#rrggbb", "opacity": 0–0.6, "duration": 0.02–1.0}} — tints the whole frame briefly
+
+SOUND (or null for a silent effect): {{"duration": {MIN_DURATION}–{MAX_DURATION} s, "gain_db": {MIN_GAIN_DB:g}–{MAX_GAIN_DB:g}, "layers": [1–{MAX_LAYERS}]}}
+  every layer: "gain" 0–1, "attack" 0–1 s (linear), "decay" 0.005–3 s (exponential, to -60 dB), optional "hp" / "lp" 20–20000 Hz (one-pole)
+    {{"type": "tone", "wave": "sine"|"square"|"saw"|"triangle", "freq": 20–12000}}
+    {{"type": "sweep", "wave": …, "freq": 20–12000, "freq_end": 20–12000}}  (exponential glide)
+    {{"type": "noise", "color": "white"|"pink"}}
+    {{"type": "click"}}  (a one-sample impulse through the decay)
+
+The answer is JSON only — one object, no prose, no code fence."""
+
+
+def _system_design() -> str:
+    return (_vocabulary() + "\n\nWORKED EXAMPLE — a Call-of-Duty hit marker: four short white lines in an X with a "
+            "gap in the middle, scale 1.4 → 1.0 in 60 ms, opacity to 0 over the last 120 ms, a 15 % "
+            "red flash for 80 ms; its sound a 1.8 kHz square tone decaying in 60 ms plus a white "
+            "noise burst through a 1.5 kHz high-pass decaying in 90 ms, at -6 dB:\n"
+            + json.dumps(_EXAMPLE_EFFECT, indent=1))
+
+
+def _transcript_in(transcript: list[dict] | None, t0: float, t1: float) -> list[dict]:
+    out = []
+    for line in transcript or []:
+        try:
+            s, e = float(line.get("start", 0)), float(line.get("end", 0))
+        except (TypeError, ValueError):
+            continue
+        if e >= t0 and s <= t1 and str(line.get("text") or "").strip():
+            out.append(line)
+    return out
 
 
 def build_design_prompt(note: str, seg: dict, clip: dict, *, peaks: list[dict],
@@ -836,8 +956,30 @@ def build_design_prompt(note: str, seg: dict, clip: dict, *, peaks: list[dict],
     to 0 over the last 120 ms, a 15 % red flash for 80 ms; a sound of a 1.8 kHz
     square tone decaying in 60 ms plus a white noise burst with a 1.5 kHz high-pass
     decaying in 90 ms, -6 dB)."""
-    raise NotImplementedError("lane fx-core")
-
+    t0, t1 = float(seg["in"]), float(seg["out"])
+    lines = [f"THE NOTE: {note.strip()}", "",
+             f"THE SHOT: clip {seg.get('clip')} from {t0:.2f}s to {t1:.2f}s"
+             + (f" (clip length {float(clip['duration']):.1f}s)" if clip and clip.get("duration") else "")
+             + (f" — why it is in the cut: {seg['why']}" if seg.get("why") else "")]
+    said = _transcript_in(transcript if transcript is not None else (clip or {}).get("transcript"), t0, t1)
+    if said:
+        lines += ["", "SAID IN THE SHOT:"]
+        lines += [f"  {float(l.get('start', 0)):.1f}s  {str(l.get('text')).strip()}" for l in said[:12]]
+    if peaks:
+        lines += ["", "IMPACTS THE AUDIO FOUND (onset peaks, seconds in the clip, strength 0..1) — "
+                      "put events on these when the note names a hit:"]
+        lines += [f"  t={p['t']:.2f}  strength={p.get('strength', 0):.2f}" for p in peaks]
+    else:
+        lines += ["", "The audio found no clear impacts in the shot; place events by the note and the shot's range."]
+    if reference and reference.get("marks"):
+        marks = ", ".join(f"({m[0]:.3f}, {m[1]:.3f})" for m in reference["marks"])
+        lines += ["", "THE HUMAN DREW A REFERENCE on a frame"
+                      + (f" at {float(reference['t']):.2f}s" if reference.get("t") is not None else "")
+                      + (f": \"{reference['goal']}\"" if reference.get("goal") else "")
+                      + f". The marks' centres, as fractions of the frame: {marks}. These ARE the anchors: "
+                        "one event per mark at those x, y — design the look and the sound, do not move them."]
+    lines += ["", "Every event's t must lie inside the shot. Answer with one JSON effect object only."]
+    return _system_design(), "\n".join(lines)
 
 
 def build_place_prompt(note: str, effect: dict, candidates: list[dict], strip: Path) -> tuple[str, str]:
@@ -845,15 +987,64 @@ def build_place_prompt(note: str, effect: dict, candidates: list[dict], strip: P
     candidate time, labelled), the note, and the question — for each frame, is the
     impact visible, and where in the frame (x, y as fractions) is the thing the note
     names (the skis)? Answers `{"events": [{"t", "x", "y", "hit": bool, "why"}]}`."""
-    raise NotImplementedError("lane fx-core")
-
+    system = ("You place a video effect by looking at frames from a ski film. Coordinates are "
+              "fractions of the frame: (0, 0) top-left, (1, 1) bottom-right. Answer JSON only.")
+    lines = [f"THE NOTE: {note.strip()}",
+             f"THE EFFECT: {effect.get('name', 'effect')} — {effect.get('why', '')}".rstrip(" —"),
+             "",
+             f"The image is a contact strip of {len(candidates)} frames, each labelled with its "
+             "index and its time in the clip, in reading order:"]
+    for i, c in enumerate(candidates):
+        lines.append(f"  [{i}] t={float(c['t']):.2f}s")
+    lines += ["",
+              "For EACH frame answer: is the impact the note describes visible in it (\"hit\"), "
+              "and where in that frame is the thing the note names (x, y as fractions of the "
+              "frame — the point the marker should sit on)? Keep t exactly as labelled.",
+              "",
+              'Answer: {"events": [{"t": seconds, "x": 0..1, "y": 0..1, "hit": true|false, '
+              '"why": "a few words"}, …]} — one entry per frame, JSON only.']
+    return system, "\n".join(lines)
 
 
 def build_revise_prompt(effect: dict, note: str) -> tuple[str, str]:
     """`(system, prompt)` for an iteration: the current effect JSON and the note ("make
     them red and bigger", "one hit only, the big one"). Same answer shape as design."""
-    raise NotImplementedError("lane fx-core")
+    current = {k: effect.get(k) for k in ("name", "why", "events", "overlay", "sound")}
+    prompt = ("THE CURRENT EFFECT:\n" + json.dumps(current, indent=1)
+              + f"\n\nTHE NOTE: {note.strip()}\n\n"
+              "Return the whole effect again with the note applied — the same shape (name, why, "
+              "events, overlay, sound). Keep every event's t, x and y unless the note asks to "
+              "move, add or drop events. Answer with one JSON object only.")
+    return _system_design(), prompt
 
+
+def _now() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _ask(system: str, prompt: str, images: list[Path] | None = None) -> Any:
+    from roughcut import config, inference
+    r = inference.complete(prompt, role=config.ROLE_JUDGE, images=list(images or ()), system=system)
+    return inference.extract_json(r.raw or str(r.content))
+
+
+def _reference_events(reference: dict, peaks: list[dict], onset: list[float], hz: float,
+                      seg: dict) -> list[dict]:
+    """The human's marks as events: x, y from the marks; t the nearest onset peak to the
+    reference frame's time (within a second), else the frame's time itself."""
+    t0, t1 = float(seg["in"]), float(seg["out"])
+    t_ref = reference.get("t")
+    t = float(t_ref) if t_ref is not None else (t0 + t1) / 2
+    if peaks:
+        nearest = min(peaks, key=lambda p: abs(p["t"] - t))
+        if abs(nearest["t"] - t) <= 1.0:
+            t = nearest["t"]
+    elif onset:
+        snapped = nearest_onset(onset, hz, t)
+        if snapped is not None:
+            t = snapped
+    t = min(max(t, t0), max(t0, t1 - NUDGE_S))
+    return [{"t": round(t, 3), "x": float(m[0]), "y": float(m[1])} for m in reference["marks"]]
 
 
 def design(note: str, seg: dict, clip: dict, sidecar: dict | None, *,
@@ -867,15 +1058,104 @@ def design(note: str, seg: dict, clip: dict, sidecar: dict | None, *,
     events re-anchored from its answer (dropping candidates the model says are not
     hits, keeping at least one). Returns a validated effect with `status: proposed`,
     `created` set, and `history: [{"note", "at"}]`."""
-    raise NotImplementedError("lane fx-core")
-
+    sidecar = sidecar or {}
+    onset = list((sidecar.get("tracks") or {}).get("onset") or [])
+    hz = float(sidecar.get("frame_hz") or ONSET_HZ)
+    t0, t1 = float(seg["in"]), float(seg["out"])
+    peaks = onset_peaks(onset, hz, t0, t1)
+    has_marks = bool(reference and reference.get("marks"))
+    transcript = (clip or {}).get("transcript")
+    if transcript is None:
+        transcript = sidecar.get("transcript")
+    system, prompt = build_design_prompt(note, seg, clip, peaks=peaks, transcript=transcript,
+                                         reference=reference if has_marks else None)
+    answer = _ask(system, prompt)
+    if not isinstance(answer, dict):
+        raise ValueError("the design answer is not an object")
+    events = answer.get("events") if isinstance(answer.get("events"), list) else []
+    if has_marks:
+        # the drawing is the strongest signal: its marks are the anchors, the model
+        # only designed the look
+        anchored = _reference_events(reference, peaks, onset, hz, seg)
+        for a, e in zip(anchored, events):
+            if isinstance(e, dict):
+                for k in ("strength", "label"):
+                    if e.get(k) is not None:
+                        a[k] = e[k]
+        events = anchored
+    elif not events:
+        events = ([{"t": p["t"], "x": 0.5, "y": 0.5, "strength": p["strength"]} for p in peaks[:3]]
+                  or [{"t": round((t0 + t1) / 2, 3), "x": 0.5, "y": 0.5}])
+    effect = {
+        "id": new_id(), "shot": seg.get("id"), "clip": seg["clip"],
+        "name": answer.get("name") or "effect", "note": note,
+        "why": answer.get("why") or "",
+        "events": events, "overlay": answer.get("overlay"), "sound": answer.get("sound"),
+        "status": "proposed",
+    }
+    effect = validate_effect(effect, segments or [seg], clips, keep_meta=False)
+    if place and proxy is not None and not has_marks:
+        wd = Path(workdir) if workdir else Path(tempfile.mkdtemp(prefix="fx_place_"))
+        wd.mkdir(parents=True, exist_ok=True)
+        times = [ev["t"] for ev in effect["events"]]
+        frames = frames_for(Path(proxy), times, wd / "frames")
+        labels = [f"[{i}] t={t:.2f}s" for i, t in enumerate(times)]
+        strip = contact_strip(frames, labels, wd / "strip.jpg")
+        psys, pprompt = build_place_prompt(note, effect, effect["events"], strip)
+        placed = _ask(psys, pprompt, images=[strip])
+        rows = placed.get("events") if isinstance(placed, dict) else None
+        if isinstance(rows, list) and rows:
+            kept = []
+            for ev in effect["events"]:
+                row = min((r for r in rows if isinstance(r, dict) and r.get("t") is not None),
+                          key=lambda r: abs(float(r["t"]) - ev["t"]), default=None)
+                if row is None or abs(float(row["t"]) - ev["t"]) > 0.5:
+                    kept.append(ev)                       # unanswered: leave it as designed
+                    continue
+                new = dict(ev)
+                try:
+                    new["x"] = min(1.0, max(0.0, float(row.get("x", ev["x"]))))
+                    new["y"] = min(1.0, max(0.0, float(row.get("y", ev["y"]))))
+                except (TypeError, ValueError):
+                    pass
+                if isinstance(row.get("why"), str) and row["why"].strip() and not new.get("label"):
+                    new["label"] = row["why"].strip()[:40]
+                if row.get("hit") is False:
+                    new["_drop"] = True
+                kept.append(new)
+            survivors = [e for e in kept if not e.get("_drop")]
+            if not survivors:                             # keep at least one: the strongest
+                survivors = [max(kept, key=lambda e: e.get("strength") or 0.0)]
+            for e in survivors:
+                e.pop("_drop", None)
+            effect["events"] = survivors
+            effect = validate_effect(effect, segments or [seg], clips, keep_meta=False)
+    created = _now()
+    effect["created"] = created
+    effect["history"] = [{"note": note, "at": created}]
+    return effect
 
 
 def revise(effect: dict, note: str, segments: list[dict], clips: dict | None = None) -> dict:
     """One iteration: the revise call, validated, id and events kept unless the note
     changed them, `history` appended. Returns the new proposed effect."""
-    raise NotImplementedError("lane fx-core")
-
+    system, prompt = build_revise_prompt(effect, note)
+    answer = _ask(system, prompt)
+    if not isinstance(answer, dict):
+        raise ValueError("the revise answer is not an object")
+    new = {k: v for k, v in effect.items() if k != "verify"}
+    for k in ("name", "why", "overlay"):
+        if answer.get(k) is not None:
+            new[k] = answer[k]
+    if "sound" in answer:
+        new["sound"] = answer["sound"]
+    if isinstance(answer.get("events"), list) and answer["events"]:
+        new["events"] = answer["events"]
+    new["status"] = "proposed"
+    new["note"] = note
+    new = validate_effect(new, segments, clips)
+    new["history"] = list(effect.get("history") or []) + [{"note": note, "at": _now()}]
+    return new
 
 
 def audio_transient_at(part: Path, t: float, *, win_s: float = 0.04) -> dict:

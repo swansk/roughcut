@@ -10,6 +10,19 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The model calls (INTAKE M12, lane fx-core)** — `fx.design` and `fx.revise` through
+  `roughcut.inference` (judge role; never `anthropic`, never `claude`). The design prompt
+  carries the note, the shot, the transcript lines inside it, the onset peaks as candidate
+  impact times and — when the human drew one — the reference's goal and marks, which then
+  *are* the anchors (t the nearest peak to the reference frame); the system text states the
+  vocabulary with its ranges from the constants, the frame's (0,0) top-left, the -1..1 box,
+  JSON only, and the worked hit-marker example. `place=True` cuts `frames_for` at the
+  candidates, tiles a `contact_strip` (labels burnt in) to `workdir/strip.jpg`, asks where
+  the skis are in each frame, re-anchors the events and drops the frames the model says are
+  not hits (keeping at least one). The answer is validated, never trusted. Tests on a
+  scripted backend: the evidence in the prompt and the vocabulary in the system, the
+  proposal's shape, the reference anchors, placing by looking, and a revise that keeps id
+  and events unless the note moves them.
 - **The part graph (INTAKE M12, lane fx-core)** — `fx.part_graph` renders one sprite `.mov`
   per event and one `.wav` per effect into the workdir and returns the extra `-i`s plus a
   `filter_complex` fragment: `setpts=PTS-STARTPTS+t/TB` delays each sprite to its clip
