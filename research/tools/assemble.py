@@ -53,7 +53,7 @@ from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from roughcut import colour, effects, fx    # noqa: E402  (after sys.path)
+from roughcut import colour, edits, effects, fx    # noqa: E402  (after sys.path)
 
 TARGET_LUFS = -16.0
 MAX_GAIN_DB = 12.0          # refuse to amplify near-silence into hiss
@@ -96,14 +96,60 @@ COLOUR_TAGS = ["-color_range", "tv", "-colorspace", "bt709",
                "-color_primaries", "bt709", "-color_trc", "bt709"]
 
 
+def atempo_chain(speed: float) -> str:
+    """The audio's retime for a shot at `speed`, as `atempo` factors within its
+    0.5–2 window: 0.25 is `atempo=0.5,atempo=0.5`, 4 is `atempo=2,atempo=2`, 0.1 is
+    `atempo=0.5,atempo=0.5,atempo=0.5,atempo=0.8`. Empty at 1."""
+    if abs(speed - 1.0) < 1e-9:
+        return ""
+    factors: list[float] = []
+    rest = float(speed)
+    while rest < 0.5 - 1e-9:
+        factors.append(0.5)
+        rest /= 0.5
+    while rest > 2.0 + 1e-9:
+        factors.append(2.0)
+        rest /= 2.0
+    if abs(rest - 1.0) > 1e-9:
+        factors.append(rest)
+    return ",".join(f"atempo={f:g}" for f in factors)
+
+
+def audio_filter(gain_db: float, speed: float = 1.0) -> str:
+    tempo = atempo_chain(speed)
+    return (f"volume={gain_db:.2f}dB," + (f"{tempo}," if tempo else "")
+            + "aresample=48000:first_pts=0")
+
+
+def part_seconds(t_in: float, t_out: float, speed: float = 1.0) -> float:
+    """What the part lasts in the film — `edits.dur` for a range at a speed."""
+    return edits.dur({"in": t_in, "out": t_out, "speed": speed})
+
+
+def retimed_events(events: list[dict], speed: float) -> list[dict]:
+    """An effect's events inside a retimed part: `t_part` is seconds from the shot's
+    in-point in *clip* time; in a part at `speed` that instant lands at `t_part /
+    speed` of output. The overlay and the sound keep their own durations — a hit
+    marker in slow motion is still a hit marker, not a slow one."""
+    if abs(speed - 1.0) < 1e-9:
+        return events
+    return [{**ev, "t_part": round(float(ev["t_part"]) / speed, 4)} for ev in events]
+
+
 def video_filter(video: dict, normalise: str | None = None,
-                 lut: str | None = None) -> str:
+                 lut: str | None = None, speed: float = 1.0) -> str:
     """The part's `-vf`: normalise (HDR → SDR 709, before anything sees the frame),
-    the scale/pad/fps conform, then either the LUT chain — which states the range on
-    both sides and ends in its own `format=yuv420p` — or the plain `format=yuv420p`."""
+    the retime when the shot has a speed (`setpts` — so the *frame count* changes,
+    not the rate: the `fps` conform after it duplicates or drops to the film's rate;
+    ahead of the conform rather than after it so a 60 fps source slowed to half
+    keeps its own frames instead of doubling decimated ones), the scale/pad/fps
+    conform, then either the LUT chain — which states the range on both sides and
+    ends in its own `format=yuv420p` — or the plain `format=yuv420p`."""
     chain = []
     if normalise:
         chain.append(normalise)
+    if abs(speed - 1.0) > 1e-9:
+        chain.append(f"setpts=(PTS-STARTPTS)/{speed:g}")
     chain += [f"scale={video['w']}:{video['h']}:force_original_aspect_ratio=decrease",
               f"pad={video['w']}:{video['h']}:(ow-iw)/2:(oh-ih)/2",
               f"fps={video['fps']}"]
@@ -113,14 +159,14 @@ def video_filter(video: dict, normalise: str | None = None,
 
 def cut(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path,
         orient: str, video: dict, normalise: str | None = None,
-        lut: str | None = None) -> None:
+        lut: str | None = None, speed: float = 1.0) -> None:
     cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin"]
     if orient == "none":
         cmd += ["-display_rotation", "0"]           # must precede -i; see module docstring
     cmd += [
-        "-ss", f"{t_in:.3f}", "-i", str(src), "-t", f"{t_out - t_in:.3f}",
-        "-vf", video_filter(video, normalise, lut),
-        "-af", f"volume={gain_db:.2f}dB,aresample=48000:first_pts=0",
+        "-ss", f"{t_in:.3f}", "-i", str(src), "-t", f"{part_seconds(t_in, t_out, speed):.3f}",
+        "-vf", video_filter(video, normalise, lut, speed),
+        "-af", audio_filter(gain_db, speed),
         "-map", "0:v:0", "-map", "0:a:0", "-dn",    # drop GoPro's telemetry track
         "-c:v", "libx264", "-preset", video["preset"], "-crf", video["crf"],
         *COLOUR_TAGS,
@@ -139,7 +185,7 @@ def cut(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path,
 def cut_with_effects(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path,
                      orient: str, video: dict, shot_effects: list[tuple[dict, list[dict]]],
                      workdir: Path, normalise: str | None = None,
-                     lut: str | None = None) -> None:
+                     lut: str | None = None, speed: float = 1.0) -> None:
     """`cut()` for a part that carries effects (INTAKE M12): the same conform and the
     same encode, but through one `-filter_complex` — `[0:v]<video_filter>[vbase]` and
     `[0:a]volume,aresample[abase]`, then `fx.part_graph`'s fragment (a sprite `.mov`
@@ -147,17 +193,20 @@ def cut_with_effects(src: Path, t_in: float, t_out: float, gain_db: float, dest:
     — mapped from its `[vout]`/`[aout]`. Everything about the part that the concat
     relies on (codec, tags, timescale, `-dn`, `-write_tmcd 0`) is identical, so the
     film still copies. The sprite inputs go between the source `-i` and `-t`: after an
-    `-i`, a `-t` is an input option for the NEXT input and would cut the sprites short."""
+    `-i`, a `-t` is an input option for the NEXT input and would cut the sprites short.
+    In a retimed part (INTAKE M13) the events are already in output seconds — see
+    `retimed_events` — and the base chains carry the shot's speed."""
     extra, graph, vout, aout = fx.part_graph(shot_effects, video["w"], video["h"],
                                              video["fps"], workdir)
     if not graph:
-        return cut(src, t_in, t_out, gain_db, dest, orient, video, normalise, lut)
-    fc = (f"[0:v]{video_filter(video, normalise, lut)}[vbase];"
-          f"[0:a]volume={gain_db:.2f}dB,aresample=48000:first_pts=0[abase];{graph}")
+        return cut(src, t_in, t_out, gain_db, dest, orient, video, normalise, lut, speed)
+    fc = (f"[0:v]{video_filter(video, normalise, lut, speed)}[vbase];"
+          f"[0:a]{audio_filter(gain_db, speed)}[abase];{graph}")
     cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin"]
     if orient == "none":
         cmd += ["-display_rotation", "0"]           # must precede -i; see module docstring
-    cmd += ["-ss", f"{t_in:.3f}", "-i", str(src), *extra, "-t", f"{t_out - t_in:.3f}",
+    cmd += ["-ss", f"{t_in:.3f}", "-i", str(src), *extra,
+            "-t", f"{part_seconds(t_in, t_out, speed):.3f}",
             "-filter_complex", fc, "-map", f"[{vout}]", "-map", f"[{aout}]", "-dn",
             "-c:v", "libx264", "-preset", video["preset"], "-crf", video["crf"],
             *COLOUR_TAGS,
@@ -187,6 +236,14 @@ def probe_video(path: Path) -> tuple[str, int, int]:
     return s["r_frame_rate"], int(s["width"]), int(s["height"])
 
 
+def source_of(footage: Path, generated_dir: Path | None, clip: str) -> Path:
+    """Where a segment's clip is: a generated clip (INTAKE M13, `gen_*.mp4`) lives in
+    `--generated-dir`, everything else in `--footage`."""
+    if edits.is_generated(clip) and generated_dir is not None:
+        return generated_dir / clip
+    return footage / clip
+
+
 def bin_profile(footage: Path, segments: list[dict]) -> tuple[str, int, int]:
     """Majority native fps and resolution across the clips this EDL actually uses.
 
@@ -203,8 +260,13 @@ def bin_profile(footage: Path, segments: list[dict]) -> tuple[str, int, int]:
     60→30, land on an exact rational ratio (5:4 and 5:2 and 2:1 respectively): a
     regular drop cadence, not the erratic one a mismatched denominator would give.
     """
-    clips = sorted({s["clip"] for s in segments})
+    # Generated clips (a slide, a freeze frame) are made at a proxy's size and rate and
+    # conform to whatever the footage is; they get no vote. A cut of nothing but
+    # slides takes the preview profile's frame.
+    clips = sorted({s["clip"] for s in segments if not edits.is_generated(s["clip"])})
     if not clips:
+        if segments:
+            return FPS, W, H
         raise SystemExit("delivery profile needs at least one segment to probe")
     probed = [probe_video(footage / c) for c in clips]
     fps = Counter(f for f, _, _ in probed).most_common(1)[0][0]
@@ -350,6 +412,9 @@ def main() -> int:
     ap.add_argument("--colour-dir", type=Path, default=None,
                     help="per-clip colour files (<stem>.colour.json, INTAKE M10); the "
                          "EDL's `colour` block is resolved against them per shot")
+    ap.add_argument("--generated-dir", type=Path, default=None,
+                    help="where the generated clips live (gen_*.mp4, INTAKE M13): a "
+                         "segment whose clip is one reads its source here, ungraded")
     ap.add_argument("--parts-dir", type=Path, default=None,
                     help="write the per-segment parts here instead of a temp dir, so "
                          "a caller can count them as progress")
@@ -368,7 +433,7 @@ def main() -> int:
     edl = json.loads(args.edl.read_text(encoding="utf-8"))
     segments = edl["segments"]
     orient = edl.get("orient", "auto")
-    planned = sum(s["out"] - s["in"] for s in segments)
+    planned = sum(edits.dur(s) for s in segments)      # a shot at a speed is longer or shorter
     video = resolve_video_profile(args.profile, args.footage, segments)
     print(f"variant {edl['variant']} — {edl['title']}: {len(segments)} segments, "
           f"{planned:.1f}s planned, orient={orient}")
@@ -387,8 +452,9 @@ def main() -> int:
         workdir = Path(tempfile.mkdtemp(prefix="roughcut-"))
     parts: list[Path] = []
     for s in segments:
-        if not (args.footage / s["clip"]).exists():
-            raise SystemExit(f"missing footage: {args.footage / s['clip']}")
+        src = source_of(args.footage, args.generated_dir, s["clip"])
+        if not src.exists():
+            raise SystemExit(f"missing footage: {src}")
     # The grade, resolved for every shot before any part is cut: the reference shot
     # may sit later in the film than the shots that match to it.
     looks = colour.load_looks(args.assets)
@@ -396,37 +462,45 @@ def main() -> int:
     probes: dict = {}
     try:
         for i, seg in enumerate(segments):
-            src = args.footage / seg["clip"]
+            generated = edits.is_generated(seg["clip"])
+            src = source_of(args.footage, args.generated_dir, seg["clip"])
+            speed = edits.speed_of(seg)
             gain = clip_gain(args.sidecars, seg["clip"]) if args.sidecars else 0.0
             dest = workdir / f"part_{i:03d}.mp4"
             res, clip_colour = resolved[i]
             probe = shot_probe(src, clip_colour, probes)
             # Normalise always, grade optionally: an HLG source is tone mapped to SDR
             # 709 whatever `colour.mode` says. After it the LUT's input is limited.
-            normalise = colour.normalise_vf(probe)
+            # A generated clip (INTAKE M13) is neither: it was made SDR at a proxy's
+            # size, has no colour file and takes no grade — a black slide stays the
+            # black it was asked for, a freeze frame the frame the monitor showed.
+            normalise = None if generated else colour.normalise_vf(probe)
             lut = None
-            if not res["identity"]:
+            if not generated and not res["identity"]:
                 cube = colour.write_cube(colour.cube_table(res["fn"], 33),
                                          workdir / f"part_{i:03d}.cube",
                                          title=f"roughcut {seg.get('id') or i}")
                 lut = colour.lut_vf(cube, colour.in_range(probe))
             # The shot's accepted effects (INTAKE M12) fold into this same encode;
-            # an event outside the shot's range is simply not drawn.
-            shot_effects = [(e, fx.events_in_shot(e, seg)) for e in fx.effects_for_shot(edl, seg)]
+            # an event outside the shot's range is simply not drawn. In a retimed
+            # part (INTAKE M13) an event's `t_part` moves with the picture.
+            shot_effects = [(e, retimed_events(fx.events_in_shot(e, seg), speed))
+                            for e in fx.effects_for_shot(edl, seg)]
             shot_effects = [(e, evs) for e, evs in shot_effects if evs]
             if shot_effects:
                 cut_with_effects(src, seg["in"], seg["out"], gain, dest, orient, video,
                                  shot_effects, workdir / f"part_{i:03d}_fx",
-                                 normalise=normalise, lut=lut)
+                                 normalise=normalise, lut=lut, speed=speed)
             else:
                 cut(src, seg["in"], seg["out"], gain, dest, orient, video,
-                    normalise=normalise, lut=lut)
+                    normalise=normalise, lut=lut, speed=speed)
             assert_no_rotation(dest, orient)        # catch it at the part, not the film
             actual = probe_duration(dest)
             parts.append(dest)
-            print(f"  {i:02d} {seg['clip']} {seg['in']:6.1f}-{seg['out']:6.1f} "
-                  f"({actual:5.2f}s, {gain:+5.1f}dB)  {seg['why'][:56]}")
-            print(f"      colour: {describe_colour(res, normalise, probe)}")
+            rate = f" ×{speed:g}" if abs(speed - 1.0) > 1e-9 else ""
+            print(f"  {i:02d} {seg['clip']} {seg['in']:6.1f}-{seg['out']:6.1f}{rate} "
+                  f"({actual:5.2f}s, {gain:+5.1f}dB)  {(seg.get('why') or '')[:56]}")
+            print(f"      colour: {'generated — as made' if generated else describe_colour(res, normalise, probe)}")
             for e, evs in shot_effects:
                 print(f"      fx: {e.get('name', 'effect')} × {len(evs)} at "
                       + ", ".join(f"{ev['t_part']:.2f}s" for ev in evs))

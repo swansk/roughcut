@@ -657,6 +657,10 @@ def project_payload() -> dict:
                          "integrated_lufs", "audio_usable")},
             "used": clip in referenced,
         }
+    # Generated clips (INTAKE M13): black, a colour, a freeze frame — real files the
+    # server made on an apply, listed like any other clip so the monitor plays them
+    # and an effect can be designed on one.
+    clips.update(generated_clips(referenced))
     return {
         "title": edl.get("title", ""),
         "variant": edl.get("variant", ""),
@@ -719,14 +723,13 @@ def api_status() -> JSONResponse:
     })
 
 
-@app.put("/api/project")
-async def api_save(request: Request) -> JSONResponse:
-    body = await request.json()
-    edl = read_edl()
-    edl["story"] = body.get("story", edl.get("story", ""))
+def clean_segments(raw: list) -> list[dict]:
+    """The segments a save (or an edits undo) is allowed to write: `clip`, `in`,
+    `out` rounded, `act` / `why` when given, `speed` validated, the id kept when it is
+    one. Raises HTTPException(400) with the sentence; nothing is written on one."""
     clean = []
     seen_ids: set[str] = set()
-    for s in body["segments"]:
+    for s in raw:
         seg = {k: s[k] for k in ("clip", "in", "out") if k in s}
         seg["in"] = round(float(seg["in"]), 2)
         seg["out"] = round(float(seg["out"]), 2)
@@ -735,6 +738,14 @@ async def api_save(request: Request) -> JSONResponse:
         for k in ("act", "why"):
             if s.get(k):
                 seg[k] = s[k]
+        # Speed (INTAKE M13): kept only when it is not 1, validated the one way
+        # `edits.validate_speed` validates it; a bad one is a 400 and nothing is written.
+        try:
+            speed = edits.validate_speed(s.get("speed"))
+        except ValueError as exc:
+            raise HTTPException(400, f"speed: {exc}")
+        if speed is not None:
+            seg["speed"] = speed
         # The id round-trips (I9.0): a shot keeps its identity across reorder, undo and a
         # proposal; a duplicate (a copied shot) or a missing one gets a fresh id.
         sid = s.get("id")
@@ -744,6 +755,15 @@ async def api_save(request: Request) -> JSONResponse:
             seg["id"] = segment_id()
         seen_ids.add(seg["id"])
         clean.append(seg)
+    return clean
+
+
+@app.put("/api/project")
+async def api_save(request: Request) -> JSONResponse:
+    body = await request.json()
+    edl = read_edl()
+    edl["story"] = body.get("story", edl.get("story", ""))
+    clean = clean_segments(body["segments"])
     edl["segments"] = clean
     # Music is the same `effects_music` key assemble.py reads, validated the way a
     # segment is: an asset that is not in the library, or a gain outside range, is a 400
@@ -2607,6 +2627,7 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
            "--footage", str(STATE["footage"]), "--sidecars", str(STATE["sidecars"]),
            "--assets", str(STATE["assets"]), "--profile", meta.get("profile", "preview"),
            "--colour-dir", str(colour_dir()),
+           "--generated-dir", str(generated_dir()),
            "--parts-dir", str(parts_dir), "-o", str(out_path)]
 
     # Same shape as the audio pass: a ticker counting finished parts on disk, so the
@@ -2881,7 +2902,7 @@ async def api_render(request: Request) -> JSONResponse:
     meta = {
         "job": job, "created": time.time(), "title": edl.get("title", ""),
         "segments": len(edl["segments"]),
-        "planned_s": round(sum(s["out"] - s["in"] for s in edl["segments"]), 2),
+        "planned_s": round(sum(edits.dur(s) for s in edl["segments"]), 2),
         "story": (edl.get("story") or "")[:300],
         "note": (body.get("label") or "")[:120],
         "music": (edl.get("effects_music") or {}).get("asset"),
@@ -2892,7 +2913,8 @@ async def api_render(request: Request) -> JSONResponse:
         # the cut currently on the timeline. Karl watched a rendered *proposal* and
         # reported that the board "doesn't seem to reflect the render" — it did not,
         # and nothing on screen said which of the renders it did reflect.
-        "shots": [{"clip": s["clip"], "in": s["in"], "out": s["out"]}
+        "shots": [{"clip": s["clip"], "in": s["in"], "out": s["out"],
+                   **({"speed": s["speed"]} if s.get("speed") else {})}
                   for s in edl["segments"]],
     }
     shots = len(edl["segments"])
@@ -3151,6 +3173,10 @@ def media_poster(name: str, t: float = 0.0) -> Response:
     if not re.fullmatch(r"[A-Za-z0-9._-]+", stem):
         raise HTTPException(404, f"no such clip: {name}")
     src = STATE["proxy_dir"] / f"{stem}.mp4"
+    if not src.exists() and edits.is_generated(stem):
+        # A generated clip (INTAKE M13) is its own proxy; its stem cannot collide with
+        # footage (`gen_` is the server's prefix) so the poster cache shares the dir.
+        src = generated_dir() / f"{stem}.mp4"
     if not src.exists():
         # Not an error the board should shout about: proxies build in the background,
         # and the cards retry when /api/status says they are done.
@@ -3358,6 +3384,10 @@ def _fx_proxy(clip: str) -> Path | None:
     p = STATE["proxy_dir"] / f"{Path(clip).stem}.mp4"
     if p.exists():
         return p
+    if edits.is_generated(clip):                      # a slide the edits made (INTAKE M13)
+        g = generated_dir() / clip
+        if g.exists():
+            return g
     src = STATE["footage"] / clip
     return src if src.exists() else None
 
@@ -3878,6 +3908,354 @@ def gradejs() -> Response:
     """The monitor's grade (INTAKE M10, I10.4): the WebGL LUT over the live video."""
     return Response((HERE / "static" / "grade.js").read_text(encoding="utf-8"),
                     media_type="application/javascript", headers=NO_STORE)
+
+
+# ---------------------------------------------------------------- edits (INTAKE M13)
+#
+# Operations on the cut itself — slow motion, an extension, a new clip. Karl,
+# 2026-09-20: *"the effect tool itself, it needs to be able to make changes like this
+# and even broader ones like slow motion or extension or creating new clips."*
+# `roughcut/edits.py` is the vocabulary and the pure apply; this is the part that
+# touches disk. A generated clip (black, a colour, a freeze frame) is a real file
+# under `work/generated/<bin>/` — per bin like the proxies, because a still is cut
+# from one bin's footage — listed among the project's clips so the monitor plays it,
+# the Ask can design on it and the render cuts it like any other. The model never
+# writes ffmpeg or a filename: `edits.generated_name` names the file, this makes it.
+
+GEN_W, GEN_H, GEN_FPS = 1280, 720, 24      # a proxy's size: the monitor plays these
+GEN_SLOTS = threading.BoundedSemaphore(2)   # two ffmpegs at once, like the posters
+
+
+def generated_dir() -> Path:
+    d = STATE.get("generated_dir") or (STATE["work"] / "generated" / STATE["footage"].name)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def generated_spec_path(name: str) -> Path:
+    """The record of what a generated file is (its `apply_ops` spec plus the probed
+    duration), beside the file, so a project reopened later still knows a black
+    slide from a freeze frame without probing or guessing from the name."""
+    return generated_dir() / f"{Path(name).stem}.json"
+
+
+def generated_label(spec: dict) -> str:
+    """One line for the card and the Ask: `generated: black 2.0 s`."""
+    kind = spec.get("kind")
+    s = float(spec.get("seconds") or 0.0)
+    if kind == "colour":
+        return f"generated: colour {spec.get('color') or '#000000'} {s:.1f} s"
+    if kind == "still":
+        return (f"generated: still of {spec.get('from_clip') or '?'} at "
+                f"{float(spec.get('at') or 0.0):.2f} s, {s:.1f} s")
+    return f"generated: black {s:.1f} s"
+
+
+def _generated_source(clip: str) -> Path:
+    """Where a still's frame comes from: the clip's proxy (the frame the monitor
+    showed when the human chose it), the source when there is no proxy yet, or a
+    generated clip's own file when the still is of a slide."""
+    if edits.is_generated(clip):
+        p = generated_dir() / clip
+    else:
+        p = STATE["proxy_dir"] / f"{Path(clip).stem}.mp4"
+        if not p.exists():
+            p = STATE["footage"] / clip
+    if not p.exists():
+        raise RuntimeError(f"no footage to take a still from: {clip}")
+    return p
+
+
+_GEN_ENCODE = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+               "-pix_fmt", "yuv420p", "-r", str(GEN_FPS),
+               "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+               "-shortest", "-movflags", "+faststart"]
+
+
+def materialise_generated(spec: dict) -> Path:
+    """Make `gen_<kind>_<key>.mp4` from one entry of `apply_ops(...)["generated"]`
+    (`clip`, `kind`, `seconds`, `color`, `from_clip`, `at`) and return its path.
+    Idempotent: a file that exists is reused, so the same slide proposed twice is one
+    encode. Black / colour: lavfi `color` + `anullsrc`. Still: one frame of the source
+    clip's proxy at `at` to a PNG, looped for `seconds` over silence. 1280×720,
+    libx264 yuv420p, aac — what a proxy is, so the monitor and the render treat it
+    as one. Raises RuntimeError with ffmpeg's last words."""
+    kind = spec.get("kind")
+    if kind not in edits.KINDS:
+        raise RuntimeError(f"unknown generated kind {kind!r}")
+    seconds = float(spec["seconds"])
+    name = spec.get("clip") or edits.generated_name(
+        kind, seconds, color=spec.get("color"), from_clip=spec.get("from_clip"),
+        at=spec.get("at"))
+    dest = generated_dir() / name
+    if dest.exists() and dest.stat().st_size:
+        return dest
+    with GEN_SLOTS:
+        if dest.exists() and dest.stat().st_size:     # made while we waited
+            return dest
+        tmp = dest.with_name(f"{dest.stem}.{os.getpid()}.part.mp4")
+        png = None
+        if kind == "still":
+            src = _generated_source(spec["from_clip"])
+            at = max(0.0, float(spec.get("at") or 0.0))
+            png = dest.with_suffix(".png")
+            r = subprocess.run(
+                ["ffmpeg", "-v", "error", "-y", "-nostdin", "-ss", f"{at:.3f}",
+                 "-i", str(src), "-frames:v", "1",
+                 "-vf", f"scale={GEN_W}:{GEN_H}:force_original_aspect_ratio=decrease,"
+                        f"pad={GEN_W}:{GEN_H}:(ow-iw)/2:(oh-ih)/2,format=rgb24",
+                 str(png)], capture_output=True, text=True)
+            if r.returncode != 0 or not png.exists() or not png.stat().st_size:
+                png.unlink(missing_ok=True)
+                raise RuntimeError(f"still failed for {src.name} at {at:.2f}s: {r.stderr[-300:]}")
+            cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin",
+                   "-loop", "1", "-framerate", str(GEN_FPS), "-i", str(png),
+                   "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+                   "-t", f"{seconds:.3f}", *_GEN_ENCODE, str(tmp)]
+        else:
+            hexcolour = (spec.get("color") or "#000000").lstrip("#")
+            cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin",
+                   "-f", "lavfi", "-i",
+                   f"color=c=0x{hexcolour}:s={GEN_W}x{GEN_H}:r={GEN_FPS}:d={seconds:.3f}",
+                   "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+                   "-t", f"{seconds:.3f}", *_GEN_ENCODE, str(tmp)]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if png is not None:
+            png.unlink(missing_ok=True)
+        if r.returncode != 0 or not tmp.exists() or not tmp.stat().st_size:
+            tmp.unlink(missing_ok=True)
+            raise RuntimeError(f"generated clip failed ({name}): {r.stderr[-300:]}")
+        tmp.replace(dest)
+        record = {k: spec.get(k) for k in ("kind", "seconds", "color", "from_clip", "at")}
+        record["clip"] = name
+        record["duration"] = probe_duration(dest) or seconds
+        generated_spec_path(name).write_text(json.dumps(record, indent=1), encoding="utf-8")
+    return dest
+
+
+def _generated_spec(name: str) -> dict:
+    p = generated_spec_path(name)
+    if p.exists():
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(d, dict):
+                return d
+        except ValueError:
+            pass
+    # a file with no record (copied in by hand): what its name says, and a probe
+    m = re.fullmatch(r"gen_(black|colour|still)_[0-9a-f]+", Path(name).stem)
+    kind = m.group(1) if m else "black"
+    dur = probe_duration(generated_dir() / name) if (generated_dir() / name).exists() else None
+    return {"kind": kind, "seconds": dur, "color": None, "from_clip": None, "at": None,
+            "clip": name, "duration": dur}
+
+
+def generated_clips(referenced: set[str] | None = None) -> dict[str, dict]:
+    """The generated files as `project_payload` lists a clip: every `gen_*.mp4` in the
+    dir, plus any a segment names that is not there yet (listed as `missing`, so the
+    board shows the shot rather than losing it). Same keys as a footage clip — the
+    card, the monitor and the Ask read them without knowing — with an empty
+    transcript, a summary that says what it is and the spec under `generated`."""
+    referenced = referenced or set()
+    d = STATE.get("generated_dir") or (STATE["work"] / "generated" / STATE["footage"].name)
+    names = [p.name for p in sorted(d.glob("gen_*.mp4")) if p.name.count(".") == 1] if d.is_dir() else []
+    names += sorted(c for c in referenced if edits.is_generated(c) and c not in names)
+    # keyed by path, not name: a re-point to another bin must not serve this one's
+    # lengths (the same reason configure() clears the footage caches)
+    cache: dict = STATE.setdefault("gen_durations", {})
+    out: dict[str, dict] = {}
+    for name in names:
+        present = (d / name).exists()
+        spec = _generated_spec(name) if present else None
+        if spec is not None:
+            key = str(d / name)
+            if key not in cache:
+                cache[key] = spec.get("duration") or probe_duration(d / name)
+            duration = cache[key]
+        else:
+            spec, duration = {"kind": "black", "seconds": None, "color": None,
+                              "from_clip": None, "at": None, "clip": name}, None
+        spec = {k: spec.get(k) for k in ("clip", "kind", "seconds", "color", "from_clip", "at")}
+        if spec["seconds"] is None:
+            spec["seconds"] = duration
+        stem = Path(name).stem
+        out[name] = {
+            "clip": name, "stem": stem, "duration": duration,
+            "proxy": f"/media/generated/{name}" if present else "",
+            "poster": f"/media/poster/{stem}.jpg" if present else "",
+            "transcript": [], "visual": {}, "captured": None, "candidates": [],
+            # The same keys a footage clip's summary has (the Ask's clip block and the
+            # mixer read them by name), and the one line that says what this is.
+            "summary": {"speech_fraction": 0.0, "wind_dominant_fraction": 0.0,
+                        "integrated_lufs": None, "audio_usable": False,
+                        "generated": generated_label(spec)},
+            "generated": spec,
+            "used": name in referenced,
+        }
+        if not present:
+            out[name]["missing"] = True
+    return out
+
+
+@app.get("/media/generated/{name}")
+def media_generated(name: str, request: Request) -> Response:
+    """A generated clip, played the way a proxy is (it is one, in every way that
+    matters to the monitor). `/media/proxy/` looks in the proxy dir and would not
+    find it; `project_payload` points a generated clip's `proxy` here."""
+    return ranged_file(generated_dir() / Path(name).name, request)
+
+
+# ---- the ops themselves: preview writes nothing, apply writes once
+
+def _edits_cut() -> tuple[dict, list[dict], dict]:
+    """The cut on disk (with ids) and the clips it can name — footage and generated —
+    for their lengths."""
+    payload = project_payload()
+    edl = read_edl()
+    ensure_segment_ids(edl)
+    return edl, edl.get("segments") or [], payload["clips"]
+
+
+def _edits_shape(res: dict) -> dict:
+    return {k: res[k] for k in ("segments", "id_map", "generated", "changed", "words")}
+
+
+def _rekey_effects(effects: list[dict], before: list[dict], after: list[dict]) -> list[dict]:
+    """Accepted effects follow their events through an edit. A shot that was split
+    leaves its effect on the piece that holds most of its events (the original id on
+    a tie); events that landed in another piece get a copy of the effect keyed to
+    that piece with just those events. An effect whose shot left the cut is dropped —
+    `validate_effect` would refuse the next save otherwise."""
+    before_by_id = {str(s.get("id")): s for s in before}
+    out: list[dict] = []
+    for e in effects:
+        sid = str(e.get("shot"))
+        orig = before_by_id.get(sid)
+        if orig is None:
+            out.append(e)                            # not ours to judge
+            continue
+        pieces = [s for s in after
+                  if s["clip"] == orig["clip"]
+                  and (str(s.get("id")) == sid
+                       or (str(s.get("id")) not in before_by_id
+                           and float(s["in"]) >= float(orig["in"]) - 1e-6
+                           and float(s["out"]) <= float(orig["out"]) + 1e-6))]
+        if not pieces:
+            continue                                 # the shot is gone; so is the effect
+        events = e.get("events") or []
+
+        def held(p: dict) -> list[dict]:
+            return [ev for ev in events if float(p["in"]) <= float(ev["t"]) < float(p["out"])]
+
+        home = max(pieces, key=lambda p: (len(held(p)), str(p.get("id")) == sid, -pieces.index(p)))
+        out.append(e if str(home.get("id")) == sid else {**e, "shot": str(home["id"])})
+        for p in pieces:
+            if p is home:
+                continue
+            evs = held(p)
+            if not evs:
+                continue
+            copy = {k: v for k, v in e.items() if k not in ("verify", "previous", "history")}
+            copy.update({"id": fx.new_id(), "shot": str(p["id"]), "events": evs})
+            out.append(copy)
+    return out
+
+
+def apply_edits(ops) -> dict:
+    """What Accept calls (and `POST /api/edits/apply`): the ops validated against the
+    cut on disk, applied, every `new:n` minted with `segment_id()`, every generated
+    clip materialised, the accepted effects re-keyed to the pieces that hold their
+    events, and the EDL's segments written — once. Raises ValueError with a sentence
+    for a bad op (nothing written). Returns `apply_ops`'s shape with `id_map` filled
+    in, plus `before` (the segments as they were — the board's undo does not cover
+    this write, `POST /api/edits/undo {before}` does), `ops` (the clean list) and,
+    when the effects changed, `before_effects` / `effects`."""
+    edl, segments, clips = _edits_cut()
+    clean = edits.validate_ops(ops, segments, clips)
+    res = edits.apply_ops(segments, clips, clean)
+    before = [dict(s) for s in segments]
+    id_map = {pid: segment_id() for pid in res["id_map"]}
+    for s in res["segments"]:
+        if s["id"] in id_map:
+            s["id"] = id_map[s["id"]]
+    res["changed"] = [id_map.get(c, c) for c in res["changed"]]
+    res["id_map"] = id_map
+    # The files first: an ffmpeg that fails leaves the cut exactly as it was.
+    for g in res["generated"]:
+        try:
+            materialise_generated(g)
+        except RuntimeError as exc:
+            raise ValueError(f"could not make {g['clip']}: {exc}") from exc
+    before_effects = list(edl.get("effects") or [])
+    effects_after = _rekey_effects(before_effects, before, res["segments"])
+    edl["segments"] = res["segments"]
+    if before_effects:
+        edl["effects"] = effects_after
+    if edl.get("selects") is not None or edl.get("floor") is not None:
+        selects.sync_timeline(edl)
+    write_edl(edl)
+    out = _edits_shape(res)
+    out["before"] = before
+    out["ops"] = clean
+    if effects_after != before_effects:
+        out["before_effects"] = before_effects
+        out["effects"] = effects_after
+    return out
+
+
+@app.post("/api/edits/preview")
+async def api_edits_preview(request: Request) -> JSONResponse:
+    """The cut as it would be after the ops — nothing written, no file made, the new
+    shots still `new:n`. A bad op is a 400 with the sentence."""
+    body = await request.json()
+    _, segments, clips = _edits_cut()
+    try:
+        clean = edits.validate_ops(body.get("ops"), segments, clips)
+        res = edits.apply_ops(segments, clips, clean)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    out = _edits_shape(res)
+    out["ops"] = clean
+    return JSONResponse(out)
+
+
+@app.post("/api/edits/apply")
+async def api_edits_apply(request: Request) -> JSONResponse:
+    """`apply_edits` over HTTP: the same shape as preview with the ids minted, the
+    files made and the cut written; `before` is what undo takes back."""
+    body = await request.json()
+    try:
+        out = await asyncio.to_thread(apply_edits, body.get("ops"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return JSONResponse(out)
+
+
+@app.post("/api/edits/undo")
+async def api_edits_undo(request: Request) -> JSONResponse:
+    """The segments back as `apply` reported them in `before`, validated the way a
+    save is. `effects`, when given, are restored the same way (a bad one is a 400);
+    when not, the accepted effects that still name a shot in the restored cut are
+    kept and the rest — copies keyed to shots that no longer exist — are dropped."""
+    body = await request.json()
+    before = body.get("before")
+    if not isinstance(before, list) or not before:
+        raise HTTPException(400, "undo needs `before`: the segments as they were")
+    clean = clean_segments(before)
+    edl = read_edl()
+    edl["segments"] = clean
+    if isinstance(body.get("effects"), list):
+        try:
+            edl["effects"] = [fx.validate_effect(e, clean) for e in body["effects"]]
+        except ValueError as exc:
+            raise HTTPException(400, f"effects: {exc}")
+    elif edl.get("effects"):
+        ids = {str(s["id"]) for s in clean}
+        edl["effects"] = [e for e in edl["effects"] if str(e.get("shot")) in ids]
+    if edl.get("selects") is not None or edl.get("floor") is not None:
+        selects.sync_timeline(edl)
+    write_edl(edl)
+    return JSONResponse({"ok": True, "segments": clean})
 
 
 # ------------------------------------------------------------------------ cuts

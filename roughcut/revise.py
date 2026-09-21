@@ -27,7 +27,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from . import config
+from . import config, edits
 from .boundaries import polish_plan
 from .estimate import Estimate, estimate
 from .inference import complete
@@ -313,9 +313,9 @@ def build_prompt(segments: list[dict], clips: dict[str, dict], story: str,
                  selects: list[dict] | None = None) -> str:
     current = "\n".join(
         f"  {i + 1:2d}. {s['clip']} {s['in']:.2f}-{s['out']:.2f} "
-        f"({s['out'] - s['in']:.1f}s) — {s.get('why', '')}"
+        f"({edits.dur(s):.1f}s) — {s.get('why', '')}"
         for i, s in enumerate(segments))
-    total = sum(s["out"] - s["in"] for s in segments)
+    total = sum(edits.dur(s) for s in segments)
     timeline = shot_timeline(clips)
     inventory = "\n\n".join(_clip_block(c, timeline) for c in clips.values())
     # Before the inventory, always. A ranked list that arrives after forty clip blocks

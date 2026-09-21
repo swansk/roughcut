@@ -24,6 +24,58 @@ same commit. Releases move entries into a dated version section.
   shows the proposed cut on the ghost lane (`tlLanes.showGhost`) when the board has
   it, and Verify carries an `edits_apply` check (the proof is skipped for a shot that
   does not exist yet). `test_fx.py` +2.
+- **The render retimes a shot and cuts a generated clip (INTAKE M13)** — in
+  `assemble.py` a part whose segment has `speed` ≠ 1 is retimed: `setpts` on the video
+  ahead of the `fps` conform (the frame count changes, the rate does not — and a 60 fps
+  source slowed to half keeps its own frames instead of doubling decimated ones),
+  `atempo` on the audio as a chain of factors inside its 0.5–2 window (0.25 is
+  `atempo=0.5,atempo=0.5`), `-t` from `edits.dur`, an accepted effect's events moved
+  to where the picture now is; the concat still copies. A segment whose clip is
+  `gen_*.mp4` reads its source from the new `--generated-dir` (the board's
+  `_render_job` passes `generated_dir()`), takes no normalise and no grade (a black
+  slide stays the black it was asked for) and casts no vote in the delivery profile's
+  frame size. The planned length and the drift check sum `edits.dur`. Also fixed: a
+  segment with no `why` (a split's second half has none) no longer crashes the part
+  log. `test_edits_render.py`: a 0.5× part of a 2 s range is 4 s at 24000/1001 and its
+  3 s frame is the source's 2.5 s frame; a black part is 1920×1080 with luma at black
+  and the film is the four parts end to end; a freeze still is the frame it names and
+  holds; the atempo / setpts / source helpers.
+- **Preview, apply and undo for the edits (INTAKE M13)** — `POST /api/edits/preview
+  {ops}` is the cut as it would be (`segments`, `id_map`, `generated`, `changed`,
+  `words`) from `edits.validate_ops` + `apply_ops` against the cut on disk, nothing
+  written, no file made, the new shots still `new:n`; a bad op is a 400 with the
+  sentence. `POST /api/edits/apply {ops}` is `apply_edits(ops)` — the module-level
+  function Accept calls — which mints every `new:n` with `segment_id()` (the `id_map`
+  filled in), materialises every generated clip *before* anything is written (an
+  ffmpeg that fails leaves the cut as it was), re-keys the accepted effects whose shot
+  was split to the piece that holds their events (events across two pieces make a
+  copy per extra piece; an effect whose shot left the cut is dropped) and writes the
+  EDL's segments once. **The board's undo does not cover this write**: the response
+  carries `before` (the segments as they were, and `before_effects` when the effects
+  changed) and `POST /api/edits/undo {before, effects?}` restores them, validated the
+  way a save is (the save's segment cleaning is now `clean_segments`, shared).
+  `test_edits_api.py` +8.
+- **Generated clips are real files (INTAKE M13)** — a black slide, a colour or a freeze
+  frame the model proposes is made by the server, never by the model:
+  `materialise_generated(spec)` writes `gen_<kind>_<key>.mp4` under
+  `work/generated/<bin>/` (`generated_dir()`) with ffmpeg — lavfi `color` + `anullsrc`
+  for black and colour, one frame of the source clip's proxy at `at` looped over
+  silence for a still — 1280×720 libx264 yuv420p + aac, the shape of a proxy, and
+  reuses the file when it exists. Every generated file (and any a segment names that
+  is not there yet, listed `missing`) is a clip in `GET /api/project` with a
+  `duration`, a `proxy` that plays it (`/media/generated/{name}`, ranged like a
+  proxy), a `poster` (`/media/poster/` falls back to the generated dir for a `gen_`
+  stem), an empty transcript, a summary whose `generated` line says what it is and the
+  spec under `generated` — so the monitor plays it, the kept tab does not break on it
+  and the Ask's clip map carries it for an effect to be designed on. `test_edits_api.py`
+  +4.
+- **A shot's speed survives a save (INTAKE M13)** — the board can now put `speed`
+  on a segment and `PUT /api/project` keeps it: validated by `edits.validate_speed`
+  (a 400 with its sentence on a bad one; absent or 1 is not stored), returned as
+  stored by `GET /api/project`, and every place the server sums a cut's length
+  (`/api/render`'s `planned_s`, the shot list a render records) uses `edits.dur`, so
+  a 2 s range at 0.5× plans as 4 s of film. `test_edits.py` covers the pure module —
+  every op, every refusal, the words; `test_edits_api.py` the save and the plan.
 - **Edits foundation (INTAKE M13, I13.0)** — Karl, 2026-09-20: *"the effect tool itself …
   needs to be able to make changes like this and even broader ones like slow motion or
   extension or creating new clips."* `roughcut/edits.py` is the closed vocabulary of
