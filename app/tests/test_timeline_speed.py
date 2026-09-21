@@ -6,6 +6,8 @@ What the effects tool can now propose (roughcut/edits.py) the board has to honou
     in every lane's sum (`tl.dur` is the one place that arithmetic lives);
   * the monitor plays it at that rate (`video.playbackRate`), ends it at its `out` in
     clip time, and reports its film position at the rate;
+  * the inspector's speed row writes `seg.speed` as one undo entry and the block wears
+    a badge; the save carries it (`tl.forSave()`; the server lane keeps it on disk);
 
 Same fixture pattern as test_timeline_ui.py: the real uvicorn server on a real port, the
 synthetic three-clip bin, the EDL re-seeded per test. Skipped when playwright is absent.
@@ -138,8 +140,10 @@ def test_a_half_speed_shot_is_twice_as_long_on_the_ruler_and_in_the_total(page):
     at = page.evaluate("tl.shotAt(3.0)")
     assert at["index"] == 0 and at["clipT"] == 2.5
     assert page.evaluate("tl.shotAt(5.0)") == {"id": ids(page)[1], "index": 1, "clipT": 1.0}
-    # the block says the film length
+    # the block says the film length and wears the badge; the plain shot wears none
     assert page.locator("#tl .blk").nth(0).locator(".dur").inner_text() == "4.0s"
+    assert page.locator("#tl .blk").nth(0).locator(".speed:not([hidden])").inner_text() == "0.5×"
+    assert page.locator("#tl .blk").nth(1).locator(".speed:not([hidden])").count() == 0
     # a split at 2 s of film cuts the clip at 2.0 (1.0 + 2 × 0.5) and both halves keep the rate
     first = ids(page)[0]
     page.evaluate(f"tl.split('{first}', 2.0)")
@@ -238,4 +242,73 @@ def test_the_monitor_plays_a_slow_shot_at_its_rate_and_hands_over_at_its_out(pag
     assert page.evaluate("liveVideo().playbackRate") == 1
     page.keyboard.press("k")
     assert page.evaluate("liveVideo().playbackRate") == 0.5
+
+
+# ------------------------------------------------------------------ the inspector
+
+def test_the_inspectors_speed_chip_writes_speed_as_one_undo_entry_and_the_save_carries_it(page, project):
+    """Select CLIP_B (1×): the row's 1× chip is lit and the box says 1. Click ½×: `speed`
+    is 0.5 on the segment, the total is 0:08.0, the block wears ½×, the undo entry is
+    `speed`, and `tl.forSave()` carries it. 1× deletes the key. The number box takes any
+    rate in 0.1–4 and clamps outside it. After the autosave the page still carries the
+    rate (afterSave never drops it), and the disk does once the server keeps it."""
+    page.locator("#tl .blk").nth(1).click()
+    page.evaluate("pauseCut()")
+    assert page.locator("#inspector .clip").inner_text() == "CLIP_B"
+    assert page.locator("#inspector .speedrow button.on").inner_text() == "1×"
+    assert page.locator("#inspector .speedNum").input_value() == "1"
+    assert page.locator("#inspector .dur").inner_text() == "2.0 s"
+
+    page.locator("#inspector .speedrow button[data-speed='0.5']").click()
+    assert page.evaluate("segs[1].speed") == 0.5
+    assert page.locator("#inspector .speedrow button.on").inner_text() == "½×"
+    assert page.locator("#inspector .dur").inner_text() == "4.0 s at 0.5×"
+    assert "2.0 s of clip → 4.0 s of film" in page.locator("#inspector .sfilm").inner_text()
+    assert page.locator("#total").inner_text() == "0:08.0"
+    assert page.locator("#tl .tl-total").inner_text() == "0:08.0"
+    assert page.locator("#tl .blk").nth(1).locator(".speed:not([hidden])").inner_text() == "0.5×"
+    assert page.locator("#undo").get_attribute("title").startswith("undo: speed")
+    assert page.evaluate("tl.forSave().map(s => s.speed)") == [0.5, 0.5]
+    wait_saved(page)
+    assert page.evaluate("segs[1].speed") == 0.5, "afterSave keeps the rate on the page"
+    disk = on_disk(project)[1]
+    if "speed" in disk:                    # the server lane keeps it through PUT /api/project
+        assert disk["speed"] == 0.5
+    remote = page.evaluate("fetch('/api/project').then(r => r.json())")["segments"][1]
+    if "speed" in remote:
+        assert remote["speed"] == 0.5
+
+    # one undo takes it back; redo brings it
+    page.keyboard.press("Control+z")
+    assert page.evaluate("'speed' in segs[1]") is False
+    assert page.locator("#total").inner_text() == "0:06.0"
+    page.keyboard.press("Control+Shift+z")
+    assert page.evaluate("segs[1].speed") == 0.5
+
+    # 1× is the absence of the key
+    page.locator("#inspector .speedrow button[data-speed='1']").click()
+    assert page.evaluate("'speed' in segs[1]") is False
+    assert page.evaluate("tl.forSave()[1].speed") is None
+    assert page.locator("#tl .blk").nth(1).locator(".speed:not([hidden])").count() == 0
+
+    # the number box: any rate, clamped to 0.1–4, one entry per committed value
+    num = page.locator("#inspector .speedNum")
+    num.fill("2.5")
+    num.press("Enter")
+    assert page.evaluate("segs[1].speed") == 2.5
+    assert page.locator("#inspector .dur").inner_text() == "0.8 s at 2.5×"
+    assert page.locator("#inspector .speedrow button.on").count() == 0
+    num.fill("9")
+    num.press("Enter")
+    assert page.evaluate("segs[1].speed") == 4
+    assert page.locator("#inspector .speedNum").input_value() == "4"
+    assert page.locator("#tl .blk").nth(1).locator(".speed:not([hidden])").inner_text() == "4×"
+    # the API on its own: a rate outside the bounds clamps, the same rate is no entry
+    assert page.evaluate(f"tl.setSpeed('{ids(page)[1]}', 4)") is False
+    assert page.evaluate(f"tl.setSpeed('{ids(page)[1]}', 0.01)") is True
+    assert page.evaluate("segs[1].speed") == 0.1
+    # a duplicate keeps its rate (the keys are ignored while the box has the focus)
+    num.blur()
+    page.keyboard.press("Control+d")
+    assert page.evaluate("segs.map(s => s.speed || 1)") == [0.5, 0.1, 0.1]
 

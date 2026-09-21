@@ -352,6 +352,15 @@ function buildShot(seg) {
       <div class="lines"></div>
       <div class="lines seen" hidden></div>
       <div class="polish hint" hidden></div>
+      <div class="speedrow" title="the shot's speed — its clip range plays at this rate; the film gets (out − in) ÷ speed of it">
+        <span class="slabel">speed</span>
+        <button data-act="speed" data-speed="0.25" title="quarter speed">¼×</button>
+        <button data-act="speed" data-speed="0.5" title="half speed — slow motion">½×</button>
+        <button data-act="speed" data-speed="1" title="as shot">1×</button>
+        <button data-act="speed" data-speed="2" title="double speed">2×</button>
+        <input type="number" class="speedNum" min="0.1" max="4" step="0.05" title="any rate from 0.1 to 4">
+        <span class="sfilm hint"></span>
+      </div>
       <div class="trim">
         <span>in</span>
         <button data-act="in" data-d="-0.25" title="in-point 0.25 s earlier (⇧ 1 s)">−</button>
@@ -415,8 +424,32 @@ function buildShot(seg) {
   el.querySelector('.shotNote').addEventListener('input', (ev) => {
     shotAskDraft.set(seg, ev.target.value);
   });
+  // The number box: one entry per committed value (change, not input — a half-typed
+  // "0." must not retime the shot). The chips are the click handler's, by data-act.
+  el.querySelector('.speedNum').addEventListener('change', (ev) => {
+    const v = parseFloat(ev.target.value);
+    const cur = inspected() || seg;
+    if (Number.isFinite(v)) tl.setSpeed(cur.id, v);
+    // the value is committed: the box shows what stuck (clamped to 0.1–4, or unchanged)
+    fillSpeed(el, tl.byId(cur.id) || cur, true);
+  });
   bindColour(el, seg);
   return el;
+}
+
+/* The speed row: the chip that matches lit, the box carrying the rate, and what that
+ * makes of the shot in the film when it is not 1×. The box is left alone while it is
+ * being typed in, unless `force` — the change handler, after the value is committed. */
+function fillSpeed(box, seg, force = false) {
+  const spd = speedOf(seg);
+  box.querySelectorAll('.speedrow button[data-speed]').forEach((b) => {
+    b.classList.toggle('on', parseFloat(b.dataset.speed) === spd);
+  });
+  const num = box.querySelector('.speedNum');
+  if (force || document.activeElement !== num) num.value = String(spd);
+  const film = box.querySelector('.sfilm');
+  film.textContent = spd === 1 ? ''
+    : `${(seg.out - seg.in).toFixed(1)} s of clip → ${tl.dur(seg).toFixed(1)} s of film`;
 }
 
 function buildMulti() {
@@ -447,6 +480,7 @@ function fillShot(box, seg) {
   // the length in the film; a retimed shot says the rate beside it
   const spd = speedOf(seg);
   q('.dur').textContent = `${tl.dur(seg).toFixed(1)} s${spd === 1 ? '' : ` at ${spd}×`}`;
+  fillSpeed(box, seg);
   const warn = boundaryWarning(seg);
   q('.warn').textContent = warn ? `⚠ ${warn}` : '';
   q('.warn').hidden = !warn;
@@ -569,6 +603,12 @@ function onInspectorClick(e) {
     const note = $('#inspector .shotNote').value.trim();
     if (!note) return toast('say what should change in this shot');
     ask({ note, focus: i, button: b, state: $('#inspector .shotState') });
+    return;
+  }
+  if (act === 'speed') {
+    // one undo entry labelled `speed`; 1× deletes the key (tl.setSpeed); the block,
+    // the total and the monitor's rate follow through the timeline's render
+    tl.setSpeed(seg.id, parseFloat(b.dataset.speed));
     return;
   }
   if (act && act.startsWith('c') && onColourAct(act, seg)) return;

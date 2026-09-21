@@ -10,6 +10,18 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **A speed badge on the block and a speed row in the inspector (INTAKE M13, I13.3)** —
+  a retimed block wears `0.5×` (nothing at 1×, so a plain cut looks as it did) and its
+  tooltip says the film length it makes from the clip range; the inspector's header
+  says `4.0 s at 0.5×`. Under the transcript lines a speed row: chips `¼× ½× 1× 2×` and
+  a number box (0.1–4), the lit chip the shot's rate, a line saying what the range
+  becomes in the film. They write through the new `tl.setSpeed(id, rate)` — one undo
+  entry labelled `speed`, clamped to edits.py's bounds, rounded to 0.01, and 1 deletes
+  the key from the segment so a 1× shot saves the way it always did; the block, the
+  total and the monitor's rate follow. The box commits on change (a half-typed `0.`
+  never retimes a shot) and shows the clamped value; a duplicate (⌘D) keeps its rate.
+  Test: the chip writes `speed`, `#total` and the badge follow, undo / redo walk it,
+  `tl.forSave()` carries it and the page keeps it through the autosave.
 - **The monitor plays a shot at its speed (INTAKE M13, I13.2)** — `arm()` and the
   `play()` calls in `playFrom` / `advance` set the buffer's `playbackRate` to the shot's
   `speed` (after `load()`, which resets it) and keep it on `dataset.speed`; the JKL

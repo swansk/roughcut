@@ -89,6 +89,11 @@
  *   tl.insert(seg, afterId|null)   Insert `{clip, in, out, why}` after a shot (null =
  *                               append); a missing id becomes a `tmp-` one. Selects it.
  *                               Returns its id.
+ *   tl.setSpeed(id, rate)       The shot's `speed` (0.1–4, rounded to 0.01): one undo
+ *                               entry labelled `speed`; the block, the total and the
+ *                               monitor's rate follow. 1 deletes the key from the
+ *                               segment, so a 1× shot saves the way it always did.
+ *                               Returns true when something changed.
  *
  *   — selection, playhead, view —
  *   tl.select(ids, {add, range, source})   Replace the selection; `add` toggles the ids in
@@ -317,7 +322,7 @@
     b.dataset.id = id;
     b.innerHTML = '<img class="poster" draggable="false" loading="lazy" decoding="async" alt="">'
       + '<div class="txt"><span class="name"></span><span class="dur"></span>'
-      + '<div class="line"></div></div>'
+      + '<span class="speed" hidden></span><div class="line"></div></div>'
       + '<i class="warn in" hidden></i><i class="warn out" hidden></i>';
     return b;
   }
@@ -378,10 +383,14 @@
     const clip = clipOf(seg.clip);
     b.querySelector('.name').textContent = stem(seg.clip);
     b.querySelector('.dur').textContent = `${filmLen.toFixed(1)}s`;
+    // the badge: only when the shot is retimed, so a 1× cut looks the way it always did
+    const badge = b.querySelector('.speed');
+    badge.hidden = spd === 1;
+    badge.textContent = spd === 1 ? '' : `${speedLabel(spd)}×`;
     b.querySelector('.line').textContent = strongestLine(seg, clip);
     b.title = `${i + 1}. ${stem(seg.clip)} ${fmt(seg.in)}–${fmt(seg.out)}`
       + (spd === 1 ? ` (${filmLen.toFixed(1)}s)`
-                   : ` at ${spd}× (${filmLen.toFixed(1)}s of film from ${(seg.out - seg.in).toFixed(1)}s)`)
+                   : ` at ${speedLabel(spd)}× (${filmLen.toFixed(1)}s of film from ${(seg.out - seg.in).toFixed(1)}s)`)
       + (seg.why ? `\n${seg.why}` : '');
     const warn = warnEdges(seg, clip);
     const wi = b.querySelector('.warn.in'), wo = b.querySelector('.warn.out');
@@ -754,6 +763,23 @@
     });
   }
 
+  /* `0.5`, `0.25`, `2` — never `0.50`; the chips and the badge read the same. */
+  function speedLabel(s) { return String(round2(s)); }
+
+  function setSpeed(id, rate) {
+    const seg = byId(id);
+    if (!seg) return false;
+    const r = Number(rate);
+    if (!Number.isFinite(r)) return false;
+    const want = round2(clamp(r, MIN_SPEED, MAX_SPEED));
+    if (want === speedOf(seg)) return false;
+    return mutate('speed', () => {
+      if (want === 1) delete seg.speed;      // 1× is the absence of the key, as edits.py reads it
+      else seg.speed = want;
+      return true;
+    });
+  }
+
   /* ------------------------------------------------------------ saving */
   function forSave() {
     return segs().map((s) => {
@@ -931,7 +957,7 @@
     state, el, mount, render, on,
     byId, indexOf, idAt, dur, speedOf, filmStart, total, shotAt, timeToX, xToTime, eventTime, snapsFor,
     begin, commit, cancel, undo, redo,
-    setRange, move, split, remove, insert,
+    setRange, move, split, remove, insert, setSpeed,
     select, syncSel, seek, setPlayhead, zoomTo, fit,
     forSave, needsRekey, afterSave,
     fmt, hueOf,
