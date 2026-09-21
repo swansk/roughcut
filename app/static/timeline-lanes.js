@@ -18,6 +18,12 @@
  *             moved ones with an arrow from where they are now, removed ones struck out on
  *             V1. Click a ghost → the monitor plays that range; `play proposal` / `play
  *             cut` at the lane's left. Accept and discard stay the panel's buttons.
+ *             The same drawing on request (INTAKE M13): `tlLanes.showGhost(segments)`
+ *             draws an explicit list as the ghost — the FX card's preview of an edit
+ *             before Accept — and `tlLanes.clearGhost()` takes it down. A segment whose
+ *             id is `new:n` (a shot the edit would make) or whose clip is not in the cut
+ *             is drawn as added; `playPlan` plays it, at each shot's `speed`. While an
+ *             explicit list is up it wins over a pending Ask's plan.
  *
  * Film time everywhere here is `tl.dur(seg)` — `(out − in) / speed` — never `out − in`,
  * which is a clip length (INTAKE M13). A clip offset inside a shot (a keep's start, a
@@ -66,6 +72,8 @@
   let mode = 'cut';                    // the ghost lane's toggle
   let seen = {};                       // what the poll last saw
   let ghost = null;                    // the matched proposal, while one is pending
+  let shown = null;                    // an explicit plan from showGhost(), while one is up
+  let shownGen = 0;                    // bumps per showGhost / clearGhost, for the poll
 
   const q = (s) => document.querySelector(s);
   const round2 = (x) => Math.round(x * 100) / 100;
@@ -129,7 +137,7 @@
   const snapshot = (a) => ({
     bin: a.bin, music: a.music, plan: a.pendingPlan, zoom: tl.state.zoom, total: tl.total(),
     up: q('#proposal') ? q('#proposal').style.display : '',
-    n: tl.state.segs.length,
+    n: tl.state.segs.length, shown: shownGen,
   });
 
   function poll() {
@@ -293,10 +301,31 @@
 
   /* ------------------------------------------------------------ the proposal ghost lane */
   function pendingPlanOf(a) {
+    if (shown) return shown;             // an explicit list (showGhost) wins over the Ask's
     const p = a.pendingPlan;
     const box = q('#proposal');
     if (!p || !Array.isArray(p.segments) || !box || box.style.display === 'none') return null;
     return p;
+  }
+
+  /* Draw a proposed cut on the ghost lane on request — the FX card's preview of an edit
+   * before Accept. `segments` is a whole cut: `{id?, clip, in, out, why?, speed?}` per
+   * shot, ids `new:n` for shots that do not exist yet. One plan object per call, so the
+   * lane's mode resets when a new list comes and holds while the same one is redrawn. */
+  function showGhost(segments) {
+    if (!Array.isArray(segments)) return false;
+    shown = { segments: segments.map((s) => ({ ...s })), explicit: true };
+    shownGen++;
+    schedule();
+    return true;
+  }
+
+  function clearGhost() {
+    if (!shown) return false;
+    shown = null;
+    shownGen++;
+    schedule();
+    return true;
   }
 
   /* Longest increasing subsequence: the positions (in `seq`) that keep their order. */
@@ -322,9 +351,12 @@
     const cur = tl.state.segs;
     const used = new Set();
     const pairs = plan.segments.map((s) => {
-      let i = s.id ? tl.indexOf(s.id) : -1;
+      // a `new:n` id is a shot the edit would make: never one of the cut's, whatever
+      // footage it takes (a still of a shot overlaps that shot's range by construction)
+      const fresh = typeof s.id === 'string' && s.id.startsWith('new:');
+      let i = s.id && !fresh ? tl.indexOf(s.id) : -1;
       if (i >= 0 && used.has(i)) i = -1;
-      if (i < 0) {
+      if (i < 0 && !fresh) {
         let bestR = 0.5;
         cur.forEach((c, k) => {
           if (used.has(k) || c.clip !== s.clip) return;
@@ -377,6 +409,7 @@
     for (const g of ghost.ghosts) {
       const d = div(`ghost ${g.cls}${g.trimmed ? ' trimmed' : ''}${isGen(g.seg.clip) ? ' gen' : ''}`);
       d.dataset.k = g.k;
+      if (typeof g.seg.id === 'string') d.dataset.id = g.seg.id;
       const dur = tl.dur(g.seg);
       const s = spd(g.seg);
       d.style.left = px(tl.timeToX(g.start));
@@ -780,7 +813,9 @@
 
   window.tlLanes = {
     redraw, slotAt, playRange, playPlan, insertAt, MIME,
+    showGhost, clearGhost,
     ghost: () => ghost,
+    shown: () => shown,
     mode: () => mode,
   };
 })();

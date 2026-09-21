@@ -10,6 +10,18 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **`tlLanes.showGhost(segments)` / `tlLanes.clearGhost()` (INTAKE M13, I13.5)** — a
+  public way to draw a proposed cut on the ghost lane: the same drawing the Ask's pending
+  plan gets (`matchPlan` — unchanged shots dim, added green, moved with an arrow,
+  removed struck out on V1), fed an explicit segments list. An id `new:n` is a shot the
+  edit would make and is drawn as added whatever footage it takes (never matched to a
+  shot of the cut by overlap); a segment's `speed` sets its ghost's width and shows
+  beside its length; a generated clip is named by its kind. `playPlan` plays it, each
+  shot at its rate. While an explicit list is up it wins over a pending Ask's plan;
+  `clearGhost()` takes it down and returns whether there was one; `tlLanes.shown()`
+  reads it. The lead's FX card calls this to preview an edit before Accept. Test: a
+  list with a kept shot and a `new:1` at 2× — the classes, the positions, the strike,
+  `playPlan`, a generated slide in the list, and `clearGhost`.
 - **Generated clips on the board (INTAKE M13, I13.4)** — a shot whose clip is
   `gen_<kind>_<key>.mp4` (a black, a colour or a still the server makes for an edit,
   listed among the clips with a `proxy`, a `poster` and a `summary` line but no

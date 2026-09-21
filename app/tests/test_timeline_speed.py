@@ -10,6 +10,8 @@ What the effects tool can now propose (roughcut/edits.py) the board has to honou
     a badge; the save carries it (`tl.forSave()`; the server lane keeps it on disk);
   * a generated clip (`gen_<kind>_<key>.mp4`, listed with a proxy, a poster and a
     `summary` line but no sidecar) draws a block that says what it is and plays;
+  * `tlLanes.showGhost(segments)` draws a proposed cut on the ghost lane on request —
+    ids `new:n` as added — and `clearGhost()` takes it down.
 
 Same fixture pattern as test_timeline_ui.py: the real uvicorn server on a real port, the
 synthetic three-clip bin, the EDL re-seeded per test. Skipped when playwright is absent.
@@ -378,3 +380,65 @@ def test_a_generated_clip_draws_a_block_that_says_what_it_is_and_plays(page, pro
     page.wait_for_function("segs.every(s => s.id && s.id.startsWith('g'))", timeout=8000)
     assert on_disk(project)[2]["clip"] == GEN
 
+
+# ------------------------------------------------------------------ showGhost
+
+def test_show_ghost_draws_a_proposed_cut_with_new_ids_as_added_and_play_plan_plays_it(page):
+    """`tlLanes.showGhost([...])` with CLIP_B kept, CLIP_A gone and a `new:1` shot on
+    CLIP_C at 2×: the ghost lane shows without any Ask pending — B `same`, the new one
+    `added` at B's film end and half the width of its clip range; A struck out on V1.
+    `playPlan(0)` plays the ghost's first shot; `clearGhost()` takes it all down."""
+    ghost = "#tl .tl-xlane[data-lane=ghost]"
+    assert page.evaluate(f"document.querySelector('{ghost}').hidden") is True
+    a, b = ids(page)
+    ok = page.evaluate(f"""tlLanes.showGhost([
+        {{id: '{b}', clip: 'CLIP_B.MP4', in: 0.0, out: 2.0, why: 'kept'}},
+        {{id: 'new:1', clip: 'CLIP_C.MP4', in: 0.5, out: 2.5, why: 'new at 2×', speed: 2}},
+    ])""")
+    assert ok is True
+    page.wait_for_function(f"!document.querySelector('{ghost}').hidden", timeout=5000)
+    page.wait_for_function(f"document.querySelectorAll('{ghost} .ghost').length === 2", timeout=5000)
+    zoom = page.evaluate("tl.state.zoom")
+    classes = page.evaluate(
+        f"[...document.querySelectorAll('{ghost} .ghost')].map(g => g.className)")
+    assert classes[0].startswith("ghost same"), classes
+    assert classes[1] == "ghost added", classes
+    assert page.evaluate(f"document.querySelectorAll('{ghost} .ghost')[1].dataset.id") == "new:1"
+    assert left(page, f"{ghost} .ghost", 0) == pytest.approx(x_of(page, 0), abs=0.5)
+    assert width(page, f"{ghost} .ghost", 0) == pytest.approx(2.0 * zoom, abs=0.5)
+    assert left(page, f"{ghost} .ghost", 1) == pytest.approx(x_of(page, 2.0), abs=0.5)
+    assert width(page, f"{ghost} .ghost", 1) == pytest.approx(1.0 * zoom, abs=0.5)   # 2 s at 2×
+    assert "2×" in page.locator(f"{ghost} .ghost").nth(1).locator(".dur").inner_text()
+    # A is not in the list: struck out on V1, the whole 4 s of film it takes
+    assert page.locator("#tl .tl-over .strike").count() == 1
+    assert left(page, "#tl .tl-over .strike") == pytest.approx(x_of(page, 0), abs=0.5)
+    assert width(page, "#tl .tl-over .strike") == pytest.approx(4.0 * zoom, abs=0.5)
+    assert page.evaluate("tlLanes.shown().segments.length") == 2
+    assert page.evaluate("tlLanes.ghost().ghosts.length") == 2
+    # the cut itself is untouched
+    assert page.evaluate("segs.map(s => s.clip)") == ["CLIP_A.MP4", "CLIP_B.MP4"]
+    # playPlan plays the proposal, shot by shot, without playing the cut
+    assert page.evaluate("tlLanes.playPlan(0)") is True
+    page.wait_for_function("liveVideo().dataset.src.includes('CLIP_B')", timeout=10000)
+    assert page.evaluate("tlLanes.mode()") == "proposal"
+    assert not page.evaluate("player.playing")
+    # the new shot plays at its rate when its turn comes
+    page.wait_for_function("liveVideo().dataset.src.includes('CLIP_C')", timeout=15000)
+    page.wait_for_function("liveVideo().playbackRate === 2", timeout=5000)
+    # a generated clip in the list is drawn as a slide
+    page.evaluate(f"""tlLanes.showGhost([
+        {{id: 'new:2', clip: '{GEN}', in: 0, out: 1.0}},
+        {{id: '{a}', clip: 'CLIP_A.MP4', in: 1.0, out: 3.0, speed: 0.5}},
+        {{id: '{b}', clip: 'CLIP_B.MP4', in: 0.0, out: 2.0}},
+    ])""")
+    page.wait_for_function(f"document.querySelectorAll('{ghost} .ghost').length === 3", timeout=5000)
+    assert page.locator(f"{ghost} .ghost.gen .name").inner_text() == "black"
+    assert page.locator("#tl .tl-over .strike").count() == 0
+    assert left(page, f"{ghost} .ghost", 1) == pytest.approx(x_of(page, 1.0), abs=0.5)
+    # clearGhost: the lane goes, the strikes go, the cut is what it was
+    assert page.evaluate("tlLanes.clearGhost()") is True
+    page.wait_for_function(f"document.querySelector('{ghost}').hidden", timeout=5000)
+    assert page.locator("#tl .tl-over .strike").count() == 0
+    assert page.evaluate("tlLanes.shown()") is None
+    assert page.evaluate("tlLanes.clearGhost()") is False
+    assert page.evaluate("segs.map(s => s.clip)") == ["CLIP_A.MP4", "CLIP_B.MP4"]
