@@ -657,6 +657,10 @@ def project_payload() -> dict:
                          "integrated_lufs", "audio_usable")},
             "used": clip in referenced,
         }
+    # Generated clips (INTAKE M13): black, a colour, a freeze frame — real files the
+    # server made on an apply, listed like any other clip so the monitor plays them
+    # and an effect can be designed on one.
+    clips.update(generated_clips(referenced))
     return {
         "title": edl.get("title", ""),
         "variant": edl.get("variant", ""),
@@ -3160,6 +3164,10 @@ def media_poster(name: str, t: float = 0.0) -> Response:
     if not re.fullmatch(r"[A-Za-z0-9._-]+", stem):
         raise HTTPException(404, f"no such clip: {name}")
     src = STATE["proxy_dir"] / f"{stem}.mp4"
+    if not src.exists() and edits.is_generated(stem):
+        # A generated clip (INTAKE M13) is its own proxy; its stem cannot collide with
+        # footage (`gen_` is the server's prefix) so the poster cache shares the dir.
+        src = generated_dir() / f"{stem}.mp4"
     if not src.exists():
         # Not an error the board should shout about: proxies build in the background,
         # and the cards retry when /api/status says they are done.
@@ -3843,6 +3851,201 @@ def gradejs() -> Response:
     """The monitor's grade (INTAKE M10, I10.4): the WebGL LUT over the live video."""
     return Response((HERE / "static" / "grade.js").read_text(encoding="utf-8"),
                     media_type="application/javascript", headers=NO_STORE)
+
+
+# ---------------------------------------------------------------- edits (INTAKE M13)
+#
+# Operations on the cut itself — slow motion, an extension, a new clip. Karl,
+# 2026-09-20: *"the effect tool itself, it needs to be able to make changes like this
+# and even broader ones like slow motion or extension or creating new clips."*
+# `roughcut/edits.py` is the vocabulary and the pure apply; this is the part that
+# touches disk. A generated clip (black, a colour, a freeze frame) is a real file
+# under `work/generated/<bin>/` — per bin like the proxies, because a still is cut
+# from one bin's footage — listed among the project's clips so the monitor plays it,
+# the Ask can design on it and the render cuts it like any other. The model never
+# writes ffmpeg or a filename: `edits.generated_name` names the file, this makes it.
+
+GEN_W, GEN_H, GEN_FPS = 1280, 720, 24      # a proxy's size: the monitor plays these
+GEN_SLOTS = threading.BoundedSemaphore(2)   # two ffmpegs at once, like the posters
+
+
+def generated_dir() -> Path:
+    d = STATE.get("generated_dir") or (STATE["work"] / "generated" / STATE["footage"].name)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def generated_spec_path(name: str) -> Path:
+    """The record of what a generated file is (its `apply_ops` spec plus the probed
+    duration), beside the file, so a project reopened later still knows a black
+    slide from a freeze frame without probing or guessing from the name."""
+    return generated_dir() / f"{Path(name).stem}.json"
+
+
+def generated_label(spec: dict) -> str:
+    """One line for the card and the Ask: `generated: black 2.0 s`."""
+    kind = spec.get("kind")
+    s = float(spec.get("seconds") or 0.0)
+    if kind == "colour":
+        return f"generated: colour {spec.get('color') or '#000000'} {s:.1f} s"
+    if kind == "still":
+        return (f"generated: still of {spec.get('from_clip') or '?'} at "
+                f"{float(spec.get('at') or 0.0):.2f} s, {s:.1f} s")
+    return f"generated: black {s:.1f} s"
+
+
+def _generated_source(clip: str) -> Path:
+    """Where a still's frame comes from: the clip's proxy (the frame the monitor
+    showed when the human chose it), the source when there is no proxy yet, or a
+    generated clip's own file when the still is of a slide."""
+    if edits.is_generated(clip):
+        p = generated_dir() / clip
+    else:
+        p = STATE["proxy_dir"] / f"{Path(clip).stem}.mp4"
+        if not p.exists():
+            p = STATE["footage"] / clip
+    if not p.exists():
+        raise RuntimeError(f"no footage to take a still from: {clip}")
+    return p
+
+
+_GEN_ENCODE = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+               "-pix_fmt", "yuv420p", "-r", str(GEN_FPS),
+               "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+               "-shortest", "-movflags", "+faststart"]
+
+
+def materialise_generated(spec: dict) -> Path:
+    """Make `gen_<kind>_<key>.mp4` from one entry of `apply_ops(...)["generated"]`
+    (`clip`, `kind`, `seconds`, `color`, `from_clip`, `at`) and return its path.
+    Idempotent: a file that exists is reused, so the same slide proposed twice is one
+    encode. Black / colour: lavfi `color` + `anullsrc`. Still: one frame of the source
+    clip's proxy at `at` to a PNG, looped for `seconds` over silence. 1280×720,
+    libx264 yuv420p, aac — what a proxy is, so the monitor and the render treat it
+    as one. Raises RuntimeError with ffmpeg's last words."""
+    kind = spec.get("kind")
+    if kind not in edits.KINDS:
+        raise RuntimeError(f"unknown generated kind {kind!r}")
+    seconds = float(spec["seconds"])
+    name = spec.get("clip") or edits.generated_name(
+        kind, seconds, color=spec.get("color"), from_clip=spec.get("from_clip"),
+        at=spec.get("at"))
+    dest = generated_dir() / name
+    if dest.exists() and dest.stat().st_size:
+        return dest
+    with GEN_SLOTS:
+        if dest.exists() and dest.stat().st_size:     # made while we waited
+            return dest
+        tmp = dest.with_name(f"{dest.stem}.{os.getpid()}.part.mp4")
+        png = None
+        if kind == "still":
+            src = _generated_source(spec["from_clip"])
+            at = max(0.0, float(spec.get("at") or 0.0))
+            png = dest.with_suffix(".png")
+            r = subprocess.run(
+                ["ffmpeg", "-v", "error", "-y", "-nostdin", "-ss", f"{at:.3f}",
+                 "-i", str(src), "-frames:v", "1",
+                 "-vf", f"scale={GEN_W}:{GEN_H}:force_original_aspect_ratio=decrease,"
+                        f"pad={GEN_W}:{GEN_H}:(ow-iw)/2:(oh-ih)/2,format=rgb24",
+                 str(png)], capture_output=True, text=True)
+            if r.returncode != 0 or not png.exists() or not png.stat().st_size:
+                png.unlink(missing_ok=True)
+                raise RuntimeError(f"still failed for {src.name} at {at:.2f}s: {r.stderr[-300:]}")
+            cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin",
+                   "-loop", "1", "-framerate", str(GEN_FPS), "-i", str(png),
+                   "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+                   "-t", f"{seconds:.3f}", *_GEN_ENCODE, str(tmp)]
+        else:
+            hexcolour = (spec.get("color") or "#000000").lstrip("#")
+            cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin",
+                   "-f", "lavfi", "-i",
+                   f"color=c=0x{hexcolour}:s={GEN_W}x{GEN_H}:r={GEN_FPS}:d={seconds:.3f}",
+                   "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+                   "-t", f"{seconds:.3f}", *_GEN_ENCODE, str(tmp)]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if png is not None:
+            png.unlink(missing_ok=True)
+        if r.returncode != 0 or not tmp.exists() or not tmp.stat().st_size:
+            tmp.unlink(missing_ok=True)
+            raise RuntimeError(f"generated clip failed ({name}): {r.stderr[-300:]}")
+        tmp.replace(dest)
+        record = {k: spec.get(k) for k in ("kind", "seconds", "color", "from_clip", "at")}
+        record["clip"] = name
+        record["duration"] = probe_duration(dest) or seconds
+        generated_spec_path(name).write_text(json.dumps(record, indent=1), encoding="utf-8")
+    return dest
+
+
+def _generated_spec(name: str) -> dict:
+    p = generated_spec_path(name)
+    if p.exists():
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(d, dict):
+                return d
+        except ValueError:
+            pass
+    # a file with no record (copied in by hand): what its name says, and a probe
+    m = re.fullmatch(r"gen_(black|colour|still)_[0-9a-f]+", Path(name).stem)
+    kind = m.group(1) if m else "black"
+    dur = probe_duration(generated_dir() / name) if (generated_dir() / name).exists() else None
+    return {"kind": kind, "seconds": dur, "color": None, "from_clip": None, "at": None,
+            "clip": name, "duration": dur}
+
+
+def generated_clips(referenced: set[str] | None = None) -> dict[str, dict]:
+    """The generated files as `project_payload` lists a clip: every `gen_*.mp4` in the
+    dir, plus any a segment names that is not there yet (listed as `missing`, so the
+    board shows the shot rather than losing it). Same keys as a footage clip — the
+    card, the monitor and the Ask read them without knowing — with an empty
+    transcript, a summary that says what it is and the spec under `generated`."""
+    referenced = referenced or set()
+    d = STATE.get("generated_dir") or (STATE["work"] / "generated" / STATE["footage"].name)
+    names = [p.name for p in sorted(d.glob("gen_*.mp4")) if p.name.count(".") == 1] if d.is_dir() else []
+    names += sorted(c for c in referenced if edits.is_generated(c) and c not in names)
+    # keyed by path, not name: a re-point to another bin must not serve this one's
+    # lengths (the same reason configure() clears the footage caches)
+    cache: dict = STATE.setdefault("gen_durations", {})
+    out: dict[str, dict] = {}
+    for name in names:
+        present = (d / name).exists()
+        spec = _generated_spec(name) if present else None
+        if spec is not None:
+            key = str(d / name)
+            if key not in cache:
+                cache[key] = spec.get("duration") or probe_duration(d / name)
+            duration = cache[key]
+        else:
+            spec, duration = {"kind": "black", "seconds": None, "color": None,
+                              "from_clip": None, "at": None, "clip": name}, None
+        spec = {k: spec.get(k) for k in ("clip", "kind", "seconds", "color", "from_clip", "at")}
+        if spec["seconds"] is None:
+            spec["seconds"] = duration
+        stem = Path(name).stem
+        out[name] = {
+            "clip": name, "stem": stem, "duration": duration,
+            "proxy": f"/media/generated/{name}" if present else "",
+            "poster": f"/media/poster/{stem}.jpg" if present else "",
+            "transcript": [], "visual": {}, "captured": None, "candidates": [],
+            # The same keys a footage clip's summary has (the Ask's clip block and the
+            # mixer read them by name), and the one line that says what this is.
+            "summary": {"speech_fraction": 0.0, "wind_dominant_fraction": 0.0,
+                        "integrated_lufs": None, "audio_usable": False,
+                        "generated": generated_label(spec)},
+            "generated": spec,
+            "used": name in referenced,
+        }
+        if not present:
+            out[name]["missing"] = True
+    return out
+
+
+@app.get("/media/generated/{name}")
+def media_generated(name: str, request: Request) -> Response:
+    """A generated clip, played the way a proxy is (it is one, in every way that
+    matters to the monitor). `/media/proxy/` looks in the proxy dir and would not
+    find it; `project_payload` points a generated clip's `proxy` here."""
+    return ranged_file(generated_dir() / Path(name).name, request)
 
 
 # ------------------------------------------------------------------------ cuts

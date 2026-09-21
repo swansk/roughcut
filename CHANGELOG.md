@@ -10,6 +10,20 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Generated clips are real files (INTAKE M13)** — a black slide, a colour or a freeze
+  frame the model proposes is made by the server, never by the model:
+  `materialise_generated(spec)` writes `gen_<kind>_<key>.mp4` under
+  `work/generated/<bin>/` (`generated_dir()`) with ffmpeg — lavfi `color` + `anullsrc`
+  for black and colour, one frame of the source clip's proxy at `at` looped over
+  silence for a still — 1280×720 libx264 yuv420p + aac, the shape of a proxy, and
+  reuses the file when it exists. Every generated file (and any a segment names that
+  is not there yet, listed `missing`) is a clip in `GET /api/project` with a
+  `duration`, a `proxy` that plays it (`/media/generated/{name}`, ranged like a
+  proxy), a `poster` (`/media/poster/` falls back to the generated dir for a `gen_`
+  stem), an empty transcript, a summary whose `generated` line says what it is and the
+  spec under `generated` — so the monitor plays it, the kept tab does not break on it
+  and the Ask's clip map carries it for an effect to be designed on. `test_edits_api.py`
+  +4.
 - **A shot's speed survives a save (INTAKE M13)** — the board can now put `speed`
   on a segment and `PUT /api/project` keeps it: validated by `edits.validate_speed`
   (a 400 with its sentence on a bad one; absent or 1 is not stored), returned as
