@@ -990,7 +990,8 @@ operations on the cut plus, when wanted, an effect.
 - [ ] I13.2 **The board** (lane `agent/edits-ui`): `tl.dur`, the monitor at the shot's speed,
       a speed badge and inspector row, generated clips as blocks, `tlLanes.showGhost`;
       `test_timeline_speed.py`.
-- [ ] I13.3 **The model and the card** (lead): `edits` in the effect vocabulary with examples
+- [x] I13.3 **The model and the card** (lead, ahead of the lanes; Accept and Preview light up
+      when the lanes' `apply_edits` / `showGhost` land): `edits` in the effect vocabulary with examples
       (slow motion, extension, a typed title on a generated slide), the FX card lists the
       edits in words with a ghost Preview, Accept applies them and re-keys the effect,
       `edits_apply` in verify.

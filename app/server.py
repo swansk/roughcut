@@ -65,7 +65,7 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, Respons
 import uvicorn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from roughcut import (config, dictate, effects, events, find, fx, inference,  # noqa: E402
+from roughcut import (config, dictate, edits, effects, events, find, fx, inference,  # noqa: E402
                       journal, picks, progress, revise, selects, themes)
 
 HERE = Path(__file__).resolve().parent
@@ -3344,6 +3344,8 @@ def _fx_segments() -> list[dict]:
 
 
 def _fx_seg(shot: str) -> dict:
+    if str(shot).startswith("new:"):
+        return {"id": str(shot), "clip": "", "in": 0.0, "out": 0.0}    # a shot the edits will create
     seg = next((s for s in _fx_segments() if str(s.get("id")) == str(shot)), None)
     if seg is None:
         raise HTTPException(400, f"no shot {shot!r} in the cut")
@@ -3575,14 +3577,37 @@ def _fx_verify_job(job: str, fx_id: str) -> None:
     entry = FX[job]
     try:
         e = _fx_get(fx_id)
-        seg = _fx_seg(e["shot"])
+        seg = _fx_seg(e["shot"]) if not str(e.get("shot", "")).startswith("new:") else {"id": e["shot"], "clip": e.get("clip"), "in": 0, "out": 0}
         sc = load_sidecar(e["clip"])
         onset = (sc.get("tracks") or {}).get("onset") or None
         hz = float(sc.get("frame_hz") or fx.ONSET_HZ)
-        entry.note("rendering a proof of the shot")
-        proof, base = _fx_proof(e, seg)
-        entry.note("measuring the proof")
-        v = fx.verify(e, seg, onset=onset, hz=hz, part=proof, base=base, impact=_fx_impact(e))
+        edit_check = None
+        if e.get("edits"):
+            try:
+                words = edits.validate_ops(e["edits"], _fx_segments(), _ask_clips()[0]) and \
+                    edits.apply_ops(_fx_segments(), _ask_clips()[0], e["edits"])["words"]
+                edit_check = {"key": "edits_apply", "label": "the edits fit the cut as it stands",
+                              "ok": True, "detail": "; ".join(words)[:200]}
+            except ValueError as exc:
+                edit_check = {"key": "edits_apply", "label": "the edits fit the cut as it stands",
+                              "ok": False, "detail": str(exc)[:200]}
+        if e.get("overlay") is None and e.get("sound") is None:
+            v = {"ok": bool(edit_check and edit_check["ok"]), "at": datetime.now().isoformat(timespec="seconds"),
+                 "checks": [edit_check] if edit_check else []}
+        elif str(e.get("shot", "")).startswith("new:"):
+            v = {"ok": bool(edit_check and edit_check["ok"]),
+                 "at": datetime.now().isoformat(timespec="seconds"),
+                 "checks": ([edit_check] if edit_check else [])
+                 + [{"key": "proof", "label": "a proof render", "ok": None,
+                     "detail": "skipped: the shot does not exist until the edits are accepted"}]}
+        else:
+            entry.note("rendering a proof of the shot")
+            proof, base = _fx_proof(e, seg)
+            entry.note("measuring the proof")
+            v = fx.verify(e, seg, onset=onset, hz=hz, part=proof, base=base, impact=_fx_impact(e))
+            if edit_check:
+                v["checks"].insert(0, edit_check)
+                v["ok"] = bool(v["ok"]) and edit_check["ok"]
         e["verify"] = v
         _fx_put(e)
         entry["result"] = {"id": fx_id, "ok": bool(v.get("ok"))}
@@ -3674,6 +3699,25 @@ async def api_fx_accept(request: Request) -> JSONResponse:
     body = await request.json()
     fx_id = str(body.get("id") or "")
     e = fx.load(fx_home(), fx_id) or _fx_get(fx_id)
+    # The edits first (INTAKE M13): applied to the cut in one write by the edits
+    # section's apply_edits, the effect re-keyed from `new:n` to the minted id, and the
+    # effect then validated against the cut as it now is.
+    if e.get("edits") and e.get("status") != "accepted":
+        applier = globals().get("apply_edits")
+        if applier is None:
+            raise HTTPException(501, "this build cannot apply edits to the cut yet")
+        try:
+            applied = applier(e["edits"])
+        except ValueError as exc:
+            raise HTTPException(400, f"the edits no longer fit the cut: {exc}")
+        id_map = applied.get("id_map") or {}
+        if str(e.get("shot", "")).startswith("new:"):
+            e["shot"] = id_map.get(e["shot"]) or e["shot"]
+            new_seg = next((s for s in applied.get("segments") or [] if str(s.get("id")) == str(e["shot"])), None)
+            if new_seg:
+                e["clip"] = new_seg["clip"]
+        e["applied"] = {"at": applied.get("at"), "before": applied.get("before"), "words": e.get("edit_words")}
+        e.pop("edits", None)                        # applied: the cut carries them now
     segments = _fx_segments()
     current = next((x for x in read_edl().get("effects") or [] if x.get("id") == fx_id), None)
     if current is not None and _fx_snapshot(current) != _fx_snapshot(e):

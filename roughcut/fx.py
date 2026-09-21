@@ -66,6 +66,8 @@ from typing import Any
 
 import numpy as np
 
+from roughcut import edits as editsmod
+
 # ---------------------------------------------------------------- the vocabulary
 
 SHAPES = ("line", "circle", "ring", "rect", "polygon", "text")
@@ -353,8 +355,21 @@ def validate_effect(raw: Any, segments: list[dict], clips: dict[str, dict] | Non
     sentence a person can act on; returns a clean copy with only known fields."""
     if not isinstance(raw, dict):
         raise ValueError("effect is not an object")
+    # The edits (INTAKE M13): operations on the cut, validated against it; the effect's
+    # shot may then be one the edits create (`new:n`), so the shot is looked up in the
+    # cut AS IT WOULD BE after them.
+    ops = None
+    after = list(segments)
+    if raw.get("edits"):
+        ops = editsmod.validate_ops(raw["edits"], segments, clips)
+        after = editsmod.apply_ops(segments, clips, ops)["segments"]
     shot = raw.get("shot")
-    seg = next((s for s in segments if str(s.get("id")) == str(shot)), None)
+    seg = next((s for s in after if str(s.get("id")) == str(shot)), None)
+    if seg is None and ops and not shot:
+        # an edit-only proposal with no shot named: it belongs to the first shot it changed
+        changed = editsmod.apply_ops(segments, clips, ops)["changed"]
+        shot = changed[0] if changed else None
+        seg = next((s for s in after if str(s.get("id")) == str(shot)), None)
     if seg is None:
         raise ValueError(f"effect names a shot that is not in the cut: {shot!r}")
     clip = raw.get("clip") or seg["clip"]
@@ -363,6 +378,8 @@ def validate_effect(raw: Any, segments: list[dict], clips: dict[str, dict] | Non
     duration = None
     if clips and clip in clips:
         duration = clips[clip].get("duration") or clips[clip].get("duration_s")
+    if duration is None and editsmod.is_generated(clip):
+        duration = float(seg["out"])                  # a generated clip is exactly its range
     name = raw.get("name") or "effect"
     if not isinstance(name, str):
         raise ValueError("name is not text")
@@ -376,11 +393,19 @@ def validate_effect(raw: Any, segments: list[dict], clips: dict[str, dict] | Non
         "name": name.strip()[:40] or "effect",
         "note": str(raw.get("note") or "")[:600],
         "why": str(raw.get("why") or "")[:400],
-        "events": validate_events(raw.get("events"), duration),
-        "overlay": validate_overlay(raw.get("overlay")),
+        "events": (validate_events(raw.get("events"), duration)
+                   if (raw.get("overlay") or raw.get("sound") or raw.get("events")) else []),
+        "overlay": validate_overlay(raw.get("overlay")) if raw.get("overlay") else None,
         "sound": validate_sound(raw.get("sound")),
         "status": status,
     }
+    if out["overlay"] is None and out["sound"] is None and not ops:
+        raise ValueError("an effect needs an overlay, a sound, or edits to the cut")
+    if (out["overlay"] or out["sound"]) and not out["events"]:
+        raise ValueError("an overlay or a sound needs at least one event")
+    if ops:
+        out["edits"] = ops
+        out["edit_words"] = editsmod.apply_ops(segments, clips, ops)["words"]
     if raw.get("limits"):
         out["limits"] = str(raw["limits"])[:300]      # what the effect could not do
     if keep_meta:
@@ -1066,9 +1091,33 @@ _EXAMPLE_TYPEWRITER = {
 }
 
 
+_EXAMPLE_SLIDE = {
+    "name": "opening title on a black slide",
+    "why": "a 3 s black slide put before the first shot, the title typed on it, the slide's last second fading is the footage arriving",
+    "edits": [{"op": "generate", "kind": "black", "seconds": 3.0, "before": "g1a2b3c4d5e"}],
+    "shot": "new:1", "clip": "gen_black_x.mp4",
+    "events": [{"t": 0.0, "x": 0.5, "y": 0.5, "label": "the slide"}],
+    "overlay": {"duration": 3.0, "size": 1.6,
+                "shapes": [{"type": "text", "text": "2026 BLIZZARD\nKillington, VT", "at": [0, 0], "h": 0.07, "bold": True,
+                            "color": "#f2efe6", "reveal": "typewriter", "cps": 12, "start": 0.3}],
+                "anim": {}},
+    "sound": {"gain_db": -12,
+              "layers": [{"type": "click", "attack": 0.0, "decay": 0.02, "gain": 0.8}],
+              "repeat": {"every": 0.0833, "count": 26, "jitter": 0.25, "gain_end": 0.9}},
+}
+_EXAMPLE_SLOWMO = {
+    "name": "slow motion on the landing",
+    "why": "the landing at 0.4× from the take-off to the ride-away; the cut is otherwise untouched",
+    "edits": [{"op": "speed", "shot": "g1a2b3c4d5e", "rate": 0.4, "from": 72.8, "to": 74.6}],
+    "events": [], "overlay": None, "sound": None,
+}
+
+
 def _vocabulary() -> str:
     """The closed vocabulary with its ranges, from the constants above, so the system
     text can never drift from what `validate_effect` accepts."""
+    MIN_SPEED_S, MAX_SPEED_S = f"{editsmod.MIN_SPEED:g}", f"{editsmod.MAX_SPEED:g}"
+    MIN_GEN_S_S, MAX_GEN_S_S = f"{editsmod.MIN_GEN_S:g}", f"{editsmod.MAX_GEN_S:g}"
     return f"""You design one video + audio effect for a ski film, as JSON in a closed vocabulary.
 The renderer draws it from the numbers; you never write ffmpeg, filenames or pixels.
 An effect can be anything the vocabulary can say: a marker on an impact, a title or a
@@ -1092,7 +1141,24 @@ COORDINATES
   (y down); a shape may poke a little past (±1.5) but never across the frame.
 - Times are seconds in the source clip; a `duration` is seconds.
 
-EFFECT = {{"name": "≤40 chars", "why": "one sentence", "events": [...], "overlay": {{...}}, "sound": {{...}} | null, "limits": "what the note asked that an effect cannot do, or omit"}}
+EFFECT = {{"name": "≤40 chars", "why": "one sentence", "events": [...], "overlay": {{...}} | null, "sound": {{...}} | null, "edits": [...] | omit, "limits": "what the note asked that nothing here can do, or omit"}}
+
+EDITS — operations on the cut itself, applied when the human accepts (the cut is listed
+under THE CUT with each shot's id; times are clip seconds; a new shot an op creates is
+"new:1", "new:2", … in the order the ops create them, and the effect's "shot" may be one
+of those — a title on a slide you generate):
+  {{"op": "extend", "shot": id, "in": Δs (negative = earlier), "out": Δs}}    lengthen or shorten a shot
+  {{"op": "set_range", "shot": id, "in": t, "out": t}}
+  {{"op": "split", "shot": id, "at": t}}                                        the second half is new:n
+  {{"op": "speed", "shot": id, "rate": {MIN_SPEED_S}–{MAX_SPEED_S}, "from": t, "to": t}}   slow motion / speed-up of a range (the middle piece is new:n; omit from/to for the whole shot)
+  {{"op": "generate", "kind": "black"|"colour"|"still", "seconds": {MIN_GEN_S_S}–{MAX_GEN_S_S}, "color": "#rrggbb", "from_shot": id, "at": t, "before": id | null (the end) | "after": id}}   a new clip in the cut (a slide, a freeze frame)
+  {{"op": "freeze", "shot": id, "at": t, "seconds": s}}                           a freeze frame inside a shot
+  {{"op": "insert", "clip": name, "in": t, "out": t, "before": id | null | "after": id}}   footage into the cut
+  {{"op": "remove", "shot": id}}   {{"op": "move", "shot": id, "before": id | "after": id}}
+  An effect with edits and no overlay is fine ("slow motion on the jump" is one edit).
+  Edits change the cut; the overlay and the sound change pixels and the mix. Use each
+  for what it is for: a title slide before a shot is a generated black clip plus a text
+  effect on it; a fade-in of the video is an overlay; slow motion is an edit.
 
 SIZES that read well (with size 1.0, the box as wide as the frame): a headline line h 0.10–0.14, a subtitle 0.06–0.08, a caption 0.04–0.05; a full-frame slide is a filled rect w 3 h 3 at size 1.6. Stack lines with \\n in ONE text shape, never several shapes at the same spot.
 
@@ -1138,6 +1204,11 @@ def _system_design() -> str:
               "character), the slide fading to the footage over its last 1.5 s, and a `limits` "
               "line for what the note asked that an effect cannot do:\n"
             + json.dumps(_EXAMPLE_TYPEWRITER, indent=1)
+            + "\n\nA FOURTH EXAMPLE — the cut changes too: a black slide the edits generate before shot "
+              "g1a2b3c4d5e, the title typed on that new slide (shot new:1, its clip is the generated "
+              "file — write any name, the renderer fills it in), and a FIFTH, an edit with no overlay at "
+              "all, slow motion on a range:\n"
+            + json.dumps(_EXAMPLE_SLIDE, indent=1) + "\n" + json.dumps(_EXAMPLE_SLOWMO, indent=1)
             + "\n\nMark only the moments the note names, inside the window the editor gave when there "
               "is one; when in doubt, fewer events. The audio's impacts are candidates for INSTANT "
               "effects only; a continuous effect starts where the note says and ignores them. A "
@@ -1158,7 +1229,8 @@ def _transcript_in(transcript: list[dict] | None, t0: float, t1: float) -> list[
 
 def build_design_prompt(note: str, seg: dict, clip: dict, *, peaks: list[dict],
                         transcript: list[dict] | None = None,
-                        reference: dict | None = None) -> tuple[str, str]:
+                        reference: dict | None = None,
+                        cut: list[dict] | None = None) -> tuple[str, str]:
     """`(system, prompt)` for the design call: the note, the shot (clip, in/out, why),
     the transcript lines in the shot, the onset peaks as candidate impact times, and —
     when the human drew one — the reference's goal text and its mark centroids as the
@@ -1172,9 +1244,17 @@ def build_design_prompt(note: str, seg: dict, clip: dict, *, peaks: list[dict],
     decaying in 90 ms, -6 dB)."""
     t0, t1 = float(seg["in"]), float(seg["out"])
     lines = [f"THE NOTE: {note.strip()}", "",
-             f"THE SHOT: clip {seg.get('clip')} from {t0:.2f}s to {t1:.2f}s"
+             f"THE SHOT: id {seg.get('id')} · clip {seg.get('clip')} from {t0:.2f}s to {t1:.2f}s"
              + (f" (clip length {float(clip['duration']):.1f}s)" if clip and clip.get("duration") else "")
+             + (f" at {editsmod.speed_of(seg):g}×" if editsmod.speed_of(seg) != 1 else "")
              + (f" — why it is in the cut: {seg['why']}" if seg.get("why") else "")]
+    if cut:
+        lines += ["", "THE CUT (shot · id · clip · range · film length), the shot above marked ►:"]
+        for k, s in enumerate(cut):
+            mark = "►" if str(s.get("id")) == str(seg.get("id")) else " "
+            lines.append(f"  {mark} {k + 1:2d} · {s.get('id')} · {s.get('clip')} · "
+                         f"{float(s['in']):.2f}–{float(s['out']):.2f}s · {editsmod.dur(s):.1f}s"
+                         + (f" · {editsmod.speed_of(s):g}×" if editsmod.speed_of(s) != 1 else ""))
     said = _transcript_in(transcript if transcript is not None else (clip or {}).get("transcript"), t0, t1)
     if said:
         lines += ["", "SAID IN THE SHOT:"]
@@ -1295,7 +1375,8 @@ def design(note: str, seg: dict, clip: dict, sidecar: dict | None, *,
     if transcript is None:
         transcript = sidecar.get("transcript")
     system, prompt = build_design_prompt(note, seg, clip, peaks=peaks, transcript=transcript,
-                                         reference=reference if has_marks else None)
+                                         reference=reference if has_marks else None,
+                                         cut=segments)
     answer = _ask(system, prompt)
     if not isinstance(answer, dict):
         raise ValueError("the design answer is not an object")
@@ -1313,15 +1394,20 @@ def design(note: str, seg: dict, clip: dict, sidecar: dict | None, *,
     elif not events:
         events = ([{"t": p["t"], "x": 0.5, "y": 0.5, "strength": p["strength"]} for p in peaks[:3]]
                   or [{"t": round((t0 + t1) / 2, 3), "x": 0.5, "y": 0.5}])
+    edits_raw = answer.get("edits") if isinstance(answer.get("edits"), list) else None
+    if not answer.get("overlay") and not answer.get("sound") and not edits_raw:
+        raise ValueError("the design answer has no overlay, no sound and no edits")
+    shot_id = answer.get("shot") if edits_raw and str(answer.get("shot") or "").startswith("new:") else seg.get("id")
     effect = {
-        "id": new_id(), "shot": seg.get("id"), "clip": seg["clip"],
+        "id": new_id(), "shot": shot_id, "clip": answer.get("clip") if str(shot_id).startswith("new:") else seg["clip"],
+        "edits": edits_raw,
         "name": answer.get("name") or "effect", "note": note,
         "why": answer.get("why") or "",
         "events": events, "overlay": answer.get("overlay"), "sound": answer.get("sound"),
         "status": "proposed",
         "limits": answer.get("limits") or None,
     }
-    if window is not None:
+    if window is not None and not str(shot_id).startswith("new:"):
         inside = [e for e in events if isinstance(e, dict) and e.get("t") is not None
                   and t0 <= float(e["t"]) <= t1]
         effect["events"] = inside or [{"t": max(t0, min(t1, float(events[0]["t"]))), "x": 0.5, "y": 0.5}] if events else effect["events"]
@@ -1383,6 +1469,8 @@ def revise(effect: dict, note: str, segments: list[dict], clips: dict | None = N
             new[k] = answer[k]
     if "sound" in answer:
         new["sound"] = answer["sound"]
+    if isinstance(answer.get("edits"), list):
+        new["edits"] = answer["edits"]
     if isinstance(answer.get("events"), list) and answer["events"]:
         new["events"] = answer["events"]
     new["status"] = "proposed"

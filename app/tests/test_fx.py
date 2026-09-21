@@ -580,3 +580,37 @@ def test_limits_travel_with_the_effect():
     e = _effect(limits="an effect cannot add two seconds to the shot")
     assert e["limits"].startswith("an effect cannot")
     assert "limits" not in _effect()
+
+
+# ---------------------------------------------------------------- the cut changes too (I13.3)
+
+def test_an_effect_can_carry_edits_and_sit_on_a_shot_they_create():
+    segs = [dict(SEG), {"id": "s2", "clip": "CLIP_B.MP4", "in": 0.0, "out": 4.0}]
+    clips = {"CLIP_A.MP4": {"duration": 10.0}, "CLIP_B.MP4": {"duration": 8.0}}
+    e = fx.validate_effect({
+        "shot": "new:1", "name": "opening title",
+        "edits": [{"op": "generate", "kind": "black", "seconds": 3.0, "before": "s1"}],
+        "events": [{"t": 0.0, "x": 0.5, "y": 0.5}],
+        "overlay": {"duration": 3.0, "size": 1.6, "shapes": [{"type": "text", "text": "HELLO", "h": 0.1}]},
+    }, segs, clips)
+    assert e["shot"] == "new:1" and e["clip"].startswith("gen_black_")
+    assert e["edits"][0]["op"] == "generate" and e["edit_words"] == ["a black clip of 3s"]
+    # an edit-only proposal: no overlay, no sound, the shot is the one it changed
+    slow = fx.validate_effect({"edits": [{"op": "speed", "shot": "s2", "rate": 0.4, "from": 1.0, "to": 3.0}],
+                               "name": "slow motion"}, segs, clips)
+    assert slow["overlay"] is None and slow["sound"] is None and slow["events"] == []
+    assert slow["shot"] == "new:1"                     # the middle piece the split made
+    assert slow["edit_words"] == ["CLIP_B.MP4 at 0.4× from 1.00 to 3.00s"]
+    # nothing at all is refused; an event-less overlay is refused; a bad op is a sentence
+    with pytest.raises(ValueError, match="needs an overlay, a sound, or edits"):
+        fx.validate_effect({"shot": "s1", "name": "x"}, segs, clips)
+    with pytest.raises(ValueError, match="not in the cut"):
+        fx.validate_effect({"shot": "s1", "edits": [{"op": "remove", "shot": "ghost"}]}, segs, clips)
+
+
+def test_the_prompt_describes_the_cut_with_ids_and_speeds():
+    segs = [dict(SEG), {"id": "s2", "clip": "CLIP_B.MP4", "in": 0.0, "out": 4.0, "speed": 0.5}]
+    system, prompt = fx.build_design_prompt("slow it down", segs[1], {"duration": 8.0}, peaks=[], cut=segs)
+    assert "THE CUT" in prompt and "► " in prompt and "s2" in prompt and "0.5×" in prompt and "8.0s" in prompt
+    for word in ('"op": "speed"', '"op": "generate"', "new:1", "EDITS", "slow motion"):
+        assert word in system, word

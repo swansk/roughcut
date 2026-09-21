@@ -206,7 +206,22 @@
     paint();
   }
 
-  function preview(e) {
+  async function preview(e) {
+    // an edit proposal previews as a ghost on the timeline (the lanes' showGhost, when
+    // the board has it); an effect on an existing shot plays the shot in the monitor
+    if (Array.isArray(e.edits) && e.edits.length) {
+      try {
+        const d = await api('POST', '/api/edits/preview', { ops: e.edits });
+        const L = window.tlLanes;
+        if (L && typeof L.showGhost === 'function') {
+          L.showGhost(d.segments);
+          say(`the ghost lane shows the cut with ${e.edits.length} change${e.edits.length === 1 ? '' : 's'} · Accept applies them`);
+        } else {
+          say(`${e.edits.length} change${e.edits.length === 1 ? '' : 's'}: ${(d.words || []).join(' · ')}`);
+        }
+      } catch (err) { say(err.message); }
+      if (String(e.shot).startsWith('new:')) return;
+    }
     const i = shotIndex(e.shot);
     if (i < 0) { say('that shot is not in the cut'); return; }
     S.fired.clear();
@@ -354,7 +369,7 @@
         + `<button data-act="verify" title="render a proof of the shot and run the checklist">Verify</button>`
         + `<button data-act="iterate" title="tell the model what to change">Iterate</button>`
         + (proposed
-          ? `<button data-act="accept" class="primary" title="into the cut — the render draws it">Accept</button>`
+          ? `<button data-act="accept" class="primary" title="${Array.isArray(e.edits) && e.edits.length ? 'applies the changes to the cut, then the effect' : 'into the cut — the render draws it'}">Accept${Array.isArray(e.edits) && e.edits.length ? ` · ${e.edits.length} change${e.edits.length === 1 ? '' : 's'}` : ''}</button>`
             + `<button data-act="discard" title="drop the proposal and its files">Discard</button>`
           : `<button data-act="remove" title="out of the cut — kept, so Restore can put it back">Remove</button>`
             + (prev ? `<button data-act="revert" title="back to the version accepted before this one (${prev} kept)">Revert</button>` : ''))
@@ -374,6 +389,11 @@
       + (e.note ? `<div class="fxnote">${esc(e.note)}</div>` : '')
       + (e.why ? `<div class="fxwhy hint">${esc(e.why)}</div>` : '')
       + (e.limits ? `<div class="fxlimits">could not: ${esc(e.limits)}</div>` : '')
+      + (Array.isArray(e.edit_words) && e.edit_words.length
+        ? `<div class="fxedits"><div class="fxeh">changes the cut${e.status === 'proposed' ? ' when accepted' : ''}</div>`
+          + `<ul>${e.edit_words.map((w) => `<li>${esc(w)}</li>`).join('')}</ul></div>` : '')
+      + (e.applied && Array.isArray(e.applied.words) && e.applied.words.length
+        ? `<div class="fxedits applied"><div class="fxeh">changed the cut</div><ul>${e.applied.words.map((w) => `<li>${esc(w)}</li>`).join('')}</ul></div>` : '')
       + `<ul class="fxevents">${events}</ul>`
       + (sel >= 0 ? `<div class="fxpick hint">moment ${sel + 1} selected · click the monitor (paused) to move it there</div>` : '')
       + checks

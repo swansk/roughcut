@@ -10,6 +10,20 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The model proposes edits to the cut, and the card applies them (INTAKE M13, I13.3)**
+  — an effect may carry `edits` (roughcut/edits.py's operations) beside or instead of an
+  overlay: a slow-motion range with no picture at all, a black slide generated before a
+  shot with the typed title on the slide it creates (`shot: new:1`). The vocabulary in
+  the prompt says which is which (edits change the cut; the overlay and the sound change
+  pixels and the mix), lists the ops with ranges, and adds two examples; the prompt
+  describes THE CUT with every shot's id, range, film length and speed so ops can name
+  shots and anchors. `validate_effect` checks the ops against the cut and the effect
+  against the cut as it would be after them; `edit_words` say them in words. The card
+  lists the changes, Accept reads `Accept · N changes` and applies them through the
+  edits section's `apply_edits` (one write; the effect re-keyed from `new:n`), Preview
+  shows the proposed cut on the ghost lane (`tlLanes.showGhost`) when the board has
+  it, and Verify carries an `edits_apply` check (the proof is skipped for a shot that
+  does not exist yet). `test_fx.py` +2.
 - **Edits foundation (INTAKE M13, I13.0)** — Karl, 2026-09-20: *"the effect tool itself …
   needs to be able to make changes like this and even broader ones like slow motion or
   extension or creating new clips."* `roughcut/edits.py` is the closed vocabulary of
