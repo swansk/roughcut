@@ -10,6 +10,18 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The vocabulary grows where the title slide failed (INTAKE M12, I12.9)** — Karl's
+  request *"fade in … this is the title slide … '2026 Blizzard Killington Vt with the
+  Boys' in typewriter effect using the sound"* came back as three text shapes on one
+  spot, letters twice the size on the monitor as on the master, no typing and a 20 Hz
+  rumble. Now: a text shape holds up to four lines (`\n`), its `h` is one line's height
+  as a fraction of the box on BOTH renderers, and it fits the box's width; every shape
+  can carry `start`, `end` and `fade`; a text can `reveal` as `typewriter` (`cps`) or
+  `fade`; a sound can `repeat` (`every`, `count`, `jitter`, `gain_end`) so a clatter, a
+  heartbeat or a ticking is one hit many times; the model says in `limits` what the
+  note asked that an effect cannot do (a shot's length, speed or framing) and the card
+  shows it; the prompt carries sizes that read well and a third example, a typed title
+  slide with a click per character. `test_fx.py` +3.
 - **The range bar is the video (INTAKE M12)** — Karl: *"it's not clear how it connects
   to the current video / playhead."* The bar is now a filmstrip of the shot (eight
   stills from the proxy), the window is the lit part with the rest dimmed, each handle

@@ -954,6 +954,11 @@ HTML proposal with others (incl. online tools / other AI tools, ideally free)."*
       sprite), the prompt names instant / continuous / following effects with a title as
       the second example, the peaks are candidates for instant effects only, checks and
       copy say event / anchor / picture / moment.
+- [x] I12.9 **The title slide's lessons** (Karl, 2026-09-20: *"for others it is really bad …
+      must be able to handle a variety of requests"*): multi-line fitted text sized the
+      same on both renderers, start / end / fade per shape, typewriter and fade reveals,
+      repeating sounds, `limits` for what an effect cannot do, sizes and a third example
+      in the prompt.
 - [ ] I12.5 Karl's look — with the window set to where the rocks are, and the tick by ear.
 
 ## Lanes in flight

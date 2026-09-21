@@ -63,7 +63,11 @@ def _effect(**over) -> dict:
 @pytest.mark.parametrize("bad, message", [
     ({"overlay": {"shapes": [{"type": "ring", "r": 0.5, "r2": 0.9}]}}, "ring.r2"),
     ({"overlay": {"shapes": [{"type": "polygon", "points": [[0, 0], [1, 1]]}]}}, "polygon.points"),
-    ({"overlay": {"shapes": [{"type": "text", "text": "x" * 25}]}}, "text.text"),
+    ({"overlay": {"shapes": [{"type": "text", "text": "x" * 81}]}}, "text.text"),
+    ({"overlay": {"shapes": [{"type": "text", "text": "a\nb\nc\nd\ne"}]}}, "text.text needs"),
+    ({"overlay": {"shapes": [{"type": "text", "text": "hi", "reveal": "spin"}]}}, "text.reveal"),
+    ({"overlay": {"shapes": [{"type": "rect", "start": 2.0, "end": 1.0}]}}, "shape.end"),
+    ({"sound": {"layers": [{"type": "click"}], "repeat": {"every": 5}}}, "repeat.every"),
     ({"overlay": {"shapes": X_LINES, "anim": {"spin": [[0, 1]]}}}, "unknown anim track"),
     ({"overlay": {"shapes": X_LINES, "duration": 0.2, "anim": {"scale": [[0.5, 1]]}}}, "anim.scale.t"),
     ({"overlay": {"shapes": [{"type": "line", "from": [-2, 0], "to": [1, 0]}]}}, "line.from"),
@@ -513,3 +517,66 @@ def test_revise_keeps_id_and_events_unless_the_note_moves_them(scripted):
     scripted(one)
     fewer = fx.revise(new, "one hit only, the big one", SEGS, CLIPS)
     assert [ev["t"] for ev in fewer["events"]] == [1.5] and len(fewer["history"]) == 3
+
+
+# ---------------------------------------------------------------- the title slide's lessons (I12.9)
+
+def test_text_lines_reveal_and_the_shapes_clock(tmp_path):
+    """Karl's title slide: three text shapes at one spot, sized twice as big on the
+    monitor as on the master, no typewriter, a rumble for a clatter. One text shape
+    holds the lines; h is a fraction of the box on both sides; a typewriter reveal
+    grows with time; a shape has a start, an end and a fade."""
+    e = _effect(overlay={"duration": 4.0, "size": 1.6, "shapes": [
+        {"type": "rect", "at": [0, 0], "w": 3, "h": 3, "fill": True, "color": "#000000", "end": 4.0, "fade": 1.0},
+        {"type": "text", "text": " 2026 BLIZZARD \n Killington \n\n", "h": 0.08, "reveal": "typewriter", "cps": 10,
+         "start": 0.5}]})
+    txt = e["overlay"]["shapes"][1]
+    assert txt["text"] == "2026 BLIZZARD\nKillington" and txt["reveal"] == "typewriter" and txt["cps"] == 10
+    assert txt["start"] == 0.5 and txt["fit"] is True
+    assert fx.text_at(txt, 0.3) == ("", 1.0)
+    assert fx.text_at(txt, 1.0)[0] == "2026 "                 # 5 chars at 10 cps after 0.5 s
+    assert fx.text_at(txt, 2.0)[0] == "2026 BLIZZARD\nK"        # the break counts as one
+    assert fx.shape_alpha(e["overlay"]["shapes"][0], 3.5, 4.0) == pytest.approx(0.5)
+    assert fx.shape_alpha(e["overlay"]["shapes"][0], 4.5, 4.0) == 0.0
+    # rasterised: the ink grows as the text types, the slide fades at the end
+    ink = []
+    for t_ in (0.2, 1.0, 2.5, 3.9):
+        d = tmp_path / f"t{t_}"
+        one = {**e["overlay"], "duration": 4.0}
+        frames = fx.render_overlay_frames(one, 640, 360, 2, d)      # 2 fps: frame k is t=k/2
+        import numpy as np
+        from PIL import Image
+        k = min(len(frames) - 1, int(t_ * 2))                         # 3.9 → frame 7, t=3.5: mid-fade
+        a = np.asarray(Image.open(frames[k]))
+        ink.append(int((a[..., :3].max(axis=2) > 128).sum()))       # bright pixels = text
+        if t_ == 3.9:
+            assert 100 < np.median(a[..., 3]) < 200                # the slide is mid-fade (the text has no fade of its own)
+    assert ink[0] == 0 < ink[1] < ink[2]
+
+
+def test_a_repeating_sound_is_many_hits(tmp_path):
+    s = fx.validate_sound({"gain_db": -6, "layers": [{"type": "click", "decay": 0.02, "gain": 0.9}],
+                           "repeat": {"every": 0.1, "count": 12, "jitter": 0.0}})
+    tail = s["layers"][0]["attack"] + s["layers"][0]["decay"]          # the click's default 2 ms attack
+    assert s["duration"] == pytest.approx(0.1 * 11 + tail + 0.05, abs=1e-3)
+    p = fx.synth_sound(s, tmp_path / "clatter.wav")
+    import wave
+    import numpy as np
+    with wave.open(str(p), "rb") as wf:
+        x = np.frombuffer(wf.readframes(wf.getnframes()), dtype="<i2")[::2].astype(float)
+        sr = wf.getframerate()
+    env = np.abs(x)
+    # twelve onsets, 100 ms apart: count the rises above a tenth of the peak that
+    # follow at least 50 ms of quiet
+    thr = env.max() * 0.1
+    loud = env > thr
+    onsets = ([0] if loud[0] else []) + [i for i in range(1, len(loud))
+                                          if loud[i] and not loud[max(0, i - int(0.05 * sr)):i].any()]
+    assert len(onsets) == 12, len(onsets)
+    assert abs((onsets[1] - onsets[0]) / sr - 0.1) < 0.005
+
+
+def test_limits_travel_with_the_effect():
+    e = _effect(limits="an effect cannot add two seconds to the shot")
+    assert e["limits"].startswith("an effect cannot")
+    assert "limits" not in _effect()

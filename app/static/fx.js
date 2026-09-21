@@ -373,6 +373,7 @@
       + `<span class="fxn">${n} moment${n === 1 ? '' : 's'}</span>${chip(e)}</div>`
       + (e.note ? `<div class="fxnote">${esc(e.note)}</div>` : '')
       + (e.why ? `<div class="fxwhy hint">${esc(e.why)}</div>` : '')
+      + (e.limits ? `<div class="fxlimits">could not: ${esc(e.limits)}</div>` : '')
       + `<ul class="fxevents">${events}</ul>`
       + (sel >= 0 ? `<div class="fxpick hint">moment ${sel + 1} selected · click the monitor (paused) to move it there</div>` : '')
       + checks
@@ -840,7 +841,24 @@
     };
   }
 
-  function drawShape(ctx, s, B) {
+  /* A shape's presence at `dt` seconds into the effect (fx.shape_alpha), and a
+   * text's revealed part (fx.text_at) — the same rules as the master's. */
+  function shapeAlpha(s, dt, dur) {
+    const start = Number(s.start || 0), end = s.end == null ? dur : Number(s.end);
+    if (dt < start || dt > end) return 0;
+    const fade = Number(s.fade || 0);
+    if (fade <= 0) return 1;
+    return Math.max(0, Math.min(1, (dt - start) / fade, (end - dt) / fade));
+  }
+  function textAt(s, dt) {
+    const text = String(s.text || '');
+    const since = dt - Number(s.start || 0);
+    if (s.reveal === 'typewriter') return [text.slice(0, Math.floor(Math.max(0, since) * Number(s.cps || 14))), 1];
+    if (s.reveal === 'fade') return [text, Math.max(0, Math.min(1, since / 0.4))];
+    return [text, 1];
+  }
+
+  function drawShape(ctx, s, B, dt) {
     const h = B / 2;
     ctx.strokeStyle = s.color || '#ffffff';
     ctx.fillStyle = s.color || '#ffffff';
@@ -888,11 +906,27 @@
         break;
       }
       case 'text': {
-        const px = Math.max(1, (s.h == null ? 0.5 : s.h) * B);
-        ctx.font = `${s.bold === false ? '' : 'bold '}${px}px system-ui, sans-serif`;
+        // h is a fraction of the BOX side; the widest full line fits the box's width;
+        // a reveal shows part of the text — the size never changes as it types
+        const [shown, talpha] = textAt(s, dt == null ? 0 : dt);
+        if (!shown.trim()) break;
+        let px = Math.max(1, (s.h == null ? 0.2 : s.h) * B);
+        const font = (p) => `${s.bold === false ? '' : 'bold '}${p}px system-ui, sans-serif`;
+        ctx.font = font(px);
+        const lines = String(s.text || '').split('\n');
+        if (s.fit !== false) {
+          const widest = Math.max(...lines.map((l) => ctx.measureText(l).width), 0);
+          const limit = 0.95 * B;
+          if (widest > limit && widest > 0) { px = Math.max(1, px * limit / widest); ctx.font = font(px); }
+        }
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(String(s.text || ''), x, y);
+        const gap = px * 1.18;
+        const top = y - gap * (lines.length - 1) / 2;
+        const prev = ctx.globalAlpha;
+        ctx.globalAlpha = prev * talpha;
+        shown.split('\n').forEach((line, i) => { if (line) ctx.fillText(line, x, top + i * gap); });
+        ctx.globalAlpha = prev;
         break;
       }
       default: break;
@@ -921,8 +955,10 @@
       ctx.rotate(pose.rotate * Math.PI / 180);
       ctx.scale(pose.scale, pose.scale);
       for (const s of ov.shapes) {
-        ctx.globalAlpha = Math.max(0, Math.min(1, pose.opacity * (s.opacity == null ? 1 : s.opacity)));
-        drawShape(ctx, s, B);
+        const a = shapeAlpha(s, dt, dur);
+        if (a <= 0) continue;
+        ctx.globalAlpha = Math.max(0, Math.min(1, pose.opacity * (s.opacity == null ? 1 : s.opacity) * a));
+        drawShape(ctx, s, B, dt);
       }
       ctx.restore();
     }

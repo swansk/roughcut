@@ -79,7 +79,10 @@ MAX_EVENTS = 24
 MAX_SHAPES = 24
 MAX_LAYERS = 6
 MAX_KEYS = 16                # keyframes per track
-MAX_TEXT = 24
+MAX_TEXT = 80                    # with line breaks: a title of up to four lines
+MAX_TEXT_LINES = 4
+REVEALS = ("typewriter", "fade")
+MAX_REPEAT = 400
 MIN_DURATION, MAX_DURATION = 0.05, 30.0         # a tick, or a title that holds
 MIN_SIZE, MAX_SIZE = 0.02, 1.6          # of the frame width; 1.6 covers the frame
 MIN_GAIN_DB, MAX_GAIN_DB = -30.0, 6.0
@@ -130,6 +133,20 @@ def validate_shape(raw: Any) -> dict:
     out: dict[str, Any] = {"type": kind,
                            "color": _colour(raw.get("color", "#ffffff"), "shape.color"),
                            "opacity": _num(raw.get("opacity", 1.0), "shape.opacity", 0, 1)}
+    # when the shape is there, inside the effect: from `start`, to `end` (or the effect's
+    # end), with a `fade` in and out of that many seconds — a title's lines can arrive
+    # one after another, a bar can leave before the text does
+    start = _num(raw.get("start", 0.0), "shape.start", 0, MAX_DURATION)
+    if start:
+        out["start"] = start
+    if raw.get("end") is not None:
+        end = _num(raw["end"], "shape.end", 0, MAX_DURATION)
+        if end <= start:
+            raise ValueError(f"shape.end {end} is not after its start {start}")
+        out["end"] = end
+    fade = _num(raw.get("fade", 0.0), "shape.fade", 0, 5.0)
+    if fade:
+        out["fade"] = fade
     if kind in ("line", "ring", "circle", "rect", "polygon"):
         out["width"] = _num(raw.get("width", 0.08), "shape.width", 0, 0.5)
     if kind in ("circle", "rect", "polygon"):
@@ -156,11 +173,53 @@ def validate_shape(raw: Any) -> dict:
         text = raw.get("text")
         if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT:
             raise ValueError(f"text.text must be 1–{MAX_TEXT} characters")
-        out["text"] = text.strip()
+        lines = [l.strip() for l in text.replace("\r", "").split("\n")]
+        lines = [l for l in lines if l]
+        if not lines or len(lines) > MAX_TEXT_LINES:
+            raise ValueError(f"text.text needs 1–{MAX_TEXT_LINES} lines")
+        out["text"] = "\n".join(lines)
         out["x"], out["y"] = _point(raw.get("at", [0, 0]), "text.at")
-        out["h"] = _num(raw.get("h", 0.5), "text.h", 0.05, 1.5)
+        # the cap height of one line as a fraction of the BOX side — the same on the
+        # master and on the monitor (the two used to disagree by a factor of two)
+        out["h"] = _num(raw.get("h", 0.2), "text.h", 0.02, 1.0)
         out["bold"] = bool(raw.get("bold", True))
+        out["fit"] = bool(raw.get("fit", True))            # shrink to the box's width
+        reveal = raw.get("reveal")
+        if reveal is not None:
+            if reveal not in REVEALS:
+                raise ValueError(f"unknown text.reveal {reveal!r} (allowed {', '.join(REVEALS)})")
+            out["reveal"] = reveal
+            out["cps"] = _num(raw.get("cps", 14), "text.cps", 2, 60)
     return out
+
+
+def shape_alpha(shape: dict, t: float, duration: float) -> float:
+    """How present a shape is at `t` seconds into the effect: 0 before `start` and
+    after `end`, ramping over `fade` at both ends, 1 between."""
+    start = float(shape.get("start", 0.0))
+    end = float(shape.get("end", duration))
+    if t < start or t > end:
+        return 0.0
+    fade = float(shape.get("fade", 0.0))
+    if fade <= 0:
+        return 1.0
+    return max(0.0, min(1.0, (t - start) / fade, (end - t) / fade))
+
+
+def text_at(shape: dict, t: float) -> tuple[str, float]:
+    """The text a shape shows at `t` and an extra alpha: a `typewriter` reveal shows
+    the first `cps × (t − start)` characters (a line break counts as one and lands
+    the next line), a `fade` reveal ramps alpha over the first 0.4 s; else the whole
+    text at alpha 1."""
+    text = str(shape.get("text") or "")
+    reveal = shape.get("reveal")
+    since = t - float(shape.get("start", 0.0))
+    if reveal == "typewriter":
+        n = int(max(0.0, since) * float(shape.get("cps", 14)))
+        return text[:n], 1.0
+    if reveal == "fade":
+        return text, max(0.0, min(1.0, since / 0.4))
+    return text, 1.0
 
 
 def validate_track(raw: Any, name: str, duration: float, lo: float, hi: float) -> list[list[float]]:
@@ -247,9 +306,24 @@ def validate_sound(raw: Any) -> dict | None:
     layers = raw.get("layers")
     if not isinstance(layers, list) or not (1 <= len(layers) <= MAX_LAYERS):
         raise ValueError(f"sound.layers needs 1–{MAX_LAYERS} layers")
-    return {"duration": _num(raw.get("duration", 0.18), "sound.duration", MIN_DURATION, MAX_DURATION),
-            "gain_db": _num(raw.get("gain_db", -6), "sound.gain_db", MIN_GAIN_DB, MAX_GAIN_DB),
-            "layers": [validate_layer(l) for l in layers]}
+    out = {"duration": _num(raw.get("duration", 0.18), "sound.duration", MIN_DURATION, MAX_DURATION),
+           "gain_db": _num(raw.get("gain_db", -6), "sound.gain_db", MIN_GAIN_DB, MAX_GAIN_DB),
+           "layers": [validate_layer(l) for l in layers]}
+    rep = raw.get("repeat")
+    if rep is not None:
+        # the same hit again and again — a typewriter's clatter, a heartbeat, a
+        # ticking — `every` seconds apart, `count` times, with a little `jitter`
+        # (a fraction of `every`) and a gain that runs to `gain_end` by the last one
+        if not isinstance(rep, dict):
+            raise ValueError("sound.repeat is not an object")
+        every = _num(rep.get("every", 0.08), "repeat.every", 0.02, 2.0)
+        count = int(_num(rep.get("count", 10), "repeat.count", 1, MAX_REPEAT))
+        out["repeat"] = {"every": every, "count": count,
+                         "jitter": _num(rep.get("jitter", 0.15), "repeat.jitter", 0, 1),
+                         "gain_end": _num(rep.get("gain_end", 1.0), "repeat.gain_end", 0, 1)}
+        tail = max(l["attack"] + l["decay"] for l in out["layers"])
+        out["duration"] = round(min(MAX_DURATION, every * (count - 1) + tail + 0.05), 3)
+    return out
 
 
 def validate_events(raw: Any, clip_duration: float | None) -> list[dict]:
@@ -307,6 +381,8 @@ def validate_effect(raw: Any, segments: list[dict], clips: dict[str, dict] | Non
         "sound": validate_sound(raw.get("sound")),
         "status": status,
     }
+    if raw.get("limits"):
+        out["limits"] = str(raw["limits"])[:300]      # what the effect could not do
     if keep_meta:
         for k in ("created", "reference", "verify", "history", "window", "previous"):
             if raw.get(k) is not None:
@@ -465,14 +541,24 @@ def _rgba(colour: str, opacity: float) -> tuple[int, int, int, int]:
             int(round(255 * max(0.0, min(1.0, opacity)))))
 
 
-def _draw_shape(layer, shape: dict, c: float, unit: float) -> None:
+def _draw_shape(layer, shape: dict, c: float, unit: float, t: float = 0.0,
+                duration: float = MAX_DURATION) -> None:
     """One shape onto its own transparent layer: `c` is the layer's centre (px), `unit`
-    the pixels per box unit (half the box side, already supersampled)."""
+    the pixels per box unit (half the box side, already supersampled); `t` is the
+    time into the effect, for a shape's start / end / fade and a text's reveal."""
     import math
     from PIL import ImageDraw
 
+    alpha = shape_alpha(shape, t, duration)
+    if alpha <= 0:
+        return
+    text, talpha = ("", 1.0)
+    if shape["type"] == "text":
+        text, talpha = text_at(shape, t)
+        if not text.strip():
+            return
     d = ImageDraw.Draw(layer)
-    colour = _rgba(shape["color"], shape["opacity"])
+    colour = _rgba(shape["color"], shape["opacity"] * alpha * talpha)
 
     def px(p):
         return (c + p[0] * unit, c + p[1] * unit)
@@ -513,12 +599,28 @@ def _draw_shape(layer, shape: dict, c: float, unit: float) -> None:
         else:
             d.polygon(pts, outline=colour, width=width)
     elif kind == "text":
-        font = _font(int(shape["h"] * unit), shape.get("bold", True))
+        # h is a fraction of the BOX side (2 units), like a stroke's width
+        size = max(4, int(shape["h"] * 2 * unit))
+        font = _font(size, shape.get("bold", True))
+        lines = str(shape["text"]).split("\n")
+        full = [l for l in text.split("\n")]          # what shows now (a reveal may cut it)
+        if shape.get("fit", True):
+            # the widest FULL line has to fit the box's width, so a typewriter line
+            # does not change size as it types
+            widest = max((font.getlength(l) for l in lines), default=0)
+            limit = 1.9 * unit                        # 95 % of the box side
+            if widest > limit and widest > 0:
+                size = max(4, int(size * limit / widest))
+                font = _font(size, shape.get("bold", True))
         x, y = px((shape["x"], shape["y"]))
-        d.text((x, y), shape["text"], fill=colour, font=font, anchor="mm")
+        gap = size * 1.18
+        top = y - gap * (len(lines) - 1) / 2
+        for i, line in enumerate(full):
+            if line:
+                d.text((x, top + i * gap), line, fill=colour, font=font, anchor="mm")
 
 
-def _sprite_image(overlay: dict, box_px: float, pose: dict):
+def _sprite_image(overlay: dict, box_px: float, pose: dict, t: float = 0.0):
     """The sprite at one pose as an RGBA image (already downsampled), plus the offset
     of its centre inside it. `box_px` is the unscaled box side in output pixels."""
     from PIL import Image
@@ -531,8 +633,10 @@ def _sprite_image(overlay: dict, box_px: float, pose: dict):
     unit = half * _SUPER
     if unit >= 0.5:
         for shape in overlay["shapes"]:
+            if shape_alpha(shape, t, overlay["duration"]) <= 0:
+                continue
             layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-            _draw_shape(layer, shape, c, unit)
+            _draw_shape(layer, shape, c, unit, t, overlay["duration"])
             canvas.alpha_composite(layer)
         if pose["rotate"]:
             canvas = canvas.rotate(-pose["rotate"], resample=Image.BICUBIC, center=(c, c))
@@ -568,7 +672,7 @@ def render_overlay_frames(overlay: dict, w: int, h: int, fps: float, out_dir: Pa
         else:
             frame = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         if pose["opacity"] > 0 and pose["scale"] > 0:
-            sprite, ext = _sprite_image(overlay, box_px, pose)
+            sprite, ext = _sprite_image(overlay, box_px, pose, t)
             cx = anchor[0] * w + pose["dx"] * w
             cy = anchor[1] * h + pose["dy"] * w
             x0, y0 = int(round(cx)) - ext, int(round(cy)) - ext
@@ -704,8 +808,43 @@ def synth_sound(sound: dict, out: Path, *, sr: int = 48000) -> Path:
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     n = max(1, int(round(sound["duration"] * sr)))
-    t = np.arange(n) / sr
     rng = np.random.default_rng(1234)              # the same patch renders the same bytes
+    rep = sound.get("repeat")
+    if rep:
+        # one hit, then the same hit `count` times `every` seconds apart with a little
+        # jitter and a gain that runs to `gain_end`: a clatter, a heartbeat, a ticking
+        tail = max(l["attack"] + l["decay"] for l in sound["layers"]) + 0.05
+        hit = synth_sound({**sound, "duration": min(MAX_DURATION, tail), "gain_db": 0.0,
+                           "repeat": None}, out.with_suffix(".hit.wav"), sr=sr)
+        with wave.open(str(hit), "rb") as wf:
+            frames = np.frombuffer(wf.readframes(wf.getnframes()), dtype="<i2")[::2] / 32767.0
+        try:
+            hit.unlink()
+        except OSError:
+            pass
+        mix = np.zeros(n)
+        count = int(rep["count"])
+        for k in range(count):
+            at = k * rep["every"] + rng.uniform(-0.5, 0.5) * rep["jitter"] * rep["every"]
+            i0 = int(round(max(0.0, at) * sr))
+            if i0 >= n:
+                break
+            g = 1.0 + (rep["gain_end"] - 1.0) * (k / max(1, count - 1))
+            m = min(len(frames), n - i0)
+            mix[i0:i0 + m] += g * frames[:m]
+        mix *= 10 ** (sound["gain_db"] / 20)
+        limit = 10 ** (-1 / 20)
+        peak = float(np.max(np.abs(mix))) if n else 0.0
+        if peak > limit:
+            mix *= limit / peak
+        pcm = (np.clip(mix, -1, 1) * 32767).astype("<i2")
+        with wave.open(str(out), "wb") as wf:
+            wf.setnchannels(2)
+            wf.setsampwidth(2)
+            wf.setframerate(sr)
+            wf.writeframes(np.repeat(pcm, 2).tobytes())
+        return out
+    t = np.arange(n) / sr
     mix = np.zeros(n)
     for layer in sound["layers"]:
         sig = _layer_signal(layer, t, sr, rng)
@@ -905,6 +1044,28 @@ _EXAMPLE_TITLE = {
 }
 
 
+_EXAMPLE_TYPEWRITER = {
+    "name": "typed title slide",
+    "why": "a black slide that types the title line by line with a clatter, holds, then fades to the footage",
+    "limits": "an effect cannot add two seconds to the shot — extend the shot's in-point on the timeline for that",
+    "events": [{"t": 187.09, "x": 0.5, "y": 0.5, "label": "the title"}],
+    "overlay": {
+        "duration": 7.0, "size": 1.6,
+        "shapes": [
+            {"type": "rect", "at": [0, 0], "w": 3, "h": 3, "fill": True, "color": "#050507", "opacity": 1.0,
+             "end": 7.0, "fade": 1.5},
+            {"type": "text", "text": "2026 BLIZZARD\nKillington, VT\nwith the boys", "at": [0, 0], "h": 0.07,
+             "bold": True, "color": "#f2efe6", "reveal": "typewriter", "cps": 12, "start": 0.4, "end": 7.0, "fade": 1.0}],
+        "anim": {}},
+    "sound": {
+        "gain_db": -12,
+        "layers": [{"type": "click", "attack": 0.0, "decay": 0.02, "gain": 0.8},
+                   {"type": "tone", "wave": "triangle", "freq": 2600, "attack": 0.001, "decay": 0.015, "gain": 0.35},
+                   {"type": "noise", "color": "white", "hp": 3000, "attack": 0.0, "decay": 0.012, "gain": 0.3}],
+        "repeat": {"every": 0.0833, "count": 38, "jitter": 0.25, "gain_end": 0.9}},
+}
+
+
 def _vocabulary() -> str:
     """The closed vocabulary with its ranges, from the constants above, so the system
     text can never drift from what `validate_effect` accepts."""
@@ -931,7 +1092,11 @@ COORDINATES
   (y down); a shape may poke a little past (±1.5) but never across the frame.
 - Times are seconds in the source clip; a `duration` is seconds.
 
-EFFECT = {{"name": "≤40 chars", "why": "one sentence", "events": [...], "overlay": {{...}}, "sound": {{...}} | null}}
+EFFECT = {{"name": "≤40 chars", "why": "one sentence", "events": [...], "overlay": {{...}}, "sound": {{...}} | null, "limits": "what the note asked that an effect cannot do, or omit"}}
+
+SIZES that read well (with size 1.0, the box as wide as the frame): a headline line h 0.10–0.14, a subtitle 0.06–0.08, a caption 0.04–0.05; a full-frame slide is a filled rect w 3 h 3 at size 1.6. Stack lines with \\n in ONE text shape, never several shapes at the same spot.
+
+WHAT AN EFFECT CANNOT DO: change the shot's length, speed or framing (no extra seconds, no slow motion, no zoom, no trim), move or cut footage, or use a recording. Say so in "limits" in one sentence and do the rest.
 
 EVENTS (1–{MAX_EVENTS}): {{"t": seconds, "x": 0..1, "y": 0..1, "strength": 0..1 (optional), "label": "≤40 chars" (optional)}}
 
@@ -942,13 +1107,15 @@ OVERLAY: {{"duration": {MIN_DURATION}–{MAX_DURATION} s, "size": {MIN_SIZE}–{
     {{"type": "ring", "at": [x, y], "r": 0.01–1.5, "r2": 0–r (the hole)}}
     {{"type": "rect", "at": [x, y], "w": 0.01–3, "h": 0.01–3, "rotate": degrees, "fill", "width"}}
     {{"type": "polygon", "points": [[x, y] × 3–32], "fill", "width"}}
-    {{"type": "text", "text": "≤{MAX_TEXT} chars", "at": [x, y], "h": 0.05–1.5 (box units), "bold": true|false}}
+    {{"type": "text", "text": "≤{MAX_TEXT} chars, up to {MAX_TEXT_LINES} lines with \\n", "at": [x, y], "h": 0.02–1.0 (one line's height as a fraction of the box side), "bold": true|false, "fit": true (shrink to the box's width), "reveal": "typewriter"|"fade" (optional), "cps": 2–60 (characters per second for typewriter)}}
+  every shape may carry "start" (seconds into the effect, default 0), "end" (optional) and "fade" (seconds, in and out): a title's lines can arrive one after another, a bar can leave before the text
   anim: keyframe tracks, each `[[t, value], …]` (1–{MAX_KEYS} keys, t within 0..duration, linear between keys):
     "scale" 0–6 (1 = the box), "opacity" 0–1, "rotate" degrees (clockwise), "dx" / "dy" -1..1 (fractions of the frame width)
   flash: {{"color": "#rrggbb", "opacity": 0–0.6, "duration": 0.02–1.0}} — tints the whole frame briefly
 
 SOUND (or null for a silent effect): {{"duration": {MIN_DURATION}–{MAX_DURATION} s, "gain_db": {MIN_GAIN_DB:g}–{MAX_GAIN_DB:g}, "layers": [1–{MAX_LAYERS}]}}
   every layer: "gain" 0–1, "attack" 0–1 s (linear), "decay" 0.005–3 s (exponential, to -60 dB), optional "hp" / "lp" 20–20000 Hz (one-pole)
+  optional "repeat": {{"every": 0.02–2 s, "count": 1–{MAX_REPEAT}, "jitter": 0–1 (of every), "gain_end": 0–1}} — the same hit again and again (a typewriter's clatter: a click every 1/cps s for as many characters; a heartbeat; a ticking); the sound's duration is then computed
     {{"type": "tone", "wave": "sine"|"square"|"saw"|"triangle", "freq": 20–12000}}
     {{"type": "sweep", "wave": …, "freq": 20–12000, "freq_end": 20–12000}}  (exponential glide)
     {{"type": "noise", "color": "white"|"pink"}}
@@ -966,6 +1133,11 @@ def _system_design() -> str:
             + "\n\nA SECOND EXAMPLE — a title: 'SEND IT' over a dark bar at the top of the frame, "
               "held 1.8 s with a quick settle and a fade, a rising whoosh under it:\n"
             + json.dumps(_EXAMPLE_TITLE, indent=1)
+            + "\n\nA THIRD EXAMPLE — a typed title slide: a black slide, three lines typed at 12 "
+              "characters a second with a click per character (repeat every 1/12 s, one per "
+              "character), the slide fading to the footage over its last 1.5 s, and a `limits` "
+              "line for what the note asked that an effect cannot do:\n"
+            + json.dumps(_EXAMPLE_TYPEWRITER, indent=1)
             + "\n\nMark only the moments the note names, inside the window the editor gave when there "
               "is one; when in doubt, fewer events. The audio's impacts are candidates for INSTANT "
               "effects only; a continuous effect starts where the note says and ignores them. A "
@@ -1147,6 +1319,7 @@ def design(note: str, seg: dict, clip: dict, sidecar: dict | None, *,
         "why": answer.get("why") or "",
         "events": events, "overlay": answer.get("overlay"), "sound": answer.get("sound"),
         "status": "proposed",
+        "limits": answer.get("limits") or None,
     }
     if window is not None:
         inside = [e for e in events if isinstance(e, dict) and e.get("t") is not None
