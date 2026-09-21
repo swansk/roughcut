@@ -45,8 +45,13 @@
  *                 suspends it, and the dragged block shows its clip's sentence and onset
  *                 points as faint ticks so the editor sees what there is to take.
  *
- * Pointer mapping: a drag is a delta in seconds — pointer travel ÷ the zoom at pointerdown
- * — applied to the edge's clip time. The zoom at pointerdown, deliberately: the
+ * Pointer mapping: a drag is a delta in FILM seconds — pointer travel ÷ the zoom at
+ * pointerdown — applied to the edge's clip time at the shot's `speed` (INTAKE M13: a
+ * 0.5× shot's edge moves half a clip second per film second of travel, and its block
+ * grows twice as fast as the hand). A roll's delta stays in film seconds and lands on
+ * each side at that side's rate, so the film's length holds whatever the two speeds
+ * are. The magnet measures its reach in pixels of film, so a clip-time candidate is
+ * scaled by the rate before it is compared. The zoom at pointerdown, deliberately: the
  * foundation refits the whole cut to the viewport after every change until someone
  * zooms, so a ripple that lengthens the film re-zooms under the pointer; a fixed
  * px-per-second keeps the hand and the number in step regardless.
@@ -239,12 +244,13 @@
       if (!box) continue;
       const pts = pointsOf(seg.clip);
       const z = tl.state.zoom;
+      const spd = tl.speedOf(seg);
       const frag = document.createDocumentFragment();
       const put = (t, cls) => {
         if (t < seg.in || t > seg.out) return;
         const k = document.createElement('i');
         k.className = `tl-tick ${cls}`;
-        k.style.left = `${(t - seg.in) * z}px`;
+        k.style.left = `${(t - seg.in) / spd * z}px`;     // a clip time, at film scale
         frag.appendChild(k);
       };
       pts.ins.forEach((t) => put(t, 'sentence in'));
@@ -314,7 +320,7 @@
     const seg = tl.byId(id);
     const fs = tl.filmStart(id);
     if (!seg || fs < 0) return 0;
-    return edge === 'in' ? fs : fs + (seg.out - seg.in);
+    return edge === 'in' ? fs : fs + tl.dur(seg);
   }
 
   /* The monitor parks on the edge being moved. The foundation's seek cues by film time
@@ -326,7 +332,7 @@
     if (!seg) return;
     const fs = tl.filmStart(id);
     if (fs < 0) return;
-    tl.seek(edge === 'in' ? fs : Math.max(fs, fs + (seg.out - seg.in) - 0.03));
+    tl.seek(edge === 'in' ? fs : Math.max(fs, fs + tl.dur(seg) - 0.03));
   }
 
   /* ---------------------------------------------------------------- the cues (I9.7) */
@@ -403,20 +409,22 @@
   }
 
   /* ---------------------------------------------------------------- the magnet */
-  /* Candidates for the value a drag is setting — a clip time for a trim, a delta for a
-   * roll — each with the category it belongs to and the film time to draw the line at.
-   * The playhead is where it stood at pointerdown: parking the monitor on the dragged
-   * edge goes through the foundation's seek, which moves the playhead with it, so the
-   * frame the editor parked on before taking the edge is the one the magnet offers. */
+  /* Candidates for the value a drag is setting — a clip time for a trim, a FILM delta
+   * for a roll — each with the category it belongs to and the film time to draw the
+   * line at. The playhead is where it stood at pointerdown: parking the monitor on the
+   * dragged edge goes through the foundation's seek, which moves the playhead with it,
+   * so the frame the editor parked on before taking the edge is the one the magnet
+   * offers. A clip's own points (sentences, words, onsets) are clip times: for a roll
+   * they become film deltas at that side's rate. */
   function candidates(d) {
     const out = [];
     const P = d.p0;                // where the playhead stood when the edge was taken
     if (d.kind === 'trim') {
-      const toFilm = (v) => d.fs0 + (v - d.in0);
+      const toFilm = (v) => d.fs0 + (v - d.in0) / d.spd;
       const lo = d.edge === 'in' ? 0 : d.in0 + MIN_LEN;
       const hi = d.edge === 'in' ? d.out0 - MIN_LEN : d.dur;
       const add = (cat, v) => { if (v >= lo - 1e-9 && v <= hi + 1e-9) out.push({ cat, v, film: toFilm(v) }); };
-      add('playhead', d.in0 + (P - d.fs0));
+      add('playhead', d.in0 + (P - d.fs0) * d.spd);
       const pts = pointsOf(d.clip);
       (d.edge === 'in' ? pts.ins : pts.outs).forEach((t) => add('sentence', t));
       pts.words.forEach((t) => add('word', t));
@@ -426,23 +434,27 @@
       for (const c of d.cuts) if (Math.abs(c - d.b0) > 1e-6) add('cut', c - d.b0);
       add('playhead', P - d.b0);
       const L = pointsOf(d.clipL), R = pointsOf(d.clipR);
-      L.outs.forEach((t) => add('sentence', t - d.outL0));
-      R.ins.forEach((t) => add('sentence', t - d.inR0));
-      L.words.forEach((t) => add('word', t - d.outL0));
-      R.words.forEach((t) => add('word', t - d.inR0));
-      L.onsets.forEach((t) => add('onset', t - d.outL0));
-      R.onsets.forEach((t) => add('onset', t - d.inR0));
+      const fromL = (t) => (t - d.outL0) / d.spdL, fromR = (t) => (t - d.inR0) / d.spdR;
+      L.outs.forEach((t) => add('sentence', fromL(t)));
+      R.ins.forEach((t) => add('sentence', fromR(t)));
+      L.words.forEach((t) => add('word', fromL(t)));
+      R.words.forEach((t) => add('word', fromR(t)));
+      L.onsets.forEach((t) => add('onset', fromL(t)));
+      R.onsets.forEach((t) => add('onset', fromR(t)));
     }
     return out;
   }
 
+  /* The magnet's reach is SNAP_PX of film: a trim's candidates are clip times, so their
+   * distance is scaled by the shot's rate before it is measured in pixels. */
   function snapFor(d, raw) {
     const all = candidates(d);
+    const perFilm = d.kind === 'trim' ? d.spd : 1;      // clip seconds per film second
     for (const cat of CATS) {
       let best = null;
       for (const c of all) {
         if (c.cat !== cat) continue;
-        const px = Math.abs(c.v - raw) * d.zoom;
+        const px = Math.abs(c.v - raw) / perFilm * d.zoom;
         if (px <= SNAP_PX && (!best || px < best.px)) best = { ...c, px };
       }
       if (best) return best;
@@ -453,17 +465,20 @@
   /* ---------------------------------------------------------------- the gesture */
   function trimParams(seg, edge) {
     return { kind: 'trim', id: seg.id, ids: [seg.id], edge, clip: seg.clip, in0: seg.in, out0: seg.out,
-             fs0: tl.filmStart(seg.id), dur: clipDur(seg.clip) };
+             fs0: tl.filmStart(seg.id), dur: clipDur(seg.clip), spd: tl.speedOf(seg) };
   }
 
+  /* A roll's delta is film seconds; its bounds are each side's clip room at that
+   * side's rate, so the shorter reach in film wins. */
   function rollParams(L, R) {
     const durL = clipDur(L.clip);
+    const spdL = tl.speedOf(L), spdR = tl.speedOf(R);
     return {
       kind: 'roll', left: L.id, right: R.id, ids: [L.id, R.id],
-      clipL: L.clip, clipR: R.clip, outL0: L.out, inR0: R.in,
+      clipL: L.clip, clipR: R.clip, outL0: L.out, inR0: R.in, spdL, spdR,
       b0: tl.filmStart(R.id),
-      lo: Math.max(L.in + MIN_LEN - L.out, -R.in),
-      hi: Math.min(durL - L.out, R.out - MIN_LEN - R.in),
+      lo: Math.max((L.in + MIN_LEN - L.out) / spdL, -R.in / spdR),
+      hi: Math.min((durL - L.out) / spdL, (R.out - MIN_LEN - R.in) / spdR),
       cuts: cutPoints(),
     };
   }
@@ -497,7 +512,7 @@
       const seg = tl.byId(blk.dataset.id);
       if (!seg) return;
       d = { kind: 'slip', id: seg.id, ids: [seg.id], clip: seg.clip, in0: seg.in, out0: seg.out,
-            dur: clipDur(seg.clip) };
+            dur: clipDur(seg.clip), spd: tl.speedOf(seg) };
     } else {
       return;                      // a plain press on a block: the foundation's click
     }
@@ -557,7 +572,7 @@
   function cutPoints() {
     const pts = [0];
     let t = 0;
-    for (const s of tl.state.segs) { t += s.out - s.in; pts.push(round2(t)); }
+    for (const s of tl.state.segs) { t += tl.dur(s); pts.push(round2(t)); }
     return pts;
   }
 
@@ -586,8 +601,9 @@
     const d = drag;
     const use = magnet && !d.suspend && d.kind !== 'slip';
     if (d.kind === 'trim') {
-      const raw = d.edge === 'in' ? clamp(d.in0 + d.dt, 0, d.out0 - MIN_LEN)
-                                  : clamp(d.out0 + d.dt, d.in0 + MIN_LEN, d.dur);
+      const dc = d.dt * d.spd;                          // film travel → clip seconds at the rate
+      const raw = d.edge === 'in' ? clamp(d.in0 + dc, 0, d.out0 - MIN_LEN)
+                                  : clamp(d.out0 + dc, d.in0 + MIN_LEN, d.dur);
       const s = use ? snapFor(d, raw) : null;
       const v = s ? s.v : raw;
       if (d.edge === 'in') tl.setRange(d.id, v, null); else tl.setRange(d.id, null, v);
@@ -595,13 +611,13 @@
       park(d.id, d.edge);
     } else if (d.kind === 'roll') {
       const s = use ? snapFor(d, d.dt) : null;
-      const v = round2(clamp(s ? s.v : d.dt, d.lo, d.hi));
-      tl.setRange(d.left, null, round2(d.outL0 + v));
-      tl.setRange(d.right, round2(d.inR0 + v), null);
+      const v = round2(clamp(s ? s.v : d.dt, d.lo, d.hi));   // film seconds, to each side at its rate
+      tl.setRange(d.left, null, round2(d.outL0 + v * d.spdL));
+      tl.setRange(d.right, round2(d.inR0 + v * d.spdR), null);
       d.snapped = s;
       park(d.right, 'in');
     } else {
-      const v = round2(clamp(d.dt, -d.in0, d.dur - d.out0));
+      const v = round2(clamp(d.dt * d.spd, -d.in0, d.dur - d.out0));
       tl.setRange(d.id, round2(d.in0 + v), round2(d.out0 + v));
       d.snapped = null;
       park(d.id, 'in');

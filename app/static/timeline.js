@@ -9,10 +9,14 @@
  *
  * ================================ THE API — window.tl ================================
  *
- *   Vocabulary. A *shot* is one entry of the EDL's `segments` — `{id, clip, in, out, why}`,
- *   `in`/`out` in the clip's own seconds (INTAKE decision 5: the only place a range lives).
- *   *Film time* is seconds from the top of the cut; a shot's film start is the sum of the
- *   durations before it. Ids come from the server (`g` + 10 hex). A shot the board makes
+ *   Vocabulary. A *shot* is one entry of the EDL's `segments` — `{id, clip, in, out, why,
+ *   speed?}`, `in`/`out` in the clip's own seconds (INTAKE decision 5: the only place a
+ *   range lives). *Film time* is seconds from the top of the cut; a shot's film start is
+ *   the sum of the durations before it, and a shot's duration in the film is
+ *   `(out − in) / speed` (INTAKE M13: `speed` 0.1–4, absent = 1 — `tl.dur(seg)` is the one
+ *   place that arithmetic lives, and every film-time sum here and in the lanes goes
+ *   through it; a clip-time comparison — a clamp, a resume check, a boundary — does not).
+ *   Ids come from the server (`g` + 10 hex). A shot the board makes
  *   before a save gets a temporary `tmp-N` id; the save strips it, the server mints a real
  *   one, and `tl.afterSave()` re-keys the shot — every map in here follows the re-key, and
  *   `tl.byId(oldTmpId)` keeps resolving. Blocks carry `data-id`, never an index.
@@ -43,9 +47,13 @@
  *   tl.byId(id)                 The shot object, or null. Resolves a re-keyed tmp id too.
  *   tl.indexOf(id)              Its index in the cut, or -1.
  *   tl.idAt(i)                  The id at an index, or null.
+ *   tl.dur(seg)                 The shot's length in the film: `(out − in) / (speed || 1)`.
+ *                               Pure — works on a proposal's segment as well as the cut's.
+ *   tl.speedOf(seg)             Its rate, 1 when absent or out of 0.1–4.
  *   tl.filmStart(id)            Film time the shot starts at, or -1.
  *   tl.total()                  The film's length in seconds.
- *   tl.shotAt(filmTime)         `{id, index, clipT}` under a film time (null on an empty cut).
+ *   tl.shotAt(filmTime)         `{id, index, clipT}` under a film time (null on an empty cut);
+ *                               `clipT` is `in + (filmTime − start) × speed`.
  *   tl.timeToX(t) / tl.xToTime(x)   Film time ↔ CANVAS x in px (scroll included — for a
  *                               pointer event, x = e.clientX − view.left + view.scrollLeft;
  *                               `tl.eventTime(e)` does exactly that).
@@ -128,6 +136,7 @@
   const PAD = 12;                  // px of canvas before 0:00
   const PAD_R = 48;                // px after the end: room for the total's label
   const MIN_LEN = 0.2;             // s — the shortest shot, as nudge() clamps
+  const MIN_SPEED = 0.1, MAX_SPEED = 4;    // edits.py's bounds: outside them a speed reads as 1
   const MIN_ZOOM = 0.5, MAX_ZOOM = 4000;   // px per second
   const STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];   // labelled ruler steps, s
   const UNDO_LIMIT = 100;
@@ -166,6 +175,14 @@
   const round2 = (x) => Math.round(x * 100) / 100;
   const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
   const stem = (clip) => String(clip).replace(/\.[^.]+$/, '');
+
+  /* The one arithmetic (INTAKE M13, edits.py's `speed_of` / `dur`): a shot's rate, 1
+   * when absent or nonsense, and its length in the film at that rate. */
+  function speedOf(seg) {
+    const s = Number(seg && seg.speed);
+    return Number.isFinite(s) && s >= MIN_SPEED && s <= MAX_SPEED ? s : 1;
+  }
+  const dur = (seg) => (seg.out - seg.in) / speedOf(seg);
 
   function fmt(t) {
     const m = Math.floor(t / 60), s = t - m * 60;
@@ -228,20 +245,21 @@
     if (i < 0) return -1;
     let t = 0;
     const list = segs();
-    for (let k = 0; k < i; k++) t += list[k].out - list[k].in;
+    for (let k = 0; k < i; k++) t += dur(list[k]);
     return t;
   }
 
-  function total() { return segs().reduce((a, s) => a + (s.out - s.in), 0); }
+  function total() { return segs().reduce((a, s) => a + dur(s), 0); }
 
   function shotAt(t) {
     const list = segs();
     if (!list.length) return null;
     let start = 0;
     for (let i = 0; i < list.length; i++) {
-      const s = list[i], d = s.out - s.in;
+      const s = list[i], d = dur(s);
       if (t < start + d || i === list.length - 1) {
-        return { id: s.id, index: i, clipT: round2(clamp(s.in + (t - start), s.in, s.out)) };
+        return { id: s.id, index: i,
+                 clipT: round2(clamp(s.in + (t - start) * speedOf(s), s.in, s.out)) };
       }
       start += d;
     }
@@ -346,8 +364,9 @@
   }
 
   function updateBlock(b, seg, i, start, live) {
-    const dur = seg.out - seg.in;
-    const w = Math.max(3, dur * state.zoom);
+    const filmLen = dur(seg);                // what the block's width and its label are
+    const spd = speedOf(seg);
+    const w = Math.max(3, filmLen * state.zoom);
     b.style.left = `${timeToX(start)}px`;
     b.style.width = `${w}px`;
     b.style.setProperty('--hue', hueOf(seg.clip));
@@ -358,9 +377,11 @@
     b.classList.toggle('tiny', w < 36);
     const clip = clipOf(seg.clip);
     b.querySelector('.name').textContent = stem(seg.clip);
-    b.querySelector('.dur').textContent = `${dur.toFixed(1)}s`;
+    b.querySelector('.dur').textContent = `${filmLen.toFixed(1)}s`;
     b.querySelector('.line').textContent = strongestLine(seg, clip);
-    b.title = `${i + 1}. ${stem(seg.clip)} ${fmt(seg.in)}–${fmt(seg.out)} (${dur.toFixed(1)}s)`
+    b.title = `${i + 1}. ${stem(seg.clip)} ${fmt(seg.in)}–${fmt(seg.out)}`
+      + (spd === 1 ? ` (${filmLen.toFixed(1)}s)`
+                   : ` at ${spd}× (${filmLen.toFixed(1)}s of film from ${(seg.out - seg.in).toFixed(1)}s)`)
       + (seg.why ? `\n${seg.why}` : '');
     const warn = warnEdges(seg, clip);
     const wi = b.querySelector('.warn.in'), wo = b.querySelector('.warn.out');
@@ -429,7 +450,7 @@
       if (lane.children[i] !== b) lane.insertBefore(b, lane.children[i] || null);
       updateBlock(b, seg, i, start, live);
       seen.add(seg.id);
-      start += seg.out - seg.in;
+      start += dur(seg);
     });
     for (const [id, b] of blocks) {
       if (seen.has(id)) continue;
@@ -693,7 +714,8 @@
     if (i < 0) return null;
     const list = segs();
     const seg = list[i];
-    const clipT = round2(seg.in + (Number(atFilmTime) - filmStart(seg.id)));
+    // a film time inside the shot is a clip time at the shot's rate; the two halves keep it
+    const clipT = round2(seg.in + (Number(atFilmTime) - filmStart(seg.id)) * speedOf(seg));
     if (!(clipT >= seg.in + MIN_LEN && clipT <= seg.out - MIN_LEN)) return null;
     return mutate('split', () => {
       const second = { ...seg, id: `tmp-${++tmpN}`, in: clipT };
@@ -907,7 +929,7 @@
 
   const tl = {
     state, el, mount, render, on,
-    byId, indexOf, idAt, filmStart, total, shotAt, timeToX, xToTime, eventTime, snapsFor,
+    byId, indexOf, idAt, dur, speedOf, filmStart, total, shotAt, timeToX, xToTime, eventTime, snapsFor,
     begin, commit, cancel, undo, redo,
     setRange, move, split, remove, insert,
     select, syncSel, seek, setPlayhead, zoomTo, fit,

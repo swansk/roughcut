@@ -64,7 +64,10 @@ function touch() {
 
 function undo() { tl.undo(); }
 
-function total() { return segs.reduce((a, s) => a + (s.out - s.in), 0); }
+/* Film time is the timeline's arithmetic (INTAKE M13): a shot's length in the film is
+ * `(out − in) / speed`, and `tl.dur` is the one place that lives. */
+function total() { return segs.reduce((a, s) => a + tl.dur(s), 0); }
+const speedOf = (seg) => tl.speedOf(seg);
 
 /* ------------------------------------------------------------ the top bar
  *
@@ -441,7 +444,9 @@ function fillShot(box, seg) {
   const times = q('.times');
   times.textContent = `${fmt(seg.in)} → ${fmt(seg.out)}`;
   times.title = `${seg.in.toFixed(2)} → ${seg.out.toFixed(2)} s of ${seg.clip}`;
-  q('.dur').textContent = `${(seg.out - seg.in).toFixed(1)} s`;
+  // the length in the film; a retimed shot says the rate beside it
+  const spd = speedOf(seg);
+  q('.dur').textContent = `${tl.dur(seg).toFixed(1)} s${spd === 1 ? '' : ` at ${spd}×`}`;
   const warn = boundaryWarning(seg);
   q('.warn').textContent = warn ? `⚠ ${warn}` : '';
   q('.warn').hidden = !warn;
@@ -524,7 +529,7 @@ function renderInspector() {
       : buildShot(seg));
   }
   if (want === 'multi') {
-    const d = selIds.reduce((a, id) => { const s = tl.byId(id); return a + (s ? s.out - s.in : 0); }, 0);
+    const d = selIds.reduce((a, id) => { const s = tl.byId(id); return a + (s ? tl.dur(s) : 0); }, 0);
     box.querySelector('.count').textContent = `${selIds.length} shots selected · ${d.toFixed(1)} s`;
   } else if (want === 'none') {
     const [lo, hi] = P.target;
@@ -840,8 +845,15 @@ const stem = (clip) => String(clip).replace(/\.[^.]+$/, '');
 
 function filmStart(i) {
   let t = 0;
-  for (let k = 0; k < i && k < segs.length; k++) t += segs[k].out - segs[k].in;
+  for (let k = 0; k < i && k < segs.length; k++) t += tl.dur(segs[k]);
   return t;
+}
+
+/* Where a clip time inside shot i sits in the film: its offset from the in-point at
+ * the shot's rate — the transport's position and the playhead both read this. */
+function filmAt(i, clipT) {
+  const seg = segs[i];
+  return filmStart(i) + Math.max(0, clipT - seg.in) / speedOf(seg);
 }
 
 function liveVideo() { return player.vids[player.cur]; }
@@ -973,7 +985,7 @@ function playFrom(i, { single = false } = {}) {
   player.playing = true;            // before go(), which refuses to start a paused monitor
   screenMsg(v.readyState >= 2 ? '' : `opening ${stem(seg.clip)}…`);
   if (v.readyState >= 1) go(); else v.addEventListener('loadedmetadata', go, { once: true });
-  const filmT = filmStart(i) + (resume ? Math.max(0, v.currentTime - seg.in) : 0);
+  const filmT = resume ? filmAt(i, v.currentTime) : filmStart(i);
   cueBed(filmT);
   tl.setPlayhead(filmT);            // the playhead jumps with the click, not on the first tick
   schedule();
@@ -999,7 +1011,7 @@ function cueAt(i, clipT) {
   if (v.readyState >= 1) park(); else v.addEventListener('loadedmetadata', park, { once: true });
   if (segs[i + 1]) arm(player.vids[1 - player.cur], segs[i + 1]);
   showLive();
-  paintPos(filmStart(i) + Math.max(0, at - seg.in), at, seg);
+  paintPos(filmAt(i, at), at, seg);
   paintTransport();
   tl.render();
 }
@@ -1019,13 +1031,15 @@ function toggleCut() {
   playFrom(sel);
 }
 
-/* True when the shot under the playhead ended and the monitor moved on or stopped. */
+/* True when the shot under the playhead ended and the monitor moved on or stopped. The
+ * shot ends at its `out` in CLIP time whatever its speed; the film position it reports
+ * is the clip offset at the rate. */
 function boundary() {
   const v = liveVideo();
   const seg = segs[player.idx];
   if (!seg) { pauseCut(); return true; }
   const clipT = v.currentTime;
-  const filmT = filmStart(player.idx) + Math.max(0, clipT - seg.in);
+  const filmT = filmAt(player.idx, clipT);
   paintPos(filmT, clipT, seg);
   bedTick(filmT, clipT, seg);
   if (clipT >= seg.out - 0.04 || v.ended) { advance(); return true; }
@@ -1722,8 +1736,7 @@ function cueBed(filmT) {
   if (el.dataset.src !== t.url) { el.dataset.src = t.url; el.src = t.url; el.load(); }
   if (filmT === undefined) {
     if (!player.playing || player.idx < 0) return;
-    const seg = segs[player.idx];
-    filmT = filmStart(player.idx) + Math.max(0, liveVideo().currentTime - seg.in);
+    filmT = filmAt(player.idx, liveVideo().currentTime);
   }
   const seek = () => { el.currentTime = t.duration_s ? filmT % t.duration_s : 0; };
   if (el.readyState >= 1) seek(); else el.addEventListener('loadedmetadata', seek, { once: true });
@@ -1943,7 +1956,7 @@ function showProposal(plan) {
     `<div style="color:var(--bad)">− ${escapeHtml(b)}</div>`));
 
   const oldTotal = total();
-  const newTotal = plan.segments.reduce((a, s) => a + (s.out - s.in), 0);
+  const newTotal = plan.segments.reduce((a, s) => a + tl.dur(s), 0);
   // A shot-scoped proposal says which shot it is about — the rest of the diff is
   // the untouched film, and without this line it reads as a whole-cut revision.
   const scope = plan.focus
@@ -1956,7 +1969,7 @@ function showProposal(plan) {
   const detail = plan.segments.map((s, i) => `<div style="padding:4px 0">
     <span class="hint">${String(i + 1).padStart(2, '0')} ${escapeHtml(
       s.clip.replace('.MP4', ''))} ${fmt(s.in)}–${fmt(s.out)}
-    (${(s.out - s.in).toFixed(1)}s)</span><br>${escapeHtml(s.why || '')}${
+    (${tl.dur(s).toFixed(1)}s${speedOf(s) === 1 ? '' : ` at ${speedOf(s)}×`})</span><br>${escapeHtml(s.why || '')}${
     s.polished_from ? `<br><span class="hint">↳ polished from ${
       s.polished_from[0].toFixed(2)}–${s.polished_from[1].toFixed(2)}: ${
       escapeHtml(s.polish_why || '')}</span>` : ''}</div>`).join('');

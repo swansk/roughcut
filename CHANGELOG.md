@@ -10,6 +10,23 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **A shot's speed is film time on the board (INTAKE M13, I13.1)** — edits.py says a shot
+  has a `speed` and its length in the film is `(out − in) / speed`; the board summed
+  `out − in` in forty-one places. `tl.dur(seg)` (and `tl.speedOf`) on the foundation is
+  now the one place that arithmetic lives, and every film-time site goes through it:
+  `filmStart`, `total`, `shotAt` (whose `clipT` is `in + (t − start) × speed`), the
+  block widths and labels, the ruler's extent, `split` at a film time, the lanes' sums
+  (`matchPlan`, `slotAt`, the duck regions, the bin's outlines, the markers and events
+  mapped at the rate), the keys' cut-walking, razor and Q/W, the reverse shuttle's
+  clip-time drive, and the trims — a drag's travel is film seconds applied to the edge
+  at the shot's rate, a roll's delta lands on each side at that side's rate so the
+  film's length holds, and the magnet measures its reach in pixels of film. The monitor
+  reports its film position at the rate (`filmAt`). Of the forty-one `.out - ` sites,
+  twenty-six were film time and use `tl.dur`; fifteen are clip time (clamps, the resume
+  and boundary checks, the trim tooltips, the trimmed / this-cut comparisons) and stay.
+  `speed` rides the segment through `tl.forSave()` and `afterSave` (the server lane
+  keeps it on disk). `test_timeline_speed.py`: a 2 s shot at 0.5× is 4 s on the ruler
+  and in `#total`; the lanes, the keys and a handle drag all move at the rate.
 - **Edits foundation (INTAKE M13, I13.0)** — Karl, 2026-09-20: *"the effect tool itself …
   needs to be able to make changes like this and even broader ones like slow motion or
   extension or creating new clips."* `roughcut/edits.py` is the closed vocabulary of
