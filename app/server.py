@@ -2627,6 +2627,7 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
            "--footage", str(STATE["footage"]), "--sidecars", str(STATE["sidecars"]),
            "--assets", str(STATE["assets"]), "--profile", meta.get("profile", "preview"),
            "--colour-dir", str(colour_dir()),
+           "--generated-dir", str(generated_dir()),
            "--parts-dir", str(parts_dir), "-o", str(out_path)]
 
     # Same shape as the audio pass: a ticker counting finished parts on disk, so the

@@ -10,6 +10,22 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The render retimes a shot and cuts a generated clip (INTAKE M13)** — in
+  `assemble.py` a part whose segment has `speed` ≠ 1 is retimed: `setpts` on the video
+  ahead of the `fps` conform (the frame count changes, the rate does not — and a 60 fps
+  source slowed to half keeps its own frames instead of doubling decimated ones),
+  `atempo` on the audio as a chain of factors inside its 0.5–2 window (0.25 is
+  `atempo=0.5,atempo=0.5`), `-t` from `edits.dur`, an accepted effect's events moved
+  to where the picture now is; the concat still copies. A segment whose clip is
+  `gen_*.mp4` reads its source from the new `--generated-dir` (the board's
+  `_render_job` passes `generated_dir()`), takes no normalise and no grade (a black
+  slide stays the black it was asked for) and casts no vote in the delivery profile's
+  frame size. The planned length and the drift check sum `edits.dur`. Also fixed: a
+  segment with no `why` (a split's second half has none) no longer crashes the part
+  log. `test_edits_render.py`: a 0.5× part of a 2 s range is 4 s at 24000/1001 and its
+  3 s frame is the source's 2.5 s frame; a black part is 1920×1080 with luma at black
+  and the film is the four parts end to end; a freeze still is the frame it names and
+  holds; the atempo / setpts / source helpers.
 - **Preview, apply and undo for the edits (INTAKE M13)** — `POST /api/edits/preview
   {ops}` is the cut as it would be (`segments`, `id_map`, `generated`, `changed`,
   `words`) from `edits.validate_ops` + `apply_ops` against the cut on disk, nothing

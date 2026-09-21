@@ -13,6 +13,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from roughcut import edits  # noqa: E402
 
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def gen_dir(tmp_path):
+    """Generated files go to a dir of this test's own. The project fixture is one work
+    dir for the session and `project_payload` lists every generated file present, so
+    a slide left behind here would appear in every later test's clip map."""
+    import server
+    server.STATE["generated_dir"] = tmp_path / "generated"
+    yield server.STATE["generated_dir"]
+    server.STATE.pop("generated_dir", None)
+    server.STATE.pop("gen_durations", None)
+
 
 def _segments(client) -> list[dict]:
     return client.get("/api/project").json()["segments"]
