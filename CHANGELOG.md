@@ -10,6 +10,13 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **A shot's speed survives a save (INTAKE M13)** — the board can now put `speed`
+  on a segment and `PUT /api/project` keeps it: validated by `edits.validate_speed`
+  (a 400 with its sentence on a bad one; absent or 1 is not stored), returned as
+  stored by `GET /api/project`, and every place the server sums a cut's length
+  (`/api/render`'s `planned_s`, the shot list a render records) uses `edits.dur`, so
+  a 2 s range at 0.5× plans as 4 s of film. `test_edits.py` covers the pure module —
+  every op, every refusal, the words; `test_edits_api.py` the save and the plan.
 - **Edits foundation (INTAKE M13, I13.0)** — Karl, 2026-09-20: *"the effect tool itself …
   needs to be able to make changes like this and even broader ones like slow motion or
   extension or creating new clips."* `roughcut/edits.py` is the closed vocabulary of

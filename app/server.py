@@ -65,7 +65,7 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, Respons
 import uvicorn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from roughcut import (config, dictate, effects, events, find, fx, inference,  # noqa: E402
+from roughcut import (config, dictate, edits, effects, events, find, fx, inference,  # noqa: E402
                       journal, picks, progress, revise, selects, themes)
 
 HERE = Path(__file__).resolve().parent
@@ -735,6 +735,14 @@ async def api_save(request: Request) -> JSONResponse:
         for k in ("act", "why"):
             if s.get(k):
                 seg[k] = s[k]
+        # Speed (INTAKE M13): kept only when it is not 1, validated the one way
+        # `edits.validate_speed` validates it; a bad one is a 400 and nothing is written.
+        try:
+            speed = edits.validate_speed(s.get("speed"))
+        except ValueError as exc:
+            raise HTTPException(400, f"speed: {exc}")
+        if speed is not None:
+            seg["speed"] = speed
         # The id round-trips (I9.0): a shot keeps its identity across reorder, undo and a
         # proposal; a duplicate (a copied shot) or a missing one gets a fresh id.
         sid = s.get("id")
@@ -2881,7 +2889,7 @@ async def api_render(request: Request) -> JSONResponse:
     meta = {
         "job": job, "created": time.time(), "title": edl.get("title", ""),
         "segments": len(edl["segments"]),
-        "planned_s": round(sum(s["out"] - s["in"] for s in edl["segments"]), 2),
+        "planned_s": round(sum(edits.dur(s) for s in edl["segments"]), 2),
         "story": (edl.get("story") or "")[:300],
         "note": (body.get("label") or "")[:120],
         "music": (edl.get("effects_music") or {}).get("asset"),
@@ -2892,7 +2900,8 @@ async def api_render(request: Request) -> JSONResponse:
         # the cut currently on the timeline. Karl watched a rendered *proposal* and
         # reported that the board "doesn't seem to reflect the render" — it did not,
         # and nothing on screen said which of the renders it did reflect.
-        "shots": [{"clip": s["clip"], "in": s["in"], "out": s["out"]}
+        "shots": [{"clip": s["clip"], "in": s["in"], "out": s["out"],
+                   **({"speed": s["speed"]} if s.get("speed") else {})}
                   for s in edl["segments"]],
     }
     shots = len(edl["segments"])
