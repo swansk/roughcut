@@ -10,6 +10,17 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The monitor plays a shot at its speed (INTAKE M13, I13.2)** — `arm()` and the
+  `play()` calls in `playFrom` / `advance` set the buffer's `playbackRate` to the shot's
+  `speed` (after `load()`, which resets it) and keep it on `dataset.speed`; the JKL
+  shuttle rides on `defaultPlaybackRate` and multiplies the shot's rate rather than
+  overwriting it (a 0.5× shot under L twice plays at 1), and it reads its own rate from
+  `defaultPlaybackRate`, not the composite. `boundary()` still ends the shot at `out` in
+  clip time; a speed changed under a playing shot reaches the buffer through
+  `syncPlayer`. The frame callbacks in grade.js and fx.js read clip time and are
+  untouched. Test: `playbackRate` is 0.5 through the slow shot, the hand-over comes at
+  the clip's out (4 s of film), the next shot plays at 1, L L reads 2 on the default
+  and 1 on the buffer.
 - **A shot's speed is film time on the board (INTAKE M13, I13.1)** — edits.py says a shot
   has a `speed` and its length in the film is `(out − in) / speed`; the board summed
   `out − in` in forty-one places. `tl.dur(seg)` (and `tl.speedOf`) on the foundation is

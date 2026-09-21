@@ -871,7 +871,12 @@ function liveVideo() { return player.vids[player.cur]; }
  * `dataset.src` stays the bare proxy URL — it is how the rest of the monitor asks
  * "which clip is this buffer holding", and a fragment in it would make every check
  * miss. Re-arming the same clip at a different in-point is the seek below, not a
- * reload: the file is already open. */
+ * reload: the file is already open.
+ *
+ * The shot's `speed` (INTAKE M13) is the buffer's playback rate: set AFTER load(),
+ * which resets `playbackRate` to the default, and kept on `dataset.speed` so the JKL
+ * shuttle (timeline-keys.js, which rides on `defaultPlaybackRate`) can multiply it
+ * rather than overwrite it. */
 function arm(v, seg) {
   const src = (P.clips[seg.clip] || {}).proxy || '';
   if (v.dataset.src !== src) {
@@ -879,11 +884,20 @@ function arm(v, seg) {
     v.src = src ? `${src}#t=${Math.max(0, seg.in).toFixed(2)}` : src;
     v.load();
   }
+  setShotRate(v, seg);
   // Deferred, so by the time metadata arrives this buffer may have been pointed at a
   // different clip; parking the old shot would then seek the new one.
   const park = () => { if (v.dataset.src === src) v.currentTime = seg.in; };
   if (v.readyState >= 1) park();
   else v.addEventListener('loadedmetadata', park, { once: true });
+}
+
+/* The buffer plays its shot at the shot's rate times the shuttle's (1 unless J/L is
+ * held). Applied at arm and again right before play(): a load() in between resets it. */
+function setShotRate(v, seg) {
+  const spd = speedOf(seg);
+  v.dataset.speed = String(spd);
+  v.playbackRate = (v.defaultPlaybackRate || 1) * spd;
 }
 
 function showLive() {
@@ -980,6 +994,7 @@ function playFrom(i, { single = false } = {}) {
   const go = () => {
     if (g !== player.gen || !player.playing) return;   // pause, or a later command, won
     if (!resume) v.currentTime = seg.in;
+    setShotRate(v, seg);
     v.play().catch((err) => { if (g === player.gen) playRefused(err); });
   };
   player.playing = true;            // before go(), which refuses to start a paused monitor
@@ -1077,6 +1092,7 @@ function advance() {
   const go = () => {
     if (g !== player.gen || !player.playing) return;
     nv.currentTime = segs[next].in;
+    setShotRate(nv, segs[next]);
     nv.play().catch((err) => { if (g === player.gen) playRefused(err); });
   };
   screenMsg(nv.readyState >= 2 ? '' : `opening ${stem(segs[next].clip)}…`);
@@ -1098,6 +1114,8 @@ function syncPlayer() {
     const src = (P.clips[seg.clip] || {}).proxy || '';
     if (v.dataset.src !== src || v.currentTime < seg.in - 0.5 || v.currentTime > seg.out + 0.5) {
       playFrom(player.idx, { single: player.single });
+    } else if (v.dataset.speed !== String(speedOf(seg))) {
+      setShotRate(v, seg);          // the shot's speed changed under the monitor mid-play
     }
   }
   tl.render();

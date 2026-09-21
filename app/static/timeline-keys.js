@@ -14,6 +14,10 @@
  *   J K L        shuttle the monitor — L forward, again for 2× 4× 8×; J reverse (driven
  *                by rAF, as the pass does — Chromium cannot play backwards), again to
  *                stack; K pause. Hold K and tap L / J: 1× while held, paused on release.
+ *                The shuttle's rate MULTIPLIES the shot's own `speed` (INTAKE M13): a
+ *                0.5× shot under L×2 plays at 1; app.js's `arm()` keeps the shot's rate
+ *                on the buffer (`dataset.speed`) and the shuttle rides on
+ *                `defaultPlaybackRate`, so the two never overwrite each other.
  *   ↑ ↓          previous / next cut: the playhead to the boundary, that shot selected.
  *   Home End     the film's start / end.
  *   ← →          one frame (1/30 s); ⇧ one second. The playhead only — the trim lane's
@@ -110,9 +114,10 @@
     for (const v of p.vids) {
       // load() resets playbackRate to the default, and arm() loads the next shot's
       // buffer while this one plays — so the rate has to be the default too, or the
-      // hand-over at a cut would drop back to 1×.
+      // hand-over at a cut would drop back to 1×. The buffer's shot has a rate of its
+      // own (`dataset.speed`, set by arm()); the shuttle multiplies it.
       v.defaultPlaybackRate = r;
-      v.playbackRate = r;
+      v.playbackRate = r * (parseFloat(v.dataset.speed) || 1);
     }
   }
 
@@ -224,7 +229,9 @@
     if (k === 'l') {
       if (sh.kHeld) { forward(1); sh.kl = true; return true; }
       const v = live();
-      const cur = p.playing ? (sh.rate > 0 ? sh.rate : (v && v.playbackRate) || 1) : 0;
+      // the shuttle's own rate — `defaultPlaybackRate`, not `playbackRate`, which
+      // carries the shot's speed as well and would read a 0.5× shot at 1× as half
+      const cur = p.playing ? (sh.rate > 0 ? sh.rate : (v && v.defaultPlaybackRate) || 1) : 0;
       forward(cur > 0 ? Math.min(MAX_RATE, cur * 2) : 1);
       return true;
     }

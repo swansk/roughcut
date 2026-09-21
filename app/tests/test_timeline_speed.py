@@ -4,8 +4,8 @@ What the effects tool can now propose (roughcut/edits.py) the board has to honou
 
   * a shot with `speed` is `(out − in) / speed` of film — on the ruler, in `#total`,
     in every lane's sum (`tl.dur` is the one place that arithmetic lives);
-  * the monitor ends it at its `out` in clip time and reports its film position at
-    the rate;
+  * the monitor plays it at that rate (`video.playbackRate`), ends it at its `out` in
+    clip time, and reports its film position at the rate;
 
 Same fixture pattern as test_timeline_ui.py: the real uvicorn server on a real port, the
 synthetic three-clip bin, the EDL re-seeded per test. Skipped when playwright is absent.
@@ -201,4 +201,41 @@ def test_a_trim_drag_on_a_slow_shot_moves_the_edge_at_the_rate(page):
     zoom_after = page.evaluate("tl.state.zoom")            # the foundation refits after the change
     assert width(page, "#tl .blk", 1) == pytest.approx(3.0 * zoom_after, abs=1.5)
     assert page.locator("#undo").get_attribute("title").startswith("undo: trim")
+
+
+# ------------------------------------------------------------------ the monitor
+
+def test_the_monitor_plays_a_slow_shot_at_its_rate_and_hands_over_at_its_out(page):
+    """Playing the cut: the live buffer's playbackRate is 0.5 through the slow shot, the
+    transport's film position is the clip offset at the rate, and the hand-over to
+    CLIP_B (at 1×) comes at CLIP_A's out in clip time — 3.0 — which is 4 s of film."""
+    page.locator("#playCut").click()
+    page.wait_for_function("player.playing && player.idx === 0", timeout=10000)
+    page.wait_for_function("liveVideo().currentTime > 1.2", timeout=10000)
+    assert page.evaluate("liveVideo().playbackRate") == 0.5
+    assert page.evaluate("liveVideo().dataset.speed") == "0.5"
+    clip_t = page.evaluate("liveVideo().currentTime")
+    film_t = page.evaluate("tl.state.playhead")
+    assert film_t == pytest.approx((clip_t - 1.0) / 0.5, abs=0.25)
+    assert film_t > 0.3
+    # the hand-over: at CLIP_A's out (clip 3.0 = film 4.0), B plays at 1×
+    page.wait_for_function("player.idx === 1", timeout=15000)
+    assert page.evaluate("tl.state.playhead") == pytest.approx(4.0, abs=0.35)
+    page.wait_for_function("liveVideo().currentTime > 0.05", timeout=10000)
+    assert page.evaluate("liveVideo().playbackRate") == 1
+    assert page.evaluate("liveVideo().dataset.speed") == "1"
+    page.evaluate("pauseCut()")
+    # the ruler cues by film time at the rate: 2 s of film is 2.0 s into CLIP_A's clip
+    page.locator("#tl .tl-ruler").click(position={"x": x_of(page, 2.0), "y": 8})
+    assert page.evaluate("player.idx") == 0
+    page.wait_for_function("Math.abs(liveVideo().currentTime - 2.0) < 0.1", timeout=10000)
+    assert page.locator("#pos").inner_text() == "0:02.0"
+    # JKL's rate multiplies the shot's: L twice is 2× the shuttle, 1× on the buffer
+    page.keyboard.press("l")
+    page.wait_for_function("player.playing", timeout=10000)
+    page.keyboard.press("l")
+    assert page.evaluate("liveVideo().defaultPlaybackRate") == 2
+    assert page.evaluate("liveVideo().playbackRate") == 1
+    page.keyboard.press("k")
+    assert page.evaluate("liveVideo().playbackRate") == 0.5
 
