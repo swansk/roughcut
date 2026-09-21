@@ -723,14 +723,13 @@ def api_status() -> JSONResponse:
     })
 
 
-@app.put("/api/project")
-async def api_save(request: Request) -> JSONResponse:
-    body = await request.json()
-    edl = read_edl()
-    edl["story"] = body.get("story", edl.get("story", ""))
+def clean_segments(raw: list) -> list[dict]:
+    """The segments a save (or an edits undo) is allowed to write: `clip`, `in`,
+    `out` rounded, `act` / `why` when given, `speed` validated, the id kept when it is
+    one. Raises HTTPException(400) with the sentence; nothing is written on one."""
     clean = []
     seen_ids: set[str] = set()
-    for s in body["segments"]:
+    for s in raw:
         seg = {k: s[k] for k in ("clip", "in", "out") if k in s}
         seg["in"] = round(float(seg["in"]), 2)
         seg["out"] = round(float(seg["out"]), 2)
@@ -756,6 +755,15 @@ async def api_save(request: Request) -> JSONResponse:
             seg["id"] = segment_id()
         seen_ids.add(seg["id"])
         clean.append(seg)
+    return clean
+
+
+@app.put("/api/project")
+async def api_save(request: Request) -> JSONResponse:
+    body = await request.json()
+    edl = read_edl()
+    edl["story"] = body.get("story", edl.get("story", ""))
+    clean = clean_segments(body["segments"])
     edl["segments"] = clean
     # Music is the same `effects_music` key assemble.py reads, validated the way a
     # segment is: an asset that is not in the library, or a gain outside range, is a 400
@@ -4046,6 +4054,159 @@ def media_generated(name: str, request: Request) -> Response:
     matters to the monitor). `/media/proxy/` looks in the proxy dir and would not
     find it; `project_payload` points a generated clip's `proxy` here."""
     return ranged_file(generated_dir() / Path(name).name, request)
+
+
+# ---- the ops themselves: preview writes nothing, apply writes once
+
+def _edits_cut() -> tuple[dict, list[dict], dict]:
+    """The cut on disk (with ids) and the clips it can name — footage and generated —
+    for their lengths."""
+    payload = project_payload()
+    edl = read_edl()
+    ensure_segment_ids(edl)
+    return edl, edl.get("segments") or [], payload["clips"]
+
+
+def _edits_shape(res: dict) -> dict:
+    return {k: res[k] for k in ("segments", "id_map", "generated", "changed", "words")}
+
+
+def _rekey_effects(effects: list[dict], before: list[dict], after: list[dict]) -> list[dict]:
+    """Accepted effects follow their events through an edit. A shot that was split
+    leaves its effect on the piece that holds most of its events (the original id on
+    a tie); events that landed in another piece get a copy of the effect keyed to
+    that piece with just those events. An effect whose shot left the cut is dropped —
+    `validate_effect` would refuse the next save otherwise."""
+    before_by_id = {str(s.get("id")): s for s in before}
+    out: list[dict] = []
+    for e in effects:
+        sid = str(e.get("shot"))
+        orig = before_by_id.get(sid)
+        if orig is None:
+            out.append(e)                            # not ours to judge
+            continue
+        pieces = [s for s in after
+                  if s["clip"] == orig["clip"]
+                  and (str(s.get("id")) == sid
+                       or (str(s.get("id")) not in before_by_id
+                           and float(s["in"]) >= float(orig["in"]) - 1e-6
+                           and float(s["out"]) <= float(orig["out"]) + 1e-6))]
+        if not pieces:
+            continue                                 # the shot is gone; so is the effect
+        events = e.get("events") or []
+
+        def held(p: dict) -> list[dict]:
+            return [ev for ev in events if float(p["in"]) <= float(ev["t"]) < float(p["out"])]
+
+        home = max(pieces, key=lambda p: (len(held(p)), str(p.get("id")) == sid, -pieces.index(p)))
+        out.append(e if str(home.get("id")) == sid else {**e, "shot": str(home["id"])})
+        for p in pieces:
+            if p is home:
+                continue
+            evs = held(p)
+            if not evs:
+                continue
+            copy = {k: v for k, v in e.items() if k not in ("verify", "previous", "history")}
+            copy.update({"id": fx.new_id(), "shot": str(p["id"]), "events": evs})
+            out.append(copy)
+    return out
+
+
+def apply_edits(ops) -> dict:
+    """What Accept calls (and `POST /api/edits/apply`): the ops validated against the
+    cut on disk, applied, every `new:n` minted with `segment_id()`, every generated
+    clip materialised, the accepted effects re-keyed to the pieces that hold their
+    events, and the EDL's segments written — once. Raises ValueError with a sentence
+    for a bad op (nothing written). Returns `apply_ops`'s shape with `id_map` filled
+    in, plus `before` (the segments as they were — the board's undo does not cover
+    this write, `POST /api/edits/undo {before}` does), `ops` (the clean list) and,
+    when the effects changed, `before_effects` / `effects`."""
+    edl, segments, clips = _edits_cut()
+    clean = edits.validate_ops(ops, segments, clips)
+    res = edits.apply_ops(segments, clips, clean)
+    before = [dict(s) for s in segments]
+    id_map = {pid: segment_id() for pid in res["id_map"]}
+    for s in res["segments"]:
+        if s["id"] in id_map:
+            s["id"] = id_map[s["id"]]
+    res["changed"] = [id_map.get(c, c) for c in res["changed"]]
+    res["id_map"] = id_map
+    # The files first: an ffmpeg that fails leaves the cut exactly as it was.
+    for g in res["generated"]:
+        try:
+            materialise_generated(g)
+        except RuntimeError as exc:
+            raise ValueError(f"could not make {g['clip']}: {exc}") from exc
+    before_effects = list(edl.get("effects") or [])
+    effects_after = _rekey_effects(before_effects, before, res["segments"])
+    edl["segments"] = res["segments"]
+    if before_effects:
+        edl["effects"] = effects_after
+    if edl.get("selects") is not None or edl.get("floor") is not None:
+        selects.sync_timeline(edl)
+    write_edl(edl)
+    out = _edits_shape(res)
+    out["before"] = before
+    out["ops"] = clean
+    if effects_after != before_effects:
+        out["before_effects"] = before_effects
+        out["effects"] = effects_after
+    return out
+
+
+@app.post("/api/edits/preview")
+async def api_edits_preview(request: Request) -> JSONResponse:
+    """The cut as it would be after the ops — nothing written, no file made, the new
+    shots still `new:n`. A bad op is a 400 with the sentence."""
+    body = await request.json()
+    _, segments, clips = _edits_cut()
+    try:
+        clean = edits.validate_ops(body.get("ops"), segments, clips)
+        res = edits.apply_ops(segments, clips, clean)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    out = _edits_shape(res)
+    out["ops"] = clean
+    return JSONResponse(out)
+
+
+@app.post("/api/edits/apply")
+async def api_edits_apply(request: Request) -> JSONResponse:
+    """`apply_edits` over HTTP: the same shape as preview with the ids minted, the
+    files made and the cut written; `before` is what undo takes back."""
+    body = await request.json()
+    try:
+        out = await asyncio.to_thread(apply_edits, body.get("ops"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return JSONResponse(out)
+
+
+@app.post("/api/edits/undo")
+async def api_edits_undo(request: Request) -> JSONResponse:
+    """The segments back as `apply` reported them in `before`, validated the way a
+    save is. `effects`, when given, are restored the same way (a bad one is a 400);
+    when not, the accepted effects that still name a shot in the restored cut are
+    kept and the rest — copies keyed to shots that no longer exist — are dropped."""
+    body = await request.json()
+    before = body.get("before")
+    if not isinstance(before, list) or not before:
+        raise HTTPException(400, "undo needs `before`: the segments as they were")
+    clean = clean_segments(before)
+    edl = read_edl()
+    edl["segments"] = clean
+    if isinstance(body.get("effects"), list):
+        try:
+            edl["effects"] = [fx.validate_effect(e, clean) for e in body["effects"]]
+        except ValueError as exc:
+            raise HTTPException(400, f"effects: {exc}")
+    elif edl.get("effects"):
+        ids = {str(s["id"]) for s in clean}
+        edl["effects"] = [e for e in edl["effects"] if str(e.get("shot")) in ids]
+    if edl.get("selects") is not None or edl.get("floor") is not None:
+        selects.sync_timeline(edl)
+    write_edl(edl)
+    return JSONResponse({"ok": True, "segments": clean})
 
 
 # ------------------------------------------------------------------------ cuts

@@ -10,6 +10,21 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Preview, apply and undo for the edits (INTAKE M13)** — `POST /api/edits/preview
+  {ops}` is the cut as it would be (`segments`, `id_map`, `generated`, `changed`,
+  `words`) from `edits.validate_ops` + `apply_ops` against the cut on disk, nothing
+  written, no file made, the new shots still `new:n`; a bad op is a 400 with the
+  sentence. `POST /api/edits/apply {ops}` is `apply_edits(ops)` — the module-level
+  function Accept calls — which mints every `new:n` with `segment_id()` (the `id_map`
+  filled in), materialises every generated clip *before* anything is written (an
+  ffmpeg that fails leaves the cut as it was), re-keys the accepted effects whose shot
+  was split to the piece that holds their events (events across two pieces make a
+  copy per extra piece; an effect whose shot left the cut is dropped) and writes the
+  EDL's segments once. **The board's undo does not cover this write**: the response
+  carries `before` (the segments as they were, and `before_effects` when the effects
+  changed) and `POST /api/edits/undo {before, effects?}` restores them, validated the
+  way a save is (the save's segment cleaning is now `clean_segments`, shared).
+  `test_edits_api.py` +8.
 - **Generated clips are real files (INTAKE M13)** — a black slide, a colour or a freeze
   frame the model proposes is made by the server, never by the model:
   `materialise_generated(spec)` writes `gen_<kind>_<key>.mp4` under
