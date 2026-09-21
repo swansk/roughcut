@@ -10,6 +10,17 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Edits foundation (INTAKE M13, I13.0)** — Karl, 2026-09-20: *"the effect tool itself …
+  needs to be able to make changes like this and even broader ones like slow motion or
+  extension or creating new clips."* `roughcut/edits.py` is the closed vocabulary of
+  operations on the cut the model can propose beside an effect — `extend`, `set_range`,
+  `split`, `speed` (a whole shot or a range of it), `generate` (a black, colour or still
+  clip into the cut), `freeze`, `insert`, `remove`, `move` — keyed by shot id in clip
+  seconds, validated against the cut and the clips, and applied by a pure `apply_ops`
+  that returns the new segments (new shots as `new:n`), the generated clips to make and
+  one line per op in words. Two facts the app learns from it: a shot has a `speed`
+  (`dur = (out − in) / speed`) and a generated clip is a real file `gen_<kind>_<key>.mp4`.
+  Nothing writes yet: the server, the render and the board follow in two lanes.
 - **The vocabulary grows where the title slide failed (INTAKE M12, I12.9)** — Karl's
   request *"fade in … this is the title slide … '2026 Blizzard Killington Vt with the
   Boys' in typewriter effect using the sound"* came back as three text shapes on one

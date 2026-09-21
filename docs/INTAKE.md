@@ -961,6 +961,43 @@ HTML proposal with others (incl. online tools / other AI tools, ideally free)."*
       in the prompt.
 - [ ] I12.5 Karl's look — with the window set to where the rocks are, and the tick by ear.
 
+### M13 · The tool changes the cut — slow motion, extension, new clips (Karl, 2026-09-20)
+
+**The ask.** *"I am more concerned about the effect tool itself, it needs to be able to
+make changes like this and even broader ones like slow motion or extension or creating new
+clips etc."* An effect draws over a shot; it cannot lengthen it, slow it, or put a slide in
+front of it. The FX tool becomes the place a change is asked for in words and proposed as
+operations on the cut plus, when wanted, an effect.
+
+**Decisions.**
+1. **Operations, not writes**: `roughcut/edits.py` is a closed vocabulary (extend, set_range,
+   split, speed, generate, freeze, insert, remove, move), validated against the cut,
+   applied by a pure function; the server applies a list on Accept in one write and can
+   undo it; the model never writes ffmpeg, filenames or ids.
+2. **`speed` is a field on a shot**; film time is `(out − in) / speed` everywhere — the
+   timeline, the monitor (`playbackRate`), the render (`setpts` + `atempo`), the sums.
+3. **A generated clip is a real file** (`work/generated/<bin>/gen_<kind>_<key>.mp4`, black /
+   colour / a freeze frame from a proxy), listed among the project's clips with a proxy and
+   a poster, so it plays and cuts like footage. Names are deterministic from the parameters.
+4. **A proposal previews as a ghost** on the timeline (`tlLanes.showGhost`) before Accept.
+5. **What an effect cannot do, an edit can; what neither can, `limits` says.**
+
+- [x] I13.0 **Foundation** (lead): `roughcut/edits.py` — the vocabulary, validation, `apply_ops`,
+      `dur` / `speed_of` / `validate_speed`, `generated_name`.
+- [ ] I13.1 **Server + render** (lane `agent/edits-render`): `speed` through save, generated
+      clips materialised and listed, `POST /api/edits/preview|apply|undo`, `apply_edits()`,
+      assemble.py retimes a part and cuts generated clips; `test_edits*.py`.
+- [ ] I13.2 **The board** (lane `agent/edits-ui`): `tl.dur`, the monitor at the shot's speed,
+      a speed badge and inspector row, generated clips as blocks, `tlLanes.showGhost`;
+      `test_timeline_speed.py`.
+- [ ] I13.3 **The model and the card** (lead): `edits` in the effect vocabulary with examples
+      (slow motion, extension, a typed title on a generated slide), the FX card lists the
+      edits in words with a ghost Preview, Accept applies them and re-keys the effect,
+      `edits_apply` in verify.
+- [ ] I13.4 Live on Killington: the title slide as a generated 2 s black clip before shot 1
+      with the typed title on it; a slow-motion range on a run.
+- [ ] I13.5 Karl's look.
+
 ## Lanes in flight
 
 | lane | branch / worktree | scope | state |
