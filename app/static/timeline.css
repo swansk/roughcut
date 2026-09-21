@@ -79,6 +79,11 @@
                   font-size: 10px; line-height: 14px; font-weight: 600; color: #0b0b0f;
                   background: var(--warn); font-variant-numeric: tabular-nums; vertical-align: 1px; }
 #tl .blk .speed[hidden] { display: none; }
+/* a generated clip — black, a colour, a still — is a slide, not footage: a dashed edge
+   and its kind in place of a clip name */
+#tl .blk.gen { border-style: dashed; border-left-style: solid; }
+#tl .blk.gen .name { font-style: italic; text-transform: lowercase; }
+#tl .tl-xlane[data-lane=ghost] .ghost.gen .name { font-style: italic; }
 /* the inspector's speed row: four chips and a number box, the lit chip the shot's rate */
 #inspector .speedrow { display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
 #inspector .speedrow .slabel { font-size: 11px; letter-spacing: .08em; color: var(--dim);

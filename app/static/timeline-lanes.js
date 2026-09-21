@@ -70,6 +70,8 @@
   const q = (s) => document.querySelector(s);
   const round2 = (x) => Math.round(x * 100) / 100;
   const stemOf = (clip) => String(clip).replace(/\.[^.]+$/, '');
+  const isGen = (clip) => String(clip).startsWith('gen_');
+  const nameOf = (clip) => (isGen(clip) ? ((/^gen_([a-z]+)_/i.exec(String(clip)) || [])[1] || 'generated') : stemOf(clip));
   const spd = (seg) => tl.speedOf(seg);
   /* a clip time inside a shot → film time */
   const toFilm = (seg, t) => tl.filmStart(seg.id) + Math.max(0, Math.min(tl.dur(seg), (t - seg.in) / spd(seg)));
@@ -373,7 +375,7 @@
     const laneH = tl.el.lanes.V1.offsetHeight || 72;
 
     for (const g of ghost.ghosts) {
-      const d = div(`ghost ${g.cls}${g.trimmed ? ' trimmed' : ''}`);
+      const d = div(`ghost ${g.cls}${g.trimmed ? ' trimmed' : ''}${isGen(g.seg.clip) ? ' gen' : ''}`);
       d.dataset.k = g.k;
       const dur = tl.dur(g.seg);
       const s = spd(g.seg);
@@ -381,10 +383,10 @@
       d.style.width = px(Math.max(3, dur * z));
       d.style.setProperty('--hue', tl.hueOf(g.seg.clip));
       d.innerHTML = '<span class="name"></span><span class="dur"></span>';
-      d.querySelector('.name').textContent = stemOf(g.seg.clip);
+      d.querySelector('.name').textContent = nameOf(g.seg.clip);
       d.querySelector('.dur').textContent = `${dur.toFixed(1)}s${s === 1 ? '' : ` · ${round2(s)}×`}`;
       const what = g.cls === 'added' ? 'added' : g.cls === 'moved' ? 'moved' : g.trimmed ? 'trimmed' : 'unchanged';
-      d.title = `proposal ${g.k + 1}. ${stemOf(g.seg.clip)} ${tl.fmt(g.seg.in)}–${tl.fmt(g.seg.out)} (${dur.toFixed(1)}s`
+      d.title = `proposal ${g.k + 1}. ${nameOf(g.seg.clip)} ${tl.fmt(g.seg.in)}–${tl.fmt(g.seg.out)} (${dur.toFixed(1)}s`
         + `${s === 1 ? '' : ` at ${round2(s)}×`}) · ${what}`
         + (g.seg.why ? `\n${g.seg.why}` : '') + '\nclick to play this shot in the monitor';
       lane.appendChild(d);
@@ -447,7 +449,7 @@
     const src = v.dataset.src;
     const what = q('#playingWhat');
     const s = spd(seg);
-    if (what) what.textContent = `proposal · ${stemOf(seg.clip)} ${tl.fmt(seg.in)}–${tl.fmt(seg.out)}${s === 1 ? '' : ` · ${round2(s)}×`}`;
+    if (what) what.textContent = `proposal · ${nameOf(seg.clip)} ${tl.fmt(seg.in)}–${tl.fmt(seg.out)}${s === 1 ? '' : ` · ${round2(s)}×`}`;
     const step = () => {
       if (token !== rangeGen || a.player.playing || v.dataset.src !== src) return;
       tl.setPlayhead(filmFrom + Math.max(0, v.currentTime - seg.in) / s, { reveal: false });

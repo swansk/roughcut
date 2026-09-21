@@ -8,6 +8,8 @@ What the effects tool can now propose (roughcut/edits.py) the board has to honou
     clip time, and reports its film position at the rate;
   * the inspector's speed row writes `seg.speed` as one undo entry and the block wears
     a badge; the save carries it (`tl.forSave()`; the server lane keeps it on disk);
+  * a generated clip (`gen_<kind>_<key>.mp4`, listed with a proxy, a poster and a
+    `summary` line but no sidecar) draws a block that says what it is and plays;
 
 Same fixture pattern as test_timeline_ui.py: the real uvicorn server on a real port, the
 synthetic three-clip bin, the EDL re-seeded per test. Skipped when playwright is absent.
@@ -17,6 +19,7 @@ from __future__ import annotations
 
 import json
 import socket
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -26,6 +29,8 @@ import pytest
 playwright_api = pytest.importorskip("playwright.sync_api",
                                      reason="playwright not installed")
 from playwright.sync_api import sync_playwright  # noqa: E402
+
+GEN = "gen_black_test.mp4"
 
 
 def _free_port() -> int:
@@ -44,6 +49,16 @@ def live_server(project):
                      project["work"], proxies=False,
                      visual=project["work"] / "speed-visual", assets=project["assets"])
     server.ensure_proxies([f"{s}.MP4" for s in project["stems"]])
+    # The generated clip the server lane will make on Accept: a real 2 s black file the
+    # monitor can play and the poster route can frame, served from the proxies dir.
+    gen = Path(server.STATE["proxy_dir"]) / GEN
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-nostdin",
+         "-f", "lavfi", "-i", "color=c=black:size=320x180:rate=24:duration=2",
+         "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono:d=2",
+         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+         "-c:a", "aac", "-shortest", str(gen)],
+        check=True, capture_output=True)
 
     port = _free_port()
     config = uvicorn.Config(server.app, host="127.0.0.1", port=port,
@@ -60,6 +75,7 @@ def live_server(project):
     srv.should_exit = True
     thread.join(timeout=10)
     project["edl"].write_text(original, encoding="utf-8")
+    gen.unlink(missing_ok=True)
 
 
 SEED = [{"clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0, "why": "first", "speed": 0.5},
@@ -311,4 +327,54 @@ def test_the_inspectors_speed_chip_writes_speed_as_one_undo_entry_and_the_save_c
     num.blur()
     page.keyboard.press("Control+d")
     assert page.evaluate("segs.map(s => s.speed || 1)") == [0.5, 0.1, 0.1]
+
+
+# ------------------------------------------------------------------ generated clips
+
+def test_a_generated_clip_draws_a_block_that_says_what_it_is_and_plays(page, project):
+    """A shot on `gen_black_test.mp4`, listed in `P.clips` the way the server lane will
+    list it (proxy, poster, `summary`, `transcript: []`, no candidates or visual): the
+    block wears its kind and the summary line, its poster is the clip's, nothing that
+    reads a clip throws (the library's tabs, the inspector, the warnings), and a click on
+    it plays it in the monitor from the proxy."""
+    page.evaluate(f"""() => {{
+      P.clips['{GEN}'] = {{
+        clip: '{GEN}', stem: 'gen_black_test', duration: 2.0,
+        proxy: '/media/proxy/{GEN}', poster: '/media/poster/gen_black_test.jpg',
+        transcript: [], summary: 'black · 2.0 s', generated: true,
+      }};
+      tl.insert({{clip: '{GEN}', in: 0, out: 2.0, why: 'a slide'}}, null);
+    }}""")
+    assert page.locator("#tl .blk").count() == 3
+    blk = page.locator("#tl .blk.gen")
+    assert blk.count() == 1
+    assert blk.locator(".name").inner_text() == "black"
+    assert blk.locator(".line").inner_text() == "black · 2.0 s"
+    assert blk.locator(".dur").inner_text() == "2.0s"
+    assert blk.locator(".warn:not([hidden])").count() == 0
+    assert blk.locator("img.poster").get_attribute("src") == "/media/poster/gen_black_test.jpg?t=0.00"
+    assert "black · 2.0 s" in blk.get_attribute("title")
+    assert page.locator("#tl .tl-total").inner_text() == "0:08.0"
+    # the poster route frames the generated file like any proxy
+    status = page.evaluate("fetch('/media/poster/gen_black_test.jpg?t=0.00').then(r => r.status)")
+    assert status == 200
+    # nothing that reads a clip assumes a sidecar
+    page.evaluate("libTab = 'heard'; renderLibrary(); libTab = 'kept'; renderLibrary(); libTab = 'heard'; renderLibrary()")
+    assert page.evaluate(f"boundaryWarning(segs[2]) === '' && linesFor(segs[2]).length === 0")
+    assert page.evaluate(f"tl.snapsFor('{GEN}')") == {
+        "clip": GEN, "sentences": [], "words": [], "onsets": [], "duration": 2.0}
+    # the inspector: the summary in place of the transcript lines
+    assert "black · 2.0 s" in page.locator("#inspector .lines:not(.seen)").inner_text()
+    assert page.locator("#inspector .clip").inner_text() == "gen_black_test"
+    # it plays from the proxy like any other shot
+    blk.click()
+    page.wait_for_function("player.playing && player.idx === 2", timeout=10000)
+    page.wait_for_function(f"liveVideo().dataset.src === '/media/proxy/{GEN}'", timeout=10000)
+    page.wait_for_function("liveVideo().currentTime > 0.3", timeout=10000)
+    assert page.evaluate("liveVideo().playbackRate") == 1
+    assert page.evaluate("liveVideo().error") is None
+    page.evaluate("pauseCut()")
+    # the save strips nothing it should not: the shot goes to disk as a shot
+    page.wait_for_function("segs.every(s => s.id && s.id.startsWith('g'))", timeout=8000)
+    assert on_disk(project)[2]["clip"] == GEN
 

@@ -242,10 +242,16 @@ function setRenderBusy(busy) {
   b.title = busy ? 'a render is already running — see the bar above' : '';
 }
 
+/* A generated clip (INTAKE M13: `gen_<kind>_<key>.mp4` — black, a colour, a still the
+ * server made for an edit) is listed among the clips with a proxy and a poster but no
+ * sidecar: `transcript: []`, no candidates, no visual. Everything that reads a clip
+ * guards for that rather than assuming footage. */
+const isGenClip = (clip) => String(clip).startsWith('gen_');
+
 function linesFor(seg) {
   const clip = P.clips[seg.clip];
   if (!clip) return [];
-  return clip.transcript.filter((u) => u.end > seg.in && u.start < seg.out);
+  return (clip.transcript || []).filter((u) => u.end > seg.in && u.start < seg.out);
 }
 
 /* A cut that starts or ends inside somebody's sentence is the defect Karl flagged.
@@ -254,7 +260,7 @@ function linesFor(seg) {
 function boundaryWarning(seg) {
   const clip = P.clips[seg.clip];
   if (!clip) return '';
-  const cutsInto = (t) => clip.transcript.some((u) => u.start + 0.05 < t && t < u.end - 0.05);
+  const cutsInto = (t) => (clip.transcript || []).some((u) => u.start + 0.05 < t && t < u.end - 0.05);
   const bad = [];
   if (cutsInto(seg.in)) bad.push('opens mid-sentence');
   if (cutsInto(seg.out)) bad.push('cuts a line off');
@@ -286,7 +292,8 @@ let posterTimer = 0;
 function posterSrc(seg) {
   if (!posterAt.has(seg)) posterAt.set(seg, seg.in);
   const base = (P.clips[seg.clip] || {}).poster;
-  return base ? `${base}?t=${Math.max(0, posterAt.get(seg)).toFixed(2)}` : '';
+  if (!base) return '';
+  return `${base}${base.includes('?') ? '&' : '?'}t=${Math.max(0, posterAt.get(seg)).toFixed(2)}`;
 }
 
 /* Catch the still up to the in-point, once the trimming stops — the timeline's rule and
@@ -496,9 +503,12 @@ function fillShot(box, seg) {
     why.textContent = seg.why || '';
   }
 
-  const lines = linesFor(seg).map(
-    (u) => `<div><b>${u.start.toFixed(1)}</b> ${escapeHtml(u.text)}</div>`).join('')
-    || '<div>(no speech)</div>';
+  const genClip = isGenClip(seg.clip) ? (P.clips[seg.clip] || {}) : null;
+  const lines = genClip
+    ? `<div>${escapeHtml(typeof genClip.summary === 'string' ? genClip.summary : 'generated clip')}</div>`
+    : linesFor(seg).map(
+      (u) => `<div><b>${u.start.toFixed(1)}</b> ${escapeHtml(u.text)}</div>`).join('')
+      || '<div>(no speech)</div>';
   if (q('.lines:not(.seen)').innerHTML !== lines) q('.lines:not(.seen)').innerHTML = lines;
   // What the visual pass saw inside this shot — the only account of anything nobody said.
   const seen = seenFor(seg).map(
@@ -916,7 +926,8 @@ function liveVideo() { return player.vids[player.cur]; }
  * The shot's `speed` (INTAKE M13) is the buffer's playback rate: set AFTER load(),
  * which resets `playbackRate` to the default, and kept on `dataset.speed` so the JKL
  * shuttle (timeline-keys.js, which rides on `defaultPlaybackRate`) can multiply it
- * rather than overwrite it. */
+ * rather than overwrite it. A generated clip (`gen_…`) is armed like any other: the
+ * server lists it with a proxy. */
 function arm(v, seg) {
   const src = (P.clips[seg.clip] || {}).proxy || '';
   if (v.dataset.src !== src) {
@@ -1316,7 +1327,7 @@ function renderLibrary() {
                     score: HOT.has(m.kind) ? 2 : m.kind === 'scenery' ? 0 : 1 });
       }
     } else if (libTab !== 'seen') {
-      for (const c of clip.candidates) {
+      for (const c of clip.candidates || []) {     // a generated clip has none
         if (used.has(`${clip.clip}@${Math.round(c.t)}`)) continue;
         rows.push({ clip: clip.clip, ...c });
       }

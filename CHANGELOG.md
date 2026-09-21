@@ -10,6 +10,20 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Generated clips on the board (INTAKE M13, I13.4)** — a shot whose clip is
+  `gen_<kind>_<key>.mp4` (a black, a colour or a still the server makes for an edit,
+  listed among the clips with a `proxy`, a `poster` and a `summary` line but no
+  sidecar) draws a block that wears its kind as the name (`black`, `colour`, `still`),
+  the clip's `summary` in place of a transcript line (`black · 2.0 s`, `colour
+  #1a2b3c`, `still of CLIP_08 at 4:31`), a dashed edge, its poster from the clip, and
+  plays in the monitor from its proxy like any other. Nothing that reads a clip assumes
+  a sidecar any more: `linesFor`, `boundaryWarning`, the block's line and warnings, the
+  inspector (the summary where the lines would be), the library's heard tab
+  (`candidates`), the bin and the kept tab, and `tl.snapsFor` (an empty payload with the
+  clip's length rather than a 404 per drag). The ghost lane names a generated shot by
+  its kind too. Test: a black 2 s file in the proxies dir, `P.clips` carrying the
+  server lane's shape — the block, the poster route, every tab, the inspector and the
+  monitor.
 - **A speed badge on the block and a speed row in the inspector (INTAKE M13, I13.3)** —
   a retimed block wears `0.5×` (nothing at 1×, so a plain cut looks as it did) and its
   tooltip says the film length it makes from the clip range; the inspector's header

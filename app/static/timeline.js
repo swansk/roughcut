@@ -16,7 +16,9 @@
  *   `(out − in) / speed` (INTAKE M13: `speed` 0.1–4, absent = 1 — `tl.dur(seg)` is the one
  *   place that arithmetic lives, and every film-time sum here and in the lanes goes
  *   through it; a clip-time comparison — a clamp, a resume check, a boundary — does not).
- *   Ids come from the server (`g` + 10 hex). A shot the board makes
+ *   A shot whose clip is a *generated* one (`gen_<kind>_<key>.mp4` — black, a colour, a
+ *   still the server made for an edit) has no transcript: its block wears the clip's
+ *   `summary` line and its kind as the name. Ids come from the server (`g` + 10 hex). A shot the board makes
  *   before a save gets a temporary `tmp-N` id; the save strips it, the server mints a real
  *   one, and `tl.afterSave()` re-keys the shot — every map in here follows the re-key, and
  *   `tl.byId(oldTmpId)` keeps resolving. Blocks carry `data-id`, never an index.
@@ -180,6 +182,7 @@
   const round2 = (x) => Math.round(x * 100) / 100;
   const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
   const stem = (clip) => String(clip).replace(/\.[^.]+$/, '');
+  const isGen = (clip) => String(clip).startsWith('gen_');
 
   /* The one arithmetic (INTAKE M13, edits.py's `speed_of` / `dur`): a shot's rate, 1
    * when absent or nonsense, and its length in the film at that rate. */
@@ -327,8 +330,26 @@
     return b;
   }
 
-  /* The line a block wears: the first transcript line inside the cut, else the why. */
+  /* A generated clip's kind, from its name: `gen_black_1a2b.mp4` → `black`. */
+  function genKind(clip) {
+    const m = /^gen_([a-z]+)_/i.exec(String(clip));
+    return m ? m[1] : 'generated';
+  }
+
+  /* What a generated clip is, in words — the server's `summary` line for it (`black ·
+   * 2.0 s`, `colour #1a2b3c`, `still of CLIP_08 at 4:31`), else its kind. A footage
+   * clip's `summary` is the sidecar's numbers, never a string, so the type is the test. */
+  function genLine(seg, clip) {
+    const s = clip && clip.summary;
+    if (typeof s === 'string' && s) return s;
+    if (s && typeof s.text === 'string' && s.text) return s.text;
+    return genKind(seg.clip);
+  }
+
+  /* The line a block wears: the first transcript line inside the cut, else the why —
+   * or, for a generated clip, what it is. */
   function strongestLine(seg, clip) {
+    if (isGen(seg.clip)) return genLine(seg, clip);
     const u = clip && (clip.transcript || []).find((x) => x.end > seg.in && x.start < seg.out);
     return (u && u.text) || seg.why || '';
   }
@@ -343,7 +364,9 @@
 
   function posterUrl(seg, t) {
     const clip = clipOf(seg.clip);
-    return clip && clip.poster ? `${clip.poster}?t=${Math.max(0, t).toFixed(2)}` : '';
+    if (!clip || !clip.poster) return '';
+    const sep = clip.poster.includes('?') ? '&' : '?';
+    return `${clip.poster}${sep}t=${Math.max(0, t).toFixed(2)}`;
   }
 
   function setPoster(b, seg) {
@@ -371,6 +394,7 @@
   function updateBlock(b, seg, i, start, live) {
     const filmLen = dur(seg);                // what the block's width and its label are
     const spd = speedOf(seg);
+    const gen = isGen(seg.clip);
     const w = Math.max(3, filmLen * state.zoom);
     b.style.left = `${timeToX(start)}px`;
     b.style.width = `${w}px`;
@@ -380,15 +404,16 @@
     b.classList.toggle('live', i === live);
     b.classList.toggle('narrow', w < 96);
     b.classList.toggle('tiny', w < 36);
+    b.classList.toggle('gen', gen);
     const clip = clipOf(seg.clip);
-    b.querySelector('.name').textContent = stem(seg.clip);
+    b.querySelector('.name').textContent = gen ? genKind(seg.clip) : stem(seg.clip);
     b.querySelector('.dur').textContent = `${filmLen.toFixed(1)}s`;
     // the badge: only when the shot is retimed, so a 1× cut looks the way it always did
     const badge = b.querySelector('.speed');
     badge.hidden = spd === 1;
     badge.textContent = spd === 1 ? '' : `${speedLabel(spd)}×`;
     b.querySelector('.line').textContent = strongestLine(seg, clip);
-    b.title = `${i + 1}. ${stem(seg.clip)} ${fmt(seg.in)}–${fmt(seg.out)}`
+    b.title = `${i + 1}. ${gen ? genLine(seg, clip) : stem(seg.clip)} ${fmt(seg.in)}–${fmt(seg.out)}`
       + (spd === 1 ? ` (${filmLen.toFixed(1)}s)`
                    : ` at ${speedLabel(spd)}× (${filmLen.toFixed(1)}s of film from ${(seg.out - seg.in).toFixed(1)}s)`)
       + (seg.why ? `\n${seg.why}` : '');
@@ -823,6 +848,15 @@
 
   function snapsFor(clip) {
     if (!snapsCache.has(clip)) {
+      if (isGen(clip)) {
+        // A generated clip has no sidecar and nothing to snap to; the server has no
+        // snaps for it either, and a 404 per drag is noise. Its length is the clip's.
+        const c = clipOf(clip);
+        snapsCache.set(clip, Promise.resolve({
+          clip, sentences: [], words: [], onsets: [], duration: (c && c.duration) || 0,
+        }));
+        return snapsCache.get(clip);
+      }
       const p = fetch(`/api/snaps/${encodeURIComponent(clip)}`)
         .then((r) => { if (!r.ok) throw new Error(`snaps ${clip}: ${r.status}`); return r.json(); })
         .catch((err) => { snapsCache.delete(clip); throw err; });
