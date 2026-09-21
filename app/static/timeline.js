@@ -9,10 +9,16 @@
  *
  * ================================ THE API — window.tl ================================
  *
- *   Vocabulary. A *shot* is one entry of the EDL's `segments` — `{id, clip, in, out, why}`,
- *   `in`/`out` in the clip's own seconds (INTAKE decision 5: the only place a range lives).
- *   *Film time* is seconds from the top of the cut; a shot's film start is the sum of the
- *   durations before it. Ids come from the server (`g` + 10 hex). A shot the board makes
+ *   Vocabulary. A *shot* is one entry of the EDL's `segments` — `{id, clip, in, out, why,
+ *   speed?}`, `in`/`out` in the clip's own seconds (INTAKE decision 5: the only place a
+ *   range lives). *Film time* is seconds from the top of the cut; a shot's film start is
+ *   the sum of the durations before it, and a shot's duration in the film is
+ *   `(out − in) / speed` (INTAKE M13: `speed` 0.1–4, absent = 1 — `tl.dur(seg)` is the one
+ *   place that arithmetic lives, and every film-time sum here and in the lanes goes
+ *   through it; a clip-time comparison — a clamp, a resume check, a boundary — does not).
+ *   A shot whose clip is a *generated* one (`gen_<kind>_<key>.mp4` — black, a colour, a
+ *   still the server made for an edit) has no transcript: its block wears the clip's
+ *   `summary` line and its kind as the name. Ids come from the server (`g` + 10 hex). A shot the board makes
  *   before a save gets a temporary `tmp-N` id; the save strips it, the server mints a real
  *   one, and `tl.afterSave()` re-keys the shot — every map in here follows the re-key, and
  *   `tl.byId(oldTmpId)` keeps resolving. Blocks carry `data-id`, never an index.
@@ -43,9 +49,13 @@
  *   tl.byId(id)                 The shot object, or null. Resolves a re-keyed tmp id too.
  *   tl.indexOf(id)              Its index in the cut, or -1.
  *   tl.idAt(i)                  The id at an index, or null.
+ *   tl.dur(seg)                 The shot's length in the film: `(out − in) / (speed || 1)`.
+ *                               Pure — works on a proposal's segment as well as the cut's.
+ *   tl.speedOf(seg)             Its rate, 1 when absent or out of 0.1–4.
  *   tl.filmStart(id)            Film time the shot starts at, or -1.
  *   tl.total()                  The film's length in seconds.
- *   tl.shotAt(filmTime)         `{id, index, clipT}` under a film time (null on an empty cut).
+ *   tl.shotAt(filmTime)         `{id, index, clipT}` under a film time (null on an empty cut);
+ *                               `clipT` is `in + (filmTime − start) × speed`.
  *   tl.timeToX(t) / tl.xToTime(x)   Film time ↔ CANVAS x in px (scroll included — for a
  *                               pointer event, x = e.clientX − view.left + view.scrollLeft;
  *                               `tl.eventTime(e)` does exactly that).
@@ -81,6 +91,11 @@
  *   tl.insert(seg, afterId|null)   Insert `{clip, in, out, why}` after a shot (null =
  *                               append); a missing id becomes a `tmp-` one. Selects it.
  *                               Returns its id.
+ *   tl.setSpeed(id, rate)       The shot's `speed` (0.1–4, rounded to 0.01): one undo
+ *                               entry labelled `speed`; the block, the total and the
+ *                               monitor's rate follow. 1 deletes the key from the
+ *                               segment, so a 1× shot saves the way it always did.
+ *                               Returns true when something changed.
  *
  *   — selection, playhead, view —
  *   tl.select(ids, {add, range, source})   Replace the selection; `add` toggles the ids in
@@ -128,6 +143,7 @@
   const PAD = 12;                  // px of canvas before 0:00
   const PAD_R = 48;                // px after the end: room for the total's label
   const MIN_LEN = 0.2;             // s — the shortest shot, as nudge() clamps
+  const MIN_SPEED = 0.1, MAX_SPEED = 4;    // edits.py's bounds: outside them a speed reads as 1
   const MIN_ZOOM = 0.5, MAX_ZOOM = 4000;   // px per second
   const STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];   // labelled ruler steps, s
   const UNDO_LIMIT = 100;
@@ -166,6 +182,15 @@
   const round2 = (x) => Math.round(x * 100) / 100;
   const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
   const stem = (clip) => String(clip).replace(/\.[^.]+$/, '');
+  const isGen = (clip) => String(clip).startsWith('gen_');
+
+  /* The one arithmetic (INTAKE M13, edits.py's `speed_of` / `dur`): a shot's rate, 1
+   * when absent or nonsense, and its length in the film at that rate. */
+  function speedOf(seg) {
+    const s = Number(seg && seg.speed);
+    return Number.isFinite(s) && s >= MIN_SPEED && s <= MAX_SPEED ? s : 1;
+  }
+  const dur = (seg) => (seg.out - seg.in) / speedOf(seg);
 
   function fmt(t) {
     const m = Math.floor(t / 60), s = t - m * 60;
@@ -228,20 +253,21 @@
     if (i < 0) return -1;
     let t = 0;
     const list = segs();
-    for (let k = 0; k < i; k++) t += list[k].out - list[k].in;
+    for (let k = 0; k < i; k++) t += dur(list[k]);
     return t;
   }
 
-  function total() { return segs().reduce((a, s) => a + (s.out - s.in), 0); }
+  function total() { return segs().reduce((a, s) => a + dur(s), 0); }
 
   function shotAt(t) {
     const list = segs();
     if (!list.length) return null;
     let start = 0;
     for (let i = 0; i < list.length; i++) {
-      const s = list[i], d = s.out - s.in;
+      const s = list[i], d = dur(s);
       if (t < start + d || i === list.length - 1) {
-        return { id: s.id, index: i, clipT: round2(clamp(s.in + (t - start), s.in, s.out)) };
+        return { id: s.id, index: i,
+                 clipT: round2(clamp(s.in + (t - start) * speedOf(s), s.in, s.out)) };
       }
       start += d;
     }
@@ -299,13 +325,32 @@
     b.dataset.id = id;
     b.innerHTML = '<img class="poster" draggable="false" loading="lazy" decoding="async" alt="">'
       + '<div class="txt"><span class="name"></span><span class="dur"></span>'
-      + '<div class="line"></div></div>'
+      + '<span class="speed" hidden></span><div class="line"></div></div>'
       + '<i class="warn in" hidden></i><i class="warn out" hidden></i>';
     return b;
   }
 
-  /* The line a block wears: the first transcript line inside the cut, else the why. */
+  /* A generated clip's kind, from its name: `gen_black_1a2b.mp4` → `black`. */
+  function genKind(clip) {
+    const m = /^gen_([a-z]+)_/i.exec(String(clip));
+    return m ? m[1] : 'generated';
+  }
+
+  /* What a generated clip is, in words — the server's `summary` line for it (`black ·
+   * 2.0 s`, `colour #1a2b3c`, `still of CLIP_08 at 4:31`), else its kind. A footage
+   * clip's `summary` is the sidecar's numbers, never a string, so the type is the test. */
+  function genLine(seg, clip) {
+    const s = clip && clip.summary;
+    if (typeof s === 'string' && s) return s;
+    if (s && typeof s.generated === 'string' && s.generated) return s.generated;   // the server's shape
+    if (s && typeof s.text === 'string' && s.text) return s.text;
+    return genKind(seg.clip);
+  }
+
+  /* The line a block wears: the first transcript line inside the cut, else the why —
+   * or, for a generated clip, what it is. */
   function strongestLine(seg, clip) {
+    if (isGen(seg.clip)) return genLine(seg, clip);
     const u = clip && (clip.transcript || []).find((x) => x.end > seg.in && x.start < seg.out);
     return (u && u.text) || seg.why || '';
   }
@@ -320,7 +365,9 @@
 
   function posterUrl(seg, t) {
     const clip = clipOf(seg.clip);
-    return clip && clip.poster ? `${clip.poster}?t=${Math.max(0, t).toFixed(2)}` : '';
+    if (!clip || !clip.poster) return '';
+    const sep = clip.poster.includes('?') ? '&' : '?';
+    return `${clip.poster}${sep}t=${Math.max(0, t).toFixed(2)}`;
   }
 
   function setPoster(b, seg) {
@@ -346,8 +393,10 @@
   }
 
   function updateBlock(b, seg, i, start, live) {
-    const dur = seg.out - seg.in;
-    const w = Math.max(3, dur * state.zoom);
+    const filmLen = dur(seg);                // what the block's width and its label are
+    const spd = speedOf(seg);
+    const gen = isGen(seg.clip);
+    const w = Math.max(3, filmLen * state.zoom);
     b.style.left = `${timeToX(start)}px`;
     b.style.width = `${w}px`;
     b.style.setProperty('--hue', hueOf(seg.clip));
@@ -356,11 +405,18 @@
     b.classList.toggle('live', i === live);
     b.classList.toggle('narrow', w < 96);
     b.classList.toggle('tiny', w < 36);
+    b.classList.toggle('gen', gen);
     const clip = clipOf(seg.clip);
-    b.querySelector('.name').textContent = stem(seg.clip);
-    b.querySelector('.dur').textContent = `${dur.toFixed(1)}s`;
+    b.querySelector('.name').textContent = gen ? genKind(seg.clip) : stem(seg.clip);
+    b.querySelector('.dur').textContent = `${filmLen.toFixed(1)}s`;
+    // the badge: only when the shot is retimed, so a 1× cut looks the way it always did
+    const badge = b.querySelector('.speed');
+    badge.hidden = spd === 1;
+    badge.textContent = spd === 1 ? '' : `${speedLabel(spd)}×`;
     b.querySelector('.line').textContent = strongestLine(seg, clip);
-    b.title = `${i + 1}. ${stem(seg.clip)} ${fmt(seg.in)}–${fmt(seg.out)} (${dur.toFixed(1)}s)`
+    b.title = `${i + 1}. ${gen ? genLine(seg, clip) : stem(seg.clip)} ${fmt(seg.in)}–${fmt(seg.out)}`
+      + (spd === 1 ? ` (${filmLen.toFixed(1)}s)`
+                   : ` at ${speedLabel(spd)}× (${filmLen.toFixed(1)}s of film from ${(seg.out - seg.in).toFixed(1)}s)`)
       + (seg.why ? `\n${seg.why}` : '');
     const warn = warnEdges(seg, clip);
     const wi = b.querySelector('.warn.in'), wo = b.querySelector('.warn.out');
@@ -429,7 +485,7 @@
       if (lane.children[i] !== b) lane.insertBefore(b, lane.children[i] || null);
       updateBlock(b, seg, i, start, live);
       seen.add(seg.id);
-      start += seg.out - seg.in;
+      start += dur(seg);
     });
     for (const [id, b] of blocks) {
       if (seen.has(id)) continue;
@@ -693,7 +749,8 @@
     if (i < 0) return null;
     const list = segs();
     const seg = list[i];
-    const clipT = round2(seg.in + (Number(atFilmTime) - filmStart(seg.id)));
+    // a film time inside the shot is a clip time at the shot's rate; the two halves keep it
+    const clipT = round2(seg.in + (Number(atFilmTime) - filmStart(seg.id)) * speedOf(seg));
     if (!(clipT >= seg.in + MIN_LEN && clipT <= seg.out - MIN_LEN)) return null;
     return mutate('split', () => {
       const second = { ...seg, id: `tmp-${++tmpN}`, in: clipT };
@@ -729,6 +786,23 @@
       list.splice(at, 0, s);
       select([s.id], { source: 'api' });
       return s.id;
+    });
+  }
+
+  /* `0.5`, `0.25`, `2` — never `0.50`; the chips and the badge read the same. */
+  function speedLabel(s) { return String(round2(s)); }
+
+  function setSpeed(id, rate) {
+    const seg = byId(id);
+    if (!seg) return false;
+    const r = Number(rate);
+    if (!Number.isFinite(r)) return false;
+    const want = round2(clamp(r, MIN_SPEED, MAX_SPEED));
+    if (want === speedOf(seg)) return false;
+    return mutate('speed', () => {
+      if (want === 1) delete seg.speed;      // 1× is the absence of the key, as edits.py reads it
+      else seg.speed = want;
+      return true;
     });
   }
 
@@ -775,6 +849,15 @@
 
   function snapsFor(clip) {
     if (!snapsCache.has(clip)) {
+      if (isGen(clip)) {
+        // A generated clip has no sidecar and nothing to snap to; the server has no
+        // snaps for it either, and a 404 per drag is noise. Its length is the clip's.
+        const c = clipOf(clip);
+        snapsCache.set(clip, Promise.resolve({
+          clip, sentences: [], words: [], onsets: [], duration: (c && c.duration) || 0,
+        }));
+        return snapsCache.get(clip);
+      }
       const p = fetch(`/api/snaps/${encodeURIComponent(clip)}`)
         .then((r) => { if (!r.ok) throw new Error(`snaps ${clip}: ${r.status}`); return r.json(); })
         .catch((err) => { snapsCache.delete(clip); throw err; });
@@ -907,9 +990,9 @@
 
   const tl = {
     state, el, mount, render, on,
-    byId, indexOf, idAt, filmStart, total, shotAt, timeToX, xToTime, eventTime, snapsFor,
+    byId, indexOf, idAt, dur, speedOf, filmStart, total, shotAt, timeToX, xToTime, eventTime, snapsFor,
     begin, commit, cancel, undo, redo,
-    setRange, move, split, remove, insert,
+    setRange, move, split, remove, insert, setSpeed,
     select, syncSel, seek, setPlayhead, zoomTo, fit,
     forSave, needsRekey, afterSave,
     fmt, hueOf,

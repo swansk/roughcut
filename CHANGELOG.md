@@ -10,6 +10,10 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The two lanes meet (INTAKE M13)** — a generated clip's `summary` is the server's object
+  (`summary.generated` is the sentence); the block and the inspector read either shape.
+  The FX card clears the ghost on Accept and Discard, and after an Accept that changed
+  the cut it reloads the board so the timeline reads the new shots.
 - **A generated slide's name is the renderer's, not the model's (INTAKE M13)** — live on
   Killington the model copied the example's placeholder clip name for the slide it
   generated and validation refused it against the real `gen_black_<key>.mp4`; for a
@@ -81,6 +85,72 @@ same commit. Releases move entries into a dated version section.
   (`/api/render`'s `planned_s`, the shot list a render records) uses `edits.dur`, so
   a 2 s range at 0.5× plans as 4 s of film. `test_edits.py` covers the pure module —
   every op, every refusal, the words; `test_edits_api.py` the save and the plan.
+- **`tlLanes.showGhost(segments)` / `tlLanes.clearGhost()` (INTAKE M13, I13.5)** — a
+  public way to draw a proposed cut on the ghost lane: the same drawing the Ask's pending
+  plan gets (`matchPlan` — unchanged shots dim, added green, moved with an arrow,
+  removed struck out on V1), fed an explicit segments list. An id `new:n` is a shot the
+  edit would make and is drawn as added whatever footage it takes (never matched to a
+  shot of the cut by overlap); a segment's `speed` sets its ghost's width and shows
+  beside its length; a generated clip is named by its kind. `playPlan` plays it, each
+  shot at its rate. While an explicit list is up it wins over a pending Ask's plan;
+  `clearGhost()` takes it down and returns whether there was one; `tlLanes.shown()`
+  reads it. The lead's FX card calls this to preview an edit before Accept. Test: a
+  list with a kept shot and a `new:1` at 2× — the classes, the positions, the strike,
+  `playPlan`, a generated slide in the list, and `clearGhost`.
+- **Generated clips on the board (INTAKE M13, I13.4)** — a shot whose clip is
+  `gen_<kind>_<key>.mp4` (a black, a colour or a still the server makes for an edit,
+  listed among the clips with a `proxy`, a `poster` and a `summary` line but no
+  sidecar) draws a block that wears its kind as the name (`black`, `colour`, `still`),
+  the clip's `summary` in place of a transcript line (`black · 2.0 s`, `colour
+  #1a2b3c`, `still of CLIP_08 at 4:31`), a dashed edge, its poster from the clip, and
+  plays in the monitor from its proxy like any other. Nothing that reads a clip assumes
+  a sidecar any more: `linesFor`, `boundaryWarning`, the block's line and warnings, the
+  inspector (the summary where the lines would be), the library's heard tab
+  (`candidates`), the bin and the kept tab, and `tl.snapsFor` (an empty payload with the
+  clip's length rather than a 404 per drag). The ghost lane names a generated shot by
+  its kind too. Test: a black 2 s file in the proxies dir, `P.clips` carrying the
+  server lane's shape — the block, the poster route, every tab, the inspector and the
+  monitor.
+- **A speed badge on the block and a speed row in the inspector (INTAKE M13, I13.3)** —
+  a retimed block wears `0.5×` (nothing at 1×, so a plain cut looks as it did) and its
+  tooltip says the film length it makes from the clip range; the inspector's header
+  says `4.0 s at 0.5×`. Under the transcript lines a speed row: chips `¼× ½× 1× 2×` and
+  a number box (0.1–4), the lit chip the shot's rate, a line saying what the range
+  becomes in the film. They write through the new `tl.setSpeed(id, rate)` — one undo
+  entry labelled `speed`, clamped to edits.py's bounds, rounded to 0.01, and 1 deletes
+  the key from the segment so a 1× shot saves the way it always did; the block, the
+  total and the monitor's rate follow. The box commits on change (a half-typed `0.`
+  never retimes a shot) and shows the clamped value; a duplicate (⌘D) keeps its rate.
+  Test: the chip writes `speed`, `#total` and the badge follow, undo / redo walk it,
+  `tl.forSave()` carries it and the page keeps it through the autosave.
+- **The monitor plays a shot at its speed (INTAKE M13, I13.2)** — `arm()` and the
+  `play()` calls in `playFrom` / `advance` set the buffer's `playbackRate` to the shot's
+  `speed` (after `load()`, which resets it) and keep it on `dataset.speed`; the JKL
+  shuttle rides on `defaultPlaybackRate` and multiplies the shot's rate rather than
+  overwriting it (a 0.5× shot under L twice plays at 1), and it reads its own rate from
+  `defaultPlaybackRate`, not the composite. `boundary()` still ends the shot at `out` in
+  clip time; a speed changed under a playing shot reaches the buffer through
+  `syncPlayer`. The frame callbacks in grade.js and fx.js read clip time and are
+  untouched. Test: `playbackRate` is 0.5 through the slow shot, the hand-over comes at
+  the clip's out (4 s of film), the next shot plays at 1, L L reads 2 on the default
+  and 1 on the buffer.
+- **A shot's speed is film time on the board (INTAKE M13, I13.1)** — edits.py says a shot
+  has a `speed` and its length in the film is `(out − in) / speed`; the board summed
+  `out − in` in forty-one places. `tl.dur(seg)` (and `tl.speedOf`) on the foundation is
+  now the one place that arithmetic lives, and every film-time site goes through it:
+  `filmStart`, `total`, `shotAt` (whose `clipT` is `in + (t − start) × speed`), the
+  block widths and labels, the ruler's extent, `split` at a film time, the lanes' sums
+  (`matchPlan`, `slotAt`, the duck regions, the bin's outlines, the markers and events
+  mapped at the rate), the keys' cut-walking, razor and Q/W, the reverse shuttle's
+  clip-time drive, and the trims — a drag's travel is film seconds applied to the edge
+  at the shot's rate, a roll's delta lands on each side at that side's rate so the
+  film's length holds, and the magnet measures its reach in pixels of film. The monitor
+  reports its film position at the rate (`filmAt`). Of the forty-one `.out - ` sites,
+  twenty-six were film time and use `tl.dur`; fifteen are clip time (clamps, the resume
+  and boundary checks, the trim tooltips, the trimmed / this-cut comparisons) and stay.
+  `speed` rides the segment through `tl.forSave()` and `afterSave` (the server lane
+  keeps it on disk). `test_timeline_speed.py`: a 2 s shot at 0.5× is 4 s on the ruler
+  and in `#total`; the lanes, the keys and a handle drag all move at the rate.
 - **Edits foundation (INTAKE M13, I13.0)** — Karl, 2026-09-20: *"the effect tool itself …
   needs to be able to make changes like this and even broader ones like slow motion or
   extension or creating new clips."* `roughcut/edits.py` is the closed vocabulary of

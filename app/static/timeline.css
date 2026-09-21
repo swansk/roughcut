@@ -73,6 +73,26 @@
 #tl .blk .warn.out { right: 0; border-width: 0 9px 9px 0;
                      border-color: transparent var(--warn) transparent transparent; }
 #tl .blk .warn[hidden] { display: none; }
+/* ---- speed and generated clips (INTAKE M13) */
+/* the badge: the shot's rate, only when it is not 1× — a plain cut looks as it did */
+#tl .blk .speed { display: inline-block; margin-left: 6px; padding: 0 4px; border-radius: 3px;
+                  font-size: 10px; line-height: 14px; font-weight: 600; color: #0b0b0f;
+                  background: var(--warn); font-variant-numeric: tabular-nums; vertical-align: 1px; }
+#tl .blk .speed[hidden] { display: none; }
+/* a generated clip — black, a colour, a still — is a slide, not footage: a dashed edge
+   and its kind in place of a clip name */
+#tl .blk.gen { border-style: dashed; border-left-style: solid; }
+#tl .blk.gen .name { font-style: italic; text-transform: lowercase; }
+#tl .tl-xlane[data-lane=ghost] .ghost.gen .name { font-style: italic; }
+/* the inspector's speed row: four chips and a number box, the lit chip the shot's rate */
+#inspector .speedrow { display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+#inspector .speedrow .slabel { font-size: 11px; letter-spacing: .08em; color: var(--dim);
+                               text-transform: uppercase; min-width: 44px; }
+#inspector .speedrow button { padding: 3px 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
+#inspector .speedrow button.on { color: var(--text); border-color: var(--warn); background: #26222a; }
+#inspector .speedrow .speedNum { width: 62px; padding: 3px 6px; font-size: 12px;
+                                 font-variant-numeric: tabular-nums; }
+#inspector .speedrow .sfilm { font-size: 12px; }
 
 /* the playhead: one line across the ruler and every lane, at its film time */
 #tl .tl-head { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px;

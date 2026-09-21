@@ -64,7 +64,10 @@ function touch() {
 
 function undo() { tl.undo(); }
 
-function total() { return segs.reduce((a, s) => a + (s.out - s.in), 0); }
+/* Film time is the timeline's arithmetic (INTAKE M13): a shot's length in the film is
+ * `(out − in) / speed`, and `tl.dur` is the one place that lives. */
+function total() { return segs.reduce((a, s) => a + tl.dur(s), 0); }
+const speedOf = (seg) => tl.speedOf(seg);
 
 /* ------------------------------------------------------------ the top bar
  *
@@ -239,10 +242,16 @@ function setRenderBusy(busy) {
   b.title = busy ? 'a render is already running — see the bar above' : '';
 }
 
+/* A generated clip (INTAKE M13: `gen_<kind>_<key>.mp4` — black, a colour, a still the
+ * server made for an edit) is listed among the clips with a proxy and a poster but no
+ * sidecar: `transcript: []`, no candidates, no visual. Everything that reads a clip
+ * guards for that rather than assuming footage. */
+const isGenClip = (clip) => String(clip).startsWith('gen_');
+
 function linesFor(seg) {
   const clip = P.clips[seg.clip];
   if (!clip) return [];
-  return clip.transcript.filter((u) => u.end > seg.in && u.start < seg.out);
+  return (clip.transcript || []).filter((u) => u.end > seg.in && u.start < seg.out);
 }
 
 /* A cut that starts or ends inside somebody's sentence is the defect Karl flagged.
@@ -251,7 +260,7 @@ function linesFor(seg) {
 function boundaryWarning(seg) {
   const clip = P.clips[seg.clip];
   if (!clip) return '';
-  const cutsInto = (t) => clip.transcript.some((u) => u.start + 0.05 < t && t < u.end - 0.05);
+  const cutsInto = (t) => (clip.transcript || []).some((u) => u.start + 0.05 < t && t < u.end - 0.05);
   const bad = [];
   if (cutsInto(seg.in)) bad.push('opens mid-sentence');
   if (cutsInto(seg.out)) bad.push('cuts a line off');
@@ -283,7 +292,8 @@ let posterTimer = 0;
 function posterSrc(seg) {
   if (!posterAt.has(seg)) posterAt.set(seg, seg.in);
   const base = (P.clips[seg.clip] || {}).poster;
-  return base ? `${base}?t=${Math.max(0, posterAt.get(seg)).toFixed(2)}` : '';
+  if (!base) return '';
+  return `${base}${base.includes('?') ? '&' : '?'}t=${Math.max(0, posterAt.get(seg)).toFixed(2)}`;
 }
 
 /* Catch the still up to the in-point, once the trimming stops — the timeline's rule and
@@ -349,6 +359,15 @@ function buildShot(seg) {
       <div class="lines"></div>
       <div class="lines seen" hidden></div>
       <div class="polish hint" hidden></div>
+      <div class="speedrow" title="the shot's speed — its clip range plays at this rate; the film gets (out − in) ÷ speed of it">
+        <span class="slabel">speed</span>
+        <button data-act="speed" data-speed="0.25" title="quarter speed">¼×</button>
+        <button data-act="speed" data-speed="0.5" title="half speed — slow motion">½×</button>
+        <button data-act="speed" data-speed="1" title="as shot">1×</button>
+        <button data-act="speed" data-speed="2" title="double speed">2×</button>
+        <input type="number" class="speedNum" min="0.1" max="4" step="0.05" title="any rate from 0.1 to 4">
+        <span class="sfilm hint"></span>
+      </div>
       <div class="trim">
         <span>in</span>
         <button data-act="in" data-d="-0.25" title="in-point 0.25 s earlier (⇧ 1 s)">−</button>
@@ -412,8 +431,32 @@ function buildShot(seg) {
   el.querySelector('.shotNote').addEventListener('input', (ev) => {
     shotAskDraft.set(seg, ev.target.value);
   });
+  // The number box: one entry per committed value (change, not input — a half-typed
+  // "0." must not retime the shot). The chips are the click handler's, by data-act.
+  el.querySelector('.speedNum').addEventListener('change', (ev) => {
+    const v = parseFloat(ev.target.value);
+    const cur = inspected() || seg;
+    if (Number.isFinite(v)) tl.setSpeed(cur.id, v);
+    // the value is committed: the box shows what stuck (clamped to 0.1–4, or unchanged)
+    fillSpeed(el, tl.byId(cur.id) || cur, true);
+  });
   bindColour(el, seg);
   return el;
+}
+
+/* The speed row: the chip that matches lit, the box carrying the rate, and what that
+ * makes of the shot in the film when it is not 1×. The box is left alone while it is
+ * being typed in, unless `force` — the change handler, after the value is committed. */
+function fillSpeed(box, seg, force = false) {
+  const spd = speedOf(seg);
+  box.querySelectorAll('.speedrow button[data-speed]').forEach((b) => {
+    b.classList.toggle('on', parseFloat(b.dataset.speed) === spd);
+  });
+  const num = box.querySelector('.speedNum');
+  if (force || document.activeElement !== num) num.value = String(spd);
+  const film = box.querySelector('.sfilm');
+  film.textContent = spd === 1 ? ''
+    : `${(seg.out - seg.in).toFixed(1)} s of clip → ${tl.dur(seg).toFixed(1)} s of film`;
 }
 
 function buildMulti() {
@@ -441,7 +484,10 @@ function fillShot(box, seg) {
   const times = q('.times');
   times.textContent = `${fmt(seg.in)} → ${fmt(seg.out)}`;
   times.title = `${seg.in.toFixed(2)} → ${seg.out.toFixed(2)} s of ${seg.clip}`;
-  q('.dur').textContent = `${(seg.out - seg.in).toFixed(1)} s`;
+  // the length in the film; a retimed shot says the rate beside it
+  const spd = speedOf(seg);
+  q('.dur').textContent = `${tl.dur(seg).toFixed(1)} s${spd === 1 ? '' : ` at ${spd}×`}`;
+  fillSpeed(box, seg);
   const warn = boundaryWarning(seg);
   q('.warn').textContent = warn ? `⚠ ${warn}` : '';
   q('.warn').hidden = !warn;
@@ -457,9 +503,13 @@ function fillShot(box, seg) {
     why.textContent = seg.why || '';
   }
 
-  const lines = linesFor(seg).map(
-    (u) => `<div><b>${u.start.toFixed(1)}</b> ${escapeHtml(u.text)}</div>`).join('')
-    || '<div>(no speech)</div>';
+  const genClip = isGenClip(seg.clip) ? (P.clips[seg.clip] || {}) : null;
+  const lines = genClip
+    ? `<div>${escapeHtml(typeof genClip.summary === 'string' ? genClip.summary
+        : (genClip.summary && genClip.summary.generated) || 'generated clip')}</div>`
+    : linesFor(seg).map(
+      (u) => `<div><b>${u.start.toFixed(1)}</b> ${escapeHtml(u.text)}</div>`).join('')
+      || '<div>(no speech)</div>';
   if (q('.lines:not(.seen)').innerHTML !== lines) q('.lines:not(.seen)').innerHTML = lines;
   // What the visual pass saw inside this shot — the only account of anything nobody said.
   const seen = seenFor(seg).map(
@@ -524,7 +574,7 @@ function renderInspector() {
       : buildShot(seg));
   }
   if (want === 'multi') {
-    const d = selIds.reduce((a, id) => { const s = tl.byId(id); return a + (s ? s.out - s.in : 0); }, 0);
+    const d = selIds.reduce((a, id) => { const s = tl.byId(id); return a + (s ? tl.dur(s) : 0); }, 0);
     box.querySelector('.count').textContent = `${selIds.length} shots selected · ${d.toFixed(1)} s`;
   } else if (want === 'none') {
     const [lo, hi] = P.target;
@@ -564,6 +614,12 @@ function onInspectorClick(e) {
     const note = $('#inspector .shotNote').value.trim();
     if (!note) return toast('say what should change in this shot');
     ask({ note, focus: i, button: b, state: $('#inspector .shotState') });
+    return;
+  }
+  if (act === 'speed') {
+    // one undo entry labelled `speed`; 1× deletes the key (tl.setSpeed); the block,
+    // the total and the monitor's rate follow through the timeline's render
+    tl.setSpeed(seg.id, parseFloat(b.dataset.speed));
     return;
   }
   if (act && act.startsWith('c') && onColourAct(act, seg)) return;
@@ -840,8 +896,15 @@ const stem = (clip) => String(clip).replace(/\.[^.]+$/, '');
 
 function filmStart(i) {
   let t = 0;
-  for (let k = 0; k < i && k < segs.length; k++) t += segs[k].out - segs[k].in;
+  for (let k = 0; k < i && k < segs.length; k++) t += tl.dur(segs[k]);
   return t;
+}
+
+/* Where a clip time inside shot i sits in the film: its offset from the in-point at
+ * the shot's rate — the transport's position and the playhead both read this. */
+function filmAt(i, clipT) {
+  const seg = segs[i];
+  return filmStart(i) + Math.max(0, clipT - seg.in) / speedOf(seg);
 }
 
 function liveVideo() { return player.vids[player.cur]; }
@@ -859,7 +922,13 @@ function liveVideo() { return player.vids[player.cur]; }
  * `dataset.src` stays the bare proxy URL — it is how the rest of the monitor asks
  * "which clip is this buffer holding", and a fragment in it would make every check
  * miss. Re-arming the same clip at a different in-point is the seek below, not a
- * reload: the file is already open. */
+ * reload: the file is already open.
+ *
+ * The shot's `speed` (INTAKE M13) is the buffer's playback rate: set AFTER load(),
+ * which resets `playbackRate` to the default, and kept on `dataset.speed` so the JKL
+ * shuttle (timeline-keys.js, which rides on `defaultPlaybackRate`) can multiply it
+ * rather than overwrite it. A generated clip (`gen_…`) is armed like any other: the
+ * server lists it with a proxy. */
 function arm(v, seg) {
   const src = (P.clips[seg.clip] || {}).proxy || '';
   if (v.dataset.src !== src) {
@@ -867,11 +936,20 @@ function arm(v, seg) {
     v.src = src ? `${src}#t=${Math.max(0, seg.in).toFixed(2)}` : src;
     v.load();
   }
+  setShotRate(v, seg);
   // Deferred, so by the time metadata arrives this buffer may have been pointed at a
   // different clip; parking the old shot would then seek the new one.
   const park = () => { if (v.dataset.src === src) v.currentTime = seg.in; };
   if (v.readyState >= 1) park();
   else v.addEventListener('loadedmetadata', park, { once: true });
+}
+
+/* The buffer plays its shot at the shot's rate times the shuttle's (1 unless J/L is
+ * held). Applied at arm and again right before play(): a load() in between resets it. */
+function setShotRate(v, seg) {
+  const spd = speedOf(seg);
+  v.dataset.speed = String(spd);
+  v.playbackRate = (v.defaultPlaybackRate || 1) * spd;
 }
 
 function showLive() {
@@ -968,12 +1046,13 @@ function playFrom(i, { single = false } = {}) {
   const go = () => {
     if (g !== player.gen || !player.playing) return;   // pause, or a later command, won
     if (!resume) v.currentTime = seg.in;
+    setShotRate(v, seg);
     v.play().catch((err) => { if (g === player.gen) playRefused(err); });
   };
   player.playing = true;            // before go(), which refuses to start a paused monitor
   screenMsg(v.readyState >= 2 ? '' : `opening ${stem(seg.clip)}…`);
   if (v.readyState >= 1) go(); else v.addEventListener('loadedmetadata', go, { once: true });
-  const filmT = filmStart(i) + (resume ? Math.max(0, v.currentTime - seg.in) : 0);
+  const filmT = resume ? filmAt(i, v.currentTime) : filmStart(i);
   cueBed(filmT);
   tl.setPlayhead(filmT);            // the playhead jumps with the click, not on the first tick
   schedule();
@@ -999,7 +1078,7 @@ function cueAt(i, clipT) {
   if (v.readyState >= 1) park(); else v.addEventListener('loadedmetadata', park, { once: true });
   if (segs[i + 1]) arm(player.vids[1 - player.cur], segs[i + 1]);
   showLive();
-  paintPos(filmStart(i) + Math.max(0, at - seg.in), at, seg);
+  paintPos(filmAt(i, at), at, seg);
   paintTransport();
   tl.render();
 }
@@ -1019,13 +1098,15 @@ function toggleCut() {
   playFrom(sel);
 }
 
-/* True when the shot under the playhead ended and the monitor moved on or stopped. */
+/* True when the shot under the playhead ended and the monitor moved on or stopped. The
+ * shot ends at its `out` in CLIP time whatever its speed; the film position it reports
+ * is the clip offset at the rate. */
 function boundary() {
   const v = liveVideo();
   const seg = segs[player.idx];
   if (!seg) { pauseCut(); return true; }
   const clipT = v.currentTime;
-  const filmT = filmStart(player.idx) + Math.max(0, clipT - seg.in);
+  const filmT = filmAt(player.idx, clipT);
   paintPos(filmT, clipT, seg);
   bedTick(filmT, clipT, seg);
   if (clipT >= seg.out - 0.04 || v.ended) { advance(); return true; }
@@ -1063,6 +1144,7 @@ function advance() {
   const go = () => {
     if (g !== player.gen || !player.playing) return;
     nv.currentTime = segs[next].in;
+    setShotRate(nv, segs[next]);
     nv.play().catch((err) => { if (g === player.gen) playRefused(err); });
   };
   screenMsg(nv.readyState >= 2 ? '' : `opening ${stem(segs[next].clip)}…`);
@@ -1084,6 +1166,8 @@ function syncPlayer() {
     const src = (P.clips[seg.clip] || {}).proxy || '';
     if (v.dataset.src !== src || v.currentTime < seg.in - 0.5 || v.currentTime > seg.out + 0.5) {
       playFrom(player.idx, { single: player.single });
+    } else if (v.dataset.speed !== String(speedOf(seg))) {
+      setShotRate(v, seg);          // the shot's speed changed under the monitor mid-play
     }
   }
   tl.render();
@@ -1244,7 +1328,7 @@ function renderLibrary() {
                     score: HOT.has(m.kind) ? 2 : m.kind === 'scenery' ? 0 : 1 });
       }
     } else if (libTab !== 'seen') {
-      for (const c of clip.candidates) {
+      for (const c of clip.candidates || []) {     // a generated clip has none
         if (used.has(`${clip.clip}@${Math.round(c.t)}`)) continue;
         rows.push({ clip: clip.clip, ...c });
       }
@@ -1722,8 +1806,7 @@ function cueBed(filmT) {
   if (el.dataset.src !== t.url) { el.dataset.src = t.url; el.src = t.url; el.load(); }
   if (filmT === undefined) {
     if (!player.playing || player.idx < 0) return;
-    const seg = segs[player.idx];
-    filmT = filmStart(player.idx) + Math.max(0, liveVideo().currentTime - seg.in);
+    filmT = filmAt(player.idx, liveVideo().currentTime);
   }
   const seek = () => { el.currentTime = t.duration_s ? filmT % t.duration_s : 0; };
   if (el.readyState >= 1) seek(); else el.addEventListener('loadedmetadata', seek, { once: true });
@@ -1943,7 +2026,7 @@ function showProposal(plan) {
     `<div style="color:var(--bad)">− ${escapeHtml(b)}</div>`));
 
   const oldTotal = total();
-  const newTotal = plan.segments.reduce((a, s) => a + (s.out - s.in), 0);
+  const newTotal = plan.segments.reduce((a, s) => a + tl.dur(s), 0);
   // A shot-scoped proposal says which shot it is about — the rest of the diff is
   // the untouched film, and without this line it reads as a whole-cut revision.
   const scope = plan.focus
@@ -1956,7 +2039,7 @@ function showProposal(plan) {
   const detail = plan.segments.map((s, i) => `<div style="padding:4px 0">
     <span class="hint">${String(i + 1).padStart(2, '0')} ${escapeHtml(
       s.clip.replace('.MP4', ''))} ${fmt(s.in)}–${fmt(s.out)}
-    (${(s.out - s.in).toFixed(1)}s)</span><br>${escapeHtml(s.why || '')}${
+    (${tl.dur(s).toFixed(1)}s${speedOf(s) === 1 ? '' : ` at ${speedOf(s)}×`})</span><br>${escapeHtml(s.why || '')}${
     s.polished_from ? `<br><span class="hint">↳ polished from ${
       s.polished_from[0].toFixed(2)}–${s.polished_from[1].toFixed(2)}: ${
       escapeHtml(s.polish_why || '')}</span>` : ''}</div>`).join('');

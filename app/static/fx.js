@@ -247,10 +247,18 @@
         await pollJobs();
       } else if (name === 'accept') {
         await api('POST', '/api/fx/accept', { id: e.id });
+        if (window.tlLanes && typeof tlLanes.clearGhost === 'function') tlLanes.clearGhost();
+        if (Array.isArray(e.edits) && e.edits.length && typeof location !== 'undefined') {
+          // the cut changed under the board: reload it so the timeline reads the new shots
+          say(`${e.name}: the cut changed — reloading`);
+          setTimeout(() => location.reload(), 600);
+          return;
+        }
         say(`${e.name}: accepted — in the cut`);
         await refresh();
       } else if (name === 'discard') {
         await api('POST', '/api/fx/discard', { id: e.id });
+        if (window.tlLanes && typeof tlLanes.clearGhost === 'function') tlLanes.clearGhost();
         say(`${e.name}: discarded`);
         await refresh();
       } else if (name === 'remove') {

@@ -18,6 +18,16 @@
  *             moved ones with an arrow from where they are now, removed ones struck out on
  *             V1. Click a ghost → the monitor plays that range; `play proposal` / `play
  *             cut` at the lane's left. Accept and discard stay the panel's buttons.
+ *             The same drawing on request (INTAKE M13): `tlLanes.showGhost(segments)`
+ *             draws an explicit list as the ghost — the FX card's preview of an edit
+ *             before Accept — and `tlLanes.clearGhost()` takes it down. A segment whose
+ *             id is `new:n` (a shot the edit would make) or whose clip is not in the cut
+ *             is drawn as added; `playPlan` plays it, at each shot's `speed`. While an
+ *             explicit list is up it wins over a pending Ask's plan.
+ *
+ * Film time everywhere here is `tl.dur(seg)` — `(out − in) / speed` — never `out − in`,
+ * which is a clip length (INTAKE M13). A clip offset inside a shot (a keep's start, a
+ * speech region's edge, an event) maps to film as `(t − in) / speed`.
  *   A1        the music bed: the track's name, a bar the length of the film, the fades as
  *             ramps, a dip under every speech region in the cut (the same `speechRegions`
  *             the monitor ducks by) and the monitor's own `bedGainAt` curve on top. It
@@ -62,10 +72,17 @@
   let mode = 'cut';                    // the ghost lane's toggle
   let seen = {};                       // what the poll last saw
   let ghost = null;                    // the matched proposal, while one is pending
+  let shown = null;                    // an explicit plan from showGhost(), while one is up
+  let shownGen = 0;                    // bumps per showGhost / clearGhost, for the poll
 
   const q = (s) => document.querySelector(s);
   const round2 = (x) => Math.round(x * 100) / 100;
   const stemOf = (clip) => String(clip).replace(/\.[^.]+$/, '');
+  const isGen = (clip) => String(clip).startsWith('gen_');
+  const nameOf = (clip) => (isGen(clip) ? ((/^gen_([a-z]+)_/i.exec(String(clip)) || [])[1] || 'generated') : stemOf(clip));
+  const spd = (seg) => tl.speedOf(seg);
+  /* a clip time inside a shot → film time */
+  const toFilm = (seg, t) => tl.filmStart(seg.id) + Math.max(0, Math.min(tl.dur(seg), (t - seg.in) / spd(seg)));
   const overlap = (a, b) => {
     const shorter = Math.max(1e-6, Math.min(a[1] - a[0], b[1] - b[0]));
     return Math.max(0, Math.min(a[1], b[1]) - Math.max(a[0], b[0])) / shorter;
@@ -120,7 +137,7 @@
   const snapshot = (a) => ({
     bin: a.bin, music: a.music, plan: a.pendingPlan, zoom: tl.state.zoom, total: tl.total(),
     up: q('#proposal') ? q('#proposal').style.display : '',
-    n: tl.state.segs.length,
+    n: tl.state.segs.length, shown: shownGen,
   });
 
   function poll() {
@@ -143,7 +160,7 @@
       if (i < 0) { avail.push(k); continue; }
       if (!k.hero) continue;
       const seg = list[i];
-      const at = tl.filmStart(seg.id) + Math.max(0, Math.min(seg.out - seg.in, k.start - seg.in));
+      const at = toFilm(seg, k.start);
       marks.push({ cls: 'mk hero', t: at, text: '★',
         title: `★ hero · ${stemOf(k.clip)} ${tl.fmt(k.start)}–${tl.fmt(k.end)}` + (k.why ? `\n${k.why}` : '') });
     }
@@ -152,12 +169,12 @@
       if (e.notable === false || e.kind === 'junk') return;
       let start = 0;
       for (const seg of list) {
-        const dur = seg.out - seg.in;
         if (seg.clip === e.clip && e.end > seg.in && e.start < seg.out) {
-          marks.push({ cls: 'mk ev', kind: e.kind || 'seen', t: start + Math.max(e.start, seg.in) - seg.in,
+          marks.push({ cls: 'mk ev', kind: e.kind || 'seen',
+            t: start + (Math.max(e.start, seg.in) - seg.in) / spd(seg),
             title: `${e.what || e.kind || 'event'} · #${e.rank || n + 1}` });
         }
-        start += dur;
+        start += tl.dur(seg);
       }
     });
 
@@ -177,7 +194,7 @@
     el.bin.replaceChildren(el.bin.lbl);
     const lastEnd = new Map();
     let start = 0;
-    for (const seg of list) { start += seg.out - seg.in; lastEnd.set(seg.clip, start); }
+    for (const seg of list) { start += tl.dur(seg); lastEnd.set(seg.clip, start); }
     const cursor = new Map();
     for (const k of avail) {
       const anchor = lastEnd.has(k.clip) ? lastEnd.get(k.clip) : tot;
@@ -224,17 +241,18 @@
       const depth = 1 - Math.pow(10, -(m.duck_db || 0) / 20);
       let start = 0;
       for (const seg of list) {
+        const s = spd(seg);
         for (const [lo, hi] of speechRegions(seg.clip)) {
           const a0 = Math.max(lo, seg.in), b0 = Math.min(hi, seg.out);
           if (b0 <= a0) continue;
           const d = div('duck');
-          d.style.left = px(tl.timeToX(start + a0 - seg.in));
-          d.style.width = px((b0 - a0) * z);
+          d.style.left = px(tl.timeToX(start + (a0 - seg.in) / s));
+          d.style.width = px((b0 - a0) / s * z);
           d.style.height = `${(depth * 100).toFixed(1)}%`;
           d.title = `duck −${m.duck_db} dB · ${stemOf(seg.clip)} ${tl.fmt(a0)}–${tl.fmt(b0)}`;
           lane.appendChild(d);
         }
-        start += seg.out - seg.in;
+        start += tl.dur(seg);
       }
     }
 
@@ -283,10 +301,31 @@
 
   /* ------------------------------------------------------------ the proposal ghost lane */
   function pendingPlanOf(a) {
+    if (shown) return shown;             // an explicit list (showGhost) wins over the Ask's
     const p = a.pendingPlan;
     const box = q('#proposal');
     if (!p || !Array.isArray(p.segments) || !box || box.style.display === 'none') return null;
     return p;
+  }
+
+  /* Draw a proposed cut on the ghost lane on request — the FX card's preview of an edit
+   * before Accept. `segments` is a whole cut: `{id?, clip, in, out, why?, speed?}` per
+   * shot, ids `new:n` for shots that do not exist yet. One plan object per call, so the
+   * lane's mode resets when a new list comes and holds while the same one is redrawn. */
+  function showGhost(segments) {
+    if (!Array.isArray(segments)) return false;
+    shown = { segments: segments.map((s) => ({ ...s })), explicit: true };
+    shownGen++;
+    schedule();
+    return true;
+  }
+
+  function clearGhost() {
+    if (!shown) return false;
+    shown = null;
+    shownGen++;
+    schedule();
+    return true;
   }
 
   /* Longest increasing subsequence: the positions (in `seq`) that keep their order. */
@@ -312,9 +351,12 @@
     const cur = tl.state.segs;
     const used = new Set();
     const pairs = plan.segments.map((s) => {
-      let i = s.id ? tl.indexOf(s.id) : -1;
+      // a `new:n` id is a shot the edit would make: never one of the cut's, whatever
+      // footage it takes (a still of a shot overlaps that shot's range by construction)
+      const fresh = typeof s.id === 'string' && s.id.startsWith('new:');
+      let i = s.id && !fresh ? tl.indexOf(s.id) : -1;
       if (i >= 0 && used.has(i)) i = -1;
-      if (i < 0) {
+      if (i < 0 && !fresh) {
         let bestR = 0.5;
         cur.forEach((c, k) => {
           if (used.has(k) || c.clip !== s.clip) return;
@@ -336,9 +378,10 @@
       ghosts.push({
         seg: s, k, start, cur: i,
         cls: i < 0 ? 'added' : stay.has(pos) ? 'same' : 'moved',
-        trimmed: !!c && (Math.abs(c.in - s.in) > 0.011 || Math.abs(c.out - s.out) > 0.011),
+        trimmed: !!c && (Math.abs(c.in - s.in) > 0.011 || Math.abs(c.out - s.out) > 0.011
+                         || spd(c) !== spd(s)),
       });
-      start += s.out - s.in;
+      start += tl.dur(s);
     });
     const removed = cur.map((c, k) => k).filter((k) => !used.has(k));
     return { plan, ghosts, removed, total: start };
@@ -364,22 +407,25 @@
     const laneH = tl.el.lanes.V1.offsetHeight || 72;
 
     for (const g of ghost.ghosts) {
-      const d = div(`ghost ${g.cls}${g.trimmed ? ' trimmed' : ''}`);
+      const d = div(`ghost ${g.cls}${g.trimmed ? ' trimmed' : ''}${isGen(g.seg.clip) ? ' gen' : ''}`);
       d.dataset.k = g.k;
-      const dur = g.seg.out - g.seg.in;
+      if (typeof g.seg.id === 'string') d.dataset.id = g.seg.id;
+      const dur = tl.dur(g.seg);
+      const s = spd(g.seg);
       d.style.left = px(tl.timeToX(g.start));
       d.style.width = px(Math.max(3, dur * z));
       d.style.setProperty('--hue', tl.hueOf(g.seg.clip));
       d.innerHTML = '<span class="name"></span><span class="dur"></span>';
-      d.querySelector('.name').textContent = stemOf(g.seg.clip);
-      d.querySelector('.dur').textContent = `${dur.toFixed(1)}s`;
+      d.querySelector('.name').textContent = nameOf(g.seg.clip);
+      d.querySelector('.dur').textContent = `${dur.toFixed(1)}s${s === 1 ? '' : ` · ${round2(s)}×`}`;
       const what = g.cls === 'added' ? 'added' : g.cls === 'moved' ? 'moved' : g.trimmed ? 'trimmed' : 'unchanged';
-      d.title = `proposal ${g.k + 1}. ${stemOf(g.seg.clip)} ${tl.fmt(g.seg.in)}–${tl.fmt(g.seg.out)} (${dur.toFixed(1)}s) · ${what}`
+      d.title = `proposal ${g.k + 1}. ${nameOf(g.seg.clip)} ${tl.fmt(g.seg.in)}–${tl.fmt(g.seg.out)} (${dur.toFixed(1)}s`
+        + `${s === 1 ? '' : ` at ${round2(s)}×`}) · ${what}`
         + (g.seg.why ? `\n${g.seg.why}` : '') + '\nclick to play this shot in the monitor';
       lane.appendChild(d);
       if (g.cls === 'moved' && g.cur >= 0) {
         const c = cur[g.cur];
-        const x0 = tl.timeToX(tl.filmStart(c.id) + (c.out - c.in) / 2);
+        const x0 = tl.timeToX(tl.filmStart(c.id) + tl.dur(c) / 2);
         const x1 = tl.timeToX(g.start + dur / 2);
         const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
         line.setAttribute('class', 'arrow');
@@ -393,7 +439,7 @@
       const c = cur[k];
       const s = div('strike');
       s.style.left = px(tl.timeToX(tl.filmStart(c.id)));
-      s.style.width = px(Math.max(3, (c.out - c.in) * z));
+      s.style.width = px(Math.max(3, tl.dur(c) * z));
       s.title = `${stemOf(c.clip)} — removed by the proposal`;
       el.over.appendChild(s);
     }
@@ -420,7 +466,7 @@
   /* Play one range — a proposal's shot, not necessarily in the cut — in the monitor,
    * paused at its end. The monitor's own play (space, ▶) takes over the moment it
    * starts: `player.playing` flips and this loop stops. */
-  function playRange(seg, filmAt, onEnd) {
+  function playRange(seg, filmFrom, onEnd) {
     const a = app();
     const pauseCut = fn('pauseCut'), liveVideo = fn('liveVideo'), arm = fn('arm');
     const showLive = fn('showLive'), reveal = fn('revealMonitor');
@@ -435,10 +481,11 @@
     const token = ++rangeGen;
     const src = v.dataset.src;
     const what = q('#playingWhat');
-    if (what) what.textContent = `proposal · ${stemOf(seg.clip)} ${tl.fmt(seg.in)}–${tl.fmt(seg.out)}`;
+    const s = spd(seg);
+    if (what) what.textContent = `proposal · ${nameOf(seg.clip)} ${tl.fmt(seg.in)}–${tl.fmt(seg.out)}${s === 1 ? '' : ` · ${round2(s)}×`}`;
     const step = () => {
       if (token !== rangeGen || a.player.playing || v.dataset.src !== src) return;
-      tl.setPlayhead(filmAt + Math.max(0, v.currentTime - seg.in), { reveal: false });
+      tl.setPlayhead(filmFrom + Math.max(0, v.currentTime - seg.in) / s, { reveal: false });
       if (v.currentTime >= seg.out - 0.04 || v.ended) {
         v.pause();
         if (onEnd) onEnd();
@@ -485,7 +532,7 @@
     };
     list.forEach((s, i) => {
       if (!excluded || !excluded.has(s.id)) consider(start, s.id, i);
-      start += s.out - s.in;
+      start += tl.dur(s);
     });
     consider(start, null, list.length);
     return best;
@@ -766,7 +813,9 @@
 
   window.tlLanes = {
     redraw, slotAt, playRange, playPlan, insertAt, MIME,
+    showGhost, clearGhost,
     ghost: () => ghost,
+    shown: () => shown,
     mode: () => mode,
   };
 })();

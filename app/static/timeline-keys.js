@@ -14,6 +14,10 @@
  *   J K L        shuttle the monitor — L forward, again for 2× 4× 8×; J reverse (driven
  *                by rAF, as the pass does — Chromium cannot play backwards), again to
  *                stack; K pause. Hold K and tap L / J: 1× while held, paused on release.
+ *                The shuttle's rate MULTIPLIES the shot's own `speed` (INTAKE M13): a
+ *                0.5× shot under L×2 plays at 1; app.js's `arm()` keeps the shot's rate
+ *                on the buffer (`dataset.speed`) and the shuttle rides on
+ *                `defaultPlaybackRate`, so the two never overwrite each other.
  *   ↑ ↓          previous / next cut: the playhead to the boundary, that shot selected.
  *   Home End     the film's start / end.
  *   ← →          one frame (1/30 s); ⇧ one second. The playhead only — the trim lane's
@@ -110,9 +114,10 @@
     for (const v of p.vids) {
       // load() resets playbackRate to the default, and arm() loads the next shot's
       // buffer while this one plays — so the rate has to be the default too, or the
-      // hand-over at a cut would drop back to 1×.
+      // hand-over at a cut would drop back to 1×. The buffer's shot has a rate of its
+      // own (`dataset.speed`, set by arm()); the shuttle multiplies it.
       v.defaultPlaybackRate = r;
-      v.playbackRate = r;
+      v.playbackRate = r * (parseFloat(v.dataset.speed) || 1);
     }
   }
 
@@ -199,7 +204,8 @@
     const i = p.idx, seg = list[i], v = live();
     if (!seg || !v) { stopReverse(); return; }
     if (sh.hold || v.readyState < 1) return;           // still opening: wait for the park
-    const t = v.currentTime + sh.rate * dt;
+    const spd = tl.speedOf(seg);                       // a 0.5× shot moves half a clip second per film second
+    const t = v.currentTime + sh.rate * dt * spd;
     if (t <= seg.in + 1e-3) {
       if (i === 0) {
         v.currentTime = seg.in;
@@ -212,7 +218,7 @@
       return;
     }
     v.currentTime = t;
-    paintAt(tl.filmStart(seg.id) + (t - seg.in), t, seg);
+    paintAt(tl.filmStart(seg.id) + (t - seg.in) / spd, t, seg);
   }
 
   function shuttleKey(k, e) {
@@ -223,7 +229,9 @@
     if (k === 'l') {
       if (sh.kHeld) { forward(1); sh.kl = true; return true; }
       const v = live();
-      const cur = p.playing ? (sh.rate > 0 ? sh.rate : (v && v.playbackRate) || 1) : 0;
+      // the shuttle's own rate — `defaultPlaybackRate`, not `playbackRate`, which
+      // carries the shot's speed as well and would read a 0.5× shot at 1× as half
+      const cur = p.playing ? (sh.rate > 0 ? sh.rate : (v && v.defaultPlaybackRate) || 1) : 0;
       forward(cur > 0 ? Math.min(MAX_RATE, cur * 2) : 1);
       return true;
     }
@@ -413,7 +421,7 @@
     const seg = tl.byId(id);
     if (!seg) return false;
     const start = tl.filmStart(id);
-    return ph >= start - 1e-6 && ph <= start + (seg.out - seg.in) + 1e-6;
+    return ph >= start - 1e-6 && ph <= start + tl.dur(seg) + 1e-6;
   }
 
   function razor() {
@@ -423,7 +431,7 @@
     let id = tl.state.anchor;
     if (id != null) {
       const seg = tl.byId(id), start = tl.filmStart(id);
-      if (!(ph > start && ph < start + (seg.out - seg.in))) id = null;
+      if (!(ph > start && ph < start + tl.dur(seg))) id = null;
     }
     if (id == null) { const at = tl.shotAt(ph); id = at ? at.id : null; }
     if (id == null) return true;
@@ -444,7 +452,7 @@
       say(`the playhead is outside the selected shot — ${key} trims its ${edge} to the playhead`);
       return true;
     }
-    const clipT = round2(seg.in + (ph - tl.filmStart(id)));
+    const clipT = round2(seg.in + (ph - tl.filmStart(id)) * tl.speedOf(seg));   // film → clip
     if (edge === 'in' && clipT > seg.out - MIN_LEN) {
       say(`too close to the out point — a shot keeps ${MIN_LEN} s`); return true;
     }
@@ -454,7 +462,7 @@
     const changed = edge === 'in' ? tl.setRange(id, clipT, null) : tl.setRange(id, null, clipT);
     if (!changed) { say(`the ${edge} point is already at the playhead`); return true; }
     const now = tl.byId(id), start = tl.filmStart(id);
-    park(edge === 'in' ? start : start + (now.out - now.in));
+    park(edge === 'in' ? start : start + tl.dur(now));
     say(`${edge} → ${tl.fmt(clipT)} on ${stem(now.clip)}`);
     return true;
   }
@@ -481,7 +489,9 @@
     let after = chosen[chosen.length - 1].id;
     const made = [];
     for (const s of chosen) {
-      const id = tl.insert({ clip: s.clip, in: s.in, out: s.out, why: s.why }, after);
+      const copy = { clip: s.clip, in: s.in, out: s.out, why: s.why };
+      if (s.speed != null) copy.speed = s.speed;       // a duplicate keeps its rate
+      const id = tl.insert(copy, after);
       if (id != null) { made.push(id); after = id; }
     }
     tl.commit();
