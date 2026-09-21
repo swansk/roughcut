@@ -372,7 +372,8 @@ def validate_effect(raw: Any, segments: list[dict], clips: dict[str, dict] | Non
         seg = next((s for s in after if str(s.get("id")) == str(shot)), None)
     if seg is None:
         raise ValueError(f"effect names a shot that is not in the cut: {shot!r}")
-    clip = raw.get("clip") or seg["clip"]
+    # a shot the edits create has a name the model cannot know: the segment's wins
+    clip = seg["clip"] if str(shot).startswith("new:") else (raw.get("clip") or seg["clip"])
     if clip != seg["clip"]:
         raise ValueError(f"effect's clip {clip!r} is not the shot's clip {seg['clip']!r}")
     duration = None
@@ -1397,6 +1398,8 @@ def design(note: str, seg: dict, clip: dict, sidecar: dict | None, *,
     edits_raw = answer.get("edits") if isinstance(answer.get("edits"), list) else None
     if not answer.get("overlay") and not answer.get("sound") and not edits_raw:
         raise ValueError("the design answer has no overlay, no sound and no edits")
+    if not answer.get("overlay") and not answer.get("sound"):
+        events = []                                   # an edit-only proposal has no moments to draw
     shot_id = answer.get("shot") if edits_raw and str(answer.get("shot") or "").startswith("new:") else seg.get("id")
     effect = {
         "id": new_id(), "shot": shot_id, "clip": answer.get("clip") if str(shot_id).startswith("new:") else seg["clip"],

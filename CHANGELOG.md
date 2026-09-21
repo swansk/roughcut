@@ -10,6 +10,11 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **A generated slide's name is the renderer's, not the model's (INTAKE M13)** — live on
+  Killington the model copied the example's placeholder clip name for the slide it
+  generated and validation refused it against the real `gen_black_<key>.mp4`; for a
+  `new:n` shot the segment's clip wins now. An edit-only design keeps no fallback
+  moments, and the job's detail counts moments and changes to the cut.
 - **The model proposes edits to the cut, and the card applies them (INTAKE M13, I13.3)**
   — an effect may carry `edits` (roughcut/edits.py's operations) beside or instead of an
   overlay: a slow-motion range with no picture at all, a black slide generated before a

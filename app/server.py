@@ -3533,7 +3533,10 @@ def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict 
         fx.save(fx_home(), e)
         _fx_sound(e)
         entry["result"] = {"id": fx_id}
-        entry.finish("done", detail=f"{e['name']} — {len(e['events'])} hit(s), a proposal")
+        n_ev, n_ed = len(e.get("events") or []), len(e.get("edits") or [])
+        what = " · ".join(x for x in [f"{n_ev} moment{'s' if n_ev != 1 else ''}" if n_ev else "",
+                                     f"{n_ed} change{'s' if n_ed != 1 else ''} to the cut" if n_ed else ""] if x)
+        entry.finish("done", detail=f"{e['name']} — {what}, a proposal")
     except Exception as exc:  # noqa: BLE001 — the job reports, the server lives
         entry.finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
 
