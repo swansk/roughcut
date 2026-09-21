@@ -3392,9 +3392,26 @@ def _fx_proxy(clip: str) -> Path | None:
     return src if src.exists() else None
 
 
+def _fx_anchor(e: dict) -> str | None:
+    """The shot a proposal keyed to a shot the edits will create belongs to on the
+    board, until Accept: the first op's shot, or the shot it is placed before / after."""
+    if not str(e.get("shot", "")).startswith("new:"):
+        return None
+    for op in e.get("edits") or []:
+        for k in ("shot", "before", "after", "from_shot"):
+            v = op.get(k)
+            if v and not str(v).startswith("new:"):
+                return str(v)
+    segs = _fx_segments()
+    return str(segs[0]["id"]) if segs else None
+
+
 def _fx_urls(e: dict) -> dict:
     d = fx_home() / e["id"]
     out = dict(e)
+    anchor = _fx_anchor(e)
+    if anchor:
+        out["anchor_shot"] = anchor
     for key, name in (("sound_url", "sound.wav"), ("proof_url", "proof.mp4"),
                       ("base_url", "base.mp4"), ("strip_url", "strip.jpg"),
                       ("ref_url", "ref.png")):

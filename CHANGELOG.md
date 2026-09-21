@@ -10,6 +10,10 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **A proposal on a shot the edits will create shows on the board (INTAKE M13)** — live,
+  the typed-title-on-a-slide proposal (shot `new:1`) was on disk but on no shot's card;
+  the list now carries `anchor_shot` (the first op's shot, or the shot the slide goes
+  before / after) and the FX tool shows the proposal there until Accept.
 - **The two lanes meet (INTAKE M13)** — a generated clip's `summary` is the server's object
   (`summary.generated` is the sentence); the block and the inspector read either shape.
   The FX card clears the ghost on Accept and Discard, and after an Accept that changed

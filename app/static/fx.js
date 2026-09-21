@@ -129,7 +129,11 @@
     return t && t.state && t.state.anchor != null ? String(t.state.anchor) : null;
   }
   function seg(id) { return SEGS().find((s) => String(s.id) === String(id)) || null; }
-  function forShot(id) { return id == null ? [] : S.effects.filter((e) => String(e.shot) === String(id)); }
+  /* the shot's effects — and the proposals keyed to a shot the edits will create, which
+   * sit on the shot they are anchored to until Accept (`anchor_shot`, the server's) */
+  function forShot(id) {
+    return id == null ? [] : S.effects.filter((e) => String(e.shot) === String(id) || (e.anchor_shot && String(e.anchor_shot) === String(id)));
+  }
   /* the ones that draw, sound and count: not the removed (kept for Restore) */
   function activeForShot(id) { return forShot(id).filter((e) => e.status !== 'removed'); }
   function shotIndex(id) { return SEGS().findIndex((s) => String(s.id) === String(id)); }

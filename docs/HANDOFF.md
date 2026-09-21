@@ -1,5 +1,14 @@
 # Handoff — read this first
 
+**2026-09-20, latest — INTAKE M13: the FX tool changes the cut.** Beside an overlay and a
+sound, the model now proposes **operations on the cut** (`roughcut/edits.py`: extend,
+set_range, split, speed over a range, generate a black / colour / still clip, freeze,
+insert, remove, move); a shot has a **speed** the timeline, the monitor and the render
+honour; a **generated clip** is a real file the board plays; Preview ghosts the proposed
+cut, Accept applies it in one write (`POST /api/edits/apply`, undo with `/undo`). Two live
+proposals sit on Killington for Karl's look (I13.5): slow motion on the rocks hit, a typed
+title on a generated slide before shot 1. Everything below still stands.
+
 **2026-09-20, later — INTAKE M12, effects the model designs and the machine verifies, is
 BUILT and live; next is Karl's look (I12.5), then I11.5 / I9.6 / I10.6.** The FX rail tool:
 say what the effect is on the selected shot (or draw a reference on the paused frame),

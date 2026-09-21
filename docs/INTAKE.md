@@ -984,10 +984,10 @@ operations on the cut plus, when wanted, an effect.
 
 - [x] I13.0 **Foundation** (lead): `roughcut/edits.py` — the vocabulary, validation, `apply_ops`,
       `dur` / `speed_of` / `validate_speed`, `generated_name`.
-- [ ] I13.1 **Server + render** (lane `agent/edits-render`): `speed` through save, generated
+- [x] I13.1 **Server + render** (lane `agent/edits-render`, merged `1dd08de`; commits `aa438bf`…`cda43f7`; `test_edits*.py` 43): `speed` through save, generated
       clips materialised and listed, `POST /api/edits/preview|apply|undo`, `apply_edits()`,
       assemble.py retimes a part and cuts generated clips; `test_edits*.py`.
-- [ ] I13.2 **The board** (lane `agent/edits-ui`): `tl.dur`, the monitor at the shot's speed,
+- [x] I13.2 **The board** (lane `agent/edits-ui`, merged `317eb4a`; commits `25a0487`…`7d35f4f`; 26 film-time sites → `tl.dur`, `test_timeline_speed.py`): `tl.dur`, the monitor at the shot's speed,
       a speed badge and inspector row, generated clips as blocks, `tlLanes.showGhost`;
       `test_timeline_speed.py`.
 - [x] I13.3 **The model and the card** (lead, ahead of the lanes; Accept and Preview light up
@@ -995,8 +995,15 @@ operations on the cut plus, when wanted, an effect.
       (slow motion, extension, a typed title on a generated slide), the FX card lists the
       edits in words with a ghost Preview, Accept applies them and re-keys the effect,
       `edits_apply` in verify.
-- [ ] I13.4 Live on Killington: the title slide as a generated 2 s black clip before shot 1
-      with the typed title on it; a slow-motion range on a run.
+- [x] I13.4 **Live on Killington** (2026-09-20, through the API, two design calls): *"Slow motion
+      at 0.4× over the biggest rock hit in this window, no overlay, no sound"* → an edit-only
+      proposal, `speed 0.4× 170.85–171.50` on the rocks shot, `limits` explaining that the
+      onset under "Oh yeah I see it" was left alone as speech; *"a 3 second black title slide
+      before this shot with the title typed on it"* → `generate black 3 s before shot 1` plus
+      the typed title keyed to `new:1`, verify `edits_apply` ok and the proof waiting for
+      Accept. Two live fixes on the way: a `new:n` shot takes the segment's clip name (the
+      model copied the example's placeholder); a proposal on a shot the edits will create
+      is anchored to a shot on the board (`anchor_shot`). Both proposals left for Karl.
 - [ ] I13.5 Karl's look.
 
 ## Lanes in flight
