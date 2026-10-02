@@ -32,6 +32,10 @@ same commit. Releases move entries into a dated version section.
   inversion; a tilted horizon alone is camera roll; unsure is `action`, not `jump`.
   `validate` keeps an event that rests on inversion words (*inverted, upside-down, flip*)
   but demotes it to not-notable until a second look agrees. `PROMPT_VERSION` 3.
+- **Docs: roadmap item 1's audit half is recorded as built** — HANDOFF says what was built
+  and what remains (the spend is Karl's; the weights are still argued, not fitted; no
+  horizon-angle measurement), INTAKE's Discovered bullet points at the fix, and R10 has a
+  "follow-up built" section.
 - **A proposal on a shot the edits will create shows on the board (INTAKE M13)** — live,
   the typed-title-on-a-slide proposal (shot `new:1`) was on disk but on no shot's card;
   the list now carries `anchor_shot` (the first op's shot, or the shot the slide goes

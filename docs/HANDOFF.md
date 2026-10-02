@@ -491,14 +491,26 @@ Whatever Karl reports is the first input of the next session.
 
 Ordered by what changes most, not by effort:
 
-1. **Events: audit what the sheets claim, then fit the rank.** R10's first follow-up is one
-   line: spend the close-look windows on the coarse pass's *own claims* (two refuted events still
-   rank 6th and 20th because the motion scan never covered them), not only on motion peaks; and
-   fine-pass positives should not inherit a neutral 1.0. The weights are argued, not fitted —
-   there is no labelled set; nine adjudications measured the failure mode, not a rate. The
-   camera-inverted false positive needs its own guard (horizon angle from the frame, or "is the
-   *ground* at 45°?" in the sheet prompt). Junk and orientation could be proposed from the same
-   sidecars. RQ-1/RQ-7 (sheet density, thumbnail size, model tier) remain unmeasured.
+1. **Events: audit what the sheets claim, then fit the rank.** *The audit half is built
+   (branch `agent/events-audit`); the spend and the fit are not.* Built: the close look's
+   windows go to the coarse pass's *own* unaudited jump/fall/crash claims first (notable, then
+   score), motion peaks after, inside the same three windows per clip, nothing already read
+   re-bought (`events.choose_windows`, `event_scan.py`); a priced **Audit N claims · ~$x**
+   button on the seen tab (`POST /api/visual/audit`, `dry_run` for the price) that spends the
+   close look on only the bin's top 12 unaudited hot claims and rebuilds `events.json`;
+   fine-pass positives with no coarse claim agreeing are `fine-only` (`FINE_ONLY` 0.7, *one
+   look* on the row) instead of inheriting the neutral 1.0; and the camera-inverted guard is in
+   both sheet prompts ("find the snow beneath the skis; a tilted horizon alone is camera roll;
+   unsure is `action`") with `validate` demoting an event that rests on inversion words.
+   **Remaining:** (a) **the spend is Karl's** — on Killington the button should read
+   ~12 claims, under $1; nobody has clicked it, so the bin still has no `confirmed` event and
+   the guard's effect on a real sheet is unmeasured (the coarse sidecars predate it; only new
+   reads carry `prompt_version` 3). (b) **The weights are still argued, not fitted** — there is
+   no labelled set; nine adjudications measured the failure mode, not a rate, and `FINE_ONLY`
+   is one more argued number. The audit's verdicts are the first cheap labels toward a fit.
+   (c) A horizon-angle measurement from the frame (free, no model) was not built. Junk and
+   orientation could be proposed from the same sidecars. RQ-1/RQ-7 (sheet density, thumbnail
+   size, model tier) remain unmeasured.
 2. ~~**The board's first frame.**~~ — **done.** Karl: *"I can hear the videos when I click play,
    but the preview window still shows up blank."* Two faults, both measured on the Killington
    bin: the cards' 17 `<video preload="metadata">` proxies took every connection Chrome allows,
