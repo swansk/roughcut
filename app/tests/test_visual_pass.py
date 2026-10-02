@@ -88,3 +88,25 @@ def test_the_prompt_names_the_camera_the_frames_and_the_rules(vp):
         assert phrase.lower() in p.lower(), phrase
     assert "helmet" in vp.SYSTEM and "never in frame" in vp.SYSTEM
     assert vp.PROMPT_VERSION >= 2
+
+
+def test_both_prompts_carry_the_camera_inverted_guard(vp):
+    """R10: on a helmet or chest mount the horizon sits at 40-45°, so the camera is
+    inverted, not the person — and every inversion claim either pass made on Killington
+    was that. Both questions now ask for the snow under the skis before a jump."""
+    for template in (vp.PROMPT, vp.FINE_PROMPT):
+        p = template.format(n=15, clip="CLIP_11.MP4", interval=1, start=136, end=150,
+                            stamps="136, 137")
+        p = " ".join(p.lower().split())
+        assert "the camera rolls, not the rider" in p
+        assert "beneath the skis" in p and "camera roll" in p
+        assert "`action`, not `jump`" in p
+    assert vp.PROMPT_VERSION >= 3
+
+
+def test_an_event_resting_on_inversion_is_kept_but_not_notable(vp):
+    m = _one(vp, what="skier at 0:04 upside-down mid-air in a backflip")
+    assert m["notable"] is False and "camera roll" in m["demoted"]
+    assert m["kind"] == "jump"                     # kept: the audit still checks it
+    # a plain jump with the ground named is untouched
+    assert _one(vp, what="skier at 0:04 mid-air, skis level, landing slope below")["notable"]

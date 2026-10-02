@@ -1354,6 +1354,7 @@ function renderLibrary() {
   lib.classList.toggle('grid', libTab === 'kept');
   const bf = $('#binFilter');
   if (bf) bf.hidden = libTab !== 'kept';
+  paintAudit();
   if (libTab === 'kept') { renderKept(lib); return; }
   $('#libHint').textContent = libTab === 'seen'
     ? (ranked.length ? 'What was seen, ranked — events first, confirmed above guessed.'
@@ -1368,9 +1369,12 @@ function renderLibrary() {
     d.className = 'cand';
     // The evidence word rides with the row: on this footage a `jump` nobody has
     // checked is often a tilted camera, and the human clicking is the last defence.
+    // `fine-only` is a close look that nothing else saw — one look at the busiest
+    // seconds, where the artefacts are (R10), so it says so rather than passing as a find.
     const seal = r.evidence === 'confirmed' ? '<i class="kind hot">confirmed</i>'
       : (r.evidence === 'contradicted' || r.evidence === 'unsupported')
-        ? '<i class="kind">unconfirmed</i>' : '';
+        ? '<i class="kind">unconfirmed</i>'
+        : r.evidence === 'fine-only' ? '<i class="kind">one look</i>' : '';
     d.innerHTML = `<span class="w">${r.kind ? kindTag(r.kind) : ''}${seal}${escapeHtml(r.why)}</span>
       <span class="t">${stem(r.clip)} · ${fmt(r.t)}${r.end ? `–${fmt(r.end)}` : ''}</span>`;
     d.onclick = () => {
@@ -1378,6 +1382,46 @@ function renderLibrary() {
     };
     lib.appendChild(d);
   });
+}
+
+/* Audit the claims (HANDOFF roadmap item 1, R10's follow-up). The seen tab's top rows
+ * are mostly `unaudited` jumps and falls, and on helmet-cam footage those are often a
+ * tilted camera. One priced click spends a 1 s close look on exactly those claims and
+ * rebuilds the rank; the price comes with /api/status like the visual pass's, and the
+ * button is off when there is nothing left to audit or a pass is already running. */
+let auditPending = false;
+function paintAudit() {
+  const row = $('#auditRow');
+  if (!row) return;
+  const vz = (S && S.visual) || {};
+  const a = vz.audit || { claims: 0, windows: 0, projected_usd: 0 };
+  row.style.display = libTab === 'seen' ? 'flex' : 'none';
+  const b = $('#auditClaims');
+  b.disabled = auditPending || !!vz.running || !a.windows;
+  b.textContent = a.windows
+    ? `Audit ${a.claims} claim${a.claims === 1 ? '' : 's'} · ~$${a.projected_usd.toFixed(2)}`
+    : 'Audit the claims';
+  $('#auditInfo').textContent = !a.windows ? 'every hot claim has had a close look'
+    : vz.running ? 'a visual pass is running'
+    : `${a.windows} close look${a.windows === 1 ? '' : 's'} at 1 s`;
+}
+
+async function auditClaims() {
+  auditPending = true;
+  paintAudit();
+  try {
+    const r = await fetch('/api/visual/audit', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const d = await r.json();
+    if (!r.ok) { toast(d.detail || 'the audit could not start'); return; }
+    // The job is a `visual` job: the top bar shows it and, when it is done, adopt()
+    // reloads the project, so the seen tab repaints with the verdicts.
+    toast(`auditing ${d.claims} claim${d.claims === 1 ? '' : 's'} — ~$${d.projected_usd.toFixed(2)}`);
+    await refreshStatus();
+  } finally {
+    auditPending = false;
+    paintAudit();
+  }
 }
 
 /* The bin on the board — Option B's Source panel, first stage, on the board as it is.
@@ -1860,6 +1904,7 @@ async function refreshStatus() {
     <div class="path">${escapeHtml(S.footage)}</div>
     <div class="path">${escapeHtml(S.edl)}${S.edl_created ? ' (new)' : ''}</div>`;
   paintBackend(S.backend);
+  paintAudit();                        // its price rides on the status, like the pass's
   // Previews build in the background for tens of minutes on a long bin. Silence there
   // reads as "nothing is happening", which is the confusion this panel exists to end.
   const px = S.proxies || { ready: true, done: 0, total: 0 };
@@ -2743,6 +2788,7 @@ async function boot() {
     // Verdicts happen elsewhere (the pass, another tab): showing the bin re-reads it.
     if (libTab === 'kept') refreshBin();
   };
+  $('#auditClaims').onclick = auditClaims;
   $('#musicTrack').onchange = musicChanged;
   $('#duck').oninput = () => { $('#duckVal').textContent = $('#duck').value; };
   $('#duck').onchange = musicChanged;

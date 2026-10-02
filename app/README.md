@@ -105,7 +105,7 @@ server, and every edit is undoable because fiddling is only fun when it is cheap
 | **Boundary warnings** | A live ⚠ when a cut opens mid-sentence or clips a line off — the defect Karl flagged, surfaced while you trim rather than only when you ask |
 | **Story** | In the Ask tool. Free text saved into the EDL. The thing the agent is worst at; typing "the milk is the running joke" beats an hour of analysis |
 | **Sound** | The music bed, its own tool: pick a track from `assets/music/`, set how far it ducks under speech and its fades. Saved into the EDL as `effects_music` the moment it changes, rendered by `assemble.py` with the picture untouched, and heard under the monitor with the same duck before you render. A click on the music lane opens it |
-| **Bin** | The dock's default tool (INTAKE M11). **kept** — the bin, first and the one the board opens on when the pass has kept anything: a card per keep, heroes first then by clip and start — the still at its start, `CLIP_04 · 3:44.0 → 3:48.2 · 4.2 s`, `★ HERO`, the pass's reason and the editor's note, the pass's labels as chips, and either *in the cut · shot N* (click selects the shot) or *+ add*; a keep whose footage left says so and cannot be added; an empty bin points at the pass. The chips above the grid are the same labels as a filter, with counts, plus hero / in the cut / not yet — one chip on at a time, the same chip again clears it, a chip on a card works the same. The search box filters the grid as you type; **Find** and **Ask the model** search the whole footage from the same box (word match over transcripts and what the visual pass saw; the priced model read for what words cannot reach), with each match playing the whole clip proxy seeked to the moment. Click a card to select it; `enter` adds it, `space` or a double-click plays the clip in the bin's own player so the monitor stays on the cut; drag a card onto V1. **heard** — audio candidates not already in the cut, ranked — and **seen** — what the visual pass found, ranked by the bin's `events.json`. Re-read when the tab is shown and after every save while it is up. The rail's badge is the count of keeps |
+| **Bin** | The dock's default tool (INTAKE M11). **kept** — the bin, first and the one the board opens on when the pass has kept anything: a card per keep, heroes first then by clip and start — the still at its start, `CLIP_04 · 3:44.0 → 3:48.2 · 4.2 s`, `★ HERO`, the pass's reason and the editor's note, the pass's labels as chips, and either *in the cut · shot N* (click selects the shot) or *+ add*; a keep whose footage left says so and cannot be added; an empty bin points at the pass. The chips above the grid are the same labels as a filter, with counts, plus hero / in the cut / not yet — one chip on at a time, the same chip again clears it, a chip on a card works the same. The search box filters the grid as you type; **Find** and **Ask the model** search the whole footage from the same box (word match over transcripts and what the visual pass saw; the priced model read for what words cannot reach), with each match playing the whole clip proxy seeked to the moment. Click a card to select it; `enter` adds it, `space` or a double-click plays the clip in the bin's own player so the monitor stays on the cut; drag a card onto V1. **heard** — audio candidates not already in the cut, ranked — and **seen** — what the visual pass found, ranked by the bin's `events.json`, with the priced *Audit N claims* button above it. Re-read when the tab is shown and after every save while it is up. The rail's badge is the count of keeps |
 | **Ask for a change** | Plain-language note → revised timeline, shown as a diff you accept or discard |
 | **Cut from the bin** | The same Ask with a fixed note — *build the cut from the editor's selects: every hero must appear, use the other keeps where they serve the story, and take nothing else unless it is needed to make a keep land* — and the current story, then the usual proposal / accept / discard. Under the note in the Ask panel, and beside *Ask for a first cut* when the timeline is empty (where the panel is hidden, and where someone arriving from the pass lands); disabled with a hint while the bin is empty. The fixed note never becomes the story |
 | **Snap to speech** | Runs `edl_snap.py` and shows the result as a proposal — undoable, never silently applied |
@@ -129,6 +129,22 @@ and the unusable stretches flagged. That is the only account the model has of th
 narrated, and the same moments show in the inspector and under *Add a moment → seen*. It is
 optional: the audio pass is local and cheap, this one costs model calls, which is why it is
 priced before it is offered.
+
+**Audit the claims** (HANDOFF roadmap item 1, R10's follow-up). The coarse pass's jumps and
+falls are one reader's guess from frames four seconds apart, and on helmet-cam footage a tilted
+horizon reads as a rider upside down — so the top of the *seen* tab is mostly claims nobody has
+checked. The tab's **Audit N claims · ~$x** button spends a 1 s close look on exactly those: the
+top `AUDIT_CLAIMS` (12) unaudited jump/fall/crash claims across the bin, notable first then by
+score, one window per claim (claims close together share one; a claim a read window already
+covers is never re-bought), then rebuilds `events.json`. It is off when nothing is unaudited or a
+visual pass is running, and it runs as a `visual` job in the top bar. By API:
+`POST /api/visual/audit {"n": 12, "dry_run": true}` returns the plan and its price
+(`claims`, `windows`, `calls`, `projected_usd`, `eta_s`) without spending; the same body without
+`dry_run` starts the job (409 while a pass runs or over the budget cap, 400 when there is
+nothing to audit). `/api/status`'s `visual.audit` carries the same price for the button. The
+whole-bin pass's second stage now puts each clip's own unaudited claims ahead of its motion peaks
+too, inside the same three windows per clip. A row only a close look saw (no coarse claim
+agreeing) is marked **one look** and ranks below an unaudited claim (`FINE_ONLY`).
 
 The originating prompt states two things a model reading clips one at a time cannot rediscover,
 both measured in R8/R9 rather than guessed: transcript density points *away* from the action on

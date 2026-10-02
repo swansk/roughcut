@@ -136,6 +136,9 @@ Read the evidence word, not just the kind:
   evidence available; prefer these.
 * `unaudited` — nobody has looked closely yet. The kind is one reader's guess from
   frames four seconds apart, and on this footage that guess is often wrong.
+* `fine-only` — only the 1s close look saw it; the first pass saw nothing there. One
+  look at the busiest seconds of a clip, which is where camera artefacts live: weaker
+  than unaudited.
 * `unsupported` / `contradicted` — a closer look at 1s found nothing, or found a
   camera artefact where the first pass claimed an event. Do not build a shot on these.
 

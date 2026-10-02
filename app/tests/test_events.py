@@ -138,3 +138,116 @@ def test_a_windowed_contact_sheet_labels_its_cells_in_clip_seconds(project, tmp_
     cells = index["clips"][0]["sheets"][0]["cells"]
     assert index["clips"][0]["window"] == [2.0, 5.0]
     assert [c["t"] for c in cells][:3] == [2.0, 3.0, 4.0]
+
+
+# ------------------------------------------------------------------ the audit (R10 follow-up)
+
+def _claim(start, end, kind="jump", notable=True, what="rider in the air over a roller"):
+    return {"start": start, "end": end, "kind": kind, "notable": notable, "what": what,
+            "frames": [start], "confidence": "high"}
+
+
+def test_the_close_look_goes_to_the_claims_before_the_motion_peaks():
+    """R10: the motion scan's top windows never covered CLIP_07 168-196 or CLIP_11
+    136-160, so two claims refuted by eye kept ranking 6th and 20th — and on Killington
+    not one close-look moment ever agreed with a hot claim. The claims come first now,
+    inside the same per-clip budget, and the highest-ranked one leads."""
+    track = flat(600, 0.0)
+    track[500] = 6.0                                   # one big motion peak at 50 s
+    coarse = {"moments": [_claim(20.0, 24.0, kind="action"),
+                          _claim(10.0, 12.0, kind="jump", notable=False),
+                          _claim(30.0, 32.0, kind="fall")]}
+    w = events.choose_windows("CLIP_X.MP4", coarse, {}, track, limit=3)
+    assert [x["source"] for x in w] == ["claim", "claim", "motion"]
+    # notable first, then score: the fall leads, the non-notable jump follows
+    assert w[0]["claims"][0]["kind"] == "fall" and w[0]["start"] <= 30 and w[0]["end"] >= 32
+    assert w[1]["claims"][0]["kind"] == "jump"
+    assert w[2]["at"] == 50.0
+    # an action is not a hot claim and never buys a window of its own
+    assert all(c["kind"] != "action" for x in w for c in x.get("claims", []))
+    # the budget is the caller's, unchanged: claims take slots, they do not add any
+    assert len(events.choose_windows("CLIP_X.MP4", coarse, {}, track, limit=1)) == 1
+
+
+def test_a_claim_already_read_is_not_bought_twice_and_neither_is_its_window():
+    track = flat(600, 0.0)
+    track[310] = 6.0                                   # the peak sits in the read window
+    track[500] = 5.0
+    coarse = {"moments": [_claim(30.0, 32.0, kind="fall"), _claim(40.0, 42.0)]}
+    fine = {"windows_read": [[27.0, 35.0]], "moments": [], "unusable": []}
+    w = events.choose_windows("CLIP_X.MP4", coarse, fine, track, limit=3)
+    spans = [(x["start"], x["end"]) for x in w]
+    assert all(not (s <= 31.0 <= e) for s, e in spans), spans    # the fall: read
+    assert w[0]["source"] == "claim" and w[0]["claims"][0]["start"] == 40.0
+    assert [x["at"] for x in w if x["source"] == "motion"] == [50.0]   # 31 s skipped
+
+
+def test_claims_close_together_share_one_window_and_a_long_claim_is_still_covered():
+    # two claims two seconds apart are one window, priced once
+    plan = events.plan_claims(
+        [{"clip": "A", "start": 10.0, "end": 11.0, "kind": "jump", "score": 1.0},
+         {"clip": "A", "start": 12.0, "end": 13.0, "kind": "fall", "score": 0.9}],
+        limit=5)
+    assert len(plan) == 1 and len(plan[0]["claims"]) == 2
+    # a "jump 136-160" read through an 8 s window would come back still unseen
+    lo, hi = events.claim_window(136.0, 160.0)
+    assert hi - lo <= events.FINE_SHEET_S
+    assert events._covered({"start": 136.0, "end": 160.0}, [(lo, hi)]) >= events.COVERED
+    # and a window near the end of a clip stays inside it, full width where it can
+    lo, hi = events.claim_window(58.0, 59.0, duration=60.0)
+    assert hi == 60.0 and lo == 52.0
+
+
+def test_a_fine_only_find_ranks_below_an_unaudited_claim_and_above_a_refuted_one():
+    """R10: "a close look is a good auditor and a poor detector" — three of the four
+    fine-only claims in its top fifteen were wrong by eye. One look at the busiest
+    seconds no longer inherits UNSEEN's neutral 1.0."""
+    jump = _claim(10.0, 12.0)
+    fine_only = events.rank_clip("A", {}, {"moments": [jump], "windows_read": [[6, 14]]})
+    unseen = events.rank_clip("A", {"moments": [jump]}, {})
+    contradicted = events.rank_clip("A", {"moments": [jump]}, {
+        "windows_read": [[6.0, 14.0]], "unusable": [],
+        "moments": [{**jump, "kind": "junk", "what": "a glove"}]})
+    assert fine_only[0]["why_ranked"]["confirmation"] == "fine-only"
+    claim = [e for e in contradicted if e["kind"] == "jump"][0]
+    assert claim["why_ranked"]["confirmation"] == "contradicted"
+    assert claim["score"] < fine_only[0]["score"] < unseen[0]["score"]
+    # two looks agreeing is still `confirmed`
+    both = events.rank_clip("A", {"moments": [jump]},
+                            {"moments": [jump], "windows_read": [[6, 14]]})
+    assert [e["why_ranked"]["confirmation"] for e in both] == ["confirmed"]
+
+
+def test_the_rebuilt_events_file_names_the_fine_only_weight(tmp_path):
+    vis = tmp_path / "visual"
+    vis.mkdir()
+    payload = events.build(vis, tmp_path / "audio")
+    assert payload["params"]["fine_only"] == events.FINE_ONLY
+    assert payload["params"]["confirmation"]["fine-only"] == events.FINE_ONLY
+    assert events.CONTRADICTED < events.UNSUPPORTED < events.FINE_ONLY < events.UNSEEN
+
+
+def test_the_scan_tool_writes_the_claim_window_first(project, tmp_path):
+    """The real event_scan.py over a real clip: the windows file the close look reads
+    leads with the coarse claim, not with whatever moved most."""
+    import json
+    import subprocess
+
+    visual = tmp_path / "visual"
+    visual.mkdir()
+    (visual / "CLIP_A.visual.json").write_text(json.dumps({
+        "clip": "CLIP_A.MP4", "unusable": [],
+        "moments": [{"start": 1.0, "end": 2.0, "kind": "fall", "notable": True,
+                     "what": "rider down on the snow", "frames": [1.0]}]}),
+        encoding="utf-8")
+    tool = Path(__file__).resolve().parents[2] / "research" / "tools" / "event_scan.py"
+    out = tmp_path / "windows.json"
+    r = subprocess.run(
+        ["uv", "run", "--quiet", str(tool), str(project["footage"]),
+         "--sidecars", str(project["sidecars"]), "--visual", str(visual),
+         "--only", "CLIP_A", "--limit", "1", "--windows-out", str(out)],
+        capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert "claim: fall" in r.stdout
+    lo, hi = json.loads(out.read_text(encoding="utf-8"))["CLIP_A"][0]
+    assert lo <= 1.0 and hi >= 2.0

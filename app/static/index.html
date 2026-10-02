@@ -528,6 +528,12 @@
           <span class="tab" data-tab="seen" style="display:none">seen</span>
         </div>
         <div class="hint" id="libHint" style="margin-bottom:6px">Audio candidates not yet in the cut.</div>
+        <!-- the audit: a close look at the claims at the top of the seen tab, priced -->
+        <div id="auditRow" style="display:none;gap:8px;align-items:center;margin-bottom:6px">
+          <button id="auditClaims"
+            title="A 1 s close look at the highest-ranked jump / fall / crash claims nobody has checked, then the rank is rebuilt">Audit the claims</button>
+          <span class="hint" id="auditInfo"></span>
+        </div>
         <div id="binFilter" hidden></div>
         <div class="lib" id="library"></div>
       </section>
