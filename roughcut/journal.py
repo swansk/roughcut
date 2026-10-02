@@ -78,6 +78,12 @@ TIMING_WINDOW = 8         # how many recent durations the per-stage rolling mean
 
 ORDERS = ("priority", "capture")
 
+# The skip reason `set_junk` writes, and the only skip it will undo.
+JUNK_REASON = "junk — confirmed by the editor"
+# Where a clip's junk word puts it in the queue: clean first, proposed after, confirmed
+# last (its priced stages are skipped; what is left of it is free).
+JUNK_RANK = {None: 0, "proposed": 1, "confirmed": 2}
+
 
 class JournalError(ValueError):
     """A call the journal cannot honour: an unknown clip or stage, a stage started out
@@ -133,7 +139,7 @@ def _stage_record() -> dict:
 
 def _clip_record(clip: str, now: float, captured: float | None) -> dict:
     return {"clip": clip, "added": now, "captured": captured, "facts": None,
-            "priority": None, "missing": False, "parked": None,
+            "priority": None, "missing": False, "parked": None, "junk": None,
             "stages": {s: _stage_record() for s in STAGES}}
 
 
@@ -197,6 +203,7 @@ class Journal:
             rec.setdefault("facts", None)
             rec.setdefault("priority", None)
             rec.setdefault("captured", None)
+            rec.setdefault("junk", None)
         return j
 
     def save(self) -> None:
@@ -330,6 +337,45 @@ class Journal:
         st["finished"] = now
         self._touch()
 
+    def set_junk(self, clip: str, junk: str | None, *, now: float | None = None) -> list[str]:
+        """The bin's word on a clip (HANDOFF roadmap item 5, `roughcut/junk.py`):
+        `"confirmed"` (the human said junk), `"proposed"` (the measurement says junk,
+        nobody has answered), or None.
+
+        Confirmed junk has its priced stages skipped — the money a black clip would
+        otherwise spend on sheets of black — and a clip un-confirmed gets back exactly
+        the stages this skipped (a skip with any other reason is a fact about the clip
+        and stays). A stage already done or running is left alone: the money is spent.
+        A proposed clip walks the queue after every clean clip, so an editor who
+        answers the proposal while the index runs answers it before the sheets are
+        bought. Returns the stages it skipped or reopened."""
+        now = time.time() if now is None else now
+        rec = self._rec(clip)
+        if junk not in (None, "proposed", "confirmed"):
+            raise JournalError(f"junk must be 'proposed', 'confirmed' or None, not {junk!r}")
+        rec["junk"] = junk
+        touched: list[str] = []
+        for stage in STAGES:
+            if stage not in PRICED:
+                continue
+            st = rec["stages"][stage]
+            if junk == "confirmed" and st["state"] in RETRYABLE:
+                st["state"] = "skipped"
+                st["last_error"] = JUNK_REASON
+                st["finished"] = now
+                st["not_before"] = None
+                touched.append(stage)
+            elif (junk != "confirmed" and st["state"] == "skipped"
+                  and st.get("last_error") == JUNK_REASON):
+                st.update(state="queued", attempts=0, last_error=None, started=None,
+                          finished=None, not_before=None)
+                touched.append(stage)
+        if touched:
+            self._log(now, f"{clip} {'junk — skipped' if junk == 'confirmed' else 'reopened'}"
+                           f" {', '.join(touched)}")
+        self._touch()
+        return touched
+
     def reopen(self, clip: str, stage: str, *, now: float | None = None) -> None:
         """Put a settled or skipped stage back in the queue — a skip that turned out
         not to be a fact about the clip (a stage that did not exist yet when it was
@@ -425,13 +471,14 @@ class Journal:
     def _sort_key(self, rec: dict):
         cap = rec.get("captured")
         cap = float("inf") if cap is None else float(cap)
+        junk = JUNK_RANK.get(rec.get("junk"), 0)
         if self.order == "capture":
-            return (cap, rec["clip"])
+            return (junk, cap, rec["clip"])
         pri = rec.get("priority")
         # Scored clips first, best first; unscored after them in capture order — but
         # note that an unscored clip's *free* stages draw from pools the scored clips
         # have long finished with, so in practice they run at once.
-        return (0 if pri is not None else 1, -(pri or 0.0), cap, rec["clip"])
+        return (junk, 0 if pri is not None else 1, -(pri or 0.0), cap, rec["clip"])
 
     def ordered(self) -> list[str]:
         """Every clip in the order the queue walks them (missing ones included, last)."""
@@ -659,6 +706,7 @@ class Journal:
                     left = max(0.0, mean - (now - float(st["started"])))
                 pool_s[KIND[s]] = pool_s.get(KIND[s], 0.0) + left
             rows.append({"clip": clip, "priority": rec.get("priority"), "state": state,
+                         "junk": rec.get("junk"),
                          "captured": rec.get("captured"),
                          "stages": {s: rec["stages"][s]["state"] for s in STAGES},
                          "attempts": {s: rec["stages"][s]["attempts"] for s in STAGES

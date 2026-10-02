@@ -1317,7 +1317,9 @@ function renderLibrary() {
    * re-guessed here from the kind alone. Falls back to the old kind ordering for a
    * bin looked at before the rank existed. */
   const ranked = P.events || [];
+  const gone = junkConfirmed();
   for (const clip of Object.values(P.clips)) {
+    if (gone.has(clip.clip)) continue;          // confirmed junk offers nothing to add
     const moments = (clip.visual || {}).moments || [];
     if (moments.length) anySeen = true;
     if (libTab === 'seen' && !ranked.length) {
@@ -1337,7 +1339,7 @@ function renderLibrary() {
   if (libTab === 'seen' && ranked.length) {
     anySeen = true;
     for (const e of ranked) {
-      if (!e.notable || e.kind === 'junk') continue;
+      if (!e.notable || e.kind === 'junk' || gone.has(e.clip)) continue;
       if (used.has(`${e.clip}@${Math.round(e.start)}`)) continue;
       rows.push({ clip: e.clip, t: e.start, end: e.end, why: e.what, kind: e.kind,
                   score: e.score, evidence: (e.why_ranked || {}).confirmation });
@@ -1449,6 +1451,10 @@ function keepChips(s) {
 }
 
 function keepMatches(s, text) {
+  // Confirmed junk is out of the default view; the junk chip shows only junk.
+  const jstate = junkState(s.clip);
+  if (binChip === 'junk') { if (jstate !== 'confirmed' && jstate !== 'proposed') return false; }
+  else if (jstate === 'confirmed') return false;
   if (binChip === 'hero' && !s.hero) return false;
   if (binChip === 'in' || binChip === 'out') {
     const at = (!s.missing && P.clips[s.clip]) ? shotOf(s) : -1;
@@ -1481,10 +1487,12 @@ function paintBinFilter(keeps) {
   [...kinds.entries()].sort((a, b) => b[1] - a[1])
     .forEach(([k, n]) => chips.push([`kind:${k}`, `${k} ${n}`, '']));
   chips.push(['in', `in the cut ${inCut}`, 'in'], ['out', `not yet ${keeps.length - inCut}`, '']);
+  const nJunk = junkRows().filter((r) => r.state === 'proposed' || r.state === 'confirmed').length;
+  if (nJunk) chips.push(['junk', `junk ${nJunk}`, 'junk']);
   el.innerHTML = chips.map(([k, label, cls]) =>
     `<span class="chip ${cls}${binChip === k ? ' on' : ''}" data-chip="${escapeHtml(k)}"
            title="${binChip === k ? 'click to clear the filter' : 'show only these'}">${escapeHtml(label)}</span>`).join('');
-  el.hidden = !keeps.length;
+  el.hidden = !keeps.length && !nJunk;
 }
 
 function selectKeep(s, row) {
@@ -1530,14 +1538,15 @@ function keepRow(s) {
       ${s.why ? `<span class="w">${escapeHtml(s.why)}</span>` : ''}
       ${s.note ? `<span class="w note">“${escapeHtml(s.note)}”</span>` : ''}
       <div class="chips">${keepChips(s)}</div>
+      ${junkState(s.clip) === 'proposed' ? junkBadge(s.clip) : ''}
       ${use}
     </div>`;
   d.addEventListener('click', (e) => {
-    if (e.target.closest('a.use, button.use, .chip')) return;
+    if (e.target.closest('a.use, button.use, .chip, .junkq')) return;
     selectKeep(s, d);
   });
   d.addEventListener('dblclick', (e) => {
-    if (e.target.closest('a.use, button.use, .chip')) return;
+    if (e.target.closest('a.use, button.use, .chip, .junkq')) return;
     playKeep(s);
   });
   const link = d.querySelector('a.use');
@@ -1596,21 +1605,99 @@ function renderKept(lib) {
   const text = (q ? q.value : '').trim().toLowerCase();
   const keeps = all.filter((s) => keepMatches(s, text));
   paintBinFilter(all);
-  $('#libHint').textContent = !all.length ? ''
+  // The clips the junk pass has a word on, as cards of their own ahead of the keeps:
+  // a black clip rarely has a keep, and a proposal nobody can see is never answered.
+  // Proposed ones always; confirmed ones only under the junk chip.
+  const jcards = junkRows().filter((r) => (r.state === 'proposed'
+    || (binChip === 'junk' && r.state === 'confirmed'))
+    && (!text || r.stem.toLowerCase().includes(text)));
+  $('#libHint').textContent = binChip === 'junk'
+    ? 'Junk — proposed by a measurement, yours to confirm. Confirmed clips are out of the Ask, Find and this grid, and the index skips their look.'
+    : !all.length ? ''
     : keeps.length === all.length
       ? 'What the pass kept — heroes first. Click to select · + or enter adds it at the playhead · drag it onto V1 · double-click plays it here.'
       : `${keeps.length} of ${all.length} keeps match`;
   lib.innerHTML = '';
+  jcards.forEach((r) => lib.appendChild(junkCard(r)));
+  if (binChip === 'junk') {
+    keeps.forEach((s) => lib.appendChild(keepRow(s)));
+    if (!jcards.length && !keeps.length) lib.innerHTML = '<div class="hint">no junk — clear the chip</div>';
+    return;
+  }
   if (!all.length) {
+    if (jcards.length) return;
     lib.innerHTML = `<div class="hint">nothing kept yet — the pass is where you keep
       things · <a href="/floor" style="color:var(--accent)">the pass →</a></div>`;
     return;
   }
   if (!keeps.length) {
-    lib.innerHTML = '<div class="hint">no keep matches — clear the chip or the words above</div>';
+    if (!jcards.length) lib.innerHTML = '<div class="hint">no keep matches — clear the chip or the words above</div>';
     return;
   }
   keeps.forEach((s) => lib.appendChild(keepRow(s)));
+}
+
+/* Junk (HANDOFF roadmap item 5): the server measures, the editor answers. `junk` is
+ * GET /api/junk's rows; a verdict is one POST and a re-read, and the grid repaints. */
+let junk = null;
+
+function junkRows() { return (junk && junk.clips) || []; }
+function junkState(clip) {
+  const r = junkRows().find((x) => x.clip === clip);
+  return r ? r.state : 'clean';
+}
+function junkConfirmed() {
+  return new Set(junkRows().filter((r) => r.state === 'confirmed').map((r) => r.clip));
+}
+
+async function fetchJunk() {
+  try {
+    junk = await (await fetch('/api/junk')).json();
+  } catch (e) {
+    /* a blip keeps the last answer */
+  }
+}
+
+function junkBadge(clip) {
+  const r = junkRows().find((x) => x.clip === clip) || {};
+  const why = (r.reasons || []).join(' · ');
+  return `<div class="junkq" data-clip="${escapeHtml(clip)}" title="${escapeHtml(why)}">
+      <span class="jb">junk?</span>
+      <button class="jv" data-verdict="junk" title="confirm: out of the Ask, Find and the grid; the index skips its look">Confirm</button>
+      <button class="jv" data-verdict="keep" title="not junk: keep it everywhere">Keep</button></div>`;
+}
+
+function junkCard(r) {
+  const d = document.createElement('div');
+  d.className = `keep junkcard ${r.state}`;
+  d.dataset.clip = r.clip;
+  const why = (r.reasons || [])[0] || '';
+  const answer = r.state === 'proposed' ? junkBadge(r.clip)
+    : `<div class="junkq" data-clip="${escapeHtml(r.clip)}"><span class="jb done">junk</span>
+         <button class="jv" data-verdict="keep" title="not junk after all">Keep</button></div>`;
+  d.innerHTML = `
+    <img class="still" loading="lazy" decoding="async" draggable="false"
+         alt="${escapeHtml(r.stem)}" src="${r.poster}?t=0.00">
+    <div class="body">
+      <div class="t">${escapeHtml(r.stem)}${r.duration != null ? ` · ${Number(r.duration).toFixed(1)} s` : ''}</div>
+      <span class="w">${escapeHtml(why)}</span>
+      ${answer}
+    </div>`;
+  return d;
+}
+
+async function junkVerdict(clip, verdict) {
+  const r = await fetch('/api/junk', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ clip, verdict }),
+  });
+  if (!r.ok) return toast(`junk: ${(await r.text()).slice(0, 120)}`);
+  const body = await r.json();
+  await fetchJunk();
+  renderLibrary();
+  const skipped = (body.stages || []).length ? ` — the index skips its ${body.stages.join(' and ')}` : '';
+  return toast(verdict === 'junk' ? `${stem(clip)} is junk${skipped}`
+    : verdict === 'keep' ? `${stem(clip)} kept` : `${stem(clip)}: the proposal stands`);
 }
 
 /* The Project panel's one line about the bin, from the server's own summary. */
@@ -1678,6 +1765,7 @@ function paintCutFromBin() {
 async function refreshBin() {
   const fresh = await fetchBin();
   if (fresh) bin = fresh;
+  await fetchJunk();
   paintBinLine();
   paintSteps();
   renderLibrary();
@@ -2684,7 +2772,8 @@ async function boot() {
   // The bin, before the first paint: when the pass has kept things, the library opens
   // on them — that is what going from the pass to the board should look like.
   bin = await fetchBin();
-  if (keepsUsable().length) libTab = 'kept';
+  await fetchJunk();
+  if (keepsUsable().length || junkRows().some((r) => r.state === 'proposed')) libTab = 'kept';
   $('#title').textContent = [P.variant, P.title].filter(Boolean).join(' · ');
   $('#story').value = P.story || '';
   document.title = `Cut board — ${P.title}`;
@@ -2749,6 +2838,13 @@ async function boot() {
     if (libTab !== 'kept') return;
     clearTimeout(filterTimer);
     filterTimer = setTimeout(renderLibrary, 120);
+  });
+  // A junk answer, on a junk card or on a keep from a proposed clip.
+  $('#library').addEventListener('click', (e) => {
+    const b = e.target.closest('.junkq button.jv');
+    if (!b) return;
+    e.stopPropagation();
+    junkVerdict(b.closest('.junkq').dataset.clip, b.dataset.verdict);
   });
   // A chip, on the grid or on a card, is the filter; the same chip again clears it.
   document.addEventListener('click', (e) => {

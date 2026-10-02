@@ -235,6 +235,16 @@
   .keep button.use { padding: 2px 9px; }
   .keep.missing { opacity: .6; }
   .keep .gone { color: var(--bad); font-size: 12px; margin-top: 5px; display: block; }
+  /* Junk (HANDOFF item 5): a proposal wears "junk?" and the two answers; a junk card
+     is a clip, not a keep — no add, no drag, just the question. */
+  .chip.junk { color: var(--bad); border-color: #4c2c2c; }
+  .junkq { display: flex; align-items: center; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
+  .junkq .jb { color: var(--bad); font-weight: 600; font-size: 11px; letter-spacing: .04em;
+               cursor: help; }
+  .junkq .jb.done { cursor: default; }
+  #tools .junkq button.jv { padding: 1px 8px; font-size: 11.5px; }
+  .keep.junkcard { cursor: default; border-style: dashed; }
+  .keep.junkcard.confirmed { opacity: .65; }
   #binLine a, #indexLine a { color: var(--accent); text-decoration: none; }
   #binLine a:hover, #indexLine a:hover { text-decoration: underline; }
   kbd { background: #222; border: 1px solid var(--line); border-bottom-width: 2px;

@@ -152,6 +152,9 @@ function flagsOf(c) {
   else out.push('<i class="flag" title="the file could not be probed">telemetry ?</i>');
   if (c.looked) out.push('<i class="flag on">looked</i>');
   if (c.released) out.push('<i class="flag good">released</i>');
+  // The junk band (HANDOFF item 5): a measurement's proposal, answered on the board.
+  if (c.junk === 'proposed') out.push('<i class="flag bad" title="looks like junk — answer it in the bin on the board">junk?</i>');
+  else if (c.junk === 'confirmed') out.push('<i class="flag bad">junk</i>');
   return out.join('');
 }
 

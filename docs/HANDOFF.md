@@ -224,7 +224,7 @@ closed:
 |---|---|---|
 | new project | — | `--footage` alone; a missing EDL is scaffolded ✅ |
 | analyse | `audio_analyze.py` in a terminal | in-app, progress counted from sidecars on disk ✅ |
-| junk / orientation | manual `--skip`, prior study | **still not proposed** ❌ (`--orient` at scaffold, `skip` on the analyse call) |
+| junk / orientation | manual `--skip`, prior study | **junk proposed, human confirms** ✅ (2026-10, roadmap item 5; thresholds provisional) · orientation: proxies honour the rotation tag (`--orient auto`), not proposed per clip |
 | **first cut** | **hand-authored JSON** | **Ask originates it** ✅ |
 | refine | the board, and it works | ✅ plus a five-step strip saying where you are |
 | render & compare | one file, newest only | versions list, A/B players ✅ |
@@ -553,6 +553,20 @@ Ordered by what changes most, not by effort:
    false-positives on the night parking lot and the dim plane interior, both real content),
    orientation per-clip from a sheet the human confirms — or from the visual sidecars, now that
    they exist.
+   **Junk: BUILT (2026-10-02, `agent/junk`).** `roughcut/junk.py` reads the colour file the
+   proxy stage already writes, the sidecar's words and the duration: *black* = mean luma
+   < 12/255 with no sample above 40, *flat* = luma spread < 10/255, *short* = < 1.5 s, and
+   never with a word heard. On B1 it takes exactly the nine junk clips (they measure
+   1.1–10.9; the app's own colour files agree within 2.4/255 below 35) and none of the dim
+   real ones (16.8–29.6). **The thresholds are provisional** — one raw bin's numbers; run
+   them over the next raw bin before trusting them. The EDL's `junk` block holds only the
+   editor's `junk` / `keep`; a confirmed clip leaves the Ask, Find and the bin's default
+   view, and the journal skips its look and close look; a proposed one waits behind the
+   clean clips in the index. Board: a `junk?` card per proposal at the head of the bin
+   grid with Confirm / Keep, a `junk N` chip. API: `GET` / `POST /api/junk` (app/README →
+   *Junk*). Not built: a frozen-frame rule (at 5 s sampling a tripod shot looks frozen —
+   GX010487 moves 0.9/255), a `junk?` badge on the pass, and orientation proposals
+   (proxies already apply the rotation tag with `--orient auto`).
 6. **Music mode (P2.6)** — a bed is built; *cutting to* a track is not. It is a genuinely
    different selection problem ("fill these N slots of these lengths"), which is why it has not
    been picked up casually. Karl's *"a cut that works perfect with a jump and the music"* was

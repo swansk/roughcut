@@ -28,6 +28,28 @@ same commit. Releases move entries into a dated version section.
   mints new ids for every shot and strands their colour overrides.
 - **INTAKE I10.5 ticked** with the commit and the lane's decisions (patch not block,
   reject-not-drop on the shot ask, no second inference path).
+- **Docs for junk (HANDOFF roadmap item 5)** — HANDOFF's session-3 table row and roadmap
+  item 5 say what is built and that the thresholds are provisional; app/README gains a
+  *Junk* row with the two endpoints and loses the "junk not proposed" gap; INTAKE I5.1
+  notes the junk band is on the wire.
+- **Junk in the dock's bin and on the open screen (HANDOFF roadmap item 5)** — a proposed
+  clip gets a card of its own at the head of the bin grid (a black clip rarely has a
+  keep, and a proposal nobody sees is never answered), its keeps wear `junk?` with
+  **Confirm** / **Keep**, and the bin opens on the grid when there is a proposal.
+  Confirmed clips leave the grid's default view and the heard / seen rows; a `junk N`
+  chip shows them, with **Keep** to undo. `/open`'s cards carry the `junk?` / `junk`
+  flag I5.1 left off the wire. `test_junk_ui.py` (2).
+- **Junk is proposed, the editor confirms (HANDOFF roadmap item 5)** — `roughcut/junk.py`
+  reads the colour file the proxy stage already wrote, the audio sidecar's words and the
+  duration, and proposes a clip as junk when it is essentially black (mean luma < 12/255
+  and no sample above 40), one flat field (luma spread < 10/255) or under 1.5 s — and
+  never when a word was heard. Held against B1/Copper's per-clip measurements it takes
+  exactly the nine known junk clips and none of the dim real ones a naive `luma<35`
+  takes (the night parking lot, the plane); every threshold is provisional, one bin's
+  numbers. The EDL's `junk` block holds only the human's `junk` / `keep` (validated on
+  PUT); `GET /api/junk` / `POST /api/junk`. A confirmed clip leaves the Ask's inventory
+  (first cut and revision) and Find, and the index journal skips its look and close
+  look — the money; a proposed one waits behind the clean clips in the index queue.
 - **A proposal on a shot the edits will create shows on the board (INTAKE M13)** — live,
   the typed-title-on-a-slide proposal (shot `new:1`) was on disk but on no shot's card;
   the list now carries `anchor_shot` (the first op's shot, or the shot the slide goes

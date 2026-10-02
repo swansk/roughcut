@@ -156,3 +156,60 @@ def client(project):
     with TestClient(server.app) as c:
         yield c
     project["edl"].write_text(original, encoding="utf-8")
+
+
+# ---------------------------------------------------------------- a bin with junk in it
+#
+# HANDOFF roadmap item 5. Modelled on B1/Copper's measurements
+# (benchmarks/labels/B1-luma.json): a pocket clip that is black (B1's nine junk clips
+# measure 1.1–10.9), a dim but real night clip (the parking lot and the plane measure
+# 16.8–29.6 — what a naive luma<35 would wrongly take), a black clip someone talks
+# over, and a half-second accidental press. Plus one ordinary clip to cut from.
+
+JUNK_CLIPS = {
+    # stem: (lavfi video source, seconds, words in its sidecar)
+    "CLIP_OK": ("testsrc2=size=320x180:rate=24", 6.0, True),
+    "CLIP_DARK": ("color=c=black:size=320x180:rate=24", 12.0, False),
+    "CLIP_NIGHT": ("testsrc2=size=320x180:rate=24,lutyuv=y=16+(val-16)*0.15:u=128+(val-128)*0.15:v=128+(val-128)*0.15", 12.0, False),
+    "CLIP_TALK": ("color=c=black:size=320x180:rate=24", 12.0, True),
+    "CLIP_BLIP": ("testsrc2=size=320x180:rate=24", 1.0, False),
+}
+
+
+def _make_junk_clip(path: Path, src: str, seconds: float) -> None:
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-nostdin",
+         "-f", "lavfi", "-i", f"{src.split(',')[0]}:duration={seconds}",
+         "-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}",
+         *(["-vf", ",".join(src.split(",")[1:])] if "," in src else []),
+         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+         "-c:a", "aac", "-shortest", str(path)],
+        check=True, capture_output=True)
+
+
+@pytest.fixture(scope="session")
+def junk_project(tmp_path_factory) -> dict:
+    root = tmp_path_factory.mktemp("junkproj")
+    footage, sidecars, work = root / "footage", root / "sidecars", root / "work"
+    for d in (footage, sidecars, work):
+        d.mkdir()
+    for stem, (src, seconds, talks) in JUNK_CLIPS.items():
+        _make_junk_clip(footage / f"{stem}.MP4", src, seconds)
+        side = _sidecar(stem)
+        side["duration_s"] = seconds
+        if not talks:
+            side["transcript"] = []
+            side["candidates"] = []
+            side["summary"] = {**side["summary"], "n_words": 0, "speech_fraction": 0.0}
+        (sidecars / f"{stem}.audio.json").write_text(json.dumps(side, indent=1),
+                                                      encoding="utf-8")
+    edl = {"variant": "J", "title": "junk bin", "orient": "none", "story": "",
+           "target_s": [5, 20],
+           "segments": [{"clip": "CLIP_OK.MP4", "in": 1.0, "out": 3.0, "why": "first"}]}
+    edl_path = root / "edl.json"
+    edl_path.write_text(json.dumps(edl, indent=1), encoding="utf-8")
+    assets = root / "assets"
+    (assets / "music").mkdir(parents=True)
+    return {"root": root, "footage": footage, "sidecars": sidecars, "work": work,
+            "edl": edl_path, "stems": list(JUNK_CLIPS), "assets": assets,
+            "seed": edl_path.read_text(encoding="utf-8")}
