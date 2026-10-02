@@ -10,6 +10,10 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Docs for junk (HANDOFF roadmap item 5)** — HANDOFF's session-3 table row and roadmap
+  item 5 say what is built and that the thresholds are provisional; app/README gains a
+  *Junk* row with the two endpoints and loses the "junk not proposed" gap; INTAKE I5.1
+  notes the junk band is on the wire.
 - **Junk in the dock's bin and on the open screen (HANDOFF roadmap item 5)** — a proposed
   clip gets a card of its own at the head of the bin grid (a black clip rarely has a
   keep, and a proposal nobody sees is never answered), its keeps wear `junk?` with

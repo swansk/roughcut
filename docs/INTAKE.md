@@ -278,6 +278,8 @@ them); a pre-ask price for "Cut from the bin".
       `no telemetry`, `looked`, `released`), the journal's word on the picture once the bin
       has one, a legend. The junk band and the rotation side-data are not on the wire yet
       (`/api/clips` carries neither) — flags shown are the free facts it does carry.
+      **The junk band is on the wire since `f0e01ec`** (HANDOFF roadmap item 5, branch
+      `agent/junk`): `/api/clips` carries `junk` and the cards show `junk?` / `junk`.
       `test_open_ui.py` 2 passed; suite 332 passed, 1 skipped.
 - [x] I5.2 Themes proposed from transcripts (one judge-role call), chips + dictation. — the
       data side `fc26979`: `roughcut/themes.py`, `POST /api/themes/propose` (job, priced),
