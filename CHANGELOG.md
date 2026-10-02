@@ -10,6 +10,13 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Junk in the dock's bin and on the open screen (HANDOFF roadmap item 5)** — a proposed
+  clip gets a card of its own at the head of the bin grid (a black clip rarely has a
+  keep, and a proposal nobody sees is never answered), its keeps wear `junk?` with
+  **Confirm** / **Keep**, and the bin opens on the grid when there is a proposal.
+  Confirmed clips leave the grid's default view and the heard / seen rows; a `junk N`
+  chip shows them, with **Keep** to undo. `/open`'s cards carry the `junk?` / `junk`
+  flag I5.1 left off the wire. `test_junk_ui.py` (2).
 - **Junk is proposed, the editor confirms (HANDOFF roadmap item 5)** — `roughcut/junk.py`
   reads the colour file the proxy stage already wrote, the audio sidecar's words and the
   duration, and proposes a clip as junk when it is essentially black (mean luma < 12/255
