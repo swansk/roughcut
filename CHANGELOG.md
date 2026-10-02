@@ -9,6 +9,11 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Documentation
+- **HANDOFF: the 2026-10-02 block** — the colour Ask, the claims audit and junk proposals
+  merged; measured read-only on the real bins (Copper's junk proposals are exactly B1's
+  nine; Killington's top-12 audit ≈ $0.88, unspent); suite 678 passed, 1 skipped.
+
 ### Added
 - **The Ask reaches colour (INTAKE M10, I10.5)** — a note about the picture ("warmer",
   "less blue on the lift shot", "make it pop", "match the lift shot to the summit")

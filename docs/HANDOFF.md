@@ -1,5 +1,28 @@
 # Handoff — read this first
 
+**2026-10-02 — three things built while Karl's looks are pending.** Nothing here needs
+his look to be useful, and each is one click away from a decision only he makes.
+(1) **The Ask reaches colour (INTAKE I10.5):** a note about the picture comes back as a
+`colour` patch (film look / strength / mode, per-shot overrides by segment id) validated
+against the looks library — an invented look fails the plan and re-asks; the shot ask may
+only touch its own shot; the proposal panel shows the colour lines, Accept merges the
+patch in the same PUT. Planned shots now **carry the id** of the shot they continue
+(`revise.carry_ids`), so a full Ask no longer strands per-shot overrides. (2) **Audit what
+the sheets claim (roadmap 1):** close-look windows go to the coarse pass's own hot claims
+before motion peaks; a priced **Audit N claims** button on the seen tab
+(`POST /api/visual/audit`, dry run prices it); a close look with no coarse claim agreeing
+is `fine-only` (0.7), no longer a neutral 1.0; the sheet prompts carry the camera-roll
+guard and inversion wording is demoted. **Measured on Killington's files (read-only):**
+23 unaudited hot claims; the top 12 are 12 windows, **≈ $0.88** — Karl's spend, not
+spent. (3) **Junk proposed, human confirms (roadmap 5):** `roughcut/junk.py` from the
+colour files, words and duration; Confirm/Keep in the bin; confirmed junk leaves the Ask,
+Find and the grid and skips the priced index stages. **Measured on the real bins:**
+Copper proposes exactly B1's nine junk clips and nothing else; Killington proposes none.
+Suite on merged main: **678 passed, 1 skipped**. Lanes `agent/ask-colour`,
+`agent/events-audit`, `agent/junk` merged (`40c97bf`, `9692a11`, `5bd3804`).
+**Next for Karl:** the looks already queued (I9.6, I10.6, I11.5, I12.5, I13.5), then say
+the word on the ≈ $0.88 audit, and try a colour note in the Ask ("warmer", "use cold").
+
 **2026-09-20, latest — INTAKE M13: the FX tool changes the cut.** Beside an overlay and a
 sound, the model now proposes **operations on the cut** (`roughcut/edits.py`: extend,
 set_range, split, speed over a range, generate a black / colour / still clip, freeze,
