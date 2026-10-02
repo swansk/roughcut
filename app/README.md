@@ -145,6 +145,23 @@ Plans are validated hard before they reach the screen — a segment naming a cli
 exist, or running past the end of one, fails and gets one bounded re-ask. An invented timestamp
 that renders as missing footage is worse than a visible error.
 
+**The Ask reaches colour (INTAKE M10, I10.5).** A revision prompt also carries a short
+*Colour* section: the film's `colour` block, the looks library by name and description, the
+override vocabulary with its limits, and one line of measured numbers per shot in the cut (the
+white surface's L\* and cast, clipped %, the balance it resolves to now). A note about the
+picture — *warmer*, *less blue on the lift shot*, *make it pop*, *match the lift shot to the
+summit* — answers with a `colour` **patch** (only what changes; per-shot overrides keyed by
+the shot's id), validated against the real library: an invented look or a number outside the
+vocabulary is a failed plan and gets the same one re-ask. A colour-only note may leave
+`segments` out, and the proposal says *the cut unchanged — only the colour changes*. The panel
+shows the grade in words (`look: filmic at 0.6`, `shot 3 · CLIP_07: warmer, brighter`);
+Accept merges the patch over the board's block and saves it with the segments in one write
+(colour is not on the undo stack, as in the inspector); Discard drops both. The ✎ shot ask
+offers the same clause for that shot alone and rejects a patch that touches the film or
+another shot. A proposal's shots now carry the ids of the shots they continue (same clip,
+half the shorter range overlapping), so an Accept no longer re-keys every shot and strands
+their colour overrides.
+
 All of this goes through `roughcut.inference` (SPEC §6), never directly to a model: roles from
 `config.py`, `ROUGHCUT_BACKEND=claude_cli|anthropic_api`, and every call logged with tokens and
 `projected_usd` — including on the Max subscription, where there is no marginal cost but the

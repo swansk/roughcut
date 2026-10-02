@@ -24,9 +24,11 @@ Two design rules, both learned the hard way earlier in this project:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Callable
 
+from . import colour as colourmod
 from . import config, edits
 from .boundaries import polish_plan
 from .estimate import Estimate, estimate
@@ -37,6 +39,15 @@ PLAN_SCHEMA = {
     "segments": [{"clip": "GX010495.MP4", "in": 1.6, "out": 13.7,
                   "why": "one short sentence on why this moment, in this place"}],
     "notes": "2-3 sentences: what you changed and why, addressed to the editor",
+}
+
+# The same plan when the prompt carries the colour section (INTAKE I10.5). The key is
+# described, not exemplified: an example patch in the shape would be copied into answers
+# whose note never mentioned the picture.
+PLAN_SCHEMA_COLOUR = {
+    **PLAN_SCHEMA,
+    "colour": "OPTIONAL — leave this key out unless the note asks for a change to the "
+              "picture; when present, a patch on the colour block (see '## Colour')",
 }
 
 SYSTEM = (
@@ -307,10 +318,144 @@ def _clip_block(clip: dict, timeline: dict[str, str] | None = None) -> str:
     return "\n".join(lines)
 
 
+# ------------------------------------------------------------------ colour (I10.5)
+#
+# The Ask reaches the grade through the vocabulary M10 decided (decision 1: the model
+# never writes filter strings): a patch on the EDL's colour block, validated against the
+# real looks library by `colour.validate_patch`, and an invented look is a failed plan
+# that gets the bounded re-ask like an invented clip. The section is short on purpose —
+# a full Ask is already tens of thousands of tokens — and per-shot numbers are given
+# only for the shots in the cut, since a shot outside it has no id to be graded by.
+
+COLOUR_HEADER = "## Colour"
+
+COLOUR_GUIDANCE = """\
+The picture is graded through a closed vocabulary; you never write filters. **Leave
+`colour` out of your answer unless the note asks for a change to the picture** — colour,
+warmth, blue or yellow, brightness, contrast, "pop", a look, one shot matching another.
+When it does, `colour` is a patch: only the keys that change.
+
+  {"look": name or null, "strength": 0-1, "mode": "auto" or "off", "reference": shot id,
+   "shots": {"<shot id>": {"balance": {"gain": [r, g, b], "exposure": x, "knee": k,
+                                       "lift": l} or null,
+                            "auto": true/false, "look": name or null, "strength": 0-1,
+                            "match": "previous" or "reference" or null}}}
+
+* `look` / `strength` — the film's look, by a name from the list below and nothing else;
+  0.4-0.6 reads as a look, above 0.8 as a filter. Choose by description ("make it pop"
+  is the one whose description says contrast and vibrance). A shot's own `look` (null:
+  none on that shot) overrides the film's.
+* `balance` replaces the shot's auto balance, so start from the shot's numbers below and
+  move them: warmer = gain r up and b down by 0.02-0.04 a step, "less blue" = b down,
+  brighter = exposure ×1.05 a step. Limits: each gain 0.85-1.15, exposure 0.75-1.5,
+  lift ±0.04, knee 0.6-1.0 — outside them the plan is rejected. `balance: null` returns
+  the shot to the auto; `auto: false` shows it as the camera shot it.
+* `match: "previous"` moves a shot's colour toward the shot before it; `"reference"`
+  toward the film's reference shot, which `reference` sets — "match the lift shot to the
+  summit" is `reference` = the summit's id and `match: "reference"` on the lift shot.
+* Shots are named by the ids below; an id that is not listed is rejected."""
+
+COLOUR_FACTS = """\
+Each shot, measured on sampled frames: `white` is the bright near-neutral surface (snow,
+sky, a wall) — L* its brightness, a*/b* its cast (b* below 0 is blue, above 0 yellow; a*
+below 0 green, above 0 magenta); `clipped` the share of pixels at 98 % or more, which no
+grade brings back; `balance` what the shot resolves to now (auto or a hand's)."""
+
+
+def _shot_colour_line(n: int, row: dict, over: dict | None) -> str:
+    w = row.get("witness") or {}
+    parts = [f"  {n:2d}. {row['id']}  {Path(row['clip']).stem}"]
+    if w.get("white_source") == "surface" and w.get("white"):
+        wh = w["white"]
+        parts.append(f"white L {wh['L']:.0f} a {wh['a']:+.1f} b {wh['b']:+.1f}")
+    elif w.get("white_source") == "grey":
+        parts.append("no white surface (grey-world)")
+    elif w.get("n"):
+        parts.append("no white reference")
+    else:
+        parts.append("not measured")
+    if w.get("clip") is not None and w.get("n"):
+        parts.append(f"clipped {100 * float(w['clip']):.1f}%")
+    if w.get("chroma") is not None:
+        parts.append(f"chroma {float(w['chroma']):.1f}")
+    b = row.get("balance")
+    if b:
+        g = b["gain"]
+        parts.append(f"balance {b.get('source', 'auto')} gain {g[0]:.2f}/{g[1]:.2f}/{g[2]:.2f} "
+                     f"×{float(b['exposure']):.2f} lift {float(b.get('lift', 0)):+.3f}")
+    else:
+        parts.append("balance none (as shot)")
+    look = row.get("look")
+    parts.append(f"look {look} at {row.get('strength', 0):g}" if look else "no look")
+    if over:
+        parts.append("override " + json.dumps(over, separators=(",", ":")))
+    return " · ".join(parts)
+
+
+def colour_section(ctx: dict | None, segments: list[dict],
+                   only: str | None = None) -> str:
+    """The colour vocabulary, the film's block, the looks by name and description, and
+    one line of numbers per shot in the cut — or "" with nothing to grade. `only` (the
+    scoped ask) lists that one shot and says the patch may touch nothing else."""
+    if not ctx:
+        return ""
+    film = ctx.get("film") or {}
+    looks = [(k, v.get("description", "")) for k, v in (ctx.get("looks") or {}).items()
+             if v.get("kind") != "broken"]
+    rows = {r["id"]: r for r in ctx.get("shots") or [] if r.get("id")}
+    overs = film.get("shots") or {}
+    lines = []
+    for i, s in enumerate(segments):
+        sid = s.get("id")
+        if sid in rows and (only is None or sid == only):
+            lines.append(_shot_colour_line(i + 1, rows[sid], overs.get(sid)))
+    if only is not None and not lines:
+        return ""
+    now = (f"mode {film.get('mode', 'auto')}, "
+           + (f"look {film['look']} at {film.get('strength', colourmod.DEFAULT_STRENGTH):g}"
+              if film.get("look") else "no look")
+           + (f", reference {film['reference']}" if film.get("reference") else
+              ", reference: the first shot"))
+    scope = ("" if only is None else
+             f"\n\nThis note is about ONE shot: `colour` may only set `shots.{only}` — the "
+             "film's look, mode and reference, and every other shot, are not yours to "
+             "change here.")
+    return (f"{COLOUR_HEADER}\n\n{COLOUR_GUIDANCE}{scope}\n\nThe film now: {now}.\n\n"
+            "Looks (the only names that exist):\n"
+            + "\n".join(f"* {k} — {d}" for k, d in looks)
+            + (f"\n\n{COLOUR_FACTS}\n" + "\n".join(lines) if lines else ""))
+
+
+def carry_ids(new: list[dict], current: list[dict]) -> list[dict]:
+    """The plan's shots take the ids of the cut's shots they continue — same clip and
+    overlapping at least half the shorter of the two (the ghost lane's `matchPlan` rule),
+    each id claimed once. Without it every Accept minted new ids, and every per-shot
+    colour override, hand or proposed, was keyed to a shot that no longer existed."""
+    out = [dict(s) for s in new]
+    used: set[str] = set()
+    for s in out:
+        best, best_r = None, 0.5
+        for c in current:
+            cid = c.get("id")
+            if not cid or cid in used or c.get("clip") != s.get("clip"):
+                continue
+            a0, a1 = float(s["in"]), float(s["out"])
+            b0, b1 = float(c["in"]), float(c["out"])
+            shorter = max(1e-6, min(a1 - a0, b1 - b0))
+            r = max(0.0, min(a1, b1) - max(a0, b0)) / shorter
+            if r >= best_r:
+                best, best_r = cid, r
+        if best:
+            s["id"] = best
+            used.add(best)
+    return out
+
+
 def build_prompt(segments: list[dict], clips: dict[str, dict], story: str,
                  note: str, target: tuple[float, float],
                  events: list[dict] | None = None,
-                 selects: list[dict] | None = None) -> str:
+                 selects: list[dict] | None = None,
+                 colour: dict | None = None) -> str:
     current = "\n".join(
         f"  {i + 1:2d}. {s['clip']} {s['in']:.2f}-{s['out']:.2f} "
         f"({edits.dur(s):.1f}s) — {s.get('why', '')}"
@@ -325,6 +470,13 @@ def build_prompt(segments: list[dict], clips: dict[str, dict], story: str,
     kept = f"{kept}\n\n" if kept else ""
     ranked = events_section(events or [])
     ranked = f"{ranked}\n\n" if ranked else ""
+    # After the note and before the bin: short, and only read when the note is about
+    # the picture — but it must be seen before the inventory buries it.
+    graded = colour_section(colour, segments)
+    graded = f"{graded}\n\n" if graded else ""
+    colour_only = ("\n\nIf the note asks only for a change to the picture, you may leave "
+                   "out `segments` entirely: the cut then stays exactly as it is and only "
+                   "`colour` changes." if graded else "")
 
     return f"""The editor is cutting a short film from one bin of footage.
 
@@ -341,7 +493,7 @@ def build_prompt(segments: list[dict], clips: dict[str, dict], story: str,
 ## The editor's note
 {note.strip()}
 
-{kept}{ranked}## Every clip available, with its transcript
+{graded}{kept}{ranked}## Every clip available, with its transcript
 {inventory}
 
 ## What to return
@@ -351,7 +503,7 @@ seconds within the named clip. Prefer cutting on utterance boundaries visible in
 transcripts above. Each clip says when it was recorded relative to the others — use it
 as information rather than as a rule. Deliberate reordering is good editing; only the
 accidental kind, drifting backwards through one continuous stretch for no reason,
-reads as a mistake. Say in the `why` when a move is deliberate."""
+reads as a mistake. Say in the `why` when a move is deliberate.{colour_only}"""
 
 
 def build_first_prompt(clips: dict[str, dict], story: str, note: str,
@@ -420,7 +572,8 @@ SHOT_FALLBACK_ETA_S = 60.0
 
 def build_shot_prompt(segments: list[dict], index: int, clips: dict[str, dict],
                       story: str, note: str,
-                      target: tuple[float, float]) -> str:
+                      target: tuple[float, float],
+                      colour: dict | None = None) -> str:
     """The scoped prompt: the whole film for context, one clip in full detail.
 
     Deliberately NOT the bin inventory. A full Ask is ~40k tokens and 3-4 minutes on
@@ -440,6 +593,11 @@ def build_shot_prompt(segments: list[dict], index: int, clips: dict[str, dict],
     # No shot_timeline here: relative capture order is chronology *across* clips, and
     # this call is confined to one.
     block = _clip_block(clips[clip])
+    # The colour clause (I10.5): this shot's numbers only, and a patch confined to its id.
+    graded = colour_section(colour, segments, only=seg.get("id")) if seg.get("id") else ""
+    graded = f"\n\n{graded}" if graded else ""
+    colour_only = ("\n\nIf the note is only about the picture, leave out `segments`: the "
+                   "shot keeps its range and only `colour` changes." if graded else "")
 
     return f"""The editor is cutting a short film from one bin of footage and has a note \
 about ONE shot of the current edit.
@@ -463,7 +621,7 @@ Why it is there: {seg.get('why') or '(no reason recorded)'}
 {note.strip()}
 
 ## The clip this shot comes from
-{block}
+{block}{graded}
 
 ## What to return
 The replacement for this one shot only, as `segments` — usually one segment, more if
@@ -471,15 +629,21 @@ the note asks to split it. Every segment must come from {clip}; the rest of the 
 is not yours to change here. Timestamps are seconds within the clip. Prefer cutting on
 utterance boundaries visible in the transcript, and mind what plays before and after
 this shot. If the note would be best served by removing the shot entirely, return it
-unchanged and say so in `notes` — removing is the editor's own one-click action."""
+unchanged and say so in `notes` — removing is the editor's own one-click action.\
+{colour_only}"""
 
 
 def propose_shot(segments: list[dict], index: int, clips: dict[str, dict],
                  story: str, note: str,
                  target: tuple[float, float] = (120.0, 180.0),
-                 on_partial: Callable[[str, str], None] | None = None) -> dict:
+                 on_partial: Callable[[str, str], None] | None = None,
+                 colour: dict | None = None) -> dict:
     """Ask for a revision of one shot. Returns {'segments', 'notes', 'usage'} where
-    `segments` is the replacement for that shot alone — the caller splices."""
+    `segments` is the replacement for that shot alone — the caller splices — and
+    `colour`, when the note asked for one, a patch that touches that shot's id only.
+
+    `colour` is the grading context (`colour_section`'s `ctx`); the clause is offered
+    only when the shot has an id to key it by."""
     if not note.strip():
         raise ValueError("empty note")
     if not segments:
@@ -490,8 +654,11 @@ def propose_shot(segments: list[dict], index: int, clips: dict[str, dict],
     if clip not in clips:
         raise ValueError(f"{clip} has no analysis — run the audio pass first")
     scoped = {clip: clips[clip]}
-    return _ask(build_shot_prompt(segments, index, clips, story, note, target),
-                SHOT_SYSTEM, scoped, on_partial)
+    sid = segments[index].get("id")
+    ctx = colour if sid else None
+    return _ask(build_shot_prompt(segments, index, clips, story, note, target, ctx),
+                SHOT_SYSTEM, scoped, on_partial, colour=ctx,
+                current=[segments[index]], focus_id=sid)
 
 
 # A hero counts as placed when one shot covers at least this much of its range — the
@@ -525,7 +692,9 @@ def dropped_heroes(segments: list[dict], heroes: list[dict]) -> list[dict]:
 
 
 def validate_plan(payload: Any, clips: dict[str, dict],
-                  heroes: list[dict] | None = None) -> dict:
+                  heroes: list[dict] | None = None, *,
+                  colour: dict | None = None, current: list[dict] | None = None,
+                  focus_id: str | None = None) -> dict:
     """Strict. A plausible-looking plan that names a clip we do not have, or runs
     past the end of one, is worse than a loud failure — it renders as a crash or,
     worse, as silently missing footage.
@@ -535,7 +704,29 @@ def validate_plan(payload: Any, clips: dict[str, dict],
     unless `notes` names that hero's clip. The model may drop a hero; it must say so,
     because "hero = must appear, model may trim inside" (docs/INTAKE.md, defaults) is
     only honest if a dropped one is visible to the editor rather than quietly gone.
+
+    `colour` (the grading context, I10.5) admits a `colour` patch, held to the real
+    looks library and to the ids of `current` — the cut's shots, or with `focus_id` the
+    one shot a scoped ask is about, and then no film-level keys. With it, a plan may
+    leave `segments` out to mean "the cut as it is": a colour-only note need not make
+    the model re-type every shot. Without it a `colour` key is dropped — the model was
+    never shown the vocabulary, so nothing it wrote there can be trusted.
     """
+    patch: dict = {}
+    if isinstance(payload, dict) and colour is not None and payload.get("colour"):
+        ids = ({focus_id} if focus_id else
+               {s["id"] for s in current or [] if s.get("id")})
+        try:
+            patch = colourmod.validate_patch(payload["colour"], colour.get("looks") or {},
+                                             ids=ids, film=focus_id is None)
+        except ValueError as exc:
+            raise ValueError(f"colour: {exc}") from None
+    if (isinstance(payload, dict) and payload.get("segments") in (None, [])
+            and patch and current):
+        # Colour only: the shots verbatim (ids, speed and all), and nothing to polish.
+        return {"segments": [dict(s) for s in current],
+                "notes": str(payload.get("notes", "")).strip()[:1200],
+                "colour": patch, "unchanged": True}
     if not isinstance(payload, dict) or "segments" not in payload:
         raise ValueError("expected an object with a 'segments' list")
     segments = payload["segments"]
@@ -568,7 +759,30 @@ def validate_plan(payload: Any, clips: dict[str, dict],
                 f"{float(h['start']):.1f}-{float(h['end']):.1f} without saying why: "
                 f"keep it (trimming inside its range is fine) or name {h['clip']} "
                 f"in notes and explain")
-    return {"segments": clean, "notes": notes}
+    plan: dict = {"segments": clean, "notes": notes}
+    if current:
+        plan["segments"] = carry_ids(clean, current)
+    if patch:
+        # A shot the patch grades but the plan no longer contains (cut, or retrimmed
+        # past recognition) has nothing to carry the change: it is left out and said,
+        # the way polish declares what it moved — rejecting it would spend a whole
+        # re-ask on a line the editor can redo with one nudge.
+        kept = {s.get("id") for s in plan["segments"] if s.get("id")}
+        gone = [sid for sid in (patch.get("shots") or {}) if sid not in kept]
+        for sid in gone:
+            patch["shots"].pop(sid)
+        if "shots" in patch and not patch["shots"]:
+            patch.pop("shots")
+        if patch.get("reference") and patch["reference"] not in kept:
+            patch.pop("reference")
+            gone.append("the reference")
+        if gone:
+            line = (f"Colour: left out the change for {', '.join(gone)} — the plan no "
+                    "longer has that shot.")
+            plan["notes"] = f"{notes}\n\n{line}".strip()
+        if patch:
+            plan["colour"] = patch
+    return plan
 
 
 # ------------------------------------------------------------------ progress
@@ -675,17 +889,22 @@ thinking enabled, and it must return the whole edit as JSON.
 
 def _ask(prompt: str, system: str, clips: dict[str, dict],
          on_partial: Callable[[str, str], None] | None = None,
-         heroes: list[dict] | None = None) -> dict:
+         heroes: list[dict] | None = None, *, colour: dict | None = None,
+         current: list[dict] | None = None, focus_id: str | None = None) -> dict:
     result = complete(
-        prompt, role=config.ROLE_SKELETON, schema=PLAN_SCHEMA, system=system,
-        validate=lambda payload: validate_plan(payload, clips, heroes), retries=1,
-        on_partial=on_partial)
+        prompt, role=config.ROLE_SKELETON,
+        schema=PLAN_SCHEMA_COLOUR if colour is not None else PLAN_SCHEMA, system=system,
+        validate=lambda payload: validate_plan(payload, clips, heroes, colour=colour,
+                                               current=current, focus_id=focus_id),
+        retries=1, on_partial=on_partial)
     # Boundary polish runs on the *validated* plan, so it can assume in/out are
     # real numbers inside a real clip and worry only about where they land in the
     # speech. Both callers get it: a first cut has the same clipped words as a
     # revision, and asking the model to be more careful about a timestamp it read
     # off a transcript is asking it to do arithmetic the sidecar already knows.
-    plan = polish_plan(result.content, clips)
+    # A colour-only plan is the cut as it stands: nothing the model chose to polish.
+    plan = (dict(result.content) if result.content.get("unchanged")
+            else polish_plan(result.content, clips))
     plan["usage"] = {
         "input_tokens": result.input_tokens, "output_tokens": result.output_tokens,
         "projected_usd": result.projected_usd, "model": result.model,
@@ -698,16 +917,22 @@ def propose(segments: list[dict], clips: dict[str, dict], story: str, note: str,
             target: tuple[float, float] = (120.0, 180.0),
             events: list[dict] | None = None,
             on_partial: Callable[[str, str], None] | None = None,
-            selects: list[dict] | None = None) -> dict:
-    """Ask for a revision. Returns {'segments', 'notes', 'usage'}.
+            selects: list[dict] | None = None,
+            colour: dict | None = None) -> dict:
+    """Ask for a revision. Returns {'segments', 'notes', 'usage'}, plus `colour` (a
+    patch on the EDL's colour block) when the note asked for a change to the picture.
 
     `selects` — the bin (`edl["selects"]`) — is context here, not a constraint: the
     editor has already accepted a cut, and the note is what they are steering by now.
+    `colour` — `{"film": the EDL's block, "looks": the library, "shots": the server's
+    resolved rows}` — offers the grade (INTAKE I10.5); without it the Ask is cut-only.
+    The plan's shots carry the ids of the cut's shots they continue (`carry_ids`).
     """
     if not note.strip():
         raise ValueError("empty note")
-    return _ask(build_prompt(segments, clips, story, note, target, events, selects),
-                SYSTEM, clips, on_partial)
+    return _ask(build_prompt(segments, clips, story, note, target, events, selects,
+                             colour),
+                SYSTEM, clips, on_partial, colour=colour, current=segments)
 
 
 def originate(clips: dict[str, dict], story: str, note: str = "",

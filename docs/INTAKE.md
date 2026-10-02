@@ -817,7 +817,23 @@ below must honour:
       nudges (± steps on the clamped parameters), *reference* / *match to previous*, and
       the numbers as the witness (snow L\*, cast a\*/b\*, clipped %). Browser test: the
       canvas draws, `G` flips it, a nudge PUTs the override keyed by id.
-- [ ] I10.5 **The Ask reaches colour.** A note ("warmer", "less blue", "make it pop",
+- [x] I10.5 (lane `agent/ask-colour` `0b53962`; `test_ask_colour.py` 22 + one browser test
+      in `test_ui_flow.py`) **The Ask reaches colour.** Decisions: the plan carries a
+      `colour` **patch**, not a whole block — a whole block would have to echo every hand
+      override, and the one it forgot would be lost on Accept; Accept merges the patch over
+      the block the board holds *then* (`mergeColour`, the same rule as
+      `colour.merge_colour`), so a nudge made while the call ran survives. Out-of-range is a
+      validation failure, not a clamp (a hand overshoot means "more", a model's 1.4 gain is
+      a misread vocabulary) and takes the one re-ask. The shot ask's clause may touch only
+      its own id and no film key — **rejected, not dropped**: a scoped answer that re-grades
+      the film has misread its scope, and applying the half it got right as if nothing
+      happened hides that. A full-Ask patch for a shot the plan cuts is dropped and said in
+      the notes (a re-ask for that would cost minutes). A colour-only answer may omit
+      `segments` (the cut verbatim, unpolished, `unchanged`) — it saves the shots phase of
+      the output; **no second inference path**, since knowing a note is colour-only before
+      the call would itself need a call. `revise.carry_ids` now gives planned shots the ids
+      they continue (the ghost lane's rule), which also fixes every Accept re-keying the
+      cut. Colour stays off the undo stack (I10.4). Original item: A note ("warmer", "less blue", "make it pop",
       "match the lift shot to the summit") → parameters from the vocabulary and the looks
       manifest, as a proposal on the ghost lane; Accept/Discard as ever; the scoped shot
       ask carries a colour clause. Test: an invented look name fails validation.
