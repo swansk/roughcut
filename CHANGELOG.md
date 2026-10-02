@@ -10,6 +10,22 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The Ask reaches colour (INTAKE M10, I10.5)** — a note about the picture ("warmer",
+  "less blue on the lift shot", "make it pop", "match the lift shot to the summit")
+  answers with a `colour` patch on the EDL's block: the film's look / strength / mode /
+  reference and per-shot overrides keyed by segment id, validated by
+  `colour.validate_patch` against the real looks library — an invented look, an unknown
+  key or a balance outside the clamps fails the plan and gets the one bounded re-ask. The
+  prompt's *Colour* section names the looks with their descriptions, the vocabulary and
+  its limits, and each shot's measured white L\*/cast, clipped % and current balance; it
+  says to leave `colour` out unless the note is about the picture. A colour-only answer
+  may omit `segments` (the cut verbatim, not polished). The proposal panel shows the grade
+  in words (`colour.describe_patch`); Accept merges it over the board's block and saves it
+  with the segments in one PUT; Discard drops both. The ✎ shot ask carries the clause for
+  its own shot only and rejects one that touches the film or another shot.
+- **A proposal's shots keep their ids** — `revise.carry_ids` gives each planned shot the id
+  of the cut's shot it continues (same clip, ≥ half the shorter range), so Accept no longer
+  mints new ids for every shot and strands their colour overrides.
 - **A proposal on a shot the edits will create shows on the board (INTAKE M13)** — live,
   the typed-title-on-a-slide proposal (shot `new:1`) was on disk but on no shot's card;
   the list now carries `anchor_shot` (the first op's shot, or the shot the slide goes

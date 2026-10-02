@@ -898,12 +898,13 @@ def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
                              "shots": shots, "why": est.detail,
                              "usage": est.usage}
     entry["state"] = "running"
+    grade = ask_colour_context(segments) if segments else None
     try:
         watcher = _ask_watcher(entry, shots)
         if focus is not None:
             plan = revise.propose_shot(segments=segments, index=focus, clips=clips,
                                        story=story, note=note, target=target,
-                                       on_partial=watcher)
+                                       on_partial=watcher, colour=grade)
             # The model answered for one shot; the proposal the human reads and
             # accepts is the whole timeline, so the splice happens here — a record on
             # disk holding only the replacement would offer "1 shot" as the recovered
@@ -920,7 +921,7 @@ def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
             plan = revise.propose(segments=segments, clips=clips, story=story,
                                   note=note, target=target, events=ranked,
                                   selects=read_edl().get("selects"),
-                                  on_partial=watcher)
+                                  on_partial=watcher, colour=grade)
         else:
             plan = revise.originate(clips=clips, story=story, note=note,
                                     target=target, events=ranked,
@@ -942,6 +943,15 @@ def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
         entry.finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
         return
     entry.complete("notes", detail="snapping cut points to speech")
+    if plan.get("colour"):
+        # The words the proposal panel shows for the grade — computed here, where each
+        # shot's resolved balance is known, so "warmer" is said against what the
+        # monitor shows today rather than against a blank.
+        rows = {r["id"]: r for r in (grade or {}).get("shots") or []}
+        labels = {s["id"]: f"shot {i + 1} · {Path(s['clip']).stem}"
+                  for i, s in enumerate(plan["segments"]) if s.get("id")}
+        plan["colour_lines"] = colourmod.describe_patch(
+            plan["colour"], labels, {k: v.get("balance") for k, v in rows.items()})
     # On disk before it is announced. A two-minute call whose only copy is an HTTP
     # response is one dropped connection away from being spent for nothing — which is
     # exactly what happened on the first Killington ask: the model answered, the
@@ -953,7 +963,25 @@ def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
     path.write_text(json.dumps(record, indent=1), encoding="utf-8")
     entry["plan"] = plan
     entry.complete("polish")
-    entry.finish("done", detail=f"{len(plan['segments'])} shots proposed")
+    entry.finish("done", detail="a colour change proposed, the cut as it is"
+                 if plan.get("unchanged") else f"{len(plan['segments'])} shots proposed")
+
+
+def ask_colour_context(segments: list[dict]) -> dict | None:
+    """What the Ask is shown of the grade (INTAKE I10.5): the EDL's colour block, the
+    looks library, and every shot of the cut being asked about resolved the way the
+    inspector resolves it — balance, look, the witness numbers. Only shots with an id
+    can be graded (overrides are keyed by id); a failure here costs the Ask its colour
+    clause, never the Ask."""
+    try:
+        edl = read_edl()
+        film = edl.get("colour") or {}
+        keyed = [s for s in segments if isinstance(s.get("id"), str) and s.get("clip")]
+        rows = resolve_colour({"segments": keyed, "colour": film}) if keyed else []
+        return {"film": film, "looks": looks_library(), "shots": rows}
+    except Exception as exc:  # noqa: BLE001 — the grade is optional to an Ask
+        print(f"  !! ask colour context: {exc}", flush=True)
+        return None
 
 
 @app.post("/api/ask")

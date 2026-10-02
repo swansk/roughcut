@@ -433,6 +433,63 @@ def test_the_inspector_asks_about_the_selected_shot(page):
         inference.set_backend(None)
 
 
+def test_a_colour_proposal_reads_as_words_and_accept_writes_the_grade(page, live_server):
+    """INTAKE I10.5 on the board: a colour-only answer is a proposal like any other —
+    its colour line in the panel, the cut unchanged and said so, Discard leaving the
+    EDL's colour alone, Accept writing the patch into it in the one save."""
+    import urllib.request
+    from roughcut import config, inference, revise
+
+    def project():
+        with urllib.request.urlopen(f"{live_server}/api/project") as r:
+            return json.loads(r.read())
+
+    ids = page.evaluate("segs.map((s) => s.id)")
+
+    class Scripted:
+        name = "scripted"
+
+        def complete(self, request):
+            text = (json.dumps({"notes": "a film look, the opening matched",
+                                "colour": {"look": "filmic", "strength": 0.6,
+                                           "shots": {ids[0]: {"match": "previous"}}}})
+                    if request.system == revise.SYSTEM else "{}")
+            return inference.Result(content=text, input_tokens=10, output_tokens=5,
+                                    backend="scripted", model=config.model_for(request.role),
+                                    projected_usd=0.0001, latency_ms=1, raw=text)
+
+    inference.set_backend(Scripted())
+    inference.reset_spend()
+    try:
+        before = page.evaluate("JSON.stringify(segs)")
+        page.evaluate("dock.open('ask')")
+        page.locator("#note").fill("make it filmic")
+        page.locator("#ask").click()
+        page.wait_for_selector("#proposal:visible", timeout=30000)
+        diff = page.locator("#proposalDiff").inner_text()
+        assert "look: filmic at 0.6" in diff
+        assert "the cut unchanged" in diff and "only the colour changes" in diff
+
+        page.locator("#rejectProposal").click()
+        page.wait_for_timeout(300)
+        assert not project().get("colour"), "Discard must leave the grade alone"
+
+        page.locator("#ask").click()
+        page.wait_for_selector("#proposal:visible", timeout=30000)
+        page.locator("#acceptProposal").click()
+        deadline = time.time() + 10
+        while (project().get("colour") or {}).get("look") != "filmic":
+            assert time.time() < deadline, "Accept never saved the grade"
+            time.sleep(0.1)
+        saved = project()
+        assert saved["colour"]["strength"] == 0.6
+        assert saved["colour"]["shots"] == {ids[0]: {"match": "previous"}}
+        assert [s["id"] for s in saved["segments"]] == ids
+        assert page.evaluate("JSON.stringify(segs)") == before
+    finally:
+        inference.set_backend(None)
+
+
 def test_find_a_moment_lists_matches_and_plays_the_whole_clip(page):
     """The finder, free layer: type what you remember, get windows, click one and
     the full clip opens seeked to the moment; add it and it becomes a shot."""

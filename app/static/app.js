@@ -2043,11 +2043,21 @@ function showProposal(plan) {
     s.polished_from ? `<br><span class="hint">↳ polished from ${
       s.polished_from[0].toFixed(2)}–${s.polished_from[1].toFixed(2)}: ${
       escapeHtml(s.polish_why || '')}</span>` : ''}</div>`).join('');
+  // The grade the note asked for (INTAKE I10.5), in the server's words — "look: cold at
+  // 0.6", "shot 3 · CLIP_07: warmer" — above the shots, because a colour-only proposal
+  // is nothing but this line and must not read as "no change".
+  const graded = plan.colour && Object.keys(plan.colour).length
+    ? `<div class="proposalColour" style="margin-bottom:8px"><span class="hint">colour</span>${
+      (plan.colour_lines || ['a change to the grade']).map((l) => `<div style="color:var(--good)">± ${escapeHtml(l)}</div>`).join('')}</div>`
+    : '';
+  const head = plan.unchanged
+    ? `the cut unchanged — ${segs.length} shots ${fmt(oldTotal)}; only the colour changes`
+    : `${segs.length} shots ${fmt(oldTotal)} → ${plan.segments.length} shots ${fmt(newTotal)}`;
   $('#proposalDiff').innerHTML =
-    `<div class="hint" style="margin-bottom:6px">${segs.length} shots ${fmt(oldTotal)}
-     → ${plan.segments.length} shots ${fmt(newTotal)}</div>`
-    + rows.join('') + '<hr style="border:0;border-top:1px solid var(--line);margin:10px 0">'
-    + detail;
+    `<div class="hint" style="margin-bottom:6px">${head}</div>` + graded
+    + (plan.unchanged ? '' : rows.join('')
+      + '<hr style="border:0;border-top:1px solid var(--line);margin:10px 0">'
+      + detail);
   $('#proposal').style.display = 'block';
   $('#proposal').scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
@@ -2173,16 +2183,47 @@ async function ask(opts = {}) {
   }
 }
 
+/* A colour patch over the block the board holds NOW — not the one the Ask saw — so a
+ * nudge made while the call ran survives it. The same merge as colour.merge_colour:
+ * film keys replaced, a shot's override merged key by key, a null match or balance
+ * removing that key. */
+function mergeColour(base, patch) {
+  const out = JSON.parse(JSON.stringify(base || {}));
+  for (const k of ['mode', 'look', 'strength', 'reference']) {
+    if (k in patch) out[k] = patch[k];
+  }
+  for (const [id, o] of Object.entries(patch.shots || {})) {
+    const cur = { ...((out.shots || {})[id] || {}) };
+    for (const [k, v] of Object.entries(o)) {
+      if (v === null && (k === 'match' || k === 'balance')) delete cur[k];
+      else cur[k] = v;
+    }
+    out.shots = out.shots || {};
+    out.shots[id] = cur;
+  }
+  return out;
+}
+
 function acceptProposal() {
   if (!pendingPlan) return;
-  pushUndo('proposal');
+  const graded = !!(pendingPlan.colour && Object.keys(pendingPlan.colour).length);
+  const cutToo = !pendingPlan.unchanged;
+  if (cutToo) pushUndo('proposal');     // a colour-only proposal has no cut to undo
   segs = pendingPlan.segments.map((s) => ({ ...s }));
+  // Segments and colour in the one save below (INTAKE I10.5). Colour is not on the
+  // undo stack (I10.4: a setting, like the music), so `u` takes back the cut only.
+  if (graded) {
+    colour = mergeColour(colour, pendingPlan.colour);
+    tidyColour();
+  }
   pendingPlan = null;
   $('#proposal').style.display = 'none';
   $('#lastAsk').style.display = 'none';
   render();
   save();                       // straight to disk; a 16-shot cut is not "in progress"
-  toast('applied — undo with u');
+  toast(!graded ? 'applied — undo with u'
+    : cutToo ? 'applied, cut and colour — u undoes the cut; the grade is in the inspector'
+      : 'colour applied — the grade is in the inspector', graded ? 5000 : undefined);
 }
 
 function rejectProposal() {

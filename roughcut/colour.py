@@ -647,6 +647,180 @@ def validate_balance(b: dict) -> dict:
     return out
 
 
+# --------------------------------------------------------------------- the Ask (I10.5)
+#
+# A note ("warmer", "less blue on the lift shot", "make it pop") answers with a *patch*
+# on the EDL's colour block, never the whole block: the model is shown the film's block
+# and every shot's numbers, and says only what the note changes. A whole block would
+# have to echo every hand override the editor made — and the one it forgot would be
+# lost on Accept without anyone having asked for that.
+
+PATCH_FILM_KEYS = ("mode", "look", "strength", "reference")
+PATCH_SHOT_KEYS = ("auto", "balance", "look", "strength", "match")
+BALANCE_KEYS = ("gain", "exposure", "knee", "lift")
+
+
+def _strict_balance(b) -> dict:
+    """A balance the model wrote, checked against the widest clamps rather than clamped
+    into them. A hand nudge that overshoots is clamped (`validate_balance`) — the hand
+    meant "more"; a model's 1.4 gain is a misread vocabulary, and a quietly clamped one
+    would put a number on screen that nobody asked for. So it fails, and gets the re-ask."""
+    if not isinstance(b, dict):
+        raise ValueError("balance must be an object")
+    extra = set(b) - set(BALANCE_KEYS) - {"source"}
+    if extra:
+        raise ValueError(f"unknown balance key {sorted(extra)[0]!r}")
+    wide = CLAMPS["gopro"]
+    gain = b.get("gain", [1, 1, 1])
+    if not (isinstance(gain, list) and len(gain) == 3):
+        raise ValueError("balance.gain must be [r, g, b]")
+    for v in gain:
+        if not (1 - wide["gain"] - 1e-6 <= float(v) <= 1 + wide["gain"] + 1e-6):
+            raise ValueError(f"balance gain {v} outside {1 - wide['gain']:.2f}..{1 + wide['gain']:.2f}")
+    lo, hi = wide["exposure"]
+    if not (lo - 1e-6 <= float(b.get("exposure", 1.0)) <= hi + 1e-6):
+        raise ValueError(f"balance exposure {b.get('exposure')} outside {lo}..{hi}")
+    if not (0.6 <= float(b.get("knee", KNEE)) <= 1.0):
+        raise ValueError(f"balance knee {b.get('knee')} outside 0.6..1.0")
+    if not (abs(float(b.get("lift", 0.0))) <= wide["lift"] + 1e-6):
+        raise ValueError(f"balance lift {b.get('lift')} outside ±{wide['lift']}")
+    return validate_balance(b)
+
+
+def validate_patch(patch, looks: dict[str, dict], *, ids: set[str] | None = None,
+                   film: bool = True) -> dict:
+    """A colour patch from the Ask, strict: only the keys present come back, an unknown
+    key, an invented look, a shot id that is not in the cut (`ids`) or a number outside
+    the vocabulary is a ValueError. `film=False` (the scoped shot ask) refuses the
+    film-level keys — a note about one shot does not get to re-grade the film."""
+    if patch in (None, {}):
+        return {}
+    if not isinstance(patch, dict):
+        raise ValueError("colour must be an object")
+    extra = set(patch) - set(PATCH_FILM_KEYS) - {"shots"}
+    if extra:
+        raise ValueError(f"unknown colour key {sorted(extra)[0]!r}")
+    film_keys = [k for k in PATCH_FILM_KEYS if k in patch]
+    if film_keys and not film:
+        raise ValueError(f"colour.{film_keys[0]} is the film's, not this shot's — a note "
+                         "about one shot may only set colour.shots for that shot")
+    out: dict = {}
+    if film_keys:
+        # validate_colour fills what is absent; only what was present is kept
+        full = validate_colour({k: patch[k] for k in film_keys}, looks)
+        out = {k: full[k] for k in film_keys}
+        if out.get("reference") and ids is not None and out["reference"] not in ids:
+            raise ValueError(f"colour.reference {out['reference']!r} is not a shot in the cut")
+    shots = patch.get("shots")
+    if shots:
+        if not isinstance(shots, dict):
+            raise ValueError("colour.shots must be an object keyed by shot id")
+        clean: dict = {}
+        for sid, o in shots.items():
+            sid = str(sid)
+            if ids is not None and sid not in ids:
+                raise ValueError(f"colour.shots names {sid!r}, which is not "
+                                 + ("the shot this note is about" if not film
+                                    else "a shot id in the cut"))
+            if not isinstance(o, dict) or not o:
+                raise ValueError(f"colour.shots[{sid!r}] must be a non-empty object")
+            bad = set(o) - set(PATCH_SHOT_KEYS)
+            if bad:
+                raise ValueError(f"unknown shot colour key {sorted(bad)[0]!r}")
+            if o.get("balance") is not None:
+                _strict_balance(o["balance"])
+            full = validate_colour({"shots": {sid: o}}, looks).get("shots", {}).get(sid, {})
+            s = {k: full[k] for k in PATCH_SHOT_KEYS if k in full}
+            # validate_colour drops a null match / balance; in a patch a null means
+            # "clear it", which is a change the editor should see and Accept should do
+            for k in ("match", "balance"):
+                if k in o and o[k] is None:
+                    s[k] = None
+            clean[sid] = s
+        if clean:
+            out["shots"] = clean
+    return out
+
+
+def merge_colour(base: dict | None, patch: dict | None) -> dict:
+    """The block Accept writes: `patch` over `base`, film keys replaced, each shot's
+    override merged key by key, a `None` match or balance removing that key. The board
+    does the same merge at Accept (app.js `mergeColour`) — on the block it holds then,
+    not the one the Ask saw, so a nudge made while the call ran is not undone by it."""
+    out = json.loads(json.dumps(base or {}))
+    for k in PATCH_FILM_KEYS:
+        if k in (patch or {}):
+            out[k] = patch[k]
+    for sid, o in ((patch or {}).get("shots") or {}).items():
+        cur = dict((out.get("shots") or {}).get(sid) or {})
+        for k, v in o.items():
+            if v is None and k in ("match", "balance"):
+                cur.pop(k, None)
+            else:
+                cur[k] = v
+        out.setdefault("shots", {})
+        if cur:
+            out["shots"][sid] = cur
+        else:
+            out["shots"].pop(sid, None)
+    if "shots" in out and not out["shots"]:
+        out.pop("shots")
+    return out
+
+
+def describe_patch(patch: dict | None, labels: dict[str, str] | None = None,
+                   current: dict[str, dict | None] | None = None) -> list[str]:
+    """The proposal's colour, as lines the editor reads before Accept: "look: cold at
+    0.6", "shot 3 · CLIP_07: warmer, brighter". `labels` names a shot id; `current` is
+    each shot's resolved balance today, so a hand balance reads as the direction it
+    moves the picture in rather than as three gains nobody can see."""
+    if not patch:
+        return []
+    lines = []
+    if "mode" in patch:
+        lines.append("auto balance: " + ("off for the film" if patch["mode"] == "off"
+                                         else "on for the film"))
+    if "look" in patch:
+        lines.append(f"look: {patch['look']}" + (f" at {patch['strength']:g}"
+                                                 if "strength" in patch else "")
+                     if patch["look"] else "look: none")
+    elif "strength" in patch:
+        lines.append(f"look strength: {patch['strength']:g}")
+    if patch.get("reference"):
+        ref = patch["reference"]
+        lines.append(f"reference: {(labels or {}).get(ref, ref)}")
+    for sid, o in (patch.get("shots") or {}).items():
+        words = []
+        if "auto" in o:
+            words.append("auto on" if o["auto"] else "auto off (as shot)")
+        if "balance" in o:
+            b = o["balance"]
+            if b is None:
+                words.append("back to the auto balance")
+            else:
+                base = (current or {}).get(sid) or {"gain": [1, 1, 1], "exposure": 1.0}
+                warm = (b["gain"][0] - b["gain"][2]) - (base["gain"][0] - base["gain"][2])
+                if warm > 0.005:
+                    words.append("warmer")
+                elif warm < -0.005:
+                    words.append("cooler")
+                ex = b["exposure"] / max(float(base["exposure"]), 1e-3)
+                if ex > 1.005:
+                    words.append("brighter")
+                elif ex < 0.995:
+                    words.append("darker")
+                words.append(f"(gain r {b['gain'][0]:.2f} g {b['gain'][1]:.2f} "
+                             f"b {b['gain'][2]:.2f}, ×{b['exposure']:.2f})")
+        if "look" in o:
+            words.append(f"look {o['look']}" if o["look"] else "no look")
+        if "strength" in o:
+            words.append(f"strength {o['strength']:g}")
+        if "match" in o:
+            words.append(f"match ← {o['match']}" if o["match"] else "no match")
+        lines.append(f"{(labels or {}).get(sid, sid)}: {', '.join(words)}")
+    return lines
+
+
 def resolve_shot(edl: dict, seg: dict, clip_colour: dict | None, looks: dict[str, dict],
                  reference: dict | None = None, previous: dict | None = None) -> dict:
     """Everything the render (and the monitor) needs for one shot: the balance, the
