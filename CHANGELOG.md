@@ -26,6 +26,8 @@ same commit. Releases move entries into a dated version section.
 - **A proposal's shots keep their ids** — `revise.carry_ids` gives each planned shot the id
   of the cut's shot it continues (same clip, ≥ half the shorter range), so Accept no longer
   mints new ids for every shot and strands their colour overrides.
+- **INTAKE I10.5 ticked** with the commit and the lane's decisions (patch not block,
+  reject-not-drop on the shot ask, no second inference path).
 - **A proposal on a shot the edits will create shows on the board (INTAKE M13)** — live,
   the typed-title-on-a-slide proposal (shot `new:1`) was on disk but on no shot's card;
   the list now carries `anchor_shot` (the first op's shot, or the shot the slide goes
