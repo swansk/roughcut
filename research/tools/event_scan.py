@@ -16,6 +16,10 @@ Nothing here is a claim that something happened. A whiteout, a lens wipe and a b
 spike the same track; the fine visual read (`visual_pass.py --windows`) is what tells
 them apart. This only has to put the backflip on the list.
 
+The coarse pass's own unaudited jump/fall/crash claims come first, before any motion
+peak (R10's follow-up, `events.choose_windows`): the close look's job is to audit what
+the sheets claimed, and on Killington the motion peaks never landed on the claims.
+
 Usage:
     uv run event_scan.py PROXY_DIR --sidecars AUDIO_DIR --visual VISUAL_DIR \\
         [--only CLIP_07,CLIP_11] [--limit 8] [--windows-out windows.json]
@@ -66,12 +70,29 @@ def scan(proxies: Path, sidecars: Path, visual: Path, only: set[str], limit: int
     for proxy in clips:
         mafd = load_track(proxy, visual, force)
         track = events.excitement(mafd, onset_track(sidecars, proxy.stem))
-        windows = events.candidate_windows(track, limit=limit, half_width_s=around)
+        # The coarse pass's own claims get the windows first (R10's follow-up), so the
+        # sidecars the windows are meant to audit are read here; a clip never looked at
+        # coarsely has no claims and falls back to motion peaks alone.
+        coarse, fine = _sidecar(visual, proxy.stem, "visual"), _sidecar(visual, proxy.stem,
+                                                                         "fine")
+        windows = events.choose_windows(coarse.get("clip") or proxy.name, coarse, fine,
+                                        track, limit=limit, half_width_s=around)
         out[proxy.stem.upper()] = {"track": track, "windows": windows}
         print(f"{proxy.stem}: {len(track)} samples, {len(windows)} window(s) — "
-              + ", ".join(f"{w['at']:.1f}s(z{w['z']:.1f})" for w in windows),
-              flush=True)
+              + ", ".join(_describe(w) for w in windows), flush=True)
     return out
+
+
+def _sidecar(visual: Path, stem: str, suffix: str) -> dict:
+    p = visual / f"{stem}.{suffix}.json"
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+
+
+def _describe(w: dict) -> str:
+    if w.get("source") == "claim":
+        c = w["claims"][0]
+        return f"{w['start']:.1f}-{w['end']:.1f}s(claim: {c['kind']})"
+    return f"{w['at']:.1f}s(z{w['z']:.1f})"
 
 
 def main() -> int:
@@ -83,7 +104,8 @@ def main() -> int:
                     help="visual sidecar directory — motion tracks cache here")
     ap.add_argument("--only", default="", help="comma-separated stems")
     ap.add_argument("--limit", type=int, default=8,
-                    help="candidate windows per clip, most unusual first")
+                    help="candidate windows per clip: unaudited hot claims first, "
+                         "then the most unusual motion")
     ap.add_argument("--around", type=float, default=events.WINDOW_HALF_S,
                     help="half-width of a window, seconds")
     ap.add_argument("--force", action="store_true", help="recompute motion tracks")

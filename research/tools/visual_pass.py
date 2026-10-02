@@ -50,7 +50,7 @@ from roughcut import config, inference   # noqa: E402  (after sys.path)
 HERE = Path(__file__).resolve().parent
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".avi", ".m4v", ".mts", ".webm"}
 
-PROMPT_VERSION = 2   # bumped whenever the prompts or the validation rules change
+PROMPT_VERSION = 3   # bumped whenever the prompts or the validation rules change
 
 SYSTEM = (
     "You are a video assistant looking at a contact sheet: frames sampled from one "
@@ -73,6 +73,13 @@ EVENT_KINDS = ("jump", "fall", "crash")
 # An airborne moment lasts under two seconds; a fall a few. At the coarse interval a
 # real one shows in at most this many consecutive sampled frames.
 MAX_EVENT_FRAMES = 2
+# Words that describe a person upside down. R10 adjudicated every inversion claim either
+# pass made on Killington by eye — "clearly upside-down mid-air", "another inverted
+# aerial trick", "aerial flip or backflip", "skier rotates or flips" — and none survived:
+# on a helmet or chest mount the horizon sits at 40-45° and it is the camera that is
+# inverted. So an event that rests on inversion is kept but not notable until a second
+# look agrees (the ranker still audits non-notable hot claims, after the notable ones).
+INVERSION = ("inverted", "upside-down", "upside down", "backflip", "flip", "somersault")
 
 SCHEMA = {
     "moments": [{"start": 12.0, "end": 20.0, "what": "one sentence on what happens",
@@ -104,6 +111,11 @@ The rules for an event (`jump`, `fall`, `crash`):
 - It needs **another person** visibly in the air, or visibly down on the snow, in a frame
   you name — or the wearer's own ski tips clearly off the snow with the ground far below.
   A tilted or sky-filled frame is the wearer's head moving, not anyone airborne.
+- **On a helmet or chest mount the camera rolls, not the rider.** The horizon often sits
+  at 40-45°, trees hang from the top of frame and sky fills the bottom. Before calling a
+  jump, a flip or anything inverted, find the snow: if it is still beneath the skis
+  relative to the frame, nobody is upside down. A tilted horizon alone is camera roll.
+  If you are unsure, it is `action`, not `jump`.
 - **Dark shapes close to the lens are the wearer's glove, pole, ski or binding.** Call
   them `pov-gear`, never a person, never `inverted`, never `airborne`.
 - A jump is in the air for under two seconds and a fall is over in a few, so at this
@@ -144,7 +156,10 @@ boring ones:
    another person visibly in the air or down on the snow in a frame you name (or the
    wearer's ski tips clearly off the snow with the ground far below). Give it the
    tightest start and end the frames support, and say in `what` which frame shows the
-   peak of it (the highest point, the impact).
+   peak of it (the highest point, the impact). On a helmet or chest mount the camera
+   rolls, not the rider: before calling a jump, a flip or anything inverted, check that
+   the snow is no longer beneath the skis relative to the frame. A horizon at 45° alone
+   is camera roll. If you are unsure, it is `action`, not `jump`.
 2. **A camera artefact** — a whip pan, a lens wipe, the wearer's glove, pole, ski or
    binding across the lens (`pov-gear`), a whiteout, the camera being picked up or put
    down. Mark these `junk` or `pov-gear` and list the stretch as unusable. A window that
@@ -267,6 +282,9 @@ def validate(payload, lo: float, hi: float, times: list[float] | None = None) ->
             elif kind in EVENT_KINDS and step and len(frames) > MAX_EVENT_FRAMES:
                 demoted = (f"{len(frames)} consecutive frames at {step:g} s is not a "
                            f"{kind} — nothing is airborne that long")
+            elif kind in EVENT_KINDS and any(w in what.lower() for w in INVERSION):
+                demoted = ("inverted on a helmet or chest mount is camera roll until "
+                           "a second look agrees")
         if demoted:
             notable = False
         row = {"start": round(start, 1), "end": round(end, 1), "what": what,

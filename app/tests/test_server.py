@@ -2137,6 +2137,96 @@ def test_one_visual_pass_at_a_time_and_a_failure_is_reported(tmp_path, project,
         assert c.get("/api/visual/nope").status_code == 404
 
 
+# ------------------------------------------------------------------ the audit (R10)
+
+def _claims_on_disk(visual: Path) -> None:
+    """Three clips, each with a coarse fall nobody audited — except CLIP_C's, read."""
+    visual.mkdir(parents=True, exist_ok=True)
+    for stem in ("CLIP_A", "CLIP_B", "CLIP_C"):
+        (visual / f"{stem}.visual.json").write_text(json.dumps({
+            "clip": f"{stem}.MP4",
+            "moments": [{"start": 2.0, "end": 3.0, "kind": "fall", "notable": True,
+                         "what": "rider down on the snow", "frames": [2.0]},
+                        {"start": 4.0, "end": 5.0, "kind": "faces", "notable": True,
+                         "what": "two people laughing", "frames": [4.0]}],
+            "unusable": [], "summary": "a run"}), encoding="utf-8")
+    (visual / "CLIP_C.fine.json").write_text(json.dumps({
+        "clip": "CLIP_C.mp4", "mode": "fine", "windows_read": [[0.0, 6.0]],
+        "moments": [], "unusable": []}), encoding="utf-8")
+
+
+def test_the_audit_is_priced_before_it_spends_and_offered_on_the_status(
+        tmp_path, project, monkeypatch):
+    """R10's follow-up: the close look on the claims, not on motion peaks. The dry run
+    and the status both carry the price; nothing runs until the editor clicks."""
+    import server
+
+    ran: list = []
+    jobs_before = set(server.VISUALS)
+    monkeypatch.setattr(server, "audit_cmd", lambda w: ran.append(w) or ["false"])
+    with _fresh(tmp_path, project, sidecars=project["sidecars"], visual=None) as c:
+        _claims_on_disk(server.STATE["visual"])
+        dry = c.post("/api/visual/audit", json={"dry_run": True}).json()
+        # two unaudited falls (A and B); C's was read, and faces are not hot claims
+        assert dry["claims"] == 2 and dry["windows"] == 2 and dry["calls"] == 2
+        assert dry["projected_usd"] == pytest.approx(2 * server.FINE_USD_PER_WINDOW,
+                                                     abs=0.005)
+        assert sorted(w["clip"] for w in dry["plan"]) == ["CLIP_A.MP4", "CLIP_B.MP4"]
+        assert dry["n"] == server.AUDIT_CLAIMS
+        # n counts claims: one claim, one window
+        assert c.post("/api/visual/audit",
+                      json={"dry_run": True, "n": 1}).json()["windows"] == 1
+        a = c.get("/api/status").json()["visual"]["audit"]
+        assert a["claims"] == 2 and a["projected_usd"] == dry["projected_usd"]
+        assert ran == [] and set(server.VISUALS) == jobs_before
+
+
+def test_the_audit_reads_exactly_the_planned_windows_then_reranks(
+        tmp_path, project, monkeypatch):
+    import server
+
+    monkeypatch.setattr(server, "PROGRESS_TICK_S", 0.05)
+    handed: dict = {}
+
+    def cmd(windows):
+        handed.update(json.loads(Path(windows).read_text(encoding="utf-8")))
+        # the stub close look: a fall where the claim was, so two looks agree
+        script = tmp_path / "audit.py"
+        script.write_text(
+            "import json, sys\n"
+            "from pathlib import Path\n"
+            "out = Path(sys.argv[1]); spans = json.loads(sys.argv[2])\n"
+            "for stem, ws in spans.items():\n"
+            "    (out / f'{stem}.fine.json').write_text(json.dumps({\n"
+            "        'clip': f'{stem}.mp4', 'mode': 'fine', 'windows_read': ws,\n"
+            "        'moments': [{'start': 2.0, 'end': 3.0, 'kind': 'fall',\n"
+            "                     'what': 'rider down', 'notable': True}],\n"
+            "        'unusable': [], 'projected_usd': 0.073}))\n"
+            "    print(f'{stem}.mp4: 1 moments', flush=True)\n", encoding="utf-8")
+        return [sys.executable, str(script), str(server.STATE["visual"]),
+                json.dumps(handed)]
+
+    monkeypatch.setattr(server, "audit_cmd", cmd)
+    with _fresh(tmp_path, project, sidecars=project["sidecars"], visual=None) as c:
+        _claims_on_disk(server.STATE["visual"])
+        plan = c.post("/api/visual/audit", json={"dry_run": True}).json()["plan"]
+        start = c.post("/api/visual/audit", json={})
+        assert start.status_code == 200, start.text
+        s = _wait_visual(c, start.json()["job"])
+        assert s["state"] == "done", s
+        # exactly the planned windows, keyed the way visual_pass.py --windows reads them
+        assert handed == {Path(w["clip"]).stem.upper(): [[w["start"], w["end"]]]
+                          for w in plan}
+        assert not list(server.STATE["work"].glob("audit_*.json"))      # cleaned up
+        # the rank was rebuilt: two looks agree on the falls, and nothing is left to buy
+        ranked = c.get("/api/project").json()["events"]
+        falls = [e for e in ranked if e["kind"] == "fall" and e["clip"] != "CLIP_C.MP4"]
+        assert len(falls) == 2 and all(
+            e["why_ranked"]["confirmation"] == "confirmed" for e in falls)
+        assert c.get("/api/status").json()["visual"]["audit"]["windows"] == 0
+        assert c.post("/api/visual/audit", json={}).status_code == 400
+
+
 # ------------------------------------------------------------------ music in the board
 
 def _library(tmp_path) -> Path:

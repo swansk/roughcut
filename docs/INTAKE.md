@@ -1062,7 +1062,12 @@ them. Every lane adds its own CHANGELOG bullet; integration keeps all of them.
 - **The Killington events file has no `confirmed` event at all** (121 unseen · 8 unsupported ·
   5 contradicted; the 7 close-look moments never agreed with a hot coarse claim). So the floor
   shows no `audited` seal on this bin — honest, and a reminder that roadmap item 1 (audit what
-  the sheets claim) is still the biggest lever on the visual side.
+  the sheets claim) is still the biggest lever on the visual side. **Built since
+  (`agent/events-audit`):** close-look windows go to the unaudited hot claims first, and the
+  seen tab has a priced *Audit N claims* button (`POST /api/visual/audit`). The cause above is
+  the thing fixed — windows went to motion peaks, not to the claims. Clicking it on Killington
+  is Karl's spend (~12 claims, under $1); until then this bin still has no `confirmed` event.
+  Close-look-only rows are now `fine-only` (0.7) rather than a neutral `unseen`.
 - **GoPro's GPMF carries its own 10 Hz wind meter (`WNDM`), a wet-mic flag and an audio level**
   (telemetry lane, R11). Relevant to R8/R9's never-validated wind detector; not used yet.
 - **R11 corrected an R10 label:** CLIP_11 144.3 s is a real fall (6.7 g, skis against the sky at

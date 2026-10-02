@@ -1081,6 +1081,53 @@ def test_the_seen_tab_is_ordered_by_the_rank_not_by_the_kind(page, project):
         ranked.unlink(missing_ok=True)
 
 
+def test_the_seen_tab_offers_the_audit_priced_and_marks_a_one_look_find(page, project):
+    """HANDOFF roadmap item 1: the claims at the top of the seen tab are the ones nobody
+    checked, so the tab carries one priced button that audits them. It is never clicked
+    here — the real close look spends model calls."""
+    import server
+
+    vdir = Path(server.STATE["visual"])
+    vdir.mkdir(parents=True, exist_ok=True)
+    sidecar = vdir / "CLIP_C.visual.json"        # the tab shows once something was seen
+    sidecar.write_text(json.dumps({
+        "clip": "CLIP_C.MP4",
+        "moments": [{"start": 1.5, "end": 3.5, "what": "rider goes down",
+                     "kind": "fall", "notable": True}],
+        "unusable": [], "summary": "a run"}), encoding="utf-8")
+    ranked = vdir / "events.json"
+    one_look = {"rank": 2, "clip": "CLIP_B.MP4", "start": 4.0, "end": 5.0, "kind": "jump",
+                "notable": True, "score": 0.63, "source": "close look",
+                "what": "skier leaves the lip", "why_ranked": {"confirmation": "fine-only"}}
+    ranked.write_text(json.dumps({"built": 0, "clips": 2, "events": [
+        {"rank": 1, "clip": "CLIP_C.MP4", "start": 1.5, "end": 3.5, "kind": "fall",
+         "notable": True, "score": 1.2, "source": "sheet",
+         "what": "rider goes down", "why_ranked": {"confirmation": "unseen"}},
+        one_look]}), encoding="utf-8")
+    try:
+        page.reload()
+        page.wait_for_selector("#tl .blk")
+        assert not page.locator("#auditRow").is_visible()     # heard: not this tab's
+        page.locator("#libTabs .tab", has_text="seen").click()
+        button = page.locator("#auditClaims")
+        assert button.is_visible() and button.is_enabled()
+        assert button.inner_text() == f"Audit 1 claim · ~${server.FINE_USD_PER_WINDOW:.2f}"
+        rows = page.locator("#library .cand")
+        assert "one look" in rows.nth(1).inner_text().lower()
+
+        # nothing left unaudited: the button stays on the tab, off, and says why
+        ranked.write_text(json.dumps({"built": 0, "clips": 1, "events": [one_look]}),
+                          encoding="utf-8")
+        page.reload()
+        page.wait_for_selector("#tl .blk")
+        page.locator("#libTabs .tab", has_text="seen").click()
+        assert page.locator("#auditClaims").is_disabled()
+        assert "close look" in page.locator("#auditInfo").inner_text()
+    finally:
+        sidecar.unlink(missing_ok=True)
+        ranked.unlink(missing_ok=True)
+
+
 # ------------------------------------------------------------------ music
 
 def test_the_music_panel_writes_the_bed_and_the_monitor_plays_it_ducked(page, project):

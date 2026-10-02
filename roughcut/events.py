@@ -25,8 +25,9 @@ events rather than to timing a known one:
    proxy at 10 Hz. Free, ~6s per 5-minute clip, no model call. Combined with the R8
    onset track the audio sidecars have carried since July, it says *something happened
    here* with 100 ms resolution.
-2. **Candidate windows** — the peaks of that combined track, which is where a fine
-   visual read is worth paying for.
+2. **Candidate windows** — the coarse pass's own unaudited hot claims first (R10's
+   follow-up: an audit that never looks at the claims audits nothing), then the peaks
+   of that combined track, which is where a fine visual read is worth paying for.
 3. **A fine read** — 1s sampling across ±4s of a candidate, one sheet per window
    (`visual_pass.py --windows`), which resolves what the coarse pass could only imply.
 4. **A rank** — kind × notable × corroboration × confirmation, so the top of the list
@@ -235,6 +236,16 @@ CONFIRMED = 1.5          # a close look found an event of the same family here
 UNSEEN = 1.0             # nobody has looked closely; the claim stands unaudited
 UNSUPPORTED = 0.6        # looked at 1s and found nothing to report
 CONTRADICTED = 0.35      # looked at 1s and found a camera artefact instead
+# A close-look moment no coarse claim agrees with. It used to inherit UNSEEN's neutral
+# 1.0, and R10 is the argument against: "a close look is a good auditor and a poor
+# detector". Its positives are read off windows the motion scan chose — the seconds
+# where the picture changes most, which on POV footage is where the gloves, whip pans
+# and tilted horizons are — and of the four fine-only claims in R10's top fifteen, three
+# were wrong by eye (a reaction, camera handling twice). One look, at the seconds most
+# likely to fool it, is worth less than an unaudited coarse claim; it is still more than
+# a look that found nothing, so it sits between UNSUPPORTED and UNSEEN.
+# Provisional like every weight here: argued, not fitted.
+FINE_ONLY = 0.7
 
 UNUSABLE_PENALTY = 0.4   # you cannot cut here, however good the moment was
 # How much of a moment a fine window must cover before its silence counts as evidence.
@@ -285,6 +296,7 @@ def confirmation(moment: dict, fine: dict) -> str:
 
 
 CONFIRMATION_WEIGHT = {"confirmed": CONFIRMED, "unseen": UNSEEN,
+                       "fine-only": FINE_ONLY,
                        "unsupported": UNSUPPORTED, "contradicted": CONTRADICTED}
 
 
@@ -343,7 +355,8 @@ def rank_clip(clip: str, coarse: dict, fine: dict | None = None,
                                    status=status)})
     for m in fine.get("moments", []):
         # A fine moment landing on a coarse claim of the same family is two looks
-        # agreeing, which is the strongest evidence available here.
+        # agreeing, which is the strongest evidence available here. One that lands on
+        # nothing is one look, and not the neutral one (FINE_ONLY).
         span = (m["start"], m["end"])
         agrees = any(c.get("kind") in HOT and overlap(span, (c["start"], c["end"])) > 0
                      for c in coarse.get("moments", [])
@@ -355,7 +368,7 @@ def rank_clip(clip: str, coarse: dict, fine: dict | None = None,
                     "confidence": m.get("confidence", ""),
                     "demoted": m.get("demoted", ""),
                     **score_moment(m, track=track, hz=hz, unusable=unusable,
-                                   status="confirmed" if agrees else "unseen")})
+                                   status="confirmed" if agrees else "fine-only")})
     return [e for e in out if e["score"] > 0.0]
 
 
@@ -391,6 +404,129 @@ def merge_moments(coarse: list[dict], fine: dict | None) -> list[dict]:
     kept += [{**m, "fine": True} for m in fine.get("moments", [])]
     kept.sort(key=lambda m: m["start"])
     return kept
+
+
+# ------------------------------------------------------------------- the audit
+#
+# Where the close look's windows go. R10's first follow-up, in its own words: the motion
+# scan's top windows never covered CLIP_07 168-196 or CLIP_11 136-160, so two claims
+# refuted by eye still ranked 6th and 20th, and on Killington not one of the seven
+# close-look moments ever agreed with a hot coarse claim (INTAKE Discovered: 121 unseen,
+# 0 confirmed). The windows went to motion peaks, not to the claims. So the coarse pass's
+# own unaudited hot claims — the ones that rank highest *because* nobody checked them —
+# get the windows first, and motion peaks fill whatever budget is left.
+
+# One fine sheet is 3×5 cells at 1 s (server.fine_cmd), and ffmpeg's `fps=1` over a
+# T-second window can emit T+1 frames — so 14 s is the widest window that is still one
+# sheet, i.e. one call at the price the button shows.
+FINE_SHEET_S = 14.0
+
+
+def unaudited_claims(ranked: list[dict]) -> list[dict]:
+    """The coarse pass's hot claims nobody has looked at closely, in audit order.
+
+    Notable first, then score — the order they rank in while `unseen`, which is exactly
+    why they are worth auditing: a wrong claim at the top of the list is the expensive
+    kind of wrong. A claim a read window already covers is not `unseen` any more and is
+    never re-bought.
+    """
+    claims = [e for e in ranked
+              if e.get("source") == "sheet" and e.get("kind") in HOT
+              and (e.get("why_ranked") or {}).get("confirmation") == "unseen"]
+    claims.sort(key=lambda e: (not e.get("notable"), -float(e.get("score") or 0.0),
+                               e.get("clip", ""), float(e["start"])))
+    return claims
+
+
+def claim_window(start: float, end: float, *, duration: float | None = None,
+                 half_width_s: float = WINDOW_HALF_S) -> tuple[float, float]:
+    """A window centred on a claim, wide enough that its verdict counts.
+
+    The claim's own span, padded to the usual ±`half_width_s` and capped at one sheet.
+    It has to cover at least COVERED of the claim or the audit is wasted — a "jump
+    136-160" read through an 8 s window would come back still `unseen`. Up to 28 s a
+    14 s window covers half; a claim longer than that is not a jump anyway.
+    """
+    width = min(FINE_SHEET_S, max(2 * half_width_s, end - start))
+    lo = (start + end) / 2 - width / 2
+    if duration is not None:
+        lo = min(lo, duration - width)
+    lo = max(0.0, lo)
+    hi = lo + width
+    if duration is not None:
+        hi = min(hi, duration)
+    return round(lo, 2), round(hi, 2)
+
+
+def plan_claims(claims: list[dict], *, limit: int,
+                durations: dict[str, float | None] | None = None,
+                taken: dict[str, list] | None = None,
+                half_width_s: float = WINDOW_HALF_S) -> list[dict]:
+    """Up to `limit` windows over `claims`, in their order, deduped as they are placed.
+
+    `taken` is what is already read or already chosen, per clip; a claim it covers to
+    COVERED rides along with that window rather than buying its own. Each window carries
+    the claims it audits, so a price can say what it is for.
+    """
+    taken = {k: list(v) for k, v in (taken or {}).items()}
+    out: list[dict] = []
+    for c in claims:
+        clip = c["clip"]
+        spans = taken.setdefault(clip, [])
+        if _covered(c, spans) >= COVERED:
+            for w in out:
+                if w["clip"] == clip and _covered(c, [(w["start"], w["end"])]) >= COVERED:
+                    w["claims"].append(_claim_row(c))
+                    break
+            continue
+        if len(out) >= limit:
+            break
+        lo, hi = claim_window(float(c["start"]), float(c["end"]),
+                              duration=(durations or {}).get(clip),
+                              half_width_s=half_width_s)
+        spans.append((lo, hi))
+        out.append({"clip": clip, "start": lo, "end": hi, "source": "claim",
+                    "claims": [_claim_row(c)]})
+    return out
+
+
+def _claim_row(c: dict) -> dict:
+    return {"start": c["start"], "end": c["end"], "kind": c.get("kind", ""),
+            "what": c.get("what", ""), "score": c.get("score", 0.0),
+            "notable": bool(c.get("notable"))}
+
+
+def choose_windows(clip: str, coarse: dict, fine: dict | None = None,
+                   track: list[float] | None = None, *, limit: int = 8,
+                   hz: float = MOTION_HZ, half_width_s: float = WINDOW_HALF_S,
+                   duration: float | None = None) -> list[dict]:
+    """One clip's close-look windows: its unaudited hot claims first, then motion peaks.
+
+    The per-clip budget is the caller's `limit`, unchanged — the claims take the first
+    slots rather than adding to the bill. A motion window that a read window or a chosen
+    claim window already covers to COVERED is the same seconds bought twice, so it is
+    skipped and the next peak gets the slot.
+    """
+    fine = fine or {}
+    if duration is None and track:
+        duration = len(track) / hz
+    read = [(float(w[0]), float(w[1])) for w in fine.get("windows_read") or []]
+    claims = unaudited_claims(rank_clip(clip, coarse, fine, track, hz))
+    out = plan_claims(claims, limit=limit, durations={clip: duration},
+                      taken={clip: read}, half_width_s=half_width_s)
+    spans = read + [(w["start"], w["end"]) for w in out]
+    if track:
+        # Asked for more than the budget, because some of them will be skipped.
+        peaks = candidate_windows(track, hz=hz, half_width_s=half_width_s,
+                                  limit=limit + len(spans) + 4, duration=duration)
+        for w in sorted(peaks, key=lambda w: -w["z"]):         # most unusual first
+            if len(out) >= limit:
+                break
+            if _covered(w, spans) >= COVERED:
+                continue
+            spans.append((w["start"], w["end"]))
+            out.append({"clip": clip, **w, "source": "motion"})
+    return out
 
 
 # ------------------------------------------------------------------- on disk
@@ -467,6 +603,9 @@ def build(visual_dir: Path, audio_dir: Path) -> dict:
         "params": {"kind_weight": KIND_WEIGHT, "not_notable": NOT_NOTABLE,
                    "corroboration_gain": CORROBORATION_GAIN,
                    "confirmation": CONFIRMATION_WEIGHT,
+                   "fine_only": FINE_ONLY,
+                   "audit_order": "unaudited hot claims, notable then score, "
+                                  "before motion peaks",
                    "unusable_penalty": UNUSABLE_PENALTY,
                    "provisional": "R10 — weights argued, not fitted"},
     }

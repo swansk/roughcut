@@ -50,6 +50,32 @@ same commit. Releases move entries into a dated version section.
   PUT); `GET /api/junk` / `POST /api/junk`. A confirmed clip leaves the Ask's inventory
   (first cut and revision) and Find, and the index journal skips its look and close
   look — the money; a proposed one waits behind the clean clips in the index queue.
+- **Audit the claims (HANDOFF roadmap item 1, R10's follow-up)** — the close look's windows
+  go to the coarse pass's own unaudited jump/fall/crash claims first (notable, then score),
+  then to motion peaks, inside the same per-clip budget; a window already read or a claim
+  already covered to `COVERED` is never re-bought (`events.choose_windows`, used by
+  `event_scan.py`). A claim window is the claim's span padded to ±4 s and capped at one
+  sheet (14 s), so a "jump 136-160" comes back audited instead of still `unseen`. The
+  whole-bin pass now scans only clips never looked at closely, so it cannot buy windows its
+  price did not count.
+- **`POST /api/visual/audit` and the seen tab's *Audit N claims · ~$x* button** — the close
+  look on the bin's top 12 unaudited hot claims only, then the rank is rebuilt; `dry_run`
+  prices it without spending, `/api/status` carries the same price, the button is off when
+  nothing is unaudited or a pass is running. Not spent by anyone but the editor.
+- **`fine-only` evidence (`FINE_ONLY` 0.7)** — a close-look moment no coarse claim agrees
+  with no longer inherits `unseen`'s neutral 1.0; R10: "a good auditor and a poor detector",
+  three of four such rows in its top fifteen were wrong by eye. Shown as *one look* on the
+  seen tab, `claimed` on the floor, explained in the Ask's events header; `events.json`
+  params carry it. Provisional — argued, not fitted.
+- **The camera-inverted guard in both sheet prompts** — on a helmet or chest mount the
+  camera rolls, not the rider: find the snow beneath the skis before calling a jump or an
+  inversion; a tilted horizon alone is camera roll; unsure is `action`, not `jump`.
+  `validate` keeps an event that rests on inversion words (*inverted, upside-down, flip*)
+  but demotes it to not-notable until a second look agrees. `PROMPT_VERSION` 3.
+- **Docs: roadmap item 1's audit half is recorded as built** — HANDOFF says what was built
+  and what remains (the spend is Karl's; the weights are still argued, not fitted; no
+  horizon-angle measurement), INTAKE's Discovered bullet points at the fix, and R10 has a
+  "follow-up built" section.
 - **A proposal on a shot the edits will create shows on the board (INTAKE M13)** — live,
   the typed-title-on-a-slide proposal (shot `new:1`) was on disk but on no shot's card;
   the list now carries `anchor_shot` (the first op's shot, or the shot the slide goes

@@ -63,6 +63,7 @@ CONTRADICTED_FACTOR = 0.35
 STATE_BY_CONFIRMATION = {
     "confirmed": "audited",
     "unseen": "claimed",
+    "fine-only": "claimed",          # one close look, nothing agreeing: still a claim
     "unsupported": "contradicted",
     "contradicted": "contradicted",
 }

@@ -511,6 +511,12 @@ VISUAL_USD_PER_SHEET = 0.09
 FINE_WINDOWS_PER_CLIP = 3
 FINE_USD_PER_WINDOW = 0.073
 
+# The audit (R10's follow-up, HANDOFF roadmap item 1): the close look spent only on the
+# coarse pass's own unaudited hot claims, bin-wide, in the order they rank while nobody
+# has checked them. Twelve by default — Killington's top fifteen held eleven hot claims,
+# none audited — at FINE_USD_PER_WINDOW each, so the button reads under a dollar.
+AUDIT_CLAIMS = 12
+
 # And how long each of those costs in wall clock, which is what a progress bar needs
 # and the price does not say. Measured on Killington: a coarse sheet ~40s, a fine
 # window ~35s (same prompt, fewer frames), the free motion scan ~6s per 5-minute clip.
@@ -558,6 +564,28 @@ def sheets_for(clip: str, interval: float | None = None) -> int:
                             / sheet_seconds(interval or look_interval())))
 
 
+def audit_plan(ranked: list[dict], n: int = AUDIT_CLAIMS) -> list[dict]:
+    """The windows an audit of the top `n` unaudited hot claims would buy.
+
+    Planned off the ranked events rather than the sidecars: `unseen` there already means
+    "no read window covers this claim to COVERED", and the order is the one the board
+    shows, so the claims the button audits are the ones at the top of the seen tab.
+    Claims close enough to share a window share it — `n` counts claims, the price counts
+    windows.
+    """
+    claims = events.unaudited_claims(ranked)[:max(0, n)]
+    return events.plan_claims(claims, limit=len(claims),
+                              durations={c["clip"]: clip_duration(c["clip"])
+                                         for c in claims})
+
+
+def audit_price(plan: list[dict]) -> dict:
+    return {"claims": sum(len(w["claims"]) for w in plan), "windows": len(plan),
+            "calls": len(plan),
+            "projected_usd": round(len(plan) * FINE_USD_PER_WINDOW, 2),
+            "eta_s": round(len(plan) * FINE_WINDOW_READ_S + 2.0, 1)}
+
+
 def visual_status(fine: bool = True, interval: float | None = None) -> dict:
     """How much of the bin has been looked at, and what looking at the rest would cost.
 
@@ -595,6 +623,8 @@ def visual_status(fine: bool = True, interval: float | None = None) -> dict:
                         for i in VISUAL_INTERVALS},
         "running": any(v["state"] not in progress.TERMINAL for v in VISUALS.values()),
         "events": len(events.load(STATE["visual"])),
+        # The audit button's price, read off the ranked file the board already shows.
+        "audit": audit_price(audit_plan(events.load(STATE["visual"]))),
         "dir": str(STATE["visual"]),
     }
 
@@ -1942,12 +1972,19 @@ def _visual_job(job: str, cmd: list[str], wanted: set[str], fine: bool,
         entry["stage"] = "scanning"
         entry["now"] = ""            # the coarse pass's last clip is not this stage's
         windows = STATE["work"] / f"windows_{job}.json"
-        stems = sorted(Path(c).stem for c in footage_clips())
+        # Only the clips never looked at closely — the ones the price counted. The scan
+        # now puts a clip's unaudited claims first and skips what was read, so scanning
+        # an audited clip again would buy fresh windows the button never priced; that
+        # is the audit's job (/api/visual/audit), with its own price.
+        closely = fine_stems()
+        stems = sorted(Path(c).stem for c in footage_clips()
+                       if Path(c).stem not in closely)
         entry.note("scanning for motion — free, no model calls")
-        rc = _run_counted(entry, scan_cmd(stems, windows, windows_per_clip),
-                          lambda: len(fine_stems()), key="fine_done", append=True)
+        rc = (_run_counted(entry, scan_cmd(stems, windows, windows_per_clip),
+                           lambda: len(fine_stems()), key="fine_done", append=True)
+              if stems else 0)
         entry.complete("scan")
-        if rc == 0 and windows.exists():
+        if rc == 0 and stems and windows.exists():
             entry["stage"] = "closer"
             total_fine = max(1, entry.get("fine_total") or len(stems))
             rc = _run_counted(
@@ -2086,6 +2123,99 @@ async def api_visual(request: Request) -> JSONResponse:
                            windows_per_clip),
                      daemon=True).start()
     return JSONResponse({"job": job, "total": len(wanted)})
+
+
+def audit_cmd(windows: Path) -> list[str]:
+    """The audit's close look — the same tool and settings as the second stage, a
+    function of its own so the tests can see exactly which windows it was handed."""
+    return fine_cmd(windows)
+
+
+def _audit_job(job: str, windows: Path, stems: set[str]) -> None:
+    """Close look at the planned windows, then the rank. Nothing else runs: the coarse
+    pass and the scan have both happened, and this is the spend on what they claimed."""
+    entry = VISUALS[job]
+    entry["state"] = "running"
+    entry["stage"] = "closer"
+    before = {s: len(load_fine(s).get("windows_read") or []) for s in stems}
+
+    def audited() -> int:
+        return sum(1 for s in stems
+                   if len(load_fine(s).get("windows_read") or []) > before[s])
+
+    rc = _run_counted(
+        entry, audit_cmd(windows), audited, key="fine_done",
+        on_line=lambda line: _visual_note(entry, line, key="fine_done",
+                                          total=len(stems), verb="audited"),
+        on_count=lambda n: entry.advance(
+            "closer", n / max(1, len(stems)),
+            detail=_visual_note(entry, key="fine_done", total=len(stems),
+                                verb="audited")))
+    windows.unlink(missing_ok=True)
+    entry.complete("closer")
+    entry["stage"] = "ranking"
+    entry.note("ranking what was seen")
+    entry["events"] = rebuild_events()
+    entry.complete("rank")
+    if rc != 0:
+        # The windows that were read are on disk and already ranked; what failed is
+        # the rest, and it is still unaudited, so the button offers it again.
+        entry.finish("failed", detail="the audit did not finish — see the log; "
+                                      "what was read is kept and ranked")
+        return
+    entry["stage"] = "done"
+    entry.finish("done", detail=f"{entry['claims']} claims audited, "
+                                f"{entry['events']} events ranked")
+
+
+@app.post("/api/visual/audit")
+async def api_visual_audit(request: Request) -> JSONResponse:
+    """Audit what the sheets claim — the close look on the bin's top unaudited claims.
+
+    R10's first follow-up and the biggest lever left on the visual side (HANDOFF roadmap
+    item 1): Killington's events file has no `confirmed` event at all, because the close
+    look's windows went to motion peaks and never to the claims. This spends windows on
+    exactly the claims that rank highest *because* nobody checked them, then rebuilds
+    the rank. `{"dry_run": true}` prices it without spending — the board's button shows
+    that price and the editor clicks; nothing here runs on the app's own initiative.
+    """
+    body = await request.json()
+    n = max(1, min(40, int(body.get("n", AUDIT_CLAIMS))))
+    rebuild_events()                     # free, and the plan must see what is on disk
+    plan = audit_plan(events.load(STATE["visual"]), n)
+    price = audit_price(plan)
+    out = {**price, "n": n, "plan": plan}
+    if body.get("dry_run"):
+        return JSONResponse(out)
+    if any(v["state"] not in progress.TERMINAL for v in VISUALS.values()):
+        raise HTTPException(409, "a visual pass is already running")
+    if not plan:
+        raise HTTPException(400, "nothing to audit — every hot claim has had a close look")
+    if _over_budget(price["projected_usd"]):
+        raise HTTPException(409, f"the audit (~${price['projected_usd']:.2f}) would pass "
+                                 f"the budget cap ${budget_cap():.2f}")
+    job = uuid.uuid4().hex[:8]
+    by_stem: dict[str, list[list[float]]] = {}
+    for w in plan:
+        by_stem.setdefault(Path(w["clip"]).stem.upper(), []).append([w["start"], w["end"]])
+    windows = STATE["work"] / f"audit_{job}.json"
+    windows.parent.mkdir(parents=True, exist_ok=True)
+    windows.write_text(json.dumps(by_stem, indent=1), encoding="utf-8")
+    stems = {Path(w["clip"]).stem for w in plan}
+    VISUALS[job] = progress.Job(
+        "visual", "Auditing the claims", id=job, stage="closer", log="",
+        total=len(stems), done=0, fine_done=0, fine_total=len(stems), events=0,
+        fine=True, sheets=len(plan), claims=price["claims"], now="",
+        detail=f"{price['windows']} window{'' if price['windows'] == 1 else 's'} "
+               f"over {price['claims']} claim{'' if price['claims'] == 1 else 's'}")
+    VISUALS[job].set_estimate(
+        price["eta_s"],
+        [progress.milestone("closer", "a closer look at the claims",
+                            max(1.0, len(plan) * FINE_WINDOW_READ_S)),
+         progress.milestone("rank", "ranking what was seen", 2.0)],
+        source="measured")
+    threading.Thread(target=_audit_job, args=(job, windows, stems), daemon=True).start()
+    return JSONResponse({**out, "job": job})
 
 
 @app.get("/api/visual/{job}")

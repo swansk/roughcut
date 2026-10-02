@@ -216,6 +216,25 @@ UNCONFIRMED.
 The coarse pass over the same three clips had cost $0.693. Every number above came from
 `~/work/roughcut-ledger.jsonl` and the sidecars' own `projected_usd`.
 
+## Follow-up built (2026-10-02, branch `agent/events-audit`)
+
+The three provisional items above that were changes rather than studies:
+
+- **Windows on the claims.** `events.choose_windows` puts a clip's unaudited jump/fall/crash
+  claims ahead of its motion peaks, inside the same budget, and never re-buys a read window.
+  A claim window is the claim's span padded to ±4 s and capped at one sheet (14 s) so that it
+  covers `COVERED` — a "jump 136-160" read through 8 s would have come back still `unseen`.
+  The board's *Audit N claims* button (`POST /api/visual/audit`) spends the close look on the
+  bin's top 12 unaudited claims only. **Not yet run** — the spend is Karl's.
+- **Fine-only positives** are `fine-only`, weight `FINE_ONLY` 0.7 (between unsupported and
+  unseen), on the argument in Result 3: a close look is a good auditor and a poor detector.
+- **The tilted-camera guard** is in both prompts (find the snow beneath the skis; horizon
+  roll alone is camera roll; unsure is `action`), and `validate` demotes an event resting on
+  inversion words. Its effect on real sheets is unmeasured until a pass re-reads them.
+
+Still argued, not fitted: every weight, including the new one. The audit's verdicts are the
+first labels this bin will have.
+
 ## Reproduce
 
 ```
