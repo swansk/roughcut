@@ -67,6 +67,7 @@ import uvicorn
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from roughcut import (config, dictate, edits, effects, events, find, fx, inference,  # noqa: E402
                       journal, picks, progress, revise, selects, themes)
+from roughcut import junk as junkmod  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent / "research" / "tools"
@@ -792,6 +793,17 @@ async def api_save(request: Request) -> JSONResponse:
                               for e in raw]
         except ValueError as exc:
             raise HTTPException(400, f"effects: {exc}")
+    # Junk (HANDOFF item 5): the editor's verdicts by clip, validated like the rest; a
+    # bad one is a 400 and nothing is written. Absent leaves them alone; null clears.
+    if "junk" in body:
+        try:
+            spec = junkmod.validate(body["junk"])
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        if spec:
+            edl["junk"] = spec
+        else:
+            edl.pop("junk", None)
     if "music" in body:
         music = body["music"]
         if music:
@@ -973,7 +985,7 @@ async def api_ask(request: Request) -> JSONResponse:
     body = await request.json()
     note = (body.get("note") or "").strip()
 
-    clips, payload = _ask_clips()
+    clips, payload = _ask_clips(body.get("segments"), drop_junk=True)
     target = payload["target"]
     segments = body.get("segments")
     if segments is None:
@@ -1055,15 +1067,28 @@ FIND_ETA_S = 45.0
 FIND_EXPECTED_MATCHES = 6
 
 
-def _ask_clips() -> tuple[dict, dict]:
+def _ask_clips(segments: list[dict] | None = None, *,
+               drop_junk: bool = False) -> tuple[dict, dict]:
     """The clips dict the model-facing calls read, plus the full payload it came
     from. One shape, built one way — /api/ask grew its own copy of this inline and
-    /api/find needing a second copy is what promoted it to a function."""
+    /api/find needing a second copy is what promoted it to a function.
+
+    `drop_junk` (the Ask and Find): clips the editor confirmed as junk leave the
+    inventory — blocks of "(no speech)" over a black frame are tokens the model reads
+    for nothing, and an originated cut that opens on one is the failure the junk pass
+    exists for. A confirmed clip a shot of `segments` (default: the cut on disk) still
+    uses stays: the human put it there, and the plan validator rejects a shot whose
+    clip the inventory does not have."""
     payload = project_payload()
     clips = {c: {"clip": c, "duration": v["duration"], "transcript": v["transcript"],
                  "summary": v["summary"], "captured": v.get("captured"),
                  "visual": v.get("visual")}
              for c, v in payload["clips"].items()}
+    if drop_junk:
+        used = {s.get("clip") for s in (segments if segments is not None
+                                        else payload["segments"]) if isinstance(s, dict)}
+        for c in confirmed_junk() - used:
+            clips.pop(c, None)
     return clips, payload
 
 
@@ -1129,7 +1154,7 @@ async def api_find(request: Request) -> JSONResponse:
     query = (body.get("query") or "").strip()
     if not query:
         raise HTTPException(400, "empty query — describe the moment")
-    clips, payload = _ask_clips()
+    clips, payload = _ask_clips(drop_junk=True)
     if not clips:
         raise HTTPException(400, "no analysed clips yet — run the audio pass first")
     matches = find.lexical(query, clips)
@@ -1262,8 +1287,10 @@ def api_picks(order: str = "rank") -> JSONResponse:
     rows = picks.build(payload["clips"], payload["events"], themes=themes,
                        telemetry=bin_telemetry(),
                        verdicts=edl["floor"]["verdicts"], selects=edl["selects"])
+    junk_of = {r["clip"]: r["state"] for r in junk_rows(edl)}
     for p in rows:
         p["released"] = p["clip"] in released
+        p["junk"] = junk_of.get(p["clip"], "clean")
     ordered = picks.order(rows, order)
     return JSONResponse({
         "picks": _pick_rows(ordered),
@@ -1421,6 +1448,144 @@ def floor_js() -> Response:
         raise HTTPException(404, "the floor's script is not built yet")
     return Response(p.read_text(encoding="utf-8"),
                     media_type="application/javascript", headers=NO_STORE)
+
+
+# ---------------------------------------------------------------- junk (HANDOFF item 5)
+#
+# Proposed by a measurement, confirmed by the human: `roughcut/junk.py` reads the
+# colour file the proxy stage already wrote, the audio sidecar and the duration, and
+# says which clips look like a camera in a pocket. Nothing here decodes video unless a
+# clip has a proxy and no colour file yet (one 5 s sample per frame, from the proxy).
+# The EDL's `junk` block holds only the human's word; the proposals are recomputed on
+# every read, cached by the files' mtimes, so they cost a stat per clip.
+
+
+def junk_block(edl: dict | None = None) -> dict:
+    block = (edl if edl is not None else read_edl()).get("junk")
+    return block if isinstance(block, dict) else {}
+
+
+def confirmed_junk(edl: dict | None = None) -> set[str]:
+    return junkmod.confirmed(junk_block(edl))
+
+
+def junk_assess(clip: str, measure: bool = False) -> dict:
+    """The proposal for one clip. `measure` builds a missing colour file from the
+    proxy — the cheap fallback; without it a clip with no colour file is judged on
+    its length alone, and says so (`numbers.samples` is 0)."""
+    cfile = colour_file(clip)
+    sfile: Path = STATE["sidecars"] / f"{Path(clip).stem}.audio.json"
+    if measure and not cfile.exists() and (STATE["proxy_dir"] / f"{Path(clip).stem}.mp4").exists():
+        try:
+            measure_colour(clip)
+        except RuntimeError:
+            pass
+    mtime = lambda p: p.stat().st_mtime if p.exists() else None   # noqa: E731
+    key = (str(cfile), mtime(cfile), str(sfile), mtime(sfile))
+    cache: dict = STATE.setdefault("junk_cache", {})
+    hit = cache.get(clip)
+    if hit and hit[0] == key:
+        return hit[1]
+    side = load_sidecar(clip) or None
+    out = junkmod.assess(junkmod.facts(load_colour(clip), side, clip_duration(clip)))
+    cache[clip] = (key, out)
+    return out
+
+
+def junk_rows(edl: dict | None = None, measure: bool = False) -> list[dict]:
+    """Every footage clip with the machine's proposal, the human's verdict and the one
+    word that follows from both. Generated clips are never assessed — a black slide
+    the editor asked for is the point of it."""
+    edl = edl if edl is not None else read_edl()
+    block = junk_block(edl)
+    used = {s.get("clip") for s in edl.get("segments") or []}
+    rows = []
+    for clip in footage_clips():
+        a = junk_assess(clip, measure=measure)
+        verdict = (block.get(clip) or {}).get("verdict")
+        stem = Path(clip).stem
+        rows.append({"clip": clip, "stem": stem,
+                     "state": junkmod.status(a["junk"], verdict),
+                     "proposed": a["junk"], "verdict": verdict,
+                     "reasons": a["reasons"], "numbers": a["numbers"],
+                     "duration": clip_duration(clip), "used": clip in used,
+                     "proxy": f"/media/proxy/{stem}.mp4",
+                     "poster": f"/media/poster/{stem}.jpg"})
+    return rows
+
+
+def junk_counts(rows: list[dict]) -> dict:
+    return {s: sum(1 for r in rows if r["state"] == s) for s in junkmod.STATES}
+
+
+def journal_junk(row: dict) -> str | None:
+    """What the index journal should hold for a clip's junk row."""
+    return {"confirmed": "confirmed", "proposed": "proposed"}.get(row["state"])
+
+
+def sync_junk(j: journal.Journal) -> None:
+    """Bend the journal to the bin's junk word: confirmed clips skip their priced
+    stages, proposed ones wait behind the clean ones, a kept or cleared one gets its
+    stages back. Called by the index thread between stages — it owns the journal while
+    it runs — and by POST /api/junk when no index is running."""
+    for row in junk_rows():
+        clip = row["clip"]
+        if clip in j.clips and j.clips[clip].get("junk") != journal_junk(row):
+            j.set_junk(clip, journal_junk(row))
+
+
+@app.get("/api/junk")
+def api_junk() -> JSONResponse:
+    """The junk proposals with their reasons and numbers, and the editor's verdicts.
+    Free: a measurement over files the index already wrote."""
+    rows = junk_rows(measure=True)
+    return JSONResponse({"clips": rows, "counts": junk_counts(rows),
+                         "thresholds": {"luma_black": junkmod.LUMA_BLACK,
+                                        "luma_lit": junkmod.LUMA_LIT,
+                                        "flat_spread": junkmod.FLAT_SPREAD,
+                                        "short_s": junkmod.SHORT_S},
+                         "provisional": True})
+
+
+@app.post("/api/junk")
+async def api_junk_post(request: Request) -> JSONResponse:
+    """`{clip, verdict: "junk" | "keep" | null}` — the editor's answer to a proposal
+    (or a clip marked by hand). `junk` takes the clip out of the Ask, Find and the
+    bin's default view and skips its priced index stages; `keep` overrides the
+    proposal; null forgets the answer and the proposal stands again."""
+    body = await request.json()
+    clip = str(body.get("clip") or "")
+    verdict = body.get("verdict")
+    if verdict not in (*junkmod.VERDICTS, None):
+        raise HTTPException(400, f"verdict must be one of {junkmod.VERDICTS} or null")
+    edl = read_edl()
+    if clip not in footage_clips() and clip not in junk_block(edl):
+        raise HTTPException(400, f"unknown clip {clip!r}")
+    a = junk_assess(clip) if clip in footage_clips() else {"reasons": []}
+    edl["junk"] = junkmod.set_verdict(junk_block(edl), clip, verdict,
+                                      reasons=a["reasons"])
+    if not edl["junk"]:
+        edl.pop("junk")
+    write_edl(edl)
+    rows = junk_rows(edl)
+    row = next((r for r in rows if r["clip"] == clip), None)
+    # The journal follows now when nothing else holds it; a running index owns its
+    # journal in memory and picks the word up before its next stage.
+    index = "none"
+    skipped: list[str] = []
+    if journal_path().exists() and row is not None:
+        if any(x["state"] not in progress.TERMINAL for x in INDEXES.values()):
+            index = "next stage"
+        else:
+            try:
+                j = load_journal()
+                if clip in j.clips:
+                    skipped = j.set_junk(clip, journal_junk(row))
+                index = "applied"
+            except journal.JournalError:
+                index = "unreadable"
+    return JSONResponse({"ok": True, "clip": row, "counts": junk_counts(rows),
+                         "index": index, "stages": skipped})
 
 
 # ---------------------------------------------------------------- backend
@@ -2360,6 +2525,13 @@ def _index_job(job: str, order: str) -> None:
 
     report("reading the journal")
     while True:
+        # The bin's junk word, before every pick: a clip the editor confirmed while the
+        # last stage ran never gets its sheets bought, and a clip whose proxy just
+        # landed is measured and, if it looks like junk, waits behind the clean ones.
+        try:
+            sync_junk(j)
+        except (OSError, ValueError, journal.JournalError) as exc:
+            entry.note(f"junk check skipped: {str(exc)[:80]}")
         nxt = j.next()
         if nxt is None:
             break
@@ -2513,6 +2685,8 @@ def api_clips() -> JSONResponse:
         except journal.JournalError:
             j = None
     released = set(released_clips())
+    # The junk band I5.1 wanted on the wire: the proposal's one word per clip.
+    junk_of = {r["clip"]: r["state"] for r in junk_rows()}
     out = []
     for clip in clips:
         stem = Path(clip).stem
@@ -2529,6 +2703,7 @@ def api_clips() -> JSONResponse:
             "closed": stem in fine_stems(),
             "telemetry": has_telemetry(clip),
             "released": clip in released,
+            "junk": junk_of.get(clip, "clean"),
             "journal": None if rec is None else {
                 "priority": rec.get("priority"), "missing": bool(rec.get("missing")),
                 "parked": rec.get("parked"),
