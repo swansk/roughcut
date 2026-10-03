@@ -147,6 +147,10 @@ Read the evidence word, not just the kind:
   evidence available; prefer these.
 * `unaudited` — nobody has looked closely yet. The kind is one reader's guess from
   frames four seconds apart, and on this footage that guess is often wrong.
+* `deep` — a deep look (individual frames at the seconds the editor chose, read in
+  order, every claim tied to a frame) found it and no earlier pass claimed it: one
+  careful look, stronger than unaudited, weaker than confirmed. The clip's inventory
+  below carries the deep look's beats for those seconds, `seen` or `inferred`.
 * `fine-only` — only the 1s close look saw it; the first pass saw nothing there. One
   look at the busiest seconds of a clip, which is where camera artefacts live: weaker
   than unaudited.

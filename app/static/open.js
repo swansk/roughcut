@@ -206,6 +206,8 @@ function renderSheet() {
   const link = $('#openPass');
   link.setAttribute('aria-disabled', released ? 'false' : 'true');
   link.textContent = released ? `Open the pass on ${plural(released, 'clip')} →` : 'Open the pass →';
+  // A mini coverage strip per card: what the machine looked at, how densely (M15).
+  if (window.deep) deep.minis($('#sessions'));
   $('#passHint').textContent = released
     ? (released < clips.length ? 'the rest keep indexing; new clips join as a round when they are released'
                                : 'every clip is released')

@@ -171,8 +171,8 @@ async function adopt(j) {
     if (!full.found) return;
     renderFindResults(full.found.matches, full.found.notes);
     toast('the model search finished — matches are in Find a moment');
-  } else if ((j.kind === 'visual' || j.kind === 'analyse' || j.kind === 'index')
-             && j.state === 'done') {
+  } else if ((j.kind === 'visual' || j.kind === 'analyse' || j.kind === 'index'
+              || j.kind === 'deep') && j.state === 'done') {
     // Nothing on this board starts these any more (the open screen runs the index;
     // the two passes are API-only), but whatever finished wrote transcripts, sidecars
     // or picks, so the whole project reloads.
@@ -420,6 +420,7 @@ function buildShot(seg) {
         </div>
       </div>
       <div class="prov hint" hidden></div>
+      <div class="deepbox" hidden></div>
     </div>`;
   el.querySelector('.why').addEventListener('blur', (ev) => {
     const text = ev.target.textContent.trim();
@@ -555,6 +556,8 @@ function fillShot(box, seg) {
   if (document.activeElement !== note) note.value = shotAskDraft.get(seg) || '';
 
   fillColour(box, seg);
+  // How the machine saw this clip, the shot's range marked, Look deeper on it (M15).
+  if (window.deep) deep.inspector(q('.deepbox'), seg);
 }
 
 function renderInspector() {
@@ -1376,12 +1379,15 @@ function renderLibrary() {
     const seal = r.evidence === 'confirmed' ? '<i class="kind hot">confirmed</i>'
       : (r.evidence === 'contradicted' || r.evidence === 'unsupported')
         ? '<i class="kind">unconfirmed</i>'
-        : r.evidence === 'fine-only' ? '<i class="kind">one look</i>' : '';
+        : r.evidence === 'fine-only' ? '<i class="kind">one look</i>'
+          : r.evidence === 'deep' ? '<i class="kind hot">deep look</i>' : '';
     d.innerHTML = `<span class="w">${r.kind ? kindTag(r.kind) : ''}${seal}${escapeHtml(r.why)}</span>
       <span class="t">${stem(r.clip)} · ${fmt(r.t)}${r.end ? `–${fmt(r.end)}` : ''}</span>`;
     d.onclick = () => {
       insertShot({ clip: r.clip, start: r.t, end: r.end ?? r.t + 3, why: r.why });
     };
+    // Look deeper at this moment, priced on the button (INTAKE M15).
+    if (libTab === 'seen' && window.deep) deep.rowButton(d, r.clip, r.t, r.end);
     lib.appendChild(d);
   });
 }
