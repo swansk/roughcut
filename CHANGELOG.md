@@ -10,6 +10,11 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Changed
+- **The sheets record which model read them (Karl, 2026-10-03 #4).** `visual_pass.py`
+  writes `params.model` — the model the backend reported for the sheets it read — beside
+  the role it already wrote, so the coverage strip can say what read a clip rather than
+  what the role maps to today (the close look moved tiers on 2026-10-03). Sidecars
+  written before this carry no model and are shown as *model not recorded*.
 - **Deep work on Opus 5.5, quick work on Sonnet 5.5 (Karl, 2026-10-03).** `config.DEEP_MODEL`
   (`claude-opus-5-5`) serves the skeleton and judge roles — the Ask, effect design, the
   model's Find, the themes — and now the close look and the audit too (`FINE_ROLE`, passed
