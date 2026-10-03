@@ -431,6 +431,7 @@ function tick(now) {
     }
     paintHead(t);
     paintKeep();
+    if (window.deep) deep.head($('#deepFloor'), t);
   }
   requestAnimationFrame(tick);
 }
@@ -816,6 +817,8 @@ function paintAll() {
   paintTape();
   if (zoom.built !== (cur() && (cur().id || cur().clip))) buildZoom();
   paintKeep(true);
+  // How the machine saw this clip, under the tape, the band marked (INTAKE M15).
+  if (window.deep && cur()) deep.floor($('#deepFloor'), cur().clip, keepRange().snapped, seek);
 }
 
 /* ------------------------------------------------------------- the queue */

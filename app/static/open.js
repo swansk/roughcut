@@ -211,6 +211,8 @@ function renderSheet() {
   const link = $('#openPass');
   link.setAttribute('aria-disabled', released ? 'false' : 'true');
   link.textContent = released ? `Open the pass on ${plural(released, 'clip')} →` : 'Open the pass →';
+  // A mini coverage strip per card: what the machine looked at, how densely (M15).
+  if (window.deep) deep.minis($('#sessions'));
   // Two numbers that used to be one word: on the pass (heard and previewed — picks from
   // the words) and fully indexed (looked at too). While the looks are paused they differ.
   const looksWait = d.journal && d.paused_priced && full < released ? released - full : 0;

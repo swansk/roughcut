@@ -117,6 +117,7 @@ server, and every edit is undoable because fiddling is only fun when it is cheap
 | **Story** | In the Ask tool. Free text saved into the EDL. The thing the agent is worst at; typing "the milk is the running joke" beats an hour of analysis |
 | **Sound** | The music bed, its own tool: pick a track from `assets/music/`, set how far it ducks under speech and its fades. Saved into the EDL as `effects_music` the moment it changes, rendered by `assemble.py` with the picture untouched, and heard under the monitor with the same duck before you render. A click on the music lane opens it |
 | **Bin** | The dock's default tool (INTAKE M11). **kept** — the bin, first and the one the board opens on when the pass has kept anything: a card per keep, heroes first then by clip and start — the still at its start, `CLIP_04 · 3:44.0 → 3:48.2 · 4.2 s`, `★ HERO`, the pass's reason and the editor's note, the pass's labels as chips, and either *in the cut · shot N* (click selects the shot) or *+ add*; a keep whose footage left says so and cannot be added; an empty bin points at the pass. The chips above the grid are the same labels as a filter, with counts, plus hero / in the cut / not yet — one chip on at a time, the same chip again clears it, a chip on a card works the same. The search box filters the grid as you type; **Find** and **Ask the model** search the whole footage from the same box (word match over transcripts and what the visual pass saw; the priced model read for what words cannot reach), with each match playing the whole clip proxy seeked to the moment. Click a card to select it; `enter` adds it, `space` or a double-click plays the clip in the bin's own player so the monitor stays on the cut; drag a card onto V1. **heard** — audio candidates not already in the cut, ranked — and **seen** — what the visual pass found, ranked by the bin's `events.json`, with the priced *Audit N claims* button above it. Re-read when the tab is shown and after every save while it is up. The rail's badge is the count of keeps |
+| **How the machine saw it** | A strip per clip (INTAKE M15, `deep.js`): the clip's length as a bar with a lane per layer of the index — **heard** (the utterances), **coarse** (a tick per sheet frame), **close** (the close look's windows and their 1 s frames), **deep** (each deep look's span and its keyframes; the frames it asked for in orange), **motion** (the free 10 Hz track as a sparkline) — and the **claims** each layer made, coloured by evidence (confirmed green, deep gold, unaudited outlined, close look only, contradicted red, unusable hatched). Under it the legend says the granularity in words, from each sidecar's own record — *a frame every 4 s, read 30 to a sheet (6×5, 320 px) by Sonnet 5.5* — and says *model not recorded* (or *frame times derived from the interval*) for sidecars written before those were kept, rather than guessing from today's config. Hover: what was seen at that second (the nearest coarse frame and how far, the close window, the deep span, the claims). Drag: choose up to 20 s to look deeper at. In the inspector for the selected shot (its range marked, *Look deeper* priced for it), under the pass's tape for the pick's clip (the playhead on it; no buttons — the pass is keys, so there it shows and says the board is where to look deeper; a click on a deep span opens it, again closes it), and as a mini strip on each card of the open screen |
 | **Junk** | Proposed by a measurement, confirmed by you (HANDOFF roadmap item 5, `roughcut/junk.py`). From what the index already has — the clip's colour file (one sample per 5 s of the proxy), the audio sidecar's words, the duration — a clip is proposed when it is **essentially black** (mean luma < 12/255 and no sample above 40), **one flat field** (luma spread < 10/255 — a lens cap, a bag) or **under 1.5 s**, and never when a single word was heard. No model call. A proposed clip has a dashed card at the head of the bin grid with its reason, and its keeps wear `junk?`; **Confirm** takes it out of the Ask's inventory (first cut and revision — unless a shot of the cut still uses it), out of Find, out of the grid's default view and the heard / seen rows, and the index journal skips its look and close look — the money; **Keep** overrides the proposal. The `junk N` chip shows proposed and confirmed clips together, a confirmed one with **Keep** to undo. While the index runs, a proposed clip's sheets wait behind every clean clip's, so an answer given mid-run still saves them. `/open`'s cards carry `junk?` / `junk`. **API:** `GET /api/junk` — every footage clip with `state` (`proposed` · `confirmed` · `kept` · `clean`), the machine's `proposed`, the `verdict`, `reasons` (sentences) and `numbers` (the facts and the thresholds); a clip with a proxy and no colour file is measured on the way. `POST /api/junk {clip, verdict: "junk" \| "keep" \| null}` — writes the EDL's `junk` block (only the human's word is stored; proposals are recomputed, cached by file mtimes) and the journal when no index is running (`index: "applied"`, `stages` it skipped or reopened; a running index picks it up before its next stage). `PUT /api/project` validates a `junk` block like the other blocks. The thresholds are **provisional** — one bin's numbers (B1/Copper's `benchmarks/labels/B1-luma.json`) |
 | **Ask for a change** | Plain-language note → revised timeline, shown as a diff you accept or discard |
 | **Cut from the bin** | The same Ask with a fixed note — *build the cut from the editor's selects: every hero must appear, use the other keeps where they serve the story, and take nothing else unless it is needed to make a keep land* — and the current story, then the usual proposal / accept / discard. Under the note in the Ask panel, and beside *Ask for a first cut* when the timeline is empty (where the panel is hidden, and where someone arriving from the pass lands); disabled with a hint while the bin is empty. The fixed note never becomes the story |
@@ -157,6 +158,65 @@ nothing to audit). `/api/status`'s `visual.audit` carries the same price for the
 whole-bin pass's second stage now puts each clip's own unaudited claims ahead of its motion peaks
 too, inside the same three windows per clip. A row only a close look saw (no coarse claim
 agreeing) is marked **one look** and ranks below an unaudited claim (`FINE_ONLY`).
+
+### How the agent sees, and Look deeper (INTAKE M15)
+
+Karl, 2026-10-03: *"make it clearer how the videos are indexed by the agent (e.g. showing
+granularity), and make it easier to run deeper keyframe-based analysis (w/ AI interpolating
+as needed between frames to really understand what is going on)."*
+
+The index has four layers and each looks at a clip differently: the **audio pass** (every
+word timed), the **coarse sheets** (a frame every 4 s by default, 30 to a 6×5 sheet at
+320 px, the quick tier), the **close look** (a frame a second over 8–14 s windows, 3×5
+sheets at 480 px, the deep tier) and the free **motion scan** (picture change at 10 Hz).
+The strip above shows which seconds each one covered; the numbers come from the sidecars.
+
+**Look deeper** is a fifth layer, run by hand on a span the editor chooses
+(`roughcut/deep.py`). It is not a denser sheet. It picks **keyframes where the picture
+changes** — the motion track's peaks and turns, a uniform floor so a still stretch is never
+unsampled, and the rest of the cap on the gaps with the most change in them (≤ 24 frames
+over ≤ 20 s) — cuts each as its own 640 px JPEG from the proxy, and hands them to the deep
+model **in order, with their timestamps and the motion between each pair as numbers**. The
+answer is a beat-by-beat account in which every beat is either **seen** on a named frame or
+**inferred** between two named bracketing frames with why; events in the coarse pass's
+vocabulary; the camera (mount, and whether a tilted horizon is the camera — *"unless the
+ground under the skis says otherwise"*, R10/R11); and what it is unsure of. It may ask for up
+to 8 more frames where its inference is weakest; if it does and the budget allows, **one**
+follow-up call adds exactly those and takes the final answer — never a loop. An answer that
+puts a beat outside the span, cites a frame that does not exist, or infers without two
+bracketing frames is refused and re-asked once.
+
+Where: a **Look deeper · ~$x** button on every row of the bin's *seen* tab (the moment ± 2 s),
+in the inspector for the selected shot (the shot's in/out, capped at 20 s), and after a drag
+on the strip. The price is a dry run and is on the button (the tooltip has the bound with the
+follow-up); nothing spends without the click; one at a time; refused past the budget cap. A
+span already read says *Show the deep look* and costs nothing. The run is a `deep` job in the
+top bar. The result shows in place: the keyframes as a filmstrip with their timestamps (a
+click enlarges one; the frames it asked for are outlined), a bar of beats under it — seen
+beats solid on their frame, inferred beats hatched across the two frames that bracket them,
+a marker at each asked-for frame — the beats in words (hover one to light its frames), the
+events, the camera and what it was unsure of.
+
+**The rank believes it** (`roughcut/events.py`): a jump / fall / crash claim that a deep span
+covers is `confirmed` when the deep look found the same family there and `contradicted`
+otherwise (camera roll, nothing, or a fall under a jump claim); a deep event no earlier claim
+made ranks with its own weight `DEEP` 1.3 (argued in the code: above an unaudited guess,
+below two looks agreeing). The Ask's inventory carries the deep beats, marked seen or
+inferred, in place of the coarse and close lines for those seconds.
+
+**API.** `GET /api/coverage/{clip}` — `duration`, `layers.{heard, coarse, close, deep,
+motion}` (spans, sample times, interval, width, role, `model` or null, `frames_recorded`),
+`moments` (each claim with its `status`) and `unusable`; free, from the files.
+`GET /api/coverage` — the same, compact, for every clip (the open screen's cards).
+`POST /api/deep {clip, start, end, dry_run?, force?}` — `dry_run` returns the plan and price
+(`frames`, `frames_plan`, `projected_usd`, `max_usd` with the follow-up, `eta_s`, `cached`,
+`capped`); without it starts the job (`job`), or answers `cached` for a span already read;
+409 while one runs or past the cap, 400 with no proxy. `POST /api/deep/quote {spans: [...]}`
+prices many at once. `GET /api/deep/{clip}` — the clip's deep looks whole (beats, events,
+camera, frames, model, cost) and `frames_url`; `/media/deep/<stem>/<frame>.jpg` serves the
+keyframes, cut under `--work/deep/<bin>/<stem>/`. Stored as `<stem>.deep.json` beside the
+visual sidecars. **Provisional:** the cap, floor, width and the price (no deep call has been
+measured; ≈ $0.51 for 24 frames on Opus 5.5, ≤ $1.07 with the follow-up).
 
 The originating prompt states two things a model reading clips one at a time cannot rediscover,
 both measured in R8/R9 rather than guessed: transcript density points *away* from the action on

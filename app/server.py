@@ -69,6 +69,7 @@ from roughcut import (config, dictate, edits, effects, events, find, fx, inferen
                       journal, picks, progress, revise, selects, themes)
 from roughcut import junk as junkmod  # noqa: E402
 from roughcut import flow as flowmod  # noqa: E402
+from roughcut import deep as deepmod  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent / "research" / "tools"
@@ -90,6 +91,7 @@ ASKS: dict[str, progress.Job] = {}
 VISUALS: dict[str, progress.Job] = {}
 FINDS: dict[str, progress.Job] = {}
 FX: dict[str, progress.Job] = {}          # effects: design, revise, verify (INTAKE M12)
+DEEPS: dict[str, progress.Job] = {}       # look deeper at a span (INTAKE M15)
 
 
 def all_jobs() -> list[progress.Job]:
@@ -101,7 +103,8 @@ def all_jobs() -> list[progress.Job]:
     still running — which is the state his machine is in as this is written.
     """
     return [*ANALYSES.values(), *VISUALS.values(), *INDEXES.values(), *ASKS.values(),
-            *FINDS.values(), *THEMES.values(), *FX.values(), *RENDERS.values()]
+            *FINDS.values(), *THEMES.values(), *FX.values(), *RENDERS.values(),
+            *DEEPS.values()]
 
 
 # Polled once a second by every open board, so it carries no payloads: a finished Ask
@@ -124,7 +127,7 @@ def api_jobs() -> JSONResponse:
 
 @app.get("/api/job/{job}")
 def api_job(job: str) -> JSONResponse:
-    for registry in (ANALYSES, VISUALS, INDEXES, ASKS, FINDS, THEMES, FX, RENDERS):
+    for registry in (ANALYSES, VISUALS, INDEXES, ASKS, FINDS, THEMES, FX, RENDERS, DEEPS):
         if job in registry:
             return JSONResponse(registry[job].snapshot())
     raise HTTPException(404, "no such job")
@@ -458,14 +461,16 @@ def load_visual(clip: str) -> dict:
     """
     stem = Path(clip).stem
     p: Path = STATE["visual"] / f"{stem}.visual.json"
-    if not p.exists():
+    deep = deepmod.load(STATE["visual"], stem)
+    if not p.exists() and not deep:
         return {}
-    d = json.loads(p.read_text(encoding="utf-8"))
+    d = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
     fine = load_fine(stem)
     # The close look replaces the coarse account of the same seconds rather than
     # joining it. An inventory that still lists a backflip the 1s read found to be a
-    # glove over the lens teaches the Ask exactly the wrong thing (R10).
-    return {"moments": events.merge_moments(d.get("moments", []), fine),
+    # glove over the lens teaches the Ask exactly the wrong thing (R10). A deep look's
+    # beats replace both for the seconds it read (INTAKE M15).
+    return {"moments": events.merge_moments(d.get("moments", []), fine, deep),
             "unusable": d.get("unusable", []) + fine.get("unusable", []),
             "summary": d.get("summary", "")}
 
@@ -2525,6 +2530,222 @@ def api_visual_status(job: str) -> JSONResponse:
     return JSONResponse(VISUALS[job].snapshot())
 
 
+# ---------------------------------------------------------------- how the agent sees (M15)
+#
+# Karl, 2026-10-03 (#4): *"make it clearer how the videos are indexed by the agent (e.g.
+# showing granularity), and make it easier to run deeper keyframe-based analysis."*
+# Two halves. **Coverage** is free and read from the files only: for one clip, which
+# seconds each layer of the index looked at, how densely, with which model (where the
+# sidecar recorded it), and what each concluded — `deep.js` draws it as a strip of lanes.
+# **The deep look** (`roughcut/deep.py`) is priced: keyframes where the picture changes,
+# individual frames read in order on the deep tier, beats marked seen or inferred, at
+# most one follow-up for frames it asks for. One at a time, priced by a dry run, refused
+# past the budget cap, and it never re-buys a span already read.
+
+
+def deep_frames_dir(stem: str) -> Path:
+    """Per bin, like the proxies the frames are cut from — two bins can share a stem."""
+    return STATE["work"] / "deep" / STATE["footage"].name / stem
+
+
+def _footage_clip(clip: str) -> str:
+    want = Path(str(clip)).stem.upper()
+    for c in footage_clips():
+        if Path(c).stem.upper() == want:
+            return c
+    raise HTTPException(404, f"no clip {clip} in this bin")
+
+
+def _asr_model() -> str | None:
+    """The ASR model, from the audio pass's own index — the sidecars do not carry it."""
+    try:
+        d = json.loads((STATE["sidecars"] / "index.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return ((d.get("asr") or {}) if isinstance(d, dict) else {}).get("model")
+
+
+def clip_coverage(clip: str) -> dict:
+    stem = Path(clip).stem
+    vp: Path = STATE["visual"] / f"{stem}.visual.json"
+    try:
+        coarse = json.loads(vp.read_text(encoding="utf-8")) if vp.exists() else {}
+    except (OSError, ValueError):
+        coarse = {}
+    fine = load_fine(stem)
+    deep = deepmod.load(STATE["visual"], stem)
+    motion = events.motion_cache(STATE["visual"], stem)
+    audio = load_sidecar(clip)
+    track = events.excitement(motion, (audio.get("tracks") or {}).get("onset") or [])
+    moments = events.rank_clip(clip, coarse, fine, track, events.MOTION_HZ, deep)
+    return deepmod.coverage(clip, duration=clip_duration(clip), audio=audio,
+                            coarse=coarse, fine=fine, deep=deep, motion=motion,
+                            hz=events.MOTION_HZ, moments=moments,
+                            asr_model=_asr_model())
+
+
+@app.get("/api/coverage")
+def api_coverage_bin() -> JSONResponse:
+    """Every clip's coverage in compact form, for the open screen's cards."""
+    return JSONResponse({"clips": {c: deepmod.summary(clip_coverage(c))
+                                   for c in footage_clips()}})
+
+
+@app.get("/api/coverage/{clip}")
+def api_coverage(clip: str) -> JSONResponse:
+    """Which seconds of one clip the machine looked at, how densely, and what it said."""
+    return JSONResponse(clip_coverage(_footage_clip(clip)))
+
+
+def deep_plan(clip: str, start: float, end: float, force: bool = False) -> dict:
+    """What a deep look at [start, end] would read and cost — free, nothing is cut.
+
+    With the clip's motion track cached the frames are chosen exactly as the run will
+    choose them; without it the run measures the track first (free) and the price
+    assumes the cap, which is the most it can be."""
+    stem = Path(clip).stem
+    s, e = deepmod.clamp_span(start, end, clip_duration(clip))
+    have = deepmod.covering(deepmod.load(STATE["visual"], stem), s, e)
+    motion = events.motion_cache(STATE["visual"], stem)
+    frames = deepmod.keyframes(motion, s, e, hz=events.MOTION_HZ) if motion else []
+    out = {"clip": clip, "start": s, "end": e, "requested": [start, end],
+           "capped": (end - start) - (e - s) > 0.01,
+           "max_span_s": deepmod.MAX_SPAN_S,
+           "frames_plan": [f["t"] for f in frames],
+           "motion": "cached" if motion else "measured first — free",
+           **deepmod.quote(len(frames) if motion else deepmod.FRAME_CAP)}
+    out["cached"] = bool(have) and not force
+    if out["cached"]:
+        out.update(projected_usd=0.0, max_usd=0.0, calls=0, max_calls=0, eta_s=0.0,
+                   read={"start": have["start"], "end": have["end"]})
+    return out
+
+
+def _num_field(body: dict, key: str) -> float:
+    try:
+        return float(body[key])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(400, f"'{key}' must be a number of seconds") from None
+
+
+@app.post("/api/deep/quote")
+async def api_deep_quote(request: Request) -> JSONResponse:
+    """Prices for many spans in one request — the seen tab prices every row's button."""
+    body = await request.json()
+    out = []
+    for sp in (body.get("spans") or [])[:80]:
+        try:
+            clip = _footage_clip(sp.get("clip", ""))
+            out.append(deep_plan(clip, _num_field(sp, "start"), _num_field(sp, "end")))
+        except HTTPException as exc:
+            out.append({"error": exc.detail, **{k: sp.get(k) for k in
+                                                ("clip", "start", "end")}})
+    return JSONResponse({"quotes": out})
+
+
+def _deep_job(job: str, clip: str, start: float, end: float) -> None:
+    entry = DEEPS[job]
+    stem = Path(clip).stem
+    proxy: Path = STATE["proxy_dir"] / f"{stem}.mp4"
+
+    def on_step(key: str, detail: str) -> None:
+        if key in ("frames", "read"):
+            entry.complete(key)
+        entry.note(detail)
+
+    try:
+        motion = events.motion_cache(STATE["visual"], stem)
+        if not motion:
+            entry.note("measuring the motion — free, no model call")
+            motion = events.motion_track(proxy)
+            events.write_motion_cache(STATE["visual"], stem, clip, motion)
+        entry.complete("motion")
+        record = deepmod.look(
+            proxy, clip, start, end, frames_dir=deep_frames_dir(stem), mafd=motion,
+            hz=events.MOTION_HZ, may_follow_up=lambda usd: not _over_budget(usd),
+            on_step=on_step)
+    except inference.BudgetExceeded as exc:
+        entry.update(code=429)
+        entry.finish("failed", detail=str(exc))
+        return
+    except (inference.InferenceError, RuntimeError, ValueError, OSError) as exc:
+        entry.update(code=502)
+        entry.finish("failed", detail=f"the deep look failed: {str(exc)[:300]}")
+        return
+    deepmod.store(STATE["visual"], stem, clip, record)
+    entry["record"] = {"start": record["start"], "end": record["end"]}
+    entry.note("ranking what was seen")
+    entry["events"] = rebuild_events()
+    entry.complete("rank")
+    inferred = sum(1 for b in record["beats"] if b["basis"] == "inferred")
+    more = (f" — read again with {len(record['asked'])} frames it asked for"
+            if record["followup"] else "")
+    entry.finish("done", detail=f"{len(record['beats'])} beats ({inferred} inferred), "
+                                f"{len(record['events'])} events, "
+                                f"${record['projected_usd']:.2f}{more}")
+
+
+@app.post("/api/deep")
+async def api_deep(request: Request) -> JSONResponse:
+    """Look deeper at a span of one clip. `{"dry_run": true}` prices it and spends nothing;
+    the board's button carries that price and nothing runs without the click. A span
+    already read comes back as `cached` and costs nothing (`force` re-reads it)."""
+    body = await request.json()
+    clip = _footage_clip(body.get("clip", ""))
+    plan = deep_plan(clip, _num_field(body, "start"), _num_field(body, "end"),
+                     force=bool(body.get("force")))
+    if body.get("dry_run") or plan["cached"]:
+        return JSONResponse({**plan, "job": None})
+    if any(d["state"] not in progress.TERMINAL for d in DEEPS.values()):
+        raise HTTPException(409, "a deep look is already running — one at a time")
+    if not (STATE["proxy_dir"] / f"{Path(clip).stem}.mp4").exists():
+        raise HTTPException(400, f"{clip} has no preview yet — the frames come from it")
+    if _over_budget(plan["max_usd"]):
+        raise HTTPException(409, f"the deep look (up to ~${plan['max_usd']:.2f}) would "
+                                 f"pass the budget cap ${budget_cap():.2f}")
+    job = uuid.uuid4().hex[:8]
+    DEEPS[job] = progress.Job(
+        "deep", f"Looking deeper · {Path(clip).stem} {plan['start']:.1f}–{plan['end']:.1f} s",
+        id=job, clip=clip, start=plan["start"], end=plan["end"], code=0, events=0,
+        detail=f"cutting up to {plan['frames']} frames")
+    DEEPS[job].set_estimate(
+        plan["eta_s"],
+        [progress.milestone("motion", "the motion track", 1.0),
+         progress.milestone("frames", "cutting the keyframes", 4.0),
+         progress.milestone("read", "reading the frames in order", plan["eta_s"]),
+         progress.milestone("rank", "ranking what was seen", 1.0)],
+        source="measured")
+    threading.Thread(target=_deep_job, args=(job, clip, plan["start"], plan["end"]),
+                     daemon=True).start()
+    return JSONResponse({**plan, "job": job})
+
+
+@app.get("/api/deep/{clip}")
+def api_deep_get(clip: str) -> JSONResponse:
+    """A clip's deep looks, whole — beats, events, camera, frames — and any running one."""
+    clip = _footage_clip(clip)
+    stem = Path(clip).stem
+    d = deepmod.load(STATE["visual"], stem)
+    running = next((j for j in DEEPS.values() if j.get("clip") == clip
+                    and j["state"] not in progress.TERMINAL), None)
+    return JSONResponse({"clip": clip, "spans": d.get("spans") or [],
+                         "frames_url": f"/media/deep/{stem}/",
+                         "job": running["id"] if running else None})
+
+
+_DEEP_FRAME = re.compile(r"^t\d{4}\.\d{2}\.jpg$")
+
+
+@app.get("/media/deep/{stem}/{name}")
+def deep_frame(stem: str, name: str) -> Response:
+    if not _DEEP_FRAME.match(name) or "/" in stem or "\\" in stem or stem.startswith("."):
+        raise HTTPException(404, "no such frame")
+    p = deep_frames_dir(stem) / name
+    if not p.is_file():
+        raise HTTPException(404, "no such frame")
+    return FileResponse(p, media_type="image/jpeg")
+
+
 # ---------------------------------------------------------------- themes
 #
 # Listen first, then propose (design §2, INTAKE I5.2): after the free audio pass one
@@ -4565,6 +4786,13 @@ def dockjs() -> Response:
                     media_type="application/javascript", headers=NO_STORE)
 
 
+@app.get("/deep.js")
+def deepjs() -> Response:
+    """The coverage strip and Look deeper (INTAKE M15), shared by the three screens."""
+    return Response((HERE / "static" / "deep.js").read_text(encoding="utf-8"),
+                    media_type="application/javascript", headers=NO_STORE)
+
+
 @app.get("/grade.js")
 def gradejs() -> Response:
     """The monitor's grade (INTAKE M10, I10.4): the WebGL LUT over the live video."""
@@ -5290,7 +5518,7 @@ async def api_projects_open(request: Request) -> JSONResponse:
         if isinstance(rec, dict) and rec.get("edl") and Path(rec["edl"]).is_file() \
                 and Path(rec.get("footage", "")) == folder:
             edl = Path(rec["edl"])
-    for reg in (ANALYSES, VISUALS, INDEXES, ASKS, FINDS, THEMES, RENDERS):
+    for reg in (ANALYSES, VISUALS, INDEXES, ASKS, FINDS, THEMES, RENDERS, DEEPS):
         reg.clear()
     configure(edl, folder, None, STATE["work"],
               proxies=STATE.get("proxies_enabled", True), orient="auto")

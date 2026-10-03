@@ -246,6 +246,17 @@ CONTRADICTED = 0.35      # looked at 1s and found a camera artefact instead
 # a look that found nothing, so it sits between UNSUPPORTED and UNSEEN.
 # Provisional like every weight here: argued, not fitted.
 FINE_ONLY = 0.7
+# The deep look (INTAKE M15, `roughcut.deep`): an event it found that no earlier claim
+# agrees with. Above UNSEEN, unlike FINE_ONLY, and the argument is the difference between
+# the two looks rather than a fit. FINE_ONLY's discount is that the close look reads the
+# windows the motion scan chose — where the artefacts are — off a contact sheet of 480 px
+# thumbnails. The deep look reads the span *the editor* chose, frame by frame at 640 px
+# in order with the motion between them as numbers, and it had to name the frame for
+# every claim and two bracketing frames for every inference, or be refused. That is a
+# better single look than either sheet. It is still one reader, so it sits below two
+# looks agreeing (CONFIRMED); a deep event that does agree with an earlier claim is
+# `confirmed` like any other agreement. Provisional like every weight here.
+DEEP = 1.3
 
 UNUSABLE_PENALTY = 0.4   # you cannot cut here, however good the moment was
 # How much of a moment a fine window must cover before its silence counts as evidence.
@@ -255,6 +266,11 @@ UNUSABLE_PENALTY = 0.4   # you cannot cut here, however good the moment was
 COVERED = 0.5
 
 HOT = {"fall", "crash", "jump"}
+# Families for the deep look's verdict on an earlier claim. R11's one real fall was the
+# coarse pass's "upside-down mid-air" — an event *was* there, and the claim was wrong
+# about which: a deep look that finds a fall under a jump claim refutes the claim (the
+# fall ranks on its own row), it does not confirm it.
+FAMILY = {"jump": "air", "fall": "down", "crash": "down"}
 
 
 def overlap(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -295,8 +311,36 @@ def confirmation(moment: dict, fine: dict) -> str:
     return "unsupported"
 
 
+def deep_spans(deep: dict | None) -> list[tuple[float, float]]:
+    return [(float(r["start"]), float(r["end"])) for r in (deep or {}).get("spans") or []]
+
+
+def deep_events(deep: dict | None) -> list[dict]:
+    return [e for r in (deep or {}).get("spans") or [] for e in r.get("events") or []]
+
+
+def deep_verdict(moment: dict, deep: dict | None) -> str | None:
+    """What a deep look says about an earlier hot claim, or None when it has nothing to
+    say (the claim is not hot, or no deep span covers it to COVERED).
+
+    The strongest evidence there is, so it overrides the close look's verdict: a deep
+    event of the claim's family overlapping it is `confirmed`; anything else — a camera
+    roll, nothing, an event of another family — is `contradicted`. The deep look read
+    every frame of those seconds and named what it saw; a claim it did not find there is
+    not a claim that stands unaudited.
+    """
+    kind = (moment.get("kind") or "").strip().lower()
+    spans = deep_spans(deep)
+    if kind not in HOT or not spans or _covered(moment, spans) < COVERED:
+        return None
+    span = (moment["start"], moment["end"])
+    same = [e for e in deep_events(deep) if FAMILY.get(e.get("kind")) == FAMILY[kind]
+            and overlap(span, (e["start"], e["end"])) > 0]
+    return "confirmed" if same else "contradicted"
+
+
 CONFIRMATION_WEIGHT = {"confirmed": CONFIRMED, "unseen": UNSEEN,
-                       "fine-only": FINE_ONLY,
+                       "deep": DEEP, "fine-only": FINE_ONLY,
                        "unsupported": UNSUPPORTED, "contradicted": CONTRADICTED}
 
 
@@ -326,12 +370,15 @@ def score_moment(moment: dict, *, track: list[float] | None = None,
 
 
 def rank_clip(clip: str, coarse: dict, fine: dict | None = None,
-              track: list[float] | None = None, hz: float = MOTION_HZ) -> list[dict]:
-    """One clip's moments, coarse and fine together, each with a score and its reason.
+              track: list[float] | None = None, hz: float = MOTION_HZ,
+              deep: dict | None = None) -> list[dict]:
+    """One clip's moments, coarse, fine and deep together, each with a score and its reason.
 
     A fine moment supersedes the coarse moment it audits rather than joining it: they
     are two accounts of the same seconds, and the closer look is the better one. The
-    coarse claim survives in `superseded` so the disagreement stays visible.
+    coarse claim survives in `superseded` so the disagreement stays visible. A deep look
+    supersedes both the same way (`deep_verdict`): a hot claim it confirms gives its slot
+    to the deep event, one it does not find stays on the list as `contradicted`.
     """
     fine = fine or {}
     unusable = list(coarse.get("unusable", [])) + list(fine.get("unusable", []))
@@ -339,7 +386,10 @@ def rank_clip(clip: str, coarse: dict, fine: dict | None = None,
 
     fine_spans = [(m["start"], m["end"]) for m in fine.get("moments", [])]
     for m in coarse.get("moments", []):
-        status = confirmation(m, fine)
+        verdict = deep_verdict(m, deep)
+        if verdict == "confirmed":
+            continue                        # the deep event carries it, tighter
+        status = verdict or confirmation(m, fine)
         if status == "confirmed" and _covered(m, fine_spans) > 0.0:
             # Two looks agree; the fine one carries the tighter timestamps, so it is
             # the one that goes on the list. Dropping the coarse copy here is what
@@ -361,6 +411,9 @@ def rank_clip(clip: str, coarse: dict, fine: dict | None = None,
         agrees = any(c.get("kind") in HOT and overlap(span, (c["start"], c["end"])) > 0
                      for c in coarse.get("moments", [])
                      if (m.get("kind") or "") in HOT)
+        verdict = deep_verdict(m, deep)
+        if verdict == "confirmed":
+            continue
         out.append({"clip": clip, "start": m["start"], "end": m["end"],
                     "what": m.get("what", ""), "notable": bool(m.get("notable")),
                     "source": "close look",
@@ -368,7 +421,25 @@ def rank_clip(clip: str, coarse: dict, fine: dict | None = None,
                     "confidence": m.get("confidence", ""),
                     "demoted": m.get("demoted", ""),
                     **score_moment(m, track=track, hz=hz, unusable=unusable,
-                                   status="confirmed" if agrees else "fine-only")})
+                                   status=verdict or (
+                                       "confirmed" if agrees else "fine-only"))})
+    earlier = [m for m in list(coarse.get("moments", [])) + list(fine.get("moments", []))
+               if (m.get("kind") or "") in HOT]
+    for e in deep_events(deep):
+        if e.get("kind") == "pov-gear":
+            continue                        # the wearer's own gear is never a moment
+        span = (e["start"], e["end"])
+        fam = FAMILY.get(e.get("kind"))
+        agrees = fam is not None and any(
+            FAMILY.get(c.get("kind")) == fam and overlap(span, (c["start"], c["end"])) > 0
+            for c in earlier)
+        out.append({"clip": clip, "start": e["start"], "end": e["end"],
+                    "what": e.get("what", ""), "notable": bool(e.get("notable")),
+                    "source": "deep look",
+                    "frames": [float(f) for f in (e.get("frames") or [])],
+                    "confidence": e.get("confidence", ""), "demoted": "",
+                    **score_moment(e, track=track, hz=hz, unusable=unusable,
+                                   status="confirmed" if agrees else "deep")})
     return [e for e in out if e["score"] > 0.0]
 
 
@@ -382,26 +453,45 @@ def rank_bin(per_clip: dict[str, dict]) -> list[dict]:
     out: list[dict] = []
     for clip, d in per_clip.items():
         out += rank_clip(clip, d.get("coarse", {}), d.get("fine"), d.get("track"),
-                         d.get("hz", MOTION_HZ))
+                         d.get("hz", MOTION_HZ), d.get("deep"))
     out.sort(key=lambda e: (-e["score"], e["clip"], e["start"]))
     for i, e in enumerate(out, 1):
         e["rank"] = i
     return out
 
 
-def merge_moments(coarse: list[dict], fine: dict | None) -> list[dict]:
-    """The clip inventory's "what is visible" lines, with the close look folded in.
+def merge_moments(coarse: list[dict], fine: dict | None,
+                  deep: dict | None = None) -> list[dict]:
+    """The clip inventory's "what is visible" lines, with the close and deep looks folded in.
 
     Where a fine window audited a coarse moment, the fine account replaces it. That is
     the point of paying for the second look: an inventory that still lists a backflip
     the close read found to be a glove over the lens teaches the Ask the wrong thing.
+    Where a deep look read the seconds, its beats replace both — seen and inferred,
+    said as such — and its events ride along as moments of their own.
     """
     fine = fine or {}
-    if not fine.get("moments") and not fine.get("windows_read"):
+    spans = deep_spans(deep)
+    if not spans and not fine.get("moments") and not fine.get("windows_read"):
         return list(coarse)
-    kept = [dict(m) for m in coarse
-            if confirmation(m, fine) in ("unseen", "unsupported")]
-    kept += [{**m, "fine": True} for m in fine.get("moments", [])]
+    if fine.get("moments") or fine.get("windows_read"):
+        kept = [dict(m) for m in coarse
+                if confirmation(m, fine) in ("unseen", "unsupported")]
+        kept += [{**m, "fine": True} for m in fine.get("moments", [])]
+    else:
+        kept = [dict(m) for m in coarse]
+    if spans:
+        kept = [m for m in kept if _covered(m, spans) < COVERED]
+        for r in (deep or {}).get("spans") or []:
+            for b in r.get("beats") or []:
+                how = (f"seen at {b['frame']:g}s" if b.get("basis") == "seen" else
+                       f"inferred between {b['between'][0]:g}s and {b['between'][1]:g}s"
+                       + (f" ({b['why']})" if b.get("why") else ""))
+                kept.append({"start": b["start"], "end": b["end"], "kind": "beat",
+                             "notable": False, "deep": True, "basis": b.get("basis"),
+                             "what": f"deep look, {how}: {b.get('what', '')}"})
+            for e in r.get("events") or []:
+                kept.append({**e, "deep": True, "what": f"deep look: {e.get('what', '')}"})
     kept.sort(key=lambda m: m["start"])
     return kept
 
@@ -547,6 +637,18 @@ def choose_windows(clip: str, coarse: dict, fine: dict | None = None,
 
 EVENTS_FILE = "events.json"
 MOTION_SUFFIX = ".motion.json"
+DEEP_SUFFIX = ".deep.json"          # roughcut.deep's file; read here, written there
+
+
+def load_deep(visual_dir: Path, stem: str) -> dict:
+    p = visual_dir / f"{stem}{DEEP_SUFFIX}"
+    if not p.exists():
+        return {}
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return d if isinstance(d, dict) else {}
 
 
 def motion_cache(visual_dir: Path, stem: str) -> list[float]:
@@ -581,15 +683,18 @@ def gather(visual_dir: Path, audio_dir: Path) -> dict[str, dict]:
     ordered, never an exception in front of the board.
     """
     per_clip: dict[str, dict] = {}
-    for p in sorted(visual_dir.glob("*.visual.json")):
-        stem = p.name[: -len(".visual.json")]
-        coarse = json.loads(p.read_text(encoding="utf-8"))
+    stems = sorted({p.name[: -len(".visual.json")] for p in visual_dir.glob("*.visual.json")}
+                   | {p.name[: -len(DEEP_SUFFIX)] for p in visual_dir.glob(f"*{DEEP_SUFFIX}")})
+    for stem in stems:
+        p = visual_dir / f"{stem}.visual.json"
+        coarse = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
         fine_path = visual_dir / f"{stem}.fine.json"
         fine = (json.loads(fine_path.read_text(encoding="utf-8"))
                 if fine_path.exists() else {})
+        deep = load_deep(visual_dir, stem)
         track = excitement(motion_cache(visual_dir, stem), _onset(audio_dir, stem))
-        per_clip[coarse.get("clip") or f"{stem}.MP4"] = {
-            "coarse": coarse, "fine": fine, "track": track, "hz": MOTION_HZ}
+        per_clip[coarse.get("clip") or deep.get("clip") or f"{stem}.MP4"] = {
+            "coarse": coarse, "fine": fine, "deep": deep, "track": track, "hz": MOTION_HZ}
     return per_clip
 
 
@@ -603,7 +708,7 @@ def build(visual_dir: Path, audio_dir: Path) -> dict:
         "params": {"kind_weight": KIND_WEIGHT, "not_notable": NOT_NOTABLE,
                    "corroboration_gain": CORROBORATION_GAIN,
                    "confirmation": CONFIRMATION_WEIGHT,
-                   "fine_only": FINE_ONLY,
+                   "fine_only": FINE_ONLY, "deep": DEEP,
                    "audit_order": "unaudited hot claims, notable then score, "
                                   "before motion peaks",
                    "unusable_penalty": UNUSABLE_PENALTY,

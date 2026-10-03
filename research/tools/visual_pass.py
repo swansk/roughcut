@@ -324,6 +324,7 @@ def analyse(video: Path, out_dir: Path, interval: float, cols: int, rows: int,
         moments, unusable, summaries, failed, spend = [], [], [], [], 0.0
         read: list[list[float]] = []
         sampled: list[float] = []
+        models: set[str] = set()
         for s in sheets:
             try:
                 got = read_sheet(s["path"], video.name, s["cells"], interval, role,
@@ -344,6 +345,7 @@ def analyse(video: Path, out_dir: Path, interval: float, cols: int, rows: int,
             moments += got["moments"]
             unusable += got["unusable"]
             sampled += got.get("frames_sampled", [])
+            models.add(got["usage"]["model"])
             summaries.append(got["summary"])
             spend += got["usage"]["projected_usd"]
             print(f"  {s['path'].name}: {len(got['moments'])} moments "
@@ -356,6 +358,11 @@ def analyse(video: Path, out_dir: Path, interval: float, cols: int, rows: int,
            "frames_sampled": sorted(set(sampled)),
            "params": {"interval_s": interval, "cols": cols, "rows": rows,
                       "width": width, "role": role,
+                      # Which model read the sheets, as the backend reported it. A role
+                      # maps to a model through config at the time of the run, and that
+                      # mapping moves (2026-10-03: the close look went to the deep tier);
+                      # the coverage strip says what read a clip, not what would now.
+                      "model": ", ".join(sorted(models)) or None,
                       "prompt_version": PROMPT_VERSION,
                       "provisional": "RQ-1/RQ-7 unmeasured"}}
     if windows:

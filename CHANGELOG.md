@@ -10,6 +10,13 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Changed
+- **M15 names no model ID outside config.py** (CLAUDE.md model-version policy): the deep
+  tests take `config.DEEP_MODEL`, and `deep.js` describes the name pattern it prettifies.
+- **The sheets record which model read them (Karl, 2026-10-03 #4).** `visual_pass.py`
+  writes `params.model` — the model the backend reported for the sheets it read — beside
+  the role it already wrote, so the coverage strip can say what read a clip rather than
+  what the role maps to today (the close look moved tiers on 2026-10-03). Sidecars
+  written before this carry no model and are shown as *model not recorded*.
 - **Deep work on Opus 5.5, quick work on Sonnet 5.5 (Karl, 2026-10-03).** `config.DEEP_MODEL`
   (`claude-opus-5-5`) serves the skeleton and judge roles — the Ask, effect design, the
   model's Find, the themes — and now the close look and the audit too (`FINE_ROLE`, passed
@@ -21,6 +28,38 @@ same commit. Releases move entries into a dated version section.
   2.1.280+; the WSL CLI was 2.1.278 and was updated to 2.1.288.
 
 ### Added
+- **Docs for INTAKE M15** (Karl, 2026-10-03 #4): app/README.md — the coverage strip in
+  *What's on screen*, a section on how the agent sees and Look deeper with its endpoints;
+  INTAKE M15 with its decisions and items by commit; HANDOFF roadmap item 1 notes the deep
+  look exists.
+- **How the agent sees a clip, and Look deeper (Karl, 2026-10-03 #4; INTAKE M15).**
+  A **coverage strip** (`/deep.js`) per clip: lanes for what was heard, the coarse sheets'
+  frames, the close look's windows, the deep looks' keyframes and the free motion track,
+  the claims marked by evidence (confirmed / deep / unaudited / one look / contradicted),
+  a legend that states each layer's granularity from the sidecar's own record (*a frame
+  every 4 s, read 30 to a sheet … by role analysis, model not recorded*), hover for what
+  was seen at a second, drag to choose seconds. On the board's inspector (the shot's
+  range marked), under the pass's tape (the playhead live; no buttons — the pass is keys)
+  and as a mini strip on the open screen's cards. `GET /api/coverage[/{clip}]`, free.
+  **Look deeper** (`roughcut/deep.py`): keyframes where the picture changes (the 10 Hz
+  motion track's peaks and turns, a uniform floor, the rest of the cap on the gaps with
+  the most change; ≤ 24 frames, ≤ 20 s, 640 px, each its own file) read in order on the
+  deep tier with the motion between them as numbers; beats marked `seen` on a frame or
+  `inferred` between two named bracketing frames with why; events, the camera (the
+  camera-roll guard: "unless the ground under the skis says otherwise"), what it was
+  unsure of; at most one follow-up for up to 8 frames it asks for. Validated strictly;
+  stored as `<stem>.deep.json`; a span already read is never re-bought. Priced by a dry
+  run on the button (`POST /api/deep`, `POST /api/deep/quote`), one at a time, refused
+  past the cap, a `deep` job in the top bar; on a seen-tab row, in the inspector for the
+  shot, or by dragging on the strip. The result shows in place: the keyframes as a
+  filmstrip, the beats under it (seen solid, inferred hatched between their frames), the
+  frames it asked for marked. **The rank believes it**: a hot claim a deep span covers is
+  `confirmed` (same family found) or `contradicted` (camera roll, nothing, or another
+  family — R11's "upside-down mid-air" that was a fall); a deep event nobody claimed
+  ranks at `DEEP` 1.3 (argued: the editor chose the seconds, every claim tied to a
+  frame; one reader, so below two agreeing); the Ask's inventory carries the deep beats
+  for those seconds. Provisional: the cap, floor, width and the price (≈ $0.51 for 24
+  frames on Opus 5.5, ≤ $1.07 with the follow-up — no deep call has been measured).
 - **The CLI tells you when it needs you, on every screen (Karl, 2026-10-03).**
   `inference.diagnose` turns a CLI failure into the thing to do — sign in
   (`claude auth login`), update (`claude update`), allow a blocked tool, wait out the
