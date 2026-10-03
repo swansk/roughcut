@@ -37,6 +37,84 @@ class BudgetExceeded(InferenceError):
     """The projected spend cap would be breached. Raised *before* the call."""
 
 
+# ------------------------------------------------------------ what to do about it
+#
+# Karl, 2026-10-03: *"make it easier for me to realize I need to grant claude cli
+# permissions (when needed) from the app."* Every one of these failures has the same
+# shape — the CLI needs a human at a terminal for ten seconds — and every one used to
+# arrive as an error string in whichever job happened to hit it. `diagnose` turns the
+# string into the thing to do, so the board can say it once, at the top, in words.
+# Ordered: the first match wins, and an out-of-date CLI is checked before login
+# because its message also mentions "claude".
+_DIAGNOSES = (
+    ("update", re.compile(r"does not support this model|or newer is required|"
+                          r"unrecognized_model|run 'claude update'", re.I),
+     "The Claude CLI is too old for the model this app uses",
+     "claude update",
+     "Opus 5.5 needs Claude Code 2.1.280 or newer. Update it in a WSL terminal, then "
+     "check again."),
+    ("login", re.compile(r"/login|not logged in|log in|invalid api key|"
+                         r"oauth token (has )?expired|authentication_error|"
+                         r"invalid x-api-key|credentials", re.I),
+     "The Claude CLI needs you to sign in",
+     "claude auth login",
+     "The CLI is not signed in (or its sign-in expired). Run this in a WSL terminal, "
+     "finish the sign-in in the browser it opens, then check again."),
+    ("permission", re.compile(r"permission_denials|need (your )?permission|"
+                              r"permission to (read|use|access)|requires? approval|"
+                              r"was (blocked|denied)", re.I),
+     "The Claude CLI blocked a tool this app needs",
+     "claude",
+     "A call asked to read a frame from disk and the CLI refused. Roughcut allows only "
+     "the Read tool; a deny rule in ~/.claude/settings.json wins over that. Open "
+     "`claude` in WSL, run /permissions, allow Read, then check again."),
+    ("limit", re.compile(r"usage limit|rate limit|rate_limit|\b429\b|overloaded", re.I),
+     "The Claude plan's usage window is full",
+     "",
+     "The subscription's rolling limit was reached. Nothing to run — wait for the "
+     "window to reset (the CLI's message says when), then check again."),
+    ("path", re.compile(r"not (found )?on PATH", re.I),
+     "The server cannot find the Claude CLI",
+     "bash -l",
+     "The server was started from a shell that does not see ~/.local/bin. Restart it "
+     "from a login shell."),
+)
+
+
+def diagnose(text: str) -> dict | None:
+    """What a human must do about a CLI failure, or None if it is not that kind of
+    failure (a timeout, a schema miss — those are the app's problem, not Karl's)."""
+    for kind, pattern, title, command, why in _DIAGNOSES:
+        if pattern.search(text or ""):
+            return {"kind": kind, "title": title, "command": command, "why": why,
+                    "detail": (text or "")[:300], "at": round(time.time(), 1)}
+    return None
+
+
+_PROBLEM: dict | None = None
+
+
+def last_problem() -> dict | None:
+    """The most recent failure a human can fix, until a call succeeds again."""
+    return _PROBLEM
+
+
+def clear_problem() -> None:
+    global _PROBLEM
+    _PROBLEM = None
+
+
+def note_problem(text: str) -> dict | None:
+    """Record `text` if it diagnoses; return the diagnosis either way. Also the door
+    for failures seen outside this process — the visual pass runs as a subprocess and
+    the server hands its log lines here."""
+    global _PROBLEM
+    found = diagnose(text)
+    if found:
+        _PROBLEM = found
+    return found
+
+
 @dataclass(frozen=True)
 class Request:
     prompt: str
@@ -348,6 +426,13 @@ class ClaudeCliBackend:
             # The login prompt arrives this way, and is the most likely failure on a
             # fresh machine — surface it as itself rather than as a parse error.
             raise InferenceError(f"claude CLI error: {text[:200]}")
+        denied = payload.get("permission_denials") or []
+        if denied:
+            # The answer arrived, but the CLI refused a tool on the way — the call that
+            # needed a frame from disk will have answered without it.
+            tools = sorted({str(d.get("tool_name", "?")) if isinstance(d, dict) else str(d)
+                            for d in denied})
+            note_problem(f"permission_denials: {', '.join(tools)}")
 
         usage = payload.get("usage", {}) or {}
         # Cached tokens count. The CLI splits input across `input_tokens`,
@@ -478,7 +563,7 @@ def complete(prompt: str, *, role: str = config.ROLE_ANALYSIS,
     last: Exception | None = None
     for attempt in range(retries + 1):
         _check_budget(0.05)          # coarse pre-flight; real cost logged after
-        result = backend.complete(request)
+        result = _call(backend, request)
         _log(result, role)
         if schema is None:
             return result
@@ -496,6 +581,21 @@ def complete(prompt: str, *, role: str = config.ROLE_ANALYSIS,
     raise InferenceError(f"schema validation failed after {retries + 1} attempts: {last}")
 
 
+def _call(backend: Backend, request: Request) -> Result:
+    """One backend call, with what a human must fix recorded on the way out: a failure
+    that diagnoses becomes `last_problem()`, and a clean success clears it — unless
+    this very call raised a new one (a permission denial arrives inside a success)."""
+    before = _PROBLEM
+    try:
+        result = backend.complete(request)
+    except InferenceError as exc:
+        note_problem(str(exc))
+        raise
+    if _PROBLEM is before:
+        clear_problem()
+    return result
+
+
 def complete_many(requests: Sequence[Request]) -> list[Result]:
     """The only batching surface (SPEC §6.1). The CLI backend loops; an API backend
     may fan out to the Batch API internally."""
@@ -503,7 +603,7 @@ def complete_many(requests: Sequence[Request]) -> list[Result]:
     out: list[Result] = []
     for req in requests:
         _check_budget(0.05)
-        result = backend.complete(req)
+        result = _call(backend, req)
         _log(result, req.role)
         out.append(result)
     return out

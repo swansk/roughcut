@@ -75,6 +75,55 @@ def test_roles_resolve_and_are_overridable(monkeypatch):
     assert config.model_for(config.ROLE_SKELETON) == "some-future-model"
 
 
+def test_deep_work_runs_on_opus_and_quick_work_on_sonnet(monkeypatch):
+    """Karl, 2026-10-03: opus 5.5 for the deeper analysis, sonnet for quick."""
+    for role in ("SKELETON", "ANALYSIS", "JUDGE"):
+        monkeypatch.delenv(f"ROUGHCUT_MODEL_{role}", raising=False)
+    assert config.model_for(config.ROLE_SKELETON) == config.DEEP_MODEL
+    assert config.model_for(config.ROLE_JUDGE) == config.DEEP_MODEL
+    assert config.model_for(config.ROLE_ANALYSIS) == config.QUICK_MODEL
+    assert "opus" in config.DEEP_MODEL and "sonnet" in config.QUICK_MODEL
+    # a price measured on the small tier scales up, never down
+    assert config.price_scale(config.QUICK_MODEL) == 3.0
+    assert config.price_scale(config.DEEP_MODEL) == 5.0
+
+
+@pytest.mark.parametrize("text, kind", [
+    ("API Error: 400 Claude Code 2.1.278 does not support this model; version 2.1.280 "
+     "or newer is required. Run 'claude update'", "update"),
+    ("claude CLI error: Invalid API key · Please run /login", "login"),
+    ("claude CLI error: OAuth token has expired", "login"),
+    ("permission_denials: Read", "permission"),
+    ("I need your permission to read the image", "permission"),
+    ("Claude AI usage limit reached|1791040000", "limit"),
+    ("claude CLI not found on PATH. It installs to ~/.local/bin", "path"),
+])
+def test_cli_failures_diagnose_to_the_thing_to_do(text, kind):
+    found = inference.diagnose(text)
+    assert found and found["kind"] == kind and found["title"] and found["why"]
+
+
+@pytest.mark.parametrize("text", [
+    "claude CLI timed out after 600s (raise ROUGHCUT_CALL_TIMEOUT_S)",
+    "schema validation failed after 2 attempts: bad",
+    "CLIP_04.MP4: 3 sheet(s)",
+])
+def test_the_apps_own_failures_are_not_karls_to_fix(text):
+    assert inference.diagnose(text) is None
+
+
+def test_a_permission_denial_inside_a_success_is_recorded(monkeypatch):
+    """The answer arrives, but the CLI refused the Read it needed on the way."""
+    inference.clear_problem()
+    payload = {**LIVE_SHAPE, "permission_denials": [{"tool_name": "Read"}]}
+    inference.set_backend(_cli_with(monkeypatch, payload))
+    inference.complete("hi", role=config.ROLE_ANALYSIS)
+    assert inference.last_problem()["kind"] == "permission"
+    inference.set_backend(_cli_with(monkeypatch, LIVE_SHAPE))
+    inference.complete("hi", role=config.ROLE_ANALYSIS)
+    assert inference.last_problem() is None
+
+
 def test_unknown_role_is_an_error():
     with pytest.raises(ValueError):
         config.model_for("nonesuch")

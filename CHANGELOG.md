@@ -9,6 +9,30 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Changed
+- **Deep work on Opus 5.5, quick work on Sonnet 5.5 (Karl, 2026-10-03).** `config.DEEP_MODEL`
+  (`claude-opus-5-5`) serves the skeleton and judge roles — the Ask, effect design, the
+  model's Find, the themes — and now the close look and the audit too (`FINE_ROLE`, passed
+  as `--role` to the visual pass); `config.QUICK_MODEL` (`claude-sonnet-5-5`) serves the
+  analysis role — the coarse sheets, the estimates, the probe. Haiku is out. The visual
+  pass's per-sheet prices were measured on the small tier and now scale by
+  `config.price_scale` (sheets ×3, close-look windows ×5), so priced buttons read higher:
+  Killington's 12-claim audit is ≈ $4.38 projected, not $0.88. Opus 5.5 needs Claude Code
+  2.1.280+; the WSL CLI was 2.1.278 and was updated to 2.1.288.
+
+### Added
+- **The CLI tells you when it needs you, on every screen (Karl, 2026-10-03).**
+  `inference.diagnose` turns a CLI failure into the thing to do — sign in
+  (`claude auth login`), update (`claude update`), allow a blocked tool, wait out the
+  plan's usage window, fix PATH — and every call records it (`last_problem`, cleared by
+  the next clean call; a `permission_denials` inside a successful reply counts too). The
+  server adds the free checks at launch (`claude --version`, `claude auth status`), a
+  probe that calls each distinct model once (a quick-model probe said "ready" over a CLI
+  that rejected every Ask), and the visual pass subprocess's error lines.
+  `GET /api/backend` carries `fix`; `/cli.js` puts it across the top of the board, the
+  pass and the open screen — what is wrong, the command with Copy, *Check again* — in
+  the page's flow, never over a control. The header pill names the fix and both models.
+
 ### Documentation
 - **HANDOFF: the 2026-10-02 block** — the colour Ask, the claims audit and junk proposals
   merged; measured read-only on the real bins (Copper's junk proposals are exactly B1's

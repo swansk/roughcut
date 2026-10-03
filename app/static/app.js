@@ -2054,7 +2054,17 @@ async function refreshIndex() {
 function paintBackend(b) {
   const el = $('#backend');
   const short = (b.model || '').replace(/^claude-/, '');
+  const tiers = b.models ? `deep ${b.models.deep} · quick ${b.models.quick}\n` : '';
   el.classList.remove('ok', 'bad');
+  if (b.fix && b.state !== 'checking') {
+    // The banner across the top (cli.js) says what to do; the pill only has to agree.
+    el.classList.add('bad');
+    el.textContent = `${short} · ${{ login: 'sign in needed', update: 'CLI update needed',
+      permission: 'permission needed', limit: 'usage limit', path: 'CLI not found',
+    }[b.fix.kind] || 'needs you'}`;
+    el.title = `${tiers}${b.fix.title}\n${b.fix.detail || ''}`;
+    return;
+  }
   if (b.problems.length) {
     el.classList.add('bad');
     el.textContent = `${b.backend} · not usable`;
@@ -2071,7 +2081,7 @@ function paintBackend(b) {
   if (b.state === 'ok') {
     el.classList.add('ok');
     el.textContent = `${short} · ready`;
-    el.title = `${b.backend}, replied in ${(b.latency_ms / 1000).toFixed(1)}s\n` +
+    el.title = `${tiers}${b.backend}, replied in ${(b.latency_ms / 1000).toFixed(1)}s\n` +
       `$${b.spent_usd} of $${b.budget_usd} projected this run`;
     return;
   }
@@ -2091,6 +2101,7 @@ async function probeBackend() {
   paintBackend({ ...S.backend, state: 'checking' });
   await fetch('/api/backend/probe', { method: 'POST' });
   followProbe();
+  if (window.cliFix) window.cliFix.poll();
 }
 
 async function save() {

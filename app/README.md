@@ -38,6 +38,17 @@ uv run app/server.py --footage ~/footage/copper-02-2026 \
 Then open `http://localhost:8765`. First launch builds a 720p proxy per clip (a few minutes,
 once); later launches are instant.
 
+**Models and the CLI.** Deep work (the Ask, the close look and the audit, effect design, the
+model's Find, the themes) runs on Opus 5.5; quick work (the coarse sheets, the estimates, the
+probe) on Sonnet 5.5 — `config.DEEP_MODEL` / `QUICK_MODEL`, each role still overridable by
+`ROUGHCUT_MODEL_<ROLE>`. **Opus 5.5 needs Claude Code 2.1.280 or newer** (`claude update` in
+WSL). When the CLI needs you — signed out, too old for a model, a tool blocked, the plan's
+usage window full — every screen shows a banner across the top with what is wrong, the one
+command to run in a WSL terminal (Copy) and *Check again*. It is fed by the free checks at
+launch (`claude --version`, `claude auth status`), by the probe (one tiny call per distinct
+model), and by any job whose call fails that way, the visual pass's subprocess included.
+`GET /api/backend` is what it polls; `POST /api/backend/probe` re-checks everything.
+
 `--orient auto|none` applies only when a *new* project is scaffolded. It is per-bin and cannot
 be generalised — Copper's rotation side-data is spurious (`none`), Killington's is correct
 (`auto`) — so it is asked for rather than guessed.

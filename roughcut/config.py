@@ -24,10 +24,18 @@ ROLE_SKELETON = "skeleton"
 ROLE_ANALYSIS = "analysis"
 ROLE_JUDGE = "judge"
 
+# Two tiers, Karl, 2026-10-03: *"opus for the deeper analysis, sonnet for quick"*.
+# Deep is every call whose answer is a judgement about the footage — the Ask, the
+# close and deep looks, effect design, the model's Find, the themes. Quick is every
+# call that is many-and-small or only exists to keep the board moving — the coarse
+# sheets, the estimates, the backend probe. A role picks a tier; a tier names a model.
+DEEP_MODEL = "claude-opus-5-5"
+QUICK_MODEL = "claude-sonnet-5-5"
+
 _DEFAULT_MODELS = {
-    ROLE_SKELETON: "claude-opus-5",
-    ROLE_ANALYSIS: "claude-haiku-4-5-20251001",
-    ROLE_JUDGE: "claude-sonnet-5",
+    ROLE_SKELETON: DEEP_MODEL,
+    ROLE_ANALYSIS: QUICK_MODEL,
+    ROLE_JUDGE: DEEP_MODEL,
 }
 
 
@@ -63,6 +71,16 @@ def price_per_mtok(model: str) -> tuple[float, float]:
         if family in model:
             return _TIER_PRICES[tier]
     return _TIER_PRICES["mid"]          # unknown family: assume mid, never free
+
+
+def price_scale(model: str, measured_on: str = "small") -> float:
+    """How much dearer `model` is than the tier a per-call price was *measured* on.
+
+    The visual pass's per-sheet prices were measured from the ledger when sheets ran on
+    the small tier. Rather than re-measure every time a role moves, a measured price is
+    stated with the tier it came from and scaled by input price — input is nearly all of
+    a sheet call (the prompt and the image, against a few hundred tokens of answer)."""
+    return price_per_mtok(model)[0] / _TIER_PRICES[measured_on][0]
 
 
 def projected_usd(model: str, input_tokens: int, output_tokens: int) -> float:

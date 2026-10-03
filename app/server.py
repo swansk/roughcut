@@ -500,7 +500,10 @@ def sheet_seconds(interval: float) -> float:
 
 
 VISUAL_SHEET_S = sheet_seconds(VISUAL_INTERVAL_S)   # 120 s at the default
-VISUAL_USD_PER_SHEET = 0.09
+# Measured on the small tier (169 sheet calls in the ledger); scaled to whatever tier the
+# coarse sheets run on now — the quick one, Karl 2026-10-03.
+VISUAL_USD_PER_SHEET = round(
+    0.09 * config.price_scale(config.model_for(config.ROLE_ANALYSIS)), 3)
 
 # The second stage: a close look at the few busiest windows in each clip. Priced the
 # same way and from the same kind of evidence — 23 fine sheets over three Killington
@@ -509,7 +512,10 @@ VISUAL_USD_PER_SHEET = 0.09
 # the input. Three windows per clip by default: enough to audit a clip's loudest
 # claims, cheap enough that turning the stage on is not a decision.
 FINE_WINDOWS_PER_CLIP = 3
-FINE_USD_PER_WINDOW = 0.073
+# The close look is deep analysis, so it runs on the deep tier (`FINE_ROLE`); the $0.073
+# was measured on the small tier and scales with it.
+FINE_ROLE = config.ROLE_JUDGE
+FINE_USD_PER_WINDOW = round(0.073 * config.price_scale(config.model_for(FINE_ROLE)), 3)
 
 # The audit (R10's follow-up, HANDOFF roadmap item 1): the close look spent only on the
 # coarse pass's own unaudited hot claims, bin-wide, in the order they rank while nobody
@@ -1649,7 +1655,7 @@ async def api_junk_post(request: Request) -> JSONResponse:
 # ---------------------------------------------------------------- backend
 
 
-BACKEND: dict = {"state": "unknown", "detail": "", "latency_ms": None}
+BACKEND: dict = {"state": "unknown", "detail": "", "latency_ms": None, "fix": None}
 
 
 def backend_preflight() -> dict:
@@ -1663,12 +1669,17 @@ def backend_preflight() -> dict:
     """
     name = config.backend_name()
     problems: list[str] = []
+    cli: dict = {}
     if name == "claude_cli":
         if shutil.which("claude") is None:
             problems.append(
                 "claude CLI not on PATH — it installs to ~/.local/bin, which a "
                 "non-login shell does not pick up. Start from `bash -l`, or set "
                 "ROUGHCUT_BACKEND=anthropic_api.")
+        elif STATE.get("cli_facts"):
+            # Only a real launch asks the CLI about itself; the suite's in-process
+            # servers must not depend on whoever is signed in on the box running it.
+            cli = cli_facts()
     elif name == "anthropic_api":
         if not os.environ.get("ANTHROPIC_API_KEY"):
             problems.append("ANTHROPIC_API_KEY is not set.")
@@ -1677,11 +1688,60 @@ def backend_preflight() -> dict:
     return {
         "backend": name,
         "model": config.model_for(config.ROLE_SKELETON),
+        "models": {"deep": config.model_for(config.ROLE_SKELETON),
+                   "quick": config.model_for(config.ROLE_ANALYSIS)},
         "problems": problems,
+        "cli": cli,
         "budget_usd": budget_cap(),
         "spent_usd": round(inference.spent_usd(), 4),
         **BACKEND,
+        # after BACKEND, whose own `fix` is only the probe's half of the answer
+        "fix": backend_fix(problems, cli),
     }
+
+
+# The free half of "does the CLI need Karl": its version and whether it is signed in,
+# both answered by the CLI itself without a model call. Cached because /api/status
+# carries this and is polled; a sign-in done at the terminal shows within the TTL, or
+# at once on *Check again*, which drops the cache.
+CLI_FACTS_TTL_S = 30.0
+_CLI_FACTS: dict = {"at": 0.0, "facts": {}}
+
+
+def cli_facts(fresh: bool = False) -> dict:
+    if not fresh and time.time() - _CLI_FACTS["at"] < CLI_FACTS_TTL_S:
+        return _CLI_FACTS["facts"]
+    facts: dict = {}
+    try:
+        out = subprocess.run(["claude", "--version"], capture_output=True, text=True,
+                             timeout=15).stdout.strip()
+        facts["version"] = out.split()[0] if out else None
+    except (OSError, subprocess.TimeoutExpired):
+        facts["version"] = None
+    try:
+        proc = subprocess.run(["claude", "auth", "status"], capture_output=True,
+                              text=True, timeout=15)
+        auth = json.loads(proc.stdout or "{}")
+        facts["logged_in"] = bool(auth.get("loggedIn"))
+        facts["auth"] = auth.get("authMethod")
+        facts["plan"] = auth.get("subscriptionType")
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        facts["logged_in"] = None          # unknown is not "signed out"
+    _CLI_FACTS.update(at=time.time(), facts=facts)
+    return facts
+
+
+def backend_fix(problems: list[str], cli: dict) -> dict | None:
+    """The one thing Karl must do at a terminal, if there is one — the banner's
+    content. Free evidence first (a signed-out CLI is known without a call), then the
+    probe's verdict, then whatever a real job most recently ran into."""
+    for p in problems:
+        found = inference.diagnose(p)
+        if found:
+            return found
+    if cli.get("logged_in") is False:
+        return inference.diagnose("not logged in")
+    return BACKEND.get("fix") or inference.last_problem()
 
 
 def _probe_job() -> None:
@@ -1694,27 +1754,43 @@ def _probe_job() -> None:
     requests per rolling window.
     """
     t0 = time.time()
-    try:
-        result = inference.complete("Reply with exactly: OK",
-                                    role=config.ROLE_ANALYSIS)
-    except inference.InferenceError as exc:
-        BACKEND.update(state="failed", detail=str(exc)[:400],
-                       latency_ms=int((time.time() - t0) * 1000))
-        return
-    BACKEND.update(state="ok", detail=str(result.content).strip()[:80],
-                   latency_ms=result.latency_ms)
+    # One tiny call per *distinct model*, not per role: the deep model is the one an
+    # out-of-date CLI rejects (Opus 5.5 needs 2.1.280+), and a probe on the quick model
+    # alone said "ready" over a CLI that would fail every Ask.
+    roles = {config.model_for(r): r for r in (config.ROLE_ANALYSIS, config.ROLE_SKELETON)}
+    result = None
+    for model, role in roles.items():
+        try:
+            result = inference.complete("Reply with exactly: OK", role=role)
+        except inference.InferenceError as exc:
+            BACKEND.update(state="failed", detail=f"{model}: {str(exc)[:380]}",
+                           fix=inference.diagnose(str(exc)),
+                           latency_ms=int((time.time() - t0) * 1000))
+            return
+    BACKEND.update(state="ok", detail=str(result.content).strip()[:80] if result else "",
+                   fix=None, latency_ms=int((time.time() - t0) * 1000))
 
 
 def probe_backend() -> None:
     if BACKEND["state"] == "checking":
         return
-    BACKEND.update(state="checking", detail="", latency_ms=None)
+    # *Check again* means everything: the cached CLI facts, the last job's diagnosis.
+    cli_facts(fresh=True)
+    inference.clear_problem()
+    BACKEND.update(state="checking", detail="", latency_ms=None, fix=None)
     threading.Thread(target=_probe_job, daemon=True).start()
 
 
 @app.post("/api/backend/probe")
 def api_backend_probe() -> JSONResponse:
     probe_backend()
+    return JSONResponse(backend_preflight())
+
+
+@app.get("/api/backend")
+def api_backend() -> JSONResponse:
+    """The backend alone — what the banner on every screen polls, without the rest of
+    /api/status (the pass and the open screen have no use for the board's status)."""
     return JSONResponse(backend_preflight())
 
 
@@ -1797,6 +1873,11 @@ def _run_counted(entry: dict, cmd: list[str], count, key: str = "done",
         for line in proc.stdout:
             text = line.rstrip()
             lines.append(text)
+            # The visual pass's calls happen in this child process, so its CLI
+            # failures never reach this process's `inference` — read them off the log.
+            # Error lines only: a sheet's own words ("log in", "blocked") must not.
+            if re.search(r"error|failed|claude CLI", text, re.I):
+                inference.note_problem(text)
             entry["log"] = "\n".join(lines[-40:])
             if on_line is not None:
                 on_line(text)
@@ -1932,7 +2013,7 @@ def fine_cmd(windows: Path) -> list[str]:
     return ["uv", "run", "--quiet", str(TOOLS / "visual_pass.py"),
             str(STATE["proxy_dir"]), "-o", str(STATE["visual"]),
             "--interval", "1", "--cols", "3", "--rows", "5", "--width", "480",
-            "--orient", "auto", "--windows", str(windows)]
+            "--orient", "auto", "--role", FINE_ROLE, "--windows", str(windows)]
 
 
 def rebuild_events() -> int:
@@ -4249,6 +4330,13 @@ def switcherjs() -> Response:
                     media_type="application/javascript", headers=NO_STORE)
 
 
+@app.get("/cli.js")
+def clijs() -> Response:
+    """The banner every screen carries when the Claude CLI needs Karl at a terminal."""
+    return Response((HERE / "static" / "cli.js").read_text(encoding="utf-8"),
+                    media_type="application/javascript", headers=NO_STORE)
+
+
 @app.get("/dock.js")
 def dockjs() -> Response:
     """The board's dock (INTAKE M11): the rail of tools, the keys overlay, the popover."""
@@ -5115,8 +5203,15 @@ def main() -> int:
     if STATE["edl_created"]:
         print(f"new project: {STATE['edl']}", flush=True)
 
+    STATE["cli_facts"] = not args.no_probe
     pre = backend_preflight()
-    print(f"backend: {pre['backend']} · {pre['model']}", flush=True)
+    print(f"backend: {pre['backend']} · deep {pre['models']['deep']} · "
+          f"quick {pre['models']['quick']}", flush=True)
+    if pre["cli"]:
+        print(f"  claude CLI {pre['cli'].get('version')} · "
+              f"signed in: {pre['cli'].get('logged_in')}", flush=True)
+    if pre["fix"]:
+        print(f"  !! {pre['fix']['title']} — run: {pre['fix']['command']}", flush=True)
     for problem in pre["problems"]:
         print(f"  !! {problem}", flush=True)
     if not args.no_probe and not pre["problems"]:

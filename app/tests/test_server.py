@@ -1703,14 +1703,18 @@ def test_preflight_catches_a_missing_api_key_before_the_call(client, monkeypatch
 
 
 def test_probe_reports_a_working_backend(client):
+    """One tiny call per distinct model: a probe on the quick model alone said
+    "ready" over a CLI too old for the deep one, which failed every Ask."""
     from roughcut import config, inference
+
+    asked: list[str] = []
 
     class Fine:
         name = "fine"
 
         def complete(self, request):
             model = config.model_for(request.role)
-            assert request.role == config.ROLE_ANALYSIS, "probe uses the cheap role"
+            asked.append(model)
             return inference.Result(content="OK", input_tokens=2, output_tokens=1,
                                     backend="fine", model=model, projected_usd=1e-6,
                                     latency_ms=42, raw="OK")
@@ -1720,9 +1724,100 @@ def test_probe_reports_a_working_backend(client):
     try:
         client.post("/api/backend/probe")
         b = _await_probe(client)
-        assert b["state"] == "ok" and b["detail"] == "OK" and b["latency_ms"] == 42
+        assert b["state"] == "ok" and b["detail"] == "OK" and b["fix"] is None
+        assert sorted(asked) == sorted({config.model_for(config.ROLE_SKELETON),
+                                        config.model_for(config.ROLE_ANALYSIS)})
+        assert b["models"] == {"deep": config.model_for(config.ROLE_SKELETON),
+                               "quick": config.model_for(config.ROLE_ANALYSIS)}
     finally:
         inference.set_backend(None)
+
+
+def test_an_out_of_date_cli_is_named_with_the_command_that_fixes_it(client):
+    """Karl, 2026-10-03: make it easy to realise the CLI needs him. The deep model
+    failing on an old CLI comes back as a fix — what, why, and the one command."""
+    from roughcut import config, inference
+
+    class OldCli:
+        name = "old"
+
+        def complete(self, request):
+            if request.role == config.ROLE_SKELETON:
+                raise inference.InferenceError(
+                    "claude CLI error: API Error: 400 Claude Code 2.1.278 does not "
+                    "support this model; version 2.1.280 or newer is required.")
+            m = config.model_for(request.role)
+            return inference.Result(content="OK", input_tokens=2, output_tokens=1,
+                                    backend="old", model=m, projected_usd=1e-6,
+                                    latency_ms=5, raw="OK")
+
+    inference.set_backend(OldCli())
+    inference.reset_spend()
+    try:
+        client.post("/api/backend/probe")
+        b = _await_probe(client)
+        assert b["state"] == "failed"
+        assert b["fix"]["kind"] == "update" and b["fix"]["command"] == "claude update"
+        assert client.get("/api/backend").json()["fix"]["kind"] == "update"
+    finally:
+        inference.set_backend(None)
+
+
+def test_a_job_that_hits_a_signed_out_cli_raises_the_banner_and_a_success_clears_it(client):
+    """The banner is not only the probe's: any call that fails for a reason Karl must
+    fix shows on every screen, and the next call that works takes it down."""
+    from roughcut import config, inference
+    import server
+
+    inference.clear_problem()
+    server.BACKEND.update(fix=None)
+
+    class Flaky:
+        name = "flaky"
+        fail = True
+
+        def complete(self, request):
+            if self.fail:
+                raise inference.InferenceError("claude CLI error: Not logged in · "
+                                               "Please run /login")
+            m = config.model_for(request.role)
+            return inference.Result(content="OK", input_tokens=2, output_tokens=1,
+                                    backend="flaky", model=m, projected_usd=1e-6,
+                                    latency_ms=5, raw="OK")
+
+    flaky = Flaky()
+    inference.set_backend(flaky)
+    inference.reset_spend()
+    try:
+        with pytest.raises(inference.InferenceError):
+            inference.complete("hi", role=config.ROLE_SKELETON)
+        fix = client.get("/api/backend").json()["fix"]
+        assert fix["kind"] == "login" and fix["command"] == "claude auth login"
+        flaky.fail = False
+        inference.complete("hi", role=config.ROLE_SKELETON)
+        assert client.get("/api/backend").json()["fix"] is None
+    finally:
+        inference.set_backend(None)
+
+
+def test_a_signed_out_cli_is_known_without_a_call(client, monkeypatch):
+    """`claude auth status` is free; a signed-out CLI needs no probe to be named."""
+    import server
+
+    monkeypatch.setitem(server.STATE, "cli_facts", True)
+    monkeypatch.setattr(server, "cli_facts",
+                        lambda fresh=False: {"version": "2.1.288", "logged_in": False})
+    monkeypatch.setattr(server.shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setenv("ROUGHCUT_BACKEND", "claude_cli")
+    b = client.get("/api/backend").json()
+    assert b["fix"]["kind"] == "login" and b["cli"]["logged_in"] is False
+
+
+def test_every_screen_carries_the_cli_banner(client):
+    for path in ("/", "/floor", "/open"):
+        assert '<script src="/cli.js"></script>' in client.get(path).text, path
+    js = client.get("/cli.js")
+    assert js.status_code == 200 and "Check again" in js.text
 
 
 def test_probe_surfaces_not_logged_in_at_launch(client):
