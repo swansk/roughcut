@@ -1,5 +1,28 @@
 # Handoff — read this first
 
+**2026-10-03 — Karl's four asks (XS, XS, L, L), all built, merged and live on Killington.**
+(1) **The CLI says when it needs you:** `inference.diagnose` → `GET /api/backend` `fix` →
+`/cli.js` banner on every screen (what, why, the one command with Copy, *Check again*);
+free launch checks (`claude --version`, `claude auth status`), a probe per distinct model,
+the visual pass subprocess's error lines. (2) **Opus 5.5 deep / Sonnet 5.5 quick**
+(`config.DEEP_MODEL` / `QUICK_MODEL`; close look + audit + deep look on the deep tier).
+**Opus 5.5 needs Claude Code ≥ 2.1.280** — the WSL CLI was 2.1.278 and was updated to
+2.1.288; priced buttons now read higher (prices measured on the small tier scale by
+`config.price_scale`). (3) **The flow** (INTAKE M14): one bar on `/`, `/floor`, `/open` —
+Footage · Index · Brief · Pass · Cut · Polish · Render, each done / running / needs-you,
+and one *Next*; the old step strip, the 1–6 bar and the header pills are gone; the open
+screen no longer says "released" and "queued" about the same clip. (4) **How the agent
+sees + Look deeper** (INTAKE M15): a coverage strip per clip (heard · coarse · close ·
+deep · motion · claims, the granularity in words from the sidecars' own params) in the
+inspector, under the pass's tape and on the open screen's cards; *Look deeper · ~$0.70*
+reads up to 24 motion-chosen keyframes in order on Opus 5.5, every beat `seen` on a frame
+or `inferred` between two, one bounded follow-up for frames it asks for. **First live deep
+look** (one call, smoke test): CLIP_11 141–155 s read R11's fall correctly by the skis
+against the sky; $0.70 measured, price refitted. Suite: 745 passed + the themes
+calibration fixed (tier-scaled). **Next for Karl:** I14.4 (does the bar say where he is
+and what's next?) and I15.6 (read CLIP_11's deep look; try *Look deeper* on a claim).
+Gotcha: the in-app browser pane asks per action on the WSL IP; use `localhost:8765`.
+
 **2026-10-02 — three things built while Karl's looks are pending.** Nothing here needs
 his look to be useful, and each is one click away from a decision only he makes.
 (1) **The Ask reaches colour (INTAKE I10.5):** a note about the picture comes back as a
