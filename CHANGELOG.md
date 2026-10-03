@@ -28,6 +28,10 @@ same commit. Releases move entries into a dated version section.
   2.1.280+; the WSL CLI was 2.1.278 and was updated to 2.1.288.
 
 ### Added
+- **Docs for INTAKE M15** (Karl, 2026-10-03 #4): app/README.md — the coverage strip in
+  *What's on screen*, a section on how the agent sees and Look deeper with its endpoints;
+  INTAKE M15 with its decisions and items by commit; HANDOFF roadmap item 1 notes the deep
+  look exists.
 - **How the agent sees a clip, and Look deeper (Karl, 2026-10-03 #4; INTAKE M15).**
   A **coverage strip** (`/deep.js`) per clip: lanes for what was heard, the coarse sheets'
   frames, the close look's windows, the deep looks' keyframes and the free motion track,

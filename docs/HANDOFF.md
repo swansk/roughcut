@@ -533,7 +533,12 @@ Ordered by what changes most, not by effort:
    is one more argued number. The audit's verdicts are the first cheap labels toward a fit.
    (c) A horizon-angle measurement from the frame (free, no model) was not built. Junk and
    orientation could be proposed from the same sidecars. RQ-1/RQ-7 (sheet density, thumbnail
-   size, model tier) remain unmeasured.
+   size, model tier) remain unmeasured. **(d) The deep look exists (INTAKE M15, 2026-10-03):**
+   a priced *Look deeper* on any seen row, on the selected shot or a dragged span reads
+   keyframes at motion changes in order on the deep tier, beats marked seen or inferred, and
+   the rank treats it as the strongest evidence (`confirmed` / `contradicted` on the claims it
+   covers, `DEEP` 1.3 alone) — a per-claim alternative to the audit's 1 s sheets, unspent
+   and unmeasured; the coverage strip shows which seconds every layer actually read.
 2. ~~**The board's first frame.**~~ — **done.** Karl: *"I can hear the videos when I click play,
    but the preview window still shows up blank."* Two faults, both measured on the Killington
    bin: the cards' 17 `<video preload="metadata">` proxies took every connection Chrome allows,

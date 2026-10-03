@@ -1024,6 +1024,50 @@ operations on the cut plus, when wanted, an effect.
       is anchored to a shot on the board (`anchor_shot`). Both proposals left for Karl.
 - [ ] I13.5 Karl's look.
 
+### M15 · How the agent sees, and looking deeper — Karl, 2026-10-03 (#4)
+
+**The ask.** *"Make it clearer how the videos are indexed by the agent (e.g. showing
+granularity), and make it easier to run deeper keyframe-based analysis (w/ AI interpolating
+as needed between frames to really understand what is going on)."* Nothing showed which
+seconds of a clip the machine had looked at, how densely, or what it concluded; and a contact
+sheet of thumbnails is a poor way to understand motion (R10: both passes read camera roll as
+flips; R11: the one real fall in CLIP_11 was read as a rolled POV by both passes and by eye).
+
+**Decisions.**
+1. **Coverage is free and from the files**: every number on the strip is the sidecar's own
+   record; where a sidecar did not record something (its model, the oldest coarse frame
+   times) the strip says so instead of guessing from today's config.
+2. **The deep look is keyframes, not a denser sheet**: frames at the motion track's peaks and
+   turns plus a floor and a change-weighted fill, each its own 640 px file, in order, with the
+   motion between them as numbers.
+3. **Seen and inferred never blur**: every beat names its frame or its two bracketing frames
+   and why, or the answer is refused.
+4. **"Interpolating as needed" is one bounded follow-up** for up to 8 frames the model asks
+   for — never a loop.
+5. **Priced on the button by a dry run, one at a time, never re-bought.** The pass stays keys,
+   not buttons: it shows the strip and points at the board for the spend.
+6. **The rank believes the deep look most** (`DEEP` 1.3 alone; `confirmed` / `contradicted`
+   for claims it covers) — argued, not fitted, like every weight there.
+
+- [x] I15.1 **Coverage** (`45ed3f9`): `GET /api/coverage[/{clip}]`, `deep.coverage` /
+      `deep.summary`, `deep.js`'s strip with the granularity legend, hover and drag; hooks in
+      the inspector, under the pass's tape and on the open screen's cards. The sheets now
+      record their model (`1af34ec`).
+- [x] I15.2 **The deep look** (`45ed3f9`): `roughcut/deep.py` (keyframes, prompt, validation,
+      one follow-up, store), `POST /api/deep` (+ `dry_run`), `POST /api/deep/quote`,
+      `GET /api/deep/{clip}`, `/media/deep/…`, a `deep` job.
+- [x] I15.3 **The rank and the Ask** (`45ed3f9`): `events.deep_verdict`, `DEEP`, deep rows in
+      `rank_clip`, `merge_moments` carries the beats; the events header explains `deep`.
+- [x] I15.4 **Where Karl runs it** (`45ed3f9`): Look deeper · ~$x on every seen row, in the
+      inspector for the shot, after a drag on the strip; the result in place (filmstrip,
+      seen-solid / inferred-hatched beats, asked-for frames, events, camera).
+- [x] I15.5 **Tests** (`45ed3f9`): `test_deep.py` (26), `test_deep_ui.py` (4); grounded read-only on
+      Killington — CLIP_11 141–155 s picks 24 frames including 145.08 (the skis against the
+      sky, R11), which the floor alone missed.
+- [ ] I15.6 Karl's look, and **the first live deep look** (his spend; the button on CLIP_11
+      ≈ 141–155 s should read ~$0.51) — which measures the price, the latency and whether
+      the model reads the fall R11 found.
+
 ## Lanes in flight
 
 | lane | branch / worktree | scope | state |
