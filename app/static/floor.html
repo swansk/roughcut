@@ -45,6 +45,10 @@
   /* a batch verdict asks once, here, before it lands */
   #hudAsk { color: var(--warn); font-weight: 600; }
   #hudAsk[hidden] { display: none; }
+  /* the flow bar (/flow.js, INTAKE M14): the pass had no way to say where the project
+     is; it carries the same seven stages and Next chip as the open screen and the
+     board, in a row of its own under the HUD — 31 px, paid for in #frame's height */
+  #flowRow { flex: none; padding: 3px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
 
   /* ---- the filter line (I2.4): chips for kind · state · clip, a box for a word ---- */
   #filter { display: flex; align-items: center; gap: 12px; padding: 5px 14px; background: #0c0c10;
@@ -72,7 +76,7 @@
   #picture { position: relative; display: flex; align-items: center; justify-content: center;
              background: #050507; min-width: 0; min-height: 0; }
   #frame { position: relative; max-width: 100%; max-height: 100%; aspect-ratio: 16 / 9;
-           width: min(100%, calc((100vh - 336px) * 16 / 9)); background: #000; border-radius: 4px;
+           width: min(100%, calc((100vh - 367px) * 16 / 9)); background: #000; border-radius: 4px;
            overflow: hidden; }
   #pic { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
   #stamp { position: absolute; left: 26px; top: 22px; z-index: 6; font: 800 34px var(--display);
@@ -301,6 +305,7 @@
     <span class="grow"></span>
     <span class="key" title="key map">?</span>
   </div>
+  <div id="flowRow"><div id="flow"></div></div>
   <!-- the filter line (I2.4): `/` opens it, Esc clears it. Chips, not buttons — the pass
        has no buttons in the flow; a chip is a term, like a mark on the tape is a pick. -->
   <div id="filter" hidden>
@@ -398,6 +403,7 @@
 <div id="overlay" hidden><div class="box" id="overlayBox"></div></div>
 <div id="toast"></div>
 <script src="/cli.js"></script>
+<script src="/flow.js"></script>
 <script src="/switcher.js"></script>
 <script src="/floor.js"></script>
 </body>

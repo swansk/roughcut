@@ -1280,7 +1280,7 @@ function render() {
   const cls = t < lo ? 'under' : t > hi ? 'over' : 'ok';
   $('#total').innerHTML = `<span class="${cls}">${fmt(t)}</span>`;
   $('#band').textContent = `${segs.length} shots · target ${fmt(lo)}–${fmt(hi)}`;
-  paintSteps();
+  flowSoon();
   paintVersions();          // so "this cut" follows the timeline rather than the last fetch
   renderLibrary();
   paintCutFromBin();        // the empty state is rebuilt above; its bin button follows
@@ -1626,7 +1626,7 @@ function insertShot(shot) {
       const i = tl.indexOf(id);
       if (i >= 0) { sel = i; tl.select([id]); }
     }
-    render();                   // the total, the steps and the bin's "in the cut" follow
+    render();                   // the total, the flow and the bin's "in the cut" follow
     return id;
   }
   pushUndo('insert');
@@ -1811,7 +1811,7 @@ async function refreshBin() {
   if (fresh) bin = fresh;
   await fetchJunk();
   paintBinLine();
-  paintSteps();
+  flowSoon();
   renderLibrary();
   paintCutFromBin();
 }
@@ -1948,33 +1948,13 @@ function cueBed(filmT) {
   el.play().catch(() => {});
 }
 
-/* The board was flat: Ask, Snap, Undo, Save and Render were peers, and nothing said
- * what to do first. This is the smallest honest fix — the five steps a project goes
- * through, with the one you are on marked. It reads state rather than tracking it, so
- * it cannot get out of step with the files on disk. */
-function paintSteps() {
-  if (!S) return;
-  // A hero the pass kept that is not in the cut is the step's unfinished business,
-  // whether or not a cut exists yet: the bin is what a first cut is built from.
-  const waiting = heroesWaiting().length;
-  const heroes = waiting ? `${waiting} hero${waiting > 1 ? 'es' : ''} waiting` : '';
-  const firstCut = segs.length
-    ? [`${segs.length} shots`, heroes].filter(Boolean).join(' · ')
-    : (heroes || 'ask for one');
-  const steps = [
-    ['footage', S.clips > 0, `${S.clips} clips`],
-    ['analyse', S.clips > 0 && S.analysed >= S.clips,
-      S.analysed ? `${S.analysed}/${S.clips} analysed` : 'audio pass'],
-    ['first cut', segs.length > 0, firstCut],
-    ['refine', segs.length > 0 && nRenders > 0, 'trim · snap · ask'],
-    ['render', nRenders > 0, nRenders ? `${nRenders} version${nRenders > 1 ? 's' : ''}` : ''],
-  ];
-  const current = steps.findIndex(([, done]) => !done);
-  $('#steps').innerHTML = steps.map(([name, done, detail], i) => {
-    const cls = done ? 'done' : i === current ? 'now' : '';
-    return `<span class="step ${cls}">${done ? '✓ ' : `${i + 1} `}${name}` +
-      `${detail ? ` <span style="opacity:.7">${escapeHtml(detail)}</span>` : ''}</span>`;
-  }).join('');
+/* The flow bar (/flow.js, INTAKE M14) replaced the five-step strip that used to be
+ * painted here: it reads the files on the server, so after an edit settles (the
+ * autosave has written it) it is asked again rather than left to its own poll. */
+let flowT = null;
+function flowSoon() {
+  clearTimeout(flowT);
+  flowT = setTimeout(() => { if (window.flowBar) window.flowBar.poll(); }, 1200);
 }
 
 async function refreshStatus() {
@@ -2365,6 +2345,7 @@ function acceptProposal() {
   $('#lastAsk').style.display = 'none';
   render();
   save();                       // straight to disk; a 16-shot cut is not "in progress"
+  answerProposal('accept');
   toast(!graded ? 'applied — undo with u'
     : cutToo ? 'applied, cut and colour — u undoes the cut; the grade is in the inspector'
       : 'colour applied — the grade is in the inspector', graded ? 5000 : undefined);
@@ -2374,6 +2355,15 @@ function rejectProposal() {
   pendingPlan = null;
   $('#proposal').style.display = 'none';
   toast('discarded');
+  answerProposal('discard');
+}
+
+/* The answer, on the proposal's record (INTAKE M14): an Accept saves the cut, which
+ * answers it already; a Discard wrote nothing anywhere, so the flow bar kept calling a
+ * thrown-away proposal "waiting for you". */
+function answerProposal(answer) {
+  fetch('/api/asks/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ answer }) }).then(flowSoon, () => {});
 }
 
 /* Find a moment. Two layers, two prices: the word-level match over the transcripts
@@ -2635,7 +2625,7 @@ async function refreshVersions() {
   // An empty black player labelled "B —" is not a feature; the B slot appears when
   // there is a second version to compare against.
   $('#slotB').style.display = renders.length > 1 ? 'block' : 'none';
-  paintSteps();
+  flowSoon();
   waitForReviews(renders);
 }
 

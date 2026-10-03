@@ -101,6 +101,12 @@ def api(page, path: str) -> dict:
     return page.evaluate(f"fetch('{path}').then(r => r.json())")
 
 
+def flow_state(page, stage: str) -> str:
+    """The flow bar's word on one stage (INTAKE M14) — the bar replaced the six steps."""
+    page.wait_for_selector(f"#flow [data-stage={stage}]", timeout=10000)
+    return page.locator(f"#flow [data-stage={stage}]").get_attribute("data-state")
+
+
 def rows(page) -> list[dict]:
     """The index table as the page shows it: stem, the chip classes, the state."""
     return page.evaluate("""() => {
@@ -136,17 +142,19 @@ def test_the_folder_reads_as_a_contact_sheet(page, project):
     # the free flags: heard, not looked, no sensor stream in a synthetic file
     flags = first.locator(".flags").inner_text()
     assert "listened" in flags and "no telemetry" in flags, flags
-    assert "looked" not in flags and "released" not in flags
+    assert "looked" not in flags and "on the pass" not in flags
     # no proxy yet: a placeholder, never a broken image
     assert first.locator(".ph").count() == 1 and first.locator("img").count() == 0
     # no journal on this bin yet: nothing claims a state on the picture
     assert page.locator(".badge").count() == 0
-    # the step strip: heard, and nothing for the pass to show yet
-    assert "done" in page.locator("[data-step=listen]").get_attribute("class")
-    assert page.locator("#stepPass").get_attribute("aria-disabled") == "true"
+    # the flow bar: nothing for the pass to show yet (no previews), the index to run
+    assert flow_state(page, "pass") == "waiting"
+    assert flow_state(page, "index") == "ready"
+    assert page.locator("#openPass").get_attribute("aria-disabled") == "true"
     # the legend names every flag it uses
     legend = page.locator("#legend").inner_text()
-    for word in ("listened", "not yet", "telemetry", "looked", "released", "parked", "missing"):
+    for word in ("listened", "not yet", "telemetry", "looked", "on the pass", "released",
+                 "look paused", "parked", "missing"):
         assert word in legend, word
 
 
@@ -436,17 +444,31 @@ def test_index_the_footage_runs_the_journal_and_the_cap_pauses_the_priced_stages
     # the table: every clip's free stages done, the priced ones queued, in capture order
     table = rows(page)
     assert [r["clip"] for r in table] == ["CLIP_A", "CLIP_B", "CLIP_C"]
+    # INTAKE M14: these clips are on the pass from their words, their looks held by the
+    # pause — not "queued" under a footer saying they are released, as it used to read
     for r in table:
         assert r["chips"] == ["ok", "skip", "ok", "ok", "", "", ""], r
-        assert r["state"] == "queued" and r["priority"] != "—", r
+        assert r["state"] == "on the pass · look paused" and r["priority"] != "—", r
     assert page.locator("#progCount").inner_text() == "0 of 3 released"
-    assert "priced stages paused" in page.locator("#progMeta").inner_text()
-    assert "Index paused" in page.locator("#indexTitle").inner_text()
-    assert "3 queued" in page.locator("#indexCounts").inner_text()
+    assert "looks paused" in page.locator("#progMeta").inner_text()
+    assert "Looks paused" in page.locator("#indexTitle").inner_text()
+    assert page.locator("#indexCounts").inner_text() == "3 look paused"
+    # the paused box in the editor's words, the price on the button
+    title = page.locator("#pausedTitle").inner_text()
+    assert title.startswith("Looks are paused — 3 clips, ~$"), title
+    assert "lead" not in page.locator("#paused").inner_text()
+    assert page.locator("#resume").inner_text().startswith("Resume · ~$")
     assert page.locator("#journalLog div").count() >= 1
     # the sheet caught up: proxies exist now, and the journal's word is on every picture
     assert page.locator(".card img").count() == 3 and page.locator(".card .ph").count() == 0
-    assert page.locator(".card .badge.queued").count() == 3
+    assert page.locator(".card .badge.waiting").count() == 3
+    assert page.locator(".card .badge.waiting").first.inner_text().lower() == "look paused"
+    assert "from the words only" in page.locator("#passHint").inner_text()
+    # and the flow bar says it is waiting on the editor, with the price
+    page.wait_for_function(
+        "document.querySelector('#flow [data-stage=index]')"
+        " && document.querySelector('#flow [data-stage=index]').dataset.state === 'needs-you'",
+        timeout=10000)
     # the cap must not take the floor away: with the free stages done the floor's own
     # word (`/api/clips` `released`) says the pass may show them — picks from the words —
     # so the link opens even though the journal's strict release list is empty
@@ -477,10 +499,10 @@ def test_resume_priced_stages_releases_every_clip_and_opens_the_pass(page, bin_s
     link = page.locator("#openPass")
     assert link.get_attribute("aria-disabled") == "false"
     assert link.inner_text() == "Open the pass on 3 clips →"
-    assert page.locator("#stepPass").get_attribute("aria-disabled") == "false"
+    assert page.locator("#passHint").inner_text() == "every clip is on the pass"
     assert page.locator(".card .badge.released").count() == 3
     flags = page.locator(".card .flags").first.inner_text()
-    assert "looked" in flags and "released" in flags, flags
+    assert "looked" in flags and "on the pass" in flags, flags
     # and the price line has nothing left to sell: the slider is off and says why
     assert "nothing left to buy" in page.locator("#priceLine").inner_text()
     assert page.locator("#interval").is_disabled()
@@ -574,7 +596,7 @@ def test_the_proposal_is_priced_before_the_button_and_themes_never_score(page):
     assert "never score" in hint and "order the index" in hint and "lift and tag" in hint, hint
     for sel in ("#themesEdit", "#themesKept", "#themesRunning"):
         assert page.locator(sel).is_hidden(), sel
-    assert "done" not in page.locator("[data-step=themes]").get_attribute("class")
+    assert flow_state(page, "brief") != "done"          # the flow bar's Brief (INTAKE M14)
     # a bin the audio pass has not heard: the section says so and the button is disabled
     page.evaluate("() => { sheet.state.themes.analysed = 0; sheet.renderThemes(); }")
     assert "has not listened yet" in page.locator("#themesPrice").inner_text()
@@ -684,7 +706,10 @@ def test_propose_shows_chips_with_counts_and_keep_writes_exactly_the_ticked_ones
     assert [c["text"] for c in chips(page, "#keptNames")] == ["✓ Spenny"]
     assert "~$" in page.locator("#againBtn").inner_text()
     assert page.locator("#changeBtn").is_visible()
-    assert "done" in page.locator("[data-step=themes]").get_attribute("class")
+    page.evaluate("flowBar.poll()")
+    page.wait_for_function(
+        "document.querySelector('#flow [data-stage=brief]').dataset.state === 'done'",
+        timeout=10000)
     assert api(page, "/api/themes")["themes"] == ["the greeting", "the milk joke"]
 
 
@@ -919,7 +944,7 @@ def test_opening_another_bin_reloads_the_whole_page_for_it(page, project, bin_se
         assert page.locator(".badge").count() == 0                          # and there is no journal
         for sel in ("#index", "#progress", "#paused", "#themesKept", "#themesEdit"):
             assert page.locator(sel).is_hidden(), sel
-        assert page.locator("#stepPass").get_attribute("aria-disabled") == "true"
+        assert page.locator("#openPass").get_attribute("aria-disabled") == "true"
         assert page.locator("#story").input_value() == ""
         assert "has not listened yet" in page.locator("#themesPrice").inner_text()
         assert "1 clip not yet looked at" in page.locator("#priceLine").inner_text()
@@ -927,7 +952,9 @@ def test_opening_another_bin_reloads_the_whole_page_for_it(page, project, bin_se
         assert "Index the footage" in page.locator("#indexBtn").inner_text()
         s = api(page, "/api/status")
         assert s["footage"] == str(other) and s["clips"] == 1
-        assert page.locator("#stepPass").get_attribute("href") == "/floor"
+        page.wait_for_function("window.flowBar && flowBar.state()"
+                               " && flowBar.state().stages[0].counts.clips === 1", timeout=10000)
+        assert page.locator("#flow [data-stage=pass]").get_attribute("href") == "/floor"
         # and back, by its path typed into the field: the first bin's own EDL, not a new one
         page.keyboard.press("o")
         open_picker(page)

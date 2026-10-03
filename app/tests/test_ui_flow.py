@@ -92,6 +92,17 @@ def total_text(page) -> str:
     return page.locator("#total").inner_text()
 
 
+def cut_says(page, text: str, present: bool = True) -> None:
+    """The flow bar's Cut stage (INTAKE M14) — where the old step strip's "1 hero
+    waiting" went, as "1 hero not in it". Read from the files, so it follows the save."""
+    page.evaluate("flowBar.poll()")
+    page.wait_for_function(
+        "([t, want]) => { const f = window.flowBar && flowBar.state();"
+        " const s = f && f.stages.find((x) => x.key === 'cut');"
+        " return !!s && s.summary.includes(t) === want; }",
+        arg=[text, present], timeout=15000)
+
+
 def select_shot(page, i: int) -> None:
     """Select shot i on the timeline by id, without playing it (a click on a block also
     plays the cut from there). The inspector follows the selection."""
@@ -339,7 +350,13 @@ def test_an_empty_timeline_offers_a_first_cut_and_gets_one(page):
         page.wait_for_selector("#inspector .empty")
         assert page.locator("#tl .blk").count() == 0
         assert "No cut yet" in page.locator(".empty").inner_text()
-        assert page.locator(".step.now").inner_text().endswith("ask for one")
+        # the flow bar: the cut is the stage to do, and Next says so
+        page.evaluate("flowBar.poll()")
+        page.wait_for_function(
+            "document.querySelector('#flow [data-stage=cut]')"
+            " && document.querySelector('#flow [data-stage=cut]').dataset.state === 'ready'",
+            timeout=10000)
+        assert "first cut" in page.locator("#flowNext").inner_text()
         # the sidebar Ask panel hides itself here — the empty state already has a box
         # for the same sentence, and two inputs for one thing is a UI defect
         assert not page.locator("#askPanel").is_visible()
@@ -617,14 +634,21 @@ def test_a_second_render_becomes_a_second_version_to_compare_against(page):
     assert page.evaluate("document.querySelector('#previewB').duration") > 0
 
 
-def test_the_steps_strip_says_where_the_project_is(page):
+def test_the_flow_bar_says_where_the_project_is(page):
     """The board was flat — Ask, Snap, Undo, Save and Render as peers, with nothing
-    saying what to do first."""
-    names = page.locator(".step").all_inner_texts()
-    assert [n.split()[1] for n in names] == ["footage", "analyse", "first", "refine",
-                                             "render"]
-    # this project has clips, sidecars and a cut, so the first three are behind us
-    assert page.locator(".step.done").count() >= 3
+    saying what to do first. The five-step strip that answered it is now the flow bar
+    every screen carries (INTAKE M14)."""
+    page.wait_for_selector("#flow [data-stage=render]")
+    assert page.locator(".step").count() == 0 and page.locator("#steps").count() == 0
+    keys = page.eval_on_selector_all("#flow .fs", "els => els.map(e => e.dataset.stage)")
+    assert keys == ["footage", "index", "brief", "pass", "cut", "polish", "render"]
+    # this project has clips, previews and a cut: footage and the cut are behind us
+    state = lambda k: page.locator(f"#flow [data-stage={k}]").get_attribute("data-state")  # noqa: E731
+    assert state("footage") == "done" and state("cut") == "done"
+    # the board's own stages are marked as this screen's
+    here = page.eval_on_selector_all("#flow .fs.here", "els => els.map(e => e.dataset.stage)")
+    assert here == ["cut", "polish", "render"]
+    assert page.locator("#flowNext").count() == 1
 
 
 # ---------------------------------------------------------------- the inspector
@@ -1417,11 +1441,11 @@ def test_the_kept_tab_shows_the_bin_and_puts_a_keep_in_the_cut(page):
     gone = rows.nth(2)
     assert "footage missing" in gone.inner_text()
     assert gone.locator("button.add").count() == 0, "a missing keep cannot be added"
-    # the Project panel reads the server's summary, and the step names the hero
+    # the Project panel reads the server's summary, and the flow bar's Cut names the hero
     line = page.locator("#binLine").inner_text()
     assert "bin · 3 moments · 1 hero · 0:07 if strung out" in line, line
     assert page.locator("#binLine a").get_attribute("href") == "/floor"
-    assert "1 hero waiting" in page.locator(".step", has_text="first").inner_text()
+    cut_says(page, "1 hero not in it")
 
     # + add to cut: a shot with the keep's range and reason, after the selected shot
     page.evaluate("tl.seek(1.5)")            # adding lands at the playhead (INTAKE M11): the cut nearest 1.5 s is 2.0, so shot 2
@@ -1433,9 +1457,9 @@ def test_the_kept_tab_shows_the_bin_and_puts_a_keep_in_the_cut(page):
     hero = page.locator("#library .keep", has_text="CLIP_C")
     assert hero.locator("a.use").inner_text() == "in the cut · shot 2"
     assert hero.locator("button.add").count() == 0
-    assert "waiting" not in page.locator(".step", has_text="first").inner_text()
     page.wait_for_function(
         "document.querySelector('#saveState').textContent.startsWith('saved')", timeout=8000)
+    cut_says(page, "not in it", present=False)
     # the save told the bin; re-read from the server it still says the same, and the
     # two seeded shots have been adopted as hand keeps like any other
     page.wait_for_function(
@@ -1453,7 +1477,7 @@ def test_the_kept_tab_shows_the_bin_and_puts_a_keep_in_the_cut(page):
     # removing the shot un-flips the row
     page.keyboard.press("x")
     assert page.locator("#library .keep", has_text="CLIP_C").locator("button.add").count() == 1
-    assert "1 hero waiting" in page.locator(".step", has_text="first").inner_text()
+    cut_says(page, "1 hero not in it")
 
 
 def test_an_empty_bin_says_where_to_keep_things(page):
@@ -1543,7 +1567,7 @@ def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
         assert page.locator("#tl .blk").count() == 1
         assert page.locator("#library .keep", has_text="CLIP_C").locator("a.use").inner_text() \
             == "in the cut · shot 1"
-        assert "waiting" not in page.locator(".step", has_text="first").inner_text()
+        cut_says(page, "not in it", present=False)
     finally:
         inference.set_backend(None)
 
@@ -1572,8 +1596,11 @@ def test_the_old_buttons_are_gone_and_the_index_line_reads_the_journals_word(
     link = page.locator("#openFootage")
     assert link.get_attribute("href") == "/open"
     assert "open the footage" in link.inner_text()
-    assert page.locator("#screens a[href='/open']").count() == 1
-    assert page.locator("#screens a[href='/floor']").count() == 1
+    # (the flow bar, INTAKE M14 — the `open · pass · board` pills are gone)
+    page.wait_for_selector("#flow [data-stage=index]")
+    assert page.locator("#screens").count() == 0
+    assert page.locator("#flow a[href='/open']").count() >= 1
+    assert page.locator("#flow a[href='/floor']").count() == 1
     # nothing has been indexed on this bin, and the line says so before any run
     page.wait_for_function(
         "document.querySelector('#indexState').textContent === 'not indexed yet'",

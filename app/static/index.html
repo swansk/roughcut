@@ -272,19 +272,9 @@
   .ver .dl:hover { border-color: var(--accent); }
   .hint.warn { color: var(--warn); }
   .hint.bad { color: var(--bad); }
-  .steps { display: flex; gap: 6px; flex-wrap: wrap; width: 100%; margin-top: 2px; }
-  .step { font-size: 12px; color: var(--dim); border: 1px solid var(--line);
-          border-radius: 999px; padding: 2px 10px; }
-  .step.done { color: var(--good); border-color: #2c4c39; }
-  .step.now { color: #0b0b0f; background: var(--accent); border-color: transparent;
-              font-weight: 600; }
-  /* the screens nav in the header — the same pills as open.html's six-step strip */
-  #screens { display: flex; gap: 6px; align-items: center; }
-  .jump { font-size: 11px; color: var(--dim); border: 1px solid var(--line);
-          border-radius: 999px; padding: 2px 10px; white-space: nowrap; text-decoration: none; }
-  a.jump.link { border-color: var(--accent); color: var(--text); }
-  a.jump.link:hover { background: var(--card-hi); }
-  .jump.now { color: #0b0b0f; background: var(--accent); border-color: transparent; font-weight: 600; }
+  /* The flow bar (/flow.js, INTAKE M14): the header's second row, where the five-step
+     strip was — the same height, so the dock's fit is unchanged. */
+  header #flow { width: 100%; margin-top: 2px; }
   .pill { border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px;
           font-size: 12px; color: var(--dim); cursor: pointer; white-space: nowrap; }
   .pill.ok { color: var(--good); border-color: #2c4c39; }
@@ -315,7 +305,7 @@
   #keysOverlay .panel h2 .hint { font-weight: 400; }
   #keysOverlay .panel > .hint { line-height: 2; }
 
-  /* The progress strip. One place, below the steps, full width, for every long
+  /* The progress strip. One place, below the flow bar, full width, for every long
      operation in the app — Karl: "consider a progress tracking bar up top for anything
      which may take time to complete — re-use across app." It holds more than one at a
      time on purpose: a render and an Ask overlap routinely. */
@@ -396,13 +386,6 @@
        save a copy of the cut. The control itself is /switcher.js, shared by every
        screen. -->
   <button type="button" id="hdBin" title="switch bins or cuts, save a copy · O"></button>
-  <!-- The three screens, the way the open screen's strip links them: the board is
-       the last of them, and the way back to the other two lives here. -->
-  <nav id="screens" aria-label="screens">
-    <a class="jump link" href="/open">open</a>
-    <a class="jump link" href="/floor">pass</a>
-    <span class="jump now" aria-current="page">board</span>
-  </nav>
   <div class="total"><span id="total">—</span><span class="band" id="band"></span></div>
   <!-- The project's facts — clips, shots, the index, the bin — in a popover. -->
   <button type="button" id="projectBtn" title="the project: clips, shots, the index, the bin">Project ▾</button>
@@ -432,7 +415,10 @@
   </select>
   <button id="render" class="primary">Render</button>
   <button type="button" id="keysBtn" title="the keys · ?">?</button>
-  <div class="steps" id="steps"></div>
+  <!-- Where the project is — Footage · Index · Brief · Pass · Cut · Polish · Render and
+       the one next thing — drawn by /flow.js, the same bar the other two screens carry;
+       it is also the way to them. -->
+  <div id="flow"></div>
   <!-- Every long operation in the app draws itself here: label, bar, percentage,
        elapsed, ETA and the line saying what it is doing right now. Empty and hidden
        when nothing is running. -->
@@ -650,6 +636,7 @@
 <script src="/cli.js"></script>
 <script src="/switcher.js"></script>
 <script src="/dock.js"></script>
+<script src="/flow.js"></script>
 <script src="/timeline/timeline.js"></script>
 <script src="/timeline/timeline-trim.js"></script>
 <script src="/timeline/timeline-keys.js"></script>

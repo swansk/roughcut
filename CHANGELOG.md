@@ -44,6 +44,26 @@ same commit. Releases move entries into a dated version section.
   the coarse sidecars' own `interval_s`. The journal gains a row word, `waiting` — free
   stages settled, priced ones held by the pause — and `GET /api/index` carries what the
   pause holds, priced (`waiting`), from the index job's own arithmetic.
+- **One flow bar on all three screens (INTAKE M14).** `/flow.js` draws `/api/flow` as a
+  rail in each header — ✓ done, a fill while running, amber when it needs you, this
+  screen's stages underlined — and a **Next** chip with the one recommended action. A click
+  goes to the screen where a stage is done (the board honours `#tool=ask|fx|out` and opens
+  that dock tool); a priced action navigates to the button that carries its price, a free
+  one on its own screen is pressed (Render). It replaces the open screen's six numbered
+  steps, the board's five-step strip and its `open · pass · board` pills; the pass gains
+  it (a 31 px row, paid for in the frame's height).
+
+### Fixed
+- **The open screen stopped contradicting itself (INTAKE M14).** With the looks paused its
+  header said "3 released · 9 queued" while its footer said every clip was released and
+  every card wore QUEUED beside a lit `released` flag: two definitions of released —
+  the journal's (every stage done) and the pass's (free stages done, picks from the
+  words while paused). They are now two words: a card's flag is *on the pass*, a clip
+  held only by the pause is *look paused* (badge, table row, counts), the title is
+  *Looks paused*, and the pass hint says how many are on the pass from their words only.
+  The paused box speaks to the editor — *Looks are paused — 9 clips, ~$X*, **Resume ·
+  ~$X** — and repeats the journal's reason only when the app wrote it (the budget cap, or
+  you), never a log line like "paused by the lead after the live kill test".
 
 ### Documentation
 - **HANDOFF: the 2026-10-02 block** — the colour Ask, the claims audit and junk proposals
