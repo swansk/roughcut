@@ -45,12 +45,16 @@ def test_validate_rejects_an_invented_clip_and_dedupes():
 
 def test_the_price_is_calibrated_on_the_live_run():
     """Killington, 2026-09-08: 12 clips, 323 capped lines -> $0.20 billed. The estimate
-    must land near that, not at the $0.09 it first said."""
+    must land near that, not at the $0.09 it first said. That run was on the mid tier;
+    themes are deep work now (Karl, 2026-10-03), so the calibration scales by tier."""
+    from roughcut import config
+    tier = (config.price_per_mtok(config.model_for(config.ROLE_JUDGE))[0]
+            / config.price_per_mtok("claude-sonnet")[0])
     clips = {f"C{i}.MP4": {"clip": f"C{i}.MP4", "duration": 200.0,
                            "transcript": [{"start": j, "end": j + 1, "text": "a line of talk"}
                                           for j in range(27)]} for i in range(12)}
-    assert 0.16 <= themes.projected_usd(clips) <= 0.26
-    assert 0 < themes.projected_usd(_clips()) < 0.2
+    assert 0.16 * tier <= themes.projected_usd(clips) <= 0.26 * tier
+    assert 0 < themes.projected_usd(_clips()) < 0.2 * tier
 
 
 # ------------------------------------------------------------------ endpoints

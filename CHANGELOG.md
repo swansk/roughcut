@@ -105,6 +105,9 @@ same commit. Releases move entries into a dated version section.
   you), never a log line like "paused by the lead after the live kill test".
 
 ### Fixed
+- **The themes price test scales its calibration by tier.** The one live run ($0.20)
+  was on the mid tier; themes are deep work now, so the bounds scale by the judge
+  role's input price over Sonnet's (5/3 on Opus 5.5) rather than being loosened.
 - **The CLI banner no longer pushes the board's dock off the screen.** The dock sizes
   itself to the header (`--hd`); the banner arrives later, above the header, so the
   dock overflowed the viewport by the banner's height. `cli.js` announces a `clifix`
