@@ -66,6 +66,7 @@ same commit. Releases move entries into a dated version section.
   you), never a log line like "paused by the lead after the live kill test".
 
 ### Documentation
+- **INTAKE M14 · The flow** — the milestone, its decisions and items ticked by commit.
 - **HANDOFF: the 2026-10-02 block** — the colour Ask, the claims audit and junk proposals
   merged; measured read-only on the real bins (Copper's junk proposals are exactly B1's
   nine; Killington's top-12 audit ≈ $0.88, unspent); suite 678 passed, 1 skipped.

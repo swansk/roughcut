@@ -1024,6 +1024,56 @@ operations on the cut plus, when wanted, an effect.
       is anchored to a shot on the board (`anchor_shot`). Both proposals left for Karl.
 - [ ] I13.5 Karl's look.
 
+### M14 · The flow — where am I, what is done, what is next (Karl, 2026-10-03 #3)
+
+**The ask.** *"Make the flow through various stages make more sense in the UI."* Walking the
+three screens on Killington: three navigation schemes (the open screen's `1 open · 2 listen
+· 3 themes · 4 index · 5 the pass · 6 the cut board`, the board's `footage · analyse · first
+cut · refine · render` strip plus `open · pass · board` pills, and nothing on the pass); the
+open screen contradicting itself ("Index paused · 3 released · 9 queued" over a footer
+saying every clip was released, every card QUEUED with `released` lit); a paused box in
+lead-to-lead language. Nothing answered *where am I, what's done, what should I do next,
+and what's waiting on me*.
+
+**Decisions.**
+1. **One model, on the server, from files**: `roughcut/flow.py` is pure (facts in, stages
+   out); `server.flow_facts()` reads the files; `GET /api/flow` is the one answer every
+   screen draws. Seven stages — Footage · Index · Brief · Pass · Cut · Polish · Render — and
+   six states (done · running · ready · waiting · needs-you · optional). Brief, the pass
+   before a first cut, and polish never block anything.
+2. **One Next**, in a fixed precedence: footage missing; a proposal waiting (already paid
+   for); the index until every clip is heard; the first cut (from the keeps when there are
+   any); a render of a cut that changed; paused looks with their price; refine. While the
+   index runs, Next is the pass on what is already released, or an honest wait.
+3. **Nothing spends from the bar.** A priced Next navigates to the button that carries its
+   price; only a free action on its own screen is pressed (Render). A signed-out CLI is the
+   blocker of every priced stage, from the server's own `backend_fix` (not re-derived), and
+   a priced Next becomes the CLI's fix.
+4. **Replace, not beside**: the bar is the only stage strip on every screen; the board's
+   dock tools are reachable by hash (`/#tool=ask|fx|out`).
+5. **Two words for two facts** on the open screen: *on the pass* (heard and previewed —
+   the pass shows it) and *released* (every stage done); a clip held only by paused looks is
+   *look paused*, never *queued*. Paused copy says what waits and what it costs, and the
+   journal's reason only when the app wrote it.
+
+- [x] I14.1 **The model and the API** (`e9f45b8`): `roughcut/flow.py`, `GET /api/flow`,
+      `POST /api/asks/answer` (a discarded Ask proposal stops waiting on you), the journal's
+      `waiting` row word and count, `GET /api/index` `waiting` (what the pause holds,
+      priced by the index job's own arithmetic); granularity in words from the coarse
+      sidecars' `interval_s`. `test_flow.py` (facts → stages: fresh bin, indexed bin with no
+      cut, a pending proposal, a stale render, paused looks, the CLI blocker; the API on the
+      suite's bin), `test_journal.py`.
+- [x] I14.2 **One bar on all three screens** (`4fd4ea1`): `/flow.js` in the open screen's
+      header (in place of `#steps`), the board's header row (in place of `paintSteps()` and
+      the `#screens` pills) and a new row on the pass; Next chip; the board honours
+      `#tool=`. `test_flow_ui.py`; `test_ui_flow.py` / `test_open_ui.py` moved off the old
+      strips.
+- [x] I14.3 **The open screen, honest** (`4fd4ea1`): *on the pass* / *look paused* /
+      *Looks paused* / *Index stopped*; the paused box *Looks are paused — N clips, ~$X* with
+      **Resume · ~$X**.
+- [ ] I14.4 Karl's look: open Killington's three screens and say whether the bar answers
+      where he is and what to do next — and whether *Next* ever points somewhere wrong.
+
 ## Lanes in flight
 
 | lane | branch / worktree | scope | state |
