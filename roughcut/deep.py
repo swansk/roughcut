@@ -95,26 +95,26 @@ KINDS = ("action", "fall", "crash", "jump", "reaction", "faces", "scenery",
 MOUNTS = ("helmet", "chest", "handheld", "pole", "static", "unknown")
 
 # --- the price --------------------------------------------------------------
-# No deep call has been measured yet. The fixed part of one CLI call that reads images
-# from disk is the close look's measured $0.073 per window on the small tier (most of it
-# is the prompt and the CLI's own context, not the picture), scaled to the deep tier.
-# On top, each frame: 640x360 ≈ 307 image tokens, counted READS_PER_FRAME times because
-# the CLI opens frames with a tool call and every later turn carries the earlier images
-# again. Over-estimates on purpose; the ledger will say by how much.
-CALL_USD_SMALL = 0.073
-FRAME_TOKENS = 307
-READS_PER_FRAME = 4
-# Wall clock, for the bar: the close look's ~35 s per sheet, plus time per frame read.
-CALL_S = 40.0
-FRAME_S = 2.0
+# Measured, 2026-10-03, on the first live deep look (CLIP_11 141-155 s, 24 frames, Opus
+# 5.5, one call, no follow-up): 108,277 tokens in, 6,251 out, 59 s, $0.70 projected —
+# against the $0.51 the first, unmeasured formula quoted. The fixed part is the CLI's own
+# context, the same ~21.6k tokens the two probe calls billed that morning; the rest is
+# per frame, because the CLI opens each frame with a Read and every later turn carries
+# the earlier images again (~3.6k in per frame, not the 307 a single read of a 640 px
+# frame costs), and the beats it writes grow with the frames (~260 out per frame).
+BASE_IN_TOKENS = 21_600
+FRAME_IN_TOKENS = 3_600
+FRAME_OUT_TOKENS = 260
+# Wall clock, for the bar: cutting the frames (~10 s), then the read (59 s for 24).
+CALL_S = 12.0
+FRAME_S = 2.5
 
 
 def price(frames: int, *, model: str | None = None) -> float:
     """Projected USD for one call reading `frames` frames."""
     model = model or config.model_for(DEEP_ROLE)
-    per_mtok_in = config.price_per_mtok(model)[0]
-    base = CALL_USD_SMALL * config.price_scale(model)
-    return round(base + frames * FRAME_TOKENS * READS_PER_FRAME * per_mtok_in / 1e6, 4)
+    return round(config.projected_usd(model, BASE_IN_TOKENS + frames * FRAME_IN_TOKENS,
+                                      frames * FRAME_OUT_TOKENS), 4)
 
 
 def quote(frames: int, *, model: str | None = None) -> dict:

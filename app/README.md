@@ -215,8 +215,9 @@ motion}` (spans, sample times, interval, width, role, `model` or null, `frames_r
 prices many at once. `GET /api/deep/{clip}` — the clip's deep looks whole (beats, events,
 camera, frames, model, cost) and `frames_url`; `/media/deep/<stem>/<frame>.jpg` serves the
 keyframes, cut under `--work/deep/<bin>/<stem>/`. Stored as `<stem>.deep.json` beside the
-visual sidecars. **Provisional:** the cap, floor, width and the price (no deep call has been
-measured; ≈ $0.51 for 24 frames on Opus 5.5, ≤ $1.07 with the follow-up).
+visual sidecars. **Provisional:** the cap, floor and width. **The price is measured** (one live
+look, CLIP_11 141–155 s: 108k tokens in, 6.3k out, 59 s): ≈ $0.70 for 24 frames on Opus 5.5,
+≤ $1.59 with the follow-up.
 
 The originating prompt states two things a model reading clips one at a time cannot rediscover,
 both measured in R8/R9 rather than guessed: transcript density points *away* from the action on

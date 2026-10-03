@@ -105,6 +105,12 @@ same commit. Releases move entries into a dated version section.
   you), never a log line like "paused by the lead after the live kill test".
 
 ### Fixed
+- **Look deeper's price is fitted to a measured run.** The first live deep look
+  (CLIP_11 141–155 s, 24 frames, Opus 5.5) billed 108k in / 6.3k out, $0.70 against the
+  $0.51 quoted — the CLI re-sends earlier frames on every Read turn (~3.6k in per frame,
+  not 307) and the beats grow with the frames (~260 out each). `deep.price` is now
+  base + per-frame tokens through `config.projected_usd`; the button reads $0.70, the
+  bound with the follow-up $1.59. It read R11's fall correctly, by the skis against the sky.
 - **The themes price test scales its calibration by tier.** The one live run ($0.20)
   was on the mid tier; themes are deep work now, so the bounds scale by the judge
   role's input price over Sonnet's (5/3 on Opus 5.5) rather than being loosened.

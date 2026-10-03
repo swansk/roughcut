@@ -1114,9 +1114,15 @@ flips; R11: the one real fall in CLIP_11 was read as a rolled POV by both passes
 - [x] I15.5 **Tests** (`45ed3f9`): `test_deep.py` (26), `test_deep_ui.py` (4); grounded read-only on
       Killington — CLIP_11 141–155 s picks 24 frames including 145.08 (the skis against the
       sky, R11), which the floor alone missed.
-- [ ] I15.6 Karl's look, and **the first live deep look** (his spend; the button on CLIP_11
-      ≈ 141–155 s should read ~$0.51) — which measures the price, the latency and whether
-      the model reads the fall R11 found.
+- [x] I15.6a **The first live deep look** (lead, 2026-10-03, one call as a smoke test):
+      CLIP_11 141–155 s, 24 frames, Opus 5.5, no follow-up asked — 108,277 tokens in,
+      6,251 out, 59 s, **$0.70** projected against the $0.51 quoted; `deep.price` is now
+      fitted to that run. **It read the fall R11 found:** "fall, 143.0–145.0, high", and
+      the camera note decides it the way R10 asked — "that is the rider's real fall, not
+      just the camera rolling: from 145.08 to 146.4 the skis point up into the sky over
+      the chairlift". 20 beats (18 seen, 2 inferred between named frames), 6 events, three
+      honest `unsure` lines. Stored in Killington's `CLIP_11.deep.json`.
+- [ ] I15.6 Karl's look — open CLIP_11's strip in the inspector and read that look.
 
 ## Lanes in flight
 
