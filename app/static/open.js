@@ -132,8 +132,14 @@ const O = {
 // The journal's word on a clip, as one badge on its picture. Derived from the stage
 // states the same way journal.progress() derives a row's `state`, so the card and the
 // table never disagree; `retrying` is a failed stage the journal will run again (Fig. 2's
-// "retrying · encode failed twice").
-function journalWord(j) {
+// "retrying · encode failed twice"). `waiting` (INTAKE M14): the free stages are done
+// and only the paused priced ones are left — the pass already shows the clip from its
+// words. The screen used to call these `queued` under a footer saying every clip was
+// released, which were both half true.
+const PRICED = new Set(['look', 'close']);
+const WORD_TEXT = { waiting: 'look paused' };
+
+function journalWord(j, paused) {
   if (!j) return null;
   if (j.missing) return 'missing';
   if (j.parked) return 'parked';
@@ -141,6 +147,9 @@ function journalWord(j) {
   if (states.every((s) => SETTLED.has(s))) return 'released';
   if (states.includes('running')) return 'indexing';
   if (states.includes('failed')) return 'retrying';
+  if (paused && STAGES.every((s) => PRICED.has(s) || s === 'picks' || SETTLED.has(j.stages[s]))) {
+    return 'waiting';
+  }
   return 'queued';
 }
 
@@ -151,7 +160,7 @@ function flagsOf(c) {
   else if (c.telemetry === false) out.push('<i class="flag">no telemetry</i>');
   else out.push('<i class="flag" title="the file could not be probed">telemetry ?</i>');
   if (c.looked) out.push('<i class="flag on">looked</i>');
-  if (c.released) out.push('<i class="flag good">released</i>');
+  if (c.released) out.push('<i class="flag good">on the pass</i>');
   // The junk band (HANDOFF item 5): a measurement's proposal, answered on the board.
   if (c.junk === 'proposed') out.push('<i class="flag bad" title="looks like junk — answer it in the bin on the board">junk?</i>');
   else if (c.junk === 'confirmed') out.push('<i class="flag bad">junk</i>');
@@ -159,14 +168,14 @@ function flagsOf(c) {
 }
 
 function cardHtml(c) {
-  const word = journalWord(c.journal);
+  const word = journalWord(c.journal, O.clips && O.clips.paused_priced);
   const reason = c.journal && c.journal.parked && c.journal.parked.error;
   const picture = c.proxy
     ? `<img src="${escapeHtml(c.poster)}" loading="lazy" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'), {className: 'ph', textContent: 'no preview'}))">`
     : '<div class="ph">no preview yet</div>';
   return `<div class="card${word ? ` ${word}` : ''}" data-clip="${escapeHtml(c.clip)}"${word ? ` data-word="${word}"` : ''}>
     <div class="frame">${picture}<span class="tc tnum">${clock(c.duration)}</span>${
-      word ? `<span class="badge ${word}"${reason ? ` title="${escapeHtml(reason)}"` : ''}>${word}</span>` : ''}</div>
+      word ? `<span class="badge ${word}"${reason ? ` title="${escapeHtml(reason)}"` : ''}>${WORD_TEXT[word] || word}</span>` : ''}</div>
     <div class="cap"><b title="${escapeHtml(c.clip)}">${escapeHtml(c.stem)}</b><span class="flags">${flagsOf(c)}</span></div>
   </div>`;
 }
@@ -196,20 +205,21 @@ function renderSheet() {
     </div>`;
   }).join('');
 
-  // the step strip: listened when every clip has been heard; the pass opens on what is released
-  const heard = clips.length > 0 && clips.every((c) => c.analysed);
-  $('[data-step=listen]').classList.toggle('done', heard);
+  // the pass opens on what is on it (the flow bar in the header says the rest)
   const released = clips.filter((c) => c.released).length;
-  const pass = $('#stepPass');
-  pass.setAttribute('aria-disabled', released ? 'false' : 'true');
-  pass.textContent = released ? `5 the pass · ${plural(released, 'clip')} →` : '5 the pass';
+  const full = clips.filter((c) => journalWord(c.journal, d.paused_priced) === 'released').length;
   const link = $('#openPass');
   link.setAttribute('aria-disabled', released ? 'false' : 'true');
   link.textContent = released ? `Open the pass on ${plural(released, 'clip')} →` : 'Open the pass →';
-  $('#passHint').textContent = released
-    ? (released < clips.length ? 'the rest keep indexing; new clips join as a round when they are released'
-                               : 'every clip is released')
-    : 'nothing released yet — the pass opens on the first clip that is';
+  // Two numbers that used to be one word: on the pass (heard and previewed — picks from
+  // the words) and fully indexed (looked at too). While the looks are paused they differ.
+  const looksWait = d.journal && d.paused_priced && full < released ? released - full : 0;
+  $('#passHint').textContent = !released
+    ? 'nothing on the pass yet — it opens on the first clip the index releases'
+    : looksWait
+      ? `${released === clips.length ? 'every clip is' : `${plural(released, 'clip')} are`} on the pass · ${plural(looksWait, 'clip')} from the words only until their looks resume`
+      : released < clips.length ? 'the rest keep indexing; new clips join as a round when they are released'
+        : 'every clip is on the pass';
 }
 
 /* ------------------------------------------------- the price and the budget */
@@ -319,6 +329,7 @@ function rowState(r) {
   }
   if (r.state === 'parked') return { cls: 'parked', text: `parked · ${r.error || 'failed three times'}` };
   if (r.state === 'missing') return { cls: 'missing', text: 'missing — the file is gone' };
+  if (r.state === 'waiting') return { cls: 'waiting', text: 'on the pass · look paused' };
   if (r.state === 'queued' && STAGES.some((s) => r.stages[s] === 'failed')) {
     return { cls: 'queued', text: `retrying · ${r.error || 'a stage failed'}` };
   }
@@ -331,19 +342,23 @@ function renderIndex() {
   $('#progress').hidden = !ix.exists;
   $('#index').hidden = !ix.exists;
   $('#paused').hidden = !(ix.exists && ix.paused_priced);
-  $('[data-step=index]').classList.toggle('now', running);
   renderButton();
   if (!ix.exists) return;
 
   const p = ix.progress;
   const orderWord = ORDER_WORD[ix.order] || ix.order;
-  const counts = { released: 0, indexing: 0, queued: 0, parked: 0, missing: 0 };
+  const counts = { released: 0, waiting: 0, indexing: 0, queued: 0, parked: 0, missing: 0 };
   for (const r of p.rows) counts[r.state] = (counts[r.state] || 0) + 1;
+  const COUNT_WORD = { waiting: 'look paused' };
 
-  // the table (Fig. 2): clip · stages as chips · priority · state, in the journal's order
-  $('#indexTitle').textContent = `${running ? 'Indexing' : p.released === p.clips - p.missing ? 'Indexed' : 'Index paused'} · ${orderWord}`;
+  // the table (Fig. 2): clip · stages as chips · priority · state, in the journal's order.
+  // The title says what the run is doing in words: a run that ended with the looks held
+  // is paused on the editor's word, one that ended otherwise short of every clip stopped.
+  const all = p.released === p.clips - p.missing;
+  $('#indexTitle').textContent = `${running ? 'Indexing' : all ? 'Indexed'
+    : p.paused_priced ? 'Looks paused' : 'Index stopped'} · ${orderWord}`;
   $('#indexCounts').textContent = Object.entries(counts).filter(([, n]) => n)
-    .map(([k, n]) => `${n} ${k}`).join(' · ');
+    .map(([k, n]) => `${n} ${COUNT_WORD[k] || k}`).join(' · ');
   $('#indexDetail').textContent = running ? O.detail : '';
   $('#rows').innerHTML = '<span class="lbl">clip</span><span class="lbl">stages</span><span class="lbl">priority</span><span class="lbl">state</span>'
     + p.rows.map((r) => {
@@ -363,13 +378,37 @@ function renderIndex() {
   const eta = p.eta_s != null ? `about ${clock(p.eta_s)} left`
     : running ? 'ETA once a stage has been timed' : 'not running';
   const parked = p.parked ? ` · <span class="bad">${plural(p.parked, 'clip')} parked</span>` : '';
-  const paused = p.paused_priced ? ' · <span class="warn">priced stages paused</span>' : '';
+  const paused = p.paused_priced ? ' · <span class="warn">looks paused</span>' : '';
   $('#progMeta').innerHTML = `${p.pct || 0}% of stages · <span class="warn">${usd(p.cost_usd)}</span> spent by the index · ${eta}${parked}${paused}`;
-  $('#pausedWhy').textContent = p.paused_reason || 'paused';
+  renderPaused(ix);
   $('#journalPath').textContent = ix.path || '';
   $('#journalLog').innerHTML = (p.log || []).slice(-5).map((e) =>
     `<div><b>${escapeHtml(timeOf(e.at))}</b>${escapeHtml(e.what)}</div>`).join('');
   renderSettingsRunning();
+}
+
+// The paused box (INTAKE M14): what waits, what it costs, and why — said to the editor.
+// The journal's reason is a log line ("paused by the lead after the live kill test" was
+// on screen); only the two reasons the app itself writes are repeated, anything else is
+// the plain fact that they were paused before this run.
+function pausedWords(reason) {
+  const r = String(reason || '');
+  if (r.startsWith('budget cap')) {
+    const cap = r.replace(/^budget cap\s*/, '').replace(/\s*reached$/, '');
+    return `The budget cap${cap ? ` (${cap})` : ''} was reached — raise it under ⚙, or resume and it is checked again before every look.`;
+  }
+  if (r === 'paused by the editor') return 'You paused them.';
+  return 'They were paused before this run.';
+}
+
+function renderPaused(ix) {
+  const w = ix.waiting || { clips: 0, looks: 0, close: 0, usd: 0 };
+  const what = w.looks ? 'Looks' : 'Close looks';
+  $('#pausedTitle').textContent = w.clips
+    ? `${what} are paused — ${plural(w.clips, 'clip')}, ~${usd(w.usd)}`
+    : 'Looks are paused';
+  $('#pausedWhy').textContent = pausedWords(ix.progress && ix.progress.paused_reason);
+  $('#resume').textContent = w.clips ? `Resume · ~${usd(w.usd)}` : 'Resume';
 }
 
 /* --------------------------------------------------------------- settings */
@@ -662,7 +701,6 @@ function renderThemes() {
     chipHtml({ theme, kept: true, clips: null }, i, 'static', 'data-k')).join('')
     || '<span class="hint small">no themes kept — picks rank on their own</span>';
   $('#keptNames').innerHTML = nameChips(t.names.map((name) => ({ name, kept: true })), true);
-  $('[data-step=themes]').classList.toggle('done', kept);
 }
 
 function openProposal(p) {
@@ -969,7 +1007,7 @@ async function startIndex(extra = {}) {
     O.job = r.job;
     O.interval = null;
     O.detail = '';
-    toast(extra.resume_priced ? 'priced stages resumed — the cap is checked again before each one'
+    toast(extra.resume_priced ? 'looks resumed — the cap is checked again before each one'
                               : 'indexing — it runs on its own; close the tab and it keeps going');
     await refreshIndex();
     poll();

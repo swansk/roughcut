@@ -68,6 +68,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from roughcut import (config, dictate, edits, effects, events, find, fx, inference,  # noqa: E402
                       journal, picks, progress, revise, selects, themes)
 from roughcut import junk as junkmod  # noqa: E402
+from roughcut import flow as flowmod  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent / "research" / "tools"
@@ -1794,6 +1795,224 @@ def api_backend() -> JSONResponse:
     return JSONResponse(backend_preflight())
 
 
+# ---------------------------------------------------------------- the flow (INTAKE M14)
+#
+# Karl, 2026-10-03 (#3): "make the flow through various stages make more sense in the
+# UI." One model of where the project is, computed here from files and drawn by
+# /flow.js on all three screens — `roughcut/flow.py` is the logic, this is the facts.
+
+
+def priced_waiting(look: list[str], close: list[str]) -> dict:
+    """What looking at `look` and closely at `close` would cost — the index job's own
+    arithmetic (a sheet per `sheets_for`, three windows per close look), so the price
+    the bar and the paused box say is the price the run then spends."""
+    usd = (sum(sheets_for(c) for c in look) * VISUAL_USD_PER_SHEET
+           + len(close) * FINE_WINDOWS_PER_CLIP * FINE_USD_PER_WINDOW)
+    return {"clips": len(set(look) | set(close)), "looks": len(look),
+            "close": len(close), "usd": round(usd, 2)}
+
+
+def journal_waiting(j: journal.Journal) -> dict:
+    """The priced work a journal still holds, by the journal's own word on each clip
+    (a junk-confirmed clip's stages are skipped, so it is never in here)."""
+    present = set(footage_clips())
+    live = [c for c in j.clips if c in present and not j.clips[c].get("missing")]
+    look = [c for c in live if j.state(c, "look") in journal.RETRYABLE]
+    close = [c for c in live if j.state(c, "close") in journal.RETRYABLE]
+    return priced_waiting(look, close)
+
+
+_INTERVAL_CACHE: dict = {}
+
+
+def look_intervals(stems: set[str]) -> dict[str, int]:
+    """How many clips were looked at at each interval, from the coarse sidecars' own
+    `params.interval_s` — the granularity, in data the index already wrote. Cached by
+    mtime: the bar polls this."""
+    out: dict[str, int] = {}
+    for stem in stems:
+        p: Path = STATE["visual"] / f"{stem}.visual.json"
+        try:
+            key = (str(p), p.stat().st_mtime)
+        except OSError:
+            continue
+        if _INTERVAL_CACHE.get(str(p), (None,))[0] != key:
+            try:
+                d = json.loads(p.read_text(encoding="utf-8"))
+                iv = float((d.get("params") or {}).get("interval_s") or VISUAL_INTERVAL_S)
+            except (OSError, ValueError, TypeError):
+                iv = VISUAL_INTERVAL_S
+            _INTERVAL_CACHE[str(p)] = (key, iv)
+        iv = _INTERVAL_CACHE[str(p)][1]
+        out[f"{iv:g}"] = out.get(f"{iv:g}", 0) + 1
+    return out
+
+
+def ask_pending(edl_mtime: float) -> dict | None:
+    """The newest Ask proposal, when nobody has answered it: not marked answered (the
+    board's Discard marks it, `POST /api/asks/answer`) and newer than the cut on disk
+    (an Accept saves the cut, which answers it)."""
+    files = sorted(STATE["asks"].glob("*.json"), key=lambda p: p.stat().st_mtime,
+                   reverse=True)
+    if not files:
+        return None
+    try:
+        rec = json.loads(files[0].read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if rec.get("answered") or float(rec.get("created") or 0) <= edl_mtime:
+        return None
+    plan = rec.get("plan") or {}
+    return {"job": rec.get("job"), "shots": len(plan.get("segments") or []),
+            "colour_only": bool(plan.get("unchanged"))}
+
+
+def _same_shots(a: list[dict] | None, b: list[dict]) -> bool:
+    """A render's shot list against the cut — the board's own `isThisCut` rule."""
+    if not a or len(a) != len(b):
+        return False
+    return all(x.get("clip") == y.get("clip")
+               and abs(float(x.get("in", 0)) - float(y.get("in", 0))) < 0.005
+               and abs(float(x.get("out", 0)) - float(y.get("out", 0))) < 0.005
+               and float(x.get("speed") or 1) == float(y.get("speed") or 1)
+               for x, y in zip(a, b))
+
+
+def render_facts(segments: list[dict]) -> dict:
+    metas = []
+    for meta_path in STATE["renders"].glob("cut_*.json"):
+        try:
+            metas.append(json.loads(meta_path.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            continue
+    metas = [m for m in metas if (STATE["renders"] / f"cut_{m.get('job')}.mp4").exists()]
+    metas.sort(key=lambda m: float(m.get("created") or 0), reverse=True)
+    return {"count": len(metas),
+            "latest_matches": bool(metas) and _same_shots(metas[0].get("shots"), segments),
+            "matches": any(_same_shots(m.get("shots"), segments) for m in metas)}
+
+
+def running_jobs() -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for kind, reg in (("index", INDEXES), ("analyse", ANALYSES), ("visual", VISUALS),
+                      ("themes", THEMES), ("ask", ASKS), ("fx", FX), ("render", RENDERS)):
+        live = [x for x in reg.values() if x["state"] not in progress.TERMINAL]
+        if live:
+            snap = live[-1].snapshot()
+            out[kind] = {"id": snap.get("id"), "pct": snap.get("pct"),
+                         "detail": snap.get("detail") or ""}
+    return out
+
+
+def flow_facts() -> dict:
+    """Everything `flow.compute` reads, off the files: footage, proxies, the journal,
+    the sidecars, the EDL's brief / selects / cut / polish blocks, the asks and the
+    renders on disk, the running jobs and the CLI's fix. Nothing here spends."""
+    clips = footage_clips()
+    edl = read_edl()
+    edl_mtime = STATE["edl"].stat().st_mtime
+    junk = confirmed_junk(edl) & set(clips)
+    clean = [c for c in clips if c not in junk]
+    heard = analysed_stems()
+    looked_stems, close_stems = visual_stems(), fine_stems()
+    on_pass = released_clips()
+    ix: dict = {"journal": journal_path().exists(), "interval_s": look_interval(),
+                "listened": sum(1 for c in clips if Path(c).stem in heard),
+                "on_pass": len(on_pass), "paused": False, "released": 0, "parked": 0}
+    j = None
+    if ix["journal"]:
+        try:
+            j = load_journal()
+        except journal.JournalError:
+            j = None
+    if j is not None:
+        live = [c for c in clean if c in j.clips and not j.clips[c].get("missing")]
+        settled = lambda c, s: j.state(c, s) in journal.SETTLED   # noqa: E731
+        ix["looked"] = sum(1 for c in clean if (c in j.clips and settled(c, "look"))
+                           or Path(c).stem in looked_stems)
+        ix["close"] = sum(1 for c in clean if (c in j.clips and settled(c, "close"))
+                          or Path(c).stem in close_stems)
+        prog = j.progress()
+        ix.update(paused=j.paused_priced, paused_reason=j.data.get("paused_reason"),
+                  released=prog.get("released", 0), parked=prog.get("parked", 0),
+                  waiting=journal_waiting(j))
+        pend_look = [c for c in live if j.state(c, "look") in journal.RETRYABLE]
+        pend_close = [c for c in live if j.state(c, "close") in journal.RETRYABLE]
+    else:
+        ix["looked"] = sum(1 for c in clean if Path(c).stem in looked_stems)
+        ix["close"] = sum(1 for c in clean if Path(c).stem in close_stems)
+        # Without a journal a clip with nothing worth a close look leaves no file, so
+        # the close look is not a requirement here — only the coarse look is.
+        ix["close_need"] = ix["close"]
+        pend_look = [c for c in clean if Path(c).stem not in looked_stems]
+        pend_close = [c for c in clean if Path(c).stem not in close_stems]
+    ix["pending_usd"] = priced_waiting(pend_look, pend_close)["usd"]
+    ix["intervals"] = look_intervals({Path(c).stem for c in clean} & looked_stems)
+
+    themes_done = any(t["state"] == "done" and t.get("proposal") for t in THEMES.values())
+    brief = {"story": bool(str(edl.get("story") or "").strip()),
+             "themes": len([t for t in (edl.get("themes") or []) if isinstance(t, str)]),
+             "proposal": themes_done or proposal_path().exists()}
+
+    sel = selects.ensure(json.loads(json.dumps(edl)))
+    selects.used_in(sel)
+    passed = ({v.get("clip") for v in sel["floor"]["verdicts"]}
+              | {s.get("clip") for s in sel["selects"]}) & set(on_pass)
+    heroes = [s for s in sel["selects"] if s.get("hero")]
+    pas = {"on_pass": len(on_pass), "passed": len(passed), "keeps": len(sel["selects"]),
+           "heroes": len(heroes), "heroes_out": sum(1 for s in heroes if not s.get("used_in"))}
+
+    segments = [s for s in edl.get("segments") or [] if isinstance(s, dict)]
+    cut = {"shots": len(segments), "length_s": round(sum(edits.dur(s) for s in segments), 2),
+           "target": edl.get("target_s"), "proposal": ask_pending(edl_mtime)}
+    colour = edl.get("colour") or {}
+    look = ("off" if colour.get("mode") == "off" else colour.get("look")) or None
+    fx_proposed = sum(1 for e in _fx_all() if e.get("status") == "proposed")
+    polish = {"effects": len(edl.get("effects") or []), "fx_proposed": fx_proposed,
+              "look": look, "music": bool((edl.get("effects_music") or {}).get("asset"))}
+    proxies = sum(1 for c in clips if (STATE["proxy_dir"] / f"{Path(c).stem}.mp4").exists())
+    return {"clips": len(clips), "junk": len(junk),
+            "proxies": {"done": proxies, "total": len(clips)},
+            "index": ix, "brief": brief, "pass": pas, "cut": cut, "polish": polish,
+            "render": render_facts(segments), "jobs": running_jobs(),
+            "fix": backend_preflight().get("fix")}
+
+
+@app.get("/api/flow")
+def api_flow() -> JSONResponse:
+    """Where the project is, as seven stages and one next action — what /flow.js draws
+    on every screen. Read from files on every call; nothing here is cached state."""
+    return JSONResponse(flowmod.compute(flow_facts()))
+
+
+@app.post("/api/asks/answer")
+async def api_asks_answer(request: Request) -> JSONResponse:
+    """The board's Discard (or Accept) of the newest Ask proposal, written into its
+    record — so the flow stops calling a discarded proposal "waiting for you". Accept
+    also saves the cut, which answers it on its own; this makes Discard say so too."""
+    body = await request.json() if int(request.headers.get("content-length") or 0) else {}
+    answer = str(body.get("answer") or "")
+    if answer not in ("accept", "discard"):
+        raise HTTPException(400, "answer must be accept or discard")
+    files = sorted(STATE["asks"].glob("*.json"), key=lambda p: p.stat().st_mtime,
+                   reverse=True)
+    if not files:
+        return JSONResponse({"ok": True, "job": None})
+    rec = json.loads(files[0].read_text(encoding="utf-8"))
+    rec["answered"] = {"answer": answer, "at": time.time()}
+    tmp = files[0].with_name(files[0].name + ".tmp")
+    tmp.write_text(json.dumps(rec, indent=1), encoding="utf-8")
+    tmp.replace(files[0])
+    return JSONResponse({"ok": True, "job": rec.get("job")})
+
+
+@app.get("/flow.js")
+def flowjs() -> Response:
+    """The flow bar every screen carries (INTAKE M14)."""
+    return Response((HERE / "static" / "flow.js").read_text(encoding="utf-8"),
+                    media_type="application/javascript", headers=NO_STORE)
+
+
 # ---------------------------------------------------------------- analysis
 
 
@@ -3008,6 +3227,8 @@ def api_index_status() -> JSONResponse:
     j = load_journal()
     return JSONResponse({"exists": True, "path": str(path), "order": j.order,
                          "paused_priced": j.paused_priced,
+                         # what the pause holds, priced — the paused box says it
+                         "waiting": journal_waiting(j),
                          "interval_s": look_interval(),
                          "progress": j.progress(), "released": j.released_clips(),
                          "running": running is not None,

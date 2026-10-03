@@ -10,7 +10,7 @@
  *   - which tool is open (`#tools > section[data-tool]`, one shown, the rest `hidden`);
  *     the rail button of the open tool carries `.on`; the choice is remembered per
  *     browser (localStorage) and restored on the next load;
- *   - the header's height as `--hd` on :root (a ResizeObserver — the steps strip and
+ *   - the header's height as `--hd` on :root (a ResizeObserver — the flow bar and
  *     the progress strip change it), so the dock's `top` and `height` stay right;
  *   - the rail badges (`dock.badge(name, n)` — app.js says how many keeps, how many
  *     versions);

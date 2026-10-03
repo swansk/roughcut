@@ -32,6 +32,38 @@ same commit. Releases move entries into a dated version section.
   `GET /api/backend` carries `fix`; `/cli.js` puts it across the top of the board, the
   pass and the open screen — what is wrong, the command with Copy, *Check again* — in
   the page's flow, never over a control. The header pill names the fix and both models.
+- **The flow: where the project is, as one model (Karl 2026-10-03 #3, INTAKE M14).**
+  `roughcut/flow.py` (pure) turns facts the server reads off the files into seven stages —
+  Footage · Index · Brief · Pass · Cut · Polish · Render — each `done` / `running` (with
+  progress) / `ready` / `waiting` (on which stage, why) / `needs-you` (the reason and the
+  action) / `optional`, a one-line summary in the editor's words, the screen and dock tool
+  where it is done, and the counts it rests on; plus **one** `next` action and `blockers`
+  (the server's own `backend_fix`, so a signed-out CLI stands in front of every priced
+  stage). `GET /api/flow`; `POST /api/asks/answer` marks the newest Ask proposal answered so
+  a discarded one stops waiting on you. The index stage says its granularity in words from
+  the coarse sidecars' own `interval_s`. The journal gains a row word, `waiting` — free
+  stages settled, priced ones held by the pause — and `GET /api/index` carries what the
+  pause holds, priced (`waiting`), from the index job's own arithmetic.
+- **One flow bar on all three screens (INTAKE M14).** `/flow.js` draws `/api/flow` as a
+  rail in each header — ✓ done, a fill while running, amber when it needs you, this
+  screen's stages underlined — and a **Next** chip with the one recommended action. A click
+  goes to the screen where a stage is done (the board honours `#tool=ask|fx|out` and opens
+  that dock tool); a priced action navigates to the button that carries its price, a free
+  one on its own screen is pressed (Render). It replaces the open screen's six numbered
+  steps, the board's five-step strip and its `open · pass · board` pills; the pass gains
+  it (a 31 px row, paid for in the frame's height).
+
+### Fixed
+- **The open screen stopped contradicting itself (INTAKE M14).** With the looks paused its
+  header said "3 released · 9 queued" while its footer said every clip was released and
+  every card wore QUEUED beside a lit `released` flag: two definitions of released —
+  the journal's (every stage done) and the pass's (free stages done, picks from the
+  words while paused). They are now two words: a card's flag is *on the pass*, a clip
+  held only by the pause is *look paused* (badge, table row, counts), the title is
+  *Looks paused*, and the pass hint says how many are on the pass from their words only.
+  The paused box speaks to the editor — *Looks are paused — 9 clips, ~$X*, **Resume ·
+  ~$X** — and repeats the journal's reason only when the app wrote it (the budget cap, or
+  you), never a log line like "paused by the lead after the live kill test".
 
 ### Fixed
 - **The CLI banner no longer pushes the board's dock off the screen.** The dock sizes
@@ -44,6 +76,7 @@ same commit. Releases move entries into a dated version section.
   lane's run order).
 
 ### Documentation
+- **INTAKE M14 · The flow** — the milestone, its decisions and items ticked by commit.
 - **HANDOFF: the 2026-10-02 block** — the colour Ask, the claims audit and junk proposals
   merged; measured read-only on the real bins (Copper's junk proposals are exactly B1's
   nine; Killington's top-12 audit ≈ $0.88, unspent); suite 678 passed, 1 skipped.
