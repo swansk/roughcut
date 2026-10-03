@@ -17,7 +17,7 @@
   let timer = null, shown = null, last = null;
 
   const css = `
-  #cliFix { position: sticky; top: 0; z-index: 50; display: flex; gap: 14px;
+  #cliFix { position: relative; z-index: 50; display: flex; gap: 14px;
     align-items: center; flex-wrap: wrap; padding: 10px 16px;
     background: #3a2c0c; color: #f6e7c4; border-bottom: 1px solid #e0b050;
     font: 13px/1.4 system-ui, sans-serif; }
@@ -50,11 +50,16 @@
     last = b;
     const el = ensure();
     const fix = b && b.fix;
-    if (!fix) { el.hidden = true; el.innerHTML = ''; shown = null; return; }
+    if (!fix) {
+      if (!el.hidden) { el.hidden = true; el.innerHTML = ''; announce(); }
+      shown = null;
+      return;
+    }
     const key = fix.kind + '|' + fix.command + '|' + b.state;
     if (key === shown) return;          // nothing changed: leave a hovered button be
     shown = key;
     const checking = b.state === 'checking';
+    const appearing = el.hidden;
     el.hidden = false;
     el.innerHTML =
       `<span class="t">⚠ ${esc(fix.title)}</span>` +
@@ -64,6 +69,7 @@
       `<button data-act="check" ${checking ? 'disabled' : ''}>` +
       `${checking ? 'Checking…' : 'Check again'}</button>`;
     el.title = fix.detail || '';
+    if (appearing) announce();
     el.querySelector('[data-act="check"]').onclick = check;
     const copy = el.querySelector('[data-act="copy"]');
     if (copy) copy.onclick = async () => {
@@ -71,6 +77,9 @@
       catch (e) { copy.textContent = 'select it ↑'; }
     };
   }
+
+  // Pages that size themselves to the viewport (the board's dock) re-measure on this.
+  function announce() { window.dispatchEvent(new Event('clifix')); }
 
   function esc(s) {
     return String(s || '').replace(/[&<>"]/g, c =>

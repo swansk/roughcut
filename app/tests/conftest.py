@@ -60,6 +60,24 @@ def ledger(tmp_path_factory):
     mp.undo()
 
 
+@pytest.fixture(autouse=True)
+def no_cli_problem_carried_over():
+    """Every test starts with a CLI that needs nothing from Karl.
+
+    `inference.last_problem()` and the probe's `BACKEND["fix"]` are process-wide on
+    purpose — a failure in one job must reach every screen — so a test that scripts a
+    signed-out CLI left the banner up for every browser test after it, and the board's
+    dock overflowed the viewport by the banner's height (found by the flow lane's run
+    order, test_server then test_dock_ui)."""
+    inference = sys.modules.get("roughcut.inference")   # only once something loaded it
+    if inference is not None:
+        inference.clear_problem()
+    server = sys.modules.get("server")
+    if server is not None:
+        server.BACKEND.update(fix=None)
+    yield
+
+
 CLIP_S = 6.0
 
 # Fabricated so that snap's three passes each have something to bite on:

@@ -117,6 +117,32 @@ def rect(page, sel: str) -> dict:
 
 # ---------------------------------------------------------------- the dock itself
 
+def test_the_cli_banner_shows_above_the_board_and_the_dock_still_fits(page):
+    """Karl, 2026-10-03: the CLI needing him must be obvious. The banner arrives after
+    the dock has measured the header; the dock re-measures, so the page still never
+    scrolls — and Check again clears it once the CLI is fine."""
+    import server
+    server.BACKEND.update(fix={"kind": "login", "title": "The Claude CLI needs you to sign in",
+                               "command": "claude auth login", "why": "signed out",
+                               "detail": "Not logged in"})
+    try:
+        page.evaluate("window.cliFix.poll()")
+        page.wait_for_selector("#cliFix:not([hidden])")
+        assert "claude auth login" in page.inner_text("#cliFix")
+        assert "sign in needed" in page.evaluate(
+            "fetch('/api/status').then(r => r.json()).then(s => "
+            "{ paintBackend(s.backend); return document.querySelector('#backend').textContent; })")
+        page.wait_for_function(
+            "document.querySelector('#dock').getBoundingClientRect().bottom <= 901")
+        banner = rect(page, "#cliFix")
+        assert banner["top"] < rect(page, "header")["top"], "the banner is above the header"
+        assert rect(page, "#dock")["top"] >= rect(page, "header")["bottom"]
+    finally:
+        server.BACKEND.update(fix=None)
+    page.evaluate("window.cliFix.poll()")
+    page.wait_for_selector("#cliFix[hidden]", state="attached")
+
+
 def test_the_dock_fits_the_viewport_and_never_asks_the_page_to_scroll(page):
     """The old sidebar was ~2,900 px "sticky" beside a 900 px viewport. The dock is
     exactly the viewport's height under the header, whatever the header's height is,

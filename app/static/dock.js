@@ -72,7 +72,11 @@
   function fit() {
     const h = $('header');
     if (!h) return;
-    document.documentElement.style.setProperty('--hd', `${h.offsetHeight}px`);
+    // The CLI banner (/cli.js) sits above the header when the CLI needs Karl; the dock
+    // must give up its height too, or the page scrolls by exactly that much.
+    const b = document.getElementById('cliFix');
+    const banner = b && !b.hidden ? b.offsetHeight : 0;
+    document.documentElement.style.setProperty('--hd', `${h.offsetHeight + banner}px`);
   }
 
   /* ------------------------------------------------------------ keys overlay + popover */
@@ -109,6 +113,7 @@
     const h = $('header');
     if (h && 'ResizeObserver' in window) new ResizeObserver(fit).observe(h);
     window.addEventListener('resize', fit);
+    window.addEventListener('clifix', fit);        // the banner came or went
 
     const kb = $('#keysBtn');
     if (kb) kb.addEventListener('click', () => keys());

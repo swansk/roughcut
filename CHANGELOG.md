@@ -33,6 +33,16 @@ same commit. Releases move entries into a dated version section.
   pass and the open screen — what is wrong, the command with Copy, *Check again* — in
   the page's flow, never over a control. The header pill names the fix and both models.
 
+### Fixed
+- **The CLI banner no longer pushes the board's dock off the screen.** The dock sizes
+  itself to the header (`--hd`); the banner arrives later, above the header, so the
+  dock overflowed the viewport by the banner's height. `cli.js` announces a `clifix`
+  event when it comes or goes and `dock.js` counts it; the banner is in the page's
+  flow (relative, not sticky). The suite resets the process-wide CLI problem before
+  every test (`conftest.no_cli_problem_carried_over`): a scripted signed-out CLI in
+  test_server left the banner up for the browser tests after it (found by the flow
+  lane's run order).
+
 ### Documentation
 - **HANDOFF: the 2026-10-02 block** — the colour Ask, the claims audit and junk proposals
   merged; measured read-only on the real bins (Copper's junk proposals are exactly B1's
