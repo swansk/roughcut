@@ -32,6 +32,18 @@ same commit. Releases move entries into a dated version section.
   `GET /api/backend` carries `fix`; `/cli.js` puts it across the top of the board, the
   pass and the open screen — what is wrong, the command with Copy, *Check again* — in
   the page's flow, never over a control. The header pill names the fix and both models.
+- **The flow: where the project is, as one model (Karl 2026-10-03 #3, INTAKE M14).**
+  `roughcut/flow.py` (pure) turns facts the server reads off the files into seven stages —
+  Footage · Index · Brief · Pass · Cut · Polish · Render — each `done` / `running` (with
+  progress) / `ready` / `waiting` (on which stage, why) / `needs-you` (the reason and the
+  action) / `optional`, a one-line summary in the editor's words, the screen and dock tool
+  where it is done, and the counts it rests on; plus **one** `next` action and `blockers`
+  (the server's own `backend_fix`, so a signed-out CLI stands in front of every priced
+  stage). `GET /api/flow`; `POST /api/asks/answer` marks the newest Ask proposal answered so
+  a discarded one stops waiting on you. The index stage says its granularity in words from
+  the coarse sidecars' own `interval_s`. The journal gains a row word, `waiting` — free
+  stages settled, priced ones held by the pause — and `GET /api/index` carries what the
+  pause holds, priced (`waiting`), from the index job's own arithmetic.
 
 ### Documentation
 - **HANDOFF: the 2026-10-02 block** — the colour Ask, the claims audit and junk proposals

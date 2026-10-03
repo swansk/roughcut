@@ -634,6 +634,22 @@ class Journal:
     def released_clips(self) -> list[str]:
         return [c for c in self.ordered() if self.released(c)]
 
+    def waiting_on_priced(self, clip: str) -> bool:
+        """Paused priced stages are all that stand between this clip and release: the
+        free stages are settled, the footage is here, and the pause holds the rest.
+
+        The server releases such a clip to the pass anyway (picks from the words, the
+        design's fallback), so this is the third word a row can have besides
+        `released` and `queued` — and the one the open screen lacked when it said "9
+        queued" over cards the pass was already showing (INTAKE M14, I14.3)."""
+        rec = self._rec(clip)
+        if not self.paused_priced or rec.get("missing") or rec.get("parked"):
+            return False
+        if self.released(clip):
+            return False
+        return all(rec["stages"][s]["state"] in SETTLED
+                   for s in STAGES if s not in PRICED and s != "picks")
+
     # ------------------------------------------------------------- progress
 
     def _note_duration(self, stage: str, seconds: float) -> None:
@@ -665,7 +681,7 @@ class Journal:
         counts = {s: {st: 0 for st in STATES} for s in STAGES}
         pool_s: dict[str, float] = {}
         unmeasured: set[str] = set()
-        clips_n = released_n = missing_n = parked_n = 0
+        clips_n = released_n = missing_n = parked_n = waiting_n = 0
         done_stages = total_stages = 0
         rows = []
         for clip in self.ordered():
@@ -682,6 +698,9 @@ class Journal:
                 state = "released"
             elif any(rec["stages"][s]["state"] == "running" for s in STAGES):
                 state = "indexing"
+            elif self.waiting_on_priced(clip):
+                waiting_n += 1
+                state = "waiting"
             else:
                 state = "queued"
             for s in STAGES:
@@ -721,6 +740,8 @@ class Journal:
         return {
             "clips": clips_n, "released": released_n, "missing": missing_n,
             "parked": parked_n, "running": self.running(),
+            # on the pass from their words, their priced stages held by the pause
+            "waiting": waiting_n,
             "stages": counts,
             "done_stages": done_stages, "total_stages": total_stages,
             "pct": round(100.0 * done_stages / total_stages, 1) if total_stages else 0.0,

@@ -385,6 +385,25 @@ def test_pause_priced_skips_look_and_close_while_free_stages_continue(tmp_path):
     assert Journal.load(tmp_path / "bin.json").paused_priced
 
 
+def test_a_clip_held_only_by_the_pause_is_waiting_not_queued(tmp_path):
+    """INTAKE M14: the open screen said "9 queued" over clips the pass was already
+    showing. A clip whose free stages are settled while the priced ones are paused is
+    its own word — `waiting` — and is counted as such; it is not `released`."""
+    j = _journal(tmp_path, "A.MP4", "B.MP4")
+    _listen(j, "A.MP4")
+    _run(j, "A.MP4", "proxy", t=10.0)
+    _listen(j, "B.MP4", t=11.0)                     # B has no proxy yet: still queued
+    assert not j.waiting_on_priced("A.MP4"), "not paused: A is simply queued for its look"
+    j.pause_priced("budget cap $5.00 reached", now=12.0)
+    assert j.waiting_on_priced("A.MP4") and not j.waiting_on_priced("B.MP4")
+    p = j.progress(now=13.0)
+    rows = {r["clip"]: r["state"] for r in p["rows"]}
+    assert rows == {"A.MP4": "waiting", "B.MP4": "queued"}
+    assert p["waiting"] == 1 and p["released"] == 0
+    j.resume_priced(now=14.0)
+    assert j.progress(now=15.0)["waiting"] == 0
+
+
 # ---------------------------------------------------------------- progress
 
 def test_progress_counts_cost_and_a_rolling_mean_eta(tmp_path):
