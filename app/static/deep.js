@@ -130,7 +130,7 @@
   };
   const usd = (x) => `$${Number(x || 0).toFixed(2)}`;
 
-  /* "claude-opus-5-5" reads as "Opus 5.5"; anything else as itself. */
+  /* "claude-<family>-<major>-<minor>" reads as "<Family> <major>.<minor>"; anything else as itself. */
   function modelName(m) {
     if (!m) return '';
     return String(m).split(',').map((x) => {

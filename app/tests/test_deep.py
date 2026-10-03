@@ -320,7 +320,7 @@ def _sidecars(visual: Path) -> None:
         "clip": "CLIP_A.mp4", "mode": "fine", "windows_read": [[0.0, 4.0]],
         "frames_sampled": [0.0, 1.0, 2.0, 3.0, 4.0], "moments": [], "unusable": [],
         "params": {"interval_s": 1.0, "cols": 3, "rows": 5, "width": 480,
-                   "role": "judge", "model": "claude-opus-5-5"}}), encoding="utf-8")
+                   "role": "judge", "model": config.DEEP_MODEL}}), encoding="utf-8")
 
 
 def test_coverage_says_what_each_layer_looked_at_and_how(tmp_path, project):
@@ -338,7 +338,7 @@ def test_coverage_says_what_each_layer_looked_at_and_how(tmp_path, project):
         assert L["coarse"]["model"] is None and L["coarse"]["role"] == "analysis"
         assert L["coarse"]["width"] is None                       # not recorded, not guessed
         assert L["close"]["windows"] == [[0.0, 4.0]] and L["close"]["frames_recorded"]
-        assert L["close"]["model"] == "claude-opus-5-5"
+        assert L["close"]["model"] == config.DEEP_MODEL
         assert L["deep"]["read"] is False and L["deep"]["cap"] == deep.FRAME_CAP
         assert L["motion"]["cached"] is False
         # the claim and the close look's verdict on it

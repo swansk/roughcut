@@ -10,6 +10,8 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Changed
+- **M15 names no model ID outside config.py** (CLAUDE.md model-version policy): the deep
+  tests take `config.DEEP_MODEL`, and `deep.js` describes the name pattern it prettifies.
 - **The sheets record which model read them (Karl, 2026-10-03 #4).** `visual_pass.py`
   writes `params.model` — the model the backend reported for the sheets it read — beside
   the role it already wrote, so the coverage strip can say what read a clip rather than

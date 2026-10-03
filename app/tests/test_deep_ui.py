@@ -52,7 +52,7 @@ STORED = {"start": 3.5, "end": 5.5, "frames": [
                 "notable": False, "what": "the pattern moves", "frames": [4.2]}],
     "camera": {"mount": "static", "roll": "level", "evidence": "3.5"},
     "unsure": ["whether it loops"], "summary": "a test pattern scrolling",
-    "model": "claude-opus-5-5", "role": "judge", "calls": 2, "projected_usd": 0.9}
+    "model": config.DEEP_MODEL, "role": "judge", "calls": 2, "projected_usd": 0.9}
 
 
 def _free_port() -> int:
@@ -74,7 +74,7 @@ def _sidecars(visual: Path) -> None:
         "clip": "CLIP_A.mp4", "mode": "fine", "windows_read": [[3.0, 6.0]],
         "frames_sampled": [3.0, 4.0, 5.0, 6.0], "moments": [], "unusable": [],
         "params": {"interval_s": 1.0, "cols": 3, "rows": 5, "width": 480,
-                   "role": "judge", "model": "claude-opus-5-5"}}), encoding="utf-8")
+                   "role": "judge", "model": config.DEEP_MODEL}}), encoding="utf-8")
 
 
 @pytest.fixture(scope="module")
@@ -153,7 +153,8 @@ def test_the_inspector_shows_how_the_shot_s_clip_was_seen(bin_state, browser):
     # the granularity, in words, from the sidecars' own records
     legend = pg.inner_text(f"{box} .dv-legend")
     assert "a frame every 2 s" in legend and "model not recorded" in legend
-    assert "every 1 s in 1 window of 3 s" in legend and "Opus 5.5" in legend
+    assert "every 1 s in 1 window of 3 s, 480 px by " in legend
+    assert legend.count("model not recorded") == 2        # the coarse sheet and the ASR
     assert "keyframes at motion changes" in legend
     # the shot's range is marked on the strip, and the button is priced for it
     assert pg.is_visible(f"{box} .dv-markband")
