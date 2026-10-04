@@ -10,6 +10,13 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Changed
+- **The board listens on this machine only (Karl, 2026-10-04, ahead of an open-source
+  release).** `app/server.py` bound `0.0.0.0` with no login, so on a shared network
+  anyone could open the board and its footage. A new `--host` defaults to `127.0.0.1`
+  (WSL2 still forwards it to Windows `localhost:8765`); `--host 0.0.0.0` is the opt-in
+  for when forwarding breaks and the board is reached at the WSL IP, and the launch
+  prints a warning when it is used. The parser moved into `parse_args()` so a test
+  pins the default.
 - **The CLI stays signed in, and the sign-in runs from Windows (Karl, 2026-10-04: *"I
   keep losing access to claude in roughcut and then struggling to run auth in my command
   prompt (cmd not found)"*).** The WSL credentials file was found with both OAuth tokens

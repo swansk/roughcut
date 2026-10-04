@@ -5611,7 +5611,7 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
         threading.Thread(target=ensure_proxies, args=(clips,), daemon=True).start()
 
 
-def main() -> int:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Roughcut cut board.")
     ap.add_argument("--footage", type=Path, required=True,
                     help="folder of source clips — the only required argument")
@@ -5631,10 +5631,20 @@ def main() -> int:
                          "generalisable — see docs/HANDOFF.md)")
     ap.add_argument("--work", type=Path, default=Path.home() / "work" / "app")
     ap.add_argument("--port", type=int, default=87 * 100 + 65)   # 8765
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="address to listen on (default: this machine only). The "
+                         "board has no login and serves the footage, so 0.0.0.0 — "
+                         "every network the machine is on — is opt-in, e.g. when "
+                         "WSL's localhost forwarding breaks and the board is "
+                         "reached at the WSL IP")
     ap.add_argument("--no-proxies", action="store_true")
     ap.add_argument("--no-probe", action="store_true",
                     help="skip the one-call backend auth check at startup")
-    args = ap.parse_args()
+    return ap.parse_args(argv)
+
+
+def main() -> int:
+    args = parse_args()
 
     for tool in ("ffmpeg", "ffprobe", "uv"):
         if shutil.which(tool) is None:
@@ -5669,7 +5679,10 @@ def main() -> int:
         probe_backend()          # one call, in the background; result shows in the UI
 
     print(f"cut board on http://localhost:{args.port}  (edl: {STATE['edl'].name})", flush=True)
-    uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="warning")
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print(f"  !! listening on {args.host}: anyone who can reach this machine can "
+              f"open the board (no login)", flush=True)
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     return 0
 
 

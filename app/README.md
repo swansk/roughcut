@@ -21,7 +21,9 @@ wsl -d Ubuntu -- bash -lc "cd /mnt/c/Users/karl/Documents/Projects/roughcut && \
 ```
 
 Then open `http://localhost:8765` in Windows — WSL2 forwards localhost, so the browser side needs
-nothing.
+nothing. The board listens on this machine only; if forwarding breaks and you need the WSL IP
+(`hostname -I`), launch with `--host 0.0.0.0` — that opens it to every network the machine is
+on, and the board has no login.
 
 A folder of footage is the only required argument. If that bin has no EDL yet, one is
 scaffolded empty under `--work` (`~/work/app/projects/<bin>.edl.json`) and sidecars default to

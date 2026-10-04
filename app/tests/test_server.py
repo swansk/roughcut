@@ -2569,3 +2569,11 @@ def test_a_revision_reads_the_bin_as_context_not_constraint(client):
         assert prompt.index("## The editor's selects") < prompt.index("## Every clip available")
     finally:
         inference.set_backend(None)
+
+
+def test_the_board_listens_on_this_machine_only_unless_told_otherwise():
+    # No login and the footage on the wire: 0.0.0.0 on a hotel or dorm network hands
+    # the board to everyone on it, so every-interface is an explicit --host.
+    import server
+    assert server.parse_args(["--footage", "x"]).host == "127.0.0.1"
+    assert server.parse_args(["--footage", "x", "--host", "0.0.0.0"]).host == "0.0.0.0"
