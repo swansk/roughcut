@@ -1757,7 +1757,7 @@ def test_an_out_of_date_cli_is_named_with_the_command_that_fixes_it(client):
         client.post("/api/backend/probe")
         b = _await_probe(client)
         assert b["state"] == "failed"
-        assert b["fix"]["kind"] == "update" and b["fix"]["command"] == "claude update"
+        assert b["fix"]["kind"] == "update" and b["fix"]["command"] == 'wsl -e bash -lc "claude update"'
         assert client.get("/api/backend").json()["fix"]["kind"] == "update"
     finally:
         inference.set_backend(None)
@@ -1792,7 +1792,7 @@ def test_a_job_that_hits_a_signed_out_cli_raises_the_banner_and_a_success_clears
         with pytest.raises(inference.InferenceError):
             inference.complete("hi", role=config.ROLE_SKELETON)
         fix = client.get("/api/backend").json()["fix"]
-        assert fix["kind"] == "login" and fix["command"] == "claude auth login"
+        assert fix["kind"] == "login" and fix["command"] == inference.SIGNIN_COMMAND
         flaky.fail = False
         inference.complete("hi", role=config.ROLE_SKELETON)
         assert client.get("/api/backend").json()["fix"] is None

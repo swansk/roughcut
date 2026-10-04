@@ -7,3 +7,6 @@
 *.jpg binary
 *.jpeg binary
 *.otio text eol=lf
+
+# Windows batch files want CRLF; cmd.exe misreads some LF-only scripts
+*.cmd text eol=crlf

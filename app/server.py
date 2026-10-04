@@ -1725,8 +1725,10 @@ def cli_facts(fresh: bool = False) -> dict:
     except (OSError, subprocess.TimeoutExpired):
         facts["version"] = None
     try:
+        # With the year-long token (`inference.cli_env`) this reports signed in without
+        # checking the token is still good — an expired one is the probe's to catch.
         proc = subprocess.run(["claude", "auth", "status"], capture_output=True,
-                              text=True, timeout=15)
+                              text=True, timeout=15, env=inference.cli_env())
         auth = json.loads(proc.stdout or "{}")
         facts["logged_in"] = bool(auth.get("loggedIn"))
         facts["auth"] = auth.get("authMethod")

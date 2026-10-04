@@ -37,6 +37,50 @@ class BudgetExceeded(InferenceError):
     """The projected spend cap would be breached. Raised *before* the call."""
 
 
+# ------------------------------------------------------------ signing the CLI in
+#
+# Karl, 2026-10-04: *"I keep losing access to claude in roughcut and then struggling to
+# run auth in my command prompt to fix it (cmd not found)."* Two problems. The first is
+# the sign-in itself: `claude auth login` keeps a short-lived access token plus a
+# refresh token that rotates on every refresh, and this app runs several `claude -p` at
+# once (index, audit, themes, the probe). When the access token lapses they can all
+# refresh with the same refresh token; one wins and a loser's failed refresh wipes the
+# saved credentials — the WSL credentials file was found on 2026-10-04 with both tokens
+# emptied. A `claude setup-token` token lasts a year and is never refreshed, so there is
+# nothing to race over; when its file exists every CLI call carries it. The second is
+# the banner's command, which only ran in a WSL shell and was pasted into cmd.
+
+def cli_env() -> dict[str, str] | None:
+    """The environment for a `claude` child: ours plus the long-lived token, if one has
+    been made. None (inherit as-is) when there is no token file, or when the token is
+    already in the environment — an explicit export wins over the file."""
+    if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        return None
+    try:
+        token = config.cli_token_path().read_text().strip()
+    except OSError:
+        return None
+    return {**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": token} if token else None
+
+
+def _signin_command() -> str:
+    """The sign-in script, spelled so it runs where Karl pastes it. The server runs in
+    WSL on a repo under /mnt/<drive>/, so that is a Windows path to the .cmd launcher —
+    no spaces, so it runs as-is in cmd and PowerShell alike, and double-clicks from
+    Explorer. Anywhere else, the shell script."""
+    scripts = Path(__file__).resolve().parents[1] / "scripts"
+    m = re.match(r"^/mnt/([a-z])/(.*)$", scripts.as_posix())
+    if m:
+        return f"{m.group(1).upper()}:\\{m.group(2).replace('/', chr(92))}\\claude-signin.cmd"
+    return str(scripts / "claude-signin.sh")
+
+
+SIGNIN_COMMAND = _signin_command()
+# Everything else the banner asks for also runs inside WSL, so it is spelled to paste
+# into a Windows prompt; `bash -lc` because ~/.local/bin is only on a login shell's PATH.
+_IN_WSL = 'wsl -e bash -lc "{}"'
+
+
 # ------------------------------------------------------------ what to do about it
 #
 # Karl, 2026-10-03: *"make it easier for me to realize I need to grant claude cli
@@ -50,24 +94,24 @@ _DIAGNOSES = (
     ("update", re.compile(r"does not support this model|or newer is required|"
                           r"unrecognized_model|run 'claude update'", re.I),
      "The Claude CLI is too old for the model this app uses",
-     "claude update",
-     "Opus 5.5 needs Claude Code 2.1.280 or newer. Update it in a WSL terminal, then "
-     "check again."),
+     _IN_WSL.format("claude update"),
+     "Opus 5.5 needs Claude Code 2.1.280 or newer. Paste this into cmd or PowerShell, "
+     "then check again."),
     ("login", re.compile(r"/login|not logged in|log in|invalid api key|"
                          r"oauth token (has )?expired|authentication_error|"
                          r"invalid x-api-key|credentials", re.I),
      "The Claude CLI needs you to sign in",
-     "claude auth login",
-     "The CLI is not signed in (or its sign-in expired). Run this in a WSL terminal, "
-     "finish the sign-in in the browser it opens, then check again."),
+     SIGNIN_COMMAND,
+     "Double-click this file in Explorer (or paste it into cmd or PowerShell). It "
+     "signs the CLI in with a token that lasts a year, then re-checks for you."),
     ("permission", re.compile(r"permission_denials|need (your )?permission|"
                               r"permission to (read|use|access)|requires? approval|"
                               r"was (blocked|denied)", re.I),
      "The Claude CLI blocked a tool this app needs",
-     "claude",
+     _IN_WSL.format("claude"),
      "A call asked to read a frame from disk and the CLI refused. Roughcut allows only "
-     "the Read tool; a deny rule in ~/.claude/settings.json wins over that. Open "
-     "`claude` in WSL, run /permissions, allow Read, then check again."),
+     "the Read tool; a deny rule in ~/.claude/settings.json wins over that. Paste this "
+     "into cmd or PowerShell, run /permissions, allow Read, then check again."),
     ("limit", re.compile(r"usage limit|rate limit|rate_limit|\b429\b|overloaded", re.I),
      "The Claude plan's usage window is full",
      "",
@@ -292,7 +336,7 @@ class ClaudeCliBackend:
         t0 = time.time()
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True,
-                                  timeout=timeout)
+                                  timeout=timeout, env=cli_env())
         except FileNotFoundError as exc:
             # The likeliest failure on a fresh machine: `claude` lives in ~/.local/bin
             # and a non-login shell does not source .bashrc, so a server started the
@@ -334,7 +378,8 @@ class ClaudeCliBackend:
         t0 = time.time()
         try:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, text=True, bufsize=1)
+                                    stderr=subprocess.PIPE, text=True, bufsize=1,
+                                    env=cli_env())
         except FileNotFoundError as exc:
             raise InferenceError(
                 "claude CLI not found on PATH. It installs to ~/.local/bin, which a "

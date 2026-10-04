@@ -95,6 +95,15 @@ def backend_name() -> str:
     return os.environ.get("ROUGHCUT_BACKEND", "claude_cli")
 
 
+def cli_token_path() -> Path:
+    """Where the CLI backend looks for a long-lived subscription token (made by
+    `scripts/claude-signin.sh`, which runs `claude setup-token`). Outside the repo on
+    purpose — it is a credential — and only readable by its owner."""
+    return Path(os.environ.get(
+        "ROUGHCUT_CLAUDE_TOKEN_FILE",
+        Path.home() / ".config" / "roughcut" / "claude-token")).expanduser()
+
+
 def budget_usd() -> float:
     """Cap enforced on `projected_usd` on *both* backends (SPEC §7).
 

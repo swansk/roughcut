@@ -10,6 +10,18 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Changed
+- **The CLI stays signed in, and the sign-in runs from Windows (Karl, 2026-10-04: *"I
+  keep losing access to claude in roughcut and then struggling to run auth in my command
+  prompt (cmd not found)"*).** The WSL credentials file was found with both OAuth tokens
+  emptied: the login's access token is short-lived, its refresh token rotates, and
+  several concurrent `claude -p` refreshing at once can wipe it. `scripts/claude-signin.cmd`
+  (double-click, or paste its path into cmd/PowerShell) runs `scripts/claude-signin.sh`
+  in WSL, which makes a year-long `claude setup-token` token, checks it with one call,
+  saves it to `~/.config/roughcut/claude-token` (mode 600; `ROUGHCUT_CLAUDE_TOKEN_FILE`
+  overrides), and re-probes the board. `inference.cli_env()` hands that token to every
+  `claude` child as `CLAUDE_CODE_OAUTH_TOKEN` — never refreshed, so nothing to race.
+  The banner's commands now paste into a Windows prompt: the sign-in is that `.cmd`'s
+  Windows path, and update/permissions are wrapped in `wsl -e bash -lc "…"`.
 - **M15 names no model ID outside config.py** (CLAUDE.md model-version policy): the deep
   tests take `config.DEEP_MODEL`, and `deep.js` describes the name pattern it prettifies.
 - **The sheets record which model read them (Karl, 2026-10-03 #4).** `visual_pass.py`

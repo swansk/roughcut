@@ -13,6 +13,7 @@ can edit video. What must hold:
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -250,6 +251,54 @@ def test_cli_surfaces_not_logged_in(monkeypatch):
     backend = _cli_with(monkeypatch, LIVE_ERROR)
     with pytest.raises(inference.InferenceError, match="Not logged in"):
         backend.complete(inference.Request(prompt="hi"))
+
+
+def _capture_env(monkeypatch):
+    import subprocess as sp
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["env"] = kwargs.get("env")
+        return sp.CompletedProcess(cmd, 0, stdout=json.dumps(LIVE_SHAPE), stderr="")
+
+    monkeypatch.setattr(inference.subprocess, "run", fake_run)
+    return seen
+
+
+def test_cli_calls_carry_the_year_long_token_when_one_was_made(monkeypatch, tmp_path):
+    """Karl, 2026-10-04: the sign-in kept dropping. A `claude setup-token` token is never
+    refreshed, so concurrent calls cannot race each other out of it — but only if every
+    call carries it."""
+    token = tmp_path / "claude-token"
+    token.write_text("sk-ant-oat01-test\n")
+    monkeypatch.setenv("ROUGHCUT_CLAUDE_TOKEN_FILE", str(token))
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    seen = _capture_env(monkeypatch)
+    inference.ClaudeCliBackend().complete(inference.Request(prompt="hi"))
+    assert seen["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-test"
+    assert seen["env"]["PATH"] == os.environ["PATH"], "the rest of the env is kept"
+
+
+def test_cli_calls_inherit_the_env_without_a_token(monkeypatch, tmp_path):
+    monkeypatch.setenv("ROUGHCUT_CLAUDE_TOKEN_FILE", str(tmp_path / "absent"))
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    seen = _capture_env(monkeypatch)
+    inference.ClaudeCliBackend().complete(inference.Request(prompt="hi"))
+    assert seen["env"] is None
+    # an exported token wins over the file
+    (tmp_path / "absent").write_text("sk-ant-oat01-file")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-exported")
+    assert inference.cli_env() is None
+
+
+def test_the_banner_commands_paste_into_a_windows_prompt():
+    """The server runs in WSL but Karl pastes into cmd, where `claude` does not exist."""
+    signin = inference.diagnose("Not logged in · Please run /login")["command"]
+    assert signin == inference.SIGNIN_COMMAND and "claude-signin." in signin
+    if Path(__file__).resolve().as_posix().startswith("/mnt/"):
+        assert signin.endswith(".cmd") and " " not in signin and signin[1] == ":"
+    assert inference.diagnose("Run 'claude update'")["command"].startswith("wsl ")
+    assert inference.diagnose("permission_denials: Read")["command"].startswith("wsl ")
 
 
 def test_cli_missing_binary_explains_the_path_problem(monkeypatch):
