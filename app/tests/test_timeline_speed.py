@@ -368,8 +368,8 @@ def test_a_generated_clip_draws_a_block_that_says_what_it_is_and_plays(page, pro
     # the inspector: the summary in place of the transcript lines
     assert "black · 2.0 s" in page.locator("#inspector .lines:not(.seen)").inner_text()
     assert page.locator("#inspector .clip").inner_text() == "gen_black_test"
-    # it plays from the proxy like any other shot
-    blk.click()
+    # it plays from the proxy like any other shot (a double-click plays, M16 decision 6)
+    blk.dblclick()
     page.wait_for_function("player.playing && player.idx === 2", timeout=10000)
     page.wait_for_function(f"liveVideo().dataset.src === '/media/proxy/{GEN}'", timeout=10000)
     page.wait_for_function("liveVideo().currentTime > 0.3", timeout=10000)

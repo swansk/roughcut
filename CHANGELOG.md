@@ -234,6 +234,11 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **A click on a timeline block selects it and parks the monitor there, paused (INTAKE M16
+  I16.4, decision 6).** A click used to play the cut from the block (the strip's old
+  promise), so looking at a shot started its sound. Now the block is selected, the
+  playhead and the monitor sit on its first frame, and nothing plays; space or a
+  double-click on the block plays from there. ⇧-click and ⌘-click are unchanged.
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
   buttons called the model with no price: the empty board's *Ask for a first cut* and
   *Cut from the bin*, the Ask panel's *Ask* and *Cut from the bin*, a shot's *Ask*, and

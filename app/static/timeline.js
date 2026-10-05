@@ -132,7 +132,8 @@
  *   The module handles pointerdown/up on the V1 lane and the ruler. A pointerdown that
  *   moves more than 4 px before pointerup, or whose propagation a lane's own handler stops
  *   (a trim handle, a drag), never becomes a click here: a plain click on a block selects
- *   it and plays the cut from it (the strip's old promise, kept); ⇧-click ranges; ⌘/ctrl-
+ *   it and parks the monitor on its first frame, paused (INTAKE M16 decision 6; a double-
+ *   click plays the cut from it, as space does); ⇧-click ranges; ⌘/ctrl-
  *   click toggles; a click on the empty lane or the ruler clears the selection and seeks;
  *   dragging on the ruler scrubs. Keys (outside inputs): `+`/`=` and `-` zoom ×2 / ÷2,
  *   `\` fits, ⌘/ctrl + wheel zooms around the cursor, ⇧ + wheel pans, ⌘Z / ⌘⇧Z undo / redo.
@@ -879,6 +880,9 @@
     if (down && (Math.abs(e.clientX - down.x) > 4 || Math.abs(e.clientY - down.y) > 4)) down.moved = true;
   }
 
+  /* A plain click selects the block and parks the monitor on its first frame, paused
+   * (INTAKE M16 decision 6 — it used to play from there, so looking at a shot's strip
+   * started the sound). Space or a double-click plays. */
   function onLaneUp(e) {
     const d = down;
     down = null;
@@ -890,12 +894,18 @@
       else if (e.metaKey || e.ctrlKey) select([id], { add: true, source: 'click' });
       else {
         select([id], { source: 'click' });
-        if (hooks.play) hooks.play(indexOf(id));
+        seek(filmStart(id));
       }
       return;
     }
     select([], { source: 'click' });
     seek(eventTime(e));
+  }
+
+  function onLaneDbl(e) {
+    const b = e.target.closest('.blk');
+    if (!b || e.shiftKey || e.metaKey || e.ctrlKey || !hooks.play) return;
+    hooks.play(indexOf(b.dataset.id));
   }
 
   function onRulerDown(e) {
@@ -974,6 +984,7 @@
     lane.addEventListener('pointermove', onLaneMove);
     lane.addEventListener('pointerup', onLaneUp);
     lane.addEventListener('pointercancel', () => { down = null; });
+    lane.addEventListener('dblclick', onLaneDbl);
     el.ruler.addEventListener('pointerdown', onRulerDown);
     el.ruler.addEventListener('pointermove', onRulerMove);
     el.ruler.addEventListener('pointerup', onRulerUp);

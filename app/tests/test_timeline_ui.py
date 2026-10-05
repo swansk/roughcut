@@ -163,8 +163,12 @@ def test_plus_doubles_the_zoom_and_backslash_fits(page):
 
 def test_a_click_on_a_block_selects_it_and_the_inspector_and_the_index_selects_the_block(page):
     page.locator("#tl .blk").nth(1).click()
-    page.evaluate("pauseCut()")                 # the click also plays from there
     second = ids(page)[1]
+    # INTAKE M16 decision 6: a click selects and parks the monitor on the shot's first
+    # frame, paused — it no longer plays from there
+    assert not page.evaluate("player.playing"), "a click parks, it does not play"
+    assert page.evaluate("player.idx") == 1
+    assert page.evaluate("tl.state.playhead") == pytest.approx(2.0, abs=0.02)
     assert page.locator("#tl .blk.sel").count() == 1
     assert page.locator("#tl .blk.sel").get_attribute("data-id") == second
     assert page.evaluate("[...tl.state.sel]") == [second]
@@ -176,6 +180,12 @@ def test_a_click_on_a_block_selects_it_and_the_inspector_and_the_index_selects_t
     assert page.locator("#tl .blk.sel").get_attribute("data-id") == ids(page)[0]
     assert page.evaluate("tl.state.anchor") == ids(page)[0]
     assert page.locator("#inspector .clip").inner_text() == "CLIP_A"
+
+
+def test_a_double_click_on_a_block_plays_the_cut_from_it(page):
+    page.locator("#tl .blk").nth(1).dblclick()
+    page.wait_for_function("player.playing && player.idx === 1", timeout=10000)
+    assert page.evaluate("[...tl.state.sel]") == [ids(page)[1]]
 
 
 def test_shift_click_selects_the_range_and_cmd_click_toggles(page):

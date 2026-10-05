@@ -877,16 +877,21 @@ def test_the_cut_plays_through_from_the_proxies(page):
 
 
 def test_clicking_a_block_in_the_strip_jumps_the_monitor(page):
+    """INTAKE M16 decision 6: a click parks the monitor on the shot, paused; a double-
+    click (or space) plays from there."""
     blocks = page.locator("#tl .blk")
     assert blocks.count() == 2
-    blocks.nth(0).click()
+    blocks.nth(0).dblclick()
     page.wait_for_function("player.playing && player.idx === 0", timeout=10000)
     # shot A starts at 1.0 into its clip, not at the top of the proxy
     page.wait_for_function(
         "(() => { const v = document.querySelector('.screen video.live');"
         " return v.currentTime >= 1.0 && v.currentTime < 2.6; })()", timeout=10000)
     blocks.nth(1).click()
-    page.wait_for_function("player.playing && player.idx === 1", timeout=10000)
+    page.wait_for_function("!player.playing && player.idx === 1", timeout=10000)
+    page.wait_for_function(
+        "Math.abs(document.querySelector('.screen video.live').currentTime - 0.0) < 0.1",
+        timeout=10000)
     assert page.evaluate("sel") == 1, "the strip and the inspector select together"
     assert page.locator("#inspector .clip").inner_text() == "CLIP_B"
     assert page.locator("#tl .blk.sel").count() == 1
