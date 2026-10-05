@@ -95,6 +95,15 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **A proposal already waiting when the board opens is checked by itself (INTAKE M16
+  review, I16.5).** The FX tool checks a proposal the server has not checked (one made
+  before the server began checking every design), but it read `/api/fx` at start-up
+  before the board had loaded the cut: no proposal was on a shot of it, none was
+  checked, the rail counted none, and nothing read again until some job finished. Next
+  landed on the waiting card and it never said "✓ checked" (22 s probed; Killington's
+  I13.5 proposals are exactly this case). The board re-reads the effects once the cut is
+  drawn. New test in `test_fx_ui.py` that never calls `fx.refresh()` itself; it fails
+  without the fix.
 - **The pass's closing card no longer hides the screen's one blue under its scrim (INTAKE
   M16 review, C2 / I16.3).** When Next is not the cut — the index or a look paused, an
   effect waiting, the film not made — the blue goes on the header's Next chip, and the

@@ -719,6 +719,32 @@ def test_undo_after_an_in_place_accept_cannot_take_the_edit_back(page, project):
     assert d[0]["in"] == 1.5                                  # the trim stays too
 
 
+def test_a_proposal_waiting_when_the_board_opens_is_checked_by_itself(page):
+    """INTAKE M16 I16.5: the free check runs itself. The server checks every new design,
+    and the tool checks a proposal made before it did — but the tool read /api/fx at
+    start-up before the board had loaded the cut, found no proposal on a shot of it, and
+    never looked again until some job finished: Killington's waiting proposals (I13.5)
+    never said "✓ checked". Nothing here calls fx.refresh() by hand."""
+    import server
+    sid2 = shot_ids(page)[1]
+    fx.save(server.fx_home(), {
+        "id": "fx_boot01", "shot": sid2, "clip": "CLIP_B.MP4", "name": "slow motion",
+        "note": "slow motion on the hit", "why": "", "events": [{"t": 1.1, "x": 0.5, "y": 0.5}],
+        "status": "proposed", "edits": [{"op": "speed", "shot": sid2, "rate": 0.5,
+                                         "from": 1.0, "to": 1.4}],
+        "created": "2026-09-20T22:42:23"})
+    assert not effects(page)[0].get("verify")
+    page.reload()
+    page.wait_for_selector("#tl .blk")
+    page.wait_for_function("window.fx && fx.ready")
+    page.wait_for_function("fx.state.kicked.has('fx_boot01')", timeout=10000)
+    wait_effect(page, "fx_boot01", "e => !!e.verify", timeout=30)
+    open_fx(page, 1)
+    page.wait_for_function(
+        "(document.querySelector(\"#fx .fxcard[data-id='fx_boot01'] .fxcheck\") || {}).textContent === '✓ checked'",
+        timeout=30000)
+
+
 def test_discard_drops_the_proposal(page):
     e = design(page)
     page.locator("#fx .fxcard button[data-act=discard]").click()

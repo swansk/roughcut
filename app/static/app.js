@@ -3124,6 +3124,10 @@ async function boot() {
   };
   render();
   paintBinLine();
+  // The FX tool read /api/fx before the cut was here, so no proposal was on a shot of it:
+  // none counted on the rail, and one made before the server checked by itself was never
+  // checked (INTAKE M16 I16.5). Read again now that the cut is.
+  if (window.fx && typeof fx.refresh === 'function') fx.refresh();
   await refreshVersions();
   await offerLastProposal();
   // The job registry is server-side, so a reload lands on whatever is still going —
