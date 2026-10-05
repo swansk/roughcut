@@ -9,8 +9,7 @@ was released). Nothing anywhere answered *where am I, what is done, what should 
 next, and what is waiting on me*.
 
 So the answer is computed once, here, from facts the server reads off the files, and
-every screen draws the same thing from `GET /api/flow`. Seven stages, in the order a
-film is made:
+every screen reads it from `GET /api/flow`. Seven stages, in the order a film is made:
 
     Footage → Index → Brief → Pass → Cut → Polish → Render
 
@@ -28,6 +27,10 @@ board's dock `tool`), and the `counts` the summary rests on — the machine's ev
 rather than an assertion (Karl's rule). Then **one** `next`: the single recommended
 action, and `blockers`: the thing in the way of every priced stage (a signed-out CLI),
 with the server's own fix (`server.backend_fix`) — never re-derived here.
+
+The screens no longer draw the stages (INTAKE M16 decision 2: the seven-step bar came
+off every screen): /flow.js draws only `next`, as the one chip in each header. The
+stages stay; `next` is chosen from them.
 
 Pure: it never reads a file and never imports the server. `server.flow_facts()` builds
 the facts dict; the tests build it by hand.

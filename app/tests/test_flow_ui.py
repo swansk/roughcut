@@ -1,11 +1,10 @@
-"""The flow bar in a real browser, on all three screens (INTAKE M14).
+"""Next in a real browser, on all three screens (INTAKE M14, M16).
 
 Karl, 2026-10-03 (#3): "make the flow through various stages make more sense in the
-UI." The three screens had three navigation schemes; they now carry one bar, drawn by
-/flow.js from GET /api/flow. These tests drive each screen and check that it is the
-same bar — the same seven stages in the same states — that a click goes to the screen
-where a stage is done (on the board, with the right dock tool open), and that the old
-bars are gone rather than sitting beside it.
+UI." M14 gave every screen one bar of seven stages and a Next chip, drawn by /flow.js
+from GET /api/flow. M16 (Karl, 2026-10-04, "take things away") took the bar off every
+screen (decision 2) and kept Next as the one "what now": the chip is the only thing in
+`#flow`. These tests drive each screen and check exactly that.
 """
 
 from __future__ import annotations
@@ -21,8 +20,6 @@ import pytest
 playwright_api = pytest.importorskip("playwright.sync_api",
                                      reason="playwright not installed")
 from playwright.sync_api import sync_playwright  # noqa: E402
-
-KEYS = ["footage", "index", "brief", "pass", "cut", "polish", "render"]
 
 
 def _free_port() -> int:
@@ -77,57 +74,51 @@ def test_the_bar_script_is_served(client):
     assert "/api/flow" in r.text
 
 
-def bar(page) -> list[tuple[str, str]]:
-    page.wait_for_selector("#flow [data-stage=render]", timeout=15000)
-    return page.eval_on_selector_all(
-        "#flow .fs", "els => els.map(e => [e.dataset.stage, e.dataset.state])")
+def chip(page) -> str:
+    page.wait_for_selector("#flowNext", timeout=15000)
+    page.wait_for_function("window.flowBar && flowBar.state()", timeout=15000)
+    return page.locator("#flowNext").inner_text().strip()
 
 
 def open_screen(browser, url: str):
-    pg = browser.new_page(viewport={"width": 1280, "height": 900})
+    pg = browser.new_page(viewport={"width": 1440, "height": 900})
     pg.goto(url)
     return pg
 
 
-def test_one_bar_on_all_three_screens_with_the_same_stages(browser, live):
-    seen = {}
-    here = {}
+def test_no_step_bar_only_the_next_chip_on_all_three_screens(browser, live):
+    """M16 decision 2: the seven-step bar comes off every screen; Next stays. `#flow`
+    holds the chip and nothing else, on one line, and it says the same thing on the
+    board and the open screen (the pass says the round, while one is open)."""
+    said = {}
     for path in ("/", "/floor", "/open"):
         pg = open_screen(browser, live + path)
-        seen[path] = [tuple(x) for x in bar(pg)]
-        here[path] = pg.eval_on_selector_all(
-            "#flow .fs.here", "els => els.map(e => e.dataset.stage)")
-        # the old bars are gone, not hidden beside the new one
-        assert pg.locator("#steps").count() == 0, path
-        assert pg.locator(".step").count() == 0, path
-        assert pg.locator("#screens").count() == 0, path
-        assert pg.locator("#flowNext").count() == 1, path
-        # one row: the bar never wraps onto a second line
+        said[path] = chip(pg)
+        assert pg.locator("#flow a").count() == 1, path
+        assert pg.locator("#flow .fs, #flow [data-stage], #flow .sep").count() == 0, path
+        # the older bars are still gone too
+        for gone in ("#steps", ".step", "#screens"):
+            assert pg.locator(gone).count() == 0, (path, gone)
         h = pg.eval_on_selector("#flow", "el => el.getBoundingClientRect().height")
         assert h <= 26, (path, h)
         pg.close()
-    assert [k for k, _ in seen["/"]] == KEYS
-    assert seen["/"] == seen["/floor"] == seen["/open"], seen
-    assert here == {"/": ["cut", "polish", "render"], "/floor": ["pass"],
-                    "/open": ["footage", "index", "brief"]}
+    assert said["/"] == said["/open"], said
+    assert said["/"].startswith("Next"), said
 
 
-def test_a_stage_on_another_screen_navigates_and_opens_the_dock_tool(browser, live):
+def test_next_from_another_screen_lands_on_the_board_with_its_tool_open(browser, live):
+    """No render of this cut exists, so Next is the film's quick look: from /open the
+    chip goes to the board with the film tool ('out') open."""
     pg = open_screen(browser, live + "/open")
-    bar(pg)
-    pg.locator("#flow [data-stage=render]").click()
+    chip(pg)
+    nxt = pg.evaluate("flowBar.state().next")
+    if nxt["stage"] != "render":
+        pytest.skip(f"another test left this bin's next at {nxt['stage']}")
+    assert nxt["href"] == "/#tool=out"
+    pg.locator("#flowNext").click()
     pg.wait_for_url("**/#tool=out", timeout=10000)
     pg.wait_for_selector("#tl .blk", timeout=15000)
     pg.wait_for_function("window.dock && dock.current() === 'out'", timeout=5000)
-    # on the board itself, a board stage opens its tool without leaving the page
-    pg.evaluate("window.__stay = 1")
-    pg.locator("#flow [data-stage=cut]").click()
-    pg.wait_for_function("dock.current() === 'ask'", timeout=5000)
-    assert pg.evaluate("window.__stay") == 1, "the page did not reload"
-    # and the pass is a screen away
-    pg.locator("#flow [data-stage=pass]").click()
-    pg.wait_for_url("**/floor", timeout=10000)
-    assert [k for k, _ in bar(pg)] == KEYS
     pg.close()
 
 
@@ -138,7 +129,7 @@ def test_next_on_the_board_presses_render_because_render_is_free(browser, live):
 
     pg = open_screen(browser, live + "/")
     pg.wait_for_selector("#tl .blk", timeout=15000)
-    bar(pg)
+    chip(pg)
     nxt = pg.evaluate("flowBar.state().next")
     if nxt["stage"] != "render":
         pytest.skip(f"another test left this bin's next at {nxt['stage']}")

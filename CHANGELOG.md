@@ -9,6 +9,17 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Removed
+- **The seven-step bar, on every screen (INTAKE M16 I16.1, decision 2).** M14 drew
+  Footage › Index › Brief › Pass › Cut › Polish › Render as seven chips with ticks,
+  counts and "stale" at the top of /, /floor and /open; on Killington it was the third
+  header row on the board and Karl answered Q1 "the bar comes off". `/flow.js` now draws
+  only the **Next** chip into `#flow` (the one "what now"), keeping its landing
+  (`honourHash`, `land`, `go(target)`) and its free-action press. `GET /api/flow` still
+  computes the stages: Next is chosen from them. On the fixture bin at 1440×900 this takes
+  7 controls and ~20 words off each screen. Tests read a stage's state from
+  `flowBar.state()` instead of the bar.
+
 ### Docs
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 

@@ -109,9 +109,12 @@ def api(page, path: str) -> dict:
 
 
 def flow_state(page, stage: str) -> str:
-    """The flow bar's word on one stage (INTAKE M14) — the bar replaced the six steps."""
-    page.wait_for_selector(f"#flow [data-stage={stage}]", timeout=10000)
-    return page.locator(f"#flow [data-stage={stage}]").get_attribute("data-state")
+    """The flow's word on one stage (INTAKE M14), from /flow.js's own answer — the step
+    bar that drew it came off every screen (M16 decision 2); Next is chosen from it."""
+    page.wait_for_function(f"window.flowBar && flowBar.state()"
+                           f" && flowBar.state().stages.some((s) => s.key === '{stage}')",
+                           timeout=10000)
+    return page.evaluate(f"flowBar.state().stages.find((s) => s.key === '{stage}').state")
 
 
 def rows(page) -> list[dict]:
@@ -481,10 +484,10 @@ def test_index_the_footage_runs_the_journal_and_the_cap_pauses_the_priced_stages
     assert page.locator(".card .badge.waiting").count() == 3
     assert page.locator(".card .badge.waiting").first.inner_text().lower() == "look paused"
     assert "from the words only" in page.locator("#passHint").inner_text()
-    # and the flow bar says it is waiting on the editor, with the price
+    # and the flow says it is waiting on the editor, with the price
     page.wait_for_function(
-        "document.querySelector('#flow [data-stage=index]')"
-        " && document.querySelector('#flow [data-stage=index]').dataset.state === 'needs-you'",
+        "window.flowBar && flowBar.state()"
+        " && flowBar.state().stages.find((s) => s.key === 'index').state === 'needs-you'",
         timeout=10000)
     # the cap must not take the floor away: with the free stages done the floor's own
     # word (`/api/clips` `released`) says the pass may show them — picks from the words —
@@ -730,7 +733,7 @@ def test_propose_shows_chips_with_counts_and_keep_writes_exactly_the_ticked_ones
     assert page.locator("#changeBtn").is_visible()
     page.evaluate("flowBar.poll()")
     page.wait_for_function(
-        "document.querySelector('#flow [data-stage=brief]').dataset.state === 'done'",
+        "flowBar.state().stages.find((s) => s.key === 'brief').state === 'done'",
         timeout=10000)
     assert api(page, "/api/themes")["themes"] == ["the greeting", "the milk joke"]
 
@@ -976,7 +979,6 @@ def test_opening_another_bin_reloads_the_whole_page_for_it(page, project, bin_se
         assert s["footage"] == str(other) and s["clips"] == 1
         page.wait_for_function("window.flowBar && flowBar.state()"
                                " && flowBar.state().stages[0].counts.clips === 1", timeout=10000)
-        assert page.locator("#flow [data-stage=pass]").get_attribute("href") == "/floor"
         # and back, by its path typed into the field: the first bin's own EDL, not a new one
         page.keyboard.press("o")
         open_picker(page)
