@@ -234,6 +234,16 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **The film's one sentence tags moments, in place of themes (INTAKE M16 I16.2,
+  decision 8).** The themes step goes from the open screen; what it fed — tags and the
+  +0.25 lift on the pass's moments (`picks.theme_hits`), the index's `theme_hits`
+  priority term — now reads the EDL's `story`, for free: `picks.sentence_words` keeps
+  its content words (find.py's stopwords out, plus words any sentence about a film
+  carries — "about", "film", "being"; one tag per stem), and `picks.brief_tags` puts
+  any themes kept before the step went first. Killington's sentence, as the proposal quotes it, gives
+  *friends · skiing · killington · silly · hitting · rocks · skis*. `GET /api/picks`
+  passes `story` to `picks.build`; `index_facts` counts the same tags. Names stay in the
+  EDL as dictation's vocabulary; the themes endpoints stay.
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
   buttons called the model with no price: the empty board's *Ask for a first cut* and
   *Cut from the bin*, the Ask panel's *Ask* and *Cut from the bin*, a shot's *Ask*, and

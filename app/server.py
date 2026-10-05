@@ -1439,7 +1439,7 @@ def api_picks(order: str = "rank") -> JSONResponse:
     released = set(released_clips())
     themes = edl.get("themes") or []
     rows = picks.build(payload["clips"], payload["events"], themes=themes,
-                       telemetry=bin_telemetry(),
+                       story=edl.get("story"), telemetry=bin_telemetry(),
                        verdicts=edl["floor"]["verdicts"], selects=edl["selects"])
     junk_of = {r["clip"]: r["state"] for r in junk_rows(edl)}
     for p in rows:
@@ -3204,7 +3204,9 @@ def index_facts(clip: str) -> dict:
     if words is None:
         words = sum(len(u.get("words") or str(u.get("text", "")).split())
                     for u in transcript)
-    themes = [t for t in (read_edl().get("themes") or []) if isinstance(t, str)]
+    edl = read_edl()
+    # the sentence's words count as theme hits (INTAKE M16 decision 8)
+    themes = picks.brief_tags(edl.get("story"), edl.get("themes"))
     text = " ".join(str(u.get("text", "")) for u in transcript)
     hits = sum(1 for t in themes if find._tokens(t) and find._matched(find._tokens(t), text))
     tele = telemetry_peaks(clip)

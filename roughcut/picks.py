@@ -1,9 +1,10 @@
 """Picks: the moments the index proposes for the cutting room floor.
 
 A pick is a window of one clip with a reason and its **witnesses** — who saw it, what was
-heard, what a sensor felt, which theme it serves — assembled from evidence the pipeline
-already produces: the R8 speech candidates in the audio sidecars, the ranked events file
-the visual pass derives, an optional telemetry summary, and the editor's themes. It is a
+heard, what a sensor felt, which words of the brief it answers — assembled from evidence the
+pipeline already produces: the R8 speech candidates in the audio sidecars, the ranked events
+file the visual pass derives, an optional telemetry summary, and the editor's one sentence
+about the film (with any themes kept before the themes step went). It is a
 place to *look*, never a cut: the floor plays it, the human keeps or rejects it, and only a
 keep becomes a select in the bin.
 
@@ -214,6 +215,45 @@ def felt_witnesses(clip: str, telemetry: dict | None) -> list[dict]:
     return out
 
 
+# The brief (INTAKE M16 decision 8): the themes step went, and the one sentence about the
+# film — "What is this film about?" — tags moments in its place, for free. Each content
+# word of it is a tag: find.py's stopwords out, and the words any sentence about a film
+# carries ("about", "film", "being"), which would tag everything and so say nothing.
+# Themes an editor kept before still count; nothing writes new ones.
+SENTENCE_FILLER = frozenset({
+    "about", "being", "film", "movie", "also", "all", "lot", "lots", "having", "getting",
+    "going", "make", "made", "want", "would", "should", "could", "will", "from", "over",
+    "each", "other", "more", "most", "much", "many", "such", "own", "same", "not", "yes",
+    "too", "can", "has", "have", "had", "day", "days", "time", "people", "story",
+})
+MIN_TAG_LEN = 3
+MAX_SENTENCE_TAGS = 12
+
+
+def sentence_words(story: str | None) -> list[str]:
+    """The content words of the editor's sentence, in its order, one per stem
+    ("rock rocks" is one tag)."""
+    out: list[str] = []
+    for w in _tokens(story or ""):
+        if len(w) < MIN_TAG_LEN or w.isdigit() or w in SENTENCE_FILLER:
+            continue
+        if any(_matched([w], x) for x in out):
+            continue
+        out.append(w)
+    return out[:MAX_SENTENCE_TAGS]
+
+
+def brief_tags(story: str | None, themes: Iterable[str] | None = None) -> list[str]:
+    """What tags a moment: any kept themes, then the sentence's content words."""
+    tags = [str(t) for t in (themes or []) if isinstance(t, str) and t.strip()]
+    seen = {t.lower() for t in tags}
+    for w in sentence_words(story):
+        if w not in seen:
+            tags.append(w)
+            seen.add(w)
+    return tags
+
+
 def theme_hits(themes: list[str], witnesses: list[dict]) -> list[str]:
     """Which themes this pick's own words and sights answer for."""
     hits = []
@@ -335,6 +375,7 @@ def _pick_from(clip: str, group: list[dict], duration: float,
 
 def build(clips: dict[str, dict], events: list[dict], *,
           themes: list[str] | None = None,
+          story: str | None = None,
           telemetry: dict[str, dict] | None = None,
           verdicts: list[dict] | None = None,
           selects: list[dict] | None = None) -> list[dict]:
@@ -342,8 +383,10 @@ def build(clips: dict[str, dict], events: list[dict], *,
 
     `clips` is the model-facing dict the server already builds (clip → duration,
     transcript, candidates, visual); `events` is `events.load(...)`. Everything else is
-    optional and absent on a bin that has never been looked at or felt.
+    optional and absent on a bin that has never been looked at or felt. `story` is the
+    editor's sentence about the film: its words tag and lift picks like kept themes.
     """
+    themes = brief_tags(story, themes)
     out: list[dict] = []
     for clip, c in clips.items():
         witnesses = (heard_witnesses(clip, c)

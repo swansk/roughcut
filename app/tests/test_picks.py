@@ -252,6 +252,29 @@ def test_themes_tag_and_lift_matching_picks():
     assert themed["score"] == pytest.approx(plain["score"] + picks.THEME_BONUS)
 
 
+def test_the_sentence_s_content_words_tag_and_lift_picks_for_free():
+    """INTAKE M16 decision 8: the themes step went, and the editor's one sentence about
+    the film tags moments in its place. Its content words are the tags — not the
+    stopwords, nor the words any sentence about a film carries ("about", "film")."""
+    karl = ("This is about my friends and me skiing Killington, being silly, and hitting "
+            "some rocks with our skis.")
+    assert picks.sentence_words(karl) == ["friends", "skiing", "killington", "silly",
+                                          "hitting", "rocks", "skis"]
+    assert picks.sentence_words("rock rocks ROCK") == ["rock"], "one tag per stem"
+    assert picks.sentence_words("") == [] and picks.sentence_words(None) == []
+    clips = {"CLIP_A.MP4": _clip()}
+    plain = picks.build(clips, [])[0]
+    told = picks.build(clips, [], story="A film about pizza in the pocket")[0]
+    assert told["tags"] == ["pizza", "pocket"]
+    assert told["score"] == pytest.approx(plain["score"] + picks.THEME_BONUS)
+    assert picks.build(clips, [], story="a film about the snow")[0]["tags"] == []
+    # themes kept before the step went still count, first, and a word is not doubled
+    both = picks.build(clips, [], themes=["the pizza gag"], story="pizza")[0]
+    assert both["tags"] == ["the pizza gag", "pizza"]
+    assert both["score"] == pytest.approx(told["score"]), "one bonus, however many tags"
+    assert picks.brief_tags("Pizza", ["pizza"]) == ["pizza"]
+
+
 def test_stored_verdicts_reattach_by_overlap_and_keeps_win():
     clips = {"CLIP_A.MP4": _clip()}
     keep = {"id": "k_1", "clip": "CLIP_A.MP4", "start": 9.0, "end": 12.0,
