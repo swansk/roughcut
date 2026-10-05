@@ -394,6 +394,12 @@ def test_the_menu_is_the_way_to_the_footage_and_the_pass_with_the_projects_facts
     places(pg)
     pg.locator("#placeList .place", has_text="The footage").click()
     pg.wait_for_url("**/open", timeout=10000)
+    # the same word for the same bin: its words heard, no index run — "partly indexed"
+    # on the menu's footage row and on /open's headline (which said "not indexed yet")
+    pg.wait_for_function("document.querySelector('#headline').textContent.includes('indexed')",
+                         timeout=10000)
+    assert foot["facts"] == "3 clips · partly indexed", foot
+    assert pg.locator("#headline").inner_text() == "3 clips · 0:18 · partly indexed"
     pg.close()
 
 

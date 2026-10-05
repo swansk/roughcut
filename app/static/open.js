@@ -244,13 +244,19 @@ function renderSheet() {
   renderHow();
 }
 
-// "12 clips · 43:08 · Jan 18 + Jan 27" — or "· not indexed yet" on a new bin.
+// "12 clips · 43:08 · Jan 18 + Jan 27" — or "· not indexed yet" on a new bin ("· partly
+// indexed" when its words were heard before any index ran).
 function renderHeadline() {
   const d = O.clips, ix = O.index;
   if (!d) return;
   const days = daysText(O.days || []);
+  // the switcher's word for the same bin (/switcher.js footageFacts): "not indexed yet"
+  // only when nothing has been heard or looked at — words heard without a journal (a bin
+  // listened to before the index ran) is "partly indexed" there, and was "not indexed
+  // yet" here, on the same screen's menu
+  const some = d.clips.some((c) => c.analysed || c.looked);
   $('#headline').textContent = `${plural(d.clips.length, 'clip')} · ${clock(d.total_s)}`
-    + (ix && !ix.exists ? ' · not indexed yet' : days ? ` · ${days}` : '');
+    + (ix && !ix.exists ? (some ? ' · partly indexed' : ' · not indexed yet') : days ? ` · ${days}` : '');
 }
 
 // How it was indexed, in one line honest to the files (sidecars on disk, the project's

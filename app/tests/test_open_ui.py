@@ -161,8 +161,10 @@ def test_the_folder_reads_as_a_contact_sheet(page, project):
     assert page.locator("#hd #keysBtn").inner_text() == "?"
     assert page.locator("#hd #settingsBtn").inner_text() == "settings"
     assert "ROUGHCUT" not in hd.inner_text() and page.locator(".brand").count() == 0
-    # a new bin: the headline says it is not indexed yet; no second bin name, no telemetry
-    assert page.locator("#headline").inner_text() == "3 clips · 0:18 · not indexed yet"
+    # a bin whose words were heard but that no index has run on: "partly indexed", the
+    # bin · cut menu's word for it (test_flow_ui reads both on one server); no second
+    # bin name, no telemetry
+    assert page.locator("#headline").inner_text() == "3 clips · 0:18 · partly indexed"
     for gone in ("#binName", "#binTele", "#legend", "#openPass", "#passHint", "#links",
                  "#settingsLine", "#indexHint", "#priceDetail", "#sliderHint"):
         assert page.locator(gone).count() == 0, gone
