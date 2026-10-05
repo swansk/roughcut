@@ -137,6 +137,12 @@ same commit. Releases move entries into a dated version section.
   enabled only once it reads "Ask the model · ~$0.19". If the price cannot be fetched
   it says "price unavailable" and stays disabled. New API and UI tests (both failed
   before).
+- **The refused-play test waits for the refusal, not for any monitor message (M16 stage
+  0 review, test flake).** `test_a_refused_play_is_named_on_the_monitor` waited for
+  `#screenMsg` to show and read it at once; when the proxy was still opening at the
+  click, the monitor first says "opening CLIP_A…" and names the refusal only once the
+  metadata is in, so the assertion read the wrong line (seen twice in full-file runs
+  during the review fixes, never alone). It now waits for the refusal's own words.
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six

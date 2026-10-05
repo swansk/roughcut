@@ -977,8 +977,11 @@ def test_a_refused_play_is_named_on_the_monitor(page):
                              + 'document first.', 'NotAllowedError'));
     }""")
     page.locator("#playCut").click()
-    page.wait_for_selector("#screenMsg:not([hidden])", timeout=10000)
-    assert "refused to play" in page.locator("#screenMsg").inner_text()
+    # not any message: while the proxy is still below HAVE_CURRENT_DATA the monitor says
+    # "opening CLIP_A…" first, and the refusal follows once the metadata is in
+    page.wait_for_function(
+        "(() => { const m = document.querySelector('#screenMsg');"
+        " return !m.hidden && m.textContent.includes('refused to play'); })()", timeout=10000)
     assert "click the monitor" in page.locator("#toast").inner_text()
     page.wait_for_function("!player.playing", timeout=5000)
     assert page.locator("#playCut").inner_text().startswith("▶")
