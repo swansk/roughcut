@@ -5440,26 +5440,35 @@ def list_projects() -> dict:
     whether it has a journal — never a judgement."""
     current: Path = STATE["footage"]
     known = _registry()
+    # Keyed by the folder's real path: a bin reached by two names (~/footage is a
+    # symlink to /mnt/roughcut/footage on foxtrot) is one bin, listed once — the
+    # most recently opened record of it.
     rows: dict[str, dict] = {}
     for name, rec in known.items():
         if not isinstance(rec, dict) or not rec.get("footage"):
             continue
         folder = Path(rec["footage"])
-        rows[str(folder)] = {"name": name, "footage": str(folder), "known": True,
-                             "opened": rec.get("opened"), "_edl": rec.get("edl")}
+        key = os.path.realpath(folder)
+        if key in rows and (rows[key]["opened"] or 0) >= (rec.get("opened") or 0):
+            continue
+        rows[key] = {"name": name, "footage": str(folder), "known": True,
+                     "opened": rec.get("opened"), "_edl": rec.get("edl")}
     for folder in sorted(current.parent.iterdir()) if current.parent.is_dir() else []:
-        if folder.is_dir() and str(folder) not in rows and _count_videos(folder):
-            rows[str(folder)] = {"name": folder.name, "footage": str(folder),
-                                 "known": False, "opened": None, "_edl": None}
+        if folder.is_dir() and os.path.realpath(folder) not in rows and _count_videos(folder):
+            rows[os.path.realpath(folder)] = {"name": folder.name, "footage": str(folder),
+                                              "known": False, "opened": None, "_edl": None}
     out = []
-    for r in rows.values():
+    for key, r in rows.items():
         folder = Path(r["footage"])
+        here = key == os.path.realpath(current)
+        if here:
+            folder = current
         remembered = r.pop("_edl")
         # The cut this bin would open on: the one it was last on if it still exists,
         # else its own file; the row reports that cut's shots and how many cuts the
         # bin has, so the picker can say "cut · 21 shots · 3 cuts".
         edl_path = default_cut_path(folder.name)
-        if folder == current:
+        if here:
             edl_path = STATE["edl"]
         elif remembered and Path(remembered).is_file():
             edl_path = Path(remembered)
@@ -5472,13 +5481,13 @@ def list_projects() -> dict:
             except (OSError, ValueError):
                 segments = 0
         n_cuts = len(_cut_paths(folder.name))
-        if folder == current and STATE["edl"] not in _cut_paths(folder.name):
+        if here and STATE["edl"] not in _cut_paths(folder.name):
             n_cuts += 1
         out.append({**r, "exists": folder.is_dir(), "clips": _count_videos(folder),
                     "cut": edl_path.exists(), "segments": segments,
                     "cut_name": cut_name, "cuts": n_cuts,
                     "journal": (STATE["work"] / "index" / f"{folder.name}.json").exists(),
-                    "current": folder == current})
+                    "current": here})
     out.sort(key=lambda r: (not r["current"], -(r["opened"] or 0), r["name"]))
     return {"current": {"name": current.name, "footage": str(current),
                         "edl": str(STATE["edl"]), "clips": len(footage_clips()),

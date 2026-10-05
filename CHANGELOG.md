@@ -115,6 +115,12 @@ same commit. Releases move entries into a dated version section.
   it (a 31 px row, paid for in the frame's height).
 
 ### Fixed
+- **The bin · cut name reads right from the start, and each bin is listed once (INTAKE
+  I16.0 h).** The switcher's stylesheet was injected only when its panel first opened,
+  so the header read "killington-neutralmain" with no ▾ until then; it now loads at
+  boot. `/api/projects` keyed bins by the path as written, and on foxtrot `~/footage` is
+  a symlink to `/mnt/roughcut/footage`, so copper and killington were listed twice each;
+  rows are keyed by the real path now (the most recently opened record wins).
 - **The open screen stopped contradicting itself (INTAKE M14).** With the looks paused its
   header said "3 released · 9 queued" while its footer said every clip was released and
   every card wore QUEUED beside a lit `released` flag: two definitions of released —

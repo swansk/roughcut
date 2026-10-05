@@ -189,11 +189,19 @@
 
   /* -------------------------------------------------------------- the panel */
 
-  function mountPanel() {
-    if ($('#picker')) return;
+  /* At boot, not with the panel: the header's own name (#hdBin's spacing, its ▾) is in
+   * this sheet, and before the first open it read "killington-neutralmain". */
+  function mountStyle() {
+    if ($('#switcherCss')) return;
     const style = document.createElement('style');
+    style.id = 'switcherCss';
     style.textContent = CSS;
     document.head.appendChild(style);
+  }
+
+  function mountPanel() {
+    if ($('#picker')) return;
+    mountStyle();
     const el = document.createElement('div');
     el.id = 'picker';
     el.setAttribute('role', 'dialog');
@@ -406,6 +414,7 @@
   function boot() {
     const btn = $('#hdBin');
     if (!btn) return;
+    mountStyle();
     btn.setAttribute('aria-haspopup', 'dialog');
     btn.setAttribute('aria-expanded', 'false');
     btn.addEventListener('click', () => { if (S.open) close(); else open(); });

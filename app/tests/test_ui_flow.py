@@ -1709,3 +1709,15 @@ def test_saving_a_copy_flushes_the_autosave_first_and_the_board_moves_to_it(page
         server.switch_cut(original)
         if copy_path and Path(copy_path).exists():
             Path(copy_path).unlink()
+
+
+def test_the_switchers_name_is_styled_before_it_is_ever_opened(page):
+    """I16.0 (h): the switcher's sheet was injected with its panel, so until the first
+    open the header read "killington-neutralmain" — bin and cut run together, no ▾."""
+    page.wait_for_function(
+        "document.querySelector('#hdBin .cutname').textContent === 'edl'", timeout=10000)
+    assert page.locator("#picker").count() == 0, "the panel has not been opened"
+    after = page.evaluate("getComputedStyle(document.querySelector('#hdBin'), '::after').content")
+    assert "▾" in after, after
+    gap = page.evaluate("getComputedStyle(document.querySelector('#hdBin .cutname')).marginLeft")
+    assert gap == "6px", gap
