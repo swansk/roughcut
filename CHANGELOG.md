@@ -234,6 +234,16 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **The free check on an effect runs by itself (INTAKE M16 I16.5).** Proposals arrived
+  unchecked — the slow motion on Killington (`fx_d644520f`) never had a check run —
+  because the check waited for a Verify button on every card. The server now queues it
+  after every design, revise, nudge (`PUT /api/fx/{id}`) and revert: a proof render of
+  the one shot and the measured checklist, never a model call. It waits behind any
+  render of the cut ("waiting for the render to finish") and behind another check; a
+  check already waiting for an effect covers a newer change, because it reads the effect
+  when it starts, and `POST /api/fx/verify` joins the same queue. A check whose effect
+  changed while its proof rendered no longer writes the old copy back over the nudge.
+  Each check's job carries `fx_id`, so the FX tool can say "checking…" on its card.
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
   buttons called the model with no price: the empty board's *Ask for a first cut* and
   *Cut from the bin*, the Ask panel's *Ask* and *Cut from the bin*, a shot's *Ask*, and

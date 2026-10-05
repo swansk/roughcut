@@ -4720,6 +4720,7 @@ def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict 
         fx.save(fx_home(), e)
         _fx_sound(e)
         entry["result"] = {"id": fx_id}
+        _fx_autoverify(fx_id)                       # the free check, by itself (I16.5)
         n_ev, n_ed = len(e.get("events") or []), len(e.get("edits") or [])
         what = " · ".join(x for x in [f"{n_ev} moment{'s' if n_ev != 1 else ''}" if n_ev else "",
                                      f"{n_ed} change{'s' if n_ed != 1 else ''} to the cut" if n_ed else ""] if x)
@@ -4749,6 +4750,7 @@ def _fx_revise_job(job: str, fx_id: str, note: str) -> None:
             # the accepted one stays in the EDL until this proposal is accepted over it
             pass
         entry["result"] = {"id": fx_id}
+        _fx_autoverify(fx_id)
         entry.finish("done", detail=f"{new['name']} — revised, a proposal")
     except Exception as exc:  # noqa: BLE001
         entry.finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
@@ -4793,10 +4795,65 @@ def _fx_proof(e: dict, seg: dict) -> tuple[Path, Path]:
     return proof, base
 
 
+# The free check runs by itself (INTAKE M16 I16.5): after every design, revise, nudge
+# and revert, never a model call — a proof render of the one shot and the measured
+# checklist. Proposals arrived unchecked because the check waited for a Verify button
+# (the slow motion on Killington never had one run). One proof renders at a time, after
+# any render of the cut (a 4K encode owns the cores); a check already waiting for an
+# effect covers a newer change too, because it reads the effect when it starts.
+FX_VERIFY_SLOT = threading.Lock()
+FX_VERIFY_GUARD = threading.Lock()
+FX_VERIFY_WAITING: dict[str, str] = {}      # fx id → the job queued for it, not started
+FX_VERIFY_POLL_S = 1.0
+FX_SPEC_CHECKED = ("shot", "events", "overlay", "sound", "window", "edits")
+
+
+def _fx_render_running() -> bool:
+    return any(j["state"] not in progress.TERMINAL for j in RENDERS.values())
+
+
+def _fx_autoverify(fx_id: str) -> str | None:
+    """Queue the free check for an effect; returns its job id (the one already waiting
+    when there is one), or None when the effect is gone."""
+    with FX_VERIFY_GUARD:
+        waiting = FX_VERIFY_WAITING.get(fx_id)
+        if waiting and waiting in FX and FX[waiting]["state"] not in progress.TERMINAL:
+            return waiting
+        try:
+            name = _fx_get(fx_id).get("name") or "the effect"
+        except HTTPException:
+            return None
+        job = _fx_start("verify", f"Checking {name}", _fx_verify_job, fx_id, fx_id=fx_id)
+        FX_VERIFY_WAITING[fx_id] = job
+        return job
+
+
+def _fx_verify_wait(entry: progress.Job, job: str, fx_id: str) -> None:
+    """Behind any render, then behind another check; once started, a newer change to
+    this effect queues a check of its own."""
+    waited = False
+    while _fx_render_running():
+        if not waited:
+            entry.note("waiting for the render to finish")
+            waited = True
+        time.sleep(FX_VERIFY_POLL_S)
+    FX_VERIFY_SLOT.acquire()
+    with FX_VERIFY_GUARD:
+        if FX_VERIFY_WAITING.get(fx_id) == job:
+            FX_VERIFY_WAITING.pop(fx_id)
+
+
 def _fx_verify_job(job: str, fx_id: str) -> None:
     entry = FX[job]
+    slot = False
     try:
-        e = _fx_get(fx_id)
+        _fx_verify_wait(entry, job, fx_id)
+        slot = True
+        try:
+            e = _fx_get(fx_id)
+        except HTTPException:                       # discarded while it waited
+            entry.finish("done", detail="the effect is gone")
+            return
         seg = _fx_seg(e["shot"]) if not str(e.get("shot", "")).startswith("new:") else {"id": e["shot"], "clip": e.get("clip"), "in": 0, "out": 0}
         sc = load_sidecar(e["clip"])
         onset = (sc.get("tracks") or {}).get("onset") or None
@@ -4828,6 +4885,15 @@ def _fx_verify_job(job: str, fx_id: str) -> None:
             if edit_check:
                 v["checks"].insert(0, edit_check)
                 v["ok"] = bool(v["ok"]) and edit_check["ok"]
+        # The effect may have changed while its proof rendered (a nudge, a revise, an
+        # Accept that applied its edits): this checklist describes the old one, and the
+        # change has queued its own check — writing this back would also undo the change.
+        fresh = _fx_get(fx_id)
+        if {k: fresh.get(k) for k in FX_SPEC_CHECKED} != {k: e.get(k) for k in FX_SPEC_CHECKED}:
+            entry["result"] = {"id": fx_id, "ok": None}
+            entry.finish("done", detail="the effect changed meanwhile — checked again")
+            return
+        e = fresh
         e["verify"] = v
         _fx_put(e)
         entry["result"] = {"id": fx_id, "ok": bool(v.get("ok"))}
@@ -4836,13 +4902,24 @@ def _fx_verify_job(job: str, fx_id: str) -> None:
                      else "failed: " + ", ".join(failed)[:200])
     except Exception as exc:  # noqa: BLE001
         entry.finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
+    finally:
+        if slot:
+            FX_VERIFY_SLOT.release()
+        with FX_VERIFY_GUARD:
+            if FX_VERIFY_WAITING.get(fx_id) == job:
+                FX_VERIFY_WAITING.pop(fx_id)
+
+
+def _fx_start(kind: str, label: str, target, *args, fx_id: str | None = None) -> str:
+    job = uuid.uuid4().hex[:8]
+    FX[job] = progress.Job("fx", label, id=job, state="running", fx_kind=kind,
+                           **({"fx_id": fx_id} if fx_id else {}))
+    threading.Thread(target=target, args=(job, *args), daemon=True).start()
+    return job
 
 
 def _fx_job(kind: str, label: str, target, *args) -> JSONResponse:
-    job = uuid.uuid4().hex[:8]
-    FX[job] = progress.Job("fx", label, id=job, state="running", fx_kind=kind)
-    threading.Thread(target=target, args=(job, *args), daemon=True).start()
-    return JSONResponse({"job": job})
+    return JSONResponse({"job": _fx_start(kind, label, target, *args)})
 
 
 @app.get("/api/fx")
@@ -4904,7 +4981,7 @@ async def api_fx_verify(request: Request) -> JSONResponse:
     fx_id = str(body.get("id") or "")
     e = _fx_get(fx_id)
     _fx_seg(e["shot"])
-    return _fx_job("verify", f"Verifying {e.get('name', 'the effect')}", _fx_verify_job, fx_id)
+    return JSONResponse({"job": _fx_autoverify(fx_id)})
 
 
 FX_SPEC_KEYS = ("name", "why", "events", "overlay", "sound", "window")
@@ -4976,6 +5053,7 @@ async def api_fx_revert(request: Request) -> JSONResponse:
     e = fx.validate_effect(e, _fx_segments())
     _fx_put(e)
     _fx_sound(e)
+    _fx_autoverify(e["id"])
     return JSONResponse({"ok": True, "effect": _fx_urls(e)})
 
 
@@ -5058,6 +5136,7 @@ async def api_fx_update(fx_id: str, request: Request) -> JSONResponse:
     _fx_put(new)
     if body.get("sound") is not None:
         _fx_sound(new)
+    _fx_autoverify(fx_id)
     return JSONResponse(_fx_urls(new))
 
 
