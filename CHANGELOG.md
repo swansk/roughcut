@@ -115,6 +115,14 @@ same commit. Releases move entries into a dated version section.
   it (a 31 px row, paid for in the frame's height).
 
 ### Fixed
+- **Rendered films say when, from which cut, and once (INTAKE I16.0 k).** Killington's
+  ten renders span Jul 25 – Sep 8 and each row showed only a clock time; three were the
+  same 17-shot preview; none was the cut on the board and nothing said so. Rows read
+  "Sep 8, 10:05 PM · main · …" (`GET /api/renders` now carries each render's `cut`),
+  renders of the same cut, shots, profile, music and note fold into one row with "×3"
+  (the newest plays; the others are named on hover; renders too old to carry a shot
+  list never fold), and when no row is the cut on the board one line says "this cut
+  hasn't been made yet". "proposal … — not accepted" and "· this cut" are unchanged.
 - **A typed title's check looks once the title has typed (INTAKE I16.0 j).** The accepted
   title slide fx_b9e6a61c showed a red "not drawn where expected: 0.00s changed 1.153%
   bbox [0.4313, 0.1889, 0.5719, 0.3361]": `fx.verify` sampled 0.1 s after the event, when

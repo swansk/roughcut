@@ -3835,6 +3835,9 @@ def api_renders() -> JSONResponse:
             "duration_s": meta.get("duration_s"), "segments": meta.get("segments"),
             "planned_s": meta.get("planned_s"), "note": meta.get("note", ""),
             "music": meta.get("music"), "shots": meta.get("shots"),
+            # The cut it was made from (a bin has several); None on renders made
+            # before a bin could, which the row then simply does not name
+            "cut": meta.get("cut"),
             # Renders made before this profile existed carry no key — "preview"
             # is what they all were, and no width/height reads as "don't know",
             # never as "upscale to 4K".

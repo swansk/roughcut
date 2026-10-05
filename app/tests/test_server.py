@@ -639,6 +639,10 @@ def test_a_render_can_carry_a_label(client, project):
         time.sleep(0.5)
     listed = {r["name"]: r for r in client.get("/api/renders").json()["renders"]}
     assert listed[f"cut_{job}.mp4"]["note"] == "proposal abc123 — not accepted"
+    # and which cut it came from, now that a bin has several (I16.0 k)
+    import server
+    cut = server.cut_name_of(server.read_edl(), server.STATE["edl"])
+    assert cut and listed[f"cut_{job}.mp4"]["cut"] == cut
 
 
 # ------------------------------------------------------------------ render profiles

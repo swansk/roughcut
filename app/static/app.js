@@ -2584,16 +2584,47 @@ function loadVersion(v, slot) {
   versionSettled(slot);
 }
 
+/* "Sep 8, 10:05 PM" — the list spans weeks, and a clock time alone (three rows of
+ * "02:13 PM") said nothing about which day a film was made. */
+function renderWhen(v) {
+  return new Date(v.created * 1000).toLocaleString([],
+    { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+/* Renders of the same cut, the same shots and the same profile are one film made more
+ * than once (Killington had three identical 17-shot previews): one row, with a count.
+ * The newest stands for them. A render too old to carry its shot list is never folded —
+ * nothing says it is the same. */
+function foldRenders(list) {
+  const rows = [], seen = new Map();
+  list.forEach((v) => {
+    const key = v.shots ? JSON.stringify([v.cut || '', v.profile || 'preview', v.shots,
+      v.music || '', v.note || '']) : null;
+    const row = key && seen.get(key);
+    if (row) { row.also.push(v); return; }
+    const fresh = { v, also: [] };
+    if (key) seen.set(key, fresh);
+    rows.push(fresh);
+  });
+  return rows;
+}
+
 /* Rebuilds only the list, never the A/B slots — repainted on every edit so that
  * "this cut" tracks the timeline instead of going stale the moment anything is trimmed. */
 function paintVersions() {
   if (window.dock) dock.badge('out', (renderList || []).length);
   const box = $('#versions');
   if (!box) return;
-  box.innerHTML = renderList.length ? '' : '<div class="hint">no renders yet</div>';
-  renderList.forEach((v) => {
-    const when = new Date(v.created * 1000).toLocaleTimeString([],
-      { hour: '2-digit', minute: '2-digit' });
+  box.innerHTML = '';
+  // When no film is of the cut on the board, one line says so rather than leaving it to
+  // be worked out from the rows.
+  if (segs.length && !renderList.some(isThisCut)) {
+    box.innerHTML = '<div class="hint" id="cutUnmade">this cut hasn\u2019t been made yet</div>';
+  } else if (!renderList.length) {
+    box.innerHTML = '<div class="hint">no renders yet</div>';
+  }
+  foldRenders(renderList).forEach(({ v, also }) => {
+    const when = renderWhen(v);
     const row = document.createElement('div');
     row.className = 'ver';
     // Size and resolution on the row, because the button next to them starts a
@@ -2601,8 +2632,13 @@ function paintVersions() {
     const heft = [human(v.size), v.width ? `${v.width}x${v.height}` : '']
       .filter(Boolean).join(' · ');
     const building = v.review_state === 'building' ? ' · review copy building…' : '';
+    const times = also.length ? ` · ×${also.length + 1}` : '';
     row.innerHTML = `<span class="t">${escapeHtml(versionLabel(v))}
-      <span class="hint">· ${when}${heft ? ` · ${heft}` : ''}${building}</span></span>`;
+      <span class="hint">· ${escapeHtml(when)}${v.cut ? ` · ${escapeHtml(v.cut)}` : ''}${times}${heft ? ` · ${heft}` : ''}${building}</span></span>`;
+    if (also.length) {
+      row.title = `made ${also.length + 1} times, the same cut and shots — the newest plays; `
+        + `also ${also.map(renderWhen).join(', ')}`;
+    }
     ['A', 'B'].forEach((slot) => {
       const b = document.createElement('button');
       b.textContent = slot;

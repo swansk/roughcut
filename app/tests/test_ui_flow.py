@@ -1721,3 +1721,46 @@ def test_the_switchers_name_is_styled_before_it_is_ever_opened(page):
     assert "▾" in after, after
     gap = page.evaluate("getComputedStyle(document.querySelector('#hdBin .cutname')).marginLeft")
     assert gap == "6px", gap
+
+
+def test_render_rows_say_the_day_and_the_cut_and_fold_repeats(page):
+    """I16.0 (k): Killington's ten renders span Jul 25 – Sep 8 and each row said only a
+    clock time; three were the same 17-shot preview; none was the cut on the board, and
+    nothing said so. Rows carry the day and the cut, identical ones fold with a count,
+    and one line says when this cut has not been made."""
+    got = page.evaluate("""() => {
+      const other = [{clip: 'CLIP_C.MP4', in: 0, out: 1.5}];
+      const base = {size: 2e6, width: 320, height: 180, duration_s: 1.5, segments: 1,
+                    profile: 'preview', review_state: 'ready', url: '', review_url: '',
+                    download_url: '/x', download_name: 'x.mp4', note: '', music: null};
+      const t = (d) => new Date(d).getTime() / 1000;
+      renderList = [
+        {...base, name: 'cut_a.mp4', created: t('2026-09-08T22:05:00'), cut: 'main', shots: other},
+        {...base, name: 'cut_b.mp4', created: t('2026-08-23T16:10:00'), cut: 'main', shots: other},
+        {...base, name: 'cut_c.mp4', created: t('2026-08-23T14:13:00'), cut: 'main', shots: other},
+        {...base, name: 'cut_d.mp4', created: t('2026-08-22T18:54:00'), cut: 'main', shots: other,
+         note: 'proposal ed8134bb — not accepted'},
+        {...base, name: 'cut_e.mp4', created: t('2026-07-25T20:37:00'), shots: null},
+      ];
+      paintVersions();
+      const un = document.querySelector('#cutUnmade');
+      return {rows: [...document.querySelectorAll('#versions .ver')].map(
+                (r) => [r.textContent.replace(/\\s+/g, ' ').trim(), r.title]),
+              unmade: un && un.textContent};
+    }""")
+    rows = got["rows"]
+    assert len(rows) == 3, rows                      # a, b, c are one film made three times
+    assert "Sep 8, 10:05 PM" in rows[0][0] and "· main" in rows[0][0] and "×3" in rows[0][0]
+    assert "Aug 23" in rows[0][1], "the folded ones are still named, on hover"
+    assert "proposal ed8134bb — not accepted" in rows[1][0] and "×" not in rows[1][0]
+    assert "Jul 25" in rows[2][0]
+    assert not any("this cut" in r[0] for r in rows)
+    assert got["unmade"] == "this cut hasn’t been made yet"
+    # a render of the cut on the board: the row says so and the line goes
+    again = page.evaluate("""() => {
+      renderList[0].shots = segs.map((s) => ({clip: s.clip, in: s.in, out: s.out}));
+      paintVersions();
+      return {first: document.querySelector('#versions .ver').textContent,
+              unmade: !!document.querySelector('#cutUnmade')};
+    }""")
+    assert "this cut" in again["first"] and again["unmade"] is False
