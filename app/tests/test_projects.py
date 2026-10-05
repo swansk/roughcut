@@ -93,6 +93,33 @@ def test_the_picker_lists_the_bins_it_knows_and_the_folders_next_door(tmp_path, 
         assert known[project["footage"].name]["footage"] == str(project["footage"])
 
 
+def test_a_bin_reached_by_two_names_is_listed_once(tmp_path, project):
+    """I16.0 (h): on foxtrot ~/footage is a symlink to /mnt/roughcut/footage, and the
+    picker listed copper and killington twice each — once by the name the registry
+    remembered, once by the folder next door. Rows are keyed by the real path."""
+    other = project["footage"].parent / "other-trip"
+    other.mkdir(exist_ok=True)
+    if not (other / "GX01.MP4").exists():
+        _make_clip(other / "GX01.MP4")
+    alias = tmp_path / "footage-link"
+    alias.symlink_to(project["footage"].parent, target_is_directory=True)
+    (tmp_path / "projects.json").write_text(json.dumps({
+        "other-trip": {"footage": str(alias / "other-trip"), "edl": None,
+                       "opened": 1.0, "cuts": []},
+        # the bin on the board, remembered once under the other name
+        project["footage"].name: {"footage": str(alias / project["footage"].name),
+                                  "edl": None, "opened": 2.0, "cuts": []},
+    }), encoding="utf-8")
+    with _fresh(tmp_path, project) as c:
+        rows = c.get("/api/projects").json()["projects"]
+        names = [r["name"] for r in rows]
+        assert names.count("other-trip") == 1, rows
+        assert names.count(project["footage"].name) == 1, rows
+        assert [r["name"] for r in rows if r["current"]] == [project["footage"].name]
+        mine = next(r for r in rows if r["name"] == "other-trip")
+        assert mine["known"] is True and mine["clips"] == 1
+
+
 def test_opening_another_bin_repoints_everything_without_a_relaunch(tmp_path, project):
     """I5.4: the same path main() takes, at runtime. The other bin gets its own scaffolded
     EDL, sidecars, proxies and journal paths; the per-clip caches do not leak across."""

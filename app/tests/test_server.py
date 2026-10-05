@@ -639,6 +639,10 @@ def test_a_render_can_carry_a_label(client, project):
         time.sleep(0.5)
     listed = {r["name"]: r for r in client.get("/api/renders").json()["renders"]}
     assert listed[f"cut_{job}.mp4"]["note"] == "proposal abc123 — not accepted"
+    # and which cut it came from, now that a bin has several (I16.0 k)
+    import server
+    cut = server.cut_name_of(server.read_edl(), server.STATE["edl"])
+    assert cut and listed[f"cut_{job}.mp4"]["cut"] == cut
 
 
 # ------------------------------------------------------------------ render profiles
@@ -1149,6 +1153,32 @@ def test_a_plan_survives_the_browser_that_asked_for_it(client, project):
     assert record["plan"]["segments"][0]["why"] == "recoverable"
     assert record["note"] == "build it around the milk"
     assert record["created"] > 0
+
+
+def test_the_last_proposal_is_offered_only_while_it_waits(tmp_path, project):
+    """I16.0 (l): "last proposal — 21 shots, 40 days ago · show it" was offered on every
+    load. /api/asks/latest says whether the record still waits — the flow's own
+    `ask_pending` rule: not answered, and newer than the cut on disk."""
+    import server
+
+    with _fresh(tmp_path, project) as c:
+        assert c.get("/api/asks/latest").json() == {"record": None, "pending": False}
+        asks = server.STATE["asks"]
+        asks.mkdir(parents=True, exist_ok=True)
+        now = server.STATE["edl"].stat().st_mtime
+        rec = {"job": "a1", "created": now + 60, "note": "n", "story": "",
+               "plan": {"segments": [{"clip": "CLIP_A.MP4", "in": 0.0, "out": 1.0, "why": ""}]}}
+        (asks / "a1.json").write_text(json.dumps(rec), encoding="utf-8")
+        got = c.get("/api/asks/latest").json()
+        assert got["record"]["job"] == "a1" and got["pending"] is True
+        assert c.post("/api/asks/answer", json={"answer": "discard"}).status_code == 200
+        got = c.get("/api/asks/latest").json()
+        assert got["record"]["job"] == "a1" and got["pending"] is False, "answered"
+        # unanswered but older than the cut on disk: not waiting either
+        old = {**rec, "job": "a0", "created": now - 40 * 86400}
+        (asks / "a0.json").write_text(json.dumps(old), encoding="utf-8")
+        got = c.get("/api/asks/latest").json()
+        assert got["record"]["job"] == "a0" and got["pending"] is False
 
 
 def test_first_cut_without_any_analysis_says_so(tmp_path, project):
@@ -1733,10 +1763,13 @@ def test_probe_reports_a_working_backend(client):
         inference.set_backend(None)
 
 
-def test_an_out_of_date_cli_is_named_with_the_command_that_fixes_it(client):
+def test_an_out_of_date_cli_is_named_with_the_command_that_fixes_it(client, monkeypatch):
     """Karl, 2026-10-03: make it easy to realise the CLI needs him. The deep model
     failing on an old CLI comes back as a fix — what, why, and the one command."""
     from roughcut import config, inference
+
+    # the words depend on the board's host (I16.0 m); this one is the WSL laptop's
+    monkeypatch.setattr(inference, "HOST", {"wsl": True, "name": "laptop"})
 
     class OldCli:
         name = "old"

@@ -147,6 +147,50 @@ same commit. Releases move entries into a dated version section.
   any such keep already in the EDL out of what it hands on — the Bin, its counts, the
   pass's and the flow's — so they agree. A read never rewrites the EDL; the old keep
   leaves the file on the next write made for another reason.
+- **On the board plain U no longer undoes, and ⌫ takes out only a shot you chose (INTAKE
+  I16.0 n).** U means "later" on the pass and meant "undo" on the board; undo is ⌘Z
+  (the keys sheet, the undo button's tooltip and the proposal toasts say so). ⌫ / Del
+  ripple-deleted whatever was selected, and the board selects on its own — the first
+  shot at load, the shot under the playhead as the cut plays, the shot handed on after a
+  delete — so a pass habit (⌫ = previous moment) took a shot out of the cut. ⌫ / Del now
+  need a selection somebody made (a click on a block, a key that selects); otherwise
+  they say "click a shot to choose it". X is unchanged.
+- **The CLI banner's commands are right for the box the board runs on (INTAKE I16.0 m).**
+  The board runs natively on foxtrot now, and the banner still said `wsl -e bash -lc
+  "claude update"` and "Double-click this file in Explorer", for a path that exists only
+  on foxtrot. `inference.HOST` reads the host once (WSL when `/proc/version` says
+  microsoft; the hostname): under WSL the words are unchanged; on a native box the
+  commands are plain — `claude update`, `claude` then /permissions, and the sign-in as
+  `bash <repo>/scripts/claude-signin.sh` — with "Run this on foxtrot (from another
+  machine, `ssh foxtrot` first)". Tests inject the host.
+- **"Last proposal" is offered only while it waits (INTAKE I16.0 l).** The board offered
+  "last proposal — 21 shots, 40 days ago · show it" on every load, from an Ask answered
+  weeks ago. `GET /api/asks/latest` now says whether the record is `pending` — the flow's
+  own `ask_pending` rule (not answered, newer than the cut on disk) — and the link shows
+  only then; a Discard hides it at once. A waiting paid proposal is never hidden.
+- **Rendered films say when, from which cut, and once (INTAKE I16.0 k).** Killington's
+  ten renders span Jul 25 – Sep 8 and each row showed only a clock time; three were the
+  same 17-shot preview; none was the cut on the board and nothing said so. Rows read
+  "Sep 8, 10:05 PM · main · …" (`GET /api/renders` now carries each render's `cut`),
+  renders of the same cut, shots, profile, music and note fold into one row with "×3"
+  (the newest plays; the others are named on hover; renders too old to carry a shot
+  list never fold), and when no row is the cut on the board one line says "this cut
+  hasn't been made yet". "proposal … — not accepted" and "· this cut" are unchanged.
+- **A typed title's check looks once the title has typed (INTAKE I16.0 j).** The accepted
+  title slide fx_b9e6a61c showed a red "not drawn where expected: 0.00s changed 1.153%
+  bbox [0.4313, 0.1889, 0.5719, 0.3361]": `fx.verify` sampled 0.1 s after the event, when
+  a typewriter has drawn two characters high on the first line, and tested the block's
+  centre (0.5, 0.5) against them. A text shape with a reveal is now sampled when it has
+  revealed (`len(text) / cps` after its start for a typewriter, 0.4 s for a fade, plus a
+  frame), kept inside the overlay, before the shape fades out and inside the shot; other
+  overlays are sampled as before. Re-run locally on that title's own proof and base
+  (fetched read-only from the board): picture_landed passes.
+- **The bin · cut name reads right from the start, and each bin is listed once (INTAKE
+  I16.0 h).** The switcher's stylesheet was injected only when its panel first opened,
+  so the header read "killington-neutralmain" with no ▾ until then; it now loads at
+  boot. `/api/projects` keyed bins by the path as written, and on foxtrot `~/footage` is
+  a symlink to `/mnt/roughcut/footage`, so copper and killington were listed twice each;
+  rows are keyed by the real path now (the most recently opened record wins).
 - **The open screen stopped contradicting itself (INTAKE M14).** With the looks paused its
   header said "3 released · 9 queued" while its footer said every clip was released and
   every card wore QUEUED beside a lit `released` flag: two definitions of released —

@@ -2131,7 +2131,7 @@ async function snap() {
   const before = total();
   segs = data.segments;
   render();
-  toast(`snapped: ${fmt(before)} → ${fmt(total())} (undo with u)`, 4000);
+  toast(`snapped: ${fmt(before)} → ${fmt(total())} (undo with ⌘Z)`, 4000);
 }
 
 /* Ask — the interject loop. A revision arrives as a *proposal*: shown as a diff,
@@ -2231,8 +2231,10 @@ function ago(seconds) {
 }
 
 async function offerLastProposal() {
-  const { record } = await (await fetch('/api/asks/latest')).json();
-  if (!record) return;
+  // Only while it still waits (I16.0 l): answered, or older than the cut on disk, it is
+  // not a proposal any more — "last proposal — 21 shots, 40 days ago" was offered forever.
+  const { record, pending } = await (await fetch('/api/asks/latest')).json();
+  if (!record || !pending) return;
   const el = $('#lastAsk');
   el.style.display = 'block';
   el.innerHTML = `last proposal — ${record.plan.segments.length} shots,
@@ -2341,7 +2343,7 @@ function acceptProposal() {
   if (cutToo) pushUndo('proposal');     // a colour-only proposal has no cut to undo
   segs = pendingPlan.segments.map((s) => ({ ...s }));
   // Segments and colour in the one save below (INTAKE I10.5). Colour is not on the
-  // undo stack (I10.4: a setting, like the music), so `u` takes back the cut only.
+  // undo stack (I10.4: a setting, like the music), so ⌘Z takes back the cut only.
   if (graded) {
     colour = mergeColour(colour, pendingPlan.colour);
     tidyColour();
@@ -2352,14 +2354,15 @@ function acceptProposal() {
   render();
   save();                       // straight to disk; a 16-shot cut is not "in progress"
   answerProposal('accept');
-  toast(!graded ? 'applied — undo with u'
-    : cutToo ? 'applied, cut and colour — u undoes the cut; the grade is in the inspector'
+  toast(!graded ? 'applied — undo with ⌘Z'
+    : cutToo ? 'applied, cut and colour — ⌘Z undoes the cut; the grade is in the inspector'
       : 'colour applied — the grade is in the inspector', graded ? 5000 : undefined);
 }
 
 function rejectProposal() {
   pendingPlan = null;
   $('#proposal').style.display = 'none';
+  $('#lastAsk').style.display = 'none';      // answered: not offered again
   toast('discarded');
   answerProposal('discard');
 }
@@ -2584,16 +2587,47 @@ function loadVersion(v, slot) {
   versionSettled(slot);
 }
 
+/* "Sep 8, 10:05 PM" — the list spans weeks, and a clock time alone (three rows of
+ * "02:13 PM") said nothing about which day a film was made. */
+function renderWhen(v) {
+  return new Date(v.created * 1000).toLocaleString([],
+    { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+/* Renders of the same cut, the same shots and the same profile are one film made more
+ * than once (Killington had three identical 17-shot previews): one row, with a count.
+ * The newest stands for them. A render too old to carry its shot list is never folded —
+ * nothing says it is the same. */
+function foldRenders(list) {
+  const rows = [], seen = new Map();
+  list.forEach((v) => {
+    const key = v.shots ? JSON.stringify([v.cut || '', v.profile || 'preview', v.shots,
+      v.music || '', v.note || '']) : null;
+    const row = key && seen.get(key);
+    if (row) { row.also.push(v); return; }
+    const fresh = { v, also: [] };
+    if (key) seen.set(key, fresh);
+    rows.push(fresh);
+  });
+  return rows;
+}
+
 /* Rebuilds only the list, never the A/B slots — repainted on every edit so that
  * "this cut" tracks the timeline instead of going stale the moment anything is trimmed. */
 function paintVersions() {
   if (window.dock) dock.badge('out', (renderList || []).length);
   const box = $('#versions');
   if (!box) return;
-  box.innerHTML = renderList.length ? '' : '<div class="hint">no renders yet</div>';
-  renderList.forEach((v) => {
-    const when = new Date(v.created * 1000).toLocaleTimeString([],
-      { hour: '2-digit', minute: '2-digit' });
+  box.innerHTML = '';
+  // When no film is of the cut on the board, one line says so rather than leaving it to
+  // be worked out from the rows.
+  if (segs.length && !renderList.some(isThisCut)) {
+    box.innerHTML = '<div class="hint" id="cutUnmade">this cut hasn\u2019t been made yet</div>';
+  } else if (!renderList.length) {
+    box.innerHTML = '<div class="hint">no renders yet</div>';
+  }
+  foldRenders(renderList).forEach(({ v, also }) => {
+    const when = renderWhen(v);
     const row = document.createElement('div');
     row.className = 'ver';
     // Size and resolution on the row, because the button next to them starts a
@@ -2601,8 +2635,13 @@ function paintVersions() {
     const heft = [human(v.size), v.width ? `${v.width}x${v.height}` : '']
       .filter(Boolean).join(' · ');
     const building = v.review_state === 'building' ? ' · review copy building…' : '';
+    const times = also.length ? ` · ×${also.length + 1}` : '';
     row.innerHTML = `<span class="t">${escapeHtml(versionLabel(v))}
-      <span class="hint">· ${when}${heft ? ` · ${heft}` : ''}${building}</span></span>`;
+      <span class="hint">· ${escapeHtml(when)}${v.cut ? ` · ${escapeHtml(v.cut)}` : ''}${times}${heft ? ` · ${heft}` : ''}${building}</span></span>`;
+    if (also.length) {
+      row.title = `made ${also.length + 1} times, the same cut and shots — the newest plays; `
+        + `also ${also.map(renderWhen).join(', ')}`;
+    }
     ['A', 'B'].forEach((slot) => {
       const b = document.createElement('button');
       b.textContent = slot;
@@ -2722,7 +2761,7 @@ document.addEventListener('keydown', (e) => {
   const k = e.key;
   if (k === 'j') { sel = Math.min(segs.length - 1, sel + 1); paint(); scrollSel(); }
   else if (k === 'k') { sel = Math.max(0, sel - 1); paint(); scrollSel(); }
-  else if (k === 'u') undo();
+  // no plain `u`: on the pass U is "later" (I16.0 n); undo is ⌘Z, the foundation's
   else if (k === 'x') { pushUndo('remove'); segs.splice(sel, 1); render(); }
   else if (k === '[') { pushUndo('trim'); nudge(sel, 'in', -step); render(); }
   else if (k === ']') { pushUndo('trim'); nudge(sel, 'in', step); render(); }

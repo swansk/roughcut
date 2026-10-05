@@ -13,6 +13,7 @@ can edit video. What must hold:
 from __future__ import annotations
 
 import json
+import shlex
 import os
 import sys
 from pathlib import Path
@@ -291,14 +292,55 @@ def test_cli_calls_inherit_the_env_without_a_token(monkeypatch, tmp_path):
     assert inference.cli_env() is None
 
 
-def test_the_banner_commands_paste_into_a_windows_prompt():
-    """The server runs in WSL but Karl pastes into cmd, where `claude` does not exist."""
-    signin = inference.diagnose("Not logged in · Please run /login")["command"]
-    assert signin == inference.SIGNIN_COMMAND and "claude-signin." in signin
+def test_the_banner_commands_paste_into_a_windows_prompt(monkeypatch):
+    """Under WSL Karl pastes into cmd, where `claude` does not exist."""
+    monkeypatch.setattr(inference, "HOST", {"wsl": True, "name": "laptop"})
+    signin = inference.diagnose("Not logged in · Please run /login")
+    assert signin["command"] == inference._signin_command({"wsl": True, "name": "laptop"})
+    assert "claude-signin." in signin["command"] and "Explorer" in signin["why"]
     if Path(__file__).resolve().as_posix().startswith("/mnt/"):
-        assert signin.endswith(".cmd") and " " not in signin and signin[1] == ":"
-    assert inference.diagnose("Run 'claude update'")["command"].startswith("wsl ")
+        assert signin["command"].endswith(".cmd") and " " not in signin["command"]
+        assert signin["command"][1] == ":"
+    update = inference.diagnose("Run 'claude update'")
+    assert update["command"] == 'wsl -e bash -lc "claude update"'
+    assert "cmd or PowerShell" in update["why"]
     assert inference.diagnose("permission_denials: Read")["command"].startswith("wsl ")
+
+
+def test_the_banner_commands_run_on_the_native_box_by_name(monkeypatch):
+    """I16.0 (m): the board runs natively on foxtrot now (no WSL), and the banner still
+    said `wsl -e bash -lc …` and "Double-click this file in Explorer"."""
+    monkeypatch.setattr(inference, "HOST", {"wsl": False, "name": "foxtrot"})
+    update = inference.diagnose("Run 'claude update'")
+    assert update["command"] == "claude update"
+    assert "on foxtrot" in update["why"] and "ssh foxtrot" in update["why"]
+    signin = inference.diagnose("Not logged in · Please run /login")
+    script = Path(inference.__file__).resolve().parents[1] / "scripts" / "claude-signin.sh"
+    assert script.is_file()
+    assert shlex.split(signin["command"]) == ["bash", str(script)]
+    assert "on foxtrot" in signin["why"]
+    perm = inference.diagnose("permission_denials: Read")
+    assert perm["command"] == "claude" and "/permissions" in perm["why"]
+    for fix in (update, signin, perm):
+        assert "wsl" not in fix["command"].lower()
+        assert not any(w in fix["why"] for w in ("Explorer", "cmd", "PowerShell")), fix["why"]
+
+
+def test_the_host_is_read_from_the_kernel_and_the_hostname(monkeypatch, tmp_path):
+    """WSL's kernel says "microsoft" in /proc/version; foxtrot's does not."""
+    monkeypatch.setattr(inference.socket, "gethostname", lambda: "foxtrot.lan")
+    real = Path.read_text
+
+    def fake(self, *a, **kw):
+        if str(self) == "/proc/version":
+            return fake.text
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", fake)
+    fake.text = "Linux version 6.8.0-124-generic (buildd@lcy02) #124-Ubuntu SMP"
+    assert inference._detect_host() == {"wsl": False, "name": "foxtrot"}
+    fake.text = "Linux version 6.6.87.2-microsoft-standard-WSL2 (root@...)"
+    assert inference._detect_host()["wsl"] is True
 
 
 def test_cli_missing_binary_explains_the_path_problem(monkeypatch):

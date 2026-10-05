@@ -353,6 +353,38 @@ def test_verify_runs_every_check_on_the_proof(parts):
     assert v["at"][:4] == "2026" or len(v["at"]) >= 19
 
 
+def test_verify_looks_at_a_typed_title_once_it_has_typed(tmp_path):
+    """I16.0 (j): the accepted title fx_b9e6a61c failed its own check — "not drawn where
+    expected: 0.00s changed 1.153% bbox [0.4313, 0.1889, 0.5719, 0.3361]". The check
+    looked 0.1 s in, when a typewriter has drawn two characters high on the first line,
+    and tested the block's centre against them. It looks once the text has typed."""
+    e = _effect(events=[{"t": 1.0, "x": 0.5, "y": 0.5}], sound=None, overlay={
+        "duration": 1.9, "size": 1.6, "shapes": [
+            {"type": "text", "text": "2026 BLIZZARD\nKILLINGTON VT\nWITH THE BOYS", "h": 0.07,
+             "reveal": "typewriter", "cps": 40, "end": 1.9, "fade": 0.2}]})
+    # a black slide, as the title's shot is (testsrc2's moving blocks re-encode noisily
+    # enough to smear any bbox across the frame)
+    src = tmp_path / "black.mp4"
+    r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin",
+                        "-f", "lavfi", "-i", "color=black:s=320x180:r=24:d=4",
+                        "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", "4",
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(src)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[-500:]
+    base = _render_part(src, SEG, None, tmp_path / "base.mp4")
+    part = _render_part(src, SEG, e, tmp_path / "part.mp4")
+    # what the old sampling saw: the first characters, above the anchor
+    early = fx.frame_change_at(part, base, 0.1)
+    assert early["bbox"] and early["bbox"][3] < 0.5, early
+    assert fx._revealed_at(e["overlay"], 1.9) == pytest.approx(41 / 40 + 0.05)
+    v = fx.verify(e, SEG, part=part, base=base, impact=False)
+    by = {c["key"]: c for c in v["checks"]}
+    assert by["picture_landed"]["ok"] is True, by["picture_landed"]
+    assert v["ok"] is True, v
+    # an overlay with no reveal is still sampled where it always was
+    assert fx._revealed_at({"shapes": X_LINES}, 0.35) is None
+
+
 def test_verify_skips_what_it_cannot_measure_and_fails_what_it_can():
     e = _effect()
     v = fx.verify(e, SEG, onset=None, impact=True)

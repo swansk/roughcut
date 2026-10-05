@@ -453,7 +453,7 @@
     const top = undoStack[undoStack.length - 1], next = redoStack[redoStack.length - 1];
     if (u) {
       u.disabled = !top;
-      u.title = top ? `undo: ${top.label} (⌘Z · u)` : 'nothing to undo';
+      u.title = top ? `undo: ${top.label} (⌘Z)` : 'nothing to undo';
     }
     if (r) {
       r.disabled = !next;
