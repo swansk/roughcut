@@ -1811,3 +1811,45 @@ def test_the_last_proposal_link_shows_only_while_the_proposal_waits(page, live_s
         assert page.evaluate("document.querySelector('#lastAsk').style.display") == "none"
     finally:
         path.unlink(missing_ok=True)
+
+
+def _waiting_ask(job: str, segments: list[dict]) -> Path:
+    """An unanswered Ask proposal on disk, newer than any cut the test saves."""
+    import server
+    asks = server.STATE["asks"]
+    asks.mkdir(parents=True, exist_ok=True)
+    path = asks / f"{job}.json"
+    path.write_text(json.dumps({"job": job, "created": time.time() + 3600, "note": "n",
+                                "story": "", "plan": {"segments": segments}}),
+                    encoding="utf-8")
+    return path
+
+
+def _next_with(page, key: str) -> dict:
+    page.evaluate("flowBar.poll()")
+    page.wait_for_function(
+        "(k) => { const n = window.flowBar && flowBar.state() && flowBar.state().next;"
+        " return !!n && !!n.target && !!n.target[k]; }", arg=key, timeout=15000)
+    return page.evaluate("flowBar.state().next")
+
+
+def test_next_lands_on_a_waiting_first_cut_proposal(page, live_server, project):
+    """I16.0a, review: a first-cut proposal waits on an empty cut. Next carried
+    `{ask: job}`, but the landing waited for a shot on the timeline — which an empty cut
+    never has — and gave up after 15 s without showing the proposal."""
+    Path(project["edl"]).write_text(json.dumps({
+        "variant": "T", "title": "test cut", "orient": "none", "story": "",
+        "target_s": [5, 20], "segments": []}, indent=1), encoding="utf-8")
+    path = _waiting_ask("i16first", [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 2.0, "why": "w"},
+                                     {"clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0, "why": "w"}])
+    try:
+        page.goto(live_server + "/open")
+        nxt = _next_with(page, "ask")
+        assert nxt["stage"] == "cut" and nxt["target"] == {"ask": "i16first"}, nxt
+        page.locator("#flowNext").click()
+        page.wait_for_selector("#proposal", state="visible", timeout=12000)
+        assert page.evaluate("segs.length") == 0, "landed on the empty board"
+        assert "ask=" not in page.evaluate("location.hash")
+        assert "0 shots" in page.locator("#proposalDiff").inner_text()
+    finally:
+        path.unlink(missing_ok=True)

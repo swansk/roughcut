@@ -48,6 +48,13 @@ same commit. Releases move entries into a dated version section.
   follows the anchor), and `timeline-keys.js` treats it like the board's own pick, so ⌫
   says "click a shot to choose it". The landing test presses ⌫ after Next and checks the
   cut is whole.
+- **Next lands on a waiting first-cut proposal (M16 stage 0 review, I16.0a).** With the
+  cut empty and a first-cut proposal waiting, Next carried `{ask: job}`, but the landing
+  (`flow.js` `land()`) waited for the timeline to hold a shot before it did anything —
+  an empty cut never does — so it gave up after 15 s and the proposal was never shown.
+  The landing now waits for the timeline only when its target is a shot or an effect; an
+  Ask target waits for the "show it" link alone. A new UI test goes from /open to the
+  empty board through Next and finds the proposal open (it timed out before the fix).
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six

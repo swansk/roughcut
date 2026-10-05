@@ -170,7 +170,9 @@
    * Ask proposal is shown (the Ask tool's own "show it" link — free, it only reads the
    * proposal off disk). Next used to open the tool on whatever shot the board had
    * anchored — shot 1's accepted title while the proposal waited on shot 17. The board
-   * builds its timeline after a few fetches, so this waits (up to 15 s) for it. */
+   * builds its timeline after a few fetches, so this waits (up to 15 s) for it — for a
+   * shot or an effect only: an Ask target waits for the "show it" link alone, since a
+   * first-cut proposal waits on an empty cut, which never has a shot to wait for. */
   let landing = 0;
   function mounted() {
     try { return !!(window.tl && tl.state && Array.isArray(tl.state.segs) && tl.state.segs.length); } catch (err) { return false; }
@@ -182,7 +184,8 @@
     const later = (fn) => { if (gen === landing && Date.now() < until) setTimeout(fn, 120); };
     const step = () => {
       if (gen !== landing) return;
-      if (!mounted() || (target.fx && !(window.fx && fx.ready))) { later(step); return; }
+      const onCut = !!(target.shot || target.fx);
+      if ((onCut && !mounted()) || (target.fx && !(window.fx && fx.ready))) { later(step); return; }
       const shot = target.shot && tl.indexOf(target.shot) >= 0 ? target.shot : null;
       if (shot) {
         tl.select([shot], { source: 'land' });   // the board's pick, not Karl's: ⌫ won't take it
