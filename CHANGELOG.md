@@ -234,6 +234,13 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **The open screen's popovers hang under the header, and the slider says its interval
+  once (INTAKE M16 I16.2, review).** The settings and keys popovers were fixed at
+  `top: 50px`, which lands on the header itself when the CLI banner sits above it in
+  the page; they now open under the header wherever it is drawn, and scroll inside when
+  taller than the window. The open slider repeated the line above it ("Looks at a frame
+  every 4 s" / "a frame every 4 s · sees the run, misses the moment"); under it now is
+  only what the stop sees ("sees the run, misses the moment").
 - **The footage screen, in two states with one header row (INTAKE M16 I16.2).**
   Measured headless at 1440×900 on the suite's 3-clip bin: setup 19 controls · 460
   words in view → 15 · 74; indexed 17 · 314 in view (480 on the page, 2 blue buttons)

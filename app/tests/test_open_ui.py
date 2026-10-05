@@ -203,6 +203,8 @@ def test_the_keys_sit_behind_question_mark(page):
     assert keys.is_hidden()
     page.keyboard.press("?")
     assert keys.is_visible() and page.locator("#keysBtn").get_attribute("aria-expanded") == "true"
+    hd = page.locator("#hd").bounding_box()
+    assert keys.bounding_box()["y"] >= hd["y"] + hd["height"], "it hangs under the header"
     text = keys.inner_text()
     for word in ("switch bin or cut", "hold to speak", "settings"):
         assert word in text, text
@@ -243,7 +245,7 @@ def test_the_look_is_priced_on_the_button_that_buys_it(page):
     page.locator("#lookChange").click()
     assert page.locator("#look").is_visible()
     assert page.locator("#interval").is_enabled() and page.locator("#interval").input_value() == "0"
-    assert page.locator("#intervalWord").inner_text() == "a frame every 4 s · sees the run, misses the moment"
+    assert page.locator("#intervalWord").inner_text() == "sees the run, misses the moment"
     page.locator("#lookChange").click()
     assert page.locator("#look").is_hidden()
     # the order is a setting now, next to the cap and the workers
@@ -277,7 +279,7 @@ def test_the_slider_reprices_live_from_by_interval_without_a_round_trip(page, mo
     assert slider.is_enabled() and slider.get_attribute("max") == "3" and slider.input_value() == "0"
     assert page.locator("#stops span").all_inner_texts() == ["4 s", "3 s", "2 s", "1 s"]
     assert "on" in page.locator("#stops span").first.get_attribute("class")
-    assert page.locator("#intervalWord").inner_text() == "a frame every 4 s · sees the run, misses the moment"
+    assert page.locator("#intervalWord").inner_text() == "sees the run, misses the moment"
     assert f"~${v['by_interval']['4']:.2f}" in page.locator("#indexBtn").inner_text()
     # move the thumb: the words and the button re-price with no request
     hits: list[str] = []
@@ -285,12 +287,12 @@ def test_the_slider_reprices_live_from_by_interval_without_a_round_trip(page, mo
     slider.focus()
     page.keyboard.press("ArrowRight")                                    # 3 s
     assert slider.input_value() == "1"
-    assert page.locator("#intervalWord").inner_text() == "a frame every 3 s · sees the approach"
+    assert page.locator("#intervalWord").inner_text() == "sees the approach"
     assert page.locator("#lookWord").inner_text() == "Looks at a frame every 3 s"
     assert f"~${v['by_interval']['3']:.2f}" in page.locator("#indexBtn").inner_text()
     page.keyboard.press("End")                                           # 1 s, the far end
     assert slider.input_value() == "3" and page.evaluate("sheet.interval()") == 1
-    assert page.locator("#intervalWord").inner_text() == "every 1 s · sees the landing"
+    assert page.locator("#intervalWord").inner_text() == "sees the landing"
     assert f"~${v['by_interval']['1']:.2f}" in page.locator("#indexBtn").inner_text()
     assert "on" in page.locator("#stops span").last.get_attribute("class")
     assert hits == [], hits
@@ -335,6 +337,8 @@ def test_the_gear_or_comma_opens_settings_and_a_saved_cap_moves_the_budget_line(
     page.keyboard.press(",")                              # the key, outside any field
     s = open_settings(page)
     assert gear.get_attribute("aria-expanded") == "true"
+    hd = page.locator("#hd").bounding_box()
+    assert page.locator("#settings").bounding_box()["y"] >= hd["y"] + hd["height"]
     # the current values, straight from GET /api/settings
     got = api(page, "/api/settings")
     assert got["budget_usd"] == s["budget_usd"] and got["workers"] == s["workers"]

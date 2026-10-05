@@ -45,13 +45,14 @@ const SETTLED = new Set(['done', 'skipped']);
 const POLL_MS = 2000;
 const HOLD_MS = 250;             // V held longer than this in the story field speaks; a tap types
 const ORDER_WORD = { priority: 'most promising first', capture: 'capture order' };
-// The slider's four stops in words (design §2: "sample interval, 4 s to 1 s"). A sheet
-// is 30 frames, so at 4 s one sheet covers two minutes and a jump is a frame or two.
+// What each of the slider's four stops sees (design §2: "sample interval, 4 s to 1 s");
+// the line above it already says the interval. A sheet is 30 frames, so at 4 s one
+// sheet covers two minutes and a jump is a frame or two.
 const INTERVAL_WORD = {
-  4: 'a frame every 4 s · sees the run, misses the moment',
-  3: 'a frame every 3 s · sees the approach',
-  2: 'a frame every 2 s · sees the air',
-  1: 'every 1 s · sees the landing',
+  4: 'sees the run, misses the moment',
+  3: 'sees the approach',
+  2: 'sees the air',
+  1: 'sees the landing',
 };
 // The stages a worker count applies to, in the order the index runs them, and why the
 // default is what it is — in words, one line each (design §3: "workers apply to previews
@@ -341,7 +342,7 @@ function renderControls() {
   el.max = String(stops.length - 1);
   el.value = String(at);
   $('#stops').innerHTML = stops.map((s, k) => `<span${k === at ? ' class="on"' : ''}>${s} s</span>`).join('');
-  $('#intervalWord').textContent = pending ? (INTERVAL_WORD[i] || `a frame every ${i} s`) : '';
+  $('#intervalWord').textContent = pending ? (INTERVAL_WORD[i] || '') : '';
   $('#lookWord').textContent = `Looks at a frame every ${i} s`;
   // one money number, on the how line; the backend and its model are not this page's
   // to say — the CLI banner (/cli.js) speaks when it needs Karl
@@ -551,6 +552,7 @@ function renderSettings() {
   const s = O.settings;
   $('#settingsBtn').setAttribute('aria-expanded', String(O.sopen));
   $('#settings').hidden = !O.sopen;
+  if (O.sopen) placePop($('#settings'));
   renderSettingsRunning();
   if (!O.sopen) return;
   $('#settingsGone').hidden = !O.sgone;
@@ -723,9 +725,16 @@ function wireSettings() {
 
 /* ------------------------------------------------------------------ keys */
 
+// The header's two popovers hang under the header wherever it is drawn — the CLI
+// banner, when it shows, sits above it in the page.
+function placePop(el) {
+  el.style.top = `${Math.round(Math.max(0, $('#hd').getBoundingClientRect().bottom) + 6)}px`;
+}
+
 // ? in the header: the page's few keys, in a small popover — Esc or ? again closes it.
 function renderKeys() {
   $('#keys').hidden = !O.keysOpen;
+  if (O.keysOpen) placePop($('#keys'));
   $('#keysBtn').setAttribute('aria-expanded', String(O.keysOpen));
 }
 
