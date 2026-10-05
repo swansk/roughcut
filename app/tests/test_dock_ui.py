@@ -239,51 +239,74 @@ def test_the_ask_tool_is_the_one_sentence_and_the_change(page):
 # ---------------------------------------------------------------- the bin
 
 def test_the_bin_is_a_labelled_grid_with_the_labels_as_a_filter(page):
+    """INTAKE M16 I16.4: the bin opens on "not in the cut · N" (C10), two cards a row,
+    each labelled by the note, else the line spoken in it, else what was seen — no clip
+    name, times or chips on a card; "+ add" only on the card under the pointer or the
+    selected one; the rail badge is the not-in-the-cut count. The evidence chips and
+    the heard / seen tabs are under "more found ▸"."""
     _with_bin(page)
     assert "grid" in page.locator("#library").get_attribute("class")
     cards = page.locator("#library .keep")
-    assert cards.count() == 3
-    assert page.locator("#rail .tool[data-tool=bin] .badge").inner_text() == "3"
-    # heroes first; the labels ride on the card
+    assert cards.count() == 2                      # CLIP_B's keep is shot 2: not here
+    assert page.locator("#binTabs .tab").all_inner_texts() == ["not in the cut · 2", "all 3"]
+    assert page.locator("#rail .tool[data-tool=bin] .badge").inner_text() == "2"
+    # heroes first; the label is the line spoken inside the keep
     first = cards.first
-    assert "CLIP_A" in first.inner_text()
-    assert [c.strip() for c in first.locator(".chips .chip").all_inner_texts()] == ["★ hero", "banter"]
-    assert "+ add" in first.inner_text()
-    assert "in the cut · shot 2" in page.locator("#library .keep", has_text="CLIP_B").inner_text()
-    # the filter row carries every label the bin has, with counts
+    assert first.locator(".w").inner_text() == "★ “goodbye”"
+    assert "1.5 s" in first.inner_text()
+    assert "CLIP_A" not in first.inner_text() and first.locator(".chip").count() == 0
+    assert first.get_attribute("title").startswith("CLIP_A 0:04.0–0:05.5")
+    assert not first.locator("button.add").is_visible()
+    first.hover()
+    assert first.locator("button.add").is_visible()
+    # the instruction paragraph and the Find button are gone; one box
+    assert page.locator("#libHint").inner_text() == ""
+    assert page.locator("#findGo").count() == 0
+    # all: the keep in the cut says where it is
+    page.locator("#binTabs .tab[data-tab=all]").click()
+    assert cards.count() == 3
+    assert "in the cut · shot 2" in page.locator('#library .keep[title^="CLIP_B"]').inner_text()
+    # more found ▸: the labels as a filter, with counts; the tabs above already say where
+    assert not page.locator("#binFilter").is_visible()
+    page.locator("#moreFound").click()
     chips = [c.strip() for c in page.locator("#binFilter .chip").all_inner_texts()]
-    # tags first, then the kinds of evidence the keeps rest on, then where they are
-    assert chips == ["★ hero 1", "banter 2", "crash 2", "seen 1", "in the cut 1", "not yet 2"]
-    assert [c.strip() for c in page.locator("#library .keep", has_text="CLIP_C")
-            .locator(".chips .chip").all_inner_texts()] == ["crash", "seen"]
+    assert chips == ["★ hero 1", "banter 2", "crash 2", "seen 1"]
     page.locator("#binFilter .chip", has_text="seen").click()
     assert cards.count() == 1
     page.locator("#binFilter .chip", has_text="seen").click()
     page.locator("#binFilter .chip", has_text="crash").click()
     assert cards.count() == 2
     assert "2 of 3 keeps match" in page.locator("#libHint").inner_text()
-    assert "on" in page.locator("#binFilter .chip", has_text="crash").get_attribute("class")
     page.locator("#binFilter .chip", has_text="crash").click()      # the same chip clears it
     assert cards.count() == 3
-    page.locator("#binFilter .chip", has_text="not yet").click()
-    assert cards.count() == 2
-    assert "CLIP_B" not in page.locator("#library").inner_text()
-    # a chip on a card is the same filter
-    page.locator("#library .keep", has_text="CLIP_C").locator(".chip", has_text="crash").click()
-    assert cards.count() == 2
-    assert [t.strip() for t in page.locator("#binFilter .chip.on").all_inner_texts()] == ["crash 2"]
-    page.locator("#binFilter .chip.on").click()
-    assert cards.count() == 3
-    # the search box filters as you type; Find is one keypress further
+    # the box filters as you type
     page.locator("#findQ").fill("goodbye")
     page.wait_for_function("document.querySelectorAll('#library .keep').length === 1")
-    assert "CLIP_A" in page.locator("#library .keep").inner_text()
+    assert page.locator("#library .keep").get_attribute("title").startswith("CLIP_A")
     page.locator("#findQ").fill("")
     page.wait_for_function("document.querySelectorAll('#library .keep').length === 3")
-    # the heard tab is the old list, not a grid, and the filter row goes with the bin
+    # the heard tab is the old list, not a grid, and the filter row goes with the keeps
     page.locator("#libTabs .tab", has_text="heard").click()
     assert "grid" not in (page.locator("#library").get_attribute("class") or "")
     assert not page.locator("#binFilter").is_visible()
+    # closing more found goes back to the keeps
+    page.locator("#moreFound").click()
+    assert "grid" in page.locator("#library").get_attribute("class")
+
+
+def test_enter_finds_and_the_priced_search_sits_under_any_find(page):
+    """One find box: Enter finds a moment anywhere; under the result, plain and priced,
+    "Not it? Ask the model · ~$x" — hidden until a find has run."""
+    assert page.locator("#findDeep").is_hidden()
+    page.locator("#findQ").fill("goodbye")
+    page.locator("#findQ").press("Enter")
+    page.wait_for_selector("#findResults .cand", timeout=15000)
+    deep = page.locator("#findDeep")
+    assert deep.is_visible()
+    assert deep.inner_text().startswith("Not it? Ask the model · ~$")
+    assert "primary" not in (deep.get_attribute("class") or "")
+    row = page.locator("#findResults .cand").first
+    assert "goodbye" in row.inner_text() and "CLIP_" not in row.inner_text()
 
 
 def test_adding_from_the_bin_lands_at_the_playhead(page):
@@ -293,20 +316,25 @@ def test_adding_from_the_bin_lands_at_the_playhead(page):
     _with_bin(page)
     # the playhead at 1.2 s of film: the nearest cut is at 2.0, so before shot 2
     page.evaluate("tl.seek(1.2)")
-    page.locator("#library .keep", has_text="CLIP_C").locator("button.add").click()
+    card = page.locator('#library .keep[title^="CLIP_C"]')
+    card.hover()                                       # + add shows on the hovered card (M16)
+    card.locator("button.add").click()
     assert shots(page) == [["CLIP_A.MP4", 1.0, 3.0], ["CLIP_C.MP4", 0.5, 2.0],
                            ["CLIP_B.MP4", 0.0, 2.0]]
     assert page.locator("#undo").get_attribute("title").startswith("undo: insert")
     # one evaluate: the autosave may re-key the new shot between two round trips
     assert page.evaluate("[...tl.state.sel][0] === segs[1].id") is True
-    # the card flipped to where it is in the cut, before any save landed
-    assert "in the cut · shot 2" in page.locator("#library .keep", has_text="CLIP_C").inner_text()
+    # the card left "not in the cut" at once, before any save landed; all says where it is
+    assert page.locator('#library .keep[title^="CLIP_C"]').count() == 0
+    page.locator("#binTabs .tab[data-tab=all]").click()
+    assert "in the cut · shot 2" in page.locator('#library .keep[title^="CLIP_C"]').inner_text()
+    page.locator("#binTabs .tab[data-tab=out]").click()
     assert page.locator("#total").inner_text() == "0:05.5"
     # near the end of the film the nearest cut is the end: it appends
     page.evaluate("tl.seek(5.3)")
     # (the save after the first add wrote shot 1 into the bin as a keep of its own, so
     # "CLIP_A" now names two cards — the hero is the goodbye)
-    card = page.locator("#library .keep", has_text="the goodbye")
+    card = page.locator('#library .keep[title*="the goodbye"]')
     card.click()                                       # select
     assert "sel" in card.get_attribute("class")
     page.keyboard.press("Enter")                       # add it at the playhead
@@ -317,7 +345,8 @@ def test_adding_from_the_bin_lands_at_the_playhead(page):
     assert page.evaluate("segs.length") == 3
     page.keyboard.press("Control+z")
     assert page.evaluate("segs.length") == 2
-    # the same rule for a heard row
+    # the same rule for a heard row (under more found, M16)
+    page.locator("#moreFound").click()
     page.locator("#libTabs .tab", has_text="heard").click()
     page.evaluate("tl.seek(0.3)")                      # nearest cut: the head of the film
     page.locator("#library .cand").first.click()
@@ -327,7 +356,7 @@ def test_adding_from_the_bin_lands_at_the_playhead(page):
 
 def test_space_on_a_selected_keep_plays_it_in_the_bin_not_the_monitor(page):
     _with_bin(page)
-    card = page.locator("#library .keep", has_text="CLIP_C")
+    card = page.locator('#library .keep[title^="CLIP_C"]')
     card.click()
     assert not page.locator("#findPlayer").is_visible()
     page.keyboard.press(" ")

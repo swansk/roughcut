@@ -33,7 +33,8 @@
  *                               → park the monitor on shot i at clip time clipT, paused;
  *                               `play(i)` → play the cut from shot i; `touch()` → the
  *                               board's autosave; `render()` → repaint the whole board;
- *                               `toast(msg)`.
+ *                               `toast(msg)`; optional `extra()` / `setExtra(v)` → more
+ *                               state that rides each undo entry (the colour block).
  *   tl.state                    `{segs, sel, anchor, zoom, scrollX, playhead}` — `segs` is
  *                               the live array (a getter over hooks.segs()); `sel` is a
  *                               Set<id>, REPLACED on every change (read it, do not hold it);
@@ -132,7 +133,8 @@
  *   The module handles pointerdown/up on the V1 lane and the ruler. A pointerdown that
  *   moves more than 4 px before pointerup, or whose propagation a lane's own handler stops
  *   (a trim handle, a drag), never becomes a click here: a plain click on a block selects
- *   it and plays the cut from it (the strip's old promise, kept); ⇧-click ranges; ⌘/ctrl-
+ *   it and parks the monitor on its first frame, paused (INTAKE M16 decision 6; a double-
+ *   click plays the cut from it, as space does); ⇧-click ranges; ⌘/ctrl-
  *   click toggles; a click on the empty lane or the ruler clears the selection and seeks;
  *   dragging on the ruler scrubs. Keys (outside inputs): `+`/`=` and `-` zoom ×2 / ÷2,
  *   `\` fits, ⌘/ctrl + wheel zooms around the cursor, ⇧ + wheel pans, ⌘Z / ⌘⇧Z undo / redo.
@@ -325,8 +327,7 @@
     b.className = 'blk';
     b.dataset.id = id;
     b.innerHTML = '<img class="poster" draggable="false" loading="lazy" decoding="async" alt="">'
-      + '<div class="txt"><span class="name"></span><span class="dur"></span>'
-      + '<span class="speed" hidden></span><div class="line"></div></div>'
+      + '<div class="txt"><span class="speed" hidden></span><span class="name"></span></div>'
       + '<i class="warn in" hidden></i><i class="warn out" hidden></i>';
     return b;
   }
@@ -354,6 +355,19 @@
     if (isGen(seg.clip)) return genLine(seg, clip);
     const u = clip && (clip.transcript || []).find((x) => x.end > seg.in && x.start < seg.out);
     return (u && u.text) || seg.why || '';
+  }
+
+  /* A block's name (INTAKE M16 I16.4): the first words spoken inside the shot, else the
+   * shot's why, else what was seen in it — never the camera's file name; a generated
+   * slide by what it is (`black`, `title`). The file and the clip range are the
+   * tooltip's. */
+  function blockName(seg, clip) {
+    if (isGen(seg.clip)) return genKind(seg.clip);
+    const line = strongestLine(seg, clip);
+    if (line) return line;
+    const seen = ((clip && clip.visual && clip.visual.moments) || [])
+      .find((m) => m.end > seg.in && m.start < seg.out && m.what);
+    return seen ? seen.what : 'no words';
   }
 
   /* Mirrors app.js's boundaryWarning, per edge: a cut point inside somebody's sentence. */
@@ -408,13 +422,11 @@
     b.classList.toggle('tiny', w < 36);
     b.classList.toggle('gen', gen);
     const clip = clipOf(seg.clip);
-    b.querySelector('.name').textContent = gen ? genKind(seg.clip) : stem(seg.clip);
-    b.querySelector('.dur').textContent = `${filmLen.toFixed(1)}s`;
+    b.querySelector('.name').textContent = blockName(seg, clip);
     // the badge: only when the shot is retimed, so a 1× cut looks the way it always did
     const badge = b.querySelector('.speed');
     badge.hidden = spd === 1;
     badge.textContent = spd === 1 ? '' : `${speedLabel(spd)}×`;
-    b.querySelector('.line').textContent = strongestLine(seg, clip);
     b.title = `${i + 1}. ${gen ? genLine(seg, clip) : stem(seg.clip)} ${fmt(seg.in)}–${fmt(seg.out)}`
       + (spd === 1 ? ` (${filmLen.toFixed(1)}s)`
                    : ` at ${speedLabel(spd)}× (${filmLen.toFixed(1)}s of film from ${(seg.out - seg.in).toFixed(1)}s)`)
@@ -629,10 +641,20 @@
   }
 
   /* ------------------------------------------------------------ undo / redo */
-  const snapshot = () => JSON.stringify(segs());
+  /* An entry is the cut — and, when the board hands one over (`hooks.extra()` /
+   * `hooks.setExtra(v)`), a second piece of state that rides the same stack: the film's
+   * colour block, so a warmer / cooler nudge is one ⌘Z (INTAKE M16 I16.4). */
+  const snapshot = () => JSON.stringify(hooks && hooks.extra
+    ? { segs: segs(), extra: hooks.extra() } : segs());
 
   function restore(json) {
-    hooks.setSegs(JSON.parse(json));
+    const v = JSON.parse(json);
+    if (v && !Array.isArray(v) && Array.isArray(v.segs)) {
+      hooks.setSegs(v.segs);
+      if (hooks.setExtra) hooks.setExtra(v.extra);
+    } else {
+      hooks.setSegs(v);
+    }
     ensureIds();
   }
 
@@ -879,6 +901,9 @@
     if (down && (Math.abs(e.clientX - down.x) > 4 || Math.abs(e.clientY - down.y) > 4)) down.moved = true;
   }
 
+  /* A plain click selects the block and parks the monitor on its first frame, paused
+   * (INTAKE M16 decision 6 — it used to play from there, so looking at a shot's strip
+   * started the sound). Space or a double-click plays. */
   function onLaneUp(e) {
     const d = down;
     down = null;
@@ -890,12 +915,18 @@
       else if (e.metaKey || e.ctrlKey) select([id], { add: true, source: 'click' });
       else {
         select([id], { source: 'click' });
-        if (hooks.play) hooks.play(indexOf(id));
+        seek(filmStart(id));
       }
       return;
     }
     select([], { source: 'click' });
     seek(eventTime(e));
+  }
+
+  function onLaneDbl(e) {
+    const b = e.target.closest('.blk');
+    if (!b || e.shiftKey || e.metaKey || e.ctrlKey || !hooks.play) return;
+    hooks.play(indexOf(b.dataset.id));
   }
 
   function onRulerDown(e) {
@@ -974,6 +1005,7 @@
     lane.addEventListener('pointermove', onLaneMove);
     lane.addEventListener('pointerup', onLaneUp);
     lane.addEventListener('pointercancel', () => { down = null; });
+    lane.addEventListener('dblclick', onLaneDbl);
     el.ruler.addEventListener('pointerdown', onRulerDown);
     el.ruler.addEventListener('pointermove', onRulerMove);
     el.ruler.addEventListener('pointerup', onRulerUp);
@@ -986,7 +1018,10 @@
     }
     const redoBtn = document.querySelector('#redo');
     if (redoBtn) redoBtn.addEventListener('click', () => redo());
-    lastAppSel = -1;                 // adopt app.js's index on the first render
+    // Nothing is selected at start (INTAKE M16 I16.4): app.js's index is not adopted on
+    // the first render — the strip under the timeline shows the film until a shot is
+    // chosen, played or landed on.
+    lastAppSel = hooks.sel ? hooks.sel() : -1;
     render();
     return tl;
   }
@@ -998,7 +1033,7 @@
     setRange, move, split, remove, insert, setSpeed,
     select, syncSel, seek, setPlayhead, zoomTo, fit,
     forSave, needsRekey, afterSave,
-    fmt, hueOf,
+    fmt, hueOf, blockName,
   };
   window.tl = tl;
 })();

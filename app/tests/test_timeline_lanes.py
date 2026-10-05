@@ -2,9 +2,9 @@
 
 The module under test is `app/static/timeline-lanes.js`, built on the foundation
 (`timeline.js`, `window.tl`): the A1 music lane with the bed, its fades and a dip under
-every speech region in the cut; the markers lane (`★` per hero keep in the cut, a tick
-per ranked event inside a shot) and the bin lane (the pass's keeps not in the cut as
-faint outlines); the proposal ghost lane while a proposal is pending; the body drag on
+every speech region in the cut; a ★ on the block of a hero keep in the cut (the markers
+lane went in INTAKE M16) and the bin lane (the pass's keeps not in the cut as faint
+outlines); the proposal ghost lane while a proposal is pending; the body drag on
 V1 with a drop line; and the HTML5 drop of a kept row, a Find result or an available
 outline onto V1. Assertions are made against the EDL on disk, the monitor's element and
 app.js's own `segs`, not against the module's word for it.
@@ -202,65 +202,47 @@ def test_the_music_lane_draws_the_bed_its_fades_and_a_dip_per_speech_region(page
     page.wait_for_function(f"document.querySelector('{a1}').hidden", timeout=8000)
 
 
-def test_the_markers_lane_stars_a_hero_in_the_cut_ticks_an_event_and_shelves_the_rest(page):
-    """Two keeps: a hero that IS in the cut (CLIP_A 1.0–3.0 is shot 1 — matched by clip
-    and overlap ≥ 0.5, the kept tab's rule) gets a `★` at its film position; a keep that
-    is not (CLIP_C) becomes a faint `available` outline in the bin lane after the end of
-    the film, as wide as it is long. A ranked event inside shot 2 is a tick at its film
-    time; one in a clip that is not in the cut has no film position and no tick."""
-    import server
-
-    vdir = Path(server.STATE["visual"])
-    vdir.mkdir(parents=True, exist_ok=True)
-    ranked = vdir / "events.json"
-    ranked.write_text(json.dumps({"built": 0, "clips": 1, "events": [
-        {"rank": 1, "clip": "CLIP_B.MP4", "start": 0.5, "end": 1.5, "kind": "fall",
-         "notable": True, "score": 1.5, "source": "close look",
-         "what": "the body goes down in the snow",
-         "why_ranked": {"confirmation": "confirmed"}},
-        {"rank": 2, "clip": "CLIP_C.MP4", "start": 1.5, "end": 3.5, "kind": "jump",
-         "notable": True, "score": 0.4, "source": "sheet", "what": "a backflip",
-         "why_ranked": {"confirmation": "contradicted"}},
-    ]}), encoding="utf-8")
+def test_a_hero_in_the_cut_wears_a_star_and_the_rest_are_unlabelled_outlines(page):
+    """INTAKE M16 I16.4: the markers lane above V1 and its legend are gone. Two keeps: a
+    hero that IS in the cut (CLIP_A 1.0–3.0 is shot 1 — matched by clip and overlap
+    ≥ 0.5, the kept tab's rule) puts a ★ on that block's name; a keep that is not
+    (CLIP_C) is a faint outline in the bin lane after the end of the film, as wide as it
+    is long, with no label and no clip name (a drag path; the tooltip says what it is).
+    Nothing sits above V1 any more."""
     _put_selects(page, [
         {"clip": "CLIP_A.MP4", "start": 1.0, "end": 3.0, "hero": True, "why": "the hello"},
         {"clip": "CLIP_C.MP4", "start": 0.5, "end": 4.0, "hero": False,
          "why": "the whole take"},
     ])
-    try:
-        page.reload()
-        page.wait_for_selector("#tl .blk")
-        markers = "#tl .tl-xlane[data-lane=markers]"
-        page.wait_for_function(f"!document.querySelector('{markers}').hidden", timeout=8000)
-        zoom = page.evaluate("tl.state.zoom")
-        legend = page.locator(f"{markers} .lbl").inner_text()
-        assert "★" in legend and "hero" in legend and "event" in legend and "available keep" in legend
-        # the hero's star at the keep's film position — shot 1 starts at the keep's start
-        assert page.locator(f"{markers} .mk.hero").count() == 1
-        assert left(page, f"{markers} .mk.hero") == pytest.approx(x_of(page, 0), abs=0.5)
-        assert "the hello" in page.locator(f"{markers} .mk.hero").get_attribute("title")
-        # the event in CLIP_B at 0.5 s is 2.5 s of film; the CLIP_C one is nowhere
-        ticks = page.locator(f"{markers} .mk.ev")
-        assert ticks.count() == 1
-        assert left(page, f"{markers} .mk.ev") == pytest.approx(x_of(page, 2.5), abs=0.5)
-        assert ticks.first.get_attribute("data-kind") == "fall"
-        assert ticks.first.get_attribute("title") == "the body goes down in the snow · #1"
-        # V1 moved down to make room, and the view grew with it
-        assert page.evaluate("getComputedStyle(document.querySelector('#tl')).getPropertyValue('--tl-above').trim()") == "18px"
-        # the keep that is not in the cut: an outline after the end, width to length
-        avail = "#tl .tl-xlane[data-lane=bin] .avail"
-        assert page.locator(avail).count() == 1
-        assert left(page, avail) == pytest.approx(x_of(page, 4.0), abs=0.5)
-        assert width(page, avail) == pytest.approx(3.5 * zoom, abs=0.5)
-        assert page.locator(avail).get_attribute("draggable") == "true"
-        assert "CLIP_C" in page.locator(avail).inner_text()
-        # the lane follows the zoom
-        page.keyboard.press("+")
-        page.wait_for_function(
-            f"Math.abs(parseFloat(document.querySelector('{avail}').style.width) - {7.0 * zoom}) < 1",
-            timeout=5000)
-    finally:
-        ranked.unlink(missing_ok=True)
+    page.reload()
+    page.wait_for_selector("#tl .blk")
+    assert page.locator("#tl .tl-xlane[data-lane=markers]").count() == 0
+    first = page.evaluate("segs[0].id")
+    page.wait_for_function(
+        f"document.querySelector('#tl .blk[data-id=\"{first}\"]').classList.contains('hero')",
+        timeout=8000)
+    assert page.locator("#tl .blk.hero").count() == 1
+    star = page.evaluate(
+        "getComputedStyle(document.querySelector('#tl .blk.hero .name'), '::before').content")
+    assert "★" in star
+    zoom = page.evaluate("tl.state.zoom")
+    assert page.evaluate(
+        "getComputedStyle(document.querySelector('#tl')).getPropertyValue('--tl-above').trim()") == "0px"
+    # the keep that is not in the cut: an outline after the end, width to length
+    avail = "#tl .tl-xlane[data-lane=bin] .avail"
+    page.wait_for_selector(avail, timeout=8000)
+    assert page.locator(avail).count() == 1
+    assert left(page, avail) == pytest.approx(x_of(page, 4.0), abs=0.5)
+    assert width(page, avail) == pytest.approx(3.5 * zoom, abs=0.5)
+    assert page.locator(avail).get_attribute("draggable") == "true"
+    assert page.locator(avail).inner_text() == ""
+    assert "CLIP_C" not in page.locator(avail).get_attribute("title")
+    assert page.locator("#tl .tl-xlane[data-lane=bin] .lbl").count() == 0
+    # the lane follows the zoom
+    page.keyboard.press("+")
+    page.wait_for_function(
+        f"Math.abs(parseFloat(document.querySelector('{avail}').style.width) - {7.0 * zoom}) < 1",
+        timeout=5000)
 
 
 def test_a_pending_proposal_is_a_ghost_lane_you_can_play_either_side_of(page):
@@ -420,7 +402,7 @@ def test_dragging_a_shots_body_past_the_next_one_reorders_and_the_ids_travel(pag
     assert shots(page) == [["CLIP_B.MP4", 0.0, 2.0], ["CLIP_A.MP4", 1.0, 3.0]]
     assert page.locator("#tl .blk.dragging").count() == 0
     assert page.locator("#undo").get_attribute("title").startswith("undo: move")
-    assert page.locator("#tl .blk").first.locator(".name").inner_text() == "CLIP_B"
+    assert "CLIP_B" in page.locator("#tl .blk").first.get_attribute("title")
     wait_saved(page)
     assert [(s["id"], s["clip"]) for s in on_disk(project)] == [(b, "CLIP_B.MP4"), (a, "CLIP_A.MP4")]
     page.keyboard.press("Control+z")
@@ -477,6 +459,8 @@ def test_a_kept_row_or_a_find_result_dropped_on_v1_inserts_there(page, project):
     page.set_viewport_size({"width": 1280, "height": 2400})
     page.reload()
     page.wait_for_selector("#library .keep")
+    page.click("#binTabs .tab[data-tab=all]")     # so the row stays once it is in the cut (M16)
+    page.evaluate("refreshBin()")                  # the tab's own re-read, settled
     page.wait_for_function(
         "document.querySelector('#library .keep').getAttribute('draggable') === 'true'", timeout=5000)
     row = page.locator("#library .keep").first.bounding_box()
@@ -501,7 +485,7 @@ def test_a_kept_row_or_a_find_result_dropped_on_v1_inserts_there(page, project):
 
     # a Find result carries the same payload — the row is loaded (its own click) and read
     page.locator("#findQ").fill("goodbye")
-    page.locator("#findGo").click()
+    page.locator("#findQ").press("Enter")      # Enter finds (the Find button went, M16)
     page.wait_for_selector("#findResults .cand", timeout=15000)
     assert page.locator("#findResults .cand").first.get_attribute("draggable") == "true"
     payload = page.evaluate("""() => {

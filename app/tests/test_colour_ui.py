@@ -118,10 +118,25 @@ def api(page, live_server, path: str) -> dict:
         "async (u) => (await fetch(u)).json()", f"{live_server}{path}")
 
 
+def open_look(page) -> None:
+    """The shot's look and matching sit behind "colour & look ▸" (INTAKE M16), closed on
+    every shot; the four nudges and reset are on the strip."""
+    page.locator("#inspector [data-disc=look]").click()
+    page.wait_for_selector("#inspector .shot .colour")
+
+
 def select_first(page) -> str:
     page.locator("#tl .blk").nth(0).click()
-    page.wait_for_selector("#inspector .shot .colour")
+    page.wait_for_selector("#inspector .shot [data-act=cwarm]")
+    open_look(page)
     return ids(page)[0]
+
+
+def colour_words(page) -> str:
+    """The colour in words, behind why? ▸."""
+    if page.locator("#inspector .whybox").is_hidden():
+        page.locator("#inspector [data-disc=why]").click()
+    return page.locator("#inspector .whybox .witness").inner_text()
 
 
 def colour_on_disk(page, live_server) -> dict:
@@ -174,19 +189,24 @@ def test_the_monitor_fetches_the_shot_it_is_on(page, live_server):
 # ------------------------------------------------------------------ the inspector
 
 def test_selecting_a_shot_shows_the_colour_block(page):
-    """The block carries a witness line and a look select listing the library."""
+    """The shot's colour is in words behind why? ▸ (no white-point numbers), its look
+    select behind "colour & look ▸" lists the library; the film's look is the film
+    row's, shown with nothing selected — not repeated in every shot (INTAKE M16)."""
     select_first(page)
-    witness = page.locator("#inspector .colour .witness").inner_text()
-    assert witness, "no witness line"
-    assert any(w in witness for w in ("white:", "no white reference", "not measured", "hand-set"))
+    words = colour_words(page)
+    assert words.startswith("colour: "), words
+    assert any(w in words for w in ("as shot", "auto-balanced", "set by hand")), words
+    assert "white:" not in words and " L " not in words and "cast" not in words, words
     options = page.evaluate(
         "[...document.querySelectorAll('#inspector .clook option')].map(o => o.value)")
     assert options[0] == ""                       # the film's
     for name in ("crisp", "alpine", "filmic"):
         assert name in options, options
-    assert page.locator("#inspector .clook option").first.inner_text().startswith("— film's")
+    assert page.locator("#inspector .clook option").first.inner_text().startswith("the film's")
+    assert page.locator("#inspector .cfilmlook").count() == 0, "the film's look is not per shot"
+    page.keyboard.press("Escape")
     film_options = page.evaluate(
-        "[...document.querySelectorAll('#inspector .cfilmlook option')].map(o => o.value)")
+        "[...document.querySelectorAll('#inspector .film .cfilmlook option')].map(o => o.value)")
     assert film_options[:1] == [""] and "alpine" in film_options
 
 
@@ -213,19 +233,24 @@ def test_choosing_a_look_for_the_shot_saves_the_override(page, live_server):
 
 
 def test_the_film_row_off_makes_every_shot_the_identity(page, live_server):
-    """mode off, no film look → colour.mode == 'off' and every shot's LUT is the identity."""
-    select_first(page)
-    page.locator("#inspector .cmode").select_option("off")
+    """auto-balance off on the film row, no film look → colour.mode == 'off' and every
+    shot's LUT is the identity."""
+    film = page.locator("#inspector .film")
+    assert film.locator(".fauto").inner_text() == "auto-balance on"
+    film.locator(".fauto").click()
+    assert film.locator(".fauto").inner_text() == "auto-balance off"
     wait_saved(page)
     saved = colour_on_disk(page, live_server)
     assert saved["mode"] == "off" and saved["look"] is None
     shots = api(page, live_server, "/api/colour")["shots"]
     assert shots and all(s["identity"] is True for s in shots), shots
-    # the witness now says as shot; the auto checkbox is moot
-    assert "as shot" in page.locator("#inspector .colour .witness").inner_text()
+    # the shot's colour now says as shot; the auto checkbox is moot
+    select_first(page)
+    assert "as shot" in colour_words(page)
     assert page.locator("#inspector .cauto").is_disabled()
-    # and the film look select puts a look over the whole film
-    page.locator("#inspector .cfilmlook").select_option("alpine")
+    # and the film row's look select puts a look over the whole film
+    page.keyboard.press("Escape")
+    film.locator(".cfilmlook").select_option("alpine")
     wait_saved(page)
     saved = colour_on_disk(page, live_server)
     assert saved["look"] == "alpine"
@@ -244,7 +269,10 @@ def test_warmer_writes_a_balance_override_and_reset_drops_it(page, live_server):
     assert bal["source"] == "hand"
     by_id = {s["id"]: s for s in api(page, live_server, "/api/colour")["shots"]}
     assert by_id[sid]["balance"]["source"] == "hand"
-    assert page.locator("#inspector .colour .witness").inner_text().startswith("hand-set")
+    page.wait_for_function(
+        "document.querySelector('#inspector .whybox .witness').textContent.startsWith('colour: set by hand')",
+        timeout=8000)
+    assert page.locator("#undo").get_attribute("title").startswith("undo: warmer")
     # brighter steps the exposure on the same override
     exposure = bal["exposure"]
     page.locator('#inspector [data-act="cbright"]').click()
@@ -257,6 +285,30 @@ def test_warmer_writes_a_balance_override_and_reset_drops_it(page, live_server):
     assert "balance" not in saved.get("shots", {}).get(sid, {}), saved
 
 
+def test_each_colour_nudge_is_one_undo_entry(page, live_server):
+    """INTAKE M16 I16.4: the colour block rides the board's undo stack — warmer, then
+    brighter, then ⌘Z twice puts the shot back as it was, and the disk follows."""
+    sid = select_first(page)
+    page.locator('#inspector [data-act="cwarm"]').click()
+    page.locator('#inspector [data-act="cbright"]').click()
+    wait_saved(page)
+    bal = colour_on_disk(page, live_server)["shots"][sid]["balance"]
+    page.keyboard.press("Control+z")
+    assert page.evaluate(f"colour.shots['{sid}'].balance.exposure") == pytest.approx(
+        bal["exposure"] - 0.05, abs=1e-3)
+    assert page.locator("#undo").get_attribute("title").startswith("undo: warmer")
+    page.keyboard.press("Control+z")
+    assert page.evaluate(f"!(colour.shots && colour.shots['{sid}'])")
+    page.wait_for_function(
+        "document.querySelector('#saveState').textContent.startsWith('saved')", timeout=8000)
+    page.wait_for_timeout(300)
+    wait_saved(page)
+    assert sid not in (colour_on_disk(page, live_server) or {}).get("shots", {})
+    page.keyboard.press("Control+Shift+z")
+    assert page.evaluate(f"colour.shots['{sid}'].balance.gain[0]") == pytest.approx(
+        bal["gain"][0], abs=1e-3)
+
+
 def test_match_and_reference_are_saved_by_id(page, live_server):
     """set as reference → colour.reference; match ← previous on shot 2 → shots[id].match."""
     first = select_first(page)
@@ -266,7 +318,8 @@ def test_match_and_reference_are_saved_by_id(page, live_server):
     page.locator("#tl .blk").nth(1).click()
     second = ids(page)[1]
     page.wait_for_function(
-        "document.querySelector('#inspector .n').textContent.startsWith('SHOT 2')")
+        "document.querySelector('#inspector .sname').textContent.startsWith('Shot 2')")
+    open_look(page)                     # closed again on the new shot
     page.locator('#inspector [data-act="cmatchprev"]').click()
     wait_saved(page)
     saved = colour_on_disk(page, live_server)

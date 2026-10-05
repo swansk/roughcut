@@ -87,6 +87,7 @@ def _cards(pg) -> dict:
 def test_badge_shows_and_confirm_hides_the_clip(page):
     pg = page
     pg.wait_for_selector("#library .junkcard")
+    pg.click("#binTabs .tab[data-tab=all]")       # CLIP_OK's keep is in the cut (M16: not on "not in the cut")
     cards = _cards(pg)
     # the proposals have cards; the dark clip's keep wears the badge; the good one not
     assert {c["clip"] for c in cards if c["junkcard"]} == {"CLIP_DARK.MP4", "CLIP_BLIP.MP4"}
@@ -101,6 +102,7 @@ def test_badge_shows_and_confirm_hides_the_clip(page):
     assert {c["clip"] for c in _cards(pg)} == {"CLIP_BLIP.MP4", "CLIP_OK.MP4"}
 
     # the junk chip brings the confirmed clip back, answerable
+    pg.click("#moreFound")                       # the chips are under more found (M16)
     pg.click('#binFilter .chip[data-chip="junk"]')
     pg.wait_for_selector('#library .junkcard.confirmed[data-clip="CLIP_DARK.MP4"]')
     assert "CLIP_OK.MP4" not in {c["clip"] for c in _cards(pg)}

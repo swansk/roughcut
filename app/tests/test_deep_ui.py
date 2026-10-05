@@ -138,10 +138,18 @@ def _board(browser, url):
 
 
 def test_the_inspector_shows_how_the_shot_s_clip_was_seen(bin_state, browser):
+    """INTAKE M16 I16.4 / decision 9: on the shot strip, Look deeper is a visible priced
+    button for the shot's own range, and how the machine saw the clip is one closed line
+    that opens the full strip in place — the strip is not drawn until asked for."""
     pg = _board(browser, bin_state)
     pg.locator("#tl .blk").nth(0).click()
-    pg.evaluate("pauseCut()")
-    box = "#inspector .deepbox"
+    look = "#inspector .srow.top .lookhost .dv-look"
+    pg.wait_for_function(f"""() => /^Look deeper · ~\\$\\d/.test(
+        (document.querySelector('{look}') || {{}}).textContent || '')""")
+    assert "1.0–3.0 s" in pg.get_attribute(look, "title")      # the shot, not ± 2 s
+    box = "#inspector .deepline"
+    assert pg.locator(f"{box} .dv-bar").count() == 0, "the six-lane strip is not on the main view"
+    pg.locator(f"{box} > :first-child").click()
     pg.wait_for_selector(f"{box} .dv-bar")
     lanes = pg.evaluate(f"""() => [...document.querySelectorAll('{box} .dv-lane')]
         .map((l) => [l.dataset.lane, l.querySelectorAll('i').length])""")
@@ -207,6 +215,7 @@ def test_look_deeper_from_a_seen_row_is_priced_then_runs_and_shows_the_beats(
     try:
         pg = _board(browser, bin_state)
         pg.evaluate("dock.open('bin')")
+        pg.evaluate("document.querySelector('#more').hidden && document.querySelector('#moreFound').click()")      # under more found (M16)
         pg.click("#libTabs .tab[data-tab=seen]")
         row = "#library .cand:has(.dv-look)"
         pg.wait_for_function("""() => [...document.querySelectorAll('#library .cand .dv-look')]

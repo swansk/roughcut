@@ -576,12 +576,18 @@ def test_the_magnets_priority_is_the_playhead_then_sentences_then_words(page):
 def test_s_turns_the_magnet_off_and_ctrl_suspends_it(page):
     z = zoom(page)
     ind = page.locator("#tl .tl-magnet")
+    # INTAKE M16: the chip shows only while something is being dragged; S still toggles,
+    # and says so in a toast
+    assert ind.is_hidden()
     assert ind.inner_text() == "magnet · on"
     page.keyboard.press("s")
     assert ind.inner_text() == "magnet · off"
+    page.wait_for_function(
+        "document.querySelector('#toast').textContent === 'magnet off'", timeout=3000)
     assert page.evaluate("localStorage.getItem('roughcut.tl.magnet')") == "0"
     drag(page, out_handle(page, 0), 1.45 * z - 4, release=False)
     page.wait_for_function("segs[0].out > 4.3", timeout=3000)
+    assert ind.is_visible(), "the chip shows while the edge is dragged"
     assert page.locator("#tl .tl-snapline").is_hidden()
     page.mouse.up()
     out = page.evaluate("segs[0].out")
@@ -595,10 +601,7 @@ def test_s_turns_the_magnet_off_and_ctrl_suspends_it(page):
     out = page.evaluate("segs[0].out")
     assert out != 4.45 and out == pytest.approx(4.45 - 4 / z, abs=0.011)
     assert ind.inner_text() == "magnet · on"
-    # the indicator is a button too
-    reveal(page)
-    ind.click()
-    assert ind.inner_text() == "magnet · off"
+    assert ind.is_hidden(), "gone again once the drag is over"
 
 
 # ------------------------------------------------------------------ nudges

@@ -163,8 +163,12 @@ def test_plus_doubles_the_zoom_and_backslash_fits(page):
 
 def test_a_click_on_a_block_selects_it_and_the_inspector_and_the_index_selects_the_block(page):
     page.locator("#tl .blk").nth(1).click()
-    page.evaluate("pauseCut()")                 # the click also plays from there
     second = ids(page)[1]
+    # INTAKE M16 decision 6: a click selects and parks the monitor on the shot's first
+    # frame, paused — it no longer plays from there
+    assert not page.evaluate("player.playing"), "a click parks, it does not play"
+    assert page.evaluate("player.idx") == 1
+    assert page.evaluate("tl.state.playhead") == pytest.approx(2.0, abs=0.02)
     assert page.locator("#tl .blk.sel").count() == 1
     assert page.locator("#tl .blk.sel").get_attribute("data-id") == second
     assert page.evaluate("[...tl.state.sel]") == [second]
@@ -178,7 +182,14 @@ def test_a_click_on_a_block_selects_it_and_the_inspector_and_the_index_selects_t
     assert page.locator("#inspector .clip").inner_text() == "CLIP_A"
 
 
+def test_a_double_click_on_a_block_plays_the_cut_from_it(page):
+    page.locator("#tl .blk").nth(1).dblclick()
+    page.wait_for_function("player.playing && player.idx === 1", timeout=10000)
+    assert page.evaluate("[...tl.state.sel]") == [ids(page)[1]]
+
+
 def test_shift_click_selects_the_range_and_cmd_click_toggles(page):
+    page.evaluate("document.querySelector('#more').hidden && document.querySelector('#moreFound').click(); document.querySelector('#libTabs .tab[data-tab=heard]').click()")
     page.locator("#library .cand").first.click()        # a third shot, after the first
     assert page.locator("#tl .blk").count() == 3
     blocks = page.locator("#tl .blk")
@@ -195,7 +206,7 @@ def test_shift_click_selects_the_range_and_cmd_click_toggles(page):
     page.locator("#tl .tl-ruler").click(position={"x": 4, "y": 6})
     assert page.locator("#tl .blk.sel").count() == 0
     assert page.evaluate("tl.state.anchor") is None
-    assert "select a shot on the timeline" in page.locator("#inspector").inner_text()
+    assert page.locator("#inspector .film .totals").is_visible()      # the film row (M16)
 
 
 # ------------------------------------------------------------------ scrub and playhead
@@ -304,7 +315,9 @@ def test_move_reorders_and_the_ids_travel_with_the_shots(page, project):
     assert ids(page) == [b, a]
     assert page.evaluate("segs.map(s => s.clip)") == ["CLIP_B.MP4", "CLIP_A.MP4"]
     assert block_ids(page) == [b, a]
-    assert page.locator("#tl .blk").first.locator(".name").inner_text() == "CLIP_B"
+    # a block is named by the first words spoken in it, never the camera's file name
+    assert page.locator("#tl .blk").first.locator(".name").inner_text() == "hello there"
+    assert "CLIP_B" in page.locator("#tl .blk").first.get_attribute("title")
     wait_saved(page)
     assert [(s["id"], s["clip"]) for s in on_disk(project)] == [
         (b, "CLIP_B.MP4"), (a, "CLIP_A.MP4")]
@@ -340,20 +353,23 @@ def test_snaps_for_resolves_with_the_clips_sentences_and_is_cached(page):
 
 
 def test_the_inspectors_edits_share_the_stack_with_the_timeline(page):
-    """The inspector's trim button is the module's begin/setRange/commit: it and a
-    timeline edit undo in one order, and the tooltip says which is next."""
-    page.locator("#inspector button[data-act=out][data-d='0.25']").click()   # out +0.25
+    """The strip's edits are the module's begin/commit: a Fix (here the out edge, which
+    cuts "how are you" off) and a timeline edit undo in one order, and the tooltip says
+    which is next. (The strip's trim buttons went in INTAKE M16.)"""
+    page.locator("#tl .blk").nth(0).click()
+    page.locator("#inspector button[data-act=fixout]").click()      # out 3.0 → 4.45
+    assert page.evaluate("segs[0].out") == 4.45
     first = ids(page)[0]
     page.evaluate(f"tl.move(['{first}'], null)")
     assert page.evaluate("segs.map(s => s.clip)") == ["CLIP_B.MP4", "CLIP_A.MP4"]
     assert page.locator("#undo").get_attribute("title").startswith("undo: move")
     page.locator("#undo").click()
     assert page.evaluate("segs.map(s => s.clip)") == ["CLIP_A.MP4", "CLIP_B.MP4"]
-    assert page.locator("#undo").get_attribute("title").startswith("undo: trim")
+    assert page.locator("#undo").get_attribute("title").startswith("undo: fix")
     page.keyboard.press("u")                       # plain U is the pass's "later", not undo (I16.0 n)
-    assert page.evaluate("segs[0].out") == 3.25
+    assert page.evaluate("segs[0].out") == 4.45
     page.keyboard.press("Control+z")
     assert page.evaluate("segs[0].out") == 3.0
-    assert page.locator("#redo").get_attribute("title").startswith("redo: trim")
+    assert page.locator("#redo").get_attribute("title").startswith("redo: fix")
     page.locator("#redo").click()
-    assert page.evaluate("segs[0].out") == 3.25
+    assert page.evaluate("segs[0].out") == 4.45

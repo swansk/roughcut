@@ -7,8 +7,8 @@
  * (`tl.begin` / `tl.move` / `tl.insert` / `tl.commit`), so it is one undo entry and it
  * reaches the autosave the same way a trim does.
  *
- *   markers   a thin lane ABOVE V1: `★` at every hero keep that is in the cut, a tick per
- *             ranked event (`P.events`, top 60) that falls inside a shot, and the legend.
+ *   heroes    (INTAKE M16 I16.4: the markers lane above V1 and its legend are gone) a
+ *             block holding a hero keep wears `.hero`, and the block's name a ★.
  *   V1        the foundation's. This file owns the BODY drag: a pointerdown on a block
  *             that is not on a handle, not within 8 px of an edge and has no alt key is a
  *             move (the trim lane owns edges and alt-drag). A drop line shows where the
@@ -33,7 +33,9 @@
  *             the monitor ducks by) and the monitor's own `bedGainAt` curve on top. It
  *             draws, never edits (INTAKE decision 5): a click scrolls the music panel in.
  *   bin       the pass's keeps NOT in the cut as faint outlines after the last shot of
- *             their clip (else after the end), width to length — drag one onto V1.
+ *             their clip (else after the end), width to length — drag one onto V1. No
+ *             label and no clip name on them (M16): an outline is a drag path, the
+ *             tooltip says what it is.
  *
  * Drop from outside: a kept row, a Find result or an `available` outline dragged onto
  * the timeline carries `application/x-roughcut-shot` = `{clip, start, end, why}` and
@@ -57,12 +59,10 @@
   const MIME = 'application/x-roughcut-shot';
   const EDGE = 8;                      // px at a block's edge that belong to the trim lane
   const CLICK = 4;                     // px under which a pointer drag is the foundation's click
-  const EVENTS_TOP = 60;
   const POLL_MS = 500;
-  const HOT = new Set(['fall', 'crash', 'jump', 'reaction']);
-  const H = { markers: 16, ghost: 40, a1: 30, bin: 22, gap: 4 };
+  const H = { ghost: 40, a1: 30, bin: 22, gap: 4 };
 
-  const el = { markers: null, ghost: null, a1: null, bin: null, over: null, arrows: null, drop: null };
+  const el = { ghost: null, a1: null, bin: null, over: null, arrows: null, drop: null };
   let mounted = false;
   let drag = null;                     // the body drag on V1, from pointerdown to pointerup
   let holdRedraw = false;              // an outline is pressed or dragged: rebuilding would end the drag
@@ -104,14 +104,13 @@
   /* ------------------------------------------------------------ layout */
   function layout() {
     const root = tl.el.root;
-    const above = el.markers.hidden ? 0 : H.markers + 2;
+    const above = 0;                     // nothing sits above V1 since the markers lane went
     let below = 0;
     for (const lane of [el.ghost, el.a1, el.bin]) {
       if (lane.hidden) continue;
       lane.style.top = `calc(var(--tl-ruler) + 5px + var(--tl-lane) + ${above + H.gap + below}px)`;
       below += lane.h + H.gap;
     }
-    el.markers.style.top = 'calc(var(--tl-ruler) + 3px)';
     el.over.style.top = `calc(var(--tl-ruler) + 5px + ${above}px)`;
     el.arrows.style.top = el.over.style.top;
     root.style.setProperty('--tl-above', px(above));
@@ -127,7 +126,7 @@
     if (!mounted || holdRedraw) return;
     const a = app();
     if (!a) return;
-    drawMarkers(a);
+    drawHeroes(a);
     drawA1(a);
     drawGhost(a);
     layout();
@@ -147,51 +146,26 @@
     for (const k of Object.keys(now)) if (now[k] !== seen[k]) { schedule(); return; }
   }
 
-  /* ------------------------------------------------------------ markers + bin */
-  function drawMarkers(a) {
+  /* ------------------------------------------------------------ heroes + bin */
+  function drawHeroes(a) {
     const list = tl.state.segs;
     const tot = tl.total();
     const z = tl.state.zoom;
     const keepsUsable = fn('keepsUsable'), shotOf = fn('shotOf'), binOrder = fn('binOrder');
     const keeps = keepsUsable && binOrder ? binOrder(keepsUsable()) : [];
-    const marks = [], avail = [];
+    const heroIds = new Set(), avail = [];
     for (const k of keeps) {
       const i = shotOf ? shotOf(k) : -1;
       if (i < 0) { avail.push(k); continue; }
-      if (!k.hero) continue;
-      const seg = list[i];
-      const at = toFilm(seg, k.start);
-      marks.push({ cls: 'mk hero', t: at, text: '★',
-        title: `★ hero · ${stemOf(k.clip)} ${tl.fmt(k.start)}–${tl.fmt(k.end)}` + (k.why ? `\n${k.why}` : '') });
+      if (k.hero && list[i]) heroIds.add(list[i].id);
     }
-    const events = ((a.P && a.P.events) || []).slice(0, EVENTS_TOP);
-    events.forEach((e, n) => {
-      if (e.notable === false || e.kind === 'junk') return;
-      let start = 0;
-      for (const seg of list) {
-        if (seg.clip === e.clip && e.end > seg.in && e.start < seg.out) {
-          marks.push({ cls: 'mk ev', kind: e.kind || 'seen',
-            t: start + (Math.max(e.start, seg.in) - seg.in) / spd(seg),
-            title: `${e.what || e.kind || 'event'} · #${e.rank || n + 1}` });
-        }
-        start += tl.dur(seg);
-      }
+    tl.el.lanes.V1.querySelectorAll('.blk').forEach((b) => {
+      b.classList.toggle('hero', heroIds.has(b.dataset.id));
     });
-
-    el.markers.hidden = !list.length || !(marks.length || avail.length || events.length);
-    el.markers.replaceChildren(el.markers.lbl);
-    for (const m of marks) {
-      const d = div(m.cls);
-      d.style.left = px(tl.timeToX(m.t));
-      if (m.kind) d.dataset.kind = m.kind;
-      if (m.text) d.textContent = m.text;
-      d.title = m.title;
-      el.markers.appendChild(d);
-    }
 
     // the pass's keeps not in the cut: after the last shot of their clip, else after the end
     el.bin.hidden = !list.length || !avail.length;
-    el.bin.replaceChildren(el.bin.lbl);
+    el.bin.replaceChildren();
     const lastEnd = new Map();
     let start = 0;
     for (const seg of list) { start += tl.dur(seg); lastEnd.set(seg.clip, start); }
@@ -205,9 +179,9 @@
       d.style.left = px(tl.timeToX(at));
       d.style.width = px(Math.max(6, len * z));
       d.style.setProperty('--hue', tl.hueOf(k.clip));
-      d.textContent = `${stemOf(k.clip)} ${len.toFixed(1)}s${k.hero ? ' ★' : ''}`;
-      d.title = `available: ${stemOf(k.clip)} ${tl.fmt(k.start)}–${tl.fmt(k.end)} — drag onto V1 to add it`
-        + (k.why ? `\n${k.why}` : '');
+      d.textContent = k.hero ? '★' : '';
+      d.title = `kept, not in the cut · ${len.toFixed(1)} s — drag onto the timeline to add it`
+        + (k.note || k.why ? `\n${k.note || k.why}` : '');
       d._keep = k;
       el.bin.appendChild(d);
       cursor.set(anchor, at + len);
@@ -727,19 +701,17 @@
     if (mounted || !tl.el || !tl.el.canvas) return;
     mounted = true;
     const canvas = tl.el.canvas;
-    el.markers = lane('markers', H.markers,
-      '<b>★</b> hero · <i class="ev"></i> event · <span class="box"></span> available keep');
     el.ghost = lane('ghost', H.ghost,
       'proposal · <button class="play-proposal" type="button" title="play the proposed cut in the monitor">play proposal</button>'
       + '<button class="play-cut on" type="button" title="play the cut as it is">play cut</button>');
     el.a1 = lane('A1', H.a1, '♪');
-    el.bin = lane('bin', H.bin, 'available');
+    el.bin = lane('bin', H.bin, '');
     el.over = div('tl-over');
     el.arrows = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     el.arrows.setAttribute('class', 'tl-arrows');
     el.drop = div('tl-dropline');
     el.drop.style.display = 'none';
-    for (const x of [el.markers, el.ghost, el.a1, el.bin, el.over, el.arrows, el.drop]) canvas.appendChild(x);
+    for (const x of [el.ghost, el.a1, el.bin, el.over, el.arrows, el.drop]) canvas.appendChild(x);
 
     // V1: the body drag
     const v1 = tl.el.lanes.V1;

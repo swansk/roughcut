@@ -299,6 +299,7 @@ def test_x_removes_the_whole_selection_and_one_undo_restores_it(page):
     assert page.locator("#tl .blk").count() == 2
     # the shot that takes the place is selected; Delete and Backspace do the same
     page.evaluate("tl.seek(tl.total())")               # adding lands at the playhead (INTAKE M11): at the end, so it appends
+    page.evaluate("document.querySelector('#more').hidden && document.querySelector('#moreFound').click(); document.querySelector('#libTabs .tab[data-tab=heard]').click()")
     page.locator("#library .cand").first.click()        # a third shot, after the other two
     assert page.evaluate("segs.length") == 3
     page.evaluate(f"tl.select(['{a}'])")
@@ -327,7 +328,10 @@ def test_backspace_never_takes_the_shot_the_board_picked(page):
     the shot under the playhead as the cut plays. ⌫ and Del take only a chosen shot;
     X is unchanged."""
     a, b = ids(page)
-    assert page.evaluate("[...tl.state.sel]") == [a], "the board picked the first shot"
+    # nothing is selected at start (INTAKE M16); the board picking one is the same case
+    assert page.evaluate("[...tl.state.sel]") == [], "nothing is selected at start"
+    page.evaluate("sel = 0; paint()")              # app.js's index moving, as playback does
+    assert page.evaluate("[...tl.state.sel]") == [a]
     for key in ("Backspace", "Delete"):
         page.keyboard.press(key)
         assert ids(page) == [a, b], key
@@ -407,7 +411,7 @@ def test_escape_clears_the_selection(page):
     page.keyboard.press("Escape")
     assert page.evaluate("tl.state.sel.size") == 0
     assert page.evaluate("tl.state.anchor") is None
-    assert "select a shot on the timeline" in page.locator("#inspector").inner_text()
+    assert page.locator("#inspector .film .totals").is_visible()      # the film row (M16)
 
 
 # ------------------------------------------------------------------ marks on a clip
@@ -430,7 +434,7 @@ def test_i_o_and_enter_on_a_playing_clip_insert_the_marked_range(page):
     assert page.evaluate("[...tl.state.sel]") == [a], "Esc went to the picker, not the selection"
 
     page.locator("#findQ").fill("goodbye")
-    page.locator("#findGo").click()
+    page.locator("#findQ").press("Enter")      # Enter finds (the Find button went, M16)
     page.wait_for_selector("#findResults .cand", timeout=15000)
     page.locator("#findResults .cand").first.click()
     page.wait_for_selector("#findPlayer:visible")
@@ -509,6 +513,7 @@ def test_keys_are_ignored_while_typing(page):
     page.keyboard.press("x")
     page.keyboard.press("Delete")
     assert page.evaluate("segs.length") == 2
+    page.evaluate("tl.select([tl.idAt(0)])")      # nothing is selected at start (M16)
     page.locator("#inspector .why").focus()
     page.keyboard.press("c")
     assert page.evaluate("segs.length") == 2

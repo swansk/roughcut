@@ -352,6 +352,58 @@ same commit. Releases move entries into a dated version section.
   of this cut exists the header's button reads "↓ Download · 1080p · 3:09" and downloads
   it; a dot on *Make the film* says the cut changed since its last film. The board's own
   blue (`button.primary`) is gone: Next's `is-next` is the one blue.
+- **Board tests choose a shot before acting on one (INTAKE M16 I16.4).** With nothing
+  selected at start, the proposal-accept and save-a-copy tests select shot 1 first.
+- **The Bin: one find box, "not in the cut" first, cards named in plain words (INTAKE M16
+  I16.4).** The Find button is gone — Enter in the box finds a moment anywhere, and typing
+  still filters the keeps. Under any find result sits a plain `Not it? Ask the model ·
+  ~$x` (hidden until a find has run). The tabs are `not in the cut · N` (the default, so
+  `/#tool=bin` opens there) and `all N`; two cards a row, each labelled by your note,
+  else the line spoken in it, else what was seen, with its length — no clip name, no
+  `0:37.6 → 0:44.3`, no detector title (`onset spike (impact/sudden event)`), no chips;
+  the clip and range are the card's tooltip. `+ add` shows on the card under the pointer
+  or the selected one. The instruction paragraph is gone. The evidence chips and the
+  heard / seen tabs moved under `more found ▸`; the `in the cut` / `not yet` chips went
+  (the tabs say it). The Audit button stays in view until it has been clicked once on
+  this browser, then lives with the seen tab. The Bin rail badge counts the keeps not in
+  the cut. A chosen tab is plain, not blue.
+- **The board's selected shot is a strip under the timeline, in view with the picture
+  (INTAKE M16 I16.4).** The inspector sat below the fold at y≈953 on Killington with ~27
+  controls and ~290 words per shot. The picture now takes about 46 % of the window (never
+  so much that the strip leaves the screen) and the strip reads: the still, `Shot 2 ·
+  12.9 s`, ▶ play, `Ask about this shot · ~$x`, `Look deeper · ~$x` (the shot's own
+  range), Remove, the why (editable), the first line spoken, any warning with its own
+  fix, one speed control, warmer / cooler / brighter / darker / reset, `colour & look ▸`
+  (the shot's look, strength, auto-balance, matching, reference) and `why? ▸` (where the
+  shot came from, the timed lines, what was seen, the colour in words), and one line for
+  how the machine saw the clip. Both disclosures start closed on every shot. Gone from
+  the main view: the clip-time header, "starts at … of the film", timestamps on lines,
+  five speed controls (now one), the four in/out ± buttons (trims are the block's edges
+  and `[ ] { }`, decision 5), the white-point numbers, the film's look in every shot and
+  the six-lane strip with its legend. A generated slide has no colour controls and a
+  human name (`Shot 1 · black · 3.0 s`). Nothing is selected at start: the strip shows
+  the film — `19 shots · 3:09 · look ▾ · subtle / medium / strong · auto-balance on ·
+  N warnings ▸`, the last stepping to the next warned shot. Warnings sit on their shot
+  with a Fix that is one undo entry and never automatic (`⚠ starts mid-sentence · Fix`
+  moves the in-point to the sentence's start less a breath, the snap tool's rule;
+  `0:01–0:05 goes dark · Trim it out`). Every colour change — a nudge, a look, the film
+  row — is now one ⌘Z entry: the colour block rides the timeline's undo stack.
+- **The `magnet · on` chip shows only while an edge is dragged (INTAKE M16 I16.4).** It sat
+  on the ruler at all times. S still toggles the magnet, and says `magnet on` / `magnet
+  off` in a toast when nothing is being dragged.
+- **Timeline blocks are named by their first words; heroes wear a ★; the markers lane is
+  gone (INTAKE M16 I16.4).** A block read `CLIP_01 12.9s` over a dim line of speech; it
+  now reads the first words spoken in it (else the shot's why, else what was seen), up to
+  three lines, and a generated slide reads its kind (`black`, `title`). The clip, range
+  and film length are the tooltip's. The markers lane above V1 and its legend
+  (`★ hero · event · available keep`) are gone: a block holding a hero keep wears ★ on its
+  name. The dashed outlines of keeps not in the cut stay — they are a drag path — without
+  the `available` label or a clip name on them.
+- **A click on a timeline block selects it and parks the monitor there, paused (INTAKE M16
+  I16.4, decision 6).** A click used to play the cut from the block (the strip's old
+  promise), so looking at a shot started its sound. Now the block is selected, the
+  playhead and the monitor sit on its first frame, and nothing plays; space or a
+  double-click on the block plays from there. ⇧-click and ⌘-click are unchanged.
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
   buttons called the model with no price: the empty board's *Ask for a first cut* and
   *Cut from the bin*, the Ask panel's *Ask* and *Cut from the bin*, a shot's *Ask*, and
