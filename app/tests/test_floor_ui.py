@@ -1006,7 +1006,11 @@ def test_the_closing_card_appears_after_the_last_pick_and_plays_the_bin(page, pr
     assert "3 moments" in card and "if strung out" in card
     assert "3 picks · 3 decided · 3 clips" in card
     assert "0 new picks" in card
-    assert "Assemble · $0.60" in card
+    # the way out spends nothing, so it shows no price (I16.0e: it read "Assemble · $0.60")
+    out = page.locator("#cardAssemble")
+    assert out.inner_text().startswith("Back to the cut →"), out.inner_text()
+    assert "$" not in out.inner_text() and "priced" not in (out.get_attribute("class") or "")
+    assert "$" not in card
     assert "enough" not in card.lower(), "the card reports, it never judges"
     assert page.locator("#cardNext").is_disabled(), "nothing left for a next round"
     # ↵ plays the bin: every select in order, in the same picture
@@ -1019,6 +1023,23 @@ def test_the_closing_card_appears_after_the_last_pick_and_plays_the_bin(page, pr
     assert page.locator("#ctxClip").inner_text() == "CLIP_B"
     page.keyboard.press("Escape")
     page.wait_for_selector("#overlay[data-kind=card]", timeout=5000)
+
+
+def test_with_no_cut_the_card_says_make_the_first_cut_and_opens_the_ask(page, live_server):
+    """I16.0e: with no cut yet the way out is "Make the first cut →", unpriced, and it
+    lands on the board with the Ask open — where the first cut is priced and made."""
+    page.evaluate("floor.state.P.segments = []")
+    for key, word in (("x", "REJECTED"), ("u", "LATER"), ("p", "PICKED")):
+        page.wait_for_function("floor.state.mode === 'pass' && !floor.current().verdict", timeout=5000)
+        page.keyboard.press(key)
+        stamped(page, word)
+    page.wait_for_selector("#overlay[data-kind=card]", timeout=5000)
+    out = page.locator("#cardAssemble")
+    assert out.inner_text().startswith("Make the first cut →"), out.inner_text()
+    assert "$" not in out.inner_text() and "priced" not in (out.get_attribute("class") or "")
+    with page.expect_navigation(timeout=10000):
+        out.click()
+    assert page.url == f"{live_server}/#tool=ask", page.url
 
 
 def test_the_position_resumes_after_a_reload(page, project, live_server):

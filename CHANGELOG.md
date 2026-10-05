@@ -133,6 +133,12 @@ same commit. Releases move entries into a dated version section.
   stand first; a pick with only a demoted claim says it short and plainly — "maybe:
   Skier possibly airborne or jumping on slope, framed with trees · not checked" — and its
   witness line reads the same way. The rule's reason stays on the witness's `demoted`.
+- **The pass's closing card has no fake price (INTAKE I16.0e).** Its way out read
+  "Assemble · $0.60", styled as priced, on a button whose only action was to open the
+  board. It now reads "Back to the cut →" when a cut exists and "Make the first cut →"
+  when none does, with no price; the second (button or `A`) opens the board with the Ask
+  tool (`/#tool=ask`), where the first cut is priced before the click. Play the bin,
+  Next round, By clip and Revisit later are unchanged.
 - **The open screen stopped contradicting itself (INTAKE M14).** With the looks paused its
   header said "3 released · 9 queued" while its footer said every clip was released and
   every card wore QUEUED beside a lit `released` flag: two definitions of released —
