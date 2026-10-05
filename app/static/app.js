@@ -415,7 +415,7 @@ function buildShot(seg) {
         <textarea class="shotNote"
           placeholder="what should change in this shot — start later · hold through the reaction · just keep the punchline"></textarea>
         <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
-          <button data-act="shotgo" class="primary">Ask${priceTag('shot')}</button>
+          <button data-act="shotgo" class="primary"${unpricedAttr('shot')}>Ask${priceTag('shot')}</button>
           <span class="hint shotState"></span>
         </div>
       </div>
@@ -1234,8 +1234,8 @@ function emptyState() {
     You will get a proposal to accept, discard or take apart by hand.</div>
     <textarea id="firstNote" style="margin-top:12px;min-height:60px"
       placeholder="a 2–3 minute edit of the trip for the friends who were there · loose and fun · the people are the point"></textarea>
-    <button id="firstCut" class="primary" style="margin-top:10px">Ask for a first cut${priceTag('first')}</button>
-    <button id="firstFromBin" style="margin-top:10px;margin-left:8px;display:none"
+    <button id="firstCut" class="primary" style="margin-top:10px"${unpricedAttr('first')}>Ask for a first cut${priceTag('first')}</button>
+    <button id="firstFromBin" style="margin-top:10px;margin-left:8px;display:none"${unpricedAttr('bin')}
       title="One Ask with a fixed note: every hero appears, the other keeps serve the story, nothing else unless a keep needs it — a proposal to accept or discard">Cut from the bin${priceTag('bin')}</button>
     <div class="hint" id="firstState" style="margin-top:8px"></div>${look}`;
   el.querySelector('#firstCut').onclick = () => ask({
@@ -1787,33 +1787,58 @@ const BIN_NOTE = "Build the cut from the editor's selects: every hero must appea
  * cut, Cut from the bin (twice), the Ask panel's Ask and a shot's Ask. GET
  * /api/ask/price is free: the server fits it to the asks this project already paid
  * for, priced for today's model. Fetched at boot and again after every ask (the
- * records it is fitted to just grew); a button whose price has not arrived keeps its
- * plain name rather than a guess. */
+ * records it is fitted to just grew). A button whose price has not arrived is
+ * disabled — it used to keep its plain name and stay clickable, so a click in the
+ * first second (or after a failed fetch, for good) spent with no price shown — and one
+ * whose price could not be fetched says so. ask() refuses an unpriced spend too. */
 const askPrice = { first: null, bin: null, full: null, shot: null };
-const priceTag = (mode) => (askPrice[mode] && typeof askPrice[mode].usd === 'number'
-  ? ` · ~$${askPrice[mode].usd.toFixed(2)}` : '');
+const askPriceFailed = { first: false, bin: false, full: false, shot: false };
+const priced = (mode) => !!(askPrice[mode] && typeof askPrice[mode].usd === 'number');
+const priceTag = (mode) => (priced(mode) ? ` · ~$${askPrice[mode].usd.toFixed(2)}`
+  : askPriceFailed[mode] ? ' · price unavailable' : '');
+/* For a button built in a template: disabled, and marked as held for its price only. */
+const unpricedAttr = (mode) => (priced(mode) ? '' : ' disabled data-await-price="1"');
 
 async function fetchAskPrices() {
   await Promise.all(Object.keys(askPrice).map(async (mode) => {
     try {
       const r = await fetch(`/api/ask/price?mode=${mode}`);
-      if (r.ok) askPrice[mode] = await r.json();
-    } catch (e) { /* the plain name stays; the next fetch brings the price */ }
+      if (r.ok) { askPrice[mode] = await r.json(); askPriceFailed[mode] = false; return; }
+    } catch (e) { /* said on the button below */ }
+    if (!priced(mode)) askPriceFailed[mode] = true;
   }));
   paintAskPrices();
+}
+
+/* Held for its price: disabled while unpriced, and enabled again once priced only if it
+ * was this that disabled it — a button disabled for its own reason (an ask running)
+ * keeps that. */
+function holdForPrice(el, mode) {
+  if (!priced(mode)) {
+    if (!el.disabled) { el.disabled = true; el.dataset.awaitPrice = '1'; }
+  } else if (el.dataset.awaitPrice) {
+    delete el.dataset.awaitPrice;
+    el.disabled = false;
+  }
 }
 
 function paintAskPrices() {
   const label = (el, name, mode, basis) => {
     if (!el) return;
     el.textContent = name + priceTag(mode);
-    if (basis && askPrice[mode]) el.title = `about $${askPrice[mode].usd.toFixed(2)} — ${askPrice[mode].basis}`;
+    if (basis && priced(mode)) el.title = `about $${askPrice[mode].usd.toFixed(2)} — ${askPrice[mode].basis}`;
   };
   label($('#ask'), 'Ask', 'full', true);
   label($('#cutFromBin'), 'Cut from the bin', 'bin', false);
   label($('#firstCut'), 'Ask for a first cut', 'first', true);
   label($('#firstFromBin'), 'Cut from the bin', 'bin', false);
   document.querySelectorAll('#inspector button[data-act=shotgo]').forEach((b) => label(b, 'Ask', 'shot', true));
+  for (const [sel, mode] of [['#ask', 'full'], ['#firstCut', 'first'], ['#firstFromBin', 'bin']]) {
+    const el = $(sel);
+    if (el) holdForPrice(el, mode);
+  }
+  document.querySelectorAll('#inspector button[data-act=shotgo]').forEach((b) => holdForPrice(b, 'shot'));
+  paintCutFromBin();                    // its keeps and its price, together
 }
 
 function cutFromBin(opts = {}) {
@@ -1829,7 +1854,7 @@ function paintCutFromBin() {
   const b = $('#cutFromBin');
   const h = $('#cutFromBinHint');
   if (b && h) {
-    b.disabled = !n;
+    b.disabled = !n || !priced('bin');   // and never an unpriced spend (I16.0f)
     if (!n) {
       h.textContent = 'nothing kept yet — the pass is where you keep things';
       h.dataset.empty = '1';
@@ -2298,6 +2323,7 @@ async function reattachAsk() {
     toast(`the ask that was running failed: ${e.message}`, 6000);
   } finally {
     $('#ask').disabled = false;
+    holdForPrice($('#ask'), 'full');          // still never an unpriced spend
   }
 }
 
@@ -2308,6 +2334,9 @@ async function ask(opts = {}) {
   const focus = opts.focus;                 // a shot index: revise that one shot only
   const first = !segs.length;
   if (!note && !first) return toast('type what you want changed first');
+  // every spend shows its price first (I16.0f): no price on the button, no call
+  const mode = focus !== undefined ? 'shot' : opts.fixed ? 'bin' : first ? 'first' : 'full';
+  if (!priced(mode)) return toast('this ask has no price yet — not asking');
   // The brief is the human's half of the loop and the most valuable thing typed into
   // this app, so a first-cut note becomes the story rather than being thrown away.
   // A fixed note (Cut from the bin) is the app's words, not theirs, and never does.
@@ -2346,6 +2375,7 @@ async function ask(opts = {}) {
     toast(`ask failed: ${e.message}`, 6000);
   } finally {
     button.disabled = false;
+    holdForPrice(button, mode);
     fetchAskPrices();
   }
 }

@@ -1554,9 +1554,10 @@ def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
     try:
         # with a cut on the board: the Ask panel's button, a revision
         page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
+        # priced first (I16.0f): until its price is on it the button is disabled
+        assert_priced(page, "#cutFromBin", "Cut from the bin", "bin")
         assert page.locator("#cutFromBin").is_enabled()
         assert page.locator("#cutFromBinHint").inner_text() == ""
-        assert_priced(page, "#cutFromBin", "Cut from the bin", "bin")
         before = page.evaluate("JSON.stringify(segs)")
         page.locator("#cutFromBin").click()
         page.wait_for_selector("#proposal:visible", timeout=30000)
@@ -1720,6 +1721,41 @@ def test_ask_the_model_in_the_bin_is_priced_before_it_can_be_clicked(page, live_
         timeout=5000)
     assert page.locator("#findDeep").is_disabled()
     page.unroute("**/api/find/price")
+
+
+def test_ask_buttons_wait_for_their_price_and_never_spend_without_one(page, live_server):
+    """INTAKE I16.0f / decision 7, review: an Ask-family button whose price had not
+    arrived kept its plain name and stayed clickable — a click in the first second
+    spent with no price shown, and a failed price fetch left it so for good. It is
+    disabled until priced; with no price to be had it says so, stays disabled, and an
+    ask that gets through anyway (a key, a script) refuses before any POST."""
+    assert_priced(page, "#ask", "Ask", "full")
+    assert page.locator("#ask").is_enabled()
+    html = page.evaluate("fetch('/').then(r => r.text())")
+    assert '<button id="ask" class="primary" disabled data-await-price="1">Ask</button>' in html
+
+    posts = []
+    page.on("request", lambda r: posts.append(r.url)
+            if r.method == "POST" and r.url.rstrip("/").endswith("/api/ask") else None)
+    page.route("**/api/ask/price*", lambda route: route.abort())
+    page.reload()
+    page.wait_for_selector("#tl .blk")
+    page.wait_for_function(
+        "document.querySelector('#ask').textContent === 'Ask · price unavailable'", timeout=5000)
+    assert page.locator("#ask").is_disabled()
+    assert page.locator("#cutFromBin").is_disabled()
+    insp = page.locator("#inspector")
+    insp.locator("button[data-act=ask]").click()
+    page.wait_for_selector("#inspector .shotAsk:visible")
+    go = insp.locator("button[data-act=shotgo]")
+    assert go.is_disabled() and go.inner_text() == "Ask · price unavailable"
+    page.evaluate("document.querySelector('#note').value = 'tighten it'")
+    page.evaluate("ask()")
+    page.wait_for_function(
+        "document.querySelector('#toast').textContent.includes('no price yet')", timeout=3000)
+    page.wait_for_timeout(300)
+    assert posts == [], posts
+    page.unroute("**/api/ask/price*")
 
 
 # ---------------------------------------------------------------- the switcher

@@ -346,6 +346,46 @@ def test_the_tool_follows_the_selected_shot_and_prices_the_button(page):
     assert page.locator("#fxDesign").count() == 0
 
 
+def test_design_and_go_wait_for_their_price_and_never_spend_without_one(page):
+    """INTAKE I16.0f, review: Design and Iterate's Go were clickable while their price
+    was still on its way, and stayed unpriced for good when the fetch failed. They are
+    disabled until priced; with no price to be had they say so and stay disabled."""
+    e = design(page)
+    page.wait_for_function("!document.querySelector('#fxDesign').disabled")
+    page.locator(f"#fx .fxcard[data-id='{e['id']}'] button[data-act=iterate]").click()
+    go = page.locator(f"#fx .fxcard[data-id='{e['id']}'] button[data-act=revise]")
+    page.wait_for_function(
+        "(() => { const b = document.querySelector('#fx .fxiter button[data-act=revise]');"
+        " return !!b && !b.disabled && b.textContent.includes('~$'); })()", timeout=5000)
+
+    posts = []
+    page.on("request", lambda r: posts.append(r.url)
+            if r.method == "POST" and ("/api/fx/design" in r.url or "/api/fx/revise" in r.url)
+            else None)
+    page.route("**/api/fx/price*", lambda route: route.abort())
+    page.reload()
+    page.wait_for_selector("#tl .blk")
+    page.wait_for_function("window.fx && fx.ready")
+    open_fx(page, 0)
+    page.wait_for_function(
+        "document.querySelector('#fxDesign').textContent.includes('price unavailable')",
+        timeout=5000)
+    assert page.locator("#fxDesign").is_disabled()
+    page.locator(f"#fx .fxcard[data-id='{e['id']}'] button[data-act=iterate]").click()
+    page.wait_for_function(
+        "(() => { const b = document.querySelector('#fx .fxiter button[data-act=revise]');"
+        " return !!b && b.textContent.includes('price unavailable'); })()", timeout=5000)
+    assert go.is_disabled()
+    # Enter in the box and ⌘Enter in the note go through the same refusal
+    page.locator("#fx .fxiter input").fill("bigger")
+    page.locator("#fx .fxiter input").press("Enter")
+    page.locator("#fxNote").fill("a title")
+    page.locator("#fxNote").press("Control+Enter")
+    page.wait_for_timeout(300)
+    assert posts == [], posts
+    page.unroute("**/api/fx/price*")
+
+
 def test_design_makes_a_proposal_card_and_never_touches_the_edl(page):
     """Design → a job (kind fx) → the card: name, hits, the amber chip, the note, the
     events with their times and anchors; the rail badge counts it; the EDL has no

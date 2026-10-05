@@ -143,6 +143,19 @@ same commit. Releases move entries into a dated version section.
   click, the monitor first says "opening CLIP_A…" and names the refusal only once the
   metadata is in, so the assertion read the wrong line (seen twice in full-file runs
   during the review fixes, never alone). It now waits for the refusal's own words.
+- **Ask, Cut from the bin, a shot's Ask, FX Design and Go wait for their price (M16
+  stage 0 review, I16.0f).** A button whose price had not arrived kept its plain name
+  and stayed enabled ("rather than a guess"), so a click in the first second after
+  load — before `GET /api/ask/price` or `/api/fx/price` answered — spent with no price
+  shown, and a failed fetch left the button unpriced for good. Each of them is now
+  disabled until its price is on it (the Ask panel's *Ask* is served disabled; the
+  empty board's and the inspector's are built disabled), and enabled again only if the
+  price is what held it; with no price to be had it reads "· price unavailable" and
+  stays disabled. `ask()`, Design and Go also refuse an unpriced call themselves (a key
+  or a script gets no further than a toast). FX's Design no longer shows the previous
+  shot's price while the new shot's is on its way. New UI tests abort the price
+  requests and find every such button disabled and no model call sent (both failed
+  before).
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six

@@ -81,6 +81,8 @@
     place: false,
     price: null,             // {usd, frames} for `place` on this shot
     revisePrice: null,       // {usd} for one Iterate → Go (the revise call), on its button
+    revisePriceFailed: false, // its fetch failed: Go says so and stays disabled
+    priceFailed: false,      // the Design price's fetch failed for this shot
     priceFor: null,
     reference: null,         // the sketch's reference, sent with the next Design
     window: null,            // {t0, t1} clip seconds — the human's window on the shot, or null
@@ -174,14 +176,17 @@
     // Iterate's Go is a model call (POST /api/fx/revise): priced like a design with
     // nothing to place, once, before any card's box is open (INTAKE I16.0f)
     if (!S.revisePrice) {
-      api('GET', '/api/fx/price').then((d) => { S.revisePrice = d; paint(); }).catch(() => {});
+      api('GET', '/api/fx/price').then((d) => { S.revisePrice = d; S.revisePriceFailed = false; paint(); })
+        .catch(() => { S.revisePriceFailed = true; paint(); });
     }
     S.priceFor = id;
+    S.price = null;                 // another shot's price is not this one's
+    S.priceFailed = false;
     try {
       const d = await api('GET', `/api/fx/price?place=1&shot=${encodeURIComponent(id)}`);
       if (S.priceFor === id) { S.price = d; paint(); }
     } catch (e) {
-      if (S.priceFor === id) { S.price = null; paint(); }
+      if (S.priceFor === id) { S.price = null; S.priceFailed = true; paint(); }
     }
   }
 
@@ -264,6 +269,7 @@
       } else if (name === 'revise') {
         const note = (S.iter[e.id] || '').trim();
         if (!note) { say('say what to change'); return; }
+        if (!revisePriced()) { say('Go has no price yet — not asking'); return; }
         await api('POST', '/api/fx/revise', { id: e.id, note });
         S.iter[e.id] = '';
         S.iterOpen.delete(e.id);
@@ -303,11 +309,18 @@
     }
   }
 
+  /* Every model button shows its price first (INTAKE I16.0f): Design and Go are
+   * disabled until theirs is on them, and refuse here too (Enter, ⌘Enter). A drawn
+   * reference is one design call at its fixed price, never unpriced. */
+  function designPriced() { return !!S.reference || !!(S.price && typeof S.price.usd === 'number'); }
+  function revisePriced() { return !!(S.revisePrice && typeof S.revisePrice.usd === 'number'); }
+
   async function design() {
     const shot = S.shot;
     const note = (S.note || '').trim();
     if (!shot) { say('select a shot on the timeline first'); return; }
     if (!note) { say('say what the effect is'); return; }
+    if (!designPriced()) { say('the design has no price yet — not asking'); return; }
     // placing is not optional: without it the anchor is the frame's centre, which is
     // never what anyone asked for (Karl, 2026-09-20). A drawn reference carries the
     // anchors itself and skips the call.
@@ -408,7 +421,7 @@
         + `</div>`;
     const iter = S.iterOpen.has(e.id)
       ? `<div class="fxiter"><input type="text" placeholder="red and bigger · hold it a second longer · only the big one · no sound" value="${esc(S.iter[e.id] || '')}">`
-        + `<button data-act="revise" class="primary" title="one model call — the effect comes back as a proposal">Go${S.revisePrice && typeof S.revisePrice.usd === 'number' ? ` · ~$${S.revisePrice.usd.toFixed(2)}` : ''}</button></div>`
+        + `<button data-act="revise" class="primary"${revisePriced() ? '' : ' disabled'} title="one model call — the effect comes back as a proposal">Go${revisePriced() ? ` · ~$${S.revisePrice.usd.toFixed(2)}` : S.revisePriceFailed ? ' · price unavailable' : ''}</button></div>`
       : '';
     const extras = [];
     if (Array.isArray(e.window) && e.window.length === 2) extras.push(`window · ${fmtT(e.window[0])}–${fmtT(e.window[1])}`);
@@ -439,7 +452,7 @@
     const designing = !!(busy && busy.fx_kind === 'design');
     const price = S.price && typeof S.price.usd === 'number'
       ? ` <span class="hint fxprice">≈ $${S.price.usd.toFixed(2)}${S.price.frames ? ` · ${S.price.frames} frame${S.price.frames === 1 ? '' : 's'}` : ''}</span>`
-      : '';
+      : S.priceFailed ? ' <span class="hint fxprice">price unavailable</span>' : '';
     const ref = S.reference
       ? `<div class="fxref">reference · ${S.reference.marks.length} mark${S.reference.marks.length === 1 ? '' : 's'} at ${fmtT(S.reference.t)}`
         + (S.reference.goal ? ` · <i>${esc(S.reference.goal)}</i>` : '')
@@ -453,7 +466,7 @@
       + whereHtml()
       + ref + sk
       + `<div class="fxbtns"><button id="fxSketch"${S.sketch ? ' disabled' : ''} title="pause the monitor and draw on the frame: where the effect goes — the marks become the anchors, no placing call">Draw a reference</button>`
-      + `<div class="grow"></div><button id="fxDesign" class="primary"${designing ? ' disabled' : ''} title="${S.reference ? 'one design call; your marks are the anchors' : 'one design call, then a look at a frame around each moment to put the effect on the thing you named'}">${designing ? 'Designing…' : `Design${S.reference ? ' <span class="fxprice">≈ $0.05</span>' : price}`}</button></div>`
+      + `<div class="grow"></div><button id="fxDesign" class="primary"${designing || !designPriced() ? ' disabled' : ''} title="${S.reference ? 'one design call; your marks are the anchors' : 'one design call, then a look at a frame around each moment to put the effect on the thing you named'}">${designing ? 'Designing…' : `Design${S.reference ? ' <span class="fxprice">≈ $0.05</span>' : price}`}</button></div>`
       + (busy ? `<div class="fxstate hint">${esc(busy.label)}${busy.detail ? ` — ${esc(busy.detail)}` : ''}</div>` : '')
       + `</div>`;
   }
@@ -725,7 +738,7 @@
 
   function signature() {
     return JSON.stringify([
-      S.shot, S.effects, S.sel, S.price, S.revisePrice,
+      S.shot, S.effects, S.sel, S.price, S.revisePrice, S.priceFailed, S.revisePriceFailed,
       S.reference && [S.reference.t, S.reference.marks.length, S.reference.goal],
       S.window && [S.window.t0, S.window.t1],
       S.peaks.length,
