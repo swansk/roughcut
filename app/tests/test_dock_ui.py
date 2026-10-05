@@ -348,9 +348,18 @@ def test_the_keys_are_an_overlay_on_question_mark(page):
     assert not page.locator("#keysOverlay").is_visible()
     page.keyboard.press("?")
     assert page.locator("#keysOverlay").is_visible()
-    # timeline-keys.js found the panel by its heading and put its own section in it
-    assert page.locator("#keysOverlay #tlKeys").is_visible()
-    assert "timeline" in page.locator("#keysOverlay").inner_text().lower()   # the h3 is uppercased by CSS
+    # one table grouped by task (INTAKE M16 I16.4), the timeline's rows read from its
+    # own table: no second section, no module tags, no row twice
+    groups = page.eval_on_selector_all("#keyTable th", "els => els.map(e => e.textContent)")
+    assert groups == ["Play", "Trim and cut", "Move around", "The bin"], groups
+    assert not page.locator("#keysOverlay #tlKeys").is_visible()   # mounted, not shown
+    text = page.locator("#keysOverlay").inner_text()
+    assert "razor" in text                         # a row from window.tlKeys.KEYS
+    for tag in ("· foundation", "· trim", "· edges"):
+        assert tag not in text, tag
+    rows = page.eval_on_selector_all(
+        "#keyTable tr:not(:has(th))", "els => els.map(e => e.textContent.replace(/\\s+/g, ' '))")
+    assert len(rows) == len(set(rows)), rows
     page.keyboard.press("Escape")
     assert not page.locator("#keysOverlay").is_visible()
     assert page.evaluate("segs.length") == 2             # Esc closed the map, nothing else

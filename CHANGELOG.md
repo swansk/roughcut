@@ -234,6 +234,11 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **The keys sheet is one table grouped by task (INTAKE M16 I16.4).** It was the board's
+  own run-on line of keys, then the timeline's section with module tags ("· foundation",
+  "· trim", "· edges") and rows said twice (x, ⌘Z, + − \). Now one table — Play · Trim
+  and cut · Move around · The bin — drawn by /dock.js from the board's keys and the
+  timeline's own table (`window.tlKeys.KEYS`, read, never copied), each row once.
 - **Sound in one line (INTAKE M16 I16.4).** Removed: the MUSIC heading, the 0–24 dB
   slider and its "12 dB" label, and the hint paragraphs ("Heard under the cut in the
   monitor…", "A bed sits under the cut and ducks…"). Now: the track; one line only when it

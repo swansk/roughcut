@@ -301,7 +301,13 @@
   #keysOverlay .panel h2 { font-size: 14px; color: var(--text); text-transform: none;
                            letter-spacing: 0; display: flex; align-items: baseline; gap: 10px; }
   #keysOverlay .panel h2 .hint { font-weight: 400; }
-  #keysOverlay .panel > .hint { line-height: 2; }
+  #keysOverlay .panel > .hint { margin-top: 10px; }
+  #keysOverlay #tlKeys { display: none; }
+  #keyTable { border-collapse: collapse; width: 100%; font-size: 13px; }
+  #keyTable th { text-align: left; color: var(--dim); font-size: 11px; font-weight: 600;
+                 text-transform: uppercase; letter-spacing: .08em; padding: 12px 0 4px; }
+  #keyTable td { padding: 3px 0; vertical-align: top; color: var(--text); }
+  #keyTable td.k { white-space: nowrap; padding-right: 14px; width: 1%; }
 
   /* The progress strip. One place, below the flow bar, full width, for every long
      operation in the app — Karl: "consider a progress tracking bar up top for anything
@@ -603,23 +609,15 @@
   </aside>
 </main>
 
-<!-- The keys, on ? — an overlay, the way the pass shows its map. The panel inside keeps
-     the `Keys` heading timeline-keys.js looks for to append its own section. -->
+<!-- The keys, on ? — an overlay, the way the pass shows its map: one table grouped by
+     task, drawn by /dock.js from the board's keys and the timeline's own table. The
+     `Keys` heading stays: timeline-keys.js finds the panel by it and mounts its own
+     section (#tlKeys), which the table replaces on screen. -->
 <div id="keysOverlay" hidden>
   <div class="panel" role="dialog" aria-label="keys">
     <h2>Keys</h2>
-    <!-- the first .hint is the board's own line: timeline-keys.js rewrites "j/k move"
-         in it and appends its Timeline section after -->
-    <div class="hint">
-      <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>space</kbd> play / pause the cut from here ·
-      <kbd>enter</kbd> play this shot only ·
-      <kbd>[</kbd><kbd>]</kbd> trim in · <kbd>{</kbd><kbd>}</kbd> trim out ·
-      <kbd>x</kbd> remove · hold <kbd>shift</kbd> for 1s steps ·
-      <kbd>⌘z</kbd> undo · <kbd>⌘⇧z</kbd> redo · <kbd>+</kbd><kbd>−</kbd> zoom · <kbd>\</kbd> fit ·
-      <kbd>g</kbd> grade on / off · <kbd>o</kbd> bins and cuts ·
-      in the bin: click selects a keep · <kbd>enter</kbd> adds it at the playhead · <kbd>space</kbd> plays it there · drag it onto V1 ·
-      <kbd>?</kbd> or <kbd>esc</kbd> closes this
-    </div>
+    <table id="keyTable"></table>
+    <div class="hint"><kbd>?</kbd> or <kbd>esc</kbd> closes this</div>
   </div>
 </div>
 <div id="toast"></div>

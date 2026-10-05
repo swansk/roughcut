@@ -488,10 +488,11 @@ def test_the_keys_panel_lists_the_timeline_keys_from_the_table(page):
     assert "shuttle" in text and "razor" in text and "magnet" in text
     assert page.evaluate("tlKeys.KEYS.length") == \
         page.locator("#tlKeys .row").count(), "rendered from the table, row for row"
-    # the board's own line no longer says j/k move the selection
+    # the board's own line no longer says j/k move the selection — it is gone: the
+    # overlay is one table by task (INTAKE M16 I16.4, /dock.js), read from this table
     panel = page.locator("#tlKeys").locator("..")
     assert "j/k move" not in panel.inner_text()
-    assert "↑/↓ move" in panel.inner_text()
+    assert panel.locator("#keyTable").count() == 1
     page.keyboard.press("?")
     assert "tl-flash" in (panel.get_attribute("class") or "")
 
