@@ -22,9 +22,11 @@
  *
  * Workers and the budget cap live in settings (design §2 Fig. 1: "workers 2 · cap $15 ·
  * settings ▾"), behind the gear next to the Index button (or `,`): GET/PUT /api/settings.
- * The cap is the line the index pauses its priced stages at; a cap from the environment
- * (ROUGHCUT_BUDGET_USD) wins over the one saved here, so the field is disabled when the
- * server says so. Workers are one small stepper per stage, 1–8, applied to the next run.
+ * No cap is the default (INTAKE M16 decision 7); a cap, when chosen, is on this
+ * project's spend — the one money number on this page — and is the line the index
+ * pauses its priced stages at. A cap from the environment (ROUGHCUT_BUDGET_USD) wins
+ * over the one saved here, so the choice is disabled when the server says so. Workers
+ * are one small stepper per stage, 1–8, applied to the next run.
  */
 
 'use strict';
@@ -71,6 +73,11 @@ const dayOf = (epoch) => epoch
 const timeOf = (epoch) => new Date(epoch * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const usd = (x) => `$${Number(x || 0).toFixed(2)}`;
+// The one money number (INTAKE M16 I16.0g): this project's spend, and the cap only when
+// there is one.
+const spentLine = (b) => (b && b.budget_usd != null
+  ? `${usd(b.spent_usd)} of ${usd(b.budget_usd)} cap` : usd(b && b.spent_usd));
+const capText = (c) => (c == null ? 'none' : usd(c));
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, (c) =>
@@ -281,7 +288,7 @@ function renderControls() {
     : looked
       ? `applies to the ${plural(pending, 'clip')} not yet looked at — the ${plural(looked, 'clip')} already looked at stay as they are`
       : 're-prices live as the thumb moves · the close look after the sheets is the same at every stop';
-  $('#budgetLine').textContent = `${usd(b.spent_usd)} of ${usd(b.budget_usd)}`;
+  $('#budgetLine').textContent = spentLine(b);
   const problems = (b.problems || []).map((p) => `<span class="bad">${escapeHtml(p)}</span>`).join(' ');
   $('#backendLine').innerHTML = `${escapeHtml(b.backend || '')} · ${escapeHtml(b.model || '')}${problems ? ' · ' + problems : ''}`;
   renderButton();
@@ -381,7 +388,7 @@ function renderIndex() {
     : running ? 'ETA once a stage has been timed' : 'not running';
   const parked = p.parked ? ` · <span class="bad">${plural(p.parked, 'clip')} parked</span>` : '';
   const paused = p.paused_priced ? ' · <span class="warn">looks paused</span>' : '';
-  $('#progMeta').innerHTML = `${p.pct || 0}% of stages · <span class="warn">${usd(p.cost_usd)}</span> spent by the index · ${eta}${parked}${paused}`;
+  $('#progMeta').innerHTML = `${p.pct || 0}% of stages · ${eta}${parked}${paused}`;
   renderPaused(ix);
   $('#journalPath').textContent = ix.path || '';
   $('#journalLog').innerHTML = (p.log || []).slice(-5).map((e) =>
@@ -396,8 +403,11 @@ function renderIndex() {
 function pausedWords(reason) {
   const r = String(reason || '');
   if (r.startsWith('budget cap')) {
-    const cap = r.replace(/^budget cap\s*/, '').replace(/\s*reached$/, '');
-    return `The budget cap${cap ? ` (${cap})` : ''} was reached — raise it under ⚙, or resume and it is checked again before every look.`;
+    // the cap as it is now, not as the reason recorded it: raised or removed since,
+    // Resume is all it takes
+    const b = (O.status && O.status.backend) || {};
+    if (b.budget_usd == null) return 'They stopped at this project\'s budget cap. There is no cap now — Resume carries on.';
+    return `The budget cap is reached — this project has spent ${spentLine(b)}. Raise or remove the cap under ⚙, then Resume.`;
   }
   if (r === 'paused by the editor') return 'You paused them.';
   return 'They were paused before this run.';
@@ -444,11 +454,18 @@ function workerField(st) {
 function fillSettingsForm(v) {
   const s = O.settings;
   if (!s) return;
-  if (s.source.budget_usd !== 'env' && v.budget_usd != null) $('#capField').value = String(v.budget_usd);
+  if (s.source.budget_usd !== 'env') setCapForm(v.budget_usd);
   for (const st of WORKER_STAGES) {
     const f = workerField(st);
     if (f && v.workers && v.workers[st] != null) f.value = String(clampWorkers(v.workers[st]));
   }
+}
+
+// No cap, or a cap and its number: the radios and the field say the same thing.
+function setCapForm(cap) {
+  $('#capNone').checked = cap == null;
+  $('#capOn').checked = cap != null;
+  $('#capField').value = cap == null ? '' : String(cap);
 }
 
 function settingsErr(text) {
@@ -472,7 +489,7 @@ function renderSettings() {
   $('#settingsBtn').setAttribute('aria-expanded', String(O.sopen));
   $('#settings').hidden = !O.sopen;
   $('#settingsLine').textContent = s
-    ? `cap ${usd(s.budget_usd)} · workers ${WORKER_STAGES.map((st) => `${st} ${s.workers[st]}`).join(' · ')}`
+    ? `${s.budget_usd == null ? 'no cap' : `cap ${usd(s.budget_usd)}`} · workers ${WORKER_STAGES.map((st) => `${st} ${s.workers[st]}`).join(' · ')}`
     : '';
   renderSettingsRunning();
   if (!O.sopen) return;
@@ -482,15 +499,13 @@ function renderSettings() {
   if (!s) return;
   const src = (s.source || {}).budget_usd;
   const env = src === 'env';
-  const f = $('#capField');
-  f.disabled = env;
-  f.value = String(s.budget_usd);                  // the environment's number too, so the field says what holds
-  $('#capSpent').textContent = `${usd(s.spent_usd)} spent`;
+  for (const el of [$('#capField'), $('#capNone'), $('#capOn')]) el.disabled = env;
+  setCapForm(s.budget_usd);                        // the environment's number too, so the form says what holds
   $('#capHint').textContent = env
     ? 'from the environment — ROUGHCUT_BUDGET_USD wins over this'
-    : src === 'settings'
-      ? 'set here — the index pauses its priced stages at this line and says so'
-      : 'the default — the index pauses its priced stages at this line and says so';
+    : s.budget_usd == null
+      ? 'no cap — every button that spends still shows its price first'
+      : 'on this project\'s spend — the index pauses its priced stages at this line, and a model call past it is refused';
   fillSettingsForm(s);
   $('#settingsState').textContent = '';
 }
@@ -511,7 +526,8 @@ async function openSettings() {
   settingsErr('');
   renderSettings();                                // the last answer first, then a fresh one
   await refreshSettings();
-  const first = $('#capField').disabled ? workerField(WORKER_STAGES[0]) : $('#capField');
+  const first = $('#capField').disabled ? workerField(WORKER_STAGES[0])
+    : $('#capOn').checked ? $('#capField') : $('#capNone');
   if (first && O.settings) first.focus();
 }
 
@@ -531,8 +547,8 @@ function toggleSettings() {
 // What Save changed, in words: "cap $15.00 → $5.00 · sheet workers 2 → 4".
 function settingsChanges(before, after) {
   const out = [];
-  if (before && Number(before.budget_usd) !== Number(after.budget_usd)) {
-    out.push(`cap ${usd(before.budget_usd)} → ${usd(after.budget_usd)}`);
+  if (before && capText(before.budget_usd) !== capText(after.budget_usd)) {
+    out.push(`cap ${capText(before.budget_usd)} → ${capText(after.budget_usd)}`);
   }
   for (const st of WORKER_STAGES) {
     const a = before && before.workers ? before.workers[st] : undefined;
@@ -557,12 +573,16 @@ async function saveSettings(body) {
       body.workers[st] = n;
     }
     if (before.source.budget_usd !== 'env') {
-      const cap = Number($('#capField').value);
-      if (!(cap > 0)) {
-        settingsErr('the cap must be more than $0');
-        return null;
+      if ($('#capNone').checked) {
+        body.budget_usd = null;                    // no cap
+      } else {
+        const cap = Number($('#capField').value);
+        if (!(cap > 0)) {
+          settingsErr('the cap must be more than $0 — or choose No cap');
+          return null;
+        }
+        body.budget_usd = cap;
       }
-      body.budget_usd = cap;
     }
   }
   O.sbusy = true;
@@ -624,6 +644,10 @@ function wireSettings() {
   $('#workers').addEventListener('change', (e) => {
     if (e.target.matches('input[data-stage]')) e.target.value = String(clampWorkers(e.target.value));
   });
+  // typing a number is choosing a cap; choosing No cap empties the number
+  $('#capField').addEventListener('input', () => { $('#capOn').checked = true; settingsErr(''); });
+  $('#capNone').addEventListener('change', () => { if ($('#capNone').checked) $('#capField').value = ''; });
+  $('#capOn').addEventListener('change', () => { if ($('#capOn').checked) $('#capField').focus(); });
   $('#settings').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && e.target.matches('input')) { e.preventDefault(); saveSettings(); }
   });

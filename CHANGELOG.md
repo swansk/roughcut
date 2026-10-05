@@ -13,6 +13,32 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Changed
+- **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
+  buttons called the model with no price: the empty board's *Ask for a first cut* and
+  *Cut from the bin*, the Ask panel's *Ask* and *Cut from the bin*, a shot's *Ask*, and
+  the FX card's Iterate *Go*. A new free `GET /api/ask/price?mode=first|bin|full|shot`
+  returns `{usd, basis}`: the median of this project's last few asks of that kind
+  (their recorded tokens, re-priced at the deep role's model now, so a tier move moves
+  the price), else a typical Killington-sized call, plus the quick estimate call that
+  opens a whole-cut ask — Killington today: whole-cut ~$0.58, a shot ~$0.15. The
+  buttons read "Ask · ~$0.58"; Go reads the fx price ("Go · ~$0.05"). The after-the-run
+  token line ("claude-opus-5 · 39403→15314 tok · $0.5799 projected") is one short
+  "cost $0.58".
+- **No budget cap by default; spend is per project, one number (INTAKE I16.0g, Karl,
+  2026-10-04: *"Do not have a cap … 'no cap' — this should be on by default"*).** The
+  cap was a $15 default against `inference.spent_usd()`, a process-lifetime counter: a
+  restart reset it, every bin shared it, and the visual pass's subprocess spend never
+  reached it. Now `config.budget_usd()` is None unless `ROUGHCUT_BUDGET_USD` pins one;
+  the settings drawer offers *No cap* (the default) or *cap this project at $__*
+  (`PUT /api/settings {"budget_usd": null}` removes it). `server.project_spent()` reads
+  this bin's spend from disk — the visual sidecars (looks, close looks, audits) plus
+  `spend/<bin>.jsonl`, one row per in-process call written by a new
+  `inference.add_spend_listener` hook, its first row the asks / themes / deep records
+  already on disk — and a cap is enforced against it at the index, the audit, the deep
+  look and, through `inference.set_budget_gate`, before every model call. /open shows
+  one money number, "spent on this project $X" (+ "of $Y cap" only when one is set);
+  the index line's own "$ spent by the index" is gone; the paused box says the cap is
+  reached and that raising or removing it lets Resume carry on.
 - **The board listens on this machine only (Karl, 2026-10-04, ahead of an open-source
   release).** `app/server.py` bound `0.0.0.0` with no login, so on a shared network
   anyone could open the board and its footage. A new `--host` defaults to `127.0.0.1`

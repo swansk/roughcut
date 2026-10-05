@@ -415,7 +415,7 @@ function buildShot(seg) {
         <textarea class="shotNote"
           placeholder="what should change in this shot — start later · hold through the reaction · just keep the punchline"></textarea>
         <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
-          <button data-act="shotgo" class="primary">Ask</button>
+          <button data-act="shotgo" class="primary">Ask${priceTag('shot')}</button>
           <span class="hint shotState"></span>
         </div>
       </div>
@@ -1234,9 +1234,9 @@ function emptyState() {
     You will get a proposal to accept, discard or take apart by hand.</div>
     <textarea id="firstNote" style="margin-top:12px;min-height:60px"
       placeholder="a 2–3 minute edit of the trip for the friends who were there · loose and fun · the people are the point"></textarea>
-    <button id="firstCut" class="primary" style="margin-top:10px">Ask for a first cut</button>
+    <button id="firstCut" class="primary" style="margin-top:10px">Ask for a first cut${priceTag('first')}</button>
     <button id="firstFromBin" style="margin-top:10px;margin-left:8px;display:none"
-      title="One Ask with a fixed note: every hero appears, the other keeps serve the story, nothing else unless a keep needs it — a proposal to accept or discard">Cut from the bin</button>
+      title="One Ask with a fixed note: every hero appears, the other keeps serve the story, nothing else unless a keep needs it — a proposal to accept or discard">Cut from the bin${priceTag('bin')}</button>
     <div class="hint" id="firstState" style="margin-top:8px"></div>${look}`;
   el.querySelector('#firstCut').onclick = () => ask({
     note: el.querySelector('#firstNote').value.trim(),
@@ -1783,6 +1783,39 @@ const BIN_NOTE = "Build the cut from the editor's selects: every hero must appea
   + 'the other keeps where they serve the story, and take nothing else unless it is '
   + 'needed to make a keep land.';
 
+/* What an Ask costs, on its button before the click (INTAKE M16 I16.0f) — the first
+ * cut, Cut from the bin (twice), the Ask panel's Ask and a shot's Ask. GET
+ * /api/ask/price is free: the server fits it to the asks this project already paid
+ * for, priced for today's model. Fetched at boot and again after every ask (the
+ * records it is fitted to just grew); a button whose price has not arrived keeps its
+ * plain name rather than a guess. */
+const askPrice = { first: null, bin: null, full: null, shot: null };
+const priceTag = (mode) => (askPrice[mode] && typeof askPrice[mode].usd === 'number'
+  ? ` · ~$${askPrice[mode].usd.toFixed(2)}` : '');
+
+async function fetchAskPrices() {
+  await Promise.all(Object.keys(askPrice).map(async (mode) => {
+    try {
+      const r = await fetch(`/api/ask/price?mode=${mode}`);
+      if (r.ok) askPrice[mode] = await r.json();
+    } catch (e) { /* the plain name stays; the next fetch brings the price */ }
+  }));
+  paintAskPrices();
+}
+
+function paintAskPrices() {
+  const label = (el, name, mode, basis) => {
+    if (!el) return;
+    el.textContent = name + priceTag(mode);
+    if (basis && askPrice[mode]) el.title = `about $${askPrice[mode].usd.toFixed(2)} — ${askPrice[mode].basis}`;
+  };
+  label($('#ask'), 'Ask', 'full', true);
+  label($('#cutFromBin'), 'Cut from the bin', 'bin', false);
+  label($('#firstCut'), 'Ask for a first cut', 'first', true);
+  label($('#firstFromBin'), 'Cut from the bin', 'bin', false);
+  document.querySelectorAll('#inspector button[data-act=shotgo]').forEach((b) => label(b, 'Ask', 'shot', true));
+}
+
 function cutFromBin(opts = {}) {
   if (!keepsUsable().length) return toast('nothing kept yet — the pass is where you keep things');
   return ask({ note: BIN_NOTE, fixed: true, button: opts.button, state: opts.state });
@@ -2068,7 +2101,8 @@ function paintBackend(b) {
     el.classList.add('ok');
     el.textContent = `${short} · ready`;
     el.title = `${tiers}${b.backend}, replied in ${(b.latency_ms / 1000).toFixed(1)}s\n` +
-      `$${b.spent_usd} of $${b.budget_usd} projected this run`;
+      `$${Number(b.spent_usd || 0).toFixed(2)} spent on this project`
+      + (b.budget_usd != null ? ` of a $${Number(b.budget_usd).toFixed(2)} cap` : '');
     return;
   }
   el.textContent = `${short} · unchecked`;
@@ -2301,10 +2335,9 @@ async function ask(opts = {}) {
     strip.owned.add(job);        // this page is following it; the strip must not double up
     const plan = await pollAsk(job, verb, stateEl);
     showProposal(plan);
+    // the price was on the button; what it measured is one short line after
     const u = plan.usage || {};
-    const cost = u.model
-      ? `${u.model} · ${u.input_tokens}→${u.output_tokens} tok · $${(u.projected_usd || 0).toFixed(4)} projected`
-      : '';
+    const cost = typeof u.projected_usd === 'number' ? `cost $${u.projected_usd.toFixed(2)}` : '';
     stateEl.textContent = cost;
     $('#askState').textContent = cost;
   } catch (e) {
@@ -2312,6 +2345,7 @@ async function ask(opts = {}) {
     toast(`ask failed: ${e.message}`, 6000);
   } finally {
     button.disabled = false;
+    fetchAskPrices();
   }
 }
 
@@ -2899,6 +2933,7 @@ async function boot() {
   // strip is right on the first frame rather than a second later.
   await pollJobs();
   reattachAsk();
+  fetchAskPrices();
   setInterval(pollJobs, 1000);
   if (!P.proxies_ready) {
     toast('building proxies in the background — previews appear as they finish', 6000);

@@ -414,6 +414,9 @@ def test_verify_iterate_accept_and_remove(page):
     assert "verified" in card.locator(".fxvhead").inner_text()
     # iterate
     card.locator("button[data-act=iterate]").click()
+    # Go is a model call: its price is on it before the click (INTAKE I16.0f)
+    go = card.locator(".fxiter button[data-act=revise]")
+    assert go.inner_text() == f"Go · ~${api(page, '/api/fx/price')['usd']:.2f}"
     box = card.locator(".fxiter input")
     box.fill("make them red")
     box.press("Enter")

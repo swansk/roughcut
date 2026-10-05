@@ -30,6 +30,20 @@ playwright_api = pytest.importorskip("playwright.sync_api",
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 
+def assert_priced(page, selector: str, name: str, mode: str) -> None:
+    """INTAKE I16.0f: a button that asks the model carries its price before the click —
+    "Ask · ~$0.58" — and it is the server's free estimate for that kind of ask."""
+    usd = page.evaluate(f"fetch('/api/ask/price?mode={mode}').then(r => r.json()).then(d => d.usd)")
+    want = f"{name} · ~${usd:.2f}"
+    try:
+        page.wait_for_function(
+            "([s, w]) => document.querySelector(s) && document.querySelector(s).textContent.trim() === w",
+            arg=[selector, want], timeout=5000)
+    except playwright_api.TimeoutError:
+        raise AssertionError(f"{selector} reads {page.locator(selector).first.inner_text()!r}, "
+                             f"not {want!r}") from None
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -294,6 +308,7 @@ def test_ask_shows_a_proposal_that_can_be_accepted_or_discarded(page):
         before = page.evaluate("JSON.stringify(segs)")
         page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
         page.locator("#note").fill("use the clip that isn't in the cut")
+        assert_priced(page, "#ask", "Ask", "full")
         page.locator("#ask").click()
         page.wait_for_selector("#proposal:visible", timeout=30000)
 
@@ -364,6 +379,7 @@ def test_an_empty_timeline_offers_a_first_cut_and_gets_one(page):
         page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
         page.fill("#story", "")        # an earlier test may have left one behind
         page.locator("#firstNote").fill("a loose film about two people talking")
+        assert_priced(page, "#firstCut", "Ask for a first cut", "first")
         page.locator("#firstCut").click()
         page.wait_for_selector("#proposal:visible", timeout=30000)
         assert "conversation" in page.locator("#proposalNotes").inner_text()
@@ -431,6 +447,7 @@ def test_the_inspector_asks_about_the_selected_shot(page):
         insp.locator("button[data-act=ask]").click()
         page.wait_for_selector("#inspector .shotAsk:visible")
         insp.locator(".shotNote").fill("start this on the line instead")
+        assert_priced(page, "#inspector button[data-act=shotgo]", "Ask", "shot")
         insp.locator("button[data-act=shotgo]").click()
         page.wait_for_selector("#proposal:visible", timeout=30000)
 
@@ -1536,6 +1553,7 @@ def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
         page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
         assert page.locator("#cutFromBin").is_enabled()
         assert page.locator("#cutFromBinHint").inner_text() == ""
+        assert_priced(page, "#cutFromBin", "Cut from the bin", "bin")
         before = page.evaluate("JSON.stringify(segs)")
         page.locator("#cutFromBin").click()
         page.wait_for_selector("#proposal:visible", timeout=30000)
@@ -1557,6 +1575,7 @@ def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
         page.wait_for_selector("#inspector .empty")
         assert not page.locator("#askPanel").is_visible()
         assert page.locator("#firstFromBin").is_visible()
+        assert_priced(page, "#firstFromBin", "Cut from the bin", "bin")
         page.locator("#firstFromBin").click()
         page.wait_for_selector("#proposal:visible", timeout=30000)
         prompt = Scripted.seen[-1].prompt

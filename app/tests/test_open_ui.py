@@ -97,6 +97,13 @@ def budget(bin_server, usd: float) -> None:
     bin_server["mp"].setattr(server, "budget_cap", lambda: usd)
 
 
+def money(b: dict) -> str:
+    """The one money number on /open (INTAKE I16.0g): this project's spend, and the cap
+    only when there is one."""
+    cap = b.get("budget_usd")
+    return f"${b['spent_usd']:.2f}" + (f" of ${cap:.2f} cap" if cap is not None else "")
+
+
 def api(page, path: str) -> dict:
     return page.evaluate(f"fetch('{path}').then(r => r.json())")
 
@@ -179,7 +186,7 @@ def test_the_look_is_priced_before_the_button_that_buys_it(page):
     assert "3 clips not yet looked at" in price
     assert "3 sheets" in page.locator("#priceDetail").inner_text()
     b = status["backend"]
-    assert page.locator("#budgetLine").inner_text() == f"${b['spent_usd']:.2f} of ${b['budget_usd']:.2f}"
+    assert page.locator("#budgetLine").inner_text() == money(b)
     btn = page.locator("#indexBtn")
     assert btn.is_enabled()
     assert "Index the footage" in btn.inner_text() and "$" in btn.inner_text()
@@ -269,7 +276,9 @@ def open_settings(page) -> dict:
     page.wait_for_selector("#settings:not([hidden])", timeout=3000)
     page.wait_for_function("sheet.state.settings && !document.querySelector('#settingsForm').hidden",
                            timeout=5000)
-    return page.evaluate("sheet.state.settings")
+    # the drawer paints the last answer first and then asks again; a test reads the
+    # server's word now, not whichever of the two landed before it looked
+    return page.evaluate("async () => { await sheet.refreshSettings(); return sheet.state.settings; }")
 
 
 def test_the_gear_or_comma_opens_settings_and_a_saved_cap_moves_the_budget_line(page):
@@ -285,8 +294,13 @@ def test_the_gear_or_comma_opens_settings_and_a_saved_cap_moves_the_budget_line(
     assert set(got["workers"]) == set(STAGES_WITH_WORKERS)
     assert got["source"]["budget_usd"] in ("settings", "default")
     cap = page.locator("#capField")
-    assert cap.is_enabled() and float(cap.input_value()) == got["budget_usd"]
-    assert page.locator("#capSpent").inner_text() == f"${got['spent_usd']:.2f} spent"
+    # no cap is the default (INTAKE M16 decision 7), said by the radio, the field empty
+    assert got["budget_usd"] is None
+    assert page.locator("#capNone").is_checked() and not page.locator("#capOn").is_checked()
+    assert cap.is_enabled() and cap.input_value() == ""
+    assert "no cap" in page.locator("#capHint").inner_text()
+    assert "no cap" in page.locator("#settingsLine").inner_text()
+    assert page.locator("#capSpent").count() == 0, "one money number: the drawer does not repeat it"
     assert "ROUGHCUT_BUDGET_USD" not in page.locator("#capHint").inner_text()
     assert worker_fields(page) == {k: str(v) for k, v in got["workers"].items()}
     assert page.locator("#workers .wrow").count() == 5
@@ -306,18 +320,18 @@ def test_the_gear_or_comma_opens_settings_and_a_saved_cap_moves_the_budget_line(
     # server keeps it and says it came from settings
     page.keyboard.press(",")
     open_settings(page)
-    before = float(cap.input_value())
     cap.fill("5")
+    assert page.locator("#capOn").is_checked(), "typing a number is choosing a cap"
     page.locator("#settingsSave").click()
     page.wait_for_function("document.querySelector('#toast').textContent.startsWith('saved')", timeout=5000)
     toast = page.locator("#toast").inner_text()
-    assert f"cap ${before:.2f} → $5.00" in toast, toast
-    page.wait_for_function("document.querySelector('#budgetLine').textContent.endsWith('of $5.00')", timeout=5000)
+    assert "cap none → $5.00" in toast, toast
+    page.wait_for_function("document.querySelector('#budgetLine').textContent.endsWith('of $5.00 cap')", timeout=5000)
     got = api(page, "/api/settings")
     assert got["budget_usd"] == 5.0 and got["source"]["budget_usd"] == "settings"
     assert api(page, "/api/status")["backend"]["budget_usd"] == 5.0
     assert "cap $5.00" in page.locator("#settingsLine").inner_text()
-    assert "set here" in page.locator("#capHint").inner_text()
+    assert "this project's spend" in page.locator("#capHint").inner_text()
     assert page.locator("#settings").is_visible(), "saving leaves the drawer open"
     # nothing else changed, and saving again says so
     assert got["workers"] == s["workers"]
@@ -384,7 +398,8 @@ def test_a_cap_from_the_environment_disables_the_field_and_reset_fills_the_defau
     hint = page.locator("#capHint").inner_text()
     assert "ROUGHCUT_BUDGET_USD" in hint and "wins" in hint, hint
     page.evaluate("sheet.refresh()")
-    page.wait_for_function("document.querySelector('#budgetLine').textContent.endsWith('of $7.50')", timeout=5000)
+    assert page.locator("#capNone").is_disabled() and page.locator("#capOn").is_checked()
+    page.wait_for_function("document.querySelector('#budgetLine').textContent.endsWith('of $7.50 cap')", timeout=5000)
     # Reset: the defaults fill the form, the hint says Save applies them, nothing written yet
     page.locator("#settingsReset").click()
     assert worker_fields(page) == {k: str(v) for k, v in s["defaults"]["workers"].items()}
@@ -404,13 +419,14 @@ def test_a_cap_from_the_environment_disables_the_field_and_reset_fills_the_defau
     # drawer re-reads on opening, so `defaults` is the server's word with no environment
     page.keyboard.press(",")
     s = open_settings(page)
-    assert s["source"]["budget_usd"] == "settings" and s["defaults"]["budget_usd"] == 15.0
+    assert s["source"]["budget_usd"] == "settings" and s["defaults"]["budget_usd"] is None
     assert page.locator("#capField").is_enabled()
     page.locator("#settingsReset").click()
-    assert float(page.locator("#capField").input_value()) == 15.0
+    assert page.locator("#capNone").is_checked() and page.locator("#capField").input_value() == ""
     page.locator("#settingsSave").click()
-    page.wait_for_function("document.querySelector('#toast').textContent.includes('cap $5.00 → $15.00')", timeout=5000)
-    assert api(page, "/api/settings")["budget_usd"] == 15.0
+    page.wait_for_function("document.querySelector('#toast').textContent.includes('cap $5.00 → none')", timeout=5000)
+    assert api(page, "/api/settings")["budget_usd"] is None
+    page.wait_for_function("!document.querySelector('#budgetLine').textContent.includes('cap')", timeout=5000)
     page.keyboard.press("Escape")
 
 
@@ -427,7 +443,8 @@ def test_index_the_footage_runs_the_journal_and_the_cap_pauses_the_priced_stages
     page.locator("#indexBtn").click()
     page.wait_for_function("document.querySelector('#indexBtn').disabled", timeout=3000)
     page.wait_for_selector("#paused:not([hidden])", timeout=60000)
-    assert "budget cap" in page.locator("#pausedWhy").inner_text()
+    why = page.locator("#pausedWhy").inner_text()
+    assert "budget cap" in why and "Raise or remove the cap" in why, why
     # the run ends on its own with the priced stages waiting; the button comes back
     page.wait_for_function("!document.querySelector('#indexBtn').disabled", timeout=60000)
     assert "Index what isn't done" in page.locator("#indexBtn").inner_text()
@@ -493,7 +510,12 @@ def test_resume_priced_stages_releases_every_clip_and_opens_the_pass(page, bin_s
     assert "Indexed" in page.locator("#indexTitle").inner_text()
     assert "3 released" in page.locator("#indexCounts").inner_text()
     meta = page.locator("#progMeta").inner_text()
-    assert "100% of stages" in meta and "$" in meta, meta
+    # one money number on the page: the index's line no longer carries its own
+    assert "100% of stages" in meta and "$" not in meta, meta
+    page.evaluate("sheet.refresh()")
+    b = api(page, "/api/status")["backend"]
+    assert b["spent_usd"] > 0, "the looks this run bought are this project's spend"
+    page.wait_for_function(f"document.querySelector('#budgetLine').textContent === {money(b)!r}", timeout=5000)
     assert page.locator("#progBar").evaluate("el => el.style.width") == "100%"
     # the pass opens on what is released — the link, and the step in the header
     link = page.locator("#openPass")

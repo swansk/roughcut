@@ -8,8 +8,8 @@ config change.
 
 Every call is logged with `input_tokens`, `output_tokens` and `projected_usd`, on both
 backends. The Max subscription has no marginal dollar cost, but the projection is what
-answers "would this be affordable in production", and the budget cap is enforced on it
-regardless of backend.
+answers "would this be affordable in production", and a budget cap, when one is set, is
+enforced on it regardless of backend (none by default since INTAKE M16 decision 7).
 
 Backends are selected by `ROUGHCUT_BACKEND`; `claude_cli` is the development default.
 """
@@ -243,17 +243,53 @@ def reset_spend() -> None:
     _SPENT = 0.0
 
 
+# Who else hears about spend (INTAKE M16 I16.0g). `_SPENT` is this process's, and dies
+# with it; the board keeps each project's spend on disk and caps it per project, so it
+# listens to every logged call and may refuse one before it is made. Both are optional
+# — a script that imports this module alone has neither and behaves as it always did.
+_LISTENERS: list[Callable[["Result", str], None]] = []
+_GATE: Callable[[float], None] | None = None
+
+
+def add_spend_listener(fn: Callable[["Result", str], None]) -> None:
+    """Call `fn(result, role)` after every logged call. A listener that raises is
+    ignored: keeping a record of a spend must never cost the call that was paid for."""
+    if fn not in _LISTENERS:
+        _LISTENERS.append(fn)
+
+
+def set_budget_gate(fn: Callable[[float], None] | None) -> None:
+    """A second cap, asked before every call with that call's rough price; it refuses
+    by raising `BudgetExceeded`. None removes it."""
+    global _GATE
+    _GATE = fn
+
+
 def _check_budget(estimate: float) -> None:
     cap = config.budget_usd()
-    if _SPENT + estimate > cap:
+    if cap is not None and _SPENT + estimate > cap:
         raise BudgetExceeded(
             f"projected spend {_SPENT + estimate:.4f} would exceed cap {cap:.2f} "
             f"(ROUGHCUT_BUDGET_USD)")
+    gate = _GATE
+    if gate is None:
+        return
+    try:
+        gate(estimate)
+    except BudgetExceeded:
+        raise
+    except Exception:                                          # pragma: no cover
+        pass          # a gate that breaks is no gate; the call is not its hostage
 
 
 def _log(result: Result, role: str) -> None:
     global _SPENT
     _SPENT += result.projected_usd
+    for fn in list(_LISTENERS):
+        try:
+            fn(result, role)
+        except Exception:                                      # pragma: no cover
+            pass
     path = config.ledger_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

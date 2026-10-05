@@ -1,0 +1,100 @@
+"""GET /api/ask/price — the price on every Ask-family button before the click (INTAKE
+M16 I16.0f): the first cut, Cut from the bin, the Ask panel's Ask and a shot's Ask.
+Free (it reads records, never the model), fitted to the asks this project already
+paid for, and priced for the deep role's model as it is now."""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from roughcut import config, inference  # noqa: E402
+
+from test_server import _fresh  # noqa: E402
+
+
+class _Never:
+    name = "never"
+
+    def complete(self, request):
+        raise AssertionError("a price must not call the model")
+
+
+@pytest.fixture
+def no_model():
+    inference.set_backend(_Never())
+    yield
+    inference.set_backend(None)
+
+
+def _ask_record(server, name: str, tin: int, tout: int, *, shot: bool = False,
+                model: str = "claude-opus-5") -> None:
+    plan = {"segments": [], "notes": "",
+            "usage": {"input_tokens": tin, "output_tokens": tout, "model": model,
+                      "projected_usd": config.projected_usd(model, tin, tout)}}
+    if shot:
+        plan["focus"] = {"index": 0, "clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0, "with": 1}
+    (server.STATE["asks"] / f"{name}.json").write_text(
+        json.dumps({"job": name, "note": "n", "story": "", "plan": plan}), encoding="utf-8")
+
+
+def _estimate_usd() -> float:
+    import server
+    return config.projected_usd(config.model_for(config.ROLE_ANALYSIS),
+                                *server.ASK_ESTIMATE_TOKENS)
+
+
+def test_with_no_asks_on_the_bin_a_typical_one_is_the_price(tmp_path, project, no_model):
+    import server
+
+    with _fresh(tmp_path, project) as c:
+        deep = config.model_for(config.ROLE_SKELETON)
+        cut = config.projected_usd(deep, *server.ASK_TYPICAL_TOKENS["cut"]) + _estimate_usd()
+        for mode in ("first", "bin", "full"):
+            d = c.get(f"/api/ask/price?mode={mode}").json()
+            assert d["usd"] == round(cut, 2) and d["fitted_on"] == 0, d
+            assert "none yet" in d["basis"] and deep in d["basis"]
+        shot = c.get("/api/ask/price?mode=shot").json()
+        assert shot["usd"] == round(config.projected_usd(deep, *server.ASK_TYPICAL_TOKENS["shot"]), 2)
+        assert 0 < shot["usd"] < d["usd"]
+        assert c.get("/api/ask/price?mode=everything").status_code == 400
+        # the route is not taken for a job id
+        assert c.get("/api/ask/price").json()["mode"] == "full"
+
+
+def test_the_price_is_fitted_to_this_projects_asks_and_follows_the_model(tmp_path, project,
+                                                                          no_model, monkeypatch):
+    """Killington's shape: whole-cut asks at 39–45k tokens in, 9.5–15k out (~$0.46–0.58
+    on the top tier) and a shot ask at 28.5k / 0.5k (~$0.15). The middle of the last few
+    of a kind, re-priced at today's deep model — a tier move moves the price with it."""
+    import server
+
+    with _fresh(tmp_path, project) as c:
+        _ask_record(server, "a", 45292, 13736)
+        _ask_record(server, "b", 39403, 15314)
+        _ask_record(server, "c", 40388, 14682)
+        _ask_record(server, "d", 44657, 9545)
+        _ask_record(server, "s", 28487, 476, shot=True)
+        (server.STATE["asks"] / "recovered.json").write_text(
+            json.dumps({"job": "recovered", "plan": {"segments": []}}), encoding="utf-8")
+        deep = config.model_for(config.ROLE_SKELETON)
+        fits = sorted(config.projected_usd(deep, i, o) for i, o in
+                      ((45292, 13736), (39403, 15314), (40388, 14682), (44657, 9545)))
+        want = (fits[1] + fits[2]) / 2 + _estimate_usd()
+        d = c.get("/api/ask/price?mode=full").json()
+        assert d["usd"] == round(want, 2) and d["fitted_on"] == 4, d
+        assert 0.45 <= d["usd"] <= 0.65, "Killington's asks priced at the top tier"
+        assert "last 4 asks about the whole cut" in d["basis"]
+        s = c.get("/api/ask/price?mode=shot").json()
+        assert s["usd"] == round(config.projected_usd(deep, 28487, 476), 2) == 0.15
+        assert s["fitted_on"] == 1
+
+        # the deep role moved to the mid tier: the same tokens, priced there
+        monkeypatch.setenv("ROUGHCUT_MODEL_SKELETON", config.QUICK_MODEL)
+        mid = c.get("/api/ask/price?mode=full").json()
+        assert mid["usd"] < d["usd"] and config.QUICK_MODEL in mid["basis"]

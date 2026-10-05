@@ -152,6 +152,7 @@
            border: 1px solid #3a3a48; border-radius: 6px; padding: 4px 6px; width: 72px; }
   #settings input[type=number]:focus { outline: none; border-color: var(--accent); }
   #settings input[type=number]:disabled { opacity: .5; }
+  #settings input[type=radio] { margin: 0 3px 0 0; accent-color: var(--accent); }
   #settingsRunning { color: var(--warn); }
   .wrow { display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; }
   .wrow .top { display: flex; align-items: center; gap: 8px; }
@@ -320,7 +321,7 @@
         <button type="button" id="resume" class="priced">Resume</button>
       </div>
       <div class="box">
-        <div class="row"><span class="hint">spent so far this project</span><span id="budgetLine" class="tnum hint">…</span></div>
+        <div class="row"><span class="hint">spent on this project</span><span id="budgetLine" class="tnum hint">…</span></div>
         <div id="backendLine" class="hint small"></div>
         <div id="indexRow">
           <button type="button" id="indexBtn" class="primary" disabled>Index the footage</button>
@@ -336,9 +337,10 @@
         <div id="settingsGone" class="hint small" hidden>this server has no settings endpoint yet — the cap and the workers are what the environment says</div>
         <div id="settingsForm">
           <div class="lbl">Budget cap</div>
-          <div class="row" style="justify-content:flex-start">
-            <label class="money" for="capField">$<input id="capField" type="number" min="0.01" step="0.5" inputmode="decimal" aria-label="budget cap in dollars"></label>
-            <span id="capSpent" class="hint tnum"></span>
+          <div class="row" id="capMode" role="radiogroup" aria-label="budget cap" style="justify-content:flex-start">
+            <label class="money"><input type="radio" name="capMode" id="capNone" value="none"> No cap</label>
+            <label class="money"><input type="radio" name="capMode" id="capOn" value="cap"> cap this project at</label>
+            <label class="money" for="capField">$<input id="capField" type="number" min="0.01" step="0.5" inputmode="decimal" placeholder="—" aria-label="budget cap in dollars"></label>
           </div>
           <div id="capHint" class="hint small"></div>
           <div class="lbl">Workers</div>
