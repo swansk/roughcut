@@ -748,15 +748,25 @@
     const key = `${clip}|${a.toFixed(2)}|${b.toFixed(2)}`;
     const holder = document.createElement('span');
     holder.className = 'dv-rowact';
+    holder.dataset.key = key;
     row.appendChild(holder);
     const show = (s, e) => {
       openRows.set(key, [s, e]);
-      if (!row.parentNode) return;
-      let res = row.nextElementSibling;
+      // The finished job also reloads the board's project, and that redraws the list:
+      // when the redraw lands first this row is gone and its replacement (same span,
+      // same key) is the one to open — the result was lost there before (INTAKE M16
+      // integration). With no replacement drawn yet, its own rowButton reopens it.
+      let at = row;
+      if (!at.isConnected) {
+        const h = [...document.querySelectorAll('.dv-rowact')].find((x) => x.dataset.key === key);
+        at = h && h.parentElement;
+        if (!at || !at.isConnected) return;
+      }
+      let res = at.nextElementSibling;
       if (!res || !res.classList.contains('dv-res')) {
         res = document.createElement('div');
         res.className = 'dv-res inrow';
-        row.after(res);
+        at.after(res);
       }
       renderResult(res, clip, s, e, { inrow: true });
     };

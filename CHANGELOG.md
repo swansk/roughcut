@@ -95,6 +95,14 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **A paid Look deeper on a Bin row always shows its result (INTAKE M16 integration).**
+  The finished deep job does two things a second apart: the button's own poll draws the
+  beats under its row, and the board's job strip reloads the project, which redraws the
+  Bin's list. When the redraw landed first the row was gone and the result was never
+  drawn — the look was paid for and the screen showed nothing.
+  `test_deep_ui::test_look_deeper_from_a_seen_row_is_priced_then_runs_and_shows_the_beats`,
+  listed as a flake by lanes cut and pass, failed 3 of 3 alone on the merge. The result
+  now opens under the redrawn row (same span, same key); 3 of 3 pass.
 - **The Bin's tabs and *more found ▸* answer from the first paint (INTAKE M16
   integration, I16.4).** Lane cut put *heard* and *seen* under *more found ▸*; the
   handlers for it and the tabs were bound at the end of the board's start-up, after the
