@@ -880,6 +880,29 @@ def test_shift_X_with_a_filter_asks_once_then_rejects_the_matching_undecided_pic
     page.wait_for_function("floor.state.i === 1", timeout=5000)
 
 
+def test_a_clicked_verdict_drops_a_pending_batch_question(page, project):
+    """INTAKE M16 decision 5: P / X / U take a click as well as a key. Any key but the
+    one that asked drops a pending "reject N picks? ⇧X again"; a clicked X kept it armed,
+    so the next single ⇧X rejected every match without asking."""
+    inject_kinds(page)
+    page.keyboard.press("/")
+    page.wait_for_selector("#filter:visible")
+    chip(page, "kinds", "speech").click()
+    page.wait_for_function("document.querySelector('#filterCount').textContent.includes('3 of 5 match')")
+    page.keyboard.press("Shift+X")
+    page.wait_for_selector("#hudAsk:visible")
+    assert page.locator("#hudAsk").inner_text() == "reject 3 picks? ⇧X again · Esc"
+    page.locator("#keys .vkey[data-v=reject]").click()
+    wait_edl(project, lambda d: len(d.get("floor", {}).get("verdicts", [])) == 1)
+    page.wait_for_selector("#hudAsk", state="hidden")
+    assert page.evaluate("floor.state.ask") is None
+    page.keyboard.press("Shift+X")                              # asks again, does not reject
+    page.wait_for_selector("#hudAsk:visible")
+    assert page.locator("#hudAsk").inner_text() == "reject 2 picks? ⇧X again · Esc"
+    page.wait_for_timeout(300)
+    assert len(edl(project)["floor"]["verdicts"]) == 1
+
+
 def test_shift_X_without_a_filter_still_rejects_the_rest_of_the_clip(page, project):
     """The old meaning, kept: from A·speech, ⇧X rejects this clip's undecided picks from
     here on — the speech and the jump — with their own reasons, and moves on to B."""

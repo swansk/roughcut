@@ -2140,6 +2140,9 @@ async function boot() {
   // on the dim line do what their keys do; } next line is the } key
   document.querySelectorAll('#keys .vkey').forEach((b) => b.addEventListener('click', () => {
     b.blur();                                  // space stays the picture's, not the button's
+    // a click is a key here too: it drops a pending batch question, as any other key
+    // does — left armed, one ⇧X would reject the rest without asking again
+    if (F.ask) { F.ask = null; paintHud(); }
     verdict(b.dataset.v);
   }));
   document.querySelectorAll('#keys [data-key]').forEach((el) => el.addEventListener('click', () => {
