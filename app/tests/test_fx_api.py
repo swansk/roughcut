@@ -435,3 +435,38 @@ def test_a_check_that_outlives_its_effect_does_not_write_it_back(stubbed, client
     first = next(j for j in _verify_jobs(fx_id) if j["state"] == "done" and j["result"]["ok"] is None)
     assert "changed meanwhile" in first["detail"]
     assert server.FX_VERIFY_WAITING.get(fx_id) is None
+
+
+# ---------------------------------------------------------------- the sentence, in film time
+# INTAKE M16 I16.5 (1): a proposal says in one sentence what changes in the film, in
+# film time — not "CLIP_08.MP4 at 0.4× from 170.85 to 171.50s" (clip seconds that read
+# as film time on a 3:09 film).
+
+def _propose(fx_id: str, shot: str, ops: list, **extra) -> None:
+    import server
+    e = {"id": fx_id, "shot": shot, "clip": extra.pop("clip", "CLIP_B.MP4"), "name": "an edit",
+         "why": "", "events": [{"t": 1.2, "x": 0.5, "y": 0.5}], "status": "proposed",
+         "edits": ops, "created": "2026-09-20T22:42:23", **extra}
+    fx.save(server.fx_home(), e)
+
+
+def test_an_edit_proposal_says_what_changes_in_film_time(stubbed, client):
+    _seed(stubbed, client)
+    a, b = [s["id"] for s in client.get("/api/project").json()["segments"]]   # 1.0–3.0, 0.0–2.0
+    _propose("fx_says0001", b, [{"op": "speed", "shot": b, "rate": 0.5, "from": 1.0, "to": 1.5}])
+    _propose("fx_says0002", "new:1", [{"op": "generate", "kind": "black", "seconds": 3, "before": a}],
+             clip="")
+    _propose("fx_says0003", b, [{"op": "speed", "shot": "gone", "rate": 0.5}])
+    lst = {e["id"]: e for e in client.get("/api/fx").json()["effects"]}
+    # shot 2 starts at 0:02 of the film; 0.5 s of it at 0.5× is 0.5 s more, from 0:03
+    assert lst["fx_says0001"]["says"] == "Slows 0.50 s to 0.5×. Shot 2 gets 0.5 s longer, at 0:03."
+    assert lst["fx_says0001"]["film"] == {"n": 2, "start": 2.0, "in": 0.0, "speed": 1.0}
+    assert lst["fx_says0002"]["says"] == "Adds a 3 s black slide before shot 1. The film gets 3.0 s longer, at 0:00."
+    # the shot the edits will create has a place in the film already
+    assert lst["fx_says0002"]["film"]["n"] == 1 and lst["fx_says0002"]["film"]["start"] == 0.0
+    assert lst["fx_says0003"]["says"] == "This change no longer fits the cut."
+    # an overlay effect has no sentence of its own (the card says its why)
+    fx_id = _wait(client, client.post("/api/fx/design", json={"shot": a, "note": "hit markers"}).json()["job"])["result"]["id"]
+    e = next(x for x in client.get("/api/fx").json()["effects"] if x["id"] == fx_id)
+    assert "says" not in e and e["film"] == {"n": 1, "start": 0.0, "in": 1.0, "speed": 1.0}
+

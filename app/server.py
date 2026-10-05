@@ -4576,12 +4576,139 @@ def _fx_anchor(e: dict) -> str | None:
     return str(segs[0]["id"]) if segs else None
 
 
-def _fx_urls(e: dict) -> dict:
+def _film_clock(t: float) -> str:
+    m, sec = divmod(int(round(max(0.0, t))), 60)
+    return f"{m}:{sec:02d}"
+
+
+def _film_starts(segments: list[dict]) -> dict[str, float]:
+    out, t = {}, 0.0
+    for sg in segments:
+        out[str(sg.get("id"))] = t
+        t += edits.dur(sg)
+    return out
+
+
+def _fx_edit_says(ops: list[dict], segments: list[dict]) -> str:
+    """What a proposal's edits do to the film, in one or two plain sentences in film
+    time (INTAKE M16 I16.5): "Slows 0.65 s to 0.4×. Shot 17 gets 1.0 s longer, at 2:50."
+    — never a file name or a clip second ("CLIP_08.MP4 at 0.4× from 170.85 to 171.50s",
+    the M13 words, read as clip time on a 3:09 film)."""
+    try:
+        clean = edits.validate_ops(ops, segments)
+        after = edits.apply_ops(segments, None, clean)["segments"]
+    except ValueError:
+        return "This change no longer fits the cut."
+    starts = _film_starts(segments)
+    by_id = {str(sg.get("id")): sg for sg in segments}
+    num = {str(sg.get("id")): i + 1 for i, sg in enumerate(segments)}
+
+    def shot(sid) -> str:
+        return f"shot {num[str(sid)]}" if str(sid) in num else "the new shot"
+
+    def where(op: dict) -> str:
+        if op.get("after") is not None:
+            return f"after {shot(op['after'])}"
+        if op.get("before") is not None:
+            return f"before {shot(op['before'])}"
+        return "at the end"
+
+    def where_t(op: dict) -> float | None:
+        if op.get("after") is not None and str(op["after"]) in by_id:
+            return starts[str(op["after"])] + edits.dur(by_id[str(op["after"])])
+        if op.get("before") is not None:
+            return starts.get(str(op["before"]))
+        return sum(edits.dur(sg) for sg in segments)
+
+    def at_clip(sid, t) -> float | None:
+        sg = by_id.get(str(sid))
+        if sg is None:
+            return None
+        return starts[str(sid)] + (float(t) - float(sg["in"])) / edits.speed_of(sg)
+
+    said, at = [], None
+    for op in clean:
+        k, sid = op["op"], op.get("shot")
+        if k == "speed":
+            verb = "Slows" if op["rate"] < 1 else "Speeds up"
+            if "from" in op:
+                said.append(f"{verb} {op['to'] - op['from']:.2f} s to {op['rate']:g}×")
+                t = at_clip(sid, op["from"])
+            else:
+                said.append(f"{verb} {shot(sid)} to {op['rate']:g}×")
+                t = starts.get(str(sid))
+        elif k in ("extend", "set_range"):
+            said.append(f"Re-trims {shot(sid)}")
+            t = starts.get(str(sid))
+        elif k == "split":
+            said.append(f"Splits {shot(sid)}")
+            t = at_clip(sid, op["at"])
+        elif k == "freeze":
+            said.append(f"Holds a frame of {shot(sid)} for {op['seconds']:g} s")
+            t = at_clip(sid, op["at"])
+        elif k == "generate":
+            what = {"black": "black slide", "colour": "colour slide", "still": "still"}[op["kind"]]
+            said.append(f"Adds a {op['seconds']:g} s {what} {where(op)}")
+            t = where_t(op)
+        elif k == "insert":
+            said.append(f"Adds a {op['out'] - op['in']:.1f} s shot {where(op)}")
+            t = where_t(op)
+        elif k == "remove":
+            said.append(f"Takes {shot(sid)} out")
+            t = starts.get(str(sid))
+        else:                                       # move
+            said.append(f"Moves {shot(sid)} {where(op)}")
+            t = None
+        if at is None and t is not None:
+            at = t
+    first = said[0] if len(said) == 1 else (
+        f"{said[0]} and {said[1][0].lower()}{said[1][1:]}" if len(said) == 2
+        else f"{said[0]}, and {len(said) - 1} more changes")
+    delta = sum(edits.dur(sg) for sg in after) - sum(edits.dur(sg) for sg in segments)
+    one = {str(op.get("shot")) for op in clean} if all(op.get("shot") for op in clean) else set()
+    if abs(delta) < 0.05:
+        tail = ""
+    elif len(one) == 1 and next(iter(one)) in num:
+        tail = f" {shot(next(iter(one))).capitalize()} gets {abs(delta):.1f} s {'longer' if delta > 0 else 'shorter'}"
+    else:
+        tail = f" The film gets {abs(delta):.1f} s {'longer' if delta > 0 else 'shorter'}"
+    if tail and at is not None:
+        tail += f", at {_film_clock(at)}"
+    return f"{first}.{tail}." if tail else f"{first}."
+
+
+def _fx_film(e: dict, segments: list[dict]) -> dict | None:
+    """Where the effect's shot sits in the film — after the proposal's own edits, so a
+    shot they create has a place too: `{n, start, in, speed}`, the FX tool's way from
+    clip seconds to film time when the board does not have the shot yet."""
+    cut = segments
+    if e.get("edits") and e.get("status") == "proposed":
+        try:
+            cut = edits.apply_ops(segments, None, edits.validate_ops(e["edits"], segments))["segments"]
+        except ValueError:
+            cut = segments
+    starts = _film_starts(cut)
+    for i, sg in enumerate(cut):
+        if str(sg.get("id")) == str(e.get("shot")):
+            return {"n": i + 1, "start": round(starts[str(sg["id"])], 3),
+                    "in": float(sg["in"]), "speed": edits.speed_of(sg)}
+    return None
+
+
+def _fx_urls(e: dict, segments: list[dict] | None = None) -> dict:
     d = fx_home() / e["id"]
     out = dict(e)
     anchor = _fx_anchor(e)
     if anchor:
         out["anchor_shot"] = anchor
+    segments = _fx_segments() if segments is None else segments
+    if e.get("edits") and e.get("status") == "proposed":
+        out["says"] = _fx_edit_says(e["edits"], segments)
+    elif (e.get("applied") or {}).get("says"):
+        out["says"] = e["applied"]["says"]
+    film = _fx_film(e, segments)
+    if film:
+        out["film"] = film
     for key, name in (("sound_url", "sound.wav"), ("proof_url", "proof.mp4"),
                       ("base_url", "base.mp4"), ("strip_url", "strip.jpg"),
                       ("ref_url", "ref.png")):
@@ -4605,7 +4732,8 @@ def _fx_all() -> list[dict]:
         proposed.append(e)
     # accepted first, then proposals, then what was removed (kept for Restore)
     proposed.sort(key=lambda e: e.get("status") == "removed")
-    return [_fx_urls(e) for e in accepted + proposed]
+    segments = edl.get("segments") or []
+    return [_fx_urls(e, segments) for e in accepted + proposed]
 
 
 def _fx_get(fx_id: str) -> dict:
@@ -5008,6 +5136,7 @@ async def api_fx_accept(request: Request) -> JSONResponse:
         applier = globals().get("apply_edits")
         if applier is None:
             raise HTTPException(501, "this build cannot apply edits to the cut yet")
+        says = _fx_edit_says(e["edits"], _fx_segments())     # the cut as Karl saw it
         try:
             applied = applier(e["edits"])
         except ValueError as exc:
@@ -5018,7 +5147,8 @@ async def api_fx_accept(request: Request) -> JSONResponse:
             new_seg = next((s for s in applied.get("segments") or [] if str(s.get("id")) == str(e["shot"])), None)
             if new_seg:
                 e["clip"] = new_seg["clip"]
-        e["applied"] = {"at": applied.get("at"), "before": applied.get("before"), "words": e.get("edit_words")}
+        e["applied"] = {"at": applied.get("at"), "before": applied.get("before"), "words": e.get("edit_words"),
+                        "says": says}
         e.pop("edits", None)                        # applied: the cut carries them now
     segments = _fx_segments()
     current = next((x for x in read_edl().get("effects") or [] if x.get("id") == fx_id), None)

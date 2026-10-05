@@ -234,6 +234,16 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **An effect proposal says what changes in the film, in film time (INTAKE M16 I16.5).**
+  The slow motion's card read "CLIP_08.MP4 at 0.4× from 170.85 to 171.50s" — a file name
+  and clip seconds that look like film time on a 3:09 film where shot 17 starts at
+  2:35. `GET /api/fx` now gives a proposal with edits `says`, one or two plain sentences
+  worked out from its ops against the cut: "Slows 0.65 s to 0.4×. Shot 17 gets 1.0 s
+  longer, at 2:50." (also *Adds a 3 s black slide before shot 1*, *Holds a frame of
+  shot 4 for 2 s*, *Takes shot 9 out*, *The film gets 3.0 s longer*, or "This change no
+  longer fits the cut."), and every effect `film` — `{n, start, in, speed}`, where its
+  shot sits in the film after the proposal's own edits — so the FX tool can show clip
+  seconds as film time, even for a shot the edits have yet to make.
 - **The free check on an effect runs by itself (INTAKE M16 I16.5).** Proposals arrived
   unchecked — the slow motion on Killington (`fx_d644520f`) never had a check run —
   because the check waited for a Verify button on every card. The server now queues it
