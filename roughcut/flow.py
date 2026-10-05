@@ -9,8 +9,7 @@ was released). Nothing anywhere answered *where am I, what is done, what should 
 next, and what is waiting on me*.
 
 So the answer is computed once, here, from facts the server reads off the files, and
-every screen draws the same thing from `GET /api/flow`. Seven stages, in the order a
-film is made:
+every screen reads it from `GET /api/flow`. Seven stages, in the order a film is made:
 
     Footage → Index → Brief → Pass → Cut → Polish → Render
 
@@ -28,6 +27,11 @@ board's dock `tool`), and the `counts` the summary rests on — the machine's ev
 rather than an assertion (Karl's rule). Then **one** `next`: the single recommended
 action, and `blockers`: the thing in the way of every priced stage (a signed-out CLI),
 with the server's own fix (`server.backend_fix`) — never re-derived here.
+
+The screens no longer draw the stages (INTAKE M16 decision 2: the seven-step bar came
+off every screen): /flow.js draws only `next`, as the one chip in each header, and puts
+the screen's one blue button on the element a page marks `data-next-for="<stage>"`. The
+stages stay; `next` is chosen from them.
 
 Pure: it never reads a file and never imports the server. `server.flow_facts()` builds
 the facts dict; the tests build it by hand.
@@ -55,6 +59,11 @@ SCREENS: dict[str, tuple[str, str | None]] = {
 PRICED_STAGES = ("index", "brief", "cut", "polish")
 
 STATES = ("done", "running", "ready", "waiting", "needs-you", "optional")
+
+# The elements a screen marks as an action's button: `data-next-for="cut render"`.
+# /flow.js gives the first visible one the screen's one blue (`.is-next`), and presses
+# it for a free action (`click`).
+NEXT_FOR = '[data-next-for~="%s"]'
 
 # What an action may land on (INTAKE M16 I16.0a): the shot (a segment id) and the
 # effect (an fx id) of a waiting proposal, or the Ask job of a waiting cut proposal.
@@ -391,7 +400,9 @@ def render_stage(f: dict) -> dict:
                       progress=(job.get("pct") or 0) / 100.0)
     if r.get("latest_matches"):
         return _stage("render", "done", "The newest render is this cut", counts=counts)
-    sentence = "Render the cut"
+    # Next presses the film tool's quick look itself: free, on the board, the button
+    # the board marks for this stage (M16 C2) — never the final 4K, which is Karl's.
+    sentence = "Make the film — quick look"
     if count:
         summary = ("A render of this cut exists, but newer renders differ"
                    if r.get("matches") else
@@ -400,7 +411,7 @@ def render_stage(f: dict) -> dict:
     else:
         summary = "Not rendered yet"
     return _stage("render", "ready", summary, counts=counts) | {"action": action(
-        "render", sentence, "Render", click="#render")}
+        "render", sentence, "Render", click=NEXT_FOR % "render")}
 
 
 # ------------------------------------------------------------------- the whole

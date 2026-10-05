@@ -9,7 +9,9 @@
  * Windows prompt when the board runs in WSL, on the board's own box (foxtrot) when it runs
  * natively; the server words it for its host — with a copy button, and *Check again*, which re-probes and clears the
  * banner the moment the CLI answers. It sits in the page's flow, never over it, so it
- * cannot cover a control.
+ * cannot cover a control — and above the header, never in it, on one line of its own:
+ * every screen's header is one row (INTAKE M16), and the banner is there only while the
+ * CLI needs Karl. A long reason is cut short on the line; the whole of it is its title.
  *
  * Self-contained (styles inline) because the three pages do not share a stylesheet.
  */
@@ -19,12 +21,15 @@
 
   const css = `
   #cliFix { position: relative; z-index: 50; display: flex; gap: 14px;
-    align-items: center; flex-wrap: wrap; padding: 10px 16px;
+    align-items: center; flex-wrap: nowrap; white-space: nowrap; padding: 6px 16px;
     background: #3a2c0c; color: #f6e7c4; border-bottom: 1px solid #e0b050;
-    font: 13px/1.4 system-ui, sans-serif; }
+    font: 13px/1.4 system-ui, sans-serif; box-sizing: border-box; }
   #cliFix[hidden] { display: none; }
-  #cliFix .t { font-weight: 600; color: #ffd27a; }
-  #cliFix .why { flex: 1 1 320px; color: #e9d9b4; }
+  #cliFix .t { flex: none; font-weight: 600; color: #ffd27a; }
+  #cliFix .why { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    color: #e9d9b4; }
+  #cliFix code { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #cliFix button { flex: none; }
   #cliFix code { background: #14110a; color: #ffe1a0; border: 1px solid #6b5520;
     border-radius: 4px; padding: 3px 8px; font: 13px ui-monospace, monospace; }
   #cliFix button { background: #e0b050; color: #1a1406; border: 0; border-radius: 5px;
@@ -64,7 +69,7 @@
     el.hidden = false;
     el.innerHTML =
       `<span class="t">⚠ ${esc(fix.title)}</span>` +
-      `<span class="why">${esc(fix.why)}</span>` +
+      `<span class="why" title="${esc(fix.why)}">${esc(fix.why)}</span>` +
       (fix.command ? `<code>${esc(fix.command)}</code>` +
         `<button class="ghost" data-act="copy">Copy</button>` : '') +
       `<button data-act="check" ${checking ? 'disabled' : ''}>` +

@@ -365,13 +365,14 @@ def test_an_empty_timeline_offers_a_first_cut_and_gets_one(page):
         page.wait_for_selector("#inspector .empty")
         assert page.locator("#tl .blk").count() == 0
         assert "No cut yet" in page.locator(".empty").inner_text()
-        # the flow bar: the cut is the stage to do, and Next says so
+        # the flow: the cut is the stage to do, and Next says so
         page.evaluate("flowBar.poll()")
         page.wait_for_function(
-            "document.querySelector('#flow [data-stage=cut]')"
-            " && document.querySelector('#flow [data-stage=cut]').dataset.state === 'ready'",
+            "window.flowBar && flowBar.state()"
+            " && flowBar.state().stages.find((s) => s.key === 'cut').state === 'ready'",
             timeout=10000)
-        assert "first cut" in page.locator("#flowNext").inner_text()
+        page.wait_for_function(
+            "document.querySelector('#flowNext').innerText.includes('first cut')", timeout=5000)
         # the sidebar Ask panel hides itself here — the empty state already has a box
         # for the same sentence, and two inputs for one thing is a UI defect
         assert not page.locator("#askPanel").is_visible()
@@ -651,21 +652,19 @@ def test_a_second_render_becomes_a_second_version_to_compare_against(page):
     assert page.evaluate("document.querySelector('#previewB').duration") > 0
 
 
-def test_the_flow_bar_says_where_the_project_is(page):
+def test_the_board_says_what_to_do_next_and_nothing_more(page):
     """The board was flat — Ask, Snap, Undo, Save and Render as peers, with nothing
-    saying what to do first. The five-step strip that answered it is now the flow bar
-    every screen carries (INTAKE M14)."""
-    page.wait_for_selector("#flow [data-stage=render]")
+    saying what to do first. The five-step strip that answered it became the M14 flow
+    bar; M16 (decision 2) took the bar off and kept its Next chip, the one "what now"."""
+    page.wait_for_selector("#flowNext")
     assert page.locator(".step").count() == 0 and page.locator("#steps").count() == 0
-    keys = page.eval_on_selector_all("#flow .fs", "els => els.map(e => e.dataset.stage)")
-    assert keys == ["footage", "index", "brief", "pass", "cut", "polish", "render"]
-    # this project has clips, previews and a cut: footage and the cut are behind us
-    state = lambda k: page.locator(f"#flow [data-stage={k}]").get_attribute("data-state")  # noqa: E731
+    assert page.locator("#flow .fs, #flow [data-stage]").count() == 0
+    assert page.locator("#flow a").count() == 1
+    # the flow behind it still knows: this project has clips, previews and a cut
+    page.wait_for_function("window.flowBar && flowBar.state()", timeout=10000)
+    state = lambda k: page.evaluate(  # noqa: E731
+        f"flowBar.state().stages.find((s) => s.key === '{k}').state")
     assert state("footage") == "done" and state("cut") == "done"
-    # the board's own stages are marked as this screen's
-    here = page.eval_on_selector_all("#flow .fs.here", "els => els.map(e => e.dataset.stage)")
-    assert here == ["cut", "polish", "render"]
-    assert page.locator("#flowNext").count() == 1
 
 
 # ---------------------------------------------------------------- the inspector
@@ -1619,11 +1618,10 @@ def test_the_old_buttons_are_gone_and_the_index_line_reads_the_journals_word(
     link = page.locator("#openFootage")
     assert link.get_attribute("href") == "/open"
     assert "open the footage" in link.inner_text()
-    # (the flow bar, INTAKE M14 — the `open · pass · board` pills are gone)
-    page.wait_for_selector("#flow [data-stage=index]")
+    # (the `open · pass · board` pills and the M14 step bar are gone, M16 decision 2)
+    page.wait_for_selector("#flowNext")
     assert page.locator("#screens").count() == 0
-    assert page.locator("#flow a[href='/open']").count() >= 1
-    assert page.locator("#flow a[href='/floor']").count() == 1
+    assert page.locator("#flow .fs").count() == 0
     # nothing has been indexed on this bin, and the line says so before any run
     page.wait_for_function(
         "document.querySelector('#indexState').textContent === 'not indexed yet'",

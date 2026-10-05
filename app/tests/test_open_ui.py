@@ -109,9 +109,12 @@ def api(page, path: str) -> dict:
 
 
 def flow_state(page, stage: str) -> str:
-    """The flow bar's word on one stage (INTAKE M14) — the bar replaced the six steps."""
-    page.wait_for_selector(f"#flow [data-stage={stage}]", timeout=10000)
-    return page.locator(f"#flow [data-stage={stage}]").get_attribute("data-state")
+    """The flow's word on one stage (INTAKE M14), from /flow.js's own answer — the step
+    bar that drew it came off every screen (M16 decision 2); Next is chosen from it."""
+    page.wait_for_function(f"window.flowBar && flowBar.state()"
+                           f" && flowBar.state().stages.some((s) => s.key === '{stage}')",
+                           timeout=10000)
+    return page.evaluate(f"flowBar.state().stages.find((s) => s.key === '{stage}').state")
 
 
 def rows(page) -> list[dict]:
@@ -481,10 +484,10 @@ def test_index_the_footage_runs_the_journal_and_the_cap_pauses_the_priced_stages
     assert page.locator(".card .badge.waiting").count() == 3
     assert page.locator(".card .badge.waiting").first.inner_text().lower() == "look paused"
     assert "from the words only" in page.locator("#passHint").inner_text()
-    # and the flow bar says it is waiting on the editor, with the price
+    # and the flow says it is waiting on the editor, with the price
     page.wait_for_function(
-        "document.querySelector('#flow [data-stage=index]')"
-        " && document.querySelector('#flow [data-stage=index]').dataset.state === 'needs-you'",
+        "window.flowBar && flowBar.state()"
+        " && flowBar.state().stages.find((s) => s.key === 'index').state === 'needs-you'",
         timeout=10000)
     # the cap must not take the floor away: with the free stages done the floor's own
     # word (`/api/clips` `released`) says the pass may show them — picks from the words —
@@ -730,7 +733,7 @@ def test_propose_shows_chips_with_counts_and_keep_writes_exactly_the_ticked_ones
     assert page.locator("#changeBtn").is_visible()
     page.evaluate("flowBar.poll()")
     page.wait_for_function(
-        "document.querySelector('#flow [data-stage=brief]').dataset.state === 'done'",
+        "flowBar.state().stages.find((s) => s.key === 'brief').state === 'done'",
         timeout=10000)
     assert api(page, "/api/themes")["themes"] == ["the greeting", "the milk joke"]
 
@@ -832,7 +835,8 @@ def test_a_copy_of_the_cut_is_saved_from_the_header_and_the_page_moves_to_it(pag
     assert page.locator("#copyName").evaluate("el => document.activeElement === el")
     assert cut_rows(page) == [{"name": "main", "facts": "empty", "flags": [],
                                "acts": ["rename"], "current": True}]
-    assert "whole project file" in page.locator("#picker").inner_text()
+    # the menu's first rows are the places (M16 decision 2): the footage, the pass, the cut
+    assert page.locator("#placeList .place").count() == 3
     page.locator("#copyName").fill("try the river first")
     page.locator("#copyGo").click()
     page.wait_for_function(
@@ -909,13 +913,15 @@ def test_the_bin_name_opens_a_picker_and_a_running_job_refuses_the_switch(page, 
     table = picker_rows(page)
     assert table[0]["name"] == project["footage"].name and table[0]["current"]
     assert table[0]["clips"] == "3 clips" and table[0]["path"] == str(project["footage"])
-    assert table[0]["flags"] == (["journal"] if api(page, "/api/index")["exists"] else ["new"])
+    # a bin that is fine says nothing (M16: status only when something is wrong)
+    assert table[0]["flags"] == ([] if api(page, "/api/index")["exists"] else ["new"])
     by = {r["name"]: r for r in table}
     assert by["picker-bin"] == {"name": "picker-bin", "clips": "1 clip", "flags": ["new"],
                                 "path": str(other), "current": False}
     assert "sidecars" not in by, "a folder without video is not a bin"
     text = page.locator("#picker").inner_text()
-    assert "no browsing dialog" in text and "open a folder" in page.locator("#pickerPath").get_attribute("placeholder")
+    assert "no browsing dialog" not in text      # M16: the explanation went; the field says it
+    assert "open a folder" in page.locator("#pickerPath").get_attribute("placeholder")
     # Esc closes it; the name reopens it
     page.keyboard.press("Escape")
     assert page.locator("#picker").is_hidden() and name.get_attribute("aria-expanded") == "false"
@@ -976,10 +982,11 @@ def test_opening_another_bin_reloads_the_whole_page_for_it(page, project, bin_se
         assert s["footage"] == str(other) and s["clips"] == 1
         page.wait_for_function("window.flowBar && flowBar.state()"
                                " && flowBar.state().stages[0].counts.clips === 1", timeout=10000)
-        assert page.locator("#flow [data-stage=pass]").get_attribute("href") == "/floor"
         # and back, by its path typed into the field: the first bin's own EDL, not a new one
         page.keyboard.press("o")
         open_picker(page)
+        # the way to the pass is the menu's place row now (M16: the step bar is gone)
+        assert page.locator("#placeList .place[href='/floor']").count() == 1
         assert [r["name"] for r in picker_rows(page)][0] == "picker-bin"
         page.locator("#pickerPath").fill(str(project["footage"]))
         page.locator("#pickerPath").press("Enter")

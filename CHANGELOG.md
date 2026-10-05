@@ -9,6 +9,64 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Added
+- **`test_budget.py`, the screen-size ratchet (INTAKE M16 I16.1).** Every earlier answer
+  to "it is hard to use" added a surface; this fails when one grows back. At 1440×900 on
+  the fixture bin, read-only: one header row ≤ 50 px holding the switcher and Next side
+  by side, exactly one `.is-next` (none while a round of the pass is open), the board
+  with no page scroll, no step bar, and words / controls in view under each screen's
+  number. Measured on this branch: / 176 words · 19 controls, /floor 324 · 5, /open
+  433 · 12 (before: 197 · 26, 350 · 12, 454 · 19). The numbers are generous until the
+  other stage-1 lanes merge (TODO-tighten); the board's and the pass's one-row header and
+  the board's no-scroll are listed in `AWAITS` as expected failures until lanes shell,
+  pass and cut land, and a listed check that passes fails until it is taken out.
+
+### Changed
+- **The CLI banner is one line above the header (INTAKE M16 I16.1, C1).** It wrapped to
+  two or three lines at the top of every screen when the reason was long. It still sits
+  above the page, never in the one header row, and only while the CLI needs Karl; now on
+  one line (≤ 44 px at 1440 wide), the reason cut short with the whole of it on hover,
+  the command and Copy / Check again always in view.
+- **The bin · cut menu is the way between the screens (INTAKE M16 I16.1, decision 2).**
+  With the step bar gone, its first rows are the places — *The footage* (/open, "3 clips ·
+  indexed"), *The pass* (/floor, "40 not watched · 44 kept") and *The cut* (/, "19 shots ·
+  3:09"), the current screen marked — carrying the facts the board's Project ▾ held (the
+  index summary and the footage and project paths on hover; "the footage folder is not
+  there" or a missing tool only when so). A bin nothing has been heard or looked at in
+  opens on /open, where indexing starts. Taken away from the menu: the two paragraphs
+  explaining copies and paths (~60 words), the "journal" flag on a bin that is fine, the
+  "opened before, or a folder of video next door" sub-line, and Save copy's blue (a plain
+  button: the one blue is Next's). The header names the bin it moved to from the
+  server's own answer, before the page reloads.
+- **On the pass mid-round, Next is the round: "N left" (INTAKE M16 I16.1, C3).** Next
+  on /floor said what waited on another screen ("1 effect proposed — accept or
+  discard"), pulling Karl off a round he was in. While the round has undecided moments
+  the chip reads "3 left", plain, nothing on the pass is blue (P / X / U are the choice)
+  and a click on the chip stays put; when the round closes, Next is Next again. The count
+  is the pass's own (`window.passRound()` when the pass offers it, else its frozen
+  queue), read again each second and whenever the pass repaints.
+- **One blue button per screen, chosen by Next (INTAKE M16 I16.1, decision 3).** Up to
+  four buttons per screen were blue (Render, ▶ Play cut, Ask, Accept, Index, Open the
+  pass…), and the Next chip was a fifth. `.is-next` is now the only primary style, and
+  `/flow.js` puts it on exactly one element: the first visible one a screen marks
+  `data-next-for="<Next's stage>"` (narrowed to `data-fx` when Next names an effect),
+  else the Next chip, which is plain otherwise. It is placed again when the screen
+  changes under it (a tool opens, a card arrives). Next's free action on the board is
+  now the film tool's quick look — `click: '[data-next-for~="render"]'`, worded "Make
+  the film — quick look" — pressed after the tool opens; the header's Render is going
+  (lane shell).
+
+### Removed
+- **The seven-step bar, on every screen (INTAKE M16 I16.1, decision 2).** M14 drew
+  Footage › Index › Brief › Pass › Cut › Polish › Render as seven chips with ticks,
+  counts and "stale" at the top of /, /floor and /open; on Killington it was the third
+  header row on the board and Karl answered Q1 "the bar comes off". `/flow.js` now draws
+  only the **Next** chip into `#flow` (the one "what now"), keeping its landing
+  (`honourHash`, `land`, `go(target)`) and its free-action press. `GET /api/flow` still
+  computes the stages: Next is chosen from them. On the fixture bin at 1440×900 this takes
+  7 controls and ~20 words off each screen. Tests read a stage's state from
+  `flowBar.state()` instead of the bar.
+
 ### Docs
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
