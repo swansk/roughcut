@@ -1699,7 +1699,7 @@ def backend_preflight() -> dict:
         "problems": problems,
         "cli": cli,
         "budget_usd": budget_cap(),
-        "spent_usd": round(inference.spent_usd(), 4),
+        "spent_usd": project_spent(),               # this project's, from disk
         **BACKEND,
         # after BACKEND, whose own `fix` is only the probe's half of the answer
         "fix": backend_fix(problems, cli),
@@ -2500,7 +2500,7 @@ async def api_visual_audit(request: Request) -> JSONResponse:
         raise HTTPException(400, "nothing to audit — every hot claim has had a close look")
     if _over_budget(price["projected_usd"]):
         raise HTTPException(409, f"the audit (~${price['projected_usd']:.2f}) would pass "
-                                 f"the budget cap ${budget_cap():.2f}")
+                                 f"{cap_words()}")
     job = uuid.uuid4().hex[:8]
     by_stem: dict[str, list[list[float]]] = {}
     for w in plan:
@@ -2704,7 +2704,7 @@ async def api_deep(request: Request) -> JSONResponse:
         raise HTTPException(400, f"{clip} has no preview yet — the frames come from it")
     if _over_budget(plan["max_usd"]):
         raise HTTPException(409, f"the deep look (up to ~${plan['max_usd']:.2f}) would "
-                                 f"pass the budget cap ${budget_cap():.2f}")
+                                 f"pass {cap_words()}")
     job = uuid.uuid4().hex[:8]
     DEEPS[job] = progress.Job(
         "deep", f"Looking deeper · {Path(clip).stem} {plan['start']:.1f}–{plan['end']:.1f} s",
@@ -2905,7 +2905,9 @@ def api_themes_discard() -> JSONResponse:
 # The two knobs the design's settings drawer names (cutting-room-floor §3, Fig. 1): the
 # budget cap and the index's workers. Kept under --work, not in the EDL — they are how
 # this machine runs, not what the film is — and the environment still wins for the cap,
-# so a production deployment can pin it.
+# so a production deployment can pin it. The cap is optional and off by default (Karl,
+# INTAKE M16 decision 7: "Do not have a cap … 'no cap' … on by default"); when one is
+# set it caps what *this project* has spent (`project_spent`), not this process.
 
 SETTINGS_FILE = "settings.json"
 WORKER_RANGE = (1, 8)
@@ -2930,25 +2932,27 @@ def save_settings(d: dict) -> None:
     tmp.replace(settings_path())
 
 
-def budget_cap() -> float:
-    """The cap the index and the status line honour: the environment if it is set (the
-    production pin), else the saved setting, else the code's default."""
-    if os.environ.get("ROUGHCUT_BUDGET_USD"):
-        return config.budget_usd()
+def budget_cap() -> float | None:
+    """The cap on this project's spend that the index, the audit, the deep look and
+    every model call honour: the environment if it is set (the production pin), else
+    the saved setting, else None — no cap, the default."""
+    env = config.budget_usd()
+    if env is not None:
+        return env
     saved = load_settings().get("budget_usd")
     try:
-        return float(saved) if saved is not None else config.budget_usd()
+        return float(saved) if saved is not None else None
     except (TypeError, ValueError):
-        return config.budget_usd()
+        return None
 
 
 def settings_payload() -> dict:
     saved = load_settings()
     return {
         "budget_usd": budget_cap(),
-        "spent_usd": inference.spent_usd(),
+        "spent_usd": project_spent(),
         "workers": {**journal.DEFAULT_WORKERS, **(saved.get("workers") or {})},
-        "defaults": {"budget_usd": 15.0, "workers": dict(journal.DEFAULT_WORKERS)},
+        "defaults": {"budget_usd": None, "workers": dict(journal.DEFAULT_WORKERS)},
         "source": {"budget_usd": ("env" if os.environ.get("ROUGHCUT_BUDGET_USD")
                                   else "settings" if saved.get("budget_usd") is not None
                                   else "default")},
@@ -2963,20 +2967,23 @@ def api_settings() -> JSONResponse:
 @app.put("/api/settings")
 async def api_settings_put(request: Request) -> JSONResponse:
     """Validated like everything else that changes how money is spent: a cap must be
-    positive, a worker count 1–8 on a stage the journal knows. Workers apply at the next
-    index run; the cap applies at the next priced stage."""
+    positive (null is no cap), a worker count 1–8 on a stage the journal knows. Workers
+    apply at the next index run; the cap applies at the next priced stage or call."""
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(400, "expected an object")
     saved = load_settings()
     if "budget_usd" in body:
-        try:
-            cap = float(body["budget_usd"])
-        except (TypeError, ValueError):
-            raise HTTPException(400, "budget_usd must be a number")
-        if not cap > 0:
-            raise HTTPException(400, "budget_usd must be positive")
-        saved["budget_usd"] = round(cap, 2)
+        if body["budget_usd"] is None:
+            saved.pop("budget_usd", None)          # no cap: the default, so nothing kept
+        else:
+            try:
+                cap = float(body["budget_usd"])
+            except (TypeError, ValueError):
+                raise HTTPException(400, "budget_usd must be a number, or null for no cap")
+            if not (math.isfinite(cap) and cap > 0):
+                raise HTTPException(400, "budget_usd must be positive, or null for no cap")
+            saved["budget_usd"] = round(cap, 2)
     if "workers" in body:
         raw = body["workers"]
         if not isinstance(raw, dict):
@@ -3151,7 +3158,143 @@ class _Skip(Exception):
 
 
 def _over_budget(next_usd: float) -> bool:
-    return inference.spent_usd() + next_usd > budget_cap()
+    cap = budget_cap()
+    return cap is not None and project_spent() + next_usd > cap
+
+
+def cap_words() -> str:
+    """"this project's budget cap of $5.00 ($4.80 spent)" — what a refusal says; only
+    asked when a cap is set."""
+    return (f"this project's budget cap of ${budget_cap() or 0.0:.2f} "
+            f"(${project_spent():.2f} spent)")
+
+
+# ------------------------------------------------------------------ spend
+# What this project has spent (INTAKE M16 I16.0g): one number per bin, read from disk,
+# so it survives a restart and a bin switch — the process's own counter
+# (`inference.spent_usd`) did neither, and capping it let a restart reset the cap and
+# let one bin's spend pause another. Two sources, and no call is in both:
+#   * the visual pass's sidecars. It runs as a subprocess, outside this process's
+#     ledger, and its `.visual.json` / `.fine.json` carry what every look and close
+#     look on this bin cost (the index's and the audit's — the fine file is a running
+#     sum of every window paid for);
+#   * `spend/<bin>.jsonl`, one row per model call made in this process — asks, effects,
+#     themes, deep looks, finds, the estimates that draw a bar — written by the
+#     listener below. Its first row is the history: what the records on disk (asks,
+#     the themes proposal, deep looks) said this bin had spent before the file existed.
+#     Until it exists those records are the number.
+
+SPEND_DIR = "spend"
+SPEND_LOCK = threading.Lock()
+_USD_CACHE: dict[str, tuple[int, int, float]] = {}       # path → (mtime_ns, size, usd)
+
+
+def spend_path() -> Path:
+    return STATE["work"] / SPEND_DIR / f"{STATE['footage'].name}.jsonl"
+
+
+def _usd_at(path: Path, *keys: str) -> float:
+    """The number at `keys` in one JSON record, 0 when absent or unreadable; cached by
+    mtime and size, because the status line asks every few seconds."""
+    try:
+        st = path.stat()
+    except OSError:
+        return 0.0
+    hit = _USD_CACHE.get(str(path))
+    if hit and hit[:2] == (st.st_mtime_ns, st.st_size):
+        return hit[2]
+    try:
+        v = json.loads(path.read_text(encoding="utf-8"))
+        for k in keys:
+            v = v.get(k) if isinstance(v, dict) else None
+        usd = float(v or 0.0)
+    except (OSError, ValueError, TypeError):
+        usd = 0.0
+    usd = usd if math.isfinite(usd) and usd > 0 else 0.0
+    _USD_CACHE[str(path)] = (st.st_mtime_ns, st.st_size, usd)
+    return usd
+
+
+def _spend_rows_usd(path: Path) -> float | None:
+    """The sum of the spend file's rows; None when there is no file yet."""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    hit = _USD_CACHE.get(str(path))
+    if hit and hit[:2] == (st.st_mtime_ns, st.st_size):
+        return hit[2]
+    total = 0.0
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                total += float(json.loads(line).get("usd") or 0.0)
+            except (ValueError, TypeError, AttributeError):
+                continue                 # a torn last line costs that row, not the total
+    except OSError:
+        return None
+    _USD_CACHE[str(path)] = (st.st_mtime_ns, st.st_size, total)
+    return total
+
+
+def _visual_records(pattern: str) -> list[Path]:
+    d = STATE.get("visual")
+    return sorted(d.glob(pattern)) if d is not None and d.is_dir() else []
+
+
+def _sidecar_usd() -> float:
+    return sum(_usd_at(p, "projected_usd")
+               for pat in ("*.visual.json", "*.fine.json") for p in _visual_records(pat))
+
+
+def _history_usd() -> float:
+    """In-process spend this bin's records carry: asks, the themes proposal, deep looks."""
+    asks = STATE.get("asks")
+    total = sum(_usd_at(p, "plan", "usage", "projected_usd")
+                for p in (sorted(asks.glob("*.json")) if asks and asks.is_dir() else []))
+    total += _usd_at(proposal_path(), "proposal", "usage", "projected_usd")
+    total += sum(_usd_at(p, "projected_usd") for p in _visual_records("*.deep.json"))
+    return total
+
+
+def project_spent() -> float:
+    """What this project (the bin open now) has spent, projected USD, from disk."""
+    if not STATE.get("work") or not STATE.get("footage"):
+        return 0.0
+    rows = _spend_rows_usd(spend_path())
+    return round(_sidecar_usd() + (_history_usd() if rows is None else rows), 4)
+
+
+def _record_spend(result: inference.Result, role: str) -> None:
+    """The listener: one row per call made in this process, on the bin open now — a
+    job outlives nothing here, because the board will not switch bins while one runs."""
+    if not STATE.get("work") or not STATE.get("footage"):
+        return
+    with SPEND_LOCK:
+        path = spend_path()
+        rows = []
+        if not path.exists():
+            rows.append({"ts": round(time.time(), 3), "kind": "before",
+                         "usd": round(_history_usd(), 6),
+                         "why": "asks, themes and deep looks on disk before this file"})
+        rows.append({"ts": round(time.time(), 3), "role": role, "model": result.model,
+                     "usd": result.projected_usd})
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write("".join(json.dumps(r) + "\n" for r in rows))
+
+
+def _project_gate(estimate: float) -> None:
+    """Every model call this process makes asks first: with a cap set, a call that
+    would take this project past it is refused, said in the cap's words."""
+    if _over_budget(estimate):
+        raise inference.BudgetExceeded(
+            f"~${estimate:.2f} more would pass {cap_words()} — raise or remove the cap "
+            f"in settings")
+
+
+inference.add_spend_listener(_record_spend)
+inference.set_budget_gate(_project_gate)
 
 
 def _index_job(job: str, order: str) -> None:
@@ -3222,7 +3365,8 @@ def _index_job(job: str, order: str) -> None:
             est = (VISUAL_USD_PER_SHEET if stage == "look"
                    else FINE_WINDOWS_PER_CLIP * FINE_USD_PER_WINDOW)
             if _over_budget(est):
-                j.pause_priced(f"budget cap ${budget_cap():.2f} reached")
+                j.pause_priced(f"budget cap ${budget_cap() or 0.0:.2f} reached — "
+                               f"${project_spent():.2f} spent on this project")
                 report(f"budget cap reached — priced stages paused; {stem} waits")
                 continue
         j.start(clip, stage)

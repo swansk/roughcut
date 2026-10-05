@@ -104,14 +104,18 @@ def cli_token_path() -> Path:
         Path.home() / ".config" / "roughcut" / "claude-token")).expanduser()
 
 
-def budget_usd() -> float:
-    """Cap enforced on `projected_usd` on *both* backends (SPEC §7).
+def budget_usd() -> float | None:
+    """The environment's cap on `projected_usd`, on *both* backends (SPEC §7) — or None.
 
-    On the subscription backend there is no marginal dollar cost, but the cap still
-    applies — otherwise developing on a Max plan silently destroys the ability to
-    answer "is this affordable in production", which is why the discipline exists.
+    None is the default since Karl's answer of 2026-10-04 (INTAKE M16 decision 7): *"Do
+    not have a cap, I am using claude max here … 'no cap' — this should be on by
+    default."* `ROUGHCUT_BUDGET_USD` still pins one, for a deployment that needs it; the
+    board's settings offer a per-project cap (`server.budget_cap`). Uncapped is not
+    unmeasured: every call is still logged with its `projected_usd`, and every button
+    that spends shows its price before the click.
     """
-    return float(os.environ.get("ROUGHCUT_BUDGET_USD", "15.0"))
+    raw = os.environ.get("ROUGHCUT_BUDGET_USD", "").strip()
+    return float(raw) if raw else None
 
 
 def ledger_path() -> Path:

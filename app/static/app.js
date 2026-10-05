@@ -2068,7 +2068,8 @@ function paintBackend(b) {
     el.classList.add('ok');
     el.textContent = `${short} · ready`;
     el.title = `${tiers}${b.backend}, replied in ${(b.latency_ms / 1000).toFixed(1)}s\n` +
-      `$${b.spent_usd} of $${b.budget_usd} projected this run`;
+      `$${Number(b.spent_usd || 0).toFixed(2)} spent on this project`
+      + (b.budget_usd != null ? ` of a $${Number(b.budget_usd).toFixed(2)} cap` : '');
     return;
   }
   el.textContent = `${short} · unchecked`;
