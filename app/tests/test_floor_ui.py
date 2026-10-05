@@ -1042,6 +1042,21 @@ def test_with_no_cut_the_card_says_make_the_first_cut_and_opens_the_ask(page, li
     assert page.url == f"{live_server}/#tool=ask", page.url
 
 
+def test_with_no_cut_the_a_key_on_the_card_opens_the_ask_too(page, live_server):
+    """I16.0e, review: the card's A key is the button's twin, and only the button was
+    tested — A going to the bare board (`/`) instead of the Ask still passed."""
+    page.evaluate("floor.state.P.segments = []")
+    for key, word in (("x", "REJECTED"), ("u", "LATER"), ("p", "PICKED")):
+        page.wait_for_function("floor.state.mode === 'pass' && !floor.current().verdict", timeout=5000)
+        page.keyboard.press(key)
+        stamped(page, word)
+    page.wait_for_selector("#overlay[data-kind=card]", timeout=5000)
+    assert page.locator("#cardAssemble").inner_text().startswith("Make the first cut →")
+    with page.expect_navigation(timeout=10000):
+        page.keyboard.press("a")
+    assert page.url == f"{live_server}/#tool=ask", page.url
+
+
 def test_the_position_resumes_after_a_reload(page, project, live_server):
     playing_at(page, 0.6)
     paused_at(page)

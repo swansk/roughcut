@@ -195,6 +195,11 @@ same commit. Releases move entries into a dated version section.
   of the I16.0d test's cases had a contradicted witness, so quoting the maybe wording
   passed. The test now adds one and checks the conflict quotes the bare claim; quoting
   the witness text fails it.
+- **The closing card's A key is tested on the no-cut route (M16 stage 0 review, I16.0e,
+  test strength).** With no cut, the card's way out is "Make the first cut →" to
+  `/#tool=ask`, by its button or by A; only the button was tested, and A sending the
+  board to `/` still passed. A new pass UI test presses A on the card and expects the
+  Ask.
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
