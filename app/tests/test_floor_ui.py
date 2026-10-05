@@ -1090,6 +1090,13 @@ def test_the_closing_card_appears_after_the_last_pick_and_plays_the_bin(page, pr
     assert out.get_attribute("data-next-for") == "cut"
     assert "$" not in card
     assert page.locator("#overlayBox .primary").count() == 0
+    # with the round over, one thing on the screen is blue (C2): Next's own — the card's
+    # way back when Next is the cut, else the chip — placed as the card is drawn
+    page.evaluate("flowBar.poll()")
+    page.wait_for_function("""() => { const n = flowBar.state() && flowBar.state().next;
+        const b = [...document.querySelectorAll('.is-next')];
+        return !!n && b.length === 1
+          && b[0].id === (n.stage === 'cut' ? 'cardAssemble' : 'flowNext'); }""", timeout=5000)
     assert "enough" not in card.lower(), "the card reports, it never judges"
     assert page.locator("#cardNext").count() == 0, "nothing left for a next round: no button"
     assert page.locator("#cardLater").count() == 0, "nothing later: no button"

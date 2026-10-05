@@ -71,6 +71,13 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **Next hears the pass repaint (INTAKE M16 integration, C2 / C3).** Lane pass announces
+  every repaint of /floor with a `roughcut:pass` event — the round's count, and the
+  closing card's *Back to the cut* the moment it is drawn — and lane nav's /flow.js
+  re-read the pass only once a second or on a DOM change it happened to see. It listens
+  for the event now and places "N left" and the one blue at once; the second's re-read
+  stays as a safety net. The closing-card test now also checks the screen's one blue is
+  Next's own (the card's way back when Next is the cut, else the chip).
 - **The in-place Accept test no longer calls its own stub (INTAKE M16 integration,
   C5).** `test_fx_ui::test_accepting_an_edit_changes_the_cut_in_place` installed its
   counting `window.roughcutRefresh` with an `evaluate` whose expression ended in the

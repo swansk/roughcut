@@ -306,8 +306,14 @@
       subtree: true, childList: true, attributes: true,
       attributeFilter: ['hidden', 'class', 'style', 'disabled', 'open', 'data-next-for', 'data-fx'],
     });
-    // the pass decides a moment without always touching the DOM the chip can see
-    if (HERE === '/floor') setInterval(soon, 1000);
+    // the pass decides a moment without always touching the DOM the chip can see; it
+    // says so itself after every repaint (`roughcut:pass`, /floor.js), which is also
+    // when the closing card's "Back to the cut" appears, so "N left" and the blue
+    // follow at once; the second's re-read stays as the safety net
+    if (HERE === '/floor') {
+      document.addEventListener('roughcut:pass', () => { if (last) paint(last); });
+      setInterval(soon, 1000);
+    }
     poll();
   }
 
