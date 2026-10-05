@@ -13,6 +13,12 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **A finished check no longer takes the caret from the design note (INTAKE M16 I16.5).**
+  The FX tool rebuilds itself when a job ends, and the server's own check now ends a few
+  seconds after every design and nudge — so typing the next note (or a Change line) lost
+  its focus mid-word. A rebuild now puts the caret back where it was. A design that came
+  back also empties the note, so "+ design another effect" starts blank instead of with
+  the last design's words.
 - **Accepting an edit-only proposal changes the cut once (INTAKE M16 I16.5).** The slow
   motion on Killington has nothing to draw or hear. `POST /api/fx/accept` applied its
   edits to the cut, then asked `validate_effect` to keep an effect with no overlay, no

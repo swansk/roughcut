@@ -389,6 +389,22 @@ def test_the_design_box_is_behind_its_link_and_the_window_has_no_number_inputs(p
     assert page.locator("#fxNote").count() == 0 and page.locator("#fxAdd").count() == 1
 
 
+def test_a_finished_check_does_not_take_the_caret_from_the_next_note(page):
+    """The server's check finishes seconds after every design and repaints the tool;
+    Karl typing the next note in the design box keeps his caret."""
+    e = design(page)
+    open_design(page)
+    note = page.locator("#fxNote")
+    assert note.input_value() == ""                          # the last design's note is used
+    note.click()
+    page.keyboard.type("a SEND IT ti")
+    page.evaluate("fx.state.sig = ''; fx.refresh()")         # a repaint, as a finished job makes
+    page.wait_for_function("document.activeElement && document.activeElement.id === 'fxNote'")
+    page.keyboard.type("tle")
+    assert note.input_value() == "a SEND IT title"
+    assert e["id"]
+
+
 def test_design_and_go_wait_for_their_price_and_never_spend_without_one(page):
     """INTAKE I16.0f, review: Design and Iterate's Go were clickable while their price
     was still on its way, and stayed unpriced for good when the fetch failed. They are

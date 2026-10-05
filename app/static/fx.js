@@ -386,6 +386,8 @@
       const finished = j.state === 'done' || j.state === 'failed';
       if (finished && before !== j.state) {
         changed = true;
+        // a design that came back: "+ design another effect" starts from an empty note
+        if (j.fx_kind === 'design' && j.state === 'done' && S.ticks) S.note = '';
         if (S.ticks && !(check && j.state === 'done')) {     // a check's answer is on its card
           say(j.state === 'done' ? `${j.label}: ${j.detail || 'done'}`
             : `${j.label} failed — ${j.detail || 'no detail'}`, 6000);
@@ -866,11 +868,33 @@
     const list = cardsFor(S.shot);
     const i = shotIndex(S.shot);
     const len = (Number(sg.out) - Number(sg.in)) / speedOf(sg);
+    const typing = typingIn(el);
     el.innerHTML = `<div class="fxtitle">Shot ${i + 1} · ${len.toFixed(1)} s</div>`
       + list.map(cardHtml).join('')
       + (designShown(list) ? designHtml()
         : `<button class="fxlink" id="fxAdd">+ design another effect</button>`);
+    if (typing) typing();
     paintBand();
+  }
+
+  /* A rebuild keeps the caret where Karl is typing — the design note, a Change line.
+   * The server's own checks finish seconds after every design and nudge, and each one
+   * repaints the tool; without this the next note lost its focus mid-word. Returns the
+   * restore, or null when nothing in the tool has the focus. */
+  function typingIn(el) {
+    const a = document.activeElement;
+    if (!a || !el.contains(a) || !['TEXTAREA', 'INPUT'].includes(a.tagName)) return null;
+    const card = a.closest('.fxcard');
+    const sel = card ? `#fx .fxcard[data-id="${CSS.escape(card.dataset.id)}"] .fxiter input`
+      : a.id ? `#${CSS.escape(a.id)}` : null;
+    if (!sel) return null;
+    const [s0, s1] = [a.selectionStart, a.selectionEnd];
+    return () => {
+      const b = document.querySelector(sel);
+      if (!b) return;
+      b.focus();
+      try { b.setSelectionRange(s0, s1); } catch (e) { /* not a text field */ }
+    };
   }
 
   function onToolPointerDown(e) {
