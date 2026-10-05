@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Sign the Claude CLI in for Roughcut with a token that lasts a year.
 #
-# Run it from Windows by double-clicking claude-signin.cmd (or pasting that file's path
-# into cmd / PowerShell); from WSL, `bash -l scripts/claude-signin.sh`.
+# Run it where the board runs. On a native Linux box (foxtrot, since 2026-10-04):
+# `bash scripts/claude-signin.sh` there — from another machine, `ssh foxtrot` first; the
+# board's banner prints the exact line. On the laptop, where the board runs in WSL:
+# double-click claude-signin.cmd from Windows (or paste that file's path into cmd /
+# PowerShell), or from WSL `bash -l scripts/claude-signin.sh`.
 #
 # Why a token and not `claude auth login`: the login's access token is short-lived and
 # its refresh token rotates, and Roughcut runs several `claude -p` at once — when they
@@ -15,8 +18,16 @@ export PATH="$HOME/.local/bin:$PATH"
 token_file="${ROUGHCUT_CLAUDE_TOKEN_FILE:-$HOME/.config/roughcut/claude-token}"
 pattern='sk-ant-oat[0-9]*-[A-Za-z0-9_-]{20,}'
 
+# Where this runs, in the words of the error below: WSL's kernel says "microsoft" in
+# /proc/version, a native box's does not (ROUGHCUT_PROC_VERSION: another file, for tests).
+if grep -qi microsoft "${ROUGHCUT_PROC_VERSION:-/proc/version}" 2>/dev/null; then
+  where="in WSL"
+else
+  where="on $(hostname -s 2>/dev/null || hostname)"
+fi
+
 if ! command -v claude >/dev/null; then
-  echo "The Claude CLI is not installed in WSL (expected ~/.local/bin/claude)." >&2
+  echo "The Claude CLI is not installed $where (expected ~/.local/bin/claude)." >&2
   exit 1
 fi
 

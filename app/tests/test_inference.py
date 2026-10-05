@@ -326,6 +326,38 @@ def test_the_banner_commands_run_on_the_native_box_by_name(monkeypatch):
         assert not any(w in fix["why"] for w in ("Explorer", "cmd", "PowerShell")), fix["why"]
 
 
+def test_the_signin_script_names_the_host_when_the_cli_is_missing(tmp_path):
+    """I16.0 (m), review: the banner sends foxtrot to `bash …/claude-signin.sh`, and with
+    no CLI there the script said it "is not installed in WSL". It names the host it runs
+    on; under WSL it still says WSL. Run with no `claude` reachable, so it stops at that
+    check — before any sign-in, any model call or any request to a board."""
+    import shutil
+    import socket
+    import subprocess
+
+    script = Path(inference.__file__).resolve().parents[1] / "scripts" / "claude-signin.sh"
+    path = "/usr/bin:/bin"
+    if shutil.which("claude", path=path) or not shutil.which("bash"):
+        pytest.skip("a claude on the system PATH: the script would go on to sign in")
+    native, wsl = tmp_path / "native", tmp_path / "wsl"
+    native.write_text("Linux version 6.8.0-124-generic (buildd@lcy02) #124-Ubuntu SMP\n")
+    wsl.write_text("Linux version 5.15.167.4-microsoft-standard-WSL2 (root@f9c826d3017f)\n")
+    said = {}
+    for name, version in (("native", native), ("wsl", wsl)):
+        r = subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=20,
+                           env={"HOME": str(tmp_path), "PATH": path,
+                                "ROUGHCUT_PROC_VERSION": str(version)})
+        assert r.returncode == 1, r
+        said[name] = r.stderr
+    host = socket.gethostname().split(".")[0]
+    assert f"The Claude CLI is not installed on {host} " in said["native"], said
+    assert "WSL" not in said["native"]
+    assert "The Claude CLI is not installed in WSL " in said["wsl"], said
+    # the header covers the box the banner sends Karl to, not only Windows and WSL
+    head = script.read_text(encoding="utf-8").split("set -euo")[0]
+    assert "foxtrot" in head and "bash scripts/claude-signin.sh" in head
+
+
 def test_the_host_is_read_from_the_kernel_and_the_hostname(monkeypatch, tmp_path):
     """WSL's kernel says "microsoft" in /proc/version; foxtrot's does not."""
     monkeypatch.setattr(inference.socket, "gethostname", lambda: "foxtrot.lan")

@@ -168,6 +168,14 @@ same commit. Releases move entries into a dated version section.
   settings" — when their price would pass it; the board shows that as the call's
   failure. A new test puts each call half a cent past the cap and finds all six refused
   with nothing reaching the model (the Ask started before the fix).
+- **The sign-in script speaks for the host it runs on (M16 stage 0 review, I16.0m).**
+  On foxtrot the banner now says `bash <repo>/scripts/claude-signin.sh`, "Run this on
+  foxtrot", but with no CLI there the script answered "The Claude CLI is not installed
+  in WSL", and its header said to run it from Windows by double-clicking the .cmd. It
+  now names the host — "not installed on foxtrot" — and says WSL only when the kernel
+  is WSL's; the header covers the native box first and the laptop's WSL second. A new
+  test runs the script with no `claude` reachable (it stops at that check, before any
+  sign-in) on a native and a WSL kernel string (it said WSL for both before).
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
