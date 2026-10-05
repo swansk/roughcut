@@ -10,6 +10,11 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Changed
+- **The CLI banner is one line above the header (INTAKE M16 I16.1, C1).** It wrapped to
+  two or three lines at the top of every screen when the reason was long. It still sits
+  above the page, never in the one header row, and only while the CLI needs Karl; now on
+  one line (≤ 44 px at 1440 wide), the reason cut short with the whole of it on hover,
+  the command and Copy / Check again always in view.
 - **The bin · cut menu is the way between the screens (INTAKE M16 I16.1, decision 2).**
   With the step bar gone, its first rows are the places — *The footage* (/open, "3 clips ·
   indexed"), *The pass* (/floor, "40 not watched · 44 kept") and *The cut* (/, "19 shots ·

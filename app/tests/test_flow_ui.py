@@ -254,6 +254,34 @@ def test_mid_round_the_pass_says_how_many_are_left_and_nothing_is_blue(browser, 
     pg.close()
 
 
+def test_the_cli_banner_is_one_line_above_the_one_row_header(browser, live):
+    """The banner shows only while the CLI needs Karl, above the page — never in the
+    header row — and on one line, whatever the reason's length."""
+    import server
+    server.BACKEND.update(fix={"kind": "login", "title": "The Claude CLI needs you to sign in",
+                               "command": "ssh foxtrot ~/roughcut/scripts/claude-signin.sh",
+                               "why": "signed out, so nothing priced can run — " * 6,
+                               "detail": "Not logged in"})
+    try:
+        pg = open_screen(browser, live + "/open")
+        chip(pg)
+        pg.evaluate("window.cliFix.poll()")
+        pg.wait_for_selector("#cliFix:not([hidden])", timeout=5000)
+        r = pg.evaluate("""() => { const b = document.querySelector('#cliFix').getBoundingClientRect();
+            const n = document.querySelector('#flowNext').getBoundingClientRect();
+            const s = document.querySelector('#hdBin').getBoundingClientRect();
+            return {h: b.height, bottom: b.bottom, chip: n.top, bin: s.top,
+                    w: document.documentElement.scrollWidth}; }""")
+        assert r["h"] <= 44, r
+        assert r["bottom"] <= r["chip"] and r["bottom"] <= r["bin"], r
+        assert r["w"] <= 1440, r
+        said = pg.evaluate("fetch('/api/backend').then(r => r.json()).then(b => b.fix.command)")
+        assert pg.locator("#cliFix code").inner_text() == said
+        pg.close()
+    finally:
+        server.BACKEND.update(fix=None)
+
+
 # ---------------------------------------------------------------- the menu's places
 #
 # M16 decision 2 / C6: with the step bar gone, the bin · cut menu is the way between
