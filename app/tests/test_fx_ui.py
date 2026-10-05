@@ -239,12 +239,21 @@ def design(page, note: str = "hit markers where my skis hit the rocks, with the 
            shot: int = 0) -> dict:
     """Design an effect on `shot` through the tool; returns it as the server lists it."""
     open_fx(page, shot)
+    open_design(page)
     page.locator("#fxNote").fill(note)
     page.locator("#fxDesign").click()
     page.wait_for_selector("#fx .fxcard", timeout=20000)
     lst = effects(page)
     assert len(lst) >= 1, lst
     return lst[-1]
+
+
+def open_design(page) -> None:
+    """The design box: open by itself on a shot with no effects, else behind "+ design
+    another effect" (INTAKE M16 I16.5)."""
+    if page.locator("#fxAdd").count():
+        page.locator("#fxAdd").click()
+    page.wait_for_selector("#fxNote")
 
 
 def wait_effect(page, fx_id: str, pred_js: str, timeout: float = 10.0) -> dict:
@@ -291,8 +300,10 @@ def test_the_range_bar_drag_survives_the_parked_playhead(page):
     mid = seg["in"] + (seg["out"] - seg["in"]) * 0.5
     assert abs(w["t1"] - mid) < 0.15 * (seg["out"] - seg["in"]), (w, seg)
     assert page.evaluate("!player.playing") is True
-    assert "the whole shot" not in page.locator("#fx .fxwhole").inner_text()
     assert page.locator("#tl .fx-tlband").count() == 1
+    # the band names the window in film time (shot 1 starts the film at its clip 1.0)
+    want_end = page.evaluate("t => fx.fmtT(t)", w["t1"] - seg["in"])
+    assert page.locator("#tl .fx-tlband span").inner_text() == f"0:00.0–{want_end}"
 
 
 def test_the_range_bar_is_the_video(page):
@@ -306,8 +317,9 @@ def test_the_range_bar_is_the_video(page):
     assert all("/media/poster/" in s and "?t=" in s for s in srcs)
     # park the monitor at 1.5 s of the clip through the timeline: the bar's playhead follows
     page.evaluate("tl.seek(tl.filmStart(segs[0].id) + 0.5)")
-    page.wait_for_function("!document.querySelector('#fxBar .ph').hidden && document.querySelector('#fxBar .ph b').textContent === '0:01.5'")
-    assert "the monitor is at" in page.locator("#fxBarLine").inner_text()
+    # the playhead is labelled in film time (clip 1.5 of shot 1 is 0:00.5 of the film)
+    page.wait_for_function("!document.querySelector('#fxBar .ph').hidden && document.querySelector('#fxBar .ph b').textContent === '0:00.5'")
+    assert page.locator("#fxBarLine").count() == 0          # no hint line under the bar
     # a drag on the strip scrubs: the monitor ends near the pointer's time, paused
     bar = page.locator("#fxBar").bounding_box()
     y = bar["y"] + bar["height"] / 2
@@ -322,7 +334,13 @@ def test_the_range_bar_is_the_video(page):
     page.wait_for_function(f"Math.abs(liveVideo().currentTime - {want}) < 0.3", timeout=5000)
     assert page.evaluate("!player.playing") is True
     assert page.evaluate("fx.state.window") is None          # a scrub is not a window
-    assert page.locator("#fxBar .h1 span").inner_text() != ""   # the handles carry their times
+    assert page.locator("#fxBar .h1 span").inner_text() == "0:02.0"   # the handles carry film times
+    # one control sets the nearer end at the parked playhead: here, near the end
+    head = page.locator("#fxAtHead")
+    page.wait_for_function("document.querySelector('#fxAtHead').textContent === 'set end at playhead'")
+    head.click()
+    w = page.evaluate("fx.state.window")
+    assert w["t0"] == seg["in"] and abs(w["t1"] - want) < 0.3, w
 
 
 def test_the_tool_follows_the_selected_shot_and_prices_the_button(page):
@@ -331,11 +349,13 @@ def test_the_tool_follows_the_selected_shot_and_prices_the_button(page):
     sid = open_fx(page, 0)
     # (text_content, not inner_text: the title is uppercased by CSS)
     assert page.locator("#fx .fxtitle").text_content() == "Shot 1 · 2.0 s"   # no file name (M16)
-    assert "no effects on this shot yet" in page.locator("#fx").inner_text()
+    # no effects yet: the design box is open by itself, and nothing says so in words
+    assert page.locator("#fxNote").is_visible() and page.locator("#fxAdd").count() == 0
+    assert "no effects" not in page.locator("#fx").inner_text()
     page.wait_for_selector("#fx .fxprice")
     price = api(page, f"/api/fx/price?place=1&shot={sid}")
     assert price["frames"] >= 1
-    assert page.locator("#fx .fxprice").inner_text().startswith(f"≈ ${price['usd']:.2f}")
+    assert page.locator("#fxDesign").inner_text() == f"Design · ~${price['usd']:.2f}"   # no "· 8 frames"
     # the other shot
     open_fx(page, 1)
     assert page.locator("#fx .fxtitle").text_content() == "Shot 2 · 2.0 s"
@@ -346,11 +366,35 @@ def test_the_tool_follows_the_selected_shot_and_prices_the_button(page):
     assert page.locator("#fxDesign").count() == 0
 
 
+def test_the_design_box_is_behind_its_link_and_the_window_has_no_number_inputs(page):
+    """INTAKE M16 I16.5 (4). On a shot with an effect the design box is one line, "+ design
+    another effect"; it opens on a click and closes when another shot is chosen. The
+    window is the range bar's handles and one "set start/end at playhead" control: the
+    number inputs, the two "◀ playhead" buttons, "the whole shot ✕", "· N frames" and
+    "click the strip to park the monitor on this shot" are gone."""
+    design(page)
+    assert page.locator("#fxNote").count() == 0
+    assert page.locator("#fxAdd").inner_text() == "+ design another effect"
+    page.locator("#fxAdd").click()
+    page.wait_for_selector("#fxNote")
+    assert page.evaluate("document.activeElement.id") == "fxNote"
+    text = page.locator("#fx .fxdesign").inner_text()
+    for gone in ("where", "◀ playhead", "the whole shot", "frame", "click the strip", "design an effect for this shot"):
+        assert gone not in text, gone
+    assert page.locator("#fx .fxdesign input").count() == 0
+    assert page.locator("#fxAtHead").count() == 1
+    open_fx(page, 1)                                         # another shot: no effects, the box open
+    assert page.locator("#fxNote").is_visible()
+    open_fx(page, 0)                                         # back: closed again
+    assert page.locator("#fxNote").count() == 0 and page.locator("#fxAdd").count() == 1
+
+
 def test_design_and_go_wait_for_their_price_and_never_spend_without_one(page):
     """INTAKE I16.0f, review: Design and Iterate's Go were clickable while their price
     was still on its way, and stayed unpriced for good when the fetch failed. They are
     disabled until priced; with no price to be had they say so and stay disabled."""
     e = design(page)
+    open_design(page)
     page.wait_for_function("!document.querySelector('#fxDesign').disabled")
     page.locator(f"#fx .fxcard[data-id='{e['id']}'] button[data-act=iterate]").click()
     go = page.locator(f"#fx .fxcard[data-id='{e['id']}'] button[data-act=revise]")
@@ -367,6 +411,7 @@ def test_design_and_go_wait_for_their_price_and_never_spend_without_one(page):
     page.wait_for_selector("#tl .blk")
     page.wait_for_function("window.fx && fx.ready")
     open_fx(page, 0)
+    open_design(page)
     page.wait_for_function(
         "document.querySelector('#fxDesign').textContent.includes('price unavailable')",
         timeout=5000)
@@ -538,7 +583,7 @@ def test_the_waiting_proposal_is_first_in_film_time_and_its_preview_is_nexts(pag
     assert pv.get_attribute("data-next-for") == "polish" and pv.get_attribute("data-fx") == "fx_slowui01"
     assert pv.inner_text() == "▶ Preview"
     assert [b.inner_text() for b in first.locator(".fxbtns button").all()][:3] == ["▶ Preview", "Accept", "Discard"]
-    assert page.locator("#fx .fxcard .primary").count() == 0
+    assert page.locator("#fx .primary").count() == 0
     assert page.locator("#fx button[data-act=verify]").count() == 0
     first.locator("button[data-act=why]").click()
     why = first.locator(".fxwhybox").inner_text()
@@ -582,6 +627,7 @@ def test_next_lands_on_the_waiting_effect_not_the_anchored_shot(page, live_serve
     # two accepted effects ahead of the proposal: its card starts below the dock's fold,
     # as the slow motion's did on Killington, so the landing has to scroll to it
     for n, note in enumerate(("a title as we drop in", "a red vignette as I land"), 1):
+        open_design(page)
         page.locator("#fxNote").fill(note)
         page.locator("#fxDesign").click()
         page.wait_for_function(f"document.querySelectorAll('#fx .fxcard').length === {n}",
@@ -591,6 +637,7 @@ def test_next_lands_on_the_waiting_effect_not_the_anchored_shot(page, live_serve
         wait_effect(page, made["id"], "e => e.status === 'accepted'")
         page.wait_for_function(
             f"[...document.querySelectorAll('#fx .fxchip')].filter(c => c.textContent === 'accepted').length === {n}")
+    open_design(page)
     page.locator("#fxNote").fill("hit markers where my skis hit the rocks")
     page.locator("#fxDesign").click()
     page.wait_for_function("document.querySelectorAll('#fx .fxcard').length === 3", timeout=20000)
@@ -897,7 +944,7 @@ def test_draw_a_reference_makes_marks_from_strokes_and_the_design_uses_them(page
             assert 0 <= p["x"] <= 1 and 0 <= p["y"] <= 1        # fractions, never pixels
     assert ref["png"].startswith("data:image/png;base64,")
     line = page.locator("#fx .fxref").inner_text()
-    assert "reference · 2 marks at 0:01.5" in line and "the skis" in line
+    assert "reference · 2 marks at 0:00.5" in line and "the skis" in line   # film time
     # the next Design carries it; the server keeps the marks as the anchors
     page.locator("#fxNote").fill("hit markers on the skis")
     page.locator("#fxDesign").click()

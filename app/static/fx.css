@@ -3,7 +3,6 @@
 #fx { min-height: 40px; }
 #fx .fxtitle { font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
                color: var(--dim); margin: 0 0 8px; }
-#fx .fxempty { margin: 4px 0 10px; }
 
 /* one effect */
 #fx .fxcard { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
@@ -61,7 +60,6 @@
 /* the design box */
 #fx .fxdesign { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
                 padding: 10px 12px; margin-top: 4px; }
-#fx .fxdhead { margin-bottom: 6px; }
 #fx .fxdesign textarea { min-height: 64px; }
 #fx .fxplace { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-top: 6px;
                cursor: pointer; }
@@ -72,10 +70,9 @@
 #fx .fxref button { padding: 0 6px; font-size: 11px; line-height: 18px; }
 #fx .fxstate { margin-top: 6px; }
 
-/* the window */
-#fx .fxwhere { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-top: 6px; font-size: 12px; }
-#fx .fxwhere input { width: 64px; padding: 3px 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
-#fx .fxwhere button { padding: 1px 6px; font-size: 11px; }
+/* the window: the range bar's handles, and one "set start/end at playhead" */
+#fx .fxwhere { display: flex; justify-content: flex-end; margin-top: 2px; }
+#fx .fxwhere button.fxlink:disabled { opacity: .5; }
 #fx .fxev .del { color: var(--bad); opacity: .7; }
 #fx .fxev .del:hover { opacity: 1; background: var(--card); }
 
@@ -105,12 +102,7 @@
 #fx .fxbar .ph b { position: absolute; top: -16px; left: 50%; transform: translateX(-50%); font-size: 10px; font-weight: 600;
                    color: #0b0b0f; background: #fff; padding: 0 4px; border-radius: 3px; white-space: nowrap;
                    font-variant-numeric: tabular-nums; }
-#fx .fxbar .lbl { position: absolute; bottom: -15px; font-size: 10px; color: var(--dim); font-variant-numeric: tabular-nums; }
-#fx .fxbar .l0 { left: 0; } #fx .fxbar .l1 { right: 0; }
-#fx .fxbarline { margin-top: 18px; font-size: 11.5px; }
-#fx .fxbarline b { color: var(--text); font-variant-numeric: tabular-nums; }
-#fx .fxprice { font-weight: 400; opacity: .8; margin-left: 4px; }
-#fx button.primary .fxprice { color: #0b0b0f; opacity: .75; }
+#fx .fxprice { font-weight: 400; opacity: .8; }
 #fx .fxrefimg { display: block; width: 100%; border-radius: 6px; border: 1px solid var(--line); margin-top: 6px; }
 
 /* the window and the hits on the timeline itself, while the FX tool is open */

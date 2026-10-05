@@ -242,6 +242,18 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **The design box is behind "+ design another effect", and the window is the range bar
+  (INTAKE M16 I16.5).** The design box sat open under every shot's cards with a heading,
+  a five-example placeholder cut off mid-sentence, a "where [156.00] ◀ playhead to
+  [175.56] ◀ playhead · the whole shot ✕" row (clip seconds, a third time format), end
+  labels doubling the handles', "click the strip to park the monitor on this shot" under
+  the bar, and "Design ≈ $0.21 · 8 frames". On a shot with an effect the box is now one
+  line, "+ design another effect" (open by itself on a shot with none, while a reference
+  is drawn or held, and while a design runs; closed again on another shot). The window
+  is the range bar's handles plus one "set start/end at playhead" control that moves the
+  nearer end to the parked monitor; the handles, the playhead, the reference line and the
+  timeline band (now blank for the whole shot) read film time; the button reads
+  "Design · ~$0.21". Design, *Use it* and the sketch HUD's *Use it* are plain buttons.
 - **The FX tool shows the waiting answer first (INTAKE M16 I16.5).** After Next, the
   slow motion's card was ~180 words under an accepted card: Karl's note quoted back, the
   model's paraphrase of it, an amber "could not:" paragraph in clip seconds, "CHANGES THE
