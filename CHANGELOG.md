@@ -55,6 +55,12 @@ same commit. Releases move entries into a dated version section.
   The landing now waits for the timeline only when its target is a shot or an effect; an
   Ask target waits for the "show it" link alone. A new UI test goes from /open to the
   empty board through Next and finds the proposal open (it timed out before the fix).
+- **Next's landing on a waiting Ask proposal has a browser test (M16 stage 0 review,
+  I16.0a).** Only the href string (`/#tool=ask&ask=<job>`) was tested: with the Ask
+  landing switched off in `flow.js`, 63 flow, Next and proposal UI tests still passed.
+  A new test writes an unanswered proposal, clicks Next on the board itself (in place)
+  and again from /open, and checks the proposal opens and the hash drops `ask=` both
+  times; it fails with the landing switched off.
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six

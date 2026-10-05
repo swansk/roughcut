@@ -1853,3 +1853,29 @@ def test_next_lands_on_a_waiting_first_cut_proposal(page, live_server, project):
         assert "0 shots" in page.locator("#proposalDiff").inner_text()
     finally:
         path.unlink(missing_ok=True)
+
+
+def test_next_lands_on_a_waiting_revision_proposal_in_place_and_from_open(page, live_server):
+    """I16.0a: Next's `{ask}` target opens the waiting proposal — clicked on the board
+    itself (in place, no reload) and from /open (through `/#tool=ask&ask=<job>`). Only
+    the href string was tested; the landing that shows the proposal was not."""
+    path = _waiting_ask("i16rev", [{"clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0, "why": "w"}])
+    try:
+        page.reload()
+        page.wait_for_selector("#tl .blk")
+        nxt = _next_with(page, "ask")
+        assert nxt["href"] == "/#tool=ask&ask=i16rev", nxt
+        assert not page.locator("#proposal").is_visible()
+        page.locator("#flowNext").click()
+        page.wait_for_selector("#proposal", state="visible", timeout=10000)
+        assert page.evaluate("location.hash") == "#tool=ask"
+        assert "1 shots" in page.locator("#proposalDiff").inner_text()
+
+        page.goto(live_server + "/open")
+        _next_with(page, "ask")
+        page.locator("#flowNext").click()
+        page.wait_for_selector("#tl .blk")
+        page.wait_for_selector("#proposal", state="visible", timeout=12000)
+        assert "ask=" not in page.evaluate("location.hash")
+    finally:
+        path.unlink(missing_ok=True)
