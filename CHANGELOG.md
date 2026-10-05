@@ -95,6 +95,16 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **A backend problem with no command for it is said again, in the banner (INTAKE M16
+  review, decision 1).** Two surfaces said what is wrong with the model backend: the
+  board's header pill ("… · not usable", "… · unreachable") and the open screen's backend
+  line. M16 took both away, and the CLI banner draws only when the server has a command
+  for Karl — so "ANTHROPIC_API_KEY is not set.", an unknown `ROUGHCUT_BACKEND`, or a
+  probe that failed for a reason nothing diagnoses (a timeout, the network) showed
+  nowhere, and Next kept pointing at priced buttons that failed only after the click.
+  The banner now says those too, on the same one line, with *Check again* and no command
+  to copy. New test in `test_flow_ui.py` (no key on `/`, a timed-out probe on `/floor`);
+  it fails on the old banner. The suite's per-test reset also clears a failed probe.
 - **How closely to look can be chosen before Resume, not only before Index (INTAKE M16
   review, I16.2 keep-list).** The "Looks at a frame every N s · change" line and its
   slider lived only in the setup box, which is hidden while the looks are paused — the

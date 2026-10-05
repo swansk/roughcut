@@ -13,11 +13,14 @@
  * every screen's header is one row (INTAKE M16), and the banner is there only while the
  * CLI needs Karl. A long reason is cut short on the line; the whole of it is its title.
  *
+ * It also says what is wrong when there is no command for it — a backend with no API key,
+ * a probe that timed out — in the same line, with *Check again* (`trouble()` below).
+ *
  * Self-contained (styles inline) because the three pages do not share a stylesheet.
  */
 (function () {
   const POLL_MS = 15000, FAST_MS = 2000;
-  let timer = null, shown = null, last = null;
+  let timer = null, shown = null, last = null, held = null;
 
   const css = `
   #cliFix { position: relative; z-index: 50; display: flex; gap: 14px;
@@ -52,16 +55,37 @@
     return el;
   }
 
+  /* What is wrong, if anything. The server's `fix` when it has one (a command Karl can
+   * run); else what it knows is wrong but has no command for — a preflight problem
+   * ("ANTHROPIC_API_KEY is not set.", an unknown backend) or a probe that failed for a
+   * reason nothing diagnoses (a timeout, the network). The header's backend pill and the
+   * open screen's backend line said those; with both gone (INTAKE M16) this is the one
+   * place left, and without it Next pointed at priced buttons that failed only after the
+   * click. *Check again* keeps the banner up, "Checking…", until the probe answers. */
+  function trouble(b) {
+    if (!b) return null;
+    if (b.fix) return b.fix;
+    const p = (b.problems || []).find(Boolean);
+    if (p) return { kind: 'problem', title: 'The model can’t be used', why: p, command: '', detail: p };
+    if (b.state === 'failed') {
+      const why = b.detail || 'the last check of the model failed';
+      return { kind: 'failed', title: 'The model didn’t answer', why, command: '', detail: why };
+    }
+    if (b.state === 'checking' && held) return held;
+    return null;
+  }
+
   function paint(b) {
     last = b;
     const el = ensure();
-    const fix = b && b.fix;
+    const fix = trouble(b);
+    held = fix;
     if (!fix) {
       if (!el.hidden) { el.hidden = true; el.innerHTML = ''; announce(); }
       shown = null;
       return;
     }
-    const key = fix.kind + '|' + fix.command + '|' + b.state;
+    const key = fix.kind + '|' + fix.command + '|' + fix.why + '|' + b.state;
     if (key === shown) return;          // nothing changed: leave a hovered button be
     shown = key;
     const checking = b.state === 'checking';

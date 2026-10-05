@@ -282,6 +282,39 @@ def test_the_cli_banner_is_one_line_above_the_one_row_header(browser, live):
         server.BACKEND.update(fix=None)
 
 
+def test_the_banner_says_what_is_wrong_when_there_is_no_command_for_it(browser, live, monkeypatch):
+    """M16 decision 1, status when something is wrong. The header's backend pill and the
+    open screen's backend line said what the banner cannot diagnose — an API backend
+    with no key, a probe that timed out — and both are gone; the banner drew only when the
+    server had a command for Karl, so these showed nowhere."""
+    import server
+    monkeypatch.setenv("ROUGHCUT_BACKEND", "anthropic_api")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    pg = open_screen(browser, live + "/")
+    pg.evaluate("window.cliFix.poll()")
+    pg.wait_for_selector("#cliFix:not([hidden])", timeout=5000)
+    text = pg.locator("#cliFix").inner_text()
+    assert "The model can’t be used" in text and "ANTHROPIC_API_KEY is not set." in text, text
+    assert pg.locator("#cliFix button[data-act=check]").is_visible()
+    assert pg.locator("#cliFix code, #cliFix button[data-act=copy]").count() == 0, "no command to copy"
+    pg.close()
+    # a probe that failed for a reason nothing diagnoses (a timeout): said, with its detail
+    monkeypatch.setenv("ROUGHCUT_BACKEND", "claude_cli")
+    monkeypatch.setattr(server.shutil, "which", lambda name: "/usr/bin/claude")
+    server.BACKEND.update(state="failed", detail="claude-test: timed out after 120 s", fix=None)
+    try:
+        pg = open_screen(browser, live + "/floor")
+        pg.evaluate("window.cliFix.poll()")
+        pg.wait_for_selector("#cliFix:not([hidden])", timeout=5000)
+        assert "timed out after 120 s" in pg.locator("#cliFix .why").inner_text()
+        server.BACKEND.update(state="ok", detail="OK")
+        pg.evaluate("window.cliFix.poll()")
+        pg.wait_for_selector("#cliFix[hidden]", state="attached", timeout=5000)
+        pg.close()
+    finally:
+        server.BACKEND.update(state="unknown", detail="", fix=None)
+
+
 # ---------------------------------------------------------------- the menu's places
 #
 # M16 decision 2 / C6: with the step bar gone, the bin · cut menu is the way between

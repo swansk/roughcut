@@ -74,7 +74,8 @@ def no_cli_problem_carried_over():
         inference.clear_problem()
     server = sys.modules.get("server")
     if server is not None:
-        server.BACKEND.update(fix=None)
+        # a failed probe is a banner too now (cli.js shows what nothing diagnoses)
+        server.BACKEND.update(fix=None, state="unknown", detail="")
     yield
 
 
