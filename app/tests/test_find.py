@@ -115,6 +115,27 @@ def test_find_returns_playable_matches_without_spending_anything(client):
     assert row["duration"] == pytest.approx(6.0, abs=0.1)
 
 
+def test_the_model_searchs_price_is_free_before_any_query(client):
+    """INTAKE I16.0f: *Ask the model* shows its price before the first click. The price
+    came only in the POST's response — to the click that had already started the call.
+    GET /api/find/price is the same number, for nothing, with nothing typed."""
+    from roughcut import inference
+
+    class Refuse:
+        name = "refuse"
+
+        def complete(self, request):
+            raise AssertionError("a price must not call the model")
+
+    inference.set_backend(Refuse())
+    try:
+        price = client.get("/api/find/price").json()
+    finally:
+        inference.set_backend(None)
+    assert price["usd"] > 0
+    assert price["usd"] == client.post("/api/find", json={"query": "goodbye"}).json()["deep_projected_usd"]
+
+
 def test_find_rejects_an_empty_query(client):
     assert client.post("/api/find", json={"query": "   "}).status_code == 400
 

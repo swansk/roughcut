@@ -1694,6 +1694,31 @@ def test_the_index_line_carries_no_second_money_number(page):
     assert not any("$" in x for x in lines)
 
 
+def test_ask_the_model_in_the_bin_is_priced_before_it_can_be_clicked(page, live_server):
+    """INTAKE I16.0f / decision 7: every model button shows its price before the click.
+    The Bin's *Ask the model* read just that, enabled, and a click spent before any
+    price was shown. It is disabled until the free price is on it, and when the price
+    cannot be had it says so and stays disabled."""
+    usd = page.evaluate("fetch('/api/find/price').then(r => r.json()).then(d => d.usd)")
+    want = f"Ask the model · ~${usd:.2f}"
+    page.wait_for_function(
+        "(w) => document.querySelector('#findDeep').textContent.trim() === w", arg=want,
+        timeout=5000)
+    assert page.locator("#findDeep").is_enabled()
+    # the page as served starts it disabled: no click before the price lands
+    html = page.evaluate("fetch('/').then(r => r.text())")
+    assert '<button id="findDeep" disabled' in html
+    # no price to be had: no unpriced spend either
+    page.route("**/api/find/price", lambda route: route.abort())
+    page.reload()
+    page.wait_for_selector("#tl .blk")
+    page.wait_for_function(
+        "document.querySelector('#findDeep').textContent.includes('price unavailable')",
+        timeout=5000)
+    assert page.locator("#findDeep").is_disabled()
+    page.unroute("**/api/find/price")
+
+
 # ---------------------------------------------------------------- the switcher
 
 def test_saving_a_copy_flushes_the_autosave_first_and_the_board_moves_to_it(page, project,

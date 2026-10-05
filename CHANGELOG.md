@@ -127,6 +127,16 @@ same commit. Releases move entries into a dated version section.
   project", a different number. The line now says where the index is and nothing about
   money. A new test reads the line in all four states and finds no `$` (each carried
   "$3.20" before).
+- **The Bin's *Ask the model* shows its price before it can be clicked (M16 stage 0
+  review, I16.0f).** I16.0f and decision 7 say every model button shows its price
+  first, and the end state counts buttons that spend without one. The Bin's Find button
+  *Ask the model* read just that and was enabled at boot; typing a query and clicking
+  it started the model search in the same request whose response brought the price —
+  priced only after the spend began. A new free `GET /api/find/price` returns the same
+  `find.projected_usd` before anything is typed; the button is served disabled, and
+  enabled only once it reads "Ask the model · ~$0.19". If the price cannot be fetched
+  it says "price unavailable" and stays disabled. New API and UI tests (both failed
+  before).
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six

@@ -1276,6 +1276,19 @@ def _find_job(job: str, query: str, clips: dict, ranked: list[dict]) -> None:
     entry.finish("done", detail=f"{n} match{'es' if n != 1 else ''} found")
 
 
+@app.get("/api/find/price")
+def api_find_price() -> JSONResponse:
+    """What *Ask the model* costs on this bin, before anything is typed (INTAKE I16.0f:
+    every model button shows its price first). Free — the same `find.projected_usd`
+    the POST returns, which reached the button only in the response to the click that
+    had already started the call. `usd` is None while there is nothing to search."""
+    clips, _ = _ask_clips(drop_junk=True)
+    if not clips:
+        return JSONResponse({"usd": None,
+                             "why": "no analysed clips yet — run the audio pass first"})
+    return JSONResponse({"usd": find.projected_usd(clips)})
+
+
 @app.post("/api/find")
 async def api_find(request: Request) -> JSONResponse:
     """Find a moment in the bin from a plain-language description.

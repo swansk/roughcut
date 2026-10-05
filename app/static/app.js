@@ -2417,9 +2417,32 @@ function answerProposal(answer) {
  * WHOLE clip, seeked to the moment: a window is somewhere to look, not yet a cut. */
 let findSel = null;              // the match loaded in the finder's player
 
+/* *Ask the model* carries its price before the click (INTAKE I16.0f), so it stays
+ * disabled until the price is on it: the free GET /api/find/price at boot. It used to
+ * be priced only by the POST that a click on it had already sent. */
+let findPriced = false;
+
 function paintFindDeepPrice(usd) {
-  if (usd == null) return;
+  if (typeof usd !== 'number') return;
+  findPriced = true;
   $('#findDeep').textContent = `Ask the model · ~$${usd.toFixed(2)}`;
+}
+
+async function fetchFindPrice() {
+  const b = $('#findDeep');
+  let d = null;
+  try {
+    const r = await fetch('/api/find/price');
+    if (r.ok) d = await r.json();
+  } catch (e) { /* said below */ }
+  if (d && typeof d.usd === 'number') {
+    paintFindDeepPrice(d.usd);
+    if (!$('#findGo').disabled) b.disabled = false;     // not mid-search
+  } else if (!findPriced) {
+    b.disabled = true;
+    b.textContent = d ? 'Ask the model' : 'Ask the model · price unavailable';
+    if (d && d.why) b.title = d.why;
+  }
 }
 
 function renderFindResults(rows, note) {
@@ -2484,7 +2507,7 @@ function followFind(job) {
     }
     clearInterval(iv);
     $('#findGo').disabled = false;
-    $('#findDeep').disabled = false;
+    $('#findDeep').disabled = !findPriced;
     if (s.state !== 'done') {
       $('#findState').textContent = '';
       return toast(`model search failed: ${s.detail || 'see the bar above'}`, 6000);
@@ -2501,6 +2524,7 @@ function followFind(job) {
 async function doFind(deep = false) {
   const q = $('#findQ').value.trim();
   if (!q) return toast('describe the moment you are looking for');
+  if (deep && !findPriced) return toast('the model search has no price yet — not asking');
   $('#findGo').disabled = true;
   $('#findDeep').disabled = true;
   $('#findState').textContent = deep ? 'asking the model…' : 'searching…';
@@ -2529,7 +2553,7 @@ async function doFind(deep = false) {
     toast(`find failed: ${e.message}`, 6000);
   }
   $('#findGo').disabled = false;
-  $('#findDeep').disabled = false;
+  $('#findDeep').disabled = !findPriced;
 }
 
 /* Renders as versions rather than "the newest file". Judging an edit is comparative —
@@ -2935,6 +2959,7 @@ async function boot() {
   await pollJobs();
   reattachAsk();
   fetchAskPrices();
+  fetchFindPrice();
   setInterval(pollJobs, 1000);
   if (!P.proxies_ready) {
     toast('building proxies in the background — previews appear as they finish', 6000);
