@@ -13,6 +13,10 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **Next's blue Preview survives the FX tool's rebuilds (INTAKE M16 I16.5, contract C2).**
+  The tool rebuilds its cards when a job ends or a check lands; the `.is-next` class
+  flow.js puts on the waiting proposal's ▶ Preview went with the old element until
+  flow.js's next pass. A rebuild now carries it to the new Preview of the same effect.
 - **A change to an accepted effect can be seen and answered (INTAKE M16 I16.5).** Change
   (Iterate) on an accepted effect wrote the revision to the fx dir under the same id
   while `GET /api/fx` listed only the EDL's accepted copy, so the paid-for change could

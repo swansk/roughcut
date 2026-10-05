@@ -869,10 +869,18 @@
     const i = shotIndex(S.shot);
     const len = (Number(sg.out) - Number(sg.in)) / speedOf(sg);
     const typing = typingIn(el);
+    // flow.js makes Next's target the one blue button (.is-next, contract C2); a rebuild
+    // must not drop it from the waiting proposal's Preview between flow.js's passes
+    const blue = el.querySelector('.is-next[data-fx]');
+    const blueFx = blue ? blue.dataset.fx : null;
     el.innerHTML = `<div class="fxtitle">Shot ${i + 1} · ${len.toFixed(1)} s</div>`
       + list.map(cardHtml).join('')
       + (designShown(list) ? designHtml()
         : `<button class="fxlink" id="fxAdd">+ design another effect</button>`);
+    if (blueFx) {
+      const again = el.querySelector(`[data-next-for][data-fx="${CSS.escape(blueFx)}"]`);
+      if (again) again.classList.add('is-next');
+    }
     if (typing) typing();
     paintBand();
   }

@@ -601,6 +601,11 @@ def test_the_waiting_proposal_is_first_in_film_time_and_its_preview_is_nexts(pag
     assert [b.inner_text() for b in first.locator(".fxbtns button").all()][:3] == ["▶ Preview", "Accept", "Discard"]
     assert page.locator("#fx .primary").count() == 0
     assert page.locator("#fx button[data-act=verify]").count() == 0
+    # flow.js's one blue button (C2) survives the tool's own rebuilds
+    pv.evaluate("b => b.classList.add('is-next')")
+    page.evaluate("fx.state.sig = ''; fx.refresh()")
+    page.wait_for_function("document.querySelector(\"#fx button[data-fx='fx_slowui01']\").classList.contains('is-next')")
+    assert page.locator("#fx .is-next").count() == 1
     first.locator("button[data-act=why]").click()
     why = first.locator(".fxwhybox").inner_text()
     assert "slow motion at 0.4x over the biggest hit" in why and "the hit at 1.10 s" in why
