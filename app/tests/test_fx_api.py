@@ -470,3 +470,24 @@ def test_an_edit_proposal_says_what_changes_in_film_time(stubbed, client):
     e = next(x for x in client.get("/api/fx").json()["effects"] if x["id"] == fx_id)
     assert "says" not in e and e["film"] == {"n": 1, "start": 0.0, "in": 1.0, "speed": 1.0}
 
+
+def test_accepting_an_edit_only_proposal_changes_the_cut_once(stubbed, client, project):
+    """The slow motion has nothing to draw or hear. Accept answered 500 *after* the
+    edits had changed the cut — validate_effect refused an effect with no overlay, no
+    sound and no edits left — and the proposal stayed waiting, to be applied twice. Now
+    the cut changes once, the proposal leaves every list (the record stays on disk with
+    the sentence and `applied.before` for an undo), and nothing is put in `effects`."""
+    import server
+    _seed(stubbed, client)
+    a, b = [s["id"] for s in client.get("/api/project").json()["segments"]]
+    _propose("fx_slow0001", b, [{"op": "speed", "shot": b, "rate": 0.5, "from": 1.0, "to": 1.5}])
+    r = client.post("/api/fx/accept", json={"id": "fx_slow0001"})
+    assert r.status_code == 200, r.text
+    got = r.json()["effect"]
+    assert got["status"] == "applied" and got["says"].startswith("Slows 0.50 s to 0.5×")
+    assert [s["id"] for s in got["applied"]["before"]] == [a, b]
+    edl = json.loads(project["edl"].read_text(encoding="utf-8"))
+    assert [s.get("speed") for s in edl["segments"]] == [None, None, 0.5, None]
+    assert not edl.get("effects")
+    assert client.get("/api/fx").json()["effects"] == []
+    assert json.loads((server.fx_home() / "fx_slow0001.json").read_text())["status"] == "applied"

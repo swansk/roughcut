@@ -5150,6 +5150,15 @@ async def api_fx_accept(request: Request) -> JSONResponse:
         e["applied"] = {"at": applied.get("at"), "before": applied.get("before"), "words": e.get("edit_words"),
                         "says": says}
         e.pop("edits", None)                        # applied: the cut carries them now
+        if e.get("overlay") is None and e.get("sound") is None:
+            # Edit-only (the slow motion on Killington): nothing is left to draw or hear,
+            # so it is not an effect for the EDL. validate_effect refused it and Accept
+            # answered 500 *after* changing the cut, with the proposal still waiting to
+            # be accepted — and applied — again. It is kept on disk as the record, out
+            # of every list; `applied.before` is what an undo takes back.
+            e["status"] = "applied"
+            fx.save(fx_home(), e)
+            return JSONResponse({"ok": True, "effect": _fx_urls(e)})
     segments = _fx_segments()
     current = next((x for x in read_edl().get("effects") or [] if x.get("id") == fx_id), None)
     if current is not None and _fx_snapshot(current) != _fx_snapshot(e):
