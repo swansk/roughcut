@@ -21,7 +21,8 @@
  * re-packing: the table is already laid out that way).
  *
  * API (window.grade):
- *   enabled        true when the grade is shown (G flips it)
+ *   enabled        true when the grade is shown (G flips it); while false, #ungraded
+ *                  is shown on the monitor
  *   toggle()       flip it; returns the new state
  *   setShot(id)    the monitor moved to this shot: fetch (or take from cache) its LUT
  *                  and draw. null / an id that 404s → identity, canvas hidden.
@@ -307,8 +308,16 @@
     return setShot(G.shot);
   }
 
+  /* While the grade is off the picture says so: an "ungraded" tag on the monitor
+   * (INTAKE M16 I16.1), where G's state used to be only a toast that faded. */
+  function tag() {
+    const t = $('#ungraded');
+    if (t) t.hidden = G.enabled;
+  }
+
   function toggle() {
     G.enabled = !G.enabled;
+    tag();
     settle();
     return G.enabled;
   }
@@ -340,7 +349,7 @@
 
   window.grade = {
     get enabled() { return G.enabled; },
-    set enabled(v) { G.enabled = !!v; settle(); },
+    set enabled(v) { G.enabled = !!v; tag(); settle(); },
     get ready() { return G.ready; },
     get shot() { return G.shot; },
     get lut() { return G.lut; },

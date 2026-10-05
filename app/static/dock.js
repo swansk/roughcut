@@ -12,9 +12,9 @@
  *     browser (localStorage) and restored on the next load;
  *   - the header's height as `--hd` on :root (a ResizeObserver — the flow bar and
  *     the progress strip change it), so the dock's `top` and `height` stay right;
- *   - the rail badges (`dock.badge(name, n)` — app.js says how many keeps, how many
- *     versions);
- *   - the keys overlay on `?` / the `?` button / Esc, and the Project popover.
+ *   - the rail badges (`dock.badge(name, n)`) — only for what waits on Karl (INTAKE M16:
+ *     the FX proposals, the Bin's keeps not in the cut); no count of films;
+ *   - the keys overlay on `?` / the `?` button / Esc — one table grouped by task.
  *
  * Adding a tool is one button in `#rail` and one `<section data-tool="…">` in
  * `#tools`; nothing here needs to know its name. Other modules reach a control that
@@ -79,18 +79,60 @@
     document.documentElement.style.setProperty('--hd', `${h.offsetHeight + banner}px`);
   }
 
-  /* ------------------------------------------------------------ keys overlay + popover */
+  /* ------------------------------------------------------------ keys overlay */
   function keys(show) {
     const o = $('#keysOverlay');
     if (!o) return false;
     o.hidden = show === undefined ? !o.hidden : !show;
+    if (!o.hidden) keyTable();
     return !o.hidden;
   }
-  function project(show) {
-    const p = $('#projectPop');
-    if (!p) return false;
-    p.hidden = show === undefined ? !p.hidden : !show;
-    return !p.hidden;
+
+  /* One table, grouped by task (INTAKE M16 I16.4): the board's own keys and the
+   * timeline's (`window.tlKeys.KEYS`, the table the timeline binds from — read, never
+   * copied), each row once, with no word about which file binds it. A timeline row whose
+   * keys are not placed below lands under "move". */
+  const GROUPS = [['play', 'Play'], ['trim', 'Trim and cut'], ['move', 'Move around'],
+                  ['bin', 'The bin']];
+  const BOARD_KEYS = [
+    ['space', 'play / pause the cut from here', 'play'],
+    ['↵', 'play this shot only', 'play'],
+    ['G', 'the grade on / off — "ungraded" shows on the picture while it is off', 'play'],
+    ['[ ]', 'trim the in-point (⇧ a second)', 'trim'],
+    ['{ }', 'trim the out-point (⇧ a second)', 'trim'],
+    ['O', 'bins and cuts', 'move'],
+    ['click', 'a keep selects it', 'bin'],
+    ['↵', 'adds the selected keep at the playhead', 'bin'],
+    ['space', 'plays the selected keep in the bin', 'bin'],
+    ['drag', 'a keep onto the timeline', 'bin'],
+  ];
+  const TL_GROUP = {
+    'J K L': 'play', '← →': 'play', 'Home End': 'play',
+    'C': 'trim', 'Q W': 'trim', 'X ⌫ Del': 'trim', '⌘D': 'trim', ', .': 'trim', 'S': 'trim',
+    '▲ edge': 'trim', '▼ edge': 'trim', '⇧ drag': 'trim', '⌘Z ⌘⇧Z': 'trim',
+    'I O': 'bin', '↵': 'bin',
+  };
+  function esc(x) {
+    return String(x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+  function keyTable() {
+    const box = $('#keyTable');
+    if (!box) return;
+    const tlk = (window.tlKeys && Array.isArray(window.tlKeys.KEYS)) ? window.tlKeys.KEYS : [];
+    const rows = BOARD_KEYS.map(([k, what, g]) => ({ k, what, g }));
+    const seen = new Set(rows.map((r) => `${r.k}|${r.what}`));
+    tlk.forEach(([k, what]) => {
+      if (k === '?' || seen.has(`${k}|${what}`)) return;   // `?` is said at the foot
+      seen.add(`${k}|${what}`);
+      rows.push({ k, what, g: TL_GROUP[k] || 'move' });
+    });
+    box.innerHTML = GROUPS.map(([g, name]) => {
+      const mine = rows.filter((r) => r.g === g);
+      if (!mine.length) return '';
+      return `<tr><th colspan="2">${name}</th></tr>` + mine.map((r) =>
+        `<tr><td class="k">${r.k.split(' ').map((t) => `<kbd>${esc(t)}</kbd>`).join(' ')}</td>`
+        + `<td>${esc(r.what)}</td></tr>`).join('');
+    }).join('');
   }
 
   function inField(t) {
@@ -119,21 +161,12 @@
     if (kb) kb.addEventListener('click', () => keys());
     const ko = $('#keysOverlay');
     if (ko) ko.addEventListener('click', (e) => { if (e.target === ko) keys(false); });
-    const pb = $('#projectBtn');
-    if (pb) pb.addEventListener('click', (e) => { e.stopPropagation(); project(); });
-    document.addEventListener('click', (e) => {
-      const p = $('#projectPop');
-      if (p && !p.hidden && !p.contains(e.target)) project(false);
-    });
     // On window, capture, and loaded first: timeline-keys.js listens the same way and
     // stops what it handles (`?` and Esc among them) before a document listener would
-    // hear it. An Esc that closes the overlay or the popover ends here; `?` opens the
-    // overlay and passes on, so the timeline's map renders its section into it.
+    // hear it. An Esc that closes the overlay ends here; `?` opens it and passes on.
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        if (ko && !ko.hidden) { keys(false); e.stopImmediatePropagation(); return; }
-        const p = $('#projectPop');
-        if (p && !p.hidden) { project(false); e.stopImmediatePropagation(); }
+        if (ko && !ko.hidden) { keys(false); e.stopImmediatePropagation(); }
         return;
       }
       if (e.key === '?' && !inField(e.target) && !e.metaKey && !e.ctrlKey) keys();
@@ -181,7 +214,7 @@
     h.addEventListener('dblclick', resetWidth);
   }
 
-  window.dock = { open, reveal, badge, keys, project, fit, width, resetWidth, current: () => cur };
+  window.dock = { open, reveal, badge, keys, fit, width, resetWidth, current: () => cur };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
 })();

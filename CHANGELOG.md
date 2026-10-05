@@ -292,6 +292,66 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **The FX landing test starts its card below the fold again.** `test_fx_ui`'s
+  Next-landing test sized its window (1280×640) so the waiting effect's card began
+  below the dock's fold; with the board's header one row (INTAKE M16 I16.1) the dock grew
+  by 94 px and the card started in view, so the precondition failed. The window is
+  1280×540; the landing it tests is unchanged.
+- **`window.roughcutRefresh()` (INTAKE M16, the lanes' contract C5).** Re-reads
+  /api/project and repaints the timeline, the inspector, the bin and the film tool in
+  place, keeping the selection and the playhead; returns a Promise. For a change made on
+  the server — the FX tool's Accept of an edit, which reloaded the page.
+- **The keys sheet is one table grouped by task (INTAKE M16 I16.4).** It was the board's
+  own run-on line of keys, then the timeline's section with module tags ("· foundation",
+  "· trim", "· edges") and rows said twice (x, ⌘Z, + − \). Now one table — Play · Trim
+  and cut · Move around · The bin — drawn by /dock.js from the board's keys and the
+  timeline's own table (`window.tlKeys.KEYS`, read, never copied), each row once.
+- **Sound in one line (INTAKE M16 I16.4).** Removed: the MUSIC heading, the 0–24 dB
+  slider and its "12 dB" label, and the hint paragraphs ("Heard under the cut in the
+  monitor…", "A bed sits under the cut and ducks…"). Now: the track; one line only when it
+  says something — "loops once at 1:59 under a 3:09 cut" when the track is shorter than the
+  cut (it loops in the monitor and the render, and nothing said so); "dip under talk: off /
+  a little / a lot" (0 / 6 / 12 dB, the duck the render applies — a depth saved as anything
+  else keeps its own entry); the fades behind "more".
+- **One sentence about the film, one first-cut button, and ▶ Play it (INTAKE M16
+  I16.4).** The empty board and the Ask tool both ask "What is this film about?" — one
+  field, the EDL's story (typing in the empty board's box is the story). The empty board
+  has ONE priced button, "Make the first cut from your N keeps · ~$x" (Cut from the bin's
+  fixed note) or "Make a first cut · ~$x" with no keeps, marked for Next
+  (`data-next-for="cut"`), with "aims for 2–3 min" beside it. Removed: the look-alike
+  "Ask for a first cut" + "Cut from the bin" pair, "Say what this film is about — a
+  sentence is enough — and ask for a first cut…", the "N clips nobody has looked at yet"
+  paragraph, the Ask tool's Story heading, "The thing the agent is worst at…", "no cut
+  yet — the board's empty state is where…", and Cut from the bin as a second priced button
+  beside Ask once a cut exists. The Ask tool reads "Ask for a change · ~$x" with "aims for
+  2–3 min" (the EDL's target, which sat in the header). A proposed cut gets "▶ Play it"
+  beside Accept and Discard: it plays the proposal's ghost lane in the monitor, a first
+  cut's too (the monitor shows while one waits); the readable diff stays.
+- **The monitor at rest shows the picture (INTAKE M16 I16.1).** It was a black box until
+  something played, with a help line under the transport ("click a shot below to jump ·
+  the inspector under it holds its why and trims · space play / pause · …"). Now it shows
+  the frame under the playhead (the poster endpoint, following the playhead while nothing
+  plays) with a big ▶ — the screen is the button — and, while G has the grade off, an
+  "ungraded" tag on the picture (/grade.js) where a toast faded. The help line is gone
+  (the keys are on ?); "▶ Play cut" is "▶ Play".
+- **The board's header is one row, and *Make the film* is how a film is made (INTAKE
+  M16 I16.1).** Removed from the header: "Cut board" and the second bin name, the length
+  and "target 2:00.0–3:00.0", Project ▾ and its popover (clips, analysed, the index line,
+  the bin line — the switcher's menu carries the project's facts), the model pill
+  ("opus-5-5 · ready" — the CLI banner speaks only when the CLI needs Karl), "saved" (now
+  only "unsaved…" or "save failed"), "Fix N cut points" (the fix moves onto the warned
+  shot) and Render with its preview / delivery select. Left: bin · cut ▾, Next, ↶ ↷, ?,
+  *Make the film* — 47 px tall at 1440×900 (was 141, three rows). *Make the film* opens the
+  film tool (the rail's Out is now Film; its key stays `out`): "This cut · main · 19 shots
+  · 3:09" and whether it changed since the last film; *Quick look · 1080p · ~1 min* (free —
+  the button Next may press, `#render`) and *Final 4K · ~17 min* (Karl's own click); ONE
+  player of this cut's newest film with its Download; every other film dated and folded
+  behind "Older films (N)", with Compare two inside. Gone from the tool: "idle", its own
+  progress bar (the header's strip is the one progress surface), the two players that
+  loaded on open, A / B on every row, and the Out badge counting every film. Once a film
+  of this cut exists the header's button reads "↓ Download · 1080p · 3:09" and downloads
+  it; a dot on *Make the film* says the cut changed since its last film. The board's own
+  blue (`button.primary`) is gone: Next's `is-next` is the one blue.
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
   buttons called the model with no price: the empty board's *Ask for a first cut* and
   *Cut from the bin*, the Ask panel's *Ask* and *Cut from the bin*, a shot's *Ask*, and

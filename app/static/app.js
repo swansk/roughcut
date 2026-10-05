@@ -56,8 +56,17 @@ function pushUndo(label = 'edit') {
 
 let saveTimer = null;
 
+/* The header says nothing about a good save (INTAKE M16 I16.1): "unsaved…" while the
+ * autosave waits, "save failed" when it failed. `data-state` hides the "saved" line; its
+ * text stays for whoever waits on it. */
+function saveSays(state, text) {
+  const el = $('#saveState');
+  el.dataset.state = state;
+  el.textContent = text;
+}
+
 function touch() {
-  $('#saveState').textContent = 'unsaved…';
+  saveSays('unsaved', 'unsaved…');
   clearTimeout(saveTimer);
   saveTimer = setTimeout(save, 700);
 }
@@ -178,7 +187,6 @@ async function adopt(j) {
     // or picks, so the whole project reloads.
     P = await (await fetch('/api/project')).json();
     await refreshStatus();
-    await refreshIndex();
     render();
   }
 }
@@ -204,13 +212,10 @@ async function pollJobs() {
     paintJob(jobRow(j), j);
     if (before && before.state !== j.state && (j.state === 'done' || j.state === 'failed')) {
       await adopt(j);
-    } else if (!before && jobTicks && j.kind === 'index') {
-      // An index started on the open screen is news to the Project panel's line the
-      // moment its job shows up. One that ran to done between two ticks arrives already
-      // finished, so a first sighting after boot is a transition too — otherwise the
-      // line would sit on "not indexed yet" with the journal saying every clip is out.
-      if (j.state === 'done') await adopt(j);
-      else await refreshIndex();
+    } else if (!before && jobTicks && j.kind === 'index' && j.state === 'done') {
+      // One that ran to done between two ticks arrives already finished, so a first
+      // sighting after boot is a transition too.
+      await adopt(j);
     }
   }
   jobTicks += 1;
@@ -233,13 +238,16 @@ async function pollJobs() {
  * showing what the render is doing, a control that says it is already rendering is the
  * honest other half. */
 let renderPending = false;
-function setRenderBusy(busy) {
-  const b = $('#render');
-  if (!b || b.dataset.busy === String(busy)) return;
-  b.dataset.busy = String(busy);
-  b.disabled = busy;
-  b.textContent = busy ? 'Rendering…' : 'Render';
-  b.title = busy ? 'a render is already running — see the bar above' : '';
+function setRenderBusy(busy, profile) {
+  const q = $('#render'), f = $('#renderFinal');
+  if (!q || q.dataset.busy === String(busy)) return;
+  [q, f].forEach((b) => {
+    b.dataset.busy = String(busy);
+    b.disabled = busy;
+    b.title = busy ? 'a film is being made — see the bar above' : '';
+  });
+  if (busy) (profile === 'delivery' ? f : q).textContent = 'Making the film…';
+  else if (P) paintVersions();
 }
 
 /* A generated clip (INTAKE M13: `gen_<kind>_<key>.mp4` — black, a colour, a still the
@@ -1161,7 +1169,8 @@ function advance() {
 /* Keep the monitor honest against the timeline it is playing: hide it when there is
  * nothing to play, and re-cue if the shot under the playhead was edited out from under it. */
 function syncPlayer() {
-  $('#player').style.display = segs.length ? '' : 'none';
+  // A first cut's proposal plays in the monitor too, before there is a cut.
+  $('#player').style.display = segs.length || pendingPlan ? '' : 'none';
   if (player.idx >= segs.length) { pauseCut(); player.idx = -1; }
   if (player.playing && player.idx >= 0) {
     const seg = segs[player.idx];
@@ -1174,12 +1183,48 @@ function syncPlayer() {
     }
   }
   tl.render();
-  $('#posTotal').textContent = fmt(total());
+  $('#total').textContent = fmt(total());
   paintTransport();
 }
 
+/* The monitor at rest (INTAKE M16 I16.1): the frame under the playhead and a big ▶,
+ * never a black box. The still is the poster endpoint's, shown only while no video is
+ * live on the screen; once one is, its own parked frame is the picture. The still is
+ * re-pointed once the edits and the playhead settle (restSoon, the inspector's 450 ms),
+ * never per nudge — the same frame the inspector asks for, so one request serves both. */
+let restT = 0;
+function paintRest() {
+  const big = $('#bigPlay');
+  if (big) big.hidden = player.playing || !segs.length;
+  const img = $('#monPoster');
+  if (!img) return;
+  const live = player.vids.some((v) => v.classList.contains('live') && v.dataset.src);
+  if (live || !segs.length) { img.hidden = true; return; }
+  restSoon();
+}
+
+function paintRestStill() {
+  const img = $('#monPoster');
+  const live = player.vids.some((v) => v.classList.contains('live') && v.dataset.src);
+  const at = segs.length ? tl.shotAt(tl.state.playhead || 0) : null;
+  const seg = at && segs[at.index];
+  const base = seg && (P.clips[seg.clip] || {}).poster;
+  if (live || !base) { img.hidden = true; return; }
+  const src = `${base}${base.includes('?') ? '&' : '?'}t=${Math.max(0, at.clipT).toFixed(2)}`;
+  if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+  img.hidden = false;
+}
+
+/* The playhead moved while nothing is live (a scrub before the first play, an undo):
+ * the still follows, once the moving stops. */
+function restSoon() {
+  clearTimeout(restT);
+  restT = setTimeout(paintRestStill, 450);
+}
+
 function paintTransport() {
-  $('#playCut').textContent = player.playing ? '❚❚ Pause' : '▶ Play cut';
+  $('#playCut').textContent = player.playing ? '❚❚ Pause' : '▶ Play';
+  paintRest();
   const seg = segs[player.idx];
   $('#playingWhat').textContent = seg
     ? `${player.idx + 1}/${segs.length} · ${stem(seg.clip)}${player.single ? ' · this shot only' : ''}`
@@ -1214,42 +1259,46 @@ function emptyState() {
   const el = document.createElement('div');
   el.className = 'empty';
   const analysed = S ? S.analysed : 0;
-  const clips = S ? S.clips : 0;
   if (!analysed) {
-    el.innerHTML = `<h3>Nothing indexed yet</h3><div>${clips}
-      clip${clips === 1 ? '' : 's'} in the footage folder. They need indexing before
-      anything can be cut — <a href="/open">open the footage →</a> and start the index
-      there; it runs unattended and you can come back while it goes.</div>`;
+    el.innerHTML = `<h3>Nothing indexed yet</h3><div><a href="/open">The footage →</a></div>`;
     return el;
   }
-  const vz = S && S.visual;
-  const look = vz && vz.pending.length ? `<div class="hint" style="margin-top:12px">
-    ${vz.pending.length} clip${vz.pending.length > 1 ? 's' : ''} nobody has looked at yet
-    (~$${vz.projected_usd.toFixed(2)}) — the index does that from
-    <a href="/open">the open screen</a>, so a first cut asked for afterwards knows what
-    happened on screen and not only what was said.</div>` : '';
+  // One sentence about the film (INTAKE M16 I16.4): the EDL's story — the Ask tool's
+  // field, /open's, this one — and ONE priced button. With keeps it is Cut from the bin
+  // (heroes fixed, keeps as bounds); without, the first cut from the index.
   el.innerHTML = `<h3>No cut yet</h3>
-    <div>${analysed} clip${analysed > 1 ? 's' : ''} analysed and ready.
-    Say what this film is about — a sentence is enough — and ask for a first cut.
-    You will get a proposal to accept, discard or take apart by hand.</div>
-    <textarea id="firstNote" style="margin-top:12px;min-height:60px"
-      placeholder="a 2–3 minute edit of the trip for the friends who were there · loose and fun · the people are the point"></textarea>
-    <button id="firstCut" class="primary" style="margin-top:10px"${unpricedAttr('first')}>Ask for a first cut${priceTag('first')}</button>
-    <button id="firstFromBin" style="margin-top:10px;margin-left:8px;display:none"${unpricedAttr('bin')}
-      title="One Ask with a fixed note: every hero appears, the other keeps serve the story, nothing else unless a keep needs it — a proposal to accept or discard">Cut from the bin${priceTag('bin')}</button>
-    <div class="hint" id="firstState" style="margin-top:8px"></div>${look}`;
-  el.querySelector('#firstCut').onclick = () => ask({
-    note: el.querySelector('#firstNote').value.trim(),
-    button: el.querySelector('#firstCut'),
-    state: el.querySelector('#firstState'),
-  });
-  // The Ask panel is hidden here, and here is where someone arriving from the pass
-  // lands — so the bin's button lives in the empty state too (shown when there is a bin).
-  el.querySelector('#firstFromBin').onclick = () => cutFromBin({
-    button: el.querySelector('#firstFromBin'),
-    state: el.querySelector('#firstState'),
-  });
+    <label class="ask-q" for="firstNote">What is this film about?</label>
+    <textarea id="firstNote" style="min-height:60px"
+      placeholder="optional — a sentence is enough"></textarea>
+    <div style="display:flex;gap:10px;align-items:center;justify-content:center;margin-top:10px;flex-wrap:wrap">
+      <button id="firstCut" data-next-for="cut"${unpricedAttr(firstMode())}>${firstLabel()}${priceTag(firstMode())}</button>
+      <span class="hint" id="firstAims">${escapeHtml(aimsFor())}</span>
+    </div>
+    <div class="hint" id="firstState" style="margin-top:8px"></div>`;
+  const box = el.querySelector('#firstNote');
+  box.value = $('#story').value;
+  box.oninput = () => { $('#story').value = box.value; touch(); };
+  el.querySelector('#firstCut').onclick = () => {
+    const opts = { button: el.querySelector('#firstCut'), state: el.querySelector('#firstState') };
+    return keepsUsable().length ? cutFromBin(opts) : ask({ ...opts, note: '' });
+  };
   return el;
+}
+
+/* The first cut is cut from the keeps when the pass kept any, from the index when not. */
+function firstMode() { return keepsUsable().length ? 'bin' : 'first'; }
+function firstLabel() {
+  const n = keepsUsable().length;
+  return n ? `Make the first cut from your ${n} keep${n === 1 ? '' : 's'}` : 'Make a first cut';
+}
+
+/* "aims for 2–3 min": the target every first cut and Ask is written to (the EDL's
+ * `target_s`), said beside the buttons that send it — it was the header's
+ * "target 2:00.0–3:00.0", far from what it governs. */
+function aimsFor() {
+  const [lo, hi] = (P && P.target) || [120, 180];
+  const mins = lo >= 60 && lo % 60 === 0 && hi % 60 === 0;
+  return mins ? `aims for ${lo / 60}–${hi / 60} min` : `aims for ${clock(lo)}–${clock(hi)}`;
 }
 
 function render() {
@@ -1259,31 +1308,18 @@ function render() {
   syncPlayer();
   renderInspector();
 
-  // With an empty timeline the empty state already has its own "what is this film
-  // about" box, so the sidebar panel is a second input for the same thing.
+  // With an empty timeline there is nothing to change; the empty state asks for the cut.
   $('#askPanel').style.display = segs.length ? 'block' : 'none';
-  const askEmpty = $('#askEmpty');
-  if (askEmpty) askEmpty.hidden = !!segs.length;
+  $('#askAims').textContent = aimsFor();
 
   // Nothing in the header acts on an empty timeline, so nothing in the header shows.
-  ['#snap', '#undo', '#redo', '#render', '#saveState'].forEach((sel) => {
+  ['#undo', '#redo', '#makeFilm', '#saveState'].forEach((sel) => {
     $(sel).style.display = segs.length ? '' : 'none';
   });
 
-  // "Fix cut points" only means something when there are cut points to fix, and the
-  // count is the reason to press it.
-  const warnings = segs.filter((s) => boundaryWarning(s)).length;
-  const snap = $('#snap');
-  snap.disabled = !warnings;
-  snap.textContent = warnings ? `Fix ${warnings} cut point${warnings > 1 ? 's' : ''}`
-    : 'Cut points OK';
-
-  const t = total();
-  const [lo, hi] = P.target;
-  const cls = t < lo ? 'under' : t > hi ? 'over' : 'ok';
-  $('#total').innerHTML = `<span class="${cls}">${fmt(t)}</span>`;
-  $('#band').textContent = `${segs.length} shots · target ${fmt(lo)}–${fmt(hi)}`;
+  $('#total').textContent = fmt(total());
   flowSoon();
+  paintMusic();             // "loops once at 1:59 under a 3:09 cut" follows the cut's length
   paintVersions();          // so "this cut" follows the timeline rather than the last fetch
   renderLibrary();
   paintCutFromBin();        // the empty state is rebuilt above; its bin button follows
@@ -1828,12 +1864,10 @@ function paintAskPrices() {
     el.textContent = name + priceTag(mode);
     if (basis && priced(mode)) el.title = `about $${askPrice[mode].usd.toFixed(2)} — ${askPrice[mode].basis}`;
   };
-  label($('#ask'), 'Ask', 'full', true);
-  label($('#cutFromBin'), 'Cut from the bin', 'bin', false);
-  label($('#firstCut'), 'Ask for a first cut', 'first', true);
-  label($('#firstFromBin'), 'Cut from the bin', 'bin', false);
+  label($('#ask'), 'Ask for a change', 'full', true);
+  label($('#firstCut'), firstLabel(), firstMode(), true);
   document.querySelectorAll('#inspector button[data-act=shotgo]').forEach((b) => label(b, 'Ask', 'shot', true));
-  for (const [sel, mode] of [['#ask', 'full'], ['#firstCut', 'first'], ['#firstFromBin', 'bin']]) {
+  for (const [sel, mode] of [['#ask', 'full'], ['#firstCut', firstMode()]]) {
     const el = $(sel);
     if (el) holdForPrice(el, mode);
   }
@@ -1846,25 +1880,14 @@ function cutFromBin(opts = {}) {
   return ask({ note: BIN_NOTE, fixed: true, button: opts.button, state: opts.state });
 }
 
-/* The control is only worth pressing when there is a bin to cut from. Two places: the
- * Ask panel, and the empty state — which is where the panel is hidden, and exactly
- * where someone arriving from the pass lands. */
+/* The empty state's one button follows the bin: its words ("from your 3 keeps") and
+ * its price (Cut from the bin, or a first cut from the index) change with the keeps. */
 function paintCutFromBin() {
-  const n = keepsUsable().length;
-  const b = $('#cutFromBin');
-  const h = $('#cutFromBinHint');
-  if (b && h) {
-    b.disabled = !n || !priced('bin');   // and never an unpriced spend (I16.0f)
-    if (!n) {
-      h.textContent = 'nothing kept yet — the pass is where you keep things';
-      h.dataset.empty = '1';
-    } else if (h.dataset.empty) {   // only clear what this painted, never a running ask
-      h.textContent = '';
-      delete h.dataset.empty;
-    }
-  }
-  const f = $('#firstFromBin');
-  if (f) f.style.display = n ? '' : 'none';
+  const b = $('#firstCut');
+  if (!b) return;
+  const mode = firstMode();
+  b.textContent = firstLabel() + priceTag(mode);
+  holdForPrice(b, mode);
 }
 
 /* Re-read the bin — when the tab is shown, after an insert, after a save while the tab
@@ -1911,16 +1934,29 @@ function paintMusic() {
   }
   $('#musicOpts').style.display = music ? 'block' : 'none';
   if (music) {
-    $('#duck').value = music.duck === false ? 0 : (music.duck_db ?? 12);
-    $('#duckVal').textContent = $('#duck').value;
+    // off / a little / a lot are 0 / 6 / 12 dB; a depth saved as anything else keeps
+    // its own entry rather than being rounded on the next save
+    const db = music.duck === false ? 0 : (music.duck_db ?? 12);
+    const duck = $('#duck');
+    if (![...duck.options].some((o) => Number(o.value) === db)) {
+      duck.insertAdjacentHTML('beforeend', `<option value="${db}">${db} dB</option>`);
+    }
+    duck.value = String(db);
     $('#fadeIn').value = music.fade_in ?? 1.5;
     $('#fadeOut').value = music.fade_out ?? 4;
   }
-  $('#musicHint').textContent = music
-    ? 'Heard under the cut in the monitor; the render mixes it under the film with the picture untouched.'
-    : tracks.length
-      ? 'A bed sits under the cut and ducks where people talk. You hear it in the monitor before you render.'
-      : 'No tracks yet — drop an mp3 or wav into assets/music/ and reload.';
+  // One status line (INTAKE M16 I16.4): what the track does under the cut when that is
+  // worth knowing — it loops where it is shorter — and nothing when it is not.
+  const t = trackInfo();
+  const len = total();
+  let line = '';
+  if (!tracks.length && !music) line = 'No tracks yet — drop an mp3 or wav into assets/music/ and reload.';
+  else if (music && t && t.duration_s && t.duration_s < len) {
+    const n = Math.ceil(len / t.duration_s) - 1;
+    line = `loops ${n === 1 ? 'once' : `${n} times`} at ${clock(t.duration_s)} under a ${clock(len)} cut`;
+  }
+  $('#musicHint').textContent = line;
+  $('#musicHint').hidden = !line;
 }
 
 function musicChanged() {
@@ -2021,133 +2057,14 @@ function flowSoon() {
   flowT = setTimeout(() => { if (window.flowBar) window.flowBar.poll(); }, 1200);
 }
 
+/* The project's status (GET /api/status): what the empty state reads. The header's
+ * Project ▾ popover and the model pill are gone (INTAKE M16 I16.1): the project's facts
+ * are the switcher's menu (/switcher.js), and the CLI's state is the banner (/cli.js),
+ * which shows only when the CLI needs Karl. */
 async function refreshStatus() {
   S = await (await fetch('/api/status')).json();
-  const missing = Object.entries(S.tools).filter(([, ok]) => !ok).map(([t]) => t);
-  const vz = S.visual || { pending: [], done: 0, total: 0, calls: 0, projected_usd: 0 };
-  $('#project').innerHTML = `
-    <div class="kv"><span>clips in folder</span><b>${S.clips}</b></div>
-    <div class="kv"><span>analysed</span><b>${S.analysed}</b></div>
-    <div class="kv"><span>shots in the cut</span><b>${S.segments}</b></div>
-    ${vz.total ? `<div class="kv"><span>looked at</span><b>${vz.done}/${vz.total}</b></div>` : ''}
-    ${vz.events ? `<div class="kv"><span>events ranked</span><b>${vz.events}</b></div>` : ''}
-    ${S.footage_exists ? '' : '<div style="color:var(--bad)">footage folder not found</div>'}
-    ${missing.length ? `<div style="color:var(--bad)">missing on PATH: ${missing.join(', ')}</div>` : ''}
-    <div class="path">${escapeHtml(S.footage)}</div>
-    <div class="path">${escapeHtml(S.edl)}${S.edl_created ? ' (new)' : ''}</div>`;
-  paintBackend(S.backend);
   paintAudit();                        // its price rides on the status, like the pass's
-  // Previews build in the background for tens of minutes on a long bin. Silence there
-  // reads as "nothing is happening", which is the confusion this panel exists to end.
-  const px = S.proxies || { ready: true, done: 0, total: 0 };
-  if (!px.ready && px.total) {
-    $('#proxyState').style.display = 'block';
-    $('#proxyState').innerHTML =
-      `<div class="kv"><span>building previews</span><b>${px.done}/${px.total}</b></div>
-       <div class="bar"><i style="width:${Math.round(100 * px.done / px.total)}%"></i></div>
-       <div class="hint" style="margin-top:4px">You can ask for a cut now — this only
-       affects the previews on each shot.</div>`;
-  } else {
-    $('#proxyState').style.display = 'none';
-  }
   return S;
-}
-
-/* The bin's index, in one line under the Project counts: the journal's own word from
- * GET /api/index — released n of N, paused or not — and a link to the
- * screen that runs it. This replaced the Analyse audio / Look at the footage buttons:
- * the index is one unattended, resumable run started from /open (INTAKE decision 3),
- * and two ways to spend money on one bin was one too many. The endpoints those
- * buttons used still exist for tests and tools; nothing here starts anything. */
-let indexPoll = null;
-
-function indexLine(ix) {
-  if (!ix.exists) return ix.running ? 'indexing · opening the journal' : 'not indexed yet';
-  const p = ix.progress;
-  const n = p.clips - p.missing;
-  const released = `${p.released} of ${n} released`;
-  // No money here (INTAKE I16.0g, one money number): the journal's cost is the index's
-  // alone, and the project's spend — the one number — is the backend pill's and /open's.
-  const parked = p.parked ? ` · ${p.parked} parked` : '';
-  if (ix.running) return `indexing · ${released}${parked}`;
-  if (p.paused_priced) {
-    const wait = Math.max(0, n - p.released - p.parked);
-    return `index paused · ${wait} clip${wait === 1 ? '' : 's'} wait${parked}`;
-  }
-  if (p.released >= n) return `indexed · ${released}${parked}`;
-  return `index stopped · ${released}${parked}`;
-}
-
-async function refreshIndex() {
-  let ix;
-  try { ix = await (await fetch('/api/index')).json(); } catch (e) { return; }
-  const el = $('#indexState');
-  const line = indexLine(ix);
-  // Only touch the DOM when the words change: a poll every 3 s must not flicker.
-  if (el.textContent !== line) el.textContent = line;
-  const title = ix.exists && ix.progress.paused_reason ? ix.progress.paused_reason : (ix.path || '');
-  if (el.title !== title) el.title = title;
-  if (ix.running && !indexPoll) indexPoll = setInterval(refreshIndex, 3000);
-  if (!ix.running && indexPoll) { clearInterval(indexPoll); indexPoll = null; }
-  return ix;
-}
-
-/* Backend status, in the header. Karl's report was that auth problems only appeared
- * ~80s into an Ask — the worst possible moment. Preflight catches the free cases (no
- * CLI on PATH, no API key) at launch; one tiny call catches "not logged in", which
- * nothing free can see. */
-function paintBackend(b) {
-  const el = $('#backend');
-  const short = (b.model || '').replace(/^claude-/, '');
-  const tiers = b.models ? `deep ${b.models.deep} · quick ${b.models.quick}\n` : '';
-  el.classList.remove('ok', 'bad');
-  if (b.fix && b.state !== 'checking') {
-    // The banner across the top (cli.js) says what to do; the pill only has to agree.
-    el.classList.add('bad');
-    el.textContent = `${short} · ${{ login: 'sign in needed', update: 'CLI update needed',
-      permission: 'permission needed', limit: 'usage limit', path: 'CLI not found',
-    }[b.fix.kind] || 'needs you'}`;
-    el.title = `${tiers}${b.fix.title}\n${b.fix.detail || ''}`;
-    return;
-  }
-  if (b.problems.length) {
-    el.classList.add('bad');
-    el.textContent = `${b.backend} · not usable`;
-    el.title = b.problems.join('\n');
-    return;
-  }
-  if (b.state === 'checking') { el.textContent = `${short} · checking…`; return; }
-  if (b.state === 'failed') {
-    el.classList.add('bad');
-    el.textContent = `${short} · ${(b.detail || 'unreachable').slice(0, 40)}`;
-    el.title = b.detail;
-    return;
-  }
-  if (b.state === 'ok') {
-    el.classList.add('ok');
-    el.textContent = `${short} · ready`;
-    el.title = `${tiers}${b.backend}, replied in ${(b.latency_ms / 1000).toFixed(1)}s\n` +
-      `$${Number(b.spent_usd || 0).toFixed(2)} spent on this project`
-      + (b.budget_usd != null ? ` of a $${Number(b.budget_usd).toFixed(2)} cap` : '');
-    return;
-  }
-  el.textContent = `${short} · unchecked`;
-  el.title = 'Click to check the backend with one small call';
-}
-
-function followProbe() {
-  const poll = setInterval(async () => {
-    const b = (await (await fetch('/api/status')).json()).backend;
-    paintBackend(b);
-    if (b.state !== 'checking') { clearInterval(poll); S.backend = b; }
-  }, 1500);
-}
-
-async function probeBackend() {
-  paintBackend({ ...S.backend, state: 'checking' });
-  await fetch('/api/backend/probe', { method: 'POST' });
-  followProbe();
-  if (window.cliFix) window.cliFix.poll();
 }
 
 async function save() {
@@ -2159,15 +2076,14 @@ async function save() {
     body: JSON.stringify({ segments: tl.forSave(), story: $('#story').value, music, colour }),
   });
   if (!r.ok) {
-    $('#saveState').textContent = 'save failed';
+    saveSays('failed', 'save failed');
     return toast('save failed — the edit is still on screen, do not reload', 8000);
   }
   // A save can change every shot's resolved colour — a trim re-derives the auto, a
   // nudge is a new LUT — so the inspector's witness and the monitor's LUT refetch.
   refreshColour();
   const t = new Date();
-  $('#saveState').textContent =
-    `saved ${t.getHours()}:${String(t.getMinutes()).padStart(2, '0')}`;
+  saveSays('saved', `saved ${t.getHours()}:${String(t.getMinutes()).padStart(2, '0')}`);
   // A save is where the bin learns from the timeline (which keeps became shots, and
   // which shots were placed by hand). While the tab is up, it must show that.
   if (libTab === 'kept') refreshBin();
@@ -2249,6 +2165,7 @@ function showProposal(plan) {
       + '<hr style="border:0;border-top:1px solid var(--line);margin:10px 0">'
       + detail);
   $('#proposal').style.display = 'block';
+  if (!segs.length) syncPlayer();               // a first cut plays from its ghost lane
   $('#proposal').scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
 
@@ -2422,6 +2339,14 @@ function acceptProposal() {
   toast(!graded ? 'applied — undo with ⌘Z'
     : cutToo ? 'applied, cut and colour — ⌘Z undoes the cut; the grade is in the inspector'
       : 'colour applied — the grade is in the inspector', graded ? 5000 : undefined);
+}
+
+/* ▶ Play it (INTAKE M16 I16.4): the proposed cut plays in the monitor from its ghost
+ * lane (/timeline-lanes.js), before anything is accepted — watched, not only read. */
+function playProposal() {
+  if (!pendingPlan) return;
+  const lanes = window.tlLanes;
+  if (!lanes || !lanes.ghost() || !lanes.playPlan(0)) toast('the proposal is still being drawn — try again');
 }
 
 function rejectProposal() {
@@ -2631,16 +2556,11 @@ function human(bytes) {
   return mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${Math.round(mb)} MB`;
 }
 
-/* What a version player is doing when it is not showing a picture, said under it.
- * Karl: *"they seem to get stuck in this loading forever place"* — the players had
- * exactly one way of reporting anything, which was a black rectangle, and three
- * things behind it: a review copy still encoding, a stalled stream, and a media
- * error. The monitor learned to say which; these had not.
- *
- * `versionSticky` is what the slot says when nothing transient is happening — the
- * standing warning that this row is playing a heavy master, which must come back
- * after a `buffering…` rather than being cleared by it. */
-const versionSticky = { A: ['', ''], B: ['', ''] };
+/* What the film tool's player is doing when it is not showing a picture, said under it.
+ * Karl: *"they seem to get stuck in this loading forever place"* — a black rectangle
+ * with three things behind it: a review copy still encoding, a stalled stream, and a
+ * media error. `versionSticky` is what it says when nothing transient is happening. */
+let versionSticky = ['', ''];
 
 function versionMsg(slot, text, kind) {
   const el = $(`#state${slot}`);
@@ -2650,30 +2570,38 @@ function versionMsg(slot, text, kind) {
 }
 
 function versionSettled(slot) {
-  versionMsg(slot, versionSticky[slot][0], versionSticky[slot][1]);
+  versionMsg(slot, versionSticky[0], versionSticky[1]);
 }
 
-/* The A/B players play the 720p review copy, never the master.
- *
- * The delivery render Karl watched is 987 MB of 4K at 43.6 Mbps; ffmpeg needs 92.8 s
- * of wall clock to walk its 181 s on this box, which is half of real time, so no
- * browser was ever going to stream it smoothly off loopback. The file is fine — 5427
- * frames at a clean 1/29.97 — it is just heavy, and "jumping all around the place"
- * and "3s before video buffers" are both that weight. The master stays for Download. */
-function loadVersion(v, slot) {
-  const el = $(`#preview${slot}`);
-  const building = v.review_state === 'building';
-  el.src = building ? '' : (v.review_state === 'ready' ? v.review_url : v.url);
-  if (building) el.removeAttribute('src');
+/* What a player plays: the 720p review copy, never the master. The delivery render Karl
+ * watched is 987 MB of 4K at 43.6 Mbps — no browser streams that smoothly off this box.
+ * The master stays for Download. */
+function reviewSrc(v) {
+  return v.review_state === 'building' ? '' : (v.review_state === 'ready' ? v.review_url : v.url);
+}
+
+function setSrc(el, src) {
+  if ((el.getAttribute('src') || '') === src) return;
+  if (src) el.src = src; else el.removeAttribute('src');
   el.load();
-  $(`#label${slot}`).textContent = versionLabel(v);
-  versionSticky[slot] = building
-    ? ['making a review copy to play — the download below is ready now', '']
+}
+
+/* The film tool's one player: this cut's newest film. */
+function loadVersion(v) {
+  setSrc($('#previewA'), reviewSrc(v));
+  versionSticky = v.review_state === 'building'
+    ? ['making a copy to play — Download is ready now', '']
     : (v.review_state === 'failed'
-      ? [`no review copy — playing the ${human(v.size)} master, expect it to stutter`,
-         'warn']
+      ? [`no copy to play — playing the ${human(v.size)} master, expect it to stutter`, 'warn']
       : ['', '']);
-  versionSettled(slot);
+  versionSettled('A');
+}
+
+/* "1080p" / "4K" — what a film is, in the words the buttons use. */
+function qualityOf(v) {
+  if (v.width >= 3840) return '4K';
+  if (v.height) return `${v.height}p`;
+  return v.profile === 'delivery' ? 'final' : '1080p';
 }
 
 /* "Sep 8, 10:05 PM" — the list spans weeks, and a clock time alone (three rows of
@@ -2701,51 +2629,140 @@ function foldRenders(list) {
   return rows;
 }
 
-/* Rebuilds only the list, never the A/B slots — repainted on every edit so that
- * "this cut" tracks the timeline instead of going stale the moment anything is trimmed. */
-function paintVersions() {
-  if (window.dock) dock.badge('out', (renderList || []).length);
-  const box = $('#versions');
-  if (!box) return;
-  box.innerHTML = '';
-  // When no film is of the cut on the board, one line says so rather than leaving it to
-  // be worked out from the rows.
-  if (segs.length && !renderList.some(isThisCut)) {
-    box.innerHTML = '<div class="hint" id="cutUnmade">this cut hasn\u2019t been made yet</div>';
-  } else if (!renderList.length) {
-    box.innerHTML = '<div class="hint">no renders yet</div>';
+/* This cut's newest film, or null: the one the header's Download and the tool's player
+ * are about. */
+function thisCutsFilm() {
+  return segs.length ? renderList.find(isThisCut) || null : null;
+}
+
+/* The header's one button for the film (INTAKE M16 I16.1): *Make the film* opens the
+ * film tool; once a film of this cut has landed it reads "↓ Download · 1080p · 0:04" and
+ * downloads it. The dot: the cut changed since its last film. */
+function paintMakeFilm() {
+  const b = $('#makeFilm');
+  if (!b) return;
+  const v = thisCutsFilm();
+  if (v) {
+    b.textContent = `↓ Download · ${qualityOf(v)} · ${clock(v.duration_s || total())}`;
+    b.title = `${v.download_name} · ${human(v.size)}`;
+    b.dataset.download = v.download_url;
+  } else {
+    b.textContent = 'Make the film';
+    delete b.dataset.download;
+    b.title = renderList.length ? 'the cut changed since its last film' : 'make a film of this cut';
+    if (renderList.length) b.insertAdjacentHTML('beforeend', '<span class="dot" aria-label="the cut changed">•</span>');
   }
-  foldRenders(renderList).forEach(({ v, also }) => {
-    const when = renderWhen(v);
+}
+
+function onMakeFilm() {
+  const url = $('#makeFilm').dataset.download;
+  if (!url) { if (window.dock) dock.open('out'); return; }
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = '';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+/* "~1 min" / "~17 min": Killington's 3:09 cut took about a minute at 1080p and ~17 at
+ * 4K on foxtrot — the same rates, scaled to this cut's length. */
+function makeTime(ratio) {
+  return `~${Math.max(1, Math.round(total() * ratio / 60))} min`;
+}
+
+/* The film tool, from the cut and the films on disk. Repainted on every edit so that
+ * "this cut" follows the timeline instead of going stale the moment anything is trimmed. */
+function paintVersions() {
+  paintMakeFilm();
+  const what = $('#filmCut');
+  if (!what) return;
+  what.textContent = `This cut · ${P && P.cut ? P.cut : 'main'} · ${segs.length} shot${segs.length === 1 ? '' : 's'} · ${clock(total())}`;
+  const mine = thisCutsFilm();
+  const since = $('#filmSince');
+  if (mine) since.textContent = `made ${renderWhen(mine)}`;
+  else if (renderList.length) since.textContent = `changed since your last film (${renderWhen(renderList[0])})`;
+  else since.textContent = '';
+  // "this cut hasn't been made yet" — said once, on the line under the cut, when no film is of it
+  since.dataset.unmade = mine ? '' : '1';
+  if (!$('#render').dataset.busy || $('#render').dataset.busy === 'false') {
+    $('#render').textContent = `Quick look · 1080p · ${makeTime(0.32)}`;
+  }
+  if (!$('#renderFinal').dataset.busy || $('#renderFinal').dataset.busy === 'false') {
+    $('#renderFinal').textContent = `Final 4K · ${makeTime(5.4)}`;
+  }
+
+  const newest = $('#filmNewest');
+  newest.hidden = !mine;
+  if (mine) {
+    $('#labelA').textContent = [renderWhen(mine), 'this cut', qualityOf(mine), human(mine.size)]
+      .filter(Boolean).join(' · ');
+    const dl = $('#filmDownload');
+    dl.href = mine.download_url;
+    dl.title = `${mine.download_name} · ${human(mine.size)}`;
+    dl.textContent = `↓ Download · ${human(mine.size)}`;
+    if (newest.dataset.name !== mine.name || newest.dataset.review !== mine.review_state) {
+      newest.dataset.name = mine.name;
+      newest.dataset.review = mine.review_state;
+      loadVersion(mine);
+    }
+  } else {
+    newest.dataset.name = '';
+  }
+
+  // every other film, dated, the identical ones folded together
+  const rows = foldRenders(renderList.filter((v) => v !== mine));
+  const older = $('#olderFilms');
+  older.hidden = !rows.length;
+  older.querySelector('summary').textContent = `Older films (${rows.length})`;
+  const box = $('#versions');
+  box.innerHTML = '';
+  rows.forEach(({ v, also }) => {
     const row = document.createElement('div');
     row.className = 'ver';
-    // Size and resolution on the row, because the button next to them starts a
-    // download and 987 MB is worth knowing about before it begins.
-    const heft = [human(v.size), v.width ? `${v.width}x${v.height}` : '']
-      .filter(Boolean).join(' · ');
-    const building = v.review_state === 'building' ? ' · review copy building…' : '';
+    // Size and resolution on the row, because the link next to them starts a download
+    // and 987 MB is worth knowing about before it begins.
+    const heft = [human(v.size), v.width ? `${v.width}x${v.height}` : ''].filter(Boolean).join(' · ');
+    const building = v.review_state === 'building' ? ' · copy building…' : '';
     const times = also.length ? ` · ×${also.length + 1}` : '';
     row.innerHTML = `<span class="t">${escapeHtml(versionLabel(v))}
-      <span class="hint">· ${escapeHtml(when)}${v.cut ? ` · ${escapeHtml(v.cut)}` : ''}${times}${heft ? ` · ${heft}` : ''}${building}</span></span>`;
+      <span class="hint">· ${escapeHtml(renderWhen(v))}${v.cut ? ` · ${escapeHtml(v.cut)}` : ''}${times}${heft ? ` · ${heft}` : ''}${building}</span></span>`;
     if (also.length) {
       row.title = `made ${also.length + 1} times, the same cut and shots — the newest plays; `
         + `also ${also.map(renderWhen).join(', ')}`;
     }
-    ['A', 'B'].forEach((slot) => {
-      const b = document.createElement('button');
-      b.textContent = slot;
-      b.onclick = () => loadVersion(v, slot);
-      row.appendChild(b);
-    });
     // A plain link, so the browser's own download machinery handles it; the server
     // sends it as an attachment with a filename worth having.
     const dl = document.createElement('a');
     dl.className = 'dl';
     dl.href = v.download_url;
-    dl.textContent = '↓ download';
+    dl.textContent = '↓';
     dl.title = `${v.download_name} · ${human(v.size)}`;
+    dl.setAttribute('aria-label', 'download');
     row.appendChild(dl);
     box.appendChild(row);
+  });
+  paintCompare();
+}
+
+/* Compare two (inside Older films): any two films side by side — the newest and the one
+ * before it to start with. The players load only once the fold is open. */
+function paintCompare() {
+  const opts = renderList.map((v, k) =>
+    `<option value="${k}">${escapeHtml(`${renderWhen(v)} · ${versionLabel(v)}`)}</option>`).join('');
+  [['#cmpPickA', 0], ['#cmpPickB', 1]].forEach(([sel, dflt]) => {
+    const el = $(sel);
+    const keep = el.value;
+    el.innerHTML = opts;
+    el.value = keep !== '' && Number(keep) < renderList.length ? keep : String(Math.min(dflt, renderList.length - 1));
+  });
+  if ($('#compare').open) loadCompare();
+}
+
+function loadCompare() {
+  [['#cmpPickA', '#cmpA'], ['#cmpPickB', '#cmpB']].forEach(([pick, vid]) => {
+    const v = renderList[Number($(pick).value)];
+    if (v) setSrc($(vid), reviewSrc(v));
   });
 }
 
@@ -2754,11 +2771,6 @@ async function refreshVersions() {
   nRenders = renders.length;
   renderList = renders;
   paintVersions();
-  if (renders[0]) loadVersion(renders[0], 'A');   // newest is what you just made
-  if (renders[1]) loadVersion(renders[1], 'B');   // and the one before it, to compare
-  // An empty black player labelled "B —" is not a feature; the B slot appears when
-  // there is a second version to compare against.
-  $('#slotB').style.display = renders.length > 1 ? 'block' : 'none';
   flowSoon();
   waitForReviews(renders);
 }
@@ -2785,17 +2797,20 @@ function waitForReviews(renders) {
   }, 4000);
 }
 
-async function doRender() {
+/* Make the film: Quick look (`preview`, free — Next may press it) or Final 4K
+ * (`delivery`, Karl's own click). Its progress is the header's strip; when it lands the
+ * player and the header's Download follow. */
+async function doRender(profile = 'preview') {
   if ($('#render').disabled) return;
   // Before the request, not after it: the click that matters is the second one, and
   // it happens long before any response comes back.
   renderPending = true;
-  setRenderBusy(true);
+  setRenderBusy(true, profile);
   let r;
   try {
     r = await fetch('/api/render', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ segments: segs, profile: $('#renderProfile').value }),
+      body: JSON.stringify({ segments: segs, profile }),
     });
   } finally {
     renderPending = false;
@@ -2810,36 +2825,16 @@ async function doRender() {
   }
   const { job } = await r.json();
   strip.owned.add(job);
-  $('#renderState').textContent = 'starting…';
-  $('#renderBar').style.display = 'block';
   const poll = setInterval(async () => {
-    const s = await (await fetch(`/api/render/${job}`)).json();
-    if (s.state === 'running') {
-      // Every shot is cut to its own file before they are joined, so this is a real
-      // count rather than a spinner. "rendering…" for two minutes says nothing — and
-      // neither does "done" while the copy these players stream is still being made,
-      // which is the render's third phase and not an errand after it.
-      const el = clock(s.elapsed_s);
-      $('#renderState').textContent = {
-        joining: `joining ${s.total} shots… ${el}`,
-        review: `making the review copy… ${el}`,
-      }[s.stage] || `cutting ${s.done}/${s.total}… ${el}`;
-      // The job's own percentage, which counts all three phases; the shot count on its
-      // own read 100% from the moment the last part landed on disk.
-      $('#renderBar').firstElementChild.style.width = `${Math.round(
-        s.pct === undefined ? 100 * s.done / Math.max(1, s.total) : s.pct)}%`;
-      return;
-    }
+    const st = await (await fetch(`/api/render/${job}`)).json();
+    if (st.state === 'running') return;     // the header's strip says how far
     clearInterval(poll);
-    $('#renderBar').style.display = 'none';
     setRenderBusy(false);
-    $('#renderState').textContent = s.state === 'done'
-      ? `done in ${clock(s.elapsed_s)}` : 'failed';
-    if (s.url) {
+    if (st.url) {
       await refreshVersions();
-      toast('render ready — A is the new one, B the one before');
+      toast('the film is ready');
     } else {
-      toast('render failed — see server log');
+      toast('the film failed — see server log');
     }
   }, 1500);
 }
@@ -2862,10 +2857,10 @@ document.addEventListener('keydown', (e) => {
   }
   else if (k === 'g' || k === 'G') {
     // The grade's before / after (INTAKE M10): the monitor with the LUT, or the camera's picture.
+    // the "ungraded" tag on the picture says which (/grade.js)
     const g = gradeApi();
     if (!g) return toast('the grade did not load — /grade.js is missing');
-    const on = g.toggle();
-    toast(on ? 'grade on — the monitor shows the colour' : 'grade off — the camera\'s picture');
+    g.toggle();
   }
   else return;
 });
@@ -2929,24 +2924,21 @@ async function boot() {
   // The version players get the same treatment the monitor got: a stall or an error
   // said on the screen. Silence there is what "stuck in this loading forever place"
   // was — a black rectangle with nothing to distinguish encoding, buffering and broken.
-  ['A', 'B'].forEach((slot) => {
-    const el = $(`#preview${slot}`);
-    if (!el) return;
-    el.addEventListener('error', () =>
-      versionMsg(slot, mediaErrorText(el), 'bad'));
+  {
+    const el = $('#previewA');
+    el.addEventListener('error', () => versionMsg('A', mediaErrorText(el), 'bad'));
     el.addEventListener('stalled', () =>
-      versionMsg(slot, 'the stream stalled — the board may be busy', 'warn'));
-    el.addEventListener('waiting', () => versionMsg(slot, 'buffering…'));
-    el.addEventListener('playing', () => versionSettled(slot));
-    el.addEventListener('loadeddata', () => versionSettled(slot));
-  });
+      versionMsg('A', 'the stream stalled — the board may be busy', 'warn'));
+    el.addEventListener('waiting', () => versionMsg('A', 'buffering…'));
+    el.addEventListener('playing', () => versionSettled('A'));
+    el.addEventListener('loadeddata', () => versionSettled('A'));
+  }
   bed.el = $('#bed');
   P = await (await fetch('/api/project')).json();
   music = P.music || null;
   colour = P.colour || {};
   await refreshColour();          // the looks and every shot's resolved colour, before the first paint
   await refreshStatus();
-  await refreshIndex();
   await loadAssets();
   segs = P.segments.map((s) => ({ ...s }));
   // The bin, before the first paint: when the pass has kept things, the library opens
@@ -2954,7 +2946,6 @@ async function boot() {
   bin = await fetchBin();
   await fetchJunk();
   if (keepsUsable().length || junkRows().some((r) => r.state === 'proposed')) libTab = 'kept';
-  $('#title').textContent = [P.variant, P.title].filter(Boolean).join(' · ');
   $('#story').value = P.story || '';
   document.title = `Cut board — ${P.title}`;
   // The timeline (INTAKE M9): it reads and mutates `segs` in place, maps its id
@@ -2978,6 +2969,7 @@ async function boot() {
     paint();                                  // the inspector follows the anchor
   });
   tl.on('change', renderInspector);           // a trim changes the header; an undo the why
+  tl.on('playhead', () => { if (!player.playing) restSoon(); });
   $('#inspector').addEventListener('click', onInspectorClick);
   render();
   paintBinLine();
@@ -2995,17 +2987,15 @@ async function boot() {
     toast('building proxies in the background — previews appear as they finish', 6000);
     waitForProxies();
   }
-  $('#backend').onclick = probeBackend;
-  // the startup probe may still be in flight; follow it rather than showing "unchecked"
-  if (S.backend.state === 'checking') followProbe();
   $('#story').oninput = touch;
-  $('#snap').onclick = snap;
   $('#undo').onclick = undo;
-  $('#render').onclick = doRender;
+  $('#render').onclick = () => doRender('preview');
+  $('#renderFinal').onclick = () => doRender('delivery');
+  $('#makeFilm').onclick = onMakeFilm;
+  $('#compare').addEventListener('toggle', () => { if ($('#compare').open) loadCompare(); });
+  ['#cmpPickA', '#cmpPickB'].forEach((sel) => { $(sel).onchange = loadCompare; });
   $('#ask').onclick = () => ask();   // not `ask` — a MouseEvent has a `.button` too
-  $('#cutFromBin').onclick = () => cutFromBin({
-    button: $('#cutFromBin'), state: $('#cutFromBinHint'),
-  });
+  $('#playProposal').onclick = playProposal;
   $('#acceptProposal').onclick = acceptProposal;
   $('#rejectProposal').onclick = rejectProposal;
   $('#findGo').onclick = () => doFind();
@@ -3064,7 +3054,6 @@ async function boot() {
   };
   $('#auditClaims').onclick = auditClaims;
   $('#musicTrack').onchange = musicChanged;
-  $('#duck').oninput = () => { $('#duckVal').textContent = $('#duck').value; };
   $('#duck').onchange = musicChanged;
   $('#fadeIn').onchange = musicChanged;
   $('#fadeOut').onchange = musicChanged;
@@ -3076,4 +3065,30 @@ async function boot() {
  * copy, or in the next bin's cut. The board has no in-place reload; the switcher
  * reloads the page and boot() reads the new cut. */
 window.roughcutFlush = async () => { if (saveTimer) await save(); };
+
+/* Re-read the cut from disk and repaint it in place (INTAKE M16, C5) — the timeline, the
+ * inspector, the bin, the film tool — keeping the selection and the playhead. For a
+ * change made on the server (an effect's edit accepted), which used to reload the page.
+ * Anything the autosave still holds is written first, so nothing typed is lost. */
+window.roughcutRefresh = async () => {
+  if (saveTimer) await save();
+  const keep = { sel: [...tl.state.sel], anchor: tl.state.anchor, at: tl.state.playhead,
+                 index: tl.state.anchor == null ? -1 : tl.indexOf(tl.state.anchor) };
+  P = await (await fetch('/api/project')).json();
+  segs = P.segments.map((s) => ({ ...s }));
+  music = P.music || null;
+  colour = P.colour || {};
+  await refreshColour();
+  render();
+  const ids = keep.sel.filter((id) => id !== keep.anchor && tl.indexOf(id) >= 0);
+  if (keep.anchor != null && tl.indexOf(keep.anchor) >= 0) ids.push(keep.anchor);
+  // a shot the change replaced: the one now in its place
+  else if (keep.index >= 0 && segs.length) ids.push(tl.idAt(Math.min(keep.index, segs.length - 1)));
+  if (ids.length) tl.select(ids);
+  tl.setPlayhead(Math.min(keep.at || 0, tl.total()), { reveal: false });
+  paintRest();
+  await refreshBin();
+  await refreshVersions();
+  if (window.fx && typeof fx.refresh === 'function') fx.refresh();
+};
 boot();

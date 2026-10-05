@@ -2050,7 +2050,11 @@ def test_analyze_status_404_for_unknown_job(client):
 # ------------------------------------------------------------------ static
 
 def test_index_and_script_served(client):
-    assert "Cut board" in client.get("/").text
+    html = client.get("/").text
+    assert "<title>Roughcut — cut board</title>" in html
+    # the one header row (INTAKE M16 I16.1): no brand words, Make the film at its end
+    head = html[html.index("<header>"):html.index("</header>")]
+    assert 'id="makeFilm"' in head and "Cut board" not in head
     js = client.get("/app.js")
     assert js.status_code == 200
     assert "function render" in js.text

@@ -132,18 +132,25 @@ def colour_on_disk(page, live_server) -> dict:
 
 def test_the_monitor_has_the_grade_canvas_and_g_flips_it(page):
     """The canvas sits in the monitor's screen with the two videos; G toggles
-    window.grade.enabled and the toast says which way it went."""
+    window.grade.enabled, and while it is off the picture itself says "ungraded"
+    (INTAKE M16 I16.1) — G's state used to be only a toast that faded, and a hint line
+    under the transport that is gone."""
     assert page.locator("#player .screen canvas#gradeCanvas").count() == 1
     assert page.evaluate("typeof window.grade") == "object"
     assert page.evaluate("grade.enabled") is True
+    tag = page.locator("#player .screen #ungraded")
+    assert not tag.is_visible()
     page.keyboard.press("g")
     assert page.evaluate("grade.enabled") is False
-    assert page.locator("#toast").inner_text().startswith("grade off")
+    assert tag.is_visible() and tag.inner_text() == "ungraded"
     page.keyboard.press("g")
     assert page.evaluate("grade.enabled") is True
-    assert page.locator("#toast").inner_text().startswith("grade on")
-    # the keys line under the monitor says so
-    assert "grade" in page.locator("#player .transport .hint").last.inner_text()
+    assert not tag.is_visible()
+    # the setter says so too, not only the key
+    page.evaluate("grade.enabled = false")
+    assert tag.is_visible()
+    page.evaluate("grade.enabled = true")
+    assert page.locator("#player .transport .hint.keys").count() == 0
 
 
 def test_the_monitor_fetches_the_shot_it_is_on(page, live_server):

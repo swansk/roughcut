@@ -1,11 +1,12 @@
 """INTAKE M11 — the dock, driven in a real browser.
 
-The board's right column is a dock: a rail of tools (Bin · Ask · Sound · Out) and one
+The board's right column is a dock: a rail of tools (Bin · Ask · Sound · FX · Film) and one
 panel the height of the viewport that scrolls inside itself, so the page never scrolls
 for it and the monitor never leaves. The Bin is the default tool and a labelled grid:
 a card per keep with the pass's labels as chips, the same chips as a filter, the search
 box filtering as you type, and adding at the playhead (the button, Enter, a drop). The
-keys are an overlay on `?`; the project's facts are a popover.
+keys are an overlay on `?`, one table grouped by task (INTAKE M16); the project's facts
+are the switcher's menu now, not a popover of the board's.
 
 Same fixture pattern as test_ui_flow.py: the real uvicorn server on a real port, the
 synthetic three-clip bin, the EDL re-seeded per test (two shots, 2 s each), a fresh
@@ -129,9 +130,8 @@ def test_the_cli_banner_shows_above_the_board_and_the_dock_still_fits(page):
         page.evaluate("window.cliFix.poll()")
         page.wait_for_selector("#cliFix:not([hidden])")
         assert "claude auth login" in page.inner_text("#cliFix")
-        assert "sign in needed" in page.evaluate(
-            "fetch('/api/status').then(r => r.json()).then(s => "
-            "{ paintBackend(s.backend); return document.querySelector('#backend').textContent; })")
+        # the banner is the one place it is said: no model pill in the header (M16 I16.1)
+        assert page.locator("#backend").count() == 0
         page.wait_for_function(
             "document.querySelector('#dock').getBoundingClientRect().bottom <= 901")
         banner = rect(page, "#cliFix")
@@ -185,7 +185,7 @@ def test_the_dock_resizes_by_its_left_edge_and_the_timeline_refits(page):
     assert page.evaluate("dock.width()") == w0
     # the icons and labels are on the rail
     assert page.locator("#rail .tool svg").count() == page.locator("#rail .tool").count() == 5
-    assert [t.strip().lower() for t in page.locator("#rail .tool span").all_inner_texts()] == ["bin", "ask", "sound", "fx", "out"]
+    assert [t.strip().lower() for t in page.locator("#rail .tool span").all_inner_texts()] == ["bin", "ask", "sound", "fx", "film"]
 
 
 def test_the_rail_opens_one_tool_at_a_time_and_remembers_it(page):
@@ -212,16 +212,28 @@ def test_the_rail_opens_one_tool_at_a_time_and_remembers_it(page):
     assert page.locator("#story").is_visible()
 
 
-def test_the_ask_tool_says_why_it_is_empty_on_an_empty_timeline(page):
+def test_the_ask_tool_is_the_one_sentence_and_the_change(page):
+    """INTAKE M16 I16.4: one sentence about the film, in the same words everywhere —
+    "What is this film about?" — and "Ask for a change" with what the cut aims for
+    beside it. Gone: the Story heading and "The thing the agent is worst at…", the
+    second button (Cut from the bin), and on an empty timeline "no cut yet — the
+    board's empty state is where…" (the empty state is right there)."""
     page.evaluate("dock.open('ask')")
     assert page.locator("#askPanel").is_visible()
-    assert not page.locator("#askEmpty").is_visible()
+    tool = page.locator("#tools section[data-tool=ask]")
+    assert "What is this film about?" in tool.inner_text()
+    assert "worst at" not in tool.inner_text()
+    assert tool.locator("button").count() == 1
+    assert page.locator("#askAims").inner_text() == "aims for 0:05–0:20"   # target_s [5, 20]
     page.evaluate("tl.select([tl.idAt(0), tl.idAt(1)])")
     page.keyboard.press("x")
     page.wait_for_selector("#inspector .empty")
     assert not page.locator("#askPanel").is_visible()
-    assert page.locator("#askEmpty").is_visible()
+    assert page.locator("#askEmpty").count() == 0
     assert page.locator("#story").is_visible()       # the story is still there to write
+    # and the empty state's field is the same sentence: typing in one is the other
+    page.locator("#firstNote").fill("two friends talking")
+    assert page.input_value("#story") == "two friends talking"
 
 
 # ---------------------------------------------------------------- the bin
@@ -336,9 +348,18 @@ def test_the_keys_are_an_overlay_on_question_mark(page):
     assert not page.locator("#keysOverlay").is_visible()
     page.keyboard.press("?")
     assert page.locator("#keysOverlay").is_visible()
-    # timeline-keys.js found the panel by its heading and put its own section in it
-    assert page.locator("#keysOverlay #tlKeys").is_visible()
-    assert "timeline" in page.locator("#keysOverlay").inner_text().lower()   # the h3 is uppercased by CSS
+    # one table grouped by task (INTAKE M16 I16.4), the timeline's rows read from its
+    # own table: no second section, no module tags, no row twice
+    groups = page.eval_on_selector_all("#keyTable th", "els => els.map(e => e.textContent)")
+    assert groups == ["Play", "Trim and cut", "Move around", "The bin"], groups
+    assert not page.locator("#keysOverlay #tlKeys").is_visible()   # mounted, not shown
+    text = page.locator("#keysOverlay").inner_text()
+    assert "razor" in text                         # a row from window.tlKeys.KEYS
+    for tag in ("· foundation", "· trim", "· edges"):
+        assert tag not in text, tag
+    rows = page.eval_on_selector_all(
+        "#keyTable tr:not(:has(th))", "els => els.map(e => e.textContent.replace(/\\s+/g, ' '))")
+    assert len(rows) == len(set(rows)), rows
     page.keyboard.press("Escape")
     assert not page.locator("#keysOverlay").is_visible()
     assert page.evaluate("segs.length") == 2             # Esc closed the map, nothing else
@@ -353,13 +374,14 @@ def test_the_keys_are_an_overlay_on_question_mark(page):
     assert page.locator("#findQ").input_value() == "?"
 
 
-def test_the_project_facts_are_a_popover(page):
-    assert not page.locator("#projectPop").is_visible()
-    page.locator("#projectBtn").click()
-    assert page.locator("#projectPop").is_visible()
-    assert "clip" in page.locator("#project").inner_text()
-    page.keyboard.press("Escape")
-    assert not page.locator("#projectPop").is_visible()
-    page.locator("#projectBtn").click()
-    page.locator("#total").click()                      # a click elsewhere closes it
-    assert not page.locator("#projectPop").is_visible()
+def test_the_rail_names_its_tools_and_badges_only_what_waits(page):
+    """INTAKE M16 I16.4: the rail reads Bin · Ask · Sound · FX · Film (the tool's key
+    stays `out`, so #tool=out and the flow keep working), and a badge is only for what
+    waits on Karl — the old Out badge counted every film ever made. The Project ▾
+    popover is gone (its facts are the switcher's menu)."""
+    names = page.eval_on_selector_all("#rail .tool", "els => els.map(e => e.textContent.trim())")
+    assert names == ["Bin", "Ask", "Sound", "FX", "Film"], names
+    assert page.locator("#rail .tool[data-tool=out] .badge").count() == 0
+    assert page.locator("#projectBtn").count() == 0 and page.locator("#projectPop").count() == 0
+    page.evaluate("location.hash = '#tool=out'")
+    page.wait_for_function("dock.current() === 'out'", timeout=5000)

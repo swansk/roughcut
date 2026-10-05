@@ -106,6 +106,24 @@ def total_text(page) -> str:
     return page.locator("#total").inner_text()
 
 
+def make_film(page) -> int:
+    """Quick look, from the film tool (INTAKE M16 I16.1: the header's Render and its
+    profile select are gone; *Make the film* opens this tool). Returns how many films
+    there were before."""
+    n = page.evaluate("renderList.length")
+    page.evaluate("dock.open('out')")
+    page.locator("#render").click()
+    return n
+
+
+def film_made(page, before: int, timeout: int = 180000) -> None:
+    """The film landed: one more in the list and the buttons given back. The tool's own
+    progress line is gone — the header's strip is the one progress surface."""
+    page.wait_for_function(
+        f"renderList.length > {before} && document.querySelector('#render').dataset.busy !== 'true'",
+        timeout=timeout)
+
+
 def cut_says(page, text: str, present: bool = True) -> None:
     """The flow bar's Cut stage (INTAKE M14) — where the old step strip's "1 hero
     waiting" went, as "1 hero not in it". Read from the files, so it follows the save."""
@@ -125,7 +143,8 @@ def select_shot(page, i: int) -> None:
 
 def test_board_renders_the_timeline(page):
     assert page.locator("#tl .blk").count() == 2
-    assert "test cut" in page.locator("#title").inner_text()
+    # the cut's title is the tab's, not a header line (INTAKE M16 I16.1: one header row)
+    assert "test cut" in page.title()
     assert page.locator("#total").inner_text() == "0:04.0"   # (3.0-1.0) + (2.0-0.0)
 
 
@@ -211,21 +230,21 @@ def test_keyboard_trim_matches_button_trim(page):
 
 def test_boundary_warning_appears_and_snap_clears_it(page):
     """The defect Karl flagged, surfaced live and then fixed by the tool. Shot 1 (the
-    boot selection) opens mid-sentence: the inspector says so, and the header's button
-    counts it; after the snap neither does."""
+    boot selection) opens mid-sentence: the inspector says so; after the snap it does
+    not. The header's "Fix N cut points" is gone (INTAKE M16 I16.1) — the fix belongs
+    on the warned shot; `snap()` is what fixes them."""
     assert "⚠" in page.locator("#inspector .meta").inner_text(), \
         "seeded EDL cuts mid-utterance; warning should show"
-    assert page.locator("#snap").inner_text().startswith("Fix ")
-    page.locator("#snap").click()
-    page.wait_for_function(
-        "document.querySelector('#snap').textContent === 'Cut points OK'", timeout=15000)
+    assert page.locator("#snap").count() == 0
+    page.evaluate("snap()")
+    page.wait_for_function("segs.every((s) => !boundaryWarning(s))", timeout=15000)
     assert "⚠" not in page.locator("#inspector .meta").inner_text()
     assert page.locator("#tl .blk .warn:not([hidden])").count() == 0
 
 
 def test_undo_restores_exact_state_after_snap(page):
     before = page.evaluate("JSON.stringify(segs)")
-    page.locator("#snap").click()
+    page.evaluate("snap()")
     page.wait_for_function(f"JSON.stringify(segs) !== {json.dumps(before)}",
                            timeout=15000)
     page.locator("#undo").click()
@@ -308,9 +327,13 @@ def test_ask_shows_a_proposal_that_can_be_accepted_or_discarded(page):
         before = page.evaluate("JSON.stringify(segs)")
         page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
         page.locator("#note").fill("use the clip that isn't in the cut")
-        assert_priced(page, "#ask", "Ask", "full")
+        assert_priced(page, "#ask", "Ask for a change", "full")
         page.locator("#ask").click()
         page.wait_for_selector("#proposal:visible", timeout=30000)
+        # one blue button per screen is Next's (INTAKE M16): the proposal's are plain,
+        # and ▶ Play it is the one Next may mark
+        assert page.locator("#proposal button.primary").count() == 0
+        assert page.locator("#playProposal").get_attribute("data-next-for") == "cut"
 
         assert "replaced the opening" in page.locator("#proposalNotes").inner_text()
         assert "CLIP_C" in page.locator("#proposalDiff").inner_text()
@@ -373,14 +396,20 @@ def test_an_empty_timeline_offers_a_first_cut_and_gets_one(page):
             timeout=10000)
         page.wait_for_function(
             "document.querySelector('#flowNext').innerText.includes('first cut')", timeout=5000)
-        # the sidebar Ask panel hides itself here — the empty state already has a box
-        # for the same sentence, and two inputs for one thing is a UI defect
+        # the Ask tool's change box hides itself here — there is nothing to change
         assert not page.locator("#askPanel").is_visible()
+        # one sentence (INTAKE M16 I16.4): the empty state asks it in the same words as
+        # the Ask tool, and both are the EDL's story; ONE priced button, Next's to mark
+        assert "What is this film about?" in page.locator(".empty").inner_text()
+        assert page.locator(".empty button").count() == 1
+        assert page.locator("#firstCut").get_attribute("data-next-for") == "cut"
+        assert "aims for" in page.locator("#firstAims").inner_text()
 
         page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
         page.fill("#story", "")        # an earlier test may have left one behind
         page.locator("#firstNote").fill("a loose film about two people talking")
-        assert_priced(page, "#firstCut", "Ask for a first cut", "first")
+        assert page.input_value("#story") == "a loose film about two people talking"
+        assert_priced(page, "#firstCut", "Make a first cut", "first")
         page.locator("#firstCut").click()
         page.wait_for_selector("#proposal:visible", timeout=30000)
         assert "conversation" in page.locator("#proposalNotes").inner_text()
@@ -556,11 +585,8 @@ def test_find_a_moment_lists_matches_and_plays_the_whole_clip(page):
 
 
 def test_render_from_the_ui_produces_a_playable_file(page):
-    page.locator("#render").click()
-    page.wait_for_function(
-        "document.querySelector('#renderState').textContent.startsWith('done')", timeout=180000)
-    page.evaluate("dock.open('out')")   # the dock's tool (INTAKE M11)
-    page.wait_for_selector("#versions .ver")
+    film_made(page, make_film(page))
+    page.wait_for_selector("#filmNewest:not([hidden])")
     # The player plays the 720p review copy, which is derived after the render says
     # done — so it appears a beat later, through the list's own poll.
     page.wait_for_function(
@@ -577,10 +603,7 @@ def test_a_version_player_reaches_a_painted_frame(page):
     loading forever place"*. The player showed a black rectangle and said nothing. It
     plays a 720p review copy now, and a black rectangle is a failure the test can see:
     read the pixels back."""
-    page.locator("#render").click()
-    page.wait_for_function(
-        "document.querySelector('#renderState').textContent.startsWith('done')",
-        timeout=180000)
+    film_made(page, make_film(page))
     page.wait_for_function(
         "(document.querySelector('#previewA').getAttribute('src') || '')"
         ".startsWith('/media/review/')", timeout=60000)
@@ -615,41 +638,49 @@ def test_a_version_player_reaches_a_painted_frame(page):
 
 def test_a_version_row_offers_a_download_and_says_how_big_it_is(page):
     """Karl: *"Make it clear how to download the renders."* Getting a finished cut off
-    the board was folklore — you had to know where ~/work/app/renders is."""
-    page.locator("#render").click()
-    page.wait_for_function(
-        "document.querySelector('#renderState').textContent.startsWith('done')",
-        timeout=180000)
-    page.evaluate("dock.open('out')")   # the dock's tool (INTAKE M11)
-    page.wait_for_selector("#versions .ver a.dl")
-    row = page.locator("#versions .ver").first
-    dl = row.locator("a.dl")
+    the board was folklore — you had to know where ~/work/app/renders is. Now the film
+    of this cut is Download in the film tool AND in the header's slot where *Make the
+    film* was (INTAKE M16 I16.1), with its size before the click."""
+    film_made(page, make_film(page))
+    page.wait_for_selector("#filmNewest:not([hidden])")
+    dl = page.locator("#filmDownload")
     assert dl.get_attribute("href").startswith("/media/download/render/cut_")
     assert dl.get_attribute("title").endswith("MB")
     assert ".mp4" in dl.get_attribute("title")
-    assert "MB" in row.inner_text() and "x" in row.inner_text()   # size and resolution
+    assert "MB" in dl.inner_text()
+    assert "this cut" in page.locator("#labelA").inner_text()
+    # the header's button is that film's Download now: quality and length on it
+    head = page.locator("#makeFilm")
+    page.wait_for_function(
+        "document.querySelector('#makeFilm').textContent.startsWith('↓ Download')", timeout=5000)
+    assert head.inner_text() == "↓ Download · 1080p · 0:04"
+    assert head.get_attribute("data-download") == dl.get_attribute("href")
+    with page.expect_download(timeout=15000) as got:
+        head.click()
+    assert got.value.suggested_filename.endswith(".mp4")
 
 
 def test_a_second_render_becomes_a_second_version_to_compare_against(page):
-    """Judging an edit is comparative. The newest render lands in A and the previous
-    one in B, so two versions can be watched against each other without leaving."""
-    before = page.locator("#versions .ver").count()
+    """Judging an edit is comparative. Compare two (inside Older films, INTAKE M16 —
+    A/B no longer on every row, and no players loading on open) starts on the newest
+    film and the one before it, so two versions can be watched side by side."""
+    film_made(page, make_film(page))
     select_shot(page, 0)
     page.keyboard.press("x")                      # change the edit, so B differs
-    page.locator("#render").click()
+    film_made(page, make_film(page))
+    assert page.get_attribute("#cmpA", "src") is None, "nothing loads until it is opened"
+    page.locator("#olderFilms > summary").click()
+    page.locator("#compare > summary").click()
     page.wait_for_function(
-        "document.querySelector('#renderState').textContent.startsWith('done')", timeout=180000)
-    page.wait_for_function(
-        f"document.querySelectorAll('#versions .ver').length > {before}", timeout=30000)
-    page.wait_for_function(
-        "['A', 'B'].every((s) => (document.querySelector('#preview' + s)"
+        "['#cmpA', '#cmpB'].every((s) => (document.querySelector(s)"
         ".getAttribute('src') || '').startsWith('/media/review/'))", timeout=60000)
-    a = page.get_attribute("#previewA", "src")
-    b = page.get_attribute("#previewB", "src")
+    a = page.get_attribute("#cmpA", "src")
+    b = page.get_attribute("#cmpB", "src")
     assert a and b and a != b
+    assert a == page.get_attribute("#previewA", "src"), "A starts on this cut's newest film"
     page.wait_for_function(
-        "document.querySelector('#previewB').readyState >= 1", timeout=30000)
-    assert page.evaluate("document.querySelector('#previewB').duration") > 0
+        "document.querySelector('#cmpB').readyState >= 1", timeout=30000)
+    assert page.evaluate("document.querySelector('#cmpB').duration") > 0
 
 
 def test_the_board_says_what_to_do_next_and_nothing_more(page):
@@ -1011,24 +1042,24 @@ def test_playing_from_the_inspector_brings_the_monitor_into_view(page):
 def test_the_versions_list_says_which_render_is_the_cut_on_the_board(page, project):
     """Karl: *"Cut board doesn't seem to reflect the render"* — after watching a rendered
     proposal that had never been accepted. It was labelled as a proposal, but nothing said
-    which of the renders the board *did* reflect, and their names are hashes."""
-    page.locator("#render").click()
-    page.wait_for_function(
-        "document.querySelectorAll('#versions .ver').length >= 1", timeout=120000)
-    page.wait_for_function(
-        "[...document.querySelectorAll('#versions .ver')]"
-        ".some((r) => r.textContent.includes('this cut'))", timeout=10000)
+    which of the renders the board *did* reflect, and their names are hashes. The film
+    tool's player is this cut's newest film; the header's button is its Download, and
+    *Make the film* with a dot once the cut changes (INTAKE M16 I16.1)."""
+    film_made(page, make_film(page), timeout=120000)
+    page.wait_for_selector("#filmNewest:not([hidden])", timeout=10000)
+    assert "this cut" in page.locator("#labelA").inner_text()
+    assert page.locator("#filmSince").inner_text().startswith("made ")
+    assert page.locator("#makeFilm").inner_text().startswith("↓ Download")
 
     # trim the timeline and the render is no longer what is on the board
     page.locator("#inspector button[data-act=out][data-d='0.25']").click()
-    assert not page.evaluate(
-        "[...document.querySelectorAll('#versions .ver')]"
-        ".some((r) => r.textContent.includes('this cut'))"), \
+    assert not page.locator("#filmNewest").is_visible(), \
         "an edited timeline is not the rendered one any more"
+    assert page.locator("#filmSince").inner_text().startswith("changed since your last film")
+    assert page.locator("#makeFilm").inner_text().replace(" ", "") == "Makethefilm•"
     page.locator("#undo").click()
-    page.wait_for_function(
-        "[...document.querySelectorAll('#versions .ver')]"
-        ".some((r) => r.textContent.includes('this cut'))", timeout=5000)
+    page.wait_for_selector("#filmNewest:not([hidden])", timeout=5000)
+    assert page.locator("#makeFilm").inner_text().startswith("↓ Download")
 
 
 # ------------------------------------------------------------------ what was seen
@@ -1118,7 +1149,8 @@ def test_the_seen_tab_is_ordered_by_the_rank_not_by_the_kind(page, project):
         second = rows.nth(1).inner_text().lower()
         assert "the body goes down" in first and "confirmed" in first
         assert "backflip" in second and "unconfirmed" in second
-        assert "events ranked" in page.locator("#project").inner_text()
+        # ("events ranked" was the Project popover's line; its facts are the switcher's
+        # menu now — INTAKE M16 I16.1)
     finally:
         sidecar.unlink(missing_ok=True)
         ranked.unlink(missing_ok=True)
@@ -1333,15 +1365,18 @@ def test_the_top_bar_makes_a_render_impossible_to_miss(page, monkeypatch):
     for registry in (server.ASKS, server.RENDERS, server.ANALYSES, server.VISUALS):
         registry.clear()
     row = "#progress .job[data-kind=render]"
-    page.locator("#render").click()
+    page.wait_for_function("document.querySelector('#progress').hidden === true",
+                           timeout=5000)         # earlier tests' finished films gone
+    before = make_film(page)
     page.wait_for_selector(row, timeout=20000)
     assert "Rendering" in page.locator(f"{row} .jname").inner_text()
     page.wait_for_function(
         f"/cutting|joining/.test(document.querySelector('{row} .jdetail')"
         ".textContent)", timeout=60000)
-    page.wait_for_function(
-        "document.querySelector('#renderState').textContent.startsWith('done')",
-        timeout=180000)
+    # the strip is the one progress surface: the film tool keeps no bar of its own
+    assert page.locator("#outPanel .bar").count() == 0
+    assert "idle" not in page.locator("#outPanel").inner_text()
+    film_made(page, before)
     page.wait_for_function(
         "document.querySelector('#progress').hidden === true", timeout=20000)
 
@@ -1358,10 +1393,11 @@ def test_the_render_control_will_not_fire_a_second_render(page, monkeypatch):
     monkeypatch.setattr(progress, "KEEP_FINISHED_S", 1.0)
     for registry in (server.ASKS, server.RENDERS, server.ANALYSES, server.VISUALS):
         registry.clear()
-    page.locator("#render").click()
+    make_film(page)
     page.wait_for_function(
         "document.querySelector('#render').disabled === true", timeout=20000)
-    assert "Rendering" in page.locator("#render").inner_text()
+    assert "Making the film" in page.locator("#render").inner_text()
+    assert page.locator("#renderFinal").is_disabled(), "one film at a time, either kind"
 
     # A second press does nothing: a disabled button dispatches no click, so no
     # second job is started even though the pointer found the same pixels.
@@ -1383,7 +1419,8 @@ def test_the_render_control_will_not_fire_a_second_render(page, monkeypatch):
     # than off this tab's own click
     page.wait_for_function(
         "document.querySelector('#render').disabled === false", timeout=180000)
-    assert page.locator("#render").inner_text().strip() == "Render"
+    assert page.locator("#render").inner_text().strip() == "Quick look · 1080p · ~1 min"
+    assert page.locator("#renderFinal").inner_text().strip() == "Final 4K · ~1 min"
 
 
 def test_a_running_ask_is_picked_back_up_after_a_reload(page):
@@ -1460,10 +1497,8 @@ def test_the_kept_tab_shows_the_bin_and_puts_a_keep_in_the_cut(page):
     gone = rows.nth(2)
     assert "footage missing" in gone.inner_text()
     assert gone.locator("button.add").count() == 0, "a missing keep cannot be added"
-    # the Project panel reads the server's summary, and the flow bar's Cut names the hero
-    line = page.locator("#binLine").inner_text()
-    assert "bin · 3 moments · 1 hero · 0:07 if strung out" in line, line
-    assert page.locator("#binLine a").get_attribute("href") == "/floor"
+    # the flow bar's Cut names the hero (the Project panel's bin line went with Project ▾,
+    # INTAKE M16 I16.1 — the bin's facts are the switcher's menu)
     cut_says(page, "1 hero not in it")
 
     # + add to cut: a shot with the keep's range and reason, after the selected shot
@@ -1507,10 +1542,9 @@ def test_an_empty_bin_says_where_to_keep_things(page):
         timeout=5000)
     assert "the pass is where you keep things" in box.inner_text()
     assert box.locator("a").get_attribute("href") == "/floor"
-    assert "nothing kept yet" in page.locator("#binLine").inner_text()
-    # and there is nothing to cut from: the control says so rather than firing an Ask
-    assert page.locator("#cutFromBin").is_disabled()
-    assert "nothing kept yet" in page.locator("#cutFromBinHint").inner_text()
+    # and there is nothing to cut from: no Cut from the bin to press (INTAKE M16: the
+    # Ask tool's second button is gone; with no keeps the first cut is from the index)
+    assert page.locator("#cutFromBin").count() == 0
     # with no keeps the board opens on heard, as before
     page.reload()
     page.wait_for_selector("#tl .blk")
@@ -1524,9 +1558,10 @@ BIN_NOTE = ("Build the cut from the editor's selects: every hero must appear, us
 
 
 def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
-    """The prompt already carries the bin (revise.py's "The editor's selects"); this is
-    the button that asks for exactly that, from the Ask panel when there is a cut and
-    from the empty state when there is not — and the proposal loop is the usual one."""
+    """The prompt already carries the bin (revise.py's "The editor's selects"); the
+    empty board's one button asks for exactly that when there are keeps — "Make the
+    first cut from your 1 keep" — and the proposal loop is the usual one. Once a cut
+    exists it is not a second button beside Ask (INTAKE M16: the look-alike goes)."""
     from roughcut import config, inference
 
     class Scripted:
@@ -1551,22 +1586,10 @@ def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
     inference.set_backend(Scripted())
     inference.reset_spend()
     try:
-        # with a cut on the board: the Ask panel's button, a revision
+        # with a cut on the board: the Ask tool has one priced button, Ask for a change
         page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
-        # priced first (I16.0f): until its price is on it the button is disabled
-        assert_priced(page, "#cutFromBin", "Cut from the bin", "bin")
-        assert page.locator("#cutFromBin").is_enabled()
-        assert page.locator("#cutFromBinHint").inner_text() == ""
-        before = page.evaluate("JSON.stringify(segs)")
-        page.locator("#cutFromBin").click()
-        page.wait_for_selector("#proposal:visible", timeout=30000)
-        prompt = Scripted.seen[-1].prompt
-        assert "The editor's selects" in prompt
-        assert BIN_NOTE in prompt
-        assert "HERO" in prompt and "editor's note: \"this is the film\"" in prompt
-        assert "built from the bin" in page.locator("#proposalNotes").inner_text()
-        assert page.evaluate("JSON.stringify(segs)") == before   # a proposal, not an edit
-        page.locator("#rejectProposal").click()
+        assert page.locator("#cutFromBin").count() == 0
+        assert page.locator("#askPanel button").count() == 1
 
         # with no cut: the panel is hidden and the empty state carries the button; the
         # fixed note is the app's words and must not become the story
@@ -1577,13 +1600,15 @@ def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
         page.keyboard.press("x")
         page.wait_for_selector("#inspector .empty")
         assert not page.locator("#askPanel").is_visible()
-        assert page.locator("#firstFromBin").is_visible()
-        assert_priced(page, "#firstFromBin", "Cut from the bin", "bin")
-        page.locator("#firstFromBin").click()
+        assert page.locator(".empty button").count() == 1
+        assert_priced(page, "#firstCut", "Make the first cut from your 1 keep", "bin")
+        page.locator("#firstCut").click()
         page.wait_for_selector("#proposal:visible", timeout=30000)
         prompt = Scripted.seen[-1].prompt
         assert "There is no edit yet" in prompt and BIN_NOTE in prompt
         assert "The editor's selects" in prompt
+        assert "HERO" in prompt and "editor's note: \"this is the film\"" in prompt
+        assert "built from the bin" in page.locator("#proposalNotes").inner_text()
         assert page.input_value("#story") == ""
         page.locator("#acceptProposal").click()
         assert page.locator("#tl .blk").count() == 1
@@ -1596,104 +1621,65 @@ def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
 
 # ------------------------------------------------------------ the index line
 
-def test_the_old_buttons_are_gone_and_the_index_line_reads_the_journals_word(
-        page, project, monkeypatch, tmp_path):
-    """INTAKE decision 3: the index is one unattended run started from the open screen.
-    The board used to carry the two buttons that predate it — Analyse audio and Look at
-    the footage — which were a second way to spend money on the same bin. Now it says
-    where the index is, in the journal's own words, and points at the screen that runs
-    it. The run here is real (tools stubbed the way test_index.py stubs them), started
-    the way the open screen starts it."""
-    import server
-    from roughcut import inference
-    from test_index import _stub_tools
-
-    # gone, not hidden
-    for gone in ("#analyze", "#visual", "#analyzeBar", "#visualBar", "#visualRow"):
+def test_the_old_buttons_are_gone_and_the_header_is_one_row(page):
+    """INTAKE decision 3: the index is one unattended run started from the open screen;
+    the board's Analyse audio / Look at the footage buttons stay gone. INTAKE M16 I16.1:
+    the header is ONE row at most 50 px tall — the bin · cut name, Next, ↶ ↷, ? and
+    Make the film. Gone from it: "Cut board" and the second bin name, the length and
+    target, Project ▾ (its facts, the index line among them, are the switcher's menu),
+    the model pill (the CLI banner speaks when the CLI needs Karl), "saved", "Fix N cut
+    points", Render and its profile select."""
+    for gone in ("#analyze", "#visual", "#analyzeBar", "#visualBar", "#visualRow",
+                 "#projectBtn", "#projectPop", "#indexState", "#openFootage", "#backend",
+                 "#snap", "#renderProfile", "#band", "header h1", "#title"):
         assert page.locator(gone).count() == 0, gone
     seen = page.locator("body").inner_text()      # what a person reads, not the source
-    assert "Analyse audio" not in seen
-    assert "Look at the footage" not in seen
-    # the link, and the header's way to the other two screens
-    link = page.locator("#openFootage")
-    assert link.get_attribute("href") == "/open"
-    assert "open the footage" in link.inner_text()
+    for words in ("Analyse audio", "Look at the footage", "Cut board", "target",
+                  "Project ▾", "saved"):
+        assert words not in seen, words
     # (the `open · pass · board` pills and the M14 step bar are gone, M16 decision 2)
     page.wait_for_selector("#flowNext")
     assert page.locator("#screens").count() == 0
     assert page.locator("#flow .fs").count() == 0
-    # nothing has been indexed on this bin, and the line says so before any run
+    page.set_viewport_size({"width": 1440, "height": 900})
+    # (the progress strip is the header's second row only while something runs)
+    import server
+    for registry in (server.ASKS, server.RENDERS, server.ANALYSES, server.VISUALS):
+        registry.clear()
+    page.wait_for_function("document.querySelector('#progress').hidden === true", timeout=5000)
+    hd = page.evaluate("document.querySelector('header').getBoundingClientRect().height")
+    assert hd <= 50, hd
+    mids = page.evaluate("""[...document.querySelectorAll('header > *')]
+        .filter((e) => e.getBoundingClientRect().height > 0)
+        .map((e) => { const r = e.getBoundingClientRect(); return (r.top + r.bottom) / 2; })""")
+    assert max(mids) - min(mids) <= 3, mids       # one row: every item on one line
+    ids = page.evaluate("""[...document.querySelectorAll('header button')]
+        .filter((e) => e.getBoundingClientRect().height > 0).map((e) => e.id)""")
+    assert ids == ["hdBin", "undo", "redo", "keysBtn", "makeFilm"], ids
+    # Make the film opens the film tool (the rail calls it Film; its key stays `out`) —
+    # while no film of this cut exists (an earlier test's would make it Download)
+    page.evaluate("renderList = []; paintVersions()")
+    assert page.locator("#makeFilm").inner_text() == "Make the film"
+    page.locator("#makeFilm").click()
+    assert page.evaluate("dock.current()") == "out"
+    assert page.locator("#rail .tool[data-tool=out]").inner_text().strip() == "FILM"
+
+
+def test_saved_says_nothing_and_a_failed_save_says_so(page, live_server):
+    """INTAKE M16 I16.1: status only when something is wrong — "unsaved…" while the
+    autosave waits, "save failed" when it failed, nothing after a good save."""
+    page.keyboard.press("x")
     page.wait_for_function(
-        "document.querySelector('#indexState').textContent === 'not indexed yet'",
-        timeout=5000)
-
-    _stub_tools(server, monkeypatch, tmp_path)
-    # the cap the index checks before every priced stage is on projected spend, and
-    # earlier tests' stub backends have been spending into the same counter
-    inference.reset_spend()
-    before = {d: set(Path(server.STATE[d]).glob("*"))
-              for d in ("visual", "sidecars") if server.STATE.get(d)}
-
-    def line_reads(pattern: str, timeout: int) -> None:
-        """Wait for the index line to match, and say what it said if it never does."""
-        try:
-            page.wait_for_function(
-                f"{pattern}.test(document.querySelector('#indexState').textContent)",
-                timeout=timeout)
-        except playwright_api.TimeoutError:
-            ix = page.evaluate("fetch('/api/index').then(r => r.json())")
-            raise AssertionError(
-                f"index line never matched {pattern}: it reads "
-                f"{page.locator('#indexState').inner_text()!r}; /api/index says "
-                f"running={ix.get('running')} "
-                f"progress={ {k: v for k, v in (ix.get('progress') or {}).items() if k in ('clips', 'released', 'parked', 'missing', 'paused_priced', 'paused_reason', 'cost_usd')} } "
-                f"rows={[(r['clip'], r['state'], r.get('error')) for r in (ix.get('progress') or {}).get('rows', [])]}"
-            ) from None
-
-    try:
-        started = page.evaluate(
-            "fetch('/api/index', {method: 'POST', headers: {'content-type': 'application/json'},"
-            " body: JSON.stringify({order: 'priority'})}).then(r => r.json())")
-        assert "job" in started, started
-        # while it runs, the line polls the journal and says so; once it is done, the
-        # journal's own count of released clips is the line — no "click here", no bar
-        line_reads(r"/^(indexing|indexed) · \d+ of \d+ released/", 30000)
-        line_reads(r"/^indexed · /", 60000)
-        ix = page.evaluate("fetch('/api/index').then(r => r.json())")
-        assert ix["exists"] and not ix["running"]
-        n = ix["progress"]["clips"] - ix["progress"]["missing"]
-        line = page.locator("#indexState").inner_text()
-        assert line.startswith(f"indexed · {ix['progress']['released']} of {n} released"), line
-        assert ix["progress"]["released"] == n == len(project["stems"])
-    finally:
-        # leave the module's server as this test found it: no journal, no index job in
-        # the strip, none of the sidecars the stubbed tools wrote
-        server.INDEXES.clear()
-        server.journal_path().unlink(missing_ok=True)
-        for d, had in before.items():
-            for f in Path(server.STATE[d]).glob("*"):
-                if f not in had and f.is_file():
-                    f.unlink()
-
-
-def test_the_index_line_carries_no_second_money_number(page):
-    """INTAKE I16.0g, one money number: /open dropped "$ spent by the index", but the
-    board's index line still read "indexed · 12 of 12 released · $3.20" — the journal's
-    cost beside the pill's "$X spent on this project", a different number."""
-    lines = page.evaluate("""() => {
-        const p = {clips: 12, missing: 0, released: 12, parked: 1, cost_usd: 3.2,
-                   paused_priced: false};
-        return [indexLine({exists: true, running: true, progress: p}),
-                indexLine({exists: true, running: false, progress: p}),
-                indexLine({exists: true, running: false,
-                           progress: {...p, released: 4, paused_priced: true}}),
-                indexLine({exists: true, running: false, progress: {...p, released: 4}})];
-    }""")
-    assert lines == ["indexing · 12 of 12 released · 1 parked",
-                     "indexed · 12 of 12 released · 1 parked",
-                     "index paused · 7 clips wait · 1 parked",
-                     "index stopped · 4 of 12 released · 1 parked"], lines
-    assert not any("$" in x for x in lines)
+        "document.querySelector('#saveState').textContent.startsWith('saved')", timeout=8000)
+    assert not page.locator("#saveState").is_visible()
+    page.route("**/api/project", lambda route: route.fulfill(status=500, body="no")
+               if route.request.method == "PUT" else route.continue_())
+    page.evaluate("touch()")
+    assert page.locator("#saveState").inner_text() == "unsaved…"
+    page.wait_for_function(
+        "document.querySelector('#saveState').textContent === 'save failed'", timeout=8000)
+    assert page.locator("#saveState").is_visible()
+    page.unroute("**/api/project")
 
 
 def test_ask_the_model_in_the_bin_is_priced_before_it_can_be_clicked(page, live_server):
@@ -1727,10 +1713,10 @@ def test_ask_buttons_wait_for_their_price_and_never_spend_without_one(page, live
     spent with no price shown, and a failed price fetch left it so for good. It is
     disabled until priced; with no price to be had it says so, stays disabled, and an
     ask that gets through anyway (a key, a script) refuses before any POST."""
-    assert_priced(page, "#ask", "Ask", "full")
+    assert_priced(page, "#ask", "Ask for a change", "full")
     assert page.locator("#ask").is_enabled()
     html = page.evaluate("fetch('/').then(r => r.text())")
-    assert '<button id="ask" class="primary" disabled data-await-price="1">Ask</button>' in html
+    assert '<button id="ask" disabled data-await-price="1">Ask for a change</button>' in html
 
     posts = []
     page.on("request", lambda r: posts.append(r.url)
@@ -1739,9 +1725,8 @@ def test_ask_buttons_wait_for_their_price_and_never_spend_without_one(page, live
     page.reload()
     page.wait_for_selector("#tl .blk")
     page.wait_for_function(
-        "document.querySelector('#ask').textContent === 'Ask · price unavailable'", timeout=5000)
+        "document.querySelector('#ask').textContent === 'Ask for a change · price unavailable'", timeout=5000)
     assert page.locator("#ask").is_disabled()
-    assert page.locator("#cutFromBin").is_disabled()
     insp = page.locator("#inspector")
     insp.locator("button[data-act=ask]").click()
     page.wait_for_selector("#inspector .shotAsk:visible")
@@ -1794,7 +1779,6 @@ def test_saving_a_copy_flushes_the_autosave_first_and_the_board_moves_to_it(page
         assert cuts["current"]["from"] == "edl"
         assert Path(copy_path) != original and Path(copy_path).parent.name == project["footage"].name
         assert page.locator("#tl .blk").count() == 1
-        assert "one shot" in page.locator("#title").inner_text() or True
         # and back, by its row — the header says so, the timeline is the original's
         page.locator("#hdBin").click()
         page.wait_for_selector("#cutList .crow")
@@ -1828,7 +1812,8 @@ def test_render_rows_say_the_day_and_the_cut_and_fold_repeats(page):
     """I16.0 (k): Killington's ten renders span Jul 25 – Sep 8 and each row said only a
     clock time; three were the same 17-shot preview; none was the cut on the board, and
     nothing said so. Rows carry the day and the cut, identical ones fold with a count,
-    and one line says when this cut has not been made."""
+    and the line under "This cut" says when this cut has not been made — since when it
+    changed (INTAKE M16 I16.1: the rows are "Older films", folded, each with ↓)."""
     got = page.evaluate("""() => {
       const other = [{clip: 'CLIP_C.MP4', in: 0, out: 1.5}];
       const base = {size: 2e6, width: 320, height: 180, duration_s: 1.5, segments: 1,
@@ -1844,13 +1829,15 @@ def test_render_rows_say_the_day_and_the_cut_and_fold_repeats(page):
         {...base, name: 'cut_e.mp4', created: t('2026-07-25T20:37:00'), shots: null},
       ];
       paintVersions();
-      const un = document.querySelector('#cutUnmade');
+      const un = document.querySelector('#filmSince');
       // the day and the time in the viewer's own words ("Sep 8, 10:05 PM" in en-US,
       // "8 Sept, 22:05" in en-GB): the expected strings are made the way the row's are
       const when = (d) => new Date(d).toLocaleString([],
         {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
       return {rows: [...document.querySelectorAll('#versions .ver')].map(
                 (r) => [r.textContent.replace(/\\s+/g, ' ').trim(), r.title]),
+              links: document.querySelectorAll('#versions .ver a.dl').length,
+              older: document.querySelector('#olderFilms > summary').textContent,
               unmade: un && un.textContent,
               when: [when('2026-09-08T22:05:00'), when('2026-08-23T16:10:00'),
                      when('2026-07-25T20:37:00')]};
@@ -1863,15 +1850,21 @@ def test_render_rows_say_the_day_and_the_cut_and_fold_repeats(page):
     assert "proposal ed8134bb — not accepted" in rows[1][0] and "×" not in rows[1][0]
     assert jul25 in rows[2][0]
     assert not any("this cut" in r[0] for r in rows)
-    assert got["unmade"] == "this cut hasn’t been made yet"
-    # a render of the cut on the board: the row says so and the line goes
+    assert got["links"] == 3 and got["older"] == "Older films (3)"
+    assert got["unmade"] == f"changed since your last film ({sep8})"
+    # a render of the cut on the board: it leaves the rows for the player, and the line
+    # says when it was made
     again = page.evaluate("""() => {
       renderList[0].shots = segs.map((s) => ({clip: s.clip, in: s.in, out: s.out}));
       paintVersions();
-      return {first: document.querySelector('#versions .ver').textContent,
-              unmade: !!document.querySelector('#cutUnmade')};
+      return {rows: document.querySelectorAll('#versions .ver').length,
+              newest: !document.querySelector('#filmNewest').hidden,
+              label: document.querySelector('#labelA').textContent,
+              since: document.querySelector('#filmSince').textContent};
     }""")
-    assert "this cut" in again["first"] and again["unmade"] is False
+    assert again["newest"] and "this cut" in again["label"], again
+    assert again["since"] == f"made {sep8}", again
+    assert again["rows"] == 3, again             # b and c fold now; d; e
 
 
 def test_the_last_proposal_link_shows_only_while_the_proposal_waits(page, live_server):
@@ -1968,3 +1961,133 @@ def test_next_lands_on_a_waiting_revision_proposal_in_place_and_from_open(page, 
         assert "ask=" not in page.evaluate("location.hash")
     finally:
         path.unlink(missing_ok=True)
+
+
+# ------------------------------------------------------------ M16 · the board's frame
+
+def test_the_monitor_at_rest_shows_the_frame_at_the_playhead_with_a_big_play(page):
+    """INTAKE M16 I16.1: the picture at rest was a black box, with a help line under the
+    transport. Now it is the frame under the playhead (the poster endpoint) with a big
+    ▶, and the help line is gone (the keys are on ?)."""
+    poster = page.locator("#monPoster")
+    page.wait_for_function("!document.querySelector('#monPoster').hidden", timeout=5000)
+    src = poster.get_attribute("src")
+    assert src.startswith("/media/poster/CLIP_A") and src.endswith("t=1.00"), src
+    page.wait_for_function("document.querySelector('#monPoster').naturalWidth > 0", timeout=10000)
+    assert page.locator("#bigPlay").is_visible()
+    assert "click a shot below" not in page.locator("#player").inner_text()
+    # the playhead moves while nothing plays: the still follows it, into shot 2
+    page.evaluate("tl.setPlayhead(3.0)")
+    page.wait_for_function(
+        "(document.querySelector('#monPoster').getAttribute('src') || '').includes('CLIP_B')",
+        timeout=5000)
+    # playing: the ▶ goes and the live picture replaces the still
+    page.locator("#playCut").click()
+    page.wait_for_function("player.playing", timeout=10000)
+    assert not page.locator("#bigPlay").is_visible()
+    assert not poster.is_visible()
+    page.locator("#playCut").click()
+    page.wait_for_function("!player.playing", timeout=5000)
+    assert page.locator("#bigPlay").is_visible()
+    assert page.locator("#playCut").inner_text() == "▶ Play"
+
+
+def test_a_proposed_cut_plays_before_it_is_accepted(page):
+    """INTAKE M16 I16.4: a proposal was a text diff with Accept and Discard — read, not
+    watched. ▶ Play it plays the proposed cut in the monitor from its ghost lane; the cut
+    on the board is untouched until Accept, and the readable diff stays."""
+    from roughcut import config, inference
+
+    class Scripted:
+        name = "scripted"
+
+        def complete(self, request):
+            text = json.dumps({
+                "segments": [{"clip": "CLIP_C.MP4", "in": 0.5, "out": 4.0,
+                              "why": "brought in per the note"}],
+                "notes": "replaced the opening"})
+            model = config.model_for(request.role)
+            return inference.Result(content=text, input_tokens=10, output_tokens=5,
+                                    backend="scripted", model=model,
+                                    projected_usd=0.0001, latency_ms=1, raw=text)
+
+    inference.set_backend(Scripted())
+    inference.reset_spend()
+    try:
+        before = page.evaluate("JSON.stringify(segs)")
+        page.evaluate("dock.open('ask')")
+        page.locator("#note").fill("open on the other clip")
+        assert_priced(page, "#ask", "Ask for a change", "full")
+        page.locator("#ask").click()
+        page.wait_for_selector("#proposal:visible", timeout=30000)
+        assert "CLIP_C" in page.locator("#proposalDiff").inner_text()   # the diff stays
+        buttons = page.eval_on_selector_all("#proposal button", "els => els.map(e => e.textContent)")
+        assert buttons == ["▶ Play it", "Accept", "Discard"], buttons
+        page.wait_for_function("window.tlLanes && tlLanes.ghost()", timeout=8000)
+        page.locator("#playProposal").click()
+        page.wait_for_function(
+            "liveVideo().dataset.src.includes('CLIP_C') && !liveVideo().paused", timeout=10000)
+        assert "proposal" in page.locator("#playingWhat").inner_text()
+        assert page.evaluate("JSON.stringify(segs)") == before   # watched, not applied
+        page.locator("#rejectProposal").click()
+    finally:
+        inference.set_backend(None)
+
+
+def test_sound_is_one_line_and_dip_under_talk(page, project):
+    """INTAKE M16 I16.4: the Sound tool was a MUSIC heading, a 0–24 dB slider and its
+    label, and three hint paragraphs. Now: the track, one line when it loops under a
+    longer cut, "dip under talk: off / a little / a lot" (0 / 6 / 12 dB — the duck the
+    render applies), and the fades behind "more"."""
+    page.evaluate("dock.open('sound')")
+    assert page.locator("#musicPanel h2").count() == 0
+    page.select_option("#musicTrack", "music/bed.wav")      # 2 s under a 4 s cut
+    page.wait_for_function(
+        "document.querySelector('#saveState').textContent.startsWith('saved')", timeout=8000)
+    assert page.locator("#musicHint").inner_text() == "loops once at 0:02 under a 0:04 cut"
+    options = page.eval_on_selector_all("#duck option", "els => els.map(e => [e.value, e.textContent])")
+    assert options == [["0", "off"], ["6", "a little"], ["12", "a lot"]], options
+    assert page.input_value("#duck") == "12"
+    assert not page.locator("#fadeIn").is_visible(), "the fades are behind more"
+
+    def disk():
+        return json.loads(Path(project["edl"]).read_text(encoding="utf-8"))["effects_music"]
+
+    page.select_option("#duck", "6")
+    for _ in range(50):
+        if disk()["duck_db"] == 6:
+            break
+        time.sleep(0.1)
+    assert disk()["duck"] is True and disk()["duck_db"] == 6
+    page.select_option("#duck", "0")
+    for _ in range(50):
+        if disk()["duck"] is False:
+            break
+        time.sleep(0.1)
+    assert disk()["duck"] is False
+    page.select_option("#musicTrack", "")
+
+
+def test_roughcut_refresh_repaints_the_cut_in_place(page):
+    """INTAKE M16 C5: a change made on the server (an effect's edit accepted) used to
+    reload the page. window.roughcutRefresh() reads the cut back and repaints the
+    timeline and the inspector in place, keeping the selection and the playhead."""
+    page.evaluate("window.__stay = 1")
+    select_shot(page, 1)
+    keep = page.evaluate("tl.idAt(1)")
+    page.evaluate("tl.setPlayhead(2.5)")
+    page.evaluate("""async () => {
+      const s = tl.forSave().map((x) => ({...x}));      // the cut's ids, as on disk
+      s[1].why = 'changed on the server';
+      await fetch('/api/project', {method: 'PUT', headers: {'content-type': 'application/json'},
+        body: JSON.stringify({segments: s, story: ''})});
+    }""")
+    assert page.evaluate("segs[1].why") == "second"
+    page.evaluate("roughcutRefresh()")
+    page.wait_for_function("segs[1].why === 'changed on the server'", timeout=5000)
+    assert page.evaluate("window.__stay") == 1, "the page did not reload"
+    assert page.evaluate("[...tl.state.sel]") == [keep]
+    assert page.evaluate("tl.state.playhead") == pytest.approx(2.5, abs=0.01)
+    page.wait_for_function(
+        "document.querySelector('#inspector .why').textContent === 'changed on the server'",
+        timeout=5000)

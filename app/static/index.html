@@ -20,24 +20,24 @@
   }
   header {
     position: sticky; top: 0; z-index: 20; background: var(--panel);
-    border-bottom: 1px solid var(--line); padding: 10px 16px;
-    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--line); padding: 7px 16px;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   }
-  h1 { font-size: 15px; margin: 0; font-weight: 600; }
-  h1 small { color: var(--dim); font-weight: 400; margin-left: 8px; }
+  header > button { padding: 5px 11px; }
+  #undo, #redo { min-width: 34px; }
+  #saveState[data-state="saved"] { display: none; }
+  #saveState[data-state="failed"] { color: var(--bad); }
+  #makeFilm .dot { color: var(--accent); margin-left: 6px; }
   .grow { flex: 1; }
   button {
     background: var(--card); color: var(--text); border: 1px solid var(--line);
     border-radius: 7px; padding: 6px 11px; font: inherit; cursor: pointer;
   }
   button:hover { background: var(--card-hi); }
-  button.primary { background: var(--accent); color: #0b0b0f; border-color: transparent;
-                   font-weight: 600; }
+  /* No blue button of its own (INTAKE M16, one blue per screen): the one blue element is
+     Next's `is-next`, put on by /flow.js. */
   button.ghost { border-color: transparent; color: var(--dim); }
   button:disabled { opacity: .45; cursor: default; }
-  .total { font-variant-numeric: tabular-nums; font-size: 15px; }
-  .total .band { color: var(--dim); font-size: 12px; margin-left: 6px; }
-  .ok { color: var(--good); } .over { color: var(--warn); } .under { color: var(--warn); }
 
   main { display: grid; grid-template-columns: minmax(0,1fr) var(--dock-w); gap: 16px;
          padding: 16px; align-items: start; }
@@ -183,6 +183,7 @@
   #findVideo { width: 100%; border-radius: 6px; background: #000; display: block;
                aspect-ratio: 16/9; }
   .shotAsk textarea { min-height: 44px; }
+  .ask-q { display: block; font-weight: 600; margin-bottom: 6px; }
   input[type=range] { accent-color: var(--accent); }
   .tabs { display: flex; gap: 4px; margin: 10px 0 6px; }
   .tab { font-size: 12px; color: var(--dim); border: 1px solid var(--line);
@@ -245,8 +246,6 @@
   #tools .junkq button.jv { padding: 1px 8px; font-size: 11.5px; }
   .keep.junkcard { cursor: default; border-style: dashed; }
   .keep.junkcard.confirmed { opacity: .65; }
-  #binLine a, #indexLine a { color: var(--accent); text-decoration: none; }
-  #binLine a:hover, #indexLine a:hover { text-decoration: underline; }
   kbd { background: #222; border: 1px solid var(--line); border-bottom-width: 2px;
         border-radius: 4px; padding: 0 4px; font-size: 11px; }
   .hint { color: var(--dim); font-size: 12px; }
@@ -256,6 +255,14 @@
   .empty { border: 1px dashed var(--line); border-radius: 10px; padding: 28px 20px;
            text-align: center; color: var(--dim); }
   .empty h3 { color: var(--text); font-size: 15px; margin: 0 0 6px; }
+  #filmWhat { margin-bottom: 10px; }
+  .filmGo { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+  #filmNewest video { width: 100%; border-radius: 6px; background: #000; display: block;
+                      aspect-ratio: 16/9; }
+  #filmNewest .dl { display: inline-block; margin-top: 6px; }
+  #outPanel details { margin-top: 10px; }
+  #outPanel summary { cursor: pointer; color: var(--accent); font-size: 12px; }
+  .ab select { width: 100%; margin-bottom: 4px; font-size: 12px; }
   .ab { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
   .ab video { width: 100%; border-radius: 6px; background: #000; display: block;
               aspect-ratio: 16/9; }
@@ -272,9 +279,8 @@
   .ver .dl:hover { border-color: var(--accent); }
   .hint.warn { color: var(--warn); }
   .hint.bad { color: var(--bad); }
-  /* The flow bar (/flow.js, INTAKE M14): the header's second row, where the five-step
-     strip was — the same height, so the dock's fit is unchanged. */
-  header #flow { width: 100%; margin-top: 2px; }
+  /* Next (/flow.js): in the header's one row, after the bin · cut name. */
+  header #flow { flex: 0 1 auto; min-width: 0; overflow: hidden; }
   .pill { border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px;
           font-size: 12px; color: var(--dim); cursor: pointer; white-space: nowrap; }
   .pill.ok { color: var(--good); border-color: #2c4c39; }
@@ -283,15 +289,7 @@
          overflow: hidden; }
   .bar i { display: block; height: 100%; width: 0; background: var(--accent);
            transition: width .3s; }
-  /* The project's facts, behind one header button: what the Project panel said, in a
-     popover under the header rather than the first 250 px of the sidebar. */
-  #projectBtn { font-size: 12px; padding: 4px 10px; }
-  #projectPop { position: absolute; top: 100%; left: 16px; z-index: 30; margin-top: 6px;
-                width: 360px; max-width: calc(100vw - 32px); background: var(--panel);
-                border: 1px solid var(--line); border-radius: 10px; padding: 12px;
-                box-shadow: 0 18px 40px -20px #000; }
-  #projectPop[hidden] { display: none; }
-  #keysBtn { font-size: 12px; padding: 4px 9px; min-width: 30px; }
+  #keysBtn { min-width: 34px; }
   /* The key map: an overlay on `?`, like the pass's — not a panel spending 800 px of
      sidebar on the thing read least. timeline-keys.js appends its own section to the
      panel inside (it finds it by the `Keys` heading). */
@@ -303,7 +301,13 @@
   #keysOverlay .panel h2 { font-size: 14px; color: var(--text); text-transform: none;
                            letter-spacing: 0; display: flex; align-items: baseline; gap: 10px; }
   #keysOverlay .panel h2 .hint { font-weight: 400; }
-  #keysOverlay .panel > .hint { line-height: 2; }
+  #keysOverlay .panel > .hint { margin-top: 10px; }
+  #keysOverlay #tlKeys { display: none; }
+  #keyTable { border-collapse: collapse; width: 100%; font-size: 13px; }
+  #keyTable th { text-align: left; color: var(--dim); font-size: 11px; font-weight: 600;
+                 text-transform: uppercase; letter-spacing: .08em; padding: 12px 0 4px; }
+  #keyTable td { padding: 3px 0; vertical-align: top; color: var(--text); }
+  #keyTable td.k { white-space: nowrap; padding-right: 14px; width: 1%; }
 
   /* The progress strip. One place, below the flow bar, full width, for every long
      operation in the app — Karl: "consider a progress tracking bar up top for anything
@@ -367,8 +371,18 @@
   #screenMsg[hidden] { display: none; }
   .transport { display: flex; gap: 10px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
   .transport .pos { font-variant-numeric: tabular-nums; }
-  .transport .keys { min-width: 0; white-space: nowrap; overflow: hidden;
-                     text-overflow: ellipsis; }
+  #monPoster { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+               -webkit-user-select: none; user-select: none; }
+  #monPoster[hidden] { display: none; }
+  #bigPlay { position: absolute; left: 50%; top: 50%; z-index: 2; width: 64px; height: 64px;
+             margin: -32px 0 0 -32px; border-radius: 50%; background: rgba(10,10,14,.6);
+             color: #fff; font-size: 26px; line-height: 64px; text-align: center;
+             padding-left: 4px; pointer-events: none; }
+  #bigPlay[hidden] { display: none; }
+  #ungraded { position: absolute; right: 8px; top: 8px; z-index: 2; font-size: 11px;
+              letter-spacing: .06em; color: var(--dim); background: rgba(10,10,14,.7);
+              border-radius: 4px; padding: 1px 6px; pointer-events: none; }
+  #ungraded[hidden] { display: none; }
   /* the timeline under the transport is styled by /timeline/timeline.css */
   #toast {
     position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
@@ -381,44 +395,20 @@
 </head>
 <body>
 <header>
-  <h1>Cut board <small id="title"></small></h1>
-  <!-- The bin and the cut this board is on; click it (or O) to switch either, or to
-       save a copy of the cut. The control itself is /switcher.js, shared by every
-       screen. -->
+  <!-- ONE row (INTAKE M16 I16.1): the bin and the cut (/switcher.js — its menu holds the
+       footage, the pass and the project's facts), Next (/flow.js), then undo, redo, the
+       keys and Make the film. Status shows only when something is wrong. -->
   <button type="button" id="hdBin" title="switch bins or cuts, save a copy · O"></button>
-  <div class="total"><span id="total">—</span><span class="band" id="band"></span></div>
-  <!-- The project's facts — clips, shots, the index, the bin — in a popover. -->
-  <button type="button" id="projectBtn" title="the project: clips, shots, the index, the bin">Project ▾</button>
-  <div id="projectPop" hidden>
-    <div id="project" class="hint">loading…</div>
-    <div id="proxyState" class="hint" style="display:none;margin-top:8px"></div>
-    <!-- The index is one unattended, resumable run started from the open screen
-         (INTAKE decision 3). The board only says where it is — the journal's own
-         word from GET /api/index — and points at the screen that runs it. -->
-    <div class="hint" id="indexLine" style="margin-top:9px">
-      <span id="indexState">…</span> ·
-      <a id="openFootage" href="/open">open the footage →</a>
-    </div>
-    <!-- The bin, in one line: what the pass kept, from GET /api/selects. -->
-    <div class="hint" id="binLine" style="margin-top:4px;display:none"></div>
-  </div>
-  <div class="grow"></div>
-  <span id="backend" class="pill" title="Backend status — click to re-check">…</span>
-  <span class="hint" id="saveState">saved</span>
-  <button id="snap" title="Extend cuts that open mid-sentence or clip a line off, so each shot carries a whole thought">Fix cut points</button>
-  <button id="undo" title="Undo (u)">Undo</button>
-  <button id="redo" title="Redo (⌘⇧Z)">Redo</button>
-  <select id="renderProfile"
-          title="preview: fast 1920x1080 @ 24fps — what quick versions use. delivery: the bin's own frame rate, up to 4K, never upscaled — slower, bigger, for the final file.">
-    <option value="preview" selected>preview</option>
-    <option value="delivery">delivery (4K)</option>
-  </select>
-  <button id="render" class="primary">Render</button>
-  <button type="button" id="keysBtn" title="the keys · ?">?</button>
-  <!-- Where the project is — Footage · Index · Brief · Pass · Cut · Polish · Render and
-       the one next thing — drawn by /flow.js, the same bar the other two screens carry;
-       it is also the way to them. -->
   <div id="flow"></div>
+  <div class="grow"></div>
+  <!-- "unsaved…" or "save failed" only; a good save says nothing -->
+  <span class="hint" id="saveState" data-state="saved">saved</span>
+  <button id="undo" title="Undo (⌘Z)" aria-label="undo">↶</button>
+  <button id="redo" title="Redo (⌘⇧Z)" aria-label="redo">↷</button>
+  <button type="button" id="keysBtn" title="the keys · ?">?</button>
+  <!-- Opens the film tool; once a film of this cut exists it is that film's Download.
+       The dot: the cut changed since its last film. -->
+  <button type="button" id="makeFilm">Make the film</button>
   <!-- Every long operation in the app draws itself here: label, bar, percentage,
        elapsed, ETA and the line saying what it is doing right now. Empty and hidden
        when nothing is running. -->
@@ -436,6 +426,9 @@
            queued behind the download. arm() puts the in-point in the URL as a media
            fragment, so the first request after the header lands on the shot. -->
       <div class="screen">
+        <!-- At rest the monitor shows the frame under the playhead (the poster endpoint),
+             never a black box, with a big ▶ — the screen is the button. -->
+        <img id="monPoster" alt="" draggable="false" hidden>
         <video id="pv0" preload="metadata" playsinline></video>
         <video id="pv1" preload="metadata" playsinline></video>
         <!-- The grade: /grade.js draws the live video through the shot's LUT here
@@ -446,18 +439,15 @@
              to draw; `.sketch` while the human draws a reference on the frame, when
              it takes the pointer. -->
         <canvas id="fxCanvas"></canvas>
+        <span id="bigPlay" aria-hidden="true">▶</span>
+        <!-- G's state, on the picture while the grade is off (/grade.js) -->
+        <span id="ungraded" hidden>ungraded</span>
         <div id="screenMsg" hidden></div>
       </div>
       <div class="transport">
-        <button id="playCut" class="primary">▶ Play cut</button>
-        <span class="pos"><span id="pos">0:00.0</span> / <span id="posTotal">0:00.0</span></span>
+        <button id="playCut">▶ Play</button>
+        <span class="pos"><span id="pos">0:00.0</span> / <span id="posTotal"><span id="total">0:00.0</span></span></span>
         <span class="hint" id="playingWhat"></span>
-        <div class="grow"></div>
-        <!-- One line at any width: a short window (the inspector on screen, the monitor
-             scrolled off) must still fit the whole monitor, so the keys line clips its
-             tail with an ellipsis rather than wrapping and pushing the timeline down. -->
-        <span class="hint keys">click a shot below to jump · the inspector under it holds its why and trims · <kbd>space</kbd> play / pause ·
-          <kbd>+</kbd><kbd>−</kbd> zoom · <kbd>\</kbd> fit · <kbd>⇧</kbd>wheel pan · <kbd>g</kbd> grade · <kbd>?</kbd> all the keys</span>
       </div>
       <!-- The timeline: a ruler, the V1 lane of shot blocks by film time, the playhead
            across the whole cut. The module is /timeline/timeline.js (window.tl); app.js
@@ -475,8 +465,9 @@
       <div id="proposalNotes" style="margin-bottom:10px"></div>
       <div id="proposalDiff" style="max-height:340px;overflow:auto"></div>
       <div style="display:flex;gap:8px;margin-top:10px">
-        <button id="acceptProposal" class="primary">Accept</button>
-        <button id="rejectProposal" class="ghost">Discard</button>
+        <button id="playProposal" data-next-for="cut" title="play the proposed cut in the monitor">▶ Play it</button>
+        <button id="acceptProposal">Accept</button>
+        <button id="rejectProposal">Discard</button>
       </div>
     </div>
     <!-- The inspector: the selected shot's still, header, lines, why, trims and scoped
@@ -495,7 +486,7 @@
       <button type="button" class="tool" data-tool="ask" title="ask for a change · the story"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="M15 8l.7 1.8 1.8.7-1.8.7L15 13l-.7-1.8-1.8-.7 1.8-.7z" fill="currentColor" stroke="none"/></svg><span>Ask</span></button>
       <button type="button" class="tool" data-tool="sound" title="the music bed"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10v4h4l5 4V6L8 10z"/><path d="M16 9a4 4 0 0 1 0 6"/><path d="M18.5 6.5a8 8 0 0 1 0 11"/></svg><span>Sound</span></button>
       <button type="button" class="tool" data-tool="fx" title="effects — markers, titles, tints, glows, sounds: designed by the model, checked by the machine, accepted by you"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2.5l1.9 4.9 4.9 1.9-4.9 1.9L12 16.1l-1.9-4.9-4.9-1.9 4.9-1.9z"/><path d="M5 15l.9 2.3 2.3.9-2.3.9L5 21.4l-.9-2.3-2.3-.9 2.3-.9z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg><span>FX</span><b class="badge"></b></button>
-      <button type="button" class="tool" data-tool="out" title="renders and versions"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/><path d="M12 3v12"/><path d="M7 8l5-5 5 5"/></svg><span>Out</span><b class="badge"></b></button>
+      <button type="button" class="tool" data-tool="out" title="make the film · download it"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/><path d="M12 3v12"/><path d="M7 8l5-5 5 5"/></svg><span>Film</span></button>
     </nav>
     <div id="tools">
       <!-- BIN — the pass's keeps as a labelled grid, with Find as its search box. -->
@@ -534,46 +525,41 @@
         <div class="lib" id="library"></div>
       </section>
 
-      <!-- ASK — the whole-cut ask, cut from the bin, and the story every ask reads. -->
+      <!-- ASK — the one sentence about the film (the EDL's story, the same field and
+           words as /open's), and a change asked of the whole cut, priced on its button. -->
       <section data-tool="ask" hidden>
-        <div class="panel" id="askPanel">
-          <h2>Ask for a change</h2>
+        <div class="panel flat">
+          <label class="ask-q" for="story">What is this film about?</label>
+          <textarea id="story" style="min-height:66px"
+            placeholder="optional — a sentence is enough"></textarea>
+        </div>
+        <div class="panel flat" id="askPanel">
           <textarea id="note" style="min-height:66px"
-            placeholder="tighten the intro · more skiing, less airport · build it around the milk joke · lose the plane bit"></textarea>
-          <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-            <button id="ask" class="primary" disabled data-await-price="1">Ask</button>
+            placeholder="tighten the intro · more of the rocks, less of the lift · end on the fall"></textarea>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+            <button id="ask" disabled data-await-price="1">Ask for a change</button>
+            <span class="hint" id="askAims"></span>
             <span class="hint" id="askState"></span>
           </div>
-          <!-- The same Ask with a fixed note: build the cut from what the pass kept —
-               heroes fixed, keeps as bounds, nothing else unless a keep needs it. -->
-          <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
-            <button id="cutFromBin"
-                    title="One Ask with a fixed note: every hero appears, the other keeps serve the story, nothing else unless a keep needs it — a proposal to accept or discard">Cut from the bin</button>
-            <span class="hint" id="cutFromBinHint"></span>
-          </div>
-        </div>
-        <div class="hint" id="askEmpty" hidden style="margin-bottom:12px">no cut yet — the board's empty state is where the first one is asked for</div>
-        <div class="panel">
-          <h2>Story</h2>
-          <textarea id="story" placeholder="What is this cut about? Who's in it, what's the running joke, what should it feel like? Saved into the EDL and read by the agent on the next pass."></textarea>
-          <p class="hint">The thing the agent is worst at. Typing "the milk is the running joke" here beats an hour of analysis.</p>
         </div>
       </section>
 
-      <!-- SOUND — the music bed. Per-shot levels and a beat grid land here later. -->
+      <!-- SOUND — the music bed, in one line: the track, what it does under the cut,
+           how far it dips under talk; the fades behind "more". -->
       <section data-tool="sound" hidden>
         <div class="panel flat" id="musicPanel">
-          <h2>Music</h2>
           <select id="musicTrack" style="width:100%"><option value="">no music</option></select>
+          <div class="hint" id="musicHint" style="margin-top:6px"></div>
           <div id="musicOpts" style="display:none">
-            <div class="kv" style="margin-top:8px"><span>duck under speech</span><b><span id="duckVal">12</span> dB</b></div>
-            <input type="range" id="duck" min="0" max="24" step="1" value="12" style="width:100%">
-            <div class="hint" style="display:flex;gap:12px;margin-top:6px">
-              <label>fade in <input type="number" id="fadeIn" min="0" max="20" step="0.5" value="1.5" style="width:58px"> s</label>
-              <label>fade out <input type="number" id="fadeOut" min="0" max="20" step="0.5" value="4" style="width:58px"> s</label>
-            </div>
+            <label class="hint" style="display:flex;gap:8px;align-items:center;margin-top:8px">dip under talk
+              <select id="duck"><option value="0">off</option><option value="6">a little</option><option value="12" selected>a lot</option></select></label>
+            <details style="margin-top:8px"><summary class="hint" style="cursor:pointer">more</summary>
+              <div class="hint" style="display:flex;gap:12px;margin-top:6px">
+                <label>fade in <input type="number" id="fadeIn" min="0" max="20" step="0.5" value="1.5" style="width:58px"> s</label>
+                <label>fade out <input type="number" id="fadeOut" min="0" max="20" step="0.5" value="4" style="width:58px"> s</label>
+              </div>
+            </details>
           </div>
-          <p class="hint" id="musicHint"></p>
         </div>
       </section>
 
@@ -583,51 +569,55 @@
         <div id="fx"><div class="hint">effects load with /fx.js</div></div>
       </section>
 
-      <!-- OUT — renders: the A/B review players and every version. -->
+      <!-- FILM (the tool key stays `out`: #tool=out and the flow keep working) — what
+           will be made, the two ways to make it, this cut's newest film and its
+           Download; every older film folded away, with Compare two inside. Progress is
+           the header's strip, the one progress surface. -->
       <section data-tool="out" hidden>
         <div class="panel flat" id="outPanel">
-          <h2>Renders</h2>
-          <div id="renderState" class="hint">idle</div>
-          <div class="bar" id="renderBar" style="display:none"><i></i></div>
-          <div class="ab">
-            <!-- These play the 720p review copy, never the master: a delivery render is
-                 4K at ~44 Mbps and no browser streams that off this box. What each player
-                 is doing when it shows nothing is said in the line under it. -->
-            <div>
-              <div class="hint"><b>A</b> <span id="labelA">—</span></div>
-              <video id="previewA" controls preload="metadata"></video>
-              <div class="hint" id="stateA"></div>
-            </div>
-            <div id="slotB" style="display:none">
-              <div class="hint"><b>B</b> <span id="labelB">—</span></div>
-              <video id="previewB" controls preload="metadata"></video>
-              <div class="hint" id="stateB"></div>
-            </div>
+          <div id="filmWhat"><b id="filmCut"></b><div class="hint" id="filmSince"></div></div>
+          <div class="filmGo">
+            <!-- #render is the free quick look Next may press; Final 4K is only ever
+                 Karl's own click (M14 decision 3). -->
+            <button id="render" data-profile="preview" data-next-for="render"
+                    title="1920x1080 at 24 fps — quick to make, to watch the cut through">Quick look · 1080p · ~1 min</button>
+            <button id="renderFinal" data-profile="delivery"
+                    title="the bin's own frame rate, up to 4K, never upscaled — slower, bigger, for the final file">Final 4K · ~17 min</button>
           </div>
-          <div id="versions" class="lib" style="margin-top:8px"></div>
+          <!-- These play the 720p review copy, never the master: a delivery render is
+               4K at ~44 Mbps and no browser streams that off this box. -->
+          <div id="filmNewest" hidden>
+            <video id="previewA" controls preload="metadata"></video>
+            <div class="hint" id="labelA"></div>
+            <div class="hint" id="stateA"></div>
+            <a class="dl" id="filmDownload">↓ Download</a>
+          </div>
+          <details id="olderFilms" hidden>
+            <summary></summary>
+            <div id="versions" class="lib"></div>
+            <details id="compare">
+              <summary>Compare two</summary>
+              <div class="ab">
+                <div><select id="cmpPickA"></select><video id="cmpA" controls preload="none"></video></div>
+                <div><select id="cmpPickB"></select><video id="cmpB" controls preload="none"></video></div>
+              </div>
+            </details>
+          </details>
         </div>
       </section>
     </div>
   </aside>
 </main>
 
-<!-- The keys, on ? — an overlay, the way the pass shows its map. The panel inside keeps
-     the `Keys` heading timeline-keys.js looks for to append its own section. -->
+<!-- The keys, on ? — an overlay, the way the pass shows its map: one table grouped by
+     task, drawn by /dock.js from the board's keys and the timeline's own table. The
+     `Keys` heading stays: timeline-keys.js finds the panel by it and mounts its own
+     section (#tlKeys), which the table replaces on screen. -->
 <div id="keysOverlay" hidden>
   <div class="panel" role="dialog" aria-label="keys">
     <h2>Keys</h2>
-    <!-- the first .hint is the board's own line: timeline-keys.js rewrites "j/k move"
-         in it and appends its Timeline section after -->
-    <div class="hint">
-      <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>space</kbd> play / pause the cut from here ·
-      <kbd>enter</kbd> play this shot only ·
-      <kbd>[</kbd><kbd>]</kbd> trim in · <kbd>{</kbd><kbd>}</kbd> trim out ·
-      <kbd>x</kbd> remove · hold <kbd>shift</kbd> for 1s steps ·
-      <kbd>⌘z</kbd> undo · <kbd>⌘⇧z</kbd> redo · <kbd>+</kbd><kbd>−</kbd> zoom · <kbd>\</kbd> fit ·
-      <kbd>g</kbd> grade on / off · <kbd>o</kbd> bins and cuts ·
-      in the bin: click selects a keep · <kbd>enter</kbd> adds it at the playhead · <kbd>space</kbd> plays it there · drag it onto V1 ·
-      <kbd>?</kbd> or <kbd>esc</kbd> closes this
-    </div>
+    <table id="keyTable"></table>
+    <div class="hint"><kbd>?</kbd> or <kbd>esc</kbd> closes this</div>
   </div>
 </div>
 <div id="toast"></div>
