@@ -519,7 +519,9 @@ def test_next_lands_on_the_waiting_effect_not_the_anchored_shot(page, live_serve
     and a proposal on shot 2, the board on shot 1. Next selects shot 2, parks the
     monitor at its start (paused), opens FX with the proposal's card in view — in
     place on the board, and from another screen through the hash."""
-    page.set_viewport_size({"width": 1280, "height": 640})
+    # (540, not 640: the board's header became one row, INTAKE M16 I16.1, and the dock
+    # grew by what it gave up — the card has to start below the fold all the same)
+    page.set_viewport_size({"width": 1280, "height": 540})
     sid2 = open_fx(page, 1)
     # two accepted effects ahead of the proposal: its card starts below the dock's fold,
     # as the slow motion's did on Killington, so the landing has to scroll to it

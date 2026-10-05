@@ -234,6 +234,11 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **The FX landing test starts its card below the fold again.** `test_fx_ui`'s
+  Next-landing test sized its window (1280×640) so the waiting effect's card began
+  below the dock's fold; with the board's header one row (INTAKE M16 I16.1) the dock grew
+  by 94 px and the card started in view, so the precondition failed. The window is
+  1280×540; the landing it tests is unchanged.
 - **`window.roughcutRefresh()` (INTAKE M16, the lanes' contract C5).** Re-reads
   /api/project and repaints the timeline, the inspector, the bin and the film tool in
   place, keeping the selection and the playhead; returns a Promise. For a change made on
