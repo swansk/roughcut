@@ -19,8 +19,11 @@
  * frames that bracket it, the events, the camera, and the frames it asked for.
  *
  *   deep.strip(host, clip, {mark, onSeek, compact})  → controller {head(t), mark(a, b)}
+ *   deep.line(host, clip, {range, onSeek, compact})  → {head(t), mark(a, b)}   ONE line
+ *       ("every word heard · a frame every 4 s · 3 close looks ▸"); a click opens the
+ *       strip under it, in host; every call renders closed (INTAKE M16 decision 9)
  *   deep.inspector(host, seg)        the board's inspector, for the selected shot
- *   deep.floor(host, clip, range, onSeek) / deep.head(host, t)   the pass, under its tape
+ *   deep.head(host, t)               the playhead, on a strip or an open line
  *   deep.minis(root)                 the open screen's cards, one request for the bin
  *   deep.rowButton(row, clip, start, end)   a priced button on a seen-tab row
  *
@@ -108,6 +111,8 @@
 .dv-mini i.w { top: 3px; height: 3px; background: #6ea8fe; }
 .dv-mini i.d { top: 6px; height: 3px; background: #f0c860; }
 .dv-mini i.m { top: 9px; height: 3px; min-width: 2px; }
+.dv-line { color: var(--dim, #9a9aa8); font-size: 11px; cursor: pointer; user-select: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dv-line:hover { color: var(--text, #e8e8ee); }
 `;
 
   function injectCss() {
@@ -436,7 +441,7 @@
           ${lane('heard', heard, 'no speech heard')}
           ${lane('coarse', coarse, 'not looked at')}
           ${lane('close', close, 'no close look')}
-          ${lane('deep', deep, 'none yet — drag to choose seconds')}
+          ${lane('deep', deep, opts.compact ? 'none yet' : 'none yet — drag to choose seconds')}
           ${lane('motion', motion, 'not measured')}
           ${lane('moments', marks, 'nothing claimed')}
           <div class="dv-markband" hidden></div>
@@ -487,10 +492,10 @@
     if (act.dataset.key === key) return;
     act.dataset.key = key;
     act.innerHTML = '';
-    // The pass is keys, not buttons: there the strip shows, and the look deeper is the
-    // board's (its inspector, its seen tab) — one line says where, nothing to click.
+    // The pass does not spend: there the strip shows, and Look deeper is the board's
+    // (a shot's priced button) — four words say where, nothing to click.
     if (ctl.opts.compact) {
-      act.innerHTML = '<span class="dv-info">look deeper at these seconds from the cut board — a shot’s inspector, or the bin’s seen tab · click a deep span to read it</span>';
+      act.innerHTML = '<span class="dv-info">Look deeper: on the board</span>';
       return;
     }
     if (!range || range[1] - range[0] < 0.2) {
@@ -635,13 +640,71 @@
     strip(host, seg.clip, { mark: [seg.in, seg.out], markLabel: 'this shot' });
   }
 
-  /* The pass: the pick's clip under the tape, the band marked, the playhead live. */
+  /* How the machine saw a clip, as one line, in words honest to the sidecars: what was
+   * heard, how often a frame was read, how many closer and deeper looks there are. */
+  function lineWords(cov) {
+    const L = cov.layers;
+    const n = (k, one) => `${k} ${one}${k === 1 ? '' : 's'}`;
+    const out = [];
+    out.push(!L.heard.read ? 'not listened to yet'
+      : L.heard.utterances.length ? 'every word heard' : 'no speech heard');
+    out.push(L.coarse.read && L.coarse.interval_s ? `a frame every ${L.coarse.interval_s} s`
+      : 'not looked at yet');
+    if (L.close.read && L.close.windows.length) out.push(n(L.close.windows.length, 'close look'));
+    if (L.deep.spans.length) out.push(n(L.deep.spans.length, 'deep look'));
+    return out.join(' · ');
+  }
+
+  /* INTAKE M16 decision 9: "how the machine saw" is one line that opens per item and
+   * closes on the next. The line goes into `host`; a click opens the whole strip under
+   * it, in `host` (the range marked, the playhead live); a second click closes it. Every
+   * call renders closed — a new item never inherits the last one's open strip. */
+  function line(host, clip, opts = {}) {
+    if (!host || !clip) return null;
+    injectCss();
+    const tok = {};
+    host._line = tok;
+    host._deep = null;
+    host.dataset.clip = clip;
+    host.innerHTML = '<div class="dv-line" role="button" tabindex="-1" title="how the machine saw this clip — click to open">…</div><div class="dv-more" hidden></div>';
+    const ln = host.querySelector('.dv-line');
+    const more = host.querySelector('.dv-more');
+    tok.range = opts.range || null;
+    let words = '';
+    const say = () => { ln.textContent = `${words} ${more.hidden ? '▸' : '▾'}`; };
+    coverage(clip).then((cov) => {
+      if (host._line !== tok) return;
+      words = cov ? lineWords(cov) : 'how the machine saw it: not known';
+      say();
+    });
+    ln.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (more.hidden) {
+        more.hidden = false;
+        strip(more, clip, { mark: tok.range, markLabel: opts.markLabel || 'this range',
+          onSeek: opts.onSeek, compact: !!opts.compact });
+        if (tok.t != null) more._deep.head(tok.t);
+      } else {
+        more.hidden = true;
+      }
+      if (words) say();
+    });
+    tok.more = more;
+    tok.head = (t) => { tok.t = t; if (!more.hidden && more._deep) more._deep.head(t); };
+    tok.mark = (a, b) => { tok.range = [a, b]; if (!more.hidden && more._deep) more._deep.mark(a, b); };
+    return tok;
+  }
+
+  /* The pass's old hook: the strip under its tape. */
   function floor(host, clip, range, onSeek) {
     if (!host || !clip) return;
     strip(host, clip, { mark: range, markLabel: 'the band', onSeek, compact: true });
   }
+
   function head(host, t) {
-    if (host && host._deep) host._deep.head(t);
+    if (!host) return;
+    if (host._deep) host._deep.head(t);
+    else if (host._line) host._line.head(t);
   }
 
   /* The open screen: a mini strip per card, from one request for the whole bin. */
@@ -708,5 +771,5 @@
     if (openRows.has(key)) setTimeout(() => show(...openRows.get(key)), 0);
   }
 
-  window.deep = { strip, inspector, floor, head, minis, rowButton, invalidate, modelName };
+  window.deep = { strip, line, inspector, floor, head, minis, rowButton, invalidate, modelName };
 })();

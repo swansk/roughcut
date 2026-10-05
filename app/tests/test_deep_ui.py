@@ -237,13 +237,49 @@ def test_the_pass_carries_the_strip_under_its_tape(bin_state, browser):
     assert pg.is_visible("#deepFloor .dv-markband")
     # the pass is keys, not buttons: the strip shows, the spending is the board's
     assert pg.locator("#deepFloor button").count() == 0
-    assert "from the cut board" in pg.inner_text("#deepFloor .dv-act")
+    assert "Look deeper: on the board" == pg.inner_text("#deepFloor .dv-act")
     if clip == "CLIP_A.MP4":
         pg.click("#deepFloor .dv-lane[data-lane=deep] i.w")
         pg.wait_for_selector("#deepFloor .dv-res .dv-beats li.inferred")
         assert pg.locator("#deepFloor button").count() == 0
         pg.click("#deepFloor .dv-lane[data-lane=deep] i.w")         # again: closed
         pg.wait_for_function("!document.querySelector('#deepFloor .dv-res').innerHTML")
+
+
+def test_the_machine_line_is_one_line_that_opens_the_strip_and_closes_on_the_next_call(
+        bin_state, browser):
+    """INTAKE M16 decision 9 / C4: `deep.line` says how the machine saw a clip in one
+    line, in words from the sidecars; a click opens the whole strip under it (the range
+    marked, the playhead carried), a second click closes it, and every call renders
+    closed — the next item never inherits an open strip."""
+    pg = _board(browser, bin_state)
+    pg.evaluate("""() => {
+        const host = document.createElement('div');
+        host.id = 'lineHost';
+        document.body.prepend(host);
+        window.__ln = deep.line(host, 'CLIP_A.MP4', { range: [1, 3], compact: true });
+    }""")
+    pg.wait_for_function("document.querySelector('#lineHost .dv-line').textContent.includes('every')")
+    assert pg.inner_text("#lineHost .dv-line") == \
+        "every word heard · a frame every 2 s · 1 close look · 1 deep look ▸"
+    assert pg.locator("#lineHost .dv-bar").count() == 0, "closed: one line, no strip"
+    pg.click("#lineHost .dv-line")
+    pg.wait_for_selector("#lineHost .dv-more .dv-bar")
+    assert pg.inner_text("#lineHost .dv-line").endswith("▾")
+    assert pg.is_visible("#lineHost .dv-markband")
+    assert pg.locator("#lineHost button").count() == 0, "compact: nothing spends here"
+    pg.evaluate("__ln.head(2.5); deep.head(document.querySelector('#lineHost'), 2.5)")
+    pg.wait_for_function("!document.querySelector('#lineHost .dv-headline').hidden")
+    pg.click("#lineHost .dv-line")
+    assert pg.locator("#lineHost .dv-more").is_hidden()
+    # opened again, then a new call for the next item: closed, and its own words
+    pg.click("#lineHost .dv-line")
+    pg.wait_for_selector("#lineHost .dv-more .dv-bar")
+    pg.evaluate("deep.line(document.querySelector('#lineHost'), 'CLIP_B.MP4', {})")
+    pg.wait_for_function("document.querySelector('#lineHost .dv-line').textContent.includes('▸')")
+    assert pg.locator("#lineHost .dv-more").is_hidden()
+    assert pg.locator("#lineHost .dv-bar").count() == 0
+    assert pg.inner_text("#lineHost .dv-line") == "every word heard · not looked at yet ▸"
 
 
 def test_the_open_screen_cards_carry_a_mini_strip(bin_state, browser):

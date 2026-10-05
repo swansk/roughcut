@@ -234,6 +234,15 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **How the machine saw a clip is one line (INTAKE M16 I16.3, decision 9).** `deep.line(host,
+  clip, {range, onSeek, compact})` writes one line from the clip's sidecars — *every word
+  heard · a frame every 4 s · 3 close looks ▸* — and a click opens the whole coverage
+  strip under it, in the same host (the range marked, the playhead carried); a second
+  click closes it, and every call renders closed, so the next item never inherits an
+  open strip. The pass and the board's shot strip call it; `deep.strip`, `inspector`
+  and `rowButton` are unchanged. In the compact strip the deep lane's empty text no
+  longer says "drag to choose seconds" (a drag there does nothing) and the pointer to
+  the board is four words, *Look deeper: on the board*.
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
   buttons called the model with no price: the empty board's *Ask for a first cut* and
   *Cut from the bin*, the Ask panel's *Ask* and *Cut from the bin*, a shot's *Ask*, and
