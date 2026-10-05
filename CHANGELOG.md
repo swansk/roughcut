@@ -234,6 +234,8 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **Board tests choose a shot before acting on one (INTAKE M16 I16.4).** With nothing
+  selected at start, the proposal-accept and save-a-copy tests select shot 1 first.
 - **The Bin: one find box, "not in the cut" first, cards named in plain words (INTAKE M16
   I16.4).** The Find button is gone — Enter in the box finds a moment anywhere, and typing
   still filters the keeps. Under any find result sits a plain `Not it? Ask the model ·

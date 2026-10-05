@@ -349,6 +349,8 @@ def test_ask_shows_a_proposal_that_can_be_accepted_or_discarded(page):
         page.wait_for_selector("#proposal:visible", timeout=30000)
         page.locator("#acceptProposal").click()
         assert page.locator("#tl .blk").count() == 1
+        # nothing chosen after an accept (INTAKE M16): the strip is the film until a shot is
+        select_shot(page, 0)
         assert page.locator("#inspector .clip").inner_text() == "CLIP_C"
 
         page.locator("#undo").click()          # and it stays undoable
@@ -1823,6 +1825,7 @@ def test_saving_a_copy_flushes_the_autosave_first_and_the_board_moves_to_it(page
     (a reload, the word carried across), and can come back."""
     import server
     original = server.STATE["edl"]
+    select_shot(page, 0)                     # nothing is selected at start (M16)
     page.keyboard.press("x")                 # remove the selected shot: 2 → 1, save pending
     assert page.locator("#tl .blk").count() == 1
     # hold the timer open so the flush is the only way the edit reaches the file
