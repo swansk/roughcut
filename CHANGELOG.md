@@ -27,6 +27,12 @@ same commit. Releases move entries into a dated version section.
   The FX rail badge counts the proposals waiting across the cut — the Polish stage's
   number — instead of the selected shot's effects, which changed with every click. A
   proposal still outranks a stale render (M14 decision 2).
+- **Proposed themes stop counting as "needs you" (INTAKE M16 I16.0b).** Killington's
+  themes proposal from Sep 8 kept the flow's Brief stage amber and could take Next,
+  though M14 decision 1 says the brief never blocks anything. A waiting themes proposal
+  now leaves Brief *optional* ("Proposed themes wait — keep or discard them whenever you
+  like", `counts.proposal`), with no `needs`, and Next never routes to it: a waiting cut
+  or effect, the index, the first cut, a stale render come first as before.
 
 ### Changed
 - **The board listens on this machine only (Karl, 2026-10-04, ahead of an open-source

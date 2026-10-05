@@ -247,11 +247,12 @@ def brief_stage(f: dict) -> dict:
         return _stage("brief", "running", "Proposing themes from the transcripts",
                       counts=counts)
     if b.get("proposal"):
-        return _stage("brief", "needs-you", "Proposed themes wait for Keep or Discard",
-                      counts=counts, needs={
-                          "reason": "Proposed themes wait for Keep or Discard.",
-                          "action": action("brief", "Keep or discard the proposed themes",
-                                           "Answer")})
+        # The brief never blocks anything (M14 decision 1), so proposed themes are not
+        # waiting on you: no amber, and Next never routes to them (INTAKE M16 I16.0b —
+        # the Sep 8 proposal held "! Brief" and Next on every screen).
+        return _stage("brief", "optional",
+                      "Proposed themes wait — keep or discard them whenever you like",
+                      counts={**counts, "proposal": True})
     if themes or story:
         bits = (["story set"] if story else []) + ([_plural(themes, "theme")] if themes else [])
         return _stage("brief", "done", " · ".join(bits), counts=counts)
@@ -420,7 +421,8 @@ def _next(stages: dict[str, dict], f: dict, blocked: list[dict]) -> dict:
     """The one recommended action, in a fixed order of precedence:
 
     1. footage missing — nothing else means anything;
-    2. a proposal waiting (already paid for: answering it costs nothing);
+    2. a proposal waiting (already paid for: answering it costs nothing) — a cut or
+       an effect; proposed themes are the brief's, which never blocks (M16 I16.0b);
     3. the index, until every clip has at least been heard (the free part) — or the
        open screen's first *Index the footage* when nothing has been indexed;
     4. no cut yet → make the first cut (from the keeps when there are any);
@@ -444,7 +446,7 @@ def _next(stages: dict[str, dict], f: dict, blocked: list[dict]) -> dict:
 
     if stages["footage"]["state"] == "needs-you":
         return stages["footage"]["needs"]["action"]
-    for key in ("cut", "polish", "brief"):
+    for key in ("cut", "polish"):
         if stages[key]["state"] == "needs-you":
             return stages[key]["needs"]["action"]
     ix = stages["index"]

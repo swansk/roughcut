@@ -170,6 +170,30 @@ def test_next_carries_the_waiting_effect_as_its_target():
     assert "target" not in nxt and nxt["href"] == "/#tool=fx"
 
 
+def test_proposed_themes_never_need_you_or_take_next():
+    """INTAKE M16 I16.0b: the Sep 8 themes proposal held an amber "! Brief" and Next
+    on every screen, though M14 decision 1 says the brief never blocks anything."""
+    f = with_cut(indexed())
+    f["brief"] = {"story": True, "themes": 0, "proposal": True}
+    out = flow.compute(f)
+    br = by_key(out)["brief"]
+    assert br["state"] == "optional" and "needs" not in br
+    assert br["counts"]["proposal"] is True
+    assert out["next"]["stage"] != "brief"
+    assert out["next"]["stage"] == "cut" and out["next"]["verb"] == "Refine"
+    # a stale render is what Next says, not the themes
+    f["render"] = {"count": 1, "latest_matches": False, "matches": False}
+    assert flow.compute(f)["next"]["stage"] == "render"
+    # and a signed-out CLI does not mark them blocked: nothing waits on the brief
+    f["fix"] = FIX
+    assert "blocked" not in by_key(flow.compute(f))["brief"]
+    # on a fresh bin the index stays the next thing
+    g = fresh()
+    g["brief"] = {"proposal": True}
+    out = flow.compute(g)
+    assert by_key(out)["brief"]["state"] == "optional" and out["next"]["stage"] == "index"
+
+
 def test_a_render_goes_stale_after_an_edit():
     f = with_cut(indexed())
     st = by_key(flow.compute(f))
