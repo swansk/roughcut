@@ -1981,14 +1981,25 @@ async function closingCard() {
       <button id="cardOrder">${F.order === 'rank' ? 'By clip' : 'By rank'} <span class="key" style="margin-left:6px">C</span></button>
       <button id="cardLater" ${laters ? '' : 'disabled'}>Revisit ${laters} later <span class="key" style="margin-left:6px">L</span></button>
       <span class="grow"></span>
-      <button id="cardAssemble" class="priced">Assemble · $0.60 <span class="key" style="margin-left:6px">A</span></button>
+      <button id="cardAssemble">${hasCut() ? 'Back to the cut →' : 'Make the first cut →'} <span class="key" style="margin-left:6px">A</span></button>
     </div>
     <div class="hint small" style="margin-top:10px"><span class="key">Esc</span> back to the last pick</div>`);
   $('#cardPlay').onclick = playBin;
   $('#cardNext').onclick = () => nextRound();
   $('#cardOrder').onclick = switchOrder;
   $('#cardLater').onclick = () => nextRound({ laters: true });
-  $('#cardAssemble').onclick = () => { location.href = '/'; };
+  $('#cardAssemble').onclick = leaveForTheCut;
+}
+
+/* The card's way out (I16.0e): back to the cut on the board, or — with no cut yet — the
+ * board with the Ask open, where the first cut is made and priced. It spends nothing,
+ * so it shows no price. */
+function hasCut() {
+  return ((F.P || {}).segments || []).length > 0;
+}
+
+function leaveForTheCut() {
+  location.href = hasCut() ? '/' : '/#tool=ask';
 }
 
 function leaveCard() {
@@ -2095,7 +2106,7 @@ document.addEventListener('keydown', (e) => {
     if (k === 'r') return nextRound();
     if (k === 'c') return switchOrder();
     if (k === 'l') return nextRound({ laters: true });
-    if (k === 'a') { location.href = '/'; return; }
+    if (k === 'a') return leaveForTheCut();
     if (k === 'Escape' && F.queue.length) { leaveCard(); return show(F.i, { autoplay: false }); }
     return;
   }

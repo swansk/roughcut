@@ -24,6 +24,7 @@ Pure: reads dicts, returns dicts. The server adds URLs; the floor renders.
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Iterable
 
 from .find import _matched, _tokens
@@ -37,6 +38,13 @@ PAD_HEAD_S = 0.5
 PAD_TAIL_S = 0.5
 # Windows on one clip closer than this are one moment.
 MERGE_GAP_S = 3.0
+# A moment that rests on one sampled frame has no length of its own (start == end), and
+# a zero range can take no verdict: the server refuses it and nothing re-attaches to it,
+# so the pass never finished (I16.0c). A pick shorter than MIN_PICK_S stands for the
+# seconds its frame was sampled from — the look interval around it (visual_pass.py's
+# default, one frame every 4 s), clamped to the clip.
+MIN_PICK_S = 1.0
+LOOK_INTERVAL_S = 4.0
 # A stored verdict re-attaches to a pick when they share at least this fraction of the
 # shorter of the two ranges.
 REATTACH_MIN_OVERLAP = 0.5
@@ -79,7 +87,12 @@ def _overlap(a: tuple[float, float], b: tuple[float, float]) -> float:
 
 
 def _overlap_ratio(a: tuple[float, float], b: tuple[float, float]) -> float:
-    shorter = max(1e-6, min(a[1] - a[0], b[1] - b[0]))
+    # A zero-length range is a point: it is covered when it falls inside the other
+    # (a safety net — `_pick_from` pads such picks, but a stored verdict may be one).
+    if min(a[1] - a[0], b[1] - b[0]) <= 1e-6:
+        point, other = (a, b) if a[1] - a[0] <= b[1] - b[0] else (b, a)
+        return 1.0 if other[0] - 1e-6 <= point[0] <= other[1] + 1e-6 else 0.0
+    shorter = min(a[1] - a[0], b[1] - b[0])
     return _overlap(a, b) / shorter
 
 
@@ -112,6 +125,35 @@ def heard_witnesses(clip: str, c: dict) -> list[dict]:
     return out
 
 
+MAYBE_HEAD, MAYBE_TAIL = "maybe: ", " · not checked"
+SHORT_CLAIM = 80
+
+
+def _maybe(claim: str) -> str:
+    return f"{MAYBE_HEAD}{claim}{MAYBE_TAIL}"
+
+
+def _claim(w: dict) -> str:
+    """A seen witness's claim as the sheet wrote it, without the maybe wording."""
+    t = str(w.get("text", ""))
+    if w.get("demoted") and t.startswith(MAYBE_HEAD) and t.endswith(MAYBE_TAIL):
+        return t[len(MAYBE_HEAD):len(t) - len(MAYBE_TAIL)]
+    return t
+
+
+def _short(claim: str, limit: int = SHORT_CLAIM) -> str:
+    """A claim's first sentence, at most `limit` characters: cut at a comma when one
+    falls in the second half, else at a word with an ellipsis."""
+    head = re.split(r"(?<=[.;!?])\s+|\s+—\s+", claim.strip(), maxsplit=1)[0]
+    head = head.rstrip(" .;!?")
+    if len(head) > limit:
+        cut = head[:limit]
+        comma = cut.rfind(", ")
+        head = (cut[:comma] if comma >= limit // 2
+                else cut.rsplit(" ", 1)[0].rstrip(" ,;:") + "…")
+    return head
+
+
 def stamp(t: float) -> str:
     """`m:ss.s` — the form the floor turns into a link."""
     t = max(0.0, float(t))
@@ -131,10 +173,11 @@ def seen_witnesses(clip: str, events: Iterable[dict]) -> list[dict]:
         demoted = str(e.get("demoted") or "")
         text = str(e.get("what", "")).strip()
         # A claim the sheet's own rules demoted (hedged, no frame, too long for a jump)
-        # is shown, but it is not an event: no kind to lift a pick by, and the reason
-        # on the line so the pass can say why it does not count.
+        # is shown, but it is not an event: no kind to lift a pick by. It is worded as
+        # what it is — a maybe nobody checked (I16.0d) — and the rule's reason stays on
+        # `demoted`, out of the words the pass reads.
         if demoted:
-            text = f"{text} — not a claim: {demoted}"
+            text = _maybe(text)
         out.append({"kind": "seen", "clip": clip, "start": float(e["start"]),
                     "end": float(e["end"]), "at": round(float(at), 2),
                     "text": text, "state": state,
@@ -203,6 +246,12 @@ def _pick_from(clip: str, group: list[dict], duration: float,
     end = max(w["end"] for w in group)
     if duration:
         end = min(end, duration)
+    if end - start < MIN_PICK_S:
+        mid = (start + end) / 2
+        start = max(0.0, mid - LOOK_INTERVAL_S / 2)
+        end = mid + LOOK_INTERVAL_S / 2
+        if duration:
+            end = min(end, duration)
     seen = [w for w in group if w["kind"] == "seen"]
     heard = [w for w in group if w["kind"] == "heard"]
     felt = [w for w in group if w["kind"] == "felt"]
@@ -228,13 +277,17 @@ def _pick_from(clip: str, group: list[dict], duration: float,
     if hits:
         score += THEME_BONUS
 
-    # The reason: built from what agrees; the conflict stated, never resolved.
+    # The reason: built from what agrees; the conflict stated, never resolved. A demoted
+    # claim speaks only when nothing seen stands, and then as a short maybe (I16.0d).
     parts = []
-    if agreeing_seen:
-        best = max(agreeing_seen, key=lambda w: w["score"])
+    trusted = [w for w in agreeing_seen if not w.get("demoted")]
+    if trusted:
+        best = max(trusted, key=lambda w: w["score"])
         cited = best.get("frames") or []
         parts.append(best["text"] + (f" (frames {' · '.join(stamp(f) for f in cited)})"
                                      if cited else ""))
+    elif agreeing_seen:
+        parts.append(_maybe(_short(_claim(max(agreeing_seen, key=lambda w: w["score"])))))
     if heard:
         parts.append(f"\"{heard[0]['text']}\"")
     if felt:
@@ -243,7 +296,7 @@ def _pick_from(clip: str, group: list[dict], duration: float,
     conflict = ""
     if contradicted:
         claim = max(contradicted, key=lambda w: w["score"])
-        conflict = (f"the sheet claimed \"{claim['text']}\" ({claim.get('event_kind', '')}) "
+        conflict = (f"the sheet claimed \"{_claim(claim)}\" ({claim.get('event_kind', '')}) "
                     f"— a closer look did not support it")
 
     # The anchor is the strongest witness's moment; the preview is what plays by default.

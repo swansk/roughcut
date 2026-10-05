@@ -249,6 +249,83 @@ def test_a_hand_added_shot_on_rejected_seconds_is_the_human_changing_their_mind(
     assert selects.summary(edl)["used"] == 1
 
 
+GEN_BLACK = "gen_black_3fb88607.mp4"
+
+
+def test_a_generated_slide_in_the_cut_is_never_adopted_as_a_keep():
+    """I16.0i: sync_timeline adopted the black title slide as a keep (live: k_ca3d7755
+    gen_black_3fb88607, source hand) — Bin 43 against the pass's 44, and a 'footage
+    missing' card. A generated slide is not footage."""
+    edl = {"segments": [{"id": "s0", "clip": GEN_BLACK, "in": 0.0, "out": 3.0, "why": "title"},
+                        {"id": "s1", "clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0}]}
+    selects.sync_timeline(edl)
+    assert [s["clip"] for s in edl["selects"]] == ["CLIP_B.MP4"]
+    selects.sync_timeline(edl)
+    assert len(edl["selects"]) == 1, "and not on the next save either"
+    with pytest.raises(ValueError, match="generated"):
+        selects.apply_verdict(edl, GEN_BLACK, 0.0, 3.0, "pick")
+
+
+def test_a_generated_keep_already_in_the_edl_leaves_the_bin_and_the_counts(client, project):
+    """One adopted before the fix is left out of the Bin, its counts, the pass's and the
+    flow's — on read, without rewriting the EDL."""
+    import server
+
+    d = json.loads(project["edl"].read_text(encoding="utf-8"))
+    d["selects"] = [
+        {"id": "k_ca3d7755", "clip": GEN_BLACK, "start": 0.0, "end": 3.0, "why": "title",
+         "note": "", "hero": False, "witnesses": [], "tags": [], "source": "hand",
+         "created": 1.0, "used_in": ["s0"], "missing": True},
+        {"id": "k_real", "clip": "CLIP_C.MP4", "start": 0.5, "end": 4.0, "why": "",
+         "note": "", "hero": False, "witnesses": [], "tags": [], "source": "floor",
+         "created": 2.0, "used_in": [], "clip_duration": 6.0}]
+    d["floor"] = {"verdicts": [], "position": {"round": 1, "index": 0, "order": "rank"}}
+    project["edl"].write_text(json.dumps(d, indent=1), encoding="utf-8")
+    before = project["edl"].read_bytes()
+    bin_ = client.get("/api/selects").json()
+    assert [s["id"] for s in bin_["selects"]] == ["k_real"]
+    assert bin_["summary"]["moments"] == 1
+    assert not any(s.get("missing") for s in bin_["selects"]), "no 'footage missing' card"
+    assert client.get("/api/picks").json()["summary"]["moments"] == 1
+    assert server.flow_facts()["pass"]["keeps"] == 1, "the pass agrees with the Bin"
+    assert project["edl"].read_bytes() == before, "a read never rewrites the EDL"
+
+
+def test_x_on_a_formerly_zero_length_pick_lands_and_the_pass_can_finish(client, monkeypatch):
+    """I16.0c: a pick resting on one frame used to be start == end; X posted
+    [p.start, p.end], the server answered 400 'is not a range', and the pick stayed
+    undecided for ever. Built padded, the verdict lands and every pick is decided."""
+    import server
+
+    real = server.project_payload
+
+    def one_frame_on_c():
+        payload = real()
+        clips = dict(payload["clips"])
+        clips["CLIP_C.MP4"] = {**clips["CLIP_C.MP4"], "candidates": []}
+        return {**payload, "clips": clips, "events": [
+            {"clip": "CLIP_C.MP4", "start": 3.0, "end": 3.0, "kind": "jump",
+             "what": "in the air", "notable": True, "score": 0.7, "rank": 1,
+             "frames": [3.0], "why_ranked": {"confirmation": "unseen"}}]}
+
+    monkeypatch.setattr(server, "project_payload", one_frame_on_c)
+    rows = client.get("/api/picks").json()["picks"]
+    lone = next(p for p in rows if p["clip"] == "CLIP_C.MP4")
+    assert lone["start"] < lone["end"], "a pick is always a range"
+    r = client.post("/api/floor/verdict", json={
+        "clip": lone["clip"], "start": lone["start"], "end": lone["end"],
+        "verdict": "reject"})
+    assert r.status_code == 200, r.text
+    for p in rows:
+        if p["id"] != lone["id"]:
+            assert client.post("/api/floor/verdict", json={
+                "clip": p["clip"], "start": p["start"], "end": p["end"],
+                "verdict": "pick"}).status_code == 200
+    after = client.get("/api/picks").json()["picks"]
+    assert next(p for p in after if p["id"] == lone["id"])["verdict"] == "reject"
+    assert [p["id"] for p in after if not p["verdict"]] == [], "the pass is finished"
+
+
 def test_a_saved_timeline_grows_the_bin_by_its_hand_added_shots(client, project):
     """The API path: once the bin exists, every save teaches it which shots were
     placed by hand — a keep with `source: "hand"` and its `used_in`."""
