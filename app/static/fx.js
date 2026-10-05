@@ -530,7 +530,7 @@
       : '';
     return `<div class="fxcard ${esc(e.status)}" data-id="${esc(e.id)}">`
       + `<div class="fxhead"><b class="fxname">${esc(e.name || 'effect')}</b>${chip(e)}</div>`
-      + (says ? `<div class="fxsays">${esc(says)}</div>` : '')
+      + (says ? `<div class="fxsays"${proposed ? '' : ` title="${esc(says)}"`}>${esc(says)}</div>` : '')
       + checkLine(e)
       + (moments ? momentsHtml(e) : '')
       + btns + iter

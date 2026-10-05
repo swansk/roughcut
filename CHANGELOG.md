@@ -248,6 +248,10 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **An accepted effect's sentence folds to two lines (INTAKE M16 I16.5).** The fold kept
+  the model's whole why — 26 words on Killington's rock hit markers, five lines in the
+  dock. An accepted (or removed) card now shows two lines at most, the rest on hover; the
+  waiting proposal's sentence is never cut.
 - **Accepting an edit updates the cut in place (INTAKE M16 I16.5).** Accept on a proposal
   that changes the cut (the slow motion) toasted "the cut changed — reloading" and
   reloaded the whole page. It now awaits `window.roughcutRefresh()` — the board's own

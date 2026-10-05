@@ -605,10 +605,15 @@ def test_the_waiting_proposal_is_first_in_film_time_and_its_preview_is_nexts(pag
     why = first.locator(".fxwhybox").inner_text()
     assert "slow motion at 0.4x over the biggest hit" in why and "the hit at 1.10 s" in why
     assert "the onset at 0.20 s is a voice" in why
-    # the accepted one folds below it: its sentence, Remove and Change, no moments
+    # the accepted one folds below it: its sentence in two lines at most (the rest on
+    # hover), Remove and Change, no moments
     second = page.locator("#fx .fxcard").nth(1)
     assert second.locator(".fxchip").text_content() == "accepted"
     assert second.locator(".fxev").count() == 0 and second.locator("button[data-act=moments]").count() == 1
+    says = second.locator(".fxsays")
+    assert says.evaluate("el => getComputedStyle(el).webkitLineClamp") == "2"
+    assert says.get_attribute("title") == says.inner_text()
+    assert first.locator(".fxsays").evaluate("el => getComputedStyle(el).webkitLineClamp") == "none"
 
 
 def test_accepting_an_edit_changes_the_cut_in_place(page):
