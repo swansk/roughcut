@@ -4,7 +4,8 @@ Karl, 2026-10-03 (#3): "make the flow through various stages make more sense in 
 UI." M14 gave every screen one bar of seven stages and a Next chip, drawn by /flow.js
 from GET /api/flow. M16 (Karl, 2026-10-04, "take things away") took the bar off every
 screen (decision 2) and kept Next as the one "what now": the chip is the only thing in
-`#flow`. These tests drive each screen and check exactly that.
+`#flow`, and the screen's one blue button is Next's target or the chip (decision 3).
+These tests drive each screen and check exactly that.
 """
 
 from __future__ import annotations
@@ -86,6 +87,11 @@ def open_screen(browser, url: str):
     return pg
 
 
+def blue(page) -> list[str]:
+    return page.eval_on_selector_all(
+        ".is-next", "els => els.map(e => e.id || e.dataset.mark || e.tagName)")
+
+
 def test_no_step_bar_only_the_next_chip_on_all_three_screens(browser, live):
     """M16 decision 2: the seven-step bar comes off every screen; Next stays. `#flow`
     holds the chip and nothing else, on one line, and it says the same thing on the
@@ -122,9 +128,20 @@ def test_next_from_another_screen_lands_on_the_board_with_its_tool_open(browser,
     pg.close()
 
 
-def test_next_on_the_board_presses_render_because_render_is_free(browser, live):
-    """No render of this cut exists, so Next is *Render the cut* — free, on this
-    screen, so the chip presses the board's own Render button rather than navigating."""
+MARKED_JS = """([stage, fx, id]) => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.id = id; b.dataset.mark = id; b.dataset.nextFor = stage;
+  if (fx) b.dataset.fx = fx;
+  b.textContent = id;
+  b.addEventListener('click', (e) => { window.__pressed = (window.__pressed || []).concat(id); });
+  document.body.prepend(b);
+}"""
+
+
+def test_next_on_the_board_presses_the_quick_look_because_it_is_free(browser, live):
+    """Free, on this screen: the chip opens the film tool and presses the button the
+    board marks for the render stage (`data-next-for="render"`, the quick look) — never
+    one it did not mark, and nothing is rendered by this test."""
     import server
 
     pg = open_screen(browser, live + "/")
@@ -133,10 +150,70 @@ def test_next_on_the_board_presses_render_because_render_is_free(browser, live):
     nxt = pg.evaluate("flowBar.state().next")
     if nxt["stage"] != "render":
         pytest.skip(f"another test left this bin's next at {nxt['stage']}")
-    assert nxt["click"] == "#render"
-    pg.evaluate("window.__clicked = 0; document.querySelector('#render')"
-                ".addEventListener('click', (e) => { window.__clicked++; e.stopImmediatePropagation(); }, true)")
+    assert nxt["click"] == '[data-next-for~="render"]' and nxt["tool"] == "out"
+    # Every marked button stops here; the board's own (once the film tool carries one)
+    # counts as pressed like the test's.
+    pg.evaluate("""() => document.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-next-for~="render"]');
+        if (!b) return;
+        window.__pressed = (window.__pressed || []).concat(b.id || 'board');
+        e.stopImmediatePropagation(); e.preventDefault(); }, true)""")
+    if not pg.evaluate("!!document.querySelector('[data-next-for~=render]')"):
+        pg.evaluate(MARKED_JS, ["render", None, "quickLook"])
     pg.locator("#flowNext").click()
-    assert pg.evaluate("window.__clicked") == 1
+    pg.wait_for_function("(window.__pressed || []).length === 1", timeout=5000)
+    pg.wait_for_function("dock.current() === 'out'", timeout=5000)
     assert not [r for r in server.RENDERS.values() if r["state"] == "running"]
+    pg.close()
+
+
+def test_one_blue_button_on_nexts_target_else_on_the_chip(browser, live):
+    """M16 decision 3. `.is-next` is the only primary style, and /flow.js puts it on
+    exactly one element: the first visible one a screen marked for Next's stage, else
+    the chip — and a button that was blue before loses it."""
+    pg = open_screen(browser, live + "/")
+    pg.wait_for_selector("#tl .blk", timeout=15000)
+    chip(pg)
+    stage = pg.evaluate("flowBar.state().next.stage")
+    pg.wait_for_function("document.querySelectorAll('.is-next').length === 1", timeout=5000)
+    assert blue(pg) == ["flowNext"] or len(blue(pg)) == 1
+    # a stale blue left by anyone is taken off
+    pg.evaluate("document.querySelector('#hdBin').classList.add('is-next')")
+    # a marked button for another stage stays plain; Next's own takes the blue
+    pg.evaluate(MARKED_JS, ["index" if stage != "index" else "pass", None, "other"])
+    pg.evaluate(MARKED_JS, [stage, None, "mine"])
+    pg.evaluate("flowBar.mark()")
+    assert blue(pg) == ["mine"]
+    assert pg.evaluate("getComputedStyle(document.querySelector('#mine')).backgroundColor") \
+        == "rgb(110, 168, 254)"
+    assert pg.evaluate("getComputedStyle(document.querySelector('#other')).backgroundColor") \
+        != "rgb(110, 168, 254)"
+    # hidden, it is not on this screen: the chip has it again (the observer, unprompted)
+    pg.evaluate("document.querySelector('#mine').hidden = true")
+    pg.wait_for_function("document.querySelector('#flowNext').classList.contains('is-next')",
+                         timeout=3000)
+    assert blue(pg) == ["flowNext"]
+    pg.close()
+
+
+def test_when_next_names_an_effect_only_its_card_is_blue(browser, live):
+    """Next carries `target.fx` for a waiting effect (I16.0a); of the cards marked for
+    polish, only the one whose `data-fx` is that effect takes the blue."""
+    pg = browser.new_page(viewport={"width": 1440, "height": 900})
+    fake = {"stages": [], "blockers": [], "running": False,
+            "next": {"stage": "polish", "sentence": "1 effect proposed — accept or discard",
+                     "verb": "Answer", "screen": "/", "tool": "fx", "kind": "go",
+                     "href": "/#tool=fx&shot=s2&fx=fx_b", "target": {"shot": "s2", "fx": "fx_b"}}}
+    pg.route("**/api/flow", lambda r: r.fulfill(status=200, content_type="application/json",
+                                                 body=json.dumps(fake)))
+    pg.goto(live + "/open")
+    chip(pg)
+    pg.evaluate(MARKED_JS, ["polish", "fx_a", "cardA"])
+    pg.evaluate(MARKED_JS, ["polish", "fx_b", "cardB"])
+    pg.evaluate("flowBar.mark()")
+    assert blue(pg) == ["cardB"]
+    # without its card on screen, the chip
+    pg.evaluate("document.querySelector('#cardB').remove()")
+    pg.evaluate("flowBar.mark()")
+    assert blue(pg) == ["flowNext"]
     pg.close()

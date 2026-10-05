@@ -8,8 +8,14 @@
  * `<div id="flow">` in its one header row.
  *
  * The chip navigates — to the button that carries the price, for anything priced —
- * and presses a button itself only for a free action on its own screen (Render on
- * the board): nothing spends without the click on the button that says what it costs. It lands on its target (a shot, an effect, a waiting proposal).
+ * and presses a button itself only for a free action on its own screen (a quick look
+ * of the film on the board): nothing spends without the click on the button that says
+ * what it costs. It lands on its target (a shot, an effect, a waiting proposal).
+ *
+ * One blue button per screen (M16 decision 3): `.is-next` is the only primary style,
+ * and this puts it on exactly one element — the first visible element marked
+ * `data-next-for` with Next's stage (and, when Next names an effect, the one whose
+ * `data-fx` is that effect), else on the chip itself.
  *
  * Self-contained styles, like /cli.js, because the three pages do not share a
  * stylesheet. It repaints only when the answer changes (no flicker under a hovered
@@ -27,14 +33,21 @@
     font: 12px/1 system-ui, -apple-system, "Segoe UI", sans-serif; white-space: nowrap; }
   #flow .fnext { flex: 0 1 auto; min-width: 0; max-width: 100%; display: inline-flex;
     align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 6px;
-    border: 1px solid #6ea8fe; color: #e8e8ee; background: #16223a;
+    border: 1px solid #3a3a48; color: #e8e8ee; background: transparent;
     text-decoration: none; overflow: hidden; cursor: pointer; box-sizing: border-box; }
-  #flow .fnext b { color: #6ea8fe; font-weight: 700; flex: none; }
+  #flow .fnext:hover { border-color: #6ea8fe; }
+  #flow .fnext b { color: #9a9aa8; font-weight: 600; flex: none; }
   #flow .fnext span { overflow: hidden; text-overflow: ellipsis; }
   #flow .fnext.cli { border-color: #e0b050; background: #3a2c0c; }
   #flow .fnext.cli b { color: #ffd27a; }
-  #flow .fnext.wait { border-color: #2e2e38; background: transparent; color: #9a9aa8; }
-  #flow .fnext.wait b { color: #9a9aa8; }`;
+  #flow .fnext.wait { color: #9a9aa8; }
+  /* The one blue thing on a screen (INTAKE M16 decision 3). */
+  .is-next { background: #6ea8fe !important; color: #0b0b0f !important;
+    border-color: #6ea8fe !important; font-weight: 600; }
+  .is-next b, .is-next .price, .is-next .fxprice { color: #0b0b0f !important; }
+  #flow .fnext.cli.is-next { background: #3a2c0c !important; color: #f6e7c4 !important;
+    border-color: #e0b050 !important; }
+  #flow .fnext.cli.is-next b { color: #ffd27a !important; }`;
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"]/g, (c) =>
@@ -72,6 +85,47 @@
         el.innerHTML = '';
       }
     }
+    mark();
+  }
+
+  function visible(el) {
+    if (!el || !el.getClientRects().length) return false;
+    const st = getComputedStyle(el);
+    return st.visibility !== 'hidden' && st.opacity !== '0';
+  }
+
+  /* The first visible element a lane marked as Next's (`data-next-for="cut render"`),
+   * narrowed to the effect Next names when it names one. */
+  function target(n) {
+    if (!n || !n.stage || n.kind === 'cli') return null;
+    const fx = n.target && n.target.fx;
+    const all = document.querySelectorAll('[data-next-for]');
+    for (const el of all) {
+      if (!(el.dataset.nextFor || '').split(/\s+/).includes(n.stage)) continue;
+      if (fx && el.dataset.fx !== fx) continue;
+      if (visible(el)) return el;
+    }
+    return null;
+  }
+
+  /* One blue button (INTAKE M16 decision 3): `.is-next` on Next's target when it is on
+   * this screen, else on the chip. */
+  function mark() {
+    const n = last && last.next;
+    let pick = null;
+    if (n) pick = target(n) || document.getElementById('flowNext');
+    document.querySelectorAll('.is-next').forEach((el) => {
+      if (el !== pick) el.classList.remove('is-next');
+    });
+    if (pick && !pick.classList.contains('is-next')) pick.classList.add('is-next');
+  }
+
+  // The screen changes under the chip — a tool opens, a card arrives — so the blue is
+  // placed again (at most every 150 ms) when it does.
+  let soonT = 0;
+  function soon() {
+    if (soonT) return;
+    soonT = setTimeout(() => { soonT = 0; if (last) paint(last); }, 150);
   }
 
   /* On this screen already: open the tool instead of reloading the page — and land on
@@ -130,6 +184,19 @@
     step();
   }
 
+  /* Press a free action's own button on this screen — the first visible one marked
+   * for it — once its tool has drawn it (a dock tool may build its buttons on open). */
+  function press(sel) {
+    const until = Date.now() + 2000;
+    const tryIt = () => {
+      let btn = null;
+      for (const el of document.querySelectorAll(sel)) { if (visible(el)) { btn = el; break; } }
+      if (btn && !btn.disabled) { btn.click(); return; }
+      if (Date.now() < until) setTimeout(tryIt, 100);
+    };
+    tryIt();
+  }
+
   function onClick(e) {
     const a = e.target.closest('#flow a');
     if (!a || !last) return;
@@ -147,13 +214,15 @@
       }
       return;
     }
-    // Free, on this screen: press the screen's own button (Render). Priced or
-    // elsewhere: go to the button that carries the price.
-    const btn = n.click && n.screen === HERE ? document.querySelector(n.click) : null;
-    if (btn && !btn.disabled) {
+    // Free, on this screen: open its tool and press its button (a quick look of the
+    // film). Priced or elsewhere: go to the button that carries the price.
+    if (n.click && n.screen === HERE) {
       e.preventDefault();
-      if (n.tool && window.dock) window.dock.open(n.tool);
-      btn.click();
+      if (n.tool && window.dock) {
+        window.dock.open(n.tool);
+        try { history.replaceState(null, '', `#tool=${n.tool}`); } catch (err) { /* fine */ }
+      }
+      press(n.click);
       return;
     }
     go(n.screen, n.tool, n.href, e, n.target);
@@ -198,10 +267,17 @@
     el.addEventListener('click', onClick);
     honourHash();
     window.addEventListener('hashchange', honourHash);
+    new MutationObserver(soon).observe(document.body, {
+      subtree: true, childList: true, attributes: true,
+      attributeFilter: ['hidden', 'class', 'style', 'disabled', 'open', 'data-next-for', 'data-fx'],
+    });
     poll();
   }
 
-  window.flowBar = { poll, state: () => last, here: HERE, land };
+  // `mark()`: place the blue again now — for a page that has just drawn a button it
+  // marked `data-next-for` and cannot wait the observer's 150 ms (tests, mostly).
+  window.flowBar = { poll, state: () => last, here: HERE, land,
+                     mark: () => { if (last) paint(last); } };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
 })();

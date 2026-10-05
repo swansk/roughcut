@@ -9,6 +9,18 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Changed
+- **One blue button per screen, chosen by Next (INTAKE M16 I16.1, decision 3).** Up to
+  four buttons per screen were blue (Render, ▶ Play cut, Ask, Accept, Index, Open the
+  pass…), and the Next chip was a fifth. `.is-next` is now the only primary style, and
+  `/flow.js` puts it on exactly one element: the first visible one a screen marks
+  `data-next-for="<Next's stage>"` (narrowed to `data-fx` when Next names an effect),
+  else the Next chip, which is plain otherwise. It is placed again when the screen
+  changes under it (a tool opens, a card arrives). Next's free action on the board is
+  now the film tool's quick look — `click: '[data-next-for~="render"]'`, worded "Make
+  the film — quick look" — pressed after the tool opens; the header's Render is going
+  (lane shell).
+
 ### Removed
 - **The seven-step bar, on every screen (INTAKE M16 I16.1, decision 2).** M14 drew
   Footage › Index › Brief › Pass › Cut › Polish › Render as seven chips with ticks,
