@@ -189,6 +189,12 @@ same commit. Releases move entries into a dated version section.
   test built such a proposal, and reading `shot` alone still passed. A new flow API test
   puts a `new:1` proposal anchored on shot 1 beside a proposal on shot 2 and expects
   Next on shot 1; it fails when the anchor is ignored.
+- **The conflict line of a demoted, contradicted claim is tested (M16 stage 0 review,
+  I16.0d, test strength).** I16.0d quotes a contradicted claim in the conflict line as
+  the sheet wrote it (`_claim`), not as its "maybe: … · not checked" wording, but none
+  of the I16.0d test's cases had a contradicted witness, so quoting the maybe wording
+  passed. The test now adds one and checks the conflict quotes the bare claim; quoting
+  the witness text fails it.
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six

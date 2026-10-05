@@ -120,7 +120,17 @@ def test_a_demoted_claim_never_writes_not_a_claim_into_why_and_the_moment_stays(
         "skier, skis raised off the snow; the clearest frame is 31.9", "confidence medium")])
     assert long[0]["why"] == ("maybe: A skier in the mid-distance is down on the snow "
                               "beside a standing skier · not checked — \"go back feet yeah\"")
-    for p in alone + both + long:
+    # a demoted claim a closer look contradicted: the conflict line quotes the claim as
+    # the sheet wrote it — no "maybe:", no "· not checked" (review: untested)
+    contra = demoted(40.0, 42.0, "A skier lands a backflip off the cornice",
+                     "confidence low")
+    contra["why_ranked"]["confirmation"] = "contradicted"
+    crossed = picks.build(clips, [contra])
+    assert crossed[0]["conflict"].startswith(
+        "the sheet claimed \"A skier lands a backflip off the cornice\" (")
+    assert "maybe" not in crossed[0]["conflict"] and "not checked" not in crossed[0]["conflict"]
+    assert crossed[0]["why"] == "", "a contradicted claim never writes WHY"
+    for p in alone + both + long + crossed:
         shown = [p["why"], p["conflict"]] + [w["text"] for w in p["witnesses"]]
         assert not any("not a claim" in s for s in shown), shown
 
