@@ -1186,8 +1186,44 @@ function syncPlayer() {
   paintTransport();
 }
 
+/* The monitor at rest (INTAKE M16 I16.1): the frame under the playhead and a big ▶,
+ * never a black box. The still is the poster endpoint's, shown only while no video is
+ * live on the screen; once one is, its own parked frame is the picture. The still is
+ * re-pointed once the edits and the playhead settle (restSoon, the inspector's 450 ms),
+ * never per nudge — the same frame the inspector asks for, so one request serves both. */
+let restT = 0;
+function paintRest() {
+  const big = $('#bigPlay');
+  if (big) big.hidden = player.playing || !segs.length;
+  const img = $('#monPoster');
+  if (!img) return;
+  const live = player.vids.some((v) => v.classList.contains('live') && v.dataset.src);
+  if (live || !segs.length) { img.hidden = true; return; }
+  restSoon();
+}
+
+function paintRestStill() {
+  const img = $('#monPoster');
+  const live = player.vids.some((v) => v.classList.contains('live') && v.dataset.src);
+  const at = segs.length ? tl.shotAt(tl.state.playhead || 0) : null;
+  const seg = at && segs[at.index];
+  const base = seg && (P.clips[seg.clip] || {}).poster;
+  if (live || !base) { img.hidden = true; return; }
+  const src = `${base}${base.includes('?') ? '&' : '?'}t=${Math.max(0, at.clipT).toFixed(2)}`;
+  if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+  img.hidden = false;
+}
+
+/* The playhead moved while nothing is live (a scrub before the first play, an undo):
+ * the still follows, once the moving stops. */
+function restSoon() {
+  clearTimeout(restT);
+  restT = setTimeout(paintRestStill, 450);
+}
+
 function paintTransport() {
-  $('#playCut').textContent = player.playing ? '❚❚ Pause' : '▶ Play cut';
+  $('#playCut').textContent = player.playing ? '❚❚ Pause' : '▶ Play';
+  paintRest();
   const seg = segs[player.idx];
   $('#playingWhat').textContent = seg
     ? `${player.idx + 1}/${segs.length} · ${stem(seg.clip)}${player.single ? ' · this shot only' : ''}`
@@ -2808,10 +2844,10 @@ document.addEventListener('keydown', (e) => {
   }
   else if (k === 'g' || k === 'G') {
     // The grade's before / after (INTAKE M10): the monitor with the LUT, or the camera's picture.
+    // the "ungraded" tag on the picture says which (/grade.js)
     const g = gradeApi();
     if (!g) return toast('the grade did not load — /grade.js is missing');
-    const on = g.toggle();
-    toast(on ? 'grade on — the monitor shows the colour' : 'grade off — the camera\'s picture');
+    g.toggle();
   }
   else return;
 });
@@ -2920,6 +2956,7 @@ async function boot() {
     paint();                                  // the inspector follows the anchor
   });
   tl.on('change', renderInspector);           // a trim changes the header; an undo the why
+  tl.on('playhead', () => { if (!player.playing) restSoon(); });
   $('#inspector').addEventListener('click', onInspectorClick);
   render();
   paintBinLine();

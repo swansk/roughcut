@@ -234,6 +234,13 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **The monitor at rest shows the picture (INTAKE M16 I16.1).** It was a black box until
+  something played, with a help line under the transport ("click a shot below to jump ·
+  the inspector under it holds its why and trims · space play / pause · …"). Now it shows
+  the frame under the playhead (the poster endpoint, following the playhead while nothing
+  plays) with a big ▶ — the screen is the button — and, while G has the grade off, an
+  "ungraded" tag on the picture (/grade.js) where a toast faded. The help line is gone
+  (the keys are on ?); "▶ Play cut" is "▶ Play".
 - **The board's header is one row, and *Make the film* is how a film is made (INTAKE
   M16 I16.1).** Removed from the header: "Cut board" and the second bin name, the length
   and "target 2:00.0–3:00.0", Project ▾ and its popover (clips, analysed, the index line,

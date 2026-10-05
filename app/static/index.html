@@ -364,8 +364,18 @@
   #screenMsg[hidden] { display: none; }
   .transport { display: flex; gap: 10px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
   .transport .pos { font-variant-numeric: tabular-nums; }
-  .transport .keys { min-width: 0; white-space: nowrap; overflow: hidden;
-                     text-overflow: ellipsis; }
+  #monPoster { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+               -webkit-user-select: none; user-select: none; }
+  #monPoster[hidden] { display: none; }
+  #bigPlay { position: absolute; left: 50%; top: 50%; z-index: 2; width: 64px; height: 64px;
+             margin: -32px 0 0 -32px; border-radius: 50%; background: rgba(10,10,14,.6);
+             color: #fff; font-size: 26px; line-height: 64px; text-align: center;
+             padding-left: 4px; pointer-events: none; }
+  #bigPlay[hidden] { display: none; }
+  #ungraded { position: absolute; right: 8px; top: 8px; z-index: 2; font-size: 11px;
+              letter-spacing: .06em; color: var(--dim); background: rgba(10,10,14,.7);
+              border-radius: 4px; padding: 1px 6px; pointer-events: none; }
+  #ungraded[hidden] { display: none; }
   /* the timeline under the transport is styled by /timeline/timeline.css */
   #toast {
     position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
@@ -409,6 +419,9 @@
            queued behind the download. arm() puts the in-point in the URL as a media
            fragment, so the first request after the header lands on the shot. -->
       <div class="screen">
+        <!-- At rest the monitor shows the frame under the playhead (the poster endpoint),
+             never a black box, with a big ▶ — the screen is the button. -->
+        <img id="monPoster" alt="" draggable="false" hidden>
         <video id="pv0" preload="metadata" playsinline></video>
         <video id="pv1" preload="metadata" playsinline></video>
         <!-- The grade: /grade.js draws the live video through the shot's LUT here
@@ -419,18 +432,15 @@
              to draw; `.sketch` while the human draws a reference on the frame, when
              it takes the pointer. -->
         <canvas id="fxCanvas"></canvas>
+        <span id="bigPlay" aria-hidden="true">▶</span>
+        <!-- G's state, on the picture while the grade is off (/grade.js) -->
+        <span id="ungraded" hidden>ungraded</span>
         <div id="screenMsg" hidden></div>
       </div>
       <div class="transport">
         <button id="playCut">▶ Play</button>
         <span class="pos"><span id="pos">0:00.0</span> / <span id="posTotal"><span id="total">0:00.0</span></span></span>
         <span class="hint" id="playingWhat"></span>
-        <div class="grow"></div>
-        <!-- One line at any width: a short window (the inspector on screen, the monitor
-             scrolled off) must still fit the whole monitor, so the keys line clips its
-             tail with an ellipsis rather than wrapping and pushing the timeline down. -->
-        <span class="hint keys">click a shot below to jump · the inspector under it holds its why and trims · <kbd>space</kbd> play / pause ·
-          <kbd>+</kbd><kbd>−</kbd> zoom · <kbd>\</kbd> fit · <kbd>⇧</kbd>wheel pan · <kbd>g</kbd> grade · <kbd>?</kbd> all the keys</span>
       </div>
       <!-- The timeline: a ruler, the V1 lane of shot blocks by film time, the playhead
            across the whole cut. The module is /timeline/timeline.js (window.tl); app.js

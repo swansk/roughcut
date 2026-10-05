@@ -1958,3 +1958,32 @@ def test_next_lands_on_a_waiting_revision_proposal_in_place_and_from_open(page, 
         assert "ask=" not in page.evaluate("location.hash")
     finally:
         path.unlink(missing_ok=True)
+
+
+# ------------------------------------------------------------ M16 · the board's frame
+
+def test_the_monitor_at_rest_shows_the_frame_at_the_playhead_with_a_big_play(page):
+    """INTAKE M16 I16.1: the picture at rest was a black box, with a help line under the
+    transport. Now it is the frame under the playhead (the poster endpoint) with a big
+    ▶, and the help line is gone (the keys are on ?)."""
+    poster = page.locator("#monPoster")
+    page.wait_for_function("!document.querySelector('#monPoster').hidden", timeout=5000)
+    src = poster.get_attribute("src")
+    assert src.startswith("/media/poster/CLIP_A") and src.endswith("t=1.00"), src
+    page.wait_for_function("document.querySelector('#monPoster').naturalWidth > 0", timeout=10000)
+    assert page.locator("#bigPlay").is_visible()
+    assert "click a shot below" not in page.locator("#player").inner_text()
+    # the playhead moves while nothing plays: the still follows it, into shot 2
+    page.evaluate("tl.setPlayhead(3.0)")
+    page.wait_for_function(
+        "(document.querySelector('#monPoster').getAttribute('src') || '').includes('CLIP_B')",
+        timeout=5000)
+    # playing: the ▶ goes and the live picture replaces the still
+    page.locator("#playCut").click()
+    page.wait_for_function("player.playing", timeout=10000)
+    assert not page.locator("#bigPlay").is_visible()
+    assert not poster.is_visible()
+    page.locator("#playCut").click()
+    page.wait_for_function("!player.playing", timeout=5000)
+    assert page.locator("#bigPlay").is_visible()
+    assert page.locator("#playCut").inner_text() == "▶ Play"
