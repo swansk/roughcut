@@ -193,6 +193,25 @@ def test_the_folder_reads_as_a_contact_sheet(page, project):
     assert page.locator(".primary, a.btn").count() == 0
     assert flow_state(page, "pass") == "waiting"
     assert flow_state(page, "index") == "ready"
+    # one blue (C2): Next's target when it is on this screen, else the chip. These
+    # clips were all heard (the fixture's sidecars), so Next is the first cut, elsewhere
+    page.wait_for_function("""() => { const n = window.flowBar && flowBar.state() && flowBar.state().next;
+        const b = [...document.querySelectorAll('.is-next')];
+        return !!n && n.stage === 'cut' && b.length === 1 && b[0].id === 'flowNext'; }""",
+                           timeout=10000)
+    # when Next is the index — a bin nothing was heard in — Index the footage is the blue
+    nxt = {"stage": "index", "sentence": "Index the footage", "verb": "Index", "screen": "/open",
+           "href": "/open", "kind": "go"}
+    page.route("**/api/flow", lambda r: r.fulfill(
+        status=200, content_type="application/json",
+        body=json.dumps({"stages": [], "blockers": [], "running": False, "next": nxt})))
+    try:
+        page.evaluate("flowBar.poll()")
+        page.wait_for_function("""() => { const b = [...document.querySelectorAll('.is-next')];
+            return b.length === 1 && b[0].id === 'indexBtn'; }""", timeout=5000)
+    finally:
+        page.unroute("**/api/flow")
+        page.evaluate("flowBar.poll()")
     # nothing ran: no progress line, no pause, no how-it-was-indexed line
     for sel in ("#progress", "#paused", "#howLine", "#how"):
         assert page.locator(sel).is_hidden(), sel

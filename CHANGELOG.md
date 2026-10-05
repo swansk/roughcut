@@ -22,6 +22,11 @@ same commit. Releases move entries into a dated version section.
   pass and cut land, and a listed check that passes fails until it is taken out.
 
 ### Changed
+- **The open screen's one blue is tested on the merged page (INTAKE M16 integration,
+  C2).** Lane open marked *Index the footage* `data-next-for="index footage"`; lane nav
+  placed the blue. The contact-sheet test now checks both: with every clip heard Next
+  is the first cut on the board, so the chip is the blue; with Next on the index, *Index
+  the footage* is, and nothing else.
 - **A waiting proposal's ▶ Play it is tested as the board's one blue (INTAKE M16
   integration, C2).** Lane shell marked *▶ Play it* `data-next-for="cut"` and lane nav
   placed the blue, each tested alone. The Play it test now checks, merged, that with an
