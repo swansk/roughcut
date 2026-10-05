@@ -1847,16 +1847,23 @@ def test_render_rows_say_the_day_and_the_cut_and_fold_repeats(page):
       ];
       paintVersions();
       const un = document.querySelector('#cutUnmade');
+      // the day and the time in the viewer's own words ("Sep 8, 10:05 PM" in en-US,
+      // "8 Sept, 22:05" in en-GB): the expected strings are made the way the row's are
+      const when = (d) => new Date(d).toLocaleString([],
+        {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
       return {rows: [...document.querySelectorAll('#versions .ver')].map(
                 (r) => [r.textContent.replace(/\\s+/g, ' ').trim(), r.title]),
-              unmade: un && un.textContent};
+              unmade: un && un.textContent,
+              when: [when('2026-09-08T22:05:00'), when('2026-08-23T16:10:00'),
+                     when('2026-07-25T20:37:00')]};
     }""")
     rows = got["rows"]
+    sep8, aug23, jul25 = got["when"]
     assert len(rows) == 3, rows                      # a, b, c are one film made three times
-    assert "Sep 8, 10:05 PM" in rows[0][0] and "· main" in rows[0][0] and "×3" in rows[0][0]
-    assert "Aug 23" in rows[0][1], "the folded ones are still named, on hover"
+    assert sep8 in rows[0][0] and "· main" in rows[0][0] and "×3" in rows[0][0], (sep8, rows)
+    assert aug23 in rows[0][1], "the folded ones are still named, on hover"
     assert "proposal ed8134bb — not accepted" in rows[1][0] and "×" not in rows[1][0]
-    assert "Jul 25" in rows[2][0]
+    assert jul25 in rows[2][0]
     assert not any("this cut" in r[0] for r in rows)
     assert got["unmade"] == "this cut hasn’t been made yet"
     # a render of the cut on the board: the row says so and the line goes

@@ -212,6 +212,12 @@ same commit. Releases move entries into a dated version section.
   test wrote four, so removing the window still passed. A new test writes three early,
   very large asks and five newer ones, and expects the price of the newest five alone
   ("last 5 asks"); without the window it is fitted on eight and fails.
+- **The render-rows test passes in any locale (M16 stage 0 review, I16.0k, test
+  strength).** The board writes a render's day and time in the viewer's locale
+  (`toLocaleString([], …)`), and the test's browser inherits the host's `LANG`, but the
+  test expected the en-US words: under `LANG=en_GB.UTF-8` it failed on "'Sep 8, 10:05
+  PM' not in '… 8 Sept, 22:05 · main · ×3 …'". The expected strings are now made in the
+  page with the same options as the rows; it passes under en_GB and en_US.
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
