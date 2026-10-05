@@ -19,6 +19,7 @@
 /* an accepted effect folds: its sentence in two lines at most, the rest on hover */
 #fx .fxcard:not(.proposed) .fxsays { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
                                      overflow: hidden; }
+#fx .fxlimits { font-size: 12px; margin-top: 3px; color: var(--warn); }
 #fx .fxcheck { font-size: 12px; margin-top: 3px; }
 #fx .fxcheck.ok { color: var(--good); }
 #fx .fxcheck.bad { color: var(--bad); }

@@ -104,6 +104,15 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **A waiting proposal says on its card what it did not do (INTAKE M16 review, I16.5).**
+  The model's own shortfall (`limits`, "couldn't: …") moved behind *why? ▸* in I16.5,
+  while the card's "✓ checked" sits in view — and the free check measures what was made
+  (in the shot, in the frame, in sync), not whether it is what the note asked for. A
+  proposal that skipped half the note read as checked and complete, and that is what
+  Accept vs Change turns on. A proposed card with `limits` now carries one line,
+  "didn't: …", above the check; *why? ▸* no longer repeats it, and accepted cards keep
+  it behind *why?* as before. The waiting-proposal test reads the line (it fails on the
+  old card).
 - **One priced Look deeper on the selected shot (INTAKE M16 review, decision 9).** The
   shot strip's top row carries *Look deeper · ~$x* for the shot; opening its "how the
   machine saw" line drew the full strip, whose action area priced the very same seconds

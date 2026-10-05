@@ -487,7 +487,7 @@
     return `<div class="fxwhybox">`
       + (e.note ? `<div class="fxnote">“${esc(e.note)}”</div>` : '')
       + (e.says && e.why ? `<div class="hint">${esc(e.why)}</div>` : '')
-      + (e.limits ? `<div class="hint">couldn't: ${esc(e.limits)}</div>` : '')
+      + (e.limits && e.status !== 'proposed' ? `<div class="hint">couldn't: ${esc(e.limits)}</div>` : '')
       + (v && Array.isArray(v.checks) && v.checks.length ? `<ul class="fxchecks">${v.checks.map(checkRow).join('')}</ul>` : '')
       + (extras.length ? `<div class="fxextras hint">${extras.join(' · ')}</div>` : '')
       + (e.ref_url ? `<img class="fxrefimg" src="${esc(e.ref_url)}" alt="the reference drawn on the frame" title="the frame you drew on — the marks are the anchors">` : '')
@@ -531,6 +531,10 @@
     return `<div class="fxcard ${esc(e.status)}" data-id="${esc(e.id)}">`
       + `<div class="fxhead"><b class="fxname">${esc(e.name || 'effect')}</b>${chip(e)}</div>`
       + (says ? `<div class="fxsays"${proposed ? '' : ` title="${esc(says)}"`}>${esc(says)}</div>` : '')
+      // what the model says it did not do, on the waiting card itself: "✓ checked" is the
+      // free check of what was made, not of what was asked, and this shortfall is what
+      // Accept vs Change turns on — behind why? ▸ it read as checked and complete
+      + (proposed && e.limits ? `<div class="fxlimits">didn't: ${esc(e.limits)}</div>` : '')
       + checkLine(e)
       + (moments ? momentsHtml(e) : '')
       + btns + iter

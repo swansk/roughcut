@@ -591,6 +591,9 @@ def test_the_waiting_proposal_is_first_in_film_time_and_its_preview_is_nexts(pag
     assert first.locator(".fxsays").inner_text() == "Slows 0.40 s to 0.4×. Shot 2 gets 0.6 s longer, at 0:03."
     text = first.inner_text()
     assert "CLIP_B" not in text and "1.00" not in text and "could not" not in text
+    # what the model says it did not do is on the card, beside "✓ checked" (which checks
+    # what was made, not what was asked) — not only behind why? ▸
+    assert first.locator(".fxlimits").inner_text() == "didn't: the onset at 0.20 s is a voice"
     assert first.locator(".fxev").count() == 0
     page.wait_for_function(
         "(document.querySelector(\"#fx .fxcard[data-id='fx_slowui01'] .fxcheck\") || {}).textContent === '✓ checked'",
@@ -609,7 +612,9 @@ def test_the_waiting_proposal_is_first_in_film_time_and_its_preview_is_nexts(pag
     first.locator("button[data-act=why]").click()
     why = first.locator(".fxwhybox").inner_text()
     assert "slow motion at 0.4x over the biggest hit" in why and "the hit at 1.10 s" in why
-    assert "the onset at 0.20 s is a voice" in why
+    assert "the onset at 0.20 s is a voice" not in why, "said once, on the card"
+    # the accepted card (it has no limits) wears no such line
+    assert page.locator("#fx .fxcard").nth(1).locator(".fxlimits").count() == 0
     # the accepted one folds below it: its sentence in two lines at most (the rest on
     # hover), Remove and Change, no moments
     second = page.locator("#fx .fxcard").nth(1)
