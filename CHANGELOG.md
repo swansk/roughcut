@@ -97,6 +97,15 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **A Bin find's rows can be told apart, and an empty keep grid says so once (INTAKE M16
+  review, I16.4).** The same line heard in three clips came back as three identical
+  rows ("goodbye · 1.5 s" — the clip and the times went to the tooltip in I16.4), and
+  under them the keeps said "0 of 1 keeps match" and then "no keep matches — clear the
+  chip or the words above" with no chip set. Each find row now carries the picture at
+  its moment and where in its clip it is ("at 0:05 · 1.5 s"), as the keep cards carry a
+  picture; the keep count shows only when some match, and the empty grid names what is
+  set (the words, the chip, or both). New test in `test_dock_ui.py`; it fails on the old
+  rows.
 - **Timeline block names keep their words whole, two lines at most (INTAKE M16 review,
   I16.4).** A block's name (the first words spoken in it) broke inside words and
   stacked three lines: on a ~45 px block "goodbye" read "goodb / ye", and "how are you"

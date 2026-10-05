@@ -17,6 +17,7 @@ playwright is absent.
 from __future__ import annotations
 
 import json
+import re
 import socket
 import threading
 import time
@@ -311,6 +312,34 @@ def test_enter_finds_and_the_priced_search_sits_under_any_find(page):
     assert "primary" not in (deep.get_attribute("class") or "")
     row = page.locator("#findResults .cand").first
     assert "goodbye" in row.inner_text() and "CLIP_" not in row.inner_text()
+
+
+def test_a_find_says_one_count_and_its_rows_can_be_told_apart(page):
+    """A find over the Bin: the same line heard in three clips read as three identical
+    rows ("hello there · 1.5 s"), and under them the keeps said "0 of 1 keeps match" and
+    "no keep matches — clear the chip or the words above" with no chip set. Each row now
+    has the picture at its moment and where in its clip it is; an empty keep grid says it
+    once, naming what is set."""
+    _put_selects(page, KEEPS[:1])                          # the goodbye: no "hello" in it
+    page.reload()
+    page.wait_for_selector("#library .keep")
+    page.locator("#findQ").fill("hello")                   # heard in all three clips
+    page.locator("#findQ").press("Enter")
+    page.wait_for_selector("#findResults .cand", timeout=15000)
+    page.wait_for_function("document.querySelector('#library .hint')", timeout=5000)
+    rows = page.locator("#findResults .cand")
+    assert rows.count() == 3, rows.count()
+    srcs = [rows.nth(i).locator("img.still").get_attribute("src") for i in range(3)]
+    assert len(set(srcs)) == 3 and all("t=" in s for s in srcs), srcs     # a picture each
+    assert re.fullmatch(r"at \d+:\d\d · \d+\.\d s", rows.first.locator(".t").inner_text())
+    assert page.locator("#libHint").inner_text() == ""                 # not "0 of 2"
+    assert page.locator("#library .hint").inner_text() == "no keep matches — clear the words above"
+    page.evaluate("binChip = 'tag:crash'; renderLibrary()")
+    assert page.locator("#library .hint").inner_text() == "no keep matches — clear the chip or the words above"
+    page.locator("#findQ").fill("")
+    page.evaluate("binChip = 'tag:nothing-has-this'; renderLibrary()")
+    assert page.locator("#library .hint").inner_text() == "no keep matches — clear the chip"
+    page.evaluate("binChip = null; renderLibrary()")
 
 
 def test_adding_from_the_bin_lands_at_the_playhead(page):

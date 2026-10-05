@@ -1844,9 +1844,11 @@ function renderKept(lib) {
   const jcards = junkRows().filter((r) => (r.state === 'proposed'
     || (binChip === 'junk' && r.state === 'confirmed'))
     && (!text || r.stem.toLowerCase().includes(text)));
+  // a count only when some match: "0 of 1 keeps match" over "no keep matches" said the
+  // same nothing twice
   $('#libHint').textContent = binChip === 'junk'
     ? 'Junk — proposed by a measurement, yours to confirm. Confirmed clips are out of the Ask, Find and this grid, and the index skips their look.'
-    : !all.length || keeps.length === all.length ? ''
+    : !all.length || !keeps.length || keeps.length === all.length ? ''
       : `${keeps.length} of ${all.length} keeps match`;
   lib.innerHTML = '';
   jcards.forEach((r) => lib.appendChild(junkCard(r)));
@@ -1864,7 +1866,9 @@ function renderKept(lib) {
     return;
   }
   if (!keeps.length) {
-    if (!jcards.length) lib.innerHTML = '<div class="hint">no keep matches — clear the chip or the words above</div>';
+    // what to clear is what is set: the chip, the words, or both
+    const clear = binChip && text ? 'clear the chip or the words above' : binChip ? 'clear the chip' : 'clear the words above';
+    if (!jcards.length) lib.innerHTML = `<div class="hint">no keep matches — ${clear}</div>`;
     return;
   }
   keeps.forEach((s) => lib.appendChild(keepRow(s)));
@@ -2563,11 +2567,17 @@ function renderFindResults(rows, note) {
   rows.forEach((m) => {
     const d = document.createElement('div');
     d.className = 'cand';
-    // what was said or seen, and how long — the clip, the times and why it matched are
-    // the tooltip's (INTAKE M16)
+    // what was said or seen, the picture at the moment and where in its clip it is, and
+    // how long — as the keep cards have a picture: the same line found in three clips
+    // read as three identical rows. The clip's name and why it matched are the tooltip's
+    // (INTAKE M16).
     d.title = `${stem(m.clip)} ${fmt(m.start)}–${fmt(m.end)}${m.why ? ` · ${m.why}` : ''}`;
-    d.innerHTML = `<span class="w">${escapeHtml(m.what || '')}</span>
-      <span class="t">${Math.max(0, m.end - m.start).toFixed(1)} s</span>`;
+    const poster = (P.clips[m.clip] || {}).poster;
+    const still = poster ? `${poster}${poster.includes('?') ? '&' : '?'}t=${Math.max(0, m.start).toFixed(2)}` : '';
+    d.innerHTML = `${still ? `<img class="still" loading="lazy" decoding="async" draggable="false" alt="" src="${escapeHtml(still)}">`
+                            : '<div class="still"></div>'}
+      <div class="body"><span class="w">${escapeHtml(m.what || '')}</span>
+      <span class="t">at ${clock(m.start)} · ${Math.max(0, m.end - m.start).toFixed(1)} s</span></div>`;
     d.onclick = () => showFindMatch(m);
     box.appendChild(d);
   });

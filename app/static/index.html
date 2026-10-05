@@ -201,7 +201,11 @@
           padding: 0 4px; margin-right: 5px; font-style: normal; }
   .kind.hot { color: var(--warn); border-color: #4c4026; }
   .lib { overflow: auto; }
-  .cand { border-top: 1px solid var(--line); padding: 7px 0; cursor: pointer; }
+  .cand { border-top: 1px solid var(--line); padding: 7px 0; cursor: pointer; display: flex;
+          gap: 8px; align-items: center; }
+  .cand .still { width: 64px; aspect-ratio: 16/9; object-fit: cover; border-radius: 3px;
+                 background: #000; flex: none; }
+  .cand .body { min-width: 0; }
   .cand:first-child { border-top: 0; }
   .cand:hover { background: var(--card-hi); }
   .cand .t { color: var(--dim); font-variant-numeric: tabular-nums; font-size: 12px; }
