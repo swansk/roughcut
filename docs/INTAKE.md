@@ -1174,7 +1174,7 @@ with the selected shot's details in view and no page scroll, ≲ 200 in FX after
 waiting proposal's shot), ≲ 180 with the film tool open; 0 buttons that spend without a
 price; Next lands on the exact waiting item; the Q2 test set up for Karl's two clicks.
 
-- [ ] I16.0 **Stage 0 — fix what's broken** (verified bugs; each with a test):
+- [x] I16.0 (stage-0 lanes merged `34579e5` `36f0bac` `082ebe5` `72d2e7a`, review fixes to `b620ff7`; suite 791 passed + 3 pre-existing/environment failures) **Stage 0 — fix what's broken** (verified bugs; each with a test):
       (a) Next carries `target {shot, fx}` and lands there; the FX rail badge counts
       proposals across the cut · (b) themes stop counting as needs-you · (c) zero-length
       picks padded at build (`picks._pick_from`) so verdicts land; matching a point is a
@@ -1190,7 +1190,7 @@ price; Next lands on the exact waiting item; the Q2 test set up for Karl's two c
       made yet" when none matches · (l) "last proposal" only while one waits · (m) the CLI
       banner's commands are right for the host the board runs on (foxtrot, native) ·
       (n) plain U no longer undoes on the board (⌘Z does); Backspace needs a selected shot.
-- [ ] I16.1 **Stage 1 — one row, one next step, one way out:** one header row on `/`,
+- [x] I16.1 (`9198aae` nav, `4e48607` shell; review fixes to `bd1b082`; `test_budget.py` holds it) **Stage 1 — one row, one next step, one way out:** one header row on `/`,
       `/floor`, `/open` (bin · cut ▾ · Next · ↶ ↷ · ? · Make the film); the step bar gone;
       the switcher's footage / pass rows and project facts; exactly one primary button per
       screen; *Make the film* opens the film tool (this cut, Quick look 1080p free,
@@ -1198,18 +1198,18 @@ price; Next lands on the exact waiting item; the Q2 test set up for Karl's two c
       Download when a film lands; the monitor at rest shows the frame at the playhead with
       ▶ and an "ungraded" tag while G is off; `test_budget.py` fails when words / controls in
       view grow past each screen's numbers.
-- [ ] I16.2 **Stage 2a — the footage screen:** an un-indexed bin opens on /open; setup state
+- [x] I16.2 (`3af49e8`; fixes to `bd1b082`) **Stage 2a — the footage screen:** an un-indexed bin opens on /open; setup state
       (clips by day, the sentence, "Looks at a frame every 4 s · change", Index · ~$X in
       view); done state (headline, pictures from mid-clip, badges only for problems, junk?
       answered on the card, one "how it was indexed" line that opens to the table); themes
       removed (decision 8); order / cap / workers in settings.
-- [ ] I16.3 **Stage 2b — the pass:** picture ≈ half the window; one clip strip; the words
+- [x] I16.3 (`d0da1fa`; fixes to `bd1b082`) **Stage 2b — the pass:** picture ≈ half the window; one clip strip; the words
       with the kept part marked; the kept range said once with "} next line"; the machine
       line (decision 9); clickable P / X / U (decision 5); progress in Next ("N left"); the
       closing card's blue "Back to the cut — N keeps aren't in it yet →" (Bin filtered);
       By clip kept as a plain button; a big ▶ when autoplay is blocked; the placeholder More
       menu and fake waveform gone.
-- [ ] I16.4 **Stage 3 — the board:** the selected shot's strip under the timeline, in view,
+- [x] I16.4 (`ab6e2d8` cut + `4e48607` shell; fixes to `bd1b082`) **Stage 3 — the board:** the selected shot's strip under the timeline, in view,
       nothing selected at start; the strip's controls (▶, Ask about this shot · price, Look
       deeper · price, Remove, the reason, the first line, speed, warmer/cooler/brighter/
       darker/reset on ⌘Z, "colour & look ▸", "why? ▸"); with nothing selected the film row
@@ -1221,12 +1221,13 @@ price; Next lands on the exact waiting item; the Q2 test set up for Karl's two c
       "more found ▸"); one sentence about the film everywhere, the first-cut button priced,
       "aims for 2–3 min" beside the Ask; ▶ Play it on a proposed cut (diff kept); Sound as
       one line + "dip under talk: off / a little / a lot"; the keys sheet grouped by task.
-- [ ] I16.5 **Stage 4 — effects:** the proposed card first, in film time, one sentence of
+- [x] I16.5 (`ee86b58`; fixes to `bd1b082`) **Stage 4 — effects:** the proposed card first, in film time, one sentence of
       what changes, ✓ checked, Preview · Accept · Discard · Change · ~$x; overlay proposals
       keep their moment rows; the free verify runs itself; accepted cards fold (Remove,
       Change, Revert when there is a previous version); the design box behind "+ design
       another effect" with the range bar + "set start/end at playhead"; Accept updates in
       place (no reload).
+**Open for Karl (2026-10-05, from the wave-B review):** (1) *Cut from the bin* has no button once a cut exists — a re-cut from the keeps is now an Ask in words; restore a priced button, or keep it gone? (2) Junk is answered in two places (the /open cards and the board's Bin) — keep both or only /open? (3) **Deploying is Karl's step**: auto mode refused fast-forwarding main and restarting the board, and a preview board over a copy of the data; I16.6 and I16.7 wait on the deploy.
 - [ ] I16.6 **Q2 set up:** two fresh cuts on Killington for the side-by-side first cuts (one
       with the keeps, one with none), the sentence carried, both buttons priced; Karl clicks.
 - [ ] I16.7 **Live on Killington, measured:** suite green; the capture re-run; numbers vs the
@@ -1303,6 +1304,7 @@ them. Every lane adds its own CHANGELOG bullet; integration keeps all of them.
 
 ## Verification log
 
+- 2026-10-05 · M16 stages 0–4 on `agent/m16-int2` `bd1b082` · **861 passed, 1 skipped (no WebGL), 0 failed** in six chunks (the integration's order; `test_budget.py` after `test_server.py` is order-dependent, and `test_find.py` alone cannot import `roughcut` — both pre-existing). Words / controls in view at 1440×900 on the suite fixture (budget test, +10 % ceilings): board 197→72 words, 26→18 controls; the pass 350→52, 12→7; /open 454→53, 19→8; board with a shot selected 118 / 30 (strip in view, no scroll); film tool 67 / 17; FX after Next 118 / 31 with the proposal's Preview the one blue; header ≤ 47 px on all three screens. Killington numbers (I16.7) wait on the deploy.
 - 2026-09-07 · foundations `2810e61` · 265 passed
 - 2026-09-07 · + journal `53a2578` · 283 passed
 - 2026-09-07 · + dictate `50899d0` · 293 (one race in the job-list test fixed, 3/3)

@@ -1,6 +1,8 @@
 # Handoff — read this first
 
-**2026-10-04 — M16, take things away (in progress).** Karl's *"hard to use / with a bunch of buttons and text from the footage -> the other steps"* was answered with a proposal page (https://claude.ai/artifact/PPbCx4q1QtyZ1GDDHQ3kgH) and he chose **Subtract**: keep every screen and decision, take the clutter away. His eight answers, the end state and the items are in [INTAKE.md](INTAKE.md) M16 — read that first. No budget cap by default (he is on Max).
+**2026-10-05 — M16 stages 0–4 BUILT on `agent/m16-int2` (`38e8503`, 122 commits over `2a724d5`), not on main.** Suite 861 passed / 0 failed; fixture words in view: board 197→72, the pass 350→52, /open 454→53; one header row and one blue button per screen. **Deploying is Karl's step** (auto mode refused it): `git -C ~/Documents/Projects/roughcut merge --ff-only agent/m16-int2` then `systemctl --user restart roughcut-board`. After that: I16.6 (the two first-cut test cuts on Killington) and I16.7 (re-measure on Killington). Two questions wait in INTAKE M16 (Cut from the bin; junk in two places). Worktrees `roughcut-wt/m16-*` can go once main has it.
+
+**2026-10-04 — M16, take things away.** Karl's *"hard to use / with a bunch of buttons and text from the footage -> the other steps"* was answered with a proposal page (https://claude.ai/artifact/PPbCx4q1QtyZ1GDDHQ3kgH) and he chose **Subtract**: keep every screen and decision, take the clutter away. His eight answers, the end state and the items are in [INTAKE.md](INTAKE.md) M16 — read that first. No budget cap by default (he is on Max).
 
 **2026-10-03 — Karl's four asks (XS, XS, L, L), all built, merged and live on Killington.**
 (1) **The CLI says when it needs you:** `inference.diagnose` → `GET /api/backend` `fix` →

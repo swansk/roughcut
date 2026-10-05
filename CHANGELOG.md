@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Docs
+- **INTAKE M16: I16.0–I16.5 ticked on the integration branch** with their merge commits, the fixture measurements in the Verification log (board 197→72 words in view, the pass 350→52, /open 454→53; 861 passed), and the two questions the review left for Karl (Cut from the bin once a cut exists; junk answered in two places). I16.6–I16.7 wait on Karl deploying main; HANDOFF gives the two deploy commands.
+
 ### Added
 - **`test_budget.py`, the screen-size ratchet (INTAKE M16 I16.1).** Every earlier answer
   to "it is hard to use" added a surface; this fails when one grows back. At 1440×900 on
