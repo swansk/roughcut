@@ -3,7 +3,6 @@
 #fx { min-height: 40px; }
 #fx .fxtitle { font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
                color: var(--dim); margin: 0 0 8px; }
-#fx .fxempty { margin: 4px 0 10px; }
 
 /* one effect */
 #fx .fxcard { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
@@ -11,19 +10,25 @@
 #fx .fxcard.accepted { border-color: #2c4c39; }
 #fx .fxhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 #fx .fxname { font-size: 13px; }
-#fx .fxn { color: var(--dim); font-size: 12px; }
 #fx .fxchip { margin-left: auto; font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
               border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
 #fx .fxchip.proposed { color: var(--warn); border-color: #4c4026; }
 #fx .fxchip.accepted { color: var(--good); border-color: #2c4c39; }
-#fx .fxnote { font-size: 12px; margin-top: 6px; }
-#fx .fxwhy { margin-top: 2px; }
-#fx .fxlimits { margin-top: 4px; font-size: 12px; color: var(--warn); }
-#fx .fxedits { margin-top: 6px; border-left: 2px solid var(--accent); padding-left: 8px; font-size: 12px; }
-#fx .fxedits.applied { border-color: var(--good); }
-#fx .fxedits .fxeh { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
-#fx .fxedits.applied .fxeh { color: var(--good); }
-#fx .fxedits ul { margin: 2px 0 0; padding-left: 16px; } #fx .fxedits li { margin: 1px 0; }
+/* the one sentence of what changes in the film, and the free check's answer */
+#fx .fxsays { font-size: 12.5px; margin-top: 4px; line-height: 1.4; }
+/* an accepted effect folds: its sentence in two lines at most, the rest on hover */
+#fx .fxcard:not(.proposed) .fxsays { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+                                     overflow: hidden; }
+#fx .fxcheck { font-size: 12px; margin-top: 3px; }
+#fx .fxcheck.ok { color: var(--good); }
+#fx .fxcheck.bad { color: var(--bad); }
+#fx .fxcheck.wait { color: var(--dim); }
+/* "why? ▸", "adjust the moments ▸": a disclosure, not a button */
+#fx button.fxlink { border: 0; background: none; padding: 4px 2px; color: var(--dim); font-size: 12px; }
+#fx button.fxlink:hover { color: var(--text); background: none; }
+#fx .fxwhybox { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 6px; font-size: 12px; }
+#fx .fxwhybox > * + * { margin-top: 4px; }
+#fx .fxnote { font-size: 12px; font-style: italic; }
 
 /* the hits */
 #fx .fxevents { list-style: none; margin: 8px 0 0; padding: 0; }
@@ -32,24 +37,18 @@
 #fx .fxev:hover { background: var(--card-hi); }
 #fx .fxev.sel { background: var(--card-hi); outline: 1px solid var(--accent); }
 #fx .fxev .t { min-width: 44px; }
-#fx .fxev .xy { color: var(--dim); }
 #fx .fxev .nudge { padding: 0 6px; font-size: 10px; line-height: 18px; border-radius: 6px;
                    border-color: transparent; color: var(--dim); }
 #fx .fxev .nudge:hover { color: var(--text); background: var(--card); }
 #fx .fxpick { margin-top: 4px; color: var(--accent); }
 
-/* the machine's checklist */
-#fx .fxverify { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
-#fx .fxvhead { font-size: 12px; }
-#fx .fxverify.ok .fxvhead { color: var(--good); }
-#fx .fxverify.bad .fxvhead { color: var(--bad); }
+/* the machine's checklist, behind why? */
 #fx .fxchecks { list-style: none; margin: 4px 0 0; padding: 0; }
 #fx .fxchecks li { display: flex; gap: 6px; align-items: baseline; font-size: 12px; padding: 1px 0; }
 #fx .fxchecks li .mark { width: 12px; text-align: center; flex: none; }
 #fx .fxchecks li.ok .mark { color: var(--good); }
 #fx .fxchecks li.bad .mark { color: var(--bad); }
 #fx .fxchecks li.skip .mark, #fx .fxchecks li.skip .lbl { color: var(--dim); }
-#fx .fxchecks li .hint { margin-left: auto; text-align: right; max-width: 55%; }
 #fx .fxextras { margin-top: 6px; }
 #fx .fxextras a { color: var(--dim); }
 
@@ -64,7 +63,6 @@
 /* the design box */
 #fx .fxdesign { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
                 padding: 10px 12px; margin-top: 4px; }
-#fx .fxdhead { margin-bottom: 6px; }
 #fx .fxdesign textarea { min-height: 64px; }
 #fx .fxplace { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-top: 6px;
                cursor: pointer; }
@@ -75,10 +73,9 @@
 #fx .fxref button { padding: 0 6px; font-size: 11px; line-height: 18px; }
 #fx .fxstate { margin-top: 6px; }
 
-/* the window */
-#fx .fxwhere { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-top: 6px; font-size: 12px; }
-#fx .fxwhere input { width: 64px; padding: 3px 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
-#fx .fxwhere button { padding: 1px 6px; font-size: 11px; }
+/* the window: the range bar's handles, and one "set start/end at playhead" */
+#fx .fxwhere { display: flex; justify-content: flex-end; margin-top: 2px; }
+#fx .fxwhere button.fxlink:disabled { opacity: .5; }
 #fx .fxev .del { color: var(--bad); opacity: .7; }
 #fx .fxev .del:hover { opacity: 1; background: var(--card); }
 
@@ -108,12 +105,7 @@
 #fx .fxbar .ph b { position: absolute; top: -16px; left: 50%; transform: translateX(-50%); font-size: 10px; font-weight: 600;
                    color: #0b0b0f; background: #fff; padding: 0 4px; border-radius: 3px; white-space: nowrap;
                    font-variant-numeric: tabular-nums; }
-#fx .fxbar .lbl { position: absolute; bottom: -15px; font-size: 10px; color: var(--dim); font-variant-numeric: tabular-nums; }
-#fx .fxbar .l0 { left: 0; } #fx .fxbar .l1 { right: 0; }
-#fx .fxbarline { margin-top: 18px; font-size: 11.5px; }
-#fx .fxbarline b { color: var(--text); font-variant-numeric: tabular-nums; }
-#fx .fxprice { font-weight: 400; opacity: .8; margin-left: 4px; }
-#fx button.primary .fxprice { color: #0b0b0f; opacity: .75; }
+#fx .fxprice { font-weight: 400; opacity: .8; }
 #fx .fxrefimg { display: block; width: 100%; border-radius: 6px; border: 1px solid var(--line); margin-top: 6px; }
 
 /* the window and the hits on the timeline itself, while the FX tool is open */

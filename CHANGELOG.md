@@ -75,6 +75,33 @@ same commit. Releases move entries into a dated version section.
   the new setup state still showed *Index the footage*, which the server refuses with a
   400 ("no footage to index"). An empty folder is its own state now: the "No footage in
   this folder yet" line, no Index button.
+- **Next's blue Preview survives the FX tool's rebuilds (INTAKE M16 I16.5, contract C2).**
+  The tool rebuilds its cards when a job ends or a check lands; the `.is-next` class
+  flow.js puts on the waiting proposal's ▶ Preview went with the old element until
+  flow.js's next pass. A rebuild now carries it to the new Preview of the same effect.
+- **A change to an accepted effect can be seen and answered (INTAKE M16 I16.5).** Change
+  (Iterate) on an accepted effect wrote the revision to the fx dir under the same id
+  while `GET /api/fx` listed only the EDL's accepted copy, so the paid-for change could
+  not be seen, previewed or accepted from the board — and the check, a nudge or a second
+  Change worked on the accepted copy instead (a nudge even overwrote the revision). The
+  revision is now listed in the accepted copy's place as a proposal, and the check, a
+  nudge (`PUT /api/fx/{id}`) and Change work on it; Accept keeps the old version for
+  Revert as before, and Discard drops the revision and leaves the accepted copy as it was
+  (it answered 400 "remove it instead").
+- **A finished check no longer takes the caret from the design note (INTAKE M16 I16.5).**
+  The FX tool rebuilds itself when a job ends, and the server's own check now ends a few
+  seconds after every design and nudge — so typing the next note (or a Change line) lost
+  its focus mid-word. A rebuild now puts the caret back where it was. A design that came
+  back also empties the note, so "+ design another effect" starts blank instead of with
+  the last design's words.
+- **Accepting an edit-only proposal changes the cut once (INTAKE M16 I16.5).** The slow
+  motion on Killington has nothing to draw or hear. `POST /api/fx/accept` applied its
+  edits to the cut, then asked `validate_effect` to keep an effect with no overlay, no
+  sound and no edits left, which it refuses — so Accept answered 500 *after* changing the
+  cut, and the proposal stayed waiting to be accepted, and applied, again. Now the cut
+  changes once and the proposal leaves every list: its file stays on disk as the record
+  (`status: applied`, with its sentence and `applied.before`, what an undo takes back),
+  and nothing is added to the EDL's `effects`. No test had accepted a proposal with edits.
 - **Next lands on the waiting effect (INTAKE M16 I16.0a).** On Killington, Next opened
   the FX tool on whatever shot the board had anchored — shot 1's accepted typed title —
   while the slow-motion proposal `fx_d644520f` waited on shot 17 (`g1ce00e2b83`): the
@@ -511,6 +538,67 @@ same commit. Releases move entries into a dated version section.
   and `rowButton` are unchanged, and the pass's old hook `deep.floor` is gone. In the compact strip the deep lane's empty text no
   longer says "drag to choose seconds" (a drag there does nothing) and the pointer to
   the board is four words, *Look deeper: on the board*.
+- **An accepted effect's sentence folds to two lines (INTAKE M16 I16.5).** The fold kept
+  the model's whole why — 26 words on Killington's rock hit markers, five lines in the
+  dock. An accepted (or removed) card now shows two lines at most, the rest on hover; the
+  waiting proposal's sentence is never cut.
+- **Accepting an edit updates the cut in place (INTAKE M16 I16.5).** Accept on a proposal
+  that changes the cut (the slow motion) toasted "the cut changed — reloading" and
+  reloaded the whole page. It now awaits `window.roughcutRefresh()` — the board's own
+  repaint of the timeline, shot strip and bin, keeping the selection and the playhead
+  (contract C5) — and the card leaves the tool; the reload stays only as the fallback
+  where the board has no `roughcutRefresh`, or it fails.
+- **The design box is behind "+ design another effect", and the window is the range bar
+  (INTAKE M16 I16.5).** The design box sat open under every shot's cards with a heading,
+  a five-example placeholder cut off mid-sentence, a "where [156.00] ◀ playhead to
+  [175.56] ◀ playhead · the whole shot ✕" row (clip seconds, a third time format), end
+  labels doubling the handles', "click the strip to park the monitor on this shot" under
+  the bar, and "Design ≈ $0.21 · 8 frames". On a shot with an effect the box is now one
+  line, "+ design another effect" (open by itself on a shot with none, while a reference
+  is drawn or held, and while a design runs; closed again on another shot). The window
+  is the range bar's handles plus one "set start/end at playhead" control that moves the
+  nearer end to the parked monitor; the handles, the playhead, the reference line and the
+  timeline band (now blank for the whole shot) read film time; the button reads
+  "Design · ~$0.21". Design, *Use it* and the sketch HUD's *Use it* are plain buttons.
+- **The FX tool shows the waiting answer first (INTAKE M16 I16.5).** After Next, the
+  slow motion's card was ~180 words under an accepted card: Karl's note quoted back, the
+  model's paraphrase of it, an amber "could not:" paragraph in clip seconds, "CHANGES THE
+  CUT WHEN ACCEPTED · CLIP_08.MP4 at 0.4× from 170.85 to 171.50s", two "x 0.50 y 0.50"
+  rows with nudges that move nothing, and five buttons (Preview, Verify, Iterate, Accept,
+  Discard). The proposed card is now first on its shot: its name, one sentence of what
+  changes in the film (the server's `says`, else the model's why), "✓ checked" or what is
+  wrong in plain words ("✗ it does not show where expected") or "checking…", then
+  ▶ Preview · Accept · Discard · Change · ~$0.05 · why? ▸. Overlays and sounds keep their
+  moment rows in view, in film time (◀ 0:00.5 rock left ▶ ✕; the anchor on hover); an
+  edit-only proposal shows none. An accepted effect folds to its name, sentence, Remove ·
+  Change · Revert (when a previous version is kept) and "adjust the moments ▸"; a passed
+  check is not repeated on it. Behind why? ▸: the note, the model's why, what it could not
+  do, the checklist in plain words (the measurements on hover), the window in film time,
+  the reference, proof and strip. Removed: the Verify button (the check runs by itself),
+  Iterate (now Change, priced), "N moments", the edit words, the "FX · shot 1 ·
+  GEN_BLACK_3FB88607" title (now "Shot 17 · 19.6 s"), "N effects in this cut", and the
+  blue Accept and Restore — ▶ Preview carries `data-next-for="polish"` and `data-fx`, so
+  Next's one blue button lands on it. A finished check is no longer a toast.
+- **An effect proposal says what changes in the film, in film time (INTAKE M16 I16.5).**
+  The slow motion's card read "CLIP_08.MP4 at 0.4× from 170.85 to 171.50s" — a file name
+  and clip seconds that look like film time on a 3:09 film where shot 17 starts at
+  2:35. `GET /api/fx` now gives a proposal with edits `says`, one or two plain sentences
+  worked out from its ops against the cut: "Slows 0.65 s to 0.4×. Shot 17 gets 1.0 s
+  longer, at 2:50." (also *Adds a 3 s black slide before shot 1*, *Holds a frame of
+  shot 4 for 2 s*, *Takes shot 9 out*, *The film gets 3.0 s longer*, or "This change no
+  longer fits the cut."), and every effect `film` — `{n, start, in, speed}`, where its
+  shot sits in the film after the proposal's own edits — so the FX tool can show clip
+  seconds as film time, even for a shot the edits have yet to make.
+- **The free check on an effect runs by itself (INTAKE M16 I16.5).** Proposals arrived
+  unchecked — the slow motion on Killington (`fx_d644520f`) never had a check run —
+  because the check waited for a Verify button on every card. The server now queues it
+  after every design, revise, nudge (`PUT /api/fx/{id}`) and revert: a proof render of
+  the one shot and the measured checklist, never a model call. It waits behind any
+  render of the cut ("waiting for the render to finish") and behind another check; a
+  check already waiting for an effect covers a newer change, because it reads the effect
+  when it starts, and `POST /api/fx/verify` joins the same queue. A check whose effect
+  changed while its proof rendered no longer writes the old copy back over the nudge.
+  Each check's job carries `fx_id`, so the FX tool can say "checking…" on its card.
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
   buttons called the model with no price: the empty board's *Ask for a first cut* and
   *Cut from the bin*, the Ask panel's *Ask* and *Cut from the bin*, a shot's *Ask*, and

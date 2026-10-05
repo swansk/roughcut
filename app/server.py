@@ -4578,12 +4578,139 @@ def _fx_anchor(e: dict) -> str | None:
     return str(segs[0]["id"]) if segs else None
 
 
-def _fx_urls(e: dict) -> dict:
+def _film_clock(t: float) -> str:
+    m, sec = divmod(int(round(max(0.0, t))), 60)
+    return f"{m}:{sec:02d}"
+
+
+def _film_starts(segments: list[dict]) -> dict[str, float]:
+    out, t = {}, 0.0
+    for sg in segments:
+        out[str(sg.get("id"))] = t
+        t += edits.dur(sg)
+    return out
+
+
+def _fx_edit_says(ops: list[dict], segments: list[dict]) -> str:
+    """What a proposal's edits do to the film, in one or two plain sentences in film
+    time (INTAKE M16 I16.5): "Slows 0.65 s to 0.4×. Shot 17 gets 1.0 s longer, at 2:50."
+    — never a file name or a clip second ("CLIP_08.MP4 at 0.4× from 170.85 to 171.50s",
+    the M13 words, read as clip time on a 3:09 film)."""
+    try:
+        clean = edits.validate_ops(ops, segments)
+        after = edits.apply_ops(segments, None, clean)["segments"]
+    except ValueError:
+        return "This change no longer fits the cut."
+    starts = _film_starts(segments)
+    by_id = {str(sg.get("id")): sg for sg in segments}
+    num = {str(sg.get("id")): i + 1 for i, sg in enumerate(segments)}
+
+    def shot(sid) -> str:
+        return f"shot {num[str(sid)]}" if str(sid) in num else "the new shot"
+
+    def where(op: dict) -> str:
+        if op.get("after") is not None:
+            return f"after {shot(op['after'])}"
+        if op.get("before") is not None:
+            return f"before {shot(op['before'])}"
+        return "at the end"
+
+    def where_t(op: dict) -> float | None:
+        if op.get("after") is not None and str(op["after"]) in by_id:
+            return starts[str(op["after"])] + edits.dur(by_id[str(op["after"])])
+        if op.get("before") is not None:
+            return starts.get(str(op["before"]))
+        return sum(edits.dur(sg) for sg in segments)
+
+    def at_clip(sid, t) -> float | None:
+        sg = by_id.get(str(sid))
+        if sg is None:
+            return None
+        return starts[str(sid)] + (float(t) - float(sg["in"])) / edits.speed_of(sg)
+
+    said, at = [], None
+    for op in clean:
+        k, sid = op["op"], op.get("shot")
+        if k == "speed":
+            verb = "Slows" if op["rate"] < 1 else "Speeds up"
+            if "from" in op:
+                said.append(f"{verb} {op['to'] - op['from']:.2f} s to {op['rate']:g}×")
+                t = at_clip(sid, op["from"])
+            else:
+                said.append(f"{verb} {shot(sid)} to {op['rate']:g}×")
+                t = starts.get(str(sid))
+        elif k in ("extend", "set_range"):
+            said.append(f"Re-trims {shot(sid)}")
+            t = starts.get(str(sid))
+        elif k == "split":
+            said.append(f"Splits {shot(sid)}")
+            t = at_clip(sid, op["at"])
+        elif k == "freeze":
+            said.append(f"Holds a frame of {shot(sid)} for {op['seconds']:g} s")
+            t = at_clip(sid, op["at"])
+        elif k == "generate":
+            what = {"black": "black slide", "colour": "colour slide", "still": "still"}[op["kind"]]
+            said.append(f"Adds a {op['seconds']:g} s {what} {where(op)}")
+            t = where_t(op)
+        elif k == "insert":
+            said.append(f"Adds a {op['out'] - op['in']:.1f} s shot {where(op)}")
+            t = where_t(op)
+        elif k == "remove":
+            said.append(f"Takes {shot(sid)} out")
+            t = starts.get(str(sid))
+        else:                                       # move
+            said.append(f"Moves {shot(sid)} {where(op)}")
+            t = None
+        if at is None and t is not None:
+            at = t
+    first = said[0] if len(said) == 1 else (
+        f"{said[0]} and {said[1][0].lower()}{said[1][1:]}" if len(said) == 2
+        else f"{said[0]}, and {len(said) - 1} more changes")
+    delta = sum(edits.dur(sg) for sg in after) - sum(edits.dur(sg) for sg in segments)
+    one = {str(op.get("shot")) for op in clean} if all(op.get("shot") for op in clean) else set()
+    if abs(delta) < 0.05:
+        tail = ""
+    elif len(one) == 1 and next(iter(one)) in num:
+        tail = f" {shot(next(iter(one))).capitalize()} gets {abs(delta):.1f} s {'longer' if delta > 0 else 'shorter'}"
+    else:
+        tail = f" The film gets {abs(delta):.1f} s {'longer' if delta > 0 else 'shorter'}"
+    if tail and at is not None:
+        tail += f", at {_film_clock(at)}"
+    return f"{first}.{tail}." if tail else f"{first}."
+
+
+def _fx_film(e: dict, segments: list[dict]) -> dict | None:
+    """Where the effect's shot sits in the film — after the proposal's own edits, so a
+    shot they create has a place too: `{n, start, in, speed}`, the FX tool's way from
+    clip seconds to film time when the board does not have the shot yet."""
+    cut = segments
+    if e.get("edits") and e.get("status") == "proposed":
+        try:
+            cut = edits.apply_ops(segments, None, edits.validate_ops(e["edits"], segments))["segments"]
+        except ValueError:
+            cut = segments
+    starts = _film_starts(cut)
+    for i, sg in enumerate(cut):
+        if str(sg.get("id")) == str(e.get("shot")):
+            return {"n": i + 1, "start": round(starts[str(sg["id"])], 3),
+                    "in": float(sg["in"]), "speed": edits.speed_of(sg)}
+    return None
+
+
+def _fx_urls(e: dict, segments: list[dict] | None = None) -> dict:
     d = fx_home() / e["id"]
     out = dict(e)
     anchor = _fx_anchor(e)
     if anchor:
         out["anchor_shot"] = anchor
+    segments = _fx_segments() if segments is None else segments
+    if e.get("edits") and e.get("status") == "proposed":
+        out["says"] = _fx_edit_says(e["edits"], segments)
+    elif (e.get("applied") or {}).get("says"):
+        out["says"] = e["applied"]["says"]
+    film = _fx_film(e, segments)
+    if film:
+        out["film"] = film
     for key, name in (("sound_url", "sound.wav"), ("proof_url", "proof.mp4"),
                       ("base_url", "base.mp4"), ("strip_url", "strip.jpg"),
                       ("ref_url", "ref.png")):
@@ -4596,18 +4723,27 @@ def _fx_all() -> list[dict]:
     edl = read_edl()
     accepted = list(edl.get("effects") or [])
     ids = {e.get("id") for e in accepted}
-    proposed = []
+    proposed, revising = [], {}
     for p in sorted(fx_home().glob("fx_*.json")):
         try:
             e = json.loads(p.read_text(encoding="utf-8"))
         except ValueError:
             continue
-        if e.get("id") in ids or e.get("status") not in ("proposed", "removed"):
+        if e.get("id") in ids:
+            # Change on an accepted effect (a revise) leaves the revision in the fx dir
+            # under the same id, the accepted copy in the EDL: the revision is what
+            # waits on Karl. It was never listed, so the paid-for change could not be
+            # seen, previewed or accepted from the board (INTAKE M16 I16.5).
+            if e.get("status") == "proposed":
+                revising[e["id"]] = e
+            continue
+        if e.get("status") not in ("proposed", "removed"):
             continue
         proposed.append(e)
     # accepted first, then proposals, then what was removed (kept for Restore)
     proposed.sort(key=lambda e: e.get("status") == "removed")
-    return [_fx_urls(e) for e in accepted + proposed]
+    segments = edl.get("segments") or []
+    return [_fx_urls(revising.get(e.get("id"), e), segments) for e in accepted + proposed]
 
 
 def _fx_get(fx_id: str) -> dict:
@@ -4618,6 +4754,16 @@ def _fx_get(fx_id: str) -> dict:
     if e is None:
         raise HTTPException(404, f"no effect {fx_id}")
     return e
+
+
+def _fx_current(fx_id: str) -> dict:
+    """The version on the board: a revision of an accepted effect waiting on Karl (its
+    file in the fx dir, proposed) before the accepted copy in the EDL — what Change, a
+    nudge and the free check work on."""
+    e = fx.load(fx_home(), fx_id)
+    if e is not None and e.get("status") == "proposed":
+        return e
+    return _fx_get(fx_id)
 
 
 def _fx_put(e: dict) -> None:
@@ -4722,6 +4868,7 @@ def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict 
         fx.save(fx_home(), e)
         _fx_sound(e)
         entry["result"] = {"id": fx_id}
+        _fx_autoverify(fx_id)                       # the free check, by itself (I16.5)
         n_ev, n_ed = len(e.get("events") or []), len(e.get("edits") or [])
         what = " · ".join(x for x in [f"{n_ev} moment{'s' if n_ev != 1 else ''}" if n_ev else "",
                                      f"{n_ed} change{'s' if n_ed != 1 else ''} to the cut" if n_ed else ""] if x)
@@ -4733,7 +4880,7 @@ def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict 
 def _fx_revise_job(job: str, fx_id: str, note: str) -> None:
     entry = FX[job]
     try:
-        e = _fx_get(fx_id)
+        e = _fx_current(fx_id)
         segments = _fx_segments()
         clips, _ = _ask_clips()
         entry.note("revising the effect")
@@ -4751,6 +4898,7 @@ def _fx_revise_job(job: str, fx_id: str, note: str) -> None:
             # the accepted one stays in the EDL until this proposal is accepted over it
             pass
         entry["result"] = {"id": fx_id}
+        _fx_autoverify(fx_id)
         entry.finish("done", detail=f"{new['name']} — revised, a proposal")
     except Exception as exc:  # noqa: BLE001
         entry.finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
@@ -4795,10 +4943,65 @@ def _fx_proof(e: dict, seg: dict) -> tuple[Path, Path]:
     return proof, base
 
 
+# The free check runs by itself (INTAKE M16 I16.5): after every design, revise, nudge
+# and revert, never a model call — a proof render of the one shot and the measured
+# checklist. Proposals arrived unchecked because the check waited for a Verify button
+# (the slow motion on Killington never had one run). One proof renders at a time, after
+# any render of the cut (a 4K encode owns the cores); a check already waiting for an
+# effect covers a newer change too, because it reads the effect when it starts.
+FX_VERIFY_SLOT = threading.Lock()
+FX_VERIFY_GUARD = threading.Lock()
+FX_VERIFY_WAITING: dict[str, str] = {}      # fx id → the job queued for it, not started
+FX_VERIFY_POLL_S = 1.0
+FX_SPEC_CHECKED = ("shot", "events", "overlay", "sound", "window", "edits")
+
+
+def _fx_render_running() -> bool:
+    return any(j["state"] not in progress.TERMINAL for j in RENDERS.values())
+
+
+def _fx_autoverify(fx_id: str) -> str | None:
+    """Queue the free check for an effect; returns its job id (the one already waiting
+    when there is one), or None when the effect is gone."""
+    with FX_VERIFY_GUARD:
+        waiting = FX_VERIFY_WAITING.get(fx_id)
+        if waiting and waiting in FX and FX[waiting]["state"] not in progress.TERMINAL:
+            return waiting
+        try:
+            name = _fx_get(fx_id).get("name") or "the effect"
+        except HTTPException:
+            return None
+        job = _fx_start("verify", f"Checking {name}", _fx_verify_job, fx_id, fx_id=fx_id)
+        FX_VERIFY_WAITING[fx_id] = job
+        return job
+
+
+def _fx_verify_wait(entry: progress.Job, job: str, fx_id: str) -> None:
+    """Behind any render, then behind another check; once started, a newer change to
+    this effect queues a check of its own."""
+    waited = False
+    while _fx_render_running():
+        if not waited:
+            entry.note("waiting for the render to finish")
+            waited = True
+        time.sleep(FX_VERIFY_POLL_S)
+    FX_VERIFY_SLOT.acquire()
+    with FX_VERIFY_GUARD:
+        if FX_VERIFY_WAITING.get(fx_id) == job:
+            FX_VERIFY_WAITING.pop(fx_id)
+
+
 def _fx_verify_job(job: str, fx_id: str) -> None:
     entry = FX[job]
+    slot = False
     try:
-        e = _fx_get(fx_id)
+        _fx_verify_wait(entry, job, fx_id)
+        slot = True
+        try:
+            e = _fx_current(fx_id)
+        except HTTPException:                       # discarded while it waited
+            entry.finish("done", detail="the effect is gone")
+            return
         seg = _fx_seg(e["shot"]) if not str(e.get("shot", "")).startswith("new:") else {"id": e["shot"], "clip": e.get("clip"), "in": 0, "out": 0}
         sc = load_sidecar(e["clip"])
         onset = (sc.get("tracks") or {}).get("onset") or None
@@ -4830,6 +5033,15 @@ def _fx_verify_job(job: str, fx_id: str) -> None:
             if edit_check:
                 v["checks"].insert(0, edit_check)
                 v["ok"] = bool(v["ok"]) and edit_check["ok"]
+        # The effect may have changed while its proof rendered (a nudge, a revise, an
+        # Accept that applied its edits): this checklist describes the old one, and the
+        # change has queued its own check — writing this back would also undo the change.
+        fresh = _fx_current(fx_id)
+        if {k: fresh.get(k) for k in FX_SPEC_CHECKED} != {k: e.get(k) for k in FX_SPEC_CHECKED}:
+            entry["result"] = {"id": fx_id, "ok": None}
+            entry.finish("done", detail="the effect changed meanwhile — checked again")
+            return
+        e = fresh
         e["verify"] = v
         _fx_put(e)
         entry["result"] = {"id": fx_id, "ok": bool(v.get("ok"))}
@@ -4838,13 +5050,24 @@ def _fx_verify_job(job: str, fx_id: str) -> None:
                      else "failed: " + ", ".join(failed)[:200])
     except Exception as exc:  # noqa: BLE001
         entry.finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
+    finally:
+        if slot:
+            FX_VERIFY_SLOT.release()
+        with FX_VERIFY_GUARD:
+            if FX_VERIFY_WAITING.get(fx_id) == job:
+                FX_VERIFY_WAITING.pop(fx_id)
+
+
+def _fx_start(kind: str, label: str, target, *args, fx_id: str | None = None) -> str:
+    job = uuid.uuid4().hex[:8]
+    FX[job] = progress.Job("fx", label, id=job, state="running", fx_kind=kind,
+                           **({"fx_id": fx_id} if fx_id else {}))
+    threading.Thread(target=target, args=(job, *args), daemon=True).start()
+    return job
 
 
 def _fx_job(kind: str, label: str, target, *args) -> JSONResponse:
-    job = uuid.uuid4().hex[:8]
-    FX[job] = progress.Job("fx", label, id=job, state="running", fx_kind=kind)
-    threading.Thread(target=target, args=(job, *args), daemon=True).start()
-    return JSONResponse({"job": job})
+    return JSONResponse({"job": _fx_start(kind, label, target, *args)})
 
 
 @app.get("/api/fx")
@@ -4906,7 +5129,7 @@ async def api_fx_verify(request: Request) -> JSONResponse:
     fx_id = str(body.get("id") or "")
     e = _fx_get(fx_id)
     _fx_seg(e["shot"])
-    return _fx_job("verify", f"Verifying {e.get('name', 'the effect')}", _fx_verify_job, fx_id)
+    return JSONResponse({"job": _fx_autoverify(fx_id)})
 
 
 FX_SPEC_KEYS = ("name", "why", "events", "overlay", "sound", "window")
@@ -4933,6 +5156,7 @@ async def api_fx_accept(request: Request) -> JSONResponse:
         applier = globals().get("apply_edits")
         if applier is None:
             raise HTTPException(501, "this build cannot apply edits to the cut yet")
+        says = _fx_edit_says(e["edits"], _fx_segments())     # the cut as Karl saw it
         try:
             applied = applier(e["edits"])
         except ValueError as exc:
@@ -4943,8 +5167,18 @@ async def api_fx_accept(request: Request) -> JSONResponse:
             new_seg = next((s for s in applied.get("segments") or [] if str(s.get("id")) == str(e["shot"])), None)
             if new_seg:
                 e["clip"] = new_seg["clip"]
-        e["applied"] = {"at": applied.get("at"), "before": applied.get("before"), "words": e.get("edit_words")}
+        e["applied"] = {"at": applied.get("at"), "before": applied.get("before"), "words": e.get("edit_words"),
+                        "says": says}
         e.pop("edits", None)                        # applied: the cut carries them now
+        if e.get("overlay") is None and e.get("sound") is None:
+            # Edit-only (the slow motion on Killington): nothing is left to draw or hear,
+            # so it is not an effect for the EDL. validate_effect refused it and Accept
+            # answered 500 *after* changing the cut, with the proposal still waiting to
+            # be accepted — and applied — again. It is kept on disk as the record, out
+            # of every list; `applied.before` is what an undo takes back.
+            e["status"] = "applied"
+            fx.save(fx_home(), e)
+            return JSONResponse({"ok": True, "effect": _fx_urls(e)})
     segments = _fx_segments()
     current = next((x for x in read_edl().get("effects") or [] if x.get("id") == fx_id), None)
     if current is not None and _fx_snapshot(current) != _fx_snapshot(e):
@@ -4978,6 +5212,7 @@ async def api_fx_revert(request: Request) -> JSONResponse:
     e = fx.validate_effect(e, _fx_segments())
     _fx_put(e)
     _fx_sound(e)
+    _fx_autoverify(e["id"])
     return JSONResponse({"ok": True, "effect": _fx_urls(e)})
 
 
@@ -5014,7 +5249,12 @@ async def api_fx_discard(request: Request) -> JSONResponse:
     e = fx.load(fx_home(), fx_id)
     if e is None:
         raise HTTPException(404, f"no proposal {fx_id}")
-    if e.get("status") == "accepted" or any(x.get("id") == fx_id for x in read_edl().get("effects") or []):
+    current = next((x for x in read_edl().get("effects") or [] if x.get("id") == fx_id), None)
+    if current is not None and e.get("status") == "proposed":
+        fx.save(fx_home(), current)                 # a revision dropped: the accepted one stays
+        _fx_sound(current)
+        return JSONResponse({"ok": True})
+    if e.get("status") == "accepted" or current is not None:
         raise HTTPException(400, "that effect is accepted — remove it instead")
     # a proposal, or a removed effect: gone for good, files and all
     (fx_home() / f"{fx_id}.json").unlink(missing_ok=True)
@@ -5047,7 +5287,7 @@ async def api_fx_update(fx_id: str, request: Request) -> JSONResponse:
     like everything else; the checklist is cleared because it no longer describes
     this effect."""
     body = await request.json()
-    e = _fx_get(fx_id)
+    e = _fx_current(fx_id)
     merged = dict(e)
     for k in ("events", "overlay", "sound", "name", "note"):
         if k in body:
@@ -5060,6 +5300,7 @@ async def api_fx_update(fx_id: str, request: Request) -> JSONResponse:
     _fx_put(new)
     if body.get("sound") is not None:
         _fx_sound(new)
+    _fx_autoverify(fx_id)
     return JSONResponse(_fx_urls(new))
 
 

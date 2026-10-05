@@ -239,12 +239,21 @@ def design(page, note: str = "hit markers where my skis hit the rocks, with the 
            shot: int = 0) -> dict:
     """Design an effect on `shot` through the tool; returns it as the server lists it."""
     open_fx(page, shot)
+    open_design(page)
     page.locator("#fxNote").fill(note)
     page.locator("#fxDesign").click()
     page.wait_for_selector("#fx .fxcard", timeout=20000)
     lst = effects(page)
     assert len(lst) >= 1, lst
     return lst[-1]
+
+
+def open_design(page) -> None:
+    """The design box: open by itself on a shot with no effects, else behind "+ design
+    another effect" (INTAKE M16 I16.5)."""
+    if page.locator("#fxAdd").count():
+        page.locator("#fxAdd").click()
+    page.wait_for_selector("#fxNote")
 
 
 def wait_effect(page, fx_id: str, pred_js: str, timeout: float = 10.0) -> dict:
@@ -291,8 +300,10 @@ def test_the_range_bar_drag_survives_the_parked_playhead(page):
     mid = seg["in"] + (seg["out"] - seg["in"]) * 0.5
     assert abs(w["t1"] - mid) < 0.15 * (seg["out"] - seg["in"]), (w, seg)
     assert page.evaluate("!player.playing") is True
-    assert "the whole shot" not in page.locator("#fx .fxwhole").inner_text()
     assert page.locator("#tl .fx-tlband").count() == 1
+    # the band names the window in film time (shot 1 starts the film at its clip 1.0)
+    want_end = page.evaluate("t => fx.fmtT(t)", w["t1"] - seg["in"])
+    assert page.locator("#tl .fx-tlband span").inner_text() == f"0:00.0–{want_end}"
 
 
 def test_the_range_bar_is_the_video(page):
@@ -306,8 +317,9 @@ def test_the_range_bar_is_the_video(page):
     assert all("/media/poster/" in s and "?t=" in s for s in srcs)
     # park the monitor at 1.5 s of the clip through the timeline: the bar's playhead follows
     page.evaluate("tl.seek(tl.filmStart(segs[0].id) + 0.5)")
-    page.wait_for_function("!document.querySelector('#fxBar .ph').hidden && document.querySelector('#fxBar .ph b').textContent === '0:01.5'")
-    assert "the monitor is at" in page.locator("#fxBarLine").inner_text()
+    # the playhead is labelled in film time (clip 1.5 of shot 1 is 0:00.5 of the film)
+    page.wait_for_function("!document.querySelector('#fxBar .ph').hidden && document.querySelector('#fxBar .ph b').textContent === '0:00.5'")
+    assert page.locator("#fxBarLine").count() == 0          # no hint line under the bar
     # a drag on the strip scrubs: the monitor ends near the pointer's time, paused
     bar = page.locator("#fxBar").bounding_box()
     y = bar["y"] + bar["height"] / 2
@@ -322,7 +334,13 @@ def test_the_range_bar_is_the_video(page):
     page.wait_for_function(f"Math.abs(liveVideo().currentTime - {want}) < 0.3", timeout=5000)
     assert page.evaluate("!player.playing") is True
     assert page.evaluate("fx.state.window") is None          # a scrub is not a window
-    assert page.locator("#fxBar .h1 span").inner_text() != ""   # the handles carry their times
+    assert page.locator("#fxBar .h1 span").inner_text() == "0:02.0"   # the handles carry film times
+    # one control sets the nearer end at the parked playhead: here, near the end
+    head = page.locator("#fxAtHead")
+    page.wait_for_function("document.querySelector('#fxAtHead').textContent === 'set end at playhead'")
+    head.click()
+    w = page.evaluate("fx.state.window")
+    assert w["t0"] == seg["in"] and abs(w["t1"] - want) < 0.3, w
 
 
 def test_the_tool_follows_the_selected_shot_and_prices_the_button(page):
@@ -330,15 +348,17 @@ def test_the_tool_follows_the_selected_shot_and_prices_the_button(page):
     carries the price from GET /api/fx/price before anything is pressed."""
     sid = open_fx(page, 0)
     # (text_content, not inner_text: the title is uppercased by CSS)
-    assert page.locator("#fx .fxtitle").text_content() == "FX · shot 1 · CLIP_A"
-    assert "no effects on this shot yet" in page.locator("#fx").inner_text()
+    assert page.locator("#fx .fxtitle").text_content() == "Shot 1 · 2.0 s"   # no file name (M16)
+    # no effects yet: the design box is open by itself, and nothing says so in words
+    assert page.locator("#fxNote").is_visible() and page.locator("#fxAdd").count() == 0
+    assert "no effects" not in page.locator("#fx").inner_text()
     page.wait_for_selector("#fx .fxprice")
     price = api(page, f"/api/fx/price?place=1&shot={sid}")
     assert price["frames"] >= 1
-    assert page.locator("#fx .fxprice").inner_text().startswith(f"≈ ${price['usd']:.2f}")
+    assert page.locator("#fxDesign").inner_text() == f"Design · ~${price['usd']:.2f}"   # no "· 8 frames"
     # the other shot
     open_fx(page, 1)
-    assert page.locator("#fx .fxtitle").text_content() == "FX · shot 2 · CLIP_B"
+    assert page.locator("#fx .fxtitle").text_content() == "Shot 2 · 2.0 s"
     # nothing selected: the tool says so and the design box goes
     page.evaluate("tl.select([])")
     page.wait_for_function("document.querySelector('#fx .fxtitle').textContent === 'FX'")
@@ -346,11 +366,51 @@ def test_the_tool_follows_the_selected_shot_and_prices_the_button(page):
     assert page.locator("#fxDesign").count() == 0
 
 
+def test_the_design_box_is_behind_its_link_and_the_window_has_no_number_inputs(page):
+    """INTAKE M16 I16.5 (4). On a shot with an effect the design box is one line, "+ design
+    another effect"; it opens on a click and closes when another shot is chosen. The
+    window is the range bar's handles and one "set start/end at playhead" control: the
+    number inputs, the two "◀ playhead" buttons, "the whole shot ✕", "· N frames" and
+    "click the strip to park the monitor on this shot" are gone."""
+    design(page)
+    assert page.locator("#fxNote").count() == 0
+    assert page.locator("#fxAdd").inner_text() == "+ design another effect"
+    page.locator("#fxAdd").click()
+    page.wait_for_selector("#fxNote")
+    assert page.evaluate("document.activeElement.id") == "fxNote"
+    text = page.locator("#fx .fxdesign").inner_text()
+    for gone in ("where", "◀ playhead", "the whole shot", "frame", "click the strip", "design an effect for this shot"):
+        assert gone not in text, gone
+    assert page.locator("#fx .fxdesign input").count() == 0
+    assert page.locator("#fxAtHead").count() == 1
+    open_fx(page, 1)                                         # another shot: no effects, the box open
+    assert page.locator("#fxNote").is_visible()
+    open_fx(page, 0)                                         # back: closed again
+    assert page.locator("#fxNote").count() == 0 and page.locator("#fxAdd").count() == 1
+
+
+def test_a_finished_check_does_not_take_the_caret_from_the_next_note(page):
+    """The server's check finishes seconds after every design and repaints the tool;
+    Karl typing the next note in the design box keeps his caret."""
+    e = design(page)
+    open_design(page)
+    note = page.locator("#fxNote")
+    assert note.input_value() == ""                          # the last design's note is used
+    note.click()
+    page.keyboard.type("a SEND IT ti")
+    page.evaluate("fx.state.sig = ''; fx.refresh()")         # a repaint, as a finished job makes
+    page.wait_for_function("document.activeElement && document.activeElement.id === 'fxNote'")
+    page.keyboard.type("tle")
+    assert note.input_value() == "a SEND IT title"
+    assert e["id"]
+
+
 def test_design_and_go_wait_for_their_price_and_never_spend_without_one(page):
     """INTAKE I16.0f, review: Design and Iterate's Go were clickable while their price
     was still on its way, and stayed unpriced for good when the fetch failed. They are
     disabled until priced; with no price to be had they say so and stay disabled."""
     e = design(page)
+    open_design(page)
     page.wait_for_function("!document.querySelector('#fxDesign').disabled")
     page.locator(f"#fx .fxcard[data-id='{e['id']}'] button[data-act=iterate]").click()
     go = page.locator(f"#fx .fxcard[data-id='{e['id']}'] button[data-act=revise]")
@@ -367,6 +427,7 @@ def test_design_and_go_wait_for_their_price_and_never_spend_without_one(page):
     page.wait_for_selector("#tl .blk")
     page.wait_for_function("window.fx && fx.ready")
     open_fx(page, 0)
+    open_design(page)
     page.wait_for_function(
         "document.querySelector('#fxDesign').textContent.includes('price unavailable')",
         timeout=5000)
@@ -387,21 +448,26 @@ def test_design_and_go_wait_for_their_price_and_never_spend_without_one(page):
 
 
 def test_design_makes_a_proposal_card_and_never_touches_the_edl(page):
-    """Design → a job (kind fx) → the card: name, hits, the amber chip, the note, the
-    events with their times and anchors; the rail badge counts it; the EDL has no
-    `effects` until Accept."""
+    """Design → a job (kind fx) → the card: name, the amber chip, one sentence, the
+    moments with their times in FILM time (shot 1 is CLIP_A 1.0–3.0 at film 0, so the
+    hits at clip 1.5 / 2.4 are 0:00.5 / 0:01.4), the anchors only on hover; Karl's note
+    behind why?; the rail badge counts it; the EDL has no `effects` until Accept."""
     e = design(page)
     card = page.locator("#fx .fxcard")
     assert card.count() == 1
     text = card.inner_text()
-    assert "hit markers" in text and "2 moments" in text
+    assert "hit markers" in text and "moments" not in text
     assert card.locator(".fxchip").text_content() == "proposed"   # uppercased by CSS
-    assert "hit markers where my skis hit the rocks" in text
+    assert card.locator(".fxsays").inner_text() == "the two impacts the onset track found"
+    assert "hit markers where my skis hit the rocks" not in text   # the note is behind why?
+    card.locator("button[data-act=why]").click()
+    page.wait_for_selector("#fx .fxwhybox")
+    assert "hit markers where my skis hit the rocks" in card.locator(".fxwhybox").inner_text()
     rows = card.locator(".fxev")
     assert rows.count() == 2
-    assert rows.nth(0).locator(".t").inner_text() == "0:01.5"
-    assert rows.nth(0).locator(".xy").inner_text() == "x 0.50 y 0.70"
-    assert rows.nth(1).locator(".t").inner_text() == "0:02.4"
+    assert rows.nth(0).locator(".t").inner_text() == "0:00.5"
+    assert rows.nth(0).get_attribute("title").startswith("x 0.50 y 0.70")
+    assert rows.nth(1).locator(".t").inner_text() == "0:01.4"
     assert card.locator("button[data-act=accept]").is_visible()
     assert card.locator("button[data-act=discard]").is_visible()
     assert card.locator("button[data-act=remove]").count() == 0
@@ -423,49 +489,52 @@ def test_the_nudges_move_a_hit_one_frame_through_put(page):
     card.locator(".fxev").nth(0).locator("button.nudge[data-d='1']").click()
     got = wait_effect(page, e["id"], f"e => Math.abs(e.events[0].t - {1.5 + fx.NUDGE_S}) < 1e-3")
     assert got["events"][0]["t"] == pytest.approx(1.5 + fx.NUDGE_S, abs=1e-3)
-    assert "verify" not in got
     card.locator(".fxev").nth(0).locator("button.nudge[data-d='-1']").click()
     wait_effect(page, e["id"], "e => Math.abs(e.events[0].t - 1.5) < 1e-3")
     card.locator(".fxev").nth(0).locator("button.nudge[data-d='-1']").click()
     got = wait_effect(page, e["id"], f"e => Math.abs(e.events[0].t - {1.5 - fx.NUDGE_S}) < 1e-3")
     # the card follows the server's copy (1.4583 reads as 0:01.5 at a tenth)
     page.wait_for_function(
-        "document.querySelector('#fx .fxev .t').textContent === '0:01.5'")
+        "document.querySelector('#fx .fxev .t').textContent === '0:00.5'")
     assert got["events"][1]["t"] == 2.4                      # the other hit stayed
+    # a nudge clears the checklist, and the server checks the effect again by itself
+    wait_effect(page, e["id"], "e => !!e.verify && Math.abs(e.events[0].t - %s) < 1e-3" % (1.5 - fx.NUDGE_S))
 
 
-def test_verify_iterate_accept_and_remove(page):
-    """Verify runs the checklist and the card shows it (✓ / ✗ / – per check with its
-    detail); Iterate is one line and a revise job that clears the checklist; Accept
-    moves it into the EDL (the chip goes green, Remove replaces Accept / Discard);
-    Remove takes it out of the cut."""
+def test_the_check_runs_by_itself_then_change_accept_and_remove(page):
+    """INTAKE M16 I16.5. No Verify button: the server checks a design by itself and the
+    card says "✓ checked"; why? shows the checklist in plain words (the measurements on
+    hover, not on the card). Change · ~$x opens one line and Go (priced) revises it — the
+    change is checked again by itself. Accept folds the card (Remove · Change, the moments
+    behind "adjust the moments ▸", no check line once it passes); Remove keeps it for
+    Restore; Delete is for good."""
     e = design(page)
     card = page.locator("#fx .fxcard")
-    card.locator("button[data-act=verify]").click()
-    page.wait_for_selector("#fx .fxverify", timeout=30000)
+    assert card.locator("button[data-act=verify]").count() == 0
+    page.wait_for_function("(document.querySelector('#fx .fxcheck') || {}).textContent === '✓ checked'",
+                           timeout=30000)
     got = next(x for x in effects(page) if x["id"] == e["id"])
     assert got["verify"]["ok"] is True
+    card.locator("button[data-act=why]").click()
     checks = card.locator(".fxchecks li")
     assert checks.count() == 3
-    assert checks.nth(0).locator(".mark").inner_text() == "✓"
-    assert checks.nth(1).locator(".mark").inner_text() == "–"
-    assert "skipped" in checks.nth(1).inner_text()
-    assert checks.nth(2).locator(".mark").inner_text() == "✓"
-    assert "rise 9.1 dB" in checks.nth(2).inner_text()
-    assert "verified" in card.locator(".fxvhead").inner_text()
-    # iterate
+    assert [checks.nth(k).locator(".mark").inner_text() for k in range(3)] == ["✓", "–", "✓"]
+    assert checks.nth(0).locator(".lbl").inner_text() == "every moment is in the shot"
+    assert checks.nth(1).locator(".lbl").inner_text() == "each hit lands on a sharp sound — not checked"
+    assert checks.nth(2).locator(".lbl").inner_text() == "the sound is heard"
+    assert "9.1 dB" not in card.inner_text() and checks.nth(2).get_attribute("title") == "rise 9.1 dB"
+    # change: a model call, its price on the button and on Go
+    price = api(page, '/api/fx/price')['usd']
+    assert card.locator("button[data-act=iterate]").inner_text() == f"Change · ~${price:.2f}"
     card.locator("button[data-act=iterate]").click()
-    # Go is a model call: its price is on it before the click (INTAKE I16.0f)
     go = card.locator(".fxiter button[data-act=revise]")
-    assert go.inner_text() == f"Go · ~${api(page, '/api/fx/price')['usd']:.2f}"
+    assert go.inner_text() == f"Go · ~${price:.2f}"
     box = card.locator(".fxiter input")
     box.fill("make them red")
     box.press("Enter")
-    got = wait_effect(page, e["id"], "e => e.overlay.shapes.every(s => s.color === '#ff0000')",
+    got = wait_effect(page, e["id"], "e => e.overlay.shapes.every(s => s.color === '#ff0000') && !!e.verify",
                       timeout=30000)
     assert [h["note"] for h in got["history"]][-1] == "make them red"
-    assert "verify" not in got                               # an iteration is unverified
-    page.wait_for_function("document.querySelectorAll('#fx .fxverify').length === 0")
     assert page.locator("#fx .fxiter").count() == 0
     # accept: the human's click, and only then the EDL
     card.locator("button[data-act=accept]").click()
@@ -473,6 +542,11 @@ def test_verify_iterate_accept_and_remove(page):
     assert [x["id"] for x in api(page, "/api/project")["effects"]] == [e["id"]]
     assert card.locator("button[data-act=remove]").is_visible()
     assert card.locator("button[data-act=accept]").count() == 0
+    assert card.locator("button[data-act=preview]").count() == 0
+    page.wait_for_function("!document.querySelector('#fx .fxcard .fxcheck')")   # passed and answered: quiet
+    assert card.locator(".fxev").count() == 0                 # folded
+    card.locator("button[data-act=moments]").click()
+    page.wait_for_function("document.querySelectorAll('#fx .fxev').length === 2")
     # the badge counts what waits on you: an accepted effect is answered (INTAKE M16)
     assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == ""
     # remove keeps it (Karl: reversible), out of the cut, with Restore; Delete is for good
@@ -490,6 +564,105 @@ def test_verify_iterate_accept_and_remove(page):
     card.locator("button[data-act=discard]").click()
     page.wait_for_function("document.querySelectorAll('#fx .fxcard').length === 0")
     assert effects(page) == []
+
+
+def test_the_waiting_proposal_is_first_in_film_time_and_its_preview_is_nexts(page):
+    """INTAKE M16 I16.5 on the slow motion: an edit-only proposal on shot 2, beside an
+    accepted effect, is the first card; it says what changes in the film in film time
+    (shot 2 starts at 0:02), is checked by itself, shows no moment rows (nothing to draw),
+    and its ▶ Preview carries data-next-for="polish" and its id — the button flow.js
+    makes the one blue one. Nothing in the tool keeps the old primary style."""
+    import server
+    sid1, sid2 = shot_ids(page)
+    acc = design(page, shot=1)
+    page.locator(f"#fx .fxcard[data-id='{acc['id']}'] button[data-act=accept]").click()
+    wait_effect(page, acc["id"], "e => e.status === 'accepted'")
+    fx.save(server.fx_home(), {
+        "id": "fx_slowui01", "shot": sid2, "clip": "CLIP_B.MP4", "name": "slow motion on the hit",
+        "note": "slow motion at 0.4x over the biggest hit", "why": "the hit at 1.10 s at 0.4x",
+        "events": [{"t": 1.1, "x": 0.5, "y": 0.5}], "status": "proposed",
+        "edits": [{"op": "speed", "shot": sid2, "rate": 0.4, "from": 1.0, "to": 1.4}],
+        "edit_words": ["CLIP_B.MP4 at 0.4× from 1.00 to 1.40s"],
+        "limits": "the onset at 0.20 s is a voice", "created": "2026-09-20T22:42:23"})
+    page.evaluate("fx.refresh()")
+    page.wait_for_function("document.querySelectorAll('#fx .fxcard').length === 2")
+    first = page.locator("#fx .fxcard").first
+    assert first.get_attribute("data-id") == "fx_slowui01"
+    assert first.locator(".fxsays").inner_text() == "Slows 0.40 s to 0.4×. Shot 2 gets 0.6 s longer, at 0:03."
+    text = first.inner_text()
+    assert "CLIP_B" not in text and "1.00" not in text and "could not" not in text
+    assert first.locator(".fxev").count() == 0
+    page.wait_for_function(
+        "(document.querySelector(\"#fx .fxcard[data-id='fx_slowui01'] .fxcheck\") || {}).textContent === '✓ checked'",
+        timeout=30000)
+    pv = first.locator("button[data-act=preview]")
+    assert pv.get_attribute("data-next-for") == "polish" and pv.get_attribute("data-fx") == "fx_slowui01"
+    assert pv.inner_text() == "▶ Preview"
+    assert [b.inner_text() for b in first.locator(".fxbtns button").all()][:3] == ["▶ Preview", "Accept", "Discard"]
+    assert page.locator("#fx .primary").count() == 0
+    assert page.locator("#fx button[data-act=verify]").count() == 0
+    # flow.js's one blue button (C2) survives the tool's own rebuilds
+    pv.evaluate("b => b.classList.add('is-next')")
+    page.evaluate("fx.state.sig = ''; fx.refresh()")
+    page.wait_for_function("document.querySelector(\"#fx button[data-fx='fx_slowui01']\").classList.contains('is-next')")
+    assert page.locator("#fx .is-next").count() == 1
+    first.locator("button[data-act=why]").click()
+    why = first.locator(".fxwhybox").inner_text()
+    assert "slow motion at 0.4x over the biggest hit" in why and "the hit at 1.10 s" in why
+    assert "the onset at 0.20 s is a voice" in why
+    # the accepted one folds below it: its sentence in two lines at most (the rest on
+    # hover), Remove and Change, no moments
+    second = page.locator("#fx .fxcard").nth(1)
+    assert second.locator(".fxchip").text_content() == "accepted"
+    assert second.locator(".fxev").count() == 0 and second.locator("button[data-act=moments]").count() == 1
+    says = second.locator(".fxsays")
+    assert says.evaluate("el => getComputedStyle(el).webkitLineClamp") == "2"
+    assert says.get_attribute("title") == says.inner_text()
+    assert first.locator(".fxsays").evaluate("el => getComputedStyle(el).webkitLineClamp") == "none"
+
+
+def test_accepting_an_edit_changes_the_cut_in_place(page):
+    """INTAKE M16 I16.5 (5), contract C5. Accepting the slow motion reloaded the whole
+    page. Accept now awaits the board's window.roughcutRefresh() — the shell repaints
+    the timeline, the shot strip and the bin in place — and the card leaves the tool;
+    only where the board has no roughcutRefresh is the page reloaded."""
+    import server
+
+    def propose(fx_id, sid, op):
+        fx.save(server.fx_home(), {
+            "id": fx_id, "shot": sid, "clip": "CLIP_B.MP4", "name": "slow motion",
+            "note": "slow motion on the hit", "why": "", "events": [{"t": 1.1, "x": 0.5, "y": 0.5}],
+            "status": "proposed", "edits": [{"op": "speed", "shot": sid, "rate": 0.5, **op}],
+            "created": "2026-09-20T22:42:23"})
+
+    sid1, sid2 = shot_ids(page)
+    propose("fx_inplace1", sid2, {"from": 1.0, "to": 1.4})
+    open_fx(page, 1)
+    page.evaluate("fx.refresh()")
+    page.wait_for_selector("#fx .fxcard[data-id='fx_inplace1']")
+    page.evaluate("""window.__stay = 1; window.__refreshed = 0;
+        window.roughcutRefresh = async () => { window.__refreshed += 1; }""")
+    page.locator("#fx .fxcard[data-id='fx_inplace1'] button[data-act=accept]").click()
+    page.wait_for_function("window.__refreshed === 1")
+    page.wait_for_function("document.querySelectorAll('#fx .fxcard').length === 0")
+    assert page.evaluate("window.__stay") == 1                # no reload
+    cut = api(page, "/api/project")["segments"]
+    assert [s.get("speed") for s in cut] == [None, None, 0.5, None]
+    # the fallback: no roughcutRefresh on the board, the page reloads onto the new cut
+    page.reload()
+    page.wait_for_selector("#tl .blk")
+    page.wait_for_function("window.fx && fx.ready")
+    sid = shot_ids(page)[3]                                  # CLIP_B 1.4–2.0, the last piece
+    propose("fx_inplace2", sid, {})
+    open_fx(page, 3)
+    page.evaluate("fx.refresh()")
+    page.wait_for_selector("#fx .fxcard[data-id='fx_inplace2']")
+    page.evaluate("window.__stay = 1; window.roughcutRefresh = undefined")
+    page.locator("#fx .fxcard[data-id='fx_inplace2'] button[data-act=accept]").click()
+    page.wait_for_function("window.__stay === undefined", timeout=10000)
+    page.wait_for_selector("#tl .blk", timeout=15000)
+    page.wait_for_function("typeof segs !== 'undefined' && segs.length === 4 && segs[3].speed === 0.5",
+                           timeout=15000)
 
 
 def test_discard_drops_the_proposal(page):
@@ -526,6 +699,7 @@ def test_next_lands_on_the_waiting_effect_not_the_anchored_shot(page, live_serve
     # two accepted effects ahead of the proposal: its card starts below the dock's fold,
     # as the slow motion's did on Killington, so the landing has to scroll to it
     for n, note in enumerate(("a title as we drop in", "a red vignette as I land"), 1):
+        open_design(page)
         page.locator("#fxNote").fill(note)
         page.locator("#fxDesign").click()
         page.wait_for_function(f"document.querySelectorAll('#fx .fxcard').length === {n}",
@@ -535,6 +709,7 @@ def test_next_lands_on_the_waiting_effect_not_the_anchored_shot(page, live_serve
         wait_effect(page, made["id"], "e => e.status === 'accepted'")
         page.wait_for_function(
             f"[...document.querySelectorAll('#fx .fxchip')].filter(c => c.textContent === 'accepted').length === {n}")
+    open_design(page)
     page.locator("#fxNote").fill("hit markers where my skis hit the rocks")
     page.locator("#fxDesign").click()
     page.wait_for_function("document.querySelectorAll('#fx .fxcard').length === 3", timeout=20000)
@@ -572,15 +747,28 @@ def test_next_lands_on_the_waiting_effect_not_the_anchored_shot(page, live_serve
         assert page.evaluate("window.scrollY") == 0          # only the dock scrolled
         assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == "1"
 
-    # the card starts out of the dock's view (opened on its shot, scrolled to the top)
+    # the waiting card is the first one now (I16.5); fx.focus still brings it into view
+    # from a dock scrolled past it — the accepted cards' why? open makes the tool tall
     page.evaluate(f"tl.select(['{sid2}'])")
     page.evaluate("dock.open('fx')")
     page.wait_for_selector(f"#fx .fxcard[data-id='{waiting['id']}']")
+    assert page.locator("#fx .fxcard").first.get_attribute("data-id") == waiting["id"]
+    for k in (1, 2):
+        page.locator("#fx .fxcard").nth(k).locator("button[data-act=why]").click()
+    page.wait_for_function("document.querySelectorAll('#fx .fxwhybox').length === 2")
+    page.evaluate("window.scrollTo(0, 0)")                   # the clicks scrolled the page to reach them
+    page.evaluate("(() => { const t = document.querySelector('#tools'); t.scrollTop = t.scrollHeight; })()")
     start = page.evaluate(f"""(() => {{
         const c = document.querySelector("#fx .fxcard[data-id='{waiting['id']}']").getBoundingClientRect();
         const t = document.querySelector('#tools').getBoundingClientRect();
-        return {{ct: c.top, tb: t.bottom}}; }})()""")
-    assert start["ct"] > start["tb"] - 40, f"the card must start out of view: {start}"
+        return {{ct: c.top, tt: t.top}}; }})()""")
+    assert start["ct"] < start["tt"] - 1, f"the card must start out of view: {start}"
+    assert page.evaluate(f"fx.focus('{waiting['id']}')") is True
+    box = page.evaluate(f"""(() => {{
+        const c = document.querySelector("#fx .fxcard[data-id='{waiting['id']}']").getBoundingClientRect();
+        const t = document.querySelector('#tools').getBoundingClientRect();
+        return {{ct: c.top, tt: t.top, tb: t.bottom}}; }})()""")
+    assert box["tt"] - 1 <= box["ct"] < box["tb"] - 40, box
     page.evaluate(f"tl.select(['{sid1}'])")
     page.evaluate("dock.open('bin')")
     # on the board: in place, no reload
@@ -828,7 +1016,7 @@ def test_draw_a_reference_makes_marks_from_strokes_and_the_design_uses_them(page
             assert 0 <= p["x"] <= 1 and 0 <= p["y"] <= 1        # fractions, never pixels
     assert ref["png"].startswith("data:image/png;base64,")
     line = page.locator("#fx .fxref").inner_text()
-    assert "reference · 2 marks at 0:01.5" in line and "the skis" in line
+    assert "reference · 2 marks at 0:00.5" in line and "the skis" in line   # film time
     # the next Design carries it; the server keeps the marks as the anchors
     page.locator("#fxNote").fill("hit markers on the skis")
     page.locator("#fxDesign").click()
@@ -900,7 +1088,7 @@ def test_a_click_on_the_paused_monitor_moves_the_selected_hit(page):
     page.wait_for_function(
         "Math.abs(document.querySelector('.screen video.live').currentTime - 2.4) < 0.02", timeout=10000)
     assert "sel" in card.locator(".fxev").nth(1).get_attribute("class")
-    assert "moment 2 selected" in card.locator(".fxpick").inner_text()
+    assert card.locator(".fxpick").inner_text() == "click the picture to move moment 2"
     assert page.evaluate("player.playing") is False
     r = screen_rect(page)
     page.mouse.click(r["x"] + 0.25 * r["w"], r["y"] + 0.60 * r["h"])
@@ -908,10 +1096,9 @@ def test_a_click_on_the_paused_monitor_moves_the_selected_hit(page):
     assert got["events"][1]["y"] == pytest.approx(0.60, abs=0.03)
     assert got["events"][1]["t"] == 2.4
     assert (got["events"][0]["x"], got["events"][0]["y"], got["events"][0]["t"]) == (0.5, 0.7, 1.5)
-    assert "verify" not in got
     assert page.evaluate("player.playing") is False           # the click was ours, not the screen's
     page.wait_for_function(
-        "document.querySelectorAll('#fx .fxev .xy')[1].textContent.startsWith('x 0.2')")
+        "document.querySelectorAll('#fx .fxev')[1].title.startsWith('x 0.2')")
     # the monitor draws it where it went
     page.wait_for_function(f"({SPRITE_ALPHA})([{got['events'][1]['x']}, {got['events'][1]['y']}]) > 200",
                            timeout=10000)

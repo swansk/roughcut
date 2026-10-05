@@ -338,3 +338,186 @@ def test_the_project_put_revalidates_effects(stubbed, client):
     assert r.status_code == 200
     edl = json.loads(project["edl"].read_text(encoding="utf-8"))
     assert edl["effects"][0]["id"] == "fx_put00001"
+
+
+# ---------------------------------------------------------------- the free check, by itself
+# INTAKE M16 I16.5: the Verify button goes; the check runs after every design, revise
+# and nudge, queued behind any render, and never a model call.
+
+def _wait_verify(client, fx_id: str, pred=lambda e: bool(e.get("verify")), timeout: float = 20.0) -> dict:
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        e = next((x for x in client.get("/api/fx").json()["effects"] if x["id"] == fx_id), None)
+        if e is not None and pred(e):
+            return e
+        time.sleep(0.05)
+    raise AssertionError(f"{fx_id} was never checked")
+
+
+def _verify_jobs(fx_id: str) -> list:
+    import server
+    return [j for j in server.FX.values() if j.get("fx_kind") == "verify" and j.get("fx_id") == fx_id]
+
+
+def test_a_design_and_a_revise_are_checked_without_a_click(stubbed, client):
+    shot = _seed(stubbed, client)
+    fx_id = _wait(client, client.post("/api/fx/design", json={"shot": shot, "note": "hit markers"}).json()["job"])["result"]["id"]
+    e = _wait_verify(client, fx_id)
+    assert e["verify"]["ok"] is True and e["proof_url"].endswith("proof.mp4")
+    assert _verify_jobs(fx_id)[0]["label"] == "Checking hit markers"
+    _wait(client, client.post("/api/fx/revise", json={"id": fx_id, "note": "make them red"}).json()["job"])
+    e = _wait_verify(client, fx_id, lambda e: bool(e.get("verify"))
+                     and {s["color"] for s in e["overlay"]["shapes"]} == {"#ff0000"})
+    assert e["verify"]["ok"] is True
+
+
+def test_a_nudge_clears_the_checklist_and_is_checked_again(stubbed, client):
+    shot = _seed(stubbed, client)
+    fx_id = _wait(client, client.post("/api/fx/design", json={"shot": shot, "note": "hit markers"}).json()["job"])["result"]["id"]
+    _wait_verify(client, fx_id)
+    r = client.put(f"/api/fx/{fx_id}", json={"events": [{"t": 1.5 + fx.NUDGE_S, "x": 0.5, "y": 0.7}]})
+    assert r.status_code == 200 and "verify" not in r.json()
+    e = _wait_verify(client, fx_id)
+    assert e["events"][0]["t"] == pytest.approx(1.5 + fx.NUDGE_S, abs=1e-3) and e["verify"]["ok"] is True
+
+
+def test_the_check_waits_behind_a_render_and_one_waits_per_effect(stubbed, client, monkeypatch):
+    """A 4K encode owns the cores: the check waits for it, saying so, and a second
+    change while it waits does not queue a second proof — the waiting one reads the
+    effect when it starts. The Verify endpoint (tools, tests) joins the same queue."""
+    import server
+    from roughcut import progress
+    monkeypatch.setattr(server, "FX_VERIFY_POLL_S", 0.05)
+    shot = _seed(stubbed, client)
+    server.RENDERS["rtest001"] = progress.Job("render", "Rendering — preview", id="rtest001")
+    try:
+        fx_id = _wait(client, client.post("/api/fx/design", json={"shot": shot, "note": "hit markers"}).json()["job"])["result"]["id"]
+        time.sleep(0.3)
+        jobs = _verify_jobs(fx_id)
+        assert len(jobs) == 1 and jobs[0]["state"] == "running"
+        assert jobs[0]["detail"] == "waiting for the render to finish"
+        assert "verify" not in next(x for x in client.get("/api/fx").json()["effects"] if x["id"] == fx_id)
+        assert client.put(f"/api/fx/{fx_id}", json={"events": [{"t": 2.0, "x": 0.4, "y": 0.6}]}).status_code == 200
+        assert client.post("/api/fx/verify", json={"id": fx_id}).json()["job"] == jobs[0]["id"]
+        assert len(_verify_jobs(fx_id)) == 1
+    finally:
+        server.RENDERS["rtest001"].finish("done")
+    e = _wait_verify(client, fx_id)
+    assert [ev["t"] for ev in e["events"]] == [2.0]            # the change it waited through
+    assert e["verify"]["ok"] is True
+    server.RENDERS.pop("rtest001", None)
+
+
+def test_a_check_that_outlives_its_effect_does_not_write_it_back(stubbed, client, monkeypatch):
+    """A nudge while the proof renders: the old checklist is dropped (writing it back
+    would also put the old events back), and the nudge's own check is what lands."""
+    import threading
+    import server
+    gate, seen = threading.Event(), []
+    real = fx.verify
+
+    def slow(effect, seg, **kw):
+        seen.append([ev["t"] for ev in effect["events"]])
+        if len(seen) == 1:
+            gate.wait(10)
+        return real(effect, seg, **kw)
+    monkeypatch.setattr(fx, "verify", slow)
+    shot = _seed(stubbed, client)
+    fx_id = _wait(client, client.post("/api/fx/design", json={"shot": shot, "note": "hit markers"}).json()["job"])["result"]["id"]
+    t0 = time.time()
+    while not seen and time.time() - t0 < 10:
+        time.sleep(0.02)
+    assert seen == [[1.5, 2.4]]
+    assert client.put(f"/api/fx/{fx_id}", json={"events": [{"t": 2.2, "x": 0.4, "y": 0.6}]}).status_code == 200
+    gate.set()
+    e = _wait_verify(client, fx_id)
+    assert [ev["t"] for ev in e["events"]] == [2.2] and seen[-1] == [2.2]
+    first = next(j for j in _verify_jobs(fx_id) if j["state"] == "done" and j["result"]["ok"] is None)
+    assert "changed meanwhile" in first["detail"]
+    assert server.FX_VERIFY_WAITING.get(fx_id) is None
+
+
+# ---------------------------------------------------------------- the sentence, in film time
+# INTAKE M16 I16.5 (1): a proposal says in one sentence what changes in the film, in
+# film time — not "CLIP_08.MP4 at 0.4× from 170.85 to 171.50s" (clip seconds that read
+# as film time on a 3:09 film).
+
+def _propose(fx_id: str, shot: str, ops: list, **extra) -> None:
+    import server
+    e = {"id": fx_id, "shot": shot, "clip": extra.pop("clip", "CLIP_B.MP4"), "name": "an edit",
+         "why": "", "events": [{"t": 1.2, "x": 0.5, "y": 0.5}], "status": "proposed",
+         "edits": ops, "created": "2026-09-20T22:42:23", **extra}
+    fx.save(server.fx_home(), e)
+
+
+def test_an_edit_proposal_says_what_changes_in_film_time(stubbed, client):
+    _seed(stubbed, client)
+    a, b = [s["id"] for s in client.get("/api/project").json()["segments"]]   # 1.0–3.0, 0.0–2.0
+    _propose("fx_says0001", b, [{"op": "speed", "shot": b, "rate": 0.5, "from": 1.0, "to": 1.5}])
+    _propose("fx_says0002", "new:1", [{"op": "generate", "kind": "black", "seconds": 3, "before": a}],
+             clip="")
+    _propose("fx_says0003", b, [{"op": "speed", "shot": "gone", "rate": 0.5}])
+    lst = {e["id"]: e for e in client.get("/api/fx").json()["effects"]}
+    # shot 2 starts at 0:02 of the film; 0.5 s of it at 0.5× is 0.5 s more, from 0:03
+    assert lst["fx_says0001"]["says"] == "Slows 0.50 s to 0.5×. Shot 2 gets 0.5 s longer, at 0:03."
+    assert lst["fx_says0001"]["film"] == {"n": 2, "start": 2.0, "in": 0.0, "speed": 1.0}
+    assert lst["fx_says0002"]["says"] == "Adds a 3 s black slide before shot 1. The film gets 3.0 s longer, at 0:00."
+    # the shot the edits will create has a place in the film already
+    assert lst["fx_says0002"]["film"]["n"] == 1 and lst["fx_says0002"]["film"]["start"] == 0.0
+    assert lst["fx_says0003"]["says"] == "This change no longer fits the cut."
+    # an overlay effect has no sentence of its own (the card says its why)
+    fx_id = _wait(client, client.post("/api/fx/design", json={"shot": a, "note": "hit markers"}).json()["job"])["result"]["id"]
+    e = next(x for x in client.get("/api/fx").json()["effects"] if x["id"] == fx_id)
+    assert "says" not in e and e["film"] == {"n": 1, "start": 0.0, "in": 1.0, "speed": 1.0}
+
+
+def test_accepting_an_edit_only_proposal_changes_the_cut_once(stubbed, client, project):
+    """The slow motion has nothing to draw or hear. Accept answered 500 *after* the
+    edits had changed the cut — validate_effect refused an effect with no overlay, no
+    sound and no edits left — and the proposal stayed waiting, to be applied twice. Now
+    the cut changes once, the proposal leaves every list (the record stays on disk with
+    the sentence and `applied.before` for an undo), and nothing is put in `effects`."""
+    import server
+    _seed(stubbed, client)
+    a, b = [s["id"] for s in client.get("/api/project").json()["segments"]]
+    _propose("fx_slow0001", b, [{"op": "speed", "shot": b, "rate": 0.5, "from": 1.0, "to": 1.5}])
+    r = client.post("/api/fx/accept", json={"id": "fx_slow0001"})
+    assert r.status_code == 200, r.text
+    got = r.json()["effect"]
+    assert got["status"] == "applied" and got["says"].startswith("Slows 0.50 s to 0.5×")
+    assert [s["id"] for s in got["applied"]["before"]] == [a, b]
+    edl = json.loads(project["edl"].read_text(encoding="utf-8"))
+    assert [s.get("speed") for s in edl["segments"]] == [None, None, 0.5, None]
+    assert not edl.get("effects")
+    assert client.get("/api/fx").json()["effects"] == []
+    assert json.loads((server.fx_home() / "fx_slow0001.json").read_text())["status"] == "applied"
+
+
+def test_a_change_to_an_accepted_effect_waits_as_a_proposal_and_discard_keeps_the_old(stubbed, client, project):
+    """Change (a revise) on an accepted effect left the revision in the fx dir under the
+    same id while /api/fx listed only the EDL's accepted copy: the paid-for change could
+    not be seen, previewed or accepted from the board. The revision is listed in its
+    place, checked by itself (the revision, not the accepted copy), nudged as itself;
+    Accept keeps the old for Revert, Discard drops the revision and the accepted copy
+    stays as it was."""
+    shot = _seed(stubbed, client)
+    fx_id = _wait(client, client.post("/api/fx/design", json={"shot": shot, "note": "hit markers"}).json()["job"])["result"]["id"]
+    assert client.post("/api/fx/accept", json={"id": fx_id}).status_code == 200
+    _wait(client, client.post("/api/fx/revise", json={"id": fx_id, "note": "make them red"}).json()["job"])
+    lst = client.get("/api/fx").json()["effects"]
+    assert [(e["id"], e["status"]) for e in lst] == [(fx_id, "proposed")]
+    e = _wait_verify(client, fx_id)
+    assert {s["color"] for s in e["overlay"]["shapes"]} == {"#ff0000"} and e["verify"]["ok"] is True
+    r = client.put(f"/api/fx/{fx_id}", json={"events": [{"t": 2.0, "x": 0.4, "y": 0.6}]})
+    assert r.status_code == 200 and r.json()["status"] == "proposed"
+    edl = json.loads(project["edl"].read_text(encoding="utf-8"))
+    assert [ev["t"] for ev in edl["effects"][0]["events"]] == [1.5, 2.4]   # the accepted copy untouched
+    assert {s.get("color", "#ffffff") for s in edl["effects"][0]["overlay"]["shapes"]} == {"#ffffff"}
+    # discard: the revision goes, the accepted copy is listed again as it was
+    assert client.post("/api/fx/discard", json={"id": fx_id}).status_code == 200
+    lst = client.get("/api/fx").json()["effects"]
+    assert [(e["id"], e["status"]) for e in lst] == [(fx_id, "accepted")]
+    assert [ev["t"] for ev in lst[0]["events"]] == [1.5, 2.4]
+    assert json.loads(project["edl"].read_text(encoding="utf-8"))["effects"][0]["id"] == fx_id
+    # an accepted effect with no revision is still removed, not discarded
+    assert client.post("/api/fx/discard", json={"id": fx_id}).status_code == 400
