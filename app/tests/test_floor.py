@@ -249,6 +249,41 @@ def test_a_hand_added_shot_on_rejected_seconds_is_the_human_changing_their_mind(
     assert selects.summary(edl)["used"] == 1
 
 
+def test_x_on_a_formerly_zero_length_pick_lands_and_the_pass_can_finish(client, monkeypatch):
+    """I16.0c: a pick resting on one frame used to be start == end; X posted
+    [p.start, p.end], the server answered 400 'is not a range', and the pick stayed
+    undecided for ever. Built padded, the verdict lands and every pick is decided."""
+    import server
+
+    real = server.project_payload
+
+    def one_frame_on_c():
+        payload = real()
+        clips = dict(payload["clips"])
+        clips["CLIP_C.MP4"] = {**clips["CLIP_C.MP4"], "candidates": []}
+        return {**payload, "clips": clips, "events": [
+            {"clip": "CLIP_C.MP4", "start": 3.0, "end": 3.0, "kind": "jump",
+             "what": "in the air", "notable": True, "score": 0.7, "rank": 1,
+             "frames": [3.0], "why_ranked": {"confirmation": "unseen"}}]}
+
+    monkeypatch.setattr(server, "project_payload", one_frame_on_c)
+    rows = client.get("/api/picks").json()["picks"]
+    lone = next(p for p in rows if p["clip"] == "CLIP_C.MP4")
+    assert lone["start"] < lone["end"], "a pick is always a range"
+    r = client.post("/api/floor/verdict", json={
+        "clip": lone["clip"], "start": lone["start"], "end": lone["end"],
+        "verdict": "reject"})
+    assert r.status_code == 200, r.text
+    for p in rows:
+        if p["id"] != lone["id"]:
+            assert client.post("/api/floor/verdict", json={
+                "clip": p["clip"], "start": p["start"], "end": p["end"],
+                "verdict": "pick"}).status_code == 200
+    after = client.get("/api/picks").json()["picks"]
+    assert next(p for p in after if p["id"] == lone["id"])["verdict"] == "reject"
+    assert [p["id"] for p in after if not p["verdict"]] == [], "the pass is finished"
+
+
 def test_a_saved_timeline_grows_the_bin_by_its_hand_added_shots(client, project):
     """The API path: once the bin exists, every save teaches it which shots were
     placed by hand — a keep with `source: "hand"` and its `used_in`."""

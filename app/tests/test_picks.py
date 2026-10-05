@@ -87,6 +87,40 @@ def test_a_seen_witness_carries_the_frames_it_rests_on_and_the_why_cites_them():
     assert out[0]["kind"] == "seen", "no event kind to lift the pick by"
 
 
+def test_a_pick_on_one_frame_is_padded_to_the_look_interval_so_a_verdict_can_land():
+    """I16.0c: a lone seen witness on one sampled frame made a pick with start == end
+    (live: CLIP_04 200.0–200.0, CLIP_10 25.0–25.0). The server refuses a verdict on a
+    zero range and nothing re-attached to it, so the pass never finished. It stands for
+    the look interval around its frame, clamped to the clip."""
+    clips = {"CLIP_A.MP4": _clip(candidates=[], duration=60.0)}
+    p = picks.build(clips, [_event(30.0, 30.0, what="in the air")])[0]
+    assert (p["start"], p["end"]) == (28.0, 32.0)
+    assert p["end"] - p["start"] == picks.LOOK_INTERVAL_S
+    assert p["preview"] == [28.0, 32.0] and p["anchor"] == 30.0
+    # near-zero too (live: CLIP_12 1.4–1.6), and clamped at both ends of the clip
+    near = picks.build(clips, [_event(1.4, 1.6)])[0]
+    assert (near["start"], near["end"]) == (0.0, 3.5)
+    tail = picks.build(clips, [_event(59.5, 59.5)])[0]
+    assert (tail["start"], tail["end"]) == (57.5, 60.0)
+    # a real range is left as it is
+    assert picks.build(clips, [_event(20.0, 21.2)])[0]["end"] == 21.2
+    # the keep a P left on the old zero range (CLIP_04 200.0–200.1) re-attaches
+    keep = {"id": "k_1", "clip": "CLIP_A.MP4", "start": 30.0, "end": 30.1}
+    assert picks.build(clips, [_event(30.0, 30.0)], selects=[keep])[0]["verdict"] == "pick"
+
+
+def test_a_zero_length_range_is_matched_as_a_point_inside_the_other():
+    """The safety net: a point inside a range is covered by it; outside, it is not."""
+    assert picks._overlap_ratio((25.0, 25.0), (22.63, 35.67)) == 1.0
+    assert picks._overlap_ratio((22.63, 35.67), (25.0, 25.0)) == 1.0
+    assert picks._overlap_ratio((40.0, 40.0), (22.63, 35.67)) == 0.0
+    assert picks._overlap_ratio((1.0, 3.0), (2.0, 5.0)) == 0.5
+    rows = [{"id": "p_x", "clip": "C", "start": 25.0, "end": 25.0}]
+    picks.attach_verdicts(rows, [{"clip": "C", "start": 24.0, "end": 26.0,
+                                  "verdict": "reject"}], [])
+    assert rows[0]["verdict"] == "reject"
+
+
 def test_overlapping_witnesses_merge_into_one_pick_with_corroboration():
     clips = {"CLIP_A.MP4": _clip(candidates=[
         {"t": 30.0, "end": 33.0, "why": "reaction", "score": 0.6}])}

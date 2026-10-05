@@ -115,6 +115,15 @@ same commit. Releases move entries into a dated version section.
   it (a 31 px row, paid for in the frame's height).
 
 ### Fixed
+- **The pass can finish: a moment on one frame is a range (INTAKE I16.0c).** A pick
+  resting on one sampled frame was built with start == end (Killington: CLIP_04
+  200.0–200.0, CLIP_10 25.0–25.0). X and U posted that zero range and the server
+  answered 400 "is not a range", and `_overlap_ratio` divided by ~0 so no stored keep
+  re-attached — the floor opened on "round 3 · pick 2 of 2" for ever while the bar said
+  the pass was done. `picks._pick_from` now pads any pick shorter than 1 s to the look
+  interval around its frame (4 s, clamped to the clip), and a zero-length range is
+  matched as a point inside the other as a safety net. The 0.1 s keep a P left on
+  CLIP_04 at 3:20 re-attaches; it is not removed.
 - **The open screen stopped contradicting itself (INTAKE M14).** With the looks paused its
   header said "3 released · 9 queued" while its footer said every clip was released and
   every card wore QUEUED beside a lit `released` flag: two definitions of released —
