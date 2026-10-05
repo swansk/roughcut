@@ -242,6 +242,12 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **Accepting an edit updates the cut in place (INTAKE M16 I16.5).** Accept on a proposal
+  that changes the cut (the slow motion) toasted "the cut changed — reloading" and
+  reloaded the whole page. It now awaits `window.roughcutRefresh()` — the board's own
+  repaint of the timeline, shot strip and bin, keeping the selection and the playhead
+  (contract C5) — and the card leaves the tool; the reload stays only as the fallback
+  where the board has no `roughcutRefresh`, or it fails.
 - **The design box is behind "+ design another effect", and the window is the range bar
   (INTAKE M16 I16.5).** The design box sat open under every shot's cards with a heading,
   a five-example placeholder cut off mid-sentence, a "where [156.00] ◀ playhead to

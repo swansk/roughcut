@@ -294,12 +294,7 @@
       } else if (name === 'accept') {
         await api('POST', '/api/fx/accept', { id: e.id });
         if (window.tlLanes && typeof tlLanes.clearGhost === 'function') tlLanes.clearGhost();
-        if (Array.isArray(e.edits) && e.edits.length && typeof location !== 'undefined') {
-          // the cut changed under the board: reload it so the timeline reads the new shots
-          say(`${e.name}: the cut changed — reloading`);
-          setTimeout(() => location.reload(), 600);
-          return;
-        }
+        if (Array.isArray(e.edits) && e.edits.length && !(await refreshCut(e))) return;
         say(`${e.name}: accepted — in the cut`);
         await refresh();
       } else if (name === 'discard') {
@@ -323,6 +318,20 @@
     } catch (err) {
       say(err.message);
     }
+  }
+
+  /* The cut changed under the board (an edit accepted): the board repaints it in place
+   * — timeline, shot strip and bin, keeping the selection and the playhead — through
+   * the shell's window.roughcutRefresh (INTAKE M16 I16.5, contract C5). A whole-page
+   * reload is the fallback where there is none, or it fails. */
+  async function refreshCut(e) {
+    if (typeof window.roughcutRefresh === 'function') {
+      try { await window.roughcutRefresh(); return true; } catch (err) { /* reload below */ }
+    }
+    if (typeof location === 'undefined') return true;
+    say(`${e.name}: the cut changed — reloading`);
+    setTimeout(() => location.reload(), 600);
+    return false;
   }
 
   /* Every model button shows its price first (INTAKE I16.0f): Design and Go are

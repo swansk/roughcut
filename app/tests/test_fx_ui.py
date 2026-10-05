@@ -595,6 +595,50 @@ def test_the_waiting_proposal_is_first_in_film_time_and_its_preview_is_nexts(pag
     assert second.locator(".fxev").count() == 0 and second.locator("button[data-act=moments]").count() == 1
 
 
+def test_accepting_an_edit_changes_the_cut_in_place(page):
+    """INTAKE M16 I16.5 (5), contract C5. Accepting the slow motion reloaded the whole
+    page. Accept now awaits the board's window.roughcutRefresh() — the shell repaints
+    the timeline, the shot strip and the bin in place — and the card leaves the tool;
+    only where the board has no roughcutRefresh is the page reloaded."""
+    import server
+
+    def propose(fx_id, sid, op):
+        fx.save(server.fx_home(), {
+            "id": fx_id, "shot": sid, "clip": "CLIP_B.MP4", "name": "slow motion",
+            "note": "slow motion on the hit", "why": "", "events": [{"t": 1.1, "x": 0.5, "y": 0.5}],
+            "status": "proposed", "edits": [{"op": "speed", "shot": sid, "rate": 0.5, **op}],
+            "created": "2026-09-20T22:42:23"})
+
+    sid1, sid2 = shot_ids(page)
+    propose("fx_inplace1", sid2, {"from": 1.0, "to": 1.4})
+    open_fx(page, 1)
+    page.evaluate("fx.refresh()")
+    page.wait_for_selector("#fx .fxcard[data-id='fx_inplace1']")
+    page.evaluate("""window.__stay = 1; window.__refreshed = 0;
+        window.roughcutRefresh = async () => { window.__refreshed += 1; }""")
+    page.locator("#fx .fxcard[data-id='fx_inplace1'] button[data-act=accept]").click()
+    page.wait_for_function("window.__refreshed === 1")
+    page.wait_for_function("document.querySelectorAll('#fx .fxcard').length === 0")
+    assert page.evaluate("window.__stay") == 1                # no reload
+    cut = api(page, "/api/project")["segments"]
+    assert [s.get("speed") for s in cut] == [None, None, 0.5, None]
+    # the fallback: no roughcutRefresh on the board, the page reloads onto the new cut
+    page.reload()
+    page.wait_for_selector("#tl .blk")
+    page.wait_for_function("window.fx && fx.ready")
+    sid = shot_ids(page)[3]                                  # CLIP_B 1.4–2.0, the last piece
+    propose("fx_inplace2", sid, {})
+    open_fx(page, 3)
+    page.evaluate("fx.refresh()")
+    page.wait_for_selector("#fx .fxcard[data-id='fx_inplace2']")
+    page.evaluate("window.__stay = 1; window.roughcutRefresh = undefined")
+    page.locator("#fx .fxcard[data-id='fx_inplace2'] button[data-act=accept]").click()
+    page.wait_for_function("window.__stay === undefined", timeout=10000)
+    page.wait_for_selector("#tl .blk", timeout=15000)
+    page.wait_for_function("typeof segs !== 'undefined' && segs.length === 4 && segs[3].speed === 0.5",
+                           timeout=15000)
+
+
 def test_discard_drops_the_proposal(page):
     e = design(page)
     page.locator("#fx .fxcard button[data-act=discard]").click()
