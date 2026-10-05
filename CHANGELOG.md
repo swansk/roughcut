@@ -207,6 +207,11 @@ same commit. Releases move entries into a dated version section.
   price's literal `0.15` assumed the default deep model too. The tests now clear both
   role pins first and derive the band and the shot price from `config.DEEP_MODEL`'s
   prices instead of literal dollars; they pass with the pins set.
+- **The Ask price's "newest five" window is tested (M16 stage 0 review, I16.0f, test
+  strength).** The price is the middle of the newest five asks of a kind, but the fitted
+  test wrote four, so removing the window still passed. A new test writes three early,
+  very large asks and five newer ones, and expects the price of the newest five alone
+  ("last 5 asks"); without the window it is fitted on eight and fails.
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six

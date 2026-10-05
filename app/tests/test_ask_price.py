@@ -105,3 +105,30 @@ def test_the_price_is_fitted_to_this_projects_asks_and_follows_the_model(tmp_pat
         monkeypatch.setenv("ROUGHCUT_MODEL_SKELETON", config.QUICK_MODEL)
         mid = c.get("/api/ask/price?mode=full").json()
         assert mid["usd"] < d["usd"] and config.QUICK_MODEL in mid["basis"]
+
+
+def test_only_the_newest_five_asks_of_a_kind_set_the_price(tmp_path, project, no_model):
+    """The fit is the middle of the newest ASK_FIT_LAST asks of a kind, so an old run of
+    outliers (the first, unbounded asks) stops setting the price once five newer ones
+    exist. The fitted test above has four records and never reached the window."""
+    import os
+    import time
+
+    import server
+
+    assert server.ASK_FIT_LAST == 5
+    with _fresh(tmp_path, project) as c:
+        newest = [(40000, 12000), (41000, 12500), (42000, 13000), (43000, 13500),
+                  (44000, 14000)]
+        old = [(200000, 60000), (210000, 61000), (220000, 62000)]   # three huge, early
+        now = time.time()
+        for k, (tin, tout) in enumerate(old + newest):
+            _ask_record(server, f"w{k}", tin, tout)
+            stamp = now - 1000 + k * 10           # in this order: the old ones oldest
+            os.utime(server.STATE["asks"] / f"w{k}.json", (stamp, stamp))
+        deep = config.model_for(config.ROLE_SKELETON)
+        fits = sorted(config.projected_usd(deep, i, o) for i, o in newest)
+        d = c.get("/api/ask/price?mode=full").json()
+        assert d["fitted_on"] == 5, d
+        assert d["usd"] == round(fits[2] + _estimate_usd(), 2), d
+        assert "last 5 asks about the whole cut" in d["basis"]
