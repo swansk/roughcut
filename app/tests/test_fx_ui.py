@@ -667,6 +667,58 @@ def test_accepting_an_edit_changes_the_cut_in_place(page):
                            timeout=15000)
 
 
+def test_undo_after_an_in_place_accept_cannot_take_the_edit_back(page, project):
+    """INTAKE M16, contract C5. The in-place Accept re-reads the cut through the board's
+    real roughcutRefresh. The timeline's undo stack still held snapshots of the cut from
+    before it, so ⌘Z of a trim made earlier saved that old cut over the accepted slow
+    motion — and the effect stayed 'applied', so it never came back to be accepted again.
+    The reload this replaced emptied the stack; the refresh empties it now."""
+    import server
+
+    def disk():
+        return json.loads(Path(project["edl"]).read_text(encoding="utf-8"))["segments"]
+
+    def wait_disk(pred, timeout=10.0):
+        end = time.time() + timeout
+        while time.time() < end:
+            try:
+                d = disk()
+                if pred(d):
+                    return d
+            except ValueError:
+                pass
+            time.sleep(0.1)
+        raise AssertionError(f"the cut on disk never matched: {disk()}")
+
+    sid1, sid2 = shot_ids(page)
+    page.evaluate(f"tl.setRange('{sid1}', 1.5, null)")          # an edit: one undo entry
+    wait_disk(lambda d: d[0]["in"] == 1.5)
+    assert page.locator("#undo").is_enabled()
+    fx.save(server.fx_home(), {
+        "id": "fx_undo1", "shot": sid2, "clip": "CLIP_B.MP4", "name": "slow motion",
+        "note": "slow motion on the hit", "why": "", "events": [{"t": 1.1, "x": 0.5, "y": 0.5}],
+        "status": "proposed", "edits": [{"op": "speed", "shot": sid2, "rate": 0.5,
+                                         "from": 1.0, "to": 1.4}],
+        "created": "2026-09-20T22:42:23"})
+    open_fx(page, 1)
+    page.evaluate("fx.refresh()")
+    page.wait_for_selector("#fx .fxcard[data-id='fx_undo1']")
+    page.evaluate("window.__stay = 1")
+    page.locator("#fx .fxcard[data-id='fx_undo1'] button[data-act=accept]").click()
+    page.wait_for_function("document.querySelectorAll('#fx .fxcard').length === 0")
+    page.wait_for_function("segs.some(s => s.speed === 0.5)")
+    assert page.evaluate("window.__stay") == 1                # in place, not reloaded
+    wait_disk(lambda d: any(s.get("speed") == 0.5 for s in d))
+    assert page.locator("#undo").is_disabled()
+    page.locator("body").click(position={"x": 5, "y": 5})
+    page.keyboard.press("Control+z")
+    page.wait_for_function("document.querySelector('#toast').textContent.includes('nothing to undo')")
+    time.sleep(1.5)                                           # past the 700 ms autosave
+    d = disk()
+    assert [s.get("speed") for s in d] == [None, None, 0.5, None], d
+    assert d[0]["in"] == 1.5                                  # the trim stays too
+
+
 def test_discard_drops_the_proposal(page):
     e = design(page)
     page.locator("#fx .fxcard button[data-act=discard]").click()

@@ -72,6 +72,9 @@
  *   tl.cancel()                 Put the cut back the way begin() found it.
  *   tl.undo() / tl.redo()       ⌘Z / ⌘⇧Z (ctrl on Windows), `u`, the header's #undo /
  *                               #redo — whose tooltips carry the label (`undo: trim`).
+ *   tl.clearHistory()           Forget every undo and redo entry. For a cut the server
+ *                               changed (an effect's edit accepted, read back in place):
+ *                               an entry from before it would put the old cut back over it.
  *   Every mutation below is undoable on its own when called outside begin/commit (it wraps
  *   itself with its own name as the label), goes through hooks.touch() so autosave and
  *   roughcutFlush behave exactly as before, repaints the board and emits `change`.
@@ -719,6 +722,17 @@
     return true;
   }
 
+  /* The cut was replaced from outside the stack (window.roughcutRefresh after an effect's
+   * edit was accepted on the server): every entry's snapshot is of a cut that no longer
+   * exists, and restoring one would wipe the change — the page reload this replaced
+   * emptied the stacks the same way (INTAKE M16, C5). */
+  function clearHistory() {
+    pending = null;
+    undoStack.length = 0;
+    redoStack.length = 0;
+    paintUndo();
+  }
+
   /* ------------------------------------------------------------ mutations */
   function mutate(kind, fn) {
     const own = begin(kind);
@@ -1029,7 +1043,7 @@
   const tl = {
     state, el, mount, render, on,
     byId, indexOf, idAt, dur, speedOf, filmStart, total, shotAt, timeToX, xToTime, eventTime, snapsFor,
-    begin, commit, cancel, undo, redo,
+    begin, commit, cancel, undo, redo, clearHistory,
     setRange, move, split, remove, insert, setSpeed,
     select, syncSel, seek, setPlayhead, zoomTo, fit,
     forSave, needsRekey, afterSave,

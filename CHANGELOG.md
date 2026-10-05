@@ -95,6 +95,15 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **⌘Z after an in-place Accept can no longer take the accepted edit back (INTAKE M16
+  review, C5).** Accepting an effect with an edit re-reads the cut through the board's
+  `roughcutRefresh()` instead of reloading the page, but the timeline's undo and redo
+  stacks still held snapshots of the cut from before it. Trim a shot, accept a slow
+  motion, press ⌘Z: the toast said "undone: trim" and the autosave wrote the old cut —
+  the slow motion was gone from disk while its effect stayed *applied*, so it never came
+  back to be accepted. The refresh now empties the history (`tl.clearHistory()`), as the
+  reload did; ⌘Z says "nothing to undo" and the cut on disk keeps both changes. New test
+  in `test_fx_ui.py`; it fails without the fix.
 - **A paid Look deeper on a Bin row always shows its result (INTAKE M16 integration).**
   The finished deep job does two things a second apart: the button's own poll draws the
   beats under its row, and the board's job strip reloads the project, which redraws the

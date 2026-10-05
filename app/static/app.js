@@ -3208,7 +3208,8 @@ window.roughcutFlush = async () => { if (saveTimer) await save(); };
 /* Re-read the cut from disk and repaint it in place (INTAKE M16, C5) — the timeline, the
  * inspector, the bin, the film tool — keeping the selection and the playhead. For a
  * change made on the server (an effect's edit accepted), which used to reload the page.
- * Anything the autosave still holds is written first, so nothing typed is lost. */
+ * Anything the autosave still holds is written first, so nothing typed is lost; the
+ * undo history is not kept, as a reload did not keep it. */
 window.roughcutRefresh = async () => {
   if (saveTimer) await save();
   const keep = { sel: [...tl.state.sel], anchor: tl.state.anchor, at: tl.state.playhead,
@@ -3217,6 +3218,10 @@ window.roughcutRefresh = async () => {
   segs = P.segments.map((s) => ({ ...s }));
   music = P.music || null;
   colour = P.colour || {};
+  // The undo stack holds snapshots of the cut before the server's change: ⌘Z of an
+  // earlier trim would save that old cut over the accepted edit (the reload this
+  // replaced emptied the stack too).
+  tl.clearHistory();
   await refreshColour();
   render();
   const ids = keep.sel.filter((id) => id !== keep.anchor && tl.indexOf(id) >= 0);
