@@ -104,6 +104,15 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **"What is this film about?" is asked once where the first cut is made (INTAKE M16
+  review, I16.4).** Next for the first cut lands on `/#tool=ask` (so does the pass's
+  *Make the first cut →*); on an empty board the Ask tool hid its change box but kept its
+  story panel, and the empty state under the timeline asks the same sentence with its
+  own field — two "What is this film about?" on one screen. The Ask tool's field now
+  steps aside while the board is empty, and one line says where the sentence and the
+  first cut are (a blank tool would read as broken); with a cut on the board the field
+  is back. The two fields were already one sentence underneath. The empty-board and
+  Ask-tool tests count one question on the screen.
 - **The film tool's Download is readable (INTAKE M16 review, I16.1).** `#filmNewest`'s
   "↓ Download · 2 MB" was a bare link in the browser's own dark blue, underlined, on the
   near-black panel — about 2:1 (sampled rgb(16, 9, 211)) — the payoff of the tool, and

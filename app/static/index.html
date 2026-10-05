@@ -564,7 +564,10 @@
       <!-- ASK — the one sentence about the film (the EDL's story, the same field and
            words as /open's), and a change asked of the whole cut, priced on its button. -->
       <section data-tool="ask" hidden>
-        <div class="panel flat">
+        <!-- on an empty board the sentence is the empty state's, under the timeline, with
+             the first cut: asked once, not here as well -->
+        <div class="hint" id="askFirst" hidden>No cut yet: the sentence and the first cut are under the timeline.</div>
+        <div class="panel flat" id="askStory">
           <label class="ask-q" for="story">What is this film about?</label>
           <textarea id="story" style="min-height:66px"
             placeholder="optional — a sentence is enough"></textarea>

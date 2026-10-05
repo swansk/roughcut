@@ -1439,8 +1439,12 @@ function render() {
   syncPlayer();
   renderInspector();
 
-  // With an empty timeline there is nothing to change; the empty state asks for the cut.
+  // With an empty timeline there is nothing to change; the empty state asks for the cut
+  // — and asks the sentence, so the Ask tool does not ask it a second time on the same
+  // screen (Next lands here, on /#tool=ask, for the first cut).
   $('#askPanel').style.display = segs.length ? 'block' : 'none';
+  $('#askStory').hidden = !segs.length;
+  $('#askFirst').hidden = !!segs.length;
   $('#askAims').textContent = aimsFor();
 
   // Nothing in the header acts on an empty timeline, so nothing in the header shows.

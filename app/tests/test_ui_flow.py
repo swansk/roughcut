@@ -432,10 +432,16 @@ def test_an_empty_timeline_offers_a_first_cut_and_gets_one(page):
         assert page.locator("#firstCut").get_attribute("data-next-for") == "cut"
         assert "aims for" in page.locator("#firstAims").inner_text()
 
-        page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
-        page.fill("#story", "")        # an earlier test may have left one behind
+        page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11), where Next lands
+        # asked once on the screen: the Ask tool's own sentence steps aside for the empty
+        # state's, and says where it is
+        asked = page.eval_on_selector_all(
+            "label", "els => els.filter(e => e.offsetParent && /What is this film about/.test(e.textContent)).length")
+        assert asked == 1, asked
+        assert not page.locator("#story").is_visible() and page.locator("#askFirst").is_visible()
+        page.evaluate("document.querySelector('#story').value = ''")   # an earlier test's
         page.locator("#firstNote").fill("a loose film about two people talking")
-        assert page.input_value("#story") == "a loose film about two people talking"
+        assert page.evaluate("document.querySelector('#story').value") == "a loose film about two people talking"
         assert_priced(page, "#firstCut", "Make a first cut", "first")
         page.locator("#firstCut").click()
         page.wait_for_selector("#proposal:visible", timeout=30000)
@@ -443,7 +449,9 @@ def test_an_empty_timeline_offers_a_first_cut_and_gets_one(page):
 
         page.locator("#acceptProposal").click()
         assert page.locator("#tl .blk").count() == 2
-        # the brief is the human's half of the loop, so it is kept, not thrown away
+        # the brief is the human's half of the loop, so it is kept, not thrown away — and
+        # with a cut on the board it is the Ask tool's again
+        assert page.locator("#story").is_visible() and not page.locator("#askFirst").is_visible()
         assert page.input_value("#story") == "a loose film about two people talking"
         assert "There is no edit yet" in Scripted.seen[-1].prompt
     finally:

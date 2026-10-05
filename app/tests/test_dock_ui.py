@@ -217,7 +217,9 @@ def test_the_ask_tool_is_the_one_sentence_and_the_change(page):
     "What is this film about?" — and "Ask for a change" with what the cut aims for
     beside it. Gone: the Story heading and "The thing the agent is worst at…", the
     second button (Cut from the bin), and on an empty timeline "no cut yet — the
-    board's empty state is where…" (the empty state is right there)."""
+    board's empty state is where…" (the empty state is right there). On an empty
+    timeline the sentence is the empty state's, asked once: the tool's own field steps
+    aside for it, and one line says where it is (the tool is not left blank)."""
     page.evaluate("dock.open('ask')")
     assert page.locator("#askPanel").is_visible()
     tool = page.locator("#tools section[data-tool=ask]")
@@ -230,10 +232,12 @@ def test_the_ask_tool_is_the_one_sentence_and_the_change(page):
     page.wait_for_selector("#inspector .empty")
     assert not page.locator("#askPanel").is_visible()
     assert page.locator("#askEmpty").count() == 0
-    assert page.locator("#story").is_visible()       # the story is still there to write
+    assert not page.locator("#story").is_visible()   # the empty state's field asks it
+    assert page.locator("#askFirst").inner_text() == \
+        "No cut yet: the sentence and the first cut are under the timeline."
     # and the empty state's field is the same sentence: typing in one is the other
     page.locator("#firstNote").fill("two friends talking")
-    assert page.input_value("#story") == "two friends talking"
+    assert page.evaluate("document.querySelector('#story').value") == "two friends talking"
 
 
 # ---------------------------------------------------------------- the bin
