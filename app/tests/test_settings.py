@@ -273,3 +273,79 @@ def test_the_backend_probe_is_not_refused_by_the_projects_cap(tmp_path, project,
             assert paid.calls == before
         finally:
             inference.set_backend(None)
+
+
+def test_a_priced_call_is_checked_against_the_cap_at_its_price(tmp_path, project, monkeypatch):
+    """Review of I16.0g: the gate every model call passes sees a $0.05 pre-flight, so
+    with a $5 cap and $4.90 spent a whole-cut Ask (~$0.58) started and the project
+    landed near $5.48. An Ask, a shot's Ask, the model search, proposing themes, an FX
+    design and an FX revision are each checked at their own price before they start,
+    as the index, the audit and the deep look already were."""
+    import server
+    from roughcut import find, fx, inference, themes
+
+    monkeypatch.delenv("ROUGHCUT_BUDGET_USD", raising=False)
+    edl = tmp_path / "cut.json"
+    edl.write_text(json.dumps({
+        "variant": "T", "title": "t", "orient": "none", "story": "",
+        "segments": [{"clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0, "why": "first"},
+                     {"clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0, "why": "second"}]}),
+        encoding="utf-8")
+    with _fresh(tmp_path, project, edl=edl, sidecars=project["sidecars"], visual=None) as c:
+        segs = c.get("/api/project").json()["segments"]
+        sid = segs[0]["id"]
+        home = server.fx_home()
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "fx_capped.json").write_text(json.dumps(
+            {"id": "fx_capped", "shot": sid, "clip": "CLIP_A.MP4", "status": "proposed",
+             "name": "t", "events": []}), encoding="utf-8")
+        clips, _ = server._ask_clips(drop_junk=True)
+        cases = [
+            ("this ask", server.ask_price("full")["usd"],
+             lambda: c.post("/api/ask", json={"note": "tighten it", "segments": segs})),
+            ("this ask", server.ask_price("shot")["usd"],
+             lambda: c.post("/api/ask", json={"note": "later", "segments": segs, "focus": 0})),
+            ("the model search", find.projected_usd(clips),
+             lambda: c.post("/api/find", json={"query": "goodbye", "deep": True})),
+            ("proposing themes", themes.projected_usd(clips),
+             lambda: c.post("/api/themes/propose", json={})),
+            ("the design", fx.price(place_frames=0),
+             lambda: c.post("/api/fx/design", json={"shot": sid, "note": "a title"})),
+            ("the revision", fx.price(place_frames=0),
+             lambda: c.post("/api/fx/revise", json={"id": "fx_capped", "note": "bigger"})),
+        ]
+        assert c.put("/api/settings", json={"budget_usd": 5}).status_code == 200
+        paid = _Paid(0.0)
+        inference.set_backend(paid)
+
+        def settle():
+            """A call that started anyway (the bug) runs out on the stub, never on
+            whatever backend is set once this test lets go of it."""
+            import time
+
+            from roughcut import progress
+            deadline = time.time() + 20
+            while time.time() < deadline and any(
+                    j["state"] not in progress.TERMINAL
+                    for reg in (server.ASKS, server.FINDS, server.THEMES, server.FX)
+                    for j in reg.values()):
+                time.sleep(0.05)
+        try:
+            for what, usd, call in cases:
+                # spent so the call's own price passes the cap by half a cent
+                _spend_records(server, ask=round(5.0 - usd + 0.005, 4))
+                inference.reset_spend()
+                r = call()
+                if r.status_code != 409:
+                    settle()
+                assert r.status_code == 409, (what, r.status_code, r.text)
+                assert r.json()["detail"].startswith(f"{what} (~${usd:.2f}) would pass this "
+                                                     "project's budget cap of $5.00"), r.json()
+            assert paid.calls == 0, "refused before anything reached the model"
+            # with room for it, the check passes (no job is started here: it would call
+            # whatever backend is set once this test lets go of the stub)
+            _spend_records(server, ask=1.0)
+            for what, usd, _ in cases:
+                server.refuse_past_cap(what, usd)
+        finally:
+            inference.set_backend(None)

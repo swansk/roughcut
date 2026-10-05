@@ -1083,6 +1083,7 @@ async def api_ask(request: Request) -> JSONResponse:
                                      f"{len(segments)}-shot cut")
         if segments[focus]["clip"] not in clips:
             raise HTTPException(400, f"{segments[focus]['clip']} has no analysis")
+    refuse_past_cap("this ask", ask_price("shot" if focus is not None else "full")["usd"])
 
     job = uuid.uuid4().hex[:8]
     if focus is not None:
@@ -1318,6 +1319,7 @@ async def api_find(request: Request) -> JSONResponse:
         if running is not None:
             raise HTTPException(409, "a model search is already running — "
                                      f"{running.get('detail') or running['label']}")
+        refuse_past_cap("the model search", resp["deep_projected_usd"])
         job = uuid.uuid4().hex[:8]
         FINDS[job] = progress.Job(
             "find", f"Finding — {query[:48]}", id=job, state="running", found=None,
@@ -2956,6 +2958,7 @@ async def api_themes_propose(request: Request) -> JSONResponse:
         raise HTTPException(400, "no analysed clips yet — run the audio pass first")
     body = await request.json() if int(request.headers.get("content-length") or 0) else {}
     story = str(body.get("story") or payload.get("story") or "")
+    refuse_past_cap("proposing themes", themes.projected_usd(clips))
     job = uuid.uuid4().hex[:8]
     THEMES[job] = progress.Job(
         "themes", "Proposing themes from the transcripts", id=job, state="running",
@@ -3316,6 +3319,16 @@ def cap_words() -> str:
     asked when a cap is set."""
     return (f"this project's budget cap of ${budget_cap() or 0.0:.2f} "
             f"(${project_spent():.2f} spent)")
+
+
+def refuse_past_cap(what: str, usd: float) -> None:
+    """A call whose price is on its button is checked at that price before it starts,
+    as the index, the audit and the deep look already were (M16 review): the gate every
+    model call passes sees only a $0.05 pre-flight, so with a $5 cap and $4.90 spent a
+    whole-cut Ask (~$0.58) started and landed the project near $5.48."""
+    if _over_budget(usd):
+        raise HTTPException(409, f"{what} (~${usd:.2f}) would pass {cap_words()} — "
+                                 "raise or remove the cap in settings")
 
 
 # ------------------------------------------------------------------ spend
@@ -4837,18 +4850,20 @@ def api_fx_list() -> JSONResponse:
     return JSONResponse({"effects": _fx_all()})
 
 
+def _fx_place_frames(seg: dict) -> int:
+    """The frames a placing look reads: one per candidate impact in the shot."""
+    sc = load_sidecar(seg["clip"])
+    peaks = fx.onset_peaks((sc.get("tracks") or {}).get("onset") or [],
+                           float(sc.get("frame_hz") or fx.ONSET_HZ),
+                           float(seg["in"]), float(seg["out"]))
+    return max(1, len(peaks))
+
+
 @app.get("/api/fx/price")
 def api_fx_price(place: int = 0, shot: str = "") -> JSONResponse:
     """The cost on the button before it is pressed: the design call, plus a frame per
     candidate impact when the model is asked to place the anchors by looking."""
-    frames = 0
-    if place and shot:
-        seg = _fx_seg(shot)
-        sc = load_sidecar(seg["clip"])
-        peaks = fx.onset_peaks((sc.get("tracks") or {}).get("onset") or [],
-                               float(sc.get("frame_hz") or fx.ONSET_HZ),
-                               float(seg["in"]), float(seg["out"]))
-        frames = max(1, len(peaks))
+    frames = _fx_place_frames(_fx_seg(shot)) if place and shot else 0
     return JSONResponse({"usd": fx.price(place_frames=frames), "frames": frames})
 
 
@@ -4864,6 +4879,8 @@ async def api_fx_design(request: Request) -> JSONResponse:
     if seg["clip"] not in clips:
         raise HTTPException(400, f"{seg['clip']} has no analysis yet")
     window = _fx_window(body.get("window"), seg)
+    placing = bool(body.get("place")) and not body.get("reference")
+    refuse_past_cap("the design", fx.price(place_frames=_fx_place_frames(seg) if placing else 0))
     return _fx_job("design", f"Designing an effect — {Path(seg['clip']).stem}",
                    _fx_design_job, shot, note, bool(body.get("place")), body.get("reference"),
                    window)
@@ -4877,6 +4894,7 @@ async def api_fx_revise(request: Request) -> JSONResponse:
     if not note:
         raise HTTPException(400, "say what to change")
     e = _fx_get(fx_id)
+    refuse_past_cap("the revision", fx.price(place_frames=0))
     return _fx_job("revise", f"Revising {e.get('name', 'the effect')}", _fx_revise_job, fx_id, note)
 
 

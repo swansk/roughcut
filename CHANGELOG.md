@@ -156,6 +156,18 @@ same commit. Releases move entries into a dated version section.
   shot's price while the new shot's is on its way. New UI tests abort the price
   requests and find every such button disabled and no model call sent (both failed
   before).
+- **A cap is checked at the call's own price before an Ask, a model search, themes or an
+  FX design / revision starts (M16 stage 0 review, I16.0g).** The index, the audit and
+  the deep look checked their real price against the cap; everything else met only the
+  gate before every model call, which sees a $0.05 pre-flight. With a $5 cap and $4.90
+  spent, 4.90 + 0.05 passed and a whole-cut Ask (~$0.58 by `/api/ask/price`) landed
+  the project near $5.48. `POST /api/ask` (whole cut or one shot), the model search
+  (`/api/find` with `deep`), `/api/themes/propose`, `/api/fx/design` and
+  `/api/fx/revise` now refuse with a 409 in the cap's words — "this ask (~$0.58) would
+  pass this project's budget cap of $5.00 ($4.43 spent) — raise or remove the cap in
+  settings" — when their price would pass it; the board shows that as the call's
+  failure. A new test puts each call half a cent past the cap and finds all six refused
+  with nothing reaching the model (the Ask started before the fix).
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
