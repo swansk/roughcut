@@ -95,6 +95,14 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **The pass's closing card no longer hides the screen's one blue under its scrim (INTAKE
+  M16 review, C2 / I16.3).** When Next is not the cut — the index or a look paused, an
+  effect waiting, the film not made — the blue goes on the header's Next chip, and the
+  card's full-screen overlay (z-index 30, `inset: 0`) covered the header: the chip was
+  dimmed to 28 %, `elementFromPoint` at its centre returned the overlay, and a click on
+  it (or on the bin · cut menu) landed on the scrim. The header now sits above the
+  scrim while the card is up. The closing-card test checks that the one blue, the chip
+  and the switcher are each the element under their own centre (it fails without this).
 - **The header stops offering the old film's Download after a shot's speed changes
   (INTAKE M16 review, I16.1).** The board's `isThisCut` compared clip, in and out; the
   server's `_same_shots`, which calls itself "the board's own isThisCut rule", also

@@ -223,6 +223,10 @@
   /* ---- overlays: evidence drawer, key map, more menu, the closing card ---- */
   #overlay { position: fixed; inset: 0; z-index: 30; background: rgba(4,4,6,.72); display: flex;
              align-items: center; justify-content: center; padding: 24px; }
+  /* The closing card is where a round ends, and the header is the way on: Next's chip (the
+   * screen's one blue when Next is not the cut — C2) and the bin · cut menu stay above the
+   * card's scrim, lit and clickable, rather than dimmed under it. */
+  body:has(#overlay[data-kind=card]:not([hidden])) #hud { position: relative; z-index: 31; }
   /* an id selector outranks the UA's [hidden] rule, so say it explicitly */
   #overlay[hidden], #stamp[hidden], #screenMsg[hidden], #noteEdit[hidden], #noteRow[hidden], #caption[hidden],
   #ctxExtend[hidden], #ctxTake[hidden], .handle[hidden] { display: none; }

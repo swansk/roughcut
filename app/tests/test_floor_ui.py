@@ -1097,6 +1097,13 @@ def test_the_closing_card_appears_after_the_last_pick_and_plays_the_bin(page, pr
         const b = [...document.querySelectorAll('.is-next')];
         return !!n && b.length === 1
           && b[0].id === (n.stage === 'cut' ? 'cardAssemble' : 'flowNext'); }""", timeout=5000)
+    # and it can be seen and pressed: the card's scrim covers the screen, not the header —
+    # the chip under it was dimmed and its click landed on the overlay
+    on_top = """(sel) => { const el = document.querySelector(sel), r = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return !!hit && el.contains(hit); }"""
+    assert page.evaluate(on_top, ".is-next"), "the screen's one blue is under the card's scrim"
+    assert page.evaluate(on_top, "#flowNext") and page.evaluate(on_top, "#hdBin")
     assert "enough" not in card.lower(), "the card reports, it never judges"
     assert page.locator("#cardNext").count() == 0, "nothing left for a next round: no button"
     assert page.locator("#cardLater").count() == 0, "nothing later: no button"
