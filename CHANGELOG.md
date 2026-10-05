@@ -101,6 +101,16 @@ same commit. Releases move entries into a dated version section.
   the clip's next pick on either side ((28, 31.75) and (31.75, 35.25)); with room, it
   is still 4 s. Not seen on Killington today (its three short picks have room). A new
   test answers three such picks and finds every verdict kept.
+- **"Cap this project at $X" caps this project only (M16 stage 0 review, I16.0g).** The
+  settings drawer offers *cap this project at $__* and enforces it against this
+  project's spend, but the cap itself was one `budget_usd` in `settings.json` under
+  --work, shared by every bin: capping Killington at $5 capped copper at $5 too (each
+  against its own spend). The cap is now kept per bin, by the bin's name as the spend
+  file and the journal are (`settings.json` `budget_usd_by_bin`); `/api/settings` and
+  `/api/status` read the open bin's, and *No cap* removes only that bin's. The workers
+  stay one setting for the machine, and `ROUGHCUT_BUDGET_USD` still pins every bin. A
+  new test caps one bin, opens another under the same --work and finds it uncapped
+  (it read $5 before).
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six

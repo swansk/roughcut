@@ -3018,9 +3018,13 @@ def api_themes_discard() -> JSONResponse:
 # this machine runs, not what the film is — and the environment still wins for the cap,
 # so a production deployment can pin it. The cap is optional and off by default (Karl,
 # INTAKE M16 decision 7: "Do not have a cap … 'no cap' … on by default"); when one is
-# set it caps what *this project* has spent (`project_spent`), not this process.
+# set it caps what *this project* has spent (`project_spent`), not this process — and it
+# is kept for this project alone, by the bin's name as its spend file and its journal
+# are: the drawer says "cap this project at $__", and one cap for every bin capped
+# copper the moment Killington was capped.
 
 SETTINGS_FILE = "settings.json"
+CAPS_KEY = "budget_usd_by_bin"          # bin name → that project's cap
 WORKER_RANGE = (1, 8)
 
 
@@ -3043,18 +3047,29 @@ def save_settings(d: dict) -> None:
     tmp.replace(settings_path())
 
 
+def _bin_name() -> str | None:
+    footage = STATE.get("footage")
+    return footage.name if footage else None
+
+
+def saved_cap(saved: dict | None = None) -> float | None:
+    """This project's cap as the settings drawer saved it, or None."""
+    caps = (load_settings() if saved is None else saved).get(CAPS_KEY)
+    raw = caps.get(_bin_name()) if isinstance(caps, dict) else None
+    try:
+        return float(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def budget_cap() -> float | None:
     """The cap on this project's spend that the index, the audit, the deep look and
     every model call honour: the environment if it is set (the production pin), else
-    the saved setting, else None — no cap, the default."""
+    this project's saved cap, else None — no cap, the default."""
     env = config.budget_usd()
     if env is not None:
         return env
-    saved = load_settings().get("budget_usd")
-    try:
-        return float(saved) if saved is not None else None
-    except (TypeError, ValueError):
-        return None
+    return saved_cap()
 
 
 def settings_payload() -> dict:
@@ -3065,7 +3080,7 @@ def settings_payload() -> dict:
         "workers": {**journal.DEFAULT_WORKERS, **(saved.get("workers") or {})},
         "defaults": {"budget_usd": None, "workers": dict(journal.DEFAULT_WORKERS)},
         "source": {"budget_usd": ("env" if os.environ.get("ROUGHCUT_BUDGET_USD")
-                                  else "settings" if saved.get("budget_usd") is not None
+                                  else "settings" if saved_cap(saved) is not None
                                   else "default")},
     }
 
@@ -3085,8 +3100,10 @@ async def api_settings_put(request: Request) -> JSONResponse:
         raise HTTPException(400, "expected an object")
     saved = load_settings()
     if "budget_usd" in body:
+        caps = saved.get(CAPS_KEY)
+        caps = dict(caps) if isinstance(caps, dict) else {}
         if body["budget_usd"] is None:
-            saved.pop("budget_usd", None)          # no cap: the default, so nothing kept
+            caps.pop(_bin_name(), None)            # no cap: the default, so nothing kept
         else:
             try:
                 cap = float(body["budget_usd"])
@@ -3094,7 +3111,11 @@ async def api_settings_put(request: Request) -> JSONResponse:
                 raise HTTPException(400, "budget_usd must be a number, or null for no cap")
             if not (math.isfinite(cap) and cap > 0):
                 raise HTTPException(400, "budget_usd must be positive, or null for no cap")
-            saved["budget_usd"] = round(cap, 2)
+            caps[_bin_name()] = round(cap, 2)      # this project's, not every bin's
+        if caps:
+            saved[CAPS_KEY] = caps
+        else:
+            saved.pop(CAPS_KEY, None)
     if "workers" in body:
         raw = body["workers"]
         if not isinstance(raw, dict):

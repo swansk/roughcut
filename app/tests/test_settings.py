@@ -41,7 +41,9 @@ def test_settings_read_defaults_and_write_validated(tmp_path, project, monkeypat
         assert d["budget_usd"] == 5.0 and d["source"]["budget_usd"] == "settings"
         assert d["workers"]["sheet"] == 4 and d["workers"]["asr"] == 1
         on_disk = json.loads(server.settings_path().read_text(encoding="utf-8"))
-        assert on_disk == {"budget_usd": 5.0, "workers": {"sheet": 4}}
+        # the cap is this project's, kept by the bin's name; the workers are the machine's
+        assert on_disk == {"budget_usd_by_bin": {server.STATE["footage"].name: 5.0},
+                           "workers": {"sheet": 4}}
         # the status line reads the same cap
         assert c.get("/api/status").json()["backend"]["budget_usd"] == 5.0
         # null takes the cap away again: nothing kept, the default's word
@@ -82,6 +84,30 @@ def test_the_cap_and_the_workers_reach_the_index(tmp_path, project, monkeypatch)
         for clip in ("CLIP_A.MP4", "CLIP_B.MP4", "CLIP_C.MP4"):
             assert j.state(clip, "look") == "queued", "the priced stage waited on the cap"
             assert j.state(clip, "asr") == "done"
+
+
+def test_a_cap_on_this_project_leaves_every_other_bin_uncapped(tmp_path, project, monkeypatch):
+    """Review of I16.0g: the drawer says "cap this project at $__", but the cap was one
+    setting under --work — capping Killington at $5 capped copper too."""
+    import shutil
+
+    import server
+
+    monkeypatch.delenv("ROUGHCUT_BUDGET_USD", raising=False)
+    with _fresh(tmp_path, project, visual=None) as c:
+        assert c.put("/api/settings", json={"budget_usd": 5}).json()["budget_usd"] == 5.0
+    other = tmp_path / "elsewhere" / "other-bin"
+    shutil.copytree(project["footage"], other)
+    with _fresh(tmp_path, {**project, "footage": other}, visual=None) as c:
+        d = c.get("/api/settings").json()
+        assert d["budget_usd"] is None and d["source"]["budget_usd"] == "default"
+        assert server.budget_cap() is None and not server._over_budget(1e6)
+        assert c.get("/api/status").json()["backend"]["budget_usd"] is None
+        # its own cap, and taking it away again, leave the first project's alone
+        assert c.put("/api/settings", json={"budget_usd": 2}).json()["budget_usd"] == 2.0
+        assert c.put("/api/settings", json={"budget_usd": None}).json()["budget_usd"] is None
+    with _fresh(tmp_path, project, visual=None) as c:
+        assert c.get("/api/settings").json()["budget_usd"] == 5.0
 
 
 # ------------------------------------------------- spend per project (INTAKE I16.0g)
