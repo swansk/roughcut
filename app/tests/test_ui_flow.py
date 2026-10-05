@@ -2029,3 +2029,37 @@ def test_a_proposed_cut_plays_before_it_is_accepted(page):
         page.locator("#rejectProposal").click()
     finally:
         inference.set_backend(None)
+
+
+def test_sound_is_one_line_and_dip_under_talk(page, project):
+    """INTAKE M16 I16.4: the Sound tool was a MUSIC heading, a 0–24 dB slider and its
+    label, and three hint paragraphs. Now: the track, one line when it loops under a
+    longer cut, "dip under talk: off / a little / a lot" (0 / 6 / 12 dB — the duck the
+    render applies), and the fades behind "more"."""
+    page.evaluate("dock.open('sound')")
+    assert page.locator("#musicPanel h2").count() == 0
+    page.select_option("#musicTrack", "music/bed.wav")      # 2 s under a 4 s cut
+    page.wait_for_function(
+        "document.querySelector('#saveState').textContent.startsWith('saved')", timeout=8000)
+    assert page.locator("#musicHint").inner_text() == "loops once at 0:02 under a 0:04 cut"
+    options = page.eval_on_selector_all("#duck option", "els => els.map(e => [e.value, e.textContent])")
+    assert options == [["0", "off"], ["6", "a little"], ["12", "a lot"]], options
+    assert page.input_value("#duck") == "12"
+    assert not page.locator("#fadeIn").is_visible(), "the fades are behind more"
+
+    def disk():
+        return json.loads(Path(project["edl"]).read_text(encoding="utf-8"))["effects_music"]
+
+    page.select_option("#duck", "6")
+    for _ in range(50):
+        if disk()["duck_db"] == 6:
+            break
+        time.sleep(0.1)
+    assert disk()["duck"] is True and disk()["duck_db"] == 6
+    page.select_option("#duck", "0")
+    for _ in range(50):
+        if disk()["duck"] is False:
+            break
+        time.sleep(0.1)
+    assert disk()["duck"] is False
+    page.select_option("#musicTrack", "")

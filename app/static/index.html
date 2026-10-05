@@ -538,20 +538,22 @@
         </div>
       </section>
 
-      <!-- SOUND — the music bed. Per-shot levels and a beat grid land here later. -->
+      <!-- SOUND — the music bed, in one line: the track, what it does under the cut,
+           how far it dips under talk; the fades behind "more". -->
       <section data-tool="sound" hidden>
         <div class="panel flat" id="musicPanel">
-          <h2>Music</h2>
           <select id="musicTrack" style="width:100%"><option value="">no music</option></select>
+          <div class="hint" id="musicHint" style="margin-top:6px"></div>
           <div id="musicOpts" style="display:none">
-            <div class="kv" style="margin-top:8px"><span>duck under speech</span><b><span id="duckVal">12</span> dB</b></div>
-            <input type="range" id="duck" min="0" max="24" step="1" value="12" style="width:100%">
-            <div class="hint" style="display:flex;gap:12px;margin-top:6px">
-              <label>fade in <input type="number" id="fadeIn" min="0" max="20" step="0.5" value="1.5" style="width:58px"> s</label>
-              <label>fade out <input type="number" id="fadeOut" min="0" max="20" step="0.5" value="4" style="width:58px"> s</label>
-            </div>
+            <label class="hint" style="display:flex;gap:8px;align-items:center;margin-top:8px">dip under talk
+              <select id="duck"><option value="0">off</option><option value="6">a little</option><option value="12" selected>a lot</option></select></label>
+            <details style="margin-top:8px"><summary class="hint" style="cursor:pointer">more</summary>
+              <div class="hint" style="display:flex;gap:12px;margin-top:6px">
+                <label>fade in <input type="number" id="fadeIn" min="0" max="20" step="0.5" value="1.5" style="width:58px"> s</label>
+                <label>fade out <input type="number" id="fadeOut" min="0" max="20" step="0.5" value="4" style="width:58px"> s</label>
+              </div>
+            </details>
           </div>
-          <p class="hint" id="musicHint"></p>
         </div>
       </section>
 

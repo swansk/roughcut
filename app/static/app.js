@@ -1319,6 +1319,7 @@ function render() {
 
   $('#total').textContent = fmt(total());
   flowSoon();
+  paintMusic();             // "loops once at 1:59 under a 3:09 cut" follows the cut's length
   paintVersions();          // so "this cut" follows the timeline rather than the last fetch
   renderLibrary();
   paintCutFromBin();        // the empty state is rebuilt above; its bin button follows
@@ -1933,16 +1934,29 @@ function paintMusic() {
   }
   $('#musicOpts').style.display = music ? 'block' : 'none';
   if (music) {
-    $('#duck').value = music.duck === false ? 0 : (music.duck_db ?? 12);
-    $('#duckVal').textContent = $('#duck').value;
+    // off / a little / a lot are 0 / 6 / 12 dB; a depth saved as anything else keeps
+    // its own entry rather than being rounded on the next save
+    const db = music.duck === false ? 0 : (music.duck_db ?? 12);
+    const duck = $('#duck');
+    if (![...duck.options].some((o) => Number(o.value) === db)) {
+      duck.insertAdjacentHTML('beforeend', `<option value="${db}">${db} dB</option>`);
+    }
+    duck.value = String(db);
     $('#fadeIn').value = music.fade_in ?? 1.5;
     $('#fadeOut').value = music.fade_out ?? 4;
   }
-  $('#musicHint').textContent = music
-    ? 'Heard under the cut in the monitor; the render mixes it under the film with the picture untouched.'
-    : tracks.length
-      ? 'A bed sits under the cut and ducks where people talk. You hear it in the monitor before you render.'
-      : 'No tracks yet — drop an mp3 or wav into assets/music/ and reload.';
+  // One status line (INTAKE M16 I16.4): what the track does under the cut when that is
+  // worth knowing — it loops where it is shorter — and nothing when it is not.
+  const t = trackInfo();
+  const len = total();
+  let line = '';
+  if (!tracks.length && !music) line = 'No tracks yet — drop an mp3 or wav into assets/music/ and reload.';
+  else if (music && t && t.duration_s && t.duration_s < len) {
+    const n = Math.ceil(len / t.duration_s) - 1;
+    line = `loops ${n === 1 ? 'once' : `${n} times`} at ${clock(t.duration_s)} under a ${clock(len)} cut`;
+  }
+  $('#musicHint').textContent = line;
+  $('#musicHint').hidden = !line;
 }
 
 function musicChanged() {
@@ -3040,7 +3054,6 @@ async function boot() {
   };
   $('#auditClaims').onclick = auditClaims;
   $('#musicTrack').onchange = musicChanged;
-  $('#duck').oninput = () => { $('#duckVal').textContent = $('#duck').value; };
   $('#duck').onchange = musicChanged;
   $('#fadeIn').onchange = musicChanged;
   $('#fadeOut').onchange = musicChanged;

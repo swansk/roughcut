@@ -234,6 +234,13 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **Sound in one line (INTAKE M16 I16.4).** Removed: the MUSIC heading, the 0–24 dB
+  slider and its "12 dB" label, and the hint paragraphs ("Heard under the cut in the
+  monitor…", "A bed sits under the cut and ducks…"). Now: the track; one line only when it
+  says something — "loops once at 1:59 under a 3:09 cut" when the track is shorter than the
+  cut (it loops in the monitor and the render, and nothing said so); "dip under talk: off /
+  a little / a lot" (0 / 6 / 12 dB, the duck the render applies — a depth saved as anything
+  else keeps its own entry); the fades behind "more".
 - **One sentence about the film, one first-cut button, and ▶ Play it (INTAKE M16
   I16.4).** The empty board and the Ask tool both ask "What is this film about?" — one
   field, the EDL's story (typing in the empty board's box is the story). The empty board
