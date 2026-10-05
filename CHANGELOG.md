@@ -12,14 +12,21 @@ same commit. Releases move entries into a dated version section.
 ### Added
 - **`test_budget.py`, the screen-size ratchet (INTAKE M16 I16.1).** Every earlier answer
   to "it is hard to use" added a surface; this fails when one grows back. At 1440×900 on
-  the fixture bin, read-only: one header row ≤ 50 px holding the switcher and Next side
-  by side, exactly one `.is-next` (none while a round of the pass is open), the board
-  with no page scroll, no step bar, and words / controls in view under each screen's
-  number. Measured on this branch: / 176 words · 19 controls, /floor 324 · 5, /open
-  433 · 12 (before: 197 · 26, 350 · 12, 454 · 19). The numbers are generous until the
-  other stage-1 lanes merge (TODO-tighten); the board's and the pass's one-row header and
-  the board's no-scroll are listed in `AWAITS` as expected failures until lanes shell,
-  pass and cut land, and a listed check that passes fails until it is taken out.
+  the fixture bin, read-only (GETs, and Look deeper's two price-only POSTs so the shot's
+  strip reads its price as the screen does): one header row ≤ 50 px holding the
+  switcher and Next side by side, exactly one `.is-next` and the expected one (none
+  while a round of the pass is open), the board with no page scroll, no step bar, and
+  words / controls in view under each screen's and state's number. It measures the
+  three screens and the board in the states the M16 end state names — a shot selected
+  (its strip in view), the film tool open, FX after Next (landed on a waiting slow
+  motion) — and with jobs running. Measured on the merged M16 screens, words · controls
+  in view: / 72 · 18, /floor 52 · 7, /open 53 · 8, a shot 118 · 30, the film 67 · 17,
+  two jobs running 98 · 18, FX after Next 118 · 31 (before stage 1: / 197 · 26, /floor
+  350 · 12, /open 454 · 19); the limits are those plus 10 %, so growth fails. `AWAITS`
+  (expected failures while a lane was in flight) is empty. Jobs another module finished
+  (they lingered 12 s) are cleared before measuring — after `test_ask_*` they made the
+  board's header 243 px and +87 words. `ROUGHCUT_BUDGET_SHOTS=<dir>` saves a screenshot
+  of each state.
 
 ### Changed
 - **The open screen's one blue is tested on the merged page (INTAKE M16 integration,
@@ -32,20 +39,6 @@ same commit. Releases move entries into a dated version section.
   placed the blue, each tested alone. The Play it test now checks, merged, that with an
   Ask proposal waiting Next's stage is the cut and *▶ Play it* — not the chip, not a
   first-cut button — is the single `.is-next`.
-- **`test_budget.py` holds the merged M16 screens to their measured size (INTAKE M16
-  integration, I16.1).** With every stage 1–4 lane merged the three AWAITS entries
-  (the board's and the pass's one header row, the board's no-scroll) passed and are
-  gone. The ratchet now also measures the board in the three states the end state
-  names — a shot selected (its strip in view), the film tool open (*Make the film*),
-  FX after Next (landed on a waiting slow-motion proposal) — checks each one's single
-  blue (the chip; Quick look; the proposal's Preview) and that the board never scrolls.
-  Measured on the fixture, words · controls in view: / 72 · 18, /floor 52 · 7, /open
-  53 · 8, a shot 118 · 30, the film 67 · 17, FX after Next 118 · 31 (before stage 1:
-  / 197 · 26, /floor 350 · 12, /open 454 · 19). The limits are those plus 10 %, so
-  growth fails. Two fixes to the measuring: jobs another module finished (they linger
-  12 s) are cleared first — after `test_ask_*` they made the board's header 243 px and
-  +87 words — and Look deeper's two price-only POSTs are let through the read-only
-  guard, so the shot's strip reads its price as the screen does.
 - **The CLI banner is one line above the header (INTAKE M16 I16.1, C1).** It wrapped to
   two or three lines at the top of every screen when the reason was long. It still sits
   above the page, never in the one header row, and only while the CLI needs Karl; now on
