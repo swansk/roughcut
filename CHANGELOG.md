@@ -22,6 +22,20 @@ same commit. Releases move entries into a dated version section.
   pass and cut land, and a listed check that passes fails until it is taken out.
 
 ### Changed
+- **`test_budget.py` holds the merged M16 screens to their measured size (INTAKE M16
+  integration, I16.1).** With every stage 1–4 lane merged the three AWAITS entries
+  (the board's and the pass's one header row, the board's no-scroll) passed and are
+  gone. The ratchet now also measures the board in the three states the end state
+  names — a shot selected (its strip in view), the film tool open (*Make the film*),
+  FX after Next (landed on a waiting slow-motion proposal) — checks each one's single
+  blue (the chip; Quick look; the proposal's Preview) and that the board never scrolls.
+  Measured on the fixture, words · controls in view: / 72 · 18, /floor 52 · 7, /open
+  53 · 8, a shot 118 · 30, the film 67 · 17, FX after Next 118 · 31 (before stage 1:
+  / 197 · 26, /floor 350 · 12, /open 454 · 19). The limits are those plus 10 %, so
+  growth fails. Two fixes to the measuring: jobs another module finished (they linger
+  12 s) are cleared first — after `test_ask_*` they made the board's header 243 px and
+  +87 words — and Look deeper's two price-only POSTs are let through the read-only
+  guard, so the shot's strip reads its price as the screen does.
 - **The CLI banner is one line above the header (INTAKE M16 I16.1, C1).** It wrapped to
   two or three lines at the top of every screen when the reason was long. It still sits
   above the page, never in the one header row, and only while the CLI needs Karl; now on
