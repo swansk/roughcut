@@ -1712,7 +1712,10 @@ def test_preflight_names_the_backend_and_model_without_calling_it(client):
         assert b["backend"] == "claude_cli"
         assert "claude" in b["model"]
         assert b["state"] in ("unknown", "ok", "failed", "checking")
-        assert b["budget_usd"] > 0
+        # no cap unless one is set (INTAKE M16 I16.0g); a cap, when set, is positive,
+        # and the spend is this project's, from disk
+        assert b["budget_usd"] is None or b["budget_usd"] > 0
+        assert b["spent_usd"] >= 0
     finally:
         inference.set_backend(None)
 

@@ -33,6 +33,12 @@ same commit. Releases move entries into a dated version section.
   now leaves Brief *optional* ("Proposed themes wait — keep or discard them whenever you
   like", `counts.proposal`), with no `needs`, and Next never routes to it: a waiting cut
   or effect, the index, the first cut, a stale render come first as before.
+- **The launch-preflight test follows "no cap by default" (M16 stage 0 integration).**
+  `test_server.py::test_preflight_names_the_backend_and_model_without_calling_it` still
+  asserted `budget_usd > 0` on `/api/status`, and failed with `None > 0` once I16.0g made
+  no cap the default (the money lane did not run `test_server.py`). It now asserts the
+  cap is either absent or positive, and that `spent_usd` (this project's, from disk) is
+  a number.
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
