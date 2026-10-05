@@ -5036,7 +5036,14 @@ def _fx_verify_job(job: str, fx_id: str) -> None:
         # The effect may have changed while its proof rendered (a nudge, a revise, an
         # Accept that applied its edits): this checklist describes the old one, and the
         # change has queued its own check — writing this back would also undo the change.
-        fresh = _fx_current(fx_id)
+        # Or it was discarded meanwhile (a check starts after every design, so a quick
+        # Discard lands here): nothing to check, which is not a failure.
+        try:
+            fresh = _fx_current(fx_id)
+        except HTTPException:
+            entry["result"] = {"id": fx_id, "ok": None}
+            entry.finish("done", detail="the effect is gone")
+            return
         if {k: fresh.get(k) for k in FX_SPEC_CHECKED} != {k: e.get(k) for k in FX_SPEC_CHECKED}:
             entry["result"] = {"id": fx_id, "ok": None}
             entry.finish("done", detail="the effect changed meanwhile — checked again")

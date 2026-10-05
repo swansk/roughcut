@@ -437,6 +437,39 @@ def test_a_check_that_outlives_its_effect_does_not_write_it_back(stubbed, client
     assert server.FX_VERIFY_WAITING.get(fx_id) is None
 
 
+def test_a_discard_while_the_check_renders_is_not_a_failed_check(stubbed, client, monkeypatch):
+    """A check starts by itself after every design (I16.5), so a quick Discard lands while
+    its proof renders. The second read of the effect was unguarded: the job ended
+    'failed — HTTPException: 404', a red row in the board's progress strip and a
+    "… failed" toast for a proposal Karl had only thrown away."""
+    import threading
+    gate, seen = threading.Event(), []
+    real = fx.verify
+
+    def slow(effect, seg, **kw):
+        seen.append(1)
+        gate.wait(10)
+        return real(effect, seg, **kw)
+    monkeypatch.setattr(fx, "verify", slow)
+    shot = _seed(stubbed, client)
+    fx_id = _wait(client, client.post("/api/fx/design", json={"shot": shot, "note": "hit markers"}).json()["job"])["result"]["id"]
+    t0 = time.time()
+    while not seen and time.time() - t0 < 10:
+        time.sleep(0.02)
+    assert seen
+    assert client.post("/api/fx/discard", json={"id": fx_id}).status_code == 200
+    gate.set()
+    t0 = time.time()
+    while time.time() - t0 < 10:
+        jobs = _verify_jobs(fx_id)
+        if jobs and all(j["state"] != "running" for j in jobs):
+            break
+        time.sleep(0.05)
+    jobs = _verify_jobs(fx_id)
+    assert jobs and [(j["state"], j["detail"]) for j in jobs] == [("done", "the effect is gone")] * len(jobs), \
+        [(j["state"], j.get("detail")) for j in jobs]
+
+
 # ---------------------------------------------------------------- the sentence, in film time
 # INTAKE M16 I16.5 (1): a proposal says in one sentence what changes in the film, in
 # film time — not "CLIP_08.MP4 at 0.4× from 170.85 to 171.50s" (clip seconds that read

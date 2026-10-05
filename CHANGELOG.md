@@ -95,6 +95,14 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **Discarding a proposal while its check renders is not a failed check (INTAKE M16
+  review, I16.5).** The check guarded its first read of the effect ("discarded while it
+  waited") but not the second, after the proof render; since every design now starts a
+  check by itself, a quick Discard landed in that window and the job ended `failed —
+  HTTPException: 404: no effect …` — a red row in the board's progress strip (a second
+  header row) and a "… failed" toast for a proposal Karl had thrown away. That read is
+  guarded too: the job ends `done`, "the effect is gone". New test in
+  `test_fx_api.py`; it fails without the guard.
 - **The bin · cut menu closes on the board and the pass (INTAKE M16 review, decision 2).**
   Esc and a click outside set the menu's `hidden`, but its own `#picker { display: flex }`
   outranks the browser's `[hidden]` rule, and only the open screen has a global
