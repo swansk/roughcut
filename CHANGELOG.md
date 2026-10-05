@@ -234,6 +234,14 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **The pass has one header row (INTAKE M16 I16.3, C1).** The bin · cut switcher, Next and
+  a real **?** button on the right, ≤ 50 px; the step bar's row of its own under it is
+  gone, and so are "THE PASS", *round 3 · pick 2 of 2 · queue frozen for this round*,
+  the progress bar and *bin 44 moments · 0 hero · if strung out 5:14.8 · 2 later*. How
+  many are left is Next's to say: the page dispatches `roughcut:pass` (`{left, round,
+  mode, queue}`) on every repaint and exposes `floor.left()`, so `/flow.js` can read
+  "3 left" without polling. A filter's *N of M match* stays in the filter line, and the
+  batch verdict's question moved there too.
 - **How the machine saw a clip is one line (INTAKE M16 I16.3, decision 9).** `deep.line(host,
   clip, {range, onSeek, compact})` writes one line from the clip's sidecars — *every word
   heard · a frame every 4 s · 3 close looks ▸* — and a click opens the whole coverage

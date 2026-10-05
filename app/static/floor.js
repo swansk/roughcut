@@ -438,14 +438,22 @@ function tick(now) {
 
 /* ------------------------------------------------------------------ paint */
 
+/* How many of this round are still undecided — what Next says on the pass ("3 left",
+ * /flow.js). Nothing on this screen counts the round itself (INTAKE M16 I16.3). */
+function left() {
+  return F.mode === 'card' ? 0 : F.queue.filter((p) => !p.verdict).length;
+}
+
+/* Tell the header what the pass knows and the files do not yet: the round's undecided
+ * count, and that the screen changed (a closing card's button may now be the one Next
+ * points at). /flow.js listens; nothing else should. */
+function announce() {
+  document.dispatchEvent(new CustomEvent('roughcut:pass', {
+    detail: { left: left(), round: F.round, mode: F.mode, queue: F.queue.length },
+  }));
+}
+
 function paintHud() {
-  const n = F.queue.length;
-  const done = F.queue.filter((p) => p.verdict).length;
-  const match = F.filter && !filterIsEmpty(F.filter) ? F.queue.filter(matches).length : null;
-  $('#hudPos').innerHTML = n
-    ? `round ${F.round} · pick <b>${F.i + 1}</b> of ${n}`
-      + (match != null ? ` · <b>${match}</b> of ${n} match` : '') + ' · queue frozen for this round'
-    : `round ${F.round} · nothing to cull`;
   const ask = $('#hudAsk');
   ask.hidden = !F.ask;
   if (F.ask) {
@@ -453,13 +461,7 @@ function paintHud() {
     ask.textContent = `${F.ask.kind === 'reject' ? 'reject' : 'mark later'} ${F.ask.n} pick${F.ask.n === 1 ? '' : 's'}? ${key} again · Esc`;
   }
   paintFilter();
-  $('#hudDone').style.width = n ? `${(100 * done / n).toFixed(1)}%` : '0';
-  $('#hudNow').style.left = n ? `${(100 * done / n).toFixed(1)}%` : '0';
-  $('#hudNow').style.width = n ? `${(100 / n).toFixed(1)}%` : '0';
-  const s = F.summary || {};
-  $('#hudBin').innerHTML = `bin <b class="good">${s.moments || 0} moment${s.moments === 1 ? '' : 's'}</b>`
-    + ` · ${s.heroes || 0} hero · if strung out <b>${fmt(s.strung_out_s || 0)}</b>`
-    + (s.later ? ` · ${s.later} later` : '');
+  announce();
 }
 
 function paintContext() {
@@ -2234,6 +2236,10 @@ async function boot() {
   });
   ta.addEventListener('blur', () => { if (!ta.hidden) { const t = ta.value; closeNote(); setNote(t); } });
   wireFilter();
+  $('#keysBtn').addEventListener('click', (e) => {
+    e.currentTarget.blur();                    // space stays the picture's, not the button's
+    toggleOverlay('keymap', keymapHtml);
+  });
   window.addEventListener('resize', () => { zoom.built = ''; buildZoom(); paintKeep(true); });
   window.addEventListener('pagehide', releaseMic);
   document.addEventListener('visibilitychange', () => { if (document.hidden) releaseMic(); });
@@ -2244,7 +2250,7 @@ async function boot() {
   try {
     [F.P, picks] = await Promise.all([getJSON('/api/project'), getJSON('/api/picks')]);
   } catch (e) {
-    $('#hudPos').textContent = `could not load the bin — ${e.message}`;
+    screenMsg(`could not load the bin — ${e.message}`, 'bad');
     return;
   }
   const pos = picks.position || {};
@@ -2268,7 +2274,7 @@ async function boot() {
 window.floor = {
   state: F, current: cur, keepRange, show, advance, undo, playBin, seek,
   dictSend, mic: dict, snapStart, snapEnd, words, utterances, coverageLine, lit,
-  matches, filterWords,
+  matches, filterWords, left,
 };
 
 boot();

@@ -32,23 +32,16 @@
          min-width: 16px; text-align: center; line-height: 14px; vertical-align: 1px; }
   a { color: var(--accent); text-decoration: none; }
 
-  /* ---- HUD ---- */
-  #hud { display: flex; align-items: center; gap: 14px; padding: 7px 14px; background: var(--panel);
-         border-bottom: 1px solid var(--line); flex: none; font-size: 12px; }
-  #hud .brand { font-weight: 700; font-size: 12px; letter-spacing: .06em; }
-  #hud b { color: var(--text); }
-  #hudBar { flex: 1; max-width: 380px; height: 6px; background: #17171d; border-radius: 3px;
-            overflow: hidden; position: relative; }
-  #hudBar i { position: absolute; top: 0; bottom: 0; }
-  #hudDone { left: 0; background: var(--good); }
-  #hudNow { background: var(--accent); }
-  /* a batch verdict asks once, here, before it lands */
+  /* ---- the header: one row on every screen (INTAKE M16 C1) — the bin · cut switcher,
+   * Next (/flow.js: on the pass, how many are left), and ? on the right. Where the round
+   * stands is Next's to say; nothing else here counts. ---- */
+  #hud { display: flex; align-items: center; gap: 12px; padding: 6px 14px; background: var(--panel);
+         border-bottom: 1px solid var(--line); flex: none; font-size: 12px; min-height: 0; }
+  #hud #flow { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+  #keysBtn { padding: 2px 9px; font: 600 12px var(--mono); }
+  /* a batch verdict asks once, in the filter line, before it lands */
   #hudAsk { color: var(--warn); font-weight: 600; }
   #hudAsk[hidden] { display: none; }
-  /* the flow bar (/flow.js, INTAKE M14): the pass had no way to say where the project
-     is; it carries the same seven stages and Next chip as the open screen and the
-     board, in a row of its own under the HUD — 31 px, paid for in #frame's height */
-  #flowRow { flex: none; padding: 3px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
 
   /* ---- the filter line (I2.4): chips for kind · state · clip, a box for a word ---- */
   #filter { display: flex; align-items: center; gap: 12px; padding: 5px 14px; background: #0c0c10;
@@ -297,15 +290,11 @@
 <body>
 <div id="app">
   <div id="hud">
-    <span class="brand">THE PASS <button type="button" id="hdBin" title="switch bins or cuts, save a copy · O"></button></span>
-    <span id="hudPos" class="hint tnum">loading the bin…</span>
-    <div id="hudBar"><i id="hudDone"></i><i id="hudNow"></i></div>
-    <span id="hudBin" class="hint tnum small"></span>
-    <span id="hudAsk" class="tnum" hidden></span>
+    <button type="button" id="hdBin" title="switch bins or cuts, save a copy · O"></button>
+    <div id="flow"></div>
     <span class="grow"></span>
-    <span class="key" title="key map">?</span>
+    <button type="button" id="keysBtn" title="every key">?</button>
   </div>
-  <div id="flowRow"><div id="flow"></div></div>
   <!-- the filter line (I2.4): `/` opens it, Esc clears it. Chips, not buttons — the pass
        has no buttons in the flow; a chip is a term, like a mark on the tape is a pick. -->
   <div id="filter" hidden>
@@ -315,6 +304,7 @@
     <span class="fgroup"><span class="lbl">clip</span><span id="filterClips"></span></span>
     <input id="filterText" type="text" placeholder="a word in the reason or a witness" spellcheck="false" autocomplete="off">
     <span id="filterCount" class="tnum"></span>
+    <span id="hudAsk" class="tnum" hidden></span>
     <span class="grow"></span>
     <span class="hint small"><span class="key">↵</span><span class="key">⌫</span> step through what matches · <span class="key">⇧X</span> reject them · <span class="key">⇧U</span> later · <span class="key">Esc</span> clears</span>
   </div>
