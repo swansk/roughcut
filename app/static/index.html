@@ -372,11 +372,14 @@
   /* The monitor: one place where the whole cut plays, fed from the proxies. */
   #player { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
             padding: 10px; margin-bottom: 12px; }
-  /* About 46 % of the window, and never so tall that the transport, the timeline and
-     the shot strip under it leave the screen (INTAKE M16): ~450 px is what sits below. */
+  /* About half the window, and never so tall that the transport, the timeline and the
+     shot strip under it leave the screen (INTAKE M16): ~420 px is what sits below with a
+     shot selected (the strip's measured bottom left ~80 px spare under the old 450).
+     Centred in its panel: at the height cap the picture is narrower than the panel, and
+     left-aligned it left a ~270 px gutter on one side. */
   .screen { position: relative; background: #000; border-radius: 6px; overflow: hidden;
-            aspect-ratio: 16/9; max-height: min(46vh, calc(100vh - var(--hd) - 450px));
-            min-height: 160px; }
+            aspect-ratio: 16/9; max-height: min(48vh, calc(100vh - var(--hd) - 420px));
+            min-height: 160px; margin-inline: auto; }
   .screen video { position: absolute; inset: 0; width: 100%; height: 100%; display: none;
                   object-fit: contain; }
   .screen video.live { display: block; }

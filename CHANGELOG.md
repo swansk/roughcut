@@ -97,6 +97,15 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **The board's monitor is centred and a little bigger (INTAKE M16 review, I16.4).** At
+  1440×900 the picture was 716 × 403, left-aligned in a 1012 px panel — a ~270 px
+  gutter on its right — with ~185 px empty under the film row at rest; today's monitor
+  was ~832 × 467 and the mock's fills the panel. The room kept under it was 450 px, for
+  a selected shot's strip whose bottom measured ~80 px short of the window's. It is
+  centred now, and the reserve is 420 px (the cut lane's own suggestion) under a 48 %
+  cap: 768 × 432 on the fixture, the same size with a shot selected, and the board still
+  never scrolls. `test_budget.py` checks the centring, the height and that selecting a
+  shot does not resize it (the centring fails on the old CSS).
 - **A Bin find's rows can be told apart, and an empty keep grid says so once (INTAKE M16
   review, I16.4).** The same line heard in three clips came back as three identical
   rows ("goodbye · 1.5 s" — the clip and the times went to the tooltip in I16.4), and

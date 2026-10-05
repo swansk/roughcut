@@ -102,6 +102,10 @@ INVENTORY_JS = r"""
     header: box(hd), header_tag: hd ? (hd.id || hd.tagName.toLowerCase()) : null,
     bin: box(bin), chip: box(chip), chip_text: chip ? chip.innerText.trim() : null,
     strip: box(document.getElementById('inspector')),
+    monitor: (() => { const sc = document.querySelector('#player .screen'), pl = document.getElementById('player');
+      if (!sc || !pl || !sc.getClientRects().length) return null;
+      const a = sc.getBoundingClientRect(), b = pl.getBoundingClientRect();
+      return {left: a.left - b.left, right: b.right - a.right, width: a.width, height: a.height}; })(),
     blue: [...document.querySelectorAll('.is-next')].map(el => el.id || el.dataset.nextFor || el.tagName),
     jobs: [...document.querySelectorAll('#progress .job')].map(el => { const r = el.getBoundingClientRect();
       return {id: el.dataset.job, top: r.top, bottom: r.bottom, visible: vis(el)}; }),
@@ -350,6 +354,16 @@ def test_running_jobs_sit_in_the_header_row_and_a_finished_one_leaves(measured):
     for r in rows:
         assert r["visible"] and abs(mid(r) - mid(m["bin"])) < 12, (r, m["bin"])
         assert r["bottom"] <= m["header"]["bottom"], (r, m["header"])
+
+
+def test_the_monitor_is_centred_and_as_big_as_the_strip_leaves(measured):
+    """The picture sat left in its panel with a ~270 px gutter on the right, 716 × 403 at
+    1440 × 900, with ~185 px empty under the film row: it is centred now, and the room
+    reserved under it is what a selected shot's strip measures, not more."""
+    m = measured["/"]["monitor"]
+    assert m and abs(m["left"] - m["right"]) <= 2, m
+    assert m["height"] >= 425, m
+    assert measured["/ shot"]["monitor"]["height"] == m["height"], "selecting a shot does not resize it"
 
 
 def test_the_selected_shot_is_in_view(measured):
