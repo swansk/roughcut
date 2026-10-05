@@ -25,7 +25,7 @@
   }
   header > button { padding: 5px 11px; }
   #undo, #redo { min-width: 34px; }
-  #saveState[data-state="saved"] { display: none; }
+  #saveState[data-state="saved"], #saveState[data-state="unsaved"]:not([data-late]) { display: none; }
   #saveState[data-state="failed"] { color: var(--bad); }
   #makeFilm .dot { color: var(--accent); margin-left: 6px; }
   .grow { flex: 1; }
@@ -428,7 +428,7 @@
        hidden when nothing is running. -->
   <div id="progress" hidden></div>
   <div class="grow"></div>
-  <!-- "unsaved…" or "save failed" only; a good save says nothing -->
+  <!-- "save failed", or "unsaved…" when the save is late; a good save says nothing -->
   <span class="hint" id="saveState" data-state="saved">saved</span>
   <button id="undo" title="Undo (⌘Z)" aria-label="undo">↶</button>
   <button id="redo" title="Redo (⌘⇧Z)" aria-label="redo">↷</button>

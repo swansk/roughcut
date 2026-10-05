@@ -1744,8 +1744,9 @@ def test_the_old_buttons_are_gone_and_the_header_is_one_row(page):
 
 
 def test_saved_says_nothing_and_a_failed_save_says_so(page, live_server):
-    """INTAKE M16 I16.1: status only when something is wrong — "unsaved…" while the
-    autosave waits, "save failed" when it failed, nothing after a good save."""
+    """INTAKE M16 I16.1: status only when something is wrong — "save failed" when it
+    failed, "unsaved…" only when the save is late, nothing after a good save and nothing
+    through the autosave's own 700 ms wait (it flashed after every trim)."""
     page.keyboard.press("x")
     page.wait_for_function(
         "document.querySelector('#saveState').textContent.startsWith('saved')", timeout=8000)
@@ -1753,10 +1754,26 @@ def test_saved_says_nothing_and_a_failed_save_says_so(page, live_server):
     page.route("**/api/project", lambda route: route.fulfill(status=500, body="no")
                if route.request.method == "PUT" else route.continue_())
     page.evaluate("touch()")
-    assert page.locator("#saveState").inner_text() == "unsaved…"
+    assert page.evaluate("document.querySelector('#saveState').textContent") == "unsaved…"
+    assert not page.locator("#saveState").is_visible(), "waiting 700 ms to save is nothing wrong"
     page.wait_for_function(
         "document.querySelector('#saveState').textContent === 'save failed'", timeout=8000)
     assert page.locator("#saveState").is_visible()
+    page.unroute("**/api/project")
+    # a save that hangs is late: after two seconds the header says so
+    held = []
+    page.route("**/api/project", lambda route: held.append(route)
+               if route.request.method == "PUT" else route.continue_())
+    page.evaluate("touch()")
+    page.wait_for_timeout(1200)
+    assert held and not page.locator("#saveState").is_visible()
+    page.wait_for_selector("#saveState:visible", timeout=3000)
+    assert page.locator("#saveState").inner_text() == "unsaved…"
+    for r in held:
+        r.continue_()
+    page.wait_for_function(
+        "document.querySelector('#saveState').textContent.startsWith('saved')", timeout=8000)
+    assert not page.locator("#saveState").is_visible()
     page.unroute("**/api/project")
 
 

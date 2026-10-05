@@ -56,13 +56,21 @@ function pushUndo(label = 'edit') {
 
 let saveTimer = null;
 
-/* The header says nothing about a good save (INTAKE M16 I16.1): "unsaved…" while the
- * autosave waits, "save failed" when it failed. `data-state` hides the "saved" line; its
- * text stays for whoever waits on it. */
+/* The header says nothing about a good save (INTAKE M16 I16.1): "save failed" when it
+ * failed, and "unsaved…" only when the save is late — two seconds after the edit, a hung
+ * request or a slow disk. The autosave's own 700 ms wait is nothing wrong, and saying
+ * "unsaved…" through it flashed a word in the header after every trim. `data-state`
+ * still moves at once (hidden until late), so whoever waits on "saved" waits for the
+ * save; its text stays for them too. */
+let lateTimer = 0;
+const LATE_MS = 2000;
 function saveSays(state, text) {
   const el = $('#saveState');
   el.dataset.state = state;
   el.textContent = text;
+  clearTimeout(lateTimer);
+  delete el.dataset.late;
+  if (state === 'unsaved') lateTimer = setTimeout(() => { el.dataset.late = '1'; }, LATE_MS);
 }
 
 function touch() {
