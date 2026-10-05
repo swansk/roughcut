@@ -158,8 +158,8 @@ def test_a_half_speed_shot_is_twice_as_long_on_the_ruler_and_in_the_total(page):
     at = page.evaluate("tl.shotAt(3.0)")
     assert at["index"] == 0 and at["clipT"] == 2.5
     assert page.evaluate("tl.shotAt(5.0)") == {"id": ids(page)[1], "index": 1, "clipT": 1.0}
-    # the block says the film length and wears the badge; the plain shot wears none
-    assert page.locator("#tl .blk").nth(0).locator(".dur").inner_text() == "4.0s"
+    # the block wears the badge, its tooltip the film length; the plain shot wears none
+    assert "(4.0s of film from 2.0s)" in page.locator("#tl .blk").nth(0).get_attribute("title")
     assert page.locator("#tl .blk").nth(0).locator(".speed:not([hidden])").inner_text() == "0.5×"
     assert page.locator("#tl .blk").nth(1).locator(".speed:not([hidden])").count() == 0
     # a split at 2 s of film cuts the clip at 2.0 (1.0 + 2 × 0.5) and both halves keep the rate
@@ -350,9 +350,7 @@ def test_a_generated_clip_draws_a_block_that_says_what_it_is_and_plays(page, pro
     assert page.locator("#tl .blk").count() == 3
     blk = page.locator("#tl .blk.gen")
     assert blk.count() == 1
-    assert blk.locator(".name").inner_text() == "black"
-    assert blk.locator(".line").inner_text() == "black · 2.0 s"
-    assert blk.locator(".dur").inner_text() == "2.0s"
+    assert blk.locator(".name").inner_text() == "black"          # named by its kind (M16)
     assert blk.locator(".warn:not([hidden])").count() == 0
     assert blk.locator("img.poster").get_attribute("src") == "/media/poster/gen_black_test.jpg?t=0.00"
     assert "black · 2.0 s" in blk.get_attribute("title")

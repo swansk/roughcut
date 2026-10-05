@@ -234,6 +234,14 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **Timeline blocks are named by their first words; heroes wear a ★; the markers lane is
+  gone (INTAKE M16 I16.4).** A block read `CLIP_01 12.9s` over a dim line of speech; it
+  now reads the first words spoken in it (else the shot's why, else what was seen), up to
+  three lines, and a generated slide reads its kind (`black`, `title`). The clip, range
+  and film length are the tooltip's. The markers lane above V1 and its legend
+  (`★ hero · event · available keep`) are gone: a block holding a hero keep wears ★ on its
+  name. The dashed outlines of keeps not in the cut stay — they are a drag path — without
+  the `available` label or a clip name on them.
 - **A click on a timeline block selects it and parks the monitor there, paused (INTAKE M16
   I16.4, decision 6).** A click used to play the cut from the block (the strip's old
   promise), so looking at a shot started its sound. Now the block is selected, the

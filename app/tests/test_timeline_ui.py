@@ -314,7 +314,9 @@ def test_move_reorders_and_the_ids_travel_with_the_shots(page, project):
     assert ids(page) == [b, a]
     assert page.evaluate("segs.map(s => s.clip)") == ["CLIP_B.MP4", "CLIP_A.MP4"]
     assert block_ids(page) == [b, a]
-    assert page.locator("#tl .blk").first.locator(".name").inner_text() == "CLIP_B"
+    # a block is named by the first words spoken in it, never the camera's file name
+    assert page.locator("#tl .blk").first.locator(".name").inner_text() == "hello there"
+    assert "CLIP_B" in page.locator("#tl .blk").first.get_attribute("title")
     wait_saved(page)
     assert [(s["id"], s["clip"]) for s in on_disk(project)] == [
         (b, "CLIP_B.MP4"), (a, "CLIP_A.MP4")]

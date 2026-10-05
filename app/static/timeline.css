@@ -61,10 +61,10 @@
 #tl .blk .txt { min-width: 0; overflow: hidden; font-size: 11px; line-height: 1.3;
                 color: var(--text); pointer-events: none; }
 #tl .blk.tiny .txt { display: none; }
-#tl .blk .name { font-weight: 600; margin-right: 6px; }
-#tl .blk .dur { color: var(--dim); font-variant-numeric: tabular-nums; }
-#tl .blk .line { color: var(--dim); white-space: nowrap; overflow: hidden;
-                 text-overflow: ellipsis; margin-top: 2px; }
+/* the block's name is the first words spoken in it (INTAKE M16), up to three lines */
+#tl .blk .name { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3;
+                 -webkit-box-orient: vertical; word-break: break-word; }
+#tl .blk.hero .name::before { content: '★ '; color: var(--warn); }
 /* a boundary warning is a small mark on the edge it concerns */
 #tl .blk .warn { position: absolute; top: 0; width: 0; height: 0; border-style: solid;
                  pointer-events: auto; }
@@ -75,7 +75,7 @@
 #tl .blk .warn[hidden] { display: none; }
 /* ---- speed and generated clips (INTAKE M13) */
 /* the badge: the shot's rate, only when it is not 1× — a plain cut looks as it did */
-#tl .blk .speed { display: inline-block; margin-left: 6px; padding: 0 4px; border-radius: 3px;
+#tl .blk .speed { display: inline-block; float: right; margin-left: 4px; padding: 0 4px; border-radius: 3px;
                   font-size: 10px; line-height: 14px; font-weight: 600; color: #0b0b0f;
                   background: var(--warn); font-variant-numeric: tabular-nums; vertical-align: 1px; }
 #tl .blk .speed[hidden] { display: none; }
@@ -213,17 +213,6 @@
                             border-radius: 3px; background: transparent; color: var(--dim);
                             border: 1px solid var(--line); cursor: pointer; }
 #tl .tl-xlane .lbl button.on { color: var(--text); border-color: var(--accent); }
-
-/* markers: ★ a hero keep in the cut, | a ranked event inside a shot */
-#tl .tl-xlane[data-lane=markers] .mk { position: absolute; top: 0; pointer-events: auto; }
-#tl .tl-xlane[data-lane=markers] .mk.hero { color: var(--warn); font-size: 12px; line-height: 16px;
-                                            transform: translateX(-50%); cursor: default; }
-#tl .tl-xlane[data-lane=markers] .mk.ev { top: 3px; width: 2px; height: 10px; margin-left: -1px;
-                                          background: var(--accent); }
-#tl .tl-xlane[data-lane=markers] .mk.ev[data-kind=fall],
-#tl .tl-xlane[data-lane=markers] .mk.ev[data-kind=crash],
-#tl .tl-xlane[data-lane=markers] .mk.ev[data-kind=jump],
-#tl .tl-xlane[data-lane=markers] .mk.ev[data-kind=reaction] { background: var(--warn); }
 
 /* A1: the bed bar, its fades as ramps, a dip under every speech region, the level curve */
 #tl .tl-xlane[data-lane=A1] { cursor: pointer; background: rgba(110, 168, 254, .04); border-radius: 3px; }

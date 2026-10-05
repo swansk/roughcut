@@ -326,8 +326,7 @@
     b.className = 'blk';
     b.dataset.id = id;
     b.innerHTML = '<img class="poster" draggable="false" loading="lazy" decoding="async" alt="">'
-      + '<div class="txt"><span class="name"></span><span class="dur"></span>'
-      + '<span class="speed" hidden></span><div class="line"></div></div>'
+      + '<div class="txt"><span class="speed" hidden></span><span class="name"></span></div>'
       + '<i class="warn in" hidden></i><i class="warn out" hidden></i>';
     return b;
   }
@@ -355,6 +354,19 @@
     if (isGen(seg.clip)) return genLine(seg, clip);
     const u = clip && (clip.transcript || []).find((x) => x.end > seg.in && x.start < seg.out);
     return (u && u.text) || seg.why || '';
+  }
+
+  /* A block's name (INTAKE M16 I16.4): the first words spoken inside the shot, else the
+   * shot's why, else what was seen in it — never the camera's file name; a generated
+   * slide by what it is (`black`, `title`). The file and the clip range are the
+   * tooltip's. */
+  function blockName(seg, clip) {
+    if (isGen(seg.clip)) return genKind(seg.clip);
+    const line = strongestLine(seg, clip);
+    if (line) return line;
+    const seen = ((clip && clip.visual && clip.visual.moments) || [])
+      .find((m) => m.end > seg.in && m.start < seg.out && m.what);
+    return seen ? seen.what : 'no words';
   }
 
   /* Mirrors app.js's boundaryWarning, per edge: a cut point inside somebody's sentence. */
@@ -409,13 +421,11 @@
     b.classList.toggle('tiny', w < 36);
     b.classList.toggle('gen', gen);
     const clip = clipOf(seg.clip);
-    b.querySelector('.name').textContent = gen ? genKind(seg.clip) : stem(seg.clip);
-    b.querySelector('.dur').textContent = `${filmLen.toFixed(1)}s`;
+    b.querySelector('.name').textContent = blockName(seg, clip);
     // the badge: only when the shot is retimed, so a 1× cut looks the way it always did
     const badge = b.querySelector('.speed');
     badge.hidden = spd === 1;
     badge.textContent = spd === 1 ? '' : `${speedLabel(spd)}×`;
-    b.querySelector('.line').textContent = strongestLine(seg, clip);
     b.title = `${i + 1}. ${gen ? genLine(seg, clip) : stem(seg.clip)} ${fmt(seg.in)}–${fmt(seg.out)}`
       + (spd === 1 ? ` (${filmLen.toFixed(1)}s)`
                    : ` at ${speedLabel(spd)}× (${filmLen.toFixed(1)}s of film from ${(seg.out - seg.in).toFixed(1)}s)`)
@@ -1009,7 +1019,7 @@
     setRange, move, split, remove, insert, setSpeed,
     select, syncSel, seek, setPlayhead, zoomTo, fit,
     forSave, needsRekey, afterSave,
-    fmt, hueOf,
+    fmt, hueOf, blockName,
   };
   window.tl = tl;
 })();
