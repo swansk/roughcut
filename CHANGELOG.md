@@ -13,6 +13,17 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Changed
+- **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
+  buttons called the model with no price: the empty board's *Ask for a first cut* and
+  *Cut from the bin*, the Ask panel's *Ask* and *Cut from the bin*, a shot's *Ask*, and
+  the FX card's Iterate *Go*. A new free `GET /api/ask/price?mode=first|bin|full|shot`
+  returns `{usd, basis}`: the median of this project's last few asks of that kind
+  (their recorded tokens, re-priced at the deep role's model now, so a tier move moves
+  the price), else a typical Killington-sized call, plus the quick estimate call that
+  opens a whole-cut ask — Killington today: whole-cut ~$0.58, a shot ~$0.15. The
+  buttons read "Ask · ~$0.58"; Go reads the fx price ("Go · ~$0.05"). The after-the-run
+  token line ("claude-opus-5 · 39403→15314 tok · $0.5799 projected") is one short
+  "cost $0.58".
 - **No budget cap by default; spend is per project, one number (INTAKE I16.0g, Karl,
   2026-10-04: *"Do not have a cap … 'no cap' — this should be on by default"*).** The
   cap was a $15 default against `inference.spent_usd()`, a process-lifetime counter: a

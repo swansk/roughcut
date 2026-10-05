@@ -1106,6 +1106,67 @@ async def api_ask(request: Request) -> JSONResponse:
     return JSONResponse({"job": job})
 
 
+# What an Ask costs, on its button before the click (INTAKE M16 I16.0f): fitted to the
+# asks this bin already paid for, the way effects and deep looks are priced, and free.
+# Each stored ask carries its call's tokens (`plan.usage`); they are re-priced at the
+# deep role's model *now*, so a record made on one tier prices the next one honestly.
+# With no record of the kind yet, a typical call measured on Killington stands in.
+ASK_MODES = ("first", "bin", "full", "shot")
+ASK_FIT_LAST = 5                       # the median of the newest few of a kind
+ASK_TYPICAL_TOKENS = {                 # (in, out) of one call, Killington 2026-09/10:
+    "cut": (42_000, 13_000),           # four whole-cut asks, 39–45k in, 9.5–15k out
+    "shot": (28_500, 500),             # one shot ask, 28.5k in, ~0.5k out
+}
+ASK_ESTIMATE_TOKENS = (3_000, 400)     # the quick ETA call that opens a whole-cut ask
+
+
+def ask_price(mode: str) -> dict:
+    kind = "shot" if mode == "shot" else "cut"
+    model = config.model_for(config.ROLE_SKELETON)
+    fits: list[float] = []
+    asks: Path = STATE["asks"]
+    files = sorted(asks.glob("*.json"), key=lambda q: q.stat().st_mtime,
+                   reverse=True) if asks.is_dir() else []
+    for path in files:
+        try:
+            plan = json.loads(path.read_text(encoding="utf-8")).get("plan") or {}
+            u = plan.get("usage") or {}
+            tin, tout = int(u["input_tokens"]), int(u["output_tokens"])
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            continue
+        if ("focus" in plan) != (kind == "shot") or tin <= 0:
+            continue
+        fits.append(config.projected_usd(model, tin, tout))
+        if len(fits) == ASK_FIT_LAST:
+            break
+    what = "shot asks" if kind == "shot" else "asks about the whole cut"
+    if fits:
+        fits.sort()
+        mid = len(fits) // 2
+        usd = fits[mid] if len(fits) % 2 else (fits[mid - 1] + fits[mid]) / 2
+        basis = (f"the middle of this project's last {len(fits)} {what}, "
+                 f"priced for {model}")
+    else:
+        usd = config.projected_usd(model, *ASK_TYPICAL_TOKENS[kind])
+        basis = f"a typical one of the {what} — this project has none yet; priced for {model}"
+    if kind == "cut":
+        usd += config.projected_usd(config.model_for(config.ROLE_ANALYSIS),
+                                    *ASK_ESTIMATE_TOKENS)
+        basis += ", plus the quick estimate that draws its bar"
+    return {"mode": mode, "usd": round(usd, 2), "basis": basis, "model": model,
+            "fitted_on": len(fits)}
+
+
+@app.get("/api/ask/price")
+def api_ask_price(mode: str = "full") -> JSONResponse:
+    """The price on an Ask-family button (first cut, Cut from the bin, Ask, a shot's
+    Ask) before it is pressed. Reads records; never calls the model. Declared before
+    /api/ask/{job}, which would otherwise take "price" for a job id."""
+    if mode not in ASK_MODES:
+        raise HTTPException(400, f"mode must be one of {list(ASK_MODES)}")
+    return JSONResponse(ask_price(mode))
+
+
 @app.get("/api/ask/{job}")
 def api_ask_status(job: str) -> JSONResponse:
     if job not in ASKS:

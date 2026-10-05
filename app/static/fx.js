@@ -79,6 +79,7 @@
     note: '',                // the design box
     place: false,
     price: null,             // {usd, frames} for `place` on this shot
+    revisePrice: null,       // {usd} for one Iterate → Go (the revise call), on its button
     priceFor: null,
     reference: null,         // the sketch's reference, sent with the next Design
     window: null,            // {t0, t1} clip seconds — the human's window on the shot, or null
@@ -156,6 +157,11 @@
   async function fetchPrice(id) {
     if (!id) { S.price = null; S.peaks = []; return; }
     fetchPeaks(id);
+    // Iterate's Go is a model call (POST /api/fx/revise): priced like a design with
+    // nothing to place, once, before any card's box is open (INTAKE I16.0f)
+    if (!S.revisePrice) {
+      api('GET', '/api/fx/price').then((d) => { S.revisePrice = d; paint(); }).catch(() => {});
+    }
     S.priceFor = id;
     try {
       const d = await api('GET', `/api/fx/price?place=1&shot=${encodeURIComponent(id)}`);
@@ -388,7 +394,7 @@
         + `</div>`;
     const iter = S.iterOpen.has(e.id)
       ? `<div class="fxiter"><input type="text" placeholder="red and bigger · hold it a second longer · only the big one · no sound" value="${esc(S.iter[e.id] || '')}">`
-        + `<button data-act="revise" class="primary">Go</button></div>`
+        + `<button data-act="revise" class="primary" title="one model call — the effect comes back as a proposal">Go${S.revisePrice && typeof S.revisePrice.usd === 'number' ? ` · ~$${S.revisePrice.usd.toFixed(2)}` : ''}</button></div>`
       : '';
     const extras = [];
     if (Array.isArray(e.window) && e.window.length === 2) extras.push(`window · ${fmtT(e.window[0])}–${fmtT(e.window[1])}`);
@@ -705,7 +711,7 @@
 
   function signature() {
     return JSON.stringify([
-      S.shot, S.effects, S.sel, S.price,
+      S.shot, S.effects, S.sel, S.price, S.revisePrice,
       S.reference && [S.reference.t, S.reference.marks.length, S.reference.goal],
       S.window && [S.window.t0, S.window.t1],
       S.peaks.length,
