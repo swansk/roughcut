@@ -200,6 +200,13 @@ same commit. Releases move entries into a dated version section.
   `/#tool=ask`, by its button or by A; only the button was tested, and A sending the
   board to `/` still passed. A new pass UI test presses A on the card and expects the
   Ask.
+- **The Ask-price tests no longer depend on the shell's model pins (M16 stage 0 review,
+  I16.0f, test strength).** With `ROUGHCUT_MODEL_SKELETON=claude-sonnet-5-5` in the
+  environment (a developer shell or a service that pins a tier), `test_ask_price.py`
+  failed: "assert 0.45 <= 0.36 — Killington's asks priced at the top tier", and the shot
+  price's literal `0.15` assumed the default deep model too. The tests now clear both
+  role pins first and derive the band and the shot price from `config.DEEP_MODEL`'s
+  prices instead of literal dollars; they pass with the pins set.
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six

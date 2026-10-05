@@ -26,7 +26,11 @@ class _Never:
 
 
 @pytest.fixture
-def no_model():
+def no_model(monkeypatch):
+    """No model call, and the default tiers: a shell or a service that pins a role's
+    model (ROUGHCUT_MODEL_SKELETON=claude-sonnet-5-5) must not move these prices."""
+    for role in (config.ROLE_SKELETON, config.ROLE_ANALYSIS):
+        monkeypatch.delenv(f"ROUGHCUT_MODEL_{role.upper()}", raising=False)
     inference.set_backend(_Never())
     yield
     inference.set_backend(None)
@@ -88,10 +92,13 @@ def test_the_price_is_fitted_to_this_projects_asks_and_follows_the_model(tmp_pat
         want = (fits[1] + fits[2]) / 2 + _estimate_usd()
         d = c.get("/api/ask/price?mode=full").json()
         assert d["usd"] == round(want, 2) and d["fitted_on"] == 4, d
-        assert 0.45 <= d["usd"] <= 0.65, "Killington's asks priced at the top tier"
+        # priced at the top tier: between the cheapest and the dearest of the four there
+        assert deep == config.DEEP_MODEL
+        assert fits[0] <= d["usd"] - _estimate_usd() <= fits[-1] + 0.005, \
+            "Killington's asks priced at the top tier"
         assert "last 4 asks about the whole cut" in d["basis"]
         s = c.get("/api/ask/price?mode=shot").json()
-        assert s["usd"] == round(config.projected_usd(deep, 28487, 476), 2) == 0.15
+        assert s["usd"] == round(config.projected_usd(config.DEEP_MODEL, 28487, 476), 2)
         assert s["fitted_on"] == 1
 
         # the deep role moved to the mid tier: the same tokens, priced there
