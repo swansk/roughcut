@@ -149,17 +149,57 @@
     el.innerHTML = parts.join('');
   }
 
-  /* On this screen already: open the tool instead of reloading the page. */
-  function go(screen, tool, href, e) {
+  /* On this screen already: open the tool instead of reloading the page — and land on
+   * the action's target (its shot and card) there and then. */
+  function go(screen, tool, href, e, target) {
     if (screen === HERE) {
       if (e) e.preventDefault();
       if (tool && window.dock) {
         window.dock.open(tool);
         try { history.replaceState(null, '', `#tool=${tool}`); } catch (err) { /* fine */ }
+        if (target) land(tool, target);
       }
       return;
     }
     if (!e) location.href = href;
+  }
+
+  /* Next lands on its target (INTAKE M16 I16.0a). `/#tool=fx&shot=<id>&fx=<id>`: the
+   * shot is selected, the monitor parked at its start (paused), the FX tool opened and
+   * the effect's card brought into view (fx.focus); `/#tool=ask&ask=<job>`: the waiting
+   * Ask proposal is shown (the Ask tool's own "show it" link — free, it only reads the
+   * proposal off disk). Next used to open the tool on whatever shot the board had
+   * anchored — shot 1's accepted title while the proposal waited on shot 17. The board
+   * builds its timeline after a few fetches, so this waits (up to 15 s) for it. */
+  let landing = 0;
+  function mounted() {
+    try { return !!(window.tl && tl.state && Array.isArray(tl.state.segs) && tl.state.segs.length); } catch (err) { return false; }
+  }
+  function land(tool, target) {
+    if (HERE !== '/' || !target) return;
+    const gen = ++landing;
+    const until = Date.now() + 15000;
+    const later = (fn) => { if (gen === landing && Date.now() < until) setTimeout(fn, 120); };
+    const step = () => {
+      if (gen !== landing) return;
+      if (!mounted() || (target.fx && !(window.fx && fx.ready))) { later(step); return; }
+      const shot = target.shot && tl.indexOf(target.shot) >= 0 ? target.shot : null;
+      if (shot) {
+        tl.select([shot]);
+        const start = tl.filmStart(shot);
+        if (start >= 0) tl.seek(start);
+      }
+      if (tool && window.dock) window.dock.open(tool);
+      if (target.fx && window.fx && typeof fx.focus === 'function') fx.focus(target.fx);
+      if (target.ask) {
+        const show = () => {
+          const a = document.getElementById('showLast');
+          if (a) a.click(); else later(show);
+        };
+        show();
+      }
+    };
+    step();
   }
 
   function onClick(e) {
@@ -187,7 +227,7 @@
         btn.click();
         return;
       }
-      go(n.screen, n.tool, n.href, e);
+      go(n.screen, n.tool, n.href, e, n.target);
       return;
     }
     const s = last.stages.find((x) => x.key === a.dataset.stage);
@@ -195,10 +235,25 @@
   }
 
   /* `/#tool=fx` opens that dock tool — how a click on another screen's bar lands on
-   * the right panel of the board. */
+   * the right panel of the board; `&shot=…&fx=…` / `&ask=…` is what it lands on. The
+   * target is taken off the hash once read, so a later reload does not land again on
+   * a proposal that has since been answered. */
   function honourHash() {
-    const m = /(?:^#|&)tool=([a-z]+)/.exec(location.hash || '');
-    if (m && window.dock) window.dock.open(m[1]);
+    const h = (location.hash || '').replace(/^#/, '');
+    const q = {};
+    h.split('&').forEach((kv) => {
+      const i = kv.indexOf('=');
+      if (i > 0) {
+        try { q[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1)); } catch (err) { /* skip */ }
+      }
+    });
+    if (!/^[a-z]+$/.test(q.tool || '') || !window.dock) return;
+    window.dock.open(q.tool);
+    const target = {};
+    ['shot', 'fx', 'ask'].forEach((k) => { if (q[k]) target[k] = q[k]; });
+    if (!Object.keys(target).length) return;
+    try { history.replaceState(null, '', `#tool=${q.tool}`); } catch (err) { /* fine */ }
+    land(q.tool, target);
   }
 
   async function poll() {
@@ -221,7 +276,7 @@
     poll();
   }
 
-  window.flowBar = { poll, state: () => last, here: HERE };
+  window.flowBar = { poll, state: () => last, here: HERE, land };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
 })();

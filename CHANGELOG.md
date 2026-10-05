@@ -12,6 +12,22 @@ same commit. Releases move entries into a dated version section.
 ### Docs
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
+### Fixed
+- **Next lands on the waiting effect (INTAKE M16 I16.0a).** On Killington, Next opened
+  the FX tool on whatever shot the board had anchored — shot 1's accepted typed title —
+  while the slow-motion proposal `fx_d644520f` waited on shot 17 (`g1ce00e2b83`): the
+  action carried only `{tool: 'fx'}`. `GET /api/flow` now gives the action a `target`
+  (`{shot, fx}` — of the waiting proposals, the one on the earliest shot of the cut;
+  `{ask}` for a waiting Ask proposal) and carries it in the href,
+  `/#tool=fx&shot=<id>&fx=<id>`. The board's hash handler (`/flow.js`, in place when
+  Next is clicked on the board) selects the shot, parks the monitor at its start, paused,
+  opens FX and calls the new `fx.focus(id)`, which scrolls the dock (not the page) until
+  the proposal's card is in view; an `ask` target opens the Ask tool's "show it". The
+  target leaves the hash once read, so a reload does not land on an answered proposal.
+  The FX rail badge counts the proposals waiting across the cut — the Polish stage's
+  number — instead of the selected shot's effects, which changed with every click. A
+  proposal still outranks a stale render (M14 decision 2).
+
 ### Changed
 - **The board listens on this machine only (Karl, 2026-10-04, ahead of an open-source
   release).** `app/server.py` bound `0.0.0.0` with no login, so on a shared network

@@ -1911,6 +1911,29 @@ def running_jobs() -> dict[str, dict]:
     return out
 
 
+def fx_target(proposed: list[dict], segments: list[dict]) -> dict | None:
+    """Where Next lands for the waiting effects (INTAKE M16 I16.0a): the proposal on
+    the earliest shot of the cut (then the oldest), as `{shot, fx}` — the shot the
+    board selects and the card the FX tool brings into view. Next used to open the
+    tool on whatever shot the board had anchored: shot 1's accepted title, while the
+    slow motion waited on shot 17. A proposal for a shot the edits will create sits
+    on its `anchor_shot`; one whose shot is no longer in the cut carries only `fx`."""
+    if not proposed:
+        return None
+    order = {str(s.get("id")): i for i, s in enumerate(segments) if s.get("id")}
+
+    def shot_of(e: dict) -> str | None:
+        sid = str(e.get("anchor_shot") or e.get("shot") or "")
+        return sid if sid in order else None
+
+    first = min(proposed, key=lambda e: (order.get(shot_of(e) or "", len(order)),
+                                         str(e.get("created") or ""), str(e.get("id"))))
+    out = {"fx": str(first.get("id"))}
+    if shot_of(first):
+        out["shot"] = shot_of(first)
+    return out
+
+
 def flow_facts() -> dict:
     """Everything `flow.compute` reads, off the files: footage, proxies, the journal,
     the sidecars, the EDL's brief / selects / cut / polish blocks, the asks and the
@@ -1974,8 +1997,9 @@ def flow_facts() -> dict:
            "target": edl.get("target_s"), "proposal": ask_pending(edl_mtime)}
     colour = edl.get("colour") or {}
     look = ("off" if colour.get("mode") == "off" else colour.get("look")) or None
-    fx_proposed = sum(1 for e in _fx_all() if e.get("status") == "proposed")
-    polish = {"effects": len(edl.get("effects") or []), "fx_proposed": fx_proposed,
+    proposed = [e for e in _fx_all() if e.get("status") == "proposed"]
+    polish = {"effects": len(edl.get("effects") or []), "fx_proposed": len(proposed),
+              "target": fx_target(proposed, segments),
               "look": look, "music": bool((edl.get("effects_music") or {}).get("asset"))}
     proxies = sum(1 for c in clips if (STATE["proxy_dir"] / f"{Path(c).stem}.mp4").exists())
     return {"clips": len(clips), "junk": len(junk),

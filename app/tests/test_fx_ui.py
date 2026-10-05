@@ -370,10 +370,11 @@ def test_design_makes_a_proposal_card_and_never_touches_the_edl(page):
     assert e["status"] == "proposed" and e["shot"] == shot_ids(page)[0]
     assert e["sound_url"].endswith("/sound.wav")
     assert api(page, "/api/project").get("effects") in (None, [])
-    # the other shot has no cards and no badge
+    # the other shot has no cards — and the badge still counts the proposal waiting on
+    # shot 1: it is what waits across the cut, not the selected shot's (INTAKE M16)
     open_fx(page, 1)
     assert page.locator("#fx .fxcard").count() == 0
-    assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == ""
+    assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == "1"
 
 
 def test_the_nudges_move_a_hit_one_frame_through_put(page):
@@ -429,7 +430,8 @@ def test_verify_iterate_accept_and_remove(page):
     assert [x["id"] for x in api(page, "/api/project")["effects"]] == [e["id"]]
     assert card.locator("button[data-act=remove]").is_visible()
     assert card.locator("button[data-act=accept]").count() == 0
-    assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == "1"
+    # the badge counts what waits on you: an accepted effect is answered (INTAKE M16)
+    assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == ""
     # remove keeps it (Karl: reversible), out of the cut, with Restore; Delete is for good
     card.locator("button[data-act=remove]").click()
     page.wait_for_function("document.querySelector('#fx .fxcard .fxchip.removed') !== null")
@@ -439,7 +441,7 @@ def test_verify_iterate_accept_and_remove(page):
     card.locator("button[data-act=restore]").click()
     page.wait_for_function("document.querySelector('#fx .fxcard .fxchip.accepted') !== null")
     assert len(api(page, "/api/project")["effects"]) == 1
-    assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == "1"
+    assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == ""
     card.locator("button[data-act=remove]").click()
     page.wait_for_function("document.querySelector('#fx .fxcard .fxchip.removed') !== null")
     card.locator("button[data-act=discard]").click()
@@ -465,6 +467,76 @@ def test_a_reload_lands_on_a_proposal_made_before_it(page):
     page.wait_for_selector("#fx .fxcard")
     assert page.locator("#fx .fxcard").get_attribute("data-id") == e["id"]
 
+
+
+def test_next_lands_on_the_waiting_effect_not_the_anchored_shot(page, live_server):
+    """INTAKE M16 I16.0a. On Killington, Next opened the FX tool on the shot the board
+    had anchored — shot 1's accepted title — while the slow motion waited on shot 17,
+    and the rail badge counted the selected shot's effects. Here: an accepted effect
+    and a proposal on shot 2, the board on shot 1. Next selects shot 2, parks the
+    monitor at its start (paused), opens FX with the proposal's card in view — in
+    place on the board, and from another screen through the hash."""
+    page.set_viewport_size({"width": 1280, "height": 640})
+    sid2 = open_fx(page, 1)
+    page.locator("#fxNote").fill("a title as we drop in")
+    page.locator("#fxDesign").click()
+    page.wait_for_selector("#fx .fxcard", timeout=20000)
+    first = effects(page)[-1]
+    page.locator(f"#fx .fxcard[data-id='{first['id']}'] button[data-act=accept]").click()
+    wait_effect(page, first["id"], "e => e.status === 'accepted'")
+    page.wait_for_function("document.querySelector('#fx .fxchip').textContent === 'accepted'")
+    page.locator("#fxNote").fill("hit markers where my skis hit the rocks")
+    page.locator("#fxDesign").click()
+    page.wait_for_function("document.querySelectorAll('#fx .fxcard').length === 2", timeout=20000)
+    waiting = next(e for e in effects(page) if e["status"] == "proposed")
+    assert waiting["shot"] == sid2
+    # the board on shot 1, which has no effects: the badge still says one waits
+    sid1 = open_fx(page, 0)
+    assert page.evaluate("fx.state.shot") == sid1
+    assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == "1"
+    page.evaluate("dock.open('bin')")
+    page.evaluate("flowBar.poll()")
+    page.wait_for_function(
+        f"(() => {{ const n = flowBar.state() && flowBar.state().next;"
+        f" return !!n && !!n.target && n.target.fx === '{waiting['id']}'; }})()", timeout=10000)
+    nxt = page.evaluate("flowBar.state().next")
+    assert nxt["stage"] == "polish"
+    assert nxt["href"] == f"/#tool=fx&shot={sid2}&fx={waiting['id']}"
+
+    def landed():
+        page.wait_for_function(
+            f"window.tl && tl.state && tl.state.anchor === '{sid2}'"
+            f" && window.fx && fx.state.shot === '{sid2}' && dock.current() === 'fx'"
+            f" && !!document.querySelector(\"#fx .fxcard[data-id='{waiting['id']}']\")",
+            timeout=15000)
+        assert page.evaluate("!player.playing") is True
+        assert page.evaluate("player.idx") == 1
+        assert page.evaluate(f"Math.abs(tl.state.playhead - tl.filmStart('{sid2}'))") < 0.05
+        page.wait_for_function("Math.abs(liveVideo().currentTime - segs[1].in) < 0.1", timeout=5000)
+        page.wait_for_timeout(200)
+        box = page.evaluate(f"""(() => {{
+            const c = document.querySelector("#fx .fxcard[data-id='{waiting['id']}']").getBoundingClientRect();
+            const t = document.querySelector('#tools').getBoundingClientRect();
+            return {{ct: c.top, tt: t.top, tb: t.bottom}}; }})()""")
+        assert box["tt"] - 1 <= box["ct"] < box["tb"] - 40, box   # the card's head is in view
+        assert page.evaluate("window.scrollY") == 0          # only the dock scrolled
+        assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == "1"
+
+    # on the board: in place, no reload
+    page.evaluate("window.__stay = 1")
+    page.locator("#flowNext").click()
+    landed()
+    assert page.evaluate("window.__stay") == 1
+    assert page.evaluate("location.hash") == "#tool=fx"
+    # from another screen: the href carries the target, and the hash lets go of it
+    page.goto(live_server + "/open")
+    page.wait_for_function(
+        f"(() => {{ const n = window.flowBar && flowBar.state() && flowBar.state().next;"
+        f" return !!n && !!n.target && n.target.fx === '{waiting['id']}'; }})()", timeout=15000)
+    page.locator("#flowNext").click()
+    page.wait_for_selector("#tl .blk", timeout=15000)
+    landed()
+    assert page.evaluate("location.hash") == "#tool=fx"
 
 
 # ---------------------------------------------------------------- the monitor overlay

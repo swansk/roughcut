@@ -137,6 +137,39 @@ def test_an_effect_proposed_needs_you_in_the_fx_tool():
     assert out["next"]["href"] == "/#tool=fx"
 
 
+def test_next_carries_the_waiting_effect_as_its_target():
+    """INTAKE M16 I16.0a: Next opened the FX tool on whatever shot the board had
+    anchored (shot 1's accepted title on Killington) while the proposal waited on
+    shot 17. The action now carries the shot and the effect, in the href too."""
+    f = with_cut(indexed())
+    f["polish"] = {"fx_proposed": 1, "effects": 2,
+                   "target": {"shot": "g1ce00e2b83", "fx": "fx_d644520f"}}
+    # a stale render: a proposal that changes the cut still outranks it (M14 decision 2)
+    f["render"] = {"count": 10, "latest_matches": False, "matches": False}
+    out = flow.compute(f)
+    nxt = out["next"]
+    assert nxt["stage"] == "polish" and nxt["tool"] == "fx"
+    assert nxt["target"] == {"shot": "g1ce00e2b83", "fx": "fx_d644520f"}
+    assert nxt["href"] == "/#tool=fx&shot=g1ce00e2b83&fx=fx_d644520f"
+    assert "click" not in nxt
+    # the stage itself still opens the tool; only the action lands on the proposal
+    assert by_key(out)["polish"]["href"] == "/#tool=fx"
+    # a waiting Ask proposal carries its job
+    f["polish"] = {}
+    f["cut"]["proposal"] = {"job": "ab12", "shots": 18, "colour_only": False}
+    nxt = flow.compute(f)["next"]
+    assert nxt["stage"] == "cut" and nxt["target"] == {"ask": "ab12"}
+    assert nxt["href"] == "/#tool=ask&ask=ab12"
+    f["cut"]["proposal"]["colour_only"] = True
+    nxt = flow.compute(f)["next"]
+    assert nxt["stage"] == "polish" and nxt["href"] == "/#tool=ask&ask=ab12"
+    # no target known: the plain tool, as before
+    f["cut"]["proposal"] = None
+    f["polish"] = {"fx_proposed": 1}
+    nxt = flow.compute(f)["next"]
+    assert "target" not in nxt and nxt["href"] == "/#tool=fx"
+
+
 def test_a_render_goes_stale_after_an_edit():
     f = with_cut(indexed())
     st = by_key(flow.compute(f))
@@ -260,6 +293,45 @@ def test_api_flow_carries_the_servers_own_cli_fix(client, monkeypatch):
     assert by_key(out)["index"]["blocked"] == "cli"
     monkeypatch.setattr(server, "backend_preflight", lambda: {**real(), "fix": None})
     assert client.get("/api/flow").json()["blockers"] == []
+
+
+def test_api_flow_lands_on_the_proposal_on_the_earliest_shot(client, project):
+    """The server picks Next's target off the files: of the waiting proposals, the one
+    on the earliest shot of the cut; an accepted effect on shot 1 is not one."""
+    import server
+
+    edl = json.loads(project["edl"].read_text(encoding="utf-8"))
+    edl["segments"] = [{"id": "gflow00001", "clip": "CLIP_A.MP4", "in": 0.0, "out": 2.0},
+                       {"id": "gflow00002", "clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0},
+                       {"id": "gflow00003", "clip": "CLIP_C.MP4", "in": 0.0, "out": 2.0}]
+    edl["effects"] = [{"id": "fx_accepted1", "shot": "gflow00001", "status": "accepted",
+                       "name": "title", "events": []}]
+    project["edl"].write_text(json.dumps(edl), encoding="utf-8")
+    home = server.fx_home()
+    home.mkdir(parents=True, exist_ok=True)
+    made = []
+    for fid, shot, created in (("fx_flowlate", "gflow00003", "2026-09-01T00:00:00"),
+                               ("fx_flowmid", "gflow00002", "2026-09-20T00:00:00"),
+                               ("fx_flowgone", "gnotincut0", "2026-08-01T00:00:00")):
+        path = home / f"{fid}.json"
+        path.write_text(json.dumps({"id": fid, "shot": shot, "clip": "CLIP_B.MP4",
+                                    "status": "proposed", "name": fid, "events": [],
+                                    "created": created}), encoding="utf-8")
+        made.append(path)
+    try:
+        out = client.get("/api/flow").json()
+        nxt = out["next"]
+        assert nxt["stage"] == "polish", nxt
+        assert nxt["target"] == {"shot": "gflow00002", "fx": "fx_flowmid"}
+        assert nxt["href"] == "/#tool=fx&shot=gflow00002&fx=fx_flowmid"
+        assert by_key(out)["polish"]["counts"]["fx_proposed"] == 3
+        # only the one whose shot left the cut: it still names the effect
+        for path in made[:2]:
+            path.unlink()
+        assert client.get("/api/flow").json()["next"]["target"] == {"fx": "fx_flowgone"}
+    finally:
+        for path in made:
+            path.unlink(missing_ok=True)
 
 
 def test_a_discarded_ask_is_answered_and_stops_waiting(client, project):
