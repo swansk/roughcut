@@ -2443,10 +2443,11 @@ function acceptProposal() {
   if (!pendingPlan) return;
   const graded = !!(pendingPlan.colour && Object.keys(pendingPlan.colour).length);
   const cutToo = !pendingPlan.unchanged;
-  if (cutToo) pushUndo('proposal');     // a colour-only proposal has no cut to undo
+  // Segments and colour in the one save below (INTAKE I10.5), and in one undo entry:
+  // the colour block rides every entry beside the cut (tl's `extra` hook, INTAKE M16
+  // I16.4), so ⌘Z takes back what the proposal changed — the cut, the grade, or both.
+  if (cutToo || graded) pushUndo('proposal');
   segs = pendingPlan.segments.map((s) => ({ ...s }));
-  // Segments and colour in the one save below (INTAKE I10.5). Colour is not on the
-  // undo stack (I10.4: a setting, like the music), so ⌘Z takes back the cut only.
   if (graded) {
     colour = mergeColour(colour, pendingPlan.colour);
     tidyColour();
@@ -2458,8 +2459,8 @@ function acceptProposal() {
   save();                       // straight to disk; a 16-shot cut is not "in progress"
   answerProposal('accept');
   toast(!graded ? 'applied — undo with ⌘Z'
-    : cutToo ? 'applied, cut and colour — ⌘Z undoes the cut; the grade is in the inspector'
-      : 'colour applied — the grade is in the inspector', graded ? 5000 : undefined);
+    : cutToo ? 'applied, cut and colour — ⌘Z undoes both'
+      : 'colour applied — ⌘Z undoes it');
 }
 
 /* ▶ Play it (INTAKE M16 I16.4): the proposed cut plays in the monitor from its ghost

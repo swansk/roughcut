@@ -580,6 +580,16 @@ def test_a_colour_proposal_reads_as_words_and_accept_writes_the_grade(page, live
         assert saved["colour"]["shots"] == {ids[0]: {"match": "previous"}}
         assert [s["id"] for s in saved["segments"]] == ids
         assert page.evaluate("JSON.stringify(segs)") == before
+        # one undo entry, and it takes the grade back (INTAKE M16 I16.4: colour rides
+        # the undo stack now) — the toast says so rather than "the inspector", gone
+        assert page.locator("#toast").inner_text() == "colour applied — ⌘Z undoes it"
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+        page.keyboard.press("Control+z")
+        deadline = time.time() + 10
+        while (project().get("colour") or {}).get("look") == "filmic":
+            assert time.time() < deadline, "⌘Z never took the grade back"
+            time.sleep(0.1)
+        assert [s["id"] for s in project()["segments"]] == ids
     finally:
         inference.set_backend(None)
 

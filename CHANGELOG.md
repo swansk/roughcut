@@ -85,6 +85,15 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **Accepting a proposal is one undo entry for the cut and the grade, and its toast
+  stops naming the inspector (INTAKE M16 integration, I16.4).** Lane cut put the colour
+  block on every undo entry and took the inspector away (the grade is behind a shot's
+  *colour & look ▸*); lane shell's Accept still said "⌘Z undoes the cut; the grade is in
+  the inspector", and a colour-only proposal pushed no undo entry at all, so ⌘Z after
+  it did nothing. Accept now pushes one entry whenever the cut or the grade changes,
+  and says "applied, cut and colour — ⌘Z undoes both" / "colour applied — ⌘Z undoes it".
+  The colour-proposal board test now presses ⌘Z and finds the grade gone (it fails with
+  the old undo rule).
 - **A passed effect check leaves no row in the progress strip (INTAKE M16 integration,
   decision 1).** Lane fx made the free check run after every design, Change and nudge;
   lane shell made the board's header one row, with the progress strip its second row
