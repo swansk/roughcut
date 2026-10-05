@@ -193,6 +193,16 @@ async function adopt(j) {
 
 let jobTicks = 0;             // pollJobs ticks so far — the first one is the boot paint
 
+/* A free effect check that finished and found nothing wrong (INTAKE M16 decision 1:
+ * status only when something is wrong). Since I16.5 one runs after every design,
+ * Change and nudge; while it runs it is progress like any job, and once it passes the
+ * card's "✓ checked" says so — a "Checking slow motion · done" row for 12 s more made
+ * the header two rows after every nudge. A failed check keeps its row. */
+function quietJob(j) {
+  return j.kind === 'fx' && j.fx_kind === 'verify' && j.state === 'done'
+    && !/^failed/.test(j.detail || '');
+}
+
 async function pollJobs() {
   let jobs;
   try {
@@ -209,7 +219,13 @@ async function pollJobs() {
   for (const j of jobs) {
     const before = strip.seen.get(j.id);
     strip.seen.set(j.id, j);
-    paintJob(jobRow(j), j);
+    if (quietJob(j)) {
+      // said nothing worth a row: none, and the strip is not a second header row for it
+      const row = strip.rows.get(j.id);
+      if (row) { row.remove(); strip.rows.delete(j.id); }
+    } else {
+      paintJob(jobRow(j), j);
+    }
     if (before && before.state !== j.state && (j.state === 'done' || j.state === 'failed')) {
       await adopt(j);
     } else if (!before && jobTicks && j.kind === 'index' && j.state === 'done') {
@@ -221,7 +237,7 @@ async function pollJobs() {
   jobTicks += 1;
   // Gone completely when there is nothing to say. A strip that lingers empty is one
   // more thing on a screen that already has plenty.
-  $('#progress').hidden = !jobs.length;
+  $('#progress').hidden = !jobs.some((j) => !quietJob(j));
   // Driven from the server's registry rather than from this tab's own click, so it is
   // right after a reload and right when the render was started somewhere else. The
   // pending flag covers the second between the click and the job existing to be seen.

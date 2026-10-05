@@ -675,6 +675,36 @@ def test_discard_drops_the_proposal(page):
     assert api(page, f"/api/fx/{e['id']}/sound.wav") == {"detail": "sound.wav is not there yet"}
 
 
+def test_a_passed_check_leaves_no_row_in_the_progress_strip(page):
+    """INTAKE M16 decision 1, where I16.5 meets I16.1: the free check now runs after
+    every design, Change and nudge, and its finished job lingered 12 s as a "Checking …
+    done" row in the progress strip — the board's one header row became two after
+    every nudge. A check that passed says so on its card ("✓ checked") and leaves no
+    row; one that is running, or found something wrong, keeps its row."""
+    job = {"id": "fx_jobv1", "kind": "fx", "fx_kind": "verify", "fx_id": "fx_x",
+           "state": "done", "label": "Checking slow motion", "detail": "every check passed",
+           "pct": 100, "elapsed_s": 2.0, "eta_s": None, "started": 1.0, "milestones": []}
+    jobs = {"jobs": [job]}
+    page.route("**/api/jobs", lambda r: r.fulfill(status=200, content_type="application/json",
+                                                  body=json.dumps(jobs)))
+    try:
+        page.evaluate("pollJobs()")
+        assert page.locator("#progress .job[data-job=fx_jobv1]").count() == 0
+        assert page.locator("#progress").is_hidden()
+        for state, detail in (("done", "failed: the sound is in the proof"),
+                              ("running", "rendering a proof of the shot")):
+            job.update(state=state, detail=detail)
+            page.evaluate("pollJobs()")
+            assert page.locator("#progress .job[data-job=fx_jobv1]").count() == 1, state
+            assert page.locator("#progress").is_visible(), state
+        job.update(state="done", detail="every check passed")
+        page.evaluate("pollJobs()")
+        assert page.locator("#progress .job[data-job=fx_jobv1]").count() == 0
+        assert page.locator("#progress").is_hidden()
+    finally:
+        page.unroute("**/api/jobs")
+
+
 def test_a_reload_lands_on_a_proposal_made_before_it(page):
     """The effects are the server's: a new page shows what an earlier one designed."""
     e = design(page)

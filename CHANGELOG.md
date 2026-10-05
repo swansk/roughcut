@@ -85,6 +85,14 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **A passed effect check leaves no row in the progress strip (INTAKE M16 integration,
+  decision 1).** Lane fx made the free check run after every design, Change and nudge;
+  lane shell made the board's header one row, with the progress strip its second row
+  only while a job is worth showing. Merged, every nudge left "Checking slow motion ·
+  done" in the strip for 12 s more — two header rows for a check that found nothing.
+  A check that finished and passed now has no row (its card says "✓ checked"); one that
+  is running, or failed, keeps its row. New test in `test_fx_ui.py`; it fails on the
+  merge's app.js.
 - **Next hears the pass repaint (INTAKE M16 integration, C2 / C3).** Lane pass announces
   every repaint of /floor with a `roughcut:pass` event — the round's count, and the
   closing card's *Back to the cut* the moment it is drawn — and lane nav's /flow.js
