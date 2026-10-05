@@ -6,9 +6,11 @@
  * keyframe."* The vocabulary is `roughcut/fx.py`'s and the loop is the server's
  * (`/api/fx`); this module is the board's side of it, in four parts:
  *
- *   1. the FX tool in the dock (`#fx`): the selected shot's effects as cards — the
- *      hits with one-frame nudges, the machine's checklist, Preview / Verify / Iterate /
- *      Accept / Discard / Remove — and the design box under them;
+ *   1. the FX tool in the dock (`#fx`): the selected shot's effects as cards, the
+ *      waiting proposal first — one sentence of what changes in the film, its check
+ *      (run by the server by itself), Preview / Accept / Discard / Change; an accepted
+ *      effect folds to its sentence, Remove / Change / Revert — and the design box
+ *      behind "+ design another effect";
  *   2. the monitor overlay (`#fxCanvas`): every effect of the live shot drawn at the
  *      live time from the same JSON the render draws from, and heard;
  *   3. the sketch: a reference drawn on a paused frame, sent with the next Design;
@@ -43,7 +45,6 @@
   };
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const stem = (c) => String(c || '').replace(/\.[^.]+$/, '');
   const round4 = (v) => Math.round(v * 10000) / 10000;
 
   /* ------------------------------------------------------------ the board's globals */
@@ -91,6 +92,10 @@
     drag: null,              // {end: 't0'|'t1'} while a bar handle is dragged
     iter: {},                // id → the iterate box's text
     iterOpen: new Set(),
+    whyOpen: new Set(),      // cards whose "why? ▸" is open (the note, the checklist, links)
+    momentsOpen: new Set(),  // accepted cards whose "adjust the moments ▸" is open
+    checking: new Set(),     // effects whose free check is queued or running (server jobs)
+    kicked: new Set(),       // proposals from before the check ran by itself, checked once
     jobs: new Map(),         // fx job id → state last seen
     busy: null,              // the running fx job, or null
     ticks: 0,
@@ -121,6 +126,13 @@
     try { d = await api('GET', '/api/fx'); } catch (e) { return; }
     S.effects = Array.isArray(d.effects) ? d.effects : [];
     if (S.sel && !byId(S.sel.id)) S.sel = null;     // the selected hit may be gone with its effect
+    // The server checks every design, revise and nudge by itself (INTAKE M16 I16.5); a
+    // proposal made before it did is checked once here — free, never a model call.
+    for (const e of S.effects) {
+      if (e.status !== 'proposed' || e.verify || S.kicked.has(e.id) || !inCut(e)) continue;
+      S.kicked.add(e.id);
+      api('POST', '/api/fx/verify', { id: e.id }).then(pollJobs).catch(() => { /* its card says nothing */ });
+    }
     syncAudio();
     paint();
     badge();
@@ -260,8 +272,11 @@
   async function act(name, e) {
     try {
       if (name === 'preview') preview(e);
-      else if (name === 'verify') { await api('POST', '/api/fx/verify', { id: e.id }); await pollJobs(); }
-      else if (name === 'iterate') {
+      else if (name === 'why' || name === 'moments') {
+        const set = name === 'why' ? S.whyOpen : S.momentsOpen;
+        if (set.has(e.id)) set.delete(e.id); else set.add(e.id);
+        paint(true);
+      } else if (name === 'iterate') {
         if (S.iterOpen.has(e.id)) S.iterOpen.delete(e.id); else S.iterOpen.add(e.id);
         paint(true);
         const inp = $(`#fx .fxcard[data-id="${e.id}"] .fxiter input`);
@@ -349,16 +364,19 @@
     try { jobs = (await (await fetch('/api/jobs')).json()).jobs || []; } catch (e) { return; }
     let changed = false, running = null;
     const seen = new Set();
+    const checking = new Set();
     for (const j of jobs) {
       if (j.kind !== 'fx') continue;
       seen.add(j.id);
       const before = S.jobs.get(j.id);
       S.jobs.set(j.id, j.state);
-      if (j.state === 'running' && !running) running = j;
+      const check = j.fx_kind === 'verify';
+      if (check && j.state === 'running' && j.fx_id) checking.add(j.fx_id);
+      if (j.state === 'running' && !running && !check) running = j;
       const finished = j.state === 'done' || j.state === 'failed';
       if (finished && before !== j.state) {
         changed = true;
-        if (S.ticks) {
+        if (S.ticks && !(check && j.state === 'done')) {     // a check's answer is on its card
           say(j.state === 'done' ? `${j.label}: ${j.detail || 'done'}`
             : `${j.label} failed — ${j.detail || 'no detail'}`, 6000);
         }
@@ -369,8 +387,10 @@
     const key = (j) => (j ? `${j.id}:${j.detail || ''}:${j.milestone || ''}` : '');
     const was = key(S.busy);
     S.busy = running;
+    S.checking = checking;
     if (changed) await refresh();
     else if (key(running) !== was) paint();
+    else paint();                         // the signature decides: "checking…" on a card
   }
 
   /* ------------------------------------------------------------ the tool */
@@ -378,73 +398,137 @@
     return `<span class="fxchip ${esc(e.status)}">${esc(e.status)}</span>`;
   }
 
+  /* Film time (INTAKE M16 I16.5): an effect's times are clip seconds; the card says
+   * where they are in the film — from the board's timeline when the shot is on it, else
+   * from the server's `film` (a shot the proposal's edits have yet to make). */
+  const speedOf = (sg) => { const v = Number(sg && sg.speed); return v > 0 ? v : 1; };
+  function filmOf(e, t) {
+    const sg = seg(e.shot), tl = TL();
+    if (sg && tl && typeof tl.filmStart === 'function') {
+      const start = tl.filmStart(sg.id);
+      if (start >= 0) return start + (Number(t) - Number(sg.in)) / speedOf(sg);
+    }
+    const f = e.film;
+    return f ? f.start + (Number(t) - Number(f.in)) / (Number(f.speed) || 1) : null;
+  }
+  function filmT(e, t) { const f = filmOf(e, t); return fmtT(f == null ? t : f); }
+
+  /* The machine's checklist in plain words: what passed, and what is wrong. */
+  const PLAIN = {
+    in_shot: ['every moment is in the shot', 'a moment is outside the shot'],
+    in_frame: ['every mark is on the picture', 'a mark is off the picture'],
+    sync: ['the sound starts with the picture', 'the sound and the picture are out of step'],
+    on_onset: ['each hit lands on a sharp sound', 'a hit misses the sharp sound'],
+    audio_landed: ['the sound is heard', 'the sound is not heard'],
+    picture_landed: ['it shows on the picture', 'it does not show where expected'],
+    edits_apply: ['the change fits the cut', 'the change no longer fits the cut'],
+    proof: ['a test render', 'no test render yet'],
+  };
+  function plain(c, bad) { const w = PLAIN[c.key]; return w ? w[bad ? 1 : 0] : String(c.label || c.key); }
+
+  /* One line under the sentence: "✓ checked", or what is wrong — on an accepted effect
+   * only when something is (it is answered), and "checking…" while the server's free
+   * check runs. */
+  function checkLine(e) {
+    if (e.status === 'removed') return '';
+    if (S.checking.has(e.id)) return `<div class="fxcheck wait">checking…</div>`;
+    const v = e.verify;
+    if (!v || !Array.isArray(v.checks)) return '';
+    if (v.ok) return e.status === 'proposed' ? `<div class="fxcheck ok">✓ checked</div>` : '';
+    const bad = v.checks.find((c) => c.ok === false);
+    return `<div class="fxcheck bad">✗ ${esc(bad ? plain(bad, true) : 'not checked')}</div>`;
+  }
+
   function checkRow(c) {
     const mark = c.ok === true ? '✓' : c.ok === false ? '✗' : '–';
     const cls = c.ok === true ? 'ok' : c.ok === false ? 'bad' : 'skip';
-    return `<li class="${cls}"><span class="mark">${mark}</span><span class="lbl">${esc(c.label || c.key)}</span>`
-      + (c.detail ? `<span class="hint">${esc(c.detail)}</span>` : '') + '</li>';
+    return `<li class="${cls}" title="${esc(c.detail || '')}"><span class="mark">${mark}</span>`
+      + `<span class="lbl">${esc(c.ok === null ? `${plain(c, false)} — not checked` : plain(c, c.ok === false))}</span></li>`;
   }
 
-  function cardHtml(e) {
-    const n = (e.events || []).length;
+  /* Overlays and sounds land on moments; an edit-only proposal (the slow motion) has
+   * none to adjust. */
+  function hasMoments(e) { return !!(e.overlay || e.sound) && (e.events || []).length > 0; }
+
+  function momentsHtml(e) {
     const sel = S.sel && S.sel.id === e.id ? S.sel.i : -1;
-    const events = (e.events || []).map((ev, i) =>
-      `<li class="fxev${i === sel ? ' sel' : ''}" data-i="${i}" title="click: park the monitor on this moment, then click the monitor to move it">`
+    const rows = (e.events || []).map((ev, i) =>
+      `<li class="fxev${i === sel ? ' sel' : ''}" data-i="${i}" title="x ${Number(ev.x).toFixed(2)} y ${Number(ev.y).toFixed(2)} · click: park the monitor here, then click the picture to move it">`
       + `<button class="nudge" data-d="-1" title="one frame earlier">◀</button>`
-      + `<span class="t">${fmtT(ev.t)}</span>`
-      + `<span class="xy">x ${Number(ev.x).toFixed(2)} y ${Number(ev.y).toFixed(2)}</span>`
+      + `<span class="t">${filmT(e, ev.t)}</span>`
       + (ev.label ? `<span class="hint">${esc(ev.label)}</span>` : '')
       + `<button class="nudge" data-d="1" title="one frame later">▶</button>`
       + `<button class="nudge del" data-act="delevent" title="not one — take it out">✕</button></li>`).join('');
+    return `<ul class="fxevents">${rows}</ul>`
+      + (sel >= 0 ? `<div class="fxpick hint">click the picture to move moment ${sel + 1}</div>` : '');
+  }
+
+  /* Behind "why? ▸": Karl's note, what the machine made of it, what it could not do, the
+   * checklist in plain words (the measurements are on hover), the window, the links. */
+  function whyHtml(e) {
     const v = e.verify;
-    const checks = v && Array.isArray(v.checks) && v.checks.length
-      ? `<div class="fxverify ${v.ok ? 'ok' : 'bad'}"><div class="fxvhead">${v.ok ? '✓ verified' : '✗ not yet'}`
-        + (v.at ? ` <span class="hint">${esc(String(v.at).replace('T', ' ').slice(0, 16))}</span>` : '')
-        + `</div><ul class="fxchecks">${v.checks.map(checkRow).join('')}</ul></div>`
-      : '';
-    const proposed = e.status === 'proposed';
-    const removed = e.status === 'removed';
-    const prev = Array.isArray(e.previous) ? e.previous.length : 0;
-    const btns = removed
-      ? `<div class="fxbtns"><span class="hint">out of the cut — kept as it was</span><div class="grow"></div>`
-        + `<button data-act="restore" class="primary" title="back into the cut, exactly as it was">Restore</button>`
-        + `<button data-act="discard" title="delete it for good, files and all">Delete</button></div>`
-      : `<div class="fxbtns">`
-        + `<button data-act="preview" title="play this shot in the monitor with the effect drawn and heard">Preview</button>`
-        + `<button data-act="verify" title="render a proof of the shot and run the checklist">Verify</button>`
-        + `<button data-act="iterate" title="tell the model what to change">Iterate</button>`
-        + (proposed
-          ? `<button data-act="accept" class="primary" title="${Array.isArray(e.edits) && e.edits.length ? 'applies the changes to the cut, then the effect' : 'into the cut — the render draws it'}">Accept${Array.isArray(e.edits) && e.edits.length ? ` · ${e.edits.length} change${e.edits.length === 1 ? '' : 's'}` : ''}</button>`
-            + `<button data-act="discard" title="drop the proposal and its files">Discard</button>`
-          : `<button data-act="remove" title="out of the cut — kept, so Restore can put it back">Remove</button>`
-            + (prev ? `<button data-act="revert" title="back to the version accepted before this one (${prev} kept)">Revert</button>` : ''))
-        + `</div>`;
-    const iter = S.iterOpen.has(e.id)
-      ? `<div class="fxiter"><input type="text" placeholder="red and bigger · hold it a second longer · only the big one · no sound" value="${esc(S.iter[e.id] || '')}">`
-        + `<button data-act="revise" class="primary"${revisePriced() ? '' : ' disabled'} title="one model call — the effect comes back as a proposal">Go${revisePriced() ? ` · ~$${S.revisePrice.usd.toFixed(2)}` : S.revisePriceFailed ? ' · price unavailable' : ''}</button></div>`
-      : '';
     const extras = [];
-    if (Array.isArray(e.window) && e.window.length === 2) extras.push(`window · ${fmtT(e.window[0])}–${fmtT(e.window[1])}`);
+    if (Array.isArray(e.window) && e.window.length === 2) extras.push(`window ${filmT(e, e.window[0])}–${filmT(e, e.window[1])}`);
     if (e.reference) extras.push(`reference · ${(e.reference.marks || []).length} marks${e.reference.goal ? ` · ${esc(e.reference.goal)}` : ''}`);
     if (e.proof_url) extras.push(`<a href="${esc(e.proof_url)}" target="_blank" rel="noopener">proof</a>`);
     if (e.strip_url) extras.push(`<a href="${esc(e.strip_url)}" target="_blank" rel="noopener">strip</a>`);
-    return `<div class="fxcard ${esc(e.status)}" data-id="${esc(e.id)}">`
-      + `<div class="fxhead"><b class="fxname">${esc(e.name || 'effect')}</b>`
-      + `<span class="fxn">${n} moment${n === 1 ? '' : 's'}</span>${chip(e)}</div>`
-      + (e.note ? `<div class="fxnote">${esc(e.note)}</div>` : '')
-      + (e.why ? `<div class="fxwhy hint">${esc(e.why)}</div>` : '')
-      + (e.limits ? `<div class="fxlimits">could not: ${esc(e.limits)}</div>` : '')
-      + (Array.isArray(e.edit_words) && e.edit_words.length
-        ? `<div class="fxedits"><div class="fxeh">changes the cut${e.status === 'proposed' ? ' when accepted' : ''}</div>`
-          + `<ul>${e.edit_words.map((w) => `<li>${esc(w)}</li>`).join('')}</ul></div>` : '')
-      + (e.applied && Array.isArray(e.applied.words) && e.applied.words.length
-        ? `<div class="fxedits applied"><div class="fxeh">changed the cut</div><ul>${e.applied.words.map((w) => `<li>${esc(w)}</li>`).join('')}</ul></div>` : '')
-      + `<ul class="fxevents">${events}</ul>`
-      + (sel >= 0 ? `<div class="fxpick hint">moment ${sel + 1} selected · click the monitor (paused) to move it there</div>` : '')
-      + checks
+    return `<div class="fxwhybox">`
+      + (e.note ? `<div class="fxnote">“${esc(e.note)}”</div>` : '')
+      + (e.says && e.why ? `<div class="hint">${esc(e.why)}</div>` : '')
+      + (e.limits ? `<div class="hint">couldn't: ${esc(e.limits)}</div>` : '')
+      + (v && Array.isArray(v.checks) && v.checks.length ? `<ul class="fxchecks">${v.checks.map(checkRow).join('')}</ul>` : '')
       + (extras.length ? `<div class="fxextras hint">${extras.join(' · ')}</div>` : '')
       + (e.ref_url ? `<img class="fxrefimg" src="${esc(e.ref_url)}" alt="the reference drawn on the frame" title="the frame you drew on — the marks are the anchors">` : '')
-      + btns + iter + `</div>`;
+      + `</div>`;
+  }
+
+  /* The waiting answer first (INTAKE M16 I16.5): a proposal says in one sentence what
+   * changes in the film, whether the free check passed, and Preview · Accept · Discard ·
+   * Change. An accepted effect folds to its sentence and Remove · Change · Revert; its
+   * moments open on "adjust the moments ▸". The rest is behind "why? ▸". Preview is the
+   * one blue button when Next waits on this proposal (flow.js reads data-next-for). */
+  function cardHtml(e) {
+    const proposed = e.status === 'proposed';
+    const removed = e.status === 'removed';
+    const prev = Array.isArray(e.previous) ? e.previous.length : 0;
+    const says = e.says || e.why || '';
+    const moments = hasMoments(e) && !removed && (proposed || S.momentsOpen.has(e.id));
+    const why = `<button class="fxlink" data-act="why">why? ${S.whyOpen.has(e.id) ? '▾' : '▸'}</button>`;
+    const change = `<button data-act="iterate" title="tell the model what to change — the effect comes back as a proposal">`
+      + `Change${revisePriced() ? ` · ~$${S.revisePrice.usd.toFixed(2)}` : ''}</button>`;
+    const btns = removed
+      ? `<div class="fxbtns"><span class="hint">out of the cut</span><div class="grow"></div>`
+        + `<button data-act="restore" title="back into the cut, exactly as it was">Restore</button>`
+        + `<button data-act="discard" title="delete it for good, files and all">Delete</button></div>`
+      : proposed
+        ? `<div class="fxbtns">`
+          + `<button data-act="preview" data-next-for="polish" data-fx="${esc(e.id)}" title="play this shot in the monitor with the effect drawn and heard${Array.isArray(e.edits) && e.edits.length ? ' · the ghost lane shows the cut with the change' : ''}">▶ Preview</button>`
+          + `<button data-act="accept" title="${Array.isArray(e.edits) && e.edits.length ? 'changes the cut, in place' : 'into the cut — the render draws it'}">Accept</button>`
+          + `<button data-act="discard" title="drop the proposal and its files">Discard</button>`
+          + change + why + `</div>`
+        : `<div class="fxbtns">`
+          + `<button data-act="remove" title="out of the cut — kept, so Restore can put it back">Remove</button>`
+          + change
+          + (prev ? `<button data-act="revert" title="back to the version accepted before this one (${prev} kept)">Revert</button>` : '')
+          + (hasMoments(e) ? `<button class="fxlink" data-act="moments">adjust the moments ${moments ? '▾' : '▸'}</button>` : '')
+          + why + `</div>`;
+    const iter = S.iterOpen.has(e.id)
+      ? `<div class="fxiter"><input type="text" placeholder="red and bigger · hold it a second longer · only the big one · no sound" value="${esc(S.iter[e.id] || '')}">`
+        + `<button data-act="revise"${revisePriced() ? '' : ' disabled'} title="one model call — the effect comes back as a proposal">Go${revisePriced() ? ` · ~$${S.revisePrice.usd.toFixed(2)}` : S.revisePriceFailed ? ' · price unavailable' : ''}</button></div>`
+      : '';
+    return `<div class="fxcard ${esc(e.status)}" data-id="${esc(e.id)}">`
+      + `<div class="fxhead"><b class="fxname">${esc(e.name || 'effect')}</b>${chip(e)}</div>`
+      + (says ? `<div class="fxsays">${esc(says)}</div>` : '')
+      + checkLine(e)
+      + (moments ? momentsHtml(e) : '')
+      + btns + iter
+      + (S.whyOpen.has(e.id) ? whyHtml(e) : '')
+      + `</div>`;
+  }
+
+  const ORDER = { proposed: 0, accepted: 1, removed: 2 };
+  function cardsFor(id) {
+    return forShot(id).slice().sort((a, b) => (ORDER[a.status] ?? 1) - (ORDER[b.status] ?? 1));
   }
 
   function designHtml() {
@@ -743,6 +827,7 @@
       S.window && [S.window.t0, S.window.t1],
       S.peaks.length,
       S.sketch && [S.sketch.strokes.length, S.sketch.goal], [...S.iterOpen], S.place,
+      [...S.whyOpen], [...S.momentsOpen], [...S.checking],
       S.busy && [S.busy.id, S.busy.state, S.busy.detail, S.busy.milestone],
     ]);
   }
@@ -765,13 +850,13 @@
     if (!sg) {
       paintBand();
       el.innerHTML = `<div class="fxtitle">FX</div>`
-        + `<div class="hint">select a shot on the timeline — its effects and the design box appear here</div>`
-        + (S.effects.length ? `<div class="hint" style="margin-top:6px">${S.effects.length} effect${S.effects.length === 1 ? '' : 's'} in this cut</div>` : '');
+        + `<div class="hint">select a shot on the timeline</div>`;
       return;
     }
-    const list = forShot(S.shot);
+    const list = cardsFor(S.shot);
     const i = shotIndex(S.shot);
-    el.innerHTML = `<div class="fxtitle">FX · shot ${i + 1} · ${esc(stem(sg.clip))}</div>`
+    const len = (Number(sg.out) - Number(sg.in)) / speedOf(sg);
+    el.innerHTML = `<div class="fxtitle">Shot ${i + 1} · ${len.toFixed(1)} s</div>`
       + (list.length ? list.map(cardHtml).join('')
         : `<div class="hint fxempty">no effects on this shot yet</div>`)
       + designHtml();
@@ -892,6 +977,8 @@
     const id = shotId();
     if (id === S.shot) return;
     S.shot = id;
+    S.whyOpen.clear();
+    S.momentsOpen.clear();
     if (S.sel && (!byId(S.sel.id) || String(byId(S.sel.id).shot) !== String(id))) S.sel = null;
     if (id) fetchPrice(id); else S.price = null;
     paint();

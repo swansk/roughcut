@@ -242,6 +242,25 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **The FX tool shows the waiting answer first (INTAKE M16 I16.5).** After Next, the
+  slow motion's card was ~180 words under an accepted card: Karl's note quoted back, the
+  model's paraphrase of it, an amber "could not:" paragraph in clip seconds, "CHANGES THE
+  CUT WHEN ACCEPTED · CLIP_08.MP4 at 0.4× from 170.85 to 171.50s", two "x 0.50 y 0.50"
+  rows with nudges that move nothing, and five buttons (Preview, Verify, Iterate, Accept,
+  Discard). The proposed card is now first on its shot: its name, one sentence of what
+  changes in the film (the server's `says`, else the model's why), "✓ checked" or what is
+  wrong in plain words ("✗ it does not show where expected") or "checking…", then
+  ▶ Preview · Accept · Discard · Change · ~$0.05 · why? ▸. Overlays and sounds keep their
+  moment rows in view, in film time (◀ 0:00.5 rock left ▶ ✕; the anchor on hover); an
+  edit-only proposal shows none. An accepted effect folds to its name, sentence, Remove ·
+  Change · Revert (when a previous version is kept) and "adjust the moments ▸"; a passed
+  check is not repeated on it. Behind why? ▸: the note, the model's why, what it could not
+  do, the checklist in plain words (the measurements on hover), the window in film time,
+  the reference, proof and strip. Removed: the Verify button (the check runs by itself),
+  Iterate (now Change, priced), "N moments", the edit words, the "FX · shot 1 ·
+  GEN_BLACK_3FB88607" title (now "Shot 17 · 19.6 s"), "N effects in this cut", and the
+  blue Accept and Restore — ▶ Preview carries `data-next-for="polish"` and `data-fx`, so
+  Next's one blue button lands on it. A finished check is no longer a toast.
 - **An effect proposal says what changes in the film, in film time (INTAKE M16 I16.5).**
   The slow motion's card read "CLIP_08.MP4 at 0.4× from 170.85 to 171.50s" — a file name
   and clip seconds that look like film time on a 3:09 film where shot 17 starts at
