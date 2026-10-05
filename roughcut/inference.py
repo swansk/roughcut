@@ -19,6 +19,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
+import socket
 import subprocess
 import threading
 import time
@@ -63,12 +65,31 @@ def cli_env() -> dict[str, str] | None:
     return {**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": token} if token else None
 
 
-def _signin_command() -> str:
-    """The sign-in script, spelled so it runs where Karl pastes it. The server runs in
-    WSL on a repo under /mnt/<drive>/, so that is a Windows path to the .cmd launcher —
-    no spaces, so it runs as-is in cmd and PowerShell alike, and double-clicks from
-    Explorer. Anywhere else, the shell script."""
+def _detect_host() -> dict:
+    """Where this server runs, for the banner's words: inside WSL on the laptop (the
+    commands are pasted into a Windows prompt) or natively on a Linux box — foxtrot
+    since 2026-10-04, reached from the laptop over ssh — and that box's name."""
+    try:
+        wsl = "microsoft" in Path("/proc/version").read_text(encoding="utf-8").lower()
+    except OSError:
+        wsl = False
+    return {"wsl": wsl, "name": socket.gethostname().split(".")[0] or "this machine"}
+
+
+# Read once. Tests replace it: what the banner says must not depend on the box that
+# happens to run the suite.
+HOST = _detect_host()
+
+
+def _signin_command(host: dict | None = None) -> str:
+    """The sign-in script, spelled so it runs where Karl pastes it. In WSL on a repo
+    under /mnt/<drive>/, that is a Windows path to the .cmd launcher — no spaces, so it
+    runs as-is in cmd and PowerShell alike, and double-clicks from Explorer; elsewhere in
+    WSL, the shell script. On a native Linux box, the shell script run by bash there."""
+    h = host or HOST
     scripts = Path(__file__).resolve().parents[1] / "scripts"
+    if not h["wsl"]:
+        return f"bash {shlex.quote(str(scripts / 'claude-signin.sh'))}"
     m = re.match(r"^/mnt/([a-z])/(.*)$", scripts.as_posix())
     if m:
         return f"{m.group(1).upper()}:\\{m.group(2).replace('/', chr(92))}\\claude-signin.cmd"
@@ -76,9 +97,21 @@ def _signin_command() -> str:
 
 
 SIGNIN_COMMAND = _signin_command()
-# Everything else the banner asks for also runs inside WSL, so it is spelled to paste
-# into a Windows prompt; `bash -lc` because ~/.local/bin is only on a login shell's PATH.
+# In WSL everything else the banner asks for also runs inside WSL, so it is spelled to
+# paste into a Windows prompt; `bash -lc` because ~/.local/bin is only on a login
+# shell's PATH. On a native box the command is the plain one, run on that box.
 _IN_WSL = 'wsl -e bash -lc "{}"'
+
+
+def _run(cmd: str):
+    """A banner command for the host: wrapped for a Windows prompt under WSL, plain on
+    a native Linux box."""
+    return lambda h: _IN_WSL.format(cmd) if h["wsl"] else cmd
+
+
+def _where(h: dict) -> str:
+    """Where a native box's command runs — Karl reads the banner on the laptop."""
+    return f"Run this on {h['name']} (from another machine, `ssh {h['name']}` first)"
 
 
 # ------------------------------------------------------------ what to do about it
@@ -94,24 +127,27 @@ _DIAGNOSES = (
     ("update", re.compile(r"does not support this model|or newer is required|"
                           r"unrecognized_model|run 'claude update'", re.I),
      "The Claude CLI is too old for the model this app uses",
-     _IN_WSL.format("claude update"),
-     "Opus 5.5 needs Claude Code 2.1.280 or newer. Paste this into cmd or PowerShell, "
-     "then check again."),
+     _run("claude update"),
+     lambda h: "Opus 5.5 needs Claude Code 2.1.280 or newer. "
+     + ("Paste this into cmd or PowerShell" if h["wsl"] else _where(h))
+     + ", then check again."),
     ("login", re.compile(r"/login|not logged in|log in|invalid api key|"
                          r"oauth token (has )?expired|authentication_error|"
                          r"invalid x-api-key|credentials", re.I),
      "The Claude CLI needs you to sign in",
-     SIGNIN_COMMAND,
-     "Double-click this file in Explorer (or paste it into cmd or PowerShell). It "
-     "signs the CLI in with a token that lasts a year, then re-checks for you."),
+     _signin_command,
+     lambda h: ("Double-click this file in Explorer (or paste it into cmd or PowerShell)"
+                if h["wsl"] else _where(h))
+     + ". It signs the CLI in with a token that lasts a year, then re-checks for you."),
     ("permission", re.compile(r"permission_denials|need (your )?permission|"
                               r"permission to (read|use|access)|requires? approval|"
                               r"was (blocked|denied)", re.I),
      "The Claude CLI blocked a tool this app needs",
-     _IN_WSL.format("claude"),
-     "A call asked to read a frame from disk and the CLI refused. Roughcut allows only "
-     "the Read tool; a deny rule in ~/.claude/settings.json wins over that. Paste this "
-     "into cmd or PowerShell, run /permissions, allow Read, then check again."),
+     _run("claude"),
+     lambda h: "A call asked to read a frame from disk and the CLI refused. Roughcut "
+     "allows only the Read tool; a deny rule in ~/.claude/settings.json wins over that. "
+     + ("Paste this into cmd or PowerShell" if h["wsl"] else _where(h))
+     + ", run /permissions, allow Read, then check again."),
     ("limit", re.compile(r"usage limit|rate limit|rate_limit|\b429\b|overloaded", re.I),
      "The Claude plan's usage window is full",
      "",
@@ -130,6 +166,9 @@ def diagnose(text: str) -> dict | None:
     failure (a timeout, a schema miss — those are the app's problem, not Karl's)."""
     for kind, pattern, title, command, why in _DIAGNOSES:
         if pattern.search(text or ""):
+            # the words for the box the board runs on (HOST), read at the failure
+            command = command(HOST) if callable(command) else command
+            why = why(HOST) if callable(why) else why
             return {"kind": kind, "title": title, "command": command, "why": why,
                     "detail": (text or "")[:300], "at": round(time.time(), 1)}
     return None

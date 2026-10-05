@@ -1763,10 +1763,13 @@ def test_probe_reports_a_working_backend(client):
         inference.set_backend(None)
 
 
-def test_an_out_of_date_cli_is_named_with_the_command_that_fixes_it(client):
+def test_an_out_of_date_cli_is_named_with_the_command_that_fixes_it(client, monkeypatch):
     """Karl, 2026-10-03: make it easy to realise the CLI needs him. The deep model
     failing on an old CLI comes back as a fix — what, why, and the one command."""
     from roughcut import config, inference
+
+    # the words depend on the board's host (I16.0 m); this one is the WSL laptop's
+    monkeypatch.setattr(inference, "HOST", {"wsl": True, "name": "laptop"})
 
     class OldCli:
         name = "old"

@@ -115,6 +115,14 @@ same commit. Releases move entries into a dated version section.
   it (a 31 px row, paid for in the frame's height).
 
 ### Fixed
+- **The CLI banner's commands are right for the box the board runs on (INTAKE I16.0 m).**
+  The board runs natively on foxtrot now, and the banner still said `wsl -e bash -lc
+  "claude update"` and "Double-click this file in Explorer", for a path that exists only
+  on foxtrot. `inference.HOST` reads the host once (WSL when `/proc/version` says
+  microsoft; the hostname): under WSL the words are unchanged; on a native box the
+  commands are plain — `claude update`, `claude` then /permissions, and the sign-in as
+  `bash <repo>/scripts/claude-signin.sh` — with "Run this on foxtrot (from another
+  machine, `ssh foxtrot` first)". Tests inject the host.
 - **"Last proposal" is offered only while it waits (INTAKE I16.0 l).** The board offered
   "last proposal — 21 shots, 40 days ago · show it" on every load, from an Ask answered
   weeks ago. `GET /api/asks/latest` now says whether the record is `pending` — the flow's

@@ -5,8 +5,9 @@
  * characters of red; the pass and the open screen said nothing at all, and a job that
  * hit a signed-out CLI said it in its own log. This polls /api/backend and, when the
  * server has a `fix` — sign in, update, allow a tool, wait out the plan's window — puts
- * it across the top of the page in words: what is wrong, the one command to run in a
- * WSL terminal (with a copy button), and *Check again*, which re-probes and clears the
+ * it across the top of the page in words: what is wrong, the one command to run — for a
+ * Windows prompt when the board runs in WSL, on the board's own box (foxtrot) when it runs
+ * natively; the server words it for its host — with a copy button, and *Check again*, which re-probes and clears the
  * banner the moment the CLI answers. It sits in the page's flow, never over it, so it
  * cannot cover a control.
  *
