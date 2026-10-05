@@ -363,6 +363,40 @@ def test_api_flow_lands_on_the_proposal_on_the_earliest_shot(client, project):
             path.unlink(missing_ok=True)
 
 
+def test_api_flow_lands_a_proposal_for_a_shot_the_edits_will_make_on_its_anchor(client, project):
+    """fx_target's docstring: a proposal for a shot the edits will create (`shot:
+    "new:1"`) sits on its `anchor_shot` — the shot the board shows it on until Accept.
+    Next lands there, ahead of a proposal on a later shot; reading `shot` alone it would
+    sort last and Next would land on the later one."""
+    import server
+
+    edl = json.loads(project["edl"].read_text(encoding="utf-8"))
+    edl["segments"] = [{"id": "ganchor001", "clip": "CLIP_A.MP4", "in": 0.0, "out": 4.0},
+                       {"id": "ganchor002", "clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0}]
+    edl["effects"] = []
+    project["edl"].write_text(json.dumps(edl), encoding="utf-8")
+    home = server.fx_home()
+    home.mkdir(parents=True, exist_ok=True)
+    made = [home / "fx_flowlater.json", home / "fx_flownew.json"]
+    made[0].write_text(json.dumps({"id": "fx_flowlater", "shot": "ganchor002",
+                                   "clip": "CLIP_B.MP4", "status": "proposed", "name": "a",
+                                   "events": [], "created": "2026-08-01T00:00:00"}),
+                       encoding="utf-8")
+    made[1].write_text(json.dumps({"id": "fx_flownew", "shot": "new:1", "clip": "CLIP_A.MP4",
+                                   "status": "proposed", "name": "b", "events": [],
+                                   "created": "2026-09-01T00:00:00",
+                                   "edits": [{"op": "split", "shot": "ganchor001", "at": 2.0}]}),
+                       encoding="utf-8")
+    try:
+        out = client.get("/api/flow").json()
+        assert by_key(out)["polish"]["counts"]["fx_proposed"] == 2
+        assert out["next"]["target"] == {"shot": "ganchor001", "fx": "fx_flownew"}, out["next"]
+        assert out["next"]["href"] == "/#tool=fx&shot=ganchor001&fx=fx_flownew"
+    finally:
+        for path in made:
+            path.unlink(missing_ok=True)
+
+
 def test_a_discarded_ask_is_answered_and_stops_waiting(client, project):
     import time
 

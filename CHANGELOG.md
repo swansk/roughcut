@@ -183,6 +183,12 @@ same commit. Releases move entries into a dated version section.
   test now puts two accepted effects ahead of the proposal on its shot, checks the card
   starts below the dock's fold, and then that Next brings it into view; with the scroll
   line removed it fails.
+- **Next landing on a proposal for a shot the edits will make is tested (M16 stage 0
+  review, I16.0a, test strength).** `fx_target` reads a proposal's `anchor_shot` before
+  its `shot` — a `new:1` shot sits on the shot it is anchored to until Accept — but no
+  test built such a proposal, and reading `shot` alone still passed. A new flow API test
+  puts a `new:1` proposal anchored on shot 1 beside a proposal on shot 2 and expects
+  Next on shot 1; it fails when the anchor is ignored.
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
