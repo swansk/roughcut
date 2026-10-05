@@ -43,67 +43,72 @@
          padding: 16px; align-items: start; }
   @media (max-width: 1100px) { main { grid-template-columns: minmax(0,1fr); } }
 
-  /* The inspector (INTAKE M9, I9.5): one panel under the timeline for the selected
-     shot, holding what a shot card held. The list of one card per shot is gone — the
-     timeline is the editing surface. */
+  /* The shot strip (INTAKE M16 I16.4): one panel under the timeline for the selected
+     shot — or, with nothing selected, the film — sized so the header, the picture, the
+     timeline and the strip fit 900 px without the page scrolling. */
   #inspector { margin-bottom: 10px; }
   #inspector .shot {
-    display: grid; grid-template-columns: 214px minmax(0,1fr); gap: 14px;
-    background: var(--card); border: 1px solid var(--accent); border-radius: 10px;
-    padding: 10px;
+    display: grid; grid-template-columns: 150px minmax(0,1fr); gap: 10px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 8px 10px;
   }
   #inspector .none, #inspector .multi {
-    display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
     background: var(--card); border: 1px solid var(--line); border-radius: 10px;
-    padding: 12px 14px; color: var(--dim);
+    padding: 9px 12px; color: var(--dim);
   }
-  #inspector .multi .count { color: var(--text); font-variant-numeric: tabular-nums; }
-  #inspector .none .totals { margin-left: auto; font-variant-numeric: tabular-nums; }
+  #inspector .multi .count, #inspector .none .totals { color: var(--text);
+                                                       font-variant-numeric: tabular-nums; }
+  #inspector .none select { padding: 3px 6px; font-size: 12px; }
+  #inspector .none .fstrength { display: inline-flex; }
+  #inspector .none [hidden] { display: none; }
+  #inspector .none .fstrength button { border-radius: 0; margin-left: -1px; }
+  #inspector .none .fstrength button:first-child { border-radius: 7px 0 0 7px; }
+  #inspector .none .fstrength button:last-child { border-radius: 0 7px 7px 0; }
+  #inspector button { padding: 3px 9px; font-size: 12px; }
+  #inspector button.on { border-color: var(--accent); color: var(--text); }
+  #inspector .fwarn { color: var(--warn); }
   /* The picture is a still, not a stream: sixteen live proxies on one board took every
      connection Chrome had and the monitor played sound over black. */
   #inspector .poster { width: 100%; border-radius: 6px; background: #000; display: block;
                        aspect-ratio: 16/9; object-fit: cover; cursor: pointer;
                        -webkit-user-select: none; user-select: none; }
-  .meta { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-  .meta .n { font-size: 11px; letter-spacing: .08em; color: var(--dim); }
-  .meta .at { margin-left: auto; }
-  .clip { font-weight: 600; }
-  .times { color: var(--dim); font-variant-numeric: tabular-nums; }
-  .dur { font-variant-numeric: tabular-nums; }
-  .why { color: var(--dim); margin: 6px 0; min-height: 1.4em; }
+  .srow { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .srow.top > .dv-res { order: 9; flex-basis: 100%; }
+  .sname { font-weight: 600; font-variant-numeric: tabular-nums; margin-right: 4px; }
+  .lookhost:empty { display: none; }
+  .why { color: var(--dim); margin: 4px 0 2px; min-height: 1.3em; }
   .why[contenteditable]:focus { outline: 1px solid var(--accent); border-radius: 4px;
                                 color: var(--text); }
   .why[contenteditable]:empty::before { content: "why this shot — click to write";
                                         opacity: .5; }
-  .lines { margin: 6px 0 0; padding: 6px 8px; background: #131318; border-radius: 6px;
-           max-height: 92px; overflow: auto; }
-  .lines div { color: var(--dim); }
-  .lines b { color: var(--text); font-weight: 500; }
-  .polish { margin-top: 6px; }
-  .trim { display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
-  .trim span { color: var(--dim); font-size: 12px; }
-  .trim button { padding: 3px 8px; font-size: 12px; }
-  .shotAsk { margin-top: 8px; }
-  .prov { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
-  /* The Colour block (INTAKE M10, I10.4): the witness line, the shot's controls, the
-     film row — one compact panel between the trims and the scoped ask. */
-  .colour { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
-  .colour .crow { display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
-                  margin-top: 5px; }
-  .colour .clabel { font-size: 11px; letter-spacing: .08em; color: var(--dim);
-                    text-transform: uppercase; min-width: 44px; }
-  .colour .witness { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
-  .colour .witness.hand { color: var(--warn); }
-  .colour button { padding: 3px 8px; font-size: 12px; }
-  .colour button.on { border-color: var(--accent); color: var(--text); }
+  .said { color: var(--dim); font-style: italic; white-space: nowrap; overflow: hidden;
+          text-overflow: ellipsis; margin-bottom: 4px; }
+  .warns { display: flex; gap: 12px; flex-wrap: wrap; color: var(--warn); font-size: 12px;
+           margin-bottom: 4px; }
+  .warns[hidden] { display: none; }
+  .srow.ctl select.speed { padding: 3px 6px; font-size: 12px; }
+  .srow.ctl .nudge { display: inline-flex; gap: 4px; }
+  .srow.ctl .nudge[hidden] { display: none; }
+  #inspector .disc { border-color: transparent; color: var(--accent); background: transparent; }
+  #inspector .disc[hidden] { display: none; }
+  .colour[data-pane], .whybox { display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+                                margin-top: 6px; border-top: 1px solid var(--line); padding-top: 6px; }
+  .colour[data-pane][hidden], .whybox[hidden] { display: none; }
+  .whybox { display: block; color: var(--dim); font-size: 12px; }
+  .whybox .lines { margin: 4px 0 0; max-height: 92px; overflow: auto; }
+  .whybox .lines b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums;
+                     margin-right: 4px; }
   .colour select { padding: 3px 6px; font-size: 12px; max-width: 170px; }
   .colour input[type=range] { width: 90px; }
-  .colour .cstrengthVal, .colour .cfilmstrengthVal { font-size: 12px; color: var(--dim);
-                                                     font-variant-numeric: tabular-nums;
-                                                     min-width: 28px; }
+  .colour .cstrengthVal { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums;
+                          min-width: 28px; }
   .colour label { font-size: 12px; color: var(--dim); display: inline-flex; gap: 4px;
                   align-items: center; }
-  .colour .film { border-top: 1px dashed var(--line); padding-top: 5px; }
+  .deepline:empty { display: none; }
+  .deepline .dl-open { border-color: transparent; background: transparent; color: var(--dim);
+                       padding: 2px 0; }
+  .shotAsk { margin-top: 6px; }
 
   /* The dock (INTAKE M11): the sidebar was eight panels stacked 2,900 px tall beside a
      900 px viewport, "sticky" at its top so the bin — panel seven — was reached by
@@ -339,8 +344,11 @@
   /* The monitor: one place where the whole cut plays, fed from the proxies. */
   #player { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
             padding: 10px; margin-bottom: 12px; }
+  /* About 46 % of the window, and never so tall that the transport, the timeline and
+     the shot strip under it leave the screen (INTAKE M16): ~450 px is what sits below. */
   .screen { position: relative; background: #000; border-radius: 6px; overflow: hidden;
-            aspect-ratio: 16/9; max-height: 52vh; }
+            aspect-ratio: 16/9; max-height: min(46vh, calc(100vh - var(--hd) - 450px));
+            min-height: 160px; }
   .screen video { position: absolute; inset: 0; width: 100%; height: 100%; display: none;
                   object-fit: contain; }
   .screen video.live { display: block; }

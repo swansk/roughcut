@@ -327,7 +327,10 @@ def test_backspace_never_takes_the_shot_the_board_picked(page):
     the shot under the playhead as the cut plays. ⌫ and Del take only a chosen shot;
     X is unchanged."""
     a, b = ids(page)
-    assert page.evaluate("[...tl.state.sel]") == [a], "the board picked the first shot"
+    # nothing is selected at start (INTAKE M16); the board picking one is the same case
+    assert page.evaluate("[...tl.state.sel]") == [], "nothing is selected at start"
+    page.evaluate("sel = 0; paint()")              # app.js's index moving, as playback does
+    assert page.evaluate("[...tl.state.sel]") == [a]
     for key in ("Backspace", "Delete"):
         page.keyboard.press(key)
         assert ids(page) == [a, b], key
@@ -407,7 +410,7 @@ def test_escape_clears_the_selection(page):
     page.keyboard.press("Escape")
     assert page.evaluate("tl.state.sel.size") == 0
     assert page.evaluate("tl.state.anchor") is None
-    assert "select a shot on the timeline" in page.locator("#inspector").inner_text()
+    assert page.locator("#inspector .film .totals").is_visible()      # the film row (M16)
 
 
 # ------------------------------------------------------------------ marks on a clip
@@ -508,6 +511,7 @@ def test_keys_are_ignored_while_typing(page):
     page.keyboard.press("x")
     page.keyboard.press("Delete")
     assert page.evaluate("segs.length") == 2
+    page.evaluate("tl.select([tl.idAt(0)])")      # nothing is selected at start (M16)
     page.locator("#inspector .why").focus()
     page.keyboard.press("c")
     assert page.evaluate("segs.length") == 2

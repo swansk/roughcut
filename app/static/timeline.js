@@ -33,7 +33,8 @@
  *                               → park the monitor on shot i at clip time clipT, paused;
  *                               `play(i)` → play the cut from shot i; `touch()` → the
  *                               board's autosave; `render()` → repaint the whole board;
- *                               `toast(msg)`.
+ *                               `toast(msg)`; optional `extra()` / `setExtra(v)` → more
+ *                               state that rides each undo entry (the colour block).
  *   tl.state                    `{segs, sel, anchor, zoom, scrollX, playhead}` — `segs` is
  *                               the live array (a getter over hooks.segs()); `sel` is a
  *                               Set<id>, REPLACED on every change (read it, do not hold it);
@@ -640,10 +641,20 @@
   }
 
   /* ------------------------------------------------------------ undo / redo */
-  const snapshot = () => JSON.stringify(segs());
+  /* An entry is the cut — and, when the board hands one over (`hooks.extra()` /
+   * `hooks.setExtra(v)`), a second piece of state that rides the same stack: the film's
+   * colour block, so a warmer / cooler nudge is one ⌘Z (INTAKE M16 I16.4). */
+  const snapshot = () => JSON.stringify(hooks && hooks.extra
+    ? { segs: segs(), extra: hooks.extra() } : segs());
 
   function restore(json) {
-    hooks.setSegs(JSON.parse(json));
+    const v = JSON.parse(json);
+    if (v && !Array.isArray(v) && Array.isArray(v.segs)) {
+      hooks.setSegs(v.segs);
+      if (hooks.setExtra) hooks.setExtra(v.extra);
+    } else {
+      hooks.setSegs(v);
+    }
     ensureIds();
   }
 
@@ -1007,7 +1018,10 @@
     }
     const redoBtn = document.querySelector('#redo');
     if (redoBtn) redoBtn.addEventListener('click', () => redo());
-    lastAppSel = -1;                 // adopt app.js's index on the first render
+    // Nothing is selected at start (INTAKE M16 I16.4): app.js's index is not adopted on
+    // the first render — the strip under the timeline shows the film until a shot is
+    // chosen, played or landed on.
+    lastAppSel = hooks.sel ? hooks.sel() : -1;
     render();
     return tl;
   }

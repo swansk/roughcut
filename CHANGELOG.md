@@ -234,6 +234,27 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **The board's selected shot is a strip under the timeline, in view with the picture
+  (INTAKE M16 I16.4).** The inspector sat below the fold at y≈953 on Killington with ~27
+  controls and ~290 words per shot. The picture now takes about 46 % of the window (never
+  so much that the strip leaves the screen) and the strip reads: the still, `Shot 2 ·
+  12.9 s`, ▶ play, `Ask about this shot · ~$x`, `Look deeper · ~$x` (the shot's own
+  range), Remove, the why (editable), the first line spoken, any warning with its own
+  fix, one speed control, warmer / cooler / brighter / darker / reset, `colour & look ▸`
+  (the shot's look, strength, auto-balance, matching, reference) and `why? ▸` (where the
+  shot came from, the timed lines, what was seen, the colour in words), and one line for
+  how the machine saw the clip. Both disclosures start closed on every shot. Gone from
+  the main view: the clip-time header, "starts at … of the film", timestamps on lines,
+  five speed controls (now one), the four in/out ± buttons (trims are the block's edges
+  and `[ ] { }`, decision 5), the white-point numbers, the film's look in every shot and
+  the six-lane strip with its legend. A generated slide has no colour controls and a
+  human name (`Shot 1 · black · 3.0 s`). Nothing is selected at start: the strip shows
+  the film — `19 shots · 3:09 · look ▾ · subtle / medium / strong · auto-balance on ·
+  N warnings ▸`, the last stepping to the next warned shot. Warnings sit on their shot
+  with a Fix that is one undo entry and never automatic (`⚠ starts mid-sentence · Fix`
+  moves the in-point to the sentence's start less a breath, the snap tool's rule;
+  `0:01–0:05 goes dark · Trim it out`). Every colour change — a nudge, a look, the film
+  row — is now one ⌘Z entry: the colour block rides the timeline's undo stack.
 - **The `magnet · on` chip shows only while an edge is dragged (INTAKE M16 I16.4).** It sat
   on the ruler at all times. S still toggles the magnet, and says `magnet on` / `magnet
   off` in a toast when nothing is being dragged.

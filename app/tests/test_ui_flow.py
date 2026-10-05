@@ -118,8 +118,8 @@ def cut_says(page, text: str, present: bool = True) -> None:
 
 
 def select_shot(page, i: int) -> None:
-    """Select shot i on the timeline by id, without playing it (a click on a block also
-    plays the cut from there). The inspector follows the selection."""
+    """Select shot i on the timeline by id, without cueing the monitor. Nothing is
+    selected at start (INTAKE M16); the shot strip follows the selection."""
     page.evaluate(f"tl.select([tl.idAt({i})])")
 
 
@@ -162,8 +162,11 @@ def test_the_inspector_carries_a_poster_not_a_video_stream(page):
     request: it reached readyState 4 at ~10 s while the audio had already started. The
     inspector shows one frame of the selected shot, and it is an <img>."""
     assert page.locator("#inspector video").count() == 0, "the inspector is streaming video"
+    # nothing is selected at start (INTAKE M16): the strip is the film's row, no still
+    assert page.locator("#inspector img.poster").count() == 0
+    select_shot(page, 0)
     posters = page.locator("#inspector img.poster")
-    assert posters.count() == 1                       # shot 1 is selected at boot
+    assert posters.count() == 1
     src = posters.first.get_attribute("src")
     assert src.startswith("/media/poster/") and "?t=1.00" in src, src
     # and it is a real picture, not a broken image
@@ -180,8 +183,9 @@ def test_trimming_the_in_point_moves_the_poster_without_one_frame_per_nudge(page
     asked: list[str] = []
     page.on("request",
             lambda r: asked.append(r.url) if "/media/poster/" in r.url else None)
+    select_shot(page, 0)
     for _ in range(6):
-        page.locator("#inspector button[data-act=in][data-d='0.25']").click()   # in +0.25
+        page.keyboard.press("]")                   # in +0.25 — the strip has no trim buttons
     assert page.evaluate("segs[0].in") == pytest.approx(2.5, abs=0.01)
     page.wait_for_function(
         "document.querySelector('#inspector img.poster').src.includes('t=2.50')",
@@ -191,12 +195,15 @@ def test_trimming_the_in_point_moves_the_poster_without_one_frame_per_nudge(page
     assert len(asked) <= 2, f"a frame per press, not per settled trim: {asked}"
 
 
-def test_trim_buttons_change_duration_and_are_undoable(page):
-    before = total_text(page)
-    page.locator("#inspector button[data-act=out][data-d='0.25']").click()   # out +0.25
-    assert total_text(page) != before
-    page.locator("#undo").click()
-    assert total_text(page) == before
+def test_the_strip_has_no_trim_buttons_and_the_trim_keys_need_a_shot(page):
+    """INTAKE M16 decision 5: the four in/out ± buttons are gone — trims are the block's
+    edges and [ ] { }. With nothing selected (the start) a trim key does nothing."""
+    before = page.evaluate("JSON.stringify(segs)")
+    page.keyboard.press("}")
+    assert page.evaluate("JSON.stringify(segs)") == before, "nothing selected, nothing trimmed"
+    select_shot(page, 0)
+    assert page.locator("#inspector button[data-act=in], #inspector button[data-act=out]").count() == 0
+    assert page.locator("#inspector .speedrow").count() == 0
 
 
 def test_keyboard_trim_matches_button_trim(page):
@@ -209,18 +216,32 @@ def test_keyboard_trim_matches_button_trim(page):
     assert total_text(page) == before
 
 
-def test_boundary_warning_appears_and_snap_clears_it(page):
-    """The defect Karl flagged, surfaced live and then fixed by the tool. Shot 1 (the
-    boot selection) opens mid-sentence: the inspector says so, and the header's button
-    counts it; after the snap neither does."""
-    assert "⚠" in page.locator("#inspector .meta").inner_text(), \
-        "seeded EDL cuts mid-utterance; warning should show"
-    assert page.locator("#snap").inner_text().startswith("Fix ")
-    page.locator("#snap").click()
-    page.wait_for_function(
-        "document.querySelector('#snap').textContent === 'Cut points OK'", timeout=15000)
-    assert "⚠" not in page.locator("#inspector .meta").inner_text()
+def test_a_warning_sits_on_its_shot_with_a_fix_that_is_one_undo_entry(page, project):
+    """The defect Karl flagged, on the shot it concerns (INTAKE M16 I16.4): shot 1 opens
+    mid-sentence and cuts a line off. With nothing selected the film row counts the
+    warned shots and steps to them; each warning on the strip carries its own Fix, one
+    undo entry each, never automatic — the snap tool's head and tail rule ("hello there"
+    0.5–2.0 → in 0.25; "how are you" 2.4–4.0 → out 4.45)."""
+    insp = page.locator("#inspector")
+    assert insp.locator(".fwarn").inner_text() == "1 warning ▸"
+    insp.locator(".fwarn").click()
+    assert page.evaluate("[...tl.state.sel]") == [page.evaluate("segs[0].id")]
+    assert not page.evaluate("player.playing")
+    warns = insp.locator(".warns")
+    assert "⚠ starts mid-sentence · Fix" in warns.inner_text()
+    assert "⚠ cuts a line off · Fix" in warns.inner_text()
+    insp.locator("button[data-act=fixin]").click()
+    assert page.evaluate("[segs[0].in, segs[0].out]") == [0.25, 3.0]
+    assert page.locator("#undo").get_attribute("title").startswith("undo: fix")
+    assert "starts mid-sentence" not in warns.inner_text()
+    insp.locator("button[data-act=fixout]").click()
+    assert page.evaluate("[segs[0].in, segs[0].out]") == [0.25, 4.45]
+    assert warns.is_hidden()
     assert page.locator("#tl .blk .warn:not([hidden])").count() == 0
+    page.keyboard.press("Control+z")
+    assert page.evaluate("[segs[0].in, segs[0].out]") == [0.25, 3.0]
+    page.keyboard.press("Control+z")
+    assert page.evaluate("[segs[0].in, segs[0].out]") == [1.0, 3.0]
 
 
 def test_undo_restores_exact_state_after_snap(page):
@@ -236,6 +257,7 @@ def test_remove_from_the_inspector_takes_the_shot_out_and_moves_on(page):
     """remove in the inspector is tl.remove: the shot goes, the one that takes its place
     is selected, and the inspector shows that one."""
     assert page.locator("#tl .blk").count() == 2
+    select_shot(page, 0)
     first_clip = page.locator("#inspector .clip").inner_text()
     page.locator("#inspector button[data-act=del]").click()
     assert page.locator("#tl .blk").count() == 1
@@ -269,6 +291,7 @@ def test_edits_reach_the_disk_without_being_asked(page, project):
 
 def test_the_cut_survives_a_reload(page):
     """The whole point: what is on screen after F5 is what you left."""
+    select_shot(page, 0)
     page.locator("#inspector button[data-act=del]").click()
     page.wait_for_function(
         "document.querySelector('#saveState').textContent.startsWith('saved')",
@@ -442,8 +465,11 @@ def test_the_inspector_asks_about_the_selected_shot(page):
     inference.set_backend(Scripted())
     inference.reset_spend()
     try:
+        select_shot(page, 0)
         insp = page.locator("#inspector")
         assert insp.locator(".shotAsk").is_hidden()
+        # the opener carries the shot's price too; it spends nothing itself
+        assert_priced(page, "#inspector button[data-act=ask]", "Ask about this shot", "shot")
         insp.locator("button[data-act=ask]").click()
         page.wait_for_selector("#inspector .shotAsk:visible")
         insp.locator(".shotNote").fill("start this on the line instead")
@@ -677,31 +703,42 @@ def _on_disk(project) -> list[dict]:
     return json.loads(Path(project["edl"]).read_text(encoding="utf-8"))["segments"]
 
 
-def test_selecting_a_block_fills_the_inspectors_header_and_why(page):
+def test_selecting_a_block_fills_the_shot_strip(page):
+    """INTAKE M16 I16.4: the strip says "Shot N · length", the why (editable), the first
+    line spoken — no clip-time header, no "starts at … of the film", no timestamps on
+    the main view. The clip, its range and the timed lines are behind why? ▸, which
+    starts closed on every shot."""
     assert page.locator(".seg").count() == 0, "the card list is gone"
     insp = page.locator("#inspector")
-    # shot 1 is the anchor at boot
-    assert "SHOT 1 of 2" in insp.locator(".meta").inner_text()
+    assert page.evaluate("tl.state.anchor") is None, "nothing is selected at start"
+    assert insp.locator(".film .totals").inner_text() == "2 shots · 0:04"
     page.locator("#tl .blk").nth(1).click()
-    page.evaluate("pauseCut()")                   # a click on a block also plays from it
-    head = insp.locator(".meta").inner_text()
-    assert "SHOT 2 of 2" in head and "CLIP_B" in head, head
-    assert "0:00.0 → 0:02.0" in head and "2.0 s" in head, head
-    assert "starts at 0:02.0 of the film" in head, head
-    assert "⚠" not in head, "CLIP_B 0.0–2.0 ends with 'hello there', on its edge"
+    assert insp.locator(".sname").inner_text() == "Shot 2 · 2.0 s"
     assert insp.locator(".why").inner_text() == "second"
-    assert "hello there" in insp.locator(".lines").first.inner_text()
+    assert insp.locator(".said").inner_text() == "“hello there”"
+    assert insp.locator(".warns").is_hidden(), "CLIP_B 0.0–2.0 ends on 'hello there''s edge"
     assert insp.locator("img.poster").get_attribute("src") == "/media/poster/CLIP_B.jpg?t=0.00"
+    shown = insp.inner_text()
+    for gone in ("CLIP_B", "→", "starts at", "of the film", "SHOT"):
+        assert gone not in shown, (gone, shown)
+    # why? ▸ — the evidence, closed until asked for
+    assert insp.locator(".whybox").is_hidden()
+    insp.locator("[data-disc=why]").click()
+    assert insp.locator(".whybox").is_visible()
+    assert insp.locator(".clip").inner_text() == "CLIP_B"
+    assert "0:00 hello there" in insp.locator(".whybox .lines").first.inner_text()
     assert insp.locator(".lines.seen").is_hidden(), "nothing was seen on this bin"
-    # ↑ goes back to the previous cut and the inspector follows
+    # ↑ goes back to the previous cut, the strip follows and why? is closed again
     page.keyboard.press("ArrowUp")
-    assert "SHOT 1 of 2" in insp.locator(".meta").inner_text()
+    assert insp.locator(".sname").inner_text() == "Shot 1 · 2.0 s"
     assert insp.locator(".clip").inner_text() == "CLIP_A"
     assert insp.locator(".why").inner_text() == "first"
-    assert "⚠ opens mid-sentence · cuts a line off" in insp.locator(".meta").inner_text()
+    assert insp.locator(".whybox").is_hidden()
+    assert "starts mid-sentence" in insp.locator(".warns").inner_text()
 
 
 def test_editing_why_in_the_inspector_saves_to_the_edl(page, project):
+    select_shot(page, 0)
     why = page.locator("#inspector .why")
     why.click()
     page.keyboard.press("Control+a")
@@ -717,33 +754,20 @@ def test_editing_why_in_the_inspector_saves_to_the_edl(page, project):
     assert "opens on the greeting" in page.locator("#tl .blk").first.get_attribute("title")
 
 
-def test_the_inspectors_trim_buttons_are_one_undo_entry_each(page, project):
+def test_the_strips_speed_is_one_control(page, project):
+    """INTAKE M16 I16.4: five speed controls became one select; a change is one undo
+    entry and the strip's length follows."""
+    select_shot(page, 0)
     insp = page.locator("#inspector")
-    insp.locator("button[data-act=out][data-d='0.25']").click()
-    assert page.evaluate("[segs[0].in, segs[0].out]") == [1.0, 3.25]
-    assert "0:01.0 → 0:03.3" in insp.locator(".meta").inner_text()
-    assert insp.locator(".times").get_attribute("title") == "1.00 → 3.25 s of CLIP_A.MP4"
-    assert "2.3 s" in insp.locator(".meta").inner_text()
-    assert page.locator("#total").inner_text() == "0:04.3"
-    assert page.locator("#undo").get_attribute("title").startswith("undo: trim")
-    insp.locator("button[data-act=in][data-d='-0.25']").click()
-    assert page.evaluate("[segs[0].in, segs[0].out]") == [0.75, 3.25]
-    # ⇧ makes it a second
-    insp.locator("button[data-act=in][data-d='0.25']").click(modifiers=["Shift"])
-    assert page.evaluate("[segs[0].in, segs[0].out]") == [1.75, 3.25]
-    page.wait_for_function(
-        "document.querySelector('#saveState').textContent.startsWith('saved')", timeout=8000)
-    first = _on_disk(project)[0]
-    assert (first["in"], first["out"]) == (1.75, 3.25)
-    # one ⌘Z per press, in order
+    sel = insp.locator("select.speed")
+    assert sel.count() == 1 and sel.input_value() == "1"
+    sel.select_option("0.5")
+    assert page.evaluate("segs[0].speed") == 0.5
+    assert insp.locator(".sname").inner_text() == "Shot 1 · 4.0 s"
+    assert page.locator("#undo").get_attribute("title").startswith("undo: speed")
     page.keyboard.press("Control+z")
-    assert page.evaluate("[segs[0].in, segs[0].out]") == [0.75, 3.25]
-    page.keyboard.press("Control+z")
-    assert page.evaluate("[segs[0].in, segs[0].out]") == [1.0, 3.25]
-    page.keyboard.press("Control+z")
-    assert page.evaluate("[segs[0].in, segs[0].out]") == [1.0, 3.0]
-    assert "0:01.0 → 0:03.0" in insp.locator(".meta").inner_text()
-    assert page.locator("#total").inner_text() == "0:04.0"
+    assert page.evaluate("segs[0].speed") is None
+    assert insp.locator(".sname").inner_text() == "Shot 1 · 2.0 s"
 
 
 def test_the_kept_tabs_in_the_cut_link_selects_the_block_and_the_inspector_shows_it(page):
@@ -760,7 +784,7 @@ def test_the_kept_tabs_in_the_cut_link_selects_the_block_and_the_inspector_shows
     assert page.evaluate("sel") == 1
     assert page.locator("#tl .blk.sel").get_attribute("data-id") == page.evaluate("segs[1].id")
     assert page.locator("#inspector .clip").inner_text() == "CLIP_B"
-    assert "SHOT 2 of 2" in page.locator("#inspector .meta").inner_text()
+    assert page.locator("#inspector .sname").inner_text() == "Shot 2 · 2.0 s"
     assert not page.evaluate("player.playing"), "a link selects; it does not play"
 
 
@@ -768,9 +792,12 @@ def test_the_inspector_says_so_when_nothing_or_several_are_selected(page):
     insp = page.locator("#inspector")
     page.keyboard.press("Escape")
     assert page.evaluate("tl.state.anchor") is None
+    # nothing selected: the strip is the film — length, look, strength, auto-balance,
+    # the warnings to step through (INTAKE M16 I16.4)
     text = insp.inner_text()
-    assert "select a shot on the timeline" in text and "↑" in text and "↓" in text, text
-    assert "2 shots · 0:04.0 · target 0:05.0–0:20.0" in text, text
+    assert "2 shots · 0:04" in text and "look" in text and "auto-balance on" in text, text
+    assert "1 warning ▸" in text, text
+    assert "target" not in text and "select a shot" not in text, text
     assert insp.locator(".why").count() == 0
     # a multi-selection: the count and the length, and remove for all of them
     page.keyboard.press("Control+a")
@@ -787,7 +814,7 @@ def test_the_inspector_says_so_when_nothing_or_several_are_selected(page):
     assert page.locator("#tl .blk").count() == 2
     assert insp.locator(".empty").count() == 0
     select_shot(page, 0)
-    assert "SHOT 1 of 2" in insp.locator(".meta").inner_text()
+    assert insp.locator(".sname").inner_text() == "Shot 1 · 2.0 s"
 
 
 # ------------------------------------------------------------------ the monitor
@@ -1026,7 +1053,8 @@ def test_the_versions_list_says_which_render_is_the_cut_on_the_board(page, proje
         ".some((r) => r.textContent.includes('this cut'))", timeout=10000)
 
     # trim the timeline and the render is no longer what is on the board
-    page.locator("#inspector button[data-act=out][data-d='0.25']").click()
+    select_shot(page, 0)
+    page.keyboard.press("}")
     assert not page.evaluate(
         "[...document.querySelectorAll('#versions .ver')]"
         ".some((r) => r.textContent.includes('this cut'))"), \
@@ -1071,13 +1099,19 @@ def test_what_the_visual_pass_saw_shows_in_the_inspector_and_in_the_library(page
         # the insert selects the new shot, so the inspector is on it
         insp = page.locator("#inspector")
         assert insp.locator(".clip").inner_text() == "CLIP_C"
-        assert "rider goes down in deep snow" in insp.locator(".lines.seen").inner_text()
+        assert "seen: rider goes down in deep snow" in insp.locator(".lines.seen").inner_text()
         # 1.5–3.5 is clear of the covered lens at the top of the clip…
-        assert "unusable" not in insp.inner_text()
-        # …until the in-point is dragged back into it
+        assert "lens" not in insp.locator(".warns").inner_text()
+        # …until the in-point is trimmed back into it: a warning in plain words, on the
+        # shot, with its own fix (INTAKE M16 I16.4)
         for _ in range(4):
-            insp.locator("button[data-act=in][data-d='-0.25']").click()
-        assert "unusable 0.0–0.6: lens covered" in insp.inner_text()
+            page.keyboard.press("[")
+        assert "⚠ 0:00.0–0:00.1 the lens is covered · Trim it out" in insp.locator(".warns").inner_text()
+        assert insp.locator(".warns .w", has_text="lens").get_attribute("title") == "lens covered"
+        insp.locator("button[data-act=trimbad]").click()
+        assert page.evaluate("segs[sel].clip") == "CLIP_C.MP4"
+        assert page.evaluate("segs[sel].in") == pytest.approx(0.6)
+        assert "lens" not in insp.locator(".warns").inner_text()
     finally:
         sidecar.unlink(missing_ok=True)
 
@@ -1749,6 +1783,7 @@ def test_ask_buttons_wait_for_their_price_and_never_spend_without_one(page, live
         "document.querySelector('#ask').textContent === 'Ask · price unavailable'", timeout=5000)
     assert page.locator("#ask").is_disabled()
     assert page.locator("#cutFromBin").is_disabled()
+    select_shot(page, 0)
     insp = page.locator("#inspector")
     insp.locator("button[data-act=ask]").click()
     page.wait_for_selector("#inspector .shotAsk:visible")

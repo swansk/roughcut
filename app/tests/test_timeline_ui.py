@@ -205,7 +205,7 @@ def test_shift_click_selects_the_range_and_cmd_click_toggles(page):
     page.locator("#tl .tl-ruler").click(position={"x": 4, "y": 6})
     assert page.locator("#tl .blk.sel").count() == 0
     assert page.evaluate("tl.state.anchor") is None
-    assert "select a shot on the timeline" in page.locator("#inspector").inner_text()
+    assert page.locator("#inspector .film .totals").is_visible()      # the film row (M16)
 
 
 # ------------------------------------------------------------------ scrub and playhead
@@ -352,20 +352,23 @@ def test_snaps_for_resolves_with_the_clips_sentences_and_is_cached(page):
 
 
 def test_the_inspectors_edits_share_the_stack_with_the_timeline(page):
-    """The inspector's trim button is the module's begin/setRange/commit: it and a
-    timeline edit undo in one order, and the tooltip says which is next."""
-    page.locator("#inspector button[data-act=out][data-d='0.25']").click()   # out +0.25
+    """The strip's edits are the module's begin/commit: a Fix (here the out edge, which
+    cuts "how are you" off) and a timeline edit undo in one order, and the tooltip says
+    which is next. (The strip's trim buttons went in INTAKE M16.)"""
+    page.locator("#tl .blk").nth(0).click()
+    page.locator("#inspector button[data-act=fixout]").click()      # out 3.0 → 4.45
+    assert page.evaluate("segs[0].out") == 4.45
     first = ids(page)[0]
     page.evaluate(f"tl.move(['{first}'], null)")
     assert page.evaluate("segs.map(s => s.clip)") == ["CLIP_B.MP4", "CLIP_A.MP4"]
     assert page.locator("#undo").get_attribute("title").startswith("undo: move")
     page.locator("#undo").click()
     assert page.evaluate("segs.map(s => s.clip)") == ["CLIP_A.MP4", "CLIP_B.MP4"]
-    assert page.locator("#undo").get_attribute("title").startswith("undo: trim")
+    assert page.locator("#undo").get_attribute("title").startswith("undo: fix")
     page.keyboard.press("u")                       # plain U is the pass's "later", not undo (I16.0 n)
-    assert page.evaluate("segs[0].out") == 3.25
+    assert page.evaluate("segs[0].out") == 4.45
     page.keyboard.press("Control+z")
     assert page.evaluate("segs[0].out") == 3.0
-    assert page.locator("#redo").get_attribute("title").startswith("redo: trim")
+    assert page.locator("#redo").get_attribute("title").startswith("redo: fix")
     page.locator("#redo").click()
-    assert page.evaluate("segs[0].out") == 3.25
+    assert page.evaluate("segs[0].out") == 4.45

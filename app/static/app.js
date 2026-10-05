@@ -14,7 +14,7 @@
 let P = null;                 // project payload
 let S = null;                 // project status: where this bin is in the workflow
 let segs = [];                // working segment list
-let sel = 0;
+let sel = -1;                 // the anchor's index; -1 until a shot is chosen (nothing at start)
 let nRenders = 0;
 let renderList = [];          // the versions list, kept so it can be repainted on edit
 let bin = null;               // GET /api/selects — what the pass kept, and its summary
@@ -342,85 +342,74 @@ function commitWhy(box) {
   tl.render();                  // the block's tooltip and fallback line carry the why
 }
 
+/* The shot strip (INTAKE M16 I16.4): one panel under the timeline, in view with the
+ * picture, for the selected shot — the still, "Shot N · 12.9 s", ▶ play, Ask about this
+ * shot and Look deeper (each priced), Remove, the why (editable), the first line spoken,
+ * any warning with its own fix, the speed, the four colour nudges and reset; per-shot
+ * look and matching behind "colour & look ▸", the evidence behind "why? ▸", and how the
+ * machine saw the clip in one line. Both disclosures start closed on every shot. What
+ * the old inspector also showed — the clip time header, "starts at … of the film",
+ * timestamps on lines, five speed controls, four in/out buttons (trims are the edges
+ * and [ ] { }), the white-point numbers, the film's look in every shot and the six-lane
+ * coverage strip with its legend — is gone or folded. */
+const SPEEDS = [0.25, 0.5, 0.75, 1, 1.5, 2];
+const speedText = (v) => ({ 0.25: '¼×', 0.5: '½×', 0.75: '¾×' }[v] || `${v}×`);
+
 function buildShot(seg) {
+  const gen = isGenClip(seg.clip);
   const el = document.createElement('div');
-  el.className = 'shot';
+  el.className = 'shot' + (gen ? ' gen' : '');
   el.innerHTML = `
     <img class="poster" draggable="false" decoding="async" title="play the cut from here">
-    <div>
-      <div class="meta">
-        <span class="head"><span class="n"></span> · <span class="clip"></span> ·
-          <span class="times"></span> · <span class="dur"></span></span>
-        <span class="warn" style="color:var(--warn)" hidden></span>
-        <span class="blind" style="color:var(--bad)" hidden></span>
-        <span class="at hint"></span>
+    <div class="sbody">
+      <div class="srow top">
+        <span class="sname"></span>
+        <button data-act="play" title="play this shot only, then stop · enter">▶ play</button>
+        <button data-act="ask" title="ask for a change to this one shot — opens a box; nothing is spent until its Ask">Ask about this shot${priceTag('shot')}</button>
+        <span class="lookhost"></span>
+        <button data-act="del" title="take this shot out of the cut — ⌘Z brings it back">Remove</button>
       </div>
-      <div class="why" contenteditable title="why this shot — edited here, saved with the cut"></div>
-      <div class="lines"></div>
-      <div class="lines seen" hidden></div>
-      <div class="polish hint" hidden></div>
-      <div class="speedrow" title="the shot's speed — its clip range plays at this rate; the film gets (out − in) ÷ speed of it">
-        <span class="slabel">speed</span>
-        <button data-act="speed" data-speed="0.25" title="quarter speed">¼×</button>
-        <button data-act="speed" data-speed="0.5" title="half speed — slow motion">½×</button>
-        <button data-act="speed" data-speed="1" title="as shot">1×</button>
-        <button data-act="speed" data-speed="2" title="double speed">2×</button>
-        <input type="number" class="speedNum" min="0.1" max="4" step="0.05" title="any rate from 0.1 to 4">
-        <span class="sfilm hint"></span>
+      <div class="why" contenteditable title="why this shot — yours to edit, saved with the cut"></div>
+      <div class="said"></div>
+      <div class="warns"></div>
+      <div class="srow ctl">
+        <select class="speed" title="the shot's speed"></select>
+        <span class="nudge"${gen ? ' hidden' : ''}>
+          <button data-act="cwarm" title="warmer — ⌘Z undoes it">warmer</button>
+          <button data-act="ccool" title="cooler — ⌘Z undoes it">cooler</button>
+          <button data-act="cbright" title="brighter — ⌘Z undoes it">brighter</button>
+          <button data-act="cdark" title="darker — ⌘Z undoes it">darker</button>
+          <button data-act="creset" class="ghost" title="back to the auto balance">reset</button>
+        </span>
+        <button class="disc" data-disc="look"${gen ? ' hidden' : ''}>colour &amp; look ▸</button>
+        <button class="disc" data-disc="why">why? ▸</button>
       </div>
-      <div class="trim">
-        <span>in</span>
-        <button data-act="in" data-d="-0.25" title="in-point 0.25 s earlier (⇧ 1 s)">−</button>
-        <button data-act="in" data-d="0.25" title="in-point 0.25 s later (⇧ 1 s)">+</button>
-        <span>out</span>
-        <button data-act="out" data-d="-0.25" title="out-point 0.25 s earlier (⇧ 1 s)">−</button>
-        <button data-act="out" data-d="0.25" title="out-point 0.25 s later (⇧ 1 s)">+</button>
-        <button data-act="play" title="play this shot only, then stop">▶ play</button>
-        <button data-act="ask" title="Ask for a change to this one shot — a scoped model call, seconds rather than minutes">✎ ask about this shot</button>
-        <button data-act="del" class="ghost" title="remove this shot from the cut (undoable)">remove</button>
+      <div class="colour" data-pane="look" hidden>
+        <label title="the auto balance for this shot (unchecked: as shot)"><input type="checkbox" class="cauto"> auto-balance</label>
+        <select class="clook" title="this shot's look — the film's unless set here"></select>
+        <input type="range" class="cstrength" min="0" max="1" step="0.05" title="look strength for this shot">
+        <span class="cstrengthVal"></span>
+        <button data-act="cmatchprev" title="match this shot's colour to the shot before it (again: off)">match ← previous</button>
+        <button data-act="cmatchref" title="match this shot's colour to the film's reference shot (again: off)">match ← reference</button>
+        <button data-act="csetref" title="make this the shot others match to (again: none)">set as reference</button>
       </div>
-      <div class="colour">
-        <div class="crow">
-          <span class="clabel">colour</span>
-          <span class="witness"></span>
-        </div>
-        <div class="crow">
-          <label title="the auto balance for this shot (unchecked: as shot)"><input type="checkbox" class="cauto"> auto</label>
-          <select class="clook" title="this shot's look — the film's unless set here"></select>
-          <input type="range" class="cstrength" min="0" max="1" step="0.05" title="look strength for this shot">
-          <span class="cstrengthVal"></span>
-        </div>
-        <div class="crow">
-          <button data-act="cwarm" title="warmer: red gain +2 %, blue −2 % on the shot's balance">warmer</button>
-          <button data-act="ccool" title="cooler: red gain −2 %, blue +2 %">cooler</button>
-          <button data-act="cbright" title="exposure +0.05">brighter</button>
-          <button data-act="cdark" title="exposure −0.05">darker</button>
-          <button data-act="creset" class="ghost" title="drop the hand balance — back to the auto">reset</button>
-          <button data-act="cmatchprev" title="match this shot's colour to the shot before it (again: off)">match ← previous</button>
-          <button data-act="cmatchref" title="match this shot's colour to the film's reference shot (again: off)">match ← reference</button>
-          <button data-act="csetref" title="make this the shot others match to (again: none)">set as reference</button>
-        </div>
-        <div class="crow film">
-          <span class="clabel">film</span>
-          <select class="cmode" title="auto: every shot balanced from its white reference · off: the camera's picture">
-            <option value="auto">auto</option>
-            <option value="off">off</option>
-          </select>
-          <select class="cfilmlook" title="the look over the whole film"></select>
-          <input type="range" class="cfilmstrength" min="0" max="1" step="0.05" title="the film look's strength">
-          <span class="cfilmstrengthVal"></span>
-        </div>
+      <div class="whybox" data-pane="why" hidden>
+        <div class="from"><span class="clip"></span> · <span class="times"></span></div>
+        <div class="lines"></div>
+        <div class="lines seen" hidden></div>
+        <div class="witness"></div>
+        <div class="polish" hidden></div>
+        <div class="prov" hidden></div>
       </div>
+      <div class="deepline"${gen ? ' hidden' : ''}></div>
       <div class="shotAsk" hidden>
         <textarea class="shotNote"
           placeholder="what should change in this shot — start later · hold through the reaction · just keep the punchline"></textarea>
         <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
-          <button data-act="shotgo" class="primary"${unpricedAttr('shot')}>Ask${priceTag('shot')}</button>
+          <button data-act="shotgo"${unpricedAttr('shot')}>Ask${priceTag('shot')}</button>
           <span class="hint shotState"></span>
         </div>
       </div>
-      <div class="prov hint" hidden></div>
-      <div class="deepbox" hidden></div>
     </div>`;
   el.querySelector('.why').addEventListener('blur', (ev) => {
     const text = ev.target.textContent.trim();
@@ -432,32 +421,29 @@ function buildShot(seg) {
   el.querySelector('.shotNote').addEventListener('input', (ev) => {
     shotAskDraft.set(seg, ev.target.value);
   });
-  // The number box: one entry per committed value (change, not input — a half-typed
-  // "0." must not retime the shot). The chips are the click handler's, by data-act.
-  el.querySelector('.speedNum').addEventListener('change', (ev) => {
+  // One control for the speed: one undo entry labelled `speed` per change.
+  el.querySelector('.speed').addEventListener('change', (ev) => {
     const v = parseFloat(ev.target.value);
     const cur = inspected() || seg;
     if (Number.isFinite(v)) tl.setSpeed(cur.id, v);
-    // the value is committed: the box shows what stuck (clamped to 0.1–4, or unchanged)
-    fillSpeed(el, tl.byId(cur.id) || cur, true);
+    fillSpeed(el, tl.byId(cur.id) || cur);
   });
   bindColour(el, seg);
   return el;
 }
 
-/* The speed row: the chip that matches lit, the box carrying the rate, and what that
- * makes of the shot in the film when it is not 1×. The box is left alone while it is
- * being typed in, unless `force` — the change handler, after the value is committed. */
-function fillSpeed(box, seg, force = false) {
+/* The speed select: the usual rates, plus the shot's own when it is something else. */
+function fillSpeed(box, seg) {
   const spd = speedOf(seg);
-  box.querySelectorAll('.speedrow button[data-speed]').forEach((b) => {
-    b.classList.toggle('on', parseFloat(b.dataset.speed) === spd);
-  });
-  const num = box.querySelector('.speedNum');
-  if (force || document.activeElement !== num) num.value = String(spd);
-  const film = box.querySelector('.sfilm');
-  film.textContent = spd === 1 ? ''
-    : `${(seg.out - seg.in).toFixed(1)} s of clip → ${tl.dur(seg).toFixed(1)} s of film`;
+  const sel = box.querySelector('select.speed');
+  if (!sel) return;
+  const rates = SPEEDS.includes(spd) ? SPEEDS : [...SPEEDS, spd].sort((a, b) => a - b);
+  const key = rates.join(',');
+  if (sel.dataset.key !== key) {
+    sel.dataset.key = key;
+    sel.innerHTML = rates.map((v) => `<option value="${v}">${speedText(v)}</option>`).join('');
+  }
+  setIfIdle(sel, String(spd));
 }
 
 function buildMulti() {
@@ -468,64 +454,106 @@ function buildMulti() {
   return el;
 }
 
+/* Nothing selected: the strip is the film — its length, its look and strength, the auto
+ * balance, and the warnings to step through. The film's look lived in every shot. */
 function buildNone() {
   const el = document.createElement('div');
-  el.className = 'none';
-  el.innerHTML = `<span>select a shot on the timeline — or press <kbd>↑</kbd> / <kbd>↓</kbd></span>
-    <span class="totals"></span>`;
+  el.className = 'none film';
+  el.innerHTML = `<span class="totals"></span>
+    <label class="flook">look <select class="cfilmlook" title="the look over the whole film"></select></label>
+    <span class="fstrength">
+      <button data-act="fstr" data-v="0.25">subtle</button><button data-act="fstr" data-v="0.5">medium</button><button data-act="fstr" data-v="0.85">strong</button>
+    </span>
+    <button data-act="fauto" class="fauto" title="every shot balanced from its white reference, or the camera's picture"></button>
+    <button data-act="nextwarn" class="fwarn" hidden title="select the next shot with a warning"></button>`;
+  el.querySelector('.cfilmlook').addEventListener('change', (ev) => {
+    const v = ev.target.value || null;
+    colourEdit('film look', () => { colour.look = v; });
+  });
   return el;
 }
 
-/* Fill the shot inspector from the segment, touching only what changed. */
+/* The shots the strip warns about: a cut inside a sentence, or a stretch the visual pass
+ * said not to use. */
+function shotWarnings(seg) {
+  const out = [];
+  const clip = P.clips[seg.clip];
+  if (clip && !isGenClip(seg.clip)) {
+    const cutsInto = (t) => (clip.transcript || []).some((u) => u.start + 0.05 < t && t < u.end - 0.05);
+    if (cutsInto(seg.in)) out.push({ kind: 'in', text: 'starts mid-sentence', fix: 'Fix' });
+    if (cutsInto(seg.out)) out.push({ kind: 'out', text: 'cuts a line off', fix: 'Fix' });
+  }
+  unusableFor(seg).forEach((u, k) => {
+    const spd = speedOf(seg);
+    const a = Math.max(0, (u.start - seg.in) / spd), b = Math.min(tl.dur(seg), (u.end - seg.in) / spd);
+    const whole = u.start <= seg.in + 0.05 && u.end >= seg.out - 0.05;
+    const at = (t) => (b - a >= 1 ? clock(t) : fmt(t));      // a short stretch keeps its tenths
+    out.push({ kind: 'bad', k, why: u.why, text: `${at(a)}–${at(b)} ${badWords(u.why)}`,
+               fix: whole ? '' : 'Trim it out' });
+  });
+  return out;
+}
+
+/* What an unusable stretch is, in plain words; the pass's own sentence is the tooltip. */
+function badWords(why) {
+  const w = String(why || '').toLowerCase();
+  if (/black|dark|dropout/.test(w)) return 'goes dark';
+  if (/blur|focus/.test(w)) return 'is blurred';
+  if (/obstruct|cover|lens|finger|glove/.test(w)) return 'the lens is covered';
+  if (/shak|jerk/.test(w)) return 'shakes';
+  return 'is unusable';
+}
+
+/* Fill the shot strip from the segment, touching only what changed. */
 function fillShot(box, seg) {
   const q = (s) => box.querySelector(s);
   const i = tl.indexOf(seg.id);
-  q('.n').textContent = `SHOT ${i + 1} of ${segs.length}`;
-  q('.clip').textContent = stem(seg.clip);
-  const times = q('.times');
-  times.textContent = `${fmt(seg.in)} → ${fmt(seg.out)}`;
-  times.title = `${seg.in.toFixed(2)} → ${seg.out.toFixed(2)} s of ${seg.clip}`;
-  // the length in the film; a retimed shot says the rate beside it
-  const spd = speedOf(seg);
-  q('.dur').textContent = `${tl.dur(seg).toFixed(1)} s${spd === 1 ? '' : ` at ${spd}×`}`;
+  const gen = isGenClip(seg.clip);
+  const kind = gen ? (/^gen_([a-z]+)_/i.exec(String(seg.clip)) || [])[1] || 'slide' : '';
+  q('.sname').textContent = `Shot ${i + 1} · ${kind ? `${kind} · ` : ''}${tl.dur(seg).toFixed(1)} s`;
   fillSpeed(box, seg);
-  const warn = boundaryWarning(seg);
-  q('.warn').textContent = warn ? `⚠ ${warn}` : '';
-  q('.warn').hidden = !warn;
-  const blind = unusableFor(seg).map(
-    (u) => `unusable ${u.start.toFixed(1)}–${u.end.toFixed(1)}: ${u.why}`).join(' · ');
-  q('.blind').textContent = blind ? `⚠ ${blind}` : '';
-  q('.blind').hidden = !blind;
-  const start = tl.filmStart(seg.id);
-  q('.at').textContent = start >= 0 ? `starts at ${fmt(start)} of the film` : '';
 
   const why = q('.why');
   if (document.activeElement !== why && why.textContent !== (seg.why || '')) {
     why.textContent = seg.why || '';
   }
+  const first = gen ? null : linesFor(seg)[0];
+  const said = first ? `“${first.text}”` : '';
+  if (q('.said').textContent !== said) q('.said').textContent = said;
+  q('.said').hidden = !said;
 
-  const genClip = isGenClip(seg.clip) ? (P.clips[seg.clip] || {}) : null;
+  // the warnings, each with its own fix — one undo entry each, never automatic
+  const warns = shotWarnings(seg);
+  const wkey = JSON.stringify(warns.map((w) => [w.kind, w.text, w.fix]));
+  const wEl = q('.warns');
+  if (wEl.dataset.key !== wkey) {
+    wEl.dataset.key = wkey;
+    wEl.innerHTML = warns.map((w) => `<span class="w" title="${escapeHtml(w.why || '')}">⚠ ${escapeHtml(w.text)}${w.fix
+      ? ` · <button data-act="${w.kind === 'bad' ? 'trimbad' : `fix${w.kind}`}" data-k="${w.k ?? ''}">${w.fix}</button>` : ''}</span>`).join('');
+  }
+  wEl.hidden = !warns.length;
+
+  // why? — the evidence: where the shot came from, the timed transcript, what was seen
+  // with times, the colour in words, and the proposal's polish when it carries one
+  q('.clip').textContent = stem(seg.clip);
+  q('.times').textContent = `${fmt(seg.in)}–${fmt(seg.out)}`;
+  const genClip = gen ? (P.clips[seg.clip] || {}) : null;
   const lines = genClip
     ? `<div>${escapeHtml(typeof genClip.summary === 'string' ? genClip.summary
         : (genClip.summary && genClip.summary.generated) || 'generated clip')}</div>`
     : linesFor(seg).map(
-      (u) => `<div><b>${u.start.toFixed(1)}</b> ${escapeHtml(u.text)}</div>`).join('')
-      || '<div>(no speech)</div>';
+      (u) => `<div><b>${clock(Math.max(0, (u.start - seg.in) / speedOf(seg)))}</b> ${escapeHtml(u.text)}</div>`).join('')
+      || '<div>no words</div>';
   if (q('.lines:not(.seen)').innerHTML !== lines) q('.lines:not(.seen)').innerHTML = lines;
-  // What the visual pass saw inside this shot — the only account of anything nobody said.
   const seen = seenFor(seg).map(
-    (m) => `<div><b>${m.start.toFixed(1)}</b> ${kindTag(m.kind)}${escapeHtml(m.what)}</div>`).join('');
+    (m) => `<div><b>${clock(Math.max(0, (m.start - seg.in) / speedOf(seg)))}</b> seen: ${escapeHtml(m.what)}</div>`).join('');
   const seenEl = q('.lines.seen');
   if (seenEl.innerHTML !== seen) seenEl.innerHTML = seen;
   seenEl.hidden = !seen;
-
-  // Only what the segment actually carries: a proposal's polish (polished_from /
-  // polish_why ride on the plan's segments until the next reload; the save keeps clip,
-  // in, out, act, why and id) and the act it belongs to.
   const pf = Array.isArray(seg.polished_from) && seg.polished_from.length === 2
     ? seg.polished_from : null;
   const polish = pf
-    ? `↳ polished from ${Number(pf[0]).toFixed(2)}–${Number(pf[1]).toFixed(2)}`
+    ? `polished from ${fmt(Number(pf[0]))}–${fmt(Number(pf[1]))}`
       + (seg.polish_why ? ` · ${seg.polish_why}` : '')
     : '';
   q('.polish').textContent = polish;
@@ -555,9 +583,43 @@ function fillShot(box, seg) {
   const note = q('.shotNote');
   if (document.activeElement !== note) note.value = shotAskDraft.get(seg) || '';
 
-  fillColour(box, seg);
-  // How the machine saw this clip, the shot's range marked, Look deeper on it (M15).
-  if (window.deep) deep.inspector(q('.deepbox'), seg);
+  if (!gen) fillColour(box, seg);
+  else q('.witness').textContent = '';
+  machineLine(box, seg);
+}
+
+/* Look deeper (priced, on the strip's top row) and how the machine saw the clip (one
+ * line, closed). Rebuilt when the shot's range changes, once the trimming settles — a
+ * drag must not ask for a price per frame. */
+let machineTimer = 0;
+function machineLine(box, seg) {
+  if (isGenClip(seg.clip) || !window.deep) return;
+  const key = `${seg.clip}|${seg.in}|${seg.out}`;
+  const host = box.querySelector('.lookhost');
+  if (!host || host.dataset.key === key) return;
+  const first = !host.dataset.key;
+  host.dataset.key = key;
+  clearTimeout(machineTimer);
+  const go = () => {
+    if (inspected() !== seg || host.dataset.key !== key) return;
+    host.replaceChildren();
+    const res = host.parentNode && host.parentNode.querySelector(':scope > .dv-res');
+    if (res) res.remove();
+    // deep.rowButton pads the span by 2 s each side for a moment; a shot is its own span
+    if (typeof deep.rowButton === 'function') deep.rowButton(host, seg.clip, seg.in + 2, seg.out - 2);
+    const line = box.querySelector('.deepline');
+    if (typeof deep.line === 'function') deep.line(line, seg.clip, { range: [seg.in, seg.out] });
+    else if (line) {
+      // until /deep.js carries its one line: a closed line that opens the full strip
+      line.innerHTML = '<button type="button" class="dl-open">how the machine saw this clip ▸</button><div class="deepbox"></div>';
+      line.querySelector('.dl-open').onclick = () => {
+        const b = line.querySelector('.deepbox');
+        if (b.childElementCount) { b.innerHTML = ''; b.hidden = true; return; }
+        if (typeof deep.inspector === 'function') deep.inspector(b, seg);
+      };
+    }
+  };
+  if (first) go(); else machineTimer = setTimeout(go, 450);
 }
 
 function renderInspector() {
@@ -580,15 +642,73 @@ function renderInspector() {
     const d = selIds.reduce((a, id) => { const s = tl.byId(id); return a + (s ? tl.dur(s) : 0); }, 0);
     box.querySelector('.count').textContent = `${selIds.length} shots selected · ${d.toFixed(1)} s`;
   } else if (want === 'none') {
-    const [lo, hi] = P.target;
-    box.querySelector('.totals').textContent =
-      `${segs.length} shot${segs.length === 1 ? '' : 's'} · ${fmt(total())} · target ${fmt(lo)}–${fmt(hi)}`;
+    fillFilm(box);
   } else {
     fillShot(box, seg);
   }
 }
 
-/* The inspector's controls, delegated once. Every edit goes through the timeline's API,
+/* The film row: what nothing-selected shows. */
+function fillFilm(box) {
+  const q = (s) => box.querySelector(s);
+  q('.totals').textContent = `${segs.length} shot${segs.length === 1 ? '' : 's'} · ${clock(total())}`;
+  lookOptions(q('.cfilmlook'), 'none', false);
+  setIfIdle(q('.cfilmlook'), colour.look || '');
+  const fs = colour.strength ?? 0.5;
+  const near = [0.25, 0.5, 0.85].reduce((a, b) => (Math.abs(b - fs) < Math.abs(a - fs) ? b : a));
+  box.querySelectorAll('[data-act=fstr]').forEach((b) => b.classList.toggle('on', parseFloat(b.dataset.v) === near));
+  q('.fstrength').hidden = !colour.look;
+  q('.fauto').textContent = `auto-balance ${colour.mode === 'off' ? 'off' : 'on'}`;
+  q('.fauto').classList.toggle('on', colour.mode !== 'off');
+  const n = segs.filter((s) => shotWarnings(s).length).length;
+  q('.fwarn').hidden = !n;
+  q('.fwarn').textContent = `${n} warning${n === 1 ? '' : 's'} ▸`;
+}
+
+/* The next shot with a warning after the playhead (wrapping): select it, park there. */
+function nextWarned() {
+  const start = tl.shotAt(tl.state.playhead);
+  const from = start ? start.index : -1;
+  for (let k = 1; k <= segs.length; k++) {
+    const i = (from + k) % segs.length;
+    if (shotWarnings(segs[i]).length) {
+      const id = tl.idAt(i);
+      tl.select([id], { source: 'click' });
+      tl.seek(tl.filmStart(id));
+      scrollSel();
+      return true;
+    }
+  }
+  return false;
+}
+
+/* A cut that opens or closes inside a sentence, moved to the sentence's edge — the snap
+ * tool's head and tail rule (research/tools/edl_snap.py: a breath before the first word,
+ * the last word let land). One undo entry, and only on the click. */
+const PAD_HEAD = 0.25, PAD_TAIL = 0.45;
+function fixEdge(seg, edge) {
+  const clip = P.clips[seg.clip] || {};
+  const t = edge === 'in' ? seg.in : seg.out;
+  const u = (clip.transcript || []).find((x) => x.start + 0.05 < t && t < x.end - 0.05);
+  if (!u) return;
+  tl.begin('fix');
+  if (edge === 'in') tl.setRange(seg.id, Math.max(0, u.start - PAD_HEAD), null);
+  else tl.setRange(seg.id, null, Math.min(clip.duration ?? 1e9, u.end + PAD_TAIL));
+  tl.commit();
+}
+
+/* An unusable stretch trimmed off whichever edge leaves more of the shot. */
+function trimBad(seg, k) {
+  const u = unusableFor(seg)[k];
+  if (!u) return;
+  const keepHead = u.start - seg.in, keepTail = seg.out - u.end;
+  tl.begin('trim it out');
+  if (keepTail >= keepHead) tl.setRange(seg.id, Math.min(seg.out - 0.2, u.end), null);
+  else tl.setRange(seg.id, null, Math.max(seg.in + 0.2, u.start));
+  tl.commit();
+}
+
+/* The strip's controls, delegated once. Every edit goes through the timeline's API,
  * so it is one undo entry, repaints the board and reaches the autosave as before. */
 function onInspectorClick(e) {
   const b = e.target.closest('button');
@@ -601,11 +721,25 @@ function onInspectorClick(e) {
   if (!b) return;
   const act = b.dataset.act;
   if (act === 'delall') { tl.remove([...tl.state.sel]); return; }
+  if (act === 'fstr') { const v = parseFloat(b.dataset.v); colourEdit('look strength', () => { colour.strength = v; }); return; }
+  if (act === 'fauto') { colourEdit('auto-balance', () => { colour.mode = colour.mode === 'off' ? 'auto' : 'off'; }); return; }
+  if (act === 'nextwarn') { nextWarned(); return; }
+  if (b.dataset.disc) {
+    // a disclosure: open one pane, close it again; both start closed on every shot
+    const pane = $(`#inspector [data-pane="${b.dataset.disc}"]`);
+    if (!pane) return;
+    pane.hidden = !pane.hidden;
+    b.classList.toggle('on', !pane.hidden);
+    b.textContent = b.textContent.replace(/[▸▾]$/, pane.hidden ? '▸' : '▾');
+    return;
+  }
   const seg = inspected();
   if (!seg) return;
   const i = tl.indexOf(seg.id);
   if (act === 'play') { revealMonitor(); playFrom(i, { single: true }); return; }
   if (act === 'del') { tl.remove([seg.id]); return; }
+  if (act === 'fixin' || act === 'fixout') { fixEdge(seg, act.slice(3)); return; }
+  if (act === 'trimbad') { trimBad(seg, Number(b.dataset.k)); return; }
   if (act === 'ask') {
     if (shotAskOpen.has(seg)) shotAskOpen.delete(seg); else shotAskOpen.add(seg);
     renderInspector();
@@ -619,24 +753,10 @@ function onInspectorClick(e) {
     ask({ note, focus: i, button: b, state: $('#inspector .shotState') });
     return;
   }
-  if (act === 'speed') {
-    // one undo entry labelled `speed`; 1× deletes the key (tl.setSpeed); the block,
-    // the total and the monitor's rate follow through the timeline's render
-    tl.setSpeed(seg.id, parseFloat(b.dataset.speed));
-    return;
-  }
-  if (act && act.startsWith('c') && onColourAct(act, seg)) return;
-  // Anything else is a trim button carrying data-d; a button without one must not
-  // fall through with NaN.
-  if (!('d' in b.dataset)) return;
-  const d = parseFloat(b.dataset.d) * (e.shiftKey ? 4 : 1);
-  tl.begin('trim');
-  if (act === 'in') tl.setRange(seg.id, seg.in + d, null);
-  else tl.setRange(seg.id, null, seg.out + d);
-  tl.commit();
+  if (act && act.startsWith('c')) onColourAct(act, seg);
 }
 
-/* The `[` `]` `{` `}` keys' nudge; the inspector's buttons go through tl.setRange. */
+/* The `[` `]` `{` `}` keys' nudge — the trims the strip no longer has buttons for. */
 function nudge(i, edge, d) {
   const seg = segs[i];
   const dur = (P.clips[seg.clip] || {}).duration ?? 1e9;
@@ -651,15 +771,16 @@ function nudge(i, edge, d) {
  *
  * The film's `colour` block is the EDL's, kept here and sent with every save — the same
  * body as the segments, the story and the music; there is no second save path. What the
- * inspector shows for a shot (the witness numbers, the resolved balance, look and
- * strength) is the server's word from GET /api/colour, refetched after every save,
- * because a trim re-derives the auto and a nudge changes what the monitor's LUT bakes.
- * `colour` itself is never overwritten from the server: the server normalises the block
- * (fills look: null, strength 0.5) but does not change its meaning, and a change made
- * while a save was in flight must not be lost to the reply.
+ * strip shows for a shot (the colour in words, the resolved look and strength) is the
+ * server's word from GET /api/colour, refetched after every save, because a trim
+ * re-derives the auto and a nudge changes what the monitor's LUT bakes. `colour` itself
+ * is never overwritten from the server: the server normalises the block (fills look:
+ * null, strength 0.5) but does not change its meaning, and a change made while a save
+ * was in flight must not be lost to the reply.
  *
- * Nothing here is on the undo stack: like the music, a colour change is a setting, not
- * an edit of the cut, and `reset` is one click. */
+ * Every colour change is one entry on the board's undo stack (INTAKE M16 I16.4): the
+ * block rides each entry beside the cut (tl's `extra` hook), so ⌘Z takes back a warmer
+ * the way it takes back a trim. */
 let colour = {};              // the EDL's colour block: {mode, look, strength, reference, shots}
 let C = null;                 // GET /api/colour: {film, looks, shots, clips}
 
@@ -701,54 +822,44 @@ async function refreshColour() {
   const box = $('#inspector');
   const seg = inspecting && typeof inspecting === 'object' ? inspecting : null;   // boot: nothing mounted yet
   if (seg && box.querySelector('.colour')) fillColour(box, seg);
+  if (inspecting === 'none' && box.querySelector('.film')) fillFilm(box);
   const g = gradeApi();
   if (g) g.invalidate();
 }
 
-/* One change to the block: keep the block tidy, save through the one path (touch's
- * debounce coalesces a slider's steps), and show the change at once — the witness and
+/* One change to the block, one undo entry: keep the block tidy, save through the one
+ * path (the commit touches the autosave), and show the change at once — the words and
  * the monitor catch up when the save's refetch lands. */
-function colourChanged() {
+function colourEdit(label, fn) {
+  tl.begin(label);
+  fn();
   tidyColour();
-  const seg = inspected();
-  if (seg) fillColour($('#inspector'), seg);
-  touch();
+  tl.commit();
+  renderInspector();
 }
 
-const fmtGain = (g) => `${g >= 1 ? '+' : ''}${Math.round((g - 1) * 100)}%`;
-
-/* The witness: what the auto saw and what it did — or that a hand did it instead. */
-function witnessLine(shot) {
-  if (!shot) return 'not measured · as shot';
+/* The colour, in words: what the auto (or a hand) did to the shot. */
+function colourWords(shot) {
+  if (!shot) return 'colour: as shot';
   const w = shot.witness || {};
   const bal = shot.balance;
-  const parts = [];
-  if (bal && bal.source === 'hand') {
-    parts.push('hand-set',
-      `gain r ${fmtGain(bal.gain[0])} b ${fmtGain(bal.gain[2])}`,
-      `×${Number(bal.exposure).toFixed(2)}`);
-  } else if (!w.n) {
-    parts.push('not measured', 'as shot');
-  } else if (w.white_source === 'surface' && w.white) {
-    parts.push('white: surface', `L ${Math.round(w.white.L)}`,
-      `cast b ${w.white.b >= 0 ? '+' : '−'}${Math.abs(w.white.b).toFixed(1)}`);
-    parts.push(bal ? `auto ×${Number(bal.exposure).toFixed(2)}` : 'as shot');
-  } else if (w.white_source === 'grey') {
-    parts.push('white: grey-world');
-    parts.push(bal ? `auto ×${Number(bal.exposure).toFixed(2)}` : 'as shot');
-  } else {
-    parts.push('no white reference', 'as shot');
+  const parts = [bal ? (bal.source === 'hand' ? 'set by hand' : 'auto-balanced') : 'as shot'];
+  if (bal) {
+    const e = Math.round((Number(bal.exposure) - 1) * 100);
+    if (e) parts.push(`${Math.abs(e)}% ${e > 0 ? 'brighter' : 'darker'}`);
+    const warm = Math.round((bal.gain[0] - bal.gain[2]) * 50);
+    if (warm) parts.push(`${Math.abs(warm)}% ${warm > 0 ? 'warmer' : 'cooler'}`);
   }
-  if (w.clip > 0.005) parts.push(`clipped ${(w.clip * 100).toFixed(1)}%`);
+  if (w.clip > 0.005) parts.push(`${Math.round(w.clip * 100)}% of the frame is blown out`);
   if (shot.match) {
     const o = shotOverride(shot.id) || {};
-    parts.push(`matched ← ${o.match || 'reference'}`);
+    parts.push(`matched to the ${o.match === 'previous' ? 'shot before' : 'reference shot'}`);
   }
-  return parts.join(' · ');
+  return `colour: ${parts.join(', ')}`;
 }
 
 /* The look select's options: the first is the fallback (the film's look for a shot;
- * "no look" for the film), a shot also gets "none" to switch its look off alone, then
+ * "none" for the film), a shot also gets "none" to switch its look off alone, then
  * every look in the library — a broken manifest entry disabled with its reason. */
 function lookOptions(sel, firstLabel, withNone) {
   const looks = (C && C.looks) || [];
@@ -764,8 +875,8 @@ function lookOptions(sel, firstLabel, withNone) {
 
 const setIfIdle = (el, v) => { if (document.activeElement !== el && el.value !== String(v)) el.value = v; };
 
-/* Fill the shot's Colour block in place — nothing here rebuilds the inspector, so a why
- * being typed is not interrupted. */
+/* Fill the shot's colour in place — nothing here rebuilds the strip, so a why being
+ * typed is not interrupted. */
 function fillColour(box, seg) {
   const q = (s) => box.querySelector(s);
   const blk = q('.colour');
@@ -774,18 +885,17 @@ function fillColour(box, seg) {
   const shot = colourShot(id);
   const over = shotOverride(id) || {};
   const w = q('.witness');
-  w.textContent = witnessLine(shot);
-  w.classList.toggle('hand', !!(shot && shot.balance && shot.balance.source === 'hand'));
+  if (w) w.textContent = colourWords(shot);
 
   const auto = q('.cauto');
   auto.checked = over.auto !== false;
   auto.disabled = colour.mode === 'off' || !!over.balance;
-  auto.title = colour.mode === 'off' ? 'the film is off: no auto on any shot'
+  auto.parentNode.title = colour.mode === 'off' ? 'the film is off: no auto on any shot'
     : over.balance ? 'a hand balance is set — reset it to go back to the auto'
       : 'the auto balance for this shot (unchecked: as shot)';
 
   const filmLook = colour.look ? colour.look : 'none';
-  lookOptions(q('.clook'), `— film's (${filmLook})`, true);
+  lookOptions(q('.clook'), `the film's (${filmLook})`, true);
   setIfIdle(q('.clook'), 'look' in over ? (over.look || 'none') : '');
   const strength = 'strength' in over ? over.strength
     : shot ? shot.strength : (colour.strength ?? 0.5);
@@ -800,13 +910,6 @@ function fillColour(box, seg) {
   refBtn.textContent = isRef ? 'the reference' : 'set as reference';
   q('[data-act="cmatchref"]').disabled = isRef;
   q('[data-act="creset"]').disabled = !over.balance;
-
-  setIfIdle(q('.cmode'), colour.mode || 'auto');
-  lookOptions(q('.cfilmlook'), 'no look', false);
-  setIfIdle(q('.cfilmlook'), colour.look || '');
-  const fs = colour.strength ?? 0.5;
-  setIfIdle(q('.cfilmstrength'), fs);
-  q('.cfilmstrengthVal').textContent = Number(fs).toFixed(2);
 }
 
 /* The nudges start from the balance the shot resolves to today — the auto's numbers
@@ -823,59 +926,51 @@ function nudgeBalance(id, fn) {
   shotOverride(id, true).balance = b;
 }
 
-/* The block's buttons; the selects and sliders have their own listeners in buildShot. */
+/* The colour buttons; the selects and sliders have their own listeners in bindColour. */
+const COLOUR_LABEL = { cwarm: 'warmer', ccool: 'cooler', cbright: 'brighter', cdark: 'darker',
+  creset: 'colour reset', cmatchprev: 'match', cmatchref: 'match', csetref: 'reference' };
 function onColourAct(act, seg) {
+  if (!COLOUR_LABEL[act]) return false;
   const id = seg.id;
-  if (act === 'cwarm') nudgeBalance(id, (b) => { b.gain[0] += NUDGE_GAIN; b.gain[2] -= NUDGE_GAIN; });
-  else if (act === 'ccool') nudgeBalance(id, (b) => { b.gain[0] -= NUDGE_GAIN; b.gain[2] += NUDGE_GAIN; });
-  else if (act === 'cbright') nudgeBalance(id, (b) => { b.exposure += NUDGE_EXPOSURE; });
-  else if (act === 'cdark') nudgeBalance(id, (b) => { b.exposure -= NUDGE_EXPOSURE; });
-  else if (act === 'creset') { const o = shotOverride(id); if (o) delete o.balance; }
-  else if (act === 'cmatchprev' || act === 'cmatchref') {
-    const want = act === 'cmatchprev' ? 'previous' : 'reference';
-    const o = shotOverride(id, true);
-    if (o.match === want) delete o.match; else o.match = want;   // again: off
-  } else if (act === 'csetref') {
-    colour.reference = colour.reference === id ? null : id;
-  } else return false;
-  colourChanged();
+  colourEdit(COLOUR_LABEL[act], () => {
+    if (act === 'cwarm') nudgeBalance(id, (b) => { b.gain[0] += NUDGE_GAIN; b.gain[2] -= NUDGE_GAIN; });
+    else if (act === 'ccool') nudgeBalance(id, (b) => { b.gain[0] -= NUDGE_GAIN; b.gain[2] += NUDGE_GAIN; });
+    else if (act === 'cbright') nudgeBalance(id, (b) => { b.exposure += NUDGE_EXPOSURE; });
+    else if (act === 'cdark') nudgeBalance(id, (b) => { b.exposure -= NUDGE_EXPOSURE; });
+    else if (act === 'creset') { const o = shotOverride(id); if (o) delete o.balance; }
+    else if (act === 'cmatchprev' || act === 'cmatchref') {
+      const want = act === 'cmatchprev' ? 'previous' : 'reference';
+      const o = shotOverride(id, true);
+      if (o.match === want) delete o.match; else o.match = want;   // again: off
+    } else if (act === 'csetref') {
+      colour.reference = colour.reference === id ? null : id;
+    }
+  });
   return true;
 }
 
 function bindColour(el, seg) {
   const q = (s) => el.querySelector(s);
   q('.cauto').addEventListener('change', (ev) => {
-    const o = shotOverride(seg.id, true);
-    if (ev.target.checked) delete o.auto; else o.auto = false;
-    colourChanged();
+    const on = ev.target.checked;
+    colourEdit('auto-balance', () => {
+      const o = shotOverride(seg.id, true);
+      if (on) delete o.auto; else o.auto = false;
+    });
   });
   q('.clook').addEventListener('change', (ev) => {
-    const o = shotOverride(seg.id, true);
     const v = ev.target.value;
-    if (v === '') delete o.look; else o.look = v === 'none' ? null : v;
-    colourChanged();
+    colourEdit('look', () => {
+      const o = shotOverride(seg.id, true);
+      if (v === '') delete o.look; else o.look = v === 'none' ? null : v;
+    });
   });
   q('.cstrength').addEventListener('input', (ev) => {
     q('.cstrengthVal').textContent = Number(ev.target.value).toFixed(2);
   });
   q('.cstrength').addEventListener('change', (ev) => {
-    shotOverride(seg.id, true).strength = parseFloat(ev.target.value);
-    colourChanged();
-  });
-  q('.cmode').addEventListener('change', (ev) => {
-    colour.mode = ev.target.value === 'off' ? 'off' : 'auto';
-    colourChanged();
-  });
-  q('.cfilmlook').addEventListener('change', (ev) => {
-    colour.look = ev.target.value || null;
-    colourChanged();
-  });
-  q('.cfilmstrength').addEventListener('input', (ev) => {
-    q('.cfilmstrengthVal').textContent = Number(ev.target.value).toFixed(2);
-  });
-  q('.cfilmstrength').addEventListener('change', (ev) => {
-    colour.strength = parseFloat(ev.target.value);
-    colourChanged();
+    const v = parseFloat(ev.target.value);
+    colourEdit('look strength', () => { shotOverride(seg.id, true).strength = v; });
   });
 }
 
@@ -1833,6 +1928,7 @@ function paintAskPrices() {
   label($('#firstCut'), 'Ask for a first cut', 'first', true);
   label($('#firstFromBin'), 'Cut from the bin', 'bin', false);
   document.querySelectorAll('#inspector button[data-act=shotgo]').forEach((b) => label(b, 'Ask', 'shot', true));
+  document.querySelectorAll('#inspector button[data-act=ask]').forEach((b) => label(b, 'Ask about this shot', 'shot', false));
   for (const [sel, mode] of [['#ask', 'full'], ['#firstCut', 'first'], ['#firstFromBin', 'bin']]) {
     const el = $(sel);
     if (el) holdForPrice(el, mode);
@@ -2852,6 +2948,9 @@ document.addEventListener('keydown', (e) => {
   else if (k === 'k') { sel = Math.max(0, sel - 1); paint(); scrollSel(); }
   // no plain `u`: on the pass U is "later" (I16.0 n); undo is ⌘Z, the foundation's
   else if (k === 'x') { pushUndo('remove'); segs.splice(sel, 1); render(); }
+  // the trims by key — the strip has no in/out buttons (INTAKE M16 decision 5) — and
+  // only on a selected shot: nothing is selected at start
+  else if ('[]{}'.includes(k) && (tl.state.anchor == null || !segs[sel])) return;
   else if (k === '[') { pushUndo('trim'); nudge(sel, 'in', -step); render(); }
   else if (k === ']') { pushUndo('trim'); nudge(sel, 'in', step); render(); }
   else if (k === '{') { pushUndo('trim'); nudge(sel, 'out', -step); render(); }
@@ -2972,6 +3071,9 @@ async function boot() {
     touch,
     render,
     toast,
+    // the colour block rides each undo entry, so a nudge is one ⌘Z (INTAKE M16 I16.4)
+    extra: () => colour,
+    setExtra: (c) => { colour = c && typeof c === 'object' ? c : {}; },
   });
   tl.on('select', (ev) => {
     if (ev.source === 'app') return;          // paint() already ran; it told the module
