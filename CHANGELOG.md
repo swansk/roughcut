@@ -115,6 +115,15 @@ same commit. Releases move entries into a dated version section.
   it (a 31 px row, paid for in the frame's height).
 
 ### Fixed
+- **A typed title's check looks once the title has typed (INTAKE I16.0 j).** The accepted
+  title slide fx_b9e6a61c showed a red "not drawn where expected: 0.00s changed 1.153%
+  bbox [0.4313, 0.1889, 0.5719, 0.3361]": `fx.verify` sampled 0.1 s after the event, when
+  a typewriter has drawn two characters high on the first line, and tested the block's
+  centre (0.5, 0.5) against them. A text shape with a reveal is now sampled when it has
+  revealed (`len(text) / cps` after its start for a typewriter, 0.4 s for a fade, plus a
+  frame), kept inside the overlay, before the shape fades out and inside the shot; other
+  overlays are sampled as before. Re-run locally on that title's own proof and base
+  (fetched read-only from the board): picture_landed passes.
 - **The bin · cut name reads right from the start, and each bin is listed once (INTAKE
   I16.0 h).** The switcher's stylesheet was injected only when its panel first opened,
   so the header read "killington-neutralmain" with no ▾ until then; it now loads at

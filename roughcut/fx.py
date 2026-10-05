@@ -1569,6 +1569,25 @@ def frame_change_at(part: Path, base: Path, t: float) -> dict:
     return {"changed": round(changed, 6), "bbox": bbox}
 
 
+def _revealed_at(overlay: dict, dur: float) -> float | None:
+    """Seconds into the effect when every text shape with a reveal shows all of
+    itself — a typewriter's last character (`len(text) / cps` after its start), a fade's
+    0.4 s ramp — plus a frame's grace, kept inside the overlay and before any of those
+    shapes starts fading out. None when nothing reveals: the check samples as before."""
+    done, last = None, dur - 0.05
+    for sh in overlay.get("shapes") or []:
+        if sh.get("type") != "text" or not sh.get("reveal"):
+            continue
+        start = float(sh.get("start", 0.0))
+        span = (len(str(sh.get("text") or "")) / float(sh.get("cps", 14))
+                if sh["reveal"] == "typewriter" else 0.4)
+        done = max(done or 0.0, start + span + 0.05)
+        last = min(last, float(sh.get("end", dur)) - float(sh.get("fade", 0.0)) - 0.05)
+    if done is None:
+        return None
+    return max(0.0, min(done, last))
+
+
 def verify(effect: dict, seg: dict, *, onset: list[float] | None = None,
            hz: float = ONSET_HZ, part: Path | None = None, base: Path | None = None,
            impact: bool = True) -> dict:
@@ -1663,8 +1682,14 @@ def verify(effect: dict, seg: dict, *, onset: list[float] | None = None,
             add("audio_landed", "the sound is in the proof", None, "skipped: no sound")
         miss = []
         dur = float(overlay.get("duration", MIN_DURATION))
+        # A revealing text is measured once it has revealed: at 0.1 s a typewriter title
+        # has drawn its first two characters, high on the first line, nowhere near the
+        # anchor its whole block is centred on (fx_b9e6a61c, I16.0 j)
+        look = _revealed_at(overlay, dur)
         for ev in evs:
             ts = ev["t_part"] + min(0.1, dur * 0.4)
+            if look is not None:      # …and never past the shot's own end
+                ts = max(ts, min(ev["t_part"] + look, t1 - t0 - 0.05))
             m = frame_change_at(Path(part), Path(base), ts)
             bb = m["bbox"]
             inside = bool(bb) and (bb[0] - 0.01 <= ev["x"] <= bb[2] + 0.01) and (bb[1] - 0.01 <= ev["y"] <= bb[3] + 0.01)
