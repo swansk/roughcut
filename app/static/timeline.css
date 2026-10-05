@@ -61,9 +61,12 @@
 #tl .blk .txt { min-width: 0; overflow: hidden; font-size: 11px; line-height: 1.3;
                 color: var(--text); pointer-events: none; }
 #tl .blk.tiny .txt { display: none; }
-/* the block's name is the first words spoken in it (INTAKE M16), up to three lines */
-#tl .blk .name { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3;
-                 -webkit-box-orient: vertical; word-break: break-word; }
+/* the block's name is the first words spoken in it (INTAKE M16), up to two lines, whole
+   words: break-word split "goodbye" into "goodb / ye" on a 45 px block and stacked
+   "how / are / you" three high (Killington has ~20 shots in ~990 px). A word wider than
+   its block is cut at the block's edge; the whole line is the tooltip's. */
+#tl .blk .name { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2;
+                 -webkit-box-orient: vertical; word-break: normal; overflow-wrap: normal; }
 #tl .blk.hero .name::before { content: '★ '; color: var(--warn); }
 /* a boundary warning is a small mark on the edge it concerns */
 #tl .blk .warn { position: absolute; top: 0; width: 0; height: 0; border-style: solid;

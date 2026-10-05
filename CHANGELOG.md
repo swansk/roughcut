@@ -97,6 +97,13 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **Timeline block names keep their words whole, two lines at most (INTAKE M16 review,
+  I16.4).** A block's name (the first words spoken in it) broke inside words and
+  stacked three lines: on a ~45 px block "goodbye" read "goodb / ye", and "how are you"
+  stood three high — Killington fits ~20 shots in ~990 px, so most blocks are that
+  narrow. Names now break only between words, clamp at two lines, and a word wider than
+  its block is cut at the edge (the whole line is the tooltip). The block-name test lays
+  both names out on a 45 px block: 1 and 2 lines (it measured 2 and 3 before).
 - **A waiting proposal says on its card what it did not do (INTAKE M16 review, I16.5).**
   The model's own shortfall (`limits`, "couldn't: …") moved behind *why? ▸* in I16.5,
   while the card's "✓ checked" sits in view — and the free check measures what was made

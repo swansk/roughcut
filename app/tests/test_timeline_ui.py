@@ -317,6 +317,19 @@ def test_move_reorders_and_the_ids_travel_with_the_shots(page, project):
     assert block_ids(page) == [b, a]
     # a block is named by the first words spoken in it, never the camera's file name
     assert page.locator("#tl .blk").first.locator(".name").inner_text() == "hello there"
+    # whole words, at most two lines: on a ~45 px block "goodbye" is not "goodb / ye",
+    # and "how are you" is not stacked three high
+    lines = page.evaluate("""(texts) => texts.map((t) => {
+        const b = document.querySelector('#tl .blk').cloneNode(true);
+        b.style.width = '45px'; b.classList.add('narrow');
+        const n = b.querySelector('.name'); n.textContent = t;
+        document.querySelector('#tl .tl-lane').appendChild(b);
+        const r = document.createRange(); r.selectNodeContents(n);
+        const tops = new Set([...r.getClientRects()].map((x) => Math.round(x.top)));
+        const shown = [...tops].filter((y) => y < n.getBoundingClientRect().bottom - 1).length;
+        b.remove();
+        return shown; })""", ["goodbye", "how are you"])
+    assert lines == [1, 2], lines
     assert "CLIP_B" in page.locator("#tl .blk").first.get_attribute("title")
     wait_saved(page)
     assert [(s["id"], s["clip"]) for s in on_disk(project)] == [
