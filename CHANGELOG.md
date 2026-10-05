@@ -71,6 +71,13 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **The in-place Accept test no longer calls its own stub (INTAKE M16 integration,
+  C5).** `test_fx_ui::test_accepting_an_edit_changes_the_cut_in_place` installed its
+  counting `window.roughcutRefresh` with an `evaluate` whose expression ended in the
+  function, and Playwright calls a function an expression evaluates to: the count was 1
+  before the click. On the lane branch the Accept was slow enough for the wait to see 1;
+  merged, the shell's board answered faster, the count reached 2 and the wait for 1 timed
+  out (3 of 3 runs). The stub is installed inside a function body now; the test passes.
 - **The shot strip's machine line marks the range as "this shot" (INTAKE M16
   integration, C4).** Lane cut called `deep.line` on the strip before lane pass's
   `deep.line` existed and drew its own fallback; merged, the real line opened a strip

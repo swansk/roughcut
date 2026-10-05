@@ -640,8 +640,10 @@ def test_accepting_an_edit_changes_the_cut_in_place(page):
     open_fx(page, 1)
     page.evaluate("fx.refresh()")
     page.wait_for_selector("#fx .fxcard[data-id='fx_inplace1']")
-    page.evaluate("""window.__stay = 1; window.__refreshed = 0;
-        window.roughcutRefresh = async () => { window.__refreshed += 1; }""")
+    # (a function body: an expression that ends in a function is *called* by evaluate,
+    # which counted one refresh before the click)
+    page.evaluate("""() => { window.__stay = 1; window.__refreshed = 0;
+        window.roughcutRefresh = async () => { window.__refreshed += 1; }; }""")
     page.locator("#fx .fxcard[data-id='fx_inplace1'] button[data-act=accept]").click()
     page.wait_for_function("window.__refreshed === 1")
     page.wait_for_function("document.querySelectorAll('#fx .fxcard').length === 0")
