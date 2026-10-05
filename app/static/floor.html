@@ -236,15 +236,10 @@
   .ev { border-top: 1px solid #1e1e26; padding: 8px 0; font-size: 12px; }
   .ev .s { font: 600 9.5px var(--mono); letter-spacing: .1em; }
   .ev pre { margin: 6px 0 0; font: 10.5px var(--mono); color: var(--dim); white-space: pre-wrap; }
-  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
-  .stats > div { background: #0f0f14; border-radius: 8px; padding: 10px 12px; }
-  .stats .n { font: 700 20px var(--display); }
-  .stats .n.good { color: var(--good-soft); }
+  #cardSum { font-size: 14px; }
   .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
   button { font: inherit; font-size: 11.5px; background: var(--card-hi); color: var(--text);
            border: 1px solid #3a3a48; border-radius: 8px; padding: 7px 14px; cursor: pointer; }
-  button.primary { background: var(--accent); color: #0b0b0f; border-color: transparent; font-weight: 600; }
-  button.priced { border-color: #4c4026; color: #ffe9b8; }
   button:disabled { opacity: .45; cursor: default; }
 
   /* the survey: takes side by side, the cursor's outlined, this pick starred, an earlier

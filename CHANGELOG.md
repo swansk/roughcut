@@ -234,6 +234,17 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **The pass's closing card is one line and one way back (INTAKE M16 I16.3).** *Round 3
+  done* · *44 kept · 5:15 if strung out · 2 later*, then **Back to the cut — 24 keeps
+  aren't in it yet →** (`data-next-for="cut"`, the button Next may light; it opens the
+  board's Bin, which opens on the keeps not in the cut) — or *Back to the cut →* when the
+  cut has them all, *Make the first cut →* with no cut — then plain *▶ Play the keeps*,
+  *Next round · N* and *Revisit N later* (each only when there is something), and *By
+  clip*. Removed: the four-number grid, *N picks · N decided · N clips*, *you could
+  assemble now — your call*, *since this round started: 0 new picks* when nothing
+  arrived (said only when something did, as "N new moments"), the round ETA, every key
+  letter on the buttons, the C and L keys on the card (the razor and the shuttle on the
+  board; ↵, R and A still work) and the pass's own blue button style.
 - **A refused autoplay is a big ▶ on the pass's picture (INTAKE M16 I16.3).** When the
   browser wants a gesture before it plays, the picture shows a large ▶ that a click (or
   space) answers, instead of the small *the browser wants a key first — press space or

@@ -45,7 +45,6 @@ const MIN_WORD_PX = 14;          // words closer than this become a sentence bar
 const SNAP_PX = 10;              // a dragged edge this close to a tick takes the tick
 const DRAG_PX = 3;               // less movement than this is a click
 const STAMP_MS = 350;            // the stamp lands before the next pick begins
-const SECONDS_PER_PICK = 7;      // the design's "about seven seconds" — for the round ETA
 
 const fmt = (t) => {
   t = Math.max(0, t || 0);
@@ -1865,13 +1864,18 @@ function restartBand() {
 
 /* ------------------------------------------------------------ the closing card */
 
+/* The end of a round: what it came to, in one line, and the way back to the cut — the one
+ * button Next may light (data-next-for="cut", INTAKE M16 C2) — then the quieter ways on.
+ * Nothing here spends, so nothing shows a price. */
 async function closingCard() {
   pause();
   F.mode = 'card';
   F.bin = null;
-  let d;
+  let d, sel;
   try {
-    d = await getJSON(`/api/picks?order=${F.order}`);       // the one re-fetch: at the boundary
+    // the one re-fetch: at the boundary — the picks, and which keeps the cut already has
+    [d, sel] = await Promise.all([getJSON(`/api/picks?order=${F.order}`),
+      getJSON('/api/selects').catch(() => null)]);
   } catch (e) {
     return toast(`could not read the bin: ${e.message}`, 6000);
   }
@@ -1880,56 +1884,46 @@ async function closingCard() {
   if (d.looked) F.looked = d.looked;
   const seen = new Set(F.queue.map((p) => p.id));
   const fresh = undecided(d.picks);
-  const arrivals = fresh.filter((p) => !seen.has(p.id));
-  const worst = Math.max(0, ...F.queue.map((p) => p.rank || 0));
-  const outrank = arrivals.filter((p) => (p.rank || 0) < worst).length;
+  const arrivals = fresh.filter((p) => !seen.has(p.id)).length;
   const laters = d.picks.filter((p) => p.released && p.verdict === 'later').length;
-  const decided = F.queue.filter((p) => p.verdict).length;
-  const clips = new Set(F.queue.map((p) => p.clip)).size;
   const s = d.summary;
-  F.card = { picks: d.picks, remaining: fresh.length, laters };
-  paintHud();
+  const cut = hasCut();
+  // the keeps the cut does not have yet — the board's Bin opens on exactly these (C10)
+  const notIn = cut && sel ? (sel.selects || []).filter((k) => !k.missing && !(k.used_in || []).length).length : 0;
+  F.card = { picks: d.picks, remaining: fresh.length, laters, notIn };
   const nextN = Math.min(F.roundSize, fresh.length);
+  const out = !cut ? 'Make the first cut →'
+    : notIn ? `Back to the cut — ${notIn} keep${notIn === 1 ? ' isn’t' : 's aren’t'} in it yet →`
+      : 'Back to the cut →';
   openOverlay('card', `
-    <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:12px">
-      <h2 style="margin:0">Round ${F.round} done</h2>
-      <span class="hint tnum">${F.queue.length} pick${F.queue.length === 1 ? '' : 's'} · ${decided} decided · ${clips} clip${clips === 1 ? '' : 's'}</span>
-      <span class="grow"></span>
-      <span class="lbl">you could assemble now — your call</span>
-    </div>
-    <div class="stats">
-      <div><div class="n good">${s.moments} moment${s.moments === 1 ? '' : 's'}</div><div class="hint small">${s.heroes} hero · ${s.later} later · ${s.rejected} rejected</div></div>
-      <div><div class="n">${fmt(s.strung_out_s)}</div><div class="hint small">if strung out${F.P && F.P.target ? ` · target ${fmt(F.P.target[0])}–${fmt(F.P.target[1])}` : ''}</div></div>
-      <div><div class="n">${s.notes} note${s.notes === 1 ? '' : 's'}</div><div class="hint small">attached to their moments</div></div>
-      <div><div class="n">${d.released.length}</div><div class="hint small">clip${d.released.length === 1 ? '' : 's'} released · ${fresh.length} pick${fresh.length === 1 ? '' : 's'} still undecided</div></div>
-    </div>
-    <div class="hint small" style="margin-bottom:4px"><span style="color:var(--accent)">◆</span> since this round started:
-      <b style="color:var(--text)">${arrivals.length} new pick${arrivals.length === 1 ? '' : 's'}</b>${outrank ? ` — ${outrank} of them outrank things you saw` : ''}</div>
+    <h2>Round ${F.round} done</h2>
+    <div id="cardSum" class="tnum">${s.moments} kept · ${clock(s.strung_out_s || 0)} if strung out${s.later ? ` · ${s.later} later` : ''}</div>
+    ${arrivals ? `<div class="hint small" style="margin-top:4px">${arrivals} new moment${arrivals === 1 ? '' : 's'} since this round started</div>` : ''}
+    <div class="actions" style="margin-top:16px"><button id="cardAssemble" data-next-for="cut">${out}</button></div>
     <div class="actions">
-      <button id="cardPlay" class="primary">▶ Play the bin <span class="key" style="margin-left:6px">↵</span></button>
-      <button id="cardNext" ${nextN ? '' : 'disabled'}>Next round · ${nextN} · ~${clock(nextN * SECONDS_PER_PICK)} <span class="key" style="margin-left:6px">R</span></button>
-      <button id="cardOrder">${F.order === 'rank' ? 'By clip' : 'By rank'} <span class="key" style="margin-left:6px">C</span></button>
-      <button id="cardLater" ${laters ? '' : 'disabled'}>Revisit ${laters} later <span class="key" style="margin-left:6px">L</span></button>
-      <span class="grow"></span>
-      <button id="cardAssemble">${hasCut() ? 'Back to the cut →' : 'Make the first cut →'} <span class="key" style="margin-left:6px">A</span></button>
-    </div>
-    <div class="hint small" style="margin-top:10px"><span class="key">Esc</span> back to the last pick</div>`);
+      <button id="cardPlay">▶ Play the keeps</button>
+      ${nextN ? `<button id="cardNext">Next round · ${nextN}</button>` : ''}
+      ${laters ? `<button id="cardLater">Revisit ${laters} later</button>` : ''}
+      <button id="cardOrder">${F.order === 'rank' ? 'By clip' : 'By rank'}</button>
+    </div>`);
   $('#cardPlay').onclick = playBin;
-  $('#cardNext').onclick = () => nextRound();
+  if (nextN) $('#cardNext').onclick = () => nextRound();
   $('#cardOrder').onclick = switchOrder;
-  $('#cardLater').onclick = () => nextRound({ laters: true });
+  if (laters) $('#cardLater').onclick = () => nextRound({ laters: true });
   $('#cardAssemble').onclick = leaveForTheCut;
+  paintHud();                              // after the card: Next may now point at its button
 }
 
-/* The card's way out (I16.0e): back to the cut on the board, or — with no cut yet — the
- * board with the Ask open, where the first cut is made and priced. It spends nothing,
- * so it shows no price. */
+/* The card's way out (I16.0e, I16.3): back to the cut on the board — its Bin, which opens
+ * on the keeps not in the cut, when there are some — or, with no cut yet, the board with
+ * the Ask open, where the first cut is made and priced. It spends nothing, so it shows
+ * no price. */
 function hasCut() {
   return ((F.P || {}).segments || []).length > 0;
 }
 
 function leaveForTheCut() {
-  location.href = hasCut() ? '/' : '/#tool=ask';
+  location.href = !hasCut() ? '/#tool=ask' : F.card && F.card.notIn ? '/#tool=bin' : '/';
 }
 
 function leaveCard() {
@@ -2033,9 +2027,9 @@ document.addEventListener('keydown', (e) => {
 
   if (F.mode === 'card') {
     if (k === 'Enter') { e.preventDefault(); return playBin(); }
+    // C and L mean the razor and the shuttle on the board: the card's By clip and
+    // Revisit are buttons only (I16.3)
     if (k === 'r') return nextRound();
-    if (k === 'c') return switchOrder();
-    if (k === 'l') return nextRound({ laters: true });
     if (k === 'a') return leaveForTheCut();
     if (k === 'Escape' && F.queue.length) { leaveCard(); return show(F.i, { autoplay: false }); }
     return;

@@ -1058,9 +1058,7 @@ def test_three_verdicts_in_a_row_with_no_enter_land_on_the_closing_card(page, pr
         page.keyboard.press(key)
         stamped(page, word)
     page.wait_for_selector("#overlay[data-kind=card]", timeout=5000)
-    card = page.locator("#overlayBox").inner_text()
-    assert "3 picks · 3 decided · 3 clips" in card
-    assert "1 moment" in card and "1 later · 1 rejected" in card
+    assert page.locator("#cardSum").inner_text() == "1 kept · 0:06 if strung out · 1 later"
     d = edl(project)
     assert len(d["selects"]) == 1 and d["selects"][0]["clip"] == "CLIP_C.MP4"
     assert {v["verdict"] for v in d["floor"]["verdicts"]} == {"reject", "later"}
@@ -1079,16 +1077,24 @@ def test_the_closing_card_appears_after_the_last_pick_and_plays_the_bin(page, pr
     page.wait_for_selector("#overlay[data-kind=card]", timeout=5000)
     card = page.locator("#overlayBox").inner_text()
     assert "Round 1 done" in card
-    assert "3 moments" in card and "if strung out" in card
-    assert "3 picks · 3 decided · 3 clips" in card
-    assert "0 new picks" in card
-    # the way out spends nothing, so it shows no price (I16.0e: it read "Assemble · $0.60")
+    # one line for what the round came to; no grid, no counts of the round, no letters
+    assert page.locator("#cardSum").inner_text() == "3 kept · 0:18 if strung out"
+    for gone in ("picks", "decided", "clips released", "notes", "new moment", "assemble", "hero"):
+        assert gone not in card.lower(), gone
+    assert page.locator("#overlayBox .key, #overlayBox .stats").count() == 0
+    # the way back: the cut has CLIP_A and CLIP_B, so one keep (CLIP_C) is not in it yet;
+    # it spends nothing, so no price (I16.0e: it read "Assemble · $0.60"); it is the
+    # button Next may light (C2), and it is not blue by itself
     out = page.locator("#cardAssemble")
-    assert out.inner_text().startswith("Back to the cut →"), out.inner_text()
-    assert "$" not in out.inner_text() and "priced" not in (out.get_attribute("class") or "")
+    assert out.inner_text() == "Back to the cut — 1 keep isn’t in it yet →", out.inner_text()
+    assert out.get_attribute("data-next-for") == "cut"
     assert "$" not in card
+    assert page.locator("#overlayBox .primary").count() == 0
     assert "enough" not in card.lower(), "the card reports, it never judges"
-    assert page.locator("#cardNext").is_disabled(), "nothing left for a next round"
+    assert page.locator("#cardNext").count() == 0, "nothing left for a next round: no button"
+    assert page.locator("#cardLater").count() == 0, "nothing later: no button"
+    assert page.locator("#cardPlay").inner_text() == "▶ Play the keeps"
+    assert page.locator("#cardOrder").inner_text() == "By clip"
     # ↵ plays the bin: every select in order, in the same picture
     page.keyboard.press("Enter")
     page.wait_for_function("floor.state.mode === 'bin'", timeout=5000)
@@ -1099,6 +1105,10 @@ def test_the_closing_card_appears_after_the_last_pick_and_plays_the_bin(page, pr
     assert page.locator("#ctxClip").inner_text() == "CLIP_B"
     page.keyboard.press("Escape")
     page.wait_for_selector("#overlay[data-kind=card]", timeout=5000)
+    # and the way back opens the board's Bin, whose default is "not in the cut" (C10)
+    with page.expect_navigation(timeout=10000):
+        page.locator("#cardAssemble").click()
+    assert page.url.endswith("/#tool=bin"), page.url
 
 
 def test_with_no_cut_the_card_says_make_the_first_cut_and_opens_the_ask(page, live_server):
@@ -1155,7 +1165,12 @@ def test_by_clip_switches_the_order_and_starts_a_new_round(page, project):
     page.evaluate("floor.show(2)")
     page.keyboard.press("Enter")                     # past the last pick: the card
     page.wait_for_selector("#overlay[data-kind=card]", timeout=5000)
+    # C means the razor on the board: on the card By clip is a plain button, no letter
     page.keyboard.press("c")
+    page.wait_for_timeout(200)
+    assert page.evaluate("floor.state.order") == "rank" and page.evaluate("floor.state.round") == 1
+    assert page.locator("#cardNext").inner_text() == "Next round · 3"
+    page.locator("#cardOrder").click()
     page.wait_for_function("floor.state.round === 2", timeout=5000)
     assert page.evaluate("floor.state.order") == "clip"
     d = wait_edl(project, lambda d: d.get("floor", {}).get("position", {}).get("round") == 2)
