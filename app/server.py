@@ -4721,19 +4721,27 @@ def _fx_all() -> list[dict]:
     edl = read_edl()
     accepted = list(edl.get("effects") or [])
     ids = {e.get("id") for e in accepted}
-    proposed = []
+    proposed, revising = [], {}
     for p in sorted(fx_home().glob("fx_*.json")):
         try:
             e = json.loads(p.read_text(encoding="utf-8"))
         except ValueError:
             continue
-        if e.get("id") in ids or e.get("status") not in ("proposed", "removed"):
+        if e.get("id") in ids:
+            # Change on an accepted effect (a revise) leaves the revision in the fx dir
+            # under the same id, the accepted copy in the EDL: the revision is what
+            # waits on Karl. It was never listed, so the paid-for change could not be
+            # seen, previewed or accepted from the board (INTAKE M16 I16.5).
+            if e.get("status") == "proposed":
+                revising[e["id"]] = e
+            continue
+        if e.get("status") not in ("proposed", "removed"):
             continue
         proposed.append(e)
     # accepted first, then proposals, then what was removed (kept for Restore)
     proposed.sort(key=lambda e: e.get("status") == "removed")
     segments = edl.get("segments") or []
-    return [_fx_urls(e, segments) for e in accepted + proposed]
+    return [_fx_urls(revising.get(e.get("id"), e), segments) for e in accepted + proposed]
 
 
 def _fx_get(fx_id: str) -> dict:
@@ -4744,6 +4752,16 @@ def _fx_get(fx_id: str) -> dict:
     if e is None:
         raise HTTPException(404, f"no effect {fx_id}")
     return e
+
+
+def _fx_current(fx_id: str) -> dict:
+    """The version on the board: a revision of an accepted effect waiting on Karl (its
+    file in the fx dir, proposed) before the accepted copy in the EDL — what Change, a
+    nudge and the free check work on."""
+    e = fx.load(fx_home(), fx_id)
+    if e is not None and e.get("status") == "proposed":
+        return e
+    return _fx_get(fx_id)
 
 
 def _fx_put(e: dict) -> None:
@@ -4860,7 +4878,7 @@ def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict 
 def _fx_revise_job(job: str, fx_id: str, note: str) -> None:
     entry = FX[job]
     try:
-        e = _fx_get(fx_id)
+        e = _fx_current(fx_id)
         segments = _fx_segments()
         clips, _ = _ask_clips()
         entry.note("revising the effect")
@@ -4978,7 +4996,7 @@ def _fx_verify_job(job: str, fx_id: str) -> None:
         _fx_verify_wait(entry, job, fx_id)
         slot = True
         try:
-            e = _fx_get(fx_id)
+            e = _fx_current(fx_id)
         except HTTPException:                       # discarded while it waited
             entry.finish("done", detail="the effect is gone")
             return
@@ -5016,7 +5034,7 @@ def _fx_verify_job(job: str, fx_id: str) -> None:
         # The effect may have changed while its proof rendered (a nudge, a revise, an
         # Accept that applied its edits): this checklist describes the old one, and the
         # change has queued its own check — writing this back would also undo the change.
-        fresh = _fx_get(fx_id)
+        fresh = _fx_current(fx_id)
         if {k: fresh.get(k) for k in FX_SPEC_CHECKED} != {k: e.get(k) for k in FX_SPEC_CHECKED}:
             entry["result"] = {"id": fx_id, "ok": None}
             entry.finish("done", detail="the effect changed meanwhile — checked again")
@@ -5229,7 +5247,12 @@ async def api_fx_discard(request: Request) -> JSONResponse:
     e = fx.load(fx_home(), fx_id)
     if e is None:
         raise HTTPException(404, f"no proposal {fx_id}")
-    if e.get("status") == "accepted" or any(x.get("id") == fx_id for x in read_edl().get("effects") or []):
+    current = next((x for x in read_edl().get("effects") or [] if x.get("id") == fx_id), None)
+    if current is not None and e.get("status") == "proposed":
+        fx.save(fx_home(), current)                 # a revision dropped: the accepted one stays
+        _fx_sound(current)
+        return JSONResponse({"ok": True})
+    if e.get("status") == "accepted" or current is not None:
         raise HTTPException(400, "that effect is accepted — remove it instead")
     # a proposal, or a removed effect: gone for good, files and all
     (fx_home() / f"{fx_id}.json").unlink(missing_ok=True)
@@ -5262,7 +5285,7 @@ async def api_fx_update(fx_id: str, request: Request) -> JSONResponse:
     like everything else; the checklist is cleared because it no longer describes
     this effect."""
     body = await request.json()
-    e = _fx_get(fx_id)
+    e = _fx_current(fx_id)
     merged = dict(e)
     for k in ("events", "overlay", "sound", "name", "note"):
         if k in body:

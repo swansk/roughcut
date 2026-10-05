@@ -491,3 +491,33 @@ def test_accepting_an_edit_only_proposal_changes_the_cut_once(stubbed, client, p
     assert not edl.get("effects")
     assert client.get("/api/fx").json()["effects"] == []
     assert json.loads((server.fx_home() / "fx_slow0001.json").read_text())["status"] == "applied"
+
+
+def test_a_change_to_an_accepted_effect_waits_as_a_proposal_and_discard_keeps_the_old(stubbed, client, project):
+    """Change (a revise) on an accepted effect left the revision in the fx dir under the
+    same id while /api/fx listed only the EDL's accepted copy: the paid-for change could
+    not be seen, previewed or accepted from the board. The revision is listed in its
+    place, checked by itself (the revision, not the accepted copy), nudged as itself;
+    Accept keeps the old for Revert, Discard drops the revision and the accepted copy
+    stays as it was."""
+    shot = _seed(stubbed, client)
+    fx_id = _wait(client, client.post("/api/fx/design", json={"shot": shot, "note": "hit markers"}).json()["job"])["result"]["id"]
+    assert client.post("/api/fx/accept", json={"id": fx_id}).status_code == 200
+    _wait(client, client.post("/api/fx/revise", json={"id": fx_id, "note": "make them red"}).json()["job"])
+    lst = client.get("/api/fx").json()["effects"]
+    assert [(e["id"], e["status"]) for e in lst] == [(fx_id, "proposed")]
+    e = _wait_verify(client, fx_id)
+    assert {s["color"] for s in e["overlay"]["shapes"]} == {"#ff0000"} and e["verify"]["ok"] is True
+    r = client.put(f"/api/fx/{fx_id}", json={"events": [{"t": 2.0, "x": 0.4, "y": 0.6}]})
+    assert r.status_code == 200 and r.json()["status"] == "proposed"
+    edl = json.loads(project["edl"].read_text(encoding="utf-8"))
+    assert [ev["t"] for ev in edl["effects"][0]["events"]] == [1.5, 2.4]   # the accepted copy untouched
+    assert {s.get("color", "#ffffff") for s in edl["effects"][0]["overlay"]["shapes"]} == {"#ffffff"}
+    # discard: the revision goes, the accepted copy is listed again as it was
+    assert client.post("/api/fx/discard", json={"id": fx_id}).status_code == 200
+    lst = client.get("/api/fx").json()["effects"]
+    assert [(e["id"], e["status"]) for e in lst] == [(fx_id, "accepted")]
+    assert [ev["t"] for ev in lst[0]["events"]] == [1.5, 2.4]
+    assert json.loads(project["edl"].read_text(encoding="utf-8"))["effects"][0]["id"] == fx_id
+    # an accepted effect with no revision is still removed, not discarded
+    assert client.post("/api/fx/discard", json={"id": fx_id}).status_code == 400
