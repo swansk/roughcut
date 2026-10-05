@@ -521,16 +521,21 @@ def test_next_lands_on_the_waiting_effect_not_the_anchored_shot(page, live_serve
     place on the board, and from another screen through the hash."""
     page.set_viewport_size({"width": 1280, "height": 640})
     sid2 = open_fx(page, 1)
-    page.locator("#fxNote").fill("a title as we drop in")
-    page.locator("#fxDesign").click()
-    page.wait_for_selector("#fx .fxcard", timeout=20000)
-    first = effects(page)[-1]
-    page.locator(f"#fx .fxcard[data-id='{first['id']}'] button[data-act=accept]").click()
-    wait_effect(page, first["id"], "e => e.status === 'accepted'")
-    page.wait_for_function("document.querySelector('#fx .fxchip').textContent === 'accepted'")
+    # two accepted effects ahead of the proposal: its card starts below the dock's fold,
+    # as the slow motion's did on Killington, so the landing has to scroll to it
+    for n, note in enumerate(("a title as we drop in", "a red vignette as I land"), 1):
+        page.locator("#fxNote").fill(note)
+        page.locator("#fxDesign").click()
+        page.wait_for_function(f"document.querySelectorAll('#fx .fxcard').length === {n}",
+                               timeout=20000)
+        made = next(e for e in effects(page) if e["status"] == "proposed")
+        page.locator(f"#fx .fxcard[data-id='{made['id']}'] button[data-act=accept]").click()
+        wait_effect(page, made["id"], "e => e.status === 'accepted'")
+        page.wait_for_function(
+            f"[...document.querySelectorAll('#fx .fxchip')].filter(c => c.textContent === 'accepted').length === {n}")
     page.locator("#fxNote").fill("hit markers where my skis hit the rocks")
     page.locator("#fxDesign").click()
-    page.wait_for_function("document.querySelectorAll('#fx .fxcard').length === 2", timeout=20000)
+    page.wait_for_function("document.querySelectorAll('#fx .fxcard').length === 3", timeout=20000)
     waiting = next(e for e in effects(page) if e["status"] == "proposed")
     assert waiting["shot"] == sid2
     # the board on shot 1, which has no effects: the badge still says one waits
@@ -565,6 +570,17 @@ def test_next_lands_on_the_waiting_effect_not_the_anchored_shot(page, live_serve
         assert page.evaluate("window.scrollY") == 0          # only the dock scrolled
         assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == "1"
 
+    # the card starts out of the dock's view (opened on its shot, scrolled to the top)
+    page.evaluate(f"tl.select(['{sid2}'])")
+    page.evaluate("dock.open('fx')")
+    page.wait_for_selector(f"#fx .fxcard[data-id='{waiting['id']}']")
+    start = page.evaluate(f"""(() => {{
+        const c = document.querySelector("#fx .fxcard[data-id='{waiting['id']}']").getBoundingClientRect();
+        const t = document.querySelector('#tools').getBoundingClientRect();
+        return {{ct: c.top, tb: t.bottom}}; }})()""")
+    assert start["ct"] > start["tb"] - 40, f"the card must start out of view: {start}"
+    page.evaluate(f"tl.select(['{sid1}'])")
+    page.evaluate("dock.open('bin')")
     # on the board: in place, no reload
     page.evaluate("window.__stay = 1")
     page.locator("#flowNext").click()

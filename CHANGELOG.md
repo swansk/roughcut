@@ -176,6 +176,13 @@ same commit. Releases move entries into a dated version section.
   is WSL's; the header covers the native box first and the laptop's WSL second. A new
   test runs the script with no `claude` reachable (it stops at that check, before any
   sign-in) on a native and a WSL kernel string (it said WSL for both before).
+- **Next's landing test proves the card is scrolled into view (M16 stage 0 review,
+  I16.0a, test strength).** The live bug was a waiting card deep in the dock (shot 17
+  on Killington), but in the landing test the proposal's card was already in view at
+  1280×640, so "the card's head is in view" held with `fx.focus`'s scroll removed. The
+  test now puts two accepted effects ahead of the proposal on its shot, checks the card
+  starts below the dock's fold, and then that Next brings it into view; with the scroll
+  line removed it fails.
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
