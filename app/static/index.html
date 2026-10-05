@@ -315,14 +315,19 @@
   #keysOverlay { position: fixed; inset: 0; z-index: 60; background: rgba(4,4,6,.72);
                  display: flex; align-items: center; justify-content: center; padding: 24px; }
   #keysOverlay[hidden] { display: none; }
-  #keysOverlay .panel { width: 720px; max-width: 100%; max-height: 86vh; overflow: auto;
+  #keysOverlay .panel { width: 900px; max-width: 100%; max-height: 86vh; overflow: auto;
                         margin: 0; background: #12121a; padding: 18px 22px; }
   #keysOverlay .panel h2 { font-size: 14px; color: var(--text); text-transform: none;
                            letter-spacing: 0; display: flex; align-items: baseline; gap: 10px; }
   #keysOverlay .panel h2 .hint { font-weight: 400; }
   #keysOverlay .panel > .hint { margin-top: 10px; }
   #keysOverlay #tlKeys { display: none; }
-  #keyTable { border-collapse: collapse; width: 100%; font-size: 13px; }
+  /* the groups in two columns, each group whole, like the pass's map: in one column the
+     sheet ran 959 px in a 772 px box and cut its last row in half, with nothing to say
+     it scrolled */
+  #keyTable { columns: 2; column-gap: 32px; }
+  #keyTable table { border-collapse: collapse; width: 100%; font-size: 13px;
+                    break-inside: avoid; }
   #keyTable th { text-align: left; color: var(--dim); font-size: 11px; font-weight: 600;
                  text-transform: uppercase; letter-spacing: .08em; padding: 12px 0 4px; }
   #keyTable td { padding: 3px 0; vertical-align: top; color: var(--text); }
@@ -662,7 +667,7 @@
 <div id="keysOverlay" hidden>
   <div class="panel" role="dialog" aria-label="keys">
     <h2>Keys</h2>
-    <table id="keyTable"></table>
+    <div id="keyTable"></div>
     <div class="hint"><kbd>?</kbd> or <kbd>esc</kbd> closes this</div>
   </div>
 </div>

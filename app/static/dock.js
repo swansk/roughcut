@@ -126,12 +126,13 @@
       seen.add(`${k}|${what}`);
       rows.push({ k, what, g: TL_GROUP[k] || 'move' });
     });
+    // a table per group, so a group never splits across the sheet's two columns
     box.innerHTML = GROUPS.map(([g, name]) => {
       const mine = rows.filter((r) => r.g === g);
       if (!mine.length) return '';
-      return `<tr><th colspan="2">${name}</th></tr>` + mine.map((r) =>
+      return `<table><tr><th colspan="2">${name}</th></tr>` + mine.map((r) =>
         `<tr><td class="k">${r.k.split(' ').map((t) => `<kbd>${esc(t)}</kbd>`).join(' ')}</td>`
-        + `<td>${esc(r.what)}</td></tr>`).join('');
+        + `<td>${esc(r.what)}</td></tr>`).join('') + '</table>';
     }).join('');
   }
 

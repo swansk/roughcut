@@ -422,6 +422,13 @@ def test_the_keys_are_an_overlay_on_question_mark(page):
     rows = page.eval_on_selector_all(
         "#keyTable tr:not(:has(th))", "els => els.map(e => e.textContent.replace(/\\s+/g, ' '))")
     assert len(rows) == len(set(rows)), rows
+    # the whole sheet in view: the groups in two columns, none split between them — in
+    # one column it ran 959 px in a 772 px box and cut its last row in half
+    fit = page.evaluate("""() => { const p = document.querySelector('#keysOverlay .panel');
+        const cols = new Set([...document.querySelectorAll('#keyTable table')].map(
+          (t) => Math.round(t.getBoundingClientRect().left)));
+        return {over: p.scrollHeight - p.clientHeight, cols: cols.size}; }""")
+    assert fit["over"] <= 1 and fit["cols"] == 2, fit
     page.keyboard.press("Escape")
     assert not page.locator("#keysOverlay").is_visible()
     assert page.evaluate("segs.length") == 2             # Esc closed the map, nothing else

@@ -97,6 +97,12 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **The board's keys sheet fits on screen (INTAKE M16 review, I16.4).** Grouped by task in
+  one column it ran 959 px inside a 772 px box: "THE BIN" sat over a half-drawn row at
+  the bottom edge, and nothing said the box scrolled. The four groups now sit in two
+  columns, each group whole, as the pass's key map does, in a 900 px sheet. The keys
+  test checks the sheet has nothing below its fold and that the groups take two columns
+  (it overflowed by 187 px before).
 - **The board's monitor is centred and a little bigger (INTAKE M16 review, I16.4).** At
   1440×900 the picture was 716 × 403, left-aligned in a 1012 px panel — a ~270 px
   gutter on its right — with ~185 px empty under the film row at rest; today's monitor
