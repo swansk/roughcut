@@ -164,11 +164,22 @@ def test_the_inspector_shows_how_the_shot_s_clip_was_seen(bin_state, browser):
     assert "every 1 s in 1 window of 3 s, 480 px by " in legend
     assert legend.count("model not recorded") == 2        # the coarse sheet and the ASR
     assert "keyframes at motion changes" in legend
-    # the shot's range is marked on the strip, and the button is priced for it
+    # the shot's range is marked on the strip; its priced Look deeper is the top row's
+    # alone (decision 9) — the strip offers one only for seconds dragged across it
     assert pg.is_visible(f"{box} .dv-markband")
+    assert pg.locator(f"{box} .dv-act .dv-look").count() == 0
+    assert pg.locator("#inspector .dv-look:visible").count() == 1
+    assert "drag across the strip" in pg.inner_text(f"{box} .dv-act")
+    bar = pg.locator(f"{box} .dv-bar").bounding_box()
+    y = bar["y"] + bar["height"] / 2
+    pg.mouse.move(bar["x"] + bar["width"] * 0.1, y)
+    pg.mouse.down()
+    pg.mouse.move(bar["x"] + bar["width"] * 0.25, y, steps=4)
+    pg.mouse.move(bar["x"] + bar["width"] * 0.4, y, steps=4)
+    pg.mouse.up()
     pg.wait_for_function(f"""() => /Look deeper · ~\\$\\d/.test(
         (document.querySelector('{box} .dv-act .dv-look') || {{}}).textContent || '')""")
-    assert "this shot · 1.0–3.0 s" in pg.inner_text(f"{box} .dv-act")
+    assert pg.inner_text(f"{box} .dv-act").startswith("chosen · ")
     assert "if it asks for more" in pg.inner_text(f"{box} .dv-act")
 
     # the stored look renders in place: a filmstrip, seen solid, inferred hatched

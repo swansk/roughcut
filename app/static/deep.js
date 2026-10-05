@@ -19,9 +19,11 @@
  * frames that bracket it, the events, the camera, and the frames it asked for.
  *
  *   deep.strip(host, clip, {mark, onSeek, compact})  → controller {head(t), mark(a, b)}
- *   deep.line(host, clip, {range, onSeek, compact})  → {head(t), mark(a, b)}   ONE line
- *       ("every word heard · a frame every 4 s · 3 close looks ▸"); a click opens the
- *       strip under it, in host; every call renders closed (INTAKE M16 decision 9)
+ *   deep.line(host, clip, {range, onSeek, compact, markLook})  → {head(t), mark(a, b)}
+ *       ONE line ("every word heard · a frame every 4 s · 3 close looks ▸"); a click
+ *       opens the strip under it, in host; every call renders closed (INTAKE M16
+ *       decision 9). `markLook: false` — the host already has the range's priced Look
+ *       deeper (the board's shot strip): the opened strip offers one only for a drag.
  *   deep.inspector(host, seg)        the board's inspector, for the selected shot
  *   deep.head(host, t)               the playhead, on a strip or an open line
  *   deep.minis(root)                 the open screen's cards, one request for the bin
@@ -498,7 +500,9 @@
       act.innerHTML = '<span class="dv-info">Look deeper: on the board</span>';
       return;
     }
-    if (!range || range[1] - range[0] < 0.2) {
+    // the shot's own range is priced on the host's row (decision 9: one visible priced
+    // button on the shot) — a second one here, for the same seconds, said it twice
+    if (!range || range[1] - range[0] < 0.2 || (fromMark && ctl.opts.markLook === false)) {
       if (!ctl.opts.compact) {
         act.innerHTML = '<span class="dv-info">drag across the strip to choose seconds to look deeper at</span>';
       }
@@ -682,7 +686,7 @@
       if (more.hidden) {
         more.hidden = false;
         strip(more, clip, { mark: tok.range, markLabel: opts.markLabel || 'this range',
-          onSeek: opts.onSeek, compact: !!opts.compact });
+          onSeek: opts.onSeek, compact: !!opts.compact, markLook: opts.markLook });
         if (tok.t != null) more._deep.head(tok.t);
       } else {
         more.hidden = true;

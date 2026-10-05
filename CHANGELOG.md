@@ -104,6 +104,15 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **One priced Look deeper on the selected shot (INTAKE M16 review, decision 9).** The
+  shot strip's top row carries *Look deeper · ~$x* for the shot; opening its "how the
+  machine saw" line drew the full strip, whose action area priced the very same seconds
+  again ("this shot · 1.0–3.0 s · Look deeper · ~$x") — two priced buttons for one
+  look. The opened strip now offers Look deeper only for seconds dragged across it
+  (I15.4's drag, kept); the shot's own range is the top row's. `deep.line` takes
+  `markLook: false` for a host that prices the range itself; the pass's compact strip
+  is unchanged. The inspector test counts one visible Look deeper and drags for the
+  second (it fails on the old strip).
 - **"What is this film about?" is asked once where the first cut is made (INTAKE M16
   review, I16.4).** Next for the first cut lands on `/#tool=ask` (so does the pass's
   *Make the first cut →*); on an empty board the Ask tool hid its change box but kept its

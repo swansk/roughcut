@@ -652,7 +652,10 @@ function machineLine(box, seg) {
     // deep.rowButton pads the span by 2 s each side for a moment; a shot is its own span
     if (typeof deep.rowButton === 'function') deep.rowButton(host, seg.clip, seg.in + 2, seg.out - 2);
     if (same) { line._line.mark(seg.in, seg.out); return; }
-    if (typeof deep.line === 'function') deep.line(line, seg.clip, { range: [seg.in, seg.out], markLabel: 'this shot' });
+    // the top row's Look deeper is the shot's; the opened strip prices only a drag
+    if (typeof deep.line === 'function') {
+      deep.line(line, seg.clip, { range: [seg.in, seg.out], markLabel: 'this shot', markLook: false });
+    }
     else if (line) {
       // until /deep.js carries its one line: a closed line that opens the full strip
       line.innerHTML = '<button type="button" class="dl-open">how the machine saw this clip ▸</button><div class="deepbox"></div>';
