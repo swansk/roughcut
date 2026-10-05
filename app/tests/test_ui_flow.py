@@ -2092,6 +2092,12 @@ def test_a_proposed_cut_plays_before_it_is_accepted(page):
         assert "CLIP_C" in page.locator("#proposalDiff").inner_text()   # the diff stays
         buttons = page.eval_on_selector_all("#proposal button", "els => els.map(e => e.textContent)")
         assert buttons == ["▶ Play it", "Accept", "Discard"], buttons
+        # the waiting proposal is Next's (C2): its ▶ Play it is the screen's one blue
+        page.evaluate("flowBar.poll()")
+        page.wait_for_function("""() => { const n = flowBar.state() && flowBar.state().next;
+            const b = [...document.querySelectorAll('.is-next')];
+            return !!n && n.stage === 'cut' && b.length === 1 && b[0].id === 'playProposal'; }""",
+                               timeout=10000)
         page.wait_for_function("window.tlLanes && tlLanes.ghost()", timeout=8000)
         page.locator("#playProposal").click()
         page.wait_for_function(

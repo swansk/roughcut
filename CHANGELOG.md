@@ -22,6 +22,11 @@ same commit. Releases move entries into a dated version section.
   pass and cut land, and a listed check that passes fails until it is taken out.
 
 ### Changed
+- **A waiting proposal's ▶ Play it is tested as the board's one blue (INTAKE M16
+  integration, C2).** Lane shell marked *▶ Play it* `data-next-for="cut"` and lane nav
+  placed the blue, each tested alone. The Play it test now checks, merged, that with an
+  Ask proposal waiting Next's stage is the cut and *▶ Play it* — not the chip, not a
+  first-cut button — is the single `.is-next`.
 - **`test_budget.py` holds the merged M16 screens to their measured size (INTAKE M16
   integration, I16.1).** With every stage 1–4 lane merged the three AWAITS entries
   (the board's and the pass's one header row, the board's no-scroll) passed and are
