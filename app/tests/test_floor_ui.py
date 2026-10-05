@@ -130,61 +130,140 @@ def stamped(page, word: str):
 
 def test_the_floor_lists_the_picks_and_starts_on_the_first(page):
     assert page.evaluate("floor.state.queue.length") == 3
-    assert "pick 1 of 3" in page.locator("#hudPos").inner_text()
-    assert "queue frozen" in page.locator("#hudPos").inner_text()
+    assert page.evaluate("floor.state.i") == 0 and page.evaluate("floor.left()") == 3
     assert page.locator("#ctxClip").inner_text() == "CLIP_A"
     # the picture is the pick's proxy, fetched from the preview start, metadata only
     src = page.evaluate("document.querySelector('#pic').getAttribute('src')")
     assert src.startswith("/media/proxy/CLIP_A.mp4#t=0.00"), src
     assert page.evaluate("document.querySelector('#pic').preload") == "metadata"
-    # witnesses as seals with the word, the reason on the caption line
-    seals = page.locator("#seals .seal")
-    assert seals.count() >= 1
-    assert "HEARD" in seals.first.inner_text()
-    assert "hello there" in page.locator("#why").inner_text()
+    # a spoken moment has no line under the picture: its words are on the strip below
+    assert page.locator("#caption").is_hidden()
+    assert page.locator("#ctxKeep").inner_text() == "keeping 0:00.0 – 0:06.0 · 6.0 s"
     # the zoomed strip carries words (they fit at 80 px/s) and snap ticks at line ends,
     # line starts and word starts — where the keys and a dragged handle land
     assert page.locator("#zoomInner .w").count() == 6
     assert page.locator("#zoomInner .snap.end").count() == 3
     assert page.locator("#zoomInner .snap.start").count() == 3
     assert page.locator("#zoomInner .snap.word").count() == 6
-    # the tape marks this clip's picks, the current one as a bracket, with a ruler (every
-    # second on a 6 s clip), a lens, and a legend in the margin that names the marks
+    # one whole-clip strip: its name, this clip's picks (the current one a bracket), a
+    # ruler (every second on a 6 s clip; none under the name, none at the right edge) and
+    # a lens — no legend, no instructions, no fake waveform: the marks' words are in ?
+    assert page.locator("#tapeLbl").inner_text() == "CLIP_A · 0:06"
     assert page.locator("#tapeMarks span.now").count() == 1
-    assert page.locator("#tapeRuler span").count() == 7
-    assert page.locator("#tapeRuler span").first.inner_text() == "0:00"
+    assert page.evaluate("[...document.querySelectorAll('#tapeRuler span')].map((s) => s.textContent)") \
+        == ["", "0:01", "0:02", "0:03", "0:04", "0:05", ""]
     assert page.locator("#tapeLens").is_visible()
-    legend = page.locator("#legend").inner_text()
-    for word in ("this", "picked", "later", "undecided", "lens"):
-        assert word in legend
-    assert "WHOLE CLIP" in page.locator("#tapeLbl").inner_text()
-    assert "CLOSER" in page.locator("#zoom").inner_text()
-    assert page.locator("#tapeTrace path").count() == 0, "no felt witness, no trace"
+    for gone in ("#legend", "#left", "#right", "#seals", "#tapeWave", "#tapeLooked", "#tapeTrace", "#zoomInfo"):
+        assert page.locator(gone).count() == 0, gone
+    assert page.locator("#zoom").inner_text().strip().startswith("hello"), "the words, no label"
     # and it is playing, from the top of the preview
     playing_at(page, 0.3)
 
 
-def test_no_buttons_in_the_flow(page):
-    """The pass is keys, not buttons. The one exception is the header's bin·cut
-    switcher (/switcher.js), which is the way to another bin or cut, not part of the
-    flow — and it must not take a key the pass uses (it takes `O` and `Esc`)."""
-    assert page.locator("#app button:not(#hdBin)").count() == 0
+def test_the_verdicts_are_buttons_at_twice_a_keycaps_size_and_nothing_is_blue(page, project):
+    """The pass is keys. INTAKE M16 decision 5: P / X / U are also buttons, their keycaps
+    twice the size of the others; the keys are unchanged. Besides them only the header's
+    bin·cut switcher (/switcher.js — it takes `O` and `Esc`, no key the pass uses), the
+    header's ? and the `} next line` chip are buttons, and none of them is blue: during
+    an open round nothing on the pass is (C2)."""
+    assert page.locator("#app button:not(#hdBin):not(#keysBtn):not(.vkey):not(#ctxExtend)").count() == 0
     assert page.locator("#hud #hdBin").count() == 1
     assert page.locator("#hdBin .cutname").inner_text() == "edl"   # the fixture's --edl file
+    vk = page.locator("#keys .vkey")
+    assert [vk.nth(k).inner_text().replace("\n", " ").split() for k in range(3)] == [
+        ["P", "pick"], ["X", "reject"], ["U", "later"]]
+    big = page.evaluate("parseFloat(getComputedStyle(document.querySelector('#keys .vkey .key')).fontSize)")
+    small = page.evaluate("parseFloat(getComputedStyle(document.querySelector('#keys .dimkeys .key')).fontSize)")
+    assert big == pytest.approx(2 * small, abs=0.5), (big, small)
+    assert page.locator("#app .primary, #app .is-next").count() == 0
+    # a click is the key: X rejects the pick's own range and the pass moves on
+    playing_at(page, 0.3)
+    page.locator("#keys .vkey[data-v=reject]").click()
+    d = wait_edl(project, lambda d: d.get("floor", {}).get("verdicts"))
+    assert d["floor"]["verdicts"][0]["verdict"] == "reject"
+    page.wait_for_function("document.querySelector('#ctxClip').textContent === 'CLIP_B'", timeout=5000)
+    # the button let go of the focus: space is the picture's again
+    assert page.evaluate("document.activeElement.classList.contains('vkey')") is False
+    playing_at(page, 0.3)
+    page.keyboard.press("Space")
+    page.wait_for_function("document.querySelector('#pic').paused", timeout=3000)
+    page.locator("#keys .vkey[data-v=pick]").click()
+    wait_edl(project, lambda d: len(d.get("selects", [])) == 1)
 
 
-def test_the_key_line_shows_six_things_and_the_map_has_the_rest(page):
-    """I2.7 move 4: P X U · space · [ ] { } · V · ? on the line; everything else behind ?."""
+def test_the_picture_takes_about_half_the_window_and_nothing_scrolls(page):
+    """I16.3: the frame's size is what the rows under it leave, not a fixed budget."""
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.wait_for_timeout(100)
+    box = page.locator("#frame").bounding_box()
+    assert box["width"] * box["height"] >= 0.45 * 1440 * 900, box
+    assert abs(box["width"] / box["height"] - 16 / 9) < 0.02
+    assert page.evaluate("document.scrollingElement.scrollHeight") <= 900
+    keys = page.locator("#keys").bounding_box()
+    assert keys["y"] + keys["height"] <= 900, "the key line is in view"
+
+
+def test_one_header_row_and_no_count_of_the_round(page):
+    """INTAKE M16 C1 / I16.3: one header row — the bin · cut switcher, Next, and ? on the
+    right — no taller than 50 px at 1440×900. The round's position, the frozen queue and
+    the bin's tally are gone from it: how many are left is Next's to say, and the page
+    tells the header that count as it changes."""
+    page.set_viewport_size({"width": 1440, "height": 900})
+    hud = page.locator("#hud")
+    assert hud.bounding_box()["height"] <= 50
+    kids = page.evaluate("[...document.querySelector('#hud').children].map((e) => e.id || e.className)")
+    assert kids == ["hdBin", "flow", "grow", "keysBtn"], kids
+    text = hud.inner_text()
+    for gone in ("THE PASS", "round", "queue frozen", "moments", "if strung out", "hero"):
+        assert gone not in text, gone
+    assert page.locator("#flowRow").count() == 0
+    # ? in the header opens the map, as the key does
+    page.locator("#keysBtn").click()
+    page.wait_for_selector("#overlay[data-kind=keymap]")
+    page.keyboard.press("Escape")
+    # the count Next reads: this round's undecided picks, announced on each verdict
+    page.evaluate("""() => { window.__left = [];
+        document.addEventListener('roughcut:pass', (e) => window.__left.push(e.detail.left)); }""")
+    playing_at(page, 0.3)
+    page.keyboard.press("x")
+    page.wait_for_function("window.__left.includes(2)", timeout=5000)
+    assert page.evaluate("floor.left()") == 2
+
+
+def test_the_key_line_shows_the_verdicts_and_four_dim_keys_and_the_map_has_the_rest(page):
+    """I2.7 move 4, made quieter by I16.3: P X U · space · V · E · ? on the line;
+    everything else — the sentence keys too — behind ?."""
     keys = page.locator("#keys")
-    assert keys.locator(".key").count() == 10
+    assert keys.locator(".key").count() == 7
     line = keys.inner_text()
-    for word in ("shuttle", "hero", "undo", "frame", "evidence", "more"):
+    for word in ("shuttle", "hero", "undo", "frame", "evidence", "more", "sentence",
+                 "cut board", "hold", "microphone"):
         assert word not in line, word
+    assert " ".join(line.split()).endswith("space play · V note · E why? · ? keys")
     page.keyboard.press("?")
     page.wait_for_selector("#overlay[data-kind=keymap]")
     full = page.locator("#overlayBox").inner_text()
     for word in ("shuttle", "hero", "undo", "frame step", "evidence", "drag"):
         assert word in full, word
+
+
+def test_a_refused_autoplay_shows_a_big_play_on_the_picture(page):
+    """I16.3: when the browser wants a gesture before it plays, the picture says so with
+    a big ▶, not a line of key instructions; a click on it plays."""
+    page.evaluate("""() => {
+        window.__play = HTMLMediaElement.prototype.play;
+        HTMLMediaElement.prototype.play = function () {
+            return Promise.reject(new DOMException('no gesture', 'NotAllowedError'));
+        };
+        floor.show(1);
+    }""")
+    page.wait_for_selector("#playBig:visible", timeout=5000)
+    assert page.locator("#screenMsg").is_hidden()
+    assert "press" not in page.locator("#frame").inner_text()
+    page.evaluate("() => { HTMLMediaElement.prototype.play = window.__play; }")
+    page.locator("#playBig").click()
+    page.wait_for_function("!document.querySelector('#pic').paused", timeout=5000)
+    page.wait_for_selector("#playBig", state="hidden", timeout=5000)
 
 
 # --------------------------------------------------------------- verdicts
@@ -204,10 +283,9 @@ def test_P_keeps_the_preview_snapped_to_the_sentence_and_advances(page, project)
     there" — so the snap has something to do."""
     preview_to(page, 1.2)
     assert page.evaluate("floor.keepRange().snapped") == [0.0, 2.45]
-    # the margin says what will be kept before the key is pressed, and where it came from
-    assert page.locator("#ctxKeep").inner_text().startswith("0:00.0–0:02.5")
-    assert "the preview 0:00.0–0:01.2, snapped out" in page.locator("#ctxSnap").inner_text()
-    assert "watched" not in page.locator("#left").inner_text()
+    # beside the band, once: what will be kept before the key is pressed
+    assert page.locator("#ctxKeep").inner_text() == "keeping 0:00.0 – 0:02.5 · 2.5 s"
+    assert "watched" not in page.locator("#keepRow").inner_text()
     page.keyboard.press("p")
     d = wait_edl(project, lambda d: len(d.get("selects", [])) == 1)
     s = d["selects"][0]
@@ -221,9 +299,9 @@ def test_P_keeps_the_preview_snapped_to_the_sentence_and_advances(page, project)
     # a stamp landed, then the next pick began
     page.wait_for_function("document.querySelector('#ctxClip').textContent === 'CLIP_B'",
                            timeout=5000)
-    assert "pick 2 of 3" in page.locator("#hudPos").inner_text()
-    assert "1 moment" in page.locator("#hudBin").inner_text()
-    assert "0:02.5" in page.locator("#hudBin").inner_text()     # if strung out
+    assert page.evaluate("floor.state.i") == 1 and page.evaluate("floor.left()") == 2
+    assert page.evaluate("floor.state.summary.moments") == 1
+    assert page.evaluate("floor.state.summary.strung_out_s") == 2.45
 
 
 def test_X_rejects_the_picks_own_range_and_1_marks_a_hero(page, project):
@@ -241,15 +319,18 @@ def test_X_rejects_the_picks_own_range_and_1_marks_a_hero(page, project):
     d = wait_edl(project, lambda d: len(d.get("selects", [])) == 1)
     assert d["selects"][0]["hero"] is True and d["selects"][0]["clip"] == "CLIP_B.MP4"
     stamped(page, "HERO")
-    assert "1 hero" in page.locator("#hudBin").inner_text()
+    assert page.evaluate("floor.state.summary.heroes") == 1
 
 
 def test_the_verdict_carries_the_typed_note(page, project):
+    assert page.locator("#noteRow").is_hidden(), "no note, no empty slot"
     page.keyboard.press("n")
     page.wait_for_selector("#noteEdit:visible")
+    assert page.locator("#noteRow").is_visible(), "the slot shows while a note is typed"
     page.keyboard.type("hold on his face after")
     page.keyboard.press("Enter")
     assert "hold on his face after" in page.locator("#noteText").inner_text()
+    assert page.locator("#noteRow").is_visible()
     # a note on an undecided pick is not a verdict: nothing reached the EDL yet
     assert "floor" not in edl(project) or not edl(project)["floor"].get("verdicts")
     playing_at(page, 0.6)
@@ -267,10 +348,12 @@ def test_trim_keys_snap_to_sentences_and_arrows_step_frames_at_the_edge(page, pr
     # } extends the out-point to the next line's end: 2.45 -> 4.45 ("how are you")
     page.keyboard.press("}")
     assert page.evaluate("floor.keepRange().snapped[1]") == 4.45
-    assert "extend to the next line" in page.locator("#ctxExtend").inner_text()
-    assert "goodbye" in page.locator("#ctxExtend").inner_text()
-    page.keyboard.press("}")                                    # 6.05 clamps to the clip
+    # the "} next line" chip beside the range is the same as the key
+    ext = page.locator("#ctxExtend")
+    assert ext.inner_text() == "} next line" and "goodbye" in ext.get_attribute("title")
+    ext.click()                                                 # 6.05 clamps to the clip
     assert page.evaluate("floor.keepRange().snapped[1]") == 6.0
+    assert ext.is_hidden(), "no line after the last one"
     page.keyboard.press("{")                                    # back to 4.45
     assert page.evaluate("floor.keepRange().snapped[1]") == 4.45
     # the picture parks on the edge frame
@@ -319,7 +402,7 @@ def test_space_plays_and_pauses_and_at_the_bands_end_watches_on_without_moving_i
     t = page.evaluate("document.querySelector('#pic').currentTime")
     assert 2.6 <= t < 4.0
     assert page.evaluate("floor.keepRange().snapped") == [0.0, 2.45], "watching is not keeping"
-    assert "watched" not in page.locator("#left").inner_text() + page.locator("#zoomInfo").inner_text()
+    assert "watched" not in page.locator("#keepRow").inner_text()
     page.keyboard.press("p")
     d = wait_edl(project, lambda d: len(d.get("selects", [])) == 1)
     assert d["selects"][0]["end"] == 2.45, "the preview, snapped — not the second line"
@@ -349,7 +432,7 @@ def test_dragging_a_handle_trims_with_a_magnet_and_dragging_the_band_slides_it(p
     # handle, the picture is parked on the edge frame
     lit = page.locator("#zoomInner .snap.lit")
     assert lit.count() == 1 and lit.get_attribute("data-t") == "4.45"
-    assert "sentence end" in page.locator("#zoomHint").inner_text()
+    assert "end of line" in page.locator("#zoomHint").inner_text()
     assert page.evaluate("document.querySelector('#pic').paused")
     assert page.evaluate("document.querySelector('#pic').currentTime") == pytest.approx(4.45, abs=0.1)
     page.mouse.up()
@@ -398,15 +481,14 @@ def test_clicking_a_mark_on_the_tape_jumps_to_that_pick(page, project):
     assert "click to jump" in mark.get_attribute("title")
     mark.click()
     page.wait_for_function("floor.state.i === 3", timeout=5000)
-    assert "pick 4 of 4" in page.locator("#hudPos").inner_text()
-    assert page.locator("#ctxPick").inner_text().startswith("0:04.0 → 0:06.0")
+    assert page.evaluate("floor.current().start") == 4
     assert page.locator("#tapeMarks span.now").count() == 1
     playing_at(page, 4.2)                            # it plays from its preview, as ↵ would
     wait_edl(project, lambda d: d.get("floor", {}).get("position", {}).get("index") == 3)
     # and back: now the first pick's mark is the one that jumps
     page.locator("#tapeMarks span.jump").click()
     page.wait_for_function("floor.state.i === 0", timeout=5000)
-    assert page.locator("#ctxPick").inner_text().startswith("0:00.0 → 0:06.0")
+    assert page.evaluate("floor.current().start") == 0
 
 
 # ------------------------------------------------------------ compare takes (I2.4)
@@ -447,8 +529,8 @@ def test_T_compares_the_takes_and_P_keeps_one_and_rejects_the_rest_in_one_undo(p
     any verdict; ← → and ↵ move the pass; P on a take keeps it and rejects the cluster's
     other undecided takes, one POST each, then moves on — and ⌘Z takes all of it back."""
     inject_takes(page)
-    assert "take 1 of 3" in page.locator("#ctxOthers").inner_text()
-    assert "T to compare" in page.locator("#ctxOthers").inner_text()
+    assert "take 1 of 3" in page.locator("#ctxTake").inner_text()
+    assert "T to compare" in page.locator("#ctxTake").inner_text()
     page.keyboard.press("t")
     page.wait_for_selector("#overlay[data-kind=survey]")
     cards = survey_cards(page)
@@ -478,8 +560,8 @@ def test_T_compares_the_takes_and_P_keeps_one_and_rejects_the_rest_in_one_undo(p
     page.keyboard.press("Enter")
     page.wait_for_function("floor.state.i === 3", timeout=5000)
     assert page.locator("#overlay").is_hidden()
-    assert page.locator("#ctxPick").inner_text().startswith("0:04.0 → 0:06.0")
-    assert "take 3 of 3" in page.locator("#ctxOthers").inner_text()
+    assert page.evaluate("floor.current().start") == 4
+    assert "take 3 of 3" in page.locator("#ctxTake").inner_text()
     page.keyboard.press("t")
     page.wait_for_selector("#overlay[data-kind=survey]")
     assert "★" in survey_cards(page).nth(2).inner_text()
@@ -524,7 +606,7 @@ def test_T_compares_the_takes_and_P_keeps_one_and_rejects_the_rest_in_one_undo(p
     page.wait_for_function("floor.state.i === 3", timeout=5000)
     assert page.evaluate("floor.state.queue[0].verdict") is None
     assert page.evaluate("floor.current().verdict") is None
-    assert page.locator("#ctxPick").inner_text().startswith("0:04.0 → 0:06.0")
+    assert page.evaluate("floor.current().start") == 4
     # X in the survey rejects the chosen take only, and the pass stays put
     page.keyboard.press("t")
     page.wait_for_selector("#overlay[data-kind=survey]")
@@ -545,7 +627,7 @@ def test_T_compares_the_takes_and_P_keeps_one_and_rejects_the_rest_in_one_undo(p
     assert "compare takes" in page.locator("#overlayBox").inner_text()
     page.keyboard.press("Escape")
     page.evaluate("floor.show(1, { autoplay: false })")
-    assert "T to compare" not in page.locator("#ctxOthers").inner_text()
+    assert page.locator("#ctxTake").is_hidden()
     page.keyboard.press("t")
     page.wait_for_function("document.querySelector('#toast').textContent.includes('not a take')")
     assert page.locator("#overlay").is_hidden()
@@ -604,7 +686,6 @@ def test_slash_opens_a_filter_and_a_kind_narrows_the_count_and_the_stepping(page
     Esc clears it and the round reads whole again."""
     inject_kinds(page)
     assert page.locator("#filter").is_hidden()
-    assert "match" not in page.locator("#hudPos").inner_text()
     page.keyboard.press("/")
     page.wait_for_selector("#filter:visible")
     assert page.evaluate("document.activeElement.id") == "filterText"
@@ -618,17 +699,15 @@ def test_slash_opens_a_filter_and_a_kind_narrows_the_count_and_the_stepping(page
     assert chip_count(page, "clips", "CLIP_A") == 2 and chip_count(page, "clips", "CLIP_B") == 2
     assert chip_count(page, "clips", "CLIP_C") == 1
     assert "5 in this round" in page.locator("#filterCount").inner_text()
-    assert page.locator("#app button:not(#hdBin)").count() == 0, "chips, not buttons"
+    assert page.locator("#filter button").count() == 0, "chips, not buttons"
     # kind = jump: one match; this pick (A·speech) is outside it, so the pass moves to the
     # jump — the queue is still five long and the position is saved
     chip(page, "kinds", "jump").click()
     page.wait_for_function("floor.state.i === 3", timeout=5000)
-    assert "1 of 5 match" in page.locator("#hudPos").inner_text()
-    assert "queue frozen" in page.locator("#hudPos").inner_text()
     assert "1 of 5 match" in page.locator("#filterCount").inner_text()
     assert "on" in chip(page, "kinds", "jump").get_attribute("class")
     assert page.evaluate("floor.state.queue.length") == 5
-    assert page.locator("#ctxPick").inner_text().startswith("0:04.0 → 0:06.0")
+    assert page.evaluate("floor.current().start") == 4
     assert page.locator("#tapeMarks span").count() == 2
     assert page.locator("#tapeMarks span.now").count() == 1
     assert len(dimmed(page)) == 1, "A's speech mark dims; this pick's bracket does not"
@@ -636,7 +715,7 @@ def test_slash_opens_a_filter_and_a_kind_narrows_the_count_and_the_stepping(page
     wait_edl(project, lambda d: d.get("floor", {}).get("position", {}).get("index") == 3)
     # + fall (chips of one group OR): two match; ↵ steps to the fall and no further, ⌫ back
     chip(page, "kinds", "fall").click()
-    page.wait_for_function("document.querySelector('#hudPos').textContent.includes('2 of 5 match')")
+    page.wait_for_function("document.querySelector('#filterCount').textContent.includes('2 of 5 match')")
     assert page.evaluate("floor.state.i") == 3, "this pick still matches: the pass stays"
     assert page.evaluate("floor.filterWords()") == "kind jump / fall"
     page.keyboard.press("Enter")
@@ -654,18 +733,17 @@ def test_slash_opens_a_filter_and_a_kind_narrows_the_count_and_the_stepping(page
     assert page.evaluate("floor.state.i") == 3
     # a chip clicked again drops its term
     chip(page, "kinds", "fall").click()
-    page.wait_for_function("document.querySelector('#hudPos').textContent.includes('1 of 5 match')")
+    page.wait_for_function("document.querySelector('#filterCount').textContent.includes('1 of 5 match')")
     # Esc: the filter goes, the line closes, nothing dims, the position stays
     page.keyboard.press("Escape")
     page.wait_for_selector("#filter", state="hidden")
     assert page.evaluate("floor.state.filter") is None
-    assert "match" not in page.locator("#hudPos").inner_text()
     assert dimmed(page) == []
     assert page.evaluate("floor.state.i") == 3
     page.keyboard.press("Enter")                               # ↵ steps the whole queue again
     page.wait_for_function("floor.state.i === 4", timeout=5000)
-    # the map has the / and ⇧U rows and ⇧X's second meaning; the six-key line is untouched
-    assert page.locator("#keys .key").count() == 10
+    # the map has the / and ⇧U rows and ⇧X's second meaning; the key line is untouched
+    assert page.locator("#keys .key").count() == 7
     page.keyboard.press("?")
     page.wait_for_selector("#overlay[data-kind=keymap]")
     full = page.locator("#overlayBox").inner_text()
@@ -680,13 +758,13 @@ def test_the_filters_free_text_matches_a_witness_line_and_the_terms_and_together
     page.keyboard.press("/")
     page.wait_for_selector("#filter:visible")
     page.keyboard.type("GOODBYE")                              # a heard line on the three speech picks
-    page.wait_for_function("document.querySelector('#hudPos').textContent.includes('3 of 5 match')")
+    page.wait_for_function("document.querySelector('#filterCount').textContent.includes('3 of 5 match')")
     assert page.evaluate("floor.state.i") == 0, "this pick matches: the pass stays"
     assert dimmed(page) == ["jump-a"], "A's jump, outside the filter, dims on A's tape"
     assert page.evaluate("floor.filterWords()") == '"goodbye"'
     page.keyboard.press("Control+a")
     page.keyboard.type("leaves the lip")                       # a seen witness's text, on the jump only
-    page.wait_for_function("document.querySelector('#hudPos').textContent.includes('1 of 5 match')")
+    page.wait_for_function("document.querySelector('#filterCount').textContent.includes('1 of 5 match')")
     page.wait_for_function("floor.state.i === 3", timeout=5000)
     assert page.evaluate("document.querySelector('#pic').paused"), "a filter's move parks; it does not play"
     # ↵ in the box hands the keys back to the pass; the filter stays
@@ -698,23 +776,23 @@ def test_the_filters_free_text_matches_a_witness_line_and_the_terms_and_together
     # the state chips: telemetry is the fall alone; claimed only is the jump and the fall;
     # with the text still on, claimed only AND "leaves the lip" is the jump alone
     chip(page, "states", "telemetry").click()
-    page.wait_for_function("document.querySelector('#hudPos').textContent.includes('0 of 5 match')")
+    page.wait_for_function("document.querySelector('#filterCount').textContent.includes('0 of 5 match')")
     assert page.evaluate("floor.state.i") == 3, "nothing matches: the pass stays where it is"
     chip(page, "states", "telemetry").click()
     chip(page, "states", "claimed").click()
-    page.wait_for_function("document.querySelector('#hudPos').textContent.includes('1 of 5 match')")
+    page.wait_for_function("document.querySelector('#filterCount').textContent.includes('1 of 5 match')")
     assert page.evaluate("floor.filterWords()") == 'claimed only · "leaves the lip"'
     # the text dropped: claimed only is two; + clip CLIP_B is the fall alone
     page.locator("#filterText").fill("")
-    page.wait_for_function("document.querySelector('#hudPos').textContent.includes('2 of 5 match')")
+    page.wait_for_function("document.querySelector('#filterCount').textContent.includes('2 of 5 match')")
     chip(page, "clips", "CLIP_B").click()
-    page.wait_for_function("document.querySelector('#hudPos').textContent.includes('1 of 5 match')")
+    page.wait_for_function("document.querySelector('#filterCount').textContent.includes('1 of 5 match')")
     page.wait_for_function("floor.state.i === 4", timeout=5000)
     assert page.evaluate("floor.filterWords()") == "claimed only · CLIP_B"
     # every term dropped: the line stays open, nothing is narrowed, the HUD says no count
     chip(page, "clips", "CLIP_B").click()
     chip(page, "states", "claimed").click()
-    page.wait_for_function("!document.querySelector('#hudPos').textContent.includes('match')")
+    page.wait_for_function("document.querySelector('#filterCount').textContent.includes('nothing chosen')")
     assert page.locator("#filter").is_visible()
     assert "nothing chosen" in page.locator("#filterCount").inner_text()
     page.evaluate("document.querySelector('#filterText').blur()")
@@ -732,7 +810,7 @@ def test_shift_X_with_a_filter_asks_once_then_rejects_the_matching_undecided_pic
     page.keyboard.press("/")
     page.wait_for_selector("#filter:visible")
     chip(page, "kinds", "speech").click()
-    page.wait_for_function("document.querySelector('#hudPos').textContent.includes('3 of 5 match')")
+    page.wait_for_function("document.querySelector('#filterCount').textContent.includes('3 of 5 match')")
     page.keyboard.press("u")                                   # A·speech: later; the pass steps to B·speech
     wait_edl(project, lambda d: d.get("floor", {}).get("verdicts"))
     page.wait_for_function("floor.state.i === 1", timeout=5000)
@@ -782,7 +860,7 @@ def test_shift_X_with_a_filter_asks_once_then_rejects_the_matching_undecided_pic
     page.keyboard.press("/")
     page.wait_for_selector("#filter:visible")
     chip(page, "states", "claimed").click()
-    page.wait_for_function("document.querySelector('#hudPos').textContent.includes('2 of 5 match')")
+    page.wait_for_function("document.querySelector('#filterCount').textContent.includes('2 of 5 match')")
     page.keyboard.press("Shift+U")
     page.wait_for_selector("#hudAsk:visible")
     assert page.locator("#hudAsk").inner_text() == "mark later 2 picks? ⇧U again · Esc"
@@ -887,8 +965,6 @@ def test_the_kept_range_is_a_green_band_on_the_tape_and_the_panel_says_where_it_
     assert page.evaluate("floor.keepRange().snapped") == [0.0, 6.0]
     assert tape_keep(page) == pytest.approx((0.0, 15.0), abs=0.05)              # 0-6 of 40
     assert page.locator("#tapeMarks span.now").count() == 1, "the bracket stays"
-    assert page.locator("#ctxWhere").inner_text() == "0:00 → 0:06 of 0:40 · 0 % in"
-    assert "the clip you keep" in page.locator("#legend").inner_text()
     # the bridge: the lens's edges (0-8 of 40) fan out to the strip's full width, and the
     # playhead's line runs from its place on the tape to the strip's centre
     lens_at(page, 0.0, 20.0)
@@ -917,7 +993,7 @@ def test_the_kept_range_is_a_green_band_on_the_tape_and_the_panel_says_where_it_
     page.mouse.up()
     assert page.evaluate("floor.keepRange().snapped") == [1.2, 4.45]
     assert tape_keep(page) == pytest.approx((3.0, 8.12), abs=0.05)
-    assert page.locator("#ctxWhere").inner_text() == "0:01 → 0:04 of 0:40 · 3 % in"
+    assert page.locator("#ctxKeep").inner_text() == "keeping 0:01.2 – 0:04.5 · 3.3 s"
     # the same green on both strips
     tape_bg = page.evaluate("getComputedStyle(document.querySelector('#tapeKeep')).backgroundColor")
     zoom_bg = page.evaluate("getComputedStyle(document.querySelector('#zoomKeep')).backgroundColor")
@@ -940,12 +1016,12 @@ def test_ctrl_z_restores_the_verdict_with_its_trim_and_note(page, project):
     page.keyboard.press("Control+z")
     wait_edl(project, lambda d: d.get("selects") == [])
     page.wait_for_function("document.querySelector('#ctxClip').textContent === 'CLIP_A'")
-    assert "pick 1 of 3" in page.locator("#hudPos").inner_text()
+    assert page.evaluate("floor.state.i") == 0
     assert page.locator("#ctxKeep").inner_text() == keep_before
     assert page.evaluate("floor.keepRange().snapped[1]") == 4.45
     assert "keep the reply" in page.locator("#noteText").inner_text()
     assert page.evaluate("floor.current().verdict") is None
-    assert "0 moments" in page.locator("#hudBin").inner_text()
+    assert page.evaluate("floor.state.summary.moments") == 0
 
 
 def test_undo_reinstates_the_verdict_that_was_there_before(page, project):
@@ -982,9 +1058,7 @@ def test_three_verdicts_in_a_row_with_no_enter_land_on_the_closing_card(page, pr
         page.keyboard.press(key)
         stamped(page, word)
     page.wait_for_selector("#overlay[data-kind=card]", timeout=5000)
-    card = page.locator("#overlayBox").inner_text()
-    assert "3 picks · 3 decided · 3 clips" in card
-    assert "1 moment" in card and "1 later · 1 rejected" in card
+    assert page.locator("#cardSum").inner_text() == "1 kept · 0:06 if strung out · 1 later"
     d = edl(project)
     assert len(d["selects"]) == 1 and d["selects"][0]["clip"] == "CLIP_C.MP4"
     assert {v["verdict"] for v in d["floor"]["verdicts"]} == {"reject", "later"}
@@ -1003,26 +1077,38 @@ def test_the_closing_card_appears_after_the_last_pick_and_plays_the_bin(page, pr
     page.wait_for_selector("#overlay[data-kind=card]", timeout=5000)
     card = page.locator("#overlayBox").inner_text()
     assert "Round 1 done" in card
-    assert "3 moments" in card and "if strung out" in card
-    assert "3 picks · 3 decided · 3 clips" in card
-    assert "0 new picks" in card
-    # the way out spends nothing, so it shows no price (I16.0e: it read "Assemble · $0.60")
+    # one line for what the round came to; no grid, no counts of the round, no letters
+    assert page.locator("#cardSum").inner_text() == "3 kept · 0:18 if strung out"
+    for gone in ("picks", "decided", "clips released", "notes", "new moment", "assemble", "hero"):
+        assert gone not in card.lower(), gone
+    assert page.locator("#overlayBox .key, #overlayBox .stats").count() == 0
+    # the way back: the cut has CLIP_A and CLIP_B, so one keep (CLIP_C) is not in it yet;
+    # it spends nothing, so no price (I16.0e: it read "Assemble · $0.60"); it is the
+    # button Next may light (C2), and it is not blue by itself
     out = page.locator("#cardAssemble")
-    assert out.inner_text().startswith("Back to the cut →"), out.inner_text()
-    assert "$" not in out.inner_text() and "priced" not in (out.get_attribute("class") or "")
+    assert out.inner_text() == "Back to the cut — 1 keep isn’t in it yet →", out.inner_text()
+    assert out.get_attribute("data-next-for") == "cut"
     assert "$" not in card
+    assert page.locator("#overlayBox .primary").count() == 0
     assert "enough" not in card.lower(), "the card reports, it never judges"
-    assert page.locator("#cardNext").is_disabled(), "nothing left for a next round"
+    assert page.locator("#cardNext").count() == 0, "nothing left for a next round: no button"
+    assert page.locator("#cardLater").count() == 0, "nothing later: no button"
+    assert page.locator("#cardPlay").inner_text() == "▶ Play the keeps"
+    assert page.locator("#cardOrder").inner_text() == "By clip"
     # ↵ plays the bin: every select in order, in the same picture
     page.keyboard.press("Enter")
     page.wait_for_function("floor.state.mode === 'bin'", timeout=5000)
     assert page.locator("#ctxClip").inner_text() == "CLIP_A"
-    assert "playing the bin · 1 of 3" in page.locator("#ctxOthers").inner_text()
+    assert page.locator("#ctxKeep").inner_text() == "playing the keeps · 1 of 3 · Esc stops"
     playing_at(page, 0.3)
     page.wait_for_function("floor.state.bin && floor.state.bin.k === 1", timeout=10000)
     assert page.locator("#ctxClip").inner_text() == "CLIP_B"
     page.keyboard.press("Escape")
     page.wait_for_selector("#overlay[data-kind=card]", timeout=5000)
+    # and the way back opens the board's Bin, whose default is "not in the cut" (C10)
+    with page.expect_navigation(timeout=10000):
+        page.locator("#cardAssemble").click()
+    assert page.url.endswith("/#tool=bin"), page.url
 
 
 def test_with_no_cut_the_card_says_make_the_first_cut_and_opens_the_ask(page, live_server):
@@ -1070,20 +1156,25 @@ def test_the_position_resumes_after_a_reload(page, project, live_server):
     page.wait_for_function("window.floor && floor.state.queue.length > 0", timeout=15000)
     assert page.evaluate("floor.state.queue.length") == 2, "A is decided and gone"
     assert page.locator("#ctxClip").inner_text() == "CLIP_C"
-    assert "pick 2 of 2" in page.locator("#hudPos").inner_text()
-    assert "1 moment" in page.locator("#hudBin").inner_text()
+    assert page.evaluate("floor.state.i") == 1
+    assert page.evaluate("floor.left()") == 2, "B was skipped, not decided: both are left"
+    assert page.evaluate("floor.state.summary.moments") == 1
 
 
 def test_by_clip_switches_the_order_and_starts_a_new_round(page, project):
     page.evaluate("floor.show(2)")
     page.keyboard.press("Enter")                     # past the last pick: the card
     page.wait_for_selector("#overlay[data-kind=card]", timeout=5000)
+    # C means the razor on the board: on the card By clip is a plain button, no letter
     page.keyboard.press("c")
+    page.wait_for_timeout(200)
+    assert page.evaluate("floor.state.order") == "rank" and page.evaluate("floor.state.round") == 1
+    assert page.locator("#cardNext").inner_text() == "Next round · 3"
+    page.locator("#cardOrder").click()
     page.wait_for_function("floor.state.round === 2", timeout=5000)
     assert page.evaluate("floor.state.order") == "clip"
     d = wait_edl(project, lambda d: d.get("floor", {}).get("position", {}).get("round") == 2)
     assert d["floor"]["position"]["order"] == "clip"
-    assert "round 2" in page.locator("#hudPos").inner_text()
 
 
 # ---------------------------------------------------------- evidence and more
@@ -1092,7 +1183,8 @@ def test_the_evidence_drawer_opens_and_any_verdict_closes_it(page, project):
     page.keyboard.press("e")
     page.wait_for_selector("#overlay[data-kind=evidence]")
     text = page.locator("#overlayBox").inner_text()
-    assert "Evidence" in text and "HEARD" in text and "goodbye" in text
+    assert "Why?" in text and "HEARD" in text and "goodbye" in text
+    assert "rank" not in text and "score" not in text and "{" not in text, "no dump"
     page.keyboard.press("e")
     assert page.locator("#overlay").is_hidden()
     page.keyboard.press("?")
@@ -1108,16 +1200,19 @@ def test_the_evidence_drawer_opens_and_any_verdict_closes_it(page, project):
     assert page.locator("#overlay").is_hidden(), "a verdict closes the drawer"
 
 
-def test_more_opens_the_whole_clip_and_says_what_is_not_built(page):
+def test_the_more_menu_is_gone_and_0_still_opens_the_whole_clip(page):
+    """I16.3: the More menu held two placeholders and an O that duplicated 0."""
     page.keyboard.press(".")
-    page.wait_for_selector("#overlay[data-kind=more]")
-    page.keyboard.press("l")
-    assert page.locator("#toast").inner_text() == "not on the floor yet"
+    page.wait_for_timeout(100)
     assert page.locator("#overlay").is_hidden()
+    page.keyboard.press("?")
+    page.wait_for_selector("#overlay[data-kind=keymap]")
+    full = page.locator("#overlayBox").inner_text()
+    assert "look closer" not in full and "find like this" not in full
+    page.keyboard.press("Escape")
     page.evaluate("floor.current().preview[1] = 1.0; floor.show(0)")
     page.wait_for_function("document.querySelector('#pic').paused", timeout=10000)
-    page.keyboard.press(".")
-    page.keyboard.press("o")
+    page.keyboard.press("0")
     assert page.evaluate("floor.state.whole") is True
     playing_at(page, 1.5)                            # past the preview end, still going
 
@@ -1145,81 +1240,46 @@ def inject_looked(page, looked=LOOKED, frames=(2, 4),
     page.wait_for_function("document.querySelector('#pic').paused")
 
 
-def looked_ticks(page) -> list[tuple[float, str]]:
-    return [tuple(x) for x in page.evaluate(
-        "[...document.querySelectorAll('#tapeLooked span')]"
-        ".map((s) => [parseFloat(s.style.left), s.className])")]
-
-
-def lit_ticks(page) -> list[str]:
-    return page.evaluate("[...document.querySelectorAll('#tapeLooked span.lit')].map((s) => s.dataset.t)")
-
-
-def test_the_tape_shows_what_was_looked_at_and_every_time_is_a_link(page):
+def test_why_shows_what_was_looked_at_and_every_time_is_a_link(page):
     """I7.2, Karl's third report: "indicate how much of the clip was indexed by keyframe …
     the indexed keyframes should be referenced in the why and timestamps should be
-    jumpable". The tape carries a tick per sampled frame, the two a witness cites brighter;
-    the label counts them; WHY and the witness line turn every time into a chip that parks
-    the picture on that frame and lights its tick; the drawer says how many frames sit
-    under this pick's window. A clip never looked at says so; a wire that does not say
-    leaves the tape as it was."""
-    # before anything is injected: the old contract — no ticks, no label, no legend line
-    assert page.locator("#tapeLooked span").count() == 0
-    assert "LOOKED" not in page.locator("#tapeLbl").inner_text()
-    assert page.locator("#legendLooked").is_hidden()
-    assert page.locator("#why .chip").count() == 0
+    jumpable". Since I16.3 that lives behind why? (E), not on the tape: the reason and
+    the witness lines turn every time into a chip that parks the picture on that frame,
+    and the drawer says how many frames sit under this pick's window. A clip never
+    looked at says so."""
     inject_looked(page)
-    # three ticks at 0, 2 and 4 of 6 s; the ones a witness cites are marked
-    assert looked_ticks(page) == [(0.0, ""), (33.33, "cited"), (66.67, "cited")]
-    assert "LOOKED · 3 frames · every 2 s · 1 sheet" in page.locator("#tapeLbl").inner_text()
-    assert page.locator("#legendLooked").is_visible()
-    assert "look pass" in page.locator("#legend").inner_text()
-    # WHY: the two times are chips
-    why_chips = page.locator("#why .chip")
-    assert why_chips.count() == 2
-    assert [why_chips.nth(k).inner_text() for k in range(2)] == ["0:02.0", "0:04.0"]
-    # the witness line: its frames after the text, and how sure the pass was
-    seal = page.locator("#seals .seal", has_text="SEEN")
-    assert seal.count() == 1
-    assert "frames" in seal.inner_text() and "high confidence" in seal.inner_text()
-    frame_chips = seal.locator(".chip")
-    assert [frame_chips.nth(k).get_attribute("data-t") for k in range(frame_chips.count())] == ["2", "2", "4"]
-    assert frame_chips.nth(1).inner_text() == "0:02" and frame_chips.nth(2).inner_text() == "0:04"
-    # a chip clicked: parked on that frame, paused, its tick lit
-    why_chips.nth(1).click()
-    page.wait_for_function("Math.abs(document.querySelector('#pic').currentTime - 4) < 0.1")
-    assert page.evaluate("document.querySelector('#pic').paused")
-    assert lit_ticks(page) == ["4"]
-    assert page.evaluate("floor.state.whole") is False, "4 s is inside the preview"
-    # hovering a chip lights its tick too, and unlights it when the pointer leaves
-    why_chips.nth(0).hover()
-    assert sorted(lit_ticks(page)) == ["2", "4"]
-    page.mouse.move(5, 5)
-    assert lit_ticks(page) == ["4"]
-    # the evidence drawer: the same chips, and how much of this window was looked at —
-    # the frames at 0, 2 and 4 of the three the 2 s interval puts in 0–6
+    assert page.locator("#tapeLooked").count() == 0, "no ticks on the one strip"
     page.keyboard.press("e")
     page.wait_for_selector("#overlay[data-kind=evidence]")
+    # the reason: the two times are chips
+    why_chips = page.locator("#evWhy .chip")
+    assert [why_chips.nth(k).inner_text() for k in range(why_chips.count())] == ["0:02.0", "0:04.0"]
+    # the witness: what the machine saw, its state in words, its frames, how sure it was
+    row = page.locator("#overlayBox .ev", has_text="THE MACHINE SAW")
+    assert row.count() == 1
+    assert 'THE MACHINE SAW "JUMP" · NOT CHECKED' in row.inner_text()
+    assert "frames" in row.inner_text() and "high confidence" in row.inner_text()
+    frame_chips = row.locator(".chip")
+    assert [frame_chips.nth(k).get_attribute("data-t") for k in range(frame_chips.count())] == ["1", "5", "2", "2", "4"]
+    # how much of this window was looked at: the frames at 0, 2 and 4 of the three the 2 s
+    # interval puts in 0–6
     cover = page.locator("#evCover")
     assert cover.inner_text().startswith("this window: 3 of 3 frames looked at · every 2 s")
     assert cover.locator(".chip").count() == 3
-    assert page.locator("#overlayBox .chip").count() >= 3 + 2 + 3   # cover + WHY + the witness's
-    # a chip in the drawer closes it and parks the picture, so the frame can be seen
-    cover.locator(".chip").nth(1).click()
+    # a chip closes the drawer and parks the picture on its frame, so the frame shows
+    why_chips.nth(1).click()
     assert page.locator("#overlay").is_hidden()
-    page.wait_for_function("Math.abs(document.querySelector('#pic').currentTime - 2) < 0.1")
-    assert lit_ticks(page) == ["2"]
+    page.wait_for_function("Math.abs(document.querySelector('#pic').currentTime - 4) < 0.1")
+    assert page.evaluate("document.querySelector('#pic').paused")
+    assert page.evaluate("floor.state.whole") is False, "4 s is inside the preview"
     # a window the grid reaches but no sampled frame does, and one the grid skips: the
     # drawer says nothing is under the claim either way
     assert page.evaluate("floor.coverageLine({ clip: 'CLIP_A.MP4', start: 5.5, end: 6.5 })") \
         == "this window: 0 of 1 frames looked at — nothing under the claim"
     assert page.evaluate("floor.coverageLine({ clip: 'CLIP_A.MP4', start: 2.5, end: 3.5 })").startswith(
         "this window: no frame falls in it")
-    # CLIP_B was never looked at: the tape and the drawer say so
+    # CLIP_B was never looked at: the drawer says so
     page.evaluate("floor.show(1, { autoplay: false })")
-    assert page.locator("#tapeLooked span").count() == 0
-    assert "not looked at yet" in page.locator("#tapeLbl").inner_text()
-    assert page.locator("#legendLooked").is_hidden()
     page.keyboard.press("e")
     page.wait_for_selector("#overlay[data-kind=evidence]")
     assert "this window: not looked at yet" in page.locator("#evCover").inner_text()
@@ -1228,6 +1288,37 @@ def test_the_tape_shows_what_was_looked_at_and_every_time_is_a_link(page):
     page.keyboard.press("?")
     page.wait_for_selector("#overlay[data-kind=keymap]")
     assert "click it to park the picture" in page.locator("#overlayBox").inner_text()
+
+
+def test_a_moment_only_the_machine_saw_says_what_and_whether_anyone_checked(page):
+    """I16.3 and M15 decision 3: for a moment with no heard line, one line under the
+    picture says what the machine saw and, in one word, its state — never the claim as a
+    fact. A spoken moment has no such line (its words are on the strip)."""
+    inject_kinds(page)
+    assert page.locator("#caption").is_hidden()
+    page.evaluate("floor.show(3, { autoplay: false })")              # the jump: claimed only
+    assert page.locator("#caption").is_visible()
+    assert page.locator("#why").inner_text() == "maybe: a skier leaves the lip · not checked"
+    line = lambda w: page.evaluate("(w) => floor.machineLine({ witnesses: w })", w)
+    seen = {"kind": "seen", "text": "a skier leaves the lip", "score": 0.6}
+    assert line([{**seen, "state": "audited"}]) == "a skier leaves the lip · checked"
+    assert line([{**seen, "state": "contradicted"}]) == \
+        "maybe: a skier leaves the lip · a closer look did not see it"
+    # picks.py's own maybe wording is not doubled; a long claim is cut to its first clause
+    assert line([{**seen, "state": "claimed", "demoted": "hedged wording",
+                  "text": "maybe: Skier possibly airborne on slope; image partially obscured · not checked"}]) \
+        == "maybe: Skier possibly airborne on slope · not checked"
+    assert line([{**seen, "state": "audited", "demoted": "no frame"}]).endswith("· not checked")
+    assert line([{"kind": "felt", "text": "6.7 g"}]) == "the camera felt 6.7 g · nothing seen or heard"
+    assert line([{**seen, "state": "claimed"}, {"kind": "heard", "text": "hello"}]) == ""
+    # the machine's view of the clip: one line beside the kept range, closed on each pick
+    page.wait_for_function("document.querySelector('#deepFloor .dv-line').textContent.includes('▸')")
+    page.click("#deepFloor .dv-line")
+    page.wait_for_selector("#deepFloor .dv-more .dv-bar")
+    page.keyboard.press("Enter")                                     # the next pick
+    page.wait_for_function("floor.state.i === 4", timeout=5000)
+    assert page.locator("#deepFloor .dv-more").is_hidden()
+    assert page.locator("#deepFloor .dv-bar").count() == 0
 
 
 # --------------------------------------------- restart from the beginning (I7.3)
@@ -1276,9 +1367,8 @@ def test_0_restarts_the_clip_and_shift_0_restarts_the_band(page):
     page.wait_for_function(
         "document.querySelector('#pic').currentTime < 0.3 && !document.querySelector('#pic').paused",
         timeout=5000)
-    # the hint by the strips and the map say so; the six-key line is untouched
-    assert "restarts the clip" in page.locator("#tape .strip-lbl.right").inner_text()
-    assert page.locator("#keys .key").count() == 10
+    # the map says so; the key line is untouched
+    assert page.locator("#keys .key").count() == 7
     page.keyboard.press("?")
     page.wait_for_selector("#overlay[data-kind=keymap]")
     full = page.locator("#overlayBox").inner_text()
@@ -1370,8 +1460,9 @@ def test_a_blocked_microphone_is_named_and_never_opens_the_editor(page):
     without asking the browser again."""
     mic_page(page, "prompt", "refuse")
     hint = page.locator("#dictHint")
-    assert "V will ask for the microphone the first time" in hint.inner_text()
+    assert hint.inner_text() == "", "nothing is wrong yet: no words, the V key wears the state"
     assert hint.get_attribute("data-mic") == "prompt"
+    assert page.locator("#vKey").get_attribute("data-mic") == "prompt"
     playing_at(page, 0.3)
     page.keyboard.down("v")
     page.wait_for_function(
@@ -1414,7 +1505,8 @@ def test_a_microphone_granted_after_V_was_released_is_kept_and_the_next_hold_rec
     assert page.locator("#noteEdit").is_hidden()
     assert page.evaluate("window.__mic.recs") == 0, "nothing was recorded from a released key"
     assert page.locator("#dictHint").get_attribute("data-mic") == "granted"
-    assert "ducks while you speak" in page.locator("#dictHint").inner_text()
+    assert page.locator("#vKey").get_attribute("data-mic") == "granted"
+    assert page.locator("#dictHint").inner_text() == ""
     # too brief: dropped, said, nothing posted
     hits: list[int] = []
     page.on("request", lambda r: hits.append(r.method) if "/api/dictate" in r.url else None)

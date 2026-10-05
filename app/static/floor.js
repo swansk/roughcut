@@ -20,8 +20,9 @@
  *   3. the queue is frozen for a round of 40; what arrives lands at the round boundary.
  *   4. verdicts are ranges on clip time, so nothing here depends on a pick id surviving.
  *
- * No buttons in the flow: every action is a key, and the only buttons live on the
- * closing card. Nothing here spends a model call.
+ * Every action is a key. The three verdicts are also buttons, at twice a keycap's size
+ * (INTAKE M16 decision 5); the rest of the buttons live on the closing card. Nothing
+ * here spends a model call.
  *
  * The strips take a pointer (I2.7, Karl's first report): the green band on the closer
  * strip is the clip — drag a handle to trim it, its middle to slide it; click either strip
@@ -44,7 +45,6 @@ const MIN_WORD_PX = 14;          // words closer than this become a sentence bar
 const SNAP_PX = 10;              // a dragged edge this close to a tick takes the tick
 const DRAG_PX = 3;               // less movement than this is a click
 const STAMP_MS = 350;            // the stamp lands before the next pick begins
-const SECONDS_PER_PICK = 7;      // the design's "about seven seconds" — for the round ETA
 
 const fmt = (t) => {
   t = Math.max(0, t || 0);
@@ -90,14 +90,14 @@ const F = {
   undo: [],
   gen: 0,                  // play commands; a deferred callback that finds it moved does nothing
   playing: false,
-  whole: false,            // `.` opened the whole clip: no stop at the preview end
+  whole: false,            // the whole clip is open (`0`, a seek): no stop at the preview end
   until: null,             // ⇧0 replays the band: playback stops here instead of the preview end
   shuttle: 0,              // J: negative rate driven by the tick; L: positive playbackRate
   bin: null,               // {list, k} while the closing card plays the bin
   writes: 0,               // completed writes — the tests wait on this
   pending: 0,
   card: null,              // what the closing card learned
-  overlay: null,           // evidence | keymap | more | card
+  overlay: null,           // evidence | keymap | survey | card
   filter: null,            // the filter line's terms while one is on: {kinds, states, clips, text}
   filterOpen: false,       // the filter line is showing (`/`)
   ask: null,               // a batch verdict waiting for its second ⇧X / ⇧U: {kind, n}
@@ -219,15 +219,6 @@ function lookedOf(p) {
   return l === undefined ? undefined : l;
 }
 
-/* The frames this pick's `seen` witnesses cite, as a set of rounded clip seconds. */
-function citedFrames(p) {
-  const s = new Set();
-  (p.witnesses || []).forEach((w) => {
-    if (w.kind === 'seen') (w.frames || []).forEach((t) => { if (Number.isFinite(t)) s.add(r2(t)); });
-  });
-  return s;
-}
-
 const fmtFrame = (t) => (Number.isInteger(t) ? clock(t) : fmt(t));
 
 function chipHtml(t, label) {
@@ -270,27 +261,15 @@ function coverageLine(p) {
     + (iv ? ` · every ${iv} s` : '') + ` · ${frameChips(frames)}`;
 }
 
-/* The lit tick on the tape: the frame a chip is hovered for, and the last one clicked. */
-const lit = { hover: null, hit: null };
-
-function paintLookedLit() {
-  $('#tapeLooked').querySelectorAll('span').forEach((el) => {
-    const t = parseFloat(el.dataset.t);
-    el.classList.toggle('lit', [lit.hover, lit.hit].some((x) => x != null && Math.abs(x - t) < 0.05));
-  });
-}
-
 /* A chip clicked: park the picture on that frame — paused, the strip re-centred, the whole
  * clip open if it lies outside the preview (seek does that) so playback will not stop
- * behind you — and light its tick. From the drawer the drawer closes, so the frame shows. */
+ * behind you. From the drawer the drawer closes, so the frame shows. */
 function goFrame(t) {
   const p = cur();
   if (!p || F.mode !== 'pass' || !Number.isFinite(t)) return;
   if (F.overlay && F.overlay !== 'card') closeOverlay();
   pause();
   seek(t);
-  lit.hit = r2(t);
-  paintLookedLit();
 }
 
 const chipAt = (e) => (e.target && e.target.closest ? e.target.closest('.chip') : null);
@@ -327,11 +306,13 @@ function arm(v, src, at) {
   else v.addEventListener('loadedmetadata', park, { once: true });
 }
 
+/* A play() the browser refused. Wanting a gesture first is not an error: a big ▶ on the
+ * picture, which a click (or space) answers. Anything else is said. */
 function playRefused(err) {
   const gesture = err && err.name === 'NotAllowedError';
   F.playing = false;
-  screenMsg(gesture ? 'the browser wants a key first — press space or L to play'
-    : `the browser refused to play — ${(err && err.name) || 'error'}`, 'warn');
+  if (gesture) { screenMsg(''); $('#playBig').hidden = false; return; }
+  screenMsg(`the browser refused to play — ${(err && err.name) || 'error'}`, 'warn');
 }
 
 /* Play the current item from `at`. Every command bumps `gen`; a deferred callback that
@@ -398,7 +379,7 @@ function park(t) {
 }
 
 /* Where playback stops on its own: the preview end, unless the whole clip was opened
- * (`.` O, `0`, a seek outside the band, or space pressed again at the band's end) or ⇧0
+ * (`0`, a seek outside the band, or space pressed again at the band's end) or ⇧0
  * is replaying the band (its end); in the bin, the select's end. */
 function stopAt() {
   const p = cur();
@@ -431,21 +412,29 @@ function tick(now) {
     }
     paintHead(t);
     paintKeep();
-    if (window.deep) deep.head($('#deepFloor'), t);
+    if (window.deep && F.line) deep.head($('#deepFloor'), t);
   }
   requestAnimationFrame(tick);
 }
 
 /* ------------------------------------------------------------------ paint */
 
+/* How many of this round are still undecided — what Next says on the pass ("3 left",
+ * /flow.js). Nothing on this screen counts the round itself (INTAKE M16 I16.3). */
+function left() {
+  return F.mode === 'card' ? 0 : F.queue.filter((p) => !p.verdict).length;
+}
+
+/* Tell the header what the pass knows and the files do not yet: the round's undecided
+ * count, and that the screen changed (a closing card's button may now be the one Next
+ * points at). /flow.js listens; nothing else should. */
+function announce() {
+  document.dispatchEvent(new CustomEvent('roughcut:pass', {
+    detail: { left: left(), round: F.round, mode: F.mode, queue: F.queue.length },
+  }));
+}
+
 function paintHud() {
-  const n = F.queue.length;
-  const done = F.queue.filter((p) => p.verdict).length;
-  const match = F.filter && !filterIsEmpty(F.filter) ? F.queue.filter(matches).length : null;
-  $('#hudPos').innerHTML = n
-    ? `round ${F.round} · pick <b>${F.i + 1}</b> of ${n}`
-      + (match != null ? ` · <b>${match}</b> of ${n} match` : '') + ' · queue frozen for this round'
-    : `round ${F.round} · nothing to cull`;
   const ask = $('#hudAsk');
   ask.hidden = !F.ask;
   if (F.ask) {
@@ -453,43 +442,25 @@ function paintHud() {
     ask.textContent = `${F.ask.kind === 'reject' ? 'reject' : 'mark later'} ${F.ask.n} pick${F.ask.n === 1 ? '' : 's'}? ${key} again · Esc`;
   }
   paintFilter();
-  $('#hudDone').style.width = n ? `${(100 * done / n).toFixed(1)}%` : '0';
-  $('#hudNow').style.left = n ? `${(100 * done / n).toFixed(1)}%` : '0';
-  $('#hudNow').style.width = n ? `${(100 / n).toFixed(1)}%` : '0';
-  const s = F.summary || {};
-  $('#hudBin').innerHTML = `bin <b class="good">${s.moments || 0} moment${s.moments === 1 ? '' : 's'}</b>`
-    + ` · ${s.heroes || 0} hero · if strung out <b>${fmt(s.strung_out_s || 0)}</b>`
-    + (s.later ? ` · ${s.later} later` : '');
+  announce();
 }
 
+/* The clip strip's name, the kept range said once beside the band, a take's compare. */
 function paintContext() {
   const p = cur();
   if (!p) return;
-  const c = clipOf(p);
-  const dur = p.duration || c.duration || 0;
-  $('#legend').hidden = F.mode === 'bin';
+  const dur = p.duration || clipOf(p).duration || 0;
+  $('#ctxClip').textContent = stem(p.clip);
+  $('#ctxClipMeta').textContent = `· ${clock(dur)}`;
   if (F.mode === 'bin') {
-    $('#ctxClip').textContent = stem(p.clip);
-    $('#ctxClipMeta').textContent = `· ${fmt(dur)}`;
-    $('#ctxPick').textContent = `${fmt(p.start)} → ${fmt(p.end)}`;
-    $('#ctxWhere').textContent = `${clock(p.start)} → ${clock(p.end)} of ${clock(dur)} · ${Math.round(100 * p.start / (dur || 1))} % in`;
-    $('#ctxOthers').textContent = `playing the bin · ${F.bin.k + 1} of ${F.bin.list.length} · Esc stops`;
-    $('#ctxKeep').textContent = p.hero ? 'HERO' : 'kept';
-    $('#ctxSnap').textContent = p.why || '';
-    $('#ctxExtend').textContent = '';
-    $('#ctxHint').innerHTML = 'every select in order, from the proxies · <span class="key">Esc</span> back to the card';
+    $('#ctxKeep').textContent = `playing the keeps · ${F.bin.k + 1} of ${F.bin.list.length} · Esc stops`;
+    $('#ctxExtend').hidden = true;
+    $('#ctxTake').hidden = true;
     return;
   }
-  const others = F.picks.filter((q) => q.clip === p.clip && q.id !== p.id).length;
-  $('#ctxClip').textContent = stem(p.clip);
-  $('#ctxClipMeta').textContent = `· ${fmt(dur)}`;
-  $('#ctxPick').textContent = `${fmt(p.start)} → ${fmt(p.end)}`
-    + (p.preview[0] > p.start || p.preview[1] < p.end
-      ? ` · preview ${fmt(p.preview[0])} → ${fmt(p.preview[1])}` : '');
-  $('#ctxOthers').innerHTML = `${others} other pick${others === 1 ? '' : 's'} in this clip`
-    + (p.take ? ` · <b>take ${p.take.n} of ${p.take.of}</b> · <span class="key">T</span> to compare` : '')
-    + ` · <span class="key">.</span> open the clip`;
-  $('#ctxHint').innerHTML = 'the green band is the clip — drag its edges · <span class="key">space</span> plays and pauses · at the band’s end it watches on';
+  const take = $('#ctxTake');
+  take.hidden = !p.take;
+  take.innerHTML = p.take ? `take ${p.take.n} of ${p.take.of} · <span class="key">T</span> to compare` : '';
   paintKeep(true);
 }
 
@@ -502,28 +473,19 @@ function paintKeep(force) {
   const key = `${k.raw}|${k.snapped}|${F.keep.edge}|${F.keep.manualStart}|${F.keep.manualEnd}`;
   if (key === keepKey && !force) return;
   keepKey = key;
-  // The margin says what the band is and where it came from — the preview as offered,
-  // the preview snapped out to a line, or a hand — never what was watched.
-  const manual = F.keep.manualStart != null || F.keep.manualEnd != null;
+  // The kept range, said once, beside the band: what P will keep — never what was watched.
   const [a, b] = k.snapped;
-  $('#ctxKeep').textContent = `${fmt(a)}–${fmt(b)} · ${(b - a).toFixed(1)} s`;
-  const moved = a !== k.raw[0] || b !== k.raw[1];
-  $('#ctxSnap').textContent = manual
-    ? 'trimmed by hand · the green band is the clip'
-    : moved
-      ? `the preview ${fmt(k.raw[0])}–${fmt(k.raw[1])}, snapped out to the sentence (start − ${PAD_HEAD} / end + ${PAD_TAIL})`
-      : 'the preview as offered · the green band is the clip — drag its edges';
-  const nxt = utterances(p).find((u) => u.end + PAD_TAIL > b + 0.01);
-  $('#ctxExtend').innerHTML = nxt
-    ? `<span class="key">}</span> extend to the next line: "${escapeHtml(nxt.text || '')}" at ${fmt(nxt.start)}`
-    : '';
-  $('#zoomInfo').textContent = `keeping ${fmt(a)} → ${fmt(b)} · ${(b - a).toFixed(1)} s`;
-  // the same range on the tape, solid, and in words: where the clip sits in the whole clip
+  $('#ctxKeep').textContent = `keeping ${fmt(a)} – ${fmt(b)} · ${(b - a).toFixed(1)} s`;
+  // `}` as a chip: the next line, when there is one, one click away
+  const nxt = utterances(p).find((u) => Math.min(p.duration || Infinity, u.end + PAD_TAIL) > b + 0.01);
+  const ext = $('#ctxExtend');
+  ext.hidden = !nxt;
+  ext.title = nxt ? `keep the next line too: "${nxt.text || ''}" (})` : '';
+  // the same range on the tape, solid: where the clip sits in the whole clip
   // (Karl, 2026-09-08: "unclear where the subclip is within the whole clip timeline")
   const dur = p.duration || 1;
   $('#tapeKeep').style.left = `${(100 * a / dur).toFixed(2)}%`;
   $('#tapeKeep').style.width = `${(100 * (b - a) / dur).toFixed(2)}%`;
-  $('#ctxWhere').textContent = `${clock(a)} → ${clock(b)} of ${clock(dur)} · ${Math.round(100 * a / dur)} % in`;
   // words inside the keep light up
   $('#zoomInner').querySelectorAll('.w, .sb').forEach((el) => {
     const t0 = parseFloat(el.dataset.t0), t1 = parseFloat(el.dataset.t1);
@@ -531,6 +493,7 @@ function paintKeep(force) {
   });
   $('#handleIn').classList.toggle('active', F.keep.edge === 'in');
   $('#handleOut').classList.toggle('active', F.keep.edge === 'out');
+  if (F.line) F.line.mark(a, b);
   paintHead(pic().currentTime || 0);
 }
 
@@ -541,50 +504,71 @@ function sealClass(w) {
   return { audited: 'aud', contradicted: 'contra' }[w.state] || 'claim';
 }
 
+/* A witness's label in the why? drawer, in plain words — and always its state: what the
+ * machine saw is never said without whether anyone checked it (M15 decision 3). */
 function sealLabel(w) {
-  if (w.kind === 'felt') return 'FELT · NUMBERS ONLY';
+  if (w.kind === 'felt') return 'THE CAMERA FELT';
   if (w.kind === 'heard') return 'HEARD';
   if (w.kind === 'theme') return `THEME · ${String(w.text || '').toUpperCase()}`;
-  const claim = w.event_kind ? `CLAIMED "${String(w.event_kind).toUpperCase()}"` : 'CLAIMED';
-  const state = { audited: 'AUDITED', contradicted: 'CONTRADICTED', claimed: 'CLAIMED' }[w.state] || '';
-  return `SEEN · ${claim}${state && state !== 'CLAIMED' ? ` · ${state}` : ''}`;
+  const kind = w.event_kind ? ` "${String(w.event_kind).toUpperCase()}"` : '';
+  return `THE MACHINE SAW${kind} · ${CHECK_WORD[checkState(w)].toUpperCase()}`;
 }
 
-function paintSeals() {
-  const p = cur();
-  const box = $('#seals');
-  box.innerHTML = '';
-  if (!p) return;
-  const list = (p.witnesses || []).slice();
-  (p.tags || []).forEach((t) => list.push({ kind: 'theme', text: t }));
-  list.forEach((w) => {
-    const d = document.createElement('div');
-    d.className = `seal ${sealClass(w)}`;
-    const when = w.kind === 'theme' ? '' : `${fmt(w.at != null ? w.at : w.start)} `;
-    const text = w.kind === 'theme' ? 'from this pick’s words' : (w.text || '');
-    d.innerHTML = `<span class="s">${escapeHtml(sealLabel(w))}</span>`
-      + `<span>${chips(escapeHtml(when), p)}${chips(escapeHtml(text), p)}${witnessExtra(w)}</span>`;
-    box.appendChild(d);
-  });
-  paintNote();
+const CHECK_WORD = { checked: 'checked', unchecked: 'not checked', disagreed: 'a closer look did not see it' };
+
+function checkState(w) {
+  if (w.state === 'contradicted') return 'disagreed';
+  return w.state === 'audited' && !w.demoted ? 'checked' : 'unchecked';
 }
 
+const MAYBE_HEAD = 'maybe: ', MAYBE_TAIL = ' · not checked';
+
+/* A claim's first clause, at most 80 characters, without picks.py's maybe wording —
+ * the line adds its own state. */
+function shortClaim(text) {
+  let t = String(text || '').trim();
+  if (t.startsWith(MAYBE_HEAD) && t.endsWith(MAYBE_TAIL)) t = t.slice(MAYBE_HEAD.length, -MAYBE_TAIL.length);
+  t = t.split(/(?<=[.;!?])\s+|\s+—\s+/)[0].replace(/[\s.;!?]+$/, '');
+  if (t.length > 80) t = `${t.slice(0, 80).replace(/\s+\S*$/, '')}…`;
+  return t;
+}
+
+/* The line under the picture, for a moment only the machine saw: what it saw and, in one
+ * word, whether anyone checked — never a claim stated as fact (M15 decision 3; Karl: "be
+ * very careful not to over-index"). A moment with a heard line gets none: its words are
+ * on the strip, and saying them twice is what this screen stopped doing. */
+function machineLine(p) {
+  const ws = p.witnesses || [];
+  if (ws.some((w) => w.kind === 'heard')) return '';
+  const seen = ws.filter((w) => w.kind === 'seen');
+  if (seen.length) {
+    const rank = { checked: 2, unchecked: 1, disagreed: 0 };
+    const w = seen.slice().sort((x, y) => rank[checkState(y)] - rank[checkState(x)]
+      || (y.score || 0) - (x.score || 0))[0];
+    const st = checkState(w);
+    return st === 'checked' ? `${shortClaim(w.text)} · checked`
+      : `maybe: ${shortClaim(w.text)} · ${CHECK_WORD[st]}`;
+  }
+  const felt = ws.filter((w) => w.kind === 'felt');
+  if (felt.length) return `the camera felt ${felt.map((w) => w.text).join(', ')} · nothing seen or heard`;
+  return '';
+}
+
+/* The note shows once one is made, or while it is typed; an empty slot is not drawn. */
 function paintNote(meta) {
   const p = cur();
   const text = F.mode === 'pass' ? F.note : (p ? p.note || '' : '');
-  $('#noteSlot').classList.toggle('empty', !text);
-  $('#noteText').textContent = text ? `“${text}”` : 'no note yet';
+  $('#noteRow').hidden = !text && $('#noteEdit').hidden;
+  $('#noteText').textContent = text ? `“${text}”` : '';
   $('#noteMeta').textContent = text ? `· ${meta ? `${meta} · ` : ''}N edit` : '';
 }
 
 function paintCaption() {
   const p = cur();
   if (!p) return;
-  // every m:ss.s in the reason is a chip: click it and the picture parks there (I7.2)
-  $('#why').innerHTML = chips(escapeHtml(p.why || (F.mode === 'bin' ? '' : '(no reason — the witnesses did not agree)')), p);
-  $('#conflict').textContent = p.conflict ? `· ${p.conflict}` : '';
-  $('#rank').innerHTML = F.mode === 'bin' ? ''
-    : `rank ${p.rank} · ${p.kind || ''} · <span class="key">E</span> evidence in full`;
+  const text = F.mode === 'pass' ? machineLine(p) : '';
+  $('#caption').hidden = !text;
+  $('#why').textContent = text;
 }
 
 /* The ruler's step: the smallest that puts no more than a dozen labels on the tape — every
@@ -598,42 +582,17 @@ function paintTape() {
   if (!p) return;
   const dur = p.duration || 1;
   const mine = F.picks.filter((q) => q.clip === p.clip);
-  const felt = mine.flatMap((q) => (q.witnesses || []).filter((w) => w.kind === 'felt'));
-  // What the look pass read (I7.2): a tick per sampled frame under the ruler, the ones a
-  // `seen` witness of this pick cites brighter and taller, and the count in the label. A
-  // clip never looked at says so; a wire that does not say leaves the tape as it was.
-  const looked = $('#tapeLooked');
-  looked.innerHTML = '';
-  const l = lookedOf(p);
-  let lookedLbl = '';
-  if (l === null) lookedLbl = ' · not looked at yet';
-  else if (l) {
-    const frames = (l.frames || []).filter(Number.isFinite);
-    const cited = citedFrames(p);
-    frames.forEach((t) => {
-      const s = document.createElement('span');
-      s.dataset.t = r2(t);
-      s.style.left = `${(100 * t / dur).toFixed(2)}%`;
-      if (cited.has(r2(t))) s.className = 'cited';
-      looked.appendChild(s);
-    });
-    const iv = Number(l.interval_s);
-    lookedLbl = ` · LOOKED · ${frames.length} frame${frames.length === 1 ? '' : 's'}`
-      + (iv ? ` · every ${iv} s` : '')
-      + (l.sheets != null ? ` · ${l.sheets} sheet${l.sheets === 1 ? '' : 's'}` : '');
-  }
-  $('#legendLooked').hidden = !l;
-  paintLookedLit();
-  $('#tapeLbl').textContent = `WHOLE CLIP · ${stem(p.clip).toUpperCase()} · ${fmt(dur)}`
-    + (felt.length ? ' · telemetry' : '') + lookedLbl;
   const ruler = $('#tapeRuler');
   ruler.innerHTML = '';
+  const tapeW = $('#tape').clientWidth || 1;
+  const lblW = $('#tapeLbl').offsetLeft + $('#tapeLbl').offsetWidth + 4;
   const step = rulerStep(dur);
   for (let t = 0; t <= dur + 1e-6; t += step) {
     const x = 100 * t / dur;
     const s = document.createElement('span');
     s.style.left = `${x.toFixed(2)}%`;
-    if (x < 96) s.textContent = clock(t);              // a label at the right edge would spill
+    // a label at the right edge would spill; one under the clip's name would hide
+    if (x < 96 && x * tapeW / 100 > lblW) s.textContent = clock(t);
     ruler.appendChild(s);
   }
   // One mark per pick. A mark in this round's queue jumps there on a click — decided or
@@ -652,29 +611,10 @@ function paintTape() {
     s.style.left = `${(100 * q.start / dur).toFixed(2)}%`;
     s.style.width = `${(100 * (q.end - q.start) / dur).toFixed(2)}%`;
     const state = here ? 'this pick' : q.hero ? 'hero' : q.verdict === 'pick' ? 'picked' : q.verdict || 'undecided';
-    s.title = `${fmt(q.start)}–${fmt(q.end)} · rank ${q.rank} · ${state}${q.why ? `\n${q.why}` : ''}`
+    s.title = `${fmt(q.start)}–${fmt(q.end)} · ${state}${q.why ? `\n${q.why}` : ''}`
       + (here ? '' : inQueue ? '\nclick to jump to it' : '\ndecided in an earlier round — not in this queue');
     marks.appendChild(s);
   });
-  // A telemetry trace only when a `felt` witness exists — numbers, never event names.
-  const svg = $('#tapeTrace');
-  svg.innerHTML = '';
-  if (felt.length) {
-    const vals = felt.map((w) => ({ at: w.at, v: parseFloat(String(w.text)) || 1 }));
-    const vmax = Math.max(...vals.map((x) => x.v), 1e-6);
-    const pts = [[0, 58]];                             // the baseline sits on the wave row
-    vals.sort((a, b) => a.at - b.at).forEach((x) => {
-      const px = 1000 * x.at / dur;
-      pts.push([px - 6, 58], [px, 58 - 30 * x.v / vmax], [px + 6, 58]);
-    });
-    pts.push([1000, 58]);
-    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('d', pts.map((q, k) => `${k ? 'L' : 'M'}${q[0].toFixed(1)} ${q[1].toFixed(1)}`).join(' '));
-    path.setAttribute('stroke', '#4a86b8');
-    path.setAttribute('stroke-width', '1.4');
-    path.setAttribute('fill', 'none');
-    svg.appendChild(path);
-  }
 }
 
 /* The zoomed strip is built once per pick at a fixed scale and slid under a fixed
@@ -726,16 +666,9 @@ function buildZoom() {
       if (title) el.title = title;
       inner.appendChild(el);
     };
-    tick('end', u.end + PAD_TAIL, `sentence end + ${PAD_TAIL}`);
-    tick('start', Math.max(0, u.start - PAD_HEAD), `sentence start − ${PAD_HEAD}`);
+    tick('end', u.end + PAD_TAIL, 'end of line');
+    tick('start', Math.max(0, u.start - PAD_HEAD), 'start of line');
     mine.forEach((w) => tick('word', w.t));
-  });
-  (p.witnesses || []).filter((w) => w.kind === 'felt').forEach((w) => {
-    const f = document.createElement('span');
-    f.className = 'felt';
-    f.textContent = `▼ ${w.text}`;
-    f.style.left = `${(w.at * zoom.pps).toFixed(1)}px`;
-    inner.appendChild(f);
   });
   zoom.built = p.id || p.clip;
   keepKey = '';
@@ -788,7 +721,7 @@ function paintHead(t) {
   // while a handle moves, the time reads out under it, with the tick it took
   if (dragging) hint.textContent = `${fmt(edgeT)}${drag.snap ? ` · ${drag.snap}` : ''}`;
   else hint.textContent = Math.abs(edgeT - raw) > 0.01
-    ? (F.keep.edge === 'in' ? 'snap ◂ sentence start − 0.25' : `sentence end + ${PAD_TAIL} ▸`) : '';
+    ? (F.keep.edge === 'in' ? '◂ start of line' : 'end of line ▸') : '';
 }
 
 function stamp(kind, hero, extra) {
@@ -811,14 +744,16 @@ function clearStamp() {
 
 function paintAll() {
   paintHud();
+  // How the machine saw this clip: one line beside the kept range, closed on every new
+  // item (INTAKE M16 decision 9); a click opens the strip with the band marked.
+  F.line = window.deep && cur() ? deep.line($('#deepFloor'), cur().clip,
+    { range: keepRange().snapped, onSeek: seek, compact: true, markLabel: 'the band' }) : null;
   paintContext();
-  paintSeals();
+  paintNote();
   paintCaption();
   paintTape();
   if (zoom.built !== (cur() && (cur().id || cur().clip))) buildZoom();
   paintKeep(true);
-  // How the machine saw this clip, under the tape, the band marked (INTAKE M15).
-  if (window.deep && cur()) deep.floor($('#deepFloor'), cur().clip, keepRange().snapped, seek);
 }
 
 /* ------------------------------------------------------------- the queue */
@@ -863,7 +798,6 @@ function show(i, { autoplay = true } = {}) {
   F.note = p.note || '';
   F.whole = false;
   F.until = null;
-  lit.hit = null;
   if (p.verdict) stamp(p.verdict, p.hero && p.verdict === 'pick');
   paintAll();
   if (autoplay) play(p.preview[0]); else park(p.preview[0]);
@@ -1065,6 +999,14 @@ function setOut(t) {
   paintKeep(true);
 }
 
+/* `}` — and its chip: the out-point to the next line's end. */
+function extendLine() {
+  const p = cur();
+  if (!p || F.mode !== 'pass') return;
+  const b = keepRange().snapped[1];
+  setOut(after(sentenceEnds(p), b) ?? (p.duration || b));
+}
+
 function stepEdge(dir, byWord) {
   const p = cur();
   if (!p) return;
@@ -1096,8 +1038,8 @@ const clampT = (p, t) => Math.max(0, Math.min(p.duration || t, t));
 /* Where an edge may land by magnet: the same places the keys go. */
 function snapTargets(p, edge) {
   const lines = edge === 'in'
-    ? sentenceStarts(p).map((t) => ({ t, why: `sentence start − ${PAD_HEAD}` }))
-    : sentenceEnds(p).map((t) => ({ t, why: `sentence end + ${PAD_TAIL}` }));
+    ? sentenceStarts(p).map((t) => ({ t, why: 'start of line' }))
+    : sentenceEnds(p).map((t) => ({ t, why: 'end of line' }));
   return lines.concat(words(p).map((w) => ({ t: w.t, why: `"${w.w}"` })));
 }
 
@@ -1235,6 +1177,7 @@ function editNote() {
   const p = cur();
   ta.value = F.mode === 'pass' ? F.note : (p ? p.note || '' : '');
   ta.hidden = false;
+  $('#noteRow').hidden = false;
   $('#noteText').hidden = true;
   $('#noteMeta').hidden = true;
   ta.focus();
@@ -1245,6 +1188,7 @@ function closeNote() {
   $('#noteText').hidden = false;
   $('#noteMeta').hidden = false;
   $('#noteEdit').blur();
+  paintNote();
 }
 
 /* A note on an undecided pick waits for the verdict — /api/floor/note would make it a
@@ -1304,19 +1248,16 @@ function micState() {
   return dict.perm || 'unknown';
 }
 
+/* The V key wears the microphone's state; words appear only when something is wrong. */
 function paintDictHint() {
   const el = $('#dictHint');
   const state = micState();
   el.dataset.mic = state;
-  const key = `<span class="key" data-mic="${state}" title="microphone: ${state}">V</span>`;
-  const n = '<span class="key">N</span> to type';
-  el.innerHTML = state === 'absent'
-    ? `dictation is not installed on the server — ${n} a note`
-    : state === 'denied'
-      ? `microphone blocked for this site — allow it in the address bar, or ${n}`
-      : state === 'prompt'
-        ? `hold ${key} · V will ask for the microphone the first time · ${n}`
-        : `hold ${key} · clip audio ducks while you speak · text lands when you let go · ${n}`;
+  $('#vKey').dataset.mic = state;
+  $('#vKey').title = `hold V to speak a note · microphone: ${state}`;
+  el.textContent = state === 'absent' ? 'dictation is not installed on the server — N to type a note'
+    : state === 'denied' ? 'microphone blocked for this site — allow it in the address bar, or N to type'
+      : '';
 }
 
 /* Ask the browser what it will do when V is held, and keep listening for a change — the
@@ -1855,18 +1796,17 @@ function toggleOverlay(kind, html) {
   openOverlay(kind, html());
 }
 
+/* why? (E): what was heard, what the machine saw and whether anyone checked, how much
+ * of this window was looked at — every time a link that parks the picture (I7.2). */
 function evidenceHtml() {
   const p = cur();
-  // the same chips as WHY and the witness lines (I7.2): every time is a link
   const rows = (p.witnesses || []).map((w) => `<div class="ev">
     <span class="s seal ${sealClass(w)}" style="display:inline-block;padding:2px 8px">${escapeHtml(sealLabel(w))}</span>
-    <div style="margin-top:4px">${chipHtml(w.start, fmt(w.start))}–${chipHtml(w.end, fmt(w.end))}${w.at != null ? ` · at ${chipHtml(w.at, fmt(w.at))}` : ''}
-      ${w.score != null ? ` · score ${Number(w.score).toFixed(2)}` : ''}${w.notable ? ' · notable' : ''}</div>
-    <div>${chips(escapeHtml(w.text || ''), p)}${witnessExtra(w)}</div>
-    <pre>${escapeHtml(JSON.stringify(w, null, 1))}</pre></div>`).join('');
+    <div style="margin-top:4px">${chipHtml(w.start, fmt(w.start))}–${chipHtml(w.end, fmt(w.end))}${w.at != null ? ` · at ${chipHtml(w.at, fmt(w.at))}` : ''}</div>
+    <div>${chips(escapeHtml(w.text || ''), p)}${witnessExtra(w)}</div></div>`).join('');
   const cover = coverageLine(p);
-  return `<h2>Evidence <span class="hint">${escapeHtml(stem(p.clip))} ${fmt(p.start)}–${fmt(p.end)} · rank ${p.rank} · score ${Number(p.score || 0).toFixed(2)}</span></h2>
-    <div class="hint" style="margin-bottom:8px">${chips(escapeHtml(p.why || ''), p)}${p.conflict ? `<div class="bad">${escapeHtml(p.conflict)}</div>` : ''}</div>
+  return `<h2>Why? <span class="hint">${escapeHtml(stem(p.clip))} ${fmt(p.start)}–${fmt(p.end)}</span></h2>
+    <div id="evWhy" class="hint" style="margin-bottom:8px">${chips(escapeHtml(p.why || ''), p)}${p.conflict ? `<div class="bad">${escapeHtml(p.conflict)}</div>` : ''}</div>
     ${cover ? `<div id="evCover" class="hint" style="margin-bottom:8px;font:600 10.5px var(--mono)">${cover}</div>` : ''}
     ${rows || '<div class="hint">no witnesses</div>'}
     <div class="hint small" style="margin-top:10px">any verdict key closes this · <span class="key">E</span> / <span class="key">Esc</span> close</div>`;
@@ -1887,30 +1827,19 @@ function keymapHtml() {
     ['{ }', 'out-point likewise — } extends to the reaction'], ['← →', 'frame step at the active edge (⇧ for a word)'],
     ['↵', 'skip for now — the next pick without a verdict · ⌫ back to the previous, decided or not'],
     ['V', 'hold to speak a note; N edits it'],
-    ['E', 'evidence drawer'], ['.', 'more: open the whole clip · look closer · find like this'],
+    ['E', 'why? — the evidence: what was heard, what the machine saw and whether anyone checked'],
     ['T', 'compare takes — this clip’s other attempts at the same thing, side by side; P keeps one and rejects the rest'],
     ['?', 'this map'],
     ['drag', 'the green band’s edges trim it, its middle slides it · click a strip to seek, drag to scrub · click a mark on the tape to jump to that pick'],
-    ['a time', 'a timestamp in WHY, on a witness or in the evidence drawer is a link — click it to park the picture on that frame; the ticks under the tape’s ruler are every frame the look pass read'],
+    ['the strip', 'the whole clip: green is what you keep, the white box this moment; other moments are marks — green picked, amber later, grey undecided — and the grey lens is the seconds the words below show'],
+    ['a time', 'a timestamp in why? is a link — click it to park the picture on that frame; the line beside the kept range opens how the machine saw the clip'],
   ];
   return `<h2>The keys</h2><div class="keymap">${rows.map(([k, t]) =>
     `<div><span class="key">${escapeHtml(k)}</span><span>${escapeHtml(t)}</span></div>`).join('')}</div>`;
 }
 
-function moreHtml() {
-  return `<h2>More</h2><div class="menu">
-    <div><span class="key">O</span> open the whole clip <span class="hint">play from 0 with the tape</span></div>
-    <div><span class="key">L</span> look closer <span class="hint">a closer look at this window · not on the floor yet</span></div>
-    <div><span class="key">F</span> find like this <span class="hint">the board’s Find, prefilled · not on the floor yet</span></div>
-  </div><div class="hint small" style="margin-top:10px"><span class="key">Esc</span> close</div>`;
-}
-
-function openWhole() {
-  restartClip();
-}
-
 /* `0` / Home (I7.3, Karl: "add a restart from beginning of clip in the pass"): from
- * anywhere on the pass, the whole clip from 0 — the same as `.` O — with no stop at the
+ * anywhere on the pass, the whole clip from 0, with no stop at the
  * preview end behind you. */
 function restartClip() {
   const p = cur();
@@ -1935,13 +1864,18 @@ function restartBand() {
 
 /* ------------------------------------------------------------ the closing card */
 
+/* The end of a round: what it came to, in one line, and the way back to the cut — the one
+ * button Next may light (data-next-for="cut", INTAKE M16 C2) — then the quieter ways on.
+ * Nothing here spends, so nothing shows a price. */
 async function closingCard() {
   pause();
   F.mode = 'card';
   F.bin = null;
-  let d;
+  let d, sel;
   try {
-    d = await getJSON(`/api/picks?order=${F.order}`);       // the one re-fetch: at the boundary
+    // the one re-fetch: at the boundary — the picks, and which keeps the cut already has
+    [d, sel] = await Promise.all([getJSON(`/api/picks?order=${F.order}`),
+      getJSON('/api/selects').catch(() => null)]);
   } catch (e) {
     return toast(`could not read the bin: ${e.message}`, 6000);
   }
@@ -1950,56 +1884,46 @@ async function closingCard() {
   if (d.looked) F.looked = d.looked;
   const seen = new Set(F.queue.map((p) => p.id));
   const fresh = undecided(d.picks);
-  const arrivals = fresh.filter((p) => !seen.has(p.id));
-  const worst = Math.max(0, ...F.queue.map((p) => p.rank || 0));
-  const outrank = arrivals.filter((p) => (p.rank || 0) < worst).length;
+  const arrivals = fresh.filter((p) => !seen.has(p.id)).length;
   const laters = d.picks.filter((p) => p.released && p.verdict === 'later').length;
-  const decided = F.queue.filter((p) => p.verdict).length;
-  const clips = new Set(F.queue.map((p) => p.clip)).size;
   const s = d.summary;
-  F.card = { picks: d.picks, remaining: fresh.length, laters };
-  paintHud();
+  const cut = hasCut();
+  // the keeps the cut does not have yet — the board's Bin opens on exactly these (C10)
+  const notIn = cut && sel ? (sel.selects || []).filter((k) => !k.missing && !(k.used_in || []).length).length : 0;
+  F.card = { picks: d.picks, remaining: fresh.length, laters, notIn };
   const nextN = Math.min(F.roundSize, fresh.length);
+  const out = !cut ? 'Make the first cut →'
+    : notIn ? `Back to the cut — ${notIn} keep${notIn === 1 ? ' isn’t' : 's aren’t'} in it yet →`
+      : 'Back to the cut →';
   openOverlay('card', `
-    <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:12px">
-      <h2 style="margin:0">Round ${F.round} done</h2>
-      <span class="hint tnum">${F.queue.length} pick${F.queue.length === 1 ? '' : 's'} · ${decided} decided · ${clips} clip${clips === 1 ? '' : 's'}</span>
-      <span class="grow"></span>
-      <span class="lbl">you could assemble now — your call</span>
-    </div>
-    <div class="stats">
-      <div><div class="n good">${s.moments} moment${s.moments === 1 ? '' : 's'}</div><div class="hint small">${s.heroes} hero · ${s.later} later · ${s.rejected} rejected</div></div>
-      <div><div class="n">${fmt(s.strung_out_s)}</div><div class="hint small">if strung out${F.P && F.P.target ? ` · target ${fmt(F.P.target[0])}–${fmt(F.P.target[1])}` : ''}</div></div>
-      <div><div class="n">${s.notes} note${s.notes === 1 ? '' : 's'}</div><div class="hint small">attached to their moments</div></div>
-      <div><div class="n">${d.released.length}</div><div class="hint small">clip${d.released.length === 1 ? '' : 's'} released · ${fresh.length} pick${fresh.length === 1 ? '' : 's'} still undecided</div></div>
-    </div>
-    <div class="hint small" style="margin-bottom:4px"><span style="color:var(--accent)">◆</span> since this round started:
-      <b style="color:var(--text)">${arrivals.length} new pick${arrivals.length === 1 ? '' : 's'}</b>${outrank ? ` — ${outrank} of them outrank things you saw` : ''}</div>
+    <h2>Round ${F.round} done</h2>
+    <div id="cardSum" class="tnum">${s.moments} kept · ${clock(s.strung_out_s || 0)} if strung out${s.later ? ` · ${s.later} later` : ''}</div>
+    ${arrivals ? `<div class="hint small" style="margin-top:4px">${arrivals} new moment${arrivals === 1 ? '' : 's'} since this round started</div>` : ''}
+    <div class="actions" style="margin-top:16px"><button id="cardAssemble" data-next-for="cut">${out}</button></div>
     <div class="actions">
-      <button id="cardPlay" class="primary">▶ Play the bin <span class="key" style="margin-left:6px">↵</span></button>
-      <button id="cardNext" ${nextN ? '' : 'disabled'}>Next round · ${nextN} · ~${clock(nextN * SECONDS_PER_PICK)} <span class="key" style="margin-left:6px">R</span></button>
-      <button id="cardOrder">${F.order === 'rank' ? 'By clip' : 'By rank'} <span class="key" style="margin-left:6px">C</span></button>
-      <button id="cardLater" ${laters ? '' : 'disabled'}>Revisit ${laters} later <span class="key" style="margin-left:6px">L</span></button>
-      <span class="grow"></span>
-      <button id="cardAssemble">${hasCut() ? 'Back to the cut →' : 'Make the first cut →'} <span class="key" style="margin-left:6px">A</span></button>
-    </div>
-    <div class="hint small" style="margin-top:10px"><span class="key">Esc</span> back to the last pick</div>`);
+      <button id="cardPlay">▶ Play the keeps</button>
+      ${nextN ? `<button id="cardNext">Next round · ${nextN}</button>` : ''}
+      ${laters ? `<button id="cardLater">Revisit ${laters} later</button>` : ''}
+      <button id="cardOrder">${F.order === 'rank' ? 'By clip' : 'By rank'}</button>
+    </div>`);
   $('#cardPlay').onclick = playBin;
-  $('#cardNext').onclick = () => nextRound();
+  if (nextN) $('#cardNext').onclick = () => nextRound();
   $('#cardOrder').onclick = switchOrder;
-  $('#cardLater').onclick = () => nextRound({ laters: true });
+  if (laters) $('#cardLater').onclick = () => nextRound({ laters: true });
   $('#cardAssemble').onclick = leaveForTheCut;
+  paintHud();                              // after the card: Next may now point at its button
 }
 
-/* The card's way out (I16.0e): back to the cut on the board, or — with no cut yet — the
- * board with the Ask open, where the first cut is made and priced. It spends nothing,
- * so it shows no price. */
+/* The card's way out (I16.0e, I16.3): back to the cut on the board — its Bin, which opens
+ * on the keeps not in the cut, when there are some — or, with no cut yet, the board with
+ * the Ask open, where the first cut is made and priced. It spends nothing, so it shows
+ * no price. */
 function hasCut() {
   return ((F.P || {}).segments || []).length > 0;
 }
 
 function leaveForTheCut() {
-  location.href = hasCut() ? '/' : '/#tool=ask';
+  location.href = !hasCut() ? '/#tool=ask' : F.card && F.card.notIn ? '/#tool=bin' : '/';
 }
 
 function leaveCard() {
@@ -2103,9 +2027,9 @@ document.addEventListener('keydown', (e) => {
 
   if (F.mode === 'card') {
     if (k === 'Enter') { e.preventDefault(); return playBin(); }
+    // C and L mean the razor and the shuttle on the board: the card's By clip and
+    // Revisit are buttons only (I16.3)
     if (k === 'r') return nextRound();
-    if (k === 'c') return switchOrder();
-    if (k === 'l') return nextRound({ laters: true });
     if (k === 'a') return leaveForTheCut();
     if (k === 'Escape' && F.queue.length) { leaveCard(); return show(F.i, { autoplay: false }); }
     return;
@@ -2116,11 +2040,6 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  if (F.overlay === 'more') {
-    if (k === 'o' || k === 'Enter') return openWhole();
-    if (k === 'l' || k === 'f') { closeOverlay(); return toast('not on the floor yet', 2500); }
-    if (k === 'Escape' || k === '.') return closeOverlay();
-  }
   if (F.overlay && (k === 'Escape' || (k === 'e' && F.overlay === 'evidence'))) return closeOverlay();
   // Esc on the pass itself: a pending batch verdict is dropped; else the filter is cleared.
   // (The header's switcher takes Esc first, on capture, and prevents it when it closes.)
@@ -2164,14 +2083,13 @@ document.addEventListener('keydown', (e) => {
     case '[': return setIn(before(sentenceStarts(cur()), keepRange().snapped[0]) ?? 0);
     case ']': return setIn(after(sentenceStarts(cur()), keepRange().snapped[0]) ?? keepRange().snapped[0]);
     case '{': return setOut(before(sentenceEnds(cur()), keepRange().snapped[1]) ?? keepRange().snapped[1]);
-    case '}': return setOut(after(sentenceEnds(cur()), keepRange().snapped[1]) ?? (cur().duration || keepRange().snapped[1]));
+    case '}': return extendLine();
     case 'ArrowLeft': e.preventDefault(); return stepEdge(-1, e.shiftKey);
     case 'ArrowRight': e.preventDefault(); return stepEdge(1, e.shiftKey);
     case 'v': if (!e.repeat) dictStart(); return;
     case 'n': e.preventDefault(); return editNote();
     case 'e': return toggleOverlay('evidence', evidenceHtml);
     case 't': return openSurvey();
-    case '.': return toggleOverlay('more', moreHtml);
     case 'Enter': e.preventDefault(); return advance();
     case 'Backspace': e.preventDefault(); return back();
     default: return undefined;
@@ -2195,7 +2113,7 @@ async function boot() {
       + `${(err && MEDIA_ERR[err.code]) || 'media error'}${err ? ` (code ${err.code})` : ''}`, 'bad');
     F.playing = false;
   });
-  v.addEventListener('playing', () => screenMsg(''));
+  v.addEventListener('playing', () => { screenMsg(''); $('#playBig').hidden = true; });
   v.addEventListener('waiting', () => { if (F.playing) screenMsg('buffering…'); });
   const tape = $('#tape'), zoomEl = $('#zoom');
   tape.addEventListener('pointerdown', tapeDown);
@@ -2210,8 +2128,7 @@ async function boot() {
     if (F.mode === 'card') return;
     if (F.playing && !pic().paused) pause(); else resume();
   });
-  // a timestamp chip anywhere — WHY, a witness, the drawer — parks the picture on its
-  // frame; hovering one lights its tick on the tape (I7.2)
+  // a timestamp chip in the why? drawer parks the picture on its frame (I7.2)
   document.addEventListener('click', (e) => {
     const c = chipAt(e);
     if (!c) return;
@@ -2219,13 +2136,18 @@ async function boot() {
     e.stopPropagation();
     goFrame(parseFloat(c.dataset.t));
   });
-  document.addEventListener('mouseover', (e) => {
-    const c = chipAt(e);
-    if (c) { lit.hover = parseFloat(c.dataset.t); paintLookedLit(); }
-  });
-  document.addEventListener('mouseout', (e) => {
-    if (chipAt(e)) { lit.hover = null; paintLookedLit(); }
-  });
+  // the three verdicts take a click as well as a key (INTAKE M16 decision 5); E and ?
+  // on the dim line do what their keys do; } next line is the } key
+  document.querySelectorAll('#keys .vkey').forEach((b) => b.addEventListener('click', () => {
+    b.blur();                                  // space stays the picture's, not the button's
+    verdict(b.dataset.v);
+  }));
+  document.querySelectorAll('#keys [data-key]').forEach((el) => el.addEventListener('click', () => {
+    if (el.dataset.key === '?') return toggleOverlay('keymap', keymapHtml);
+    if (cur() && F.mode === 'pass') toggleOverlay('evidence', evidenceHtml);
+    return undefined;
+  }));
+  $('#ctxExtend').addEventListener('click', (e) => { e.currentTarget.blur(); extendLine(); });
   const ta = $('#noteEdit');
   ta.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); const t = ta.value; closeNote(); setNote(t); }
@@ -2234,6 +2156,10 @@ async function boot() {
   });
   ta.addEventListener('blur', () => { if (!ta.hidden) { const t = ta.value; closeNote(); setNote(t); } });
   wireFilter();
+  $('#keysBtn').addEventListener('click', (e) => {
+    e.currentTarget.blur();                    // space stays the picture's, not the button's
+    toggleOverlay('keymap', keymapHtml);
+  });
   window.addEventListener('resize', () => { zoom.built = ''; buildZoom(); paintKeep(true); });
   window.addEventListener('pagehide', releaseMic);
   document.addEventListener('visibilitychange', () => { if (document.hidden) releaseMic(); });
@@ -2244,7 +2170,7 @@ async function boot() {
   try {
     [F.P, picks] = await Promise.all([getJSON('/api/project'), getJSON('/api/picks')]);
   } catch (e) {
-    $('#hudPos').textContent = `could not load the bin — ${e.message}`;
+    screenMsg(`could not load the bin — ${e.message}`, 'bad');
     return;
   }
   const pos = picks.position || {};
@@ -2267,8 +2193,8 @@ async function boot() {
 /* What the tests reach for; nothing else should. */
 window.floor = {
   state: F, current: cur, keepRange, show, advance, undo, playBin, seek,
-  dictSend, mic: dict, snapStart, snapEnd, words, utterances, coverageLine, lit,
-  matches, filterWords,
+  dictSend, mic: dict, snapStart, snapEnd, words, utterances, coverageLine,
+  matches, filterWords, left, machineLine,
 };
 
 boot();

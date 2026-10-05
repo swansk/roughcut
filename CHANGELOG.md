@@ -452,6 +452,65 @@ same commit. Releases move entries into a dated version section.
   *friends · skiing · killington · silly · hitting · rocks · skis*. `GET /api/picks`
   passes `story` to `picks.build`; `index_facts` counts the same tags. Names stay in the
   EDL as dictation's vocabulary; the themes endpoints stay.
+- **The pass's closing card is one line and one way back (INTAKE M16 I16.3).** *Round 3
+  done* · *44 kept · 5:15 if strung out · 2 later*, then **Back to the cut — 24 keeps
+  aren't in it yet →** (`data-next-for="cut"`, the button Next may light; it opens the
+  board's Bin, which opens on the keeps not in the cut) — or *Back to the cut →* when the
+  cut has them all, *Make the first cut →* with no cut — then plain *▶ Play the keeps*,
+  *Next round · N* and *Revisit N later* (each only when there is something), and *By
+  clip*. Removed: the four-number grid, *N picks · N decided · N clips*, *you could
+  assemble now — your call*, *since this round started: 0 new picks* when nothing
+  arrived (said only when something did, as "N new moments"), the round ETA, every key
+  letter on the buttons, the C and L keys on the card (the razor and the shuttle on the
+  board; ↵, R and A still work) and the pass's own blue button style.
+- **A refused autoplay is a big ▶ on the pass's picture (INTAKE M16 I16.3).** When the
+  browser wants a gesture before it plays, the picture shows a large ▶ that a click (or
+  space) answers, instead of the small *the browser wants a key first — press space or
+  L to play* on its bottom edge. Any other refusal is still said.
+- **The pass is the picture, one strip and three keys (INTAKE M16 I16.3).** The picture
+  is the largest 16:9 the rows under it leave (a size container replaced the fixed
+  367 px budget that predated the machine strip) — about 60 % of a 1440×900 window,
+  from 26 %. Under it: one whole-clip strip named by the clip (*CLIP_04 · 5:19*, its
+  marks, this moment boxed, the kept range in green), the words around the playhead with
+  the kept part lit and the green band to drag, then the kept range said once beside the
+  band — *keeping 3:06.8 – 3:15.8 · 9.0 s* — with a **} next line** chip (the `}` key),
+  and on the right the machine's one line (`deep.line`, closed on every new moment).
+  For a moment only the machine saw, one line under the picture says what it saw and
+  its state in a word — *maybe: skier airborne · not checked* / *… · checked* / *… · a
+  closer look did not see it* — never the claim as fact; a spoken moment has no line
+  (its words are on the strip). **P / X / U are buttons** at twice a keycap's size
+  (decision 5; the keys are unchanged), then the dim *space play · V note · E why? · ?
+  keys*. Removed: the left column (CLIP, THIS PICK, the *63 % in* line, the ON THE TAPE
+  legend, the looked-frames legend, KEEPING with the snap arithmetic and the *} extend to
+  the next line: "…"* sentence, the green-band hint), the WITNESSES column, the WHY
+  line with *rank 47 · seen*, the tape's instruction label and its *LOOKED · 80 frames
+  · every 4 s · 3 sheets*, the looked-frame ticks, the telemetry trace, the fake
+  waveform, the closer strip's label and its second keeping readout, the felt numbers on
+  the words, *sentence end + 0.45* (now *end of line*), the More menu (two placeholders
+  and an O that duplicated 0), *[ ] { } in / out by sentence*, *← the cut board*, *hold
+  V · V will ask for the microphone the first time · N to type* (words now only when the
+  microphone is blocked or dictation is missing; the V key wears the state) and the
+  empty *YOUR NOTE · no note yet* box (a note shows once made). why? (E) keeps the
+  evidence in plain words — *HEARD*, *THE MACHINE SAW "JUMP" · NOT CHECKED*, *THE CAMERA
+  FELT* — with every time a link and the window's frame coverage, without rank, score
+  or the JSON dump; the strip's legend moved into ?.
+- **The pass has one header row (INTAKE M16 I16.3, C1).** The bin · cut switcher, Next and
+  a real **?** button on the right, ≤ 50 px; the step bar's row of its own under it is
+  gone, and so are "THE PASS", *round 3 · pick 2 of 2 · queue frozen for this round*,
+  the progress bar and *bin 44 moments · 0 hero · if strung out 5:14.8 · 2 later*. How
+  many are left is Next's to say: the page dispatches `roughcut:pass` (`{left, round,
+  mode, queue}`) on every repaint and exposes `floor.left()`, so `/flow.js` can read
+  "3 left" without polling. A filter's *N of M match* stays in the filter line, and the
+  batch verdict's question moved there too.
+- **How the machine saw a clip is one line (INTAKE M16 I16.3, decision 9).** `deep.line(host,
+  clip, {range, onSeek, compact})` writes one line from the clip's sidecars — *every word
+  heard · a frame every 4 s · 3 close looks ▸* — and a click opens the whole coverage
+  strip under it, in the same host (the range marked, the playhead carried); a second
+  click closes it, and every call renders closed, so the next item never inherits an
+  open strip. The pass and the board's shot strip call it; `deep.strip`, `inspector`
+  and `rowButton` are unchanged, and the pass's old hook `deep.floor` is gone. In the compact strip the deep lane's empty text no
+  longer says "drag to choose seconds" (a drag there does nothing) and the pointer to
+  the board is four words, *Look deeper: on the board*.
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
   buttons called the model with no price: the empty board's *Ask for a first cut* and
   *Cut from the bin*, the Ask panel's *Ask* and *Cut from the bin*, a shot's *Ask*, and
