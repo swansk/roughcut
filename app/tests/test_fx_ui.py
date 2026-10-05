@@ -604,6 +604,21 @@ def test_next_lands_on_the_waiting_effect_not_the_anchored_shot(page, live_serve
     assert page.evaluate("location.hash") == "#tool=fx"
 
 
+def test_focus_on_its_own_selects_the_shot_as_the_boards_pick(page):
+    """The seam fix (I16.0a × n): fx.focus selects the effect's shot itself when nobody
+    did, and that is the board's pick like Next's landing — ⌫ must not take it. The
+    landing test cannot see this half: land() has selected the shot before focus runs."""
+    e = design(page, shot=1)
+    sid1, sid2 = shot_ids(page)
+    page.locator(f'#tl .blk[data-id="{sid1}"]').click()   # Karl chose shot 1
+    page.evaluate("player.playing && pauseCut()")
+    assert page.evaluate("tl.state.anchor") == sid1
+    assert page.evaluate(f"fx.focus('{e['id']}')") is True
+    assert page.evaluate("tl.state.anchor") == sid2
+    page.keyboard.press("Backspace")
+    assert shot_ids(page) == [sid1, sid2], "⌫ took the shot focus selected"
+
+
 def test_a_proposal_whose_shot_left_the_cut_neither_counts_nor_holds_next(page):
     """Review of I16.0a: the FX tool has a card only for a shot of the cut, so a proposal
     whose shot was taken out cannot be answered — yet the rail badge counted it and it

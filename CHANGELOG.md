@@ -226,6 +226,12 @@ same commit. Releases move entries into a dated version section.
   first record instead of the most recently opened, both still passed. The entry is now
   written after the board opens, under a second name and newer; the test expects one
   row, that record's name, and `current` true through the link. Both mutations fail.
+- **`fx.focus`'s own selection is tested as the board's pick (M16 stage 0 review,
+  I16.0a × n, test strength).** The seam fix made both Next's landing and `fx.focus`
+  select with `source: 'land'`, but in the landing test `land()` has already selected
+  the shot when `fx.focus` runs, so reverting `fx.focus` alone still passed. A new FX UI
+  test chooses shot 1, calls `fx.focus` on a proposal on shot 2, presses ⌫ and finds
+  the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
