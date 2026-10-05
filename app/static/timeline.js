@@ -124,8 +124,9 @@
  *
  *   — events —
  *   tl.on(event, fn) → off()    `change` {label, kind, ids} · `select` {ids, anchor,
- *                               source: 'click'|'api'|'app'|'land'} · `playhead` {t} · `zoom`
- *                               {zoom}.
+ *                               source: 'click'|'api'|'app'|'land'|'heir'} · `playhead`
+ *                               {t} · `zoom` {zoom}. 'heir' is the shot handed the
+ *                               selection when the selected one left the cut.
  *
  *   — pointer contract for the lanes —
  *   The module handles pointerdown/up on the V1 lane and the ruler. A pointerdown that
@@ -577,7 +578,7 @@
     state.anchor = anchor;
     if (anchor != null) { const i = indexOf(anchor); lastAppSel = i; if (hooks.setSel) hooks.setSel(i); }
     paintSel();
-    emit('select', { ids: [...next], anchor, source: 'api' });
+    emit('select', { ids: [...next], anchor, source: anchorGone ? 'heir' : 'api' });
   }
 
   /* ------------------------------------------------------------ playhead and view */
@@ -770,7 +771,9 @@
       const kept = list.filter((s) => !want.has(s.id));
       list.splice(0, list.length, ...kept);
       const heir = kept[Math.min(first, kept.length - 1)];
-      select(heir ? [heir.id] : [], { source: 'api' });
+      // 'heir': the board hands the selection on — nobody chose it, so ⌫ won't take it
+      // (I16.0 n), whoever called remove (the X key, the inspector's remove)
+      select(heir ? [heir.id] : [], { source: 'heir' });
       return true;
     });
   }

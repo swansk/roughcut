@@ -343,6 +343,27 @@ def test_backspace_never_takes_the_shot_the_board_picked(page):
     assert ids(page) == [a]
 
 
+def test_backspace_never_takes_the_heir_of_the_inspectors_remove(page):
+    """I16.0 (n), review: the heir of a delete is the board's pick whoever deleted. The X
+    key protected it, but the inspector's own remove (and remove-all) handed it on as an
+    ordinary selection, so a ⌫ right after took out a shot nobody chose."""
+    a, b = ids(page)
+    page.locator(f'#tl .blk[data-id="{a}"]').click()
+    page.wait_for_selector('#inspector button[data-act="del"]')
+    page.locator('#inspector button[data-act="del"]').click()
+    page.wait_for_function(f"segs.length === 1 && segs[0].id === '{b}'", timeout=5000)
+    assert page.evaluate("[...tl.state.sel]") == [b], "the heir was handed the selection"
+    for key in ("Backspace", "Delete"):
+        page.keyboard.press(key)
+        assert ids(page) == [b], key
+    page.wait_for_function(
+        "document.querySelector('#toast').textContent.includes('click a shot')", timeout=3000)
+    # once chosen it goes
+    page.locator(f'#tl .blk[data-id="{b}"]').click()
+    page.keyboard.press("Backspace")
+    assert ids(page) == []
+
+
 def test_plain_u_does_not_undo_on_the_board(page):
     """I16.0 (n): U is "later" on the pass and was "undo" on the board. ⌘Z undoes."""
     a, b = ids(page)

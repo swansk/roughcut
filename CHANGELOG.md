@@ -61,6 +61,15 @@ same commit. Releases move entries into a dated version section.
   A new test writes an unanswered proposal, clicks Next on the board itself (in place)
   and again from /open, and checks the proposal opens and the hash drops `ask=` both
   times; it fails with the landing switched off.
+- **⌫ does not take out the shot handed on after the inspector's remove (M16 stage 0
+  review, I16.0n).** I16.0n says ⌫ never takes "the one handed on after a delete", and
+  the X key kept that promise only because `rippleDelete` reset its own flag: `tl.remove`
+  handed the selection on as an ordinary `api` select, which counts as chosen. Removing a
+  shot with the inspector's *remove* (or *remove* on a multi-selection) and pressing ⌫
+  took out the next shot, which nobody had clicked. `tl.remove`, and `pruneSel` when the
+  anchor leaves the cut, now hand on with `source: 'heir'`, and `timeline-keys.js`
+  treats `heir` like the board's own pick. A new test removes shot 1 from the inspector,
+  presses ⌫ and Del, and finds shot 2 still in the cut (it was gone before the fix).
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six

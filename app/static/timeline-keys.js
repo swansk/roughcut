@@ -636,10 +636,12 @@
       const n = $(s);
       if (n) n.addEventListener('pointerdown', settle, true);
     }
-    // whether the selection was chosen: anything but app.js's index being adopted or
-    // Next landing on its target ('land' — flow.js / fx.focus); a click on a block that
-    // is already selected changes nothing, so it emits nothing
-    tl.on('select', (ev) => { chosen = ev.source !== 'app' && ev.source !== 'land'; });
+    // whether the selection was chosen: anything but app.js's index being adopted, Next
+    // landing on its target ('land' — flow.js / fx.focus) or the shot handed on after a
+    // delete ('heir' — tl.remove, whoever removed); a click on a block that is already
+    // selected changes nothing, so it emits nothing
+    const BOARDS = new Set(['app', 'land', 'heir']);
+    tl.on('select', (ev) => { chosen = !BOARDS.has(ev.source); });
     const lane = $('#tl');
     if (lane) {
       lane.addEventListener('click', (e) => {
