@@ -124,6 +124,15 @@ same commit. Releases move entries into a dated version section.
   interval around its frame (4 s, clamped to the clip), and a zero-length range is
   matched as a point inside the other as a safety net. The 0.1 s keep a P left on
   CLIP_04 at 3:20 re-attaches; it is not removed.
+- **A demoted claim reads "maybe: … · not checked", never "— not a claim: …" (INTAKE
+  I16.0d).** A claim the look pass's own rules demoted (hedged wording, no frame, too
+  long for a jump, medium confidence) put its rule into WHY — "Skier possibly airborne …
+  — not a claim: hedged wording — a guess, not a claim (frames 3:20.0)" — on 4 of
+  Killington's 92 moments, and on one of them it outranked a claim that stood. The
+  moments stay (recall: *"You missed some cool jumps"*). WHY is built from claims that
+  stand first; a pick with only a demoted claim says it short and plainly — "maybe:
+  Skier possibly airborne or jumping on slope, framed with trees · not checked" — and its
+  witness line reads the same way. The rule's reason stays on the witness's `demoted`.
 - **The open screen stopped contradicting itself (INTAKE M14).** With the looks paused its
   header said "3 released · 9 queued" while its footer said every clip was released and
   every card wore QUEUED beside a lit `released` flag: two definitions of released —

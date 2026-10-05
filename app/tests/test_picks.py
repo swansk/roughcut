@@ -77,14 +77,52 @@ def test_a_seen_witness_carries_the_frames_it_rests_on_and_the_why_cites_them():
     old = picks.build(clips, [_event(20.0, 24.0, "confirmed", what="airborne")])
     assert old[0]["witnesses"][0]["frames"] == [] and old[0]["why"] == "airborne"
     assert picks.stamp(144.25) == "2:24.2" and picks.stamp(0) == "0:00.0"
-    # a claim the sheet's rules demoted is shown with its reason and lifts nothing
+    # a claim the sheet's rules demoted is shown as a maybe, keeps its reason off the
+    # page, and lifts nothing
     dem = _event(30.0, 30.0, "unseen", what="skier possibly airborne", score=0.1)
     dem.update({"frames": [30.0], "confidence": "low", "notable": False,
                 "demoted": "hedged wording — a guess, not a claim"})
     out = picks.build(clips, [dem])
     w = out[0]["witnesses"][0]
-    assert w["event_kind"] == "" and w["text"].endswith("not a claim: hedged wording — a guess, not a claim")
+    assert w["event_kind"] == "" and w["text"] == "maybe: skier possibly airborne · not checked"
+    assert w["demoted"] == "hedged wording — a guess, not a claim"
     assert out[0]["kind"] == "seen", "no event kind to lift the pick by"
+
+
+def test_a_demoted_claim_never_writes_not_a_claim_into_why_and_the_moment_stays():
+    """I16.0d: WHY read "… — not a claim: hedged wording — a guess, not a claim (frames
+    3:20.0)". The moment stays (recall: Karl, 08-23, "You missed some cool jumps"), worded
+    as a short maybe; a claim that stands writes WHY ahead of any demoted one."""
+    clips = {"CLIP_A.MP4": _clip(candidates=[])}
+
+    def demoted(start, end, what, why, score=0.9):
+        e = _event(start, end, "unseen", kind="", what=what, score=score)
+        e.update({"frames": [start], "notable": False, "demoted": why})
+        return e
+
+    alone = picks.build(clips, [demoted(
+        30.0, 30.0, "Skier possibly airborne or jumping on slope, framed with trees; "
+        "image partially obscured.", "hedged wording — a guess, not a claim")])
+    assert len(alone) == 1, "the moment is still offered"
+    assert alone[0]["why"] == ("maybe: Skier possibly airborne or jumping on slope, "
+                               "framed with trees · not checked")
+    # beside a claim that stands, the standing claim writes WHY — even when the demoted
+    # one scored higher (live: CLIP_01 84–109, "5 consecutive frames … is not a fall")
+    both = picks.build(clips, [
+        _event(20.0, 24.0, "unseen", kind="faces", what="close-ups of faces", score=0.6),
+        demoted(25.0, 27.0, "A skier is down in deep powder; frame 26 shows it",
+                "5 consecutive frames at 1 s is not a fall", score=0.9)])
+    assert len(both) == 1 and both[0]["why"] == "close-ups of faces"
+    # with words, the maybe comes first and the line after it; a long claim is cut short
+    words = {"CLIP_A.MP4": _clip(candidates=[{"t": 31.0, "end": 33.0, "why": "x", "score": 0.8}])}
+    long = picks.build(words, [demoted(
+        30.9, 33.9, "A skier in the mid-distance is down on the snow beside a standing "
+        "skier, skis raised off the snow; the clearest frame is 31.9", "confidence medium")])
+    assert long[0]["why"] == ("maybe: A skier in the mid-distance is down on the snow "
+                              "beside a standing skier · not checked — \"go back feet yeah\"")
+    for p in alone + both + long:
+        shown = [p["why"], p["conflict"]] + [w["text"] for w in p["witnesses"]]
+        assert not any("not a claim" in s for s in shown), shown
 
 
 def test_a_pick_on_one_frame_is_padded_to_the_look_interval_so_a_verdict_can_land():
