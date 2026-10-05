@@ -3100,6 +3100,26 @@ async function boot() {
   tl.on('change', renderInspector);           // a trim changes the header; an undo the why
   tl.on('playhead', () => { if (!player.playing) restSoon(); });
   $('#inspector').addEventListener('click', onInspectorClick);
+  // The Bin's tabs and "more found ▸" work from the first paint: bound after the awaits
+  // below, a click in the first second (the board drawn, the jobs and prices still
+  // loading) did nothing — measured after test_timeline_lanes, which slows the load.
+  const onTab = (e) => {
+    const t = e.target.closest('.tab');
+    if (!t) return;
+    libTab = t.dataset.tab;
+    renderLibrary();
+    // Verdicts happen elsewhere (the pass, another tab): showing the bin re-reads it.
+    if (keepsTab()) refreshBin();
+  };
+  $('#binTabs').onclick = onTab;
+  $('#libTabs').onclick = onTab;
+  // more found ▸: the machine's offers and the evidence chips, folded
+  $('#moreFound').onclick = () => {
+    const more = $('#more');
+    more.hidden = !more.hidden;
+    $('#moreFound').textContent = more.hidden ? 'more found ▸' : 'more found ▾';
+    if (more.hidden && !keepsTab()) { libTab = 'out'; renderLibrary(); }
+  };
   render();
   paintBinLine();
   await refreshVersions();
@@ -3171,23 +3191,6 @@ async function boot() {
       playKeep(row._keep);
     }
   });
-  const onTab = (e) => {
-    const t = e.target.closest('.tab');
-    if (!t) return;
-    libTab = t.dataset.tab;
-    renderLibrary();
-    // Verdicts happen elsewhere (the pass, another tab): showing the bin re-reads it.
-    if (keepsTab()) refreshBin();
-  };
-  $('#binTabs').onclick = onTab;
-  $('#libTabs').onclick = onTab;
-  // more found ▸: the machine's offers and the evidence chips, folded
-  $('#moreFound').onclick = () => {
-    const more = $('#more');
-    more.hidden = !more.hidden;
-    $('#moreFound').textContent = more.hidden ? 'more found ▸' : 'more found ▾';
-    if (more.hidden && !keepsTab()) { libTab = 'out'; renderLibrary(); }
-  };
   $('#auditClaims').onclick = auditClaims;
   $('#musicTrack').onchange = musicChanged;
   $('#duck').onchange = musicChanged;

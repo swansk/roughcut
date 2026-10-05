@@ -95,6 +95,14 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **The Bin's tabs and *more found ▸* answer from the first paint (INTAKE M16
+  integration, I16.4).** Lane cut put *heard* and *seen* under *more found ▸*; the
+  handlers for it and the tabs were bound at the end of the board's start-up, after the
+  versions, the last proposal and the jobs had loaded — so a click in that first second
+  did nothing. `test_timeline_ui::test_shift_click_selects_the_range_and_cmd_click_toggles`
+  failed every time it ran after `test_timeline_lanes` (2 of 2 suite chunks, 1 of 1
+  pair run; the later module's page loads slower): its click opened nothing and the
+  heard tab never showed. They are bound before the first paint now; the pair passes.
 - **Accepting a proposal is one undo entry for the cut and the grade, and its toast
   stops naming the inspector (INTAKE M16 integration, I16.4).** Lane cut put the colour
   block on every undo entry and took the inspector away (the grade is behind a shot's
