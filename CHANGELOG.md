@@ -95,6 +95,17 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **The board's header stays one row while work runs (INTAKE M16 review, C1).** The
+  progress strip was a full-width second row inside the header, one row per job, and a
+  job that finished well lingered 12 s saying "done": a Quick look made the header
+  102 px from the click until 12 s after the film landed, the monitor shrank and the
+  board jumped 55 px when the strip cleared (Killington's renders run for minutes). Each
+  running job is now one compact line in the header's own row, beside Next — "▸ Rendering
+  — preview ▬ 32% · ~10s left" — with what it is on as its hover and its steps under ▸
+  in a panel over the page; a job that finished well leaves at once (its result is on
+  the screen), a failed one stays and says why on its line. `test_budget.py` measures a
+  new board state, two jobs running and one just finished: header 47 px, one row, the
+  finished one gone, 98 words · 18 controls (limits 108 · 20). It fails on the old strip.
 - **The one money number is on screen while the index spends, and readable from every
   screen (INTAKE M16 review, decision 7).** /open's "spent $X" rides on the how line,
   which is hidden while the index runs; the board's only spend readout was the backend

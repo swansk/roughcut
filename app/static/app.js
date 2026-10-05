@@ -80,7 +80,7 @@ const speedOf = (seg) => tl.speedOf(seg);
 
 /* ------------------------------------------------------------ the top bar
  *
- * One strip under the header that every long operation drives. Karl, on the render:
+ * One strip, in the header's row, that every long operation drives. Karl, on the render:
  * "got like no response - and just see rendering...", and then: "consider a progress
  * tracking bar up top for anything which may take time to complete - re-use across
  * app."
@@ -127,13 +127,19 @@ function paintJob(row, j) {
   row.querySelector('.jname').textContent = j.label;
   row.querySelector('.caret').textContent = strip.open.has(j.id) ? '▾' : '▸';
   row.querySelector('.jbar i').style.width = `${j.pct}%`;
-  const eta = j.state === 'done' || j.state === 'failed' ? '' : etaText(j.eta_s);
+  // the row is one compact line in the header: how far and how long ("~10s left"); the
+  // time it has taken so far is the hover's
+  const eta = j.state === 'done' || j.state === 'failed' ? ''
+    : etaText(j.eta_s).replace(/^about /, '~').replace(/^~a minute/, '~1 min');
   row.querySelector('.jnums').textContent =
-    [`${Math.round(j.pct)}%`, clock(j.elapsed_s), eta].filter(Boolean).join(' · ');
+    [`${Math.round(j.pct)}%`, eta].filter(Boolean).join(' · ');
   // The milestone is what the operation is *on*; the detail is what it is doing inside
   // it. Both, because "choosing the shots" without "12 of ~18" is a spinner with words.
-  row.querySelector('.jdetail').textContent =
-    [j.milestone, j.detail].filter(Boolean).join(' — ');
+  // In the header's row they are the line's hover and the first line under ▸; a failed
+  // job says them on the line itself.
+  const now = [j.milestone, j.detail].filter(Boolean).join(' — ');
+  row.querySelector('.jdetail').textContent = now;
+  row.title = [j.label, now, `${clock(j.elapsed_s)} so far`].filter(Boolean).join(' — ');
 
   let more = row.querySelector('.jmore');
   if (!strip.open.has(j.id)) {
@@ -154,7 +160,8 @@ function paintJob(row, j) {
     : j.eta_source === 'model' ? 'estimated by the model before it started'
       : j.eta_source === 'fallback' ? 'estimate call failed — measured fallback' : '';
   const tail = (j.log || '').split('\n').filter(Boolean).slice(-6).join('\n');
-  more.innerHTML = (steps ? `<ol>${steps}</ol>` : '')
+  more.innerHTML = (now ? `<div class="jnow">${escapeHtml(now)}</div>` : '')
+    + (steps ? `<ol>${steps}</ol>` : '')
     + (src ? `<div class="hint" style="margin-top:6px">${src}</div>` : '')
     + (tail ? `<pre>${escapeHtml(tail)}</pre>` : '');
 }
@@ -193,14 +200,13 @@ async function adopt(j) {
 
 let jobTicks = 0;             // pollJobs ticks so far — the first one is the boot paint
 
-/* A free effect check that finished and found nothing wrong (INTAKE M16 decision 1:
- * status only when something is wrong). Since I16.5 one runs after every design,
- * Change and nudge; while it runs it is progress like any job, and once it passes the
- * card's "✓ checked" says so — a "Checking slow motion · done" row for 12 s more made
- * the header two rows after every nudge. A failed check keeps its row. */
+/* A job that finished and found nothing wrong (INTAKE M16 decision 1: status only when
+ * something is wrong). While it runs it is progress, in the header's row; once it is done
+ * its result is on the screen — the proposal, the film, the card's "✓ checked", the
+ * toast — and a "· done" line for 12 s more said it a second time. A failed job keeps
+ * its line, saying why; so does a check that finished and failed ("failed: …"). */
 function quietJob(j) {
-  return j.kind === 'fx' && j.fx_kind === 'verify' && j.state === 'done'
-    && !/^failed/.test(j.detail || '');
+  return j.state === 'done' && !/^failed/.test(j.detail || '');
 }
 
 async function pollJobs() {

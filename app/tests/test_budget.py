@@ -11,7 +11,7 @@ own fixture bin, read-only (it only loads pages):
     chip) — none while a round of the pass is open, where the chip reads "N left";
   * the board does not scroll — at rest, with a shot selected, with the film tool open,
     and in FX after Next (on the waiting proposal's shot), the three board states the
-    M16 end state names;
+    M16 end state names — nor while jobs run, when the header is still one row;
   * with a shot selected, its strip is in view;
   * the words and controls in view stay under each screen's (and state's) number.
 
@@ -39,21 +39,28 @@ from playwright.sync_api import sync_playwright  # noqa: E402
 SCREENS = ("/", "/floor", "/open")
 # The board in the states the M16 end state measures: a shot selected (its strip in
 # view), the film tool open, and FX after Next — the waiting proposal's card, landed on.
-BOARD = ("/", "/ shot", "/ film", "/ fx")
+BOARD = ("/", "/ shot", "/ film", "/ jobs", "/ fx")
 STATES = SCREENS + BOARD[1:]
+# The header's one row holds while work runs, not only at rest: a render and an Ask
+# running and a find that just finished (the progress strip was a second row, 102 px
+# for a whole render — the M16 wave B review).
+HEADERS = SCREENS + ("/ jobs",)
 VIEWPORT = {"width": 1440, "height": 900}
 HEADER_MAX_PX = 50
 
 # Words and controls in view, at 1440×900 on the fixture bin: what the merged M16 stage
 # 1–4 screens measured (INTAKE M16 integration, 2026-10-05) plus 10 %, so growth fails.
 # Measured (words · controls): / 72 · 18, /floor 52 · 7, /open 53 · 8, / shot 118 · 30,
-# / film 67 · 17, / fx 118 · 31 — before stage 1, on b620ff7: / 197 · 26, /floor
+# / film 67 · 17, / fx 118 · 31, / jobs 98 · 18 (two running jobs in the header's row,
+# measured in the M16 wave B review) — before stage 1, on b620ff7: / 197 · 26, /floor
 # 350 · 12, /open 454 · 19. Lower a number when a screen gets quieter; raise one only in
 # review, saying what the new words are for. The end state (Killington, not this
 # fixture): ≲ 100 words on /open and the pass, ≲ 220 on the board with a shot
 # selected, ≲ 200 in FX after Next, ≲ 180 with the film tool open.
-WORDS_IN_VIEW = {"/": 80, "/floor": 58, "/open": 59, "/ shot": 130, "/ film": 74, "/ fx": 130}
-CONTROLS_IN_VIEW = {"/": 20, "/floor": 8, "/open": 9, "/ shot": 33, "/ film": 19, "/ fx": 35}
+WORDS_IN_VIEW = {"/": 80, "/floor": 58, "/open": 59, "/ shot": 130, "/ film": 74, "/ fx": 130,
+                 "/ jobs": 108}
+CONTROLS_IN_VIEW = {"/": 20, "/floor": 8, "/open": 9, "/ shot": 33, "/ film": 19, "/ fx": 35,
+                    "/ jobs": 20}
 
 # Contracts another lane delivers (M16 stage 1, C1): until that lane is merged the
 # check is an expected failure on that screen. Every stage-1 lane is merged, so this is
@@ -96,6 +103,8 @@ INVENTORY_JS = r"""
     bin: box(bin), chip: box(chip), chip_text: chip ? chip.innerText.trim() : null,
     strip: box(document.getElementById('inspector')),
     blue: [...document.querySelectorAll('.is-next')].map(el => el.id || el.dataset.nextFor || el.tagName),
+    jobs: [...document.querySelectorAll('#progress .job')].map(el => { const r = el.getBoundingClientRect();
+      return {id: el.dataset.job, top: r.top, bottom: r.bottom, visible: vis(el)}; }),
     scroll_h: document.documentElement.scrollHeight, inner_h: innerHeight,
     steps: document.querySelectorAll('#flow [data-stage], #flow .fs').length,
     flow_links: [...document.querySelectorAll('#flow a')].length,
@@ -130,6 +139,21 @@ PROPOSAL = {
                "checks": [{"key": "edits_apply", "label": "the edits fit the cut as it stands",
                            "ok": True, "detail": ""}]},
 }
+
+
+# The jobs the board's header shows in "/ jobs", answered in place of /api/jobs: two
+# running (a render and an Ask overlap routinely) and one that just finished well.
+JOBS = [
+    {"id": "bud_render", "kind": "render", "state": "running", "label": "Rendering — preview",
+     "milestone": "cutting the shots", "detail": "4 of 12", "pct": 32.0, "elapsed_s": 4.0,
+     "eta_s": 8.0, "started": 1.0, "milestones": []},
+    {"id": "bud_ask", "kind": "ask", "state": "running", "label": "Cutting from your note",
+     "milestone": "choosing the shots", "detail": "3 shots decided", "pct": 40.0,
+     "elapsed_s": 20.0, "eta_s": 30.0, "started": 2.0, "milestones": []},
+    {"id": "bud_done", "kind": "find", "state": "done", "label": "Finding in the footage",
+     "detail": "3 matches", "pct": 100.0, "elapsed_s": 6.0, "eta_s": None, "started": 0.5,
+     "milestones": []},
+]
 
 
 def _read_only(route):
@@ -167,6 +191,12 @@ def _set_up(pg, state: str) -> None:
         pg.wait_for_function("dock.current() === 'fx' && window.fx && fx.state.shot === 'budget0002'"
                              " && !!document.querySelector(\"#fx .fxcard[data-id='fx_budget01']\")",
                              timeout=15000)
+    elif state == "/ jobs":
+        pg.wait_for_selector("#tl .blk", timeout=15000)
+        pg.route("**/api/jobs", lambda r: r.fulfill(
+            status=200, content_type="application/json", body=json.dumps({"jobs": JOBS})))
+        pg.evaluate("pollJobs()")
+        pg.wait_for_selector("#progress .job[data-job=bud_ask]", timeout=5000)
 
 
 def _quiet_jobs(server) -> None:
@@ -265,7 +295,7 @@ def landed(check: str, path: str) -> None:
         pytest.fail(f"{check} on {path} passes now: take it out of AWAITS ({AWAITS[(check, path)]})")
 
 
-@pytest.mark.parametrize("path", SCREENS)
+@pytest.mark.parametrize("path", HEADERS)
 def test_one_header_row_at_most_50_px(measured, path):
     m = measured[path]
     assert m["bin"] and m["chip"], f"{path}: the switcher and the Next chip are both in the header"
@@ -306,6 +336,20 @@ def test_the_board_does_not_scroll(measured, state):
         awaits("scroll", state)
         raise
     landed("scroll", state)
+
+
+def test_running_jobs_sit_in_the_header_row_and_a_finished_one_leaves(measured):
+    """The progress strip was the header's second row, full width, one row per job, and
+    a finished job lingered 12 s saying "done": 102 px for a whole render, and the board
+    jumped 55 px when it cleared. Each running job is one compact line in the row now;
+    one that finished well has no line (its result is on the screen)."""
+    m = measured["/ jobs"]
+    rows = m["jobs"]
+    assert [r["id"] for r in rows] == ["bud_render", "bud_ask"], rows
+    mid = lambda b: (b["top"] + b["bottom"]) / 2   # noqa: E731
+    for r in rows:
+        assert r["visible"] and abs(mid(r) - mid(m["bin"])) < 12, (r, m["bin"])
+        assert r["bottom"] <= m["header"]["bottom"], (r, m["header"])
 
 
 def test_the_selected_shot_is_in_view(measured):
