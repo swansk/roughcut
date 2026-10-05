@@ -43,6 +43,9 @@
             background: var(--panel, #0f0f13); color: var(--text, #e8e8ee); border: 1px solid #3a3a48;
             border-radius: 10px; padding: 10px 12px; box-shadow: 0 12px 32px rgba(0,0,0,.55);
             display: flex; flex-direction: column; gap: 8px; font: 12px/1.45 var(--display, system-ui, sans-serif); }
+  /* an id rule with display outranks the UA's [hidden]: the board and the pass have no
+   * global [hidden] rule (the open screen does), so the menu said closed and stayed drawn */
+  #picker[hidden] { display: none; }
   #picker.busy { opacity: .6; pointer-events: none; }
   #picker .lbl { font: 600 9.5px var(--mono, ui-monospace, monospace); letter-spacing: .1em;
                  color: #8f8fa3; text-transform: uppercase; }

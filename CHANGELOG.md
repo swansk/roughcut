@@ -95,6 +95,14 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **The bin · cut menu closes on the board and the pass (INTAKE M16 review, decision 2).**
+  Esc and a click outside set the menu's `hidden`, but its own `#picker { display: flex }`
+  outranks the browser's `[hidden]` rule, and only the open screen has a global
+  `[hidden] { display: none }`: on `/` and `/floor` the 325 px menu stayed drawn over the
+  monitor, the pass's picture and the keys sheet, while it said it was closed. It
+  predates M16, but the menu is now the way between the screens. `#picker[hidden]` is
+  `display: none`; the menu test closes it with Esc and with a click outside on the
+  board and on the pass (it fails without this).
 - **A proposal already waiting when the board opens is checked by itself (INTAKE M16
   review, I16.5).** The FX tool checks a proposal the server has not checked (one made
   before the server began checking every design), but it read `/api/fx` at start-up

@@ -300,6 +300,18 @@ def places(page) -> list[dict]:
         here: a.getAttribute('aria-current') === 'page'}))""")
 
 
+def menu_closes(page) -> None:
+    """The open menu goes away on Esc and on a click outside it."""
+    page.keyboard.press("Escape")
+    page.wait_for_function("!switcher.state.open")
+    assert page.locator("#picker").is_hidden(), "Esc closed the menu but it is still drawn"
+    page.locator("#hdBin").click()
+    page.wait_for_selector("#picker:not([hidden])", timeout=3000)
+    page.mouse.click(720, 600)
+    page.wait_for_function("!switcher.state.open")
+    assert page.locator("#picker").is_hidden(), "a click outside closed the menu but it is still drawn"
+
+
 def test_the_menu_is_the_way_to_the_footage_and_the_pass_with_the_projects_facts(browser, live, project):
     pg = open_screen(browser, live + "/")
     pg.wait_for_selector("#tl .blk", timeout=15000)
@@ -328,12 +340,20 @@ def test_the_menu_is_the_way_to_the_footage_and_the_pass_with_the_projects_facts
     assert "whole project file" not in text and "no browsing dialog" not in text
     assert pg.evaluate("getComputedStyle(document.querySelector('#copyGo')).backgroundColor") \
         in ("rgba(0, 0, 0, 0)", "transparent")
+    # it closes — Esc, a click outside — and is gone from the screen, not only 'closed':
+    # the board has no global [hidden] rule, and the menu stayed drawn over the monitor
+    menu_closes(pg)
+    pg.locator("#hdBin").click()
+    places(pg)
     # a row goes there
     pg.locator("#placeList .place", has_text="The pass").click()
     pg.wait_for_url("**/floor", timeout=10000)
     pg.locator("#hdBin").click()
     rows = places(pg)
     assert [r["here"] for r in rows] == [False, True, False]
+    menu_closes(pg)                                # the pass has no [hidden] rule either
+    pg.locator("#hdBin").click()
+    places(pg)
     pg.locator("#placeList .place", has_text="The footage").click()
     pg.wait_for_url("**/open", timeout=10000)
     pg.close()
