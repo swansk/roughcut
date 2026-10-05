@@ -140,12 +140,20 @@
   function activeForShot(id) { return forShot(id).filter((e) => e.status !== 'removed'); }
   function shotIndex(id) { return SEGS().findIndex((s) => String(s.id) === String(id)); }
 
+  /* On a shot of this cut (its own, or the one it is anchored to): the only proposals
+   * this tool has a card for. One whose shot left the cut — or from a sibling cut of
+   * the bin — cannot be answered here, so it is not counted (the server's rule too). */
+  function inCut(e) {
+    const ids = new Set(SEGS().map((s) => String(s.id)));
+    return ids.has(String(e.shot)) || (!!e.anchor_shot && ids.has(String(e.anchor_shot)));
+  }
+
   /* The rail counts the proposals waiting anywhere in the cut — what the tool asks of
    * you, the same number the flow's Polish stage says — not the selected shot's
    * effects, which changed with every click (INTAKE M16 I16.0a). */
   function badge() {
     if (window.dock && typeof dock.badge === 'function') {
-      dock.badge('fx', S.effects.filter((e) => e.status === 'proposed').length);
+      dock.badge('fx', S.effects.filter((e) => e.status === 'proposed' && inCut(e)).length);
     }
   }
 

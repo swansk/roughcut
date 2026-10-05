@@ -1986,7 +1986,8 @@ def fx_target(proposed: list[dict], segments: list[dict]) -> dict | None:
     board selects and the card the FX tool brings into view. Next used to open the
     tool on whatever shot the board had anchored: shot 1's accepted title, while the
     slow motion waited on shot 17. A proposal for a shot the edits will create sits
-    on its `anchor_shot`; one whose shot is no longer in the cut carries only `fx`."""
+    on its `anchor_shot`. `flow_facts` passes only proposals on a shot of the cut; one
+    given here whose shot is not in it carries only `fx`."""
     if not proposed:
         return None
     order = {str(s.get("id")): i for i, s in enumerate(segments) if s.get("id")}
@@ -2066,7 +2067,14 @@ def flow_facts() -> dict:
            "target": edl.get("target_s"), "proposal": ask_pending(edl_mtime)}
     colour = edl.get("colour") or {}
     look = ("off" if colour.get("mode") == "off" else colour.get("look")) or None
-    proposed = [e for e in _fx_all() if e.get("status") == "proposed"]
+    # A proposal waits on this cut only while its shot (or the shot it is anchored to) is
+    # in it: the FX tool lists cards per shot of the cut, so one whose shot left — or
+    # one from a sibling cut of the bin, whose ids differ — has no card to answer it
+    # on, and would hold Next and the badge for good. It stays on disk and comes back
+    # with its shot (an undo).
+    in_cut = {str(s.get("id")) for s in segments if s.get("id")}
+    proposed = [e for e in _fx_all() if e.get("status") == "proposed"
+                and (str(e.get("shot")) in in_cut or str(e.get("anchor_shot") or "") in in_cut)]
     polish = {"effects": len(edl.get("effects") or []), "fx_proposed": len(proposed),
               "target": fx_target(proposed, segments),
               "look": look, "music": bool((edl.get("effects_music") or {}).get("asset"))}

@@ -70,6 +70,17 @@ same commit. Releases move entries into a dated version section.
   anchor leaves the cut, now hand on with `source: 'heir'`, and `timeline-keys.js`
   treats `heir` like the board's own pick. A new test removes shot 1 from the inspector,
   presses ⌫ and Del, and finds shot 2 still in the cut (it was gone before the fix).
+- **An effect proposal whose shot left the cut no longer holds Next or the FX badge (M16
+  stage 0 review, I16.0a).** Design an effect on shot 2, take shot 2 out with X: Next
+  stayed on "1 effect proposed — accept or discard" and the rail badge read 1, but the
+  FX tool lists cards only for shots of the cut, so the landing found no card and the
+  proposal could not be answered — and a waiting proposal outranks everything else, so
+  Next was stuck there. Proposals from a sibling cut of the same bin (different shot
+  ids) did the same. `flow_facts` and the badge now count only proposals whose shot, or
+  the shot they are anchored to, is in the cut. The proposal stays on disk and counts
+  again when its shot comes back (⌘Z). `test_flow.py`'s landing test now expects the
+  orphan to be left out, and a new FX UI test removes the shot, sees the badge empty
+  and Next elsewhere, then undoes and sees it count again (both failed before).
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six

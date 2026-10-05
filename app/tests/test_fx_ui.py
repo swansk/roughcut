@@ -548,6 +548,39 @@ def test_next_lands_on_the_waiting_effect_not_the_anchored_shot(page, live_serve
     assert page.evaluate("location.hash") == "#tool=fx"
 
 
+def test_a_proposal_whose_shot_left_the_cut_neither_counts_nor_holds_next(page):
+    """Review of I16.0a: the FX tool has a card only for a shot of the cut, so a proposal
+    whose shot was taken out cannot be answered — yet the rail badge counted it and it
+    held Next ("1 effect proposed — accept or discard") for good. It stays on disk and
+    comes back with its shot."""
+    e = design(page, shot=1)
+    sid2 = shot_ids(page)[1]
+    assert e["status"] == "proposed" and e["shot"] == sid2
+    assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == "1"
+    page.locator(f'#tl .blk[data-id="{sid2}"]').click()
+    page.keyboard.press("x")
+    page.wait_for_function(f"!segs.some(s => s.id === '{sid2}')")
+    page.wait_for_function(
+        "document.querySelector('#saveState').textContent.startsWith('saved')", timeout=8000)
+    page.wait_for_function(
+        "document.querySelector('#rail .tool[data-tool=fx] .badge').textContent === ''",
+        timeout=5000)
+    page.evaluate("flowBar.poll()")
+    page.wait_for_function(
+        "(() => { const f = window.flowBar && flowBar.state();"
+        " const p = f && f.stages.find((x) => x.key === 'polish');"
+        " return !!p && p.counts.fx_proposed === 0; })()", timeout=10000)
+    nxt = page.evaluate("flowBar.state().next")
+    assert nxt["stage"] != "polish" and e["id"] not in json.dumps(nxt), nxt
+    assert any(x["id"] == e["id"] for x in effects(page)), "kept on disk"
+    # the shot back (⌘Z): the proposal counts again
+    page.keyboard.press("Control+z")
+    page.wait_for_function(f"segs.some(s => s.id === '{sid2}')")
+    page.wait_for_function(
+        "document.querySelector('#rail .tool[data-tool=fx] .badge').textContent === '1'",
+        timeout=5000)
+
+
 # ---------------------------------------------------------------- the monitor overlay
 
 def test_poseAt_follows_the_python_rules(page):

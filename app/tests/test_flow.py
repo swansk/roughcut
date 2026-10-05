@@ -348,11 +348,16 @@ def test_api_flow_lands_on_the_proposal_on_the_earliest_shot(client, project):
         assert nxt["stage"] == "polish", nxt
         assert nxt["target"] == {"shot": "gflow00002", "fx": "fx_flowmid"}
         assert nxt["href"] == "/#tool=fx&shot=gflow00002&fx=fx_flowmid"
-        assert by_key(out)["polish"]["counts"]["fx_proposed"] == 3
-        # only the one whose shot left the cut: it still names the effect
+        # the one whose shot left the cut has no card to answer it on: not counted
+        assert by_key(out)["polish"]["counts"]["fx_proposed"] == 2
+        # …and on its own it neither needs you nor holds Next (review: it did, for good)
         for path in made[:2]:
             path.unlink()
-        assert client.get("/api/flow").json()["next"]["target"] == {"fx": "fx_flowgone"}
+        out = client.get("/api/flow").json()
+        assert by_key(out)["polish"]["counts"]["fx_proposed"] == 0
+        assert by_key(out)["polish"]["state"] != "needs-you"
+        assert out["next"]["stage"] != "polish", out["next"]
+        assert "fx_flowgone" not in json.dumps(out["next"])
     finally:
         for path in made:
             path.unlink(missing_ok=True)
