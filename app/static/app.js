@@ -1404,7 +1404,10 @@ function kindTag(kind) {
 /* Two sources of moments to add: what was *heard* (the audio candidates, ranked) and
  * what was *seen* (the visual pass's notable moments — events first, since a fall
  * nobody narrated is exactly what the transcripts cannot offer). */
-let libTab = 'heard';
+/* The bin's view (INTAKE M16 I16.4): 'out' — the keeps not in the cut, the default
+ * (C10) — or 'all'; 'heard' and 'seen' are the machine's offers behind "more found ▸". */
+let libTab = 'out';
+const keepsTab = () => libTab === 'out' || libTab === 'all';
 
 function renderLibrary() {
   const used = new Set(segs.map((s) => `${s.clip}@${Math.round(s.in)}`));
@@ -1427,7 +1430,7 @@ function renderLibrary() {
         rows.push({ clip: clip.clip, t: m.start, end: m.end, why: m.what, kind: m.kind,
                     score: HOT.has(m.kind) ? 2 : m.kind === 'scenery' ? 0 : 1 });
       }
-    } else if (libTab !== 'seen') {
+    } else if (libTab === 'heard') {
       for (const c of clip.candidates || []) {     // a generated clip has none
         if (used.has(`${clip.clip}@${Math.round(c.t)}`)) continue;
         rows.push({ clip: clip.clip, ...c });
@@ -1448,18 +1451,15 @@ function renderLibrary() {
   // something has been looked at.
   $('#libTabs .tab[data-tab=seen]').style.display = anySeen ? '' : 'none';
   if (!anySeen && libTab === 'seen') libTab = 'heard';
-  document.querySelectorAll('#libTabs .tab').forEach((x) =>
+  document.querySelectorAll('#libTabs .tab, #binTabs .tab').forEach((x) =>
     x.classList.toggle('sel', x.dataset.tab === libTab));
   const lib = $('#library');
-  lib.classList.toggle('grid', libTab === 'kept');
+  lib.classList.toggle('grid', keepsTab());
   const bf = $('#binFilter');
-  if (bf) bf.hidden = libTab !== 'kept';
+  if (bf) bf.hidden = !keepsTab();
   paintAudit();
-  if (libTab === 'kept') { renderKept(lib); return; }
-  $('#libHint').textContent = libTab === 'seen'
-    ? (ranked.length ? 'What was seen, ranked — events first, confirmed above guessed.'
-                     : 'What the visual pass saw, not yet in the cut — events first.')
-    : 'Audio candidates not yet in the cut.';
+  if (keepsTab()) { renderKept(lib); return; }
+  $('#libHint').textContent = '';
   lib.innerHTML = rows.length ? '' : `<div class="hint">${libTab === 'seen'
     ? 'nothing left that was seen — or look at more of the footage (Project panel)'
     : 'nothing left to add'}</div>`;
@@ -1498,7 +1498,8 @@ function paintAudit() {
   if (!row) return;
   const vz = (S && S.visual) || {};
   const a = vz.audit || { claims: 0, windows: 0, projected_usd: 0 };
-  row.style.display = libTab === 'seen' ? 'flex' : 'none';
+  // in view until it has been used once (INTAKE M16), then with the seen tab
+  row.style.display = libTab === 'seen' || (a.windows && !auditUsed()) ? 'flex' : 'none';
   const b = $('#auditClaims');
   b.disabled = auditPending || !!vz.running || !a.windows;
   b.textContent = a.windows
@@ -1509,7 +1510,14 @@ function paintAudit() {
     : `${a.windows} close look${a.windows === 1 ? '' : 's'} at 1 s`;
 }
 
+/* "Used once" is this viewer's click, remembered per bin (a convenience, not state). */
+const auditKey = () => `roughcut.audit.used:${(S && S.footage) || ''}`;
+function auditUsed() {
+  try { return localStorage.getItem(auditKey()) === '1'; } catch (e) { return false; }
+}
+
 async function auditClaims() {
+  try { localStorage.setItem(auditKey(), '1'); } catch (e) { /* private mode: stays in view */ }
   auditPending = true;
   paintAudit();
   try {
@@ -1583,33 +1591,18 @@ function keepKinds(s) {
   return kinds;
 }
 
-function keepChips(s) {
-  const out = [];
-  if (s.hero) out.push('<span class="chip hero" data-chip="hero">★ hero</span>');
-  for (const t of (s.tags || []).slice(0, 6)) {
-    out.push(`<span class="chip" data-chip="tag:${escapeHtml(t)}">${escapeHtml(t)}</span>`);
-  }
-  for (const k of keepKinds(s)) {
-    out.push(`<span class="chip" data-chip="kind:${escapeHtml(k)}">${escapeHtml(k)}</span>`);
-  }
-  return out.join('');
-}
-
 function keepMatches(s, text) {
   // Confirmed junk is out of the default view; the junk chip shows only junk.
   const jstate = junkState(s.clip);
   if (binChip === 'junk') { if (jstate !== 'confirmed' && jstate !== 'proposed') return false; }
   else if (jstate === 'confirmed') return false;
   if (binChip === 'hero' && !s.hero) return false;
-  if (binChip === 'in' || binChip === 'out') {
-    const at = (!s.missing && P.clips[s.clip]) ? shotOf(s) : -1;
-    if (binChip === 'in' && at < 0) return false;
-    if (binChip === 'out' && at >= 0) return false;
-  }
+  // the tab: 'out' shows only what is not in the cut
+  if (libTab === 'out' && !s.missing && P.clips[s.clip] && shotOf(s) >= 0) return false;
   if (binChip && binChip.startsWith('tag:') && !(s.tags || []).includes(binChip.slice(4))) return false;
   if (binChip && binChip.startsWith('kind:') && !keepKinds(s).includes(binChip.slice(5))) return false;
   if (text) {
-    const hay = [stem(s.clip), s.why, s.note].concat(s.tags || []).join(' ').toLowerCase();
+    const hay = [stem(s.clip), s.why, s.note, keepLabel(s)].concat(s.tags || []).join(' ').toLowerCase();
     if (!hay.includes(text)) return false;
   }
   return true;
@@ -1621,7 +1614,6 @@ function paintBinFilter(keeps) {
   if (!el) return;
   const tags = new Map();
   keeps.forEach((s) => (s.tags || []).forEach((t) => tags.set(t, (tags.get(t) || 0) + 1)));
-  const inCut = keeps.filter((s) => !s.missing && P.clips[s.clip] && shotOf(s) >= 0).length;
   const heroes = keeps.filter((s) => s.hero).length;
   const chips = [];
   if (heroes) chips.push(['hero', `★ hero ${heroes}`, 'hero']);
@@ -1631,7 +1623,6 @@ function paintBinFilter(keeps) {
   keeps.forEach((s) => keepKinds(s).forEach((k) => kinds.set(k, (kinds.get(k) || 0) + 1)));
   [...kinds.entries()].sort((a, b) => b[1] - a[1])
     .forEach(([k, n]) => chips.push([`kind:${k}`, `${k} ${n}`, '']));
-  chips.push(['in', `in the cut ${inCut}`, 'in'], ['out', `not yet ${keeps.length - inCut}`, '']);
   const nJunk = junkRows().filter((r) => r.state === 'proposed' || r.state === 'confirmed').length;
   if (nJunk) chips.push(['junk', `junk ${nJunk}`, 'junk']);
   el.innerHTML = chips.map(([k, label, cls]) =>
@@ -1657,6 +1648,16 @@ function playKeep(s) {
   if (fp) fp.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
+/* A keep's label: the note, the first line spoken inside it, what was seen in it. */
+function keepLabel(s) {
+  if (s.note) return `your note: ${s.note}`;
+  const clip = (P && P.clips[s.clip]) || {};
+  const u = (clip.transcript || []).find((x) => x.end > s.start && x.start < s.end);
+  if (u) return `“${u.text}”`;
+  const m = ((clip.visual || {}).moments || []).find((x) => x.end > s.start && x.start < s.end && x.what);
+  return m ? m.what : 'no words';
+}
+
 function keepRow(s) {
   const d = document.createElement('div');
   d.className = 'keep' + (s.missing ? ' missing' : '') + (binSel === keepKey(s) ? ' sel' : '');
@@ -1672,17 +1673,17 @@ function keepRow(s) {
       ? '<span class="gone">clip not analysed — cannot be added</span>'
       : at >= 0
         ? `<a href="#" class="use" data-shot="${at}" title="select the shot on the timeline">in the cut · shot ${at + 1}</a>`
-        : '<button class="use add" title="add it at the playhead · enter">+ add</button>';
+        : '<button class="use add" title="add it at the playhead · enter · or drag it onto the timeline">+ add</button>';
+  // labelled by Karl's note, else the line spoken in it, else what was seen — never the
+  // clip's file name, the detector's title or the telemetry (INTAKE M16 I16.4)
+  d.title = `${stem(s.clip)} ${fmt(s.start)}–${fmt(s.end)}${s.why ? `\n${s.why}` : ''}`;
   d.innerHTML = `
     ${still ? `<img class="still" loading="lazy" decoding="async" draggable="false"
                    alt="${escapeHtml(stem(s.clip))} at ${s.start.toFixed(1)}s" src="${still}">`
             : '<div class="still"></div>'}
     <div class="body">
-      <div class="t">${escapeHtml(stem(s.clip))} · ${fmt(s.start)} → ${fmt(s.end)}
-        · ${(s.end - s.start).toFixed(1)} s${s.hero ? '<span class="hero">★ HERO</span>' : ''}</div>
-      ${s.why ? `<span class="w">${escapeHtml(s.why)}</span>` : ''}
-      ${s.note ? `<span class="w note">“${escapeHtml(s.note)}”</span>` : ''}
-      <div class="chips">${keepChips(s)}</div>
+      <span class="w${s.note ? ' note' : ''}">${s.hero ? '<span class="hero">★</span> ' : ''}${escapeHtml(keepLabel(s))}</span>
+      <div class="t">${(s.end - s.start).toFixed(1)} s</div>
       ${junkState(s.clip) === 'proposed' ? junkBadge(s.clip) : ''}
       ${use}
     </div>`;
@@ -1745,11 +1746,19 @@ function addKeep(s) {
 }
 
 function renderKept(lib) {
-  const all = binOrder((bin && bin.selects) || []);
+  const every = binOrder((bin && bin.selects) || []);
+  const isOut = (s) => s.missing || !P.clips[s.clip] || shotOf(s) < 0;
+  const nOut = every.filter((s) => isOut(s) && junkState(s.clip) !== 'confirmed').length;
+  const nAll = every.filter((s) => junkState(s.clip) !== 'confirmed').length;
+  const tabOut = $('#binTabs .tab[data-tab=out]'), tabAll = $('#binTabs .tab[data-tab=all]');
+  if (tabOut) tabOut.textContent = `not in the cut · ${nOut}`;
+  if (tabAll) tabAll.textContent = `all ${nAll}`;
+  if (window.dock) dock.badge('bin', nOut);          // the rail says what is left to use
+  const all = libTab === 'out' ? every.filter(isOut) : every;
   const q = $('#findQ');
   const text = (q ? q.value : '').trim().toLowerCase();
   const keeps = all.filter((s) => keepMatches(s, text));
-  paintBinFilter(all);
+  paintBinFilter(every);
   // The clips the junk pass has a word on, as cards of their own ahead of the keeps:
   // a black clip rarely has a keep, and a proposal nobody can see is never answered.
   // Proposed ones always; confirmed ones only under the junk chip.
@@ -1758,9 +1767,7 @@ function renderKept(lib) {
     && (!text || r.stem.toLowerCase().includes(text)));
   $('#libHint').textContent = binChip === 'junk'
     ? 'Junk — proposed by a measurement, yours to confirm. Confirmed clips are out of the Ask, Find and this grid, and the index skips their look.'
-    : !all.length ? ''
-    : keeps.length === all.length
-      ? 'What the pass kept — heroes first. Click to select · + or enter adds it at the playhead · drag it onto V1 · double-click plays it here.'
+    : !all.length || keeps.length === all.length ? ''
       : `${keeps.length} of ${all.length} keeps match`;
   lib.innerHTML = '';
   jcards.forEach((r) => lib.appendChild(junkCard(r)));
@@ -1771,7 +1778,9 @@ function renderKept(lib) {
   }
   if (!all.length) {
     if (jcards.length) return;
-    lib.innerHTML = `<div class="hint">nothing kept yet — the pass is where you keep
+    lib.innerHTML = every.length
+      ? '<div class="hint">every keep is in the cut</div>'
+      : `<div class="hint">nothing kept yet — the pass is where you keep
       things · <a href="/floor" style="color:var(--accent)">the pass →</a></div>`;
     return;
   }
@@ -1847,7 +1856,7 @@ async function junkVerdict(clip, verdict) {
 
 /* The Project panel's one line about the bin, from the server's own summary. */
 function paintBinLine() {
-  if (window.dock) dock.badge('bin', keepsUsable().length);
+  if (window.dock) dock.badge('bin', keepsUsable().filter((s) => shotOf(s) < 0).length);
   const el = $('#binLine');
   if (!el) return;
   const sm = bin && bin.summary;
@@ -2266,7 +2275,7 @@ async function save() {
     `saved ${t.getHours()}:${String(t.getMinutes()).padStart(2, '0')}`;
   // A save is where the bin learns from the timeline (which keeps became shots, and
   // which shots were placed by hand). While the tab is up, it must show that.
-  if (libTab === 'kept') refreshBin();
+  if (keepsTab()) refreshBin();
   // A shot made on the board (a split, an insert) has a temporary id until the server
   // mints one; the save's reply does not carry segments, so read them back and re-key.
   if (tl.needsRekey()) {
@@ -2547,11 +2556,12 @@ let findSel = null;              // the match loaded in the finder's player
  * disabled until the price is on it: the free GET /api/find/price at boot. It used to
  * be priced only by the POST that a click on it had already sent. */
 let findPriced = false;
+let finding = false;             // a find is in flight (the Find button went: Enter finds)
 
 function paintFindDeepPrice(usd) {
   if (typeof usd !== 'number') return;
   findPriced = true;
-  $('#findDeep').textContent = `Ask the model · ~$${usd.toFixed(2)}`;
+  $('#findDeep').textContent = `Not it? Ask the model · ~$${usd.toFixed(2)}`;
 }
 
 async function fetchFindPrice() {
@@ -2563,10 +2573,10 @@ async function fetchFindPrice() {
   } catch (e) { /* said below */ }
   if (d && typeof d.usd === 'number') {
     paintFindDeepPrice(d.usd);
-    if (!$('#findGo').disabled) b.disabled = false;     // not mid-search
+    if (!finding) b.disabled = false;     // not mid-search
   } else if (!findPriced) {
     b.disabled = true;
-    b.textContent = d ? 'Ask the model' : 'Ask the model · price unavailable';
+    b.textContent = d ? 'Not it? Ask the model' : 'Not it? Ask the model · price unavailable';
     if (d && d.why) b.title = d.why;
   }
 }
@@ -2574,6 +2584,7 @@ async function fetchFindPrice() {
 function renderFindResults(rows, note) {
   const box = $('#findResults');
   box.innerHTML = '';
+  $('#findDeep').hidden = false;          // under any find: the priced search, plain
   if (note) box.insertAdjacentHTML('beforeend', `<div class="hint" style="padding:4px 0">${escapeHtml(note)}</div>`);
   if (!rows.length) {
     box.insertAdjacentHTML('beforeend',
@@ -2583,11 +2594,11 @@ function renderFindResults(rows, note) {
   rows.forEach((m) => {
     const d = document.createElement('div');
     d.className = 'cand';
-    const tag = m.source === 'model' ? '<i class="kind hot">model</i>'
-      : `<i class="kind">${escapeHtml(m.source || 'match')}</i>`;
-    d.innerHTML = `<span class="w">${tag}${m.kind ? kindTag(m.kind) : ''}${escapeHtml(m.what || '')}</span>
-      ${m.why ? `<span class="hint">${escapeHtml(m.why)}</span>` : ''}
-      <span class="t">${stem(m.clip)} · ${fmt(m.start)}–${fmt(m.end)}</span>`;
+    // what was said or seen, and how long — the clip, the times and why it matched are
+    // the tooltip's (INTAKE M16)
+    d.title = `${stem(m.clip)} ${fmt(m.start)}–${fmt(m.end)}${m.why ? ` · ${m.why}` : ''}`;
+    d.innerHTML = `<span class="w">${escapeHtml(m.what || '')}</span>
+      <span class="t">${Math.max(0, m.end - m.start).toFixed(1)} s</span>`;
     d.onclick = () => showFindMatch(m);
     box.appendChild(d);
   });
@@ -2632,7 +2643,7 @@ function followFind(job) {
       return;
     }
     clearInterval(iv);
-    $('#findGo').disabled = false;
+    finding = false;
     $('#findDeep').disabled = !findPriced;
     if (s.state !== 'done') {
       $('#findState').textContent = '';
@@ -2651,7 +2662,7 @@ async function doFind(deep = false) {
   const q = $('#findQ').value.trim();
   if (!q) return toast('describe the moment you are looking for');
   if (deep && !findPriced) return toast('the model search has no price yet — not asking');
-  $('#findGo').disabled = true;
+  finding = true;
   $('#findDeep').disabled = true;
   $('#findState').textContent = deep ? 'asking the model…' : 'searching…';
   try {
@@ -2678,7 +2689,7 @@ async function doFind(deep = false) {
     $('#findState').textContent = '';
     toast(`find failed: ${e.message}`, 6000);
   }
-  $('#findGo').disabled = false;
+  finding = false;
   $('#findDeep').disabled = !findPriced;
 }
 
@@ -3052,7 +3063,6 @@ async function boot() {
   // on them — that is what going from the pass to the board should look like.
   bin = await fetchBin();
   await fetchJunk();
-  if (keepsUsable().length || junkRows().some((r) => r.state === 'proposed')) libTab = 'kept';
   $('#title').textContent = [P.variant, P.title].filter(Boolean).join(' · ');
   $('#story').value = P.story || '';
   document.title = `Cut board — ${P.title}`;
@@ -3110,7 +3120,6 @@ async function boot() {
   });
   $('#acceptProposal').onclick = acceptProposal;
   $('#rejectProposal').onclick = rejectProposal;
-  $('#findGo').onclick = () => doFind();
   $('#findDeep').onclick = () => doFind(true);
   $('#findQ').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); doFind(); }
@@ -3119,7 +3128,7 @@ async function boot() {
   // The same box filters the bin as you type (the kept tab) — Find is one keypress on.
   let filterTimer = null;
   $('#findQ').addEventListener('input', () => {
-    if (libTab !== 'kept') return;
+    if (!keepsTab()) return;
     clearTimeout(filterTimer);
     filterTimer = setTimeout(renderLibrary, 120);
   });
@@ -3155,14 +3164,22 @@ async function boot() {
       playKeep(row._keep);
     }
   });
-  $('#libTabs').onclick = (e) => {
+  const onTab = (e) => {
     const t = e.target.closest('.tab');
     if (!t) return;
     libTab = t.dataset.tab;
-    document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('sel', x === t));
     renderLibrary();
     // Verdicts happen elsewhere (the pass, another tab): showing the bin re-reads it.
-    if (libTab === 'kept') refreshBin();
+    if (keepsTab()) refreshBin();
+  };
+  $('#binTabs').onclick = onTab;
+  $('#libTabs').onclick = onTab;
+  // more found ▸: the machine's offers and the evidence chips, folded
+  $('#moreFound').onclick = () => {
+    const more = $('#more');
+    more.hidden = !more.hidden;
+    $('#moreFound').textContent = more.hidden ? 'more found ▸' : 'more found ▾';
+    if (more.hidden && !keepsTab()) { libTab = 'out'; renderLibrary(); }
   };
   $('#auditClaims').onclick = auditClaims;
   $('#musicTrack').onchange = musicChanged;

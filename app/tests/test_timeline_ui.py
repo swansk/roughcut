@@ -189,6 +189,7 @@ def test_a_double_click_on_a_block_plays_the_cut_from_it(page):
 
 
 def test_shift_click_selects_the_range_and_cmd_click_toggles(page):
+    page.evaluate("document.querySelector('#more').hidden && document.querySelector('#moreFound').click(); document.querySelector('#libTabs .tab[data-tab=heard]').click()")
     page.locator("#library .cand").first.click()        # a third shot, after the first
     assert page.locator("#tl .blk").count() == 3
     blocks = page.locator("#tl .blk")

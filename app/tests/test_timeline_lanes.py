@@ -459,6 +459,8 @@ def test_a_kept_row_or_a_find_result_dropped_on_v1_inserts_there(page, project):
     page.set_viewport_size({"width": 1280, "height": 2400})
     page.reload()
     page.wait_for_selector("#library .keep")
+    page.click("#binTabs .tab[data-tab=all]")     # so the row stays once it is in the cut (M16)
+    page.evaluate("refreshBin()")                  # the tab's own re-read, settled
     page.wait_for_function(
         "document.querySelector('#library .keep').getAttribute('draggable') === 'true'", timeout=5000)
     row = page.locator("#library .keep").first.bounding_box()
@@ -483,7 +485,7 @@ def test_a_kept_row_or_a_find_result_dropped_on_v1_inserts_there(page, project):
 
     # a Find result carries the same payload — the row is loaded (its own click) and read
     page.locator("#findQ").fill("goodbye")
-    page.locator("#findGo").click()
+    page.locator("#findQ").press("Enter")      # Enter finds (the Find button went, M16)
     page.wait_for_selector("#findResults .cand", timeout=15000)
     assert page.locator("#findResults .cand").first.get_attribute("draggable") == "true"
     payload = page.evaluate("""() => {

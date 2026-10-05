@@ -299,6 +299,7 @@ def test_x_removes_the_whole_selection_and_one_undo_restores_it(page):
     assert page.locator("#tl .blk").count() == 2
     # the shot that takes the place is selected; Delete and Backspace do the same
     page.evaluate("tl.seek(tl.total())")               # adding lands at the playhead (INTAKE M11): at the end, so it appends
+    page.evaluate("document.querySelector('#more').hidden && document.querySelector('#moreFound').click(); document.querySelector('#libTabs .tab[data-tab=heard]').click()")
     page.locator("#library .cand").first.click()        # a third shot, after the other two
     assert page.evaluate("segs.length") == 3
     page.evaluate(f"tl.select(['{a}'])")
@@ -433,7 +434,7 @@ def test_i_o_and_enter_on_a_playing_clip_insert_the_marked_range(page):
     assert page.evaluate("[...tl.state.sel]") == [a], "Esc went to the picker, not the selection"
 
     page.locator("#findQ").fill("goodbye")
-    page.locator("#findGo").click()
+    page.locator("#findQ").press("Enter")      # Enter finds (the Find button went, M16)
     page.wait_for_selector("#findResults .cand", timeout=15000)
     page.locator("#findResults .cand").first.click()
     page.wait_for_selector("#findPlayer:visible")

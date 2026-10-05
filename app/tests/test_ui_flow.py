@@ -267,6 +267,7 @@ def test_remove_from_the_inspector_takes_the_shot_out_and_moves_on(page):
 
 def test_library_insert_adds_a_shot(page):
     before = page.locator("#tl .blk").count()
+    page.evaluate("document.querySelector('#more').hidden && document.querySelector('#moreFound').click(); document.querySelector('#libTabs .tab[data-tab=heard]').click()")      # heard is under more found (M16)
     page.locator("#library .cand").first.click()
     assert page.locator("#tl .blk").count() == before + 1
 
@@ -554,7 +555,7 @@ def test_find_a_moment_lists_matches_and_plays_the_whole_clip(page):
     """The finder, free layer: type what you remember, get windows, click one and
     the full clip opens seeked to the moment; add it and it becomes a shot."""
     page.locator("#findQ").fill("goodbye")
-    page.locator("#findGo").click()
+    page.locator("#findQ").press("Enter")      # Enter finds (the Find button went, M16)
     page.wait_for_selector("#findResults .cand", timeout=15000)
     rows = page.locator("#findResults .cand")
     assert rows.count() >= 1
@@ -774,8 +775,10 @@ def test_the_kept_tabs_in_the_cut_link_selects_the_block_and_the_inspector_shows
     _put_selects(page, [{"clip": "CLIP_B.MP4", "start": 0.0, "end": 2.0, "hero": True,
                          "why": "the reply"}])
     page.reload()
+    page.wait_for_selector("#tl .blk")
+    page.evaluate("dock.open('bin')"); page.locator("#binTabs .tab[data-tab=all]").click()      # in the cut: the all tab
     page.wait_for_selector("#library .keep")
-    link = page.locator("#library .keep", has_text="CLIP_B").locator("a.use")
+    link = page.locator('#library .keep[title^="CLIP_B"]').locator("a.use")
     assert link.inner_text() == "in the cut · shot 2"
     # from a cleared selection too — the link goes by id through the timeline
     page.keyboard.press("Escape")
@@ -1089,6 +1092,7 @@ def test_what_the_visual_pass_saw_shows_in_the_inspector_and_in_the_library(page
         page.reload()
         page.wait_for_selector("#tl .blk")
         # the library grows a "seen" tab now that something has been looked at
+        page.evaluate("document.querySelector('#more').hidden && document.querySelector('#moreFound').click()")      # under more found (M16)
         page.locator("#libTabs .tab", has_text="seen").click()
         cands = page.locator("#library .cand")
         assert cands.count() == 1, "notable moments only — the scenery is not offered"
@@ -1150,6 +1154,7 @@ def test_the_seen_tab_is_ordered_by_the_rank_not_by_the_kind(page, project):
     try:
         page.reload()
         page.wait_for_selector("#tl .blk")
+        page.evaluate("document.querySelector('#more').hidden && document.querySelector('#moreFound').click()")      # under more found (M16)
         page.locator("#libTabs .tab", has_text="seen").click()
         rows = page.locator("#library .cand")
         assert rows.count() == 2, "junk is never offered, whatever its kind says"
@@ -1190,7 +1195,9 @@ def test_the_seen_tab_offers_the_audit_priced_and_marks_a_one_look_find(page, pr
     try:
         page.reload()
         page.wait_for_selector("#tl .blk")
-        assert not page.locator("#auditRow").is_visible()     # heard: not this tab's
+        # in view until it has been used once (INTAKE M16), then on the seen tab
+        assert page.locator("#auditRow").is_visible()
+        page.evaluate("document.querySelector('#more').hidden && document.querySelector('#moreFound').click()")      # under more found (M16)
         page.locator("#libTabs .tab", has_text="seen").click()
         button = page.locator("#auditClaims")
         assert button.is_visible() and button.is_enabled()
@@ -1203,6 +1210,7 @@ def test_the_seen_tab_offers_the_audit_priced_and_marks_a_one_look_find(page, pr
                           encoding="utf-8")
         page.reload()
         page.wait_for_selector("#tl .blk")
+        page.evaluate("document.querySelector('#more').hidden && document.querySelector('#moreFound').click()")      # under more found (M16)
         page.locator("#libTabs .tab", has_text="seen").click()
         assert page.locator("#auditClaims").is_disabled()
         assert "close look" in page.locator("#auditInfo").inner_text()
@@ -1481,21 +1489,26 @@ def test_the_kept_tab_shows_the_bin_and_puts_a_keep_in_the_cut(page):
     ])
     page.reload()
     page.wait_for_selector("#library .keep")
-    # kept is the first tab and the one the board opened on
-    tabs = page.locator("#libTabs .tab")
-    assert tabs.first.inner_text() == "kept"
+    # "not in the cut" is the tab the board opened on (INTAKE M16, C10); all is beside it
+    page.evaluate("dock.open('bin')")
+    tabs = page.locator("#binTabs .tab")
+    assert tabs.first.inner_text() == "not in the cut · 3"
     assert "sel" in tabs.first.get_attribute("class")
+    assert tabs.nth(1).inner_text() == "all 3"
+    tabs.nth(1).click()                           # all: the rows flip in place below
     rows = page.locator("#library .keep")
     assert rows.count() == 3
-    # hero first, then by clip and start; each row says what it is
+    # hero first, then by clip and start; a card is labelled by the note, else the line
+    # spoken in it — no clip name, no times, no detector's reason on it
     hero = rows.nth(0)
-    assert "★ HERO" in hero.inner_text()
-    assert "CLIP_C · 0:00.5 → 0:04.0 · 3.5 s" in hero.inner_text()
-    assert "(frames 0:00 · 0:04)" in hero.inner_text()
+    assert hero.locator(".w").inner_text() == "★ “hello there”"
+    assert "3.5 s" in hero.inner_text()
+    assert "CLIP_C" not in hero.inner_text() and "frames" not in hero.inner_text()
+    assert hero.get_attribute("title").startswith("CLIP_C 0:00.5–0:04.0")
     assert hero.locator("img.still").get_attribute("src") == "/media/poster/CLIP_C.jpg?t=0.50"
     plain = rows.nth(1)
-    assert "CLIP_A" in plain.inner_text() and "“end on this”" in plain.inner_text()
-    assert "HERO" not in plain.inner_text()
+    assert plain.locator(".w").inner_text() == "your note: end on this"
+    assert "★" not in plain.inner_text()
     assert plain.locator("button.add").count() == 1
     gone = rows.nth(2)
     assert "footage missing" in gone.inner_text()
@@ -1508,12 +1521,13 @@ def test_the_kept_tab_shows_the_bin_and_puts_a_keep_in_the_cut(page):
 
     # + add to cut: a shot with the keep's range and reason, after the selected shot
     page.evaluate("tl.seek(1.5)")            # adding lands at the playhead (INTAKE M11): the cut nearest 1.5 s is 2.0, so shot 2
+    hero.hover()                             # + add shows on the hovered card (M16)
     hero.locator("button.add").click()
     assert page.locator("#tl .blk").count() == 3
     added = page.evaluate("JSON.stringify([segs[1].clip, segs[1].in, segs[1].out, segs[1].why])")
     assert added == '["CLIP_C.MP4",0.5,4,"the whole take (frames 0:00 · 0:04)"]'
     # …and the row flips at once, before the autosave lands
-    hero = page.locator("#library .keep", has_text="CLIP_C")
+    hero = page.locator('#library .keep[title^="CLIP_C"]')
     assert hero.locator("a.use").inner_text() == "in the cut · shot 2"
     assert hero.locator("button.add").count() == 0
     page.wait_for_function(
@@ -1526,21 +1540,21 @@ def test_the_kept_tab_shows_the_bin_and_puts_a_keep_in_the_cut(page):
     on_server = page.evaluate("fetch('/api/selects').then(r => r.json())")
     hero_row = next(s for s in on_server["selects"] if s["clip"] == "CLIP_C.MP4")
     assert hero_row["used_in"], hero_row
-    assert page.locator("#library .keep", has_text="CLIP_C").locator("a.use").inner_text() \
+    assert page.locator('#library .keep[title^="CLIP_C"]').locator("a.use").inner_text() \
         == "in the cut · shot 2"
     # the link selects the shot
     select_shot(page, 0)
-    page.locator("#library .keep", has_text="CLIP_C").locator("a.use").click()
+    page.locator('#library .keep[title^="CLIP_C"]').locator("a.use").click()
     assert page.evaluate("sel") == 1
     assert page.locator("#inspector .clip").inner_text() == "CLIP_C"
     # removing the shot un-flips the row
     page.keyboard.press("x")
-    assert page.locator("#library .keep", has_text="CLIP_C").locator("button.add").count() == 1
+    assert page.locator('#library .keep[title^="CLIP_C"]').locator("button.add").count() == 1
     cut_says(page, "1 hero not in it")
 
 
 def test_an_empty_bin_says_where_to_keep_things(page):
-    page.locator("#libTabs .tab", has_text="kept").click()
+    assert "sel" in page.locator("#binTabs .tab[data-tab=out]").get_attribute("class")
     box = page.locator("#library")
     page.wait_for_function(
         "document.querySelector('#library').textContent.includes('nothing kept yet')",
@@ -1551,10 +1565,10 @@ def test_an_empty_bin_says_where_to_keep_things(page):
     # and there is nothing to cut from: the control says so rather than firing an Ask
     assert page.locator("#cutFromBin").is_disabled()
     assert "nothing kept yet" in page.locator("#cutFromBinHint").inner_text()
-    # with no keeps the board opens on heard, as before
-    page.reload()
-    page.wait_for_selector("#tl .blk")
-    assert "sel" in page.locator("#libTabs .tab", has_text="heard").get_attribute("class")
+    # the machine's offers are one click further, under more found (INTAKE M16)
+    assert not page.locator("#libTabs").is_visible()
+    page.locator("#moreFound").click()
+    page.locator("#libTabs .tab", has_text="heard").click()
     assert page.locator("#library .cand").count() >= 1
 
 
@@ -1627,7 +1641,8 @@ def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
         assert page.input_value("#story") == ""
         page.locator("#acceptProposal").click()
         assert page.locator("#tl .blk").count() == 1
-        assert page.locator("#library .keep", has_text="CLIP_C").locator("a.use").inner_text() \
+        page.evaluate("dock.open('bin')"); page.locator("#binTabs .tab[data-tab=all]").click()
+        assert page.locator('#library .keep[title^="CLIP_C"]').locator("a.use").inner_text() \
             == "in the cut · shot 1"
         cut_says(page, "not in it", present=False)
     finally:
@@ -1743,14 +1758,14 @@ def test_ask_the_model_in_the_bin_is_priced_before_it_can_be_clicked(page, live_
     price was shown. It is disabled until the free price is on it, and when the price
     cannot be had it says so and stays disabled."""
     usd = page.evaluate("fetch('/api/find/price').then(r => r.json()).then(d => d.usd)")
-    want = f"Ask the model · ~${usd:.2f}"
+    want = f"Not it? Ask the model · ~${usd:.2f}"
     page.wait_for_function(
         "(w) => document.querySelector('#findDeep').textContent.trim() === w", arg=want,
         timeout=5000)
     assert page.locator("#findDeep").is_enabled()
     # the page as served starts it disabled: no click before the price lands
     html = page.evaluate("fetch('/').then(r => r.text())")
-    assert '<button id="findDeep" disabled' in html
+    assert '<button id="findDeep" hidden disabled' in html
     # no price to be had: no unpriced spend either
     page.route("**/api/find/price", lambda route: route.abort())
     page.reload()

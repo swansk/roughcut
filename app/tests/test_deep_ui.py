@@ -215,6 +215,7 @@ def test_look_deeper_from_a_seen_row_is_priced_then_runs_and_shows_the_beats(
     try:
         pg = _board(browser, bin_state)
         pg.evaluate("dock.open('bin')")
+        pg.evaluate("document.querySelector('#more').hidden && document.querySelector('#moreFound').click()")      # under more found (M16)
         pg.click("#libTabs .tab[data-tab=seen]")
         row = "#library .cand:has(.dv-look)"
         pg.wait_for_function("""() => [...document.querySelectorAll('#library .cand .dv-look')]

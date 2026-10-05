@@ -234,6 +234,19 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **The Bin: one find box, "not in the cut" first, cards named in plain words (INTAKE M16
+  I16.4).** The Find button is gone — Enter in the box finds a moment anywhere, and typing
+  still filters the keeps. Under any find result sits a plain `Not it? Ask the model ·
+  ~$x` (hidden until a find has run). The tabs are `not in the cut · N` (the default, so
+  `/#tool=bin` opens there) and `all N`; two cards a row, each labelled by your note,
+  else the line spoken in it, else what was seen, with its length — no clip name, no
+  `0:37.6 → 0:44.3`, no detector title (`onset spike (impact/sudden event)`), no chips;
+  the clip and range are the card's tooltip. `+ add` shows on the card under the pointer
+  or the selected one. The instruction paragraph is gone. The evidence chips and the
+  heard / seen tabs moved under `more found ▸`; the `in the cut` / `not yet` chips went
+  (the tabs say it). The Audit button stays in view until it has been clicked once on
+  this browser, then lives with the seen tab. The Bin rail badge counts the keeps not in
+  the cut. A chosen tab is plain, not blue.
 - **The board's selected shot is a strip under the timeline, in view with the picture
   (INTAKE M16 I16.4).** The inspector sat below the fold at y≈953 on Killington with ~27
   controls and ~290 words per shot. The picture now takes about 46 % of the window (never

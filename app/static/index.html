@@ -193,7 +193,8 @@
   .tab { font-size: 12px; color: var(--dim); border: 1px solid var(--line);
          border-radius: 999px; padding: 3px 11px; cursor: pointer; }
   .tab:hover { color: var(--text); }
-  .tab.sel { color: #0b0b0f; background: var(--accent); border-color: transparent; font-weight: 600; }
+  /* a chosen tab is plain: the one blue control on a screen is Next's (INTAKE M16) */
+  .tab.sel { color: var(--text); background: var(--card-hi); border-color: var(--text); font-weight: 600; }
   .kind { font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
           color: var(--dim); border: 1px solid var(--line); border-radius: 4px;
           padding: 0 4px; margin-right: 5px; font-style: normal; }
@@ -217,8 +218,12 @@
   .chip.on { border-color: var(--accent); color: var(--text); background: var(--card-hi); }
   .chip.hero { color: var(--warn); }
   .chip.in { color: var(--good); border-color: #2c4c39; }
-  #library.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-                  gap: 8px; }
+  #library.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  /* + add shows on the card under the pointer or the selected one (INTAKE M16) */
+  .keep:not(:hover):not(.sel):not(:focus-within) button.use.add { visibility: hidden; }
+  #findDeep { margin-top: 6px; }
+  #findDeep[hidden], #more[hidden], #libHint:empty { display: none; }
+  #moreFound { margin-top: 8px; padding: 2px 0; color: var(--accent); }
   .keep { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
           overflow: hidden; cursor: grab; outline: none; }
   .keep:focus-visible, .keep.sel { border-color: var(--accent);
@@ -506,16 +511,20 @@
       <button type="button" class="tool" data-tool="out" title="renders and versions"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/><path d="M12 3v12"/><path d="M7 8l5-5 5 5"/></svg><span>Out</span><b class="badge"></b></button>
     </nav>
     <div id="tools">
-      <!-- BIN — the pass's keeps as a labelled grid, with Find as its search box. -->
+      <!-- BIN — the pass's keeps, two to a row, with one find box (INTAKE M16 I16.4):
+           typing filters the keeps, Enter finds a moment anywhere in the footage, and
+           the priced model search sits under any find. "not in the cut" is the default
+           (C10); the machine's offers — heard, seen, the evidence chips — are behind
+           "more found ▸". -->
       <section data-tool="bin">
         <div class="findbar">
-          <input type="text" id="findQ" placeholder="filter the bin · or find a moment anywhere: where I hit the rocks">
-          <button id="findGo" title="word search over every transcript and everything the visual pass saw">Find</button>
-          <button id="findDeep" disabled
-                  title="One model call reading every transcript and everything the visual pass saw — finds what word-matching cannot (a river said as a stream).">Ask the model</button>
+          <input type="text" id="findQ" placeholder="find a moment…"
+                 title="typing filters the keeps · Enter finds a moment anywhere in the footage">
         </div>
         <div class="hint" id="findState" style="margin-top:4px"></div>
         <div id="findResults" class="lib" style="max-height:32vh;margin-top:6px"></div>
+        <button id="findDeep" hidden disabled
+                title="One model call reading every transcript and everything the visual pass saw — finds what word-matching cannot (a river said as a stream).">Not it? Ask the model</button>
         <div id="findPlayer" style="display:none;margin-top:8px">
           <video id="findVideo" controls preload="metadata" playsinline></video>
           <div class="hint" id="findWhat" style="margin-top:4px"></div>
@@ -524,22 +533,26 @@
             <span class="hint" id="findInfo"></span>
           </div>
         </div>
-        <!-- kept first: what the pass kept is the bin, and the bin is what a cut is
-             built from. heard and seen are the machine's offers. -->
-        <div class="tabs" id="libTabs">
-          <span class="tab" data-tab="kept">kept</span>
-          <span class="tab sel" data-tab="heard">heard</span>
-          <span class="tab" data-tab="seen" style="display:none">seen</span>
-        </div>
-        <div class="hint" id="libHint" style="margin-bottom:6px">Audio candidates not yet in the cut.</div>
-        <!-- the audit: a close look at the claims at the top of the seen tab, priced -->
-        <div id="auditRow" style="display:none;gap:8px;align-items:center;margin-bottom:6px">
+        <!-- the audit: priced, in view until it has been used once, then under more found -->
+        <div id="auditRow" style="display:none;gap:8px;align-items:center;margin:8px 0 0">
           <button id="auditClaims"
             title="A 1 s close look at the highest-ranked jump / fall / crash claims nobody has checked, then the rank is rebuilt">Audit the claims</button>
           <span class="hint" id="auditInfo"></span>
         </div>
-        <div id="binFilter" hidden></div>
+        <div class="tabs" id="binTabs">
+          <span class="tab sel" data-tab="out">not in the cut</span>
+          <span class="tab" data-tab="all">all</span>
+        </div>
+        <div id="more" hidden>
+          <div class="tabs" id="libTabs">
+            <span class="tab" data-tab="heard">heard</span>
+            <span class="tab" data-tab="seen" style="display:none">seen</span>
+          </div>
+          <div id="binFilter" hidden></div>
+        </div>
+        <div class="hint" id="libHint" style="margin-bottom:6px"></div>
         <div class="lib" id="library"></div>
+        <button type="button" id="moreFound" class="ghost">more found ▸</button>
       </section>
 
       <!-- ASK — the whole-cut ask, cut from the bin, and the story every ask reads. -->
