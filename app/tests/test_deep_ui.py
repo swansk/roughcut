@@ -186,6 +186,32 @@ def test_the_inspector_shows_how_the_shot_s_clip_was_seen(bin_state, browser):
     assert pg.locator(f"{box} .dv-film figure.lit").count() == 2
 
 
+def test_a_trim_keeps_the_shot_s_machine_line_open_with_the_new_range(bin_state, browser):
+    """INTAKE M16 decision 9: the line "opens per item and closes on the next". A trim is
+    the same item, but the strip rebuilt the line once the trim settled, and every build
+    renders closed — the opened strip snapped shut under Karl's hands. Now the open
+    strip's mark follows the new range and the top row's Look deeper is re-priced for it."""
+    pg = _board(browser, bin_state)
+    pg.locator("#tl .blk").nth(0).click()
+    sid = pg.evaluate("tl.idAt(0)")
+    box = "#inspector .deepline"
+    look = "#inspector .srow.top .lookhost .dv-look"
+    pg.wait_for_function(f"(document.querySelector('{look}') || {{}}).title?.includes('1.0–3.0 s')")
+    pg.wait_for_function(f"!document.querySelector('{box} .dv-line').textContent.startsWith('…')")
+    pg.locator(f"{box} .dv-line").click()
+    pg.wait_for_selector(f"{box} .dv-markband")
+    pg.evaluate(f"tl.setRange('{sid}', 1.5, null)")
+    pg.wait_for_function(f"(document.querySelector('{look}') || {{}}).title?.includes('1.5–3.0 s')")
+    pg.wait_for_timeout(300)
+    assert pg.evaluate("tl.state.anchor") == sid, "the same shot is selected"
+    assert pg.is_visible(f"{box} .dv-more"), "the trim closed the line"
+    assert pg.evaluate(f"document.querySelector('{box} .dv-more')._deep.markRange") == [1.5, 3.0]
+    assert pg.inner_text(f"{box} .dv-line").endswith("▾")
+    # the next shot is the next item: closed
+    pg.locator("#tl .blk").nth(1).click()
+    pg.wait_for_function(f"document.querySelector('{box} .dv-line') && document.querySelector('{box} .dv-more').hidden")
+
+
 class Scripted:
     def __init__(self):
         self.seen = []

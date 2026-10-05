@@ -95,6 +95,13 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **A trim keeps the shot's "how the machine saw" line as it was (INTAKE M16 review,
+  decision 9).** The line opens per item and closes on the next; a trim is the same
+  item, but once it settled (450 ms) the strip rebuilt the line — every build renders
+  closed — and removed any Look deeper result drawn under the top row. Now a trim of the
+  same shot moves the line's mark to the new range (open or closed as it was), keeps a
+  drawn result, and re-prices only the top row's Look deeper; a new shot builds both
+  afresh. New test in `test_deep_ui.py`; it fails without the fix.
 - **A clicked P / X / U drops a pending batch question, as a key does (INTAKE M16
   review, decision 5).** Any key but the one that asked drops "reject 3 picks? ⇧X again ·
   Esc"; the new keycap buttons called the verdict directly and left it armed, so after

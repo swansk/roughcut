@@ -613,8 +613,10 @@ function fillShot(box, seg) {
 }
 
 /* Look deeper (priced, on the strip's top row) and how the machine saw the clip (one
- * line, closed). Rebuilt when the shot's range changes, once the trimming settles — a
- * drag must not ask for a price per frame. */
+ * line, closed). Re-priced when the shot's range changes, once the trimming settles — a
+ * drag must not ask for a price per frame. A trim is the same item (decision 9: the
+ * line closes on the *next* one): the line keeps open or closed with the new range
+ * marked, and a Look deeper result already drawn stays; a new shot builds both afresh. */
 let machineTimer = 0;
 function machineLine(box, seg) {
   if (isGenClip(seg.clip) || !window.deep) return;
@@ -627,11 +629,15 @@ function machineLine(box, seg) {
   const go = () => {
     if (inspected() !== seg || host.dataset.key !== key) return;
     host.replaceChildren();
-    const res = host.parentNode && host.parentNode.querySelector(':scope > .dv-res');
-    if (res) res.remove();
+    const line = box.querySelector('.deepline');
+    const same = !first && line && line._line && line.dataset.clip === seg.clip;
+    if (!same) {
+      const res = host.parentNode && host.parentNode.querySelector(':scope > .dv-res');
+      if (res) res.remove();
+    }
     // deep.rowButton pads the span by 2 s each side for a moment; a shot is its own span
     if (typeof deep.rowButton === 'function') deep.rowButton(host, seg.clip, seg.in + 2, seg.out - 2);
-    const line = box.querySelector('.deepline');
+    if (same) { line._line.mark(seg.in, seg.out); return; }
     if (typeof deep.line === 'function') deep.line(line, seg.clip, { range: [seg.in, seg.out], markLabel: 'this shot' });
     else if (line) {
       // until /deep.js carries its one line: a closed line that opens the full strip
