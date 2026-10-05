@@ -218,6 +218,14 @@ same commit. Releases move entries into a dated version section.
   test expected the en-US words: under `LANG=en_GB.UTF-8` it failed on "'Sep 8, 10:05
   PM' not in '… 8 Sept, 22:05 · main · ×3 …'". The expected strings are now made in the
   page with the same options as the rows; it passes under en_GB and en_US.
+- **The picker's "one bin, two names" test reaches the bin on the board (M16 stage 0
+  review, I16.0h, test strength).** Its second registry entry — the current bin
+  remembered under the link — was overwritten when the board opened (opening
+  re-registers the bin by its own name and spelling), so the test never exercised it:
+  marking the current row by its spelled path instead of its real path, or keeping the
+  first record instead of the most recently opened, both still passed. The entry is now
+  written after the board opens, under a second name and newer; the test expects one
+  row, that record's name, and `current` true through the link. Both mutations fail.
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six

@@ -101,23 +101,42 @@ def test_a_bin_reached_by_two_names_is_listed_once(tmp_path, project):
     other.mkdir(exist_ok=True)
     if not (other / "GX01.MP4").exists():
         _make_clip(other / "GX01.MP4")
+    import os
+    import time
+
+    import server
+
     alias = tmp_path / "footage-link"
     alias.symlink_to(project["footage"].parent, target_is_directory=True)
     (tmp_path / "projects.json").write_text(json.dumps({
         "other-trip": {"footage": str(alias / "other-trip"), "edl": None,
                        "opened": 1.0, "cuts": []},
-        # the bin on the board, remembered once under the other name
-        project["footage"].name: {"footage": str(alias / project["footage"].name),
-                                  "edl": None, "opened": 2.0, "cuts": []},
     }), encoding="utf-8")
+    here = os.path.realpath(project["footage"])
     with _fresh(tmp_path, project) as c:
+        # the bin on the board, remembered a second time under another name and by the
+        # link — written after the board opened (opening re-registers the bin by its own
+        # name and spelling, which would otherwise overwrite this record)
+        known = json.loads(server.projects_path().read_text(encoding="utf-8"))
+        assert project["footage"].name in known, "opening registered the bin"
+        known["killington-by-link"] = {"footage": str(alias / project["footage"].name),
+                                       "edl": None, "opened": time.time() + 1000,
+                                       "cuts": []}
+        server._write_registry(known)
         rows = c.get("/api/projects").json()["projects"]
         names = [r["name"] for r in rows]
         assert names.count("other-trip") == 1, rows
-        assert names.count(project["footage"].name) == 1, rows
-        assert [r["name"] for r in rows if r["current"]] == [project["footage"].name]
         mine = next(r for r in rows if r["name"] == "other-trip")
         assert mine["known"] is True and mine["clips"] == 1
+        # one row for the bin on the board, whichever name reached it…
+        same = [r for r in rows if os.path.realpath(r["footage"]) == here]
+        assert len(same) == 1, rows
+        # …its most recently opened record (the link's), and still the current bin,
+        # though its path is spelled through the link
+        assert same[0]["name"] == "killington-by-link", same
+        assert same[0]["current"] is True, same
+        assert Path(same[0]["footage"]) != project["footage"]
+        assert [r["name"] for r in rows if r["current"]] == ["killington-by-link"]
 
 
 def test_opening_another_bin_repoints_everything_without_a_relaunch(tmp_path, project):
