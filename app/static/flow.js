@@ -185,7 +185,7 @@
       if (!mounted() || (target.fx && !(window.fx && fx.ready))) { later(step); return; }
       const shot = target.shot && tl.indexOf(target.shot) >= 0 ? target.shot : null;
       if (shot) {
-        tl.select([shot]);
+        tl.select([shot], { source: 'land' });   // the board's pick, not Karl's: ⌫ won't take it
         const start = tl.filmStart(shot);
         if (start >= 0) tl.seek(start);
       }

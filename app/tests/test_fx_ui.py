@@ -531,6 +531,12 @@ def test_next_lands_on_the_waiting_effect_not_the_anchored_shot(page, live_serve
     landed()
     assert page.evaluate("window.__stay") == 1
     assert page.evaluate("location.hash") == "#tool=fx"
+    # the landing is the board's pick, not a shot Karl chose: ⌫ (the pass's "previous
+    # moment") does not take it out of the cut (I16.0n)
+    cut = page.evaluate("segs.map(s => s.id)")
+    page.keyboard.press("Backspace")
+    assert page.evaluate("segs.map(s => s.id)") == cut
+    assert page.evaluate("tl.state.anchor") == sid2
     # from another screen: the href carries the target, and the hash lets go of it
     page.goto(live_server + "/open")
     page.wait_for_function(

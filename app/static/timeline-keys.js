@@ -636,9 +636,10 @@
       const n = $(s);
       if (n) n.addEventListener('pointerdown', settle, true);
     }
-    // whether the selection was chosen: anything but app.js's index being adopted; a
-    // click on a block that is already selected changes nothing, so it emits nothing
-    tl.on('select', (ev) => { chosen = ev.source !== 'app'; });
+    // whether the selection was chosen: anything but app.js's index being adopted or
+    // Next landing on its target ('land' — flow.js / fx.focus); a click on a block that
+    // is already selected changes nothing, so it emits nothing
+    tl.on('select', (ev) => { chosen = ev.source !== 'app' && ev.source !== 'land'; });
     const lane = $('#tl');
     if (lane) {
       lane.addEventListener('click', (e) => {

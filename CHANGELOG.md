@@ -39,6 +39,15 @@ same commit. Releases move entries into a dated version section.
   no cap the default (the money lane did not run `test_server.py`). It now asserts the
   cap is either absent or positive, and that `spent_usd` (this project's, from disk) is
   a number.
+- **⌫ does not take out the shot Next landed on (M16 stage 0 integration, I16.0a × n).**
+  Next's landing (`flow.js` `land()`, `fx.focus`) selected the shot with a plain
+  `tl.select`, which the select event reports as `api`, and I16.0n counts anything but
+  `app` as a shot somebody chose — so, merged, Next selected shot 2 and a ⌫ from the
+  pass's habit took it out of the cut (the landing test with ⌫ added: shot 2 gone).
+  The landing now selects with `source: 'land'`: app.js still paints (the inspector
+  follows the anchor), and `timeline-keys.js` treats it like the board's own pick, so ⌫
+  says "click a shot to choose it". The landing test presses ⌫ after Next and checks the
+  cut is whole.
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six

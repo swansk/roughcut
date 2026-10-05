@@ -124,7 +124,7 @@
  *
  *   — events —
  *   tl.on(event, fn) → off()    `change` {label, kind, ids} · `select` {ids, anchor,
- *                               source: 'click'|'api'|'app'} · `playhead` {t} · `zoom`
+ *                               source: 'click'|'api'|'app'|'land'} · `playhead` {t} · `zoom`
  *                               {zoom}.
  *
  *   — pointer contract for the lanes —

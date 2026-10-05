@@ -848,7 +848,7 @@
     if (!e) return false;
     const shot = String(e.anchor_shot || e.shot);
     const t = TL();
-    if (shotId() !== shot && shotIndex(shot) >= 0 && t && typeof t.select === 'function') t.select([shot]);
+    if (shotId() !== shot && shotIndex(shot) >= 0 && t && typeof t.select === 'function') t.select([shot], { source: 'land' });
     if (window.dock && typeof dock.open === 'function') dock.open('fx');
     onSelect();
     paint(true);
