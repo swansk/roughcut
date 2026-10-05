@@ -2131,7 +2131,7 @@ async function snap() {
   const before = total();
   segs = data.segments;
   render();
-  toast(`snapped: ${fmt(before)} → ${fmt(total())} (undo with u)`, 4000);
+  toast(`snapped: ${fmt(before)} → ${fmt(total())} (undo with ⌘Z)`, 4000);
 }
 
 /* Ask — the interject loop. A revision arrives as a *proposal*: shown as a diff,
@@ -2343,7 +2343,7 @@ function acceptProposal() {
   if (cutToo) pushUndo('proposal');     // a colour-only proposal has no cut to undo
   segs = pendingPlan.segments.map((s) => ({ ...s }));
   // Segments and colour in the one save below (INTAKE I10.5). Colour is not on the
-  // undo stack (I10.4: a setting, like the music), so `u` takes back the cut only.
+  // undo stack (I10.4: a setting, like the music), so ⌘Z takes back the cut only.
   if (graded) {
     colour = mergeColour(colour, pendingPlan.colour);
     tidyColour();
@@ -2354,8 +2354,8 @@ function acceptProposal() {
   render();
   save();                       // straight to disk; a 16-shot cut is not "in progress"
   answerProposal('accept');
-  toast(!graded ? 'applied — undo with u'
-    : cutToo ? 'applied, cut and colour — u undoes the cut; the grade is in the inspector'
+  toast(!graded ? 'applied — undo with ⌘Z'
+    : cutToo ? 'applied, cut and colour — ⌘Z undoes the cut; the grade is in the inspector'
       : 'colour applied — the grade is in the inspector', graded ? 5000 : undefined);
 }
 
@@ -2761,7 +2761,7 @@ document.addEventListener('keydown', (e) => {
   const k = e.key;
   if (k === 'j') { sel = Math.min(segs.length - 1, sel + 1); paint(); scrollSel(); }
   else if (k === 'k') { sel = Math.max(0, sel - 1); paint(); scrollSel(); }
-  else if (k === 'u') undo();
+  // no plain `u`: on the pass U is "later" (I16.0 n); undo is ⌘Z, the foundation's
   else if (k === 'x') { pushUndo('remove'); segs.splice(sel, 1); render(); }
   else if (k === '[') { pushUndo('trim'); nudge(sel, 'in', -step); render(); }
   else if (k === ']') { pushUndo('trim'); nudge(sel, 'in', step); render(); }

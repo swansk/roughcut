@@ -27,7 +27,8 @@
  *                ⌥I ⌥O clear. Playing the cut: a toast says to open a clip.
  *   C            razor at the playhead (the selected shot, else the shot under it).
  *   Q W          the selected shot's in / out to the playhead.
- *   X ⌫ Del      ripple delete the selection (multi-select included).
+ *   X ⌫ Del      ripple delete the selection (multi-select included); ⌫ Del only a
+ *                selection somebody chose, never one the board adopted (I16.0 n).
  *   ⌘A  ⌘D  Esc  select every shot · duplicate the selection after itself · clear the
  *                selection and the marks.
  *   ⌘Z ⌘⇧Z       the foundation's — not bound twice here.
@@ -61,7 +62,7 @@
     ['↵', 'with both marks: insert that range as a shot after the selected one'],
     ['C', 'razor at the playhead — the selected shot, else the shot under it'],
     ['Q W', 'the selected shot’s in / out to the playhead'],
-    ['X ⌫ Del', 'ripple delete the selection'],
+    ['X ⌫ Del', 'ripple delete the selection (⌫ Del: only a shot you chose)'],
     ['⌘Z ⌘⇧Z', 'undo / redo', 'foundation'],
     ['⌘A', 'select every shot'],
     ['⌘D', 'duplicate the selection after itself'],
@@ -471,7 +472,22 @@
     const ids = [...tl.state.sel];
     if (!ids.length) { say('nothing selected'); return true; }
     tl.remove(ids);                  // the foundation selects the shot that takes the place
+    chosen = false;                  // …which nobody chose
     say(`removed ${ids.length} shot${ids.length > 1 ? 's' : ''} — ⌘Z brings ${ids.length > 1 ? 'them' : 'it'} back`);
+    return true;
+  }
+
+  /* ⌫ / Del take out only a shot somebody chose (I16.0 n) — a click on a block, a key
+   * that selects (↑ ↓ ⌘A ⌘D C, Esc to clear) — never the one the board picked: the shot
+   * playback adopts as the playhead crosses into it, the first shot at load, the one
+   * handed on after a delete. On the pass ⌫ is "the previous moment", so a hand used to
+   * it took the shot under the playhead out of the cut. X is unchanged. */
+  let chosen = false;
+
+  function backspace() {
+    if (chosen) return rippleDelete();
+    say(tl.state.sel.size ? 'click a shot to choose it — ⌫ takes out only a shot you selected'
+      : 'nothing selected');
     return true;
   }
 
@@ -591,7 +607,8 @@
         case 'c': handled = razor(); break;
         case 'q': handled = trimTo('in'); break;
         case 'w': handled = trimTo('out'); break;
-        case 'x': case 'Delete': case 'Backspace': handled = rippleDelete(); break;
+        case 'x': handled = rippleDelete(); break;
+        case 'Delete': case 'Backspace': handled = backspace(); break;
         case 'Escape':                     // the switcher's picker and a trim drag in progress come first
           handled = (pickerOpen() || (window.tl && tl.trim && tl.trim.dragging)) ? false : clearAll();
           break;
@@ -618,6 +635,15 @@
     for (const s of ['#playCut', '.screen', '#tl']) {
       const n = $(s);
       if (n) n.addEventListener('pointerdown', settle, true);
+    }
+    // whether the selection was chosen: anything but app.js's index being adopted; a
+    // click on a block that is already selected changes nothing, so it emits nothing
+    tl.on('select', (ev) => { chosen = ev.source !== 'app'; });
+    const lane = $('#tl');
+    if (lane) {
+      lane.addEventListener('click', (e) => {
+        if (e.target.closest('.blk') && tl.state.sel.size) chosen = true;
+      }, true);
     }
     ensureMarksEl();
     renderMap();

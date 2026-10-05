@@ -115,6 +115,14 @@ same commit. Releases move entries into a dated version section.
   it (a 31 px row, paid for in the frame's height).
 
 ### Fixed
+- **On the board plain U no longer undoes, and ⌫ takes out only a shot you chose (INTAKE
+  I16.0 n).** U means "later" on the pass and meant "undo" on the board; undo is ⌘Z
+  (the keys sheet, the undo button's tooltip and the proposal toasts say so). ⌫ / Del
+  ripple-deleted whatever was selected, and the board selects on its own — the first
+  shot at load, the shot under the playhead as the cut plays, the shot handed on after a
+  delete — so a pass habit (⌫ = previous moment) took a shot out of the cut. ⌫ / Del now
+  need a selection somebody made (a click on a block, a key that selects); otherwise
+  they say "click a shot to choose it". X is unchanged.
 - **The CLI banner's commands are right for the box the board runs on (INTAKE I16.0 m).**
   The board runs natively on foxtrot now, and the banner still said `wsl -e bash -lc
   "claude update"` and "Double-click this file in Explorer", for a path that exists only

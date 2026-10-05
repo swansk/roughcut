@@ -308,10 +308,51 @@ def test_x_removes_the_whole_selection_and_one_undo_restores_it(page):
     heir = page.evaluate("segs[0].id")
     assert page.evaluate("[...tl.state.sel]") == [heir]
     assert page.evaluate("sel") == 0
+    # the heir was handed on, not chosen: ⌫ asks for a choice (I16.0 n)…
+    page.keyboard.press("Backspace")
+    assert page.evaluate("segs.length") == 2 and heir in ids(page)
+    page.wait_for_function(
+        "document.querySelector('#toast').textContent.includes('click a shot')", timeout=3000)
+    # …and takes it once it is chosen
+    page.locator(f'#tl .blk[data-id="{heir}"]').click()
     page.keyboard.press("Backspace")
     assert page.evaluate("segs.length") == 1
     assert heir not in ids(page)
     assert page.evaluate("[...tl.state.sel]") == ids(page), "the last one left is selected"
+
+
+def test_backspace_never_takes_the_shot_the_board_picked(page):
+    """I16.0 (n): on the pass ⌫ is "the previous moment"; on the board it ripple-deleted
+    whatever was selected, and the board selects on its own — the first shot at load,
+    the shot under the playhead as the cut plays. ⌫ and Del take only a chosen shot;
+    X is unchanged."""
+    a, b = ids(page)
+    assert page.evaluate("[...tl.state.sel]") == [a], "the board picked the first shot"
+    for key in ("Backspace", "Delete"):
+        page.keyboard.press(key)
+        assert ids(page) == [a, b], key
+    # playback carries the selection to the shot under the playhead: still not chosen
+    page.evaluate("sel = 1; paint()")              # app.js's index moving, as playback does
+    assert page.evaluate("[...tl.state.sel]") == [b]
+    page.keyboard.press("Backspace")
+    assert ids(page) == [a, b]
+    # a click on it is a choice — even on the block already selected, which changes
+    # no selection and so emits nothing
+    page.locator(f'#tl .blk[data-id="{b}"]').click()
+    page.keyboard.press("Backspace")
+    assert ids(page) == [a]
+
+
+def test_plain_u_does_not_undo_on_the_board(page):
+    """I16.0 (n): U is "later" on the pass and was "undo" on the board. ⌘Z undoes."""
+    a, b = ids(page)
+    page.evaluate(f"tl.select(['{b}'])")
+    page.keyboard.press("x")
+    assert ids(page) == [a]
+    page.keyboard.press("u")
+    assert ids(page) == [a]
+    page.keyboard.press("Control+z")
+    assert ids(page) == [a, b]
 
 
 def test_cmd_d_duplicates_the_selection_after_itself(page, project):

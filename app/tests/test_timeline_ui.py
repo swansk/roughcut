@@ -350,7 +350,9 @@ def test_the_inspectors_edits_share_the_stack_with_the_timeline(page):
     page.locator("#undo").click()
     assert page.evaluate("segs.map(s => s.clip)") == ["CLIP_A.MP4", "CLIP_B.MP4"]
     assert page.locator("#undo").get_attribute("title").startswith("undo: trim")
-    page.keyboard.press("u")
+    page.keyboard.press("u")                       # plain U is the pass's "later", not undo (I16.0 n)
+    assert page.evaluate("segs[0].out") == 3.25
+    page.keyboard.press("Control+z")
     assert page.evaluate("segs[0].out") == 3.0
     assert page.locator("#redo").get_attribute("title").startswith("redo: trim")
     page.locator("#redo").click()
