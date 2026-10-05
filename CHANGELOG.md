@@ -71,6 +71,10 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **An empty folder offers nothing to index (INTAKE M16 I16.2, review).** With no clips
+  the new setup state still showed *Index the footage*, which the server refuses with a
+  400 ("no footage to index"). An empty folder is its own state now: the "No footage in
+  this folder yet" line, no Index button.
 - **Next lands on the waiting effect (INTAKE M16 I16.0a).** On Killington, Next opened
   the FX tool on whatever shot the board had anchored — shot 1's accepted typed title —
   while the slow-motion proposal `fx_d644520f` waited on shot 17 (`g1ce00e2b83`): the
@@ -404,6 +408,50 @@ same commit. Releases move entries into a dated version section.
   promise), so looking at a shot started its sound. Now the block is selected, the
   playhead and the monitor sit on its first frame, and nothing plays; space or a
   double-click on the block plays from there. ⇧-click and ⌘-click are unchanged.
+- **The open screen's popovers hang under the header, and the slider says its interval
+  once (INTAKE M16 I16.2, review).** The settings and keys popovers were fixed at
+  `top: 50px`, which lands on the header itself when the CLI banner sits above it in
+  the page; they now open under the header wherever it is drawn, and scroll inside when
+  taller than the window. The open slider repeated the line above it ("Looks at a frame
+  every 4 s" / "a frame every 4 s · sees the run, misses the moment"); under it now is
+  only what the stop sees ("sees the run, misses the moment").
+- **The footage screen, in two states with one header row (INTAKE M16 I16.2).**
+  Measured headless at 1440×900 on the suite's 3-clip bin: setup 19 controls · 460
+  words in view → 15 · 74; indexed 17 · 314 in view (480 on the page, 2 blue buttons)
+  → 14 · 78, one screen, no blue (Next's is-next comes from /flow.js) — both counts
+  still carry the step bar, which the nav lane removes. **Header** (C1): `#hdBin`,
+  `#flow`, then `?` (the page's four keys in a small popover) and *settings*; gone are
+  "ROUGHCUT", the second bin name and the telemetry count. **Setup** (no journal, new
+  clips, or a stage still to run): clips by day, *What is this film about?*, "Looks at
+  a frame every 4 s · change" (the 4/3/2/1 s slider opens on *change* and re-prices the
+  button), and *Index the footage · ~$X* (`data-next-for="index footage"`), which
+  becomes one progress line ("Indexing · 2 of 3 ready · about 1:40 left") once
+  clicked. **Done**: "12 clips · 43:08 · Jan 18 + Jan 27", the pictures taken from
+  mid-clip (the poster's `?t=` at half the length — CLIP_12's first frame is black), a
+  badge only when something is wrong (not heard yet · look paused · parked · missing ·
+  junk?, with *Junk* / *Keep* answered on the card through `POST /api/junk`), and one
+  line — "every word heard · a frame every 4 s · close looks on all 12 · spent $4.38 ▸"
+  — that opens to the per-clip table and the journal. When the looks are paused, one
+  box: "Looks paused on 9 clips", why, *Resume · ~$X*. **Removed**: the 12-row table of
+  7 stage chips + PRIORITY + STATE from the main view, RELEASED ×12, the listened /
+  telemetry / looked / on-the-pass flags, the ~155-word flags legend, the per-card
+  coverage minis (`/deep.js` no longer loads here), "claude_cli · claude-opus-5-5" (the
+  CLI banner speaks when the CLI needs Karl), the settings summary line, "runs on its
+  own · survives a crash…", the price detail and slider hints, "Open the pass on 12
+  clips →", "← the cut board", "close this tab…", and the themes step whole (Propose
+  themes, theme and people chips, add your own, Keep / Discard, the transcripts' one
+  sentence, two hints). The order moved into the settings drawer beside the cap and the
+  workers; no `.primary` style is left on the page.
+- **The film's one sentence tags moments, in place of themes (INTAKE M16 I16.2,
+  decision 8).** The themes step goes from the open screen; what it fed — tags and the
+  +0.25 lift on the pass's moments (`picks.theme_hits`), the index's `theme_hits`
+  priority term — now reads the EDL's `story`, for free: `picks.sentence_words` keeps
+  its content words (find.py's stopwords out, plus words any sentence about a film
+  carries — "about", "film", "being"; one tag per stem), and `picks.brief_tags` puts
+  any themes kept before the step went first. Killington's sentence, as the proposal quotes it, gives
+  *friends · skiing · killington · silly · hitting · rocks · skis*. `GET /api/picks`
+  passes `story` to `picks.build`; `index_facts` counts the same tags. Names stay in the
+  EDL as dictation's vocabulary; the themes endpoints stay.
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
   buttons called the model with no price: the empty board's *Ask for a first cut* and
   *Cut from the bin*, the Ask panel's *Ask* and *Cut from the bin*, a shot's *Ask*, and

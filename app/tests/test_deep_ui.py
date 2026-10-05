@@ -255,10 +255,12 @@ def test_the_pass_carries_the_strip_under_its_tape(bin_state, browser):
         pg.wait_for_function("!document.querySelector('#deepFloor .dv-res').innerHTML")
 
 
-def test_the_open_screen_cards_carry_a_mini_strip(bin_state, browser):
+def test_the_open_screen_cards_carry_no_coverage_strip(bin_state, browser):
+    """INTAKE M16 (C4, I16.2): how the machine saw a clip is one line on the pass and
+    the board; a card on the open screen is its picture, length and name, and how the
+    bin was indexed is the one line above the cards."""
     pg = browser.new_page(viewport={"width": 1280, "height": 900})
     pg.goto(f"{bin_state}/open")
-    pg.wait_for_selector('.card[data-clip="CLIP_A.MP4"] .dv-mini')
-    title = pg.get_attribute('.card[data-clip="CLIP_A.MP4"] .dv-mini', "title")
-    assert "a frame every 2 s" in title and "deep: 1 span" in title
-    assert pg.locator('.card[data-clip="CLIP_A.MP4"] .dv-mini i.d').count() == 1
+    pg.wait_for_selector('.card[data-clip="CLIP_A.MP4"]')
+    assert pg.locator(".dv-mini").count() == 0
+    assert pg.evaluate("typeof window.deep") == "undefined", "/deep.js is not loaded there"

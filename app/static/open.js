@@ -1,32 +1,37 @@
-/* Roughcut — the open screen (docs/design/cutting-room-floor.html §2–§3, INTAKE M5).
+/* Roughcut — the open screen (docs/design/cutting-room-floor.html §2–§3, INTAKE M5, M16).
  *
- * Know the bin before you pay for it: the folder as a contact sheet — one grid per
- * session in capture order, a card per clip with its first frame, its length and the
- * free flags — the price of looking before the button that spends it, and the journal's
- * word on every clip while the index runs. Framework-free like app.js and floor.js,
- * served from disk; it borrows their patterns by copy.
+ * Know the bin before you pay for it: the folder as a contact sheet — one grid per day
+ * in capture order, a card per clip with a picture from the middle of it, its length and
+ * its name — and the price of looking on the button that spends it. Framework-free like
+ * app.js and floor.js, served from disk; it borrows their patterns by copy.
  *
- * Two actions spend money. **Index the footage** → POST /api/index (decision 3: unattended,
- * resumable, priority-ordered, releasing clips whole). **Propose themes** → POST
- * /api/themes/propose (INTAKE I5.2): one judge-role call over the transcripts, priced
- * before the button, whose answer is chips the editor keeps or discards — nothing from a
- * proposal is the EDL's word until Keep. Everything else here is ffprobe and file checks.
- * While a run is going the page polls GET /api/index every 2 s; the run lives in the
- * server, so closing the tab changes nothing.
+ * Two states (INTAKE M16 I16.2, "take things away"). **Setup** — no index yet, new clips,
+ * or a stage still to run: the sentence, "Looks at a frame every 4 s · change" (the
+ * slider opens on change and re-prices the button), and **Index the footage · ~$X**,
+ * which becomes one progress line once clicked. **Done**: a headline, the pictures, a
+ * badge on a card only when something is wrong with it (not heard yet · look paused ·
+ * parked · missing · junk? answered on the card), and one line on how it was indexed that
+ * opens to the per-clip table and the journal. While a run is going the page polls
+ * GET /api/index every 2 s; the run lives in the server, so closing the tab changes
+ * nothing.
+ *
+ * One action spends money: the Index button → POST /api/index (decision 3: unattended,
+ * resumable, priority-ordered, releasing clips whole), or Resume when the cap or the
+ * editor paused the looks. The themes step is gone (M16 decision 8): the sentence is the
+ * brief, and its words tag moments for free (roughcut/picks.py). Everything else here is
+ * ffprobe and file checks.
  *
  * The bin is something you point at, not a launch argument (INTAKE I5.4): the name in
- * the header opens a picker over GET /api/projects, and a row (or a path typed in) is
- * POST /api/projects/open — the server re-points itself, and this page reloads all of
- * its data for the new bin. A 409 (a job still running) or a 400 (no video there) is
- * said and the panel stays.
+ * the header opens the switcher (/switcher.js), and this page reloads all of its data
+ * for the new bin through `window.roughcutReopen`.
  *
- * Workers and the budget cap live in settings (design §2 Fig. 1: "workers 2 · cap $15 ·
- * settings ▾"), behind the gear next to the Index button (or `,`): GET/PUT /api/settings.
- * No cap is the default (INTAKE M16 decision 7); a cap, when chosen, is on this
- * project's spend — the one money number on this page — and is the line the index
- * pauses its priced stages at. A cap from the environment (ROUGHCUT_BUDGET_USD) wins
- * over the one saved here, so the choice is disabled when the server says so. Workers
- * are one small stepper per stage, 1–8, applied to the next run.
+ * The order, the workers and the budget cap live in settings, behind the header's
+ * settings button (or `,`): GET/PUT /api/settings for the cap and the workers, the order
+ * riding with the next POST /api/index. No cap is the default (INTAKE M16 decision 7);
+ * a cap, when chosen, is on this project's spend — the one money number on this page —
+ * and is the line the index pauses its priced stages at. A cap from the environment
+ * (ROUGHCUT_BUDGET_USD) wins over the one saved here, so the choice is disabled when the
+ * server says so. Workers are one small stepper per stage, 1–8, applied to the next run.
  */
 
 'use strict';
@@ -38,16 +43,16 @@ const STAGES = ['probe', 'telemetry', 'asr', 'proxy', 'look', 'close', 'picks'];
 const STAGE_LABEL = { telemetry: 'tele' };
 const SETTLED = new Set(['done', 'skipped']);
 const POLL_MS = 2000;
-const THEMES_POLL_MS = 500;      // the proposal is one short call; its job is polled closer
 const HOLD_MS = 250;             // V held longer than this in the story field speaks; a tap types
 const ORDER_WORD = { priority: 'most promising first', capture: 'capture order' };
-// The slider's four stops in words (design §2: "sample interval, 4 s to 1 s"). A sheet
-// is 30 frames, so at 4 s one sheet covers two minutes and a jump is a frame or two.
+// What each of the slider's four stops sees (design §2: "sample interval, 4 s to 1 s");
+// the line above it already says the interval. A sheet is 30 frames, so at 4 s one
+// sheet covers two minutes and a jump is a frame or two.
 const INTERVAL_WORD = {
-  4: 'a frame every 4 s · sees the run, misses the moment',
-  3: 'a frame every 3 s · sees the approach',
-  2: 'a frame every 2 s · sees the air',
-  1: 'every 1 s · sees the landing',
+  4: 'sees the run, misses the moment',
+  3: 'sees the approach',
+  2: 'sees the air',
+  1: 'sees the landing',
 };
 // The stages a worker count applies to, in the order the index runs them, and why the
 // default is what it is — in words, one line each (design §3: "workers apply to previews
@@ -70,6 +75,7 @@ const clock = (s) => {
 const dayOf = (epoch) => epoch
   ? new Date(epoch * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
   : 'undated';
+const dayKey = (epoch) => (epoch ? new Date(epoch * 1000).toDateString() : '');
 const timeOf = (epoch) => new Date(epoch * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const usd = (x) => `$${Number(x || 0).toFixed(2)}`;
@@ -113,21 +119,20 @@ const O = {
   clips: null,             // /api/clips — the folder, with the journal's word when there is one
   status: null,            // /api/status — the backend's budget and the look pass's price
   index: null,             // /api/index — the journal's progress, whether a run is going
-  order: null,             // the toggle: 'priority' | 'capture'; null until the journal or the human says
+  order: null,             // settings' toggle: 'priority' | 'capture'; null until the journal or the human says
   interval: null,          // the slider: seconds between frames once the human moves it; null = the project's
   job: null,               // the id of the run this page started or found running
   detail: '',              // the running job's own one-liner ("CLIP_07 · look")
   busy: false,             // a POST in flight — the button is disabled meanwhile
   timer: null,
   polls: 0,                // how many times the page has asked while a run was going
-  themes: null,            // /api/themes — the EDL's kept themes + names, the story, the price of proposing
-  proposal: null,          // a proposal being edited: {themes:[{theme, why, clips, lines, kept}], names:[{name, kept}]}
-  tjob: null,              // the id of the proposal job this page started or found running
-  tbusy: false,            // a themes POST/PUT in flight
-  ttimer: null,
-  story: null,             // the story as last saved to the EDL; null until /api/themes has answered
+  brief: null,             // /api/themes — the EDL's sentence about the film, whether dictation is installed
+  story: null,             // the sentence as last saved to the EDL; null until /api/themes has answered
   dictation: null,         // null until tried; false once the recogniser said 501 (the mic hides)
-  seenLast: null,          // the last finished proposal's id this page has already shown
+  lookOpen: false,         // the slider, behind "change"
+  howOpen: false,          // the table and the journal, behind the how-it-was-indexed line
+  days: [],                // the days the bin was shot on, for the headline
+  keysOpen: false,         // the keys, behind ?
   settings: null,          // /api/settings — the cap, the spend, the workers, the defaults, the cap's source
   sgone: false,            // the server answered the settings GET with an error (no endpoint yet)
   sopen: false,            // the drawer is open
@@ -136,15 +141,12 @@ const O = {
 
 /* ------------------------------------------------------------ the sheet */
 
-// The journal's word on a clip, as one badge on its picture. Derived from the stage
-// states the same way journal.progress() derives a row's `state`, so the card and the
-// table never disagree; `retrying` is a failed stage the journal will run again (Fig. 2's
-// "retrying · encode failed twice"). `waiting` (INTAKE M14): the free stages are done
-// and only the paused priced ones are left — the pass already shows the clip from its
-// words. The screen used to call these `queued` under a footer saying every clip was
-// released, which were both half true.
+// The journal's word on a clip, derived from the stage states the same way
+// journal.progress() derives a row's `state`, so the card and the table never disagree;
+// `retrying` is a failed stage the journal will run again (Fig. 2's "retrying · encode
+// failed twice"). `waiting` (INTAKE M14): the free stages are done and only the paused
+// priced ones are left — the pass already shows the clip from its words.
 const PRICED = new Set(['look', 'close']);
-const WORD_TEXT = { waiting: 'look paused' };
 
 function journalWord(j, paused) {
   if (!j) return null;
@@ -160,75 +162,144 @@ function journalWord(j, paused) {
   return 'queued';
 }
 
-function flagsOf(c) {
-  const out = [];
-  out.push(c.analysed ? '<i class="flag on">listened</i>' : '<i class="flag off">not yet</i>');
-  if (c.telemetry === true) out.push('<i class="flag tele">telemetry</i>');
-  else if (c.telemetry === false) out.push('<i class="flag">no telemetry</i>');
-  else out.push('<i class="flag" title="the file could not be probed">telemetry ?</i>');
-  if (c.looked) out.push('<i class="flag on">looked</i>');
-  if (c.released) out.push('<i class="flag good">on the pass</i>');
-  // The junk band (HANDOFF item 5): a measurement's proposal, answered on the board.
-  if (c.junk === 'proposed') out.push('<i class="flag bad" title="looks like junk — answer it in the bin on the board">junk?</i>');
-  else if (c.junk === 'confirmed') out.push('<i class="flag bad">junk</i>');
-  return out.join('');
+// Where the page is (I16.2): one progress line while a run goes; setup while there is
+// something to index — no journal yet, a clip the journal has not met, a stage queued or
+// failed; done otherwise. A pause is not setup: the paused box asks for its own word.
+function phase() {
+  const ix = O.index, d = O.clips;
+  if (!ix || !d) return 'loading';
+  if (ix.running) return 'running';
+  if (!d.clips.length) return 'empty';             // nothing to index: the folder says so
+  if (!ix.exists) return 'setup';
+  return d.clips.some((c) => ['queued', 'retrying', null].includes(journalWord(c.journal, d.paused_priced)))
+    ? 'setup' : 'done';
+}
+
+// A badge only when something is wrong with the clip (M16 decision 1) — one, the worst.
+// A new bin is not wrong, only not indexed yet: no badges until the index has run.
+function badgeOf(c) {
+  const d = O.clips, ix = O.index;
+  const word = journalWord(c.journal, d && d.paused_priced);
+  if (word === 'missing') return { cls: 'missing', text: 'missing', title: 'the file is gone' };
+  if (word === 'parked') {
+    return { cls: 'parked', text: 'parked', title: (c.journal.parked && c.journal.parked.error) || 'failed three times' };
+  }
+  if (c.junk === 'proposed') return { cls: 'junk', text: 'junk?', title: 'black, one flat field or a blip with no words' };
+  if (c.junk === 'confirmed') return { cls: 'junk', text: 'junk', title: 'out of the Ask and Find; its look is skipped' };
+  if (word === 'waiting') return { cls: 'waiting', text: 'look paused', title: 'on the pass from its words; its look waits' };
+  if (ix && ix.exists && !ix.running && !c.analysed) return { cls: 'unheard', text: 'not heard yet', title: '' };
+  return null;
+}
+
+// The picture from the middle of the clip: a first frame is often the lens cap or the
+// pocket (Killington's CLIP_12 is black at 0 s). The poster URL carries its own time.
+function midPoster(c) {
+  const t = ((c.duration || 0) / 2).toFixed(2);
+  const url = String(c.poster || '');
+  return /[?&]t=/.test(url) ? url.replace(/([?&]t=)[^&]*/, `$1${t}`) : `${url}${url.includes('?') ? '&' : '?'}t=${t}`;
 }
 
 function cardHtml(c) {
   const word = journalWord(c.journal, O.clips && O.clips.paused_priced);
-  const reason = c.journal && c.journal.parked && c.journal.parked.error;
+  const badge = badgeOf(c);
   const picture = c.proxy
-    ? `<img src="${escapeHtml(c.poster)}" loading="lazy" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'), {className: 'ph', textContent: 'no preview'}))">`
-    : '<div class="ph">no preview yet</div>';
+    ? `<img src="${escapeHtml(midPoster(c))}" loading="lazy" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'), {className: 'ph'}))">`
+    : '<div class="ph"></div>';
+  const answer = c.junk === 'proposed'
+    ? '<button type="button" data-junk="junk" title="junk: out of the Ask, Find and the bin; the index skips its look">Junk</button>'
+      + '<button type="button" data-junk="keep" title="not junk: keep it everywhere">Keep</button>'
+    : c.junk === 'confirmed' ? '<button type="button" data-junk="keep" title="not junk after all">Keep</button>' : '';
   return `<div class="card${word ? ` ${word}` : ''}" data-clip="${escapeHtml(c.clip)}"${word ? ` data-word="${word}"` : ''}>
     <div class="frame">${picture}<span class="tc tnum">${clock(c.duration)}</span>${
-      word ? `<span class="badge ${word}"${reason ? ` title="${escapeHtml(reason)}"` : ''}>${WORD_TEXT[word] || word}</span>` : ''}</div>
-    <div class="cap"><b title="${escapeHtml(c.clip)}">${escapeHtml(c.stem)}</b><span class="flags">${flagsOf(c)}</span></div>
+      badge ? `<span class="badge ${badge.cls}"${badge.title ? ` title="${escapeHtml(badge.title)}"` : ''}>${badge.text}</span>` : ''}</div>
+    <div class="cap"><b title="${escapeHtml(c.clip)}">${escapeHtml(c.stem)}</b>${answer}</div>
   </div>`;
+}
+
+// The days the bin was shot on: "Jan 18 + Jan 27", or the first and last of many.
+function daysText(days) {
+  const named = days.filter(Boolean);
+  if (!named.length) return '';
+  return named.length <= 3 ? named.join(' + ') : `${named[0]} – ${named[named.length - 1]} · ${named.length} days`;
 }
 
 function renderSheet() {
   const d = O.clips;
   const clips = d.clips.slice().sort((a, b) => (a.captured || 0) - (b.captured || 0));
-  const name = String(d.footage).split(/[\\/]/).filter(Boolean).pop() || d.footage;
-  $('#binName').textContent = name;
-  const withTele = clips.filter((c) => c.telemetry === true).length;
-  $('#binMeta').textContent = `${plural(clips.length, 'clip')} · ${clock(d.total_s)} · ${plural(d.sessions, 'session')}`;
-  $('#binTele').textContent = clips.length ? `telemetry ${withTele}/${clips.length}` : '';
   $('#empty').hidden = clips.length > 0;
-
-  const bySession = new Map();
+  const byDay = new Map();
   for (const c of clips) {
-    const k = c.session == null ? 0 : c.session;
-    if (!bySession.has(k)) bySession.set(k, []);
-    bySession.get(k).push(c);
+    const k = dayKey(c.captured);
+    if (!byDay.has(k)) byDay.set(k, []);
+    byDay.get(k).push(c);
   }
-  $('#sessions').innerHTML = [...bySession.entries()].map(([k, cs]) => {
-    const secs = cs.reduce((t, c) => t + (c.duration || 0), 0);
-    const day = dayOf(cs[0].captured);
-    return `<div class="session" data-session="${k}">
-      <div class="lbl"><span>session ${k} · ${escapeHtml(day)} · ${plural(cs.length, 'clip')} · ${clock(secs)}</span></div>
+  const days = [...byDay.values()].map((cs) => (cs[0].captured ? dayOf(cs[0].captured) : ''));
+  O.days = days;
+  renderHeadline();
+  $('#sessions').innerHTML = [...byDay.values()].map((cs, k) => `<div class="session" data-day="${k}">
+      <div class="lbl"><span>${escapeHtml(days[k] || 'undated')} · ${plural(cs.length, 'clip')}</span></div>
       <div class="grid">${cs.map(cardHtml).join('')}</div>
-    </div>`;
-  }).join('');
+    </div>`).join('');
+  renderButton();
+  renderHow();
+}
 
-  // the pass opens on what is on it (the flow bar in the header says the rest)
-  const released = clips.filter((c) => c.released).length;
-  const full = clips.filter((c) => journalWord(c.journal, d.paused_priced) === 'released').length;
-  const link = $('#openPass');
-  link.setAttribute('aria-disabled', released ? 'false' : 'true');
-  link.textContent = released ? `Open the pass on ${plural(released, 'clip')} →` : 'Open the pass →';
-  // A mini coverage strip per card: what the machine looked at, how densely (M15).
-  if (window.deep) deep.minis($('#sessions'));
-  // Two numbers that used to be one word: on the pass (heard and previewed — picks from
-  // the words) and fully indexed (looked at too). While the looks are paused they differ.
-  const looksWait = d.journal && d.paused_priced && full < released ? released - full : 0;
-  $('#passHint').textContent = !released
-    ? 'nothing on the pass yet — it opens on the first clip the index releases'
-    : looksWait
-      ? `${released === clips.length ? 'every clip is' : `${plural(released, 'clip')} are`} on the pass · ${plural(looksWait, 'clip')} from the words only until their looks resume`
-      : released < clips.length ? 'the rest keep indexing; new clips join as a round when they are released'
-        : 'every clip is on the pass';
+// "12 clips · 43:08 · Jan 18 + Jan 27" — or "· not indexed yet" on a new bin.
+function renderHeadline() {
+  const d = O.clips, ix = O.index;
+  if (!d) return;
+  const days = daysText(O.days || []);
+  $('#headline').textContent = `${plural(d.clips.length, 'clip')} · ${clock(d.total_s)}`
+    + (ix && !ix.exists ? ' · not indexed yet' : days ? ` · ${days}` : '');
+}
+
+// How it was indexed, in one line honest to the files (sidecars on disk, the project's
+// interval, this project's spend): "every word heard · a frame every 4 s · close looks
+// on all 12 · spent $4.38 ▸". It opens to the per-clip table and the journal.
+function howWords() {
+  const d = O.clips;
+  const live = d.clips.filter((c) => !(c.journal && c.journal.missing));
+  const clean = live.filter((c) => c.junk !== 'confirmed');
+  const n = live.length, m = clean.length;
+  const heard = live.filter((c) => c.analysed).length;
+  const looked = clean.filter((c) => c.looked).length;
+  const closed = clean.filter((c) => c.closed).length;
+  const closeWait = clean.filter((c) => !c.closed && c.journal && !SETTLED.has(c.journal.stages.close)).length;
+  const out = [heard >= n ? 'every word heard' : `${heard} of ${n} heard`];
+  const every = `a frame every ${projectInterval()} s`;
+  if (looked) out.push(looked >= m ? every : `${looked} of ${m} looked at · ${every}`);
+  if (closed) {
+    out.push(closed >= m ? `close looks on all ${m}`
+      : closeWait ? `close looks on ${closed} of ${closed + closeWait}` : `close looks on ${closed}`);
+  }
+  return out.join(' · ');
+}
+
+function renderHow() {
+  const ix = O.index;
+  const show = !!(ix && ix.exists && !ix.running && O.clips && O.status);
+  $('#howLine').hidden = !show;
+  $('#how').hidden = !(show && O.howOpen);
+  $('#howLine').setAttribute('aria-expanded', String(show && O.howOpen));
+  $('#howArrow').textContent = O.howOpen ? '▾' : '▸';
+  if (!show) return;
+  $('#howText').textContent = `${howWords()} · `;
+}
+
+function toggleHow() {
+  O.howOpen = !O.howOpen;
+  renderHow();
+}
+
+async function junkVerdict(clip, verdict) {
+  try {
+    await send('POST', '/api/junk', { clip, verdict });
+  } catch (e) {
+    return toast(`junk: ${e.message || e}`, 5000);
+  }
+  const stem = String(clip).replace(/\.[^.]+$/, '');
+  toast(verdict === 'junk' ? `${stem} is junk — its look is skipped` : `${stem} kept`);
+  try { await refreshClips(); } catch (e) { /* the next poll will */ }
 }
 
 /* ------------------------------------------------- the price and the budget */
@@ -272,26 +343,13 @@ function renderControls() {
   el.max = String(stops.length - 1);
   el.value = String(at);
   $('#stops').innerHTML = stops.map((s, k) => `<span${k === at ? ' class="on"' : ''}>${s} s</span>`).join('');
-  $('#intervalWord').textContent = pending ? (INTERVAL_WORD[i] || `a frame every ${i} s`) : '';
-  $('#priceLine').innerHTML = pending
-    ? `<b>~${usd(priceAt(i))}</b> for the ${plural(pending, 'clip')} not yet looked at`
-    : 'every clip has been looked at — nothing left to buy';
-  // the sheet count is on the wire only for the project's own interval; the other
-  // stops carry their price (by_interval), and the close look is the same at every stop
-  const atProject = i === Number(v.interval_s);
-  $('#priceDetail').textContent = pending
-    ? `${atProject ? plural(v.coarse_calls, 'sheet') : 'sheets'} at a frame every ${i} s, then a close look at up to ${plural(v.fine_calls, 'window')} across ${plural(v.fine_pending, 'clip')}`
-    : '';
-  const looked = v.done || 0;
-  $('#sliderHint').textContent = !pending
-    ? `the slider is off — the bin was looked at a frame every ${projectInterval()} s and there is nothing left to re-price`
-    : looked
-      ? `applies to the ${plural(pending, 'clip')} not yet looked at — the ${plural(looked, 'clip')} already looked at stay as they are`
-      : 're-prices live as the thumb moves · the close look after the sheets is the same at every stop';
+  $('#intervalWord').textContent = pending ? (INTERVAL_WORD[i] || '') : '';
+  $('#lookWord').textContent = `Looks at a frame every ${i} s`;
+  // one money number, on the how line; the backend and its model are not this page's
+  // to say — the CLI banner (/cli.js) speaks when it needs Karl
   $('#budgetLine').textContent = spentLine(b);
-  const problems = (b.problems || []).map((p) => `<span class="bad">${escapeHtml(p)}</span>`).join(' ');
-  $('#backendLine').innerHTML = `${escapeHtml(b.backend || '')} · ${escapeHtml(b.model || '')}${problems ? ' · ' + problems : ''}`;
   renderButton();
+  renderHow();
 }
 
 function renderButton() {
@@ -300,16 +358,18 @@ function renderButton() {
   const v = O.status && O.status.visual;
   const pending = !!(v && v.pending && v.pending.length);
   const price = pending ? ` · ~${usd(priceAt(interval()))}` : '';
+  const ph = phase();
+  $('#setup').hidden = ph !== 'setup';
+  // the slider's line only while there is something left to look at; "change" opens it
+  $('#lookLine').hidden = !pending;
+  $('#look').hidden = !(pending && O.lookOpen);
+  $('#lookChange').setAttribute('aria-expanded', String(pending && O.lookOpen));
   btn.disabled = running || O.busy || !O.status || !O.index;
-  if (running) btn.textContent = 'Indexing… runs on its own';
-  else if (O.index && O.index.exists) btn.textContent = `Index what isn't done${price}`;
-  else btn.textContent = `Index the footage${price} · runs on its own`;
+  btn.textContent = O.index && O.index.exists ? `Index what isn't done${price}` : `Index the footage${price}`;
   for (const el of $$('#order button')) {
     el.classList.toggle('on', el.dataset.order === order());
     el.disabled = running || O.busy;
   }
-  // the slider is off while a run is going (it is looking at the project's interval) and
-  // once every clip has been looked at (nothing left to re-price)
   $('#interval').disabled = running || O.busy || !pending;
 }
 
@@ -348,10 +408,12 @@ function rowState(r) {
 function renderIndex() {
   const ix = O.index;
   const running = !!ix.running;
-  $('#progress').hidden = !ix.exists;
-  $('#index').hidden = !ix.exists;
-  $('#paused').hidden = !(ix.exists && ix.paused_priced);
+  const w = ix.waiting || { clips: 0 };
+  $('#paused').hidden = !(ix.exists && ix.paused_priced && !running && w.clips);
+  renderHeadline();
   renderButton();
+  renderHow();
+  renderProgress();
   if (!ix.exists) return;
 
   const p = ix.progress;
@@ -360,9 +422,8 @@ function renderIndex() {
   for (const r of p.rows) counts[r.state] = (counts[r.state] || 0) + 1;
   const COUNT_WORD = { waiting: 'look paused' };
 
-  // the table (Fig. 2): clip · stages as chips · priority · state, in the journal's order.
-  // The title says what the run is doing in words: a run that ended with the looks held
-  // is paused on the editor's word, one that ended otherwise short of every clip stopped.
+  // the table (Fig. 2), behind the how line: clip · stages as chips · priority · state,
+  // in the journal's order. The title says what the run is doing in words.
   const all = p.released === p.clips - p.missing;
   $('#indexTitle').textContent = `${running ? 'Indexing' : all ? 'Indexed'
     : p.paused_priced ? 'Looks paused' : 'Index stopped'} · ${orderWord}`;
@@ -377,23 +438,29 @@ function renderIndex() {
         + `<span class="tnum">${r.priority == null ? '—' : Number(r.priority).toFixed(2)}</span>`
         + `<span class="st ${st.cls}" title="${escapeHtml(st.text)}">${escapeHtml(st.text)}</span>`;
     }).join('');
-
-  // the overall block: bar, released n of N, cost, ETA — all the journal's own numbers
-  const prog = $('#progress');
-  prog.classList.toggle('running', running);
-  prog.classList.toggle('done', !running);
-  $('#progCount').textContent = `${p.released} of ${p.clips - p.missing} released`;
-  $('#progBar').style.width = `${Math.max(0, Math.min(100, p.pct || 0))}%`;
-  const eta = p.eta_s != null ? `about ${clock(p.eta_s)} left`
-    : running ? 'ETA once a stage has been timed' : 'not running';
-  const parked = p.parked ? ` · <span class="bad">${plural(p.parked, 'clip')} parked</span>` : '';
-  const paused = p.paused_priced ? ' · <span class="warn">looks paused</span>' : '';
-  $('#progMeta').innerHTML = `${p.pct || 0}% of stages · ${eta}${parked}${paused}`;
   renderPaused(ix);
   $('#journalPath').textContent = ix.path || '';
   $('#journalLog').innerHTML = (p.log || []).slice(-5).map((e) =>
     `<div><b>${escapeHtml(timeOf(e.at))}</b>${escapeHtml(e.what)}</div>`).join('');
   renderSettingsRunning();
+}
+
+// After the click, one progress line (I16.2): "Indexing · 3 of 12 ready · about 25:00
+// left", and a thin bar — the journal's own numbers.
+function renderProgress() {
+  const ix = O.index;
+  const running = !!(ix && ix.running);
+  $('#progress').hidden = !running;
+  if (!running) return;
+  const p = ix.exists ? ix.progress : null;
+  if (!p) {
+    $('#progLine').textContent = 'Indexing · opening the journal';
+    $('#progBar').style.width = '0%';
+    return;
+  }
+  const eta = p.eta_s >= 1 ? ` · about ${clock(p.eta_s)} left` : '';
+  $('#progLine').textContent = `Indexing · ${p.released} of ${p.clips - p.missing} ready${eta}`;
+  $('#progBar').style.width = `${Math.max(0, Math.min(100, p.pct || 0))}%`;
 }
 
 // The paused box (INTAKE M14): what waits, what it costs, and why — said to the editor.
@@ -406,8 +473,8 @@ function pausedWords(reason) {
     // the cap as it is now, not as the reason recorded it: raised or removed since,
     // Resume is all it takes
     const b = (O.status && O.status.backend) || {};
-    if (b.budget_usd == null) return 'They stopped at this project\'s budget cap. There is no cap now — Resume carries on.';
-    return `The budget cap is reached — this project has spent ${spentLine(b)}. Raise or remove the cap under ⚙, then Resume.`;
+    if (b.budget_usd == null) return 'They stopped at the budget cap. There is no cap now.';
+    return `The budget cap is reached — spent ${spentLine(b)}. Raise or remove the cap in settings.`;
   }
   if (r === 'paused by the editor') return 'You paused them.';
   return 'They were paused before this run.';
@@ -416,9 +483,7 @@ function pausedWords(reason) {
 function renderPaused(ix) {
   const w = ix.waiting || { clips: 0, looks: 0, close: 0, usd: 0 };
   const what = w.looks ? 'Looks' : 'Close looks';
-  $('#pausedTitle').textContent = w.clips
-    ? `${what} are paused — ${plural(w.clips, 'clip')}, ~${usd(w.usd)}`
-    : 'Looks are paused';
+  $('#pausedTitle').textContent = w.clips ? `${what} paused on ${plural(w.clips, 'clip')}` : 'Looks paused';
   $('#pausedWhy').textContent = pausedWords(ix.progress && ix.progress.paused_reason);
   $('#resume').textContent = w.clips ? `Resume · ~${usd(w.usd)}` : 'Resume';
 }
@@ -488,9 +553,7 @@ function renderSettings() {
   const s = O.settings;
   $('#settingsBtn').setAttribute('aria-expanded', String(O.sopen));
   $('#settings').hidden = !O.sopen;
-  $('#settingsLine').textContent = s
-    ? `${s.budget_usd == null ? 'no cap' : `cap ${usd(s.budget_usd)}`} · workers ${WORKER_STAGES.map((st) => `${st} ${s.workers[st]}`).join(' · ')}`
-    : '';
+  if (O.sopen) placePop($('#settings'));
   renderSettingsRunning();
   if (!O.sopen) return;
   $('#settingsGone').hidden = !O.sgone;
@@ -523,6 +586,7 @@ async function refreshSettings() {
 
 async function openSettings() {
   O.sopen = true;
+  closeKeys();
   settingsErr('');
   renderSettings();                                // the last answer first, then a fresh one
   await refreshSettings();
@@ -620,6 +684,12 @@ function resetSettings() {
 function onSettingsKey(e) {
   if (e.key === 'Escape') {
     if (O.sopen) { e.preventDefault(); closeSettings(); }
+    if (O.keysOpen) { e.preventDefault(); closeKeys(); }
+    return;
+  }
+  if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey && !isTyping(document.activeElement)) {
+    e.preventDefault();
+    toggleKeys();
     return;
   }
   if (e.key === ',' && !e.ctrlKey && !e.metaKey && !e.altKey && !isTyping(document.activeElement)) {
@@ -654,198 +724,48 @@ function wireSettings() {
   document.addEventListener('keydown', onSettingsKey);
 }
 
-/* ---------------------------------------------------------------- themes */
+/* ------------------------------------------------------------------ keys */
 
-// Listen first, then propose (design §2, Fig. 1). The story is the brief the proposal
-// reads; the chips are its answer — one per theme with its clip count, the quoted line
-// and the why on hover — and each is a toggle the editor keeps or not. Themes are a brief
-// and a filter (INTAKE Decisions): the pass lifts and tags picks that match them and the
-// journal's priority counts theme hits; they never score. Nothing from a proposal
-// reaches the EDL until Keep, which is one PUT of exactly the ticked ones.
-
-function themePrice() {
-  const p = O.themes && O.themes.projected_usd;
-  return p == null ? '' : `~${usd(p)}`;
+// The header's two popovers hang under the header wherever it is drawn — the CLI
+// banner, when it shows, sits above it in the page.
+function placePop(el) {
+  el.style.top = `${Math.round(Math.max(0, $('#hd').getBoundingClientRect().bottom) + 6)}px`;
 }
 
-function whyOf(t) {
-  if (t.clips === null) return t.own ? 'your own — the pass tags what matches it' : 'kept — change to edit';
-  const line = (t.lines || [])[0];
-  return `${line ? `“${line}” — ` : ''}${t.why || `in ${plural(t.clips.length, 'clip')}`}`;
+// ? in the header: the page's few keys, in a small popover — Esc or ? again closes it.
+function renderKeys() {
+  $('#keys').hidden = !O.keysOpen;
+  if (O.keysOpen) placePop($('#keys'));
+  $('#keysBtn').setAttribute('aria-expanded', String(O.keysOpen));
 }
 
-function chipHtml(t, i, cls, attr) {
-  const n = t.clips ? ` <span class="n">· ${plural(t.clips.length, 'clip')}</span>` : '';
-  return `<button type="button" class="chip${t.kept ? ' on' : ''}${cls ? ` ${cls}` : ''}" ${attr}="${i}" role="checkbox" `
-    + `aria-checked="${!!t.kept}" title="${escapeHtml(whyOf(t))}">${t.kept ? '✓' : '+'} ${escapeHtml(t.theme)}${n}</button>`;
+function closeKeys() {
+  if (!O.keysOpen) return;
+  O.keysOpen = false;
+  renderKeys();
 }
 
-function nameChips(names, keptOnly) {
-  const list = keptOnly ? names.filter((n) => n.kept) : names;
-  if (!list.length) return '';
-  return '<span class="who">people:</span>' + list.map((n, i) =>
-    `<button type="button" class="chip${n.kept ? ' on' : ''}${keptOnly ? ' static' : ''}" data-n="${names.indexOf(n)}" `
-    + `role="checkbox" aria-checked="${!!n.kept}">${n.kept ? '✓' : '+'} ${escapeHtml(n.name)}</button>`).join('');
+function toggleKeys() {
+  O.keysOpen = !O.keysOpen;
+  if (O.keysOpen) closeSettings();
+  renderKeys();
 }
 
-function renderChips() {
-  const p = O.proposal;
-  if (!p) return;
-  $('#chips').innerHTML = p.themes.map((t, i) => chipHtml(t, i, '', 'data-i')).join('')
-    || '<span class="hint small">nothing proposed — add your own, or discard</span>';
-  $('#nameChips').innerHTML = nameChips(p.names, false);
-  $('#themesNotes').textContent = p.notes ? `the transcripts' one sentence: ${p.notes}` : '';
-  $('#themesNotes').hidden = !p.notes;
-  $('#themeWhy').textContent = '';
-}
+/* ---------------------------------------------------------- the sentence */
 
-function renderThemes() {
-  const t = O.themes;
+// One field, "What is this film about?" (INTAKE M16 C7): the EDL's `story`, the brief
+// the Ask reads and the words that tag moments on the pass (roughcut/picks.py).
+function renderBrief() {
+  const t = O.brief;
   if (!t) return;
-  if (O.story === null) {                        // first answer: the EDL's story fills the field
+  if (O.story === null) {                        // first answer: the EDL's sentence fills the field
     O.story = t.story || '';
     $('#story').value = O.story;
   }
-  const analysed = (t.analysed || 0) > 0;
-  const kept = t.themes.length > 0 || t.names.length > 0;
-  const running = !!O.tjob;
-  const editing = !!O.proposal;
-  $('#themesRunning').hidden = !running;
-  $('#themesEdit').hidden = running || !editing;
-  $('#themesKept').hidden = running || editing || !kept;
-  $('#themesAsk').hidden = running || editing || kept;
-  $('#themesSub').textContent = editing ? (O.proposal.proposed ? 'the transcripts suggest —' : 'editing')
-    : kept ? 'kept' : '';
-  $('#themesPrice').innerHTML = analysed
-    ? `<b>${themePrice()}</b> · one call over the transcripts of ${plural(t.analysed, 'clip')}`
-    : 'the audio pass has not listened yet — themes are proposed from the transcripts once it has';
-  $('#proposeBtn').disabled = !analysed || O.tbusy;
-  $('#againBtn').textContent = `propose again ${themePrice()}`;
-  $('#againBtn').disabled = !analysed || O.tbusy;
-  $('#keepBtn').disabled = O.tbusy;
-  $('#keptChips').innerHTML = t.themes.map((theme, i) =>
-    chipHtml({ theme, kept: true, clips: null }, i, 'static', 'data-k')).join('')
-    || '<span class="hint small">no themes kept — picks rank on their own</span>';
-  $('#keptNames').innerHTML = nameChips(t.names.map((name) => ({ name, kept: true })), true);
 }
 
-function openProposal(p) {
-  O.proposal = {
-    themes: (p.themes || []).map((x) => ({ theme: x.theme, why: x.why || '', clips: x.clips || [],
-                                           lines: x.lines || [], kept: true, own: false })),
-    names: (p.names || []).map((name) => ({ name, kept: true })),
-    notes: p.notes || '', usage: p.usage || null, proposed: true,
-  };
-  renderChips();
-  renderThemes();
-}
-
-// "change": the kept ones come back as chips, ticked, with no counts — the counts were
-// the proposal's and the EDL keeps only the words.
-function openKept() {
-  const t = O.themes;
-  O.proposal = {
-    themes: t.themes.map((theme) => ({ theme, why: '', clips: null, lines: [], kept: true, own: false })),
-    names: t.names.map((name) => ({ name, kept: true })),
-    notes: '', usage: null, proposed: false,
-  };
-  renderChips();
-  renderThemes();
-}
-
-async function proposeThemes() {
-  if (O.tjob || O.tbusy) return;
-  O.tbusy = true;
-  renderThemes();
-  try {
-    await saveStory();
-    const r = await send('POST', '/api/themes/propose', { story: $('#story').value });
-    O.tjob = r.job;
-    O.proposal = null;
-    $('#themesRunning').textContent = 'listening… reading the transcripts';
-  } catch (e) {
-    toast(String(e.message || e), 5000);
-  } finally {
-    O.tbusy = false;
-    renderThemes();
-  }
-  if (O.tjob) pollThemes();
-}
-
-async function pollThemes() {
-  clearTimeout(O.ttimer);
-  if (!O.tjob) return;
-  let s;
-  try {
-    s = await getJSON(`/api/job/${O.tjob}`);
-  } catch (e) {
-    O.tjob = null;
-    renderThemes();
-    return toast(`the proposal was lost: ${e.message}`, 5000);
-  }
-  if (s.state === 'running') {
-    $('#themesRunning').textContent = `listening… ${s.detail || ''}`;
-    O.ttimer = setTimeout(pollThemes, THEMES_POLL_MS);
-    return;
-  }
-  O.tjob = null;
-  if (s.state === 'done' && s.proposal) {
-    openProposal(s.proposal);
-    const u = s.proposal.usage || {};
-    toast(`${plural(O.proposal.themes.length, 'theme')} proposed${u.projected_usd != null ? ` · ${usd(u.projected_usd)}` : ''} — keep what fits`);
-  } else {
-    toast(`no themes: ${s.detail || s.state}`, 6000);
-    renderThemes();
-  }
-}
-
-async function keepThemes() {
-  const p = O.proposal;
-  if (!p || O.tbusy) return;
-  O.tbusy = true;
-  renderThemes();
-  const body = {
-    themes: p.themes.filter((t) => t.kept).map((t) => t.theme),
-    names: p.names.filter((n) => n.kept).map((n) => n.name),
-    story: $('#story').value,
-  };
-  try {
-    const r = await send('PUT', '/api/themes', body);
-    O.themes.themes = r.themes || [];
-    O.themes.names = r.names || [];
-    O.story = body.story;
-    O.proposal = null;
-    toast(r.themes.length ? `kept ${plural(r.themes.length, 'theme')} — the pass lifts and tags what matches`
-                          : 'no themes kept — picks rank on their own');
-  } catch (e) {
-    toast(`could not keep the themes: ${e.message}`, 5000);
-  } finally {
-    O.tbusy = false;
-    renderThemes();
-  }
-}
-
-function discardThemes() {
-  if (!O.proposal) return;
-  O.proposal = null;
-  renderThemes();
-  toast('discarded — nothing was written');
-  // and the server forgets it, so a reload does not offer it again
-  send('POST', '/api/themes/discard', {}).catch(() => {});
-}
-
-function addTheme(text) {
-  const s = String(text || '').trim().slice(0, 60);
-  if (!s || !O.proposal) return;
-  const p = O.proposal;
-  const had = p.themes.find((t) => t.theme.toLowerCase() === s.toLowerCase());
-  if (had) had.kept = true;
-  else p.themes.push({ theme: s, why: '', clips: null, lines: [], kept: true, own: true });
-  renderChips();
-}
-
-// The story is the EDL's brief (the ask reads it too); it is saved on its own when the
-// field settles, so a brief typed and never proposed on survives a reload.
+// The sentence is saved when the field settles, so one typed and never used survives a
+// reload.
 async function saveStory() {
   const s = $('#story').value;
   if (O.story === null || s === O.story) return;
@@ -1003,19 +923,17 @@ function onKeyUp(e) {
 // the pass and the board; this page only says how to reload itself for another bin
 // or another cut — the hook the switcher calls after the server has re-pointed
 // itself. Forget everything this page held about the last one — a run's id, the
-// story, a proposal being edited, the slider's move — and load the new one the way
-// boot() does.
+// sentence, the slider's move — and load the new one the way boot() does.
 async function reopen() {
   clearTimeout(O.timer);
-  clearTimeout(O.ttimer);
   dictStop();
   Object.assign(O, {
     clips: null, status: null, index: null, order: null, interval: null, job: null, detail: '',
-    busy: false, timer: null, themes: null, proposal: null, tjob: null, tbusy: false,
-    ttimer: null, story: null, sopen: false,
+    busy: false, timer: null, brief: null, story: null, sopen: false, lookOpen: false, howOpen: false,
   });
-  $('#binName').textContent = 'opening the folder…';
+  $('#headline').textContent = 'opening the folder…';
   $('#story').value = '';
+  renderSettings();
   await load();
 }
 window.roughcutReopen = reopen;
@@ -1033,8 +951,8 @@ async function startIndex(extra = {}) {
     O.job = r.job;
     O.interval = null;
     O.detail = '';
-    toast(extra.resume_priced ? 'looks resumed — the cap is checked again before each one'
-                              : 'indexing — it runs on its own; close the tab and it keeps going');
+    O.lookOpen = false;
+    toast(extra.resume_priced ? 'looks resumed' : 'indexing');
     await refreshIndex();
     poll();
   } catch (e) {
@@ -1057,27 +975,15 @@ async function refreshStatus() {
   renderControls();
 }
 
-async function refreshThemes() {
-  O.themes = await getJSON('/api/themes');
-  if (O.themes.job && !O.tjob) {                   // a proposal started elsewhere: pick it up
-    O.tjob = O.themes.job;
-    pollThemes();
-  }
+async function refreshBrief() {
+  O.brief = await getJSON('/api/themes');
   // The server says whether the recogniser is installed: hide the mic before the first
-  // hold rather than on a 501. And a proposal that answered before this page loaded
-  // (a reload, another tab) comes back as `last`: show its chips instead of pricing
-  // again — it is still not the EDL's word until Keep.
-  if (O.themes.dictation === false && O.dictation !== false) {
+  // hold rather than on a 501.
+  if (O.brief.dictation === false && O.dictation !== false) {
     O.dictation = false;
     $('#mic').hidden = true;
   }
-  if (O.themes.last && O.themes.last.proposal && !O.proposal && !O.tjob
-      && !(O.themes.themes || []).length && O.seenLast !== O.themes.last.id) {
-    O.seenLast = O.themes.last.id;
-    openProposal(O.themes.last.proposal);
-    return;
-  }
-  renderThemes();
+  renderBrief();
 }
 
 async function refreshIndex() {
@@ -1098,8 +1004,8 @@ function poll() {
 async function tick() {
   O.polls++;
   try {
-    // themes too: the price of proposing grows as the asr stage hears more clips
-    await Promise.all([refreshIndex(), refreshClips(), refreshStatus(), refreshThemes()]);
+    await Promise.all([refreshIndex(), refreshClips(), refreshStatus()]);
+    renderSheet();                                 // the badges read the journal's answer too
   } catch (e) {
     toast(String(e.message || e), 4000);
   }
@@ -1107,45 +1013,7 @@ async function tick() {
   else if (O.detail) $('#indexDetail').textContent = O.detail;
 }
 
-function wireThemes() {
-  $('#proposeBtn').addEventListener('click', proposeThemes);
-  $('#againBtn').addEventListener('click', proposeThemes);
-  $('#keepBtn').addEventListener('click', keepThemes);
-  $('#discardBtn').addEventListener('click', discardThemes);
-  $('#changeBtn').addEventListener('click', openKept);
-  $('#chips').addEventListener('click', (e) => {
-    const c = e.target.closest('.chip');
-    if (!c || !O.proposal) return;
-    const t = O.proposal.themes[Number(c.dataset.i)];
-    if (!t) return;
-    t.kept = !t.kept;
-    renderChips();
-  });
-  $('#chips').addEventListener('mouseover', (e) => {
-    const c = e.target.closest('.chip');
-    if (!c || !O.proposal) return;
-    const t = O.proposal.themes[Number(c.dataset.i)];
-    if (t) $('#themeWhy').textContent = whyOf(t);
-  });
-  $('#chips').addEventListener('focusin', (e) => {
-    const c = e.target.closest('.chip');
-    const t = c && O.proposal && O.proposal.themes[Number(c.dataset.i)];
-    if (t) $('#themeWhy').textContent = whyOf(t);
-  });
-  $('#nameChips').addEventListener('click', (e) => {
-    const c = e.target.closest('.chip');
-    if (!c || !O.proposal) return;
-    const n = O.proposal.names[Number(c.dataset.n)];
-    if (!n) return;
-    n.kept = !n.kept;
-    renderChips();
-  });
-  $('#addTheme').addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter') return;
-    e.preventDefault();
-    addTheme(e.target.value);
-    e.target.value = '';
-  });
+function wireBrief() {
   $('#story').addEventListener('change', saveStory);
   const mic = $('#mic');
   mic.addEventListener('pointerdown', (e) => { e.preventDefault(); dictStart(); });
@@ -1165,7 +1033,24 @@ async function boot() {
     O.interval = intervals()[Number(e.target.value)] ?? null;
     if (O.status) renderControls();
   });
-  wireThemes();
+  const look = () => { O.lookOpen = !O.lookOpen; renderButton(); };
+  $('#lookChange').addEventListener('click', look);
+  $('#lookChange').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); look(); }
+  });
+  $('#howLine').addEventListener('click', toggleHow);
+  $('#keysBtn').addEventListener('click', toggleKeys);
+  // a click anywhere else puts the two header popovers away
+  document.addEventListener('click', (e) => {
+    if (O.keysOpen && !e.target.closest('#keys, #keysBtn')) closeKeys();
+    if (O.sopen && !e.target.closest('#settings, #settingsBtn')) closeSettings();
+  });
+  $('#sessions').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-junk]');
+    const card = b && b.closest('.card');
+    if (card) junkVerdict(card.dataset.clip, b.dataset.junk);
+  });
+  wireBrief();
   wireSettings();
   await load();
 }
@@ -1175,15 +1060,16 @@ async function boot() {
 // older server without the endpoint is said in the drawer instead.
 async function load() {
   try {
-    await Promise.all([refreshClips(), refreshStatus(), refreshIndex(), refreshThemes(), refreshSettings()]);
+    await Promise.all([refreshClips(), refreshStatus(), refreshIndex(), refreshBrief(), refreshSettings()]);
+    renderSheet();                                 // the badges read the journal's answer too
     if (O.index.running) poll();
   } catch (e) {
-    $('#binName').textContent = 'could not open the folder';
+    $('#headline').textContent = 'could not open the folder';
     toast(String(e.message || e), 6000);
   }
 }
 
-window.sheet = { state: O, refresh: tick, journalWord, order, interval, renderControls,
-                 renderThemes, proposeThemes, keepThemes, dictSend, dictStart, dictStop, reopen,
+window.sheet = { state: O, refresh: tick, journalWord, phase, badgeOf, midPoster, order, interval,
+                 renderControls, renderSheet, dictSend, dictStart, dictStop, reopen,
                  openSettings, closeSettings, saveSettings, resetSettings, refreshSettings };
 boot();

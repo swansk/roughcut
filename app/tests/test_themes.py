@@ -1,4 +1,9 @@
-"""Themes proposed from the transcripts (INTAKE I5.2) — the module and the endpoints."""
+"""Themes proposed from the transcripts (INTAKE I5.2) — the module and the endpoints.
+
+The open screen no longer offers them (INTAKE M16 decision 8): the editor's one sentence
+about the film is the brief, and its words tag moments in their place. The endpoints stay
+— GET /api/themes carries the sentence and whether dictation is installed, PUT saves the
+sentence — and themes kept before the step went still count."""
 
 from __future__ import annotations
 
@@ -152,3 +157,17 @@ def test_a_proposal_naming_an_unknown_clip_fails_the_job(client):
         assert s["state"] == "failed" and s["code"] == 502 and "unknown clip" in s["detail"]
     finally:
         inference.set_backend(None)
+
+
+def test_the_sentence_tags_picks_and_counts_as_theme_hits(client):
+    """M16 decision 8, server side: the EDL's `story` reaches the picks (tags, for free)
+    and the index's priority facts (`theme_hits`), with no themes kept."""
+    import server
+    assert client.put("/api/themes", json={"story": "people saying goodbye"}).status_code == 200
+    rows = client.get("/api/picks").json()["picks"]
+    tagged = [p for p in rows if p["tags"]]
+    assert tagged and all(p["tags"] == ["goodbye"] for p in tagged), [p["tags"] for p in rows]
+    assert server.index_facts("CLIP_A.MP4")["theme_hits"] == 1
+    client.put("/api/themes", json={"story": ""})
+    assert not any(p["tags"] for p in client.get("/api/picks").json()["picks"])
+    assert server.index_facts("CLIP_A.MP4")["theme_hits"] == 0
