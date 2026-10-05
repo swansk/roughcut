@@ -95,6 +95,12 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **The film tool's Download is readable (INTAKE M16 review, I16.1).** `#filmNewest`'s
+  "↓ Download · 2 MB" was a bare link in the browser's own dark blue, underlined, on the
+  near-black panel — about 2:1 (sampled rgb(16, 9, 211)) — the payoff of the tool, and
+  the hardest thing in it to read. It is a full-width button in the accent colour now,
+  as the mock draws it. The download test checks its contrast (≥ 4.5:1), no underline
+  and the full width; it measured 2.2:1 before.
 - **"unsaved…" shows only when a save is late (INTAKE M16 review, decision 1).** The
   header said "unsaved…" for the autosave's own 700 ms wait after every edit — a word
   flashing in the one header row each trim, though nothing was wrong. It shows now only

@@ -269,7 +269,12 @@
   .filmGo { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
   #filmNewest video { width: 100%; border-radius: 6px; background: #000; display: block;
                       aspect-ratio: 16/9; }
-  #filmNewest .dl { display: inline-block; margin-top: 6px; }
+  /* the payoff of the tool: a full-width Download, the size on it — it was a bare <a> in
+     the browser's own dark blue, underlined, ~2:1 on this panel */
+  #filmNewest .dl { display: block; margin-top: 8px; padding: 6px 11px; text-align: center;
+                    color: var(--accent); text-decoration: none; border: 1px solid var(--line);
+                    border-radius: 7px; background: var(--card); }
+  #filmNewest .dl:hover { border-color: var(--accent); background: var(--card-hi); }
   #outPanel details { margin-top: 10px; }
   #outPanel summary { cursor: pointer; color: var(--accent); font-size: 12px; }
   .ab select { width: 100%; margin-bottom: 4px; font-size: 12px; }

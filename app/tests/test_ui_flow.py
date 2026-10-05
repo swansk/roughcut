@@ -688,6 +688,19 @@ def test_a_version_row_offers_a_download_and_says_how_big_it_is(page):
     assert dl.get_attribute("title").endswith("MB")
     assert ".mp4" in dl.get_attribute("title")
     assert "MB" in dl.inner_text()
+    # readable: not the browser's default link blue (~2:1 on the panel) — a full-width
+    # button in the accent colour, at least 4.5:1 against what is behind it
+    look = dl.evaluate("""(el) => {
+        const rgb = (c) => (c.match(/[\\d.]+/g) || []).slice(0, 3).map(Number);
+        const lum = ([r, g, b]) => { const f = (v) => { v /= 255;
+          return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+          return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
+        const s = getComputedStyle(el);
+        const a = lum(rgb(s.color)), b = lum(rgb(s.backgroundColor));
+        const box = el.getBoundingClientRect(), host = el.parentElement.getBoundingClientRect();
+        return {ratio: (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05),
+                underline: s.textDecorationLine, full: box.width >= host.width - 1}; }""")
+    assert look["ratio"] >= 4.5 and look["underline"] == "none" and look["full"], look
     assert "this cut" in page.locator("#labelA").inner_text()
     # the header's button is that film's Download now: quality and length on it
     head = page.locator("#makeFilm")
