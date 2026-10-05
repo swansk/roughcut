@@ -2029,7 +2029,7 @@ async function refreshStatus() {
 }
 
 /* The bin's index, in one line under the Project counts: the journal's own word from
- * GET /api/index — released n of N, the cost so far, paused or not — and a link to the
+ * GET /api/index — released n of N, paused or not — and a link to the
  * screen that runs it. This replaced the Analyse audio / Look at the footage buttons:
  * the index is one unattended, resumable run started from /open (INTAKE decision 3),
  * and two ways to spend money on one bin was one too many. The endpoints those
@@ -2041,15 +2041,16 @@ function indexLine(ix) {
   const p = ix.progress;
   const n = p.clips - p.missing;
   const released = `${p.released} of ${n} released`;
-  const cost = p.cost_usd ? ` · $${Number(p.cost_usd).toFixed(2)}` : '';
+  // No money here (INTAKE I16.0g, one money number): the journal's cost is the index's
+  // alone, and the project's spend — the one number — is the backend pill's and /open's.
   const parked = p.parked ? ` · ${p.parked} parked` : '';
-  if (ix.running) return `indexing · ${released}${cost}${parked}`;
+  if (ix.running) return `indexing · ${released}${parked}`;
   if (p.paused_priced) {
     const wait = Math.max(0, n - p.released - p.parked);
-    return `index paused · ${wait} clip${wait === 1 ? '' : 's'} wait${cost}${parked}`;
+    return `index paused · ${wait} clip${wait === 1 ? '' : 's'} wait${parked}`;
   }
-  if (p.released >= n) return `indexed · ${released}${cost}${parked}`;
-  return `index stopped · ${released}${cost}${parked}`;
+  if (p.released >= n) return `indexed · ${released}${parked}`;
+  return `index stopped · ${released}${parked}`;
 }
 
 async function refreshIndex() {

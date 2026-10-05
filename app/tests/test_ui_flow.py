@@ -1674,6 +1674,26 @@ def test_the_old_buttons_are_gone_and_the_index_line_reads_the_journals_word(
                     f.unlink()
 
 
+def test_the_index_line_carries_no_second_money_number(page):
+    """INTAKE I16.0g, one money number: /open dropped "$ spent by the index", but the
+    board's index line still read "indexed · 12 of 12 released · $3.20" — the journal's
+    cost beside the pill's "$X spent on this project", a different number."""
+    lines = page.evaluate("""() => {
+        const p = {clips: 12, missing: 0, released: 12, parked: 1, cost_usd: 3.2,
+                   paused_priced: false};
+        return [indexLine({exists: true, running: true, progress: p}),
+                indexLine({exists: true, running: false, progress: p}),
+                indexLine({exists: true, running: false,
+                           progress: {...p, released: 4, paused_priced: true}}),
+                indexLine({exists: true, running: false, progress: {...p, released: 4}})];
+    }""")
+    assert lines == ["indexing · 12 of 12 released · 1 parked",
+                     "indexed · 12 of 12 released · 1 parked",
+                     "index paused · 7 clips wait · 1 parked",
+                     "index stopped · 4 of 12 released · 1 parked"], lines
+    assert not any("$" in x for x in lines)
+
+
 # ---------------------------------------------------------------- the switcher
 
 def test_saving_a_copy_flushes_the_autosave_first_and_the_board_moves_to_it(page, project,

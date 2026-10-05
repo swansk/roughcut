@@ -120,6 +120,13 @@ same commit. Releases move entries into a dated version section.
   file does not carry a cap that looks live. Foxtrot's live work dir has no
   `settings.json`; the laptop's could not be checked. A new test starts from the old
   file and finds no cap, then saves workers and finds the old key gone.
+- **The board's index line carries no second money number (M16 stage 0 review,
+  I16.0g).** I16.0g asks for one money number, and /open dropped "$ spent by the
+  index", but the board's index line still appended the journal's own cost —
+  "indexed · 12 of 12 released · $3.20" — beside the backend pill's "$X spent on this
+  project", a different number. The line now says where the index is and nothing about
+  money. A new test reads the line in all four states and finds no `$` (each carried
+  "$3.20" before).
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
