@@ -110,6 +110,27 @@ def test_a_cap_on_this_project_leaves_every_other_bin_uncapped(tmp_path, project
         assert c.get("/api/settings").json()["budget_usd"] == 5.0
 
 
+def test_a_cap_the_old_drawer_saved_is_not_a_cap(tmp_path, project, monkeypatch):
+    """Review of I16.0g: before M16 the drawer sent the cap field on every Save — a Save
+    that only changed the workers wrote the $15 default too. That file must not keep a
+    $15 cap after the upgrade (decision 7: no cap by default); the next save drops it."""
+    import server
+
+    monkeypatch.delenv("ROUGHCUT_BUDGET_USD", raising=False)
+    with _fresh(tmp_path, project, visual=None) as c:
+        server.settings_path().parent.mkdir(parents=True, exist_ok=True)
+        server.settings_path().write_text(json.dumps(
+            {"budget_usd": 15.0, "workers": {"sheet": 3}}), encoding="utf-8")
+        d = c.get("/api/settings").json()
+        assert d["budget_usd"] is None and d["source"]["budget_usd"] == "default"
+        assert d["workers"]["sheet"] == 3
+        assert server.budget_cap() is None
+        assert c.get("/api/status").json()["backend"]["budget_usd"] is None
+        assert c.put("/api/settings", json={"workers": {"asr": 2}}).status_code == 200
+        on_disk = json.loads(server.settings_path().read_text(encoding="utf-8"))
+        assert on_disk == {"workers": {"sheet": 3, "asr": 2}}, on_disk
+
+
 # ------------------------------------------------- spend per project (INTAKE I16.0g)
 
 def _spend_records(server, *, ask=0.0, fine=0.0, deep=0.0, themes=0.0) -> None:

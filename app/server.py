@@ -3099,6 +3099,10 @@ async def api_settings_put(request: Request) -> JSONResponse:
     if not isinstance(body, dict):
         raise HTTPException(400, "expected an object")
     saved = load_settings()
+    # The drawer before M16 kept one cap for every bin and wrote it on every Save, the
+    # old $15 default included; it is not read (no cap by default, decision 7), and the
+    # next save drops it so settings.json does not carry a cap that looks live.
+    saved.pop("budget_usd", None)
     if "budget_usd" in body:
         caps = saved.get(CAPS_KEY)
         caps = dict(caps) if isinstance(caps, dict) else {}

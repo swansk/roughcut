@@ -111,6 +111,15 @@ same commit. Releases move entries into a dated version section.
   stay one setting for the machine, and `ROUGHCUT_BUDGET_USD` still pins every bin. A
   new test caps one bin, opens another under the same --work and finds it uncapped
   (it read $5 before).
+- **A $15 cap saved by the old settings drawer is not a cap (M16 stage 0 review,
+  I16.0g).** Before M16 the drawer sent the cap field on every Save, so a Save that only
+  changed the workers wrote the $15 default into `settings.json`, and the M16 code
+  honoured any saved `budget_usd` — such an install kept a $15 cap after the upgrade,
+  against decision 7's "no cap by default". Since the cap moved per bin (above) that
+  global key is no longer read, and the next save of the settings now drops it, so the
+  file does not carry a cap that looks live. Foxtrot's live work dir has no
+  `settings.json`; the laptop's could not be checked. A new test starts from the old
+  file and finds no cap, then saves workers and finds the old key gone.
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
