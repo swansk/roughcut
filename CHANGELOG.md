@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Docs
+- **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
+
 ### Changed
 - **The board listens on this machine only (Karl, 2026-10-04, ahead of an open-source
   release).** `app/server.py` bound `0.0.0.0` with no login, so on a shared network

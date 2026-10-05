@@ -1,5 +1,7 @@
 # Handoff — read this first
 
+**2026-10-04 — M16, take things away (in progress).** Karl's *"hard to use / with a bunch of buttons and text from the footage -> the other steps"* was answered with a proposal page (https://claude.ai/artifact/PPbCx4q1QtyZ1GDDHQ3kgH) and he chose **Subtract**: keep every screen and decision, take the clutter away. His eight answers, the end state and the items are in [INTAKE.md](INTAKE.md) M16 — read that first. No budget cap by default (he is on Max).
+
 **2026-10-03 — Karl's four asks (XS, XS, L, L), all built, merged and live on Killington.**
 (1) **The CLI says when it needs you:** `inference.diagnose` → `GET /api/backend` `fix` →
 `/cli.js` banner on every screen (what, why, the one command with Copy, *Check again*);

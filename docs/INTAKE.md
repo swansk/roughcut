@@ -1124,6 +1124,115 @@ flips; R11: the one real fall in CLIP_11 was read as a rolled POV by both passes
       honest `unsure` lines. Stored in Killington's `CLIP_11.deep.json`.
 - [ ] I15.6 Karl's look — open CLIP_11's strip in the inspector and read that look.
 
+### M16 · Take things away — Karl, 2026-10-04
+
+**The ask.** *"roughcut feels hard to use / with a bunch of buttons and text from the footage
+-> the other steps. think about what would make it easier"* — the fourth report of the same
+complaint (07-25, 09-08, 10-03, 10-04). Every earlier answer **added** a surface (a strip, a
+panel, a hint line); the UI grew from 10 to 101 `<button`s. Measured read-only at 1440×900 on
+Killington: /open 40 controls · 758 words (36 · 518 in view); the pass 662 words (486 in view,
+picture 26 % of the window); the board 150 controls · 1,923 words (34 · 395 in view, the shot
+inspector below the fold at y≈953); FX after Next 518 words in view on the wrong shot; Out 47
+controls in view. Footage → first film ≈ 270 actions (≈ 230 on the pass), ≈ 8,500 words.
+The proposal (four directions judged on Karl's rules, the journey and build cost; three
+refute-first reviews) is the page https://claude.ai/artifact/PPbCx4q1QtyZ1GDDHQ3kgH; Karl's
+answers are its db doc `responses/karl` (2026-10-05T00:42Z).
+
+**Decisions (Karl's answers — do not relitigate).**
+1. **Subtract** (rated 5/5; Cut first 4, Two levels 3, One list 2): keep the three screens,
+   the dock and every earlier decision; make each screen quiet. Anything new names what it
+   replaces. Status shows only when something is wrong; machine detail folds into one line.
+2. **The seven-step bar comes off every screen (Q1)**; Next stays as the one "what now". The
+   bin · cut ▾ menu gains "The footage" and "The pass · N not watched" rows and the project
+   facts, so no screen becomes unreachable. This reopens only M14 decision 4's "the bar is the
+   stage strip on every screen"; M14's flow model, Next's precedence and "nothing spends from
+   the bar" stand.
+3. **One blue button per screen**, chosen by Next. Next carries its target (shot, effect) and
+   lands on it.
+4. **The pass gate is tested, not changed (Q2):** two fresh first cuts side by side — one from
+   the keeps, one from the index alone, both unedited, ~$1.20, Karl clicks both. Stage 5 (a
+   first cut without the pass) waits for that result.
+5. **P / X / U keycaps on the pass are clickable, at twice the size (Q3).** Keys unchanged
+   (decision 2).
+6. **A click on a timeline block selects it and parks the monitor there, paused (Q4)**;
+   space or a double-click plays.
+7. **No budget cap by default (Q5):** *"Do not have a cap, I am using claude max here, or at
+   least enable an option where I can select 'no cap' — this should be on by default for my
+   version of the app since I am developing."* Settings offers a cap; every spend still shows
+   its price on the button first; spend is shown per project, one number.
+8. **The themes step goes (Q6):** the one sentence about the film is the brief; its words tag
+   moments for free; names stay as silent dictation vocabulary.
+9. **"How the machine saw" is one line (Q7)** that opens per item and closes on the next;
+   Look deeper stays a visible priced button on the shot.
+10. **Order (Q0):** stages 0 and 1 first, then 2–4, to the end state below.
+
+**End state (what the check-ins measure against).** Stages 0–4 merged on main with tests;
+the suite green; live on Killington and re-measured with the read-only capture at
+1440×900: one header row (≤ 50 px) on all three screens, no step bar, exactly one blue
+(primary) button per screen; words in view ≲ 100 on /open and the pass, ≲ 220 on the board
+with the selected shot's details in view and no page scroll, ≲ 200 in FX after Next (on the
+waiting proposal's shot), ≲ 180 with the film tool open; 0 buttons that spend without a
+price; Next lands on the exact waiting item; the Q2 test set up for Karl's two clicks.
+
+- [ ] I16.0 **Stage 0 — fix what's broken** (verified bugs; each with a test):
+      (a) Next carries `target {shot, fx}` and lands there; the FX rail badge counts
+      proposals across the cut · (b) themes stop counting as needs-you · (c) zero-length
+      picks padded at build (`picks._pick_from`) so verdicts land; matching a point is a
+      safety net · (d) hedged/demoted witnesses never print "— not a claim …"; the moment
+      stays, worded "maybe … · not checked" · (e) the closing card's fake "Assemble · $0.60"
+      becomes "Back to the cut →" / "Make the first cut →", no price · (f) every model
+      button shows its price first (first cut, Cut from the bin ×2, Ask, a shot's Ask, FX
+      Iterate) · (g) spend per project, **no cap by default**, an optional cap in settings
+      that is enforced per project; one money number · (h) the switcher's style loads at
+      start; bins deduped by real path · (i) generated slides never adopted as keeps ·
+      (j) the typewriter title's verify checks the whole text block after typing starts ·
+      (k) render rows dated, with the cut name, identical rows folded, "this cut hasn't been
+      made yet" when none matches · (l) "last proposal" only while one waits · (m) the CLI
+      banner's commands are right for the host the board runs on (foxtrot, native) ·
+      (n) plain U no longer undoes on the board (⌘Z does); Backspace needs a selected shot.
+- [ ] I16.1 **Stage 1 — one row, one next step, one way out:** one header row on `/`,
+      `/floor`, `/open` (bin · cut ▾ · Next · ↶ ↷ · ? · Make the film); the step bar gone;
+      the switcher's footage / pass rows and project facts; exactly one primary button per
+      screen; *Make the film* opens the film tool (this cut, Quick look 1080p free,
+      Final 4K, one player, Download; older films folded, Compare two inside) and becomes
+      Download when a film lands; the monitor at rest shows the frame at the playhead with
+      ▶ and an "ungraded" tag while G is off; `test_budget.py` fails when words / controls in
+      view grow past each screen's numbers.
+- [ ] I16.2 **Stage 2a — the footage screen:** an un-indexed bin opens on /open; setup state
+      (clips by day, the sentence, "Looks at a frame every 4 s · change", Index · ~$X in
+      view); done state (headline, pictures from mid-clip, badges only for problems, junk?
+      answered on the card, one "how it was indexed" line that opens to the table); themes
+      removed (decision 8); order / cap / workers in settings.
+- [ ] I16.3 **Stage 2b — the pass:** picture ≈ half the window; one clip strip; the words
+      with the kept part marked; the kept range said once with "} next line"; the machine
+      line (decision 9); clickable P / X / U (decision 5); progress in Next ("N left"); the
+      closing card's blue "Back to the cut — N keeps aren't in it yet →" (Bin filtered);
+      By clip kept as a plain button; a big ▶ when autoplay is blocked; the placeholder More
+      menu and fake waveform gone.
+- [ ] I16.4 **Stage 3 — the board:** the selected shot's strip under the timeline, in view,
+      nothing selected at start; the strip's controls (▶, Ask about this shot · price, Look
+      deeper · price, Remove, the reason, the first line, speed, warmer/cooler/brighter/
+      darker/reset on ⌘Z, "colour & look ▸", "why? ▸"); with nothing selected the film row
+      (look, strength, auto-balance, "N warnings ▸"); warnings on their shot with Fix
+      (replacing "Fix N cut points"); blocks named by their first words, generated slides by
+      kind, ★ heroes, keep outlines kept; click = select + park (decision 6); the Bin (one
+      find box, "not in the cut · N" default, cards labelled by note / line / caption,
+      "Not it? Ask the model · ~$x" under any find, Audit until used, evidence chips under
+      "more found ▸"); one sentence about the film everywhere, the first-cut button priced,
+      "aims for 2–3 min" beside the Ask; ▶ Play it on a proposed cut (diff kept); Sound as
+      one line + "dip under talk: off / a little / a lot"; the keys sheet grouped by task.
+- [ ] I16.5 **Stage 4 — effects:** the proposed card first, in film time, one sentence of
+      what changes, ✓ checked, Preview · Accept · Discard · Change · ~$x; overlay proposals
+      keep their moment rows; the free verify runs itself; accepted cards fold (Remove,
+      Change, Revert when there is a previous version); the design box behind "+ design
+      another effect" with the range bar + "set start/end at playhead"; Accept updates in
+      place (no reload).
+- [ ] I16.6 **Q2 set up:** two fresh cuts on Killington for the side-by-side first cuts (one
+      with the keeps, one with none), the sentence carried, both buttons priced; Karl clicks.
+- [ ] I16.7 **Live on Killington, measured:** suite green; the capture re-run; numbers vs the
+      end state recorded in the Verification log.
+- [ ] I16.8 Karl uses it (not a yes/no page).
+
 ## Lanes in flight
 
 | lane | branch / worktree | scope | state |
