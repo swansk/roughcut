@@ -15,7 +15,8 @@
  * One blue button per screen (M16 decision 3): `.is-next` is the only primary style,
  * and this puts it on exactly one element — the first visible element marked
  * `data-next-for` with Next's stage (and, when Next names an effect, the one whose
- * `data-fx` is that effect), else on the chip itself.
+ * `data-fx` is that effect), else on the chip itself. While a round of the pass is
+ * open nothing is blue: the chip reads "N left" and never takes Karl off the pass.
  *
  * Self-contained styles, like /cli.js, because the three pages do not share a
  * stylesheet. It repaints only when the answer changes (no flicker under a hovered
@@ -40,7 +41,9 @@
   #flow .fnext span { overflow: hidden; text-overflow: ellipsis; }
   #flow .fnext.cli { border-color: #e0b050; background: #3a2c0c; }
   #flow .fnext.cli b { color: #ffd27a; }
-  #flow .fnext.wait { color: #9a9aa8; }
+  #flow .fnext.wait, #flow .fnext.round { color: #9a9aa8; }
+  #flow .fnext.round { cursor: default; font-variant-numeric: tabular-nums; }
+  #flow .fnext.round:hover { border-color: #3a3a48; }
   /* The one blue thing on a screen (INTAKE M16 decision 3). */
   .is-next { background: #6ea8fe !important; color: #0b0b0f !important;
     border-color: #6ea8fe !important; font-weight: 600; }
@@ -68,15 +71,42 @@
     return el;
   }
 
+  /* The pass mid-round (INTAKE M16 C3): how many of this round's moments are still
+   * undecided, or null when no round is open (or this is not the pass). The pass may
+   * say it itself (`window.passRound()`); otherwise its own state is read — the round's
+   * frozen queue, while the pass (not the closing card) is on screen. */
+  function roundLeft() {
+    if (HERE !== '/floor') return null;
+    try {
+      if (typeof window.passRound === 'function') {
+        const n = Number(window.passRound());
+        return n > 0 ? n : null;
+      }
+      // the pass's state object, a top-level const of /floor.js (a classic script)
+      // eslint-disable-next-line no-undef
+      const P = typeof F === 'object' ? F : null;
+      if (P && Array.isArray(P.queue) && P.mode === 'pass') {
+        const n = P.queue.filter((p) => !p.verdict).length;
+        return n > 0 ? n : null;
+      }
+    } catch (err) { /* the pass is still loading */ }
+    return null;
+  }
+
   function paint(f) {
     const el = mount();
     if (!el || !f) return;
     last = f;
-    const key = JSON.stringify(f.next);
+    const left = roundLeft();
+    const key = JSON.stringify([f.next, left]);
     if (key !== shown) {                   // nothing changed: leave a hovered chip be
       shown = key;
       const n = f.next;
-      if (n) {
+      if (left) {
+        el.innerHTML = `<a class="fnext round" id="flowNext" href="/floor" data-next="pass"` +
+          ` title="${left} still to decide in this round — P pick · X reject · U later">` +
+          `<span>${left} left</span></a>`;
+      } else if (n) {
         const cls = n.kind === 'cli' ? 'cli' : n.kind === 'wait' ? 'wait' : '';
         el.innerHTML = `<a class="fnext ${cls}" id="flowNext" href="${esc(n.href)}"` +
           ` data-next="${esc(n.stage)}" title="${esc(n.sentence)}">` +
@@ -109,19 +139,19 @@
   }
 
   /* One blue button (INTAKE M16 decision 3): `.is-next` on Next's target when it is on
-   * this screen, else on the chip. */
+   * this screen, else on the chip; on nothing while a round of the pass is open. */
   function mark() {
     const n = last && last.next;
     let pick = null;
-    if (n) pick = target(n) || document.getElementById('flowNext');
+    if (n && !roundLeft()) pick = target(n) || document.getElementById('flowNext');
     document.querySelectorAll('.is-next').forEach((el) => {
       if (el !== pick) el.classList.remove('is-next');
     });
     if (pick && !pick.classList.contains('is-next')) pick.classList.add('is-next');
   }
 
-  // The screen changes under the chip — a tool opens, a card arrives — so the blue is
-  // placed again (at most every 150 ms) when it does.
+  // The screen changes under the chip — a tool opens, a card arrives, a verdict lands
+  // on the pass — so the blue is placed again (at most every 150 ms) when it does.
   let soonT = 0;
   function soon() {
     if (soonT) return;
@@ -201,6 +231,11 @@
     const a = e.target.closest('#flow a');
     if (!a || !last) return;
     if (a.id !== 'flowNext') return;
+    if (a.classList.contains('round')) {
+      // Mid-round the chip is the round's count, not a way off the pass.
+      e.preventDefault();
+      return;
+    }
     const n = last.next;
     if (!n) return;
     if (n.kind === 'cli') {
@@ -271,6 +306,8 @@
       subtree: true, childList: true, attributes: true,
       attributeFilter: ['hidden', 'class', 'style', 'disabled', 'open', 'data-next-for', 'data-fx'],
     });
+    // the pass decides a moment without always touching the DOM the chip can see
+    if (HERE === '/floor') setInterval(soon, 1000);
     poll();
   }
 

@@ -4,8 +4,8 @@ Karl, 2026-10-03 (#3): "make the flow through various stages make more sense in 
 UI." M14 gave every screen one bar of seven stages and a Next chip, drawn by /flow.js
 from GET /api/flow. M16 (Karl, 2026-10-04, "take things away") took the bar off every
 screen (decision 2) and kept Next as the one "what now": the chip is the only thing in
-`#flow`, and the screen's one blue button is Next's target or the chip (decision 3).
-These tests drive each screen and check exactly that.
+`#flow`, the screen's one blue button is Next's target or the chip (decision 3), and a
+round of the pass reads "N left". These tests drive each screen and check exactly that.
 """
 
 from __future__ import annotations
@@ -216,4 +216,35 @@ def test_when_next_names_an_effect_only_its_card_is_blue(browser, live):
     pg.evaluate("document.querySelector('#cardB').remove()")
     pg.evaluate("flowBar.mark()")
     assert blue(pg) == ["flowNext"]
+    pg.close()
+
+
+def test_mid_round_the_pass_says_how_many_are_left_and_nothing_is_blue(browser, live):
+    """M16 C3: while a round of the pass has undecided moments, the chip on /floor is
+    the round ("N left"), plain — the choice is P / X / U — and a click on it does not
+    take Karl off the pass."""
+    pg = open_screen(browser, live + "/floor")
+    pg.wait_for_function("typeof F === 'object' && F.queue.length > 0 && F.mode === 'pass'",
+                         timeout=15000)
+    n = pg.evaluate("F.queue.filter((p) => !p.verdict).length")
+    assert n > 0
+    pg.wait_for_function(
+        "(n) => (document.querySelector('#flowNext') || {}).innerText === n + ' left'",
+        arg=n, timeout=5000)
+    assert blue(pg) == []
+    pg.evaluate("window.__stay = 1")
+    pg.locator("#flowNext").click()
+    pg.wait_for_timeout(300)
+    assert pg.evaluate("window.__stay") == 1 and pg.url.endswith("/floor")
+    # one decided (in the page's state only — nothing is written): the count follows
+    pg.evaluate("F.queue.find((p) => !p.verdict).verdict = 'later'")
+    if n > 1:
+        pg.wait_for_function(
+            "(n) => document.querySelector('#flowNext').innerText === n + ' left'",
+            arg=n - 1, timeout=3000)
+    # the round over (the closing card): Next is Next again, and one thing is blue
+    pg.evaluate("F.queue.forEach((p) => { p.verdict = p.verdict || 'later'; }); F.mode = 'card'")
+    pg.wait_for_function("document.querySelector('#flowNext').innerText.startsWith('Next')",
+                         timeout=3000)
+    pg.wait_for_function("document.querySelectorAll('.is-next').length === 1", timeout=3000)
     pg.close()

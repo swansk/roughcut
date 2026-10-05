@@ -10,6 +10,13 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Changed
+- **On the pass mid-round, Next is the round: "N left" (INTAKE M16 I16.1, C3).** Next
+  on /floor said what waited on another screen ("1 effect proposed — accept or
+  discard"), pulling Karl off a round he was in. While the round has undecided moments
+  the chip reads "3 left", plain, nothing on the pass is blue (P / X / U are the choice)
+  and a click on the chip stays put; when the round closes, Next is Next again. The count
+  is the pass's own (`window.passRound()` when the pass offers it, else its frozen
+  queue), read again each second and whenever the pass repaints.
 - **One blue button per screen, chosen by Next (INTAKE M16 I16.1, decision 3).** Up to
   four buttons per screen were blue (Render, ▶ Play cut, Ask, Accept, Index, Open the
   pass…), and the Next chip was a fifth. `.is-next` is now the only primary style, and
