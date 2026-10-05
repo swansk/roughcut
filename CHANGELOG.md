@@ -234,6 +234,24 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **The board's header is one row, and *Make the film* is how a film is made (INTAKE
+  M16 I16.1).** Removed from the header: "Cut board" and the second bin name, the length
+  and "target 2:00.0–3:00.0", Project ▾ and its popover (clips, analysed, the index line,
+  the bin line — the switcher's menu carries the project's facts), the model pill
+  ("opus-5-5 · ready" — the CLI banner speaks only when the CLI needs Karl), "saved" (now
+  only "unsaved…" or "save failed"), "Fix N cut points" (the fix moves onto the warned
+  shot) and Render with its preview / delivery select. Left: bin · cut ▾, Next, ↶ ↷, ?,
+  *Make the film* — 47 px tall at 1440×900 (was 141, three rows). *Make the film* opens the
+  film tool (the rail's Out is now Film; its key stays `out`): "This cut · main · 19 shots
+  · 3:09" and whether it changed since the last film; *Quick look · 1080p · ~1 min* (free —
+  the button Next may press, `#render`) and *Final 4K · ~17 min* (Karl's own click); ONE
+  player of this cut's newest film with its Download; every other film dated and folded
+  behind "Older films (N)", with Compare two inside. Gone from the tool: "idle", its own
+  progress bar (the header's strip is the one progress surface), the two players that
+  loaded on open, A / B on every row, and the Out badge counting every film. Once a film
+  of this cut exists the header's button reads "↓ Download · 1080p · 3:09" and downloads
+  it; a dot on *Make the film* says the cut changed since its last film. The board's own
+  blue (`button.primary`) is gone: Next's `is-next` is the one blue.
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six
   buttons called the model with no price: the empty board's *Ask for a first cut* and
   *Cut from the bin*, the Ask panel's *Ask* and *Cut from the bin*, a shot's *Ask*, and

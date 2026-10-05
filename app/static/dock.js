@@ -12,9 +12,9 @@
  *     browser (localStorage) and restored on the next load;
  *   - the header's height as `--hd` on :root (a ResizeObserver — the flow bar and
  *     the progress strip change it), so the dock's `top` and `height` stay right;
- *   - the rail badges (`dock.badge(name, n)` — app.js says how many keeps, how many
- *     versions);
- *   - the keys overlay on `?` / the `?` button / Esc, and the Project popover.
+ *   - the rail badges (`dock.badge(name, n)`) — only for what waits on Karl (INTAKE M16:
+ *     the FX proposals, the Bin's keeps not in the cut); no count of films;
+ *   - the keys overlay on `?` / the `?` button / Esc.
  *
  * Adding a tool is one button in `#rail` and one `<section data-tool="…">` in
  * `#tools`; nothing here needs to know its name. Other modules reach a control that
@@ -79,18 +79,12 @@
     document.documentElement.style.setProperty('--hd', `${h.offsetHeight + banner}px`);
   }
 
-  /* ------------------------------------------------------------ keys overlay + popover */
+  /* ------------------------------------------------------------ keys overlay */
   function keys(show) {
     const o = $('#keysOverlay');
     if (!o) return false;
     o.hidden = show === undefined ? !o.hidden : !show;
     return !o.hidden;
-  }
-  function project(show) {
-    const p = $('#projectPop');
-    if (!p) return false;
-    p.hidden = show === undefined ? !p.hidden : !show;
-    return !p.hidden;
   }
 
   function inField(t) {
@@ -119,21 +113,13 @@
     if (kb) kb.addEventListener('click', () => keys());
     const ko = $('#keysOverlay');
     if (ko) ko.addEventListener('click', (e) => { if (e.target === ko) keys(false); });
-    const pb = $('#projectBtn');
-    if (pb) pb.addEventListener('click', (e) => { e.stopPropagation(); project(); });
-    document.addEventListener('click', (e) => {
-      const p = $('#projectPop');
-      if (p && !p.hidden && !p.contains(e.target)) project(false);
-    });
     // On window, capture, and loaded first: timeline-keys.js listens the same way and
     // stops what it handles (`?` and Esc among them) before a document listener would
-    // hear it. An Esc that closes the overlay or the popover ends here; `?` opens the
-    // overlay and passes on, so the timeline's map renders its section into it.
+    // hear it. An Esc that closes the overlay ends here; `?` opens the overlay and passes
+    // on, so the timeline's map renders its section into it.
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        if (ko && !ko.hidden) { keys(false); e.stopImmediatePropagation(); return; }
-        const p = $('#projectPop');
-        if (p && !p.hidden) { project(false); e.stopImmediatePropagation(); }
+        if (ko && !ko.hidden) { keys(false); e.stopImmediatePropagation(); }
         return;
       }
       if (e.key === '?' && !inField(e.target) && !e.metaKey && !e.ctrlKey) keys();
@@ -181,7 +167,7 @@
     h.addEventListener('dblclick', resetWidth);
   }
 
-  window.dock = { open, reveal, badge, keys, project, fit, width, resetWidth, current: () => cur };
+  window.dock = { open, reveal, badge, keys, fit, width, resetWidth, current: () => cur };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
 })();
