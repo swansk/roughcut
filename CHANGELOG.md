@@ -95,6 +95,14 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **The header stops offering the old film's Download after a shot's speed changes
+  (INTAKE M16 review, I16.1).** The board's `isThisCut` compared clip, in and out; the
+  server's `_same_shots`, which calls itself "the board's own isThisCut rule", also
+  compares speed, and renders record it. Since I16.1 the header's *Make the film*
+  becomes *↓ Download* when `isThisCut` finds a film, so after a Quick look and a shot
+  set to 2× the header read "↓ Download · 1080p · 0:04" — the 4 s film of a cut that is
+  now 3 s — while Next said *Make the film*. Speed is part of the rule now; the film
+  test sets 2× and back (it fails with the old rule).
 - **⌘Z after an in-place Accept can no longer take the accepted edit back (INTAKE M16
   review, C5).** Accepting an effect with an edit re-reads the cut through the board's
   `roughcutRefresh()` instead of reloading the page, but the timeline's undo and redo

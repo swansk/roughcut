@@ -1110,6 +1110,17 @@ def test_the_versions_list_says_which_render_is_the_cut_on_the_board(page, proje
     page.wait_for_selector("#filmNewest:not([hidden])", timeout=5000)
     assert page.locator("#makeFilm").inner_text().startswith("↓ Download")
 
+    # a shot's speed is part of the cut, as the server's _same_shots says: at 2× the film
+    # is not this cut, and the header must not offer the old one's Download
+    sid = page.evaluate("tl.idAt(0)")
+    page.evaluate(f"tl.setSpeed('{sid}', 2)")
+    page.wait_for_function("!document.querySelector('#makeFilm').dataset.download", timeout=5000)
+    assert page.locator("#makeFilm").inner_text().replace(" ", "") == "Makethefilm•"
+    assert page.locator("#filmSince").inner_text().startswith("changed since your last film")
+    page.evaluate(f"tl.setSpeed('{sid}', 1)")
+    page.wait_for_selector("#filmNewest:not([hidden])", timeout=5000)
+    assert page.locator("#makeFilm").inner_text().startswith("↓ Download")
+
 
 # ------------------------------------------------------------------ what was seen
 

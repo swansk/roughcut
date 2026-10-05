@@ -2650,9 +2650,11 @@ async function doFind(deep = false) {
 function isThisCut(v) {
   if (!segs.length) return false;
   if (v.shots) {
+    // The server's _same_shots is the same rule: a shot's speed is part of the cut (a 2×
+    // shot is a different film), and the header's Download hangs on this answer.
     return v.shots.length === segs.length && v.shots.every((s, i) =>
       s.clip === segs[i].clip && Math.abs(s.in - segs[i].in) < 0.005
-      && Math.abs(s.out - segs[i].out) < 0.005);
+      && Math.abs(s.out - segs[i].out) < 0.005 && speedOf(s) === speedOf(segs[i]));
   }
   return v.segments === segs.length && v.planned_s != null
     && Math.abs(v.planned_s - total()) < 0.05;
