@@ -2231,8 +2231,10 @@ function ago(seconds) {
 }
 
 async function offerLastProposal() {
-  const { record } = await (await fetch('/api/asks/latest')).json();
-  if (!record) return;
+  // Only while it still waits (I16.0 l): answered, or older than the cut on disk, it is
+  // not a proposal any more — "last proposal — 21 shots, 40 days ago" was offered forever.
+  const { record, pending } = await (await fetch('/api/asks/latest')).json();
+  if (!record || !pending) return;
   const el = $('#lastAsk');
   el.style.display = 'block';
   el.innerHTML = `last proposal — ${record.plan.segments.length} shots,
@@ -2360,6 +2362,7 @@ function acceptProposal() {
 function rejectProposal() {
   pendingPlan = null;
   $('#proposal').style.display = 'none';
+  $('#lastAsk').style.display = 'none';      // answered: not offered again
   toast('discarded');
   answerProposal('discard');
 }

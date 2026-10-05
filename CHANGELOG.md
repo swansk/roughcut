@@ -115,6 +115,11 @@ same commit. Releases move entries into a dated version section.
   it (a 31 px row, paid for in the frame's height).
 
 ### Fixed
+- **"Last proposal" is offered only while it waits (INTAKE I16.0 l).** The board offered
+  "last proposal — 21 shots, 40 days ago · show it" on every load, from an Ask answered
+  weeks ago. `GET /api/asks/latest` now says whether the record is `pending` — the flow's
+  own `ask_pending` rule (not answered, newer than the cut on disk) — and the link shows
+  only then; a Discard hides it at once. A waiting paid proposal is never hidden.
 - **Rendered films say when, from which cut, and once (INTAKE I16.0 k).** Killington's
   ten renders span Jul 25 – Sep 8 and each row showed only a clock time; three were the
   same 17-shot preview; none was the cut on the board and nothing said so. Rows read

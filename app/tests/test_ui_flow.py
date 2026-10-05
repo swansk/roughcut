@@ -1764,3 +1764,31 @@ def test_render_rows_say_the_day_and_the_cut_and_fold_repeats(page):
               unmade: !!document.querySelector('#cutUnmade')};
     }""")
     assert "this cut" in again["first"] and again["unmade"] is False
+
+
+def test_the_last_proposal_link_shows_only_while_the_proposal_waits(page, live_server):
+    """I16.0 (l): "last proposal — 21 shots, 40 days ago · show it" came back on every
+    load. It is offered while the proposal waits, and gone once it is answered."""
+    import server
+    asks = server.STATE["asks"]
+    asks.mkdir(parents=True, exist_ok=True)
+    path = asks / "i16l.json"
+    rec = {"job": "i16l", "created": time.time() + 3600, "note": "n", "story": "",
+           "plan": {"segments": [{"clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0, "why": "w"}]}}
+    try:
+        path.write_text(json.dumps(rec), encoding="utf-8")
+        page.reload()
+        page.wait_for_selector("#tl .blk")
+        page.wait_for_function(
+            "document.querySelector('#lastAsk').textContent.includes('show it')", timeout=10000)
+        assert page.evaluate("document.querySelector('#lastAsk').style.display") == "block"
+        # answered (the board's Discard writes this): not offered again
+        path.write_text(json.dumps({**rec, "answered": {"answer": "discard", "at": time.time()}}),
+                        encoding="utf-8")
+        with page.expect_response(lambda r: "/api/asks/latest" in r.url, timeout=15000):
+            page.reload()
+        page.wait_for_selector("#tl .blk")
+        page.wait_for_timeout(500)                  # the answer read and acted on
+        assert page.evaluate("document.querySelector('#lastAsk').style.display") == "none"
+    finally:
+        path.unlink(missing_ok=True)

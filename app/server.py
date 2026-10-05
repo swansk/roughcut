@@ -1123,8 +1123,16 @@ def api_ask_latest() -> JSONResponse:
     files = sorted(STATE["asks"].glob("*.json"),
                    key=lambda p: p.stat().st_mtime, reverse=True)
     if not files:
-        return JSONResponse({"record": None})
-    return JSONResponse({"record": json.loads(files[0].read_text(encoding="utf-8"))})
+        return JSONResponse({"record": None, "pending": False})
+    record = json.loads(files[0].read_text(encoding="utf-8"))
+    # Whether it still waits for an answer — the flow's own rule (I16.0 l): the board
+    # offers "last proposal · show it" only then, never a 40-day-old answered one
+    try:
+        waiting = ask_pending(STATE["edl"].stat().st_mtime)
+    except OSError:
+        waiting = None
+    return JSONResponse({"record": record,
+                         "pending": bool(waiting) and waiting.get("job") == record.get("job")})
 
 
 # ---------------------------------------------------------------- find a moment

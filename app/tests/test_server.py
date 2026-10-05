@@ -1155,6 +1155,32 @@ def test_a_plan_survives_the_browser_that_asked_for_it(client, project):
     assert record["created"] > 0
 
 
+def test_the_last_proposal_is_offered_only_while_it_waits(tmp_path, project):
+    """I16.0 (l): "last proposal — 21 shots, 40 days ago · show it" was offered on every
+    load. /api/asks/latest says whether the record still waits — the flow's own
+    `ask_pending` rule: not answered, and newer than the cut on disk."""
+    import server
+
+    with _fresh(tmp_path, project) as c:
+        assert c.get("/api/asks/latest").json() == {"record": None, "pending": False}
+        asks = server.STATE["asks"]
+        asks.mkdir(parents=True, exist_ok=True)
+        now = server.STATE["edl"].stat().st_mtime
+        rec = {"job": "a1", "created": now + 60, "note": "n", "story": "",
+               "plan": {"segments": [{"clip": "CLIP_A.MP4", "in": 0.0, "out": 1.0, "why": ""}]}}
+        (asks / "a1.json").write_text(json.dumps(rec), encoding="utf-8")
+        got = c.get("/api/asks/latest").json()
+        assert got["record"]["job"] == "a1" and got["pending"] is True
+        assert c.post("/api/asks/answer", json={"answer": "discard"}).status_code == 200
+        got = c.get("/api/asks/latest").json()
+        assert got["record"]["job"] == "a1" and got["pending"] is False, "answered"
+        # unanswered but older than the cut on disk: not waiting either
+        old = {**rec, "job": "a0", "created": now - 40 * 86400}
+        (asks / "a0.json").write_text(json.dumps(old), encoding="utf-8")
+        got = c.get("/api/asks/latest").json()
+        assert got["record"]["job"] == "a0" and got["pending"] is False
+
+
 def test_first_cut_without_any_analysis_says_so(tmp_path, project):
     """Distinct from a backend failure: there is nothing to cut from yet."""
     with _fresh(tmp_path, project, sidecars=tmp_path / "none") as c:
