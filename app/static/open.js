@@ -350,6 +350,7 @@ function renderControls() {
   $('#budgetLine').textContent = spentLine(b);
   renderButton();
   renderHow();
+  renderProgress();
 }
 
 function renderButton() {
@@ -459,14 +460,18 @@ function renderProgress() {
   const running = !!(ix && ix.running);
   $('#progress').hidden = !running;
   if (!running) return;
+  // the one money number while it is being spent (M16 decision 7): the how line that
+  // carries it at rest is hidden during the run, and no cap stops it by default
+  const b = O.status && O.status.backend;
+  const spent = b ? ` · spent ${spentLine(b)}` : '';
   const p = ix.exists ? ix.progress : null;
   if (!p) {
-    $('#progLine').textContent = 'Indexing · opening the journal';
+    $('#progLine').textContent = `Indexing · opening the journal${spent}`;
     $('#progBar').style.width = '0%';
     return;
   }
   const eta = p.eta_s >= 1 ? ` · about ${clock(p.eta_s)} left` : '';
-  $('#progLine').textContent = `Indexing · ${p.released} of ${p.clips - p.missing} ready${eta}`;
+  $('#progLine').textContent = `Indexing · ${p.released} of ${p.clips - p.missing} ready${eta}${spent}`;
   $('#progBar').style.width = `${Math.max(0, Math.min(100, p.pct || 0))}%`;
 }
 

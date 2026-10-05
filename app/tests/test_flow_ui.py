@@ -360,6 +360,11 @@ def test_the_menu_is_the_way_to_the_footage_and_the_pass_with_the_projects_facts
     assert re.fullmatch(r"(\d+ not watched|all watched|nothing to watch yet)( · .*)?", pas["facts"]), pas
     assert cut["facts"] == "2 shots · 0:04", cut
     assert str(project["edl"]) in cut["title"]
+    # the one money number (decision 7), readable from the board and the pass too
+    b = pg.evaluate("fetch('/api/backend').then(r => r.json())")
+    cap = f" of ${b['budget_usd']:.2f} cap" if b.get("budget_usd") is not None else ""
+    pg.wait_for_function("document.querySelector('#placeSpent').textContent !== ''", timeout=5000)
+    assert pg.locator("#placeSpent").inner_text() == f"spent ${b['spent_usd']:.2f}{cap} on this project"
     # only what is wrong is said: here at most a tool this machine lacks (the suite's
     # PATH may not carry uv), never "the footage folder is not there"
     st = pg.evaluate("fetch('/api/status').then(r => r.json())")

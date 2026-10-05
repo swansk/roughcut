@@ -91,6 +91,8 @@
   #picker .place { text-decoration: none; }
   #picker .place b { min-width: 86px; }
   #picker .place .n { overflow: hidden; text-overflow: ellipsis; }
+  #placeSpent { padding: 0 8px; }
+  #placeSpent:empty { display: none; }
   #picker hr { border: 0; border-top: 1px solid #22222b; margin: 2px 0; }
   #switcherToast { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); background: #1e1e25;
                    color: #e8e8ee; border: 1px solid #3a3a48; border-radius: 8px; padding: 8px 14px; font-size: 12px;
@@ -227,6 +229,8 @@
     return c.shots ? `${plural(c.shots, 'shot')} · ${clock(c.length_s || 0)}` : 'no cut yet';
   }
 
+  const money = (x) => `$${Number(x || 0).toFixed(2)}`;
+
   function placeRow(href, name, facts, title) {
     const here = href === HERE;
     return `<a class="prow place${here ? ' current' : ''}" href="${href}" data-place="${href}"`
@@ -243,6 +247,15 @@
                             [ix && ix.summary, st.footage].filter(Boolean).join('\n'))
       + placeRow('/floor', 'The pass', passFacts(), ps ? ps.summary : '')
       + placeRow('/', 'The cut', cutFacts(), [ct && ct.summary, st.edl].filter(Boolean).join('\n'));
+    // The one money number (M16 decision 7: spend per project, one number) — the same
+    // one /open's how line says, here so it can be read from the board and the pass too.
+    const be = st.backend;
+    const sp = $('#placeSpent');
+    if (sp) {
+      sp.textContent = be && be.spent_usd != null
+        ? `spent ${money(be.spent_usd)}${be.budget_usd != null ? ` of ${money(be.budget_usd)} cap` : ''} on this project`
+        : '';
+    }
     // Only what is wrong (M16 decision 1): a folder gone, a tool missing on this box.
     const bad = [];
     if (S.status && S.status.footage_exists === false) bad.push('the footage folder is not there');
@@ -296,6 +309,7 @@
     el.hidden = true;
     el.innerHTML = `
       <div id="placeList"></div>
+      <div id="placeSpent" class="hint small tnum"></div>
       <div id="placeBad" class="bad small" hidden></div>
       <hr>
       <div class="lbl">Cuts <span id="cutSub" class="sub"></span></div>

@@ -20,6 +20,7 @@ Skipped, not failed, when playwright is absent:
 from __future__ import annotations
 
 import json
+import re
 import socket
 import threading
 import time
@@ -542,6 +543,10 @@ def test_index_the_footage_runs_the_journal_and_the_cap_pauses_the_priced_stages
     page.wait_for_selector("#progress:not([hidden])", timeout=5000)
     assert page.locator("#setup").is_hidden()
     assert page.locator("#progLine").inner_text().startswith("Indexing")
+    # the one money number stays on screen while the run spends (decision 7): the how
+    # line that carries it at rest is hidden now
+    assert page.locator("#howLine").is_hidden()
+    assert re.search(r" · spent \$\d+\.\d\d", page.locator("#progLine").inner_text())
     page.wait_for_selector("#paused:not([hidden])", timeout=60000)
     assert page.locator("#progress").is_hidden()
     why = page.locator("#pausedWhy").inner_text()

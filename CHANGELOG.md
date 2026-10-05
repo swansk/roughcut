@@ -95,6 +95,14 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **The one money number is on screen while the index spends, and readable from every
+  screen (INTAKE M16 review, decision 7).** /open's "spent $X" rides on the how line,
+  which is hidden while the index runs; the board's only spend readout was the backend
+  pill's title, which M16 removed, and the pass had none. With no cap by default, a
+  Killington-size index ran with no running total anywhere. The running line now ends
+  "· spent $X" (and the cap when there is one), and the bin · cut menu — the way between
+  the three screens — says "spent $X on this project" under its places, from the same
+  `/api/status` number. The index test and the menu test check both (they fail without).
 - **A backend problem with no command for it is said again, in the banner (INTAKE M16
   review, decision 1).** Two surfaces said what is wrong with the model backend: the
   board's header pill ("… · not usable", "… · unreachable") and the open screen's backend
