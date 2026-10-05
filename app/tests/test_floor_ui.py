@@ -247,6 +247,25 @@ def test_the_key_line_shows_the_verdicts_and_four_dim_keys_and_the_map_has_the_r
         assert word in full, word
 
 
+def test_a_refused_autoplay_shows_a_big_play_on_the_picture(page):
+    """I16.3: when the browser wants a gesture before it plays, the picture says so with
+    a big ▶, not a line of key instructions; a click on it plays."""
+    page.evaluate("""() => {
+        window.__play = HTMLMediaElement.prototype.play;
+        HTMLMediaElement.prototype.play = function () {
+            return Promise.reject(new DOMException('no gesture', 'NotAllowedError'));
+        };
+        floor.show(1);
+    }""")
+    page.wait_for_selector("#playBig:visible", timeout=5000)
+    assert page.locator("#screenMsg").is_hidden()
+    assert "press" not in page.locator("#frame").inner_text()
+    page.evaluate("() => { HTMLMediaElement.prototype.play = window.__play; }")
+    page.locator("#playBig").click()
+    page.wait_for_function("!document.querySelector('#pic').paused", timeout=5000)
+    page.wait_for_selector("#playBig", state="hidden", timeout=5000)
+
+
 # --------------------------------------------------------------- verdicts
 
 def preview_to(page, end: float):

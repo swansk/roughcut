@@ -234,6 +234,10 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **A refused autoplay is a big ▶ on the pass's picture (INTAKE M16 I16.3).** When the
+  browser wants a gesture before it plays, the picture shows a large ▶ that a click (or
+  space) answers, instead of the small *the browser wants a key first — press space or
+  L to play* on its bottom edge. Any other refusal is still said.
 - **The pass is the picture, one strip and three keys (INTAKE M16 I16.3).** The picture
   is the largest 16:9 the rows under it leave (a size container replaced the fixed
   367 px budget that predated the machine strip) — about 60 % of a 1440×900 window,

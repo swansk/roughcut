@@ -307,11 +307,13 @@ function arm(v, src, at) {
   else v.addEventListener('loadedmetadata', park, { once: true });
 }
 
+/* A play() the browser refused. Wanting a gesture first is not an error: a big ▶ on the
+ * picture, which a click (or space) answers. Anything else is said. */
 function playRefused(err) {
   const gesture = err && err.name === 'NotAllowedError';
   F.playing = false;
-  screenMsg(gesture ? 'the browser wants a key first — press space or L to play'
-    : `the browser refused to play — ${(err && err.name) || 'error'}`, 'warn');
+  if (gesture) { screenMsg(''); $('#playBig').hidden = false; return; }
+  screenMsg(`the browser refused to play — ${(err && err.name) || 'error'}`, 'warn');
 }
 
 /* Play the current item from `at`. Every command bumps `gen`; a deferred callback that
@@ -2117,7 +2119,7 @@ async function boot() {
       + `${(err && MEDIA_ERR[err.code]) || 'media error'}${err ? ` (code ${err.code})` : ''}`, 'bad');
     F.playing = false;
   });
-  v.addEventListener('playing', () => screenMsg(''));
+  v.addEventListener('playing', () => { screenMsg(''); $('#playBig').hidden = true; });
   v.addEventListener('waiting', () => { if (F.playing) screenMsg('buffering…'); });
   const tape = $('#tape'), zoomEl = $('#zoom');
   tape.addEventListener('pointerdown', tapeDown);

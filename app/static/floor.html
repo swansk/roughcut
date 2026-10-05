@@ -77,6 +77,11 @@
   #stamp.reject { color: #8f8fa3; }
   #stamp.later { color: var(--warn); }
   #stamp.hero { color: var(--gold); }
+  /* the browser refused to play without a gesture: a big ▶ — a click on the picture plays */
+  #playBig { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center;
+             justify-content: center; font-size: 84px; color: #fff; background: rgba(0,0,0,.28);
+             cursor: pointer; text-shadow: 0 2px 18px rgba(0,0,0,.6); }
+  #playBig[hidden] { display: none; }
   #screenMsg { position: absolute; left: 0; right: 0; bottom: 10px; z-index: 5; text-align: center;
                font: 600 11px var(--mono); color: var(--dim); pointer-events: none; }
   #screenMsg.bad { color: var(--bad); }
@@ -295,6 +300,7 @@
       <div id="frame">
         <video id="pic" preload="metadata" playsinline></video>
         <div id="stamp" hidden></div>
+        <div id="playBig" hidden title="click or press space to play">▶</div>
         <div id="screenMsg" hidden></div>
       </div>
     </div>
