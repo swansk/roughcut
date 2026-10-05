@@ -81,6 +81,16 @@ same commit. Releases move entries into a dated version section.
   again when its shot comes back (⌘Z). `test_flow.py`'s landing test now expects the
   orphan to be left out, and a new FX UI test removes the shot, sees the badge empty
   and Next elsewhere, then undoes and sees it count again (both failed before).
+- **A project cap no longer makes the backend pill call a working CLI failed (M16
+  stage 0 review, I16.0g).** The new per-project gate asks before every model call,
+  and that included the backend probe (at startup and on *Check again*). With a $5 cap
+  and $4.97 spent — the index pauses as soon as one more sheet would pass the cap, so a
+  project can stop that close — the probe's $0.05 pre-flight was refused, and the pill
+  read red: "claude-sonnet-5-5: ~$0.05 more would pass this project's budget cap…". The
+  probe proves the CLI answers, for a fraction of a cent, and is not project work: the
+  gate now lets it through on the thread it runs on, and refuses every other call as
+  before. A new test probes at $4.97 of $5 and gets `ok`, then checks an ordinary call
+  is still refused (it read `failed` before the fix).
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six

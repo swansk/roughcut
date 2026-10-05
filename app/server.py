@@ -1731,6 +1731,8 @@ async def api_junk_post(request: Request) -> JSONResponse:
 
 
 BACKEND: dict = {"state": "unknown", "detail": "", "latency_ms": None, "fix": None}
+# Set on the thread running the backend probe: the project's cap does not gate it.
+_GATE_OFF = threading.local()
 
 
 def backend_preflight() -> dict:
@@ -1836,14 +1838,22 @@ def _probe_job() -> None:
     # alone said "ready" over a CLI that would fail every Ask.
     roles = {config.model_for(r): r for r in (config.ROLE_ANALYSIS, config.ROLE_SKELETON)}
     result = None
-    for model, role in roles.items():
-        try:
-            result = inference.complete("Reply with exactly: OK", role=role)
-        except inference.InferenceError as exc:
-            BACKEND.update(state="failed", detail=f"{model}: {str(exc)[:380]}",
-                           fix=inference.diagnose(str(exc)),
-                           latency_ms=int((time.time() - t0) * 1000))
-            return
+    # The project's cap is not asked (M16 review): the probe proves the door opens, for
+    # a fraction of a cent, and is no part of the project's work. Asked, it was refused
+    # within $0.05 of a cap — where the index's own pause leaves a project — and the
+    # pill called a working CLI failed, in the cap's words.
+    _GATE_OFF.probe = True
+    try:
+        for model, role in roles.items():
+            try:
+                result = inference.complete("Reply with exactly: OK", role=role)
+            except inference.InferenceError as exc:
+                BACKEND.update(state="failed", detail=f"{model}: {str(exc)[:380]}",
+                               fix=inference.diagnose(str(exc)),
+                               latency_ms=int((time.time() - t0) * 1000))
+                return
+    finally:
+        _GATE_OFF.probe = False
     BACKEND.update(state="ok", detail=str(result.content).strip()[:80] if result else "",
                    fix=None, latency_ms=int((time.time() - t0) * 1000))
 
@@ -3387,7 +3397,10 @@ def _record_spend(result: inference.Result, role: str) -> None:
 
 def _project_gate(estimate: float) -> None:
     """Every model call this process makes asks first: with a cap set, a call that
-    would take this project past it is refused, said in the cap's words."""
+    would take this project past it is refused, said in the cap's words — all but the
+    backend probe's, on the thread it runs on (`_probe_job`)."""
+    if getattr(_GATE_OFF, "probe", False):
+        return
     if _over_budget(estimate):
         raise inference.BudgetExceeded(
             f"~${estimate:.2f} more would pass {cap_words()} — raise or remove the cap "

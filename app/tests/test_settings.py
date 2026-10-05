@@ -196,3 +196,33 @@ def test_a_cap_is_on_this_project_and_removing_it_lets_resume_carry_on(tmp_path,
         s = _wait_index(c, c.post("/api/index", json={"resume_priced": True}).json()["job"])
         assert s["state"] == "done" and s["detail"].startswith("3 of 3 clips released"), s
         assert c.get("/api/index").json()["paused_priced"] is False
+
+
+def test_the_backend_probe_is_not_refused_by_the_projects_cap(tmp_path, project, monkeypatch):
+    """Review of I16.0g: the startup probe and *Check again* asked the project's cap like
+    any model call; within $0.05 of the cap — where the index's own pause leaves a
+    project — it was refused, and the pill called a working CLI "failed" in the cap's
+    words. The probe is not project work; it is not gated. Everything else still is."""
+    import server
+    from roughcut import inference
+
+    monkeypatch.delenv("ROUGHCUT_BUDGET_USD", raising=False)
+    with _fresh(tmp_path, project, visual=None) as c:
+        _spend_records(server, ask=4.97)
+        inference.reset_spend()
+        assert c.put("/api/settings", json={"budget_usd": 5}).status_code == 200
+        assert server.project_spent() == pytest.approx(4.97)
+        paid = _Paid(0.0001)
+        inference.set_backend(paid)
+        try:
+            server._probe_job()          # what startup and "Check again" run
+            b = c.get("/api/status").json()["backend"]
+            assert b["state"] == "ok", b
+            assert paid.calls >= 1, "the probe reached the backend"
+            # the gate is back on for this thread afterwards
+            before = paid.calls
+            with pytest.raises(inference.BudgetExceeded, match="this project's"):
+                inference.complete("past the cap", role="judge")
+            assert paid.calls == before
+        finally:
+            inference.set_backend(None)
