@@ -81,6 +81,15 @@ same commit. Releases move entries into a dated version section.
   (lane shell).
 
 ### Removed
+- **The ghost lane's "play proposal / play cut" buttons (INTAKE M16 review, decision 1:
+  anything new names what it replaces).** ▶ Play it (I16.4) beside Accept and Discard
+  plays the proposed cut — the same `playPlan(0)` the lane's *play proposal* called — and
+  the monitor's own ▶ / space plays the cut, which is what *play cut* did; a waiting
+  proposal showed two controls for each. ▶ Play it replaces them; the lane says
+  "proposal". Its ghost blocks are named the way I16.4 names V1's (`tl.blockName`: the
+  first words, a slide by its kind) instead of "CLIP_01 12.9s"; the length and the file
+  stay in the tooltip, and a retimed shot keeps its "2×". The lanes test checks the
+  label, the names and that ▶ Play it and the monitor's ▶ do the two jobs.
 - **The seven-step bar, on every screen (INTAKE M16 I16.1, decision 2).** M14 drew
   Footage › Index › Brief › Pass › Cut › Polish › Render as seven chips with ticks,
   counts and "stale" at the top of /, /floor and /open; on Killington it was the third

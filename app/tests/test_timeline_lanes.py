@@ -251,8 +251,11 @@ def test_a_pending_proposal_is_a_ghost_lane_you_can_play_either_side_of(page):
     keeps its order (dim); A matches shot 1 but has moved behind B (an arrow from where it
     is now) and comes back polished (trimmed); C is new (green). Nothing is removed, so
     V1 wears no strike. Clicking a ghost cues the monitor to THAT range — a shot that is
-    not in the cut — without playing the cut; `play cut` hands the monitor back; discard
-    takes the lane away and the cut is untouched throughout."""
+    not in the cut — without playing the cut; the panel's ▶ Play it plays the proposal and
+    the monitor's own ▶ hands it back to the cut (the lane's "play proposal / play cut"
+    said both again, and are gone); ghost blocks are named like V1's, by their first
+    words, not the camera's file and a length; discard takes the lane away and the cut is
+    untouched throughout."""
     from roughcut import config, inference
 
     class Scripted:
@@ -303,8 +306,14 @@ def test_a_pending_proposal_is_a_ghost_lane_you_can_play_either_side_of(page):
         assert page.locator("#tl .tl-over .strike").count() == 0
         x1 = page.evaluate("parseFloat(document.querySelector('#tl .tl-arrows line.arrow').getAttribute('x1'))")
         assert x1 == pytest.approx(x_of(page, 1.0), abs=1)
-        assert "play proposal" in page.locator(f"{ghost} .lbl").inner_text()
-        assert "on" in page.locator(f"{ghost} .play-cut").get_attribute("class")
+        assert page.locator(f"{ghost} .lbl").inner_text() == "proposal"
+        assert page.locator(f"{ghost} button").count() == 0, "▶ Play it and the monitor's ▶ play"
+        # named like V1's blocks (tl.blockName), never 'CLIP_B 2.0s'
+        names = page.eval_on_selector_all(f"{ghost} .ghost .name", "els => els.map(e => e.textContent)")
+        assert names == page.evaluate(
+            "pendingPlan.segments.map(s => tl.blockName(s, P.clips[s.clip] || null))"), names
+        assert not any("CLIP_" in n for n in names), names
+        assert page.eval_on_selector_all(f"{ghost} .ghost .dur", "els => els.map(e => e.textContent)") == ["", "", ""]
 
         # click the added ghost: the monitor is on CLIP_C at 0.5 s, and the cut is not playing
         page.locator(f"{ghost} .ghost").nth(2).click()
@@ -318,14 +327,13 @@ def test_a_pending_proposal_is_a_ghost_lane_you_can_play_either_side_of(page):
         assert page.evaluate("JSON.stringify(segs)") == before
         assert page.locator("#tl .blk").count() == 2
 
-        # play proposal / play cut
-        page.locator(f"{ghost} .play-proposal").click()
+        # ▶ Play it plays the proposal; the monitor's own ▶ plays the cut again
+        page.locator("#playProposal").click()
         page.wait_for_function("liveVideo().dataset.src.includes('CLIP_B')", timeout=10000)
-        assert "on" in page.locator(f"{ghost} .play-proposal").get_attribute("class")
+        assert page.evaluate("tlLanes.mode()") == "proposal"
         assert not page.evaluate("player.playing")
-        page.locator(f"{ghost} .play-cut").click()
+        page.evaluate("pauseCut(); playFrom(0)")
         page.wait_for_function("player.playing && player.idx === 0", timeout=10000)
-        assert "on" in page.locator(f"{ghost} .play-cut").get_attribute("class")
         page.evaluate("pauseCut()")
 
         # discard: the panel closes, the ghost lane goes, the cut is untouched

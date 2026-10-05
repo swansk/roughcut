@@ -16,8 +16,12 @@
  *   ghost     while a proposal is pending (the diff panel is up): the proposed timeline
  *             under V1 aligned by ITS film time — unchanged shots dim, added ones green,
  *             moved ones with an arrow from where they are now, removed ones struck out on
- *             V1. Click a ghost → the monitor plays that range; `play proposal` / `play
- *             cut` at the lane's left. Accept and discard stay the panel's buttons.
+ *             V1. Click a ghost → the monitor plays that range. The whole proposal plays
+ *             from the panel's ▶ Play it (`playPlan`) and the cut from the monitor's own
+ *             ▶ / space — the lane's "play proposal / play cut" buttons said both again
+ *             (INTAKE M16 review). Ghost blocks are named like V1's (`tl.blockName`:
+ *             the first words, a slide by its kind), not by the camera's file and a
+ *             length. Accept and discard stay the panel's buttons.
  *             The same drawing on request (INTAKE M13): `tlLanes.showGhost(segments)`
  *             draws an explicit list as the ghost — the FX card's preview of an edit
  *             before Accept — and `tlLanes.clearGhost()` takes it down. A segment whose
@@ -390,8 +394,10 @@
       d.style.width = px(Math.max(3, dur * z));
       d.style.setProperty('--hue', tl.hueOf(g.seg.clip));
       d.innerHTML = '<span class="name"></span><span class="dur"></span>';
-      d.querySelector('.name').textContent = nameOf(g.seg.clip);
-      d.querySelector('.dur').textContent = `${dur.toFixed(1)}s${s === 1 ? '' : ` · ${round2(s)}×`}`;
+      const a = app();
+      d.querySelector('.name').textContent = tl.blockName(g.seg, a && a.P && a.P.clips ? a.P.clips[g.seg.clip] || null : null);
+      // like V1: a badge only when the shot is retimed; the length is the tooltip's
+      d.querySelector('.dur').textContent = s === 1 ? '' : `${round2(s)}×`;
       const what = g.cls === 'added' ? 'added' : g.cls === 'moved' ? 'moved' : g.trimmed ? 'trimmed' : 'unchanged';
       d.title = `proposal ${g.k + 1}. ${nameOf(g.seg.clip)} ${tl.fmt(g.seg.in)}–${tl.fmt(g.seg.out)} (${dur.toFixed(1)}s`
         + `${s === 1 ? '' : ` at ${round2(s)}×`}) · ${what}`
@@ -430,11 +436,10 @@
     return defs;
   }
 
+  /* What the monitor plays — the proposal or the cut (`tlLanes.mode()`): the cut again
+   * the moment the monitor's own play takes over. */
   function paintMode(a) {
-    const b = el.ghost.lbl;
     if (a && a.player && a.player.playing) mode = 'cut';
-    b.querySelector('.play-proposal').classList.toggle('on', mode === 'proposal');
-    b.querySelector('.play-cut').classList.toggle('on', mode === 'cut');
   }
 
   /* Play one range — a proposal's shot, not necessarily in the cut — in the monitor,
@@ -701,9 +706,7 @@
     if (mounted || !tl.el || !tl.el.canvas) return;
     mounted = true;
     const canvas = tl.el.canvas;
-    el.ghost = lane('ghost', H.ghost,
-      'proposal · <button class="play-proposal" type="button" title="play the proposed cut in the monitor">play proposal</button>'
-      + '<button class="play-cut on" type="button" title="play the cut as it is">play cut</button>');
+    el.ghost = lane('ghost', H.ghost, 'proposal');
     el.a1 = lane('A1', H.a1, '♪');
     el.bin = lane('bin', H.bin, '');
     el.over = div('tl-over');
@@ -727,13 +730,6 @@
       if (p) p.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     });
     el.ghost.addEventListener('click', (e) => {
-      if (e.target.closest('.play-proposal')) { playPlan(0); return; }
-      if (e.target.closest('.play-cut')) {
-        stopRange(); mode = 'cut'; paintMode(null);
-        const playFrom = fn('playFrom');
-        if (playFrom) playFrom(0);
-        return;
-      }
       const g = e.target.closest('.ghost');
       if (!g || !ghost) return;
       const item = ghost.ghosts[Number(g.dataset.k)];
