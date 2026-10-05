@@ -95,6 +95,16 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **How closely to look can be chosen before Resume, not only before Index (INTAKE M16
+  review, I16.2 keep-list).** The "Looks at a frame every N s · change" line and its
+  slider lived only in the setup box, which is hidden while the looks are paused — the
+  paused box held its title, the reason and Resume, and Resume spent at the project's
+  stop. On `b620ff7` the slider was on screen whenever a clip waited to be looked at,
+  paused ones included; on Killington (9 clips paused, ~$2) the choice was gone. The look
+  line now moves into whichever box is up, and Resume is priced at the stop chosen (the
+  journal's price for what waits, moved by what the stop changes in the coarse sheets).
+  The pause test opens the slider in the paused box and checks Resume's price follows it
+  (it fails on the old page).
 - **A trim keeps the shot's "how the machine saw" line as it was (INTAKE M16 review,
   decision 9).** The line opens per item and closes on the next; a trim is the same
   item, but once it settled (450 ms) the strip rebuilt the line — every build renders

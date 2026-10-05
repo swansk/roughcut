@@ -360,6 +360,13 @@ function renderButton() {
   const price = pending ? ` · ~${usd(priceAt(interval()))}` : '';
   const ph = phase();
   $('#setup').hidden = ph !== 'setup';
+  // The granularity is chosen before the click that spends on it — Index's, or Resume's
+  // while the looks are paused (Killington: 9 clips waiting). The one look line goes to
+  // whichever box is up, and Resume is priced at the stop chosen.
+  const pausedUp = !$('#paused').hidden && ph !== 'setup';
+  const home = pausedUp ? $('#paused') : $('#setup');
+  if ($('#lookCtl').parentNode !== home) home.insertBefore($('#lookCtl'), pausedUp ? $('#resume') : btn);
+  if (pausedUp && O.index) renderPaused(O.index);
   // the slider's line only while there is something left to look at; "change" opens it
   $('#lookLine').hidden = !pending;
   $('#look').hidden = !(pending && O.lookOpen);
@@ -485,7 +492,16 @@ function renderPaused(ix) {
   const what = w.looks ? 'Looks' : 'Close looks';
   $('#pausedTitle').textContent = w.clips ? `${what} paused on ${plural(w.clips, 'clip')}` : 'Looks paused';
   $('#pausedWhy').textContent = pausedWords(ix.progress && ix.progress.paused_reason);
-  $('#resume').textContent = w.clips ? `Resume · ~${usd(w.usd)}` : 'Resume';
+  $('#resume').textContent = w.clips ? `Resume · ~${usd(resumeUsd(w))}` : 'Resume';
+}
+
+// What Resume spends at the slider's stop: the journal's own price for what waits (at the
+// project's stop), moved by what the stop changes — the coarse sheets for the clips not
+// looked at yet, from /api/status's every-stop prices (the close looks do not change).
+function resumeUsd(w) {
+  if (!w.looks) return w.usd;
+  const at = priceAt(interval()), was = priceAt(projectInterval());
+  return at == null || was == null ? w.usd : Math.max(0, w.usd + at - was);
 }
 
 /* --------------------------------------------------------------- settings */

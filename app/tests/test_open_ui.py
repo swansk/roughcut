@@ -590,6 +590,24 @@ def test_index_the_footage_runs_the_journal_and_the_cap_pauses_the_priced_stages
     st = next(x for x in api(page, "/api/flow")["stages"] if x["key"] == "index")
     assert st["state"] == "needs-you" and st["needs"]["action"]["stage"] == "index", st
     assert page.evaluate("sheet.state.polls") >= 1, "the page polled while the run was going"
+    # how closely to look is still Karl's before Resume spends on it: the look line sits
+    # in the paused box (Index's box is gone), and the slider re-prices Resume
+    assert page.locator("#paused #lookLine").is_visible()
+    assert page.locator("#lookWord").inner_text() == "Looks at a frame every 2 s"
+    ix = api(page, "/api/index")
+    assert page.locator("#resume").inner_text() == f"Resume · ~${ix['waiting']['usd']:.2f}"
+    page.locator("#lookChange").click()
+    assert page.locator("#paused #interval").is_visible() and page.locator("#interval").is_enabled()
+    page.locator("#interval").focus()
+    page.keyboard.press("ArrowRight")                                    # 1 s
+    assert page.evaluate("sheet.interval()") == 1
+    by = api(page, "/api/status")["visual"]["by_interval"]
+    want = ix["waiting"]["usd"] + by["1"] - by["2"]
+    assert page.locator("#resume").inner_text() == f"Resume · ~${want:.2f}"
+    # (the fixture's 6 s clips are one sheet at any stop; a longer bin's are not)
+    page.evaluate("""() => { sheet.state.status.visual.by_interval = {'4': 1, '3': 1.5, '2': 2, '1': 3.5};
+        sheet.renderControls(); }""")
+    assert page.locator("#resume").inner_text() == f"Resume · ~${ix['waiting']['usd'] + 1.5:.2f}"
 
 
 def test_resume_releases_every_clip_and_the_page_goes_quiet(page, bin_server):
