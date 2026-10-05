@@ -690,7 +690,13 @@
       return;
     }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if (k === 's' || k === 'S') { e.preventDefault(); setMagnet(!magnet); return; }
+    if (k === 's' || k === 'S') {
+      e.preventDefault();
+      setMagnet(!magnet);
+      // the chip shows only mid-drag now (INTAKE M16), so a toggle at rest says so here
+      if (!drag && typeof window.toast === 'function') window.toast(`magnet ${magnet ? 'on' : 'off'}`);
+      return;
+    }
     if (!tl.state.segs.length || drag) return;
     if (k === ',' || k === '<') { e.preventDefault(); nudge(-1, e.shiftKey || k === '<'); }
     else if (k === '.' || k === '>') { e.preventDefault(); nudge(1, e.shiftKey || k === '>'); }

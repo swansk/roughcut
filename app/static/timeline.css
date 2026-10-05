@@ -188,9 +188,13 @@
                  line-height: 1; padding: 2px 6px; border-radius: 3px; cursor: pointer;
                  background: #1c1c24; color: var(--accent); border: 1px solid var(--line); }
 #tl .tl-magnet.off { color: var(--dim); }
+/* only while an edge is dragged (INTAKE M16): S still toggles it, with a toast */
+#tl .tl-magnet { display: none; }
+#tl:has(.tl-lane.tl-dragging) .tl-magnet { display: block; }
 #tl .tl-magnet:hover { border-color: var(--accent); }
 /* ---- lanes (I9.4) */
-/* The lanes (timeline-lanes.js) move V1 down by --tl-above (the markers lane) and grow
+/* The lanes (timeline-lanes.js) could move V1 down by --tl-above (0 since the markers lane
+   went, INTAKE M16) and grow
    the view by --tl-below (ghost, A1, bin); both are set on #tl by the module, 0 until a
    lane has something to show. The lanes' own tops are calc()s of the same variables. */
 #tl { --tl-above: 0px; --tl-below: 0px; }

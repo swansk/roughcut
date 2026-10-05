@@ -234,6 +234,9 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **The `magnet · on` chip shows only while an edge is dragged (INTAKE M16 I16.4).** It sat
+  on the ruler at all times. S still toggles the magnet, and says `magnet on` / `magnet
+  off` in a toast when nothing is being dragged.
 - **Timeline blocks are named by their first words; heroes wear a ★; the markers lane is
   gone (INTAKE M16 I16.4).** A block read `CLIP_01 12.9s` over a dim line of speech; it
   now reads the first words spoken in it (else the shot's why, else what was seen), up to
