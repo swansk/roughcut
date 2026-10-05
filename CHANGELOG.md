@@ -91,6 +91,16 @@ same commit. Releases move entries into a dated version section.
   gate now lets it through on the thread it runs on, and refuses every other call as
   before. A new test probes at $4.97 of $5 and gets `ok`, then checks an ordinary call
   is still refused (it read `failed` before the fix).
+- **Padded one-frame picks no longer overlap their neighbour (M16 stage 0 review,
+  I16.0c).** I16.0c pads a pick that rests on one sampled frame to the 4 s look
+  interval (±2 s), but witnesses join into one moment only within 3 s. Two one-frame
+  picks 3 to ~4 s apart (30.0 and 33.5) became (28, 32) and (31.5, 35.5): separate
+  picks that overlap, and a verdict on one cleared the other's (`apply_verdict` clears
+  any verdict touching 1 % of its range), so the pass could not finish — the I16.0c
+  symptom by another route. A padded pick now reaches at most halfway into the gap to
+  the clip's next pick on either side ((28, 31.75) and (31.75, 35.25)); with room, it
+  is still 4 s. Not seen on Killington today (its three short picks have room). A new
+  test answers three such picks and finds every verdict kept.
 
 ### Changed
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six

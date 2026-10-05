@@ -42,7 +42,10 @@ MERGE_GAP_S = 3.0
 # a zero range can take no verdict: the server refuses it and nothing re-attaches to it,
 # so the pass never finished (I16.0c). A pick shorter than MIN_PICK_S stands for the
 # seconds its frame was sampled from — the look interval around it (visual_pass.py's
-# default, one frame every 4 s), clamped to the clip.
+# default, one frame every 4 s), clamped to the clip and to the halfway point of the gap
+# to the clip's next pick on either side: two one-frame picks 3–4 s apart (separate
+# moments, past MERGE_GAP_S) would otherwise overlap, and a verdict on one erased the
+# other's, so the pass could not finish by another route.
 MIN_PICK_S = 1.0
 LOOK_INTERVAL_S = 4.0
 # A stored verdict re-attaches to a pick when they share at least this fraction of the
@@ -240,16 +243,25 @@ def _merge(witnesses: list[dict]) -> list[list[dict]]:
     return groups
 
 
+def _span(group: list[dict]) -> tuple[float, float]:
+    return min(w["start"] for w in group), max(w["end"] for w in group)
+
+
 def _pick_from(clip: str, group: list[dict], duration: float,
-               themes: list[str] | None) -> dict:
-    start = min(w["start"] for w in group)
-    end = max(w["end"] for w in group)
+               themes: list[str] | None,
+               room: tuple[float, float | None] = (0.0, None)) -> dict:
+    """`room` is how far a padded pick may reach: the halfway points of the gaps to the
+    clip's picks either side (None: nothing after it)."""
+    start, end = _span(group)
     if duration:
         end = min(end, duration)
     if end - start < MIN_PICK_S:
         mid = (start + end) / 2
-        start = max(0.0, mid - LOOK_INTERVAL_S / 2)
+        lo, hi = room
+        start = max(0.0, lo, mid - LOOK_INTERVAL_S / 2)
         end = mid + LOOK_INTERVAL_S / 2
+        if hi is not None:
+            end = min(end, hi)
         if duration:
             end = min(end, duration)
     seen = [w for w in group if w["kind"] == "seen"]
@@ -341,7 +353,11 @@ def build(clips: dict[str, dict], events: list[dict], *,
         # promote (INTAKE M6). It only ever joins a moment somebody else claimed.
         groups = [g for g in _merge(witnesses) if any(w["kind"] != "felt" for w in g)]
         duration = float(c.get("duration") or 0.0)
-        out += [_pick_from(clip, g, duration, themes) for g in groups]
+        spans = [_span(g) for g in groups]          # in order, each > MERGE_GAP_S apart
+        for i, g in enumerate(groups):
+            lo = (spans[i - 1][1] + spans[i][0]) / 2 if i else 0.0
+            hi = (spans[i][1] + spans[i + 1][0]) / 2 if i + 1 < len(groups) else None
+            out.append(_pick_from(clip, g, duration, themes, (lo, hi)))
     out.sort(key=lambda p: (-p["score"], p["clip"], p["start"]))
     for i, p in enumerate(out, 1):
         p["rank"] = i

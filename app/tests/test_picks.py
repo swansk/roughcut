@@ -147,6 +147,28 @@ def test_a_pick_on_one_frame_is_padded_to_the_look_interval_so_a_verdict_can_lan
     assert picks.build(clips, [_event(30.0, 30.0)], selects=[keep])[0]["verdict"] == "pick"
 
 
+def test_padded_one_frame_picks_never_overlap_so_each_keeps_its_verdict():
+    """Review of I16.0c: two one-frame picks 3–4 s apart are separate moments (past
+    MERGE_GAP_S), and padded to 4 s each they overlapped — (28, 32) and (31.5, 35.5) — so
+    a verdict on one erased the other's and the pass could not finish. A padded pick
+    reaches only halfway into the gap to its neighbour."""
+    from roughcut import selects
+
+    clips = {"CLIP_A.MP4": _clip(candidates=[], transcript=[], duration=60.0)}
+    events = [_event(30.0, 30.0, what="in the air"), _event(33.5, 33.5, what="lands"),
+              _event(37.0, 39.0, what="skis away")]
+    ps = sorted(picks.build(clips, events), key=lambda p: p["start"])
+    assert [(p["start"], p["end"]) for p in ps] == [(28.0, 31.75), (31.75, 35.25),
+                                                    (37.0, 39.0)]
+    assert all(p["end"] - p["start"] >= picks.MIN_PICK_S for p in ps)
+    edl = {"segments": [], "selects": []}
+    for p, v in zip(ps, ("reject", "later", "pick")):
+        selects.apply_verdict(edl, p["clip"], p["start"], p["end"], v)
+    again = sorted(picks.build(clips, events, verdicts=edl["floor"]["verdicts"],
+                               selects=edl["selects"]), key=lambda p: p["start"])
+    assert [p["verdict"] for p in again] == ["reject", "later", "pick"], "the pass finishes"
+
+
 def test_a_zero_length_range_is_matched_as_a_point_inside_the_other():
     """The safety net: a point inside a range is covered by it; outside, it is not."""
     assert picks._overlap_ratio((25.0, 25.0), (22.63, 35.67)) == 1.0
