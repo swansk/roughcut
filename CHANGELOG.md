@@ -234,6 +234,33 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **The footage screen, in two states with one header row (INTAKE M16 I16.2).**
+  Measured headless at 1440×900 on the suite's 3-clip bin: setup 19 controls · 460
+  words in view → 15 · 74; indexed 17 · 314 in view (480 on the page, 2 blue buttons)
+  → 14 · 78, one screen, no blue (Next's is-next comes from /flow.js) — both counts
+  still carry the step bar, which the nav lane removes. **Header** (C1): `#hdBin`,
+  `#flow`, then `?` (the page's four keys in a small popover) and *settings*; gone are
+  "ROUGHCUT", the second bin name and the telemetry count. **Setup** (no journal, new
+  clips, or a stage still to run): clips by day, *What is this film about?*, "Looks at
+  a frame every 4 s · change" (the 4/3/2/1 s slider opens on *change* and re-prices the
+  button), and *Index the footage · ~$X* (`data-next-for="index footage"`), which
+  becomes one progress line ("Indexing · 2 of 3 ready · about 1:40 left") once
+  clicked. **Done**: "12 clips · 43:08 · Jan 18 + Jan 27", the pictures taken from
+  mid-clip (the poster's `?t=` at half the length — CLIP_12's first frame is black), a
+  badge only when something is wrong (not heard yet · look paused · parked · missing ·
+  junk?, with *Junk* / *Keep* answered on the card through `POST /api/junk`), and one
+  line — "every word heard · a frame every 4 s · close looks on all 12 · spent $4.38 ▸"
+  — that opens to the per-clip table and the journal. When the looks are paused, one
+  box: "Looks paused on 9 clips", why, *Resume · ~$X*. **Removed**: the 12-row table of
+  7 stage chips + PRIORITY + STATE from the main view, RELEASED ×12, the listened /
+  telemetry / looked / on-the-pass flags, the ~155-word flags legend, the per-card
+  coverage minis (`/deep.js` no longer loads here), "claude_cli · claude-opus-5-5" (the
+  CLI banner speaks when the CLI needs Karl), the settings summary line, "runs on its
+  own · survives a crash…", the price detail and slider hints, "Open the pass on 12
+  clips →", "← the cut board", "close this tab…", and the themes step whole (Propose
+  themes, theme and people chips, add your own, Keep / Discard, the transcripts' one
+  sentence, two hints). The order moved into the settings drawer beside the cap and the
+  workers; no `.primary` style is left on the page.
 - **The film's one sentence tags moments, in place of themes (INTAKE M16 I16.2,
   decision 8).** The themes step goes from the open screen; what it fed — tags and the
   +0.25 lift on the pass's moments (`picks.theme_hits`), the index's `theme_hits`

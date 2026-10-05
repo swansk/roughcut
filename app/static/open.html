@@ -4,10 +4,12 @@
 <meta charset="utf-8">
 <title>Roughcut — open</title>
 <style>
-  /* The open screen (docs/design/cutting-room-floor.html §2–§3): the folder as a contact
-   * sheet before anything is spent, the price before the button, and the index's own
-   * progress while it runs. The floor's palette, on a page that scrolls — a bin can be a
-   * hundred cards. */
+  /* The open screen (docs/design/cutting-room-floor.html §2–§3, INTAKE M16 I16.2): the
+   * folder as a contact sheet, in one of two states. Setup — nothing indexed yet, or new
+   * clips: the sentence, how closely it looks, and the one priced button. Done: a headline,
+   * the pictures with a badge only where something is wrong, and one line on how it was
+   * indexed that opens to the table. The floor's palette, on a page that scrolls — a bin
+   * can be a hundred cards. */
   :root {
     --bg: #101013; --panel: #17171c; --card: #14141a; --card-hi: #1e1e25;
     --line: #26262f; --line-soft: #1c1c24; --text: #e8e8ee; --dim: #9a9aa8; --faint: #6c6c80;
@@ -35,30 +37,37 @@
   [hidden] { display: none !important; }
   button { font: inherit; font-size: 11.5px; background: var(--card-hi); color: var(--text);
            border: 1px solid #3a3a48; border-radius: 8px; padding: 7px 14px; cursor: pointer; }
-  button.primary { background: var(--accent); color: #0b0b0f; border-color: transparent; font-weight: 600; }
   button.priced { border-color: #4c4026; color: #ffe9b8; }
   button:disabled { opacity: .45; cursor: default; }
 
-  /* ---- header: the brand, the bin and the flow bar ---- */
-  #hd { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 12px;
-        padding: 8px 14px; background: var(--panel); border-bottom: 1px solid #2e2e38; }
-  #hd .brand { font-weight: 700; font-size: 12px; letter-spacing: .06em; }
-  #hd .brand small { color: var(--dim); font-weight: 400; letter-spacing: 0; margin-left: 8px; }
-  /* the bin's name is a control: click it (or O) for the picker (INTAKE I5.4) — the
-     control and its panel are /switcher.js's, shared with the pass and the board */
-  /* the flow bar (/flow.js, INTAKE M14) fills the rest of the header row: the same
-     seven stages and Next chip the pass and the board carry; it wraps whole */
-  #hd { flex-wrap: wrap; row-gap: 6px; }
-  #hd #flow { flex: 1 1 700px; }     /* a narrow window puts it on its own row, uncut */
+  /* ---- one header row (INTAKE M16 C1): the bin · cut, Next, and this screen's ? and
+     settings — no brand, no second bin name, no step bar ---- */
+  #hd { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 10px;
+        height: 44px; padding: 0 14px; background: var(--panel); border-bottom: 1px solid #2e2e38;
+        flex-wrap: nowrap; }
+  #hd #flow { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+  #hd > button { padding: 4px 10px; flex: none; }
+  #hd > button[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+  /* the one blue button on a screen is the one Next points at (C2) — flow.js marks it */
+  button.is-next { background: var(--accent); color: #0b0b0f; border-color: transparent; font-weight: 600; }
+  .pop { position: fixed; top: 50px; right: 14px; z-index: 30; width: 340px; max-width: calc(100vw - 28px);
+         background: #0f0f14; border: 1px solid #3a3a48; border-radius: 10px; padding: 12px 14px;
+         box-shadow: 0 12px 32px rgba(0,0,0,.55); display: flex; flex-direction: column; gap: 6px; }
+  #keys { width: 260px; font-size: 11.5px; }
+  #keys div { display: flex; gap: 8px; align-items: baseline; }
 
   /* ---- the sheet ---- */
-  #main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; min-height: calc(100vh - 38px); }
+  #main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; min-height: calc(100vh - 44px); }
   @media (max-width: 980px) { #main { grid-template-columns: minmax(0, 1fr); } }
   #sheet { display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--line); }
-  #binLine { display: flex; gap: 10px; align-items: baseline; padding: 10px 14px;
-             border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-  #binLine b { font-size: 13px; }
-  #sessions { padding: 10px 14px; flex: 1; }
+  #head { display: flex; flex-direction: column; gap: 3px; padding: 12px 14px 6px; }
+  #headline { font-size: 17px; font-weight: 700; }
+  /* how it was indexed: one line, and the table behind it */
+  #howLine { align-self: flex-start; background: transparent; border: 0; padding: 0; border-radius: 0;
+             color: var(--dim); font: 11px var(--mono); text-align: left; cursor: pointer; }
+  #howLine:hover { color: var(--text); }
+  #how { padding: 6px 14px 10px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+  #sessions { padding: 6px 14px 10px; flex: 1; }
   .session { margin-bottom: 14px; }
   .session .lbl { margin-bottom: 6px; display: flex; gap: 8px; align-items: baseline; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
@@ -66,37 +75,24 @@
   .card .frame { position: relative; aspect-ratio: 16 / 9; border-radius: 4px; overflow: hidden;
                  background: #0b0b0f; border: 1px solid var(--line-soft); }
   .card .frame img { display: block; width: 100%; height: 100%; object-fit: cover; }
-  .card .ph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-              font: 600 9px var(--mono); letter-spacing: .08em; color: var(--faint); text-transform: uppercase;
+  .card .ph { position: absolute; inset: 0;
               background: repeating-linear-gradient(135deg, #0e0e13 0 8px, #101016 8px 16px); }
-  .card .tc { position: absolute; left: 5px; bottom: 4px; font: 600 9px var(--mono); color: #e8e8ee;
+  .card .tc { position: absolute; right: 5px; bottom: 4px; font: 600 9px var(--mono); color: #e8e8ee;
               background: rgba(8,8,14,.72); border-radius: 3px; padding: 0 4px; }
-  .card .badge { position: absolute; right: 5px; top: 4px; font: 600 8.5px var(--mono); letter-spacing: .06em;
+  .card .badge { position: absolute; left: 5px; top: 4px; font: 600 8.5px var(--mono); letter-spacing: .06em;
                  text-transform: uppercase; border-radius: 3px; padding: 1px 5px; background: rgba(8,8,14,.78);
-                 color: var(--dim); border: 1px solid #2e2e38; }
-  .card .badge.released { color: var(--good-soft); border-color: #2c4c39; }
-  .card .badge.waiting { color: var(--warn); border-color: #4c4026; }
-  .card .badge.indexing { color: var(--accent); border-color: #2f4a70; }
-  .card .badge.retrying { color: var(--bad-soft); border-color: #6a3a3a; }
-  .card .badge.parked, .card .badge.missing { color: var(--bad-soft); border-color: #6a3a3a; }
+                 color: var(--warn); border: 1px solid #4c4026; }
+  .card .badge.parked, .card .badge.missing, .card .badge.junk { color: var(--bad-soft); border-color: #6a3a3a; }
   .card.indexing .frame { outline: 1px solid var(--accent); }
   .card.missing .frame { opacity: .5; }
-  .card .cap { font-size: 10.5px; margin-top: 3px; display: flex; gap: 6px; align-items: baseline;
+  .card .cap { font-size: 10.5px; margin-top: 3px; display: flex; gap: 6px; align-items: center;
                flex-wrap: wrap; min-width: 0; }
-  .card .cap b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-  .flags { display: inline-flex; gap: 4px; flex-wrap: wrap; }
-  .flag { font: 500 9px var(--mono); color: var(--faint); font-style: normal; white-space: nowrap; }
-  .flag.on { color: #cfd6e4; }
-  .flag.off { color: var(--warn); }
-  .flag.tele { color: var(--tele); }
-  .flag.good { color: var(--good-soft); }
-  #legend { padding: 8px 14px 14px; border-top: 1px solid var(--line-soft); line-height: 1.7; }
-  #legend .flag { font-size: 9.5px; }
+  .card .cap b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; font-weight: 500; color: var(--dim); }
+  .card .cap button { padding: 1px 8px; font-size: 10.5px; border-radius: 6px; }
   #empty { padding: 40px 14px; color: var(--dim); }
 
-  /* ---- the index table (Fig. 2), above the grids once the bin has a journal ---- */
-  #index { padding: 10px 14px; border-bottom: 1px solid var(--line); }
-  #indexHead { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; font-size: 11px; }
+  /* ---- the index table, behind the how line ---- */
+  #indexHead { display: flex; align-items: center; gap: 12px; font-size: 11px; }
   #indexHead b { font-size: 12px; }
   #rows { display: grid; grid-template-columns: minmax(90px, 130px) 1fr 64px minmax(120px, 200px);
           gap: 5px 10px; font-size: 10.5px; align-items: center; }
@@ -114,38 +110,49 @@
   .stg.run { color: var(--accent); border-color: #2f4a70; }
   .stg.bad { color: var(--bad-soft); border-color: #6a3a3a; }
   .stg.skip { color: #8f8fa3; border-style: dashed; }
+  .journal { background: #0f0f14; border: 1px solid #2a2a36; border-radius: 8px; padding: 8px 10px; font-size: 10.5px;
+             display: flex; flex-direction: column; gap: 3px; }
+  .journal .path { font: 10px var(--mono); color: var(--faint); word-break: break-all; }
+  .journal .log div { color: var(--dim); }
+  .journal .log b { color: var(--faint); font-weight: 500; font-family: var(--mono); font-size: 9.5px; margin-right: 5px; }
 
-  /* ---- the right column (Fig. 1): price, order, the button, progress ---- */
+  /* ---- the right column: the sentence, then the one thing to do here, if any ---- */
   #side { display: flex; flex-direction: column; background: #111116; min-width: 0; }
   #side .box { padding: 12px 14px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
-  #side .box .lbl { margin-bottom: 2px; }
-  #side .row { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; font-size: 11px; }
-  #priceLine { font-size: 13px; }
-  #priceLine b { color: var(--warn); }
-  /* the one slider (Fig. 1): four stops, coarse to fine, the words for each under it */
+  #side .box:empty { display: none; }
+  #brief .lbl { font-size: 11px; text-transform: none; letter-spacing: 0; color: var(--text); font-family: var(--display); }
+  #story { width: 100%; resize: vertical; min-height: 60px; font: inherit; font-size: 12px; color: #c9c9d6;
+           background: #101014; border: 1px solid #2e2e38; border-radius: 6px; padding: 7px 9px; }
+  #story:focus { outline: none; border-color: var(--accent); }
+  #story.live { border-color: var(--bad-soft); }
+  #micRow { display: flex; gap: 8px; align-items: center; }
+  #mic { padding: 2px 9px; font-size: 10.5px; white-space: nowrap; user-select: none; -webkit-user-select: none;
+         touch-action: none; }
+  #mic.live { border-color: var(--bad-soft); color: var(--bad-soft); }
+  #dictState.live { color: var(--bad-soft); }
+  #lookLine { font-size: 12px; color: #c9c9d6; }
+  #lookChange { cursor: pointer; }
+  /* the one slider, behind "change": four stops, coarse to fine, re-pricing the button */
   #interval { width: 100%; margin: 4px 0 0; accent-color: var(--accent); cursor: pointer; }
   #interval:disabled { opacity: .4; cursor: default; }
   #stops { display: flex; justify-content: space-between; font: 600 9px var(--mono); color: var(--faint);
            padding: 0 3px; letter-spacing: .04em; }
   #stops span.on { color: var(--text); }
   #intervalWord { font-size: 11px; color: #c9c9d6; min-height: 16px; }
-  .toggle { display: inline-flex; border: 1px solid #3a3a48; border-radius: 8px; overflow: hidden; }
+  #indexBtn, #resume { padding: 9px 12px; font-size: 12px; }
+  #paused { border-left: 3px solid var(--warn); }
+  #pausedTitle { font-size: 13px; font-weight: 600; }
+  #progLine { font-size: 12px; }
+  .bar1 { height: 4px; background: #0d0d11; border: 1px solid #2e2e38; border-radius: 4px; overflow: hidden; }
+  .bar1 i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .4s; }
+  .toggle { display: inline-flex; border: 1px solid #3a3a48; border-radius: 8px; overflow: hidden; align-self: flex-start; }
   .toggle button { border: 0; border-radius: 0; background: transparent; color: var(--dim); padding: 5px 10px; font-size: 11px; }
   .toggle button + button { border-left: 1px solid #3a3a48; }
   .toggle button.on { background: var(--card-hi); color: var(--text); font-weight: 600; }
-  #paused { background: #1a1610; border-left: 3px solid var(--warn); }
-  #paused .lbl { color: var(--warn); }
-  #pausedTitle { font-size: 13px; font-weight: 600; }
-  #indexRow { display: flex; gap: 6px; align-items: stretch; }
-  #indexBtn { flex: 1; min-width: 0; padding: 9px 12px; font-size: 12px; }
-  /* the gear (Fig. 1's "settings ▾"): workers and the cap live behind it, not on the form */
-  #settingsBtn { padding: 0 10px; font-size: 14px; line-height: 1; }
-  #settingsBtn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
-  #settingsLine { text-align: center; min-height: 14px; }
-  #resume { align-self: flex-start; }
 
-  /* ---- the settings drawer: the budget cap and one stepper per stage ---- */
-  #settings { background: #0f0f14; border-left: 3px solid var(--accent); }
+  /* ---- the settings drawer: the order, the budget cap and one stepper per stage ---- */
+  #settings { border-left: 3px solid var(--accent); }
+  #settings .row { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; font-size: 11px; }
   #settings .lbl { margin-top: 4px; }
   #settings .money { display: inline-flex; align-items: center; gap: 2px; color: var(--dim); font-size: 12px; }
   #settings input[type=number] { font: inherit; font-size: 12px; color: var(--text); background: #101014;
@@ -165,49 +172,6 @@
   .wrow .whint { padding-left: 48px; }
   #settingsErr { min-height: 0; }
   #settings .acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
-  .bar1 { height: 6px; background: #0d0d11; border: 1px solid #2e2e38; border-radius: 4px; overflow: hidden; }
-  .bar1 i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .4s; }
-  #progress.running .bar1 i { background: var(--accent); }
-  #progress.done .bar1 i { background: var(--good); }
-  .journal { background: #0f0f14; border: 1px solid #2a2a36; border-radius: 8px; padding: 8px 10px; font-size: 10.5px;
-             display: flex; flex-direction: column; gap: 3px; }
-  .journal .path { font: 10px var(--mono); color: var(--faint); word-break: break-all; }
-  .journal .log div { color: var(--dim); }
-  .journal .log b { color: var(--faint); font-weight: 500; font-family: var(--mono); font-size: 9.5px; margin-right: 5px; }
-  #links { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; align-items: stretch; margin-top: auto; }
-  a.btn { display: block; text-align: center; background: var(--accent); color: #0b0b0f; font-weight: 600; border-radius: 8px;
-          padding: 8px 12px; font-size: 12px; }
-  a.btn[aria-disabled="true"] { background: var(--card-hi); color: var(--faint); pointer-events: none; }
-  #links .hint { text-align: center; }
-
-  /* ---- themes (Fig. 1, "what is this film about?"): the story, the mic, the chips ---- */
-  #themes .lbl .sub { color: #d0a8ff; text-transform: none; letter-spacing: 0; font-weight: 500; margin-left: 4px; }
-  #storyRow { display: flex; gap: 6px; align-items: stretch; }
-  #story { flex: 1; min-width: 0; resize: vertical; min-height: 44px; font: inherit; font-size: 11.5px; color: #c9c9d6;
-           background: #101014; border: 1px solid #2e2e38; border-radius: 6px; padding: 7px 9px; }
-  #story:focus { outline: none; border-color: var(--accent); }
-  #story.live { border-color: var(--bad-soft); }
-  #mic { padding: 0 9px; font-size: 10.5px; white-space: nowrap; user-select: none; -webkit-user-select: none;
-         touch-action: none; }
-  #mic.live { border-color: var(--bad-soft); color: var(--bad-soft); }
-  #dictState { min-height: 14px; }
-  #dictState.live { color: var(--bad-soft); }
-  .chips { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
-  .chip { font: inherit; font-size: 10.5px; border: 1px solid #3a3a48; border-radius: 999px; padding: 2px 9px;
-          background: transparent; color: #a0a0b0; cursor: pointer; text-align: left; }
-  .chip.on { border-color: var(--accent); color: var(--text); }
-  .chip.static { cursor: default; border-color: #2f4a70; }
-  .chip .n { color: var(--dim); }
-  .chips.names .chip { font-size: 9.5px; padding: 1px 7px; }
-  .chips .who { font-size: 9.5px; color: var(--dim); }
-  #addTheme { font: inherit; font-size: 10.5px; color: var(--text); background: #101014; border: 1px dashed #3a3a48;
-              border-radius: 999px; padding: 2px 9px; width: 160px; }
-  #addTheme:focus { outline: none; border-color: var(--accent); }
-  #themeWhy { min-height: 14px; font-style: italic; }
-  #themesRunning { color: var(--accent); }
-  #themes .acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  #themes a.act { cursor: pointer; font-size: 11px; }
-  #themesPrice b { color: var(--warn); }
 
   #toast { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); background: #1e1e25;
            color: var(--text); border: 1px solid #3a3a48; border-radius: 8px; padding: 8px 14px; font-size: 12px;
@@ -218,156 +182,100 @@
 <body>
 <div id="app">
   <div id="hd">
-    <span class="brand">ROUGHCUT <button type="button" id="hdBin" title="switch bins or cuts, save a copy · O"></button></span>
+    <button type="button" id="hdBin" title="switch bins or cuts, save a copy · O"></button>
     <div id="flow"></div>
+    <span class="grow"></span>
+    <button type="button" id="keysBtn" title="the keys · ?" aria-controls="keys" aria-expanded="false">?</button>
+    <button type="button" id="settingsBtn" title="settings · ," aria-haspopup="dialog" aria-controls="settings"
+            aria-expanded="false">settings</button>
+  </div>
+  <div id="keys" class="pop" hidden>
+    <div><span class="key">O</span> switch bin or cut</div>
+    <div><span class="key">V</span> hold to speak</div>
+    <div><span class="key">,</span> settings</div>
+    <div><span class="key">Esc</span> close</div>
+  </div>
+  <div id="settings" class="pop" role="dialog" aria-labelledby="settingsTitle" hidden>
+    <div class="row"><span class="lbl" id="settingsTitle">Settings</span><span class="hint small"><span class="key">Esc</span> closes</span></div>
+    <div id="settingsRunning" class="hint small" hidden>the index is running — changes apply to the next run</div>
+    <div id="settingsGone" class="hint small" hidden>this server has no settings endpoint yet — the cap and the workers are what the environment says</div>
+    <div class="lbl">Order</div>
+    <div id="order" class="toggle" role="radiogroup">
+      <button type="button" data-order="priority" class="on" title="the sentence's words, what was said and the sensors first">most promising first</button>
+      <button type="button" data-order="capture" title="a chronological cull">capture order</button>
+    </div>
+    <div id="settingsForm">
+      <div class="lbl">Budget cap</div>
+      <div class="row" id="capMode" role="radiogroup" aria-label="budget cap" style="justify-content:flex-start">
+        <label class="money"><input type="radio" name="capMode" id="capNone" value="none"> No cap</label>
+        <label class="money"><input type="radio" name="capMode" id="capOn" value="cap"> cap this project at</label>
+        <label class="money" for="capField">$<input id="capField" type="number" min="0.01" step="0.5" inputmode="decimal" placeholder="—" aria-label="budget cap in dollars"></label>
+      </div>
+      <div id="capHint" class="hint small"></div>
+      <div class="lbl">Workers</div>
+      <div id="workers"></div>
+      <div id="settingsErr" class="bad small" role="alert" hidden></div>
+      <div class="acts">
+        <button type="button" id="settingsSave">Save</button>
+        <button type="button" id="settingsReset">Reset to defaults</button>
+        <span id="settingsState" class="hint small"></span>
+      </div>
+    </div>
   </div>
 
   <div id="main">
     <div id="sheet">
-      <div id="binLine">
-        <b id="binName">opening the folder…</b>
-        <span id="binMeta" class="hint tnum"></span>
-        <span class="grow"></span>
-        <span id="binTele" class="hint tnum"></span>
+      <div id="head">
+        <b id="headline" class="tnum">opening the folder…</b>
+        <button type="button" id="howLine" aria-controls="how" aria-expanded="false" hidden><span id="howText"></span>spent <span id="budgetLine" class="tnum"></span> <span id="howArrow">▸</span></button>
       </div>
-      <div id="index" hidden>
-        <div id="indexHead">
-          <b id="indexTitle"></b>
-          <span id="indexCounts" class="hint tnum"></span>
-          <span class="grow"></span>
-          <span id="indexDetail" class="hint small"></span>
-        </div>
-        <div id="rows"></div>
-      </div>
-      <div id="sessions"></div>
-      <div id="empty" hidden>No footage in this folder yet — drop clips in and reload.</div>
-      <div id="legend" class="hint small">
-        <span class="lbl">Flags</span> are free facts, never a judgement:
-        <i class="flag on">listened</i> the audio pass has heard it ·
-        <i class="flag off">not yet</i> it has not ·
-        <i class="flag tele">telemetry</i> / <i class="flag">no telemetry</i> a GoPro sensor stream is in the file (a fact shown, never assumed; clips without it index the same way) ·
-        <i class="flag on">looked</i> the sheets have been read ·
-        <i class="flag good">on the pass</i> heard and previewed — the pass shows it ·
-        <i class="flag bad">junk?</i> black, one flat field or under 1.5 s with no words heard — a proposal for the board's bin to confirm; <i class="flag bad">junk</i> confirmed, and its look is skipped.
-        <br>
-        <span class="lbl">On the picture</span>, once the bin has a journal:
-        <i class="flag good">released</i> every stage done · <i class="flag warn">look paused</i> on the pass from its words, its look waits for your word ·
-        <i class="flag" style="color:var(--accent)">indexing</i> · <i class="flag">queued</i> ·
-        <i class="flag bad">retrying</i> · <i class="flag bad">parked</i> (failed three times, with the reason) · <i class="flag bad">missing</i> (the file is gone).
-        A silent clip is not a dim clip — the skiing is silent.
-      </div>
-    </div>
-
-    <aside id="side">
-      <div id="themes" class="box">
-        <div class="lbl">What is this film about? <span id="themesSub" class="sub"></span></div>
-        <div id="storyRow">
-          <textarea id="story" rows="2" placeholder="what is this film about? (optional)" spellcheck="false"></textarea>
-          <button type="button" id="mic" title="hold to speak — or hold V in the field; a tap of V types the letter">🎙 hold to speak</button>
-        </div>
-        <div id="dictState" class="hint small"></div>
-        <div id="themesAsk">
-          <div id="themesPrice" class="hint small tnum">pricing the proposal…</div>
-          <button type="button" id="proposeBtn" class="priced" disabled>Propose themes from the transcripts</button>
-        </div>
-        <div id="themesRunning" class="hint small" hidden>listening…</div>
-        <div id="themesEdit" hidden>
-          <div id="themesNotes" class="hint small"></div>
-          <div id="chips" class="chips"></div>
-          <div id="nameChips" class="chips names"></div>
-          <div id="themeWhy" class="hint small"></div>
-          <div class="acts">
-            <input id="addTheme" type="text" placeholder="+ add a theme of your own" spellcheck="false">
+      <div id="how" hidden>
+        <div id="index">
+          <div id="indexHead">
+            <b id="indexTitle"></b>
+            <span id="indexCounts" class="hint tnum"></span>
+            <span class="grow"></span>
+            <span id="indexDetail" class="hint small"></span>
           </div>
-          <div class="acts">
-            <button type="button" id="keepBtn" class="primary">Keep</button>
-            <button type="button" id="discardBtn">Discard</button>
-          </div>
-          <div id="keepHint" class="hint small">nothing reaches the EDL until Keep — Discard leaves it untouched</div>
+          <div id="rows"></div>
         </div>
-        <div id="themesKept" hidden>
-          <div id="keptChips" class="chips"></div>
-          <div id="keptNames" class="chips names"></div>
-          <div class="acts">
-            <a id="changeBtn" class="act">change</a>
-            <button type="button" id="againBtn" class="priced">propose again</button>
-          </div>
-        </div>
-        <div id="themesHint" class="hint small">a brief and a filter: themes lift and tag picks on the pass and order the index; they never score.</div>
-      </div>
-      <div class="box">
-        <div class="lbl">Look — how closely?</div>
-        <input id="interval" type="range" min="0" max="3" step="1" value="0" disabled
-               aria-label="a frame every how many seconds — coarse to fine" title="4 · 3 · 2 · 1 s — coarse to fine, re-pricing live">
-        <div id="stops"><span class="on">4 s</span><span>3 s</span><span>2 s</span><span>1 s</span></div>
-        <div id="intervalWord"></div>
-        <div id="priceLine" class="tnum">pricing the bin…</div>
-        <div id="priceDetail" class="hint small"></div>
-        <div id="sliderHint" class="hint small"></div>
-      </div>
-      <div class="box">
-        <div class="lbl">Order</div>
-        <div id="order" class="toggle" role="radiogroup">
-          <button type="button" data-order="priority" class="on" title="speech candidates + telemetry peaks + theme hits, ties by capture time">most promising first</button>
-          <button type="button" data-order="capture" title="a chronological cull">capture order</button>
-        </div>
-        <div class="hint small">the priced stages run in this order; clips are released whole as they finish</div>
-      </div>
-      <div id="paused" class="box" hidden>
-        <div class="lbl">Waiting on your word</div>
-        <div id="pausedTitle"></div>
-        <div id="pausedWhy" class="hint small"></div>
-        <div class="hint small">Everything free has run: every clip is heard and previewed, and the pass already shows them — picks from the words. A look is what lets the pass and the Ask see what nobody said.</div>
-        <button type="button" id="resume" class="priced">Resume</button>
-      </div>
-      <div class="box">
-        <div class="row"><span class="hint">spent on this project</span><span id="budgetLine" class="tnum hint">…</span></div>
-        <div id="backendLine" class="hint small"></div>
-        <div id="indexRow">
-          <button type="button" id="indexBtn" class="primary" disabled>Index the footage</button>
-          <button type="button" id="settingsBtn" title="settings — workers and the budget cap · ," aria-label="settings — workers and the budget cap"
-                  aria-haspopup="dialog" aria-controls="settings" aria-expanded="false">⚙</button>
-        </div>
-        <div id="settingsLine" class="hint small"></div>
-        <div id="indexHint" class="hint small" style="text-align:center">runs on its own · survives a crash · releases clips whole while the rest continues</div>
-      </div>
-      <div id="settings" class="box" role="dialog" aria-labelledby="settingsTitle" hidden>
-        <div class="row"><span class="lbl" id="settingsTitle">Settings</span><span class="hint small"><span class="key">Esc</span> closes</span></div>
-        <div id="settingsRunning" class="hint small" hidden>the index is running — changes apply to the next run</div>
-        <div id="settingsGone" class="hint small" hidden>this server has no settings endpoint yet — the cap and the workers are what the environment says</div>
-        <div id="settingsForm">
-          <div class="lbl">Budget cap</div>
-          <div class="row" id="capMode" role="radiogroup" aria-label="budget cap" style="justify-content:flex-start">
-            <label class="money"><input type="radio" name="capMode" id="capNone" value="none"> No cap</label>
-            <label class="money"><input type="radio" name="capMode" id="capOn" value="cap"> cap this project at</label>
-            <label class="money" for="capField">$<input id="capField" type="number" min="0.01" step="0.5" inputmode="decimal" placeholder="—" aria-label="budget cap in dollars"></label>
-          </div>
-          <div id="capHint" class="hint small"></div>
-          <div class="lbl">Workers</div>
-          <div id="workers"></div>
-          <div id="settingsErr" class="bad small" role="alert" hidden></div>
-          <div class="acts">
-            <button type="button" id="settingsSave" class="primary">Save</button>
-            <button type="button" id="settingsReset">Reset to defaults</button>
-            <span id="settingsState" class="hint small"></span>
-          </div>
-        </div>
-      </div>
-      <div id="progress" class="box" hidden>
-        <div class="row"><b id="progTitle">Overall</b><span id="progCount" class="tnum"></span></div>
-        <div class="bar1"><i id="progBar"></i></div>
-        <div id="progMeta" class="hint small tnum"></div>
         <div class="journal">
           <div class="lbl">Journal</div>
           <div id="journalPath" class="path"></div>
           <div id="journalLog" class="log"></div>
         </div>
       </div>
-      <div id="links">
-        <a id="openPass" class="btn" href="/floor" aria-disabled="true">Open the pass →</a>
-        <span id="passHint" class="hint small">nothing released yet</span>
-        <a href="/" class="hint">← the cut board</a>
-        <span class="hint small">close this tab: the index keeps running in the server; reopen anywhere and the journal picks up.</span>
+      <div id="sessions"></div>
+      <div id="empty" hidden>No footage in this folder yet — drop clips in and reload.</div>
+    </div>
+
+    <aside id="side">
+      <div id="brief" class="box">
+        <label class="lbl" for="story">What is this film about?</label>
+        <textarea id="story" rows="3" placeholder="optional — a sentence is enough" spellcheck="false"></textarea>
+        <div id="micRow">
+          <button type="button" id="mic" title="hold to speak — or hold V in the field; a tap of V types the letter">🎙 hold to speak</button>
+          <span id="dictState" class="hint small"></span>
+        </div>
+      </div>
+      <div id="paused" class="box" hidden>
+        <div id="pausedTitle"></div>
+        <div id="pausedWhy" class="hint small"></div>
+        <button type="button" id="resume" class="priced" data-next-for="index">Resume</button>
+      </div>
+      <div id="setup" class="box" hidden>
+        <div id="lookLine"><span id="lookWord"></span> · <a id="lookChange" role="button" tabindex="0" aria-controls="look" aria-expanded="false">change</a></div>
+        <div id="look" hidden>
+          <input id="interval" type="range" min="0" max="3" step="1" value="0"
+                 aria-label="a frame every how many seconds — coarse to fine" title="4 · 3 · 2 · 1 s — coarse to fine, re-pricing live">
+          <div id="stops"><span class="on">4 s</span><span>3 s</span><span>2 s</span><span>1 s</span></div>
+          <div id="intervalWord"></div>
+        </div>
+        <button type="button" id="indexBtn" class="priced" data-next-for="index footage" disabled>Index the footage</button>
+      </div>
+      <div id="progress" class="box" hidden>
+        <div id="progLine" class="tnum"></div>
+        <div class="bar1"><i id="progBar"></i></div>
       </div>
     </aside>
   </div>
@@ -376,7 +284,6 @@
 <script src="/cli.js"></script>
 <script src="/flow.js"></script>
 <script src="/switcher.js"></script>
-<script src="/deep.js"></script>
 <script src="/open.js"></script>
 </body>
 </html>
