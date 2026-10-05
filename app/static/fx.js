@@ -25,7 +25,8 @@
  * API (window.fx):
  *   ready        true once mounted
  *   refresh()    GET /api/fx and repaint (a job finished, a save landed)
- *   badge()      put the shot's count on the rail
+ *   badge()      put the proposals waiting across the cut on the rail
+ *   focus(id)    show that effect's shot and bring its card into view (Next lands here)
  *   state        the module's state (tests read it)
  */
 (() => {
@@ -139,8 +140,13 @@
   function activeForShot(id) { return forShot(id).filter((e) => e.status !== 'removed'); }
   function shotIndex(id) { return SEGS().findIndex((s) => String(s.id) === String(id)); }
 
+  /* The rail counts the proposals waiting anywhere in the cut — what the tool asks of
+   * you, the same number the flow's Polish stage says — not the selected shot's
+   * effects, which changed with every click (INTAKE M16 I16.0a). */
   function badge() {
-    if (window.dock && typeof dock.badge === 'function') dock.badge('fx', activeForShot(S.shot).length);
+    if (window.dock && typeof dock.badge === 'function') {
+      dock.badge('fx', S.effects.filter((e) => e.status === 'proposed').length);
+    }
   }
 
   async function fetchPeaks(id) {
@@ -829,6 +835,37 @@
     else if (t.id === 'fxNote' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); design(); }
   }
 
+  /* ------------------------------------------------------------ landing on an effect */
+  /* Next carries its target (INTAKE M16 I16.0a): the board's hash handler selects the
+   * effect's shot, parks the monitor at its start and opens this tool, then calls this.
+   * It follows that selection now rather than on the next half-second tick (selecting
+   * the shot itself when nobody did), waits for the effects when the page is still
+   * loading them, and scrolls the dock — only the dock, never the page — so the card
+   * is the first thing in view. Resolves to whether the card is there. */
+  async function focus(id) {
+    if (!byId(id)) await refresh();
+    const e = byId(id);
+    if (!e) return false;
+    const shot = String(e.anchor_shot || e.shot);
+    const t = TL();
+    if (shotId() !== shot && shotIndex(shot) >= 0 && t && typeof t.select === 'function') t.select([shot]);
+    if (window.dock && typeof dock.open === 'function') dock.open('fx');
+    onSelect();
+    paint(true);
+    const card = document.querySelector(`#fx .fxcard[data-id="${CSS.escape(String(id))}"]`);
+    if (!card) return false;
+    const box = card.closest('#tools') || card.parentElement;
+    if (box) {
+      const b = box.getBoundingClientRect(), c = card.getBoundingClientRect();
+      if (c.top < b.top || c.bottom > b.bottom) box.scrollTop += c.top - b.top - 4;
+    }
+    if (typeof card.animate === 'function') {
+      card.animate([{ outline: '2px solid #6ea8fe' }, { outline: '2px solid transparent' }],
+        { duration: 1200 });
+    }
+    return true;
+  }
+
   /* ------------------------------------------------------------ following the board */
   function onSelect() {
     const id = shotId();
@@ -1451,6 +1488,7 @@
     ready: false,
     refresh,
     badge,
+    focus,
     state: S,
     NUDGE_S,
     select: selectEvent,

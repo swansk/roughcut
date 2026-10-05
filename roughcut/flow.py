@@ -35,6 +35,8 @@ the facts dict; the tests build it by hand.
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 STAGES = ("footage", "index", "brief", "pass", "cut", "polish", "render")
 
 NAMES = {"footage": "Footage", "index": "Index", "brief": "Brief", "pass": "Pass",
@@ -53,6 +55,10 @@ SCREENS: dict[str, tuple[str, str | None]] = {
 PRICED_STAGES = ("index", "brief", "cut", "polish")
 
 STATES = ("done", "running", "ready", "waiting", "needs-you", "optional")
+
+# What an action may land on (INTAKE M16 I16.0a): the shot (a segment id) and the
+# effect (an fx id) of a waiting proposal, or the Ask job of a waiting cut proposal.
+TARGET_KEYS = ("shot", "fx", "ask")
 
 # The look interval in words, the open screen's slider's own vocabulary (shorter).
 INTERVAL_WORDS = {4.0: "a frame every 4 s", 3.0: "a frame every 3 s",
@@ -115,22 +121,34 @@ def _stage(key: str, state: str, summary: str, *, counts: dict | None = None,
     return out
 
 
-def href(screen: str, tool: str | None) -> str:
-    return f"{screen}#tool={tool}" if tool else screen
+def href(screen: str, tool: str | None, target: dict | None = None) -> str:
+    """`/#tool=fx`, and with a target the thing it lands on: `/#tool=fx&shot=<segment
+    id>&fx=<effect id>` (or `&ask=<job>`) — the board's hash handler reads it."""
+    if not tool:
+        return screen
+    t = target or {}
+    extra = "".join(f"&{k}={quote(str(t[k]), safe='')}" for k in TARGET_KEYS if t.get(k))
+    return f"{screen}#tool={tool}{extra}"
 
 
 def action(stage: str, sentence: str, verb: str, *, tool: str | None = None,
            screen: str | None = None, click: str | None = None,
-           usd: float | None = None, kind: str = "go") -> dict:
+           usd: float | None = None, kind: str = "go",
+           target: dict | None = None) -> dict:
     """One thing to do. `click` is a selector the bar may click *on its own screen*
     — only ever for free, non-spending actions (a render on the board); anything
     priced navigates to the button that carries its price, because nothing spends
-    without the click on that button (Karl's rule)."""
+    without the click on that button (Karl's rule). `target` is what it lands on
+    (`{shot, fx}` or `{ask}`), carried in the href too, so Next opens the waiting
+    proposal itself and not whatever shot the board had selected (INTAKE M16)."""
     scr, default_tool = SCREENS[stage]
     scr = screen or scr
     t = tool if tool is not None else default_tool
+    tgt = {k: str(v) for k, v in (target or {}).items() if k in TARGET_KEYS and v}
     out = {"stage": stage, "sentence": sentence, "verb": verb, "screen": scr,
-           "tool": t, "href": href(scr, t), "kind": kind}
+           "tool": t, "href": href(scr, t, tgt), "kind": kind}
+    if tgt and t:
+        out["target"] = tgt
     if click:
         out["click"] = click
     if usd is not None:
@@ -229,11 +247,12 @@ def brief_stage(f: dict) -> dict:
         return _stage("brief", "running", "Proposing themes from the transcripts",
                       counts=counts)
     if b.get("proposal"):
-        return _stage("brief", "needs-you", "Proposed themes wait for Keep or Discard",
-                      counts=counts, needs={
-                          "reason": "Proposed themes wait for Keep or Discard.",
-                          "action": action("brief", "Keep or discard the proposed themes",
-                                           "Answer")})
+        # The brief never blocks anything (M14 decision 1), so proposed themes are not
+        # waiting on you: no amber, and Next never routes to them (INTAKE M16 I16.0b —
+        # the Sep 8 proposal held "! Brief" and Next on every screen).
+        return _stage("brief", "optional",
+                      "Proposed themes wait — keep or discard them whenever you like",
+                      counts={**counts, "proposal": True})
     if themes or story:
         bits = (["story set"] if story else []) + ([_plural(themes, "theme")] if themes else [])
         return _stage("brief", "done", " · ".join(bits), counts=counts)
@@ -288,7 +307,8 @@ def cut_stage(f: dict) -> dict:
         return _stage("cut", "needs-you", reason, counts={**counts, "proposal": n},
                       needs={"reason": reason,
                              "action": action("cut", "Read the proposal and accept or "
-                                              "discard it", "Answer")})
+                                              "discard it", "Answer",
+                                              target={"ask": prop.get("job")})})
     if shots == 0:
         if listened == 0:
             return _stage("cut", "waiting", "Needs the footage heard first",
@@ -336,10 +356,14 @@ def polish_stage(f: dict) -> dict:
             what.append("a colour change proposed")
         reason = " · ".join(what) + " — accept or discard"
         tool = "fx" if fx_proposed else "ask"
+        # Land on the proposal: the effect's shot and card (the server picks the one on
+        # the earliest shot), or the waiting colour-only Ask.
+        target = (p.get("target") if fx_proposed
+                  else {"ask": (c.get("proposal") or {}).get("job")})
         return _stage("polish", "needs-you", reason, counts=counts, needs={
             "reason": reason,
             "action": action("polish", reason[0].upper() + reason[1:], "Answer",
-                             tool=tool)})
+                             tool=tool, target=target)})
     bits = []
     if p.get("look"):
         bits.append(f"look: {p['look']}")
@@ -397,7 +421,8 @@ def _next(stages: dict[str, dict], f: dict, blocked: list[dict]) -> dict:
     """The one recommended action, in a fixed order of precedence:
 
     1. footage missing — nothing else means anything;
-    2. a proposal waiting (already paid for: answering it costs nothing);
+    2. a proposal waiting (already paid for: answering it costs nothing) — a cut or
+       an effect; proposed themes are the brief's, which never blocks (M16 I16.0b);
     3. the index, until every clip has at least been heard (the free part) — or the
        open screen's first *Index the footage* when nothing has been indexed;
     4. no cut yet → make the first cut (from the keeps when there are any);
@@ -421,7 +446,7 @@ def _next(stages: dict[str, dict], f: dict, blocked: list[dict]) -> dict:
 
     if stages["footage"]["state"] == "needs-you":
         return stages["footage"]["needs"]["action"]
-    for key in ("cut", "polish", "brief"):
+    for key in ("cut", "polish"):
         if stages[key]["state"] == "needs-you":
             return stages[key]["needs"]["action"]
     ix = stages["index"]
