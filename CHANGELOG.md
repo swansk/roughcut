@@ -9,6 +9,18 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Added
+- **`test_budget.py`, the screen-size ratchet (INTAKE M16 I16.1).** Every earlier answer
+  to "it is hard to use" added a surface; this fails when one grows back. At 1440×900 on
+  the fixture bin, read-only: one header row ≤ 50 px holding the switcher and Next side
+  by side, exactly one `.is-next` (none while a round of the pass is open), the board
+  with no page scroll, no step bar, and words / controls in view under each screen's
+  number. Measured on this branch: / 176 words · 19 controls, /floor 324 · 5, /open
+  433 · 12 (before: 197 · 26, 350 · 12, 454 · 19). The numbers are generous until the
+  other stage-1 lanes merge (TODO-tighten); the board's and the pass's one-row header and
+  the board's no-scroll are listed in `AWAITS` as expected failures until lanes shell,
+  pass and cut land, and a listed check that passes fails until it is taken out.
+
 ### Changed
 - **The CLI banner is one line above the header (INTAKE M16 I16.1, C1).** It wrapped to
   two or three lines at the top of every screen when the reason was long. It still sits
