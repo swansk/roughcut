@@ -169,6 +169,7 @@ function phase() {
   const ix = O.index, d = O.clips;
   if (!ix || !d) return 'loading';
   if (ix.running) return 'running';
+  if (!d.clips.length) return 'empty';             // nothing to index: the folder says so
   if (!ix.exists) return 'setup';
   return d.clips.some((c) => ['queued', 'retrying', null].includes(journalWord(c.journal, d.paused_priced)))
     ? 'setup' : 'done';

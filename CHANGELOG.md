@@ -13,6 +13,10 @@ same commit. Releases move entries into a dated version section.
 - **INTAKE M16, take things away (Karl, 2026-10-04).** The fourth report that the flow is hard (*"a bunch of buttons and text from the footage -> the other steps"*) gets the opposite of the last three answers: remove, don't add. M16 records Karl's eight answers from the proposal page (Subtract; the step bar off; Next lands on its target; the two-first-cuts test before the pass changes; clickable P/X/U; click selects and parks; no budget cap by default; themes dropped; one line for how the machine saw), the measured baseline, the end state the check-ins measure against, and items I16.0–I16.8. HANDOFF points at it.
 
 ### Fixed
+- **An empty folder offers nothing to index (INTAKE M16 I16.2, review).** With no clips
+  the new setup state still showed *Index the footage*, which the server refuses with a
+  400 ("no footage to index"). An empty folder is its own state now: the "No footage in
+  this folder yet" line, no Index button.
 - **Next lands on the waiting effect (INTAKE M16 I16.0a).** On Killington, Next opened
   the FX tool on whatever shot the board had anchored — shot 1's accepted typed title —
   while the slow-motion proposal `fx_d644520f` waited on shot 17 (`g1ce00e2b83`): the

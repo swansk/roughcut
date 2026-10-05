@@ -228,6 +228,14 @@ def test_the_journals_word_is_derived_the_way_the_journal_derives_it(page):
     assert word({"missing": False, "parked": None, "stages": {**done, "telemetry": "skipped", "look": "queued"}}) == "queued"
 
 
+def test_an_empty_folder_offers_nothing_to_index(page):
+    assert page.evaluate("sheet.phase()") == "setup"
+    page.evaluate("""() => { sheet.state.clips = {...sheet.state.clips, clips: [], total_s: 0};
+        sheet.renderSheet(); }""")
+    assert page.evaluate("sheet.phase()") == "empty"
+    assert page.locator("#empty").is_visible() and page.locator("#setup").is_hidden()
+
+
 # --------------------------------------------------------- the controls (I5.3)
 
 def test_the_look_is_priced_on_the_button_that_buys_it(page):
