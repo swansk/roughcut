@@ -2063,3 +2063,28 @@ def test_sound_is_one_line_and_dip_under_talk(page, project):
         time.sleep(0.1)
     assert disk()["duck"] is False
     page.select_option("#musicTrack", "")
+
+
+def test_roughcut_refresh_repaints_the_cut_in_place(page):
+    """INTAKE M16 C5: a change made on the server (an effect's edit accepted) used to
+    reload the page. window.roughcutRefresh() reads the cut back and repaints the
+    timeline and the inspector in place, keeping the selection and the playhead."""
+    page.evaluate("window.__stay = 1")
+    select_shot(page, 1)
+    keep = page.evaluate("tl.idAt(1)")
+    page.evaluate("tl.setPlayhead(2.5)")
+    page.evaluate("""async () => {
+      const s = tl.forSave().map((x) => ({...x}));      // the cut's ids, as on disk
+      s[1].why = 'changed on the server';
+      await fetch('/api/project', {method: 'PUT', headers: {'content-type': 'application/json'},
+        body: JSON.stringify({segments: s, story: ''})});
+    }""")
+    assert page.evaluate("segs[1].why") == "second"
+    page.evaluate("roughcutRefresh()")
+    page.wait_for_function("segs[1].why === 'changed on the server'", timeout=5000)
+    assert page.evaluate("window.__stay") == 1, "the page did not reload"
+    assert page.evaluate("[...tl.state.sel]") == [keep]
+    assert page.evaluate("tl.state.playhead") == pytest.approx(2.5, abs=0.01)
+    page.wait_for_function(
+        "document.querySelector('#inspector .why').textContent === 'changed on the server'",
+        timeout=5000)

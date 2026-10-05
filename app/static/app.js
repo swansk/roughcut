@@ -3065,4 +3065,30 @@ async function boot() {
  * copy, or in the next bin's cut. The board has no in-place reload; the switcher
  * reloads the page and boot() reads the new cut. */
 window.roughcutFlush = async () => { if (saveTimer) await save(); };
+
+/* Re-read the cut from disk and repaint it in place (INTAKE M16, C5) — the timeline, the
+ * inspector, the bin, the film tool — keeping the selection and the playhead. For a
+ * change made on the server (an effect's edit accepted), which used to reload the page.
+ * Anything the autosave still holds is written first, so nothing typed is lost. */
+window.roughcutRefresh = async () => {
+  if (saveTimer) await save();
+  const keep = { sel: [...tl.state.sel], anchor: tl.state.anchor, at: tl.state.playhead,
+                 index: tl.state.anchor == null ? -1 : tl.indexOf(tl.state.anchor) };
+  P = await (await fetch('/api/project')).json();
+  segs = P.segments.map((s) => ({ ...s }));
+  music = P.music || null;
+  colour = P.colour || {};
+  await refreshColour();
+  render();
+  const ids = keep.sel.filter((id) => id !== keep.anchor && tl.indexOf(id) >= 0);
+  if (keep.anchor != null && tl.indexOf(keep.anchor) >= 0) ids.push(keep.anchor);
+  // a shot the change replaced: the one now in its place
+  else if (keep.index >= 0 && segs.length) ids.push(tl.idAt(Math.min(keep.index, segs.length - 1)));
+  if (ids.length) tl.select(ids);
+  tl.setPlayhead(Math.min(keep.at || 0, tl.total()), { reveal: false });
+  paintRest();
+  await refreshBin();
+  await refreshVersions();
+  if (window.fx && typeof fx.refresh === 'function') fx.refresh();
+};
 boot();

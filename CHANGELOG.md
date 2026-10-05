@@ -234,6 +234,10 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **`window.roughcutRefresh()` (INTAKE M16, the lanes' contract C5).** Re-reads
+  /api/project and repaints the timeline, the inspector, the bin and the film tool in
+  place, keeping the selection and the playhead; returns a Promise. For a change made on
+  the server — the FX tool's Accept of an edit, which reloaded the page.
 - **The keys sheet is one table grouped by task (INTAKE M16 I16.4).** It was the board's
   own run-on line of keys, then the timeline's section with module tags ("· foundation",
   "· trim", "· edges") and rows said twice (x, ⌘Z, + − \). Now one table — Play · Trim
