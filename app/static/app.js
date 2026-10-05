@@ -1169,7 +1169,8 @@ function advance() {
 /* Keep the monitor honest against the timeline it is playing: hide it when there is
  * nothing to play, and re-cue if the shot under the playhead was edited out from under it. */
 function syncPlayer() {
-  $('#player').style.display = segs.length ? '' : 'none';
+  // A first cut's proposal plays in the monitor too, before there is a cut.
+  $('#player').style.display = segs.length || pendingPlan ? '' : 'none';
   if (player.idx >= segs.length) { pauseCut(); player.idx = -1; }
   if (player.playing && player.idx >= 0) {
     const seg = segs[player.idx];
@@ -1258,42 +1259,46 @@ function emptyState() {
   const el = document.createElement('div');
   el.className = 'empty';
   const analysed = S ? S.analysed : 0;
-  const clips = S ? S.clips : 0;
   if (!analysed) {
-    el.innerHTML = `<h3>Nothing indexed yet</h3><div>${clips}
-      clip${clips === 1 ? '' : 's'} in the footage folder. They need indexing before
-      anything can be cut — <a href="/open">open the footage →</a> and start the index
-      there; it runs unattended and you can come back while it goes.</div>`;
+    el.innerHTML = `<h3>Nothing indexed yet</h3><div><a href="/open">The footage →</a></div>`;
     return el;
   }
-  const vz = S && S.visual;
-  const look = vz && vz.pending.length ? `<div class="hint" style="margin-top:12px">
-    ${vz.pending.length} clip${vz.pending.length > 1 ? 's' : ''} nobody has looked at yet
-    (~$${vz.projected_usd.toFixed(2)}) — the index does that from
-    <a href="/open">the open screen</a>, so a first cut asked for afterwards knows what
-    happened on screen and not only what was said.</div>` : '';
+  // One sentence about the film (INTAKE M16 I16.4): the EDL's story — the Ask tool's
+  // field, /open's, this one — and ONE priced button. With keeps it is Cut from the bin
+  // (heroes fixed, keeps as bounds); without, the first cut from the index.
   el.innerHTML = `<h3>No cut yet</h3>
-    <div>${analysed} clip${analysed > 1 ? 's' : ''} analysed and ready.
-    Say what this film is about — a sentence is enough — and ask for a first cut.
-    You will get a proposal to accept, discard or take apart by hand.</div>
-    <textarea id="firstNote" style="margin-top:12px;min-height:60px"
-      placeholder="a 2–3 minute edit of the trip for the friends who were there · loose and fun · the people are the point"></textarea>
-    <button id="firstCut" class="primary" style="margin-top:10px"${unpricedAttr('first')}>Ask for a first cut${priceTag('first')}</button>
-    <button id="firstFromBin" style="margin-top:10px;margin-left:8px;display:none"${unpricedAttr('bin')}
-      title="One Ask with a fixed note: every hero appears, the other keeps serve the story, nothing else unless a keep needs it — a proposal to accept or discard">Cut from the bin${priceTag('bin')}</button>
-    <div class="hint" id="firstState" style="margin-top:8px"></div>${look}`;
-  el.querySelector('#firstCut').onclick = () => ask({
-    note: el.querySelector('#firstNote').value.trim(),
-    button: el.querySelector('#firstCut'),
-    state: el.querySelector('#firstState'),
-  });
-  // The Ask panel is hidden here, and here is where someone arriving from the pass
-  // lands — so the bin's button lives in the empty state too (shown when there is a bin).
-  el.querySelector('#firstFromBin').onclick = () => cutFromBin({
-    button: el.querySelector('#firstFromBin'),
-    state: el.querySelector('#firstState'),
-  });
+    <label class="ask-q" for="firstNote">What is this film about?</label>
+    <textarea id="firstNote" style="min-height:60px"
+      placeholder="optional — a sentence is enough"></textarea>
+    <div style="display:flex;gap:10px;align-items:center;justify-content:center;margin-top:10px;flex-wrap:wrap">
+      <button id="firstCut" data-next-for="cut"${unpricedAttr(firstMode())}>${firstLabel()}${priceTag(firstMode())}</button>
+      <span class="hint" id="firstAims">${escapeHtml(aimsFor())}</span>
+    </div>
+    <div class="hint" id="firstState" style="margin-top:8px"></div>`;
+  const box = el.querySelector('#firstNote');
+  box.value = $('#story').value;
+  box.oninput = () => { $('#story').value = box.value; touch(); };
+  el.querySelector('#firstCut').onclick = () => {
+    const opts = { button: el.querySelector('#firstCut'), state: el.querySelector('#firstState') };
+    return keepsUsable().length ? cutFromBin(opts) : ask({ ...opts, note: '' });
+  };
   return el;
+}
+
+/* The first cut is cut from the keeps when the pass kept any, from the index when not. */
+function firstMode() { return keepsUsable().length ? 'bin' : 'first'; }
+function firstLabel() {
+  const n = keepsUsable().length;
+  return n ? `Make the first cut from your ${n} keep${n === 1 ? '' : 's'}` : 'Make a first cut';
+}
+
+/* "aims for 2–3 min": the target every first cut and Ask is written to (the EDL's
+ * `target_s`), said beside the buttons that send it — it was the header's
+ * "target 2:00.0–3:00.0", far from what it governs. */
+function aimsFor() {
+  const [lo, hi] = (P && P.target) || [120, 180];
+  const mins = lo >= 60 && lo % 60 === 0 && hi % 60 === 0;
+  return mins ? `aims for ${lo / 60}–${hi / 60} min` : `aims for ${clock(lo)}–${clock(hi)}`;
 }
 
 function render() {
@@ -1303,11 +1308,9 @@ function render() {
   syncPlayer();
   renderInspector();
 
-  // With an empty timeline the empty state already has its own "what is this film
-  // about" box, so the sidebar panel is a second input for the same thing.
+  // With an empty timeline there is nothing to change; the empty state asks for the cut.
   $('#askPanel').style.display = segs.length ? 'block' : 'none';
-  const askEmpty = $('#askEmpty');
-  if (askEmpty) askEmpty.hidden = !!segs.length;
+  $('#askAims').textContent = aimsFor();
 
   // Nothing in the header acts on an empty timeline, so nothing in the header shows.
   ['#undo', '#redo', '#makeFilm', '#saveState'].forEach((sel) => {
@@ -1860,12 +1863,10 @@ function paintAskPrices() {
     el.textContent = name + priceTag(mode);
     if (basis && priced(mode)) el.title = `about $${askPrice[mode].usd.toFixed(2)} — ${askPrice[mode].basis}`;
   };
-  label($('#ask'), 'Ask', 'full', true);
-  label($('#cutFromBin'), 'Cut from the bin', 'bin', false);
-  label($('#firstCut'), 'Ask for a first cut', 'first', true);
-  label($('#firstFromBin'), 'Cut from the bin', 'bin', false);
+  label($('#ask'), 'Ask for a change', 'full', true);
+  label($('#firstCut'), firstLabel(), firstMode(), true);
   document.querySelectorAll('#inspector button[data-act=shotgo]').forEach((b) => label(b, 'Ask', 'shot', true));
-  for (const [sel, mode] of [['#ask', 'full'], ['#firstCut', 'first'], ['#firstFromBin', 'bin']]) {
+  for (const [sel, mode] of [['#ask', 'full'], ['#firstCut', firstMode()]]) {
     const el = $(sel);
     if (el) holdForPrice(el, mode);
   }
@@ -1878,25 +1879,14 @@ function cutFromBin(opts = {}) {
   return ask({ note: BIN_NOTE, fixed: true, button: opts.button, state: opts.state });
 }
 
-/* The control is only worth pressing when there is a bin to cut from. Two places: the
- * Ask panel, and the empty state — which is where the panel is hidden, and exactly
- * where someone arriving from the pass lands. */
+/* The empty state's one button follows the bin: its words ("from your 3 keeps") and
+ * its price (Cut from the bin, or a first cut from the index) change with the keeps. */
 function paintCutFromBin() {
-  const n = keepsUsable().length;
-  const b = $('#cutFromBin');
-  const h = $('#cutFromBinHint');
-  if (b && h) {
-    b.disabled = !n || !priced('bin');   // and never an unpriced spend (I16.0f)
-    if (!n) {
-      h.textContent = 'nothing kept yet — the pass is where you keep things';
-      h.dataset.empty = '1';
-    } else if (h.dataset.empty) {   // only clear what this painted, never a running ask
-      h.textContent = '';
-      delete h.dataset.empty;
-    }
-  }
-  const f = $('#firstFromBin');
-  if (f) f.style.display = n ? '' : 'none';
+  const b = $('#firstCut');
+  if (!b) return;
+  const mode = firstMode();
+  b.textContent = firstLabel() + priceTag(mode);
+  holdForPrice(b, mode);
 }
 
 /* Re-read the bin — when the tab is shown, after an insert, after a save while the tab
@@ -2161,6 +2151,7 @@ function showProposal(plan) {
       + '<hr style="border:0;border-top:1px solid var(--line);margin:10px 0">'
       + detail);
   $('#proposal').style.display = 'block';
+  if (!segs.length) syncPlayer();               // a first cut plays from its ghost lane
   $('#proposal').scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
 
@@ -2334,6 +2325,14 @@ function acceptProposal() {
   toast(!graded ? 'applied — undo with ⌘Z'
     : cutToo ? 'applied, cut and colour — ⌘Z undoes the cut; the grade is in the inspector'
       : 'colour applied — the grade is in the inspector', graded ? 5000 : undefined);
+}
+
+/* ▶ Play it (INTAKE M16 I16.4): the proposed cut plays in the monitor from its ghost
+ * lane (/timeline-lanes.js), before anything is accepted — watched, not only read. */
+function playProposal() {
+  if (!pendingPlan) return;
+  const lanes = window.tlLanes;
+  if (!lanes || !lanes.ghost() || !lanes.playPlan(0)) toast('the proposal is still being drawn — try again');
 }
 
 function rejectProposal() {
@@ -2982,9 +2981,7 @@ async function boot() {
   $('#compare').addEventListener('toggle', () => { if ($('#compare').open) loadCompare(); });
   ['#cmpPickA', '#cmpPickB'].forEach((sel) => { $(sel).onchange = loadCompare; });
   $('#ask').onclick = () => ask();   // not `ask` — a MouseEvent has a `.button` too
-  $('#cutFromBin').onclick = () => cutFromBin({
-    button: $('#cutFromBin'), state: $('#cutFromBinHint'),
-  });
+  $('#playProposal').onclick = playProposal;
   $('#acceptProposal').onclick = acceptProposal;
   $('#rejectProposal').onclick = rejectProposal;
   $('#findGo').onclick = () => doFind();

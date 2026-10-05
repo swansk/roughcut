@@ -327,9 +327,13 @@ def test_ask_shows_a_proposal_that_can_be_accepted_or_discarded(page):
         before = page.evaluate("JSON.stringify(segs)")
         page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
         page.locator("#note").fill("use the clip that isn't in the cut")
-        assert_priced(page, "#ask", "Ask", "full")
+        assert_priced(page, "#ask", "Ask for a change", "full")
         page.locator("#ask").click()
         page.wait_for_selector("#proposal:visible", timeout=30000)
+        # one blue button per screen is Next's (INTAKE M16): the proposal's are plain,
+        # and ▶ Play it is the one Next may mark
+        assert page.locator("#proposal button.primary").count() == 0
+        assert page.locator("#playProposal").get_attribute("data-next-for") == "cut"
 
         assert "replaced the opening" in page.locator("#proposalNotes").inner_text()
         assert "CLIP_C" in page.locator("#proposalDiff").inner_text()
@@ -391,14 +395,20 @@ def test_an_empty_timeline_offers_a_first_cut_and_gets_one(page):
             " && document.querySelector('#flow [data-stage=cut]').dataset.state === 'ready'",
             timeout=10000)
         assert "first cut" in page.locator("#flowNext").inner_text()
-        # the sidebar Ask panel hides itself here — the empty state already has a box
-        # for the same sentence, and two inputs for one thing is a UI defect
+        # the Ask tool's change box hides itself here — there is nothing to change
         assert not page.locator("#askPanel").is_visible()
+        # one sentence (INTAKE M16 I16.4): the empty state asks it in the same words as
+        # the Ask tool, and both are the EDL's story; ONE priced button, Next's to mark
+        assert "What is this film about?" in page.locator(".empty").inner_text()
+        assert page.locator(".empty button").count() == 1
+        assert page.locator("#firstCut").get_attribute("data-next-for") == "cut"
+        assert "aims for" in page.locator("#firstAims").inner_text()
 
         page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
         page.fill("#story", "")        # an earlier test may have left one behind
         page.locator("#firstNote").fill("a loose film about two people talking")
-        assert_priced(page, "#firstCut", "Ask for a first cut", "first")
+        assert page.input_value("#story") == "a loose film about two people talking"
+        assert_priced(page, "#firstCut", "Make a first cut", "first")
         page.locator("#firstCut").click()
         page.wait_for_selector("#proposal:visible", timeout=30000)
         assert "conversation" in page.locator("#proposalNotes").inner_text()
@@ -1533,9 +1543,9 @@ def test_an_empty_bin_says_where_to_keep_things(page):
         timeout=5000)
     assert "the pass is where you keep things" in box.inner_text()
     assert box.locator("a").get_attribute("href") == "/floor"
-    # and there is nothing to cut from: the control says so rather than firing an Ask
-    assert page.locator("#cutFromBin").is_disabled()
-    assert "nothing kept yet" in page.locator("#cutFromBinHint").inner_text()
+    # and there is nothing to cut from: no Cut from the bin to press (INTAKE M16: the
+    # Ask tool's second button is gone; with no keeps the first cut is from the index)
+    assert page.locator("#cutFromBin").count() == 0
     # with no keeps the board opens on heard, as before
     page.reload()
     page.wait_for_selector("#tl .blk")
@@ -1549,9 +1559,10 @@ BIN_NOTE = ("Build the cut from the editor's selects: every hero must appear, us
 
 
 def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
-    """The prompt already carries the bin (revise.py's "The editor's selects"); this is
-    the button that asks for exactly that, from the Ask panel when there is a cut and
-    from the empty state when there is not — and the proposal loop is the usual one."""
+    """The prompt already carries the bin (revise.py's "The editor's selects"); the
+    empty board's one button asks for exactly that when there are keeps — "Make the
+    first cut from your 1 keep" — and the proposal loop is the usual one. Once a cut
+    exists it is not a second button beside Ask (INTAKE M16: the look-alike goes)."""
     from roughcut import config, inference
 
     class Scripted:
@@ -1576,22 +1587,10 @@ def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
     inference.set_backend(Scripted())
     inference.reset_spend()
     try:
-        # with a cut on the board: the Ask panel's button, a revision
+        # with a cut on the board: the Ask tool has one priced button, Ask for a change
         page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
-        # priced first (I16.0f): until its price is on it the button is disabled
-        assert_priced(page, "#cutFromBin", "Cut from the bin", "bin")
-        assert page.locator("#cutFromBin").is_enabled()
-        assert page.locator("#cutFromBinHint").inner_text() == ""
-        before = page.evaluate("JSON.stringify(segs)")
-        page.locator("#cutFromBin").click()
-        page.wait_for_selector("#proposal:visible", timeout=30000)
-        prompt = Scripted.seen[-1].prompt
-        assert "The editor's selects" in prompt
-        assert BIN_NOTE in prompt
-        assert "HERO" in prompt and "editor's note: \"this is the film\"" in prompt
-        assert "built from the bin" in page.locator("#proposalNotes").inner_text()
-        assert page.evaluate("JSON.stringify(segs)") == before   # a proposal, not an edit
-        page.locator("#rejectProposal").click()
+        assert page.locator("#cutFromBin").count() == 0
+        assert page.locator("#askPanel button").count() == 1
 
         # with no cut: the panel is hidden and the empty state carries the button; the
         # fixed note is the app's words and must not become the story
@@ -1602,13 +1601,15 @@ def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
         page.keyboard.press("x")
         page.wait_for_selector("#inspector .empty")
         assert not page.locator("#askPanel").is_visible()
-        assert page.locator("#firstFromBin").is_visible()
-        assert_priced(page, "#firstFromBin", "Cut from the bin", "bin")
-        page.locator("#firstFromBin").click()
+        assert page.locator(".empty button").count() == 1
+        assert_priced(page, "#firstCut", "Make the first cut from your 1 keep", "bin")
+        page.locator("#firstCut").click()
         page.wait_for_selector("#proposal:visible", timeout=30000)
         prompt = Scripted.seen[-1].prompt
         assert "There is no edit yet" in prompt and BIN_NOTE in prompt
         assert "The editor's selects" in prompt
+        assert "HERO" in prompt and "editor's note: \"this is the film\"" in prompt
+        assert "built from the bin" in page.locator("#proposalNotes").inner_text()
         assert page.input_value("#story") == ""
         page.locator("#acceptProposal").click()
         assert page.locator("#tl .blk").count() == 1
@@ -1709,10 +1710,10 @@ def test_ask_buttons_wait_for_their_price_and_never_spend_without_one(page, live
     spent with no price shown, and a failed price fetch left it so for good. It is
     disabled until priced; with no price to be had it says so, stays disabled, and an
     ask that gets through anyway (a key, a script) refuses before any POST."""
-    assert_priced(page, "#ask", "Ask", "full")
+    assert_priced(page, "#ask", "Ask for a change", "full")
     assert page.locator("#ask").is_enabled()
     html = page.evaluate("fetch('/').then(r => r.text())")
-    assert '<button id="ask" class="primary" disabled data-await-price="1">Ask</button>' in html
+    assert '<button id="ask" disabled data-await-price="1">Ask for a change</button>' in html
 
     posts = []
     page.on("request", lambda r: posts.append(r.url)
@@ -1721,9 +1722,8 @@ def test_ask_buttons_wait_for_their_price_and_never_spend_without_one(page, live
     page.reload()
     page.wait_for_selector("#tl .blk")
     page.wait_for_function(
-        "document.querySelector('#ask').textContent === 'Ask · price unavailable'", timeout=5000)
+        "document.querySelector('#ask').textContent === 'Ask for a change · price unavailable'", timeout=5000)
     assert page.locator("#ask").is_disabled()
-    assert page.locator("#cutFromBin").is_disabled()
     insp = page.locator("#inspector")
     insp.locator("button[data-act=ask]").click()
     page.wait_for_selector("#inspector .shotAsk:visible")
@@ -1987,3 +1987,45 @@ def test_the_monitor_at_rest_shows_the_frame_at_the_playhead_with_a_big_play(pag
     page.wait_for_function("!player.playing", timeout=5000)
     assert page.locator("#bigPlay").is_visible()
     assert page.locator("#playCut").inner_text() == "▶ Play"
+
+
+def test_a_proposed_cut_plays_before_it_is_accepted(page):
+    """INTAKE M16 I16.4: a proposal was a text diff with Accept and Discard — read, not
+    watched. ▶ Play it plays the proposed cut in the monitor from its ghost lane; the cut
+    on the board is untouched until Accept, and the readable diff stays."""
+    from roughcut import config, inference
+
+    class Scripted:
+        name = "scripted"
+
+        def complete(self, request):
+            text = json.dumps({
+                "segments": [{"clip": "CLIP_C.MP4", "in": 0.5, "out": 4.0,
+                              "why": "brought in per the note"}],
+                "notes": "replaced the opening"})
+            model = config.model_for(request.role)
+            return inference.Result(content=text, input_tokens=10, output_tokens=5,
+                                    backend="scripted", model=model,
+                                    projected_usd=0.0001, latency_ms=1, raw=text)
+
+    inference.set_backend(Scripted())
+    inference.reset_spend()
+    try:
+        before = page.evaluate("JSON.stringify(segs)")
+        page.evaluate("dock.open('ask')")
+        page.locator("#note").fill("open on the other clip")
+        assert_priced(page, "#ask", "Ask for a change", "full")
+        page.locator("#ask").click()
+        page.wait_for_selector("#proposal:visible", timeout=30000)
+        assert "CLIP_C" in page.locator("#proposalDiff").inner_text()   # the diff stays
+        buttons = page.eval_on_selector_all("#proposal button", "els => els.map(e => e.textContent)")
+        assert buttons == ["▶ Play it", "Accept", "Discard"], buttons
+        page.wait_for_function("window.tlLanes && tlLanes.ghost()", timeout=8000)
+        page.locator("#playProposal").click()
+        page.wait_for_function(
+            "liveVideo().dataset.src.includes('CLIP_C') && !liveVideo().paused", timeout=10000)
+        assert "proposal" in page.locator("#playingWhat").inner_text()
+        assert page.evaluate("JSON.stringify(segs)") == before   # watched, not applied
+        page.locator("#rejectProposal").click()
+    finally:
+        inference.set_backend(None)

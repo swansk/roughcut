@@ -212,16 +212,28 @@ def test_the_rail_opens_one_tool_at_a_time_and_remembers_it(page):
     assert page.locator("#story").is_visible()
 
 
-def test_the_ask_tool_says_why_it_is_empty_on_an_empty_timeline(page):
+def test_the_ask_tool_is_the_one_sentence_and_the_change(page):
+    """INTAKE M16 I16.4: one sentence about the film, in the same words everywhere —
+    "What is this film about?" — and "Ask for a change" with what the cut aims for
+    beside it. Gone: the Story heading and "The thing the agent is worst at…", the
+    second button (Cut from the bin), and on an empty timeline "no cut yet — the
+    board's empty state is where…" (the empty state is right there)."""
     page.evaluate("dock.open('ask')")
     assert page.locator("#askPanel").is_visible()
-    assert not page.locator("#askEmpty").is_visible()
+    tool = page.locator("#tools section[data-tool=ask]")
+    assert "What is this film about?" in tool.inner_text()
+    assert "worst at" not in tool.inner_text()
+    assert tool.locator("button").count() == 1
+    assert page.locator("#askAims").inner_text() == "aims for 0:05–0:20"   # target_s [5, 20]
     page.evaluate("tl.select([tl.idAt(0), tl.idAt(1)])")
     page.keyboard.press("x")
     page.wait_for_selector("#inspector .empty")
     assert not page.locator("#askPanel").is_visible()
-    assert page.locator("#askEmpty").is_visible()
+    assert page.locator("#askEmpty").count() == 0
     assert page.locator("#story").is_visible()       # the story is still there to write
+    # and the empty state's field is the same sentence: typing in one is the other
+    page.locator("#firstNote").fill("two friends talking")
+    assert page.input_value("#story") == "two friends talking"
 
 
 # ---------------------------------------------------------------- the bin

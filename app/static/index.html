@@ -183,6 +183,7 @@
   #findVideo { width: 100%; border-radius: 6px; background: #000; display: block;
                aspect-ratio: 16/9; }
   .shotAsk textarea { min-height: 44px; }
+  .ask-q { display: block; font-weight: 600; margin-bottom: 6px; }
   input[type=range] { accent-color: var(--accent); }
   .tabs { display: flex; gap: 4px; margin: 10px 0 6px; }
   .tab { font-size: 12px; color: var(--dim); border: 1px solid var(--line);
@@ -458,8 +459,9 @@
       <div id="proposalNotes" style="margin-bottom:10px"></div>
       <div id="proposalDiff" style="max-height:340px;overflow:auto"></div>
       <div style="display:flex;gap:8px;margin-top:10px">
-        <button id="acceptProposal" class="primary">Accept</button>
-        <button id="rejectProposal" class="ghost">Discard</button>
+        <button id="playProposal" data-next-for="cut" title="play the proposed cut in the monitor">▶ Play it</button>
+        <button id="acceptProposal">Accept</button>
+        <button id="rejectProposal">Discard</button>
       </div>
     </div>
     <!-- The inspector: the selected shot's still, header, lines, why, trims and scoped
@@ -517,29 +519,22 @@
         <div class="lib" id="library"></div>
       </section>
 
-      <!-- ASK — the whole-cut ask, cut from the bin, and the story every ask reads. -->
+      <!-- ASK — the one sentence about the film (the EDL's story, the same field and
+           words as /open's), and a change asked of the whole cut, priced on its button. -->
       <section data-tool="ask" hidden>
-        <div class="panel" id="askPanel">
-          <h2>Ask for a change</h2>
+        <div class="panel flat">
+          <label class="ask-q" for="story">What is this film about?</label>
+          <textarea id="story" style="min-height:66px"
+            placeholder="optional — a sentence is enough"></textarea>
+        </div>
+        <div class="panel flat" id="askPanel">
           <textarea id="note" style="min-height:66px"
-            placeholder="tighten the intro · more skiing, less airport · build it around the milk joke · lose the plane bit"></textarea>
-          <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-            <button id="ask" class="primary" disabled data-await-price="1">Ask</button>
+            placeholder="tighten the intro · more of the rocks, less of the lift · end on the fall"></textarea>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+            <button id="ask" disabled data-await-price="1">Ask for a change</button>
+            <span class="hint" id="askAims"></span>
             <span class="hint" id="askState"></span>
           </div>
-          <!-- The same Ask with a fixed note: build the cut from what the pass kept —
-               heroes fixed, keeps as bounds, nothing else unless a keep needs it. -->
-          <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
-            <button id="cutFromBin"
-                    title="One Ask with a fixed note: every hero appears, the other keeps serve the story, nothing else unless a keep needs it — a proposal to accept or discard">Cut from the bin</button>
-            <span class="hint" id="cutFromBinHint"></span>
-          </div>
-        </div>
-        <div class="hint" id="askEmpty" hidden style="margin-bottom:12px">no cut yet — the board's empty state is where the first one is asked for</div>
-        <div class="panel">
-          <h2>Story</h2>
-          <textarea id="story" placeholder="What is this cut about? Who's in it, what's the running joke, what should it feel like? Saved into the EDL and read by the agent on the next pass."></textarea>
-          <p class="hint">The thing the agent is worst at. Typing "the milk is the running joke" here beats an hour of analysis.</p>
         </div>
       </section>
 

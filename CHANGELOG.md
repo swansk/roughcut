@@ -234,6 +234,20 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **One sentence about the film, one first-cut button, and ▶ Play it (INTAKE M16
+  I16.4).** The empty board and the Ask tool both ask "What is this film about?" — one
+  field, the EDL's story (typing in the empty board's box is the story). The empty board
+  has ONE priced button, "Make the first cut from your N keeps · ~$x" (Cut from the bin's
+  fixed note) or "Make a first cut · ~$x" with no keeps, marked for Next
+  (`data-next-for="cut"`), with "aims for 2–3 min" beside it. Removed: the look-alike
+  "Ask for a first cut" + "Cut from the bin" pair, "Say what this film is about — a
+  sentence is enough — and ask for a first cut…", the "N clips nobody has looked at yet"
+  paragraph, the Ask tool's Story heading, "The thing the agent is worst at…", "no cut
+  yet — the board's empty state is where…", and Cut from the bin as a second priced button
+  beside Ask once a cut exists. The Ask tool reads "Ask for a change · ~$x" with "aims for
+  2–3 min" (the EDL's target, which sat in the header). A proposed cut gets "▶ Play it"
+  beside Accept and Discard: it plays the proposal's ghost lane in the monitor, a first
+  cut's too (the monitor shows while one waits); the readable diff stays.
 - **The monitor at rest shows the picture (INTAKE M16 I16.1).** It was a black box until
   something played, with a help line under the transport ("click a shot below to jump ·
   the inspector under it holds its why and trims · space play / pause · …"). Now it shows
