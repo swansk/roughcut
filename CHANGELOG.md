@@ -234,6 +234,33 @@ same commit. Releases move entries into a dated version section.
   the cut whole; a plain `select` in `fx.focus` fails it.
 
 ### Changed
+- **The pass is the picture, one strip and three keys (INTAKE M16 I16.3).** The picture
+  is the largest 16:9 the rows under it leave (a size container replaced the fixed
+  367 px budget that predated the machine strip) — about 60 % of a 1440×900 window,
+  from 26 %. Under it: one whole-clip strip named by the clip (*CLIP_04 · 5:19*, its
+  marks, this moment boxed, the kept range in green), the words around the playhead with
+  the kept part lit and the green band to drag, then the kept range said once beside the
+  band — *keeping 3:06.8 – 3:15.8 · 9.0 s* — with a **} next line** chip (the `}` key),
+  and on the right the machine's one line (`deep.line`, closed on every new moment).
+  For a moment only the machine saw, one line under the picture says what it saw and
+  its state in a word — *maybe: skier airborne · not checked* / *… · checked* / *… · a
+  closer look did not see it* — never the claim as fact; a spoken moment has no line
+  (its words are on the strip). **P / X / U are buttons** at twice a keycap's size
+  (decision 5; the keys are unchanged), then the dim *space play · V note · E why? · ?
+  keys*. Removed: the left column (CLIP, THIS PICK, the *63 % in* line, the ON THE TAPE
+  legend, the looked-frames legend, KEEPING with the snap arithmetic and the *} extend to
+  the next line: "…"* sentence, the green-band hint), the WITNESSES column, the WHY
+  line with *rank 47 · seen*, the tape's instruction label and its *LOOKED · 80 frames
+  · every 4 s · 3 sheets*, the looked-frame ticks, the telemetry trace, the fake
+  waveform, the closer strip's label and its second keeping readout, the felt numbers on
+  the words, *sentence end + 0.45* (now *end of line*), the More menu (two placeholders
+  and an O that duplicated 0), *[ ] { } in / out by sentence*, *← the cut board*, *hold
+  V · V will ask for the microphone the first time · N to type* (words now only when the
+  microphone is blocked or dictation is missing; the V key wears the state) and the
+  empty *YOUR NOTE · no note yet* box (a note shows once made). why? (E) keeps the
+  evidence in plain words — *HEARD*, *THE MACHINE SAW "JUMP" · NOT CHECKED*, *THE CAMERA
+  FELT* — with every time a link and the window's frame coverage, without rank, score
+  or the JSON dump; the strip's legend moved into ?.
 - **The pass has one header row (INTAKE M16 I16.3, C1).** The bin · cut switcher, Next and
   a real **?** button on the right, ≤ 50 px; the step bar's row of its own under it is
   gone, and so are "THE PASS", *round 3 · pick 2 of 2 · queue frozen for this round*,

@@ -225,13 +225,19 @@ def test_look_deeper_from_a_seen_row_is_priced_then_runs_and_shows_the_beats(
         inference.set_backend(None)
 
 
-def test_the_pass_carries_the_strip_under_its_tape(bin_state, browser):
+def test_the_pass_carries_the_machine_line_that_opens_the_strip(bin_state, browser):
+    """I16.3: on the pass, how the machine saw the clip is one line beside the kept range
+    (INTAKE M16 decision 9); a click opens the strip, the band marked, the playhead live."""
     pg = browser.new_page(viewport={"width": 1280, "height": 900})
     pg.goto(f"{bin_state}/floor")
     pg.wait_for_function("window.floor && floor.state.queue.length > 0", timeout=15000)
-    pg.wait_for_selector("#deepFloor .dv-bar")
+    pg.wait_for_function("(document.querySelector('#deepFloor .dv-line') || {}).textContent?.includes('▸')")
+    assert pg.locator("#deepFloor .dv-bar").count() == 0, "closed until asked"
     clip = pg.evaluate("floor.state.queue[floor.state.i].clip")
     assert pg.get_attribute("#deepFloor", "data-clip") == clip
+    assert pg.inner_text("#deepFloor .dv-line").startswith("every word heard · a frame every")
+    pg.click("#deepFloor .dv-line")
+    pg.wait_for_selector("#deepFloor .dv-bar")
     # the playhead rides the strip, the band is marked
     pg.wait_for_function("!document.querySelector('#deepFloor .dv-headline').hidden")
     assert pg.is_visible("#deepFloor .dv-markband")
