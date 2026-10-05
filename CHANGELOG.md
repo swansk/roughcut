@@ -139,6 +139,14 @@ same commit. Releases move entries into a dated version section.
   when none does, with no price; the second (button or `A`) opens the board with the Ask
   tool (`/#tool=ask`), where the first cut is priced before the click. Play the bin,
   Next round, By clip and Revisit later are unchanged.
+- **A generated slide is never a keep (INTAKE I16.0i).** `selects.sync_timeline` adopts
+  every shot no keep covers as a hand keep, and it adopted the black title slide
+  (Killington: k_ca3d7755 `gen_black_3fb88607`), so the Bin said 43, the pass 44, and
+  the Bin showed a "footage missing" card for it. Generated clips (`gen_*`) are now
+  skipped by `sync_timeline`, a `pick` on one is refused, and `selects.ensure` leaves
+  any such keep already in the EDL out of what it hands on — the Bin, its counts, the
+  pass's and the flow's — so they agree. A read never rewrites the EDL; the old keep
+  leaves the file on the next write made for another reason.
 - **The open screen stopped contradicting itself (INTAKE M14).** With the looks paused its
   header said "3 released · 9 queued" while its footer said every clip was released and
   every card wore QUEUED beside a lit `released` flag: two definitions of released —

@@ -26,6 +26,8 @@ from __future__ import annotations
 import hashlib
 import time
 
+from .edits import is_generated
+
 # Two keeps in one clip that share this much of the shorter one are the same moment and
 # merge; a string-out must never play footage twice.
 MERGE_MIN_OVERLAP = 0.5
@@ -58,8 +60,17 @@ def select_id(clip: str, start: float, end: float, created: float) -> str:
 
 
 def ensure(edl: dict) -> dict:
-    """The keys, present and well-formed, on the dict passed in."""
-    edl.setdefault("selects", [])
+    """The keys, present and well-formed, on the dict passed in.
+
+    Well-formed includes: no keep on a generated clip (a black slide, a colour, a freeze
+    frame — INTAKE M13). The bin is footage; `sync_timeline` once adopted a slide placed
+    in the cut as a keep (I16.0i). Such a keep is left out of the dict here, so the Bin,
+    the counts and the pass never see it; the EDL on disk changes only when the caller
+    next writes for its own reason, never because something read it.
+    """
+    kept = [s for s in edl.get("selects") or [] if not is_generated(str(s.get("clip", "")))]
+    if kept != edl.get("selects"):
+        edl["selects"] = kept
     floor = edl.setdefault("floor", {})
     floor.setdefault("verdicts", [])
     floor.setdefault("position", {"round": 1, "index": 0, "order": "rank"})
@@ -104,6 +115,8 @@ def apply_verdict(edl: dict, clip: str, start: float, end: float, verdict: str, 
     start, end = float(start), float(end)
     if not (0.0 <= start < end):
         raise ValueError(f"range {start}-{end} is not a range")
+    if verdict == "pick" and is_generated(clip):
+        raise ValueError(f"{clip} is a generated slide, not footage to keep")
     ensure(edl)
     floor = edl["floor"]
     # Anything already said about these seconds gives way to this verdict.
@@ -185,6 +198,7 @@ def sync_timeline(edl: dict) -> dict:
     that trimmed inside a keep stays that keep's use rather than becoming a second one.
     Adoption goes through `apply_verdict("pick")`: placing seconds in the film outranks
     a reject or a later on them. Idempotent — the adopted keep covers its shot exactly.
+    A generated slide (`gen_*`) is never adopted: it is not footage (I16.0i).
     """
     used_in(edl)
     for seg in list(edl.get("segments") or []):
@@ -193,7 +207,7 @@ def sync_timeline(edl: dict) -> dict:
             start, end = float(seg["in"]), float(seg["out"])
         except (KeyError, TypeError, ValueError):
             continue
-        if not (0.0 <= start < end):
+        if not (0.0 <= start < end) or is_generated(clip):
             continue
         if any(_touching(s, clip, start, end) for s in edl["selects"]):
             continue
