@@ -10,6 +10,17 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Changed
+- **The bin · cut menu is the way between the screens (INTAKE M16 I16.1, decision 2).**
+  With the step bar gone, its first rows are the places — *The footage* (/open, "3 clips ·
+  indexed"), *The pass* (/floor, "40 not watched · 44 kept") and *The cut* (/, "19 shots ·
+  3:09"), the current screen marked — carrying the facts the board's Project ▾ held (the
+  index summary and the footage and project paths on hover; "the footage folder is not
+  there" or a missing tool only when so). A bin nothing has been heard or looked at in
+  opens on /open, where indexing starts. Taken away from the menu: the two paragraphs
+  explaining copies and paths (~60 words), the "journal" flag on a bin that is fine, the
+  "opened before, or a folder of video next door" sub-line, and Save copy's blue (a plain
+  button: the one blue is Next's). The header names the bin it moved to from the
+  server's own answer, before the page reloads.
 - **On the pass mid-round, Next is the round: "N left" (INTAKE M16 I16.1, C3).** Next
   on /floor said what waited on another screen ("1 effect proposed — accept or
   discard"), pulling Karl off a round he was in. While the round has undecided moments
