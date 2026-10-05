@@ -290,7 +290,7 @@ same commit. Releases move entries into a dated version section.
   strip under it, in the same host (the range marked, the playhead carried); a second
   click closes it, and every call renders closed, so the next item never inherits an
   open strip. The pass and the board's shot strip call it; `deep.strip`, `inspector`
-  and `rowButton` are unchanged. In the compact strip the deep lane's empty text no
+  and `rowButton` are unchanged, and the pass's old hook `deep.floor` is gone. In the compact strip the deep lane's empty text no
   longer says "drag to choose seconds" (a drag there does nothing) and the pointer to
   the board is four words, *Look deeper: on the board*.
 - **Every Ask-family button shows its price before the click (INTAKE I16.0f).** Six

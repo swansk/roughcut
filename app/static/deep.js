@@ -695,12 +695,6 @@
     return tok;
   }
 
-  /* The pass's old hook: the strip under its tape. */
-  function floor(host, clip, range, onSeek) {
-    if (!host || !clip) return;
-    strip(host, clip, { mark: range, markLabel: 'the band', onSeek, compact: true });
-  }
-
   function head(host, t) {
     if (!host) return;
     if (host._deep) host._deep.head(t);
@@ -771,5 +765,5 @@
     if (openRows.has(key)) setTimeout(() => show(...openRows.get(key)), 0);
   }
 
-  window.deep = { strip, line, inspector, floor, head, minis, rowButton, invalidate, modelName };
+  window.deep = { strip, line, inspector, head, minis, rowButton, invalidate, modelName };
 })();
