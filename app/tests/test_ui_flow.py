@@ -1698,6 +1698,22 @@ def test_nothing_left_that_was_seen_links_to_where_more_is_looked_at(page):
     assert box.locator("a[href='/open']").count() == 1
 
 
+def test_make_the_film_works_before_the_renders_have_loaded(page):
+    """The header's buttons were bound after three more awaits (renders, the last
+    proposal, the jobs), so a click on Make the film in that window did nothing — the
+    gate's "/ film" state timed out at load 22. Hold /api/renders forever: the board is
+    drawn, and Make the film still opens the film tool."""
+    held = []
+    page.route("**/api/renders*", lambda r: held.append(r))
+    page.reload(wait_until="domcontentloaded")
+    page.wait_for_selector("#tl .blk", timeout=15000)
+    page.wait_for_function("window.dock && true", timeout=5000)
+    assert held, "the board asked for its renders"
+    page.locator("#makeFilm").click()
+    page.wait_for_function("dock.current() === 'out'", timeout=3000)
+    page.unroute("**/api/renders*")
+
+
 BIN_NOTE = ("Build the cut from the editor's selects: every hero must appear, use the "
             "other keeps where they serve the story, and take nothing else unless it is "
             "needed to make a keep land.")

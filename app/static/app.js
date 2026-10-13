@@ -3186,6 +3186,26 @@ async function boot() {
     $('#moreFound').textContent = more.hidden ? 'more found ▸' : 'more found ▾';
     if (more.hidden && !keepsTab()) { libTab = 'out'; renderLibrary(); }
   };
+  // The header's and the panels' buttons work from the first paint, like the tabs above:
+  // bound after the awaits below, Make the film / undo / Ask did nothing for as long as
+  // the versions, the last proposal and the jobs took to load — 5 s and more on a busy
+  // box (the gate's "/ film" state timed out twice at load 22), longer over a network.
+  $('#story').oninput = touch;
+  $('#undo').onclick = undo;
+  $('#render').onclick = () => doRender('preview');
+  $('#renderFinal').onclick = () => doRender('delivery');
+  $('#makeFilm').onclick = onMakeFilm;
+  $('#compare').addEventListener('toggle', () => { if ($('#compare').open) loadCompare(); });
+  ['#cmpPickA', '#cmpPickB'].forEach((sel) => { $(sel).onchange = loadCompare; });
+  $('#ask').onclick = () => ask();   // not `ask` — a MouseEvent has a `.button` too
+  $('#playProposal').onclick = playProposal;
+  $('#acceptProposal').onclick = acceptProposal;
+  $('#rejectProposal').onclick = rejectProposal;
+  $('#findDeep').onclick = () => doFind(true);
+  $('#findQ').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); doFind(); }
+  });
+  $('#findAdd').onclick = addFindMatch;
   render();
   paintBinLine();
   // The FX tool read /api/fx before the cut was here, so no proposal was on a shot of it:
@@ -3206,22 +3226,6 @@ async function boot() {
     toast('building proxies in the background — previews appear as they finish', 6000);
     waitForProxies();
   }
-  $('#story').oninput = touch;
-  $('#undo').onclick = undo;
-  $('#render').onclick = () => doRender('preview');
-  $('#renderFinal').onclick = () => doRender('delivery');
-  $('#makeFilm').onclick = onMakeFilm;
-  $('#compare').addEventListener('toggle', () => { if ($('#compare').open) loadCompare(); });
-  ['#cmpPickA', '#cmpPickB'].forEach((sel) => { $(sel).onchange = loadCompare; });
-  $('#ask').onclick = () => ask();   // not `ask` — a MouseEvent has a `.button` too
-  $('#playProposal').onclick = playProposal;
-  $('#acceptProposal').onclick = acceptProposal;
-  $('#rejectProposal').onclick = rejectProposal;
-  $('#findDeep').onclick = () => doFind(true);
-  $('#findQ').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); doFind(); }
-  });
-  $('#findAdd').onclick = addFindMatch;
   // The same box filters the bin as you type (the kept tab) — Find is one keypress on.
   let filterTimer = null;
   $('#findQ').addEventListener('input', () => {
