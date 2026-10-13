@@ -1582,8 +1582,9 @@ function paintAudit() {
   const b = $('#auditClaims');
   b.disabled = auditPending || !!vz.running || !a.windows;
   b.textContent = a.windows
-    ? `Audit ${a.claims} claim${a.claims === 1 ? '' : 's'} · ~$${a.projected_usd.toFixed(2)}`
+    ? `Audit ${a.claims} claim${a.claims === 1 ? '' : 's'} · ${rcCost.tag(a.projected_usd, a)}`
     : 'Audit the claims';
+  b.title = a.windows ? rcCost.note(a.projected_usd, a) : '';
   $('#auditInfo').textContent = !a.windows ? 'every hot claim has had a close look'
     : vz.running ? 'a visual pass is running'
     : `${a.windows} close look${a.windows === 1 ? '' : 's'} at 1 s`;
@@ -1606,7 +1607,7 @@ async function auditClaims() {
     if (!r.ok) { toast(d.detail || 'the audit could not start'); return; }
     // The job is a `visual` job: the top bar shows it and, when it is done, adopt()
     // reloads the project, so the seen tab repaints with the verdicts.
-    toast(`auditing ${d.claims} claim${d.claims === 1 ? '' : 's'} — ~$${d.projected_usd.toFixed(2)}`);
+    toast(`auditing ${d.claims} claim${d.claims === 1 ? '' : 's'} — ${rcCost.tag(d.projected_usd, d)}`);
     await refreshStatus();
   } finally {
     auditPending = false;
@@ -1997,7 +1998,7 @@ const BIN_NOTE = "Build the cut from the editor's selects: every hero must appea
 const askPrice = { first: null, bin: null, full: null, shot: null };
 const askPriceFailed = { first: false, bin: false, full: false, shot: false };
 const priced = (mode) => !!(askPrice[mode] && typeof askPrice[mode].usd === 'number');
-const priceTag = (mode) => (priced(mode) ? ` · ~$${askPrice[mode].usd.toFixed(2)}`
+const priceTag = (mode) => (priced(mode) ? ` · ${rcCost.tag(askPrice[mode].usd, askPrice[mode])}`
   : askPriceFailed[mode] ? ' · price unavailable' : '');
 /* For a button built in a template: disabled, and marked as held for its price only. */
 const unpricedAttr = (mode) => (priced(mode) ? '' : ' disabled data-await-price="1"');
@@ -2029,7 +2030,7 @@ function paintAskPrices() {
   const label = (el, name, mode, basis) => {
     if (!el) return;
     el.textContent = name + priceTag(mode);
-    if (basis && priced(mode)) el.title = `about $${askPrice[mode].usd.toFixed(2)} — ${askPrice[mode].basis}`;
+    if (basis && priced(mode)) el.title = `${rcCost.note(askPrice[mode].usd, askPrice[mode])} — ${askPrice[mode].basis}`;
   };
   label($('#ask'), 'Ask for a change', 'full', true);
   label($('#firstCut'), firstLabel(), firstMode(), true);
@@ -2452,7 +2453,7 @@ async function ask(opts = {}) {
     showProposal(plan);
     // the price was on the button; what it measured is one short line after
     const u = plan.usage || {};
-    const cost = typeof u.projected_usd === 'number' ? `cost $${u.projected_usd.toFixed(2)}` : '';
+    const cost = typeof u.projected_usd === 'number' ? rcCost.spent(u.projected_usd, askPrice.full) : '';
     stateEl.textContent = cost;
     $('#askState').textContent = cost;
   } catch (e) {
@@ -2547,10 +2548,13 @@ let findSel = null;              // the match loaded in the finder's player
 let findPriced = false;
 let finding = false;             // a find is in flight (the Find button went: Enter finds)
 
-function paintFindDeepPrice(usd) {
+let findTerms = null;            // the price's `charged`/`backend`, for the after-line
+function paintFindDeepPrice(usd, terms) {
   if (typeof usd !== 'number') return;
   findPriced = true;
-  $('#findDeep').textContent = `Not it? Ask the model · ~$${usd.toFixed(2)}`;
+  findTerms = terms || findTerms;
+  $('#findDeep').textContent = `Not it? Ask the model · ${rcCost.tag(usd, findTerms)}`;
+  $('#findDeep').title = rcCost.note(usd, findTerms);
 }
 
 async function fetchFindPrice() {
@@ -2561,7 +2565,7 @@ async function fetchFindPrice() {
     if (r.ok) d = await r.json();
   } catch (e) { /* said below */ }
   if (d && typeof d.usd === 'number') {
-    paintFindDeepPrice(d.usd);
+    paintFindDeepPrice(d.usd, d);
     if (!finding) b.disabled = false;     // not mid-search
   } else if (!findPriced) {
     b.disabled = true;
@@ -2648,7 +2652,7 @@ function followFind(job) {
     renderFindResults(found.matches, found.notes);
     const u = found.usage || {};
     $('#findState').textContent = u.model
-      ? `${found.matches.length} from the model · $${(u.projected_usd || 0).toFixed(2)} projected`
+      ? `${found.matches.length} from the model · ${rcCost.spent(u.projected_usd, findTerms)}`
       : `${found.matches.length} from the model`;
   }, 1000);
 }
@@ -2670,7 +2674,7 @@ async function doFind(deep = false) {
       throw new Error(d.detail || `HTTP ${r.status}`);
     }
     const data = await r.json();
-    paintFindDeepPrice(data.deep_projected_usd);
+    paintFindDeepPrice(data.deep_projected_usd, data);
     renderFindResults(data.matches);
     $('#findState').textContent = data.matches.length
       ? `${data.matches.length} match${data.matches.length > 1 ? 'es' : ''} in the words and the frames`

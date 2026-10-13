@@ -15,6 +15,19 @@ same commit. Releases move entries into a dated version section.
 ### Added
 - **ROUGHCUT-GOAL.md, the closed-loop bar, and `tools/gate.py` (branch `closed-loop/2026-10-13`).** Karl, 2026-10-13: *"next time I open Roughcut I want to actually use the video editor and feel good about it"* — the editor's equivalent of NOITA's and STICKFIGHT's "ready for Steam" bar: eight dimensions (opens fast, footage in, cut/trim, preview, nothing lost, a film comes out, quiet and plain, no dead ends), each with a pass line a fresh judge checks from the gate's screenshots and the suite. `python3 tools/gate.py [ref] [--quick]` freezes a commit into `~/roughcut-loop/snap-<sha>` and runs the suite (a full-run failure that passes alone is named as flaky), `test_budget.py` with a PNG per screen, and a hygiene grep (model literals, `anthropic` imports, Windows paths); `summary.md` per run. `LOOP-LOG.md` is the commit-by-commit record. `test_budget.py` now times each screen to its Next (≤ 3 s, dimension 1; 285–457 ms measured) and fails on any uncaught page error.
 
+### Changed
+- **On the subscription backend no price reads as spending money (Karl, 2026-10-05).** The
+  default `claude_cli` backend runs `claude -p` on Karl's Claude plan and bills nothing, but
+  the audit, Ask, Look deeper, Find's *Ask the model*, FX and Index buttons said "~$0.58" —
+  enough for an agent driving the board to read the audit as a real-world purchase and stop
+  for a click. Now: `config.charges_money()` / `config.cost_terms()`; every price response
+  (`/api/ask/price`, `/api/find/price`, `/api/fx/price`, `/api/visual/audit`, the deep quote,
+  `/api/status`'s visual pass and audit, `/api/backend`) carries `charged` and `backend`; one
+  client helper, `rcCost` in cli.js, words every button: "free on your plan", with the
+  estimate in the title as "about $0.58 estimated cost if using the API". On `anthropic_api`
+  the dollars stay. The next-action sentences (flow.py) follow the same rule. CLAUDE.md gains
+  the standing rule: running these is part of the loop, never a pause for approval.
+
 ### Docs
 - **INTAKE M16: I16.0–I16.5 ticked on the integration branch** with their merge commits, the fixture measurements in the Verification log (board 197→72 words in view, the pass 350→52, /open 454→53; 861 passed), and the two questions the review left for Karl (Cut from the bin once a cut exists; junk answered in two places). I16.6–I16.7 wait on Karl deploying main; HANDOFF gives the two deploy commands.
 

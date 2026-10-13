@@ -507,7 +507,7 @@
     const moments = hasMoments(e) && !removed && (proposed || S.momentsOpen.has(e.id));
     const why = `<button class="fxlink" data-act="why">why? ${S.whyOpen.has(e.id) ? '▾' : '▸'}</button>`;
     const change = `<button data-act="iterate" title="tell the model what to change — the effect comes back as a proposal">`
-      + `Change${revisePriced() ? ` · ~$${S.revisePrice.usd.toFixed(2)}` : ''}</button>`;
+      + `Change${revisePriced() ? ` · ${rcCost.tag(S.revisePrice.usd, S.revisePrice)}` : ''}</button>`;
     const btns = removed
       ? `<div class="fxbtns"><span class="hint">out of the cut</span><div class="grow"></div>`
         + `<button data-act="restore" title="back into the cut, exactly as it was">Restore</button>`
@@ -526,7 +526,7 @@
           + why + `</div>`;
     const iter = S.iterOpen.has(e.id)
       ? `<div class="fxiter"><input type="text" placeholder="red and bigger · hold it a second longer · only the big one · no sound" value="${esc(S.iter[e.id] || '')}">`
-        + `<button data-act="revise"${revisePriced() ? '' : ' disabled'} title="one model call — the effect comes back as a proposal">Go${revisePriced() ? ` · ~$${S.revisePrice.usd.toFixed(2)}` : S.revisePriceFailed ? ' · price unavailable' : ''}</button></div>`
+        + `<button data-act="revise"${revisePriced() ? '' : ' disabled'} title="one model call — the effect comes back as a proposal">Go${revisePriced() ? ` · ${rcCost.tag(S.revisePrice.usd, S.revisePrice)}` : S.revisePriceFailed ? ' · price unavailable' : ''}</button></div>`
       : '';
     return `<div class="fxcard ${esc(e.status)}" data-id="${esc(e.id)}">`
       + `<div class="fxhead"><b class="fxname">${esc(e.name || 'effect')}</b>${chip(e)}</div>`
@@ -559,7 +559,7 @@
     const busy = S.busy;
     const designing = !!(busy && busy.fx_kind === 'design');
     const price = S.price && typeof S.price.usd === 'number'
-      ? `<span class="fxprice"> · ~$${S.price.usd.toFixed(2)}</span>`
+      ? `<span class="fxprice" title="${esc(rcCost.note(S.price.usd, S.price))}"> · ${rcCost.tag(S.price.usd, S.price)}</span>`
       : S.priceFailed ? '<span class="fxprice"> · price unavailable</span>' : '';
     const ref = S.reference
       ? `<div class="fxref">reference · ${S.reference.marks.length} mark${S.reference.marks.length === 1 ? '' : 's'} at ${shotFilm(S.reference.t)}`
@@ -573,7 +573,7 @@
       + whereHtml()
       + ref + sk
       + `<div class="fxbtns"><button id="fxSketch"${S.sketch ? ' disabled' : ''} title="pause the monitor and draw on the frame: where the effect goes — the marks become the anchors, no placing call">Draw a reference</button>`
-      + `<div class="grow"></div><button id="fxDesign"${designing || !designPriced() ? ' disabled' : ''} title="${S.reference ? 'one design call; your marks are the anchors' : 'one design call, then a look at a frame around each moment to put the effect on the thing you named'}">${designing ? 'Designing…' : `Design${S.reference ? '<span class="fxprice"> · ~$0.05</span>' : price}`}</button></div>`
+      + `<div class="grow"></div><button id="fxDesign"${designing || !designPriced() ? ' disabled' : ''} title="${S.reference ? 'one design call; your marks are the anchors' : 'one design call, then a look at a frame around each moment to put the effect on the thing you named'}">${designing ? 'Designing…' : `Design${S.reference ? `<span class="fxprice"> · ${rcCost.tag(0.05, S.price || S.revisePrice)}</span>` : price}`}</button></div>`
       + (busy ? `<div class="fxstate hint">${esc(busy.label)}${busy.detail ? ` — ${esc(busy.detail)}` : ''}</div>` : '')
       + `</div>`;
   }

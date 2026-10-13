@@ -308,7 +308,7 @@ def test_enter_finds_and_the_priced_search_sits_under_any_find(page):
     page.wait_for_selector("#findResults .cand", timeout=15000)
     deep = page.locator("#findDeep")
     assert deep.is_visible()
-    assert deep.inner_text().startswith("Not it? Ask the model · ~$")
+    assert deep.inner_text().startswith("Not it? Ask the model · ")
     assert "primary" not in (deep.get_attribute("class") or "")
     row = page.locator("#findResults .cand").first
     assert "goodbye" in row.inner_text() and "CLIP_" not in row.inner_text()

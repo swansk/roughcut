@@ -219,17 +219,22 @@
 
   // ---------------------------------------------------------------- the button
 
+  // the last quote's `charged`/`backend` (rcCost in cli.js), for lines without a quote
+  let terms = null;
   function priceText(q) {
     if (!q || q.error) return 'Look deeper';
+    if ('charged' in q) terms = q;
     if (q.cached) return 'Show the deep look';
-    return `Look deeper · ~${usd(q.projected_usd)}`;
+    return `Look deeper · ${rcCost.tag(q.projected_usd, q)}`;
   }
+  // "≤ $0.20 if it asks for more", or nothing to add when nothing is billed
+  const upTo = (q) => (rcCost.free(q) ? '' : ` · ≤ ${usd(q.max_usd)} if it asks for more`);
   function priceTitle(q) {
     if (!q || q.error) return (q && q.error) || 'price unavailable';
     if (q.cached) return `${fmtT(q.read.start)}–${fmtT(q.read.end)} was already read — free to show`;
     return `${q.frames} keyframes, ${q.start.toFixed(1)}–${q.end.toFixed(1)} s`
       + `${q.capped ? ` (capped at ${q.max_span_s} s)` : ''}, read in order by ${modelName(q.model)}`
-      + ` · up to ${usd(q.max_usd)} if it asks for more frames (once)`
+      + ` · ${rcCost.note(q.projected_usd, q)}, up to ${usd(q.max_usd)} if it asks for more frames (once)`
       + ` · motion ${q.motion}`;
   }
 
@@ -242,7 +247,7 @@
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { say(d.detail || 'the deep look could not start'); return null; }
     if (!d.job) return { state: 'done', cached: true };
-    say(`looking — ${d.frames} frames, ~${usd(d.projected_usd)}`);
+    say(`looking — ${d.frames} frames, ${rcCost.tag(d.projected_usd, d)}`);
     for (;;) {
       await new Promise((ok) => setTimeout(ok, 1000));
       let j;
@@ -276,7 +281,7 @@
       b.dataset.usd = q && !q.cached ? String(q.projected_usd) : '0';
       if (!small && q && !q.error) {
         info.textContent = q.cached ? 'already read'
-          : `${q.frames} frames${q.capped ? ` · the first ${q.max_span_s} s` : ''} · ≤ ${usd(q.max_usd)} if it asks for more`;
+          : `${q.frames} frames${q.capped ? ` · the first ${q.max_span_s} s` : ''}${upTo(q)}`;
       }
     });
     b.addEventListener('click', async (e) => {
@@ -318,7 +323,7 @@
     const at = (t) => `${(100 * (t - r.start) / span).toFixed(2)}%`;
     const inferred = (r.beats || []).filter((b) => b.basis === 'inferred').length;
     const head = `DEEP LOOK · ${stemOf(clip)} ${r.start.toFixed(1)}–${r.end.toFixed(1)} s · `
-      + `${(r.frames || []).length} keyframes · ${modelName(r.model) || 'model not recorded'} · ${usd(r.projected_usd)}`
+      + `${(r.frames || []).length} keyframes · ${modelName(r.model) || 'model not recorded'} · ${rcCost.spent(r.projected_usd, terms)}`
       + ` · ${(r.beats || []).length} beats, ${inferred} inferred`
       + (r.followup ? ` · read again with ${r.asked.length} frame${r.asked.length === 1 ? '' : 's'} it asked for` : '')
       + ((r.asked_but_refused || []).length ? ` · it asked for ${r.asked_but_refused.length} more (refused by the budget)` : '');

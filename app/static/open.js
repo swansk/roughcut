@@ -364,7 +364,7 @@ function renderButton() {
   const running = !!(O.index && O.index.running);
   const v = O.status && O.status.visual;
   const pending = !!(v && v.pending && v.pending.length);
-  const price = pending ? ` · ~${usd(priceAt(interval()))}` : '';
+  const price = pending ? ` · ${rcCost.tag(priceAt(interval()), v)}` : '';
   const ph = phase();
   $('#setup').hidden = ph !== 'setup';
   // The granularity is chosen before the click that spends on it — Index's, or Resume's
@@ -380,6 +380,7 @@ function renderButton() {
   $('#lookChange').setAttribute('aria-expanded', String(pending && O.lookOpen));
   btn.disabled = running || O.busy || !O.status || !O.index;
   btn.textContent = O.index && O.index.exists ? `Index what isn't done${price}` : `Index the footage${price}`;
+  btn.title = pending ? rcCost.note(priceAt(interval()), v) : '';
   for (const el of $$('#order button')) {
     el.classList.toggle('on', el.dataset.order === order());
     el.disabled = running || O.busy;
@@ -503,7 +504,9 @@ function renderPaused(ix) {
   const what = w.looks ? 'Looks' : 'Close looks';
   $('#pausedTitle').textContent = w.clips ? `${what} paused on ${plural(w.clips, 'clip')}` : 'Looks paused';
   $('#pausedWhy').textContent = pausedWords(ix.progress && ix.progress.paused_reason);
-  $('#resume').textContent = w.clips ? `Resume · ~${usd(resumeUsd(w))}` : 'Resume';
+  const v = O.status && O.status.visual;
+  $('#resume').textContent = w.clips ? `Resume · ${rcCost.tag(resumeUsd(w), v)}` : 'Resume';
+  $('#resume').title = w.clips ? rcCost.note(resumeUsd(w), v) : '';
 }
 
 // What Resume spends at the slider's stop: the journal's own price for what waits (at the

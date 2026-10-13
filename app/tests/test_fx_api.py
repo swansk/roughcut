@@ -316,7 +316,8 @@ def test_the_window_is_the_humans_and_confines_the_hits(stubbed, client):
 def test_the_price_is_on_the_button_before_the_call(stubbed, client):
     shot = _seed(stubbed, client)
     r = client.get("/api/fx/price").json()
-    assert r == {"usd": 0.05, "frames": 0}
+    assert {k: r[k] for k in ("usd", "frames")} == {"usd": 0.05, "frames": 0}
+    assert r["charged"] is (r["backend"] == "anthropic_api")      # test_cost_terms.py
     r = client.get(f"/api/fx/price?place=1&shot={shot}").json()
     assert r["frames"] >= 1 and r["usd"] >= 0.07
 

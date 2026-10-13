@@ -30,11 +30,18 @@ playwright_api = pytest.importorskip("playwright.sync_api",
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 
+def cost_tag(usd: float, charged: bool) -> str:
+    """What `rcCost.tag` (cli.js) puts on a button: on the subscription backend nothing
+    is billed, so no bare dollar figure (Karl, 2026-10-05)."""
+    return f"~${usd:.2f}" if charged else "free on your plan"
+
+
 def assert_priced(page, selector: str, name: str, mode: str) -> None:
     """INTAKE I16.0f: a button that asks the model carries its price before the click —
-    "Ask · ~$0.58" — and it is the server's free estimate for that kind of ask."""
-    usd = page.evaluate(f"fetch('/api/ask/price?mode={mode}').then(r => r.json()).then(d => d.usd)")
-    want = f"{name} · ~${usd:.2f}"
+    "Ask · ~$0.58" on the API backend, "Ask · free on your plan" on the default
+    subscription one — from the server's free estimate for that kind of ask."""
+    d = page.evaluate(f"fetch('/api/ask/price?mode={mode}').then(r => r.json())")
+    want = f"{name} · {cost_tag(d['usd'], d['charged'])}"
     try:
         page.wait_for_function(
             "([s, w]) => document.querySelector(s) && document.querySelector(s).textContent.trim() === w",
@@ -1277,7 +1284,10 @@ def test_the_seen_tab_offers_the_audit_priced_and_marks_a_one_look_find(page, pr
         page.locator("#libTabs .tab", has_text="seen").click()
         button = page.locator("#auditClaims")
         assert button.is_visible() and button.is_enabled()
-        assert button.inner_text() == f"Audit 1 claim · ~${server.FINE_USD_PER_WINDOW:.2f}"
+        assert button.inner_text() == \
+            f"Audit 1 claim · {cost_tag(server.FINE_USD_PER_WINDOW, server.config.charges_money())}"
+        if not server.config.charges_money():     # the estimate is labelled as the API's
+            assert "estimated cost if using the API" in button.get_attribute("title")
         rows = page.locator("#library .cand")
         assert "one look" in rows.nth(1).inner_text().lower()
 
@@ -1821,8 +1831,8 @@ def test_ask_the_model_in_the_bin_is_priced_before_it_can_be_clicked(page, live_
     The Bin's *Ask the model* read just that, enabled, and a click spent before any
     price was shown. It is disabled until the free price is on it, and when the price
     cannot be had it says so and stays disabled."""
-    usd = page.evaluate("fetch('/api/find/price').then(r => r.json()).then(d => d.usd)")
-    want = f"Not it? Ask the model · ~${usd:.2f}"
+    d = page.evaluate("fetch('/api/find/price').then(r => r.json())")
+    want = f"Not it? Ask the model · {cost_tag(d['usd'], d['charged'])}"
     page.wait_for_function(
         "(w) => document.querySelector('#findDeep').textContent.trim() === w", arg=want,
         timeout=5000)
@@ -2233,3 +2243,21 @@ def test_roughcut_refresh_repaints_the_cut_in_place(page):
     page.wait_for_function(
         "document.querySelector('#inspector .why').textContent === 'changed on the server'",
         timeout=5000)
+
+
+def test_the_board_words_a_price_by_whether_it_is_billed(page):
+    """`rcCost` (cli.js), which every price on every screen goes through: on the
+    subscription backend no bare dollars, and the estimate is labelled as the API's
+    (Karl, 2026-10-05). The whole contract is test_cost_terms.py."""
+    free = {"charged": False, "backend": "claude_cli"}
+    billed = {"charged": True, "backend": "anthropic_api"}
+    ev = lambda fn, p: page.evaluate(f"([p]) => rcCost.{fn}(0.58, p)", [p])  # noqa: E731
+    assert ev("tag", free) == "free on your plan"
+    assert "$" not in ev("tag", free)
+    assert ev("note", free) == \
+        "free on your Claude plan — about $0.58 estimated cost if using the API"
+    assert ev("spent", free) == "~$0.58 if using the API · free on your plan"
+    assert ev("tag", billed) == "~$0.58"
+    assert ev("spent", billed) == "cost $0.58"
+    # a response that does not say is never passed off as free
+    assert ev("tag", {}) == "~$0.58" and ev("tag", None) == "~$0.58"

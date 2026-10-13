@@ -95,6 +95,23 @@ def backend_name() -> str:
     return os.environ.get("ROUGHCUT_BACKEND", "claude_cli")
 
 
+def charges_money() -> bool:
+    """Whether a model call bills anyone per call. Only `anthropic_api` does.
+
+    Karl, 2026-10-05: *"the audit doesn't spend money — it runs on Claude Code"*. The
+    `claude_cli` backend runs `claude -p` on his Claude plan; there is no per-call charge,
+    and every `projected_usd` on that backend is the estimated cost *if* the same calls
+    went through the API — a capacity measure, never a bill. A price label that reads as
+    a real charge makes an agent stop and ask before an audit it should simply run."""
+    return backend_name() == "anthropic_api"
+
+
+def cost_terms() -> dict:
+    """Rides on every response that carries a price, so a person or an agent reading the
+    JSON knows whether the dollars are a bill or an API-equivalent estimate."""
+    return {"backend": backend_name(), "charged": charges_money()}
+
+
 def cli_token_path() -> Path:
     """Where the CLI backend looks for a long-lived subscription token (made by
     `scripts/claude-signin.sh`, which runs `claude setup-token`). Outside the repo on

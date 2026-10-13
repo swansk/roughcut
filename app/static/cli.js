@@ -135,3 +135,28 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', poll);
   else poll();
 })();
+
+/* How a price reads (Karl, 2026-10-05). On the default `claude_cli` backend a model call
+ * runs `claude -p` on Karl's Claude plan and bills nothing; the dollars every price
+ * endpoint returns are the estimated cost *if* the same calls went through the API. So a
+ * button never shows a bare "$" there — it says "free on your plan", and the estimate
+ * lives in its title, labelled as the API's. A bare "~$0.58" made an agent driving the
+ * board read the audit as spending money and stop for a human. Every price response
+ * carries `charged` (server `config.cost_terms()`); anything but an explicit `false` is
+ * shown as a real charge, so a response that forgot to say is never passed off as free. */
+window.rcCost = (function () {
+  const dollars = (usd) => `$${Number(usd || 0).toFixed(2)}`;
+  const free = (p) => !!p && p.charged === false;
+  return {
+    free,
+    /* the short words on a button or in a toast */
+    tag: (usd, p) => (free(p) ? 'free on your plan' : `~${dollars(usd)}`),
+    /* the title: the estimate, said to be the API's when nothing is billed */
+    note: (usd, p) => (free(p)
+      ? `free on your Claude plan — about ${dollars(usd)} estimated cost if using the API`
+      : `about ${dollars(usd)}, billed to the API key`),
+    /* a measured spend after the fact */
+    spent: (usd, p) => (free(p) ? `~${dollars(usd)} if using the API · free on your plan`
+      : `cost ${dollars(usd)}`),
+  };
+}());

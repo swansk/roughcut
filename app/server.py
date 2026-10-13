@@ -595,7 +595,8 @@ def audit_price(plan: list[dict]) -> dict:
     return {"claims": sum(len(w["claims"]) for w in plan), "windows": len(plan),
             "calls": len(plan),
             "projected_usd": round(len(plan) * FINE_USD_PER_WINDOW, 2),
-            "eta_s": round(len(plan) * FINE_WINDOW_READ_S + 2.0, 1)}
+            "eta_s": round(len(plan) * FINE_WINDOW_READ_S + 2.0, 1),
+            **config.cost_terms()}
 
 
 def visual_status(fine: bool = True, interval: float | None = None) -> dict:
@@ -638,6 +639,7 @@ def visual_status(fine: bool = True, interval: float | None = None) -> dict:
         # The audit button's price, read off the ranked file the board already shows.
         "audit": audit_price(audit_plan(events.load(STATE["visual"]))),
         "dir": str(STATE["visual"]),
+        **config.cost_terms(),
     }
 
 
@@ -1155,7 +1157,7 @@ def ask_price(mode: str) -> dict:
                                     *ASK_ESTIMATE_TOKENS)
         basis += ", plus the quick estimate that draws its bar"
     return {"mode": mode, "usd": round(usd, 2), "basis": basis, "model": model,
-            "fitted_on": len(fits)}
+            "fitted_on": len(fits), **config.cost_terms()}
 
 
 @app.get("/api/ask/price")
@@ -1286,8 +1288,9 @@ def api_find_price() -> JSONResponse:
     clips, _ = _ask_clips(drop_junk=True)
     if not clips:
         return JSONResponse({"usd": None,
-                             "why": "no analysed clips yet — run the audio pass first"})
-    return JSONResponse({"usd": find.projected_usd(clips)})
+                             "why": "no analysed clips yet — run the audio pass first",
+                             **config.cost_terms()})
+    return JSONResponse({"usd": find.projected_usd(clips), **config.cost_terms()})
 
 
 @app.post("/api/find")
@@ -1312,7 +1315,7 @@ async def api_find(request: Request) -> JSONResponse:
         raise HTTPException(400, "no analysed clips yet — run the audio pass first")
     matches = find.lexical(query, clips)
     resp: dict = {"matches": _match_rows(matches), "job": None,
-                  "deep_projected_usd": find.projected_usd(clips)}
+                  "deep_projected_usd": find.projected_usd(clips), **config.cost_terms()}
     if body.get("deep"):
         running = next((f for f in FINDS.values()
                         if f["state"] not in progress.TERMINAL), None)
@@ -1786,6 +1789,7 @@ def backend_preflight() -> dict:
         "cli": cli,
         "budget_usd": budget_cap(),
         "spent_usd": project_spent(),               # this project's, from disk
+        "charged": config.charges_money(),          # False: the $ are API-equivalent
         **BACKEND,
         # after BACKEND, whose own `fix` is only the probe's half of the answer
         "fix": backend_fix(problems, cli),
@@ -2741,7 +2745,8 @@ def deep_plan(clip: str, start: float, end: float, force: bool = False) -> dict:
            "max_span_s": deepmod.MAX_SPAN_S,
            "frames_plan": [f["t"] for f in frames],
            "motion": "cached" if motion else "measured first — free",
-           **deepmod.quote(len(frames) if motion else deepmod.FRAME_CAP)}
+           **deepmod.quote(len(frames) if motion else deepmod.FRAME_CAP),
+           **config.cost_terms()}
     out["cached"] = bool(have) and not force
     if out["cached"]:
         out.update(projected_usd=0.0, max_usd=0.0, calls=0, max_calls=0, eta_s=0.0,
@@ -2945,6 +2950,7 @@ def api_themes() -> JSONResponse:
         "analysed": len(clips), "job": running["id"] if running else None,
         "last": {"id": last["id"], "proposal": last["proposal"]} if last else None,
         "dictation": dictate.available(),
+        **config.cost_terms(),
     })
 
 
@@ -5096,7 +5102,8 @@ def api_fx_price(place: int = 0, shot: str = "") -> JSONResponse:
     """The cost on the button before it is pressed: the design call, plus a frame per
     candidate impact when the model is asked to place the anchors by looking."""
     frames = _fx_place_frames(_fx_seg(shot)) if place and shot else 0
-    return JSONResponse({"usd": fx.price(place_frames=frames), "frames": frames})
+    return JSONResponse({"usd": fx.price(place_frames=frames), "frames": frames,
+                         **config.cost_terms()})
 
 
 @app.post("/api/fx/design")

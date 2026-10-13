@@ -81,6 +81,15 @@ follow HANDOFF's next actions.
 - **Every call still logs tokens and `projected_usd`** — the API-rate equivalent. Budget caps
   are enforced on `projected_usd` on both backends, so subscription development never loses the
   ability to answer "is this affordable in production".
+- **The board's model buttons cost no money on the default backend — run them without
+  stopping.** Audit, Ask, Look deeper, Index and FX Design/Change call `claude -p` on Karl's
+  Claude plan (`claude_cli`); no call is billed. Every dollar figure on them is
+  `projected_usd`, the estimated cost *if* the calls went through the API — which is why the
+  board says "free on your plan" there and every price response carries `charged: false`.
+  Running them (on the board or via its API) is part of the iteration loop: never pause for
+  approval, or call it spending, because a price is shown. Only `ROUGHCUT_BACKEND=anthropic_api`
+  bills (`charged: true`). The request-window and hundreds-of-calls rules still apply.
+  (Karl, 2026-10-05: *"the audit uses Claude Code on my plan, no API."*)
 - Tests use mocked backends by default; live smoke tests are ≤ 3 calls and explicitly marked.
 - Anything that would run hundreds of live calls in a single session: stop and confirm with
   Karl first, regardless of backend.

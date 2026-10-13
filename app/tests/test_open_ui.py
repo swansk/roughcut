@@ -264,7 +264,11 @@ def test_the_look_is_priced_on_the_button_that_buys_it(page):
     status = api(page, "/api/status")
     btn = page.locator("#indexBtn")
     assert btn.is_enabled()
-    assert btn.inner_text() == f"Index the footage · ~${status['visual']['projected_usd']:.2f}"
+    # the default backend bills nothing: no bare dollars, the estimate is the API's
+    assert status["visual"]["charged"] is False
+    assert btn.inner_text() == "Index the footage · free on your plan"
+    assert btn.get_attribute("title") == ("free on your Claude plan — about "
+        f"${status['visual']['projected_usd']:.2f} estimated cost if using the API")
     assert "priced" in btn.get_attribute("class") and "primary" not in btn.get_attribute("class")
     b = status["backend"]
     assert page.locator("#budgetLine").inner_text() == money(b)
@@ -297,6 +301,7 @@ def test_the_slider_reprices_live_from_by_interval_without_a_round_trip(page, mo
     30 frames covers 120 s at 4 s (one sheet a clip) and 30 s at 1 s (four)."""
     import server
     monkeypatch.setattr(server, "clip_duration", lambda clip: 100.0)
+    monkeypatch.setenv("ROUGHCUT_BACKEND", "anthropic_api")    # dollars on the button
     page.evaluate("sheet.refresh()")
     page.wait_for_function(
         "sheet.state.status.visual.by_interval['1'] !== sheet.state.status.visual.by_interval['4']",
@@ -526,11 +531,13 @@ def test_a_second_run_while_one_is_going_is_refused_not_doubled(page):
     assert page.locator("#indexBtn").is_enabled()
 
 
-def test_index_the_footage_runs_the_journal_and_the_cap_pauses_the_priced_stages(page, bin_server, project):
+def test_index_the_footage_runs_the_journal_and_the_cap_pauses_the_priced_stages(page, bin_server, project,
+                                                                                monkeypatch):
     """One click runs a real journal walk (tools stubbed): one progress line while it
     goes, the free stages finish, the budget cap holds the priced ones, and the screen
     says so with a way to resume. The slider's stop rides with the click and the project
     keeps it; the order is the settings drawer's."""
+    monkeypatch.setenv("ROUGHCUT_BACKEND", "anthropic_api")    # Resume's dollars are checked
     budget(bin_server, 0.0)
     page.locator("#settingsBtn").click()
     page.locator("#order button[data-order=capture]").click()
@@ -1003,7 +1010,7 @@ def test_opening_another_bin_reloads_the_whole_page_for_it(page, project, bin_se
         assert page.locator("#story").input_value() == ""
         assert page.locator("#setup").is_visible()
         assert page.locator("#lookWord").inner_text().startswith("Looks at a frame every")
-        assert page.locator("#indexBtn").inner_text().startswith("Index the footage · ~$")
+        assert page.locator("#indexBtn").inner_text().startswith("Index the footage · ")
         s = api(page, "/api/status")
         assert s["footage"] == str(other) and s["clips"] == 1
         page.wait_for_function("window.flowBar && flowBar.state()"

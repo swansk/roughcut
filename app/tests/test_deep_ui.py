@@ -144,7 +144,7 @@ def test_the_inspector_shows_how_the_shot_s_clip_was_seen(bin_state, browser):
     pg = _board(browser, bin_state)
     pg.locator("#tl .blk").nth(0).click()
     look = "#inspector .srow.top .lookhost .dv-look"
-    pg.wait_for_function(f"""() => /^Look deeper · ~\\$\\d/.test(
+    pg.wait_for_function(f"""() => /^Look deeper · (~\\$\\d|free on your plan)/.test(
         (document.querySelector('{look}') || {{}}).textContent || '')""")
     assert "1.0–3.0 s" in pg.get_attribute(look, "title")      # the shot, not ± 2 s
     box = "#inspector .deepline"
@@ -177,10 +177,11 @@ def test_the_inspector_shows_how_the_shot_s_clip_was_seen(bin_state, browser):
     pg.mouse.move(bar["x"] + bar["width"] * 0.25, y, steps=4)
     pg.mouse.move(bar["x"] + bar["width"] * 0.4, y, steps=4)
     pg.mouse.up()
-    pg.wait_for_function(f"""() => /Look deeper · ~\\$\\d/.test(
+    pg.wait_for_function(f"""() => /Look deeper · (~\\$\\d|free on your plan)/.test(
         (document.querySelector('{box} .dv-act .dv-look') || {{}}).textContent || '')""")
     assert pg.inner_text(f"{box} .dv-act").startswith("chosen · ")
-    assert "if it asks for more" in pg.inner_text(f"{box} .dv-act")
+    # the follow-up's ceiling is a dollar figure, so it is said only where it is billed
+    assert ("if it asks for more" in pg.inner_text(f"{box} .dv-act")) is config.charges_money()
 
     # the stored look renders in place: a filmstrip, seen solid, inferred hatched
     pg.click(f"{box} .dv-lane[data-lane=deep] i.w")
@@ -256,9 +257,9 @@ def test_look_deeper_from_a_seen_row_is_priced_then_runs_and_shows_the_beats(
         pg.click("#libTabs .tab[data-tab=seen]")
         row = "#library .cand:has(.dv-look)"
         pg.wait_for_function("""() => [...document.querySelectorAll('#library .cand .dv-look')]
-            .some((b) => /Look deeper · ~\\$\\d/.test(b.textContent))""")
+            .some((b) => /Look deeper · (~\\$\\d|free on your plan)/.test(b.textContent))""")
         assert not backend.seen                      # priced, nothing spent
-        btn = pg.locator(f"{row} .dv-look", has_text="Look deeper · ~$").first
+        btn = pg.locator(f"{row} .dv-look", has_text="Look deeper · ").first
         btn.click()
         pg.wait_for_selector("#library .dv-res.inrow .dv-beats li.inferred", timeout=30000)
         assert len(backend.seen) == 1

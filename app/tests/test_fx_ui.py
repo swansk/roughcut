@@ -40,6 +40,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from roughcut import fx  # noqa: E402
 
 
+def tag(price: dict) -> str:
+    """`rcCost.tag` (cli.js): no bare dollars where nothing is billed."""
+    return f"~${price['usd']:.2f}" if price["charged"] else "free on your plan"
+
+
 # ---------------------------------------------------------------- the fixed effect
 
 HIT = {
@@ -355,7 +360,7 @@ def test_the_tool_follows_the_selected_shot_and_prices_the_button(page):
     page.wait_for_selector("#fx .fxprice")
     price = api(page, f"/api/fx/price?place=1&shot={sid}")
     assert price["frames"] >= 1
-    assert page.locator("#fxDesign").inner_text() == f"Design · ~${price['usd']:.2f}"   # no "· 8 frames"
+    assert page.locator("#fxDesign").inner_text() == f"Design · {tag(price)}"   # no "· 8 frames"
     # the other shot
     open_fx(page, 1)
     assert page.locator("#fx .fxtitle").text_content() == "Shot 2 · 2.0 s"
@@ -416,7 +421,7 @@ def test_design_and_go_wait_for_their_price_and_never_spend_without_one(page):
     go = page.locator(f"#fx .fxcard[data-id='{e['id']}'] button[data-act=revise]")
     page.wait_for_function(
         "(() => { const b = document.querySelector('#fx .fxiter button[data-act=revise]');"
-        " return !!b && !b.disabled && b.textContent.includes('~$'); })()", timeout=5000)
+        " return !!b && !b.disabled && b.textContent.includes(' · '); })()", timeout=5000)
 
     posts = []
     page.on("request", lambda r: posts.append(r.url)
@@ -524,11 +529,11 @@ def test_the_check_runs_by_itself_then_change_accept_and_remove(page):
     assert checks.nth(2).locator(".lbl").inner_text() == "the sound is heard"
     assert "9.1 dB" not in card.inner_text() and checks.nth(2).get_attribute("title") == "rise 9.1 dB"
     # change: a model call, its price on the button and on Go
-    price = api(page, '/api/fx/price')['usd']
-    assert card.locator("button[data-act=iterate]").inner_text() == f"Change · ~${price:.2f}"
+    price = api(page, '/api/fx/price')
+    assert card.locator("button[data-act=iterate]").inner_text() == f"Change · {tag(price)}"
     card.locator("button[data-act=iterate]").click()
     go = card.locator(".fxiter button[data-act=revise]")
-    assert go.inner_text() == f"Go · ~${price:.2f}"
+    assert go.inner_text() == f"Go · {tag(price)}"
     box = card.locator(".fxiter input")
     box.fill("make them red")
     box.press("Enter")

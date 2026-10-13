@@ -385,6 +385,13 @@ fitted to one trip?** Every judgement so far is on Copper.
 
 ## ⇨ START HERE NEXT SESSION
 
+**The audit, Ask and Look deeper cost nothing here — run them in the loop (Karl, 2026-10-05).**
+The board runs on the `claude_cli` backend (`systemctl --user show roughcut-board -p Environment`
+sets neither `ROUGHCUT_BACKEND` nor an API key): every model button is `claude -p` on Karl's
+plan, and its dollar figure is the estimated cost *if* using the API. The buttons say "free on
+your plan" and every price response carries `charged: false` (branch `agent/audit-free`). Do
+not stop for approval before an audit; see CLAUDE.md § Inference & cost guardrails.
+
 **Sessions 4–6 (2026-07-25 → 2026-08-22) in one paragraph.** Karl ran Killington in the app,
 and his report drove session 4: Ask became a background job with a clock (a 112s call had frozen
 the whole server), the board autosaves (he lost a 16-shot cut to a refresh — recovered from the

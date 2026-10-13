@@ -41,6 +41,8 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
+from . import config
+
 STAGES = ("footage", "index", "brief", "pass", "cut", "polish", "render")
 
 NAMES = {"footage": "Footage", "index": "Index", "brief": "Brief", "pass": "Pass",
@@ -86,6 +88,12 @@ def _clock(s: float | None) -> str:
 
 def _usd(x: float | None) -> str:
     return f"${float(x or 0.0):.2f}"
+
+
+def _price(x: float | None) -> str:
+    """A price in a sentence, worded the way `rcCost.tag` (cli.js) words a button: on
+    the subscription backend nothing is billed, so no bare dollars (Karl, 2026-10-05)."""
+    return f"~{_usd(x)}" if config.charges_money() else "free on your plan"
 
 
 def interval_words(intervals: dict | None, project: float | None) -> str:
@@ -230,18 +238,18 @@ def index_stage(f: dict) -> dict:
         k = int(waiting["clips"])
         what = "Looks" if int(waiting.get("looks") or 0) else "Close looks"
         usd = waiting.get("usd")
-        reason = (f"{what} are paused — {_plural(k, 'clip')} wait, ~{_usd(usd)}. "
+        reason = (f"{what} are paused — {_plural(k, 'clip')} wait, {_price(usd)}. "
                   f"The pass already shows them from what was heard.")
         return _stage("index", "needs-you", reason, counts={**counts, "waiting": k},
                       progress=pct, needs={
                           "reason": reason,
                           "action": action("index", f"Resume the {what.lower()} — "
-                                           f"{_plural(k, 'clip')}, ~{_usd(usd)}",
+                                           f"{_plural(k, 'clip')}, {_price(usd)}",
                                            "Resume", usd=usd)})
     usd = ix.get("pending_usd")
     verb = "Index" if not ix.get("journal") and listened == 0 else "Index the rest"
     sentence = ("Index the footage" if verb == "Index"
-                else "Index what isn't done") + (f" — ~{_usd(usd)}" if usd else "")
+                else "Index what isn't done") + (f" — {_price(usd)}" if usd else "")
     return _stage("index", "ready", summary, counts=counts, progress=pct,
                   recommended=True) | {"action": action(
                       "index", sentence, verb, usd=usd)}

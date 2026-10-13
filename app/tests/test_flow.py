@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from roughcut import flow  # noqa: E402
+from roughcut import config, flow  # noqa: E402
 
 FIX = {"kind": "login", "title": "Sign the Claude CLI in",
        "why": "the CLI is signed out, so nothing priced can run",
@@ -78,7 +78,8 @@ def test_a_fresh_bin_builds_previews_and_offers_the_index():
     assert st["polish"]["state"] == "waiting" and st["render"]["state"] == "waiting"
     nxt = out["next"]
     assert nxt["stage"] == "index" and nxt["screen"] == "/open"
-    assert nxt["sentence"] == "Index the footage — ~$3.10" and nxt["usd"] == 3.1
+    price = "~$3.10" if config.charges_money() else "free on your plan"
+    assert nxt["sentence"] == f"Index the footage — {price}" and nxt["usd"] == 3.1
     assert "click" not in nxt, "a priced action navigates to its button; it never presses it"
     assert out["running"] is True and out["blockers"] == []
 
@@ -225,7 +226,8 @@ def test_paused_priced_stages_need_your_word_with_the_price():
     out = flow.compute(f)
     ix = by_key(out)["index"]
     assert ix["state"] == "needs-you"
-    assert ix["summary"].startswith("Close looks are paused — 9 clips wait, ~$1.97")
+    want = "~$1.97" if config.charges_money() else "free on your plan"
+    assert ix["summary"].startswith(f"Close looks are paused — 9 clips wait, {want}")
     assert ix["needs"]["action"]["verb"] == "Resume"
     assert ix["needs"]["action"]["usd"] == 1.97
     # rendered and nothing else waiting: resuming is what is left to do
@@ -418,3 +420,12 @@ def test_a_discarded_ask_is_answered_and_stops_waiting(client, project):
         assert client.post("/api/asks/answer", json={"answer": "maybe"}).status_code == 400
     finally:
         path.unlink(missing_ok=True)
+
+
+def test_a_priced_sentence_is_worded_by_whether_it_is_billed(monkeypatch):
+    """Karl, 2026-10-05: on the subscription backend nothing is billed, so the next
+    action never reads as spending money; only the API backend shows dollars."""
+    monkeypatch.setenv("ROUGHCUT_BACKEND", "claude_cli")
+    assert flow.compute(fresh())["next"]["sentence"] == "Index the footage — free on your plan"
+    monkeypatch.setenv("ROUGHCUT_BACKEND", "anthropic_api")
+    assert flow.compute(fresh())["next"]["sentence"] == "Index the footage — ~$3.10"
