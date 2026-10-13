@@ -1662,6 +1662,8 @@ def test_an_empty_bin_offers_the_footage_and_says_where_to_keep_things(page):
     assert hint["y"] + hint["height"] <= card["y"] + 1, (hint, card)
     first = rows.nth(0)
     assert (first.get_attribute("title") or "").startswith(stems[0] + " 0:00")
+    # each card names its clip: the fixture's three all say "hello there"
+    assert [rows.nth(i).locator(".w").inner_text().split(" · ")[0] for i in range(len(stems))] == stems
     n = page.locator("#tl .blk").count()
     page.evaluate("tl.seek(0)")
     first.hover()

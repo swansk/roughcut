@@ -1731,6 +1731,9 @@ function playKeep(s) {
 /* A keep's label: the note, the first line spoken inside it, what was seen in it. */
 function keepLabel(s) {
   if (s.note) return `your note: ${s.note}`;
+  // a whole clip of the footage is that clip: three cards all saying "hello there" were
+  // three cards nobody could tell apart
+  if (s.whole) return `${stem(s.clip)} · ${keepLabel({ ...s, whole: false })}`;
   const clip = (P && P.clips[s.clip]) || {};
   const u = (clip.transcript || []).find((x) => x.end > s.start && x.start < s.end);
   if (u) return `“${u.text}”`;
