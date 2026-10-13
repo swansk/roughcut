@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Docs
+- **HANDOFF points at the closed loop** (ROUGHCUT-GOAL.md, tools/gate.py, LOOP-LOG.md on `closed-loop/2026-10-13`) and corrects its 2026-10-05 entry: M16 is on main and live, not waiting on a deploy.
+
 ### Fixed
 - **The board's Bin is the footage until something is kept (ROUGHCUT-GOAL.md dimension 2).** A bin nobody had passed opened the editor on "nothing kept yet — the pass is where you keep things" and nothing to put on the timeline: the editor could not edit without the pass first. With no keeps the Bin now lists every clip (junk-confirmed and generated ones aside) as a whole-clip card — the same row, + add at the playhead, drag, Enter — with "keep moments on the pass →" as one line above. `test_an_empty_bin_offers_the_footage_and_says_where_to_keep_things` adds one and undoes it. `test_budget.py`'s words in view are raised for it, in review: / 80→92, / shot 130→143, / jobs 108→121 (the three fixture cards' first lines, +12 words; controls unchanged — + add shows on hover).
 

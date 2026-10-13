@@ -1,5 +1,17 @@
 # Handoff — read this first
 
+**2026-10-13 — a closed loop on branch `closed-loop/2026-10-13` (not main).** Karl: *"next
+time I open Roughcut I want to actually use the video editor and feel good about it"* — the
+bar is [ROUGHCUT-GOAL.md](../ROUGHCUT-GOAL.md) (eight dimensions a fresh judge scores),
+`python3 tools/gate.py [ref] [--quick]` runs every automated check on a frozen commit
+(output in `~/roughcut-loop/`), and [LOOP-LOG.md](../LOOP-LOG.md) lists each commit with
+its gate result (`PASS:` / `FAIL:` subjects). First fixes: the board's Bin is the footage
+until something is kept (it was a dead end without the pass), the header's buttons work from
+the first paint, Karl's `agent/audit-free` cherry-picked ("free on your plan"). Merging the
+branch to main and restarting the board are Karl's steps. **Correction to the entry below:**
+M16 *is* on main (`35cb147` = `agent/m16-int2`) and the board service has run it since
+2026-10-12; the `roughcut-wt/m16-*` worktrees are all merged.
+
 **2026-10-05 — M16 stages 0–4 BUILT on `agent/m16-int2` (`38e8503`, 122 commits over `2a724d5`), not on main.** Suite 861 passed / 0 failed; fixture words in view: board 197→72, the pass 350→52, /open 454→53; one header row and one blue button per screen. **Deploying is Karl's step** (auto mode refused it): `git -C ~/Documents/Projects/roughcut merge --ff-only agent/m16-int2` then `systemctl --user restart roughcut-board`. After that: I16.6 (the two first-cut test cuts on Killington) and I16.7 (re-measure on Killington). Two questions wait in INTAKE M16 (Cut from the bin; junk in two places). Worktrees `roughcut-wt/m16-*` can go once main has it.
 
 **2026-10-04 — M16, take things away.** Karl's *"hard to use / with a bunch of buttons and text from the footage -> the other steps"* was answered with a proposal page (https://claude.ai/artifact/PPbCx4q1QtyZ1GDDHQ3kgH) and he chose **Subtract**: keep every screen and decision, take the clutter away. His eight answers, the end state and the items are in [INTAKE.md](INTAKE.md) M16 — read that first. No budget cap by default (he is on Max).
