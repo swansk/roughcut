@@ -57,8 +57,12 @@ HEADER_MAX_PX = 50
 # review, saying what the new words are for. The end state (Killington, not this
 # fixture): ≲ 100 words on /open and the pass, ≲ 220 on the board with a shot
 # selected, ≲ 200 in FX after Next, ≲ 180 with the film tool open.
-WORDS_IN_VIEW = {"/": 80, "/floor": 58, "/open": 59, "/ shot": 130, "/ film": 74, "/ fx": 130,
-                 "/ jobs": 108}
+# Raised in review on the closed-loop branch (2026-10-13, ROUGHCUT-GOAL.md dimension 2):
+# with nothing kept the Bin lists the footage, one card per clip, so a bin nobody has
+# passed can still be cut — the fixture's three cards add 12 words (their first lines):
+# / 72→84, / shot 118→130, / jobs 98→110; +10 % on those.
+WORDS_IN_VIEW = {"/": 92, "/floor": 58, "/open": 59, "/ shot": 143, "/ film": 74, "/ fx": 130,
+                 "/ jobs": 121}
 CONTROLS_IN_VIEW = {"/": 20, "/floor": 8, "/open": 9, "/ shot": 33, "/ film": 19, "/ fx": 35,
                     "/ jobs": 20}
 
