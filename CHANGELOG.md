@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Added
+- **ROUGHCUT-GOAL.md, the closed-loop bar, and `tools/gate.py` (branch `closed-loop/2026-10-13`).** Karl, 2026-10-13: *"next time I open Roughcut I want to actually use the video editor and feel good about it"* — the editor's equivalent of NOITA's and STICKFIGHT's "ready for Steam" bar: eight dimensions (opens fast, footage in, cut/trim, preview, nothing lost, a film comes out, quiet and plain, no dead ends), each with a pass line a fresh judge checks from the gate's screenshots and the suite. `python3 tools/gate.py [ref] [--quick]` freezes a commit into `~/roughcut-loop/snap-<sha>` and runs the suite (a full-run failure that passes alone is named as flaky), `test_budget.py` with a PNG per screen, and a hygiene grep (model literals, `anthropic` imports, Windows paths); `summary.md` per run. `LOOP-LOG.md` is the commit-by-commit record. `test_budget.py` now times each screen to its Next (≤ 3 s, dimension 1; 285–457 ms measured) and fails on any uncaught page error.
+
 ### Docs
 - **INTAKE M16: I16.0–I16.5 ticked on the integration branch** with their merge commits, the fixture measurements in the Verification log (board 197→72 words in view, the pass 350→52, /open 454→53; 861 passed), and the two questions the review left for Karl (Cut from the bin once a cut exists; junk answered in two places). I16.6–I16.7 wait on Karl deploying main; HANDOFF gives the two deploy commands.
 

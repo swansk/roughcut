@@ -260,18 +260,23 @@ def measured(project):
                 pg.route("**/api/backend", lambda r: r.fulfill(
                     status=200, content_type="application/json",
                     body=json.dumps({"state": "ok", "fix": None})))
+                errors = []
+                pg.on("pageerror", lambda e, errors=errors: errors.append(str(e)))
+                t0 = time.monotonic()
                 pg.goto(base + path, wait_until="domcontentloaded")
                 pg.wait_for_function("window.flowBar && flowBar.state()", timeout=15000)
                 pg.wait_for_selector("#flowNext", timeout=15000)
+                ready_ms = round((time.monotonic() - t0) * 1000)
                 _set_up(pg, state)
                 pg.wait_for_timeout(3000)
                 m = pg.evaluate(INVENTORY_JS)
                 m["next"] = pg.evaluate("flowBar.state().next")
+                m["ready_ms"], m["errors"] = ready_ms, errors
                 out[state] = m
                 print(f"\nbudget {state:7s} words {m['words_in_view']:4d} · controls "
                       f"{m['controls_in_view']:3d} · header {m['header'] and round(m['header']['height'])} px"
                       f" ({m['header_tag']}) · page {m['scroll_h']} / {m['inner_h']} · blue {m['blue']}"
-                      f" · chip {m['chip_text']!r}")
+                      f" · chip {m['chip_text']!r} · ready {ready_ms} ms · errors {len(errors)}")
                 print(f"  controls: {m['controls']}")
                 if shots:
                     Path(shots).mkdir(parents=True, exist_ok=True)
@@ -388,3 +393,19 @@ def test_no_step_bar_on_any_screen(measured):
     for path, m in measured.items():
         assert m["steps"] == 0, (path, m["steps"])
         assert m["flow_links"] == 1, (path, "#flow holds the Next chip and nothing else")
+
+
+# ROUGHCUT-GOAL.md dimension 1, "opens fast, lands somewhere": the screen's Next is drawn
+# within this long of the request, on the fixture. Generous on purpose — the gate runs
+# beside other jobs on a shared box — so a failure means something got slow, not noise.
+READY_MS = 3000
+
+
+@pytest.mark.parametrize("path", SCREENS)
+def test_every_screen_shows_next_within_3_s(measured, path):
+    assert measured[path]["ready_ms"] <= READY_MS, (path, measured[path]["ready_ms"])
+
+
+@pytest.mark.parametrize("state", STATES)
+def test_no_uncaught_page_errors(measured, state):
+    assert measured[state]["errors"] == [], (state, measured[state]["errors"])
