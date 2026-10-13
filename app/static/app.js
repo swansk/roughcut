@@ -1884,6 +1884,9 @@ function footageRows(lib, text) {
     .filter(([c, v]) => !isGenClip(c) && v.proxy && junkState(c) !== 'confirmed'
       && (!text || stem(c).toLowerCase().includes(text)))
     .sort(([a], [b]) => a.localeCompare(b));
+  // the tab says what the grid holds: the footage, not "not in the cut · 0" over three cards
+  const tabOut = $('#binTabs .tab[data-tab=out]');
+  if (tabOut) tabOut.textContent = `footage · ${clips.length}`;
   lib.innerHTML = `<div class="hint">nothing kept yet — the footage, whole clips ·
     <a href="/floor" style="color:var(--accent)">keep moments on the pass →</a></div>`;
   clips.forEach(([c, v]) => lib.appendChild(keepRow({ clip: c, start: 0, end: v.duration || 0,

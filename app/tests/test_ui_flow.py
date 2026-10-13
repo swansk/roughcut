@@ -1656,6 +1656,10 @@ def test_an_empty_bin_offers_the_footage_and_says_where_to_keep_things(page):
         "Object.keys(P.clips).filter(c => !isGenClip(c) && P.clips[c].proxy)"))
     rows = box.locator(".keep")
     assert rows.count() == len(stems) >= 1
+    assert page.locator("#binTabs .tab[data-tab=out]").inner_text() == f"footage · {len(stems)}"
+    # the line spans the grid, above the cards — not a card of its own
+    hint, card = box.locator(".hint").bounding_box(), rows.nth(0).bounding_box()
+    assert hint["y"] + hint["height"] <= card["y"] + 1, (hint, card)
     first = rows.nth(0)
     assert (first.get_attribute("title") or "").startswith(stems[0] + " 0:00")
     n = page.locator("#tl .blk").count()
