@@ -216,6 +216,27 @@ function cardHtml(c) {
   </div>`;
 }
 
+// A click on a clip's picture plays the clip there (ROUGHCUT-GOAL.md dimension 2): the
+// footage screen showed every clip and none of them did anything when clicked. One
+// plays at a time; the picture comes back when another starts.
+function playInCard(frame) {
+  if (!frame || frame.querySelector('video')) return;
+  const card = frame.closest('.card');
+  const c = ((O.clips && O.clips.clips) || []).find((x) => x.clip === card.dataset.clip);
+  if (!c || !c.proxy) return;
+  document.querySelectorAll('#sessions .card .frame video').forEach((v) => {
+    const f = v.closest('.card');
+    v.closest('.frame').outerHTML = new DOMParser().parseFromString(cardHtml(
+      O.clips.clips.find((x) => x.clip === f.dataset.clip)), 'text/html').querySelector('.frame').outerHTML;
+  });
+  const v = Object.assign(document.createElement('video'), {
+    src: `/media/proxy/${encodeURIComponent(c.stem)}.mp4`, controls: true, autoplay: true,
+  });
+  v.style.cssText = 'display:block;width:100%;height:100%;object-fit:contain;background:#000';
+  const img = frame.querySelector('img, .ph');
+  if (img) img.replaceWith(v); else frame.prepend(v);
+}
+
 // The days the bin was shot on: "Jan 18 + Jan 27", or the first and last of many.
 function daysText(days) {
   const named = days.filter(Boolean);
@@ -1078,7 +1099,8 @@ async function boot() {
   $('#sessions').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-junk]');
     const card = b && b.closest('.card');
-    if (card) junkVerdict(card.dataset.clip, b.dataset.junk);
+    if (card) { junkVerdict(card.dataset.clip, b.dataset.junk); return; }
+    playInCard(e.target.closest('.card .frame'));
   });
   wireBrief();
   wireSettings();

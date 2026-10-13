@@ -1036,3 +1036,30 @@ def test_opening_another_bin_reloads_the_whole_page_for_it(page, project, bin_se
         server.INDEXES.clear()
         server.configure(None, project["footage"], project["sidecars"], bin_server["work"],
                          proxies=False, visual=None)
+
+
+def test_a_click_on_a_clip_plays_it_in_its_card(page, project):
+    """ROUGHCUT-GOAL.md dimension 2: the footage screen showed every clip and none of them
+    did anything when clicked. A click on the picture plays that clip's proxy there; a
+    click on another puts the first picture back — one plays at a time. (Last in the
+    module: it builds the proxies the other tests' fresh bin does not have.)"""
+    import server
+    server.ensure_proxies([f"{s}.MP4" for s in project["stems"]])
+    page.reload()
+    page.wait_for_selector("#sessions .card", timeout=10000)
+    cards = page.locator("#sessions .card")
+    assert cards.count() >= 2
+    with_proxy = page.evaluate("O.clips.clips.filter(c => c.proxy).map(c => c.clip)")
+    assert len(with_proxy) >= 2, "the fixture's clips have proxies"
+    a = page.locator(f"#sessions .card[data-clip='{with_proxy[0]}'] .frame")
+    b = page.locator(f"#sessions .card[data-clip='{with_proxy[1]}'] .frame")
+    a.click()
+    v = a.locator("video")
+    assert v.count() == 1
+    assert v.get_attribute("src").startswith("/media/proxy/")
+    page.wait_for_function(f"document.querySelector(\"#sessions .card[data-clip='{with_proxy[0]}'] video\").readyState >= 1",
+                           timeout=10000)
+    b.click()
+    assert b.locator("video").count() == 1
+    assert page.locator("#sessions .card video").count() == 1
+    assert a.locator("img, .ph").count() == 1
