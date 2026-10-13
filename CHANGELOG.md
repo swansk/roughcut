@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Fixed
+- **The board's Bin is the footage until something is kept (ROUGHCUT-GOAL.md dimension 2).** A bin nobody had passed opened the editor on "nothing kept yet — the pass is where you keep things" and nothing to put on the timeline: the editor could not edit without the pass first. With no keeps the Bin now lists every clip (junk-confirmed and generated ones aside) as a whole-clip card — the same row, + add at the playhead, drag, Enter — with "keep moments on the pass →" as one line above. `test_an_empty_bin_offers_the_footage_and_says_where_to_keep_things` adds one and undoes it.
+
 ### Added
 - **ROUGHCUT-GOAL.md, the closed-loop bar, and `tools/gate.py` (branch `closed-loop/2026-10-13`).** Karl, 2026-10-13: *"next time I open Roughcut I want to actually use the video editor and feel good about it"* — the editor's equivalent of NOITA's and STICKFIGHT's "ready for Steam" bar: eight dimensions (opens fast, footage in, cut/trim, preview, nothing lost, a film comes out, quiet and plain, no dead ends), each with a pass line a fresh judge checks from the gate's screenshots and the suite. `python3 tools/gate.py [ref] [--quick]` freezes a commit into `~/roughcut-loop/snap-<sha>` and runs the suite (a full-run failure that passes alone is named as flaky), `test_budget.py` with a PNG per screen, and a hygiene grep (model literals, `anthropic` imports, Windows paths); `summary.md` per run. `LOOP-LOG.md` is the commit-by-commit record. `test_budget.py` now times each screen to its Next (≤ 3 s, dimension 1; 285–457 ms measured) and fails on any uncaught page error.
 

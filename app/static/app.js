@@ -1745,7 +1745,7 @@ function keepRow(s) {
   const clip = P.clips[s.clip] || {};
   const known = !s.missing && !!P.clips[s.clip];
   const still = clip.poster ? `${clip.poster}?t=${Math.max(0, s.start).toFixed(2)}` : '';
-  const at = known ? shotOf(s) : -1;
+  const at = known && !s.whole ? shotOf(s) : -1;   // a whole clip can be added again
   const use = s.missing
     ? '<span class="gone">footage missing — cannot be added until the clip is back</span>'
     : !known
@@ -1859,10 +1859,11 @@ function renderKept(lib) {
   }
   if (!all.length) {
     if (jcards.length) return;
-    lib.innerHTML = every.length
-      ? '<div class="hint">every keep is in the cut</div>'
-      : `<div class="hint">nothing kept yet — the pass is where you keep
-      things · <a href="/floor" style="color:var(--accent)">the pass →</a></div>`;
+    if (every.length) {
+      lib.innerHTML = '<div class="hint">every keep is in the cut</div>';
+      return;
+    }
+    footageRows(lib, text);
     return;
   }
   if (!keeps.length) {
@@ -1872,6 +1873,21 @@ function renderKept(lib) {
     return;
   }
   keeps.forEach((s) => lib.appendChild(keepRow(s)));
+}
+
+/* Nothing kept yet: the bin is the footage (ROUGHCUT-GOAL.md dimension 2 — the pass and
+ * the index make a cut better, never possible). One card per clip, the whole clip, the
+ * same row and the same + add / drag as a keep, so a trim after is the only step left. */
+function footageRows(lib, text) {
+  const clips = Object.entries(P.clips || {})
+    .filter(([c, v]) => !isGenClip(c) && v.proxy && junkState(c) !== 'confirmed'
+      && (!text || stem(c).toLowerCase().includes(text)))
+    .sort(([a], [b]) => a.localeCompare(b));
+  lib.innerHTML = `<div class="hint">nothing kept yet — the footage, whole clips ·
+    <a href="/floor" style="color:var(--accent)">keep moments on the pass →</a></div>`;
+  clips.forEach(([c, v]) => lib.appendChild(keepRow({ clip: c, start: 0, end: v.duration || 0,
+                                                      why: 'whole clip', whole: true })));
+  if (!clips.length && text) lib.insertAdjacentHTML('beforeend', '<div class="hint">no clip matches — clear the words above</div>');
 }
 
 /* Junk (HANDOFF roadmap item 5): the server measures, the editor answers. `junk` is

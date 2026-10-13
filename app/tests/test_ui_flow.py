@@ -1632,14 +1632,32 @@ def test_the_kept_tab_shows_the_bin_and_puts_a_keep_in_the_cut(page):
     cut_says(page, "1 hero not in it")
 
 
-def test_an_empty_bin_says_where_to_keep_things(page):
+def test_an_empty_bin_offers_the_footage_and_says_where_to_keep_things(page):
+    """ROUGHCUT-GOAL.md dimension 2: with nothing kept the Bin is the footage, one card
+    per clip, and + add puts the whole clip on the timeline — no pass, no model call."""
     assert "sel" in page.locator("#binTabs .tab[data-tab=out]").get_attribute("class")
     box = page.locator("#library")
     page.wait_for_function(
         "document.querySelector('#library').textContent.includes('nothing kept yet')",
         timeout=5000)
-    assert "the pass is where you keep things" in box.inner_text()
-    assert box.locator("a").get_attribute("href") == "/floor"
+    assert "keep moments on the pass" in box.inner_text()
+    assert box.locator("a[href='/floor']").count() == 1
+    stems = sorted(c.split(".")[0] for c in page.evaluate(
+        "Object.keys(P.clips).filter(c => !isGenClip(c) && P.clips[c].proxy)"))
+    rows = box.locator(".keep")
+    assert rows.count() == len(stems) >= 1
+    first = rows.nth(0)
+    assert (first.get_attribute("title") or "").startswith(stems[0] + " 0:00")
+    n = page.locator("#tl .blk").count()
+    page.evaluate("tl.seek(0)")
+    first.hover()
+    first.locator("button.add").click()
+    assert page.locator("#tl .blk").count() == n + 1
+    added = page.evaluate("JSON.stringify((s => [s.clip, s.in, s.out, s.why])(segs[sel]))")
+    dur = page.evaluate(f"P.clips['{stems[0]}.MP4'].duration")
+    assert added == f'["{stems[0]}.MP4",0,{json.dumps(dur)},"whole clip"]', added
+    page.keyboard.press("Control+z")
+    assert page.locator("#tl .blk").count() == n
     # and there is nothing to cut from: no Cut from the bin to press (INTAKE M16: the
     # Ask tool's second button is gone; with no keeps the first cut is from the index)
     assert page.locator("#cutFromBin").count() == 0
