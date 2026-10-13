@@ -1684,6 +1684,20 @@ def test_an_empty_bin_offers_the_footage_and_says_where_to_keep_things(page):
     assert page.locator("#library .cand").count() >= 1
 
 
+def test_nothing_left_that_was_seen_links_to_where_more_is_looked_at(page):
+    """ROUGHCUT-GOAL.md dimension 8: the seen tab's empty state pointed at "the Project
+    panel", which INTAKE M16 removed — words naming a place that is not there. It links
+    to the footage screen, where the look's granularity and the index are."""
+    # something was looked at (the tab shows), nothing notable is left to offer
+    page.evaluate("P.events = []; Object.values(P.clips).forEach(c => {"
+                  " c.visual = {moments: [{start: 0, end: 1, what: 'a sky', kind: 'scenery',"
+                  " notable: false}]}; }); libTab = 'seen'; renderLibrary()")
+    box = page.locator("#library")
+    assert "nothing left that was seen" in box.inner_text()
+    assert "Project panel" not in box.inner_text()
+    assert box.locator("a[href='/open']").count() == 1
+
+
 BIN_NOTE = ("Build the cut from the editor's selects: every hero must appear, use the "
             "other keeps where they serve the story, and take nothing else unless it is "
             "needed to make a keep land.")

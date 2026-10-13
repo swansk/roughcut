@@ -1540,7 +1540,8 @@ function renderLibrary() {
   if (keepsTab()) { renderKept(lib); return; }
   $('#libHint').textContent = '';
   lib.innerHTML = rows.length ? '' : `<div class="hint">${libTab === 'seen'
-    ? 'nothing left that was seen — or look at more of the footage (Project panel)'
+    ? `nothing left that was seen — <a href="/open" style="color:var(--accent)">look at more of
+       the footage →</a>`
     : 'nothing left to add'}</div>`;
   rows.slice(0, 40).forEach((r) => {
     // The line people read is what is said or seen, not the ranking score that put it here.
