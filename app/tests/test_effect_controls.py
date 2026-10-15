@@ -167,13 +167,25 @@ def needs_webgl(page) -> None:
 
 def test_the_sections_are_premieres_and_the_head_is_timecode(page):
     select_first(page)
-    names = page.locator("#inspector .ec-sec .ec-twirl span").all_inner_texts()
+    names = page.locator("#inspector .ec-sec > .ec-sh .ec-twirl span").all_inner_texts()
     assert names == ["Motion", "Opacity", "Time Remapping", "Volume", "Lumetri Color",
                      "Designed effects"]
     rows = page.locator("#inspector .ec-row .ec-name").all_inner_texts()
-    for want in ("Position", "Scale", "Rotation", "Opacity", "Speed", "Level",
-                 "Temperature", "Tint", "Exposure", "Contrast", "Saturation"):
+    for want in ("Position", "Scale", "Rotation", "Opacity", "Speed", "Level"):
         assert want in rows, (want, rows)
+    # Lumetri Color › Basic Correction in Premiere's order: White Balance, Tone, Saturation,
+    # each a slider with its number
+    assert page.locator("#inspector [data-sec=lumetri] .ec-subtw span").inner_text() == "Basic Correction"
+    basic = page.locator("#inspector [data-sub=basic] .ec-lum .ec-name").all_inner_texts()
+    assert basic == ["Temperature", "Tint", "Exposure", "Contrast", "Highlights", "Shadows",
+                     "Whites", "Blacks", "Saturation"], basic
+    assert page.locator("#inspector [data-sub=basic] .ec-grp").all_inner_texts() == ["White Balance", "Tone"]
+    assert page.locator("#inspector [data-sub=basic] .ec-lum input[type=range]").count() == 9
+    assert page.locator("#inspector [data-sub=basic] .ec-lum .ec-v").count() == 9
+    # no name is cut short at 1440 (verdict 3 ruled out ellipsized leaves)
+    cut = page.locator("#inspector .ec-row .ec-name").evaluate_all(
+        "els => els.filter(e => e.offsetParent && e.scrollWidth > e.clientWidth + 1).map(e => e.textContent)")
+    assert cut == [], cut
     head = page.locator("#ecWhat").inner_text()
     assert head == "CLIP_A · 00:00:01:00 – 00:00:03:00", head
     # the values Premiere shows by default
@@ -218,6 +230,7 @@ def test_motion_opacity_volume_show_on_the_program_within_150_ms(page, key, valu
 
 @pytest.mark.parametrize("key,value", [
     ("temperature", 60), ("tint", -60), ("exposure", 0.5), ("contrast", 80), ("saturation", 10),
+    ("highlights", -80), ("shadows", 80), ("whites", -80), ("blacks", 80),
 ])
 def test_lumetri_changes_the_program_pixels_within_150_ms(page, key, value):
     select_first(page)
@@ -229,6 +242,56 @@ def test_lumetri_changes_the_program_pixels_within_150_ms(page, key, value):
     inp.press("Enter")
     ms = elapsed(page)
     assert ms < LIMIT_MS, f"{key}: {ms:.0f} ms"
+
+
+def test_highlights_and_shadows_move_the_preview_pixels(page):
+    """Lumetri's tone (wave 6): shadows lift the darks, highlights pull down the brights —
+    the drawn picture's mean moves the way each says, and back on reset."""
+    select_first(page)
+    needs_webgl(page)
+    page.wait_for_function("grade.lut != null", timeout=8000)
+    frame = "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))"
+    base = page.evaluate("grade.probe()")
+    mean = lambda p: sum(p) / 3  # noqa: E731
+    for key, value, sign in (("shadows", 100, 1), ("highlights", -100, -1),
+                             ("blacks", 100, 1), ("whites", -100, -1)):
+        assert page.evaluate(f"effects.set('{key}', {value})")
+        moved = page.evaluate("grade.probe()")
+        # the fixture is testsrc2: saturated bars, most channels at 0 or 255 where the tone
+        # weights vanish, so the mean moves a few levels, not tens
+        assert sign * (mean(moved) - mean(base)) > 2, (key, base, moved)
+        assert page.evaluate(f"effects.set('{key}', 0)")
+        page.evaluate(frame)                     # the canvas settles (hidden: nothing to grade)
+        back = page.evaluate("grade.probe()")
+        assert abs(mean(back) - mean(base)) < 0.6, (key, base, back)
+    # shadows move the darks more than the brights: the formula's weight 3x(1-x)^2
+    page.evaluate("effects.set('shadows', 100)")
+    lifted = page.evaluate("grade.probe()")
+    assert lifted[2] - base[2] > 0 and lifted[0] - base[0] > 0, (base, lifted)
+
+
+def test_a_lumetri_slider_drag_is_live_and_one_undo(page):
+    select_first(page)
+    needs_webgl(page)
+    sl = page.locator("#inspector .ec-sl[data-sl=shadows]")
+    sl.scroll_into_view_if_needed()
+    b = sl.bounding_box()
+    y = b["y"] + b["height"] / 2
+    page.mouse.move(b["x"] + b["width"] / 2, y)
+    page.mouse.down()
+    for f in (0.6, 0.7, 0.8, 0.9):
+        page.mouse.move(b["x"] + b["width"] * f, y)
+    live = page.evaluate("effects.value('shadows')")
+    assert live > 50, live                                         # live before the release
+    assert page.locator("#inspector .ec-v[data-k=shadows]").input_value() == f"{live:.1f}"
+    page.mouse.up()
+    assert page.locator("#undo").get_attribute("title").startswith("undo: shadows")
+    page.keyboard.press("Control+z")
+    assert page.evaluate("effects.value('shadows')") == 0
+    assert page.evaluate("segs[0].controls") is None
+    # the number beside it moves the slider
+    type_value(page, "highlights", -50)
+    assert page.locator("#inspector .ec-sl[data-sl=highlights]").input_value() == "-50"
 
 
 def test_warmer_shows_within_150_ms_not_after_the_save(page):
@@ -312,20 +375,23 @@ def test_values_survive_a_reload(live_server, project):
         sid = select_first(pg)
         for key, value in (("posx", 1100), ("posy", 500), ("scale", 80), ("rotation", -15),
                            ("opacity", 70), ("volume_db", -3), ("contrast", 25),
-                           ("saturation", 140), ("temperature", 30), ("exposure", 0.25)):
+                           ("saturation", 140), ("temperature", 30), ("exposure", 0.25),
+                           ("highlights", -30), ("shadows", 20), ("whites", 10), ("blacks", -10)):
             type_value(pg, key, value)
         wait_saved(pg)
         saved = api(pg, "/api/project")
         c = saved["segments"][0]["controls"]
         assert c == {"position": [pytest.approx(1100 / 1920, abs=1e-4), pytest.approx(500 / 1080, abs=1e-4)],
                      "scale": 80, "rotation": -15, "opacity": 70, "volume_db": -3,
-                     "contrast": 25, "saturation": 140}, c
+                     "contrast": 25, "saturation": 140, "highlights": -30, "shadows": 20,
+                     "whites": 10, "blacks": -10}, c
         assert "controls" not in saved["segments"][1]
         bal = saved["colour"]["shots"][sid]["balance"]
         assert bal["gain"][0] > bal["gain"][2] and bal["exposure"] == pytest.approx(2 ** 0.25, abs=1e-3)
         before = {k: pg.evaluate(f"effects.value('{k}')") for k in
                   ("posx", "posy", "scale", "rotation", "opacity", "volume_db", "contrast",
-                   "saturation", "temperature", "exposure")}
+                   "saturation", "temperature", "exposure", "highlights", "shadows", "whites",
+                   "blacks")}
         pg.reload()
         pg.wait_for_selector("#tl .blk")
         pg.wait_for_function("typeof C !== 'undefined' && C && C.shots && window.effects", timeout=8000)
@@ -343,7 +409,8 @@ def test_the_server_rejects_controls_it_does_not_know(live_server, project):
     import httpx
     _seed(project)
     seg = {"clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0, "id": "shot-a"}
-    for bad in ({"opacity": 500}, {"glow": 1}, {"position": [0.5]}, {"fx_off": [3]}):
+    for bad in ({"opacity": 500}, {"glow": 1}, {"position": [0.5]}, {"fx_off": [3]},
+                {"highlights": 150}, {"keys": {"opacity": [[1, 50], [0, 60]]}}):
         r = httpx.put(f"{live_server}/api/project", json={"segments": [{**seg, "controls": bad}]})
         assert r.status_code == 400, (bad, r.text)
     r = httpx.put(f"{live_server}/api/project",

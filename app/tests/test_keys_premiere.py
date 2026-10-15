@@ -3,7 +3,9 @@ Premiere's keyboard on the timeline, driven in a real browser.
 
 `,` inserts and `.` overwrites at the playhead from the source (the Source monitor's
 `window.rcSource`, else the bin's selected clip); ⌥← / ⌥→ and Ctrl+← / Ctrl+→ trim the
-selected edit by a frame; V C B N Y A switch the tools and each tool acts; ⇧Del ripple
+selected edit by a frame; V C B N Y A switch the tools and each tool acts (C only picks
+the razor, as in Premiere); Sequence › Add / Delete Track are one undo step each and a V3
+clip drags; ⇧Del ripple
 deletes; I / O mark the sequence; M adds a marker, ⇧M / Ctrl+⇧M walk them; the ruler,
 the readout and the end mark read HH:MM:SS:FF at the sequence rate; the plain wheel
 scrolls and Alt / Ctrl + wheel zoom; the map says Ctrl, not ⌘, off a Mac. Every
@@ -246,24 +248,124 @@ def test_v_c_b_n_y_a_switch_the_tool_and_the_button_says_which(page):
     assert page.locator("#tl .tl-toolmenu").is_hidden()
 
 
-def test_c_cuts_at_the_playhead_and_the_razor_cuts_where_clicked(page):
+def test_c_picks_the_razor_only_and_a_click_with_it_cuts(page):
+    """Premiere's C (verdict 5, punch 5): it picks the razor and cuts nothing — the
+    segment count holds with the playhead inside a shot. A click with the razor cuts
+    the block there; Ctrl+K (Add Edit) cuts at the playhead without changing the tool."""
     page.evaluate("tl.seek(1.0)")
-    page.keyboard.press("c")                         # the default action C always had
+    page.keyboard.press("c")
     assert page.evaluate("tl.state.tool") == "razor"
-    assert ranges(page)[:2] == [["CLIP_A.MP4", 1.0, 2.0], ["CLIP_A.MP4", 2.0, 3.0]]
+    assert ranges(page) == [["CLIP_A.MP4", 1.0, 3.0], ["CLIP_B.MP4", 0.0, 2.0]], \
+        "C cut the film: Premiere's C only picks the razor"
+    assert "tl-tool-razor" in page.locator("#tl").get_attribute("class")
     # a click on CLIP_B's shot cuts it at the click
-    blk = page.locator("#tl .blk").nth(2)
+    blk = page.locator("#tl .blk").nth(1)
     x, y = centre(page, blk)
     page.mouse.click(x, y)
-    assert len(ranges(page)) == 4
-    a, b = ranges(page)[2:]
+    assert len(ranges(page)) == 3
+    a, b = ranges(page)[1:]
     assert a[0] == b[0] == "CLIP_B.MP4" and a[2] == b[1] and 0.6 < a[2] < 1.4
     assert undo_title(page).startswith("undo: split")
     # Ctrl+K cuts at the playhead without changing the tool
     page.keyboard.press("v")
     page.evaluate("tl.select([]); tl.seek(0.5)")
     page.keyboard.press("Control+k")
-    assert len(ranges(page)) == 5 and page.evaluate("tl.state.tool") == "select"
+    assert len(ranges(page)) == 4 and page.evaluate("tl.state.tool") == "select"
+    assert ranges(page)[0] == ["CLIP_A.MP4", 1.0, 1.5]
+
+
+# ------------------------------------------------------------------ tracks on the undo stack
+
+def _disk(project) -> dict:
+    return json.loads(Path(project["edl"]).read_text(encoding="utf-8"))
+
+
+def _wait_disk(project, pred, timeout=8.0) -> dict:
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            d = _disk(project)
+            if pred(d):
+                return d
+        except ValueError:
+            pass
+        time.sleep(0.1)
+    raise AssertionError(f"the EDL on disk never matched: {_disk(project)}")
+
+
+def _menu(page, cmd: str) -> None:
+    page.locator("#menubar .menu[data-menu=sequence] .mtop").click()
+    page.locator(f"#menubar button[data-cmd='{cmd}']").click()
+
+
+def test_ctrl_z_after_add_video_track_removes_v3(page, project):
+    _menu(page, "seq:addv")
+    page.wait_for_selector("#tl .tl-thead[data-track=V3]")
+    assert undo_title(page).startswith("undo: add V3")
+    _wait_disk(project, lambda d: "V3" in (d.get("tracks") or {}))
+    page.keyboard.press("Control+z")
+    page.wait_for_function("!document.querySelector('#tl .tl-thead[data-track=V3]')", timeout=3000)
+    assert page.locator("#tl .tl-track[data-track=V3]").count() == 0
+    assert "V3" not in page.evaluate("tl.trackNames()")
+    assert ranges(page) == [["CLIP_A.MP4", 1.0, 3.0], ["CLIP_B.MP4", 0.0, 2.0]], "the cut is untouched"
+    _wait_disk(project, lambda d: "V3" not in (d.get("tracks") or {}))
+    page.keyboard.press("Control+Shift+z")           # and redo brings it back
+    page.wait_for_selector("#tl .tl-thead[data-track=V3]")
+    _wait_disk(project, lambda d: "V3" in (d.get("tracks") or {}))
+
+
+def test_delete_track_takes_its_clip_and_ctrl_z_restores_both(page, project):
+    """Premiere's Delete Tracks: no refusal, the track's clips go with it, in one undo
+    step; Ctrl+Z brings back the track and the clip (and its header settings)."""
+    _menu(page, "seq:addv")
+    page.wait_for_selector("#tl .tl-thead[data-track=V3]")
+    page.evaluate("tl.addOverlay({clip: 'CLIP_C.MP4', in: 1, out: 2}, 0.5, 'V3')")
+    page.evaluate("tl.setTrack('V3', 'eye', false)")   # a header toggle, not an edit
+    _wait_disk(project, lambda d: any(o.get("track") == "V3" for o in d.get("overlays") or []))
+    _menu(page, "seq:delv")
+    page.wait_for_function("!document.querySelector('#tl .tl-thead[data-track=V3]')", timeout=3000)
+    assert page.evaluate("tl.overlays().length") == 0
+    assert undo_title(page).startswith("undo: delete V3")
+    toast(page, "deleted V3 and its 1 clip")
+    _wait_disk(project, lambda d: "V3" not in (d.get("tracks") or {}) and not d.get("overlays"))
+    page.keyboard.press("Control+z")
+    page.wait_for_selector("#tl .tl-track[data-track=V3] .oblk")
+    o = page.evaluate("tl.overlays()")
+    assert len(o) == 1 and o[0]["track"] == "V3" and o[0]["at"] == 0.5 and o[0]["clip"] == "CLIP_C.MP4"
+    assert page.evaluate("tl.tracks().V3.eye") is False, "the header comes back as it was"
+    d = _wait_disk(project, lambda d: "V3" in (d.get("tracks") or {})
+                   and any(x.get("track") == "V3" for x in d.get("overlays") or []))
+    assert d["tracks"]["V3"].get("eye") is False
+    page.keyboard.press("Control+z")                 # the clip's laying, then the track's adding
+    page.keyboard.press("Control+z")
+    page.wait_for_function("!document.querySelector('#tl .tl-thead[data-track=V3]')", timeout=3000)
+
+
+def test_a_v3_clip_drags_two_seconds_and_snaps_to_a_cut(page, project):
+    _menu(page, "seq:addv")
+    page.wait_for_selector("#tl .tl-thead[data-track=V3]")
+    page.evaluate("tl.addOverlay({clip: 'CLIP_C.MP4', in: 1, out: 2}, 0.5, 'V3'); tl.seek(0)")
+    blk = page.locator("#tl .tl-track[data-track=V3] .oblk")
+    x, y = centre(page, blk)
+    z = page.evaluate("tl.state.zoom")
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + 2.0 * z, y, steps=8)
+    page.mouse.up()
+    assert page.evaluate("tl.overlays()[0].at") == pytest.approx(2.5, abs=1 / 24 + 1e-6)
+    assert undo_title(page).startswith("undo: move V3")
+    d = _wait_disk(project, lambda d: any(o.get("track") == "V3" and abs(o["at"] - 2.5) < 0.05
+                                          for o in d.get("overlays") or []))
+    assert d["overlays"][0]["in"] == 1 and d["overlays"][0]["out"] == 2, "a move keeps the range"
+    # dropped 3 px from the cut at 2.0 s, its start snaps onto it
+    x, y = centre(page, blk)
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x - 0.5 * z + 3, y, steps=8)
+    page.mouse.up()
+    assert page.evaluate("tl.overlays()[0].at") == 2.0
+    page.keyboard.press("Control+z")
+    assert page.evaluate("tl.overlays()[0].at") == pytest.approx(2.5, abs=1 / 24 + 1e-6)
 
 
 def test_a_selects_forward_and_shift_delete_ripple_deletes_it(page):

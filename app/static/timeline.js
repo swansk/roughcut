@@ -170,8 +170,14 @@
  *   tl.setAudioOffset(id, s)    An unlinked shot's sound against its picture, on frames;
  *                               one `move audio` entry.
  *   tl.overlays() overlayById(id) addOverlay(seg, at) moveOverlay(id, at) removeOverlay(id)
- *   tl.selectOverlay(id|null)   V2. Each edit is one undo entry (V2 rides the snapshot).
- *                               tl.state.osel is the V2 clip selected.
+ *   tl.trimOverlay(id, 'in'|'out', filmT)
+ *   tl.selectOverlay(id|null)   V2, V3…, A3…. Each edit is one undo entry (they ride the
+ *                               snapshot). tl.state.osel is the clip selected. A clip on
+ *                               V3… / A3… drags (snapping) and its edges trim here; V2's
+ *                               drag is timeline-lanes.js's.
+ *   tl.addTrack(kind) tl.deleteTrack(kind|name)   Sequence › Add / Delete Track: one undo
+ *                               entry each (the added tracks' names ride the snapshot);
+ *                               a deleted track's clips go in the same entry.
  *   tl.layoutTracks()           Size every row from the view's height: V2, V1, the lanes'
  *                               ghost (`tl.el.lanes.ghost`), A1, A2, the bin outlines.
  *   tl.saveSeq()                PUT the headers, V2, markers and In / Out now (debounced on
@@ -973,7 +979,7 @@
       b.title = `${name} · ${stem(o.clip)} ${fmt(o.in)}–${fmt(o.out)} at ${tc(o.at)}–${tc(o.at + d)}`
         + (o.sound ? ' — its sound, mixed with A1' : name === 'V2' ? ' — composited over V1, picture only'
           : ' — composited over the tracks below it, picture only') + (says ? `\n“${says}”` : '')
-        + (name === 'V2' ? '\ndrag to move · Delete removes it' : '\nDelete removes it');
+        + (name === 'V2' ? '\ndrag to move · Delete removes it' : '\ndrag to move, an edge to trim · Delete removes it');
       seen.add(o.id);
     }
     for (const [id, b] of oblocks) {
@@ -998,6 +1004,11 @@
       row.addEventListener('pointermove', onLaneMove);
       row.addEventListener('pointerup', onTrackUp);
       row.addEventListener('pointercancel', () => { down = null; });
+      // a clip on V3… / A3… drags like V2's, and its edges trim (wave 6, KEYS2)
+      row.addEventListener('pointerdown', onXDown, true);
+      row.addEventListener('pointermove', onXMove, true);
+      row.addEventListener('pointerup', (e) => endXDrag(e, true), true);
+      row.addEventListener('pointercancel', (e) => endXDrag(e, false), true);
       el.tracks[n] = row;
       el.lanes[n] = row;
       buildHead(box, n);
@@ -1011,22 +1022,24 @@
     }
   }
 
-  /* Sequence › Add Track: the next free V3…V9 (kind 'video') or A3…A9 ('audio'). */
+  /* Sequence › Add Track: the next free V3…V9 (kind 'video') or A3…A9 ('audio'). One
+   * undo step (wave 6, KEYS2): the added tracks ride the undo entry (`xtracks`). */
   function addTrack(kind) {
     const pool = kind === 'audio' ? EXTRA_A : EXTRA_V;
     const name = pool.find((n) => !state.tracks[n]);
     if (!name) { toast(`no more ${kind} tracks — ${pool[pool.length - 1]} is the last`); return null; }
+    const own = begin(`add ${name}`);
+    delete retired[name];
     state.tracks = { ...state.tracks, [name]: extraDefault(name) };
-    ensureTrackRows();
-    render();
-    scheduleSeqSave();
-    emit('tracks', { tracks: tracks() });
+    tracksChanged();
+    if (own) commit();
     toast(`added ${name}`);
     return name;
   }
 
-  /* Sequence › Delete Track: the highest added track of that kind (or `name`), once it is
-   * empty — its clips go first, each one undoable. V1, V2, A1 and A2 always stay. */
+  /* Sequence › Delete Track: the highest added track of that kind (or `name`), and the
+   * clips on it with it — one undo step, as Premiere's Delete Tracks is (no refusal, no
+   * confirm: ⌘Z brings the track and its clips back). V1, V2, A1 and A2 always stay. */
   function deleteTrack(kindOrName) {
     const name = isExtra(kindOrName) ? kindOrName
       : (kindOrName === 'audio' ? EXTRA_A : EXTRA_V).filter((n) => state.tracks[n]).pop();
@@ -1034,18 +1047,48 @@
       toast(`no added ${kindOrName === 'audio' ? 'audio' : 'video'} track to delete — V1, V2, A1 and A2 always stay`);
       return false;
     }
+    if (trackState(name).lock) { refuseLocked(name); return false; }
     const n = state.overlays.filter((o) => o.track === name).length
       + state.audio.filter((c) => c.track === name).length;
-    if (n) { toast(`${name} holds ${n} clip${n > 1 ? 's' : ''} — remove ${n > 1 ? 'them' : 'it'} first`); return false; }
+    const own = begin(`delete ${name}`);
+    state.overlays = state.overlays.filter((o) => o.track !== name);
+    state.audio = state.audio.filter((c) => c.track !== name);
+    if (state.osel != null && !overlayById(state.osel)) state.osel = null;
     const next = { ...state.tracks };
+    retired[name] = next[name];
     delete next[name];
     state.tracks = next;
+    tracksChanged();
+    if (own) commit();
+    toast(`deleted ${name}${n ? ` and its ${n} clip${n > 1 ? 's' : ''}` : ''} — ${keyLabel('⌘Z')} brings it back`);
+    return true;
+  }
+
+  /* After the set of added tracks changed (an add, a delete, an undo of either). */
+  function tracksChanged() {
     ensureTrackRows();
     render();
     applyMonitorAudio();
     scheduleSeqSave();
     emit('tracks', { tracks: tracks() });
-    toast(`deleted ${name}`);
+  }
+
+  /* An undo entry's added tracks: the names in it, and only those. A track brought back
+   * keeps the header settings it had when it went (`retired`) — a toggle is not an edit. */
+  const retired = {};
+  function setExtraTracks(names) {
+    const want = new Set(names);
+    const next = { ...state.tracks };
+    let changed = false;
+    for (const n of [...EXTRA_V, ...EXTRA_A]) {
+      if (want.has(n) && !next[n]) { next[n] = retired[n] || extraDefault(n); delete retired[n]; changed = true; }
+      else if (!want.has(n) && next[n]) { retired[n] = next[n]; delete next[n]; changed = true; }
+    }
+    if (!changed) return false;
+    state.tracks = next;
+    ensureTrackRows();
+    applyMonitorAudio();
+    emit('tracks', { tracks: tracks() });
     return true;
   }
 
@@ -1353,15 +1396,18 @@
     }, track);
   }
 
+  /* Any track's clip — V2, V3…, A3… — to a film time; one `move <track>` entry. */
   function moveOverlay(id, atFilmTime) {
     const o = overlayById(id);
     if (!o) return false;
-    const at = onGrid(atFilmTime);
+    const at = Math.max(0, onGrid(atFilmTime));
     if (at === o.at) return false;
-    return !!overlayMutate('move V2', () => {
+    const track = o.track || 'V2';
+    return !!overlayMutate(`move ${track}`, () => {
       state.overlays = state.overlays.map((x) => (x.id === id ? { ...x, at } : x));
+      state.audio = state.audio.map((x) => (x.id === id ? { ...x, at } : x));
       return true;
-    });
+    }, track);
   }
 
   function removeOverlay(id) {
@@ -1373,6 +1419,123 @@
       if (state.osel === id) state.osel = null;
       return true;
     }, o.track || 'V2');
+  }
+
+  /* A clip on any track to new edges: `edge` 'in' or 'out' goes to film time `filmT`
+   * (the other edge stays put in the film); one `trim <track>` entry. Clamped to the
+   * clip's media and the shortest shot. */
+  function trimOverlay(id, edge, filmT) {
+    const o = overlayById(id);
+    if (!o) return false;
+    const spd = speedOf(o), c = clipOf(o.clip);
+    const cd = c && c.duration ? c.duration : Infinity;
+    let a = o.in, b = o.out, at = o.at;
+    if (edge === 'in') {
+      const t = Math.max(0, onGrid(filmT));
+      a = r4(clamp(o.in + (t - o.at) * spd, 0, o.out - MIN_LEN * spd));
+      at = onGrid(o.at + (a - o.in) / spd);
+    } else {
+      b = r4(clamp(o.in + (onGrid(filmT) - o.at) * spd, o.in + MIN_LEN * spd, cd));
+    }
+    if (a === o.in && b === o.out && at === o.at) return false;
+    const track = o.track || 'V2';
+    const fix = (x) => (x.id === id ? { ...x, in: a, out: b, at } : x);
+    return !!overlayMutate(`trim ${track}`, () => {
+      state.overlays = state.overlays.map(fix);
+      state.audio = state.audio.map(fix);
+      return true;
+    }, track);
+  }
+
+  /* V3… and A3…: a press on a clip drags it along its track, snapping its start or its
+   * end to a cut, the playhead or another track's clip edge within 8 px (V2's own drag
+   * is timeline-lanes.js's); a press within 6 px of its edge trims that edge. */
+  const XEDGE = 6, XCLICK = 4;
+  let xdrag = null;
+  function xMode(b, x) {
+    const r = b.getBoundingClientRect();
+    if (r.width < 4 * XEDGE) return 'move';
+    if (x - r.left <= XEDGE) return 'in';
+    if (r.right - x <= XEDGE) return 'out';
+    return 'move';
+  }
+
+  function xSnaps(skip) {
+    const near = [state.playhead];
+    let t = 0;
+    for (const s of segs()) { near.push(t); t += dur(s); }
+    near.push(t);
+    for (const o of [...state.overlays, ...state.audio]) {
+      if (o.id !== skip) near.push(o.at, o.at + dur(o));
+    }
+    return near;
+  }
+
+  function snapX(t, near) {
+    for (const c of near) if (Math.abs(c - t) * state.zoom < XCLICK * 2) return c;
+    return t;
+  }
+
+  function onXDown(e) {
+    if (e.button !== 0 || xdrag) return;
+    const b = e.target.closest('.oblk');
+    if (!b) return;
+    const o = overlayById(b.dataset.id);
+    if (!o) return;
+    xdrag = { id: o.id, row: e.currentTarget, x: e.clientX, y: e.clientY, pid: e.pointerId, live: false,
+              mode: xMode(b, e.clientX), at0: o.at, end0: o.at + dur(o), t: null, block: b };
+  }
+
+  function onXMove(e) {
+    const d = xdrag;
+    if (!d) {                                   // the cursor says what a press would do
+      const b = e.target.closest && e.target.closest('.oblk');
+      if (b) b.style.cursor = xMode(b, e.clientX) === 'move' ? '' : 'ew-resize';
+      return;
+    }
+    if (e.pointerId !== d.pid) return;
+    if (!d.live) {
+      if (Math.abs(e.clientX - d.x) <= XCLICK && Math.abs(e.clientY - d.y) <= XCLICK) return;
+      d.live = true;
+      try { d.row.setPointerCapture(d.pid); } catch (err) { /* not pointer-capable */ }
+      selectOverlay(d.id);
+      d.block = oblocks.get(d.id) || d.block;
+      d.block.classList.add('dragging');
+    }
+    e.stopPropagation();
+    const dt = (e.clientX - d.x) / state.zoom;
+    const near = xSnaps(d.id);
+    if (d.mode === 'move') {
+      const len = d.end0 - d.at0;
+      let at = Math.max(0, d.at0 + dt);
+      const s1 = snapX(at, near);
+      if (s1 !== at) at = s1;
+      else { const s2 = snapX(at + len, near); if (s2 !== at + len) at = s2 - len; }
+      d.t = Math.max(0, at);
+      d.block.style.left = `${timeToX(d.t)}px`;
+    } else if (d.mode === 'in') {
+      d.t = clamp(snapX(Math.max(0, d.at0 + dt), near), 0, d.end0 - MIN_LEN);
+      d.block.style.left = `${timeToX(d.t)}px`;
+      d.block.style.width = `${Math.max(3, (d.end0 - d.t) * state.zoom)}px`;
+    } else {
+      d.t = Math.max(d.at0 + MIN_LEN, snapX(d.end0 + dt, near));
+      d.block.style.width = `${Math.max(3, (d.t - d.at0) * state.zoom)}px`;
+    }
+  }
+
+  function endXDrag(e, apply) {
+    const d = xdrag;
+    if (!d || (e && e.pointerId !== d.pid)) return;
+    xdrag = null;
+    if (!d.live) return;                        // a click: onTrackUp selects it
+    if (e) { e.stopPropagation(); e.preventDefault(); }
+    try { d.row.releasePointerCapture(d.pid); } catch (err) { /* already released */ }
+    d.block.classList.remove('dragging');
+    if (apply && d.t != null) {
+      if (d.mode === 'move') moveOverlay(d.id, d.t);
+      else trimOverlay(d.id, d.mode, d.t);
+    }
+    renderV2();
   }
 
   function selectOverlay(id) {
@@ -1782,9 +1945,11 @@
    * colour block, so a warmer / cooler nudge is one ⌘Z (INTAKE M16 I16.4). */
   /* V2's clips ride the same entry: laying, moving or removing one is one ⌘Z. The
    * track headers' toggles do not — as in Premiere, a mute or a lock is not an edit. */
+  /* The added tracks' names ride it too (wave 6, KEYS2): Add / Delete Track is one ⌘Z. */
   const snapshot = () => JSON.stringify(hooks && hooks.extra
-    ? { segs: segs(), extra: hooks.extra(), overlays: state.overlays, audio: state.audio }
-    : { segs: segs(), overlays: state.overlays, audio: state.audio });
+    ? { segs: segs(), extra: hooks.extra(), overlays: state.overlays, audio: state.audio,
+        xtracks: trackNames().filter(isExtra) }
+    : { segs: segs(), overlays: state.overlays, audio: state.audio, xtracks: trackNames().filter(isExtra) });
 
   function restore(json) {
     const v = JSON.parse(json);
@@ -1793,6 +1958,7 @@
       if (hooks.setExtra && 'extra' in v) hooks.setExtra(v.extra);
       if (Array.isArray(v.overlays)) state.overlays = v.overlays;
       if (Array.isArray(v.audio)) state.audio = v.audio;
+      if (Array.isArray(v.xtracks)) setExtraTracks(v.xtracks);
     } else {
       hooks.setSegs(v);
     }
@@ -2503,7 +2669,7 @@
     trackNames, addTrack, deleteTrack, placeAt, isGap,
     audioClips: () => state.audio.map((c) => ({ ...c })),
     overlays: () => state.overlays.map((o) => ({ ...o })), overlayById,
-    addOverlay, moveOverlay, removeOverlay, selectOverlay, layoutTracks, saveSeq,
+    addOverlay, moveOverlay, trimOverlay, removeOverlay, selectOverlay, layoutTracks, saveSeq,
     get trackTops() { return { ...(state.trackTops || {}) }; },
     fps, setFps, frame, tc, keyLabel, isMac: IS_MAC, gridRate, onGrid, isOnGrid,
     TOOLS, setTool, get tool() { return state.tool; },
