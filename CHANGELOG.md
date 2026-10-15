@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Redesign verdict 1 (baseline): FAIL.** `judge/verdict-1.md`: scores 1-4 of 10 across the twelve dimensions; the three biggest gaps to Premiere are the layout (one monitor, one video track, no Source monitor), no picture until proxies exist, and a first pass with no home or re-run. Its punch list drives wave 1.
 - **The redesign loop: REDESIGN-GOAL.md, judge/JUDGE.md, judge/LOOP.md (branch `redesign/2026-10-14`).** Karl tried the closed-loop build on 2026-10-14: *"it is not clear how to re run the first pass, and this is not something that I feel meets 'premier pro quality'. The system might have to do a complete redesign."* The new bar: a Premiere Pro user opens Roughcut, understands it at once and would choose to cut in it, with the AI first pass as a visible, re-runnable step inside the editor. Twelve dimensions (first five minutes, Premiere parity of the editing core, quality of feel, the AI part as reviewable edits, a scripted end-to-end journey), section S standing decisions and section K for Karl's notes. A fresh, harsh judge agent scores a frozen rev every ~30 minutes by driving a snapshot server on port 8781 with Playwright; two consecutive PASS verdicts close the loop. ROUGHCUT-GOAL.md is marked superseded and carries Karl's note. The pre-commit hook is executable again.
 
 ### Docs
