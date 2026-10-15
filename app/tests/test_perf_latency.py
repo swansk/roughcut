@@ -490,6 +490,10 @@ def test_latency_under_load(perf_record, live_server):
     assert play["cuts"] >= 2, f"the monitor did not cut to shot 2 and then shot 3: {play}"
     assert facts["grade_on"], "the grade canvas was off: the fixture no longer exercises it"
     assert play["screen_bad_n"] == 0, f"black or a wait line on screen during play: {play}"
+    # both cuts went to the buffer parked for them (three buffers: the file after the 0.4 s
+    # shot was open and parked before it played), whatever the box's load did to the frames
+    assert all(c.get("parked") for c in play["cut_log"]), play["cut_log"]
+    assert len({c.get("buf") for c in play["cut_log"]}) == 2, play["cut_log"]
     assert play["longest_gap_ms"] <= GAP_LIMIT_MS, f"frame gap across the two cuts: {play}"
     # Premiere's Playback Resolution: smaller while playing, the monitor's full size parked
     if play.get("canvas_w_play") is not None:
@@ -627,3 +631,50 @@ def perf_record(request, tmp_path, monkeypatch):
             if k in facts:
                 rec[k] = round(facts[k], 2) if isinstance(facts[k], float) else facts[k]
     _write_perf_json(rec)
+
+
+def test_three_buffers_park_both_files_after_a_short_shot_and_a_better_proxy_goes_in(live_server):
+    """Wave 8 (PLAY3): parked on shot 1, the next shot (0.4 s, file B) and the one after it
+    (file C) each have a buffer of their own, neither the live one. And (after RANGEPROXY)
+    a buffer that opened its clip as the 360p preview is re-opened, at the same clip time,
+    once /media/status says the clip serves better (preview < range < proxy), at a park."""
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(live_server)
+            page.wait_for_function("player.vids.length === 3 && segs.length === 4", timeout=15000)
+            page.evaluate("cueAt(0, segs[0].in + 0.5)")
+            page.wait_for_function(
+                "[1, 2].every((k) => { const b = upcomingVideo(k); return b && b.readyState >= 2 && !b.seeking; })",
+                timeout=20000)
+            got = page.evaluate("""() => ({
+                live: liveVideo().id, one: upcomingVideo(1).id, two: upcomingVideo(2).id,
+                srcs: [1, 2].map((k) => upcomingVideo(k).dataset.src),
+                ts: [1, 2].map((k) => upcomingVideo(k).currentTime) })""")
+            assert len({got["live"], got["one"], got["two"]}) == 3, got
+            assert got["srcs"] == ["/media/proxy/P60_B.mp4", "/media/proxy/P60_C.mp4"], got
+            # parked a little ahead of their in-points (B 1.0, C 5.0), not on the file's top
+            assert 0.6 <= got["ts"][0] <= 1.0 and 4.6 <= got["ts"][1] <= 5.0, got
+
+            # the live buffer opened its clip as the preview; the server now has the proxy
+            page.route("**/media/status/**", lambda route: route.fulfill(
+                status=200, content_type="application/json",
+                body='{"serves": "proxy", "ready": true, "url": "/media/proxy/P60_A.mp4"}'))
+            before = page.evaluate("""() => { const v = liveVideo(); v._kind = 'preview'; v._freshAt = 0;
+                window.__loads = 0; v.addEventListener('loadstart', () => { window.__loads++; });
+                return v.currentTime; }""")
+            page.evaluate("pauseCut()")
+            page.wait_for_function("window.__loads >= 1 && liveVideo()._kind === 'proxy'"
+                                   " && liveVideo().readyState >= 2 && !liveVideo().seeking", timeout=15000)
+            after = page.evaluate("liveVideo().currentTime")
+            assert abs(after - before) < 0.05, (before, after)
+            # the best kind already in: a later park asks and leaves it alone
+            page.evaluate("liveVideo()._freshAt = 0; pauseCut()")
+            page.wait_for_timeout(600)
+            assert page.evaluate("window.__loads") == 1
+            assert errors == [], errors
+        finally:
+            browser.close()

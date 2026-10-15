@@ -1246,6 +1246,7 @@ function arm(v, seg, at = seg.in) {
     if (v._waitStop) { v._waitStop(); v._waitStop = null; }
     v.src = src ? `${src}#t=${Math.max(0, at).toFixed(2)}` : src;
     v.load();
+    noteKind(v, src);
   }
   if (v._roll) {                    // whatever it was prerolling, it is parked now
     v._roll = null;
@@ -1264,6 +1265,48 @@ function arm(v, seg, at = seg.in) {
   };
   if (v.readyState >= 1) park();
   else v.addEventListener('loadedmetadata', park, { once: true });
+}
+
+/* What a buffer's /media/proxy URL was served as when it loaded it (wave 8, after lane
+ * RANGEPROXY): the 360p preview, the 1280 range proxy of the cut's shots, or the whole
+ * proxy (or a playable original). The URL never changes — the server redirects it — so a
+ * buffer that opened the preview kept it for as long as it held that clip, however many
+ * shots of the clip it played. `freshen(v)` re-opens it at the same clip time once the
+ * server serves a better kind, only at a park: never the buffer on screen while playing,
+ * never one prerolling. */
+const KIND_RANK = { preview: 0, range: 1, proxy: 2, original: 2 };
+const statusUrl = (src) => src.replace('/media/proxy/', '/media/status/');
+
+async function mediaKind(src) {
+  try {
+    const r = await fetch(statusUrl(src), { cache: 'no-store' });
+    return r.ok ? ((await r.json()) || {}).serves || null : null;
+  } catch (e) { return null; }
+}
+
+function noteKind(v, src) {
+  v._kind = null;
+  if (!src || !src.startsWith('/media/proxy/')) return;
+  mediaKind(src).then((k) => { if (v.dataset.src === src && v._kind == null) v._kind = k; });
+}
+
+async function freshen(v) {
+  const src = v && v.dataset.src;
+  if (!src || !src.startsWith('/media/proxy/') || !(v._kind in KIND_RANK) || KIND_RANK[v._kind] >= 2) return;
+  const now = performance.now();
+  if (v._freshAt && now - v._freshAt < 3000) return;     // asked a moment ago
+  v._freshAt = now;
+  const k = await mediaKind(src);
+  if (!(k in KIND_RANK) || KIND_RANK[k] <= KIND_RANK[v._kind] || v.dataset.src !== src) return;
+  if (v._roll || v.seeking || (player.playing && v === liveVideo())) return;   // not a park
+  const t = v.currentTime;
+  v._kind = k;
+  v.src = `${src}#t=${Math.max(0, t).toFixed(2)}`;
+  v.load();
+  const park = () => {
+    if (v.dataset.src === src && Math.abs(v.currentTime - t) > 0.002) { v.currentTime = t; seekTimed(v); }
+  };
+  v.addEventListener('loadedmetadata', park, { once: true });
 }
 
 /* How long a park takes on this box (seek issued → `seeked`), learned like roll.lat:
@@ -1374,6 +1417,7 @@ function mediaWaitFor(v) {
     v.dataset.src = src;
     v.src = src;
     v.load();
+    noteKind(v, src);
   }, (why) => { const el = $('#monWait span'); if (el && v === liveVideo()) el.textContent = why; });
 }
 
@@ -1466,6 +1510,7 @@ function cueAt(i, clipT) {
   player.idx = i;
   sel = i;
   arm(v, seg, at);
+  freshen(v);
   paint();
   showWhenReady(g, (b) => b.readyState >= 2 && !b.seeking, () => {
     if (g === player.gen) armUpcoming(i, g);
@@ -1481,6 +1526,7 @@ function pauseCut() {
   player.vids.forEach((v) => v.pause());
   if (bed.el) bed.el.pause();
   player.playing = false;
+  freshen(liveVideo());               // parked: a better kind of its media can go in now
   cancelAnimationFrame(player.raf);
   progPause();
   screenMsg('');       // callers that have something to say set it after this
@@ -1766,10 +1812,12 @@ function armNext(v, seg, room) {
       && lead <= Math.max(seg.in - at, PREROLL_S * speedOf(seg)) / speedOf(seg) + 1e-3) {
     setShotRate(v, seg);
     v._for = seg;
+    freshen(v);
     return;
   }
   arm(v, seg, at);
   v._for = seg;
+  freshen(v);
 }
 
 /* The buffer for a shot of `seg.clip`: the live one, unless only another has that clip
