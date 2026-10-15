@@ -129,3 +129,17 @@ next judge runs, and the next judge rules it honest or lenient.
 - 2026-10-15 (wave 1, lane WORKSPACE, after merging lane KEYS): `test_budget.py` words in view on
   `/` 94 → 105. Measured 96 once the timeline gained its timecode readout column and HH:MM:SS:FF
   ruler labels (lane KEYS) and the monitors switched to timecode; +~10 % as before.
+- 2026-10-15 (wave 2, lane FINISH; verdict 2 ruled the dropped 425 px floor lenient and asked
+  for a replacement): the Program monitor has a floor again, sized for the five-panel top row.
+  In the **default layout at 1440×900 the Program picture is ≥ 380 px wide and its black
+  letterbox is ≤ 30 % of its room's height**; persisted (dragged) sizes still win. Checked by
+  `test_workspace.py::test_the_program_picture_fills_its_panel_at_1440x900` and by
+  `test_budget.py::test_the_monitor_is_centred_and_as_big_as_the_strip_leaves`. Measured
+  before: 389×219 in a 389×447 room (51 % letterbox; the judge saw 389×219 in a 511 px panel).
+  After (the default top row is 0.42 of the height, Project 0.195 and Effect Controls 0.255
+  of the width, Source = Program): 386×217 in a 386×294 room at 1440×900 (26 %), 517×291 in
+  517×369 at 1920×1080 (21 %). Also new in the same test file, no threshold loosened: no
+  overflowing chrome under `header`, `.ws-tab(s)`, `.plist td/th` or the monitor transports
+  at 1440×900 and 1920×1080 (the app bar may ellipsize a job's name or Next's sentence only
+  with a hover title), no link in the browser's blue or underline on `/`, and every `/open`
+  card has a loaded picture within 10 s of opening a fresh work dir.

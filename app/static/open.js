@@ -196,20 +196,19 @@ function badgeOf(c) {
   return null;
 }
 
-// The picture from the middle of the clip: a first frame is often the lens cap or the
-// pocket (Killington's CLIP_12 is black at 0 s). The poster URL carries its own time.
-function midPoster(c) {
-  const t = ((c.duration || 0) / 2).toFixed(2);
-  const url = String(c.poster || '');
-  return /[?&]t=/.test(url) ? url.replace(/([?&]t=)[^&]*/, `$1${t}`) : `${url}${url.includes('?') ? '&' : '?'}t=${t}`;
+// The card's picture is the Project panel's: the same /media/poster frame at the same
+// URL (verdict 2, punch 9: /open showed blank stripes for 6 min while the board's bin had
+// every poster). The server builds that frame for every clip first, from the proxy or,
+// before there is one, from the original; one URL is one request, cached, for both.
+function posterOf(c) {
+  return String(c.poster || `/media/poster/${encodeURIComponent(c.stem)}.jpg?t=0.00`);
 }
 
 function cardHtml(c) {
   const word = journalWord(c.journal, O.clips && O.clips.paused_priced);
   const badge = badgeOf(c);
-  const picture = c.proxy
-    ? `<img src="${escapeHtml(midPoster(c))}" loading="lazy" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'), {className: 'ph'}))">`
-    : '<div class="ph"></div>';
+  const picture = word === 'missing' ? '<div class="ph"></div>'
+    : `<img src="${escapeHtml(posterOf(c))}" alt="" decoding="async" onerror="this.replaceWith(Object.assign(document.createElement('div'), {className: 'ph'}))">`;
   const answer = c.junk === 'proposed'
     ? '<button type="button" data-junk="junk" title="junk: out of the Ask, Find and the bin; the index skips its look">Junk</button>'
       + '<button type="button" data-junk="keep" title="not junk: keep it everywhere">Keep</button>'
@@ -1165,7 +1164,7 @@ async function load() {
   }
 }
 
-window.sheet = { state: O, refresh: tick, journalWord, phase, badgeOf, midPoster, order, interval,
+window.sheet = { state: O, refresh: tick, journalWord, phase, badgeOf, posterOf, order, interval,
                  renderControls, renderSheet, dictSend, dictStart, dictStop, reopen,
                  openSettings, closeSettings, saveSettings, resetSettings, refreshSettings };
 boot();

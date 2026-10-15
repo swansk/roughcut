@@ -49,6 +49,12 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-15 02:20: **VERDICT 2 = FAIL** (rev `548e3b4`; 1:5 2:2 3:5 4:6 5:5 6:6 7:3 8:4 9:4 10:5 11:3 12:2; rulings:
+  budgets raised = honest, Program >=425 px dropped = LENIENT (replace with >=380 px wide, <=30% letterbox), words 94->105 =
+  honest). Scaffold `f371199` (/modules/<name>, firstpass/export stubs + mount points). **Wave 2 lanes** (from `f371199`):
+  FPUI (punch 1 + 6), TRACKS (3 + markers/in/out/fps server), EFFECTS (4), EXPORT (5), INGEST (7 + 8), FINISH (9).
+  Test hooks fixed for the wave-3 journey: firstpass-button/-panel/-run; export-dialog/-preset/-name/-go/-progress/-done(data-path)/-cancel.
+  Wave 3: journey.py (2), meters + picks as editor objects (10), render honours opacity/motion/volume, whatever verdict 3 says.
 - 2026-10-15 01:20: **wave 1 merged** (`c1067c0` + the bin-menu wording fix): FIRSTPASS `b78dc40`, MONEY `02c2b57`,
   MEDIA `b2d3014`, KEYS `1bff11b`, WORKSPACE `c1067c0`. Board is now Project / Source / Program / Timeline / Effect
   Controls with a menu bar; Premiere keys, markers, HH:MM:SS:FF; posters + playable media before proxies; /api/firstpass
