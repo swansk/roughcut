@@ -2722,6 +2722,8 @@ def api_firstpass_cancel() -> JSONResponse:
     scopes = [live["scope"]] + [INDEX_SCOPES[x["id"]] for x in indexes
                                 if x["id"] in INDEX_SCOPES]
     killers = [threading.Thread(target=sc.kill, daemon=True) for sc in scopes]
+    # and the preview encodes (verdict 4: "one ffmpeg (a preview build) kept running")
+    killers.append(threading.Thread(target=stop_media, daemon=True))
     for t in killers:
         t.start()
     for t in killers:
@@ -4261,6 +4263,7 @@ def _index_job(job: str, order: str) -> None:
     scope. `entry["coarse"]` (the first pass sets it) asks the journal for the coarse
     tier first; `entry["coarse_ready"]` says when every clip is heard and looked at."""
     scope = INDEX_SCOPES.setdefault(job, procscope.Scope(f"index {job}"))
+    kick_previews()          # a walk a cancel ended starts again with the index
     try:
         with procscope.active(scope):
             _index_walk(job, order, scope)
@@ -4777,6 +4780,51 @@ def api_index_status() -> JSONResponse:
                          "progress": j.progress(), "released": j.released_clips(),
                          "running": running is not None,
                          "job": running["id"] if running else None})
+
+
+INDEX_CANCEL_WAIT_S = 5.0
+
+
+@app.post("/api/index/cancel")
+def api_index_cancel() -> JSONResponse:
+    """Stop the background index — its proxies, close looks, contact-sheet reads, the
+    audio pass — and every preview and poster encode, now (verdict 4, punch 8: after the
+    first pass moved on, the index kept encoding with nothing on screen able to stop it).
+    The tools die with their process groups (`procscope`), the way the first pass's Stop
+    and the export's cancel kill theirs. What finished is kept; a stage that was killed
+    goes back in the queue (`journal.requeue`), so no clip reads as heard, looked at or
+    proxied when it is not, and a killed preview is "not built", never "failed". A first
+    pass still waiting on the index stops with it. Returns once the index has ended (or
+    after INDEX_CANCEL_WAIT_S), so the job pill is gone on the next poll."""
+    fp = _fp_live()
+    stopped_pass = None
+    if fp is not None and (fp.get("stage") or "index") == "index":
+        try:
+            stopped_pass = json.loads(api_firstpass_cancel().body).get("job")
+        except HTTPException:
+            stopped_pass = None
+    live = [x for x in INDEXES.values() if x["state"] not in progress.TERMINAL]
+    for x in live:
+        x["cancel"] = True
+        x.note("stopping — what finished is kept")
+    scopes = [INDEX_SCOPES[x["id"]] for x in live if x["id"] in INDEX_SCOPES]
+    killed: list[int] = []
+
+    def kill(sc: procscope.Scope) -> None:
+        killed.append(sc.kill())
+
+    killers = [threading.Thread(target=kill, args=(sc,), daemon=True) for sc in scopes]
+    killers.append(threading.Thread(target=lambda: killed.append(stop_media()), daemon=True))
+    for t in killers:
+        t.start()
+    for t in killers:
+        t.join(timeout=procscope.GRACE_S + 1.0)
+    deadline = time.time() + INDEX_CANCEL_WAIT_S
+    while time.time() < deadline and any(x["state"] not in progress.TERMINAL for x in live):
+        time.sleep(0.05)
+    return JSONResponse({"stopped": [x["id"] for x in live],
+                         "states": {x["id"]: x["state"] for x in live},
+                         "first_pass": stopped_pass, "killed": sum(killed)})
 
 
 def probe_duration(path: Path) -> float | None:
@@ -6173,7 +6221,33 @@ BROWSER_VIDEO = {".mp4": {"h264"}, ".m4v": {"h264"}, ".mov": {"h264"},
 BROWSER_AUDIO = {".mp4": {"aac", "mp3"}, ".m4v": {"aac", "mp3"}, ".mov": {"aac", "mp3"},
                  ".webm": {"opus", "vorbis"}}
 MEDIA: dict = {"lock": threading.Lock(), "wanted": [], "building": {}, "failed": {},
-               "facts": {}, "thread": None, "gpu": None}
+               "facts": {}, "thread": None, "gpu": None,
+               # Stop means stop for the pictures too (verdict 4, punch 8): every preview
+               # and poster encode runs in this scope, and the index's cancel kills it
+               # (`stop_media`); `walk_gen` moves on so the background walk ends.
+               "scope": None, "walk_gen": 0, "stopped": 0}
+
+
+def media_scope() -> procscope.Scope:
+    """The scope preview and poster encodes run in: a fresh one after a stop."""
+    with MEDIA["lock"]:
+        sc = MEDIA.get("scope")
+        if sc is None or sc.cancelled:
+            sc = MEDIA["scope"] = procscope.Scope("previews")
+        return sc
+
+
+def stop_media() -> int:
+    """Kill every preview and poster ffmpeg (their process groups) and end the
+    background walk. An asked-for clip (a monitor waiting on it) is built again when it
+    is next asked for; a killed build is not recorded as failed. Returns how many
+    processes were signalled."""
+    with MEDIA["lock"]:
+        MEDIA["walk_gen"] += 1
+        sc, MEDIA["scope"] = MEDIA.get("scope"), None
+    n = sc.kill() if sc is not None else 0
+    MEDIA["stopped"] += n
+    return n
 
 
 def clip_for_stem(stem: str) -> str | None:
@@ -6461,17 +6535,25 @@ def _build_claimed(src: Path, dest: Path, orient: str, ev: threading.Event) -> N
     """Paths fixed by the caller, not read from STATE here: a board re-pointed at
     another bin mid-build must not have this write that bin's preview from this one."""
     key = str(dest)
+    scope = None
     try:
         with PREVIEW_SLOTS:
             if not dest.exists():
                 t0 = time.monotonic()
-                how = build_preview(src, dest, orient)
+                scope = media_scope()
+                with procscope.active(scope):
+                    how = build_preview(src, dest, orient)
                 print(f"  preview {dest.stem} ({how}) in {time.monotonic() - t0:.1f}s",
                       flush=True)
         MEDIA["failed"].pop(key, None)
     except (RuntimeError, OSError) as exc:
-        MEDIA["failed"][key] = (time.monotonic(), str(exc)[:300])
-        print(f"  !! {exc}", flush=True)
+        if scope is not None and scope.cancelled:
+            # stopped, not broken: the clip's status stays "not built", never "failed"
+            MEDIA["failed"].pop(key, None)
+            print(f"  preview {dest.stem} stopped", flush=True)
+        else:
+            MEDIA["failed"][key] = (time.monotonic(), str(exc)[:300])
+            print(f"  !! {exc}", flush=True)
     finally:
         with MEDIA["lock"]:
             MEDIA["building"].pop(key, None)
@@ -6563,13 +6645,16 @@ def _media_walk() -> None:
     from concurrent.futures import ThreadPoolExecutor
     try:
         footage = STATE["footage"]
+        gen = MEDIA["walk_gen"]
 
         def poster(clip: str) -> None:
-            if STATE["footage"] != footage:
-                return                      # re-pointed at another bin: its own walk
+            if STATE["footage"] != footage or MEDIA["walk_gen"] != gen:
+                return                      # re-pointed at another bin, or stopped
             try:
                 clip_duration(clip)         # cached: the card frame is 1 s in
-                ensure_poster(Path(clip).stem, poster_time(clip), slots=WALK_POSTER_SLOTS)
+                with procscope.active(media_scope()):
+                    ensure_poster(Path(clip).stem, poster_time(clip),
+                                  slots=WALK_POSTER_SLOTS)
             except RuntimeError as exc:
                 print(f"  !! {exc}", flush=True)
 
@@ -6577,7 +6662,7 @@ def _media_walk() -> None:
             list(pool.map(poster, footage_clips()))
         if not preview_gpu():
             return
-        while STATE["footage"] == footage:
+        while STATE["footage"] == footage and MEDIA["walk_gen"] == gen:
             todo = [c for c in footage_clips() if needs_preview(c)
                     and not _failed_recently(str(preview_path(Path(c).stem)))]
             if not todo:
