@@ -140,6 +140,11 @@
     frameGen: 0,             // bumps per re-arm of the frame callback
     uploaded: null,          // the LUT record in texLut now
     draws: 0,                // frames drawn (tests read it)
+    // verdict 4 punch 5: the frame goes up at the size the monitor shows it, once
+    stage: null,             // a 2D canvas the frame is scaled into before the upload
+    stageCtx: null,
+    box: { w: 0, h: 0 },     // the monitor's box (ResizeObserver), CSS px
+    frameKey: null,          // the parked frame in texVideo now: no second upload of it
   };
 
   function $(s) { return document.querySelector(s); }
@@ -241,6 +246,53 @@
     gl.uniform1f(G.uN, n);
   }
 
+  /* The size the frame is drawn at: the picture as the monitor shows it (object-fit:
+   * contain in the monitor's box, times the device pixel ratio), never above the video's
+   * own. Verdict 4 punch 5: the 1280×720 proxy went up whole on every frame — through
+   * WebGL's video upload, ~25 ms of CPU a frame on a software GL, ~80 ms on a box at
+   * three times its cores — to be shown 386 px wide. Scaled first in a 2D canvas, the
+   * upload and the shader both work on the pixels that are seen. */
+  function drawSize(vw, vh) {
+    const dpr = window.devicePixelRatio || 1;
+    const bw = G.box.w * dpr, bh = G.box.h * dpr;
+    if (!bw || !bh) return [vw, vh];
+    const s = Math.min(1, bw / vw, bh / vh);
+    if (s > 0.9) return [vw, vh];   // near full size: the scale costs more than it saves
+    return [Math.max(2, Math.round(vw * s / 2) * 2), Math.max(2, Math.round(vh * s / 2) * 2)];
+  }
+
+  /* The frame into texVideo, at w×h. A parked frame that is already there is not sent
+   * again: an Effect Controls change on a paused monitor redraws with new uniforms only. */
+  function upload(v, w, h) {
+    const gl = G.gl;
+    const parked = v.paused && !v.seeking;
+    const key = parked ? `${v.id}|${v.currentSrc}|${v.currentTime}|${w}x${h}` : null;
+    if (key && key === G.frameKey) return true;
+    G.frameKey = null;
+    try {
+      if (w === v.videoWidth && h === v.videoHeight) {
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, v);
+      } else {
+        if (!G.stage) {
+          G.stage = document.createElement('canvas');
+          // a CPU canvas (willReadFrequently): the frame is scaled where it was decoded
+          // and handed up small; an accelerated one round-trips through the GL process,
+          // measured 3 ms against 7-14 ms a frame at 384 px wide
+          G.stageCtx = G.stage.getContext('2d', { alpha: false, willReadFrequently: true });
+        }
+        if (G.stage.width !== w || G.stage.height !== h) { G.stage.width = w; G.stage.height = h; }
+        G.stageCtx.drawImage(v, 0, 0, w, h);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, G.stage);
+      }
+    } catch (e) {
+      return false;
+    }
+    G.frameKey = key;
+    return true;
+  }
+
   /* Draw the live video's current frame through the LUT. A no-op while there is
    * nothing to draw: no context, grade off, identity LUT, no live video, or a video
    * that has no frame yet. */
@@ -249,22 +301,19 @@
     const adj = raw ? null : adjustNow();
     if (!raw && (!G.gl || !G.enabled || !G.lut || (G.lut.identity && !adj))) return;
     if (!G.gl || !v || v.readyState < 2) return;
-    const w = v.videoWidth, h = v.videoHeight;
-    if (!w || !h) return;
+    const vw = v.videoWidth, vh = v.videoHeight;
+    if (!vw || !vh) return;
+    const [w, h] = drawSize(vw, vh);
     const gl = G.gl;
     if (G.canvas.width !== w || G.canvas.height !== h) {
       G.canvas.width = w;
       G.canvas.height = h;
+      G.frameKey = null;
     }
     gl.viewport(0, 0, w, h);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, G.texVideo);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-    try {
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, v);
-    } catch (e) {
-      return;                       // a frame that is not there yet; the next one will be
-    }
+    if (!upload(v, w, h)) return;   // a frame that is not there yet; the next one will be
     const rec = raw || G.lut.identity ? IDENTITY_TABLE : G.lut;
     if (G.uploaded !== rec) uploadLut(rec);
     const a = adj || NO_ADJUST;
@@ -455,9 +504,23 @@
     // where rAF and the frame callback both stop.
     G.videos.forEach((v) => {
       ['seeked', 'loadeddata', 'timeupdate', 'play'].forEach((ev) => {
-        v.addEventListener(ev, () => { if (v === live()) settle(); });
+        v.addEventListener(ev, () => {
+          if (v !== live()) return;
+          // playing in a visible tab, the frame callback draws every frame already: a
+          // timeupdate draw on top of it was a second upload four times a second
+          if (ev === 'timeupdate' && !v.paused && !document.hidden) return;
+          settle();
+        });
       });
     });
+    // the monitor's box, for drawSize: read here, never per frame (a layout read)
+    const box = canvas.parentElement;
+    if (box && typeof ResizeObserver === 'function') {
+      new ResizeObserver((ents) => {
+        const r = ents[ents.length - 1].contentRect;
+        G.box = { w: r.width, h: r.height };
+      }).observe(box);
+    }
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
