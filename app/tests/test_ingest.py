@@ -292,13 +292,15 @@ def test_a_cold_land_reads_the_folder_and_shows_a_picture(live_server, ingest_bi
     pg.wait_for_function("document.querySelectorAll('#projList tr.row').length === 3")
     assert pg.evaluate("window.__sawNoFootage") is False
     # the empty Timeline: the editor's first action, and the first pass beside it
-    pg.wait_for_selector("#tlEmpty .empty")
+    pg.wait_for_selector("#tlEmpty .empty [data-testid=firstpass-empty-timeline]")
     empty = pg.locator("#tlEmpty .empty").inner_text()
     assert "Drag a clip here or press ," in empty and "Run first pass" in empty, empty
     assert "Nothing indexed" not in empty and "The footage" not in empty
-    assert pg.locator("#tlEmpty [data-first-pass]").count() == 1
+    # one Run first pass offer each (lane FPUI's button), never a second link of ours
+    assert pg.locator("#tlEmpty [data-testid=firstpass-empty-timeline]").count() == 1
+    assert pg.locator("#tlEmpty a").count() == 0
     assert "press ," in pg.locator("#progEmpty").inner_text()
-    pg.locator("#tlEmpty [data-first-pass]").click()          # a no-op until FPUI lands
+    assert pg.locator("#progEmpty [data-testid=firstpass-empty-program]").count() == 1
     assert pg.url.rstrip("/") == live_server.rstrip("/")
     assert pg.errors == []
     pg.context.close()
@@ -328,5 +330,23 @@ def test_a_cold_land_reads_the_folder_and_shows_a_picture(live_server, ingest_bi
     pg.evaluate("document.activeElement && document.activeElement.blur()")
     pg.keyboard.press(",")
     pg.wait_for_function("segs.length === 1 && segs[0].clip === 'CLIP_A.MP4'", timeout=1000)
+    assert pg.errors == []
+    pg.context.close()
+
+
+def test_make_a_first_cut_waits_while_the_first_pass_runs(live_server, ingest_bin, browser,
+                                                          tmp_path):
+    """Two ways to a first cut must not overlap: while the first pass runs (lane FPUI's
+    `rcFirstPass.state()`), the empty Timeline's "Make a first cut" is disabled."""
+    _configure(ingest_bin, tmp_path / "work", ingest_bin["heard"], {**SEED, "segments": []})
+    pg = _page(browser, live_server)
+    pg.wait_for_selector("#tlEmpty #firstCut")
+    pg.wait_for_function("window.rcFirstPass && rcFirstPass.state()", timeout=10000)
+    assert pg.locator("#tlEmpty #firstCut").is_enabled()
+    assert "Drag a clip here or press ," in pg.locator("#tlEmpty .empty").inner_text()
+    pg.evaluate("rcFirstPass.state = () => ({ state: 'running' })")
+    pg.wait_for_function("document.querySelector('#tlEmpty #firstCut').disabled", timeout=2500)
+    pg.evaluate("rcFirstPass.state = () => ({ state: 'done' })")
+    pg.wait_for_function("!document.querySelector('#tlEmpty #firstCut').disabled", timeout=2500)
     assert pg.errors == []
     pg.context.close()
