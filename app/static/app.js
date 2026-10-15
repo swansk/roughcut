@@ -3078,21 +3078,36 @@ function summarise(list) {
  * shots as a table — ✓ / ✗, Source In / Out timecode, why — one row per proposed shot,
  * the removed ones struck at the end. The ghost lane under V1 is the same review. */
 const PROPOSAL_CSS = `
+#proposal { margin-bottom: 8px; position: relative; }
 #proposal .pbtns { display: flex; flex-wrap: nowrap; gap: 5px; align-items: center; position: sticky; top: -6px;
-  z-index: 2; background: var(--panel); padding: 4px 0 6px; margin: -4px 0 6px; }
-#proposal .pbtns button { flex: none; white-space: nowrap; padding: 3px 8px; }
+  z-index: 2; background: var(--panel); padding: 3px 0 4px; margin: 0 0 4px; }
+#proposal .pbtns button { flex: none; white-space: nowrap; padding: 2px 8px; }
 #proposal .pbtns button[hidden] { display: none; }
-#proposal h2 { margin-bottom: 4px; }
-#proposal .pchecks { border-left: 2px solid var(--warn); padding: 2px 0 2px 8px; margin: 0 0 8px; }
-#proposal .pchecks b { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--warn); }
+#proposal h2 { display: inline-block; margin: 0; white-space: nowrap; line-height: 17px; }
+#askFold { display: none; width: 100%; text-align: left; background: transparent; color: var(--dim);
+  border: 1px solid var(--line); border-radius: 3px; padding: 3px 8px; margin: 0 0 8px; font-size: 11.5px;
+  white-space: nowrap; overflow: hidden; }
+#askFold::before { content: '▸ '; }
+#askFold:hover { color: var(--text); }
+section[data-tool=ask].pup:not(.nocut) #askFold { display: block; }
+section[data-tool=ask].pup.askopen #askFold::before { content: '▾ '; }
+section[data-tool=ask].pup:not(.askopen) #askStory,
+section[data-tool=ask].pup:not(.askopen) #askPanel { display: none !important; }
+#proposal .pchecks { border-left: 2px solid var(--warn); padding: 1px 0 1px 8px; margin: 0 0 4px; }
+#proposal .pchecks b { display: block; font-size: 10.5px; line-height: 1.3; text-transform: uppercase; letter-spacing: .06em; color: var(--warn); }
 #proposal .pchecks ul { margin: 2px 0 0; padding: 0; list-style: none; }
-#proposal .pchecks li { padding: 1px 0; }
+#proposal .pchecks li { padding: 0; line-height: 1.3; font-size: 11px; }
 #proposal .pchecks li.flag::before { content: '⚠ '; color: var(--warn); }
 #proposal .pchecks li.ask::before { content: '• '; color: var(--dim); }
 #proposal .pchecks li[data-k] { cursor: pointer; }
 #proposal .pchecks li[data-k]:hover { color: #fff; }
+#proposal .pchecks:not(.all) li.pmore, #proposal .pchecks.all .pshowall { display: none; }
+#proposal .pchecks .pshowall { background: transparent; border: 0; padding: 0 0 0 4px; color: var(--dim);
+  font-size: 10.5px; letter-spacing: 0; text-transform: none; cursor: pointer; line-height: inherit; }
+#proposal .pchecks .pshowall:hover { color: var(--text); }
+#proposal .pchecks .pwhere { color: var(--tc); font-variant-numeric: tabular-nums; white-space: nowrap; }
 #proposal .pline { color: var(--dim); margin-bottom: 4px; }
-#proposal details.pnotes { margin-bottom: 6px; }
+#proposal details.pnotes { margin-bottom: 4px; }
 #proposal details.pnotes > summary { cursor: pointer; color: var(--dim); white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; list-style-position: inside; }
 #proposal details.pnotes > summary b { color: var(--text); font-weight: 600; margin-right: 4px; }
@@ -3100,15 +3115,18 @@ const PROPOSAL_CSS = `
 #proposal details.pnotes .pall { white-space: pre-line; margin-top: 4px; }
 #proposal .pnote { margin-bottom: 6px; white-space: pre-line; }
 #proposalDiff .phead { color: var(--dim); margin-bottom: 4px; }
+#proposalDiff .phead.up { position: absolute; top: 0; right: 0; margin: 0; line-height: 17px; white-space: nowrap;
+  font-variant-numeric: tabular-nums; color: var(--text); }
 #proposalDiff table.ptable, #proposalDiff .ptable thead, #proposalDiff .ptable tbody { display: block; width: 100%; }
 #proposalDiff table.ptable { font-size: 11.5px; }
 #proposalDiff .ptable tr { display: grid; grid-template-columns: 25px 21px minmax(0, 1fr) 80px 80px;
   border-bottom: 1px solid #26262a; }
 #proposalDiff .ptable thead tr { border-bottom-color: var(--line); }
-#proposalDiff .ptable th { text-align: left; font-weight: 500; color: var(--dim); font-size: 10.5px; padding: 2px 3px;
-  white-space: nowrap; }
-#proposalDiff .ptable td { padding: 3px 3px 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#proposalDiff .ptable td.pw { grid-column: 2 / -1; padding: 0 3px 3px; color: #c4c4c9; }
+#proposalDiff .ptable th { text-align: left; font-weight: 500; color: var(--dim); font-size: 10.5px; padding: 1px 3px;
+  white-space: nowrap; line-height: 1.25; }
+#proposalDiff .ptable td { padding: 2px 3px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  line-height: 1.2; }
+#proposalDiff .ptable td.pw { grid-column: 2 / -1; padding: 0 3px 2px; color: #c4c4c9; }
 #proposalDiff .ptable td.tc { font-variant-numeric: tabular-nums; color: var(--tc); font-size: 11px; text-overflow: clip; }
 #proposalDiff .ptable td.pn { color: var(--dim); font-variant-numeric: tabular-nums; }
 #proposalDiff .ptable tr.pshot { cursor: pointer; }
@@ -3118,7 +3136,7 @@ const PROPOSAL_CSS = `
 #proposalDiff .ptable tr.pshot.rejected td.pc, #proposalDiff .ptable tr.pshot.rejected td.tc { text-decoration: line-through; }
 #proposalDiff .ptable tr.pgone td { color: var(--bad); }
 #proposalDiff .ptable tr.prej td { color: var(--faint); font-style: italic; }
-#proposalDiff .ptable .pv { display: inline-block; width: 18px; height: 17px; line-height: 15px; text-align: center;
+#proposalDiff .ptable .pv { display: inline-block; width: 18px; height: 15px; line-height: 13px; text-align: center;
   border-radius: 3px; border: 1px solid var(--good); color: var(--good); font-weight: 700; cursor: pointer; user-select: none; }
 #proposalDiff .ptable .pv[aria-checked=false] { border-color: var(--bad); color: var(--bad); }
 #proposalDiff .ptable .pv:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -3142,15 +3160,40 @@ function proposalCss() {
  * true any more — the cut is on the ghost lane — so it goes, whoever hides #proposal
  * (Accept, Discard) brings it back. render() owns the line's `hidden`; this owns its
  * display, so the two never fight. */
+/* A pending proposal owns the Assistant (verdict 5, punch 3): it is on top, and the
+ * story and change boxes under it fold to one line (#askFold) until that is clicked —
+ * a re-run's table opened below the form with no row in view. */
 function watchProposalUp() {
   const box = $('#proposal');
   if (!box || box.dataset.watched) return;
   box.dataset.watched = '1';
+  const sec = box.closest('section[data-tool]');
+  const fold = $('#askFold');
+  if (fold) {
+    fold.onclick = () => {
+      const open = !sec.classList.contains('askopen');
+      sec.classList.toggle('askopen', open);
+      fold.setAttribute('aria-expanded', String(open));
+      if (open) {
+        const n = $('#note');
+        if (n && n.offsetParent !== null) n.focus({ preventScroll: true });
+        fold.scrollIntoView({ block: 'nearest' });
+      }
+    };
+  }
   const sync = () => {
     const up = box.style.display !== 'none';
     const first = $('#askFirst');
     if (first) first.style.display = up ? 'none' : '';
     if (up) $('#lastAsk').style.display = 'none';
+    if (sec) {
+      if (up && !sec.classList.contains('pup')) {
+        sec.classList.remove('askopen');          // each proposal arrives with the form folded
+        if (fold) fold.setAttribute('aria-expanded', 'false');
+      }
+      sec.classList.toggle('pup', up);
+      sec.classList.toggle('nocut', !segs.length);   // a first cut: no form to fold
+    }
   };
   new MutationObserver(sync).observe(box, { attributes: true, attributeFilter: ['style'] });
   sync();
@@ -3208,33 +3251,73 @@ function rejectedChecks(plan) {
   });
 }
 
+/* The proposed shot a check is about: the plan's own `shot` when the server knew it
+ * (null = no row, e.g. a removed shot), else the shot of that clip it overlaps most. */
+function checkShot(plan, c) {
+  if (Number.isInteger(c.shot)) return c.shot >= 0 && c.shot < plan.segments.length ? c.shot : null;
+  if (c.shot === null || !c.clip || typeof c.in !== 'number' || typeof c.out !== 'number') return null;
+  let best = null, most = 0;
+  plan.segments.forEach((s, i) => {
+    if (s.clip !== c.clip) return;
+    const o = Math.min(s.out, c.out) - Math.max(s.in, c.in);
+    if (o > most) { most = o; best = i; }
+  });
+  return best;
+}
+
+/* Checks are data (verdict 5, punch 3): `plan.checks`, in the server's order — the
+ * notes check's flags and the rejected ranges (`kind` flag / rejected), then the
+ * model's own ({text, clip, in, out}). A plan saved before the list existed falls back
+ * to the flags, the rejected ranges and the notes' "Things to check first:". */
+function planChecks(plan, notes) {
+  if (!Array.isArray(plan.checks)) {
+    return flagChecks(plan).concat(rejectedChecks(plan)).map((c) => ({ ...c, cls: 'flag' }))
+      .concat(notesChecks(notes).map((t) => ({ text: t, k: null, cls: 'ask' })));
+  }
+  return plan.checks.filter((c) => c && typeof c.text === 'string' && c.text.trim()).map((c) => {
+    const model = c.kind !== 'flag' && c.kind !== 'rejected';
+    const ranged = c.clip && typeof c.in === 'number' && typeof c.out === 'number';
+    return { text: c.text.trim(), k: checkShot(plan, c), cls: model ? 'ask' : 'flag',
+             where: model && ranged ? `${stem(c.clip)} ${fmt(c.in)}–${fmt(c.out)}` : '' };
+  });
+}
+
+/* The first CHECKS_SHOWN are on screen, the rest one click away ("2 more"): a long list
+ * would push the shots out of the panel, and the shots are the review. */
+const CHECKS_SHOWN = 3;
 function proposalChecksHtml(plan, notes) {
-  const flags = flagChecks(plan).concat(rejectedChecks(plan));
-  const asks = notesChecks(notes);
-  if (!flags.length && !asks.length) return '';
-  const li = (cls, c) => `<li class="${cls}"${c.k != null ? ` data-k="${c.k}"` : ''}>${escapeHtml(c.text)}</li>`;
-  return `<b>Things to check</b><ul>${flags.map((c) => li('flag', c)).join('')}${
-    asks.map((t) => li('ask', { text: t, k: null })).join('')}</ul>`;
+  const items = planChecks(plan, notes);
+  if (!items.length) return '';
+  const li = (c, i) => `<li class="${c.cls}${i >= CHECKS_SHOWN ? ' pmore' : ''}"${c.k != null ? ` data-k="${c.k}"` : ''}`
+    + `${c.where ? ` title="${escapeHtml(c.where)}"` : ''}>`
+    + `${c.where ? `<span class="pwhere">${escapeHtml(c.where)}</span> ` : ''}${escapeHtml(c.text)}</li>`;
+  const more = items.length - CHECKS_SHOWN;
+  return `<b>Things to check${more > 0
+    ? ` <button type="button" class="pshowall" title="every check">+ ${more} more</button>` : ''}</b>`
+    + `<ul>${items.map(li).join('')}</ul>`;
 }
 
 /* The model's notes, folded to their first sentence (the whole text one click away). */
 function proposalNotesHtml(plan) {
   const parts = [];
   const fpLine = plan.firstpass && plan.firstpass.diff && plan.firstpass.diff.sentence;
-  if (fpLine) parts.push(`<div class="fp-sentence pline">First pass: ${escapeHtml(fpLine)}</div>`);
+  const fp = fpLine ? `First pass: ${fpLine}` : '';
   // A shot-scoped proposal says which shot it is about — the rest of the diff is
   // the untouched film, and without this line it reads as a whole-cut revision.
   if (plan.focus) parts.push(`<div class="pline">[shot ${plan.focus.index + 1} · ${escapeHtml(stem(plan.focus.clip))}]</div>`);
   // the model's words: the server's "Check:" lines are the Things to check above
   const words = String(plan.notes_model || plan.notes || '').split('\n')
     .filter((l) => !/^(Check|Left out): /.test(l.trim())).join('\n').trim();
-  if (!words) parts.push('<div class="pnote hint">(no note returned)</div>');
+  // One line while a proposal waits (verdict 5, punch 3: the rows come first): the
+  // first pass's sentence, else the notes' first sentence, opens to the whole.
+  if (!words) parts.push(fp ? `<div class="fp-sentence pline">${escapeHtml(fp)}</div>`
+    : '<div class="pnote hint">(no note returned)</div>');
   else {
     const first = words.split(/(?<=[.!?])\s+|\n\s*\n/)[0].trim();   // a sentence, or a paragraph
-    parts.push(first === words && words.length <= 160
+    parts.push(!fp && first === words && words.length <= 160
       ? `<div class="pnote">${escapeHtml(words)}</div>`
-      : `<details class="pnotes"><summary><b>Notes</b><span class="pprev">${escapeHtml(first)}</span></summary>`
-        + `<div class="pall">${escapeHtml(words)}</div></details>`);
+      : `<details class="pnotes"><summary><b>Notes</b><span class="pprev">${escapeHtml(fp || first)}</span></summary>`
+        + `<div class="pall">${fp ? `${escapeHtml(fp)}\n\n` : ''}${escapeHtml(words)}</div></details>`);
   }
   return parts.join('');
 }
@@ -3328,9 +3411,13 @@ function showProposal(plan) {
   const head = plan.unchanged
     ? `the cut unchanged — ${segs.length} shots ${fmt(oldTotal)}; only the colour changes`
     : `${segs.length} shots ${fmt(oldTotal)} → ${plan.segments.length} shots ${fmt(newTotal)}`;
+  const askSec = $('#proposal').closest('section[data-tool]');
+  if (askSec) askSec.classList.toggle('nocut', !segs.length);
   $('#proposal').style.display = 'block';
   if (window.tlLanes && tlLanes.redraw) tlLanes.redraw();     // the ghost lane, now
-  $('#proposalDiff').innerHTML = `<div class="phead">${head}</div>` + graded
+  // a cut's counts ride the title's line (.phead.up), so the table starts a line higher;
+  // a colour-only proposal has no table and says it in full, in the flow
+  $('#proposalDiff').innerHTML = `<div class="phead${plan.unchanged ? '' : ' up'}">${head}</div>` + graded
     + (plan.unchanged ? '' : proposalTableHtml(plan, reviewable));
   const toggle = (k) => { if (window.tlLanes) tlLanes.setVerdict(k, !tlLanes.verdict(k)); };
   $('#proposalDiff').onclick = (e) => {
@@ -3348,7 +3435,9 @@ function showProposal(plan) {
     e.stopPropagation();
     toggle(Number(b.dataset.k));
   };
+  checks.classList.remove('all');
   checks.onclick = (e) => {
+    if (e.target.closest('.pshowall')) { checks.classList.add('all'); return; }
     const li = e.target.closest('li[data-k]');
     if (!li) return;
     const k = Number(li.dataset.k);

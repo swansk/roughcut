@@ -207,16 +207,31 @@ def test_a_waiting_first_cut_opens_on_reload_as_an_edit(browser, live_server, pr
             "#proposalDiff tr.pshot td.tc, #proposalDiff tr.pshot td.pc",
             "els => els.filter(e => e.scrollWidth > e.clientWidth).map(e => e.textContent)")
         assert clipped == [], clipped
+        # an empty sequence: the ghost is drawn in V1's own row (no empty V1 above it),
+        # and the Program shows the proposal's first frame, not a black screen
+        v1 = pg.evaluate("(() => { const r = document.querySelector('#tl .tl-lane[data-lane=V1]')"
+                         ".getBoundingClientRect(); return [r.top, r.height]; })()")
+        g1 = pg.evaluate(f"(() => {{ const r = document.querySelector('{GHOST}')"
+                         ".getBoundingClientRect(); return [r.top, r.height]; })()")
+        assert abs(v1[0] - g1[0]) <= 1 and abs(v1[1] - g1[1]) <= 1, (v1, g1)
+        assert not pg.locator("#tl .tl-thead[data-track=V1]").is_visible()
+        pg.wait_for_function("(() => { const v = document.querySelector('#player video.live');"
+                             " return !!v && v.readyState >= 2; })()", timeout=15000)
+        assert pg.evaluate("document.querySelector('#player video.live').dataset.src").find("CLIP_A") >= 0
+        assert not pg.locator("#progEmpty").is_visible()
         # and the ghosts' frames load (the poster endpoint answers every tile)
         pg.wait_for_function(
             f"[...document.querySelectorAll('{GHOST} .gstrip img')].every(i => i.complete && i.naturalWidth > 0)",
             timeout=20000)
-        # rows on screen without scrolling the panel: since wave 4's LAYOUT the Assistant
-        # lives in the bottom row (~410 px at 1440x900), so 4 of the 5 rows fit and the
-        # panel scrolls like Premiere's do; the ghost lane above shows every shot
-        body_box = pg.evaluate("document.querySelector('#proposal').closest('.ws-body').getBoundingClientRect().bottom")
-        last = rows.nth(3).bounding_box()
-        assert last["y"] + last["height"] <= body_box + 1, (last, body_box)
+        # every row on screen without scrolling the panel (verdict 5, punch 3: the wave-4
+        # concession of 4 rows is gone): the proposal owns the Assistant, the form folds
+        seen = _rows_in_view(pg)
+        assert seen["first"] and seen["n"] >= 5, seen
+        # a first cut: no form to fold, so no fold line; the counts on the title's line
+        assert not pg.locator("#askFold").is_visible()
+        counts = pg.locator("#proposalDiff .phead").bounding_box()
+        title = pg.locator("#proposal h2").bounding_box()
+        assert abs(counts["y"] - title["y"]) <= 1 and title["x"] + title["width"] < counts["x"], (title, counts)
 
         # a rejection, from the table: the lane and Accept follow; every button on one row
         rows.nth(1).locator(".pv").click()
@@ -394,3 +409,260 @@ def test_rejected_ranges_are_said_in_the_panel_and_the_proposal(browser, live_se
     finally:
         _seed(project, TWO)
         pg.close()
+
+
+# ---------------------------------------------------------------- verdict 5, punch 3
+# A pending proposal owns the Assistant: on a re-run (the K1 workflow) it used to open
+# below the "What is this film about?" / "Ask for a change" form, with 0 rows in view.
+
+CUT6 = [{"clip": c, "in": a, "out": b, "why": w} for c, a, b, w in [
+    ("CLIP_A.MP4", 0.5, 2.0, "hello"), ("CLIP_B.MP4", 0.0, 1.5, "reply"),
+    ("CLIP_C.MP4", 1.0, 2.5, "ride"), ("CLIP_A.MP4", 3.0, 4.0, "turn"),
+    ("CLIP_B.MP4", 2.0, 3.0, "laugh"), ("CLIP_C.MP4", 4.0, 5.5, "view")]]
+
+
+def _rerun_plan(ids: list[str]) -> dict:
+    """A re-run's proposal as the server writes it: the trimmed shot kept, two added,
+    one left out because the editor rejected it, checks from the model and the notes
+    check, the notes long enough to fold."""
+    segs = [{"id": ids[0], "clip": "CLIP_A.MP4", "in": 0.5, "out": 2.0, "why": "hello"},
+            {"id": ids[1], "clip": "CLIP_B.MP4", "in": 0.0, "out": 1.5, "why": "reply"},
+            {"clip": "CLIP_C.MP4", "in": 0.2, "out": 1.0, "why": "the lift arrives before the ride"},
+            {"id": ids[2], "clip": "CLIP_C.MP4", "in": 1.0, "out": 2.5, "why": "ride"},
+            {"id": ids[3], "clip": "CLIP_A.MP4", "in": 3.2, "out": 4.0, "why": "the turn, tighter"},
+            {"id": ids[4], "clip": "CLIP_B.MP4", "in": 2.0, "out": 3.0, "why": "laugh"},
+            {"clip": "CLIP_A.MP4", "in": 5.0, "out": 5.8, "why": "a breath before the view"},
+            {"id": ids[5], "clip": "CLIP_C.MP4", "in": 4.0, "out": 5.5, "why": "view"}]
+    left = [{"clip": "CLIP_B.MP4", "in": 4.0, "out": 5.0, "action": "dropped",
+             "rejected": {"in": 4.0, "out": 5.0}}]
+    return {
+        "segments": segs,
+        "notes": ("I kept your trim on the hello and every shot you locked. Check the picture "
+                  "under the CLIP_C 0.2-1.0 lift first: it is unaudited. Also check that the "
+                  "CLIP_A 5.0-5.8 breath really holds still before the view.\n\nLeft out: "
+                  "CLIP_B 0:04.0–0:05.0 — you rejected this shot before, so it stays out."),
+        "notes_model": ("I kept your trim on the hello and every shot you locked. Check the picture "
+                        "under the CLIP_C 0.2-1.0 lift first: it is unaudited. Also check that the "
+                        "CLIP_A 5.0-5.8 breath really holds still before the view."),
+        "checks": [
+            {"text": "CLIP_B 0:04.0–0:05.0 — you rejected this shot before: left out",
+             "clip": "CLIP_B.MP4", "in": 4.0, "out": 5.0, "kind": "rejected", "shot": None},
+            {"text": "Check the picture under the lift first: it is unaudited.",
+             "clip": "CLIP_C.MP4", "in": 0.2, "out": 1.0, "kind": "model"},
+            {"text": "Check the breath really holds still before the view.",
+             "clip": "CLIP_A.MP4", "in": 5.0, "out": 5.8, "kind": "model"}],
+        "notes_check": {"ok": True, "flags": [], "checked": 1, "rejected": left},
+        "firstpass": {"rejected": left, "mode": "rerun", "keep": ids[:2],
+                      "diff": {"sentence": "This keeps 5 of your shots, changes 1 and adds 2.",
+                               "shots": []}},
+    }
+
+
+def _seed_rerun(project) -> None:
+    Path(project["edl"]).write_text(json.dumps({
+        "variant": "T", "title": "test cut", "orient": "none",
+        "story": "A greeting, a ride and a goodbye on the hill.",
+        "target_s": [5, 20], "segments": [dict(s, id=f"s{i}") for i, s in enumerate(CUT6)]},
+        indent=1), encoding="utf-8")
+
+
+def _rows_in_view(pg) -> dict:
+    return pg.evaluate("""() => {
+      const body = document.querySelector('#proposal').closest('.ws-body').getBoundingClientRect();
+      const rows = [...document.querySelectorAll('#proposalDiff tr.pshot')].map(r => r.getBoundingClientRect());
+      const inView = rows.filter(r => r.top >= body.top - 1 && r.bottom <= body.bottom + 1);
+      return {n: inView.length, first: rows.length ? rows[0].top >= body.top - 1 && rows[0].bottom <= body.bottom + 1 : false,
+              body: [body.top, body.bottom], rows: rows.map(r => [Math.round(r.top), Math.round(r.bottom)])};
+    }""")
+
+
+def test_a_pending_rerun_proposal_owns_the_assistant(browser, live_server, project):
+    """Verdict 5, punch 3: at 1440x900, with a pending re-run proposal, the proposal sits
+    above the Ask form (folded to one line), the table's first row is in view and at
+    least 5 rows show without scrolling."""
+    _seed_rerun(project)
+    ids = [f"s{i}" for i in range(6)]
+    path = _waiting("rv-rerun", _rerun_plan(ids))
+    pg = _open(browser, live_server)
+    try:
+        pg.wait_for_selector("#proposal", state="visible", timeout=10000)
+        pg.wait_for_function(f"document.querySelectorAll('{GHOST} .ghost').length === 8", timeout=8000)
+        pg.wait_for_timeout(300)
+        # the proposal is above the form, and the form is one line while it is up
+        top = pg.evaluate("""() => {
+          const p = document.querySelector('#proposal').getBoundingClientRect();
+          const f = [...document.querySelectorAll('#askStory, #askPanel')]
+            .filter(e => e.offsetParent !== null).map(e => e.getBoundingClientRect());
+          return {p: p.top, forms: f.map(r => [r.top, r.height])};
+        }""")
+        assert all(t > top["p"] for t, _ in top["forms"]), top
+        assert pg.locator("#story").is_visible() is False, "the story box folds while a proposal is up"
+        assert pg.locator("#note").is_visible() is False, "the change box folds while a proposal is up"
+        fold = pg.locator("#askFold")
+        assert fold.is_visible()
+        fb = fold.bounding_box()
+        assert fb["height"] <= 30, fb
+        _shot(pg, "review-rerun-1440")
+        seen = _rows_in_view(pg)
+        assert seen["first"], seen
+        assert seen["n"] >= 5, seen
+        # the checks are the plan's list, not a regex on the notes
+        items = pg.locator("#proposalChecks li").all_inner_texts()
+        assert len(items) == 3, items
+        assert "CLIP_C 0:00.2–0:01.0" in items[1] and pg.locator("#proposalChecks li").nth(1).get_attribute("data-k") == "2"
+        # a long list shows 3 and folds the rest, so the shots stay in view
+        many = _rerun_plan(ids)
+        many["checks"] = many["checks"] + [{"text": f"Check {n}.", "kind": "model"} for n in range(3)]
+        pg.evaluate("(p) => rcShowProposal(p)", many)
+        pg.wait_for_function("document.querySelectorAll('#proposalChecks li.pmore').length === 3")
+        assert pg.locator("#proposalChecks li:visible").count() == 3
+        assert pg.locator("#proposalChecks .pshowall").inner_text() == "+ 3 more"
+        assert _rows_in_view(pg)["n"] >= 5
+        pg.locator("#proposalChecks .pshowall").click()
+        assert pg.locator("#proposalChecks li:visible").count() == 6
+        # the fold opens the form again (the proposal stays up, above it)
+        fold.click()
+        assert pg.locator("#note").is_visible()
+        assert pg.locator("#proposal").is_visible()
+        assert pg.errors == []
+    finally:
+        path.unlink(missing_ok=True)
+        _seed(project, TWO)
+        pg.close()
+
+
+def test_checks_are_the_plans_list_not_a_regex_on_the_notes(browser, live_server, project):
+    """Verdict 5: the model's "Check … first" / "Also check …" warnings sat in the folded
+    notes because "Things to check" parsed only the literal phrase. A plan carries its
+    checks as data — `checks: [{text, clip, in, out}]` — and the list renders from it; a
+    check on a proposed shot's range points at its row."""
+    _seed(project, TWO)
+    pg = _open(browser, live_server)
+    try:
+        pg.wait_for_selector("#tl .blk")
+        notes = ("Opens on the ride now. Check the picture under the CLIP_C 0.5-4.0 ending first: "
+                 "it is unaudited. Also check that the CLIP_A 1.0-3.0 hello really reads on screen.")
+        plan = {"segments": [{"clip": "CLIP_C.MP4", "in": 0.5, "out": 4.0, "why": "the ride"},
+                             {"clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0, "why": "the hello"}],
+                "notes": notes}
+        # without a list, the notes alone give nothing to check (the old regex's blind spot)
+        pg.evaluate("(p) => rcShowProposal(p)", plan)
+        pg.wait_for_selector("#proposal", state="visible", timeout=5000)
+        assert pg.locator("#proposalChecks li").count() == 0
+        pg.locator("#rejectProposal").click()
+        # with it, both are Things to check, each pointing at its shot
+        plan["checks"] = [
+            {"text": "Check the picture under the ending first: it is unaudited.",
+             "clip": "CLIP_C.MP4", "in": 0.5, "out": 4.0},
+            {"text": "Check that the hello really reads on screen.",
+             "clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0}]
+        pg.evaluate("(p) => rcShowProposal(p)", plan)
+        pg.wait_for_selector("#proposal", state="visible", timeout=5000)
+        assert pg.locator("#proposalChecks").is_visible()
+        li = pg.locator("#proposalChecks li")
+        assert li.count() == 2, li.all_inner_texts()
+        assert "unaudited" in li.nth(0).inner_text() and "CLIP_C 0:00.5–0:04.0" in li.nth(0).inner_text()
+        assert "reads on screen" in li.nth(1).inner_text()
+        assert [li.nth(i).get_attribute("data-k") for i in range(2)] == ["0", "1"]
+        li.nth(1).click()
+        assert "open" in pg.locator("#proposalDiff tr.pshot").nth(1).get_attribute("class")
+        pg.locator("#rejectProposal").click()
+        assert pg.errors == []
+    finally:
+        _seed(project, TWO)
+        pg.close()
+
+
+def test_pick_markers_never_cover_a_ghosts_name(browser, live_server, project):
+    """Verdict 5: "ghost names truncated to 'C…' under amber pick markers". The markers
+    sit under the name band, so no `.tl-pick` box intersects a `.ghost .gtxt` box."""
+    _seed(project, TWO)
+    pg = _open(browser, live_server)
+    try:
+        pg.wait_for_selector("#tl .blk")
+        out = pg.evaluate("""(selects) => fetch('/api/selects', {
+            method: 'PUT', headers: {'content-type': 'application/json'},
+            body: JSON.stringify({selects})}).then(r => r.json())""", [
+            {"clip": "CLIP_A.MP4", "start": 0.0, "end": 2.5, "hero": True, "why": "the hello"},
+            {"clip": "CLIP_C.MP4", "start": 1.5, "end": 2.0, "why": "the ride"},
+            {"clip": "CLIP_B.MP4", "start": 0.0, "end": 1.0, "why": "the reply"}])
+        assert out.get("ok"), out
+        pg.evaluate("refreshBin()")
+        pg.evaluate("(p) => rcShowProposal(p)", {"segments": [
+            {"clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0, "why": "the hello"},
+            {"clip": "CLIP_C.MP4", "in": 1.5, "out": 4.0, "why": "the ride"},
+            {"clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0, "why": "the reply"}], "notes": "three"})
+        pg.wait_for_function(f"document.querySelectorAll('{GHOST} .tl-pick').length >= 3", timeout=8000)
+        hits = pg.evaluate("""() => {
+          const box = (e) => e.getBoundingClientRect();
+          const cross = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+          const picks = [...document.querySelectorAll('#tl .tl-pick')].map(box);
+          const names = [...document.querySelectorAll('#tl .ghost .gtxt')].map(box);
+          const out = [];
+          picks.forEach((p, i) => names.forEach((n, j) => { if (cross(p, n)) out.push([i, j]); }));
+          return {hits: out, picks: picks.length, names: names.length};
+        }""")
+        assert hits["picks"] >= 3 and hits["names"] == 3, hits
+        assert hits["hits"] == [], hits
+        _shot(pg, "review-picks-under-names-1440")
+        pg.locator("#rejectProposal").click()
+        assert pg.errors == []
+    finally:
+        _seed(project, TWO)
+        pg.close()
+
+
+# ---------------------------------------------------------------- checks, server side
+CLIPS3 = {c: {"name": c, "duration": 6.0} for c in ("CLIP_A.MP4", "CLIP_B.MP4", "CLIP_C.MP4")}
+
+
+def test_the_plan_carries_the_models_checks_validated():
+    """`checks` is part of the plan the model writes: kept with its range when the range
+    is real, kept without it when not, dropped when it says nothing — never a re-ask."""
+    from roughcut import revise
+    assert "checks" in revise.PLAN_SCHEMA
+    plan = revise.validate_plan({
+        "segments": [{"clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0, "why": "hello"}],
+        "notes": "Opens on the hello.",
+        "checks": [{"text": "Check the hello reads on screen.", "clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0},
+                   {"text": "Check  the  ending.", "clip": "CLIP_Z.MP4", "in": 1, "out": 2},
+                   {"text": "Past the end.", "clip": "CLIP_B.MP4", "in": 5.0, "out": 9.0},
+                   {"text": "  "}, "Whole film: is it too long?"]}, CLIPS3)
+    assert plan["checks"] == [
+        {"text": "Check the hello reads on screen.", "clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0, "kind": "model"},
+        {"text": "Check the ending.", "clip": None, "in": None, "out": None, "kind": "model"},
+        {"text": "Past the end.", "clip": "CLIP_B.MP4", "in": None, "out": None, "kind": "model"},
+        {"text": "Whole film: is it too long?", "clip": None, "in": None, "out": None, "kind": "model"}]
+    # an old answer without the key still validates
+    assert revise.validate_plan({"segments": [{"clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0}]},
+                                CLIPS3)["checks"] == []
+    # every prompt asks for them
+    prompt = revise.build_first_prompt({}, "", "", (5, 20))
+    assert "`checks`" in prompt
+
+
+def test_check_notes_puts_flags_rejections_and_the_models_checks_in_one_list():
+    from roughcut import revise
+    current = [{"id": "a", "clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0},
+               {"id": "b", "clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0}]
+    plan = {"segments": [{"id": "a", "clip": "CLIP_A.MP4", "in": 1.5, "out": 3.0},
+                         {"id": "b", "clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0},
+                         {"clip": "CLIP_C.MP4", "in": 0.5, "out": 4.0}],
+            "notes": "Added the ride; the rest is unchanged.",
+            "checks": [{"text": "Check the ride's picture.", "clip": "CLIP_C.MP4",
+                        "in": 1.0, "out": 2.0, "kind": "model"}],
+            "firstpass": {"rejected": [{"clip": "CLIP_B.MP4", "in": 3.0, "out": 4.0,
+                                        "action": "dropped"}]}}
+    out = revise.check_notes(plan, current)
+    kinds = [c["kind"] for c in out["checks"]]
+    assert kinds == ["flag", "rejected", "model"], out["checks"]
+    flag, rej, model = out["checks"]
+    assert flag["shot"] == 0 and "shot 1 (CLIP_A) changes 0:01.0–0:03.0 → 0:01.5–0:03.0" in flag["text"]
+    assert rej["shot"] is None and rej["text"] == "CLIP_B 0:03.0–0:04.0 — you rejected this shot before: left out"
+    assert model["shot"] == 2 and model["text"] == "Check the ride's picture."
+    # idempotent: a second pass does not double the list
+    assert revise.check_notes(out, current)["checks"] == out["checks"]
+    # a first cut (nothing to compare) still carries the model's checks
+    first = revise.check_notes({"segments": plan["segments"], "notes": "x",
+                                "checks": plan["checks"]}, [])
+    assert [c["kind"] for c in first["checks"]] == ["model"]

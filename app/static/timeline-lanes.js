@@ -117,10 +117,35 @@
    * outlines under A2, every row sized from the panel's height. The strike-outs and the
    * arrows sit over V1. */
   function layout() {
+    // A first cut on an empty sequence (verdict 5, punch 3): the ghost is drawn in V1's
+    // own row, where Accept will put it, not under an empty V1 — the foundation lays the
+    // rows out without a ghost row and the lane takes V1's place.
+    const inV1 = ghostInV1();
+    if (inV1) el.ghost.hidden = true;
     if (tl.layoutTracks) tl.layoutTracks();
+    if (inV1) el.ghost.hidden = false;
+    placeGhostInV1(inV1);
     el.over.style.top = 'var(--tl-v1top)';
     el.arrows.style.top = el.over.style.top;
     if (el.picks) el.picks.style.top = el.over.style.top;
+  }
+
+  function ghostInV1() {
+    return !!(el.ghost && ghost && !el.ghost.hidden && !tl.state.segs.length);
+  }
+
+  function placeGhostInV1(on) {
+    const v1 = tl.el.lanes.V1;
+    const head = tl.el.heads && tl.el.heads.V1;
+    if (head) head.style.visibility = on ? 'hidden' : '';
+    el.ghost.classList.toggle('in-v1', on);
+    if (!on || !v1) return;
+    el.ghost.style.top = v1.style.top;
+    el.ghost.style.height = v1.style.height;
+    if (el.ghostHead) {
+      el.ghostHead.style.top = v1.style.top;
+      el.ghostHead.style.height = v1.style.height;
+    }
   }
 
   /* The review controls' and the pick markers' look, shipped with the lane that draws
@@ -162,7 +187,11 @@
 #tl .tl-over .strike.kept button.rv { color: var(--good); border-color: var(--good); }
 #tl .tl-over .strike.flagged { box-shadow: inset 0 -2px 0 var(--warn); }
 #tl .tl-picks { position: absolute; left: 0; right: 0; height: 0; pointer-events: none; z-index: 4; }
-#tl .tl-pick { position: absolute; top: 0; width: 9px; height: 10px; margin-left: -4.5px; pointer-events: auto;
+#tl .tl-xlane[data-lane=ghost].in-v1 { z-index: 3; }
+/* under the name band (the label's 1 + 14 + 3 px inside the ghost's 1 px border, and a
+   pixel clear), never over a shot's name — verdict 5 read "C…" where markers covered the
+   ghosts' names */
+#tl .tl-pick { position: absolute; top: 20px; width: 9px; height: 10px; margin-left: -4.5px; pointer-events: auto;
   background: #e0a63a; cursor: help; clip-path: polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%); }
 #tl .tl-pick.hero { background: #f2c94c; }
 #tl .tl-pick.on-ghost { z-index: 2; }
@@ -676,6 +705,8 @@
       const w = tl.el.view.clientWidth || 0;
       if (w > 200) tl.zoomTo(Math.max(0.5, Math.min(400, (w - 12 - 90) / ghost.total)), { at: 0, viewX: 0 });
     }
+    // ... and its first frame in the Program monitor, not a black screen (verdict 5)
+    if (fresh && !tl.state.segs.length && ghost.ghosts.length) cueRange(ghost.ghosts[0].seg, ghost.ghosts[0].start);
     lane.hidden = false;
     lane.h = ghostHeight();
     if (lane.style.height !== px(lane.h)) lane.style.height = px(lane.h);
@@ -879,6 +910,28 @@
       step();
     };
     if (v.readyState >= 1) go(); else v.addEventListener('loadedmetadata', go, { once: true });
+    return true;
+  }
+
+  /* Park the monitor on a proposal's shot without playing it: its first frame, with
+   * a picture (readyState ≥ 2) — preload="metadata" alone can stop short of one, so the
+   * parked time is seeked to again once the metadata is in. */
+  function cueRange(seg, filmFrom) {
+    const a = app();
+    const pauseCut = fn('pauseCut'), liveVideo = fn('liveVideo'), arm = fn('arm'), showLive = fn('showLive');
+    if (!a || !a.player || a.player.playing || !pauseCut || !liveVideo || !arm || !seg) return false;
+    pauseCut();
+    const v = liveVideo();
+    if (!v) return false;
+    rangeGen++;
+    arm(v, seg);
+    if (showLive) showLive();
+    const src = v.dataset.src;
+    const what = q('#playingWhat');
+    if (what) what.textContent = `proposal · ${nameOf(seg.clip)} ${tl.fmt(seg.in)}–${tl.fmt(seg.out)}`;
+    tl.setPlayhead(filmFrom || 0, { reveal: false });
+    const kick = () => { if (v.dataset.src === src && v.readyState < 2) v.currentTime = seg.in; };
+    if (v.readyState >= 1) kick(); else v.addEventListener('loadedmetadata', kick, { once: true });
     return true;
   }
 
@@ -1314,7 +1367,12 @@
     tl.on('change', schedule);
     tl.on('zoom', schedule);
     const render = tl.render;
-    tl.render = function () { const r = render.apply(tl, arguments); schedule(); return r; };
+    tl.render = function () {
+      const r = render.apply(tl, arguments);
+      if (ghostInV1()) layout();           // the render laid a ghost row out under V1 again
+      schedule();
+      return r;
+    };
     setInterval(poll, POLL_MS);
     redraw();
   }
