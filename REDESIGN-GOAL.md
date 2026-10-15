@@ -143,3 +143,10 @@ next judge runs, and the next judge rules it honest or lenient.
   at 1440×900 and 1920×1080 (the app bar may ellipsize a job's name or Next's sentence only
   with a hover title), no link in the browser's blue or underline on `/`, and every `/open`
   card has a loaded picture within 10 s of opening a fresh work dir.
+- 2026-10-15 (wave 2, lane TRACKS): `test_budget.py` board budgets raised for the track
+  headers (Premiere's V2/V1/A1/A2 headers: lock, target, eye or mute/solo — 14 controls,
+  ~9 words). Measured on the merged branch: / 103 · 49, / shot 154 · 61, / film 111 · 48,
+  / jobs 129 · 49, / fx 131 · 52. Controls: / 38 → 54, / shot 51 → 67, / film 37 → 53,
+  / jobs 38 → 54, / fx 41 → 57; words: / film 104 → 122, / jobs 122 → 142, / fx 130 → 144
+  (measured +~10 %, so growth still fails); words on / and / shot unchanged (still under).
+  /floor and /open unchanged; every other check unchanged.

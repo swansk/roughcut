@@ -28,14 +28,14 @@
 #tl .tick { position: absolute; bottom: 0; width: 1px; height: 5px; background: #33333f;
             pointer-events: none; }
 #tl .tick.major { height: 9px; background: #55556a; }
-#tl .tick.major label { position: absolute; left: 3px; bottom: 7px; font-size: 10px;
+#tl .tick.major label { position: absolute; left: 3px; bottom: 7px; font-size: 11px;
                         color: var(--dim); white-space: nowrap;
                         font-variant-numeric: tabular-nums; }
 #tl .tl-end { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed #3e3e4c;
               pointer-events: none; z-index: 2; }
 /* the film's total, on the lane row just past the end line — never on top of a tick label */
 #tl .tl-end label { position: absolute; left: 5px; top: calc(var(--tl-ruler) + 8px);
-                    font-size: 10px; color: var(--dim); white-space: nowrap;
+                    font-size: 11px; color: var(--dim); white-space: nowrap;
                     font-variant-numeric: tabular-nums; }
 
 /* V1: shot blocks positioned by film time */
@@ -212,7 +212,7 @@
 #tl .tl-track[data-track=A2] .bed { position: absolute; top: 2px; bottom: 2px; border-radius: 3px;
                                     background: hsl(150 30% 26%); border: 1px solid hsl(150 30% 38%);
                                     box-sizing: border-box; cursor: pointer; overflow: hidden; }
-#tl .tl-track[data-track=A2] .bedname { position: sticky; left: 4px; display: inline-block; font-size: 10px;
+#tl .tl-track[data-track=A2] .bedname { position: sticky; left: 4px; display: inline-block; font-size: 11px;
                                         line-height: 14px; padding: 1px 5px; color: var(--text);
                                         white-space: nowrap; z-index: 1; }
 #tl .tl-track[data-track=A2] .duck { position: absolute; top: 2px; background: #0d0d11; opacity: .55;
@@ -324,10 +324,10 @@
 #tl .tl-corner { position: relative; height: var(--tl-ruler); display: flex; align-items: center;
                  gap: 6px; padding: 0 4px 0 6px; box-sizing: border-box; z-index: 2;
                  background: #131318; border: 1px solid var(--line); border-right: 0; border-radius: 6px 0 0 0; }
-#tl .tl-tc { font: 600 13px/22px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+#tl .tl-tc { font: 600 12px/22px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
              font-variant-numeric: tabular-nums; color: var(--accent); letter-spacing: .02em;
              white-space: nowrap; height: 22px; flex: 1 1 auto; overflow: hidden; }
-#tl .tl-toolbtn { width: 26px; height: 20px; padding: 0; font-size: 13px; line-height: 1; flex: none;
+#tl .tl-toolbtn { width: 26px; height: 20px; padding: 0; font-size: 12px; line-height: 1; flex: none;
                   border-radius: 4px; cursor: pointer; background: #1c1c24; color: var(--text);
                   border: 1px solid var(--line); }
 #tl .tl-toolbtn:hover { border-color: var(--accent); }
@@ -388,7 +388,7 @@
 
 /* A1: each shot's own sound — Premiere's audio green, the speech in it as brighter bands */
 #tl .ablk { position: absolute; box-sizing: border-box; overflow: hidden; cursor: pointer;
-            border-radius: 3px; padding: 2px 5px; font-size: 10px; line-height: 14px;
+            border-radius: 3px; padding: 2px 5px; font-size: 11px; line-height: 14px;
             color: #dff3e6; white-space: nowrap; z-index: 1;
             background: hsl(152 32% 22%); border: 1px solid hsl(152 30% 34%);
             border-left: 3px solid hsl(var(--hue) 45% 58%); }
@@ -411,7 +411,7 @@
 
 /* V2: clips over the cut — the picture's blue, a poster at the head */
 #tl .oblk { position: absolute; box-sizing: border-box; overflow: hidden; cursor: grab; display: flex;
-            gap: 5px; align-items: stretch; border-radius: 3px; padding: 2px 4px; font-size: 10px;
+            gap: 5px; align-items: stretch; border-radius: 3px; padding: 2px 4px; font-size: 11px;
             line-height: 14px; color: var(--text); white-space: nowrap; z-index: 1;
             background: hsl(220 30% 24%); border: 1px solid hsl(220 35% 40%);
             border-left: 3px solid hsl(var(--hue) 45% 58%); }
@@ -427,7 +427,7 @@
                 padding: 0 5px; box-sizing: border-box; pointer-events: auto; overflow: hidden;
                 background: #1a1a20; border-left: 1px solid var(--line); border-top: 1px solid #22222a; }
 #tl .tl-thead.audio { background: #18191d; }
-#tl .tl-thead button { height: 18px; min-width: 20px; padding: 0 4px; font: 600 10px/16px system-ui, sans-serif;
+#tl .tl-thead button { height: 18px; min-width: 20px; padding: 0 4px; font: 600 11px/16px system-ui, sans-serif;
                        border-radius: 3px; cursor: pointer; background: #24242c; color: var(--dim);
                        border: 1px solid #30303a; display: inline-flex; align-items: center; justify-content: center; }
 #tl .tl-thead button:hover { border-color: var(--accent); color: var(--text); }

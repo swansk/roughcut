@@ -756,6 +756,8 @@
     if (!mounted) return;
     const t = e.target;
     if (t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable)) return;
+    // a modal (the Export dialog) owns its keys: Enter / Space on its buttons are its own
+    if (t && t.closest && t.closest('dialog[open]')) return;
     const mod = e.metaKey || e.ctrlKey;
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     let handled = false;

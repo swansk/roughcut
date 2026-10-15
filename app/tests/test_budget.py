@@ -72,10 +72,15 @@ HEADER_MAX_PX = 50
 # fails. /floor and /open are unchanged.
 # After lane KEYS merged (the timeline's timecode column and HH:MM:SS:FF ruler labels),
 # "/" measured 96 words: 94 → 105.
-WORDS_IN_VIEW = {"/": 105, "/floor": 58, "/open": 59, "/ shot": 154, "/ film": 104, "/ fx": 130,
-                 "/ jobs": 122}
-CONTROLS_IN_VIEW = {"/": 38, "/floor": 8, "/open": 9, "/ shot": 51, "/ film": 37, "/ fx": 41,
-                    "/ jobs": 38}
+# Lane TRACKS (wave 2, verdict 2 punch 3): the Timeline's four track headers are 14
+# controls (lock · name/target · eye on V1/V2; lock · name · M · S on A1/A2) and ~9
+# words (V2 V1 A1 M S A2 M S, the bed's name on A2). Measured after it: / 103 · 49,
+# / shot 154 · 61, / film 111 · 48, / jobs 129 · 49, / fx 131 · 52; the board's numbers
+# below are those plus ~10 % (words on / and / shot were still under theirs, kept).
+WORDS_IN_VIEW = {"/": 105, "/floor": 58, "/open": 59, "/ shot": 154, "/ film": 122, "/ fx": 144,
+                 "/ jobs": 142}
+CONTROLS_IN_VIEW = {"/": 54, "/floor": 8, "/open": 9, "/ shot": 67, "/ film": 53, "/ fx": 57,
+                    "/ jobs": 54}
 
 # Contracts another lane delivers (M16 stage 1, C1): until that lane is merged the
 # check is an expected failure on that screen. Every stage-1 lane is merged, so this is

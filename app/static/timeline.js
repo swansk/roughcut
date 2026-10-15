@@ -1871,6 +1871,7 @@
 
   function onKey(e) {
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName) || e.target.isContentEditable) return;
+    if (e.target.closest && e.target.closest('dialog[open]')) return;   // a modal's keys are its own
     const k = e.key;
     if ((e.metaKey || e.ctrlKey) && k.toLowerCase() === 'z') {
       e.preventDefault();
