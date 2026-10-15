@@ -49,6 +49,10 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-15 20:30: JOURNEY2 `7fa9ff2`, PROPOSAL2 `0b71e70`, RENDER2 merged. Wave-7 queue adds: keys on a razor/split must
+  shift on BOTH sides (client timeline.js `split()` AND server `roughcut/edits.py` ops) with a key at the cut; V2+ overlays
+  honour their own `controls` (alpha-composite over V1, not blend to black); the size sample includes overlays; the 8-bit RGB
+  tone step clips a channel before the saturation mix (shader clamps after).
 - 2026-10-15 19:00: KEYS2 `a07bedd` and KEYUI merged. Queued for wave 7 (KEYUI's requests, timeline.js): a razor `split()`
   copies `controls.keys` unchanged to the second half; shift them by -(split offset) and add a key at the cut so neither half
   jumps; trimming a shot's in-point shifts its keys (t is from the shot's start): shift by the trim's film-time change so keys

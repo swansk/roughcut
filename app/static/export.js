@@ -57,6 +57,19 @@
     return b > a ? [a, b] : null;
   }
 
+  /* A shot's keyframes (`controls.keys`, seconds from the shot's start in film time)
+   * when `head` film seconds are trimmed off its start: every key moves `head` earlier,
+   * so the animation stays where it was in the film. */
+  function shiftKeys(s, head) {
+    const c = s.controls;
+    if (!(head > 0) || !c || !c.keys) return s;
+    const keys = {};
+    Object.entries(c.keys).forEach(([prop, list]) => {
+      keys[prop] = (list || []).map(([t, v]) => [+(Number(t) - head).toFixed(4), v]);
+    });
+    return { ...s, controls: { ...c, keys } };
+  }
+
   /* The shots between film seconds a and b, trimmed at the two ends. A shot at a speed
    * covers `speed` clip seconds per film second, so the trim scales by it. */
   function clipRange(list, a, b) {
@@ -70,7 +83,9 @@
       const sp = speedOf(s);
       const cin = Number(s.in) + Math.max(0, a - s0) * sp;
       const cout = Number(s.out) - Math.max(0, s1 - b) * sp;
-      if ((cout - cin) / sp > tiny) out.push({ ...s, in: +cin.toFixed(4), out: +cout.toFixed(4) });
+      if ((cout - cin) / sp > tiny) {
+        out.push({ ...shiftKeys(s, Math.max(0, a - s0)), in: +cin.toFixed(4), out: +cout.toFixed(4) });
+      }
     });
     return out;
   }
@@ -266,8 +281,14 @@
       <div><span>Bitrate</span><b>≈ ${vMbps.toFixed(vMbps < 10 ? 1 : 0)} Mbps</b></div>
       <div title="${esc(how)}"><span>Estimated size</span><b id="exSize" data-mb="${mb.toFixed(3)}"
         data-source="${esc(measuring ? 'measuring' : p.source || 'typical')}">≈ ${esc(human(mb))}${measuring ? ' <i class="ex-measuring">measuring…</i>' : ''}</b></div>`;
+    // Export never guesses (verdict 5, punch 6: "≈ 773 MB" said, 306 MB written): while
+    // the size is being measured the button waits for it, and the repaint when the
+    // sample lands enables it with the measured figure on screen.
     const empty = !sequence().length;
-    dlg.querySelector('#exGo').disabled = empty;
+    const go = dlg.querySelector('#exGo');
+    go.disabled = empty || measuring;
+    go.title = measuring ? 'Export unlocks once the size is measured: a 2 s sample of this sequence is encoding' : '';
+    dlg.dataset.measuring = measuring ? 'yes' : 'no';
     if (empty) dlg.querySelector('#exNote').textContent = 'The sequence is empty: put a clip on V1 first.';
   }
 
