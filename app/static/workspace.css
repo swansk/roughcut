@@ -529,8 +529,15 @@ a.floorbtn:hover { color: var(--text); background: var(--card-hi); border-color:
 #tlBody { overflow: clip; padding: 6px 8px 18px;
           background: linear-gradient(#0d0d11, #0d0d11) no-repeat 8px 6px / calc(100% - 16px) calc(100% - 24px); }
 #tl { margin-top: 0; }
+/* The track header column is one surface down to the panel's foot, as Premiere's is: the
+   seam between two tracks' headers (8 px between V1 and A1) showed the sequence area's
+   near-black through it — the dark stripe under the V1 header (verdict 5, punch 9). */
+#tl .tl-side { background: #18191d; }
 #tlEmpty { position: absolute; inset: 0; overflow: auto; padding: 14px; display: flex;
            align-items: center; justify-content: center; pointer-events: none; z-index: 8; }
+/* centred over the tracks, right of the header column (timeline.css --tl-side, 150 px,
+   plus the body's 8 px), so the column never covers the box's left edge */
+#tlEmpty { padding-left: 172px; }
 /* the box floats over the empty sequence's tracks; around it a drop reaches them */
 #tlEmpty > * { pointer-events: auto; background: rgba(19,19,22,.94); }
 #tlEmpty[hidden] { display: none; }
@@ -541,6 +548,10 @@ a.floorbtn:hover { color: var(--text); background: var(--card-hi); border-color:
 /* one AI action in the empty Timeline (verdict 4, punch 10): the first pass's box until a
    pass has finished, then "Make a first cut" (app.js emptyState sets data-ai) */
 #tlEmpty .empty[data-ai="pass"] .firstRow, #tlEmpty .empty[data-ai="cut"] .fp-empty { display: none !important; }
+/* Cold, "Run first pass" is the header's and the Timeline card's — two, not three
+   (verdict 5, punch 9): the empty Program monitor says how to fill it and offers no
+   button of its own (firstpass.js still mounts one there; it is not drawn). */
+#progEmpty .fp-empty-btn { display: none; }
 
 /* ------------------------------------------------------------ overlays */
 #keysOverlay { position: fixed; inset: 0; z-index: 60; background: rgba(4,4,6,.72);

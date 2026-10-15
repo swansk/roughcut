@@ -1725,9 +1725,10 @@ function syncPlayer() {
   // the empty Program says how to fill it, in Premiere's words (verdict 2, punch 8)
   if (progEmpty && !progEmpty.hidden && !progEmpty.dataset.said) {
     progEmpty.dataset.said = '1';
-    // only the words: firstpass.js keeps its Run first pass button in here too
+    // only the words: firstpass.js mounts its button in here too, which workspace.css
+    // does not draw (verdict 5, punch 9: Run first pass is the header's and the Timeline's)
     const words = [...progEmpty.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim());
-    if (words) words.textContent = 'the sequence is empty · drag a clip to the Timeline or press ,';
+    if (words) words.textContent = 'the sequence is empty · drag a clip to the Timeline or press , (Insert)';
   }
   if (player.idx >= segs.length) { pauseCut(); player.idx = -1; }
   if (player.playing && player.idx >= 0) {
@@ -1832,7 +1833,7 @@ function emptyState() {
   // Footage goes in before the AI has heard it (verdict 2, punch 8): the first action
   // is the editor's — a drag or `,`. "Run first pass" beside it is lane FPUI's button,
   // which firstpass.js puts into this box (`.fp-empty`) after every render.
-  const lead = 'Drag a clip here or press <kbd>,</kbd>';
+  const lead = 'Drag a clip here or press <kbd>,</kbd> (Insert)';
   if (!analysed) {
     el.innerHTML = `<h3>${lead}</h3>`;
     el.dataset.ai = 'pass';

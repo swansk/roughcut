@@ -885,6 +885,60 @@ def test_the_workspace_styles_are_a_module_not_an_inline_block(live_server):
     assert "#ws {" in css and ".ws-tab" in css
 
 
+RUN_FIRST_PASS_JS = """() => [...document.querySelectorAll('button, a[href], [role=button]')]
+    .filter((b) => { const r = b.getBoundingClientRect(), s = getComputedStyle(b);
+      return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'
+        && /Run first pass/.test(b.textContent); })
+    .map((b) => b.closest('header') ? 'header' : b.closest('#pTimeline') ? 'timeline'
+      : b.closest('#pProgram') ? 'program' : b.id || b.className)"""
+
+
+def test_the_cold_screen_offers_run_first_pass_twice_and_says_what_comma_does(
+        live_server, project, browser):
+    """Verdict 5, punch 9: cold, "Run first pass" showed three times (the header, the
+    Timeline card and the Program monitor), the Program read "… or press ," and a dark
+    stripe sat under the V1 header. Now: the header's and the Timeline's, no more; both
+    empty states say "press , (Insert)"; the track header column is one colour down to
+    the panel's foot."""
+    import os
+    pg = _open(browser, live_server, project, (1440, 900), seed={**SEED, "segments": []})
+    pg.wait_for_selector("#tlEmpty .fp-empty-btn:visible", timeout=15000)
+    pg.wait_for_function("window.rcFirstPass && rcFirstPass.state()", timeout=15000)
+    pg.wait_for_timeout(500)
+    shots = os.environ.get("ROUGHCUT_COLD_SHOTS")
+    if shots:
+        Path(shots).mkdir(parents=True, exist_ok=True)
+        pg.screenshot(path=str(Path(shots) / "cold-1440.png"))
+    where = pg.evaluate(RUN_FIRST_PASS_JS)
+    assert sorted(where) == ["header", "timeline"], where
+    assert "press , (Insert)" in pg.locator("#progEmpty").inner_text()
+    assert "press , (Insert)" in pg.locator("#tlEmpty .empty").inner_text()
+    # the track header column under V1: the seam down to A1's header is the column's own
+    # surface, never the sequence area's near-black showing through
+    seam = pg.evaluate(SEAM_JS)
+    assert seam["gap"] >= 0, seam
+    assert seam["seam"] >= seam["head"] - 6, seam          # no dark band between V1 and A1
+    assert pg.errors == []
+    pg.context.close()
+
+
+SEAM_JS = r"""() => {
+    const heads = [...document.querySelectorAll('#tl .tl-thead')];
+    const named = (n) => heads.find((h) => h.querySelector('.tname')
+      && h.querySelector('.tname').textContent.trim() === n);
+    const rv = named('V1').getBoundingClientRect(), ra = named('A1').getBoundingClientRect();
+    const lum = (c) => { const m = c.match(/[\d.]+/g).map(Number);
+      return m.length > 3 && m[3] === 0 ? null : (m[0] + m[1] + m[2]) / 3; };
+    // the first painted layer under the point: a background colour, or a gradient's
+    // (the sequence area's near-black is #tlBody's background-image)
+    const paint = (x, y) => { for (const e of document.elementsFromPoint(x, y)) {
+      const s = getComputedStyle(e), g = s.backgroundImage.match(/rgba?\([^)]*\)/);
+      const l = lum(g ? g[0] : s.backgroundColor); if (l != null) return l; } return null; };
+    const x = rv.left + rv.width / 2;
+    return {gap: ra.top - rv.bottom, seam: paint(x, (rv.bottom + ra.top) / 2),
+            head: paint(x, rv.top + 3)}; }"""
+
+
 NTSC = 30000 / 1001
 
 
