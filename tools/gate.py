@@ -17,11 +17,19 @@ Checks (each one line in summary.md, exit 0 only if all are green):
   screens  test_budget.py again with ROUGHCUT_BUDGET_SHOTS set: the screen budget (one
            header row, one blue button, no board scroll, words/controls in view) plus a PNG
            of every screen and board state for the judge to look at.
+  journey  tools/journey.py (REDESIGN-GOAL dimension 12): one scripted editing session in
+           real Chromium on the frozen copy, the suite's fixture and a scripted model —
+           open, Run first pass, accept, trim ×2, razor, move, warmer, Re-run first pass
+           keeping the hand edits, Export (Ctrl+M), ffprobe. The gate's own journey.py
+           drives the snapshot's board, so an old rev is judged by today's journey. A PNG
+           per step + journey.json in journey/. Red on the first step that fails.
   hygiene  no model ID literal outside roughcut/config.py; no `import anthropic` outside
            roughcut/inference; no Windows path literal in code.
---quick skips the full suite (screens + hygiene only, ~1 min).
+--quick skips the full suite (screens + journey + hygiene, ~2 min; the journey alone is
+~40-60 s on the fixture, so it runs in both).
 
-Output: $ROUGHCUT_LOOP/gate-<sha>-<stamp>/summary.md + one log per check + screens/*.png.
+Output: $ROUGHCUT_LOOP/gate-<sha>-<stamp>/summary.md + one log per check + screens/*.png
++ journey/NN-step.png + journey/journey.json.
 $ROUGHCUT_LOOP defaults to ~/roughcut-loop (outside the repo, never committed).
 """
 
@@ -32,6 +40,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -70,6 +79,34 @@ def counts(junit: Path) -> dict:
     s = r if r.tag == "testsuite" else r.find("testsuite")
     tests, fail, err, skip = (int(s.get(k, 0)) for k in ("tests", "failures", "errors", "skipped"))
     return {"passed": tests - fail - err - skip, "failed": fail + err, "skipped": skip}
+
+
+def journey(snap: Path, out: Path, log: Path, env: dict, timeout: int = 900) -> tuple[bool, str]:
+    """tools/journey.py against the frozen copy; (green, the line after "journey ✓/✗ ").
+
+    Its own process group, so a timeout takes the browser, the server and any ffmpeg
+    the journey started with it."""
+    t0 = time.time()
+    cmd = [sys.executable, str(ROOT / "tools" / "journey.py"), str(snap), str(out)]
+    with log.open("w") as f:
+        p = subprocess.Popen(cmd, cwd=snap, stdout=f, stderr=subprocess.STDOUT, env=env,
+                             start_new_session=True)
+        try:
+            rc = p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            os.killpg(p.pid, signal.SIGKILL)
+            p.wait()
+            return False, f"timed out after {timeout} s — see {log}"
+    line = ""
+    try:
+        line = json.loads((out / "journey.json").read_text()).get("line", "")
+    except (OSError, ValueError):
+        said = [ln for ln in log.read_text(errors="replace").splitlines() if ln.startswith("journey ")]
+        line = said[-1] if said else ""
+    if not line.startswith(("journey ✓ ", "journey ✗ ")):
+        return False, f"step 0 setup: no result line (rc={rc}, {time.time() - t0:.0f} s) — see {log}"
+    green = rc == 0 and line.startswith("journey ✓ ")
+    return green, line[len("journey ✓ "):]
 
 
 def browser_preflight(cwd: Path, log: Path, env: dict) -> tuple[bool, str]:
@@ -146,6 +183,7 @@ def main() -> int:
         if not quick:
             results.append(("suite", False, why))
         results.append(("screens", False, why))
+        results.append(("journey", False, why))
 
     # ---- suite ----
     if not quick and browser_ok:
@@ -182,6 +220,12 @@ def main() -> int:
                         f"test_budget rc={rc} · {len(pngs)} PNGs · {time.time() - t0:.0f} s\n    "
                         + "\n    ".join(budget)))
 
+    # ---- journey ----
+    jdir = run_dir / "journey"
+    if browser_ok:
+        print("journey: one editing session, end to end…", flush=True)
+        results.append(("journey", *journey(snap, jdir, run_dir / "journey.log", env)))
+
     # ---- hygiene ----
     problems = []
     model_lit = re.compile(r"claude-(opus|sonnet|haiku|fable)-\d")
@@ -202,7 +246,7 @@ def main() -> int:
     summary = [f"# gate {sha} · {stamp} · {'GREEN' if ok else 'RED'} · {time.time() - t_all:.0f} s",
                f"ref {ref} = {sha}; frozen copy {snap}", ""]
     summary += [f"- **{name}** {'✓' if g else '✗'} {line}" for name, g, line in results]
-    summary += ["", f"screens: {shots}"]
+    summary += ["", f"screens: {shots}", f"journey: {jdir}"]
     (run_dir / "summary.md").write_text("\n".join(summary) + "\n")
     (run_dir / "summary.json").write_text(json.dumps(
         {"sha": sha, "green": ok, "results": [{"name": n, "green": g, "line": l} for n, g, l in results]},
