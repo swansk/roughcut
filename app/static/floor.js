@@ -403,6 +403,14 @@ function tick(now) {
       if (v.currentTime <= 0) F.shuttle = 0;
     }
     const t = v.currentTime;
+    // A seek can leave Chromium's element idle with no data at the new time (readyState 1,
+    // networkState IDLE): "playing", fetching nothing, the picture frozen for good. The gate
+    // saw the band replay sit at its start for 9 s (instrumented). Not moving for over a
+    // second while idle and starved: re-issue the seek, which makes the element fetch again.
+    if (F.playing && !v.paused && v.readyState < 3 && v.networkState === 1) {
+      if (t !== F.stallT) { F.stallT = t; F.stallSince = now; }
+      else if (now - F.stallSince > 1000) { F.stallSince = now; v.currentTime = t; }
+    } else F.stallT = null;
     if (F.playing && !v.paused) {
       if (t >= stopAt() - 0.04 || v.ended) {
         v.pause();

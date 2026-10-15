@@ -4435,6 +4435,10 @@ async function boot() {
       clearTimeout(v._stallT);
       v._stallT = setTimeout(() => {
         if (v === liveVideo() && player.playing && (v.readyState < 3 || v.seeking)) monWait(true);
+        // Chromium can leave an element idle after a seek (readyState < 3, networkState IDLE):
+        // waiting forever, fetching nothing. Re-issuing the seek makes it fetch again (the same
+        // stall /floor's band replay hit in the gate; instrumented there).
+        if (player.playing && v.readyState < 3 && v.networkState === 1 && !v.seeking) v.currentTime = v.currentTime;
       }, 1500);
     });
   });

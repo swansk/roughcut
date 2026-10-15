@@ -10,6 +10,9 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **A video that stops fetching after a seek gets nudged instead of freezing.** Instrumented on /floor's band replay (the recurring "flaky" `test_0_restarts_the_clip_and_shift_0_restarts_the_band`, 1 run in 5 alone): after the seek to the band's start the element sat at readyState 1 with networkState IDLE for 9 s, nominally playing, fetching nothing. floor.js's tick re-issues the seek once the picture has not moved for over a second while the element is idle and starved; the board's Program monitor does the same in its 1.5 s stall timer. The floor test: 10/10 (was ~4/5).
+
+### Fixed
 - **`test_ingest`'s cold-land test expects no Program copy of Run first pass**, which the lead's `1d48347` removed (the wave-6 gate found it broken).
 
 ### Fixed
