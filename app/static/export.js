@@ -28,6 +28,7 @@
   let job = null;             // the running export's id
   let poll = 0;
   let result = null;          // the finished export: {path, url, name}
+  let sent = null;            // what the running export was asked for: {segments, from}
 
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -389,6 +390,8 @@
     };
     remember('preset', body.preset);
     remember('folder', body.folder);
+    const range = useRange();
+    sent = { segments, from: range ? range[0] : 0, body, range: dlg.querySelector('#exRange').value };
     go.disabled = true;
     let r;
     try {
@@ -444,8 +447,96 @@
     } else if (st.state === 'cancelled') {
       paintSettings('Export cancelled. Nothing was written.');
     } else {
-      paintSettings(`The export failed: ${String(st.detail || 'see the server log')}`);
+      paintFailed(st);
     }
+  }
+
+  /* A failed export (verdict 7, blocker 2): which shot, where it is in the sequence,
+   * ffmpeg's word on it, Go to shot (selects it and parks the playhead there) and Show
+   * log (the render log's tail, here in the dialog). assemble.py names the failing part
+   * (`failed shot: {index, id, clip, in, out, film_s, reason}`; server.failed_shot). */
+  function failedPlace(shot) {
+    if (!shot) return null;
+    const list = sequence();
+    const from = sent ? Number(sent.from) || 0 : 0;
+    let t = from + (Number(shot.film_s) || 0);
+    let seg = shot.id != null ? list.find((s) => String(s.id) === String(shot.id)) : null;
+    let start = -1;
+    if (seg && window.tl && typeof tl.filmStart === 'function') start = tl.filmStart(seg.id);
+    if (seg && start < 0) seg = null;
+    if (!seg) {
+      // no id (or the shot is gone): the shot under the part's start in the sequence
+      let acc = 0;
+      seg = list.find((s) => { const d = durOf(s); const hit = t >= acc - 1e-6 && t < acc + d - 1e-6; acc += d; return hit; }) || null;
+      if (seg && window.tl && typeof tl.filmStart === 'function') start = tl.filmStart(seg.id);
+    }
+    if (seg && start >= 0) t = Math.min(Math.max(t, start), start + durOf(seg) - 1e-3);
+    return seg ? { seg, t } : null;
+  }
+
+  function paintFailed(st) {
+    paintSettings('');
+    if (sent) {
+      // the settings it was asked with, to change and try again
+      const set = (sel, v) => { const el = dlg.querySelector(sel); if (el && v != null && v !== '') el.value = v; };
+      set('#exName', sent.body.name);
+      set('#exFolder', sent.body.folder);
+      set('#exPreset', sent.body.preset);
+      if (!preset()) dlg.querySelector('#exPreset').value = info.preset;
+      if (sent.range === 'inout' && seqRange()) set('#exRange', 'inout');
+      paintEstimate();
+      ensureSample(dlg.querySelector('#exPreset').value);
+    }
+    const shot = st.failed_shot || null;
+    const at = failedPlace(shot);
+    const clip = shot && shot.clip ? String(shot.clip) : '';
+    const n = shot ? Number(shot.index) + 1 : 0;
+    const what = shot
+      ? `Shot ${n}${clip ? ` · ${esc(clip)}` : ''}${at ? ` · <b class="ex-failtc">${esc(tc(at.t))}</b>` : ''} did not render.`
+      : 'The render did not finish.';
+    const reason = shot ? shot.reason : st.detail;
+    const tail = String(st.log_tail || String(st.log || '').split('\n').slice(-40).join('\n')).trim();
+    const box = document.createElement('div');
+    box.className = 'ex-fail';
+    box.dataset.testid = 'export-failed';
+    box.setAttribute('role', 'alert');
+    if (shot) {
+      box.dataset.shot = String(n);
+      box.dataset.clip = clip;
+      if (at) { box.dataset.id = String(at.seg.id); box.dataset.t = String(at.t); }
+    }
+    box.innerHTML = `
+      <div class="ex-failline"><span class="ex-bad">Export failed</span><span>${what}</span></div>
+      ${reason ? `<div class="ex-dim ex-failwhy">${esc(String(reason).slice(-240))}</div>` : ''}
+      <div class="ex-failact">
+        ${at ? '<input type="button" class="ex-btn" id="exGoShot" data-testid="export-goto-shot" value="Go to shot">' : ''}
+        ${tail ? '<input type="button" class="ex-btn" id="exShowLog" data-testid="export-show-log" value="Show log">' : ''}
+      </div>
+      <pre class="ex-log" id="exLog" data-testid="export-log" hidden></pre>`;
+    const body = dlg.querySelector('#exBody');
+    body.insertBefore(box, body.firstChild);
+    const log = box.querySelector('#exLog');
+    log.textContent = tail;
+    const goBtn = box.querySelector('#exGoShot');
+    if (goBtn) goBtn.addEventListener('click', () => goToShot(at));
+    const logBtn = box.querySelector('#exShowLog');
+    if (logBtn) {
+      logBtn.addEventListener('click', () => {
+        log.hidden = !log.hidden;
+        logBtn.value = log.hidden ? 'Show log' : 'Hide log';
+        if (!log.hidden) log.scrollTop = log.scrollHeight;
+      });
+    }
+  }
+
+  /* Go to shot: close the dialog, select the shot on V1 and park the playhead on the
+   * frame where its part starts (the timeline's own select + seek: one click's worth). */
+  function goToShot(at) {
+    if (!at) return;
+    close();
+    if (!window.tl) return;
+    if (typeof tl.select === 'function') tl.select([at.seg.id], { source: 'app' });
+    if (typeof tl.seek === 'function') tl.seek(at.t);
   }
 
   async function cancelJob() {

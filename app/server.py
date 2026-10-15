@@ -181,7 +181,23 @@ def clip_probe(clip: str) -> dict | None:
 def measure_colour(clip: str, force: bool = False) -> dict | None:
     """Write (or read) the clip's colour file. Reads the proxy when it exists — it is
     SDR already, `build_proxy` normalised an HDR source — and the master otherwise,
-    with the normalise applied on the way in."""
+    with the normalise applied on the way in. Never called from a GET (verdict 7
+    blocker 3): the proxy jobs call it right after a proxy lands, and the colour queue
+    (`queue_colour`) for whatever is still missing one."""
+    with COLOUR_Q["lock"]:
+        COLOUR_Q["measuring"][clip] = COLOUR_Q["measuring"].get(clip, 0) + 1
+    try:
+        return _measure_colour(clip, force)
+    finally:
+        with COLOUR_Q["lock"]:
+            n = COLOUR_Q["measuring"].get(clip, 1) - 1
+            if n <= 0:
+                COLOUR_Q["measuring"].pop(clip, None)
+            else:
+                COLOUR_Q["measuring"][clip] = n
+
+
+def _measure_colour(clip: str, force: bool = False) -> dict | None:
     out = colour_file(clip)
     if out.exists() and not force:
         try:
@@ -203,6 +219,82 @@ def measure_colour(clip: str, force: bool = False) -> dict | None:
     tmp.write_text(json.dumps(d), encoding="utf-8")
     tmp.replace(out)
     return d
+
+
+# The colour queue (verdict 7 blocker 3). A clip whose proxy has landed and whose colour
+# file has not is measured here, one clip at a time, in a background scope: its ffmpeg
+# runs at nice 19 and is SIGSTOPped while the Program plays (the YIELD encodes' rules),
+# and it dies with the server. GET /api/junk only reads: it lists such a clip as
+# `colour: "pending"` and starts this queue, and the board says "checking colour…".
+COLOUR_Q: dict = {"lock": threading.Lock(), "pending": [], "measuring": {},
+                  "failed": {}, "thread": None, "scope": None}
+
+
+def colour_pending(clip: str) -> bool:
+    """The clip has a proxy to measure and no colour file yet (and has not failed)."""
+    if clip in COLOUR_Q["failed"]:
+        return False
+    return (not colour_file(clip).exists()
+            and (STATE["proxy_dir"] / f"{Path(clip).stem}.mp4").exists())
+
+
+def queue_colour(clips: list[str]) -> int:
+    """Queue the clips for the background colour measurement; start the worker if it is
+    not running. Returns how many are waiting or being measured."""
+    with COLOUR_Q["lock"]:
+        for c in clips:
+            if c not in COLOUR_Q["pending"]:
+                COLOUR_Q["pending"].append(c)
+        n = len(COLOUR_Q["pending"]) + len(COLOUR_Q["measuring"])
+        t = COLOUR_Q["thread"]
+        if COLOUR_Q["pending"] and (t is None or not t.is_alive()):
+            t = COLOUR_Q["thread"] = threading.Thread(target=_colour_loop, daemon=True,
+                                                      name="colour")
+            t.start()
+    return n
+
+
+def _colour_scope() -> procscope.Scope:
+    with COLOUR_Q["lock"]:
+        sc = COLOUR_Q["scope"]
+        if sc is None or sc.cancelled:
+            sc = COLOUR_Q["scope"] = procscope.Scope("colour", background=True)
+        return sc
+
+
+def _colour_loop() -> None:
+    while True:
+        scope = _colour_scope()
+        with COLOUR_Q["lock"]:
+            pending = COLOUR_Q["pending"]
+            # a clip somebody else (the index's proxy stage) is measuring right now
+            # waits for that measurement rather than running a second one
+            clip = next((c for c in pending if c not in COLOUR_Q["measuring"]), None)
+            if clip is None:
+                if not pending:
+                    COLOUR_Q["thread"] = None
+                    return
+        if clip is None:
+            time.sleep(0.25)
+            with COLOUR_Q["lock"]:
+                COLOUR_Q["pending"] = [c for c in COLOUR_Q["pending"] if colour_pending(c)]
+            continue
+        try:
+            if colour_pending(clip):
+                with procscope.active(scope):
+                    measure_colour(clip)
+        except Exception as exc:  # noqa: BLE001 — one bad clip must not end the queue
+            if not scope.cancelled:
+                COLOUR_Q["failed"][clip] = str(exc)[:200]
+                print(f"  !! colour: {clip}: {exc}", flush=True)
+        finally:
+            with COLOUR_Q["lock"]:
+                if clip in COLOUR_Q["pending"]:
+                    COLOUR_Q["pending"].remove(clip)
+                if scope.cancelled:              # stopped (the server is going away)
+                    COLOUR_Q["pending"].clear()
+                    COLOUR_Q["thread"] = None
+                    return
 
 
 def load_colour(clip: str) -> dict | None:
@@ -477,6 +569,13 @@ def ensure_proxies(clips: list[str], progress=None) -> None:
             print(f"  !! missing footage {clip}", flush=True)
             continue
         build_proxy(src, pdir / f"{Path(clip).stem}.mp4", STATE["orient"])
+        # Its colour now, in this job (the caller's background scope: niced, paused
+        # while the Program plays), not in the next GET /api/junk (verdict 7 blocker 3:
+        # a reload after a proxy landed waited ~30 s on this measurement).
+        try:
+            measure_colour(clip, force=True)
+        except RuntimeError as exc:
+            print(f"  !! colour: {clip}: {exc}", flush=True)
         print(f"  [{i}/{len(todo)}] {clip}", flush=True)
         report(i)
     STATE["proxies_ready"] = True
@@ -2264,17 +2363,13 @@ def confirmed_junk(edl: dict | None = None) -> set[str]:
     return junkmod.confirmed(junk_block(edl))
 
 
-def junk_assess(clip: str, measure: bool = False) -> dict:
-    """The proposal for one clip. `measure` builds a missing colour file from the
-    proxy — the cheap fallback; without it a clip with no colour file is judged on
-    its length alone, and says so (`numbers.samples` is 0)."""
+def junk_assess(clip: str) -> dict:
+    """The proposal for one clip, from the files on disk only — it never measures
+    (verdict 7 blocker 3: measuring a fresh proxy here held the board's boot ~30 s).
+    A clip with no colour file is judged on its length alone, and says so
+    (`numbers.samples` is 0); `junk_rows` marks it pending when a measurement is due."""
     cfile = colour_file(clip)
     sfile: Path = STATE["sidecars"] / f"{Path(clip).stem}.audio.json"
-    if measure and not cfile.exists() and (STATE["proxy_dir"] / f"{Path(clip).stem}.mp4").exists():
-        try:
-            measure_colour(clip)
-        except RuntimeError:
-            pass
     mtime = lambda p: p.stat().st_mtime if p.exists() else None   # noqa: E731
     key = (str(cfile), mtime(cfile), str(sfile), mtime(sfile))
     cache: dict = STATE.setdefault("junk_cache", {})
@@ -2287,21 +2382,26 @@ def junk_assess(clip: str, measure: bool = False) -> dict:
     return out
 
 
-def junk_rows(edl: dict | None = None, measure: bool = False) -> list[dict]:
+def junk_rows(edl: dict | None = None) -> list[dict]:
     """Every footage clip with the machine's proposal, the human's verdict and the one
     word that follows from both. Generated clips are never assessed — a black slide
-    the editor asked for is the point of it."""
+    the editor asked for is the point of it. `colour` says what the proposal stands
+    on: "measured" (a colour file), "pending" (a proxy waiting for its measurement:
+    the proposal may change when it lands) or "none" (no proxy yet)."""
     edl = edl if edl is not None else read_edl()
     block = junk_block(edl)
     used = {s.get("clip") for s in edl.get("segments") or []}
     rows = []
     for clip in footage_clips():
-        a = junk_assess(clip, measure=measure)
+        a = junk_assess(clip)
         verdict = (block.get(clip) or {}).get("verdict")
         stem = Path(clip).stem
+        cstate = ("measured" if colour_file(clip).exists()
+                  else "pending" if colour_pending(clip) else "none")
         rows.append({"clip": clip, "stem": stem,
                      "state": junkmod.status(a["junk"], verdict),
                      "proposed": a["junk"], "verdict": verdict,
+                     "colour": cstate,
                      "reasons": a["reasons"], "numbers": a["numbers"],
                      "duration": clip_duration(clip), "used": clip in used,
                      "proxy": f"/media/proxy/{stem}.mp4",
@@ -2332,9 +2432,16 @@ def sync_junk(j: journal.Journal) -> None:
 @app.get("/api/junk")
 def api_junk() -> JSONResponse:
     """The junk proposals with their reasons and numbers, and the editor's verdicts.
-    Free: a measurement over files the index already wrote."""
-    rows = junk_rows(measure=True)
+    Free: it reads the files the index already wrote and never measures (verdict 7
+    blocker 3). A clip whose proxy landed before its colour file is `colour: "pending"`;
+    those go to the background colour queue, and `pending` counts them so the board can
+    say "checking colour… N clips" and read again."""
+    rows = junk_rows()
+    waiting = [r["clip"] for r in rows if r.get("colour") == "pending"]
+    if waiting:
+        queue_colour(waiting)
     return JSONResponse({"clips": rows, "counts": junk_counts(rows),
+                         "pending": len(waiting),
                          "thresholds": {"luma_black": junkmod.LUMA_BLACK,
                                         "luma_lit": junkmod.LUMA_LIT,
                                         "flat_spread": junkmod.FLAT_SPREAD,
@@ -5397,6 +5504,57 @@ def _run_render(job: str, cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
+FAILED_SHOT_PREFIX = "failed shot: "     # assemble.say_failed_shot's line
+LOG_TAIL_LINES = 40
+
+
+def failed_shot(log: str) -> dict | None:
+    """The shot whose part failed, from assemble.py's `failed shot: {json}` line (the
+    first in film order when several parts failed at once), or None."""
+    found = []
+    for line in (log or "").splitlines():
+        if line.startswith(FAILED_SHOT_PREFIX):
+            try:
+                d = json.loads(line[len(FAILED_SHOT_PREFIX):])
+            except ValueError:
+                continue
+            if isinstance(d, dict) and isinstance(d.get("index"), int):
+                found.append(d)
+    return min(found, key=lambda d: d["index"]) if found else None
+
+
+def log_tail(log: str, n: int = LOG_TAIL_LINES) -> str:
+    """The render log's last `n` lines, for the Export dialog's Show log: Python's
+    tracebacks (the frames, not the error they end in) left out — an editor reads what
+    ffmpeg said, not which line of assemble.py raised it."""
+    keep, in_tb = [], False
+    for line in (log or "").rstrip().splitlines():
+        if line.startswith("Traceback (most recent call last)") or line.startswith(
+                "During handling of the above exception"):
+            in_tb = True
+            continue
+        if in_tb and (not line.strip() or line[:1].isspace()):
+            continue
+        in_tb = False
+        keep.append(line)
+    return "\n".join(keep[-n:])
+
+
+def failure_detail(shot: dict | None, log: str) -> str:
+    """What the Export dialog says about a failed render (verdict 7, blocker 2: it said
+    "the render failed — see the log", and the log was not reachable from it): the shot
+    and its clip when a part failed, else ffmpeg's last word."""
+    if shot:
+        rng = ""
+        if isinstance(shot.get("in"), (int, float)) and isinstance(shot.get("out"), (int, float)):
+            rng = f" {float(shot['in']):.2f}–{float(shot['out']):.2f} s"
+        reason = str(shot.get("reason") or "").strip()
+        return (f"shot {shot['index'] + 1} ({shot.get('clip') or 'a clip'}{rng}) did not "
+                f"render{': ' + reason if reason else ''}")
+    last = [ln.strip() for ln in (log or "").splitlines() if ln.strip()]
+    return f"the render failed: {last[-1][-200:]}" if last else "the render failed"
+
+
 def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
     entry = RENDERS[job]
     parts_dir = STATE["work"] / f"parts_{job}"
@@ -5502,7 +5660,10 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
     )
     if not ok:
         entry["stage"] = "failed"
-        entry.finish("failed", detail="the render failed — see the log")
+        shot = failed_shot(entry["log"])
+        entry["failed_shot"] = shot
+        entry["log_tail"] = log_tail(entry["log"])
+        entry.finish("failed", detail=failure_detail(shot, entry["log"]))
         return
 
     if export:
@@ -5558,19 +5719,40 @@ def review_path(name: str) -> Path:
     return STATE["reviews"] / Path(name).name
 
 
+REVIEW_SCOPES: dict = {}
+
+
+def review_scope() -> procscope.Scope:
+    """The scope every review copy's ffmpeg runs in (verdict 7, punch 10: an export's
+    review copy outlived the server). Its own session (process group) and PR_SET_PDEATHSIG
+    as the YIELD encodes have, and the shutdown hook's `procscope.kill_all` ends it. Not
+    background: a render's own copy is a phase somebody is watching, so it is neither
+    niced nor paused. Fresh after a shutdown's kill."""
+    with REVIEW_LOCK:
+        sc = REVIEW_SCOPES.get("scope")
+        if sc is None or sc.cancelled:
+            sc = REVIEW_SCOPES["scope"] = procscope.Scope("review copies")
+        return sc
+
+
+def review_cmd(src: Path, tmp: Path) -> list[str]:
+    """The ffmpeg that makes a review copy: 720p, faststart — the proxies' recipe."""
+    return ["ffmpeg", "-v", "error", "-y", "-nostdin", "-i", str(src),
+            "-map", "0:v:0", "-map", "0:a:0?", "-dn",
+            # Capped by width, never upscaled: a preview render is already small and
+            # re-encoding it bigger would spend bytes on detail that is not there.
+            "-vf", f"scale=min({PROXY_W}\\,iw):-2", "-c:v", "libx264",
+            "-preset", "veryfast", "-crf", str(PROXY_CRF),
+            "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(tmp)]
+
+
 def build_review(src: Path, dest: Path) -> None:
-    """A 720p, faststart copy of a finished render — same recipe as the proxies."""
+    """A 720p, faststart copy of a finished render — same recipe as the proxies —
+    made in `review_scope`, so it dies with the server."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(f".{os.getpid()}.part.mp4")
-    r = subprocess.run(
-        ["ffmpeg", "-v", "error", "-y", "-nostdin", "-i", str(src),
-         "-map", "0:v:0", "-map", "0:a:0?", "-dn",
-         # Capped by width, never upscaled: a preview render is already small and
-         # re-encoding it bigger would spend bytes on detail that is not there.
-         "-vf", f"scale=min({PROXY_W}\\,iw):-2", "-c:v", "libx264",
-         "-preset", "veryfast", "-crf", str(PROXY_CRF),
-         "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(tmp)],
-        capture_output=True, text=True)
+    with procscope.active(review_scope()):
+        r = subprocess.run(review_cmd(src, tmp), capture_output=True, text=True)
     if r.returncode != 0:
         tmp.unlink(missing_ok=True)
         raise RuntimeError(f"review copy failed for {src.name}: {r.stderr[-300:]}")
