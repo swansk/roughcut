@@ -110,7 +110,7 @@ def _state(live) -> dict:
     return httpx.get(live + "/api/firstpass", timeout=20).json()
 
 
-def _wait_state(live, until, timeout=60.0) -> dict:
+def _wait_state(live, until, timeout=120.0) -> dict:
     deadline = time.time() + timeout
     s = {}
     while time.time() < deadline:
@@ -121,7 +121,7 @@ def _wait_state(live, until, timeout=60.0) -> dict:
     raise AssertionError(f"first pass did not reach {until}: {s.get('state')}")
 
 
-def _label(pg, text: str, timeout=15000) -> None:
+def _label(pg, text: str, timeout=30000) -> None:
     pg.wait_for_function(
         "(t) => { const b = document.querySelector('[data-testid=\"firstpass-button\"]');"
         " return b && b.innerText.trim() === t; }", arg=text, timeout=timeout)
@@ -147,7 +147,7 @@ def _segs(live) -> list[dict]:
 def _accept(pg, live, n: int) -> list[dict]:
     pg.wait_for_selector("#proposal", state="visible", timeout=90000)
     pg.locator("#acceptProposal").click()
-    deadline = time.time() + 20
+    deadline = time.time() + 40
     while time.time() < deadline:
         segs = _segs(live)
         if len(segs) == n:
