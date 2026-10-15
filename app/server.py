@@ -181,7 +181,23 @@ def clip_probe(clip: str) -> dict | None:
 def measure_colour(clip: str, force: bool = False) -> dict | None:
     """Write (or read) the clip's colour file. Reads the proxy when it exists — it is
     SDR already, `build_proxy` normalised an HDR source — and the master otherwise,
-    with the normalise applied on the way in."""
+    with the normalise applied on the way in. Never called from a GET (verdict 7
+    blocker 3): the proxy jobs call it right after a proxy lands, and the colour queue
+    (`queue_colour`) for whatever is still missing one."""
+    with COLOUR_Q["lock"]:
+        COLOUR_Q["measuring"][clip] = COLOUR_Q["measuring"].get(clip, 0) + 1
+    try:
+        return _measure_colour(clip, force)
+    finally:
+        with COLOUR_Q["lock"]:
+            n = COLOUR_Q["measuring"].get(clip, 1) - 1
+            if n <= 0:
+                COLOUR_Q["measuring"].pop(clip, None)
+            else:
+                COLOUR_Q["measuring"][clip] = n
+
+
+def _measure_colour(clip: str, force: bool = False) -> dict | None:
     out = colour_file(clip)
     if out.exists() and not force:
         try:
@@ -203,6 +219,82 @@ def measure_colour(clip: str, force: bool = False) -> dict | None:
     tmp.write_text(json.dumps(d), encoding="utf-8")
     tmp.replace(out)
     return d
+
+
+# The colour queue (verdict 7 blocker 3). A clip whose proxy has landed and whose colour
+# file has not is measured here, one clip at a time, in a background scope: its ffmpeg
+# runs at nice 19 and is SIGSTOPped while the Program plays (the YIELD encodes' rules),
+# and it dies with the server. GET /api/junk only reads: it lists such a clip as
+# `colour: "pending"` and starts this queue, and the board says "checking colour…".
+COLOUR_Q: dict = {"lock": threading.Lock(), "pending": [], "measuring": {},
+                  "failed": {}, "thread": None, "scope": None}
+
+
+def colour_pending(clip: str) -> bool:
+    """The clip has a proxy to measure and no colour file yet (and has not failed)."""
+    if clip in COLOUR_Q["failed"]:
+        return False
+    return (not colour_file(clip).exists()
+            and (STATE["proxy_dir"] / f"{Path(clip).stem}.mp4").exists())
+
+
+def queue_colour(clips: list[str]) -> int:
+    """Queue the clips for the background colour measurement; start the worker if it is
+    not running. Returns how many are waiting or being measured."""
+    with COLOUR_Q["lock"]:
+        for c in clips:
+            if c not in COLOUR_Q["pending"]:
+                COLOUR_Q["pending"].append(c)
+        n = len(COLOUR_Q["pending"]) + len(COLOUR_Q["measuring"])
+        t = COLOUR_Q["thread"]
+        if COLOUR_Q["pending"] and (t is None or not t.is_alive()):
+            t = COLOUR_Q["thread"] = threading.Thread(target=_colour_loop, daemon=True,
+                                                      name="colour")
+            t.start()
+    return n
+
+
+def _colour_scope() -> procscope.Scope:
+    with COLOUR_Q["lock"]:
+        sc = COLOUR_Q["scope"]
+        if sc is None or sc.cancelled:
+            sc = COLOUR_Q["scope"] = procscope.Scope("colour", background=True)
+        return sc
+
+
+def _colour_loop() -> None:
+    while True:
+        scope = _colour_scope()
+        with COLOUR_Q["lock"]:
+            pending = COLOUR_Q["pending"]
+            # a clip somebody else (the index's proxy stage) is measuring right now
+            # waits for that measurement rather than running a second one
+            clip = next((c for c in pending if c not in COLOUR_Q["measuring"]), None)
+            if clip is None:
+                if not pending:
+                    COLOUR_Q["thread"] = None
+                    return
+        if clip is None:
+            time.sleep(0.25)
+            with COLOUR_Q["lock"]:
+                COLOUR_Q["pending"] = [c for c in COLOUR_Q["pending"] if colour_pending(c)]
+            continue
+        try:
+            if colour_pending(clip):
+                with procscope.active(scope):
+                    measure_colour(clip)
+        except Exception as exc:  # noqa: BLE001 — one bad clip must not end the queue
+            if not scope.cancelled:
+                COLOUR_Q["failed"][clip] = str(exc)[:200]
+                print(f"  !! colour: {clip}: {exc}", flush=True)
+        finally:
+            with COLOUR_Q["lock"]:
+                if clip in COLOUR_Q["pending"]:
+                    COLOUR_Q["pending"].remove(clip)
+                if scope.cancelled:              # stopped (the server is going away)
+                    COLOUR_Q["pending"].clear()
+                    COLOUR_Q["thread"] = None
+                    return
 
 
 def load_colour(clip: str) -> dict | None:
@@ -477,6 +569,13 @@ def ensure_proxies(clips: list[str], progress=None) -> None:
             print(f"  !! missing footage {clip}", flush=True)
             continue
         build_proxy(src, pdir / f"{Path(clip).stem}.mp4", STATE["orient"])
+        # Its colour now, in this job (the caller's background scope: niced, paused
+        # while the Program plays), not in the next GET /api/junk (verdict 7 blocker 3:
+        # a reload after a proxy landed waited ~30 s on this measurement).
+        try:
+            measure_colour(clip, force=True)
+        except RuntimeError as exc:
+            print(f"  !! colour: {clip}: {exc}", flush=True)
         print(f"  [{i}/{len(todo)}] {clip}", flush=True)
         report(i)
     STATE["proxies_ready"] = True
@@ -2230,17 +2329,13 @@ def confirmed_junk(edl: dict | None = None) -> set[str]:
     return junkmod.confirmed(junk_block(edl))
 
 
-def junk_assess(clip: str, measure: bool = False) -> dict:
-    """The proposal for one clip. `measure` builds a missing colour file from the
-    proxy — the cheap fallback; without it a clip with no colour file is judged on
-    its length alone, and says so (`numbers.samples` is 0)."""
+def junk_assess(clip: str) -> dict:
+    """The proposal for one clip, from the files on disk only — it never measures
+    (verdict 7 blocker 3: measuring a fresh proxy here held the board's boot ~30 s).
+    A clip with no colour file is judged on its length alone, and says so
+    (`numbers.samples` is 0); `junk_rows` marks it pending when a measurement is due."""
     cfile = colour_file(clip)
     sfile: Path = STATE["sidecars"] / f"{Path(clip).stem}.audio.json"
-    if measure and not cfile.exists() and (STATE["proxy_dir"] / f"{Path(clip).stem}.mp4").exists():
-        try:
-            measure_colour(clip)
-        except RuntimeError:
-            pass
     mtime = lambda p: p.stat().st_mtime if p.exists() else None   # noqa: E731
     key = (str(cfile), mtime(cfile), str(sfile), mtime(sfile))
     cache: dict = STATE.setdefault("junk_cache", {})
@@ -2253,21 +2348,26 @@ def junk_assess(clip: str, measure: bool = False) -> dict:
     return out
 
 
-def junk_rows(edl: dict | None = None, measure: bool = False) -> list[dict]:
+def junk_rows(edl: dict | None = None) -> list[dict]:
     """Every footage clip with the machine's proposal, the human's verdict and the one
     word that follows from both. Generated clips are never assessed — a black slide
-    the editor asked for is the point of it."""
+    the editor asked for is the point of it. `colour` says what the proposal stands
+    on: "measured" (a colour file), "pending" (a proxy waiting for its measurement:
+    the proposal may change when it lands) or "none" (no proxy yet)."""
     edl = edl if edl is not None else read_edl()
     block = junk_block(edl)
     used = {s.get("clip") for s in edl.get("segments") or []}
     rows = []
     for clip in footage_clips():
-        a = junk_assess(clip, measure=measure)
+        a = junk_assess(clip)
         verdict = (block.get(clip) or {}).get("verdict")
         stem = Path(clip).stem
+        cstate = ("measured" if colour_file(clip).exists()
+                  else "pending" if colour_pending(clip) else "none")
         rows.append({"clip": clip, "stem": stem,
                      "state": junkmod.status(a["junk"], verdict),
                      "proposed": a["junk"], "verdict": verdict,
+                     "colour": cstate,
                      "reasons": a["reasons"], "numbers": a["numbers"],
                      "duration": clip_duration(clip), "used": clip in used,
                      "proxy": f"/media/proxy/{stem}.mp4",
@@ -2298,9 +2398,16 @@ def sync_junk(j: journal.Journal) -> None:
 @app.get("/api/junk")
 def api_junk() -> JSONResponse:
     """The junk proposals with their reasons and numbers, and the editor's verdicts.
-    Free: a measurement over files the index already wrote."""
-    rows = junk_rows(measure=True)
+    Free: it reads the files the index already wrote and never measures (verdict 7
+    blocker 3). A clip whose proxy landed before its colour file is `colour: "pending"`;
+    those go to the background colour queue, and `pending` counts them so the board can
+    say "checking colour… N clips" and read again."""
+    rows = junk_rows()
+    waiting = [r["clip"] for r in rows if r.get("colour") == "pending"]
+    if waiting:
+        queue_colour(waiting)
     return JSONResponse({"clips": rows, "counts": junk_counts(rows),
+                         "pending": len(waiting),
                          "thresholds": {"luma_black": junkmod.LUMA_BLACK,
                                         "luma_lit": junkmod.LUMA_LIT,
                                         "flat_spread": junkmod.FLAT_SPREAD,

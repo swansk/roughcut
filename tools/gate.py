@@ -34,6 +34,11 @@ Checks (each one line in summary.md, exit 0 only if all are green):
            keeping the hand edits, Export (Ctrl+M), ffprobe. The gate's own journey.py
            drives the snapshot's board, so an old rev is judged by today's journey. A PNG
            per step + journey.json in journey/. Red on the first step that fails.
+  boot     "board shows its cut N s after a proxy lands" (verdict 7 blocker 3): the suite's
+           test_boot_wait.py writes $ROUGHCUT_BOOT_JSON (boot.json) — a fresh page on a
+           bin whose proxy just landed, the colour measurement patched to 10 s; green when
+           the timeline's blocks and the Program frame are up in <= BOOT_CUT_MAX_S. No
+           record (--quick, a narrowed suite) runs the test alone first.
   hygiene  no model ID literal outside roughcut/config.py; no `import anthropic` outside
            roughcut/inference; no Windows path literal in code.
 --quick skips the full suite (screens + journey + hygiene, ~2 min; the journey alone is
@@ -332,6 +337,38 @@ def browser_preflight(cwd: Path, log: Path, env: dict) -> tuple[bool, str]:
     return True, f"{out.get('version', '?')} · {out.get('launch', '?')} · {time.time() - t0:.0f} s"
 
 
+BOOT_ID = "app/tests/test_boot_wait.py::test_the_cut_shows_before_the_colour_is_measured"
+BOOT_CUT_MAX_S = 2.0
+
+
+def boot_check(snap: Path, run_dir: Path, env: dict) -> tuple[bool, str]:
+    """(green, line) for "board shows its cut N s after a proxy lands" — verdict 7
+    blocker 3. Reads the record test_boot_wait wrote during the suite ($ROUGHCUT_BOOT_JSON);
+    with none (--quick, a narrowed suite) it runs that test alone first. Green only on a
+    measured cut at or under BOOT_CUT_MAX_S from a test that passed."""
+    rec_path = Path(env["ROUGHCUT_BOOT_JSON"])
+    alone = ""
+    if not rec_path.exists():
+        run(UV + [BOOT_ID, "-q", "-p", "no:cacheprovider"], snap, run_dir / "boot.log", env,
+            timeout=600)
+        alone = " (run alone)"
+    try:
+        rec = json.loads(rec_path.read_text())
+    except (OSError, ValueError):
+        return False, f"board shows its cut: not measured{alone} — no record, see {run_dir / 'boot.log'}"
+    cut = rec.get("cut_s")
+    if cut is None:
+        return False, (f"board shows its cut: not measured{alone} — the test {rec.get('outcome')}"
+                       f" before the cut showed (GET /api/junk {rec.get('api_junk_s')} s)")
+    green = rec.get("outcome") == "passed" and float(cut) <= BOOT_CUT_MAX_S
+    return green, (f"board shows its cut {float(cut):.2f} s after a proxy lands{alone}"
+                   f" (limit {BOOT_CUT_MAX_S:g} s; blocks {rec.get('blocks_s')} s, Program frame"
+                   f" {rec.get('frame_s')} s; junk marks {rec.get('junk_s')} s with the colour"
+                   f" measurement patched to {rec.get('measure_patch_s')} s; GET /api/junk"
+                   f" {rec.get('api_junk_s')} s; load {rec.get('load')} on {rec.get('cores')} cores)"
+                   f"{'' if green else ' — ' + str(rec.get('outcome')).upper()}")
+
+
 def main() -> int:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     quick = "--quick" in sys.argv
@@ -351,6 +388,7 @@ def main() -> int:
     deps = Path.home() / ".local/chromium-deps/root/usr/lib/x86_64-linux-gnu"
     if deps.exists():
         env["LD_LIBRARY_PATH"] = f"{deps}:{env.get('LD_LIBRARY_PATH', '')}"
+    env["ROUGHCUT_BOOT_JSON"] = str(run_dir / "boot.json")     # test_boot_wait's record (boot_check)
     results: list[tuple[str, bool, str]] = []
     amber: set[str] = set()          # green, but not proven: the run is AMBER, not GREEN
     t_all = time.time()
@@ -427,6 +465,10 @@ def main() -> int:
     if browser_ok:
         print("journey: one editing session, end to end…", flush=True)
         results.append(("journey", *journey(snap, jdir, run_dir / "journey.log", env)))
+
+    # ---- boot (verdict 7 blocker 3) ----
+    if browser_ok:
+        results.append(("boot", *boot_check(snap, run_dir, env)))
 
     # ---- hygiene ----
     problems = []
