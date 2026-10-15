@@ -230,6 +230,9 @@ def measure_play(page) -> dict:
     }""")
     page.keyboard.press("Space")
     page.wait_for_timeout(int((1.2 + SHORT_S + 1.3) * 1000))
+    # Playback Resolution (grade.js PLAY_W): the graded picture is drawn <= 640 px wide
+    # while it plays, full size again once paused (asserted in the test)
+    canvas_w_play = page.evaluate("player.playing ? document.querySelector('#gradeCanvas').width : null")
     page.keyboard.press("Space")
     page.evaluate("window.__flOn = false")
     log = page.evaluate("window.__fl")
@@ -241,6 +244,7 @@ def measure_play(page) -> dict:
     switches = [g for g in gaps if g[1]["v"] != g[2]["v"]]
     span = (live[-1]["t"] - live[0]["t"]) if len(live) > 1 else 0
     return {
+        "canvas_w_play": canvas_w_play,
         "frames": len(live),
         "fps": round((len(live) - 1) / (span / 1000), 1) if span else 0,
         "longest_gap_ms": round(worst[0], 1) if worst[0] is not None else None,
@@ -427,6 +431,9 @@ def test_latency_under_load(live_server):
                 facts["burners"] = b.n
                 facts["load_start"] = _load()
                 facts["play"] = measure_play(page)
+                page.evaluate("pauseCut()")
+                page.wait_for_function("document.querySelector('#gradeCanvas').width > 640", timeout=5000)
+                facts["canvas_w_paused"] = page.evaluate("document.querySelector('#gradeCanvas').width")
                 facts["grade_on"] = page.evaluate(
                     "!!document.querySelector('#gradeCanvas.on')")
                 facts["set"] = measure_set(page)
@@ -447,6 +454,10 @@ def test_latency_under_load(live_server):
     assert facts["grade_on"], "the grade canvas was off: the fixture no longer exercises it"
     assert play["screen_bad_n"] == 0, f"black or a wait line on screen during play: {play}"
     assert play["longest_gap_ms"] <= GAP_LIMIT_MS, f"frame gap across the two cuts: {play}"
+    # Premiere's Playback Resolution: smaller while playing, the monitor's full size parked
+    if play.get("canvas_w_play") is not None:
+        assert play["canvas_w_play"] <= 640, play["canvas_w_play"]
+    assert facts["canvas_w_paused"] > 640, facts["canvas_w_paused"]
     seeks = facts["seek"]
     assert statistics.median(seeks) <= SEEK_MEDIAN_MS, f"seek → frame: {seeks}"
     assert max(seeks) <= SEEK_MAX_MS, f"seek → frame: {seeks}"

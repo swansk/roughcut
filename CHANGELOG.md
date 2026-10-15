@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Changed
+- **Premiere's Playback Resolution for the grade.** While the picture plays, `grade.js` draws the graded frame at most 640 px wide (CSS scales it up); paused, it redraws at the monitor's full size, so a parked frame is always sharp. The per-frame upload and shader cost scale with the drawn pixels, and at the wave-4 monitor sizes a software-GL frame opened ~100 ms holes mid-shot under load (the wave-6 gate's perf failure). `test_perf_latency` now asserts <= 640 px playing and > 640 px parked; it passed 5 of 6 runs at load ~9-10 after the change (the remaining failure: an 83 ms hole ~45 ms after the second cut, inside the new shot's first frames; the lead's hypothesis, queued for wave 7: the per-shot LUT's texImage3D upload at the cut).
+
 ### Fixed
 - **A video that stops fetching after a seek gets nudged instead of freezing.** Instrumented on /floor's band replay (the recurring "flaky" `test_0_restarts_the_clip_and_shift_0_restarts_the_band`, 1 run in 5 alone): after the seek to the band's start the element sat at readyState 1 with networkState IDLE for 9 s, nominally playing, fetching nothing. floor.js's tick re-issues the seek once the picture has not moved for over a second while the element is idle and starved; the board's Program monitor does the same in its 1.5 s stall timer. The floor test: 10/10 (was ~4/5).
 

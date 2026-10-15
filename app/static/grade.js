@@ -268,11 +268,18 @@
    * WebGL's video upload, ~25 ms of CPU a frame on a software GL, ~80 ms on a box at
    * three times its cores — to be shown 386 px wide. Scaled first in a 2D canvas, the
    * upload and the shader both work on the pixels that are seen. */
-  function drawSize(vw, vh) {
+  /* Premiere's Playback Resolution: while the picture plays, the grade is drawn at most
+   * PLAY_W wide (CSS scales it up); paused, it is drawn at the monitor's full size again, so
+   * a parked frame is always sharp. The per-frame upload and shader cost scale with the
+   * drawn pixels: at 674-841 px wide (the wave-4 monitors) a software-GL frame cost enough
+   * to open 100 ms holes mid-shot under load (the wave-6 perf gate). */
+  const PLAY_W = 640;
+  function drawSize(vw, vh, playing) {
     const dpr = window.devicePixelRatio || 1;
     const bw = G.box.w * dpr, bh = G.box.h * dpr;
     if (!bw || !bh) return [vw, vh];
-    const s = Math.min(1, bw / vw, bh / vh);
+    let s = Math.min(1, bw / vw, bh / vh);
+    if (playing) s = Math.min(s, PLAY_W / vw);
     if (s > 0.9) return [vw, vh];   // near full size: the scale costs more than it saves
     return [Math.max(2, Math.round(vw * s / 2) * 2), Math.max(2, Math.round(vh * s / 2) * 2)];
   }
@@ -319,7 +326,7 @@
     if (!G.gl || !v || v.readyState < 2) return;
     const vw = v.videoWidth, vh = v.videoHeight;
     if (!vw || !vh) return;
-    const [w, h] = drawSize(vw, vh);
+    const [w, h] = drawSize(vw, vh, !v.paused && !v.ended);
     const gl = G.gl;
     if (G.canvas.width !== w || G.canvas.height !== h) {
       G.canvas.width = w;
@@ -563,6 +570,9 @@
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
   else mount();
+
+  // Paused: the parked frame is drawn at the monitor's full size again (PLAY_W above).
+  document.addEventListener('pause', (e) => { if (e.target === live()) settle(); }, true);
 
   window.grade = {
     get enabled() { return G.enabled; },

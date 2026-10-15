@@ -49,6 +49,11 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-15 23:40: lead fixes after wave 6: `bc8d5d7` (a video idle after a seek is nudged: /floor's recurring flaky test was a
+  real Chromium stall) and Playback Resolution in grade.js (<= 640 px while playing). test_perf_latency at the judge's 67 ms bar
+  is still MARGINAL at load 9-10 (5/6): the residual hole sits ~45 ms after a cut. Wave-7 hypothesis: the per-shot LUT's
+  texImage3D upload at the cut (the perf fixture gives every shot its own balance): cache LUT textures by record and upload
+  the next shot's LUT in slices (texSubImage3D, a few slices a frame) during the preroll.
 - 2026-10-15 22:00: **wave 6 merged**: KEYS2 `a07bedd`, KEYUI `47c3aac`, JOURNEY2 `7fa9ff2` (19 steps), PROPOSAL2 `0b71e70`,
   RENDER2 `0e0ecc8`, BINPOLISH `37758e2` (+ lead `1d48347`), PLAYBACK `4af18fb` (+ lead: tone test waits for its redraw).
   Wave-7 queue adds (PLAYBACK): a third video buffer so a short shot followed by a different file never holds a frame
