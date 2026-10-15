@@ -316,9 +316,12 @@ def test_a_drag_trim_lands_on_a_frame_boundary_and_the_server_keeps_it(page, tpr
     page.evaluate("tl.setFps(29.97)")
     assert page.evaluate("tl.gridRate()") == pytest.approx(30000 / 1001)
     page.evaluate("tl.trim.setMagnet(false)")    # the magnet off: a raw drag, no snap
-    # the seed's 4.0 s is not a 29.97 frame (119.88): any edit of that shot puts it on one
-    page.evaluate("tl.setRange(segs[0].id, 0, 4.0)")
-    assert _on_frames(page.evaluate("segs[0].out"))
+    # the seed's 4.0 s and 0.5 s are not 29.97 frames (119.88, 14.99): a trim of one edge
+    # never moves the other, so the seed is put on frames first (a slip, both edges move)
+    page.evaluate("tl.setRange(segs[0].id, 0.0001, 3.9999)")
+    page.evaluate("tl.setRange(segs[1].id, 0.5001, 3.0001)")
+    assert all(_on_frames(x) for x in page.evaluate("segs.flatMap(s => [s.in, s.out])"))
+    in1 = page.evaluate("segs[1].in")
     page.evaluate("document.querySelector('#tl').scrollIntoView({block: 'end'})")
     z = page.evaluate("tl.state.zoom")
     h = page.locator("#tl .blk").nth(1).locator(".tl-h.out")
@@ -330,24 +333,34 @@ def test_a_drag_trim_lands_on_a_frame_boundary_and_the_server_keeps_it(page, tpr
     page.mouse.up()
     out = page.evaluate("segs[1].out")
     assert out != 3.0 and out == pytest.approx(3.0 - 0.37, abs=0.05)
+    assert page.evaluate("segs[1].in") == in1, "an out-trim never moves the in"
     assert _on_frames(out), out
     # every cut in the film is on a frame
     cuts = page.evaluate("(() => { let t = 0; return segs.map(s => (t += tl.dur(s))); })()")
     assert all(_on_frames(c) for c in cuts), cuts
     page.wait_for_function("document.querySelector('#saveState').textContent.startsWith('saved')", timeout=8000)
     disk = json.loads(tproject["edl"].read_text(encoding="utf-8"))["segments"]
-    assert _on_frames(disk[1]["out"]) and disk[1]["out"] == pytest.approx(out, abs=1e-4), disk
+    assert disk[1]["out"] == pytest.approx(out, abs=1e-4), disk
+    assert all(_on_frames(s[k]) for s in disk for k in ("in", "out")), disk
 
 
 def test_razor_roll_slip_and_insert_commit_on_frames(page):
     page.evaluate("tl.setFps(29.97)")
+    page.evaluate("tl.setRange(segs[0].id, 0.0001, 3.9999)")     # the seed onto frames
+    page.evaluate("tl.setRange(segs[1].id, 0.5001, 3.0001)")
     first = page.evaluate("segs[0].id")
     second = page.evaluate(f"tl.split('{first}', 1.2345)")
     assert second
     assert _on_frames(page.evaluate("segs[0].out")) and _on_frames(page.evaluate("segs[1].in"))
     # a nudge, a slip and a roll through the API the gestures use
     page.evaluate("tl.setRange(segs[1].id, null, segs[1].out - 0.123)")
-    assert _on_frames(page.evaluate("segs[1].out"))
+    assert _on_frames(page.evaluate("segs[1].out"))       # its in is the razor's frame
+    # an in-trim keeps the out exactly (even one from before the grid) and lands on a frame
+    before_out = page.evaluate("segs[2].out")
+    page.evaluate("tl.setRange(segs[2].id, segs[2].in + 0.0931, null)")
+    assert page.evaluate("segs[2].out") == before_out
+    assert _on_frames(page.evaluate("segs[2].in"))
+    # a slip moves both onto frames
     page.evaluate("tl.setRange(segs[2].id, segs[2].in + 0.0712, segs[2].out + 0.0712)")
     assert _on_frames(page.evaluate("segs[2].in")) and _on_frames(page.evaluate("segs[2].out"))
     # an insert at an off-grid time with an off-grid range

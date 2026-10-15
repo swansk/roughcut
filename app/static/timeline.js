@@ -360,29 +360,34 @@
   }
   const r4 = (x) => Math.round(x * 1e4) / 1e4;
   const onGrid = (t) => r4(Math.round(Math.max(0, Number(t) || 0) * gridRate()) / gridRate());
-  /* A clip range on the grid: the in on a frame, the length in film whole frames (at
-   * least one) at the shot's rate. */
+  /* A clip range on the grid. `keep` 'in' / 'out': that edge stays exactly where it is
+   * (a trim of the other one); null: neither is kept (an insert, a slip). At 1× the edges
+   * that move go to their nearest frame — a clip frame is a film frame — so a shot whose
+   * edges are on the grid (every edit's, and the proposals' once they are rounded to
+   * frames) keeps every cut on a frame; a kept edge from before the grid (0.01 s) is left
+   * alone rather than moved behind the editor's back. Retimed, the moved edge makes the
+   * shot's length in the film whole frames at its rate. Never shorter than MIN_LEN. */
   function gridRange(a, b, spd, keep, maxOut) {
     const r = gridRate(), s = spd || 1;
     const hi = Number.isFinite(maxOut) ? maxOut : 1e9;
-    const nMin = Math.max(1, Math.ceil((MIN_LEN / s) * r - 1e-6));
+    const top = (x) => (x > hi + 1e-9 ? r4(Math.floor(hi * r + 1e-6) / r) : x);
     if (s === 1) {
-      let a2 = onGrid(a), b2 = onGrid(b);
-      if (b2 > hi + 1e-9) b2 = r4(Math.floor(hi * r + 1e-6) / r);
-      if (Math.round((b2 - a2) * r) < nMin) {
-        if (keep === 'out') a2 = r4(Math.max(0, b2 - nMin / r)); else b2 = r4(a2 + nMin / r);
+      let a2 = keep === 'in' ? a : onGrid(a);
+      let b2 = keep === 'out' ? b : top(onGrid(b));
+      if (b2 - a2 < MIN_LEN - 1e-9) {
+        if (keep === 'out') a2 = r4(Math.floor((b2 - MIN_LEN) * r + 1e-6) / r);
+        else b2 = top(r4(Math.ceil((a2 + MIN_LEN) * r - 1e-6) / r));
       }
-      return [a2, b2];
+      return [Math.max(0, a2), b2];
     }
-    // a retimed shot: the film length is whole frames, the edge that was not moved stays
-    let n = Math.max(nMin, Math.round(((b - a) / s) * r));
+    const nMin = Math.max(1, Math.ceil((MIN_LEN / s) * r - 1e-6));
     if (keep === 'out') {
-      let b2 = onGrid(b);
-      if (b2 > hi + 1e-9) b2 = r4(Math.floor(hi * r + 1e-6) / r);
-      while (n > nMin && b2 - (n / r) * s < -1e-9) n -= 1;
-      return [r4(Math.max(0, b2 - (n / r) * s)), b2];
+      let n = Math.max(nMin, Math.round(((b - a) / s) * r));
+      while (n > nMin && b - (n / r) * s < -1e-9) n -= 1;
+      return [r4(Math.max(0, b - (n / r) * s)), b];
     }
-    const a2 = onGrid(a);
+    const a2 = keep === 'in' ? a : onGrid(a);
+    let n = Math.max(nMin, Math.round(((b - a2) / s) * r));
     while (n > nMin && a2 + (n / r) * s > hi + 1e-9) n -= 1;
     return [a2, r4(a2 + (n / r) * s)];
   }
@@ -1713,8 +1718,11 @@
     if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
     a = clamp(a, 0, Math.max(0, dur - MIN_LEN));
     b = clamp(b, a + MIN_LEN, dur);
-    // on the sequence's frames (onGrid): an in-trim keeps the out, an out-trim the in
-    [a, b] = gridRange(a, b, speedOf(seg), tout == null ? 'out' : 'in', dur);
+    // on the sequence's frames (gridRange): an in-trim keeps the out exactly, an
+    // out-trim the in, and the shot's length in the film is whole frames
+    const keep = tout == null ? 'out' : tin == null ? 'in'
+      : a === seg.in ? 'in' : b === seg.out ? 'out' : null;
+    [a, b] = gridRange(a, b, speedOf(seg), keep, dur);
     if (a === seg.in && b === seg.out) return false;
     return mutate('trim', () => {
       const inMoved = a !== seg.in;
@@ -1826,7 +1834,7 @@
   /* A shot about to go in: its range on the grid. */
   function gridded(seg) {
     const c = clipOf(seg.clip);
-    const [a, b] = gridRange(Number(seg.in), Number(seg.out), speedOf(seg), 'in',
+    const [a, b] = gridRange(Number(seg.in), Number(seg.out), speedOf(seg), null,
                              c && c.duration ? c.duration : undefined);
     return { ...seg, in: a, out: b };
   }
