@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Added
+- **Redesign verdict 4: FAIL, every dimension now 6-8** (`judge/verdict-4.md` on `c1c5d6a`; 1:7 2:8 3:8 4:7 5:7 6:7 7:7 8:7 9:6 10:7 11:6 12:8). First real 12-clip Killington first pass: a proposal in 758 s at load ~19, Stop in 106 ms, a re-run after a hand trim kept the trim exactly. K1 resolved on real footage; K2 open. Punch list drives wave 4.
+
 ### Fixed
 - **The bin-switch test checks the leak it is about, not a race.** `test_opening_another_bin_repoints_everything_without_a_relaunch` asserted `durations` was absent right after opening another bin; since INGEST, opening a bin starts probing ITS clips in the background, so the cache was sometimes already back (the second bin's own) and the test failed under full-suite load in every gate this loop. It now asserts the first bin's cache object is gone and that what is cached names only the open bin's clips. Checked the product side: a first-bin probe still in flight re-checks the bin before writing, and `clip_duration` always reads the current bin, so no stale duration can land.
 

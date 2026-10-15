@@ -49,6 +49,12 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-15 10:30: **VERDICT 4 = FAIL** (rev `c1c5d6a`; all dims 6-8; 2/3/12 at 8; 9 and 11 at 6). Blockers: K2, picks not
+  editor objects, the re-run re-adds rejected shots and rounds kept shots off the grid. Rulings: HEADER's exemption removal
+  and /jobs 109 honest; /shot should be 189 (measured). **Wave 4 lanes** (from this commit): PICKS2 (punch 1), RERUN (2),
+  LAYOUT (3 + Selects columns at 1440), REVIEW (4), PERF (5), EXPORTSTOP (6 + 8: PCM parts / one AAC, first-open size
+  sample, one sequence rate for In/Out exports, /api/index/cancel + kill preview/proxy children), POLISH (7 + 9 + 10 +
+  versioned poster URLs + the test_budget-after-test_ui_flow order dependence).
 - 2026-10-15 08:40: **wave 3 merged**: JOURNEY `f04798a`, ORIENT `c31089f`, PROGRAM `bc13ac4`, RENDER `dfe009c`,
   HEADER `bf1aa31`, PICKS `6e21dd6`, TLAUDIO `885d39f` (+ lead `1c7af03`: one level owner, 4-place saves), PASS `2f89ad2`
   (+ lead: fixes round away from what they fix). Added to the wave-4 queue: `/api/index/cancel` so the background index
