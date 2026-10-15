@@ -328,6 +328,7 @@ def test_one_undo_per_key_add_move_and_remove(page):
     # the stopwatch off: one entry, the value at the playhead stays
     seek(page, 0.0)
     page.locator("#inspector .ec-sw[data-sw=opacity]").click()
+    page.locator("#ecConfirm [data-ans=ok]").click()              # Premiere asks first (verdict 7)
     assert undo_title(page).startswith("undo: stop animating opacity")
     assert keys(page, "opacity") == []
     assert page.evaluate("segs[0].controls") is None                     # 100 % is the default

@@ -401,12 +401,16 @@
   }
   /* Every edit here opens through this: a locked track refuses it, as the timeline's
    * own edits do (a V2+ clip's track; a V1 shot's V1, or A1 for its volume). */
-  function opens(label, audio, target) {
+  function refused(audio, target) {
     const t = TL();
-    if (!t) return false;
+    if (!t) return true;
     const seg = target || cur();
     const name = seg && isOv(seg) ? seg.track || 'V2' : audio ? 'A1' : 'V1';   // V2 is implied
-    if (name && typeof t.refuseIfLocked === 'function' && t.refuseIfLocked(name)) return false;
+    return !!(name && typeof t.refuseIfLocked === 'function' && t.refuseIfLocked(name));
+  }
+  function opens(label, audio, target) {
+    const t = TL();
+    if (!t || refused(audio, target)) return false;
     return !!t.begin(label);
   }
   function begin(p, seg) {
@@ -713,12 +717,70 @@
     const ri = g('renderInspector');
     if (typeof ri === 'function') ri();
   }
-  function toggleAnim(group) {
+  /* Premiere's warning before a stopwatch turns off over keys (verdict 7, punch 7): "This
+   * action will delete existing keyframes. Do you want to continue?" A modal of the
+   * board's own (the Export dialog's look), never window.confirm: Cancel (or Esc) keeps
+   * the keys, OK takes them off as one undo entry. Resolves true on OK. */
+  let askDlg = null;
+  function askDeleteKeys(what) {
+    if (!askDlg) {
+      askDlg = document.createElement('dialog');
+      askDlg.id = 'ecConfirm';
+      askDlg.className = 'ec-confirm';
+      askDlg.dataset.testid = 'keys-confirm';
+      askDlg.setAttribute('aria-labelledby', 'ecConfirmTitle');
+      askDlg.innerHTML = `
+        <form method="dialog" class="ecq">
+          <div class="ecq-head" id="ecConfirmTitle">Delete keyframes</div>
+          <p class="ecq-body"><span class="ecq-msg">This action will delete existing keyframes. Do you want to continue?</span>
+            <span class="ecq-what"></span></p>
+          <div class="ecq-foot">
+            <button type="button" class="ecq-btn" data-ans="cancel">Cancel</button>
+            <button type="button" class="ecq-btn primary" data-ans="ok">OK</button>
+          </div>
+        </form>`;
+      // keys typed in it stay in it (app.js plays and steps the cut from document)
+      askDlg.addEventListener('keydown', (e) => { if (e.key !== 'Escape') e.stopPropagation(); });
+      document.body.appendChild(askDlg);
+    }
+    const d = askDlg;
+    d.querySelector('.ecq-what').textContent = what || '';
+    return new Promise((resolve) => {
+      const done = (ok) => {
+        d.removeEventListener('click', onClick);
+        d.removeEventListener('cancel', onCancel);
+        if (d.open) d.close();
+        resolve(ok);
+      };
+      const onClick = (e) => {
+        const b = e.target.closest('[data-ans]');
+        if (b) { e.preventDefault(); done(b.dataset.ans === 'ok'); }
+      };
+      const onCancel = (e) => { e.preventDefault(); done(false); };
+      d.addEventListener('click', onClick);
+      d.addEventListener('cancel', onCancel);
+      d.showModal();
+      d.querySelector('[data-ans=ok]').focus();          // Premiere's default button
+    });
+  }
+  function toggleAnim(group, sure) {
     const seg = cur();
     const t = TL();
     if (!seg || !t || !GROUPS[group]) return;
     const kps = GROUPS[group];
     const on = animated(seg, group);
+    if (on && !sure) {
+      // a locked track refuses at once: it never asks a question it will then refuse
+      if (refused(group === 'volume_db')) return;
+      if (askDlg && askDlg.open) return;
+      const n = keyTimes(seg, group).length;
+      const nm = GROUP_NAME[group];
+      askDeleteKeys(`${nm[0].toUpperCase()}${nm.slice(1)}: ${n} keyframe${n === 1 ? '' : 's'}.`).then((ok) => {
+        const now = ok ? cur() : null;            // still the same shot, still keyed
+        if (now && now.id === seg.id && animated(now, group)) toggleAnim(group, true);
+      });
+      return;
+    }
     if (!opens(on ? `stop animating ${GROUP_NAME[group]}` : `animate ${GROUP_NAME[group]}`, group === 'volume_db')) return;
     if (on) {                                 // Premiere: the keys go, the value at the playhead stays
       const tv = shownT(seg);
