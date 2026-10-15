@@ -309,3 +309,44 @@
                z-index: 8; }
 #tl .tl-hint.on { visibility: visible; }
 #tl .tl-hint b { color: var(--text); font-weight: 600; }
+
+/* ---- Premiere keymap, markers, timecode (REDESIGN-GOAL dimension 5) */
+/* The side column: Premiere's top-left corner of the Timeline panel — the playhead's
+   timecode over the tool in hand. The view moves right to make room; nothing grows. */
+#tl { --tl-side: 104px; }
+#tl .tl-view { margin-left: var(--tl-side); }
+#tl .tl-side { position: absolute; left: 0; top: 0; width: calc(var(--tl-side) - 6px);
+               display: flex; flex-direction: column; gap: 6px; z-index: 9; }
+#tl .tl-tc { font: 600 13px/22px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+             font-variant-numeric: tabular-nums; color: var(--accent); letter-spacing: .02em;
+             white-space: nowrap; height: 22px; }
+#tl .tl-toolbtn { width: 30px; height: 26px; padding: 0; font-size: 15px; line-height: 1;
+                  border-radius: 4px; cursor: pointer; background: #1c1c24; color: var(--text);
+                  border: 1px solid var(--line); }
+#tl .tl-toolbtn:hover { border-color: var(--accent); }
+#tl .tl-toolmenu { position: absolute; left: 0; top: 54px; min-width: 230px; padding: 4px;
+                   background: #16161c; border: 1px solid var(--line); border-radius: 6px;
+                   box-shadow: 0 6px 24px rgba(0, 0, 0, .5); }
+#tl .tl-toolmenu[hidden] { display: none; }
+#tl .tl-toolmenu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 8px;
+                          font-size: 12px; text-align: left; background: transparent; color: var(--text);
+                          border: 0; border-radius: 4px; cursor: pointer; }
+#tl .tl-toolmenu button:hover { background: #22222c; }
+#tl .tl-toolmenu button.on { background: rgba(110, 168, 254, .18); }
+#tl .tl-toolmenu button .g { width: 16px; text-align: center; }
+#tl .tl-toolmenu button kbd { margin-left: auto; font-size: 10px; color: var(--dim); }
+/* the tool in hand, as the pointer over the shots */
+#tl.tl-tool-razor .tl-lane .blk { cursor: crosshair; }
+#tl.tl-tool-slip .tl-lane .blk { cursor: grab; }
+#tl.tl-tool-track .tl-lane .blk { cursor: e-resize; }
+#tl.tl-tool-ripple .tl-edge, #tl.tl-tool-ripple .tl-edge .q { cursor: ew-resize; }
+/* a marker: a green flag on the ruler (Premiere's default colour); a click goes there */
+#tl .tl-ruler .tl-marker { position: absolute; bottom: 0; width: 9px; height: 11px; margin-left: -4.5px;
+                           background: #3fbf6a; cursor: pointer; z-index: 2;
+                           clip-path: polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%); }
+#tl .tl-ruler .tl-marker:hover { background: #6fe292; }
+/* the sequence's in / out: the ruler shaded between them, a bracket at each end */
+#tl .tl-ruler .tl-inout { position: absolute; top: 0; bottom: 0; pointer-events: none;
+                          background: rgba(110, 168, 254, .16); box-sizing: border-box; }
+#tl .tl-ruler .tl-inout.has-in { border-left: 2px solid var(--accent); }
+#tl .tl-ruler .tl-inout.has-out { border-right: 2px solid var(--accent); }

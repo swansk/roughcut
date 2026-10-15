@@ -20,12 +20,25 @@
  *                `defaultPlaybackRate`, so the two never overwrite each other.
  *   ↑ ↓          previous / next cut: the playhead to the boundary, that shot selected.
  *   Home End     the film's start / end.
- *   ← →          one frame (1/30 s); ⇧ one second. The playhead only — the trim lane's
- *                `,` `.` are the edge nudges, so the two never collide.
- *   I O          mark in / out on the clip in Find while it plays; ↵ inserts the range as
- *                a shot after the selected one, with the clip's transcript line as why;
- *                ⌥I ⌥O clear. Playing the cut: a toast says to open a clip.
- *   C            razor at the playhead (the selected shot, else the shot under it).
+ *   ← →          one frame at the sequence rate (`tl.frame()`); ⇧ five frames, as in
+ *                Premiere. The playhead only — the trim lane's ⌥← ⌥→ / ⌘← ⌘→ move an edge.
+ *   I O          Premiere's marks: the sequence's in / out at the playhead (on the ruler).
+ *                While a clip is open in Find and the timeline was not the last thing
+ *                clicked, they mark that clip instead (the source), and ↵ inserts the
+ *                range after the selected shot with the clip's transcript line as why.
+ *                ⌥I ⌥O clear one, ⌘⇧X both. (O was the switcher's picker on the board.)
+ *   , .          insert / overwrite at the playhead from the source: the Source monitor's
+ *                clip and In / Out (`window.rcSource = {clip, inPoint, outPoint}`), else a
+ *                clip open in Find with both marks, else the bin's selected keep (the
+ *                range "+ add" would put in). Insert splits the shot under the playhead
+ *                and pushes the rest later; overwrite covers the film from the playhead
+ *                for the clip's length. The playhead then sits after the new shot.
+ *   V C B N Y A  the tools (`tl.setTool`): selection, razor, ripple edit, rolling edit,
+ *                slip, track select forward. C also cuts at the playhead, as it always
+ *                did (the selected shot, else the shot under it); ⌘K cuts there without
+ *                changing the tool.
+ *   M            a marker at the playhead; ⇧M the next, ⌘⇧M the previous; ⌘⌥M clears the
+ *                one at the playhead.
  *   Q W          the selected shot's in / out to the playhead.
  *   X ⌫ Del      ripple delete the selection (multi-select included); ⌫ Del only a
  *                selection somebody chose, never one the board adopted (I16.0 n).
@@ -33,6 +46,9 @@
  *                selection and the marks.
  *   ⌘Z ⌘⇧Z       the foundation's — not bound twice here.
  *   ?            the map.
+ *
+ * ⌘ means ⌘ on a Mac and Ctrl elsewhere — in the bindings and in the map, which is
+ * labelled through `tl.keyLabel`.
  *
  * What app.js used to do with `j` / `k` (move the card selection) is `↑` / `↓` now, and
  * its `x` is taken over so a multi-selection goes in one press. The board's static Keys
@@ -46,35 +62,38 @@
 (function () {
   'use strict';
 
-  const FRAME = 1 / 30;
   const MIN_LEN = 0.2;             // the foundation's shortest shot
+  const BIG = 5;                   // frames — ⇧ with an arrow, as in Premiere
   const MAX_RATE = 8;
-
-  /* The one table. [keys, what, owner] — keys are space-separated tokens, each a <kbd>;
-   * owner names the lane when it is not this one (so the map lists the whole timeline
-   * and cannot drift from the file that binds the keys). */
-  const KEYS = [
-    ['J K L', 'shuttle — L forward, again for 2× 4× 8×; J reverse, again stacks; K pause. Hold K and tap L or J to play at 1× while held'],
-    ['↑ ↓', 'previous / next cut — the playhead to the boundary, that shot selected'],
-    ['Home End', 'film start / end'],
-    ['← →', 'one frame (⇧ one second) — the playhead only'],
-    ['I O', 'mark in / out on the clip in Find while it plays · ⌥I ⌥O clear'],
-    ['↵', 'with both marks: insert that range as a shot after the selected one'],
-    ['C', 'razor at the playhead — the selected shot, else the shot under it'],
-    ['Q W', 'the selected shot’s in / out to the playhead'],
-    ['X ⌫ Del', 'ripple delete the selection (⌫ Del: only a shot you chose)'],
-    ['⌘Z ⌘⇧Z', 'undo / redo', 'foundation'],
-    ['⌘A', 'select every shot'],
-    ['⌘D', 'duplicate the selection after itself'],
-    ['Esc', 'clear the selection and the marks'],
-    [', .', 'nudge the active edge a frame (⇧ a second)', 'trim'],
-    ['S', 'the magnet on / off', 'trim'],
-    ['+ − \\', 'zoom in / out · fit', 'foundation'],
-    ['?', 'this map'],
-  ];
 
   const tl = window.tl;
   if (!tl) return;
+  const L = (s) => (tl.keyLabel ? tl.keyLabel(s) : s);
+
+  /* The one table. [keys, what, owner, group] — keys are space-separated tokens, each a
+   * <kbd>, written with ⌘ ⌥ ⇧ and labelled for the platform (Ctrl / Alt / Shift off a
+   * Mac); owner names the lane when it is not this one (so the map lists the whole
+   * timeline and cannot drift from the file that binds the keys); group is the task the
+   * overlay files it under (play, trim, move, bin). */
+  const RAW_KEYS = [
+    ['J K L', 'shuttle: L forward (again 2× 4× 8×), J back, K stop; hold K + L / J: 1×', '', 'play'],
+    ['← →', 'one frame (⇧ five) — the playhead only', '', 'play'],
+    ['↑ ↓ Home End', 'previous / next cut · start / end', '', 'move'],
+    [', .', 'insert / overwrite at the playhead from the Source (else the bin’s clip)', '', 'bin'],
+    ['I O', 'sequence in / out (a clip open in Find: its marks) · ⌥I ⌥O ⌘⇧X clear', '', 'bin'],
+    ['↵', 'with a clip’s in and out: insert it after the selected shot', '', 'bin'],
+    ['V C B N Y A ⌘K', 'tools: select, razor (C also cuts here), ripple, roll, slip, track forward · ⌘K cut', '', 'trim'],
+    ['⌥← ⌥→', 'trim the selected edit a frame (⇧ five), ⌘← ⌘→ too', 'trim', 'trim'],
+    ['Q W', 'the selected shot’s in / out to the playhead', '', 'trim'],
+    ['X ⇧Del', 'ripple delete the selection (⌫ Del: only a shot you chose)', '', 'trim'],
+    ['⌘Z ⌘⇧Z', 'undo / redo', 'foundation', 'trim'],
+    ['⌘A ⌘D Esc', 'select all · duplicate · clear the selection and marks', '', 'trim'],
+    ['M ⇧M ⌘⇧M', 'marker at the playhead · next · previous (⌘⌥M clears)', '', 'move'],
+    ['S', 'the magnet on / off', 'trim', 'trim'],
+    ['+ − \\', 'zoom in / out · fit · ⌥ / ⌘ wheel zooms', 'foundation', 'move'],
+    ['?', 'this map', '', 'move'],
+  ];
+  const KEYS = RAW_KEYS.map(([k, what, who, g]) => [L(k), L(what), who || undefined, g]);
 
   let H = {};                      // the hooks app.js handed tl.mount (segs, clips, cue, play, toast)
   let mounted = false;
@@ -313,7 +332,7 @@
     marksEl.id = 'tlMarks';
     marksEl.className = 'tl-marks';
     marksEl.hidden = true;
-    marksEl.title = 'I / O marks on the clip in Find — ↵ inserts the range after the selected shot · ⌥I ⌥O clear';
+    marksEl.title = L('I / O marks on the clip in Find — ↵ inserts the range after the selected shot · ⌥I ⌥O clear');
     marksEl.innerHTML = '<i class="bar"><b class="range" hidden></b><b class="tick in" hidden></b>'
       + '<b class="tick out" hidden></b></i><span class="txt"></span>';
     pos.insertAdjacentElement('afterend', marksEl);
@@ -425,9 +444,11 @@
     return ph >= start - 1e-6 && ph <= start + tl.dur(seg) + 1e-6;
   }
 
-  function razor() {
+  /* A cut at the playhead — the selected shot, else the shot under it. Returns whether
+   * it cut; `quiet` (C as the razor tool's key) still says why a cut was refused. */
+  function razorAt(quiet) {
     const list = segs();
-    if (!list.length) return true;
+    if (!list.length) return false;
     const ph = tl.state.playhead;
     let id = tl.state.anchor;
     if (id != null) {
@@ -435,13 +456,15 @@
       if (!(ph > start && ph < start + tl.dur(seg))) id = null;
     }
     if (id == null) { const at = tl.shotAt(ph); id = at ? at.id : null; }
-    if (id == null) return true;
+    if (id == null) return false;
     const second = tl.split(id, ph);
-    if (second == null) { say(`too close to a cut point to split (${MIN_LEN} s minimum)`); return true; }
+    if (second == null) { say(`too close to a cut point to split (${MIN_LEN} s minimum)`); return false; }
     tl.select([second, id]);         // both halves; the anchor stays on the first
-    say(`split ${stem(tl.byId(id).clip)} at ${tl.fmt(ph)}`);
+    say(`split ${stem(tl.byId(id).clip)} at ${tl.tc(ph)}${quiet ? ' · razor tool (V for selection)' : ''}`);
     return true;
   }
+
+  function razor() { razorAt(false); return true; }
 
   function trimTo(edge) {
     const id = tl.state.anchor;
@@ -473,7 +496,7 @@
     if (!ids.length) { say('nothing selected'); return true; }
     tl.remove(ids);                  // the foundation selects the shot that takes the place
     chosen = false;                  // …which nobody chose
-    say(`removed ${ids.length} shot${ids.length > 1 ? 's' : ''} — ⌘Z brings ${ids.length > 1 ? 'them' : 'it'} back`);
+    say(`removed ${ids.length} shot${ids.length > 1 ? 's' : ''} — ${L('⌘Z')} brings ${ids.length > 1 ? 'them' : 'it'} back`);
     return true;
   }
 
@@ -519,6 +542,141 @@
   function clearAll() {
     tl.select([]);
     clearMarks();
+    return true;
+  }
+
+  /* ------------------------------------------------------------ sequence marks: I O */
+  /* Where I / O go (Premiere marks the panel in focus): the clip open in Find while it
+   * is the source — it is open and the timeline was not the last thing clicked — else
+   * the sequence, at the playhead. */
+  let lastPanel = 'source';
+  function sourceFocused() { return !!clipPlayer() && lastPanel !== 'timeline'; }
+
+  function markKey(edge) {
+    if (sourceFocused()) return mark(edge);
+    if (!segs().length) { say('nothing on the timeline to mark'); return true; }
+    const t = edge === 'in' ? tl.setSeqIn(tl.state.playhead) : tl.setSeqOut(tl.state.playhead);
+    say(`sequence ${edge} at ${tl.tc(t)}`);
+    return true;
+  }
+
+  function clearMarkKey(edge) {
+    if (sourceFocused() || marks[edge] != null) return clearMark(edge);
+    const had = edge === 'in' ? tl.state.seqIn : tl.state.seqOut;
+    if (had == null) return true;
+    if (edge === 'in') tl.setSeqIn(null); else tl.setSeqOut(null);
+    say(`sequence ${edge} cleared`);
+    return true;
+  }
+
+  function clearInOut() {
+    if (tl.state.seqIn == null && tl.state.seqOut == null) return true;
+    tl.setSeqIn(null); tl.setSeqOut(null);
+    say('sequence in and out cleared');
+    return true;
+  }
+
+  /* ------------------------------------------------------------ markers: M */
+  function addMarker() {
+    if (!segs().length) { say('nothing on the timeline to mark'); return true; }
+    const m = tl.addMarker(tl.state.playhead);
+    say(m == null ? `a marker is already at ${tl.tc(tl.state.playhead)}` : `marker at ${tl.tc(m)}`);
+    return true;
+  }
+
+  function jumpMarker(dir) {
+    const m = dir > 0 ? tl.nextMarker() : tl.prevMarker();
+    if (m == null) {
+      say(tl.markers().length ? `no ${dir > 0 ? 'next' : 'previous'} marker` : `no markers — M adds one at the playhead`);
+      return true;
+    }
+    settle();
+    tl.seek(m);
+    tl.setPlayhead(m);
+    return true;
+  }
+
+  function clearMarker() {
+    if (tl.removeMarker(tl.state.playhead)) say('marker cleared');
+    else say('no marker at the playhead');
+    return true;
+  }
+
+  function clearAllMarkers() {
+    if (tl.clearMarkers()) say('every marker cleared');
+    return true;
+  }
+
+  /* ------------------------------------------------------------ tools: V C B N Y A */
+  const TOOL_OF = { v: 'select', c: 'razor', b: 'ripple', n: 'roll', y: 'slip', a: 'track' };
+
+  function toolKey(k) {
+    const name = TOOL_OF[k];
+    const changed = tl.setTool(name);
+    if (k === 'c') {
+      // the default action C always had: a cut at the playhead, when there is one to make
+      const cut = razorAt(true);
+      if (changed && !cut) say('razor tool — click a shot to cut it there · V for the selection tool');
+      return true;
+    }
+    if (changed) say(`${tl.TOOLS[name][2].split(' — ')[0].toLowerCase()} (${k.toUpperCase()})`);
+    return true;
+  }
+
+  /* ⌘K: Premiere's Add Edit — a cut at the playhead, the tool unchanged. */
+  function addEdit() { razor(); return true; }
+
+  /* ------------------------------------------------------------ insert / overwrite: , . */
+  /* The source an insert or overwrite takes, as `{clip, in, out, why, from}`: the
+   * Source monitor (`window.rcSource`, the workspace's — its In / Out, else the whole
+   * clip), then a clip open in Find with both marks, then the bin's selected keep (the
+   * range its "+ add" puts in). null when there is none, or its clip is not usable. */
+  function sourceShot() {
+    const clips = (H.clips && H.clips()) || {};
+    const ok = (clip) => !!clip && !!clips[clip];
+    const src = window.rcSource;
+    if (src && src.clip) {
+      const c = clips[src.clip];
+      const dur = (c && c.duration) || 0;
+      const a = Number.isFinite(Number(src.inPoint)) && src.inPoint != null ? Number(src.inPoint) : 0;
+      const b = Number.isFinite(Number(src.outPoint)) && src.outPoint != null ? Number(src.outPoint) : dur;
+      if (ok(src.clip) && b - a >= MIN_LEN) {
+        const line = ((c && c.transcript) || []).find((u) => u.end > a && u.start < b);
+        return { clip: src.clip, in: round2(a), out: round2(b),
+                 why: (line && line.text) || `from the Source monitor · ${stem(src.clip)}`, from: 'the Source monitor' };
+      }
+    }
+    if (marks.clip && marks.in != null && marks.out != null && marks.out - marks.in >= MIN_LEN && ok(marks.clip)) {
+      const c = clips[marks.clip];
+      const line = ((c && c.transcript) || []).find((u) => u.end > marks.in && u.start < marks.out);
+      return { clip: marks.clip, in: marks.in, out: marks.out,
+               why: (line && line.text) || `marked in ${stem(marks.clip)}`, from: 'the marked clip' };
+    }
+    const row = document.querySelector('#library .keep.sel');
+    const k = row && row._keep;
+    if (k && !k.missing && ok(k.clip) && k.end - k.start >= MIN_LEN) {
+      return { clip: k.clip, in: round2(k.start), out: round2(k.end),
+               why: k.why || k.note || '', from: 'the bin' };
+    }
+    return null;
+  }
+
+  function editFromSource(kind) {
+    const s = sourceShot();
+    if (!s) {
+      say(`select a clip in the bin (or open one in the Source monitor) — ${kind === 'insert' ? ',' : '.'} ${kind}s it at the playhead`);
+      return true;
+    }
+    settle();
+    const at = clamp(tl.state.playhead, 0, tl.total());
+    const seg = { clip: s.clip, in: s.in, out: s.out, why: s.why };
+    const id = kind === 'insert' ? tl.insertAt(seg, at) : tl.overwrite(seg, at);
+    if (id == null) { say(`could not ${kind} that`); return true; }
+    chosen = true;                   // the editor put it there
+    const end = tl.filmStart(id) + tl.dur(tl.byId(id));
+    tl.seek(clamp(end, 0, tl.total()));
+    tl.setPlayhead(clamp(end, 0, tl.total()));
+    say(`${kind === 'insert' ? 'inserted' : 'overwrote with'} ${stem(s.clip)} ${tl.fmt(s.in)}–${tl.fmt(s.out)} at ${tl.tc(at)} · from ${s.from}`);
     return true;
   }
 
@@ -579,13 +737,18 @@
     const mod = e.metaKey || e.ctrlKey;
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     let handled = false;
-    if (mod && !e.altKey) {
-      if (k === 'a') handled = selectAll();
-      else if (k === 'd') handled = duplicate();
+    if (mod && e.altKey) {
+      if (e.code === 'KeyM') handled = e.shiftKey ? clearAllMarkers() : clearMarker();
+    } else if (mod) {
+      if (e.code === 'KeyM' && e.shiftKey) handled = jumpMarker(-1);
+      else if (e.code === 'KeyX' && e.shiftKey) handled = clearInOut();
+      else if (k === 'a' && !e.shiftKey) handled = selectAll();
+      else if (k === 'd' && !e.shiftKey) handled = duplicate();
+      else if (k === 'k' && !e.shiftKey) handled = addEdit();
       // ⌘Z / ⌘⇧Z are the foundation's; they are not bound twice
-    } else if (e.altKey && !mod) {
-      if (e.code === 'KeyI') handled = clearMark('in');       // ⌥I is a dead key on a Mac: by code
-      else if (e.code === 'KeyO') handled = clearMark('out');
+    } else if (e.altKey) {
+      if (e.code === 'KeyI') handled = clearMarkKey('in');    // ⌥I is a dead key on a Mac: by code
+      else if (e.code === 'KeyO') handled = clearMarkKey('out');
     } else {
       switch (k) {
         case 'j': case 'k': case 'l': handled = shuttleKey(k, e); break;
@@ -597,14 +760,17 @@
           handled = list.length ? goTo(tl.total(), list[list.length - 1].id) : true;
           break;
         }
-        case 'ArrowLeft': handled = step(-(e.shiftKey ? 1 : FRAME)); break;
-        case 'ArrowRight': handled = step(e.shiftKey ? 1 : FRAME); break;
-        case 'i': handled = mark('in'); break;
-        // `o` is the project switcher's (open the picker) until a clip is open in Find;
-        // then it is the out mark, and the switcher does not see it
-        case 'o': handled = clipPlayer() ? mark('out') : false; break;
+        case 'ArrowLeft': handled = step(-(e.shiftKey ? BIG : 1) * tl.frame()); break;
+        case 'ArrowRight': handled = step((e.shiftKey ? BIG : 1) * tl.frame()); break;
+        case 'i': handled = markKey('in'); break;
+        case 'o': handled = markKey('out'); break;
         case 'Enter': handled = insertMarked(); break;     // false: app.js plays this shot only
-        case 'c': handled = razor(); break;
+        case ',': handled = editFromSource('insert'); break;
+        case '.': handled = editFromSource('overwrite'); break;
+        case 'm': handled = e.shiftKey ? jumpMarker(1) : addMarker(); break;
+        case 'v': case 'c': case 'b': case 'n': case 'y': case 'a':
+          handled = e.shiftKey ? false : toolKey(k);
+          break;
         case 'q': handled = trimTo('in'); break;
         case 'w': handled = trimTo('out'); break;
         case 'x': handled = rippleDelete(); break;
@@ -648,6 +814,13 @@
         if (e.target.closest('.blk') && tl.state.sel.size) chosen = true;
       }, true);
     }
+    // which panel I / O mark: the timeline's (and the program monitor's) or the source's
+    document.addEventListener('pointerdown', (e) => {
+      const t = e.target instanceof Element ? e.target : null;
+      if (!t) return;
+      if (t.closest('#tl, .screen, .transport')) lastPanel = 'timeline';
+      else if (t.closest('#findPlayer, #findResults, #library, [data-panel=source], #sourceMonitor')) lastPanel = 'source';
+    }, true);
     ensureMarksEl();
     renderMap();
   }
@@ -662,5 +835,6 @@
   };
   if (tl.el && tl.el.root) init({});
 
-  window.tlKeys = { KEYS, marks, shuttle: sh, renderMap, clearMarks };
+  window.tlKeys = { KEYS, marks, shuttle: sh, renderMap, clearMarks, sourceShot,
+                    get lastPanel() { return lastPanel; } };
 })();

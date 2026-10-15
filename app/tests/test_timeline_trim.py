@@ -6,7 +6,7 @@ The module under test is `app/static/timeline-trim.js`, built on the foundation
 cut line, the lane's full height, split by height — the top half extends or shortens the
 shot and the rest of the film moves (a ripple trim), the bottom half rolls the cut into the
 neighbour, ⇧ flips the two before or during the drag; the film's first in and last out
-keep a full-height handle of their own; slips by ⌥-drag; `,` / `.` nudges of the active
+keep a full-height handle of their own; slips by ⌥-drag; ⌥← / ⌥→ (Ctrl+← / Ctrl+→) nudges of the active
 edge; the hover cue, the ghost of the pushed shot and the one-line hint; and the magnet —
 snapping to the playhead, a sentence's padded cut point, a word start, with a snap line
 that says what it took, `S` to turn it off, ⌘/ctrl to suspend it. The gestures are real
@@ -33,6 +33,15 @@ import pytest
 playwright_api = pytest.importorskip("playwright.sync_api",
                                      reason="playwright not installed")
 from playwright.sync_api import sync_playwright  # noqa: E402
+
+
+def tc(seconds: float, fps: float = 23.976) -> str:
+    """Film seconds as the timeline writes them: HH:MM:SS:FF, non-drop at the nominal
+    rate, rounded to the nearest frame (timeline.js `tl.tc`)."""
+    n = round(seconds * fps)
+    nominal = round(fps)
+    ff, n = n % nominal, n // nominal
+    return f"{n // 3600:02d}:{n // 60 % 60:02d}:{n % 60:02d}:{ff:02d}"
 
 
 def _free_port() -> int:
@@ -212,7 +221,7 @@ def test_dragging_the_out_handle_ripple_trims_and_one_undo_restores(page, projec
     assert page.evaluate("segs[1].in") == 0.0 and page.evaluate("segs[1].out") == 2.0
     total = film_total(page)
     assert total == pytest.approx(4.3, abs=0.02)
-    assert page.locator("#tl .tl-total").inner_text() == f"0:{total:04.1f}"
+    assert page.locator("#tl .tl-total").inner_text() == tc(total)
     assert page.locator("#total").inner_text() == f"0:{total:04.1f}"
     assert page.locator("#undo").get_attribute("title").startswith("undo: trim")
     assert page.locator("#tl .blk.sel").get_attribute("data-id") == ids(page)[0]
@@ -222,7 +231,7 @@ def test_dragging_the_out_handle_ripple_trims_and_one_undo_restores(page, projec
 
     page.keyboard.press("Control+z")
     assert ranges(page) == [[1.0, 3.0], [0.0, 2.0]]
-    assert page.locator("#tl .tl-total").inner_text() == "0:04.0"
+    assert page.locator("#tl .tl-total").inner_text() == tc(4.0)
     assert page.locator("#redo").get_attribute("title").startswith("redo: trim")
     wait_saved(page)
     assert on_disk(project)[0]["out"] == 3.0
@@ -256,7 +265,7 @@ def test_a_boundary_drag_rolls_the_cut_and_the_film_length_holds(page):
     assert r[1][0] == pytest.approx(0.4, abs=0.02)
     assert r[1][0] - 0.0 == pytest.approx(r[0][1] - 3.0, abs=1e-9), "the same delta"
     assert film_total(page) == pytest.approx(4.0, abs=1e-9)
-    assert page.locator("#tl .tl-total").inner_text() == "0:04.0"
+    assert page.locator("#tl .tl-total").inner_text() == tc(4.0)
     assert page.locator("#undo").get_attribute("title").startswith("undo: roll")
     page.keyboard.press("Control+z")
     assert ranges(page) == [[1.0, 3.0], [0.0, 2.0]]
@@ -328,7 +337,7 @@ def test_the_top_half_of_a_cut_extends_the_shot_and_pushes_the_rest(page):
     assert ranges(page)[1] == [0.0, 2.0], "the neighbour's range is untouched"
     total = film_total(page)
     assert total == pytest.approx(4.3, abs=0.02)
-    assert page.locator("#tl .tl-total").inner_text() == f"0:{total:04.1f}"
+    assert page.locator("#tl .tl-total").inner_text() == tc(total)
     assert page.evaluate("tl.filmStart(segs[1].id)") == pytest.approx(2.3, abs=0.02), "shot 2 slid later"
     assert page.locator("#undo").get_attribute("title").startswith("undo: trim")
     page.keyboard.press("Control+z")
@@ -421,6 +430,9 @@ def test_the_last_out_extends_over_the_whole_height(page):
     assert box["height"] == pytest.approx(blk["height"], abs=3), "the whole height"
     assert box["x"] + box["width"] == pytest.approx(blk["x"] + blk["width"], abs=2), "flush with the edge"
     assert page.locator("#tl .tl-edge").count() == 1
+    # the magnet off: at this zoom a word 0.05 s short of 2.5 is within its 8 px (the
+    # timeline's side column made the view, and so the fit zoom, a little narrower)
+    page.evaluate("tl.trim.setMagnet(false)")
     reveal(page)
     box = h.bounding_box()
     x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] - 3
@@ -465,7 +477,7 @@ def test_hovering_a_cut_lights_the_half_shows_the_ghost_and_the_hint(page):
     assert hint.is_visible()
     text = hint.inner_text()
     assert "top edge" in text and "extend or shorten" in text and "the rest moves" in text, text
-    assert "bottom edge" in text and "roll the cut" in text and "⇧ flips" in text, text
+    assert "bottom edge" in text and "roll the cut" in text and "Shift flips" in text, text
     assert page.evaluate("localStorage.getItem('roughcut.tl.edgeHintSeen')") == "1"
     assert page.evaluate("getComputedStyle(document.querySelector('#tl .tl-edge .q.t.l')).cursor") \
         == "col-resize"
@@ -606,28 +618,30 @@ def test_s_turns_the_magnet_off_and_ctrl_suspends_it(page):
 
 # ------------------------------------------------------------------ nudges
 
-def test_comma_and_period_nudge_the_active_edge_by_a_frame_or_a_second(page):
-    """With nothing dragged yet the active edge is the selected shot's out; `,` takes a
-    frame (1/30 s, kept at the foundation's 0.01 s), `⇧.` a second. After an in handle
-    is dragged, that edge is the one the keys move."""
+def test_alt_and_ctrl_arrows_nudge_the_active_edge_by_a_frame_or_five(page):
+    """Premiere's trim keys (REDESIGN dimension 5; `,` `.` are insert / overwrite now):
+    with nothing dragged yet the active edge is the selected shot's out; ⌥→ / Ctrl+→
+    take a frame at the sequence rate (1/23.976 s, kept at the foundation's 0.01 s),
+    with ⇧ five. After an in handle is dragged, that edge is the one the keys move."""
+    f = 1 / 23.976
     first = ids(page)[0]
     page.evaluate(f"tl.select(['{first}'])")
-    page.keyboard.press(",")
-    assert page.evaluate("segs[0].out") == 2.97
+    page.keyboard.press("Alt+ArrowLeft")
+    assert page.evaluate("segs[0].out") == round(3.0 - f, 2)
     assert page.locator("#undo").get_attribute("title").startswith("undo: nudge")
-    page.keyboard.press(".")
+    page.keyboard.press("Control+ArrowRight")
     assert page.evaluate("segs[0].out") == 3.0
-    page.keyboard.press("Shift+.")
-    assert page.evaluate("segs[0].out") == 4.0
-    page.keyboard.press("Shift+,")
+    page.keyboard.press("Alt+Shift+ArrowRight")
+    assert page.evaluate("segs[0].out") == round(3.0 + 5 * f, 2)
+    page.keyboard.press("Control+Shift+ArrowLeft")
     assert page.evaluate("segs[0].out") == 3.0
     assert page.evaluate("segs[0].in") == 1.0
     z = zoom(page)
     drag(page, in_handle(page, 0), 0.3 * z)
     dragged = page.evaluate("segs[0].in")
     assert dragged == pytest.approx(1.3, abs=0.02)
-    page.keyboard.press(",")
-    assert page.evaluate("segs[0].in") == round(dragged - 1 / 30, 2)
+    page.keyboard.press("Alt+ArrowLeft")
+    assert page.evaluate("segs[0].in") == round(dragged - f, 2)
     assert page.evaluate("segs[0].out") == 3.0
     assert page.evaluate("tl.trim.active.edge") == "in"
     page.keyboard.press("Control+z")
@@ -635,5 +649,5 @@ def test_comma_and_period_nudge_the_active_edge_by_a_frame_or_a_second(page):
     # inside an input the keys are the input's
     page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
     page.locator("#story").fill("")
-    page.locator("#story").press(",")
+    page.locator("#story").press("Alt+ArrowLeft")
     assert page.evaluate("segs[0].in") == dragged
