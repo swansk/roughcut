@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Changed
+- **The perf gate cannot pass by skipping (verdict 6 punch 9).** `test_perf_latency::test_latency_under_load` writes `$ROUGHCUT_PERF_JSON` through a new `perf_record` fixture (its outcome passed / failed / skipped, whether the skip was forced, the reason, the load at setup, when the burners started and stopped and at teardown, the burners, every measured number), and `ROUGHCUT_PERF_FORCE_SKIP=1` skips it on purpose. `tools/gate.py` names the perf test on its own line under the suite with the load it ran at; a skip (load-aware or forced) or no record is retried once after the rest of the suite, once the load is under 2x the cores (up to `ROUGHCUT_PERF_RETRY_WAIT`, 300 s); a retry that skips again makes the suite and the run **AMBER** (exit 2), not GREEN; a retry that fails is broken. `ROUGHCUT_GATE_SUITE` narrows the suite for checking the gate itself, and a narrowed suite is AMBER too.
+
 ### Added
 - **Redesign verdict 6: FAIL, everything 8-9 but 6:7 and 10:6** (`judge/verdict-6.md` on `ee3f15e`; 2, 5, 12 at 9). Real 12-clip first pass 13.3 min at load 21. Blockers: K2, and an accepted cut lost once on a reload (save stalled, no beforeunload/keepalive). The judge's K2 read: "a harsh Premiere editor would no longer call this a toy, but would not choose it over Premiere yet". Rulings: load-aware burners honest but a skip leaving the gate green is lenient; Playback Resolution honest (belongs in the rubric log, and should be a visible setting).
 
