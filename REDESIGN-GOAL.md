@@ -110,3 +110,12 @@ next judge runs, and the next judge rules it honest or lenient.
 
 - 2026-10-14: created from ROUGHCUT-GOAL.md (2026-10-13, 8 dimensions) + Karl's 2026-10-14 notes.
   The old eight are folded into dimensions 1, 3, 5, 6, 8, 9 and 10; the old gate stays the gate.
+- 2026-10-14 (wave 1, lane WORKSPACE): `app/tests/test_budget.py` words/controls-in-view
+  budgets raised for the board's states only (/floor and /open unchanged), because the board
+  is now Premiere's five-panel workspace (menu bar, Project list, Source transport, Program
+  edit buttons, five Effect Controls tabs in place of the five-tool rail). Controls in view on
+  `/` 20 → 38, `/ shot` 33 → 51, `/ film` 19 → 37, `/ jobs` 20 → 38, `/ fx` 35 → 41; words
+  `/` 92 → 94, `/ shot` 143 → 154, `/ film` 74 → 104, `/ jobs` 121 → 122 (measured values
+  +~10 %, so growth still fails). Kept unchanged: one header row ≤ 50 px, exactly one blue
+  button, no page scroll in any state, the strip in view, the monitor centred and ≥ 425 px
+  tall at 1440×900 and not resized by a selection, Next within 3 s, zero page errors.

@@ -1,8 +1,10 @@
-"""INTAKE M11 — the dock, driven in a real browser.
+"""INTAKE M11 — the dock, driven in a real browser; since the redesign (wave 1) the dock's
+tools are tabs of the Premiere-style workspace's panel groups (test_workspace.py drives the
+panels and splitters themselves).
 
-The board's right column is a dock: a rail of tools (Bin · Ask · Sound · FX · Film) and one
-panel the height of the viewport that scrolls inside itself, so the page never scrolls
-for it and the monitor never leaves. The Bin is the default tool and a labelled grid:
+The rail of tools (Bin · Ask · Sound · FX · Film) became tabs: Selects beside Project, and
+Effects · Audio · Assistant · Export beside Effect Controls. Each group is one panel that
+scrolls inside itself, so the page never scrolls for it and the monitor never leaves. The Bin is the default tool and a labelled grid:
 a card per keep with the pass's labels as chips, the same chips as a filter, the search
 box filtering as you type, and adding at the playhead (the button, Enter, a drop). The
 keys are an overlay on `?`, one table grouped by task (INTAKE M16); the project's facts
@@ -104,6 +106,7 @@ KEEPS = [
 def _with_bin(page) -> None:
     _put_selects(page, KEEPS)
     page.reload()
+    page.evaluate("dock.open('bin')")                  # Selects, beside Project
     page.wait_for_selector("#library .keep")
 
 
@@ -134,10 +137,10 @@ def test_the_cli_banner_shows_above_the_board_and_the_dock_still_fits(page):
         # the banner is the one place it is said: no model pill in the header (M16 I16.1)
         assert page.locator("#backend").count() == 0
         page.wait_for_function(
-            "document.querySelector('#dock').getBoundingClientRect().bottom <= 901")
+            "document.querySelector('#ws').getBoundingClientRect().bottom <= 901")
         banner = rect(page, "#cliFix")
         assert banner["top"] < rect(page, "header")["top"], "the banner is above the header"
-        assert rect(page, "#dock")["top"] >= rect(page, "header")["bottom"]
+        assert rect(page, "#ws")["top"] >= rect(page, "header")["bottom"]
     finally:
         server.BACKEND.update(fix=None)
     page.evaluate("window.cliFix.poll()")
@@ -147,9 +150,9 @@ def test_the_cli_banner_shows_above_the_board_and_the_dock_still_fits(page):
 def test_the_dock_fits_the_viewport_and_never_asks_the_page_to_scroll(page):
     """The old sidebar was ~2,900 px "sticky" beside a 900 px viewport. The dock is
     exactly the viewport's height under the header, whatever the header's height is,
-    and its panel scrolls inside itself."""
+    and each panel group scrolls inside itself (the workspace, redesign wave 1)."""
     hd = rect(page, "header")
-    d = rect(page, "#dock")
+    d = rect(page, "#ws")
     assert d["top"] >= hd["bottom"], (d, hd)
     assert d["bottom"] <= 900 + 1, d
     assert d["height"] >= 320
@@ -161,11 +164,12 @@ def test_the_dock_fits_the_viewport_and_never_asks_the_page_to_scroll(page):
 
 
 def test_the_dock_resizes_by_its_left_edge_and_the_timeline_refits(page):
-    """Drag the dock's left edge: the dock takes the width, the main column and the
-    timeline's view take the rest, the width is remembered; double-click resets."""
-    w0 = page.evaluate("dock.width()")
+    """Drag the Effect Controls group's left edge: it takes the width, the monitors and
+    the timeline's view take the rest, the width is remembered; double-click resets."""
+    width = lambda: page.evaluate("document.querySelector('#pInspector').getBoundingClientRect().width")  # noqa: E731
+    w0 = width()
     view0 = page.evaluate("document.querySelector('#tl .tl-view').getBoundingClientRect().width")
-    hb = page.locator("#dockHandle").bounding_box()
+    hb = page.locator(".ws-split[data-split=insp]").bounding_box()
     x = hb["x"] + hb["width"] / 2
     y = hb["y"] + 200
     page.mouse.move(x, y)
@@ -173,39 +177,43 @@ def test_the_dock_resizes_by_its_left_edge_and_the_timeline_refits(page):
     page.mouse.move(x - 60, y, steps=4)
     page.mouse.move(x - 120, y, steps=4)
     page.mouse.up()
-    w1 = page.evaluate("dock.width()")
+    w1 = width()
     assert w1 == pytest.approx(w0 + 120, abs=3), (w0, w1)
-    assert page.evaluate("document.querySelector('#dock').getBoundingClientRect().width") == pytest.approx(w1, abs=2)
     page.wait_for_function(
         f"document.querySelector('#tl .tl-view').getBoundingClientRect().width < {view0} - 100")
     assert page.locator("#tl .blk").count() == 2       # the timeline re-fit, nothing lost
     page.reload()
     page.wait_for_selector("#tl .blk")
-    assert page.evaluate("dock.width()") == w1          # remembered
-    page.locator("#dockHandle").dblclick()
-    assert page.evaluate("dock.width()") == w0
-    # the icons and labels are on the rail
-    assert page.locator("#rail .tool svg").count() == page.locator("#rail .tool").count() == 5
-    assert [t.strip().lower() for t in page.locator("#rail .tool span").all_inner_texts()] == ["bin", "ask", "sound", "fx", "film"]
+    assert width() == pytest.approx(w1, abs=2)          # remembered
+    page.locator(".ws-split[data-split=insp]").dblclick()
+    assert width() == pytest.approx(w0, abs=2)
+    # the tools are named tabs
+    assert [t.strip() for t in page.locator("#pInspector .ws-tab").all_inner_texts()] == \
+        ["Effect Controls", "Effects", "Audio", "Assistant", "Export"]
 
 
 def test_the_rail_opens_one_tool_at_a_time_and_remembers_it(page):
+    # Project opens first, the way Premiere's does; Selects is its neighbouring tab
+    assert page.evaluate("dock.current()") == "project"
+    assert page.locator("#projList").is_visible() and not page.locator("#library").is_visible()
+    page.locator(".ws-tab[data-tool=bin]").click()
     assert page.evaluate("dock.current()") == "bin"
-    assert page.locator("#library").is_visible()
-    assert not page.locator("#musicPanel").is_visible()
-    page.locator("#rail .tool[data-tool=sound]").click()
+    assert page.locator("#library").is_visible() and not page.locator("#projList").is_visible()
+    assert page.locator("#inspector").is_visible() and not page.locator("#musicPanel").is_visible()
+    page.locator(".ws-tab[data-tool=sound]").click()
     assert page.evaluate("dock.current()") == "sound"
     assert page.locator("#musicPanel").is_visible()
-    assert not page.locator("#library").is_visible()
-    assert "on" in page.locator("#rail .tool[data-tool=sound]").get_attribute("class")
-    assert "on" not in page.locator("#rail .tool[data-tool=bin]").get_attribute("class")
-    # the choice survives a reload in this browser
+    assert not page.locator("#inspector").is_visible()
+    assert page.locator("#library").is_visible()          # one tab per group: Selects stays
+    assert "on" in page.locator(".ws-tab[data-tool=sound]").get_attribute("class")
+    assert "on" not in page.locator(".ws-tab[data-tool=inspect]").get_attribute("class")
+    # the choice survives a reload in this browser, per group
     page.reload()
     page.wait_for_selector("#tl .blk")
-    assert page.evaluate("dock.current()") == "sound"
+    assert page.evaluate("dock.isOpen('sound') && dock.isOpen('bin')") is True
     # an unknown tool is refused, the open one stays
     assert page.evaluate("dock.open('effects')") is False
-    assert page.evaluate("dock.current()") == "sound"
+    assert page.evaluate("dock.current()") == "bin"      # a reload starts on the Project group's tab
     # reveal() opens the tool holding an element in a closed tool
     assert page.evaluate("dock.reveal('#story')") is True
     assert page.evaluate("dock.current()") == "ask"
@@ -226,16 +234,16 @@ def test_the_ask_tool_is_the_one_sentence_and_the_change(page):
     tool = page.locator("#tools section[data-tool=ask]")
     assert "What is this film about?" in tool.inner_text()
     assert "worst at" not in tool.inner_text()
-    assert tool.locator("button").count() == 1
+    assert tool.locator("#askPanel button").count() == 1   # the proposal's own wait below it
     assert page.locator("#askAims").inner_text() == "aims for 0:05–0:20"   # target_s [5, 20]
     page.evaluate("tl.select([tl.idAt(0), tl.idAt(1)])")
     page.keyboard.press("x")
-    page.wait_for_selector("#inspector .empty")
+    page.wait_for_selector("#tlEmpty .empty")
     assert not page.locator("#askPanel").is_visible()
     assert page.locator("#askEmpty").count() == 0
     assert not page.locator("#story").is_visible()   # the empty state's field asks it
     assert page.locator("#askFirst").inner_text() == \
-        "No cut yet: the sentence and the first cut are under the timeline."
+        "No cut yet: the sentence and the first cut are in the Timeline panel."
     # and the empty state's field is the same sentence: typing in one is the other
     page.locator("#firstNote").fill("two friends talking")
     assert page.evaluate("document.querySelector('#story').value") == "two friends talking"
@@ -254,7 +262,7 @@ def test_the_bin_is_a_labelled_grid_with_the_labels_as_a_filter(page):
     cards = page.locator("#library .keep")
     assert cards.count() == 2                      # CLIP_B's keep is shot 2: not here
     assert page.locator("#binTabs .tab").all_inner_texts() == ["not in the cut · 2", "all 3"]
-    assert page.locator("#rail .tool[data-tool=bin] .badge").inner_text() == "2"
+    assert page.locator(".ws-tab[data-tool=bin] .badge").inner_text() == "2"
     # heroes first; the label is the line spoken inside the keep
     first = cards.first
     assert first.locator(".w").inner_text() == "★ “goodbye”"
@@ -302,6 +310,7 @@ def test_the_bin_is_a_labelled_grid_with_the_labels_as_a_filter(page):
 def test_enter_finds_and_the_priced_search_sits_under_any_find(page):
     """One find box: Enter finds a moment anywhere; under the result, plain and priced,
     "Not it? Ask the model · ~$x" — hidden until a find has run."""
+    page.evaluate("dock.open('bin')")
     assert page.locator("#findDeep").is_hidden()
     page.locator("#findQ").fill("goodbye")
     page.locator("#findQ").press("Enter")
@@ -322,6 +331,7 @@ def test_a_find_says_one_count_and_its_rows_can_be_told_apart(page):
     once, naming what is set."""
     _put_selects(page, KEEPS[:1])                          # the goodbye: no "hello" in it
     page.reload()
+    page.evaluate("dock.open('bin')")
     page.wait_for_selector("#library .keep")
     page.locator("#findQ").fill("hello")                   # heard in all three clips
     page.locator("#findQ").press("Enter")
@@ -413,7 +423,7 @@ def test_the_keys_are_an_overlay_on_question_mark(page):
     # one table grouped by task (INTAKE M16 I16.4), the timeline's rows read from its
     # own table: no second section, no module tags, no row twice
     groups = page.eval_on_selector_all("#keyTable th", "els => els.map(e => e.textContent)")
-    assert groups == ["Play", "Trim and cut", "Move around", "The bin"], groups
+    assert groups == ["Play", "Trim and cut", "Move around", "The bin", "Source monitor"], groups
     assert not page.locator("#keysOverlay #tlKeys").is_visible()   # mounted, not shown
     text = page.locator("#keysOverlay").inner_text()
     assert "razor" in text                         # a row from window.tlKeys.KEYS
@@ -437,6 +447,7 @@ def test_the_keys_are_an_overlay_on_question_mark(page):
     page.keyboard.press("?")
     assert not page.locator("#keysOverlay").is_visible()
     # not while typing
+    page.evaluate("dock.open('bin')")
     page.locator("#findQ").focus()
     page.keyboard.type("?")
     assert not page.locator("#keysOverlay").is_visible()
@@ -448,9 +459,11 @@ def test_the_rail_names_its_tools_and_badges_only_what_waits(page):
     stays `out`, so #tool=out and the flow keep working), and a badge is only for what
     waits on Karl — the old Out badge counted every film ever made. The Project ▾
     popover is gone (its facts are the switcher's menu)."""
-    names = page.eval_on_selector_all("#rail .tool", "els => els.map(e => e.textContent.trim())")
-    assert names == ["Bin", "Ask", "Sound", "FX", "Film"], names
-    assert page.locator("#rail .tool[data-tool=out] .badge").count() == 0
+    # in the workspace's words (redesign wave 1): Project · Selects, and Effect Controls ·
+    # Effects · Audio · Assistant · Export; the keys stay bin / fx / sound / ask / out
+    names = page.eval_on_selector_all(".ws-tab[data-tool]", "els => els.map(e => e.textContent.trim())")
+    assert names == ["Project", "Selects", "Effect Controls", "Effects", "Audio", "Assistant", "Export"], names
+    assert page.locator(".ws-tab[data-tool=out] .badge").count() == 0
     assert page.locator("#projectBtn").count() == 0 and page.locator("#projectPop").count() == 0
     page.evaluate("location.hash = '#tool=out'")
     page.wait_for_function("dock.current() === 'out'", timeout=5000)

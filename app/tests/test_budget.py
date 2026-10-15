@@ -61,10 +61,19 @@ HEADER_MAX_PX = 50
 # with nothing kept the Bin lists the footage, one card per clip, so a bin nobody has
 # passed can still be cut — the fixture's three cards add 12 words (their first lines):
 # / 72→84, / shot 118→130, / jobs 98→110; +10 % on those.
-WORDS_IN_VIEW = {"/": 92, "/floor": 58, "/open": 59, "/ shot": 143, "/ film": 74, "/ fx": 130,
-                 "/ jobs": 121}
-CONTROLS_IN_VIEW = {"/": 20, "/floor": 8, "/open": 9, "/ shot": 33, "/ film": 19, "/ fx": 35,
-                    "/ jobs": 20}
+# Raised in review on the redesign (2026-10-14, REDESIGN-GOAL.md dimensions 4 and 9, wave 1
+# lane WORKSPACE): the board is Premiere's five-panel workspace now. What is new in view
+# on "/" at 1440×900, measured: the menu bar (File · Edit · Clip · Sequence · Window ·
+# Help, 6), the Project panel (its two tabs, list / icon, the search box, a row per clip:
+# 4 controls, ~12 words), the Source monitor's transport (In, Out, ◀, ▶, ▶|, Insert: 6)
+# and the Program's edit-to-edit buttons (2), and the Effect Controls group's five tabs
+# (5) where the rail was (5 off). Measured: / 85 · 34, / shot 140 · 46, / film 94 · 33,
+# / jobs 111 · 34, / fx 117 · 37; the numbers below are those plus ~10 %, so growth still
+# fails. /floor and /open are unchanged.
+WORDS_IN_VIEW = {"/": 94, "/floor": 58, "/open": 59, "/ shot": 154, "/ film": 104, "/ fx": 130,
+                 "/ jobs": 122}
+CONTROLS_IN_VIEW = {"/": 38, "/floor": 8, "/open": 9, "/ shot": 51, "/ film": 37, "/ fx": 41,
+                    "/ jobs": 38}
 
 # Contracts another lane delivers (M16 stage 1, C1): until that lane is merged the
 # check is an expected failure on that screen. Every stage-1 lane is merged, so this is
@@ -368,7 +377,10 @@ def test_running_jobs_sit_in_the_header_row_and_a_finished_one_leaves(measured):
 def test_the_monitor_is_centred_and_as_big_as_the_strip_leaves(measured):
     """The picture sat left in its panel with a ~270 px gutter on the right, 716 × 403 at
     1440 × 900, with ~185 px empty under the film row: it is centred now, and the room
-    reserved under it is what a selected shot's strip measures, not more."""
+    reserved under it is what a selected shot's strip measures, not more. In the
+    workspace (redesign wave 1) the screen is the Program panel's width and the strip is
+    in Effect Controls beside it, so the same three facts hold: centred, at least 425 px
+    tall at 1440 × 900, and selecting a shot does not resize it."""
     m = measured["/"]["monitor"]
     assert m and abs(m["left"] - m["right"]) <= 2, m
     assert m["height"] >= 425, m

@@ -673,7 +673,14 @@ function renderInspector() {
   const box = $('#inspector');
   if (!box) return;
   if (!segs.length) {
-    if (inspecting !== 'empty') { inspecting = 'empty'; box.replaceChildren(emptyState()); }
+    if (inspecting !== 'empty') {
+      inspecting = 'empty';
+      const el = document.createElement('div');
+      el.className = 'none nosq';
+      el.textContent = 'Nothing selected — the sequence is empty.';
+      box.replaceChildren(el);
+    }
+    paintEcHead(null, 0);
     return;
   }
   const selIds = [...tl.state.sel].filter((id) => tl.indexOf(id) >= 0);
@@ -685,6 +692,7 @@ function renderInspector() {
     box.replaceChildren(want === 'multi' ? buildMulti() : want === 'none' ? buildNone()
       : buildShot(seg));
   }
+  paintEcHead(want === 'multi' ? null : seg, selIds.length);
   if (want === 'multi') {
     const d = selIds.reduce((a, id) => { const s = tl.byId(id); return a + (s ? tl.dur(s) : 0); }, 0);
     box.querySelector('.count').textContent = `${selIds.length} shots selected · ${d.toFixed(1)} s`;
@@ -692,6 +700,23 @@ function renderInspector() {
     fillFilm(box);
   } else {
     fillShot(box, seg);
+  }
+}
+
+/* The Effect Controls panel's head line, Premiere's "Source · clip" / "Sequence": the
+ * selected shot's clip and its range, the selection's size, or the sequence. */
+function paintEcHead(seg, n) {
+  const lab = document.querySelector('#ecHead span'), what = $('#ecWhat');
+  if (!lab || !what) return;
+  if (seg) {
+    lab.textContent = `Shot ${tl.indexOf(seg.id) + 1}`;
+    what.textContent = `${stem(seg.clip)} · ${fmt(seg.in)}–${fmt(seg.out)}`;
+  } else if (n > 1) {
+    lab.textContent = 'Selection';
+    what.textContent = `${n} shots`;
+  } else {
+    lab.textContent = 'Sequence';
+    what.textContent = (P && (P.cut || P.title)) || '';
   }
 }
 
@@ -1076,8 +1101,9 @@ function liveVideo() { return player.vids[player.cur]; }
  * server lists it with a proxy. */
 function arm(v, seg) {
   const src = (P.clips[seg.clip] || {}).proxy || '';
-  if (v.dataset.src !== src) {
+  if (v.dataset.src !== src || (v.error && !v._waitStop)) {
     v.dataset.src = src;
+    if (v._waitStop) { v._waitStop(); v._waitStop = null; }
     v.src = src ? `${src}#t=${Math.max(0, seg.in).toFixed(2)}` : src;
     v.load();
   }
@@ -1147,14 +1173,59 @@ function mediaErrorText(v) {
   const e = v.error;
   const name = stem(String(v.dataset.src || v.currentSrc || '').split('/').pop() || 'shot');
   if (!e) return `${name} would not play`;
-  return `${name}: ${MEDIA_ERR[e.code] || 'unknown media error'} (code ${e.code})`
-    + (e.message ? ` — ${e.message}` : '');
+  // the browser's own message (MEDIA_ELEMENT_ERROR: …) is for a console, not a screen
+  return `${name}: ${MEDIA_ERR[e.code] || 'it would not play'}`;
+}
+
+/* The calm wait on the Program monitor: the poster stays, one line under it. */
+function monWait(on) {
+  const el = $('#monWait');
+  if (el) el.hidden = !on;
+}
+
+/* A /media/proxy URL that would not play — no 720p proxy yet; the server 307s it to the
+ * original or a 360p preview, or answers 503 while one builds (the MEDIA lane's contract):
+ * the poster at the playhead and "preparing preview…" stay up, GET /media/status/<stem>.mp4
+ * is asked every ~3 s (dock.mediaWait), and once it says ready the same /media/proxy URL
+ * is loaded again. The URL is never rewritten here. */
+function mediaWaitFor(v) {
+  const src = v.dataset.src;
+  if (v._waitStop && v._waitFor === src) {
+    if (v === liveVideo()) { v.classList.remove('live'); clearTimeout(restT); paintRestStill(); }
+    return;
+  }
+  if (v._waitStop) v._waitStop();
+  v._waitFor = src;
+  if (!src || !window.dock || typeof dock.mediaWait !== 'function') return;
+  if (v === liveVideo()) {
+    v.classList.remove('live');            // the poster shows through, not a black box
+    clearTimeout(restT);
+    paintRestStill();
+  }
+  v._waitStop = dock.mediaWait(src, () => {
+    v._waitStop = null;
+    if (v.dataset.src !== src) return;
+    v.dataset.src = '';
+    const seg = v === liveVideo() ? segs[player.idx] : null;
+    if (seg) { arm(v, seg); showLive(); return; }
+    v.dataset.src = src;
+    v.src = src;
+    v.load();
+  }, (why) => { const el = $('#monWait span'); if (el && v === liveVideo()) el.textContent = why; });
 }
 
 /* A refused play is a fact about the browser, not about the cut, and it has to reach
  * the person: Chrome will not start an unmuted video without a gesture it recognises,
  * and the board's own click on a shot card is not always one it counts. */
 function playRefused(err) {
+  // No playable source yet (the proxy is building): the calm wait, not a refusal.
+  if (err && (err.name === 'NotSupportedError' || err.name === 'AbortError')) {
+    const v = liveVideo();
+    pauseCut();
+    monWait(true);
+    if (v) mediaWaitFor(v);
+    return;
+  }
   const gesture = err && err.name === 'NotAllowedError';
   const why = gesture
     ? 'the browser refused to play — click the monitor, then press play again'
@@ -1187,6 +1258,9 @@ function playFrom(i, { single = false } = {}) {
   if (!resume) arm(v, seg);
   if (!single && segs[i + 1]) arm(player.vids[1 - player.cur], segs[i + 1]);
   showLive();
+  // The shot's media is not ready (no proxy yet, waiting on /media/status): the poster at
+  // the playhead and the calm line stay; the wait loads it, and the next play plays.
+  if (v.error) { mediaWaitFor(v); monWait(true); player.playing = false; paintTransport(); return; }
   v.muted = false;
   const go = () => {
     if (g !== player.gen || !player.playing) return;   // pause, or a later command, won
@@ -1223,6 +1297,7 @@ function cueAt(i, clipT) {
   if (v.readyState >= 1) park(); else v.addEventListener('loadedmetadata', park, { once: true });
   if (segs[i + 1]) arm(player.vids[1 - player.cur], segs[i + 1]);
   showLive();
+  if (v.error) { mediaWaitFor(v); monWait(true); }
   paintPos(filmAt(i, at), at, seg);
   paintTransport();
   tl.render();
@@ -1304,7 +1379,8 @@ function advance() {
  * nothing to play, and re-cue if the shot under the playhead was edited out from under it. */
 function syncPlayer() {
   // A first cut's proposal plays in the monitor too, before there is a cut.
-  $('#player').style.display = segs.length || pendingPlan ? '' : 'none';
+  const progEmpty = $('#progEmpty');
+  if (progEmpty) progEmpty.hidden = !!(segs.length || pendingPlan);
   if (player.idx >= segs.length) { pauseCut(); player.idx = -1; }
   if (player.playing && player.idx >= 0) {
     const seg = segs[player.idx];
@@ -1438,7 +1514,13 @@ function aimsFor() {
 function render() {
   // The empty state is rebuilt on every render — it reads the project's status, which
   // the reload after an index or a pass can change; the inspector fills in place.
-  if (!segs.length) { inspecting = 'empty'; $('#inspector').replaceChildren(emptyState()); }
+  // The empty sequence's first action sits in the Timeline panel, where the cut will be
+  // (the workspace, redesign wave 1); the Effect Controls panel says nothing is selected.
+  const tlEmpty = $('#tlEmpty');
+  if (tlEmpty) {
+    if (!segs.length) tlEmpty.replaceChildren(emptyState()); else if (tlEmpty.childElementCount) tlEmpty.replaceChildren();
+    tlEmpty.hidden = !!segs.length;
+  }
   syncPlayer();
   renderInspector();
 
@@ -2342,7 +2424,8 @@ function showProposal(plan) {
       + detail);
   $('#proposal').style.display = 'block';
   if (!segs.length) syncPlayer();               // a first cut plays from its ghost lane
-  $('#proposal').scrollIntoView({ block: 'start', behavior: 'smooth' });
+  if (window.dock) dock.reveal('#proposal');
+  if (window.dock) dock.badge('ask', 0);
 }
 
 /* An elapsed count, not a frozen string. "building a first cut — about a minute…"
@@ -2390,6 +2473,7 @@ async function offerLastProposal() {
   if (!record || !pending) return;
   const el = $('#lastAsk');
   el.style.display = 'block';
+  if (window.dock) dock.badge('ask', 1);          // the Assistant tab says one waits
   el.innerHTML = `last proposal — ${record.plan.segments.length} shots,
     ${ago(Date.now() / 1000 - record.created)} · <a href="#" id="showLast">show it</a>`;
   $('#showLast').onclick = (e) => {
@@ -2510,6 +2594,7 @@ function acceptProposal() {
   pendingPlan = null;
   $('#proposal').style.display = 'none';
   $('#lastAsk').style.display = 'none';
+  if (window.dock) dock.badge('ask', 0);
   render();
   save();                       // straight to disk; a 16-shot cut is not "in progress"
   answerProposal('accept');
@@ -2530,6 +2615,7 @@ function rejectProposal() {
   pendingPlan = null;
   $('#proposal').style.display = 'none';
   $('#lastAsk').style.display = 'none';      // answered: not offered again
+  if (window.dock) dock.badge('ask', 0);
   toast('discarded');
   answerProposal('discard');
 }
@@ -2837,7 +2923,7 @@ function paintMakeFilm() {
     b.title = `${v.download_name} · ${human(v.size)}`;
     b.dataset.download = v.download_url;
   } else {
-    b.textContent = 'Make the film';
+    b.textContent = 'Export';
     delete b.dataset.download;
     b.title = renderList.length ? 'the cut changed since its last film' : 'make a film of this cut';
     if (renderList.length) b.insertAdjacentHTML('beforeend', '<span class="dot" aria-label="the cut changed">•</span>');
@@ -3099,12 +3185,15 @@ async function boot() {
     // A media error used to be reported only if it hit the live buffer while playing,
     // and then only as a guess about proxies still building. It says what actually
     // failed now, and it says it on the screen and not only in a toast that fades.
+    // A proxy that is missing or half-built is a wait, not an error (punch 5): the
+    // poster at the playhead with "preparing preview…", and the same URL again once the
+    // server says it is ready. Never MEDIA_ELEMENT_ERROR.
     v.addEventListener('error', () => {
-      const msg = mediaErrorText(v);
-      if (v === liveVideo()) { pauseCut(); screenMsg(msg, 'bad'); }
-      toast(msg, 8000);
+      if (v === liveVideo()) { pauseCut(); monWait(true); }
+      mediaWaitFor(v);
     });
-    v.addEventListener('playing', () => { if (v === liveVideo()) screenMsg(''); });
+    v.addEventListener('playing', () => { if (v === liveVideo()) { screenMsg(''); monWait(false); } });
+    v.addEventListener('loadeddata', () => { if (v === liveVideo()) monWait(false); });
     v.addEventListener('waiting', () => {
       if (v === liveVideo() && player.playing) screenMsg('buffering…');
     });
@@ -3113,7 +3202,7 @@ async function boot() {
   // Makes the refusal message actionable: "click the monitor, then press play again"
   // has to be something a person can do, and a monitor you can click to play is what
   // everyone expects anyway.
-  $('.screen').onclick = toggleCut;
+  $('#player .screen').onclick = toggleCut;
   // The version players get the same treatment the monitor got: a stall or an error
   // said on the screen. Silence there is what "stuck in this loading forever place"
   // was — a black rectangle with nothing to distinguish encoding, buffering and broken.
@@ -3139,7 +3228,8 @@ async function boot() {
   bin = await fetchBin();
   await fetchJunk();
   $('#story').value = P.story || '';
-  document.title = `Cut board — ${P.title}`;
+  document.title = `Roughcut — ${P.cut || P.title}`;
+  if (window.dock && dock.setTitles) dock.setTitles(P.cut || P.title);
   // The timeline (INTAKE M9): it reads and mutates `segs` in place, maps its id
   // selection onto `sel`, drives the monitor through cueAt / playFrom, and owns the
   // undo / redo stack that pushUndo() now feeds.
