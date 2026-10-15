@@ -352,3 +352,22 @@ def test_cut_keys_survive_the_save(page):
     a, b = seg_keys(page, 0), seg_keys(page, 1)
     assert a["opacity"][-1][1] == pytest.approx(b["opacity"][0][1])
     assert b["opacity"][0][0] == 0
+
+
+def test_the_trim_keys_keep_the_keys_on_the_media_and_the_grid(page):
+    """`]` (the strip's in-trim by key, app.js nudge) goes through tl.setRange like every
+    other trim: it used to write seg.in itself, rounded to 0.01 s, and left the keys where
+    they were (lead, wave 7)."""
+    page.locator("#tl .blk").nth(0).click()
+    page.wait_for_function("tl.state.anchor === 'shot-a'", timeout=5000)
+    page.keyboard.press("]")                                    # in +0.25 s
+    seg = page.evaluate("tl.state.segs[0]")
+    dt = seg["in"] - 1.0
+    assert dt == pytest.approx(0.25, abs=0.02)
+    assert page.evaluate("(t) => tl.isOnGrid(t)", seg["in"]), seg["in"]
+    k = seg["controls"]["keys"]["opacity"]
+    assert k[0] == [0, pytest.approx(100 - 50 * dt, abs=0.01)]
+    assert k[1][0] == pytest.approx(2 - dt, abs=1e-6) and k[1][1] == 0
+    page.keyboard.press("Control+z")
+    assert page.evaluate("tl.state.segs[0].in") == pytest.approx(1.0, abs=1e-6)
+    assert seg_keys(page, 0)["opacity"] == KEYS["opacity"]
