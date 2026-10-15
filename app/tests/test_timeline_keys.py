@@ -366,7 +366,8 @@ def test_backspace_never_takes_the_heir_of_the_inspectors_remove(page):
     ordinary selection, so a ⌫ right after took out a shot nobody chose."""
     a, b = ids(page)
     page.locator(f'#tl .blk[data-id="{a}"]').click()
-    page.wait_for_selector('#inspector button[data-act="del"]')
+    page.wait_for_selector('#inspector details.assist')
+    page.evaluate("document.querySelectorAll('#inspector details.assist').forEach(d => { d.open = true; })")
     page.locator('#inspector button[data-act="del"]').click()
     page.wait_for_function(f"segs.length === 1 && segs[0].id === '{b}'", timeout=5000)
     assert page.evaluate("[...tl.state.sel]") == [b], "the heir was handed the selection"
@@ -529,6 +530,7 @@ def test_keys_are_ignored_while_typing(page):
     page.keyboard.press("Delete")
     assert page.evaluate("segs.length") == 2
     page.evaluate("tl.select([tl.idAt(0)])")      # nothing is selected at start (M16)
+    page.evaluate("document.querySelectorAll('#inspector details.assist').forEach(d => { d.open = true; })")
     page.locator("#inspector .why").focus()
     page.keyboard.press("c")
     assert page.evaluate("segs.length") == 2

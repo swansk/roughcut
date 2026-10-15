@@ -81,10 +81,16 @@ HEADER_MAX_PX = 50
 # Wave 3, lane HEADER (verdict 3 punch 8): a running job is an icon and its % with the
 # name in its hover, and Next is its icon while anything runs, so "/ jobs" measured 109
 # words (was 132): lowered to that, no headroom.
-WORDS_IN_VIEW = {"/": 106, "/floor": 58, "/open": 59, "/ shot": 196, "/ film": 114, "/ fx": 134,
-                 "/ jobs": 109}
+# Wave 4, lane POLISH (verdict 4 punches 7 and 10), measured on the tree merged with
+# EXPORTSTOP and PICKS2, no headroom: "/ shot" 181 words (was 196; the judge measured 189):
+# the strip's play / Ask / Look deeper / Remove / why / quote fold into its collapsed
+# "Assistant" section. "/ jobs" 108 words and 51 controls (was 109 · 50): Next keeps its
+# words while a job runs (+), the fixture's running Ask no longer toasts "the ask that was
+# running failed: no such job" (−8), and EXPORTSTOP's × on the render pill (+1 control).
+WORDS_IN_VIEW = {"/": 106, "/floor": 58, "/open": 59, "/ shot": 181, "/ film": 114, "/ fx": 134,
+                 "/ jobs": 108}
 CONTROLS_IN_VIEW = {"/": 50, "/floor": 8, "/open": 9, "/ shot": 85, "/ film": 49, "/ fx": 53,
-                    "/ jobs": 50}
+                    "/ jobs": 51}
 
 # Contracts another lane delivers (M16 stage 1, C1): until that lane is merged the
 # check is an expected failure on that screen. Every stage-1 lane is merged, so this is
@@ -227,6 +233,12 @@ def _set_up(pg, state: str) -> None:
         pg.wait_for_selector("#tl .blk", timeout=15000)
         pg.route("**/api/jobs", lambda r: r.fulfill(
             status=200, content_type="application/json", body=json.dumps({"jobs": JOBS})))
+        # the board re-attaches to a running Ask (/api/ask/<id>): answered as the job
+        # still running, as the server would — it used to 404, and the gate's jobs.png
+        # carried the toast "the ask that was running failed: no such job" (verdict 4)
+        pg.route("**/api/ask/bud_*", lambda r: r.fulfill(
+            status=200, content_type="application/json",
+            body=json.dumps(next(j for j in JOBS if r.request.url.endswith("/" + j["id"])))))
         pg.evaluate("pollJobs()")
         pg.wait_for_selector("#progress .job[data-job=bud_ask]", timeout=5000)
 
@@ -244,7 +256,7 @@ def _quiet_jobs(server) -> None:
 
 
 @pytest.fixture(scope="module")
-def measured(project):
+def measured(project, tmp_path_factory):
     """Each screen and board state loaded once at 1440×900 and counted after the page
     has settled — the same 3 s the audit's capture waited — with the flow answered and
     drawn. FX after Next is last: its waiting proposal changes Next on every screen.
@@ -256,8 +268,13 @@ def measured(project):
 
     original = project["edl"].read_text(encoding="utf-8")
     Path(project["edl"]).write_text(json.dumps(SEED, indent=1), encoding="utf-8")
+    # Its own work dir: the session's shared one holds whatever earlier modules left —
+    # test_ui_flow's renders make "the film's quick look" done, so Next became "Index
+    # what isn't done", which the first pass covers, and no chip was drawn (the
+    # test-order dependence: this module failed after test_ui_flow in one process).
+    work = tmp_path_factory.mktemp("budget-work")
     server.configure(project["edl"], project["footage"], project["sidecars"],
-                     project["work"], proxies=False, assets=project["assets"])
+                     work, proxies=False, assets=project["assets"])
     server.ensure_proxies([f"{s}.MP4" for s in project["stems"]])
     shots = os.environ.get("ROUGHCUT_BUDGET_SHOTS")
     port = _free_port()
@@ -299,6 +316,8 @@ def measured(project):
                 pg.wait_for_timeout(3000)
                 m = pg.evaluate(INVENTORY_JS)
                 m["next"] = pg.evaluate("flowBar.state().next")
+                m["toast"] = pg.evaluate("(() => { const t = document.getElementById('toast');"
+                                         " return t && t.classList.contains('show') ? t.textContent : ''; })()")
                 m["ready_ms"], m["errors"] = ready_ms, errors
                 out[state] = m
                 print(f"\nbudget {state:7s} words {m['words_in_view']:4d} · controls "
@@ -318,6 +337,8 @@ def measured(project):
         shutil.rmtree(server.fx_home() / PROPOSAL["id"], ignore_errors=True)
         for f in Path(server.fx_home()).glob(f"{PROPOSAL['id']}*"):
             f.unlink(missing_ok=True)
+        server.configure(project["edl"], project["footage"], project["sidecars"],
+                         project["work"], proxies=False, assets=project["assets"])
     return out
 
 
@@ -421,6 +442,13 @@ def test_words_and_controls_in_view_stay_under_the_screens_numbers(measured, sta
     assert m["words_in_view"] <= WORDS_IN_VIEW[state], (state, m["words_in_view"])
     assert m["controls_in_view"] <= CONTROLS_IN_VIEW[state], (state, m["controls_in_view"],
                                                               m["controls"])
+
+
+@pytest.mark.parametrize("state", STATES)
+def test_no_failure_toast(measured, state):
+    """Verdict 4 (and 2, 3): the gate's jobs.png showed "the ask that was running failed:
+    no such job" — the fixture's running Ask was not one the server knew."""
+    assert not re.search(r"fail", measured[state]["toast"] or "", re.I), (state, measured[state]["toast"])
 
 
 def test_no_step_bar_on_any_screen(measured):
