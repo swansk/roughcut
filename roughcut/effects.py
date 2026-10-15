@@ -266,8 +266,10 @@ def resolve_asset(asset: str, assets_root: Path | None) -> Path:
 
 def add_music(film: Path, spec: dict, out: Path,
               assets_root: Path | None = None, bed_only: bool = False,
-              speech: list[tuple[float, float]] | None = None) -> dict:
-    """Mix a bed under an assembled film. The video stream is **copied**."""
+              speech: list[tuple[float, float]] | None = None,
+              audio_bitrate: str = "192k") -> dict:
+    """Mix a bed under an assembled film. The video stream is **copied**. The sound is
+    the film's one AAC encode (its input is PCM since wave 4), at the preset's bitrate."""
     s = resolve_gain(music_spec(spec), resolve_asset(spec["asset"], assets_root))
     track = resolve_asset(s["asset"], assets_root)
     film_s = probe_duration(film)
@@ -279,7 +281,7 @@ def add_music(film: Path, spec: dict, out: Path,
         cmd += ["-map", "0:v:0", "-c:v", "copy"]
     else:
         cmd += ["-vn"]
-    cmd += ["-c:a", "aac", "-b:a", "192k", "-ac", "2", "-write_tmcd", "0",
+    cmd += ["-c:a", "aac", "-b:a", audio_bitrate, "-ac", "2", "-write_tmcd", "0",
             "-movflags", "+faststart", str(out)]
     r = run(cmd)
     if r.returncode != 0:

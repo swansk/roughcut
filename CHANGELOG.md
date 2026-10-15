@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Fixed
+- **A film with a music bed is encoded at its preset's audio bitrate.** `effects.add_music` hard-coded `-b:a 192k`, so Master (256k) and YouTube (384k) exports with a bed came out at 192k. Since EXPORTSTOP the bed's pass is the film's one AAC encode, so it now takes the preset's `audio_bitrate` from assemble. `test_music_bitrate.py`: 2 passed.
+
 ### Added
 - **The journey rejects a shot and checks the re-run remembers it (RERUN's fix in the gate).** New step 04 `reject`: ✗ on the first proposal's 5th shot (its ghost's `.rv.no`), the button reads "Accept 4 of 5"; `accept` applies exactly the 4 and waits for the EDL's `provenance.rejected` to hold the 5th shot's range. The journey's stub model now proposes that shot (CLIP_C 4.4–5.6, shaped to 4.4167–6.0) and RE-PROPOSES it on the re-run; `rerun-accept` asserts the re-run proposal leaves it out, names it in `plan.firstpass.rejected` (`dropped`) and says "you rejected" in the notes. Mutation-checked: with `drop_rejected` disabled (a snapshot copy, not committed) the journey goes red at `13 rerun-accept: the re-run proposes the rejected range again`. Journey ✓ 15 steps · 52 s.
 

@@ -955,7 +955,7 @@ def main() -> int:
             speech = (effects.speech_regions(segments, args.sidecars)
                       if args.sidecars else None)
             applied = effects.add_music(args.out, music, scored, args.assets,
-                                        speech=speech)
+                                        speech=speech, audio_bitrate=video["audio_bitrate"])
             scored.replace(args.out)
             assert_no_rotation(args.out, orient)
             how = "flat"
