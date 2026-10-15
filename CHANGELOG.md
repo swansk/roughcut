@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Added
+- **Redesign verdict 2: FAIL, up from the baseline.** `judge/verdict-2.md` on `548e3b4`: workspace 6, monitors 6, orientation 5, footage-in 5, keys/timeline 5; still lowest: first pass re-runnable (K1) 2 (the API exists, no UI calls it), journey 2, Inspector 3. Its punch list drives wave 2.
+
 ### Fixed
 - **The bin menu no longer says "spent" on the plan.** `#placeSpent` in `switcher.js` read "spent $x on this project" on every backend; it now uses `rcCost.total` / `totalNote` like every other price ("~$0.27 API-equivalent · free on your plan on this project", the estimate in the hover; "spent" only on the API key). `test_price_wording.py`'s bin-menu test is no longer an xfail, and `test_flow_ui.py` expects the backend's own words. 17 passed.
 
