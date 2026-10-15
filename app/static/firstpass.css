@@ -1,1 +1,98 @@
-/* firstpass.css: lane FPUI. */
+/* firstpass.css: the first pass's header control, its panel and the empty-state offers
+   (firstpass.js, REDESIGN-GOAL dimension 2). Plus the header row's shrink order
+   (verdict 2, punch 6): the Now chip gives way first, the job strip keeps a minimum,
+   and nothing in the row overlaps at 1440×900. */
+
+/* ---------------------------------------------------------------- the header row */
+header #firstpass { flex: 0 1 auto; min-width: 118px; position: relative; display: flex;
+                    align-items: center; }
+/* the job strip keeps room for one job's name, bar and % instead of collapsing to 0
+   and spilling over the buttons to its right */
+header #progress { flex: 20 1 200px; min-width: 120px; overflow-x: clip; overflow-y: visible; }
+header #progress .job .jnums { flex: none; }
+
+/* ---------------------------------------------------------------- the control */
+#firstpass .fp-ctl { display: inline-flex; align-items: center; min-width: 0; max-width: 100%;
+                     height: 24px; border: 1px solid #3a3a48; border-radius: 6px;
+                     box-sizing: border-box; overflow: hidden; }
+#firstpass .fp-ctl:hover { border-color: var(--line-hi, #46464c); }
+#firstpass .fp-btn { display: inline-flex; align-items: center; gap: 6px; min-width: 0;
+                     height: 22px; padding: 0 9px 0 8px; border: 0; border-radius: 0;
+                     background: transparent; color: var(--text, #dcdcdf); font-size: 12px;
+                     white-space: nowrap; cursor: pointer; position: relative; }
+#firstpass .fp-btn:hover { background: var(--card-hi, #313135); }
+#firstpass .fp-btn svg { flex: none; width: 13px; height: 13px; color: var(--accent, #4a9df8); }
+#firstpass .fp-label { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                       font-variant-numeric: tabular-nums; }
+#firstpass[data-state="running"] .fp-btn { color: var(--dim, #94949c); }
+#firstpass[data-state="running"] .fp-btn svg { animation: fp-pulse 1.6s ease-in-out infinite; }
+#firstpass[data-state="stale-after-edits"] .fp-btn { padding-right: 13px; }
+#firstpass .fp-dot { position: absolute; right: 4px; top: 4px; width: 5px; height: 5px;
+                     border-radius: 50%; background: var(--warn, #e2b14f); }
+#firstpass .fp-dot[hidden] { display: none; }
+#firstpass .fp-x { flex: none; height: 22px; width: 22px; padding: 0; border: 0;
+                   border-left: 1px solid #3a3a48; border-radius: 0; background: transparent;
+                   color: var(--dim, #94949c); font-size: 14px; line-height: 20px; }
+#firstpass .fp-x:hover { color: var(--bad, #e46a6a); background: var(--card-hi, #313135); }
+#firstpass .fp-x[hidden] { display: none; }
+@keyframes fp-pulse { 50% { opacity: .35; } }
+
+/* ---------------------------------------------------------------- the panel */
+#firstpass .fp-panel { position: absolute; left: 0; top: calc(100% + 7px); z-index: 80;
+                       width: 430px; max-width: calc(100vw - 24px); white-space: normal;
+                       background: #202023; border: 1px solid var(--line-hi, #46464c);
+                       border-radius: 6px; box-shadow: 0 12px 32px rgba(0,0,0,.6);
+                       padding: 10px 12px 12px; font-size: 12px; color: var(--text, #dcdcdf);
+                       cursor: default; }
+#firstpass .fp-panel[hidden] { display: none; }
+#firstpass .fp-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+#firstpass .fp-head b { font-size: 13px; }
+#firstpass .fp-sub { color: var(--dim, #94949c); flex: 1; }
+#firstpass .fp-close { border: 0; background: transparent; color: var(--dim, #94949c);
+                       padding: 0 4px; font-size: 15px; line-height: 1; }
+#firstpass .fp-close:hover { color: var(--text, #dcdcdf); background: transparent; }
+#firstpass .fp-status { color: var(--dim, #94949c); margin-bottom: 8px; }
+#firstpass .fp-warn { color: var(--warn, #e2b14f); }
+#firstpass .fp-bad { color: var(--bad, #e46a6a); margin: 6px 0; }
+#firstpass .fp-result { background: #19191b; border: 1px solid var(--line, #333337);
+                        border-radius: 4px; padding: 6px 8px; margin-bottom: 8px; }
+#firstpass .fp-link { border: 0; background: transparent; color: var(--accent, #4a9df8);
+                      padding: 0 2px; font-size: 12px; }
+#firstpass .fp-link:hover { background: transparent; text-decoration: underline; }
+#firstpass .fp-steps { list-style: none; margin: 0 0 10px; padding: 0;
+                       border-top: 1px solid var(--line, #333337); }
+#firstpass .fp-step { display: grid; grid-template-columns: 78px minmax(0, 1fr) auto;
+                      gap: 8px; align-items: baseline; padding: 6px 0;
+                      border-bottom: 1px solid var(--line, #333337); }
+#firstpass .fp-sname { font-weight: 600; }
+#firstpass .fp-sname b { color: var(--good, #5fcf86); font-weight: 600; }
+#firstpass .fp-step.is-running .fp-sname b { color: var(--accent, #4a9df8); }
+#firstpass .fp-step.is-failed .fp-sname b { color: var(--bad, #e46a6a); }
+#firstpass .fp-step.is-skip { color: var(--dim, #94949c); }
+#firstpass .fp-swill { color: var(--dim, #94949c); }
+#firstpass .fp-step.is-running .fp-swill { color: var(--text, #dcdcdf); }
+#firstpass .fp-scost { color: var(--dim, #94949c); font-size: 11px; white-space: nowrap;
+                       cursor: help; }
+#firstpass .fp-keep { font-weight: 600; margin-bottom: 4px; }
+#firstpass .fp-kept { margin: 0 0 6px; padding: 0 0 0 16px; color: var(--text, #dcdcdf);
+                      font-variant-numeric: tabular-nums; }
+#firstpass .fp-kept li { padding: 1px 0; }
+#firstpass .fp-keepmine { display: flex; align-items: center; gap: 6px;
+                          color: var(--dim, #94949c); margin: 4px 0 2px; cursor: pointer; }
+#firstpass .fp-keepmine input { width: auto; margin: 0; accent-color: var(--accent, #4a9df8); }
+#firstpass .fp-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+                      margin-top: 10px; }
+#firstpass .fp-run { padding: 4px 14px; font-weight: 600; }
+#firstpass .fp-stop { padding: 4px 12px; }
+#firstpass .fp-stop:hover { color: var(--bad, #e46a6a); }
+#firstpass .fp-cost { color: var(--dim, #94949c); cursor: help; }
+#firstpass .fp-note { color: var(--faint, #66666e); font-size: 11px; flex-basis: 100%; }
+
+/* ---------------------------------------------------------------- empty states */
+.fp-empty { display: flex; flex-direction: column; align-items: center; gap: 4px;
+            margin-top: 14px; }
+.fp-empty-btn { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px;
+                pointer-events: auto; }
+.fp-empty-btn svg { width: 13px; height: 13px; color: var(--accent, #4a9df8); }
+#progEmpty { flex-direction: column; gap: 10px; }
+#proposalNotes .fp-sentence { color: var(--text, #dcdcdf); font-weight: 600; margin-bottom: 4px; }

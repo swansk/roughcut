@@ -37,6 +37,9 @@
     border: 1px solid #3a3a48; color: #e8e8ee; background: transparent;
     text-decoration: none; overflow: hidden; cursor: pointer; box-sizing: border-box; }
   #flow .fnext:hover { border-color: #6ea8fe; }
+  /* In a crowded header the chip gives way first: it ellipsizes before the first pass,
+     the job strip or the buttons on the right shrink (verdict 2, punch 6). */
+  header > #flow { flex-shrink: 100; }
   #flow .fnext b { color: #9a9aa8; font-weight: 600; flex: none; }
   #flow .fnext span { overflow: hidden; text-overflow: ellipsis; }
   #flow .fnext.cli { border-color: #e0b050; background: #3a2c0c; }
