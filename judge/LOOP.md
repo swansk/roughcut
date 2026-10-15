@@ -49,6 +49,17 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-15 19:05 EDT: VERDICT 7 FAIL on `273b1f1` (1:8 2:9 3:9 4:9 5:9 6:8 7:8 8:5 9:8 10:5 11:9 12:9). Blockers: K2; one Opacity
+  key breaks every export (empty sendcmd); the board blank ~30 s after a proxy lands (boot awaits /api/junk, which measures
+  colour inside the GET); gate AMBER (perf skipped at load 14). Wave 10 lanes (punch 1-4, 7-10):
+  EXPORTOK (1 + 10: assemble.py keyed graphs, export failure names the shot, review-copy spawn), BOOT (2: mount first,
+  no measuring in GET), PERFGATE (3: 0 burners above 2x cores, perf before + after the suite, rubric log incl.
+  JOURNEY_SLOWEST_S + 4K fixture), TXHITCH (4: dissolve preroll, RANGE_PAD_S grows), CRAFT (7 stopwatch-off confirm,
+  8 proposal chrome, 9 clip-grid drop). Wave 11: LUMETRI (5: curves, wheels, scopes), FXBIN (6: Effects bin + dips).
+- 2026-10-15 18:25 EDT: lead gate on `64687de` RED only on 2 broken tests (keys sheet overflowed 97 px after the transitions
+  row; journey-tool test predated SAVESAFE's suffix), both fixed in `273b1f1` (pushed). Perf ran at load 8.4: worst gap
+  50 ms, seek median 56 ms (first in-limit measurement at a sane load). Journey 19 green, screens + hygiene green.
+  Judge 7 running on `273b1f1`.
 - 2026-10-15 17:32 EDT (the box's clock; the "10-16" stamps below were mis-dated by the lead): YIELD, TRACKS, V2EC merged (`060bc3a`);
   lead `da990ab`: Effect Controls refuse edits on a locked track (V2EC's report), identity render test pins the CPU decoder.
   TRANSITIONS merged `95d77de` (Ctrl+D dissolve, Shift+D crossfade; graded mix in the grade worker; export blends).
