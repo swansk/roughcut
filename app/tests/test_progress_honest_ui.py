@@ -77,6 +77,20 @@ def test_the_index_job_has_no_clock_estimate_and_is_held_to_its_counts():
         server.INDEXES.pop(jid, None)
 
 
+def test_a_render_pill_shows_its_work_not_the_clock():
+    """Lane EXPORT: a render carries `progress_pct` from the encoder's output; the
+    header pill read the clock-creep `pct` (23 % while the dialog said 28 %, and it can
+    run ahead). The job's `pct` is held to its measured work."""
+    job = progress.Job("render", "Exporting — Quick 1080p", id="r1", progress_pct=0.0)
+    job.set_estimate(10.0, [progress.milestone("cutting", "cutting", 1.0)], source="measured")
+    job["started"] = time.time() - 8                # the clock alone would say ~68 %
+    assert job.snapshot()["pct"] == 0.0
+    job["progress_pct"] = 12.5
+    assert job.snapshot()["pct"] == 12.5
+    job.finish("done")
+    assert job.snapshot()["pct"] == 100.0
+
+
 @pytest.fixture
 def stuck(tmp_path, project, monkeypatch):
     """A fresh bin with no sidecars, served, its index running and its listening held

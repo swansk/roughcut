@@ -1,15 +1,11 @@
 /* firstpass.css: the first pass's header control, its panel and the empty-state offers
-   (firstpass.js, REDESIGN-GOAL dimension 2). Plus the header row's shrink order
-   (verdict 2, punch 6): the Now chip gives way first, the job strip keeps a minimum,
-   and nothing in the row overlaps at 1440×900. */
+   (firstpass.js, REDESIGN-GOAL dimension 2). The control ellipsizes (its
+   title says it all) before it would push the row past 1440 px. */
 
 /* ---------------------------------------------------------------- the header row */
 header #firstpass { flex: 0 1 auto; min-width: 118px; position: relative; display: flex;
                     align-items: center; }
-/* the job strip keeps room for one job's name, bar and % instead of collapsing to 0
-   and spilling over the buttons to its right */
-header #progress { flex: 20 1 200px; min-width: 120px; overflow-x: clip; overflow-y: visible; }
-header #progress .job .jnums { flex: none; }
+/* the job strip's own sizes are workspace.css's (lane FINISH) */
 
 /* ---------------------------------------------------------------- the control */
 #firstpass .fp-ctl { display: inline-flex; align-items: center; min-width: 0; max-width: 100%;
