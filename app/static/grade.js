@@ -74,6 +74,8 @@
     uniform float u_sat;
     uniform float u_knee;
     uniform float u_lift;
+    uniform vec4 u_tone;      // Lumetri blacks, shadows, highlights, whites, each /100
+    uniform float u_toneOn;
     out vec4 outColor;
     void main() {
       vec3 c = texture(u_video, v_uv).rgb * u_pre;
@@ -84,6 +86,11 @@
       c = clamp(c, 0.0, 1.0);
       vec3 p = c * ((u_n - 1.0) / u_n) + 0.5 / u_n;
       vec3 y = (texture(u_lut, p).rgb - 0.5) * u_con + 0.5;
+      if (u_toneOn > 0.5) {
+        vec3 x = clamp(y, 0.0, 1.0), ix = 1.0 - x;
+        y = x + 0.25 * u_tone.x * ix * ix * ix + 1.5 * u_tone.y * x * ix * ix
+              + 1.5 * u_tone.z * x * x * ix + 0.25 * u_tone.w * x * x * x;
+      }
       y = mix(vec3(dot(y, vec3(0.2126, 0.7152, 0.0722))), y, u_sat);
       outColor = vec4(clamp(y, 0.0, 1.0), 1.0);
     }`;
@@ -101,6 +108,8 @@
     uniform float u_sat;
     uniform float u_knee;
     uniform float u_lift;
+    uniform vec4 u_tone;
+    uniform float u_toneOn;
     void main() {
       vec3 c = texture2D(u_video, v_uv).rgb * u_pre;
       if (u_knee < 1.0) {
@@ -118,6 +127,11 @@
       vec3 s0 = texture2D(u_lut, vec2(x, y0)).rgb;
       vec3 s1 = texture2D(u_lut, vec2(x, y1)).rgb;
       vec3 y = (mix(s0, s1, t) - 0.5) * u_con + 0.5;
+      if (u_toneOn > 0.5) {
+        vec3 x = clamp(y, 0.0, 1.0), ix = 1.0 - x;
+        y = x + 0.25 * u_tone.x * ix * ix * ix + 1.5 * u_tone.y * x * ix * ix
+              + 1.5 * u_tone.z * x * x * ix + 0.25 * u_tone.w * x * x * x;
+      }
       y = mix(vec3(dot(y, vec3(0.2126, 0.7152, 0.0722))), y, u_sat);
       gl_FragColor = vec4(clamp(y, 0.0, 1.0), 1.0);
     }`;
@@ -198,6 +212,8 @@
     G.uSat = gl.getUniformLocation(prog, 'u_sat');
     G.uKnee = gl.getUniformLocation(prog, 'u_knee');
     G.uLift = gl.getUniformLocation(prog, 'u_lift');
+    G.uTone = gl.getUniformLocation(prog, 'u_tone');
+    G.uToneOn = gl.getUniformLocation(prog, 'u_toneOn');
 
     G.texVideo = gl.createTexture();
     gl.activeTexture(gl.TEXTURE0);
@@ -322,6 +338,9 @@
     gl.uniform1f(G.uSat, a.sat);
     gl.uniform1f(G.uKnee, a.knee ?? 1);
     gl.uniform1f(G.uLift, a.lift ?? 0);
+    const tone = a.tone || NO_TONE;
+    gl.uniform4f(G.uTone, tone[0], tone[1], tone[2], tone[3]);
+    gl.uniform1f(G.uToneOn, tone.some((x) => x !== 0) ? 1 : 0);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(G.gl2 ? gl.TEXTURE_3D : gl.TEXTURE_2D, G.texLut);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
@@ -333,9 +352,28 @@
    * LUT bake: `effects.adjust(id, lut)` says how the picture differs from what the LUT
    * was baked with — a per-channel gain before the table (the balance's change: exact,
    * since the balance is the table's first step; with the balance's shoulder and lift
-   * when the table was baked with none) and the Lumetri contrast and saturation after it. The save's refetch then bakes the change in and the difference goes to
-   * nothing, so the picture never jumps. */
-  const NO_ADJUST = { pre: [1, 1, 1], con: 1, sat: 1, knee: 1, lift: 0 };
+   * when the table was baked with none) and the Lumetri contrast, tone and saturation after
+   * it. The save's refetch then bakes the balance in and its difference goes to nothing, so
+   * the picture never jumps (contrast, tone and saturation are never baked: always here).
+   *
+   * Lumetri Basic Correction's tone (wave 6, verdict 5 punch 4), per channel in RGB 0..1,
+   * after the LUT and the contrast, before the saturation — research/tools/assemble.py
+   * renders the same formula:
+   *
+   *   y  = (lut(c) − 0.5) · (1 + contrast/200) + 0.5                       contrast
+   *   x  = clamp(y, 0, 1)                         (only when a tone value is not 0)
+   *   y' = x + 0.25·b·(1−x)³ + 1.5·s·x(1−x)² + 1.5·h·x²(1−x) + 0.25·w·x³     tone
+   *        b, s, h, w = blacks/100, shadows/100, highlights/100, whites/100 (−1..1)
+   *   y'' = mix(luma709(y'), y', saturation/100)                            saturation
+   *   out = clamp(y'', 0, 1)
+   *
+   * The weights are the cubic Bernstein basis (b·B0 + s·B1 + h·B2 + w·B3, with B1 and B2
+   * at twice the strength of B0 and B3): blacks moves the black point (±0.25 at 0, nothing
+   * at 1), whites the white point (±0.25 at 1), shadows peaks at x = 1/3 (±0.222 at ±100),
+   * highlights at x = 2/3 (±0.222). With all four at 0 the step (and its clamp) is
+   * skipped, so contrast and saturation render exactly as before. */
+  const NO_TONE = [0, 0, 0, 0];
+  const NO_ADJUST = { pre: [1, 1, 1], con: 1, sat: 1, knee: 1, lift: 0, tone: NO_TONE };
   function adjustNow() {
     const fx = window.effects;
     if (!G.shot || !fx || typeof fx.adjust !== 'function') return null;
@@ -344,7 +382,7 @@
     if (!a) return null;
     const near = (x, y) => Math.abs(x - y) < 1e-4;
     const trivial = a.pre.every((x) => near(x, 1)) && near(a.con, 1) && near(a.sat, 1)
-      && !((a.knee ?? 1) < 1) && near(a.lift ?? 0, 0);
+      && !((a.knee ?? 1) < 1) && near(a.lift ?? 0, 0) && (a.tone || NO_TONE).every((x) => x === 0);
     return trivial ? null : a;
   }
 

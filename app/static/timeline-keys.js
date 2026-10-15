@@ -34,9 +34,9 @@
  *                and pushes the rest later; overwrite covers the film from the playhead
  *                for the clip's length. The playhead then sits after the new shot.
  *   V C B N Y A  the tools (`tl.setTool`): selection, razor, ripple edit, rolling edit,
- *                slip, track select forward. C also cuts at the playhead, as it always
- *                did (the selected shot, else the shot under it); ⌘K cuts there without
- *                changing the tool.
+ *                slip, track select forward. As in Premiere, C only picks the razor (a
+ *                click with it cuts there); ⌘K, Add Edit, cuts at the playhead (the
+ *                selected shot, else the shot under it) without changing the tool.
  *   M            a marker at the playhead; ⇧M the next, ⌘⇧M the previous; ⌘⌥M clears the
  *                one at the playhead.
  *   Q W          the selected shot's in / out to the playhead.
@@ -82,7 +82,7 @@
     [', .', 'insert / overwrite at the playhead from the Source (else the bin’s clip)', '', 'bin'],
     ['I O', 'sequence in / out (a clip open in Find: its marks) · ⌥I ⌥O ⌘⇧X clear', '', 'bin'],
     ['↵', 'with a clip’s in and out: insert it after the selected shot', '', 'bin'],
-    ['V C B N Y A ⌘K', 'tools: select, razor (C also cuts here), ripple, roll, slip, track forward · ⌘K cut', '', 'trim'],
+    ['V C B N Y A ⌘K', 'tools: select, razor (click to cut), ripple, roll, slip, track forward · ⌘K cut at the playhead', '', 'trim'],
     ['⌥← ⌥→', 'trim the selected edit a frame (⇧ five), ⌘← ⌘→ too', 'trim', 'trim'],
     ['Q W', 'the selected shot’s in / out to the playhead', '', 'trim'],
     ['X ⇧Del', 'ripple delete the selection (⌫ Del: only a shot you chose)', '', 'trim'],
@@ -445,8 +445,8 @@
   }
 
   /* A cut at the playhead — the selected shot, else the shot under it. Returns whether
-   * it cut; `quiet` (C as the razor tool's key) still says why a cut was refused. */
-  function razorAt(quiet) {
+   * it cut. */
+  function razorAt() {
     const list = segs();
     if (!list.length) return false;
     const ph = tl.state.playhead;
@@ -460,11 +460,11 @@
     const second = tl.split(id, ph);
     if (second == null) { say(`too close to a cut point to split (${MIN_LEN} s minimum)`); return false; }
     tl.select([second, id]);         // both halves; the anchor stays on the first
-    say(`split ${stem(tl.byId(id).clip)} at ${tl.tc(ph)}${quiet ? ' · razor tool (V for selection)' : ''}`);
+    say(`split ${stem(tl.byId(id).clip)} at ${tl.tc(ph)}`);
     return true;
   }
 
-  function razor() { razorAt(false); return true; }
+  function razor() { razorAt(); return true; }
 
   function trimTo(edge) {
     const id = tl.state.anchor;
@@ -508,13 +508,13 @@
    * it took the shot under the playhead out of the cut. X is unchanged. */
   let chosen = false;
 
-  /* A clip on V2 that is selected goes first: X, ⌫ and Del take it off V2 (nothing
-   * closes up — V2 is not magnetic). */
+  /* A clip on V2 (V3…, A3…) that is selected goes first: X, ⌫ and Del take it off its
+   * track (nothing closes up — those tracks are not magnetic). */
   function removeOverlaySel() {
     const id = tl.state.osel;
     if (id == null || !tl.removeOverlay) return false;
     const o = tl.overlayById(id);
-    if (tl.removeOverlay(id)) say(`removed ${o ? stem(o.clip) : 'the clip'} from V2 — ${L('⌘Z')} brings it back`);
+    if (tl.removeOverlay(id)) say(`removed ${o ? stem(o.clip) : 'the clip'} from ${(o && o.track) || 'V2'} — ${L('⌘Z')} brings it back`);
     return true;
   }
 
@@ -625,10 +625,9 @@
   function toolKey(k) {
     const name = TOOL_OF[k];
     const changed = tl.setTool(name);
+    // Premiere's C picks the razor and nothing else (verdict 5, punch 5): the click cuts
     if (k === 'c') {
-      // the default action C always had: a cut at the playhead, when there is one to make
-      const cut = razorAt(true);
-      if (changed && !cut) say('razor tool — click a shot to cut it there · V for the selection tool');
+      if (changed) say(`razor tool — click a shot to cut it there · ${L('⌘K')} cuts at the playhead · V for the selection tool`);
       return true;
     }
     if (changed) say(`${tl.TOOLS[name][2].split(' — ')[0].toLowerCase()} (${k.toUpperCase()})`);
