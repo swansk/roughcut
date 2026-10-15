@@ -356,6 +356,102 @@ def test_the_shutdown_hook_kills_every_encode(live_server):
     assert server.playing_now() is False
 
 
+def _ffmpeg_writing_into(work: Path) -> list[int]:
+    """Every live ffmpeg on the box whose command line names a path under `work`."""
+    out = []
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            if Path(f"/proc/{name}/comm").read_text().strip() != "ffmpeg":
+                continue
+            argv = Path(f"/proc/{name}/cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        if state(int(name)) in ("gone", "Z"):
+            continue
+        if any(a.decode(errors="replace").startswith(str(work)) for a in argv):
+            out.append(int(name))
+    return out
+
+
+def test_a_sigtermed_server_takes_its_review_copy_with_it(bin_, tmp_path):
+    """Verdict 7, punch 10: an export's review copy (the 720p copy the versions list
+    makes of a finished film) outlived the server — it was spawned outside every scope.
+    It now runs in its own scope (own process group, PR_SET_PDEATHSIG, killed by the
+    shutdown hook). A real server process, SIGTERMed while a review copy is encoding
+    (slowed to real time with -re, so the copy is still running when the signal lands):
+    one second later no ffmpeg is writing into its --work."""
+    work = tmp_path / "work"
+    footage = tmp_path / "footage"
+    shutil.copytree(bin_["footage"], footage)
+    renders = work / "renders" / footage.name
+    renders.mkdir(parents=True)
+    # a finished 20 s film, as an export to the bin's own folder leaves it
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-f", "lavfi", "-i",
+                    "testsrc2=size=640x360:rate=24:duration=20", "-f", "lavfi", "-i",
+                    "sine=frequency=440:duration=20", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(renders / "film.mp4")],
+                   check=True, capture_output=True)
+    port = _free_port()
+    script = tmp_path / "serve.py"
+    script.write_text(textwrap.dedent(f"""
+        import sys
+        sys.path.insert(0, {str(REPO / "app")!r})
+        sys.path.insert(0, {str(REPO)!r})
+        import subprocess
+        import server
+        real = subprocess.run
+        def slow(args, *a, **kw):
+            # the review copy's ffmpeg (the one writing under reviews/), at real time:
+            # 20 s of encode
+            if (isinstance(args, list) and args and args[0] == "ffmpeg"
+                    and "/reviews/" in str(args[-1])):
+                i = args.index("-i")
+                args = args[:i] + ["-re"] + args[i:]
+            return real(args, *a, **kw)
+        subprocess.run = slow
+        sys.argv = ["server.py", "--footage", {str(footage)!r}, "--work", {str(work)!r},
+                    "--sidecars", {str(bin_["sidecars"])!r}, "--edl", {str(tmp_path / "edl.json")!r},
+                    "--assets", {str(bin_["assets"])!r}, "--port", "{port}",
+                    "--no-proxies", "--no-probe"]
+        raise SystemExit(server.main())
+    """), encoding="utf-8")
+    shutil.copy(bin_["edl"], tmp_path / "edl.json")
+    proc = subprocess.Popen([sys.executable, str(script)], stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+    base = f"http://127.0.0.1:{port}"
+    try:
+        def listed():
+            try:
+                r = httpx.get(base + "/api/renders", timeout=5)
+            except httpx.HTTPError:
+                return None
+            return r.json()["renders"] if r.status_code == 200 else None
+        rows = until(listed, 60, 0.2)
+        assert rows and rows[0]["name"] == "film.mp4", rows
+        assert rows[0]["review_state"] == "building", rows       # the versions list started it
+        assert until(lambda: _ffmpeg_writing_into(work), 10), "no review copy encoding"
+        time.sleep(0.5)
+        assert _ffmpeg_writing_into(work), "the review copy ended before the signal"
+        proc.send_signal(signal.SIGTERM)
+        time.sleep(1.0)
+        left = _ffmpeg_writing_into(work)
+        assert not left, f"ffmpeg still writing into --work 1 s after SIGTERM: {left}"
+        assert proc.wait(10) is not None
+        assert not (renders.parent.parent / "reviews" / footage.name / "film.mp4").exists()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(5)
+        for pid in _ffmpeg_writing_into(work):         # only ever this test's own
+            _signal_pid = getattr(os, "kill")
+            try:
+                _signal_pid(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
 # ------------------------------------------------------------------------------ (4)
 
 def test_a_poster_storm_leaves_the_board_its_connections(live_server, monkeypatch):
