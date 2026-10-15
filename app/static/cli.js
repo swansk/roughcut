@@ -146,6 +146,10 @@
  * shown as a real charge, so a response that forgot to say is never passed off as free. */
 window.rcCost = (function () {
   const dollars = (usd) => `$${Number(usd || 0).toFixed(2)}`;
+  // "~$0.27 API-equivalent", but "~$0.49 of $15.00 cap (API-equivalent)" — the word
+  // belongs to the dollars, not to the cap
+  const planTail = (amount) => (/ cap$/.test(String(amount)) ? ' (API-equivalent)'
+    : ' API-equivalent') + ' · free on your plan';
   const free = (p) => !!p && p.charged === false;
   return {
     free,
@@ -158,5 +162,16 @@ window.rcCost = (function () {
     /* a measured spend after the fact */
     spent: (usd, p) => (free(p) ? `~${dollars(usd)} if using the API · free on your plan`
       : `cost ${dollars(usd)}`),
+    /* a running total — this project's so far; `amount` is already formatted and may
+     * carry "of $5.00 cap". "spent" only when the backend bills: on the plan it is an
+     * API-equivalent estimate and the word never shows (REDESIGN-GOAL S). */
+    total: (amount, p) => (free(p) ? `~${amount}${planTail(amount)}`
+      : `spent ${amount}`),
+    /* what follows the number on the plan (the how line on /open draws its own number) */
+    planTail,
+    /* the title behind a total */
+    totalNote: (usd, p) => (free(p)
+      ? `free on your Claude plan — nothing was billed; this project's model calls would have cost about ${dollars(usd)} through the API`
+      : `${dollars(usd)} billed to the API key for this project`),
   };
 }());

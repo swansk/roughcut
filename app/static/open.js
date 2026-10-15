@@ -83,6 +83,11 @@ const usd = (x) => `$${Number(x || 0).toFixed(2)}`;
 // there is one.
 const spentLine = (b) => (b && b.budget_usd != null
   ? `${usd(b.spent_usd)} of ${usd(b.budget_usd)} cap` : usd(b && b.spent_usd));
+// ...said in the backend's terms (REDESIGN-GOAL S): "spent $4.38" only when the backend
+// bills (`charged: true`); on the plan "~$4.38 API-equivalent · free on your plan", and
+// the estimate's meaning in the title.
+const moneyWords = (b) => rcCost.total(spentLine(b), b);
+const moneyNote = (b) => rcCost.totalNote(b && b.spent_usd, b);
 const capText = (c) => (c == null ? 'none' : usd(c));
 
 function escapeHtml(s) {
@@ -374,10 +379,29 @@ function renderControls() {
   $('#lookWord').textContent = `Looks at a frame every ${i} s`;
   // one money number, on the how line; the backend and its model are not this page's
   // to say — the CLI banner (/cli.js) speaks when it needs Karl
-  $('#budgetLine').textContent = spentLine(b);
+  renderBudgetLine(b);
   renderButton();
   renderHow();
   renderProgress();
+}
+
+// The how line's money: `#budgetLine` keeps the bare number (and the cap); the word the
+// page's markup puts before it ("spent ") and a tail after it follow the backend — on the
+// plan, "~$4.38 API-equivalent · free on your plan", never "spent".
+function renderBudgetLine(b) {
+  const bl = $('#budgetLine');
+  bl.textContent = spentLine(b);
+  const free = rcCost.free(b);
+  const lead = bl.previousSibling;
+  if (lead && lead.nodeType === Node.TEXT_NODE) lead.textContent = free ? '~' : 'spent ';
+  let tail = $('#budgetTerms');
+  if (!tail) {
+    tail = document.createElement('span');
+    tail.id = 'budgetTerms';
+    bl.after(tail);
+  }
+  tail.textContent = free ? rcCost.planTail(bl.textContent) : '';
+  $('#howLine').title = b ? moneyNote(b) : '';
 }
 
 function renderButton() {
@@ -491,7 +515,8 @@ function renderProgress() {
   // the one money number while it is being spent (M16 decision 7): the how line that
   // carries it at rest is hidden during the run, and no cap stops it by default
   const b = O.status && O.status.backend;
-  const spent = b ? ` · spent ${spentLine(b)}` : '';
+  const spent = b ? ` · ${moneyWords(b)}` : '';
+  $('#progLine').title = b ? moneyNote(b) : '';
   const p = ix.exists ? ix.progress : null;
   if (!p) {
     $('#progLine').textContent = `Indexing · opening the journal${spent}`;
@@ -514,7 +539,7 @@ function pausedWords(reason) {
     // Resume is all it takes
     const b = (O.status && O.status.backend) || {};
     if (b.budget_usd == null) return 'They stopped at the budget cap. There is no cap now.';
-    return `The budget cap is reached — spent ${spentLine(b)}. Raise or remove the cap in settings.`;
+    return `The budget cap is reached — ${moneyWords(b)}. Raise or remove the cap in settings.`;
   }
   if (r === 'paused by the editor') return 'You paused them.';
   return 'They were paused before this run.';
@@ -615,11 +640,16 @@ function renderSettings() {
   const env = src === 'env';
   for (const el of [$('#capField'), $('#capNone'), $('#capOn')]) el.disabled = env;
   setCapForm(s.budget_usd);                        // the environment's number too, so the form says what holds
+  // on the plan nothing is billed: the cap is on the API-equivalent estimate (S)
+  const free = rcCost.free(O.status && O.status.backend);
   $('#capHint').textContent = env
     ? 'from the environment — ROUGHCUT_BUDGET_USD wins over this'
     : s.budget_usd == null
-      ? 'no cap — every button that spends still shows its price first'
-      : 'on this project\'s spend — the index pauses its priced stages at this line, and a model call past it is refused';
+      ? (free ? 'no cap — free on your plan; every model button still shows its API-equivalent estimate first'
+        : 'no cap — every button that spends still shows its price first')
+      : free
+        ? 'on this project\'s spend as the API would bill it (nothing is billed on your plan) — the index pauses its priced stages at this line, and a model call past it is refused'
+        : 'on this project\'s spend — the index pauses its priced stages at this line, and a model call past it is refused';
   fillSettingsForm(s);
   $('#settingsState').textContent = '';
 }
@@ -1004,6 +1034,9 @@ async function startIndex(extra = {}) {
     O.detail = '';
     O.lookOpen = false;
     toast(extra.resume_priced ? 'looks resumed' : 'indexing');
+    // the backend's terms first, so the progress line's money is said in today's words
+    // (billed or API-equivalent) from its first paint, not after the first poll
+    await refreshStatus();
     await refreshIndex();
     poll();
   } catch (e) {
