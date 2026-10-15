@@ -76,3 +76,56 @@
 /* the shot's still is a reference, not the picture (the Program monitor is): smaller,
    so the sections sit in view at 1440×900 */
 #inspector .shot .poster { max-height: 104px; }
+
+/* keyframes (wave 6, verdict 5 punch 4): Premiere's stopwatch in the row's indent, the
+   value, ◀ ◆ ▶ once animated, the reset, and the row's lane of the mini timeline — the
+   shot's span from its first frame to its last, the playhead, a diamond per key. The
+   lanes line up in one column on the right, as Premiere's timeline view does. */
+.ec-row.ec-anim { grid-template-columns: 15px minmax(0, 1fr) auto 38px 18px minmax(56px, 25%);
+                  padding-left: 4px; gap: 4px; }
+.ec-anim .ec-vals { gap: 6px; }
+#inspector .ec-anim input.ec-v { width: 50px; }
+#inspector .ec-sw { width: 15px; height: 18px; padding: 0; border: 0; background: none; color: var(--faint);
+                    display: inline-flex; align-items: center; justify-content: center; border-radius: 2px; }
+#inspector .ec-sw svg { width: 12px; height: 12px; }
+#inspector .ec-sw:hover { color: var(--text); background: none; }
+#inspector .ec-sw[aria-pressed="true"] { color: var(--tc); }
+.ec-nav { display: inline-flex; justify-content: center; visibility: hidden; }
+.ec-anim.animated .ec-nav { visibility: visible; }
+#inspector .ec-nav button { width: 12px; height: 18px; padding: 0; border: 0; background: none; color: var(--dim);
+                            font-size: 9px; line-height: 18px; border-radius: 0; }
+#inspector .ec-nav button:hover { color: var(--text); background: none; }
+#inspector .ec-nav .ec-kadd { font-size: 10px; }
+#inspector .ec-nav .ec-kadd.at { color: var(--tc); }
+.ec-anim.animated .ec-reset { visibility: visible; }
+.ec-lane { position: relative; height: 18px; background: rgba(255,255,255,.035); border-left: 1px solid var(--line-hi);
+           border-right: 1px solid var(--line-hi); cursor: pointer; touch-action: none; }
+.ec-anim.animated .ec-lane { background: rgba(74,157,248,.07); }
+.ec-ph { position: absolute; top: -3px; bottom: -3px; width: 1px; margin-left: -0.5px; background: #4a9df8;
+         pointer-events: none; }
+.ec-ph[hidden] { display: none; }
+.ec-kf { position: absolute; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px; transform: rotate(45deg);
+         background: var(--text); border: 1px solid #000; cursor: ew-resize; }
+.ec-kf:hover, .ec-kf.drag { background: #8cc2ff; }
+
+/* Lumetri Color › Basic Correction: name · slider · number · reset */
+.ec-sub { margin: 0 0 2px; }
+.ec-ssh { display: flex; align-items: center; height: 22px; padding-left: 12px; }
+#inspector .ec-subtw { font-weight: 600; color: var(--text); }
+.ec-ssb { display: none; }
+.ec-sub.open .ec-ssb { display: block; }
+.ec-sub.open > .ec-ssh .ec-tri { transform: rotate(90deg); }
+.ec-grp { color: var(--faint); font-size: 10.5px; padding: 3px 0 1px 25px; }
+.ec-row.ec-lum { grid-template-columns: 80px minmax(48px, 1fr) auto 22px; padding-left: 25px; gap: 6px; }
+#inspector .ec-lum input.ec-v { width: 50px; }
+.ec-sl { -webkit-appearance: none; appearance: none; width: 100%; min-width: 0; height: 14px; margin: 0;
+         background: transparent; cursor: pointer; }
+.ec-sl::-webkit-slider-runnable-track { height: 2px; background: var(--line-hi); border-radius: 1px; }
+.ec-sl::-moz-range-track { height: 2px; background: var(--line-hi); border-radius: 1px; }
+.ec-sl::-webkit-slider-thumb { -webkit-appearance: none; width: 9px; height: 9px; margin-top: -3.5px; border-radius: 50%;
+                               background: var(--text); border: 0; }
+.ec-sl::-moz-range-thumb { width: 9px; height: 9px; border-radius: 50%; background: var(--text); border: 0; }
+.ec-sl:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.ec-row[data-row=temperature] .ec-sl::-webkit-slider-runnable-track { background: linear-gradient(90deg, #4f7fd6, #d9c24f); }
+.ec-row[data-row=tint] .ec-sl::-webkit-slider-runnable-track { background: linear-gradient(90deg, #4fbf5a, #c64fc2); }
+.ec-row[data-row=saturation] .ec-sl::-webkit-slider-runnable-track { background: linear-gradient(90deg, #808080, #d65a4f); }

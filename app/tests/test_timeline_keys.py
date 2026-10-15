@@ -247,11 +247,12 @@ def test_arrows_step_the_playhead_and_leave_the_selection_alone(page):
 
 # ------------------------------------------------------------------ editing
 
-def test_c_splits_at_the_playhead_and_both_halves_survive_the_save(page, project):
+def test_ctrl_k_splits_at_the_playhead_and_both_halves_survive_the_save(page, project):
+    """Add Edit (Ctrl+K) — C only picks the razor now, as in Premiere (wave 6)."""
     a, b = ids(page)
     page.evaluate(f"tl.select(['{a}'])")
     page.evaluate("tl.seek(1.0)")           # 1 s into shot 1 = 2.0 s into CLIP_A
-    page.keyboard.press("c")
+    page.keyboard.press("Control+k")
     assert ranges(page) == [["CLIP_A.MP4", 1.0, 2.0], ["CLIP_A.MP4", 2.0, 3.0],
                             ["CLIP_B.MP4", 0.0, 2.0]]
     halves = page.evaluate("segs.slice(0, 2).map(s => s.out - s.in)")
@@ -266,11 +267,11 @@ def test_c_splits_at_the_playhead_and_both_halves_survive_the_save(page, project
     # nothing selected: the shot under the playhead is cut
     page.evaluate("tl.select([])")
     page.evaluate("tl.seek(3.0)")
-    page.keyboard.press("c")
+    page.keyboard.press("Control+k")
     assert ranges(page)[2:] == [["CLIP_B.MP4", 0.0, 1.0], ["CLIP_B.MP4", 1.0, 2.0]]
     # too close to an edge is refused, and is not an edit
     page.evaluate("tl.seek(0.05)")
-    page.keyboard.press("c")
+    page.keyboard.press("Control+k")
     assert page.locator("#tl .blk").count() == 4
     page.wait_for_function(
         "document.querySelector('#toast').textContent.includes('too close')", timeout=3000)

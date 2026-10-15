@@ -28,7 +28,8 @@ The steps, each one a screenshot at 1440×900 in `<out dir>/NN-step.png`:
                     on the cut wherever a pick overlaps a shot (verdict 4, punch 1)
   08 trim-out       a ripple trim of shot 1's out, dragged on the cut's edge column
   09 trim-in        a ripple trim of shot 3's in, the same way
-  10 razor          the playhead into shot 2 by a click on the ruler, then C: two pieces
+  10 razor          the playhead into shot 2 by a click on the ruler, C (the razor, no cut),
+                    then a razor click on shot 2 at the playhead: two pieces
   11 move           shot 4 dragged by its body to the head of the film
   12 warmer         Effect Controls › Lumetri Color › Temperature on a trimmed shot
   13 rerun-panel    the header reads "Re-run first pass"; its panel names both trimmed shots as kept
@@ -727,9 +728,15 @@ class Journey:
             need(t0 + 0.15 < ph < t0 + before[i]["out"] - before[i]["in"] - 0.15,
                  f"the ruler click put the playhead at {ph:.2f}, not inside shot 2")
             self.js("pauseCut && pauseCut()")
+            # Premiere's razor (wave 6): C picks the tool and cuts nothing; a click with it
+            # on shot 2's block, at the playhead's x, cuts there
             pg.keyboard.press("c")
+            need(self.js("tl.state.tool") == "razor", f"C did not pick the razor ({self.js('tl.state.tool')})")
+            need(len(self.segs()) == len(before), "C cut the film by itself — Premiere's C only picks the razor")
+            lane = pg.locator("#tl .tl-lane[data-lane=V1]").bounding_box()
+            pg.mouse.click(self.x_of(ph), lane["y"] + lane["height"] / 2)
             self.until(f"segs.length === {len(before) + 1}",
-                       f"C with the playhead in shot 2 did not cut it ({len(before)} shots still)", 5000)
+                       f"a razor click on shot 2 did not cut it ({len(before)} shots still)", 5000)
             after = self.segs()
             a, b2 = after[i], after[i + 1]
             need(a["clip"] == b2["clip"] == before[i]["clip"], "the razor's pieces are not of shot 2's clip")

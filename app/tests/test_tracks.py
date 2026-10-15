@@ -355,11 +355,11 @@ def test_adding_a_clip_makes_v1_and_a1_blocks(page):
     assert abs(v1[2]["left"] - a1[2]["left"]) < 0.5
 
 
-def test_c_cuts_both_halves(page, project):
+def test_add_edit_cuts_both_halves(page, project):
     page.evaluate("tl.seek(1.0)")
     page.click("#tl .tl-ruler", position={"x": 2, "y": 2})   # focus the timeline
     page.evaluate("tl.seek(1.0); tl.select([])")
-    page.keyboard.press("c")
+    page.keyboard.press("Control+k")                 # C only picks the razor (wave 6)
     page.wait_for_function("segs.length === 3")
     v1, a1 = v1_blocks(page), a1_blocks(page)
     assert len(a1) == 3 and [b["id"] for b in a1] == [b["id"] for b in v1]
