@@ -3387,6 +3387,8 @@ function playProposedShot(k) {
 
 function showProposal(plan) {
   pendingPlan = plan;
+  // a proposal is the pass's (or the Ask's) result: its picks may have just landed
+  if (typeof window.rcPicksStale === 'function') window.rcPicksStale();
   proposalCss();
   watchProposalUp();
   const oldTotal = total();
