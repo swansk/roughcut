@@ -307,50 +307,44 @@ TONE_PROPS = ("highlights", "shadows", "whites", "blacks")
 
 def tone_curve(x: float, highlights: float = 0.0, shadows: float = 0.0,
                whites: float = 0.0, blacks: float = 0.0) -> float:
-    """Lumetri Basic's Highlights / Shadows / Whites / Blacks: THE formula. The render
-    uses this function (a per-value luma table, `luma_table`); grade.js's shader must
-    compute the same thing. Every slider is -100..100 and 0 is off.
+    """Lumetri Basic's Highlights / Shadows / Whites / Blacks, per channel: THE formula,
+    the same as grade.js's shader (lane KEYUI, wave 6). `x` is one RGB channel on 0..1
+    after the LUT and Contrast; every slider is -100..100 and 0 is off. With b, s, h, w =
+    blacks, shadows, highlights, whites / 100:
 
-    `x` is luma on 0..1 (Rec.709 luma of the picture's 0..1 RGB, which in the part's
-    limited-range YUV is `(Y - 16) / 219`). With a = slider / 100:
+        x = clamp(x, 0, 1)
+        y = x + 0.25·b·(1-x)³ + 1.5·s·x·(1-x)² + 1.5·h·x²·(1-x) + 0.25·w·x³
 
-        y = x + 0.10·a_shadows    · 6.75·x·(1-x)²      (a bump peaking at x = 1/3)
-              + 0.10·a_highlights · 6.75·x²·(1-x)      (a bump peaking at x = 2/3)
-              + 0.15·a_blacks     · (1-x)²             (moves the black end)
-              + 0.15·a_whites     · x²                 (moves the white end)
-        y = clamp(y, 0, 1)
-
-    so +100 shadows lifts the quarter-tones by up to 0.10 (22 code values) and leaves
-    black and white where they were, +100 highlights does the same to the three-quarter
-    tones, +100 blacks lifts black by 0.15, -100 whites pulls white down by 0.15. The
-    amplitudes keep the curve monotonic at any setting (its slope stays >= 0.025).
-
-    Only luma changes: the shader matches it exactly by taking x = dot(rgb, (0.2126,
-    0.7152, 0.0722)) and adding (y - x) to each of R, G and B (an equal offset to R, G,
-    B moves Y and leaves Cb and Cr alone). It runs after Contrast and before
-    Saturation, as Lumetri's Basic panel lists them."""
+    so shadows ±100 moves a channel at 1/3 by ±0.222 and highlights ±100 one at 2/3 by
+    ±0.222, leaving 0 and 1 where they were; blacks ±100 moves 0 by ±0.25 and whites ±100
+    moves 1 by ±0.25. Not clamped here: Saturation follows, then the clamp to 0..1. With
+    all four at 0 the step (and its clamp) is skipped, as the shader skips it."""
     x = min(1.0, max(0.0, float(x)))
-    s, h = shadows / 100.0, highlights / 100.0
-    b, w = blacks / 100.0, whites / 100.0
-    y = (x + 0.10 * s * 6.75 * x * (1 - x) ** 2 + 0.10 * h * 6.75 * x * x * (1 - x)
-         + 0.15 * b * (1 - x) ** 2 + 0.15 * w * x * x)
-    return min(1.0, max(0.0, y))
+    b, s = blacks / 100.0, shadows / 100.0
+    h, w = highlights / 100.0, whites / 100.0
+    ix = 1.0 - x
+    return (x + 0.25 * b * ix ** 3 + 1.5 * s * x * ix * ix + 1.5 * h * x * x * ix
+            + 0.25 * w * x ** 3)
 
 
-def luma_table(controls: dict | None) -> list[int] | None:
-    """The part's luma, code value by code value (0..255 in, legal 16..235 out): the
-    contrast about 125.5 (grade.js: `(c - 0.5)·k + 0.5`), then `tone_curve`. None when
-    no tone slider is set (`adjust_vf` then keeps its contrast expression)."""
+def tone_of(controls: dict | None) -> dict[str, float] | None:
     tone = {p: ctl_num(controls, p, 0.0) for p in TONE_PROPS}
-    if all(abs(v) < 1e-9 for v in tone.values()):
-        return None
-    k = 1.0 + ctl_num(controls, "contrast", 0.0) / 200.0
-    out = []
-    for val in range(256):
-        x = ((val - 125.5) * k + 125.5 - 16.0) / 219.0
-        y = 16.0 + 219.0 * tone_curve(x, **tone)
-        out.append(int(min(235, max(16, math.floor(y + 0.5)))))
-    return out
+    return None if all(abs(v) < 1e-9 for v in tone.values()) else tone
+
+
+def grade_channel(c: float, controls: dict | None) -> float:
+    """One RGB channel (0..1, after the LUT) through grade.js's per-channel steps:
+    Contrast `(c - 0.5)·(1 + contrast/200) + 0.5`, then `tone_curve` when a tone slider
+    is set. Saturation (a mix across channels) comes after it."""
+    y = (c - 0.5) * (1.0 + ctl_num(controls, "contrast", 0.0) / 200.0) + 0.5
+    tone = tone_of(controls)
+    return tone_curve(y, **tone) if tone else y
+
+
+def channel_table(controls: dict | None) -> list[int]:
+    """`grade_channel` for every 8-bit code value, rounded and clipped to 0..255."""
+    return [int(min(255, max(0, math.floor(255.0 * grade_channel(v / 255.0, controls) + 0.5))))
+            for v in range(256)]
 
 
 def table_expr(table: list[int], var: str = "val") -> str:
@@ -364,25 +358,49 @@ def table_expr(table: list[int], var: str = "val") -> str:
     return tree(0, len(table) - 1)
 
 
+REC709 = (0.2126, 0.7152, 0.0722)
+
+
+def saturation_mixer(sat: float) -> str | None:
+    """grade.js's `mix(luma709(y), y, sat)` as a `colorchannelmixer` matrix."""
+    if abs(sat - 1.0) < 1e-9:
+        return None
+    rows = []
+    for i, ch in enumerate("rgb"):
+        for j, src in enumerate("rgb"):
+            rows.append(f"{ch}{src}={(1 - sat) * REC709[j] + (sat if i == j else 0):.6g}")
+    return "colorchannelmixer=" + ":".join(rows)
+
+
 def adjust_vf(controls: dict | None) -> str | None:
-    """Lumetri contrast and saturation, after the LUT, as grade.js's shader does them
-    in RGB: `y = (c - 0.5) * (1 + contrast/200) + 0.5`, then a mix toward Rec.709 luma
-    by saturation/100. In the part's limited-range BT.709 YUV that is exactly: luma
-    about its middle (125.5) times k, and both chroma about 128 times k × s (a
-    per-channel contrast about 0.5 scales R-Y and B-Y by k; the mix toward luma keeps
-    luma and scales them by s). Clipped to the legal range, as the shader clamps.
-    Highlights / shadows / whites / blacks (`tone_curve`) make the luma a table."""
+    """Lumetri contrast, tone and saturation, after the LUT, as grade.js's shader does
+    them in RGB: `y = (c - 0.5) * (1 + contrast/200) + 0.5`, the tone curve when a tone
+    slider is set (`tone_curve`), then a mix toward Rec.709 luma by saturation/100.
+
+    Without tone, in the part's limited-range BT.709 YUV that is exactly: luma about its
+    middle (125.5) times k, and both chroma about 128 times k × s (a per-channel contrast
+    about 0.5 scales R-Y and B-Y by k; the mix toward luma keeps luma and scales them by
+    s), clipped to the legal range as the shader clamps: one `lutyuv`. The tone curve is
+    per channel and not linear, so with it the picture goes to RGB (BT.709, limited in),
+    through one `lutrgb` table of `grade_channel` and a `colorchannelmixer` saturation,
+    and back to limited BT.709 4:2:0. (8-bit RGB clamps a channel the tone pushed past
+    1 before the saturation mix; the shader clamps only after it.)"""
     k = 1.0 + ctl_num(controls, "contrast", 0.0) / 200.0
     sat = ctl_num(controls, "saturation", 100.0) / 100.0
-    table = luma_table(controls)
-    if abs(k - 1.0) < 1e-9 and abs(sat - 1.0) < 1e-9 and table is None:
+    if tone_of(controls):
+        t = table_expr(channel_table(controls))
+        chain = ["scale=in_range=tv:in_color_matrix=bt709:flags=accurate_rnd+full_chroma_int",
+                 "format=gbrp", f"lutrgb=r='{t}':g='{t}':b='{t}'"]
+        mix = saturation_mixer(sat)
+        if mix:
+            chain.append(mix)
+        chain += ["scale=out_range=tv:out_color_matrix=bt709:flags=accurate_rnd",
+                  "format=yuv420p"]
+        return ",".join(chain)
+    if abs(k - 1.0) < 1e-9 and abs(sat - 1.0) < 1e-9:
         return None
     ks = k * sat
-    y = (f"'{table_expr(table)}'" if table is not None
-         else f"'clip((val-125.5)*{k:.6g}+125.5,16,235)'")
-    if abs(ks - 1.0) < 1e-9:
-        return f"lutyuv=y={y}"
-    return (f"lutyuv=y={y}"
+    return (f"lutyuv=y='clip((val-125.5)*{k:.6g}+125.5,16,235)'"
             f":u='clip((val-128)*{ks:.6g}+128,16,240)'"
             f":v='clip((val-128)*{ks:.6g}+128,16,240)'")
 

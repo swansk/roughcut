@@ -348,17 +348,66 @@ def test_sequence_add_and_delete_track(board, project):
     assert pg.locator("#tl .tl-track[data-track=A3] .oblk.aclip").count() == 1
     d = wait_disk(project, lambda d: any(o.get("track") == "V3" for o in d.get("overlays") or [])
                   and any(c.get("track") == "A3" for c in d.get("audio") or []))
-    # Delete Track refuses a track that still holds clips; empty, it goes
-    _menu(pg, "seq:delv")
-    assert pg.locator("#tl .tl-thead[data-track=V3]").count() == 1
-    oid = pg.evaluate("tl.overlays().find(o => o.track === 'V3').id")
-    pg.evaluate(f"tl.removeOverlay('{oid}')")
+    # Delete Track takes a track that holds clips with its clips, as Premiere does (one
+    # undo step; test_keys_premiere.py checks the Ctrl+Z)
     _menu(pg, "seq:delv")
     pg.wait_for_function("!document.querySelector('#tl .tl-thead[data-track=V3]')", timeout=3000)
+    assert not any(o.get("track") == "V3" for o in pg.evaluate("tl.overlays()"))
     assert pg.locator("#tl .tl-track[data-track=V3]").count() == 0
-    wait_disk(project, lambda d: "V3" not in (d.get("tracks") or {}) and "A3" in (d.get("tracks") or {}))
+    wait_disk(project, lambda d: "V3" not in (d.get("tracks") or {}) and "A3" in (d.get("tracks") or {})
+              and not any(o.get("track") == "V3" for o in d.get("overlays") or []))
     # a reload keeps the added track and its clip
     pg.reload()
     pg.wait_for_selector("#tl .tl-thead[data-track=A3]", timeout=15000)
     assert pg.locator("#tl .tl-track[data-track=A3] .oblk.aclip").count() == 1
+    assert pg.errors == []
+
+
+def test_an_a3_clip_drags_and_a_v3_clip_trims_by_its_edge(board, project):
+    """V3+ and A3+ clips drag like V2's (snapping to the cuts and the playhead), and a
+    press within 6 px of a clip's edge trims that edge; each is one undo step."""
+    pg = board(SEED)
+    pg.wait_for_selector("#tl .blk", timeout=15000)
+    pg.evaluate("tl.addTrack('video'); tl.addTrack('audio')")
+    pg.evaluate("tl.addOverlay({clip: 'CLIP_C.MP4', in: 1, out: 3}, 0.5, 'V3')")
+    pg.evaluate("tl.addOverlay({clip: 'CLIP_B.MP4', in: 0, out: 1}, 0.25, 'A3'); tl.seek(0)")
+    pg.evaluate("document.querySelector('#tl').scrollIntoView({block: 'end'})")
+    z = pg.evaluate("tl.state.zoom")
+    a3 = pg.locator("#tl .tl-track[data-track=A3] .oblk")
+    box = a3.bounding_box()
+    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    pg.mouse.move(x, y)
+    pg.mouse.down()
+    pg.mouse.move(x + 1.0 * z, y, steps=8)
+    pg.mouse.up()
+    assert pg.evaluate("tl.audioClips()[0].at") == pytest.approx(1.25, abs=1 / 24 + 1e-6)
+    assert pg.locator("#undo").get_attribute("title").startswith("undo: move A3")
+    wait_disk(project, lambda d: any(c.get("track") == "A3" and abs(c["at"] - 1.25) < 0.05
+                                     for c in d.get("audio") or []))
+    # V3's out edge, dragged 0.5 s left: the clip's out goes 3 -> 2.5, its start holds
+    v3 = pg.locator("#tl .tl-track[data-track=V3] .oblk")
+    box = v3.bounding_box()
+    x, y = box["x"] + box["width"] - 2, box["y"] + box["height"] / 2
+    pg.mouse.move(x, y)
+    pg.mouse.down()
+    pg.mouse.move(x - 0.5 * z, y, steps=8)
+    pg.mouse.up()
+    o = pg.evaluate("tl.overlays()[0]")
+    assert o["at"] == 0.5 and o["in"] == 1 and o["out"] == pytest.approx(2.5, abs=1 / 24 + 1e-6), o
+    assert pg.locator("#undo").get_attribute("title").startswith("undo: trim V3")
+    # its in edge, 0.25 s right: the in and the start move together
+    box = v3.bounding_box()
+    x = box["x"] + 2
+    pg.mouse.move(x, y)
+    pg.mouse.down()
+    pg.mouse.move(x + 0.25 * z, y, steps=8)
+    pg.mouse.up()
+    o = pg.evaluate("tl.overlays()[0]")
+    assert o["at"] == pytest.approx(0.75, abs=1 / 24 + 1e-6) and o["in"] - 1 == pytest.approx(o["at"] - 0.5, abs=1e-3)
+    wait_disk(project, lambda d: any(x.get("track") == "V3" and abs(x["at"] - o["at"]) < 1e-3
+                                     and abs(x["out"] - o["out"]) < 1e-3 for x in d.get("overlays") or []))
+    pg.keyboard.press("Control+z")
+    pg.keyboard.press("Control+z")
+    o = pg.evaluate("tl.overlays()[0]")
+    assert (o["at"], o["in"], o["out"]) == (0.5, 1, 3)
     assert pg.errors == []

@@ -5,37 +5,60 @@
 
 Real Chromium against the board of `<snapshot dir>` (a `git archive` of the rev under
 judgement, as tools/gate.py makes it), on the suite's synthetic fixture (three 6-second
-clips with fabricated sidecars, built fresh under `<out dir>/fixture` by the snapshot's
-own app/tests/conftest.py) and a fresh `--work` under `<out dir>/work`. The model is
+24 fps clips with fabricated sidecars, built fresh under `<out dir>/fixture` by the
+snapshot's own app/tests/conftest.py) plus one clip in the shape of Killington's GoPro
+footage, built here: CLIP_R, HEVC at 59.94 fps, stored upside down with a −180° display matrix
+(`ffmpeg -display_rotation 180`), its picture four coloured quadrants so a turn, a flip
+or a mirror each read wrong. A fresh `--work` under `<out dir>/work`. The model is
 scripted (no real model call, ever: the ledger is checked afterwards) and the index's
 tools are the suite's stubs (app/tests/test_index._stub_tools).
 
 The steps, each one a screenshot at 1440×900 in `<out dir>/NN-step.png`:
 
   01 open           the board lands; the bin holds the fixture; "Run first pass" in the header
-  02 firstpass      one click on [data-testid=firstpass-button] opens its panel (steps, cost)
-  03 run            [data-testid=firstpass-run] → the index (stubbed) → picks → the proposal opens
-  04 reject         ✗ on the proposal's 5th shot (its ghost's `.rv.no`): Accept reads "Accept 4 of 5"
-  05 accept         Accept puts the 4 accepted shots on V1 and on disk; the EDL's
+  02 preview        CLIP_R opened in the Source monitor before any index ran: the server's
+                    360p preview plays (an HEVC original is never handed to the browser),
+                    each quadrant its colour, the right way up (verdict 3 punch 1's picture)
+  03 firstpass      one click on [data-testid=firstpass-button] opens its panel (steps, cost)
+  04 run            [data-testid=firstpass-run] → the index (stubbed) → picks → the proposal opens
+  05 reject         ✗ on the proposal's 5th shot (its ghost's `.rv.no`): Accept reads "Accept 4 of 5"
+  06 accept         Accept puts the 4 accepted shots on V1 and on disk; the EDL's
                     provenance.rejected records the 5th shot's range (verdict 4, punch 2)
-  06 selects        Selects lists the pass's picks (> 0 rows, one per pick); an amber marker
+  07 selects        Selects lists the pass's picks (> 0 rows, one per pick); an amber marker
                     on the cut wherever a pick overlaps a shot (verdict 4, punch 1)
-  07 trim-out       a ripple trim of shot 1's out, dragged on the cut's edge column
-  08 trim-in        a ripple trim of shot 3's in, the same way
-  09 razor          the playhead into shot 2 by a click on the ruler, then C: two pieces
-  10 move           shot 4 dragged by its body to the head of the film
-  11 warmer         Effect Controls › Lumetri Color › Temperature on a trimmed shot
-  12 rerun-panel    the header reads "Re-run first pass"; its panel names both trimmed shots as kept
-  13 rerun-accept   Run (the model re-proposes the rejected range): the proposal leaves it out,
+  08 trim-out       a ripple trim of shot 1's out, dragged on the cut's edge column
+  09 trim-in        a ripple trim of shot 3's in, the same way
+  10 razor          the playhead into shot 2 by a click on the ruler, C (the razor, no cut),
+                    then a razor click on shot 2 at the playhead: two pieces
+  11 move           shot 4 dragged by its body to the head of the film
+  12 warmer         Effect Controls › Lumetri Color › Temperature on a trimmed shot
+  13 rerun-panel    the header reads "Re-run first pass"; its panel names both trimmed shots as kept
+  14 rerun-accept   Run (the model re-proposes the rejected range): the proposal leaves it out,
                     says so in plan.firstpass.rejected and the notes; accept: every kept shot
                     (the trimmed two among them) has the same in/out
-  14 export         Ctrl+M → export-dialog, export-name, export-go, export-progress → 100, export-done
-  15 ffprobe        the file's duration is within one frame of tl.total()
+  15 drop-grade     CLIP_R dragged from the Project panel to the film's end, and within 100 ms
+                    of it landing `effects.set('temperature', 40)` on the shot Effect Controls
+                    shows; idle, reload: the shot is on disk under a server id with the warm
+                    balance, colour.shots has no `tmp-` key, Effect Controls shows 40
+                    (verdict 5, punch 1: the grade judge 5 lost)
+  16 upright        CLIP_R in the Program monitor (its graded frame, as shown) and in the
+                    Source monitor: each quadrant is its colour, the right way up
+  17 short-shot     a 0.4 s range of CLIP_R marked I / O in the Source monitor and inserted
+                    with `,` at the first cut; ▶ from 0.6 s before it plays through it into
+                    the next shot
+  18 export         Ctrl+M → Quick 1080p, the whole sequence; the size estimate settles
+                    (no "measuring…"); export-go, export-progress → 100, export-done
+  19 ffprobe        the file's duration is within one frame of tl.total(); its size within
+                    ±25 % of the dialog's estimate; CLIP_R's frame in it is upright
+
+After the browser closes, the review copy the board started for the export is waited
+for (not killed half-made, which printed "!! review copy failed"); a copy that failed
+fails the journey.
 
 The first failing step stops the journey. Zero page errors are allowed: an error thrown
 in the page fails the step it happened in. `<out dir>/journey.json` has each step's name,
 ok, ms, PNG, why it failed and the page errors; the last line printed is the gate's:
-`journey ✓ 15 steps · 74 s` or `journey ✗ step 7 razor: <why>`. Exit 0 only when green.
+`journey ✓ 19 steps · 74 s` or `journey ✗ step 7 razor: <why>`. Exit 0 only when green.
 
 The script needs fastapi, uvicorn, httpx, numpy, pytest and playwright; when the Python
 running it lacks them it re-runs itself under `uv run --with …` (as the gate's suite does).
@@ -130,6 +153,136 @@ def _load(name: str, path: Path):
     return mod
 
 
+# ------------------------------------------------------------------ the GoPro-shaped clip
+
+ROT = "CLIP_R.MP4"
+CLIPS = ["CLIP_A.MP4", "CLIP_B.MP4", "CLIP_C.MP4", ROT]
+ROT_S = 6.0
+# The picture as it must be SEEN, by quadrant. No two alike, so an upside-down picture
+# (the bug ORIENT fixed), a mirror and a vertical flip each read wrong.
+QUADS = {"tl": (255, 0, 0), "tr": (0, 255, 0), "bl": (0, 0, 255), "br": (255, 255, 0)}
+
+
+def make_rotated_clip(path: Path, scratch: Path) -> dict:
+    """CLIP_R as a GoPro mounted upside down writes it: HEVC at 59.94 fps, the pixels
+    stored turned 180°, and a display matrix of −180° that says to turn them back. HEVC,
+    as Killington's 59.94 clips are, so the board cannot hand the browser the original
+    (it turns a tagged h264 file itself) and the picture goes through the server's
+    preview, where the turn was lost before ORIENT (verdict 3, punch 1). Returns what
+    ffprobe reads off it (the fixture is checked, so a quiet ffmpeg change cannot make
+    the upright step vacuous)."""
+    scratch.mkdir(parents=True, exist_ok=True)
+    stored = scratch / "CLIP_R.stored.mp4"
+    w, h = 320, 180
+    boxes = ",".join(
+        f"drawbox=x={x}:y={y}:w={w // 2}:h={h // 2}:c={c}:t=fill"
+        for x, y, c in ((0, 0, "red"), (w // 2, 0, "lime"), (0, h // 2, "blue"),
+                        (w // 2, h // 2, "yellow")))
+    src = f"color=c=black:s={w}x{h}:r=60000/1001:d={ROT_S},{boxes},hflip,vflip"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-f", "lavfi", "-i", src,
+                    "-f", "lavfi", "-i", f"sine=frequency=660:duration={ROT_S}",
+                    "-c:v", "libx265", "-preset", "ultrafast", "-x265-params", "log-level=error",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(stored)],
+                   check=True, capture_output=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-display_rotation", "180",
+                    "-i", str(stored), "-c", "copy", str(path)], check=True, capture_output=True)
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                        "stream=codec_name,r_frame_rate:stream_side_data=rotation", "-of", "json", str(path)],
+                       capture_output=True, text=True, check=True)
+    v = json.loads(r.stdout)["streams"][0]
+    rot = next((sd.get("rotation") for sd in v.get("side_data_list") or [] if "rotation" in sd), None)
+    if (v.get("codec_name") != "hevc" or v.get("r_frame_rate") != "60000/1001"
+            or rot is None or abs(abs(float(rot)) - 180) > 0.5):
+        raise RuntimeError(f"the rotated fixture came out as {v}")
+    return {"codec": v["codec_name"], "r_frame_rate": v["r_frame_rate"], "rotation": rot}
+
+
+def quadrants(rgb, why: str) -> dict:
+    """Which colour each quadrant of a picture shows (an H×W×3 array; black bars around
+    the picture are cropped off first). Fails the step unless every quadrant is the
+    colour QUADS says, by a clear margin."""
+    import numpy as np
+    a = np.asarray(rgb, dtype=float)
+    lit = a.max(axis=2) > 60
+    rows = np.where(lit.mean(axis=1) > 0.5)[0]
+    cols = np.where(lit.mean(axis=0) > 0.5)[0]
+    need(len(rows) > 16 and len(cols) > 16, f"{why}: no picture to read (all dark)")
+    y0, y1, x0, x1 = rows[0], rows[-1] + 1, cols[0], cols[-1] + 1
+    ph, pw = y1 - y0, x1 - x0
+    seen, wrong = {}, []
+    for key, (qy, qx) in {"tl": (0, 0), "tr": (0, 1), "bl": (1, 0), "br": (1, 1)}.items():
+        # the middle half of the quadrant: clear of its edges and of any overlay text
+        ys, ye = y0 + int(ph * (0.5 * qy + 0.125)), y0 + int(ph * (0.5 * qy + 0.375))
+        xs, xe = x0 + int(pw * (0.5 * qx + 0.125)), x0 + int(pw * (0.5 * qx + 0.375))
+        m = a[ys:ye, xs:xe].reshape(-1, 3).mean(axis=0)
+        dist = {k: float(np.linalg.norm(m - np.array(c))) for k, c in QUADS.items()}
+        best = min(dist, key=dist.get)
+        seen[key] = {"rgb": [round(float(x)) for x in m], "looks": best}
+        if best != key or dist[best] > 150:
+            wrong.append(f"{key} looks {best} {seen[key]['rgb']}")
+    need(not wrong, f"{why} is not upright: " + "; ".join(wrong))
+    return seen
+
+
+def png_rgb(png: bytes):
+    """A PNG (a Playwright screenshot) as an H×W×3 uint8 array, decoded by ffmpeg."""
+    import struct
+    import numpy as np
+    w, h = struct.unpack(">II", png[16:24])
+    r = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-f", "png_pipe", "-i", "-",
+                        "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                       input=png, capture_output=True, check=True)
+    return np.frombuffer(r.stdout, np.uint8)[: w * h * 3].reshape(h, w, 3)
+
+
+def file_frame_rgb(path: Path, t: float):
+    """The frame of a file at `t` seconds, displayed (ffmpeg applies the matrix)."""
+    import numpy as np
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                        "stream=width,height", "-of", "json", str(path)],
+                       capture_output=True, text=True, check=True)
+    s = json.loads(r.stdout)["streams"][0]
+    w, h = int(s["width"]), int(s["height"])
+    r = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-ss", f"{t:.3f}", "-i", str(path),
+                        "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                       capture_output=True, check=True)
+    return np.frombuffer(r.stdout, np.uint8)[: w * h * 3].reshape(h, w, 3)
+
+
+# A Project row dragged to the film's end on V1 (HTML5 drag events, as Chromium sends
+# them), then — the moment the shot is in the sequence — Effect Controls' own setter on
+# the shot it shows: the judge's "drop a clip, warm it" in one breath (verdict 5, dim 7).
+DROP_THEN_GRADE = """async ([clip, value]) => {
+  const row = [...document.querySelectorAll('#projList tr[data-clip], #projList .picon[data-clip]')]
+    .find((r) => r.dataset.clip === clip);
+  if (!row) return { error: `no Project row for ${clip}` };
+  const before = new Set(segs.map((s) => String(s.id)));
+  const n0 = segs.length;
+  const dt = new DataTransfer();
+  row.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
+  const view = tl.el.view, lane = tl.el.lanes.V1;
+  const r = view.getBoundingClientRect(), lr = lane.getBoundingClientRect();
+  const x = r.left + tl.timeToX(tl.total()) - view.scrollLeft + 2;
+  const y = lr.top + lr.height / 2;
+  const t0 = performance.now();
+  for (const type of ['dragenter', 'dragover', 'drop']) {
+    lane.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, clientX: x,
+                                             clientY: y, dataTransfer: dt }));
+  }
+  row.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }));
+  while (segs.length === n0 && performance.now() - t0 < 3000) {
+    await new Promise((res) => setTimeout(res, 2));
+  }
+  const landed = performance.now() - t0;
+  const fresh = segs.filter((s) => !before.has(String(s.id)));
+  const shown = typeof inspected === 'function' && inspected() ? String(inspected().id) : null;
+  const ok = effects.set('temperature', value);
+  const set = performance.now() - t0;
+  return { n0, n: segs.length, landed: Math.round(landed), set: Math.round(set), ok, shown,
+           fresh: fresh.map((s) => ({ id: String(s.id), clip: s.clip, in: s.in, out: s.out })) };
+}"""
+
+
 # ------------------------------------------------------------------ the scripted model
 
 FIRST_CUT = [
@@ -188,6 +341,7 @@ class Journey:
         self.errors: list[str] = []          # page errors, all of them
         self.console: list[str] = []         # console errors (recorded, not judged)
         self.facts: dict = {}
+        self.media: list[tuple[str, str | None]] = []
         self.pg = None
         self.base = ""
 
@@ -280,6 +434,43 @@ class Journey:
                    "document.querySelector('#saveState').dataset.state === 'saved'",
                    "the board never said the edit was saved", timeout)
 
+    def idle(self, quiet_ms=800, timeout=20000) -> None:
+        """The board says saved, no save is waiting or in flight, and it stays so."""
+        self.wait_saved(timeout)
+        expr = ("(typeof saveTimer === 'undefined' || saveTimer === null)"
+                " && (typeof saveRun === 'undefined' || saveRun === null)"
+                " && document.querySelector('#saveState').dataset.state === 'saved'")
+        self.until(expr, "the board never went idle (a save kept waiting)", timeout)
+        self.pg.wait_for_timeout(quiet_ms)
+        self.until(expr, "the board saved again after it said saved", timeout)
+
+    def loaded(self) -> None:
+        """The board after a (re)load: its state, the bin, the cut on V1."""
+        self.until("window.rcFirstPass && rcFirstPass.state() && window.effects && window.tl && tl.state",
+                   "the board never loaded after a reload", 30000)
+        self.until(f"document.querySelectorAll('#projList [data-clip]').length === {len(CLIPS)}",
+                   "the Project panel never listed the clips after a reload", 20000)
+        self.until("segs.length > 0 && document.querySelectorAll('#tl .tl-lane[data-lane=V1] .blk').length === segs.length",
+                   "V1 never drew the cut after a reload", 20000)
+
+    def source_picture(self, why: str) -> dict:
+        """Open CLIP_R in the Source monitor from the Project panel and read its picture."""
+        pg = self.pg
+        pg.locator(".ws-tab[data-tool=project]").click()      # Selects may be in front
+        pg.locator("#projList tr.row", has_text=ROT.split(".")[0]).first.click()
+        self.until(f"window.rcSource && rcSource.clip === {json.dumps(ROT)}",
+                   f"a click on {ROT}'s row did not open it in Source", 5000)
+        self.until("(() => { const v = document.querySelector('#srcVideo');"
+                   " return v.readyState >= 2 && !v.seeking"
+                   f" && v.currentSrc.includes({json.dumps(ROT.split('.')[0])}); }})()",
+                   f"the Source monitor never showed {ROT}'s frame", 120000)
+        pg.wait_for_timeout(300)
+        return quadrants(png_rgb(pg.locator("#srcScreen").screenshot()), why)
+
+    def media_kinds(self) -> list[str]:
+        """What the server said it served for CLIP_R so far (x-roughcut-media)."""
+        return sorted({k for u, k in self.media if ROT.split(".")[0] in u and k})
+
     def wait_disk(self, cond, why: str, timeout=30.0) -> dict:
         deadline = time.time() + timeout
         d = {}
@@ -355,6 +546,9 @@ class Journey:
         self.pg = pg
         pg.on("pageerror", lambda e: self.errors.append(str(e)))
         pg.on("console", lambda m: self.console.append(m.text) if m.type == "error" else None)
+        # what the server hands the monitors: original, preview or proxy (its header)
+        pg.on("response", lambda r: self.media.append((r.url, r.headers.get("x-roughcut-media")))
+              if "/media/" in r.url else None)
         pg.set_default_timeout(30000)
         F = self.facts
 
@@ -363,17 +557,31 @@ class Journey:
             pg.goto(self.base + "/")
             self.until("window.rcFirstPass && rcFirstPass.state()",
                        "the board never loaded the first pass's state (rcFirstPass)", 30000)
-            self.until("document.querySelectorAll('#projList [data-clip]').length === 3",
-                       "the Project panel never listed the fixture's three clips", 20000)
+            self.until(f"document.querySelectorAll('#projList [data-clip]').length === {len(CLIPS)}",
+                       f"the Project panel never listed the fixture's {len(CLIPS)} clips", 20000)
             F["open_ms"] = round((time.time() - t0) * 1000)
             clips = self.js("[...document.querySelectorAll('#projList tr[data-clip], #projList .picon[data-clip]')]"
                             ".map(r => r.dataset.clip)")
-            need(sorted(set(clips)) == ["CLIP_A.MP4", "CLIP_B.MP4", "CLIP_C.MP4"],
-                 f"the bin shows {clips}, not the fixture's three clips")
+            need(sorted(set(clips)) == sorted(CLIPS),
+                 f"the bin shows {clips}, not the fixture's {CLIPS}")
             need(self.js("segs.length") == 0, "a fresh bin should open with an empty sequence")
             self.fp_label("Run first pass")
             need(pg.locator('header [data-testid="firstpass-button"]').count() == 1,
                  "the first-pass control is not in the header")
+
+        def preview():
+            # CLIP_R before the index has made its proxy: the Source monitor plays the
+            # server's 360p preview (an HEVC original is not handed to the browser), the
+            # picture Killington shows for its first hour and more. It was upside down
+            # before ORIENT; it must be the right way up.
+            import server
+            proxy = Path(server.STATE["proxy_dir"]) / "CLIP_R.mp4"
+            need(not proxy.exists(), f"{ROT} has a proxy before any index ran: {proxy}")
+            got = self.source_picture(f"{ROT}'s preview in the Source monitor")
+            kinds = self.media_kinds()
+            need("preview" in kinds, f"the Source monitor did not play {ROT}'s preview "
+                                     f"(the server answered {kinds or 'nothing'} for it)")
+            F["preview"] = {"quadrants": got, "media": kinds}
 
         def firstpass_panel():
             text = self.open_fp_panel()
@@ -450,8 +658,17 @@ class Journey:
             need(len(picks) > 0, "the first pass made no picks to list")
             pg.evaluate("dock.open('bin')")
             pg.locator("#binTabs .tab[data-tab=all]").click()
-            self.until(f"document.querySelectorAll('#library tr.keep.pick').length === {len(picks)}",
-                       f"Selects does not list the pass's {len(picks)} picks", 15000)
+            try:
+                self.until(f"document.querySelectorAll('#library tr.keep.pick').length === {len(picks)}",
+                           f"Selects does not list the pass's {len(picks)} picks", 15000)
+            except StepFailed as e:
+                # say which: the board's own copy of /api/picks is what Selects draws
+                held = self.js("Array.isArray(passPicks) ? passPicks.length : passPicks")
+                age = self.js("Math.round(Date.now() - picksRead)")
+                raise StepFailed(f"{e}; the board holds {held} picks, read {age} ms ago, while "
+                                 f"/api/picks has {len(picks)} with firstpass_picked true (a read "
+                                 "made before the pass made its picks is kept: nothing re-reads "
+                                 "them when the pass lands)")
             n = self.js("document.querySelectorAll('#library tr.keep.pick').length")
             need(n > 0, "Selects shows none of the pass's picks")
             F["selects_picks"] = n
@@ -511,16 +728,22 @@ class Journey:
             need(t0 + 0.15 < ph < t0 + before[i]["out"] - before[i]["in"] - 0.15,
                  f"the ruler click put the playhead at {ph:.2f}, not inside shot 2")
             self.js("pauseCut && pauseCut()")
+            # Premiere's razor (wave 6): C picks the tool and cuts nothing; a click with it
+            # on shot 2's block, at the playhead's x, cuts there
             pg.keyboard.press("c")
+            need(self.js("tl.state.tool") == "razor", f"C did not pick the razor ({self.js('tl.state.tool')})")
+            need(len(self.segs()) == len(before), "C cut the film by itself — Premiere's C only picks the razor")
+            lane = pg.locator("#tl .tl-lane[data-lane=V1]").bounding_box()
+            pg.mouse.click(self.x_of(ph), lane["y"] + lane["height"] / 2)
             self.until(f"segs.length === {len(before) + 1}",
-                       f"C with the playhead in shot 2 did not cut it ({len(before)} shots still)", 5000)
+                       f"a razor click on shot 2 did not cut it ({len(before)} shots still)", 5000)
             after = self.segs()
             a, b2 = after[i], after[i + 1]
             need(a["clip"] == b2["clip"] == before[i]["clip"], "the razor's pieces are not of shot 2's clip")
             need(abs(a["in"] - before[i]["in"]) < 1e-6 and abs(b2["out"] - before[i]["out"]) < 1e-6
                  and abs(a["out"] - b2["in"]) < 1e-6, f"the pieces {a}, {b2} do not tile shot 2 {before[i]}")
             self.wait_saved()
-            self.wait_disk(lambda d: len(d.get("segments", [])) == len(after),
+            d = self.wait_disk(lambda d: len(d.get("segments", [])) == len(after),
                            "the razor never reached the disk")
             F["razored"] = [a["id"], b2["id"]]
 
@@ -652,12 +875,156 @@ class Journey:
             need("rerun" in self.model.calls, "the re-run never asked the model with locked shots")
             self.wait_saved()
 
+        def drop_grade():
+            n0 = len(self.segs())
+            got = self.js(DROP_THEN_GRADE, [ROT, 40])
+            need("error" not in got, got.get("error", ""))
+            need(got["n"] == n0 + 1 and len(got["fresh"]) == 1 and got["fresh"][0]["clip"] == ROT,
+                 f"dropping {ROT} on V1 did not add one {ROT} shot: {got}")
+            tmp = got["fresh"][0]["id"]
+            need(got["shown"] == tmp,
+                 f"after the drop Effect Controls shows {got['shown']}, not the dropped shot {tmp}")
+            need(got["ok"] is True, f"effects.set('temperature', 40) refused the dropped shot: {got}")
+            need(got["set"] - got["landed"] < 100,
+                 f"the grade was set {got['set'] - got['landed']} ms after the drop, not within 100")
+            F["drop"] = got
+            self.idle()
+            pg.reload()
+            self.loaded()
+            d = self.disk()
+            on = d.get("segments", [])
+            need(on and on[-1].get("clip") == ROT, f"after a reload the cut does not end on {ROT}: "
+                 f"{[(s.get('clip'), s.get('id')) for s in on]}")
+            sid = on[-1]["id"]
+            need(sid and not str(sid).startswith("tmp-"), f"the dropped shot is on disk as {sid!r}")
+            edl = self.wait_edl(lambda e: True, "the EDL cannot be read")
+            shots = ((edl.get("colour") or {}).get("shots") or {})
+            stray = [k for k in shots if str(k).startswith("tmp-")]
+            need(not stray, f"colour.shots keeps temporary keys {stray} after a reload: {shots}")
+            bal = (shots.get(sid) or {}).get("balance")
+            need(bal and bal["gain"][0] > bal["gain"][2],
+                 f"the grade set right after the drop is lost: shot {sid} has {shots.get(sid)} "
+                 f"(colour.shots keys {list(shots)})")
+            need([s["id"] for s in self.segs()] == [s["id"] for s in on],
+                 "the board's shots are not the ones on disk after a reload")
+            idx = len(on) - 1
+            pg.locator("#tl .tl-lane[data-lane=V1] .blk").nth(idx).click()
+            self.js("pauseCut && pauseCut()")
+            tab = pg.locator(".ws-tab[data-tool=inspect]")
+            if tab.count():
+                tab.click()
+            self.sel("#inspector .ec-v[data-k=temperature]", "Effect Controls shows no Temperature")
+            need(self.js("String(inspected().id)") == sid, "the click did not put the dropped shot in Effect Controls")
+            shown = pg.locator("#inspector .ec-v[data-k=temperature]").input_value()
+            try:
+                val = float("".join(ch for ch in shown if ch in "0123456789.-"))
+            except ValueError:
+                val = float("nan")
+            need(abs(val - 40) < 0.6, f"after a reload Effect Controls shows Temperature {shown!r}, not 40")
+            F["dropped"] = {"id": sid, "tmp": tmp, "balance": bal, "shown": shown}
+
+        def upright():
+            sid = F["dropped"]["id"]
+            idx = self.js(f"segs.findIndex(s => s.id === {json.dumps(sid)})")
+            need(idx >= 0, f"the dropped shot {sid} is not in the cut")
+            self.js(f"cueAt({idx}, segs[{idx}].in + 1.0)")
+            self.until(f"player.idx === {idx} && liveVideo() && liveVideo().readyState >= 2"
+                       f" && (!(window.grade && grade.ready) || grade.shot === {json.dumps(sid)})",
+                       f"the Program monitor never showed {ROT}'s frame", 90000)
+            pg.wait_for_timeout(500)
+            prog = quadrants(png_rgb(pg.locator("#player .screen").screenshot()),
+                             f"{ROT} in the Program monitor")
+            # the Source monitor, as opened from the Project panel: its proxy now
+            src = self.source_picture(f"{ROT} in the Source monitor (its proxy)")
+            F["upright"] = {"program": prog, "source": src,
+                            "program_src": self.js("liveVideo().currentSrc"),
+                            "media": self.media_kinds()}
+
+        def short_shot():
+            before = self.segs()
+            # Source still holds CLIP_R (the upright step opened it): mark 2.0 → 2.4
+            self.until(f"window.rcSource && rcSource.clip === {json.dumps(ROT)}",
+                       f"{ROT} is not in the Source monitor", 5000)
+            pg.locator("#pSource .ws-head").click()
+            for key, t in (("i", 2.0), ("o", 2.4)):
+                self.js(f"document.querySelector('#srcVideo').currentTime = {t}")
+                self.until(f"Math.abs(document.querySelector('#srcVideo').currentTime - {t}) < 0.01",
+                           f"the Source monitor did not go to {t}", 5000)
+                pg.keyboard.press(key)
+            src = self.js("({...rcSource})")
+            need(src.get("inPoint") is not None and src.get("outPoint") is not None
+                 and abs(src["outPoint"] - src["inPoint"] - 0.4) < 0.03,
+                 f"I / O in the Source monitor marked {src}, not 0.4 s")
+            # at the first cut: the short shot plays between two others
+            cut = before[0]["out"] - before[0]["in"]
+            self.js(f"tl.seek({cut})")
+            self.js("document.activeElement && document.activeElement.blur()")
+            pg.keyboard.press(",")
+            self.until(f"segs.length === {len(before) + 1}",
+                       f", did not insert the Source range ({len(before)} shots still)", 5000)
+            after = self.segs()
+            s = after[1]
+            need(s["clip"] == ROT and abs((s["out"] - s["in"]) - 0.4) < 0.03,
+                 f"the shot after the first cut is {s}, not 0.4 s of {ROT}")
+            need([x["id"] for x in after[:1] + after[2:]] == [x["id"] for x in before],
+                 "the insert moved or changed the other shots")
+            self.idle()
+            d = self.wait_disk(lambda d: len(d.get("segments", [])) == len(after)
+                           and not str(d["segments"][1].get("id", "tmp-")).startswith("tmp-")
+                           and d["segments"][1].get("clip") == ROT, "the 0.4 s shot never reached the disk")
+            # ▶ across it: shot 1's last 0.6 s, the 0.4 s shot, into shot 3
+            self.js("""() => { window.__pb = [];
+              const tick = () => { if (!window.__pb) return;
+                const m = document.querySelector('#screenMsg');
+                window.__pb.push({t: performance.now(), idx: player.idx, playing: !!player.playing,
+                                  msg: m && !m.hidden ? m.textContent : ''});
+                requestAnimationFrame(tick); };
+              requestAnimationFrame(tick); }""")
+            self.js("cueAt(0, segs[0].out - 0.6)")
+            self.until("liveVideo() && liveVideo().readyState >= 2", "the Program monitor is not ready at shot 1", 30000)
+            pg.locator("#pProgram .ws-head").click()
+            t0 = time.time()
+            pg.keyboard.press(" ")
+            self.until("player.playing", "space did not start playback", 5000)
+            self.until("player.idx >= 2 && liveVideo() && liveVideo().currentTime > segs[2].in + 0.2",
+                       "playback never got through the 0.4 s shot into the next", 15000)
+            wall = time.time() - t0
+            self.js("pauseCut && pauseCut()")
+            pb = self.js("(() => { const p = window.__pb; window.__pb = null; return p; })()")
+            order = []
+            for r in pb:
+                if r["playing"] and (not order or order[-1] != r["idx"]):
+                    order.append(r["idx"])
+            need(order[:3] == [0, 1, 2], f"playback did not go shot 1 → the 0.4 s shot → shot 3: {order}")
+            in_short = [r["t"] for r in pb if r["idx"] == 1 and r["playing"]]
+            F["short"] = {"id": d["segments"][1]["id"], "range": [s["in"], s["out"]], "wall_s": round(wall, 2),
+                          "order": order[:6],
+                          "short_on_screen_ms": round(in_short[-1] - in_short[0]) if in_short else 0,
+                          "messages": sorted({r["msg"] for r in pb if r["msg"]})}
+            need(wall < 0.6 + 0.4 + 0.2 + 4.0, f"playing 1.2 s across the short shot took {wall:.1f} s")
+
         def export():
             pg.locator("#tl .tl-ruler").click(position={"x": 2, "y": 2})   # focus off any input
             pg.keyboard.press("Control+m")
             self.sel("[data-testid=export-dialog] [data-testid=export-go]", "Ctrl+M opened no export dialog", 8000)
             need(self.js("document.querySelector('[data-testid=export-dialog]').open !== false"),
                  "the export dialog is not open")
+            # Quick 1080p, the whole sequence; the estimate is read once it is measured
+            pg.select_option("[data-testid=export-preset]", "quick")
+            self.until("document.querySelector('#exSize') &&"
+                       " document.querySelector('#exSize').dataset.source !== 'measuring'",
+                       "the size estimate never stopped measuring", 120000)
+            F["export_estimate"] = {"mb": float(pg.get_attribute("#exSize", "data-mb")),
+                                    "source": pg.get_attribute("#exSize", "data-source"),
+                                    "duration": pg.inner_text("#exDur"),
+                                    "tc_total": self.js("tl.tc(tl.total())")}
+            need(F["export_estimate"]["duration"] == F["export_estimate"]["tc_total"],
+                 f"the dialog exports {F['export_estimate']['duration']}, not the whole sequence "
+                 f"({F['export_estimate']['tc_total']})")
+            starts = self.js("(() => { let t = 0; return segs.map(s => { const a = t;"
+                             " t += (s.out - s.in) / (Number(s.speed) > 0 ? Number(s.speed) : 1);"
+                             " return {id: s.id, clip: s.clip, at: a, len: t - a}; }); })()")
+            F["export_shots"] = starts
             self.js("""() => { window.__bar = [];
               const d = document.querySelector('[data-testid=export-dialog]');
               const read = () => { const b = d.querySelector('[data-testid=export-progress]');
@@ -710,11 +1077,22 @@ class Journey:
             vd = F["ffprobe"]["video_duration"]
             need(abs(vd - want) <= frame + 1e-6,
                  f"the video stream is {vd:.3f} s, the sequence {want:.3f} s (one frame = {frame:.4f} s)")
+            # the dialog's size estimate against the file (its MB are 10^6 bytes)
+            est, real = F["export_estimate"]["mb"], path.stat().st_size / 1e6
+            F["ffprobe"]["size_vs_estimate"] = round((est - real) / real, 3)
+            need(abs(est - real) <= 0.25 * real,
+                 f"the dialog estimated {est:.3f} MB ({F['export_estimate']['source']}), "
+                 f"the file is {real:.3f} MB ({100 * (est - real) / real:+.0f} %)")
+            # CLIP_R in the film is upright too (the frame in the middle of the dropped shot)
+            shot = next(s for s in F["export_shots"] if s["id"] == F["dropped"]["id"])
+            F["ffprobe"]["rotated_frame"] = quadrants(
+                file_frame_rgb(path, shot["at"] + shot["len"] / 2), f"{ROT} in the exported file")
 
-        plan = [("open", open_board), ("firstpass", firstpass_panel), ("run", run_firstpass),
+        plan = [("open", open_board), ("preview", preview), ("firstpass", firstpass_panel), ("run", run_firstpass),
                 ("reject", reject), ("accept", accept), ("selects", selects), ("trim-out", trim(0, "out", -0.35)),
                 ("trim-in", trim(2, "in", 0.4)), ("razor", razor), ("move", move),
                 ("warmer", warmer), ("rerun-panel", rerun_panel), ("rerun-accept", rerun_accept),
+                ("drop-grade", drop_grade), ("upright", upright), ("short-shot", short_shot),
                 ("export", export), ("ffprobe", ffprobe)]
         self.planned = len(plan)
         for name, fn in plan:
@@ -763,6 +1141,12 @@ def main() -> int:
             conftest._make_clip(footage / f"{stem}.MP4")
             (sidecars / f"{stem}.audio.json").write_text(
                 json.dumps(conftest._sidecar(stem), indent=1), encoding="utf-8")
+        # the GoPro-shaped clip: HEVC 59.94, upside down under a −180° matrix, no words
+        j.facts["rotated_fixture"] = make_rotated_clip(footage / ROT, fx / "raw")
+        side = conftest._sidecar("CLIP_R")
+        side.update(duration_s=ROT_S, transcript=[], candidates=[])
+        side["summary"] = {**side["summary"], "n_words": 0, "speech_fraction": 0.0}
+        (sidecars / "CLIP_R.audio.json").write_text(json.dumps(side, indent=1), encoding="utf-8")
 
         import server
         from roughcut import config, inference
@@ -830,6 +1214,20 @@ def main() -> int:
         while any(x.get("state") == "running" for x in server.FIRSTPASS.values()) \
                 and time.time() < deadline:
             time.sleep(0.1)
+        # The board's renders list started a review copy of the export (ensure_review):
+        # wait for it rather than kill its ffmpeg half-way, which is what printed
+        # "!! review copy failed for journey.mp4" in every gate. A copy that fails on
+        # its own is a real failure and fails the journey below.
+        states = getattr(server, "REVIEW_STATE", {})
+        lock = getattr(server, "REVIEW_LOCK", threading.Lock())
+        deadline = time.time() + 180
+        while time.time() < deadline:
+            with lock:
+                review = dict(states)
+            if "building" not in review.values():
+                break
+            time.sleep(0.2)
+        j.facts["review_copies"] = review
     if srv is not None:
         srv.should_exit = True
         th.join(timeout=10)
@@ -837,7 +1235,7 @@ def main() -> int:
         mp.undo()
     j.facts["stopped_children"] = len(_stop_children())     # e.g. the export's review copy
 
-    planned = getattr(j, "planned", 15)
+    planned = getattr(j, "planned", 19)
     fail = next((s for s in j.steps if not s["ok"]), None)
     total = time.time() - t_all
     if fail:
@@ -849,6 +1247,9 @@ def main() -> int:
         line = f"journey ✗ step {len(j.steps) + 1} ?: the journey stopped after {len(j.steps)} of {planned} steps"
     elif ledger_bad:
         line = f"journey ✗ step {planned} {j.steps[-1]['name']}: a call reached a real backend ({ledger_bad[0]})"
+    elif any(v != "ready" for v in (j.facts.get("review_copies") or {}).values()):
+        name, st = next((k, v) for k, v in j.facts["review_copies"].items() if v != "ready")
+        line = f"journey ✗ step {planned} {j.steps[-1]['name']}: the review copy of {name} is {st}, not ready"
     else:
         line = f"journey ✓ {len(j.steps)} steps · {total:.0f} s"
     result.update(ok=line.startswith("journey ✓"), line=line, total_s=round(total, 1),

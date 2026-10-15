@@ -221,30 +221,56 @@ def test_value_at_and_its_expression_agree():
     assert "eval=frame" in assemble.volume_vf({"keys": {"volume_db": [[0, -3], [1, 0]]}})
 
 
-def test_the_tone_curve_is_one_documented_function():
+def test_the_tone_curve_is_grade_js_formula():
+    """KEYUI's shader (grade.js), per channel: y = x + 0.25·b·(1−x)³ + 1.5·s·x(1−x)²
+    + 1.5·h·x²(1−x) + 0.25·w·x³, after contrast, before saturation."""
     import assemble
     tc = assemble.tone_curve
     for x in (0.0, 0.3, 0.5, 0.9, 1.0):
         assert tc(x) == pytest.approx(x)                     # all zero: identity
-    # shadows and highlights leave black and white where they are
     for kw in ({"shadows": 100}, {"shadows": -100}, {"highlights": 100}, {"highlights": -100}):
         assert tc(0.0, **kw) == pytest.approx(0.0) and tc(1.0, **kw) == pytest.approx(1.0)
-    assert tc(1 / 3, shadows=100) == pytest.approx(1 / 3 + 0.10)
-    assert tc(2 / 3, highlights=-100) == pytest.approx(2 / 3 - 0.10)
-    assert tc(0.0, blacks=100) == pytest.approx(0.15) and tc(1.0, whites=-100) == pytest.approx(0.85)
-    # monotonic at every corner of the sliders
-    xs = np.linspace(0, 1, 401)
-    for s in (-100, 100):
-        for h in (-100, 100):
-            for b in (-100, 100):
-                for w in (-100, 100):
-                    ys = [tc(x, highlights=h, shadows=s, whites=w, blacks=b) for x in xs]
-                    assert all(b2 >= a2 - 1e-12 for a2, b2 in zip(ys, ys[1:])), (s, h, b, w)
-    # the render's table is that curve on limited-range luma, after contrast
-    table = assemble.luma_table({"shadows": 100})
-    for val in (16, 60, 89, 125, 200, 235):
-        want = 16 + 219 * tc((val - 16) / 219, shadows=100)
-        assert abs(table[val] - want) <= 0.5 + 1e-9, (val, table[val], want)
-    assert assemble.luma_table({"contrast": 50}) is None
-    vf = assemble.adjust_vf({"highlights": -40})
-    assert vf.startswith("lutyuv=y='if(lt(val,") and ":u=" not in vf, vf[:80]
+    assert tc(1 / 3, shadows=100) - 1 / 3 == pytest.approx(0.2222, abs=1e-4)
+    assert tc(1 / 3, shadows=-100) - 1 / 3 == pytest.approx(-0.2222, abs=1e-4)
+    assert tc(2 / 3, highlights=100) - 2 / 3 == pytest.approx(0.2222, abs=1e-4)
+    assert tc(0.0, blacks=100) == pytest.approx(0.25) and tc(1.0, whites=-100) == pytest.approx(0.75)
+    assert tc(1.4, shadows=50) == pytest.approx(1.0)        # clamped to 0..1 first
+    # the render's table: contrast, then the curve, per 8-bit channel value
+    c = {"contrast": 50, "shadows": 100}
+    table = assemble.channel_table(c)
+    for v in (0, 40, 85, 128, 200, 255):
+        y = (v / 255 - 0.5) * 1.25 + 0.5
+        want = min(255, max(0, 255 * tc(y, shadows=100)))
+        assert abs(table[v] - want) <= 0.5 + 1e-9, (v, table[v], want)
+    assert assemble.adjust_vf({"contrast": 50}).startswith("lutyuv=")      # no tone: YUV as before
+    vf = assemble.adjust_vf({"highlights": -40, "saturation": 50})
+    assert "format=gbrp,lutrgb=r='if(lt(val," in vf and "colorchannelmixer=" in vf, vf[:200]
+    assert assemble.saturation_mixer(1.0) is None
+
+
+@pytest.mark.parametrize("controls,want", [
+    ({"shadows": 100}, 1 / 3 + 0.2222), ({"shadows": -100}, 1 / 3 - 0.2222),
+    ({"highlights": 100}, 1 / 3 + 1.5 * (1 / 9) * (2 / 3)), ({"blacks": 100}, 1 / 3 + 0.25 * (8 / 27)),
+])
+def test_a_grey_at_a_third_moves_as_the_shader_says(project, tmp_path, controls, want):
+    """A flat grey at RGB 1/3 (limited Y 89) through the export: its luma is the formula's
+    value (grade.probe-equivalent maths), within 2 code values."""
+    foot = tmp_path / "footage"
+    foot.mkdir()
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-f", "lavfi", "-i",
+                    "color=c=0x555555:size=320x180:rate=24:duration=2", "-f", "lavfi", "-i",
+                    "anullsrc=r=48000:cl=stereo", "-t", "2", "-c:v", "libx264", "-pix_fmt",
+                    "yuv420p", "-color_range", "tv", "-colorspace", "bt709", "-c:a", "aac",
+                    str(foot / "GREY.MP4")], check=True, capture_output=True)
+    edl = {"variant": "G", "title": "grey", "orient": "none", "segments": [
+        {"id": "g", "clip": "GREY.MP4", "in": 0.0, "out": 1.0, "controls": controls}]}
+    src = tmp_path / "g.json"
+    src.write_text(json.dumps(edl), encoding="utf-8")
+    out = tmp_path / "g.mp4"
+    r = subprocess.run(["uv", "run", "--quiet", str(TOOLS / "assemble.py"), str(src), "--footage",
+                        str(foot), "--profile", "match", "-o", str(out)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    planes = frame(out, 0, 0.5)
+    y = planes[0][20:-20, 20:-20].mean()
+    assert abs(y - (16 + 219 * want)) <= 2.0, (controls, y, 16 + 219 * want)
+    assert abs(planes[1:].mean() - 128) < 1.5                 # a grey stays grey
