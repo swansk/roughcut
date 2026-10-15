@@ -84,3 +84,18 @@
 /* the first open's size sample, while it encodes (verdict 4, punch 6) */
 #exportDialog .ex-measuring { display: block; font-style: normal; font-weight: 400; font-size: 10.5px;
                               color: var(--dim, #94949c); }
+/* a failed export (verdict 7, blocker 2): the shot, Go to shot, Show log */
+#exportDialog .ex-fail { display: flex; flex-direction: column; gap: 6px; margin: 0 0 12px; padding: 8px 10px;
+                         border: 1px solid var(--bad, #e5636b); border-radius: 4px;
+                         background: color-mix(in srgb, var(--bad, #e5636b) 9%, transparent); }
+#exportDialog .ex-failline { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+#exportDialog .ex-bad { color: var(--bad, #e5636b); font-weight: 600; }
+#exportDialog .ex-failtc { color: var(--tc, #4a9df8); font-variant-numeric: tabular-nums; font-weight: 600; }
+#exportDialog .ex-failwhy { overflow-wrap: anywhere; }
+#exportDialog .ex-failact { display: flex; gap: 8px; }
+#exportDialog .ex-failact:empty { display: none; }
+#exportDialog .ex-log { margin: 0; max-height: 180px; overflow: auto; padding: 6px 8px; border-radius: 3px;
+                        background: var(--bg, #111112); border: 1px solid var(--line, #333337);
+                        font: 10.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+                        white-space: pre-wrap; overflow-wrap: anywhere; color: var(--dim, #94949c); }
+#exportDialog .ex-log[hidden] { display: none; }

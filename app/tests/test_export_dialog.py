@@ -279,6 +279,83 @@ def test_a_running_export_can_be_cancelled(page, project, monkeypatch):
     assert jobs and jobs[-1]["state"] == "cancelled"
 
 
+BROKEN_ASSEMBLE = """# /// script
+# requires-python = ">=3.12"
+# dependencies = ["numpy>=2", "pillow>=10"]
+# ///
+# assemble.py as it is, except that the part of every shot of CLIP_C fails in ffmpeg the
+# way verdict 7's one Opacity key did ("Invalid argument"): a forced, real part failure.
+import sys
+sys.path.insert(0, {tools!r})
+import assemble
+real = assemble.encode_part
+def encode_part(*a, **kw):
+    if kw["src"].name == "CLIP_C.MP4":
+        raise RuntimeError(f"cut failed {{kw['src'].name}} {{kw['t_in']}}-{{kw['t_out']}}: "
+                           "initializing filters\\nFailed to set value 'x' for option "
+                           "'filter_complex': Invalid argument\\n"
+                           "Error parsing global options: Invalid argument")
+    return real(*a, **kw)
+assemble.encode_part = encode_part
+raise SystemExit(assemble.main())
+"""
+
+
+def test_a_failed_export_names_the_shot_and_goes_to_it(page, project, monkeypatch, tmp_path):
+    """Verdict 7, blocker 2: a failed export said only "the render failed — see the
+    log", the log was not reachable from the dialog, and nothing said which shot. Now
+    the dialog names the shot (its number, its clip and its timecode in the sequence),
+    says ffmpeg's word on it, "Go to shot" closes the dialog, selects that shot and parks
+    the playhead on it, and "Show log" shows the render log's tail in the dialog."""
+    import server
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "assemble.py").write_text(BROKEN_ASSEMBLE.format(tools=str(server.TOOLS)),
+                                       encoding="utf-8")
+    monkeypatch.setattr(server, "TOOLS", tools)
+    page.evaluate("tl.seek(0)")
+    page.keyboard.press("Control+m")
+    wait_settings(page)
+    page.fill("[data-testid=export-name]", "broken")
+    page.fill("#exFolder", "failed")
+    page.click("[data-testid=export-go]")
+    box = page.wait_for_selector("[data-testid=export-failed]", timeout=120000)
+    # shot 3 is CLIP_C, from 8 s into the sequence (4 s + 4 s before it)
+    want_t = page.evaluate("tl.filmStart(segs[2].id)")
+    assert abs(want_t - 8.0) < 0.05, want_t
+    text = box.inner_text()
+    assert "Export failed" in text and "Shot 3" in text and "CLIP_C.MP4" in text, text
+    assert page.evaluate(f"tl.tc({want_t})") in text, text
+    assert "Invalid argument" in text, text
+    assert box.get_attribute("data-shot") == "3"
+    assert not (Path(project["work"]) / "renders" / "failed" / "broken.mp4").exists()
+    # the server's own record of it
+    job = next(j for j in server.RENDERS.values() if j.get("path", "").endswith("/broken.mp4"))
+    assert job["state"] == "failed" and job["failed_shot"]["clip"] == "CLIP_C.MP4", job.get("failed_shot")
+    assert job["detail"].startswith("shot 3 (CLIP_C.MP4 1.00–5.00 s) did not render"), job["detail"]
+    # Show log: the render log's tail, in the dialog
+    log = page.locator("[data-testid=export-log]")
+    assert not log.is_visible()
+    page.click("[data-testid=export-show-log]")
+    assert log.is_visible()
+    assert "cut failed CLIP_C.MP4" in log.inner_text() and "Invalid argument" in log.inner_text()
+    page.click("[data-testid=export-show-log]")
+    assert not log.is_visible()
+    # the settings it was asked with are still there: change something and export again
+    assert page.input_value("[data-testid=export-name]") == "broken"
+    assert page.input_value("#exFolder") == "failed"
+    tail = log.text_content()
+    assert "Invalid argument" in tail and "Traceback" not in tail and 'File "' not in tail, tail
+    page.wait_for_function("!document.querySelector('[data-testid=export-go]').disabled",
+                           timeout=120000)          # (once the size sample has landed)
+    # Go to shot: the dialog closes, shot 3 is selected and the playhead is on it
+    page.click("[data-testid=export-goto-shot]")
+    page.wait_for_function("!document.getElementById('exportDialog').open", timeout=3000)
+    assert page.evaluate("[...tl.state.sel]") == [page.evaluate("segs[2].id")]
+    assert abs(page.evaluate("tl.state.playhead") - want_t) < 0.05
+    page.wait_for_function("document.querySelector('#tl .blk.sel') !== null", timeout=3000)
+
+
 def test_the_name_and_folder_cannot_leave_the_renders_folder(page, project):
     """A name or folder with separators or `..` is one sanitised path component each."""
     import server

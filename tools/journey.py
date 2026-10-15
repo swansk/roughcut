@@ -46,10 +46,15 @@ The steps, each one a screenshot at 1440×900 in `<out dir>/NN-step.png`:
   17 short-shot     a 0.4 s range of CLIP_R marked I / O in the Source monitor and inserted
                     with `,` at the first cut; ▶ from 0.6 s before it plays through it into
                     the next shot
-  18 export         Ctrl+M → Quick 1080p, the whole sequence; the size estimate settles
-                    (no "measuring…"); export-go, export-progress → 100, export-done
-  19 ffprobe        the file's duration is within one frame of tl.total(); its size within
-                    ±25 % of the dialog's estimate; CLIP_R's frame in it is upright
+  18 opacity-key    one click on Opacity's stopwatch on the first shot (Premiere's "start
+                    animating"): ONE key, on disk — and the export below carries it
+                    (verdict 7, blocker 2: one such key made every export fail)
+  19 export         Ctrl+M → Quick 1080p, the whole sequence; the size estimate settles
+                    (no "measuring…"); export-go, export-progress → 100, export-done; a
+                    failed export fails the step at once with the shot the dialog names
+  20 ffprobe        the file's duration is within one frame of tl.total(); its size within
+                    ±25 % of the dialog's estimate; CLIP_R's frame in it is upright; the
+                    keyed shot's frame is the shot at 100 %, not black
 
 After the browser closes, the review copy the board started for the export is waited
 for (not killed half-made, which printed "!! review copy failed"); a copy that failed
@@ -1003,6 +1008,33 @@ class Journey:
                           "messages": sorted({r["msg"] for r in pb if r["msg"]})}
             need(wall < 0.6 + 0.4 + 0.2 + 4.0, f"playing 1.2 s across the short shot took {wall:.1f} s")
 
+        def opacity_key():
+            idx = 0
+            sid = self.js("segs[0].id")
+            pg.locator("#tl .tl-lane[data-lane=V1] .blk").nth(idx).click()
+            self.js("pauseCut && pauseCut()")
+            need(self.js("tl.state.sel.has(" + json.dumps(sid) + ")"), "the click did not select shot 1")
+            # the playhead half a second into the shot: the key lands there
+            self.js("tl.seek(tl.filmStart(segs[0].id) + 0.5)")
+            tab = pg.locator(".ws-tab[data-tool=inspect]")
+            need(tab.count() == 1, "no Effect Controls tab")
+            tab.click()
+            sw = pg.locator("#inspector .ec-sw[data-sw=opacity]")
+            self.sel("#inspector .ec-sw[data-sw=opacity]", "Effect Controls shows no Opacity stopwatch")
+            sw.click()
+            self.until("(() => { const c = segs[0].controls; return !!(c && c.keys && c.keys.opacity"
+                       " && c.keys.opacity.length === 1); })()",
+                       "one click on Opacity's stopwatch did not make one key", 5000)
+            need(sw.get_attribute("aria-pressed") == "true", "the Opacity stopwatch is not on")
+            self.wait_saved()
+            d = self.wait_disk(lambda d: len(((((d.get("segments") or [{}])[0].get("controls") or {})
+                                               .get("keys") or {}).get("opacity") or [])) == 1,
+                               "the one Opacity key never reached the disk")
+            key = d["segments"][0]["controls"]["keys"]["opacity"]
+            need(abs(key[0][1] - 100) < 1e-6, f"the stopwatch keyed {key}, not the shot's 100 %")
+            F["opacity_key"] = {"id": sid, "keys": key}
+            pg.keyboard.press("Escape")
+
         def export():
             pg.locator("#tl .tl-ruler").click(position={"x": 2, "y": 2})   # focus off any input
             pg.keyboard.press("Control+m")
@@ -1035,8 +1067,15 @@ class Journey:
             pg.click("[data-testid=export-go]")
             self.sel("[data-testid=export-progress]", "Export showed no progress bar")
             self.until("(() => { const b = document.querySelector('[data-testid=export-progress]');"
-                       " return b && Number(b.getAttribute('aria-valuenow')) >= 100; })()",
+                       " return !!document.querySelector('[data-testid=export-failed]')"
+                       " || (b && Number(b.getAttribute('aria-valuenow')) >= 100); })()",
                        "the export never reached 100 %", 300000)
+            failed = pg.locator("[data-testid=export-failed]")
+            if failed.count():
+                need(False, "the export failed: " + " ".join(failed.inner_text().split())[:300])
+            failed_old = self.js("(() => { const n = document.querySelector('#exNote');"
+                                 " return n && /failed/i.test(n.textContent) ? n.textContent : ''; })()")
+            need(not failed_old, f"the export failed: {failed_old}")
             self.sel("[data-testid=export-done][data-path]", "the export reached 100 % but never said where the file is", 30000)
             bar = self.js("window.__bar")
             need(bar == sorted(bar), f"the export bar went backwards: {bar}")
@@ -1087,13 +1126,19 @@ class Journey:
             shot = next(s for s in F["export_shots"] if s["id"] == F["dropped"]["id"])
             F["ffprobe"]["rotated_frame"] = quadrants(
                 file_frame_rgb(path, shot["at"] + shot["len"] / 2), f"{ROT} in the exported file")
+            # the shot with one Opacity key (at 100 %) is itself, not dimmed toward black
+            keyed = next(s for s in F["export_shots"] if s["id"] == F["opacity_key"]["id"])
+            rgb = file_frame_rgb(path, keyed["at"] + min(1.0, keyed["len"] / 2))
+            F["ffprobe"]["keyed_shot_mean"] = round(float(rgb.mean()), 1)
+            need(rgb.mean() > 40, f"the shot with one Opacity key at 100 % is dark in the file "
+                                  f"(mean {rgb.mean():.1f})")
 
         plan = [("open", open_board), ("preview", preview), ("firstpass", firstpass_panel), ("run", run_firstpass),
                 ("reject", reject), ("accept", accept), ("selects", selects), ("trim-out", trim(0, "out", -0.35)),
                 ("trim-in", trim(2, "in", 0.4)), ("razor", razor), ("move", move),
                 ("warmer", warmer), ("rerun-panel", rerun_panel), ("rerun-accept", rerun_accept),
                 ("drop-grade", drop_grade), ("upright", upright), ("short-shot", short_shot),
-                ("export", export), ("ffprobe", ffprobe)]
+                ("opacity-key", opacity_key), ("export", export), ("ffprobe", ffprobe)]
         self.planned = len(plan)
         for name, fn in plan:
             if not self.step(name, fn):
