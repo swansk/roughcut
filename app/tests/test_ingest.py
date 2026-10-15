@@ -303,7 +303,8 @@ def test_a_cold_land_reads_the_folder_and_shows_a_picture(live_server, ingest_bi
     assert pg.locator("#tlEmpty [data-testid=firstpass-empty-timeline]").count() == 1
     assert pg.locator("#tlEmpty a").count() == 0
     assert "press ," in pg.locator("#progEmpty").inner_text()
-    assert pg.locator("#progEmpty [data-testid=firstpass-empty-program]").count() == 1
+    # the Program offers no copy since wave 6 (verdict 5 punch 9): header + Timeline only
+    assert pg.locator("#progEmpty [data-testid=firstpass-empty-program]").count() == 0
     assert pg.url.rstrip("/") == live_server.rstrip("/")
     assert pg.errors == []
     pg.context.close()

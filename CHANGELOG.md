@@ -10,6 +10,9 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **`test_ingest`'s cold-land test expects no Program copy of Run first pass**, which the lead's `1d48347` removed (the wave-6 gate found it broken).
+
+### Fixed
 - **`test_highlights_and_shadows_move_the_preview_pixels` waits for the redraw it measures.** Effect Controls redraws on the next animation frame (`effects.drawSoon` -> `grade.draw`, i.e. `settle()`, which turns the canvas on); the test probed in the same task and read the raw frame (PLAYBACK saw it fail 7 of 8 on the base). Instrumented: the preview is right 50 ms after the change (shadows +100 lifts the mean ~5 levels). Product unchanged; 5/5 now.
 
 ### Docs
