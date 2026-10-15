@@ -258,6 +258,9 @@ def fp(tmp_path, project, monkeypatch, model):
         _stub_tools(server, monkeypatch, tmp_path)
         monkeypatch.setattr(server, "FIRSTPASS_POLL_S", 0.05)
         server.FIRSTPASS.clear()
+        # index jobs another file cancelled (test_firstpass_ui) stay in INDEXES and made a
+        # re-run here wait on them: this test failed only when that file ran first (REVIEW)
+        server.INDEXES.clear()
         yield c
         _end_jobs(server, model)
     server.FIRSTPASS.clear()

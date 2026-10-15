@@ -49,6 +49,14 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-15 15:10: **wave 4 merged**: RERUN `3349be3`, PICKS2 `bca9671`+`5bcdf33` (journey 15 steps), EXPORTSTOP `e1a3b2e`
+  (+ lead `51cc176` bed bitrate), POLISH `5c322bf`, PERF `5f5a309` (+ lead `e8a1484` poster test), LAYOUT `7907718`,
+  REVIEW `ad00a46` (+ lead: fp fixture clears INDEXES). Wave-5 queue adds: the double save (acceptProposal saves, then
+  tl.commit's touch() saves again 700 ms later: re-mints tmp ids, races external PUTs); empty sequence + proposal: collapse
+  V1 or draw the ghost in V1's row, Program shows the proposal's first frame; pick markers sit over the ghosts' name band;
+  timeline.js should export its row weights so the ghost height can't drift; test_perf_latency's 100 ms gap limit is
+  marginal on a loaded box with either layout (LAYOUT: 116.7/100.1 ms; base 133.2/100.1) — consider capping the grade
+  canvas's drawn size. Full gate next, then judge 5.
 - 2026-10-15 14:10: PERF merged (`5f5a309`; 4.3 -> 23-28 fps, cut hole 817 -> 17-50 ms under load; 59.94 proxies at
   29.97, `PROXY_V` v2, old proxies left on disk to delete by hand). Queued for wave 5: timeline.js `onScreen()` /
   `keepInView` read layout per block after style writes (~16 ms per tl.render under load): read once per render or cache the
