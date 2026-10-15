@@ -37,6 +37,17 @@ PLAN = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _no_proposal_left_behind(live_server):
+    """The waiting proposal is an Ask record in the session project's work dir: left
+    there, every later module's board would open on it (as test_proposal_review's
+    tests, each test takes its record away)."""
+    yield
+    import server
+    for rec in server.STATE["asks"].glob("ch-*.json"):
+        rec.unlink(missing_ok=True)
+
+
 def _pending(browser, live_server, project, job="ch-first"):
     _seed(project, [])
     _waiting(job, PLAN)
