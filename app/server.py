@@ -4562,6 +4562,20 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
             except (OSError, ValueError, journal.JournalError) as exc:
                 entry.note(f"junk check skipped: {str(exc)[:80]}")
             coarse = bool(entry.get("coarse"))
+            # The cut's clips take the proxy pool first, in film order (verdict 5 punch 2:
+            # the Program shows a 360p preview until a clip's 720p proxy lands) — once the
+            # first pass's coarse tier, what its proposal waits on, is through.
+            pick = _cut_proxy_next(j) if not coarse or j.coarse_ready() else None
+            if pick is not None:
+                try:
+                    j.start(pick, "proxy", coarse=coarse)
+                except journal.JournalError:
+                    pick = None
+            if pick is not None:
+                report(f"{Path(pick).stem} · proxy (in the cut)")
+                th = threading.Thread(target=work, args=(pick, "proxy"), daemon=True)
+                running[(pick, "proxy")] = th
+                th.start()
             while True:
                 nxt = j.next(coarse=coarse)
                 if nxt is None:
@@ -6472,14 +6486,73 @@ def want_media(stem: str) -> None:
 
 
 def first_wanted(pending: list[str]) -> str:
-    """The pending clip the human asked for most recently, else the first in order."""
+    """The pending clip the human asked for most recently, else the first the cut plays
+    (`cut_clips`), else the first in order."""
     with MEDIA["lock"]:
         wanted = list(MEDIA["wanted"])
     by_stem = {Path(c).stem: c for c in pending}
     for stem in wanted:
         if stem in by_stem:
             return by_stem[stem]
+    for clip in cut_clips():
+        if Path(clip).stem in by_stem:
+            return by_stem[Path(clip).stem]
     return pending[0]
+
+
+def cut_clips() -> list[str]:
+    """The clips the cut plays, each once, in the order the Program meets them: V1's
+    shots, then V2+ and A3+, then a proposal nobody has answered yet (the first pass's
+    cut before its Accept). Their proxies and previews are built before the rest of the
+    bin's (verdict 5 punch 2: the Program showed the soft 360p preview for the first
+    ~90 minutes of a Killington project, the bin's proxies going in priority order)."""
+    out: list[str] = []
+
+    def add(c) -> None:
+        if isinstance(c, str) and c and c not in out:
+            out.append(c)
+
+    try:
+        edl = read_edl()
+    except Exception:  # noqa: BLE001 — no cut yet is an empty list, not an error
+        edl = {}
+    for key in ("segments", "overlays", "audio"):
+        for s in edl.get(key) or []:
+            if isinstance(s, dict):
+                add(s.get("clip"))
+    try:
+        recs = _ask_records(newest=1)
+    except Exception:  # noqa: BLE001
+        recs = []
+    for rec in recs:
+        if not rec.get("answered"):
+            for s in (rec.get("plan") or {}).get("segments") or []:
+                if isinstance(s, dict):
+                    add(s.get("clip"))
+    return out
+
+
+def _cut_proxy_next(j: journal.Journal) -> str | None:
+    """A clip the cut plays whose proxy stage could start now (the journal's own rules:
+    the proxy pool has a free worker, the stage is queued or retryable and out of its
+    backoff, the probe is settled, the clip is neither parked nor missing), or None."""
+    kind = journal.KIND["proxy"]
+    if sum(1 for _c, s in j.running() if journal.KIND[s] == kind) >= int(j.workers.get(kind, 1)):
+        return None
+    now = time.time()
+    for clip in cut_clips():
+        rec = j.clips.get(clip)
+        if not rec or rec.get("missing") or rec.get("parked"):
+            continue
+        st = rec["stages"]["proxy"]
+        if st["state"] not in journal.RETRYABLE:
+            continue
+        if st.get("not_before") and float(st["not_before"]) > now:
+            continue
+        if any(rec["stages"][d]["state"] not in journal.SETTLED for d in journal.DEPENDS["proxy"]):
+            continue
+        return clip
+    return None
 
 
 def _rate(s: str | None) -> float | None:

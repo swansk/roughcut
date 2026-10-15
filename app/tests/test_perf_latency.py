@@ -15,11 +15,19 @@ Killington slow and the three-clip suite fixture does not:
   * CPU burners: `ROUGHCUT_PERF_BURNERS` children (default: one per core) spinning
     `while 1: pass` for the whole measurement, started and stopped by the test
 
+  * a 0.4 s shot between the two 59.94 shots (verdict 5: a 12-frame Killington shot held
+    a black "buffering…" for 400-483 ms at 1920)
+
 and measures, inside the page:
 
-  play     `requestVideoFrameCallback` on both buffers while playing from 1.2 s before a
-           cut to ~1.3 s after it; the longest gap between frames the LIVE buffer
-           presented (the parked buffer's seek frames are not on screen and do not count)
+  play     `requestVideoFrameCallback` on both buffers while playing from 1.2 s before the
+           first cut, through the 0.4 s shot and the second cut, to ~1.3 s after it; the
+           longest gap between frames the LIVE buffer presented (the parked buffer's seek
+           frames are not on screen and do not count), ≤ 67 ms (two frame periods at
+           29.97); and on every animation frame, that the live buffer has a picture and
+           no "buffering…" / wait line is on the Program
+  seek     `tl.seek(t)` → the live buffer presents the frame at t, six seeks inside a
+           shot, into the next, onto the other clip and back: median ≤ 250 ms, max ≤ 400
   set      `effects.set(k, v)` → the second animation frame after it
   click    mousedown on a V1 block → Effect Controls says that shot, one frame later
   keys     ↓ / ↑ keydown → the playhead moved, two frames later
@@ -48,6 +56,12 @@ playwright_api = pytest.importorskip("playwright.sync_api",
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 LIMIT_MS = 100
+# Verdict 5 (punch 2): "no visible gap" is two frame periods at 29.97, not three; a seek
+# shows its frame within 250 ms (median) and never takes more than 400.
+GAP_LIMIT_MS = 67
+SEEK_MEDIAN_MS = 250
+SEEK_MAX_MS = 400
+SHORT_S = 0.4                 # the sub-second shot between the two cuts (Killington's 12 frames)
 CLIP_S = 8.0
 FPS = "60000/1001"
 STEMS = ["P60_A", "P60_B"]
@@ -85,7 +99,8 @@ def perf_project(tmp_path_factory):
         (sidecars / f"{stem}.audio.json").write_text(json.dumps(side), encoding="utf-8")
     segs = [
         {"clip": "P60_A.MP4", "in": 1.0, "out": 4.0, "why": "one", "id": "s1"},
-        {"clip": "P60_B.MP4", "in": 1.0, "out": 4.0, "why": "two", "id": "s2"},
+        # verdict 5: a 12-frame shot held a black "buffering…" for 400-483 ms at 1920
+        {"clip": "P60_B.MP4", "in": 1.0, "out": 1.0 + SHORT_S, "why": "two", "id": "s2"},
         {"clip": "P60_A.MP4", "in": 5.0, "out": 7.0, "why": "three", "id": "s3"},
         {"clip": "P60_B.MP4", "in": 5.0, "out": 7.0, "why": "four", "id": "s4"},
     ]
@@ -172,7 +187,9 @@ def _too_busy() -> str | None:
 # ---------------------------------------------------------------- the four measurements
 
 def measure_play(page) -> dict:
-    """Play from 1.2 s before the cut between shot 1 and 2, log the live buffer's frames."""
+    """Play from 1.2 s before the cut into the 0.4 s shot 2, through it and the cut into
+    shot 3, to ~1.3 s after that; log the live buffer's frames, and on every animation
+    frame what the screen shows: a live buffer with a picture, and no wait text on it."""
     page.evaluate("cueAt(0, segs[0].out - 1.2)")
     page.wait_for_function(
         "liveVideo() && liveVideo().readyState >= 3 && !liveVideo().seeking"
@@ -180,7 +197,7 @@ def measure_play(page) -> dict:
         timeout=20000)
     page.wait_for_timeout(500)
     page.evaluate("""() => {
-      window.__fl = []; window.__flOn = true;
+      window.__fl = []; window.__flOn = true; window.__scr = [];
       const t0 = performance.now();
       window.__fl0 = t0;
       player.vids.forEach((v) => {
@@ -192,26 +209,103 @@ def measure_play(page) -> dict:
         };
         v.requestVideoFrameCallback(cb);
       });
+      // what a person sees, every frame: a live <video> holding a picture, and no
+      // "buffering…" / "opening…" over it (verdict 5's black hold at the 12-frame shot)
+      const shown = (el) => !!el && !el.hidden && getComputedStyle(el).display !== 'none'
+        && el.getBoundingClientRect().width > 0;
+      const look = () => {
+        if (!window.__flOn) return;
+        if (player.playing) {
+          const lv = document.querySelector('#player .screen video.live');
+          const words = [...document.querySelectorAll('#screenMsg, #monWait')]
+            .filter(shown).map((el) => el.textContent.trim()).filter(Boolean);
+          const bad = !lv || lv.readyState < 2 || words.length > 0
+            || /buffering/i.test(document.querySelector('#player').innerText);
+          if (bad) window.__scr.push({ t: performance.now() - t0, live: lv ? lv.id : null,
+                                       rs: lv ? lv.readyState : null, words });
+        }
+        requestAnimationFrame(look);
+      };
+      requestAnimationFrame(look);
     }""")
     page.keyboard.press("Space")
-    page.wait_for_timeout(2500)
+    page.wait_for_timeout(int((1.2 + SHORT_S + 1.3) * 1000))
     page.keyboard.press("Space")
     page.evaluate("window.__flOn = false")
     log = page.evaluate("window.__fl")
+    screen = page.evaluate("window.__scr")
     live = [f for f in log if f["live"]]
     live.sort(key=lambda f: f["t"])
     gaps = [(live[i]["t"] - live[i - 1]["t"], live[i - 1], live[i]) for i in range(1, len(live))]
     worst = max(gaps, key=lambda g: g[0]) if gaps else (None, None, None)
-    switch = next((g for g in gaps if g[1]["v"] != g[2]["v"]), (None, None, None))
+    switches = [g for g in gaps if g[1]["v"] != g[2]["v"]]
     span = (live[-1]["t"] - live[0]["t"]) if len(live) > 1 else 0
     return {
         "frames": len(live),
         "fps": round((len(live) - 1) / (span / 1000), 1) if span else 0,
         "longest_gap_ms": round(worst[0], 1) if worst[0] is not None else None,
-        "longest_at": [worst[1] and worst[1]["v"], worst[2] and worst[2]["v"]],
-        "cut_gap_ms": round(switch[0], 1) if switch[0] is not None else None,
-        "switched": switch[0] is not None,
+        "longest_at": [worst[1] and worst[1]["v"], worst[2] and worst[2]["v"],
+                       worst[1] and round(worst[1]["t"]), worst[1] and worst[1]["mt"]],
+        "cut_gaps_ms": [round(g[0], 1) for g in switches],
+        "cuts": len(switches),
+        "screen_bad": screen[:8],
+        "screen_bad_n": len(screen),
+        "roll": page.evaluate("typeof roll === 'object' ? { ...roll } : null"),
+        "cut_log": page.evaluate("(player.cutLog || []).map(({ t, ...c }) => c)"),
     }
+
+
+def measure_seeks(page) -> list[float]:
+    """Seek → the Program presents the frame: `tl.seek(t)` (a click on the ruler) to the
+    first frame the LIVE buffer presents at that clip time. Inside a shot, into the next
+    one, onto another clip, back again: what an editor's clicks do."""
+    page.evaluate("pauseCut()")
+    page.evaluate("document.activeElement && document.activeElement.blur()")
+    out = []
+    # film times: shot 1 (A 1-4), shot 3 (A 5-7), shot 4 (B 5-7), shot 1, shot 2 (B), shot 4
+    for frac in [(0, 0.8), (2, 0.6), (3, 0.5), (0, 0.3), (1, 0.2), (3, 1.4)]:
+        ms = page.evaluate("""async ([i, off]) => {
+          const t = filmStart(i) + off;             // app.js: film seconds where shot i starts
+          const want = segs[i].in + off * (segs[i].speed || 1);
+          // On screen = the buffer marked live is presenting the frame at `want`: it has
+          // called back with that frame (a parked buffer may decode it off screen) and
+          // is not seeking anywhere else.
+          return await new Promise((res) => {
+            let done = false;
+            const t0 = performance.now();
+            const got = new Set(), seen = [];
+            player.vids.forEach((v) => {
+              const cb = (now, md) => {
+                if (done) return;
+                seen.push([v.id, v.classList.contains('live'), md.mediaTime]);
+                if (Math.abs(md.mediaTime - want) < 0.05) got.add(v); else got.delete(v);
+                v.requestVideoFrameCallback(cb);
+              };
+              v.requestVideoFrameCallback(cb);
+            });
+            const look = () => {
+              if (done) return;
+              const lv = document.querySelector('#player .screen video.live');
+              if (lv && got.has(lv) && !lv.seeking && Math.abs(lv.currentTime - want) < 0.05) {
+                done = true; res(performance.now() - t0); return;
+              }
+              if (performance.now() - t0 > 5000) {
+                done = true;
+                res(JSON.stringify({ want, t, seen, live: lv && lv.id, ct: lv && lv.currentTime }));
+                return;
+              }
+              requestAnimationFrame(look);
+            };
+            tl.seek(t);
+            requestAnimationFrame(look);
+          });
+        }""", list(frac))
+        if isinstance(ms, str):
+            print("SEEK no frame in 5 s:", ms, flush=True)   # what the buffers presented
+            ms = 5000
+        out.append(round(ms, 1))
+        page.wait_for_timeout(500)
+    return out
 
 
 def measure_set(page) -> list[float]:
@@ -338,6 +432,7 @@ def test_latency_under_load(live_server):
                 facts["set"] = measure_set(page)
                 facts["click"] = measure_click(page)
                 facts["keys"] = measure_keys(page)
+                facts["seek"] = measure_seeks(page)
                 facts["load_end"] = _load()
             print("\nPERF", json.dumps(facts), flush=True)
             out = os.environ.get("ROUGHCUT_PERF_LOG")
@@ -348,9 +443,13 @@ def test_latency_under_load(live_server):
             browser.close()
 
     play = facts["play"]
-    assert play["switched"], f"the monitor never cut to shot 2: {play}"
+    assert play["cuts"] >= 2, f"the monitor did not cut to shot 2 and then shot 3: {play}"
     assert facts["grade_on"], "the grade canvas was off: the fixture no longer exercises it"
-    assert play["longest_gap_ms"] <= LIMIT_MS, f"frame gap across the cut: {play}"
+    assert play["screen_bad_n"] == 0, f"black or a wait line on screen during play: {play}"
+    assert play["longest_gap_ms"] <= GAP_LIMIT_MS, f"frame gap across the two cuts: {play}"
+    seeks = facts["seek"]
+    assert statistics.median(seeks) <= SEEK_MEDIAN_MS, f"seek → frame: {seeks}"
+    assert max(seeks) <= SEEK_MAX_MS, f"seek → frame: {seeks}"
     # The interaction numbers: the median must be under the line and no single one may
     # be more than half again over it (one scheduler hiccup on a box at 3x its cores).
     for k in ("set", "click", "keys"):
