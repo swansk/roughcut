@@ -1010,7 +1010,9 @@
   function insertAt(shot, beforeId) {
     if (!shot || !shot.clip || !(shot.end > shot.start)) return null;
     tl.begin('insert');
-    const id = tl.insert({ clip: shot.clip, in: round2(shot.start), out: round2(shot.end), why: shot.why || '' }, null);
+    // the range as it came (tl.insert puts it on the grid and inside the clip's media);
+    // rounding it to 0.01 first moved a whole clip's end past its last frame (verdict 7)
+    const id = tl.insert({ clip: shot.clip, in: Number(shot.start), out: Number(shot.end), why: shot.why || '' }, null);
     if (id != null && beforeId != null) tl.move([id], beforeId);
     tl.commit();
     const toast = fn('toast');
