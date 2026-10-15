@@ -293,7 +293,7 @@
 
     /* Draw `src` (a <video> or a VideoFrame, sw×sh) at w×h through the LUT `key` (made
      * from n/data when this renderer has not seen it) with the live preview's `adj`. */
-    function render(src, sw, sh, w, h, key, n, data, adj, parkedKey) {
+    function render(src, sw, sh, w, h, key, n, data, adj, parkedKey, mix) {
       if (canvas.width !== w || canvas.height !== h) {
         canvas.width = w;
         canvas.height = h;
@@ -315,7 +315,35 @@
       gl.uniform4f(U.u_tone, tone[0], tone[1], tone[2], tone[3]);
       gl.uniform1f(U.u_toneOn, tone.some((x) => x !== 0) ? 1 : 0);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      if (mix && mix.w > 0) drawMix(mix, w, h);
       return true;
+    }
+
+    /* A transition's other shot (app.js programMix, verdict 6 punch 6): its frame through
+     * ITS OWN LUT, laid over the picture just drawn at constant alpha w — a Cross
+     * Dissolve of the two graded pictures, as the render mixes them. */
+    function drawMix(mix, w, h) {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, texVideo);
+      if (!upload(mix.src, mix.sw, mix.sh, w, h, null)) return;
+      frameKey = null;                       // the texture holds the other frame now
+      if (!lut(mix.key, mix.n, mix.data)) return;
+      current = mix.key;
+      gl.uniform1f(U.u_n, mix.n);
+      const a = mix.adj || NO_ADJUST;          // its Lumetri contrast, tone, saturation
+      gl.uniform3f(U.u_pre, 1, 1, 1);
+      gl.uniform1f(U.u_con, a.con);
+      gl.uniform1f(U.u_sat, a.sat);
+      gl.uniform1f(U.u_knee, 1);
+      gl.uniform1f(U.u_lift, 0);
+      const tone = a.tone || NO_TONE;
+      gl.uniform4f(U.u_tone, tone[0], tone[1], tone[2], tone[3]);
+      gl.uniform1f(U.u_toneOn, tone.some((x) => x !== 0) ? 1 : 0);
+      gl.enable(gl.BLEND);
+      gl.blendColor(0, 0, 0, Math.max(0, Math.min(1, mix.w)));
+      gl.blendFunc(gl.CONSTANT_ALPHA, gl.ONE_MINUS_CONSTANT_ALPHA);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.disable(gl.BLEND);
     }
 
     /* The mean [r, g, b] of what was just drawn (same task: no preserved buffer). */
@@ -349,9 +377,9 @@ onmessage = (e) => {
     return;
   }
   if (m.t === 'frame') {
-    try { if (R) R.render(m.frame, m.sw, m.sh, m.w, m.h, m.key, m.n, m.data, m.adj, null); }
+    try { if (R) R.render(m.frame, m.sw, m.sh, m.w, m.h, m.key, m.n, m.data, m.adj, null, m.mix); }
     catch (err) { /* a frame that will not draw: the next one will */ }
-    finally { m.frame.close(); }
+    finally { m.frame.close(); if (m.mix) m.mix.src.close(); }
     postMessage({ t: 'drawn' });
     return;
   }
@@ -384,6 +412,7 @@ onmessage = (e) => {
     drawReq: 0,              // the pending coalesced draw (drawSoon), a rAF id
     draws: 0,                // frames drawn (tests read it)
     box: { w: 0, h: 0 },     // the monitor's box (ResizeObserver), CSS px
+    mix: null,               // a transition's other shot: {video, id, w, rec} (setMix)
   };
 
   function $(s) { return document.querySelector(s); }
@@ -445,7 +474,8 @@ onmessage = (e) => {
   function job(raw) {
     const v = live();
     const adj = raw ? null : adjustNow();
-    if (!raw && (!G.ok || !G.enabled || !G.lut || (G.lut.identity && !adj))) return null;
+    const mixGraded = mixIsGraded();
+    if (!raw && (!G.ok || !G.enabled || !G.lut || (G.lut.identity && !adj && !mixGraded))) return null;
     if (!G.ok || !v || v.readyState < 2) return null;
     const vw = v.videoWidth, vh = v.videoHeight;
     if (!vw || !vh) return null;
@@ -453,11 +483,17 @@ onmessage = (e) => {
     const rec = raw || G.lut.identity ? IDENTITY_TABLE : G.lut;
     const parked = v.paused && !v.seeking
       ? `${v.id}|${v.currentSrc}|${v.currentTime}|${w}x${h}` : null;
-    return { v, vw, vh, w, h, rec, adj, parked };
+    const m = G.mix;
+    const mix = m && m.rec && m.w > 0 && m.video.readyState >= 2 && m.video.videoWidth
+      ? { src: m.video, sw: m.video.videoWidth, sh: m.video.videoHeight,
+          key: m.rec.identity ? IDENTITY_TABLE.key : m.rec.key, n: m.rec.identity ? IDENTITY_TABLE.n : m.rec.n,
+          data: m.rec.identity ? IDENTITY_TABLE.data : m.rec.data, w: m.w, adj: mixAdjust() }
+      : null;
+    return { v, vw, vh, w, h, rec, adj, parked: mix ? null : parked, mix };
   }
 
   function drawOn(R, j) {
-    return R.render(j.v, j.vw, j.vh, j.w, j.h, j.rec.key, j.rec.n, j.rec.data, j.adj, j.parked);
+    return R.render(j.v, j.vw, j.vh, j.w, j.h, j.rec.key, j.rec.n, j.rec.data, j.adj, j.parked, j.mix);
   }
 
   /* Draw the live video's current frame through the LUT. */
@@ -475,11 +511,18 @@ onmessage = (e) => {
     let frame;
     try { frame = new VideoFrame(j.v, { timestamp: Math.round((j.v.currentTime || 0) * 1e6) }); }
     catch (e) { return; }                       // no frame to take yet: the next one
+    let mix = null;
+    if (j.mix) {
+      try {
+        const f = new VideoFrame(j.mix.src, { timestamp: Math.round((j.mix.src.currentTime || 0) * 1e6) });
+        mix = { ...j.mix, src: f, sw: f.displayWidth, sh: f.displayHeight };
+      } catch (e) { mix = null; }
+    }
     const m = { t: 'frame', frame, sw: frame.displayWidth, sh: frame.displayHeight,
-                w: j.w, h: j.h, rec: j.rec, adj: j.adj };
+                w: j.w, h: j.h, rec: j.rec, adj: j.adj, mix };
     // a worker that never answered (it died) does not hold the picture for good
     if (G.inflight && performance.now() - G.sentAt < 1000) {
-      if (G.pending) G.pending.frame.close();
+      if (G.pending) { G.pending.frame.close(); if (G.pending.mix) G.pending.mix.src.close(); }
       G.pending = m;
       return;
     }
@@ -490,12 +533,16 @@ onmessage = (e) => {
     const rec = m.rec;
     const msg = { t: 'frame', frame: m.frame, sw: m.sw, sh: m.sh, w: m.w, h: m.h,
                   key: rec.key, n: rec.n, data: rec.key !== G.sentKey ? rec.data : null,
-                  adj: m.adj ? JSON.parse(JSON.stringify(m.adj)) : null };
+                  adj: m.adj ? JSON.parse(JSON.stringify(m.adj)) : null, mix: m.mix || null };
     G.sentKey = rec.key;
     G.inflight = true;
     G.sentAt = performance.now();
-    try { G.worker.postMessage(msg, [m.frame]); }
-    catch (e) { G.inflight = false; try { m.frame.close(); } catch (e2) { /* gone */ } return; }
+    try { G.worker.postMessage(msg, m.mix ? [m.frame, m.mix.src] : [m.frame]); }
+    catch (e) {
+      G.inflight = false;
+      try { m.frame.close(); if (m.mix) m.mix.src.close(); } catch (e2) { /* gone */ }
+      return;
+    }
     G.draws++;
   }
 
@@ -576,12 +623,18 @@ onmessage = (e) => {
 
   function show(on) {
     if (!G.canvas) return;
+    const was = G.canvas.classList.contains('on');
     G.canvas.classList.toggle('on', !!on);
+    // a transition's layer is the page's while the canvas is off, the canvas's while it
+    // is on (setMix): the page is told when that flips under it (a cut's LUT landing)
+    if (was !== !!on && G.mix && typeof G.mix.onChange === 'function') setTimeout(G.mix.onChange, 0);
   }
 
   /* Whether the canvas should be visible right now, and make it so. */
   function settle() {
-    const on = !!(G.ok && G.enabled && G.lut && (!G.lut.identity || adjustNow()) && live());
+    const mixGraded = mixIsGraded();
+    const on = !!(G.ok && G.enabled && live()
+      && ((G.lut && (!G.lut.identity || adjustNow())) || (mixGraded && G.lut)));
     show(on);
     if (on) draw();
   }
@@ -709,6 +762,53 @@ onmessage = (e) => {
     });
   }
 
+  /* The transition's other shot's Lumetri (contrast, tone, saturation: never baked in its
+   * LUT), or null when it has none. Its balance is in its LUT already: no `pre`. */
+  function mixAdjust() {
+    const fx = window.effects;
+    if (!G.mix || !fx || typeof fx.adjust !== 'function') return null;
+    let a = null;
+    try { a = fx.adjust(G.mix.id); } catch (e) { a = null; }
+    if (!a) return null;
+    const near = (x, y) => Math.abs(x - y) < 1e-4;
+    const tone = a.tone || NO_TONE;
+    if (near(a.con, 1) && near(a.sat, 1) && tone.every((x) => x === 0)) return null;
+    return { pre: [1, 1, 1], con: a.con, sat: a.sat, knee: 1, lift: 0, tone };
+  }
+
+  function mixIsGraded() {
+    return !!(G.mix && G.mix.w > 0 && G.mix.rec && (!G.mix.rec.identity || mixAdjust()));
+  }
+
+  /* A transition's other shot (app.js programMix): `{video, id, w}` — that buffer's frame
+   * is drawn through its shot's LUT over the live one at weight w — or null. Returns
+   * whether the canvas draws the mix (then the page hides that layer; else the page shows
+   * it at CSS opacity w, which is exact while both shots are ungraded). */
+  function setMix(m) {
+    const was = G.mix;
+    if (!m || !m.video || !(m.w > 0) || m.id == null || !G.ok) {
+      G.mix = null;
+      if (was) drawSoon();
+      return false;
+    }
+    const id = String(m.id);
+    const hit = G.cache.get(id);
+    const rec = hit && typeof hit.then !== 'function' ? hit : (was && was.id === id ? was.rec : null);
+    G.mix = { video: m.video, id, w: m.w, rec, onChange: m.onChange };
+    if (!rec && !id.startsWith('tmp-')) {
+      // its LUT is still on its way: once here the canvas may turn on, and the page has to
+      // hide the layer it showed meanwhile (`onChange`; also when the canvas flips)
+      fetchLut(id).then((r) => {
+        if (!G.mix || G.mix.id !== id) return;
+        G.mix.rec = r;
+        settle();
+        if (typeof m.onChange === 'function') m.onChange();
+      });
+    }
+    settle();
+    return !!(G.canvas && G.enabled && G.canvas.classList.contains('on'));
+  }
+
   function invalidate() {
     G.cache.clear();
     G.epoch++;
@@ -819,6 +919,8 @@ onmessage = (e) => {
     setShot,
     prefetch,
     invalidate,
+    setMix,
+    get mix() { return G.mix ? { id: G.mix.id, w: G.mix.w, graded: mixIsGraded() } : null; },
     draw: settle,
     probe,
     get draws() { return G.draws; },

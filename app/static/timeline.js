@@ -191,6 +191,23 @@
  *   A locked V1 or A1 refuses every edit of the cut (a toast says so); a locked V2 refuses
  *   V2's. The Program monitor's videos carry A1's level (0 muted) and the bed follows A2.
  *
+ *   — transitions at the edits (verdict 6, punch 6; the model is roughcut/tracks.py) —
+ *   tl.transitions()            `[{a, b, kind, dur, align}]`: the two shots of the edit,
+ *                               'cross_dissolve' (drawn on V1) | 'audio_crossfade' (A1),
+ *                               film seconds (an even number of frames), 'center'.
+ *   tl.applyTransition('video'|'audio'|'both')   ⌘D / ⇧D / ⌘⇧D: the default (1 s) at
+ *                               tl.editForTransition() — the selected transition's edit,
+ *                               else the selected edit point (a click on its column,
+ *                               tl.selectEdit(k)), else the edit nearest the playhead. One
+ *                               undo entry; shortened to the media ("insufficient media").
+ *   tl.addTransition(k, kind, dur?) removeTransition(key) setTransitionDur(key, s)
+ *   tl.selectTransition(key) editTransitionDur(key) tl.tsel   key = `a|b|kind`. The box's
+ *                               ends drag its length (centred: both move), a double-click
+ *                               types it (`1.5`, `12f`), Del removes the selected one.
+ *   tl.transitionHalves()       per edit k `{video, audio, short, at}`: the half-lengths the
+ *                               Program plays (cut down to the media), at film second `at`.
+ *   tl.transitionsForSave()     for app.js's save body, under the ids the server knows.
+ *
  *   — saving —
  *   tl.forSave()            The segments to PUT: known tmp ids mapped to their server
  *                               ids, unknown ones sent as `tmp-N` (the server mints and
@@ -312,6 +329,9 @@
     tool: 'select', markers: [], seqIn: null, seqOut: null,
     tracks: DEFAULT_TRACKS(), overlays: [], osel: null,
     audio: [],                     // the added audio tracks' clips (A3…)
+    transitions: [],               // {a, b, kind, dur, align} at the edits (punch 6)
+    tsel: null,                    // the selected transition's key
+    edit: null,                    // the selected edit point {a, b} (a click on its column)
   };
   const ablocks = new Map();       // id -> A1 block element (the shot's linked sound)
   const oblocks = new Map();       // overlay id -> V2 block element
@@ -1432,6 +1452,8 @@
       .map((o) => ({ ...o, id: o.id || newId() }));
     state.audio = ((p && p.audio) || []).filter((c) => c && c.clip && c.track)
       .map((c) => ({ ...c, id: c.id || newId() }));
+    state.transitions = ((p && p.transitions) || []).filter((t) => t && t.a && t.b && TRANS_NAMES[t.kind])
+      .map((t) => ({ a: t.a, b: t.b, kind: t.kind, dur: Number(t.dur) || TRANS_DEFAULT_S, align: 'center' }));
   }
 
   /* An id in the server's own shape (`g` + 10 hex), so a V2 clip never needs re-keying. */
@@ -1904,6 +1926,7 @@
     ensureTrackRows();
     renderA1(list, live, at);
     renderV2();
+    renderTransitions();
     layoutTracks();
     paintHeads();
     el.end.style.left = `${timeToX(tot)}px`;
@@ -2059,6 +2082,381 @@
     return state.zoom;
   }
 
+  /* ------------------------------------------------------------ transitions
+   * Premiere's default transitions at an edit (verdict 6, punch 6; the model is
+   * roughcut/tracks.py): `state.transitions` holds `{a, b, kind, dur, align}` — the two
+   * shots either side of the edit, 'cross_dissolve' (V1) or 'audio_crossfade' (A1), the
+   * duration in film seconds (whole frames, an even count so each half is whole), always
+   * centred on the cut. They ride the undo snapshot and the cut's own save (app.js
+   * saveBody, under the ids the server knows), so a transition laid on a shot made a
+   * moment ago is named like the shot. A pair that stops being neighbours (a move, a
+   * delete) loses its transition on the next render, inside the same undo entry.
+   * Centred means each shot gives dur/2 of media beyond its edge (its handle); where one
+   * has less, the transition is shortened to what the media allows ("insufficient
+   * media", as Premiere warns) — when it is laid, and on screen afterwards when a trim
+   * eats a handle (the box is hatched, its tooltip says so, the render does the same). */
+  const TRANS_NAMES = { cross_dissolve: 'Cross Dissolve', audio_crossfade: 'Constant Power' };
+  const TRANS_DEFAULT_S = 1.0;      // Premiere's default duration
+  const TRANS_EDGE_PX = 6;          // the box's ends: a drag there changes its length
+  const tblocks = new Map();        // key -> the box on V1 / A1
+  let tdrag = null;
+  const tkey = (t) => `${t.a}|${t.b}|${t.kind}`;
+  const tlaneOf = (kind) => (kind === 'cross_dissolve' ? el.lanes.V1 : el.tracks.A1);
+  const ttrack = (kind) => (kind === 'cross_dissolve' ? 'V1' : 'A1');
+
+  /* The cut index of a transition (between shots k and k+1), or -1 once it is not an edit. */
+  function transCut(t) {
+    const k = indexOf(t.a);
+    const list = segs();
+    return k >= 0 && k + 1 < list.length && list[k + 1].id === resolveId(t.b) ? k : -1;
+  }
+
+  function transAt(k, kind) {
+    const list = segs();
+    if (!list[k] || !list[k + 1]) return null;
+    return state.transitions.find((t) => t.kind === kind && resolveId(t.a) === list[k].id
+      && resolveId(t.b) === list[k + 1].id) || null;
+  }
+
+  /* The longest half a transition of `kind` at cut k can have, in film seconds: the
+   * outgoing shot's media past its out, the incoming's before its in, and each shot's own
+   * length (half of it when a transition of the kind sits at its other edge too). */
+  function maxHalf(k, kind) {
+    const list = segs();
+    const a = list[k], b = list[k + 1];
+    if (!a || !b) return 0;
+    const ca = clipOf(a.clip);
+    const len = ca && Number(ca.duration) > 0 ? Number(ca.duration) : Infinity;
+    const tail = Math.max(0, (len - a.out) / speedOf(a));
+    const head = Math.max(0, b.in / speedOf(b));
+    const roomA = dur(a) / (k > 0 && transAt(k - 1, kind) ? 2 : 1);
+    const roomB = dur(b) / (k + 2 < list.length && transAt(k + 1, kind) ? 2 : 1);
+    return Math.max(0, Math.min(tail, head, roomA, roomB));
+  }
+
+  /* A duration on the grid: an even number of frames, so each half is whole frames. */
+  function transFrames(d) {
+    const r = gridRate();
+    return Math.max(2, 2 * Math.round((Number(d) || 0) * r / 2));
+  }
+
+  /* What the Program and the drawing use: per cut, `{video, audio}` half-durations in film
+   * seconds (0 for none), each cut down to the media (maxHalf), and `short` kinds. */
+  function transitionHalves() {
+    const list = segs();
+    const out = [];
+    for (let k = 0; k + 1 < list.length; k++) {
+      const c = { video: 0, audio: 0, short: [], at: 0 };
+      for (const kind of ['cross_dissolve', 'audio_crossfade']) {
+        const t = transAt(k, kind);
+        if (!t) continue;
+        const want = Number(t.dur) / 2;
+        const got = Math.min(want, maxHalf(k, kind));
+        if (got < want - 1e-6) c.short.push(kind);
+        c[kind === 'cross_dissolve' ? 'video' : 'audio'] = got >= 0.5 / gridRate() ? got : 0;
+      }
+      out.push(c);
+    }
+    let t = 0;
+    out.forEach((c, k) => { t += dur(list[k]); c.at = t; });
+    return out;
+  }
+
+  /* Drop transitions whose two shots are no longer neighbours (render calls this, inside
+   * whatever entry changed the cut). */
+  function pruneTransitions() {
+    const keep = state.transitions.filter((t) => transCut(t) >= 0);
+    if (keep.length !== state.transitions.length) state.transitions = keep;
+    if (state.tsel && !state.transitions.some((t) => tkey(t) === state.tsel)) state.tsel = null;
+  }
+
+  /* Ctrl+D / Shift+D: the default transition of `kind` at cut k (replacing one of that
+   * kind there), 1 s or `d`, shortened to the media. One undo entry. Returns it or null. */
+  function addTransition(k, kind, d) {
+    const list = segs();
+    if (!TRANS_NAMES[kind] || !list[k] || !list[k + 1]) return null;
+    const trk = ttrack(kind);
+    if (trackState(trk).lock) return refuseLocked(trk) || null;
+    const name = TRANS_NAMES[kind];
+    const r = gridRate();
+    let n = transFrames(d == null ? TRANS_DEFAULT_S : d);
+    const room = Math.floor(maxHalf(k, kind) * r + 1e-6);
+    if (room < 1) {
+      toast(`insufficient media: ${blockName(list[k])} has nothing past its out or ${blockName(list[k + 1])}`
+        + ` nothing before its in — trim them to make room for a ${name}`);
+      return null;
+    }
+    const asked = n;
+    if (n / 2 > room) {
+      n = 2 * room;
+      toast(`insufficient media: the ${name} is shortened to ${(n / r).toFixed(2)} s`);
+    }
+    const t = { a: list[k].id, b: list[k + 1].id, kind, dur: r4(n / r), align: 'center' };
+    const own = begin(name);
+    state.transitions = state.transitions.filter((x) => !(x.kind === kind && transCut(x) === k));
+    state.transitions.push(t);
+    state.tsel = tkey(t);
+    if (hooks.render) hooks.render(); else render();
+    if (own) commit();
+    return n < asked ? { ...t, shortened: r4(asked / r) } : { ...t };
+  }
+
+  function removeTransition(key) {
+    const t = state.transitions.find((x) => tkey(x) === key);
+    if (!t) return false;
+    const trk = ttrack(t.kind);
+    if (trackState(trk).lock) return refuseLocked(trk) || false;
+    const own = begin(`delete ${TRANS_NAMES[t.kind]}`);
+    state.transitions = state.transitions.filter((x) => x !== t);
+    if (state.tsel === key) state.tsel = null;
+    if (hooks.render) hooks.render(); else render();
+    if (own) commit();
+    return true;
+  }
+
+  /* A new duration (film seconds), on the grid and within the media. One undo entry
+   * unless inside a gesture's begin … commit (the edge drag). Returns the duration. */
+  function setTransitionDur(key, d) {
+    const t = state.transitions.find((x) => tkey(x) === key);
+    if (!t) return null;
+    const k = transCut(t);
+    if (k < 0) return null;
+    const r = gridRate();
+    const room = Math.max(1, Math.floor(maxHalf(k, t.kind) * r + 1e-6));
+    const n = Math.min(transFrames(d), 2 * room);
+    const v = r4(n / r);
+    if (Math.abs(v - t.dur) < 1e-6) return v;
+    const own = begin(`${TRANS_NAMES[t.kind]} duration`);
+    t.dur = v;
+    if (hooks.render) hooks.render(); else render();
+    if (own) commit();
+    return v;
+  }
+
+  function selectTransition(key) {
+    state.tsel = key && state.transitions.some((t) => tkey(t) === key) ? key : null;
+    if (state.tsel) state.edit = null;
+    paintTransitions();
+    emit('select', { ids: [...state.sel], anchor: state.anchor, transition: state.tsel, source: 'click' });
+  }
+
+  /* The selected edit point (a click on an edit's column, below) or the transition's. */
+  function selectedEdit() {
+    if (state.tsel) {
+      const t = state.transitions.find((x) => tkey(x) === state.tsel);
+      const k = t ? transCut(t) : -1;
+      if (k >= 0) return k;
+    }
+    if (state.edit) {
+      const k = indexOf(state.edit.a);
+      const list = segs();
+      if (k >= 0 && list[k + 1] && list[k + 1].id === resolveId(state.edit.b)) return k;
+    }
+    return -1;
+  }
+
+  /* The edit Ctrl+D acts on: the selected one, else the one nearest the playhead. */
+  function editForTransition() {
+    const sel = selectedEdit();
+    if (sel >= 0) return sel;
+    const list = segs();
+    let best = -1, bd = Infinity, t = 0;
+    for (let k = 0; k + 1 < list.length; k++) {
+      t += dur(list[k]);
+      const d = Math.abs(t - (state.playhead || 0));
+      if (d < bd) { bd = d; best = k; }
+    }
+    return best;
+  }
+
+  /* Ctrl+D (video), Shift+D (audio), Ctrl+Shift+D (both): one undo entry. */
+  function applyTransition(which) {
+    const k = editForTransition();
+    if (k < 0) { toast('no edit to put a transition on — the sequence needs two shots'); return []; }
+    const kinds = which === 'both' ? ['cross_dissolve', 'audio_crossfade']
+      : [which === 'audio' ? 'audio_crossfade' : 'cross_dissolve'];
+    const own = begin(kinds.length > 1 ? 'transitions' : TRANS_NAMES[kinds[0]]);
+    const made = kinds.map((kind) => addTransition(k, kind)).filter(Boolean);
+    if (own) commit();
+    if (made.length) {
+      state.tsel = tkey(made[0]);
+      paintTransitions();
+      const short = made.find((t) => t.shortened);
+      toast(`${made.map((t) => TRANS_NAMES[t.kind]).join(' + ')} · ${made[0].dur.toFixed(2)} s at the edit`
+        + (short ? ` — insufficient media: shortened from ${short.shortened.toFixed(2)} s` : ''));
+    }
+    return made;
+  }
+
+  function transitionsForSave() {
+    return state.transitions.map((t) => ({ ...t, a: idFor(resolveId(t.a)), b: idFor(resolveId(t.b)) }));
+  }
+
+  function makeTBlock(key) {
+    const b = document.createElement('div');
+    b.className = 'tl-trans';
+    b.dataset.key = key;
+    b.innerHTML = '<i class="te l"></i><span class="lbl"></span><i class="te r"></i>';
+    b.addEventListener('pointerdown', onTransDown);
+    b.addEventListener('dblclick', onTransDbl);
+    return b;
+  }
+
+  /* The boxes, drawn on the cut over the two blocks: V1's for a dissolve, A1's for a
+   * crossfade, as wide as the transition (cut down to the media). */
+  function renderTransitions() {
+    pruneTransitions();
+    const halves = transitionHalves();
+    const seen = new Set();
+    for (const t of state.transitions) {
+      const k = transCut(t);
+      const lane = tlaneOf(t.kind);
+      if (k < 0 || !lane) continue;
+      const key = tkey(t);
+      let b = tblocks.get(key);
+      if (!b) { b = makeTBlock(key); tblocks.set(key, b); }
+      if (b.parentNode !== lane) lane.appendChild(b);
+      const c = halves[k];
+      const h = t.kind === 'cross_dissolve' ? c.video : c.audio;
+      const short = c.short.includes(t.kind);
+      const name = TRANS_NAMES[t.kind];
+      const w = Math.max(6, 2 * (h || Number(t.dur) / 2) * state.zoom);
+      b.style.left = `${timeToX(c.at) - w / 2}px`;
+      b.style.width = `${w}px`;
+      b.classList.toggle('audio', t.kind !== 'cross_dissolve');
+      b.classList.toggle('short', short);
+      b.classList.toggle('narrow', w < 70);
+      b.dataset.dur = String(r4(2 * h));
+      const lbl = b.querySelector('.lbl');
+      if (lbl.textContent !== name) lbl.textContent = name;
+      b.title = `${name} · ${(2 * h).toFixed(2)} s, centred on the cut`
+        + (short ? ` — insufficient media: shortened from ${Number(t.dur).toFixed(2)} s` : '')
+        + ' · drag an end to change its length, double-click to type it, Delete removes it';
+      seen.add(key);
+    }
+    for (const [key, b] of tblocks) {
+      if (seen.has(key)) continue;
+      b.remove();
+      tblocks.delete(key);
+    }
+    paintTransitions();
+  }
+
+  function paintTransitions() {
+    for (const [key, b] of tblocks) b.classList.toggle('sel', key === state.tsel);
+    const k = selectedEdit();
+    let mark = el.editMark;
+    if (!mark && el.lanes.V1) {
+      mark = el.editMark = document.createElement('i');
+      mark.className = 'tl-editsel';
+    }
+    if (!mark) return;
+    if (k < 0 || state.tsel) { mark.hidden = true; return; }
+    if (mark.parentNode !== el.lanes.V1) el.lanes.V1.appendChild(mark);
+    mark.hidden = false;
+    mark.style.left = `${timeToX(filmStart(segs()[k + 1].id))}px`;
+  }
+
+  /* A press on a box: an end drags its length (both ends move: it stays centred), the
+   * body selects it. Never a click on the lane under it. */
+  function onTransDown(e) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+    const b = e.currentTarget;
+    const key = b.dataset.key;
+    const t = state.transitions.find((x) => tkey(x) === key);
+    if (!t) return;
+    selectTransition(key);
+    const r = b.getBoundingClientRect();
+    const end = e.clientX - r.left < TRANS_EDGE_PX || r.right - e.clientX < TRANS_EDGE_PX;
+    if (!end) return;
+    const k = transCut(t);
+    tdrag = { key, pointerId: e.pointerId, cut: filmStart(segs()[k + 1].id), b, began: false };
+    try { b.setPointerCapture(e.pointerId); } catch (err) { /* not pointer-capable */ }
+    b.addEventListener('pointermove', onTransMove);
+    b.addEventListener('pointerup', onTransUp);
+    b.addEventListener('pointercancel', onTransUp);
+  }
+
+  function onTransMove(e) {
+    if (!tdrag || e.pointerId !== tdrag.pointerId) return;
+    const half = Math.abs(eventTime(e) - tdrag.cut);
+    if (!tdrag.began) { tdrag.began = begin('transition duration'); }
+    setTransitionDur(tdrag.key, 2 * half);
+  }
+
+  function onTransUp(e) {
+    if (!tdrag || e.pointerId !== tdrag.pointerId) return;
+    const d = tdrag;
+    tdrag = null;
+    d.b.removeEventListener('pointermove', onTransMove);
+    d.b.removeEventListener('pointerup', onTransUp);
+    d.b.removeEventListener('pointercancel', onTransUp);
+    try { d.b.releasePointerCapture(d.pointerId); } catch (err) { /* released */ }
+    if (d.began) commit();
+  }
+
+  /* Double-click: type the duration (seconds, or frames as `12f`), as Premiere's Set
+   * Transition Duration. Enter sets it, Esc leaves it. */
+  function onTransDbl(e) {
+    e.stopPropagation();
+    e.preventDefault();
+    editTransitionDur(e.currentTarget.dataset.key);
+  }
+
+  function editTransitionDur(key) {
+    const b = tblocks.get(key);
+    const t = state.transitions.find((x) => tkey(x) === key);
+    if (!b || !t) return null;
+    let inp = b.querySelector('input');
+    if (inp) { inp.focus(); return inp; }
+    inp = document.createElement('input');
+    inp.className = 'tl-trans-dur';
+    inp.value = Number(b.dataset.dur || t.dur).toFixed(2);
+    inp.title = 'duration in seconds (or frames: 12f) — Enter sets it, Esc leaves it';
+    b.appendChild(inp);
+    inp.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+    let done = false;
+    const close = () => { if (done) return; done = true; if (inp.isConnected) inp.remove(); };
+    inp.addEventListener('keydown', (ev) => {
+      ev.stopPropagation();
+      if (ev.key === 'Escape') { close(); return; }
+      if (ev.key !== 'Enter') return;
+      const raw = inp.value.trim();
+      const m = /^(\d+(?:\.\d+)?)\s*(f)?$/i.exec(raw);
+      close();
+      if (!m) { toast(`not a duration: ${raw}`); return; }
+      const v = m[2] ? Number(m[1]) / gridRate() : Number(m[1]);
+      setTransitionDur(key, v);
+    });
+    inp.addEventListener('blur', close);
+    inp.focus();
+    inp.select();
+    return inp;
+  }
+
+  /* A click on an edit's column selects that edit point (Ctrl+D's target), as Premiere's
+   * selection tool does; the trim lane's own press still trims it. Capture: before the
+   * trim lane stops it. */
+  function onEditPress(e) {
+    const col = e.target && e.target.closest ? e.target.closest('.tl-edge') : null;
+    if (!col) return;
+    const x = col.getBoundingClientRect();
+    const t = xToTime(x.left + x.width / 2 - el.view.getBoundingClientRect().left + el.view.scrollLeft);
+    const list = segs();
+    let best = -1, bd = Infinity, acc = 0;
+    for (let k = 0; k + 1 < list.length; k++) {
+      acc += dur(list[k]);
+      const d = Math.abs(acc - t);
+      if (d < bd) { bd = d; best = k; }
+    }
+    if (best < 0 || bd * state.zoom > 12) return;
+    state.edit = { a: list[best].id, b: list[best + 1].id };
+    state.tsel = null;
+    setTimeout(paintTransitions, 0);
+  }
+
   /* ------------------------------------------------------------ undo / redo */
   /* An entry is the cut — and, when the board hands one over (`hooks.extra()` /
    * `hooks.setExtra(v)`), a second piece of state that rides the same stack: the film's
@@ -2066,10 +2464,12 @@
   /* V2's clips ride the same entry: laying, moving or removing one is one ⌘Z. The
    * track headers' toggles do not — as in Premiere, a mute or a lock is not an edit. */
   /* The added tracks' names ride it too (wave 6, KEYS2): Add / Delete Track is one ⌘Z. */
+  /* The transitions ride it too (verdict 6, punch 6): Ctrl+D is one ⌘Z. */
   const snapshot = () => JSON.stringify(hooks && hooks.extra
     ? { segs: segs(), extra: hooks.extra(), overlays: state.overlays, audio: state.audio,
-        xtracks: trackNames().filter(isExtra) }
-    : { segs: segs(), overlays: state.overlays, audio: state.audio, xtracks: trackNames().filter(isExtra) });
+        xtracks: trackNames().filter(isExtra), transitions: state.transitions }
+    : { segs: segs(), overlays: state.overlays, audio: state.audio, xtracks: trackNames().filter(isExtra),
+        transitions: state.transitions });
 
   function restore(json) {
     const v = JSON.parse(json);
@@ -2079,6 +2479,7 @@
       if (Array.isArray(v.overlays)) state.overlays = v.overlays;
       if (Array.isArray(v.audio)) state.audio = v.audio;
       if (Array.isArray(v.xtracks)) setExtraTracks(v.xtracks);
+      state.transitions = Array.isArray(v.transitions) ? v.transitions.map((t) => ({ ...t })) : [];
     } else {
       hooks.setSegs(v);
     }
@@ -2520,7 +2921,24 @@
       state.sel = next;
     }
     if (state.anchor === oldId) state.anchor = newId;
+    // a transition names its edit by the two shots: it follows their re-key
+    let moved = false;
+    for (const t of state.transitions) {
+      if (t.a === oldId) { t.a = newId; moved = true; }
+      if (t.b === oldId) { t.b = newId; moved = true; }
+    }
+    if (state.edit && state.edit.a === oldId) state.edit.a = newId;
+    if (state.edit && state.edit.b === oldId) state.edit.b = newId;
+    if (moved) {                   // the boxes are keyed by the pair: drawn again
+      for (const [key, b] of [...tblocks]) {
+        if (!key.split('|').includes(oldId)) continue;
+        b.remove();
+        tblocks.delete(key);
+      }
+      if (state.tsel) state.tsel = state.tsel.split('|').map((x) => (x === oldId ? newId : x)).join('|');
+    }
   }
+
 
   function afterSave(serverSegs) {
     const list = segs();
@@ -2582,6 +3000,7 @@
     down = null;
     if (!d || d.moved || e.button !== 0 || e.defaultPrevented) return;
     const b = e.target.closest('.blk');
+    if (state.edit || state.tsel) { state.edit = null; state.tsel = null; paintTransitions(); }
     if (b && state.tool === 'razor') {
       // the razor: a cut where the click landed, the selection left alone
       const t = eventTime(e);
@@ -2750,6 +3169,7 @@
 
     const lane = el.lanes.V1;
     lane.addEventListener('pointerdown', onLaneDown);
+    lane.addEventListener('pointerdown', onEditPress, true);    // an edit's column: select it
     lane.addEventListener('pointermove', onLaneMove);
     lane.addEventListener('pointerup', onLaneUp);
     lane.addEventListener('pointercancel', () => { down = null; });
@@ -2820,6 +3240,18 @@
     markers: () => [...state.markers],
     setSeqIn, setSeqOut,
     keysWindow,                     // keyframes on the media (KEYANCHOR; app.js's [ ] nudge)
+    // transitions at the edits (verdict 6, punch 6; roughcut/tracks.py)
+    transitions: () => state.transitions.map((t) => ({ ...t })),
+    transitionHalves, addTransition, removeTransition, setTransitionDur, applyTransition,
+    selectTransition, editTransitionDur, transitionsForSave, editForTransition,
+    TRANS_NAMES, get tsel() { return state.tsel; },
+    selectEdit: (k) => {
+      const list = segs();
+      state.edit = list[k] && list[k + 1] ? { a: list[k].id, b: list[k + 1].id } : null;
+      state.tsel = null;
+      paintTransitions();
+      return selectedEdit();
+    },
   };
   window.tl = tl;
 })();

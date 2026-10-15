@@ -331,7 +331,7 @@ def test_the_inspectors_speed_chip_writes_speed_as_one_undo_entry_and_the_save_c
     assert page.evaluate("segs[1].speed") == 0.1
     # a duplicate keeps its rate (the keys are ignored while the select has the focus)
     sel.blur()
-    page.keyboard.press("Control+d")
+    page.keyboard.press("Control+Alt+d")
     assert page.evaluate("segs.map(s => s.speed || 1)") == [0.5, 0.1, 0.1]
 
 
