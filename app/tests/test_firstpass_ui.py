@@ -190,8 +190,15 @@ def test_fresh_bin_offers_run_first_pass_in_the_header_and_both_empty_states(pag
     assert mon.is_visible() and mon.inner_text().strip() == "Run first pass"
     mon.click()
     pg.wait_for_selector(PANEL, state="visible", timeout=5000)
-    # one control, and it is not the screen's blue button (that stays Next's)
-    assert "is-next" not in (pg.locator(BTN).get_attribute("class") or "")
+    # a bin without a cut: the first pass is THE first action, so its header button is
+    # the screen's one blue button and Next's chip yields to it
+    pg.keyboard.press("Escape")
+    pg.evaluate("flowBar.poll()")
+    pg.wait_for_function("window.flowBar && flowBar.yielded()", timeout=10000)
+    pg.wait_for_function(
+        "document.querySelector('[data-testid=\"firstpass-button\"]').classList.contains('is-next')",
+        timeout=10000)
+    assert pg.locator(".is-next").count() == 1
 
 
 RUNNING = {

@@ -155,7 +155,6 @@
     const btn = $('.fp-btn', host);
     $('.fp-label', host).textContent = label(s);
     btn.title = title(s);
-    $('.fp-label', host).title = btn.title;
     host.dataset.state = s ? s.state : 'unknown';
     $('.fp-dot', host).hidden = !(s && s.state === 'stale-after-edits');
     $('.fp-x', host).hidden = !running(s);

@@ -1,7 +1,6 @@
 /* firstpass.css: the first pass's header control, its panel and the empty-state offers
-   (firstpass.js, REDESIGN-GOAL dimension 2). The control never ellipsizes (verdict 3
-   ruled that lenient): its words are short at every state ("First pass · 3/12") and
-   the detail is in its hover and its panel. */
+   (firstpass.js, REDESIGN-GOAL dimension 2). Its words are short at every state
+   ("First pass · 3/12"); the detail is in its hover and its panel. */
 
 /* ---------------------------------------------------------------- the header row */
 header #firstpass { flex: 0 0 auto; position: relative; display: flex;
@@ -19,7 +18,7 @@ header #firstpass { flex: 0 0 auto; position: relative; display: flex;
                      white-space: nowrap; cursor: pointer; position: relative; }
 #firstpass .fp-btn:hover { background: var(--card-hi, #313135); }
 #firstpass .fp-btn svg { flex: none; width: 13px; height: 13px; color: var(--accent, #4a9df8); }
-#firstpass .fp-label { white-space: nowrap; font-variant-numeric: tabular-nums; }
+#firstpass .fp-label { font-variant-numeric: tabular-nums; }
 #firstpass[data-state="running"] .fp-btn { color: var(--dim, #94949c); }
 #firstpass[data-state="running"] .fp-btn svg { animation: fp-pulse 1.6s ease-in-out infinite; }
 #firstpass[data-state="stale-after-edits"] .fp-btn { padding-right: 13px; }
