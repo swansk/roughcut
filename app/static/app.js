@@ -1749,6 +1749,11 @@ function preroll(left) {
   nb._roll = { gen: g, seg: nseg };
   nb.muted = true;
   setShotRate(nb, nseg);
+  // Late — the park after a short shot landed with less time left than its lead needs —
+  // it runs faster until the cut, so it is on its in-point there rather than frames
+  // behind it (which showWhenReady would hold); advance() puts the shot's rate back.
+  const avail = left - 0.04 - roll.lat * shuttle;
+  if (lead > 0.02 && avail < lead - 0.01) nb.playbackRate *= Math.min(4, lead / Math.max(0.05, avail));
   const t0 = performance.now();
   if (typeof nb.requestVideoFrameCallback === 'function') {
     nb.requestVideoFrameCallback(() => {

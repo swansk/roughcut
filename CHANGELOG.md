@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Fixed
+- **A preroll that starts late catches up instead of arriving behind the cut (wave 6, lane PLAYBACK).** After a short shot the park of the shot after it can land with less time left than its lead needs (a seek of ~0.12-0.25 s at load 10-18); the prerolled buffer then ran at the shot's rate and reached its in-point up to ~0.1 s after the cut, which the frame hold covered (46-76 ms holds measured). `preroll()` now runs it up to 4× until the cut (lead ÷ the time left), and `advance()` puts the shot's rate back as before. Perf fixture at load 10.7-12.2, no burners, three runs: cut holes 33-50 ms, holds ≤ 1 ms.
+
 ### Docs
 - **LOOP.md: wave 6 merges so far and the wave-7 queue (keyframes across a split, overlay controls).**
 
