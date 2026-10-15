@@ -104,12 +104,22 @@ def ffprobe_duration(path: str) -> float:
     return float(r.stdout.strip().strip(","))
 
 
-def ffprobe_fps(path: str) -> float:
+def ffprobe_rates(path: str) -> dict:
+    """The video stream's r_frame_rate, avg_frame_rate, size and frame count."""
     r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-                        "stream=r_frame_rate", "-of", "csv=p=0", path],
-                       capture_output=True, text=True, check=True)
-    num, _, den = r.stdout.strip().strip(",").partition("/")
-    return float(num) / float(den or 1)
+                        "stream=r_frame_rate,avg_frame_rate,width,height,nb_frames",
+                        "-of", "json", path], capture_output=True, text=True, check=True)
+    return json.loads(r.stdout)["streams"][0]
+
+
+def rational(fps: float) -> str:
+    """The sequence's rate as ffprobe writes it (the server's own rule)."""
+    import server
+    return server.fps_rational(fps) + ("" if "/" in server.fps_rational(fps) else "/1")
+
+
+def size_estimate_mb(pg) -> float:
+    return float(pg.get_attribute("#exSize", "data-mb"))
 
 
 def watch_bar(pg) -> None:
@@ -142,7 +152,7 @@ def test_ctrl_m_opens_the_export_dialog_with_name_folder_duration_and_size(page,
     wait_settings(page)
     # a preset, a file name from the cut, a folder under --work/renders
     labels = page.eval_on_selector_all("[data-testid=export-preset] option", "os => os.map(o => o.text)")
-    assert labels == ["Quick 1080p", "Master 4K", "YouTube 1080p"], labels
+    assert labels == ["Quick 1080p", "Match Sequence", "Master 4K", "YouTube 1080p"], labels
     assert page.input_value("[data-testid=export-name]") == "footage - edl"
     assert page.input_value("#exFolder") == "footage"
     renders = str(Path(project["work"]) / "renders")
@@ -151,10 +161,15 @@ def test_ctrl_m_opens_the_export_dialog_with_name_folder_duration_and_size(page,
     assert page.inner_text("#exDur") == page.evaluate("tl.tc(tl.total())")
     size = page.inner_text("#exSize")
     assert size.startswith("≈ ") and size.endswith("MB"), size
-    # Quick 1080p is 14 Mbps + 192 kbps: ~19 s of it is ~34 MB
-    mb = float(size.split()[1])
+    # the preset's bitrate (measured off this bin's earlier files once there are any)
+    # plus its sound, over the sequence's length
+    quick = next(p for p in page.evaluate("fetch('/api/export').then(r => r.json())")["presets"]
+                 if p["key"] == "quick")
+    mb = size_estimate_mb(page)
     secs = page.evaluate("tl.total()")
-    assert abs(mb - secs * (14 + 0.192) / 8) < 1.0, (mb, secs)
+    assert abs(mb - secs * (quick["video_mbps"] + quick["audio_kbps"] / 1000) / 8) < 0.05, (mb, secs)
+    # the frame says the rate: the sequence's
+    assert page.inner_text("#exFrame") == "1920×1080 · 24 fps"
     # another preset re-estimates
     page.select_option("[data-testid=export-preset]", "youtube")
     assert page.inner_text("#exSize") != size
@@ -187,10 +202,16 @@ def test_an_export_reaches_100_and_is_the_sequence_at_the_path_it_says(page, pro
     # the file is where data-path says, under --work/renders/<folder>/<name>.mp4
     want = Path(project["work"]) / "renders" / "lane-tests" / "journey cut.mp4"
     assert path == str(want) and want.exists() and want.stat().st_size > 0
-    # and it is the sequence: its length within one frame of tl.total()
+    # and it is the sequence: constant frame rate at the sequence's rate, and its length
+    # within one SEQUENCE frame of tl.total() (the journey's finding: the file's own
+    # r_frame_rate was 120/1, so "one frame" of it was no measure at all)
     total = page.evaluate("tl.total()")
+    seq_fps = page.evaluate("tl.fps()")
+    rates = ffprobe_rates(path)
+    assert rates["r_frame_rate"] == rates["avg_frame_rate"] == rational(seq_fps), (rates, seq_fps)
     got = ffprobe_duration(path)
-    assert abs(got - total) <= 1.0 / ffprobe_fps(path) + 1e-6, (got, total)
+    assert abs(got - total) <= 1.0 / seq_fps + 1e-6, (got, total)
+    assert abs(int(rates["nb_frames"]) - total * seq_fps) <= 0.5 + 1e-6, (rates, total)
     # Play plays it, Show file shows the path
     page.click("#exShow")
     assert page.input_value("#exFilePath") == path
@@ -275,3 +296,59 @@ def test_the_name_and_folder_cannot_leave_the_renders_folder(page, project):
         "segments": SEGMENTS[:1], "preset": "nope", "name": "x"}),
         headers={"content-type": "application/json"})
     assert bad.status == 400
+
+
+# ---------------------------------------------------------------- verdict 3, punch 10
+
+def test_match_sequence_exports_at_the_sources_rate_and_frame(page, project):
+    """Match Sequence is the footage's own frame size and frame rate (Quick forced
+    1920×1080 at 23.976): its r_frame_rate equals the source clip's, constant."""
+    src = ffprobe_rates(str(Path(project["footage"]) / "CLIP_A.MP4"))
+    page.keyboard.press("Control+m")
+    wait_settings(page)
+    page.select_option("[data-testid=export-preset]", "match")
+    assert page.inner_text("#exFrame") == f"{src['width']}×{src['height']} · 24 fps"
+    path = export(page, "matched", "lane-tests", preset="match")
+    got = ffprobe_rates(path)
+    assert got["r_frame_rate"] == src["r_frame_rate"] == got["avg_frame_rate"], (got, src)
+    assert (got["width"], got["height"]) == (src["width"], src["height"])
+    total = page.evaluate("tl.total()")
+    assert abs(ffprobe_duration(path) - total) <= 1.0 / 24 + 1e-6
+
+
+def test_the_size_estimate_is_within_a_quarter_of_the_real_file(page, project):
+    """Calibrated from the bin's own files of each preset (verdict 3: 128 MB estimated
+    for a 78 MB file): after one export with a preset, the next estimate for the same
+    sequence is within ±25 % of what that preset really wrote."""
+    page.keyboard.press("Control+m")
+    path = export(page, "measure me", "lane-tests", preset="quick")
+    real_mb = Path(path).stat().st_size / (1024 * 1024)
+    page.click("[data-testid=export-cancel]")            # Close, after the end
+    page.wait_for_function("!document.getElementById('exportDialog').open", timeout=3000)
+    page.keyboard.press("Control+m")
+    wait_settings(page)
+    page.select_option("[data-testid=export-preset]", "quick")
+    est = size_estimate_mb(page)
+    assert abs(est - real_mb) <= 0.25 * real_mb, (est, real_mb)
+    assert "measured" in page.locator("#exSize").locator("xpath=..").get_attribute("title")
+    # Match Sequence too, from the file the test above made (or this one's own)
+    page.select_option("[data-testid=export-preset]", "match")
+    matched = Path(project["work"]) / "renders" / "lane-tests" / "matched.mp4"
+    if matched.exists():
+        est = size_estimate_mb(page)
+        real = matched.stat().st_size / (1024 * 1024)
+        assert abs(est - real) <= 0.25 * real, (est, real)
+
+
+def test_the_folder_chooser_offers_recent_folders_newest_first(page, project):
+    page.keyboard.press("Control+m")
+    wait_settings(page)
+    opts = page.eval_on_selector_all("#exRecent option", "os => os.map(o => o.value)")
+    assert opts[0] == "" and "lane-tests" in opts, opts
+    info = page.evaluate("fetch('/api/export').then(r => r.json())")
+    whens = [f["when"] for f in info["recent"]]
+    assert whens == sorted(whens, reverse=True), info["recent"]
+    page.select_option("#exRecent", "lane-tests")
+    assert page.input_value("#exFolder") == "lane-tests"
+    renders = str(Path(project["work"]) / "renders")
+    assert page.inner_text("#exPath").startswith(f"{renders}/lane-tests/")

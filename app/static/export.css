@@ -27,6 +27,9 @@
 #exportDialog select:focus, #exportDialog input[type=text]:focus { outline: none; border-color: var(--accent, #4a9df8); }
 #exportDialog .ex-name { display: flex; align-items: center; gap: 6px; }
 #exportDialog .ex-ext { color: var(--dim, #94949c); }
+#exportDialog .ex-loc { display: flex; gap: 6px; }
+#exportDialog .ex-loc #exFolder { flex: 1 1 auto; min-width: 0; }
+#exportDialog .ex-loc #exRecent { flex: 0 0 150px; width: 150px; }
 #exportDialog .ex-about, #exportDialog .ex-path {
   color: var(--faint, #66666e); font-size: 11px; margin-top: 4px; line-height: 1.35;
   overflow-wrap: anywhere;

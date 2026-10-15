@@ -27,8 +27,8 @@
  *       {"position": [x, y] (fractions of the frame, 0.5 = centre), "scale": %,
  *        "rotation": degrees, "opacity": %, "volume_db": dB, "contrast": -100..100,
  *        "saturation": 0..200, "fx_off": [effect ids], "fx_order": [effect ids]}
- *     validated by server.py's `clean_controls` on every save. The export does not draw
- *     these yet (the render's lane); each such row says so on hover.
+ *     validated by server.py's `clean_controls` on every save. The export draws every
+ *     one of them (research/tools/assemble.py `encode_part`); each row says so on hover.
  *
  * Loaded after app.js. The board's globals (`tl`, `segs`, `colour`, `C`, `player`,
  * `shotOverride`, `tidyColour`, `renderInspector`, `cueAt`, `inspected`, `gradeApi`) are
@@ -49,7 +49,8 @@
   const FRAME_W = 1920, FRAME_H = 1080;     // the readout's frame, Premiere's default sequence
   const GAIN = 0.15;                        // colour.CLAMPS widest gain: validate_balance's clamp
   const EXPOSURE = [0.75, 1.5];             // and its exposure clamp
-  const NOT_RENDERED = 'previews on the Program monitor now; the export does not include it yet';
+  // Every property here renders (verdict 3, punch 3: assemble.py's `encode_part`).
+  const RENDERED = 'the export renders it';
   const store = {
     get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } },
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* fine */ } },
@@ -144,7 +145,7 @@
   }
   function plain(key, dflt, lo, hi, step, digits, unit, label, sec) {
     return {
-      key, sec, label, lo, hi, step, digits, unit, dflt, hover: NOT_RENDERED,
+      key, sec, label, lo, hi, step, digits, unit, dflt, hover: RENDERED,
       get: (seg) => (ctl(seg)[key] ?? dflt),
       set: (seg, v) => setCtl(seg, key, Math.round(clamp(v, lo, hi) * 1000) / 1000, dflt),
     };
@@ -153,7 +154,7 @@
     const k = axis === 'x' ? 0 : 1, size = axis === 'x' ? FRAME_W : FRAME_H;
     return {
       key: `pos${axis}`, sec: 'motion', label: 'Position', lo: -10 * size, hi: 11 * size, step: 1, digits: 1,
-      unit: '', dflt: size / 2, hover: `${axis.toUpperCase()} in a ${FRAME_W}×${FRAME_H} frame · ${NOT_RENDERED}`,
+      unit: '', dflt: size / 2, hover: `${axis.toUpperCase()} in a ${FRAME_W}×${FRAME_H} frame · ${RENDERED}`,
       get: (seg) => ((ctl(seg).position || [0.5, 0.5])[k]) * size,
       set: (seg, v) => {
         const p = [...(ctl(seg).position || [0.5, 0.5])];
@@ -190,7 +191,7 @@
   ];
   const BY_KEY = new Map(PROPS.map((p) => [p.key, p]));
   // volume previews up to 0 dB only: the monitor's element cannot play louder than full
-  BY_KEY.get('volume_db').hover = `the shot's level · above 0.00 dB is heard only in the export once it renders levels · ${NOT_RENDERED}`;
+  BY_KEY.get('volume_db').hover = `the shot's level · above 0.00 dB is heard only in the export (the monitor plays at most full level) · ${RENDERED}`;
 
   const LABELS = { posx: 'position', posy: 'position', volume_db: 'volume' };
   const labelOf = (p) => LABELS[p.key] || p.key;
@@ -553,7 +554,7 @@
     if (host.dataset.key === key) return;
     host.dataset.key = key;
     host.innerHTML = list.length
-      ? list.map((e, i) => `<div class="ec-row ec-fxrow${off.has(e.id) ? ' off' : ''}" data-fx="${esc(e.id)}" title="${esc(e.note || e.name)} · bypass and order ${NOT_RENDERED}">
+      ? list.map((e, i) => `<div class="ec-row ec-fxrow${off.has(e.id) ? ' off' : ''}" data-fx="${esc(e.id)}" title="${esc(e.note || e.name)} · bypass and order: ${RENDERED}">
           <button type="button" class="ec-fxtog${off.has(e.id) ? '' : ' on'}" data-fxact="bypass" data-id="${esc(e.id)}" title="${off.has(e.id) ? 'turn this effect on' : 'bypass this effect'}">fx</button>
           <span class="ec-name">${esc(e.name)}${e.status === 'proposed' ? ' <i class="ec-prop">proposed</i>' : ''}</span>
           <span class="ec-ord"><button type="button" data-fxact="up" data-id="${esc(e.id)}"${i ? '' : ' disabled'} title="move up the stack">▲</button><button type="button" data-fxact="down" data-id="${esc(e.id)}"${i < list.length - 1 ? '' : ' disabled'} title="move down the stack">▼</button></span>
