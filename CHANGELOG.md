@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Docs
+- **LOOP.md: wave 2 launched** (FPUI, TRACKS, EFFECTS, EXPORT, INGEST, FINISH from `f371199`), verdict 2's rubric rulings, and the fixed `data-testid` hooks the wave-3 journey test will drive.
+
 ### Added
 - **`/modules/<name>`: one route for the workspace's new modules (redesign wave 2 scaffold).** Every static file had its own hand-written route, so a new panel meant a `server.py` edit (the WORKSPACE lane had to inline its CSS). `MODULE_FILES` is a fixed list, served by name like `/timeline/<name>`, never by directory. The board now loads `firstpass.js/.css` and `export.js/.css` (stubs for the wave-2 lanes) and carries their mount points: `#firstpass` in the header after `#flow`, and `<dialog id="exportDialog">`. `test_modules_route.py`: 3 passed; `test_workspace.py` still green.
 
