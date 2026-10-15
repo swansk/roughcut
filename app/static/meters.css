@@ -1,6 +1,6 @@
-/* meters.css: the Program's audio meters (meters.js, wave 3 TLAUDIO). One canvas: under
-   the picture while the picture is as wide as the panel ('h'), beside it when the panel
-   has room to spare ('v', a grid: picture | meters, the transport across both). */
+/* meters.css: the Program's audio meters (meters.js, wave 3 TLAUDIO). One canvas, beside
+   the picture ('v', a grid: picture | meters, the transport across both; the default
+   since wave 4), or under it in a Program panel dragged too narrow to spare 30 px ('h'). */
 #meters { flex: none; position: relative; box-sizing: border-box; background: #0b0b0e;
           cursor: default; overflow: hidden; }
 #meters canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }

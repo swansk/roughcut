@@ -165,3 +165,27 @@ next judge runs, and the next judge rules it honest or lenient.
   footage; anything about the index or the first cut while the pass runs), and a job is an icon
   and its % with its name in the hover. `test_budget.py`: `/ jobs` words 132 → 109, the
   measured count (lowered, not raised); every other number unchanged.
+- 2026-10-15 (wave 4, lane LAYOUT; verdict 4 punch 3, dimensions 4 and 9): **the Program
+  floor is raised, 380 → 560 px at 1440×900, and a 1920×1080 floor is added, 800 px.** The
+  default arrangement is now Premiere's Editing workspace: Source | Program share the whole
+  top row (half each), Project | Timeline | Effect Controls the bottom row, the meters
+  vertical beside the Program picture. Checked by
+  `test_workspace.py::test_the_program_picture_fills_its_panel[1440x900, 1920x1080]` (width
+  floor, letterbox ≤ 30 % of the room, centred in its room, meters mode `v` beside and as
+  tall as the picture, Source = Program width, unchanged by a selection) and by
+  `test_budget.py::test_the_monitor_is_centred_and_as_big_as_the_strip_leaves` (≥ 560 px,
+  ≤ 30 %). Measured before: 386×217 in 386×272 (1440), 517×291 in 517×347 (1920), meters
+  horizontal. After: **674×379 in 682×379 (1440), 841×473 in 922×473 (1920)**, 0 % letterbox,
+  meters vertical. Two checks change shape, neither loosened in what it is for:
+  (a) "centred" is now measured inside the picture's room (the screenbox), since the
+  vertical meters stand beside the room and would otherwise read as a 30 px off-centre;
+  (b) `test_the_selected_shot_is_in_view` asked for the whole Effect Controls strip to end
+  above the fold; Effect Controls is now in the bottom row and a long strip scrolls inside
+  its panel, as Premiere's does, so the check is that the strip starts in view and its
+  panel shows ≥ 300 px of it (measured ~340). The words/controls budgets are LOWERED to the
+  measured counts on the tree merged with POLISH, no headroom (less of Effect Controls is
+  in view): words / 106 → 93, / shot 181 → 119, / film 114 → 101, / fx 134 → 124, / jobs
+  108 → 102; controls / shot 85 → 61. Also new: `test_selects_opens_wide_enough_for_its_media_in_out_and_reason`
+  (Selects' list ≥ 560 px at both sizes, the Timeline ≥ 460 px meanwhile) and
+  `test_a_layout_saved_before_the_new_arrangement_keeps_its_widths_once` (the one-time
+  migration of an unversioned saved layout).

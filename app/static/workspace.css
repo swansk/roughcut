@@ -1,7 +1,8 @@
 /* The workspace (redesign wave 1, REDESIGN-GOAL dimension 4; finished in wave 2, lane
- * FINISH, dimension 9): Premiere's editing arrangement — Project top left, the Source and
- * Program monitors across the top, the Timeline along the bottom, Effect Controls down
- * the right — each a titled panel with draggable splitters (sizes kept per browser by
+ * FINISH, dimension 9; re-arranged in wave 4, lane LAYOUT): Premiere's Editing
+ * arrangement — the Source and Program monitors sharing the top row, Project bottom left,
+ * the Timeline bottom centre, Effect Controls bottom right — each a titled panel with
+ * draggable splitters (sizes kept per browser by
  * /dock.js). One dark, dense theme. Served at /modules/workspace.css and linked where
  * the inline <style id="workspace-css"> used to be, so the cascade order is unchanged. */
 :root {
@@ -167,20 +168,26 @@ body > header > #firstpass { flex-shrink: 0; min-width: 0; }
 .job .jmore pre { margin: 7px 0 0; white-space: pre-wrap; color: var(--dim); max-height: 120px; overflow: auto; }
 
 /* ------------------------------------------------------------ the workspace grid */
+/* Premiere's Editing arrangement (wave 4, verdict 4 punch 3): the two monitors share the
+   whole top row, half each by default; the bottom row is Project | Timeline | Effect
+   Controls. The top row is one grid area its three children share: Source from the left
+   at --c-src, its splitter after it, Program taking the rest. */
 #ws {
   height: calc(100vh - var(--hd)); padding: 4px; display: grid; gap: 0;
-  grid-template-columns: var(--c-proj) var(--split) var(--c-src) var(--split)
-                         minmax(0, 1fr) var(--split) var(--c-insp);
+  grid-template-columns: var(--c-proj) var(--split) minmax(0, 1fr) var(--split) var(--c-insp);
   grid-template-rows: var(--r-top) var(--split) minmax(0, 1fr);
   grid-template-areas:
-    "proj s1 src s2 prog s3 insp"
-    "h    h  h   h  h    s3 insp"
-    "tl   tl tl  tl tl   s3 insp";
+    "mon  mon mon mon mon"
+    "h    h   h   h   h"
+    "proj s1  tl  s3  insp";
 }
-#pProject { grid-area: proj; } #pSource { grid-area: src; } #pProgram { grid-area: prog; }
-#pInspector { grid-area: insp; } #pTimeline { grid-area: tl; }
-.ws-split[data-split=proj] { grid-area: s1; } .ws-split[data-split=src] { grid-area: s2; }
-.ws-split[data-split=insp] { grid-area: s3; } .ws-split[data-split=top] { grid-area: h; }
+#pSource { grid-area: mon; justify-self: start; width: var(--c-src); }
+.ws-split[data-split=src] { grid-area: mon; justify-self: start; width: var(--split);
+                            margin-left: var(--c-src); }
+#pProgram { grid-area: mon; justify-self: end; width: calc(100% - var(--c-src) - var(--split)); }
+#pProject { grid-area: proj; } #pInspector { grid-area: insp; } #pTimeline { grid-area: tl; }
+.ws-split[data-split=proj] { grid-area: s1; } .ws-split[data-split=insp] { grid-area: s3; }
+.ws-split[data-split=top] { grid-area: h; }
 .ws-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column;
             background: var(--panel); border: 1px solid #0a0a0b; border-radius: 4px;
             overflow: clip; position: relative; }
@@ -341,6 +348,11 @@ table.plist td.name span { overflow: hidden; text-overflow: ellipsis; }
 #library table.plist td.name .n { align-items: flex-start; }
 #library table.plist td.name span.w { white-space: normal; overflow: visible; overflow-wrap: anywhere;
                                       text-overflow: clip; }
+/* With Reason shown (a 560 px list: Selects opened wide, wave 4 LAYOUT) the name, which
+   carries a still and a who-tag, gets more of the room than the one-line Reason, which
+   ellipsizes with the whole reason in its row's hover; equal halves wrapped a short line
+   over five rows at 1440 */
+#library table.sel-list:has(th[data-sort=why]) col:first-child { width: 31%; }
 table.plist .st { color: var(--dim); }
 table.plist .st.ok { color: var(--good); }
 .picons { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; }

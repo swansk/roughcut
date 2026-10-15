@@ -2,9 +2,10 @@
 client half of punch 5), driven in a real browser.
 
 Karl, 2026-10-14: the board "is not something that I feel meets 'premier pro quality'".
-A Premiere user has to be able to name every panel from a screenshot: Project top left,
-the Source and Program monitors across the top, the Timeline along the bottom, Effect
-Controls down the right. At 1440×900 and 1920×1080:
+A Premiere user has to be able to name every panel from a screenshot. Since wave 4
+(verdict 4 punch 3) the arrangement is Premiere's Editing workspace: the Source and
+Program monitors share the top row, half each; Project bottom left, the Timeline bottom
+centre, Effect Controls bottom right. At 1440×900 and 1920×1080:
 
   * the five titled panels are visible and none overlaps another;
   * each splitter resizes its panels and the size survives a reload;
@@ -136,12 +137,15 @@ def test_five_titled_panels_fill_the_window_without_overlap_or_scroll(live_serve
     for i, a in enumerate(names):
         for b in names[i + 1:]:
             assert _overlap(boxes[a], boxes[b]) < 1, (a, b, boxes[a], boxes[b])
-    # Premiere's arrangement: Project left of Source left of Program, all above the
-    # Timeline; Effect Controls right of everything
-    assert boxes["#pProject"]["r"] <= boxes["#pSource"]["x"] <= boxes["#pProgram"]["x"]
-    assert max(boxes[s]["b"] for s in ("#pProject", "#pSource", "#pProgram")) <= boxes["#pTimeline"]["y"]
-    assert boxes["#pInspector"]["x"] >= boxes["#pProgram"]["r"]
-    assert boxes["#pInspector"]["x"] >= boxes["#pTimeline"]["r"]
+    # Premiere's Editing arrangement: Source left of Program across the top row, the two
+    # sharing its whole width; Project | Timeline | Effect Controls below them
+    src, prog = boxes["#pSource"], boxes["#pProgram"]
+    assert src["r"] <= prog["x"] and abs(src["y"] - prog["y"]) < 1
+    assert src["w"] + prog["w"] >= size[0] - 8 - 4 - 1, (src, prog)      # #ws padding, one splitter
+    low = [boxes[s] for s in ("#pProject", "#pTimeline", "#pInspector")]
+    assert max(src["b"], prog["b"]) <= min(b["y"] for b in low)
+    assert low[0]["r"] <= low[1]["x"] and low[1]["r"] <= low[2]["x"], low
+    assert all(abs(b["y"] - low[0]["y"]) < 1 for b in low), low
     # the window is the workspace: no page scroll either way
     s = pg.evaluate("[document.documentElement.scrollHeight, innerHeight,"
                     " document.documentElement.scrollWidth, innerWidth]")
@@ -644,23 +648,44 @@ def test_no_link_wears_the_browsers_blue_underline(live_server, project, browser
     pg.context.close()
 
 
-def test_the_program_picture_fills_its_panel_at_1440x900(live_server, project, browser):
-    """Rubric log 2026-10-15 (wave 2): the replacement for the dropped "Program >= 425 px
-    tall" check. In the default layout at 1440×900 the Program picture is at least 380 px
-    wide and the black letterbox above and below it is at most 30 % of its room (verdict 2
-    measured 389×219 in a 447 px tall room: 51 %). The ▶ is not parked on the picture: it
-    shows only while the pointer is over a paused picture."""
-    pg = _open(browser, live_server, project, (1440, 900))
-    m = pg.evaluate("""() => { const room = document.querySelector('#pProgram .screenbox').getBoundingClientRect(),
-        pic = document.querySelector('#pProgram .screen').getBoundingClientRect();
-        return {w: pic.width, h: pic.height, rw: room.width, rh: room.height,
-                left: pic.left - room.left, right: room.right - pic.right,
-                top: pic.top - room.top, bottom: room.bottom - pic.bottom}; }""")
-    assert m["w"] >= 380, m
+PICTURE_JS = """() => { const room = document.querySelector('#pProgram .screenbox').getBoundingClientRect(),
+    pic = document.querySelector('#pProgram .screen').getBoundingClientRect(),
+    met = document.querySelector('#meters').getBoundingClientRect();
+    return {w: pic.width, h: pic.height, rw: room.width, rh: room.height,
+            left: pic.left - room.left, right: room.right - pic.right,
+            top: pic.top - room.top, bottom: room.bottom - pic.bottom,
+            mode: rcMeters.mode(), ml: met.left, mt: met.top, mw: met.width, mh: met.height,
+            pr: pic.right, pt: pic.top, pb: pic.bottom}; }"""
+
+# the default layout's Program picture floor, per viewport (rubric log, 2026-10-15 wave 4)
+PICTURE_FLOOR = {(1440, 900): 560, (1920, 1080): 800}
+
+
+@pytest.mark.parametrize("size", VIEWPORTS, ids=lambda s: f"{s[0]}x{s[1]}")
+def test_the_program_picture_fills_its_panel(live_server, project, browser, size):
+    """Rubric log 2026-10-15: wave 2 set the floor at 380 px wide and <= 30 % letterbox at
+    1440×900 (verdict 2 measured 389×219 in a 447 px tall room: 51 %). Verdict 4 punch 3:
+    still a quarter of the screen each. Wave 4 gives the two monitors the whole top row,
+    as Premiere's Editing workspace does: in the default layout the Program picture is
+    >= 560 px wide at 1440×900 and >= 800 px at 1920×1080, its letterbox <= 30 % of its
+    room, centred in that room, with the audio meters standing vertical beside it. The ▶
+    is not parked on the picture: it shows only while the pointer is over a paused
+    picture."""
+    pg = _open(browser, live_server, project, size)
+    pg.wait_for_function("window.rcMeters && rcMeters.mode() === 'v'", timeout=5000)
+    m = pg.evaluate(PICTURE_JS)
+    assert m["w"] >= PICTURE_FLOOR[size], m
     assert 1 - m["h"] / m["rh"] <= 0.30, m
     assert abs(m["left"] - m["right"]) <= 1 and abs(m["top"] - m["bottom"]) <= 1, m
+    # the meters: vertical, beside the picture (right of it, as tall as it), never over it
+    assert m["mode"] == "v" and m["mw"] >= 24 and m["ml"] >= m["pr"] - 0.5, m
+    assert m["mt"] <= m["pt"] + 1 and m["mt"] + m["mh"] >= m["pb"] - 1, m
     # the Source monitor is the same size (Premiere's two monitors, side by side)
     assert box(pg, "#pSource")["w"] == pytest.approx(box(pg, "#pProgram")["w"], abs=2)
+    # a selected shot does not resize it
+    pg.locator("#tl .blk").first.click()
+    pg.wait_for_timeout(400)
+    assert pg.evaluate(PICTURE_JS)["w"] == pytest.approx(m["w"], abs=0.5)
     # the ▶: there at rest for the pointer, invisible until it is over the picture
     big = pg.locator("#bigPlay")
     assert big.count() == 1 and not pg.evaluate("document.querySelector('#bigPlay').hidden")
@@ -672,10 +697,79 @@ def test_the_program_picture_fills_its_panel_at_1440x900(live_server, project, b
     pg.wait_for_timeout(300)
     assert pg.evaluate("getComputedStyle(document.querySelector('#bigPlay')).opacity") == "1"
     # a layout the editor dragged still wins over the defaults
-    pg.evaluate("localStorage.setItem('roughcut.ws.layout', JSON.stringify({proj: 0.2, insp: 0.245, src: null, top: 0.6}))")
+    pg.evaluate("localStorage.setItem('roughcut.ws.layout', JSON.stringify({v: 2, proj: 0.2, insp: 0.245, src: null, top: 0.6}))")
     pg.reload()
     pg.wait_for_selector("#tl .blk", timeout=15000)
-    assert box(pg, "#pProgram")["h"] > 480
+    assert box(pg, "#pProgram")["h"] == pytest.approx(0.6 * (size[1] - 36 - 8 - 4), abs=3)
+    assert pg.errors == []
+    pg.context.close()
+
+
+def test_a_layout_saved_before_the_new_arrangement_keeps_its_widths_once(live_server, project, browser):
+    """Wave 4 changed what the top row is (the monitors' whole row, not a quarter each).
+    A layout saved before it (no version) keeps the widths it gave Project and Effect
+    Controls, drops its top-row height and Source width once so the bigger monitors reach
+    that browser, and is kept whole under roughcut.ws.layout.v1; the layout saved after
+    it is version 2 and is honoured as it is."""
+    old = {"proj": 0.3, "insp": 0.3, "src": 0.2, "top": 0.3}
+    pg = _open(browser, live_server, project, (1440, 900))
+    pg.evaluate(f"localStorage.setItem('roughcut.ws.layout', JSON.stringify({json.dumps(old)}))")
+    pg.reload()
+    pg.wait_for_selector("#tl .blk", timeout=15000)
+    W = 1440 - 8
+    assert box(pg, "#pProject")["w"] == pytest.approx(0.3 * W, abs=2)
+    assert box(pg, "#pInspector")["w"] == pytest.approx(0.3 * W, abs=2)
+    assert box(pg, "#pSource")["w"] == pytest.approx(box(pg, "#pProgram")["w"], abs=2)
+    assert pg.evaluate(PICTURE_JS)["w"] >= PICTURE_FLOOR[(1440, 900)]
+    assert json.loads(pg.evaluate("localStorage.getItem('roughcut.ws.layout.v1')")) == old
+    saved = json.loads(pg.evaluate("localStorage.getItem('roughcut.ws.layout')"))
+    assert saved == {"v": 2, "proj": 0.3, "insp": 0.3}, saved
+    # once: a second load reads the version-2 layout as it is
+    pg.reload()
+    pg.wait_for_selector("#tl .blk", timeout=15000)
+    assert json.loads(pg.evaluate("localStorage.getItem('roughcut.ws.layout')")) == saved
+    assert box(pg, "#pProject")["w"] == pytest.approx(0.3 * W, abs=2)
+    assert pg.errors == []
+    pg.context.close()
+
+
+@pytest.mark.parametrize("size", VIEWPORTS, ids=lambda s: f"{s[0]}x{s[1]}")
+def test_selects_opens_wide_enough_for_its_media_in_out_and_reason(live_server, project, browser, size):
+    """Verdict 4's note: at 1440 the Project group was too narrow for the Selects list's
+    Media In / Media Out and Reason columns (app.js shows them from a 440 / 560 px list).
+    While Selects is the group's open tab the group is wide enough for them, taken from
+    the Timeline (which keeps >= 460 px); the Project tab gives the width back."""
+    pg = _open(browser, live_server, project, size)
+    own = box(pg, "#pProject")["w"]
+    tl0 = box(pg, "#pTimeline")["w"]
+    pg.locator(".ws-tab[data-tool=bin]").click()
+    pg.wait_for_timeout(300)
+    assert pg.evaluate("document.querySelector('#library').clientWidth") >= 560
+    assert box(pg, "#pTimeline")["w"] >= 460
+    head = pg.locator("#library table.sel-list th").all_inner_texts()
+    assert {"Media In", "Media Out", "Reason"} <= {h.strip() for h in head}, head
+    s = pg.evaluate("[document.documentElement.scrollWidth, innerWidth]")
+    assert s[0] <= s[1], s
+    pg.locator(".ws-tab[data-tool=project]").click()
+    pg.wait_for_timeout(300)
+    assert box(pg, "#pProject")["w"] == pytest.approx(own, abs=1)
+    assert box(pg, "#pTimeline")["w"] == pytest.approx(tl0, abs=1)
+    assert pg.errors == []
+    pg.context.close()
+
+
+def test_the_source_monitors_poster_is_the_versioned_one(live_server, project, browser):
+    """Lane POLISH versioned poster URLs in the file name (`<stem>.v2.jpg`, the server's
+    poster_url) so a browser drops a cached pre-ORIENT frame. The Source monitor builds its
+    poster from the clip's own `poster` URL, swapping only `?t=`, never an unversioned one."""
+    pg = _open(browser, live_server, project, (1440, 900))
+    pg.evaluate("dock.source.marks['CLIP_B.MP4'] = [1.5, null]; dock.project.select('CLIP_B.MP4')")
+    src = pg.get_attribute("#srcPoster", "src")
+    want = pg.evaluate("dock.project.clips().find(c => c.clip === 'CLIP_B.MP4').poster").split("?")[0]
+    assert ".v2.jpg" in want and src == f"{want}?t=1.50", (src, want)
+    pg.evaluate("dock.project.view('icon')")
+    icons = pg.evaluate("[...document.querySelectorAll('#projList .picon img')].map(i => i.getAttribute('src'))")
+    assert icons and all(".v2.jpg?t=" in i for i in icons), icons
     assert pg.errors == []
     pg.context.close()
 
