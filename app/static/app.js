@@ -3140,7 +3140,13 @@ function rejectProposal() {
  * thrown-away proposal "waiting for you". */
 function answerProposal(answer, partial) {
   // `partial`: which shots an Accept took ({accepted, of, rejected: [k], kept: [ids]}) —
-  // on the record for the server to read; it answers the record the same either way
+  // on the record for the server to read; it answers the record the same either way.
+  // With it go the ranges the editor rejected (verdict 4: a re-run brought one back),
+  // from the review the Accept just read (tlLanes.reviewed).
+  const lanes = window.tlLanes;
+  if (partial && !partial.ranges && lanes && lanes.reviewed && Array.isArray(lanes.reviewed.lastRanges)) {
+    partial = { ...partial, ranges: lanes.reviewed.lastRanges };
+  }
   fetch('/api/asks/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(partial ? { answer, partial } : { answer }) }).then(flowSoon, () => {});
 }

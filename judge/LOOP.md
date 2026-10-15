@@ -49,6 +49,9 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-15 11:40: RERUN merged (`3349be3`). Queued for wave 5: the board can save twice before `tl.afterSave` re-keys
+  `tmp-N` ids, so the server mints a second set of ids (what judge 4 hit; the server now re-aliases trims, but per-shot
+  colour keyed by id can still be orphaned): one save in flight, or `forSave` re-keys from the first reply.
 - 2026-10-15 10:30: **VERDICT 4 = FAIL** (rev `c1c5d6a`; all dims 6-8; 2/3/12 at 8; 9 and 11 at 6). Blockers: K2, picks not
   editor objects, the re-run re-adds rejected shots and rounds kept shots off the grid. Rulings: HEADER's exemption removal
   and /jobs 109 honest; /shot should be 189 (measured). **Wave 4 lanes** (from this commit): PICKS2 (punch 1), RERUN (2),

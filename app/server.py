@@ -2357,7 +2357,26 @@ async def api_asks_answer(request: Request) -> JSONResponse:
     tmp.replace(files[0])
     if rec["answered"].get("partial"):
         note_partial_accept(rec)                  # provenance: the save may have landed
+        note_rejections(rec)                      # verdict 4: a rejection is remembered
     return JSONResponse({"ok": True, "job": rec.get("job")})
+
+
+def note_rejections(rec: dict, edl: dict | None = None) -> None:
+    """The ranges a partial Accept turned down (`firstpass.rejected_ranges`), on the
+    cut: a re-run is told not to propose them and is held to it. Called by the answer
+    (it writes the EDL) and by the save that answers it (`edl`, written by that save) —
+    whichever lands first; a range is kept once. Never fails either."""
+    try:
+        partial = (rec.get("answered") or {}).get("partial")
+        ranges = fpmod.rejected_ranges(rec.get("plan") or {}, partial)
+        if not ranges:
+            return
+        target = edl if edl is not None else read_edl()
+        at = (rec.get("answered") or {}).get("at")
+        if fpmod.record_rejections(target, ranges, job=rec.get("job"), at=at) and edl is None:
+            write_edl(target)
+    except Exception as exc:  # noqa: BLE001 — a rejection note must never cost a save
+        print(f"  !! provenance (rejections): {exc}", flush=True)
 
 
 @app.get("/flow.js")
@@ -2457,6 +2476,7 @@ def note_accept(edl: dict, saved: list[dict], colour=None) -> None:
                 prior = {r["id"]: r["how"] for r in fpmod.manual_edits(edl, ask_plans())
                          if r.get("id")}
                 hand = fpmod.partial_hand(saved, plan, prior)
+                note_rejections(rec, edl)         # this save writes them
             else:
                 before = {s.get("id"): s for s in fpmod._segments(edl) if s.get("id")}
                 hand = {}
@@ -2586,8 +2606,12 @@ def firstpass_state() -> dict:
     ensure_segment_ids(edl)
     facts = flow_facts()
     manual = fpmod.manual_edits(edl, ask_plans())
-    rec = _fp_record()
-    live = _fp_live()
+    # one consistent pair: a run that ends sets its state and saves its record under
+    # this lock, so a poll between the two read a "running" record with no live run and
+    # called it interrupted by a restart (a flake in test_firstpass)
+    with FIRSTPASS_LOCK:
+        live = _fp_live()
+        rec = _fp_record()
     out: dict = {"manual_edits": manual, "last": rec, **config.cost_terms()}
     try:
         out["would"] = firstpass_plan(None, None, facts=facts, edl=edl, manual=manual)
@@ -2854,16 +2878,27 @@ def _firstpass_walk(job: str, fp: dict) -> None:
         manual = fpmod.manual_edits(edl, ask_plans())
         locked = [k for k in fp["keep"] if any(s.get("id") == k for s in segments)]
         originate = not segments or (fp["mode"] == "run" and not locked)
-        note = fp["note"] if originate else fpmod.plan_note(len(locked), fp["mode"],
-                                                              fp["note"])
+        # verdict 4: the ranges the editor rejected in a review — not proposed again
+        rejected = fpmod.rejections(edl)
+        note = (fpmod.plan_note(len(locked), fp["mode"], fp["note"], rejected)
+                if not originate else
+                "\n\n".join(x for x in ((fp["note"] or "").strip(),
+                                         fpmod.rejected_brief(rejected)) if x))
 
         def finish(plan: dict) -> dict:
             plan = dict(plan)
+            plan["segments"], left = fpmod.drop_rejected(plan["segments"], segments,
+                                                         rejected)
             if segments and locked:
                 plan["segments"] = fpmod.enforce_locks(plan["segments"], segments, locked)
+            if left:
+                plan["notes"] = "\n\n".join(x for x in (
+                    str(plan.get("notes") or "").strip(),
+                    "\n".join(fpmod.rejected_lines(left))) if x)
             plan["firstpass"] = {
                 "job": job, "mode": fp["mode"], "keep": locked,
                 "manual": [r for r in manual if r.get("id") in set(locked)],
+                "rejected": left,
                 "diff": fpmod.rerun_diff(segments, plan["segments"], locked, manual)}
             return plan
 
