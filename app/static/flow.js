@@ -21,6 +21,15 @@
  * Self-contained styles, like /cli.js, because the three pages do not share a
  * stylesheet. It repaints only when the answer changes (no flicker under a hovered
  * chip) and keeps one height, so a poll never moves the page.
+ *
+ * One first action, nothing clipped (verdict 3, punch 8). On the board the first pass
+ * (firstpass.js, the header's "Run first pass") starts by indexing the footage, so Next
+ * never offers "Index the footage" beside it: when Next's action is the pass's, the
+ * chip yields its slot and the blue goes on the first pass's button (none while the
+ * pass runs: its label is the progress). See `passCovers`. And the chip never
+ * ellipsizes: while a job or the pass runs, or when its sentence has no room in the
+ * row, it collapses to an icon with the sentence in its hover (`.compact`) — a clipped
+ * "Next Make t…" read as a broken primary button.
  */
 (function () {
   'use strict';
@@ -41,7 +50,11 @@
      the job strip or the buttons on the right shrink (verdict 2, punch 6). */
   header > #flow { flex-shrink: 100; }
   #flow .fnext b { color: #9a9aa8; font-weight: 600; flex: none; }
-  #flow .fnext span { overflow: hidden; text-overflow: ellipsis; }
+  #flow .fnext span { flex: none; }
+  #flow .fnext .fico { display: none; width: 14px; height: 14px; flex: none; }
+  #flow .fnext.compact { flex: none; padding: 0 5px; }
+  #flow .fnext.compact b, #flow .fnext.compact span { display: none; }
+  #flow .fnext.compact .fico { display: block; }
   #flow .fnext.cli { border-color: #e0b050; background: #3a2c0c; }
   #flow .fnext.cli b { color: #ffd27a; }
   #flow .fnext.wait, #flow .fnext.round { color: #9a9aa8; }
@@ -54,6 +67,9 @@
   #flow .fnext.cli.is-next { background: #3a2c0c !important; color: #f6e7c4 !important;
     border-color: #e0b050 !important; }
   #flow .fnext.cli.is-next b { color: #ffd27a !important; }`;
+
+  const ICON = '<svg class="fico" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor"'
+    + ' stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8h10M9 4.5 12.5 8 9 11.5"/></svg>';
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"]/g, (c) =>
@@ -96,12 +112,66 @@
     return null;
   }
 
+  /* ---- the board's first pass (firstpass.js): its state, and what it covers */
+  function fpHost() { return HERE === '/' ? document.getElementById('firstpass') : null; }
+  function fpState() {
+    try {
+      const s = window.rcFirstPass && typeof window.rcFirstPass.state === 'function'
+        ? window.rcFirstPass.state() : null;
+      return s ? s.state : null;
+    } catch (err) { return null; }
+  }
+  function fpButton() { const h = fpHost(); return h ? h.querySelector('.fp-btn') : null; }
+
+  /* Next's action is one the first pass does — index the footage (verdict 3: "Next:
+   * Index the footage" beside "Run first pass", and the index is the pass's first step)
+   * — so the header's first pass control is that action, and the chip does not offer
+   * it a second time. While the pass runs, its label is the news about the index, the
+   * clips released and the first cut, so a wait on those yields too. (A wait on an
+   * index started elsewhere stays: the chip's icon, "Now: …". The empty Timeline's
+   * "Make the first cut" on a bin already indexed stays Next's: INTAKE M16 I16.4.) */
+  function passCovers(f) {
+    const n = f && f.next;
+    if (!n || !fpHost() || n.kind === 'cli') return false;    // the CLI's fix is its own
+    if (fpState() === 'running') {
+      const cut = (f.stages || []).find((s) => s.key === 'cut');
+      const noCut = !cut || !((cut.counts || {}).shots > 0);
+      return n.stage === 'index' || n.stage === 'pass' || (n.stage === 'cut' && noCut);
+    }
+    return n.kind !== 'wait' && n.stage === 'index';
+  }
+
+  /* Something runs in the row: the pass, or a job in the progress strip. */
+  function busy() {
+    if (fpState() === 'running') return true;
+    const strip = document.getElementById('progress');
+    if (!strip || strip.hidden) return false;
+    return [...strip.querySelectorAll('.job')].some(visible);
+  }
+
+  /* The chip whole when it has room and nothing runs, else its icon (never ellipsized).
+   * Measured in one task — whole, then compact if it overflows — so nothing paints in
+   * between. */
+  function fit() {
+    const el = document.getElementById('flow');
+    const a = document.getElementById('flowNext');
+    if (!el || !a || a.classList.contains('round')) return;
+    const set = (on) => {
+      a.classList.toggle('compact', on);
+      el.classList.toggle('compact', on);
+    };
+    if (busy()) { set(true); return; }
+    set(false);
+    if (a.scrollWidth > a.clientWidth + 0.5 || el.scrollWidth > el.clientWidth + 0.5) set(true);
+  }
+
   function paint(f) {
     const el = mount();
     if (!el || !f) return;
     last = f;
     const left = roundLeft();
-    const key = JSON.stringify([f.next, left]);
+    const yielded = !left && passCovers(f);
+    const key = JSON.stringify([f.next, left, yielded]);
     if (key !== shown) {                   // nothing changed: leave a hovered chip be
       shown = key;
       const n = f.next;
@@ -109,15 +179,19 @@
         el.innerHTML = `<a class="fnext round" id="flowNext" href="/floor" data-next="pass"` +
           ` title="${left} still to decide in this round — P pick · X reject · U later">` +
           `<span>${left} left</span></a>`;
-      } else if (n) {
+      } else if (n && !yielded) {
         const cls = n.kind === 'cli' ? 'cli' : n.kind === 'wait' ? 'wait' : '';
+        const word = n.kind === 'wait' ? 'Now' : 'Next';
         el.innerHTML = `<a class="fnext ${cls}" id="flowNext" href="${esc(n.href)}"` +
-          ` data-next="${esc(n.stage)}" title="${esc(n.sentence)}">` +
-          `<b>${esc(n.kind === 'wait' ? 'Now' : 'Next')}</b><span>${esc(n.sentence)}</span></a>`;
+          ` data-next="${esc(n.stage)}" title="${esc(`${word}: ${n.sentence}`)}"` +
+          ` aria-label="${esc(`${word}: ${n.sentence}`)}">` +
+          `<b>${esc(word)}</b><span>${esc(n.sentence)}</span>${ICON}</a>`;
       } else {
         el.innerHTML = '';
       }
+      el.dataset.yielded = yielded ? 'firstpass' : '';
     }
+    fit();
     mark();
   }
 
@@ -146,7 +220,11 @@
   function mark() {
     const n = last && last.next;
     let pick = null;
-    if (n && !roundLeft()) pick = target(n) || document.getElementById('flowNext');
+    if (n && !roundLeft()) {
+      // yielded to the first pass: its button is the one action (nothing while it runs)
+      if (passCovers(last)) pick = fpState() === 'running' ? null : fpButton();
+      else pick = target(n) || document.getElementById('flowNext');
+    }
     document.querySelectorAll('.is-next').forEach((el) => {
       if (el !== pick) el.classList.remove('is-next');
     });
@@ -305,10 +383,16 @@
     el.addEventListener('click', onClick);
     honourHash();
     window.addEventListener('hashchange', honourHash);
-    new MutationObserver(soon).observe(document.body, {
+    // ...but not when the change is the chip's own (fit() and mark() toggle its classes)
+    new MutationObserver((recs) => {
+      if (recs.some((r) => !el.contains(r.target))) soon();
+    }).observe(document.body, {
       subtree: true, childList: true, attributes: true,
-      attributeFilter: ['hidden', 'class', 'style', 'disabled', 'open', 'data-next-for', 'data-fx'],
+      attributeFilter: ['hidden', 'class', 'style', 'disabled', 'open', 'data-next-for', 'data-fx',
+                        'data-state'],
     });
+    // the row's room changes with the window: whole or icon, again
+    window.addEventListener('resize', soon);
     // the pass decides a moment without always touching the DOM the chip can see; it
     // says so itself after every repaint (`roughcut:pass`, /floor.js), which is also
     // when the closing card's "Back to the cut" appears, so "N left" and the blue
@@ -322,7 +406,9 @@
 
   // `mark()`: place the blue again now — for a page that has just drawn a button it
   // marked `data-next-for` and cannot wait the observer's 150 ms (tests, mostly).
+  // `yielded()`: Next's action is the first pass's, so the chip gave its slot to it.
   window.flowBar = { poll, state: () => last, here: HERE, land,
+                     yielded: () => !!(last && !roundLeft() && passCovers(last)),
                      mark: () => { if (last) paint(last); } };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();

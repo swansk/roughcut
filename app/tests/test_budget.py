@@ -78,8 +78,11 @@ HEADER_MAX_PX = 50
 # / shot 154 · 61, / film 111 · 48, / jobs 129 · 49, / fx 131 · 52; the board's numbers
 # Lead, at merge: the board's numbers below are the MEASURED counts on the merged tree with no
 # headroom (TRACKS + FPUI together; see REDESIGN-GOAL's rubric log), so any growth fails.
+# Wave 3, lane HEADER (verdict 3 punch 8): a running job is an icon and its % with the
+# name in its hover, and Next is its icon while anything runs, so "/ jobs" measured 109
+# words (was 132): lowered to that, no headroom.
 WORDS_IN_VIEW = {"/": 106, "/floor": 58, "/open": 59, "/ shot": 196, "/ film": 114, "/ fx": 134,
-                 "/ jobs": 132}
+                 "/ jobs": 109}
 CONTROLS_IN_VIEW = {"/": 50, "/floor": 8, "/open": 9, "/ shot": 85, "/ film": 49, "/ fx": 53,
                     "/ jobs": 50}
 

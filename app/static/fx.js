@@ -183,8 +183,14 @@
     }
   }
 
+  /* A shot laid in a moment ago has a temporary `tmp-N` id until its save re-keys it
+   * (timeline.js `afterSave`); the server answers 4xx for it, a console error per insert
+   * (verdict 3, punch 9). Nothing per-shot is asked until the real id is in: onSelect
+   * sees the re-keyed anchor as a new shot and fetches then. */
+  const unsaved = (id) => !id || String(id).startsWith('tmp-');
+
   async function fetchPeaks(id) {
-    if (!id) { S.peaks = []; return; }
+    if (unsaved(id)) { S.peaks = []; return; }
     S.peaksFor = id;
     try {
       const d = await api('GET', `/api/fx/peaks?shot=${encodeURIComponent(id)}`);
@@ -195,7 +201,7 @@
   }
 
   async function fetchPrice(id) {
-    if (!id) { S.price = null; S.peaks = []; return; }
+    if (unsaved(id)) { S.price = null; S.peaks = []; S.priceFor = null; S.peaksFor = null; return; }
     fetchPeaks(id);
     // Iterate's Go is a model call (POST /api/fx/revise): priced like a design with
     // nothing to place, once, before any card's box is open (INTAKE I16.0f)
