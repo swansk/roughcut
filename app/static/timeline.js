@@ -42,7 +42,8 @@
  *                               index `sel` points at, or null when nothing is selected;
  *                               `zoom` is px per second of film; `scrollX` mirrors the
  *                               viewport's scrollLeft; `playhead` is a film time.
- *   tl.el                       `{root, view, canvas, ruler, lanes: {V1}, head}` — the DOM
+ *   tl.el                       `{root, view, canvas, ruler, lanes: {V1, V2, A1, A2}, tracks,
+ *                               heads, head}` — the DOM
  *                               the lanes hang their own elements on. `canvas` is the
  *                               scrolled surface; `view` scrolls it.
  *
@@ -147,8 +148,33 @@
  *                               project and cut, or come from `P.markers` / `P.in` /
  *                               `P.out` once the server sends them. Emit `markers`.
  *
+ *   — the tracks: V2 V1 A1 A2 (verdict 2 punch 3; the model is roughcut/tracks.py) —
+ *   The cut is still one magnetic list, and each shot is two clips: its picture on V1 and,
+ *   linked, its clip's own sound on A1 (`.ablk` in `tl.el.tracks.A1`, keyed by the shot's
+ *   id) — so a trim, a razor, a ripple delete or a move acts on both. A shot may carry
+ *   `link: false` (unlinked) and `a_off` (film seconds the sound sits after its picture).
+ *   A2 is the music bed (drawn by timeline-lanes.js). V2 holds `overlays`, clips laid over
+ *   the cut at a film time `at` (picture only; the render composites them over V1).
+ *   tl.tracks() / tl.setTrack(name, key, v)   The headers: V1/V2 {lock, eye, target},
+ *                               A1/A2 {lock, mute, solo, target, gain_db}. Not undoable (as
+ *                               in Premiere); saved with V2 and the markers. Emits `tracks`.
+ *   tl.audible(name)            Not muted and, when any track is soloed, soloed.
+ *   tl.isLinked(seg) tl.aOff(seg) tl.setLink(id, bool) tl.toggleLink(id)   ⌥-click on
+ *                               either half toggles (the trim lane and the lanes call it).
+ *   tl.setAudioOffset(id, s)    An unlinked shot's sound against its picture, on frames;
+ *                               one `move audio` entry.
+ *   tl.overlays() overlayById(id) addOverlay(seg, at) moveOverlay(id, at) removeOverlay(id)
+ *   tl.selectOverlay(id|null)   V2. Each edit is one undo entry (V2 rides the snapshot).
+ *                               tl.state.osel is the V2 clip selected.
+ *   tl.layoutTracks()           Size every row from the view's height: V2, V1, the lanes'
+ *                               ghost (`tl.el.lanes.ghost`), A1, A2, the bin outlines.
+ *   tl.saveSeq()                PUT the headers, V2, markers and In / Out now (debounced on
+ *                               every change; a body with no `segments` leaves the cut alone).
+ *   A locked V1 or A1 refuses every edit of the cut (a toast says so); a locked V2 refuses
+ *   V2's. The Program monitor's videos carry A1's level (0 muted) and the bed follows A2.
+ *
  *   — saving —
- *   tl.forSave()              The segments to PUT: known tmp ids mapped to their server
+ *   tl.forSave()            The segments to PUT: known tmp ids mapped to their server
  *                               ids, unknown ones stripped (the server mints).
  *   tl.needsRekey()             True while a shot has no server id yet.
  *   tl.afterSave(segments)      The segments from GET /api/project after a save: re-key by
@@ -196,13 +222,28 @@
     slip: ['Y', '↔', 'Slip tool — drag a shot to slip its content'],
     track: ['A', '⇉', 'Track select forward — a click takes that shot and every one after'],
   };
+  /* The tracks (roughcut/tracks.py): V2 over V1, then A1 (each shot's own sound, linked)
+   * and A2 (the music bed). Rows share the panel's height by weight, never under their
+   * minimum; the ruler is RULER_H; a thin gap between rows, a wider one between the video
+   * and the audio tracks, as Premiere draws them. */
+  const TRACKS = ['V2', 'V1', 'A1', 'A2'];
+  const TRACK_W = { V2: 0.8, V1: 1.5, A1: 1.15, A2: 0.75 };
+  const TRACK_MIN = { V2: 24, V1: 40, A1: 28, A2: 22 };
+  const RULER_H = 24, ROW_GAP = 2, AV_GAP = 6;
+  const DEFAULT_TRACKS = () => ({
+    V1: { lock: false, eye: true, target: true },
+    V2: { lock: false, eye: true, target: false },
+    A1: { lock: false, mute: false, solo: false, target: true, gain_db: 0 },
+    A2: { lock: false, mute: false, solo: false, target: false, gain_db: 0 },
+  });
+  const SEQ_SAVE_MS = 400;
   const IS_MAC = /Mac|iPhone|iPad/i.test(
     (typeof navigator !== 'undefined'
       && ((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform)) || '');
 
   let hooks = null;
   const el = { root: null, view: null, canvas: null, ruler: null, lanes: {}, head: null,
-               end: null, total: null };
+               end: null, total: null, tracks: {}, heads: null, divider: null };
   const blocks = new Map();        // id -> block element
   const posterAt = new Map();      // id -> the in-point the block's poster shows
   const tmpMap = new Map();        // tmp id -> server id, learnt after a save
@@ -222,7 +263,12 @@
   const state = {
     sel: new Set(), anchor: null, zoom: 40, scrollX: 0, playhead: 0,
     tool: 'select', markers: [], seqIn: null, seqOut: null,
+    tracks: DEFAULT_TRACKS(), overlays: [], osel: null,
   };
+  const ablocks = new Map();       // id -> A1 block element (the shot's linked sound)
+  const oblocks = new Map();       // overlay id -> V2 block element
+  let seqTimer = 0;                // the tracks / V2 / markers save, debounced
+  let seqSaved = null;             // the body last saved (or loaded): unchanged saves nothing
   let fpsOverride = null;          // tl.setFps()
   Object.defineProperty(state, 'segs', {
     enumerable: true, get: () => (hooks ? hooks.segs() : []),
@@ -449,7 +495,8 @@
     b.className = 'blk';
     b.dataset.id = id;
     b.innerHTML = '<img class="poster" draggable="false" loading="lazy" decoding="async" alt="">'
-      + '<div class="txt"><span class="speed" hidden></span><span class="name"></span></div>'
+      + '<div class="txt"><span class="speed" hidden></span><span class="sync" hidden></span>'
+      + '<span class="name"></span></div>'
       + '<i class="warn in" hidden></i><i class="warn out" hidden></i>';
     return b;
   }
@@ -479,17 +526,22 @@
     return (u && u.text) || seg.why || '';
   }
 
-  /* A block's name (INTAKE M16 I16.4): the first words spoken inside the shot, else the
-   * shot's why, else what was seen in it — never the camera's file name; a generated
-   * slide by what it is (`black`, `title`). The file and the clip range are the
-   * tooltip's. */
-  function blockName(seg, clip) {
+  /* A block's name is its clip's, as in Premiere (verdict 2, punch 3 — it was the first
+   * words spoken, INTAKE M16, which read as three identical "Oh, that's tight." blocks);
+   * a generated slide by what it is (`black`, `title`). What is said in the shot, else
+   * what was seen in it, is the hover's first line (`blockSays`). */
+  function blockName(seg) {
     if (isGen(seg.clip)) return genKind(seg.clip);
+    return stem(seg.clip);
+  }
+
+  function blockSays(seg, clip) {
+    if (isGen(seg.clip)) return genLine(seg, clip);
     const line = strongestLine(seg, clip);
     if (line) return line;
     const seen = ((clip && clip.visual && clip.visual.moments) || [])
       .find((m) => m.end > seg.in && m.start < seg.out && m.what);
-    return seen ? seen.what : 'no words';
+    return seen ? seen.what : '';
   }
 
   /* Mirrors app.js's boundaryWarning, per edge: a cut point inside somebody's sentence. */
@@ -549,16 +601,448 @@
     const badge = b.querySelector('.speed');
     badge.hidden = spd === 1;
     badge.textContent = spd === 1 ? '' : `${speedLabel(spd)}×`;
-    b.title = `${i + 1}. ${gen ? genLine(seg, clip) : stem(seg.clip)} ${fmt(seg.in)}–${fmt(seg.out)}`
+    paintSync(b.querySelector('.sync'), seg);
+    b.classList.toggle('unlinked', !isLinked(seg));
+    const says = blockSays(seg, clip);
+    b.title = (says ? `“${says}”\n` : '')
+      + `${i + 1}. ${gen ? genLine(seg, clip) : stem(seg.clip)} ${fmt(seg.in)}–${fmt(seg.out)}`
       + (spd === 1 ? ` (${filmLen.toFixed(1)}s)`
                    : ` at ${speedLabel(spd)}× (${filmLen.toFixed(1)}s of film from ${(seg.out - seg.in).toFixed(1)}s)`)
-      + (seg.why ? `\n${seg.why}` : '');
+      + (isLinked(seg) ? '' : ' · unlinked from its sound on A1')
+      + (seg.why && seg.why !== says ? `\n${seg.why}` : '');
     const warn = warnEdges(seg, clip);
     const wi = b.querySelector('.warn.in'), wo = b.querySelector('.warn.out');
     wi.hidden = !warn.in; wi.title = 'opens mid-sentence';
     wo.hidden = !warn.out; wo.title = 'cuts a line off';
     if (!posterAt.has(seg.id)) setPoster(b, seg);
     else if (posterAt.get(seg.id) !== seg.in) schedulePosters();
+  }
+
+  /* ================================================== the tracks (V2 V1 A1 A2) */
+  /* A shot is a picture on V1 and, linked to it, its clip's own sound on A1. `link:
+   * false` unlinks the pair (Alt-click either half); `a_off` is where the sound sits
+   * against the picture, in film seconds — only an unlinked pair's sound moves alone,
+   * and relinking keeps the offset (Premiere shows it in red on both halves). */
+  const isLinked = (seg) => !(seg && seg.link === false);
+  function aOff(seg) {
+    const x = Number(seg && seg.a_off);
+    return Number.isFinite(x) ? x : 0;
+  }
+
+  function paintSync(badge, seg) {
+    if (!badge) return;
+    const off = aOff(seg);
+    badge.hidden = !off;
+    // Premiere's red offset, without the zero hours and minutes: +00:12 is twelve frames
+    badge.textContent = off ? `${off > 0 ? '+' : '−'}${tc(Math.abs(off)).replace(/^(00:)+(?=\d\d:\d\d$)/, '')}` : '';
+    badge.title = off ? `out of sync: the sound is ${Math.abs(off).toFixed(2)} s ${off > 0 ? 'later' : 'earlier'} than the picture` : '';
+  }
+
+  function trackState(name) { return state.tracks[name] || DEFAULT_TRACKS()[name]; }
+  /* Whether an audio track is heard: not muted and, when any track is soloed, soloed. */
+  function audible(name) {
+    const t = trackState(name);
+    if (!t || t.mute) return false;
+    const anySolo = ['A1', 'A2'].some((n) => trackState(n).solo);
+    return anySolo ? !!t.solo : true;
+  }
+  const cutLocked = () => trackState('V1').lock || trackState('A1').lock;
+
+  function refuseLocked(name) {
+    toast(`${name} is locked — unlock it in its track header to edit`);
+    return null;
+  }
+
+  function makeABlock(id) {
+    const b = document.createElement('div');
+    b.className = 'ablk';
+    b.dataset.id = id;
+    b.innerHTML = '<div class="wave"></div><span class="sync" hidden></span><span class="name"></span>';
+    return b;
+  }
+
+  /* A1: each shot's sound, at its film start plus its offset. Inside it, the clip's
+   * speech (from the transcript, at the shot's rate) as brighter bands — what there is
+   * to hear, never an invented waveform. */
+  function renderA1(list, live) {
+    const lane = el.tracks.A1;
+    if (!lane) return;
+    const seen = new Set();
+    let start = 0;
+    list.forEach((seg, i) => {
+      let b = ablocks.get(seg.id);
+      if (!b) { b = makeABlock(seg.id); ablocks.set(seg.id, b); }
+      if (lane.children[i] !== b) lane.insertBefore(b, lane.children[i] || null);
+      const d = dur(seg), spd = speedOf(seg), w = Math.max(3, d * state.zoom);
+      b.style.left = `${timeToX(start + aOff(seg))}px`;
+      b.style.width = `${w}px`;
+      b.style.setProperty('--hue', hueOf(seg.clip));
+      b.classList.toggle('sel', state.sel.has(seg.id));
+      b.classList.toggle('live', i === live);
+      b.classList.toggle('unlinked', !isLinked(seg));
+      b.classList.toggle('narrow', w < 60);
+      b.classList.toggle('gen', isGen(seg.clip));
+      b.querySelector('.name').textContent = isGen(seg.clip) ? `${genKind(seg.clip)} · silence` : stem(seg.clip);
+      paintSync(b.querySelector('.sync'), seg);
+      const clip = clipOf(seg.clip);
+      const key = `${seg.in}|${seg.out}|${spd}|${Math.round(w)}`;
+      if (b.dataset.wave !== key) {
+        b.dataset.wave = key;
+        const wave = b.querySelector('.wave');
+        wave.replaceChildren();
+        for (const u of (clip && clip.transcript) || []) {
+          const a0 = Math.max(u.start, seg.in), b0 = Math.min(u.end, seg.out);
+          if (b0 <= a0) continue;
+          const s = document.createElement('i');
+          s.style.left = `${((a0 - seg.in) / spd) * state.zoom}px`;
+          s.style.width = `${Math.max(1, ((b0 - a0) / spd) * state.zoom)}px`;
+          wave.appendChild(s);
+        }
+      }
+      const says = blockSays(seg, clip);
+      b.title = `A1 · ${stem(seg.clip)} ${fmt(seg.in)}–${fmt(seg.out)} — its own sound`
+        + (isLinked(seg) ? ', linked to the picture on V1' : ', unlinked: drag to move it alone')
+        + (aOff(seg) ? ` · ${aOff(seg) > 0 ? '+' : '−'}${Math.abs(aOff(seg)).toFixed(2)} s out of sync` : '')
+        + (says ? `\n“${says}”` : '')
+        + `\n${keyLabel('⌥')}-click: ${isLinked(seg) ? 'unlink' : 'link'}`;
+      seen.add(seg.id);
+      start += d;
+    });
+    for (const [id, b] of ablocks) {
+      if (seen.has(id)) continue;
+      b.remove(); ablocks.delete(id);
+    }
+    lane.classList.toggle('muted', !audible('A1'));
+  }
+
+  function makeOBlock(id) {
+    const b = document.createElement('div');
+    b.className = 'oblk';
+    b.dataset.id = id;
+    b.innerHTML = '<img class="poster" draggable="false" loading="lazy" decoding="async" alt=""><span class="name"></span>';
+    return b;
+  }
+
+  /* V2: clips laid over the cut at their own film time (picture only). */
+  function renderV2() {
+    const lane = el.tracks.V2;
+    if (!lane) return;
+    const seen = new Set();
+    for (const o of state.overlays) {
+      let b = oblocks.get(o.id);
+      if (!b) { b = makeOBlock(o.id); oblocks.set(o.id, b); lane.appendChild(b); }
+      const d = dur(o), w = Math.max(3, d * state.zoom);
+      b.style.left = `${timeToX(o.at)}px`;
+      b.style.width = `${w}px`;
+      b.style.setProperty('--hue', hueOf(o.clip));
+      b.classList.toggle('sel', state.osel === o.id);
+      b.classList.toggle('narrow', w < 80);
+      b.querySelector('.name').textContent = blockName(o);
+      const img = b.querySelector('.poster');
+      const src = posterUrl(o, o.in);
+      if (!src) img.removeAttribute('src'); else if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+      const says = blockSays(o, clipOf(o.clip));
+      b.title = `V2 · ${stem(o.clip)} ${fmt(o.in)}–${fmt(o.out)} over ${tc(o.at)}–${tc(o.at + d)}`
+        + ' — composited over V1, picture only' + (says ? `\n“${says}”` : '')
+        + '\ndrag to move · Delete removes it';
+      seen.add(o.id);
+    }
+    for (const [id, b] of oblocks) {
+      if (seen.has(id)) continue;
+      b.remove(); oblocks.delete(id);
+    }
+    if (state.osel != null && !state.overlays.some((o) => o.id === state.osel)) state.osel = null;
+  }
+
+  /* The rows share the panel's height: V2, V1, the lanes' ghost (a proposal) under V1,
+   * then A1, A2 and the lanes' bin outlines. Every row's header sits at its top. */
+  function layoutTracks() {
+    if (!el.root || !el.view) return;
+    const extra = (name) => {
+      const x = el.lanes[name];
+      return x && !x.hidden ? (x.h || x.offsetHeight || 0) : 0;
+    };
+    const ghost = extra('ghost'), bin = extra('bin');
+    const gaps = ROW_GAP * 3 + AV_GAP + (ghost ? ROW_GAP : 0) + (bin ? ROW_GAP : 0);
+    const avail = Math.max(0, el.view.clientHeight - RULER_H - 2 - gaps - ghost - bin);
+    const wsum = TRACKS.reduce((a, n) => a + TRACK_W[n], 0);
+    const h = {};
+    for (const n of TRACKS) h[n] = Math.max(TRACK_MIN[n], Math.floor(avail * TRACK_W[n] / wsum));
+    const rows = [['V2', h.V2], ['V1', h.V1]];
+    if (ghost) rows.push(['ghost', ghost]);
+    rows.push(['|', AV_GAP - ROW_GAP], ['A1', h.A1], ['A2', h.A2]);
+    if (bin) rows.push(['bin', bin]);
+    let y = RULER_H + 2;
+    const tops = {};
+    for (const [name, hh] of rows) {
+      if (name !== '|') {
+        tops[name] = y;
+        const row = name === 'V1' ? el.lanes.V1 : (el.tracks[name] || el.lanes[name]);
+        if (row) { row.style.top = `${y}px`; row.style.height = `${hh}px`; }
+        const head = el.heads && el.heads[name];
+        if (head) { head.style.top = `${y}px`; head.style.height = `${hh}px`; }
+      }
+      y += hh + ROW_GAP;
+    }
+    el.root.style.setProperty('--tl-lane', `${h.V1}px`);
+    el.root.style.setProperty('--tl-v1h', `${h.V1}px`);
+    el.root.style.setProperty('--tl-v1top', `${tops.V1}px`);
+    el.root.style.setProperty('--tl-ruler', `${RULER_H}px`);
+    el.canvas.style.height = `${Math.max(el.view.clientHeight, y)}px`;
+    if (el.divider) el.divider.style.top = `${tops.A1 - AV_GAP / 2 - 1}px`;
+    state.trackTops = tops;
+  }
+
+  const LOCK_SVG = '<svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="5.5" width="8" height="5.5" rx="1"/>'
+    + '<path d="M4 5.5V4a2 2 0 0 1 4 0v1.5" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>';
+  const EYE_SVG = '<svg viewBox="0 0 14 10" aria-hidden="true"><path d="M1 5c1.6-2.7 3.7-4 6-4s4.4 1.3 6 4c-1.6 2.7-3.7 4-6 4S2.6 7.7 1 5z"'
+    + ' fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="7" cy="5" r="1.8"/>'
+    + '<path class="off" d="M2 9.5 12 .5" stroke="currentColor" stroke-width="1.3"/></svg>';
+  const HEAD_WORDS = {
+    target: (n) => `${n} — target: ${n[0] === 'V' ? 'a source clip goes here (, insert · . overwrite)' : 'its sound goes here'}`,
+    lock: (n) => `lock ${n}: no edits on it`,
+    eye: (n) => `toggle ${n}'s output: hidden from the Program monitor's render`,
+    mute: (n) => `mute ${n}`,
+    solo: (n) => `solo ${n}: only soloed tracks are heard`,
+  };
+
+  function buildHeads(side) {
+    const box = side.querySelector('.tl-heads');
+    el.heads = {};
+    for (const n of TRACKS) {
+      const h = document.createElement('div');
+      h.className = `tl-thead ${n[0] === 'V' ? 'video' : 'audio'}`;
+      h.dataset.track = n;
+      const btn = (k, inner, cls = '') => `<button type="button" class="${k} ${cls}" data-toggle="${k}"`
+        + ` title="${HEAD_WORDS[k](n)}" aria-label="${HEAD_WORDS[k](n)}">${inner}</button>`;
+      h.innerHTML = btn('lock', LOCK_SVG) + btn('target', n, 'tname')
+        + (n[0] === 'V' ? btn('eye', EYE_SVG)
+          : btn('mute', 'M') + btn('solo', 'S'))
+        + `<span class="tinfo"></span>`;
+      box.appendChild(h);
+      el.heads[n] = h;
+    }
+    box.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-toggle]');
+      if (!b) return;
+      const n = b.closest('.tl-thead').dataset.track, k = b.dataset.toggle;
+      const v = k === 'eye' ? !trackState(n).eye : !trackState(n)[k];
+      setTrack(n, k, v);
+      toast(`${n} ${k === 'eye' ? (v ? 'shown' : 'hidden') : k === 'target' ? (v ? 'targeted' : 'not targeted')
+        : `${v ? '' : 'un'}${k === 'lock' ? 'locked' : k === 'mute' ? 'muted' : 'soloed'}`}`);
+    });
+  }
+
+  function paintHeads() {
+    if (!el.heads) return;
+    for (const n of TRACKS) {
+      const t = trackState(n), h = el.heads[n];
+      for (const b of h.querySelectorAll('button[data-toggle]')) {
+        const k = b.dataset.toggle;
+        b.classList.toggle('on', k === 'eye' ? !t.eye : !!t[k]);
+        b.setAttribute('aria-pressed', String(k === 'eye' ? !t.eye : !!t[k]));
+      }
+      h.classList.toggle('locked', !!t.lock);
+      const row = n === 'V1' ? el.lanes.V1 : el.tracks[n];
+      if (row) {
+        row.classList.toggle('locked', !!t.lock);
+        row.classList.toggle('hidden-out', n[0] === 'V' && !t.eye);
+        row.classList.toggle('muted', n[0] === 'A' && !audible(n));
+      }
+      const info = h.querySelector('.tinfo');
+      if (n[0] === 'A') {
+        const g = Number(t.gain_db) || 0;
+        info.textContent = g ? `${g > 0 ? '+' : ''}${g.toFixed(1)} dB` : '';
+      }
+    }
+  }
+
+  function setTrack(name, key, value) {
+    const t = state.tracks[name];
+    if (!t || !(key in t)) return false;
+    let v = value;
+    if (key === 'gain_db') {
+      v = Math.round(clamp(Number(value) || 0, -60, 12) * 10) / 10;
+    } else v = !!value;
+    if (t[key] === v) return false;
+    state.tracks = { ...state.tracks, [name]: { ...t, [key]: v } };
+    paintHeads();
+    renderA1(segs(), hooks && hooks.live ? hooks.live() : -1);
+    applyMonitorAudio();
+    scheduleSeqSave();
+    emit('tracks', { tracks: tracks() });
+    return true;
+  }
+
+  function tracks() { return JSON.parse(JSON.stringify(state.tracks)); }
+
+  /* What the monitor plays follows A1 and A2: the Program's videos carry A1's level
+   * (0 when muted or soloed out), the bed follows A2. Volume, not `muted`: the board
+   * owns `muted` for its own reasons. */
+  function applyMonitorAudio() {
+    const g = audible('A1') ? Math.min(1, Math.pow(10, (Number(trackState('A1').gain_db) || 0) / 20)) : 0;
+    try {
+      // eslint-disable-next-line no-undef
+      const vids = typeof player !== 'undefined' && player && player.vids ? player.vids : [];
+      for (const v of vids) if (v && Math.abs(v.volume - g) > 1e-3) v.volume = g;
+    } catch (err) { /* no board */ }
+    const bed = document.querySelector('#bed');
+    if (bed) bed.muted = !audible('A2');
+  }
+
+  /* ---- the sequence's own save: tracks, V2, markers and In / Out */
+  function tracksDiff() {
+    const base = DEFAULT_TRACKS(), out = {};
+    for (const n of TRACKS) {
+      for (const [k, v] of Object.entries(state.tracks[n])) {
+        if (base[n][k] !== v) (out[n] = out[n] || {})[k] = v;
+      }
+    }
+    return out;
+  }
+
+  function seqBody() {
+    return JSON.stringify({
+      tracks: tracksDiff(),
+      overlays: state.overlays.map((o) => ({ ...o })),
+      markers: [...state.markers], in: state.seqIn, out: state.seqOut,
+    });
+  }
+
+  function scheduleSeqSave() {
+    if (seqSaved == null) return;              // not mounted yet
+    clearTimeout(seqTimer);
+    seqTimer = setTimeout(saveSeq, SEQ_SAVE_MS);
+  }
+
+  async function saveSeq() {
+    clearTimeout(seqTimer);
+    const body = seqBody();
+    if (body === seqSaved) return true;
+    try {
+      const r = await fetch('/api/project', {
+        method: 'PUT', headers: { 'content-type': 'application/json' }, body,
+      });
+      if (!r.ok) {
+        const msg = await r.text().catch(() => '');
+        toast(`the tracks did not save: ${msg.slice(0, 120)}`);
+        return false;
+      }
+      seqSaved = body;
+      return true;
+    } catch (err) {
+      toast('the tracks did not save — the board is unreachable');
+      return false;
+    }
+  }
+
+  function loadSeq() {
+    let p = null;
+    try {
+      // eslint-disable-next-line no-undef
+      p = typeof P !== 'undefined' && P ? P : null;
+    } catch (err) { p = null; }
+    const base = DEFAULT_TRACKS();
+    const got = (p && p.tracks) || {};
+    for (const n of TRACKS) base[n] = { ...base[n], ...(got[n] || {}) };
+    state.tracks = base;
+    state.overlays = ((p && p.overlays) || []).filter((o) => o && o.clip)
+      .map((o) => ({ ...o, id: o.id || newId() }));
+  }
+
+  /* An id in the server's own shape (`g` + 10 hex), so a V2 clip never needs re-keying. */
+  function newId() {
+    const a = new Uint8Array(5);
+    (window.crypto || window.msCrypto).getRandomValues(a);
+    return `g${[...a].map((x) => x.toString(16).padStart(2, '0')).join('')}`;
+  }
+
+  /* ---- link and offset */
+  function setLink(id, linked) {
+    const seg = byId(id);
+    if (!seg || isLinked(seg) === !!linked) return false;
+    return !!mutate(linked ? 'link' : 'unlink', () => {
+      if (linked) delete seg.link; else seg.link = false;
+      return true;
+    });
+  }
+
+  function toggleLink(id) {
+    const seg = byId(id);
+    if (!seg) return false;
+    const to = !isLinked(seg);
+    if (!setLink(id, to)) return false;
+    toast(to ? `linked ${stem(seg.clip)} — its picture and sound move together${aOff(seg) ? ' (still out of sync)' : ''}`
+      : `unlinked ${stem(seg.clip)} — drag its sound on A1 to move it alone`);
+    return true;
+  }
+
+  /* The shot's sound against its picture, in film seconds (on the frame grid); only an
+   * unlinked pair's. 0 puts it back in sync. */
+  function setAudioOffset(id, off) {
+    const seg = byId(id);
+    if (!seg || isLinked(seg)) return false;
+    const v = round2(Math.round(clamp(Number(off) || 0, -600, 600) * fps()) / fps());
+    if (v === aOff(seg)) return false;
+    return !!mutate('move audio', () => {
+      if (v) seg.a_off = v; else delete seg.a_off;
+      return true;
+    });
+  }
+
+  /* ---- V2 */
+  function overlayById(id) { return state.overlays.find((o) => o.id === id) || null; }
+
+  function overlayMutate(kind, fn) {
+    if (trackState('V2').lock) return refuseLocked('V2');
+    const own = begin(kind);
+    const r = fn();
+    renderV2();
+    if (own) commit();
+    scheduleSeqSave();
+    emit('change', { label: kind, kind, ids: state.osel ? [state.osel] : [] });
+    return r;
+  }
+
+  /* A clip laid on V2 at a film time: `{clip, in, out, speed?, why?}`. Returns its id. */
+  function addOverlay(seg, atFilmTime) {
+    if (!seg || !seg.clip || !(seg.out - seg.in >= MIN_LEN - 1e-9)) return null;
+    const o = { id: newId(), clip: seg.clip, in: round2(seg.in), out: round2(seg.out),
+                at: round2(Math.max(0, Number(atFilmTime) || 0)) };
+    if (seg.speed && speedOf(seg) !== 1) o.speed = speedOf(seg);
+    if (seg.why) o.why = seg.why;
+    return overlayMutate('V2 clip', () => {
+      state.overlays = [...state.overlays, o];
+      state.osel = o.id;
+      return o.id;
+    });
+  }
+
+  function moveOverlay(id, atFilmTime) {
+    const o = overlayById(id);
+    if (!o) return false;
+    const at = round2(Math.max(0, Number(atFilmTime) || 0));
+    if (at === o.at) return false;
+    return !!overlayMutate('move V2', () => {
+      state.overlays = state.overlays.map((x) => (x.id === id ? { ...x, at } : x));
+      return true;
+    });
+  }
+
+  function removeOverlay(id) {
+    if (!overlayById(id)) return false;
+    return !!overlayMutate('remove V2', () => {
+      state.overlays = state.overlays.filter((x) => x.id !== id);
+      if (state.osel === id) state.osel = null;
+      return true;
+    });
+  }
+
+  function selectOverlay(id) {
+    state.osel = id && overlayById(id) ? id : null;
+    if (state.osel) select([], { source: 'click' });
+    renderV2();
+    emit('select', { ids: [], anchor: null, overlay: state.osel, source: 'click' });
   }
 
   function fitZoom(viewW, tot) {
@@ -641,7 +1125,8 @@
     let v = null;
     try {
       // eslint-disable-next-line no-undef
-      if (typeof P !== 'undefined' && P && Array.isArray(P.markers)) {
+      if (typeof P !== 'undefined' && P && Array.isArray(P.markers)
+          && (P.markers.length || P.in != null || P.out != null)) {
         v = { markers: P.markers.map((m) => (typeof m === 'object' && m ? m.t : m)), in: P.in, out: P.out };
       }
     } catch (err) { v = null; }
@@ -660,6 +1145,7 @@
       localStorage.setItem(markStoreKey(), JSON.stringify(
         { markers: state.markers, in: state.seqIn, out: state.seqOut }));
     } catch (err) { /* private mode: they last the session */ }
+    scheduleSeqSave();
     render();
     emit('markers', { markers: [...state.markers], in: state.seqIn, out: state.seqOut });
   }
@@ -736,6 +1222,7 @@
 
   function paintSel() {
     for (const [id, b] of blocks) b.classList.toggle('sel', state.sel.has(id));
+    for (const [id, b] of ablocks) b.classList.toggle('sel', state.sel.has(id));
   }
 
   function paintUndo() {
@@ -782,6 +1269,10 @@
       b.remove(); blocks.delete(id); posterAt.delete(id);
     }
     pruneSel();
+    renderA1(list, live);
+    renderV2();
+    layoutTracks();
+    paintHeads();
     el.end.style.left = `${timeToX(tot)}px`;
     el.total.textContent = tc(tot);
     el.root.classList.toggle('tl-empty', !list.length);   // not `.empty`: the board's empty state owns that
@@ -822,6 +1313,7 @@
     const changed = !sameSet(next, state.sel) || anchor !== state.anchor;
     state.sel = next;
     state.anchor = anchor;
+    if (next.size && state.osel != null) { state.osel = null; renderV2(); }
     if (anchor != null) {
       const i = indexOf(anchor);
       lastAppSel = i;
@@ -921,18 +1413,23 @@
   /* An entry is the cut — and, when the board hands one over (`hooks.extra()` /
    * `hooks.setExtra(v)`), a second piece of state that rides the same stack: the film's
    * colour block, so a warmer / cooler nudge is one ⌘Z (INTAKE M16 I16.4). */
+  /* V2's clips ride the same entry: laying, moving or removing one is one ⌘Z. The
+   * track headers' toggles do not — as in Premiere, a mute or a lock is not an edit. */
   const snapshot = () => JSON.stringify(hooks && hooks.extra
-    ? { segs: segs(), extra: hooks.extra() } : segs());
+    ? { segs: segs(), extra: hooks.extra(), overlays: state.overlays }
+    : { segs: segs(), overlays: state.overlays });
 
   function restore(json) {
     const v = JSON.parse(json);
     if (v && !Array.isArray(v) && Array.isArray(v.segs)) {
       hooks.setSegs(v.segs);
-      if (hooks.setExtra) hooks.setExtra(v.extra);
+      if (hooks.setExtra && 'extra' in v) hooks.setExtra(v.extra);
+      if (Array.isArray(v.overlays)) state.overlays = v.overlays;
     } else {
       hooks.setSegs(v);
     }
     ensureIds();
+    scheduleSeqSave();
   }
 
   function begin(label) {
@@ -1009,6 +1506,7 @@
 
   /* ------------------------------------------------------------ mutations */
   function mutate(kind, fn) {
+    if (cutLocked()) return refuseLocked(trackState('V1').lock ? 'V1' : 'A1');
     const own = begin(kind);
     const result = fn();
     ensureIds();
@@ -1294,8 +1792,37 @@
     seek(eventTime(e));
   }
 
+  /* A click on A1 or V2 (under 4 px of travel, nobody's drag): an A1 block selects its
+   * shot as V1's does — the razor cuts it there, at the picture's time less the sound's
+   * offset; a V2 block selects that clip; the empty track clears and seeks. */
+  function onTrackUp(e) {
+    const d = down;
+    down = null;
+    if (!d || d.moved || e.button !== 0 || e.defaultPrevented || e.altKey) return;
+    const ov = e.target.closest('.oblk');
+    if (ov) { selectOverlay(ov.dataset.id); seek(eventTime(e)); return; }
+    const b = e.target.closest('.ablk');
+    if (b && state.tool === 'razor') {
+      const seg = byId(b.dataset.id);
+      if (seg && split(seg.id, eventTime(e) - aOff(seg)) == null) {
+        toast(`too close to a cut point to split (${MIN_LEN} s minimum)`);
+      }
+      return;
+    }
+    if (b) {
+      const id = b.dataset.id;
+      if (e.shiftKey) select([id], { range: true, source: 'click' });
+      else if (e.metaKey || e.ctrlKey) select([id], { add: true, source: 'click' });
+      else { select([id], { source: 'click' }); seek(filmStart(id)); }
+      return;
+    }
+    if (state.osel != null) selectOverlay(null);
+    select([], { source: 'click' });
+    seek(eventTime(e));
+  }
+
   function onLaneDbl(e) {
-    const b = e.target.closest('.blk');
+    const b = e.target.closest('.blk, .ablk');
     if (!b || e.shiftKey || e.metaKey || e.ctrlKey || !hooks.play) return;
     hooks.play(indexOf(b.dataset.id));
   }
@@ -1365,16 +1892,25 @@
     root.classList.add('tl');
     // The side column is Premiere's top-left corner of the Timeline panel: the
     // playhead's timecode, and the tool in hand (one button; the six are its menu).
+    // Under it, the track headers (V2 V1 A1 A2: lock, target, eye or mute / solo), each
+    // at its row's top; the rows fill the panel's height.
     root.innerHTML = `
       <div class="tl-side">
-        <div class="tl-tc">00:00:00:00</div>
-        <button type="button" class="tl-toolbtn"></button>
-        <div class="tl-toolmenu" hidden></div>
+        <div class="tl-corner">
+          <div class="tl-tc">00:00:00:00</div>
+          <button type="button" class="tl-toolbtn"></button>
+          <div class="tl-toolmenu" hidden></div>
+        </div>
+        <div class="tl-heads"></div>
       </div>
       <div class="tl-view">
         <div class="tl-canvas">
           <div class="tl-ruler" title="click or drag to scrub"></div>
-          <div class="tl-lane" data-lane="V1"></div>
+          <div class="tl-track" data-track="V2"></div>
+          <div class="tl-lane tl-track-v1" data-lane="V1"></div>
+          <div class="tl-avdiv"></div>
+          <div class="tl-track" data-track="A1"></div>
+          <div class="tl-track" data-track="A2"></div>
           <div class="tl-end"><label class="tl-total"></label></div>
           <div class="tl-head"></div>
         </div>
@@ -1384,12 +1920,21 @@
     el.canvas = root.querySelector('.tl-canvas');
     el.ruler = root.querySelector('.tl-ruler');
     el.lanes = { V1: root.querySelector('.tl-lane[data-lane=V1]') };
+    el.tracks = {};
+    for (const n of ['V2', 'A1', 'A2']) {
+      el.tracks[n] = root.querySelector(`.tl-track[data-track=${n}]`);
+      el.lanes[n] = el.tracks[n];
+    }
+    el.divider = root.querySelector('.tl-avdiv');
     el.end = root.querySelector('.tl-end');
     el.total = root.querySelector('.tl-total');
     el.head = root.querySelector('.tl-head');
     el.side = root.querySelector('.tl-side');
     buildSide(el.side);
+    buildHeads(el.side);
     loadMarks();
+    loadSeq();
+    seqSaved = seqBody();
 
     const lane = el.lanes.V1;
     lane.addEventListener('pointerdown', onLaneDown);
@@ -1402,11 +1947,28 @@
     el.ruler.addEventListener('pointerup', onRulerUp);
     el.ruler.addEventListener('pointercancel', onRulerUp);
     el.view.addEventListener('wheel', onWheel, { passive: false });
-    el.view.addEventListener('scroll', () => { state.scrollX = el.view.scrollLeft; });
+    el.view.addEventListener('scroll', () => {
+      state.scrollX = el.view.scrollLeft;
+      // the headers ride the rows when the tracks are taller than the panel
+      const hb = el.side.querySelector('.tl-heads');
+      if (hb) hb.style.transform = `translateY(${-el.view.scrollTop}px)`;
+    });
+    // A1: a click selects the shot (and parks the monitor on it), as V1's does; ⌥-click
+    // links or unlinks the pair. Drags are the lanes'. V2: a click selects that clip.
+    for (const n of ['A1', 'V2']) {
+      const t = el.tracks[n];
+      t.addEventListener('pointerdown', onLaneDown);
+      t.addEventListener('pointermove', onLaneMove);
+      t.addEventListener('pointerup', onTrackUp);
+      t.addEventListener('pointercancel', () => { down = null; });
+    }
+    el.tracks.A1.addEventListener('dblclick', onLaneDbl);
     document.addEventListener('keydown', onKey);
     if (typeof ResizeObserver !== 'undefined') {
-      new ResizeObserver(() => { if (autoFit) render(); }).observe(el.view);
+      new ResizeObserver(() => { if (autoFit) render(); else layoutTracks(); }).observe(el.view);
     }
+    tl.on('playhead', applyMonitorAudio);
+    applyMonitorAudio();
     const redoBtn = document.querySelector('#redo');
     if (redoBtn) redoBtn.addEventListener('click', () => redo());
     // Nothing is selected at start (INTAKE M16 I16.4): app.js's index is not adopted on
@@ -1424,7 +1986,12 @@
     setRange, move, split, remove, insert, setSpeed, insertAt, overwrite,
     select, syncSel, seek, setPlayhead, zoomTo, fit,
     forSave, needsRekey, afterSave,
-    fmt, hueOf, blockName,
+    fmt, hueOf, blockName, blockSays,
+    // the tracks (roughcut/tracks.py)
+    TRACKS, tracks, setTrack, audible, isLinked, aOff, setLink, toggleLink, setAudioOffset,
+    overlays: () => state.overlays.map((o) => ({ ...o })), overlayById,
+    addOverlay, moveOverlay, removeOverlay, selectOverlay, layoutTracks, saveSeq,
+    get trackTops() { return { ...(state.trackTops || {}) }; },
     fps, setFps, frame, tc, keyLabel, isMac: IS_MAC,
     TOOLS, setTool, get tool() { return state.tool; },
     addMarker, removeMarker, clearMarkers, setMarkers, nextMarker, prevMarker,

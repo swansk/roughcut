@@ -492,6 +492,7 @@
   }
 
   function rippleDelete() {
+    if (removeOverlaySel()) return true;
     const ids = [...tl.state.sel];
     if (!ids.length) { say('nothing selected'); return true; }
     tl.remove(ids);                  // the foundation selects the shot that takes the place
@@ -507,7 +508,18 @@
    * it took the shot under the playhead out of the cut. X is unchanged. */
   let chosen = false;
 
+  /* A clip on V2 that is selected goes first: X, ⌫ and Del take it off V2 (nothing
+   * closes up — V2 is not magnetic). */
+  function removeOverlaySel() {
+    const id = tl.state.osel;
+    if (id == null || !tl.removeOverlay) return false;
+    const o = tl.overlayById(id);
+    if (tl.removeOverlay(id)) say(`removed ${o ? stem(o.clip) : 'the clip'} from V2 — ${L('⌘Z')} brings it back`);
+    return true;
+  }
+
   function backspace() {
+    if (removeOverlaySel()) return true;
     if (chosen) return rippleDelete();
     say(tl.state.sel.size ? 'click a shot to choose it — ⌫ takes out only a shot you selected'
       : 'nothing selected');
@@ -670,6 +682,16 @@
     settle();
     const at = clamp(tl.state.playhead, 0, tl.total());
     const seg = { clip: s.clip, in: s.in, out: s.out, why: s.why };
+    // The track targets (the headers): V2 targeted and V1 not lays the clip over the cut
+    // on V2 at the playhead — V2 is not magnetic, so insert and overwrite are the same.
+    const tr = tl.tracks ? tl.tracks() : null;
+    if (tr && tr.V2.target && !tr.V1.target) {
+      const oid = tl.addOverlay(seg, at);
+      if (oid == null) { say(`could not lay that on V2`); return true; }
+      tl.setPlayhead(clamp(at + tl.dur(seg), 0, tl.total()));
+      say(`laid ${stem(s.clip)} ${tl.fmt(s.in)}–${tl.fmt(s.out)} on V2 at ${tl.tc(at)} · from ${s.from}`);
+      return true;
+    }
     const id = kind === 'insert' ? tl.insertAt(seg, at) : tl.overwrite(seg, at);
     if (id == null) { say(`could not ${kind} that`); return true; }
     chosen = true;                   // the editor put it there
