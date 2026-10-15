@@ -2918,34 +2918,30 @@ function thisCutsFilm() {
   return segs.length ? renderList.find(isThisCut) || null : null;
 }
 
-/* The header's one button for the film (INTAKE M16 I16.1): *Make the film* opens the
- * film tool; once a film of this cut has landed it reads "↓ Download · 1080p · 0:04" and
- * downloads it. The dot: the cut changed since its last film. */
+/* The header's Export (verdict 2 punch 5): it opens the Export dialog (export.js), as
+ * Ctrl+M and File › Export… do — Premiere's Export Media, not a download in disguise.
+ * The film of this cut, when there is one, is named in its hover; its Download lives in
+ * the Export panel and at the end of the dialog. The dot: the cut changed since its
+ * last film. */
 function paintMakeFilm() {
   const b = $('#makeFilm');
   if (!b) return;
   const v = thisCutsFilm();
+  const key = /Mac|iPhone|iPad/.test(navigator.platform || '') ? '⌘M' : 'Ctrl+M';
+  b.textContent = 'Export';
+  delete b.dataset.download;
   if (v) {
-    b.textContent = `↓ Download · ${qualityOf(v)} · ${clock(v.duration_s || total())}`;
-    b.title = `${v.download_name} · ${human(v.size)}`;
-    b.dataset.download = v.download_url;
+    b.title = `Export… (${key}) · this cut was last exported as ${v.download_name} · ${human(v.size)}`;
   } else {
-    b.textContent = 'Export';
-    delete b.dataset.download;
-    b.title = renderList.length ? 'the cut changed since its last film' : 'make a film of this cut';
+    b.title = renderList.length ? `Export… (${key}) · the cut changed since its last film`
+      : `Export… (${key})`;
     if (renderList.length) b.insertAdjacentHTML('beforeend', '<span class="dot" aria-label="the cut changed">•</span>');
   }
 }
 
 function onMakeFilm() {
-  const url = $('#makeFilm').dataset.download;
-  if (!url) { if (window.dock) dock.open('out'); return; }
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = '';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  if (window.exportDialog) { exportDialog.open(); return; }
+  if (window.dock) dock.open('out');
 }
 
 /* "~1 min" / "~17 min": Killington's 3:09 cut took about a minute at 1080p and ~17 at

@@ -575,11 +575,8 @@ def test_render_reports_which_shot_it_is_on(client, project, monkeypatch):
     wanted = ["cutting shot 2 of 3", "cutting shot 3 of 3", "joining 3 shots"]
     acked = [threading.Event() for _ in wanted]
     src = server.STATE["proxy_dir"] / "CLIP_A.mp4"
-    real_run = subprocess.run
 
-    def paced_assemble(cmd, *args, **kw):
-        if "assemble.py" not in " ".join(str(c) for c in cmd):
-            return real_run(cmd, *args, **kw)      # probes and the review copy, for real
+    def paced_assemble(job, cmd):
         parts = Path(cmd[cmd.index("--parts-dir") + 1])
         out = Path(cmd[cmd.index("-o") + 1])
         parts.mkdir(parents=True, exist_ok=True)
@@ -591,7 +588,9 @@ def test_render_reports_which_shot_it_is_on(client, project, monkeypatch):
         shutil.copy(src, out)
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    monkeypatch.setattr(server.subprocess, "run", paced_assemble)
+    # the render's own runner (a Popen, so it can be cancelled); probes and the
+    # review copy still run for real
+    monkeypatch.setattr(server, "_run_render", paced_assemble)
     segs = [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 2.5, "why": "a"},
             {"clip": "CLIP_B.MP4", "in": 1.0, "out": 2.0, "why": "b"},
             {"clip": "CLIP_C.MP4", "in": 0.0, "out": 1.5, "why": "c"}]

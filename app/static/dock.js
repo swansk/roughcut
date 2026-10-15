@@ -125,7 +125,10 @@
   // fractions of the workspace's width (proj, insp, src) and height (top); the Source
 // monitor's default is half of what the two side panels leave (null), and a dragged one
 // keeps its own width when a neighbour moves — the Program monitor takes up the change.
-const DEFAULTS = { proj: 0.2, insp: 0.245, src: null, top: 0.6 };
+// Wave 2 (lane FINISH, verdict 2 punch 9): the top row is sized so the Program picture
+// is >= 380 px wide with <= 30 % letterbox at 1440x900 (it was 389x219 in a 511 px tall
+// panel), Effect Controls is wide enough for its five tabs and Project for "not indexed".
+const DEFAULTS = { proj: 0.195, insp: 0.255, src: null, top: 0.42 };
   const MIN = { proj: 190, insp: 260, src: 180, prog: 220, top: 170, tl: 150 };
   const SPLIT = 4;
   let frac = { ...DEFAULTS, ...store.get(LAYOUT_KEY, {}) };
@@ -408,8 +411,8 @@ const DEFAULTS = { proj: 0.2, insp: 0.245, src: null, top: 0.6 };
   const sizeOf = (c) => (c.width && c.height ? `${c.width}×${c.height}` : '');
 
   function columns(width) {
-    const cols = [{ k: 'name', h: 'Name' }, { k: 'dur', h: 'Duration', w: 88 }];
-    if (width > 220) cols.push({ k: 'state', h: 'Status', w: 72 });
+    const cols = [{ k: 'name', h: 'Name' }, { k: 'dur', h: 'Duration', w: 80 }];
+    if (width > 220) cols.push({ k: 'state', h: 'Status', w: 78 });
     if (width > 400 && project.clips.some((c) => c.fps)) cols.push({ k: 'fps', h: 'Frame Rate', w: 76 });
     if (width > 470 && project.clips.some((c) => c.width)) cols.push({ k: 'size', h: 'Resolution', w: 88 });
     if (width > 560) cols.push({ k: 'shot', h: 'Captured', w: 118 });

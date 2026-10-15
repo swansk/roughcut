@@ -201,7 +201,9 @@ def _set_up(pg, state: str) -> None:
         pg.wait_for_function("tl.state.sel.size === 1", timeout=5000)
     elif state == "/ film":
         pg.wait_for_selector("#tl .blk", timeout=15000)
-        pg.locator("#makeFilm").click()                     # the header's Make the film
+        # Window › Export: the films panel (the header's Export opens the Export dialog)
+        pg.locator("#menubar .menu[data-menu=window] .mtop").click()
+        pg.locator("#menubar button[data-cmd='w:out']").click()
         pg.wait_for_function("dock.current() === 'out'", timeout=5000)
     elif state == "/ fx":
         pg.wait_for_selector("#tl .blk", timeout=15000)
@@ -390,6 +392,10 @@ def test_the_monitor_is_centred_and_as_big_as_the_strip_leaves(measured):
     # the 16:9 picture fills its panel's room one way or the other (was: >= 425 px tall,
     # the old single-monitor board's number; see REDESIGN-GOAL's rubric log)
     assert m["width"] >= m["room_w"] - 2 or m["height"] >= m["room_h"] - 2, m
+    # ...and the default layout gives it room worth filling: >= 380 px wide, with at most
+    # 30 % of its room in black letterbox (rubric log, 2026-10-15 wave 2: the floor that
+    # replaces the 425 px one; verdict 2 measured 389 × 219 in a 447 px room, 51 %)
+    assert m["width"] >= 380 and 1 - m["height"] / m["room_h"] <= 0.30, m
     assert measured["/ shot"]["monitor"]["height"] == m["height"], "selecting a shot does not resize it"
 
 

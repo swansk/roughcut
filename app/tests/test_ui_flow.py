@@ -718,14 +718,15 @@ def test_a_version_row_offers_a_download_and_says_how_big_it_is(page):
                 underline: s.textDecorationLine, full: box.width >= host.width - 1}; }""")
     assert look["ratio"] >= 4.5 and look["underline"] == "none" and look["full"], look
     assert "this cut" in page.locator("#labelA").inner_text()
-    # the header's button is that film's Download now: quality and length on it
+    # The header's button is Export (it opens the Export dialog, verdict 2 punch 5); the
+    # film of this cut is named in its hover, and the Download is this panel's.
     head = page.locator("#makeFilm")
     page.wait_for_function(
-        "document.querySelector('#makeFilm').textContent.startsWith('↓ Download')", timeout=5000)
-    assert head.inner_text() == "↓ Download · 1080p · 0:04"
-    assert head.get_attribute("data-download") == dl.get_attribute("href")
+        "document.querySelector('#makeFilm').title.includes('last exported as')", timeout=5000)
+    assert head.inner_text() == "Export"
+    assert dl.get_attribute("title").split(" · ")[0] in head.get_attribute("title")
     with page.expect_download(timeout=15000) as got:
-        head.click()
+        dl.click()
     assert got.value.suggested_filename.endswith(".mp4")
 
 
@@ -1133,7 +1134,7 @@ def test_the_versions_list_says_which_render_is_the_cut_on_the_board(page, proje
     page.wait_for_selector("#filmNewest:not([hidden])", timeout=10000)
     assert "this cut" in page.locator("#labelA").inner_text()
     assert page.locator("#filmSince").inner_text().startswith("made ")
-    assert page.locator("#makeFilm").inner_text().startswith("↓ Download")
+    assert page.locator("#makeFilm").inner_text() == "Export"     # no dot: this cut is made
 
     # trim the timeline and the render is no longer what is on the board
     select_shot(page, 0)
@@ -1144,18 +1145,18 @@ def test_the_versions_list_says_which_render_is_the_cut_on_the_board(page, proje
     assert page.locator("#makeFilm").inner_text().replace(" ", "") == "Export•"
     page.locator("#undo").click()
     page.wait_for_selector("#filmNewest:not([hidden])", timeout=5000)
-    assert page.locator("#makeFilm").inner_text().startswith("↓ Download")
+    assert page.locator("#makeFilm").inner_text() == "Export"
 
     # a shot's speed is part of the cut, as the server's _same_shots says: at 2× the film
-    # is not this cut, and the header must not offer the old one's Download
+    # is not this cut, and the header says the cut changed since its last film
     sid = page.evaluate("tl.idAt(0)")
     page.evaluate(f"tl.setSpeed('{sid}', 2)")
-    page.wait_for_function("!document.querySelector('#makeFilm').dataset.download", timeout=5000)
+    page.wait_for_function("document.querySelector('#makeFilm').textContent.includes('•')", timeout=5000)
     assert page.locator("#makeFilm").inner_text().replace(" ", "") == "Export•"
     assert page.locator("#filmSince").inner_text().startswith("changed since your last film")
     page.evaluate(f"tl.setSpeed('{sid}', 1)")
     page.wait_for_selector("#filmNewest:not([hidden])", timeout=5000)
-    assert page.locator("#makeFilm").inner_text().startswith("↓ Download")
+    assert page.locator("#makeFilm").inner_text() == "Export"
 
 
 # ------------------------------------------------------------------ what was seen
@@ -1717,8 +1718,8 @@ def test_make_the_film_works_before_the_renders_have_loaded(page):
     page.wait_for_selector("#tl .blk", timeout=15000)
     page.wait_for_function("window.dock && true", timeout=5000)
     assert held, "the board asked for its renders"
-    page.locator("#makeFilm").click()
-    page.wait_for_function("dock.current() === 'out'", timeout=3000)
+    page.locator("#makeFilm").click()                # opens the Export dialog (export.js)
+    page.wait_for_function("document.getElementById('exportDialog').open", timeout=3000)
     page.unroute("**/api/renders*")
 
 
@@ -1827,12 +1828,13 @@ def test_the_old_buttons_are_gone_and_the_header_is_one_row(page):
     ids = page.evaluate("""[...document.querySelectorAll('header > button')]
         .filter((e) => e.getBoundingClientRect().height > 0).map((e) => e.id)""")
     assert ids == ["hdBin", "undo", "redo", "keysBtn", "makeFilm"], ids
-    # Export opens the film tool (the workspace's Export tab; its key stays `out`) —
-    # while no film of this cut exists (an earlier test's would make it Download)
+    # Export opens the Export dialog (verdict 2 punch 5: Ctrl+M, File › Export… and this
+    # button); the workspace's Export tab (its key stays `out`) is the films made so far
     page.evaluate("renderList = []; paintVersions()")
     assert page.locator("#makeFilm").inner_text() == "Export"
     page.locator("#makeFilm").click()
-    assert page.evaluate("dock.current()") == "out"
+    page.wait_for_function("document.getElementById('exportDialog').open", timeout=3000)
+    page.keyboard.press("Escape")
     assert page.locator(".ws-tab[data-tool=out]").inner_text().strip() == "Export"
 
 
