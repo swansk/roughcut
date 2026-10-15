@@ -40,7 +40,23 @@ PLAN_SCHEMA = {
     "segments": [{"clip": "GX010495.MP4", "in": 1.6, "out": 13.7,
                   "why": "one short sentence on why this moment, in this place"}],
     "notes": "2-3 sentences: what you changed and why, addressed to the editor",
+    # Verdict 5, punch 3: the model's "check X first … also check Y" lived in `notes`,
+    # where the board could only find them with a regex on one literal phrase. They are
+    # data now, each tied to the range it is about.
+    "checks": [{"text": "one short sentence: what the editor should look at before "
+                        "accepting, and why",
+                "clip": "GX010495.MP4", "in": 1.6, "out": 13.7}],
 }
+
+# What the prompts say about `checks` (every Ask's "What to return").
+CHECKS_GUIDANCE = (
+    "Anything the editor should look at before accepting — a moment you could not see, "
+    "a cut point you are unsure of, a claim in your notes they should verify — goes in "
+    "`checks`, one item each with the clip and the range it is about (seconds within "
+    "the clip; leave the range out when it is about the whole film), not in `notes`. "
+    "An empty list is fine when there is nothing to check.")
+CHECKS_MAX = 6
+CHECK_TEXT_MAX = 200
 
 # The same plan when the prompt carries the colour section (INTAKE I10.5). The key is
 # described, not exemplified: an example patch in the shape would be copied into answers
@@ -526,7 +542,8 @@ seconds within the named clip. Prefer cutting on utterance boundaries visible in
 transcripts above. Each clip says when it was recorded relative to the others — use it
 as information rather than as a rule. Deliberate reordering is good editing; only the
 accidental kind, drifting backwards through one continuous stretch for no reason,
-reads as a mistake. Say in the `why` when a move is deliberate.{colour_only}"""
+reads as a mistake. Say in the `why` when a move is deliberate.
+{CHECKS_GUIDANCE}{colour_only}"""
 
 
 def build_first_prompt(clips: dict[str, dict], story: str, note: str,
@@ -574,8 +591,9 @@ A complete first cut as an ordered list of segments — the order they should pl
 not the order the clips were shot. Timestamps are seconds within the named clip. Cut
 on utterance boundaries visible in the transcripts above. Every segment needs a `why`:
 one sentence on what that moment is for. In `notes`, say what you decided this film is
-about and what you would look at first if it is wrong\
-{" — and name any of the editor's selects you left out, heroes first." if kept else "."}"""
+about\
+{" — and name any of the editor's selects you left out, heroes first." if kept else "."}
+What you would look at first if it is wrong goes in `checks`. {CHECKS_GUIDANCE}"""
 
 
 SHOT_SYSTEM = (
@@ -652,8 +670,8 @@ the note asks to split it. Every segment must come from {clip}; the rest of the 
 is not yours to change here. Timestamps are seconds within the clip. Prefer cutting on
 utterance boundaries visible in the transcript, and mind what plays before and after
 this shot. If the note would be best served by removing the shot entirely, return it
-unchanged and say so in `notes` — removing is the editor's own one-click action.\
-{colour_only}"""
+unchanged and say so in `notes` — removing is the editor's own one-click action.
+{CHECKS_GUIDANCE}{colour_only}"""
 
 
 def propose_shot(segments: list[dict], index: int, clips: dict[str, dict],
@@ -714,6 +732,41 @@ def dropped_heroes(segments: list[dict], heroes: list[dict]) -> list[dict]:
     return out
 
 
+def validate_checks(raw: Any, clips: dict[str, dict]) -> list[dict]:
+    """The model's `checks`, forgiving where the plan is strict: a check is advice to
+    look, so a bad one is trimmed (an unknown clip or a range outside it loses its
+    range, keeps its words) or dropped (no words), never a re-ask. Each is `{text, clip,
+    in, out, kind: "model"}`, clip/in/out None when it is about the whole film."""
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for c in raw:
+        if isinstance(c, str):
+            c = {"text": c}
+        if not isinstance(c, dict):
+            continue
+        text = " ".join(str(c.get("text") or "").split())[:CHECK_TEXT_MAX]
+        if not text:
+            continue
+        clip, t_in, t_out = c.get("clip"), None, None
+        if clip in clips:
+            try:
+                t_in, t_out = float(c["in"]), float(c["out"])
+            except (KeyError, TypeError, ValueError):
+                t_in = t_out = None
+            dur = float(clips[clip].get("duration") or 0.0)
+            if t_in is not None and not (0.0 <= t_in < t_out <= dur + 0.05):
+                t_in = t_out = None
+            if t_in is not None:
+                t_in, t_out = round(t_in, 2), round(min(t_out, dur), 2)
+        else:
+            clip = None
+        out.append({"text": text, "clip": clip, "in": t_in, "out": t_out, "kind": "model"})
+        if len(out) >= CHECKS_MAX:
+            break
+    return out
+
+
 def validate_plan(payload: Any, clips: dict[str, dict],
                   heroes: list[dict] | None = None, *,
                   colour: dict | None = None, current: list[dict] | None = None,
@@ -749,6 +802,7 @@ def validate_plan(payload: Any, clips: dict[str, dict],
         # Colour only: the shots verbatim (ids, speed and all), and nothing to polish.
         return {"segments": [dict(s) for s in current],
                 "notes": str(payload.get("notes", "")).strip()[:1200],
+                "checks": validate_checks(payload.get("checks"), clips),
                 "colour": patch, "unchanged": True}
     if not isinstance(payload, dict) or "segments" not in payload:
         raise ValueError("expected an object with a 'segments' list")
@@ -782,7 +836,8 @@ def validate_plan(payload: Any, clips: dict[str, dict],
                 f"{float(h['start']):.1f}-{float(h['end']):.1f} without saying why: "
                 f"keep it (trimming inside its range is fine) or name {h['clip']} "
                 f"in notes and explain")
-    plan: dict = {"segments": clean, "notes": notes}
+    plan: dict = {"segments": clean, "notes": notes,
+                  "checks": validate_checks(payload.get("checks"), clips)}
     if current:
         plan["segments"] = carry_ids(clean, current)
     if patch:
@@ -1188,6 +1243,7 @@ def check_notes(plan: dict, current: list[dict]) -> dict:
     seen_rejected = {"rejected": left} if left else {}
     if not cur:
         out["notes_check"] = {"ok": True, "flags": [], "checked": 0, **seen_rejected}
+        out["checks"] = plan_checks(out)
         return out
     changed = [r for r in diff["shots"] if r["status"] == "changed"]
     gone = diff["removed"]
@@ -1244,6 +1300,84 @@ def check_notes(plan: dict, current: list[dict]) -> dict:
         out["notes"] = (notes.strip() + "\n\n" + "\n".join(lines)).strip()
     out["notes_check"] = {"ok": not flags, "flags": flags, "checked": len(claims),
                           **seen_rejected}
+    out["checks"] = plan_checks(out)
+    return out
+
+
+def _shot_of(segments: list[dict], clip, t_in, t_out, *, exact: bool = False) -> int | None:
+    """The proposed shot a range is about: the same range (`exact`), else the shot of
+    that clip it overlaps most; None when no shot is."""
+    if clip is None or t_in is None or t_out is None:
+        return None
+    best, most = None, 0.0
+    for i, s in enumerate(segments):
+        if not isinstance(s, dict) or s.get("clip") != clip or "in" not in s:
+            continue
+        if exact:
+            if abs(float(s["in"]) - t_in) < 0.02 and abs(float(s["out"]) - t_out) < 0.02:
+                return i
+            continue
+        o = _overlap((float(s["in"]), float(s["out"])), (float(t_in), float(t_out)))
+        if o > most:
+            best, most = i, o
+    return best
+
+
+def plan_checks(plan: dict) -> list[dict]:
+    """"Things to check" as data (verdict 5, punch 3): the notes check's flags (`kind`
+    flag), the ranges the editor rejected before that this proposal touched (`kind`
+    rejected), then the model's own checks (`kind` model) — each `{text, clip, in, out,
+    kind, shot}`, `shot` the proposed shot's index it is about or None. Built after
+    every pass that moves shots (polish, the frame grid, the first pass's rejections),
+    so `shot` points at the plan the board shows."""
+    segs = [s for s in plan.get("segments") or [] if isinstance(s, dict)]
+    out: list[dict] = []
+    seen: set = set()
+    for f in (plan.get("notes_check") or {}).get("flags") or []:
+        for s in f.get("shots") or []:
+            key = (s.get("id"), s.get("clip"), s.get("pos"))
+            if key in seen:
+                continue
+            seen.add(key)
+            stem = Path(str(s.get("clip"))).stem
+            was = f"{_clock(s['was']['in'])}–{_clock(s['was']['out'])}" if s.get("was") else ""
+            if not s.get("now"):
+                out.append({"text": f"shot {s.get('pos')} ({stem} {was}) is removed — the notes "
+                                    f"say “{f.get('claim', '')}”",
+                            "clip": s.get("clip"), "in": (s.get("was") or {}).get("in"),
+                            "out": (s.get("was") or {}).get("out"), "kind": "flag", "shot": None})
+                continue
+            now = s["now"]
+            k = next((i for i, p in enumerate(segs) if s.get("id") and p.get("id") == s["id"]), None)
+            if k is None:
+                k = _shot_of(segs, s.get("clip"), float(now["in"]), float(now["out"]), exact=True)
+            out.append({"text": f"shot {s.get('pos')} ({stem}) changes {was} → "
+                                f"{_clock(now['in'])}–{_clock(now['out'])} — the notes say "
+                                f"“{f.get('claim', '')}”",
+                        "clip": s.get("clip"), "in": now["in"], "out": now["out"],
+                        "kind": "flag", "shot": k})
+    left = (plan.get("firstpass") or {}).get("rejected") \
+        or (plan.get("notes_check") or {}).get("rejected") or []
+    for r in left if isinstance(left, list) else []:
+        if not isinstance(r, dict) or not r.get("clip"):
+            continue
+        what = f"{Path(str(r['clip'])).stem} {_clock(r['in'])}–{_clock(r['out'])}"
+        k = None
+        if r.get("action") == "flagged":
+            text = f"{what} — you rejected this shot before, and it is proposed again"
+            k = _shot_of(segs, r["clip"], float(r["in"]), float(r["out"]), exact=True)
+        elif r.get("action") == "kept as it is":
+            text = f"{what} — you rejected this change before: left out, the shot stays as it is"
+        else:
+            text = f"{what} — you rejected this shot before: left out"
+        out.append({"text": text, "clip": r["clip"], "in": r["in"], "out": r["out"],
+                    "kind": "rejected", "shot": k})
+    for c in plan.get("checks") or []:
+        if not isinstance(c, dict) or c.get("kind", "model") != "model" or not c.get("text"):
+            continue
+        out.append({"text": c["text"], "clip": c.get("clip"), "in": c.get("in"),
+                    "out": c.get("out"), "kind": "model",
+                    "shot": _shot_of(segs, c.get("clip"), c.get("in"), c.get("out"))})
     return out
 
 

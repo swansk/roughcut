@@ -963,7 +963,70 @@ CONTROL_RANGES = {
     "scale": (0.0, 1000.0, 100.0), "rotation": (-3600.0, 3600.0, 0.0),
     "opacity": (0.0, 100.0, 100.0), "volume_db": (-60.0, 6.0, 0.0),
     "contrast": (-100.0, 100.0, 0.0), "saturation": (0.0, 200.0, 100.0),
+    # Lumetri Basic Correction's tone (wave 6): grade.js's shader documents the formula
+    "highlights": (-100.0, 100.0, 0.0), "shadows": (-100.0, 100.0, 0.0),
+    "whites": (-100.0, 100.0, 0.0), "blacks": (-100.0, 100.0, 0.0),
 }
+
+# Keyframes (wave 6, verdict 5 punch 4; schema in judge/LOOP.md): `controls.keys` is
+# {prop: [[t, v], ...]} — t seconds from the shot's start in film time, strictly
+# increasing, linear between keys and held outside them; v in the prop's range
+# (position_x / position_y are fractions of the frame, as `position`). A prop with keys
+# wins over its static value. At most KEYS_MAX keys per prop.
+KEY_RANGES = {
+    "position_x": (-10.0, 10.0), "position_y": (-10.0, 10.0),
+    "scale": (0.0, 1000.0), "rotation": (-3600.0, 3600.0),
+    "opacity": (0.0, 100.0), "volume_db": (-60.0, 6.0),
+}
+KEYS_MAX = 64
+KEY_T_MAX = 24 * 3600.0
+
+
+def _finite(v, what: str) -> float:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise ValueError(f"{what} must be a number")
+    f = float(v)
+    if not math.isfinite(f):
+        raise ValueError(f"{what} must be finite")
+    return f
+
+
+def clean_keys(raw) -> dict | None:
+    """A segment's `controls.keys`, validated; None when no prop has a key."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("keys must be an object of {prop: [[t, v], ...]}")
+    extra = set(raw) - set(KEY_RANGES)
+    if extra:
+        raise ValueError(f"no keyframes for {sorted(extra)[0]!r}")
+    out: dict = {}
+    for prop, (lo, hi) in KEY_RANGES.items():
+        lst = raw.get(prop)
+        if lst is None:
+            continue
+        if not isinstance(lst, list):
+            raise ValueError(f"keys.{prop} must be a list of [t, v]")
+        if len(lst) > KEYS_MAX:
+            raise ValueError(f"keys.{prop} has more than {KEYS_MAX} keys")
+        nd = 6 if prop.startswith("position") else 3
+        clean: list = []
+        for k in lst:
+            if not (isinstance(k, list) and len(k) == 2):
+                raise ValueError(f"keys.{prop}: each key is [t, v]")
+            t = _finite(k[0], f"keys.{prop} t")
+            v = _finite(k[1], f"keys.{prop} value")
+            if not (0.0 <= t <= KEY_T_MAX):
+                raise ValueError(f"keys.{prop}: t must be 0..{KEY_T_MAX:g} s from the shot's start")
+            if not (lo <= v <= hi):
+                raise ValueError(f"keys.{prop}: value must be {lo:g}..{hi:g}")
+            t = round(t, 6)
+            if clean and t <= clean[-1][0]:
+                raise ValueError(f"keys.{prop}: times must be sorted and distinct")
+            clean.append([t, round(v, nd)])
+        if clean:
+            out[prop] = clean
+    return out or None
 
 
 def clean_controls(raw) -> dict | None:
@@ -972,7 +1035,7 @@ def clean_controls(raw) -> dict | None:
         return None
     if not isinstance(raw, dict):
         raise ValueError("controls must be an object")
-    extra = set(raw) - set(CONTROL_RANGES) - {"position", "fx_off", "fx_order"}
+    extra = set(raw) - set(CONTROL_RANGES) - {"position", "fx_off", "fx_order", "keys"}
     if extra:
         raise ValueError(f"unknown control {sorted(extra)[0]!r}")
     out: dict = {}
@@ -1001,6 +1064,9 @@ def clean_controls(raw) -> dict | None:
             raise ValueError(f"{k} must be a list of effect ids")
         if ids:
             out[k] = list(dict.fromkeys(ids))[:64]
+    keys = clean_keys(raw.get("keys"))
+    if keys:
+        out["keys"] = keys
     return out or None
 
 
@@ -5598,6 +5664,12 @@ def sample_segments(segments: list[dict], seconds: float = EXPORT_SAMPLE_S,
                 cout = min(float(seg["out"]), cin + each * sp)
                 piece = {k2: v for k2, v in seg.items() if k2 not in ("id", "a_off")}
                 piece.update({"in": round(cin, 4), "out": round(cout, 4)})
+                keys = (seg.get("controls") or {}).get("keys")
+                if keys and a > 0:
+                    # keyframes count from the shot's start: the slice starts `a` in
+                    piece["controls"] = {**seg["controls"], "keys": {
+                        p: [[round(float(t) - a, 4), v] for t, v in ks]
+                        for p, ks in keys.items()}}
                 out.append(piece)
                 break
             start += d

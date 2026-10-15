@@ -19,6 +19,7 @@ import threading
 import time
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 playwright_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed")
@@ -440,3 +441,137 @@ def test_parts_carry_pcm_and_the_film_one_aac_stream(project, tmp_path):
             assert ("audio", "pcm_s16le") in streams(part), (part, streams(part))
         got = streams(out)
         assert [s for s in got if s[0] == "audio"] == [("audio", "aac")], got
+
+
+# ---------------------------------------------------------------- verdict 5, punch 6
+
+def test_export_is_not_clickable_while_the_size_is_measuring(page, project, monkeypatch):
+    """Verdict 5: the dialog let Export go while the size read "measuring…" (≈ 773 MB
+    shown, 306 MB written). Now Export waits for the sample: held here until the test
+    lets the sample run, a click does nothing; once it lands the estimate is the
+    sample's, Export is enabled, and the file is within ±25 % of what it said."""
+    import server
+    key = "master"             # no test in this module exports with it
+    server.sample_file(key).unlink(missing_ok=True)
+    gate = threading.Event()
+    real = server._sample_job
+
+    def held(preset, k, scope):
+        gate.wait(60)
+        real(preset, k, scope)
+
+    monkeypatch.setattr(server, "_sample_job", held)
+    page.keyboard.press("Control+m")
+    wait_settings(page)
+    page.select_option("[data-testid=export-preset]", key)
+    page.wait_for_function(
+        "document.querySelector('#exSize').dataset.source === 'measuring'", timeout=10000)
+    assert "measuring" in page.inner_text("#exSize")
+    go = page.locator("[data-testid=export-go]")
+    assert go.is_disabled()
+    renders = len(server.RENDERS)
+    go.click(force=True)                                  # a click lands on a disabled button
+    page.keyboard.press("Enter")                          # and Enter in the name field
+    page.wait_for_timeout(600)
+    assert len(server.RENDERS) == renders, "an export started while the size was a guess"
+    assert page.evaluate("exportDialog.phase") == "settings"
+    gate.set()
+    page.wait_for_function(
+        "document.querySelector('#exSize').dataset.source === 'sample'", timeout=120000)
+    assert go.is_enabled()
+    est = size_estimate_mb(page)
+    path = export(page, "master after measuring", "lane-tests", preset=key)
+    real_mb = Path(path).stat().st_size / 1e6
+    print(f"first {key} export: estimate {est:.3f} MB, file {real_mb:.3f} MB "
+          f"({100 * (est - real_mb) / real_mb:+.1f} %)")
+    assert abs(est - real_mb) <= 0.25 * real_mb, (est, real_mb)
+
+
+def _assemble(edl: dict, project, root: Path, name: str) -> tuple[Path, float, set[str], str]:
+    """Render `edl` the board's way (the preview profile, 1920×1080) and watch the output's
+    folder while it runs: (the film, wall seconds, every other file that appeared, log)."""
+    tool = Path(__file__).resolve().parents[2] / "research" / "tools" / "assemble.py"
+    out_dir = root / name
+    out_dir.mkdir()
+    src = root / f"{name}.json"
+    src.write_text(json.dumps(edl), encoding="utf-8")
+    out = out_dir / "film.mp4"
+    seen: set[str] = set()
+    t0 = time.perf_counter()
+    proc = subprocess.Popen(["uv", "run", "--quiet", str(tool), str(src), "--footage",
+                             str(project["footage"]), "--parts-dir", str(root / f"{name}-parts"),
+                             "-o", str(out)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True)
+    while proc.poll() is None:
+        seen.update(p.name for p in out_dir.iterdir())
+        time.sleep(0.01)
+    wall = time.perf_counter() - t0
+    log, err = proc.communicate()
+    assert proc.returncode == 0, log + err
+    return out, wall, seen - {"film.mp4"}, log
+
+
+def test_a_v3_overlay_composites_inside_the_parts_with_no_second_film_pass(project, tmp_path):
+    """Verdict 5: a 1.2 s V3 clip cost a whole-film re-encode (`.tracks.mp4`), 24 min for
+    4:37. Now the clip is composited inside the part it covers: no `.tracks.mp4` (no
+    second file at all) appears beside the film, and the render takes <= 1.3x the same
+    sequence without it."""
+    base = {"variant": "T", "title": "v3", "orient": "none", "segments": SEGMENTS}
+    with_v3 = {**base, "tracks": {"V3": {}},
+               "overlays": [{"id": "o1", "clip": "CLIP_C.MP4", "in": 1.0, "out": 2.0, "at": 5.5,
+                             "track": "V3"}]}
+    times: dict[str, list[float]] = {"base": [], "v3": []}
+    for run in range(2):                                  # alternate, keep the best of two
+        for name, edl in (("base", base), ("v3", with_v3)):
+            film, wall, extra, log = _assemble(edl, project, tmp_path, f"{name}{run}")
+            times[name].append(wall)
+            if name == "v3":
+                assert not extra, f"a second pass wrote {extra}"
+                assert "V3 00 CLIP_C.MP4" in log and "inside part 1" in log, log
+                v3_film = film
+            else:
+                base_film = film
+    ratio = min(times["v3"]) / min(times["base"])
+    print(f"render wall: base {times['base']}, with V3 {times['v3']}, ratio {ratio:.2f}")
+    assert ratio <= 1.3, times
+
+    def gray(path: Path, t: float) -> np.ndarray:
+        r = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-i", str(path), "-ss", f"{t:.3f}",
+                            "-frames:v", "1", "-vf", "scale=64:36", "-f", "rawvideo",
+                            "-pix_fmt", "gray", "-"], capture_output=True, check=True)
+        return np.frombuffer(r.stdout, np.uint8).astype(float)
+
+    # CLIP_C's 1.0-2.0 over 5.5-6.5 s of the film (inside shot 2, CLIP_B 1.5-2.5 there)
+    clip_c = tmp_path / "c.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-ss", "1.0", "-i",
+                    str(Path(project["footage"]) / "CLIP_C.MP4"), "-t", "1.0", "-an", str(clip_c)],
+                   check=True, capture_output=True)
+    inside = gray(v3_film, 6.0)
+    assert np.abs(inside - gray(clip_c, 0.5)).mean() < 8
+    assert np.abs(inside - gray(base_film, 6.0)).mean() > 2 * np.abs(inside - gray(clip_c, 0.5)).mean()
+    for t in (5.2, 6.8, 12.0):                             # V1 untouched outside its range
+        assert np.abs(gray(v3_film, t) - gray(base_film, t)).mean() < 3, t
+    # the film is still CFR at the sequence's rate and the sequence's length
+    rates = ffprobe_rates(str(v3_film))
+    assert rates["r_frame_rate"] == rates["avg_frame_rate"] == "24000/1001", rates
+    assert abs(ffprobe_duration(str(v3_film)) - ffprobe_duration(str(base_film))) < 1e-3
+
+
+def test_v1_hidden_is_black_in_every_part_under_v2(project, tmp_path):
+    """V1's eye off is drawn inside the parts too: black under V2, V2's picture over it,
+    no second pass."""
+    edl = {"variant": "T", "title": "eye", "orient": "none", "segments": SEGMENTS[:2],
+           "tracks": {"V1": {"eye": False}},
+           "overlays": [{"id": "o1", "clip": "CLIP_C.MP4", "in": 1.0, "out": 3.0, "at": 3.0}]}
+    film, _, extra, log = _assemble(edl, project, tmp_path, "eye")
+    assert not extra, extra
+    assert "V1 hidden" in log and "inside parts 0, 1" in log, log
+
+    def luma(t: float) -> float:
+        r = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-i", str(film), "-ss", f"{t:.3f}",
+                            "-frames:v", "1", "-vf", "scale=64:36", "-f", "rawvideo",
+                            "-pix_fmt", "gray", "-"], capture_output=True, check=True)
+        return float(np.frombuffer(r.stdout, np.uint8).mean())
+
+    assert luma(1.0) < 20 and luma(7.0) < 20               # V1 hidden: black
+    assert luma(3.5) > 60 and luma(4.5) > 60               # V2 over both parts it spans
