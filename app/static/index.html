@@ -173,8 +173,11 @@
     <div class="ws-body mon-body" id="player">
       <div class="screenbox"><div class="screen">
         <img id="monPoster" alt="" draggable="false" hidden>
-        <video id="pv0" preload="metadata" playsinline></video>
-        <video id="pv1" preload="metadata" playsinline></video>
+        <!-- The Program's buffers (app.js player.vids): the shot on screen, the next one
+             parked, and the one after it when the next is short (verdict 6 punch 2). -->
+        <video id="pv0" class="pvbuf" preload="metadata" playsinline></video>
+        <video id="pv1" class="pvbuf" preload="metadata" playsinline></video>
+        <video id="pv2" class="pvbuf" preload="metadata" playsinline></video>
         <canvas id="gradeCanvas"></canvas>
         <!-- V2 over V1 (verdict 3 punch 4): app.js's programSync shows it inside an overlay. -->
         <video id="pvV2" preload="metadata" playsinline muted style="z-index:1"></video>

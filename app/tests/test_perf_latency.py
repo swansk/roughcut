@@ -8,20 +8,26 @@ the Program monitor presented a frame every 120-160 ms with a 317 ms hole at the
 This harness reproduces that box in a real Chromium on a fixture that has what made
 Killington slow and the three-clip suite fixture does not:
 
-  * two 1920×1080 sources at 60000/1001 (testsrc2 + a tone), proxied by the server's own
-    `ensure_proxies` → `build_proxy`, so the proxy profile under test is the shipped one
+  * three 3840×2160 H.264 sources at 60000/1001 with a 1 s GOP (verdict 6 punch 2: what
+    Killington's GoPro clips are; testsrc2 with grain, so the proxy runs at a real
+    proxy's ~2 Mbps, + a tone), proxied by the server's own `ensure_proxies` →
+    `build_proxy` (the 1280 proxy, not the 360p preview), so the proxy profile under
+    test is the shipped one
   * a hand balance on every shot, so the grade canvas (grade.js, WebGL) mirrors every
     frame the way it does on an auto-balanced GoPro bin
-  * CPU burners: `ROUGHCUT_PERF_BURNERS` children (default: one per core) spinning
-    `while 1: pass` for the whole measurement, started and stopped by the test
+  * CPU burners: `ROUGHCUT_PERF_BURNERS` children (default: enough to bring the box to
+    about one runnable task per core) spinning `while 1: pass` for the whole
+    measurement, started and stopped by the test
 
-  * a 0.4 s shot between the two 59.94 shots (verdict 5: a 12-frame Killington shot held
-    a black "buffering…" for 400-483 ms at 1920)
+  * a 0.4 s shot between two shots from DIFFERENT files (A, B 0.4 s, C; verdict 5: a
+    12-frame Killington shot held a black "buffering…" for 400-483 ms at 1920; verdict 6:
+    the cut out of it froze 200-600 ms, the next file not yet open and parked)
 
 and measures, inside the page:
 
   play     `requestVideoFrameCallback` on both buffers while playing from 1.2 s before the
-           first cut, through the 0.4 s shot and the second cut, to ~1.3 s after it; the
+           first cut, through the 0.4 s shot and the second cut, to ~1.3 s after it (the
+           player parks both files after the short shot before it plays: three buffers); the
            longest gap between frames the LIVE buffer presented (the parked buffer's seek
            frames are not on screen and do not count), ≤ 67 ms (two frame periods at
            29.97); and on every animation frame, that the live buffer has a picture and
@@ -47,6 +53,7 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -64,7 +71,11 @@ SEEK_MAX_MS = 400
 SHORT_S = 0.4                 # the sub-second shot between the two cuts (Killington's 12 frames)
 CLIP_S = 8.0
 FPS = "60000/1001"
-STEMS = ["P60_A", "P60_B"]
+SRC_W, SRC_H = 3840, 2160     # verdict 6 punch 2: the fixture is 4K 59.94 with a 1 s GOP
+GRAIN = 12
+# Three files: the 0.4 s shot sits between two shots from DIFFERENT files (A, B, C), so
+# both files after the short shot have to be open and parked before it plays.
+STEMS = ["P60_A", "P60_B", "P60_C"]
 BALANCE = {"gain": [1.06, 1.0, 0.94], "exposure": 1.05, "knee": 0.8, "lift": 0.0}
 
 
@@ -75,11 +86,20 @@ def _free_port() -> int:
 
 
 def _make_source(path: Path, hue: int) -> None:
+    """A 3840x2160 59.94 H.264 source with a keyframe every second (Killington's GoPro
+    clips: 4K, 59.94, a 1 s GOP), its picture grainy enough that the 1280 proxy made from
+    it runs at a real proxy's bitrate (~2 Mbps; the judge's Killington proxies are
+    1.9-3.2 Mbps; a clean testsrc2 proxy is 0.6). The grain is made at 1280 and scaled
+    up, so it survives the proxy's own scale back down."""
+    gop = "60"
     subprocess.run(
         ["ffmpeg", "-v", "error", "-y", "-nostdin",
-         "-f", "lavfi", "-i", f"testsrc2=size=1920x1080:rate={FPS}:duration={CLIP_S},hue=h={hue}",
+         "-f", "lavfi", "-i",
+         f"testsrc2=size=1280x720:rate={FPS}:duration={CLIP_S},hue=h={hue},"
+         f"noise=alls={GRAIN}:allf=t,scale={SRC_W}:{SRC_H}",
          "-f", "lavfi", "-i", f"sine=frequency=440:duration={CLIP_S}",
          "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+         "-g", gop, "-keyint_min", gop, "-sc_threshold", "0",
          "-c:a", "aac", "-shortest", str(path)],
         check=True, capture_output=True)
 
@@ -92,8 +112,10 @@ def perf_project(tmp_path_factory):
     footage, sidecars, work = root / "footage", root / "sidecars", root / "work"
     for d in (footage, sidecars, work):
         d.mkdir()
-    for k, stem in enumerate(STEMS):
-        _make_source(footage / f"{stem}.MP4", 90 * k)
+    with ThreadPoolExecutor(len(STEMS)) as ex:
+        list(ex.map(lambda ks: _make_source(footage / f"{ks[1]}.MP4", 120 * ks[0]),
+                    enumerate(STEMS)))
+    for stem in STEMS:
         side = _sidecar(stem)
         side["duration_s"] = CLIP_S
         (sidecars / f"{stem}.audio.json").write_text(json.dumps(side), encoding="utf-8")
@@ -101,8 +123,8 @@ def perf_project(tmp_path_factory):
         {"clip": "P60_A.MP4", "in": 1.0, "out": 4.0, "why": "one", "id": "s1"},
         # verdict 5: a 12-frame shot held a black "buffering…" for 400-483 ms at 1920
         {"clip": "P60_B.MP4", "in": 1.0, "out": 1.0 + SHORT_S, "why": "two", "id": "s2"},
-        {"clip": "P60_A.MP4", "in": 5.0, "out": 7.0, "why": "three", "id": "s3"},
-        {"clip": "P60_B.MP4", "in": 5.0, "out": 7.0, "why": "four", "id": "s4"},
+        {"clip": "P60_C.MP4", "in": 5.0, "out": 7.0, "why": "three", "id": "s3"},
+        {"clip": "P60_A.MP4", "in": 5.0, "out": 7.0, "why": "four", "id": "s4"},
     ]
     edl = {"variant": "T", "title": "perf", "orient": "none", "story": "",
            "target_s": [5, 20], "segments": segs,
@@ -191,9 +213,12 @@ def measure_play(page) -> dict:
     shot 3, to ~1.3 s after that; log the live buffer's frames, and on every animation
     frame what the screen shows: a live buffer with a picture, and no wait text on it."""
     page.evaluate("cueAt(0, segs[0].out - 1.2)")
+    # parked: the live buffer, the next shot's (the 0.4 s one) and, because that one is
+    # short, the shot after it in the third buffer (app.js armUpcoming)
     page.wait_for_function(
         "liveVideo() && liveVideo().readyState >= 3 && !liveVideo().seeking"
-        " && player.vids[1 - player.cur].readyState >= 2 && !player.vids[1 - player.cur].seeking",
+        " && [1, 2].every((k) => { const b = upcomingVideo(k);"
+        " return b && b.readyState >= 2 && !b.seeking; })",
         timeout=20000)
     page.wait_for_timeout(500)
     page.evaluate("""() => {
@@ -251,6 +276,8 @@ def measure_play(page) -> dict:
         "longest_at": [worst[1] and worst[1]["v"], worst[2] and worst[2]["v"],
                        worst[1] and round(worst[1]["t"]), worst[1] and worst[1]["mt"]],
         "cut_gaps_ms": [round(g[0], 1) for g in switches],
+        # the longest hole inside a shot (one buffer to itself), apart from the cuts
+        "mid_gap_ms": round(max([g[0] for g in gaps if g[1]["v"] == g[2]["v"]] or [0]), 1),
         "cuts": len(switches),
         "screen_bad": screen[:8],
         "screen_bad_n": len(screen),
@@ -381,9 +408,10 @@ def measure_keys(page) -> list[float]:
 
 
 def test_proxy_of_a_59_94_source_is_29_97(live_server):
-    """The monitor's proxy plays at half a 59.94 source's rate; the clip itself (what the
-    export, the frame grid and the Project panel read) stays 59.94. The proxy folder
-    carries PROXY_V, so a v1 proxy at the source rate is rebuilt rather than served."""
+    """The monitor's proxy plays at half a 59.94 source's rate, with a keyframe every
+    half second; the clip itself (what the export, the frame grid and the Project panel
+    read) stays 59.94. The proxy folder carries PROXY_V, so an older proxy (v1 at the
+    source rate, v2 with 1 s keyframes) is rebuilt rather than served."""
     import httpx
     import server
 
@@ -397,6 +425,15 @@ def test_proxy_of_a_59_94_source_is_29_97(live_server):
         st = json.loads(r.stdout)["streams"][0]
         assert st["r_frame_rate"] == "30000/1001", st
         assert st["avg_frame_rate"] == "30000/1001", st
+        # a keyframe every half second at most (verdict 6 punch 2: a park or a cue decodes
+        # from the keyframe before its frame; the 4K source's own GOP is 1 s)
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-skip_frame", "nokey",
+             "-show_entries", "frame=pts_time", "-of", "csv=p=0", str(pdir / f"{stem}.mp4")],
+            capture_output=True, text=True, check=True)
+        keys = [float(x.strip(",")) for x in r.stdout.split() if x.strip(",")]
+        assert len(keys) >= CLIP_S / 0.5, keys
+        assert max(b - a for a, b in zip(keys, keys[1:])) <= 0.5 + 0.02, keys
     assert server.proxy_rate(server.STATE["footage"] / "P60_A.MP4") == "30000/1001"
     body = httpx.get(f"{live_server}/api/clips", timeout=30).json()
     rows = body.get("clips", body) if isinstance(body, dict) else body
@@ -508,7 +545,7 @@ def test_the_grade_draws_in_a_worker_shows_what_probe_reads_and_prefetches(live_
             page.wait_for_function("liveVideo() && liveVideo().readyState >= 2 && grade.lut"
                                    " && document.querySelector('#gradeCanvas.on')", timeout=15000)
             # parked on shot 1, the buffer for shot 2 is armed: its LUT is asked for already
-            page.wait_for_function("player.vids[1 - player.cur].readyState >= 2", timeout=15000)
+            page.wait_for_function("upcomingVideo(1) && upcomingVideo(1).readyState >= 2", timeout=15000)
             page.wait_for_timeout(600)
             assert "s2" in luts, luts
 

@@ -1,8 +1,8 @@
 /* meters.js: stereo peak meters beside the Program monitor (REDESIGN-GOAL dimension 6;
  * verdict 3 punch 6: "there are no audio meters").
  *
- * What is metered is what the Program plays: every <video>/<audio> inside #player (pv0
- * and pv1, lane PROGRAM's #pvA1 — an unlinked shot's moved sound — and #pvV2, which is
+ * What is metered is what the Program plays: every <video>/<audio> inside #player (the
+ * buffers pv0-pv2, lane PROGRAM's #pvA1 — an unlinked shot's moved sound — and #pvV2, which is
  * muted) and the music bed (#bed, A2). An element joins the mix the first time it fires
  * `play` (a capturing listener on the document: `play` does not bubble), so nothing has
  * to register itself.

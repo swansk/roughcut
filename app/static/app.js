@@ -1124,11 +1124,15 @@ function bindColour(el, seg) {
 }
 
 /* The monitor. One place where the cut plays, fed from the proxies, so judging an edit
- * means pressing play rather than waiting two minutes on a render. Two <video> elements
- * take turns: while one plays the current shot the other already holds the next one,
- * parked on its in-point, so a cut costs a swap of which element is visible rather than
- * the time it takes to open a file. Not gapless — a rough cut does not need to be — but
- * close enough that the rhythm of the edit reads. */
+ * means pressing play rather than waiting two minutes on a render. Three <video> elements
+ * (`player.vids`, the markup's `#player video.pvbuf`) take turns: while one plays the
+ * current shot another already holds the next one, parked on its in-point, so a cut
+ * costs a swap of which element is visible rather than the time it takes to open a
+ * file. The third holds the shot after next when the next is short (verdict 6 punch 2:
+ * a 0.4 s shot between two other files left no time to open and seek the second one, a
+ * 200-600 ms frozen hole on Killington). Which buffer holds which shot is `b._for`
+ * (armNext), never a fixed slot: `bufFor(seg)`. Not gapless — a rough cut does not need
+ * to be — but close enough that the rhythm of the edit reads. */
 /* `gen` counts commands to the monitor. Opening a shot is asynchronous — a proxy that
  * is not in the browser's cache takes seconds to give up its metadata — and until this
  * counter existed a command issued in that window did not cancel the one before it:
@@ -1156,6 +1160,63 @@ function filmAt(i, clipT) {
 
 function liveVideo() { return player.vids[player.cur]; }
 
+const proxyOf = (seg) => (P.clips[seg.clip] || {}).proxy || '';
+
+/* The buffer for an upcoming shot (not the live one): the one armed for it (`_for`), else
+ * one that has its file open and is not holding another upcoming shot, else an empty
+ * one, else the one used longest ago. Opening a file is a new pipeline (metadata, then a
+ * seek); a seek inside an open one is not. */
+function bufFor(seg) {
+  const lv = liveVideo();
+  const others = player.vids.filter((b) => b && b !== lv);
+  const mine = others.find((b) => b._for === seg);
+  if (mine) return mine;
+  const ahead = [segs[player.idx + 1], segs[player.idx + 2]].filter((x) => x && x !== seg);
+  const free = others.filter((b) => !b._for || !ahead.includes(b._for));
+  const pool = free.length ? free : others;
+  const src = proxyOf(seg);
+  return pool.find((b) => src && b.dataset.src === src && !b.error)
+    || pool.find((b) => !b.dataset.src)
+    || pool.slice().sort((a, b) => (a._used || 0) - (b._used || 0))[0];
+}
+
+/* The shots the buffers off screen hold while shot i plays: the next, and the one after it
+ * when the next is short (there is no time inside a short shot to open a file and seek).
+ * The second park waits for the first one's seek: two seeks at once share the decoder. */
+function armUpcoming(i, g, room) {
+  const n1 = segs[i + 1];
+  if (!n1 || player.single) return;
+  const b1 = bufFor(n1);
+  if (!b1) return;
+  armNext(b1, n1, room);
+  const n2 = segs[i + 2];
+  if (!n2 || player.vids.length < 3 || tl.dur(n1) >= SHORT_S) return;
+  whenParked(b1, () => {
+    if (g !== player.gen && !player.playing) return;      // a later command arms its own
+    if (segs[player.idx + 1] !== n1 && segs[player.idx] !== n1) return;
+    const b2 = bufFor(n2);
+    // parked as far ahead as the short shot leaves room for a start (prerollAt's rule,
+    // without the seek: this one has the whole of the shot before to land)
+    if (b2 && b2 !== b1) armNext(b2, n2, tl.dur(n1) + roll.seek);
+  });
+}
+
+/* The buffer holding upcoming shot k (1 = the next), or null: for the tests and the judge. */
+function upcomingVideo(k = 1) {
+  const seg = segs[player.idx + k];
+  return (seg && player.vids.find((b) => b !== liveVideo() && b._for === seg)) || null;
+}
+
+/* fn once the buffer holds a frame and is not seeking, or after 1.5 s. */
+function whenParked(v, fn) {
+  const t0 = performance.now();
+  const step = () => {
+    if ((v.readyState >= 2 && !v.seeking) || v.error || performance.now() - t0 > 1500) fn();
+    else setTimeout(step, 25);
+  };
+  step();
+}
+
 /* Point a buffer at a shot's in-point without playing it.
  *
  * The `#t=` is a media fragment, and it is the difference between fetching the shot
@@ -1177,7 +1238,9 @@ function liveVideo() { return player.vids[player.cur]; }
  * rather than overwrite it. A generated clip (`gen_…`) is armed like any other: the
  * server lists it with a proxy. */
 function arm(v, seg, at = seg.in) {
-  const src = (P.clips[seg.clip] || {}).proxy || '';
+  const src = proxyOf(seg);
+  v._for = null;                    // armNext says which upcoming shot it holds
+  v._used = performance.now();
   if (v.dataset.src !== src || (v.error && !v._waitStop)) {
     v.dataset.src = src;
     if (v._waitStop) { v._waitStop(); v._waitStop = null; }
@@ -1359,7 +1422,7 @@ function playFrom(i, { single = false } = {}) {
   paint();
   // On screen once it has the frame; the buffer it replaces is re-armed only after that
   showWhenReady(g, (b) => b.readyState >= 2 && !b.seeking, () => {
-    if (g === player.gen && !single && segs[i + 1]) armNext(player.vids[1 - player.cur], segs[i + 1]);
+    if (g === player.gen && !single) armUpcoming(i, g);
   });
   // The shot's media is not ready (no proxy yet, waiting on /media/status): the poster at
   // the playhead and the calm line stay; the wait loads it, and the next play plays.
@@ -1405,7 +1468,7 @@ function cueAt(i, clipT) {
   arm(v, seg, at);
   paint();
   showWhenReady(g, (b) => b.readyState >= 2 && !b.seeking, () => {
-    if (g === player.gen && segs[i + 1]) armNext(player.vids[1 - player.cur], segs[i + 1]);
+    if (g === player.gen) armUpcoming(i, g);
   });
   if (v.error) { mediaWaitFor(v); monWait(true); }
   paintPos(filmAt(i, at), at, seg);
@@ -1537,8 +1600,7 @@ function programSync(filmT) {
     && !player.playing;
   // V1's eye: the pair, the grade and the rest poster go dark; V2 still draws over black.
   const v1 = proposal || progTrack('V1').eye !== false ? '' : 'hidden';
-  ['#pv0', '#pv1', '#gradeCanvas', '#monPoster'].forEach((s) => {
-    const el = $(s);
+  [...player.vids, $('#gradeCanvas'), $('#monPoster')].forEach((el) => {
     if (el && el.style.visibility !== v1) el.style.visibility = v1;
   });
   const play = player.playing;
@@ -1687,27 +1749,43 @@ function armNext(v, seg, room) {
   // the grade fetches the next shot's LUT and makes its texture now, not at the cut
   const gr = gradeApi();
   if (gr && typeof gr.prefetch === 'function') gr.prefetch(seg.id);
+  // Already prerolling for this very shot (parked in the third buffer before a short shot
+  // and started by preroll()): a re-arm would stop it and seek it again.
+  if (v._roll && v._roll.seg === seg && !v.paused && v.dataset.src === proxyOf(seg)) {
+    v._for = seg;
+    return;
+  }
   // Already paused a little ahead of the in-point in that clip (a cutaway and back: the
   // buffer stopped at the out-point the next shot starts from): it is parked; a seek
   // would only cost a decode from the keyframe.
+  // A park further ahead than `room` wants (up to PREROLL_S) is kept too: preroll() runs
+  // a late start faster until the cut, which costs less than a second seek.
   const lead = (seg.in - v.currentTime) / speedOf(seg);
-  if (v.dataset.src === ((P.clips[seg.clip] || {}).proxy || '') && !v.error && v.paused
-      && !v._roll && !v.seeking && v.readyState >= 2 && lead >= 0 && lead <= (seg.in - at) / speedOf(seg) + 1e-3) {
+  if (v.dataset.src === proxyOf(seg) && !v.error && v.paused
+      && !v._roll && !v.seeking && v.readyState >= 2 && lead >= 0
+      && lead <= Math.max(seg.in - at, PREROLL_S * speedOf(seg)) / speedOf(seg) + 1e-3) {
     setShotRate(v, seg);
+    v._for = seg;
     return;
   }
   arm(v, seg, at);
+  v._for = seg;
 }
 
-/* The buffer for a shot of `seg.clip`: the live one, unless only the other has that clip
- * open — then they trade places (no swap shows until showWhenReady says so). Opening a
- * file is a new pipeline (metadata, then a seek); a seek inside an open one is not. */
+/* The buffer for a shot of `seg.clip`: the live one, unless only another has that clip
+ * open — then it goes live (no swap shows until showWhenReady says so; the one armed for
+ * this very shot first). Opening a file is a new pipeline (metadata, then a seek); a seek
+ * inside an open one is not. */
 function pickBuffer(seg) {
-  const src = (P.clips[seg.clip] || {}).proxy || '';
-  const lv = liveVideo(), ov = player.vids[1 - player.cur];
-  if (!src || !ov || lv.dataset.src === src || ov.dataset.src !== src || ov.error) return;
+  const src = proxyOf(seg);
+  const lv = liveVideo();
+  if (!src || lv.dataset.src === src) return;
+  const open = player.vids.filter((b) => b !== lv && b.dataset.src === src && !b.error);
+  const ov = open.find((b) => b._for === seg) || open[0];
+  if (!ov) return;
   if (ov._roll) { ov._roll = null; if (!ov.paused) ov.pause(); }
-  player.cur = 1 - player.cur;
+  ov._for = null;
+  player.cur = player.vids.indexOf(ov);
 }
 
 /* Put the live buffer on screen once `ok(buffer)` holds — it has the frame — and run
@@ -1741,10 +1819,12 @@ function showWhenReady(g, ok, then) {
 function preroll(left) {
   if (player.single) return;
   const nseg = segs[player.idx + 1];
-  const nb = player.vids[1 - player.cur];
-  if (!nseg || !nb || nb._roll || !nb.paused || nb.seeking || nb.readyState < 2) return;
+  if (!nseg) return;
+  const lv = liveVideo();
+  const nb = player.vids.find((b) => b !== lv && b._for === nseg);
+  if (!nb || nb._roll || !nb.paused || nb.seeking || nb.readyState < 2) return;
   if (nb.classList.contains('live')) return;                  // still on screen (held)
-  if (nb.dataset.src !== ((P.clips[nseg.clip] || {}).proxy || '')) return;
+  if (nb.dataset.src !== proxyOf(nseg)) return;
   const lead = (nseg.in - nb.currentTime) / speedOf(nseg);    // film seconds to its in-point
   if (lead < -0.01 || lead > PREROLL_S + 0.05) return;        // not parked for this cut
   // boundary() cuts 0.04 s before the out; the start's latency is real time, the
@@ -1790,14 +1870,17 @@ function advance() {
     paintTransport();
     return;
   }
-  player.cur = 1 - player.cur;
+  const nseg = segs[next];
+  // the buffer armed for this shot (bufFor reads the shot before the cut's lookahead)
+  player.cur = player.vids.indexOf(bufFor(nseg));
   player.idx = next;
   sel = next;
   tl.syncSel();                 // paint()'s first half; the inspector waits (below)
   const nv = liveVideo();
-  const nseg = segs[next];
   // Prerolled for this cut (see preroll): it is playing, near its in-point; keep it so.
   const rolled = !!nv._roll && nv._roll.gen === g - 1 && nv._roll.seg === segs[next] && !nv.paused;
+  const parked = nv._for === nseg;
+  nv._for = null;                   // on screen: it holds no upcoming shot
   if (rolled) {
     nv._roll = null;
     // a start that went badly wrong is put right; a frame or two either side is not
@@ -1812,18 +1895,18 @@ function advance() {
   const eps = (0.5 / 30) * speedOf(nseg);
   const short = tl.dur(nseg) < SHORT_S;
   // the last few cuts, for the judge and the perf test: prerolled or not, how long held
-  const rec = { shot: next, rolled, held_ms: 0, t: performance.now() };
+  const rec = { shot: next, rolled, parked, buf: nv.id, held_ms: 0, t: performance.now() };
   player.cutLog = [...(player.cutLog || []).slice(-7), rec];
   showWhenReady(g, (b) => b.readyState >= 2 && !b.seeking && b.currentTime >= nseg.in - eps, () => {
     rec.held_ms = Math.round(performance.now() - rec.t);
-    // Off screen now, the buffer we left takes the shot after this one: after a short
-    // shot at once, parked as far ahead as the room left allows (prerollAt); otherwise
-    // once the new shot has its first frames (its seek would take the decoder threads the
-    // new shot is using).
-    const after = segs[next + 1];
-    if (g !== player.gen || !after) return;
-    if (short) armNext(v, after, Math.max(0, (nseg.out - nv.currentTime) / speedOf(nseg)));
-    else afterFirstFrames(nv, () => { if (g === player.gen) armNext(v, after); });
+    // Off screen now, the buffers take the shots after this one (armUpcoming): after a
+    // short shot at once (normally the shot after it was parked during the shot before,
+    // in the third buffer, and this finds it there), parked as far ahead as the room left
+    // allows (prerollAt); otherwise once the new shot has its first frames (a seek would
+    // take the decoder threads the new shot is using).
+    if (g !== player.gen || !segs[next + 1]) return;
+    if (short) armUpcoming(next, g, Math.max(0, (nseg.out - nv.currentTime) / speedOf(nseg)));
+    else afterFirstFrames(nv, () => { if (g === player.gen) armUpcoming(next, g); });
   });
   const go = () => {
     if (g !== player.gen || !player.playing) return;
@@ -4410,7 +4493,7 @@ function waitForProxies() {
 }
 
 async function boot() {
-  player.vids = [$('#pv0'), $('#pv1')];
+  player.vids = [...document.querySelectorAll('#player video.pvbuf')];
   player.vids.forEach((v) => {
     // rAF stops in a background tab; timeupdate (4Hz) keeps the cut points honest there
     v.addEventListener('timeupdate', () => {

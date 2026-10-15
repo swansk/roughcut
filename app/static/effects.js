@@ -390,7 +390,8 @@
   }
 
   /* ------------------------------------------------------------ the live preview */
-  const LAYERS = ['#pv0', '#pv1', '#gradeCanvas', '#fxCanvas'];
+  // the Program's buffers (app.js player.vids, `video.pvbuf`) and the canvases over them
+  const LAYERS = ['#player video.pvbuf', '#gradeCanvas', '#fxCanvas'];
   let liveId = null;
   let lastStyle = '';
   function monitorShot() {
@@ -413,12 +414,10 @@
     const key = `${transform}|${opacity}`;
     if (key !== lastStyle) {
       lastStyle = key;
-      LAYERS.forEach((s) => {
-        const el = document.querySelector(s);
-        if (!el) return;
+      LAYERS.forEach((s) => document.querySelectorAll(s).forEach((el) => {
         el.style.transform = transform;
         el.style.opacity = opacity;
-      });
+      }));
     }
     const lv = typeof g('liveVideo') === 'function' ? g('liveVideo')() : null;
     if (lv) {

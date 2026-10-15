@@ -1,6 +1,6 @@
 /* Roughcut — the monitor shows the grade without a render (INTAKE M10, I10.4; decision 4).
  *
- * A <canvas> sits over the monitor's two <video> elements (#pv0 / #pv1) and mirrors
+ * A <canvas> sits over the monitor's <video> buffers (`#player video.pvbuf`) and mirrors
  * whichever one is live through a WebGL shader that applies the shot's 3D LUT — the
  * same 17³ table `/api/lut/{id}` bakes from the same function the render bakes its 33³
  * from, so what the board shows and what the render makes agree by construction.
@@ -719,7 +719,7 @@ onmessage = (e) => {
   /* ------------------------------------------------------------ mount */
   function mount() {
     const canvas = $('#gradeCanvas');
-    G.videos = [$('#pv0'), $('#pv1')].filter(Boolean);
+    G.videos = [...document.querySelectorAll('#player video.pvbuf')];   // app.js player.vids
     if (!canvas || !G.videos.length) return;
     G.canvas = canvas;
     if (!startWorker(canvas)) {
