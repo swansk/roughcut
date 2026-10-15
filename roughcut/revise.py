@@ -979,6 +979,71 @@ def _same_range(a: dict, b: dict) -> bool:
             and abs(float(a["out"]) - float(b["out"])) < SAME_EPS)
 
 
+# ------------------------------------------------------------------ the frame grid
+#
+# The journey (wave 3): the export came out VFR (r_frame_rate 120/1) because a
+# proposal's cut points sat between frames — boundary polish pads a sentence by 0.15 s,
+# the model writes hundredths. An editor's in and out are frames, so a proposal's are
+# too: every range a proposal *makes* lands on the sequence's frame grid. A range it
+# copies from the cut is left exactly as it is (the editor's own, or an accepted
+# earlier proposal's), and a shot that continues one of the cut's keeps its Effect
+# Controls exactly — the model never sees `controls`, so its plan never carries them.
+
+# The broadcast rates ffprobe reports as 29.97 / 59.94 / 23.976 are N*1000/1001.
+NTSC = {23.976: 24000 / 1001, 29.97: 30000 / 1001, 47.952: 48000 / 1001,
+        59.94: 60000 / 1001, 119.88: 120000 / 1001}
+
+
+def exact_rate(fps: float | None) -> float | None:
+    """The sequence rate as the frame grid uses it: 59.94 → 60000/1001."""
+    try:
+        f = float(fps or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if f <= 0:
+        return None
+    for k, v in NTSC.items():
+        if abs(f - k) < 0.01:
+            return v
+    return f
+
+
+def on_frames(t: float, fps: float) -> float:
+    """`t` on the nearest frame boundary of `fps`, to 1/10000 s (well inside half a
+    frame at any rate; `round(t * fps)` recovers the frame number exactly)."""
+    return round(round(float(t) * fps) / fps, 4)
+
+
+def to_sequence(plan: dict, current: list[dict] | None, fps: float | None) -> dict:
+    """A proposal as the timeline takes it: each new range on the frame grid of `fps`
+    (at least one frame long), each range copied from `current` untouched, and each
+    shot that continues one of the cut's (same id) carrying its `controls` over
+    exactly. Returns a new plan; `plan` is not modified."""
+    rate = exact_rate(fps)
+    cur = [s for s in (current or []) if isinstance(s, dict) and "in" in s and "out" in s]
+    by_id = {c.get("id"): c for c in cur if c.get("id")}
+    out = dict(plan)
+    segs = []
+    for s in plan.get("segments") or []:
+        if not (isinstance(s, dict) and "in" in s and "out" in s):
+            segs.append(s)
+            continue
+        s = dict(s)
+        copied = any(_same_range(s, c) and (not s.get("id") or not c.get("id")
+                                            or s.get("id") == c.get("id")) for c in cur)
+        if rate and not copied:
+            a, b = on_frames(s["in"], rate), on_frames(s["out"], rate)
+            if b - a < 1.0 / rate - 1e-6:
+                b = on_frames(a + 1.0 / rate, rate)
+            s["in"], s["out"] = a, b
+        was = by_id.get(s.get("id"))
+        if was is not None and was.get("controls"):
+            s["controls"] = json.loads(json.dumps(was["controls"]))
+        segs.append(s)
+    out["segments"] = segs
+    return out
+
+
 def polish_kept_alone(plan: dict, clips: dict[str, dict],
                       current: list[dict] | None) -> dict:
     """`polish_plan`, except a shot the model returned exactly as it is in the current

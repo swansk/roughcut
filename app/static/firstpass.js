@@ -6,8 +6,14 @@
  * header, at every state —
  *
  *   never-run                 "Run first pass"
- *   running                   "First pass · heard 3/12 · looked 0/12", with × to stop
+ *   running                   "First pass · 3/12" (clips heard and looked at), with ×
+ *                             to stop; the full counts are in the hover and the panel
+ *   stopped / failed          "Re-run first pass"; the panel says when, what finished
+ *                             and what a re-run picks up (verdict 3: never "not run")
  *   done / stale-after-edits  "Re-run first pass" (a dot when the cut changed since)
+ *
+ * The running label stays short (verdict 3, punch 8): the header at 1440×900 holds it
+ * beside Next and a job pill without an ellipsis.
  *
  * — and one click opens its panel: the steps a run takes now, each with its price on
  * this backend ("free on your plan", the API estimate in the hover), the shots a
@@ -55,31 +61,48 @@
 
   function running(s) { return !!s && s.state === 'running'; }
 
-  /* The control's words. Running: the counts the API gives, never a % they do not. */
+  /* Clips heard and looked at: the proposal's prerequisite, so the running count. */
+  function ready(c) {
+    c = c || {};
+    return Math.min(c.listened || 0, c.looked || 0, c.clips || 0);
+  }
+
+  /* The control's words. Running: a count the API gives, never a % it does not, and
+   * short — the detail is in the hover and the panel. */
   function label(s) {
     if (!s) return 'Run first pass';
     if (running(s)) {
       const c = (s.counts && s.counts.index) || {};
-      if (s.stage === 'picks') return 'First pass · ranking the picks';
-      if (s.stage === 'cut') return 'First pass · writing the cut';
-      return `First pass · heard ${c.listened || 0}/${c.clips || 0}`
-        + ` · looked ${c.looked || 0}/${c.look_need || 0}`;
+      if (s.stage === 'picks') return 'First pass · picks';
+      if (s.stage === 'cut') return 'First pass · the cut';
+      return `First pass · ${ready(c)}/${c.clips || 0}`;
     }
     return s.state === 'never-run' ? 'Run first pass' : 'Re-run first pass';
+  }
+
+  /* "Stopped 3 min ago · heard 12/12 · looked 1/12" */
+  function endedLine(s) {
+    const what = s.state === 'stopped' ? 'Stopped' : 'Failed';
+    return [`${what} ${ago(s.when)}`, s.finished].filter(Boolean).join(' · ');
   }
 
   function title(s) {
     if (!s) return 'The first pass: index the footage, rank the picks, propose a rough cut';
     if (running(s)) {
       const cut = s.counts && s.counts.cut;
-      return ['The first pass is running',
+      const step = s.stage === 'picks' ? 'ranking the picks'
+        : s.stage === 'cut' ? 'writing the cut' : 'hearing and looking at every clip';
+      return ['The first pass is running', step,
         s.counts && s.counts.index && s.counts.index.words,
         cut && cut.detail].filter(Boolean).join(' — ');
     }
     if (s.state === 'stale-after-edits') {
       return `${label(s)} — ${(s.stale || []).join(' · ') || 'the cut changed since'}`;
     }
-    if (s.state === 'failed') return `The last first pass failed: ${s.error || 'unknown error'}`;
+    if (s.state === 'stopped' || s.state === 'failed') {
+      return `${endedLine(s)}${s.error ? ` — ${s.error}` : ''}`
+        + `${s.resumes ? `. A re-run ${s.resumes}.` : ''}`;
+    }
     if (s.state === 'done') return `${label(s)} — last run ${ago(s.when)}`;
     return `${label(s)} — index the footage, rank the picks, propose a rough cut`;
   }
@@ -109,7 +132,7 @@
         + `<button type="button" class="fp-btn" data-testid="firstpass-button" aria-haspopup="dialog"`
         + ` aria-expanded="false">${ICON}<span class="fp-label">Run first pass</span><i class="fp-dot" hidden></i></button>`
         + `<button type="button" class="fp-x" data-testid="firstpass-cancel" hidden`
-        + ` title="Stop the first pass — what is finished is kept" aria-label="stop the first pass">×</button>`
+        + ` title="Stop the first pass now — what is finished is kept" aria-label="stop the first pass">×</button>`
         + `</span><div class="fp-panel" data-testid="firstpass-panel" role="dialog" aria-label="First pass" hidden></div>`;
       $('.fp-btn', host).addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
       $('.fp-x', host).addEventListener('click', (e) => { e.stopPropagation(); cancel(); });
@@ -132,7 +155,7 @@
     const btn = $('.fp-btn', host);
     $('.fp-label', host).textContent = label(s);
     btn.title = title(s);
-    $('.fp-label', host).title = btn.title;      // it may ellipsize in a full header row
+    $('.fp-label', host).title = btn.title;
     host.dataset.state = s ? s.state : 'unknown';
     $('.fp-dot', host).hidden = !(s && s.state === 'stale-after-edits');
     $('.fp-x', host).hidden = !running(s);
@@ -155,11 +178,20 @@
 
   function statusLine(s) {
     if (running(s)) {
-      return `Running — ${esc((s.counts && s.counts.index && s.counts.index.words) || 'starting')}`;
+      const ix = s.steps && s.steps.index;
+      const bg = ix && ix.background
+        ? ' <span class="fp-note">Previews and close looks finish in the background.</span>' : '';
+      return `Running — ${esc((s.counts && s.counts.index && s.counts.index.words) || 'starting')}.`
+        + ' The picks and the cut start once every clip is heard and looked at.' + bg;
     }
     if (s.state === 'never-run') return 'Not run on this bin yet.';
-    if (s.state === 'failed') {
-      return `<span class="fp-bad">The last run failed: ${esc(s.error || 'unknown error')}</span>`;
+    if (s.state === 'stopped' || s.state === 'failed') {
+      const line = `${esc(endedLine(s))}.`;
+      const why = s.state === 'failed'
+        ? ` <span class="fp-bad">${esc(s.error || 'unknown error')}</span>` : '';
+      const next = s.resumes
+        ? ` <span class="fp-resume" data-testid="firstpass-resumes">Re-run first pass ${esc(s.resumes)}.</span>` : '';
+      return `${line}${why}${next}`;
     }
     const p = s.proposal || {};
     const what = p.pending ? 'its proposal is waiting for you'
@@ -202,7 +234,7 @@
     const cost = w.cost || {};
     const foot = live
       ? '<button type="button" class="fp-stop" data-fp="stop" data-testid="firstpass-stop">Stop</button>'
-        + '<span class="fp-note">stops after the step in hand; what is finished is kept</span>'
+        + '<span class="fp-note">stops now; what is finished is kept</span>'
       : `<button type="button" class="fp-run" data-fp="run" data-testid="firstpass-run"`
         + `${FP.busy || w.error ? ' disabled' : ''} title="${esc(cost.hover || '')}">${esc(label(s))}</button>`
         + `<span class="fp-cost" title="${esc(cost.hover || '')}">${esc(cost.words || '')}</span>`
@@ -278,7 +310,7 @@
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
       FP.watching = null;
-      say('stopping the first pass after the step in hand');
+      say('first pass stopped — what finished is kept');
     } catch (e) {
       say(`could not stop it: ${e.message || e}`, 5000);
     }
