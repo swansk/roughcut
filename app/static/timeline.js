@@ -131,6 +131,12 @@
  *   — Premiere's frame: timecode, tools, markers, marks (REDESIGN-GOAL dimension 5) —
  *   tl.fps() / tl.setFps(r)     The sequence rate: setFps, else the project's `fps`, else
  *                               23.976. tl.frame() is one frame in seconds.
+ *   tl.gridRate() / tl.onGrid(t) The edit grid (wave 3): the exact rate (29.97 →
+ *   tl.isOnGrid(t)               30000/1001) and a time on its nearest frame. setRange,
+ *                               split, insert, overwrite, setSpeed, the A1 offset and V2
+ *                               commit on it, so every cut in the film is on a frame.
+ *   A1 waveforms                /api/peaks/<stem>?pps= per clip, fetched once for a block
+ *                               on screen; `.ablk[data-peaks]` is ok | none | loading.
  *   tl.tc(t)                    Film seconds → HH:MM:SS:FF, non-drop at the nominal rate,
  *                               rounded to the nearest frame. The ruler, the end mark and
  *                               the side column's playhead readout (`.tl-tc`) use it.
@@ -339,6 +345,55 @@
    * the board's 0.01 s (the monitor parks at 0.01 s, so a jump lands exactly on it). */
   const onFrame = (t) => round2(Math.round(Math.max(0, t) * fps()) / fps());
 
+  /* The edit grid (wave 3, the journey's VFR export): every trim, roll, slip, razor cut,
+   * insert, overwrite and move commits its points on the sequence's frames — exactly,
+   * not to the 0.01 s the board used to keep (a 29.97 frame is 0.0334 s, so 0.01 s put
+   * cuts between frames and the export came out variable-rate). The project says 29.97;
+   * the grid is 30000/1001. A shot's in is a whole number of frames into its clip and
+   * its length in the film a whole number of frames at its speed, so every cut in the
+   * film — a sum of those lengths — is on a frame too. 4 places, what the server keeps. */
+  function gridRate() {
+    const r = fps();
+    const n = Math.round(r * 1.001);
+    if (Math.abs(r - Math.round(r)) > 0.004 && Math.abs(r - n / 1.001) < 0.004) return n / 1.001;
+    return r;
+  }
+  const r4 = (x) => Math.round(x * 1e4) / 1e4;
+  const onGrid = (t) => r4(Math.round(Math.max(0, Number(t) || 0) * gridRate()) / gridRate());
+  /* A clip range on the grid. `keep` 'in' / 'out': that edge stays exactly where it is
+   * (a trim of the other one); null: neither is kept (an insert, a slip). At 1× the edges
+   * that move go to their nearest frame — a clip frame is a film frame — so a shot whose
+   * edges are on the grid (every edit's, and the proposals' once they are rounded to
+   * frames) keeps every cut on a frame; a kept edge from before the grid (0.01 s) is left
+   * alone rather than moved behind the editor's back. Retimed, the moved edge makes the
+   * shot's length in the film whole frames at its rate. Never shorter than MIN_LEN. */
+  function gridRange(a, b, spd, keep, maxOut) {
+    const r = gridRate(), s = spd || 1;
+    const hi = Number.isFinite(maxOut) ? maxOut : 1e9;
+    const top = (x) => (x > hi + 1e-9 ? r4(Math.floor(hi * r + 1e-6) / r) : x);
+    if (s === 1) {
+      let a2 = keep === 'in' ? a : onGrid(a);
+      let b2 = keep === 'out' ? b : top(onGrid(b));
+      if (b2 - a2 < MIN_LEN - 1e-9) {
+        if (keep === 'out') a2 = r4(Math.floor((b2 - MIN_LEN) * r + 1e-6) / r);
+        else b2 = top(r4(Math.ceil((a2 + MIN_LEN) * r - 1e-6) / r));
+      }
+      return [Math.max(0, a2), b2];
+    }
+    const nMin = Math.max(1, Math.ceil((MIN_LEN / s) * r - 1e-6));
+    if (keep === 'out') {
+      let n = Math.max(nMin, Math.round(((b - a) / s) * r));
+      while (n > nMin && b - (n / r) * s < -1e-9) n -= 1;
+      return [r4(Math.max(0, b - (n / r) * s)), b];
+    }
+    const a2 = keep === 'in' ? a : onGrid(a);
+    let n = Math.max(nMin, Math.round(((b - a2) / s) * r));
+    while (n > nMin && a2 + (n / r) * s > hi + 1e-9) n -= 1;
+    return [a2, r4(a2 + (n / r) * s)];
+  }
+  /* Whether a time is on the grid, to what 4 places can say. */
+  const isOnGrid = (t) => Math.abs(Number(t) - onGrid(t)) < 1e-4 + 1e-9;
+
   /* The key names the platform uses: ⌘ ⌥ ⇧ on a Mac, Ctrl+ Alt+ Shift+ elsewhere. */
   function keyLabel(s) {
     if (IS_MAC) return String(s);
@@ -494,7 +549,7 @@
     const b = document.createElement('div');
     b.className = 'blk';
     b.dataset.id = id;
-    b.innerHTML = '<img class="poster" draggable="false" loading="lazy" decoding="async" alt="">'
+    b.innerHTML = '<div class="strip"><img class="poster" draggable="false" loading="lazy" decoding="async" alt=""></div>'
       + '<div class="txt"><span class="speed" hidden></span><span class="sync" hidden></span>'
       + '<span class="name"></span></div>'
       + '<i class="warn in" hidden></i><i class="warn out" hidden></i>';
@@ -577,8 +632,48 @@
       for (const [id, b] of blocks) {
         const seg = byId(id);
         if (seg && posterAt.get(id) !== seg.in) setPoster(b, seg);
+        if (seg) paintStrip(b, seg, true);
       }
     }, POSTER_SETTLE_MS);
+  }
+
+  /* The V1 filmstrip (wave 3; verdict 3: "the filmstrip covers about 60 % of a block and
+   * the rest is a maroon fill"): the head poster and then a frame every tile's width,
+   * edge to edge, as Premiere's continuous thumbnails — the last tile is cut by the
+   * block's end, so the pictures always reach it. A tile shows the clip at its left
+   * edge, to the whole second after the head (so a trim reuses the frames it had, and
+   * the posters' disk cache does the rest); while a trim is in flight the tiles only
+   * grow or shrink in number and take their frames when it settles. */
+  const STRIP_MAX = 48;              // tiles in one block, at most
+  let stripH = 0;                    // V1's height, read once a render
+  function paintStrip(b, seg, settle) {
+    const strip = b.querySelector('.strip');
+    if (!strip) return;
+    const h = stripH || 40;
+    const w = Math.max(3, dur(seg) * state.zoom);
+    const tileW = Math.max(24, Math.round(h * 16 / 9));
+    const n = clamp(Math.ceil(w / tileW), 1, STRIP_MAX);
+    const tw = n === STRIP_MAX ? Math.ceil(w / n) : tileW;
+    strip.style.setProperty('--tile', `${tw}px`);
+    const have = strip.children.length;
+    for (let k = have; k < n; k++) {
+      const img = document.createElement('img');
+      img.className = 'ftile';
+      img.draggable = false; img.loading = 'lazy'; img.decoding = 'async'; img.alt = '';
+      strip.appendChild(img);
+    }
+    while (strip.children.length > n) strip.lastElementChild.remove();
+    if (pending && !settle) return;          // mid-trim: frames when it settles
+    const spd = speedOf(seg);
+    const tileS = (tw / state.zoom) * spd;               // clip seconds a tile spans
+    const q = tileS >= 1 ? 1 : tileS >= 0.25 ? 0.25 : 1 / gridRate();
+    for (let k = 1; k < n; k++) {
+      const img = strip.children[k];
+      const t = Math.min(seg.out - 0.05, seg.in + k * tileS);
+      const src = posterUrl(seg, Math.max(seg.in, Math.round(t / q) * q));
+      if (!src) img.removeAttribute('src');
+      else if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+    }
   }
 
   function updateBlock(b, seg, i, start, live) {
@@ -616,6 +711,8 @@
     wo.hidden = !warn.out; wo.title = 'cuts a line off';
     if (!posterAt.has(seg.id)) setPoster(b, seg);
     else if (posterAt.get(seg.id) !== seg.in) schedulePosters();
+    paintStrip(b, seg, false);
+    if (pending) schedulePosters();
   }
 
   /* ================================================== the tracks (V2 V1 A1 A2) */
@@ -661,20 +758,79 @@
     return b;
   }
 
-  /* A1: each shot's sound, at its film start plus its offset. Inside it, the clip's
-   * speech (from the transcript, at the shot's rate) as brighter bands — what there is
-   * to hear, never an invented waveform. */
+  /* ---- A1's waveforms (wave 3 TLAUDIO; verdict 3: "A1 has no waveform") */
+  /* The clip's real sound from /api/peaks (min/max pairs, int8, the whole clip at
+   * `pps` a second), fetched once per clip and rate, only for a block that is on screen,
+   * and drawn per block as one filled SVG path for the shot's range at its rate. The
+   * track's gain scales it, as Premiere's clip waveform follows its level. */
+  const peaks = new Map();          // `${clip}@${pps}` -> {done, data}
+  let a1Raf = 0;
+  const peaksRate = () => (state.zoom > 60 ? 100 : 50);
+  function peaksFor(clip, pps) {
+    const key = `${clip}@${pps}`;
+    let p = peaks.get(key);
+    if (p) return p;
+    p = { done: false, data: null };
+    peaks.set(key, p);
+    fetch(`/api/peaks/${encodeURIComponent(stem(clip))}?pps=${pps}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null)
+      .then((d) => { p.data = d; p.done = true; scheduleA1(); });
+    return p;
+  }
+  function scheduleA1() {
+    if (a1Raf) return;
+    a1Raf = requestAnimationFrame(() => {
+      a1Raf = 0;
+      renderA1(segs(), hooks && hooks.live ? hooks.live() : -1);
+    });
+  }
+  /* The waveform path for `w` px of a shot: per column, the loudest and quietest peak
+   * under it, mirrored about the middle of a 0..100 box; null when there is nothing. */
+  function wavePath(data, seg, w, gain) {
+    const lo = data && data.min, hi = data && data.max;
+    if (!lo || !lo.length) return null;
+    const pps = data.pps, spd = speedOf(seg), z = state.zoom;
+    const step = Math.max(1, w / 1500);
+    const top = [], bot = [];
+    for (let x = 0; x < w; x += step) {
+      const t0 = seg.in + (x / z) * spd, t1 = seg.in + (Math.min(w, x + step) / z) * spd;
+      let i0 = Math.floor(t0 * pps), i1 = Math.max(i0 + 1, Math.ceil(t1 * pps));
+      i0 = clamp(i0, 0, lo.length - 1); i1 = clamp(i1, i0 + 1, lo.length);
+      let mn = 0, mx = 0;
+      for (let k = i0; k < i1; k++) { if (lo[k] < mn) mn = lo[k]; if (hi[k] > mx) mx = hi[k]; }
+      const yt = 50 - clamp((mx / 127) * gain, 0, 1) * 49, yb = 50 - clamp((mn / 127) * gain, -1, 0) * 49;
+      top.push(`${x.toFixed(1)} ${Math.min(yt, 49.6).toFixed(1)}`);
+      bot.push(`${x.toFixed(1)} ${Math.max(yb, 50.4).toFixed(1)}`);
+    }
+    top.push(`${w.toFixed(1)} ${top[top.length - 1].split(' ')[1]}`);
+    bot.push(`${w.toFixed(1)} ${bot[bot.length - 1].split(' ')[1]}`);
+    return `M${top.join('L')}L${bot.reverse().join('L')}Z`;
+  }
+  function onScreen(x, w) {
+    if (!el.view) return true;
+    const v0 = el.view.scrollLeft, vw = el.view.clientWidth || 1e9;
+    return x + w >= v0 - vw && x <= v0 + 2 * vw;
+  }
+
+  /* A1: each shot's sound, at its film start plus its offset: the clip's waveform for
+   * the shot's range (above), over a faint band where the transcript says someone
+   * speaks. */
   function renderA1(list, live) {
     const lane = el.tracks.A1;
     if (!lane) return;
     const seen = new Set();
+    const pps = peaksRate();
+    const g = trackState('A1');
+    const gain = Math.pow(10, (Number(g && g.gain_db) || 0) / 20);
     let start = 0;
     list.forEach((seg, i) => {
       let b = ablocks.get(seg.id);
       if (!b) { b = makeABlock(seg.id); ablocks.set(seg.id, b); }
       if (lane.children[i] !== b) lane.insertBefore(b, lane.children[i] || null);
       const d = dur(seg), spd = speedOf(seg), w = Math.max(3, d * state.zoom);
-      b.style.left = `${timeToX(start + aOff(seg))}px`;
+      const x = timeToX(start + aOff(seg));
+      b.style.left = `${x}px`;
       b.style.width = `${w}px`;
       b.style.setProperty('--hue', hueOf(seg.clip));
       b.classList.toggle('sel', state.sel.has(seg.id));
@@ -685,8 +841,15 @@
       b.querySelector('.name').textContent = isGen(seg.clip) ? `${genKind(seg.clip)} · silence` : stem(seg.clip);
       paintSync(b.querySelector('.sync'), seg);
       const clip = clipOf(seg.clip);
-      const key = `${seg.in}|${seg.out}|${spd}|${Math.round(w)}`;
-      if (b.dataset.wave !== key) {
+      const visible = onScreen(x, w);
+      const pk = !isGen(seg.clip) && visible ? peaksFor(seg.clip, pps) : null;
+      // the coarser rate stands in while the finer one loads
+      const shown = pk && pk.done ? pk : (pk && pps !== 50 ? peaks.get(`${seg.clip}@50`) : null);
+      const ready = shown && shown.done ? (shown.data && shown.data.min && shown.data.min.length ? 'ok' : 'none') : 'loading';
+      const key = `${seg.in}|${seg.out}|${spd}|${Math.round(w)}|${gain}|${ready}|${shown && shown.data ? shown.data.pps : 0}`;
+      if (isGen(seg.clip)) b.dataset.peaks = 'none';
+      else if (visible || b.dataset.wave) b.dataset.peaks = ready;
+      if ((visible || isGen(seg.clip)) && b.dataset.wave !== key) {
         b.dataset.wave = key;
         const wave = b.querySelector('.wave');
         wave.replaceChildren();
@@ -697,6 +860,17 @@
           s.style.left = `${((a0 - seg.in) / spd) * state.zoom}px`;
           s.style.width = `${Math.max(1, ((b0 - a0) / spd) * state.zoom)}px`;
           wave.appendChild(s);
+        }
+        const path = ready === 'ok' ? wavePath(shown.data, seg, w, gain) : null;
+        if (path) {
+          const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+          svg.setAttribute('class', 'wf');
+          svg.setAttribute('viewBox', `0 0 ${Math.max(1, w).toFixed(1)} 100`);
+          svg.setAttribute('preserveAspectRatio', 'none');
+          const pe = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          pe.setAttribute('d', path);
+          svg.appendChild(pe);
+          wave.appendChild(svg);
         }
       }
       const says = blockSays(seg, clip);
@@ -791,6 +965,10 @@
     el.canvas.style.height = `${Math.max(el.view.clientHeight, y)}px`;
     if (el.divider) el.divider.style.top = `${tops.A1 - AV_GAP / 2 - 1}px`;
     state.trackTops = tops;
+    if (h.V1 !== stripH) {           // a taller V1 is wider tiles: the strips follow
+      stripH = h.V1;
+      for (const [id, b] of blocks) { const seg = byId(id); if (seg) paintStrip(b, seg, false); }
+    }
   }
 
   const LOCK_SVG = '<svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="5.5" width="8" height="5.5" rx="1"/>'
@@ -878,13 +1056,21 @@
 
   /* What the monitor plays follows A1 and A2: the Program's videos carry A1's level
    * (0 when muted or soloed out), the bed follows A2. Volume, not `muted`: the board
-   * owns `muted` for its own reasons. */
+   * owns `muted` for its own reasons. The level goes through meters.js's
+   * `rcAudio.setLevel(el, 'track', x)`, the one owner of an element's level (a gain node
+   * once the element is in the WebAudio graph, so A1 above 0 dB is heard above 0 dB);
+   * without it, the element's volume, capped at 1. */
   function applyMonitorAudio() {
-    const g = audible('A1') ? Math.min(1, Math.pow(10, (Number(trackState('A1').gain_db) || 0) / 20)) : 0;
+    const g = audible('A1') ? Math.pow(10, (Number(trackState('A1').gain_db) || 0) / 20) : 0;
     try {
       // eslint-disable-next-line no-undef
       const vids = typeof player !== 'undefined' && player && player.vids ? player.vids : [];
-      for (const v of vids) if (v && Math.abs(v.volume - g) > 1e-3) v.volume = g;
+      const ra = window.rcAudio && window.rcAudio.setLevel ? window.rcAudio : null;
+      for (const v of vids) {
+        if (!v) continue;
+        if (ra) ra.setLevel(v, 'track', g);
+        else if (Math.abs(v.volume - Math.min(1, g)) > 1e-3) v.volume = Math.min(1, g);
+      }
     } catch (err) { /* no board */ }
     const bed = document.querySelector('#bed');
     if (bed) bed.muted = !audible('A2');
@@ -982,7 +1168,8 @@
   function setAudioOffset(id, off) {
     const seg = byId(id);
     if (!seg || isLinked(seg)) return false;
-    const v = round2(Math.round(clamp(Number(off) || 0, -600, 600) * fps()) / fps());
+    const x = clamp(Number(off) || 0, -600, 600);
+    const v = Math.sign(x) * onGrid(Math.abs(x));
     if (v === aOff(seg)) return false;
     return !!mutate('move audio', () => {
       if (v) seg.a_off = v; else delete seg.a_off;
@@ -1007,8 +1194,8 @@
   /* A clip laid on V2 at a film time: `{clip, in, out, speed?, why?}`. Returns its id. */
   function addOverlay(seg, atFilmTime) {
     if (!seg || !seg.clip || !(seg.out - seg.in >= MIN_LEN - 1e-9)) return null;
-    const o = { id: newId(), clip: seg.clip, in: round2(seg.in), out: round2(seg.out),
-                at: round2(Math.max(0, Number(atFilmTime) || 0)) };
+    const g = gridded(seg);
+    const o = { id: newId(), clip: seg.clip, in: g.in, out: g.out, at: onGrid(atFilmTime) };
     if (seg.speed && speedOf(seg) !== 1) o.speed = speedOf(seg);
     if (seg.why) o.why = seg.why;
     return overlayMutate('V2 clip', () => {
@@ -1021,7 +1208,7 @@
   function moveOverlay(id, atFilmTime) {
     const o = overlayById(id);
     if (!o) return false;
-    const at = round2(Math.max(0, Number(atFilmTime) || 0));
+    const at = onGrid(atFilmTime);
     if (at === o.at) return false;
     return !!overlayMutate('move V2', () => {
       state.overlays = state.overlays.map((x) => (x.id === id ? { ...x, at } : x));
@@ -1254,6 +1441,7 @@
     // must not rebuild <img> elements, and a lane's own handles survive it.
     const live = hooks.live ? hooks.live() : -1;
     const lane = el.lanes.V1;
+    stripH = lane.clientHeight;
     const seen = new Set();
     let start = 0;
     list.forEach((seg, i) => {
@@ -1528,8 +1716,13 @@
     let a = tin == null ? seg.in : Number(tin);
     let b = tout == null ? seg.out : Number(tout);
     if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
-    a = round2(clamp(a, 0, Math.max(0, dur - MIN_LEN)));
-    b = round2(clamp(b, a + MIN_LEN, dur));
+    a = clamp(a, 0, Math.max(0, dur - MIN_LEN));
+    b = clamp(b, a + MIN_LEN, dur);
+    // on the sequence's frames (gridRange): an in-trim keeps the out exactly, an
+    // out-trim the in, and the shot's length in the film is whole frames
+    const keep = tout == null ? 'out' : tin == null ? 'in'
+      : a === seg.in ? 'in' : b === seg.out ? 'out' : null;
+    [a, b] = gridRange(a, b, speedOf(seg), keep, dur);
     if (a === seg.in && b === seg.out) return false;
     return mutate('trim', () => {
       const inMoved = a !== seg.in;
@@ -1559,8 +1752,9 @@
     const list = segs();
     const seg = list[i];
     // a film time inside the shot is a clip time at the shot's rate; the two halves keep it
-    const clipT = round2(seg.in + (Number(atFilmTime) - filmStart(seg.id)) * speedOf(seg));
-    if (!(clipT >= seg.in + MIN_LEN && clipT <= seg.out - MIN_LEN)) return null;
+    // on a frame of the film: whole frames into the shot, at its rate (onGrid)
+    const clipT = splitPoint(seg, Number(atFilmTime) - filmStart(seg.id));
+    if (!(clipT >= seg.in + MIN_LEN - 1e-9 && clipT <= seg.out - MIN_LEN + 1e-9)) return null;
     return mutate('split', () => {
       const second = { ...seg, id: `tmp-${++tmpN}`, in: clipT };
       seg.out = clipT;
@@ -1589,7 +1783,7 @@
   function insert(seg, afterId) {
     if (!seg || !seg.clip) return null;
     const list = segs();
-    const s = { ...seg };
+    const s = gridded(seg);
     if (!s.id) s.id = `tmp-${++tmpN}`;
     const after = afterId == null ? -1 : indexOf(afterId);
     const at = afterId == null ? list.length : after < 0 ? list.length : after + 1;
@@ -1614,7 +1808,7 @@
       const s = list[i], d = dur(s);
       if (t <= start + 1e-6) return i;
       if (t < start + d - 1e-6) {
-        const clipT = round2(s.in + (t - start) * speedOf(s));
+        const clipT = splitPoint(s, t - start);
         const head = clipT - s.in, tail = s.out - clipT;
         if (head >= MIN_LEN - 1e-9 && tail >= MIN_LEN - 1e-9) {
           list.splice(i + 1, 0, { ...s, id: `tmp-${++tmpN}`, in: clipT });
@@ -1630,6 +1824,21 @@
     return list.length;
   }
 
+  /* The clip time `filmOff` film seconds into a shot, moved to the nearest frame of the
+   * film (the edit grid). */
+  function splitPoint(seg, filmOff) {
+    const n = Math.round(Math.max(0, filmOff) * gridRate());
+    return r4(seg.in + (n / gridRate()) * speedOf(seg));
+  }
+
+  /* A shot about to go in: its range on the grid. */
+  function gridded(seg) {
+    const c = clipOf(seg.clip);
+    const [a, b] = gridRange(Number(seg.in), Number(seg.out), speedOf(seg), null,
+                             c && c.duration ? c.duration : undefined);
+    return { ...seg, in: a, out: b };
+  }
+
   function startOfIndex(i) {
     const list = segs();
     let t = 0;
@@ -1642,9 +1851,9 @@
    * Selects the new shot; returns its id. */
   function insertAt(seg, atFilmTime) {
     if (!seg || !seg.clip || !(seg.out > seg.in)) return null;
-    const s = { ...seg, id: seg.id || `tmp-${++tmpN}` };
+    const s = { ...gridded(seg), id: seg.id || `tmp-${++tmpN}` };
     return mutate('insert', () => {
-      const at = cutAt(clamp(Number(atFilmTime) || 0, 0, total()), 'insert');
+      const at = cutAt(clamp(onGrid(atFilmTime), 0, total()), 'insert');
       segs().splice(at, 0, s);
       select([s.id], { source: 'api' });
       return s.id;
@@ -1657,11 +1866,11 @@
    * undo entry, `overwrite`. Selects the new shot; returns its id. */
   function overwrite(seg, atFilmTime) {
     if (!seg || !seg.clip || !(seg.out > seg.in)) return null;
-    const s = { ...seg, id: seg.id || `tmp-${++tmpN}` };
+    const s = { ...gridded(seg), id: seg.id || `tmp-${++tmpN}` };
     const len = dur(s);
     return mutate('overwrite', () => {
       const list = segs();
-      const at = cutAt(clamp(Number(atFilmTime) || 0, 0, total()), 'in');
+      const at = cutAt(clamp(onGrid(atFilmTime), 0, total()), 'in');
       const end = cutAt(startOfIndex(at) + len, 'out');
       list.splice(at, Math.max(0, end - at), s);
       select([s.id], { source: 'api' });
@@ -1682,6 +1891,9 @@
     return mutate('speed', () => {
       if (want === 1) delete seg.speed;      // 1× is the absence of the key, as edits.py reads it
       else seg.speed = want;
+      // its length in the film stays whole frames at the new rate (the edit grid)
+      const c = clipOf(seg.clip);
+      [seg.in, seg.out] = gridRange(seg.in, seg.out, want, 'in', c && c.duration ? c.duration : undefined);
       return true;
     });
   }
@@ -1950,6 +2162,7 @@
     el.view.addEventListener('wheel', onWheel, { passive: false });
     el.view.addEventListener('scroll', () => {
       state.scrollX = el.view.scrollLeft;
+      scheduleA1();                // a block scrolled into view gets its waveform
       // the headers ride the rows when the tracks are taller than the panel
       const hb = el.side.querySelector('.tl-heads');
       if (hb) hb.style.transform = `translateY(${-el.view.scrollTop}px)`;
@@ -1993,7 +2206,7 @@
     overlays: () => state.overlays.map((o) => ({ ...o })), overlayById,
     addOverlay, moveOverlay, removeOverlay, selectOverlay, layoutTracks, saveSeq,
     get trackTops() { return { ...(state.trackTops || {}) }; },
-    fps, setFps, frame, tc, keyLabel, isMac: IS_MAC,
+    fps, setFps, frame, tc, keyLabel, isMac: IS_MAC, gridRate, onGrid, isOnGrid,
     TOOLS, setTool, get tool() { return state.tool; },
     addMarker, removeMarker, clearMarkers, setMarkers, nextMarker, prevMarker,
     markers: () => [...state.markers],
