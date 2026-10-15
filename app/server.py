@@ -5504,6 +5504,23 @@ def timeline_static(name: str) -> Response:
     return Response(p.read_text(encoding="utf-8"), media_type=media, headers=NO_STORE)
 
 
+# The workspace's own modules (redesign wave 2): one route and a fixed list, like the
+# timeline's, so a lane adds a panel by adding a file here instead of a route each.
+MODULE_FILES = {"firstpass.js", "firstpass.css", "export.js", "export.css", "meters.js",
+                "meters.css", "effects.js", "effects.css", "workspace.css"}
+
+
+@app.get("/modules/{name}")
+def module_static(name: str) -> Response:
+    if name not in MODULE_FILES:
+        raise HTTPException(404, "no such module")
+    p = HERE / "static" / name
+    if not p.exists():
+        raise HTTPException(404, f"{name} is not built yet")
+    media = "text/css" if name.endswith(".css") else "application/javascript"
+    return Response(p.read_text(encoding="utf-8"), media_type=media, headers=NO_STORE)
+
+
 
 # ---------------------------------------------------------------- effects (INTAKE M12)
 #

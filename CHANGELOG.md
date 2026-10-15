@@ -10,6 +10,9 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **`/modules/<name>`: one route for the workspace's new modules (redesign wave 2 scaffold).** Every static file had its own hand-written route, so a new panel meant a `server.py` edit (the WORKSPACE lane had to inline its CSS). `MODULE_FILES` is a fixed list, served by name like `/timeline/<name>`, never by directory. The board now loads `firstpass.js/.css` and `export.js/.css` (stubs for the wave-2 lanes) and carries their mount points: `#firstpass` in the header after `#flow`, and `<dialog id="exportDialog">`. `test_modules_route.py`: 3 passed; `test_workspace.py` still green.
+
+### Added
 - **Redesign verdict 2: FAIL, up from the baseline.** `judge/verdict-2.md` on `548e3b4`: workspace 6, monitors 6, orientation 5, footage-in 5, keys/timeline 5; still lowest: first pass re-runnable (K1) 2 (the API exists, no UI calls it), journey 2, Inspector 3. Its punch list drives wave 2.
 
 ### Fixed

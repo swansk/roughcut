@@ -525,6 +525,8 @@
   </nav>
   <button type="button" id="hdBin" title="switch bins or cuts, save a copy · O"></button>
   <div id="flow"></div>
+  <!-- The first pass: Run / Re-run, always here (firstpass.js, REDESIGN-GOAL dimension 2). -->
+  <div id="firstpass" data-testid="firstpass"></div>
   <!-- Every long operation in the app draws itself here, in this row. -->
   <div id="progress" hidden></div>
   <div class="grow"></div>
@@ -784,6 +786,8 @@
 </div>
 <div id="toast"></div>
 <audio id="bed" loop preload="auto"></audio>
+<!-- The Export dialog (export.js, REDESIGN-GOAL dimension 8). -->
+<dialog id="exportDialog" data-testid="export-dialog"></dialog>
 <script src="/cli.js"></script>
 <script src="/switcher.js"></script>
 <script src="/dock.js"></script>
@@ -796,5 +800,9 @@
 <script src="/fx.js"></script>
 <script src="/deep.js"></script>
 <script src="/app.js"></script>
+<link rel="stylesheet" href="/modules/firstpass.css">
+<link rel="stylesheet" href="/modules/export.css">
+<script src="/modules/firstpass.js"></script>
+<script src="/modules/export.js"></script>
 </body>
 </html>
