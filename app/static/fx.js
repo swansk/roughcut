@@ -1320,7 +1320,7 @@
     O.canvas = c;
     try { O.ctx = c.getContext('2d'); } catch (e) { O.ctx = null; }
     if (!O.ctx) return;
-    const vids = [$('#pv0'), $('#pv1')].filter(Boolean);
+    const vids = [...document.querySelectorAll('#player video.pvbuf')];   // app.js player.vids
     vids.forEach((v) => {
       v.addEventListener('seeked', () => { S.fired.clear(); S.prevV = v; S.prevT = v.currentTime; step(); });
       v.addEventListener('play', () => { S.fired.clear(); S.prevV = v; S.prevT = v.currentTime; armFrames(); step(); });

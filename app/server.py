@@ -312,7 +312,10 @@ def api_lut(sid: str, n: int = 17) -> JSONResponse:
 # ---------------------------------------------------------------- proxies
 
 
-PROXY_GOP_S = 1.0          # seconds between proxy keyframes: what a cold seek decodes
+# Seconds between proxy keyframes: what a cold seek decodes (up to this much of frames
+# before the one it wants). 0.5 since v3 (verdict 6 punch 2, lane PLAY3): a park or a
+# cue at 1 s decoded up to 30 frames of 1280 before showing one, 15 now.
+PROXY_GOP_S = 0.5
 # The proxy's version, in the proxy folder's name (configure): bump it whenever what a
 # proxy is changes, so an old --work rebuilds its proxies rather than serving them.
 # v2 (verdict 4 punch 5): a source above PROXY_MAX_FPS is proxied at a whole fraction
@@ -320,11 +323,12 @@ PROXY_GOP_S = 1.0          # seconds between proxy keyframes: what a cold seek d
 # plays and nothing else: the export, the clip facts and the frame grid all read the
 # original. At 59.94 a loaded box played the monitor at ~7 frames a second around a cut;
 # half the frames is half the decoding and half the grade's uploads.
-# v3 (wave 8, lane YIELD; RANGEPROXY's request): on a GPU the whole proxy is decoded,
+# v3 (verdict 6 punch 2): a keyframe every 0.5 s (PROXY_GOP_S), not every 1 s.
+# v4 (wave 8, lane YIELD; RANGEPROXY's request): on a GPU the whole proxy is decoded,
 # scaled and encoded on the card (NVDEC → scale_cuda → NVENC, the range proxy's encoder
 # settings) instead of a 4K/5.3K decode and x264 on the CPU — the same profile (1280
-# wide, the rate rule, the orient rule, a keyframe a second), a different encoder.
-PROXY_V = "v3"
+# wide, the rate rule, the orient rule, a keyframe every PROXY_GOP_S), another encoder.
+PROXY_V = "v4"
 PROXY_MAX_FPS = 30.5
 
 
@@ -424,9 +428,9 @@ def build_proxy(src: Path, dest: Path, orient: str) -> str:
         # than upscaled into a bigger file that carries no more detail.
         "-vf", vf, "-c:v", "libx264", "-preset", "veryfast",
         "-crf", str(PROXY_CRF),
-        # A keyframe every second, not x264's default of 250 frames (4 s at 60 fps):
-        # a seek decodes from the keyframe before it, and verdict 1 measured 1100 ms
-        # for a cold one against the rubric's 250 (punch 5).
+        # A keyframe every PROXY_GOP_S, not x264's default of 250 frames (4 s at 60
+        # fps): a seek decodes from the keyframe before it, and verdict 1 measured 1100
+        # ms for a cold one against the rubric's 250 (punch 5).
         "-force_key_frames", f"expr:gte(t,n_forced*{PROXY_GOP_S:g})",
         "-c:a", "aac", "-b:a", "128k",
         "-write_tmcd", "0", "-movflags", "+faststart", str(tmp),
