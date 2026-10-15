@@ -50,7 +50,10 @@ def test_the_gate_reads_the_journeys_line(tmp_path):
                                tmp_path / "journey.log", env=None, timeout=300)
     assert not green
     assert line.startswith("step 1 setup: "), line
-    assert (tmp_path / "journey.log").read_text().strip().splitlines()[-1] == "journey ✗ " + line
+    # the gate adds what it measured on the server (wave 8 SAVESAFE): nothing, with no board
+    said, measured = line.split(" · slowest request", 1)
+    assert measured == ": not measured (the server has no /api/debug/slow)", measured
+    assert (tmp_path / "journey.log").read_text().strip().splitlines()[-1] == "journey ✗ " + said
 
 
 def _journey_module():

@@ -93,7 +93,7 @@
     ['X ⇧Del', 'ripple delete the selection (⌫ Del: only a shot you chose)', '', 'trim'],
     ['⌘Z ⌘⇧Z', 'undo / redo', 'foundation', 'trim'],
     ['⌘A ⌘⌥D Esc', 'select all · duplicate · clear the selection and marks', '', 'trim'],
-    ['⌘D ⇧D ⌘⇧D', 'Cross Dissolve · Constant Power crossfade · both, 1 s at the selected edit (else the one nearest the playhead) · drag its ends, double-click to type its length, Del removes it', '', 'trim'],
+    ['⌘D ⇧D ⌘⇧D', '1 s Cross Dissolve · audio crossfade · both, at the selected edit', '', 'trim'],
     ['M ⇧M ⌘⇧M', 'marker at the playhead · next · previous (⌘⌥M clears)', '', 'move'],
     ['S', 'the magnet on / off', 'trim', 'trim'],
     ['+ − \\', 'zoom in / out · fit · ⌥ / ⌘ wheel zooms', 'foundation', 'move'],

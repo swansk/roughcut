@@ -575,7 +575,7 @@ a.floorbtn:hover { color: var(--text); background: var(--card-hi); border-color:
 #keysOverlay { position: fixed; inset: 0; z-index: 60; background: rgba(4,4,6,.72);
                display: flex; align-items: center; justify-content: center; padding: 24px; }
 #keysOverlay[hidden] { display: none; }
-#keysOverlay .panel { width: 900px; max-width: 100%; max-height: 86vh; overflow: auto;
+#keysOverlay .panel { width: 1120px; max-width: 100%; max-height: 92vh; overflow: auto;
                       margin: 0; background: #1b1b1e; padding: 16px 20px;
                       border: 1px solid var(--line-hi); border-radius: 6px; }
 #keysOverlay .panel h2 { font-size: 14px; color: var(--text); text-transform: none;
@@ -586,7 +586,7 @@ a.floorbtn:hover { color: var(--text); background: var(--card-hi); border-color:
 #keyTable table { border-collapse: collapse; width: 100%; font-size: 12.5px; break-inside: avoid; }
 #keyTable th { text-align: left; color: var(--dim); font-size: 11px; font-weight: 600;
                text-transform: uppercase; letter-spacing: .08em; padding: 12px 0 4px; }
-#keyTable td { padding: 3px 0; vertical-align: top; color: var(--text); }
+#keyTable td { padding: 2px 0; vertical-align: top; color: var(--text); }
 #keyTable td.k { white-space: nowrap; padding-right: 14px; width: 1%; }
 #toast {
   position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
