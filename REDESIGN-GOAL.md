@@ -190,3 +190,20 @@ next judge runs, and the next judge rules it honest or lenient.
   `test_a_layout_saved_before_the_new_arrangement_keeps_its_widths_once` (the one-time
   migration of an unversioned saved layout).
 - 2026-10-15 (lead, wave 5): `test_perf_latency.py` brings the box to about one runnable task per core (burners = cores − current load) instead of adding one burner per core on top of whatever already runs, and skips — visibly, with the load in the reason — when the box is already above 2× its cores before it starts. Why: at load ~25 on 6 cores (a judge's real first pass plus other loops) the 100 ms frame-gap limit failed on both 867f694 and the wave-5 branch with the worst gap inside one buffer, not at the cut; the gate on a quieter box passed it. The limits themselves (100 ms gap, 100 ms medians) are unchanged.
+- 2026-10-15 (wave 6, lane KEYUI; verdict 5 punch 4, dimension 7): **the "/ shot" controls
+  budget 61 → 65, measured, no headroom.** Effect Controls now has Premiere's stopwatch on
+  every animatable property (Position, Scale, Rotation, Opacity, Volume Level); at 1440×900
+  on the fixture four of them are in view (Position, Scale, Rotation, Opacity; Level is
+  below the panel's fold), which is the +4. ◀ ◆ ▶ show only on an animated row
+  (`visibility: hidden` otherwise) and the lanes' diamonds are not controls in the count, so
+  an un-animated shot adds nothing else. Lumetri Color › Basic Correction (9 sliders, 4 new
+  numbers, the "Basic Correction" twirl, "White Balance" / "Tone" headings) sits below the
+  fold and adds 0 in view. Measured after (words · controls): / 93 · 50, /floor 52 · 7,
+  /open 55 · 8, **/ shot 119 · 65**, / film 101 · 49, / jobs 102 · 51, / fx 124 · 53 — every
+  other number unchanged. New checks: `test_keyframes_ui.py` (two opacity keys → the
+  Program's composited picture at the midpoint is within ±10 % of the interpolated value,
+  parked and while playing; a lane click → Program ≤ 150 ms; one undo per animate / add /
+  move / remove; keys survive a reload; 13 bad `keys` bodies and 4 bad Lumetri values are
+  400s) and in `test_effect_controls.py` highlights / shadows / whites / blacks move
+  `grade.probe()` within 150 ms, a slider drag is live and one undo, and no Effect Controls
+  property name is ellipsized at 1440.
