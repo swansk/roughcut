@@ -10,6 +10,9 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Docs
+- **LOOP.md: RENDER3 merged; colour-LUT cost and V2 Effect Controls queued.**
+
+### Docs
 - **LOOP.md: RANGEPROXY and PLAY3 merged; the perf measurement still waits on a quiet box.**
 
 ### Added

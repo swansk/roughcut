@@ -49,6 +49,10 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-16 08:10: RENDER3 merged: 4-min Killington Quick export 1420.7 s -> 267.7 s (1.12x real time at load ~18; GPU decode
+  was the big win). Queued: a cheaper `lut_vf` in roughcut/colour.py (40 % of the 4K Match size sample's 30 s); Effect
+  Controls can't target a V2+ clip yet (data + render ready: overlays[i].controls); re-measure RENDER_S_PER_CUT_S["preview"].
+  Still running: YIELD. Then: TRANSITIONS (verdict-6 punch 6), quiet box -> full gate -> judge 7.
 - 2026-10-16 07:30: RANGEPROXY `0daab17`, PLAY3 `6139b41` merged. Playback on the 4K fixture: cut holes <= 67 ms in 12/12
   (rolled + parked every cut), fps 25-30, seeks median 64-120; residual mid-shot 83-100 ms holes at load 15-21 (two
   decoders during a 0.4 s shot). No perf run has yet measured at load <= 2x cores: the box has been at 15-50 from parallel
