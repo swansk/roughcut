@@ -105,6 +105,52 @@
     return `${mb.toFixed(1)} MB`;
   }
 
+  /* The video bitrate the estimate uses for `secs` of the range. From the preset's
+   * sample (server: export samples) it is laid over the range itself: a keyframe at
+   * every shot's start and every `keyint` frames, every other frame the sample's mean,
+   * so a range of short shots costs what its keyframes cost. Otherwise the server's
+   * figure (measured off this bin's files, or the preset's typical rate). */
+  function videoMbps(p, secs) {
+    const m = p.sample;
+    if (p.source !== 'sample' || !m || !(secs > 0)) return p.video_mbps;
+    const frames = Math.max(1, secs * (Number(p.fps) || fps()));
+    const shots = Math.max(1, exportSegments().length);
+    const keys = Math.min(frames, shots + Math.floor(frames / (m.keyint || 250)));
+    return (keys * m.i_bytes + (frames - keys) * m.p_bytes) * 8 / secs / 1e6;
+  }
+
+  /* The size sample (verdict 4, punch 6): on the first open of the dialog for a preset
+   * the bin has never exported with, the server encodes ~2 s of the sequence with it;
+   * the estimate is repainted from it when it lands. Cached per preset and bin. */
+  const sampling = new Set();
+  async function ensureSample(key) {
+    const p = info && info.presets.find((x) => x.key === key);
+    if (!p || p.source !== 'typical' || sampling.has(key) || !sequence().length) return;
+    sampling.add(key);
+    p.sample_state = 'running';          // "measuring…" from the first paint, not a beat later
+    if (phase === 'settings' && dlg.open) paintEstimate();
+    try {
+      const r = await fetch('/api/export/sample', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ preset: key }),
+      });
+      let st = r.ok ? await r.json() : { state: 'failed' };
+      p.sample_state = st.state;
+      if (phase === 'settings' && dlg.open) paintEstimate();
+      while (st.state === 'running') {
+        await new Promise((res) => setTimeout(res, 400));
+        st = await (await fetch(`/api/export/sample?preset=${encodeURIComponent(key)}`)).json();
+      }
+      const fresh = await (await fetch('/api/export')).json();
+      if (info && fresh && Array.isArray(fresh.presets)) info.presets = fresh.presets;
+      if (phase === 'settings' && dlg.open && dlg.querySelector('#exSummary')) paintEstimate();
+    } catch (_) {
+      p.sample_state = 'failed';         // the typical estimate stands, said as such
+      if (phase === 'settings' && dlg.open && dlg.querySelector('#exSummary')) paintEstimate();
+    } finally {
+      sampling.delete(key);
+    }
+  }
+
   /* ------------------------------------------------------------ painting */
   function shell() {
     dlg.innerHTML = `
@@ -176,6 +222,7 @@
     dlg.querySelector('#exFolder').value = remembered('folder', info.folder);
     if (r) dlg.querySelector('#exRange').value = 'inout';
     ['#exPreset', '#exRange'].forEach((s) => dlg.querySelector(s).addEventListener('change', paintEstimate));
+    dlg.querySelector('#exPreset').addEventListener('change', (e) => ensureSample(e.target.value));
     ['#exName', '#exFolder'].forEach((s) => dlg.querySelector(s).addEventListener('input', paintEstimate));
     dlg.querySelector('#exRecent').addEventListener('change', (e) => {
       if (!e.target.value) return;
@@ -189,6 +236,7 @@
     dlg.querySelector('#exCancel').addEventListener('click', () => close());
     dlg.querySelector('#exGo').addEventListener('click', () => start());
     paintEstimate();
+    ensureSample(sel.value);
   }
 
   function paintEstimate() {
@@ -201,17 +249,23 @@
     path.textContent = `${info.root}/${folder}/${name}.mp4`;
     path.title = 'a file of this name is never overwritten: the export becomes -2, -3 …';
     const secs = exportLength();
-    const mb = secs * (p.video_mbps + p.audio_kbps / 1000) / 8;
+    const vMbps = videoMbps(p, secs);
+    const mb = secs * (vMbps + p.audio_kbps / 1000) / 8;
     // the sequence's rate, constant: every preset renders at it
     const rate = p.fps ? `${Number(p.fps).toFixed(Number.isInteger(Number(p.fps)) ? 0 : 3)} fps` : '';
-    const how = p.measured
+    const measuring = p.source === 'typical' && p.sample_state === 'running';
+    const how = p.source === 'measured'
       ? `measured from this bin's last ${p.measured === 1 ? 'file' : `${p.measured} files`} with this preset`
-      : 'from the preset\'s typical bitrate; it learns from the first file you export with it';
+      : p.source === 'sample'
+        ? `from a ${Number(p.sample.seconds || 2).toFixed(0)} s sample of this sequence encoded with this preset`
+        : measuring ? 'encoding a 2 s sample of this sequence with this preset; until then, the preset\'s typical bitrate'
+          : 'from the preset\'s typical bitrate; it learns from the first file you export with it';
     dlg.querySelector('#exSummary').innerHTML = `
       <div><span>Duration</span><b id="exDur">${esc(tc(secs))}</b></div>
       <div><span>Frame</span><b id="exFrame">${p.width}×${p.height}${rate ? ` · ${esc(rate)}` : ''}</b></div>
-      <div><span>Bitrate</span><b>≈ ${p.video_mbps.toFixed(p.video_mbps < 10 ? 1 : 0)} Mbps</b></div>
-      <div title="${esc(how)}"><span>Estimated size</span><b id="exSize" data-mb="${mb.toFixed(3)}">≈ ${esc(human(mb))}</b></div>`;
+      <div><span>Bitrate</span><b>≈ ${vMbps.toFixed(vMbps < 10 ? 1 : 0)} Mbps</b></div>
+      <div title="${esc(how)}"><span>Estimated size</span><b id="exSize" data-mb="${mb.toFixed(3)}"
+        data-source="${esc(measuring ? 'measuring' : p.source || 'typical')}">≈ ${esc(human(mb))}${measuring ? ' <i class="ex-measuring">measuring…</i>' : ''}</b></div>`;
     const empty = !sequence().length;
     dlg.querySelector('#exGo').disabled = empty;
     if (empty) dlg.querySelector('#exNote').textContent = 'The sequence is empty: put a clip on V1 first.';
@@ -305,8 +359,11 @@
     if (!go || go.disabled) return;
     const segments = exportSegments();
     if (!segments.length) return;
+    const p = preset();
     const body = {
       segments, preset: dlg.querySelector('#exPreset').value,
+      // the rate the FRAME line says, for any range: the whole sequence's (punch 6)
+      fps: p && p.fps_rational ? p.fps_rational : undefined,
       name: dlg.querySelector('#exName').value, folder: dlg.querySelector('#exFolder').value,
     };
     remember('preset', body.preset);

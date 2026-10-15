@@ -132,6 +132,41 @@ function jobRow(j) {
 
 function paintJob(row, j) {
   row.className = `job ${j.state}`;
+  // Stop means stop (verdict 4, punch 8): a job that can be stopped carries an × that
+  // calls its own cancel: the index (proxies, close looks, previews) and a render. A
+  // stopped job says nothing more: its row goes, and the next poll does not bring it back.
+  const CANCEL = { index: () => '/api/index/cancel', render: (x) => `/api/render/${x.id}/cancel` };
+  if (j.state === 'cancelled') { row.style.display = 'none'; return; }
+  row.style.display = '';
+  let x = row.querySelector('.jx');
+  if (CANCEL[j.kind] && j.state === 'running') {
+    if (!x) {
+      x = document.createElement('span');
+      x.className = 'jx';
+      x.setAttribute('role', 'button');
+      x.dataset.testid = 'job-cancel';
+      x.textContent = '×';
+      x.title = j.kind === 'index' ? 'Stop indexing (proxies, close looks, previews): what finished is kept'
+        : 'Stop this render: nothing is written';
+      x.style.cssText = 'cursor:pointer;color:var(--dim);padding:0 0 0 2px;font-size:13px;line-height:1';
+      x.onclick = async (e) => {
+        e.stopPropagation();
+        if (x.dataset.busy) return;
+        x.dataset.busy = '1';
+        x.textContent = '…';
+        x.title = 'stopping…';
+        try {
+          await fetch(CANCEL[j.kind](j), { method: 'POST' });
+        } catch (_) { /* the next poll says how it went */ }
+        const seen = strip.seen.get(j.id);
+        if (seen) strip.seen.set(j.id, { ...seen, state: 'cancelled' });
+        row.style.display = 'none';
+      };
+      row.appendChild(x);
+    }
+  } else if (x) {
+    x.remove();
+  }
   row.querySelector('.jname').textContent = j.label;
   row.querySelector('.caret').textContent = strip.open.has(j.id) ? '▾' : '▸';
   row.querySelector('.jbar i').style.width = `${j.pct}%`;
