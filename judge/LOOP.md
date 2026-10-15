@@ -49,6 +49,12 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-15 17:32 EDT (the box's clock; the "10-16" stamps below were mis-dated by the lead): YIELD, TRACKS, V2EC merged (`060bc3a`);
+  lead `da990ab`: Effect Controls refuse edits on a locked track (V2EC's report), identity render test pins the CPU decoder.
+  TRANSITIONS merged `95d77de` (Ctrl+D dissolve, Shift+D crossfade; graded mix in the grade worker; export blends).
+  Queued from it: RANGE_PAD_S (1.0 s) should grow with a transition's half (> ~1.3 s dissolves outrun the range proxy);
+  the neighbour's handle lacks its own Motion/Opacity/fx in preview + export; #gradeCanvas wears the live shot's Motion
+  during a mix. Then: quiet box -> full gate -> judge 7.
 - 2026-10-16 08:10: RENDER3 merged: 4-min Killington Quick export 1420.7 s -> 267.7 s (1.12x real time at load ~18; GPU decode
   was the big win). Queued: a cheaper `lut_vf` in roughcut/colour.py (40 % of the 4K Match size sample's 30 s); Effect
   Controls can't target a V2+ clip yet (data + render ready: overlays[i].controls); re-measure RENDER_S_PER_CUT_S["preview"].

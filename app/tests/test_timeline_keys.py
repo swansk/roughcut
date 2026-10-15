@@ -131,9 +131,9 @@ def test_l_plays_the_cut_and_stacks_the_rate_and_k_pauses(page):
     assert page.evaluate("liveVideo().playbackRate") == 1
     page.keyboard.press("l")
     assert page.evaluate("liveVideo().playbackRate") == 2
-    # the other buffer holds the next shot: it must hand over at the same speed
-    assert page.evaluate("player.vids.map(v => v.playbackRate)") == [2, 2]
-    assert page.evaluate("player.vids.map(v => v.defaultPlaybackRate)") == [2, 2]
+    # the other buffers hold the next shots (three since PLAY3): each hands over at the same speed
+    rates = page.evaluate("player.vids.map(v => [v.playbackRate, v.defaultPlaybackRate])")
+    assert len(rates) >= 2 and all(r == [2, 2] for r in rates), rates
     page.keyboard.press("l")
     page.keyboard.press("l")
     page.keyboard.press("l")
@@ -141,7 +141,7 @@ def test_l_plays_the_cut_and_stacks_the_rate_and_k_pauses(page):
     assert page.evaluate("tlKeys.shuttle.rate") == 8
     page.keyboard.press("k")
     assert not page.evaluate("player.playing")
-    assert page.evaluate("player.vids.map(v => v.playbackRate)") == [1, 1]
+    assert set(page.evaluate("player.vids.map(v => v.playbackRate)")) == {1}
     assert page.evaluate("tlKeys.shuttle.rate") == 0
     # space after a shuttle plays at 1×, not at the rate the shuttle left behind
     page.keyboard.press("l")
