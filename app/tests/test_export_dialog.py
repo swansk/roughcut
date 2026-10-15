@@ -159,10 +159,13 @@ def test_ctrl_m_opens_the_export_dialog_with_name_folder_duration_and_size(page,
     assert page.inner_text("#exPath") == f"{renders}/footage/footage - edl.mp4"
     # the duration is the sequence's, in timecode; the size an estimate from the bitrate
     assert page.inner_text("#exDur") == page.evaluate("tl.tc(tl.total())")
-    size = page.inner_text("#exSize")
+    size = page.inner_text("#exSize").splitlines()[0]
     assert size.startswith("≈ ") and size.endswith("MB"), size
-    # the preset's bitrate (measured off this bin's earlier files once there are any)
-    # plus its sound, over the sequence's length
+    # the preset's bitrate (measured off this bin's earlier files once there are any, or
+    # off the 2 s sample the first open encodes) plus its sound, over the sequence's
+    # length; read once the sample has landed, so both sides use the same figure
+    page.wait_for_function(
+        "document.querySelector('#exSize').dataset.source !== 'measuring'", timeout=120000)
     quick = next(p for p in page.evaluate("fetch('/api/export').then(r => r.json())")["presets"]
                  if p["key"] == "quick")
     mb = size_estimate_mb(page)
@@ -172,7 +175,7 @@ def test_ctrl_m_opens_the_export_dialog_with_name_folder_duration_and_size(page,
     assert page.inner_text("#exFrame") == "1920×1080 · 24 fps"
     # another preset re-estimates
     page.select_option("[data-testid=export-preset]", "youtube")
-    assert page.inner_text("#exSize") != size
+    assert page.inner_text("#exSize").splitlines()[0] != size
     # Escape cancels before the start, and nothing was made
     page.keyboard.press("Escape")
     page.wait_for_function("!document.getElementById('exportDialog').open", timeout=3000)
@@ -352,3 +355,88 @@ def test_the_folder_chooser_offers_recent_folders_newest_first(page, project):
     assert page.input_value("#exFolder") == "lane-tests"
     renders = str(Path(project["work"]) / "renders")
     assert page.inner_text("#exPath").startswith(f"{renders}/lane-tests/")
+
+
+# ---------------------------------------------------------------- verdict 4, punch 6
+
+def test_an_in_out_export_is_written_at_the_rate_the_dialog_says(page, project, monkeypatch):
+    """Verdict 4: with an In/Out range the dialog said "29.970 fps" and the file came out
+    at 60000/1001 — `sequence_fps` counted only the clips inside the range. Here the
+    range holds only shot 3, whose clip (CLIP_C) is made to read 30 fps while the
+    sequence's other four shots are 24: the whole sequence is 24 fps, and so is the
+    file."""
+    import server
+    real = server.media_facts
+
+    def facts(src):
+        f = real(src)
+        return {**f, "fps": 30.0} if f and Path(src).name == "CLIP_C.MP4" else f
+
+    monkeypatch.setattr(server, "media_facts", facts)
+    # shot 3 is 8-12 s of the film: In/Out inside it
+    page.evaluate("tl.state.seqIn = 8.5; tl.state.seqOut = 11.5;")
+    page.keyboard.press("Control+m")
+    wait_settings(page)
+    assert page.input_value("#exRange") == "inout"
+    page.select_option("[data-testid=export-preset]", "quick")
+    frame = page.inner_text("#exFrame")
+    assert frame.endswith("· 24 fps"), frame
+    path = export(page, "in out rate", "lane-tests", preset="quick")
+    rates = ffprobe_rates(path)
+    assert rates["r_frame_rate"] == rates["avg_frame_rate"] == "24/1", rates
+    assert abs(ffprobe_duration(path) - 3.0) <= 1.0 / 24 + 1e-6
+    page.evaluate("tl.state.seqIn = null; tl.state.seqOut = null;")
+
+
+def test_the_first_ever_export_of_a_preset_is_within_a_quarter_of_its_estimate(page, project):
+    """Verdict 4: "Estimate 310 MB, file 148 MB (2.1×)" until the bin has one file of the
+    preset. Now the dialog's first open encodes a ~2 s sample of the sequence with the
+    preset and the estimate is laid from it: the first file is within ±25 %."""
+    import server
+    key = "youtube"            # no test in this module exports with it before this one
+    info = page.evaluate("fetch('/api/export').then(r => r.json())")
+    pre = next(p for p in info["presets"] if p["key"] == key)
+    assert pre["measured"] == 0, pre
+    server.sample_file(key).unlink(missing_ok=True)
+    page.keyboard.press("Control+m")
+    wait_settings(page)
+    page.select_option("[data-testid=export-preset]", key)
+    page.wait_for_function(
+        "document.querySelector('#exSize') && document.querySelector('#exSize').dataset.source === 'sample'",
+        timeout=120000)
+    assert "sample" in page.locator("#exSize").locator("xpath=..").get_attribute("title")
+    est = size_estimate_mb(page)
+    sample = json.loads(server.sample_file(key).read_text(encoding="utf-8"))
+    assert sample["seconds"] <= 2.0 + 1e-6 and sample["slices"] >= 2, sample
+    path = export(page, "first youtube", "lane-tests", preset=key)
+    real = Path(path).stat().st_size / 1e6           # the dialog's MB are 10^6 bytes
+    print(f"first {key} export: estimate {est:.3f} MB, file {real:.3f} MB "
+          f"({100 * (est - real) / real:+.1f} %)")
+    assert abs(est - real) <= 0.25 * real, (est, real)
+
+
+def test_parts_carry_pcm_and_the_film_one_aac_stream(project, tmp_path):
+    """The sound is AAC-encoded once (verdict 4, punch 6): a part carries PCM, the joined
+    film one AAC stream — with and without a music bed under it."""
+    tool = Path(__file__).resolve().parents[2] / "research" / "tools" / "assemble.py"
+
+    def streams(path: Path) -> list[tuple[str, str]]:
+        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                            "stream=codec_type,codec_name", "-of", "json", str(path)],
+                           capture_output=True, text=True, check=True)
+        return [(s["codec_type"], s["codec_name"]) for s in json.loads(r.stdout)["streams"]]
+
+    for bed in (None, str(Path(project["assets"]) / "music" / "bed.wav")):
+        edl = {"variant": "T", "title": "pcm", "orient": "none", "segments": SEGMENTS[:2]}
+        if bed:
+            edl["effects_music"] = {"asset": bed, "gain_db": -18}
+        src = tmp_path / f"edl{bool(bed)}.json"
+        src.write_text(json.dumps(edl), encoding="utf-8")
+        parts, out = tmp_path / f"parts{bool(bed)}", tmp_path / f"film{bool(bed)}.mp4"
+        subprocess.run(["uv", "run", "--quiet", str(tool), str(src), "--footage",
+                        str(project["footage"]), "--parts-dir", str(parts), "--keep-parts",
+                        "-o", str(out)], check=True, capture_output=True, text=True)
+        for part in sorted(parts.glob("part_*.mp4")):
+            assert ("audio", "pcm_s16le") in streams(part), (part, streams(part))
+        got = streams(out)
+        assert [s for s in got if s[0] == "audio"] == [("audio", "aac")], got
