@@ -56,7 +56,10 @@ CHECKS_GUIDANCE = (
     "the clip; leave the range out when it is about the whole film), not in `notes`. "
     "An empty list is fine when there is nothing to check.")
 CHECKS_MAX = 6
-CHECK_TEXT_MAX = 200
+# A check is shown on one line with the whole of it on hover, so the cap is a guard
+# against a runaway answer, not a layout limit; it is applied at a sentence end, else a
+# word's (verdict 6, punch 4: "…someone the viewer can ide" was cut at 200 characters).
+CHECK_TEXT_MAX = 300
 
 # The same plan when the prompt carries the colour section (INTAKE I10.5). The key is
 # described, not exemplified: an example patch in the shape would be copied into answers
@@ -732,6 +735,23 @@ def dropped_heroes(segments: list[dict], heroes: list[dict]) -> list[dict]:
     return out
 
 
+def trim_check(text: Any, limit: int = CHECK_TEXT_MAX) -> str:
+    """A check's words, whitespace collapsed, at most `limit` characters and never cut
+    inside a word: past the limit it ends at the last whole sentence that fits (when that
+    keeps at least half of it), else at the last whole word, with "…"."""
+    text = " ".join(str(text or "").split())
+    if len(text) <= limit:
+        return text
+    head = text[:limit + 1]
+    ends = [m.end() for m in re.finditer(r'[.!?][)"\'”’]*(?=\s)', head) if m.end() <= limit]
+    if ends and ends[-1] >= limit // 2:
+        return text[:ends[-1]]
+    cut = head.rfind(" ", 0, limit)
+    if cut <= 0:                       # one word longer than the limit: nothing to keep whole
+        return text[:limit - 1] + "…"
+    return text[:cut].rstrip(" ,;:—–-") + "…"
+
+
 def validate_checks(raw: Any, clips: dict[str, dict]) -> list[dict]:
     """The model's `checks`, forgiving where the plan is strict: a check is advice to
     look, so a bad one is trimmed (an unknown clip or a range outside it loses its
@@ -745,7 +765,7 @@ def validate_checks(raw: Any, clips: dict[str, dict]) -> list[dict]:
             c = {"text": c}
         if not isinstance(c, dict):
             continue
-        text = " ".join(str(c.get("text") or "").split())[:CHECK_TEXT_MAX]
+        text = trim_check(c.get("text"))
         if not text:
             continue
         clip, t_in, t_out = c.get("clip"), None, None
