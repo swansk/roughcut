@@ -10,6 +10,9 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **The bin-switch test checks the leak it is about, not a race.** `test_opening_another_bin_repoints_everything_without_a_relaunch` asserted `durations` was absent right after opening another bin; since INGEST, opening a bin starts probing ITS clips in the background, so the cache was sometimes already back (the second bin's own) and the test failed under full-suite load in every gate this loop. It now asserts the first bin's cache object is gone and that what is cached names only the open bin's clips. Checked the product side: a first-bin probe still in flight re-checks the bin before writing, and `clip_duration` always reads the current bin, so no stale duration can land.
+
+### Fixed
 - **A music track picked in the first second is no longer ignored.** The music controls' change handlers were bound at the very end of `boot()`, after the versions, the last proposal and the jobs had loaded; the timeline was already on screen, so a track chosen in that window showed in the menu while `music` stayed null: no bed on A2 and nothing saved for the render. Instrumented: 2 runs in 3 of the gate's music-lane test (it had been "flaky" in three gates and broken in the last). They are bound with the other first-paint controls now; that test passes 6/6.
 
 ### Fixed

@@ -152,12 +152,20 @@ def test_opening_another_bin_repoints_everything_without_a_relaunch(tmp_path, pr
         assert c.get("/api/status").json()["clips"] == 3
         server.clip_duration("CLIP_A.MP4")          # warm a per-clip cache
         assert "durations" in server.STATE
+        first_bins = server.STATE["durations"]
 
         r = c.post("/api/projects/open", json={"footage": str(other)})
         assert r.status_code == 200, r.text
         assert r.json()["name"] == "second-bin" and r.json()["clips"] == 1
         assert r.json()["edl_created"] is True
-        assert "durations" not in server.STATE, "the first bin's durations must not leak"
+        # The re-point drops the first bin's caches; since redesign wave 2 (INGEST) it then
+        # starts probing the NEW bin's clips in the background, so a `durations` cache may
+        # already be back — the second bin's own. What must not survive is the first bin's:
+        # a different dict, holding only clips of the bin now open (asserting the key was
+        # absent raced those probes and failed under full-suite load in every gate).
+        now = server.STATE.get("durations")
+        assert now is not first_bins, "the first bin's durations must not leak"
+        assert set(now or {}) <= {"CLIP_A.MP4"}, now
         s = c.get("/api/status").json()
         assert s["footage"] == str(other) and s["clips"] == 1 and s["analysed"] == 0
         assert Path(s["edl"]) == tmp_path / "projects" / "second-bin.edl.json"
