@@ -92,9 +92,17 @@ header > button { padding: 2px 9px; }
 #menubar .mdrop hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
 #menubar .mdrop button.on::before { content: "✓"; position: absolute; left: 0; }
 /* Next (/flow.js), in the app bar's one row after the bin · cut switcher */
-/* Next and the running jobs share what the menus and the buttons leave, shrinking alike
-   (the chip ellipsizes with its sentence in its hover); neither starves the other */
-header #flow { flex: 0 1 auto; min-width: 120px; max-width: 360px; overflow: hidden; }
+/* Nothing in the app bar ellipsizes (verdict 3, punch 8: "Next Make t…" read as a broken
+   primary button). Next gives way first: /flow.js shows its sentence whole when it fits,
+   else (and whenever a job or the pass runs) only its icon, the sentence in the hover.
+   When Next's action is the first pass's, the chip is not drawn at all. */
+header #flow { flex: 0 1 auto; min-width: 0; max-width: 360px; overflow: hidden; }
+header #flow.compact { flex: none; }
+header #flow:empty { display: none; }
+/* the first pass's label is never the part that gives (firstpass.css sizes the control;
+   this only keeps the row from squeezing it) */
+body > header > #firstpass { flex-shrink: 0; min-width: 0; }
+#firstpass .fp-btn.is-next svg { color: inherit; }
 .pill { border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px;
         font-size: 11.5px; color: var(--dim); cursor: pointer; white-space: nowrap; }
 .pill.ok { color: var(--good); border-color: #2c4c39; }
@@ -102,18 +110,36 @@ header #flow { flex: 0 1 auto; min-width: 120px; max-width: 360px; overflow: hid
 .bar { height: 5px; background: #131316; border-radius: 3px; margin-top: 8px; overflow: hidden; }
 .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
 
-/* The progress strip — one compact line per running job, in the app bar's row; what
-   the job is on now is its hover, and ▸ opens its steps over the page. */
+/* The progress strip — one pill per running job, in the app bar's row: an icon for the
+   kind of job and how far it is (verdict 3, punch 8: "Rendering — p…", "Cutting from
+   yo…"). Its name, what it is on now and the time so far are the pill's hover (app.js
+   sets the row's title); a click on the icon opens its steps over the page. */
 /* Its width is what the row leaves (never its content's), so it is a size container:
-   when it is narrow the bars shorten and then go, and the numbers never truncate (verdict
-   2: "Indexi… 9."). A name that still has no room ellipsizes, and the job's hover says it. */
-#progress { flex: 20 1 340px; max-width: 760px; min-width: 120px; display: flex; align-items: center;
-            gap: 12px; position: relative; container: progress / inline-size; height: 100%; }
+   when it is narrow the bars shorten and then go, and the numbers never truncate. */
+#progress { flex: 20 1 260px; max-width: 760px; min-width: 0; display: flex; align-items: center;
+            gap: 8px; position: relative; container: progress / inline-size; height: 100%; }
 #progress[hidden] { display: none; }
-.job { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-.job .jlabel { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-               font-weight: 600; font-size: 11.5px; cursor: pointer; user-select: none; }
-.job .jlabel .caret { color: var(--dim); font-size: 10px; margin-right: 4px; }
+.job { flex: none; display: flex; align-items: center; gap: 6px; white-space: nowrap;
+       height: 22px; padding: 0 8px 0 6px; border: 1px solid var(--line); border-radius: 999px;
+       box-sizing: border-box; }
+.job .jlabel { flex: none; display: inline-flex; align-items: center; cursor: pointer;
+               user-select: none; color: var(--text); }
+.job .jlabel .caret, .job .jlabel .jname { display: none; }
+.job .jlabel::before { content: ""; width: 14px; height: 14px; background: currentColor;
+  -webkit-mask: var(--jicon) center / contain no-repeat; mask: var(--jicon) center / contain no-repeat;
+  --jicon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='3.2'/%3E%3C/svg%3E"); }
+/* the kind of job, by its icon: the index hears (a waveform), a look sees (an eye), a
+   render or export makes film (a frame), a model proposes (a spark), a find searches */
+.job[data-kind=index] .jlabel::before, .job[data-kind=analyse] .jlabel::before {
+  --jicon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'%3E%3Cpath d='M2 8v0M4.5 5.5v5M7 3v10M9.5 5v6M12 6.5v3M14 8v0'/%3E%3C/svg%3E"); }
+.job[data-kind=visual] .jlabel::before, .job[data-kind=deep] .jlabel::before {
+  --jicon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5'%3E%3Cpath d='M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z'/%3E%3Ccircle cx='8' cy='8' r='2'/%3E%3C/svg%3E"); }
+.job[data-kind=render] .jlabel::before {
+  --jicon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'%3E%3Crect x='2' y='3.5' width='12' height='9' rx='1.2'/%3E%3Cpath d='M5 3.5v9M11 3.5v9M2 8h3M11 8h3'/%3E%3C/svg%3E"); }
+.job[data-kind=ask] .jlabel::before, .job[data-kind=themes] .jlabel::before, .job[data-kind=fx] .jlabel::before {
+  --jicon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'%3E%3Cpath d='M8 1.8l1.5 3.6 3.7 1.1-3.7 1.2L8 11.3 6.5 7.7 2.8 6.5l3.7-1.1z'/%3E%3C/svg%3E"); }
+.job[data-kind=find] .jlabel::before {
+  --jicon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='4.2'/%3E%3Cpath d='M10.2 10.2 14 14'/%3E%3C/svg%3E"); }
 .job .jbar { flex: none; width: 56px; height: 6px; background: #0d0d10;
              border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
 .job .jbar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .5s ease; }
@@ -125,11 +151,10 @@ header #flow { flex: 0 1 auto; min-width: 120px; max-width: 360px; overflow: hid
 @container progress (max-width: 340px) { .job .jbar { display: none; } }
 /* two or more jobs side by side: the numbers say how far, the bars go first */
 @container progress (max-width: 640px) { #progress:has(.job + .job) .jbar { display: none; } }
-/* while something runs, it is the row's news: Next steps back to a shorter chip */
-@media (max-width: 1699px) { header:has(#progress:not([hidden])) #flow { max-width: 230px; } }
+/* what a job is on, and why one failed, are its hover: a failed job is a red pill */
 .job .jdetail { display: none; }
-.job.failed .jdetail { display: block; flex: 0 1 auto; min-width: 0; overflow: hidden;
-                       text-overflow: ellipsis; color: var(--bad); font-size: 11.5px; }
+.job.failed { border-color: #4c2c2c; }
+.job.failed .jlabel, .job.failed .jnums { color: var(--bad); }
 .job .jmore { position: absolute; top: calc(100% + 10px); left: 0; z-index: 25;
               width: min(520px, 80vw); white-space: normal; background: #18181b;
               border: 1px solid var(--line); border-radius: 5px; padding: 7px 9px;

@@ -248,7 +248,15 @@ def validate_ops(raw: Any, segments: list[dict], clips: dict | None = None) -> l
 # ---------------------------------------------------------------- apply (pure)
 
 def _copy(seg: dict) -> dict:
-    return {k: v for k, v in seg.items()}
+    """A shot as a new dict, its Effect Controls (`controls`: Motion, Opacity, Volume,
+    Lumetri, the fx stack) carried with it — and copied, not shared, so a razor's two
+    halves are two shots whose controls change one at a time (Premiere keeps a clip's
+    effects on both sides of a cut)."""
+    out = dict(seg)
+    c = seg.get("controls")
+    if isinstance(c, dict):
+        out["controls"] = {k: (list(v) if isinstance(v, list) else v) for k, v in c.items()}
+    return out
 
 
 def apply_ops(segments: list[dict], clips: dict | None, ops: list[dict]) -> dict:

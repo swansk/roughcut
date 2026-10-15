@@ -132,6 +132,15 @@
     const presets = info.presets.map((p) =>
       `<option value="${esc(p.key)}">${esc(p.label)}</option>`).join('');
     const folders = info.folders.map((f) => `<option value="${esc(f)}"></option>`).join('');
+    const ago = (t) => {
+      const d = Date.now() / 1000 - Number(t || 0);
+      if (d < 90) return 'just now';
+      if (d < 5400) return `${Math.round(d / 60)} min ago`;
+      if (d < 129600) return `${Math.round(d / 3600)} h ago`;
+      return `${Math.round(d / 86400)} days ago`;
+    };
+    const recent = (info.recent || []).map((f) =>
+      `<option value="${esc(f.name)}">${esc(f.name)} · ${f.films} film${f.films === 1 ? '' : 's'} · ${esc(ago(f.when))}</option>`).join('');
     const r = seqRange();
     dlg.querySelector('#exBody').innerHTML = `
       <div class="ex-grid">
@@ -142,8 +151,10 @@
         <div class="ex-name"><input id="exName" data-testid="export-name" type="text"
           spellcheck="false" maxlength="120"><span class="ex-ext">.mp4</span></div>
         <label for="exFolder">Location</label>
-        <div><input id="exFolder" type="text" list="exFolders" spellcheck="false" maxlength="120"
-          title="a folder under ${esc(info.root)}"><datalist id="exFolders">${folders}</datalist>
+        <div><div class="ex-loc"><input id="exFolder" type="text" list="exFolders" spellcheck="false" maxlength="120"
+          title="a folder under ${esc(info.root)}: pick a recent one, or type a new name"><datalist id="exFolders">${folders}</datalist>
+          <select id="exRecent" aria-label="recent folders" title="the folders under ${esc(info.root)}, most recent first"${recent ? '' : ' disabled'}>
+            <option value="">Recent folders${recent ? '' : ' (none yet)'}</option>${recent}</select></div>
           <div class="ex-path" id="exPath"></div></div>
         <label for="exRange">Range</label>
         <div><select id="exRange">
@@ -166,6 +177,12 @@
     if (r) dlg.querySelector('#exRange').value = 'inout';
     ['#exPreset', '#exRange'].forEach((s) => dlg.querySelector(s).addEventListener('change', paintEstimate));
     ['#exName', '#exFolder'].forEach((s) => dlg.querySelector(s).addEventListener('input', paintEstimate));
+    dlg.querySelector('#exRecent').addEventListener('change', (e) => {
+      if (!e.target.value) return;
+      dlg.querySelector('#exFolder').value = e.target.value;
+      e.target.value = '';
+      paintEstimate();
+    });
     dlg.querySelector('#exName').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); start(); }
     });
@@ -185,11 +202,16 @@
     path.title = 'a file of this name is never overwritten: the export becomes -2, -3 …';
     const secs = exportLength();
     const mb = secs * (p.video_mbps + p.audio_kbps / 1000) / 8;
+    // the sequence's rate, constant: every preset renders at it
+    const rate = p.fps ? `${Number(p.fps).toFixed(Number.isInteger(Number(p.fps)) ? 0 : 3)} fps` : '';
+    const how = p.measured
+      ? `measured from this bin's last ${p.measured === 1 ? 'file' : `${p.measured} files`} with this preset`
+      : 'from the preset\'s typical bitrate; it learns from the first file you export with it';
     dlg.querySelector('#exSummary').innerHTML = `
       <div><span>Duration</span><b id="exDur">${esc(tc(secs))}</b></div>
-      <div><span>Frame</span><b>${p.width}×${p.height}</b></div>
+      <div><span>Frame</span><b id="exFrame">${p.width}×${p.height}${rate ? ` · ${esc(rate)}` : ''}</b></div>
       <div><span>Bitrate</span><b>≈ ${p.video_mbps.toFixed(p.video_mbps < 10 ? 1 : 0)} Mbps</b></div>
-      <div><span>Estimated size</span><b id="exSize">≈ ${esc(human(mb))}</b></div>`;
+      <div title="${esc(how)}"><span>Estimated size</span><b id="exSize" data-mb="${mb.toFixed(3)}">≈ ${esc(human(mb))}</b></div>`;
     const empty = !sequence().length;
     dlg.querySelector('#exGo').disabled = empty;
     if (empty) dlg.querySelector('#exNote').textContent = 'The sequence is empty: put a clip on V1 first.';

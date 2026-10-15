@@ -153,3 +153,15 @@ next judge runs, and the next judge rules it honest or lenient.
   /floor and /open unchanged; every other check unchanged.
 - 2026-10-15 (lead, merging TRACKS onto FPUI): the two raises above are replaced by the measured counts on the merged tree, with NO headroom (TRACKS had added ~10 %): words / 106, / shot 157, / film 114, / fx 134, / jobs 132; controls / 50, / shot 62, / film 49, / fx 53, / jobs 50. /floor and /open unchanged. Cause: the four track headers (14 controls, ~9 words) and the Re-run first pass control (3 words).
 - 2026-10-15 (lead, merging EFFECTS): `/ shot` (a shot selected, Effect Controls showing) words 157→196, controls 62→85, the measured counts with no headroom. Cause: Premiere-style Effect Controls (dimension 7): Motion x/y/scale/rotation, Opacity, Volume, five Lumetri values, each a scrubbable value with a reset, plus section twirls and resets. Verdict 1 noted the inherited budget pulls against Premiere density; the judge should rule whether this panel's density is earned.
+- 2026-10-15 (wave 3, lane HEADER; verdict 3 ruled the FINISH entry's app-bar exemption
+  lenient): **the exemption is removed.** `test_workspace.py`'s overflow check no longer lets
+  anything under `header` ellipsize with a hover title (`#flowNext`'s sentence, `.fp-label`, a
+  job's name): no element under `header` may have `scrollWidth > clientWidth`, checked at
+  1440×900 at rest and with two jobs running (`test_no_chrome_is_cut_off`) and in the fresh,
+  mid-index, mid-first-pass and exporting states (`test_the_app_bar_clips_nothing_and_a_fresh_bin_has_one_first_action`),
+  which also asserts exactly one blue button on a fresh bin, "Run first pass". The bar
+  collapses instead: Next shows its icon (sentence in the hover) while anything runs or when
+  its sentence has no room, Next is not drawn when its action is the first pass's (index the
+  footage; anything about the index or the first cut while the pass runs), and a job is an icon
+  and its % with its name in the hover. `test_budget.py`: `/ jobs` words 132 → 109, the
+  measured count (lowered, not raised); every other number unchanged.

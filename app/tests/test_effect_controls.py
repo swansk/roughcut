@@ -182,8 +182,8 @@ def test_the_sections_are_premieres_and_the_head_is_timecode(page):
     assert page.locator("#inspector .ec-v[data-k=scale]").input_value() == "100.0"
     assert page.locator("#inspector .ec-v[data-k=opacity]").input_value() == "100.0 %"
     assert page.locator("#inspector .ec-v[data-k=volume_db]").input_value() == "0.00 dB"
-    # a row that the export does not draw yet says so on hover
-    assert "export does not include it yet" in page.locator(
+    # every row renders now (verdict 3, punch 3), and its hover says so
+    assert "the export renders it" in page.locator(
         "#inspector .ec-row[data-row=opacity]").get_attribute("title")
     # a twirl folds its section, and stays folded on the next shot
     page.locator("#inspector [data-twirl=motion]").click()

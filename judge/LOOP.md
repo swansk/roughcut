@@ -49,6 +49,13 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-15 06:10: wave 3 merges so far: ORIENT `c31089f`, PROGRAM `bc13ac4`, RENDER (this). Queued for wave 4 (lead's
+  notes): audio is AAC-encoded twice since RENDER's join (per part, then at the join): keep part audio as PCM and encode
+  once; app.js `isThisCut` should compare `controls` like the server's `_same_shots`; the size estimate is ~4x high until
+  a bin has one export of the preset (encode a short sample on first open); poster URLs need a version param so a
+  browser holding a pre-ORIENT upside-down poster drops it (`immutable`, 1-year max-age); V2 shows ungraded; overlapping
+  moved A1 sounds: only the latest plays; journey prints "!! review copy failed" (probably the journey stopping the
+  server mid-copy; confirm).
 - 2026-10-15 04:20: **VERDICT 3 = FAIL** (rev `28eca35`; 1:7 2:6 3:7 4:7 5:7 6:5 7:5 8:7 9:6 10:6 11:3 12:2 — 12 was
   judged before JOURNEY merged). K1 resolved on evidence (Karl to confirm), K2 open. Rulings: FINISH letterbox floor
   honest; its header-ellipsis exemption LENIENT (#flowNext reads "Next Make t…"); +3 words, measured budgets, EFFECTS

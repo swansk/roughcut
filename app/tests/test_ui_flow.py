@@ -1820,7 +1820,10 @@ def test_the_old_buttons_are_gone_and_the_header_is_one_row(page):
                   "Project ▾", "saved"):
         assert words not in seen, words
     # (the `open · pass · board` pills and the M14 step bar are gone, M16 decision 2)
-    page.wait_for_selector("#flowNext")
+    # Next is drawn, or has yielded its slot to "Run first pass" when its action is the
+    # index (verdict 3 punch 8: one first action; this module's bin wants "Index the rest")
+    page.wait_for_function("window.flowBar && flowBar.state()"
+                           " && (!!document.querySelector('#flowNext') || flowBar.yielded())")
     assert page.locator("#screens").count() == 0
     assert page.locator("#flow .fs").count() == 0
     page.set_viewport_size({"width": 1440, "height": 900})
