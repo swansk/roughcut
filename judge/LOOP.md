@@ -49,6 +49,13 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-15 01:20: **wave 1 merged** (`c1067c0` + the bin-menu wording fix): FIRSTPASS `b78dc40`, MONEY `02c2b57`,
+  MEDIA `b2d3014`, KEYS `1bff11b`, WORKSPACE `c1067c0`. Board is now Project / Source / Program / Timeline / Effect
+  Controls with a menu bar; Premiere keys, markers, HH:MM:SS:FF; posters + playable media before proxies; /api/firstpass
+  (no UI yet); honest progress; truthful notes; no "spent" on the plan; gate installs Chromium. Open requests for wave 2:
+  server accepts markers/in/out + sends fps (and fps/width/height on /api/clips); /workspace.css static route; any clip
+  insertable before its audio sidecar; journal.py % on /open still inflated; first-pass header control + panel; track
+  headers in .tl-side + multi-track A/V; Inspector; export dialog; journey.py. Full gate next, then judge 2.
 - 2026-10-15 00:00: **VERDICT 1 = FAIL** (baseline, rev `a65528b`). Gate green (37 budget cases flaky only because
   Chromium rev 1248 was missing); no journey.py. Scores: 1:2 2:2 3:3 4:2 5:4 6:2 7:4 8:4 9:2 10:4 11:4 12:1. Blockers:
   journey missing, "spent $0.27" on claude_cli (`open.js:494`), K1/K2 open, Source monitor / audio tracks / markers /

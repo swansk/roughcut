@@ -190,8 +190,6 @@ def test_the_board_and_the_pass_never_say_spent_on_the_plan(browser, live, where
     assert not pg._price_errors, pg._price_errors
 
 
-@pytest.mark.xfail(strict=False, reason="switcher.js (#placeSpent) says 'spent $x on this "
-                   "project' on every backend; not this lane's file — requested of its owner")
 def test_the_bin_menu_never_says_spent_on_the_plan(browser, live):
     pg = at_board(browser, live)
     pg.locator("#hdBin").click()

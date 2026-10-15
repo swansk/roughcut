@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Fixed
+- **The bin menu no longer says "spent" on the plan.** `#placeSpent` in `switcher.js` read "spent $x on this project" on every backend; it now uses `rcCost.total` / `totalNote` like every other price ("~$0.27 API-equivalent · free on your plan on this project", the estimate in the hover; "spent" only on the API key). `test_price_wording.py`'s bin-menu test is no longer an xfail, and `test_flow_ui.py` expects the backend's own words. 17 passed.
+
 ### Changed
 - **The workspace on the merged lanes (KEYS, MEDIA, MONEY, FIRSTPASS).** The Program and Source monitors and the Project panel's durations read Premiere's HH:MM:SS:FF (`tl.tc`); the save carries the timeline's markers and sequence In/Out; the keys sheet takes each timeline row's group from the row itself and drops "O · bins and cuts" (O is Mark Out now). A monitor whose media is not ready keeps the poster at the playhead with "preparing preview…" and polls `/media/status/<stem>.mp4`, reloading the same `/media/proxy` URL once it is ready (a play pressed meanwhile waits rather than failing); the Project panel no longer gates anything on the proxy flag. The monitors are exact 16:9 boxes centred in their panels, so the grade and effect canvases and the sketch's clicks line up with the frame, and the effect sketch's HUD is one line along the top. UI tests follow the workspace (Selects opened where they drive the bin, timecode readouts, the calm media wait); the budget's monitor check and `/` word count are re-based and logged in REDESIGN-GOAL.
 

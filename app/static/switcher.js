@@ -252,9 +252,13 @@
     const be = st.backend;
     const sp = $('#placeSpent');
     if (sp) {
-      sp.textContent = be && be.spent_usd != null
-        ? `spent ${money(be.spent_usd)}${be.budget_usd != null ? ` of ${money(be.budget_usd)} cap` : ''} on this project`
-        : '';
+      // "spent" only when the backend bills; on the plan the $ are an API-equivalent
+      // estimate (REDESIGN-GOAL S), worded by cli.js's rcCost like every other price.
+      const amount = be && be.spent_usd != null
+        ? `${money(be.spent_usd)}${be.budget_usd != null ? ` of ${money(be.budget_usd)} cap` : ''}` : null;
+      sp.textContent = amount == null ? ''
+        : `${window.rcCost ? rcCost.total(amount, be) : `spent ${amount}`} on this project`;
+      sp.title = amount == null || !window.rcCost ? '' : rcCost.totalNote(be.spent_usd, be);
     }
     // Only what is wrong (M16 decision 1): a folder gone, a tool missing on this box.
     const bad = [];
