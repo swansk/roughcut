@@ -21,6 +21,10 @@ Two facts the rest of the app learns from this module:
   monitor plays it and the render cuts it like any other. `generated_name()` is
   deterministic from the parameters, so the same slide is one file however often it is
   proposed.
+- **Keyframes stay on the media** (wave 7): a shot's `controls.keys` count film seconds
+  from its start, so `split` cuts them at the razor (a key at the cut on both halves),
+  `extend` / `set_range` shift them by the in's move (keys past an edge go, a key there
+  holds their value) and `speed` scales their times by old / new rate (`anchor_keys`).
 
 The ops (every one names a `shot` by id unless said otherwise; times are clip seconds):
 
@@ -249,14 +253,100 @@ def validate_ops(raw: Any, segments: list[dict], clips: dict | None = None) -> l
 
 def _copy(seg: dict) -> dict:
     """A shot as a new dict, its Effect Controls (`controls`: Motion, Opacity, Volume,
-    Lumetri, the fx stack) carried with it — and copied, not shared, so a razor's two
-    halves are two shots whose controls change one at a time (Premiere keeps a clip's
-    effects on both sides of a cut)."""
+    Lumetri, the fx stack, the keyframes) carried with it — and copied, not shared, so a
+    razor's two halves are two shots whose controls change one at a time (Premiere keeps a
+    clip's effects on both sides of a cut)."""
     out = dict(seg)
     c = seg.get("controls")
     if isinstance(c, dict):
         out["controls"] = {k: (list(v) if isinstance(v, list) else v) for k, v in c.items()}
+        if isinstance(c.get("keys"), dict):
+            out["controls"]["keys"] = {p: [list(k) for k in ks] if isinstance(ks, list) else ks
+                                       for p, ks in c["keys"].items()}
     return out
+
+
+# ---------------------------------------------------------------- keyframes on the media
+
+# Wave 7, lane KEYANCHOR: a shot's keyframes (`controls.keys = {prop: [[t, v], ...]}`, t
+# film seconds from its start; judge/LOOP.md's wave-6 schema) stay on the media, as in
+# Premiere. timeline.js's `keysWindow` is the twin of `anchor_keys`.
+_KEY_EPS = 1e-4
+
+
+def _key_at(lst: list, t: float) -> float:
+    if t <= lst[0][0]:
+        return lst[0][1]
+    if t >= lst[-1][0]:
+        return lst[-1][1]
+    for (t0, v0), (t1, v1) in zip(lst, lst[1:]):
+        if t <= t1:
+            return v0 + (v1 - v0) * (t - t0) / (t1 - t0) if t1 > t0 else v1
+    return lst[-1][1]
+
+
+def anchor_keys(keys: Any, a: float, b: float | None = None, scale: float = 1.0) -> dict | None:
+    """The keys of a shot that is the old shot's film window [a, b] (b None: to the end),
+    counted from a, the old times first scaled by `scale` (a speed change: old / new).
+    Keys inside move a earlier; when keys fall outside a side they go, and a key on that
+    edge holds the value they gave there — so a razor's first half ends on the cut's
+    value and its second half starts on it, and nothing jumps. None when no key is left."""
+    if not isinstance(keys, dict):
+        return None
+    has_end = b is not None
+    length = round(b - a, 6) if has_end else None
+    out: dict = {}
+    for prop, raw in keys.items():
+        if not isinstance(raw, list) or not raw:
+            continue
+        nd = 6 if str(prop).startswith("position") else 3
+        lst = [(float(k[0]) * scale, float(k[1])) for k in raw]
+        res: list = []
+        if any(t < a - _KEY_EPS for t, _ in lst):
+            res.append([0.0, round(_key_at(lst, a), nd)])
+        for t, v in lst:
+            if t < a - _KEY_EPS or (has_end and t > b + _KEY_EPS):
+                continue
+            nt = 0.0 if abs(t - a) <= _KEY_EPS else round(t - a, 6)
+            if has_end and abs(t - b) <= _KEY_EPS:
+                nt = length
+            if res and nt <= res[-1][0] + 1e-9:
+                continue                      # the edge's key is there already
+            res.append([nt, v])
+        if (has_end and any(t > b + _KEY_EPS for t, _ in lst)
+                and not (res and res[-1][0] >= length - 1e-9)):
+            res.append([length, round(_key_at(lst, b), nd)])
+        if res:
+            out[prop] = res
+    return out or None
+
+
+def _put_keys(seg: dict, keys: dict | None) -> None:
+    c = dict(seg.get("controls") or {})
+    if keys:
+        c["keys"] = keys
+    else:
+        c.pop("keys", None)
+    if c:
+        seg["controls"] = c
+    else:
+        seg.pop("controls", None)
+
+
+def _keys(seg: dict) -> dict | None:
+    c = seg.get("controls")
+    k = c.get("keys") if isinstance(c, dict) else None
+    return k if isinstance(k, dict) and k else None
+
+
+def anchor_range(seg: dict, new_in: float, new_out: float) -> None:
+    """The shot's keys after its clip range moves to [new_in, new_out] at its speed (call
+    before setting them): an in moved Δ later moves every key Δ / speed earlier."""
+    k = _keys(seg)
+    if k is None:
+        return
+    sp, i0 = speed_of(seg), float(seg["in"])
+    _put_keys(seg, anchor_keys(k, (new_in - i0) / sp, (new_out - i0) / sp))
 
 
 def apply_ops(segments: list[dict], clips: dict | None, ops: list[dict]) -> dict:
@@ -312,6 +402,11 @@ def apply_ops(segments: list[dict], clips: dict | None, ops: list[dict]) -> dict
         second["in"] = round(at, 3)
         second["id"] = fresh()
         second.pop("why", None)
+        k = _keys(seg)
+        if k is not None:                     # the keys cut at the razor (KEYANCHOR)
+            d = (round(at, 3) - float(seg["in"])) / speed_of(seg)
+            _put_keys(second, anchor_keys(k, d))
+            _put_keys(seg, anchor_keys(k, 0.0, d))
         seg["out"] = round(at, 3)
         segs.insert(index_of(str(seg["id"])) + 1, second)
         by_id[second["id"]] = second
@@ -331,6 +426,7 @@ def apply_ops(segments: list[dict], clips: dict | None, ops: list[dict]) -> dict
                 raise ValueError(f"extend: the out-point would pass the clip's end ({n:.2f}s)")
             if new_out - new_in < MIN_SHOT_S:
                 raise ValueError("extend: the shot would be shorter than a shot can be")
+            anchor_range(seg, new_in, new_out)
             seg["in"], seg["out"] = new_in, new_out
             changed.append(str(seg["id"]))
             words.append(f"extend shot {seg['clip']}: in {op['in']:+.2f}s, out {op['out']:+.2f}s")
@@ -339,6 +435,7 @@ def apply_ops(segments: list[dict], clips: dict | None, ops: list[dict]) -> dict
             n = clip_len(seg["clip"])
             if n is not None and op["out"] > n + 1e-6:
                 raise ValueError(f"set_range: {op['out']:.2f}s passes the clip's end ({n:.2f}s)")
+            anchor_range(seg, op["in"], op["out"])
             seg["in"], seg["out"] = op["in"], op["out"]
             changed.append(str(seg["id"]))
             words.append(f"set shot {seg['clip']} to {op['in']:.2f}–{op['out']:.2f}s")
@@ -359,9 +456,14 @@ def apply_ops(segments: list[dict], clips: dict | None, ops: list[dict]) -> dict
                     target = split_at(seg, f, "speed")
                 if t < target["out"] - MIN_SHOT_S:
                     split_at(target, t, "speed")
+            was = speed_of(target)
             target["speed"] = validate_speed(op["rate"])
             if target["speed"] is None:
                 target.pop("speed", None)
+            k = _keys(target)
+            if k is not None:                 # film-time keys at the new rate (KEYANCHOR)
+                now = speed_of(target)
+                _put_keys(target, anchor_keys(k, 0.0, dur(target), was / now))
             changed.append(str(target["id"]))
             words.append(f"{seg['clip']} at {op['rate']:g}× " + (f"from {op['from']:.2f} to {op['to']:.2f}s" if "from" in op else "for the whole shot"))
         elif kind in ("generate", "freeze"):
