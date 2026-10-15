@@ -310,6 +310,27 @@ def api_lut(sid: str, n: int = 17) -> JSONResponse:
 
 
 PROXY_GOP_S = 1.0          # seconds between proxy keyframes: what a cold seek decodes
+# The proxy's version, in the proxy folder's name (configure): bump it whenever what a
+# proxy is changes, so an old --work rebuilds its proxies rather than serving them.
+# v2 (verdict 4 punch 5): a source above PROXY_MAX_FPS is proxied at a whole fraction
+# of its rate — Killington's 59.94 GoPro clips at 29.97. The proxy is what the monitor
+# plays and nothing else: the export, the clip facts and the frame grid all read the
+# original. At 59.94 a loaded box played the monitor at ~7 frames a second around a cut;
+# half the frames is half the decoding and half the grade's uploads.
+PROXY_V = "v2"
+PROXY_MAX_FPS = 30.5
+
+
+def proxy_rate(src: Path) -> str | None:
+    """The proxy's frame rate for `src` as an ffmpeg rational, or None to keep the
+    source's: the source's own divided by the smallest whole number that brings it to
+    PROXY_MAX_FPS or under (59.94 → 29.97, 50 → 25, 119.88 → 29.97)."""
+    from fractions import Fraction
+    fps = (media_facts(src) or {}).get("fps") or 0.0
+    if fps <= PROXY_MAX_FPS:
+        return None
+    rate = Fraction(fps).limit_denominator(1001) / math.ceil(fps / PROXY_MAX_FPS)
+    return f"{rate.numerator}/{rate.denominator}"
 
 
 def build_proxy(src: Path, dest: Path, orient: str) -> None:
@@ -336,6 +357,9 @@ def build_proxy(src: Path, dest: Path, orient: str) -> None:
     vf = f"scale=min({PROXY_W}\\,iw):-2"
     if norm:
         vf = f"{norm},{vf}"
+    rate = proxy_rate(src)
+    if rate:
+        vf = f"fps={rate},{vf}"       # first: the frames it drops are never converted
     cmd += [
         "-i", str(src), "-map", "0:v:0", "-map", "0:a:0", "-dn",
         # Capped by width so a source smaller than the target is left alone rather
@@ -8286,7 +8310,8 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
         # Per-bin, because a footage folder is now something you point at rather than
         # a single configured project: two bins can hold the same GoPro stem, and a
         # shared proxy dir would serve one bin's frames for the other's clip.
-        "proxy_dir": work / "proxies" / footage.name,
+        # PROXY_V: a proxy from an older build_proxy is rebuilt, never served.
+        "proxy_dir": work / "proxies" / footage.name / PROXY_V,
         # One JPEG per shot card, cut out of the proxy at the shot's in-point. Per-bin
         # like the proxies they come from, and disposable: every one of them is a
         # seek and a single frame, rebuilt on demand when the folder is not there.

@@ -1124,18 +1124,26 @@ function liveVideo() { return player.vids[player.cur]; }
  * shuttle (timeline-keys.js, which rides on `defaultPlaybackRate`) can multiply it
  * rather than overwrite it. A generated clip (`gen_…`) is armed like any other: the
  * server lists it with a proxy. */
-function arm(v, seg) {
+function arm(v, seg, at = seg.in) {
   const src = (P.clips[seg.clip] || {}).proxy || '';
   if (v.dataset.src !== src || (v.error && !v._waitStop)) {
     v.dataset.src = src;
     if (v._waitStop) { v._waitStop(); v._waitStop = null; }
-    v.src = src ? `${src}#t=${Math.max(0, seg.in).toFixed(2)}` : src;
+    v.src = src ? `${src}#t=${Math.max(0, at).toFixed(2)}` : src;
     v.load();
+  }
+  if (v._roll) {                    // whatever it was prerolling, it is parked now
+    v._roll = null;
+    if (!v.paused) v.pause();
   }
   setShotRate(v, seg);
   // Deferred, so by the time metadata arrives this buffer may have been pointed at a
   // different clip; parking the old shot would then seek the new one.
-  const park = () => { if (v.dataset.src === src) v.currentTime = seg.in; };
+  // A buffer already there is left alone: the same time set again is still a seek (a
+  // decode from the keyframe before it) — verdict 4 punch 5.
+  const park = () => {
+    if (v.dataset.src === src && Math.abs(v.currentTime - at) > 0.002) v.currentTime = at;
+  };
   if (v.readyState >= 1) park();
   else v.addEventListener('loadedmetadata', park, { once: true });
 }
@@ -1283,7 +1291,7 @@ function playFrom(i, { single = false } = {}) {
   sel = i;
   paint();
   if (!resume) arm(v, seg);
-  if (!single && segs[i + 1]) arm(player.vids[1 - player.cur], segs[i + 1]);
+  if (!single && segs[i + 1]) armNext(player.vids[1 - player.cur], segs[i + 1]);
   showLive();
   // The shot's media is not ready (no proxy yet, waiting on /media/status): the poster at
   // the playhead and the calm line stay; the wait loads it, and the next play plays.
@@ -1322,7 +1330,7 @@ function cueAt(i, clipT) {
   const at = Math.max(seg.in, Math.min(seg.out, clipT));
   const park = () => { if (v.dataset.src === src) v.currentTime = at; };
   if (v.readyState >= 1) park(); else v.addEventListener('loadedmetadata', park, { once: true });
-  if (segs[i + 1]) arm(player.vids[1 - player.cur], segs[i + 1]);
+  if (segs[i + 1]) armNext(player.vids[1 - player.cur], segs[i + 1]);
   showLive();
   if (v.error) { mediaWaitFor(v); monWait(true); }
   paintPos(filmAt(i, at), at, seg);
@@ -1518,7 +1526,50 @@ function boundary() {
   paintPos(filmT, clipT, seg);
   bedTick(filmT, clipT, seg);
   if (clipT >= seg.out - 0.04 || v.ended) { advance(); return true; }
+  preroll((seg.out - clipT) / speedOf(seg));
   return false;
+}
+
+/* The cut, prepared (verdict 4 punch 5). The buffer holding the next shot is parked
+ * PREROLL_S of its clip ahead of the in-point (armNext), and starts playing — muted,
+ * not shown — when the shot on screen has that long left, less what a start takes. At
+ * the cut it is already running and on its in-point: advance() only swaps which buffer
+ * is shown. Without this, every cut paid for a pipeline start (~50 ms) and before that a
+ * re-seek, a decode from the keyframe (the 317 ms hole verdict 4 measured on Killington). */
+const PREROLL_S = 0.3;
+const roll = { lat: 0.06 };         // seconds from play() to the first frame, learned
+
+function prerollAt(seg) {
+  return Math.max(0, seg.in - PREROLL_S * speedOf(seg));
+}
+
+function armNext(v, seg) {
+  arm(v, seg, prerollAt(seg));
+}
+
+function preroll(left) {
+  if (player.single) return;
+  const nseg = segs[player.idx + 1];
+  const nb = player.vids[1 - player.cur];
+  if (!nseg || !nb || nb._roll || !nb.paused || nb.seeking || nb.readyState < 2) return;
+  if (nb.dataset.src !== ((P.clips[nseg.clip] || {}).proxy || '')) return;
+  const lead = (nseg.in - nb.currentTime) / speedOf(nseg);    // film seconds to its in-point
+  if (lead < -0.01 || lead > PREROLL_S + 0.05) return;        // not parked for this cut
+  // boundary() cuts 0.04 s before the out; the start's latency is real time, the
+  // rest film time, so it scales with the J/L shuttle's rate
+  const shuttle = (liveVideo() && liveVideo().defaultPlaybackRate) || 1;
+  if (left - 0.04 > lead + roll.lat * shuttle) return;
+  const g = player.gen;
+  nb._roll = { gen: g, seg: nseg };
+  nb.muted = true;
+  setShotRate(nb, nseg);
+  const t0 = performance.now();
+  if (typeof nb.requestVideoFrameCallback === 'function') {
+    nb.requestVideoFrameCallback(() => {
+      roll.lat = Math.min(0.25, roll.lat * 0.7 + ((performance.now() - t0) / 1000) * 0.3);
+    });
+  }
+  nb.play().catch(() => { if (nb._roll && nb._roll.gen === g) nb._roll = null; });
 }
 
 function tick() {
@@ -1545,23 +1596,66 @@ function advance() {
   player.cur = 1 - player.cur;
   player.idx = next;
   sel = next;
-  paint();
+  tl.syncSel();                 // paint()'s first half; the inspector waits (below)
   const nv = liveVideo();
-  arm(nv, segs[next]);          // normally armed already; re-arming survives edits made mid-play
+  // Prerolled for this cut (see preroll): it is playing, near its in-point; keep it so.
+  const rolled = !!nv._roll && nv._roll.gen === g - 1 && nv._roll.seg === segs[next] && !nv.paused;
+  if (rolled) {
+    nv._roll = null;
+    // a start that went badly wrong is put right; a frame or two either side is not
+    if (Math.abs(nv.currentTime - segs[next].in) > 0.15) nv.currentTime = segs[next].in;
+  } else {
+    arm(nv, segs[next]);        // normally armed already; re-arming survives edits made mid-play
+  }
   nv.muted = a1Moved(segs[next]);
   showLive();
   const go = () => {
     if (g !== player.gen || !player.playing) return;
-    nv.currentTime = segs[next].in;
+    if (rolled) { setShotRate(nv, segs[next]); return; }
+    // Parked on its in-point already (arm did it while the last shot played): play from
+    // there. Setting the same time again is a seek all the same — a decode from the
+    // keyframe before it, up to a second of frames — and it was most of the hole at the
+    // cut (verdict 4 punch 5: 317 ms on Killington, 450 ms on a 59.94 fixture at load 20).
+    if (!parkedAt(nv, segs[next].in)) nv.currentTime = segs[next].in;
     setShotRate(nv, segs[next]);
     nv.play().catch((err) => { if (g === player.gen) playRefused(err); });
   };
   screenMsg(nv.readyState >= 2 ? '' : `opening ${stem(segs[next].clip)}…`);
   if (nv.readyState >= 1) go(); else nv.addEventListener('loadedmetadata', go, { once: true });
-  if (segs[next + 1]) arm(v, segs[next + 1]);
-  tl.render();
+  // What the cut does not need on its own frame waits for the new shot's first frames:
+  // the buffer we left takes the shot after this one (its seek would take the decoder
+  // threads the new shot is using), Effect Controls rebuilds for the new shot and the
+  // timeline repaints — at load 20 those were ~100 ms of main thread in the cut's frame.
+  // The inspector and the timeline catch up even if the monitor was stopped meanwhile.
+  // One piece per frame, so no frame carries all three.
+  afterFirstFrames(nv, () => {
+    if (g === player.gen && segs[next + 1]) armNext(v, segs[next + 1]);
+    afterFirstFrames(nv, () => {
+      renderInspector();
+      afterFirstFrames(nv, () => tl.render(), 1);
+    }, 1);
+  });
   paintTransport();
   schedule();
+}
+
+/* A buffer whose picture is the frame at clip time t, nothing pending. */
+function parkedAt(v, t) {
+  return v.readyState >= 2 && !v.seeking && Math.abs(v.currentTime - t) < 0.002;
+}
+
+/* Run fn once the buffer has presented `frames` more frames (a paused one presents
+ * none), or after 400 ms, whichever comes first. */
+function afterFirstFrames(v, fn, frames = 3) {
+  let done = false, n = 0;
+  const run = () => { if (done) return; done = true; fn(); };
+  const t = setTimeout(run, 400);
+  if (typeof v.requestVideoFrameCallback !== 'function') return;
+  const cb = () => {
+    if (done) return;
+    if (++n >= frames) { clearTimeout(t); run(); } else v.requestVideoFrameCallback(cb);
+  };
+  v.requestVideoFrameCallback(cb);
 }
 
 /* Keep the monitor honest against the timeline it is playing: hide it when there is
@@ -1640,9 +1734,18 @@ function paintTransport() {
 /* The playhead is the timeline's, in film time (the strip used to carry it as a
  * percentage inside one block). */
 function paintPos(filmT, clipT, seg) {
-  $('#pos').textContent = tcOf(filmT);
-  tl.setPlayhead(filmT);
+  // While playing, the timeline is asked to keep the playhead in view four times a
+  // second rather than every frame: its check reads the view's width, and after this
+  // frame's writes that read was a forced layout of the whole board on every tick
+  // (verdict 4 punch 5). The readout is written after the playhead, once, if it changed.
+  const now = performance.now();
+  const reveal = !player.playing || now - posReveal > 250;
+  if (reveal) posReveal = now;
+  tl.setPlayhead(filmT, { reveal });
+  const s = tcOf(filmT), el = $('#pos');
+  if (el.textContent !== s) el.textContent = s;
 }
+let posReveal = 0;
 
 /* The monitors read Premiere's HH:MM:SS:FF, the timeline's own timecode (tl.tc). */
 function tcOf(t) { return window.tl && typeof tl.tc === 'function' ? tl.tc(t) : fmt(t); }

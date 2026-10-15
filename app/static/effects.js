@@ -279,8 +279,20 @@
       if (i >= 0 && typeof cue === 'function' && !(g('player') || {}).playing) cue(i, seg.in);
     }
     apply();
-    const gr = typeof g('gradeApi') === 'function' ? g('gradeApi')() : null;
-    if (gr) gr.draw();
+    drawSoon();
+  }
+  /* One grade draw on the next frame, however many changes and repaints ask for it
+   * before then (verdict 4 punch 5). A drawn frame is a frame upload and a shader pass:
+   * one `effects.set` used to draw three times in its own task — preview, the commit's
+   * repaint, finish's repaint — and a click on a shot twice, ~80 ms each on a loaded box. */
+  let drawQ = 0;
+  function drawSoon() {
+    if (drawQ) return;
+    drawQ = requestAnimationFrame(() => {
+      drawQ = 0;
+      const gr = typeof g('gradeApi') === 'function' ? g('gradeApi')() : null;
+      if (gr) gr.draw();
+    });
   }
   function adjust(id) {
     const t = TL();
@@ -584,8 +596,7 @@
     if (spd) spd.classList.toggle('changed', Number(seg.speed || 1) !== 1);
     paintStack(box, seg);
     apply();
-    const gr = typeof g('gradeApi') === 'function' ? g('gradeApi')() : null;
-    if (gr) gr.draw();
+    drawSoon();
   }
 
   /* repaint the stack when the FX tool's list changes (fx.js calls this) */
