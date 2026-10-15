@@ -366,27 +366,90 @@ const DEFAULTS = { proj: 0.2, insp: 0.245, src: null, top: 0.6 };
 
   /* ================================================================ the project panel */
   const VIEW_KEY = 'roughcut.ws.projview';
-  const project = { clips: [], view: store.get(VIEW_KEY, 'list'), sel: null, q: '', timer: 0 };
+  // `read` is false until /api/clips has answered once: before that the panel says it is
+  // reading the folder, never that the bin is empty (verdict 2, punch 8).
+  const project = { clips: [], view: store.get(VIEW_KEY, 'list'), sel: null, q: '', timer: 0,
+                    read: false, failed: false };
 
   async function loadClips() {
     clearTimeout(project.timer);
+    let j = null;
     try {
       const r = await fetch('/api/clips');
       if (!r.ok) throw new Error(String(r.status));
-      const j = await r.json();
+      j = await r.json();
       project.clips = Array.isArray(j.clips) ? j.clips : [];
+      project.read = true;
+      project.failed = false;
     } catch (e) {
-      project.timer = setTimeout(loadClips, 10000);
+      if (!project.read) { project.failed = true; paintProject(); }
+      project.timer = setTimeout(loadClips, project.read ? 10000 : 2000);
       return;
     }
+    // a newly listed clip gets its facts into the board's clips, where one was stubbed
+    project.clips.forEach((c) => { if (stubs.has(c.clip)) ensureClip(c.clip, true); });
+    heardSince();
     paintProject();
-    // a clip still being indexed: look again now and then
-    if (project.clips.some((c) => !c.analysed)) project.timer = setTimeout(loadClips, 15000);
-    const want = store.get('roughcut.ws.source', null);
+    // facts still being probed: ask again in a second; a clip still being indexed: now and then
+    if (j && j.probing) project.timer = setTimeout(loadClips, 1000);
+    else if (project.clips.some((c) => !c.analysed || !c.looked)) project.timer = setTimeout(loadClips, 15000);
+    // the Source monitor opens on the clip it showed last, else the first one, so there
+    // is a picture (its poster) the moment the bin is read
     if (!source.clip && project.clips.length) {
-      const c = project.clips.find((x) => x.clip === want) || null;
-      if (c) source.load(c, { quiet: true });
+      const want = store.get('roughcut.ws.source', null);
+      const c = project.clips.find((x) => x.clip === want) || project.clips[0];
+      source.load(c, { quiet: true, auto: true });
     }
+  }
+
+  /* ---------------------------------------------------------- a clip the AI has not heard
+   * The board's clips (`P.clips`, /api/project) are the clips with a sidecar; a clip the
+   * index has not heard yet is still footage and goes in the sequence at once (verdict 2,
+   * punch 7). This lists it there from the folder's facts — no transcript, so its "why"
+   * is empty and its trims snap to nothing until the sidecar lands — and returns the
+   * entry; null when the clip is not in the folder. /api/project lists it the same way
+   * once a shot uses it. */
+  const stubs = new Set();
+  function ensureClip(name, refresh) {
+    if (typeof P === 'undefined' || !P || !P.clips || !name) return null;   // eslint-disable-line no-undef
+    const have = P.clips[name];                                              // eslint-disable-line no-undef
+    if (have && !(refresh && have.heard === false)) return have;
+    const c = clipByName(name);
+    if (!c) return have || null;
+    const stem = c.stem || name.replace(/\.[^.]+$/, '');
+    const entry = {
+      ...(have || {}),
+      clip: name, stem, duration: Number(c.duration) || (have && have.duration) || 0,
+      proxy: `/media/proxy/${stem}.mp4`, poster: `/media/poster/${stem}.jpg`,
+      transcript: [], visual: (have && have.visual) || {}, captured: c.captured || null,
+      candidates: [], summary: { speech_fraction: null, wind_dominant_fraction: null,
+                                 integrated_lufs: null, audio_usable: null },
+      used: !!(have && have.used), heard: false, fps: c.fps || null,
+    };
+    P.clips[name] = entry;                                                   // eslint-disable-line no-undef
+    stubs.add(name);
+    return entry;
+  }
+  window.rcEnsureClip = (name) => ensureClip(name, false);
+
+  /* A clip that went in unheard and has been heard since: its transcript (what trims
+   * snap to, what the Ask reads) replaces the stub, without waiting for the whole
+   * index to finish and the board to reload. */
+  async function heardSince() {
+    if (typeof P === 'undefined' || !P || !P.clips) return;                // eslint-disable-line no-undef
+    const now = project.clips.filter((c) => c.analysed && P.clips[c.clip]   // eslint-disable-line no-undef
+      && P.clips[c.clip].heard === false).map((c) => c.clip);               // eslint-disable-line no-undef
+    if (!now.length) return;
+    try {
+      const p = await (await fetch('/api/project')).json();
+      now.forEach((name) => {
+        const fresh = p.clips && p.clips[name];
+        if (fresh && fresh.heard !== false) {
+          P.clips[name] = { ...fresh, used: P.clips[name].used || fresh.used };   // eslint-disable-line no-undef
+          stubs.delete(name);
+        }
+      });
+    } catch (e) { /* the next look tries again */ }
   }
 
   const FILM_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="3" width="13" height="10" rx="1.2"/><path d="M1.5 6h13M5 3v3M8 3v3M11 3v3"/></svg>';
@@ -400,24 +463,27 @@ const DEFAULTS = { proj: 0.2, insp: 0.245, src: null, top: 0.6 };
   }
   // every clip plays (the server serves the original or a preview until the proxy is
   // built), so the state is the index's, not the proxy's
+  // heard = the sound is transcribed, looked = the pictures are read, indexed = both
   function stateOf(c) {
-    if (c.analysed) return ['indexed', 'ok'];
+    if (c.analysed && c.looked) return ['indexed', 'ok'];
+    if (c.analysed) return ['heard', 'part'];
+    if (c.looked) return ['looked', 'part'];
     return ['not indexed', ''];
   }
   const fpsOf = (c) => (c.fps ? `${Number(c.fps).toFixed(Number(c.fps) % 1 ? 2 : 0)} fps` : '');
   const sizeOf = (c) => (c.width && c.height ? `${c.width}×${c.height}` : '');
 
   function columns(width) {
-    const cols = [{ k: 'name', h: 'Name' }, { k: 'dur', h: 'Duration', w: 88 }];
-    if (width > 220) cols.push({ k: 'state', h: 'Status', w: 72 });
-    if (width > 400 && project.clips.some((c) => c.fps)) cols.push({ k: 'fps', h: 'Frame Rate', w: 76 });
-    if (width > 470 && project.clips.some((c) => c.width)) cols.push({ k: 'size', h: 'Resolution', w: 88 });
+    const cols = [{ k: 'name', h: 'Name' }, { k: 'dur', h: 'Duration', w: 82 }];
+    if (width > 220) cols.push({ k: 'state', h: 'Status', w: 80 });
+    if (width >= 400 && project.clips.some((c) => c.fps)) cols.push({ k: 'fps', h: 'Frame Rate', w: 76 });
+    if (width >= 470 && project.clips.some((c) => c.width)) cols.push({ k: 'size', h: 'Resolution', w: 88 });
     if (width > 560) cols.push({ k: 'shot', h: 'Captured', w: 118 });
     return cols;
   }
 
   function cell(k, c) {
-    if (k === 'name') return `<td class="name"><span class="n">${FILM_ICON}<span>${esc(c.clip)}</span></span></td>`;
+    if (k === 'name') return `<td class="name"><span class="n">${project.icons ? FILM_ICON : ''}<span>${esc(c.clip)}</span></span></td>`;
     if (k === 'dur') return `<td>${c.duration ? tcode(c.duration, c.fps) : ''}</td>`;
     if (k === 'state') { const [t, cls] = stateOf(c); return `<td class="st ${cls}">${t}</td>`; }
     if (k === 'fps') return `<td>${fpsOf(c)}</td>`;
@@ -438,7 +504,9 @@ const DEFAULTS = { proj: 0.2, insp: 0.245, src: null, top: 0.6 };
     $('#projCount').textContent = n ? `${list.length === n ? n : `${list.length} of ${n}`} item${n === 1 ? '' : 's'}` : '';
     $$('#projView button').forEach((b) => b.classList.toggle('on', b.dataset.view === project.view));
     if (!n) {
-      box.innerHTML = '<div class="pempty">No footage in this bin yet. <a href="/open">Open a footage folder</a></div>';
+      box.innerHTML = !project.read
+        ? `<div class="pempty">${project.failed ? 'Could not read the footage folder — trying again…' : 'Reading the footage folder…'}</div>`
+        : '<div class="pempty">No footage in this bin yet. <a href="/open">Open a footage folder</a></div>';
       return;
     }
     if (project.view === 'icon') {
@@ -449,6 +517,9 @@ const DEFAULTS = { proj: 0.2, insp: 0.245, src: null, top: 0.6 };
       return;
     }
     const cols = columns(box.clientWidth || 300);
+    // a narrow panel gives the clip's name the icon's room, so neither it nor the
+    // Status ("not indexed") is cut short
+    project.icons = (box.clientWidth || 300) >= 290;
     box.innerHTML = `<table class="plist"><colgroup>${cols.map((c) => `<col${c.w ? ` style="width:${c.w}px"` : ''}>`).join('')}</colgroup>
       <thead><tr>${cols.map((c) => `<th>${c.h}</th>`).join('')}</tr></thead>
       <tbody>${list.map((c) => `<tr class="row${project.sel === c.clip ? ' sel' : ''}" data-clip="${esc(c.clip)}" draggable="true" title="${esc(c.clip)}">${cols.map((k) => cell(k.k, c)).join('')}</tr>`).join('')}</tbody></table>`;
@@ -479,6 +550,7 @@ const DEFAULTS = { proj: 0.2, insp: 0.245, src: null, top: 0.6 };
       if (!r) return;
       const c = clipByName(r.dataset.clip);
       if (!c) return;
+      ensureClip(c.clip);                  // heard or not, it can go in the sequence now
       const [a, b] = source.marksFor(c);
       e.dataTransfer.setData('application/x-roughcut-shot',
         JSON.stringify({ clip: c.clip, start: a, end: b, why: '' }));
@@ -518,7 +590,9 @@ const DEFAULTS = { proj: 0.2, insp: 0.245, src: null, top: 0.6 };
     publish() {
       const c = this.clip;
       const m = c ? (this.marks[c.clip] || []) : [];
+      if (!window.rcSource) window.rcSource = { clip: null, inPoint: null, outPoint: null, duration: 0 };
       window.rcSource.clip = c ? c.clip : null;
+      window.rcSource.auto = !!(c && this.auto);
       window.rcSource.inPoint = c && Number.isFinite(m[0]) ? m[0] : null;
       window.rcSource.outPoint = c && Number.isFinite(m[1]) ? m[1] : null;
       window.rcSource.duration = c ? Number(c.duration) || 0 : 0;
@@ -530,6 +604,9 @@ const DEFAULTS = { proj: 0.2, insp: 0.245, src: null, top: 0.6 };
       const same = this.clip && this.clip.clip === c.clip;
       const keepAt = same || opts.keepTime ? v.currentTime : null;
       this.clip = c;
+      // opened by the board on landing (so there is a picture), not by the editor: a
+      // keep the editor then selects in the bin is what `,` takes instead
+      this.auto = !!opts.auto;
       store.set('roughcut.ws.source', c.clip);
       $('#srcTitle .lbl').textContent = `Source: ${c.clip}`;
       $('#srcEmpty').hidden = true;
@@ -585,11 +662,10 @@ const DEFAULTS = { proj: 0.2, insp: 0.245, src: null, top: 0.6 };
       if (typeof window.rcInsertFromSource === 'function') return window.rcInsertFromSource(window.rcSource);
       const [a, b] = this.marksFor(c);
       if (b - a < 0.2) return toastSay('mark an In and an Out first');
-      // the board cuts from clips whose sound has been read (they carry the transcript
-      // the trims snap to); a clip still waiting for that says so rather than half-adds
-      const known = typeof P !== 'undefined' && P && P.clips && P.clips[c.clip];
-      if (!known || typeof window.insertShot !== 'function') {
-        return toastSay(`${c.clip} is still being read — it can go in the sequence once it is indexed`);
+      // any clip goes in at once: one the index has not heard yet goes in with an empty
+      // "why", and its trims snap to the transcript once that arrives (verdict 2, punch 7)
+      if (!ensureClip(c.clip) || typeof window.insertShot !== 'function') {
+        return toastSay('the sequence is still loading — try again in a moment');
       }
       window.insertShot({ clip: c.clip, start: a, end: b, why: '' });
       if (typeof window.save === 'function') window.save();
@@ -750,6 +826,15 @@ const DEFAULTS = { proj: 0.2, insp: 0.245, src: null, top: 0.6 };
     initSplitters();
     source.init();
     initProject();
+    // the editor picked a keep or a Find match while the Source showed only the clip the
+    // board opened on landing: `,` / `.` take the pick (timeline-keys' sourceShot order)
+    document.addEventListener('click', (e) => {
+      if (!source.auto || !window.rcSource || !e.target.closest) return;
+      if (!e.target.closest('#library .keep, #findResults .cand')) return;
+      source.auto = false;
+      window.rcSource.clip = null;
+      window.rcSource.auto = false;
+    }, true);
 
     // each group's tab strip; each group opens on the tab it was left on
     $$('.ws-tabs').forEach((tabs) => tabs.addEventListener('click', (e) => {
