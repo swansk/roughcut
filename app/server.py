@@ -70,6 +70,7 @@ from roughcut import (config, dictate, edits, effects, events, find, fx, inferen
 from roughcut import junk as junkmod  # noqa: E402
 from roughcut import flow as flowmod  # noqa: E402
 from roughcut import deep as deepmod  # noqa: E402
+from roughcut import firstpass as fpmod  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent / "research" / "tools"
@@ -809,6 +810,7 @@ async def api_save(request: Request) -> JSONResponse:
     edl = read_edl()
     edl["story"] = body.get("story", edl.get("story", ""))
     clean = clean_segments(body["segments"])
+    note_accept(edl, clean)              # provenance: before the segments are replaced
     edl["segments"] = clean
     # Music is the same `effects_music` key assemble.py reads, validated the way a
     # segment is: an asset that is not in the library, or a gain outside range, is a 400
@@ -926,7 +928,13 @@ def _ask_watcher(entry: progress.Job, shots: int):
 
 def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
              target: tuple[float, float], ranked: list[dict] | None = None,
-             focus: int | None = None) -> None:
+             focus: int | None = None, *, locked: list[str] | None = None,
+             finish: Callable[[dict], dict] | None = None,
+             originate: bool = False) -> None:
+    """The Ask's work, on its thread. The first pass (`/api/firstpass`) runs the same
+    call: `locked` marks the shots a re-run must return exactly, `finish` turns the plan
+    into the re-run's proposal (locks enforced, the per-shot diff) before it is checked
+    and saved, and `originate` asks for a first cut even when there is one."""
     entry = ASKS[job]
     # Step one is not the edit, it is the estimate. Karl: *"the first step the AI must
     # complete is an estimate of how long it will take to apply the changes. This will
@@ -971,13 +979,14 @@ def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
                              "with": len(plan["segments"])}
             plan["segments"] = (segments[:focus] + plan["segments"]
                                 + segments[focus + 1:])
-        elif segments:
+        elif segments and not originate:
             # The bin rides along: context for a revision, the contract for a first cut
             # (heroes must appear, keeps are bounds) — docs/INTAKE.md I1.1.
             plan = revise.propose(segments=segments, clips=clips, story=story,
                                   note=note, target=target, events=ranked,
                                   selects=read_edl().get("selects"),
-                                  on_partial=watcher, colour=grade)
+                                  on_partial=watcher, colour=grade,
+                                  **({"locked": set(locked)} if locked else {}))
         else:
             plan = revise.originate(clips=clips, story=story, note=note,
                                     target=target, events=ranked,
@@ -999,6 +1008,11 @@ def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
         entry.finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
         return
     entry.complete("notes", detail="snapping cut points to speech")
+    if finish is not None:
+        plan = finish(plan)
+    # The notes are held to the diff before anyone reads them (judge verdict 1, punch
+    # 10): a "kept … unchanged" about a shot whose range moved is flagged and corrected.
+    plan = revise.check_notes(plan, segments)
     if plan.get("colour"):
         # The words the proposal panel shows for the grade — computed here, where each
         # shot's resolved balance is known, so "warmer" is said against what the
@@ -1430,6 +1444,16 @@ def looked_at(clip: str) -> dict | None:
             "prompt_version": int(params.get("prompt_version") or 1)}
 
 
+def bin_picks(edl: dict | None = None) -> list[dict]:
+    """Every pick in the bin, verdicts re-attached — /api/picks and the first pass's
+    picks step build them the one way."""
+    payload = project_payload()
+    edl = edl if edl is not None else selects.ensure(read_edl())
+    return picks.build(payload["clips"], payload["events"], themes=edl.get("themes") or [],
+                       story=edl.get("story"), telemetry=bin_telemetry(),
+                       verdicts=edl["floor"]["verdicts"], selects=edl["selects"])
+
+
 @app.get("/api/picks")
 def api_picks(order: str = "rank") -> JSONResponse:
     """Every pick in the bin with stored verdicts re-attached, best first or by clip."""
@@ -1437,13 +1461,10 @@ def api_picks(order: str = "rank") -> JSONResponse:
         raise HTTPException(400, f"unknown order {order!r}")
     # The full project payload, not the Ask's slimmer clip shape: picks need the R8
     # candidates, which the Ask never reads.
-    payload = project_payload()
     edl = selects.ensure(read_edl())
     released = set(released_clips())
     themes = edl.get("themes") or []
-    rows = picks.build(payload["clips"], payload["events"], themes=themes,
-                       story=edl.get("story"), telemetry=bin_telemetry(),
-                       verdicts=edl["floor"]["verdicts"], selects=edl["selects"])
+    rows = bin_picks(edl)
     junk_of = {r["clip"]: r["state"] for r in junk_rows(edl)}
     for p in rows:
         p["released"] = p["clip"] in released
@@ -2148,6 +2169,405 @@ def flowjs() -> Response:
     """The flow bar every screen carries (INTAKE M14)."""
     return Response((HERE / "static" / "flow.js").read_text(encoding="utf-8"),
                     media_type="application/javascript", headers=NO_STORE)
+
+
+# ---------------------------------------------------------------- the first pass (K1)
+#
+# Karl, 2026-10-14: "it is not clear how to re run the first pass." One home for it:
+# `GET /api/firstpass` says where it stands (never run / running {stage, counts} / done
+# {when, what it produced} / stale after edits), what a run would do and what it costs
+# on this backend; `POST /api/firstpass` runs index → picks → a proposed cut as one job,
+# reusing the index job, the picks builder and the Ask's own call. A re-run keeps the
+# editor's hand edits exactly (`roughcut/firstpass.py` holds the rules); its result is
+# an ordinary Ask proposal, so the board's Accept / Discard / Play-it read it as is.
+
+FIRSTPASS: dict[str, dict] = {}
+FIRSTPASS_LOCK = threading.Lock()
+FIRSTPASS_POLL_S = 0.5
+
+
+def firstpass_path() -> Path:
+    return fpmod.record_path(STATE["work"], STATE["footage"].name)
+
+
+def _fp_record() -> dict | None:
+    try:
+        rec = json.loads(firstpass_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return rec if isinstance(rec, dict) else None
+
+
+def _fp_save(rec: dict) -> None:
+    p = firstpass_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(rec, indent=1), encoding="utf-8")
+    tmp.replace(p)
+
+
+def _ask_records(newest: int | None = None) -> list[dict]:
+    d = STATE.get("asks")
+    files = sorted(d.glob("*.json"), key=lambda q: q.stat().st_mtime,
+                   reverse=True) if d and d.is_dir() else []
+    out = []
+    for p in files[:newest] if newest else files:
+        try:
+            rec = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(rec, dict):
+            out.append(rec)
+    return out
+
+
+def ask_plans() -> list[list[dict]]:
+    """The shots of every proposal on disk — what `firstpass.manual_edits` counts as the
+    machine's on a cut that has no base yet."""
+    return [r["plan"]["segments"] for r in _ask_records()
+            if isinstance((r.get("plan") or {}).get("segments"), list)]
+
+
+def note_accept(edl: dict, saved: list[dict]) -> None:
+    """Provenance, on every save (first pass, K1): a save that is the Accept of a waiting
+    proposal makes its shots the machine's — the new base — except the shots it carried
+    over unchanged that were the editor's own (a re-run's locked shots, or a hand-trimmed
+    shot an Ask left alone), which stay the editor's. Any other save needs nothing
+    recorded: `firstpass.manual_edits` diffs the cut against the base. Never fails a
+    save."""
+    try:
+        for rec in _ask_records(newest=3):
+            plan = rec.get("plan") or {}
+            if rec.get("answered") or plan.get("unchanged"):
+                continue
+            if not fpmod.is_accept(saved, plan.get("segments") or []):
+                continue
+            before = {s.get("id"): s for s in fpmod._segments(edl) if s.get("id")}
+            hand = {}
+            for row in fpmod.manual_edits(edl, ask_plans()):
+                sid = row.get("id")
+                now = next((s for s in saved if s.get("id") == sid), None)
+                if sid in before and now is not None and fpmod._same(now, before[sid]):
+                    hand[sid] = row["how"]
+            fpmod.record_base(edl, saved, job=rec.get("job"), hand=hand)
+            return
+    except Exception as exc:  # noqa: BLE001 — provenance must never cost a save
+        print(f"  !! provenance: {exc}", flush=True)
+
+
+def _fp_live() -> dict | None:
+    return next((x for x in FIRSTPASS.values() if x["state"] == "running"), None)
+
+
+def _fp_index_counts(stage: dict) -> dict:
+    c = stage.get("counts") or {}
+    out = {k: int(c.get(k) or 0) for k in ("clips", "listened", "looked", "look_need",
+                                            "close", "close_need", "proxied")}
+    # computed from the counts beside it, so never ahead of them (verdict 1's 87%)
+    out["pct"] = int(flowmod.honest_pct(out) * 100)
+    out["words"] = flowmod.index_counts_words(out)
+    return out
+
+
+def firstpass_plan(mode: str | None = None, keep=None, *, facts: dict | None = None,
+                   edl: dict | None = None, manual: list[dict] | None = None) -> dict:
+    """What a run would do, and its cost on this backend: the steps with their own
+    prices, the shots a re-run keeps (locked) and the ones it may replace. Reads files;
+    never calls a model. Raises ValueError on a bad `mode` or `keep`."""
+    edl = edl if edl is not None else read_edl()
+    ensure_segment_ids(edl)
+    segments = fpmod._segments(edl)
+    manual = manual if manual is not None else fpmod.manual_edits(edl, ask_plans())
+    if mode is None:
+        mode = "rerun" if segments or _fp_record() else "run"
+    if mode not in fpmod.MODES:
+        raise ValueError(f"mode must be one of {list(fpmod.MODES)}")
+    locked = fpmod.resolve_keep(keep, segments, manual, mode)
+    facts = facts if facts is not None else flow_facts()
+    stages = {s["key"]: s for s in flowmod.compute(facts)["stages"]}
+    ix = stages["index"]
+    counts = _fp_index_counts(ix)
+    index_needed = ix["state"] != "done" or counts["proxied"] < counts["clips"]
+    ix_usd = float(facts["index"].get("pending_usd") or 0.0) if index_needed else 0.0
+    n = counts["clips"]
+    if index_needed:
+        todo = [f"hear {n - counts['listened']} of {n} clips" if counts["listened"] < n else "",
+                f"look at {counts['look_need'] - counts['looked']}"
+                if counts["looked"] < counts["look_need"] else "",
+                f"look closely at {counts['close_need'] - counts['close']}"
+                if counts["close"] < counts["close_need"] else "",
+                f"build {n - counts['proxied']} previews" if counts["proxied"] < n else ""]
+        will_ix = "Index the rest: " + ", ".join(t for t in todo if t) + "." \
+            if any(todo) else "Finish the index."
+    else:
+        will_ix = "Nothing — every clip is heard, looked at and previewed."
+    lock_set = set(locked)
+    keep_rows = [r for r in manual if r.get("id") in lock_set]
+    for i, s in enumerate(segments):
+        if s.get("id") in lock_set and not any(r["id"] == s.get("id") for r in keep_rows):
+            keep_rows.append(fpmod._row(s, i, []) | {"words": "kept on request"})
+    keep_rows.sort(key=lambda r: r["pos"])
+    replace_rows = [fpmod._row(s, i, []) | {"words": "may be replaced"}
+                    for i, s in enumerate(segments) if s.get("id") not in lock_set]
+    originate = not segments or (mode == "run" and not locked)
+    cut_usd = float(ask_price("first" if originate else "full")["usd"])
+    if not segments:
+        will_cut = "Propose a first rough cut — nothing changes until you accept it."
+    elif originate:
+        will_cut = (f"Propose a new cut from scratch; it would replace all "
+                    f"{len(segments)} shots of this cut if you accept it.")
+    else:
+        will_cut = (f"Propose a new cut that keeps {len(keep_rows)} of your shots exactly "
+                    f"and may replace the other {len(replace_rows)} — nothing changes "
+                    "until you accept it.")
+    steps = [
+        {"key": "index", "name": "Index", "will": will_ix, "needed": index_needed,
+         "counts": counts, "cost": fpmod.cost_words(ix_usd)},
+        {"key": "picks", "name": "Picks", "needed": True,
+         "will": "Rank what the index found into picks (free, on this machine).",
+         "cost": fpmod.cost_words(0.0)},
+        {"key": "cut", "name": "Rough cut", "needed": True, "will": will_cut,
+         "originate": originate, "cost": fpmod.cost_words(cut_usd)},
+    ]
+    return {"mode": mode, "steps": steps, "keep": keep_rows, "replace": replace_rows,
+            "locked": locked, "cost": fpmod.cost_words(ix_usd + cut_usd),
+            "produces": "a proposed rough cut you accept, discard or adjust"}
+
+
+def firstpass_state() -> dict:
+    """The first pass as the UI shows it — see `GET /api/firstpass`."""
+    edl = read_edl()
+    ensure_segment_ids(edl)
+    facts = flow_facts()
+    manual = fpmod.manual_edits(edl, ask_plans())
+    rec = _fp_record()
+    live = _fp_live()
+    out: dict = {"manual_edits": manual, "last": rec, **config.cost_terms()}
+    try:
+        out["would"] = firstpass_plan(None, None, facts=facts, edl=edl, manual=manual)
+    except ValueError as exc:                     # a cut with an id the keep cannot name
+        out["would"] = {"error": str(exc)}
+    out["label"] = "Re-run first pass" if rec else "Run first pass"
+    if live:
+        stage = live["stage"]
+        stages = {s["key"]: s for s in flowmod.compute(facts)["stages"]}
+        counts: dict = {"index": _fp_index_counts(stages["index"])}
+        if live.get("picks") is not None:
+            counts["picks"] = {"picks": live["picks"]}
+        ask = ASKS.get(live.get("ask") or "")
+        if ask is not None:
+            snap = ask.snapshot()
+            counts["cut"] = {"detail": snap.get("detail") or "", "state": snap.get("state")}
+        out.update(state="running", job=live["id"], stage=stage, mode=live["mode"],
+                   steps=live["steps"], counts=counts, started=live["started"])
+        return out
+    if rec is None:
+        out["state"] = "never-run"
+        return out
+    if rec.get("state") == "failed":
+        out.update(state="failed", error=rec.get("error"), when=rec.get("finished"))
+        return out
+    if rec.get("state") == "running":             # a run the process lost (a restart)
+        out.update(state="failed", error="the last run was interrupted (the server "
+                   "restarted) — run it again", when=rec.get("started"))
+        return out
+    prop = rec.get("proposal") or {}
+    waiting = ask_pending(STATE["edl"].stat().st_mtime)
+    pending = bool(prop.get("job")) and bool(waiting) and waiting.get("job") == prop.get("job")
+    answered = None
+    for r in _ask_records():
+        if r.get("job") == prop.get("job"):
+            answered = (r.get("answered") or {}).get("answer")
+            break
+    # Edits *since the run*: a hand-edited shot the run already knew (and a re-run
+    # locked) is not news; one trimmed, razored, moved or added after it is.
+    then = {(r.get("id"), r.get("clip"), r.get("in"), r.get("out"))
+            for r in rec.get("manual") or []}
+    since = [r for r in manual if (r.get("id"), r.get("clip"), r.get("in"), r.get("out"))
+             not in then]
+    stale = []
+    if since and not pending:
+        stale.append(f"{len(since)} shot{'s' if len(since) != 1 else ''} edited by hand "
+                     "since")
+    new_clips = int(facts.get("clips") or 0) - int(rec.get("clips") or 0)
+    if new_clips > 0:
+        stale.append(f"{new_clips} new clip{'s' if new_clips != 1 else ''} in the folder")
+    out.update(state="stale-after-edits" if (since and not pending) else "done",
+               when=rec.get("finished"), produced=rec.get("produced") or {},
+               proposal={**prop, "pending": pending, "answer": answered}, stale=stale,
+               edited_since=since)
+    return out
+
+
+@app.get("/api/firstpass")
+def api_firstpass() -> JSONResponse:
+    """Where the first pass stands, what a run would do, and what it costs.
+
+    `state`: `never-run` · `running` (with `stage` index|picks|cut, `steps`, `counts` —
+    the index's clips heard / looked at / previewed and a % computed from them only) ·
+    `done` (`when`, `produced`, `proposal` {job, pending, answer}) · `stale-after-edits`
+    (done, and the cut has shots edited by hand since — `stale` says what) · `failed`
+    (`error`). Always: `label` (Run / Re-run first pass), `would` (the steps a run takes
+    now with their `cost` words, `keep` — the shots a re-run locks — and `replace`),
+    `manual_edits` (the editor's own shots and how), `backend` / `charged`."""
+    return JSONResponse(firstpass_state())
+
+
+@app.post("/api/firstpass")
+async def api_firstpass_post(request: Request) -> JSONResponse:
+    """Run (or re-run) the first pass: index what isn't done → picks → a proposed cut,
+    as one job. Body: `mode` "run" | "rerun" (default: rerun when there is a cut),
+    `keep` [shot ids] | "manual" | "none" (default on a re-run: "manual" — every shot
+    trimmed, razored, moved or added by hand), `note` (optional direction). Returns
+    `{job, mode, keep, would}`; the proposal lands as an Ask record (`/api/asks/latest`,
+    `/api/ask/{job}`) whose plan carries `firstpass.diff` — per shot kept / replaced /
+    new — and never writes the cut."""
+    body = await request.json() if int(request.headers.get("content-length") or 0) else {}
+    if not isinstance(body, dict):
+        raise HTTPException(400, "expected a JSON object")
+    if not footage_clips():
+        raise HTTPException(400, "no footage in this folder — nothing to pass over")
+    with FIRSTPASS_LOCK:
+        if _fp_live():
+            raise HTTPException(409, "the first pass is already running")
+        try:
+            would = firstpass_plan(body.get("mode"), body.get("keep"))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        refuse_past_cap("the first pass", float(would["cost"]["usd"]))
+        job = uuid.uuid4().hex[:8]
+        FIRSTPASS[job] = {
+            "id": job, "state": "running", "mode": would["mode"], "keep": would["locked"],
+            "note": str(body.get("note") or "").strip()[:600], "stage": "index",
+            "started": time.time(), "ask": None, "picks": None,
+            "steps": {k: {"state": "pending"} for k in ("index", "picks", "cut")}}
+    threading.Thread(target=_firstpass_job, args=(job,), daemon=True).start()
+    return JSONResponse({"job": job, "mode": would["mode"], "keep": would["locked"],
+                         "would": would})
+
+
+def firstpass_index() -> str | None:
+    """The index step: join an index already running, or run one on this thread.
+    Returns the index job id, None when the index had nothing to do."""
+    running = next((x for x in INDEXES.values() if x["state"] not in progress.TERMINAL), None)
+    if running is not None:
+        while running["state"] not in progress.TERMINAL:
+            time.sleep(FIRSTPASS_POLL_S)
+        return running["id"]
+    job = index_entry()
+    try:
+        _index_job(job, "")
+    except Exception as exc:  # noqa: BLE001 — the index job must end, whatever happened
+        INDEXES[job].finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
+        raise
+    return job
+
+
+def _fp_step(fp: dict, key: str, state: str, **extra) -> None:
+    fp["steps"][key] = {"state": state, **extra}
+    if state == "running":
+        fp["stage"] = key
+
+
+def _firstpass_job(job: str) -> None:
+    fp = FIRSTPASS[job]
+    rec = {"job": job, "mode": fp["mode"], "keep": fp["keep"], "state": "running",
+           "started": fp["started"], "clips": len(footage_clips()),
+           "cut": cut_name_of(read_edl(), STATE["edl"])}
+    try:
+        rec["manual"] = [{k: r[k] for k in ("id", "clip", "in", "out")}
+                         for r in fpmod.manual_edits(read_edl(), ask_plans())]
+    except (OSError, ValueError, KeyError):
+        rec["manual"] = []
+    _fp_save(rec)
+    try:
+        # 1 · index — only what isn't done
+        _fp_step(fp, "index", "running")
+        stages = {s["key"]: s for s in flowmod.compute(flow_facts())["stages"]}
+        counts = _fp_index_counts(stages["index"])
+        if stages["index"]["state"] != "done" or counts["proxied"] < counts["clips"]:
+            ix_job = firstpass_index()
+            stages = {s["key"]: s for s in flowmod.compute(flow_facts())["stages"]}
+            counts = _fp_index_counts(stages["index"])
+            if ix_job and INDEXES.get(ix_job, {}).get("state") == "failed":
+                raise RuntimeError(f"the index failed: {INDEXES[ix_job].get('detail')}")
+            _fp_step(fp, "index", "done", job=ix_job, counts=counts)
+        else:
+            _fp_step(fp, "index", "skipped", why="already complete", counts=counts)
+        if not counts["listened"]:
+            raise RuntimeError("no clip has been heard, so there is nothing to cut from")
+
+        # 2 · picks — the ranked events, then the floor's picks from them
+        _fp_step(fp, "picks", "running")
+        try:
+            if STATE.get("visual") is not None and STATE["visual"].is_dir():
+                rebuild_events()
+        except (OSError, ValueError) as exc:
+            print(f"  !! first pass: events not rebuilt: {exc}", flush=True)
+        rows = bin_picks()
+        fp["picks"] = len(rows)
+        _fp_step(fp, "picks", "done", picks=len(rows))
+
+        # 3 · the proposed cut — the Ask's own call, locks enforced, notes checked
+        _fp_step(fp, "cut", "running")
+        clips, payload = _ask_clips(None, drop_junk=True)
+        if not clips:
+            raise RuntimeError("no analysed clips to cut from")
+        edl = read_edl()
+        ensure_segment_ids(edl)
+        segments = fpmod._segments(edl)
+        manual = fpmod.manual_edits(edl, ask_plans())
+        locked = [k for k in fp["keep"] if any(s.get("id") == k for s in segments)]
+        originate = not segments or (fp["mode"] == "run" and not locked)
+        note = fp["note"] if originate else fpmod.plan_note(len(locked), fp["mode"],
+                                                              fp["note"])
+
+        def finish(plan: dict) -> dict:
+            plan = dict(plan)
+            if segments and locked:
+                plan["segments"] = fpmod.enforce_locks(plan["segments"], segments, locked)
+            plan["firstpass"] = {
+                "job": job, "mode": fp["mode"], "keep": locked,
+                "manual": [r for r in manual if r.get("id") in set(locked)],
+                "diff": fpmod.rerun_diff(segments, plan["segments"], locked, manual)}
+            return plan
+
+        ask = uuid.uuid4().hex[:8]
+        ASKS[ask] = progress.Job(
+            "ask", "First pass — proposing the cut" if originate
+            else "First pass — re-cutting around your edits", id=ask, state="estimating",
+            plan=None, code=0, detail="estimating how long this will take",
+            ask_kind="first pass", estimate=None, firstpass=job)
+        fp["ask"] = ask
+        target = payload["target"]
+        _ask_job(ask, segments, clips, payload.get("story", ""), note,
+                 (float(target[0]), float(target[1])), payload["events"], None,
+                 locked=locked, finish=finish, originate=originate)
+        entry = ASKS[ask]
+        if entry["state"] != "done":
+            raise RuntimeError(f"the cut failed: {entry.get('detail')}")
+        plan = entry["plan"] or {}
+        diff = (plan.get("firstpass") or {}).get("diff") or {}
+        _fp_step(fp, "cut", "done", ask=ask, shots=len(plan.get("segments") or []),
+                 counts=diff.get("counts"))
+        rec.update(state="done", finished=time.time(),
+                   proposal={"job": ask, "shots": len(plan.get("segments") or []),
+                             "counts": diff.get("counts"), "sentence": diff.get("sentence"),
+                             "notes_ok": (plan.get("notes_check") or {}).get("ok", True)},
+                   produced={"index": fp["steps"]["index"].get("counts"),
+                             "picks": fp["picks"],
+                             "cut": {"shots": len(plan.get("segments") or []),
+                                     "length_s": round(sum(edits.dur(s) for s in
+                                                           plan.get("segments") or []), 2)}})
+        fp["state"] = "done"
+    except Exception as exc:  # noqa: BLE001 — deliberately total: the job must end
+        step = fp.get("stage") or "index"
+        _fp_step(fp, step, "failed", error=str(exc)[:300])
+        rec.update(state="failed", finished=time.time(), error=str(exc)[:300], step=step)
+        fp["state"] = "failed"
+        fp["error"] = str(exc)[:300]
+    finally:
+        _fp_save(rec)
 
 
 # ---------------------------------------------------------------- analysis
@@ -3742,6 +4162,13 @@ async def api_index(request: Request) -> JSONResponse:
         load_journal().resume_priced()
     elif body.get("pause_priced"):
         load_journal().pause_priced("paused by the editor")
+    job = index_entry()
+    threading.Thread(target=_index_job, args=(job, order), daemon=True).start()
+    return JSONResponse({"job": job})
+
+
+def index_entry() -> str:
+    """A new index job in INDEXES, the way /api/index and the first pass start one."""
     job = uuid.uuid4().hex[:8]
     INDEXES[job] = progress.Job(
         "index", "Indexing the footage", id=job, state="running", journal=None,
@@ -3749,8 +4176,7 @@ async def api_index(request: Request) -> JSONResponse:
     INDEXES[job].set_estimate(
         60.0, [progress.milestone("index", "indexing, clip by clip", 1.0)],
         source="measured")
-    threading.Thread(target=_index_job, args=(job, order), daemon=True).start()
-    return JSONResponse({"job": job})
+    return job
 
 
 @app.get("/api/index")
