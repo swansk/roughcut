@@ -124,6 +124,36 @@ def is_accept(saved: list[dict], plan_segments: list[dict]) -> bool:
         _same(a, b, speed=False) for a, b in zip(saved, plan))
 
 
+def plan_changes(plan: dict) -> list[dict]:
+    """The shots a proposal changes or adds (not the ones it keeps as they are), by
+    the diff the server stored on it: the first pass's own, else the notes check's."""
+    segs = [x for x in plan.get("segments") or [] if isinstance(x, dict) and "in" in x]
+    diff = ((plan.get("firstpass") or {}).get("diff") or plan.get("diff") or {})
+    rows = diff.get("shots") or []
+    if len(rows) != len(segs):                  # no usable diff: every shot is the plan's
+        return segs
+    return [x for x, r in zip(segs, rows) if r.get("status") not in ("kept",)]
+
+
+def partial_hand(saved: list[dict], plan: dict, prior: dict[str, list[str]]) -> dict:
+    """A partial Accept (the editor took some of a proposal's shots — verdict 3 punch 7):
+    which shots of the cut it saved stay the editor's own. A shot the proposal changed
+    or added, and that the editor accepted, is the machine's; every other shot — one
+    the proposal kept as it was, a change the editor rejected (the shot stays as it
+    was), a removal the editor refused — keeps the provenance it had (`prior`, by id:
+    the hand edits as they stood)."""
+    changes = plan_changes(plan)
+    hand = {}
+    for s in saved:
+        sid = s.get("id")
+        if not sid or sid not in prior:
+            continue
+        if any(_same(s, c, speed=False) for c in changes):
+            continue                            # accepted from the proposal
+        hand[sid] = list(prior[sid])
+    return hand
+
+
 def _lcs(a: list[str], b: list[str]) -> set[str]:
     """The ids of a longest common subsequence of two id orders."""
     n, m = len(a), len(b)

@@ -2342,9 +2342,14 @@ async def api_asks_answer(request: Request) -> JSONResponse:
         return JSONResponse({"ok": True, "job": None})
     rec = json.loads(files[0].read_text(encoding="utf-8"))
     rec["answered"] = {"answer": answer, "at": time.time()}
+    partial = body.get("partial")
+    if answer == "accept" and isinstance(partial, dict):
+        rec["answered"]["partial"] = partial      # which shots the Accept took (PICKS)
     tmp = files[0].with_name(files[0].name + ".tmp")
     tmp.write_text(json.dumps(rec, indent=1), encoding="utf-8")
     tmp.replace(files[0])
+    if rec["answered"].get("partial"):
+        note_partial_accept(rec)                  # provenance: the save may have landed
     return JSONResponse({"ok": True, "job": rec.get("job")})
 
 
@@ -2431,25 +2436,57 @@ def note_accept(edl: dict, saved: list[dict], colour=None) -> None:
             if answer == "accept" and any(b.get("job") == rec.get("job")
                                           for b in fpmod.bases(edl)[:1]):
                 return                        # recorded already
-            if not fpmod.is_accept(saved, plan.get("segments") or []):
+            partial = (rec.get("answered") or {}).get("partial") if answer == "accept" else None
+            if not partial and not fpmod.is_accept(saved, plan.get("segments") or []):
                 continue
-            before = {s.get("id"): s for s in fpmod._segments(edl) if s.get("id")}
-            hand = {}
-            for row in fpmod.manual_edits(edl, ask_plans()):
-                sid = row.get("id")
-                now = next((s for s in saved if s.get("id") == sid), None)
-                if sid in before and now is not None and fpmod._same(now, before[sid]):
-                    hand[sid] = row["how"]
             grade = edl.get("colour")
             if colour is not None:
                 try:
                     grade = colourmod.validate_colour(colour, looks_library())
                 except (ValueError, TypeError):
                     pass
+            if partial:
+                # the answer landed first: this save is the partial Accept
+                prior = {r["id"]: r["how"] for r in fpmod.manual_edits(edl, ask_plans())
+                         if r.get("id")}
+                hand = fpmod.partial_hand(saved, plan, prior)
+            else:
+                before = {s.get("id"): s for s in fpmod._segments(edl) if s.get("id")}
+                hand = {}
+                for row in fpmod.manual_edits(edl, ask_plans()):
+                    sid = row.get("id")
+                    now = next((s for s in saved if s.get("id") == sid), None)
+                    if sid in before and now is not None and fpmod._same(now, before[sid]):
+                        hand[sid] = row["how"]
             fpmod.record_base(edl, saved, job=rec.get("job"), hand=hand, colour=grade or {})
             return
     except Exception as exc:  # noqa: BLE001 — provenance must never cost a save
         print(f"  !! provenance: {exc}", flush=True)
+
+
+def note_partial_accept(rec: dict) -> None:
+    """Provenance for a partial Accept whose answer (`partial`: which shots the editor
+    took) lands after its save: the cut on disk is the accepted one, so the base is
+    recorded here — the shots taken from the proposal are the machine's, the others
+    keep the provenance they had. A save that has not landed yet (no accepted change
+    on disk) leaves it to `note_accept`. Never fails the answer."""
+    try:
+        plan = rec.get("plan") or {}
+        edl = read_edl()
+        ensure_segment_ids(edl)
+        if any(b.get("job") == rec.get("job") for b in fpmod.bases(edl)[:1]):
+            return
+        saved = fpmod._segments(edl)
+        changes = fpmod.plan_changes(plan)
+        took = sum(1 for s in saved if any(fpmod._same(s, c, speed=False) for c in changes))
+        if changes and not took and int((rec["answered"]["partial"] or {}).get("accepted") or 0):
+            return                                    # the save is still on its way
+        prior = {r["id"]: r["how"] for r in fpmod.manual_edits(edl, ask_plans()) if r.get("id")}
+        fpmod.record_base(edl, saved, job=rec.get("job"),
+                          hand=fpmod.partial_hand(saved, plan, prior))
+        write_edl(edl)
+    except Exception as exc:  # noqa: BLE001 — provenance must never cost an answer
+        print(f"  !! provenance (partial accept): {exc}", flush=True)
 
 
 def _fp_live() -> dict | None:

@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Fixed
+- **A partial Accept records provenance (lane PASS, after PICKS merged).** Accepting some of a proposal's shots saved a cut that was not the plan verbatim, so `is_accept` failed, no base was recorded, and a later re-run counted the accepted AI shots as the editor's own hand edits. `/api/asks/answer` now keeps the board's `partial` ({accepted, of, rejected, kept}) on the record, and whichever of the save and the answer lands second records the base: shots the editor took from the proposal (changed or new in its diff) are the machine's; every other shot (kept by the proposal, a rejected change, a refused removal) keeps the provenance it had (`firstpass.partial_hand`, `plan_changes`). `test_firstpass.py` +2 (2 of 5 accepted, in both arrival orders: the re-run's keep list is exactly the prior hand edits).
+
 ### Changed
 - **The first pass is the one first action on every bin without a cut, indexed or not (lane PASS, the lead's decision after HEADER merged).** `flow.js` `passCovers` also yields Next to the first pass when Next's stage is the cut, the cut stage is `ready` and the pass has never run, so the header's "Run first pass" is the screen's one blue button there too. `test_firstpass_ui.py`'s fresh-bin test now asserts the button IS `is-next` (and the only one) and `flowBar.yielded()`; `test_ui_flow.py`'s empty-timeline test waits on `flowBar.yielded()` instead of a "first cut" chip and still makes and accepts its cut. The first-pass label's `title` copy and the CSS comment about ellipsizing are gone (the header never ellipsizes now).
 

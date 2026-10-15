@@ -658,3 +658,53 @@ def test_resume_words():
     assert firstpass.resume_words({**c, "listened": 3}) == \
         "hears 9 more, looks at 11 more, then picks, then the cut"
     assert firstpass.resume_words({**c, "looked": 12}, "cut").startswith("writes the cut again")
+
+
+@pytest.mark.parametrize("order", ["save-then-answer", "answer-then-save"])
+def test_a_partial_accept_records_a_base_and_a_rerun_keeps_only_the_hand_edits(fp, order):
+    """PICKS (verdict 3 punch 7): the editor can take some of a proposal's shots. A
+    partial Accept is not the plan verbatim, so no base was recorded and a later
+    re-run counted the accepted AI shots as the editor's own. Now the accepted shots
+    are the machine's, the rest keep the provenance they had: 2 of 5 accepted, and
+    the re-run's keep list is exactly the prior hand edits."""
+    import server
+
+    a, b = _run_and_accept(fp)
+    # hand edits: A trimmed, three shots added by hand
+    a_t = dict(a, out=round(a["out"] - 0.25, 2))
+    adds = [{"id": f"gh{i}", "clip": "CLIP_C.MP4", "in": 0.5 + i, "out": 1.0 + i,
+             "why": "by hand"} for i in range(3)]
+    cut = [a_t, b] + adds
+    assert fp.put("/api/project", json={"segments": cut, "story": ""}).status_code == 200
+    prior = {m["id"]: m["how"] for m in fp.get("/api/firstpass").json()["manual_edits"]}
+    assert prior == {a_t["id"]: ["trim"], "gh0": ["add"], "gh1": ["add"], "gh2": ["add"]}
+
+    # an Ask proposal of 5 shots: A kept (status kept), B, gh0 and gh1 changed, one new
+    segs = _segs(fp)
+    plan_segs = [dict(segs[0]),
+                 dict(segs[1], **{"in": 0.3, "out": 1.9}),
+                 dict(segs[2], out=1.3),
+                 dict(segs[3], out=2.3),
+                 {"clip": "CLIP_A.MP4", "in": 3.0, "out": 4.0, "why": "new"}]
+    plan = {"segments": plan_segs, "notes": "five", "diff": revise.shot_diff(segs, plan_segs)}
+    rec = {"job": "partial1", "created": time.time(), "note": "", "story": "", "plan": plan}
+    time.sleep(0.05)
+    (server.STATE["asks"] / "partial1.json").write_text(json.dumps(rec), encoding="utf-8")
+    # the editor accepts B's change and the new shot; rejects gh0's and gh1's changes
+    new_shot = dict(plan_segs[4], id="gnew")
+    saved = [dict(segs[0]), plan_segs[1], dict(segs[2]), dict(segs[3]), dict(segs[4]),
+             new_shot]
+    answer = {"answer": "accept", "partial": {"accepted": 2, "of": 5, "rejected": [2, 3],
+                                              "kept": []}}
+    if order == "save-then-answer":
+        assert fp.put("/api/project", json={"segments": saved, "story": ""}).status_code == 200
+        assert fp.post("/api/asks/answer", json=answer).status_code == 200
+    else:
+        assert fp.post("/api/asks/answer", json=answer).status_code == 200
+        assert fp.put("/api/project", json={"segments": saved, "story": ""}).status_code == 200
+    edl = json.loads(server.STATE["edl"].read_text(encoding="utf-8"))
+    assert firstpass.bases(edl)[0]["job"] == "partial1", "a base for the partial accept"
+    s = fp.get("/api/firstpass").json()
+    assert {m["id"]: m["how"] for m in s["manual_edits"]} == prior
+    assert sorted(s["would"]["locked"]) == sorted(prior), s["would"]["locked"]
+    assert b["id"] not in s["would"]["locked"] and "gnew" not in s["would"]["locked"]
