@@ -1067,7 +1067,9 @@ class Journey:
             pg.click("[data-testid=export-go]")
             self.sel("[data-testid=export-progress]", "Export showed no progress bar")
             self.until("(() => { const b = document.querySelector('[data-testid=export-progress]');"
+                       " const n = document.querySelector('#exNote');"
                        " return !!document.querySelector('[data-testid=export-failed]')"
+                       " || !!(n && /failed/i.test(n.textContent))"
                        " || (b && Number(b.getAttribute('aria-valuenow')) >= 100); })()",
                        "the export never reached 100 %", 300000)
             failed = pg.locator("[data-testid=export-failed]")
