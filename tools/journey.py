@@ -1233,7 +1233,8 @@ def main() -> int:
         try:
             import httpx
             r = httpx.get(j.base + "/api/debug/slow", timeout=10)
-            result["slow"] = r.json() if r.status_code == 200 else None
+            result["slow"] = r.json() if r.status_code == 200 else \
+                {"error": f"{r.status_code}: {r.text[:200]}"}
         except Exception as e:  # noqa: BLE001 — a server that predates the timing
             result["slow"] = {"error": str(e)[:200]}
     if srv is not None:
