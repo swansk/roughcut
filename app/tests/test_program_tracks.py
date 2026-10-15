@@ -277,7 +277,7 @@ def test_v2_plays_with_the_monitor(page):
 # ------------------------------------------------------------------ A1 offset
 
 A1 = """(() => { const a = document.querySelector('#pvA1'), v = liveVideo();
-  return {t: a.currentTime, paused: a.paused, src: a.dataset.src, vol: a.volume,
+  return {t: a.currentTime, paused: a.paused, src: a.dataset.src, vol: (window.rcAudio && rcAudio.levelOf) ? rcAudio.levelOf(a) : a.volume,  // the heard level (meters.js owns it)
           vt: v.currentTime, vmuted: v.muted, vsrc: v.dataset.src}; })()"""
 
 

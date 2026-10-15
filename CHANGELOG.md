@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Fixed
+- **One owner for every Program element's level, and saves that keep the frame grid** (the lead's integration of TLAUDIO's requests). Effect Controls' Volume and the moved-sound element `#pvA1` now set their level through `rcAudio.setLevel` (meters.js) instead of writing `volume`, so a shot's Volume and A1's gain multiply instead of the last writer winning, and both can go above 0 dB through the gain node. `roughcut/tracks.py` keeps A1 offsets, V2 in/out/at, markers and the sequence In/Out to 4 places (was 2), so frame-grid values at 29.97 survive a save. The filmstrip's tiles are retried after a failed load like the posters. `test_program_tracks.py` reads the heard level (`rcAudio.levelOf`), not the element's raw `volume`. test_tracks + effect_controls + program_tracks + timeline_audio green.
+
 ### Docs
 - **LOOP.md: wave 3 progress and the lead's wave-4 queue** (single AAC encode, client cut-sameness on controls, first-open size calibration, versioned poster URLs, V2 grade, overlapping moved sounds, the journey's review-copy warning).
 

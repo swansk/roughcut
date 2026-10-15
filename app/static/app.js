@@ -1352,7 +1352,7 @@ function progTrack(name) {
 
 function progA1Level() {
   if (!window.tl || typeof tl.audible !== 'function' || !tl.audible('A1')) return 0;
-  return Math.min(1, Math.pow(10, (Number(progTrack('A1').gain_db) || 0) / 20));
+  return Math.pow(10, (Number(progTrack('A1').gain_db) || 0) / 20);   // > 1 is fine: rcAudio's gain node
 }
 
 /* A shot whose sound sits away from its picture: its picture element is muted. */
@@ -1461,7 +1461,8 @@ function programSync(filmT) {
   const hit = proposal ? null : a1At(t);
   if (hit) {
     const lvl = progA1Level();
-    if (Math.abs(prog.a1.volume - lvl) > 1e-3) prog.a1.volume = lvl;
+    if (window.rcAudio) rcAudio.setLevel(prog.a1, 'track', lvl);
+    else if (Math.abs(prog.a1.volume - Math.min(1, lvl)) > 1e-3) prog.a1.volume = Math.min(1, lvl);
     progFollow(prog.a1, hit.seg.clip, hit.clipT, speedOf(hit.seg), play, 0.12);
   } else progHide(prog.a1);
 }
@@ -3596,7 +3597,7 @@ function waitForProxies() {
     clearInterval(iv);
     P.proxies_ready = true;
     let fixed = 0;
-    document.querySelectorAll('#inspector img.poster, #tl .blk img.poster').forEach((img) => {
+    document.querySelectorAll('#inspector img.poster, #tl .blk img.poster, #tl .blk img.ftile').forEach((img) => {
       const src = img.getAttribute('src');
       if (!src || img.naturalWidth > 0) return;
       img.src = src;                       // same URL, fresh load attempt

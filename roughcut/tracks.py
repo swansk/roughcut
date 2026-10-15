@@ -127,7 +127,7 @@ def validate_link(seg_in: dict, seg_out: dict) -> None:
         off = _finite(seg_in["a_off"], "a_off")
         if abs(off) > MAX_OFFSET_S:
             raise ValueError(f"a_off {off:g} s is more than {MAX_OFFSET_S:g} s out of sync")
-        off = round(off, 2)
+        off = round(off, 4)          # 4 places: frame-grid values (29.97) survive the save
         if off:
             seg_out["a_off"] = off
 
@@ -146,9 +146,9 @@ def validate_overlays(raw: Any, speed_validator=None) -> list[dict]:
         clip = o.get("clip")
         if not isinstance(clip, str) or not clip or "/" in clip or ".." in clip:
             raise ValueError(f"overlay {i + 1} names no clip")
-        a = round(_finite(o.get("in"), f"overlay {i + 1} in"), 2)
-        b = round(_finite(o.get("out"), f"overlay {i + 1} out"), 2)
-        at = round(_finite(o.get("at"), f"overlay {i + 1} at"), 2)
+        a = round(_finite(o.get("in"), f"overlay {i + 1} in"), 4)
+        b = round(_finite(o.get("out"), f"overlay {i + 1} out"), 4)
+        at = round(_finite(o.get("at"), f"overlay {i + 1} at"), 4)
         if a < 0 or b - a < MIN_LEN_S - 1e-9:
             raise ValueError(f"overlay {i + 1} ({clip}) is shorter than {MIN_LEN_S} s or starts before 0")
         if at < 0:
@@ -180,7 +180,7 @@ def validate_markers(raw: Any) -> list[float]:
     vals = set()
     for m in raw:
         t = m.get("t") if isinstance(m, dict) else m
-        x = round(_finite(t, "a marker"), 2)
+        x = round(_finite(t, "a marker"), 4)
         if x < 0:
             raise ValueError("a marker is before the film starts")
         vals.add(x)
@@ -190,7 +190,7 @@ def validate_markers(raw: Any) -> list[float]:
 def validate_point(v: Any, what: str) -> float | None:
     if v is None:
         return None
-    x = round(_finite(v, what), 2)
+    x = round(_finite(v, what), 4)
     if x < 0:
         raise ValueError(f"{what} is before the film starts")
     return x

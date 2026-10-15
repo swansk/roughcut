@@ -262,8 +262,11 @@
     }
     const lv = typeof g('liveVideo') === 'function' ? g('liveVideo')() : null;
     if (lv) {
-      const vol = clamp(10 ** ((c.volume_db ?? 0) / 20), 0, 1);
-      if (Math.abs(lv.volume - vol) > 1e-4) lv.volume = vol;
+      // One owner for an element's level (meters.js rcAudio): the shot's Volume is the
+      // 'clip' factor, A1's mute/solo/gain the 'track' one, so above 0 dB works too.
+      const lin = 10 ** ((c.volume_db ?? 0) / 20);
+      if (window.rcAudio) window.rcAudio.setLevel(lv, 'clip', lin);
+      else if (Math.abs(lv.volume - clamp(lin, 0, 1)) > 1e-4) lv.volume = clamp(lin, 0, 1);
     }
   }
   /* The edited shot is shown: when the monitor is elsewhere, it parks on the shot's
