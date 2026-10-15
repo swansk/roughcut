@@ -1636,7 +1636,8 @@ def test_the_kept_tab_shows_the_bin_and_puts_a_keep_in_the_cut(page):
     assert hero.locator(".w").inner_text() == "★ “hello there”"
     assert hero.locator("td.t").inner_text() == page.evaluate("tl.tc(3.5)")
     assert hero.get_attribute("title").startswith("CLIP_C 0:00.5–0:04.0")
-    assert hero.locator("img.still").get_attribute("src") == "/media/poster/CLIP_C.v2.jpg?t=0.50"
+    # a list row is one line, Premiere's list view: no thumbnail (verdict 5, punch 7)
+    assert hero.locator("img.still").count() == 0
     plain = rows.nth(1)
     assert plain.locator(".w").inner_text() == "your note: end on this"
     assert "★" not in plain.inner_text()

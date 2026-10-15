@@ -736,7 +736,7 @@ def test_a_layout_saved_before_the_new_arrangement_keeps_its_widths_once(live_se
 @pytest.mark.parametrize("size", VIEWPORTS, ids=lambda s: f"{s[0]}x{s[1]}")
 def test_selects_opens_wide_enough_for_its_media_in_out_and_reason(live_server, project, browser, size):
     """Verdict 4's note: at 1440 the Project group was too narrow for the Selects list's
-    Media In / Media Out and Reason columns (app.js shows them from a 440 / 560 px list).
+    Media In and Reason columns (app.js shows them from a 440 / 560 px list).
     While Selects is the group's open tab the group is wide enough for them, taken from
     the Timeline (which keeps >= 460 px); the Project tab gives the width back."""
     pg = _open(browser, live_server, project, size)
@@ -747,7 +747,9 @@ def test_selects_opens_wide_enough_for_its_media_in_out_and_reason(live_server, 
     assert pg.evaluate("document.querySelector('#library').clientWidth") >= 560
     assert box(pg, "#pTimeline")["w"] >= 460
     head = pg.locator("#library table.sel-list th").all_inner_texts()
-    assert {"Media In", "Media Out", "Reason"} <= {h.strip() for h in head}, head
+    # Media Out is In plus Duration, and in the row's hover: from a 640 px list (verdict 5,
+    # punch 7 gave its room to a one-line name and a Reason of >= 180 px)
+    assert {"Media In", "Duration", "Reason"} <= {h.strip() for h in head}, head
     s = pg.evaluate("[document.documentElement.scrollWidth, innerWidth]")
     assert s[0] <= s[1], s
     pg.locator(".ws-tab[data-tool=project]").click()

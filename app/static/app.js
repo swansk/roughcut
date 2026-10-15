@@ -2273,14 +2273,18 @@ function keepLabel(s) {
  * cannot hold are in the row's hover, as Project's are. The name is the label (Karl's
  * note, else the line spoken in it, else what was seen) — never the detector's title. */
 let binSort = { key: null, dir: 1 };
+/* Every column but Name is a fixed width, as a Premiere bin's are, and Name takes what is
+ * left (verdict 5, punch 7: at 1440 the quote wrapped over five lines while Reason was
+ * cut to a dozen characters). Reason is never narrower than 186 px; Media Out (In plus
+ * Duration, and in the row's hover) comes in from a 640 px list, Clip from 740. */
 const SEL_COLS = [
   { k: 'name', h: 'Name' },
-  { k: 'clip', h: 'Clip', w: 64, min: 680 },
-  { k: 'in', h: 'Media In', w: 80, min: 440 },
-  { k: 'out', h: 'Media Out', w: 80, min: 440 },
-  { k: 'dur', h: 'Duration', w: 80 },
-  { k: 'why', h: 'Reason', min: 560 },
-  { k: 'use', h: 'Usage', w: 62 },
+  { k: 'clip', h: 'Clip', w: 64, min: 740 },
+  { k: 'in', h: 'Media In', w: 82, min: 440 },
+  { k: 'out', h: 'Media Out', w: 82, min: 640 },
+  { k: 'dur', h: 'Duration', w: 82 },
+  { k: 'why', h: 'Reason', w: 186, min: 560 },
+  { k: 'use', h: 'Usage', w: 58 },
 ];
 const selCols = (width) => SEL_COLS.filter((c) => !c.min || width >= c.min);
 const keepTc = (t, clip) => (window.tl && tl.tc
@@ -2320,22 +2324,21 @@ const SEL_CSS = `
 #library table.sel-list tr.keep.missing td { opacity: .6; }
 #library table.sel-list tr.junkcard td { background: rgba(200, 80, 80, .06); cursor: default; }
 #library table.sel-list td { vertical-align: middle; }
-#library table.sel-list .still { width: 30px; height: 17px; aspect-ratio: auto; flex: none; border-radius: 2px;
-  object-fit: cover; background: #0c0c0e; display: block; }
+#library table.sel-list td.name .n { display: flex; align-items: center; gap: 5px; min-width: 0; }
 #library table.sel-list .w { margin: 0; display: block; -webkit-line-clamp: unset; white-space: nowrap;
-  overflow: hidden; text-overflow: ellipsis; font-size: 11px; min-width: 0; }
+  overflow: hidden; text-overflow: ellipsis; font-size: 11px; min-width: 0; flex: 1 1 auto; }
 #library table.sel-list .hero { margin: 0; }
 #library table.sel-list td.why { color: var(--dim); }
 #library table.sel-list td.use { overflow: visible; }
 #library table.sel-list .use { margin: 0; font-size: 11px; }
+#library table.sel-list a.use { color: var(--text); }
+#library table.sel-list a.use:hover { color: #fff; text-decoration: none; }
 #library table.sel-list button.use.add { padding: 0 6px; line-height: 15px; }
 #library table.sel-list .gone { display: inline; margin: 0; font-size: 11px; }
 #library table.sel-list .junkq { margin: 0; flex-wrap: nowrap; }
 #library table.sel-list .who { flex: none; font-size: 10px; line-height: 14px; padding: 0 4px; border-radius: 2px;
   color: #e0b04a; border: 1px solid rgba(224, 176, 74, .45); white-space: nowrap; }
 #library table.sel-list .who.yours { color: var(--text); background: #2c3a2c; border-color: #4a6a4a; }
-#libHint .floorlink { color: var(--dim); text-decoration: underline dotted; margin-left: 6px; }
-#libHint .floorlink:hover { color: var(--text); }
 `;
 
 /* The list's table, appended to `lib`; returns its body. */
@@ -2391,19 +2394,6 @@ function openPickInSource(s) {
   return true;
 }
 
-/* The list is rebuilt on every render (a trim, an insert): a still is the same <img>
- * moved into the new row, so one still loading is never asked for again. */
-const stillCache = new Map();
-function reuseStill(row) {
-  const img = row.querySelector('img.still');
-  if (!img) return;
-  const src = img.getAttribute('src');
-  const had = stillCache.get(src);
-  if (had && had !== img) img.replaceWith(had);
-  else stillCache.set(src, img);
-  if (stillCache.size > 600) stillCache.delete(stillCache.keys().next().value);
-}
-
 function keepRow(s, cols) {
   cols = cols || selCols(($('#library') || {}).clientWidth || 300);
   const d = document.createElement('tr');
@@ -2411,9 +2401,7 @@ function keepRow(s, cols) {
     + (s.missing ? ' missing' : '') + (binSel === keepKey(s) ? ' sel' : '');
   d._keep = s;                  // the lanes read the keep off its row, whatever the filter shows
   d.tabIndex = 0;
-  const clip = P.clips[s.clip] || {};
   const known = !s.missing && !!P.clips[s.clip];
-  const still = clip.poster ? `${clip.poster}?t=${Math.max(0, s.start).toFixed(2)}` : '';
   const at = known && !s.whole ? shotOf(s) : -1;   // a whole clip can be added again
   const use = s.missing
     ? '<span class="gone" title="footage missing — cannot be added until the clip is back">footage missing</span>'
@@ -2422,20 +2410,18 @@ function keepRow(s, cols) {
       : at >= 0
         ? `<a href="#" class="use" data-shot="${at}" title="in the cut · shot ${at + 1} — click to select it on the timeline">shot ${at + 1}</a>`
         : '<button class="use add" title="add it at the playhead · enter · , · or drag it onto the timeline">+ add</button>';
-  d.title = `${stem(s.clip)} ${fmt(s.start)}–${fmt(s.end)}${s.why ? `\n${s.why}` : ''}`
+  // the row's hover is the whole of what its one line cuts short: the name, the reason
+  d.title = `${stem(s.clip)} ${fmt(s.start)}–${fmt(s.end)}${s.why ? `\n${s.why}` : ''}\n${keepLabel(s)}`
     + (s.pick ? `\nthe first pass's pick · ${s.kind || 'moment'}` : s.whole ? '' : '\nkept by you on the pass')
     + '\ndouble-click: open in the Source monitor with its In and Out';
   // who it is from: the pass's kind on a pick, "yours" on a keep (a whole clip is neither)
   const who = s.pick ? `<span class="who pass" title="the first pass found this — ${escapeHtml(s.kind || 'a moment')}">${escapeHtml(s.kind || 'pick')}</span>`
     : s.whole ? '' : '<span class="who yours" title="you kept this on the pass">yours</span>';
-  // the still loads with the row, not lazily: a 30 px thumbnail of a frame the server
-  // caches on disk; a lazy one in a tab opened later was fetched again mid-edit
+  // The name is one line, as in a Premiere bin (verdict 5, punch 7): the kind chip and
+  // the quote, ellipsized; no thumbnail (the list view's, not the icon view's).
   const cell = (k) => {
     if (k === 'name') {
-      return `<td class="name"><span class="n">${still
-        ? `<img class="still" loading="eager" decoding="async" draggable="false"
-               alt="${escapeHtml(stem(s.clip))} at ${s.start.toFixed(1)}s" src="${still}">`
-        : '<span class="still"></span>'}${who}<span class="w${s.note ? ' note' : ''}">${
+      return `<td class="name"><span class="n">${who}<span class="w${s.note ? ' note' : ''}">${
         s.hero ? '<span class="hero">★</span> ' : ''}${escapeHtml(keepLabel(s))}</span></span></td>`;
     }
     if (k === 'clip') return `<td>${escapeHtml(stem(s.clip))}</td>`;
@@ -2446,7 +2432,6 @@ function keepRow(s, cols) {
     return `<td class="use">${junkState(s.clip) === 'proposed' ? junkBadge(s.clip) : ''}${use}</td>`;
   };
   d.innerHTML = cols.map((c) => cell(c.k)).join('');
-  reuseStill(d);
   d.addEventListener('click', (e) => {
     if (e.target.closest('a.use, button.use, .chip, .junkq')) return;
     selectKeep(s, d);
@@ -2545,7 +2530,7 @@ function renderKept(lib) {
     const said = $('#libHint').textContent;
     $('#libHint').innerHTML = `${said ? `${escapeHtml(said)} · ` : ''}${picked.length} pick${picked.length === 1 ? '' : 's'} from the first pass`
       + ` · ${nKeeps ? `${nKeeps} kept by you` : 'none kept yet'}`
-      + '<a class="floorlink" href="/floor" title="the pass: each pick played, with keep / reject — optional">review on the pass ↗</a>';
+      + '<a class="floorbtn" href="/floor" title="the pass: each pick played, with keep / reject — optional">review on the pass</a>';
   }
   lib.innerHTML = '';
   // one list: the junk rows first, then the keeps in the bin's order or the column's
@@ -2590,7 +2575,7 @@ function footageRows(lib, text) {
   const tabOut = $('#binTabs .tab[data-tab=out]');
   if (tabOut) tabOut.textContent = `footage · ${clips.length}`;
   lib.innerHTML = `<div class="hint">nothing kept yet — the footage, whole clips; the first
-    pass lists its picks here · <a href="/floor" style="color:var(--accent)">keep moments on the pass →</a></div>`;
+    pass lists its picks here <a class="floorbtn" href="/floor">keep moments on the pass</a></div>`;
   if (clips.length) {
     const body = selTable(lib);
     sortKeeps(clips.map(([c, v]) => ({ clip: c, start: 0, end: v.duration || 0, why: 'whole clip', whole: true })))
@@ -2644,8 +2629,7 @@ function junkCard(r, cols) {
   const dur = r.duration != null ? Number(r.duration) : null;
   const cell = (k) => {
     if (k === 'name') {
-      return `<td class="name"><span class="n"><img class="still" loading="lazy" decoding="async" draggable="false"
-        alt="${escapeHtml(r.stem)}" src="${r.poster}?t=0.00"><span class="w">${escapeHtml(r.stem)}</span></span></td>`;
+      return `<td class="name"><span class="n"><span class="w">${escapeHtml(r.stem)}</span></span></td>`;
     }
     if (k === 'clip') return `<td>${escapeHtml(r.stem)}</td>`;
     if (k === 'in') return `<td class="tc">${keepTc(0, r.clip)}</td>`;
@@ -2654,7 +2638,6 @@ function junkCard(r, cols) {
     return `<td class="use">${answer}</td>`;
   };
   d.innerHTML = cols.map((c) => cell(c.k)).join('');
-  reuseStill(d);
   return d;
 }
 
