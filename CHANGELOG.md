@@ -10,6 +10,9 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Docs
+- **LOOP.md: wave 6 merges so far and the wave-7 queue (keyframes across a split, overlay controls).**
+
+### Docs
 - **LOOP.md: KEYS2 and KEYUI merged; keyframes-on-split/trim queued for wave 7.**
 
 ### Added
