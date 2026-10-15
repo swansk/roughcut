@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Changed
+- **Proposal review where the cut is (verdict 4, punch 4).** A waiting proposal opens on page load (the ghost lane under V1 and the review in the Assistant) instead of a "last proposal · show it" link, and the Assistant's "No cut yet: …" line goes while one is up. The ghost lane is V1's height (≥ 80 px; 109 px at 1440×900, was 40), each ghost a filmstrip like V1's with its name in a top band, ✓ / ✗ at 20×18 px (stacked on a narrow shot), and the lane's name ("Proposal · 4 of 5 ✓ · 0:08.0") in the track-header column instead of over the first shot. The Assistant: ▶ Play it · Accept N of M · Accept all · Discard on one sticky row, "Things to check" on top (the notes check's flags, then the checks the model's notes ask for; a click plays that shot), the model's notes folded to their first sentence (or paragraph), and a table with one row per proposed shot (✓ / ✗, #, clip, Source In / Out timecode at the clip's rate, ± / + and the why; a click opens the row and plays the shot) with removed shots struck at the end. The first pass's "First pass: …" line is the panel's own now, so it shows on a reload too. New `test_proposal_review.py` (3); test_ui_flow's last-proposal and Next-landing tests and test_timeline_lanes' label check follow the new behaviour.
+
 ### Added
 - **Redesign verdict 4: FAIL, every dimension now 6-8** (`judge/verdict-4.md` on `c1c5d6a`; 1:7 2:8 3:8 4:7 5:7 6:7 7:7 8:7 9:6 10:7 11:6 12:8). First real 12-clip Killington first pass: a proposal in 758 s at load ~19, Stop in 106 ms, a re-run after a hand trim kept the trim exactly. K1 resolved on real footage; K2 open. Punch list drives wave 4.
 

@@ -323,18 +323,11 @@
     try {
       const d = await (await fetch(`/api/ask/${encodeURIComponent(job)}`)).json();
       if (!d.plan) return;
-      if (typeof window.rcShowProposal === 'function') {
-        window.rcShowProposal(d.plan);
-        // what the re-run keeps and replaces, in one line above the model's notes
-        const line = d.plan.firstpass && d.plan.firstpass.diff && d.plan.firstpass.diff.sentence;
-        const notes = document.getElementById('proposalNotes');
-        if (line && notes) {
-          const b = document.createElement('div');
-          b.className = 'fp-sentence';
-          b.textContent = `First pass: ${line}`;
-          notes.prepend(b);
-        }
-      } else if (window.dock) window.dock.open('ask');
+      // what the re-run keeps and replaces ("First pass: …") is the panel's own first
+      // line now (app.js reads `firstpass.diff.sentence`), so a proposal that opens on
+      // a reload says it too
+      if (typeof window.rcShowProposal === 'function') window.rcShowProposal(d.plan);
+      else if (window.dock) window.dock.open('ask');
       close();
       if (!asked) say('the first pass proposed a cut — Play it, Accept or Discard in the Assistant', 5000);
     } catch (e) { /* the board offers the last proposal on its own */ }

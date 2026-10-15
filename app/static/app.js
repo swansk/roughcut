@@ -2775,45 +2775,223 @@ function summarise(list) {
   return list.map((s) => `${s.clip.replace('.MP4', '')} ${s.in.toFixed(1)}-${s.out.toFixed(1)}`);
 }
 
-function showProposal(plan) {
-  pendingPlan = plan;
-  const before = summarise(segs);
-  const after = summarise(plan.segments);
-  const beforeSet = new Set(before);
-  const afterSet = new Set(after);
-  const rows = [];
-  after.forEach((a) => rows.push(
-    `<div style="color:${beforeSet.has(a) ? 'var(--dim)' : 'var(--good)'}">${beforeSet.has(a) ? ' ' : '+'} ${escapeHtml(a)}</div>`));
-  before.filter((b) => !afterSet.has(b)).forEach((b) => rows.push(
-    `<div style="color:var(--bad)">− ${escapeHtml(b)}</div>`));
+/* The proposal reads as an edit, not a chat (verdict 4, punch 4): the buttons on one row
+ * at the top, "Things to check" under them (the notes check's flags, then the checks the
+ * model's own notes ask for), the model's notes folded to their first sentence, and the
+ * shots as a table — ✓ / ✗, Source In / Out timecode, why — one row per proposed shot,
+ * the removed ones struck at the end. The ghost lane under V1 is the same review. */
+const PROPOSAL_CSS = `
+#proposal .pbtns { display: flex; flex-wrap: nowrap; gap: 5px; align-items: center; position: sticky; top: -6px;
+  z-index: 2; background: var(--panel); padding: 4px 0 6px; margin: -4px 0 6px; }
+#proposal .pbtns button { flex: none; white-space: nowrap; padding: 3px 8px; }
+#proposal .pbtns button[hidden] { display: none; }
+#proposal h2 { margin-bottom: 4px; }
+#proposal .pchecks { border-left: 2px solid var(--warn); padding: 2px 0 2px 8px; margin: 0 0 8px; }
+#proposal .pchecks b { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--warn); }
+#proposal .pchecks ul { margin: 2px 0 0; padding: 0; list-style: none; }
+#proposal .pchecks li { padding: 1px 0; }
+#proposal .pchecks li.flag::before { content: '⚠ '; color: var(--warn); }
+#proposal .pchecks li.ask::before { content: '• '; color: var(--dim); }
+#proposal .pchecks li[data-k] { cursor: pointer; }
+#proposal .pchecks li[data-k]:hover { color: #fff; }
+#proposal .pline { color: var(--dim); margin-bottom: 4px; }
+#proposal details.pnotes { margin-bottom: 6px; }
+#proposal details.pnotes > summary { cursor: pointer; color: var(--dim); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; list-style-position: inside; }
+#proposal details.pnotes > summary b { color: var(--text); font-weight: 600; margin-right: 4px; }
+#proposal details.pnotes[open] > summary .pprev { display: none; }
+#proposal details.pnotes .pall { white-space: pre-line; margin-top: 4px; }
+#proposal .pnote { margin-bottom: 6px; white-space: pre-line; }
+#proposalDiff .phead { color: var(--dim); margin-bottom: 4px; }
+#proposalDiff table.ptable, #proposalDiff .ptable thead, #proposalDiff .ptable tbody { display: block; width: 100%; }
+#proposalDiff table.ptable { font-size: 11.5px; }
+#proposalDiff .ptable tr { display: grid; grid-template-columns: 25px 21px minmax(0, 1fr) 80px 80px;
+  border-bottom: 1px solid #26262a; }
+#proposalDiff .ptable thead tr { border-bottom-color: var(--line); }
+#proposalDiff .ptable th { text-align: left; font-weight: 500; color: var(--dim); font-size: 10.5px; padding: 2px 3px;
+  white-space: nowrap; }
+#proposalDiff .ptable td { padding: 3px 3px 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#proposalDiff .ptable td.pw { grid-column: 2 / -1; padding: 0 3px 3px; color: #c4c4c9; }
+#proposalDiff .ptable td.tc { font-variant-numeric: tabular-nums; color: var(--tc); font-size: 11px; text-overflow: clip; }
+#proposalDiff .ptable td.pn { color: var(--dim); font-variant-numeric: tabular-nums; }
+#proposalDiff .ptable tr.pshot { cursor: pointer; }
+#proposalDiff .ptable tr.pshot:hover td { background: #232327; }
+#proposalDiff .ptable tr.pshot.open td.pw { white-space: normal; }
+#proposalDiff .ptable tr.pshot.rejected td { opacity: .45; }
+#proposalDiff .ptable tr.pshot.rejected td.pc, #proposalDiff .ptable tr.pshot.rejected td.tc { text-decoration: line-through; }
+#proposalDiff .ptable tr.pgone td { color: var(--bad); }
+#proposalDiff .ptable .pv { display: inline-block; width: 18px; height: 17px; line-height: 15px; text-align: center;
+  border-radius: 3px; border: 1px solid var(--good); color: var(--good); font-weight: 700; cursor: pointer; user-select: none; }
+#proposalDiff .ptable .pv[aria-checked=false] { border-color: var(--bad); color: var(--bad); }
+#proposalDiff .ptable .pv:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+#proposalDiff .ptable .pst { font-style: normal; font-weight: 700; margin-right: 4px; }
+#proposalDiff .ptable .pst.new { color: var(--good); }
+#proposalDiff .ptable .pst.chg { color: var(--warn); }
+#proposalDiff .ptable .pwords { display: none; font-style: normal; color: var(--dim); }
+#proposalDiff .ptable tr.pshot.open .pwords { display: inline; }
+#proposalDiff .ptable .pflag { color: var(--warn); margin-right: 3px; }
+`;
 
-  const oldTotal = total();
-  const newTotal = plan.segments.reduce((a, s) => a + tl.dur(s), 0);
+function proposalCss() {
+  if (document.getElementById('proposal-css')) return;
+  const st = document.createElement('style');
+  st.id = 'proposal-css';
+  st.textContent = PROPOSAL_CSS;
+  document.head.appendChild(st);
+}
+
+/* While a proposal is up, the Assistant's empty-sequence line ("No cut yet: …") is not
+ * true any more — the cut is on the ghost lane — so it goes, whoever hides #proposal
+ * (Accept, Discard) brings it back. render() owns the line's `hidden`; this owns its
+ * display, so the two never fight. */
+function watchProposalUp() {
+  const box = $('#proposal');
+  if (!box || box.dataset.watched) return;
+  box.dataset.watched = '1';
+  const sync = () => {
+    const up = box.style.display !== 'none';
+    const first = $('#askFirst');
+    if (first) first.style.display = up ? 'none' : '';
+    if (up) $('#lastAsk').style.display = 'none';
+  };
+  new MutationObserver(sync).observe(box, { attributes: true, attributeFilter: ['style'] });
+  sync();
+}
+
+/* The model's own "Things to check first: a, b, and whether c." → its items. */
+function notesChecks(notes) {
+  const m = /things to check(?: first)?\s*:\s*([\s\S]*?)(?:\.(?=\s|$)|$)/i.exec(String(notes || ''));
+  if (!m || !m[1].trim()) return [];
+  return m[1].split(/,\s*(?:and\s+)?(?=whether\b|if\b)/i).map((x) => x.trim()).filter(Boolean);
+}
+
+/* What the notes check flags (`notes_check.flags`), one line per shot, with the
+ * proposed shot it is about (k) when there is one. */
+function flagChecks(plan) {
+  const out = [];
+  const seen = new Set();
+  for (const f of (plan.notes_check && plan.notes_check.flags) || []) {
+    for (const s of f.shots || []) {
+      const key = `${s.id}|${s.clip}|${s.pos}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const was = s.was ? `${fmt(s.was.in)}–${fmt(s.was.out)}` : '';
+      if (!s.now) {
+        out.push({ text: `shot ${s.pos} (${stem(s.clip)} ${was}) is removed — the notes say “${f.claim}”`, k: null });
+        continue;
+      }
+      const k = plan.segments.findIndex((p) => (s.id && p.id === s.id)
+        || (p.clip === s.clip && Math.abs(p.in - s.now.in) < 0.02 && Math.abs(p.out - s.now.out) < 0.02));
+      out.push({ text: `shot ${s.pos} (${stem(s.clip)}) changes ${was} → ${fmt(s.now.in)}–${fmt(s.now.out)}`
+        + ` — the notes say “${f.claim}”`, k: k >= 0 ? k : null });
+    }
+  }
+  return out;
+}
+
+function proposalChecksHtml(plan, notes) {
+  const flags = flagChecks(plan);
+  const asks = notesChecks(notes);
+  if (!flags.length && !asks.length) return '';
+  const li = (cls, c) => `<li class="${cls}"${c.k != null ? ` data-k="${c.k}"` : ''}>${escapeHtml(c.text)}</li>`;
+  return `<b>Things to check</b><ul>${flags.map((c) => li('flag', c)).join('')}${
+    asks.map((t) => li('ask', { text: t, k: null })).join('')}</ul>`;
+}
+
+/* The model's notes, folded to their first sentence (the whole text one click away). */
+function proposalNotesHtml(plan) {
+  const parts = [];
+  const fpLine = plan.firstpass && plan.firstpass.diff && plan.firstpass.diff.sentence;
+  if (fpLine) parts.push(`<div class="fp-sentence pline">First pass: ${escapeHtml(fpLine)}</div>`);
   // A shot-scoped proposal says which shot it is about — the rest of the diff is
   // the untouched film, and without this line it reads as a whole-cut revision.
-  const scope = plan.focus
-    ? `[shot ${plan.focus.index + 1} · ${stem(plan.focus.clip)}] ` : '';
-  $('#proposalNotes').textContent = scope + (plan.notes || '(no note returned)');
+  if (plan.focus) parts.push(`<div class="pline">[shot ${plan.focus.index + 1} · ${escapeHtml(stem(plan.focus.clip))}]</div>`);
+  // the model's words: the server's "Check:" lines are the Things to check above
+  const words = String(plan.notes_model || plan.notes || '').trim();
+  if (!words) parts.push('<div class="pnote hint">(no note returned)</div>');
+  else {
+    const first = words.split(/(?<=[.!?])\s+|\n\s*\n/)[0].trim();   // a sentence, or a paragraph
+    parts.push(first === words && words.length <= 160
+      ? `<div class="pnote">${escapeHtml(words)}</div>`
+      : `<details class="pnotes"><summary><b>Notes</b><span class="pprev">${escapeHtml(first)}</span></summary>`
+        + `<div class="pall">${escapeHtml(words)}</div></details>`);
+  }
+  return parts.join('');
+}
+
+/* One row per proposed shot: ✓ / ✗, the number, the clip, Source In / Out at the clip's
+ * own rate, and the why (one line; the row's hover and a click have it whole). */
+function proposalTableHtml(plan, reviewable) {
+  const facts = (k) => (window.tlLanes && tlLanes.shotFacts ? tlLanes.shotFacts(plan, k) : null);
+  const compare = segs.length > 0;
+  const rows = plan.segments.map((s, i) => {
+    const f = facts(i);
+    const spd = speedOf(s);
+    const status = f && f.status ? f.status : '';
+    const hover = `${String(i + 1).padStart(2, '0')} ${stem(s.clip)} ${fmt(s.in)}–${fmt(s.out)}`
+      + ` (${tl.dur(s).toFixed(1)}s${spd === 1 ? '' : ` at ${spd}×`})${f && f.words ? ` · ${f.words}` : ''}`
+      + (s.why ? `\nwhy: ${s.why}` : '')
+      + (s.polished_from ? `\n↳ polished from ${s.polished_from[0].toFixed(2)}–${s.polished_from[1].toFixed(2)}`
+        + `${s.polish_why ? `: ${s.polish_why}` : ''}` : '')
+      + (f && f.flags.length ? `\n⚠ ${f.flags.join('\n⚠ ')}` : '')
+      + '\nclick to play it in the Program monitor';
+    // what the shot is to the cut, as the old diff list said it: + new, ± changed (kept
+    // shots say nothing); the words ("replaces 0:01.0–0:03.0") when the row is opened
+    const mark = status === 'new' ? '+' : status && status !== 'kept' ? '±' : '';
+    const tag = compare && f && f.words
+      ? `${mark ? `<i class="pst ${status === 'new' ? 'new' : 'chg'}" title="${escapeHtml(f.words)}">${mark}</i>` : ''}`
+        + `<i class="pwords">${escapeHtml(f.words)} · </i>` : '';
+    return `<tr class="pshot${f && f.flags.length ? ' flagged' : ''}" data-k="${i}" title="${escapeHtml(hover)}">`
+      + `<td>${reviewable ? `<span class="pv" role="checkbox" aria-checked="true" tabindex="0" data-k="${i}"`
+        + ' title="accept / reject this shot — the ghost lane\'s ✓ ✗ (Enter / ⌫ there)">✓</span>' : ''}</td>`
+      + `<td class="pn">${String(i + 1).padStart(2, '0')}</td>`
+      + `<td class="pc">${escapeHtml(stem(s.clip))}${spd === 1 ? '' : ` ${spd}×`}</td>`
+      + `<td class="tc">${keepTc(s.in, s.clip)}</td><td class="tc">${keepTc(s.out, s.clip)}</td>`
+      + `<td class="pw">${f && f.flags.length ? '<span class="pflag">⚠</span>' : ''}${tag}${escapeHtml(s.why || '')}</td></tr>`;
+  });
+  // the cut's shots the proposal drops, struck, after the proposed ones: the ghost lane's
+  // match (by id, else by clip and overlap) when it has drawn this plan, else by range
+  const g = window.tlLanes && tlLanes.ghost ? tlLanes.ghost() : null;
+  const kept = new Set(summarise(plan.segments));
+  const dropped = g && g.plan === plan && Array.isArray(g.removed)
+    ? g.removed.map((i) => segs[i]).filter(Boolean)
+    : segs.filter((s) => !kept.has(summarise([s])[0]));
+  const gone = dropped.map((s) =>
+    `<tr class="pgone" title="${escapeHtml(`${stem(s.clip)} ${fmt(s.in)}–${fmt(s.out)} — removed by the proposal`)}">`
+    + `<td>−</td><td class="pn"></td><td class="pc">${escapeHtml(stem(s.clip))}</td>`
+    + `<td class="tc">${keepTc(s.in, s.clip)}</td><td class="tc">${keepTc(s.out, s.clip)}</td><td class="pw">removed</td></tr>`);
+  // a row is two lines (a grid): ✓ / ✗ · # · clip · In · Out, and the why under them at
+  // the panel's width — one cell of a 6-column row would leave it two words
+  return '<table class="ptable">'
+    + '<thead><tr><th></th><th>#</th><th>Clip</th><th>In</th><th>Out</th></tr></thead>'
+    + `<tbody>${rows.join('')}${gone.join('')}</tbody></table>`;
+}
+
+/* Play proposed shot k in the Program monitor (the ghost lane's click). */
+function playProposedShot(k) {
+  const g = window.tlLanes && tlLanes.ghost ? tlLanes.ghost() : null;
+  const item = g && g.ghosts ? g.ghosts[k] : null;
+  if (item && tlLanes.playRange) tlLanes.playRange(item.seg, item.start, null);
+}
+
+function showProposal(plan) {
+  pendingPlan = plan;
+  proposalCss();
+  watchProposalUp();
+  const oldTotal = total();
+  const newTotal = plan.segments.reduce((a, s) => a + tl.dur(s), 0);
+  const notes = String(plan.notes_model || plan.notes || '');
+  const checks = $('#proposalChecks');
+  checks.innerHTML = proposalChecksHtml(plan, notes);
+  checks.hidden = !checks.innerHTML;
+  $('#proposalNotes').innerHTML = proposalNotesHtml(plan);
   // Each shot with the reason it was chosen: the `why` is what you check the
   // reasoning against, and it is the only account of what the agent thinks it saw.
-  // A shot whose boundaries were polished says so and says where it came from —
-  // a cut that silently differs from what the model asked for is one you cannot audit.
-  // Per shot (verdict 3, punch 7): ✓ / ✗ like the ghost lane's, what the shot is to the
-  // cut (kept / replaces / new, from the plan's diff) and a flag where the notes call a
-  // changed shot unchanged (`notes_check`).
-  const facts = (k) => (window.tlLanes && tlLanes.shotFacts ? tlLanes.shotFacts(plan, k) : null);
+  // A shot whose boundaries were polished says so on its hover — a cut that silently
+  // differs from what the model asked for is one you cannot audit. Per shot (verdict 3,
+  // punch 7): ✓ / ✗ like the ghost lane's, what the shot is to the cut (kept / replaces
+  // / new) and a ⚠ where the notes call a changed shot unchanged (`notes_check`).
   const reviewable = !plan.unchanged && !!(window.tlLanes && tlLanes.setVerdict);
-  const detail = plan.segments.map((s, i) => {
-    const f = facts(i);
-    return `<div class="pshot" data-k="${i}" style="padding:4px 0">
-    ${reviewable ? `<button type="button" class="pv" data-k="${i}" title="accept / reject this shot (the ghost lane's ✓ ✗ · Enter / ⌫ there)">✓</button> ` : ''}<span class="hint">${String(i + 1).padStart(2, '0')} ${escapeHtml(
-      s.clip.replace('.MP4', ''))} ${fmt(s.in)}–${fmt(s.out)}
-    (${tl.dur(s).toFixed(1)}s${speedOf(s) === 1 ? '' : ` at ${speedOf(s)}×`})${f && f.words ? ` · ${escapeHtml(f.words)}` : ''}</span><br>${escapeHtml(s.why || '')}${
-    s.polished_from ? `<br><span class="hint">↳ polished from ${
-      s.polished_from[0].toFixed(2)}–${s.polished_from[1].toFixed(2)}: ${
-      escapeHtml(s.polish_why || '')}</span>` : ''}${
-    f && f.flags.length ? `<br><span class="pflag" style="color:var(--warn)">⚠ ${escapeHtml(f.flags[0])}</span>` : ''}</div>`;
-  }).join('');
   // The grade the note asked for (INTAKE I10.5), in the server's words — "look: cold at
   // 0.6", "shot 3 · CLIP_07: warmer" — above the shots, because a colour-only proposal
   // is nothing but this line and must not read as "no change".
@@ -2824,19 +3002,34 @@ function showProposal(plan) {
   const head = plan.unchanged
     ? `the cut unchanged — ${segs.length} shots ${fmt(oldTotal)}; only the colour changes`
     : `${segs.length} shots ${fmt(oldTotal)} → ${plan.segments.length} shots ${fmt(newTotal)}`;
-  $('#proposalDiff').innerHTML =
-    `<div class="hint" style="margin-bottom:6px">${head}</div>` + graded
-    + (plan.unchanged ? '' : rows.join('')
-      + '<hr style="border:0;border-top:1px solid var(--line);margin:10px 0">'
-      + detail);
   $('#proposal').style.display = 'block';
-  $('#proposalDiff').onclick = (e) => {
-    const b = e.target.closest('button.pv');
-    if (!b || !window.tlLanes) return;
-    const k = Number(b.dataset.k);
-    tlLanes.setVerdict(k, !tlLanes.verdict(k));
-  };
   if (window.tlLanes && tlLanes.redraw) tlLanes.redraw();     // the ghost lane, now
+  $('#proposalDiff').innerHTML = `<div class="phead">${head}</div>` + graded
+    + (plan.unchanged ? '' : proposalTableHtml(plan, reviewable));
+  const toggle = (k) => { if (window.tlLanes) tlLanes.setVerdict(k, !tlLanes.verdict(k)); };
+  $('#proposalDiff').onclick = (e) => {
+    const b = e.target.closest('.pv');
+    if (b) { toggle(Number(b.dataset.k)); return; }
+    const row = e.target.closest('tr.pshot');
+    if (!row) return;
+    row.classList.toggle('open');               // the why, whole
+    playProposedShot(Number(row.dataset.k));
+  };
+  $('#proposalDiff').onkeydown = (e) => {
+    const b = e.target.closest && e.target.closest('.pv');
+    if (!b || (e.key !== ' ' && e.key !== 'Enter')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    toggle(Number(b.dataset.k));
+  };
+  checks.onclick = (e) => {
+    const li = e.target.closest('li[data-k]');
+    if (!li) return;
+    const k = Number(li.dataset.k);
+    const row = $(`#proposalDiff tr.pshot[data-k="${k}"]`);
+    if (row) { row.classList.add('open'); row.scrollIntoView({ block: 'nearest' }); }
+    playProposedShot(k);
+  };
   paintReview();
   if (!segs.length) syncPlayer();               // a first cut plays from its ghost lane
   if (window.dock) dock.reveal('#proposal');
@@ -2854,9 +3047,8 @@ function paintReview() {
   document.querySelectorAll('#proposalDiff .pshot').forEach((el) => {
     const no = rej.has(Number(el.dataset.k));
     el.classList.toggle('rejected', no);
-    el.style.opacity = no ? '.45' : '';
-    const b = el.querySelector('button.pv');
-    if (b) { b.textContent = no ? '✗' : '✓'; b.setAttribute('aria-pressed', no ? 'false' : 'true'); }
+    const b = el.querySelector('.pv');
+    if (b) { b.textContent = no ? '✗' : '✓'; b.setAttribute('aria-checked', no ? 'false' : 'true'); }
   });
   const partial = !!(r && r.rejected);
   if (acc) {
@@ -2910,17 +3102,12 @@ function ago(seconds) {
 async function offerLastProposal() {
   // Only while it still waits (I16.0 l): answered, or older than the cut on disk, it is
   // not a proposal any more — "last proposal — 21 shots, 40 days ago" was offered forever.
+  // A waiting one opens as it was left (verdict 4, punch 4): the ghost lane under V1 and
+  // the review in the Assistant — not a "show it" link to the proposal you came back for.
   const { record, pending } = await (await fetch('/api/asks/latest')).json();
-  if (!record || !pending) return;
-  const el = $('#lastAsk');
-  el.style.display = 'block';
-  if (window.dock) dock.badge('ask', 1);          // the Assistant tab says one waits
-  el.innerHTML = `last proposal — ${record.plan.segments.length} shots,
-    ${ago(Date.now() / 1000 - record.created)} · <a href="#" id="showLast">show it</a>`;
-  $('#showLast').onclick = (e) => {
-    e.preventDefault();
-    showProposal(record.plan);
-  };
+  if (!record || !pending || !record.plan || !Array.isArray(record.plan.segments)) return;
+  if (pendingPlan) return;                        // an Ask that landed first is up already
+  showProposal(record.plan);
 }
 
 /* A four-minute Ask outlives a reload, and the job lives on the server, so the page
