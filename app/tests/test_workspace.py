@@ -522,7 +522,7 @@ def test_open_cards_show_the_project_panels_posters(live_server, project, browse
             c.querySelectorAll('.ph').length])""")
         assert len(cards) == 3, cards
         for clip, src, ph in cards:
-            assert src == f"/media/poster/{clip.rsplit('.', 1)[0]}.jpg?t=0.00" and ph == 0, (clip, src, ph)
+            assert src == f"/media/poster/{clip.rsplit('.', 1)[0]}.jpg?t=1.00" and ph == 0, (clip, src, ph)
         # the same URL the Project panel's icon view asks for
         board = ctx.new_page()
         board.goto(live_server)

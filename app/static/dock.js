@@ -622,7 +622,11 @@ const DEFAULTS = { proj: 0.195, insp: 0.255, src: null, top: 0.42 };
         const at = keepAt != null ? keepAt : a;
         v.addEventListener('loadedmetadata', () => { v.currentTime = at; }, { once: true });
       }
-      poster.setAttribute('src', c.poster ? c.poster.replace(/t=[\d.]+/, `t=${a.toFixed(2)}`) : `/media/poster/${c.stem}.jpg?t=${a.toFixed(2)}`);
+      // no In marked: the card's own frame (pre-built, and not the black first frame
+      // many clips open on) until the video has its own; else the frame at the In
+      const marked = Number.isFinite((this.marks[c.clip] || [])[0]);
+      poster.setAttribute('src', c.poster && !marked ? c.poster
+        : c.poster ? c.poster.replace(/t=[\d.]+/, `t=${a.toFixed(2)}`) : `/media/poster/${c.stem}.jpg?t=${a.toFixed(2)}`);
       poster.hidden = false;
       $('#srcWait').hidden = true;
       this.paint();

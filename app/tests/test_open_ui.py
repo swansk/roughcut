@@ -184,7 +184,7 @@ def test_the_folder_reads_as_a_contact_sheet(page, project):
     # no proxy yet: the Project panel's own poster (the server takes it from the
     # original), never blank stripes and never a broken image (verdict 2, punch 9)
     assert first.locator(".ph").count() == 0
-    assert first.locator("img").get_attribute("src") == "/media/poster/CLIP_A.jpg?t=0.00"
+    assert first.locator("img").get_attribute("src") == "/media/poster/CLIP_A.jpg?t=1.00"  # the card frame is 1 s in (POSTER_AT_S)
     page.wait_for_function("[...document.querySelectorAll('.card img')].every(i => i.complete && i.naturalWidth > 0)",
                            timeout=15000)
     # not indexed is not wrong: no badge on any card, no coverage strip
@@ -584,7 +584,7 @@ def test_index_the_footage_runs_the_journal_and_the_cap_pauses_the_priced_stages
     # punch 9: the same /media/poster URL), and the one badge on every card is the thing
     # that waits
     assert page.locator(".card img").count() == 3 and page.locator(".card .ph").count() == 0
-    assert page.locator(".card img").first.get_attribute("src") == "/media/poster/CLIP_A.jpg?t=0.00"
+    assert page.locator(".card img").first.get_attribute("src") == "/media/poster/CLIP_A.jpg?t=1.00"  # the card frame is 1 s in (POSTER_AT_S)
     assert page.locator(".card .badge").count() == 3
     assert page.locator(".card .badge.waiting").first.inner_text().lower() == "look paused"
     # how it was indexed, one line: heard, nothing looked at yet, this project's spend

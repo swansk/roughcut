@@ -4202,6 +4202,21 @@ def _warm_colour_probe(clip: str, footage: Path) -> None:
         clip_probe(clip)
 
 
+# A clip's card picture (the Project panel's and /open's): 1 s in, not the first frame,
+# which is black on many camera clips (Killington CLIP_12 is black for its first three
+# frames). No decode to find it: a fixed offset the background walk pre-builds.
+POSTER_AT_S = 1.0
+
+
+def poster_time(clip: str) -> float:
+    """Where a clip's card frame is taken: POSTER_AT_S, or half a shorter clip; 0 while
+    its length is not known yet (cached lengths only — this never probes)."""
+    d = STATE.get("durations", {}).get(clip)
+    if not d:
+        return 0.0
+    return round(min(POSTER_AT_S, float(d) / 2), 2)
+
+
 def unheard_clip(clip: str, used: bool = False) -> dict:
     """A footage clip as `project_payload` lists one, before its sound is heard: the
     free facts, no transcript, no candidates. `heard: False` says which."""
@@ -4261,7 +4276,7 @@ def api_clips() -> JSONResponse:
             "captured": capture_time(clip) if ok else None,
             "session": session_of.get(clip),
             "proxy": (STATE["proxy_dir"] / f"{stem}.mp4").exists(),
-            "poster": f"/media/poster/{stem}.jpg?t=0.00",
+            "poster": f"/media/poster/{stem}.jpg?t={poster_time(clip) if ok else 0.0:.2f}",
             "analysed": stem in heard,
             "looked": stem in looked,
             "closed": stem in closed,
@@ -5423,7 +5438,8 @@ def _media_walk() -> None:
             if STATE["footage"] != footage:
                 return                      # re-pointed at another bin: its own walk
             try:
-                ensure_poster(Path(clip).stem, 0.0, slots=WALK_POSTER_SLOTS)
+                clip_duration(clip)         # cached: the card frame is 1 s in
+                ensure_poster(Path(clip).stem, poster_time(clip), slots=WALK_POSTER_SLOTS)
             except RuntimeError as exc:
                 print(f"  !! {exc}", flush=True)
 
