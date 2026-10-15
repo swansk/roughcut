@@ -479,3 +479,75 @@ def test_selects_shows_the_picks_opened_a_second_after_they_land(browser, live, 
     finally:
         pg.close()
         _record(False)
+
+
+def _off_grid(route) -> None:
+    """GET /api/picks as the server answers it, with CLIP_B's 6.5–9.0 pick moved off the
+    clip's 24 fps grid (a real pass's times are R8's seconds: 120.1, 128.64 …)."""
+    resp = route.fetch()
+    body = resp.json()
+    for p in body.get("picks", []):
+        if p["clip"] == "CLIP_B.MP4" and abs(p["start"] - 6.5) < 1e-6:
+            p["start"], p["end"] = 6.53, 8.97
+    route.fulfill(response=resp, json=body)
+
+
+def test_double_clicking_a_pick_marks_its_in_and_out_on_the_clips_own_frames(browser, live, bin5):
+    """Verdict 6 punch 10b: double-clicking a Selects pick opens it in Source with its In
+    and Out marked (`rcSource.inPoint/outPoint`), on the clip's own frame grid
+    (`dock.source.snap`) — the judge read `rcSource.inPoint: null`. Twice: a plain
+    double-click, and one whose rows the bin rebuilt between its two clicks (the bin
+    re-reads and repaints ~20 ms after a click; a refresh landing mid-double-click)."""
+    _record(True)
+    _seed(bin5, CUT)
+    pg = browser.new_page(viewport={"width": 1920, "height": 1080})
+    errors: list[str] = []
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    pg.route("**/api/picks*", _off_grid)
+    pg.add_init_script(LAYOUT)
+    pg.goto(live)
+    pg.wait_for_function("window.tlLanes && typeof P !== 'undefined' && P && P.clips"
+                         " && window.tl && tl.state && dock.project.clips().length === 3",
+                         timeout=20000)
+    try:
+        pg.wait_for_selector("#tl .blk")
+        _all_tab(pg, 5)
+        idx = "[...document.querySelectorAll('#library tr.keep')].findIndex(r => r._keep && r._keep.start === 6.53)"
+        assert pg.evaluate(idx) >= 0, "the off-grid pick is not in Selects"
+        # the clip's own grid, as the Source monitor marks it: 24 fps
+        want = [round(round(t * 24) / 24, 4) for t in (6.53, 8.97)]          # 6.5417, 8.9583
+        assert pg.evaluate("dock.source.snap(6.53, dock.project.clips().find(c => c.clip === 'CLIP_B.MP4'))") \
+            == want[0]
+
+        # 1. a plain double-click on the pick's name
+        pg.evaluate("dock.source.load(dock.project.clips().find(c => c.clip === 'CLIP_A.MP4'), {})")
+        pg.locator("#library tr.keep").nth(pg.evaluate(idx)).locator("td.name").dblclick()
+        pg.wait_for_function("window.rcSource && rcSource.clip === 'CLIP_B.MP4'", timeout=5000)
+        src = pg.evaluate("({...window.rcSource})")
+        assert [src["inPoint"], src["outPoint"]] == want, src
+        assert not src.get("auto")
+        assert pg.locator("#srcTitle").inner_text().strip() == "Source: CLIP_B.MP4"
+        pg.wait_for_function(f"Math.abs(document.querySelector('#srcVideo').currentTime - {want[0]}) < 0.05",
+                             timeout=10000)
+        assert not pg.locator("#source .srcbar .range").is_hidden()
+
+        # 2. the rows rebuilt between the two clicks of the double-click
+        pg.evaluate("dock.source.marks = {}; dock.source.load(dock.project.clips().find(c => c.clip === 'CLIP_A.MP4'), {})")
+        pg.wait_for_function("rcSource.clip === 'CLIP_A.MP4' && rcSource.inPoint === null")
+        box = pg.locator("#library tr.keep").nth(pg.evaluate(idx)).locator("td.name").bounding_box()
+        x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+        pg.mouse.move(x, y)
+        pg.mouse.down(click_count=1)
+        pg.mouse.up(click_count=1)
+        old = pg.evaluate_handle(f"document.querySelectorAll('#library tr.keep')[{idx}]")
+        pg.evaluate("renderKept(document.querySelector('#library'))")
+        assert pg.evaluate("(r) => !r.isConnected", old), "the rows were not rebuilt"
+        pg.mouse.down(click_count=2)
+        pg.mouse.up(click_count=2)
+        pg.wait_for_function("window.rcSource && rcSource.clip === 'CLIP_B.MP4'", timeout=5000)
+        src = pg.evaluate("({...window.rcSource})")
+        assert [src["inPoint"], src["outPoint"]] == want, src
+        _shot(pg, "06-off-grid-pick-in-source")
+        assert errors == [], errors
+    finally:
+        pg.close()
