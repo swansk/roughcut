@@ -236,25 +236,171 @@ def ctl_num(controls: dict | None, key: str, default: float) -> float:
     return default if v is None else float(v)
 
 
+# ------------------------------------------------------ keyframes (verdict 5, punch 4)
+#
+# The schema (judge/LOOP.md, wave 6; lane KEYUI writes it): `controls.keys = {prop:
+# [[t, v], ...]}`, t = seconds from the shot's start in FILM time (after its speed),
+# sorted, linear between keys and held outside them. A keyed property's keys win over
+# its static value. Inside a part every filter sees film time from the shot's start:
+# the picture after the retime and the `fps` conform starts at frame 0 = 0 s, and the
+# sound after `atempo` and `aresample=first_pts=0` at sample 0 = 0 s.
+
+KEYED_PROPS = ("position_x", "position_y", "scale", "rotation", "opacity", "volume_db")
+
+
+def keys_of(controls: dict | None, prop: str) -> list[tuple[float, float]] | None:
+    """The property's keys as sorted (t, v) pairs, or None when it is not keyed."""
+    raw = ((controls or {}).get("keys") or {}).get(prop)
+    if not raw:
+        return None
+    pts = sorted(((float(t), float(v)) for t, v in raw), key=lambda p: p[0])   # stable: a step keeps its order
+    return pts or None
+
+
+def value_at(keys: list[tuple[float, float]], t: float) -> float:
+    """The keyed value at film time `t` (seconds from the shot's start): linear between
+    the two keys either side, the first key's value before it, the last's after it."""
+    if t < keys[0][0]:
+        return keys[0][1]
+    # the last key at or before t (of two keys at one instant, the later one: a step)
+    i = max(k for k, (tk, _) in enumerate(keys) if tk <= t)
+    if i == len(keys) - 1:
+        return keys[-1][1]
+    (t0, v0), (t1, v1) = keys[i], keys[i + 1]
+    return v0 + (v1 - v0) * (t - t0) / (t1 - t0)
+
+
+def lerp_expr(keys: list[tuple[float, float]], tvar: str) -> str:
+    """`value_at` as an ffmpeg expression of `tvar`: the first value plus, per pair of
+    keys, its rise times `clip((t - t0) / (t1 - t0), 0, 1)` — which is the held value
+    outside the keys and the straight line between them."""
+    terms = [f"{keys[0][1]:.6g}"]
+    for (t0, v0), (t1, v1) in zip(keys, keys[1:]):
+        if abs(v1 - v0) < 1e-12:
+            continue
+        if t1 - t0 < 1e-9:
+            terms.append(f"({v1 - v0:.6g})*gte({tvar},{t1:.6g})")
+        else:
+            terms.append(f"({v1 - v0:.6g})*clip(({tvar}-{t0:.6g})/{t1 - t0:.6g},0,1)")
+    return "(" + "+".join(terms) + ")"
+
+
+def static_prop(controls: dict | None, prop: str) -> float:
+    """A keyable property's static (un-keyed) value, in the keys' own units."""
+    c = controls or {}
+    pos = c.get("position") or [0.5, 0.5]
+    return {"position_x": float(pos[0]), "position_y": float(pos[1]),
+            "scale": ctl_num(c, "scale", 100.0), "rotation": ctl_num(c, "rotation", 0.0),
+            "opacity": ctl_num(c, "opacity", 100.0),
+            "volume_db": ctl_num(c, "volume_db", 0.0)}[prop]
+
+
+def prop_expr(controls: dict | None, prop: str, tvar: str) -> str:
+    keys = keys_of(controls, prop)
+    return lerp_expr(keys, tvar) if keys else f"{static_prop(controls, prop):.6g}"
+
+
+# ------------------------------------------------- Lumetri tone (verdict 5, punch 4)
+
+TONE_PROPS = ("highlights", "shadows", "whites", "blacks")
+
+
+def tone_curve(x: float, highlights: float = 0.0, shadows: float = 0.0,
+               whites: float = 0.0, blacks: float = 0.0) -> float:
+    """Lumetri Basic's Highlights / Shadows / Whites / Blacks: THE formula. The render
+    uses this function (a per-value luma table, `luma_table`); grade.js's shader must
+    compute the same thing. Every slider is -100..100 and 0 is off.
+
+    `x` is luma on 0..1 (Rec.709 luma of the picture's 0..1 RGB, which in the part's
+    limited-range YUV is `(Y - 16) / 219`). With a = slider / 100:
+
+        y = x + 0.10·a_shadows    · 6.75·x·(1-x)²      (a bump peaking at x = 1/3)
+              + 0.10·a_highlights · 6.75·x²·(1-x)      (a bump peaking at x = 2/3)
+              + 0.15·a_blacks     · (1-x)²             (moves the black end)
+              + 0.15·a_whites     · x²                 (moves the white end)
+        y = clamp(y, 0, 1)
+
+    so +100 shadows lifts the quarter-tones by up to 0.10 (22 code values) and leaves
+    black and white where they were, +100 highlights does the same to the three-quarter
+    tones, +100 blacks lifts black by 0.15, -100 whites pulls white down by 0.15. The
+    amplitudes keep the curve monotonic at any setting (its slope stays >= 0.025).
+
+    Only luma changes: the shader matches it exactly by taking x = dot(rgb, (0.2126,
+    0.7152, 0.0722)) and adding (y - x) to each of R, G and B (an equal offset to R, G,
+    B moves Y and leaves Cb and Cr alone). It runs after Contrast and before
+    Saturation, as Lumetri's Basic panel lists them."""
+    x = min(1.0, max(0.0, float(x)))
+    s, h = shadows / 100.0, highlights / 100.0
+    b, w = blacks / 100.0, whites / 100.0
+    y = (x + 0.10 * s * 6.75 * x * (1 - x) ** 2 + 0.10 * h * 6.75 * x * x * (1 - x)
+         + 0.15 * b * (1 - x) ** 2 + 0.15 * w * x * x)
+    return min(1.0, max(0.0, y))
+
+
+def luma_table(controls: dict | None) -> list[int] | None:
+    """The part's luma, code value by code value (0..255 in, legal 16..235 out): the
+    contrast about 125.5 (grade.js: `(c - 0.5)·k + 0.5`), then `tone_curve`. None when
+    no tone slider is set (`adjust_vf` then keeps its contrast expression)."""
+    tone = {p: ctl_num(controls, p, 0.0) for p in TONE_PROPS}
+    if all(abs(v) < 1e-9 for v in tone.values()):
+        return None
+    k = 1.0 + ctl_num(controls, "contrast", 0.0) / 200.0
+    out = []
+    for val in range(256):
+        x = ((val - 125.5) * k + 125.5 - 16.0) / 219.0
+        y = 16.0 + 219.0 * tone_curve(x, **tone)
+        out.append(int(min(235, max(16, math.floor(y + 0.5)))))
+    return out
+
+
+def table_expr(table: list[int], var: str = "val") -> str:
+    """A 256-entry table as one ffmpeg expression: a balanced tree of `if(lt(val, m),
+    left, right)`, a run of equal entries collapsed to its value."""
+    def tree(lo: int, hi: int) -> str:
+        if all(v == table[lo] for v in table[lo:hi + 1]):
+            return str(table[lo])
+        mid = (lo + hi + 1) // 2
+        return f"if(lt({var},{mid}),{tree(lo, mid - 1)},{tree(mid, hi)})"
+    return tree(0, len(table) - 1)
+
+
 def adjust_vf(controls: dict | None) -> str | None:
     """Lumetri contrast and saturation, after the LUT, as grade.js's shader does them
     in RGB: `y = (c - 0.5) * (1 + contrast/200) + 0.5`, then a mix toward Rec.709 luma
     by saturation/100. In the part's limited-range BT.709 YUV that is exactly: luma
     about its middle (125.5) times k, and both chroma about 128 times k × s (a
     per-channel contrast about 0.5 scales R-Y and B-Y by k; the mix toward luma keeps
-    luma and scales them by s). Clipped to the legal range, as the shader clamps."""
+    luma and scales them by s). Clipped to the legal range, as the shader clamps.
+    Highlights / shadows / whites / blacks (`tone_curve`) make the luma a table."""
     k = 1.0 + ctl_num(controls, "contrast", 0.0) / 200.0
     sat = ctl_num(controls, "saturation", 100.0) / 100.0
-    if abs(k - 1.0) < 1e-9 and abs(sat - 1.0) < 1e-9:
+    table = luma_table(controls)
+    if abs(k - 1.0) < 1e-9 and abs(sat - 1.0) < 1e-9 and table is None:
         return None
     ks = k * sat
-    return (f"lutyuv=y='clip((val-125.5)*{k:.6g}+125.5,16,235)'"
+    y = (f"'{table_expr(table)}'" if table is not None
+         else f"'clip((val-125.5)*{k:.6g}+125.5,16,235)'")
+    if abs(ks - 1.0) < 1e-9:
+        return f"lutyuv=y={y}"
+    return (f"lutyuv=y={y}"
             f":u='clip((val-128)*{ks:.6g}+128,16,240)'"
             f":v='clip((val-128)*{ks:.6g}+128,16,240)'")
 
 
 def volume_db(controls: dict | None) -> float:
+    """The shot's static Volume; 0 when it is keyed (`volume_vf` then carries it)."""
+    if keys_of(controls, "volume_db"):
+        return 0.0
     return ctl_num(controls, "volume_db", 0.0)
+
+
+def volume_vf(controls: dict | None) -> str | None:
+    """A keyed Volume: `volume` evaluated per audio frame at the film's `t`, the dB
+    ramp as a gain (`pow(10, dB/20)`). Placed after the retime, so `t` is film time."""
+    keys = keys_of(controls, "volume_db")
+    if not keys:
+        return None
+    return f"volume=volume='pow(10,{lerp_expr(keys, 't')}/20)':eval=frame"
 
 
 def dim_vf(opacity: float) -> str:
@@ -324,6 +470,109 @@ def motion_graph(controls: dict | None, w: int, h: int, vin: str, vout: str) -> 
             f"[mo_bg][mo_fg]overlay=x={ox}:y={oy}:eof_action=pass,format=yuv420p[{vout}]")
 
 
+MOTION_PROPS = ("position_x", "position_y", "scale", "rotation")
+PERSPECTIVE_PAD = 8          # black border the warp samples from outside the picture
+
+
+def keyed_motion_graph(controls: dict | None, w: int, h: int, rate: Fraction,
+                       vin: str, vout: str) -> str:
+    """Motion with keyed properties, as one per-frame warp: the same transform as
+    `motion_graph` — a source point p lands at `(x·W, y·H) + s·R(r)·(p − centre)` — with
+    x, y, s and r each `lerp_expr` of the frame's film time (`in / rate`: `in` is the
+    warp's input frame count, frame 0 the shot's first). `perspective` (sense=source)
+    takes, for each output corner, the source point that lands there: the inverse
+    transform of the corner. The picture gets an 8 px black border first, so a sample
+    from outside it reads black (the warp clamps to the edge) and the border is cropped
+    off after; the scale is held at >= 2 % so no coordinate overflows the warp's fixed
+    point."""
+    P = PERSPECTIVE_PAD
+    # `in` is 1 on the warp's first frame (ffmpeg counts the frame on its way in), so
+    # film time is (in - 1) / rate; test_render_keyframes pins frame 0 to the first key
+    T = f"((in-1)*{float(1 / rate):.12g})"
+    px = prop_expr(controls, "position_x", T)
+    py = prop_expr(controls, "position_y", T)
+    sc = f"max({prop_expr(controls, 'scale', T)}/100,0.02)"
+    th = f"({prop_expr(controls, 'rotation', T)}*PI/180)"
+    cx, cy = w / 2.0, h / 2.0
+    coords = []
+    for k, (ox, oy) in enumerate(((0, 0), (w + 2 * P, 0), (0, h + 2 * P),
+                                  (w + 2 * P, h + 2 * P))):
+        # the warp's coordinates are pixel indices; the transform's are continuous (a
+        # pixel's centre at i + 0.5): output index o is frame point o + 0.5 - P, and a
+        # source point p is index p - 0.5 + P in the bordered picture
+        dx = f"({ox + 0.5 - P:g}-{px}*{w})"
+        dy = f"({oy + 0.5 - P:g}-{py}*{h})"
+        sx = f"{cx + P - 0.5:g}+(cos({th})*{dx}+sin({th})*{dy})/{sc}"
+        sy = f"{cy + P - 0.5:g}+(cos({th})*{dy}-sin({th})*{dx})/{sc}"
+        coords.append(f"x{k}='{sx}':y{k}='{sy}'")
+    return (f"[{vin}]pad={w + 2 * P}:{h + 2 * P}:{P}:{P}:black,"
+            f"perspective={':'.join(coords)}:interpolation=linear:sense=source:eval=frame,"
+            f"crop={w}:{h}:{P}:{P},format=yuv420p[{vout}]")
+
+
+def opacity_commands(keys: list[tuple[float, float]], frames: int, rate: Fraction,
+                     dest: Path, target: str = "lutyuv@kop") -> str:
+    """A keyed Opacity's per-frame values as a `sendcmd` file: the blend toward black
+    (`dim_vf`'s maths) re-set on the frame where it changes, a half frame early so a
+    timestamp's rounding never misses it. Returns the frame-0 opacity's `lutyuv`."""
+    def exprs(a: float) -> tuple[str, str, str]:
+        a = max(0.0, min(1.0, a))
+        return (f"16+(val-16)*{a:.6g}", f"128+(val-128)*{a:.6g}", f"128+(val-128)*{a:.6g}")
+    lines, last = [], None
+    for k in range(max(1, frames)):
+        a = round(value_at(keys, k / float(rate)) / 100.0, 5)
+        if a == last:
+            continue
+        if last is not None:
+            y, u, v = exprs(a)
+            at = (k - 0.5) / float(rate)
+            lines.append(f"{at:.6f} [enter] {target} y '{y}', [enter] {target} u '{u}', "
+                         f"[enter] {target} v '{v}';")
+        else:
+            first = a
+        last = a
+    dest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    y, u, v = exprs(first)
+    return f"{target}=y='{y}':u='{u}':v='{v}'"
+
+
+def filter_path(p: Path) -> str:
+    """A file path as a quoted filter option value."""
+    s = str(p)
+    if "'" in s:
+        raise RuntimeError(f"a quote in a work path cannot go into a filter graph: {s}")
+    return f"'{s}'"
+
+
+def controls_graph(controls: dict | None, w: int, h: int, rate: Fraction, frames: int,
+                   vin: str, vout: str, cmd_file: Path) -> str | None:
+    """Motion and Opacity from `[vin]` to `[vout]`, keyed or not. Nothing keyed: the
+    static `motion_graph`. Motion keyed: `keyed_motion_graph`, then the Opacity. Opacity
+    keyed: the static motion at full opacity, then the blend toward black re-set per
+    frame by `sendcmd` (`opacity_commands`, written to `cmd_file`)."""
+    op_keys = keys_of(controls, "opacity")
+    moved = any(keys_of(controls, p) for p in MOTION_PROPS)
+    if not moved and not op_keys:
+        return motion_graph(controls, w, h, vin, vout)
+    graph, cur = [], vin
+    if moved:
+        graph.append(keyed_motion_graph(controls, w, h, rate, cur, "kmo"))
+        cur = "kmo"
+    else:
+        still = motion_graph({k: v for k, v in (controls or {}).items() if k != "opacity"},
+                             w, h, cur, "kmo")
+        if still:
+            graph.append(still)
+            cur = "kmo"
+    if op_keys:
+        lut = opacity_commands(op_keys, frames, rate, cmd_file)
+        graph.append(f"[{cur}]sendcmd=f={filter_path(cmd_file)},{lut}[{vout}]")
+    else:
+        op = max(0.0, min(1.0, ctl_num(controls, "opacity", 100.0) / 100.0))
+        graph.append(f"[{cur}]{dim_vf(op) if op < 1.0 - 1e-9 else 'null'}[{vout}]")
+    return ";".join(graph)
+
+
 def ordered_effects(edl: dict, seg: dict) -> list[dict]:
     """The shot's accepted effects as its Effect Controls stack has them: a bypassed
     one (`fx_off`) is not drawn, and the rest go in `fx_order` (the board's own rank:
@@ -371,10 +620,13 @@ def encode_part(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path
                 orient: str, video: dict, *, normalise: str | None = None,
                 lut: str | None = None, speed: float = 1.0, controls: dict | None = None,
                 shot_effects: list[tuple[dict, list[dict]]] | None = None,
-                workdir: Path | None = None, span: tuple[int, int] | None = None) -> None:
+                workdir: Path | None = None, span: tuple[int, int] | None = None,
+                overlays: list[dict] | None = None, v1_hidden: bool = False) -> None:
     """One part: the conform, the grade, the shot's effects (`fx.part_graph`: a
     sprite `.mov` per event overlaid at its second, the effect's synth `.wav` delayed
-    and mixed), its Motion and Opacity and its Volume, through one `-filter_complex`.
+    and mixed), its Motion and Opacity and its Volume (static or keyed), then the V2+
+    clips over it for the frames they cover (`overlays`, from `overlay_pieces`, bottom
+    to top; V1 black under them when `v1_hidden`), through one `-filter_complex`.
     With `span` (its frames on the film's grid) the picture is exactly that many
     frames (the last one held if the source runs short) and the sound exactly that
     long; without it the part is `-t` seconds as it always was. Everything about the
@@ -383,21 +635,53 @@ def encode_part(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path
     source's own read limit is an input `-t` ahead of it."""
     extra: list[str] = []
     vcur, acur = "vbase", "abase"
+    rate = rate_of(video["fps"])
+    frames = (span[1] - span[0]) if span is not None else max(
+        1, math.ceil(part_seconds(t_in, t_out, speed) * rate))
+    vol = volume_vf(controls)
     graph = [f"[0:v]{video_filter(video, normalise, lut, speed, controls)}[vbase]",
-             f"[0:a]{audio_filter(gain_db + volume_db(controls), speed)}[abase]"]
+             f"[0:a]{audio_filter(gain_db + volume_db(controls), speed)}"
+             f"{',' + vol if vol else ''}[abase]"]
     if shot_effects:
         extra, fxg, vcur, acur = fx.part_graph(shot_effects, video["w"], video["h"],
                                                video["fps"], workdir or dest.parent)
         if fxg:
             graph.append(fxg)
-    mg = motion_graph(controls, video["w"], video["h"], vcur, "vmo")
+    mg = controls_graph(controls, video["w"], video["h"], rate, frames, vcur, "vmo",
+                        dest.with_name(dest.stem + ".opacity.cmd"))
     if mg:
         graph.append(mg)
         vcur = "vmo"
+    if v1_hidden:
+        # V1's eye off: its picture (and its effects) black under whatever V2+ holds
+        graph.append(f"[{vcur}]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[v1off]")
+        vcur = "v1off"
+    n_in = 1 + extra.count("-i")
+    for j, o in enumerate(overlays or []):
+        # V2+ inside the part (verdict 5, punch 6): the overlay's own range for the frames
+        # it covers here, through the same conform, laid over V1 from its frame
+        if orient == "none":
+            extra += ["-display_rotation", "0"]
+        extra += ["-ss", f"{o['src_in']:.4f}", "-t", f"{o['src_len'] + 1.0:.4f}",
+                  "-i", str(o["src"])]
+        off, n = o["offset"], o["frames"]
+        chain = [o["normalise"]] if o.get("normalise") else []
+        chain.append(f"setpts=(PTS-STARTPTS)/{o['speed']:g}" if abs(o["speed"] - 1.0) > 1e-9
+                     else "setpts=PTS-STARTPTS")
+        chain += [f"scale={video['w']}:{video['h']}:force_original_aspect_ratio=decrease",
+                  f"pad={video['w']}:{video['h']}:(ow-iw)/2:(oh-ih)/2",
+                  f"fps={video['fps']}", "format=yuv420p",
+                  f"tpad=stop_mode=clone:stop_duration=2,trim=end_frame={n}",
+                  f"setpts=PTS-STARTPTS+{off}/({fps_text(rate)})/TB"]
+        graph.append(f"[{n_in}:v]{','.join(chain)}[ov{j}]")
+        t0 = (off - 0.25) / float(rate)
+        t1 = (off + n - 0.5) / float(rate)
+        graph.append(f"[{vcur}][ov{j}]overlay=0:0:eof_action=pass:"
+                     f"enable='between(t,{t0:.6f},{t1:.6f})'[vov{j}]")
+        vcur = f"vov{j}"
+        n_in += 1
     tail: list[str] = []
     if span is not None:
-        rate = rate_of(video["fps"])
-        frames = span[1] - span[0]
         samples = samples_at(span[1], rate) - samples_at(span[0], rate)
         graph.append(f"[{vcur}]tpad=stop_mode=clone:stop_duration=2,"
                      f"trim=end_frame={frames},setpts=PTS-STARTPTS[vout]")
@@ -489,80 +773,89 @@ def join_parts(parts: list[Path], spans: list[tuple[int, int]], video: dict,
         raise RuntimeError(f"concat failed: {r.stderr[-600:]}")
 
 
+def overlay_pieces(edl: dict, spans: list[tuple[int, int]], rate: Fraction,
+                   footage: Path, generated_dir: Path | None,
+                   probes: dict) -> tuple[list[list[dict]], list[str]]:
+    """V2 and the added video tracks (V3…) cut into the parts they cover (verdict 5,
+    punch 6: an overlay used to cost a second encode of the whole film). Bottom to top:
+    a higher track covers a lower one, a hidden track's clips are left out
+    (`tracksmod.video_layers`). Each clip is laid on the film's frame grid — its frames
+    `round(at·rate)` up to `round((at + length)·rate)`, cut at the film's end — and each
+    part gets, per clip that overlaps it, the source range for exactly the frames it
+    covers there (`src_in`, `src_len` in clip seconds, `offset` frames into the part,
+    `frames` long), with the clip's speed and its HDR normalise. Picture only: an
+    overlay carries no sound. Returns (pieces per part, the lines to print)."""
+    trk = edl.get("tracks") or {}
+    pieces: list[list[dict]] = [[] for _ in spans]
+    said: list[str] = []
+    end = spans[-1][1] if spans else 0
+    for j, o in enumerate(tracksmod.video_layers(trk, edl.get("overlays") or [])):
+        at = float(o["at"])
+        spd = edits.speed_of(o)
+        oa = max(0, round(at * rate))
+        ob = min(end, round((at + edits.dur(o)) * rate))
+        if ob - oa < 1 or (ob - oa) / rate <= 0.05:
+            continue
+        src = source_of(footage, generated_dir, o["clip"])
+        if not src.exists():
+            raise SystemExit(f"missing footage for {o.get('track') or 'V2'}: {src}")
+        normalise = None if edits.is_generated(o["clip"]) else colour.normalise_vf(
+            shot_probe(src, None, probes))
+        hit = []
+        for i, (a, b) in enumerate(spans):
+            fa, fb = max(a, oa), min(b, ob)
+            if fb <= fa:
+                continue
+            into = fa / float(rate) - at
+            pieces[i].append({
+                "src": src, "normalise": normalise, "speed": spd,
+                "src_in": float(o["in"]) + max(0.0, into) * spd,
+                "src_len": (fb - fa) / float(rate) * spd,
+                "offset": fa - a, "frames": fb - fa,
+                "label": f"{o.get('track') or 'V2'} {j:02d}"})
+            hit.append(i)
+        said.append(f"{o.get('track') or 'V2'} {j:02d} {o['clip']} {o['in']:.1f}-{o['out']:.1f} "
+                    f"over {oa / rate:.2f}-{ob / rate:.2f}s, inside part"
+                    f"{'s' if len(hit) > 1 else ''} {', '.join(str(i) for i in hit)}")
+    return pieces, said
+
+
 def tracks_pass(film: Path, edl: dict, segments: list[dict], parts: list[Path],
                 video: dict, orient: str, footage: Path, generated_dir: Path | None,
                 workdir: Path, film_s: float | None = None, *,
                 final_audio: bool = True) -> list[str]:
-    """The sequence's tracks over the concatenated film (roughcut/tracks.py), in ONE pass
-    and only when the tracks ask for something the plain concat is not:
+    """The sequence's audio tracks over the concatenated film (roughcut/tracks.py), in
+    ONE sound-only pass and only when they ask for something the plain concat is not.
+    The picture is always stream-copied: V2+ and V1's eye are composited inside the
+    parts (`overlay_pieces`, `encode_part`), never by re-encoding the whole film.
 
       * A1 — the camera sound — muted (or soloed out), at a gain, or with a shot's sound
         unlinked and moved (`a_off`): A1 is rebuilt from the parts' own audio (already
         levelled, retimed, carrying the effects' sounds), each delayed to its film
         second and mixed; muted, it is silence the film's length.
-      * V2 — `overlays` — each clip cut like a part (the same conform) and composited
-        over V1, full frame, from its film second for its length; picture only.
-      * V1's eye off: V1 is black under whatever V2 holds.
+      * A3… — the added audio tracks' clips, each at its track's gain, mixed with A1.
 
-    The video is copied when only the sound changed. A rebuilt A1 is encoded here, from
-    the parts' PCM — the film's one AAC encode — unless `final_audio` is False (a bed
-    goes under it next: PCM, and the bed's pass encodes). Returns the lines to print."""
+    A rebuilt A1 is encoded here, from the parts' PCM — the film's one AAC encode —
+    unless `final_audio` is False (a bed goes under it next: PCM, and the bed's pass
+    encodes). Returns the lines to print."""
     trk = edl.get("tracks") or {}
     plan = tracksmod.a1_plan(segments, trk, edits.dur)
     # the film's own length — whole frames on the grid (`frame_spans`) — not the sum of
     # the shots' seconds, which a `-t` would cut the last frame short of
     total = float(film_s) if film_s is not None else plan["total"]
-    v1_eye = tracksmod.visible(trk, "V1")
-    overlays = []
-    # V2 and the added video tracks (V3…), bottom to top: a higher track covers a lower
-    # one; a hidden track's clips are left out (tracksmod.video_layers)
-    for o in tracksmod.video_layers(trk, edl.get("overlays") or []):
-        length = min(edits.dur(o), total - float(o["at"]))
-        if length > 0.05:
-            overlays.append((o, length))
     # the added audio tracks' clips (A3…), each at its track's gain, mixed with A1
     extra_audio = []
     for c, gain_db in tracksmod.audio_layers(trk, edl.get("audio") or []):
         length = min(edits.dur(c), total - float(c["at"]))
         if length > 0.05:
             extra_audio.append((c, length, gain_db))
-    if not plan["needed"] and v1_eye and not overlays and not extra_audio:
+    if not plan["needed"] and not extra_audio:
         return []
     said: list[str] = []
     inputs: list[str] = ["-i", str(film)]
     graph: list[str] = []
     n = 1
     vmap, vcodec = "0:v:0", ["-c:v", "copy"]
-    if overlays or not v1_eye:
-        base = "[0:v]"
-        if not v1_eye:
-            graph.append("[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[vb]")
-            base = "[vb]"
-            said.append("V1 hidden: black under V2")
-        for j, (o, length) in enumerate(overlays):
-            src = source_of(footage, generated_dir, o["clip"])
-            if not src.exists():
-                raise SystemExit(f"missing footage for V2: {src}")
-            dest = workdir / f"v2_{j:03d}.mp4"
-            normalise = None if edits.is_generated(o["clip"]) else colour.normalise_vf(
-                shot_probe(src, None, {}))
-            spd = edits.speed_of(o)
-            cut(src, o["in"], min(o["out"], o["in"] + length * spd), 0.0, dest, orient,
-                video, normalise=normalise, speed=spd,
-                span=(0, max(1, round(length * rate_of(video["fps"])))))
-            inputs += ["-i", str(dest)]
-            at = float(o["at"])
-            graph.append(f"[{n}:v]setpts=PTS-STARTPTS+{at:.3f}/TB[o{j}]")
-            graph.append(f"{base}[o{j}]overlay=0:0:eof_action=pass:"
-                         f"enable='between(t,{at:.3f},{at + length:.3f})'[v{j}]")
-            base = f"[v{j}]"
-            n += 1
-            said.append(f"{o.get('track') or 'V2'} {j:02d} {o['clip']} {o['in']:.1f}-{o['out']:.1f} over "
-                        f"{at:.2f}-{at + length:.2f}s")
-        graph.append(f"{base}format=yuv420p[vout]")
-        vmap = "[vout]"
-        vcodec = ["-c:v", "libx264", "-preset", video["preset"], "-crf", video["crf"],
-                  "-fps_mode", "cfr", "-r", str(video["fps"]), *COLOUR_TAGS]
     amap, acodec = "0:a:0", ["-c:a", "copy"]
     if extra_audio and not plan["needed"]:
         # A1 as cut is the film's own sound; the added tracks mix over it
@@ -601,7 +894,7 @@ def tracks_pass(film: Path, edl: dict, segments: list[dict], parts: list[Path],
                      f"dropout_transition=0,apad,atrim=0:{max(0.01, total):.3f}[amix]")
         amap = "[amix]"
         acodec = audio_codec(video, final_audio)
-    out = film.with_name(film.stem + ".tracks.mp4")
+    out = film.with_name(film.stem + ".sound.mp4")    # picture copied, sound re-laid
     cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin", *inputs,
            "-filter_complex", ";".join(graph), "-map", vmap, "-map", amap, "-dn",
            *vcodec, *acodec, "-t", f"{max(0.01, total):.3f}",
@@ -609,7 +902,7 @@ def tracks_pass(film: Path, edl: dict, segments: list[dict], parts: list[Path],
            "-movflags", "+faststart", str(out)]
     r = run(cmd)
     if r.returncode != 0:
-        raise RuntimeError(f"tracks pass failed: {r.stderr[-600:]}")
+        raise RuntimeError(f"sound pass failed: {r.stderr[-600:]}")
     out.replace(film)
     return said
 
@@ -810,9 +1103,15 @@ def describe_controls(c: dict) -> str:
     if c.get("position"):
         bits.append(f"position {c['position'][0]:.3f},{c['position'][1]:.3f}")
     for k, unit in (("scale", "%"), ("rotation", "°"), ("opacity", "%"),
-                    ("volume_db", " dB"), ("contrast", ""), ("saturation", "")):
+                    ("volume_db", " dB"), ("contrast", ""), ("saturation", ""),
+                    ("highlights", ""), ("shadows", ""), ("whites", ""), ("blacks", "")):
         if c.get(k) is not None:
             bits.append(f"{k} {c[k]:g}{unit}")
+    for k in KEYED_PROPS:
+        keys = keys_of(c, k)
+        if keys:
+            bits.append(f"{k} keyed ×{len(keys)} "
+                        + "→".join(f"{v:g}@{t:g}s" for t, v in keys))
     if c.get("fx_off"):
         bits.append(f"fx off {len(c['fx_off'])}")
     if c.get("fx_order"):
@@ -896,6 +1195,15 @@ def main() -> int:
     looks = colour.load_looks(args.assets)
     resolved = resolve_all(edl, segments, args.colour_dir, looks)
     probes: dict = {}
+    # V2+ inside the parts that cover them, V1's eye in every part (verdict 5, punch 6)
+    trk = edl.get("tracks") or {}
+    v1_hidden = not tracksmod.visible(trk, "V1")
+    pieces, overlay_said = overlay_pieces(edl, spans, rate, args.footage,
+                                          args.generated_dir, probes)
+    if v1_hidden:
+        print("tracks: V1 hidden: black under V2")
+    for line in overlay_said:
+        print(f"tracks: {line}")
     try:
         for i, seg in enumerate(segments):
             generated = edits.is_generated(seg["clip"])
@@ -928,12 +1236,13 @@ def main() -> int:
             encode_part(src, seg["in"], seg["out"], gain, dest, orient, video,
                         normalise=normalise, lut=lut, speed=speed, controls=controls,
                         shot_effects=shot_effects or None,
-                        workdir=workdir / f"part_{i:03d}_fx", span=spans[i])
+                        workdir=workdir / f"part_{i:03d}_fx", span=spans[i],
+                        overlays=pieces[i], v1_hidden=v1_hidden)
             assert_no_rotation(dest, orient)        # catch it at the part, not the film
             actual = probe_duration(dest)
             parts.append(dest)
-            rate = f" ×{speed:g}" if abs(speed - 1.0) > 1e-9 else ""
-            print(f"  {i:02d} {seg['clip']} {seg['in']:6.1f}-{seg['out']:6.1f}{rate} "
+            sp = f" ×{speed:g}" if abs(speed - 1.0) > 1e-9 else ""
+            print(f"  {i:02d} {seg['clip']} {seg['in']:6.1f}-{seg['out']:6.1f}{sp} "
                   f"({actual:5.2f}s, {gain:+5.1f}dB)  {(seg.get('why') or '')[:56]}")
             print(f"      colour: {'generated — as made' if generated else describe_colour(res, normalise, probe)}")
             if controls:
@@ -970,8 +1279,8 @@ def main() -> int:
 
         assert_no_rotation(args.out, orient)
 
-        # The tracks (roughcut/tracks.py): A1's mute / gain / unlinked offsets, V2 over
-        # V1, V1's eye — one pass, only when one of them is not the default.
+        # The audio tracks (roughcut/tracks.py): A1's mute / gain / unlinked offsets and
+        # A3+ — one sound-only pass (the picture copied), only when one is not the default.
         for line in tracks_pass(args.out, edl, segments, parts, video, orient,
                                 args.footage, args.generated_dir, workdir, film_s,
                                 final_audio=encoder == "tracks"):

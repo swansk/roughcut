@@ -63,6 +63,7 @@
 #exportDialog .ex-btn.primary { background: var(--accent, #4a9df8); border-color: var(--accent, #4a9df8);
                                 color: #08111c; font-weight: 600; min-width: 84px; }
 #exportDialog .ex-btn:disabled { opacity: .45; cursor: default; }
+#exportDialog[data-measuring=yes] #exGo:disabled { cursor: progress; }
 #exportDialog .ex-run, #exportDialog .ex-done { display: flex; flex-direction: column; gap: 8px; padding: 4px 0 8px; }
 #exportDialog .ex-runname { font-weight: 600; }
 #exportDialog .ex-bar { height: 10px; border-radius: 5px; background: var(--bg, #111112);
