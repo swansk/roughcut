@@ -109,6 +109,12 @@
  *                               monitor's rate follow. 1 deletes the key from the
  *                               segment, so a 1× shot saves the way it always did.
  *                               Returns true when something changed.
+ *   Keyframes (`controls.keys`, film seconds from the shot's start) stay on the media
+ *   through all of these (wave 7, KEYANCHOR; `keysWindow`): a split cuts them with a key
+ *   at the cut on both halves; setRange (trim, roll, slip, nudge) shifts them by the in's
+ *   film move, dropping keys past an edge for one there that holds their value — within
+ *   one begin … commit gesture from the gesture's start, so a drag back restores them;
+ *   setSpeed scales their times by old / new rate. Undo restores them with the cut.
  *
  *   — selection, playhead, view —
  *   tl.select(ids, {add, range, source})   Replace the selection; `add` toggles the ids in
@@ -426,6 +432,105 @@
   }
   /* Whether a time is on the grid, to what 4 places can say. */
   const isOnGrid = (t) => Math.abs(Number(t) - onGrid(t)) < 1e-4 + 1e-9;
+
+  /* Keyframes stay on the MEDIA, as in Premiere (wave 7, lane KEYANCHOR). A shot's
+   * `controls.keys` = {prop: [[t, v], ...]} count film seconds from its start (the wave-6
+   * schema, effects.js), so every edit that moves a shot's in, cuts it or retimes it moves
+   * them: `keysWindow(keys, a, b, scale)` is the keys of a shot that is the old shot's film
+   * window [a, b] (times first scaled by `scale`, a speed change's old / new), counted from
+   * a. A key inside stays at t − a; when keys fall outside a side, they go and a key on
+   * that edge holds the value the old keys had there, so the picture and the sound never
+   * jump (a razor's first half ends on the cut's value, its second half starts on it).
+   * `b` Infinity: nothing is cut off the end. edits.py's `anchor_keys` is the twin. */
+  const KEY_EPS = 1e-4;
+  const kr6 = (x) => Math.round(x * 1e6) / 1e6;
+  const kval = (prop, v) => (String(prop).startsWith('position')
+    ? Math.round(v * 1e6) / 1e6 : Math.round(v * 1000) / 1000);
+  function keyAt(list, t) {
+    const n = list.length;
+    if (t <= list[0][0]) return list[0][1];
+    if (t >= list[n - 1][0]) return list[n - 1][1];
+    for (let i = 1; i < n; i++) {
+      if (t <= list[i][0]) {
+        const [t0, v0] = list[i - 1], [t1, v1] = list[i];
+        return t1 > t0 ? v0 + (v1 - v0) * (t - t0) / (t1 - t0) : v1;
+      }
+    }
+    return list[n - 1][1];
+  }
+  function keysWindow(keys, a, b, scale = 1) {
+    if (!keys || typeof keys !== 'object') return null;
+    const hasEnd = Number.isFinite(b);
+    const len = hasEnd ? kr6(b - a) : Infinity;
+    const out = {};
+    for (const [prop, raw] of Object.entries(keys)) {
+      if (!Array.isArray(raw) || !raw.length) continue;
+      const L = raw.map((k) => [Number(k[0]) * scale, Number(k[1])]);
+      const res = [];
+      if (L.some((k) => k[0] < a - KEY_EPS)) res.push([0, kval(prop, keyAt(L, a))]);
+      for (const [t, v] of L) {
+        if (t < a - KEY_EPS || (hasEnd && t > b + KEY_EPS)) continue;
+        let nt = Math.abs(t - a) <= KEY_EPS ? 0 : kr6(t - a);
+        if (hasEnd && Math.abs(t - b) <= KEY_EPS) nt = len;
+        if (res.length && nt <= res[res.length - 1][0] + 1e-9) continue;   // the edge's key is there
+        res.push([nt, v]);
+      }
+      if (hasEnd && L.some((k) => k[0] > b + KEY_EPS)
+          && !(res.length && res[res.length - 1][0] >= len - 1e-9)) {
+        res.push([len, kval(prop, keyAt(L, b))]);
+      }
+      if (res.length) out[prop] = res;
+    }
+    return Object.keys(out).length ? out : null;
+  }
+  const keysOfSeg = (seg) => {
+    const k = seg && seg.controls && seg.controls.keys;
+    return k && typeof k === 'object' && Object.keys(k).length ? k : null;
+  };
+  /* The shot's keys replaced (a new `controls` object, never one another shot shares). */
+  function putKeys(seg, keys) {
+    if (!seg.controls && !keys) return;
+    const c = { ...(seg.controls || {}) };
+    if (keys) c.keys = keys; else delete c.keys;
+    if (Object.keys(c).length) seg.controls = c; else delete seg.controls;
+  }
+  /* A shot whose clip range goes from [in0, …] at `spd` to [a, b]: its keys follow the
+   * media (an in moved Δ clip seconds later is Δ / spd film seconds, every key Δ / spd
+   * earlier). `base` is {in, spd, keys} — the shot as the gesture found it, so a drag
+   * that trims past a key and comes back within one gesture brings the key back. */
+  function anchorRange(seg, base, a, b) {
+    if (!base.keys) return;
+    const s = base.spd || 1;
+    putKeys(seg, keysWindow(base.keys, (a - base.in) / s, (b - base.in) / s));
+  }
+  /* The shot as the current gesture (begin … commit) found it: a trim / roll / slip drag
+   * calls setRange once a frame, each from the drag's start, and so do the keys. */
+  let keyBase = null;
+  function baseOf(seg) {
+    const now = () => ({ in: seg.in, spd: speedOf(seg),
+                         keys: keysOfSeg(seg) ? JSON.parse(JSON.stringify(seg.controls.keys)) : null });
+    if (!pending) return now();
+    if (!keyBase || keyBase.p !== pending) keyBase = { p: pending, m: new Map() };
+    if (!keyBase.m.has(seg.id)) keyBase.m.set(seg.id, now());
+    return keyBase.m.get(seg.id);
+  }
+  /* The second half of a razor at clip time clipT (the first is `seg`; the caller moves
+   * its out there): a new shot whose controls are its own copy, and both halves' keys cut
+   * at the razor — the first keeps those before it and ends on the cut's value, the
+   * second starts on it and has the rest, d earlier. */
+  function razorHalf(seg, clipT) {
+    const second = { ...seg, id: `tmp-${++tmpN}`, in: clipT };
+    if (seg.controls) second.controls = JSON.parse(JSON.stringify(seg.controls));
+    const k = keysOfSeg(seg);
+    if (k) {
+      const d = (clipT - seg.in) / speedOf(seg);
+      putKeys(second, keysWindow(k, d, Infinity));
+      putKeys(seg, keysWindow(k, 0, d));
+    }
+    return second;
+  }
+  /* A shot's edge moved by an edit that is not a gesture (an overwrite's trims). */
+  function anchorNow(seg, a, b) { anchorRange(seg, baseOf(seg), a, b); }
 
   /* The key names the platform uses: ⌘ ⌥ ⇧ on a Mac, Ctrl+ Alt+ Shift+ elsewhere. */
   function keyLabel(s) {
@@ -1439,7 +1544,13 @@
     }
     if (a === o.in && b === o.out && at === o.at) return false;
     const track = o.track || 'V2';
-    const fix = (x) => (x.id === id ? { ...x, in: a, out: b, at } : x);
+    const fix = (x) => {
+      if (x.id !== id) return x;
+      const y = { ...x, in: a, out: b, at };
+      // a clip on V2+ with keyframes keeps them on its media too (KEYANCHOR)
+      if (keysOfSeg(x) || (keyBase && keyBase.p === pending && keyBase.m.has(x.id))) anchorRange(y, baseOf(x), a, b);
+      return y;
+    };
     return !!overlayMutate(`trim ${track}`, () => {
       state.overlays = state.overlays.map(fix);
       state.audio = state.audio.map(fix);
@@ -2072,6 +2183,7 @@
     if (a === seg.in && b === seg.out) return false;
     return mutate('trim', () => {
       const inMoved = a !== seg.in;
+      anchorRange(seg, baseOf(seg), a, b);     // the keys stay on the media (KEYANCHOR)
       seg.in = a; seg.out = b;
       if (inMoved) schedulePosters();
       return true;
@@ -2102,7 +2214,7 @@
     const clipT = splitPoint(seg, Number(atFilmTime) - filmStart(seg.id));
     if (!(clipT >= seg.in + MIN_LEN - 1e-9 && clipT <= seg.out - MIN_LEN + 1e-9)) return null;
     return mutate('split', () => {
-      const second = { ...seg, id: `tmp-${++tmpN}`, in: clipT };
+      const second = razorHalf(seg, clipT);    // both halves' keys cut at the razor
       seg.out = clipT;
       list.splice(i + 1, 0, second);
       return second.id;
@@ -2157,12 +2269,12 @@
         const clipT = splitPoint(s, t - start);
         const head = clipT - s.in, tail = s.out - clipT;
         if (head >= MIN_LEN - 1e-9 && tail >= MIN_LEN - 1e-9) {
-          list.splice(i + 1, 0, { ...s, id: `tmp-${++tmpN}`, in: clipT });
+          list.splice(i + 1, 0, razorHalf(s, clipT));
           s.out = clipT;
           return i + 1;
         }
-        if (mode === 'in' && head >= MIN_LEN - 1e-9) { s.out = clipT; return i + 1; }
-        if (mode === 'out' && tail >= MIN_LEN - 1e-9) { s.in = clipT; return i; }
+        if (mode === 'in' && head >= MIN_LEN - 1e-9) { anchorNow(s, s.in, clipT); s.out = clipT; return i + 1; }
+        if (mode === 'out' && tail >= MIN_LEN - 1e-9) { anchorNow(s, clipT, s.out); s.in = clipT; return i; }
         return (t - start) < d / 2 ? i : i + 1;
       }
       start += d;
@@ -2308,11 +2420,16 @@
     const want = round2(clamp(r, MIN_SPEED, MAX_SPEED));
     if (want === speedOf(seg)) return false;
     return mutate('speed', () => {
+      const was = speedOf(seg);
       if (want === 1) delete seg.speed;      // 1× is the absence of the key, as edits.py reads it
       else seg.speed = want;
       // its length in the film stays whole frames at the new rate (the edit grid)
       const c = clipOf(seg.clip);
       [seg.in, seg.out] = gridRange(seg.in, seg.out, want, 'in', c && c.duration ? c.duration : undefined);
+      // the keys are in film time: at the new rate a moment of the media comes was / want
+      // as far into the shot (KEYANCHOR), and none passes its new end
+      const k = keysOfSeg(seg);
+      if (k) putKeys(seg, keysWindow(k, 0, (seg.out - seg.in) / want, was / want));
       return true;
     });
   }
@@ -2676,6 +2793,7 @@
     addMarker, removeMarker, clearMarkers, setMarkers, nextMarker, prevMarker,
     markers: () => [...state.markers],
     setSeqIn, setSeqOut,
+    keysWindow,                     // keyframes on the media (KEYANCHOR; app.js's [ ] nudge)
   };
   window.tl = tl;
 })();
