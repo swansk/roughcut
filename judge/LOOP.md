@@ -49,6 +49,14 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-15 05:30: **wave 2 merged** (`9309f9b`): FINISH `93c5c5e`, EXPORT `70ea941`, FPUI `10758af`, TRACKS `f187c33`,
+  EFFECTS `d0edabe`, INGEST `9309f9b`. Board budgets now = measured counts, no headroom (rubric log). Open for wave 3:
+  journey.py (punch 2, blocker); the render honours segments[i].controls (opacity, motion, volume_db, contrast,
+  saturation, fx_off/fx_order; EFFECTS request 1); the Program monitor shows V2 and plays unlinked A1 offsets;
+  sourceShot's why fallback '' for an unheard clip; segment-rebuilding paths (edits ops, first-pass rerun) carry
+  `controls`; meters + picks as editor objects (verdict-2 punch 10); test_budget errors at setup when it runs after
+  test_ui_flow in one process (pre-existing; alphabetical full-suite order hides it); MEDIA server ignores SIGTERM while
+  previews build and leaves ffmpeg children writing into --work.
 - 2026-10-15 02:20: **VERDICT 2 = FAIL** (rev `548e3b4`; 1:5 2:2 3:5 4:6 5:5 6:6 7:3 8:4 9:4 10:5 11:3 12:2; rulings:
   budgets raised = honest, Program >=425 px dropped = LENIENT (replace with >=380 px wide, <=30% letterbox), words 94->105 =
   honest). Scaffold `f371199` (/modules/<name>, firstpass/export stubs + mount points). **Wave 2 lanes** (from `f371199`):
