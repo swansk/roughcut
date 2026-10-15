@@ -404,6 +404,24 @@ onmessage = (e) => {
    * drawn pixels: at 674-841 px wide (the wave-4 monitors) a software-GL frame cost enough
    * to open 100 ms holes mid-shot under load (the wave-6 perf gate). */
   const PLAY_W = 640;
+  /* The setting itself, as in Premiere's Program monitor (verdict 6 punch 10): the
+   * transport's menu (#playRes) — Auto (the rule above: at most PLAY_W wide), Full (the
+   * monitor's own size), 1/2 or 1/4 of it — while playing; paused is always full. Kept per
+   * browser; `grade.playRes` reads and sets it. */
+  const RES_KEY = 'roughcut.playRes';
+  const RES = { auto: null, full: 1, '1/2': 0.5, '1/4': 0.25 };
+  G.res = (() => {
+    try { const v = localStorage.getItem(RES_KEY); return v in RES ? v : 'auto'; } catch (e) { return 'auto'; }
+  })();
+  function setRes(v) {
+    if (!(v in RES)) return G.res;
+    G.res = v;
+    try { localStorage.setItem(RES_KEY, v); } catch (e) { /* private mode: this page only */ }
+    const sel = $('#playRes');
+    if (sel && sel.value !== v) sel.value = v;
+    settle();
+    return v;
+  }
   /* Playing is the player's state, not the live buffer's: at a cut the outgoing buffer is
    * paused but stays on screen until the incoming one has its frame (app.js showWhenReady),
    * and drawn as a parked frame it went up at full size — the canvas reallocated to 674 px
@@ -416,7 +434,7 @@ onmessage = (e) => {
     const bw = G.box.w * dpr, bh = G.box.h * dpr;
     if (!bw || !bh) return [vw, vh];
     let s = Math.min(1, bw / vw, bh / vh);
-    if (playing) s = Math.min(s, PLAY_W / vw);
+    if (playing) s = RES[G.res] == null ? Math.min(s, PLAY_W / vw) : s * RES[G.res];
     if (s > 0.9) return [vw, vh];   // near full size: the scale costs more than it saves
     return [Math.max(2, Math.round(vw * s / 2) * 2), Math.max(2, Math.round(vh * s / 2) * 2)];
   }
@@ -745,6 +763,12 @@ onmessage = (e) => {
         });
       });
     });
+    // Playback Resolution's menu on the transport; a choice gives the keys back to the board
+    const res = $('#playRes');
+    if (res) {
+      res.value = G.res;
+      res.addEventListener('change', () => { setRes(res.value); res.blur(); });
+    }
     // the monitor's box, for drawSize: read here, never per frame (a layout read)
     const box = canvas.parentElement;
     if (box && typeof ResizeObserver === 'function') {
@@ -799,5 +823,7 @@ onmessage = (e) => {
     probe,
     get draws() { return G.draws; },
     get mode() { return G.worker ? 'worker' : (G.R ? 'main' : 'off'); },
+    get playRes() { return G.res; },
+    set playRes(v) { setRes(String(v)); },
   };
 })();

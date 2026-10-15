@@ -448,7 +448,7 @@ def _load() -> float:
         return -1.0
 
 
-def test_latency_under_load(live_server):
+def test_latency_under_load(perf_record, live_server):
     with sync_playwright() as pw:
         browser = pw.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
         try:
@@ -572,3 +572,58 @@ def test_the_grade_draws_in_a_worker_shows_what_probe_reads_and_prefetches(live_
             assert errors == [], errors
         finally:
             browser.close()
+
+
+# ---------------------------------------------------------------- what the gate reads
+# Verdict 6 punch 9: a skipped perf test left the gate green, and the summary said only
+# "1 skipped". `perf_record` writes $ROUGHCUT_PERF_JSON (when set) after the test: its
+# outcome (passed / failed / skipped, and whether the skip was forced), the load at
+# setup, when the burners started, when they stopped and at teardown, the burners and
+# every measured number. tools/gate.py reads it, names a skip, marks the suite amber and
+# retries the test after the rest of the suite. ROUGHCUT_PERF_FORCE_SKIP=1 skips it on
+# purpose, so the gate's amber path can be shown on demand.
+
+def _write_perf_json(rec: dict) -> None:
+    out = os.environ.get("ROUGHCUT_PERF_JSON")
+    if out:
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        Path(out).write_text(json.dumps(rec, indent=1), encoding="utf-8")
+
+
+@pytest.fixture
+def perf_record(request, tmp_path, monkeypatch):
+    cores = os.cpu_count() or 4
+    rec = {"test": request.node.nodeid, "outcome": None, "forced": False, "reason": "",
+           "cores": cores, "load_setup": round(_load(), 2),
+           "burners_env": os.environ.get("ROUGHCUT_PERF_BURNERS"),
+           "started": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    if os.environ.get("ROUGHCUT_PERF_FORCE_SKIP", "").strip() not in ("", "0"):
+        rec.update(outcome="skipped", forced=True,
+                   reason=f"forced: ROUGHCUT_PERF_FORCE_SKIP=1 (box at load {_load():.1f} on {cores} cores)")
+        _write_perf_json(rec)
+        pytest.skip(rec["reason"])
+    # the test writes its numbers to $ROUGHCUT_PERF_LOG once it has measured them
+    log = os.environ.get("ROUGHCUT_PERF_LOG")
+    if log:
+        Path(log).unlink(missing_ok=True)
+    else:
+        log = str(tmp_path / "perf-facts.json")
+        monkeypatch.setenv("ROUGHCUT_PERF_LOG", log)
+    failed_before = request.session.testsfailed
+    yield rec
+    facts = None
+    try:
+        facts = json.loads(Path(log).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    failed = request.session.testsfailed > failed_before
+    rec["outcome"] = "failed" if failed else ("passed" if facts is not None else "skipped")
+    if rec["outcome"] == "skipped":
+        rec["reason"] = _too_busy() or "skipped before it measured anything"
+    rec["load_teardown"] = round(_load(), 2)
+    if facts is not None:
+        rec["facts"] = facts
+        for k in ("burners", "load_start", "load_end"):
+            if k in facts:
+                rec[k] = round(facts[k], 2) if isinstance(facts[k], float) else facts[k]
+    _write_perf_json(rec)

@@ -198,7 +198,7 @@
           <button id="playCut" title="Play / Stop · Space">▶ Play</button>
           <button type="button" id="progFwd" title="Next edit · ↓"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M11.5 3H13v10h-1.5zM3 3v10l7.5-5z"/></svg></button>
         </span>
-        <span class="tcr"><span class="pos" id="posTotal"><span id="total">00:00:00:00</span></span><span class="hint" id="playingWhat"></span></span>
+        <span class="tcr"><select id="playRes" aria-label="Playback Resolution" title="Playback Resolution: how sharp the picture is drawn while it plays (Auto: at most 640 px wide). Paused, it is always full."><option value="auto">Auto</option><option value="full">Full</option><option value="1/2">1/2</option><option value="1/4">1/4</option></select><span class="pos" id="posTotal"><span id="total">00:00:00:00</span></span><span class="hint" id="playingWhat"></span></span>
       </div>
     </div>
   </section>

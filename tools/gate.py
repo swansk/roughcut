@@ -14,6 +14,11 @@ Checks (each one line in summary.md, exit 0 only if all are green):
            here means suite and screens are not run (they would only measure the box).
   suite    pytest app/tests (API + real Chromium). A test that fails in the full run is
            re-run alone; it counts as flaky (green, but named) only if it passes alone.
+           The perf test (test_perf_latency::test_latency_under_load) writes a JSON
+           (perf-*.json: outcome, load, burners, its numbers); its line names it with the
+           load it ran at. Skipped (load-aware, or ROUGHCUT_PERF_FORCE_SKIP=1) it is
+           retried once after the rest of the suite at a quieter moment, and a second
+           skip makes the suite AMBER, not green (verdict 6 punch 9).
   screens  test_budget.py again with ROUGHCUT_BUDGET_SHOTS set: the screen budget (one
            header row, one blue button, no board scroll, words/controls in view) plus a PNG
            of every screen and board state for the judge to look at.
@@ -27,6 +32,11 @@ Checks (each one line in summary.md, exit 0 only if all are green):
            roughcut/inference; no Windows path literal in code.
 --quick skips the full suite (screens + journey + hygiene, ~2 min; the journey alone is
 ~40-60 s on the fixture, so it runs in both).
+
+The run is GREEN (exit 0) only when every check is green; AMBER (exit 2) when every check
+passed but one is not proven (a skipped perf test); else RED (exit 1).
+ROUGHCUT_GATE_SUITE=<path> narrows the suite (for checking the gate itself; the summary
+says so).
 
 Output: $ROUGHCUT_LOOP/gate-<sha>-<stamp>/summary.md + one log per check + screens/*.png
 + journey/NN-step.png + journey/journey.json.
@@ -109,6 +119,75 @@ def journey(snap: Path, out: Path, log: Path, env: dict, timeout: int = 900) -> 
     return green, line[len("journey ✓ "):]
 
 
+PERF_ID = "app/tests/test_perf_latency.py::test_latency_under_load"
+PERF_RETRY_WAIT_S = int(os.environ.get("ROUGHCUT_PERF_RETRY_WAIT", "300"))
+
+
+def _load() -> float:
+    try:
+        return os.getloadavg()[0]
+    except OSError:
+        return -1.0
+
+
+def _perf_rec(p: Path) -> dict | None:
+    try:
+        return json.loads(p.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def perf_said(rec: dict | None) -> str:
+    """One perf record (test_perf_latency's $ROUGHCUT_PERF_JSON) in words, with its load."""
+    if rec is None:
+        return "no record: the test did not run (not collected, or no Playwright)"
+    o = str(rec.get("outcome")).upper() if rec.get("outcome") != "passed" else "passed"
+    if rec.get("outcome") == "skipped":
+        return f"{o} at load {rec.get('load_setup')} on {rec.get('cores')} cores — {rec.get('reason')}"
+    f = rec.get("facts") or {}
+    play = f.get("play") or {}
+    med = lambda xs: sorted(xs)[len(xs) // 2] if xs else None   # noqa: E731
+    return (f"{o} at load {rec.get('load_start', rec.get('load_setup'))} → {rec.get('load_end', '?')}"
+            f" with {rec.get('burners', '?')} burners ({rec.get('load_setup')} before them,"
+            f" {rec.get('cores')} cores) · worst gap {play.get('longest_gap_ms')} ms"
+            f" · seek median {med(f.get('seek') or [])} ms")
+
+
+def perf_check(snap: Path, run_dir: Path, env: dict, jsons: list[Path]) -> tuple[bool, bool, str]:
+    """(ok, amber, line) for test_latency_under_load — verdict 6 punch 9: the perf gate
+    cannot pass by skipping. The last record (the full run's, or its re-run alone when it
+    failed there) decides; a skip, forced or load-aware, or no record at all, is retried
+    once after the rest of the suite, once the load is under 2x the cores (up to
+    $ROUGHCUT_PERF_RETRY_WAIT s). A retry that passes is green; one that skips again
+    leaves the suite AMBER, named here; one that fails is broken."""
+    recs = [r for r in (_perf_rec(p) for p in jsons if p.exists()) if r is not None]
+    rec = recs[-1] if recs else None
+    name = "perf " + PERF_ID.split("::")[1]
+    if rec is not None and rec.get("outcome") in ("passed", "failed"):
+        return rec["outcome"] == "passed", False, f"{name}: {perf_said(rec)}"
+    cores = os.cpu_count() or 4
+    forced = os.environ.get("ROUGHCUT_PERF_FORCE_SKIP", "").strip() not in ("", "0") or \
+        env.get("ROUGHCUT_PERF_FORCE_SKIP", "").strip() not in ("", "0")
+    t0 = time.time()
+    if not forced:
+        print(f"suite: the perf test did not measure ({perf_said(rec)}); waiting for load "
+              f"<= {2 * cores} to retry it…", flush=True)
+        while _load() > 2 * cores and time.time() - t0 < PERF_RETRY_WAIT_S:
+            time.sleep(15)
+    waited = time.time() - t0
+    pj = run_dir / "perf-retry.json"
+    run(UV + [PERF_ID, "-q", "-rs", "-p", "no:cacheprovider"], snap, run_dir / "perf-retry.log",
+        dict(env, ROUGHCUT_PERF_JSON=str(pj)), timeout=900)
+    retry = _perf_rec(pj)
+    line = (f"{name}: in the full run {perf_said(rec)}; retried after the suite"
+            f"{f' (waited {waited:.0f} s for a quieter box)' if waited >= 1 else ''}: {perf_said(retry)}")
+    if retry is not None and retry.get("outcome") == "passed":
+        return True, False, line
+    if retry is not None and retry.get("outcome") == "failed":
+        return False, False, line
+    return True, True, line + " → the suite is AMBER: a skipped perf test is not a pass"
+
+
 def browser_preflight(cwd: Path, log: Path, env: dict) -> tuple[bool, str]:
     """Make Playwright's Chromium the one the suite's Playwright wants, before the suite.
 
@@ -171,6 +250,7 @@ def main() -> int:
     if deps.exists():
         env["LD_LIBRARY_PATH"] = f"{deps}:{env.get('LD_LIBRARY_PATH', '')}"
     results: list[tuple[str, bool, str]] = []
+    amber: set[str] = set()          # green, but not proven: the run is AMBER, not GREEN
     t_all = time.time()
 
     # ---- browser ----
@@ -189,22 +269,37 @@ def main() -> int:
     if not quick and browser_ok:
         t0 = time.time()
         junit = run_dir / "suite.xml"
-        rc = run(UV + ["app/tests", "-q", "-p", "no:cacheprovider", f"--junitxml={junit}"],
-                 snap, run_dir / "suite.log", env)
+        perf_jsons = [run_dir / "perf-suite.json"]
+        suite = os.environ.get("ROUGHCUT_GATE_SUITE", "app/tests")
+        rc = run(UV + [suite, "-q", "-p", "no:cacheprovider", f"--junitxml={junit}"],
+                 snap, run_dir / "suite.log", dict(env, ROUGHCUT_PERF_JSON=str(perf_jsons[0])))
         c = counts(junit) if junit.exists() else {"passed": 0, "failed": -1, "skipped": 0}
         flaky, broken = [], []
         for tid in failed_ids(junit):
-            ok = run(UV + [tid, "-q", "-p", "no:cacheprovider"], snap,
-                     run_dir / f"rerun-{len(flaky) + len(broken)}.log", env, timeout=900) == 0
+            n = len(flaky) + len(broken)
+            pj = run_dir / f"perf-rerun-{n}.json"
+            ok = run(UV + [tid, "-q", "-p", "no:cacheprovider"], snap, run_dir / f"rerun-{n}.log",
+                     dict(env, ROUGHCUT_PERF_JSON=str(pj)), timeout=900) == 0
             (flaky if ok else broken).append(tid)
+            if pj.exists():
+                perf_jsons.append(pj)
+        # verdict 6 punch 9: the perf test cannot pass by skipping (see perf_check)
+        perf_ok, perf_amber, perf_line = perf_check(snap, run_dir, env, perf_jsons)
+        if not perf_ok and PERF_ID not in broken:
+            broken.append(PERF_ID)
         green = c["failed"] >= 0 and not broken and (rc == 0 or c["failed"] > 0)
         line = (f"{c['passed']} passed, {c['failed']} failed in the full run, {c['skipped']} skipped"
                 f" · {len(flaky)} flaky (pass alone) · {len(broken)} broken · {time.time() - t0:.0f} s")
+        if suite != "app/tests":
+            line += f" · NARROWED to {suite} (ROUGHCUT_GATE_SUITE): not the gate's suite"
+        line += "\n    " + perf_line
         if flaky:
             line += "\n    flaky: " + ", ".join(flaky)
         if broken:
             line += "\n    BROKEN: " + ", ".join(broken)
         results.append(("suite", green, line))
+        if green and (perf_amber or suite != "app/tests"):
+            amber.add("suite")
 
     # ---- screens ----
     shots = run_dir / "screens"
@@ -242,18 +337,23 @@ def main() -> int:
             problems.append(f"Windows path literal in {rel}")
     results.append(("hygiene", not problems, "clean" if not problems else "; ".join(problems)))
 
-    ok = all(g for _, g, _ in results)
-    summary = [f"# gate {sha} · {stamp} · {'GREEN' if ok else 'RED'} · {time.time() - t_all:.0f} s",
+    passing = all(g for _, g, _ in results)
+    ok = passing and not amber
+    status = "GREEN" if ok else "AMBER" if passing else "RED"
+    summary = [f"# gate {sha} · {stamp} · {status} · {time.time() - t_all:.0f} s",
                f"ref {ref} = {sha}; frozen copy {snap}", ""]
-    summary += [f"- **{name}** {'✓' if g else '✗'} {line}" for name, g, line in results]
+    summary += [f"- **{name}** {'◐ AMBER' if name in amber else '✓' if g else '✗'} {line}"
+                for name, g, line in results]
     summary += ["", f"screens: {shots}", f"journey: {jdir}"]
     (run_dir / "summary.md").write_text("\n".join(summary) + "\n")
     (run_dir / "summary.json").write_text(json.dumps(
-        {"sha": sha, "green": ok, "results": [{"name": n, "green": g, "line": l} for n, g, l in results]},
+        {"sha": sha, "green": ok, "status": status,
+         "results": [{"name": n, "green": g and n not in amber, "amber": n in amber, "line": l}
+                     for n, g, l in results]},
         indent=1))
     print("\n".join(summary))
     print(f"\n{run_dir / 'summary.md'}")
-    return 0 if ok else 1
+    return 0 if ok else 2 if passing else 1
 
 
 if __name__ == "__main__":
