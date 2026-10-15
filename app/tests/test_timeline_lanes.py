@@ -157,20 +157,21 @@ def drag_to_v1(page, source: str, film_t: float) -> None:
 # ------------------------------------------------------------------ the lanes
 
 def test_the_music_lane_draws_the_bed_its_fades_and_a_dip_per_speech_region(page):
-    """`effects_music` set → an A1 lane: the track's name, a bar the length of the film,
+    """`effects_music` set → the bed on A2 (A1 is each shot's own sound since the tracks,
+    verdict 2 punch 3): the track's name, a bar the length of the film,
     the fade-in and fade-out as ramps, and one dip per speech region in the cut — the
     same padded, merged regions the monitor ducks by. The three fabricated utterances
     merge into one region per clip (gaps ≤ 1.2 s), so two shots make two dips, the
     second one from 2.15 s of film (CLIP_B's speech starts at 0.15 s) to the end."""
-    a1 = "#tl .tl-xlane[data-lane=A1]"
-    assert page.evaluate(f"document.querySelector('{a1}').hidden") is True
+    a1 = "#tl .tl-track[data-track=A2]"
+    assert page.evaluate(f"document.querySelector('{a1} .bed')") is None
     page.evaluate("dock.open('sound')")   # the dock's tool (INTAKE M11)
     page.select_option("#musicTrack", "music/bed.wav")
-    page.wait_for_function(f"!document.querySelector('{a1}').hidden", timeout=8000)
+    page.wait_for_function(f"!!document.querySelector('{a1} .bed')", timeout=8000)
     page.wait_for_function(f"document.querySelectorAll('{a1} .duck').length === 2", timeout=8000)
     zoom = page.evaluate("tl.state.zoom")
-    assert "bed" in page.locator(f"{a1} .lbl").inner_text()
-    assert "12 dB" in page.locator(f"{a1} .lbl").inner_text()
+    assert "bed" in page.locator(f"{a1} .bedname").inner_text()
+    assert "12 dB" in page.locator(f"{a1} .bedname").inner_text()
     # the bed bar spans the film
     assert left(page, f"{a1} .bed") == pytest.approx(x_of(page, 0), abs=0.5)
     assert width(page, f"{a1} .bed") == pytest.approx(4 * zoom, abs=0.5)
@@ -200,7 +201,7 @@ def test_the_music_lane_draws_the_bed_its_fades_and_a_dip_per_speech_region(page
     page.wait_for_function(
         f"document.querySelector('{a1} .duck').style.height === '49.9%'", timeout=8000)
     page.select_option("#musicTrack", "")
-    page.wait_for_function(f"document.querySelector('{a1}').hidden", timeout=8000)
+    page.wait_for_function(f"!document.querySelector('{a1} .bed')", timeout=8000)
 
 
 def test_a_hero_in_the_cut_wears_a_star_and_the_rest_are_unlabelled_outlines(page):
@@ -309,11 +310,12 @@ def test_a_pending_proposal_is_a_ghost_lane_you_can_play_either_side_of(page):
         assert x1 == pytest.approx(x_of(page, 1.0), abs=1)
         assert page.locator(f"{ghost} .lbl").inner_text() == "proposal"
         assert page.locator(f"{ghost} button").count() == 0, "▶ Play it and the monitor's ▶ play"
-        # named like V1's blocks (tl.blockName), never 'CLIP_B 2.0s'
+        # named like V1's blocks (tl.blockName: the clip's name since the tracks, verdict 2
+        # punch 3), never with a length ('CLIP_B 2.0s')
         names = page.eval_on_selector_all(f"{ghost} .ghost .name", "els => els.map(e => e.textContent)")
         assert names == page.evaluate(
             "pendingPlan.segments.map(s => tl.blockName(s, P.clips[s.clip] || null))"), names
-        assert not any("CLIP_" in n for n in names), names
+        assert names == ["CLIP_B", "CLIP_A", "CLIP_C"], names
         assert page.eval_on_selector_all(f"{ghost} .ghost .dur", "els => els.map(e => e.textContent)") == ["", "", ""]
 
         # click the added ghost: the monitor is on CLIP_C at 0.5 s, and the cut is not playing

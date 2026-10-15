@@ -525,7 +525,7 @@
       const seg = tl.byId(blk.dataset.id);
       if (!seg) return;
       d = { kind: 'slip', id: seg.id, ids: [seg.id], clip: seg.clip, in0: seg.in, out0: seg.out,
-            dur: clipDur(seg.clip), spd: tl.speedOf(seg) };
+            dur: clipDur(seg.clip), spd: tl.speedOf(seg), alt: e.altKey && !e.metaKey && !e.ctrlKey };
     } else {
       return;                      // a plain press on a block: the foundation's click
     }
@@ -660,6 +660,9 @@
     clearTicks(); hideTip();
     ui.line.hidden = true;
     if (cancelled) tl.cancel(); else tl.commit();
+    // ⌥ and a press that never travelled: not a slip but Premiere's Alt-click on a linked
+    // clip — here it links or unlinks the picture from its sound on A1 (the tracks).
+    if (!cancelled && d.kind === 'slip' && d.alt && !d.moved && tl.toggleLink) tl.toggleLink(d.id);
     clearHover();                  // the next move over a column lights it again
     paintCue();
   }

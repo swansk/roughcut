@@ -199,7 +199,7 @@ def test_the_lanes_and_the_keys_sum_film_time_at_the_rate(page):
     assert page.locator("#tl .tl-total").inner_text() == tc(3.0)     # 0.5 s of clip left = 1 s of film
     page.keyboard.press("Control+z")
     assert page.evaluate("segs[0].in") == 1.0
-    a1 = "#tl .tl-xlane[data-lane=A1]"
+    a1 = "#tl .tl-track[data-track=A2]"       # the bed's track since the tracks (punch 3)
     page.evaluate("dock.open('sound')")
     page.select_option("#musicTrack", "music/bed.wav")
     page.wait_for_function(f"document.querySelectorAll('{a1} .duck').length === 2", timeout=8000)

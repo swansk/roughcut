@@ -65,9 +65,11 @@
   const EDGE = 8;                      // px at a block's edge that belong to the trim lane
   const CLICK = 4;                     // px under which a pointer drag is the foundation's click
   const POLL_MS = 500;
-  const H = { ghost: 40, a1: 30, bin: 22, gap: 4 };
+  const H = { ghost: 40, bin: 22, gap: 2 };   // gap: the foundation's ROW_GAP between rows
 
   const el = { ghost: null, a1: null, bin: null, over: null, arrows: null, drop: null };
+  let adrag = null;                    // a drag on A1 (the pair, or an unlinked sound alone)
+  let odrag = null;                    // a drag on V2 (a clip laid over the cut)
   let mounted = false;
   let drag = null;                     // the body drag on V1, from pointerdown to pointerup
   let holdRedraw = false;              // an outline is pressed or dragged: rebuilding would end the drag
@@ -107,19 +109,13 @@
   function px(n) { return `${n}px`; }
 
   /* ------------------------------------------------------------ layout */
+  /* The rows are the foundation's (`tl.layoutTracks`): the ghost goes under V1, the bin
+   * outlines under A2, every row sized from the panel's height. The strike-outs and the
+   * arrows sit over V1. */
   function layout() {
-    const root = tl.el.root;
-    const above = 0;                     // nothing sits above V1 since the markers lane went
-    let below = 0;
-    for (const lane of [el.ghost, el.a1, el.bin]) {
-      if (lane.hidden) continue;
-      lane.style.top = `calc(var(--tl-ruler) + 5px + var(--tl-lane) + ${above + H.gap + below}px)`;
-      below += lane.h + H.gap;
-    }
-    el.over.style.top = `calc(var(--tl-ruler) + 5px + ${above}px)`;
+    if (tl.layoutTracks) tl.layoutTracks();
+    el.over.style.top = 'var(--tl-v1top)';
     el.arrows.style.top = el.over.style.top;
-    root.style.setProperty('--tl-above', px(above));
-    root.style.setProperty('--tl-below', px(below));
   }
 
   function schedule() {
@@ -193,24 +189,31 @@
     }
   }
 
-  /* ------------------------------------------------------------ A1: the music bed */
+  /* ------------------------------------------------------------ A2: the music bed */
+  /* The bed lives on A2 (the tracks: A1 is each shot's own sound now). The foundation
+   * owns the row and its header; this draws inside it. */
   function drawA1(a) {
     const m = a.music;
     const list = tl.state.segs;
     const tot = tl.total();
     const z = tl.state.zoom;
     const lane = el.a1;
-    lane.replaceChildren(lane.lbl);
-    if (!m || !list.length || tot <= 0) { lane.hidden = true; return; }
-    lane.hidden = false;
+    lane.replaceChildren();
+    if (!m || !list.length || tot <= 0) { lane.classList.remove('has-bed'); return; }
+    lane.classList.add('has-bed');
+    lane.h = lane.offsetHeight || 30;
     const trackInfo = fn('trackInfo');
     const t = trackInfo ? trackInfo() : null;
-    lane.lbl.textContent = `♪ ${(t && t.name) || m.asset}`
-      + (m.duck ? ` · ducks −${m.duck_db} dB under speech` : ' · no duck');
 
     const bed = div('bed');
     bed.style.left = px(tl.timeToX(0));
     bed.style.width = px(tot * z);
+    const name = document.createElement('span');
+    name.className = 'bedname';
+    name.textContent = `♪ ${(t && t.name) || m.asset}`
+      + (m.duck ? ` · ducks −${m.duck_db} dB under speech` : ' · no duck');
+    bed.appendChild(name);
+    bed.title = `A2 · the music bed: ${(t && t.name) || m.asset} — click for its settings`;
     lane.appendChild(bed);
 
     // the dips: every speech region of every shot, mapped to film time — the same
@@ -582,6 +585,111 @@
     tl.commit();
   }
 
+  /* ------------------------------------------------------------ A1 and V2 drags */
+  /* A1. A press on a sound block: ⌥ and no travel links or unlinks the pair; a linked
+   * sound dragged moves the pair (the drop line, as V1's body drag); an unlinked sound
+   * dragged slides alone — its `a_off`, snapping back into sync within CLICK × 2 px and
+   * to the frame grid — one `move audio` entry. Under CLICK px it is the foundation's
+   * click (select, park). Not with the razor (it cuts) or the slip tool. */
+  function onADown(e) {
+    if (e.button !== 0 || adrag) return;
+    if (tl.state.tool === 'razor' || tl.state.tool === 'slip') return;
+    const b = e.target.closest('.ablk');
+    if (!b) return;
+    const seg = tl.byId(b.dataset.id);
+    if (!seg) return;
+    adrag = { id: seg.id, x: e.clientX, y: e.clientY, pid: e.pointerId, live: false, alt: e.altKey,
+              linked: tl.isLinked(seg), off0: tl.aOff(seg), zoom: tl.state.zoom, slot: null, block: b };
+    if (e.altKey) { e.stopPropagation(); e.preventDefault(); }
+  }
+
+  function onAMove(e) {
+    const d = adrag;
+    if (!d || e.pointerId !== d.pid) return;
+    if (!d.live) {
+      if (Math.abs(e.clientX - d.x) <= CLICK && Math.abs(e.clientY - d.y) <= CLICK) return;
+      if (d.alt) return;                     // ⌥ is a click on A1, never a drag
+      d.live = true;
+      try { tl.el.tracks.A1.setPointerCapture(d.pid); } catch (err) { /* not pointer-capable */ }
+      if (!tl.state.sel.has(d.id)) tl.select([d.id], { source: 'click' });
+      if (!d.linked) tl.begin('move audio');
+      d.block.classList.add('dragging');
+    }
+    e.stopPropagation();
+    if (d.linked) {
+      d.slot = slotAt(tl.eventTime(e) - d.off0, new Set([d.id]));
+      showDrop(d.slot.t);
+    } else {
+      let off = d.off0 + (e.clientX - d.x) / d.zoom;
+      if (Math.abs(off) * d.zoom < CLICK * 2) off = 0;      // back in sync
+      tl.setAudioOffset(d.id, off);
+    }
+  }
+
+  function endADrag(e, apply) {
+    const d = adrag;
+    if (!d || (e && e.pointerId !== d.pid)) return;
+    adrag = null;
+    hideDrop();
+    if (d.alt && !d.live) {
+      if (e) { e.stopPropagation(); e.preventDefault(); }
+      if (apply) tl.toggleLink(d.id);
+      return;
+    }
+    if (!d.live) return;                      // the foundation's click
+    if (e) { e.stopPropagation(); e.preventDefault(); }
+    d.block.classList.remove('dragging');
+    try { tl.el.tracks.A1.releasePointerCapture(d.pid); } catch (err) { /* already released */ }
+    if (d.linked) {
+      if (apply && d.slot) { tl.begin('move'); tl.move([d.id], d.slot.beforeId); tl.commit(); }
+    } else if (apply) tl.commit(); else tl.cancel();
+  }
+
+  /* V2: a clip over the cut drags along it, snapping its start to a cut point or the
+   * playhead within CLICK × 2 px; one `move V2` entry. */
+  function onODown(e) {
+    if (e.button !== 0 || odrag) return;
+    const b = e.target.closest('.oblk');
+    if (!b) return;
+    const o = tl.overlayById(b.dataset.id);
+    if (!o) return;
+    odrag = { id: o.id, x: e.clientX, y: e.clientY, pid: e.pointerId, live: false, at0: o.at,
+              zoom: tl.state.zoom, at: o.at, block: b };
+  }
+
+  function onOMove(e) {
+    const d = odrag;
+    if (!d || e.pointerId !== d.pid) return;
+    if (!d.live) {
+      if (Math.abs(e.clientX - d.x) <= CLICK && Math.abs(e.clientY - d.y) <= CLICK) return;
+      d.live = true;
+      try { tl.el.tracks.V2.setPointerCapture(d.pid); } catch (err) { /* not pointer-capable */ }
+      tl.selectOverlay(d.id);
+    }
+    e.stopPropagation();
+    let at = Math.max(0, d.at0 + (e.clientX - d.x) / d.zoom);
+    const near = [tl.state.playhead];
+    let t = 0;
+    for (const s of tl.state.segs) { near.push(t); t += tl.dur(s); }
+    near.push(t);
+    for (const c of near) if (Math.abs(c - at) * d.zoom < CLICK * 2) { at = c; break; }
+    d.at = at;
+    d.block.style.left = px(tl.timeToX(at));
+    showDrop(at);
+  }
+
+  function endODrag(e, apply) {
+    const d = odrag;
+    if (!d || (e && e.pointerId !== d.pid)) return;
+    odrag = null;
+    hideDrop();
+    if (!d.live) return;
+    if (e) { e.stopPropagation(); e.preventDefault(); }
+    try { tl.el.tracks.V2.releasePointerCapture(d.pid); } catch (err) { /* already released */ }
+    if (apply) tl.moveOverlay(d.id, d.at);
+    tl.render();
+  }
+
   /* ------------------------------------------------------------ drop from outside */
   const carries = (e) => {
     const types = e.dataTransfer && e.dataTransfer.types;
@@ -710,14 +818,17 @@
     mounted = true;
     const canvas = tl.el.canvas;
     el.ghost = lane('ghost', H.ghost, 'proposal');
-    el.a1 = lane('A1', H.a1, '♪');
+    el.a1 = tl.el.tracks && tl.el.tracks.A2;      // the bed's row: the foundation's A2
     el.bin = lane('bin', H.bin, '');
     el.over = div('tl-over');
     el.arrows = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     el.arrows.setAttribute('class', 'tl-arrows');
     el.drop = div('tl-dropline');
     el.drop.style.display = 'none';
-    for (const x of [el.ghost, el.a1, el.bin, el.over, el.arrows, el.drop]) canvas.appendChild(x);
+    for (const x of [el.ghost, el.bin, el.over, el.arrows, el.drop]) canvas.appendChild(x);
+    // the foundation lays these rows out with its tracks
+    tl.el.lanes.ghost = el.ghost;
+    tl.el.lanes.bin = el.bin;
 
     // V1: the body drag
     const v1 = tl.el.lanes.V1;
@@ -725,9 +836,26 @@
     v1.addEventListener('pointermove', onMove);
     v1.addEventListener('pointerup', (e) => endDrag(e, true));
     v1.addEventListener('pointercancel', (e) => endDrag(e, false));
+    // A1: a linked sound drags its pair (as V1's body does); an unlinked one moves alone
+    const a1 = tl.el.tracks && tl.el.tracks.A1;
+    if (a1) {
+      a1.addEventListener('pointerdown', onADown, true);
+      a1.addEventListener('pointermove', onAMove, true);
+      a1.addEventListener('pointerup', (e) => endADrag(e, true), true);
+      a1.addEventListener('pointercancel', (e) => endADrag(e, false), true);
+    }
+    // V2: a clip laid over the cut moves along it
+    const v2 = tl.el.tracks && tl.el.tracks.V2;
+    if (v2) {
+      v2.addEventListener('pointerdown', onODown, true);
+      v2.addEventListener('pointermove', onOMove, true);
+      v2.addEventListener('pointerup', (e) => endODrag(e, true), true);
+      v2.addEventListener('pointercancel', (e) => endODrag(e, false), true);
+    }
 
     // the lanes' own clicks
-    el.a1.addEventListener('click', () => {
+    el.a1.addEventListener('click', (e) => {
+      if (!e.target.closest('.bed')) return;
       const p = q('#musicPanel');
       if (window.dock) window.dock.reveal(p);      // the panel is a tool in the dock (M11)
       if (p) p.scrollIntoView({ block: 'nearest', behavior: 'smooth' });

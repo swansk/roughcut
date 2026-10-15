@@ -54,6 +54,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from roughcut import colour, edits, effects, fx    # noqa: E402  (after sys.path)
+from roughcut import tracks as tracksmod           # noqa: E402
 
 TARGET_LUFS = -16.0
 MAX_GAIN_DB = 12.0          # refuse to amplify near-silence into hiss
@@ -230,6 +231,95 @@ def cut_with_effects(src: Path, t_in: float, t_out: float, gain_db: float, dest:
     r = run(cmd)
     if r.returncode != 0:
         raise RuntimeError(f"cut with effects failed {src.name} {t_in}-{t_out}: {r.stderr[-400:]}")
+
+
+def tracks_pass(film: Path, edl: dict, segments: list[dict], parts: list[Path],
+                video: dict, orient: str, footage: Path, generated_dir: Path | None,
+                workdir: Path) -> list[str]:
+    """The sequence's tracks over the concatenated film (roughcut/tracks.py), in ONE pass
+    and only when the tracks ask for something the plain concat is not:
+
+      * A1 — the camera sound — muted (or soloed out), at a gain, or with a shot's sound
+        unlinked and moved (`a_off`): A1 is rebuilt from the parts' own audio (already
+        levelled, retimed, carrying the effects' sounds), each delayed to its film
+        second and mixed; muted, it is silence the film's length.
+      * V2 — `overlays` — each clip cut like a part (the same conform) and composited
+        over V1, full frame, from its film second for its length; picture only.
+      * V1's eye off: V1 is black under whatever V2 holds.
+
+    The video is copied when only the sound changed. Returns the lines to print."""
+    trk = edl.get("tracks") or {}
+    plan = tracksmod.a1_plan(segments, trk, edits.dur)
+    total = plan["total"]
+    v1_eye = tracksmod.visible(trk, "V1")
+    overlays = []
+    if tracksmod.visible(trk, "V2"):
+        for o in edl.get("overlays") or []:
+            length = min(edits.dur(o), total - float(o["at"]))
+            if length > 0.05:
+                overlays.append((o, length))
+    if not plan["needed"] and v1_eye and not overlays:
+        return []
+    said: list[str] = []
+    inputs: list[str] = ["-i", str(film)]
+    graph: list[str] = []
+    n = 1
+    vmap, vcodec = "0:v:0", ["-c:v", "copy"]
+    if overlays or not v1_eye:
+        base = "[0:v]"
+        if not v1_eye:
+            graph.append("[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[vb]")
+            base = "[vb]"
+            said.append("V1 hidden: black under V2")
+        for j, (o, length) in enumerate(overlays):
+            src = source_of(footage, generated_dir, o["clip"])
+            if not src.exists():
+                raise SystemExit(f"missing footage for V2: {src}")
+            dest = workdir / f"v2_{j:03d}.mp4"
+            normalise = None if edits.is_generated(o["clip"]) else colour.normalise_vf(
+                shot_probe(src, None, {}))
+            spd = edits.speed_of(o)
+            cut(src, o["in"], min(o["out"], o["in"] + length * spd), 0.0, dest, orient,
+                video, normalise=normalise, speed=spd)
+            inputs += ["-i", str(dest)]
+            at = float(o["at"])
+            graph.append(f"[{n}:v]setpts=PTS-STARTPTS+{at:.3f}/TB[o{j}]")
+            graph.append(f"{base}[o{j}]overlay=0:0:eof_action=pass:"
+                         f"enable='between(t,{at:.3f},{at + length:.3f})'[v{j}]")
+            base = f"[v{j}]"
+            n += 1
+            said.append(f"V2 {j:02d} {o['clip']} {o['in']:.1f}-{o['out']:.1f} over "
+                        f"{at:.2f}-{at + length:.2f}s")
+        graph.append(f"{base}format=yuv420p[vout]")
+        vmap = "[vout]"
+        vcodec = ["-c:v", "libx264", "-preset", video["preset"], "-crf", video["crf"],
+                  *COLOUR_TAGS]
+    amap, acodec = "0:a:0", ["-c:a", "copy"]
+    if plan["needed"]:
+        if plan["audible"]:
+            first = n
+            for part in parts:
+                inputs += ["-i", str(part)]
+                n += 1
+            graph.append(tracksmod.a1_filter(len(parts), plan, first_input=first))
+            moved = sum(1 for s in segments if abs(tracksmod.a_off(s)) > 1e-9)
+            said.append(f"A1 rebuilt: {moved} shot(s) out of sync, gain {plan['gain_db']:+.1f} dB")
+        else:
+            graph.append(f"anullsrc=r=48000:cl=stereo,atrim=0:{max(0.01, total):.3f}[a1]")
+            said.append("A1 muted: the film's sound is silence")
+        amap = "[a1]"
+        acodec = ["-c:a", "aac", "-b:a", video["audio_bitrate"], "-ac", "2"]
+    out = film.with_name(film.stem + ".tracks.mp4")
+    cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin", *inputs,
+           "-filter_complex", ";".join(graph), "-map", vmap, "-map", amap, "-dn",
+           *vcodec, *acodec, "-t", f"{max(0.01, total):.3f}",
+           "-video_track_timescale", str(video["timescale"]), "-write_tmcd", "0",
+           "-movflags", "+faststart", str(out)]
+    r = run(cmd)
+    if r.returncode != 0:
+        raise RuntimeError(f"tracks pass failed: {r.stderr[-600:]}")
+    out.replace(film)
+    return said
 
 
 def probe_video(path: Path) -> tuple[str, int, int]:
@@ -538,11 +628,30 @@ def main() -> int:
 
         assert_no_rotation(args.out, orient)
 
+        # The tracks (roughcut/tracks.py): A1's mute / gain / unlinked offsets, V2 over
+        # V1, V1's eye — one pass, only when one of them is not the default.
+        for line in tracks_pass(args.out, edl, segments, parts, video, orient,
+                                args.footage, args.generated_dir, workdir):
+            print(f"tracks: {line}")
+        assert_no_rotation(args.out, orient)
+
         # Film-wide effects run here, after the picture is assembled: the video stream
         # is copied through, so the bed costs no generation of quality.
         music = (edl.get("effects_music") or {}) if isinstance(edl, dict) else {}
         if args.music:
             music = {**music, "asset": str(args.music)}
+        # A2 is the bed (roughcut/tracks.py): muted or soloed out, there is no bed; its
+        # gain is added to the bed's own level.
+        a2 = tracksmod.resolve_tracks(edl.get("tracks"))["A2"]
+        if music.get("asset") and not tracksmod.audible(edl.get("tracks") or {}, "A2"):
+            print("music: A2 is muted — no bed")
+            music = {}
+        elif music.get("asset") and abs(float(a2["gain_db"] or 0)) > 1e-9:
+            spec = effects.resolve_gain(effects.music_spec(music),
+                                        effects.resolve_asset(music["asset"], args.assets))
+            g = float(spec["gain_db"]) + float(a2["gain_db"])
+            music = {**music, "gain_db": round(max(effects.MIN_GAIN_DB,
+                                                   min(effects.MAX_GAIN_DB, g)), 2)}
         if music.get("asset"):
             scored = args.out.with_name(args.out.stem + ".scored.mp4")
             # The transcripts know where the talking is; ducking on the film's

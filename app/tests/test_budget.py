@@ -72,10 +72,16 @@ HEADER_MAX_PX = 50
 # fails. /floor and /open are unchanged.
 # After lane KEYS merged (the timeline's timecode column and HH:MM:SS:FF ruler labels),
 # "/" measured 96 words: 94 → 105.
-WORDS_IN_VIEW = {"/": 105, "/floor": 58, "/open": 59, "/ shot": 154, "/ film": 107, "/ fx": 130,
-                 "/ jobs": 125}  # +3 each: "Re-run first pass" (K1), REDESIGN-GOAL rubric log 2026-10-15
-CONTROLS_IN_VIEW = {"/": 38, "/floor": 8, "/open": 9, "/ shot": 51, "/ film": 37, "/ fx": 41,
-                    "/ jobs": 38}
+# Lane TRACKS (wave 2, verdict 2 punch 3): the Timeline's four track headers are 14
+# controls (lock · name/target · eye on V1/V2; lock · name · M · S on A1/A2) and ~9
+# words (V2 V1 A1 M S A2 M S, the bed's name on A2). Measured after it: / 103 · 49,
+# / shot 154 · 61, / film 111 · 48, / jobs 129 · 49, / fx 131 · 52; the board's numbers
+# Lead, at merge: the board's numbers below are the MEASURED counts on the merged tree with no
+# headroom (TRACKS + FPUI together; see REDESIGN-GOAL's rubric log), so any growth fails.
+WORDS_IN_VIEW = {"/": 106, "/floor": 58, "/open": 59, "/ shot": 157, "/ film": 114, "/ fx": 134,
+                 "/ jobs": 132}
+CONTROLS_IN_VIEW = {"/": 50, "/floor": 8, "/open": 9, "/ shot": 62, "/ film": 49, "/ fx": 53,
+                    "/ jobs": 50}
 
 # Contracts another lane delivers (M16 stage 1, C1): until that lane is merged the
 # check is an expected failure on that screen. Every stage-1 lane is merged, so this is
