@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Changed
+- **Screen word budget +3 for the first-pass control.** `/ film` 104→107 and `/ jobs` 122→125 in `test_budget.py`: the header's "Re-run first pass" (K1) is three words that are now always in view. Measured 106 and 124 on the merged branch; logged in REDESIGN-GOAL.md's rubric changes log for the judge to rule on.
+
 ### Docs
 - **LOOP.md: wave 2 launched** (FPUI, TRACKS, EFFECTS, EXPORT, INGEST, FINISH from `f371199`), verdict 2's rubric rulings, and the fixed `data-testid` hooks the wave-3 journey test will drive.
 ### Changed

@@ -143,3 +143,4 @@ next judge runs, and the next judge rules it honest or lenient.
   at 1440×900 and 1920×1080 (the app bar may ellipsize a job's name or Next's sentence only
   with a hover title), no link in the browser's blue or underline on `/`, and every `/open`
   card has a loaded picture within 10 s of opening a fresh work dir.
+- 2026-10-15 (lead, wave 2): `test_budget.py` words in view `/ film` 104→107 and `/ jobs` 122→125, i.e. +3 each, exactly the words of the header control K1 requires ("Re-run first pass"). Measured on the merged branch: 106 and 124. `/ fx` unchanged (130). Controls budgets unchanged.

@@ -72,8 +72,8 @@ HEADER_MAX_PX = 50
 # fails. /floor and /open are unchanged.
 # After lane KEYS merged (the timeline's timecode column and HH:MM:SS:FF ruler labels),
 # "/" measured 96 words: 94 → 105.
-WORDS_IN_VIEW = {"/": 105, "/floor": 58, "/open": 59, "/ shot": 154, "/ film": 104, "/ fx": 130,
-                 "/ jobs": 122}
+WORDS_IN_VIEW = {"/": 105, "/floor": 58, "/open": 59, "/ shot": 154, "/ film": 107, "/ fx": 130,
+                 "/ jobs": 125}  # +3 each: "Re-run first pass" (K1), REDESIGN-GOAL rubric log 2026-10-15
 CONTROLS_IN_VIEW = {"/": 38, "/floor": 8, "/open": 9, "/ shot": 51, "/ film": 37, "/ fx": 41,
                     "/ jobs": 38}
 
