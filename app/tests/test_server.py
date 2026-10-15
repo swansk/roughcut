@@ -290,7 +290,7 @@ def test_poster_is_a_small_jpeg_of_the_frame_at_that_time(client, project):
     assert r.headers["content-type"] == "image/jpeg"
     assert r.content[:2] == b"\xff\xd8", "not a JPEG"
     assert len(r.content) < 60_000, f"a card's picture should be small: {len(r.content)}"
-    assert (server.STATE["posters"] / "CLIP_A@000002.50.jpg").exists()
+    assert server.poster_path("CLIP_A", 2.5).exists()
 
 
 def test_poster_at_a_different_time_is_a_different_picture(client):
@@ -304,7 +304,7 @@ def test_poster_is_cached_on_disk_and_declared_immutable(client, project):
     """One clip at one timestamp is one frame forever, so the browser may keep it and
     so may the disk — re-rendering the board must not re-run ffmpeg once per card."""
     import server
-    dest = server.STATE["posters"] / "CLIP_B@000003.00.jpg"
+    dest = server.poster_path("CLIP_B", 3.0)
     dest.unlink(missing_ok=True)
     r = client.get("/media/poster/CLIP_B.jpg", params={"t": 3.0})
     assert r.status_code == 200
