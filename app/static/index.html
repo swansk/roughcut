@@ -246,6 +246,23 @@
       <!-- ASSISTANT — the one sentence about the film, a change asked of the whole cut
            (priced on its button), and the proposal it comes back with. -->
       <section data-tool="ask" hidden>
+        <!-- The proposal, reviewed as an edit (verdict 4, punch 4): its buttons on one row
+             that stays in view, Things to check, the notes folded, a row per shot. While
+             one waits it owns the Assistant (verdict 5, punch 3): it sits on top and the
+             form below folds to the one line #askFold. -->
+        <div id="proposal" class="panel" style="display:none">
+          <h2>Proposed cut</h2>
+          <div class="pbtns">
+            <button id="playProposal" data-next-for="cut" title="play the proposed cut in the Program monitor">▶ Play it</button>
+            <button id="acceptProposal">Accept</button>
+            <button id="acceptAll" hidden title="every proposed shot, the rejected ones too">Accept all</button>
+            <button id="rejectProposal">Discard</button>
+          </div>
+          <div id="proposalChecks" class="pchecks" hidden></div>
+          <div id="proposalNotes"></div>
+          <div id="proposalDiff"></div>
+        </div>
+        <button type="button" id="askFold" aria-expanded="false" title="the story and a new ask — the proposal stays up above them">Ask for a change · What is this film about?</button>
         <div class="hint" id="askFirst" hidden>No cut yet: the sentence and the first cut are in the Timeline panel.</div>
         <div class="panel flat" id="askStory">
           <label class="ask-q" for="story">What is this film about?</label>
@@ -261,20 +278,6 @@
           </div>
         </div>
         <div id="lastAsk" class="hint" style="display:none;margin-bottom:10px"></div>
-        <!-- The proposal, reviewed as an edit (verdict 4, punch 4): its buttons on one row
-             that stays in view, Things to check, the notes folded, a row per shot. -->
-        <div id="proposal" class="panel" style="display:none">
-          <h2>Proposed cut</h2>
-          <div class="pbtns">
-            <button id="playProposal" data-next-for="cut" title="play the proposed cut in the Program monitor">▶ Play it</button>
-            <button id="acceptProposal">Accept</button>
-            <button id="acceptAll" hidden title="every proposed shot, the rejected ones too">Accept all</button>
-            <button id="rejectProposal">Discard</button>
-          </div>
-          <div id="proposalChecks" class="pchecks" hidden></div>
-          <div id="proposalNotes"></div>
-          <div id="proposalDiff"></div>
-        </div>
       </section>
 
       <!-- EXPORT (the tool key stays `out`: #tool=out and the flow keep working). -->
