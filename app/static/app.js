@@ -391,6 +391,10 @@ function commitWhy(box) {
  * and [ ] { }), the white-point numbers, the film's look in every shot and the six-lane
  * coverage strip with its legend — is gone or folded. */
 const SPEEDS = [0.25, 0.5, 0.75, 1, 1.5, 2];
+let assistOpen = false;          // the strip's "Assistant" section, open or closed
+/* Undo's key as this platform spells it: ⌘Z on macOS, Ctrl+Z everywhere else. */
+const ON_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
+const undoKey = () => (ON_MAC ? '⌘Z' : 'Ctrl+Z');
 const speedText = (v) => ({ 0.25: '¼×', 0.5: '½×', 0.75: '¾×' }[v] || `${v}×`);
 
 function buildShot(seg) {
@@ -402,21 +406,15 @@ function buildShot(seg) {
     <div class="sbody">
       <div class="srow top">
         <span class="sname"></span>
-        <button data-act="play" title="play this shot only, then stop · enter">▶ play</button>
-        <button data-act="ask" title="ask for a change to this one shot — opens a box; nothing is spent until its Ask">Ask about this shot${priceTag('shot')}</button>
-        <span class="lookhost"></span>
-        <button data-act="del" title="take this shot out of the cut — ⌘Z brings it back">Remove</button>
       </div>
-      <div class="why" contenteditable title="why this shot — yours to edit, saved with the cut"></div>
-      <div class="said"></div>
       <div class="warns"></div>
       <div class="srow ctl ecx">
         <select class="speed" title="the shot's speed"></select>
         <span class="nudge"${gen ? ' hidden' : ''}>
-          <button data-act="cwarm" title="warmer — ⌘Z undoes it">warmer</button>
-          <button data-act="ccool" title="cooler — ⌘Z undoes it">cooler</button>
-          <button data-act="cbright" title="brighter — ⌘Z undoes it">brighter</button>
-          <button data-act="cdark" title="darker — ⌘Z undoes it">darker</button>
+          <button data-act="cwarm" title="warmer — ${undoKey()} undoes it">warmer</button>
+          <button data-act="ccool" title="cooler — ${undoKey()} undoes it">cooler</button>
+          <button data-act="cbright" title="brighter — ${undoKey()} undoes it">brighter</button>
+          <button data-act="cdark" title="darker — ${undoKey()} undoes it">darker</button>
           <button data-act="creset" class="ghost" title="back to the auto balance">reset</button>
         </span>
         <button class="disc" data-disc="look"${gen ? ' hidden' : ''}>colour &amp; look ▸</button>
@@ -430,7 +428,17 @@ function buildShot(seg) {
         <button data-act="csetref" title="make this the shot others match to (again: none)">set as reference</button>
       </div>
       </div>
-      <div class="srow"><button class="disc" data-disc="why">why? ▸</button></div>
+      <details class="assist" data-testid="ec-assistant">
+      <summary>Assistant</summary>
+      <div class="srow acts">
+        <button data-act="play" title="play this shot only, then stop · enter">▶ play</button>
+        <button data-act="ask" title="ask for a change to this one shot — opens a box; nothing is spent until its Ask">Ask about this shot${priceTag('shot')}</button>
+        <span class="lookhost"></span>
+        <button data-act="del" title="take this shot out of the cut — ${undoKey()} brings it back">Remove</button>
+      </div>
+      <div class="why" contenteditable title="why this shot — yours to edit, saved with the cut"></div>
+      <div class="said"></div>
+      <div class="srow"><button class="disc" data-disc="why" title="the evidence: what is said and seen in the shot, and its colour">why? ▸</button></div>
       <div class="whybox" data-pane="why" hidden>
         <div class="from"><span class="clip"></span> · <span class="times"></span></div>
         <div class="lines"></div>
@@ -448,7 +456,15 @@ function buildShot(seg) {
           <span class="hint shotState"></span>
         </div>
       </div>
+      </details>
     </div>`;
+  // The AI's and the shot's own chrome sit in one collapsed "Assistant" section at the
+  // foot of Effect Controls (verdict 4, punch 10): the panel opens on Premiere's
+  // properties, not on Ask / Look deeper / Remove / a quote. Its open state carries
+  // from shot to shot, as Premiere's twirl-downs do.
+  const assist = el.querySelector('details.assist');
+  assist.open = assistOpen;
+  assist.addEventListener('toggle', () => { assistOpen = assist.open; });
   el.querySelector('.why').addEventListener('blur', (ev) => {
     const text = ev.target.textContent.trim();
     if (seg.why === text) return;
@@ -621,6 +637,7 @@ function fillShot(box, seg) {
 
   const askBox = q('.shotAsk');
   askBox.hidden = !shotAskOpen.has(seg);
+  if (!askBox.hidden && !q('details.assist').open) q('details.assist').open = true;
   const note = q('.shotNote');
   if (document.activeElement !== note) note.value = shotAskDraft.get(seg) || '';
 
@@ -1674,6 +1691,7 @@ function emptyState() {
   const lead = 'Drag a clip here or press <kbd>,</kbd>';
   if (!analysed) {
     el.innerHTML = `<h3>${lead}</h3>`;
+    el.dataset.ai = 'pass';
     return el;
   }
   // One sentence about the film (INTAKE M16 I16.4): the EDL's story — the Ask tool's
@@ -1684,19 +1702,26 @@ function emptyState() {
     <label class="ask-q" for="firstNote">What is this film about?</label>
     <textarea id="firstNote" style="min-height:60px"
       placeholder="optional — a sentence is enough"></textarea>
-    <div style="display:flex;gap:10px;align-items:center;justify-content:center;margin-top:10px;flex-wrap:wrap">
+    <div class="firstRow" style="display:flex;gap:10px;align-items:center;justify-content:center;margin-top:10px;flex-wrap:wrap">
       <button id="firstCut" data-next-for="cut"${unpricedAttr(firstMode())}>${firstLabel()}${priceTag(firstMode())}</button>
       <span class="hint" id="firstAims">${escapeHtml(aimsFor())}</span>
     </div>
     <div class="hint" id="firstState" style="margin-top:8px"></div>`;
-  // The first pass makes a first cut too: while one runs, this button waits rather than
-  // start an overlapping cut (FPUI's `rcFirstPass.state()`; re-checked each second while
-  // the empty state is on screen, since a run starts and ends without a render).
+  // The first pass makes a first cut too, so the empty Timeline offers ONE AI action
+  // (verdict 4, punch 10: "Make a first cut" sat beside "First pass running — see it"):
+  // the first pass's (firstpass.js puts it in this box) until a pass has finished, then
+  // this button — the first cut from the keeps or the index — and the pass's box steps
+  // aside (`data-ai`, workspace.css). Re-checked each second while the empty state is on
+  // screen, since a run starts and ends without a render. While one runs this button
+  // also waits rather than start an overlapping cut.
   const fc = el.querySelector('#firstCut');
   const gate = () => {
     const fp = window.rcFirstPass && typeof window.rcFirstPass.state === 'function'
       ? window.rcFirstPass.state() : null;
     const busy = !!fp && fp.state === 'running';
+    const ai = window.rcFirstPass && !(fp && ['done', 'stale-after-edits'].includes(fp.state))
+      ? 'pass' : 'cut';
+    if (el.dataset.ai !== ai) el.dataset.ai = ai;
     if (fc.dataset.fpBusy !== String(busy)) {
       fc.dataset.fpBusy = String(busy);
       fc.disabled = busy;
@@ -2763,7 +2788,7 @@ async function snap() {
   const before = total();
   segs = data.segments;
   render();
-  toast(`snapped: ${fmt(before)} → ${fmt(total())} (undo with ⌘Z)`, 4000);
+  toast(`snapped: ${fmt(before)} → ${fmt(total())} (undo with ${undoKey()})`, 4000);
 }
 
 /* Ask — the interject loop. A revision arrives as a *proposal*: shown as a diff,
@@ -3047,10 +3072,10 @@ function acceptProposal(everything) {
   save();                       // straight to disk; a 16-shot cut is not "in progress"
   answerProposal('accept', partial ? { accepted: r.accepted, of: r.total,
                                        rejected: r.rejectedShots, kept: r.keptRemoved } : null);
-  toast(partial ? `applied ${r.accepted} of ${r.total} shots${graded ? ' and the colour' : ''} — undo with ⌘Z`
-    : !graded ? 'applied — undo with ⌘Z'
-      : cutToo ? 'applied, cut and colour — ⌘Z undoes both'
-        : 'colour applied — ⌘Z undoes it');
+  toast(partial ? `applied ${r.accepted} of ${r.total} shots${graded ? ' and the colour' : ''} — undo with ${undoKey()}`
+    : !graded ? `applied — undo with ${undoKey()}`
+      : cutToo ? `applied, cut and colour — ${undoKey()} undoes both`
+        : `colour applied — ${undoKey()} undoes it`);
 }
 
 /* ▶ Play it (INTAKE M16 I16.4): the proposed cut plays in the monitor from its ghost

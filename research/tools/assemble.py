@@ -492,12 +492,19 @@ def tracks_pass(film: Path, edl: dict, segments: list[dict], parts: list[Path],
     total = float(film_s) if film_s is not None else plan["total"]
     v1_eye = tracksmod.visible(trk, "V1")
     overlays = []
-    if tracksmod.visible(trk, "V2"):
-        for o in edl.get("overlays") or []:
-            length = min(edits.dur(o), total - float(o["at"]))
-            if length > 0.05:
-                overlays.append((o, length))
-    if not plan["needed"] and v1_eye and not overlays:
+    # V2 and the added video tracks (V3…), bottom to top: a higher track covers a lower
+    # one; a hidden track's clips are left out (tracksmod.video_layers)
+    for o in tracksmod.video_layers(trk, edl.get("overlays") or []):
+        length = min(edits.dur(o), total - float(o["at"]))
+        if length > 0.05:
+            overlays.append((o, length))
+    # the added audio tracks' clips (A3…), each at its track's gain, mixed with A1
+    extra_audio = []
+    for c, gain_db in tracksmod.audio_layers(trk, edl.get("audio") or []):
+        length = min(edits.dur(c), total - float(c["at"]))
+        if length > 0.05:
+            extra_audio.append((c, length, gain_db))
+    if not plan["needed"] and v1_eye and not overlays and not extra_audio:
         return []
     said: list[str] = []
     inputs: list[str] = ["-i", str(film)]
@@ -528,13 +535,16 @@ def tracks_pass(film: Path, edl: dict, segments: list[dict], parts: list[Path],
                          f"enable='between(t,{at:.3f},{at + length:.3f})'[v{j}]")
             base = f"[v{j}]"
             n += 1
-            said.append(f"V2 {j:02d} {o['clip']} {o['in']:.1f}-{o['out']:.1f} over "
+            said.append(f"{o.get('track') or 'V2'} {j:02d} {o['clip']} {o['in']:.1f}-{o['out']:.1f} over "
                         f"{at:.2f}-{at + length:.2f}s")
         graph.append(f"{base}format=yuv420p[vout]")
         vmap = "[vout]"
         vcodec = ["-c:v", "libx264", "-preset", video["preset"], "-crf", video["crf"],
                   "-fps_mode", "cfr", "-r", str(video["fps"]), *COLOUR_TAGS]
     amap, acodec = "0:a:0", ["-c:a", "copy"]
+    if extra_audio and not plan["needed"]:
+        # A1 as cut is the film's own sound; the added tracks mix over it
+        graph.append("[0:a]anull[a1]")
     if plan["needed"]:
         if plan["audible"]:
             first = n
@@ -548,6 +558,26 @@ def tracks_pass(film: Path, edl: dict, segments: list[dict], parts: list[Path],
             graph.append(f"anullsrc=r=48000:cl=stereo,atrim=0:{max(0.01, total):.3f}[a1]")
             said.append("A1 muted: the film's sound is silence")
         amap = "[a1]"
+        acodec = ["-c:a", "aac", "-b:a", video["audio_bitrate"], "-ac", "2"]
+    if extra_audio:
+        labels = ["[a1]"]
+        for j, (c, length, gain_db) in enumerate(extra_audio):
+            src = source_of(footage, generated_dir, c["clip"])
+            if not src.exists():
+                raise SystemExit(f"missing footage for {c['track']}: {src}")
+            spd = edits.speed_of(c)
+            inputs += ["-ss", f"{float(c['in']):.3f}", "-t", f"{length * spd:.3f}", "-i", str(src)]
+            ms = int(round(float(c["at"]) * 1000))
+            tempo = f",{atempo_chain(spd)}" if abs(spd - 1.0) > 1e-9 else ""
+            graph.append(f"[{n}:a]aresample={AUDIO_RATE},asetpts=PTS-STARTPTS{tempo},"
+                         f"volume={gain_db:.2f}dB,adelay={ms}|{ms}[x{j}]")
+            labels.append(f"[x{j}]")
+            n += 1
+            said.append(f"{c['track']} {j:02d} {c['clip']} {c['in']:.1f}-{c['out']:.1f} at "
+                        f"{float(c['at']):.2f}s, {gain_db:+.1f} dB")
+        graph.append(f"{''.join(labels)}amix=inputs={len(labels)}:normalize=0:"
+                     f"dropout_transition=0,apad,atrim=0:{max(0.01, total):.3f}[amix]")
+        amap = "[amix]"
         acodec = ["-c:a", "aac", "-b:a", video["audio_bitrate"], "-ac", "2"]
     out = film.with_name(film.stem + ".tracks.mp4")
     cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin", *inputs,

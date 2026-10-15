@@ -235,6 +235,23 @@
   const TRACKS = ['V2', 'V1', 'A1', 'A2'];
   const TRACK_W = { V2: 0.8, V1: 1.5, A1: 1.15, A2: 0.75 };
   const TRACK_MIN = { V2: 24, V1: 40, A1: 28, A2: 22 };
+  /* Sequence › Add Track (verdict 4, punch 9): V3…V9 stack above V2, A3…A9 under A2. An
+   * added video track holds clips laid over the cut (overlays with `track`); an added
+   * audio track holds clips' sound (`state.audio`). The render composites the video
+   * tracks bottom to top and mixes the audio ones (roughcut/tracks.py). */
+  const EXTRA_V = ['V3', 'V4', 'V5', 'V6', 'V7', 'V8', 'V9'];
+  const EXTRA_A = ['A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9'];
+  const isExtra = (n) => EXTRA_V.includes(n) || EXTRA_A.includes(n);
+  const extraDefault = (n) => (n[0] === 'V' ? { lock: false, eye: true, target: false }
+    : { lock: false, mute: false, solo: false, target: false, gain_db: 0 });
+  const trackW = (n) => TRACK_W[n] ?? (n[0] === 'V' ? 0.7 : 0.7);
+  const trackMin = (n) => TRACK_MIN[n] ?? 22;
+  /* Every track, top to bottom: V9…V3, V2, V1, A1, A2, A3…A9. */
+  function trackNames() {
+    const have = Object.keys(state.tracks);
+    return [...EXTRA_V.filter((n) => have.includes(n)).reverse(), ...TRACKS,
+            ...EXTRA_A.filter((n) => have.includes(n))];
+  }
   const RULER_H = 24, ROW_GAP = 2, AV_GAP = 6;
   const DEFAULT_TRACKS = () => ({
     V1: { lock: false, eye: true, target: true },
@@ -270,6 +287,7 @@
     sel: new Set(), anchor: null, zoom: 40, scrollX: 0, playhead: 0,
     tool: 'select', markers: [], seqIn: null, seqOut: null,
     tracks: DEFAULT_TRACKS(), overlays: [], osel: null,
+    audio: [],                     // the added audio tracks' clips (A3…)
   };
   const ablocks = new Map();       // id -> A1 block element (the shot's linked sound)
   const oblocks = new Map();       // overlay id -> V2 block element
@@ -288,6 +306,10 @@
   const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
   const stem = (clip) => String(clip).replace(/\.[^.]+$/, '');
   const isGen = (clip) => String(clip).startsWith('gen_');
+  /* A gap on V1 (verdict 4, punch 9): empty film time, carried by a generated black clip
+   * the server makes (POST /api/gap) so the monitor and the render play black and
+   * silence. Drawn as nothing; selectable; a ripple delete closes it (Premiere). */
+  const isGap = (seg) => !!(seg && seg.gap === true);
 
   /* The one arithmetic (INTAKE M13, edits.py's `speed_of` / `dur`): a shot's rate, 1
    * when absent or nonsense, and its length in the film at that rate. */
@@ -690,7 +712,14 @@
     b.classList.toggle('narrow', w < 96);
     b.classList.toggle('tiny', w < 36);
     b.classList.toggle('gen', gen);
+    b.classList.toggle('gap', isGap(seg));
     const clip = clipOf(seg.clip);
+    if (isGap(seg)) {
+      b.querySelector('.name').textContent = '';
+      b.title = `gap · ${tc(filmLen)} of empty film — select it and ripple delete`
+        + ` (X or ${keyLabel('⇧')}Del) to close it`;
+      return;
+    }
     b.querySelector('.name').textContent = blockName(seg, clip);
     // the badge: only when the shot is retimed, so a 1× cut looks the way it always did
     const badge = b.querySelector('.speed');
@@ -735,12 +764,12 @@
     badge.title = off ? `out of sync: the sound is ${Math.abs(off).toFixed(2)} s ${off > 0 ? 'later' : 'earlier'} than the picture` : '';
   }
 
-  function trackState(name) { return state.tracks[name] || DEFAULT_TRACKS()[name]; }
+  function trackState(name) { return state.tracks[name] || DEFAULT_TRACKS()[name] || extraDefault(name); }
   /* Whether an audio track is heard: not muted and, when any track is soloed, soloed. */
   function audible(name) {
     const t = trackState(name);
     if (!t || t.mute) return false;
-    const anySolo = ['A1', 'A2'].some((n) => trackState(n).solo);
+    const anySolo = trackNames().filter((n) => n[0] === 'A').some((n) => trackState(n).solo);
     return anySolo ? !!t.solo : true;
   }
   const cutLocked = () => trackState('V1').lock || trackState('A1').lock;
@@ -838,6 +867,7 @@
       b.classList.toggle('unlinked', !isLinked(seg));
       b.classList.toggle('narrow', w < 60);
       b.classList.toggle('gen', isGen(seg.clip));
+      b.classList.toggle('gap', isGap(seg));
       b.querySelector('.name').textContent = isGen(seg.clip) ? `${genKind(seg.clip)} · silence` : stem(seg.clip);
       paintSync(b.querySelector('.sync'), seg);
       const clip = clipOf(seg.clip);
@@ -897,14 +927,20 @@
     return b;
   }
 
-  /* V2: clips laid over the cut at their own film time (picture only). */
+  /* V2 (and V3…): clips laid over the cut at their own film time (picture only); an
+   * added audio track's clips (A3…) are drawn the same way, sound only. */
   function renderV2() {
-    const lane = el.tracks.V2;
-    if (!lane) return;
+    if (!el.tracks.V2) return;
     const seen = new Set();
-    for (const o of state.overlays) {
+    const all = [...state.overlays, ...state.audio.map((c) => ({ ...c, sound: true }))];
+    for (const o of all) {
+      const name = o.track || 'V2';
+      const lane = el.tracks[name];
+      if (!lane) continue;
       let b = oblocks.get(o.id);
-      if (!b) { b = makeOBlock(o.id); oblocks.set(o.id, b); lane.appendChild(b); }
+      if (!b) { b = makeOBlock(o.id); oblocks.set(o.id, b); }
+      if (b.parentNode !== lane) lane.appendChild(b);
+      b.classList.toggle('aclip', !!o.sound);
       const d = dur(o), w = Math.max(3, d * state.zoom);
       b.style.left = `${timeToX(o.at)}px`;
       b.style.width = `${w}px`;
@@ -916,16 +952,83 @@
       const src = posterUrl(o, o.in);
       if (!src) img.removeAttribute('src'); else if (img.getAttribute('src') !== src) img.setAttribute('src', src);
       const says = blockSays(o, clipOf(o.clip));
-      b.title = `V2 · ${stem(o.clip)} ${fmt(o.in)}–${fmt(o.out)} over ${tc(o.at)}–${tc(o.at + d)}`
-        + ' — composited over V1, picture only' + (says ? `\n“${says}”` : '')
-        + '\ndrag to move · Delete removes it';
+      b.title = `${name} · ${stem(o.clip)} ${fmt(o.in)}–${fmt(o.out)} at ${tc(o.at)}–${tc(o.at + d)}`
+        + (o.sound ? ' — its sound, mixed with A1' : name === 'V2' ? ' — composited over V1, picture only'
+          : ' — composited over the tracks below it, picture only') + (says ? `\n“${says}”` : '')
+        + (name === 'V2' ? '\ndrag to move · Delete removes it' : '\nDelete removes it');
       seen.add(o.id);
     }
     for (const [id, b] of oblocks) {
       if (seen.has(id)) continue;
       b.remove(); oblocks.delete(id);
     }
-    if (state.osel != null && !state.overlays.some((o) => o.id === state.osel)) state.osel = null;
+    if (state.osel != null && !overlayById(state.osel)) state.osel = null;
+  }
+
+  /* The rows and headers of the added tracks, made or dropped to match state.tracks. */
+  function ensureTrackRows() {
+    if (!el.canvas || !el.heads) return;
+    const box = el.side.querySelector('.tl-heads');
+    const want = trackNames().filter(isExtra);
+    for (const n of want) {
+      if (el.tracks[n]) continue;
+      const row = document.createElement('div');
+      row.className = `tl-track tl-xtrack ${n[0] === 'V' ? 'video' : 'audio'}`;
+      row.dataset.track = n;
+      el.canvas.insertBefore(row, el.end);
+      row.addEventListener('pointerdown', onLaneDown);
+      row.addEventListener('pointermove', onLaneMove);
+      row.addEventListener('pointerup', onTrackUp);
+      row.addEventListener('pointercancel', () => { down = null; });
+      el.tracks[n] = row;
+      el.lanes[n] = row;
+      buildHead(box, n);
+    }
+    for (const n of [...EXTRA_V, ...EXTRA_A]) {
+      if (want.includes(n) || !el.tracks[n]) continue;
+      el.tracks[n].remove();
+      delete el.tracks[n];
+      delete el.lanes[n];
+      if (el.heads[n]) { el.heads[n].remove(); delete el.heads[n]; }
+    }
+  }
+
+  /* Sequence › Add Track: the next free V3…V9 (kind 'video') or A3…A9 ('audio'). */
+  function addTrack(kind) {
+    const pool = kind === 'audio' ? EXTRA_A : EXTRA_V;
+    const name = pool.find((n) => !state.tracks[n]);
+    if (!name) { toast(`no more ${kind} tracks — ${pool[pool.length - 1]} is the last`); return null; }
+    state.tracks = { ...state.tracks, [name]: extraDefault(name) };
+    ensureTrackRows();
+    render();
+    scheduleSeqSave();
+    emit('tracks', { tracks: tracks() });
+    toast(`added ${name}`);
+    return name;
+  }
+
+  /* Sequence › Delete Track: the highest added track of that kind (or `name`), once it is
+   * empty — its clips go first, each one undoable. V1, V2, A1 and A2 always stay. */
+  function deleteTrack(kindOrName) {
+    const name = isExtra(kindOrName) ? kindOrName
+      : (kindOrName === 'audio' ? EXTRA_A : EXTRA_V).filter((n) => state.tracks[n]).pop();
+    if (!name || !state.tracks[name]) {
+      toast(`no added ${kindOrName === 'audio' ? 'audio' : 'video'} track to delete — V1, V2, A1 and A2 always stay`);
+      return false;
+    }
+    const n = state.overlays.filter((o) => o.track === name).length
+      + state.audio.filter((c) => c.track === name).length;
+    if (n) { toast(`${name} holds ${n} clip${n > 1 ? 's' : ''} — remove ${n > 1 ? 'them' : 'it'} first`); return false; }
+    const next = { ...state.tracks };
+    delete next[name];
+    state.tracks = next;
+    ensureTrackRows();
+    render();
+    applyMonitorAudio();
+    scheduleSeqSave();
+    emit('tracks', { tracks: tracks() });
+    toast(`deleted ${name}`);
+    return true;
   }
 
   /* The rows share the panel's height: V2, V1, the lanes' ghost (a proposal) under V1,
@@ -937,14 +1040,16 @@
       return x && !x.hidden ? (x.h || x.offsetHeight || 0) : 0;
     };
     const ghost = extra('ghost'), bin = extra('bin');
-    const gaps = ROW_GAP * 3 + AV_GAP + (ghost ? ROW_GAP : 0) + (bin ? ROW_GAP : 0);
+    const gaps = ROW_GAP * (trackNames().length - 1) + AV_GAP + (ghost ? ROW_GAP : 0) + (bin ? ROW_GAP : 0);
     const avail = Math.max(0, el.view.clientHeight - RULER_H - 2 - gaps - ghost - bin);
-    const wsum = TRACKS.reduce((a, n) => a + TRACK_W[n], 0);
+    const names = trackNames();
+    const wsum = names.reduce((a, n) => a + trackW(n), 0);
     const h = {};
-    for (const n of TRACKS) h[n] = Math.max(TRACK_MIN[n], Math.floor(avail * TRACK_W[n] / wsum));
-    const rows = [['V2', h.V2], ['V1', h.V1]];
+    for (const n of names) h[n] = Math.max(trackMin(n), Math.floor(avail * trackW(n) / wsum));
+    const rows = names.filter((n) => n[0] === 'V').map((n) => [n, h[n]]);
     if (ghost) rows.push(['ghost', ghost]);
-    rows.push(['|', AV_GAP - ROW_GAP], ['A1', h.A1], ['A2', h.A2]);
+    rows.push(['|', AV_GAP - ROW_GAP]);
+    for (const n of names.filter((x) => x[0] === 'A')) rows.push([n, h[n]]);
     if (bin) rows.push(['bin', bin]);
     let y = RULER_H + 2;
     const tops = {};
@@ -984,10 +1089,8 @@
     solo: (n) => `solo ${n}: only soloed tracks are heard`,
   };
 
-  function buildHeads(side) {
-    const box = side.querySelector('.tl-heads');
-    el.heads = {};
-    for (const n of TRACKS) {
+  function buildHead(box, n) {
+    {
       const h = document.createElement('div');
       h.className = `tl-thead ${n[0] === 'V' ? 'video' : 'audio'}`;
       h.dataset.track = n;
@@ -1000,6 +1103,12 @@
       box.appendChild(h);
       el.heads[n] = h;
     }
+  }
+
+  function buildHeads(side) {
+    const box = side.querySelector('.tl-heads');
+    el.heads = {};
+    for (const n of TRACKS) buildHead(box, n);
     box.addEventListener('click', (e) => {
       const b = e.target.closest('button[data-toggle]');
       if (!b) return;
@@ -1013,8 +1122,9 @@
 
   function paintHeads() {
     if (!el.heads) return;
-    for (const n of TRACKS) {
+    for (const n of trackNames()) {
       const t = trackState(n), h = el.heads[n];
+      if (!h) continue;
       for (const b of h.querySelectorAll('button[data-toggle]')) {
         const k = b.dataset.toggle;
         b.classList.toggle('on', k === 'eye' ? !t.eye : !!t[k]);
@@ -1079,9 +1189,11 @@
   /* ---- the sequence's own save: tracks, V2, markers and In / Out */
   function tracksDiff() {
     const base = DEFAULT_TRACKS(), out = {};
-    for (const n of TRACKS) {
+    for (const n of trackNames()) {
+      const b = base[n] || extraDefault(n);
+      if (isExtra(n)) out[n] = {};                 // an added track's entry is its existence
       for (const [k, v] of Object.entries(state.tracks[n])) {
-        if (base[n][k] !== v) (out[n] = out[n] || {})[k] = v;
+        if (b[k] !== v) (out[n] = out[n] || {})[k] = v;
       }
     }
     return out;
@@ -1091,6 +1203,7 @@
     return JSON.stringify({
       tracks: tracksDiff(),
       overlays: state.overlays.map((o) => ({ ...o })),
+      audio: state.audio.map((c) => ({ ...c })),
       markers: [...state.markers], in: state.seqIn, out: state.seqOut,
     });
   }
@@ -1131,9 +1244,14 @@
     const base = DEFAULT_TRACKS();
     const got = (p && p.tracks) || {};
     for (const n of TRACKS) base[n] = { ...base[n], ...(got[n] || {}) };
+    for (const n of [...EXTRA_V, ...EXTRA_A]) {
+      if (got[n]) base[n] = { ...extraDefault(n), ...got[n] };
+    }
     state.tracks = base;
     state.overlays = ((p && p.overlays) || []).filter((o) => o && o.clip)
       .map((o) => ({ ...o, id: o.id || newId() }));
+    state.audio = ((p && p.audio) || []).filter((c) => c && c.clip && c.track)
+      .map((c) => ({ ...c, id: c.id || newId() }));
   }
 
   /* An id in the server's own shape (`g` + 10 hex), so a V2 clip never needs re-keying. */
@@ -1178,10 +1296,12 @@
   }
 
   /* ---- V2 */
-  function overlayById(id) { return state.overlays.find((o) => o.id === id) || null; }
+  function overlayById(id) {
+    return state.overlays.find((o) => o.id === id) || state.audio.find((c) => c.id === id) || null;
+  }
 
-  function overlayMutate(kind, fn) {
-    if (trackState('V2').lock) return refuseLocked('V2');
+  function overlayMutate(kind, fn, track = 'V2') {
+    if (trackState(track).lock) return refuseLocked(track);
     const own = begin(kind);
     const r = fn();
     renderV2();
@@ -1192,17 +1312,22 @@
   }
 
   /* A clip laid on V2 at a film time: `{clip, in, out, speed?, why?}`. Returns its id. */
-  function addOverlay(seg, atFilmTime) {
+  function addOverlay(seg, atFilmTime, track = 'V2') {
     if (!seg || !seg.clip || !(seg.out - seg.in >= MIN_LEN - 1e-9)) return null;
+    const sound = track[0] === 'A';
+    if (track !== 'V2' && !state.tracks[track]) return null;
+    if (sound && !EXTRA_A.includes(track)) return null;
     const g = gridded(seg);
     const o = { id: newId(), clip: seg.clip, in: g.in, out: g.out, at: onGrid(atFilmTime) };
+    if (track !== 'V2') o.track = track;
     if (seg.speed && speedOf(seg) !== 1) o.speed = speedOf(seg);
     if (seg.why) o.why = seg.why;
-    return overlayMutate('V2 clip', () => {
-      state.overlays = [...state.overlays, o];
+    return overlayMutate(`${track} clip`, () => {
+      if (sound) state.audio = [...state.audio, o];
+      else state.overlays = [...state.overlays, o];
       state.osel = o.id;
       return o.id;
-    });
+    }, track);
   }
 
   function moveOverlay(id, atFilmTime) {
@@ -1217,12 +1342,14 @@
   }
 
   function removeOverlay(id) {
-    if (!overlayById(id)) return false;
-    return !!overlayMutate('remove V2', () => {
+    const o = overlayById(id);
+    if (!o) return false;
+    return !!overlayMutate(`remove ${o.track || 'V2'}`, () => {
       state.overlays = state.overlays.filter((x) => x.id !== id);
+      state.audio = state.audio.filter((x) => x.id !== id);
       if (state.osel === id) state.osel = null;
       return true;
-    });
+    }, o.track || 'V2');
   }
 
   function selectOverlay(id) {
@@ -1457,6 +1584,7 @@
       b.remove(); blocks.delete(id); posterAt.delete(id);
     }
     pruneSel();
+    ensureTrackRows();
     renderA1(list, live);
     renderV2();
     layoutTracks();
@@ -1604,8 +1732,8 @@
   /* V2's clips ride the same entry: laying, moving or removing one is one ⌘Z. The
    * track headers' toggles do not — as in Premiere, a mute or a lock is not an edit. */
   const snapshot = () => JSON.stringify(hooks && hooks.extra
-    ? { segs: segs(), extra: hooks.extra(), overlays: state.overlays }
-    : { segs: segs(), overlays: state.overlays });
+    ? { segs: segs(), extra: hooks.extra(), overlays: state.overlays, audio: state.audio }
+    : { segs: segs(), overlays: state.overlays, audio: state.audio });
 
   function restore(json) {
     const v = JSON.parse(json);
@@ -1613,6 +1741,7 @@
       hooks.setSegs(v.segs);
       if (hooks.setExtra && 'extra' in v) hooks.setExtra(v.extra);
       if (Array.isArray(v.overlays)) state.overlays = v.overlays;
+      if (Array.isArray(v.audio)) state.audio = v.audio;
     } else {
       hooks.setSegs(v);
     }
@@ -1876,6 +2005,76 @@
       select([s.id], { source: 'api' });
       return s.id;
     });
+  }
+
+  /* The black a gap is made of: POST /api/gap, its clip record added to the board's
+   * clips so the monitor plays it at once. Resolves to the clip's name, or null. */
+  async function makeGap(seconds) {
+    try {
+      const r = await fetch('/api/gap', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ seconds }),
+      });
+      if (!r.ok) { toast(`could not leave a gap: ${(await r.text()).slice(0, 120)}`); return null; }
+      const g = await r.json();
+      const clips = hooks && hooks.clips ? hooks.clips() : null;
+      if (clips && g.record && !clips[g.clip]) clips[g.clip] = g.record;
+      return g.clip;
+    } catch (err) {
+      toast('could not leave a gap — the board is unreachable');
+      return null;
+    }
+  }
+
+  /* A clip placed at a film time on V1, as Premiere places it: inside the film it is
+   * insertAt (or overwrite); past the film's end it lands where it was put, the empty
+   * time before it a gap (verdict 4, punch 9: a drop at 10 s on an empty V1 left no gap).
+   * One undo entry. Resolves to the new shot's id. */
+  async function placeAt(seg, atFilmTime, kind = 'insert') {
+    if (!seg || !seg.clip || !(seg.out > seg.in)) return null;
+    const tot = total();
+    const at = onGrid(Math.max(0, Number(atFilmTime) || 0));
+    if (at <= tot + frame() / 2) return kind === 'overwrite' ? overwrite(seg, at) : insertAt(seg, at);
+    if (cutLocked()) return refuseLocked(trackState('V1').lock ? 'V1' : 'A1');
+    const len = onGrid(at - tot);
+    if (len < MIN_LEN - 1e-9) return insertAt(seg, tot);      // a sliver: butt it
+    const clip = await makeGap(len);
+    if (!clip) return null;
+    const s = { ...gridded(seg), id: seg.id || `tmp-${++tmpN}` };
+    const gap = { id: `tmp-${++tmpN}`, clip, in: 0, out: len, gap: true };
+    return mutate('insert', () => {
+      segs().push(gap, s);
+      select([s.id], { source: 'api' });
+      return s.id;
+    });
+  }
+
+  /* A clip dragged to the timeline past the film's end: placed where it was dropped
+   * (placeAt), ahead of the lanes' own drop, which appends. */
+  function onDropPast(e) {
+    const dt = e.dataTransfer;
+    if (!dt || ![...(dt.types || [])].includes('application/x-roughcut-shot')) return;
+    const t = eventTime(e);
+    if (t <= total() + frame() / 2) return;
+    let shot = null;
+    try { shot = JSON.parse(dt.getData('application/x-roughcut-shot')); } catch (err) { shot = null; }
+    if (!shot || !shot.clip || !(shot.end > shot.start)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const line = el.root.querySelector('.tl-dropline');
+    if (line) line.style.display = 'none';
+    placeAt({ clip: shot.clip, in: shot.start, out: shot.end, why: shot.why || '' }, t);
+  }
+
+  /* Sequence › Add / Delete Track (index.html's menu; dock.js closes the menu). */
+  function onSeqMenu(e) {
+    const b = e.target.closest('#menubar .mdrop button[data-cmd^="seq:"]');
+    if (!b) return;
+    const cmd = b.dataset.cmd.slice(4);
+    if (cmd === 'addv') addTrack('video');
+    else if (cmd === 'adda') addTrack('audio');
+    else if (cmd === 'delv') deleteTrack('video');
+    else if (cmd === 'dela') deleteTrack('audio');
   }
 
   /* `0.5`, `0.25`, `2` — never `0.50`; the chips and the badge read the same. */
@@ -2177,6 +2376,8 @@
       t.addEventListener('pointercancel', () => { down = null; });
     }
     el.tracks.A1.addEventListener('dblclick', onLaneDbl);
+    root.addEventListener('drop', onDropPast, true);
+    document.addEventListener('click', onSeqMenu);
     document.addEventListener('keydown', onKey);
     if (typeof ResizeObserver !== 'undefined') {
       new ResizeObserver(() => { if (autoFit) render(); else layoutTracks(); }).observe(el.view);
@@ -2203,6 +2404,8 @@
     fmt, hueOf, blockName, blockSays,
     // the tracks (roughcut/tracks.py)
     TRACKS, tracks, setTrack, audible, isLinked, aOff, setLink, toggleLink, setAudioOffset,
+    trackNames, addTrack, deleteTrack, placeAt, isGap,
+    audioClips: () => state.audio.map((c) => ({ ...c })),
     overlays: () => state.overlays.map((o) => ({ ...o })), overlayById,
     addOverlay, moveOverlay, removeOverlay, selectOverlay, layoutTracks, saveSeq,
     get trackTops() { return { ...(state.trackTops || {}) }; },

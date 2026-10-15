@@ -715,7 +715,7 @@ def project_payload() -> dict:
             "proxy": f"/media/proxy/{Path(clip).stem}.mp4",
             # The card's picture: this URL plus ?t=<in-point>. A card is a still, not
             # a stream — see /media/poster for what sixteen streams cost the monitor.
-            "poster": f"/media/poster/{Path(clip).stem}.jpg",
+            "poster": poster_url(Path(clip).stem),
             "transcript": d.get("transcript", []),
             "visual": load_visual(clip),
             "captured": capture_time(clip),
@@ -788,6 +788,8 @@ def sequence_payload(edl: dict, segments: list[dict]) -> dict:
     return {
         "tracks": tracksmod.resolve_tracks(edl.get("tracks")),
         "overlays": overlays,
+        # the added audio tracks' clips (A3…, Sequence › Add Track)
+        "audio": [dict(c) for c in edl.get("audio") or [] if isinstance(c, dict)],
         "markers": list(edl.get("markers") or []),
         "in": edl.get("in"),
         "out": edl.get("out"),
@@ -850,6 +852,10 @@ def clean_segments(raw: list) -> list[dict]:
         for k in ("act", "why"):
             if s.get(k):
                 seg[k] = s[k]
+        # A gap on V1 (verdict 4, punch 9): empty film time, carried by a generated black
+        # clip (POST /api/gap) so the monitor and the render play it as black and silence
+        if s.get("gap") is True and edits.is_generated(seg["clip"]):
+            seg["gap"] = True
         # Speed (INTAKE M13): kept only when it is not 1, validated the one way
         # `edits.validate_speed` validates it; a bad one is a 400 and nothing is written.
         try:
@@ -896,6 +902,15 @@ def apply_sequence(edl: dict, body: dict) -> None:
                 edl["overlays"] = ovs
             else:
                 edl.pop("overlays", None)
+        if "audio" in body:
+            clips = tracksmod.validate_audio_clips(body["audio"], edits.validate_speed)
+            for c in clips:
+                if not c["id"]:
+                    c["id"] = segment_id()
+            if clips:
+                edl["audio"] = clips
+            else:
+                edl.pop("audio", None)
         if "markers" in body:
             marks = tracksmod.validate_markers(body["markers"])
             if marks:
@@ -4624,7 +4639,7 @@ def unheard_clip(clip: str, used: bool = False) -> dict:
     stem = Path(clip).stem
     return {
         "clip": clip, "stem": stem, "duration": clip_duration(clip),
-        "proxy": f"/media/proxy/{stem}.mp4", "poster": f"/media/poster/{stem}.jpg",
+        "proxy": f"/media/proxy/{stem}.mp4", "poster": poster_url(stem),
         "transcript": [], "visual": load_visual(clip), "captured": capture_time(clip),
         "candidates": [],
         "summary": {"speech_fraction": None, "wind_dominant_fraction": None,
@@ -4677,7 +4692,7 @@ def api_clips() -> JSONResponse:
             "captured": capture_time(clip) if ok else None,
             "session": session_of.get(clip),
             "proxy": (STATE["proxy_dir"] / f"{stem}.mp4").exists(),
-            "poster": f"/media/poster/{stem}.jpg?t={poster_time(clip) if ok else 0.0:.2f}",
+            "poster": poster_url(stem, poster_time(clip) if ok else 0.0),
             "analysed": stem in heard,
             "looked": stem in looked,
             "closed": stem in closed,
@@ -5818,6 +5833,8 @@ def media_poster(name: str, t: float = 0.0) -> Response:
     kilobytes, cached on disk under --work and immutable for a given clip and time.
     """
     stem = Path(name).stem
+    if stem.endswith(f".{PICTURE_V}"):          # poster_url's versioned name
+        stem = stem[: -len(PICTURE_V) - 1]
     if not re.fullmatch(r"[A-Za-z0-9._-]+", stem):
         raise HTTPException(404, f"no such clip: {name}")
     if not math.isfinite(t) or t < 0:
@@ -6070,6 +6087,16 @@ def browser_playable(src: Path) -> bool:
 # posters were cut from them: upside down next to an upright export (verdict 3 punch 1).
 # Bump it whenever what a preview or poster shows changes, so an old --work rebuilds.
 PICTURE_V = "v2"
+
+
+def poster_url(stem: str, t: float | None = None) -> str:
+    """A poster's URL as the server hands it out: `<stem>.<PICTURE_V>.jpg` (and `?t=` when
+    given). Posters are served `immutable` for a year, so a browser that cached a pre-v2
+    (upside down) frame keeps it until the URL changes: the version is in the URL as well
+    as in the file name (lead's wave-4 queue). In the name, not a query, so every page
+    that appends `?t=` to a clip's poster keeps working; /media/poster drops it."""
+    url = f"/media/poster/{stem}.{PICTURE_V}.jpg"
+    return url if t is None else f"{url}?t={t:.2f}"
 
 
 def preview_dir() -> Path:
@@ -7649,6 +7676,32 @@ def materialise_generated(spec: dict) -> Path:
         record["duration"] = probe_duration(dest) or seconds
         generated_spec_path(name).write_text(json.dumps(record, indent=1), encoding="utf-8")
     return dest
+
+
+GAP_MAX_S = 3600.0
+
+
+@app.post("/api/gap")
+async def api_gap(request: Request) -> JSONResponse:
+    """The black a gap on V1 is made of (verdict 4, punch 9: a clip dropped at 10 s on an
+    empty V1 leaves 10 s of nothing before it, as Premiere's does). A generated black clip
+    of `seconds` (black picture, silence) — the M13 generated clip, so the monitor plays it
+    and the render cuts it like any other — returned with its clip record for the board's
+    clip list. Idempotent: the same length is the same file."""
+    body = await request.json()
+    try:
+        seconds = round(float(body.get("seconds")), 3)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "seconds must be a number")
+    if not (edits.MIN_GEN_S - 1e-9 <= seconds <= GAP_MAX_S):
+        raise HTTPException(400, f"a gap is {edits.MIN_GEN_S:g}–{GAP_MAX_S:g} s")
+    spec = {"kind": "black", "seconds": seconds, "color": None, "from_clip": None, "at": None}
+    try:
+        path = await asyncio.to_thread(materialise_generated, spec)
+    except RuntimeError as exc:
+        raise HTTPException(500, str(exc))
+    rec = generated_clips({path.name}).get(path.name)
+    return JSONResponse({"clip": path.name, "seconds": seconds, "record": rec})
 
 
 def _generated_spec(name: str) -> dict:

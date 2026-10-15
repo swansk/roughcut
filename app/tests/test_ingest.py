@@ -345,13 +345,22 @@ def test_make_a_first_cut_waits_while_the_first_pass_runs(live_server, ingest_bi
     `rcFirstPass.state()`), the empty Timeline's "Make a first cut" is disabled."""
     _configure(ingest_bin, tmp_path / "work", ingest_bin["heard"], {**SEED, "segments": []})
     pg = _page(browser, live_server)
-    pg.wait_for_selector("#tlEmpty #firstCut")
+    pg.wait_for_selector("#tlEmpty #firstCut", state="attached")
     pg.wait_for_function("window.rcFirstPass && rcFirstPass.state()", timeout=10000)
-    assert pg.locator("#tlEmpty #firstCut").is_enabled()
     assert "Drag a clip here or press ," in pg.locator("#tlEmpty .empty").inner_text()
+    # ONE AI action at every first-pass state (verdict 4, punch 10): the pass's before and
+    # while it runs — "Make a first cut" is not beside it — and this button once it has run
+    one = """() => [...document.querySelectorAll('#tlEmpty button')].filter(b => b.getClientRects().length)
+        .map(b => b.id || b.className)"""
+    for state in ("never-run", "running", "stopped", "failed"):
+        pg.evaluate(f"rcFirstPass.state = () => ({{ state: '{state}' }})")
+        pg.wait_for_function("document.querySelector('#tlEmpty #firstCut').offsetParent === null", timeout=2500)
+        assert pg.evaluate(one) == ["fp-empty-btn"], (state, pg.evaluate(one))
     pg.evaluate("rcFirstPass.state = () => ({ state: 'running' })")
     pg.wait_for_function("document.querySelector('#tlEmpty #firstCut').disabled", timeout=2500)
     pg.evaluate("rcFirstPass.state = () => ({ state: 'done' })")
     pg.wait_for_function("!document.querySelector('#tlEmpty #firstCut').disabled", timeout=2500)
+    assert pg.locator("#tlEmpty #firstCut").is_visible()
+    assert pg.evaluate(one) == ["firstCut"], pg.evaluate(one)
     assert pg.errors == []
     pg.context.close()

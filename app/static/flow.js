@@ -27,9 +27,10 @@
  * never offers "Index the footage" beside it: when Next's action is the pass's, the
  * chip yields its slot and the blue goes on the first pass's button (none while the
  * pass runs: its label is the progress). See `passCovers`. And the chip never
- * ellipsizes: while a job or the pass runs, or when its sentence has no room in the
- * row, it collapses to an icon with the sentence in its hover (`.compact`) — a clipped
- * "Next Make t…" read as a broken primary button.
+ * ellipsizes: when its sentence has no room in the row, it collapses to an icon with
+ * the sentence in its hover (`.compact`) — a clipped "Next Make t…" read as a broken
+ * primary button — and the icon is never blue (verdict 4, punch 7: a wordless blue
+ * "→" was the screen's one primary button while previews built).
  */
 (function () {
   'use strict';
@@ -146,17 +147,12 @@
     return n.kind !== 'wait' && n.stage === 'index';
   }
 
-  /* Something runs in the row: the pass, or a job in the progress strip. */
-  function busy() {
-    if (fpState() === 'running') return true;
-    const strip = document.getElementById('progress');
-    if (!strip || strip.hidden) return false;
-    return [...strip.querySelectorAll('.job')].some(visible);
-  }
-
-  /* The chip whole when it has room and nothing runs, else its icon (never ellipsized).
-   * Measured in one task — whole, then compact if it overflows — so nothing paints in
-   * between. */
+  /* The chip whole when it has room, else its icon (never ellipsized). A job running in
+   * the strip (a preview build can run for the whole session) is no reason to collapse
+   * it: verdict 4 found the screen's one primary button a wordless blue "→" for as long
+   * as previews built (punch 7). Measured in one task — whole, then compact if it
+   * overflows — so nothing paints in between. A compact chip is never the blue one
+   * (`mark`): when there is no room for its words, Next steps out of blue instead. */
   function fit() {
     const el = document.getElementById('flow');
     const a = document.getElementById('flowNext');
@@ -165,7 +161,6 @@
       a.classList.toggle('compact', on);
       el.classList.toggle('compact', on);
     };
-    if (busy()) { set(true); return; }
     set(false);
     if (a.scrollWidth > a.clientWidth + 0.5 || el.scrollWidth > el.clientWidth + 0.5) set(true);
   }
@@ -229,6 +224,8 @@
       // yielded to the first pass: its button is the one action (nothing while it runs)
       if (passCovers(last)) pick = fpState() === 'running' ? null : fpButton();
       else pick = target(n) || document.getElementById('flowNext');
+      // a primary button says what it does: an icon-only chip is not blue (punch 7)
+      if (pick && pick.id === 'flowNext' && pick.classList.contains('compact')) pick = null;
     }
     document.querySelectorAll('.is-next').forEach((el) => {
       if (el !== pick) el.classList.remove('is-next');

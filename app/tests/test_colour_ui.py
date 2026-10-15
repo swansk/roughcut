@@ -135,6 +135,7 @@ def select_first(page) -> str:
 def colour_words(page) -> str:
     """The colour in words, behind why? ▸."""
     if page.locator("#inspector .whybox").is_hidden():
+        page.evaluate("document.querySelectorAll('#inspector details.assist').forEach(d => { d.open = true; })")
         page.locator("#inspector [data-disc=why]").click()
     return page.locator("#inspector .whybox .witness").inner_text()
 
