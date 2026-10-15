@@ -392,8 +392,7 @@ class Journey:
             import httpx
             d = httpx.get(self.base + "/api/picks?order=clip", timeout=30).json()
             need(d.get("firstpass_picked"), "/api/picks does not know the first pass made its picks")
-            picks = [p for p in d["picks"] if p.get("released") is not False
-                     and p.get("verdict") not in ("reject", "pick")]
+            picks = [p for p in d["picks"] if p.get("verdict") not in ("reject", "pick")]
             need(len(picks) > 0, "the first pass made no picks to list")
             pg.evaluate("dock.open('bin')")
             pg.locator("#binTabs .tab[data-tab=all]").click()

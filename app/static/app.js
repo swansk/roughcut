@@ -1986,12 +1986,13 @@ function fetchPicks(force) {
   return picksBusy;
 }
 
-/* The pass's picks the board can act on: released to the pass, footage here, not
- * rejected on /floor, and not already one of the editor's keeps. */
+/* The pass's picks the board can act on: footage here, not rejected on /floor, and not
+ * already one of the editor's keeps. All of them, as the pass counts them — not only the
+ * clips /floor's rounds have released (their previews may still be building). */
 function picksUsable() {
   if (!passPicks || !P) return [];
   const keeps = (bin && bin.selects) || [];
-  return passPicks.filter((p) => p.released !== false && P.clips[p.clip]
+  return passPicks.filter((p) => P.clips[p.clip]
     && p.verdict !== 'reject' && p.verdict !== 'pick'
     && !keeps.some((k) => k.clip === p.clip && overlapRatio([k.start, k.end], [p.start, p.end]) >= 0.5));
 }
