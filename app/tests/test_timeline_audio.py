@@ -243,6 +243,53 @@ def test_the_meters_follow_a1s_mute(page):
     page.locator("#playCut").click()
 
 
+def _tone_level(page, seconds: float = 1.6) -> float:
+    rows = _play_and_sample(page, seconds)
+    page.locator("#playCut").click()
+    on_tone = [r["now"] for r in rows if r["t"] is not None and 0.4 < r["t"] < 1.5 and "TONE" in r["src"]]
+    assert on_tone, rows[-6:]
+    return max(on_tone)
+
+
+def test_a1_gain_is_one_owner_and_goes_above_0_db(page):
+    """Lane PROGRAM's request: the element's level has one owner, rcAudio (A1's mute /
+    solo / gain_db as its 'track' factor; Effect Controls' Volume as 'clip'), a gain node
+    once the element is in the graph — so +6 dB on A1 is heard (and metered) 6 dB up."""
+    base = _tone_level(page)
+    assert base > -30
+    page.evaluate("tl.setTrack('A1', 'gain_db', -12)")
+    assert page.evaluate("rcAudio.levelOf(player.vids[0])") == pytest.approx(10 ** (-12 / 20), rel=1e-3)
+    down = _tone_level(page)
+    page.evaluate("tl.setTrack('A1', 'gain_db', 6)")
+    assert page.evaluate("rcAudio.levelOf(player.vids[0])") == pytest.approx(10 ** (6 / 20), rel=1e-3)
+    up = _tone_level(page)
+    assert down == pytest.approx(base - 12, abs=2), (base, down)
+    assert up == pytest.approx(base + 6, abs=2), (base, up)
+    # in the graph the element's own volume stays at 1: the gain node carries the level
+    assert page.evaluate("player.vids.filter(v => rcMeters.has(v)).every(v => v.volume === 1)")
+    page.evaluate("tl.setTrack('A1', 'gain_db', 0)")
+
+
+def test_an_unlinked_moved_sound_on_pva1_is_metered(page):
+    """Lane PROGRAM's #pvA1 plays a moved A1 sound; it is in the mix like pv0/pv1."""
+    page.evaluate("(() => { const id = segs[0].id; tl.setLink(id, false); tl.setAudioOffset(id, 0.5); })()")
+    page.evaluate("tl.seek(0)")
+    page.locator("#playCut").click()
+    rows = page.evaluate("""() => new Promise((done) => {
+        const out = [], t0 = performance.now(), a = document.querySelector('#pvA1');
+        const iv = setInterval(() => {
+          out.push({ph: tl.state.playhead, a1: !!a && !a.paused, has: !!a && rcMeters.has(a),
+                    now: Math.max(...rcMeters.read().now)});
+          if (performance.now() - t0 > 2200) { clearInterval(iv); done(out); }
+        }, 50);
+      })""")
+    page.locator("#playCut").click()
+    moved = [r for r in rows if 1.0 < r["ph"] < 2.2 and r["a1"]]
+    assert moved, rows[-8:]
+    assert all(r["has"] for r in moved)
+    assert max(r["now"] for r in moved) > -30, moved
+
+
 def test_the_meters_sit_beside_or_under_the_picture_without_shrinking_it(page):
     m = page.evaluate("""() => { const pic = document.querySelector('#pProgram .screen').getBoundingClientRect(),
         met = document.querySelector('#meters').getBoundingClientRect();

@@ -1051,13 +1051,21 @@
 
   /* What the monitor plays follows A1 and A2: the Program's videos carry A1's level
    * (0 when muted or soloed out), the bed follows A2. Volume, not `muted`: the board
-   * owns `muted` for its own reasons. */
+   * owns `muted` for its own reasons. The level goes through meters.js's
+   * `rcAudio.setLevel(el, 'track', x)`, the one owner of an element's level (a gain node
+   * once the element is in the WebAudio graph, so A1 above 0 dB is heard above 0 dB);
+   * without it, the element's volume, capped at 1. */
   function applyMonitorAudio() {
-    const g = audible('A1') ? Math.min(1, Math.pow(10, (Number(trackState('A1').gain_db) || 0) / 20)) : 0;
+    const g = audible('A1') ? Math.pow(10, (Number(trackState('A1').gain_db) || 0) / 20) : 0;
     try {
       // eslint-disable-next-line no-undef
       const vids = typeof player !== 'undefined' && player && player.vids ? player.vids : [];
-      for (const v of vids) if (v && Math.abs(v.volume - g) > 1e-3) v.volume = g;
+      const ra = window.rcAudio && window.rcAudio.setLevel ? window.rcAudio : null;
+      for (const v of vids) {
+        if (!v) continue;
+        if (ra) ra.setLevel(v, 'track', g);
+        else if (Math.abs(v.volume - Math.min(1, g)) > 1e-3) v.volume = Math.min(1, g);
+      }
     } catch (err) { /* no board */ }
     const bed = document.querySelector('#bed');
     if (bed) bed.muted = !audible('A2');

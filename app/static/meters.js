@@ -2,21 +2,26 @@
  * verdict 3 punch 6: "there are no audio meters").
  *
  * What is metered is what the Program plays: every <video>/<audio> inside #player (pv0
- * and pv1 today; lane PROGRAM's V2 layer and an unlinked-sound element when they land)
- * and the music bed (#bed, A2). An element joins the mix the first time it fires `play`
- * (a capturing listener on the document: `play` does not bubble), so nothing has to
- * register itself.
+ * and pv1, lane PROGRAM's #pvA1 — an unlinked shot's moved sound — and #pvV2, which is
+ * muted) and the music bed (#bed, A2). An element joins the mix the first time it fires
+ * `play` (a capturing listener on the document: `play` does not bubble), so nothing has
+ * to register itself.
  *
  * WebAudio's createMediaElementSource can be called ONCE per element, and from then on
  * the element is heard only through the graph. This file owns that call:
- *     element → its own GainNode (window.rcAudio.gainFor(el)) → the mix bus → speakers
- *                                                               ↘ splitter → L / R analysers
- * The bus is two channels, so a mono clip shows on both meters. The element's own
- * `volume` (what timeline.js's applyMonitorAudio sets from A1/A2 mute, solo and gain_db,
- * and Effect Controls' volume) is applied before the graph, so the meters show what is
- * heard; a track gain above 0 dB, which `volume` cannot carry, is the element's gain node.
- * The graph is built only once the AudioContext runs (after a user gesture): an element
- * routed into a suspended context would go silent.
+ *     element → its own GainNode → the mix bus → speakers
+ *                                            ↘ splitter → L / R analysers
+ * The bus is two channels, so a mono clip shows on both meters.
+ *
+ * The level an element plays at has one owner, `window.rcAudio.setLevel(el, key, linear)`:
+ * named factors per element ('track': A1's mute / solo / gain_db, from timeline.js's
+ * applyMonitorAudio; 'clip': the shot's Effect Controls Volume) multiplied together. Once
+ * the element is in the graph the product is its gain node, so it can go above 0 dB, and
+ * its `volume` is left at 1; before that (no user gesture yet) the product, capped at 1,
+ * is its `volume`. A writer that still sets `volume` directly is multiplied in by the
+ * graph (the element applies its own volume before the graph), so the meters always show
+ * what is heard. The graph is built only once the AudioContext runs: an element routed
+ * into a suspended context would go silent.
  *
  * Drawing: one <canvas> (no words, no controls): two bars, -60..0 dBFS, green / yellow
  * from -18 / red from -6, a peak-hold tick (1.5 s, then it falls 20 dB/s), the level
@@ -27,7 +32,9 @@
  *
  *   window.rcMeters.read()   {now: [l, r], shown: [l, r], hold: [l, r]} in dBFS (-Infinity: silence)
  *   window.rcMeters.mode()   'v' | 'h'
- *   window.rcMeters.sources() how many elements are in the mix
+ *   window.rcMeters.sources() how many elements are in the mix; .has(el) whether el is
+ *   window.rcAudio.setLevel(el, key, linear)  one factor of the element's level (see above)
+ *   window.rcAudio.levelOf(el)  the product of its factors (1 when none)
  *   window.rcAudio.gainFor(el)  the element's GainNode (attaches it), or null before audio can run
  */
 (function () {
@@ -35,7 +42,7 @@
 
   const FLOOR_DB = -60;
   const HOLD_MS = 1500, HOLD_FALL = 20, LEVEL_FALL = 24;   // dB per second
-  const V_W = 30, H_H = 22;                                 // px: the meters' own size
+  const V_W = 30;                                           // px: the vertical meters' width
   const IDLE_MS = 2500;                                     // stop drawing this long after silence
 
   let ctx = null, bus = null, an = null, buf = null;
@@ -90,7 +97,10 @@
     const n = { src, gain };
     nodes.set(el, n);
     count++;
-    applyBoost();
+    // the level moves from `volume` (where setLevel kept it, capped) to the gain node; a
+    // writer that sets `volume` directly sets it again on its next write
+    const f = levels.get(el);
+    if (f) { el.volume = 1; gain.gain.value = product(f); }
     return n;
   }
 
@@ -108,24 +118,26 @@
     running().then((ok) => { if (ok) { attach(el); wake(); } });
   }
 
-  /* A1's gain above 0 dB: `volume` stops at 1, so the rest is the element's gain node.
-   * Below 0 dB (and mute / solo) the element's own volume already carries it. */
-  function applyBoost() {
-    const tl = window.tl;
-    if (!tl || !tl.tracks || !ctx) return;
-    let tr;
-    try { tr = tl.tracks(); } catch (err) { return; }
-    const boost = (name) => {
-      const t = tr[name] || {};
-      const audible = tl.audible ? tl.audible(name) : !t.mute;
-      return audible ? Math.max(1, Math.pow(10, (Number(t.gain_db) || 0) / 20)) : 1;
-    };
-    const a1 = boost('A1'), a2 = boost('A2');
-    for (const el of document.querySelectorAll('#player video, #player audio, #bed')) {
-      const n = nodes.get(el);
-      if (!n) continue;
-      const want = el.id === 'bed' ? a2 : a1;
-      if (Math.abs(n.gain.gain.value - want) > 1e-4) n.gain.gain.value = want;
+  /* ---- the one owner of an element's level (lane PROGRAM's request) */
+  const levels = new WeakMap();      // element -> {key: linear factor}
+  function product(f) {
+    let p = 1;
+    for (const k in f) p *= f[k];
+    return Number.isFinite(p) && p > 0 ? p : 0;
+  }
+  function setLevel(el, key, linear) {
+    if (!el) return;
+    const x = Math.max(0, Number(linear));
+    const f = levels.get(el) || {};
+    f[key] = Number.isFinite(x) ? x : 1;
+    levels.set(el, f);
+    const p = product(f);
+    const n = nodes.get(el);
+    if (n) {
+      if (Math.abs(n.gain.gain.value - p) > 1e-4) n.gain.gain.value = p;
+    } else {
+      const v = Math.min(1, p);
+      if (Math.abs(el.volume - v) > 1e-4) el.volume = v;
     }
   }
 
@@ -270,14 +282,6 @@
     const pl = document.getElementById('player');
     if (typeof ResizeObserver !== 'undefined' && pl) new ResizeObserver(layout).observe(pl);
     layout();
-    const hook = () => {
-      if (window.tl && window.tl.on) { window.tl.on('tracks', applyBoost); return true; }
-      return false;
-    };
-    if (!hook()) {
-      let tries = 0;
-      const iv = setInterval(() => { if (hook() || ++tries > 40) clearInterval(iv); }, 250);
-    }
   }
 
   document.addEventListener('play', onPlay, true);
@@ -289,10 +293,13 @@
     read: () => ({ now: [...lvl.now], shown: [...lvl.shown], hold: [...lvl.hold] }),
     mode: () => mode,
     sources: () => count,
+    has: (el) => nodes.has(el),
     state: () => (ctx ? ctx.state : 'none'),
     layout,
   };
   window.rcAudio = {
+    setLevel,
+    levelOf: (el) => product(levels.get(el) || {}),
     gainFor(el) {
       if (!el) return null;
       if (nodes.has(el)) return nodes.get(el).gain;
