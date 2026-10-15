@@ -45,11 +45,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import shutil
 import subprocess
 import sys
 import tempfile
 from collections import Counter
+from fractions import Fraction
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -75,8 +77,13 @@ PROFILES = {
     # rate like `delivery` (YouTube wants the native rate), capped at 1920x1080 and
     # never upscaled, with YouTube's recommended 384 kbps stereo AAC.
     "youtube": {"preset": "medium", "crf": "18", "audio_bitrate": "384k"},
+    # The Export dialog's Match Sequence (verdict 3 punch 10): the sequence's own frame
+    # size and rate, nothing capped and nothing upscaled, crf 18 at medium.
+    "match": {"preset": "medium", "crf": "18", "audio_bitrate": "320k"},
 }
 YOUTUBE_MAX_W, YOUTUBE_MAX_H = 1920, 1080
+MATCH_MAX_W, MATCH_MAX_H = 8192, 8192
+AUDIO_RATE = 48000
 
 # `--progress`: every part's encode writes ffmpeg's `-progress` beside it
 # (`part_007.progress`), so whoever asked for the render can read how many seconds of
@@ -150,15 +157,185 @@ def retimed_events(events: list[dict], speed: float) -> list[dict]:
     return [{**ev, "t_part": round(float(ev["t_part"]) / speed, 4)} for ev in events]
 
 
+# ------------------------------------------------- the frame grid (verdict 3, CFR)
+#
+# The journey test found exports that were variable frame rate (r_frame_rate 120/1,
+# avg 23.89 on a 24 fps sequence): every part was `-t` seconds long, which is not a
+# whole number of frames, and its sound ran a few ms past its picture, so the concat
+# demuxer started the next part's picture after a gap. Now every part is a whole
+# number of frames — counted off the film's frame grid, so the rounding never adds up
+# along the cut — its sound exactly that long, and the join lays the pictures end to
+# end by those lengths and mixes the sound as one stream. The file is constant frame
+# rate at the rate asked for, and its length is the sequence's to half a frame.
+
+def rate_of(fps: str | float) -> Fraction:
+    """`"30000/1001"`, `"24"`, `29.97` → the exact rate. A decimal NTSC rate (23.976,
+    29.97, 59.94, 47.952, 119.88) is the /1001 one it stands for; anything else is
+    read as written."""
+    text = str(fps).strip()
+    if "/" in text:
+        num, _, den = text.partition("/")
+        return Fraction(int(num), int(den))
+    f = float(text)
+    if abs(f - round(f)) < 1e-6:
+        return Fraction(int(round(f)))
+    ntsc = round(f * 1.001)
+    if abs(f - ntsc / 1.001) < 0.002:
+        return Fraction(ntsc * 1000, 1001)
+    return Fraction(f).limit_denominator(1001)
+
+
+def fps_text(rate: Fraction) -> str:
+    """The rate as ffmpeg and `-r` take it: `24`, `30000/1001`."""
+    return str(rate.numerator) if rate.denominator == 1 else f"{rate.numerator}/{rate.denominator}"
+
+
+def frame_spans(segments: list[dict], rate: Fraction) -> list[tuple[int, int]]:
+    """Each shot's (first frame, end frame) in the film, off its cumulative seconds:
+    a shot is `end - first` frames and the film `spans[-1][1]`, which is the
+    sequence's length rounded to the nearest frame — never a frame per cut off."""
+    spans, t = [], 0.0
+    for seg in segments:
+        a = round(t * rate)
+        t += edits.dur(seg)
+        spans.append((a, max(a + 1, round(t * rate))))
+    return spans
+
+
+def samples_at(frame: int, rate: Fraction) -> int:
+    """Audio samples from the film's start to `frame`, on the same grid."""
+    return round(frame * AUDIO_RATE / rate)
+
+
+# ---------------------------------------------- Effect Controls (verdict 3, punch 3)
+#
+# A segment's `controls` (app/static/effects.js; validated by server.clean_controls):
+# position [x, y] fractions of the frame with 0.5 the centre, scale %, rotation
+# degrees clockwise, opacity 0..100, volume_db, contrast -100..100, saturation 0..200,
+# fx_off and fx_order. The Program monitor shows them as a CSS transform/opacity on
+# the picture's layers and grade.js's shader; the render does the same maths here.
+
+def ctl_num(controls: dict | None, key: str, default: float) -> float:
+    v = (controls or {}).get(key)
+    return default if v is None else float(v)
+
+
+def adjust_vf(controls: dict | None) -> str | None:
+    """Lumetri contrast and saturation, after the LUT, as grade.js's shader does them
+    in RGB: `y = (c - 0.5) * (1 + contrast/200) + 0.5`, then a mix toward Rec.709 luma
+    by saturation/100. In the part's limited-range BT.709 YUV that is exactly: luma
+    about its middle (125.5) times k, and both chroma about 128 times k × s (a
+    per-channel contrast about 0.5 scales R-Y and B-Y by k; the mix toward luma keeps
+    luma and scales them by s). Clipped to the legal range, as the shader clamps."""
+    k = 1.0 + ctl_num(controls, "contrast", 0.0) / 200.0
+    sat = ctl_num(controls, "saturation", 100.0) / 100.0
+    if abs(k - 1.0) < 1e-9 and abs(sat - 1.0) < 1e-9:
+        return None
+    ks = k * sat
+    return (f"lutyuv=y='clip((val-125.5)*{k:.6g}+125.5,16,235)'"
+            f":u='clip((val-128)*{ks:.6g}+128,16,240)'"
+            f":v='clip((val-128)*{ks:.6g}+128,16,240)'")
+
+
+def volume_db(controls: dict | None) -> float:
+    return ctl_num(controls, "volume_db", 0.0)
+
+
+def dim_vf(opacity: float) -> str:
+    """Opacity over black: in limited YUV, a straight blend toward (16, 128, 128)."""
+    a = f"{opacity:.6g}"
+    return f"lutyuv=y='16+(val-16)*{a}':u='128+(val-128)*{a}':v='128+(val-128)*{a}'"
+
+
+def motion_graph(controls: dict | None, w: int, h: int, vin: str, vout: str) -> str | None:
+    """Motion and Opacity as a filter-graph fragment from `[vin]` to `[vout]`, or None
+    at the defaults. The monitor's CSS is `translate((x-0.5)·W, (y-0.5)·H) rotate(r)
+    scale(s)` about the picture's centre: a source point p lands at
+    `q = (x·W, y·H) + s·R(r)·(p − centre)`. Only the part of the source that can land
+    in the frame is cropped (so a 1000 % scale never builds a 19200-wide frame), scaled,
+    rotated (corners black) and overlaid on black where its own centre lands."""
+    c = controls or {}
+    pos = c.get("position") or [0.5, 0.5]
+    px, py = float(pos[0]), float(pos[1])
+    s = ctl_num(c, "scale", 100.0) / 100.0
+    rot = ctl_num(c, "rotation", 0.0)
+    op = max(0.0, min(1.0, ctl_num(c, "opacity", 100.0) / 100.0))
+    turned = abs(math.remainder(rot, 360.0)) > 1e-9
+    moved = abs(px - 0.5) > 1e-9 or abs(py - 0.5) > 1e-9 or abs(s - 1.0) > 1e-9 or turned
+    dim = op < 1.0 - 1e-9
+    if not moved and not dim:
+        return None
+    if not moved:
+        return f"[{vin}]{dim_vf(op)}[{vout}]"
+    black = f"[{vin}]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[{vout}]"
+    if s <= 1e-6 or op <= 1e-6:
+        return black
+    th = math.radians(rot)
+    cos, sin = round(math.cos(th), 12), round(math.sin(th), 12)
+    tx, ty, cx, cy = px * w, py * h, w / 2.0, h / 2.0
+
+    def to_src(qx: float, qy: float) -> tuple[float, float]:
+        dx, dy = (qx - tx) / s, (qy - ty) / s
+        return cx + cos * dx + sin * dy, cy - sin * dx + cos * dy
+
+    corners = [to_src(qx, qy) for qx, qy in ((0, 0), (w, 0), (0, h), (w, h))]
+    x0 = max(0, int(math.floor(min(p[0] for p in corners))) - 2) // 2 * 2
+    y0 = max(0, int(math.floor(min(p[1] for p in corners))) - 2) // 2 * 2
+    x1 = min(w, int(math.ceil(max(p[0] for p in corners))) + 2)
+    y1 = min(h, int(math.ceil(max(p[1] for p in corners))) + 2)
+    if x1 - x0 < 2 or y1 - y0 < 2:
+        return black                        # nothing of the picture lands in the frame
+    cw = min(w - x0, (x1 - x0 + 1) // 2 * 2)
+    ch = min(h - y0, (y1 - y0 + 1) // 2 * 2)
+    sw = max(2, int(round(cw * s / 2)) * 2)
+    sh = max(2, int(round(ch * s / 2)) * 2)
+    chain = [f"crop={cw}:{ch}:{x0}:{y0}", f"scale={sw}:{sh}"]
+    rw, rh = sw, sh
+    if turned:
+        rw = int(math.ceil((sw * abs(cos) + sh * abs(sin)) / 2)) * 2
+        rh = int(math.ceil((sw * abs(sin) + sh * abs(cos)) / 2)) * 2
+        chain.append(f"rotate={th:.9f}:ow={rw}:oh={rh}:c=black")
+    if dim:
+        chain.append(dim_vf(op))
+    # where the crop's own centre lands; the rotated box is centred on it
+    ex, ey = x0 + cw / 2.0 - cx, y0 + ch / 2.0 - cy
+    qx = tx + s * (cos * ex - sin * ey)
+    qy = ty + s * (sin * ex + cos * ey)
+    ox, oy = int(round(qx - rw / 2.0)), int(round(qy - rh / 2.0))
+    return (f"[{vin}]split[mo_c][mo_f];"
+            f"[mo_c]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[mo_bg];"
+            f"[mo_f]{','.join(chain)}[mo_fg];"
+            f"[mo_bg][mo_fg]overlay=x={ox}:y={oy}:eof_action=pass,format=yuv420p[{vout}]")
+
+
+def ordered_effects(edl: dict, seg: dict) -> list[dict]:
+    """The shot's accepted effects as its Effect Controls stack has them: a bypassed
+    one (`fx_off`) is not drawn, and the rest go in `fx_order` (the board's own rank:
+    an id in the order by its place, any other after them in the EDL's order). The
+    first is drawn first, so the last is on top."""
+    c = seg.get("controls") or {}
+    off = set(c.get("fx_off") or [])
+    order = list(c.get("fx_order") or [])
+    mine = [e for e in fx.effects_for_shot(edl, seg) if str(e.get("id")) not in off]
+
+    def rank(e: dict) -> float:
+        eid = str(e.get("id"))
+        return order.index(eid) if eid in order else 1e6 + mine.index(e)
+    return sorted(mine, key=rank)
+
+
 def video_filter(video: dict, normalise: str | None = None,
-                 lut: str | None = None, speed: float = 1.0) -> str:
+                 lut: str | None = None, speed: float = 1.0,
+                 controls: dict | None = None) -> str:
     """The part's `-vf`: normalise (HDR → SDR 709, before anything sees the frame),
     the retime when the shot has a speed (`setpts` — so the *frame count* changes,
     not the rate: the `fps` conform after it duplicates or drops to the film's rate;
     ahead of the conform rather than after it so a 60 fps source slowed to half
     keeps its own frames instead of doubling decimated ones), the scale/pad/fps
     conform, then either the LUT chain — which states the range on both sides and
-    ends in its own `format=yuv420p` — or the plain `format=yuv420p`."""
+    ends in its own `format=yuv420p` — or the plain `format=yuv420p`; then the
+    shot's Lumetri contrast and saturation (`adjust_vf`), after the table as on the
+    monitor."""
     chain = []
     if normalise:
         chain.append(normalise)
@@ -168,74 +345,134 @@ def video_filter(video: dict, normalise: str | None = None,
               f"pad={video['w']}:{video['h']}:(ow-iw)/2:(oh-ih)/2",
               f"fps={video['fps']}"]
     chain.append(lut if lut else "format=yuv420p")
+    adj = adjust_vf(controls)
+    if adj:
+        chain.append(adj)
     return ",".join(chain)
+
+
+def encode_part(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path,
+                orient: str, video: dict, *, normalise: str | None = None,
+                lut: str | None = None, speed: float = 1.0, controls: dict | None = None,
+                shot_effects: list[tuple[dict, list[dict]]] | None = None,
+                workdir: Path | None = None, span: tuple[int, int] | None = None) -> None:
+    """One part: the conform, the grade, the shot's effects (`fx.part_graph`: a
+    sprite `.mov` per event overlaid at its second, the effect's synth `.wav` delayed
+    and mixed), its Motion and Opacity and its Volume, through one `-filter_complex`.
+    With `span` (its frames on the film's grid) the picture is exactly that many
+    frames (the last one held if the source runs short) and the sound exactly that
+    long; without it the part is `-t` seconds as it always was. Everything about the
+    part that the join relies on (codec, tags, timescale, `-dn`, `-write_tmcd 0`) is
+    the same for every part. The sprite inputs go after the source's `-i`; the
+    source's own read limit is an input `-t` ahead of it."""
+    extra: list[str] = []
+    vcur, acur = "vbase", "abase"
+    graph = [f"[0:v]{video_filter(video, normalise, lut, speed, controls)}[vbase]",
+             f"[0:a]{audio_filter(gain_db + volume_db(controls), speed)}[abase]"]
+    if shot_effects:
+        extra, fxg, vcur, acur = fx.part_graph(shot_effects, video["w"], video["h"],
+                                               video["fps"], workdir or dest.parent)
+        if fxg:
+            graph.append(fxg)
+    mg = motion_graph(controls, video["w"], video["h"], vcur, "vmo")
+    if mg:
+        graph.append(mg)
+        vcur = "vmo"
+    tail: list[str] = []
+    if span is not None:
+        rate = rate_of(video["fps"])
+        frames = span[1] - span[0]
+        samples = samples_at(span[1], rate) - samples_at(span[0], rate)
+        graph.append(f"[{vcur}]tpad=stop_mode=clone:stop_duration=2,"
+                     f"trim=end_frame={frames},setpts=PTS-STARTPTS[vout]")
+        graph.append(f"[{acur}]apad,atrim=end_sample={samples},asetpts=PTS-STARTPTS[aout]")
+        vcur, acur = "vout", "aout"
+    else:
+        tail = ["-t", f"{part_seconds(t_in, t_out, speed):.3f}"]
+    cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin"]
+    if orient == "none":
+        cmd += ["-display_rotation", "0"]           # must precede -i; see module docstring
+    cmd += ["-ss", f"{t_in:.3f}", "-t", f"{max(0.05, t_out - t_in) + 1.0:.3f}",
+            "-i", str(src), *extra, *tail,
+            "-filter_complex", ";".join(graph),
+            "-map", f"[{vcur}]", "-map", f"[{acur}]", "-dn",   # drop GoPro's telemetry track
+            "-c:v", "libx264", "-preset", video["preset"], "-crf", video["crf"],
+            "-fps_mode", "cfr",
+            *COLOUR_TAGS,
+            "-c:a", "aac", "-b:a", video["audio_bitrate"], "-ac", "2",
+            "-video_track_timescale", str(video["timescale"]),
+            # -dn drops the source telemetry stream; -write_tmcd stops the mov muxer
+            # from synthesising a fresh timecode track out of the source metadata.
+            "-write_tmcd", "0",
+            "-movflags", "+faststart", str(dest)]
+    r = run(cmd)
+    if r.returncode != 0:
+        raise RuntimeError(f"cut failed {src.name} {t_in}-{t_out}: {r.stderr[-600:]}")
 
 
 def cut(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path,
         orient: str, video: dict, normalise: str | None = None,
-        lut: str | None = None, speed: float = 1.0) -> None:
-    cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin"]
-    if orient == "none":
-        cmd += ["-display_rotation", "0"]           # must precede -i; see module docstring
-    cmd += [
-        "-ss", f"{t_in:.3f}", "-i", str(src), "-t", f"{part_seconds(t_in, t_out, speed):.3f}",
-        "-vf", video_filter(video, normalise, lut, speed),
-        "-af", audio_filter(gain_db, speed),
-        "-map", "0:v:0", "-map", "0:a:0", "-dn",    # drop GoPro's telemetry track
-        "-c:v", "libx264", "-preset", video["preset"], "-crf", video["crf"],
-        *COLOUR_TAGS,
-        "-c:a", "aac", "-b:a", video["audio_bitrate"], "-ac", "2",
-        "-video_track_timescale", str(video["timescale"]),
-        # -dn drops the source telemetry stream; -write_tmcd stops the mov muxer
-        # from synthesising a fresh timecode track out of the source metadata.
-        "-write_tmcd", "0",
-        "-movflags", "+faststart", str(dest),
-    ]
-    r = run(cmd)
-    if r.returncode != 0:
-        raise RuntimeError(f"cut failed {src.name} {t_in}-{t_out}: {r.stderr[-400:]}")
+        lut: str | None = None, speed: float = 1.0, *, controls: dict | None = None,
+        span: tuple[int, int] | None = None) -> None:
+    encode_part(src, t_in, t_out, gain_db, dest, orient, video, normalise=normalise,
+                lut=lut, speed=speed, controls=controls, span=span)
 
 
 def cut_with_effects(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path,
                      orient: str, video: dict, shot_effects: list[tuple[dict, list[dict]]],
                      workdir: Path, normalise: str | None = None,
-                     lut: str | None = None, speed: float = 1.0) -> None:
-    """`cut()` for a part that carries effects (INTAKE M12): the same conform and the
-    same encode, but through one `-filter_complex` — `[0:v]<video_filter>[vbase]` and
-    `[0:a]volume,aresample[abase]`, then `fx.part_graph`'s fragment (a sprite `.mov`
-    per event overlaid at its clip second, the effect's synth `.wav` delayed and mixed)
-    — mapped from its `[vout]`/`[aout]`. Everything about the part that the concat
-    relies on (codec, tags, timescale, `-dn`, `-write_tmcd 0`) is identical, so the
-    film still copies. The sprite inputs go between the source `-i` and `-t`: after an
-    `-i`, a `-t` is an input option for the NEXT input and would cut the sprites short.
-    In a retimed part (INTAKE M13) the events are already in output seconds — see
-    `retimed_events` — and the base chains carry the shot's speed."""
-    extra, graph, vout, aout = fx.part_graph(shot_effects, video["w"], video["h"],
-                                             video["fps"], workdir)
-    if not graph:
-        return cut(src, t_in, t_out, gain_db, dest, orient, video, normalise, lut, speed)
-    fc = (f"[0:v]{video_filter(video, normalise, lut, speed)}[vbase];"
-          f"[0:a]{audio_filter(gain_db, speed)}[abase];{graph}")
-    cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin"]
-    if orient == "none":
-        cmd += ["-display_rotation", "0"]           # must precede -i; see module docstring
-    cmd += ["-ss", f"{t_in:.3f}", "-i", str(src), *extra,
-            "-t", f"{part_seconds(t_in, t_out, speed):.3f}",
-            "-filter_complex", fc, "-map", f"[{vout}]", "-map", f"[{aout}]", "-dn",
-            "-c:v", "libx264", "-preset", video["preset"], "-crf", video["crf"],
-            *COLOUR_TAGS,
-            "-c:a", "aac", "-b:a", video["audio_bitrate"], "-ac", "2",
-            "-video_track_timescale", str(video["timescale"]),
-            "-write_tmcd", "0",
-            "-movflags", "+faststart", str(dest)]
-    r = run(cmd)
+                     lut: str | None = None, speed: float = 1.0, *,
+                     controls: dict | None = None,
+                     span: tuple[int, int] | None = None) -> None:
+    """`cut()` for a part that carries effects (INTAKE M12). In a retimed part
+    (INTAKE M13) the events are already in output seconds — see `retimed_events` —
+    and the base chains carry the shot's speed."""
+    encode_part(src, t_in, t_out, gain_db, dest, orient, video, normalise=normalise,
+                lut=lut, speed=speed, controls=controls, shot_effects=shot_effects,
+                workdir=workdir, span=span)
+
+
+def join_parts(parts: list[Path], spans: list[tuple[int, int]], video: dict,
+               out: Path, workdir: Path) -> None:
+    """The film from its parts: the pictures stream-copied end to end through the
+    concat demuxer, each placed by its `duration` on the frame grid (its own
+    microseconds, rounded off the cumulative time so nothing drifts), and the sound
+    re-joined as one stream — each part's own, exactly its frames long — and encoded
+    once. The parts' sound used to ride the concat too, and a part whose AAC ran a few
+    ms past its picture pushed every later picture off the grid."""
+    rate = rate_of(video["fps"])
+    lines = []
+    for p, (a, b) in zip(parts, spans):
+        us = round(b * 1_000_000 / rate) - round(a * 1_000_000 / rate)
+        lines.append(f"file '{p}'\nduration {us / 1e6:.6f}\n")
+    listfile = workdir / "concat.txt"
+    listfile.write_text("".join(lines), encoding="utf-8")
+    inputs: list[str] = []
+    graph: list[str] = []
+    for k, (p, (a, b)) in enumerate(zip(parts, spans)):
+        inputs += ["-i", str(p)]
+        n = samples_at(b, rate) - samples_at(a, rate)
+        graph.append(f"[{k + 1}:a]aresample={AUDIO_RATE},apad,atrim=end_sample={n},"
+                     f"asetpts=PTS-STARTPTS[a{k}]")
+    graph.append("".join(f"[a{k}]" for k in range(len(parts)))
+                 + f"concat=n={len(parts)}:v=0:a=1[aout]")
+    total = (spans[-1][1] - spans[0][0]) / rate if spans else 0
+    r = run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-f", "concat", "-safe", "0",
+             "-i", str(listfile), *inputs, "-filter_complex", ";".join(graph),
+             # the concat demuxer starts the picture at the parts' AAC priming
+             # (0.021 s) after the sound; the first frame is the film's zero
+             "-map", "0:v:0", "-map", "[aout]", "-c:v", "copy",
+             "-bsf:v", "setts=pts=PTS-STARTPTS:dts=DTS-STARTPTS",
+             "-c:a", "aac", "-b:a", video["audio_bitrate"], "-ac", "2",
+             "-t", f"{float(total):.6f}", "-write_tmcd", "0",
+             "-movflags", "+faststart", str(out)])
     if r.returncode != 0:
-        raise RuntimeError(f"cut with effects failed {src.name} {t_in}-{t_out}: {r.stderr[-400:]}")
+        raise RuntimeError(f"concat failed: {r.stderr[-600:]}")
 
 
 def tracks_pass(film: Path, edl: dict, segments: list[dict], parts: list[Path],
                 video: dict, orient: str, footage: Path, generated_dir: Path | None,
-                workdir: Path) -> list[str]:
+                workdir: Path, film_s: float | None = None) -> list[str]:
     """The sequence's tracks over the concatenated film (roughcut/tracks.py), in ONE pass
     and only when the tracks ask for something the plain concat is not:
 
@@ -250,7 +487,9 @@ def tracks_pass(film: Path, edl: dict, segments: list[dict], parts: list[Path],
     The video is copied when only the sound changed. Returns the lines to print."""
     trk = edl.get("tracks") or {}
     plan = tracksmod.a1_plan(segments, trk, edits.dur)
-    total = plan["total"]
+    # the film's own length — whole frames on the grid (`frame_spans`) — not the sum of
+    # the shots' seconds, which a `-t` would cut the last frame short of
+    total = float(film_s) if film_s is not None else plan["total"]
     v1_eye = tracksmod.visible(trk, "V1")
     overlays = []
     if tracksmod.visible(trk, "V2"):
@@ -280,7 +519,8 @@ def tracks_pass(film: Path, edl: dict, segments: list[dict], parts: list[Path],
                 shot_probe(src, None, {}))
             spd = edits.speed_of(o)
             cut(src, o["in"], min(o["out"], o["in"] + length * spd), 0.0, dest, orient,
-                video, normalise=normalise, speed=spd)
+                video, normalise=normalise, speed=spd,
+                span=(0, max(1, round(length * rate_of(video["fps"])))))
             inputs += ["-i", str(dest)]
             at = float(o["at"])
             graph.append(f"[{n}:v]setpts=PTS-STARTPTS+{at:.3f}/TB[o{j}]")
@@ -293,7 +533,7 @@ def tracks_pass(film: Path, edl: dict, segments: list[dict], parts: list[Path],
         graph.append(f"{base}format=yuv420p[vout]")
         vmap = "[vout]"
         vcodec = ["-c:v", "libx264", "-preset", video["preset"], "-crf", video["crf"],
-                  *COLOUR_TAGS]
+                  "-fps_mode", "cfr", "-r", str(video["fps"]), *COLOUR_TAGS]
     amap, acodec = "0:a:0", ["-c:a", "copy"]
     if plan["needed"]:
         if plan["audible"]:
@@ -389,8 +629,11 @@ def delivery_resolution(native_w: int, native_h: int,
     return w, h
 
 
-def resolve_video_profile(name: str, footage: Path, segments: list[dict]) -> dict:
-    """The concrete {w, h, fps, preset, crf, audio_bitrate, timescale} for `cut()`."""
+def resolve_video_profile(name: str, footage: Path, segments: list[dict],
+                          fps_override: str | None = None) -> dict:
+    """The concrete {w, h, fps, preset, crf, audio_bitrate, timescale} for `cut()`.
+    `fps_override` (`--fps`, the sequence's rate the board asks an export for) wins
+    over the profile's own rate; the frame size is the profile's either way."""
     base = PROFILES[name]
     if name == "delivery":
         fps, native_w, native_h = bin_profile(footage, segments)
@@ -398,8 +641,13 @@ def resolve_video_profile(name: str, footage: Path, segments: list[dict]) -> dic
     elif name == "youtube":
         fps, native_w, native_h = bin_profile(footage, segments)
         w, h = delivery_resolution(native_w, native_h, YOUTUBE_MAX_W, YOUTUBE_MAX_H)
+    elif name == "match":
+        fps, native_w, native_h = bin_profile(footage, segments)
+        w, h = delivery_resolution(native_w, native_h, MATCH_MAX_W, MATCH_MAX_H)
     else:
         fps, w, h = FPS, W, H
+    if fps_override:
+        fps = fps_text(rate_of(fps_override))
     num, _, den = fps.partition("/")
     timescale = int(num) if den else int(num) * 1000   # keep sub-frame PTS precision
     return {**base, "fps": fps, "w": w, "h": h, "timescale": timescale}
@@ -504,6 +752,22 @@ def describe_colour(res: dict, normalise: str | None, probe: dict) -> str:
     return " · ".join(bits)
 
 
+def describe_controls(c: dict) -> str:
+    """One line for the render log: the shot's Effect Controls that are not default."""
+    bits = []
+    if c.get("position"):
+        bits.append(f"position {c['position'][0]:.3f},{c['position'][1]:.3f}")
+    for k, unit in (("scale", "%"), ("rotation", "°"), ("opacity", "%"),
+                    ("volume_db", " dB"), ("contrast", ""), ("saturation", "")):
+        if c.get(k) is not None:
+            bits.append(f"{k} {c[k]:g}{unit}")
+    if c.get("fx_off"):
+        bits.append(f"fx off {len(c['fx_off'])}")
+    if c.get("fx_order"):
+        bits.append("fx order")
+    return " · ".join(bits) or "defaults"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Render an EDL to a video file.")
     ap.add_argument("edl", type=Path)
@@ -529,7 +793,12 @@ def main() -> int:
                     help="preview (default): today's fixed 1920x1080 @ 24000/1001, "
                          "veryfast/crf20 — what the board's quick versions use. "
                          "delivery: the bin's own majority frame rate and up to 4K "
-                         "resolution (never upscaled), preset slow, crf 18.")
+                         "resolution (never upscaled), preset slow, crf 18. youtube: "
+                         "the same capped at 1080p. match: the bin's own size and rate.")
+    ap.add_argument("--fps", default=None,
+                    help="the film's frame rate (`30000/1001`, `24`, `29.97`), over the "
+                         "profile's own: the board passes the sequence's rate for an "
+                         "export. The file is constant frame rate at it either way.")
     ap.add_argument("--progress", action="store_true",
                     help="write ffmpeg -progress beside each part (part_NNN.progress) "
                          "so a caller can read encoded seconds")
@@ -546,7 +815,10 @@ def main() -> int:
     segments = edl["segments"]
     orient = edl.get("orient", "auto")
     planned = sum(edits.dur(s) for s in segments)      # a shot at a speed is longer or shorter
-    video = resolve_video_profile(args.profile, args.footage, segments)
+    video = resolve_video_profile(args.profile, args.footage, segments, args.fps)
+    rate = rate_of(video["fps"])
+    spans = frame_spans(segments, rate)
+    film_s = float(spans[-1][1] / rate) if spans else 0.0
     print(f"variant {edl['variant']} — {edl['title']}: {len(segments)} segments, "
           f"{planned:.1f}s planned, orient={orient}")
     print(f"profile {args.profile}: {video['w']}x{video['h']} @ {video['fps']}fps, "
@@ -596,16 +868,15 @@ def main() -> int:
             # The shot's accepted effects (INTAKE M12) fold into this same encode;
             # an event outside the shot's range is simply not drawn. In a retimed
             # part (INTAKE M13) an event's `t_part` moves with the picture.
+            # Effect Controls' stack decides which are drawn and in what order.
             shot_effects = [(e, retimed_events(fx.events_in_shot(e, seg), speed))
-                            for e in fx.effects_for_shot(edl, seg)]
+                            for e in ordered_effects(edl, seg)]
             shot_effects = [(e, evs) for e, evs in shot_effects if evs]
-            if shot_effects:
-                cut_with_effects(src, seg["in"], seg["out"], gain, dest, orient, video,
-                                 shot_effects, workdir / f"part_{i:03d}_fx",
-                                 normalise=normalise, lut=lut, speed=speed)
-            else:
-                cut(src, seg["in"], seg["out"], gain, dest, orient, video,
-                    normalise=normalise, lut=lut, speed=speed)
+            controls = seg.get("controls") or None
+            encode_part(src, seg["in"], seg["out"], gain, dest, orient, video,
+                        normalise=normalise, lut=lut, speed=speed, controls=controls,
+                        shot_effects=shot_effects or None,
+                        workdir=workdir / f"part_{i:03d}_fx", span=spans[i])
             assert_no_rotation(dest, orient)        # catch it at the part, not the film
             actual = probe_duration(dest)
             parts.append(dest)
@@ -613,25 +884,21 @@ def main() -> int:
             print(f"  {i:02d} {seg['clip']} {seg['in']:6.1f}-{seg['out']:6.1f}{rate} "
                   f"({actual:5.2f}s, {gain:+5.1f}dB)  {(seg.get('why') or '')[:56]}")
             print(f"      colour: {'generated — as made' if generated else describe_colour(res, normalise, probe)}")
+            if controls:
+                print(f"      controls: {describe_controls(controls)}")
             for e, evs in shot_effects:
                 print(f"      fx: {e.get('name', 'effect')} × {len(evs)} at "
                       + ", ".join(f"{ev['t_part']:.2f}s" for ev in evs))
 
-        listfile = workdir / "concat.txt"
-        listfile.write_text("".join(f"file '{p}'\n" for p in parts), encoding="utf-8")
         args.out.parent.mkdir(parents=True, exist_ok=True)
-        r = run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-f", "concat", "-safe", "0",
-                 "-i", str(listfile), "-c", "copy", "-write_tmcd", "0",
-                 "-movflags", "+faststart", str(args.out)])
-        if r.returncode != 0:
-            raise RuntimeError(f"concat failed: {r.stderr[-400:]}")
+        join_parts(parts, spans, video, args.out, workdir)
 
         assert_no_rotation(args.out, orient)
 
         # The tracks (roughcut/tracks.py): A1's mute / gain / unlinked offsets, V2 over
         # V1, V1's eye — one pass, only when one of them is not the default.
         for line in tracks_pass(args.out, edl, segments, parts, video, orient,
-                                args.footage, args.generated_dir, workdir):
+                                args.footage, args.generated_dir, workdir, film_s):
             print(f"tracks: {line}")
         assert_no_rotation(args.out, orient)
 
