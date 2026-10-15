@@ -35,6 +35,12 @@ playwright_api = pytest.importorskip("playwright.sync_api",
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 
+def grid(t: float, fps: float = 24.0) -> float:
+    """A time on the sequence's frame grid, as the timeline commits it (wave 3: edit
+    points land on frames, 4 places): the suite's clips are 24 fps, so the sequence is."""
+    return round(round(t * fps) / fps, 4)
+
+
 def tc(seconds: float, fps: float = 23.976) -> str:
     """Film seconds as the timeline writes them: HH:MM:SS:FF, non-drop at the nominal
     rate, rounded to the nearest frame (timeline.js `tl.tc`)."""
@@ -246,7 +252,7 @@ def test_dragging_the_in_handle_moves_the_in_point_and_the_film_closes_up(page):
     assert page.evaluate("tl.filmStart(segs[1].id)") == pytest.approx(1.6, abs=0.02)
     # and it cannot cross the out: 0.2 s is the floor
     drag(page, in_handle(page, 0), 5 * z)
-    assert page.evaluate("segs[0].in") == 2.8
+    assert page.evaluate("segs[0].in") == grid(3.0 - 5 / 24)   # 0.2 s is 4.8 frames: 5
     assert page.evaluate("segs[0].out") == 3.0
 
 
@@ -305,9 +311,9 @@ def test_a_press_on_a_handle_without_travel_is_a_click_and_esc_cancels_a_drag(pa
     # Esc mid-drag puts the cut back and leaves nothing on the stack
     z = zoom(page)
     drag(page, out_handle(page, 0), 0.3 * z, release=False)
-    page.wait_for_function("Math.abs(segs[0].out - 3.3) < 0.02", timeout=3000)
+    page.wait_for_function("Math.abs(segs[0].out - 3.3) < 0.03", timeout=3000)
     assert page.locator("#tl .tl-tip").is_visible()
-    assert "out 3.3" in page.locator("#tl .tl-tip").inner_text()
+    assert f"out {grid(3.3):.2f}" in page.locator("#tl .tl-tip").inner_text()
     page.keyboard.press("Escape")
     assert ranges(page) == [[1.0, 3.0], [0.0, 2.0]]
     assert page.locator("#tl .tl-tip").is_hidden()
@@ -514,23 +520,23 @@ def test_hovering_a_cut_lights_the_half_shows_the_ghost_and_the_hint(page):
 def test_the_tooltip_says_the_rest_moves_on_an_extend_and_roll_on_a_roll(page):
     z = zoom(page)
     drag(page, quadrant(page, 0, "t", "l"), 0.3 * z, release=False)
-    page.wait_for_function("Math.abs(segs[0].out - 3.3) < 0.02", timeout=3000)
+    page.wait_for_function("Math.abs(segs[0].out - 3.3) < 0.03", timeout=3000)
     tip = page.locator("#tl .tl-tip").inner_text()
-    assert tip.startswith("out 3.3") and "+0.3" in tip and "the rest moves" in tip, tip
+    assert tip.startswith(f"out {grid(3.3):.2f}") and f"+{grid(3.3) - 3:.2f}" in tip and "the rest moves" in tip, tip
     page.keyboard.press("Escape")
     page.mouse.up()
     drag(page, quadrant(page, 0, "b", "l"), 0.4 * z, release=False)
-    page.wait_for_function("Math.abs(segs[1].in - 0.4) < 0.02", timeout=3000)
+    page.wait_for_function("Math.abs(segs[1].in - 0.4) < 0.03", timeout=3000)
     tip = page.locator("#tl .tl-tip").inner_text()
-    assert tip.startswith("roll · CLIP_A out 3.4") and "CLIP_B in 0.4" in tip, tip
+    assert tip.startswith(f"roll · CLIP_A out {grid(3.4):.2f}") and f"CLIP_B in {grid(0.4):.2f}" in tip, tip
     page.keyboard.press("Escape")
     page.mouse.up()
     assert ranges(page) == [[1.0, 3.0], [0.0, 2.0]]
     # shortening reads as a minus
     drag(page, quadrant(page, 0, "t", "l"), -0.3 * z, release=False)
-    page.wait_for_function("Math.abs(segs[0].out - 2.7) < 0.02", timeout=3000)
+    page.wait_for_function("Math.abs(segs[0].out - 2.7) < 0.03", timeout=3000)
     tip = page.locator("#tl .tl-tip").inner_text()
-    assert tip.startswith("out 2.7") and "−0.3" in tip and "the rest moves" in tip, tip
+    assert tip.startswith(f"out {grid(2.7):.2f}") and f"−{3 - grid(2.7):.2f}" in tip and "the rest moves" in tip, tip
     page.keyboard.press("Escape")
     page.mouse.up()
     assert ranges(page) == [[1.0, 3.0], [0.0, 2.0]]
@@ -552,7 +558,7 @@ def test_a_drag_ending_near_a_sentence_cut_out_snaps_to_it_exactly(page):
     # the dragged block shows its clip's sentence points as ticks
     assert page.locator("#tl .blk").nth(0).locator(".tl-tick.sentence").count() >= 2
     page.mouse.up()
-    assert page.evaluate("segs[0].out") == 4.45
+    assert page.evaluate("segs[0].out") == grid(4.45)     # the sentence point, on a frame
     assert page.locator("#tl .tl-snapline").is_hidden()
     assert page.locator("#tl .blk .tl-tick").count() == 0
     page.keyboard.press("Control+z")
@@ -567,7 +573,7 @@ def test_the_magnets_priority_is_the_playhead_then_sentences_then_words(page):
     page.wait_for_selector("#tl .tl-snapline:not([hidden])", timeout=3000)
     assert page.locator("#tl .tl-snapline label").inner_text() == "playhead"
     page.mouse.up()
-    assert page.evaluate("segs[0].out") == 4.2
+    assert page.evaluate("segs[0].out") == grid(4.2)
     page.keyboard.press("Control+z")
     # a word starts at 3.5: nothing else within 8 px, so the word takes it
     page.evaluate("tl.setPlayhead(0)")
@@ -575,14 +581,14 @@ def test_the_magnets_priority_is_the_playhead_then_sentences_then_words(page):
     page.wait_for_selector("#tl .tl-snapline:not([hidden])", timeout=3000)
     assert page.locator("#tl .tl-snapline label").inner_text() == "word"
     page.mouse.up()
-    assert page.evaluate("segs[0].out") == 3.5
+    assert page.evaluate("segs[0].out") == grid(3.5)
     page.keyboard.press("Control+z")
     # an in edge snaps to a sentence's cut_in (2.4 − 0.25 = 2.15), not its cut_out
     drag(page, in_handle(page, 0), 1.15 * z + 4, release=False)
     page.wait_for_selector("#tl .tl-snapline:not([hidden])", timeout=3000)
     assert page.locator("#tl .tl-snapline label").inner_text() == "sentence"
     page.mouse.up()
-    assert page.evaluate("segs[0].in") == 2.15
+    assert page.evaluate("segs[0].in") == grid(2.15)
 
 
 def test_s_turns_the_magnet_off_and_ctrl_suspends_it(page):
@@ -621,18 +627,18 @@ def test_s_turns_the_magnet_off_and_ctrl_suspends_it(page):
 def test_alt_and_ctrl_arrows_nudge_the_active_edge_by_a_frame_or_five(page):
     """Premiere's trim keys (REDESIGN dimension 5; `,` `.` are insert / overwrite now):
     with nothing dragged yet the active edge is the selected shot's out; ⌥→ / Ctrl+→
-    take a frame at the sequence rate (1/23.976 s, kept at the foundation's 0.01 s),
+    take a frame at the sequence rate (the suite's clips are 24 fps; on the frame grid),
     with ⇧ five. After an in handle is dragged, that edge is the one the keys move."""
     f = 1 / 23.976
     first = ids(page)[0]
     page.evaluate(f"tl.select(['{first}'])")
     page.keyboard.press("Alt+ArrowLeft")
-    assert page.evaluate("segs[0].out") == round(3.0 - f, 2)
+    assert page.evaluate("segs[0].out") == grid(3.0 - f)
     assert page.locator("#undo").get_attribute("title").startswith("undo: nudge")
     page.keyboard.press("Control+ArrowRight")
     assert page.evaluate("segs[0].out") == 3.0
     page.keyboard.press("Alt+Shift+ArrowRight")
-    assert page.evaluate("segs[0].out") == round(3.0 + 5 * f, 2)
+    assert page.evaluate("segs[0].out") == grid(3.0 + 5 * f)
     page.keyboard.press("Control+Shift+ArrowLeft")
     assert page.evaluate("segs[0].out") == 3.0
     assert page.evaluate("segs[0].in") == 1.0
@@ -641,7 +647,7 @@ def test_alt_and_ctrl_arrows_nudge_the_active_edge_by_a_frame_or_five(page):
     dragged = page.evaluate("segs[0].in")
     assert dragged == pytest.approx(1.3, abs=0.02)
     page.keyboard.press("Alt+ArrowLeft")
-    assert page.evaluate("segs[0].in") == round(dragged - f, 2)
+    assert page.evaluate("segs[0].in") == grid(dragged - f)
     assert page.evaluate("segs[0].out") == 3.0
     assert page.evaluate("tl.trim.active.edge") == "in"
     page.keyboard.press("Control+z")

@@ -841,8 +841,10 @@ def clean_segments(raw: list) -> list[dict]:
     seen_ids: set[str] = set()
     for s in raw:
         seg = {k: s[k] for k in ("clip", "in", "out") if k in s}
-        seg["in"] = round(float(seg["in"]), 2)
-        seg["out"] = round(float(seg["out"]), 2)
+        # 4 places, not 2: the timeline commits edit points on the sequence's frame grid
+        # (a 29.97 frame is 0.0334 s), and 0.01 s rounding put them back off it (wave 3)
+        seg["in"] = round(float(seg["in"]), 4)
+        seg["out"] = round(float(seg["out"]), 4)
         if seg["out"] <= seg["in"]:
             raise HTTPException(400, f"segment out <= in for {seg['clip']}")
         for k in ("act", "why"):
@@ -6520,6 +6522,122 @@ def module_static(name: str) -> Response:
         raise HTTPException(404, f"{name} is not built yet")
     media = "text/css" if name.endswith(".css") else "application/javascript"
     return Response(p.read_text(encoding="utf-8"), media_type=media, headers=NO_STORE)
+
+
+# ---------------------------------------------------------------- audio peaks (wave 3 TLAUDIO)
+#
+# A1 draws each shot's real waveform (verdict 3, punch 6: "A1 has no waveform, just
+# speech ticks"). The clip's sound is decoded once by ffmpeg to raw mono PCM, reduced to
+# PEAKS_BASE min/max pairs a second, and cached under --work/audio/<bin>/ keyed by the
+# original's size and mtime. A request asks for a coarser rate (`pps`, or `spp` samples
+# per peak at PEAKS_SR) and gets the pairs for the whole clip as int8 (-127..127): the
+# timeline slices a shot's range out of them itself, so a trim never asks again.
+
+PEAKS_SR = 16000                 # Hz the PCM is decoded at (a waveform, not a master)
+PEAKS_BASE = 100                 # pairs a second on disk
+PEAKS_RATES = (10, 20, 25, 50, 100)
+PEAKS_SLOTS = threading.BoundedSemaphore(2)
+PEAKS_LOCKS: dict[str, threading.Lock] = {}
+# a clip's sound rarely changes under its stem, but it can (a replaced file): an hour
+# in the browser, not a year
+PEAKS_CACHE = {"cache-control": "private, max-age=3600"}
+
+
+def peaks_dir() -> Path:
+    return STATE["work"] / "audio" / STATE["footage"].name
+
+
+def peaks_source(stem: str) -> Path | None:
+    """The file whose sound A1 shows: the proxy (the smallest file to demux), the 360p
+    preview, else the original; a generated clip's own file."""
+    if edits.is_generated(stem):
+        gen = generated_dir() / f"{stem}.mp4"
+        return gen if gen.exists() and (media_facts(gen) or {}).get("acodec") else None
+    clip = clip_for_stem(stem)
+    if clip is None:
+        return None
+    for p in (STATE["proxy_dir"] / f"{stem}.mp4", preview_path(stem), STATE["footage"] / clip):
+        if p.exists() and (media_facts(p) or {}).get("acodec"):
+            return p
+    return None
+
+
+def build_peaks(stem: str):
+    """The clip's base peaks (int8 array, shape (n, 2): min, max), from the cache or
+    decoded now. None when the clip has no sound."""
+    import numpy as np
+
+    src = peaks_source(stem)
+    if src is None:
+        return None
+    orig = clip_for_stem(stem)
+    # keyed by the ORIGINAL's version when there is one: the proxy carries the same
+    # sound, so a proxy finishing never invalidates peaks made from the original
+    key_src = STATE["footage"] / orig if orig and (STATE["footage"] / orig).exists() else src
+    kst = key_src.stat()
+    dest = peaks_dir() / f"{stem}.{kst.st_size}-{kst.st_mtime_ns}.peaks"
+    lock = PEAKS_LOCKS.setdefault(stem, threading.Lock())
+    with lock:
+        if dest.exists():
+            return np.frombuffer(dest.read_bytes(), dtype=np.int8).reshape(-1, 2)
+        with PEAKS_SLOTS:
+            r = subprocess.run(
+                ["ffmpeg", "-v", "error", "-nostdin", "-i", str(src), "-vn", "-sn", "-dn",
+                 "-ac", "1", "-ar", str(PEAKS_SR), "-f", "s16le", "-acodec", "pcm_s16le", "-"],
+                capture_output=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"peaks failed for {stem}: "
+                               f"{r.stderr[-200:].decode(errors='replace')}")
+        pcm = np.frombuffer(r.stdout, dtype=np.int16).astype(np.int32)
+        spp = PEAKS_SR // PEAKS_BASE
+        n = -(-len(pcm) // spp)
+        pad = np.zeros(n * spp, dtype=np.int32)
+        pad[:len(pcm)] = pcm
+        blocks = pad.reshape(n, spp)
+        lo = np.clip(np.floor(blocks.min(axis=1) * 127 / 32768), -127, 127)
+        hi = np.clip(np.ceil(blocks.max(axis=1) * 127 / 32767), -127, 127)
+        out = np.stack([lo, hi], axis=1).astype(np.int8)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part")
+        tmp.write_bytes(out.tobytes())
+        tmp.replace(dest)
+        for old in dest.parent.glob(f"{stem}.*.peaks"):     # an earlier version of the file
+            if old != dest:
+                old.unlink(missing_ok=True)
+        return out
+
+
+@app.get("/api/peaks/{stem}")
+def api_peaks(stem: str, pps: int = 0, spp: int = 0) -> JSONResponse:
+    """A clip's waveform: `pps` min/max pairs a second (10, 20, 25, 50 or 100; `spp`, the
+    samples per peak at 16 kHz, is the other way to ask), int8 -127..127, for the whole
+    clip: `{"stem", "pps", "duration", "min", "max"}`. A clip with no sound has empty
+    lists and `"silent": true`."""
+    import numpy as np
+
+    if re.search(r"\.(mp4|mov|mxf|mkv)$", stem, re.I):
+        stem = Path(stem).stem
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", stem) or (
+            not edits.is_generated(stem) and clip_for_stem(stem) is None):
+        raise HTTPException(404, f"no such clip: {stem}")
+    want = pps if pps > 0 else (PEAKS_SR / spp if spp > 0 else 50)
+    rate = min(PEAKS_RATES, key=lambda r: abs(r - want))
+    try:
+        base = build_peaks(stem)
+    except RuntimeError as exc:
+        raise HTTPException(500, str(exc)) from exc
+    if base is None or not len(base):
+        return JSONResponse({"stem": stem, "pps": rate, "duration": 0.0, "min": [], "max": [],
+                             "silent": True}, headers=PEAKS_CACHE)
+    k = PEAKS_BASE // rate
+    n = -(-len(base) // k)
+    padded = np.zeros((n * k, 2), dtype=np.int8)
+    padded[:len(base)] = base
+    g = padded.reshape(n, k, 2)
+    lo, hi = g[:, :, 0].min(axis=1), g[:, :, 1].max(axis=1)
+    return JSONResponse({"stem": stem, "pps": rate, "duration": round(len(base) / PEAKS_BASE, 3),
+                         "min": lo.astype(int).tolist(), "max": hi.astype(int).tolist()},
+                        headers=PEAKS_CACHE)
 
 
 

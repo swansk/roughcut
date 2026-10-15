@@ -408,6 +408,13 @@
 #tl .ablk .wave i { position: absolute; top: 12%; bottom: 12%; border-radius: 2px;
                     background: repeating-linear-gradient(90deg, hsl(152 50% 58% / .55) 0 1px, transparent 1px 3px),
                                 linear-gradient(hsl(152 45% 50% / .0), hsl(152 45% 50% / .35) 50%, hsl(152 45% 50% / .0)); }
+/* the real waveform (wave 3: /api/peaks): the clip's sound for the shot's range, filled,
+   over the speech bands — which fade to a faint wash under it */
+#tl .ablk .wave .wf { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; }
+#tl .ablk .wave .wf path { fill: hsl(152 55% 62% / .85); stroke: hsl(152 60% 72%); stroke-width: .6;
+                           vector-effect: non-scaling-stroke; }
+#tl .ablk .wave:has(.wf) i { background: hsl(152 45% 50% / .14); top: 0; bottom: 0; border-radius: 0; }
+#tl .ablk .wave:has(.wf)::before { border-top-color: hsl(152 40% 45% / .3); }
 
 /* V2: clips over the cut — the picture's blue, a poster at the head */
 #tl .oblk { position: absolute; box-sizing: border-box; overflow: hidden; cursor: grab; display: flex;
@@ -454,4 +461,20 @@
                                        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #tl .tl-lane[data-lane=V1] .blk .name { display: inline; -webkit-line-clamp: unset; }
 #tl .tl-lane[data-lane=V1] .blk.narrow .poster { display: block; }
-#tl .tl-lane[data-lane=V1] .blk.tiny .poster { display: none; }
+/* The filmstrip (wave 3): frames edge to edge under the label, across the whole block —
+   the block's border is drawn OVER the pictures (::after), so the strip spans its full
+   width and no fill shows after a trim (verdict 3's maroon tail). */
+#tl .tl-lane[data-lane=V1] .blk { border: 0; background: #000; }
+#tl .tl-lane[data-lane=V1] .blk::after { content: ''; position: absolute; inset: 0; z-index: 2;
+  pointer-events: none; border-radius: inherit; box-sizing: border-box;
+  border: 1px solid hsl(var(--hue) 35% 34%); border-left: 3px solid hsl(var(--hue) 45% 58%); }
+#tl .tl-lane[data-lane=V1] .blk.live::after { border-color: hsl(var(--hue) 45% 58%); }
+#tl .tl-lane[data-lane=V1] .blk.gen::after { border-style: dashed; border-left-style: solid; }
+#tl .tl-lane[data-lane=V1] .blk.sel::after { border: 2px solid var(--text); border-left-width: 3px; }
+#tl .tl-lane[data-lane=V1] .blk .strip { position: absolute; inset: 0; display: flex; overflow: hidden;
+                                         background: hsl(var(--hue) 12% 9%); pointer-events: none; }
+#tl .tl-lane[data-lane=V1] .blk .strip img { flex: none; width: var(--tile, 71px); height: 100%;
+                                             aspect-ratio: auto; max-width: none; object-fit: cover;
+                                             border-radius: 0; background: #000; display: block; }
+#tl .tl-lane[data-lane=V1] .blk .strip img:not([src]) { visibility: hidden; }
+#tl .tl-lane[data-lane=V1] .blk .warn { z-index: 3; }

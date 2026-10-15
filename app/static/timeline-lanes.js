@@ -81,6 +81,9 @@
   let ghost = null;                    // the matched proposal, while one is pending
   let shown = null;                    // an explicit plan from showGhost(), while one is up
   let shownGen = 0;                    // bumps per showGhost / clearGhost, for the poll
+  // the per-shot review of the pending proposal (verdict 3, punch 7): which proposed
+  // shots are rejected (by index) and which removals are refused (by the cut's shot id)
+  let review = { plan: null, rej: new Set(), keep: new Set() };
 
   const q = (s) => document.querySelector(s);
   const round2 = (x) => Math.round(x * 100) / 100;
@@ -116,6 +119,46 @@
     if (tl.layoutTracks) tl.layoutTracks();
     el.over.style.top = 'var(--tl-v1top)';
     el.arrows.style.top = el.over.style.top;
+    if (el.picks) el.picks.style.top = el.over.style.top;
+  }
+
+  /* The review controls' and the pick markers' look, shipped with the lane that draws
+   * them (the timeline's stylesheet is the foundation's). */
+  const CSS = `
+#tl.tl-empty.tl-proposing { display: block; }
+.tl-proposing > #tlEmpty { display: none; }
+#tl .tl-xlane[data-lane=ghost] .ghost:focus { outline: 2px solid var(--accent); outline-offset: -2px; opacity: 1; }
+#tl .tl-xlane[data-lane=ghost] .ghost .rvs { position: absolute; right: 2px; bottom: 2px; display: flex; gap: 2px; }
+#tl .tl-xlane[data-lane=ghost] .ghost.narrow .rvs { display: none; }
+#tl .tl-xlane[data-lane=ghost] .ghost.narrow:focus .rvs, #tl .tl-xlane[data-lane=ghost] .ghost.narrow:hover .rvs { display: flex; z-index: 3; }
+#tl .tl-xlane button.rv { font-size: 10px; line-height: 13px; width: 16px; height: 15px; padding: 0; margin: 0;
+  border-radius: 3px; border: 1px solid var(--line); background: rgba(13, 13, 17, .85); color: var(--dim); cursor: pointer; }
+#tl .tl-xlane button.rv.ok[aria-pressed=true] { color: var(--good); border-color: var(--good); }
+#tl .tl-xlane button.rv.no[aria-pressed=true] { color: var(--bad); border-color: var(--bad); }
+#tl .tl-xlane[data-lane=ghost] .ghost.rejected { opacity: .28; border-style: dashed; border-color: var(--bad); }
+#tl .tl-xlane[data-lane=ghost] .ghost.rejected .name { text-decoration: line-through; }
+#tl .tl-xlane[data-lane=ghost] .ghost.rejected:focus, #tl .tl-xlane[data-lane=ghost] .ghost.rejected:hover { opacity: .6; }
+#tl .tl-xlane[data-lane=ghost] .ghost .flag { float: right; font-style: normal; font-weight: 700; color: #111;
+  background: var(--warn); border-radius: 2px; padding: 0 3px; margin-left: 3px; line-height: 12px; }
+#tl .tl-xlane[data-lane=ghost] .ghost.flagged { box-shadow: inset 0 -2px 0 var(--warn); }
+#tl .tl-over .strike button.rv { pointer-events: auto; position: absolute; right: 2px; top: 2px; font-size: 10px;
+  line-height: 13px; width: 16px; height: 15px; padding: 0; border-radius: 3px; border: 1px solid var(--bad);
+  background: rgba(13, 13, 17, .85); color: var(--bad); cursor: pointer; }
+#tl .tl-over .strike.kept { border-style: dashed; background: none; }
+#tl .tl-over .strike.kept button.rv { color: var(--good); border-color: var(--good); }
+#tl .tl-over .strike.flagged { box-shadow: inset 0 -2px 0 var(--warn); }
+#tl .tl-picks { position: absolute; left: 0; right: 0; height: 0; pointer-events: none; z-index: 4; }
+#tl .tl-pick { position: absolute; top: 0; width: 9px; height: 10px; margin-left: -4.5px; pointer-events: auto;
+  background: #e0a63a; cursor: help; clip-path: polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%); }
+#tl .tl-pick.hero { background: #f2c94c; }
+#tl .tl-pick.on-ghost { z-index: 2; }
+`;
+  function injectCss() {
+    if (document.getElementById('tl-review-css')) return;
+    const st = document.createElement('style');
+    st.id = 'tl-review-css';
+    st.textContent = CSS;
+    document.head.appendChild(st);
   }
 
   function schedule() {
@@ -130,12 +173,14 @@
     drawHeroes(a);
     drawA1(a);
     drawGhost(a);
+    drawPicks(a);
     layout();
     seen = snapshot(a);
   }
 
   const snapshot = (a) => ({
     bin: a.bin, music: a.music, plan: a.pendingPlan, zoom: tl.state.zoom, total: tl.total(),
+    clips: a.P ? a.P.clips : null,
     up: q('#proposal') ? q('#proposal').style.display : '',
     n: tl.state.segs.length, shown: shownGen,
   });
@@ -369,24 +414,199 @@
     return { plan, ghosts, removed, total: start };
   }
 
+  /* ------------------------------------------------------------ per-shot review */
+  /* Verdict 3, punch 7: a proposal is reviewed shot by shot on the ghost lane — ✓ / ✗ on
+   * every proposed shot (Enter / ⌫ on the focused one, ← → between them), a ↺ on every
+   * shot the proposal would remove — and Accept applies only what was accepted, in one
+   * undo (app.js acceptProposal reads `reviewed()`). Every shot starts accepted, so an
+   * untouched review is the whole proposal. An explicit list (showGhost, the FX card's
+   * preview) is not reviewed here: its Accept is the card's. */
+  function reviewOf(plan) {
+    if (review.plan !== plan) review = { plan, rej: new Set(), keep: new Set() };
+    return review;
+  }
+  const reviewable = (plan) => !!plan && !plan.explicit && !plan.unchanged;
+  const curKey = (c, i) => (c.id != null ? String(c.id) : `#${i}`);
+
+  function announce() {
+    try { window.dispatchEvent(new CustomEvent('tlreview')); } catch (err) { /* old engine */ }
+  }
+
+  /* Accept (true) or reject (false) proposed shot k of the pending plan. */
+  function setVerdict(k, ok) {
+    const a = app();
+    const plan = a ? pendingPlanOf(a) : null;
+    if (!reviewable(plan) || !(k >= 0 && k < plan.segments.length)) return false;
+    const rv = reviewOf(plan);
+    if (ok) rv.rej.delete(k); else rv.rej.add(k);
+    paintVerdicts();
+    announce();
+    return true;
+  }
+  function verdict(k) {
+    const a = app();
+    const plan = a ? pendingPlanOf(a) : null;
+    return !plan || !reviewOf(plan).rej.has(k);
+  }
+  /* Refuse (keep = true) or allow a removal of the cut's shot `id`. */
+  function keepRemoved(id, keep) {
+    const a = app();
+    const plan = a ? pendingPlanOf(a) : null;
+    if (!reviewable(plan)) return false;
+    const rv = reviewOf(plan);
+    if (keep) rv.keep.add(String(id)); else rv.keep.delete(String(id));
+    paintVerdicts();
+    announce();
+    return true;
+  }
+
+  /* The cut an Accept of `plan` makes from the verdicts: accepted shots as proposed, in
+   * the proposal's order; a rejected new shot left out; a rejected shot the proposal
+   * changed in place stays as it is now; a rejected move and a refused removal stay
+   * where they are in the cut now (after the nearest shot before them that is kept). */
+  function reviewed(plan) {
+    if (!plan || !Array.isArray(plan.segments)) return null;
+    const m = matchPlan(plan);
+    const rv = reviewOf(plan);
+    const cur = tl.state.segs;
+    const out = [];
+    const back = [];
+    for (const g of m.ghosts) {
+      if (!rv.rej.has(g.k)) { out.push({ seg: { ...g.seg }, cur: g.cur }); continue; }
+      if (g.cur < 0) continue;
+      if (g.cls === 'moved') back.push(g.cur);
+      else out.push({ seg: { ...cur[g.cur] }, cur: g.cur });
+    }
+    const kept = m.removed.filter((i) => rv.keep.has(curKey(cur[i], i)));
+    back.push(...kept);
+    back.sort((x, y) => x - y);
+    for (const i of back) {
+      let at = 0;
+      for (let j = i - 1; j >= 0; j--) {
+        const p = out.findIndex((o) => o.cur === j);
+        if (p >= 0) { at = p + 1; break; }
+      }
+      out.splice(at, 0, { seg: { ...cur[i] }, cur: i });
+    }
+    const rejectedShots = [...rv.rej].filter((k) => k < m.ghosts.length).sort((x, y) => x - y);
+    return {
+      segments: out.map((o) => o.seg),
+      total: m.ghosts.length, accepted: m.ghosts.length - rejectedShots.length,
+      rejectedShots, keptRemoved: kept.map((i) => curKey(cur[i], i)),
+      rejected: rejectedShots.length + kept.length,
+    };
+  }
+
+  /* What proposed shot k is to the cut, in words, and the notes' claims it breaks:
+   * the first pass's diff (kept / replaced / new, locked) else the plan's own `diff`,
+   * and `notes_check.flags` matched by id, else by clip and range. */
+  function shotFacts(plan, k) {
+    const seg = plan && plan.segments ? plan.segments[k] : null;
+    if (!seg) return null;
+    const fp = plan.firstpass && plan.firstpass.diff && plan.firstpass.diff.shots;
+    const d = (Array.isArray(fp) && fp[k]) || (plan.diff && Array.isArray(plan.diff.shots) && plan.diff.shots[k]) || null;
+    let words = '';
+    if (d) {
+      const was = d.was ? `${tl.fmt(d.was.in)}–${tl.fmt(d.was.out)}` : '';
+      words = d.status === 'kept' ? (d.locked ? 'kept — your edit, locked' : 'kept as it is')
+        : d.status === 'new' ? 'new'
+          : `replaces ${was || 'a shot of the cut'}`;
+      if (d.hand && d.status !== 'kept') words += ` (you ${String(d.hand).replace(/,/g, ', ')} it)`;
+    }
+    const same = (s) => s && s.now && ((s.id && seg.id && s.id === seg.id)
+      || (s.clip === seg.clip && Math.abs(s.now.in - seg.in) < 0.02 && Math.abs(s.now.out - seg.out) < 0.02));
+    const flags = ((plan.notes_check && plan.notes_check.flags) || [])
+      .filter((f) => (f.shots || []).some(same))
+      .map((f) => `the notes say “${f.claim}” — ${f.why || 'but the range differs'}`);
+    return { status: d ? d.status : null, words, flags, why: seg.why || '' };
+  }
+  /* The flags on a shot the plan removes (the cut's shot `id`). */
+  function removedFlags(plan, c) {
+    return ((plan.notes_check && plan.notes_check.flags) || [])
+      .filter((f) => (f.shots || []).some((s) => s.now == null
+        && ((s.id && c.id && s.id === c.id) || (s.clip === c.clip && Math.abs(s.was.in - c.in) < 0.02))))
+      .map((f) => `the notes say “${f.claim}” — but this shot is removed`);
+  }
+
+  /* The verdicts on the drawn lane, in place (no rebuild: focus stays where it is). */
+  function paintVerdicts() {
+    if (!ghost) return;
+    const rv = reviewOf(ghost.plan);
+    el.ghost.querySelectorAll('.ghost[data-k]').forEach((d) => {
+      const no = rv.rej.has(Number(d.dataset.k));
+      d.classList.toggle('rejected', no);
+      const ok = d.querySelector('button.rv.ok'), x = d.querySelector('button.rv.no');
+      if (ok) ok.setAttribute('aria-pressed', no ? 'false' : 'true');
+      if (x) x.setAttribute('aria-pressed', no ? 'true' : 'false');
+    });
+    el.over.querySelectorAll('.strike[data-key]').forEach((s) => {
+      const kept = rv.keep.has(s.dataset.key);
+      s.classList.toggle('kept', kept);
+      const b = s.querySelector('button.rv');
+      if (b) {
+        b.setAttribute('aria-pressed', kept ? 'true' : 'false');
+        b.title = kept ? 'kept — click to let the proposal remove it' : 'keep this shot (refuse its removal)';
+      }
+    });
+  }
+
+  function focusGhost(k) {
+    if (!ghost) return;
+    const n = ghost.ghosts.length;
+    const d = el.ghost.querySelector(`.ghost[data-k="${Math.max(0, Math.min(n - 1, k))}"]`);
+    if (d) d.focus({ preventScroll: true });
+  }
+
+  /* Enter accepts the focused ghost, ⌫ / Delete rejects it (both then move on), ← → move
+   * between them. On window, capture, registered before timeline-keys (whose Enter and
+   * ⌫ are the cut's), and only while a ghost has the focus. */
+  window.addEventListener('keydown', (e) => {
+    const t = document.activeElement;
+    const g = t && t.closest ? t.closest('#tl .tl-xlane[data-lane=ghost] .ghost[data-k]') : null;
+    if (!g || !ghost || !reviewable(ghost.plan) || e.metaKey || e.ctrlKey || e.altKey) return;
+    const k = Number(g.dataset.k);
+    let handled = true;
+    if (e.key === 'Enter') { setVerdict(k, true); focusGhost(k + 1); }
+    else if (e.key === 'Backspace' || e.key === 'Delete') { setVerdict(k, false); focusGhost(k + 1); }
+    else if (e.key === 'ArrowRight') focusGhost(k + 1);
+    else if (e.key === 'ArrowLeft') focusGhost(k - 1);
+    else handled = false;
+    if (handled) { e.preventDefault(); e.stopImmediatePropagation(); }
+  }, true);
+
   function drawGhost(a) {
     const plan = pendingPlanOf(a);
     const lane = el.ghost;
+    const af = document.activeElement;
+    const hadK = af && lane.contains(af) && af.closest('.ghost[data-k]') ? Number(af.closest('.ghost[data-k]').dataset.k) : null;
     lane.replaceChildren(lane.lbl);
     el.over.replaceChildren();
     el.arrows.replaceChildren();
+    // A first cut's proposal on an empty sequence: the timeline shows (with only the
+    // ghost lane) in place of the empty state, so it is reviewed where it will land.
+    tl.el.root.classList.toggle('tl-proposing', !!plan);
+    if (tl.el.root.parentElement) tl.el.root.parentElement.classList.toggle('tl-proposing', !!plan);
     if (!plan) {
       if (ghost) stopRange();
       ghost = null;
       lane.hidden = true;
       return;
     }
-    if (!ghost || ghost.plan !== plan) mode = 'cut';
+    const fresh = !ghost || ghost.plan !== plan;
+    if (fresh) mode = 'cut';
     ghost = matchPlan(plan);
+    // a first cut on an empty sequence: zoomed so the whole proposal is in view (the
+    // redraw the zoom asks for finds the same plan and does not zoom again)
+    if (fresh && !tl.state.segs.length && ghost.total > 0 && tl.zoomTo && tl.el.view) {
+      const w = tl.el.view.clientWidth || 0;
+      if (w > 200) tl.zoomTo(Math.max(0.5, Math.min(400, (w - 12 - 90) / ghost.total)), { at: 0, viewX: 0 });
+    }
     lane.hidden = false;
     const z = tl.state.zoom;
     const cur = tl.state.segs;
     const laneH = tl.el.lanes.V1.offsetHeight || 72;
+    const canReview = reviewable(plan);
+    lane.classList.toggle('reviewing', canReview);
 
     for (const g of ghost.ghosts) {
       const d = div(`ghost ${g.cls}${g.trimmed ? ' trimmed' : ''}${isGen(g.seg.clip) ? ' gen' : ''}`);
@@ -403,9 +623,27 @@
       // like V1: a badge only when the shot is retimed; the length is the tooltip's
       d.querySelector('.dur').textContent = s === 1 ? '' : `${round2(s)}×`;
       const what = g.cls === 'added' ? 'added' : g.cls === 'moved' ? 'moved' : g.trimmed ? 'trimmed' : 'unchanged';
+      const f = canReview ? shotFacts(plan, g.k) : null;
       d.title = `proposal ${g.k + 1}. ${nameOf(g.seg.clip)} ${tl.fmt(g.seg.in)}–${tl.fmt(g.seg.out)} (${dur.toFixed(1)}s`
-        + `${s === 1 ? '' : ` at ${round2(s)}×`}) · ${what}`
-        + (g.seg.why ? `\n${g.seg.why}` : '') + '\nclick to play this shot in the monitor';
+        + `${s === 1 ? '' : ` at ${round2(s)}×`}) · ${what}${f && f.words ? ` · ${f.words}` : ''}`
+        + (g.seg.why ? `\nwhy: ${g.seg.why}` : '')
+        + (g.seg.polished_from ? `\npolished from ${tl.fmt(g.seg.polished_from[0])}–${tl.fmt(g.seg.polished_from[1])}${g.seg.polish_why ? `: ${g.seg.polish_why}` : ''}` : '')
+        + (f && f.flags.length ? `\n⚠ ${f.flags.join('\n⚠ ')}` : '')
+        + '\nclick to play this shot in the monitor'
+        + (canReview ? ' · ✓ / Enter accepts it, ✗ / ⌫ rejects it' : '');
+      if (canReview) {
+        d.tabIndex = 0;
+        if (f && f.flags.length) {
+          d.classList.add('flagged');
+          d.insertAdjacentHTML('afterbegin', '<i class="flag" aria-label="the notes disagree with this shot">!</i>');
+        }
+        const rv = document.createElement('span');
+        rv.className = 'rvs';
+        rv.innerHTML = '<button type="button" class="rv ok" aria-pressed="true" title="accept this shot · Enter">✓</button>'
+          + '<button type="button" class="rv no" aria-pressed="false" title="reject this shot · ⌫">✗</button>';
+        d.appendChild(rv);
+        if (dur * z < 46) d.classList.add('narrow');
+      }
       lane.appendChild(d);
       if (g.cls === 'moved' && g.cur >= 0) {
         const c = cur[g.cur];
@@ -424,13 +662,86 @@
       const s = div('strike');
       s.style.left = px(tl.timeToX(tl.filmStart(c.id)));
       s.style.width = px(Math.max(3, tl.dur(c) * z));
-      s.title = `${stemOf(c.clip)} — removed by the proposal`;
+      const flags = canReview ? removedFlags(plan, c) : [];
+      s.title = `${stemOf(c.clip)} — removed by the proposal${flags.length ? `\n⚠ ${flags.join('\n⚠ ')}` : ''}`;
+      if (canReview) {
+        s.dataset.key = curKey(c, k);
+        if (flags.length) s.classList.add('flagged');
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'rv keep';
+        b.textContent = '↺';
+        b.setAttribute('aria-pressed', 'false');
+        b.title = 'keep this shot (refuse its removal)';
+        b.addEventListener('click', (e) => {
+          e.stopPropagation();
+          keepRemoved(s.dataset.key, !reviewOf(plan).keep.has(s.dataset.key));
+        });
+        b.addEventListener('pointerdown', (e) => e.stopPropagation());
+        s.appendChild(b);
+      }
       el.over.appendChild(s);
     }
     el.arrows.setAttribute('width', String(Math.ceil(tl.el.canvas.offsetWidth || 0)));
     el.arrows.setAttribute('height', String(laneH + H.gap + H.ghost));
     if (!el.arrows.querySelector('defs')) el.arrows.appendChild(arrowDefs());
+    drawGhostPicks(a, plan);
+    if (canReview) {
+      paintVerdicts();
+      if (hadK != null) focusGhost(hadK);
+    }
     paintMode(a);
+  }
+
+  /* ------------------------------------------------------------ picks as markers */
+  /* The pass's picks (the bin's keeps) as markers on the cut (V1) and on the proposed
+   * cut (the ghost lane): an amber flag where a pick starts inside a shot that uses its
+   * footage, the pick's label and reason on hover (verdict 3, punch 7). Drawn, never
+   * saved: the sequence markers (M) stay the editor's. */
+  function picksIn(list, startOf) {
+    const keepsUsable = fn('keepsUsable'), keepLabel = fn('keepLabel');
+    const keeps = keepsUsable ? keepsUsable() : [];
+    const out = [];
+    list.forEach((seg, i) => {
+      for (const k of keeps) {
+        if (k.clip !== seg.clip || !(k.end > seg.in && k.start < seg.out)) continue;
+        const at = startOf(i) + Math.max(0, (Math.max(k.start, seg.in) - seg.in) / spd(seg));
+        const label = keepLabel ? keepLabel(k) : '';
+        out.push({ t: at, keep: k,
+                   title: `pick${k.hero ? ' ★ hero' : ''}: ${label}`
+                     + `\n${nameOf(k.clip)} ${tl.fmt(k.start)}–${tl.fmt(k.end)}`
+                     + (k.why ? `\nwhy: ${k.why}` : '') });
+      }
+    });
+    return out;
+  }
+
+  function pickEl(p) {
+    const m = document.createElement('i');
+    m.className = `tl-pick${p.keep.hero ? ' hero' : ''}`;
+    m.style.left = px(tl.timeToX(p.t));
+    m.dataset.t = String(round2(p.t));
+    m.title = p.title;
+    return m;
+  }
+
+  function drawPicks() {
+    if (!el.picks) return;
+    el.picks.replaceChildren();
+    const list = tl.state.segs;
+    let start = 0;
+    const starts = list.map((s) => { const at = start; start += tl.dur(s); return at; });
+    for (const p of picksIn(list, (i) => starts[i])) el.picks.appendChild(pickEl(p));
+  }
+
+  function drawGhostPicks(a, plan) {
+    if (!ghost) return;
+    const starts = ghost.ghosts.map((g) => g.start);
+    for (const p of picksIn(plan.segments, (i) => starts[i])) {
+      const m = pickEl(p);
+      m.classList.add('on-ghost');
+      el.ghost.appendChild(m);
+    }
   }
 
   function arrowDefs() {
@@ -825,7 +1136,9 @@
     el.arrows.setAttribute('class', 'tl-arrows');
     el.drop = div('tl-dropline');
     el.drop.style.display = 'none';
-    for (const x of [el.ghost, el.bin, el.over, el.arrows, el.drop]) canvas.appendChild(x);
+    el.picks = div('tl-picks');
+    injectCss();
+    for (const x of [el.ghost, el.bin, el.over, el.picks, el.arrows, el.drop]) canvas.appendChild(x);
     // the foundation lays these rows out with its tracks
     tl.el.lanes.ghost = el.ghost;
     tl.el.lanes.bin = el.bin;
@@ -863,6 +1176,12 @@
     el.ghost.addEventListener('click', (e) => {
       const g = e.target.closest('.ghost');
       if (!g || !ghost) return;
+      const b = e.target.closest('button.rv');
+      if (b) {                                       // ✓ / ✗: a verdict, not a play
+        e.stopPropagation();
+        setVerdict(Number(g.dataset.k), b.classList.contains('ok'));
+        return;
+      }
       const item = ghost.ghosts[Number(g.dataset.k)];
       if (item) playRange(item.seg, item.start, null);
     });
@@ -913,6 +1232,9 @@
   window.tlLanes = {
     redraw, slotAt, playRange, playPlan, insertAt, MIME,
     showGhost, clearGhost,
+    setVerdict, verdict, keepRemoved, reviewed, shotFacts,
+    picks: () => [...document.querySelectorAll('#tl .tl-pick')].map((m) => ({
+      t: Number(m.dataset.t), title: m.title, ghost: m.classList.contains('on-ghost') })),
     ghost: () => ghost,
     shown: () => shown,
     mode: () => mode,

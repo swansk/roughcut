@@ -97,6 +97,15 @@
 
   const round2 = (x) => Math.round(x * 100) / 100;
   const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+  /* A delta in whole frames of the sequence (the edit grid, wave 3), inside [lo, hi]:
+   * the nearest frame, else the nearest one that still fits. */
+  function toFrames(v, lo, hi) {
+    const r = tl.gridRate ? tl.gridRate() : 1 / tl.frame();
+    let n = Math.round(v * r);
+    if (n / r > hi + 1e-9) n = Math.floor(hi * r + 1e-9);
+    if (n / r < lo - 1e-9) n = Math.ceil(lo * r - 1e-9);
+    return n / r;
+  }
   const secs = (t) => `${t.toFixed(2)}s`;
   const signed = (x) => `${x < 0 ? '−' : '+'}${Math.abs(x).toFixed(2)}s`;
   const stem = (clip) => String(clip).replace(/\.[^.]+$/, '');
@@ -624,14 +633,15 @@
       park(d.id, d.edge);
     } else if (d.kind === 'roll') {
       const s = use ? snapFor(d, d.dt) : null;
-      const v = round2(clamp(s ? s.v : d.dt, d.lo, d.hi));   // film seconds, to each side at its rate
-      tl.setRange(d.left, null, round2(d.outL0 + v * d.spdL));
-      tl.setRange(d.right, round2(d.inR0 + v * d.spdR), null);
+      // film seconds, whole frames (the edit grid), to each side at its rate
+      const v = toFrames(clamp(s ? s.v : d.dt, d.lo, d.hi), d.lo, d.hi);
+      tl.setRange(d.left, null, d.outL0 + v * d.spdL);
+      tl.setRange(d.right, d.inR0 + v * d.spdR, null);
       d.snapped = s;
       park(d.right, 'in');
     } else {
-      const v = round2(clamp(d.dt * d.spd, -d.in0, d.dur - d.out0));
-      tl.setRange(d.id, round2(d.in0 + v), round2(d.out0 + v));
+      const v = toFrames(clamp(d.dt * d.spd, -d.in0, d.dur - d.out0), -d.in0, d.dur - d.out0);
+      tl.setRange(d.id, d.in0 + v, d.out0 + v);
       d.snapped = null;
       park(d.id, 'in');
     }

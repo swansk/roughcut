@@ -204,20 +204,20 @@ def test_comma_takes_the_bins_selected_clip_without_a_source_monitor(page):
 
 def test_alt_and_ctrl_arrows_trim_the_selected_edit_by_a_frame(page):
     """The 1-frame edge nudge moved off `,` `.` to Premiere's trim keys. A frame is one
-    at the sequence rate (23.976): 0.0417 s, kept at the foundation's 0.01 s."""
+    at the sequence rate, on the frame grid (wave 3): the suite's clips are 24 fps."""
     first = page.evaluate("segs[0].id")
     page.evaluate(f"tl.select(['{first}'])")         # the active edge: the selected shot's out
     page.keyboard.press("Alt+ArrowRight")
-    assert page.evaluate("segs[0].out") == round(3.0 + 1 / FPS, 2)
+    assert page.evaluate("segs[0].out") == round(3.0 + 1 / 24, 4)
     assert undo_title(page).startswith("undo: nudge")
     page.keyboard.press("Alt+ArrowLeft")
     assert page.evaluate("segs[0].out") == 3.0
     page.keyboard.press("Control+ArrowLeft")
-    assert page.evaluate("segs[0].out") == round(3.0 - 1 / FPS, 2)
+    assert page.evaluate("segs[0].out") == round(3.0 - 1 / 24, 4)
     page.keyboard.press("Control+ArrowRight")
     assert page.evaluate("segs[0].out") == 3.0
     page.keyboard.press("Alt+Shift+ArrowRight")      # five frames
-    assert page.evaluate("segs[0].out") == round(3.0 + 5 / FPS, 2)
+    assert page.evaluate("segs[0].out") == round(3.0 + 5 / 24, 4)
     assert page.evaluate("segs[0].in") == 1.0, "only the active edge moves"
     page.keyboard.press("Control+z")
     assert page.evaluate("segs[0].out") == 3.0

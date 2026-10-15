@@ -258,7 +258,8 @@ def test_the_bin_is_a_labelled_grid_with_the_labels_as_a_filter(page):
     selected one; the rail badge is the not-in-the-cut count. The evidence chips and
     the heard / seen tabs are under "more found ▸"."""
     _with_bin(page)
-    assert "grid" in page.locator("#library").get_attribute("class")
+    # a list like Project's since verdict 3 punch 7 (test_picks_editor drives its columns)
+    assert page.locator("#library table.sel-list").count() == 1
     cards = page.locator("#library .keep")
     assert cards.count() == 2                      # CLIP_B's keep is shot 2: not here
     assert page.locator("#binTabs .tab").all_inner_texts() == ["not in the cut · 2", "all 3"]
@@ -266,8 +267,8 @@ def test_the_bin_is_a_labelled_grid_with_the_labels_as_a_filter(page):
     # heroes first; the label is the line spoken inside the keep
     first = cards.first
     assert first.locator(".w").inner_text() == "★ “goodbye”"
-    assert "1.5 s" in first.inner_text()
-    assert "CLIP_A" not in first.inner_text() and first.locator(".chip").count() == 0
+    assert first.locator("td.t").inner_text() == page.evaluate("tl.tc(1.5)")
+    assert first.locator(".w").inner_text().count("CLIP_A") == 0 and first.locator(".chip").count() == 0
     assert first.get_attribute("title").startswith("CLIP_A 0:04.0–0:05.5")
     assert not first.locator("button.add").is_visible()
     first.hover()
@@ -278,7 +279,7 @@ def test_the_bin_is_a_labelled_grid_with_the_labels_as_a_filter(page):
     # all: the keep in the cut says where it is
     page.locator("#binTabs .tab[data-tab=all]").click()
     assert cards.count() == 3
-    assert "in the cut · shot 2" in page.locator('#library .keep[title^="CLIP_B"]').inner_text()
+    assert page.locator('#library .keep[title^="CLIP_B"] a.use').inner_text() == "shot 2"
     # more found ▸: the labels as a filter, with counts; the tabs above already say where
     assert not page.locator("#binFilter").is_visible()
     page.locator("#moreFound").click()
@@ -298,13 +299,13 @@ def test_the_bin_is_a_labelled_grid_with_the_labels_as_a_filter(page):
     assert page.locator("#library .keep").get_attribute("title").startswith("CLIP_A")
     page.locator("#findQ").fill("")
     page.wait_for_function("document.querySelectorAll('#library .keep').length === 3")
-    # the heard tab is the old list, not a grid, and the filter row goes with the keeps
+    # the heard tab is the old list, not the keeps' table, and the filter row goes with the keeps
     page.locator("#libTabs .tab", has_text="heard").click()
-    assert "grid" not in (page.locator("#library").get_attribute("class") or "")
+    assert page.locator("#library table.sel-list").count() == 0
     assert not page.locator("#binFilter").is_visible()
     # closing more found goes back to the keeps
     page.locator("#moreFound").click()
-    assert "grid" in page.locator("#library").get_attribute("class")
+    assert page.locator("#library table.sel-list").count() == 1
 
 
 def test_enter_finds_and_the_priced_search_sits_under_any_find(page):
@@ -370,7 +371,7 @@ def test_adding_from_the_bin_lands_at_the_playhead(page):
     # the card left "not in the cut" at once, before any save landed; all says where it is
     assert page.locator('#library .keep[title^="CLIP_C"]').count() == 0
     page.locator("#binTabs .tab[data-tab=all]").click()
-    assert "in the cut · shot 2" in page.locator('#library .keep[title^="CLIP_C"]').inner_text()
+    assert page.locator('#library .keep[title^="CLIP_C"] a.use').inner_text() == "shot 2"
     page.locator("#binTabs .tab[data-tab=out]").click()
     assert page.locator("#total").inner_text() == page.evaluate("tl.tc(5.5)")   # timecode
     # near the end of the film the nearest cut is the end: it appends
@@ -408,10 +409,12 @@ def test_space_on_a_selected_keep_plays_it_in_the_bin_not_the_monitor(page):
     assert "CLIP_C" in src and "#t=0.50" in src, src
     assert page.evaluate("player.playing") is False      # the cut did not start
     assert "a crash" in page.locator("#findWhat").inner_text()
-    # double-click does the same
+    # double-click opens the pick in the Source monitor, its In and Out set (verdict 3,
+    # punch 7 — Premiere's double-click on a subclip; test_picks_editor drives it)
     page.evaluate("document.querySelector('#findPlayer').style.display = 'none'")
     card.dblclick()
-    assert page.locator("#findPlayer").is_visible()
+    page.wait_for_function("window.rcSource && rcSource.clip === 'CLIP_C.MP4'", timeout=5000)
+    assert page.evaluate("[rcSource.inPoint, rcSource.outPoint]") == [0.5, 2.0]
 
 
 # ---------------------------------------------------------------- keys and project

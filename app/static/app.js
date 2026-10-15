@@ -1824,7 +1824,8 @@ function renderLibrary() {
   document.querySelectorAll('#libTabs .tab, #binTabs .tab').forEach((x) =>
     x.classList.toggle('sel', x.dataset.tab === libTab));
   const lib = $('#library');
-  lib.classList.toggle('grid', keepsTab());
+  lib.classList.remove('grid');                 // the keeps are a list now (verdict 3, punch 7)
+  lib.classList.toggle('sel-lib', keepsTab());
   const bf = $('#binFilter');
   if (bf) bf.hidden = !keepsTab();
   paintAudit();
@@ -2033,9 +2034,145 @@ function keepLabel(s) {
   return m ? m.what : 'no words';
 }
 
-function keepRow(s) {
-  const d = document.createElement('div');
-  d.className = 'keep' + (s.missing ? ' missing' : '') + (binSel === keepKey(s) ? ' sel' : '');
+/* The Selects as a bin (verdict 3, punch 7): a list like Project's — Name, Clip, Media
+ * In, Media Out, Duration, Reason, Usage — sorted by a click on a column's head (again:
+ * the other way; a third time: the bin's own order), and its rows are clips. Drag one
+ * onto the timeline; `,` / `.` insert / overwrite the selected row's range at the
+ * playhead (timeline-keys' sourceShot reads `#library .keep.sel`); a double-click opens
+ * the pick in the Source monitor with its In and Out set. The columns a narrow panel
+ * cannot hold are in the row's hover, as Project's are. The name is the label (Karl's
+ * note, else the line spoken in it, else what was seen) — never the detector's title. */
+let binSort = { key: null, dir: 1 };
+const SEL_COLS = [
+  { k: 'name', h: 'Name' },
+  { k: 'clip', h: 'Clip', w: 64, min: 680 },
+  { k: 'in', h: 'Media In', w: 80, min: 440 },
+  { k: 'out', h: 'Media Out', w: 80, min: 440 },
+  { k: 'dur', h: 'Duration', w: 80 },
+  { k: 'why', h: 'Reason', min: 560 },
+  { k: 'use', h: 'Usage', w: 62 },
+];
+const selCols = (width) => SEL_COLS.filter((c) => !c.min || width >= c.min);
+const keepTc = (t, clip) => (window.tl && tl.tc
+  ? tl.tc(Math.max(0, t), Number(((P && P.clips[clip]) || {}).fps) || undefined) : fmt(t));
+
+function keepSortVal(s, k) {
+  if (k === 'name') return keepLabel(s).toLowerCase();
+  if (k === 'clip') return String(s.clip);
+  if (k === 'in') return s.start;
+  if (k === 'out') return s.end;
+  if (k === 'dur') return s.end - s.start;
+  if (k === 'why') return String(s.why || '').toLowerCase();
+  const i = s.missing || !P.clips[s.clip] ? -1 : shotOf(s);     // usage: in the cut first
+  return i < 0 ? 1e9 : i;
+}
+
+function sortKeeps(list) {
+  if (!binSort.key) return list;
+  const { key, dir } = binSort;
+  return [...list].sort((a, b) => {
+    const x = keepSortVal(a, key), y = keepSortVal(b, key);
+    return (x < y ? -1 : x > y ? 1 : 0) * dir || String(a.clip).localeCompare(String(b.clip)) || a.start - b.start;
+  });
+}
+
+/* The list's look: Project's `table.plist`, with the keep card's rules undone for a row
+ * (they are the grid's — a card border, a 16:9 still) — here, so the rows ship with the
+ * list that draws them. */
+const SEL_CSS = `
+#library table.sel-list { margin-top: 2px; }
+#library table.sel-list th[data-sort] { cursor: pointer; user-select: none; }
+#library table.sel-list th[data-sort]:hover { color: var(--text); }
+#library table.sel-list th.asc::after { content: ' ▴'; } #library table.sel-list th.desc::after { content: ' ▾'; }
+#library table.sel-list tr.keep { background: none; border: 0; border-radius: 0; box-shadow: none; overflow: visible; cursor: grab; }
+#library table.sel-list tr.keep:hover td { background: #232327; }
+#library table.sel-list tr.keep.sel td, #library table.sel-list tr.keep:focus-visible td { background: #26405e; color: #fff; }
+#library table.sel-list tr.keep.missing td { opacity: .6; }
+#library table.sel-list tr.junkcard td { background: rgba(200, 80, 80, .06); cursor: default; }
+#library table.sel-list td { vertical-align: middle; }
+#library table.sel-list .still { width: 30px; height: 17px; aspect-ratio: auto; flex: none; border-radius: 2px;
+  object-fit: cover; background: #0c0c0e; display: block; }
+#library table.sel-list .w { margin: 0; display: block; -webkit-line-clamp: unset; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; font-size: 11px; min-width: 0; }
+#library table.sel-list .hero { margin: 0; }
+#library table.sel-list td.why { color: var(--dim); }
+#library table.sel-list td.use { overflow: visible; }
+#library table.sel-list .use { margin: 0; font-size: 11px; }
+#library table.sel-list button.use.add { padding: 0 6px; line-height: 15px; }
+#library table.sel-list .gone { display: inline; margin: 0; font-size: 11px; }
+#library table.sel-list .junkq { margin: 0; flex-wrap: nowrap; }
+`;
+
+/* The list's table, appended to `lib`; returns its body. */
+function selTable(lib) {
+  if (!$('#sel-list-css')) {
+    const st = document.createElement('style');
+    st.id = 'sel-list-css';
+    st.textContent = SEL_CSS;
+    document.head.appendChild(st);
+  }
+  // a panel resized past a column's width redraws with that column in or out
+  if (!lib._ro && 'ResizeObserver' in window) {
+    lib._ro = new ResizeObserver(() => {
+      if (!lib.querySelector('table.sel-list')) return;
+      if (selCols(lib.clientWidth || 300).length !== (lib._cols || []).length) renderLibrary();
+    });
+    lib._ro.observe(lib);
+  }
+  const cols = selCols(lib.clientWidth || 300);
+  const t = document.createElement('table');
+  t.className = 'plist sel-list';
+  t.innerHTML = `<colgroup>${cols.map((c) => `<col${c.w ? ` style="width:${c.w}px"` : ''}>`).join('')}</colgroup>
+    <thead><tr>${cols.map((c) => `<th data-sort="${c.k}"${binSort.key === c.k ? ` class="${binSort.dir > 0 ? 'asc' : 'desc'}"` : ''}
+      title="sort by ${c.h.toLowerCase()}">${c.h}</th>`).join('')}</tr></thead><tbody></tbody>`;
+  t.tHead.onclick = (e) => {
+    const th = e.target.closest('th[data-sort]');
+    if (!th) return;
+    const k = th.dataset.sort;
+    binSort = binSort.key !== k ? { key: k, dir: 1 } : binSort.dir > 0 ? { key: k, dir: -1 } : { key: null, dir: 1 };
+    renderLibrary();
+  };
+  lib.appendChild(t);
+  lib._cols = cols;
+  return t.tBodies[0];
+}
+
+/* Open a pick in the Source monitor with its In and Out set (Premiere's double-click on
+ * a subclip): the dock's source (`dock.source`), its marks this pick's range, parked on
+ * the In. `,` / `.` then take that range from the Source monitor. */
+function openPickInSource(s) {
+  const src = window.dock && dock.source;
+  if (!src || !src.v) { playKeep(s); return false; }
+  const c = (dock.project.clips().find((x) => x.clip === s.clip)) || P.clips[s.clip];
+  if (!c) { toast('this clip is not in the footage folder'); return false; }
+  const a = Math.round(s.start * 1000) / 1000, b = Math.round(s.end * 1000) / 1000;
+  src.marks[s.clip] = [a, b];
+  try { localStorage.setItem('roughcut.ws.marks', JSON.stringify(src.marks)); } catch (e) { /* private mode */ }
+  const same = src.clip && src.clip.clip === s.clip;
+  src.load(c, {});
+  if (same && src.v.readyState >= 1) src.v.currentTime = a;
+  src.paint();
+  src.publish();
+  return true;
+}
+
+/* The list is rebuilt on every render (a trim, an insert): a still is the same <img>
+ * moved into the new row, so one still loading is never asked for again. */
+const stillCache = new Map();
+function reuseStill(row) {
+  const img = row.querySelector('img.still');
+  if (!img) return;
+  const src = img.getAttribute('src');
+  const had = stillCache.get(src);
+  if (had && had !== img) img.replaceWith(had);
+  else stillCache.set(src, img);
+  if (stillCache.size > 600) stillCache.delete(stillCache.keys().next().value);
+}
+
+function keepRow(s, cols) {
+  cols = cols || selCols(($('#library') || {}).clientWidth || 300);
+  const d = document.createElement('tr');
+  d.className = 'keep row' + (s.missing ? ' missing' : '') + (binSel === keepKey(s) ? ' sel' : '');
   d._keep = s;                  // the lanes read the keep off its row, whatever the filter shows
   d.tabIndex = 0;
   const clip = P.clips[s.clip] || {};
@@ -2043,32 +2180,44 @@ function keepRow(s) {
   const still = clip.poster ? `${clip.poster}?t=${Math.max(0, s.start).toFixed(2)}` : '';
   const at = known && !s.whole ? shotOf(s) : -1;   // a whole clip can be added again
   const use = s.missing
-    ? '<span class="gone">footage missing — cannot be added until the clip is back</span>'
+    ? '<span class="gone" title="footage missing — cannot be added until the clip is back">footage missing</span>'
     : !known
-      ? '<span class="gone">clip not analysed — cannot be added</span>'
+      ? '<span class="gone" title="clip not analysed — cannot be added">not analysed</span>'
       : at >= 0
-        ? `<a href="#" class="use" data-shot="${at}" title="select the shot on the timeline">in the cut · shot ${at + 1}</a>`
-        : '<button class="use add" title="add it at the playhead · enter · or drag it onto the timeline">+ add</button>';
-  // labelled by Karl's note, else the line spoken in it, else what was seen — never the
-  // clip's file name, the detector's title or the telemetry (INTAKE M16 I16.4)
-  d.title = `${stem(s.clip)} ${fmt(s.start)}–${fmt(s.end)}${s.why ? `\n${s.why}` : ''}`;
-  d.innerHTML = `
-    ${still ? `<img class="still" loading="lazy" decoding="async" draggable="false"
-                   alt="${escapeHtml(stem(s.clip))} at ${s.start.toFixed(1)}s" src="${still}">`
-            : '<div class="still"></div>'}
-    <div class="body">
-      <span class="w${s.note ? ' note' : ''}">${s.hero ? '<span class="hero">★</span> ' : ''}${escapeHtml(keepLabel(s))}</span>
-      <div class="t">${(s.end - s.start).toFixed(1)} s</div>
-      ${junkState(s.clip) === 'proposed' ? junkBadge(s.clip) : ''}
-      ${use}
-    </div>`;
+        ? `<a href="#" class="use" data-shot="${at}" title="in the cut · shot ${at + 1} — click to select it on the timeline">shot ${at + 1}</a>`
+        : '<button class="use add" title="add it at the playhead · enter · , · or drag it onto the timeline">+ add</button>';
+  d.title = `${stem(s.clip)} ${fmt(s.start)}–${fmt(s.end)}${s.why ? `\n${s.why}` : ''}`
+    + '\ndouble-click: open in the Source monitor with its In and Out';
+  // the still loads with the row, not lazily: a 30 px thumbnail of a frame the server
+  // caches on disk; a lazy one in a tab opened later was fetched again mid-edit
+  const cell = (k) => {
+    if (k === 'name') {
+      return `<td class="name"><span class="n">${still
+        ? `<img class="still" loading="eager" decoding="async" draggable="false"
+               alt="${escapeHtml(stem(s.clip))} at ${s.start.toFixed(1)}s" src="${still}">`
+        : '<span class="still"></span>'}<span class="w${s.note ? ' note' : ''}">${
+        s.hero ? '<span class="hero">★</span> ' : ''}${escapeHtml(keepLabel(s))}</span></span></td>`;
+    }
+    if (k === 'clip') return `<td>${escapeHtml(stem(s.clip))}</td>`;
+    if (k === 'in') return `<td class="tc">${keepTc(s.start, s.clip)}</td>`;
+    if (k === 'out') return `<td class="tc">${keepTc(s.end, s.clip)}</td>`;
+    if (k === 'dur') return `<td class="tc t">${keepTc(s.end - s.start, s.clip)}</td>`;
+    if (k === 'why') return `<td class="why">${escapeHtml(s.why || '')}</td>`;
+    return `<td class="use">${junkState(s.clip) === 'proposed' ? junkBadge(s.clip) : ''}${use}</td>`;
+  };
+  d.innerHTML = cols.map((c) => cell(c.k)).join('');
+  reuseStill(d);
   d.addEventListener('click', (e) => {
     if (e.target.closest('a.use, button.use, .chip, .junkq')) return;
     selectKeep(s, d);
+    // Premiere's rule: `,` inserts from the panel in use — the row just chosen, not a
+    // clip the Source monitor was showing before (a double-click puts it there instead)
+    if (window.rcSource && window.rcSource.clip) { window.rcSource.clip = null; window.rcSource.auto = false; }
   });
   d.addEventListener('dblclick', (e) => {
     if (e.target.closest('a.use, button.use, .chip, .junkq')) return;
-    playKeep(s);
+    selectKeep(s, d);
+    openPickInSource(s);
   });
   const link = d.querySelector('a.use');
   if (link) {
@@ -2147,14 +2296,19 @@ function renderKept(lib) {
     : !all.length || !keeps.length || keeps.length === all.length ? ''
       : `${keeps.length} of ${all.length} keeps match`;
   lib.innerHTML = '';
-  jcards.forEach((r) => lib.appendChild(junkCard(r)));
+  // one list: the junk rows first, then the keeps in the bin's order or the column's
+  const list = (rows) => {
+    const body = selTable(lib);
+    jcards.forEach((r) => body.appendChild(junkCard(r, lib._cols)));
+    sortKeeps(rows).forEach((s) => body.appendChild(keepRow(s, lib._cols)));
+  };
   if (binChip === 'junk') {
-    keeps.forEach((s) => lib.appendChild(keepRow(s)));
     if (!jcards.length && !keeps.length) lib.innerHTML = '<div class="hint">no junk — clear the chip</div>';
+    else list(keeps);
     return;
   }
   if (!all.length) {
-    if (jcards.length) return;
+    if (jcards.length) { list([]); return; }
     if (every.length) {
       lib.innerHTML = '<div class="hint">every keep is in the cut</div>';
       return;
@@ -2166,9 +2320,10 @@ function renderKept(lib) {
     // what to clear is what is set: the chip, the words, or both
     const clear = binChip && text ? 'clear the chip or the words above' : binChip ? 'clear the chip' : 'clear the words above';
     if (!jcards.length) lib.innerHTML = `<div class="hint">no keep matches — ${clear}</div>`;
+    else list([]);
     return;
   }
-  keeps.forEach((s) => lib.appendChild(keepRow(s)));
+  list(keeps);
 }
 
 /* Nothing kept yet: the bin is the footage (ROUGHCUT-GOAL.md dimension 2 — the pass and
@@ -2184,8 +2339,11 @@ function footageRows(lib, text) {
   if (tabOut) tabOut.textContent = `footage · ${clips.length}`;
   lib.innerHTML = `<div class="hint">nothing kept yet — the footage, whole clips ·
     <a href="/floor" style="color:var(--accent)">keep moments on the pass →</a></div>`;
-  clips.forEach(([c, v]) => lib.appendChild(keepRow({ clip: c, start: 0, end: v.duration || 0,
-                                                      why: 'whole clip', whole: true })));
+  if (clips.length) {
+    const body = selTable(lib);
+    sortKeeps(clips.map(([c, v]) => ({ clip: c, start: 0, end: v.duration || 0, why: 'whole clip', whole: true })))
+      .forEach((s) => body.appendChild(keepRow(s, lib._cols)));
+  }
   if (!clips.length && text) lib.insertAdjacentHTML('beforeend', '<div class="hint">no clip matches — clear the words above</div>');
 }
 
@@ -2219,22 +2377,32 @@ function junkBadge(clip) {
       <button class="jv" data-verdict="keep" title="not junk: keep it everywhere">Keep</button></div>`;
 }
 
-function junkCard(r) {
-  const d = document.createElement('div');
-  d.className = `keep junkcard ${r.state}`;
+/* A junk clip's row in the Selects list: its name, its length, the measurement as the
+ * reason, and the answer where the usage goes. */
+function junkCard(r, cols) {
+  cols = cols || selCols(($('#library') || {}).clientWidth || 300);
+  const d = document.createElement('tr');
+  d.className = `keep row junkcard ${r.state}`;
   d.dataset.clip = r.clip;
   const why = (r.reasons || [])[0] || '';
+  d.title = `${r.stem}${why ? `\n${(r.reasons || []).join(' · ')}` : ''}`;
   const answer = r.state === 'proposed' ? junkBadge(r.clip)
     : `<div class="junkq" data-clip="${escapeHtml(r.clip)}"><span class="jb done">junk</span>
          <button class="jv" data-verdict="keep" title="not junk after all">Keep</button></div>`;
-  d.innerHTML = `
-    <img class="still" loading="lazy" decoding="async" draggable="false"
-         alt="${escapeHtml(r.stem)}" src="${r.poster}?t=0.00">
-    <div class="body">
-      <div class="t">${escapeHtml(r.stem)}${r.duration != null ? ` · ${Number(r.duration).toFixed(1)} s` : ''}</div>
-      <span class="w">${escapeHtml(why)}</span>
-      ${answer}
-    </div>`;
+  const dur = r.duration != null ? Number(r.duration) : null;
+  const cell = (k) => {
+    if (k === 'name') {
+      return `<td class="name"><span class="n"><img class="still" loading="lazy" decoding="async" draggable="false"
+        alt="${escapeHtml(r.stem)}" src="${r.poster}?t=0.00"><span class="w">${escapeHtml(r.stem)}</span></span></td>`;
+    }
+    if (k === 'clip') return `<td>${escapeHtml(r.stem)}</td>`;
+    if (k === 'in') return `<td class="tc">${keepTc(0, r.clip)}</td>`;
+    if (k === 'out' || k === 'dur') return `<td class="tc">${dur != null ? keepTc(dur, r.clip) : ''}</td>`;
+    if (k === 'why') return `<td class="why">${escapeHtml(why)}</td>`;
+    return `<td class="use">${answer}</td>`;
+  };
+  d.innerHTML = cols.map((c) => cell(c.k)).join('');
+  reuseStill(d);
   return d;
 }
 
@@ -2613,13 +2781,22 @@ function showProposal(plan) {
   // reasoning against, and it is the only account of what the agent thinks it saw.
   // A shot whose boundaries were polished says so and says where it came from —
   // a cut that silently differs from what the model asked for is one you cannot audit.
-  const detail = plan.segments.map((s, i) => `<div style="padding:4px 0">
-    <span class="hint">${String(i + 1).padStart(2, '0')} ${escapeHtml(
+  // Per shot (verdict 3, punch 7): ✓ / ✗ like the ghost lane's, what the shot is to the
+  // cut (kept / replaces / new, from the plan's diff) and a flag where the notes call a
+  // changed shot unchanged (`notes_check`).
+  const facts = (k) => (window.tlLanes && tlLanes.shotFacts ? tlLanes.shotFacts(plan, k) : null);
+  const reviewable = !plan.unchanged && !!(window.tlLanes && tlLanes.setVerdict);
+  const detail = plan.segments.map((s, i) => {
+    const f = facts(i);
+    return `<div class="pshot" data-k="${i}" style="padding:4px 0">
+    ${reviewable ? `<button type="button" class="pv" data-k="${i}" title="accept / reject this shot (the ghost lane's ✓ ✗ · Enter / ⌫ there)">✓</button> ` : ''}<span class="hint">${String(i + 1).padStart(2, '0')} ${escapeHtml(
       s.clip.replace('.MP4', ''))} ${fmt(s.in)}–${fmt(s.out)}
-    (${tl.dur(s).toFixed(1)}s${speedOf(s) === 1 ? '' : ` at ${speedOf(s)}×`})</span><br>${escapeHtml(s.why || '')}${
+    (${tl.dur(s).toFixed(1)}s${speedOf(s) === 1 ? '' : ` at ${speedOf(s)}×`})${f && f.words ? ` · ${escapeHtml(f.words)}` : ''}</span><br>${escapeHtml(s.why || '')}${
     s.polished_from ? `<br><span class="hint">↳ polished from ${
       s.polished_from[0].toFixed(2)}–${s.polished_from[1].toFixed(2)}: ${
-      escapeHtml(s.polish_why || '')}</span>` : ''}</div>`).join('');
+      escapeHtml(s.polish_why || '')}</span>` : ''}${
+    f && f.flags.length ? `<br><span class="pflag" style="color:var(--warn)">⚠ ${escapeHtml(f.flags[0])}</span>` : ''}</div>`;
+  }).join('');
   // The grade the note asked for (INTAKE I10.5), in the server's words — "look: cold at
   // 0.6", "shot 3 · CLIP_07: warmer" — above the shots, because a colour-only proposal
   // is nothing but this line and must not read as "no change".
@@ -2636,10 +2813,42 @@ function showProposal(plan) {
       + '<hr style="border:0;border-top:1px solid var(--line);margin:10px 0">'
       + detail);
   $('#proposal').style.display = 'block';
+  $('#proposalDiff').onclick = (e) => {
+    const b = e.target.closest('button.pv');
+    if (!b || !window.tlLanes) return;
+    const k = Number(b.dataset.k);
+    tlLanes.setVerdict(k, !tlLanes.verdict(k));
+  };
+  if (window.tlLanes && tlLanes.redraw) tlLanes.redraw();     // the ghost lane, now
+  paintReview();
   if (!segs.length) syncPlayer();               // a first cut plays from its ghost lane
   if (window.dock) dock.reveal('#proposal');
   if (window.dock) dock.badge('ask', 0);
 }
+
+/* The per-shot verdicts, in the panel: each row's ✓ / ✗, and Accept says what it takes
+ * ("Accept 2 of 5") with Accept all beside it once a shot is rejected. The ghost lane's
+ * ✓ / ✗ and keys fire `tlreview`; this repaints from tlLanes.reviewed(). */
+function paintReview() {
+  const plan = pendingPlan;
+  const acc = $('#acceptProposal'), all = $('#acceptAll');
+  const r = plan && window.tlLanes && tlLanes.reviewed ? tlLanes.reviewed(plan) : null;
+  const rej = new Set((r && r.rejectedShots) || []);
+  document.querySelectorAll('#proposalDiff .pshot').forEach((el) => {
+    const no = rej.has(Number(el.dataset.k));
+    el.classList.toggle('rejected', no);
+    el.style.opacity = no ? '.45' : '';
+    const b = el.querySelector('button.pv');
+    if (b) { b.textContent = no ? '✗' : '✓'; b.setAttribute('aria-pressed', no ? 'false' : 'true'); }
+  });
+  const partial = !!(r && r.rejected);
+  if (acc) {
+    acc.textContent = partial ? `Accept ${r.accepted} of ${r.total}` : 'Accept';
+    acc.title = partial ? 'apply the shots you accepted, keep the cut as it is where you rejected one — one undo' : '';
+  }
+  if (all) all.hidden = !partial;
+}
+window.addEventListener('tlreview', paintReview);
 /* The first pass's hook (/modules/firstpass.js): its result is an ordinary proposal. */
 window.rcShowProposal = (plan) => { if (plan && Array.isArray(plan.segments)) showProposal(plan); };
 
@@ -2793,15 +3002,22 @@ function mergeColour(base, patch) {
   return out;
 }
 
-function acceptProposal() {
+/* Accept: the shots the editor accepted (all of them unless one was rejected on the
+ * ghost lane or in the panel — verdict 3, punch 7); `acceptProposal(true)` is Accept
+ * all. A rejected shot leaves the cut as it is there: a new shot is not added, a
+ * changed one stays as it was, a removed one stays (tlLanes.reviewed). */
+function acceptProposal(everything) {
   if (!pendingPlan) return;
   const graded = !!(pendingPlan.colour && Object.keys(pendingPlan.colour).length);
   const cutToo = !pendingPlan.unchanged;
+  const r = everything !== true && cutToo && window.tlLanes && tlLanes.reviewed
+    ? tlLanes.reviewed(pendingPlan) : null;
+  const partial = !!(r && r.rejected);
   // Segments and colour in the one save below (INTAKE I10.5), and in one undo entry:
   // the colour block rides every entry beside the cut (tl's `extra` hook, INTAKE M16
   // I16.4), so ⌘Z takes back what the proposal changed — the cut, the grade, or both.
   if (cutToo || graded) pushUndo('proposal');
-  segs = pendingPlan.segments.map((s) => ({ ...s }));
+  segs = (partial ? r.segments : pendingPlan.segments).map((s) => ({ ...s }));
   if (graded) {
     colour = mergeColour(colour, pendingPlan.colour);
     tidyColour();
@@ -2812,10 +3028,12 @@ function acceptProposal() {
   if (window.dock) dock.badge('ask', 0);
   render();
   save();                       // straight to disk; a 16-shot cut is not "in progress"
-  answerProposal('accept');
-  toast(!graded ? 'applied — undo with ⌘Z'
-    : cutToo ? 'applied, cut and colour — ⌘Z undoes both'
-      : 'colour applied — ⌘Z undoes it');
+  answerProposal('accept', partial ? { accepted: r.accepted, of: r.total,
+                                       rejected: r.rejectedShots, kept: r.keptRemoved } : null);
+  toast(partial ? `applied ${r.accepted} of ${r.total} shots${graded ? ' and the colour' : ''} — undo with ⌘Z`
+    : !graded ? 'applied — undo with ⌘Z'
+      : cutToo ? 'applied, cut and colour — ⌘Z undoes both'
+        : 'colour applied — ⌘Z undoes it');
 }
 
 /* ▶ Play it (INTAKE M16 I16.4): the proposed cut plays in the monitor from its ghost
@@ -2838,9 +3056,11 @@ function rejectProposal() {
 /* The answer, on the proposal's record (INTAKE M14): an Accept saves the cut, which
  * answers it already; a Discard wrote nothing anywhere, so the flow bar kept calling a
  * thrown-away proposal "waiting for you". */
-function answerProposal(answer) {
+function answerProposal(answer, partial) {
+  // `partial`: which shots an Accept took ({accepted, of, rejected: [k], kept: [ids]}) —
+  // on the record for the server to read; it answers the record the same either way
   fetch('/api/asks/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ answer }) }).then(flowSoon, () => {});
+    body: JSON.stringify(partial ? { answer, partial } : { answer }) }).then(flowSoon, () => {});
 }
 
 /* Find a moment. Two layers, two prices: the word-level match over the transcripts
@@ -3501,7 +3721,8 @@ async function boot() {
   ['#cmpPickA', '#cmpPickB'].forEach((sel) => { $(sel).onchange = loadCompare; });
   $('#ask').onclick = () => ask();   // not `ask` — a MouseEvent has a `.button` too
   $('#playProposal').onclick = playProposal;
-  $('#acceptProposal').onclick = acceptProposal;
+  $('#acceptProposal').onclick = () => acceptProposal();
+  $('#acceptAll').onclick = () => acceptProposal(true);
   $('#rejectProposal').onclick = rejectProposal;
   $('#findDeep').onclick = () => doFind(true);
   $('#findQ').addEventListener('keydown', (e) => {
