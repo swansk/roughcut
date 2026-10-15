@@ -979,6 +979,18 @@ def _same_range(a: dict, b: dict) -> bool:
             and abs(float(a["out"]) - float(b["out"])) < SAME_EPS)
 
 
+# The prompt prints the cut in hundredths, so a shot the model copies comes back up to
+# 0.005 s off (the validator's rounding adds float noise): within this it is an echo.
+# Under half a frame at 60 fps, so a deliberate one-frame trim is never mistaken for one.
+ECHO_EPS = 0.006
+
+
+def _echoed(a: dict, b: dict) -> bool:
+    return (a.get("clip") == b.get("clip")
+            and abs(float(a["in"]) - float(b["in"])) <= ECHO_EPS
+            and abs(float(a["out"]) - float(b["out"])) <= ECHO_EPS)
+
+
 # ------------------------------------------------------------------ the frame grid
 #
 # The journey (wave 3): the export came out VFR (r_frame_rate 120/1) because a
@@ -1016,7 +1028,8 @@ def on_frames(t: float, fps: float) -> float:
 
 def to_sequence(plan: dict, current: list[dict] | None, fps: float | None) -> dict:
     """A proposal as the timeline takes it: each new range on the frame grid of `fps`
-    (at least one frame long), each range copied from `current` untouched, and each
+    (at least one frame long), each range copied from `current` — exactly, or typed
+    back in hundredths (`_echoed`) — set to the cut's own in and out, and each
     shot that continues one of the cut's (same id) carrying its `controls` over
     exactly. Returns a new plan; `plan` is not modified."""
     rate = exact_rate(fps)
@@ -1029,8 +1042,15 @@ def to_sequence(plan: dict, current: list[dict] | None, fps: float | None) -> di
             segs.append(s)
             continue
         s = dict(s)
-        copied = any(_same_range(s, c) and (not s.get("id") or not c.get("id")
-                                            or s.get("id") == c.get("id")) for c in cur)
+        # A shot the model typed back from the cut is the cut's shot: its in and out
+        # snap back to the cut's own values, exactly (verdict 4: the prompt shows
+        # hundredths, the model echoed CLIP_02 1.4014 as 1.4, and 12 "kept" shots fell
+        # off the frame grid). Same id when both have one, else the same clip.
+        src = next((c for c in cur if _echoed(s, c) and (
+            not s.get("id") or not c.get("id") or s.get("id") == c.get("id"))), None)
+        copied = src is not None
+        if copied:
+            s["in"], s["out"] = src["in"], src["out"]
         if rate and not copied:
             a, b = on_frames(s["in"], rate), on_frames(s["out"], rate)
             if b - a < 1.0 / rate - 1e-6:
@@ -1055,7 +1075,7 @@ def polish_kept_alone(plan: dict, clips: dict[str, dict],
     cur = [s for s in (current or []) if isinstance(s, dict) and "in" in s and "out" in s]
     after = polish(before, clips)
     for i, s in enumerate(before):
-        if any(_same_range(s, c) and (not s.get("id") or not c.get("id")
+        if any(_echoed(s, c) and (not s.get("id") or not c.get("id")
                                       or s.get("id") == c.get("id")) for c in cur):
             after[i] = dict(s)
     out = dict(plan)
@@ -1163,8 +1183,11 @@ def check_notes(plan: dict, current: list[dict]) -> dict:
     proposed = [s for s in plan.get("segments") or [] if isinstance(s, dict)]
     diff = shot_diff(cur, proposed)
     out["diff"] = diff
+    # the ranges the editor rejected before, which the first pass left out (verdict 4)
+    left = (plan.get("firstpass") or {}).get("rejected") or []
+    seen_rejected = {"rejected": left} if left else {}
     if not cur:
-        out["notes_check"] = {"ok": True, "flags": [], "checked": 0}
+        out["notes_check"] = {"ok": True, "flags": [], "checked": 0, **seen_rejected}
         return out
     changed = [r for r in diff["shots"] if r["status"] == "changed"]
     gone = diff["removed"]
@@ -1219,7 +1242,8 @@ def check_notes(plan: dict, current: list[dict]) -> dict:
     if lines:
         out["notes_model"] = notes
         out["notes"] = (notes.strip() + "\n\n" + "\n".join(lines)).strip()
-    out["notes_check"] = {"ok": not flags, "flags": flags, "checked": len(claims)}
+    out["notes_check"] = {"ok": not flags, "flags": flags, "checked": len(claims),
+                          **seen_rejected}
     return out
 
 

@@ -489,11 +489,20 @@
       out.splice(at, 0, { seg: { ...cur[i] }, cur: i });
     }
     const rejectedShots = [...rv.rej].filter((k) => k < m.ghosts.length).sort((x, y) => x - y);
+    // Verdict 4: the ranges the editor turned down — a rejected shot whose range the cut
+    // does not keep (a new one, or a change) — so a re-run remembers not to bring them
+    // back. A rejected move or a kept-as-is shot is still in the cut: not a rejection.
+    const segsOut = out.map((o) => o.seg);
+    const inCut = (s) => segsOut.some((o) => o.clip === s.clip
+      && Math.abs(o.in - s.in) < 0.005 && Math.abs(o.out - s.out) < 0.005);
+    const rejectedRanges = rejectedShots.map((k) => plan.segments[k])
+      .filter((s) => s && !inCut(s)).map((s) => ({ clip: s.clip, in: s.in, out: s.out }));
+    reviewed.lastRanges = rejectedRanges;      // answerProposal sends them with the Accept
     return {
-      segments: out.map((o) => o.seg),
+      segments: segsOut,
       total: m.ghosts.length, accepted: m.ghosts.length - rejectedShots.length,
       rejectedShots, keptRemoved: kept.map((i) => curKey(cur[i], i)),
-      rejected: rejectedShots.length + kept.length,
+      rejected: rejectedShots.length + kept.length, rejectedRanges,
     };
   }
 
