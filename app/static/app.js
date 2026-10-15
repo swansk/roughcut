@@ -2506,7 +2506,9 @@ function insertShot(shot) {
 
 function addKeep(s) {
   insertShot({ clip: s.clip, start: s.start, end: s.end, why: s.why || s.note || '' });
-  save();                       // the kept tab is up, so save() re-reads the bin after
+  // the kept tab is up, so save() re-reads the bin after; on a microtask, after the
+  // insert's commit touched the autosave, so this is its one save (wave 5, SAVE)
+  queueMicrotask(save);
 }
 
 function renderKept(lib) {
@@ -2953,36 +2955,97 @@ async function refreshStatus() {
   return S;
 }
 
-async function save() {
+/* One save in flight (wave 5, lane SAVE). The board used to PUT whenever asked, so an
+ * Accept's own save and its commit's autosave 700 ms later could overlap, a second PUT
+ * went before the first reply re-keyed the new shots' `tmp-N` ids (the server minted a
+ * second id for the same shot: judge 4's trim read "added by hand"), and a PUT landing
+ * between them was overwritten. Now a save asked for while one is in flight is folded
+ * into ONE follow-up, built after the reply re-keyed (tl.applyIds), carrying the latest
+ * cut. Every caller gets the promise of the whole run: it resolves when what was on
+ * screen at the call is on disk. The timeline's own PUT (saveSeq) takes the same turn. */
+let saveRun = null;               // the run in flight (a promise), or null
+let saveAgain = false;            // asked for again while a save was in flight
+let saveOk = true;                // the run's last PUT landed
+
+function save() {
   clearTimeout(saveTimer);
   saveTimer = null;
-  const r = await fetch('/api/project', {
-    method: 'PUT', headers: { 'content-type': 'application/json' },
-    // The colour block rides the same body (INTAKE M10): an empty object removes it.
-    // The timeline's markers and sequence In / Out ride along (lane KEYS; the server keeps
-    // them from wave 2 — until then it ignores keys it does not read).
-    body: JSON.stringify({ segments: tl.forSave(), story: $('#story').value, music, colour,
-                           markers: tl.markers ? tl.markers() : [],
-                           in: tl.state.seqIn ?? null, out: tl.state.seqOut ?? null }),
-  });
-  if (!r.ok) {
-    saveSays('failed', 'save failed');
-    return toast('save failed — the edit is still on screen, do not reload', 8000);
+  saveAgain = true;
+  if (!saveRun) {
+    saveRun = (async () => {
+      try {
+        while (saveAgain) {
+          saveAgain = false;
+          saveOk = await tl.putTurn(saveOnce).catch((e) => { console.error('save', e); return false; });
+        }
+      } finally { saveRun = null; }
+      if (!saveOk || saveTimer) return;          // a failure says so; a later edit waits
+      // A save can change every shot's resolved colour — a trim re-derives the auto, a
+      // nudge is a new LUT — so the inspector's witness and the monitor's LUT refetch.
+      refreshColour();
+      const t = new Date();
+      saveSays('saved', `saved ${t.getHours()}:${String(t.getMinutes()).padStart(2, '0')}`);
+      // A save is where the bin learns from the timeline (which keeps became shots, and
+      // which shots were placed by hand). While the tab is up, it must show that.
+      if (keepsTab()) refreshBin();
+    })();
   }
-  // A save can change every shot's resolved colour — a trim re-derives the auto, a
-  // nudge is a new LUT — so the inspector's witness and the monitor's LUT refetch.
-  refreshColour();
-  const t = new Date();
-  saveSays('saved', `saved ${t.getHours()}:${String(t.getMinutes()).padStart(2, '0')}`);
-  // A save is where the bin learns from the timeline (which keeps became shots, and
-  // which shots were placed by hand). While the tab is up, it must show that.
-  if (keepsTab()) refreshBin();
-  // A shot made on the board (a split, an insert) has a temporary id until the server
-  // mints one; the save's reply does not carry segments, so read them back and re-key.
-  if (tl.needsRekey()) {
+  return saveRun;
+}
+
+/* Write what is waiting: the autosave's timer now, else the save in flight. */
+async function flushSave() {
+  if (saveTimer) await save();
+  else if (saveRun) await saveRun;
+}
+
+/* The colour block keyed by the ids the server knows (tl.idFor): a per-shot grade set
+ * on a shot laid in a moment ago follows the shot's re-key instead of being orphaned. */
+function colourIds(block) {
+  if (!block) return block;
+  const ids = Object.keys(block.shots || {});
+  const moved = ids.some((id) => tl.idFor(id) !== id)
+    || (block.reference && tl.idFor(block.reference) !== block.reference);
+  if (!moved) return block;
+  const out = { ...block };
+  if (block.shots) {
+    out.shots = {};
+    for (const id of ids) out.shots[tl.idFor(id)] = block.shots[id];
+  }
+  if (out.reference) out.reference = tl.idFor(out.reference);
+  return out;
+}
+
+/* One PUT, in its turn: the body is built now (after the reply before it re-keyed), and
+ * new shots go as `tmp-N`; the reply's `ids` names them. True when it landed. */
+async function saveOnce() {
+  let r = null;
+  try {
+    r = await fetch('/api/project', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      // The colour block rides the same body (INTAKE M10): an empty object removes it.
+      // The timeline's markers and sequence In / Out ride along (lane KEYS).
+      body: JSON.stringify({ segments: tl.forSave(), story: $('#story').value, music,
+                             colour: colourIds(colour),
+                             markers: tl.markers ? tl.markers() : [],
+                             in: tl.state.seqIn ?? null, out: tl.state.seqOut ?? null }),
+    });
+  } catch (e) { r = null; }
+  if (!r || !r.ok) {
+    saveSays('failed', 'save failed');
+    toast('save failed — the edit is still on screen, do not reload', 8000);
+    return false;
+  }
+  const d = await r.json().catch(() => ({}));
+  if (d && d.ids) {
+    tl.applyIds(d.ids);
+    colour = colourIds(colour);              // the board's own block follows the re-key
+  } else if (tl.needsRekey()) {
+    // a server without `ids`: read the cut back and re-key by position, as before
     const p = await (await fetch('/api/project')).json();
     tl.afterSave(p.segments);
   }
+  return true;
 }
 
 async function snap() {
@@ -3494,9 +3557,20 @@ function acceptProposal(everything) {
   $('#lastAsk').style.display = 'none';
   if (window.dock) dock.badge('ask', 0);
   render();
-  save();                       // straight to disk; a 16-shot cut is not "in progress"
-  answerProposal('accept', partial ? { accepted: r.accepted, of: r.total,
-                                       rejected: r.rejectedShots, kept: r.keptRemoved } : null);
+  // Straight to disk (a 16-shot cut is not "in progress"), as ONE save: pushUndo's commit
+  // runs on the microtask queued above and touches the 700 ms autosave; this microtask
+  // runs after it and saves now, clearing that timer (wave 5, SAVE: it used to save twice,
+  // and a PUT landing between the two was overwritten). The answer goes once the cut is
+  // on disk, so the server reads it against the accepted cut.
+  const lanes = window.tlLanes;
+  const ranges = lanes && lanes.reviewed && Array.isArray(lanes.reviewed.lastRanges)
+    ? lanes.reviewed.lastRanges : null;           // read now: the review the Accept read
+  const took = partial ? { accepted: r.accepted, of: r.total, rejected: r.rejectedShots,
+                           kept: r.keptRemoved, ...(ranges ? { ranges } : {}) } : null;
+  queueMicrotask(() => {
+    const answer = () => answerProposal('accept', took);
+    save().then(answer, answer);
+  });
   toast(partial ? `applied ${r.accepted} of ${r.total} shots${graded ? ' and the colour' : ''} — undo with ${undoKey()}`
     : !graded ? `applied — undo with ${undoKey()}`
       : cutToo ? `applied, cut and colour — ${undoKey()} undoes both`
@@ -4276,7 +4350,7 @@ async function boot() {
  * file it belongs to — otherwise a trim made in the last 700 ms would land in the
  * copy, or in the next bin's cut. The board has no in-place reload; the switcher
  * reloads the page and boot() reads the new cut. */
-window.roughcutFlush = async () => { if (saveTimer) await save(); };
+window.roughcutFlush = flushSave;
 
 /* Re-read the cut from disk and repaint it in place (INTAKE M16, C5) — the timeline, the
  * inspector, the bin, the film tool — keeping the selection and the playhead. For a
@@ -4284,7 +4358,7 @@ window.roughcutFlush = async () => { if (saveTimer) await save(); };
  * Anything the autosave still holds is written first, so nothing typed is lost; the
  * undo history is not kept, as a reload did not keep it. */
 window.roughcutRefresh = async () => {
-  if (saveTimer) await save();
+  await flushSave();
   const keep = { sel: [...tl.state.sel], anchor: tl.state.anchor, at: tl.state.playhead,
                  index: tl.state.anchor == null ? -1 : tl.indexOf(tl.state.anchor) };
   P = await (await fetch('/api/project')).json();

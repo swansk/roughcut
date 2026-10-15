@@ -181,10 +181,14 @@
  *
  *   — saving —
  *   tl.forSave()            The segments to PUT: known tmp ids mapped to their server
- *                               ids, unknown ones stripped (the server mints).
+ *                               ids, unknown ones sent as `tmp-N` (the server mints and
+ *                               names them in the reply's `ids`).
  *   tl.needsRekey()             True while a shot has no server id yet.
  *   tl.afterSave(segments)      The segments from GET /api/project after a save: re-key by
  *                               position where clip/in/out agree.
+ *   tl.applyIds({tmp: id})      The save reply's `ids`: re-key exactly (wave 5, SAVE).
+ *   tl.idFor(id)                The id the server knows a shot by (a re-keyed tmp's real).
+ *   tl.putTurn(fn)              Run fn when no other PUT /api/project is in flight.
  *
  *   — events —
  *   tl.on(event, fn) → off()    `change` {label, kind, ids} · `select` {ids, anchor,
@@ -836,18 +840,31 @@
     bot.push(`${w.toFixed(1)} ${bot[bot.length - 1].split(' ')[1]}`);
     return `M${top.join('L')}L${bot.reverse().join('L')}Z`;
   }
-  function onScreen(x, w) {
+  /* Within a viewport of the view, either side. `at` is the view's scrollLeft as read
+   * once by the caller BEFORE it wrote any style (wave 5, SAVE): reading it here, after
+   * each A1 block's left/width, forced a layout per block (~16 ms a render under load). */
+  function onScreen(x, w, at) {
     if (!el.view) return true;
-    const v0 = el.view.scrollLeft, vw = el.view.clientWidth || 1e9;
-    return x + w >= v0 - vw && x <= v0 + 2 * vw;
+    const vw = viewWidth() || 1e9;
+    return x + w >= at - vw && x <= at + 2 * vw;
   }
+
+  /* The view's size, kept by the ResizeObserver (mount), whose callback runs where the
+   * layout is already fresh: a render, a playhead move or keepInView never forces one to
+   * learn it. Read directly only until the observer has reported (0 = not yet). */
+  let viewW = 0, viewH = 0;
+  function viewWidth() { return viewW || (el.view ? el.view.clientWidth : 0); }
+  function viewHeight() { return viewH || (el.view ? el.view.clientHeight : 0); }
+  let canvasW = 0;                     // the canvas width the last render wrote
 
   /* A1: each shot's sound, at its film start plus its offset: the clip's waveform for
    * the shot's range (above), over a faint band where the transcript says someone
    * speaks. */
-  function renderA1(list, live) {
+  function renderA1(list, live, at) {
     const lane = el.tracks.A1;
     if (!lane) return;
+    // one read, before this function writes anything (render passes the one it read)
+    const v0 = at != null ? at : (el.view ? el.view.scrollLeft : 0);
     const seen = new Set();
     const pps = peaksRate();
     const g = trackState('A1');
@@ -871,7 +888,7 @@
       b.querySelector('.name').textContent = isGen(seg.clip) ? `${genKind(seg.clip)} · silence` : stem(seg.clip);
       paintSync(b.querySelector('.sync'), seg);
       const clip = clipOf(seg.clip);
-      const visible = onScreen(x, w);
+      const visible = onScreen(x, w, v0);
       const pk = !isGen(seg.clip) && visible ? peaksFor(seg.clip, pps) : null;
       // the coarser rate stands in while the finer one loads
       const shown = pk && pk.done ? pk : (pk && pps !== 50 ? peaks.get(`${seg.clip}@50`) : null);
@@ -1041,7 +1058,8 @@
     };
     const ghost = extra('ghost'), bin = extra('bin');
     const gaps = ROW_GAP * (trackNames().length - 1) + AV_GAP + (ghost ? ROW_GAP : 0) + (bin ? ROW_GAP : 0);
-    const avail = Math.max(0, el.view.clientHeight - RULER_H - 2 - gaps - ghost - bin);
+    const vh = viewHeight();
+    const avail = Math.max(0, vh - RULER_H - 2 - gaps - ghost - bin);
     const names = trackNames();
     const wsum = names.reduce((a, n) => a + trackW(n), 0);
     const h = {};
@@ -1067,7 +1085,7 @@
     el.root.style.setProperty('--tl-v1h', `${h.V1}px`);
     el.root.style.setProperty('--tl-v1top', `${tops.V1}px`);
     el.root.style.setProperty('--tl-ruler', `${RULER_H}px`);
-    el.canvas.style.height = `${Math.max(el.view.clientHeight, y)}px`;
+    el.canvas.style.height = `${Math.max(vh, y)}px`;
     if (el.divider) el.divider.style.top = `${tops.A1 - AV_GAP / 2 - 1}px`;
     state.trackTops = tops;
     if (h.V1 !== stripH) {           // a taller V1 is wider tiles: the strips follow
@@ -1214,8 +1232,12 @@
     seqTimer = setTimeout(saveSeq, SEQ_SAVE_MS);
   }
 
-  async function saveSeq() {
+  function saveSeq() {
     clearTimeout(seqTimer);
+    return putTurn(saveSeqNow);       // never beside the cut's own save (wave 5, SAVE)
+  }
+
+  async function saveSeqNow() {
     const body = seqBody();
     if (body === seqSaved) return true;
     try {
@@ -1524,13 +1546,20 @@
     return v;
   }
 
+  /* No layout read here (wave 5, SAVE): it runs right after positionHead's write, so a
+   * read of clientWidth / scrollLeft forced a layout on every playhead move. The width is
+   * the observer's, the scroll is state.scrollX (kept by every write and the scroll
+   * event), and the clamp is worked out from the canvas width the render wrote. */
   function keepInView(x, frac = 0.25) {
     const v = el.view;
-    const w = v.clientWidth;
+    const w = viewWidth();
     if (!w) return;
-    if (x < v.scrollLeft + 6 || x > v.scrollLeft + w - 6) {
-      v.scrollLeft = Math.max(0, x - w * frac);
-      state.scrollX = v.scrollLeft;
+    const at = state.scrollX || 0;
+    if (x < at + 6 || x > at + w - 6) {
+      const max = Math.max(0, (canvasW || x + w) - w);
+      const next = Math.round(Math.min(max, Math.max(0, x - w * frac)));
+      v.scrollLeft = next;
+      state.scrollX = next;
     }
   }
 
@@ -1558,17 +1587,21 @@
     ensureIds();
     syncSel();
     const tot = total();
-    const viewW = el.view.clientWidth;
-    if (autoFit && viewW > 0 && list.length) state.zoom = fitZoom(viewW, tot);
-    const width = Math.max(viewW, PAD + tot * state.zoom + PAD_R);
+    // Every layout read of the render, here, before it writes a style (wave 5, SAVE):
+    // a read after a write forces a layout, and one per A1 block was ~16 ms a render.
+    const lane = el.lanes.V1;
+    const vw = viewWidth();
+    const at = el.view.scrollLeft;
+    stripH = lane.clientHeight;
+    if (autoFit && vw > 0 && list.length) state.zoom = fitZoom(vw, tot);
+    const width = Math.max(vw, PAD + tot * state.zoom + PAD_R);
     el.canvas.style.width = `${width}px`;
+    canvasW = width;
     paintRuler(width);
 
     // Blocks are keyed by id and updated in place: a re-render after every shot advance
     // must not rebuild <img> elements, and a lane's own handles survive it.
     const live = hooks.live ? hooks.live() : -1;
-    const lane = el.lanes.V1;
-    stripH = lane.clientHeight;
     const seen = new Set();
     let start = 0;
     list.forEach((seg, i) => {
@@ -1585,7 +1618,7 @@
     }
     pruneSel();
     ensureTrackRows();
-    renderA1(list, live);
+    renderA1(list, live, at);
     renderV2();
     layoutTracks();
     paintHeads();
@@ -1594,7 +1627,8 @@
     el.root.classList.toggle('tl-empty', !list.length);   // not `.empty`: the board's empty state owns that
     state.playhead = clamp(state.playhead, 0, tot);
     positionHead();
-    state.scrollX = el.view.scrollLeft;
+    // the scroll as read above, clamped to the new width (no read after the writes)
+    state.scrollX = Math.min(at, Math.max(0, width - vw));
     paintUndo();
   }
 
@@ -2101,16 +2135,53 @@
   }
 
   /* ------------------------------------------------------------ saving */
+  /* A new shot goes to the server under its `tmp-N` id (wave 5, lane SAVE): the server
+   * mints one id per temporary id and its reply names them (`ids`, applyIds below). A tmp
+   * id already re-keyed (an undo brought back a snapshot taken before the re-key) goes
+   * under the id the server gave it, so a shot is never minted twice. */
   function forSave() {
     return segs().map((s) => {
       if (!isTmp(s.id)) return s;
-      const { id, ...rest } = s;
-      const real = tmpMap.get(id);
-      return real ? { ...rest, id: real } : rest;
+      const real = tmpMap.get(s.id);
+      return real ? { ...s, id: real } : s;
     });
   }
 
+  /* The id the server knows a shot by: a re-keyed tmp id's real one, else the id. */
+  function idFor(id) { return (isTmp(id) && tmpMap.get(id)) || id; }
+
   function needsRekey() { return segs().some((s) => !s.id || isTmp(s.id)); }
+
+  /* The save's reply (`ids`: {tmp-N: id}): re-key every shot it names, and any shot an
+   * undo brought back under a tmp id the server already named. The map is kept even for
+   * a shot no longer in the cut, so a redo of it saves under its real id. */
+  function applyIds(map) {
+    for (const [tmp, real] of Object.entries(map || {})) {
+      if (isTmp(tmp) && typeof real === 'string' && real) tmpMap.set(tmp, real);
+    }
+    let changed = false;
+    for (const s of segs()) {
+      const real = isTmp(s.id) ? tmpMap.get(s.id) : null;
+      if (!real || segs().some((o) => o.id === real)) continue;
+      rekey(s.id, real);
+      s.id = real;
+      changed = true;
+    }
+    if (changed) render();
+    return changed;
+  }
+
+  /* Every PUT /api/project the board sends takes a turn here, one at a time (the cut's
+   * autosave in app.js and the tracks' saveSeq): two in flight could land in either
+   * order, and the older body would win. `fn` builds its body when its turn comes and
+   * holds the turn until it has read the reply, so the next body is built after the
+   * re-key (applyIds). Returns fn's result. */
+  let putQ = Promise.resolve();
+  function putTurn(fn) {
+    const p = putQ.then(fn);
+    putQ = p.then(() => {}, () => {});
+    return p;
+  }
 
   function rekey(oldId, newId) {
     if (oldId === newId) return;
@@ -2383,7 +2454,12 @@
     document.addEventListener('click', onSeqMenu);
     document.addEventListener('keydown', onKey);
     if (typeof ResizeObserver !== 'undefined') {
-      new ResizeObserver(() => { if (autoFit) render(); else layoutTracks(); }).observe(el.view);
+      new ResizeObserver(() => {
+        // read here, where the layout is fresh: everything else uses these (viewWidth)
+        viewW = el.view.clientWidth;
+        viewH = el.view.clientHeight;
+        if (autoFit) render(); else layoutTracks();
+      }).observe(el.view);
     }
     tl.on('playhead', applyMonitorAudio);
     applyMonitorAudio();
@@ -2403,7 +2479,7 @@
     begin, commit, cancel, undo, redo, clearHistory,
     setRange, move, split, remove, insert, setSpeed, insertAt, overwrite,
     select, syncSel, seek, setPlayhead, zoomTo, fit,
-    forSave, needsRekey, afterSave,
+    forSave, needsRekey, afterSave, applyIds, idFor, putTurn,
     fmt, hueOf, blockName, blockSays,
     // the tracks (roughcut/tracks.py)
     TRACKS, tracks, setTrack, audible, isLinked, aOff, setLink, toggleLink, setAudioOffset,

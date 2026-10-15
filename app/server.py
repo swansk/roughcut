@@ -1015,11 +1015,44 @@ def attach_controls(clean: list[dict], raw: list) -> None:
             seg["controls"] = c
 
 
+def mint_board_ids(body: dict) -> dict[str, str]:
+    """Name the shots the board laid in since its last save (wave 5, lane SAVE).
+
+    A shot made on the board (an insert, a split) carries a temporary `tmp-N` id until
+    the server mints its real one. The board used to strip it and read the cut back to
+    learn the new id by position, so a second save sent before that read minted a second
+    id for the same shot, and anything the board had keyed by `tmp-N` (a per-shot grade)
+    was written under a name no shot had. Now the board sends `tmp-N`; this mints one id
+    per temporary id, renames the colour block's per-shot keys (and its reference) in the
+    same body, drops a `tmp-` key no shot in the save carries, and returns the map, which
+    the reply echoes so the board re-keys exactly. Rewrites `body` in place."""
+    ids: dict[str, str] = {}
+    segs = body.get("segments")
+    if isinstance(segs, list):
+        for s in segs:
+            sid = s.get("id") if isinstance(s, dict) else None
+            if isinstance(sid, str) and sid.startswith("tmp-"):
+                if sid not in ids:
+                    ids[sid] = segment_id()
+                s["id"] = ids[sid]
+    col = body.get("colour")
+    if isinstance(col, dict):
+        shots = col.get("shots")
+        if isinstance(shots, dict):
+            col["shots"] = {ids.get(k, k): v for k, v in shots.items()
+                            if not (isinstance(k, str) and k.startswith("tmp-") and k not in ids)}
+        ref = col.get("reference")
+        if isinstance(ref, str) and ref.startswith("tmp-"):
+            col["reference"] = ids.get(ref)
+    return ids
+
+
 @app.put("/api/project")
 async def api_save(request: Request) -> JSONResponse:
     body = await request.json()
     edl = read_edl()
     edl["story"] = body.get("story", edl.get("story", ""))
+    minted = mint_board_ids(body)
     # A body without segments leaves the cut alone: the timeline saves its tracks,
     # V2 and markers on their own when nothing else changed (roughcut/tracks.py).
     if "segments" in body:
@@ -1087,7 +1120,8 @@ async def api_save(request: Request) -> JSONResponse:
     if edl.get("selects") is not None or edl.get("floor") is not None:
         selects.sync_timeline(edl)
     write_edl(edl)
-    return JSONResponse({"ok": True, "saved": len(clean)})
+    # `ids`: {tmp-N: minted id}, so the board re-keys its new shots from this reply
+    return JSONResponse({"ok": True, "saved": len(clean), "ids": minted})
 
 
 @app.post("/api/snap")
