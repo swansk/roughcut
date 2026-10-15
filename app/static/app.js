@@ -4916,13 +4916,16 @@ const PROXY_TOAST_KEY = 'rc.proxyToast';
 const PROXY_PASS_MAX_MS = 6 * 3600 * 1000;      // a pass never seen to end is forgotten
 function proxyPassNew() {
   const key = String((P && P.edl_path) || '');
-  const done = Number(S && S.proxies && S.proxies.done) || 0;
+  // the pass's count, when the status has landed (boot does not wait on it)
+  const done = S && S.proxies && Number.isFinite(Number(S.proxies.done)) ? Number(S.proxies.done) : null;
   let rec = null;
   try { rec = JSON.parse(localStorage.getItem(PROXY_TOAST_KEY) || 'null'); } catch (_) { rec = null; }
-  const same = !!rec && rec.key === key && done >= (Number(rec.done) || 0)
+  const was = rec ? Number(rec.done) || 0 : 0;
+  const same = !!rec && rec.key === key && (done == null || done >= was)
     && Date.now() - (Number(rec.at) || 0) < PROXY_PASS_MAX_MS;
   try {
-    localStorage.setItem(PROXY_TOAST_KEY, JSON.stringify({ key, done, at: same ? rec.at : Date.now() }));
+    localStorage.setItem(PROXY_TOAST_KEY, JSON.stringify({
+      key, done: done == null ? (same ? was : 0) : done, at: same ? rec.at : Date.now() }));
   } catch (_) { /* private window: said every time */ }
   return !same;
 }
