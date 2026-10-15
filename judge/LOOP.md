@@ -49,6 +49,11 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-16 05:00: SMALL `d4015ff`, REVIEW3 `76d8242`, SAVESAFE merged. SAVESAFE's root cause of the lost cut: Chrome's 6 connections
+  per host all held by /media/poster builds after a pass; the Accept's PUT queued 11.5 s and the reload cancelled it (fix:
+  saves go credentials:'omit', a separate connection group). Queued (wave 9): posters still starve every credentialed GET
+  (polls like /api/firstpass): limit concurrent filmstrip/poster loads on the client or don't hold a connection while a poster
+  builds. Lane hygiene: lanes must use per-lane scratch dirs (one lane's $SCRATCH/snap was overwritten by another's).
 - 2026-10-16 02:30: **VERDICT 6 = FAIL** (rev `ee3f15e`: all 8-9 except 6:7, 10:6; K2 read "no longer a toy, wouldn't choose over
   Premiere yet"). Already fixed since: punch 5 (KEYANCHOR), LUT caching (LUTCACHE). **Wave 8** from this commit: SAVESAFE (1),
   PLAY3 (2), REVIEW3 (4), RENDER3 (7 + 8), SMALL (9 + 10). Held: YIELD (3) until RANGEPROXY merges (same server code);
