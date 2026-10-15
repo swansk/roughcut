@@ -552,7 +552,8 @@ def test_the_app_bar_clips_nothing_and_a_fresh_bin_has_one_first_action(live_ser
         assert chip.count() == 1
     if state == "mid-first-pass":
         # the pass's own label is the news; Next has nothing to add beside it
-        assert "First pass" in label and "3/12" in label, label
+        # (lane PASS: "First pass · n/12", n = clips heard AND looked at — 0 here)
+        assert label == "First pass · 0/12", label
         assert chip.count() == 0 and blue == [], blue
     assert errors == []
     pg.unroute_all(behavior="ignoreErrors")

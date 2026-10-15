@@ -429,8 +429,8 @@ def test_an_empty_timeline_offers_a_first_cut_and_gets_one(page):
             "window.flowBar && flowBar.state()"
             " && flowBar.state().stages.find((s) => s.key === 'cut').state === 'ready'",
             timeout=10000)
-        page.wait_for_function(
-            "document.querySelector('#flowNext').innerText.includes('first cut')", timeout=5000)
+        # the first pass is THE first action on a bin without a cut: Next yields to it
+        page.wait_for_function("flowBar.yielded()", timeout=5000)
         # the Ask tool's change box hides itself here — there is nothing to change
         assert not page.locator("#askPanel").is_visible()
         # one sentence (INTAKE M16 I16.4): the empty state asks it in the same words as

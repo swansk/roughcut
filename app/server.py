@@ -71,7 +71,12 @@ from roughcut import junk as junkmod  # noqa: E402
 from roughcut import flow as flowmod  # noqa: E402
 from roughcut import deep as deepmod  # noqa: E402
 from roughcut import firstpass as fpmod  # noqa: E402
+from roughcut import procscope  # noqa: E402
 from roughcut import tracks as tracksmod  # noqa: E402
+
+# Stop means stop (verdict 3, punch 5): a job thread inside a `procscope.active` block
+# starts its tools in their own process groups, and its cancel kills them.
+procscope.install()
 
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent / "research" / "tools"
@@ -981,7 +986,7 @@ async def api_save(request: Request) -> JSONResponse:
     if "segments" in body:
         clean = clean_segments(body["segments"])
         attach_controls(clean, body["segments"])   # Effect Controls (wave 2 EFFECTS)
-        note_accept(edl, clean)          # provenance: before the segments are replaced
+        note_accept(edl, clean, body.get("colour"))   # provenance: before the segments go
         edl["segments"] = clean
     else:
         clean = edl.get("segments") or []
@@ -1182,6 +1187,8 @@ def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
         entry.finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
         return
     entry.complete("notes", detail="snapping cut points to speech")
+    # cut points on the sequence's frames, the cut's Effect Controls kept (the journey)
+    plan = revise.to_sequence(plan, segments, sequence_fps(plan.get("segments") or segments))
     if finish is not None:
         plan = finish(plan)
     # The notes are held to the diff before anyone reads them (judge verdict 1, punch
@@ -2335,9 +2342,14 @@ async def api_asks_answer(request: Request) -> JSONResponse:
         return JSONResponse({"ok": True, "job": None})
     rec = json.loads(files[0].read_text(encoding="utf-8"))
     rec["answered"] = {"answer": answer, "at": time.time()}
+    partial = body.get("partial")
+    if answer == "accept" and isinstance(partial, dict):
+        rec["answered"]["partial"] = partial      # which shots the Accept took (PICKS)
     tmp = files[0].with_name(files[0].name + ".tmp")
     tmp.write_text(json.dumps(rec, indent=1), encoding="utf-8")
     tmp.replace(files[0])
+    if rec["answered"].get("partial"):
+        note_partial_accept(rec)                  # provenance: the save may have landed
     return JSONResponse({"ok": True, "job": rec.get("job")})
 
 
@@ -2405,13 +2417,14 @@ def ask_plans() -> list[list[dict]]:
             if isinstance((r.get("plan") or {}).get("segments"), list)]
 
 
-def note_accept(edl: dict, saved: list[dict]) -> None:
+def note_accept(edl: dict, saved: list[dict], colour=None) -> None:
     """Provenance, on every save (first pass, K1): a save that is the Accept of a waiting
     proposal makes its shots the machine's — the new base — except the shots it carried
     over unchanged that were the editor's own (a re-run's locked shots, or a hand-trimmed
     shot an Ask left alone), which stay the editor's. Any other save needs nothing
-    recorded: `firstpass.manual_edits` diffs the cut against the base. Never fails a
-    save."""
+    recorded: `firstpass.manual_edits` diffs the cut against the base. `colour` is the
+    colour block this same save writes (an Accept saves the cut and the proposal's grade
+    together), so the base's grades are the accepted ones. Never fails a save."""
     try:
         for rec in _ask_records(newest=3):
             plan = rec.get("plan") or {}
@@ -2423,19 +2436,57 @@ def note_accept(edl: dict, saved: list[dict]) -> None:
             if answer == "accept" and any(b.get("job") == rec.get("job")
                                           for b in fpmod.bases(edl)[:1]):
                 return                        # recorded already
-            if not fpmod.is_accept(saved, plan.get("segments") or []):
+            partial = (rec.get("answered") or {}).get("partial") if answer == "accept" else None
+            if not partial and not fpmod.is_accept(saved, plan.get("segments") or []):
                 continue
-            before = {s.get("id"): s for s in fpmod._segments(edl) if s.get("id")}
-            hand = {}
-            for row in fpmod.manual_edits(edl, ask_plans()):
-                sid = row.get("id")
-                now = next((s for s in saved if s.get("id") == sid), None)
-                if sid in before and now is not None and fpmod._same(now, before[sid]):
-                    hand[sid] = row["how"]
-            fpmod.record_base(edl, saved, job=rec.get("job"), hand=hand)
+            grade = edl.get("colour")
+            if colour is not None:
+                try:
+                    grade = colourmod.validate_colour(colour, looks_library())
+                except (ValueError, TypeError):
+                    pass
+            if partial:
+                # the answer landed first: this save is the partial Accept
+                prior = {r["id"]: r["how"] for r in fpmod.manual_edits(edl, ask_plans())
+                         if r.get("id")}
+                hand = fpmod.partial_hand(saved, plan, prior)
+            else:
+                before = {s.get("id"): s for s in fpmod._segments(edl) if s.get("id")}
+                hand = {}
+                for row in fpmod.manual_edits(edl, ask_plans()):
+                    sid = row.get("id")
+                    now = next((s for s in saved if s.get("id") == sid), None)
+                    if sid in before and now is not None and fpmod._same(now, before[sid]):
+                        hand[sid] = row["how"]
+            fpmod.record_base(edl, saved, job=rec.get("job"), hand=hand, colour=grade or {})
             return
     except Exception as exc:  # noqa: BLE001 — provenance must never cost a save
         print(f"  !! provenance: {exc}", flush=True)
+
+
+def note_partial_accept(rec: dict) -> None:
+    """Provenance for a partial Accept whose answer (`partial`: which shots the editor
+    took) lands after its save: the cut on disk is the accepted one, so the base is
+    recorded here — the shots taken from the proposal are the machine's, the others
+    keep the provenance they had. A save that has not landed yet (no accepted change
+    on disk) leaves it to `note_accept`. Never fails the answer."""
+    try:
+        plan = rec.get("plan") or {}
+        edl = read_edl()
+        ensure_segment_ids(edl)
+        if any(b.get("job") == rec.get("job") for b in fpmod.bases(edl)[:1]):
+            return
+        saved = fpmod._segments(edl)
+        changes = fpmod.plan_changes(plan)
+        took = sum(1 for s in saved if any(fpmod._same(s, c, speed=False) for c in changes))
+        if changes and not took and int((rec["answered"]["partial"] or {}).get("accepted") or 0):
+            return                                    # the save is still on its way
+        prior = {r["id"]: r["how"] for r in fpmod.manual_edits(edl, ask_plans()) if r.get("id")}
+        fpmod.record_base(edl, saved, job=rec.get("job"),
+                          hand=fpmod.partial_hand(saved, plan, prior))
+        write_edl(edl)
+    except Exception as exc:  # noqa: BLE001 — provenance must never cost an answer
+        print(f"  !! provenance (partial accept): {exc}", flush=True)
 
 
 def _fp_live() -> dict | None:
@@ -2474,14 +2525,19 @@ def firstpass_plan(mode: str | None = None, keep=None, *, facts: dict | None = N
     ix_usd = float(facts["index"].get("pending_usd") or 0.0) if index_needed else 0.0
     n = counts["clips"]
     if index_needed:
+        # The proposal waits for the words and one coarse look at every clip; previews
+        # and close looks finish in the background (verdict 3, punch 5).
         todo = [f"hear {n - counts['listened']} of {n} clips" if counts["listened"] < n else "",
                 f"look at {counts['look_need'] - counts['looked']}"
-                if counts["looked"] < counts["look_need"] else "",
-                f"look closely at {counts['close_need'] - counts['close']}"
-                if counts["close"] < counts["close_need"] else "",
-                f"build {n - counts['proxied']} previews" if counts["proxied"] < n else ""]
-        will_ix = "Index the rest: " + ", ".join(t for t in todo if t) + "." \
-            if any(todo) else "Finish the index."
+                if counts["looked"] < counts["look_need"] else ""]
+        later = [f"{counts['close_need'] - counts['close']} close looks"
+                 if counts["close"] < counts["close_need"] else "",
+                 f"{n - counts['proxied']} previews" if counts["proxied"] < n else ""]
+        will_ix = ("Index the rest: " + ", ".join(t for t in todo if t) + "."
+                   if any(todo) else "Every clip is heard and looked at.")
+        if any(later):
+            will_ix += (" " + " and ".join(t for t in later if t)
+                        + " finish in the background — the cut does not wait for them.")
     else:
         will_ix = "Nothing — every clip is heard, looked at and previewed."
     lock_set = set(locked)
@@ -2547,12 +2603,22 @@ def firstpass_state() -> dict:
     if rec is None:
         out["state"] = "never-run"
         return out
-    if rec.get("state") == "failed":
-        out.update(state="failed", error=rec.get("error"), when=rec.get("finished"))
-        return out
-    if rec.get("state") == "running":             # a run the process lost (a restart)
-        out.update(state="failed", error="the last run was interrupted (the server "
-                   "restarted) — run it again", when=rec.get("started"))
+    if rec.get("state") in ("stopped", "failed", "running"):
+        # A run that ended early is a state, never "not run yet" (verdict 3): when,
+        # what the index had finished (the journal keeps it), and what a re-run does.
+        stages = {s["key"]: s for s in flowmod.compute(facts)["stages"]}
+        now_counts = _fp_index_counts(stages["index"])
+        step = rec.get("step") or "index"
+        out.update(step=step, counts={"index": now_counts},
+                   finished=fpmod.finished_words(now_counts),
+                   resumes=fpmod.resume_words(now_counts, step))
+        if rec.get("state") == "stopped":
+            out.update(state="stopped", when=rec.get("stopped"))
+        elif rec.get("state") == "failed":
+            out.update(state="failed", error=rec.get("error"), when=rec.get("finished"))
+        else:                                     # a run the process lost (a restart)
+            out.update(state="failed", error="the last run was interrupted (the server "
+                       "restarted) — run it again", when=rec.get("started"))
         return out
     prop = rec.get("proposal") or {}
     waiting = ask_pending(STATE["edl"].stat().st_mtime)
@@ -2623,7 +2689,8 @@ async def api_firstpass_post(request: Request) -> JSONResponse:
             "id": job, "state": "running", "mode": would["mode"], "keep": would["locked"],
             "note": str(body.get("note") or "").strip()[:600], "stage": "index",
             "started": time.time(), "ask": None, "picks": None,
-            "steps": {k: {"state": "pending"} for k in ("index", "picks", "cut")}}
+            "steps": {k: {"state": "pending"} for k in ("index", "picks", "cut")},
+            "scope": procscope.Scope(f"first pass {job}"), "index_job": None}
     threading.Thread(target=_firstpass_job, args=(job,), daemon=True).start()
     return JSONResponse({"job": job, "mode": would["mode"], "keep": would["locked"],
                          "would": would})
@@ -2631,19 +2698,36 @@ async def api_firstpass_post(request: Request) -> JSONResponse:
 
 @app.post("/api/firstpass/cancel")
 def api_firstpass_cancel() -> JSONResponse:
-    """Stop the running first pass (the header control's ×). It stops between steps:
-    an index it is on stops after the clip-stage in hand (the journal keeps what
-    finished); a proposal being written is discarded when it lands. The pass's record
-    goes back to what it was before this run, so the control reads as it did."""
-    live = _fp_live()
-    if live is None:
-        raise HTTPException(409, "the first pass is not running")
-    live["cancel"] = True
-    if live["stage"] == "index":
-        for x in INDEXES.values():
-            if x["state"] not in progress.TERMINAL:
-                x["cancel"] = True
-    return JSONResponse({"job": live["id"], "stage": live["stage"], "cancelling": True})
+    """Stop the running first pass (the header control's ×), now: the tools it is
+    running — the index's ffmpeg encodes, its contact-sheet reads, the `claude -p`
+    writing the cut — are killed with their process groups, the way the export's
+    cancel kills its render, and the state is `stopped` before this returns. What
+    finished is kept (the journal), a stage that was killed goes back in the queue,
+    and a proposal that lands after the stop is discarded, never offered."""
+    with FIRSTPASS_LOCK:
+        live = _fp_live()
+        if live is None:
+            raise HTTPException(409, "the first pass is not running")
+        live["cancel"] = True
+        live["state"] = "cancelled"
+        _fp_step(live, live.get("stage") or "index", "cancelled")
+        indexes = [x for x in INDEXES.values() if x["state"] not in progress.TERMINAL]
+        for x in indexes:
+            x["cancel"] = True
+        rec = _fp_record() or {}
+        if rec.get("job") == live["id"]:
+            rec.update(state="stopped", stopped=time.time(),
+                       step=live.get("stage") or "index")
+            _fp_save(rec)
+    scopes = [live["scope"]] + [INDEX_SCOPES[x["id"]] for x in indexes
+                                if x["id"] in INDEX_SCOPES]
+    killers = [threading.Thread(target=sc.kill, daemon=True) for sc in scopes]
+    for t in killers:
+        t.start()
+    for t in killers:
+        t.join(timeout=procscope.GRACE_S + 1.0)
+    return JSONResponse({"job": live["id"], "stage": live.get("stage"), "stopped": True,
+                         "state": "stopped"})
 
 
 class _FpCancelled(Exception):
@@ -2655,21 +2739,33 @@ def _fp_check(fp: dict) -> None:
         raise _FpCancelled()
 
 
-def firstpass_index() -> str | None:
-    """The index step: join an index already running, or run one on this thread.
-    Returns the index job id, None when the index had nothing to do."""
-    running = next((x for x in INDEXES.values() if x["state"] not in progress.TERMINAL), None)
-    if running is not None:
-        while running["state"] not in progress.TERMINAL:
-            time.sleep(FIRSTPASS_POLL_S)
-        return running["id"]
-    job = index_entry()
-    try:
-        _index_job(job, "")
-    except Exception as exc:  # noqa: BLE001 — the index job must end, whatever happened
-        INDEXES[job].finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
-        raise
-    return job
+def firstpass_index(fp: dict) -> str | None:
+    """The index step: join an index already running, or start one, in the coarse
+    order (every clip heard and looked at first), and return as soon as the bin is
+    coarse-ready — or the index ended, or the editor stopped the pass. Proxies and
+    close looks are not the proposal's prerequisites: the index carries on with them
+    in the background while the picks and the cut are made (verdict 3, punch 5)."""
+    while True:
+        running = next((x for x in INDEXES.values()
+                        if x["state"] not in progress.TERMINAL), None)
+        if running is None or not running.get("cancel") or fp.get("cancel"):
+            break
+        time.sleep(FIRSTPASS_POLL_S)     # a stopped index still unwinding: a new one
+    if fp.get("cancel"):
+        return None
+    if running is not None and not running.get("cancel"):
+        running["coarse"] = True
+        job = running["id"]
+    else:
+        job = index_entry()
+        INDEXES[job]["coarse"] = True
+        threading.Thread(target=_index_run, args=(job, ""), daemon=True).start()
+    fp["index_job"] = job
+    while True:
+        e = INDEXES[job]
+        if fp.get("cancel") or e["state"] in progress.TERMINAL or e.get("coarse_ready"):
+            return job
+        time.sleep(FIRSTPASS_POLL_S)
 
 
 def _fp_step(fp: dict, key: str, state: str, **extra) -> None:
@@ -2678,9 +2774,24 @@ def _fp_step(fp: dict, key: str, state: str, **extra) -> None:
         fp["stage"] = key
 
 
+def _fp_discard(ask: str) -> None:
+    """A proposal that landed after the Stop: answered "discard", never offered."""
+    try:
+        p = STATE["asks"] / f"{ask}.json"
+        r = json.loads(p.read_text(encoding="utf-8"))
+        r["answered"] = {"answer": "discard", "at": time.time(), "why": "cancelled"}
+        p.write_text(json.dumps(r, indent=1), encoding="utf-8")
+    except (OSError, ValueError):
+        pass
+
+
 def _firstpass_job(job: str) -> None:
     fp = FIRSTPASS[job]
-    before = _fp_record()                  # what a cancel puts back
+    with procscope.active(fp["scope"]):     # the cut's `claude -p` dies with the Stop
+        _firstpass_walk(job, fp)
+
+
+def _firstpass_walk(job: str, fp: dict) -> None:
     rec = {"job": job, "mode": fp["mode"], "keep": fp["keep"], "state": "running",
            "started": fp["started"], "clips": len(footage_clips()),
            "cut": cut_name_of(read_edl(), STATE["edl"])}
@@ -2689,20 +2800,25 @@ def _firstpass_job(job: str) -> None:
                          for r in fpmod.manual_edits(read_edl(), ask_plans())]
     except (OSError, ValueError, KeyError):
         rec["manual"] = []
-    _fp_save(rec)
+    with FIRSTPASS_LOCK:
+        if not fp.get("cancel"):
+            _fp_save(rec)
     try:
-        # 1 · index — only what isn't done
+        # 1 · index — until every clip is heard and looked at; the rest (previews,
+        # close looks) carries on in the background and is not waited for
         _fp_step(fp, "index", "running")
         stages = {s["key"]: s for s in flowmod.compute(flow_facts())["stages"]}
         counts = _fp_index_counts(stages["index"])
         if stages["index"]["state"] != "done" or counts["proxied"] < counts["clips"]:
-            ix_job = firstpass_index()
+            ix_job = firstpass_index(fp)
+            _fp_check(fp)
             stages = {s["key"]: s for s in flowmod.compute(flow_facts())["stages"]}
             counts = _fp_index_counts(stages["index"])
-            _fp_check(fp)
-            if ix_job and INDEXES.get(ix_job, {}).get("state") == "failed":
-                raise RuntimeError(f"the index failed: {INDEXES[ix_job].get('detail')}")
-            _fp_step(fp, "index", "done", job=ix_job, counts=counts)
+            ix = INDEXES.get(ix_job) or {}
+            if ix.get("state") == "failed":
+                raise RuntimeError(f"the index failed: {ix.get('detail')}")
+            _fp_step(fp, "index", "done", job=ix_job, counts=counts,
+                     background=ix.get("state") not in progress.TERMINAL)
         else:
             _fp_step(fp, "index", "skipped", why="already complete", counts=counts)
         if not counts["listened"]:
@@ -2751,53 +2867,61 @@ def _firstpass_job(job: str) -> None:
             plan=None, code=0, detail="estimating how long this will take",
             ask_kind="first pass", estimate=None, firstpass=job)
         fp["ask"] = ask
+        _fp_check(fp)
         target = payload["target"]
         _ask_job(ask, segments, clips, payload.get("story", ""), note,
                  (float(target[0]), float(target[1])), payload["events"], None,
                  locked=locked, finish=finish, originate=originate)
         entry = ASKS[ask]
-        if fp.get("cancel"):
-            # stopped while the model wrote: the proposal is discarded, never offered
-            try:
-                p = STATE["asks"] / f"{ask}.json"
-                r = json.loads(p.read_text(encoding="utf-8"))
-                r["answered"] = {"answer": "discard", "at": time.time(), "why": "cancelled"}
-                p.write_text(json.dumps(r, indent=1), encoding="utf-8")
-            except (OSError, ValueError):
-                pass
-            entry.finish("cancelled", detail="the first pass was stopped")
-            raise _FpCancelled()
-        if entry["state"] != "done":
-            raise RuntimeError(f"the cut failed: {entry.get('detail')}")
-        plan = entry["plan"] or {}
-        diff = (plan.get("firstpass") or {}).get("diff") or {}
-        _fp_step(fp, "cut", "done", ask=ask, shots=len(plan.get("segments") or []),
-                 counts=diff.get("counts"))
-        rec.update(state="done", finished=time.time(),
-                   proposal={"job": ask, "shots": len(plan.get("segments") or []),
-                             "counts": diff.get("counts"), "sentence": diff.get("sentence"),
-                             "notes_ok": (plan.get("notes_check") or {}).get("ok", True)},
-                   produced={"index": fp["steps"]["index"].get("counts"),
-                             "picks": fp["picks"],
-                             "cut": {"shots": len(plan.get("segments") or []),
-                                     "length_s": round(sum(edits.dur(s) for s in
-                                                           plan.get("segments") or []), 2)}})
-        fp["state"] = "done"
-    except _FpCancelled:
-        _fp_step(fp, fp.get("stage") or "index", "cancelled")
-        fp["state"] = "cancelled"
-        rec = before                       # as it stood before this run
-    except Exception as exc:  # noqa: BLE001 — deliberately total: the job must end
-        step = fp.get("stage") or "index"
-        _fp_step(fp, step, "failed", error=str(exc)[:300])
-        rec.update(state="failed", finished=time.time(), error=str(exc)[:300], step=step)
-        fp["state"] = "failed"
-        fp["error"] = str(exc)[:300]
-    finally:
-        if rec is not None:
+        with FIRSTPASS_LOCK:
+            if fp.get("cancel"):
+                # stopped while the model wrote: the proposal is discarded, never offered
+                _fp_discard(ask)
+                entry.finish("cancelled", detail="the first pass was stopped")
+                raise _FpCancelled()
+            if entry["state"] != "done":
+                raise RuntimeError(f"the cut failed: {entry.get('detail')}")
+            plan = entry["plan"] or {}
+            diff = (plan.get("firstpass") or {}).get("diff") or {}
+            _fp_step(fp, "cut", "done", ask=ask, shots=len(plan.get("segments") or []),
+                     counts=diff.get("counts"))
+            rec.update(state="done", finished=time.time(),
+                       proposal={"job": ask, "shots": len(plan.get("segments") or []),
+                                 "counts": diff.get("counts"),
+                                 "sentence": diff.get("sentence"),
+                                 "notes_ok": (plan.get("notes_check") or {}).get("ok", True)},
+                       produced={"index": fp["steps"]["index"].get("counts"),
+                                 "picks": fp["picks"],
+                                 "cut": {"shots": len(plan.get("segments") or []),
+                                         "length_s": round(sum(edits.dur(s) for s in
+                                                               plan.get("segments") or []), 2)}})
+            fp["state"] = "done"
             _fp_save(rec)
-        else:
-            firstpass_path().unlink(missing_ok=True)
+    except _FpCancelled:
+        pass
+    except Exception as exc:  # noqa: BLE001 — deliberately total: the job must end
+        with FIRSTPASS_LOCK:
+            if not fp.get("cancel"):
+                step = fp.get("stage") or "index"
+                _fp_step(fp, step, "failed", error=str(exc)[:300])
+                rec.update(state="failed", finished=time.time(), error=str(exc)[:300],
+                           step=step)
+                fp["state"] = "failed"
+                fp["error"] = str(exc)[:300]
+                _fp_save(rec)
+    finally:
+        with FIRSTPASS_LOCK:
+            newer = any(x is not fp and x["started"] > fp["started"]
+                         for x in FIRSTPASS.values())
+            if fp.get("cancel") and not newer:
+                # The Stop recorded itself; a run stopped before its own record was
+                # written still leaves one that says it stopped, never "not run yet".
+                cur = _fp_record() or {}
+                if cur.get("job") != job or cur.get("state") != "stopped":
+                    rec.update(state="stopped", stopped=time.time(),
+                               step=fp.get("stage") or "index")
+                    _fp_save(rec)
+                fp["state"] = "cancelled"
 
 
 # ---------------------------------------------------------------- analysis
@@ -3915,9 +4039,13 @@ def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
         try:
             _run_tool(analyze_cmd(skip, False))
         except RuntimeError as exc:
+            scope = procscope.current()
             for other in wanted:
                 if other != clip:
-                    j.fail(other, "asr", str(exc))
+                    if scope is not None and scope.cancelled:
+                        j.requeue(other, "asr")      # stopped, not failed
+                    else:
+                        j.fail(other, "asr", str(exc))
             raise
         for other in wanted:
             if other == clip:
@@ -4120,7 +4248,27 @@ inference.add_spend_listener(_record_spend)
 inference.set_budget_gate(_project_gate)
 
 
+# The index's children, per job: the first pass's Stop kills them (`procscope`), the
+# way the export's cancel kills its render — not after the clip-stage in hand.
+INDEX_SCOPES: dict[str, procscope.Scope] = {}
+INDEX_WAIT_S = 0.25
+
+
 def _index_job(job: str, order: str) -> None:
+    """Walk the journal until nothing is left to run. Stages run concurrently, each
+    pool up to its worker count (`journal.DEFAULT_WORKERS`: one proxy encode beside two
+    contact-sheet reads beside the audio pass), every tool inside the job's process
+    scope. `entry["coarse"]` (the first pass sets it) asks the journal for the coarse
+    tier first; `entry["coarse_ready"]` says when every clip is heard and looked at."""
+    scope = INDEX_SCOPES.setdefault(job, procscope.Scope(f"index {job}"))
+    try:
+        with procscope.active(scope):
+            _index_walk(job, order, scope)
+    finally:
+        INDEX_SCOPES.pop(job, None)
+
+
+def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
     entry = INDEXES[job]
     j = load_journal()
     workers = (load_settings().get("workers") or {})
@@ -4167,54 +4315,95 @@ def _index_job(job: str, order: str) -> None:
         entry["journal"] = prog
         entry["released"] = prog.get("released", 0)
         entry["cost_usd"] = prog.get("cost_usd", 0.0)
+        entry["coarse_ready"] = j.coarse_ready()
         entry.advance("index", max(0.0, min(1.0, float(prog.get("pct") or 0.0) / 100.0)),
                       detail=detail)
 
-    report("reading the journal")
-    while True:
-        # The bin's junk word, before every pick: a clip the editor confirmed while the
-        # last stage ran never gets its sheets bought, and a clip whose proxy just
-        # landed is measured and, if it looks like junk, waits behind the clean ones.
-        try:
-            sync_junk(j)
-        except (OSError, ValueError, journal.JournalError) as exc:
-            entry.note(f"junk check skipped: {str(exc)[:80]}")
-        nxt = j.next()
-        if nxt is None or entry.get("cancel"):     # the first pass's × stops between stages
-            break
-        clip, stage = nxt
+    cond = threading.Condition()
+    landed: list[tuple[str, str, str, object]] = []
+    running: dict[tuple[str, str], threading.Thread] = {}
+
+    def work(clip: str, stage: str) -> None:
+        with procscope.active(scope):
+            try:
+                out: tuple[str, object] = ("done", _index_stage(j, clip, stage))
+            except _Skip as why:
+                out = ("skip", str(why))
+            except Exception as exc:  # noqa: BLE001 — a failed stage is a state, not a stop
+                out = ("fail", exc)
+        with cond:
+            landed.append((clip, stage, *out))
+            cond.notify_all()
+
+    def settle(clip: str, stage: str, kind: str, val) -> None:
         stem = Path(clip).stem
-        if stage in journal.PRICED:
-            est = (VISUAL_USD_PER_SHEET if stage == "look"
-                   else FINE_WINDOWS_PER_CLIP * FINE_USD_PER_WINDOW)
-            if _over_budget(est):
-                j.pause_priced(f"budget cap ${budget_cap() or 0.0:.2f} reached — "
-                               f"${project_spent():.2f} spent on this project")
-                report(f"budget cap reached — priced stages paused; {stem} waits")
-                continue
-        j.start(clip, stage)
-        report(f"{stem} · {stage}")
-        try:
-            cost = _index_stage(j, clip, stage)
-        except _Skip as why:
-            j.skip(clip, stage, str(why))
-        except Exception as exc:  # noqa: BLE001 — a failed stage is a state, not a stop
-            state = j.fail(clip, stage, str(exc)[:200],
-                           retry_after_s=30.0 if "rate" in str(exc).lower() else None)
-            report(f"{stem} · {stage} failed ({state}): {str(exc)[:80]}")
-            continue
+        if kind != "done" and (entry.get("cancel") or scope.cancelled):
+            j.requeue(clip, stage)               # killed by the Stop: not a failure
+            return
+        if kind == "skip":
+            j.skip(clip, stage, str(val))
+        elif kind == "fail":
+            state = j.fail(clip, stage, str(val)[:200],
+                           retry_after_s=30.0 if "rate" in str(val).lower() else None)
+            report(f"{stem} · {stage} failed ({state}): {str(val)[:80]}")
+            return
         else:
-            j.finish(clip, stage, cost)
+            j.finish(clip, stage, float(val or 0.0))
             # The priority facts read the telemetry summary; on a bin whose sidecars
             # already existed they were computed at reconcile time, before this stage
             # ran, so they are refreshed once the sensor has spoken.
             if stage == "telemetry" and j.state(clip, "asr") in journal.SETTLED:
                 j.set_facts(clip, index_facts(clip))
-        if j.released(clip):
-            report(f"{stem} released")
+        report(f"{stem} released" if j.released(clip) else f"{stem} · {stage} done")
+
+    report("reading the journal")
+    while True:
+        with cond:
+            got, landed[:] = list(landed), []
+        for clip, stage, kind, val in got:
+            running.pop((clip, stage), None)
+            settle(clip, stage, kind, val)
+        if entry.get("cancel") or scope.cancelled:   # the Stop: wait for the killed tools
+            if not running:
+                break
+        else:
+            # The bin's junk word, before every pick: a clip the editor confirmed while
+            # the last stage ran never gets its sheets bought, and a clip whose proxy
+            # just landed is measured and, if it looks like junk, waits behind the clean
+            # ones.
+            try:
+                sync_junk(j)
+            except (OSError, ValueError, journal.JournalError) as exc:
+                entry.note(f"junk check skipped: {str(exc)[:80]}")
+            coarse = bool(entry.get("coarse"))
+            while True:
+                nxt = j.next(coarse=coarse)
+                if nxt is None:
+                    break
+                clip, stage = nxt
+                stem = Path(clip).stem
+                if stage in journal.PRICED:
+                    est = (VISUAL_USD_PER_SHEET if stage == "look"
+                           else FINE_WINDOWS_PER_CLIP * FINE_USD_PER_WINDOW)
+                    if _over_budget(est):
+                        j.pause_priced(f"budget cap ${budget_cap() or 0.0:.2f} reached — "
+                                       f"${project_spent():.2f} spent on this project")
+                        report(f"budget cap reached — priced stages paused; {stem} waits")
+                        continue
+                j.start(clip, stage, coarse=coarse)
+                report(f"{stem} · {stage}")
+                th = threading.Thread(target=work, args=(clip, stage), daemon=True)
+                running[(clip, stage)] = th
+                th.start()
+            if not running:
+                break
+        with cond:
+            if not landed:
+                cond.wait(timeout=INDEX_WAIT_S)
     prog = j.progress()
     entry["journal"] = prog
-    if entry.get("cancel"):
+    entry["coarse_ready"] = j.coarse_ready()
+    if entry.get("cancel") or scope.cancelled:
         entry.finish("cancelled", detail="stopped — what finished is kept; index the rest any time")
         return
     entry.complete("index")
@@ -4539,8 +4728,17 @@ async def api_index(request: Request) -> JSONResponse:
     elif body.get("pause_priced"):
         load_journal().pause_priced("paused by the editor")
     job = index_entry()
-    threading.Thread(target=_index_job, args=(job, order), daemon=True).start()
+    threading.Thread(target=_index_run, args=(job, order), daemon=True).start()
     return JSONResponse({"job": job})
+
+
+def _index_run(job: str, order: str) -> None:
+    """`_index_job` on its own thread: whatever happens, the job ends."""
+    try:
+        _index_job(job, order)
+    except Exception as exc:  # noqa: BLE001 — the index job must end, whatever happened
+        if INDEXES[job]["state"] not in progress.TERMINAL:
+            INDEXES[job].finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
 
 
 def index_entry() -> str:

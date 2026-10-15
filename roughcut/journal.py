@@ -28,7 +28,9 @@ from __future__ import annotations
 
 import json
 import os
+import functools
 import statistics
+import threading
 import time
 from pathlib import Path
 from typing import Any, Iterable
@@ -78,11 +80,33 @@ TIMING_WINDOW = 8         # how many recent durations the per-stage rolling mean
 
 ORDERS = ("priority", "capture")
 
+# The first pass's coarse tier (verdict 3, punch 5): what a proposal needs from every
+# clip — its words and one coarse look — before anything else. With `coarse=True` the
+# queue offers these stages across the whole bin first and a look waits only on the
+# probe (the look reads the master, not the proxy), so a 5-minute proxy encode never
+# stands between the editor and a proposed cut; proxies, close looks and picks run
+# after, in the background.
+COARSE = ("probe", "telemetry", "asr", "look")
+# ...and the close look, which reads the proxy (`server.fine_cmd`), names the proxy it
+# no longer gets through the look.
+COARSE_DEPENDS: dict[str, tuple[str, ...]] = {**DEPENDS, "look": ("probe",),
+                                              "close": ("look", "proxy")}
+
 # The skip reason `set_junk` writes, and the only skip it will undo.
 JUNK_REASON = "junk — confirmed by the editor"
 # Where a clip's junk word puts it in the queue: clean first, proposed after, confirmed
 # last (its priced stages are skipped; what is left of it is free).
 JUNK_RANK = {None: 0, "proposed": 1, "confirmed": 2}
+
+
+def _locked(fn):
+    """One journal object is shared by the index's worker threads: every public method
+    runs under its lock, and so does every save."""
+    @functools.wraps(fn)
+    def inner(self, *a, **kw):
+        with self._lock:
+            return fn(self, *a, **kw)
+    return inner
 
 
 class JournalError(ValueError):
@@ -156,6 +180,7 @@ class Journal:
                  autosave: bool = True) -> None:
         self.path = Path(path) if path else None
         self.autosave = autosave
+        self._lock = threading.RLock()
         self.data: dict[str, Any] = {
             "version": VERSION, "bin": bin or (self.path.stem if self.path else ""),
             "created": time.time(), "updated": None,
@@ -206,6 +231,7 @@ class Journal:
             rec.setdefault("junk", None)
         return j
 
+    @_locked
     def save(self) -> None:
         """Temp file beside the journal, then an atomic replace: a crash during the
         write leaves the previous journal intact, never a half-written one."""
@@ -264,6 +290,7 @@ class Journal:
 
     # ---------------------------------------------------------------- clips
 
+    @_locked
     def add_clips(self, clips: Iterable[str], captured: dict[str, float] | None = None,
                   *, now: float | None = None) -> list[str]:
         """Footage added at any time (decision 4). New clips enter queued for every
@@ -288,6 +315,7 @@ class Journal:
         self._touch()
         return new
 
+    @_locked
     def remove_missing(self, clips: Iterable[str], *, now: float | None = None) -> list[str]:
         """Footage that is gone. Marked, never deleted: the record keeps its cost and
         its history, and a keep pointing at it is flagged, not lost (design §3)."""
@@ -304,10 +332,12 @@ class Journal:
         self._touch()
         return marked
 
+    @_locked
     def set_captured(self, clip: str, captured: float | None) -> None:
         self._rec(clip)["captured"] = captured
         self._touch()
 
+    @_locked
     def set_facts(self, clip: str, facts: dict | None) -> float:
         """The free-stage facts for a clip; the priority follows from them."""
         rec = self._rec(clip)
@@ -316,16 +346,19 @@ class Journal:
         self._touch()
         return rec["priority"]
 
+    @_locked
     def set_order(self, order: str) -> None:
         if order not in ORDERS:
             raise JournalError(f"order must be one of {ORDERS}, not {order!r}")
         self.data["order"] = order
         self._touch()
 
+    @_locked
     def set_workers(self, workers: dict[str, int]) -> None:
         self.data["workers"] = {**DEFAULT_WORKERS, **workers}
         self._touch()
 
+    @_locked
     def skip(self, clip: str, stage: str, reason: str = "", *,
              now: float | None = None) -> None:
         """Not applicable — telemetry on a clip with no sensor stream, a close look on
@@ -337,6 +370,7 @@ class Journal:
         st["finished"] = now
         self._touch()
 
+    @_locked
     def set_junk(self, clip: str, junk: str | None, *, now: float | None = None) -> list[str]:
         """The bin's word on a clip (HANDOFF roadmap item 5, `roughcut/junk.py`):
         `"confirmed"` (the human said junk), `"proposed"` (the measurement says junk,
@@ -376,6 +410,7 @@ class Journal:
         self._touch()
         return touched
 
+    @_locked
     def reopen(self, clip: str, stage: str, *, now: float | None = None) -> None:
         """Put a settled or skipped stage back in the queue — a skip that turned out
         not to be a fact about the clip (a stage that did not exist yet when it was
@@ -394,6 +429,7 @@ class Journal:
         self._log(now, f"{clip} {stage} reopened")
         self._touch()
 
+    @_locked
     def unpark(self, clip: str, *, now: float | None = None) -> None:
         """A human looked, and wants another three tries."""
         now = time.time() if now is None else now
@@ -410,6 +446,7 @@ class Journal:
 
     # ----------------------------------------------------------- reconcile
 
+    @_locked
     def reconcile(self, files: dict[str, dict[str, bool]], *,
                   now: float | None = None) -> dict:
         """Bend the plan to the disk. `files` is `{clip: {stage: exists}}` for the
@@ -486,8 +523,9 @@ class Journal:
         return ([r["clip"] for r in recs if not r.get("missing")]
                 + [r["clip"] for r in recs if r.get("missing")])
 
-    def _deps_met(self, rec: dict, stage: str) -> bool:
-        return all(rec["stages"][d]["state"] in SETTLED for d in DEPENDS[stage])
+    def _deps_met(self, rec: dict, stage: str, coarse: bool = False) -> bool:
+        deps = (COARSE_DEPENDS if coarse else DEPENDS)[stage]
+        return all(rec["stages"][d]["state"] in SETTLED for d in deps)
 
     def running(self) -> list[tuple[str, str]]:
         return [(c, s) for c, rec in self.clips.items()
@@ -499,8 +537,10 @@ class Journal:
             load[KIND[s]] = load.get(KIND[s], 0) + 1
         return load
 
+    @_locked
     def next(self, *, now: float | None = None,
-             workers: dict[str, int] | None = None) -> tuple[str, str] | None:
+             workers: dict[str, int] | None = None,
+             coarse: bool = False) -> tuple[str, str] | None:
         """The next (clip, stage) to run, or None when nothing is runnable right now.
 
         Walks clips in the journal's order and stages in pipeline order, so the top
@@ -508,15 +548,28 @@ class Journal:
         releases clips one at a time instead of half-indexing all of them. Honours
         dependencies, the per-pool worker limits, `not_before` backoffs, the priced
         pause, and skips parked or missing clips.
+
+        `coarse` (the first pass): the `COARSE` stages of every clip come before any
+        other stage of any clip, and a look waits on the probe only — the whole bin
+        heard and looked at once, then the rest.
         """
         now = time.time() if now is None else now
         limits = {**self.workers, **(workers or {})}
         load = self._pool_load()
+        tiers = ([COARSE, tuple(s for s in STAGES if s not in COARSE)] if coarse
+                 else [STAGES])
+        for tier in tiers:
+            hit = self._next_in(tier, now, limits, load, coarse)
+            if hit is not None:
+                return hit
+        return None
+
+    def _next_in(self, stages, now, limits, load, coarse) -> tuple[str, str] | None:
         for clip in self.ordered():
             rec = self.clips[clip]
             if rec.get("missing") or rec.get("parked"):
                 continue
-            for stage in STAGES:
+            for stage in stages:
                 st = rec["stages"][stage]
                 if st["state"] not in RETRYABLE:
                     continue
@@ -524,7 +577,7 @@ class Journal:
                     continue
                 if st.get("not_before") and float(st["not_before"]) > now:
                     continue
-                if not self._deps_met(rec, stage):
+                if not self._deps_met(rec, stage, coarse):
                     continue
                 kind = KIND[stage]
                 if load.get(kind, 0) >= int(limits.get(kind, 1)):
@@ -532,9 +585,12 @@ class Journal:
                 return clip, stage
         return None
 
-    def start(self, clip: str, stage: str, *, now: float | None = None) -> None:
+    @_locked
+    def start(self, clip: str, stage: str, *, now: float | None = None,
+              coarse: bool = False) -> None:
         """Mark a stage running. Counts as an attempt, so a stage that crashes the
-        process three times parks instead of looping forever."""
+        process three times parks instead of looping forever. `coarse` checks the
+        dependencies as `next(coarse=True)` offered them."""
         now = time.time() if now is None else now
         rec = self._rec(clip)
         st = self._stage(clip, stage)
@@ -542,8 +598,9 @@ class Journal:
             raise JournalError(f"{clip} {stage} is {st['state']}, not startable")
         if rec.get("parked"):
             raise JournalError(f"{clip} is parked ({rec['parked'].get('error')})")
-        if not self._deps_met(rec, stage):
-            waiting = [d for d in DEPENDS[stage] if rec["stages"][d]["state"] not in SETTLED]
+        if not self._deps_met(rec, stage, coarse):
+            waiting = [d for d in (COARSE_DEPENDS if coarse else DEPENDS)[stage]
+                       if rec["stages"][d]["state"] not in SETTLED]
             raise JournalError(f"{clip} {stage} waits on {', '.join(waiting)}")
         st["state"] = "running"
         st["attempts"] = int(st.get("attempts") or 0) + 1
@@ -552,6 +609,7 @@ class Journal:
         st["not_before"] = None
         self._touch()
 
+    @_locked
     def finish(self, clip: str, stage: str, cost_usd: float = 0.0, *,
                now: float | None = None) -> None:
         """A stage completed. The only place cost is recorded, and the only place a
@@ -570,6 +628,7 @@ class Journal:
             self._log(now, f"{clip} released")
         self._touch()
 
+    @_locked
     def fail(self, clip: str, stage: str, error: str = "", *, cost_usd: float = 0.0,
              retry_after_s: float | None = None, now: float | None = None) -> str:
         """A stage failed. Retryable until `MAX_ATTEMPTS`, then the clip is parked with
@@ -600,8 +659,37 @@ class Journal:
         self._touch()
         return st["state"]
 
+    @_locked
+    def requeue(self, clip: str, stage: str, reason: str = "stopped by the editor", *,
+                now: float | None = None) -> None:
+        """A running stage the editor stopped (the first pass's Stop killed its tool):
+        back in the queue as if it had never started — the attempt is not counted, so
+        three Stops never park a clip, and nothing it half-wrote is recorded."""
+        now = time.time() if now is None else now
+        st = self._stage(clip, stage)
+        if st["state"] != "running":
+            return
+        st["state"] = "queued"
+        st["attempts"] = max(0, int(st.get("attempts") or 0) - 1)
+        st["started"] = None
+        st["not_before"] = None
+        self._log(now, f"{clip} {stage} {reason}")
+        self._touch()
+
+    @_locked
+    def coarse_ready(self) -> bool:
+        """Every clip present is heard and looked at coarsely (or can never be: parked,
+        or its look skipped as junk) — what the first pass's picks and cut need. Not
+        the proxies, not the close looks."""
+        live = [r for r in self.clips.values() if not r.get("missing")]
+        return bool(live) and all(
+            r.get("parked") or (r["stages"]["asr"]["state"] in SETTLED and (
+                r["stages"]["look"]["state"] in SETTLED or self.paused_priced))
+            for r in live)
+
     # ------------------------------------------------------------- the budget
 
+    @_locked
     def pause_priced(self, reason: str = "budget cap", *, now: float | None = None) -> None:
         """Hold the priced stages; the free ones and anything already running go on.
         The floor opens on what is released."""
@@ -612,6 +700,7 @@ class Journal:
             self._log(now, f"priced stages paused: {reason}")
         self._touch()
 
+    @_locked
     def resume_priced(self, *, now: float | None = None) -> None:
         now = time.time() if now is None else now
         if self.paused_priced:
@@ -631,6 +720,7 @@ class Journal:
             return False
         return all(rec["stages"][s]["state"] in SETTLED for s in STAGES)
 
+    @_locked
     def released_clips(self) -> list[str]:
         return [c for c in self.ordered() if self.released(c)]
 
@@ -667,6 +757,7 @@ class Journal:
                          for rec in self.clips.values()
                          for st in rec["stages"].values()), 4)
 
+    @_locked
     def progress(self, *, now: float | None = None) -> dict:
         """The honest bar: per-stage counts, released count, cost so far, and an ETA
         from measured durations only — never a guess dressed as a measurement.

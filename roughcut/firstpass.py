@@ -23,6 +23,7 @@ edit, so a hook on each gesture would see nothing a diff does not.
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -35,9 +36,28 @@ EPS = 0.005
 MODES = ("run", "rerun")
 
 # How a shot became the editor's own, in the order the panel lists them.
-HOW = ("add", "razor", "trim", "speed", "move")
+HOW = ("add", "razor", "trim", "speed", "move", "grade")
 HOW_WORDS = {"add": "added by hand", "razor": "razored", "trim": "trimmed",
-             "speed": "speed changed", "move": "moved"}
+             "speed": "speed changed", "move": "moved", "grade": "graded"}
+
+# A shot's grade, for provenance (the journey, wave 3: a shot only colour-graded by hand
+# was not "the editor's own", so a re-run could replace it and take the grade with it):
+# its override in the EDL's colour block (balance, look, strength, auto, match) and the
+# Lumetri values Effect Controls keeps on the segment.
+GRADE_KEYS = ("auto", "balance", "look", "strength", "match")
+GRADE_CONTROLS = ("contrast", "saturation")
+
+
+def grade_of(colour: dict | None, seg: dict) -> str | None:
+    """The shot's grade as a comparable string, None when it has none of its own."""
+    shots = (colour or {}).get("shots") if isinstance(colour, dict) else None
+    own = (shots or {}).get(seg.get("id")) if isinstance(shots, dict) else None
+    g = {k: own[k] for k in GRADE_KEYS if isinstance(own, dict) and own.get(k) is not None}
+    ctl = seg.get("controls") if isinstance(seg.get("controls"), dict) else {}
+    lum = {k: ctl[k] for k in GRADE_CONTROLS if ctl.get(k) is not None}
+    if lum:
+        g["lumetri"] = lum
+    return json.dumps(g, sort_keys=True) if g else None
 
 
 def _rng(s: dict) -> tuple[str, float, float, float]:
@@ -67,10 +87,15 @@ def bases(edl: dict) -> list[dict]:
 
 
 def record_base(edl: dict, segments: list[dict], *, job: str | None,
-                hand: dict[str, list[str]] | None = None, at: float | None = None) -> dict:
+                hand: dict[str, list[str]] | None = None, at: float | None = None,
+                colour: dict | None = None) -> dict:
     """An accepted proposal becomes the newest base: its shots are the machine's, except
     the ids in `hand` (shots a re-run kept because the editor made them — they stay the
-    editor's, with how). Mutates and returns `edl`."""
+    editor's, with how). Each shot's grade is recorded too, from `colour` (the colour
+    block the accepting save writes; default the EDL's), so a grade changed by hand
+    later is a hand edit. Mutates and returns `edl`."""
+    colour = edl.get("colour") if colour is None else colour
+    grades = {}
     hand = {str(k): list(v) for k, v in (hand or {}).items()}
     shots = {}
     order = []
@@ -82,8 +107,9 @@ def record_base(edl: dict, segments: list[dict], *, job: str | None,
         shots[sid] = {"clip": s.get("clip"), "in": round(float(s["in"]), 2),
                       "out": round(float(s["out"]), 2),
                       "speed": float(s.get("speed") or 1.0)}
+        grades[sid] = grade_of(colour, s)
     base = {"job": job, "at": round(at if at is not None else time.time(), 3),
-            "shots": shots, "order": order, "hand": hand}
+            "shots": shots, "order": order, "hand": hand, "grades": grades}
     prov = edl.get(PROV_KEY) if isinstance(edl.get(PROV_KEY), dict) else {}
     prov["bases"] = ([base] + bases(edl))[:BASES_KEPT]
     edl[PROV_KEY] = prov
@@ -96,6 +122,36 @@ def is_accept(saved: list[dict], plan_segments: list[dict]) -> bool:
     plan = [s for s in plan_segments or [] if isinstance(s, dict) and "in" in s]
     return bool(plan) and len(plan) == len(saved) and all(
         _same(a, b, speed=False) for a, b in zip(saved, plan))
+
+
+def plan_changes(plan: dict) -> list[dict]:
+    """The shots a proposal changes or adds (not the ones it keeps as they are), by
+    the diff the server stored on it: the first pass's own, else the notes check's."""
+    segs = [x for x in plan.get("segments") or [] if isinstance(x, dict) and "in" in x]
+    diff = ((plan.get("firstpass") or {}).get("diff") or plan.get("diff") or {})
+    rows = diff.get("shots") or []
+    if len(rows) != len(segs):                  # no usable diff: every shot is the plan's
+        return segs
+    return [x for x, r in zip(segs, rows) if r.get("status") not in ("kept",)]
+
+
+def partial_hand(saved: list[dict], plan: dict, prior: dict[str, list[str]]) -> dict:
+    """A partial Accept (the editor took some of a proposal's shots — verdict 3 punch 7):
+    which shots of the cut it saved stay the editor's own. A shot the proposal changed
+    or added, and that the editor accepted, is the machine's; every other shot — one
+    the proposal kept as it was, a change the editor rejected (the shot stays as it
+    was), a removal the editor refused — keeps the provenance it had (`prior`, by id:
+    the hand edits as they stood)."""
+    changes = plan_changes(plan)
+    hand = {}
+    for s in saved:
+        sid = s.get("id")
+        if not sid or sid not in prior:
+            continue
+        if any(_same(s, c, speed=False) for c in changes):
+            continue                            # accepted from the proposal
+        hand[sid] = list(prior[sid])
+    return hand
 
 
 def _lcs(a: list[str], b: list[str]) -> set[str]:
@@ -140,6 +196,9 @@ def manual_edits(edl: dict, plans: list[list[dict]] | None = None) -> list[dict]
         return out
     shots: dict = base.get("shots") or {}
     hand: dict = base.get("hand") or {}
+    # a base recorded before grades were (no "grades"): a grade cannot be told apart
+    grades: dict | None = base.get("grades") if isinstance(base.get("grades"), dict) else None
+    colour = edl.get("colour")
     cur_ids = [s.get("id") for s in segs]
     common = [x for x in base.get("order") or [] if x in cur_ids]
     in_order = _lcs(common, [x for x in cur_ids if x in common])
@@ -173,6 +232,9 @@ def manual_edits(edl: dict, plans: list[list[dict]] | None = None) -> list[dict]
                 how.append("speed")
         if sid and sid in common and sid not in in_order:
             how.append("move")
+        if (b is not None and grades is not None
+                and grade_of(colour, s) != grades.get(sid)):
+            how.append("grade")
         if how:
             out.append(_row(s, i, sorted(set(how), key=HOW.index)))
     return out
@@ -315,6 +377,41 @@ def cost_words(usd: float) -> dict:
             "words": f"~${usd:.2f}" if charged else "free on your plan",
             "hover": (f"~${usd:.2f}, billed per call on the API" if charged
                       else f"~${usd:.2f} if it went through the API — no charge on your plan")}
+
+
+# ------------------------------------------------------------------ a run that ended early
+#
+# Verdict 3: after Stop the panel said "Not run on this bin yet." A stopped or failed run
+# is a state the editor reads — when, what finished, and what a re-run picks up — and
+# never the never-run state.
+
+
+def finished_words(counts: dict | None) -> str:
+    """"heard 12/12 · looked 1/12" — what the index had finished."""
+    c = counts or {}
+    n = int(c.get("clips") or 0)
+    if not n:
+        return ""
+    return (f"heard {int(c.get('listened') or 0)}/{n} · "
+            f"looked {int(c.get('looked') or 0)}/{int(c.get('look_need') or n)}")
+
+
+def resume_words(counts: dict | None, step: str | None = None) -> str:
+    """What a re-run does first and then: "looks at 11 more, then picks, then the cut".
+    The index keeps what finished, so a re-run starts where this one stopped."""
+    c = counts or {}
+    n = int(c.get("clips") or 0)
+    todo = []
+    heard, looked = int(c.get("listened") or 0), int(c.get("looked") or 0)
+    need = int(c.get("look_need") or n)
+    if n and heard < n:
+        todo.append(f"hears {n - heard} more")
+    if need and looked < need:
+        todo.append(f"looks at {need - looked} more")
+    if step == "cut" and not todo:
+        return "writes the cut again (the index and the picks are done)"
+    todo += ["then picks", "then the cut"] if todo else ["picks", "then the cut"]
+    return ", ".join(todo)
 
 
 def plan_note(locked: int, mode: str, extra: str = "") -> str:

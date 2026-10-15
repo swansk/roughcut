@@ -67,6 +67,81 @@ def probe_rotation(video: Path) -> float:
     return 0.0
 
 
+# A coarse sheet samples every few seconds, and decoding every frame of a 5.3K HEVC
+# master to keep one in 240 was the whole cost of a look: 9+ minutes of one core for a
+# 3.4-minute Killington clip under load (verdict 3: the first pass looked at 1 clip in
+# 15 minutes). GoPro masters carry a keyframe every 1.001 s, so at an interval of 2 s
+# or more each sample is taken from the keyframe nearest its time — decoding the
+# keyframes only, about 1 frame in 60 — and the cell is labelled with that keyframe's
+# own time, so a label never claims a moment the frame was not taken at. A file whose
+# keyframes are too sparse for the interval (no keyframe within half an interval of a
+# sample) is decoded in full, as before. Windows (the close look) always decode in full.
+KEYFRAME_MIN_INTERVAL = 2.0
+
+
+def keyframe_times(video: Path) -> list[float]:
+    """The video stream's keyframe times, from the packets (a demux, no decode)."""
+    r = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "packet=pts_time,flags", "-of", "csv=p=0", str(video)])
+    out = []
+    for line in r.stdout.splitlines():
+        parts = line.strip().split(",")
+        if len(parts) >= 2 and "K" in parts[1]:
+            try:
+                out.append(float(parts[0]))
+            except ValueError:
+                continue
+    return sorted(out)
+
+
+def keyframe_samples(keys: list[float], duration: float, interval: float) -> list[int] | None:
+    """For each sample time 0, interval, 2·interval …, the index of the
+    nearest keyframe — or None when one sample has no keyframe within half an interval
+    (or two samples would share one)."""
+    if not keys:
+        return None
+    want = []
+    # as many samples as the full decode's `fps=1/interval` gives: a tick counts when
+    # the clip runs at least half an interval past it
+    n = max(1, int((duration - interval / 2) // interval) + 1) if duration > interval / 2 else 1
+    for i in range(n):
+        t = i * interval
+        k = min(range(len(keys)), key=lambda j: abs(keys[j] - t))
+        if abs(keys[k] - t) > interval / 2 or (want and want[-1] == k):
+            return None
+        want.append(k)
+    return want
+
+
+def extract_keyframes(video: Path, workdir: Path, interval: float, width: int,
+                      orient: str) -> tuple[list[Path], list[float]] | None:
+    """The coarse samples from keyframes only (see KEYFRAME_MIN_INTERVAL), or None when
+    this file cannot be sampled that way."""
+    keys = keyframe_times(video)
+    duration = probe_duration(video)
+    pick = keyframe_samples(keys, duration, interval)
+    if pick is None:
+        return None
+    cmd = ["ffmpeg", "-v", "error", "-y", "-skip_frame", "nokey"]
+    if orient == "none":
+        cmd.append("-noautorotate")
+    cmd += ["-i", str(video), "-map", "0:v:0", "-vf", f"scale={width}:-2",
+            "-fps_mode", "passthrough", "-q:v", "3", str(workdir / "k_%05d.jpg")]
+    r = run(cmd)
+    if r.returncode != 0:
+        return None
+    got = sorted(workdir.glob("k_*.jpg"))
+    if len(got) != len(keys):            # decoded keyframes must match the packets 1:1
+        for f in got:
+            f.unlink(missing_ok=True)
+        return None
+    keep = set(pick)
+    for j, f in enumerate(got):
+        if j not in keep:
+            f.unlink(missing_ok=True)
+    return [got[k] for k in pick], [round(keys[k], 3) for k in pick]
+
+
 def extract_frames(video: Path, workdir: Path, interval: float, width: int,
                    orient: str,
                    window: tuple[float, float] | None = None) -> list[Path]:
@@ -133,7 +208,13 @@ def build_sheets(video: Path, out_dir: Path, interval: float, cols: int, rows: i
     offset = window[0] if window else 0.0
 
     with tempfile.TemporaryDirectory() as td:
-        frames = extract_frames(video, Path(td), interval, width, orient, window)
+        sampled = (extract_keyframes(video, Path(td), interval, width, orient)
+                   if window is None and interval >= KEYFRAME_MIN_INTERVAL else None)
+        if sampled is not None:
+            frames, times = sampled
+        else:
+            frames = extract_frames(video, Path(td), interval, width, orient, window)
+            times = [offset + gi * interval for gi in range(len(frames))]
         if not frames:
             raise RuntimeError(f"no frames extracted from {video}")
 
@@ -152,7 +233,7 @@ def build_sheets(video: Path, out_dir: Path, interval: float, cols: int, rows: i
 
             for k, frame_path in enumerate(chunk):
                 gi = s_idx + k                      # global frame index
-                t = offset + gi * interval          # sample timestamp, clip seconds
+                t = times[gi]                       # sample timestamp, clip seconds
                 r, c = divmod(k, cols)
                 x, y = c * cell_w + PAD, r * cell_h + PAD
                 canvas.paste(Image.open(frame_path), (x, y))
@@ -179,6 +260,7 @@ def build_sheets(video: Path, out_dir: Path, interval: float, cols: int, rows: i
         "cell_geometry": {"pad": PAD, "label_h": LABEL_H,
                           "cell_w": cell_w, "cell_h": cell_h},
         "n_samples": sum(len(s.cells) for s in sheets),
+        "sampling": "keyframes" if sampled is not None else "decode",
         "sheets": [asdict(s) for s in sheets],
     }
 

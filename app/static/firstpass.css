@@ -1,9 +1,9 @@
 /* firstpass.css: the first pass's header control, its panel and the empty-state offers
-   (firstpass.js, REDESIGN-GOAL dimension 2). The control ellipsizes (its
-   title says it all) before it would push the row past 1440 px. */
+   (firstpass.js, REDESIGN-GOAL dimension 2). Its words are short at every state
+   ("First pass · 3/12"); the detail is in its hover and its panel. */
 
 /* ---------------------------------------------------------------- the header row */
-header #firstpass { flex: 0 1 auto; min-width: 118px; position: relative; display: flex;
+header #firstpass { flex: 0 0 auto; position: relative; display: flex;
                     align-items: center; }
 /* the job strip's own sizes are workspace.css's (lane FINISH) */
 
@@ -18,8 +18,7 @@ header #firstpass { flex: 0 1 auto; min-width: 118px; position: relative; displa
                      white-space: nowrap; cursor: pointer; position: relative; }
 #firstpass .fp-btn:hover { background: var(--card-hi, #313135); }
 #firstpass .fp-btn svg { flex: none; width: 13px; height: 13px; color: var(--accent, #4a9df8); }
-#firstpass .fp-label { min-width: 0; overflow: hidden; text-overflow: ellipsis;
-                       font-variant-numeric: tabular-nums; }
+#firstpass .fp-label { font-variant-numeric: tabular-nums; }
 #firstpass[data-state="running"] .fp-btn { color: var(--dim, #94949c); }
 #firstpass[data-state="running"] .fp-btn svg { animation: fp-pulse 1.6s ease-in-out infinite; }
 #firstpass[data-state="stale-after-edits"] .fp-btn { padding-right: 13px; }
@@ -49,6 +48,7 @@ header #firstpass { flex: 0 1 auto; min-width: 118px; position: relative; displa
 #firstpass .fp-close:hover { color: var(--text, #dcdcdf); background: transparent; }
 #firstpass .fp-status { color: var(--dim, #94949c); margin-bottom: 8px; }
 #firstpass .fp-warn { color: var(--warn, #e2b14f); }
+#firstpass .fp-resume { color: var(--text, #dcdcdf); }
 #firstpass .fp-bad { color: var(--bad, #e46a6a); margin: 6px 0; }
 #firstpass .fp-result { background: #19191b; border: 1px solid var(--line, #333337);
                         border-radius: 4px; padding: 6px 8px; margin-bottom: 8px; }

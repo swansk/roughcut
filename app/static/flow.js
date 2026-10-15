@@ -138,6 +138,11 @@
       const noCut = !cut || !((cut.counts || {}).shots > 0);
       return n.stage === 'index' || n.stage === 'pass' || (n.stage === 'cut' && noCut);
     }
+    if (n.stage === 'cut' && fpState() === 'never-run') {
+      // the first pass is THE first action on a bin without a cut, indexed or not
+      const cut = (f.stages || []).find((s) => s.key === 'cut');
+      if (cut && cut.state === 'ready') return true;
+    }
     return n.kind !== 'wait' && n.stage === 'index';
   }
 

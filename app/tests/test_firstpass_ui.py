@@ -32,7 +32,7 @@ from playwright.sync_api import sync_playwright  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from roughcut import inference  # noqa: E402
-from test_firstpass import Scripted  # noqa: E402
+from test_firstpass import Scripted, _end_jobs  # noqa: E402
 from test_index import _stub_tools  # noqa: E402
 
 BTN = '[data-testid="firstpass-button"]'
@@ -81,6 +81,7 @@ def live(tmp_path, project, monkeypatch, model):
         time.sleep(0.1)
     assert srv.started
     yield f"http://127.0.0.1:{port}"
+    _end_jobs(server, model)              # and any index it left in the background
     srv.should_exit = True
     th.join(timeout=10)
     if model.hold is not None:
@@ -140,6 +141,16 @@ def _one_click_to_panel(pg) -> str:
     return pg.locator(PANEL).inner_text()
 
 
+def _panel_says(pg, words: str) -> str:
+    """The panel (open, or opened with one click) once it says `words`."""
+    if not pg.locator(PANEL).is_visible():
+        _one_click_to_panel(pg)
+    pg.wait_for_function(
+        "(w) => (document.querySelector('[data-testid=\"firstpass-panel\"]') || {})"
+        ".innerText.includes(w)", arg=words, timeout=10000)
+    return pg.locator(PANEL).inner_text()
+
+
 def _segs(live) -> list[dict]:
     return httpx.get(live + "/api/project", timeout=20).json()["segments"]
 
@@ -179,8 +190,15 @@ def test_fresh_bin_offers_run_first_pass_in_the_header_and_both_empty_states(pag
     assert mon.is_visible() and mon.inner_text().strip() == "Run first pass"
     mon.click()
     pg.wait_for_selector(PANEL, state="visible", timeout=5000)
-    # one control, and it is not the screen's blue button (that stays Next's)
-    assert "is-next" not in (pg.locator(BTN).get_attribute("class") or "")
+    # a bin without a cut: the first pass is THE first action, so its header button is
+    # the screen's one blue button and Next's chip yields to it
+    pg.keyboard.press("Escape")
+    pg.evaluate("flowBar.poll()")
+    pg.wait_for_function("window.flowBar && flowBar.yielded()", timeout=10000)
+    pg.wait_for_function(
+        "document.querySelector('[data-testid=\"firstpass-button\"]').classList.contains('is-next')",
+        timeout=10000)
+    assert pg.locator(".is-next").count() == 1
 
 
 RUNNING = {
@@ -218,8 +236,11 @@ def test_mid_index_the_control_reads_the_counts_and_offers_a_stop(page, live):
         status=200, content_type="application/json",
         body=json.dumps({"job": "fp000001", "stage": "index", "cancelling": True}))))
     pg.evaluate("rcFirstPass.refresh()")
-    _label(pg, "First pass · heard 3/12 · looked 0/12")
+    # short enough for the header at 1440 beside Next and a job pill (verdict 3): the
+    # count of clips heard and looked at; the full counts in the hover and the panel
+    _label(pg, "First pass · 0/12")
     assert "%" not in pg.locator(BTN).inner_text()
+    assert "heard 3/12" in (pg.locator(BTN).get_attribute("title") or "")
     stop = pg.locator('[data-testid="firstpass-cancel"]')
     assert stop.is_visible()
     text = _one_click_to_panel(pg)
@@ -234,20 +255,23 @@ def test_mid_index_the_control_reads_the_counts_and_offers_a_stop(page, live):
 
 def test_stop_while_the_cut_is_written_discards_it(page, live, model):
     """A real run held at the model call: × stops it, the proposal it was writing is
-    discarded (never shown), and the control reads as it did before the run."""
+    discarded (never shown), and the control remembers the run: Re-run first pass,
+    the panel saying it stopped and what a re-run does."""
     pg = page
     model.hold = threading.Event()
     _one_click_to_panel(pg)
     pg.locator(RUN).click()
     pg.wait_for_function("(rcFirstPass.state() || {}).stage === 'cut'", timeout=60000)
-    _label(pg, "First pass · writing the cut")
+    _label(pg, "First pass · the cut")
     with pg.expect_response("**/api/firstpass/cancel") as resp:
         pg.locator('[data-testid="firstpass-cancel"]').click()
     assert resp.value.ok
+    s = _state(live)
+    assert s["state"] == "stopped" and s["step"] == "cut", s
     model.hold.set()
-    s = _wait_state(live, ("never-run", "done", "failed"))
-    assert s["state"] == "never-run", s
-    _label(pg, "Run first pass", timeout=20000)
+    _label(pg, "Re-run first pass", timeout=20000)
+    text = _panel_says(pg, "Stopped")
+    assert "writes the cut again" in text, text
     latest = httpx.get(live + "/api/asks/latest", timeout=20).json()
     assert not latest.get("pending"), latest
     assert not pg.locator("#proposal").is_visible()
@@ -301,3 +325,47 @@ def test_run_accept_trim_rerun_keeps_the_trim(page, live):
     pg.evaluate("rcFirstPass.refresh()")
     _label(pg, "Re-run first pass")
     _one_click_to_panel(pg)
+
+
+def _kids(marker: str) -> list[str]:
+    """Live processes whose command line carries `marker` (`pgrep -f`)."""
+    import subprocess
+    r = subprocess.run(["pgrep", "-f", marker], capture_output=True, text=True)
+    return r.stdout.split()
+
+
+def test_stop_during_a_long_step_lands_within_5s_and_kills_its_children(page, live,
+                                                                         monkeypatch):
+    """Verdict 3: Stop took 5 min 25 s, because the index waited for the clip-stage in
+    hand. The look here is a 60 s tool with a child of its own (an ffmpeg would be
+    one): Stop from the header ends the run within 5 s, no child is left, and the
+    control says it stopped, what finished, and what a re-run picks up."""
+    import server
+
+    marker = "59.8765"                        # unique on a shared box
+    monkeypatch.setattr(server, "visual_cmd", lambda only, force: [
+        "bash", "-c", f"sleep {marker} & sleep {marker}; wait"])
+    pg = page
+    _one_click_to_panel(pg)
+    pg.locator(RUN).click()
+    deadline = time.time() + 30
+    while time.time() < deadline and len(_kids(f"sleep {marker}")) < 2:
+        time.sleep(0.1)
+    assert len(_kids(f"sleep {marker}")) >= 2, "the 60 s look is running"
+    _label(pg, "First pass · 0/3")
+    t0 = time.time()
+    pg.locator('[data-testid="firstpass-cancel"]').click()
+    while time.time() - t0 < 5 and _state(live)["state"] == "running":
+        time.sleep(0.1)
+    s = _state(live)
+    assert s["state"] != "running", f"still running {time.time() - t0:.1f} s after Stop"
+    assert time.time() - t0 < 5
+    while time.time() - t0 < 5 and _kids(f"sleep {marker}"):
+        time.sleep(0.1)
+    assert _kids(f"sleep {marker}") == [], "a child of the stopped step outlived the Stop"
+    assert s["state"] == "stopped" and s["label"] == "Re-run first pass"
+    _label(pg, "Re-run first pass", timeout=10000)
+    text = _panel_says(pg, "Stopped")
+    assert "Stopped just now · heard 3/3 · looked 0/3" in text, text
+    assert "Re-run first pass looks at 3 more, then picks, then the cut" in text, text
+    assert pg.locator(RUN).inner_text().strip() == "Re-run first pass"

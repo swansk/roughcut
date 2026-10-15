@@ -258,7 +258,26 @@ def fp(tmp_path, project, monkeypatch, model):
         monkeypatch.setattr(server, "FIRSTPASS_POLL_S", 0.05)
         server.FIRSTPASS.clear()
         yield c
+        _end_jobs(server, model)
     server.FIRSTPASS.clear()
+
+
+def _end_jobs(server, model=None, timeout=30.0) -> None:
+    """No first pass, and no index it left finishing in the background, outlives its
+    test: stop them the way the board's Stop does, and wait for them to end."""
+    if model is not None and model.hold is not None:
+        model.hold.set()
+    for x in list(server.INDEXES.values()):
+        if x["state"] not in server.progress.TERMINAL:
+            x["cancel"] = True
+            sc = server.INDEX_SCOPES.get(x["id"])
+            if sc is not None:
+                sc.kill()
+    deadline = time.time() + timeout
+    while time.time() < deadline and (
+            any(x["state"] not in server.progress.TERMINAL for x in server.INDEXES.values())
+            or any(x["state"] == "running" for x in server.FIRSTPASS.values())):
+        time.sleep(0.05)
 
 
 def _wait(c, until=("done", "stale-after-edits", "failed"), timeout=60.0) -> dict:
@@ -269,6 +288,15 @@ def _wait(c, until=("done", "stale-after-edits", "failed"), timeout=60.0) -> dic
             return s
         time.sleep(0.1)
     raise AssertionError(f"first pass did not reach {until}: {s}")
+
+
+def _wait_indexes(server, timeout=30.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if all(x["state"] == "done" for x in server.INDEXES.values()):
+            return
+        time.sleep(0.05)
+    raise AssertionError([(x["state"], x.get("detail")) for x in server.INDEXES.values()])
 
 
 def _plan(c, job: str) -> dict:
@@ -324,8 +352,9 @@ def test_run_then_hand_trim_then_rerun_keeps_the_trim(fp, model):
     assert _segs(fp) == [], "a proposal, never a write"
     latest = fp.get("/api/asks/latest").json()
     assert latest["record"]["job"] == job and latest["pending"] is True
-    # the index really ran, and its job ended
-    assert all(x["state"] == "done" for x in server.INDEXES.values())
+    # the index really ran, and its job ends (previews and close looks may still be
+    # finishing in the background when the proposal lands)
+    _wait_indexes(server)
 
     # ---- accept (the board saves the plan's shots verbatim): they are the machine's
     assert fp.put("/api/project", json={"segments": plan["segments"],
@@ -431,4 +460,251 @@ def test_a_run_on_a_cut_with_hand_shots_and_no_base_keeps_them(tmp_path, project
         assert s["state"] == "done"
         d = _plan(c, s["proposal"]["job"])["firstpass"]["diff"]
         assert d["counts"]["removed"] == 2 and d["counts"]["locked"] == 0
+        _end_jobs(server, model)
     server.FIRSTPASS.clear()
+
+
+# ------------------------------------------------------------------ verdict 3, punch 5
+
+
+def _run_and_accept(c) -> list[dict]:
+    """A first pass, its proposal accepted the way the board accepts it."""
+    assert c.post("/api/firstpass", json={"mode": "run"}).status_code == 200
+    s = _wait(c)
+    assert s["state"] == "done", s
+    plan = _plan(c, s["proposal"]["job"])
+    assert c.put("/api/project", json={"segments": plan["segments"],
+                                       "story": ""}).status_code == 200
+    c.post("/api/asks/answer", json={"answer": "accept"})
+    return _segs(c)
+
+
+def test_a_proposal_forms_while_the_proxies_never_finish(fp, monkeypatch):
+    """Picks and the cut start once every clip is heard and looked at coarsely: a
+    proxy encode that never ends (5-10 min a clip on Killington under load) is not a
+    prerequisite of the proposal, and the index carries on with it in the background."""
+    import server
+
+    gate = threading.Event()
+    started = []
+
+    def never(src, dest, orient):
+        started.append(Path(src).name)
+        gate.wait(60)
+        raise RuntimeError("released by the test")
+
+    monkeypatch.setattr(server, "build_proxy", never)
+    try:
+        assert fp.post("/api/firstpass", json={"mode": "run"}).status_code == 200
+        s = _wait(fp, timeout=60)
+        assert s["state"] == "done", s
+        assert s["proposal"]["pending"] is True and s["produced"]["cut"]["shots"] == 2
+        assert started, "the proxy stage was running while the cut was made"
+        assert s["produced"]["index"]["proxied"] == 0
+        # the index is still going, in the background, on the previews
+        live = [x for x in server.INDEXES.values()
+                if x["state"] not in server.progress.TERMINAL]
+        assert live and live[0].get("coarse_ready") is True
+        j = server.load_journal()
+        assert all(j.state(c, "look") == "done" for c in j.clips)
+        assert any(j.state(c, "proxy") == "running" for c in j.clips)
+        # the close look reads the proxy: it waits for it, never skips for want of it
+        assert all(j.state(c, "close") == "queued" for c in j.clips)
+    finally:
+        gate.set()
+        _end_jobs(server)
+
+
+def test_a_shot_only_graded_by_hand_is_kept_by_a_rerun(fp):
+    """The journey: a shot whose only change was its grade (a hand balance, or a
+    Lumetri value in Effect Controls) is the editor's own — "graded" — and a re-run
+    keeps it exactly, grade and all."""
+    segs = _run_and_accept(fp)
+    assert fp.get("/api/firstpass").json()["manual_edits"] == []
+    sid = segs[1]["id"]
+    colour = {"mode": "auto", "shots": {sid: {"balance": {"gain": [1.05, 1.0, 0.95],
+                                                           "exposure": 1.1}}}}
+    assert fp.put("/api/project", json={"colour": colour}).status_code == 200
+    s = fp.get("/api/firstpass").json()
+    assert [(m["id"], m["how"], m["words"]) for m in s["manual_edits"]] == [
+        (sid, ["grade"], "graded")]
+    assert s["state"] == "stale-after-edits"
+    assert s["would"]["locked"] == [sid]
+    # a Lumetri value set in Effect Controls is a grade too
+    lum = [dict(segs[0], controls={"contrast": 12.0}), segs[1]]
+    assert fp.put("/api/project", json={"segments": lum, "story": ""}).status_code == 200
+    how = {m["id"]: m["how"] for m in fp.get("/api/firstpass").json()["manual_edits"]}
+    assert how == {segs[0]["id"]: ["grade"], sid: ["grade"]}
+
+    assert fp.post("/api/firstpass", json={"mode": "rerun"}).status_code == 200
+    s = _wait(fp)
+    assert s["state"] == "done", s
+    plan = _plan(fp, s["proposal"]["job"])
+    kept = {x["id"]: x for x in plan["segments"] if x.get("id") in how}
+    for want in lum:
+        got = kept[want["id"]]
+        assert (got["clip"], got["in"], got["out"]) == (want["clip"], want["in"], want["out"])
+    assert kept[segs[0]["id"]]["controls"] == {"contrast": 12.0}
+    rows = {r.get("id"): r for r in plan["firstpass"]["diff"]["shots"]}
+    assert rows[sid]["locked"] and rows[sid]["hand"] == ["grade"]
+    # the grade itself is keyed by the shot's id, which the re-run kept
+    assert fp.get("/api/project").json()["colour"]["shots"][sid]["balance"]["exposure"] == 1.1
+
+
+def test_proposal_ranges_land_on_the_sequence_frame_grid(fp):
+    """The journey: edit points between frames made the export VFR. Every range a
+    proposal makes is a whole number of frames at the sequence rate."""
+    assert fp.post("/api/firstpass", json={"mode": "run"}).status_code == 200
+    s = _wait(fp)
+    plan = _plan(fp, s["proposal"]["job"])
+    fps = revise.exact_rate(fp.get("/api/project").json()["fps"])
+    assert fps and fps > 1
+    for x in plan["segments"]:
+        for t in (x["in"], x["out"]):
+            assert abs(t * fps - round(t * fps)) < 0.01, (t, fps, x)
+        assert x["out"] - x["in"] >= 1 / fps - 1e-6
+    # the pure rule: a copied range is left exactly as it is; a new one snaps
+    cur = [{"id": "g1", "clip": "A.MP4", "in": 1.2345, "out": 3.21}]
+    out = revise.to_sequence({"segments": [dict(cur[0]),
+                                           {"clip": "B.MP4", "in": 0.51, "out": 0.512}]},
+                             cur, 59.94)["segments"]
+    assert (out[0]["in"], out[0]["out"]) == (1.2345, 3.21)
+    r = 60000 / 1001
+    assert out[1]["in"] == round(round(0.51 * r) / r, 4)
+    assert round((out[1]["out"] - out[1]["in"]) * r) == 1, "never shorter than a frame"
+
+
+def test_effect_controls_survive_a_rerun(fp):
+    """The model never sees `controls`, so a re-run's plan carried none: every kept
+    shot lost its Motion / Opacity / Volume on Accept. They come over exactly."""
+    segs = _run_and_accept(fp)
+    ctl = [{"opacity": 40.0, "position": [0.4, 0.55]}, {"volume_db": -6.0, "scale": 120.0}]
+    with_ctl = [dict(s, controls=c) for s, c in zip(segs, ctl)]
+    assert fp.put("/api/project", json={"segments": with_ctl, "story": ""}).status_code == 200
+    assert fp.get("/api/firstpass").json()["manual_edits"] == [], \
+        "opacity, motion and volume are not hand edits of the cut"
+    assert fp.post("/api/firstpass", json={"mode": "rerun"}).status_code == 200
+    s = _wait(fp)
+    assert s["state"] == "done", s
+    plan = _plan(fp, s["proposal"]["job"])
+    by = {x.get("id"): x for x in plan["segments"]}
+    for want in with_ctl:
+        assert want["id"] in by, (want["id"], plan["segments"])
+        assert by[want["id"]]["controls"] == want["controls"]
+    # and accepting it keeps them on the cut
+    fp.put("/api/project", json={"segments": plan["segments"], "story": ""})
+    saved = {x["id"]: x.get("controls") for x in _segs(fp)}
+    assert all(saved[w["id"]] == w["controls"] for w in with_ctl)
+
+
+def test_a_stopped_run_is_a_state_with_what_finished_and_what_resumes(fp, monkeypatch):
+    """Verdict 3: after Stop the panel said "Not run on this bin yet". A stopped run
+    reads "stopped", names what finished and what a re-run picks up, and the label is
+    Re-run first pass."""
+    import server
+
+    gate = threading.Event()
+    stub_look = server.visual_cmd
+
+    def slow_look(only, force):
+        return [sys.executable, "-c", "import time; time.sleep(30)"]
+
+    monkeypatch.setattr(server, "visual_cmd", slow_look)
+    try:
+        assert fp.post("/api/firstpass", json={"mode": "run"}).status_code == 200
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            j = server.load_journal() if server.journal_path().exists() else None
+            if j and any(j.state(c, "look") == "running" for c in j.clips):
+                break
+            time.sleep(0.05)
+        t0 = time.time()
+        r = fp.post("/api/firstpass/cancel")
+        assert r.status_code == 200 and r.json()["state"] == "stopped"
+        s = fp.get("/api/firstpass").json()
+        assert time.time() - t0 < 5
+        assert s["state"] == "stopped" and s["label"] == "Re-run first pass", s
+        assert s["step"] == "index" and s["finished"] == "heard 3/3 · looked 0/3"
+        assert s["resumes"] == "looks at 3 more, then picks, then the cut"
+        assert s["when"] and abs(s["when"] - time.time()) < 10
+        r = fp.post("/api/firstpass", json={})         # a re-run straight away
+        assert r.status_code == 200, r.text
+        assert fp.post("/api/firstpass/cancel").status_code == 200
+        _end_jobs(server)
+        # the killed looks are queued again, not failed: three Stops never park a clip
+        j = server.load_journal()
+        for c in j.clips:
+            st = j.clips[c]["stages"]["look"]
+            assert st["state"] == "queued" and st["attempts"] == 0, (c, st)
+        # still stopped after the threads unwound, and the record survives
+        s = fp.get("/api/firstpass").json()
+        assert s["state"] == "stopped" and s["last"]["state"] == "stopped"
+        assert s["last"]["job"] == r.json()["job"], "the newest run's record, not the older"
+        # a re-run after the Stop runs a fresh index (the stopped one is not joined)
+        monkeypatch.setattr(server, "visual_cmd", stub_look)
+        assert fp.post("/api/firstpass", json={}).status_code == 200
+        s = _wait(fp)
+        assert s["state"] == "done", s
+        assert s["produced"]["index"]["looked"] == 3
+    finally:
+        gate.set()
+        _end_jobs(server)
+
+
+def test_resume_words():
+    c = {"clips": 12, "listened": 12, "looked": 1, "look_need": 12}
+    assert firstpass.finished_words(c) == "heard 12/12 · looked 1/12"
+    assert firstpass.resume_words(c) == "looks at 11 more, then picks, then the cut"
+    assert firstpass.resume_words({**c, "listened": 3}) == \
+        "hears 9 more, looks at 11 more, then picks, then the cut"
+    assert firstpass.resume_words({**c, "looked": 12}, "cut").startswith("writes the cut again")
+
+
+@pytest.mark.parametrize("order", ["save-then-answer", "answer-then-save"])
+def test_a_partial_accept_records_a_base_and_a_rerun_keeps_only_the_hand_edits(fp, order):
+    """PICKS (verdict 3 punch 7): the editor can take some of a proposal's shots. A
+    partial Accept is not the plan verbatim, so no base was recorded and a later
+    re-run counted the accepted AI shots as the editor's own. Now the accepted shots
+    are the machine's, the rest keep the provenance they had: 2 of 5 accepted, and
+    the re-run's keep list is exactly the prior hand edits."""
+    import server
+
+    a, b = _run_and_accept(fp)
+    # hand edits: A trimmed, three shots added by hand
+    a_t = dict(a, out=round(a["out"] - 0.25, 2))
+    adds = [{"id": f"gh{i}", "clip": "CLIP_C.MP4", "in": 0.5 + i, "out": 1.0 + i,
+             "why": "by hand"} for i in range(3)]
+    cut = [a_t, b] + adds
+    assert fp.put("/api/project", json={"segments": cut, "story": ""}).status_code == 200
+    prior = {m["id"]: m["how"] for m in fp.get("/api/firstpass").json()["manual_edits"]}
+    assert prior == {a_t["id"]: ["trim"], "gh0": ["add"], "gh1": ["add"], "gh2": ["add"]}
+
+    # an Ask proposal of 5 shots: A kept (status kept), B, gh0 and gh1 changed, one new
+    segs = _segs(fp)
+    plan_segs = [dict(segs[0]),
+                 dict(segs[1], **{"in": 0.3, "out": 1.9}),
+                 dict(segs[2], out=1.3),
+                 dict(segs[3], out=2.3),
+                 {"clip": "CLIP_A.MP4", "in": 3.0, "out": 4.0, "why": "new"}]
+    plan = {"segments": plan_segs, "notes": "five", "diff": revise.shot_diff(segs, plan_segs)}
+    rec = {"job": "partial1", "created": time.time(), "note": "", "story": "", "plan": plan}
+    time.sleep(0.05)
+    (server.STATE["asks"] / "partial1.json").write_text(json.dumps(rec), encoding="utf-8")
+    # the editor accepts B's change and the new shot; rejects gh0's and gh1's changes
+    new_shot = dict(plan_segs[4], id="gnew")
+    saved = [dict(segs[0]), plan_segs[1], dict(segs[2]), dict(segs[3]), dict(segs[4]),
+             new_shot]
+    answer = {"answer": "accept", "partial": {"accepted": 2, "of": 5, "rejected": [2, 3],
+                                              "kept": []}}
+    if order == "save-then-answer":
+        assert fp.put("/api/project", json={"segments": saved, "story": ""}).status_code == 200
+        assert fp.post("/api/asks/answer", json=answer).status_code == 200
+    else:
+        assert fp.post("/api/asks/answer", json=answer).status_code == 200
+        assert fp.put("/api/project", json={"segments": saved, "story": ""}).status_code == 200
+    edl = json.loads(server.STATE["edl"].read_text(encoding="utf-8"))
+    assert firstpass.bases(edl)[0]["job"] == "partial1", "a base for the partial accept"
+    s = fp.get("/api/firstpass").json()
+    assert {m["id"]: m["how"] for m in s["manual_edits"]} == prior
+    assert sorted(s["would"]["locked"]) == sorted(prior), s["would"]["locked"]
+    assert b["id"] not in s["would"]["locked"] and "gnew" not in s["would"]["locked"]
