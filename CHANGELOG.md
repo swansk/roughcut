@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Added
+- **Redesign verdict 6: FAIL, everything 8-9 but 6:7 and 10:6** (`judge/verdict-6.md` on `ee3f15e`; 2, 5, 12 at 9). Real 12-clip first pass 13.3 min at load 21. Blockers: K2, and an accepted cut lost once on a reload (save stalled, no beforeunload/keepalive). The judge's K2 read: "a harsh Premiere editor would no longer call this a toy, but would not choose it over Premiere yet". Rulings: load-aware burners honest but a skip leaving the gate green is lenient; Playback Resolution honest (belongs in the rubric log, and should be a visible setting).
+
 ### Changed
 - **The audio meters draw their scale once.** meters.js set a canvas font and drew the dB labels every frame, which made Chromium resolve the font through style: a forced style recalc on every played frame (LUTCACHE's trace: 3-10 ms per frame at load 20, the next-largest main-thread cost after the grade, which now draws in a worker). The background, ticks and labels go into a cached canvas rebuilt only on a size, orientation or pixel-ratio change; each frame copies it and draws the bars. test_timeline_audio + workspace + program_a3: 43 passed.
 

@@ -49,6 +49,10 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-16 02:30: **VERDICT 6 = FAIL** (rev `ee3f15e`: all 8-9 except 6:7, 10:6; K2 read "no longer a toy, wouldn't choose over
+  Premiere yet"). Already fixed since: punch 5 (KEYANCHOR), LUT caching (LUTCACHE). **Wave 8** from this commit: SAVESAFE (1),
+  PLAY3 (2), REVIEW3 (4), RENDER3 (7 + 8), SMALL (9 + 10). Held: YIELD (3) until RANGEPROXY merges (same server code);
+  TRANSITIONS (6) next wave (it shares the player with PLAY3).
 - 2026-10-16 01:30: KEYANCHOR `524a4a5` (+ lead `c7a83b7` trim keys via setRange), LUTCACHE `fa7624c` merged (the LUT hypothesis
   REFUTED: upload 0.1 ms; the real cost was the WebGL canvas draw + headless commit read-back, now in a worker; and a wrong
   LUT drawn 70-200 ms after a cut fixed by prefetch) + lead: meters draw their scale once. Perf at load 16-23 (3x cores):
