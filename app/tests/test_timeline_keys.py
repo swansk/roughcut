@@ -27,6 +27,15 @@ playwright_api = pytest.importorskip("playwright.sync_api",
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 
+def tc(seconds: float, fps: float = 23.976) -> str:
+    """Film seconds as the timeline writes them: HH:MM:SS:FF, non-drop at the nominal
+    rate, rounded to the nearest frame (timeline.js `tl.tc`)."""
+    n = round(seconds * fps)
+    nominal = round(fps)
+    ff, n = n % nominal, n // nominal
+    return f"{n // 3600:02d}:{n // 60 % 60:02d}:{n % 60:02d}:{ff:02d}"
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -214,20 +223,23 @@ def test_down_and_up_walk_the_cuts_and_home_end_the_film(page):
 
 
 def test_arrows_step_the_playhead_and_leave_the_selection_alone(page):
+    """A frame at the sequence rate (23.976 unless the project says), ⇧ five — Premiere's
+    steps (REDESIGN dimension 5; it was 1/30 s and ⇧ a second)."""
     a, b = ids(page)
+    f = 1 / 23.976
     page.evaluate(f"tl.select(['{a}'])")
     page.evaluate("tl.seek(1.0)")
     page.keyboard.press("ArrowRight")
-    assert page.evaluate("tl.state.playhead") == pytest.approx(1.0 + 1 / 30, abs=0.002)
+    assert page.evaluate("tl.state.playhead") == pytest.approx(1.0 + f, abs=0.002)
     page.keyboard.press("Shift+ArrowRight")
-    assert page.evaluate("tl.state.playhead") == pytest.approx(2.0 + 1 / 30, abs=0.002)
+    assert page.evaluate("tl.state.playhead") == pytest.approx(1.0 + 6 * f, abs=0.002)
     page.keyboard.press("ArrowLeft")
-    assert page.evaluate("tl.state.playhead") == pytest.approx(2.0, abs=0.002)
+    assert page.evaluate("tl.state.playhead") == pytest.approx(1.0 + 5 * f, abs=0.002)
     page.keyboard.press("Shift+ArrowLeft")
     assert page.evaluate("tl.state.playhead") == pytest.approx(1.0, abs=0.002)
     assert page.evaluate("[...tl.state.sel]") == [a], "the arrows move the playhead only"
     assert page.evaluate("player.idx") == 0 and not page.evaluate("player.playing")
-    page.keyboard.press("Shift+ArrowLeft")
+    page.evaluate("tl.seek(0.1)")
     page.keyboard.press("Shift+ArrowLeft")
     assert page.evaluate("tl.state.playhead") == 0, "clamped at the top"
 
@@ -276,7 +288,7 @@ def test_q_and_w_trim_the_selected_shot_to_the_playhead(page):
     page.keyboard.press("w")
     assert page.evaluate("[segs[0].in, segs[0].out]") == [1.5, 2.5]
     assert page.evaluate("tl.state.playhead") == pytest.approx(1.0, abs=0.01)
-    assert page.locator("#tl .tl-total").inner_text() == "0:03.0"
+    assert page.locator("#tl .tl-total").inner_text() == tc(3.0)
     # the playhead outside the selected shot: a toast, not a trim
     page.evaluate("tl.seek(2.5)")
     page.keyboard.press("q")
@@ -418,25 +430,25 @@ def test_escape_clears_the_selection(page):
 
 def test_i_o_and_enter_on_a_playing_clip_insert_the_marked_range(page):
     a, b = ids(page)
-    # playing the cut: I says where marks go; O is still the switcher's project picker,
-    # and Esc still closes that picker rather than clearing the selection
+    # no clip open: I / O are Premiere's sequence marks at the playhead (REDESIGN
+    # dimension 5) — O no longer opens the switcher's picker on the board
+    page.evaluate("tl.seek(1.0)")
     page.keyboard.press("i")
-    page.wait_for_function(
-        "document.querySelector('#toast').textContent.includes('mark on a clip')", timeout=3000)
+    assert page.evaluate("tl.state.seqIn") == pytest.approx(1.0, abs=0.03)
     assert page.locator("#tlMarks").is_hidden()
     page.evaluate(f"tl.select(['{a}'])")
+    page.evaluate("tl.seek(3.0)")
     page.keyboard.press("o")
-    page.wait_for_function("!document.querySelector('#picker').hidden", timeout=5000)
+    assert page.evaluate("tl.state.seqOut") == pytest.approx(3.0, abs=0.03)
+    assert page.locator("#picker").count() == 0 or page.locator("#picker").is_hidden()
     assert page.evaluate("[tlKeys.marks.in, tlKeys.marks.out]") == [None, None]
-    page.evaluate("document.activeElement && document.activeElement.blur()")
-    page.keyboard.press("Escape")
-    page.wait_for_function("document.querySelector('#picker').hidden", timeout=5000)
-    assert page.evaluate("[...tl.state.sel]") == [a], "Esc went to the picker, not the selection"
+    page.keyboard.press("Alt+i")
+    assert page.evaluate("tl.state.seqIn") is None
 
     page.locator("#findQ").fill("goodbye")
     page.locator("#findQ").press("Enter")      # Enter finds (the Find button went, M16)
     page.wait_for_selector("#findResults .cand", timeout=15000)
-    page.locator("#findResults .cand").first.click()
+    page.locator("#findResults .cand").first.click()     # the source panel was clicked last
     page.wait_for_selector("#findPlayer:visible")
     page.wait_for_function(
         "document.querySelector('#findVideo').readyState >= 1", timeout=15000)
@@ -485,8 +497,10 @@ def test_i_o_and_enter_on_a_playing_clip_insert_the_marked_range(page):
 def test_the_keys_panel_lists_the_timeline_keys_from_the_table(page):
     keys = page.evaluate(
         "[...document.querySelectorAll('#tlKeys kbd')].map(k => k.textContent)")
+    # Ctrl off a Mac (the suite's Chromium is Linux): ⌘ only where it is the key
     for k in ["J", "K", "L", "↑", "↓", "Home", "End", "←", "→", "I", "O", "↵", "C", "Q", "W",
-              "X", "⌘Z", "⌘⇧Z", "⌘A", "⌘D", "Esc", ",", ".", "S", "+", "−", "\\", "?"]:
+              "X", "Ctrl+Z", "Ctrl+Shift+Z", "Ctrl+A", "Ctrl+D", "Esc", ",", ".", "S", "+", "−",
+              "\\", "?"]:
         assert k in keys, f"{k} missing from the map"
     text = page.locator("#tlKeys").inner_text()
     assert "shuttle" in text and "razor" in text and "magnet" in text

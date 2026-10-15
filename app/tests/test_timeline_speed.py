@@ -32,6 +32,15 @@ playwright_api = pytest.importorskip("playwright.sync_api",
                                      reason="playwright not installed")
 from playwright.sync_api import sync_playwright  # noqa: E402
 
+
+def tc(seconds: float, fps: float = 23.976) -> str:
+    """Film seconds as the timeline writes them: HH:MM:SS:FF, non-drop at the nominal
+    rate, rounded to the nearest frame (timeline.js `tl.tc`)."""
+    n = round(seconds * fps)
+    nominal = round(fps)
+    ff, n = n % nominal, n // nominal
+    return f"{n // 3600:02d}:{n // 60 % 60:02d}:{n % 60:02d}:{ff:02d}"
+
 GEN = "gen_black_test.mp4"
 
 
@@ -142,12 +151,13 @@ def test_a_half_speed_shot_is_twice_as_long_on_the_ruler_and_in_the_total(page):
     assert page.evaluate("tl.dur(segs[1])") == 2.0
     assert page.evaluate("tl.speedOf(segs[0])") == 0.5
     assert page.evaluate("tl.total()") == 6.0
-    assert page.locator("#tl .tl-total").inner_text() == "0:06.0"
+    assert page.locator("#tl .tl-total").inner_text() == tc(6.0)
     assert page.locator("#total").inner_text() == "0:06.0"
     assert page.locator("#posTotal").inner_text() == "0:06.0"
     labels = page.evaluate(
         "[...document.querySelectorAll('#tl .tl-ruler .major label')].map(l => l.textContent)")
-    assert labels[:7] == ["0:00", "0:01", "0:02", "0:03", "0:04", "0:05", "0:06"], labels
+    # timecode at the sequence rate (REDESIGN dimension 5); the step follows the zoom
+    assert labels[0] == "00:00:00:00" and "00:00:06:00" in labels, labels
     assert left(page, "#tl .tl-end") == pytest.approx(x_of(page, 6.0), abs=0.5)
     assert page.evaluate("tl.filmStart(segs[1].id)") == 4.0
     zoom = page.evaluate("tl.state.zoom")
@@ -167,7 +177,7 @@ def test_a_half_speed_shot_is_twice_as_long_on_the_ruler_and_in_the_total(page):
     page.evaluate(f"tl.split('{first}', 2.0)")
     assert page.evaluate("segs.map(s => [s.in, s.out, s.speed || 1])") == [
         [1.0, 2.0, 0.5], [2.0, 3.0, 0.5], [0.0, 2.0, 1]]
-    assert page.locator("#tl .tl-total").inner_text() == "0:06.0"
+    assert page.locator("#tl .tl-total").inner_text() == tc(6.0)
 
 
 def test_the_lanes_and_the_keys_sum_film_time_at_the_rate(page):
@@ -186,7 +196,7 @@ def test_the_lanes_and_the_keys_sum_film_time_at_the_rate(page):
     page.evaluate("tl.seek(3.0)")
     page.keyboard.press("q")
     assert page.evaluate("segs[0].in") == 2.5
-    assert page.locator("#tl .tl-total").inner_text() == "0:03.0"     # 0.5 s of clip left = 1 s of film
+    assert page.locator("#tl .tl-total").inner_text() == tc(3.0)     # 0.5 s of clip left = 1 s of film
     page.keyboard.press("Control+z")
     assert page.evaluate("segs[0].in") == 1.0
     a1 = "#tl .tl-xlane[data-lane=A1]"
@@ -219,7 +229,7 @@ def test_a_trim_drag_on_a_slow_shot_moves_the_edge_at_the_rate(page):
     page.mouse.move(x0 - 1.0 * zoom, y0, steps=6)          # one film second earlier
     page.mouse.up()
     assert page.evaluate("segs[1].out") == pytest.approx(2.5, abs=0.02)   # 3.0 − 1 s × 0.5
-    assert page.locator("#tl .tl-total").inner_text() == "0:05.0"
+    assert page.locator("#tl .tl-total").inner_text() == tc(5.0)
     zoom_after = page.evaluate("tl.state.zoom")            # the foundation refits after the change
     assert width(page, "#tl .blk", 1) == pytest.approx(3.0 * zoom_after, abs=1.5)
     assert page.locator("#undo").get_attribute("title").startswith("undo: trim")
@@ -282,7 +292,7 @@ def test_the_inspectors_speed_chip_writes_speed_as_one_undo_entry_and_the_save_c
     assert sel.input_value() == "0.5"
     assert page.locator("#inspector .sname").inner_text() == "Shot 2 · 4.0 s"
     assert page.locator("#total").inner_text() == "0:08.0"
-    assert page.locator("#tl .tl-total").inner_text() == "0:08.0"
+    assert page.locator("#tl .tl-total").inner_text() == tc(8.0)
     assert page.locator("#tl .blk").nth(1).locator(".speed:not([hidden])").inner_text() == "0.5×"
     assert page.locator("#undo").get_attribute("title").startswith("undo: speed")
     assert page.evaluate("tl.forSave().map(s => s.speed)") == [0.5, 0.5]
@@ -348,7 +358,7 @@ def test_a_generated_clip_draws_a_block_that_says_what_it_is_and_plays(page, pro
     assert blk.locator(".warn:not([hidden])").count() == 0
     assert blk.locator("img.poster").get_attribute("src") == "/media/poster/gen_black_test.jpg?t=0.00"
     assert "black · 2.0 s" in blk.get_attribute("title")
-    assert page.locator("#tl .tl-total").inner_text() == "0:08.0"
+    assert page.locator("#tl .tl-total").inner_text() == tc(8.0)
     # the poster route frames the generated file like any proxy
     status = page.evaluate("fetch('/media/poster/gen_black_test.jpg?t=0.00').then(r => r.status)")
     assert status == 200

@@ -13,6 +13,7 @@
  *             that is not on a handle, not within 8 px of an edge and has no alt key is a
  *             move (the trim lane owns edges and alt-drag). A drop line shows where the
  *             shot(s) land, snapping to cut points; under 4 px it is the foundation's click.
+ *             Not with the razor or the slip tool (`tl.state.tool`): those cut and slip.
  *   ghost     while a proposal is pending (the diff panel is up): the proposed timeline
  *             under V1 aligned by ITS film time — unchanged shots dim, added ones green,
  *             moved ones with an arrow from where they are now, removed ones struck out on
@@ -538,6 +539,8 @@
   /* ------------------------------------------------------------ the body drag on V1 */
   function onDown(e) {
     if (e.button !== 0 || e.altKey || drag) return;
+    // the razor cuts on a click and the slip tool slips: neither moves the shot
+    if (tl.state.tool === 'razor' || tl.state.tool === 'slip') return;
     const b = e.target.closest('.blk');
     if (!b || e.target.closest('[class*="handle"]')) return;
     const r = b.getBoundingClientRect();
