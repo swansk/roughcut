@@ -1715,15 +1715,18 @@ const HOLD_MAX_MS = 1500;
 function showWhenReady(g, ok, then) {
   const v = liveVideo();
   const t0 = performance.now();
-  // nothing on screen to hold (the rest poster is up): live at once, as before
-  if (!player.vids.some((b) => b.classList.contains('live'))) showLive();
+  const token = player.hold = {};     // the newest call owns the screen
+  // Only a change of buffer waits. The same buffer (or nothing up yet, the rest poster)
+  // goes live at once, as before: the grade takes the new shot's LUT before its frame.
+  const swap = player.vids.some((b) => b !== v && b.classList.contains('live'));
+  if (!swap) showLive();
   const step = () => {
-    if (g !== player.gen) {           // paused or re-cued meanwhile: the screen follows
-      if (!liveVideo().classList.contains('live') && !liveVideo().error) showLive();
+    if (g !== player.gen) {           // paused meanwhile: the screen follows; re-cued: its call does
+      if (swap && player.hold === token && !liveVideo().error) showLive();
       return;
     }
     if (v.error || ok(v) || performance.now() - t0 > HOLD_MAX_MS) {
-      if (!v.classList.contains('live') || player.vids.some((b) => b !== v && b.classList.contains('live'))) showLive();
+      if (swap) showLive();
       if (then) then();
       return;
     }
