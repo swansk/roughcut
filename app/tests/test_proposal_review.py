@@ -332,3 +332,63 @@ def test_a_revision_puts_the_notes_flags_under_things_to_check(browser, live_ser
         assert pg.errors == []
     finally:
         pg.close()
+
+
+def test_rejected_ranges_are_said_in_the_panel_and_the_proposal(browser, live_server, project):
+    """Lane RERUN remembers what the editor rejected. The first-pass panel says a run will
+    not propose those ranges again; a re-run's proposal names what it left out under
+    Things to check and greys it at the end of the table ("you rejected this"), and a
+    range it still proposed (nothing else to propose) is flagged on its row's item."""
+    Path(project["edl"]).write_text(json.dumps({
+        "variant": "T", "title": "test cut", "orient": "none", "story": "",
+        "target_s": [5, 20], "segments": TWO,
+        "provenance": {"rejected": [{"clip": "CLIP_C.MP4", "in": 0.5, "out": 4.0,
+                                     "at": time.time(), "job": "j0"}]}}, indent=1),
+        encoding="utf-8")
+    pg = _open(browser, live_server)
+    try:
+        pg.wait_for_selector("#tl .blk")
+        pg.locator('[data-testid="firstpass-button"]').click()
+        line = pg.locator('[data-testid="firstpass-rejected"]')
+        line.wait_for(state="visible", timeout=10000)
+        assert line.inner_text() == "Won't re-propose 1 range you rejected"
+        assert "CLIP_C 0:00.5–0:04.0" in line.get_attribute("title")
+        pg.keyboard.press("Escape")
+
+        ids = pg.evaluate("segs.map(s => s.id)")
+        left = [{"clip": "CLIP_C.MP4", "in": 0.5, "out": 4.0, "action": "dropped",
+                 "rejected": {"in": 0.5, "out": 4.0}}]
+        plan = {
+            "segments": [{"id": ids[0], "clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0, "why": "first"},
+                         {"id": ids[1], "clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0, "why": "second"}],
+            "notes": "Kept both shots.\n\nLeft out: CLIP_C 0:00.5–0:04.0 — you rejected this shot before, so it stays out.",
+            "notes_check": {"ok": True, "flags": [], "checked": 0, "rejected": left},
+            "firstpass": {"rejected": left, "diff": {"shots": [
+                {"pos": 1, "status": "kept", "locked": True}, {"pos": 2, "status": "kept", "locked": True}]}},
+        }
+        pg.evaluate("(p) => rcShowProposal(p)", plan)
+        pg.wait_for_selector("#proposal", state="visible", timeout=5000)
+        items = pg.locator("#proposalChecks li").all_inner_texts()
+        assert items == ["CLIP_C 0:00.5–0:04.0 — you rejected this shot before: left out"], items
+        assert "Left out:" not in pg.locator("#proposalNotes").inner_text()
+        assert pg.locator("#proposalDiff tr.pshot").count() == 2
+        rej = pg.locator("#proposalDiff tr.prej")
+        assert rej.count() == 1 and "you rejected this" in rej.inner_text() and "CLIP_C" in rej.inner_text()
+        _shot(pg, "review-rejected-1440")
+        pg.locator("#rejectProposal").click()
+
+        # nothing else to propose: the server keeps it, flagged — the item points at its row
+        flagged = [{**left[0], "action": "flagged"}]
+        plan2 = {"segments": [{"clip": "CLIP_C.MP4", "in": 0.5, "out": 4.0, "why": "the ride"}],
+                 "notes": "Only the ride.", "firstpass": {"rejected": flagged}}
+        pg.evaluate("(p) => rcShowProposal(p)", plan2)
+        pg.wait_for_selector("#proposal", state="visible", timeout=5000)
+        li = pg.locator("#proposalChecks li")
+        assert li.count() == 1 and "proposed again" in li.inner_text()
+        assert li.get_attribute("data-k") == "0"
+        assert pg.locator("#proposalDiff tr.prej").count() == 0
+        pg.locator("#rejectProposal").click()
+        assert pg.errors == []
+    finally:
+        _seed(project, TWO)
+        pg.close()

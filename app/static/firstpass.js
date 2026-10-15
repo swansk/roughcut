@@ -117,6 +117,16 @@
     return `Keeps ${plural(keep.length, 'shot')} you edited by hand · may replace ${rep.length}`;
   }
 
+  /* Verdict 4: a re-run brought back a shot the editor had rejected. What it will not
+   * propose again, in one line; the ranges on its hover. */
+  function rejectedLine(w) {
+    const rej = (w && w.rejected) || [];
+    if (!rej.length) return '';
+    const list = rej.map((r) => `${stem(r.clip)} ${clockS(r.in)}–${clockS(r.out)}`).join('\n');
+    return `<div class="fp-keep fp-rejected" data-testid="firstpass-rejected" title="${esc(list)}">`
+      + `Won't re-propose ${esc(plural(rej.length, 'range'))} you rejected</div>`;
+  }
+
   function shotLine(r) {
     return `shot ${r.pos} · ${stem(r.clip)} ${clockS(r.in)}–${clockS(r.out)}`
       + (r.words ? ` · ${r.words}` : '');
@@ -245,6 +255,7 @@
       + `<ol class="fp-steps">${steps}</ol>`
       + (w.error ? `<div class="fp-bad">${esc(w.error)}</div>` : '')
       + `<div class="fp-keep" data-testid="firstpass-keep">${esc(keepLine(w))}</div>${kept}${toggleKeep}`
+      + rejectedLine(w)
       + (FP.err ? `<div class="fp-bad">${esc(FP.err)}</div>` : '')
       + `<div class="fp-foot">${foot}</div>`;
   }

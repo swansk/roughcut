@@ -2590,6 +2590,8 @@ def firstpass_plan(mode: str | None = None, keep=None, *, facts: dict | None = N
     ]
     return {"mode": mode, "steps": steps, "keep": keep_rows, "replace": replace_rows,
             "locked": locked, "cost": fpmod.cost_words(ix_usd + cut_usd),
+            # verdict 4: the ranges the editor rejected — a run will not propose them again
+            "rejected": [{k: r.get(k) for k in ("clip", "in", "out")} for r in fpmod.rejections(edl)],
             "produces": "a proposed rough cut you accept, discard or adjust"}
 
 

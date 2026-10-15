@@ -2820,6 +2820,7 @@ const PROPOSAL_CSS = `
 #proposalDiff .ptable tr.pshot.rejected td { opacity: .45; }
 #proposalDiff .ptable tr.pshot.rejected td.pc, #proposalDiff .ptable tr.pshot.rejected td.tc { text-decoration: line-through; }
 #proposalDiff .ptable tr.pgone td { color: var(--bad); }
+#proposalDiff .ptable tr.prej td { color: var(--faint); font-style: italic; }
 #proposalDiff .ptable .pv { display: inline-block; width: 18px; height: 17px; line-height: 15px; text-align: center;
   border-radius: 3px; border: 1px solid var(--good); color: var(--good); font-weight: 700; cursor: pointer; user-select: none; }
 #proposalDiff .ptable .pv[aria-checked=false] { border-color: var(--bad); color: var(--bad); }
@@ -2889,8 +2890,29 @@ function flagChecks(plan) {
   return out;
 }
 
+/* The ranges the editor rejected before that this proposal touched (lane RERUN:
+ * `firstpass.rejected`, also `notes_check.rejected`): left out, kept as it is, or — when
+ * nothing else was proposed — still in, flagged. */
+function rejectedOf(plan) {
+  const fp = (plan.firstpass && plan.firstpass.rejected) || (plan.notes_check && plan.notes_check.rejected) || [];
+  return Array.isArray(fp) ? fp.filter((r) => r && r.clip) : [];
+}
+
+function rejectedChecks(plan) {
+  return rejectedOf(plan).map((r) => {
+    const what = `${stem(r.clip)} ${fmt(r.in)}–${fmt(r.out)}`;
+    if (r.action === 'flagged') {
+      const k = plan.segments.findIndex((p) => p.clip === r.clip && Math.abs(p.in - r.in) < 0.02 && Math.abs(p.out - r.out) < 0.02);
+      return { text: `${what} — you rejected this shot before, and it is proposed again`, k: k >= 0 ? k : null };
+    }
+    return { text: r.action === 'kept as it is'
+      ? `${what} — you rejected this change before: left out, the shot stays as it is`
+      : `${what} — you rejected this shot before: left out`, k: null };
+  });
+}
+
 function proposalChecksHtml(plan, notes) {
-  const flags = flagChecks(plan);
+  const flags = flagChecks(plan).concat(rejectedChecks(plan));
   const asks = notesChecks(notes);
   if (!flags.length && !asks.length) return '';
   const li = (cls, c) => `<li class="${cls}"${c.k != null ? ` data-k="${c.k}"` : ''}>${escapeHtml(c.text)}</li>`;
@@ -2907,7 +2929,8 @@ function proposalNotesHtml(plan) {
   // the untouched film, and without this line it reads as a whole-cut revision.
   if (plan.focus) parts.push(`<div class="pline">[shot ${plan.focus.index + 1} · ${escapeHtml(stem(plan.focus.clip))}]</div>`);
   // the model's words: the server's "Check:" lines are the Things to check above
-  const words = String(plan.notes_model || plan.notes || '').trim();
+  const words = String(plan.notes_model || plan.notes || '').split('\n')
+    .filter((l) => !/^(Check|Left out): /.test(l.trim())).join('\n').trim();
   if (!words) parts.push('<div class="pnote hint">(no note returned)</div>');
   else {
     const first = words.split(/(?<=[.!?])\s+|\n\s*\n/)[0].trim();   // a sentence, or a paragraph
@@ -2960,6 +2983,12 @@ function proposalTableHtml(plan, reviewable) {
     `<tr class="pgone" title="${escapeHtml(`${stem(s.clip)} ${fmt(s.in)}–${fmt(s.out)} — removed by the proposal`)}">`
     + `<td>−</td><td class="pn"></td><td class="pc">${escapeHtml(stem(s.clip))}</td>`
     + `<td class="tc">${keepTc(s.in, s.clip)}</td><td class="tc">${keepTc(s.out, s.clip)}</td><td class="pw">removed</td></tr>`);
+  // what the re-run left out because the editor rejected it before, greyed
+  rejectedOf(plan).filter((r) => r.action !== 'flagged').forEach((r) => gone.push(
+    `<tr class="prej" title="${escapeHtml(`${stem(r.clip)} ${fmt(r.in)}–${fmt(r.out)} — you rejected this before; the re-run left it out`)}">`
+    + `<td>✗</td><td class="pn"></td><td class="pc">${escapeHtml(stem(r.clip))}</td>`
+    + `<td class="tc">${keepTc(r.in, r.clip)}</td><td class="tc">${keepTc(r.out, r.clip)}</td>`
+    + `<td class="pw">you rejected this${r.action === 'kept as it is' ? ' change — the shot stays as it is' : ' — left out'}</td></tr>`));
   // a row is two lines (a grid): ✓ / ✗ · # · clip · In · Out, and the why under them at
   // the panel's width — one cell of a 6-column row would leave it two words
   return '<table class="ptable">'
