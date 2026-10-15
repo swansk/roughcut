@@ -853,7 +853,8 @@ def test_the_kept_tabs_in_the_cut_link_selects_the_block_and_the_inspector_shows
     page.evaluate("dock.open('bin')"); page.locator("#binTabs .tab[data-tab=all]").click()      # in the cut: the all tab
     page.wait_for_selector("#library .keep")
     link = page.locator('#library .keep[title^="CLIP_B"]').locator("a.use")
-    assert link.inner_text() == "in the cut · shot 2"
+    assert link.inner_text() == "shot 2"            # the Usage column (verdict 3, punch 7)
+    assert link.get_attribute("title").startswith("in the cut · shot 2")
     # from a cleared selection too — the link goes by id through the timeline
     page.keyboard.press("Escape")
     assert page.evaluate("tl.state.anchor") is None
@@ -1608,12 +1609,12 @@ def test_the_kept_tab_shows_the_bin_and_puts_a_keep_in_the_cut(page):
     tabs.nth(1).click()                           # all: the rows flip in place below
     rows = page.locator("#library .keep")
     assert rows.count() == 3
-    # hero first, then by clip and start; a card is labelled by the note, else the line
-    # spoken in it — no clip name, no times, no detector's reason on it
+    # hero first, then by clip and start; a row is named by the note, else the line
+    # spoken in it — the list's columns (verdict 3, punch 7) carry the duration as
+    # timecode, and what a narrow panel leaves out (clip, range, reason) is the hover
     hero = rows.nth(0)
     assert hero.locator(".w").inner_text() == "★ “hello there”"
-    assert "3.5 s" in hero.inner_text()
-    assert "CLIP_C" not in hero.inner_text() and "frames" not in hero.inner_text()
+    assert hero.locator("td.t").inner_text() == page.evaluate("tl.tc(3.5)")
     assert hero.get_attribute("title").startswith("CLIP_C 0:00.5–0:04.0")
     assert hero.locator("img.still").get_attribute("src") == "/media/poster/CLIP_C.jpg?t=0.50"
     plain = rows.nth(1)
@@ -1636,7 +1637,7 @@ def test_the_kept_tab_shows_the_bin_and_puts_a_keep_in_the_cut(page):
     assert added == '["CLIP_C.MP4",0.5,4,"the whole take (frames 0:00 · 0:04)"]'
     # …and the row flips at once, before the autosave lands
     hero = page.locator('#library .keep[title^="CLIP_C"]')
-    assert hero.locator("a.use").inner_text() == "in the cut · shot 2"
+    assert hero.locator("a.use").inner_text() == "shot 2"
     assert hero.locator("button.add").count() == 0
     page.wait_for_function(
         "document.querySelector('#saveState').textContent.startsWith('saved')", timeout=8000)
@@ -1649,7 +1650,7 @@ def test_the_kept_tab_shows_the_bin_and_puts_a_keep_in_the_cut(page):
     hero_row = next(s for s in on_server["selects"] if s["clip"] == "CLIP_C.MP4")
     assert hero_row["used_in"], hero_row
     assert page.locator('#library .keep[title^="CLIP_C"]').locator("a.use").inner_text() \
-        == "in the cut · shot 2"
+        == "shot 2"
     # the link selects the shot
     select_shot(page, 0)
     page.locator('#library .keep[title^="CLIP_C"]').locator("a.use").click()
@@ -1795,7 +1796,7 @@ def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
         assert page.locator("#tl .blk").count() == 1
         page.evaluate("dock.open('bin')"); page.locator("#binTabs .tab[data-tab=all]").click()
         assert page.locator('#library .keep[title^="CLIP_C"]').locator("a.use").inner_text() \
-            == "in the cut · shot 1"
+            == "shot 1"
         cut_says(page, "not in it", present=False)
     finally:
         inference.set_backend(None)
@@ -2223,7 +2224,10 @@ def test_a_proposed_cut_plays_before_it_is_accepted(page):
         page.locator("#ask").click()
         page.wait_for_selector("#proposal:visible", timeout=30000)
         assert "CLIP_C" in page.locator("#proposalDiff").inner_text()   # the diff stays
-        buttons = page.eval_on_selector_all("#proposal button", "els => els.map(e => e.textContent)")
+        # (the rows' ✓ / ✗ are the per-shot review's, and Accept all shows only once a
+        # shot is rejected — verdict 3, punch 7, test_picks_editor)
+        buttons = page.eval_on_selector_all(
+            "#proposal button:not(.pv)", "els => els.filter(e => !e.hidden).map(e => e.textContent)")
         assert buttons == ["▶ Play it", "Accept", "Discard"], buttons
         # the waiting proposal is Next's (C2): its ▶ Play it is the screen's one blue
         page.evaluate("flowBar.poll()")
