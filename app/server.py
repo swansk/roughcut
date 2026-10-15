@@ -5650,6 +5650,12 @@ def sample_segments(segments: list[dict], seconds: float = EXPORT_SAMPLE_S,
                 cout = min(float(seg["out"]), cin + each * sp)
                 piece = {k2: v for k2, v in seg.items() if k2 not in ("id", "a_off")}
                 piece.update({"in": round(cin, 4), "out": round(cout, 4)})
+                keys = (seg.get("controls") or {}).get("keys")
+                if keys and a > 0:
+                    # keyframes count from the shot's start: the slice starts `a` in
+                    piece["controls"] = {**seg["controls"], "keys": {
+                        p: [[round(float(t) - a, 4), v] for t, v in ks]
+                        for p, ks in keys.items()}}
                 out.append(piece)
                 break
             start += d
