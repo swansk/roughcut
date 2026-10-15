@@ -82,6 +82,12 @@ class Job(dict):
             **extra)
         # Not in the dict: these must not be serialised into an API response.
         self.pct_fn: Callable[[Job], float | None] | None = None
+        # A ceiling on the bar that the job's own counts prove (0..100), and the time
+        # left those counts support — for work whose milestones are coarser than what
+        # it can count (the index: verdict 2's "90 %" with 1 of 12 clips looked at).
+        # Either may return None: no ceiling / nobody knows.
+        self.bound_fn: Callable[[Job], float | None] | None = None
+        self.eta_fn: Callable[[Job], float | None] | None = None
         self._floor = 0.0
 
     # ------------------------------------------------------------ estimating
@@ -235,6 +241,9 @@ class Job(dict):
         """
         if self["state"] == "done":
             return 0.0
+        if self.eta_fn is not None:
+            got = self.eta_fn(self)
+            return None if got is None or got <= 0 else float(got)
         total_est = self.get("total_est_s")
         if not total_est or float(total_est) <= 0:
             return None
@@ -272,8 +281,18 @@ class Job(dict):
         else:
             pct = self._time_pct() or 0.0
         pct = min(RUNNING_CEILING, max(0.0, pct))
+        bound = self.bound_fn(self) if self.bound_fn is not None else None
+        # A job that measures its own work (a render's `progress_pct`, from what the
+        # encoder has written) is never shown ahead of it by the clock's creep.
+        work = self.get("progress_pct")
+        if work is not None:
+            bound = float(work) if bound is None else min(bound, float(work))
+        if bound is not None:
+            pct = min(pct, max(0.0, float(bound)))
         self._floor = max(self._floor, pct)          # a bar that dips reads as failure
-        return self._floor
+        # ...but never ahead of the work: a ceiling that fell (a count re-read lower)
+        # wins over the floor
+        return self._floor if bound is None else min(self._floor, max(0.0, float(bound)))
 
     # ------------------------------------------------------------- snapshot
 

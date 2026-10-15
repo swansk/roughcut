@@ -522,9 +522,16 @@ function renderProgress() {
     $('#progBar').style.width = '0%';
     return;
   }
-  const eta = p.eta_s >= 1 ? ` · about ${clock(p.eta_s)} left` : '';
-  $('#progLine').textContent = `Indexing · ${p.released} of ${p.clips - p.missing} ready${eta}${spent}`;
-  $('#progBar').style.width = `${Math.max(0, Math.min(100, p.pct || 0))}%`;
+  // Never ahead of the work (verdict 2: "about 0:07 left" at 6 min with 0 of 12 ready):
+  // the bar is the clip-stages the journal proves (heard, looked at, looked at closely,
+  // previewed: flow.honest_pct), the time left is the run's own, which the server says
+  // only once every stage has finished on a clip, and never under the run's pace.
+  const st = p.stages || {}, n = Math.max(0, p.clips - p.missing);
+  const settled = (k) => Math.min(n, ((st[k] || {}).done || 0) + ((st[k] || {}).skipped || 0));
+  const pct = n ? (100 * ['asr', 'look', 'close', 'proxy'].reduce((a, k) => a + settled(k), 0)) / (4 * n) : 0;
+  const eta = O.jobEta >= 1 ? ` · about ${clock(O.jobEta)} left` : '';
+  $('#progLine').textContent = `Indexing · ${p.released} of ${n} ready${eta}${spent}`;
+  $('#progBar').style.width = `${Math.max(0, Math.min(100, pct))}%`;
 }
 
 // The paused box (INTAKE M14): what waits, what it costs, and why — said to the editor.
@@ -1074,7 +1081,11 @@ async function refreshIndex() {
   if (O.index.job) O.job = O.index.job;
   if (O.job) {
     // the run's own one-liner ("CLIP_07 · look", "budget cap reached — …") lives on the job
-    try { O.detail = (await getJSON(`/api/job/${O.job}`)).detail || ''; } catch (e) { /* the job may be gone */ }
+    try {
+      const js = await getJSON(`/api/job/${O.job}`);
+      O.detail = js.detail || '';
+      O.jobEta = js.state === 'running' ? js.eta_s : null;   // the progress line's time left
+    } catch (e) { /* the job may be gone */ }
   }
   renderIndex();
 }

@@ -1,1 +1,79 @@
-/* export.css: lane EXPORT. */
+/* export.css: the Export dialog (export.js, REDESIGN-GOAL dimension 8). Premiere's Export
+ * Settings: a dense dark modal, labels right-aligned in a column, one blue button. */
+#exportDialog {
+  padding: 0; width: 560px; max-width: calc(100vw - 32px);
+  background: var(--panel, #1d1d1f); color: var(--text, #dcdcdf);
+  border: 1px solid var(--line-hi, #46464c); border-radius: 6px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .55); font-size: 12.5px;
+}
+#exportDialog::backdrop { background: rgba(4, 4, 6, .62); }
+#exportDialog .ex { margin: 0; display: flex; flex-direction: column; }
+#exportDialog .ex-head {
+  display: flex; align-items: baseline; gap: 12px; padding: 10px 16px;
+  background: var(--head, #252527); border-bottom: 1px solid var(--line, #333337);
+  border-radius: 6px 6px 0 0;
+}
+#exportDialog .ex-title { font-weight: 600; font-size: 13px; color: var(--text, #dcdcdf); }
+#exportDialog .ex-seq { color: var(--dim, #94949c); font-size: 11.5px; white-space: nowrap;
+                         overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+#exportDialog .ex-body { padding: 14px 16px 6px; }
+#exportDialog .ex-grid { display: grid; grid-template-columns: 84px 1fr; gap: 9px 12px; align-items: start; }
+#exportDialog .ex-grid > label { color: var(--dim, #94949c); text-align: right; padding-top: 5px; font-size: 12px; }
+#exportDialog select, #exportDialog input[type=text] {
+  width: 100%; box-sizing: border-box; height: 26px; padding: 2px 8px;
+  background: var(--bg, #111112); color: var(--text, #dcdcdf);
+  border: 1px solid var(--line-hi, #46464c); border-radius: 3px; font: inherit;
+}
+#exportDialog select:focus, #exportDialog input[type=text]:focus { outline: none; border-color: var(--accent, #4a9df8); }
+#exportDialog .ex-name { display: flex; align-items: center; gap: 6px; }
+#exportDialog .ex-ext { color: var(--dim, #94949c); }
+#exportDialog .ex-about, #exportDialog .ex-path {
+  color: var(--faint, #66666e); font-size: 11px; margin-top: 4px; line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+#exportDialog .ex-path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim, #94949c); }
+#exportDialog .ex-summary {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin: 14px 0 4px;
+  border: 1px solid var(--line, #333337); border-radius: 4px; background: var(--card, #28282b);
+}
+#exportDialog .ex-summary > div { padding: 7px 10px; border-left: 1px solid var(--line, #333337); min-width: 0; }
+#exportDialog .ex-summary > div:first-child { border-left: 0; }
+#exportDialog .ex-summary span { display: block; color: var(--dim, #94949c); font-size: 10.5px;
+                                 text-transform: uppercase; letter-spacing: .06em; }
+#exportDialog .ex-summary b { display: block; font-weight: 600; margin-top: 2px; white-space: nowrap;
+                              font-variant-numeric: tabular-nums; color: var(--text, #dcdcdf); }
+#exportDialog #exDur { color: var(--tc, #4a9df8); }
+#exportDialog .ex-note { min-height: 16px; color: var(--warn, #e2b14f); font-size: 11.5px; padding: 4px 0 2px; }
+#exportDialog .ex-note:empty { visibility: hidden; }
+#exportDialog .ex-foot {
+  display: flex; align-items: center; gap: 8px; padding: 10px 16px 12px;
+  border-top: 1px solid var(--line, #333337);
+}
+#exportDialog .ex-grow { flex: 1; }
+#exportDialog .ex-key { color: var(--faint, #66666e); font-size: 11px; }
+#exportDialog .ex-btn {
+  height: 26px; padding: 0 14px; border-radius: 3px; font: inherit; cursor: pointer;
+  background: var(--card-hi, #313135); color: var(--text, #dcdcdf); border: 1px solid var(--line-hi, #46464c);
+}
+#exportDialog .ex-btn:hover:not(:disabled) { border-color: var(--accent, #4a9df8); }
+#exportDialog .ex-btn:focus-visible { outline: 2px solid var(--accent, #4a9df8); outline-offset: 1px; }
+#exportDialog .ex-btn.primary { background: var(--accent, #4a9df8); border-color: var(--accent, #4a9df8);
+                                color: #08111c; font-weight: 600; min-width: 84px; }
+#exportDialog .ex-btn:disabled { opacity: .45; cursor: default; }
+#exportDialog .ex-run, #exportDialog .ex-done { display: flex; flex-direction: column; gap: 8px; padding: 4px 0 8px; }
+#exportDialog .ex-runname { font-weight: 600; }
+#exportDialog .ex-bar { height: 10px; border-radius: 5px; background: var(--bg, #111112);
+                        border: 1px solid var(--line, #333337); overflow: hidden; }
+#exportDialog .ex-fill { height: 100%; width: 0; background: var(--accent, #4a9df8); transition: width .25s linear; }
+#exportDialog .ex-done .ex-fill { background: var(--good, #5fcf86); }
+#exportDialog .ex-runline { display: flex; justify-content: space-between; gap: 12px;
+                            color: var(--dim, #94949c); font-variant-numeric: tabular-nums; }
+#exportDialog #exPct { color: var(--text, #dcdcdf); font-weight: 600; }
+#exportDialog .ex-doneline { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+#exportDialog .ex-doneline b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#exportDialog .ex-ok { color: var(--good, #5fcf86); font-weight: 600; }
+#exportDialog .ex-dim { color: var(--dim, #94949c); font-size: 11.5px; }
+#exportDialog video { width: 100%; aspect-ratio: 16 / 9; background: #000; display: block; border-radius: 3px; }
+#exportDialog video[hidden], #exportDialog .ex-file[hidden] { display: none; }
+#exportDialog .ex-file { display: flex; gap: 6px; }
+#exportDialog .ex-file input[type=text] { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }

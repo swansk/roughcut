@@ -2259,8 +2259,14 @@ def note_accept(edl: dict, saved: list[dict]) -> None:
     try:
         for rec in _ask_records(newest=3):
             plan = rec.get("plan") or {}
-            if rec.get("answered") or plan.get("unchanged"):
+            # The board's Accept saves the cut and answers the record in two requests
+            # that race: an "accept" answer that landed first is still this save's.
+            answer = (rec.get("answered") or {}).get("answer")
+            if (answer and answer != "accept") or plan.get("unchanged"):
                 continue
+            if answer == "accept" and any(b.get("job") == rec.get("job")
+                                          for b in fpmod.bases(edl)[:1]):
+                return                        # recorded already
             if not fpmod.is_accept(saved, plan.get("segments") or []):
                 continue
             before = {s.get("id"): s for s in fpmod._segments(edl) if s.get("id")}
@@ -2467,6 +2473,32 @@ async def api_firstpass_post(request: Request) -> JSONResponse:
                          "would": would})
 
 
+@app.post("/api/firstpass/cancel")
+def api_firstpass_cancel() -> JSONResponse:
+    """Stop the running first pass (the header control's ×). It stops between steps:
+    an index it is on stops after the clip-stage in hand (the journal keeps what
+    finished); a proposal being written is discarded when it lands. The pass's record
+    goes back to what it was before this run, so the control reads as it did."""
+    live = _fp_live()
+    if live is None:
+        raise HTTPException(409, "the first pass is not running")
+    live["cancel"] = True
+    if live["stage"] == "index":
+        for x in INDEXES.values():
+            if x["state"] not in progress.TERMINAL:
+                x["cancel"] = True
+    return JSONResponse({"job": live["id"], "stage": live["stage"], "cancelling": True})
+
+
+class _FpCancelled(Exception):
+    """The editor stopped the first pass."""
+
+
+def _fp_check(fp: dict) -> None:
+    if fp.get("cancel"):
+        raise _FpCancelled()
+
+
 def firstpass_index() -> str | None:
     """The index step: join an index already running, or run one on this thread.
     Returns the index job id, None when the index had nothing to do."""
@@ -2492,6 +2524,7 @@ def _fp_step(fp: dict, key: str, state: str, **extra) -> None:
 
 def _firstpass_job(job: str) -> None:
     fp = FIRSTPASS[job]
+    before = _fp_record()                  # what a cancel puts back
     rec = {"job": job, "mode": fp["mode"], "keep": fp["keep"], "state": "running",
            "started": fp["started"], "clips": len(footage_clips()),
            "cut": cut_name_of(read_edl(), STATE["edl"])}
@@ -2510,6 +2543,7 @@ def _firstpass_job(job: str) -> None:
             ix_job = firstpass_index()
             stages = {s["key"]: s for s in flowmod.compute(flow_facts())["stages"]}
             counts = _fp_index_counts(stages["index"])
+            _fp_check(fp)
             if ix_job and INDEXES.get(ix_job, {}).get("state") == "failed":
                 raise RuntimeError(f"the index failed: {INDEXES[ix_job].get('detail')}")
             _fp_step(fp, "index", "done", job=ix_job, counts=counts)
@@ -2528,6 +2562,7 @@ def _firstpass_job(job: str) -> None:
         rows = bin_picks()
         fp["picks"] = len(rows)
         _fp_step(fp, "picks", "done", picks=len(rows))
+        _fp_check(fp)
 
         # 3 · the proposed cut — the Ask's own call, locks enforced, notes checked
         _fp_step(fp, "cut", "running")
@@ -2565,6 +2600,17 @@ def _firstpass_job(job: str) -> None:
                  (float(target[0]), float(target[1])), payload["events"], None,
                  locked=locked, finish=finish, originate=originate)
         entry = ASKS[ask]
+        if fp.get("cancel"):
+            # stopped while the model wrote: the proposal is discarded, never offered
+            try:
+                p = STATE["asks"] / f"{ask}.json"
+                r = json.loads(p.read_text(encoding="utf-8"))
+                r["answered"] = {"answer": "discard", "at": time.time(), "why": "cancelled"}
+                p.write_text(json.dumps(r, indent=1), encoding="utf-8")
+            except (OSError, ValueError):
+                pass
+            entry.finish("cancelled", detail="the first pass was stopped")
+            raise _FpCancelled()
         if entry["state"] != "done":
             raise RuntimeError(f"the cut failed: {entry.get('detail')}")
         plan = entry["plan"] or {}
@@ -2581,6 +2627,10 @@ def _firstpass_job(job: str) -> None:
                                      "length_s": round(sum(edits.dur(s) for s in
                                                            plan.get("segments") or []), 2)}})
         fp["state"] = "done"
+    except _FpCancelled:
+        _fp_step(fp, fp.get("stage") or "index", "cancelled")
+        fp["state"] = "cancelled"
+        rec = before                       # as it stood before this run
     except Exception as exc:  # noqa: BLE001 — deliberately total: the job must end
         step = fp.get("stage") or "index"
         _fp_step(fp, step, "failed", error=str(exc)[:300])
@@ -2588,7 +2638,10 @@ def _firstpass_job(job: str) -> None:
         fp["state"] = "failed"
         fp["error"] = str(exc)[:300]
     finally:
-        _fp_save(rec)
+        if rec is not None:
+            _fp_save(rec)
+        else:
+            firstpass_path().unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------- analysis
@@ -3971,7 +4024,7 @@ def _index_job(job: str, order: str) -> None:
         except (OSError, ValueError, journal.JournalError) as exc:
             entry.note(f"junk check skipped: {str(exc)[:80]}")
         nxt = j.next()
-        if nxt is None:
+        if nxt is None or entry.get("cancel"):     # the first pass's × stops between stages
             break
         clip, stage = nxt
         stem = Path(clip).stem
@@ -4005,6 +4058,9 @@ def _index_job(job: str, order: str) -> None:
             report(f"{stem} released")
     prog = j.progress()
     entry["journal"] = prog
+    if entry.get("cancel"):
+        entry.finish("cancelled", detail="stopped — what finished is kept; index the rest any time")
+        return
     entry.complete("index")
     n = len([c for c in j.clips if not j.clips[c].get("missing")])
     tail = (f" — priced stages paused: {j.data.get('paused_reason') or 'budget cap'}"
@@ -4337,9 +4393,13 @@ def index_entry() -> str:
     INDEXES[job] = progress.Job(
         "index", "Indexing the footage", id=job, state="running", journal=None,
         released=0, cost_usd=0.0, detail="opening the journal")
+    # No clock estimate: a fixed 60 s called "measured" drew 18 % at 7 s and 90 % for
+    # 12 min with nothing heard (verdict 2). The bar is held to the journal's counted
+    # clip-stages and the time left is the journal's measured one, or none.
     INDEXES[job].set_estimate(
-        60.0, [progress.milestone("index", "indexing, clip by clip", 1.0)],
-        source="measured")
+        None, [progress.milestone("index", "indexing, clip by clip", 1.0)],
+        source="none")
+    flowmod.honest_index_job(INDEXES[job])
     return job
 
 
@@ -4385,25 +4445,98 @@ def probe_resolution(path: Path) -> tuple[int, int] | None:
         return None
 
 
+# How often a render's progress is re-read. Faster than PROGRESS_TICK_S: the Export
+# dialog's bar is read off ffmpeg's own `-progress` files, which is cheap, and a bar that
+# moves twice a second reads as working where one that jumps every two reads as stuck.
+RENDER_TICK_S = 0.4
+RENDER_PROCS: dict[str, subprocess.Popen] = {}
+
+
+def _part_progress(path: Path) -> tuple[float, bool]:
+    """(seconds encoded, finished) from one ffmpeg `-progress` file."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return 0.0, False
+    out_s, ended = 0.0, False
+    for line in text.splitlines():
+        key, _, val = line.partition("=")
+        if key in ("out_time_us", "out_time_ms"):      # both are microseconds
+            try:
+                out_s = max(out_s, int(val) / 1e6)
+            except ValueError:
+                pass
+        elif key == "progress":
+            ended = val.strip() == "end"
+    return out_s, ended
+
+
+def encoded_seconds(parts_dir: Path, durs: list[float]) -> float:
+    """How many seconds of the film ffmpeg has encoded so far, against `durs` (each
+    shot's length in the film). A finished part counts whole; the one being encoded
+    counts its `out_time`, never more than its own length."""
+    if not parts_dir.exists():
+        return 0.0
+    got = 0.0
+    for i, d in enumerate(durs):
+        out_s, ended = _part_progress(parts_dir / f"part_{i:03d}.progress")
+        got += d if ended else min(out_s, d)
+    return got
+
+
+def _run_render(job: str, cmd: list[str]) -> subprocess.CompletedProcess:
+    """Run assemble.py in its own process group, so a cancel takes uv, python and
+    ffmpeg down together (`/api/render/<job>/cancel`)."""
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, start_new_session=True)
+    RENDER_PROCS[job] = proc
+    try:
+        if (RENDERS.get(job) or {}).get("cancelled"):   # cancelled before it had a process
+            os.killpg(proc.pid, 15)
+        out, err = proc.communicate()
+    finally:
+        RENDER_PROCS.pop(job, None)
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
 def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
     entry = RENDERS[job]
     parts_dir = STATE["work"] / f"parts_{job}"
+    export = bool(meta.get("export"))
+    # An export is written under a hidden name and renamed once it is whole, so nothing
+    # listing the folder (the versions list, a file manager) ever sees half a file.
+    write_to = out_path.with_name(f".{out_path.stem}.{job}.partial.mp4") if export else out_path
     cmd = ["uv", "run", "--quiet", str(TOOLS / "assemble.py"), str(edl_path),
            "--footage", str(STATE["footage"]), "--sidecars", str(STATE["sidecars"]),
            "--assets", str(STATE["assets"]), "--profile", meta.get("profile", "preview"),
            "--colour-dir", str(colour_dir()),
            "--generated-dir", str(generated_dir()),
-           "--parts-dir", str(parts_dir), "-o", str(out_path)]
+           "--parts-dir", str(parts_dir), "--progress", "-o", str(write_to)]
+    durs = [edits.dur(s) for s in meta.get("shots") or []]
+    planned = sum(durs) or 1e-9
 
-    # Same shape as the audio pass: a ticker counting finished parts on disk, so the
-    # UI can say "cutting 7/16" instead of "rendering…" for two minutes. Karl, on
-    # clicking Render: "got like no response - and just see rendering..."
+    # Same shape as the audio pass: a ticker reading the parts on disk, so the UI can
+    # say "cutting 7/16" instead of "rendering…" for two minutes. Karl, on clicking
+    # Render: "got like no response - and just see rendering..." Since the Export
+    # dialog (verdict 2 punch 5) the cutting share is ffmpeg's own `-progress`: seconds
+    # of film encoded against the sequence's length, not a count of files started.
     stop = threading.Event()
 
     def count() -> None:
-        done = len(list(parts_dir.glob("part_*.mp4"))) if parts_dir.exists() else 0
-        entry["done"] = done
-        joining = done >= entry["total"]
+        started = len(list(parts_dir.glob("part_*.mp4"))) if parts_dir.exists() else 0
+        if parts_dir.exists() and any(parts_dir.glob("part_*.progress")):
+            ends = [_part_progress(parts_dir / f"part_{i:03d}.progress")[1]
+                    for i in range(len(durs))]
+            finished = sum(ends)
+            enc = encoded_seconds(parts_dir, durs)
+        else:
+            # No `-progress` beside the parts (an assemble.py that does not write
+            # it): a part on disk is a part done, as it always was.
+            finished = started
+            enc = sum(durs[:started])
+        entry["done"] = finished
+        entry["encoded_s"] = round(enc, 2)
+        joining = finished >= entry["total"]
         entry["stage"] = "joining" if joining else "cutting"
         if joining:
             # The old bar sat at 100% here, and joining a 4K delivery render is
@@ -4411,17 +4544,39 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
             # cutting was worth and keeps counting the rest.
             entry.complete("cutting", detail=f"joining {entry['total']} shots")
         else:
-            entry.advance("cutting", done / max(1, entry["total"]),
-                          detail=f"cutting shot {done + 1} of {entry['total']}")
+            entry.advance("cutting", enc / planned,
+                          detail=f"cutting shot {finished + 1} of {entry['total']}")
+        # The Export dialog's bar: work done, from the milestones alone — never the
+        # clock, so it cannot run ahead of the encoder.
+        frac = entry.fraction() or 0.0
+        entry["progress_pct"] = max(entry.get("progress_pct") or 0.0,
+                                    round(min(99.0, 100.0 * frac), 1))
 
-    ticker = threading.Thread(target=_ticker, args=(stop, count), daemon=True)
+    def tick() -> None:
+        while not stop.wait(min(RENDER_TICK_S, PROGRESS_TICK_S)):
+            try:
+                count()
+            except OSError:
+                pass
+
+    ticker = threading.Thread(target=tick, daemon=True)
     ticker.start()
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = _run_render(job, cmd)
+        stdout, stderr, rc = r.stdout, r.stderr, r.returncode
     finally:
         stop.set()
         shutil.rmtree(parts_dir, ignore_errors=True)
-    ok = r.returncode == 0
+    if entry.get("cancelled"):
+        if export:
+            write_to.unlink(missing_ok=True)
+        else:
+            out_path.unlink(missing_ok=True)
+        entry.update(log=(stdout or "") + (stderr or ""), output=None, url=None)
+        entry["stage"] = "cancelled"
+        entry.finish("cancelled", detail="cancelled — nothing was written")
+        return
+    ok = rc == 0
     if ok:
         # Written next to the file rather than kept in memory: renders outlive the
         # process, and a versions list that empties on restart is not a versions list.
@@ -4429,21 +4584,39 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
         # And written *before* the job reports done, because the UI refreshes the
         # versions list the moment it sees "done" — a render that announces itself
         # before its own metadata exists gets listed as an unlabelled older file.
-        meta["duration_s"] = probe_duration(out_path)
-        res = probe_resolution(out_path)
+        meta["duration_s"] = probe_duration(write_to)
+        res = probe_resolution(write_to)
         if res:
             meta["width"], meta["height"] = res
         out_path.with_suffix(".json").write_text(json.dumps(meta, indent=1),
                                                  encoding="utf-8")
+        if export:
+            write_to.replace(out_path)
+    elif export:
+        write_to.unlink(missing_ok=True)
     entry.update(
         done=entry["total"] if ok else entry["done"],
-        log=(r.stdout or "") + (r.stderr or ""),
+        log=(stdout or "") + (stderr or ""),
         output=str(out_path) if ok else None,
-        url=f"/media/render/{out_path.name}" if ok else None,
+        url=media_url_for(out_path) if ok else None,
     )
     if not ok:
         entry["stage"] = "failed"
         entry.finish("failed", detail="the render failed — see the log")
+        return
+
+    if export:
+        # An export is the file somebody asked for, at the name and place they gave;
+        # the 720p copy the board's players stream is the board's business and is
+        # made lazily, the first time the versions list sees the file.
+        entry["stage"] = "done"
+        entry["progress_pct"] = 100.0
+        mb = out_path.stat().st_size / (1024 * 1024)
+        frame = f"{meta['width']}×{meta['height']}" if meta.get("width") else ""
+        entry.finish("done", detail=" · ".join(b for b in (
+            f"{meta.get('duration_s') or 0:.2f} s", frame,
+            f"{mb:.1f} MB" if mb < 10 else f"{mb:.0f} MB",
+            meta.get("preset_label") or meta.get("profile")) if b))
         return
 
     # The review copy is the last phase of the render, not an errand after it. The
@@ -4457,6 +4630,7 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
     review = await_review(out_path, note=entry.note)
     entry["stage"] = "done"
     entry["review"] = review
+    entry["progress_pct"] = 100.0
     tail = {"ready": "", "failed": " — no review copy, the players use the master",
             "building": " — the review copy is still building"}[review]
     entry.finish("done",
@@ -4621,23 +4795,134 @@ def download_name(meta: dict, path: Path, size: tuple[int, int] | None) -> str:
     return f"{stem or path.stem}.mp4"
 
 
-RENDER_PROFILES = ("preview", "delivery")
+RENDER_PROFILES = ("preview", "delivery", "youtube")
 # Seconds of wall clock per second of finished cut. Preview is measured: a 17-shot,
 # 181s cut of the Killington bin rendered in 160.8s while an Ask and a second render
 # shared the machine. Delivery comes from Karl's 17-minute render of a ~2:50 cut and is
 # provisional — nothing here may start one to check. Both are starting guesses that the
-# first milestone replaces with measurement off the run in front of it.
-RENDER_S_PER_CUT_S = {"preview": 0.9, "delivery": 6.0}
+# first milestone replaces with measurement off the run in front of it. YouTube (the
+# Export dialog's preset: 1080p at the bin's own rate, preset medium) is provisional too,
+# between the two.
+RENDER_S_PER_CUT_S = {"preview": 0.9, "delivery": 6.0, "youtube": 2.0}
 # What share of that the join is worth. Measured at 5% on the preview above (7.9s of
 # 160.8s); given more on delivery, where the join re-encodes at source resolution with
 # the music mix rather than stream-copying 1080p parts. Provisional, and the reason the
 # join is a milestone at all: the bar used to hit 100% the moment cutting ended.
-RENDER_JOIN_SHARE = {"preview": 0.1, "delivery": 0.3}
+RENDER_JOIN_SHARE = {"preview": 0.1, "delivery": 0.3, "youtube": 0.1}
 # And what the review copy costs, in the same units, measured on this box against the
 # 181s Killington cut with the box otherwise idle: 39.7s off the 1080p preview master
 # and 95.4s off the 4K delivery one. It is a phase of the render because the players
 # stream it — the render is not usable until it exists.
-REVIEW_S_PER_CUT_S = {"preview": 0.22, "delivery": 0.53}
+REVIEW_S_PER_CUT_S = {"preview": 0.22, "delivery": 0.53, "youtube": 0.25}
+
+# ---------------------------------------------------------------- the Export dialog
+#
+# Verdict 2, punch 5: "Export is two buttons … Ctrl+M does nothing: there is no export
+# dialog with a name, folder or size." Premiere's Export Settings name a preset, a file
+# name, a location and an estimated size. Each preset here is one of assemble.py's
+# profiles; `mbps` is the video bitrate at `ref` pixels (CRF encodes, so it is an
+# estimate, scaled by the frame the bin actually renders at). Quick: 49.7 MB for a
+# 28.1 s cut of Killington at 1080p (verdict 2) = 14 Mbps. Master: Karl's 987 MB 4K
+# delivery of 181 s = 43.6 Mbps. YouTube: crf 18 at medium, provisional.
+EXPORT_PRESETS = {
+    "quick": {"label": "Quick 1080p", "profile": "preview", "mbps": 14.0,
+              "audio_kbps": 192, "ref": (1920, 1080), "max": (1920, 1080), "fixed": True,
+              "about": "H.264 · 1920×1080 · 23.976 fps · fast encode, to watch the cut"},
+    "master": {"label": "Master 4K", "profile": "delivery", "mbps": 44.0,
+               "audio_kbps": 256, "ref": (3840, 2160), "max": (3840, 2160), "fixed": False,
+               "about": "H.264 · up to 3840×2160 at the footage's own frame rate, never upscaled · slow encode"},
+    "youtube": {"label": "YouTube 1080p", "profile": "youtube", "mbps": 16.0,
+                "audio_kbps": 384, "ref": (1920, 1080), "max": (1920, 1080), "fixed": False,
+                "about": "H.264 · up to 1920×1080 at the footage's own frame rate · AAC 384 kbps"},
+}
+EXPORT_NAME_MAX = 80
+
+
+def export_root() -> Path:
+    """`--work/renders`: every export lands in a folder under it, never anywhere else."""
+    return STATE["renders"].parent
+
+
+def export_component(text: str, fallback: str) -> str:
+    """A file or folder name that is one path component and nothing more: no
+    separators, no `..`, no leading dot, nothing a shell or a file manager trips on."""
+    t = re.sub(r"\.mp4$", "", str(text or "").strip(), flags=re.I)
+    t = re.sub(r"[^A-Za-z0-9 ._()-]+", "-", t)
+    t = re.sub(r"\s+", " ", t).strip(" .-")[:EXPORT_NAME_MAX].strip(" .-")
+    return t or fallback
+
+
+def free_export_path(folder: Path, name: str) -> Path:
+    """`<name>.mp4`, or `<name>-2.mp4`, `<name>-3.mp4` … — never over a file that is
+    already there."""
+    path = folder / f"{name}.mp4"
+    n = 2
+    while path.exists() or path.with_suffix(".json").exists():
+        path = folder / f"{name}-{n}.mp4"
+        n += 1
+    return path
+
+
+def media_url_for(path: Path) -> str:
+    if path.parent == STATE["renders"]:
+        return f"/media/render/{path.name}"
+    return f"/media/export/{path.parent.name}/{path.name}"
+
+
+def _native_frame() -> tuple[int, int] | None:
+    """The first real clip's frame size, cached per bin: what `delivery` and `youtube`
+    scale from (never up)."""
+    edl = read_edl()
+    for seg in edl.get("segments") or []:
+        if edits.is_generated(seg.get("clip", "")):
+            continue
+        src = STATE["footage"] / seg["clip"]
+        cache = STATE.setdefault("export_frames", {})
+        if str(src) not in cache:
+            cache[str(src)] = probe_resolution(src) if src.exists() else None
+        if cache[str(src)]:
+            return cache[str(src)]
+    return None
+
+
+def export_frame(preset: dict, native: tuple[int, int] | None) -> tuple[int, int]:
+    mw, mh = preset["max"]
+    if preset["fixed"] or not native:
+        return mw, mh
+    nw, nh = native
+    scale = min(1.0, mw / nw, mh / nh)
+    return max(2, int(nw * scale) // 2 * 2), max(2, int(nh * scale) // 2 * 2)
+
+
+def export_default_name(edl: dict) -> str:
+    cut = cut_name_of(edl, STATE["edl"])
+    bits = [STATE["footage"].name] + ([cut] if cut and cut != DEFAULT_CUT_NAME else [])
+    return export_component(" - ".join(bits), "export")
+
+
+@app.get("/api/export")
+def api_export() -> JSONResponse:
+    """What the Export dialog offers: the presets (with the frame each renders at and
+    its bitrate, for the size estimate), the default file name (from the cut's name),
+    the default folder (the bin's own, where the versions list looks) and the folders
+    already under `--work/renders`."""
+    edl = read_edl()
+    native = _native_frame()
+    presets = []
+    for key, p in EXPORT_PRESETS.items():
+        w, h = export_frame(p, native)
+        rw, rh = p["ref"]
+        mbps = max(0.5, p["mbps"] * (w * h) / (rw * rh))
+        presets.append({"key": key, "label": p["label"], "profile": p["profile"],
+                        "about": p["about"], "width": w, "height": h,
+                        "video_mbps": round(mbps, 2), "audio_kbps": p["audio_kbps"]})
+    root = export_root()
+    folders = sorted(d.name for d in root.iterdir()
+                     if d.is_dir() and not d.name.startswith(".")) if root.exists() else []
+    return JSONResponse({
+        "presets": presets, "preset": "quick", "name": export_default_name(edl),
+        "folder": STATE["footage"].name, "folders": folders, "root": str(root),
+    })
 
 
 @app.post("/api/render")
@@ -4655,15 +4940,36 @@ async def api_render(request: Request) -> JSONResponse:
         raise HTTPException(
             409, f"render {running['id']} is already running — "
                  f"{running.get('detail') or running['label']}")
-    profile = body.get("profile", "preview")
+    # The Export dialog (verdict 2 punch 5) names a preset, a file name and a folder;
+    # the film tool's two buttons still send a bare profile and get `cut_<job>.mp4`.
+    preset_key = body.get("preset")
+    export = preset_key is not None or body.get("name") is not None
+    if export:
+        if preset_key is None:
+            preset_key = "quick"
+        if preset_key not in EXPORT_PRESETS:
+            raise HTTPException(400, f"unknown export preset: {preset_key!r}")
+        profile = EXPORT_PRESETS[preset_key]["profile"]
+    else:
+        profile = body.get("profile", "preview")
     if profile not in RENDER_PROFILES:
         raise HTTPException(400, f"unknown render profile: {profile!r}")
+    if not body.get("segments"):
+        raise HTTPException(400, "nothing to export: the sequence is empty")
     edl = read_edl()
     edl["segments"] = body["segments"]
     job = uuid.uuid4().hex[:8]
     edl_path = STATE["work"] / f"render_{job}.json"
+    if export:
+        # One folder under --work/renders and one file name — sanitised to a single
+        # path component each, so no request can write anywhere else.
+        folder = export_root() / export_component(body.get("folder"), STATE["footage"].name)
+        folder.mkdir(parents=True, exist_ok=True)
+        out_path = free_export_path(
+            folder, export_component(body.get("name"), export_default_name(edl)))
+    else:
+        out_path = STATE["renders"] / f"cut_{job}.mp4"
     edl_path.write_text(json.dumps(edl, indent=1), encoding="utf-8")
-    out_path = STATE["renders"] / f"cut_{job}.mp4"
     meta = {
         "job": job, "created": time.time(), "title": edl.get("title", ""),
         "segments": len(edl["segments"]),
@@ -4682,12 +4988,18 @@ async def api_render(request: Request) -> JSONResponse:
                    **({"speed": s["speed"]} if s.get("speed") else {})}
                   for s in edl["segments"]],
     }
+    if export:
+        meta.update(export=True, preset=preset_key,
+                    preset_label=EXPORT_PRESETS[preset_key]["label"])
     shots = len(edl["segments"])
     planned = meta["planned_s"]
     RENDERS[job] = progress.Job(
-        "render", f"Rendering — {profile}", id=job, stage="cutting", log="",
+        "render", (f"Exporting — {EXPORT_PRESETS[preset_key]['label']}" if export
+                   else f"Rendering — {profile}"), id=job, stage="cutting", log="",
         output=None, url=None, done=0, total=shots, profile=profile,
-        planned_s=planned, detail=f"{shots} shots, {planned:.0f}s")
+        planned_s=planned, detail=f"{shots} shots, {planned:.0f}s",
+        progress_pct=0.0, encoded_s=0.0, path=str(out_path), export=export,
+        preset=preset_key if export else None)
     # Measured on this machine: preview cuts run about 1.4x real time end to end and
     # a delivery render about 6x, with the join a fixed share of it. Not a promise —
     # it is recalibrated off the first milestone — but it is what makes the bar mean
@@ -4698,16 +5010,40 @@ async def api_render(request: Request) -> JSONResponse:
     # preview render it is a fifth of the job, on a delivery render a twelfth.
     per_s = RENDER_S_PER_CUT_S[profile]
     join = RENDER_JOIN_SHARE[profile]
-    review_s = REVIEW_S_PER_CUT_S[profile]
-    RENDERS[job].set_estimate(
-        max(5.0, planned * (per_s + review_s)),
-        [progress.milestone("cutting", "cutting the shots", per_s * (1.0 - join)),
-         progress.milestone("joining", "joining and mixing", per_s * join),
-         progress.milestone("review", "making the review copy", review_s)],
-        source="measured")
+    # An export makes no review copy inside its job (the file asked for is the
+    # deliverable), so its bar is cutting and joining only.
+    review_s = 0.0 if export else REVIEW_S_PER_CUT_S[profile]
+    stages = [progress.milestone("cutting", "cutting the shots", per_s * (1.0 - join)),
+              progress.milestone("joining", "joining and mixing", per_s * join)]
+    if not export:
+        stages.append(progress.milestone("review", "making the review copy", review_s))
+    RENDERS[job].set_estimate(max(5.0, planned * (per_s + review_s)), stages,
+                              source="measured")
     threading.Thread(target=_render_job, args=(job, edl_path, out_path, meta),
                      daemon=True).start()
-    return JSONResponse({"job": job})
+    if not export:
+        return JSONResponse({"job": job})
+    return JSONResponse({"job": job, "path": str(out_path), "name": out_path.name,
+                         "folder": out_path.parent.name, "preset": preset_key,
+                         "planned_s": planned})
+
+
+@app.post("/api/render/{job}/cancel")
+def api_render_cancel(job: str) -> JSONResponse:
+    """Stop a running render: its whole process group, and nothing is left on disk."""
+    entry = RENDERS.get(job)
+    if entry is None:
+        raise HTTPException(404, "no such job")
+    if entry["state"] in progress.TERMINAL:
+        return JSONResponse({"job": job, "state": entry["state"]})
+    entry["cancelled"] = True
+    proc = RENDER_PROCS.get(job)
+    if proc is not None and proc.poll() is None:
+        try:
+            os.killpg(proc.pid, 15)
+        except (ProcessLookupError, PermissionError):
+            pass
+    return JSONResponse({"job": job, "state": "cancelling"})
 
 
 @app.get("/api/renders")
@@ -4720,7 +5056,11 @@ def api_renders() -> JSONResponse:
     """
     out = []
     res_cache: dict = STATE.setdefault("render_res_cache", {})
-    for mp4 in STATE["renders"].glob("cut_*.mp4"):
+    for mp4 in STATE["renders"].glob("*.mp4"):
+        # An export to the bin's own folder is a film like any other; a file still
+        # being written (hidden, `.partial`) or mid-mix (`.scored`) is not.
+        if mp4.name.startswith(".") or ".scored." in mp4.name:
+            continue
         meta_path = mp4.with_suffix(".json")
         meta = (json.loads(meta_path.read_text(encoding="utf-8"))
                 if meta_path.exists() else {})
@@ -4876,6 +5216,16 @@ def media_proxy(name: str, request: Request) -> Response:
 @app.get("/media/render/{name}")
 def media_render(name: str, request: Request) -> Response:
     return ranged_file(STATE["renders"] / Path(name).name, request)
+
+
+@app.get("/media/export/{folder}/{name}")
+def media_export(folder: str, name: str, request: Request) -> Response:
+    """An export in a folder other than the bin's own, for the dialog's Play."""
+    root = export_root().resolve()
+    path = (root / Path(folder).name / Path(name).name).resolve()
+    if path.parent.parent != root or path.suffix.lower() != ".mp4":
+        raise HTTPException(404, "not found")
+    return ranged_file(path, request)
 
 
 @app.get("/media/review/{name}")
