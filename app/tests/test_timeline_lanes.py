@@ -309,7 +309,10 @@ def test_a_pending_proposal_is_a_ghost_lane_you_can_play_either_side_of(page):
         x1 = page.evaluate("parseFloat(document.querySelector('#tl .tl-arrows line.arrow').getAttribute('x1'))")
         assert x1 == pytest.approx(x_of(page, 1.0), abs=1)
         assert page.locator(f"{ghost} .lbl").inner_text() == "proposal"
-        assert page.locator(f"{ghost} button").count() == 0, "▶ Play it and the monitor's ▶ play"
+        # no play buttons on the lane (▶ Play it and the monitor's ▶ play); its buttons are
+        # the per-shot review's ✓ / ✗ (verdict 3, punch 7 — test_picks_editor)
+        assert page.locator(f"{ghost} button:not(.rv)").count() == 0, "▶ Play it and the monitor's ▶ play"
+        assert page.locator(f"{ghost} .ghost button.rv").count() == 6
         # named like V1's blocks (tl.blockName: the clip's name since the tracks, verdict 2
         # punch 3), never with a length ('CLIP_B 2.0s')
         names = page.eval_on_selector_all(f"{ghost} .ghost .name", "els => els.map(e => e.textContent)")
