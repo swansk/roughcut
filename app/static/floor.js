@@ -1744,7 +1744,7 @@ async function batchVerdict(kind) {
   paintHud();
   paintTape();
   savePosition();
-  toast(`${kind === 'reject' ? 'rejected' : 'marked later'} ${n} pick${n === 1 ? '' : 's'} · ${words} · ⌘Z brings them back`, 4000);
+  toast(`${kind === 'reject' ? 'rejected' : 'marked later'} ${n} pick${n === 1 ? '' : 's'} · ${words} · ${/Mac|iPhone|iPad/.test(navigator.platform || '') ? '⌘Z' : 'Ctrl+Z'} brings them back`, 4000);
   // then the next undecided pick: after this one, else from the top, else the card
   let next = F.queue.findIndex((q, k) => k > F.i && !q.verdict);
   if (next < 0) next = F.queue.findIndex((q) => !q.verdict);
@@ -1819,7 +1819,7 @@ function keymapHtml() {
     ['⇧X', 'reject the rest of this clip’s picks · with a filter on: reject every undecided pick that matches, after one confirm'],
     ['⇧U', 'the same, marked later'],
     ['/', 'filter the round — by kind, state, clip or a word in the reason or a witness; ↵ ⌫ step through what matches, the tape dims the rest; Esc clears it'],
-    ['⌘Z', 'undo the last verdict, with its trim and note'],
+    [/Mac|iPhone|iPad/.test(navigator.platform || '') ? '⌘Z' : 'Ctrl+Z', 'undo the last verdict, with its trim and note'],
     ['J K L', 'shuttle — K pauses'],
     ['space', 'play / pause — pressed again where the band ended, it watches on past it'],
     ['0', 'restart the clip: play the whole clip from 0 (Home too) · ⇧0 restarts the band — from its start, stopping at its end'],

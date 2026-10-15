@@ -143,7 +143,8 @@ def test_the_inspector_shows_how_the_shot_s_clip_was_seen(bin_state, browser):
     that opens the full strip in place — the strip is not drawn until asked for."""
     pg = _board(browser, bin_state)
     pg.locator("#tl .blk").nth(0).click()
-    look = "#inspector .srow.top .lookhost .dv-look"
+    pg.evaluate("document.querySelectorAll('#inspector details.assist').forEach(d => { d.open = true; })")
+    look = "#inspector .srow.acts .lookhost .dv-look"
     pg.wait_for_function(f"""() => /^Look deeper · (~\\$\\d|free on your plan)/.test(
         (document.querySelector('{look}') || {{}}).textContent || '')""")
     assert "1.0–3.0 s" in pg.get_attribute(look, "title")      # the shot, not ± 2 s
@@ -170,6 +171,8 @@ def test_the_inspector_shows_how_the_shot_s_clip_was_seen(bin_state, browser):
     assert pg.locator(f"{box} .dv-act .dv-look").count() == 0
     assert pg.locator("#inspector .dv-look:visible").count() == 1
     assert "drag across the strip" in pg.inner_text(f"{box} .dv-act")
+    # the strip sits in the Assistant section at Effect Controls' foot: scrolled to
+    pg.locator(f"{box} .dv-bar").scroll_into_view_if_needed()
     bar = pg.locator(f"{box} .dv-bar").bounding_box()
     y = bar["y"] + bar["height"] / 2
     pg.mouse.move(bar["x"] + bar["width"] * 0.1, y)
@@ -210,8 +213,9 @@ def test_a_trim_keeps_the_shot_s_machine_line_open_with_the_new_range(bin_state,
     pg = _board(browser, bin_state)
     pg.locator("#tl .blk").nth(0).click()
     sid = pg.evaluate("tl.idAt(0)")
+    pg.evaluate("document.querySelectorAll('#inspector details.assist').forEach(d => { d.open = true; })")
     box = "#inspector .deepline"
-    look = "#inspector .srow.top .lookhost .dv-look"
+    look = "#inspector .srow.acts .lookhost .dv-look"
     pg.wait_for_function(f"(document.querySelector('{look}') || {{}}).title?.includes('1.0–3.0 s')")
     pg.wait_for_function(f"!document.querySelector('{box} .dv-line').textContent.startsWith('…')")
     pg.locator(f"{box} .dv-line").click()

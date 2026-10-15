@@ -31,6 +31,17 @@ Around the segments, the EDL gains four keys (each absent = the default below):
 
 A2 is the music bed (`effects_music`): its mute, solo and gain apply to the bed.
 
+Added tracks (Sequence › Add Track, verdict 4 punch 9): V3…V9 and A3…A9. A track that
+exists has its entry in `tracks` (stored whole, so an untouched added track survives a
+save). A clip on an added video track is an overlay with `track: "V3"` (V2 is the
+absent default); the render composites the video tracks bottom to top (V2, then V3, …),
+so a higher track covers a lower one, as Premiere stacks them. An added audio track's
+clips are a fifth key:
+
+  audio:    [{"id", "clip", "in", "out", "at", "track": "A3", "speed"?, "why"?}]
+            each clip's own sound laid at film second `at` on its track, mixed with A1
+            at the track's gain (under the bed); mute / solo as A1's.
+
 `validate_*` raise ValueError with the sentence a 400 carries; nothing here touches a
 file. `audible()` and `a1_plan()` are what the render reads.
 """
@@ -44,6 +55,9 @@ from typing import Any
 VIDEO = ("V1", "V2")
 AUDIO = ("A1", "A2")
 NAMES = VIDEO + AUDIO
+EXTRA_VIDEO = tuple(f"V{n}" for n in range(3, 10))     # Sequence › Add Track
+EXTRA_AUDIO = tuple(f"A{n}" for n in range(3, 10))
+EXTRA = EXTRA_VIDEO + EXTRA_AUDIO
 MIN_GAIN_DB, MAX_GAIN_DB = -60.0, 12.0
 MAX_OFFSET_S = 600.0
 MIN_LEN_S = 0.2
@@ -72,21 +86,40 @@ def _finite(v: Any, what: str) -> float:
     return x
 
 
+def extra_default(name: str) -> dict:
+    """An added track as Add Track makes it: visible / audible, unlocked, not targeted."""
+    if name in EXTRA_VIDEO:
+        return {"lock": False, "eye": True, "target": False}
+    return {"lock": False, "mute": False, "solo": False, "target": False, "gain_db": 0.0}
+
+
+def track_order(name: str) -> tuple[int, int]:
+    """Video before audio, then by number: V2 under V3, A1 before A3."""
+    return (0 if name[0] == "V" else 1, int(name[1:]))
+
+
 def validate_tracks(raw: Any) -> dict:
     """The headers' state, complete: unknown tracks or keys are a ValueError, missing ones
     take the default. Returns only what differs from the default, so an untouched
-    sequence saves no `tracks` key at all."""
+    sequence saves no `tracks` key at all — except an added track (V3…, A3…), kept
+    whole: its entry is what says it exists."""
     if raw is None:
         return {}
     if not isinstance(raw, dict):
         raise ValueError("tracks is not an object")
     base = default_tracks()
+    for name, spec in raw.items():
+        if name in EXTRA and spec is not None:
+            base[name] = extra_default(name)
     out: dict = {}
     for name, spec in raw.items():
         if name not in base:
-            raise ValueError(f"unknown track {name!r} (the tracks are {', '.join(NAMES)})")
+            raise ValueError(f"unknown track {name!r} (the tracks are {', '.join(NAMES)},"
+                             " and V3–V9 / A3–A9 once added)")
         if spec is None:
             continue
+        if name in EXTRA:
+            out[name] = dict(base[name])
         if not isinstance(spec, dict):
             raise ValueError(f"track {name} is not an object")
         for k, v in spec.items():
@@ -99,15 +132,18 @@ def validate_tracks(raw: Any) -> dict:
                 v = round(g, 1)
             elif not isinstance(v, bool):
                 raise ValueError(f"{name}.{k} is not true or false")
-            if v != base[name][k]:
+            if v != base[name][k] or name in EXTRA:
                 out.setdefault(name, {})[k] = v
     return out
 
 
 def resolve_tracks(stored: Any) -> dict:
-    """The full header state from what the EDL stores (only the differences)."""
+    """The full header state from what the EDL stores (only the differences, and every
+    added track whole)."""
     full = default_tracks()
     if isinstance(stored, dict):
+        for name in sorted((n for n in stored if n in EXTRA), key=track_order):
+            full[name] = extra_default(name)
         for name, spec in stored.items():
             if name in full and isinstance(spec, dict):
                 for k, v in spec.items():
@@ -154,6 +190,11 @@ def validate_overlays(raw: Any, speed_validator=None) -> list[dict]:
         if at < 0:
             raise ValueError(f"overlay {i + 1} ({clip}) starts before the film does")
         clean = {"clip": clip, "in": a, "out": b, "at": at}
+        trk = o.get("track")
+        if trk not in (None, "", "V2"):
+            if trk not in EXTRA_VIDEO:
+                raise ValueError(f"overlay {i + 1} ({clip}) is on {trk!r}, not a video track")
+            clean["track"] = trk
         if speed_validator is not None:
             sp = speed_validator(o.get("speed"))
             if sp is not None:
@@ -165,6 +206,24 @@ def validate_overlays(raw: Any, speed_validator=None) -> list[dict]:
         if clean["id"]:
             seen.add(clean["id"])
         out.append(clean)
+    return out
+
+
+def validate_audio_clips(raw: Any, speed_validator=None) -> list[dict]:
+    """The added audio tracks' clips: `{id?, clip, in, out, at, track, speed?, why?}` —
+    an overlay's shape on A3…A9. A missing or duplicate id is minted by the caller."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("audio is not a list")
+    out = validate_overlays([{k: v for k, v in c.items() if k != "track"}
+                             if isinstance(c, dict) else c for c in raw], speed_validator)
+    for i, (c, clean) in enumerate(zip(raw, out)):
+        trk = c.get("track")
+        if trk not in EXTRA_AUDIO:
+            raise ValueError(f"audio clip {i + 1} ({clean['clip']}) is on {trk!r}, "
+                             "not an added audio track (A3–A9)")
+        clean["track"] = trk
     return out
 
 
@@ -201,15 +260,37 @@ def validate_point(v: Any, what: str) -> float | None:
 def audible(tracks: dict, name: str) -> bool:
     """Whether an audio track is heard: not muted, and — when any track is soloed — soloed."""
     t = resolve_tracks(tracks)
-    if t[name]["mute"]:
+    if name not in t or t[name]["mute"]:
         return False
-    if any(t[a]["solo"] for a in AUDIO):
+    if any(t[a]["solo"] for a in t if a[0] == "A"):
         return bool(t[name]["solo"])
     return True
 
 
 def visible(tracks: dict, name: str) -> bool:
-    return bool(resolve_tracks(tracks)[name]["eye"])
+    t = resolve_tracks(tracks)
+    return name in t and bool(t[name]["eye"])
+
+
+def video_layers(tracks: dict, overlays: list[dict]) -> list[dict]:
+    """The overlays the render composites, bottom to top: by track (V2, V3, …), then by
+    film time; a clip on a hidden track or on a track that does not exist is left out."""
+    t = resolve_tracks(tracks)
+    keep = [o for o in overlays or []
+            if (o.get("track") or "V2") in t and t[o.get("track") or "V2"].get("eye", True)]
+    return sorted(keep, key=lambda o: (track_order(o.get("track") or "V2"), float(o["at"])))
+
+
+def audio_layers(tracks: dict, clips: list[dict]) -> list[tuple[dict, float]]:
+    """The added audio tracks' clips the render mixes, each with its track's gain in dB:
+    clips on a muted (or soloed-out) track, or a track that does not exist, are left out."""
+    t = resolve_tracks(tracks)
+    out = []
+    for c in clips or []:
+        name = c.get("track")
+        if name in t and audible(tracks, name):
+            out.append((c, float(t[name].get("gain_db") or 0.0)))
+    return out
 
 
 def a_off(seg: dict) -> float:
