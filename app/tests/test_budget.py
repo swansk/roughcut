@@ -81,10 +81,16 @@ HEADER_MAX_PX = 50
 # Wave 3, lane HEADER (verdict 3 punch 8): a running job is an icon and its % with the
 # name in its hover, and Next is its icon while anything runs, so "/ jobs" measured 109
 # words (was 132): lowered to that, no headroom.
-WORDS_IN_VIEW = {"/": 106, "/floor": 58, "/open": 59, "/ shot": 196, "/ film": 114, "/ fx": 134,
-                 "/ jobs": 109}
+# Wave 4, lane POLISH (verdict 4 punches 7 and 10), measured on the tree merged with
+# EXPORTSTOP and PICKS2, no headroom: "/ shot" 181 words (was 196; the judge measured 189):
+# the strip's play / Ask / Look deeper / Remove / why / quote fold into its collapsed
+# "Assistant" section. "/ jobs" 108 words and 51 controls (was 109 · 50): Next keeps its
+# words while a job runs (+), the fixture's running Ask no longer toasts "the ask that was
+# running failed: no such job" (−8), and EXPORTSTOP's × on the render pill (+1 control).
+WORDS_IN_VIEW = {"/": 106, "/floor": 58, "/open": 59, "/ shot": 181, "/ film": 114, "/ fx": 134,
+                 "/ jobs": 108}
 CONTROLS_IN_VIEW = {"/": 50, "/floor": 8, "/open": 9, "/ shot": 85, "/ film": 49, "/ fx": 53,
-                    "/ jobs": 50}
+                    "/ jobs": 51}
 
 # Contracts another lane delivers (M16 stage 1, C1): until that lane is merged the
 # check is an expected failure on that screen. Every stage-1 lane is merged, so this is

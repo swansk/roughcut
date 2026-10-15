@@ -2054,8 +2054,11 @@
   function onDropPast(e) {
     const dt = e.dataTransfer;
     if (!dt || ![...(dt.types || [])].includes('application/x-roughcut-shot')) return;
+    // on V1's own row (the ruler and the other rows keep the lanes' append), and past
+    // the end by more than the snap zone (8 px): close to the end it butts, as Premiere snaps
+    if (!(e.target instanceof Element) || !e.target.closest('.tl-lane[data-lane=V1]')) return;
     const t = eventTime(e);
-    if (t <= total() + frame() / 2) return;
+    if (t <= total() + Math.max(frame() / 2, 8 / state.zoom)) return;
     let shot = null;
     try { shot = JSON.parse(dt.getData('application/x-roughcut-shot')); } catch (err) { shot = null; }
     if (!shot || !shot.clip || !(shot.end > shot.start)) return;
