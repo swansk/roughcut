@@ -208,10 +208,15 @@ def test_b_an_edit_waiting_for_its_autosave_is_flushed_on_pagehide(
         ids = [s["id"] for s in segs]
         assert ids[:2] == ["keep000001", "keep000002"] and ids[2].startswith("g"), ids
         assert segs[2]["clip"] == "CLIP_C.MP4" and segs[2]["why"] == "late"
-        # beforeunload started the waiting save too; the keepalive flush went as well
-        assert _until(lambda: flushes, timeout=5), "no keepalive flush reached the server"
-        assert flushes[0]["x-roughcut-flush"] in ("pagehide", "hidden"), flushes
-        assert "x-roughcut-save" in flushes[0]
+        # beforeunload started the waiting save. If that save landed before pagehide, nothing
+        # was pending any more and no flush is due (correct: the edit is on disk, asserted
+        # above); under load it raced the flush either way, so the flush is only checked when
+        # one went. The flush delivering an edit on its own is pinned deterministically by
+        # test_b_a_held_older_put_never_writes_over_the_flush, which holds the normal save.
+        _until(lambda: flushes, timeout=2)
+        if flushes:
+            assert flushes[0]["x-roughcut-flush"] in ("pagehide", "hidden"), flushes
+            assert "x-roughcut-save" in flushes[0]
     finally:
         ctx.close()
 
