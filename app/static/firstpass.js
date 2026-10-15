@@ -331,6 +331,7 @@
   async function showResult(job, asked) {
     if (!job) return;
     FP.shown = job;
+    if (typeof window.rcPicksStale === 'function') window.rcPicksStale();   // its picks landed
     try {
       const d = await (await fetch(`/api/ask/${encodeURIComponent(job)}`)).json();
       if (!d.plan) return;

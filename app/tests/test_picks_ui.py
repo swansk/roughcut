@@ -443,3 +443,39 @@ def test_selects_reads_like_a_bin_at_1440(browser, live, bin5):
     finally:
         pg.close()
         _seed(bin5, [], selects=[])
+
+
+def test_selects_shows_the_picks_opened_a_second_after_they_land(browser, live, bin5):
+    """JOURNEY2's flaky `selects` step: a picks read made before the first pass had picked
+    (`firstpass_picked` false: no rows) was kept for PICKS_TTL_MS (4 s), and showing the
+    Selects tab did not re-read, so Selects said "nothing kept yet" after a pass. A read
+    that says "not picked yet" is never kept now, and `rcPicksStale()` (called when the
+    pass's result lands) forces one."""
+    _record(False)
+    _seed(bin5, CUT)
+    pg = _open(browser, live)
+    try:
+        pg.wait_for_selector("#tl .blk")
+        assert pg.evaluate("typeof window.rcPicksStale") == "function"
+        pg.evaluate("dock.open('bin')")
+        pg.wait_for_function(
+            "document.querySelector('#library').textContent.length > 0", timeout=8000)
+        pg.wait_for_timeout(300)                     # the pre-pass read has landed: no picks
+        assert pg.locator("#library tr.keep.pick").count() == 0
+        _record(True)                                # the (mocked) pass makes its picks
+        t0 = time.monotonic()
+        pg.evaluate("dock.open('project')")
+        pg.evaluate("dock.open('bin')")              # Selects shown again, well within 4 s
+        pg.locator("#binTabs .tab[data-tab=all]").click()
+        pg.wait_for_function("document.querySelectorAll('#library tr.keep.pick').length === 5",
+                             timeout=1000)
+        assert time.monotonic() - t0 < 1.5
+        # the pass's result handler forces the re-read too, however fresh the cache
+        _record(False)
+        pg.evaluate("rcPicksStale()")
+        pg.wait_for_function("document.querySelectorAll('#library tr.keep.pick').length === 0",
+                             timeout=2000)
+        assert pg.errors == []
+    finally:
+        pg.close()
+        _record(False)

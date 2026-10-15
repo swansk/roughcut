@@ -2132,16 +2132,26 @@ function keepsUsable() {
 let passPicks = null;         // /api/picks' rows, by clip; null before the first read
 let picksRead = 0;
 let picksBusy = null;
+let picksMade = false;        // the last read's `firstpass_picked`
+let picksAgain = false;       // a forced read asked for while one was in flight
 const PICKS_TTL_MS = 4000;
 
+/* A read that said "no pass has picked yet" is never kept: the pass can land its picks
+ * at any moment, and Selects opened a second later said "nothing kept yet" for the
+ * TTL (JOURNEY2's flaky `selects` step). A forced read asked for while one is in flight
+ * (made before the picks landed) runs again after it. */
 function fetchPicks(force) {
-  if (picksBusy) return picksBusy;
-  if (!force && passPicks && Date.now() - picksRead < PICKS_TTL_MS) return Promise.resolve(passPicks);
+  if (picksBusy) {
+    if (force) picksAgain = true;
+    return picksBusy;
+  }
+  if (!force && passPicks && picksMade && Date.now() - picksRead < PICKS_TTL_MS) return Promise.resolve(passPicks);
   picksBusy = fetch('/api/picks?order=clip').then((r) => (r.ok ? r.json() : null)).then((d) => {
     if (d && Array.isArray(d.picks)) {
       const was = JSON.stringify((passPicks || []).map((p) => [p.id, p.verdict, p.released]));
       // the picks are the first pass's: until one has made them, Selects is the keeps
-      passPicks = d.firstpass_picked ? d.picks.map((p) => ({ ...p, pick: true })) : [];
+      picksMade = !!d.firstpass_picked;
+      passPicks = picksMade ? d.picks.map((p) => ({ ...p, pick: true })) : [];
       picksRead = Date.now();
       if (JSON.stringify(passPicks.map((p) => [p.id, p.verdict, p.released])) !== was
           && P && window.tl && tl.state) {
@@ -2151,9 +2161,15 @@ function fetchPicks(force) {
       }
     }
     return passPicks;
-  }).catch(() => passPicks).finally(() => { picksBusy = null; });
+  }).catch(() => passPicks).finally(() => {
+    picksBusy = null;
+    if (picksAgain) { picksAgain = false; fetchPicks(true); }
+  });
   return picksBusy;
 }
+/* The first pass has made (or re-made) its picks: re-read them now, whatever the cache
+ * says (firstpass.js calls it when a run lands; showProposal may too). */
+window.rcPicksStale = () => fetchPicks(true);
 
 /* The pass's picks the board can act on: footage here, not rejected on /floor, and not
  * already one of the editor's keeps. All of them, as the pass counts them — not only the
