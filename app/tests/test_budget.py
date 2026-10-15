@@ -95,10 +95,14 @@ HEADER_MAX_PX = 50
 # Wave 6, lane KEYUI (verdict 5 punch 4), measured, no headroom: the stopwatches on Position,
 # Scale, Rotation and Opacity are in view with a shot selected (Volume's is below the fold):
 # controls / shot 61 → 65. Words unchanged (119); Lumetri's sliders sit below the fold.
+# Wave 8, lane SMALL (verdict 6 punch 10a), measured, no headroom: Premiere's Playback
+# Resolution menu on the Program's transport (Auto / Full / 1/2 / 1/4) is one control on every
+# board screen: controls / 50 → 51, / shot 65 → 66, / film 49 → 50, / fx 53 → 54, / jobs
+# 51 → 52. Words unchanged (the closed menu's "Auto" is not counted).
 WORDS_IN_VIEW = {"/": 93, "/floor": 58, "/open": 59, "/ shot": 119, "/ film": 101, "/ fx": 124,
                  "/ jobs": 102}
-CONTROLS_IN_VIEW = {"/": 50, "/floor": 8, "/open": 9, "/ shot": 65, "/ film": 49, "/ fx": 53,
-                    "/ jobs": 51}
+CONTROLS_IN_VIEW = {"/": 51, "/floor": 8, "/open": 9, "/ shot": 66, "/ film": 50, "/ fx": 54,
+                    "/ jobs": 52}
 
 # Contracts another lane delivers (M16 stage 1, C1): until that lane is merged the
 # check is an expected failure on that screen. Every stage-1 lane is merged, so this is
