@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Docs
+- **LOOP.md: wave 4 progress and POLISH's open items queued for wave 5.**
+
 ### Fixed
 - **A film with a music bed is encoded at its preset's audio bitrate.** `effects.add_music` hard-coded `-b:a 192k`, so Master (256k) and YouTube (384k) exports with a bed came out at 192k. Since EXPORTSTOP the bed's pass is the film's one AAC encode, so it now takes the preset's `audio_bitrate` from assemble. `test_music_bitrate.py`: 2 passed.
 - **A drop past the film's end leaves a gap only on V1 itself, beyond the snap zone** (lane POLISH, after merging EXPORTSTOP and PICKS2). A clip dropped on the ruler, or within 8 px of the end, still appends as before (test_timeline_lanes); dropped on V1's row further out, it lands where it was dropped with a gap before it. test_budget's numbers re-measured on the merged tree, no headroom: `/ shot` 181 words, `/ jobs` 108 words and 51 controls (EXPORTSTOP's × on the render pill is the +1).
