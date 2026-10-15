@@ -351,9 +351,11 @@ FAKE_JOBS = [
 ]
 
 # Every element under the app bar, a panel's tab strip or a Project row, and every
-# monitor readout, whose content is wider than its box. The app bar may shorten a text
-# that has no room (a job's name, Next's sentence) only on purpose: ellipsized, with the
-# whole text in a hover. Tabs, list cells and readouts may not shorten at all.
+# monitor readout, whose content is wider than its box. None may shorten at all: the
+# app bar's old exemption (a job's name or Next's sentence ellipsized with a hover
+# title) let the one blue button read "Next Make t…" (verdict 3 ruled it lenient, punch
+# 8; REDESIGN-GOAL rubric log 2026-10-15 wave 3). The app bar collapses instead: Next
+# to its icon, a job to its icon and %.
 OVERFLOW_JS = """() => {
   const shown = (el) => { const s = getComputedStyle(el);
     return el.getClientRects().length && s.display !== 'none' && s.visibility !== 'hidden'; };
@@ -366,7 +368,7 @@ OVERFLOW_JS = """() => {
       out.push(`${sel} ${el.id || el.className}: "${el.textContent.trim().slice(0, 40)}" ${el.scrollWidth} > ${el.clientWidth}`);
     }
   };
-  check('header, header *', true);
+  check('header, header *', false);
   check('.ws-tabs, .ws-tab, .ws-tab *', false);
   check('.plist td, .plist th', false);
   check('.transport, .transport *', false);
@@ -428,6 +430,132 @@ def test_no_chrome_is_cut_off(live_server, project, browser, size):
         .map(b => b.id || b.className || b.outerHTML.slice(0, 60))""")
     assert bare == []
     assert errors == []
+    ctx.close()
+
+
+# ---------------------------------------------------------------- the app bar (verdict 3, punch 8)
+#
+# One first action, nothing clipped. At 1440×900, in the four states the judge saw the
+# bar in: a fresh bin (never run), mid-index, mid-first-pass and exporting, each mocked
+# the way the server says it (/api/flow, /api/firstpass and /api/jobs answered in place),
+# no element under `header` is wider inside than its box; on the fresh bin exactly one
+# button is blue, and it is "Run first pass" (Next does not offer "Index the footage"
+# beside it). `ROUGHCUT_HEADER_SHOTS=<dir>` saves the bar of each state as a PNG.
+
+INDEX_JOB = {"id": "hd-index", "kind": "index", "state": "running", "label": "Indexing the footage",
+             "pct": 9.4, "eta_s": 4800, "eta_source": "measured", "milestone": "heard 3/12",
+             "detail": "CLIP_04 · looking", "elapsed_s": 300}
+RENDER_JOB = {"id": "hd-export", "kind": "render", "state": "running",
+              "label": "Exporting — Master 4K", "pct": 41, "eta_s": 200, "eta_source": "measured",
+              "milestone": "encoding", "detail": "frame 1210 of 2950", "elapsed_s": 140}
+ASK_JOB = {"id": "hd-ask", "kind": "ask", "state": "running", "label": "Cutting from your note",
+           "pct": 40.0, "eta_s": 30.0, "milestone": "choosing the shots", "detail": "3 shots decided",
+           "elapsed_s": 20.0}
+
+FP_COUNTS = {"index": {"clips": 12, "listened": 3, "looked": 0, "look_need": 12,
+                       "words": "heard 3/12 · looked 0/12"}}
+
+# state → (seed segments, Next's action, the first pass's state patch, running jobs)
+HEADER_STATES = {
+    "fresh": ([], {"stage": "index", "sentence": "Index the footage — free on your plan",
+                   "verb": "Index", "screen": "/open", "tool": None, "href": "/open", "kind": "go"},
+              {"state": "never-run"}, []),
+    "mid-index": (SEED["segments"],
+                  {"stage": "index", "sentence": "Indexing — heard 3/12 · looked 0/12 (9%); the pass "
+                   "opens on the first clip released", "verb": "Watch", "screen": "/open",
+                   "tool": None, "href": "/open", "kind": "wait"},
+                  {"state": "never-run"}, [INDEX_JOB]),
+    "mid-first-pass": (SEED["segments"],
+                       {"stage": "index", "sentence": "Indexing — heard 3/12 · looked 0/12 (9%); "
+                        "the pass opens on the first clip released", "verb": "Watch",
+                        "screen": "/open", "tool": None, "href": "/open", "kind": "wait"},
+                       {"state": "running", "stage": "index", "counts": FP_COUNTS},
+                       [INDEX_JOB, ASK_JOB]),
+    "exporting": (SEED["segments"],
+                  {"stage": "cut", "sentence": "Refine — trim, or ask for a change", "verb": "Refine",
+                   "screen": "/", "tool": "ask", "href": "/#tool=ask", "kind": "go"},
+                  {"state": "done"}, [RENDER_JOB]),
+}
+
+
+def _patched(patch):
+    def handler(route):
+        resp = route.fetch()
+        body = resp.json()
+        body.update(patch(body))
+        route.fulfill(response=resp, body=json.dumps(body), content_type="application/json")
+    return handler
+
+
+@pytest.mark.parametrize("state", list(HEADER_STATES))
+def test_the_app_bar_clips_nothing_and_a_fresh_bin_has_one_first_action(live_server, project,
+                                                                          browser, state):
+    import os
+    segments, nxt, fp, jobs = HEADER_STATES[state]
+    Path(project["edl"]).write_text(json.dumps({**SEED, "segments": segments}, indent=1),
+                                    encoding="utf-8")
+    ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+    pg = ctx.new_page()
+    errors = []
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    pg.route("**/api/flow", _patched(lambda b: {"next": nxt, "running": bool(jobs)}))
+    pg.route("**/api/firstpass", _patched(lambda b: fp))
+    pg.route("**/api/jobs", lambda r: r.fulfill(status=200, content_type="application/json",
+                                                 body=json.dumps({"jobs": jobs})))
+    # the backend probe, not this host's CLI: a banner is test_flow_ui's
+    pg.route("**/api/backend", lambda r: r.fulfill(status=200, content_type="application/json",
+                                                    body=json.dumps({"state": "ok", "fix": None})))
+    pg.goto(live_server)
+    pg.wait_for_selector("#projList tr.row", timeout=15000)
+    pg.wait_for_function("window.flowBar && flowBar.state() && window.rcFirstPass"
+                         f" && rcFirstPass.state() && rcFirstPass.state().state === '{fp['state']}'",
+                         timeout=15000)
+    pg.wait_for_function(f"document.querySelectorAll('#progress .job').length === {len(jobs)}",
+                         timeout=10000)
+    pg.wait_for_timeout(800)
+    shots = os.environ.get("ROUGHCUT_HEADER_SHOTS")
+    if shots:
+        Path(shots).mkdir(parents=True, exist_ok=True)
+        pg.locator("header").screenshot(path=str(Path(shots) / f"header-{state}.png"))
+    assert pg.evaluate(OVERFLOW_JS) == []
+    bar = pg.evaluate("""() => { const h = document.querySelector('header').getBoundingClientRect();
+        return {h: h.height, w: document.documentElement.scrollWidth, kids: [...document.querySelectorAll('header > *')]
+          .filter(e => e.getClientRects().length).map(e => { const r = e.getBoundingClientRect();
+            return [e.id || e.className, r.left, r.right, r.bottom]; })}; }""")
+    assert bar["w"] <= 1440 and bar["h"] <= 50, bar
+    for (a, b) in zip(bar["kids"], bar["kids"][1:]):
+        assert a[2] <= b[1] + 0.5, (a, b)                 # side by side, none over another
+    blue = pg.eval_on_selector_all(".is-next", "els => els.map(e => e.id || e.dataset.testid || e.className)")
+    chip = pg.locator("#flowNext")
+    label = pg.locator("#firstpass .fp-label").inner_text()
+    if state == "fresh":
+        # one first action: Run first pass, blue; Next does not offer the index beside it
+        assert label == "Run first pass", label
+        assert blue == ["firstpass-button"], blue
+        assert chip.count() == 0 and pg.evaluate("flowBar.yielded()")
+        assert "Index the footage" not in pg.locator("header").inner_text()
+    else:
+        # every job is an icon and its %, the name in its hover
+        for j in jobs:
+            row = pg.locator(f"#progress .job[data-job={j['id']}]")
+            assert row.locator(".jnums").inner_text().startswith(f"{round(j['pct'])}%")
+            assert not row.locator(".jname").is_visible()
+            assert row.get_attribute("title").startswith(j["label"])
+        assert len(blue) <= 1, blue
+        if chip.count():
+            # Next yields its slot while anything runs: its icon, the sentence in the hover
+            assert "compact" in chip.get_attribute("class")
+            assert chip.inner_text().strip() == ""
+            assert nxt["sentence"] in chip.get_attribute("title")
+    if state == "mid-index":
+        # an index started elsewhere: Next is its icon ("Now: Indexing — …" in the hover)
+        assert chip.count() == 1
+    if state == "mid-first-pass":
+        # the pass's own label is the news; Next has nothing to add beside it
+        assert "First pass" in label and "3/12" in label, label
+        assert chip.count() == 0 and blue == [], blue
+    assert errors == []
+    pg.unroute_all(behavior="ignoreErrors")
     ctx.close()
 
 
