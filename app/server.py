@@ -5421,7 +5421,9 @@ POSTER_CACHE = {"cache-control": "public, max-age=31536000, immutable"}
 
 
 def poster_path(stem: str, t: float) -> Path:
-    return STATE["posters"] / f"{stem}@{t:09.2f}.jpg"
+    # PICTURE_V in the name: a poster cut from a v1 preview of a rotation-flagged clip is
+    # upside down, and an old cache must be rebuilt rather than served (verdict 3 punch 1).
+    return STATE["posters"] / f"{stem}@{t:09.2f}.{PICTURE_V}.jpg"
 
 
 def build_poster(src: Path, dest: Path, t: float, original: bool = False) -> None:
@@ -5434,7 +5436,11 @@ def build_poster(src: Path, dest: Path, t: float, original: bool = False) -> Non
 
     From an `original` it is the proxy's frame: the same rotation rule and HDR tone map
     build_proxy applies, decoded on the GPU when there is one (a 4K HEVC GoPro frame:
-    0.8 s that way, 1.8 s on a loaded CPU; byte-identical JPEG either way).
+    0.8 s that way, 1.8 s on a loaded CPU; byte-identical JPEG either way). Only
+    `-hwaccel cuda`, never `-hwaccel_output_format cuda`: the frames come back to system
+    memory, where ffmpeg's autorotate turns them as it does for the proxy and the export
+    (on CUDA frames it silently does not — verdict 3's upside-down previews). A proxy or
+    preview source is already upright and carries no rotation tag.
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part.jpg")
@@ -5724,9 +5730,19 @@ def browser_playable(src: Path) -> bool:
         return False
     if max(f["width"], f["height"]) > PLAYABLE_MAX_EDGE or f["bit_rate"] > PLAYABLE_MAX_BPS:
         return False
-    if STATE.get("orient") == "none" and f["rotation"] % 360:
+    # The browser turns a tagged original itself, exactly as the export's autorotate does
+    # (`orient: auto`), but only by quarter turns; `orient: none` says the tag is wrong
+    # and the browser would honour it anyway. Either way: a preview, built by the rule.
+    if f["rotation"] % 360 and (STATE.get("orient") == "none" or f["rotation"] % 90):
         return False
     return True
+
+
+# The picture cache's version, in every preview's and poster's file name. v1 previews of
+# rotation-flagged clips were made on the all-GPU path, which does not apply the flag, and
+# posters were cut from them: upside down next to an upright export (verdict 3 punch 1).
+# Bump it whenever what a preview or poster shows changes, so an old --work rebuilds.
+PICTURE_V = "v2"
 
 
 def preview_dir() -> Path:
@@ -5735,7 +5751,25 @@ def preview_dir() -> Path:
 
 
 def preview_path(stem: str) -> Path:
-    return preview_dir() / f"{stem}.mp4"
+    return preview_dir() / f"{stem}.{PICTURE_V}.mp4"
+
+
+def preview_url(stem: str) -> str:
+    return f"/media/preview/{preview_path(stem).name}"
+
+
+def turn_needed(f: dict, orient: str) -> int:
+    """The quarter-turns a clip's display matrix asks for, as the counter-clockwise
+    degrees ffprobe reports (0, 90, 180, 270) — 0 under `orient: none`, which overrides
+    the matrix with `-display_rotation 0` everywhere (proxy, poster, export)."""
+    if orient == "none":
+        return 0
+    return int(round(float(f.get("rotation") or 0))) % 360
+
+
+# The filter that does what ffmpeg's autorotate does for a matrix of that many
+# counter-clockwise degrees (ffmpeg's own mapping; tested against it by pixels).
+TURN_VF = {90: "transpose=cclock", 180: "hflip,vflip", 270: "transpose=clock"}
 
 
 def preview_gpu() -> bool:
@@ -5758,16 +5792,27 @@ def preview_gpu() -> bool:
 
 def build_preview(src: Path, dest: Path, orient: str) -> str:
     """A 360p, keyframe-every-half-second h264/aac mp4 of `src` at `dest`; returns the
-    path it took. Three paths, fastest first, each falling through on failure: all on
-    the GPU (NVDEC + scale_cuda + NVENC; SDR 8-bit, no rotation to apply), GPU decode
-    with the CPU filters an HDR or rotated clip needs, then all software. Temp name and
-    rename, as build_proxy: the server serves while this runs."""
+    path it took. Fastest first, each falling through on failure: all on the GPU
+    (NVDEC + scale_cuda + NVENC; SDR 8-bit, no rotation to apply), the same with the
+    frames brought down after the scale for a CPU quarter-turn (a rotation-flagged SDR
+    clip: Karl's GoPro bins, flagged −180°), GPU decode with the CPU filters an HDR clip
+    needs, then all software. Temp name and rename, as build_proxy: the server serves
+    while this runs.
+
+    The orient rule is build_proxy's and the export's: under `orient: auto` the display
+    matrix is applied to the pixels and none is left on the file; under `orient: none`
+    it is overridden to 0 and the stored pixels play as they are. ffmpeg's autorotate
+    does the first on the CPU paths; on CUDA frames it silently does nothing, so the
+    all-GPU path is taken only for a clip that needs no turn (verdict 3 punch 1: 9 of
+    12 Killington clips played upside down in every monitor), and the GPU-turn path
+    overrides the matrix and turns explicitly with TURN_VF."""
     f = media_facts(src) or {}
     norm = source_normalise(src)
     fps = f.get("fps") or 30.0
     gop = max(1, round(fps * PREVIEW_GOP_S))
     w, h = f.get("width") or 0, f.get("height") or 0
-    rotated = orient != "none" and (f.get("rotation") or 0) % 180 != 0
+    turn = turn_needed(f, orient)
+    rotated = turn % 180 != 0                  # a quarter turn swaps the edges
     if rotated:
         w, h = h, w
     # the short edge to PREVIEW_H, never up; the other edge follows, even
@@ -5787,19 +5832,27 @@ def build_preview(src: Path, dest: Path, orient: str) -> str:
     paths: list[tuple[str, list[str]]] = []
     if preview_gpu():
         eight_bit = f.get("pix_fmt") in ("yuv420p", "yuvj420p", "nv12")
-        if not norm and not rotated and eight_bit:
-            paths.append(("gpu", ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda",
-                                  "-i", str(src), *io, "-vf", f"scale_cuda={tw}:{th}",
-                                  *nvenc]))
-        paths.append(("gpu-decode", ["-hwaccel", "cuda", "-i", str(src), *io,
+        cuda = ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda", "-i", str(src), *io]
+        if not norm and eight_bit and not turn:
+            paths.append(("gpu", [*pre, *cuda, "-vf", f"scale_cuda={tw}:{th}", *nvenc]))
+        elif not norm and eight_bit and turn in TURN_VF:
+            # scaled on the GPU in stored orientation (edges swapped back for a quarter
+            # turn), then a 360p frame comes down for the turn: the 5.3K decode and the
+            # scale stay on the card. The matrix is overridden so none is left on the
+            # file for the browser to apply a second time.
+            sw, sh = (th, tw) if rotated else (tw, th)
+            paths.append(("gpu-turn", [
+                "-display_rotation", "0", *cuda, "-vf",
+                f"scale_cuda={sw}:{sh},hwdownload,format=nv12,{TURN_VF[turn]}", *nvenc]))
+        paths.append(("gpu-decode", [*pre, "-hwaccel", "cuda", "-i", str(src), *io,
                                      "-vf", cpu_vf, *nvenc]))
-    paths.append(("cpu", ["-i", str(src), *io, "-vf", cpu_vf, "-c:v", "libx264",
+    paths.append(("cpu", [*pre, "-i", str(src), *io, "-vf", cpu_vf, "-c:v", "libx264",
                           "-preset", "ultrafast", "-crf", "30"]))
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part.mp4")
     err = ""
     for name, args in paths:
-        r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", *pre, *args, *tail,
+        r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", *args, *tail,
                             str(tmp)], capture_output=True, text=True)
         if r.returncode == 0 and tmp.exists() and tmp.stat().st_size:
             tmp.replace(dest)
@@ -5902,7 +5955,7 @@ def media_fallback(clip: str, wait_s: float = 0.0) -> tuple[str, str | None]:
     if browser_playable(STATE["footage"] / clip):
         return "original", f"/media/original/{stem}.mp4"
     if preview_path(stem).exists():
-        return "preview", f"/media/preview/{stem}.mp4"
+        return "preview", preview_url(stem)
     ev = start_preview(clip)
     if ev is None:
         return "failed", None
@@ -5911,7 +5964,7 @@ def media_fallback(clip: str, wait_s: float = 0.0) -> tuple[str, str | None]:
     if (STATE["proxy_dir"] / f"{stem}.mp4").exists():
         return "proxy", None
     if preview_path(stem).exists():
-        return "preview", f"/media/preview/{stem}.mp4"
+        return "preview", preview_url(stem)
     return "building", None
 
 
@@ -5979,8 +6032,15 @@ def media_original(name: str, request: Request) -> Response:
 
 @app.get("/media/preview/{name}")
 def media_preview(name: str, request: Request) -> Response:
-    """A clip's 360p preview — what plays until its 720p proxy exists."""
-    return ranged_file(preview_dir() / Path(name).name, request)
+    """A clip's 360p preview — what plays until its 720p proxy exists. Only the current
+    PICTURE_V's file: an older one may be upside down, and a page still holding its
+    URL gets a 404 and asks /media/proxy again rather than playing it."""
+    name = Path(name).name
+    tail = f".{PICTURE_V}.mp4"
+    stem = name[:-len(tail)] if name.endswith(tail) else ""
+    if not stem or name != preview_path(stem).name:
+        raise HTTPException(404, f"not found: {name}")
+    return ranged_file(preview_path(stem), request)
 
 
 @app.get("/media/status/{name}")
