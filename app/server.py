@@ -5522,6 +5522,11 @@ def _sample_job(preset: str, key: str, scope: procscope.Scope) -> None:
             raise RuntimeError((r.stderr or r.stdout or "").strip()[-200:] or "no sample")
         keys, rest = _probe_frames(out)
         res = probe_resolution(out)
+        # the sound as the encoder really spends it: AAC at "384k" on quiet or simple
+        # sound comes in well under, and on a small frame the sound is most of the file
+        ab = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0",
+                             "-show_entries", "stream=bit_rate", "-of", "csv=p=0", str(out)],
+                            capture_output=True, text=True).stdout.strip().strip(",")
         if not keys or not res:
             raise RuntimeError("the sample has no frames")
         frames = keys + rest
@@ -5534,6 +5539,7 @@ def _sample_job(preset: str, key: str, scope: procscope.Scope) -> None:
             # keyframes' mean to go on
             "p_bytes": (sum(rest) / len(rest)) if rest else sum(keys) / len(keys),
             "encode_s": round(time.time() - t0, 2),
+            "audio_kbps": round(int(ab) / 1000, 1) if ab.isdigit() else None,
         }
         sample_dir().mkdir(parents=True, exist_ok=True)
         sample_file(preset).write_text(json.dumps(data, indent=1), encoding="utf-8")
@@ -5585,7 +5591,8 @@ def sample_model(preset: str, w: int, h: int) -> dict | None:
     k = (w * h) / max(1, int(d["width"]) * int(d["height"]))
     return {"i_bytes": round(float(d["i_bytes"]) * k, 1),
             "p_bytes": round(float(d["p_bytes"]) * k, 1), "keyint": X264_KEYINT,
-            "seconds": d.get("seconds"), "slices": d.get("slices")}
+            "seconds": d.get("seconds"), "slices": d.get("slices"),
+            "audio_kbps": d.get("audio_kbps")}
 
 
 def model_video_mbps(model: dict, secs: float, shots: int, fps: float) -> float:
@@ -5650,6 +5657,7 @@ def api_export() -> JSONResponse:
         rw, rh = p["ref"]
         bppf, n = export_measured(key, seq_fps)
         model = None if bppf else sample_model(key, w, h)
+        audio_kbps = p["audio_kbps"]
         if bppf:
             total = bppf * w * h * seq_fps / 1e6
             mbps = max(0.05, total - p["audio_kbps"] / 1000)
@@ -5657,13 +5665,14 @@ def api_export() -> JSONResponse:
         elif model and seq_s > 0:
             mbps = model_video_mbps(model, seq_s, len(seq), seq_fps)
             source = "sample"
+            audio_kbps = model.get("audio_kbps") or audio_kbps
         else:
             mbps = max(0.5, p["mbps"] * (w * h) / (rw * rh) * math.sqrt(seq_fps / p["fps"]))
             source = "typical"
         presets.append({"key": key, "label": p["label"], "profile": p["profile"],
                         "about": p["about"], "width": w, "height": h,
                         "fps": round(seq_fps, 3), "fps_rational": fps_rational(seq_fps),
-                        "video_mbps": round(mbps, 3), "audio_kbps": p["audio_kbps"],
+                        "video_mbps": round(mbps, 3), "audio_kbps": audio_kbps,
                         "measured": n, "source": source, "sample": model,
                         "sample_state": "done" if model else sample_state(key)})
     root = export_root()
