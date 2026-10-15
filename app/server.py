@@ -5469,6 +5469,57 @@ def _run_render(job: str, cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
+FAILED_SHOT_PREFIX = "failed shot: "     # assemble.say_failed_shot's line
+LOG_TAIL_LINES = 40
+
+
+def failed_shot(log: str) -> dict | None:
+    """The shot whose part failed, from assemble.py's `failed shot: {json}` line (the
+    first in film order when several parts failed at once), or None."""
+    found = []
+    for line in (log or "").splitlines():
+        if line.startswith(FAILED_SHOT_PREFIX):
+            try:
+                d = json.loads(line[len(FAILED_SHOT_PREFIX):])
+            except ValueError:
+                continue
+            if isinstance(d, dict) and isinstance(d.get("index"), int):
+                found.append(d)
+    return min(found, key=lambda d: d["index"]) if found else None
+
+
+def log_tail(log: str, n: int = LOG_TAIL_LINES) -> str:
+    """The render log's last `n` lines, for the Export dialog's Show log: Python's
+    tracebacks (the frames, not the error they end in) left out — an editor reads what
+    ffmpeg said, not which line of assemble.py raised it."""
+    keep, in_tb = [], False
+    for line in (log or "").rstrip().splitlines():
+        if line.startswith("Traceback (most recent call last)") or line.startswith(
+                "During handling of the above exception"):
+            in_tb = True
+            continue
+        if in_tb and (not line.strip() or line[:1].isspace()):
+            continue
+        in_tb = False
+        keep.append(line)
+    return "\n".join(keep[-n:])
+
+
+def failure_detail(shot: dict | None, log: str) -> str:
+    """What the Export dialog says about a failed render (verdict 7, blocker 2: it said
+    "the render failed — see the log", and the log was not reachable from it): the shot
+    and its clip when a part failed, else ffmpeg's last word."""
+    if shot:
+        rng = ""
+        if isinstance(shot.get("in"), (int, float)) and isinstance(shot.get("out"), (int, float)):
+            rng = f" {float(shot['in']):.2f}–{float(shot['out']):.2f} s"
+        reason = str(shot.get("reason") or "").strip()
+        return (f"shot {shot['index'] + 1} ({shot.get('clip') or 'a clip'}{rng}) did not "
+                f"render{': ' + reason if reason else ''}")
+    last = [ln.strip() for ln in (log or "").splitlines() if ln.strip()]
+    return f"the render failed: {last[-1][-200:]}" if last else "the render failed"
+
+
 def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
     entry = RENDERS[job]
     parts_dir = STATE["work"] / f"parts_{job}"
@@ -5574,7 +5625,10 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
     )
     if not ok:
         entry["stage"] = "failed"
-        entry.finish("failed", detail="the render failed — see the log")
+        shot = failed_shot(entry["log"])
+        entry["failed_shot"] = shot
+        entry["log_tail"] = log_tail(entry["log"])
+        entry.finish("failed", detail=failure_detail(shot, entry["log"]))
         return
 
     if export:
@@ -5630,19 +5684,40 @@ def review_path(name: str) -> Path:
     return STATE["reviews"] / Path(name).name
 
 
+REVIEW_SCOPES: dict = {}
+
+
+def review_scope() -> procscope.Scope:
+    """The scope every review copy's ffmpeg runs in (verdict 7, punch 10: an export's
+    review copy outlived the server). Its own session (process group) and PR_SET_PDEATHSIG
+    as the YIELD encodes have, and the shutdown hook's `procscope.kill_all` ends it. Not
+    background: a render's own copy is a phase somebody is watching, so it is neither
+    niced nor paused. Fresh after a shutdown's kill."""
+    with REVIEW_LOCK:
+        sc = REVIEW_SCOPES.get("scope")
+        if sc is None or sc.cancelled:
+            sc = REVIEW_SCOPES["scope"] = procscope.Scope("review copies")
+        return sc
+
+
+def review_cmd(src: Path, tmp: Path) -> list[str]:
+    """The ffmpeg that makes a review copy: 720p, faststart — the proxies' recipe."""
+    return ["ffmpeg", "-v", "error", "-y", "-nostdin", "-i", str(src),
+            "-map", "0:v:0", "-map", "0:a:0?", "-dn",
+            # Capped by width, never upscaled: a preview render is already small and
+            # re-encoding it bigger would spend bytes on detail that is not there.
+            "-vf", f"scale=min({PROXY_W}\\,iw):-2", "-c:v", "libx264",
+            "-preset", "veryfast", "-crf", str(PROXY_CRF),
+            "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(tmp)]
+
+
 def build_review(src: Path, dest: Path) -> None:
-    """A 720p, faststart copy of a finished render — same recipe as the proxies."""
+    """A 720p, faststart copy of a finished render — same recipe as the proxies —
+    made in `review_scope`, so it dies with the server."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(f".{os.getpid()}.part.mp4")
-    r = subprocess.run(
-        ["ffmpeg", "-v", "error", "-y", "-nostdin", "-i", str(src),
-         "-map", "0:v:0", "-map", "0:a:0?", "-dn",
-         # Capped by width, never upscaled: a preview render is already small and
-         # re-encoding it bigger would spend bytes on detail that is not there.
-         "-vf", f"scale=min({PROXY_W}\\,iw):-2", "-c:v", "libx264",
-         "-preset", "veryfast", "-crf", str(PROXY_CRF),
-         "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(tmp)],
-        capture_output=True, text=True)
+    with procscope.active(review_scope()):
+        r = subprocess.run(review_cmd(src, tmp), capture_output=True, text=True)
     if r.returncode != 0:
         tmp.unlink(missing_ok=True)
         raise RuntimeError(f"review copy failed for {src.name}: {r.stderr[-300:]}")

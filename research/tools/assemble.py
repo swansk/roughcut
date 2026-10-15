@@ -50,6 +50,7 @@ import functools
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -468,6 +469,51 @@ def static_prop(controls: dict | None, prop: str) -> float:
             "volume_db": ctl_num(c, "volume_db", 0.0)}[prop]
 
 
+def held_value(keys: list[tuple[float, float]], a: float, b: float) -> float | None:
+    """The keys' value when it is the same at every instant of [a, b], else None. The
+    keys are linear between them and held outside, so the value is constant there exactly
+    when it is the same at both ends, at every key inside and on both sides of a step (two
+    keys at one instant): those are the only places it can turn."""
+    vals = [value_at(keys, a), value_at(keys, b)]
+    vals += [v for t, v in keys if a <= t <= b]
+    vals += [value_at(keys, t) for t, _ in keys if a < t < b]
+    return vals[0] if max(vals) - min(vals) < 1e-9 else None
+
+
+def held_controls(controls: dict | None, a: float, b: float) -> dict | None:
+    """`controls` with every keyed property whose value never changes over the clip's
+    times [a, b] (one key — a single click on a stopwatch —, keys of equal value, keys
+    that all lie before or after the part) replaced by that value as the static control
+    (verdict 7, blocker 2: one Opacity key wrote an empty `sendcmd` file and ffmpeg
+    refused the graph, so every export failed). The render then draws it exactly as the
+    static control, with no per-frame warp or command file. A property that changes
+    inside [a, b] stays keyed. Returns `controls` itself when nothing is held (the EDL's
+    own dict is never modified)."""
+    keys = (controls or {}).get("keys") or {}
+    held = {}
+    for prop in KEYED_PROPS:
+        k = keys_of(controls, prop)
+        if k:
+            v = held_value(k, a, b)
+            if v is not None:
+                held[prop] = v
+    if not held:
+        return controls
+    out = {kk: vv for kk, vv in controls.items() if kk != "keys"}
+    rest = {p: v for p, v in keys.items() if p not in held}
+    if rest:
+        out["keys"] = rest
+    if "position_x" in held or "position_y" in held:
+        pos = list(out.get("position") or [0.5, 0.5])
+        pos[0] = held.get("position_x", pos[0])
+        pos[1] = held.get("position_y", pos[1])
+        out["position"] = pos
+    for prop in ("scale", "rotation", "opacity", "volume_db"):
+        if prop in held:
+            out[prop] = held[prop]
+    return out
+
+
 def prop_expr(controls: dict | None, prop: str, tvar: str) -> str:
     keys = keys_of(controls, prop)
     return lerp_expr(keys, tvar) if keys else f"{static_prop(controls, prop):.6g}"
@@ -730,12 +776,14 @@ def keyed_motion_graph(controls: dict | None, w: int, h: int, rate: Fraction,
 
 def opacity_commands(keys: list[tuple[float, float]], frames: int, rate: Fraction,
                      dest: Path, target: str = "lutyuv@kop", *, alpha: bool = False,
-                     t0: float = 0.0) -> str:
+                     t0: float = 0.0) -> tuple[str, bool]:
     """A keyed Opacity's per-frame values as a `sendcmd` file: the blend toward black
     (`dim_vf`'s maths) re-set on the frame where it changes, a half frame early so a
-    timestamp's rounding never misses it. Returns the frame-0 opacity's `lutyuv`.
-    `alpha` (a V2+ clip): the opacity scales the picture's alpha instead, so it mixes
-    with what is under it. `t0`: the clip's time at frame 0."""
+    timestamp's rounding never misses it. Returns the frame-0 opacity's `lutyuv` and
+    whether there is any change to send: when there is none the file is not written (an
+    empty `sendcmd` file is an error to ffmpeg — verdict 7, blocker 2) and the caller
+    draws the `lutyuv` alone. `alpha` (a V2+ clip): the opacity scales the picture's
+    alpha instead, so it mixes with what is under it. `t0`: the clip's time at frame 0."""
     def exprs(a: float) -> dict[str, str]:
         a = max(0.0, min(1.0, a))
         if alpha:
@@ -754,8 +802,9 @@ def opacity_commands(keys: list[tuple[float, float]], frames: int, rate: Fractio
         else:
             first = a
         last = a
-    dest.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return f"{target}=" + ":".join(f"{c}='{e}'" for c, e in exprs(first).items())
+    if lines:
+        dest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return f"{target}=" + ":".join(f"{c}='{e}'" for c, e in exprs(first).items()), bool(lines)
 
 
 def filter_path(p: Path) -> str:
@@ -771,7 +820,10 @@ def controls_graph(controls: dict | None, w: int, h: int, rate: Fraction, frames
     """Motion and Opacity from `[vin]` to `[vout]`, keyed or not. Nothing keyed: the
     static `motion_graph`. Motion keyed: `keyed_motion_graph`, then the Opacity. Opacity
     keyed: the static motion at full opacity, then the blend toward black re-set per
-    frame by `sendcmd` (`opacity_commands`, written to `cmd_file`)."""
+    frame by `sendcmd` (`opacity_commands`, written to `cmd_file`). A keyed property
+    that holds one value over the part's frames is drawn as that static value
+    (`held_controls`; verdict 7, blocker 2)."""
+    controls = held_controls(controls, 0.0, (max(1, frames) - 1) / float(rate))
     op_keys = keys_of(controls, "opacity")
     moved = any(keys_of(controls, p) for p in MOTION_PROPS)
     if not moved and not op_keys:
@@ -787,8 +839,9 @@ def controls_graph(controls: dict | None, w: int, h: int, rate: Fraction, frames
             graph.append(still)
             cur = "kmo"
     if op_keys:
-        lut = opacity_commands(op_keys, frames, rate, cmd_file)
-        graph.append(f"[{cur}]sendcmd=f={filter_path(cmd_file)},{lut}[{vout}]")
+        lut, changes = opacity_commands(op_keys, frames, rate, cmd_file)
+        cmd = f"sendcmd=f={filter_path(cmd_file)}," if changes else ""
+        graph.append(f"[{cur}]{cmd}{lut}[{vout}]")
     else:
         op = max(0.0, min(1.0, ctl_num(controls, "opacity", 100.0) / 100.0))
         graph.append(f"[{cur}]{dim_vf(op) if op < 1.0 - 1e-9 else 'null'}[{vout}]")
@@ -805,8 +858,10 @@ def overlay_controls_graph(controls: dict | None, w: int, h: int, rate: Fraction
     V1's (`motion_layout`, `keyed_motion_graph`, `opacity_commands`; keys win), `t0` the
     clip's time at this piece's first frame. Returns `(graph, x, y)` — where the
     picture's top-left lands — or None at the defaults (the opaque full-frame overlay as
-    before), or "empty" when nothing of it shows (scale 0, opacity 0, off the frame)."""
-    c = controls or {}
+    before), or "empty" when nothing of it shows (scale 0, opacity 0, off the frame). A
+    keyed property that holds one value over the piece is its static value
+    (`held_controls`; verdict 7, blocker 2)."""
+    c = held_controls(controls, t0, t0 + (max(1, frames) - 1) / float(rate)) or {}
     op_keys = keys_of(c, "opacity")
     graph, cur, x, y = [], vin, 0, 0
     if any(keys_of(c, p) for p in MOTION_PROPS):
@@ -822,9 +877,10 @@ def overlay_controls_graph(controls: dict | None, w: int, h: int, rate: Fraction
             graph.append(f"[{cur}]format=yuva420p,{','.join(chain)}[{tag}m]")
             cur = f"{tag}m"
     if op_keys:
-        lut = opacity_commands(op_keys, frames, rate, cmd_file, f"lutyuv@{tag}op",
-                               alpha=True, t0=t0)
-        graph.append(f"[{cur}]format=yuva420p,sendcmd=f={filter_path(cmd_file)},{lut}[{vout}]")
+        lut, changes = opacity_commands(op_keys, frames, rate, cmd_file, f"lutyuv@{tag}op",
+                                        alpha=True, t0=t0)
+        cmd = f"sendcmd=f={filter_path(cmd_file)}," if changes else ""
+        graph.append(f"[{cur}]format=yuva420p,{cmd}{lut}[{vout}]")
     else:
         op = motion_opacity(c)
         if op <= 1e-6:
@@ -906,6 +962,9 @@ def encode_part(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path
     rate = rate_of(video["fps"])
     frames = (span[1] - span[0]) if span is not None else max(
         1, math.ceil(part_seconds(t_in, t_out, speed) * rate))
+    # a keyed property that holds one value over the part is its static value (one
+    # stopwatch click is one key: verdict 7, blocker 2) — the sound's window is the part
+    controls = held_controls(controls, 0.0, frames / float(rate))
     vol = volume_vf(controls)
     gpu = gpu_input(src, orient, normalise, video) if gpu_decode else None
     graph = [f"[0:v]{video_filter(video, normalise, lut, speed, controls, gpu)}[vbase]",
@@ -1549,6 +1608,47 @@ def describe_colour(res: dict, normalise: str | None, probe: dict) -> str:
     return " · ".join(bits)
 
 
+FAILED_SHOT = "failed shot: "     # the board reads this line (server._render_job)
+
+
+GENERIC_FFMPEG = ("Error parsing global options", "Error initializing complex filters",
+                  "Error opening output", "Conversion failed", "initializing filters")
+
+
+def ffmpeg_reason(text: str) -> str:
+    """ffmpeg's own word on a failure, short enough to read: the first specific line of
+    its stderr (not the generic "Error parsing global options" it ends with), with the
+    filter graph it quotes cut out and its `[fc#0 @ 0x…]` prefixes dropped."""
+    out = []
+    for ln in text.splitlines():
+        ln = re.sub(r"^cut failed [^:]*:\s*", "", ln.strip())
+        ln = re.sub(r"^\[[^\]]*@ 0x[0-9a-f]+\]\s*", "", ln)
+        ln = re.sub(r" in filtergraph description \S+", "", ln)
+        ln = re.sub(r"'[^']{60,}'", "'…'", ln)
+        if ln:
+            out.append(ln)
+    specific = [ln for ln in out if not ln.startswith(GENERIC_FFMPEG)]
+    return ((specific or out or [""])[0])[:200]
+
+
+def say_failed_shot(job: dict, exc: BaseException, spans: list, rate: Fraction) -> None:
+    """One line, for whoever ran this render, naming the shot whose part failed: its
+    place in the EDL, id, clip and range, where it starts in the film, and ffmpeg's own
+    last word on it. Verdict 7: an export failed with "the render failed — see the log"
+    and nothing said which shot or what to do; the board's Export dialog now names it
+    and offers Go to shot."""
+    seg = job["seg"]
+    i = job["index"]
+    reason = ffmpeg_reason(str(exc)) or type(exc).__name__
+    over = [f"{o.get('label', 'V2')} {Path(o['src']).name}"
+            for o in (job["kw"].get("overlays") or []) if o.get("src")]
+    print(FAILED_SHOT + json.dumps({
+        "index": i, "id": seg.get("id"), "clip": seg.get("clip"),
+        "in": seg.get("in"), "out": seg.get("out"),
+        "film_s": round(float(spans[i][0] / rate), 4),
+        "overlays": over, "reason": reason[-200:]}), flush=True)
+
+
 def describe_controls(c: dict) -> str:
     """One line for the render log: the shot's Effect Controls that are not default."""
     bits = []
@@ -1700,7 +1800,7 @@ def main() -> int:
                            shot_effects=shot_effects or None,
                            workdir=workdir / f"part_{i:03d}_fx", span=spans[i],
                            overlays=pieces[i], v1_hidden=v1_hidden),
-                "seg": seg, "generated": generated, "res": res, "probe": probe,
+                "index": i, "seg": seg, "generated": generated, "res": res, "probe": probe,
                 "shot_effects": shot_effects})
 
         # Transitions (verdict 6, punch 6): each part's halves, mixed inside it
@@ -1716,7 +1816,13 @@ def main() -> int:
             print(f"transition: {line}")
 
         def one(job: dict) -> float:
-            cut_part(video, **job["kw"])
+            try:
+                cut_part(video, **job["kw"])
+            except EncoderLost:
+                raise                               # the film is cut again with x264
+            except Exception as exc:
+                say_failed_shot(job, exc, spans, rate)
+                raise
             dest = job["kw"]["dest"]
             assert_no_rotation(dest, orient)        # catch it at the part, not the film
             return probe_duration(dest)
