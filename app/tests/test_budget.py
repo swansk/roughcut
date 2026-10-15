@@ -92,9 +92,12 @@ HEADER_MAX_PX = 50
 # row, where a long strip scrolls inside its panel (as Premiere's does), so less of it is
 # in view: words / 106 → 93, / shot 181 → 119, / film 114 → 101, / fx 134 → 124,
 # / jobs 108 → 102; controls / shot 85 → 61; the other controls unchanged.
+# Wave 6, lane KEYUI (verdict 5 punch 4), measured, no headroom: the stopwatches on Position,
+# Scale, Rotation and Opacity are in view with a shot selected (Volume's is below the fold):
+# controls / shot 61 → 65. Words unchanged (119); Lumetri's sliders sit below the fold.
 WORDS_IN_VIEW = {"/": 93, "/floor": 58, "/open": 59, "/ shot": 119, "/ film": 101, "/ fx": 124,
                  "/ jobs": 102}
-CONTROLS_IN_VIEW = {"/": 50, "/floor": 8, "/open": 9, "/ shot": 61, "/ film": 49, "/ fx": 53,
+CONTROLS_IN_VIEW = {"/": 50, "/floor": 8, "/open": 9, "/ shot": 65, "/ film": 49, "/ fx": 53,
                     "/ jobs": 51}
 
 # Contracts another lane delivers (M16 stage 1, C1): until that lane is merged the
