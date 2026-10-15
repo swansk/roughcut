@@ -372,7 +372,7 @@ def test_adding_from_the_bin_lands_at_the_playhead(page):
     page.locator("#binTabs .tab[data-tab=all]").click()
     assert "in the cut · shot 2" in page.locator('#library .keep[title^="CLIP_C"]').inner_text()
     page.locator("#binTabs .tab[data-tab=out]").click()
-    assert page.locator("#total").inner_text() == "0:05.5"
+    assert page.locator("#total").inner_text() == page.evaluate("tl.tc(5.5)")   # timecode
     # near the end of the film the nearest cut is the end: it appends
     page.evaluate("tl.seek(5.3)")
     # (the save after the first add wrote shot 1 into the bin as a keep of its own, so

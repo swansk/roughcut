@@ -152,8 +152,8 @@ def test_a_half_speed_shot_is_twice_as_long_on_the_ruler_and_in_the_total(page):
     assert page.evaluate("tl.speedOf(segs[0])") == 0.5
     assert page.evaluate("tl.total()") == 6.0
     assert page.locator("#tl .tl-total").inner_text() == tc(6.0)
-    assert page.locator("#total").inner_text() == "0:06.0"
-    assert page.locator("#posTotal").inner_text() == "0:06.0"
+    assert page.locator("#total").inner_text() == tc(6.0)       # the monitors read timecode
+    assert page.locator("#posTotal").inner_text() == tc(6.0)
     labels = page.evaluate(
         "[...document.querySelectorAll('#tl .tl-ruler .major label')].map(l => l.textContent)")
     # timecode at the sequence rate (REDESIGN dimension 5); the step follows the zoom
@@ -261,7 +261,7 @@ def test_the_monitor_plays_a_slow_shot_at_its_rate_and_hands_over_at_its_out(pag
     page.locator("#tl .tl-ruler").click(position={"x": x_of(page, 2.0), "y": 8})
     assert page.evaluate("player.idx") == 0
     page.wait_for_function("Math.abs(liveVideo().currentTime - 2.0) < 0.1", timeout=10000)
-    assert page.locator("#pos").inner_text() == "0:02.0"
+    assert page.locator("#pos").inner_text() == tc(2.0)
     # JKL's rate multiplies the shot's: L twice is 2× the shuttle, 1× on the buffer
     page.keyboard.press("l")
     page.wait_for_function("player.playing", timeout=10000)
@@ -291,7 +291,7 @@ def test_the_inspectors_speed_chip_writes_speed_as_one_undo_entry_and_the_save_c
     assert page.evaluate("segs[1].speed") == 0.5
     assert sel.input_value() == "0.5"
     assert page.locator("#inspector .sname").inner_text() == "Shot 2 · 4.0 s"
-    assert page.locator("#total").inner_text() == "0:08.0"
+    assert page.locator("#total").inner_text() == tc(8.0)
     assert page.locator("#tl .tl-total").inner_text() == tc(8.0)
     assert page.locator("#tl .blk").nth(1).locator(".speed:not([hidden])").inner_text() == "0.5×"
     assert page.locator("#undo").get_attribute("title").startswith("undo: speed")
@@ -308,7 +308,7 @@ def test_the_inspectors_speed_chip_writes_speed_as_one_undo_entry_and_the_save_c
     # one undo takes it back; redo brings it
     page.keyboard.press("Control+z")
     assert page.evaluate("'speed' in segs[1]") is False
-    assert page.locator("#total").inner_text() == "0:06.0"
+    assert page.locator("#total").inner_text() == tc(6.0)
     page.keyboard.press("Control+Shift+z")
     assert page.evaluate("segs[1].speed") == 0.5
 

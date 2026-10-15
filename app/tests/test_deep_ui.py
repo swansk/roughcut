@@ -185,6 +185,10 @@ def test_the_inspector_shows_how_the_shot_s_clip_was_seen(bin_state, browser):
 
     # the stored look renders in place: a filmstrip, seen solid, inferred hatched
     pg.click(f"{box} .dv-lane[data-lane=deep] i.w")
+    # (the strip sits in the Effect Controls panel, which scrolls inside itself: the lazy
+    # stills load once they are scrolled into it)
+    pg.wait_for_selector(f"{box} .dv-res .dv-film figure img", state="attached")
+    pg.locator(f"{box} .dv-res .dv-film").scroll_into_view_if_needed()
     pg.wait_for_selector(f"{box} .dv-res .dv-film figure img")
     assert pg.locator(f"{box} .dv-film figure").count() == 4
     assert pg.locator(f"{box} .dv-film figure.asked").count() == 1

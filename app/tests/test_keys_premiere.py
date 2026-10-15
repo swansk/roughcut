@@ -82,6 +82,7 @@ def page(live_server, project):
         pg.wait_for_selector("#tl .blk")
         pg.wait_for_selector("#tlKeys", state="attached")
         pg.evaluate("localStorage.clear()")          # markers and in / out start empty
+        pg.evaluate("dock.open('bin')")   # the workspace opens on Project; these drive its Selects tab
         pg.evaluate("tl.setMarkers([]); tl.setSeqIn(null); tl.setSeqOut(null)")
         yield pg
         browser.close()

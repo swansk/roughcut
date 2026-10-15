@@ -78,6 +78,7 @@ def page(live_server, project):
         pg = browser.new_page(viewport={"width": 1280, "height": 900})
         pg.goto(live_server)
         pg.wait_for_selector("#tl .blk")
+        pg.evaluate("dock.open('bin')")   # the workspace opens on Project; these drive its Selects tab
         yield pg
         browser.close()
 

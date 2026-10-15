@@ -202,7 +202,7 @@ def test_the_project_panel_lists_the_footage_and_opens_a_clip_in_the_source_moni
     assert [r.split()[0] for r in rows.all_inner_texts()] == ["CLIP_A.MP4", "CLIP_B.MP4", "CLIP_C.MP4"]
     head = pg.locator("#projList th").all_inner_texts()
     assert head[:2] == ["Name", "Duration"] and "Status" in head, head
-    assert "0:06.0" in rows.first.inner_text()
+    assert pg.evaluate("tl.tc(6)") in rows.first.inner_text()     # durations in timecode
     assert pg.locator("#projCount").inner_text() == "3 items"
     # the search box filters
     pg.locator("#projQ").fill("clip_b")
@@ -224,7 +224,7 @@ def test_the_project_panel_lists_the_footage_and_opens_a_clip_in_the_source_moni
     pg.keyboard.press("o")
     src = pg.evaluate("({...rcSource})")
     assert src["clip"] == "CLIP_C.MP4" and src["inPoint"] == pytest.approx(1.0) and src["outPoint"] == pytest.approx(3.0), src
-    assert pg.locator("#srcDur").inner_text() == "In–Out 0:02.0"
+    assert pg.locator("#srcDur").inner_text() == "In–Out " + pg.evaluate("tl.tc(2)")
     assert pg.locator("#srcBar .range").is_visible()
     # the marks are the clip's: another clip has none, and coming back finds them
     pg.locator("#projList tr.row", has_text="CLIP_A").click()

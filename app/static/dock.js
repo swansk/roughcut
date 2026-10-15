@@ -42,6 +42,9 @@
   };
   const esc = (x) => String(x == null ? '' : x).replace(/[&<>"]/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  // Premiere's HH:MM:SS:FF, the timeline's own (tl.tc), at the clip's rate when known
+  const tcode = (t, rate) => (window.tl && typeof tl.tc === 'function'
+    ? tl.tc(t, Number(rate) > 0 ? Number(rate) : undefined) : clockOf(t));
   const clockOf = (t) => {
     t = Math.max(0, Number(t) || 0);
     const m = Math.floor(t / 60), s = t - m * 60;
@@ -405,7 +408,7 @@ const DEFAULTS = { proj: 0.2, insp: 0.245, src: null, top: 0.6 };
   const sizeOf = (c) => (c.width && c.height ? `${c.width}×${c.height}` : '');
 
   function columns(width) {
-    const cols = [{ k: 'name', h: 'Name' }, { k: 'dur', h: 'Duration', w: 62 }];
+    const cols = [{ k: 'name', h: 'Name' }, { k: 'dur', h: 'Duration', w: 88 }];
     if (width > 220) cols.push({ k: 'state', h: 'Status', w: 72 });
     if (width > 400 && project.clips.some((c) => c.fps)) cols.push({ k: 'fps', h: 'Frame Rate', w: 76 });
     if (width > 470 && project.clips.some((c) => c.width)) cols.push({ k: 'size', h: 'Resolution', w: 88 });
@@ -415,7 +418,7 @@ const DEFAULTS = { proj: 0.2, insp: 0.245, src: null, top: 0.6 };
 
   function cell(k, c) {
     if (k === 'name') return `<td class="name"><span class="n">${FILM_ICON}<span>${esc(c.clip)}</span></span></td>`;
-    if (k === 'dur') return `<td>${c.duration ? clockOf(c.duration) : ''}</td>`;
+    if (k === 'dur') return `<td>${c.duration ? tcode(c.duration, c.fps) : ''}</td>`;
     if (k === 'state') { const [t, cls] = stateOf(c); return `<td class="st ${cls}">${t}</td>`; }
     if (k === 'fps') return `<td>${fpsOf(c)}</td>`;
     if (k === 'size') return `<td>${sizeOf(c)}</td>`;
@@ -441,7 +444,7 @@ const DEFAULTS = { proj: 0.2, insp: 0.245, src: null, top: 0.6 };
     if (project.view === 'icon') {
       box.innerHTML = `<div class="picons">${list.map((c) => `
         <div class="picon${project.sel === c.clip ? ' sel' : ''}" data-clip="${esc(c.clip)}" draggable="true" title="${esc(c.clip)}">
-          <div class="thumb"><img alt="" loading="lazy" decoding="async" draggable="false" src="${esc(c.poster || `/media/poster/${c.stem}.jpg?t=0.00`)}"><span class="d">${c.duration ? clockOf(c.duration) : ''}</span></div>
+          <div class="thumb"><img alt="" loading="lazy" decoding="async" draggable="false" src="${esc(c.poster || `/media/poster/${c.stem}.jpg?t=0.00`)}"><span class="d">${c.duration ? tcode(c.duration, c.fps) : ''}</span></div>
           <div class="nm">${esc(c.clip)}</div></div>`).join('')}</div>`;
       return;
     }
@@ -597,7 +600,7 @@ const DEFAULTS = { proj: 0.2, insp: 0.245, src: null, top: 0.6 };
       if (!v) return;
       const dur = (c && Number(c.duration)) || v.duration || 0;
       const t = v.currentTime || 0;
-      $('#srcPos').textContent = clockOf(t);
+      $('#srcPos').textContent = tcode(t, c && c.fps);
       const bar = $('#srcBar');
       const head = bar.querySelector('.head'), range = bar.querySelector('.range');
       head.style.left = dur ? `${(t / dur) * 100}%` : '0';
@@ -608,9 +611,9 @@ const DEFAULTS = { proj: 0.2, insp: 0.245, src: null, top: 0.6 };
         const [a, b] = this.marksFor(c);
         range.style.left = `${(a / dur) * 100}%`;
         range.style.width = `${Math.max(0, (b - a) / dur) * 100}%`;
-        $('#srcDur').textContent = `In–Out ${clockOf(b - a)}`;
+        $('#srcDur').textContent = `In–Out ${tcode(b - a, c.fps)}`;
       } else {
-        $('#srcDur').textContent = c ? clockOf(dur) : '';
+        $('#srcDur').textContent = c ? tcode(dur, c.fps) : '';
       }
       const play = $('#srcPlay');
       if (play) play.innerHTML = v.paused
@@ -705,7 +708,6 @@ const DEFAULTS = { proj: 0.2, insp: 0.245, src: null, top: 0.6 };
     ['G', 'the grade on / off — "ungraded" shows on the picture while it is off', 'play'],
     ['[ ]', 'trim the in-point (Shift: a second)', 'trim'],
     ['{ }', 'trim the out-point (Shift: a second)', 'trim'],
-    ['O', 'bins and cuts', 'move'],
     ['click', 'a keep selects it', 'bin'],
     ['↵', 'adds the selected keep at the playhead', 'bin'],
     ['space', 'plays the selected keep in the bin', 'bin'],
@@ -714,22 +716,18 @@ const DEFAULTS = { proj: 0.2, insp: 0.245, src: null, top: 0.6 };
     ['space', 'play / stop the source clip (Source focused)', 'source'],
     ['← →', 'step a frame (Source focused)', 'source'],
   ];
-  const TL_GROUP = {
-    'J K L': 'play', '← →': 'play', 'Home End': 'play',
-    'C': 'trim', 'Q W': 'trim', 'X ⌫ Del': 'trim', '⌘D': 'trim', ', .': 'trim', 'S': 'trim',
-    '▲ edge': 'trim', '▼ edge': 'trim', '⇧ drag': 'trim', '⌘Z ⌘⇧Z': 'trim',
-    'I O': 'bin', '↵': 'bin',
-  };
   function keyTable() {
     const box = $('#keyTable');
     if (!box) return;
     const tlk = (window.tlKeys && Array.isArray(window.tlKeys.KEYS)) ? window.tlKeys.KEYS : [];
     const rows = BOARD_KEYS.map(([k, what, g]) => ({ k, what, g }));
     const seen = new Set(rows.map((r) => `${r.k}|${r.what}`));
-    tlk.forEach(([k, what]) => {
+    // a timeline row carries its group as its 4th field (lane KEYS)
+    tlk.forEach((row) => {
+      const [k, what] = row;
       if (k === '?' || seen.has(`${k}|${what}`)) return;
       seen.add(`${k}|${what}`);
-      rows.push({ k, what, g: TL_GROUP[k] || 'move' });
+      rows.push({ k, what, g: GROUPS.some(([g]) => g === row[3]) ? row[3] : 'move' });
     });
     box.innerHTML = GROUPS.map(([g, name]) => {
       const mine = rows.filter((r) => r.g === g);

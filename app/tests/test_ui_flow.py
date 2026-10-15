@@ -105,6 +105,7 @@ def page(live_server, project):
         pg = browser.new_page(viewport={"width": 1280, "height": 900})
         pg.goto(live_server)
         pg.wait_for_selector("#tl .blk")
+        pg.evaluate("dock.open('bin')")   # the workspace opens on Project; these drive its Selects tab
         yield pg
         browser.close()
 
@@ -152,7 +153,7 @@ def test_board_renders_the_timeline(page):
     assert page.locator("#tl .blk").count() == 2
     # the cut's title is the tab's, not a header line (INTAKE M16 I16.1: one header row)
     assert "test cut" in page.title()
-    assert page.locator("#total").inner_text() == "0:04.0"   # (3.0-1.0) + (2.0-0.0)
+    assert page.locator("#total").inner_text() == page.evaluate("tl.tc(4.0)")   # (3.0-1.0) + (2.0-0.0)
 
 
 def test_preview_video_loads_and_can_seek(page):
@@ -419,7 +420,7 @@ def test_an_empty_timeline_offers_a_first_cut_and_gets_one(page):
         select_shot(page, 0)
         page.keyboard.press("x")
         page.keyboard.press("x")
-        page.wait_for_selector("#inspector .empty")
+        page.wait_for_selector("#tlEmpty .empty")
         assert page.locator("#tl .blk").count() == 0
         assert "No cut yet" in page.locator(".empty").inner_text()
         # the flow: the cut is the stage to do, and Next says so
@@ -882,20 +883,24 @@ def test_the_inspector_says_so_when_nothing_or_several_are_selected(page):
     insp.locator("button[data-act=delall]").click()
     assert page.evaluate("segs.length") == 0
     assert page.locator("#tl .blk").count() == 0
-    assert "No cut yet" in insp.locator(".empty").inner_text()
+    # the empty sequence's first action is the Timeline panel's (the workspace); Effect
+    # Controls says nothing is selected
+    assert "No cut yet" in page.locator("#tlEmpty .empty").inner_text()
+    assert "sequence is empty" in insp.inner_text()
     page.keyboard.press("Control+z")               # one entry for both
     assert page.evaluate("segs.length") == 2
     assert page.locator("#tl .blk").count() == 2
-    assert insp.locator(".empty").count() == 0
+    assert page.locator("#tlEmpty .empty").count() == 0
     select_shot(page, 0)
     assert insp.locator(".sname").inner_text() == "Shot 1 · 2.0 s"
 
 
 # ------------------------------------------------------------------ the monitor
 
-def _clock(text: str) -> float:
-    m, s = text.split(":")
-    return int(m) * 60 + float(s)
+def _clock(text: str, fps: float = 23.976) -> float:
+    """The monitors read HH:MM:SS:FF (lane KEYS's timecode, non-drop at the nominal rate)."""
+    hh, mm, ss, ff = (int(x) for x in text.split(":"))
+    return ((hh * 60 + mm) * 60 + ss + ff / round(fps)) * round(fps) / fps
 
 
 def test_the_monitor_paints_a_frame_soon_after_play_is_pressed(page):
@@ -972,7 +977,7 @@ def test_the_cut_plays_through_from_the_proxies(page):
     page.wait_for_function("!player.playing", timeout=15000)             # ran off the end
     assert page.evaluate("document.querySelector('#pv1').currentTime") >= 1.8
     assert _clock(page.locator("#pos").inner_text()) >= 3.7              # of 4.0
-    assert page.locator("#posTotal").inner_text() == "0:04.0"
+    assert page.locator("#posTotal").inner_text() == page.evaluate("tl.tc(4.0)")
     # the end puts the selection back at the top, so space plays again from the start
     assert page.evaluate("sel") == 0
 
@@ -1062,12 +1067,13 @@ def test_a_media_error_is_shown_on_the_monitor_not_swallowed(page):
         v.src = '/media/proxy/NOT_A_CLIP.mp4';        // 404: MEDIA_ERR_SRC_NOT_SUPPORTED
         v.load();
     }""")
-    page.wait_for_selector("#screenMsg:not([hidden])", timeout=10000)
-    msg = page.locator("#screenMsg").inner_text()
-    assert "CLIP_A" in msg, msg
-    assert "would not open" in msg and "code 4" in msg, msg
-    assert page.locator("#screenMsg").get_attribute("class") == "bad"
-    assert "code 4" in page.locator("#toast").inner_text()
+    # Since the redesign (verdict 1 punch 5) it is not swallowed and not shouted either: the
+    # monitor stops, keeps the poster up and says "preparing preview…" while it asks the
+    # server when the media is ready — never the browser's raw MEDIA_ELEMENT_ERROR text.
+    page.wait_for_selector("#monWait:not([hidden])", timeout=10000)
+    assert "preparing preview" in page.locator("#monWait").inner_text()
+    text = page.locator("#pProgram").inner_text()
+    assert "MEDIA_ELEMENT_ERROR" not in text and "code 4" not in text, text
     page.wait_for_function("!player.playing", timeout=5000)   # a dead buffer stops it
     assert page.locator("#playCut").inner_text().startswith("▶")
 
@@ -1101,11 +1107,13 @@ def test_playing_from_the_inspector_brings_the_monitor_into_view(page):
     screen with the monitor scrolled off; a play from its still brings the monitor back."""
     page.set_viewport_size({"width": 900, "height": 380})
     select_shot(page, 1)
+    # In the workspace (redesign wave 1) the page never scrolls: the inspector is its own
+    # panel beside the Program monitor, so bringing it into view leaves the monitor in view.
     page.evaluate("document.querySelector('#inspector').scrollIntoView({block: 'start'})")
     page.wait_for_timeout(200)
-    assert not page.evaluate(
+    assert page.evaluate(
         "(() => { const r = document.querySelector('#player').getBoundingClientRect();"
-        " return r.bottom > 0 && r.top < innerHeight; })()"), "monitor should be off-screen"
+        " return r.top >= 0 && r.bottom <= innerHeight + 1; })()"), "the monitor stays in view"
 
     # the sticky header covers the top of the viewport, so the click is the element's own
     page.evaluate("document.querySelector('#inspector img.poster').click()")
@@ -1133,7 +1141,7 @@ def test_the_versions_list_says_which_render_is_the_cut_on_the_board(page, proje
     assert not page.locator("#filmNewest").is_visible(), \
         "an edited timeline is not the rendered one any more"
     assert page.locator("#filmSince").inner_text().startswith("changed since your last film")
-    assert page.locator("#makeFilm").inner_text().replace(" ", "") == "Makethefilm•"
+    assert page.locator("#makeFilm").inner_text().replace(" ", "") == "Export•"
     page.locator("#undo").click()
     page.wait_for_selector("#filmNewest:not([hidden])", timeout=5000)
     assert page.locator("#makeFilm").inner_text().startswith("↓ Download")
@@ -1143,7 +1151,7 @@ def test_the_versions_list_says_which_render_is_the_cut_on_the_board(page, proje
     sid = page.evaluate("tl.idAt(0)")
     page.evaluate(f"tl.setSpeed('{sid}', 2)")
     page.wait_for_function("!document.querySelector('#makeFilm').dataset.download", timeout=5000)
-    assert page.locator("#makeFilm").inner_text().replace(" ", "") == "Makethefilm•"
+    assert page.locator("#makeFilm").inner_text().replace(" ", "") == "Export•"
     assert page.locator("#filmSince").inner_text().startswith("changed since your last film")
     page.evaluate(f"tl.setSpeed('{sid}', 1)")
     page.wait_for_selector("#filmNewest:not([hidden])", timeout=5000)
@@ -1760,7 +1768,7 @@ def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
         select_shot(page, 0)
         page.keyboard.press("x")
         page.keyboard.press("x")
-        page.wait_for_selector("#inspector .empty")
+        page.wait_for_selector("#tlEmpty .empty")
         assert not page.locator("#askPanel").is_visible()
         assert page.locator(".empty button").count() == 1
         assert_priced(page, "#firstCut", "Make the first cut from your 1 keep", "bin")
@@ -1816,16 +1824,16 @@ def test_the_old_buttons_are_gone_and_the_header_is_one_row(page):
         .filter((e) => e.getBoundingClientRect().height > 0)
         .map((e) => { const r = e.getBoundingClientRect(); return (r.top + r.bottom) / 2; })""")
     assert max(mids) - min(mids) <= 3, mids       # one row: every item on one line
-    ids = page.evaluate("""[...document.querySelectorAll('header button')]
+    ids = page.evaluate("""[...document.querySelectorAll('header > button')]
         .filter((e) => e.getBoundingClientRect().height > 0).map((e) => e.id)""")
     assert ids == ["hdBin", "undo", "redo", "keysBtn", "makeFilm"], ids
-    # Make the film opens the film tool (the rail calls it Film; its key stays `out`) —
+    # Export opens the film tool (the workspace's Export tab; its key stays `out`) —
     # while no film of this cut exists (an earlier test's would make it Download)
     page.evaluate("renderList = []; paintVersions()")
-    assert page.locator("#makeFilm").inner_text() == "Make the film"
+    assert page.locator("#makeFilm").inner_text() == "Export"
     page.locator("#makeFilm").click()
     assert page.evaluate("dock.current()") == "out"
-    assert page.locator("#rail .tool[data-tool=out]").inner_text().strip() == "FILM"
+    assert page.locator(".ws-tab[data-tool=out]").inner_text().strip() == "Export"
 
 
 def test_saved_says_nothing_and_a_failed_save_says_so(page, live_server):

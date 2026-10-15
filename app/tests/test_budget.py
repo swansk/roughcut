@@ -70,7 +70,9 @@ HEADER_MAX_PX = 50
 # (5) where the rail was (5 off). Measured: / 85 · 34, / shot 140 · 46, / film 94 · 33,
 # / jobs 111 · 34, / fx 117 · 37; the numbers below are those plus ~10 %, so growth still
 # fails. /floor and /open are unchanged.
-WORDS_IN_VIEW = {"/": 94, "/floor": 58, "/open": 59, "/ shot": 154, "/ film": 104, "/ fx": 130,
+# After lane KEYS merged (the timeline's timecode column and HH:MM:SS:FF ruler labels),
+# "/" measured 96 words: 94 → 105.
+WORDS_IN_VIEW = {"/": 105, "/floor": 58, "/open": 59, "/ shot": 154, "/ film": 104, "/ fx": 130,
                  "/ jobs": 122}
 CONTROLS_IN_VIEW = {"/": 38, "/floor": 8, "/open": 9, "/ shot": 51, "/ film": 37, "/ fx": 41,
                     "/ jobs": 38}
@@ -118,7 +120,9 @@ INVENTORY_JS = r"""
     monitor: (() => { const sc = document.querySelector('#player .screen'), pl = document.getElementById('player');
       if (!sc || !pl || !sc.getClientRects().length) return null;
       const a = sc.getBoundingClientRect(), b = pl.getBoundingClientRect();
-      return {left: a.left - b.left, right: b.right - a.right, width: a.width, height: a.height}; })(),
+      const box = sc.parentElement.getBoundingClientRect();
+      return {left: a.left - b.left, right: b.right - a.right, width: a.width, height: a.height,
+              room_w: box.width, room_h: box.height}; })(),
     blue: [...document.querySelectorAll('.is-next')].map(el => el.id || el.dataset.nextFor || el.tagName),
     jobs: [...document.querySelectorAll('#progress .job')].map(el => { const r = el.getBoundingClientRect();
       return {id: el.dataset.job, top: r.top, bottom: r.bottom, visible: vis(el)}; }),
@@ -383,7 +387,9 @@ def test_the_monitor_is_centred_and_as_big_as_the_strip_leaves(measured):
     tall at 1440 × 900, and selecting a shot does not resize it."""
     m = measured["/"]["monitor"]
     assert m and abs(m["left"] - m["right"]) <= 2, m
-    assert m["height"] >= 425, m
+    # the 16:9 picture fills its panel's room one way or the other (was: >= 425 px tall,
+    # the old single-monitor board's number; see REDESIGN-GOAL's rubric log)
+    assert m["width"] >= m["room_w"] - 2 or m["height"] >= m["room_h"] - 2, m
     assert measured["/ shot"]["monitor"]["height"] == m["height"], "selecting a shot does not resize it"
 
 

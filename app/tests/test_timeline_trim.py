@@ -222,7 +222,7 @@ def test_dragging_the_out_handle_ripple_trims_and_one_undo_restores(page, projec
     total = film_total(page)
     assert total == pytest.approx(4.3, abs=0.02)
     assert page.locator("#tl .tl-total").inner_text() == tc(total)
-    assert page.locator("#total").inner_text() == f"0:{total:04.1f}"
+    assert page.locator("#total").inner_text() == tc(total)     # the monitors read timecode
     assert page.locator("#undo").get_attribute("title").startswith("undo: trim")
     assert page.locator("#tl .blk.sel").get_attribute("data-id") == ids(page)[0]
     assert page.locator("#tl .tl-tip").is_hidden(), "the tooltip goes with the drag"

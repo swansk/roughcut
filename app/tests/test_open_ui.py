@@ -644,7 +644,7 @@ def test_resume_releases_every_clip_and_the_page_goes_quiet(page, bin_server):
     assert b["spent_usd"] > 0, "the looks this run bought are this project's spend"
     page.wait_for_function(f"document.querySelector('#budgetLine').textContent === {money(b)!r}", timeout=5000)
     line = page.locator("#howLine").inner_text()
-    assert line == f"every word heard · a frame every 2 s · close looks on all 3 · spent {money(b)} ▸", line
+    assert line == f"every word heard · a frame every 2 s · close looks on all 3 · ~{money(b)} (API-equivalent) · free on your plan ▸", line
     open_how(page)
     table = rows(page)
     assert len(table) == 3

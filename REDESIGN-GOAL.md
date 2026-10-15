@@ -119,3 +119,13 @@ next judge runs, and the next judge rules it honest or lenient.
   +~10 %, so growth still fails). Kept unchanged: one header row ≤ 50 px, exactly one blue
   button, no page scroll in any state, the strip in view, the monitor centred and ≥ 425 px
   tall at 1440×900 and not resized by a selection, Next within 3 s, zero page errors.
+- 2026-10-15 (wave 1, lane WORKSPACE): `test_budget.py::test_the_monitor_is_centred_and_as_big_as_the_strip_leaves`
+  no longer asks for a Program picture ≥ 425 px tall at 1440×900 (a number from the old
+  one-monitor board, where the monitor had the whole column). In the five-panel workspace
+  the Program monitor shares the top row with Project and Source, and its picture is an
+  exact 16:9 box (so the grade/effect canvases and the sketch's clicks line up with the
+  frame); the check is now that the picture fills its panel's room in one dimension, stays
+  centred, and is not resized by selecting a shot. Panel sizes are the editor's to drag.
+- 2026-10-15 (wave 1, lane WORKSPACE, after merging lane KEYS): `test_budget.py` words in view on
+  `/` 94 → 105. Measured 96 once the timeline gained its timecode readout column and HH:MM:SS:FF
+  ruler labels (lane KEYS) and the monitors switched to timecode; +~10 % as before.

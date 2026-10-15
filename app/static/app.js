@@ -716,7 +716,7 @@ function paintEcHead(seg, n) {
     what.textContent = `${n} shots`;
   } else {
     lab.textContent = 'Sequence';
-    what.textContent = (P && (P.cut || P.title)) || '';
+    what.textContent = (P && (P.title || P.cut)) || '';
   }
 }
 
@@ -1393,7 +1393,7 @@ function syncPlayer() {
     }
   }
   tl.render();
-  $('#total').textContent = fmt(total());
+  $('#total').textContent = tcOf(total());
   paintTransport();
 }
 
@@ -1444,9 +1444,12 @@ function paintTransport() {
 /* The playhead is the timeline's, in film time (the strip used to carry it as a
  * percentage inside one block). */
 function paintPos(filmT, clipT, seg) {
-  $('#pos').textContent = fmt(filmT);
+  $('#pos').textContent = tcOf(filmT);
   tl.setPlayhead(filmT);
 }
+
+/* The monitors read Premiere's HH:MM:SS:FF, the timeline's own timecode (tl.tc). */
+function tcOf(t) { return window.tl && typeof tl.tc === 'function' ? tl.tc(t) : fmt(t); }
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, (c) =>
@@ -1537,7 +1540,7 @@ function render() {
     $(sel).style.display = segs.length ? '' : 'none';
   });
 
-  $('#total').textContent = fmt(total());
+  $('#total').textContent = tcOf(total());
   flowSoon();
   paintMusic();             // "loops once at 1:59 under a 3:09 cut" follows the cut's length
   paintVersions();          // so "this cut" follows the timeline rather than the last fetch
@@ -2331,7 +2334,11 @@ async function save() {
   const r = await fetch('/api/project', {
     method: 'PUT', headers: { 'content-type': 'application/json' },
     // The colour block rides the same body (INTAKE M10): an empty object removes it.
-    body: JSON.stringify({ segments: tl.forSave(), story: $('#story').value, music, colour }),
+    // The timeline's markers and sequence In / Out ride along (lane KEYS; the server keeps
+    // them from wave 2 — until then it ignores keys it does not read).
+    body: JSON.stringify({ segments: tl.forSave(), story: $('#story').value, music, colour,
+                           markers: tl.markers ? tl.markers() : [],
+                           in: tl.state.seqIn ?? null, out: tl.state.seqOut ?? null }),
   });
   if (!r.ok) {
     saveSays('failed', 'save failed');
@@ -3228,8 +3235,8 @@ async function boot() {
   bin = await fetchBin();
   await fetchJunk();
   $('#story').value = P.story || '';
-  document.title = `Roughcut — ${P.cut || P.title}`;
-  if (window.dock && dock.setTitles) dock.setTitles(P.cut || P.title);
+  document.title = `Roughcut — ${P.title || P.cut}`;
+  if (window.dock && dock.setTitles) dock.setTitles(P.title || P.cut);
   // The timeline (INTAKE M9): it reads and mutates `segs` in place, maps its id
   // selection onto `sel`, drives the monitor through cueAt / playFrom, and owns the
   // undo / redo stack that pushUndo() now feeds.

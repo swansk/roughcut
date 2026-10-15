@@ -170,6 +170,7 @@
                    font-variant-numeric: tabular-nums; }
   .ws-tab .badge:empty { display: none; }
   .ws-head .ws-tools { display: flex; align-items: center; gap: 2px; flex: none; }
+  .ws-head .ws-tools[hidden] { display: none; }
   .ws-head .ws-tools button { padding: 1px 5px; background: transparent; border-color: transparent;
                               color: var(--dim); line-height: 16px; }
   .ws-head .ws-tools button:hover { color: var(--text); background: var(--card); }
@@ -193,11 +194,19 @@
 
   /* ------------------------------------------------------------ monitors */
   .mon-body { display: flex; flex-direction: column; overflow: clip; }
-  .screen { position: relative; flex: 1 1 auto; min-height: 60px; background: #000;
-            overflow: hidden; }
-  .screen video { position: absolute; inset: 0; width: 100%; height: 100%; display: none;
+  /* the Program monitor is `.screen` (app.js, grade.js and fx.js find it by that); the
+     Source monitor is `.mon`, so nothing that means the Program picture finds it */
+  /* The picture is exactly a 16:9 box, as large as the panel allows and centred in it
+     (Premiere's monitor): the grade and effect canvases, the sketch's clicks and the
+     poster all line up with the frame, never with a letterbox around it. */
+  .screenbox { flex: 1 1 auto; min-height: 60px; position: relative; background: #000;
+               display: flex; align-items: center; justify-content: center; overflow: hidden;
+               container-type: size; }
+  .screen, .mon { position: relative; flex: none; background: #000; overflow: hidden;
+                  aspect-ratio: 16 / 9; width: min(100cqw, calc(100cqh * 16 / 9)); }
+  .screen video, .mon video { position: absolute; inset: 0; width: 100%; height: 100%; display: none;
                   object-fit: contain; }
-  .screen video.live { display: block; }
+  .screen video.live, .mon video.live { display: block; }
   .screen canvas#gradeCanvas { position: absolute; inset: 0; width: 100%; height: 100%;
                                display: none; object-fit: contain; z-index: 1; pointer-events: none; }
   .screen canvas#gradeCanvas.on { display: block; }
@@ -232,14 +241,14 @@
   .monEmpty[hidden] { display: none; }
   /* the transport: timecode left, the buttons centred, the duration right, like Premiere's */
   .transport { flex: none; display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr);
-               align-items: center; gap: 8px; padding: 4px 8px; background: var(--panel);
+               align-items: center; gap: 6px; padding: 4px 8px; background: var(--panel);
                border-top: 1px solid #0f0f10; height: 34px; }
-  .transport .tcl { font-variant-numeric: tabular-nums; color: var(--tc); font-size: 13px;
-                    font-weight: 600; white-space: nowrap; overflow: hidden; }
+  .transport .tcl { font-variant-numeric: tabular-nums; color: var(--tc); font-size: 12.5px;
+                    font-weight: 600; white-space: nowrap; overflow: hidden; min-width: 86px; }
   .transport .tcr { text-align: right; font-variant-numeric: tabular-nums; color: var(--dim);
-                    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .transport .btns { display: flex; gap: 3px; align-items: center; }
-  .transport .btns button { padding: 1px 7px; min-width: 28px; background: transparent;
+                    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 76px; }
+  .transport .btns { display: flex; gap: 1px; align-items: center; }
+  .transport .btns button { padding: 1px 5px; min-width: 24px; background: transparent;
                             border-color: transparent; color: var(--text); }
   .transport .btns button:hover { background: var(--card-hi); }
   .transport .btns svg { width: 14px; height: 14px; display: block; margin: 0 auto; }
@@ -597,15 +606,15 @@
   <section class="ws-panel" id="pSource" data-panel="source">
     <div class="ws-head"><div class="ws-tabs"><span class="ws-tab on" id="srcTitle"><span class="lbl">Source: (no clip)</span></span></div></div>
     <div class="ws-body mon-body" id="source">
-      <div class="screen" id="srcScreen">
+      <div class="screenbox"><div class="mon" id="srcScreen">
         <img id="srcPoster" alt="" draggable="false" hidden>
         <video id="srcVideo" preload="metadata" playsinline></video>
         <div class="monEmpty" id="srcEmpty">pick a clip in the Project panel</div>
         <div class="monWait" id="srcWait" hidden><span>preparing preview…</span></div>
-      </div>
+      </div></div>
       <div class="srcbar" id="srcBar"><div class="track"></div><div class="range" hidden></div><div class="head"></div></div>
       <div class="transport">
-        <span class="tcl" id="srcPos">0:00.0</span>
+        <span class="tcl" id="srcPos">00:00:00:00</span>
         <span class="btns">
           <button type="button" data-src="in" title="Mark In · I"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 2H4v12h2"/><path d="M9 8h5M11 5l3 3-3 3"/></svg></button>
           <button type="button" data-src="out" title="Mark Out · O"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 2h2v12h-2"/><path d="M2 8h5M5 5l2 3-2 3"/></svg></button>
@@ -624,7 +633,7 @@
   <section class="ws-panel" id="pProgram" data-panel="program">
     <div class="ws-head"><div class="ws-tabs"><span class="ws-tab on" id="progTitle"><span class="lbl">Program</span></span></div></div>
     <div class="ws-body mon-body" id="player">
-      <div class="screen">
+      <div class="screenbox"><div class="screen">
         <img id="monPoster" alt="" draggable="false" hidden>
         <video id="pv0" preload="metadata" playsinline></video>
         <video id="pv1" preload="metadata" playsinline></video>
@@ -635,15 +644,15 @@
         <div class="monEmpty" id="progEmpty" hidden>the sequence is empty</div>
         <div class="monWait" id="monWait" hidden><span>preparing preview…</span></div>
         <div id="screenMsg" hidden></div>
-      </div>
+      </div></div>
       <div class="transport">
-        <span class="tcl pos"><span id="pos">0:00.0</span></span>
+        <span class="tcl pos"><span id="pos">00:00:00:00</span></span>
         <span class="btns">
           <button type="button" id="progBack" title="Previous edit · ↑"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 3h1.5v10H3zM13 3v10L5.5 8z"/></svg></button>
           <button id="playCut" title="Play / Stop · Space">▶ Play</button>
           <button type="button" id="progFwd" title="Next edit · ↓"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M11.5 3H13v10h-1.5zM3 3v10l7.5-5z"/></svg></button>
         </span>
-        <span class="tcr"><span class="pos" id="posTotal"><span id="total">0:00.0</span></span><span class="hint" id="playingWhat"></span></span>
+        <span class="tcr"><span class="pos" id="posTotal"><span id="total">00:00:00:00</span></span><span class="hint" id="playingWhat"></span></span>
       </div>
     </div>
   </section>
