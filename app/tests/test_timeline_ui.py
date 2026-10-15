@@ -28,6 +28,12 @@ playwright_api = pytest.importorskip("playwright.sync_api",
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 
+def grid(t: float, fps: float = 24.0) -> float:
+    """A time on the sequence's frame grid, as the timeline commits it (wave 3: edit
+    points land on frames, 4 places): the suite's clips are 24 fps, so the sequence is."""
+    return round(round(t * fps) / fps, 4)
+
+
 def tc(seconds: float, fps: float = 23.976) -> str:
     """Film seconds as the timeline writes them: HH:MM:SS:FF, non-drop at the nominal
     rate, rounded to the nearest frame (timeline.js `tl.tc`)."""
@@ -289,9 +295,9 @@ def test_set_range_reaches_the_disk_and_undo_redo_walk_it_back_and_forth(page, p
 
     # clamped the way nudge() clamps: never past the clip, never shorter than 0.2 s
     page.evaluate(f"tl.setRange('{first}', 2.95, 99)")
-    assert page.evaluate("[segs[0].in, segs[0].out]") == [2.95, 6.0]
+    assert page.evaluate("[segs[0].in, segs[0].out]") == [grid(2.95), 6.0]
     page.evaluate(f"tl.setRange('{first}', 5.95, 6.0)")
-    assert page.evaluate("[segs[0].in, segs[0].out]") == [5.8, 6.0]
+    assert page.evaluate("[segs[0].in, segs[0].out]") == [grid(5.8), 6.0]
 
 
 def test_a_split_makes_two_shots_that_survive_a_save_with_distinct_ids(page, project):
@@ -384,7 +390,7 @@ def test_the_inspectors_edits_share_the_stack_with_the_timeline(page):
     which is next. (The strip's trim buttons went in INTAKE M16.)"""
     page.locator("#tl .blk").nth(0).click()
     page.locator("#inspector button[data-act=fixout]").click()      # out 3.0 → 4.45
-    assert page.evaluate("segs[0].out") == 4.45
+    assert page.evaluate("segs[0].out") == grid(4.45)
     first = ids(page)[0]
     page.evaluate(f"tl.move(['{first}'], null)")
     assert page.evaluate("segs.map(s => s.clip)") == ["CLIP_B.MP4", "CLIP_A.MP4"]
@@ -393,9 +399,9 @@ def test_the_inspectors_edits_share_the_stack_with_the_timeline(page):
     assert page.evaluate("segs.map(s => s.clip)") == ["CLIP_A.MP4", "CLIP_B.MP4"]
     assert page.locator("#undo").get_attribute("title").startswith("undo: fix")
     page.keyboard.press("u")                       # plain U is the pass's "later", not undo (I16.0 n)
-    assert page.evaluate("segs[0].out") == 4.45
+    assert page.evaluate("segs[0].out") == grid(4.45)
     page.keyboard.press("Control+z")
     assert page.evaluate("segs[0].out") == 3.0
     assert page.locator("#redo").get_attribute("title").startswith("redo: fix")
     page.locator("#redo").click()
-    assert page.evaluate("segs[0].out") == 4.45
+    assert page.evaluate("segs[0].out") == grid(4.45)
