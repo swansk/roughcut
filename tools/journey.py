@@ -16,20 +16,22 @@ The steps, each one a screenshot at 1440×900 in `<out dir>/NN-step.png`:
   02 firstpass      one click on [data-testid=firstpass-button] opens its panel (steps, cost)
   03 run            [data-testid=firstpass-run] → the index (stubbed) → picks → the proposal opens
   04 accept         Accept puts the proposed cut on V1 and on disk
-  05 trim-out       a ripple trim of shot 1's out, dragged on the cut's edge column
-  06 trim-in        a ripple trim of shot 3's in, the same way
-  07 razor          the playhead into shot 2 by a click on the ruler, then C: two pieces
-  08 move           shot 4 dragged by its body to the head of the film
-  09 warmer         Effect Controls › Lumetri Color › Temperature on a trimmed shot
-  10 rerun-panel    the header reads "Re-run first pass"; its panel names both trimmed shots as kept
-  11 rerun-accept   Run, accept: every kept shot (the trimmed two among them) has the same in/out
-  12 export         Ctrl+M → export-dialog, export-name, export-go, export-progress → 100, export-done
-  13 ffprobe        the file's duration is within one frame of tl.total()
+  05 selects        Selects lists the pass's picks (> 0 rows, one per pick); an amber marker
+                    on the cut wherever a pick overlaps a shot (verdict 4, punch 1)
+  06 trim-out       a ripple trim of shot 1's out, dragged on the cut's edge column
+  07 trim-in        a ripple trim of shot 3's in, the same way
+  08 razor          the playhead into shot 2 by a click on the ruler, then C: two pieces
+  09 move           shot 4 dragged by its body to the head of the film
+  10 warmer         Effect Controls › Lumetri Color › Temperature on a trimmed shot
+  11 rerun-panel    the header reads "Re-run first pass"; its panel names both trimmed shots as kept
+  12 rerun-accept   Run, accept: every kept shot (the trimmed two among them) has the same in/out
+  13 export         Ctrl+M → export-dialog, export-name, export-go, export-progress → 100, export-done
+  14 ffprobe        the file's duration is within one frame of tl.total()
 
 The first failing step stops the journey. Zero page errors are allowed: an error thrown
 in the page fails the step it happened in. `<out dir>/journey.json` has each step's name,
 ok, ms, PNG, why it failed and the page errors; the last line printed is the gate's:
-`journey ✓ 13 steps · 74 s` or `journey ✗ step 7 razor: <why>`. Exit 0 only when green.
+`journey ✓ 14 steps · 74 s` or `journey ✗ step 7 razor: <why>`. Exit 0 only when green.
 
 The script needs fastapi, uvicorn, httpx, numpy, pytest and playwright; when the Python
 running it lacks them it re-runs itself under `uv run --with …` (as the gate's suite does).
@@ -385,6 +387,28 @@ class Journey:
             self.sel("#tl .tl-edge .q.t.l", "no edge columns over the cuts to trim with", state="attached")
             pg.evaluate("Promise.all(segs.map(s => tl.snapsFor(s.clip)))")
 
+        def selects():
+            # the first pass's picks are editor objects: rows in Selects, markers on the cut
+            import httpx
+            d = httpx.get(self.base + "/api/picks?order=clip", timeout=30).json()
+            need(d.get("firstpass_picked"), "/api/picks does not know the first pass made its picks")
+            picks = [p for p in d["picks"] if p.get("verdict") not in ("reject", "pick")]
+            need(len(picks) > 0, "the first pass made no picks to list")
+            pg.evaluate("dock.open('bin')")
+            pg.locator("#binTabs .tab[data-tab=all]").click()
+            self.until(f"document.querySelectorAll('#library tr.keep.pick').length === {len(picks)}",
+                       f"Selects does not list the pass's {len(picks)} picks", 15000)
+            n = self.js("document.querySelectorAll('#library tr.keep.pick').length")
+            need(n > 0, "Selects shows none of the pass's picks")
+            F["selects_picks"] = n
+            want = sum(1 for s in self.segs() for p in picks
+                       if p["clip"] == s["clip"] and p["end"] > s["in"] and p["start"] < s["out"])
+            self.until(f"document.querySelectorAll('#tl .tl-pick').length === {want}",
+                       f"the cut does not carry one marker per pick over a shot ({want})")
+            F["pick_markers"] = want
+            # the step's screenshot is Selects with the picks; the steps after are the
+            # timeline's and the other panels', and do not care which tab Project shows
+
         def trim(i: int, side: str, dt: float):
             def go():
                 before = self.segs()
@@ -618,7 +642,7 @@ class Journey:
                  f"the video stream is {vd:.3f} s, the sequence {want:.3f} s (one frame = {frame:.4f} s)")
 
         plan = [("open", open_board), ("firstpass", firstpass_panel), ("run", run_firstpass),
-                ("accept", accept), ("trim-out", trim(0, "out", -0.35)),
+                ("accept", accept), ("selects", selects), ("trim-out", trim(0, "out", -0.35)),
                 ("trim-in", trim(2, "in", 0.4)), ("razor", razor), ("move", move),
                 ("warmer", warmer), ("rerun-panel", rerun_panel), ("rerun-accept", rerun_accept),
                 ("export", export), ("ffprobe", ffprobe)]
@@ -743,7 +767,7 @@ def main() -> int:
         mp.undo()
     j.facts["stopped_children"] = len(_stop_children())     # e.g. the export's review copy
 
-    planned = getattr(j, "planned", 13)
+    planned = getattr(j, "planned", 14)
     fail = next((s for s in j.steps if not s["ok"]), None)
     total = time.time() - t_all
     if fail:
