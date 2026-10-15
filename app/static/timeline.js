@@ -95,6 +95,14 @@
  *   tl.insert(seg, afterId|null)   Insert `{clip, in, out, why}` after a shot (null =
  *                               append); a missing id becomes a `tmp-` one. Selects it.
  *                               Returns its id.
+ *   tl.insertAt(seg, filmT)     Premiere's insert (`,`): the shot under filmT splits (or the
+ *                               nearer cut is taken when a half would be < 0.2 s), `seg`
+ *                               goes in there, the rest moves later. One `insert` entry;
+ *                               selects it; returns its id.
+ *   tl.overwrite(seg, filmT)    Premiere's overwrite (`.`): `seg` covers the film from
+ *                               filmT for its own length — shots inside it removed, the two
+ *                               at its edges trimmed; the length changes only past the end.
+ *                               One `overwrite` entry; selects it; returns its id.
  *   tl.setSpeed(id, rate)       The shot's `speed` (0.1–4, rounded to 0.01): one undo
  *                               entry labelled `speed`; the block, the total and the
  *                               monitor's rate follow. 1 deletes the key from the
@@ -119,8 +127,28 @@
  *                               updated in place, not rebuilt). app.js calls it where the
  *                               strip used to be painted; a lane rarely needs to.
  *
+ *   — Premiere's frame: timecode, tools, markers, marks (REDESIGN-GOAL dimension 5) —
+ *   tl.fps() / tl.setFps(r)     The sequence rate: setFps, else the project's `fps`, else
+ *                               23.976. tl.frame() is one frame in seconds.
+ *   tl.tc(t)                    Film seconds → HH:MM:SS:FF, non-drop at the nominal rate,
+ *                               rounded to the nearest frame. The ruler, the end mark and
+ *                               the side column's playhead readout (`.tl-tc`) use it.
+ *   tl.keyLabel(s)              ⌘ ⌥ ⇧ as Ctrl+ Alt+ Shift+ off a Mac (tl.isMac).
+ *   tl.setTool(name) / tl.tool  'select' | 'razor' | 'ripple' | 'roll' | 'slip' | 'track'
+ *                               (tl.TOOLS: key, glyph, words). Razor: a click on a block
+ *                               splits it there. Track: a press selects that shot and every
+ *                               one after. Ripple / roll / slip are read by the trim lane.
+ *                               Emits `tool`. The side column's button shows it.
+ *   tl.addMarker(t) removeMarker(t) clearMarkers() setMarkers(list) markers()
+ *   tl.nextMarker(t) prevMarker(t)  Sequence markers, film times on the frame grid, drawn
+ *                               on the ruler (a click goes there). setSeqIn(t) /
+ *                               setSeqOut(t) (null clears) are the sequence's in / out,
+ *                               shaded on the ruler. Both persist in localStorage per
+ *                               project and cut, or come from `P.markers` / `P.in` /
+ *                               `P.out` once the server sends them. Emit `markers`.
+ *
  *   — saving —
- *   tl.forSave()                The segments to PUT: known tmp ids mapped to their server
+ *   tl.forSave()              The segments to PUT: known tmp ids mapped to their server
  *                               ids, unknown ones stripped (the server mints).
  *   tl.needsRekey()             True while a shot has no server id yet.
  *   tl.afterSave(segments)      The segments from GET /api/project after a save: re-key by
@@ -140,20 +168,37 @@
  *   click plays the cut from it, as space does); ⇧-click ranges; ⌘/ctrl-
  *   click toggles; a click on the empty lane or the ruler clears the selection and seeks;
  *   dragging on the ruler scrubs. Keys (outside inputs): `+`/`=` and `-` zoom ×2 / ÷2,
- *   `\` fits, ⌘/ctrl + wheel zooms around the cursor, ⇧ + wheel pans, ⌘Z / ⌘⇧Z undo / redo.
+ *   `\` fits, ⌘/ctrl or alt + wheel zooms around the cursor (Premiere), a plain or ⇧
+ *   wheel scrolls the timeline along, ⌘Z / ⌘⇧Z undo / redo.
  * =====================================================================================
  */
 (function () {
   'use strict';
 
   const PAD = 12;                  // px of canvas before 0:00
-  const PAD_R = 48;                // px after the end: room for the total's label
+  const PAD_R = 72;                // px after the end: room for the total's timecode
   const MIN_LEN = 0.2;             // s — the shortest shot, as nudge() clamps
   const MIN_SPEED = 0.1, MAX_SPEED = 4;    // edits.py's bounds: outside them a speed reads as 1
   const MIN_ZOOM = 0.5, MAX_ZOOM = 4000;   // px per second
-  const STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];   // labelled ruler steps, s
+  /* Labelled ruler steps in FRAMES at the nominal rate (24 for 23.976): 1, 2, 5, 10
+   * frames, then 1 s … 1 h of timecode. A label is HH:MM:SS:FF, so it needs LABEL_PX. */
+  const STEP_FRAMES = [1, 2, 5, 10];
+  const STEP_SECONDS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600];
+  const LABEL_PX = 84;
+  const DEFAULT_FPS = 23.976;      // the sequence rate when the project does not say
   const UNDO_LIMIT = 100;
   const POSTER_SETTLE_MS = 450;    // the same debounce app.js's cards use
+  const TOOLS = {                  // Premiere's tools: name -> [key, glyph, what]
+    select: ['V', '↖', 'Selection tool'],
+    razor: ['C', '✂', 'Razor tool — a click on a shot cuts it there'],
+    ripple: ['B', '⇥', 'Ripple edit tool — an edge drag trims, the rest moves'],
+    roll: ['N', '⇹', 'Rolling edit tool — an edge drag rolls the cut'],
+    slip: ['Y', '↔', 'Slip tool — drag a shot to slip its content'],
+    track: ['A', '⇉', 'Track select forward — a click takes that shot and every one after'],
+  };
+  const IS_MAC = /Mac|iPhone|iPad/i.test(
+    (typeof navigator !== 'undefined'
+      && ((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform)) || '');
 
   let hooks = null;
   const el = { root: null, view: null, canvas: null, ruler: null, lanes: {}, head: null,
@@ -176,7 +221,9 @@
 
   const state = {
     sel: new Set(), anchor: null, zoom: 40, scrollX: 0, playhead: 0,
+    tool: 'select', markers: [], seqIn: null, seqOut: null,
   };
+  let fpsOverride = null;          // tl.setFps()
   Object.defineProperty(state, 'segs', {
     enumerable: true, get: () => (hooks ? hooks.segs() : []),
   });
@@ -201,6 +248,57 @@
   function fmt(t) {
     const m = Math.floor(t / 60), s = t - m * 60;
     return `${m}:${s.toFixed(1).padStart(4, '0')}`;
+  }
+
+  /* ---- the sequence rate and timecode (REDESIGN-GOAL dimension 5) */
+  /* The sequence's frame rate: tl.setFps(), else the project's `fps` (app.js's `P`,
+   * read by name — the EDL does not carry one yet), else 23.976. */
+  function fps() {
+    if (fpsOverride) return fpsOverride;
+    const h = hooks && hooks.fps ? Number(hooks.fps()) : 0;
+    if (h > 0) return h;
+    try {
+      // eslint-disable-next-line no-undef
+      const p = typeof P !== 'undefined' && P ? Number(P.fps || (P.edl && P.edl.fps)) : 0;
+      if (p > 0 && p < 1000) return p;
+    } catch (err) { /* P not initialised yet */ }
+    return DEFAULT_FPS;
+  }
+
+  function setFps(rate) {
+    const r = Number(rate);
+    fpsOverride = Number.isFinite(r) && r > 0 && r < 1000 ? r : null;
+    render();
+    paintTc();
+    return fps();
+  }
+
+  const frame = () => 1 / fps();
+
+  /* Film seconds → HH:MM:SS:FF, non-drop-frame at the nominal rate (24 for 23.976, as
+   * Premiere counts it). A time rounds to the nearest frame boundary: shots end on cut
+   * points, and a 4.00 s film is 00:00:04:00, not 00:00:03:23. */
+  function tc(t, rate) {
+    const r = rate || fps();
+    const nominal = Math.max(1, Math.round(r));
+    let n = Math.round(Math.max(0, Number(t) || 0) * r);
+    const ff = n % nominal; n = (n - ff) / nominal;
+    const ss = n % 60; n = (n - ss) / 60;
+    const mm = n % 60;
+    const hh = (n - mm) / 60;
+    return [hh, mm, ss, ff].map((x) => String(x).padStart(2, '0')).join(':');
+  }
+
+  /* A frame-grid time: markers and in / out sit on frames, as in Premiere — kept at
+   * the board's 0.01 s (the monitor parks at 0.01 s, so a jump lands exactly on it). */
+  const onFrame = (t) => round2(Math.round(Math.max(0, t) * fps()) / fps());
+
+  /* The key names the platform uses: ⌘ ⌥ ⇧ on a Mac, Ctrl+ Alt+ Shift+ elsewhere. */
+  function keyLabel(s) {
+    if (IS_MAC) return String(s);
+    return String(s)
+      .replace(/⌘(?=\s|$)/g, 'Ctrl').replace(/⌥(?=\s|$)/g, 'Alt').replace(/⇧(?=\s|$)/g, 'Shift')
+      .replace(/⌘/g, 'Ctrl+').replace(/⌥/g, 'Alt+').replace(/⇧/g, 'Shift+');
   }
 
   function hueOf(clip) {
@@ -289,23 +387,22 @@
   }
 
   /* ------------------------------------------------------------ the picture */
-  function stepFor(zoom) {
-    for (const s of STEPS) if (s * zoom >= 64) return s;
-    return STEPS[STEPS.length - 1];
+  /* A labelled step in frames: 1, 2, 5 or 10 frames, else whole seconds of timecode —
+   * whichever first gives a label LABEL_PX of room. */
+  function stepFrames(zoom) {
+    const r = fps(), n = Math.max(1, Math.round(r));
+    for (const f of STEP_FRAMES) if (f < n && (f / r) * zoom >= LABEL_PX) return f;
+    for (const s of STEP_SECONDS) if ((s * n / r) * zoom >= LABEL_PX) return s * n;
+    return STEP_SECONDS[STEP_SECONDS.length - 1] * n;
   }
 
-  function label(t, step) {
-    const m = Math.floor(t / 60), s = t - m * 60;
-    return step >= 1 ? `${m}:${String(Math.round(s)).padStart(2, '0')}`
-                     : `${m}:${s.toFixed(1).padStart(4, '0')}`;
-  }
-
-  /* Labelled ticks every 1/2/5/10/15/30/60 s (or coarser) — whichever first gives a
-   * label 64 px of room; minor ticks split each step in five, or ten once a step is
-   * wide enough that fifths would be a hundred pixels apart. */
+  /* Labelled ticks in HH:MM:SS:FF at the sequence rate; minor ticks split a step into
+   * its frames (under a second) or into fifths, tenths once fifths are 100 px apart. */
   function paintRuler(width) {
-    const step = stepFor(state.zoom);
-    const ratio = step * state.zoom >= 500 ? 10 : 5;
+    const r = fps(), n = Math.max(1, Math.round(r));
+    const sf = stepFrames(state.zoom);
+    const step = sf / r;
+    const ratio = sf < n ? Math.max(1, sf) : (step * state.zoom >= 500 ? 10 : 5);
     const minor = step / ratio;
     const end = (width - PAD) / state.zoom;
     const frag = document.createDocumentFragment();
@@ -317,10 +414,32 @@
       tick.style.left = `${timeToX(t)}px`;
       if (major) {
         const lab = document.createElement('label');
-        lab.textContent = label(t, step);
+        lab.textContent = tc(t, r);
         tick.appendChild(lab);
       }
       frag.appendChild(tick);
+    }
+    // the sequence's in / out: the ruler shaded between them, a bracket at each
+    if (state.seqIn != null || state.seqOut != null) {
+      const a = state.seqIn != null ? state.seqIn : 0;
+      const b = state.seqOut != null ? state.seqOut : total();
+      const io = document.createElement('div');
+      io.className = 'tl-inout';
+      io.style.left = `${timeToX(a)}px`;
+      io.style.width = `${Math.max(0, (b - a) * state.zoom)}px`;
+      io.classList.toggle('has-in', state.seqIn != null);
+      io.classList.toggle('has-out', state.seqOut != null);
+      io.title = `sequence in ${state.seqIn != null ? tc(a, r) : '—'} · out ${state.seqOut != null ? tc(b, r) : '—'}`;
+      frag.appendChild(io);
+    }
+    // markers: a green flag on the ruler at each; a click goes there
+    for (const m of state.markers) {
+      const mk = document.createElement('i');
+      mk.className = 'tl-marker';
+      mk.dataset.t = String(m);
+      mk.style.left = `${timeToX(m)}px`;
+      mk.title = `marker ${tc(m, r)} — click to go there · ${keyLabel('⇧M')} next · ${keyLabel('⌘⇧M')} previous`;
+      frag.appendChild(mk);
     }
     el.ruler.replaceChildren(frag);
   }
@@ -448,6 +567,161 @@
 
   function positionHead() {
     el.head.style.left = `${timeToX(state.playhead)}px`;
+    paintTc();
+  }
+
+  /* The timeline's own playhead readout, top-left as in Premiere's Timeline panel. */
+  function paintTc() {
+    if (!el.tc) return;
+    const s = tc(state.playhead);
+    if (el.tc.textContent !== s) el.tc.textContent = s;
+  }
+
+  /* ---- tools (Premiere's V C B N Y A) */
+  function paintTool() {
+    if (!el.root) return;
+    const [key, glyph, what] = TOOLS[state.tool];
+    for (const name of Object.keys(TOOLS)) el.root.classList.toggle(`tl-tool-${name}`, name === state.tool);
+    el.root.dataset.tool = state.tool;
+    if (el.toolBtn) {
+      el.toolBtn.textContent = glyph;
+      el.toolBtn.title = `${what} (${key}) — click for the tools`;
+      el.toolBtn.setAttribute('aria-label', `${what.split(' — ')[0]} (${key})`);
+    }
+    if (el.toolMenu) {
+      for (const b of el.toolMenu.querySelectorAll('button')) b.classList.toggle('on', b.dataset.tool === state.tool);
+    }
+  }
+
+  function setTool(name) {
+    if (!TOOLS[name]) return false;
+    const changed = state.tool !== name;
+    state.tool = name;
+    paintTool();
+    if (changed) emit('tool', { tool: name });
+    return changed;
+  }
+
+  function buildSide(side) {
+    el.tc = side.querySelector('.tl-tc');
+    el.toolBtn = side.querySelector('.tl-toolbtn');
+    el.toolMenu = side.querySelector('.tl-toolmenu');
+    el.toolMenu.innerHTML = Object.entries(TOOLS).map(([name, [key, glyph, what]]) =>
+      `<button type="button" data-tool="${name}" title="${what} (${key})">`
+      + `<span class="g">${glyph}</span> ${what.split(' — ')[0]} <kbd>${key}</kbd></button>`).join('');
+    el.toolBtn.addEventListener('click', () => { el.toolMenu.hidden = !el.toolMenu.hidden; });
+    el.toolMenu.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-tool]');
+      if (!b) return;
+      setTool(b.dataset.tool);
+      el.toolMenu.hidden = true;
+    });
+    document.addEventListener('pointerdown', (e) => {
+      if (!el.toolMenu.hidden && !side.contains(e.target)) el.toolMenu.hidden = true;
+    });
+    el.tc.title = 'the playhead · HH:MM:SS:FF';
+    paintTool();
+    paintTc();
+  }
+
+  /* ---- markers and the sequence's in / out */
+  /* They live in the client until the EDL carries them: the project's `markers` /
+   * `in` / `out` (app.js's `P`) when the server sends them, else localStorage per
+   * project and cut. Film times on the frame grid. */
+  function markStoreKey() {
+    let id = '';
+    try {
+      // eslint-disable-next-line no-undef
+      if (typeof P !== 'undefined' && P) id = `${P.footage || P.title || ''}|${P.cut || 'main'}`;
+    } catch (err) { id = ''; }
+    return `roughcut.tl.marks:${id || location.pathname}`;
+  }
+
+  function loadMarks() {
+    let v = null;
+    try {
+      // eslint-disable-next-line no-undef
+      if (typeof P !== 'undefined' && P && Array.isArray(P.markers)) {
+        v = { markers: P.markers.map((m) => (typeof m === 'object' && m ? m.t : m)), in: P.in, out: P.out };
+      }
+    } catch (err) { v = null; }
+    if (!v) {
+      try { v = JSON.parse(localStorage.getItem(markStoreKey()) || 'null'); } catch (err) { v = null; }
+    }
+    v = v || {};
+    state.markers = (Array.isArray(v.markers) ? v.markers : [])
+      .map(Number).filter((t) => Number.isFinite(t) && t >= 0).sort((a, b) => a - b);
+    state.seqIn = Number.isFinite(v.in) ? v.in : null;
+    state.seqOut = Number.isFinite(v.out) ? v.out : null;
+  }
+
+  function saveMarks() {
+    try {
+      localStorage.setItem(markStoreKey(), JSON.stringify(
+        { markers: state.markers, in: state.seqIn, out: state.seqOut }));
+    } catch (err) { /* private mode: they last the session */ }
+    render();
+    emit('markers', { markers: [...state.markers], in: state.seqIn, out: state.seqOut });
+  }
+
+  const sameFrame = (a, b) => Math.abs(a - b) < 0.5 / fps();
+
+  function addMarker(t) {
+    const m = onFrame(t == null ? state.playhead : Number(t));
+    if (!Number.isFinite(m) || state.markers.some((x) => sameFrame(x, m))) return null;
+    state.markers = [...state.markers, m].sort((a, b) => a - b);
+    saveMarks();
+    return m;
+  }
+
+  function removeMarker(t) {
+    const at = t == null ? state.playhead : Number(t);
+    const keep = state.markers.filter((x) => !sameFrame(x, at));
+    if (keep.length === state.markers.length) return false;
+    state.markers = keep;
+    saveMarks();
+    return true;
+  }
+
+  function clearMarkers() {
+    if (!state.markers.length) return false;
+    state.markers = [];
+    saveMarks();
+    return true;
+  }
+
+  function setMarkers(list) {
+    state.markers = (Array.isArray(list) ? list : []).map((m) => onFrame(Number(m)))
+      .filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
+    saveMarks();
+  }
+
+  function nextMarker(t) {
+    const at = t == null ? state.playhead : t;
+    const m = state.markers.find((x) => x > at && !sameFrame(x, at));
+    return m == null ? null : m;
+  }
+
+  function prevMarker(t) {
+    const at = t == null ? state.playhead : t;
+    const before = state.markers.filter((x) => x < at && !sameFrame(x, at));
+    return before.length ? before[before.length - 1] : null;
+  }
+
+  function setSeqIn(t) {
+    const v = t == null ? null : onFrame(Number(t));
+    state.seqIn = v;
+    if (v != null && state.seqOut != null && state.seqOut <= v) state.seqOut = null;
+    saveMarks();
+    return v;
+  }
+
+  function setSeqOut(t) {
+    const v = t == null ? null : onFrame(Number(t));
+    state.seqOut = v;
+    if (v != null && state.seqIn != null && state.seqIn >= v) state.seqIn = null;
+    saveMarks();
+    return v;
   }
 
   function keepInView(x, frac = 0.25) {
@@ -469,11 +743,11 @@
     const top = undoStack[undoStack.length - 1], next = redoStack[redoStack.length - 1];
     if (u) {
       u.disabled = !top;
-      u.title = top ? `undo: ${top.label} (⌘Z)` : 'nothing to undo';
+      u.title = top ? `undo: ${top.label} (${keyLabel('⌘Z')})` : 'nothing to undo';
     }
     if (r) {
       r.disabled = !next;
-      r.title = next ? `redo: ${next.label} (⌘⇧Z)` : 'nothing to redo';
+      r.title = next ? `redo: ${next.label} (${keyLabel('⌘⇧Z')})` : 'nothing to redo';
     }
   }
 
@@ -509,7 +783,7 @@
     }
     pruneSel();
     el.end.style.left = `${timeToX(tot)}px`;
-    el.total.textContent = fmt(tot);
+    el.total.textContent = tc(tot);
     el.root.classList.toggle('tl-empty', !list.length);   // not `.empty`: the board's empty state owns that
     state.playhead = clamp(state.playhead, 0, tot);
     positionHead();
@@ -828,6 +1102,75 @@
     });
   }
 
+  /* Premiere's insert and overwrite (REDESIGN-GOAL dimension 5, `,` and `.`). Inside a
+   * mutation only: make a cut point at film time t and return the index a shot placed
+   * there goes at. The shot under t is split when both halves keep MIN_LEN; when one
+   * would not, `mode` says which side is expendable — 'in' (an overwrite's start: the
+   * tail is about to be covered, so the shot's out comes back to t), 'out' (an
+   * overwrite's end: the head is covered, the in moves up to t) — else ('insert') the
+   * nearer of the shot's two cut points. */
+  function cutAt(t, mode) {
+    const list = segs();
+    let start = 0;
+    for (let i = 0; i < list.length; i++) {
+      const s = list[i], d = dur(s);
+      if (t <= start + 1e-6) return i;
+      if (t < start + d - 1e-6) {
+        const clipT = round2(s.in + (t - start) * speedOf(s));
+        const head = clipT - s.in, tail = s.out - clipT;
+        if (head >= MIN_LEN - 1e-9 && tail >= MIN_LEN - 1e-9) {
+          list.splice(i + 1, 0, { ...s, id: `tmp-${++tmpN}`, in: clipT });
+          s.out = clipT;
+          return i + 1;
+        }
+        if (mode === 'in' && head >= MIN_LEN - 1e-9) { s.out = clipT; return i + 1; }
+        if (mode === 'out' && tail >= MIN_LEN - 1e-9) { s.in = clipT; return i; }
+        return (t - start) < d / 2 ? i : i + 1;
+      }
+      start += d;
+    }
+    return list.length;
+  }
+
+  function startOfIndex(i) {
+    const list = segs();
+    let t = 0;
+    for (let k = 0; k < i && k < list.length; k++) t += dur(list[k]);
+    return t;
+  }
+
+  /* Insert `{clip, in, out, why}` at a film time: the shot under it splits and the
+   * rest of the film moves later by the new shot's length. One undo entry, `insert`.
+   * Selects the new shot; returns its id. */
+  function insertAt(seg, atFilmTime) {
+    if (!seg || !seg.clip || !(seg.out > seg.in)) return null;
+    const s = { ...seg, id: seg.id || `tmp-${++tmpN}` };
+    return mutate('insert', () => {
+      const at = cutAt(clamp(Number(atFilmTime) || 0, 0, total()), 'insert');
+      segs().splice(at, 0, s);
+      select([s.id], { source: 'api' });
+      return s.id;
+    });
+  }
+
+  /* Overwrite at a film time: the new shot covers the film from t for its own length —
+   * whatever was there is replaced (shots wholly inside removed, the two at its edges
+   * trimmed) and the film's length changes only where the shot runs past the end. One
+   * undo entry, `overwrite`. Selects the new shot; returns its id. */
+  function overwrite(seg, atFilmTime) {
+    if (!seg || !seg.clip || !(seg.out > seg.in)) return null;
+    const s = { ...seg, id: seg.id || `tmp-${++tmpN}` };
+    const len = dur(s);
+    return mutate('overwrite', () => {
+      const list = segs();
+      const at = cutAt(clamp(Number(atFilmTime) || 0, 0, total()), 'in');
+      const end = cutAt(startOfIndex(at) + len, 'out');
+      list.splice(at, Math.max(0, end - at), s);
+      select([s.id], { source: 'api' });
+      return s.id;
+    });
+  }
+
   /* `0.5`, `0.25`, `2` — never `0.50`; the chips and the badge read the same. */
   function speedLabel(s) { return String(round2(s)); }
 
@@ -909,6 +1252,13 @@
   function onLaneDown(e) {
     if (e.button !== 0) return;
     down = { x: e.clientX, y: e.clientY, moved: false };
+    // Track select forward (A): the pressed shot and every one after it, at the press —
+    // so a drag that follows moves them all (the lanes' body drag takes the selection)
+    const b = state.tool === 'track' && !e.defaultPrevented ? e.target.closest('.blk') : null;
+    if (b) {
+      const i = indexOf(b.dataset.id);
+      if (i >= 0) select(segs().slice(i).map((s) => s.id), { source: 'click' });
+    }
   }
 
   function onLaneMove(e) {
@@ -923,6 +1273,13 @@
     down = null;
     if (!d || d.moved || e.button !== 0 || e.defaultPrevented) return;
     const b = e.target.closest('.blk');
+    if (b && state.tool === 'razor') {
+      // the razor: a cut where the click landed, the selection left alone
+      const t = eventTime(e);
+      if (split(b.dataset.id, t) == null) toast(`too close to a cut point to split (${MIN_LEN} s minimum)`);
+      return;
+    }
+    if (b && state.tool === 'track') return;          // selected at the press
     if (b) {
       const id = b.dataset.id;
       if (e.shiftKey) select([id], { range: true, source: 'click' });
@@ -946,6 +1303,8 @@
   function onRulerDown(e) {
     if (e.button !== 0) return;
     e.preventDefault();
+    const mk = e.target.closest('.tl-marker');
+    if (mk) { seek(Number(mk.dataset.t)); return; }      // a marker: go there, no scrub
     scrubbing = true;
     try { el.ruler.setPointerCapture(e.pointerId); } catch (err) { /* not pointer-capable */ }
     select([], { source: 'click' });
@@ -961,18 +1320,26 @@
 
   function onRulerUp() { scrubbing = false; }
 
+  /* Premiere's wheel: Alt or Ctrl/⌘ + wheel zooms around the cursor; a plain (or ⇧)
+   * wheel scrolls the timeline along — unless there is nothing to scroll, when the page
+   * keeps its own wheel. */
   function onWheel(e) {
-    if (e.ctrlKey || e.metaKey) {
+    if (e.ctrlKey || e.metaKey || e.altKey) {
       e.preventDefault();
       const r = el.view.getBoundingClientRect();
       const viewX = e.clientX - r.left;
       const at = xToTime(viewX + el.view.scrollLeft);
-      zoomTo(state.zoom * (e.deltaY < 0 ? 1.25 : 0.8), { at, viewX });
-    } else if (e.shiftKey) {
-      e.preventDefault();
-      el.view.scrollLeft += e.deltaY || e.deltaX;
-      state.scrollX = el.view.scrollLeft;
+      const d = e.deltaY || e.deltaX;
+      zoomTo(state.zoom * (d < 0 ? 1.25 : 0.8), { at, viewX });
+      return;
     }
+    const v = el.view;
+    if (v.scrollWidth <= v.clientWidth + 1) return;
+    const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+    if (!d) return;
+    e.preventDefault();
+    v.scrollLeft += d;
+    state.scrollX = v.scrollLeft;
   }
 
   function onKey(e) {
@@ -996,7 +1363,14 @@
     const root = typeof selector === 'string' ? document.querySelector(selector) : selector;
     if (!root) throw new Error(`tl.mount: nothing matches ${selector}`);
     root.classList.add('tl');
+    // The side column is Premiere's top-left corner of the Timeline panel: the
+    // playhead's timecode, and the tool in hand (one button; the six are its menu).
     root.innerHTML = `
+      <div class="tl-side">
+        <div class="tl-tc">00:00:00:00</div>
+        <button type="button" class="tl-toolbtn"></button>
+        <div class="tl-toolmenu" hidden></div>
+      </div>
       <div class="tl-view">
         <div class="tl-canvas">
           <div class="tl-ruler" title="click or drag to scrub"></div>
@@ -1013,6 +1387,9 @@
     el.end = root.querySelector('.tl-end');
     el.total = root.querySelector('.tl-total');
     el.head = root.querySelector('.tl-head');
+    el.side = root.querySelector('.tl-side');
+    buildSide(el.side);
+    loadMarks();
 
     const lane = el.lanes.V1;
     lane.addEventListener('pointerdown', onLaneDown);
@@ -1044,10 +1421,15 @@
     state, el, mount, render, on,
     byId, indexOf, idAt, dur, speedOf, filmStart, total, shotAt, timeToX, xToTime, eventTime, snapsFor,
     begin, commit, cancel, undo, redo, clearHistory,
-    setRange, move, split, remove, insert, setSpeed,
+    setRange, move, split, remove, insert, setSpeed, insertAt, overwrite,
     select, syncSel, seek, setPlayhead, zoomTo, fit,
     forSave, needsRekey, afterSave,
     fmt, hueOf, blockName,
+    fps, setFps, frame, tc, keyLabel, isMac: IS_MAC,
+    TOOLS, setTool, get tool() { return state.tool; },
+    addMarker, removeMarker, clearMarkers, setMarkers, nextMarker, prevMarker,
+    markers: () => [...state.markers],
+    setSeqIn, setSeqOut,
   };
   window.tl = tl;
 })();

@@ -28,6 +28,15 @@ playwright_api = pytest.importorskip("playwright.sync_api",
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 
+def tc(seconds: float, fps: float = 23.976) -> str:
+    """Film seconds as the timeline writes them: HH:MM:SS:FF, non-drop at the nominal
+    rate, rounded to the nearest frame (timeline.js `tl.tc`)."""
+    n = round(seconds * fps)
+    nominal = round(fps)
+    ff, n = n % nominal, n // nominal
+    return f"{n // 3600:02d}:{n // 60 % 60:02d}:{n % 60:02d}:{ff:02d}"
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -104,11 +113,12 @@ def on_disk(project) -> list[dict]:
 def test_the_ruler_and_the_total_match_the_seed_edl(page):
     """Two shots of 2 s: the film is 0:04.0 on the ruler's end mark, on the transport,
     and the ruler's labels count the seconds at the fit zoom."""
-    assert page.locator("#tl .tl-total").inner_text() == "0:04.0"
+    assert page.locator("#tl .tl-total").inner_text() == "00:00:04:00"   # timecode (REDESIGN dim 5)
     assert page.locator("#posTotal").inner_text() == "0:04.0"
     labels = page.evaluate(
         "[...document.querySelectorAll('#tl .tl-ruler .major label')].map(l => l.textContent)")
-    assert labels[:5] == ["0:00", "0:01", "0:02", "0:03", "0:04"], labels
+    assert labels[:5] == ["00:00:00:00", "00:00:01:00", "00:00:02:00", "00:00:03:00",
+                          "00:00:04:00"], labels
     # the end mark sits at 4 s of film
     assert page.evaluate("parseFloat(document.querySelector('#tl .tl-end').style.left)") \
         == pytest.approx(page.evaluate("tl.timeToX(4)"), abs=0.5)
@@ -134,8 +144,8 @@ def test_blocks_carry_the_servers_ids_and_fit_the_view(page):
         "[...document.querySelectorAll('#tl .blk')].map(b => b.getBoundingClientRect().width)")
     assert widths[0] == pytest.approx(widths[1], abs=1)
     view = page.evaluate("document.querySelector('#tl .tl-view').clientWidth")
-    assert sum(widths) == pytest.approx(view - 60, abs=2)   # 12 px before 0:00, 48 after the end
-    assert page.evaluate("tl.state.zoom") == pytest.approx((view - 60) / 4, rel=0.01)
+    assert sum(widths) == pytest.approx(view - 84, abs=2)   # 12 px before 0:00, 72 after the end
+    assert page.evaluate("tl.state.zoom") == pytest.approx((view - 84) / 4, rel=0.01)
     assert page.evaluate("tl.byId(segs[1].id).clip") == "CLIP_B.MP4"
     assert page.evaluate("tl.indexOf(segs[1].id)") == 1
     assert page.evaluate("tl.filmStart(segs[1].id)") == 2.0
@@ -258,7 +268,7 @@ def test_set_range_reaches_the_disk_and_undo_redo_walk_it_back_and_forth(page, p
     assert changed is True
     assert page.evaluate("segs[0].out") == 3.5
     assert page.locator("#total").inner_text() == "0:04.5"
-    assert page.locator("#tl .tl-total").inner_text() == "0:04.5"
+    assert page.locator("#tl .tl-total").inner_text() == tc(4.5)
     assert page.locator("#undo").get_attribute("title").startswith("undo: trim")
     wait_saved(page)
     assert on_disk(project)[0]["out"] == 3.5
@@ -354,7 +364,7 @@ def test_remove_and_insert_keep_the_board_and_the_bin_in_step(page):
     assert page.evaluate("sel") == 1
     page.wait_for_function("segs.every(s => s.id && s.id.startsWith('g'))", timeout=8000)
     assert page.evaluate(f"tl.indexOf('{new}')") == 1
-    assert page.locator("#tl .tl-total").inner_text() == "0:03.5"
+    assert page.locator("#tl .tl-total").inner_text() == tc(3.5)
 
 
 def test_snaps_for_resolves_with_the_clips_sentences_and_is_cached(page):

@@ -32,9 +32,14 @@
  *                 full-height handle (8 px, `ew-resize`) extends or shortens the shot.
  *   Slip          ⌥/alt + drag a block's body: `in` and `out` move together, the length
  *                 kept, clamped to the clip.
- *   Nudge         `,` / `.` move the *active edge* — the last one dragged, or the selected
- *                 shot's out — by one frame (1/30 s); `⇧,` / `⇧.` by 1 s. These two keys
- *                 are this lane's; the keys lane owns the rest of the keyboard.
+ *   Nudge         Premiere's trim keys: ⌥← / ⌥→ (and ⌘← / ⌘→, Ctrl on Linux and Windows)
+ *                 move the *active edge* — the last one dragged, or the selected shot's
+ *                 out — by one frame at the sequence rate (`tl.frame()`); with ⇧, five
+ *                 frames. `,` / `.` are insert / overwrite now (the keys lane's).
+ *   Tools         `tl.state.tool` (the keys lane binds V C B N Y A): with the ripple edit
+ *                 tool (B) both halves of an edge column trim, with the rolling edit tool
+ *                 (N) both roll — ⇧ still flips; the slip tool (Y) slips a block's body
+ *                 without ⌥; the razor (C) leaves the lane's clicks to the foundation.
  *   The magnet    while an edge or a boundary is dragged, snap within SNAP_PX to, in
  *                 priority: another cut point (roll only — for a ripple every other cut
  *                 either lies on the far side of the block or moves with the film as it
@@ -70,13 +75,14 @@
   const HINT_FREE = 5;             // cut hovers that show the hint at once, ever...
   const HINT_DWELL_MS = 600;       // ...after that, a dwell this long
   const MIN_LEN = 0.2;             // s — the foundation's shortest shot
-  const FRAME = 1 / 30;            // s — one nudge
+  const BIG = 5;                   // frames — ⇧ with a trim key, as Premiere's multi-frame trim
   const MAGNET_KEY = 'roughcut.tl.magnet';
   const HINT_KEY = 'roughcut.tl.edgeHintSeen';
   const CATS = ['cut', 'playhead', 'sentence', 'word', 'onset'];   // snap priority
   const TIP_FLASH_MS = 900;
+  const label = (k) => (window.tl && window.tl.keyLabel ? window.tl.keyLabel(k) : k);
   const HINT_HTML = '<b>top edge</b> · extend or shorten this shot, the rest moves · '
-    + '<b>bottom edge</b> · roll the cut into the next · <b>⇧</b> flips';
+    + `<b>bottom edge</b> · roll the cut into the next · <b>${label('⇧')}</b> flips`;
 
   let tl = null, lane = null, canvas = null, root = null;
   let drag = null;                 // the gesture in flight (see onDown)
@@ -94,8 +100,14 @@
   const secs = (t) => `${t.toFixed(2)}s`;
   const signed = (x) => `${x < 0 ? '−' : '+'}${Math.abs(x).toFixed(2)}s`;
   const stem = (clip) => String(clip).replace(/\.[^.]+$/, '');
-  /* Karl's rule — the top half extends, the bottom rolls — and ⇧ flips it. */
-  const modeFor = (row, shiftHeld) => ((row === 't') !== !!shiftHeld) ? 'trim' : 'roll';
+  /* Karl's rule — the top half extends, the bottom rolls — and ⇧ flips it. The ripple
+   * edit tool (B) makes both halves extend, the rolling edit tool (N) both roll. */
+  const toolOf = () => (tl && tl.state && tl.state.tool) || 'select';
+  function modeFor(row, shiftHeld) {
+    const tool = toolOf();
+    const top = tool === 'ripple' ? true : tool === 'roll' ? false : row === 't';
+    return (top !== !!shiftHeld) ? 'trim' : 'roll';
+  }
 
   /* The clip's length bounds a slip and a roll. app.js keeps the clips on a script-local
    * `P` the foundation reads through its hooks and does not expose, so the length comes
@@ -157,7 +169,7 @@
     ui.magnet.textContent = `magnet · ${magnet ? 'on' : 'off'}`;
     ui.magnet.classList.toggle('off', !magnet);
     ui.magnet.title = magnet
-      ? 'snapping to cuts, the playhead, sentences, words and onsets — S turns it off, ⌘/ctrl while dragging suspends it'
+      ? `snapping to cuts, the playhead, sentences, words and onsets — S turns it off, ${label('⌘')} while dragging suspends it`
       : 'no snapping — S turns the magnet on';
   }
 
@@ -176,9 +188,9 @@
   function decorate(b) {
     if (b.querySelector(':scope > .tl-h.in')) return;
     const hin = el('i', 'tl-h in', b);
-    hin.title = 'drag: trim the in point (ripple) · ⌥ drag the body: slip';
+    hin.title = `drag: trim the in point (ripple) · ${label('⌥')} drag the body, or the slip tool (Y): slip`;
     const hout = el('i', 'tl-h out', b);
-    hout.title = 'drag: trim the out point (ripple) · ⌥ drag the body: slip';
+    hout.title = `drag: trim the out point (ripple) · ${label('⌥')} drag the body, or the slip tool (Y): slip`;
     el('div', 'tl-ticks', b);
   }
 
@@ -494,6 +506,7 @@
 
   function onDown(e) {
     if (e.button !== 0 || drag || !tl.state.segs.length) return;
+    if (toolOf() === 'razor') return;          // the razor's click is the foundation's
     const q = e.target.closest('.tl-edge > .q');
     const h = e.target.closest('.tl-h');
     const blk = e.target.closest('.blk');
@@ -508,7 +521,7 @@
       const seg = tl.byId(blk.dataset.id);
       if (!seg) return;
       d = trimParams(seg, h.classList.contains('in') ? 'in' : 'out');
-    } else if (blk && e.altKey) {
+    } else if (blk && (e.altKey || toolOf() === 'slip')) {
       const seg = tl.byId(blk.dataset.id);
       if (!seg) return;
       d = { kind: 'slip', id: seg.id, ids: [seg.id], clip: seg.clip, in0: seg.in, out0: seg.out,
@@ -663,7 +676,7 @@
     const a = activeEdge();
     if (!a) return false;
     const seg = tl.byId(a.id);
-    const step = dir * (big ? 1 : FRAME);
+    const step = dir * (big ? BIG : 1) * tl.frame();
     tl.begin('nudge');
     const changed = a.edge === 'in'
       ? tl.setRange(a.id, seg.in + step, null)
@@ -689,6 +702,14 @@
       if (drag) { e.preventDefault(); finish(true); }
       return;
     }
+    // Premiere's trim keys: ⌥← ⌥→ or ⌘← ⌘→ (Ctrl on Linux / Windows), ⇧ for five frames
+    if ((k === 'ArrowLeft' || k === 'ArrowRight') && (e.altKey || e.metaKey || e.ctrlKey)
+        && !(e.altKey && (e.metaKey || e.ctrlKey))) {
+      if (!tl.state.segs.length || drag || !activeEdge()) return;
+      e.preventDefault();
+      nudge(k === 'ArrowLeft' ? -1 : 1, e.shiftKey);
+      return;
+    }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (k === 's' || k === 'S') {
       e.preventDefault();
@@ -697,9 +718,6 @@
       if (!drag && typeof window.toast === 'function') window.toast(`magnet ${magnet ? 'on' : 'off'}`);
       return;
     }
-    if (!tl.state.segs.length || drag) return;
-    if (k === ',' || k === '<') { e.preventDefault(); nudge(-1, e.shiftKey || k === '<'); }
-    else if (k === '.' || k === '>') { e.preventDefault(); nudge(1, e.shiftKey || k === '>'); }
   }
 
   function onKeyUp(e) {
@@ -718,9 +736,9 @@
     if (!Array.isArray(K)) { if (!retry) setTimeout(() => mapRows(true), 0); return; }
     if (K.some((r) => r[2] === 'edges')) return;
     const rows = [
-      ['▲ edge', 'drag a cut’s top half: extend or shorten the shot, the rest moves', 'edges'],
-      ['▼ edge', 'drag a cut’s bottom half: roll the cut into the next, the length held', 'edges'],
-      ['⇧ drag', 'flips extend ↔ roll, before or during the drag', 'edges'],
+      ['▲ edge', 'drag a cut’s top half: extend or shorten the shot, the rest moves', 'edges', 'trim'],
+      ['▼ edge', 'drag a cut’s bottom half: roll the cut into the next, the length held', 'edges', 'trim'],
+      [label('⇧') + ' drag', 'flips extend ↔ roll, before or during the drag', 'edges', 'trim'],
     ];
     let at = K.findIndex((r) => r[0] === '?');
     if (at < 0) at = K.length;
@@ -752,7 +770,8 @@
     layout();
     mapRows();
     tl.trim = {
-      SNAP_PX, FRAME, EDGE_PX, HINT_KEY,
+      SNAP_PX, BIG, EDGE_PX, HINT_KEY,
+      get FRAME() { return tl.frame(); },
       get magnet() { return magnet; },
       setMagnet,
       get active() { return active; },
