@@ -3746,6 +3746,13 @@ async function boot() {
     if (e.key === 'Enter') { e.preventDefault(); doFind(); }
   });
   $('#findAdd').onclick = addFindMatch;
+  // The music controls too: bound at the end of boot, a track picked in the first second
+  // showed in the menu but changed nothing (no bed on A2, nothing saved for the render);
+  // the gate's music-lane test caught it 2 runs in 3. `music` is read before the mount.
+  $('#musicTrack').onchange = musicChanged;
+  $('#duck').onchange = musicChanged;
+  $('#fadeIn').onchange = musicChanged;
+  $('#fadeOut').onchange = musicChanged;
   render();
   paintBinLine();
   // The FX tool read /api/fx before the cut was here, so no proposal was on a shot of it:
@@ -3806,10 +3813,6 @@ async function boot() {
     }
   });
   $('#auditClaims').onclick = auditClaims;
-  $('#musicTrack').onchange = musicChanged;
-  $('#duck').onchange = musicChanged;
-  $('#fadeIn').onchange = musicChanged;
-  $('#fadeOut').onchange = musicChanged;
 }
 
 /* The switcher's hook (/switcher.js): before the server re-points itself at another
