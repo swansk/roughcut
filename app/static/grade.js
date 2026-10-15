@@ -458,12 +458,18 @@ onmessage = (e) => {
   function playerPlaying() {
     try { return typeof player === 'object' && !!player && !!player.playing; } catch (e) { return false; }
   }
-  function drawSize(vw, vh, playing) {
+  /* A dissolve drawn while it plays (setMix) is two frames per frame: two uploads, two
+   * passes. On Auto the pair is drawn at most MIX_W wide, so the two cost what one frame
+   * at PLAY_W does (half the pixels each) and the window stays inside a single shot's
+   * budget (verdict 7 punch 4: at load 16-25 the canvas held 107-258 ms through a graded
+   * dissolve at 640). Paused, and on any other Playback Resolution, as before. */
+  const MIX_W = Math.round(PLAY_W / Math.SQRT2);
+  function drawSize(vw, vh, playing, mixing) {
     const dpr = window.devicePixelRatio || 1;
     const bw = G.box.w * dpr, bh = G.box.h * dpr;
     if (!bw || !bh) return [vw, vh];
     let s = Math.min(1, bw / vw, bh / vh);
-    if (playing) s = RES[G.res] == null ? Math.min(s, PLAY_W / vw) : s * RES[G.res];
+    if (playing) s = RES[G.res] == null ? Math.min(s, (mixing ? MIX_W : PLAY_W) / vw) : s * RES[G.res];
     if (s > 0.9) return [vw, vh];   // near full size: the scale costs more than it saves
     return [Math.max(2, Math.round(vw * s / 2) * 2), Math.max(2, Math.round(vh * s / 2) * 2)];
   }
@@ -479,12 +485,13 @@ onmessage = (e) => {
     if (!G.ok || !v || v.readyState < 2) return null;
     const vw = v.videoWidth, vh = v.videoHeight;
     if (!vw || !vh) return null;
-    const [w, h] = drawSize(vw, vh, (!v.paused && !v.ended) || playerPlaying());
+    const m = G.mix;
+    const mixing = !!(m && m.rec && m.w > 0 && m.video.readyState >= 2 && m.video.videoWidth);
+    const [w, h] = drawSize(vw, vh, (!v.paused && !v.ended) || playerPlaying(), mixing);
     const rec = raw || G.lut.identity ? IDENTITY_TABLE : G.lut;
     const parked = v.paused && !v.seeking
       ? `${v.id}|${v.currentSrc}|${v.currentTime}|${w}x${h}` : null;
-    const m = G.mix;
-    const mix = m && m.rec && m.w > 0 && m.video.readyState >= 2 && m.video.videoWidth
+    const mix = mixing
       ? { src: m.video, sw: m.video.videoWidth, sh: m.video.videoHeight,
           key: m.rec.identity ? IDENTITY_TABLE.key : m.rec.key, n: m.rec.identity ? IDENTITY_TABLE.n : m.rec.n,
           data: m.rec.identity ? IDENTITY_TABLE.data : m.rec.data, w: m.w, adj: mixAdjust() }
@@ -795,6 +802,14 @@ onmessage = (e) => {
     const hit = G.cache.get(id);
     const rec = hit && typeof hit.then !== 'function' ? hit : (was && was.id === id ? was.rec : null);
     G.mix = { video: m.video, id, w: m.w, rec, onChange: m.onChange };
+    // Playing, the live buffer's frame callback draws every frame at the newest weight: a
+    // draw here too (programMix runs every animation frame) was a second graded frame per
+    // video frame, two uploads each, through the whole window — the worker fell behind
+    // and the canvas held 80-210 ms at load 16-22 (verdict 7 punch 4, measured). Only a
+    // new mix (another shot, another follower, its LUT in) or a parked monitor draws here.
+    const lv = live();
+    const same = was && was.id === id && was.video === m.video && !!was.rec === !!rec;
+    if (same && lv && !lv.paused && playerPlaying()) return !!(G.canvas && G.enabled && G.canvas.classList.contains('on'));
     if (!rec && !id.startsWith('tmp-')) {
       // its LUT is still on its way: once here the canvas may turn on, and the page has to
       // hide the layer it showed meanwhile (`onChange`; also when the canvas flips)

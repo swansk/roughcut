@@ -7418,6 +7418,7 @@ def media_fallback(clip: str, wait_s: float = 0.0) -> tuple[str, str | None]:
 RANGE_V = "r1"
 RANGE_PAD_S = 1.0        # each shot's range reaches this far past its in and out points
 RANGE_LEAD_S = 0.35      # a shot is covered if its range starts this far before the in
+RANGE_TX_LEAD_S = 0.35   # a transition's incoming follower parks this far before its half (app.js TX_PRE, 0.25)
 RANGE_MERGE_S = 2.0      # two ranges closer than this are encoded as one
 RANGE_MAX = 8            # ranges per encode (each is an open decoder); closest merge first
 RANGE_POLL_S = 2.0       # how often the walk looks at the cut once it is idle
@@ -7434,10 +7435,51 @@ def range_dir() -> Path:
     return STATE["proxy_dir"] / "ranges"
 
 
+def transition_handles(edl: dict | None = None) -> dict[str, tuple[float, float]]:
+    """Per V1 shot id, the clip seconds a transition at its edges plays beyond it in the
+    Program (verdict 7 punch 4): `(head, tail)` — the incoming shot's media before its in
+    (the half, plus RANGE_TX_LEAD_S where app.js parks and starts its follower), the
+    outgoing shot's past its out (the half). Each at the shot's speed; the asked half (the
+    render may shorten it to the media; more is harmless, merge_ranges clamps to the clip);
+    a cut with a dissolve and a crossfade takes the longer, as the Program's window does."""
+    if edl is None:
+        try:
+            edl = read_edl()
+        except Exception:  # noqa: BLE001 — no cut yet: no transitions
+            return {}
+    segs = [s for s in edl.get("segments") or [] if isinstance(s, dict)]
+    order = {s.get("id"): k for k, s in enumerate(segs) if s.get("id")}
+    out: dict[str, list[float]] = {}
+    for t in edl.get("transitions") or []:
+        if not isinstance(t, dict):
+            continue
+        k = order.get(t.get("a"))
+        if k is None or k + 1 >= len(segs) or segs[k + 1].get("id") != t.get("b"):
+            continue
+        try:
+            half = float(t.get("dur")) / 2
+        except (TypeError, ValueError):
+            continue
+        if not (math.isfinite(half) and half > 0):
+            continue
+        a, b = segs[k], segs[k + 1]
+        ha = out.setdefault(a["id"], [0.0, 0.0])
+        hb = out.setdefault(b["id"], [0.0, 0.0])
+        ha[1] = max(ha[1], half * tracksmod.speed(a))
+        hb[0] = max(hb[0], (half + RANGE_TX_LEAD_S) * tracksmod.speed(b))
+    return {k: (round(v[0], 3), round(v[1], 3)) for k, v in out.items()}
+
+
 def cut_ranges() -> dict[str, list[tuple[float, float]]]:
     """The clip-time ranges the Program plays, per clip of the bin, clips in the order the
-    cut meets them (`_cut_uses`, V1 then V2+ then a waiting proposal; A3+ is sound only)."""
+    cut meets them (`_cut_uses`, V1 then V2+ then a waiting proposal; A3+ is sound only).
+    A V1 shot with a transition at an edge reaches over its handle there
+    (`transition_handles`), so the follower that plays it is in the range proxy too; the
+    cache key hashes these ranges (range_key), so a transition added or made longer than
+    the file holds is a new key, and the walk builds it (ranges_cover says the old one no
+    longer covers); one removed or shortened is still covered, and the file stays."""
     out: dict[str, list[tuple[float, float]]] = {}
+    handles = transition_handles()
     for key, s in _cut_uses():
         if key == "audio":
             continue
@@ -7449,6 +7491,9 @@ def cut_ranges() -> dict[str, list[tuple[float, float]]]:
         if not isinstance(clip, str) or not clip or not (math.isfinite(a) and math.isfinite(b)):
             continue
         if b > a >= 0:
+            head, tail = handles.get(s.get("id"), (0.0, 0.0)) if key == "segments" else (0.0, 0.0)
+            if head or tail:
+                a, b = round(max(0.0, a - head), 3), round(b + tail, 3)
             out.setdefault(clip, []).append((a, b))
     return out
 

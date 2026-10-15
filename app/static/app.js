@@ -1767,8 +1767,9 @@ function programSync(filmT) {
  *   prog.tx.out  the OUTGOING shot's media past its out-point, over the second half
  *                [C, C + h) — at `out + (t - C) * speed`.
  *
- * Each is parked TX_PRE before its half and starts playing there (muted, unseen), so it
- * is running when it shows (an open file, no seek at the edit). A Cross Dissolve shows it
+ * Each is parked TX_PRE (the outgoing one TX_PRE_OUT) before its half and starts playing
+ * there (muted, unseen) with a bare play(), so it is running when it shows (an open file, its first frame decoded at
+ * the park, no seek at the edit or in the window; txFollow). A Cross Dissolve shows it
  * at the incoming shot's weight x = (t - (C - h)) / 2h (the outgoing's 1 - x), the
  * render's x (assemble.py): the mean of the two on the edit's frame. How the GRADED
  * picture dissolves: the grade's worker draws it (grade.setMix) — the follower's frame
@@ -1778,7 +1779,58 @@ function programSync(filmT) {
  * the raw buffers are the picture) is the follower shown, at CSS opacity x, which is
  * then exact. A Constant Power crossfade sets the levels (rcAudio 'xfade'): the outgoing
  * shot at cos(πx/2), the incoming at sin(πx/2) — the live buffer and the follower. */
-const TX_PRE = 0.35;
+// How far ahead of its half each follower starts (film s): long enough for a bare play()
+// from its park to be running when the half begins (roll.lat, the learned start, is
+// 0.06-0.25 s), short enough not to keep a fourth decoder busy around the edit, where the
+// live shot, both followers and the cut's preroll of the incoming shot all play. The
+// outgoing one plays the same frames as the live buffer until the edit, so it starts
+// later. Measured on Killington's dissolve at load 16-19, three runs each: 0.35 / 0.35
+// held 67-100 ms (live and followers, the canvas up to 253), 0.25 / 0.2 held <= 67 (the
+// canvas <= 143).
+const TX_PRE = 0.25;
+const TX_PRE_OUT = 0.2;
+
+/* A follower is never seeked while it plays (verdict 7 punch 4). progFollow's rule for V2
+ * (start with `currentTime = t; play()`, re-seek past 0.08 s of drift) was measured on a
+ * 1 s dissolve of the 4K fixture: the start was a seek, the follower then trailed the film
+ * by its start latency, every re-seek took longer than the slack, and it re-seeked every
+ * 110-150 ms through its whole half — 6 seeks in pvTxIn's run, 5 in pvTxOut's, each one a
+ * decode from the keyframe; the follower showed 5-7 frames in 0.5 s and held 160-240 ms
+ * (the judge's 132 ms on Killington). Now: parked TX_PRE ahead of its half, it starts with
+ * a bare play() from the park (its first frame is decoded already), and drift is steered
+ * by its rate (±TX_STEER at most, a frame's dead band); only a follower more than
+ * TX_RESEEK_S off (a shuttle, a stall) is seeked, once, aimed where the film will be when
+ * the seek lands. */
+const TX_RESEEK_S = 0.5;
+const TX_CATCH_S = 0.3;      // a drift is taken out over about this much film
+const TX_STEER = 0.6;        // the rate moves at most this far from the film's
+
+function txFollow(el, seg, clipT, play) {
+  const spd = speedOf(seg);
+  const src = proxyOf(seg);
+  // parked, or a file still opening: progFollow's rules (a park is a seek to the frame,
+  // made before the half, never in it; a cold file meets the wish on loadedmetadata)
+  if (!play || !src || el.dataset.src !== src || el.readyState < 1) {
+    return progFollow(el, seg.clip, clipT, spd, play, 0.08);
+  }
+  const lv = liveVideo();
+  const r = ((lv && lv.defaultPlaybackRate) || 1) * spd;
+  el._goal = { src, t: clipT, at: performance.now(), play: true, rate: r };
+  if (el.seeking) return true;
+  const d = (el.currentTime - clipT) / spd;          // film seconds ahead (+) or behind (-)
+  if (Math.abs(d) > TX_RESEEK_S) {
+    el.playbackRate = r;
+    el.currentTime = clipT + roll.seek * r;
+    if (el.paused) el.play().catch(() => {});
+    return true;
+  }
+  let k = 1;
+  if (Math.abs(d) > 1 / 60) k = Math.max(1 - TX_STEER, Math.min(1 + TX_STEER, 1 - d / TX_CATCH_S));
+  k = Math.round(k * 20) / 20;                       // steps of 5 %: no rate change per tick
+  if (Math.abs(el.playbackRate - r * k) > 1e-3) el.playbackRate = r * k;
+  if (el.paused) el.play().catch(() => {});
+  return true;
+}
 
 function txEl(name) {
   const v = document.createElement('video');
@@ -1833,8 +1885,8 @@ function programMix(t, play, proposal) {
       xin = { seg: b, clipT: Math.max(0, b.in + (t - C) * speedOf(b)),
               w: inV ? xv : 0, lvl: inA ? Math.sin(Math.PI / 2 * xa) : 0 };
     }
-    // the outgoing follower: from TX_PRE before the edit to the end of its half
-    if (t >= C - TX_PRE && t < C + at.h) {
+    // the outgoing follower: from TX_PRE_OUT before the edit to the end of its half
+    if (t >= C - TX_PRE_OUT && t < C + at.h) {
       xout = { seg: a, clipT: a.out + (t - C) * speedOf(a),
                w: outV ? 1 - xv : 0, lvl: outA ? Math.cos(Math.PI / 2 * xa) : 0 };
     }
@@ -1847,10 +1899,19 @@ function programMix(t, play, proposal) {
     if (window.rcAudio) rcAudio.setLevel(v, 'xfade', v === lv ? liveLvl : 1);
   }
   let drawn = null, drawnW = 0, drawnId = null;
+  // Both shots' LUTs, before the window: the grade's mix never waits on a cold one
+  const soon = at || next;
+  if (soon && g && typeof g.prefetch === 'function') {
+    const pair = `${segs[soon.k].id}|${segs[soon.k + 1].id}`;
+    if (tx.lutFor !== pair) {
+      tx.lutFor = pair;
+      g.prefetch(segs[soon.k].id);
+      g.prefetch(segs[soon.k + 1].id);
+    }
+  }
   for (const [el, x, side] of [[tx.in, xin, 'in'], [tx.out, xout, 'out']]) {
     if (x) {
-      const spd = speedOf(x.seg);
-      progFollow(el, x.seg.clip, x.clipT, spd, play, 0.08);
+      txFollow(el, x.seg, x.clipT, play);
       el.muted = !(x.lvl > 0);
       const a1 = progA1Level();
       if (window.rcAudio) rcAudio.setLevel(el, 'track', a1 * x.lvl);
@@ -1861,12 +1922,14 @@ function programMix(t, play, proposal) {
       el.dataset.w = '0';
       if (!el.paused) el.pause();
       el.muted = true;
-      // parked where the next window's half starts, so entering it is a play, not a seek
-      const nx = next && next.c;
-      if (nx) {
-        const a = segs[next.k], b = segs[next.k + 1];
-        const pre = side === 'in' ? Math.max(0, b.in - (next.h + TX_PRE) * speedOf(b))
-          : a.out - TX_PRE * speedOf(a);
+      // parked where its half starts, so entering it is a play, not a seek: the outgoing
+      // follower, before its half of the window we are in, waits for THIS window (it used
+      // to park on the next one, and come back with a seek); otherwise the next window's
+      const w = side === 'out' && at && t < at.c.at ? at : next;
+      if (w) {
+        const a = segs[w.k], b = segs[w.k + 1];
+        const pre = side === 'in' ? Math.max(0, b.in - (w.h + TX_PRE) * speedOf(b))
+          : a.out - TX_PRE_OUT * speedOf(a);
         progFollow(el, (side === 'in' ? b : a).clip, pre, 1, false, 0);
       }
     }
