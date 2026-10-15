@@ -1,5 +1,8 @@
 # THE GOAL: Roughcut's definition of done
 
+> **Superseded 2026-10-14 by [REDESIGN-GOAL.md](REDESIGN-GOAL.md)** after Karl tried this bar's build and said it
+> does not meet "Premiere Pro quality". These eight dimensions are folded into the new twelve.
+
 Karl, 2026-10-13: *"Next time I open Roughcut I want to actually use the video editor and feel
 good about it."* That is the bar. It is the editor's equivalent of the "ready for Steam" bar on
 NOITA and STICKFIGHT, kept deliberately small: eight things a person cutting a video notices,
@@ -47,5 +50,9 @@ inference through `roughcut.inference` (gate: `hygiene`).
 
 ## K. Karl's notes (verbatim, newest first; only Karl writes here)
 
-_None yet. Until Karl writes here, INTAKE's "Decisions (do not re-litigate)" and M16's ten
+- 2026-10-14: "I can't say I like it, it is not clear how to re run the first pass, and this is not something
+  that I feel meets 'premier pro quality'. The system might have to do a complete redesign." (carried into
+  REDESIGN-GOAL.md K1 and K2)
+
+_Until Karl writes here, INTAKE's "Decisions (do not re-litigate)" and M16's ten
 decisions are the standing rules the judge enforces._
