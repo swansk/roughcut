@@ -3127,6 +3127,49 @@ async function fetchJunk() {
   } catch (e) {
     /* a blip keeps the last answer */
   }
+  paintJunkWait();
+  junkPollSoon();
+}
+
+/* The junk marks never hold the board (verdict 7 blocker 3): boot mounts the cut and
+ * reads /api/junk after, and a clip whose colour is still being measured (a proxy that
+ * just landed) is `colour: "pending"` — the bin says "checking colour… N clips" and reads
+ * again until none is, repainting the marks each time they change. */
+let junkPollT = null;
+function junkPollSoon() {
+  clearTimeout(junkPollT);
+  junkPollT = null;
+  if (!junk || !(junk.pending > 0)) return;
+  junkPollT = setTimeout(async () => {
+    junkPollT = null;
+    const before = JSON.stringify(junkRows().map((r) => [r.clip, r.state]));
+    await fetchJunk();
+    if (JSON.stringify(junkRows().map((r) => [r.clip, r.state])) !== before) junkLanded();
+  }, 2000);
+}
+
+/* The bin's one wait line about the junk marks, ahead of the list: what is still being
+ * looked at, never a blank. */
+function paintJunkWait() {
+  const lib = $('#library');
+  if (!lib) return;
+  let el = $('#junkWait');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'junkWait';
+    el.className = 'hint';
+    lib.parentNode.insertBefore(el, lib);
+  }
+  const n = junk ? Number(junk.pending) || 0 : 0;
+  el.textContent = junk === null ? 'checking for junk…'
+    : n ? `checking colour… ${n} clip${n === 1 ? '' : 's'}` : '';
+  el.hidden = !el.textContent;
+}
+
+/* The marks arrived (or changed): repaint what reads them. */
+function junkLanded() {
+  renderLibrary();
+  paintBinLine();
 }
 
 function junkBadge(clip) {
@@ -4949,7 +4992,10 @@ async function boot() {
   // The bin, before the first paint: when the pass has kept things, the library opens
   // on them — that is what going from the pass to the board should look like.
   bin = await fetchBin();
-  await fetchJunk();
+  // The junk marks come after the cut is on screen (verdict 7 blocker 3): asked for now,
+  // painted when they land (`junkLanded` below); until then the bin says it is checking.
+  const junkSoon = fetchJunk();
+  paintJunkWait();
   $('#story').value = P.story || '';
   document.title = `Roughcut — ${P.title || P.cut}`;
   if (window.dock && dock.setTitles) dock.setTitles(P.title || P.cut);
@@ -5030,6 +5076,7 @@ async function boot() {
   $('#fadeOut').onchange = musicChanged;
   render();
   paintBinLine();
+  junkSoon.then(junkLanded);                  // the junk marks, whenever they land
   // The FX tool read /api/fx before the cut was here, so no proposal was on a shot of it:
   // none counted on the rail, and one made before the server checked by itself was never
   // checked (INTAKE M16 I16.5). Read again now that the cut is.
