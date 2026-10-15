@@ -181,8 +181,12 @@ def test_the_folder_reads_as_a_contact_sheet(page, project):
     assert first.locator(".tc").inner_text() == "0:06"
     assert first.locator(".flags, .flag").count() == 0
     assert first.inner_text().strip().split() == ["0:06", "CLIP_A"], first.inner_text()
-    # no proxy yet: a placeholder with no words, never a broken image
-    assert first.locator(".ph").count() == 1 and first.locator("img").count() == 0
+    # no proxy yet: the Project panel's own poster (the server takes it from the
+    # original), never blank stripes and never a broken image (verdict 2, punch 9)
+    assert first.locator(".ph").count() == 0
+    assert first.locator("img").get_attribute("src") == "/media/poster/CLIP_A.jpg?t=0.00"
+    page.wait_for_function("[...document.querySelectorAll('.card img')].every(i => i.complete && i.naturalWidth > 0)",
+                           timeout=15000)
     # not indexed is not wrong: no badge on any card, no coverage strip
     assert page.locator(".badge").count() == 0 and page.locator(".dv-mini").count() == 0
     # setup: the sentence, how closely it looks, and the one priced button — in view
@@ -576,10 +580,11 @@ def test_index_the_footage_runs_the_journal_and_the_cap_pauses_the_priced_stages
     assert title == "Looks paused on 3 clips", title
     assert "lead" not in page.locator("#paused").inner_text()
     assert page.locator("#resume").inner_text().startswith("Resume · ~$")
-    # the sheet caught up: proxies exist now, pictures from mid-clip, and the one badge
-    # on every card is the thing that waits
+    # the sheet caught up: every card has the Project panel's own poster (verdict 2,
+    # punch 9: the same /media/poster URL), and the one badge on every card is the thing
+    # that waits
     assert page.locator(".card img").count() == 3 and page.locator(".card .ph").count() == 0
-    assert "t=3.00" in page.locator(".card img").first.get_attribute("src")
+    assert page.locator(".card img").first.get_attribute("src") == "/media/poster/CLIP_A.jpg?t=0.00"
     assert page.locator(".card .badge").count() == 3
     assert page.locator(".card .badge.waiting").first.inner_text().lower() == "look paused"
     # how it was indexed, one line: heard, nothing looked at yet, this project's spend
