@@ -380,13 +380,8 @@
       if (hint.textContent !== h) hint.textContent = h;
       hint.title = (cost && cost.hover) || '';
     }
-    const mon = document.getElementById('progEmpty');
-    if (mon) {
-      let b = mon.querySelector('.fp-empty-btn');
-      if (!b) { b = emptyButton('program'); mon.appendChild(b); }
-      const span = $('span', b);
-      if (span.textContent !== words) span.textContent = words;
-    }
+    // The Program monitor offers no second copy (wave 6, verdict 5 punch 9): the header and
+    // the Timeline's empty box are the two ways in.
   }
 
   /* ------------------------------------------------------------ polling */
@@ -430,7 +425,7 @@
     // the empty states are rebuilt by app.js on every render: put the offer back
     let soon = 0;
     const again = () => { if (!soon) soon = setTimeout(() => { soon = 0; paintEmpties(); }, 0); };
-    ['tlEmpty', 'progEmpty'].forEach((id) => {
+    ['tlEmpty'].forEach((id) => {
       const el = document.getElementById(id);
       if (el) new MutationObserver(again).observe(el, { childList: true });
     });

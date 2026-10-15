@@ -551,7 +551,6 @@ a.floorbtn:hover { color: var(--text); background: var(--card-hi); border-color:
 /* Cold, "Run first pass" is the header's and the Timeline card's — two, not three
    (verdict 5, punch 9): the empty Program monitor says how to fill it and offers no
    button of its own (firstpass.js still mounts one there; it is not drawn). */
-#progEmpty .fp-empty-btn { display: none; }
 
 /* ------------------------------------------------------------ overlays */
 #keysOverlay { position: fixed; inset: 0; z-index: 60; background: rgba(4,4,6,.72);

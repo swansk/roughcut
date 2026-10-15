@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Changed
+- **The Program monitor's "Run first pass" copy is gone, not hidden.** BINPOLISH hid it with CSS; firstpass.js no longer mounts it or watches #progEmpty, and the hiding rule is removed. test_firstpass_ui + workspace + ui_flow: 102 passed.
+
 ### Docs
 - **LOOP.md: wave 6 merges so far and the wave-7 queue (keyframes across a split, overlay controls).**
 
