@@ -2096,9 +2096,10 @@ def test_render_rows_say_the_day_and_the_cut_and_fold_repeats(page):
     assert again["rows"] == 3, again             # b and c fold now; d; e
 
 
-def test_the_last_proposal_link_shows_only_while_the_proposal_waits(page, live_server):
+def test_the_last_proposal_opens_only_while_it_waits(page, live_server):
     """I16.0 (l): "last proposal — 21 shots, 40 days ago · show it" came back on every
-    load. It is offered while the proposal waits, and gone once it is answered."""
+    load. Verdict 4, punch 4: a waiting proposal opens on the load itself (no "show it"
+    link to it), and once it is answered it does not."""
     import server
     asks = server.STATE["asks"]
     asks.mkdir(parents=True, exist_ok=True)
@@ -2109,9 +2110,10 @@ def test_the_last_proposal_link_shows_only_while_the_proposal_waits(page, live_s
         path.write_text(json.dumps(rec), encoding="utf-8")
         page.reload()
         page.wait_for_selector("#tl .blk")
-        page.wait_for_function(
-            "document.querySelector('#lastAsk').textContent.includes('show it')", timeout=10000)
-        assert page.evaluate("document.querySelector('#lastAsk').style.display") == "block"
+        page.wait_for_selector("#proposal", state="visible", timeout=10000)
+        assert "1 shots" in page.locator("#proposalDiff").inner_text()
+        assert not page.locator("#lastAsk").is_visible()
+        assert "show it" not in page.evaluate("document.body.innerText")
         # answered (the board's Discard writes this): not offered again
         path.write_text(json.dumps({**rec, "answered": {"answer": "discard", "at": time.time()}}),
                         encoding="utf-8")
@@ -2120,6 +2122,7 @@ def test_the_last_proposal_link_shows_only_while_the_proposal_waits(page, live_s
         page.wait_for_selector("#tl .blk")
         page.wait_for_timeout(500)                  # the answer read and acted on
         assert page.evaluate("document.querySelector('#lastAsk').style.display") == "none"
+        assert not page.locator("#proposal").is_visible()
     finally:
         path.unlink(missing_ok=True)
 
@@ -2176,7 +2179,8 @@ def test_next_lands_on_a_waiting_revision_proposal_in_place_and_from_open(page, 
         page.wait_for_selector("#tl .blk")
         nxt = _next_with(page, "ask")
         assert nxt["href"] == "/#tool=ask&ask=i16rev", nxt
-        assert not page.locator("#proposal").is_visible()
+        # a waiting proposal opens on the load (verdict 4, punch 4); Next lands on it too
+        page.wait_for_selector("#proposal", state="visible", timeout=10000)
         page.locator("#flowNext").click()
         page.wait_for_selector("#proposal", state="visible", timeout=10000)
         assert page.evaluate("location.hash") == "#tool=ask"

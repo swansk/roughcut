@@ -261,16 +261,19 @@
           </div>
         </div>
         <div id="lastAsk" class="hint" style="display:none;margin-bottom:10px"></div>
+        <!-- The proposal, reviewed as an edit (verdict 4, punch 4): its buttons on one row
+             that stays in view, Things to check, the notes folded, a row per shot. -->
         <div id="proposal" class="panel" style="display:none">
           <h2>Proposed cut</h2>
-          <div id="proposalNotes" style="margin-bottom:10px"></div>
-          <div id="proposalDiff" style="max-height:340px;overflow:auto"></div>
-          <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+          <div class="pbtns">
             <button id="playProposal" data-next-for="cut" title="play the proposed cut in the Program monitor">▶ Play it</button>
             <button id="acceptProposal">Accept</button>
             <button id="acceptAll" hidden title="every proposed shot, the rejected ones too">Accept all</button>
             <button id="rejectProposal">Discard</button>
           </div>
+          <div id="proposalChecks" class="pchecks" hidden></div>
+          <div id="proposalNotes"></div>
+          <div id="proposalDiff"></div>
         </div>
       </section>
 

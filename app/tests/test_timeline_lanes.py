@@ -308,7 +308,9 @@ def test_a_pending_proposal_is_a_ghost_lane_you_can_play_either_side_of(page):
         assert page.locator("#tl .tl-over .strike").count() == 0
         x1 = page.evaluate("parseFloat(document.querySelector('#tl .tl-arrows line.arrow').getAttribute('x1'))")
         assert x1 == pytest.approx(x_of(page, 1.0), abs=1)
-        assert page.locator(f"{ghost} .lbl").inner_text() == "proposal"
+        # the lane's name sits in the track-header column, clear of the blocks (verdict 4)
+        assert page.locator(f"{ghost} .lbl").count() == 0
+        assert page.locator("#tl .tl-ghead").inner_text().startswith("Proposal")
         # no play buttons on the lane (▶ Play it and the monitor's ▶ play); its buttons are
         # the per-shot review's ✓ / ✗ (verdict 3, punch 7 — test_picks_editor)
         assert page.locator(f"{ghost} button:not(.rv)").count() == 0, "▶ Play it and the monitor's ▶ play"

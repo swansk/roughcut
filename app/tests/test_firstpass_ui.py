@@ -161,10 +161,36 @@ def _accept(pg, live, n: int) -> list[dict]:
     deadline = time.time() + 40
     while time.time() < deadline:
         segs = _segs(live)
-        if len(segs) == n:
-            return segs
+        # the Accept is the save AND the answer (POST /api/asks/answer, which records
+        # the base when it lands second): an edit made before the answer lands is
+        # taken for the accepted cut, so wait for both — the board fires them together
+        rec = httpx.get(live + "/api/asks/latest", timeout=20).json().get("record") or {}
+        if len(segs) == n and rec.get("answered"):
+            _board_settled(pg)
+            return _segs(live)
         time.sleep(0.2)
-    raise AssertionError("the accepted proposal never reached the cut")
+    raise AssertionError("the accepted proposal never reached the cut (saved and answered)")
+
+
+def _board_settled(pg, quiet: float = 1.2, timeout: float = 15.0) -> None:
+    """Until the board has not PUT the cut for `quiet` s. An Accept saves at once and
+    its timeline commit queues the debounced autosave (700 ms) of the same cut — a save
+    the test's own PUT (a hand trim) must not race, or the trim is overwritten (the
+    double save LOOP.md queues for wave 5)."""
+    last = [time.time()]
+
+    def seen(r):
+        if r.method == "PUT" and r.url.endswith("/api/project"):
+            last[0] = time.time()
+
+    pg.on("request", seen)
+    try:
+        deadline = time.time() + timeout
+        while time.time() - last[0] < quiet:
+            assert time.time() < deadline, "the board kept saving"
+            pg.wait_for_timeout(100)
+    finally:
+        pg.remove_listener("request", seen)
 
 
 def test_fresh_bin_offers_run_first_pass_in_the_header_and_both_empty_states(page, live):

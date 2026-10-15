@@ -66,8 +66,9 @@
   const CLICK = 4;                     // px under which a pointer drag is the foundation's click
   const POLL_MS = 500;
   const H = { ghost: 40, bin: 22, gap: 2 };   // gap: the foundation's ROW_GAP between rows
+  const GHOST_MIN = 80;                // the ghost lane is V1's height, never under this (verdict 4)
 
-  const el = { ghost: null, a1: null, bin: null, over: null, arrows: null, drop: null };
+  const el = { ghost: null, ghostHead: null, a1: null, bin: null, over: null, arrows: null, drop: null };
   let adrag = null;                    // a drag on A1 (the pair, or an unlinked sound alone)
   let odrag = null;                    // a drag on V2 (a clip laid over the cut)
   let mounted = false;
@@ -128,11 +129,24 @@
 #tl.tl-empty.tl-proposing { display: block; }
 .tl-proposing > #tlEmpty { display: none; }
 #tl .tl-xlane[data-lane=ghost] .ghost:focus { outline: 2px solid var(--accent); outline-offset: -2px; opacity: 1; }
-#tl .tl-xlane[data-lane=ghost] .ghost .rvs { position: absolute; right: 2px; bottom: 2px; display: flex; gap: 2px; }
-#tl .tl-xlane[data-lane=ghost] .ghost.narrow .rvs { display: none; }
-#tl .tl-xlane[data-lane=ghost] .ghost.narrow:focus .rvs, #tl .tl-xlane[data-lane=ghost] .ghost.narrow:hover .rvs { display: flex; z-index: 3; }
-#tl .tl-xlane button.rv { font-size: 10px; line-height: 13px; width: 16px; height: 15px; padding: 0; margin: 0;
-  border-radius: 3px; border: 1px solid var(--line); background: rgba(13, 13, 17, .85); color: var(--dim); cursor: pointer; }
+#tl .tl-xlane[data-lane=ghost] .ghost .rvs { position: absolute; right: 2px; bottom: 2px; display: flex; gap: 2px; z-index: 2; }
+#tl .tl-xlane[data-lane=ghost] .ghost.narrow .rvs { flex-direction: column; }
+#tl .tl-xlane[data-lane=ghost] .ghost.tiny .rvs { display: none; }
+#tl .tl-xlane[data-lane=ghost] .ghost.tiny:focus .rvs, #tl .tl-xlane[data-lane=ghost] .ghost.tiny:hover .rvs { display: flex; z-index: 3; }
+#tl .tl-xlane[data-lane=ghost] .ghost { padding: 0; background: hsl(var(--hue) 12% 9%); opacity: .62; }
+#tl .tl-xlane[data-lane=ghost] .ghost.added, #tl .tl-xlane[data-lane=ghost] .ghost.moved { opacity: .92; }
+#tl .tl-xlane[data-lane=ghost] .ghost .gstrip { position: absolute; inset: 0; display: flex; overflow: hidden; pointer-events: none; }
+#tl .tl-xlane[data-lane=ghost] .ghost .gstrip img { flex: none; height: 100%; object-fit: cover; display: block; background: #000; }
+#tl .tl-xlane[data-lane=ghost] .ghost .gtxt { position: absolute; left: 0; right: 0; top: 0; z-index: 1; padding: 1px 5px 3px;
+  line-height: 14px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  background: linear-gradient(rgba(10, 10, 14, .85), rgba(10, 10, 14, .55) 70%, transparent); }
+#tl .tl-ghead { position: absolute; left: 0; right: 0; display: flex; flex-direction: column; justify-content: center;
+  padding: 0 7px; box-sizing: border-box; overflow: hidden; pointer-events: auto; background: #1a1d1b;
+  border-left: 2px solid var(--good); border-top: 1px solid #22222a; font-size: 11px; line-height: 15px; }
+#tl .tl-ghead b { color: var(--text); font-weight: 600; }
+#tl .tl-ghead span { color: var(--dim); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#tl .tl-xlane button.rv { font-size: 12px; font-weight: 700; line-height: 16px; width: 20px; height: 18px; padding: 0; margin: 0;
+  border-radius: 3px; border: 1px solid var(--line); background: rgba(13, 13, 17, .9); color: var(--dim); cursor: pointer; }
 #tl .tl-xlane button.rv.ok[aria-pressed=true] { color: var(--good); border-color: var(--good); }
 #tl .tl-xlane button.rv.no[aria-pressed=true] { color: var(--bad); border-color: var(--bad); }
 #tl .tl-xlane[data-lane=ghost] .ghost.rejected { opacity: .28; border-style: dashed; border-color: var(--bad); }
@@ -540,6 +554,7 @@
   /* The verdicts on the drawn lane, in place (no rebuild: focus stays where it is). */
   function paintVerdicts() {
     if (!ghost) return;
+    paintGhostHead(ghost.plan);
     const rv = reviewOf(ghost.plan);
     el.ghost.querySelectorAll('.ghost[data-k]').forEach((d) => {
       const no = rv.rej.has(Number(d.dataset.k));
@@ -583,12 +598,62 @@
     if (handled) { e.preventDefault(); e.stopImmediatePropagation(); }
   }, true);
 
+  /* The ghost lane is as tall as V1 (verdict 4, punch 4: "a thin 40-pixel strip of ghost
+   * shots"): the foundation shares the view's height after the ghost's own among V2 0.8 ·
+   * V1 1.5 · A1 1.15 · A2 0.75 (tl.layoutTracks), so a ghost of V1's height is
+   * base × 1.5 / 5.7 — never under GHOST_MIN; a short panel scrolls instead. */
+  function ghostHeight() {
+    const view = tl.el.view ? tl.el.view.clientHeight : 0;
+    const bin = el.bin && !el.bin.hidden ? (el.bin.h || 0) + H.gap : 0;
+    const base = view - 26 - 4 * H.gap - 6 - bin;      // the ruler, the row gaps, the A/V gap
+    return Math.max(GHOST_MIN, Math.floor(base * 1.5 / 5.7));
+  }
+
+  /* The lane's name in the track-header column, where V1's is — not over its first
+   * shot — with what the review stands at. */
+  function paintGhostHead(plan) {
+    const h = el.ghostHead;
+    if (!h) return;
+    h.style.display = plan && ghost ? '' : 'none';
+    if (!plan || !ghost) return;
+    const n = ghost.ghosts.length;
+    const rej = reviewable(plan) ? [...reviewOf(plan).rej].filter((k) => k < n).length : 0;
+    const info = reviewable(plan) ? `${n - rej} of ${n} ✓ · ${tl.fmt(ghost.total)}` : `${n} shots · ${tl.fmt(ghost.total)}`;
+    h.title = 'the proposed cut, under V1 — ✓ / ✗ each shot, then Accept in the Assistant';
+    if (h.lastChild.textContent !== info) h.lastChild.textContent = info;
+  }
+
+  /* A ghost's filmstrip, as V1's (timeline.js paintStrip): the head frame, then one every
+   * tile's width, edge to edge, from the clip's poster endpoint. */
+  function ghostStrip(seg, w, hgt, a) {
+    const strip = div('gstrip');
+    const clip = a && a.P && a.P.clips ? a.P.clips[seg.clip] : null;
+    const poster = clip && clip.poster;
+    if (!poster) return strip;
+    const tileW = Math.max(24, Math.round(hgt * 16 / 9));
+    const n = Math.max(1, Math.min(48, Math.ceil(w / tileW)));
+    const tw = n === 48 ? Math.ceil(w / n) : tileW;
+    const tileS = (tw / tl.state.zoom) * spd(seg);
+    const q = tileS >= 1 ? 1 : 0.25;
+    const sep = poster.includes('?') ? '&' : '?';
+    for (let k = 0; k < n; k++) {
+      const t = k === 0 ? seg.in
+        : Math.max(seg.in, Math.round(Math.min(seg.out - 0.05, seg.in + k * tileS) / q) * q);
+      const img = document.createElement('img');
+      img.draggable = false; img.loading = 'lazy'; img.decoding = 'async'; img.alt = '';
+      img.style.width = px(tw);
+      img.src = `${poster}${sep}t=${Math.max(0, t).toFixed(2)}`;
+      strip.appendChild(img);
+    }
+    return strip;
+  }
+
   function drawGhost(a) {
     const plan = pendingPlanOf(a);
     const lane = el.ghost;
     const af = document.activeElement;
     const hadK = af && lane.contains(af) && af.closest('.ghost[data-k]') ? Number(af.closest('.ghost[data-k]').dataset.k) : null;
-    lane.replaceChildren(lane.lbl);
+    lane.replaceChildren();              // its name is in the header column (paintGhostHead)
     el.over.replaceChildren();
     el.arrows.replaceChildren();
     // A first cut's proposal on an empty sequence: the timeline shows (with only the
@@ -599,6 +664,7 @@
       if (ghost) stopRange();
       ghost = null;
       lane.hidden = true;
+      paintGhostHead(null);
       return;
     }
     const fresh = !ghost || ghost.plan !== plan;
@@ -611,6 +677,8 @@
       if (w > 200) tl.zoomTo(Math.max(0.5, Math.min(400, (w - 12 - 90) / ghost.total)), { at: 0, viewX: 0 });
     }
     lane.hidden = false;
+    lane.h = ghostHeight();
+    if (lane.style.height !== px(lane.h)) lane.style.height = px(lane.h);
     const z = tl.state.zoom;
     const cur = tl.state.segs;
     const laneH = tl.el.lanes.V1.offsetHeight || 72;
@@ -626,8 +694,11 @@
       d.style.left = px(tl.timeToX(g.start));
       d.style.width = px(Math.max(3, dur * z));
       d.style.setProperty('--hue', tl.hueOf(g.seg.clip));
-      d.innerHTML = '<span class="name"></span><span class="dur"></span>';
       const a = app();
+      d.appendChild(ghostStrip(g.seg, Math.max(3, dur * z), lane.h, a));
+      const txt = div('gtxt');
+      txt.innerHTML = '<span class="name"></span><span class="dur"></span>';
+      d.appendChild(txt);
       d.querySelector('.name').textContent = tl.blockName(g.seg, a && a.P && a.P.clips ? a.P.clips[g.seg.clip] || null : null);
       // like V1: a badge only when the shot is retimed; the length is the tooltip's
       d.querySelector('.dur').textContent = s === 1 ? '' : `${round2(s)}×`;
@@ -644,14 +715,15 @@
         d.tabIndex = 0;
         if (f && f.flags.length) {
           d.classList.add('flagged');
-          d.insertAdjacentHTML('afterbegin', '<i class="flag" aria-label="the notes disagree with this shot">!</i>');
+          txt.insertAdjacentHTML('afterbegin', '<i class="flag" aria-label="the notes disagree with this shot">!</i>');
         }
         const rv = document.createElement('span');
         rv.className = 'rvs';
         rv.innerHTML = '<button type="button" class="rv ok" aria-pressed="true" title="accept this shot · Enter">✓</button>'
           + '<button type="button" class="rv no" aria-pressed="false" title="reject this shot · ⌫">✗</button>';
         d.appendChild(rv);
-        if (dur * z < 46) d.classList.add('narrow');
+        if (dur * z < 46) d.classList.add('narrow');       // ✓ over ✗, still readable
+        if (dur * z < 24) d.classList.add('tiny');         // on hover / focus only
       }
       lane.appendChild(d);
       if (g.cls === 'moved' && g.cur >= 0) {
@@ -692,13 +764,14 @@
       el.over.appendChild(s);
     }
     el.arrows.setAttribute('width', String(Math.ceil(tl.el.canvas.offsetWidth || 0)));
-    el.arrows.setAttribute('height', String(laneH + H.gap + H.ghost));
+    el.arrows.setAttribute('height', String(laneH + H.gap + lane.h));
     if (!el.arrows.querySelector('defs')) el.arrows.appendChild(arrowDefs());
     drawGhostPicks(a, plan);
     if (canReview) {
       paintVerdicts();
       if (hadK != null) focusGhost(hadK);
     }
+    paintGhostHead(plan);
     paintMode(a);
   }
 
@@ -1140,7 +1213,18 @@
     if (mounted || !tl.el || !tl.el.canvas) return;
     mounted = true;
     const canvas = tl.el.canvas;
-    el.ghost = lane('ghost', H.ghost, 'proposal');
+    el.ghost = lane('ghost', H.ghost, '');
+    // its name in the header column, at its row (the foundation lays out `heads.ghost`);
+    // not a .tl-thead — those are the four tracks' toggles
+    const heads = tl.el.side && tl.el.side.querySelector('.tl-heads');
+    if (heads && tl.el.heads) {
+      el.ghostHead = div('tl-ghead');
+      el.ghostHead.dataset.lane = 'ghost';
+      el.ghostHead.innerHTML = '<b>Proposal</b><span></span>';
+      el.ghostHead.style.display = 'none';
+      heads.appendChild(el.ghostHead);
+      tl.el.heads.ghost = el.ghostHead;
+    }
     el.a1 = tl.el.tracks && tl.el.tracks.A2;      // the bed's row: the foundation's A2
     el.bin = lane('bin', H.bin, '');
     el.over = div('tl-over');
