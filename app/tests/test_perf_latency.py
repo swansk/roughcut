@@ -150,8 +150,23 @@ class Burners:
 
 
 def _burners() -> int:
+    """Enough burners to bring the box to about one runnable task per core: the load
+    the limits are set for. Burners stacked on top of other loops' jobs measured the box,
+    not the app (wave 5: load ~25 on 6 cores before a single burner started)."""
     v = os.environ.get("ROUGHCUT_PERF_BURNERS")
-    return int(v) if v else (os.cpu_count() or 4)
+    if v:
+        return int(v)
+    cores = os.cpu_count() or 4
+    return max(0, cores - int(round(max(0.0, _load()))))
+
+
+def _too_busy() -> str | None:
+    """Already past twice the cores before the test adds anything: a frame gap then says
+    how busy the box is, not how the board plays. Skipped, visibly, with the numbers."""
+    cores, load = os.cpu_count() or 4, _load()
+    if load > 2 * cores and not os.environ.get("ROUGHCUT_PERF_BURNERS"):
+        return f"box already at load {load:.1f} on {cores} cores before any burner: not a measurement of the app"
+    return None
 
 
 # ---------------------------------------------------------------- the four measurements
@@ -311,6 +326,9 @@ def test_latency_under_load(live_server):
                 "typeof C !== 'undefined' && C && C.shots && window.effects && window.grade && grade.ready",
                 timeout=15000)
             facts = {"proxy": page.evaluate("P.clips['P60_A.MP4'].proxy")}
+            busy = _too_busy()
+            if busy:
+                pytest.skip(busy)
             with Burners(_burners()) as b:
                 facts["burners"] = b.n
                 facts["load_start"] = _load()

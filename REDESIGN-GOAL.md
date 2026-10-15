@@ -189,3 +189,4 @@ next judge runs, and the next judge rules it honest or lenient.
   (Selects' list ≥ 560 px at both sizes, the Timeline ≥ 460 px meanwhile) and
   `test_a_layout_saved_before_the_new_arrangement_keeps_its_widths_once` (the one-time
   migration of an unversioned saved layout).
+- 2026-10-15 (lead, wave 5): `test_perf_latency.py` brings the box to about one runnable task per core (burners = cores − current load) instead of adding one burner per core on top of whatever already runs, and skips — visibly, with the load in the reason — when the box is already above 2× its cores before it starts. Why: at load ~25 on 6 cores (a judge's real first pass plus other loops) the 100 ms frame-gap limit failed on both 867f694 and the wave-5 branch with the worst gap inside one buffer, not at the cut; the gate on a quieter box passed it. The limits themselves (100 ms gap, 100 ms medians) are unchanged.
