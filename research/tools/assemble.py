@@ -44,12 +44,16 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
+import functools
 import json
 import math
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from collections import Counter
 from fractions import Fraction
 from pathlib import Path
@@ -71,12 +75,13 @@ W, H, FPS = 1920, 1080, "24000/1001"
 # SSIM/PSNR/VMAF numbers behind it.
 DELIVERY_MAX_W, DELIVERY_MAX_H = 3840, 2160
 PROFILES = {
-    "preview": {"preset": "veryfast", "crf": "20", "audio_bitrate": "192k"},
+    # `nvenc_cq`: the NVENC quality that stands in for the x264 setting (see `video_codec`)
+    "preview": {"preset": "veryfast", "crf": "20", "audio_bitrate": "192k", "nvenc_cq": 27},
     "delivery": {"preset": "slow", "crf": "18", "audio_bitrate": "256k"},
     # The Export dialog's YouTube 1080p (REDESIGN-GOAL dimension 8): the bin's own frame
     # rate like `delivery` (YouTube wants the native rate), capped at 1920x1080 and
     # never upscaled, with YouTube's recommended 384 kbps stereo AAC.
-    "youtube": {"preset": "medium", "crf": "18", "audio_bitrate": "384k"},
+    "youtube": {"preset": "medium", "crf": "18", "audio_bitrate": "384k", "nvenc_cq": 25},
     # The Export dialog's Match Sequence (verdict 3 punch 10): the sequence's own frame
     # size and rate, nothing capped and nothing upscaled, crf 18 at medium.
     "match": {"preset": "medium", "crf": "18", "audio_bitrate": "320k"},
@@ -112,6 +117,173 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess:
         cmd = ["ffmpeg", "-progress", str(Path(cmd[-1]).with_suffix(".progress")),
                *cmd[1:]]
     return subprocess.run(cmd, capture_output=True, text=True, check=False)
+
+
+# ------------------------------------------------- the GPU (verdict 6, punch 7)
+#
+# A 4-minute Quick export took 17 minutes, and most of it was not the encoder: decoding
+# 4K GoPro HEVC and scaling it to 1080p on the CPU is ~4x real time on a busy box
+# (measured, 6 s of CLIP_01 at load 25: 25.3 s in software, 14.7 s with NVDEC and the
+# CPU scale, 2.9 s with NVDEC + `scale_cuda`). So a part's source is decoded and scaled
+# on the GPU when it can be (`gpu_input`), and the Quick and YouTube presets encode with
+# NVENC (`video_codec`). Neither changes what the film is:
+#   * the decode is bit-exact either way; the GPU path states what the CPU path did
+#     implicitly — ffmpeg skips autorotate on hardware frames, so a 180° camera gets its
+#     `hflip,vflip` here, and a full-range (`yuvj`) source is put in limited range by
+#     the LUT chain's explicit ranges, or by `FULL_TO_LIMITED` when it has no LUT;
+#   * NVENC runs at the CQ that measured no worse than the x264 setting it stands in
+#     for (1080p59.94 slices of CLIP_01 and CLIP_06 against a lossless conform, SSIM /
+#     PSNR): Quick's veryfast crf 20 = 0.982 / 42.7 dB at 10-14 Mbps, NVENC p5 cq 27 =
+#     0.984 / 43.4 dB at 12-17 Mbps; YouTube's medium crf 18 = 0.987 / 44.7 dB at
+#     16-20 Mbps, NVENC cq 25 = 0.987 / 44.6-45.1 dB at 16-22 Mbps. Match Sequence and
+#     Master stay on x264 (crf 18 at medium / slow): the quality presets.
+# Anything the GPU path cannot take (HDR to tone map, a codec or pixel format NVDEC does
+# not decode, a 90° rotation, no CUDA) takes the CPU path; a part whose GPU decode fails
+# is cut again on the CPU; and NVENC failing for good re-cuts the film with x264, because
+# every part of one film must come from one encoder (the join stream-copies them, and the
+# MP4 carries the first part's SPS). `ROUGHCUT_GPU=0` turns all of it off.
+NVENC_CODEC = "h264_nvenc"
+GPU_CODECS = {"h264", "hevc"}
+GPU_PIX = {"yuv420p", "yuvj420p", "nv12", "yuv420p10le", "p010le"}
+# full-range 8-bit → limited, as swscale's yuvj420p → yuv420p does (rounded), and the
+# frames re-tagged limited: a frame still tagged full is converted AGAIN by the next
+# filter that negotiates (measured: `overlay` took a V2 clip 4.7 code values darker)
+FULL_TO_LIMITED = ("lutyuv=y='16+val*219/255+0.5':u='128+(val-128)*224/255+0.5':"
+                   "v='128+(val-128)*224/255+0.5',setparams=range=tv")
+
+
+def gpu_allowed() -> bool:
+    return os.environ.get("ROUGHCUT_GPU", "").strip().lower() not in ("0", "off", "no", "false")
+
+
+@functools.lru_cache(maxsize=None)
+def nvenc_ok() -> bool:
+    """NVENC encodes here (probed once: a fifth of a second of black)."""
+    if not gpu_allowed():
+        return False
+    try:
+        r = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i",
+                            "color=black:s=320x180:r=30:d=0.2", "-c:v", NVENC_CODEC,
+                            "-f", "null", "-"], capture_output=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return r.returncode == 0
+
+
+@functools.lru_cache(maxsize=None)
+def cuda_ok() -> bool:
+    """CUDA frames upload, scale and download here (probed once)."""
+    if not gpu_allowed():
+        return False
+    try:
+        r = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-init_hw_device", "cuda=gpu",
+                            "-filter_hw_device", "gpu", "-f", "lavfi", "-i",
+                            "color=black:s=320x180:r=30:d=0.1", "-vf",
+                            "format=nv12,hwupload,scale_cuda=160:90:format=yuv420p,"
+                            "hwdownload,format=yuv420p", "-f", "null", "-"],
+                           capture_output=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return r.returncode == 0
+
+
+_DECODE_FACTS: dict[str, dict] = {}
+
+
+def decode_facts(src: Path) -> dict:
+    """codec, pixel format, range and rotation of a source's first video stream."""
+    key = str(src)
+    if key not in _DECODE_FACTS:
+        r = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                 "stream=codec_name,pix_fmt,color_range:stream_side_data=rotation",
+                 "-of", "json", key])
+        try:
+            st = (json.loads(r.stdout or "{}").get("streams") or [{}])[0]
+        except ValueError:
+            st = {}
+        rot = 0
+        for sd in st.get("side_data_list") or []:
+            if "rotation" in sd:
+                rot = int(round(float(sd["rotation"])))
+        pix = st.get("pix_fmt") or ""
+        _DECODE_FACTS[key] = {
+            "codec": st.get("codec_name"), "pix_fmt": pix, "rotation": rot,
+            "full": st.get("color_range") == "pc" or pix.startswith("yuvj")}
+    return _DECODE_FACTS[key]
+
+
+def gpu_input(src: Path, orient: str, normalise: str | None, video: dict) -> dict | None:
+    """How this source decodes on the GPU — `{"flip": 180° to undo, "full": full range}`
+    — or None for the CPU path."""
+    if not video.get("gpu_decode") or normalise:
+        return None
+    f = decode_facts(src)
+    if f["codec"] not in GPU_CODECS or f["pix_fmt"] not in GPU_PIX:
+        return None
+    rot = 0 if orient == "none" else f["rotation"] % 360
+    if rot not in (0, 180):
+        return None
+    return {"flip": rot == 180, "full": f["full"]}
+
+
+def input_args(src: Path, orient: str, gpu: dict | None) -> list[str]:
+    """The flags before a source's `-i`: the GPU decode, and `-display_rotation 0` under
+    `orient: none` — and always on the GPU path, which applies the rotation itself."""
+    out = []
+    if gpu:
+        out += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
+    if orient == "none" or gpu:
+        out += ["-display_rotation", "0"]           # must precede -i; see module docstring
+    return out
+
+
+def conform_chain(video: dict, gpu: dict | None, normalise: str | None,
+                  speed: float = 1.0, restart: bool = False) -> list[str]:
+    """Normalise (CPU path), the retime, then the scale / pad / fps conform. On the GPU
+    path the scale is `scale_cuda` straight off the decoder, then the frames come down."""
+    w, h = video["w"], video["h"]
+    chain = []
+    if gpu:
+        chain += [f"scale_cuda={w}:{h}:force_original_aspect_ratio=decrease:"
+                  f"format=yuv420p:interp_algo=bicubic", "hwdownload", "format=yuv420p"]
+        if gpu["flip"]:
+            chain += ["hflip", "vflip"]
+    elif normalise:
+        chain.append(normalise)
+    if abs(speed - 1.0) > 1e-9:
+        chain.append(f"setpts=(PTS-STARTPTS)/{speed:g}")
+    elif restart:
+        chain.append("setpts=PTS-STARTPTS")
+    if not gpu:
+        chain.append(f"scale={w}:{h}:force_original_aspect_ratio=decrease")
+    chain += [f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2", f"fps={video['fps']}"]
+    return chain
+
+
+def video_codec(video: dict) -> list[str]:
+    """The part's video encoder: NVENC at the profile's measured CQ (a keyframe at least
+    every 250 frames, as x264's default and the export's size model assume), or x264."""
+    if video.get("encoder") == "nvenc":
+        return ["-c:v", NVENC_CODEC, "-preset", "p5", "-tune", "hq", "-rc", "vbr",
+                "-cq", str(video["nvenc_cq"]), "-b:v", "0", "-maxrate", "200M",
+                "-bufsize", "400M", "-spatial-aq", "1", "-g", "250", "-bf", "3",
+                "-b_ref_mode", "middle", "-profile:v", "high"]
+    return ["-c:v", "libx264", "-preset", video["preset"], "-crf", video["crf"]]
+
+
+def render_jobs(asked: int | None = None) -> int:
+    """Parts encoded at once: `--jobs`, else `ROUGHCUT_RENDER_JOBS`, else half the cores.
+    (The export's size sample asks for all its slices at once: each is a quarter second,
+    so what it waits on is each ffmpeg's start and seek, not the cores.)"""
+    try:
+        n = asked or int(os.environ.get("ROUGHCUT_RENDER_JOBS", "0"))
+    except ValueError:
+        n = 0
+    return max(1, n or (os.cpu_count() or 2) // 2)
+
+
+class EncoderLost(RuntimeError):
+    """NVENC failed a part twice: the film is re-cut with x264."""
 
 
 def clip_gain(sidecars: Path, clip: str) -> float:
@@ -434,22 +606,48 @@ def motion_graph(controls: dict | None, w: int, h: int, vin: str, vout: str) -> 
     `q = (x·W, y·H) + s·R(r)·(p − centre)`. Only the part of the source that can land
     in the frame is cropped (so a 1000 % scale never builds a 19200-wide frame), scaled,
     rotated (corners black) and overlaid on black where its own centre lands."""
+    lay = motion_layout(controls, w, h)
+    if lay is None:
+        return None
+    if lay == "dim":
+        return f"[{vin}]{dim_vf(motion_opacity(controls))}[{vout}]"
+    if lay == "empty":
+        return f"[{vin}]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[{vout}]"
+    chain, ox, oy = lay
+    op = motion_opacity(controls)
+    if op < 1.0 - 1e-9:
+        chain = chain + [dim_vf(op)]
+    return (f"[{vin}]split[mo_c][mo_f];"
+            f"[mo_c]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[mo_bg];"
+            f"[mo_f]{','.join(chain)}[mo_fg];"
+            f"[mo_bg][mo_fg]overlay=x={ox}:y={oy}:eof_action=pass,format=yuv420p[{vout}]")
+
+
+def motion_opacity(controls: dict | None) -> float:
+    return max(0.0, min(1.0, ctl_num(controls, "opacity", 100.0) / 100.0))
+
+
+def motion_layout(controls: dict | None, w: int, h: int, fill: str = "black"):
+    """Static Motion as pieces: None at the defaults, "dim" when only the Opacity is
+    set, "empty" when nothing of the picture lands in the frame (scale 0, opacity 0),
+    else `(chain, ox, oy)`: the crop / scale / rotate (corners `fill`) that makes the
+    moved picture and where its top-left lands. `motion_graph` lays it on black (V1);
+    `overlay_controls_graph` lays it, with alpha, over what is under a V2+ clip."""
     c = controls or {}
     pos = c.get("position") or [0.5, 0.5]
     px, py = float(pos[0]), float(pos[1])
     s = ctl_num(c, "scale", 100.0) / 100.0
     rot = ctl_num(c, "rotation", 0.0)
-    op = max(0.0, min(1.0, ctl_num(c, "opacity", 100.0) / 100.0))
+    op = motion_opacity(c)
     turned = abs(math.remainder(rot, 360.0)) > 1e-9
     moved = abs(px - 0.5) > 1e-9 or abs(py - 0.5) > 1e-9 or abs(s - 1.0) > 1e-9 or turned
     dim = op < 1.0 - 1e-9
     if not moved and not dim:
         return None
     if not moved:
-        return f"[{vin}]{dim_vf(op)}[{vout}]"
-    black = f"[{vin}]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[{vout}]"
+        return "dim"
     if s <= 1e-6 or op <= 1e-6:
-        return black
+        return "empty"
     th = math.radians(rot)
     cos, sin = round(math.cos(th), 12), round(math.sin(th), 12)
     tx, ty, cx, cy = px * w, py * h, w / 2.0, h / 2.0
@@ -464,7 +662,7 @@ def motion_graph(controls: dict | None, w: int, h: int, vin: str, vout: str) -> 
     x1 = min(w, int(math.ceil(max(p[0] for p in corners))) + 2)
     y1 = min(h, int(math.ceil(max(p[1] for p in corners))) + 2)
     if x1 - x0 < 2 or y1 - y0 < 2:
-        return black                        # nothing of the picture lands in the frame
+        return "empty"                      # nothing of the picture lands in the frame
     cw = min(w - x0, (x1 - x0 + 1) // 2 * 2)
     ch = min(h - y0, (y1 - y0 + 1) // 2 * 2)
     sw = max(2, int(round(cw * s / 2)) * 2)
@@ -474,18 +672,13 @@ def motion_graph(controls: dict | None, w: int, h: int, vin: str, vout: str) -> 
     if turned:
         rw = int(math.ceil((sw * abs(cos) + sh * abs(sin)) / 2)) * 2
         rh = int(math.ceil((sw * abs(sin) + sh * abs(cos)) / 2)) * 2
-        chain.append(f"rotate={th:.9f}:ow={rw}:oh={rh}:c=black")
-    if dim:
-        chain.append(dim_vf(op))
+        chain.append(f"rotate={th:.9f}:ow={rw}:oh={rh}:c={fill}")
     # where the crop's own centre lands; the rotated box is centred on it
     ex, ey = x0 + cw / 2.0 - cx, y0 + ch / 2.0 - cy
     qx = tx + s * (cos * ex - sin * ey)
     qy = ty + s * (sin * ex + cos * ey)
     ox, oy = int(round(qx - rw / 2.0)), int(round(qy - rh / 2.0))
-    return (f"[{vin}]split[mo_c][mo_f];"
-            f"[mo_c]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[mo_bg];"
-            f"[mo_f]{','.join(chain)}[mo_fg];"
-            f"[mo_bg][mo_fg]overlay=x={ox}:y={oy}:eof_action=pass,format=yuv420p[{vout}]")
+    return chain, ox, oy
 
 
 MOTION_PROPS = ("position_x", "position_y", "scale", "rotation")
@@ -493,7 +686,7 @@ PERSPECTIVE_PAD = 8          # black border the warp samples from outside the pi
 
 
 def keyed_motion_graph(controls: dict | None, w: int, h: int, rate: Fraction,
-                       vin: str, vout: str) -> str:
+                       vin: str, vout: str, *, t0: float = 0.0, alpha: bool = False) -> str:
     """Motion with keyed properties, as one per-frame warp: the same transform as
     `motion_graph` — a source point p lands at `(x·W, y·H) + s·R(r)·(p − centre)` — with
     x, y, s and r each `lerp_expr` of the frame's film time (`in / rate`: `in` is the
@@ -502,11 +695,13 @@ def keyed_motion_graph(controls: dict | None, w: int, h: int, rate: Fraction,
     transform of the corner. The picture gets an 8 px black border first, so a sample
     from outside it reads black (the warp clamps to the edge) and the border is cropped
     off after; the scale is held at >= 2 % so no coordinate overflows the warp's fixed
-    point."""
+    point. `t0`: the clip's time at the warp's first frame (a V2+ piece that starts
+    inside its clip). `alpha`: a V2+ clip's picture, laid over what is under it — the
+    border and everything outside the picture transparent (yuva420p), not black."""
     P = PERSPECTIVE_PAD
     # `in` is 1 on the warp's first frame (ffmpeg counts the frame on its way in), so
     # film time is (in - 1) / rate; test_render_keyframes pins frame 0 to the first key
-    T = f"((in-1)*{float(1 / rate):.12g})"
+    T = f"((in-1)*{float(1 / rate):.12g}+{t0:.9g})" if t0 else f"((in-1)*{float(1 / rate):.12g})"
     px = prop_expr(controls, "position_x", T)
     py = prop_expr(controls, "position_y", T)
     sc = f"max({prop_expr(controls, 'scale', T)}/100,0.02)"
@@ -523,35 +718,43 @@ def keyed_motion_graph(controls: dict | None, w: int, h: int, rate: Fraction,
         sx = f"{cx + P - 0.5:g}+(cos({th})*{dx}+sin({th})*{dy})/{sc}"
         sy = f"{cy + P - 0.5:g}+(cos({th})*{dy}-sin({th})*{dx})/{sc}"
         coords.append(f"x{k}='{sx}':y{k}='{sy}'")
+    if alpha:
+        return (f"[{vin}]format=yuva420p,pad={w + 2 * P}:{h + 2 * P}:{P}:{P}:black@0,"
+                f"perspective={':'.join(coords)}:interpolation=linear:sense=source:eval=frame,"
+                f"crop={w}:{h}:{P}:{P},format=yuva420p[{vout}]")
     return (f"[{vin}]pad={w + 2 * P}:{h + 2 * P}:{P}:{P}:black,"
             f"perspective={':'.join(coords)}:interpolation=linear:sense=source:eval=frame,"
             f"crop={w}:{h}:{P}:{P},format=yuv420p[{vout}]")
 
 
 def opacity_commands(keys: list[tuple[float, float]], frames: int, rate: Fraction,
-                     dest: Path, target: str = "lutyuv@kop") -> str:
+                     dest: Path, target: str = "lutyuv@kop", *, alpha: bool = False,
+                     t0: float = 0.0) -> str:
     """A keyed Opacity's per-frame values as a `sendcmd` file: the blend toward black
     (`dim_vf`'s maths) re-set on the frame where it changes, a half frame early so a
-    timestamp's rounding never misses it. Returns the frame-0 opacity's `lutyuv`."""
-    def exprs(a: float) -> tuple[str, str, str]:
+    timestamp's rounding never misses it. Returns the frame-0 opacity's `lutyuv`.
+    `alpha` (a V2+ clip): the opacity scales the picture's alpha instead, so it mixes
+    with what is under it. `t0`: the clip's time at frame 0."""
+    def exprs(a: float) -> dict[str, str]:
         a = max(0.0, min(1.0, a))
-        return (f"16+(val-16)*{a:.6g}", f"128+(val-128)*{a:.6g}", f"128+(val-128)*{a:.6g}")
+        if alpha:
+            return {"a": f"val*{a:.6g}"}
+        return {"y": f"16+(val-16)*{a:.6g}", "u": f"128+(val-128)*{a:.6g}",
+                "v": f"128+(val-128)*{a:.6g}"}
     lines, last = [], None
     for k in range(max(1, frames)):
-        a = round(value_at(keys, k / float(rate)) / 100.0, 5)
+        a = round(value_at(keys, t0 + k / float(rate)) / 100.0, 5)
         if a == last:
             continue
         if last is not None:
-            y, u, v = exprs(a)
             at = (k - 0.5) / float(rate)
-            lines.append(f"{at:.6f} [enter] {target} y '{y}', [enter] {target} u '{u}', "
-                         f"[enter] {target} v '{v}';")
+            lines.append(f"{at:.6f} " + ", ".join(
+                f"[enter] {target} {c} '{e}'" for c, e in exprs(a).items()) + ";")
         else:
             first = a
         last = a
     dest.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    y, u, v = exprs(first)
-    return f"{target}=y='{y}':u='{u}':v='{v}'"
+    return f"{target}=" + ":".join(f"{c}='{e}'" for c, e in exprs(first).items())
 
 
 def filter_path(p: Path) -> str:
@@ -591,6 +794,49 @@ def controls_graph(controls: dict | None, w: int, h: int, rate: Fraction, frames
     return ";".join(graph)
 
 
+def overlay_controls_graph(controls: dict | None, w: int, h: int, rate: Fraction,
+                           frames: int, vin: str, vout: str, cmd_file: Path,
+                           t0: float, tag: str):
+    """A V2+ clip's own Motion and Opacity (verdict 6, punch 8), from its conformed
+    picture `[vin]` to `[vout]`, composited OVER what is under it — never blended toward
+    black as V1's are: outside the moved picture is transparent and the Opacity scales
+    its alpha (yuva420p), so a clip at 50 % is half itself and half V1. The same maths as
+    V1's (`motion_layout`, `keyed_motion_graph`, `opacity_commands`; keys win), `t0` the
+    clip's time at this piece's first frame. Returns `(graph, x, y)` — where the
+    picture's top-left lands — or None at the defaults (the opaque full-frame overlay as
+    before), or "empty" when nothing of it shows (scale 0, opacity 0, off the frame)."""
+    c = controls or {}
+    op_keys = keys_of(c, "opacity")
+    graph, cur, x, y = [], vin, 0, 0
+    if any(keys_of(c, p) for p in MOTION_PROPS):
+        graph.append(keyed_motion_graph(c, w, h, rate, cur, f"{tag}m", t0=t0, alpha=True))
+        cur = f"{tag}m"
+    else:
+        lay = motion_layout({k: v for k, v in c.items() if k != "opacity"}, w, h,
+                            fill="black@0")
+        if lay == "empty":
+            return "empty"
+        if lay not in (None, "dim"):
+            chain, x, y = lay
+            graph.append(f"[{cur}]format=yuva420p,{','.join(chain)}[{tag}m]")
+            cur = f"{tag}m"
+    if op_keys:
+        lut = opacity_commands(op_keys, frames, rate, cmd_file, f"lutyuv@{tag}op",
+                               alpha=True, t0=t0)
+        graph.append(f"[{cur}]format=yuva420p,sendcmd=f={filter_path(cmd_file)},{lut}[{vout}]")
+    else:
+        op = motion_opacity(c)
+        if op <= 1e-6:
+            return "empty"
+        if op < 1.0 - 1e-9:
+            graph.append(f"[{cur}]format=yuva420p,lutyuv=a='val*{op:.6g}'[{vout}]")
+        elif not graph:
+            return None
+        else:
+            graph.append(f"[{cur}]null[{vout}]")
+    return ";".join(graph), x, y
+
+
 def ordered_effects(edl: dict, seg: dict) -> list[dict]:
     """The shot's accepted effects as its Effect Controls stack has them: a bypassed
     one (`fx_off`) is not drawn, and the rest go in `fx_order` (the board's own rank:
@@ -609,7 +855,7 @@ def ordered_effects(edl: dict, seg: dict) -> list[dict]:
 
 def video_filter(video: dict, normalise: str | None = None,
                  lut: str | None = None, speed: float = 1.0,
-                 controls: dict | None = None) -> str:
+                 controls: dict | None = None, gpu: dict | None = None) -> str:
     """The part's `-vf`: normalise (HDR → SDR 709, before anything sees the frame),
     the retime when the shot has a speed (`setpts` — so the *frame count* changes,
     not the rate: the `fps` conform after it duplicates or drops to the film's rate;
@@ -618,15 +864,12 @@ def video_filter(video: dict, normalise: str | None = None,
     conform, then either the LUT chain — which states the range on both sides and
     ends in its own `format=yuv420p` — or the plain `format=yuv420p`; then the
     shot's Lumetri contrast and saturation (`adjust_vf`), after the table as on the
-    monitor."""
-    chain = []
-    if normalise:
-        chain.append(normalise)
-    if abs(speed - 1.0) > 1e-9:
-        chain.append(f"setpts=(PTS-STARTPTS)/{speed:g}")
-    chain += [f"scale={video['w']}:{video['h']}:force_original_aspect_ratio=decrease",
-              f"pad={video['w']}:{video['h']}:(ow-iw)/2:(oh-ih)/2",
-              f"fps={video['fps']}"]
+    monitor. With `gpu` (`gpu_input`) the decode and the scale are the GPU's
+    (`conform_chain`); a full-range source with no LUT is put in limited range here,
+    which the CPU path's `format=yuv420p` did by converting from `yuvj420p`."""
+    chain = conform_chain(video, gpu, normalise, speed)
+    if gpu and gpu["full"] and not lut:
+        chain.append(FULL_TO_LIMITED)
     chain.append(lut if lut else "format=yuv420p")
     adj = adjust_vf(controls)
     if adj:
@@ -639,7 +882,8 @@ def encode_part(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path
                 lut: str | None = None, speed: float = 1.0, controls: dict | None = None,
                 shot_effects: list[tuple[dict, list[dict]]] | None = None,
                 workdir: Path | None = None, span: tuple[int, int] | None = None,
-                overlays: list[dict] | None = None, v1_hidden: bool = False) -> None:
+                overlays: list[dict] | None = None, v1_hidden: bool = False,
+                gpu_decode: bool = True) -> None:
     """One part: the conform, the grade, the shot's effects (`fx.part_graph`: a
     sprite `.mov` per event overlaid at its second, the effect's synth `.wav` delayed
     and mixed), its Motion and Opacity and its Volume (static or keyed), then the V2+
@@ -657,7 +901,8 @@ def encode_part(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path
     frames = (span[1] - span[0]) if span is not None else max(
         1, math.ceil(part_seconds(t_in, t_out, speed) * rate))
     vol = volume_vf(controls)
-    graph = [f"[0:v]{video_filter(video, normalise, lut, speed, controls)}[vbase]",
+    gpu = gpu_input(src, orient, normalise, video) if gpu_decode else None
+    graph = [f"[0:v]{video_filter(video, normalise, lut, speed, controls, gpu)}[vbase]",
              f"[0:a]{audio_filter(gain_db + volume_db(controls), speed)}"
              f"{',' + vol if vol else ''}[abase]"]
     if shot_effects:
@@ -677,24 +922,33 @@ def encode_part(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path
     n_in = 1 + extra.count("-i")
     for j, o in enumerate(overlays or []):
         # V2+ inside the part (verdict 5, punch 6): the overlay's own range for the frames
-        # it covers here, through the same conform, laid over V1 from its frame
-        if orient == "none":
-            extra += ["-display_rotation", "0"]
-        extra += ["-ss", f"{o['src_in']:.4f}", "-t", f"{o['src_len'] + 1.0:.4f}",
-                  "-i", str(o["src"])]
+        # it covers here, through the same conform, laid over V1 from its frame — with
+        # its own Motion and Opacity, over V1 by alpha (verdict 6, punch 8)
         off, n = o["offset"], o["frames"]
-        chain = [o["normalise"]] if o.get("normalise") else []
-        chain.append(f"setpts=(PTS-STARTPTS)/{o['speed']:g}" if abs(o["speed"] - 1.0) > 1e-9
-                     else "setpts=PTS-STARTPTS")
-        chain += [f"scale={video['w']}:{video['h']}:force_original_aspect_ratio=decrease",
-                  f"pad={video['w']}:{video['h']}:(ow-iw)/2:(oh-ih)/2",
-                  f"fps={video['fps']}", "format=yuv420p",
-                  f"tpad=stop_mode=clone:stop_duration=2,trim=end_frame={n}",
-                  f"setpts=PTS-STARTPTS+{off}/({fps_text(rate)})/TB"]
-        graph.append(f"[{n_in}:v]{','.join(chain)}[ov{j}]")
+        ctl = overlay_controls_graph(o.get("controls"), video["w"], video["h"], rate, n,
+                                     f"ovr{j}", f"ovc{j}",
+                                     dest.with_name(f"{dest.stem}.ov{j}.opacity.cmd"),
+                                     float(o.get("t0") or 0.0), f"o{j}")
+        if ctl == "empty":
+            continue                            # nothing of it shows: not even decoded
+        ogpu = gpu_input(o["src"], orient, o.get("normalise"), video) if gpu_decode else None
+        extra += [*input_args(o["src"], orient, ogpu),
+                  "-ss", f"{o['src_in']:.4f}", "-t", f"{o['src_len'] + 1.0:.4f}",
+                  "-i", str(o["src"])]
+        chain = conform_chain(video, ogpu, o.get("normalise"), o["speed"], restart=True)
+        if ogpu and ogpu["full"]:
+            chain.append(FULL_TO_LIMITED)
+        chain += ["format=yuv420p", f"tpad=stop_mode=clone:stop_duration=2,trim=end_frame={n}"]
+        shift = f"setpts=PTS-STARTPTS+{off}/({fps_text(rate)})/TB"
+        x = y = 0
+        if ctl is None:
+            graph.append(f"[{n_in}:v]{','.join(chain + [shift])}[ov{j}]")
+        else:
+            cg, x, y = ctl
+            graph += [f"[{n_in}:v]{','.join(chain)}[ovr{j}]", cg, f"[ovc{j}]{shift}[ov{j}]"]
         t0 = (off - 0.25) / float(rate)
         t1 = (off + n - 0.5) / float(rate)
-        graph.append(f"[{vcur}][ov{j}]overlay=0:0:eof_action=pass:"
+        graph.append(f"[{vcur}][ov{j}]overlay={x}:{y}:eof_action=pass:"
                      f"enable='between(t,{t0:.6f},{t1:.6f})'[vov{j}]")
         vcur = f"vov{j}"
         n_in += 1
@@ -707,14 +961,12 @@ def encode_part(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path
         vcur, acur = "vout", "aout"
     else:
         tail = ["-t", f"{part_seconds(t_in, t_out, speed):.3f}"]
-    cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin"]
-    if orient == "none":
-        cmd += ["-display_rotation", "0"]           # must precede -i; see module docstring
+    cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin", *input_args(src, orient, gpu)]
     cmd += ["-ss", f"{t_in:.3f}", "-t", f"{max(0.05, t_out - t_in) + 1.0:.3f}",
             "-i", str(src), *extra, *tail,
             "-filter_complex", ";".join(graph),
             "-map", f"[{vcur}]", "-map", f"[{acur}]", "-dn",   # drop GoPro's telemetry track
-            "-c:v", "libx264", "-preset", video["preset"], "-crf", video["crf"],
+            *video_codec(video),
             "-fps_mode", "cfr",
             *COLOUR_TAGS,
             # PCM, not AAC: the film's sound is encoded once, at the end (`AUDIO_PCM`)
@@ -726,7 +978,28 @@ def encode_part(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path
             "-movflags", "+faststart", str(dest)]
     r = run(cmd)
     if r.returncode != 0:
-        raise RuntimeError(f"cut failed {src.name} {t_in}-{t_out}: {r.stderr[-600:]}")
+        raise RuntimeError(f"cut failed {src.name} {t_in}-{t_out}"
+                           f"{' (GPU decode)' if gpu else ''}: {r.stderr[-600:]}")
+
+
+def cut_part(video: dict, **kw) -> None:
+    """`encode_part`, robust to the GPU: a part whose GPU decode fails is cut again on
+    the CPU, and an NVENC part that fails twice raises `EncoderLost` (the film is then
+    re-cut with x264: one film, one encoder)."""
+    try:
+        encode_part(video=video, **kw)
+        return
+    except RuntimeError as exc:
+        first = exc
+    if video.get("encoder") != "nvenc" and not video.get("gpu_decode"):
+        raise first
+    time.sleep(0.5)                 # an NVENC session another process held may be free now
+    try:
+        encode_part(video=video, gpu_decode=False, **kw)
+    except RuntimeError as exc:
+        if video.get("encoder") == "nvenc":
+            raise EncoderLost(str(exc)) from exc
+        raise
 
 
 def cut(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path,
@@ -830,11 +1103,14 @@ def overlay_pieces(edl: dict, spans: list[tuple[int, int]], rate: Fraction,
                 "src_in": float(o["in"]) + max(0.0, into) * spd,
                 "src_len": (fb - fa) / float(rate) * spd,
                 "offset": fa - a, "frames": fb - fa,
+                # its own Effect Controls, keys timed from its first frame on the film
+                "controls": o.get("controls") or None, "t0": (fa - oa) / float(rate),
                 "label": f"{o.get('track') or 'V2'} {j:02d}"})
             hit.append(i)
+        ctl = f" · {describe_controls(o['controls'])}" if o.get("controls") else ""
         said.append(f"{o.get('track') or 'V2'} {j:02d} {o['clip']} {o['in']:.1f}-{o['out']:.1f} "
                     f"over {oa / rate:.2f}-{ob / rate:.2f}s, inside part"
-                    f"{'s' if len(hit) > 1 else ''} {', '.join(str(i) for i in hit)}")
+                    f"{'s' if len(hit) > 1 else ''} {', '.join(str(i) for i in hit)}{ctl}")
     return pieces, said
 
 
@@ -1013,7 +1289,22 @@ def resolve_video_profile(name: str, footage: Path, segments: list[dict],
         fps = fps_text(rate_of(fps_override))
     num, _, den = fps.partition("/")
     timescale = int(num) if den else int(num) * 1000   # keep sub-frame PTS precision
-    return {**base, "fps": fps, "w": w, "h": h, "timescale": timescale}
+    # the GPU (verdict 6, punch 7): NVENC for the presets that name a CQ, when it encodes
+    # here; the GPU decode and scale for every profile, when CUDA works here
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:   # ~1 s, not ~2
+        nv, cu = pool.submit(nvenc_ok), pool.submit(cuda_ok)
+        encoder = "nvenc" if base.get("nvenc_cq") and nv.result() else "x264"
+        gpu_decode = cu.result()
+    return {**base, "fps": fps, "w": w, "h": h, "timescale": timescale,
+            "encoder": encoder, "gpu_decode": gpu_decode}
+
+
+def describe_encoder(video: dict) -> str:
+    if video.get("encoder") == "nvenc":
+        enc = f"{NVENC_CODEC} cq {video['nvenc_cq']}"
+    else:
+        enc = f"libx264 preset {video['preset']}, crf {video['crf']}"
+    return enc + (", GPU decode" if video.get("gpu_decode") else "")
 
 
 def rotation_of(p: Path) -> str:
@@ -1168,6 +1459,9 @@ def main() -> int:
                     help="the film's frame rate (`30000/1001`, `24`, `29.97`), over the "
                          "profile's own: the board passes the sequence's rate for an "
                          "export. The file is constant frame rate at it either way.")
+    ap.add_argument("--jobs", type=int, default=None,
+                    help="parts encoded at once (default: ROUGHCUT_RENDER_JOBS, else half "
+                         "the cores)")
     ap.add_argument("--progress", action="store_true",
                     help="write ffmpeg -progress beside each part (part_NNN.progress) "
                          "so a caller can read encoded seconds")
@@ -1191,7 +1485,8 @@ def main() -> int:
     print(f"variant {edl['variant']} — {edl['title']}: {len(segments)} segments, "
           f"{planned:.1f}s planned, orient={orient}")
     print(f"profile {args.profile}: {video['w']}x{video['h']} @ {video['fps']}fps, "
-          f"preset {video['preset']}, crf {video['crf']}, audio {video['audio_bitrate']}")
+          f"preset {video['preset']}, crf {video['crf']}, audio {video['audio_bitrate']} · "
+          f"encoder {describe_encoder(video)}")
 
     if args.parts_dir:
         # Each part appears as it is cut, so whoever asked for this render can count
@@ -1223,6 +1518,7 @@ def main() -> int:
     for line in overlay_said:
         print(f"tracks: {line}")
     try:
+        jobs: list[dict] = []               # each part's encode, prepared in film order
         for i, seg in enumerate(segments):
             generated = edits.is_generated(seg["clip"])
             src = source_of(args.footage, args.generated_dir, seg["clip"])
@@ -1251,18 +1547,51 @@ def main() -> int:
                             for e in ordered_effects(edl, seg)]
             shot_effects = [(e, evs) for e, evs in shot_effects if evs]
             controls = seg.get("controls") or None
-            encode_part(src, seg["in"], seg["out"], gain, dest, orient, video,
-                        normalise=normalise, lut=lut, speed=speed, controls=controls,
-                        shot_effects=shot_effects or None,
-                        workdir=workdir / f"part_{i:03d}_fx", span=spans[i],
-                        overlays=pieces[i], v1_hidden=v1_hidden)
+            jobs.append({
+                "kw": dict(src=src, t_in=seg["in"], t_out=seg["out"], gain_db=gain,
+                           dest=dest, orient=orient, normalise=normalise, lut=lut,
+                           speed=speed, controls=controls,
+                           shot_effects=shot_effects or None,
+                           workdir=workdir / f"part_{i:03d}_fx", span=spans[i],
+                           overlays=pieces[i], v1_hidden=v1_hidden),
+                "seg": seg, "generated": generated, "res": res, "probe": probe,
+                "shot_effects": shot_effects})
+
+        def one(job: dict) -> float:
+            cut_part(video, **job["kw"])
+            dest = job["kw"]["dest"]
             assert_no_rotation(dest, orient)        # catch it at the part, not the film
-            actual = probe_duration(dest)
-            parts.append(dest)
+            return probe_duration(dest)
+
+        # The parts in parallel (verdict 6, punch 7), up to half the cores: each is its
+        # own ffmpeg with its own `-progress` file, and their sound stays PCM (the film's
+        # one AAC encode is still the join's or a later pass's).
+        n_jobs = min(render_jobs(args.jobs), max(1, len(jobs)))
+
+        def cut_all() -> list[float]:
+            pool = concurrent.futures.ThreadPoolExecutor(max_workers=n_jobs)
+            try:
+                return list(pool.map(one, jobs))
+            finally:
+                pool.shutdown(wait=True, cancel_futures=True)   # a failure stops the queue
+
+        try:
+            actuals = cut_all()
+        except EncoderLost as exc:
+            # one film, one encoder: every part again with x264
+            print(f"encoder: {NVENC_CODEC} failed ({str(exc)[-160:]}); "
+                  f"the film is cut again with libx264")
+            video = {**video, "encoder": "x264"}
+            actuals = cut_all()
+        print(f"parts: {len(jobs)} cut {n_jobs} at a time · {describe_encoder(video)}")
+        for i, (job, actual) in enumerate(zip(jobs, actuals)):
+            seg, speed, gain = job["seg"], job["kw"]["speed"], job["kw"]["gain_db"]
+            controls, shot_effects = job["kw"]["controls"], job["shot_effects"]
+            parts.append(job["kw"]["dest"])
             sp = f" ×{speed:g}" if abs(speed - 1.0) > 1e-9 else ""
             print(f"  {i:02d} {seg['clip']} {seg['in']:6.1f}-{seg['out']:6.1f}{sp} "
                   f"({actual:5.2f}s, {gain:+5.1f}dB)  {(seg.get('why') or '')[:56]}")
-            print(f"      colour: {'generated — as made' if generated else describe_colour(res, normalise, probe)}")
+            print(f"      colour: {'generated — as made' if job['generated'] else describe_colour(job['res'], job['kw']['normalise'], job['probe'])}")
             if controls:
                 print(f"      controls: {describe_controls(controls)}")
             for e, evs in shot_effects:
