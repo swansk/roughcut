@@ -81,9 +81,15 @@ HEADER_MAX_PX = 50
 # Wave 3, lane HEADER (verdict 3 punch 8): a running job is an icon and its % with the
 # name in its hover, and Next is its icon while anything runs, so "/ jobs" measured 109
 # words (was 132): lowered to that, no headroom.
-WORDS_IN_VIEW = {"/": 106, "/floor": 58, "/open": 59, "/ shot": 196, "/ film": 114, "/ fx": 134,
-                 "/ jobs": 109}
-CONTROLS_IN_VIEW = {"/": 50, "/floor": 8, "/open": 9, "/ shot": 85, "/ film": 49, "/ fx": 53,
+# Wave 4, lane LAYOUT (verdict 4 punch 3): the monitors take the whole top row and
+# Effect Controls moved to the bottom row, where a long strip scrolls inside its panel
+# (as Premiere's does), so less of it is in view. Measured, and lowered to that with no
+# headroom: / 106 → 93, / shot 196 → 136 words and 85 → 61 controls, / film 114 → 101,
+# / fx 134 → 124, / jobs 109 → 103; the other controls unchanged (/ 50, / film 49, / fx 53,
+# / jobs 50). /floor and /open unchanged.
+WORDS_IN_VIEW = {"/": 93, "/floor": 58, "/open": 59, "/ shot": 136, "/ film": 101, "/ fx": 124,
+                 "/ jobs": 103}
+CONTROLS_IN_VIEW = {"/": 50, "/floor": 8, "/open": 9, "/ shot": 61, "/ film": 49, "/ fx": 53,
                     "/ jobs": 50}
 
 # Contracts another lane delivers (M16 stage 1, C1): until that lane is merged the
@@ -126,11 +132,17 @@ INVENTORY_JS = r"""
     header: box(hd), header_tag: hd ? (hd.id || hd.tagName.toLowerCase()) : null,
     bin: box(bin), chip: box(chip), chip_text: chip ? chip.innerText.trim() : null,
     strip: box(document.getElementById('inspector')),
+    // how much of the strip its panel shows (Effect Controls scrolls, as Premiere's does)
+    strip_seen: (() => { const el = document.getElementById('inspector'), body = el && el.closest('.ws-body');
+      if (!el || !body) return 0; const a = el.getBoundingClientRect(), b = body.getBoundingClientRect();
+      return Math.max(0, Math.min(a.bottom, b.bottom, innerHeight) - Math.max(a.top, b.top, 0)); })(),
+    // the picture in its room (the screenbox): the meters stand beside the room, not in it
     monitor: (() => { const sc = document.querySelector('#player .screen'), pl = document.getElementById('player');
       if (!sc || !pl || !sc.getClientRects().length) return null;
-      const a = sc.getBoundingClientRect(), b = pl.getBoundingClientRect();
+      const a = sc.getBoundingClientRect();
       const box = sc.parentElement.getBoundingClientRect();
-      return {left: a.left - b.left, right: b.right - a.right, width: a.width, height: a.height,
+      return {left: a.left - box.left, right: box.right - a.right, top: a.top - box.top,
+              bottom: box.bottom - a.bottom, width: a.width, height: a.height,
               room_w: box.width, room_h: box.height}; })(),
     blue: [...document.querySelectorAll('.is-next')].map(el => el.id || el.dataset.nextFor || el.tagName),
     jobs: [...document.querySelectorAll('#progress .job')].map(el => { const r = el.getBoundingClientRect();
@@ -394,17 +406,19 @@ def test_the_monitor_is_centred_and_as_big_as_the_strip_leaves(measured):
     1440 × 900, with ~185 px empty under the film row: it is centred now, and the room
     reserved under it is what a selected shot's strip measures, not more. In the
     workspace (redesign wave 1) the screen is the Program panel's width and the strip is
-    in Effect Controls beside it, so the same three facts hold: centred, at least 425 px
-    tall at 1440 × 900, and selecting a shot does not resize it."""
+    in Effect Controls, so the same three facts hold: centred in its room (the meters
+    stand beside the room, wave 4), big at 1440 × 900, and selecting a shot does not
+    resize it."""
     m = measured["/"]["monitor"]
-    assert m and abs(m["left"] - m["right"]) <= 2, m
+    assert m and abs(m["left"] - m["right"]) <= 2 and abs(m["top"] - m["bottom"]) <= 2, m
     # the 16:9 picture fills its panel's room one way or the other (was: >= 425 px tall,
     # the old single-monitor board's number; see REDESIGN-GOAL's rubric log)
     assert m["width"] >= m["room_w"] - 2 or m["height"] >= m["room_h"] - 2, m
-    # ...and the default layout gives it room worth filling: >= 380 px wide, with at most
-    # 30 % of its room in black letterbox (rubric log, 2026-10-15 wave 2: the floor that
-    # replaces the 425 px one; verdict 2 measured 389 × 219 in a 447 px room, 51 %)
-    assert m["width"] >= 380 and 1 - m["height"] / m["room_h"] <= 0.30, m
+    # ...and the default layout gives it room worth filling: >= 560 px wide, with at most
+    # 30 % of its room in black letterbox (rubric log: 380 px in wave 2, when the monitors
+    # had a quarter of the width each; 560 px in wave 4, verdict 4 punch 3, once they
+    # share the whole top row as Premiere's do)
+    assert m["width"] >= 560 and 1 - m["height"] / m["room_h"] <= 0.30, m
     assert measured["/ shot"]["monitor"]["height"] == m["height"], "selecting a shot does not resize it"
 
 
@@ -412,7 +426,11 @@ def test_the_selected_shot_is_in_view(measured):
     """INTAKE M16 I16.4: the selected shot's strip sits under the timeline, in view —
     it used to start at y≈953, below the fold."""
     m = measured["/ shot"]
-    assert m["strip"]["height"] > 0 and m["strip"]["bottom"] <= m["inner_h"], m["strip"]
+    # Wave 4: Effect Controls is in the bottom row (Premiere's monitors take the top row),
+    # so a long strip scrolls inside its panel as Premiere's does; the strip starts in
+    # view and its panel shows at least 300 px of it (rubric log, 2026-10-15 wave 4)
+    assert m["strip"]["height"] > 0 and m["strip"]["top"] < m["inner_h"], m["strip"]
+    assert m["strip_seen"] >= 300, (m["strip"], m["strip_seen"])
 
 
 @pytest.mark.parametrize("state", STATES)

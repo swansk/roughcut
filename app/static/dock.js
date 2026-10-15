@@ -5,9 +5,11 @@
  * user could name none of it. This module lays the board out the way Premiere's editing
  * workspace is laid out, and owns everything about that layout and nothing about the cut:
  *
- *   - the panels: Project (top left, with Selects as its second tab), Source (top centre),
- *     Program (top right), Timeline (along the bottom) and Effect Controls (down the
- *     right, with Effects · Audio · Assistant · Export as its neighbouring tabs). Each has
+ *   - the panels, in Premiere's Editing arrangement (wave 4): Source (top left) and
+ *     Program (top right) share the top row, half each; Project (bottom left, with
+ *     Selects as its second tab), the Timeline (bottom centre) and Effect Controls
+ *     (bottom right, with Effects · Audio · Assistant · Export as its neighbouring tabs)
+ *     share the bottom row. Each has
  *     a title tab; the splitters between them drag, double-click resets, and the sizes
  *     are kept per browser (localStorage) as fractions of the window, so they survive a
  *     reload and a resize;
@@ -71,6 +73,8 @@
     cur = name;
     const view = panel.querySelector('#projView');
     if (view) view.hidden = name !== 'project';
+    // Selects is wider than Project's own width (SELECTS_W): the row re-lays when it opens or closes
+    if (panel.dataset.panel === 'project' && changed) layout();
     if (opts.remember !== false) {
       const t = store.get(TABS_KEY, {});
       t[panel.dataset.panel] = name;
@@ -121,17 +125,51 @@
   }
 
   /* ================================================================ panels and splitters */
+  /* Wave 4 (lane LAYOUT, verdict 4 punch 3: "Source and Program each get a quarter of the
+   * screen — a 386-pixel-wide picture on a laptop"). Premiere's Editing workspace gives the
+   * two monitors the whole top row, half each, and puts the bins bottom left beside the
+   * Timeline. So the top row is Source | Program across the full width, and the bottom
+   * row is Project | Timeline | Effect Controls (each group keeps its tabs). The default
+   * top row is tall enough for a Program picture of >= 560 px at 1440x900 and >= 800 px at
+   * 1920x1080 with its meters beside it (rubric log, 2026-10-15 wave 4).
+   *
+   * Fractions of the workspace's width (proj, insp: the bottom row's side panels; src:
+   * the Source monitor, null = half the top row) and height (top). A dragged one keeps
+   * its own size when a neighbour moves; the Program monitor and the Timeline take up the
+   * change.
+   *
+   * Version 2. A layout saved before it (no `v`) was dragged in the old arrangement,
+   * where the top row was the monitors' quarter-width strip: its Project and Effect
+   * Controls widths still mean the same panels' widths and are kept; its top-row height
+   * and Source width are dropped once, so the bigger monitors reach that browser too. The
+   * old layout is kept whole under `roughcut.ws.layout.v1` (nothing is lost), and Window ›
+   * Reset workspace layout gives the new defaults. */
   const LAYOUT_KEY = 'roughcut.ws.layout';
-  // fractions of the workspace's width (proj, insp, src) and height (top); the Source
-// monitor's default is half of what the two side panels leave (null), and a dragged one
-// keeps its own width when a neighbour moves — the Program monitor takes up the change.
-// Wave 2 (lane FINISH, verdict 2 punch 9): the top row is sized so the Program picture
-// is >= 380 px wide with <= 30 % letterbox at 1440x900 (it was 389x219 in a 511 px tall
-// panel), Effect Controls is wide enough for its five tabs and Project for "not indexed".
-const DEFAULTS = { proj: 0.195, insp: 0.255, src: null, top: 0.42 };
-  const MIN = { proj: 190, insp: 260, src: 180, prog: 220, top: 170, tl: 150 };
+  const LAYOUT_V = 2;
+  // Effect Controls keeps its wave-2 width (0.255: its five tabs whole, and fx.js's cards
+  // as wide as they were), only moved to the bottom row.
+  const DEFAULTS = { proj: 0.2, insp: 0.255, src: null, top: 0.52 };
+  // tlw: the Timeline's least width in the bottom row
+  const MIN = { proj: 190, insp: 260, src: 180, prog: 220, top: 170, tl: 150, tlw: 360 };
+  // The Selects list (app.js SEL_COLS) shows Media In / Out from a 440 px list and Reason
+  // from 560: while Selects is the Project group's open tab the group is at least this
+  // wide (the list, the section's padding, the panel's border and a scrollbar), taken
+  // from the Timeline when the Timeline keeps SEL_TLW after it (1440 px windows and up;
+  // narrower ones keep the Timeline whole and Selects shows the columns it has room for).
+  // The Project tab gives the width back.
+  const SELECTS_W = 592, SEL_TLW = 460;
   const SPLIT = 4;
-  let frac = { ...DEFAULTS, ...store.get(LAYOUT_KEY, {}) };
+  function loadLayout() {
+    const raw = store.get(LAYOUT_KEY, null);
+    if (!raw || typeof raw !== 'object') return {};
+    if (raw.v === LAYOUT_V) return raw;
+    if (store.get(`${LAYOUT_KEY}.v1`, null) == null) store.set(`${LAYOUT_KEY}.v1`, raw);
+    const kept = { v: LAYOUT_V };
+    ['proj', 'insp'].forEach((k) => { if (Number.isFinite(raw[k])) kept[k] = raw[k]; });
+    store.set(LAYOUT_KEY, kept);
+    return kept;
+  }
+  let frac = { ...DEFAULTS, ...loadLayout() };
   let px = {};
 
   function area() {
@@ -151,19 +189,24 @@ const DEFAULTS = { proj: 0.195, insp: 0.255, src: null, top: 0.42 };
     const a = area();
     if (!a || a.W <= 0) return;
     const root = document.documentElement.style;
-    const proj = Math.round(clamp(frac.proj * a.W, MIN.proj, a.W * 0.42));
-    const insp = Math.round(clamp(frac.insp * a.W, MIN.insp, a.W * 0.42));
-    const mid = a.W - proj - insp - 3 * SPLIT;
-    const src = Math.round(clamp(frac.src == null ? mid / 2 : frac.src * a.W, MIN.src, mid - MIN.prog));
+    // the top row: Source | Program, the whole width
+    const src = Math.round(clamp(frac.src == null ? (a.W - SPLIT) / 2 : frac.src * a.W,
+      MIN.src, a.W - SPLIT - MIN.prog));
     const top = Math.round(clamp(frac.top * (a.H - SPLIT), MIN.top, a.H - SPLIT - MIN.tl));
-    px = { proj, insp, src, top, prog: mid - src, tl: a.H - SPLIT - top };
+    // the bottom row: Project | Timeline | Effect Controls
+    const insp = Math.round(clamp(frac.insp * a.W, MIN.insp, a.W * 0.42));
+    const room = a.W - 2 * SPLIT - insp;
+    let proj = Math.round(clamp(frac.proj * a.W, MIN.proj, Math.min(a.W * 0.42, room - MIN.tlw)));
+    if (selectsOpen() && room - SELECTS_W >= SEL_TLW) proj = Math.max(proj, SELECTS_W);
+    px = { proj, insp, src, top, prog: a.W - SPLIT - src, tl: a.H - SPLIT - top, tlw: room - proj };
     root.setProperty('--c-proj', `${proj}px`);
     root.setProperty('--c-insp', `${insp}px`);
     root.setProperty('--c-src', `${src}px`);
     root.setProperty('--r-top', `${top}px`);
   }
 
-  function saveLayout() { store.set(LAYOUT_KEY, frac); }
+  function saveLayout() { store.set(LAYOUT_KEY, { ...frac, v: LAYOUT_V }); }
+  const selectsOpen = () => isOpen('bin');
 
   function resetLayout(key) {
     if (key) frac[key] = DEFAULTS[key]; else frac = { ...DEFAULTS };

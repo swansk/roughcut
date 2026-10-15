@@ -25,10 +25,12 @@
  *
  * Drawing: one <canvas> (no words, no controls): two bars, -60..0 dBFS, green / yellow
  * from -18 / red from -6, a peak-hold tick (1.5 s, then it falls 20 dB/s), the level
- * itself falls 24 dB/s (Premiere's ballistics are similar). Vertical beside the picture
- * when the panel has room for it; under the picture when the picture is as wide as the
- * panel (at 1440×900 the Program picture is width-bound, and 30 px beside it would take
- * the picture under its 380 px floor).
+ * itself falls 24 dB/s (Premiere's ballistics are similar). Always vertical, beside the
+ * picture, as Premiere's Audio Meters are (wave 4, lane LAYOUT: the monitors now share the
+ * whole top row, so the Program panel is wider than its picture needs at the default
+ * height and the 30 px column costs the picture nothing). The 'h' mode (a strip under the
+ * picture) is only for a Program panel dragged so narrow that a 30 px column would leave
+ * the picture under MIN_PIC_W.
  *
  *   window.rcMeters.read()   {now: [l, r], shown: [l, r], hold: [l, r]} in dBFS (-Infinity: silence)
  *   window.rcMeters.mode()   'v' | 'h'
@@ -43,6 +45,7 @@
   const FLOOR_DB = -60;
   const HOLD_MS = 1500, HOLD_FALL = 20, LEVEL_FALL = 24;   // dB per second
   const V_W = 30;                                           // px: the vertical meters' width
+  const MIN_PIC_W = 200;                                    // px: below this, the meters go under the picture
   const IDLE_MS = 2500;                                     // stop drawing this long after silence
 
   let ctx = null, bus = null, an = null, buf = null;
@@ -255,8 +258,8 @@
     const tr = pl.querySelector('.transport');
     const W = pl.clientWidth, H = pl.clientHeight - (tr ? tr.offsetHeight : 0);
     if (!(W > 0 && H > 0)) return;
-    // vertical only when the picture is bound by the height even with the meters beside it
-    const next = (W - V_W) >= H * 16 / 9 ? 'v' : 'h';
+    // vertical beside the picture (Premiere's meters), unless the panel is too narrow to spare the column
+    const next = (W - V_W) >= MIN_PIC_W ? 'v' : 'h';
     if (next !== mode || !pl.classList.contains(`meters-${next}`)) {
       mode = next;
       pl.classList.toggle('meters-v', mode === 'v');
