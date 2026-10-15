@@ -241,8 +241,23 @@
     paintAt(tl.filmStart(seg.id) + (t - seg.in) / spd, t, seg);
   }
 
+  /* app.js's proposal player (`window.rcProposalPlayer`), when the sequence is empty
+   * and a proposal waits on the ghost lane: what L / K / Space play then (verdict 6,
+   * punch 4), as ▶ Play it does. null otherwise — the keys drive the cut. */
+  function proposalOnly() {
+    const pp = window.rcProposalPlayer;
+    return !segs().length && pp && pp.ready() ? pp : null;
+  }
+
   function shuttleKey(k, e) {
     if (e.repeat) return true;                         // holding a key is not pressing it again
+    const pp = proposalOnly();
+    if (pp) {
+      if (k === 'k') pp.pause();
+      else if (k === 'l') { if (!pp.playing()) pp.play(); }
+      else say('the proposal plays forward — L or space');
+      return true;
+    }
     const p = mon();
     if (!p || !p.vids.length || !segs().length) { say('nothing to play yet'); return true; }
     if (k === 'k') { sh.kHeld = true; pause(); return true; }
@@ -823,7 +838,12 @@
           handled = (pickerOpen() || (window.tl && tl.trim && tl.trim.dragging)) ? false : clearAll();
           break;
         case '?': handled = showMap(); break;
-        case ' ': settle(); break;                          // space is app.js's: play at 1×
+        case ' ': {                                        // space is app.js's: play at 1×
+          // … or the proposal, on an empty sequence — not on a focused ✓ / ✗, whose space is its own
+          const pp = t && t.closest && t.closest('[role=checkbox]') ? null : proposalOnly();
+          if (pp && !e.repeat) { pp.toggle(); handled = true; } else if (pp) handled = true; else settle();
+          break;
+        }
         default: break;
       }
     }

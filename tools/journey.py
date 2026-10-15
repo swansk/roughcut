@@ -1228,6 +1228,15 @@ def main() -> int:
                 break
             time.sleep(0.2)
         j.facts["review_copies"] = review
+    # the slowest requests the server saw (wave 8, SAVESAFE): tools/gate.py reads them
+    if srv is not None and j.base:
+        try:
+            import httpx
+            r = httpx.get(j.base + "/api/debug/slow", timeout=10)
+            result["slow"] = r.json() if r.status_code == 200 else \
+                {"error": f"{r.status_code}: {r.text[:200]}"}
+        except Exception as e:  # noqa: BLE001 — a server that predates the timing
+            result["slow"] = {"error": str(e)[:200]}
     if srv is not None:
         srv.should_exit = True
         th.join(timeout=10)

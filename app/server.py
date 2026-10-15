@@ -1089,7 +1089,7 @@ def attach_controls(clean: list[dict], raw: list) -> None:
             seg["controls"] = c
 
 
-def mint_board_ids(body: dict) -> dict[str, str]:
+def mint_board_ids(body: dict, memo: dict[str, str] | None = None) -> dict[str, str]:
     """Name the shots the board laid in since its last save (wave 5, lane SAVE).
 
     A shot made on the board (an insert, a split) carries a temporary `tmp-N` id until
@@ -1099,7 +1099,11 @@ def mint_board_ids(body: dict) -> dict[str, str]:
     was written under a name no shot had. Now the board sends `tmp-N`; this mints one id
     per temporary id, renames the colour block's per-shot keys (and its reference) in the
     same body, drops a `tmp-` key no shot in the save carries, and returns the map, which
-    the reply echoes so the board re-keys exactly. Rewrites `body` in place."""
+    the reply echoes so the board re-keys exactly. Rewrites `body` in place.
+
+    `memo` (wave 8, SAVESAFE): the ids already minted for this page's `tmp-N`. A page
+    that unloads while a save is in flight flushes its latest cut again (a keepalive
+    PUT) carrying the same `tmp-N`, and both must name the shot alike."""
     ids: dict[str, str] = {}
     segs = body.get("segments")
     if isinstance(segs, list):
@@ -1107,7 +1111,9 @@ def mint_board_ids(body: dict) -> dict[str, str]:
             sid = s.get("id") if isinstance(s, dict) else None
             if isinstance(sid, str) and sid.startswith("tmp-"):
                 if sid not in ids:
-                    ids[sid] = segment_id()
+                    ids[sid] = (memo.get(sid) if memo is not None else None) or segment_id()
+                    if memo is not None:
+                        memo[sid] = ids[sid]
                 s["id"] = ids[sid]
     col = body.get("colour")
     if isinstance(col, dict):
@@ -1121,12 +1127,56 @@ def mint_board_ids(body: dict) -> dict[str, str]:
     return ids
 
 
+# A save that never lands on a reload (wave 8, SAVESAFE; verdict 6 punch 1). The board
+# tags each PUT `x-roughcut-save: <page>:<n>` (n counts up per page load) and, when the
+# page is hidden or unloads with a save waiting or in flight, sends its latest cut once
+# more as a keepalive PUT. That flush can land while an earlier PUT of the same page is
+# still being processed (or is held up on its way), so a save older than one already
+# applied for its page is never written over it: it is answered `stale` with the ids
+# the newer one minted for its `tmp-N`. A PUT without the tag is applied as it comes.
+SAVE_PAGES: dict[str, dict] = {}       # page -> {"seq": last applied n, "ids": {tmp: id}}
+SAVE_PAGES_MAX = 64
+# Test hook: hold every PUT /api/project this long after its body is read, as a stalled
+# server would (test_save_reload.py; ROUGHCUT_TEST_PUT_DELAY_S for a subprocess server).
+PUT_DELAY_S = float(os.environ.get("ROUGHCUT_TEST_PUT_DELAY_S") or 0.0)
+
+
+def put_delay(request: Request) -> float:
+    """The test hook's hold for this PUT (a test may hold only some of them)."""
+    return PUT_DELAY_S
+
+
+def save_tag(request: Request) -> tuple[str, int] | None:
+    raw = request.headers.get("x-roughcut-save") or ""
+    m = re.fullmatch(r"([A-Za-z0-9_-]{1,40}):(\d{1,12})", raw.strip())
+    return (m.group(1), int(m.group(2))) if m else None
+
+
+def save_page(page: str) -> dict:
+    rec = SAVE_PAGES.pop(page, None) or {"seq": 0, "ids": {}}
+    SAVE_PAGES[page] = rec                         # newest last
+    while len(SAVE_PAGES) > SAVE_PAGES_MAX:
+        SAVE_PAGES.pop(next(iter(SAVE_PAGES)))
+    return rec
+
+
 @app.put("/api/project")
 async def api_save(request: Request) -> JSONResponse:
     body = await request.json()
+    hold = put_delay(request)
+    if hold > 0:
+        await asyncio.sleep(hold)
+    # From here to the reply nothing awaits: one save is applied whole before the next.
+    tag = save_tag(request)
+    page = save_page(tag[0]) if tag else None
+    if page is not None and tag[1] <= page["seq"]:
+        segs = body.get("segments") if isinstance(body.get("segments"), list) else []
+        named = {s["id"]: page["ids"][s["id"]] for s in segs
+                 if isinstance(s, dict) and s.get("id") in page["ids"]}
+        return JSONResponse({"ok": True, "stale": True, "saved": len(segs), "ids": named})
     edl = read_edl()
     edl["story"] = body.get("story", edl.get("story", ""))
-    minted = mint_board_ids(body)
+    minted = mint_board_ids(body, page["ids"] if page is not None else None)
     # A body without segments leaves the cut alone: the timeline saves its tracks,
     # V2 and markers on their own when nothing else changed (roughcut/tracks.py).
     if "segments" in body:
@@ -1194,8 +1244,124 @@ async def api_save(request: Request) -> JSONResponse:
     if edl.get("selects") is not None or edl.get("floor") is not None:
         selects.sync_timeline(edl)
     write_edl(edl)
+    if page is not None:
+        page["seq"] = tag[1]
+    # A flush on unload carries the Accept's answer when the page could not wait for
+    # this reply to send it (the answer goes after the cut, as the board's own does).
+    if isinstance(body.get("answer"), dict):
+        try:
+            answer_ask(body["answer"])
+        except (HTTPException, OSError, ValueError) as exc:
+            print(f"  !! save: the answer it carried was not recorded: {exc}", flush=True)
     # `ids`: {tmp-N: minted id}, so the board re-keys its new shots from this reply
     return JSONResponse({"ok": True, "saved": len(clean), "ids": minted})
+
+
+# Request timing (wave 8, SAVESAFE). Verdict 6 lost an accepted cut whose save "never
+# replied" right after a first pass, and nothing said where the time went. Every request
+# is timed to its first byte (the handler's work, not a video's streaming), any over
+# SLOW_MS is printed with its handler and kept (the last 50, `GET /api/debug/slow`), and
+# the slowest of all is remembered. A watcher notes the event loop itself held up for
+# LOOP_LAG_MS or more (sync work in an async handler), the stall that delays every
+# async handler at once.
+SLOW_MS = 500.0
+LOOP_LAG_MS = 250.0
+SLOW_KEEP = 50
+SLOW: list[dict] = []
+SLOWEST: dict = {"all": None, "api": None}
+_LOOP_WATCH: dict = {"task": None}
+# Read your own save: a reload sends its keepalive flush and then asks for the page (and
+# the cut) at once, on different connections; the page is served once the saves that
+# had arrived are applied (waiting at most READ_AFTER_SAVE_S), never the cut before it.
+SAVES_IN_FLIGHT = {"n": 0}
+READ_AFTER_SAVE_S = 5.0
+
+
+def note_request(row: dict) -> None:
+    for key in ("all", "api") if row["path"].startswith("/api/") else ("all",):
+        top = SLOWEST[key]
+        if top is None or row["ms"] > top["ms"]:
+            SLOWEST[key] = row
+    if row["ms"] >= SLOW_MS:
+        SLOW.append(row)
+        del SLOW[:-SLOW_KEEP]
+        print(f"  !! slow request: {row['ms']:.0f} ms {row['method']} {row['path']} "
+              f"({row['handler']})", flush=True)
+
+
+async def _loop_lag() -> None:
+    tick = 0.1
+    while True:
+        t0 = time.perf_counter()
+        await asyncio.sleep(tick)
+        lag = (time.perf_counter() - t0 - tick) * 1000.0
+        if lag >= LOOP_LAG_MS:
+            row = {"method": "LOOP", "path": "(the event loop was held)", "handler": "-",
+                   "ms": round(lag, 1), "status": None, "at": time.time()}
+            SLOW.append(row)
+            del SLOW[:-SLOW_KEEP]
+            print(f"  !! the event loop was held {lag:.0f} ms", flush=True)
+
+
+def _watch_loop() -> None:
+    loop = asyncio.get_running_loop()
+    task = _LOOP_WATCH["task"]
+    if task is None or task.done() or task.get_loop() is not loop:
+        _LOOP_WATCH["task"] = loop.create_task(_loop_lag())
+
+
+class RequestTiming:
+    """Pure ASGI (a BaseHTTPMiddleware would buffer the media streams)."""
+
+    def __init__(self, app_) -> None:
+        self.app = app_
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        if (scope.get("client") or ("",))[0] != "testclient":   # a real server's loop
+            _watch_loop()
+        t0 = time.perf_counter()
+        first: list = [None, None]
+        method, where = scope.get("method"), scope.get("path")
+        saving = method == "PUT" and where == "/api/project"
+
+        async def timed(msg) -> None:
+            if msg["type"] == "http.response.start" and first[0] is None:
+                first[0], first[1] = time.perf_counter(), msg.get("status")
+            await send(msg)
+
+        if saving:
+            SAVES_IN_FLIGHT["n"] += 1
+        elif method == "GET" and where in ("/", "/api/project") and SAVES_IN_FLIGHT["n"]:
+            until = time.perf_counter() + READ_AFTER_SAVE_S
+            while SAVES_IN_FLIGHT["n"] and time.perf_counter() < until:
+                await asyncio.sleep(0.02)
+        try:
+            await self.app(scope, receive, timed)
+        finally:
+            if saving:
+                SAVES_IN_FLIGHT["n"] -= 1
+            path = scope.get("path") or ""
+            if path != "/api/debug/slow":
+                end = first[0] if first[0] is not None else time.perf_counter()
+                ep = scope.get("endpoint")
+                note_request({"method": scope.get("method"), "path": path,
+                              "handler": getattr(ep, "__name__", None) or "-",
+                              "ms": round((end - t0) * 1000.0, 1), "status": first[1],
+                              "at": time.time()})
+
+
+app.add_middleware(RequestTiming)
+
+
+@app.get("/api/debug/slow")
+def api_debug_slow() -> JSONResponse:
+    """Read-only: the last 50 requests over SLOW_MS (and event-loop holds), and the
+    slowest request (`slowest`) and slowest `/api/` request (`slowest_api`) seen."""
+    return JSONResponse({"threshold_ms": SLOW_MS, "slowest": SLOWEST["all"],
+                         "slowest_api": SLOWEST["api"], "slow": list(SLOW)})
 
 
 @app.post("/api/snap")
@@ -2487,13 +2653,19 @@ async def api_asks_answer(request: Request) -> JSONResponse:
     record — so the flow stops calling a discarded proposal "waiting for you". Accept
     also saves the cut, which answers it on its own; this makes Discard say so too."""
     body = await request.json() if int(request.headers.get("content-length") or 0) else {}
+    return JSONResponse(answer_ask(body if isinstance(body, dict) else {}))
+
+
+def answer_ask(body: dict) -> dict:
+    """`POST /api/asks/answer`'s work, also done by a save that carries `answer` (the
+    board's flush on unload, wave 8 SAVESAFE). Raises HTTPException(400) on a bad one."""
     answer = str(body.get("answer") or "")
     if answer not in ("accept", "discard"):
         raise HTTPException(400, "answer must be accept or discard")
     files = sorted(STATE["asks"].glob("*.json"), key=lambda p: p.stat().st_mtime,
                    reverse=True)
     if not files:
-        return JSONResponse({"ok": True, "job": None})
+        return {"ok": True, "job": None}
     rec = json.loads(files[0].read_text(encoding="utf-8"))
     rec["answered"] = {"answer": answer, "at": time.time()}
     partial = body.get("partial")
@@ -2505,7 +2677,7 @@ async def api_asks_answer(request: Request) -> JSONResponse:
     if rec["answered"].get("partial"):
         note_partial_accept(rec)                  # provenance: the save may have landed
         note_rejections(rec)                      # verdict 4: a rejection is remembered
-    return JSONResponse({"ok": True, "job": rec.get("job")})
+    return {"ok": True, "job": rec.get("job")}
 
 
 def note_rejections(rec: dict, edl: dict | None = None) -> None:
@@ -6193,7 +6365,9 @@ def media_proxy(name: str, request: Request) -> Response:
     A redirect rather than the bytes under this URL: a <video> keeps range-requesting
     the URL it was redirected to, so when the proxy lands mid-play no player is handed
     another file's bytes at the same offsets. A 503 with retry-after only when even the
-    preview is not ready; `/media/status/<stem>.mp4` says when it is."""
+    preview is not ready; `/media/status/<stem>.mp4` says when it is. Between the preview
+    and the proxy, a clip the cut plays redirects to its range proxy (`x-roughcut-media:
+    range`, wave 7): the cut's shots sharp at 1280 on the clip's own timeline."""
     path = STATE["proxy_dir"] / Path(name).name
     if path.exists():
         return ranged_file(path, request)
@@ -6451,7 +6625,9 @@ MEDIA: dict = {"lock": threading.Lock(), "wanted": [], "building": {}, "failed":
                # Stop means stop for the pictures too (verdict 4, punch 8): every preview
                # and poster encode runs in this scope, and the index's cancel kills it
                # (`stop_media`); `walk_gen` moves on so the background walk ends.
-               "scope": None, "walk_gen": 0, "stopped": 0}
+               "scope": None, "walk_gen": 0, "stopped": 0,
+               # set to wake the walk early (a cut saved): it looks at the cut at once
+               "kick": threading.Event()}
 
 
 def media_scope() -> procscope.Scope:
@@ -6519,11 +6695,18 @@ def cut_clips() -> list[str]:
     bin's (verdict 5 punch 2: the Program showed the soft 360p preview for the first
     ~90 minutes of a Killington project, the bin's proxies going in priority order)."""
     out: list[str] = []
-
-    def add(c) -> None:
+    for _key, s in _cut_uses():
+        c = s.get("clip")
         if isinstance(c, str) and c and c not in out:
             out.append(c)
+    return out
 
+
+def _cut_uses() -> list[tuple[str, dict]]:
+    """Every use of a clip the cut plays, as (where, shot) in the order the Program meets
+    them: V1's shots ("segments"), V2+ ("overlays"), A3+ ("audio"), then the shots of a
+    proposal nobody has answered yet ("proposal")."""
+    out: list[tuple[str, dict]] = []
     try:
         edl = read_edl()
     except Exception:  # noqa: BLE001 — no cut yet is an empty list, not an error
@@ -6531,7 +6714,7 @@ def cut_clips() -> list[str]:
     for key in ("segments", "overlays", "audio"):
         for s in edl.get(key) or []:
             if isinstance(s, dict):
-                add(s.get("clip"))
+                out.append((key, s))
     try:
         recs = _ask_records(newest=1)
     except Exception:  # noqa: BLE001
@@ -6540,7 +6723,7 @@ def cut_clips() -> list[str]:
         if not rec.get("answered"):
             for s in (rec.get("plan") or {}).get("segments") or []:
                 if isinstance(s, dict):
-                    add(s.get("clip"))
+                    out.append(("proposal", s))
     return out
 
 
@@ -6905,6 +7088,9 @@ def media_fallback(clip: str, wait_s: float = 0.0) -> tuple[str, str | None]:
         return "proxy", None
     if browser_playable(STATE["footage"] / clip):
         return "original", f"/media/original/{stem}.mp4"
+    rec = range_record(stem)
+    if rec is not None:
+        return "range", rec["url"]
     if preview_path(stem).exists():
         return "preview", preview_url(stem)
     ev = start_preview(clip)
@@ -6917,6 +7103,395 @@ def media_fallback(clip: str, wait_s: float = 0.0) -> tuple[str, str | None]:
     if preview_path(stem).exists():
         return "preview", preview_url(stem)
     return "building", None
+
+
+# ---------------------------------------------------------------- range proxies
+#
+# Wave 7 (PLAYBACK's measurement): on Killington the cut's 9 clips took ~37 min to get
+# their 1280 proxies with one worker (1.53 s of encode per second of 59.94 HEVC, the whole
+# of every clip decoded on the CPU), and the Program showed the soft 360p preview all that
+# time. A cut plays a few seconds of each clip. So before the whole-clip proxies, every
+# clip the cut plays gets a RANGE PROXY: a 1280 file on the clip's own timeline (it starts
+# at 0 and lasts the clip, so every clip-time seek the player makes lands where it would in
+# the proxy) whose frames inside the cut's ranges — each shot's [in − pad, out + pad] —
+# are decoded from the original, and whose frames outside them are the 360p preview's,
+# scaled up (no worse than what played before). Only the ranges touch the 4K master.
+#
+#   * Profile: PROXY_W wide (capped, as the proxy), the proxy's rate rule (59.94 → 29.97,
+#     `proxy_rate`), the orient rule (the display matrix applied under `orient: auto`,
+#     overridden under `none`), a keyframe every PROXY_GOP_S. On a GPU everything stays
+#     on the card (NVDEC → scale_cuda → overlay_cuda → NVENC; a turn is done on the
+#     1280 frame on the CPU); elsewhere, or for an HDR / 10-bit source, the CPU path
+#     with the proxy's own filters (and NVENC when there is a GPU, else x264 veryfast).
+#   * Timestamps: the preview's own (the clip's), and each range's frames moved back to
+#     theirs after the input seek (`setpts=PTS+round(a/TB)`, whole ticks: setpts
+#     truncates a float sum, and one tick short puts every 59.94 frame that sits half-way
+#     between two 29.97 slots into the earlier one, a source frame off), then both
+#     through the same `fps` filter as the proxy, so a range frame at clip time t is the
+#     proxy's frame at t (the 59.94 → 29.97 phase included).
+#   * Cache: `<proxy_dir>/ranges/<stem>.<key>.mp4` + a `.json` written after it, the key a
+#     hash of (RANGE_V, PROXY_V, PICTURE_V, orient, the source's size and mtime, the
+#     ranges). The newest current one for a clip is what `/media/proxy` 307s to
+#     (`x-roughcut-media: range`), ahead of the preview; the whole-clip proxy, when it
+#     lands, is served before it and the range files go RANGE_KEEP_S later.
+#   * A trim that takes a shot past its range: the file still plays (the preview's frames
+#     there), and the walk builds a new one for the cut as it now is.
+#
+# Built by the media walk (GPU boxes, like the previews): the cut's clips in film order,
+# each one's preview then its range proxy, then the rest of the bin's previews; the walk
+# then stays and looks at the cut every RANGE_POLL_S. `ROUGHCUT_RANGE_PROXIES=0` turns it
+# off (the before-measurement).
+
+RANGE_V = "r1"
+RANGE_PAD_S = 1.0        # each shot's range reaches this far past its in and out points
+RANGE_LEAD_S = 0.35      # a shot is covered if its range starts this far before the in
+RANGE_MERGE_S = 2.0      # two ranges closer than this are encoded as one
+RANGE_MAX = 8            # ranges per encode (each is an open decoder); closest merge first
+RANGE_POLL_S = 2.0       # how often the walk looks at the cut once it is idle
+RANGE_SETTLE_S = 1.5     # a cut saved this recently is still being edited: wait
+RANGE_KEEP_S = 300.0     # range files outlive their clip's whole proxy this long
+RANGE_NAME = re.compile(r"^(?P<stem>[A-Za-z0-9._-]+)\.(?P<key>[0-9a-f]{12})\.mp4$")
+
+
+def ranges_enabled() -> bool:
+    return os.environ.get("ROUGHCUT_RANGE_PROXIES", "1") != "0"
+
+
+def range_dir() -> Path:
+    return STATE["proxy_dir"] / "ranges"
+
+
+def cut_ranges() -> dict[str, list[tuple[float, float]]]:
+    """The clip-time ranges the Program plays, per clip of the bin, clips in the order the
+    cut meets them (`_cut_uses`, V1 then V2+ then a waiting proposal; A3+ is sound only)."""
+    out: dict[str, list[tuple[float, float]]] = {}
+    for key, s in _cut_uses():
+        if key == "audio":
+            continue
+        clip = s.get("clip")
+        try:
+            a, b = float(s.get("in")), float(s.get("out"))
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(clip, str) or not clip or not (math.isfinite(a) and math.isfinite(b)):
+            continue
+        if b > a >= 0:
+            out.setdefault(clip, []).append((a, b))
+    return out
+
+
+def merge_ranges(spans: list[tuple[float, float]], dur: float | None) -> list[tuple[float, float]]:
+    """The ranges to encode for these shots: each padded by RANGE_PAD_S, clamped to the
+    clip, merged where they overlap or come within RANGE_MERGE_S, at most RANGE_MAX (the
+    closest pairs merge first). Rounded to the millisecond, so the cache key is stable."""
+    end = float(dur) if dur and dur > 0 else math.inf
+    pad = sorted((max(0.0, a - RANGE_PAD_S), min(end, b + RANGE_PAD_S)) for a, b in spans)
+    out: list[list[float]] = []
+    for a, b in pad:
+        if b <= a:
+            continue
+        if out and a - out[-1][1] < RANGE_MERGE_S:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    while len(out) > RANGE_MAX:
+        i = min(range(len(out) - 1), key=lambda k: out[k + 1][0] - out[k][1])
+        out[i][1] = max(out[i][1], out.pop(i + 1)[1])
+    return [(round(a, 3), round(b, 3)) for a, b in out]
+
+
+def ranges_cover(have, want, dur: float | None) -> bool:
+    """Whether the encoded ranges `have` hold every shot in `want` sharp: from
+    RANGE_LEAD_S before its in-point (where the Program parks the buffer) to its out."""
+    end = float(dur) if dur and dur > 0 else math.inf
+    for a, b in want:
+        lo, hi = max(0.0, a - RANGE_LEAD_S), min(end, b)
+        if not any(x <= lo + 1e-3 and y >= hi - 1e-3 for x, y in have or []):
+            return False
+    return True
+
+
+def _range_src_id(src: Path) -> list[int] | None:
+    try:
+        st = src.stat()
+    except OSError:
+        return None
+    return [st.st_size, st.st_mtime_ns]
+
+
+def range_key(src: Path, spans, orient: str) -> str:
+    import hashlib
+    blob = json.dumps([RANGE_V, PROXY_V, PICTURE_V, orient, _range_src_id(src),
+                       [[round(a, 3), round(b, 3)] for a, b in spans]])
+    return hashlib.sha1(blob.encode()).hexdigest()[:12]
+
+
+def range_record(stem: str) -> dict | None:
+    """The newest current range proxy of a clip: its sidecar, with `path` and `url`, or
+    None. Current = this RANGE_V / PROXY_V / PICTURE_V, this project's orient, this
+    version of the source file, the file there."""
+    if not ranges_enabled():
+        return None
+    d = STATE.get("proxy_dir")
+    clip = clip_for_stem(stem)
+    if d is None or clip is None or not (d / "ranges").is_dir():
+        return None
+    src_id = _range_src_id(STATE["footage"] / clip)
+    best = None
+    for js in (d / "ranges").glob(f"{stem}.*.json"):
+        try:
+            rec = json.loads(js.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(rec, dict) or rec.get("stem") != stem:
+            continue
+        if (rec.get("v"), rec.get("proxy_v"), rec.get("picture_v")) != (RANGE_V, PROXY_V, PICTURE_V):
+            continue
+        if rec.get("orient") != STATE.get("orient", "auto") or rec.get("src") != src_id:
+            continue
+        mp4 = js.with_suffix(".mp4")
+        if not mp4.exists():
+            continue
+        if best is None or float(rec.get("made") or 0) > float(best.get("made") or 0):
+            best = {**rec, "path": mp4, "url": f"/media/range/{mp4.name}"}
+    return best
+
+
+def _range_rate(src: Path) -> str:
+    """The frame rate of a range proxy, as the proxy's: `proxy_rate`, else the source's."""
+    from fractions import Fraction
+    rate = proxy_rate(src)
+    if rate:
+        return rate
+    fps = (media_facts(src) or {}).get("fps") or 30.0
+    r = Fraction(fps).limit_denominator(1001)
+    return f"{r.numerator}/{r.denominator}"
+
+
+def build_range_proxy(src: Path, preview: Path, dest: Path, spans, orient: str) -> str:
+    """The range proxy of `src` at `dest` (see the section's comment): the preview's frames
+    scaled to the proxy's size, with the frames of each of `spans` decoded from `src` laid
+    over them at their own times. Returns the path it took ("gpu" or "cpu"). Temp name and
+    rename, as build_proxy."""
+    f = media_facts(src)
+    if not f or not f.get("width") or not f.get("height"):
+        raise RuntimeError(f"range proxy: cannot read {src.name}")
+    if not spans:
+        raise RuntimeError(f"range proxy: no ranges for {src.name}")
+    turn = turn_needed(f, orient)
+    quarter = turn % 180 != 0
+    ow, oh = (f["height"], f["width"]) if quarter else (f["width"], f["height"])
+    w = min(PROXY_W, ow) // 2 * 2
+    h = max(2, round(oh * w / ow / 2) * 2)
+    rate = _range_rate(src)
+    num, _, den = rate.partition("/")
+    gop = max(1, round(float(num) / float(den or 1) * PROXY_GOP_S))
+    norm = source_normalise(src)
+    gpu = preview_gpu()
+    nvenc = ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "23", "-b:v", "0",
+             "-g", str(gop), "-bf", "0"]
+    x264 = ["-c:v", "libx264", "-preset", "veryfast", "-crf", str(PROXY_CRF),
+            "-force_key_frames", f"expr:gte(t,n_forced*{PROXY_GOP_S:g})"]
+    tail = ["-map", "0:a:0?", "-c:a", "copy", "-dn", "-sn",
+            "-write_tmcd", "0", "-movflags", "+faststart", "-f", "mp4"]
+
+    def cut(a: float, b: float) -> list[str]:
+        return ["-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", "-i", str(src)]
+
+    def chain(base: str, over: str, label: str, cuda: bool) -> str:
+        ov = "overlay_cuda" if cuda else "overlay"
+        return f"[{base}][{over}]{ov}=eof_action=pass:repeatlast=0[{label}]"
+
+    paths: list[tuple[str, list[str]]] = []
+    eight_bit = f.get("pix_fmt") in ("yuv420p", "yuvj420p", "nv12")
+    if gpu and not norm and eight_bit and (turn == 0 or turn in TURN_VF):
+        hw = ["-hwaccel", "cuda", "-hwaccel_device", "rc", "-hwaccel_output_format", "cuda"]
+        args = ["-init_hw_device", "cuda=rc", "-filter_hw_device", "rc", *hw, "-i", str(preview)]
+        fc = [f"[0:v]fps={rate},scale_cuda={w}:{h}:format=nv12[b0]"]
+        sw, sh = (h, w) if quarter else (w, h)
+        turn_vf = (f",hwdownload,format=nv12,{TURN_VF[turn]},hwupload_cuda" if turn else "")
+        for i, (a, b) in enumerate(spans, 1):
+            # The matrix is overridden on every range input and the turn done explicitly:
+            # autorotate does nothing to CUDA frames (ORIENT's lesson).
+            args += ["-display_rotation", "0", *hw, *cut(a, b)]
+            fc.append(f"[{i}:v]scale_cuda={sw}:{sh}:format=nv12{turn_vf},"
+                      f"setpts=PTS+round({a:.3f}/TB),fps={rate}[s{i}]")
+            fc.append(chain(f"b{i - 1}", f"s{i}", f"b{i}", True))
+        fc[-1] = fc[-1].rsplit("[", 1)[0] + "[v]"
+        paths.append(("gpu", [*args, "-filter_complex", ";".join(fc), "-map", "[v]",
+                              *nvenc]))
+    pre = ["-display_rotation", "0"] if orient == "none" else []
+    dec = ["-hwaccel", "cuda"] if gpu else []
+    args = ["-i", str(preview)]
+    fc = [f"[0:v]fps={rate},scale={w}:{h},format=yuv420p[b0]"]
+    for i, (a, b) in enumerate(spans, 1):
+        args += [*pre, *dec, *cut(a, b)]
+        vf = f"scale={w}:{h},format=yuv420p,setpts=PTS+round({a:.3f}/TB),fps={rate}"
+        if norm:
+            vf = f"{norm},{vf}"
+        fc.append(f"[{i}:v]{vf}[s{i}]")
+        fc.append(chain(f"b{i - 1}", f"s{i}", f"b{i}", False))
+    fc[-1] = fc[-1].rsplit("[", 1)[0] + "[v]"
+    paths.append(("cpu", [*args, "-filter_complex", ";".join(fc), "-map", "[v]",
+                          *(nvenc if gpu else x264)]))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part.mp4")
+    err = ""
+    for name, args in paths:
+        r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", *args, *tail, str(tmp)],
+                           capture_output=True, text=True)
+        if r.returncode == 0 and tmp.exists() and tmp.stat().st_size:
+            tmp.replace(dest)
+            return name
+        err = r.stderr[-300:]
+        tmp.unlink(missing_ok=True)
+    raise RuntimeError(f"range proxy failed for {src.name}: {err}")
+
+
+def range_wanted(clip: str, cut: dict | None = None) -> list[tuple[float, float]]:
+    return list((cut_ranges() if cut is None else cut).get(clip) or [])
+
+
+def needs_range(clip: str, cut: dict | None = None) -> bool:
+    """Whether the walk should (re)build `clip`'s range proxy now: the cut plays it, it has
+    neither a whole proxy nor a playable original, its preview exists (the frames between
+    the ranges), and the newest range proxy does not hold every shot of it sharp."""
+    if not ranges_enabled():
+        return False
+    want = range_wanted(clip, cut)
+    stem = Path(clip).stem
+    src = STATE["footage"] / clip
+    if not want or clip_for_stem(stem) != clip or not src.exists():
+        return False
+    if (STATE["proxy_dir"] / f"{stem}.mp4").exists() or browser_playable(src):
+        return False
+    if not preview_path(stem).exists():
+        return False
+    dur = clip_duration(clip)
+    rec = range_record(stem)
+    if rec is not None and ranges_cover(rec.get("spans"), want, dur):
+        return False
+    key = range_key(src, merge_ranges(want, dur), STATE.get("orient", "auto"))
+    return not _failed_recently(str(range_dir() / f"{stem}.{key}.mp4"))
+
+
+def ensure_range(clip: str, cut: dict | None = None) -> dict | None:
+    """Build `clip`'s range proxy for the cut as it is now, unless the newest one already
+    covers it. Returns the record served afterwards (None when there is nothing to build
+    or the build failed)."""
+    want = range_wanted(clip, cut)
+    stem = Path(clip).stem
+    src = STATE["footage"] / clip
+    if not want or not src.exists():
+        return None
+    dur = clip_duration(clip)
+    rec = range_record(stem)
+    if rec is not None and ranges_cover(rec.get("spans"), want, dur):
+        return rec
+    preview = ensure_preview(clip)
+    if preview is None:
+        return rec
+    orient = STATE.get("orient", "auto")
+    spans = merge_ranges(want, dur)
+    rdir = range_dir()
+    dest = rdir / f"{stem}.{range_key(src, spans, orient)}.mp4"
+    key = str(dest)
+    if _failed_recently(key):
+        return rec
+    ev, owner = _claim_preview(key)
+    if not owner:
+        ev.wait()
+        return range_record(stem)
+    scope = None
+    try:
+        with PREVIEW_SLOTS:
+            t0 = time.monotonic()
+            scope = media_scope()
+            with procscope.active(scope):
+                how = build_range_proxy(src, preview, dest, spans, orient)
+            took = time.monotonic() - t0
+            meta = {"stem": stem, "clip": clip, "v": RANGE_V, "proxy_v": PROXY_V,
+                    "picture_v": PICTURE_V, "orient": orient, "src": _range_src_id(src),
+                    "spans": [list(s) for s in spans], "how": how,
+                    "built_s": round(took, 2), "made": time.time()}
+            tmpj = dest.with_suffix(f".{os.getpid()}.part.json")
+            tmpj.write_text(json.dumps(meta), encoding="utf-8")
+            tmpj.replace(dest.with_suffix(".json"))
+            sharp = sum(b - a for a, b in spans)
+            print(f"  range proxy {stem} ({how}, {len(spans)} ranges, {sharp:.0f} s sharp) "
+                  f"in {took:.1f}s", flush=True)
+        MEDIA["failed"].pop(key, None)
+        prune_ranges(stem)
+    except (RuntimeError, OSError) as exc:
+        if scope is not None and scope.cancelled:
+            MEDIA["failed"].pop(key, None)
+            print(f"  range proxy {stem} stopped", flush=True)
+        else:
+            MEDIA["failed"][key] = (time.monotonic(), str(exc)[:300])
+            print(f"  !! {exc}", flush=True)
+    finally:
+        with MEDIA["lock"]:
+            MEDIA["building"].pop(key, None)
+        ev.set()
+    return range_record(stem)
+
+
+def prune_ranges(stem: str | None = None) -> int:
+    """Range files nobody will be served again: all but the two newest of a clip (a
+    player may still hold the one before), and every one of a clip whose whole proxy has
+    been there RANGE_KEEP_S. Returns how many files went."""
+    rdir = range_dir()
+    if not rdir.is_dir():
+        return 0
+    by_stem: dict[str, list[Path]] = {}
+    for mp4 in rdir.glob("*.mp4"):
+        m = RANGE_NAME.match(mp4.name)
+        if m and (stem is None or m["stem"] == stem):
+            by_stem.setdefault(m["stem"], []).append(mp4)
+    gone = 0
+    now = time.time()
+    for s, files in by_stem.items():
+        files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        proxy = STATE["proxy_dir"] / f"{s}.mp4"
+        old = (proxy.exists() and now - proxy.stat().st_mtime > RANGE_KEEP_S)
+        for p in files if old else files[2:]:
+            p.unlink(missing_ok=True)
+            p.with_suffix(".json").unlink(missing_ok=True)
+            gone += 1
+    return gone
+
+
+def _next_media_job() -> tuple[str, str] | None:
+    """The walk's next piece of work after the posters: a preview the human asked for;
+    then, for each clip the cut plays in film order, its preview and then its range
+    proxy; then every other clip's preview (`first_wanted` order). None when idle."""
+    def failed(c: str) -> bool:
+        return _failed_recently(str(preview_path(Path(c).stem)))
+    todo = [c for c in footage_clips() if needs_preview(c) and not failed(c)]
+    with MEDIA["lock"]:
+        wanted = list(MEDIA["wanted"])
+    by_stem = {Path(c).stem: c for c in todo}
+    for stem in wanted:
+        if stem in by_stem:
+            return "preview", by_stem[stem]
+    if ranges_enabled():
+        cut = cut_ranges()
+        settled = True
+        try:
+            settled = time.time() - STATE["edl"].stat().st_mtime >= RANGE_SETTLE_S
+        except (OSError, KeyError, TypeError):
+            pass
+        # film order, except that a cut clip the human just opened goes first
+        rank = {stem: i for i, stem in enumerate(wanted)}
+        order = sorted(cut, key=lambda c: rank.get(Path(c).stem, len(rank)))
+        for clip in order:
+            if clip in todo:
+                return "preview", clip
+            if settled and needs_range(clip, cut):
+                return "range", clip
+    if todo:
+        return "preview", first_wanted(todo)
+    return None
 
 
 def kick_previews() -> None:
@@ -6957,12 +7532,25 @@ def _media_walk() -> None:
             list(pool.map(poster, footage_clips()))
         if not preview_gpu():
             return
-        while STATE["footage"] == footage and MEDIA["walk_gen"] == gen:
-            todo = [c for c in footage_clips() if needs_preview(c)
-                    and not _failed_recently(str(preview_path(Path(c).stem)))]
-            if not todo:
-                return
-            ensure_preview(first_wanted(todo))
+        # Previews, the cut's first with each one's range proxy after it; then, with
+        # range proxies on, the walk stays and looks at the cut every RANGE_POLL_S (a
+        # trim past a range, a new proposal) until the bin changes, a Stop, or proxies
+        # are turned off.
+        while (STATE["footage"] == footage and MEDIA["walk_gen"] == gen
+               and STATE.get("proxies_enabled", True)):
+            job = _next_media_job()
+            if job is None:
+                if not ranges_enabled():
+                    return
+                prune_ranges()
+                MEDIA["kick"].wait(RANGE_POLL_S)
+                MEDIA["kick"].clear()
+                continue
+            kind, clip = job
+            if kind == "preview":
+                ensure_preview(clip)
+            else:
+                ensure_range(clip)
     finally:
         with MEDIA["lock"]:
             if MEDIA["thread"] is threading.current_thread():
@@ -7009,14 +7597,37 @@ def media_status(name: str) -> JSONResponse:
     want_media(stem)
     kind, url = media_fallback(clip)
     key = str(preview_path(stem))
+    rec = range_record(stem)
+    want = range_wanted(clip)
     return JSONResponse({
         "clip": clip, "serves": kind,
         "url": f"/media/proxy/{stem}.mp4" if kind == "proxy" else url,
-        "ready": kind in ("proxy", "original", "preview"),
+        "ready": kind in ("proxy", "original", "range", "preview"),
         "proxy": (STATE["proxy_dir"] / f"{stem}.mp4").exists(),
         "preview": preview_path(stem).exists(),
+        # The range proxy (wave 7): the clip-time ranges it holds sharp (1280, from the
+        # original), and whether they hold every shot the cut plays of this clip now.
+        "range": rec is not None,
+        "ranges": [list(s) for s in rec.get("spans") or []] if rec else [],
+        "cut_sharp": (kind in ("proxy", "original") or (
+            kind == "range" and ranges_cover(rec.get("spans"), want, clip_duration(clip))))
+        if want else None,
         "error": (MEDIA["failed"].get(key) or (0, None))[1] if kind == "failed" else None,
         "poster": f"/media/poster/{stem}.jpg"})
+
+
+@app.get("/media/range/{name}")
+def media_range(name: str, request: Request) -> Response:
+    """A clip's range proxy (see "range proxies"): only a current one, by the name
+    `/media/proxy` redirected to. A stale name 404s and the player asks /media/proxy
+    again, as with an old preview."""
+    m = RANGE_NAME.match(Path(name).name)
+    if not m:
+        raise HTTPException(404, f"not found: {Path(name).name}")
+    path = range_dir() / m.group(0)
+    if not path.with_suffix(".json").exists():
+        raise HTTPException(404, f"not found: {path.name}")
+    return ranged_file(path, request, mime="video/mp4")
 
 
 # ---------------------------------------------------------------- assets

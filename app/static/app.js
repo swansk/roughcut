@@ -3196,6 +3196,61 @@ async function flushSave() {
   else if (saveRun) await saveRun;
 }
 
+/* Nothing is lost on a reload or a close (wave 8, SAVESAFE; verdict 6 punch 1: an
+ * Accept's save had not left the browser 5 s later, the reload dropped the whole cut and
+ * nothing warned). While an edit waits for its autosave, a save is in flight, the last
+ * one failed, the tracks have unsaved changes or an Accept's answer has not gone:
+ *   · `beforeunload` asks first (and starts the waiting save, so it has the dialog's
+ *     time to land);
+ *   · `pagehide` and `visibilitychange: hidden` send the latest cut, tracks and the
+ *     answer as ONE keepalive PUT, which the browser delivers after the page is gone.
+ *     It carries the page's next save tag, so the server applies it like any save and
+ *     never writes an older PUT of this page over it (and names its `tmp-N` as the
+ *     earlier one did). A body over KEEPALIVE_MAX bytes cannot ride a keepalive (the
+ *     browser's 64 KB budget for them): then the prompt is the only guard. */
+const KEEPALIVE_MAX = 60000;
+let pendingAnswer = null;          // an Accept's answer, until its save has landed
+let flushing = null;               // the keepalive body in flight, so it goes once
+
+function savePending() {
+  const st = ($('#saveState') || { dataset: {} }).dataset.state;
+  return !!(saveTimer || saveRun || pendingAnswer || st === 'unsaved' || st === 'failed'
+            || (tl.seqDirty && tl.seqDirty()));
+}
+
+function flushOnHide(kind) {
+  if (!savePending()) return false;
+  const body = { ...((tl.seqForFlush && tl.seqForFlush()) || {}), ...saveBody() };
+  if (pendingAnswer) body.answer = pendingAnswer;
+  const text = JSON.stringify(body);
+  if (text === flushing) return true;                       // already on its way
+  if (new Blob([text]).size > KEEPALIVE_MAX) return false;  // the prompt was the guard
+  flushing = text;
+  const answered = pendingAnswer;
+  try {
+    fetch('/api/project', {
+      method: 'PUT', keepalive: true, credentials: 'omit',
+      headers: tl.saveHeaders({ 'x-roughcut-flush': kind }), body: text,
+    }).then((r) => r.json()).then((d) => {
+      // the page may live on (a tab switch): the ids are the ones its own save gets
+      if (d && d.ids) { tl.applyIds(d.ids); colour = colourIds(colour); }
+    }).catch(() => {}).finally(() => { if (flushing === text) flushing = null; });
+  } catch (e) { flushing = null; return false; }
+  if (answered && pendingAnswer === answered) pendingAnswer = null;   // it went with the cut
+  return true;
+}
+
+window.addEventListener('beforeunload', (e) => {
+  if (!savePending()) return;
+  if (saveTimer) save();
+  e.preventDefault();
+  e.returnValue = '';
+});
+window.addEventListener('pagehide', () => { flushOnHide('pagehide'); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushOnHide('hidden');
+});
+
 /* The colour block keyed by the ids the server knows (tl.idFor): a per-shot grade set
  * on a shot laid in a moment ago follows the shot's re-key instead of being orphaned. */
 function colourIds(block) {
@@ -3215,17 +3270,22 @@ function colourIds(block) {
 
 /* One PUT, in its turn: the body is built now (after the reply before it re-keyed), and
  * new shots go as `tmp-N`; the reply's `ids` names them. True when it landed. */
+function saveBody() {
+  // The colour block rides the same body (INTAKE M10): an empty object removes it.
+  // The timeline's markers and sequence In / Out ride along (lane KEYS).
+  return { segments: tl.forSave(), story: $('#story').value, music,
+           colour: colourIds(colour),
+           markers: tl.markers ? tl.markers() : [],
+           in: tl.state.seqIn ?? null, out: tl.state.seqOut ?? null };
+}
+
 async function saveOnce() {
   let r = null;
   try {
+    // tagged and uncredentialed: see tl.saveHeaders (wave 8, SAVESAFE)
     r = await fetch('/api/project', {
-      method: 'PUT', headers: { 'content-type': 'application/json' },
-      // The colour block rides the same body (INTAKE M10): an empty object removes it.
-      // The timeline's markers and sequence In / Out ride along (lane KEYS).
-      body: JSON.stringify({ segments: tl.forSave(), story: $('#story').value, music,
-                             colour: colourIds(colour),
-                             markers: tl.markers ? tl.markers() : [],
-                             in: tl.state.seqIn ?? null, out: tl.state.seqOut ?? null }),
+      method: 'PUT', headers: tl.saveHeaders(), credentials: 'omit',
+      body: JSON.stringify(saveBody()),
     });
   } catch (e) { r = null; }
   if (!r || !r.ok) {
@@ -3293,7 +3353,9 @@ section[data-tool=ask].pup:not(.askopen) #askPanel { display: none !important; }
 #proposal .pchecks { border-left: 2px solid var(--warn); padding: 1px 0 1px 8px; margin: 0 0 4px; }
 #proposal .pchecks b { display: block; font-size: 10.5px; line-height: 1.3; text-transform: uppercase; letter-spacing: .06em; color: var(--warn); }
 #proposal .pchecks ul { margin: 2px 0 0; padding: 0; list-style: none; }
-#proposal .pchecks li { padding: 0; line-height: 1.3; font-size: 11px; }
+#proposal .pchecks li { padding: 0; line-height: 1.3; font-size: 11px; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; cursor: pointer; }
+#proposal .pchecks li.open { white-space: normal; }
 #proposal .pchecks li.flag::before { content: '⚠ '; color: var(--warn); }
 #proposal .pchecks li.ask::before { content: '• '; color: var(--dim); }
 #proposal .pchecks li[data-k] { cursor: pointer; }
@@ -3391,8 +3453,16 @@ function watchProposalUp() {
       sec.classList.toggle('pup', up);
       sec.classList.toggle('nocut', !segs.length);   // a first cut: no form to fold
     }
+    // While it waits and the Assistant is the group's open tab, the Effect Controls column
+    // runs the window's full height (verdict 6, punch 4: 3 rows in view on real output);
+    // the Program keeps its size and the Source monitor gives the room. Closed, or another
+    // tab opened, the arrangement is the one the editor left.
+    const ws = $('#ws');
+    if (ws) ws.classList.toggle('ptall', up && !!sec && !sec.hidden);
   };
-  new MutationObserver(sync).observe(box, { attributes: true, attributeFilter: ['style'] });
+  const watch = new MutationObserver(sync);
+  watch.observe(box, { attributes: true, attributeFilter: ['style'] });
+  if (sec) watch.observe(sec, { attributes: true, attributeFilter: ['hidden'] });
   sync();
 }
 
@@ -3462,6 +3532,16 @@ function checkShot(plan, c) {
   return best;
 }
 
+/* A plan saved before the server trimmed at a word (verdict 6, punch 4) may carry a
+ * check cut at exactly 200 characters inside a word ("…the viewer can ide"): it ends at
+ * the last whole word, with "…", rather than on half of one. */
+const OLD_CHECK_CUT = 200;
+function wholeWords(text) {
+  if (text.length !== OLD_CHECK_CUT || /[.!?…)"”’']$/.test(text)) return text;
+  const cut = text.lastIndexOf(' ');
+  return cut > 0 ? `${text.slice(0, cut).replace(/[\s,;:—–-]+$/, '')}…` : text;
+}
+
 /* Checks are data (verdict 5, punch 3): `plan.checks`, in the server's order — the
  * notes check's flags and the rejected ranges (`kind` flag / rejected), then the
  * model's own ({text, clip, in, out}). A plan saved before the list existed falls back
@@ -3474,19 +3554,21 @@ function planChecks(plan, notes) {
   return plan.checks.filter((c) => c && typeof c.text === 'string' && c.text.trim()).map((c) => {
     const model = c.kind !== 'flag' && c.kind !== 'rejected';
     const ranged = c.clip && typeof c.in === 'number' && typeof c.out === 'number';
-    return { text: c.text.trim(), k: checkShot(plan, c), cls: model ? 'ask' : 'flag',
+    return { text: wholeWords(c.text.trim()), k: checkShot(plan, c), cls: model ? 'ask' : 'flag',
              where: model && ranged ? `${stem(c.clip)} ${fmt(c.in)}–${fmt(c.out)}` : '' };
   });
 }
 
 /* The first CHECKS_SHOWN are on screen, the rest one click away ("2 more"): a long list
- * would push the shots out of the panel, and the shots are the review. */
+ * would push the shots out of the panel, and the shots are the review. Each check is one
+ * line (verdict 6, punch 4: six real checks of 150-200 characters took 170 px and left
+ * 3 rows in view): the whole of it is the line's hover, and a click opens it in place. */
 const CHECKS_SHOWN = 3;
 function proposalChecksHtml(plan, notes) {
   const items = planChecks(plan, notes);
   if (!items.length) return '';
   const li = (c, i) => `<li class="${c.cls}${i >= CHECKS_SHOWN ? ' pmore' : ''}"${c.k != null ? ` data-k="${c.k}"` : ''}`
-    + `${c.where ? ` title="${escapeHtml(c.where)}"` : ''}>`
+    + ` title="${escapeHtml(`${c.where ? `${c.where} · ` : ''}${c.text}`)}">`
     + `${c.where ? `<span class="pwhere">${escapeHtml(c.where)}</span> ` : ''}${escapeHtml(c.text)}</li>`;
   const more = items.length - CHECKS_SHOWN;
   return `<b>Things to check${more > 0
@@ -3637,6 +3719,8 @@ function showProposal(plan) {
   checks.classList.remove('all');
   checks.onclick = (e) => {
     if (e.target.closest('.pshowall')) { checks.classList.add('all'); return; }
+    const one = e.target.closest('li');
+    if (one) one.classList.toggle('open');      // the whole check, in place
     const li = e.target.closest('li[data-k]');
     if (!li) return;
     const k = Number(li.dataset.k);
@@ -3674,6 +3758,46 @@ function paintReview() {
 window.addEventListener('tlreview', paintReview);
 /* The first pass's hook (/modules/firstpass.js): its result is an ordinary proposal. */
 window.rcShowProposal = (plan) => { if (plan && Array.isArray(plan.segments)) showProposal(plan); };
+
+/* The transport keys' hook (/timeline-keys.js): on an empty sequence with a proposal
+ * waiting, L / K / Space play and pause the proposal as ▶ Play it does (verdict 6, punch
+ * 4: L toasted "nothing to play yet" over a visible proposal frame). Play resumes from
+ * where the playhead is in the proposal — the shot under it, at the frame it stopped on
+ * when that shot is the one on the monitor — and from the top once it has played out. */
+const proposalPlayer = {
+  on: false,
+  ready() { return !!(pendingPlan && !segs.length && window.tlLanes && tlLanes.ghost && tlLanes.ghost()); },
+  playing() {
+    const v = liveVideo();
+    return this.on && !player.playing && !!v && !v.paused && !v.ended;
+  },
+  play() {
+    if (!this.ready()) return false;
+    const items = tlLanes.ghost().ghosts || [];
+    const at = tl.state.playhead || 0;
+    let k = items.findIndex((it) => at >= it.start - 1e-3 && at < it.start + tl.dur(it.seg) - 0.04);
+    if (k < 0) k = 0;
+    const it = items[k];
+    const v = liveVideo();
+    // the shot it stopped in is still on the monitor: carry on from that frame
+    const back = it && v && v.dataset.src && v.readyState >= 1
+      && v.currentTime > it.seg.in && v.currentTime < it.seg.out - 0.04
+      && Math.abs(at - (it.start + (v.currentTime - it.seg.in) / speedOf(it.seg))) < 0.25
+      ? { src: v.dataset.src, t: v.currentTime } : null;
+    if (!tlLanes.playPlan(k)) return false;
+    if (back && v.dataset.src === back.src && v.readyState >= 1) v.currentTime = back.t;
+    this.on = true;
+    return true;
+  },
+  pause() {
+    this.on = false;
+    const v = liveVideo();
+    if (v && !player.playing) v.pause();
+    return true;
+  },
+  toggle() { return this.playing() ? this.pause() : this.play(); },
+};
+window.rcProposalPlayer = proposalPlayer;
 
 /* An elapsed count, not a frozen string. "building a first cut — about a minute…"
  * sitting there unchanged is indistinguishable from a hung app, which is exactly how
@@ -3856,7 +3980,13 @@ function acceptProposal(everything) {
   const took = partial ? { accepted: r.accepted, of: r.total, rejected: r.rejectedShots,
                            kept: r.keptRemoved, ...(ranges ? { ranges } : {}) } : null;
   queueMicrotask(() => {
-    const answer = () => answerProposal('accept', took);
+    // pending until it is sent: a flush on unload carries it with the cut (SAVESAFE)
+    const mine = pendingAnswer = took ? { answer: 'accept', partial: took } : { answer: 'accept' };
+    const answer = () => {
+      if (pendingAnswer !== mine) return;          // it went with a flush
+      pendingAnswer = null;
+      answerProposal('accept', took);
+    };
     save().then(answer, answer);
   });
   toast(partial ? `applied ${r.accepted} of ${r.total} shots${graded ? ' and the colour' : ''} — undo with ${undoKey()}`
@@ -3894,7 +4024,9 @@ function answerProposal(answer, partial) {
   if (partial && !partial.ranges && lanes && lanes.reviewed && Array.isArray(lanes.reviewed.lastRanges)) {
     partial = { ...partial, ranges: lanes.reviewed.lastRanges };
   }
+  // uncredentialed like the save, so it is never queued behind the posters (SAVESAFE)
   fetch('/api/asks/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    credentials: 'omit',
     body: JSON.stringify(partial ? { answer, partial } : { answer }) }).then(flowSoon, () => {});
 }
 

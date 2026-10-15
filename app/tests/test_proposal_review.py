@@ -27,6 +27,7 @@ import json
 import os
 import re
 import socket
+import sys
 import threading
 import time
 from pathlib import Path
@@ -35,6 +36,9 @@ import pytest
 
 pytest.importorskip("playwright.sync_api", reason="playwright not installed")
 from playwright.sync_api import sync_playwright  # noqa: E402
+
+# the repo root, for `roughcut` (the server tests' import of it, run alone)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 GHOST = "#tl .tl-xlane[data-lane=ghost]"
 SHOTS = os.environ.get("ROUGHCUT_REVIEW_SHOTS")
@@ -666,3 +670,257 @@ def test_check_notes_puts_flags_rejections_and_the_models_checks_in_one_list():
     first = revise.check_notes({"segments": plan["segments"], "notes": "x",
                                 "checks": plan["checks"]}, [])
     assert [c["kind"] for c in first["checks"]] == ["model"]
+
+
+# ---------------------------------------------------------------- verdict 6, punch 4
+# On real output (a 19-shot first pass, six checks of 150-200 characters) only 3 rows
+# were in view at 1440x900: "Things to check" took ~170 px of a 379 px panel. The
+# fixture's short checks hid it. Each check is one line now (its whole text on hover and
+# a click), and while a proposal waits under the Assistant tab the Effect Controls column
+# runs the window's full height. Check text was cut mid-word at 200 characters, and L / K
+# toasted "nothing to play yet" over the proposal's frame on an empty sequence.
+
+REAL_CHECKS = [
+    "Check that the skier turning toward the camera at the top of the run reads as a face: it is "
+    "the only person in the film so far, and the opening has no one in it without them.",
+    "The lift arrives before the ride here, and I could not see whether the chair swings into "
+    "frame or the camera is still on the bar; if it is the bar, the cut lands on a blur.",
+    "Check the breath before the view really holds still: the frames sampled at 5.0 and 5.8 look "
+    "level, but anything between them could still be the pole plant that shakes the whole picture.",
+    "The laugh is heard, not seen, so check that the picture under it is not the inside of a glove "
+    "or a sleeve; the transcript is clear about the laugh and says nothing about the picture.",
+    "Whole film: at two minutes fifty it is past the target, and the middle three ride shots look "
+    "alike from the samples, so one of them could go if the pace drags when you watch it through.",
+    "The last shot ends on the view, but the audio under it is wind noise at full level; check "
+    "whether it wants a fade or the music bed to carry it, since a hard stop on wind reads as a mistake.",
+]
+_RANGES = [("CLIP_A.MP4", 0.2, 1.4), ("CLIP_C.MP4", 0.2, 1.0), ("CLIP_A.MP4", 5.0, 5.8),
+           ("CLIP_B.MP4", 2.0, 3.0), (None, None, None), ("CLIP_C.MP4", 4.0, 5.5)]
+WHYS = ["opens on the skier turning toward the camera at the top of the run, the only face we get",
+        "the lift arrives before the ride, so the climb reads before the descent starts",
+        "the first turn, wide, with the whole valley behind it and the light coming low from the left",
+        "a laugh off camera that sounds like the friend from the car, kept for the voice",
+        "the second turn, closer, the snow spraying past the lens"]
+
+
+def _real_segments(ids: list[str] | None = None) -> list[dict]:
+    """19 shots of a real first pass's shape: short ranges over the three clips, each
+    with a sentence of why — ids on the first `len(ids)` when a cut is being revised."""
+    out = []
+    for i in range(19):
+        clip = ("CLIP_A.MP4", "CLIP_B.MP4", "CLIP_C.MP4")[i % 3]
+        a = round((i * 0.29) % 4.8, 2)
+        seg = {"clip": clip, "in": a, "out": round(a + 0.6 + (i % 4) * 0.2, 2),
+               "why": f"{WHYS[i % len(WHYS)]} ({i + 1})"}
+        if ids and i < len(ids):
+            seg["id"] = ids[i]
+        out.append(seg)
+    return out
+
+
+def _real_checks(kind: str = "model") -> list[dict]:
+    return [{"text": t, "clip": c, "in": a, "out": b, "kind": kind}
+            for t, (c, a, b) in zip(REAL_CHECKS, _RANGES)]
+
+
+REAL_NOTES = ("My guess at what this film is about: a morning on the hill with a friend, from the "
+              "lift to the last run. It opens on the only face and closes on the view. The middle "
+              "is the ride, cut to the turns; the laugh is kept for the voice.")
+
+
+def _real_first() -> dict:
+    return {"segments": _real_segments(), "notes": REAL_NOTES, "notes_model": REAL_NOTES,
+            "checks": _real_checks(),
+            "firstpass": {"diff": {"sentence": "This adds 19 new shots.",
+                                   "shots": [{"pos": i + 1, "status": "new", "locked": False}
+                                             for i in range(19)]}}}
+
+
+def _real_rerun(ids: list[str]) -> dict:
+    left = [{"clip": "CLIP_B.MP4", "in": 4.0, "out": 5.0, "action": "dropped",
+             "rejected": {"in": 4.0, "out": 5.0}}]
+    checks = [{"text": "CLIP_B 0:04.0–0:05.0 — you rejected this shot before: left out",
+               "clip": "CLIP_B.MP4", "in": 4.0, "out": 5.0, "kind": "rejected", "shot": None}]
+    return {"segments": _real_segments(ids), "notes": REAL_NOTES, "notes_model": REAL_NOTES,
+            "checks": checks + _real_checks()[:5],
+            "notes_check": {"ok": True, "flags": [], "checked": 6, "rejected": left},
+            "firstpass": {"rejected": left, "mode": "rerun", "keep": ids[:2],
+                          "diff": {"sentence": "This keeps 6 of your shots and adds 13.", "shots": []}}}
+
+
+def _panels_tile(pg) -> dict:
+    """The five panels inside the window, none overlapping another, and the board not
+    scrolling (test_workspace's checks, in the proposal's arrangement)."""
+    return pg.evaluate("""() => {
+      const ids = ['pProject', 'pSource', 'pProgram', 'pTimeline', 'pInspector'];
+      const r = Object.fromEntries(ids.map(i => [i, document.getElementById(i).getBoundingClientRect()]));
+      const hits = [];
+      ids.forEach((a, i) => ids.slice(i + 1).forEach(b => {
+        const A = r[a], B = r[b];
+        if (A.left < B.right - 0.5 && B.left < A.right - 0.5 && A.top < B.bottom - 0.5 && B.top < A.bottom - 0.5)
+          hits.push([a, b]);
+      }));
+      const out = ids.filter(i => r[i].left < -0.5 || r[i].top < -0.5
+        || r[i].right > innerWidth + 0.5 || r[i].bottom > innerHeight + 0.5);
+      const se = document.scrollingElement;
+      return {hits, out, scroll: se.scrollHeight > se.clientHeight || se.scrollWidth > se.clientWidth,
+              rects: Object.fromEntries(ids.map(i => [i, [Math.round(r[i].left), Math.round(r[i].top),
+                                                          Math.round(r[i].width), Math.round(r[i].height)]]))};
+    }""")
+
+
+def _checks_one_line(pg) -> list:
+    """Each visible check's height over its line height (1 = one line)."""
+    return pg.eval_on_selector_all("#proposalChecks li", """els => els.filter(e => e.offsetParent !== null)
+      .map(e => Math.round(e.getBoundingClientRect().height / parseFloat(getComputedStyle(e).lineHeight) * 100) / 100)""")
+
+
+def test_a_real_length_first_cut_shows_five_rows_and_plays_on_l(browser, live_server, project):
+    _seed(project, [])
+    plan = _real_first()
+    path = _waiting("rv-real-first", plan)
+    pg = _open(browser, live_server)
+    try:
+        pg.wait_for_selector("#proposal", state="visible", timeout=10000)
+        pg.wait_for_function(f"document.querySelectorAll('{GHOST} .ghost').length === 19", timeout=8000)
+        pg.wait_for_timeout(300)
+        # the Effect Controls column runs the full height while it waits
+        assert pg.evaluate("document.getElementById('ws').classList.contains('ptall')")
+        tile = _panels_tile(pg)
+        assert tile["hits"] == [] and tile["out"] == [] and not tile["scroll"], tile
+        insp, prog = tile["rects"]["pInspector"], tile["rects"]["pProgram"]
+        assert insp[1] <= prog[1] + 1 and insp[3] >= 800, tile
+        # each check one line, 3 shown and "+ 3 more"; the whole of each on its hover
+        lines = _checks_one_line(pg)
+        assert len(lines) == 3 and all(h <= 1.05 for h in lines), lines
+        assert pg.locator("#proposalChecks .pshowall").inner_text() == "+ 3 more"
+        for i, li in enumerate(pg.locator("#proposalChecks li").all()):
+            assert REAL_CHECKS[i] in li.get_attribute("title"), i
+            assert li.text_content().endswith(REAL_CHECKS[i]), "the words are whole; the line clips them"
+        # >= 5 rows fully in view, the first among them
+        seen = _rows_in_view(pg)
+        assert seen["first"] and seen["n"] >= 5, seen
+        _shot(pg, "review-real-first-1440")
+        # a click opens a check in place (and it stays one line until then)
+        first = pg.locator("#proposalChecks li").first
+        first.click()
+        lh = pg.evaluate("parseFloat(getComputedStyle(document.querySelector('#proposalChecks li')).lineHeight)")
+        assert first.bounding_box()["height"] > 1.5 * lh
+        first.click()
+        assert first.bounding_box()["height"] <= 1.05 * lh
+
+        # L / K / Space play and pause the proposal on the empty sequence, as ▶ Play it does
+        toasts: list[str] = []
+        pg.expose_function("rvToast", lambda t: toasts.append(t))
+        pg.evaluate("""() => { const t = window.toast; window.toast = (m, ...r) => { rvToast(String(m)); return t(m, ...r); }; }""")
+        pg.evaluate("document.activeElement && document.activeElement.blur()")
+        assert pg.evaluate("rcProposalPlayer.playing()") is False
+        pg.keyboard.press("l")
+        pg.wait_for_function("rcProposalPlayer.playing()", timeout=8000)
+        assert pg.evaluate("player.playing") is False, "the proposal plays, not the (empty) cut"
+        assert pg.evaluate("document.querySelector('#playingWhat').textContent").startswith("proposal ·")
+        pg.wait_for_timeout(400)
+        pg.keyboard.press("k")
+        pg.wait_for_function("!rcProposalPlayer.playing()", timeout=3000)
+        at = pg.evaluate("tl.state.playhead")
+        assert at > 0.1, at
+        pg.keyboard.press("Space")
+        pg.wait_for_function("rcProposalPlayer.playing()", timeout=8000)
+        pg.wait_for_timeout(200)
+        assert pg.evaluate("tl.state.playhead") >= at - 0.05, "it carries on from where it stopped"
+        pg.keyboard.press("Space")
+        pg.wait_for_function("!rcProposalPlayer.playing()", timeout=3000)
+        assert not any("nothing to play" in t for t in toasts), toasts
+
+        # answered, the arrangement is the editor's again: the Program never changed size
+        pg.locator("#rejectProposal").click()
+        pg.wait_for_function("!document.getElementById('ws').classList.contains('ptall')", timeout=3000)
+        after = _panels_tile(pg)
+        assert after["hits"] == [] and not after["scroll"], after
+        assert abs(after["rects"]["pProgram"][2] - prog[2]) <= 1, (after["rects"], prog)
+        assert after["rects"]["pInspector"][1] > prog[1] + 100, after["rects"]
+        assert pg.errors == []
+    finally:
+        path.unlink(missing_ok=True)
+        _seed(project, TWO)
+        pg.close()
+
+
+def test_a_real_length_rerun_shows_five_rows(browser, live_server, project):
+    _seed_rerun(project)
+    ids = [f"s{i}" for i in range(6)]
+    path = _waiting("rv-real-rerun", _real_rerun(ids))
+    pg = _open(browser, live_server)
+    try:
+        pg.wait_for_selector("#proposal", state="visible", timeout=10000)
+        pg.wait_for_function(f"document.querySelectorAll('{GHOST} .ghost').length === 19", timeout=8000)
+        pg.wait_for_timeout(300)
+        assert pg.locator("#askFold").is_visible()
+        assert pg.evaluate("document.getElementById('ws').classList.contains('ptall')")
+        tile = _panels_tile(pg)
+        assert tile["hits"] == [] and tile["out"] == [] and not tile["scroll"], tile
+        lines = _checks_one_line(pg)
+        assert len(lines) == 3 and all(h <= 1.05 for h in lines), lines
+        seen = _rows_in_view(pg)
+        assert seen["first"] and seen["n"] >= 5, seen
+        _shot(pg, "review-real-rerun-1440")
+        # another tab in the group gives the column back; the Assistant takes it again
+        pg.evaluate("dock.open('inspect')")
+        pg.wait_for_function("!document.getElementById('ws').classList.contains('ptall')", timeout=3000)
+        pg.evaluate("dock.open('ask')")
+        pg.wait_for_function("document.getElementById('ws').classList.contains('ptall')", timeout=3000)
+        # a sequence with shots: the keys drive the cut, as before (the proposal is not theirs)
+        assert pg.evaluate("rcProposalPlayer.ready()") is False
+        # a check saved before the word-aware trim, cut 200 characters into a word, is
+        # shown to its last whole word
+        legacy = ("Check the opening shot: the skier turns toward the camera and it is the only face "
+                  "we get, and if it does not read on the smaller screen there is nobody in the whole "
+                  "film, no someone the viewer can identify")[:200]
+        assert len(legacy) == 200 and legacy.endswith("ide"), legacy
+        plan = _real_rerun(ids)
+        plan["checks"][1]["text"] = legacy
+        pg.evaluate("(p) => rcShowProposal(p)", plan)
+        shown = pg.locator("#proposalChecks li").nth(1).text_content()
+        assert shown.endswith("viewer can…"), shown
+        pg.locator("#rejectProposal").click()
+        assert pg.errors == []
+    finally:
+        path.unlink(missing_ok=True)
+        _seed(project, TWO)
+        pg.close()
+
+
+def test_check_text_is_never_cut_inside_a_word():
+    """Verdict 6: "…someone the viewer can ide" — `CHECK_TEXT_MAX` cut at 200 characters.
+    A check past the cap ends at a sentence, else at a whole word and "…"; one within it
+    is kept whole."""
+    from roughcut import revise
+    clips = CLIPS3
+    long_one = ("Check the moment at the top of the run where the skier turns toward the camera: it "
+                "is the only face in the film so far, and if it does not read the opening has no one "
+                "in it. Without it there is no someone the viewer can identify with, and the whole "
+                "middle of the film is scenery with nobody in it at all, which is not the film you "
+                "described when you said it was about a morning with a friend.")
+    no_stop = " ".join(["the viewer can identify with someone"] * 20)
+    raws = REAL_CHECKS[:4] + [long_one, no_stop]          # CHECKS_MAX is 6
+    out = revise.validate_checks([{"text": t} for t in raws], clips)
+    texts = [c["text"] for c in out]
+    assert texts[:4] == REAL_CHECKS[:4], "a check within the cap is kept whole"
+    assert len(texts) == 6, texts
+    for raw, got in zip(raws, texts):
+        norm = " ".join(raw.split())
+        assert len(got) <= revise.CHECK_TEXT_MAX
+        if got == norm:
+            continue
+        kept = got[:-1] if got.endswith("…") else got
+        assert norm.startswith(kept), (kept, norm)
+        assert norm[len(kept)] == " " or got.endswith("…") and norm[len(kept.rstrip(' ,;:—–-'))] in " ,;:", (got, norm)
+        assert got.endswith(("…", ".", "!", "?")), got
+    assert texts[4].endswith("in it."), texts[4]
+    assert texts[5].endswith("…") and texts[5][:-1].split()[-1] in no_stop.split(), texts[5]
+    # the judge's own: 200 characters into a word, never "…ide"
+    judge = ("Check the opening shot: the skier turns toward the camera and it is the only face we get. "
+             "If it does not read on the small screen there is nobody in this film and no someone the "
+             "viewer can identify with at all")
+    got = revise.trim_check(judge, 200)
+    assert not got.endswith("ide") and got.endswith((".", "…")), got
