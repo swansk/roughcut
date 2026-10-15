@@ -49,6 +49,10 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-15 14:10: PERF merged (`5f5a309`; 4.3 -> 23-28 fps, cut hole 817 -> 17-50 ms under load; 59.94 proxies at
+  29.97, `PROXY_V` v2, old proxies left on disk to delete by hand). Queued for wave 5: timeline.js `onScreen()` /
+  `keepInView` read layout per block after style writes (~16 ms per tl.render under load): read once per render or cache the
+  width with a ResizeObserver. LAYOUT asked to re-run test_perf_latency with the bigger monitors.
 - 2026-10-15 13:30: wave 4 merged so far: RERUN, PICKS2 (+ journey reject step: 15 steps), EXPORTSTOP (+ lead: bed at
   the preset bitrate), POLISH. Still running: LAYOUT, REVIEW, PERF. Queued for wave 5 (from POLISH): drag clips along
   V3+/A3+; the Program monitor plays A3+ sound and shows V3 on its own layer; track add/delete on the undo stack; `,` past
