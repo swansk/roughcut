@@ -196,7 +196,10 @@ def test_a_clip_the_ai_has_not_heard_goes_on_v1_at_once(how, live_server, ingest
     pg.wait_for_function("segs.some(s => s.clip === 'CLIP_B.MP4')", timeout=1000)
     took = time.monotonic() - t0
     assert took <= 1.0, f"{how}: {took:.2f} s"
-    assert pg.locator("#tl .blk").count() == 2
+    # a V1 block, and its linked A1 partner (lane TRACKS)
+    pg.wait_for_function("document.querySelectorAll('#tl .tl-lane[data-lane=V1] .blk').length === 2"
+                         " && document.querySelectorAll('#tl .tl-track[data-track=A1] .ablk').length === 2",
+                         timeout=2000)
     b = pg.evaluate("segs.find(s => s.clip === 'CLIP_B.MP4')")
     assert b["out"] - b["in"] == pytest.approx(6.0, abs=0.1), b      # the whole clip
     if how in ("insert", "drag"):
@@ -329,7 +332,9 @@ def test_a_cold_land_reads_the_folder_and_shows_a_picture(live_server, ingest_bi
     pg.wait_for_selector("#tlEmpty .empty")          # the board has mounted its timeline
     pg.evaluate("document.activeElement && document.activeElement.blur()")
     pg.keyboard.press(",")
-    pg.wait_for_function("segs.length === 1 && segs[0].clip === 'CLIP_A.MP4'", timeout=1000)
+    pg.wait_for_function("segs.length === 1 && segs[0].clip === 'CLIP_A.MP4'"
+                         " && document.querySelectorAll('#tl .tl-lane[data-lane=V1] .blk').length === 1",
+                         timeout=1000)
     assert pg.errors == []
     pg.context.close()
 

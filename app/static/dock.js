@@ -218,21 +218,6 @@ const DEFAULTS = { proj: 0.195, insp: 0.255, src: null, top: 0.42 };
   }
   const focusedName = () => (focused ? focused.dataset.panel : null);
 
-  /* The timeline fills its panel: its lane grows with the panel's height (the module's
-   * own --tl-lane, set on #tl like the lanes set theirs), within a sane track height. */
-  let laneSet = '';
-  function fitTimeline() {
-    const body = $('#tlBody'), t = $('#tl');
-    if (!body || !t) return;
-    const cs = getComputedStyle(t);
-    const above = parseFloat(cs.getPropertyValue('--tl-above')) || 0;
-    const below = parseFloat(cs.getPropertyValue('--tl-below')) || 0;
-    const ruler = parseFloat(cs.getPropertyValue('--tl-ruler')) || 22;
-    const room = body.clientHeight - 24 - ruler - 10 - above - below;
-    const lane = `${Math.round(clamp(room, 40, 110))}px`;
-    if (lane !== laneSet) { laneSet = lane; t.style.setProperty('--tl-lane', lane); }
-  }
-
   /* ================================================================ menus */
   function closeMenus() { $$('#menubar .menu.open').forEach((m) => m.classList.remove('open')); }
 
@@ -867,12 +852,7 @@ const DEFAULTS = { proj: 0.195, insp: 0.255, src: null, top: 0.42 };
     if (h && 'ResizeObserver' in window) new ResizeObserver(fit).observe(h);
     window.addEventListener('resize', fit);
     window.addEventListener('clifix', fit);
-    if ('ResizeObserver' in window) new ResizeObserver(fitTimeline).observe($('#tlBody'));
-    const tlEl = $('#tl');
-    if (tlEl && 'MutationObserver' in window) {
-      new MutationObserver(fitTimeline).observe(tlEl, { attributes: true, attributeFilter: ['style'] });
-    }
-    fitTimeline();
+    // the timeline sizes its own tracks (lane TRACKS: --tl-v1h and explicit heights)
 
     const kb = $('#keysBtn');
     if (kb) kb.addEventListener('click', () => keys());
