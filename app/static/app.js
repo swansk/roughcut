@@ -410,7 +410,7 @@ function buildShot(seg) {
       <div class="why" contenteditable title="why this shot — yours to edit, saved with the cut"></div>
       <div class="said"></div>
       <div class="warns"></div>
-      <div class="srow ctl">
+      <div class="srow ctl ecx">
         <select class="speed" title="the shot's speed"></select>
         <span class="nudge"${gen ? ' hidden' : ''}>
           <button data-act="cwarm" title="warmer — ⌘Z undoes it">warmer</button>
@@ -420,8 +420,6 @@ function buildShot(seg) {
           <button data-act="creset" class="ghost" title="back to the auto balance">reset</button>
         </span>
         <button class="disc" data-disc="look"${gen ? ' hidden' : ''}>colour &amp; look ▸</button>
-        <button class="disc" data-disc="why">why? ▸</button>
-      </div>
       <div class="colour" data-pane="look" hidden>
         <label title="the auto balance for this shot (unchecked: as shot)"><input type="checkbox" class="cauto"> auto-balance</label>
         <select class="clook" title="this shot's look — the film's unless set here"></select>
@@ -431,6 +429,8 @@ function buildShot(seg) {
         <button data-act="cmatchref" title="match this shot's colour to the film's reference shot (again: off)">match ← reference</button>
         <button data-act="csetref" title="make this the shot others match to (again: none)">set as reference</button>
       </div>
+      </div>
+      <div class="srow"><button class="disc" data-disc="why">why? ▸</button></div>
       <div class="whybox" data-pane="why" hidden>
         <div class="from"><span class="clip"></span> · <span class="times"></span></div>
         <div class="lines"></div>
@@ -459,6 +459,9 @@ function buildShot(seg) {
   el.querySelector('.shotNote').addEventListener('input', (ev) => {
     shotAskDraft.set(seg, ev.target.value);
   });
+  // Effect Controls (/modules/effects.js): the speed, the colour and the new properties
+  // in Premiere's sections; without the module the row above stays as it is.
+  if (window.effects && typeof effects.build === 'function') effects.build(el.querySelector('.ecx'), seg, { gen });
   // One control for the speed: one undo entry labelled `speed` per change.
   el.querySelector('.speed').addEventListener('change', (ev) => {
     const v = parseFloat(ev.target.value);
@@ -624,6 +627,8 @@ function fillShot(box, seg) {
   if (!gen) fillColour(box, seg);
   else q('.witness').textContent = '';
   machineLine(box, seg);
+  // the sections' values, and the Program monitor's live preview of them
+  if (window.effects && typeof effects.fill === 'function') effects.fill(box, seg);
 }
 
 /* Look deeper (priced, on the strip's top row) and how the machine saw the clip (one
@@ -709,14 +714,18 @@ function paintEcHead(seg, n) {
   const lab = document.querySelector('#ecHead span'), what = $('#ecWhat');
   if (!lab || !what) return;
   if (seg) {
+    // Premiere's head: the clip, and its source In / Out in timecode
     lab.textContent = `Shot ${tl.indexOf(seg.id) + 1}`;
-    what.textContent = `${stem(seg.clip)} · ${fmt(seg.in)}–${fmt(seg.out)}`;
+    what.textContent = `${stem(seg.clip)} · ${tcOf(seg.in)} – ${tcOf(seg.out)}`;
+    what.title = `source In ${tcOf(seg.in)} · Out ${tcOf(seg.out)} · ${tcOf(tl.dur(seg))} in the sequence`;
   } else if (n > 1) {
     lab.textContent = 'Selection';
     what.textContent = `${n} shots`;
+    what.title = '';
   } else {
     lab.textContent = 'Sequence';
     what.textContent = (P && (P.title || P.cut)) || '';
+    what.title = '';
   }
 }
 

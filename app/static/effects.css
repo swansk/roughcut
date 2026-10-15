@@ -1,0 +1,78 @@
+/* Roughcut — Effect Controls (redesign wave 2, lane EFFECTS). Premiere's panel: twirl-down
+   sections, a name column, blue scrubbable values, a reset at the end of each row. The
+   page's tokens (--panel --card --line --text --dim --faint --accent --tc) are the palette. */
+
+#inspector .ecx { display: block; }
+#inspector .ec { display: block; margin: 2px -2px 0; border-top: 1px solid var(--line);
+                 font-size: 11.5px; -webkit-user-select: none; user-select: none; }
+
+.ec-sec { border-bottom: 1px solid var(--line); }
+.ec-sh { display: flex; align-items: center; height: 24px; padding: 0 2px 0 0; }
+.ec-sh:hover { background: rgba(255,255,255,.025); }
+#inspector .ec-twirl { flex: 1 1 auto; display: flex; align-items: center; gap: 6px; height: 24px;
+                       padding: 0 4px; border: 0; background: none; color: var(--text);
+                       font-weight: 600; font-size: 11.5px; text-align: left; border-radius: 0; }
+#inspector .ec-twirl:hover { background: none; }
+.ec-tri { width: 0; height: 0; border-left: 5px solid var(--dim); border-top: 4px solid transparent;
+          border-bottom: 4px solid transparent; transition: transform .08s; flex: none; }
+.ec-sec.open .ec-tri { transform: rotate(90deg); }
+.ec-fx { font: 600 9px/12px ui-sans-serif, system-ui, sans-serif; color: var(--dim); border: 1px solid var(--line-hi);
+         border-radius: 2px; padding: 0 2px; font-style: italic; flex: none; }
+.ec-sb { display: none; padding: 0 0 4px; }
+.ec-sec.open .ec-sb { display: block; }
+
+.ec-row { display: grid; grid-template-columns: minmax(0, 1fr) auto 22px; align-items: center;
+          min-height: 22px; padding: 0 2px 0 21px; gap: 6px; }
+.ec-row:hover { background: rgba(255,255,255,.03); }
+.ec-name { color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ec-row.changed .ec-name { color: var(--text); }
+.ec-vals { display: inline-flex; gap: 10px; justify-content: flex-end; align-items: center; }
+#inspector input.ec-v { color: var(--tc); font: inherit; font-variant-numeric: tabular-nums; cursor: ew-resize;
+        width: 62px; text-align: right; background: transparent; border: 0; border-bottom: 1px dotted transparent;
+        border-radius: 0; padding: 1px 0; outline: none; caret-color: transparent; }
+#inspector input.ec-v:hover, #inspector input.ec-v:focus, #inspector input.ec-v.drag { border-bottom-color: var(--tc); }
+#inspector input.ec-v.drag { color: #8cc2ff; }
+#inspector input.ec-v.editing { cursor: text; caret-color: auto; background: #151517; color: var(--text);
+        border: 1px solid var(--accent); border-radius: 3px; padding: 0 4px; }
+#inspector input.ec-v::selection { background: rgba(74,157,248,.35); }
+#inspector .ec-reset { width: 22px; height: 20px; padding: 0; border: 0; background: none;
+                       color: var(--faint); display: inline-flex; align-items: center; justify-content: center; }
+#inspector .ec-reset svg { width: 12px; height: 12px; }
+#inspector .ec-reset:hover { color: var(--text); background: none; }
+.ec-row:not(.changed) .ec-reset { visibility: hidden; }
+.ec-row:hover .ec-reset { visibility: visible; }
+#inspector .ec-sreset { flex: none; }
+
+/* Time Remapping's speed is the timeline's select, set in the value column */
+.ec-slot[data-slot=speed] select.speed { padding: 0 4px; font-size: 11.5px; color: var(--tc); background: transparent;
+                                         border-color: transparent; height: 20px; }
+.ec-slot[data-slot=speed] select.speed:hover { border-color: var(--line-hi); }
+
+/* Lumetri's quick nudges and the creative pane (look, strength, auto, match) */
+.ec-quick { padding: 3px 2px 2px 21px; }
+.ec-quick .nudge { display: inline-flex; gap: 3px; flex-wrap: wrap; }
+.ec-quick .nudge[hidden] { display: none; }
+#inspector .ec-quick button { padding: 0 6px; font-size: 11px; line-height: 17px; }
+.ec-creative { padding: 0 2px 0 17px; }
+#inspector .ec-creative > .disc { padding: 2px 4px; color: var(--dim); }
+#inspector .ec-creative > .disc:hover, #inspector .ec-creative > .disc.on { color: var(--text); }
+.ec-creative .colour[data-pane] { border-top: 0; padding: 2px 0 4px 4px; }
+
+/* the fx stack */
+.ec-fxrow { grid-template-columns: auto minmax(0, 1fr) auto; padding-left: 14px; }
+#inspector .ec-fxtog { font: italic 600 9px/12px ui-sans-serif, system-ui, sans-serif; padding: 1px 3px;
+                       border-radius: 2px; color: var(--faint); background: transparent; border-color: var(--line-hi); }
+#inspector .ec-fxtog.on { color: var(--text); border-color: var(--dim); }
+.ec-fxrow.off .ec-name { text-decoration: line-through; color: var(--faint); }
+.ec-fxrow .ec-name { color: var(--text); }
+.ec-prop { color: var(--warn); font-style: normal; font-size: 10px; margin-left: 4px; }
+.ec-ord { display: inline-flex; }
+#inspector .ec-ord button { padding: 0 4px; font-size: 9px; line-height: 16px; border: 0; background: none; color: var(--dim); }
+#inspector .ec-ord button:hover:not(:disabled) { color: var(--text); }
+.ec-empty { color: var(--faint); padding: 2px 4px 4px 21px; }
+#inspector .ec-link { border: 0; background: none; padding: 0; color: var(--accent); font-size: 11.5px; }
+#inspector .ec-link:hover { background: none; text-decoration: underline; }
+
+/* the shot's still is a reference, not the picture (the Program monitor is): smaller,
+   so the sections sit in view at 1440×900 */
+#inspector .shot .poster { max-height: 104px; }

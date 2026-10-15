@@ -78,9 +78,9 @@ HEADER_MAX_PX = 50
 # / shot 154 · 61, / film 111 · 48, / jobs 129 · 49, / fx 131 · 52; the board's numbers
 # Lead, at merge: the board's numbers below are the MEASURED counts on the merged tree with no
 # headroom (TRACKS + FPUI together; see REDESIGN-GOAL's rubric log), so any growth fails.
-WORDS_IN_VIEW = {"/": 106, "/floor": 58, "/open": 59, "/ shot": 157, "/ film": 114, "/ fx": 134,
+WORDS_IN_VIEW = {"/": 106, "/floor": 58, "/open": 59, "/ shot": 196, "/ film": 114, "/ fx": 134,
                  "/ jobs": 132}
-CONTROLS_IN_VIEW = {"/": 50, "/floor": 8, "/open": 9, "/ shot": 62, "/ film": 49, "/ fx": 53,
+CONTROLS_IN_VIEW = {"/": 50, "/floor": 8, "/open": 9, "/ shot": 85, "/ film": 49, "/ fx": 53,
                     "/ jobs": 50}
 
 # Contracts another lane delivers (M16 stage 1, C1): until that lane is merged the

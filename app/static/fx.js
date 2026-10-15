@@ -138,6 +138,8 @@
     paint();
     badge();
     draw();
+    // Effect Controls' fx stack lists these effects
+    if (window.effects && typeof window.effects.refreshStack === 'function') window.effects.refreshStack();
   }
 
   function byId(id) { return S.effects.find((e) => e.id === id) || null; }
@@ -153,6 +155,15 @@
   }
   /* the ones that draw, sound and count: not the removed (kept for Restore) */
   function activeForShot(id) { return forShot(id).filter((e) => e.status !== 'removed'); }
+  /* the ones the monitor draws and sounds: the active, less those bypassed in Effect
+   * Controls' fx stack (the shot's `controls.fx_off`), in its order (`controls.fx_order`) */
+  function drawnForShot(id) {
+    const c = (seg(id) || {}).controls || {};
+    const off = new Set(c.fx_off || []), order = c.fx_order || [];
+    const list = activeForShot(id).filter((e) => !off.has(e.id));
+    const rank = (e) => { const i = order.indexOf(e.id); return i < 0 ? 1e6 + list.indexOf(e) : i; };
+    return list.sort((a, b) => rank(a) - rank(b));
+  }
   function shotIndex(id) { return SEGS().findIndex((s) => String(s.id) === String(id)); }
 
   /* On a shot of this cut (its own, or the one it is anchored to): the only proposals
@@ -1204,7 +1215,7 @@
     if (!c || !O.ctx) return;
     const v = live();
     const sg = liveShot();
-    const effs = sg ? activeForShot(sg.id) : [];
+    const effs = sg ? drawnForShot(sg.id) : [];
     const on = !!(v && effs.length);
     c.classList.toggle('live', on);
     if (!on && !S.sketch) return;
@@ -1267,7 +1278,7 @@
       // a hand-over lands the new element at the shot's in-point: a hit right there counts
       if (prev == null && Math.abs(t - sg.in) < 0.25) prev = Math.min(t, sg.in);
       if (prev != null && !v.paused && t > prev) {
-        for (const e of activeForShot(sg.id)) {
+        for (const e of drawnForShot(sg.id)) {
           (e.events || []).forEach((ev, i) => {
             if (ev.t >= sg.in && ev.t < sg.out && ev.t >= prev && ev.t < t) sound(e, i);
           });
@@ -1650,6 +1661,7 @@
     fmtT,
     poseAt,
     draw,
+    redraw: draw,
     audio: (id) => { const a = S.audio.get(id); return a && a.el ? a.el : null; },
     sketch: { start: startSketch, use: useSketch, cancel: cancelSketch, undo: undoStroke },
     frameXY,
