@@ -313,6 +313,10 @@ body.ws-resizing.col { cursor: col-resize; } body.ws-resizing.row { cursor: row-
 .transport .btns svg { width: 14px; height: 14px; display: block; margin: 0 auto; }
 .transport .pos { font-variant-numeric: tabular-nums; }
 #playingWhat { margin-left: 8px; font-size: 11px; }
+/* Playback Resolution, Premiere's small menu beside the duration (grade.js) */
+#playRes { margin-right: 8px; padding: 0 2px; height: 20px; font-size: 11px; color: var(--dim);
+           background: var(--panel); border-color: transparent; vertical-align: middle; }
+#playRes:hover, #playRes:focus-visible { border-color: var(--line); color: var(--text); }
 #playingWhat:empty { display: none; }
 /* the source monitor's scrub bar, with its In/Out range shaded */
 .srcbar { flex: none; position: relative; height: 16px; margin: 0 8px; cursor: pointer;
