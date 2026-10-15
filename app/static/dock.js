@@ -465,7 +465,7 @@
     const entry = {
       ...(have || {}),
       clip: name, stem, duration: Number(c.duration) || (have && have.duration) || 0,
-      proxy: `/media/proxy/${stem}.mp4`, poster: `/media/poster/${stem}.jpg`,
+      proxy: `/media/proxy/${stem}.mp4`, poster: c.poster ? String(c.poster).split('?')[0] : `/media/poster/${stem}.jpg`,
       transcript: [], visual: (have && have.visual) || {}, captured: c.captured || null,
       candidates: [], summary: { speech_fraction: null, wind_dominant_fraction: null,
                                  integrated_lufs: null, audio_usable: null },
@@ -495,6 +495,15 @@
         }
       });
     } catch (e) { /* the next look tries again */ }
+  }
+
+  /* A clip's poster at `t` s: the URL /api/clips handed out (`poster`, versioned in its file
+   * name by the server's poster_url(), lane POLISH) with only its `?t=` swapped, so a
+   * browser holding an older (pre-ORIENT, upside-down) frame never asks for it again. */
+  function posterAt(c, t) {
+    const stem = c.stem || String(c.clip || '').replace(/\.[^.]+$/, '');
+    const base = c.poster ? String(c.poster).split('?')[0] : `/media/poster/${stem}.jpg`;
+    return `${base}?t=${(Number(t) || 0).toFixed(2)}`;
   }
 
   const FILM_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="3" width="13" height="10" rx="1.2"/><path d="M1.5 6h13M5 3v3M8 3v3M11 3v3"/></svg>';
@@ -557,7 +566,7 @@
     if (project.view === 'icon') {
       box.innerHTML = `<div class="picons">${list.map((c) => `
         <div class="picon${project.sel === c.clip ? ' sel' : ''}" data-clip="${esc(c.clip)}" draggable="true" title="${esc(c.clip)}">
-          <div class="thumb"><img alt="" loading="lazy" decoding="async" draggable="false" src="${esc(c.poster || `/media/poster/${c.stem}.jpg?t=0.00`)}"><span class="d">${c.duration ? tcode(c.duration, c.fps) : ''}</span></div>
+          <div class="thumb"><img alt="" loading="lazy" decoding="async" draggable="false" src="${esc(c.poster || posterAt(c, 0))}"><span class="d">${c.duration ? tcode(c.duration, c.fps) : ''}</span></div>
           <div class="nm">${esc(c.clip)}</div></div>`).join('')}</div>`;
       return;
     }
@@ -667,8 +676,7 @@
       // no In marked: the card's own frame (pre-built, and not the black first frame
       // many clips open on) until the video has its own; else the frame at the In
       const marked = Number.isFinite((this.marks[c.clip] || [])[0]);
-      poster.setAttribute('src', c.poster && !marked ? c.poster
-        : c.poster ? c.poster.replace(/t=[\d.]+/, `t=${a.toFixed(2)}`) : `/media/poster/${c.stem}.jpg?t=${a.toFixed(2)}`);
+      poster.setAttribute('src', c.poster && !marked ? c.poster : posterAt(c, a));
       poster.hidden = false;
       waitOn('#srcWait', null);
       this.paint();
@@ -763,7 +771,7 @@
         v.classList.remove('live');
         const c = this.clip;
         const poster = $('#srcPoster');
-        if (c) poster.setAttribute('src', `/media/poster/${c.stem}.jpg?t=${(v.currentTime || this.marksFor(c)[0]).toFixed(2)}`);
+        if (c) poster.setAttribute('src', posterAt(c, v.currentTime || this.marksFor(c)[0]));
         poster.hidden = false;
         $('#srcWait span').textContent = 'preparing preview…';
         waitOn('#srcWait', true, 'media');

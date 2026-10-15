@@ -282,7 +282,7 @@ def test_the_inspectors_speed_chip_writes_speed_as_one_undo_entry_and_the_save_c
     page still carries the rate (afterSave never drops it), and the disk does once the
     server keeps it."""
     page.locator("#tl .blk").nth(1).click()
-    assert page.locator("#inspector .clip").inner_text() == "CLIP_B"
+    assert page.locator("#inspector .clip").text_content() == "CLIP_B"
     sel = page.locator("#inspector select.speed")
     assert sel.input_value() == "1"
     assert page.locator("#inspector .sname").inner_text() == "Shot 2 · 2.0 s"
@@ -371,8 +371,8 @@ def test_a_generated_clip_draws_a_block_that_says_what_it_is_and_plays(page, pro
     assert page.locator("#inspector .sname").inner_text() == "Shot 3 · black · 2.0 s"
     assert page.locator("#inspector .nudge").is_hidden()
     assert page.locator("#inspector [data-disc=look]").is_hidden()
-    assert "black · 2.0 s" in page.locator("#inspector .lines:not(.seen)").inner_text()
-    assert page.locator("#inspector .clip").inner_text() == "gen_black_test"
+    assert "black · 2.0 s" in page.locator("#inspector .lines:not(.seen)").text_content()
+    assert page.locator("#inspector .clip").text_content() == "gen_black_test"
     # it plays from the proxy like any other shot (a double-click plays, M16 decision 6)
     blk.dblclick()
     page.wait_for_function("player.playing && player.idx === 2", timeout=10000)

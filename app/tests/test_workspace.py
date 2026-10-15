@@ -287,7 +287,9 @@ def test_the_menu_bar_reaches_every_tool_the_rail_held(live_server, project, bro
 def test_an_empty_sequence_offers_its_first_action_in_the_timeline_panel(live_server, project, browser):
     pg = _open(browser, live_server, project, (1440, 900), seed={**SEED, "segments": []})
     pg.wait_for_selector("#tlEmpty .empty", timeout=15000)
-    assert pg.locator("#tlEmpty #firstCut").is_visible()
+    # one AI action (verdict 4, punch 10): before a first pass has run, the pass's own
+    pg.wait_for_selector("#tlEmpty .fp-empty-btn:visible", timeout=5000)
+    assert pg.locator("#tlEmpty #firstCut").is_hidden()
     assert pg.locator("#progEmpty").is_visible()
     assert "sequence is empty" in pg.locator("#inspector").inner_text()
     for sel in PANELS:
@@ -547,18 +549,70 @@ def test_the_app_bar_clips_nothing_and_a_fresh_bin_has_one_first_action(live_ser
             assert row.get_attribute("title").startswith(j["label"])
         assert len(blue) <= 1, blue
         if chip.count():
-            # Next yields its slot while anything runs: its icon, the sentence in the hover
-            assert "compact" in chip.get_attribute("class")
-            assert chip.inner_text().strip() == ""
+            # Next is whole when its words fit, else its icon with the sentence in the
+            # hover — and an icon is never the blue button (verdict 4, punch 7)
             assert nxt["sentence"] in chip.get_attribute("title")
+            if "compact" in chip.get_attribute("class"):
+                assert chip.inner_text().strip() == ""
+                assert "flowNext" not in blue, blue
+            else:
+                assert chip.inner_text().strip().startswith(("Next", "Now")), chip.inner_text()
     if state == "mid-index":
-        # an index started elsewhere: Next is its icon ("Now: Indexing — …" in the hover)
+        # an index started elsewhere: Next is still drawn ("Now: Indexing — …")
         assert chip.count() == 1
     if state == "mid-first-pass":
         # the pass's own label is the news; Next has nothing to add beside it
         # (lane PASS: "First pass · n/12", n = clips heard AND looked at — 0 here)
         assert label == "First pass · 0/12", label
         assert chip.count() == 0 and blue == [], blue
+    assert errors == []
+    pg.unroute_all(behavior="ignoreErrors")
+    ctx.close()
+
+
+PREVIEW_JOB = {"id": "hd-previews", "kind": "index", "state": "running",
+               "label": "Building previews", "pct": 8.0, "eta_s": 5400, "eta_source": "measured",
+               "milestone": "previews 1/12", "detail": "CLIP_02", "elapsed_s": 600}
+
+
+def test_a_preview_job_never_makes_the_primary_button_wordless(live_server, project, browser):
+    """Verdict 4, punch 7: the preview build ran the whole Killington session and the
+    header collapsed Next to a blue "→" with no words for all of it. With only a preview
+    job running at 1440×900 the one blue button has at least two visible words, and
+    nothing under `header` overflows. Squeezed until Next cannot fit, it drops out of
+    blue rather than becoming a blue arrow."""
+    Path(project["edl"]).write_text(json.dumps(SEED, indent=1), encoding="utf-8")
+    nxt = {"stage": "cut", "sentence": "Refine — trim, or ask for a change", "verb": "Refine",
+           "screen": "/", "tool": "ask", "href": "/#tool=ask", "kind": "go"}
+    ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+    pg = ctx.new_page()
+    errors = []
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    pg.route("**/api/flow", _patched(lambda b: {"next": nxt, "running": True}))
+    pg.route("**/api/firstpass", _patched(lambda b: {"state": "done"}))
+    pg.route("**/api/jobs", lambda r: r.fulfill(status=200, content_type="application/json",
+                                                 body=json.dumps({"jobs": [PREVIEW_JOB]})))
+    pg.route("**/api/backend", lambda r: r.fulfill(status=200, content_type="application/json",
+                                                    body=json.dumps({"state": "ok", "fix": None})))
+    pg.goto(live_server)
+    pg.wait_for_selector("#tl .blk", timeout=15000)
+    pg.wait_for_function("document.querySelectorAll('#progress .job').length === 1", timeout=10000)
+    pg.wait_for_function("window.flowBar && flowBar.state() && document.getElementById('flowNext')",
+                         timeout=10000)
+    pg.wait_for_timeout(600)
+    blue = pg.evaluate("""() => [...document.querySelectorAll('.is-next')].map(e => ({id: e.id,
+        words: (e.innerText || '').trim().split(/\\s+/).filter(Boolean)}))""")
+    assert len(blue) == 1, blue
+    assert len(blue[0]["words"]) >= 2, blue
+    assert "compact" not in pg.locator("#flowNext").get_attribute("class")
+    assert pg.evaluate(OVERFLOW_JS) == []
+    # no room at all: the chip is its icon, and the icon is not blue
+    pg.evaluate("document.getElementById('flow').style.maxWidth = '40px'; flowBar.mark()")
+    pg.wait_for_function("document.getElementById('flowNext').classList.contains('compact')",
+                         timeout=3000)
+    blue = pg.eval_on_selector_all(".is-next", "els => els.map(e => (e.innerText || '').trim())")
+    assert all(len(b.split()) >= 2 for b in blue), blue
+    assert not pg.locator("#flowNext.is-next").count()
     assert errors == []
     pg.unroute_all(behavior="ignoreErrors")
     ctx.close()
@@ -704,6 +758,22 @@ def test_selects_opens_wide_enough_for_its_media_in_out_and_reason(live_server, 
     pg.context.close()
 
 
+def test_the_source_monitors_poster_is_the_versioned_one(live_server, project, browser):
+    """Lane POLISH versioned poster URLs in the file name (`<stem>.v2.jpg`, the server's
+    poster_url) so a browser drops a cached pre-ORIENT frame. The Source monitor builds its
+    poster from the clip's own `poster` URL, swapping only `?t=`, never an unversioned one."""
+    pg = _open(browser, live_server, project, (1440, 900))
+    pg.evaluate("dock.source.marks['CLIP_B.MP4'] = [1.5, null]; dock.project.select('CLIP_B.MP4')")
+    src = pg.get_attribute("#srcPoster", "src")
+    want = pg.evaluate("dock.project.clips().find(c => c.clip === 'CLIP_B.MP4').poster").split("?")[0]
+    assert ".v2.jpg" in want and src == f"{want}?t=1.50", (src, want)
+    pg.evaluate("dock.project.view('icon')")
+    icons = pg.evaluate("[...document.querySelectorAll('#projList .picon img')].map(i => i.getAttribute('src'))")
+    assert icons and all(".v2.jpg?t=" in i for i in icons), icons
+    assert pg.errors == []
+    pg.context.close()
+
+
 def test_open_cards_show_the_project_panels_posters(live_server, project, browser, tmp_path):
     """Verdict 2: /open still showed blank stripes for thumbnails after 6 min while the
     Project panel had every poster. On a fresh work dir (no proxies, no posters yet) every
@@ -729,7 +799,9 @@ def test_open_cards_show_the_project_panels_posters(live_server, project, browse
             c.querySelectorAll('.ph').length])""")
         assert len(cards) == 3, cards
         for clip, src, ph in cards:
-            assert src == f"/media/poster/{clip.rsplit('.', 1)[0]}.jpg?t=1.00" and ph == 0, (clip, src, ph)
+            # versioned (lead's wave-4 queue): a browser holding a pre-v2 poster drops it
+            assert src == (f"/media/poster/{clip.rsplit('.', 1)[0]}.{server.PICTURE_V}.jpg"
+                           "?t=1.00") and ph == 0, (clip, src, ph)
         # the same URL the Project panel's icon view asks for
         board = ctx.new_page()
         board.goto(live_server)
@@ -743,6 +815,60 @@ def test_open_cards_show_the_project_panels_posters(live_server, project, browse
         shutil.rmtree(work, ignore_errors=True)
         server.configure(project["edl"], project["footage"], project["sidecars"],
                          project["work"], proxies=False, assets=project["assets"])
+
+
+def test_effect_controls_opens_on_properties_with_the_assistant_folded(live_server, project, browser):
+    """Verdict 4, punch 10: Effect Controls opened on AI chrome — ▶ play, Ask, a yellow
+    Look deeper, Remove, a quote cut off with "…", "why? ▸". They sit in one collapsed
+    "Assistant" section at its foot now; opened, nothing in it (or anywhere in the panel)
+    is wider than its box at 1440, and undo reads Ctrl+Z off a Mac."""
+    pg = _open(browser, live_server, project, (1440, 900))
+    pg.locator("#tl .blk").nth(1).click()
+    pg.wait_for_selector("#inspector .shot details.assist", timeout=5000)
+    for sel in ("[data-act=play]", "[data-act=ask]", "[data-act=del]", "[data-disc=why]", ".why", ".said"):
+        assert pg.locator(f"#inspector {sel}").first.is_hidden(), sel
+    summary = pg.locator("#inspector details.assist > summary")
+    assert summary.is_visible() and summary.inner_text().strip().lower().endswith("assistant")
+    # at the foot: below every Effect Controls section
+    secs = pg.evaluate("""[...document.querySelectorAll('#inspector .shot .sbody > *')]
+        .filter(e => e.getClientRects().length).map(e => e.className)""")
+    assert secs[-1] == "assist", secs
+    summary.click()
+    pg.wait_for_selector("#inspector [data-act=ask]:visible")
+    said = pg.locator("#inspector .said")
+    assert said.is_visible() and said.inner_text().startswith("“")
+    # every leaf (the judge's measure): nothing cut off inside its own box
+    over = pg.evaluate("""[...document.querySelectorAll('#inspector *')].filter(e => !e.children.length && e.getClientRects().length
+        && e.clientWidth > 0 && e.scrollWidth > e.clientWidth + 0.5 && !['SELECT', 'INPUT', 'TEXTAREA'].includes(e.tagName))
+        .map(e => `${e.className}: ${e.textContent.trim().slice(0, 30)}`)""")
+    assert over == [], over
+    # the open state carries to the next shot, as Premiere's twirl-downs do
+    pg.locator("#tl .blk").nth(0).click()
+    pg.wait_for_selector("#inspector [data-act=ask]:visible")
+    titles = pg.evaluate("[...document.querySelectorAll('#inspector [title]')].map(e => e.title).join(' | ')")
+    assert "⌘" not in titles and "Ctrl+Z" in titles, titles
+    assert pg.errors == []
+    pg.context.close()
+
+
+def test_poster_urls_carry_the_picture_version(live_server, project):
+    """Posters are served immutable for a year, so the URL itself names the picture
+    cache's version: a browser holding a pre-ORIENT (upside down) poster asks again.
+    /api/clips, /api/project and every timeline poster built from them carry it."""
+    import urllib.request
+    import server
+    Path(project["edl"]).write_text(json.dumps(SEED, indent=1), encoding="utf-8")
+    with urllib.request.urlopen(live_server + "/api/clips") as r:
+        clips = json.loads(r.read())["clips"]
+    with urllib.request.urlopen(live_server + "/api/project") as r:
+        proj = json.loads(r.read())
+    v = f".{server.PICTURE_V}.jpg"
+    assert clips and all(v in c["poster"] for c in clips), [c["poster"] for c in clips]
+    used = [c for c in proj["clips"].values() if not c["clip"].startswith("gen_")]
+    assert used and all(v in c["poster"] for c in used), [c["poster"] for c in used]
+    # the endpoint ignores the version and still answers with the frame
+    with urllib.request.urlopen(live_server + clips[0]["poster"]) as r:
+        assert r.headers["content-type"] == "image/jpeg"
 
 
 def test_the_workspace_styles_are_a_module_not_an_inline_block(live_server):

@@ -183,9 +183,9 @@ next judge runs, and the next judge rules it honest or lenient.
   above the fold; Effect Controls is now in the bottom row and a long strip scrolls inside
   its panel, as Premiere's does, so the check is that the strip starts in view and its
   panel shows ≥ 300 px of it (measured ~340). The words/controls budgets are LOWERED to the
-  measured counts, no headroom (less of Effect Controls is in view): words / 106 → 93,
-  / shot 196 → 136, / film 114 → 101, / fx 134 → 124, / jobs 109 → 103; controls / shot
-  85 → 61. Also new: `test_selects_opens_wide_enough_for_its_media_in_out_and_reason`
+  measured counts on the tree merged with POLISH, no headroom (less of Effect Controls is
+  in view): words / 106 → 93, / shot 181 → 119, / film 114 → 101, / fx 134 → 124, / jobs
+  108 → 102; controls / shot 85 → 61. Also new: `test_selects_opens_wide_enough_for_its_media_in_out_and_reason`
   (Selects' list ≥ 560 px at both sizes, the Timeline ≥ 460 px meanwhile) and
   `test_a_layout_saved_before_the_new_arrangement_keeps_its_widths_once` (the one-time
   migration of an unversioned saved layout).

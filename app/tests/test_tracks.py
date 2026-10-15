@@ -50,7 +50,7 @@ def test_the_model_defaults_and_validation():
     assert tracksmod.validate_tracks(tracksmod.default_tracks()) == {}
     assert tracksmod.validate_tracks({"A1": {"mute": True, "gain_db": -6.04}}) == {
         "A1": {"mute": True, "gain_db": -6.0}}
-    for bad in ({"A3": {}}, {"A1": {"loud": True}}, {"A1": {"mute": "yes"}},
+    for bad in ({"A10": {}}, {"A1": {"loud": True}}, {"A1": {"mute": "yes"}},
                 {"A1": {"gain_db": 40}}, "x"):
         with pytest.raises(ValueError):
             tracksmod.validate_tracks(bad)
@@ -123,7 +123,7 @@ def test_tracks_overlays_markers_in_out_round_trip(client, project):
 
 
 @pytest.mark.parametrize("bad", [
-    {"tracks": {"A9": {}}},
+    {"tracks": {"A10": {}}},
     {"tracks": {"A1": {"gain_db": 99}}},
     {"overlays": [{"clip": "CLIP_C.MP4", "in": 1, "out": 1.05, "at": 0}]},
     {"overlays": [{"clip": "../etc", "in": 1, "out": 2, "at": 0}]},

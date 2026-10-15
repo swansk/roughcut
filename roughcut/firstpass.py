@@ -104,14 +104,20 @@ def record_base(edl: dict, segments: list[dict], *, job: str | None,
         if not sid:
             continue
         order.append(sid)
-        shots[sid] = {"clip": s.get("clip"), "in": round(float(s["in"]), 2),
-                      "out": round(float(s["out"]), 2),
+        # the cut's own values (4 places, the frame grid's), never rounded to hundredths
+        shots[sid] = {"clip": s.get("clip"), "in": round(float(s["in"]), 4),
+                      "out": round(float(s["out"]), 4),
                       "speed": float(s.get("speed") or 1.0)}
         grades[sid] = grade_of(colour, s)
     base = {"job": job, "at": round(at if at is not None else time.time(), 3),
             "shots": shots, "order": order, "hand": hand, "grades": grades}
     prov = edl.get(PROV_KEY) if isinstance(edl.get(PROV_KEY), dict) else {}
     prov["bases"] = ([base] + bases(edl))[:BASES_KEPT]
+    # a range rejected once and now accepted exactly: the editor changed their mind
+    if prov.get("rejected"):
+        prov["rejected"] = [r for r in prov["rejected"]
+                            if not any(_same(r, s, speed=False) for s in segments
+                                       if isinstance(s, dict) and "in" in s)]
     edl[PROV_KEY] = prov
     return edl
 
@@ -199,11 +205,12 @@ def manual_edits(edl: dict, plans: list[list[dict]] | None = None) -> list[dict]
     # a base recorded before grades were (no "grades"): a grade cannot be told apart
     grades: dict | None = base.get("grades") if isinstance(base.get("grades"), dict) else None
     colour = edl.get("colour")
-    cur_ids = [s.get("id") for s in segs]
+    alias = _realias(segs, shots)
+    cur_ids = [alias.get(s.get("id"), s.get("id")) for s in segs]
     common = [x for x in base.get("order") or [] if x in cur_ids]
     in_order = _lcs(common, [x for x in cur_ids if x in common])
     for i, s in enumerate(segs):
-        sid = s.get("id")
+        sid = alias.get(s.get("id"), s.get("id"))
         how: list[str] = []
         b = shots.get(sid) if sid else None
         if sid in hand:
@@ -223,7 +230,8 @@ def manual_edits(edl: dict, plans: list[list[dict]] | None = None) -> list[dict]
                 how.append("razor" if parent is not None else "add")
         else:
             if not _same(s, b, speed=False):
-                pieces = [t for t in segs if t is not s and not shots.get(t.get("id"))
+                pieces = [t for t in segs if t is not s
+                          and not shots.get(alias.get(t.get("id"), t.get("id")))
                           and t.get("clip") == s.get("clip")
                           and float(t["in"]) >= b["in"] - EPS
                           and float(t["out"]) <= b["out"] + EPS]
@@ -240,10 +248,221 @@ def manual_edits(edl: dict, plans: list[list[dict]] | None = None) -> list[dict]
     return out
 
 
+def _realias(segs: list[dict], shots: dict) -> dict[str, str]:
+    """The cut's shots that are base shots under a fresh id, `{id now: base id}`.
+
+    Verdict 4: after a partial Accept the board saved the cut again before it had re-keyed
+    its temporary ids, so the server minted a second set: every shot's id left the base,
+    and the one shot the editor then trimmed read "added by hand". A base shot whose id
+    is gone from the cut is found again by its footage — first a shot holding its range
+    exactly, then a shot of the same clip covering most of it (that shot, trimmed). A
+    shot whose id is in the base, and a razor piece of a base shot still in the cut, are
+    never re-aliased."""
+    ids = {s.get("id") for s in segs}
+    lost = {bid: sh for bid, sh in shots.items() if bid not in ids}
+    fresh = [s for s in segs if s.get("id") and s.get("id") not in shots]
+    if not lost or not fresh:
+        return {}
+    present = [sh for bid, sh in shots.items() if bid in ids]
+    alias: dict[str, str] = {}
+    for s in fresh:                                   # the same range, any id
+        hit = next((bid for bid, sh in lost.items() if bid not in alias.values()
+                    and _same(s, sh, speed=False)), None)
+        if hit:
+            alias[s["id"]] = hit
+    for s in fresh:                                   # most of its footage: trimmed
+        if s["id"] in alias or any(
+                sh["clip"] == s.get("clip") and float(s["in"]) >= sh["in"] - EPS
+                and float(s["out"]) <= sh["out"] + EPS for sh in present):
+            continue
+        best, best_r = None, 0.5
+        for bid, sh in lost.items():
+            if bid in alias.values() or sh.get("clip") != s.get("clip"):
+                continue
+            r = _overlap_ratio(s, sh)
+            if r >= best_r:
+                best, best_r = bid, r
+        if best:
+            alias[s["id"]] = best
+    return alias
+
+
 def _row(s: dict, i: int, how: list[str]) -> dict:
+    """A shot as the panel lists it. `in` / `out` are the cut's own values, exactly
+    (verdict 4: rounding them to hundredths moved kept shots off the frame grid
+    wherever a row was read back as a range); the board rounds for display."""
     return {"id": s.get("id"), "pos": i + 1, "clip": s.get("clip"),
-            "in": round(float(s["in"]), 2), "out": round(float(s["out"]), 2),
+            "in": float(s["in"]), "out": float(s["out"]),
             "how": how, "words": ", ".join(HOW_WORDS[h] for h in how)}
+
+
+# ------------------------------------------------------------------ rejections
+#
+# Verdict 4: the editor ✗-rejected CLIP_01 120.9-128.6 in a proposal, accepted the rest,
+# and the re-run a minute later added it back as "new" — its notes even presented it as
+# a choice. A rejection is part of the cut's history, like a base: the ranges the editor
+# turned down are kept on the EDL (`provenance.rejected`), the re-run's brief names them
+# as "do not propose", and its proposal is held to that after the model answers.
+
+REJECTED_KEPT = 50
+REJECT_MATCH = 0.5          # overlap / the longer of the two: mostly the same moment
+
+
+def rejections(edl: dict) -> list[dict]:
+    """The ranges the editor rejected in a review, newest first: `{clip, in, out, at,
+    job}`."""
+    prov = edl.get(PROV_KEY)
+    rows = (prov or {}).get("rejected") if isinstance(prov, dict) else None
+    return [r for r in rows or [] if isinstance(r, dict) and r.get("clip")
+            and isinstance(r.get("in"), (int, float)) and isinstance(r.get("out"), (int, float))]
+
+
+def rejected_ranges(plan: dict, partial: dict | None) -> list[dict]:
+    """The proposed ranges a partial Accept left out, from the answer (`partial`:
+    `rejected` — the proposal's shot numbers, 0-based — and the board's own `ranges`,
+    each held to a shot the proposal really made). A rejected shot the proposal kept
+    as it is (or only moved) is not a range turned down: it is still in the cut."""
+    if not isinstance(partial, dict):
+        return []
+    segs = [s for s in plan.get("segments") or [] if isinstance(s, dict) and "in" in s]
+    diff = ((plan.get("firstpass") or {}).get("diff") or plan.get("diff") or {})
+    rows = diff.get("shots") or []
+    rows = rows if len(rows) == len(segs) else [{}] * len(segs)
+
+    def made(k: int) -> bool:               # a range this proposal made, not the cut's
+        return rows[k].get("status") not in ("kept",)
+
+    picked: list[dict] = []
+    for k in partial.get("rejected") or []:
+        if isinstance(k, int) and 0 <= k < len(segs) and made(k):
+            picked.append(segs[k])
+    for r in partial.get("ranges") or []:
+        if not isinstance(r, dict):
+            continue
+        try:
+            want = {"clip": r.get("clip"), "in": float(r["in"]), "out": float(r["out"])}
+        except (KeyError, TypeError, ValueError):
+            continue
+        k = next((k for k, s in enumerate(segs) if _same(want, s, speed=False)), None)
+        if k is not None and made(k):
+            picked.append(segs[k])
+    out: list[dict] = []
+    for s in picked:
+        row = {"clip": s.get("clip"), "in": round(float(s["in"]), 4),
+               "out": round(float(s["out"]), 4)}
+        if not any(_same(row, o, speed=False) for o in out):
+            out.append(row)
+    return out
+
+
+def record_rejections(edl: dict, ranges: list[dict], *, job: str | None,
+                      at: float | None = None) -> bool:
+    """Add `ranges` to the cut's rejections (newest first, each range once). Mutates
+    `edl`; True when something was added."""
+    if not ranges:
+        return False
+    now = round(at if at is not None else time.time(), 3)
+    old = rejections(edl)
+    new = [{**r, "at": now, "job": job} for r in ranges
+           if not any(_same(r, o, speed=False) for o in old)]
+    if not new:
+        return False
+    prov = edl.get(PROV_KEY) if isinstance(edl.get(PROV_KEY), dict) else {}
+    prov["rejected"] = (new + old)[:REJECTED_KEPT]
+    edl[PROV_KEY] = prov
+    return True
+
+
+def _clock(t: float) -> str:
+    m, s = divmod(max(0.0, float(t)), 60)
+    return f"{int(m)}:{s:04.1f}"
+
+
+def _stem(clip) -> str:
+    return Path(str(clip)).stem
+
+
+def rejected_brief(rejected: list[dict]) -> str:
+    """The re-run brief's paragraph: the ranges not to propose again."""
+    if not rejected:
+        return ""
+    rows = "\n".join(f"  - {r['clip']} {float(r['in']):.2f}-{float(r['out']):.2f}"
+                     for r in rejected)
+    return ("The editor REJECTED these ranges when reviewing an earlier proposal. Do not "
+            "propose them again, nor a shot that is mostly the same moment (unless it is "
+            "already in the current edit):\n" + rows)
+
+
+def _echoes(s: dict, c: dict) -> bool:
+    """`s` is the cut's shot `c` as the model typed it back (hundredths)."""
+    return (s.get("clip") == c.get("clip")
+            and abs(float(s["in"]) - float(c["in"])) <= ECHO_EPS
+            and abs(float(s["out"]) - float(c["out"])) <= ECHO_EPS)
+
+
+ECHO_EPS = 0.006            # under half a frame at 60 fps; hundredths round by ≤ 0.005
+
+
+def _covers(s: dict, r: dict) -> bool:
+    if s.get("clip") != r.get("clip"):
+        return False
+    a0, a1, b0, b1 = float(s["in"]), float(s["out"]), float(r["in"]), float(r["out"])
+    longer = max(1e-6, max(a1 - a0, b1 - b0))
+    return max(0.0, min(a1, b1) - max(a0, b0)) / longer >= REJECT_MATCH
+
+
+def drop_rejected(proposed: list[dict], current: list[dict],
+                  rejected: list[dict]) -> tuple[list[dict], list[dict]]:
+    """The proposal without the ranges the editor rejected: a proposed shot that is
+    mostly a rejected range is dropped — or, when it continues a shot of the cut (same
+    id), that shot stays as it is now (the editor turned the change down, not the
+    shot). A shot that is in the cut now is never touched: the cut is the editor's
+    latest word. Returns `(segments, left_out)`, `left_out` = `{clip, in, out, at,
+    action: "dropped" | "kept as it is", id?}`."""
+    if not rejected:
+        return [dict(s) for s in proposed], []
+    cur = [c for c in current if isinstance(c, dict) and "in" in c and "out" in c]
+    by_id = {c.get("id"): c for c in cur if c.get("id")}
+    out: list[dict] = []
+    left: list[dict] = []
+    for s in proposed:
+        if not (isinstance(s, dict) and "in" in s and "out" in s) or any(
+                _echoes(s, c) for c in cur):
+            out.append(dict(s))
+            continue
+        hit = next((r for r in rejected if _covers(s, r)), None)
+        if hit is None:
+            out.append(dict(s))
+            continue
+        row = {"clip": s.get("clip"), "in": float(s["in"]), "out": float(s["out"]),
+               "rejected": {"in": hit["in"], "out": hit["out"], "at": hit.get("at")}}
+        was = by_id.get(s.get("id"))
+        if was is not None and not any(o.get("id") == was.get("id") for o in out):
+            out.append(dict(was))
+            row.update(action="kept as it is", id=was.get("id"))
+        else:
+            row["action"] = "dropped"
+        left.append(row)
+    if not any(isinstance(o, dict) and "in" in o for o in out):
+        # nothing else proposed: an empty cut is no proposal — keep it, and say so
+        return [dict(s) for s in proposed], [{**r, "action": "flagged"} for r in left]
+    return out, left
+
+
+def rejected_lines(left: list[dict]) -> list[str]:
+    """One line of the notes per rejected range the proposal brought back."""
+    lines = []
+    for r in left:
+        what = (f"{_stem(r['clip'])} {_clock(r['in'])}–{_clock(r['out'])}")
+        if r.get("action") == "flagged":
+            lines.append(f"Check: {what} — you rejected this shot before.")
+        elif r.get("action") == "kept as it is":
+            lines.append(f"Left out: {what} — you rejected this change before, so the "
+                         "shot stays as it is.")
+        else:
+            lines.append(f"Left out: {what} — you rejected this shot before, so it stays "
+                         "out.")
+    return lines
 
 
 def resolve_keep(keep, segments: list[dict], manual: list[dict], mode: str) -> list[str]:
@@ -414,8 +633,10 @@ def resume_words(counts: dict | None, step: str | None = None) -> str:
     return ", ".join(todo)
 
 
-def plan_note(locked: int, mode: str, extra: str = "") -> str:
-    """The note a re-run sends with the cut (the Ask's own call needs one)."""
+def plan_note(locked: int, mode: str, extra: str = "",
+              rejected: list[dict] | None = None) -> str:
+    """The note a re-run sends with the cut (the Ask's own call needs one), with the
+    ranges the editor rejected before (`rejected_brief`)."""
     lead = ("Re-run the first pass: rebuild this cut as the first pass would, from the "
             "index, the ranked events and the editor's picks, for the target length.")
     if locked:
@@ -424,6 +645,9 @@ def plan_note(locked: int, mode: str, extra: str = "") -> str:
                  "anything else.")
     else:
         lead += " Nothing is locked: replace whatever the material serves better."
+    no = rejected_brief(rejected or [])
+    if no:
+        lead += f"\n\n{no}"
     extra = (extra or "").strip()
     return f"{lead}\n\nThe editor adds: {extra}" if extra else lead
 

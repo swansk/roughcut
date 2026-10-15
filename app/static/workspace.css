@@ -342,6 +342,17 @@ table.plist tr.row.sel td { background: #26405e; color: #fff; }
 table.plist td.name .n { display: flex; gap: 5px; align-items: center; min-width: 0; }
 table.plist td.name svg { width: 13px; height: 13px; flex: none; color: #8fb8e8; }
 table.plist td.name span { overflow: hidden; text-overflow: ellipsis; }
+/* Selects: a row's name is the clip and its line ("CLIP_01 · “i…" at 1440, verdict 4
+   punch 10) — it wraps to a second line rather than being cut off */
+#library table.plist td.name { white-space: normal; overflow: visible; }
+#library table.plist td.name .n { align-items: flex-start; }
+#library table.plist td.name span.w { white-space: normal; overflow: visible; overflow-wrap: anywhere;
+                                      text-overflow: clip; }
+/* With Reason shown (a 560 px list: Selects opened wide, wave 4 LAYOUT) the name, which
+   carries a still and a who-tag, gets more of the room than the one-line Reason, which
+   ellipsizes with the whole reason in its row's hover; equal halves wrapped a short line
+   over five rows at 1440 */
+#library table.sel-list:has(th[data-sort=why]) col:first-child { width: 31%; }
 table.plist .st { color: var(--dim); }
 table.plist .st.ok { color: var(--good); }
 .picons { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; }
@@ -451,13 +462,24 @@ table.plist .st.ok { color: var(--good); }
                      aspect-ratio: 16/9; object-fit: contain; cursor: pointer; border-radius: 3px;
                      -webkit-user-select: none; user-select: none; }
 .srow { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
-.srow.top > .dv-res { order: 9; flex-basis: 100%; }
+.srow.top > .dv-res, .srow.acts > .dv-res { order: 9; flex-basis: 100%; }
 .sname { font-weight: 600; font-variant-numeric: tabular-nums; margin-right: 4px; flex-basis: 100%; }
 .lookhost:empty { display: none; }
 .why { color: var(--dim); margin: 2px 0; min-height: 1.3em; }
 .why[contenteditable]:focus { outline: 1px solid var(--accent); border-radius: 3px; color: var(--text); }
 .why[contenteditable]:empty::before { content: "why this shot — click to write"; opacity: .5; }
-.said { color: var(--dim); font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* the first line spoken, whole: wrapped, never cut off with "…" (verdict 4, punch 10) */
+.said { color: var(--dim); font-style: italic; white-space: normal; overflow-wrap: anywhere; }
+/* the AI's and the shot's own chrome — ▶ play, Ask, Look deeper, Remove, the why — in one
+   collapsed section at the foot of Effect Controls (verdict 4, punch 10) */
+#inspector details.assist { border-top: 1px solid var(--line); padding-top: 4px; }
+#inspector details.assist > summary { cursor: pointer; color: var(--dim); font-size: 11px;
+  font-weight: 600; text-transform: uppercase; letter-spacing: .06em; padding: 3px 0;
+  list-style: none; user-select: none; }
+#inspector details.assist > summary::-webkit-details-marker { display: none; }
+#inspector details.assist > summary::before { content: "▸"; display: inline-block; width: 12px; }
+#inspector details.assist[open] > summary::before { content: "▾"; }
+#inspector details.assist > :not(summary) + :not(summary) { margin-top: 6px; }
 .warns { display: flex; gap: 10px; flex-wrap: wrap; color: var(--warn); font-size: 11.5px; }
 .warns[hidden] { display: none; }
 .srow.ctl select.speed { padding: 2px 6px; font-size: 11.5px; }
@@ -507,12 +529,17 @@ table.plist .st.ok { color: var(--good); }
           background: linear-gradient(#0d0d11, #0d0d11) no-repeat 8px 6px / calc(100% - 16px) calc(100% - 24px); }
 #tl { margin-top: 0; }
 #tlEmpty { position: absolute; inset: 0; overflow: auto; padding: 14px; display: flex;
-           align-items: center; justify-content: center; }
+           align-items: center; justify-content: center; pointer-events: none; z-index: 8; }
+/* the box floats over the empty sequence's tracks; around it a drop reaches them */
+#tlEmpty > * { pointer-events: auto; background: rgba(19,19,22,.94); }
 #tlEmpty[hidden] { display: none; }
 .empty { border: 1px dashed var(--line-hi); border-radius: 6px; padding: 18px 22px;
          text-align: center; color: var(--dim); width: min(560px, 100%); }
 .empty h3 { color: var(--text); font-size: 13px; margin: 0 0 6px; font-weight: 600; }
 .empty textarea { min-height: 52px; text-align: left; }
+/* one AI action in the empty Timeline (verdict 4, punch 10): the first pass's box until a
+   pass has finished, then "Make a first cut" (app.js emptyState sets data-ai) */
+#tlEmpty .empty[data-ai="pass"] .firstRow, #tlEmpty .empty[data-ai="cut"] .fp-empty { display: none !important; }
 
 /* ------------------------------------------------------------ overlays */
 #keysOverlay { position: fixed; inset: 0; z-index: 60; background: rgba(4,4,6,.72);

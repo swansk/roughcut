@@ -489,11 +489,20 @@
       out.splice(at, 0, { seg: { ...cur[i] }, cur: i });
     }
     const rejectedShots = [...rv.rej].filter((k) => k < m.ghosts.length).sort((x, y) => x - y);
+    // Verdict 4: the ranges the editor turned down — a rejected shot whose range the cut
+    // does not keep (a new one, or a change) — so a re-run remembers not to bring them
+    // back. A rejected move or a kept-as-is shot is still in the cut: not a rejection.
+    const segsOut = out.map((o) => o.seg);
+    const inCut = (s) => segsOut.some((o) => o.clip === s.clip
+      && Math.abs(o.in - s.in) < 0.005 && Math.abs(o.out - s.out) < 0.005);
+    const rejectedRanges = rejectedShots.map((k) => plan.segments[k])
+      .filter((s) => s && !inCut(s)).map((s) => ({ clip: s.clip, in: s.in, out: s.out }));
+    reviewed.lastRanges = rejectedRanges;      // answerProposal sends them with the Accept
     return {
-      segments: out.map((o) => o.seg),
+      segments: segsOut,
       total: m.ghosts.length, accepted: m.ghosts.length - rejectedShots.length,
       rejectedShots, keptRemoved: kept.map((i) => curKey(cur[i], i)),
-      rejected: rejectedShots.length + kept.length,
+      rejected: rejectedShots.length + kept.length, rejectedRanges,
     };
   }
 
@@ -694,21 +703,24 @@
   }
 
   /* ------------------------------------------------------------ picks as markers */
-  /* The pass's picks (the bin's keeps) as markers on the cut (V1) and on the proposed
-   * cut (the ghost lane): an amber flag where a pick starts inside a shot that uses its
-   * footage, the pick's label and reason on hover (verdict 3, punch 7). Drawn, never
-   * saved: the sequence markers (M) stay the editor's. */
+  /* The pass's picks as markers on the cut (V1) and on the proposed cut (the ghost
+   * lane): an amber flag where a pick starts inside a shot that uses its footage, the
+   * pick's label and reason on hover (verdict 3, punch 7). The picks are the editor's
+   * keeps and the first pass's own picks (`picksUsable`, verdict 4, punch 1) — the pass
+   * found 81 and the cut showed 0 when only the keeps were read. Drawn, never saved:
+   * the sequence markers (M) stay the editor's. */
   function picksIn(list, startOf) {
-    const keepsUsable = fn('keepsUsable'), keepLabel = fn('keepLabel');
-    const keeps = keepsUsable ? keepsUsable() : [];
+    const keepsUsable = fn('keepsUsable'), picksUsable = fn('picksUsable'), keepLabel = fn('keepLabel');
+    const keeps = (keepsUsable ? keepsUsable() : []).concat(picksUsable ? picksUsable() : []);
     const out = [];
     list.forEach((seg, i) => {
       for (const k of keeps) {
         if (k.clip !== seg.clip || !(k.end > seg.in && k.start < seg.out)) continue;
         const at = startOf(i) + Math.max(0, (Math.max(k.start, seg.in) - seg.in) / spd(seg));
         const label = keepLabel ? keepLabel(k) : '';
+        const who = k.pick ? ` · the first pass · ${k.kind || 'moment'}` : ' · yours';
         out.push({ t: at, keep: k,
-                   title: `pick${k.hero ? ' ★ hero' : ''}: ${label}`
+                   title: `pick${k.hero ? ' ★ hero' : ''}${who}: ${label}`
                      + `\n${nameOf(k.clip)} ${tl.fmt(k.start)}–${tl.fmt(k.end)}`
                      + (k.why ? `\nwhy: ${k.why}` : '') });
       }
@@ -718,7 +730,7 @@
 
   function pickEl(p) {
     const m = document.createElement('i');
-    m.className = `tl-pick${p.keep.hero ? ' hero' : ''}`;
+    m.className = `tl-pick${p.keep.hero ? ' hero' : ''}${p.keep.pick ? ' pass' : ' yours'}`;
     m.style.left = px(tl.timeToX(p.t));
     m.dataset.t = String(round2(p.t));
     m.title = p.title;

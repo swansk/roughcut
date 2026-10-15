@@ -715,7 +715,7 @@ def project_payload() -> dict:
             "proxy": f"/media/proxy/{Path(clip).stem}.mp4",
             # The card's picture: this URL plus ?t=<in-point>. A card is a still, not
             # a stream — see /media/poster for what sixteen streams cost the monitor.
-            "poster": f"/media/poster/{Path(clip).stem}.jpg",
+            "poster": poster_url(Path(clip).stem),
             "transcript": d.get("transcript", []),
             "visual": load_visual(clip),
             "captured": capture_time(clip),
@@ -788,6 +788,8 @@ def sequence_payload(edl: dict, segments: list[dict]) -> dict:
     return {
         "tracks": tracksmod.resolve_tracks(edl.get("tracks")),
         "overlays": overlays,
+        # the added audio tracks' clips (A3…, Sequence › Add Track)
+        "audio": [dict(c) for c in edl.get("audio") or [] if isinstance(c, dict)],
         "markers": list(edl.get("markers") or []),
         "in": edl.get("in"),
         "out": edl.get("out"),
@@ -850,6 +852,10 @@ def clean_segments(raw: list) -> list[dict]:
         for k in ("act", "why"):
             if s.get(k):
                 seg[k] = s[k]
+        # A gap on V1 (verdict 4, punch 9): empty film time, carried by a generated black
+        # clip (POST /api/gap) so the monitor and the render play it as black and silence
+        if s.get("gap") is True and edits.is_generated(seg["clip"]):
+            seg["gap"] = True
         # Speed (INTAKE M13): kept only when it is not 1, validated the one way
         # `edits.validate_speed` validates it; a bad one is a 400 and nothing is written.
         try:
@@ -896,6 +902,15 @@ def apply_sequence(edl: dict, body: dict) -> None:
                 edl["overlays"] = ovs
             else:
                 edl.pop("overlays", None)
+        if "audio" in body:
+            clips = tracksmod.validate_audio_clips(body["audio"], edits.validate_speed)
+            for c in clips:
+                if not c["id"]:
+                    c["id"] = segment_id()
+            if clips:
+                edl["audio"] = clips
+            else:
+                edl.pop("audio", None)
         if "markers" in body:
             marks = tracksmod.validate_markers(body["markers"])
             if marks:
@@ -1651,7 +1666,14 @@ def api_picks(order: str = "rank") -> JSONResponse:
         p["released"] = p["clip"] in released
         p["junk"] = junk_of.get(p["clip"], "clean")
     ordered = picks.order(rows, order)
+    # Whether a first pass has made its picks (it finished, or stopped or failed in the
+    # cut step, or one is running past them): the board lists the picks in Selects and
+    # marks them on the cut from then on (verdict 4, punch 1).
+    rec, live = _fp_record() or {}, _fp_live()
+    made = ((rec.get("produced") or {}).get("picks") is not None or rec.get("step") == "cut"
+            or bool(live and live.get("picks") is not None))
     return JSONResponse({
+        "firstpass_picked": made,
         "picks": _pick_rows(ordered),
         "rounds": len(picks.rounds([p for p in ordered if p["released"]])),
         "round_size": picks.ROUND_SIZE,
@@ -2350,7 +2372,26 @@ async def api_asks_answer(request: Request) -> JSONResponse:
     tmp.replace(files[0])
     if rec["answered"].get("partial"):
         note_partial_accept(rec)                  # provenance: the save may have landed
+        note_rejections(rec)                      # verdict 4: a rejection is remembered
     return JSONResponse({"ok": True, "job": rec.get("job")})
+
+
+def note_rejections(rec: dict, edl: dict | None = None) -> None:
+    """The ranges a partial Accept turned down (`firstpass.rejected_ranges`), on the
+    cut: a re-run is told not to propose them and is held to it. Called by the answer
+    (it writes the EDL) and by the save that answers it (`edl`, written by that save) —
+    whichever lands first; a range is kept once. Never fails either."""
+    try:
+        partial = (rec.get("answered") or {}).get("partial")
+        ranges = fpmod.rejected_ranges(rec.get("plan") or {}, partial)
+        if not ranges:
+            return
+        target = edl if edl is not None else read_edl()
+        at = (rec.get("answered") or {}).get("at")
+        if fpmod.record_rejections(target, ranges, job=rec.get("job"), at=at) and edl is None:
+            write_edl(target)
+    except Exception as exc:  # noqa: BLE001 — a rejection note must never cost a save
+        print(f"  !! provenance (rejections): {exc}", flush=True)
 
 
 @app.get("/flow.js")
@@ -2450,6 +2491,7 @@ def note_accept(edl: dict, saved: list[dict], colour=None) -> None:
                 prior = {r["id"]: r["how"] for r in fpmod.manual_edits(edl, ask_plans())
                          if r.get("id")}
                 hand = fpmod.partial_hand(saved, plan, prior)
+                note_rejections(rec, edl)         # this save writes them
             else:
                 before = {s.get("id"): s for s in fpmod._segments(edl) if s.get("id")}
                 hand = {}
@@ -2579,8 +2621,12 @@ def firstpass_state() -> dict:
     ensure_segment_ids(edl)
     facts = flow_facts()
     manual = fpmod.manual_edits(edl, ask_plans())
-    rec = _fp_record()
-    live = _fp_live()
+    # one consistent pair: a run that ends sets its state and saves its record under
+    # this lock, so a poll between the two read a "running" record with no live run and
+    # called it interrupted by a restart (a flake in test_firstpass)
+    with FIRSTPASS_LOCK:
+        live = _fp_live()
+        rec = _fp_record()
     out: dict = {"manual_edits": manual, "last": rec, **config.cost_terms()}
     try:
         out["would"] = firstpass_plan(None, None, facts=facts, edl=edl, manual=manual)
@@ -2722,6 +2768,8 @@ def api_firstpass_cancel() -> JSONResponse:
     scopes = [live["scope"]] + [INDEX_SCOPES[x["id"]] for x in indexes
                                 if x["id"] in INDEX_SCOPES]
     killers = [threading.Thread(target=sc.kill, daemon=True) for sc in scopes]
+    # and the preview encodes (verdict 4: "one ffmpeg (a preview build) kept running")
+    killers.append(threading.Thread(target=stop_media, daemon=True))
     for t in killers:
         t.start()
     for t in killers:
@@ -2847,16 +2895,27 @@ def _firstpass_walk(job: str, fp: dict) -> None:
         manual = fpmod.manual_edits(edl, ask_plans())
         locked = [k for k in fp["keep"] if any(s.get("id") == k for s in segments)]
         originate = not segments or (fp["mode"] == "run" and not locked)
-        note = fp["note"] if originate else fpmod.plan_note(len(locked), fp["mode"],
-                                                              fp["note"])
+        # verdict 4: the ranges the editor rejected in a review — not proposed again
+        rejected = fpmod.rejections(edl)
+        note = (fpmod.plan_note(len(locked), fp["mode"], fp["note"], rejected)
+                if not originate else
+                "\n\n".join(x for x in ((fp["note"] or "").strip(),
+                                         fpmod.rejected_brief(rejected)) if x))
 
         def finish(plan: dict) -> dict:
             plan = dict(plan)
+            plan["segments"], left = fpmod.drop_rejected(plan["segments"], segments,
+                                                         rejected)
             if segments and locked:
                 plan["segments"] = fpmod.enforce_locks(plan["segments"], segments, locked)
+            if left:
+                plan["notes"] = "\n\n".join(x for x in (
+                    str(plan.get("notes") or "").strip(),
+                    "\n".join(fpmod.rejected_lines(left))) if x)
             plan["firstpass"] = {
                 "job": job, "mode": fp["mode"], "keep": locked,
                 "manual": [r for r in manual if r.get("id") in set(locked)],
+                "rejected": left,
                 "diff": fpmod.rerun_diff(segments, plan["segments"], locked, manual)}
             return plan
 
@@ -4261,6 +4320,7 @@ def _index_job(job: str, order: str) -> None:
     scope. `entry["coarse"]` (the first pass sets it) asks the journal for the coarse
     tier first; `entry["coarse_ready"]` says when every clip is heard and looked at."""
     scope = INDEX_SCOPES.setdefault(job, procscope.Scope(f"index {job}"))
+    kick_previews()          # a walk a cancel ended starts again with the index
     try:
         with procscope.active(scope):
             _index_walk(job, order, scope)
@@ -4624,7 +4684,7 @@ def unheard_clip(clip: str, used: bool = False) -> dict:
     stem = Path(clip).stem
     return {
         "clip": clip, "stem": stem, "duration": clip_duration(clip),
-        "proxy": f"/media/proxy/{stem}.mp4", "poster": f"/media/poster/{stem}.jpg",
+        "proxy": f"/media/proxy/{stem}.mp4", "poster": poster_url(stem),
         "transcript": [], "visual": load_visual(clip), "captured": capture_time(clip),
         "candidates": [],
         "summary": {"speech_fraction": None, "wind_dominant_fraction": None,
@@ -4677,7 +4737,7 @@ def api_clips() -> JSONResponse:
             "captured": capture_time(clip) if ok else None,
             "session": session_of.get(clip),
             "proxy": (STATE["proxy_dir"] / f"{stem}.mp4").exists(),
-            "poster": f"/media/poster/{stem}.jpg?t={poster_time(clip) if ok else 0.0:.2f}",
+            "poster": poster_url(stem, poster_time(clip) if ok else 0.0),
             "analysed": stem in heard,
             "looked": stem in looked,
             "closed": stem in closed,
@@ -4777,6 +4837,51 @@ def api_index_status() -> JSONResponse:
                          "progress": j.progress(), "released": j.released_clips(),
                          "running": running is not None,
                          "job": running["id"] if running else None})
+
+
+INDEX_CANCEL_WAIT_S = 5.0
+
+
+@app.post("/api/index/cancel")
+def api_index_cancel() -> JSONResponse:
+    """Stop the background index — its proxies, close looks, contact-sheet reads, the
+    audio pass — and every preview and poster encode, now (verdict 4, punch 8: after the
+    first pass moved on, the index kept encoding with nothing on screen able to stop it).
+    The tools die with their process groups (`procscope`), the way the first pass's Stop
+    and the export's cancel kill theirs. What finished is kept; a stage that was killed
+    goes back in the queue (`journal.requeue`), so no clip reads as heard, looked at or
+    proxied when it is not, and a killed preview is "not built", never "failed". A first
+    pass still waiting on the index stops with it. Returns once the index has ended (or
+    after INDEX_CANCEL_WAIT_S), so the job pill is gone on the next poll."""
+    fp = _fp_live()
+    stopped_pass = None
+    if fp is not None and (fp.get("stage") or "index") == "index":
+        try:
+            stopped_pass = json.loads(api_firstpass_cancel().body).get("job")
+        except HTTPException:
+            stopped_pass = None
+    live = [x for x in INDEXES.values() if x["state"] not in progress.TERMINAL]
+    for x in live:
+        x["cancel"] = True
+        x.note("stopping — what finished is kept")
+    scopes = [INDEX_SCOPES[x["id"]] for x in live if x["id"] in INDEX_SCOPES]
+    killed: list[int] = []
+
+    def kill(sc: procscope.Scope) -> None:
+        killed.append(sc.kill())
+
+    killers = [threading.Thread(target=kill, args=(sc,), daemon=True) for sc in scopes]
+    killers.append(threading.Thread(target=lambda: killed.append(stop_media()), daemon=True))
+    for t in killers:
+        t.start()
+    for t in killers:
+        t.join(timeout=procscope.GRACE_S + 1.0)
+    deadline = time.time() + INDEX_CANCEL_WAIT_S
+    while time.time() < deadline and any(x["state"] not in progress.TERMINAL for x in live):
+        time.sleep(0.05)
+    return JSONResponse({"stopped": [x["id"] for x in live],
+                         "states": {x["id"]: x["state"] for x in live},
+                         "first_pass": stopped_pass, "killed": sum(killed)})
 
 
 def probe_duration(path: Path) -> float | None:
@@ -5285,6 +5390,18 @@ def fps_rational(fps: float | None) -> str:
     return f"{round(f * 1000)}/1000"
 
 
+def export_rate(asked, sequence: list[dict]) -> str:
+    """The rate an export is written at, as `--fps` takes it: the one the dialog showed
+    (`fps` in the request: its FRAME line, from /api/export) when it is a sane rate, else
+    the whole sequence's (`sequence_fps` over every shot, never only a range's — an
+    In/Out export of a 29.97 sequence that starts on a 59.94 clip said 29.970 fps and
+    wrote 59.94, verdict 4)."""
+    v = _rate_value(asked) if asked is not None else None
+    if v is not None and 1.0 <= v <= 240.0:
+        return fps_rational(v)
+    return fps_rational(sequence_fps(sequence))
+
+
 def _rate_value(text: str | None) -> float | None:
     try:
         num, _, den = str(text).partition("/")
@@ -5335,6 +5452,234 @@ def export_measured(key: str, seq_fps: float) -> tuple[float | None, int]:
     return bppf, len(vals)
 
 
+# ---------------------------------------------------- the first export's size (punch 6)
+#
+# Verdict 4: "Estimate 310 MB, file 148 MB (2.1×)" — a preset's typical bitrate is a
+# guess until the bin has a file made with it. So the dialog's first open encodes a ~2 s
+# sample of the sequence at the preset (assemble.py, the export's own profile and rate,
+# the sequence's shots), cached per preset and bin, and the estimate scales it. The
+# sample is a few short slices spread over the film, so one snowfield does not stand for
+# a cut of lift lines; and it is measured frame by frame — the mean keyframe and the mean
+# other frame, both scaled to the preset's frame — because every shot of an export
+# starts on a keyframe, and a 2 s slice is far more keyframe than a 10 s shot is. The
+# dialog lays those over the range it exports: one keyframe per shot plus one per
+# X264_KEYINT frames, every other frame a mean one, plus the sound at its bitrate.
+#
+# Eight slices of a quarter second, not fewer longer ones: measured on 40 s of Killington
+# (6 shots, Quick 1080p, real file 7.12 Mbps of video) the model read 7.95 Mbps from 8
+# slices (+12 %), 7.32 from 6 (+3 %), but 2.57 from 4 (−64 %) and 10.62 from 2 (+49 %):
+# GoPro detail swings shot to shot, so coverage beats length. The preset's typical
+# figure said 14 Mbps (+97 %). On the suite's synthetic clips 4 slices read 3.14 against
+# a real 3.12.
+EXPORT_SAMPLE_S = 2.0
+EXPORT_SAMPLE_SLICES = 8
+EXPORT_SAMPLE_TIMEOUT_S = 600.0
+X264_KEYINT = 250                         # x264's default -g: a keyframe at least this often
+SAMPLES: dict[str, dict] = {}             # "<bin>.<preset>" → {"state", "scope", "error"}
+SAMPLES_LOCK = threading.Lock()
+
+
+def sample_dir() -> Path:
+    return STATE["work"] / "export-samples"
+
+
+def sample_key(preset: str) -> str:
+    return f"{STATE['footage'].name}.{preset}"
+
+
+def sample_file(preset: str) -> Path:
+    return sample_dir() / f"{sample_key(preset)}.json"
+
+
+def load_sample(preset: str) -> dict | None:
+    try:
+        d = json.loads(sample_file(preset).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return d if isinstance(d, dict) and d.get("p_bytes") else None
+
+
+def sample_segments(segments: list[dict], seconds: float = EXPORT_SAMPLE_S,
+                    slices: int = EXPORT_SAMPLE_SLICES) -> list[dict]:
+    """`slices` pieces of the film, `seconds` in all, centred at evenly spaced film
+    times: each a range of the shot playing there (its own clip, speed and controls),
+    cut to that shot's edges. A film shorter than `seconds` is sampled whole."""
+    durs = [edits.dur(x) for x in segments]
+    total = sum(durs)
+    if total <= 0:
+        return []
+    if total <= seconds:
+        return [dict(x) for x in segments]
+    n = max(1, min(slices, len(segments) * 2))
+    each = seconds / n
+    out = []
+    for k in range(n):
+        t = total * (k + 0.5) / n
+        start = 0.0
+        for seg, d in zip(segments, durs):
+            if start + d >= t or seg is segments[-1]:
+                sp = edits.speed_of(seg)
+                a = max(0.0, min(d - each, t - start - each / 2))
+                cin = float(seg["in"]) + a * sp
+                cout = min(float(seg["out"]), cin + each * sp)
+                piece = {k2: v for k2, v in seg.items() if k2 not in ("id", "a_off")}
+                piece.update({"in": round(cin, 4), "out": round(cout, 4)})
+                out.append(piece)
+                break
+            start += d
+    return out
+
+
+def _probe_frames(path: Path) -> tuple[list[int], list[int]]:
+    """The video packets' sizes: (keyframes, every other frame)."""
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                        "-show_entries", "packet=size,flags", "-of", "csv=p=0", str(path)],
+                       capture_output=True, text=True)
+    keys, rest = [], []
+    for line in r.stdout.splitlines():
+        size, _, flags = line.partition(",")
+        try:
+            n = int(size)
+        except ValueError:
+            continue
+        (keys if "K" in flags else rest).append(n)
+    return keys, rest
+
+
+def _sample_job(preset: str, key: str, scope: procscope.Scope) -> None:
+    rec = SAMPLES[key]
+    work = sample_dir() / f"tmp-{key}"
+    try:
+        edl = read_edl()
+        segs = sample_segments(edl.get("segments") or [])
+        if not segs:
+            raise RuntimeError("the sequence is empty")
+        p = EXPORT_PRESETS[preset]
+        seq = edl.get("segments") or []
+        rate = export_rate(None, seq)
+        sample = {k: v for k, v in edl.items()
+                  if k not in ("overlays", "effects_music", "tracks", "markers", "in", "out")}
+        sample["segments"] = segs
+        work.mkdir(parents=True, exist_ok=True)
+        edl_path, out = work / "sample.json", work / "sample.mp4"
+        edl_path.write_text(json.dumps(sample), encoding="utf-8")
+        cmd = ["uv", "run", "--quiet", str(TOOLS / "assemble.py"), str(edl_path),
+               "--footage", str(STATE["footage"]), "--sidecars", str(STATE["sidecars"]),
+               "--assets", str(STATE["assets"]), "--profile", p["profile"],
+               "--colour-dir", str(colour_dir()), "--generated-dir", str(generated_dir()),
+               "--parts-dir", str(work / "parts"), "--fps", rate, "-o", str(out)]
+        t0 = time.time()
+        with procscope.active(scope):
+            r = subprocess.run(cmd, capture_output=True, text=True,
+                               timeout=EXPORT_SAMPLE_TIMEOUT_S)
+        if scope.cancelled:
+            rec.update(state="cancelled")
+            return
+        if r.returncode != 0 or not out.exists():
+            raise RuntimeError((r.stderr or r.stdout or "").strip()[-200:] or "no sample")
+        keys, rest = _probe_frames(out)
+        res = probe_resolution(out)
+        # the sound as the encoder really spends it: AAC at "384k" on quiet or simple
+        # sound comes in well under, and on a small frame the sound is most of the file
+        ab = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0",
+                             "-show_entries", "stream=bit_rate", "-of", "csv=p=0", str(out)],
+                            capture_output=True, text=True).stdout.strip().strip(",")
+        if not keys or not res:
+            raise RuntimeError("the sample has no frames")
+        frames = keys + rest
+        data = {
+            "preset": preset, "bin": STATE["footage"].name, "created": time.time(),
+            "seconds": round(sum(edits.dur(x) for x in segs), 3), "slices": len(segs),
+            "fps": rate, "width": res[0], "height": res[1], "frames": len(frames),
+            "keys": len(keys), "i_bytes": sum(keys) / len(keys),
+            # a sample with no frame but keyframes (a very short film) has only the
+            # keyframes' mean to go on
+            "p_bytes": (sum(rest) / len(rest)) if rest else sum(keys) / len(keys),
+            "encode_s": round(time.time() - t0, 2),
+            "audio_kbps": round(int(ab) / 1000, 1) if ab.isdigit() else None,
+        }
+        sample_dir().mkdir(parents=True, exist_ok=True)
+        sample_file(preset).write_text(json.dumps(data, indent=1), encoding="utf-8")
+        rec.update(state="done")
+    except (RuntimeError, OSError, subprocess.TimeoutExpired, KeyError) as exc:
+        rec.update(state="cancelled" if scope.cancelled else "failed",
+                   error=str(exc)[:300])
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def start_sample(preset: str) -> dict:
+    """Encode this preset's sample unless it is cached or already being made."""
+    key = sample_key(preset)
+    if load_sample(preset):
+        return {"state": "done"}
+    with SAMPLES_LOCK:
+        rec = SAMPLES.get(key)
+        if rec and rec["state"] == "running":
+            return {"state": "running"}
+        scope = procscope.Scope(f"export sample {key}")
+        rec = SAMPLES[key] = {"state": "running", "scope": scope, "error": None,
+                              "started": time.time()}
+    threading.Thread(target=_sample_job, args=(preset, key, scope), daemon=True).start()
+    return {"state": "running"}
+
+
+def stop_samples() -> int:
+    """Kill every sample being encoded (an export starting wants the cores)."""
+    with SAMPLES_LOCK:
+        live = [r for r in SAMPLES.values() if r["state"] == "running"]
+    for r in live:
+        r["scope"].kill(grace_s=0.5)
+    return len(live)
+
+
+def sample_state(preset: str) -> str:
+    if load_sample(preset):
+        return "done"
+    rec = SAMPLES.get(sample_key(preset))
+    return rec["state"] if rec else "none"
+
+
+def sample_model(preset: str, w: int, h: int) -> dict | None:
+    """The sample's frame sizes at the preset's frame (`w`×`h`), for the dialog."""
+    d = load_sample(preset)
+    if not d:
+        return None
+    k = (w * h) / max(1, int(d["width"]) * int(d["height"]))
+    return {"i_bytes": round(float(d["i_bytes"]) * k, 1),
+            "p_bytes": round(float(d["p_bytes"]) * k, 1), "keyint": X264_KEYINT,
+            "seconds": d.get("seconds"), "slices": d.get("slices"),
+            "audio_kbps": d.get("audio_kbps")}
+
+
+def model_video_mbps(model: dict, secs: float, shots: int, fps: float) -> float:
+    """The sample's model over `secs` of film in `shots` shots, as a video bitrate."""
+    frames = max(1.0, secs * fps)
+    keys = min(frames, max(1, shots) + math.floor(frames / model["keyint"]))
+    return (keys * model["i_bytes"] + (frames - keys) * model["p_bytes"]) * 8 / secs / 1e6
+
+
+@app.post("/api/export/sample")
+async def api_export_sample(request: Request) -> JSONResponse:
+    """Start the preset's size sample (the dialog asks on its first open)."""
+    body = await request.json() if int(request.headers.get("content-length") or 0) else {}
+    preset = str((body or {}).get("preset") or "quick")
+    if preset not in EXPORT_PRESETS:
+        raise HTTPException(400, f"unknown export preset: {preset!r}")
+    if not (read_edl().get("segments") or []):
+        return JSONResponse({"preset": preset, "state": "none"})
+    return JSONResponse({"preset": preset, **start_sample(preset)})
+
+
+@app.get("/api/export/sample")
+def api_export_sample_status(preset: str = "quick") -> JSONResponse:
+    if preset not in EXPORT_PRESETS:
+        raise HTTPException(400, f"unknown export preset: {preset!r}")
+    rec = SAMPLES.get(sample_key(preset)) or {}
+    return JSONResponse({"preset": preset, "state": sample_state(preset),
+                         "error": rec.get("error"), "sample": load_sample(preset)})
+
+
 def export_folders() -> list[dict]:
     """The folders under `--work/renders`, the most recently written first: name, how
     many films are in it and when the newest was made."""
@@ -5360,22 +5705,33 @@ def api_export() -> JSONResponse:
     folders already under `--work/renders`, the most recently used first."""
     edl = read_edl()
     native = _native_frame()
-    seq_fps = sequence_fps(edl.get("segments") or [])
+    seq = edl.get("segments") or []
+    seq_fps = sequence_fps(seq)
+    seq_s = sum(edits.dur(x) for x in seq)
     presets = []
     for key, p in EXPORT_PRESETS.items():
         w, h = export_frame(p, native)
         rw, rh = p["ref"]
         bppf, n = export_measured(key, seq_fps)
+        model = None if bppf else sample_model(key, w, h)
+        audio_kbps = p["audio_kbps"]
         if bppf:
             total = bppf * w * h * seq_fps / 1e6
             mbps = max(0.05, total - p["audio_kbps"] / 1000)
+            source = "measured"
+        elif model and seq_s > 0:
+            mbps = model_video_mbps(model, seq_s, len(seq), seq_fps)
+            source = "sample"
+            audio_kbps = model.get("audio_kbps") or audio_kbps
         else:
             mbps = max(0.5, p["mbps"] * (w * h) / (rw * rh) * math.sqrt(seq_fps / p["fps"]))
+            source = "typical"
         presets.append({"key": key, "label": p["label"], "profile": p["profile"],
                         "about": p["about"], "width": w, "height": h,
                         "fps": round(seq_fps, 3), "fps_rational": fps_rational(seq_fps),
-                        "video_mbps": round(mbps, 3), "audio_kbps": p["audio_kbps"],
-                        "measured": n})
+                        "video_mbps": round(mbps, 3), "audio_kbps": audio_kbps,
+                        "measured": n, "source": source, "sample": model,
+                        "sample_state": "done" if model else sample_state(key)})
     root = export_root()
     folders = export_folders()
     return JSONResponse({
@@ -5416,7 +5772,12 @@ async def api_render(request: Request) -> JSONResponse:
         raise HTTPException(400, f"unknown render profile: {profile!r}")
     if not body.get("segments"):
         raise HTTPException(400, "nothing to export: the sequence is empty")
+    stop_samples()            # the size samples are the dialog's; an export wants the cores
     edl = read_edl()
+    # The sequence's rate, from the whole sequence before `segments` is replaced by what
+    # the body sends (an In/Out range sends only the shots inside it): the rate the
+    # dialog's FRAME line shows, for any range (verdict 4, punch 6).
+    seq_rate = export_rate(body.get("fps"), edl.get("segments") or body["segments"])
     # Effect Controls ride each segment to the render (verdict 3, punch 3), validated by
     # the same rule a save uses, so the film is what the Program monitor showed.
     segments = []
@@ -5470,7 +5831,7 @@ async def api_render(request: Request) -> JSONResponse:
         # An export is constant frame rate at the sequence's rate, whatever the preset.
         meta.update(export=True, preset=preset_key,
                     preset_label=EXPORT_PRESETS[preset_key]["label"],
-                    fps=fps_rational(sequence_fps(edl["segments"])))
+                    fps=seq_rate)
     shots = len(edl["segments"])
     planned = meta["planned_s"]
     RENDERS[job] = progress.Job(
@@ -5818,6 +6179,8 @@ def media_poster(name: str, t: float = 0.0) -> Response:
     kilobytes, cached on disk under --work and immutable for a given clip and time.
     """
     stem = Path(name).stem
+    if stem.endswith(f".{PICTURE_V}"):          # poster_url's versioned name
+        stem = stem[: -len(PICTURE_V) - 1]
     if not re.fullmatch(r"[A-Za-z0-9._-]+", stem):
         raise HTTPException(404, f"no such clip: {name}")
     if not math.isfinite(t) or t < 0:
@@ -5926,7 +6289,33 @@ BROWSER_VIDEO = {".mp4": {"h264"}, ".m4v": {"h264"}, ".mov": {"h264"},
 BROWSER_AUDIO = {".mp4": {"aac", "mp3"}, ".m4v": {"aac", "mp3"}, ".mov": {"aac", "mp3"},
                  ".webm": {"opus", "vorbis"}}
 MEDIA: dict = {"lock": threading.Lock(), "wanted": [], "building": {}, "failed": {},
-               "facts": {}, "thread": None, "gpu": None}
+               "facts": {}, "thread": None, "gpu": None,
+               # Stop means stop for the pictures too (verdict 4, punch 8): every preview
+               # and poster encode runs in this scope, and the index's cancel kills it
+               # (`stop_media`); `walk_gen` moves on so the background walk ends.
+               "scope": None, "walk_gen": 0, "stopped": 0}
+
+
+def media_scope() -> procscope.Scope:
+    """The scope preview and poster encodes run in: a fresh one after a stop."""
+    with MEDIA["lock"]:
+        sc = MEDIA.get("scope")
+        if sc is None or sc.cancelled:
+            sc = MEDIA["scope"] = procscope.Scope("previews")
+        return sc
+
+
+def stop_media() -> int:
+    """Kill every preview and poster ffmpeg (their process groups) and end the
+    background walk. An asked-for clip (a monitor waiting on it) is built again when it
+    is next asked for; a killed build is not recorded as failed. Returns how many
+    processes were signalled."""
+    with MEDIA["lock"]:
+        MEDIA["walk_gen"] += 1
+        sc, MEDIA["scope"] = MEDIA.get("scope"), None
+    n = sc.kill() if sc is not None else 0
+    MEDIA["stopped"] += n
+    return n
 
 
 def clip_for_stem(stem: str) -> str | None:
@@ -6072,6 +6461,16 @@ def browser_playable(src: Path) -> bool:
 PICTURE_V = "v2"
 
 
+def poster_url(stem: str, t: float | None = None) -> str:
+    """A poster's URL as the server hands it out: `<stem>.<PICTURE_V>.jpg` (and `?t=` when
+    given). Posters are served `immutable` for a year, so a browser that cached a pre-v2
+    (upside down) frame keeps it until the URL changes: the version is in the URL as well
+    as in the file name (lead's wave-4 queue). In the name, not a query, so every page
+    that appends `?t=` to a clip's poster keeps working; /media/poster drops it."""
+    url = f"/media/poster/{stem}.{PICTURE_V}.jpg"
+    return url if t is None else f"{url}?t={t:.2f}"
+
+
 def preview_dir() -> Path:
     """Per bin, under --work, like the proxies and posters: disposable."""
     return STATE["work"] / "previews" / STATE["footage"].name
@@ -6214,17 +6613,25 @@ def _build_claimed(src: Path, dest: Path, orient: str, ev: threading.Event) -> N
     """Paths fixed by the caller, not read from STATE here: a board re-pointed at
     another bin mid-build must not have this write that bin's preview from this one."""
     key = str(dest)
+    scope = None
     try:
         with PREVIEW_SLOTS:
             if not dest.exists():
                 t0 = time.monotonic()
-                how = build_preview(src, dest, orient)
+                scope = media_scope()
+                with procscope.active(scope):
+                    how = build_preview(src, dest, orient)
                 print(f"  preview {dest.stem} ({how}) in {time.monotonic() - t0:.1f}s",
                       flush=True)
         MEDIA["failed"].pop(key, None)
     except (RuntimeError, OSError) as exc:
-        MEDIA["failed"][key] = (time.monotonic(), str(exc)[:300])
-        print(f"  !! {exc}", flush=True)
+        if scope is not None and scope.cancelled:
+            # stopped, not broken: the clip's status stays "not built", never "failed"
+            MEDIA["failed"].pop(key, None)
+            print(f"  preview {dest.stem} stopped", flush=True)
+        else:
+            MEDIA["failed"][key] = (time.monotonic(), str(exc)[:300])
+            print(f"  !! {exc}", flush=True)
     finally:
         with MEDIA["lock"]:
             MEDIA["building"].pop(key, None)
@@ -6316,13 +6723,16 @@ def _media_walk() -> None:
     from concurrent.futures import ThreadPoolExecutor
     try:
         footage = STATE["footage"]
+        gen = MEDIA["walk_gen"]
 
         def poster(clip: str) -> None:
-            if STATE["footage"] != footage:
-                return                      # re-pointed at another bin: its own walk
+            if STATE["footage"] != footage or MEDIA["walk_gen"] != gen:
+                return                      # re-pointed at another bin, or stopped
             try:
                 clip_duration(clip)         # cached: the card frame is 1 s in
-                ensure_poster(Path(clip).stem, poster_time(clip), slots=WALK_POSTER_SLOTS)
+                with procscope.active(media_scope()):
+                    ensure_poster(Path(clip).stem, poster_time(clip),
+                                  slots=WALK_POSTER_SLOTS)
             except RuntimeError as exc:
                 print(f"  !! {exc}", flush=True)
 
@@ -6330,7 +6740,7 @@ def _media_walk() -> None:
             list(pool.map(poster, footage_clips()))
         if not preview_gpu():
             return
-        while STATE["footage"] == footage:
+        while STATE["footage"] == footage and MEDIA["walk_gen"] == gen:
             todo = [c for c in footage_clips() if needs_preview(c)
                     and not _failed_recently(str(preview_path(Path(c).stem)))]
             if not todo:
@@ -7649,6 +8059,32 @@ def materialise_generated(spec: dict) -> Path:
         record["duration"] = probe_duration(dest) or seconds
         generated_spec_path(name).write_text(json.dumps(record, indent=1), encoding="utf-8")
     return dest
+
+
+GAP_MAX_S = 3600.0
+
+
+@app.post("/api/gap")
+async def api_gap(request: Request) -> JSONResponse:
+    """The black a gap on V1 is made of (verdict 4, punch 9: a clip dropped at 10 s on an
+    empty V1 leaves 10 s of nothing before it, as Premiere's does). A generated black clip
+    of `seconds` (black picture, silence) — the M13 generated clip, so the monitor plays it
+    and the render cuts it like any other — returned with its clip record for the board's
+    clip list. Idempotent: the same length is the same file."""
+    body = await request.json()
+    try:
+        seconds = round(float(body.get("seconds")), 3)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "seconds must be a number")
+    if not (edits.MIN_GEN_S - 1e-9 <= seconds <= GAP_MAX_S):
+        raise HTTPException(400, f"a gap is {edits.MIN_GEN_S:g}–{GAP_MAX_S:g} s")
+    spec = {"kind": "black", "seconds": seconds, "color": None, "from_clip": None, "at": None}
+    try:
+        path = await asyncio.to_thread(materialise_generated, spec)
+    except RuntimeError as exc:
+        raise HTTPException(500, str(exc))
+    rec = generated_clips({path.name}).get(path.name)
+    return JSONResponse({"clip": path.name, "seconds": seconds, "record": rec})
 
 
 def _generated_spec(name: str) -> dict:
