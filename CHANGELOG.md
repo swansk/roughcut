@@ -9,6 +9,12 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Fixed
+- **`test_highlights_and_shadows_move_the_preview_pixels` waits for the redraw it measures.** Effect Controls redraws on the next animation frame (`effects.drawSoon` -> `grade.draw`, i.e. `settle()`, which turns the canvas on); the test probed in the same task and read the raw frame (PLAYBACK saw it fail 7 of 8 on the base). Instrumented: the preview is right 50 ms after the change (shadows +100 lifts the mean ~5 levels). Product unchanged; 5/5 now.
+
+### Docs
+- **LOOP.md: wave 6 merged.**
+
 ### Changed
 - **The Program monitor's "Run first pass" copy is gone, not hidden.** BINPOLISH hid it with CSS; firstpass.js no longer mounts it or watches #progEmpty, and the hiding rule is removed. test_firstpass_ui + workspace + ui_flow: 102 passed.
 ### Fixed

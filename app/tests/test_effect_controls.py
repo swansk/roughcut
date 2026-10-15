@@ -256,6 +256,9 @@ def test_highlights_and_shadows_move_the_preview_pixels(page):
     for key, value, sign in (("shadows", 100, 1), ("highlights", -100, -1),
                              ("blacks", 100, 1), ("whites", -100, -1)):
         assert page.evaluate(f"effects.set('{key}', {value})")
+        # Effect Controls redraws on the next animation frame (effects.drawSoon -> grade.draw,
+        # which settles the canvas on); probing in the same task raced it under load
+        page.evaluate(frame)
         moved = page.evaluate("grade.probe()")
         # the fixture is testsrc2: saturated bars, most channels at 0 or 255 where the tone
         # weights vanish, so the mean moves a few levels, not tens
@@ -266,6 +269,7 @@ def test_highlights_and_shadows_move_the_preview_pixels(page):
         assert abs(mean(back) - mean(base)) < 0.6, (key, base, back)
     # shadows move the darks more than the brights: the formula's weight 3x(1-x)^2
     page.evaluate("effects.set('shadows', 100)")
+    page.evaluate(frame)                         # the same next-frame redraw as above
     lifted = page.evaluate("grade.probe()")
     assert lifted[2] - base[2] > 0 and lifted[0] - base[0] > 0, (base, lifted)
 

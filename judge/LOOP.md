@@ -49,6 +49,12 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-15 22:00: **wave 6 merged**: KEYS2 `a07bedd`, KEYUI `47c3aac`, JOURNEY2 `7fa9ff2` (19 steps), PROPOSAL2 `0b71e70`,
+  RENDER2 `0e0ecc8`, BINPOLISH `37758e2` (+ lead `1d48347`), PLAYBACK `4af18fb` (+ lead: tone test waits for its redraw).
+  Wave-7 queue adds (PLAYBACK): a third video buffer so a short shot followed by a different file never holds a frame
+  (grade.js:493, fx.js:1323, effects.js:233 hard-code #pv0/#pv1); range-first proxies (the cut's in/out ranges before whole
+  clips: Program off the 360p preview in minutes, not ~37 min on Killington); perf gate marginal between load 10 and 12 (cap
+  the grade canvas's per-frame cost or lower the skip threshold). Full gate next, then judge 6.
 - 2026-10-15 20:30: JOURNEY2 `7fa9ff2`, PROPOSAL2 `0b71e70`, RENDER2 merged. Wave-7 queue adds: keys on a razor/split must
   shift on BOTH sides (client timeline.js `split()` AND server `roughcut/edits.py` ops) with a key at the cut; V2+ overlays
   honour their own `controls` (alpha-composite over V1, not blend to black); the size sample includes overlays; the 8-bit RGB
