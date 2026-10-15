@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 def test_listed_modules_are_served_with_their_type():
     c = TestClient(server.app)
-    for name in ("firstpass.js", "export.js", "firstpass.css", "export.css"):
+    for name in ("firstpass.js", "export.js", "firstpass.css", "export.css", "meters.js", "meters.css"):
         r = c.get(f"/modules/{name}")
         assert r.status_code == 200, name
         assert r.headers["content-type"].startswith(
@@ -28,6 +28,6 @@ def test_anything_off_the_list_is_404():
 
 def test_the_board_loads_its_modules():
     html = (Path(server.__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
-    for tag in ('src="/modules/firstpass.js"', 'src="/modules/export.js"',
+    for tag in ('src="/modules/firstpass.js"', 'src="/modules/export.js"', 'src="/modules/meters.js"', 'id="meters"',
                 'id="firstpass"', 'id="exportDialog"'):
         assert tag in html, tag

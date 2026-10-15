@@ -9,6 +9,10 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Added
+- **Redesign verdict 3: FAIL, most dimensions now 6-7** (`judge/verdict-3.md` on `28eca35`; 1:7 2:6 3:7 4:7 5:7 6:5 7:5 8:7 9:6 10:6 11:3 12:2). K1 resolved on evidence (for Karl to confirm); K2 open. Its top finding: 9 of Killington's 12 clips (rotated 180°) preview upside down while the export is upright. Punch list drives wave 3.
+- **Wave 3 scaffold:** a `#meters` slot beside the Program picture and `meters.js` / `meters.css` stubs served from `/modules/`. `test_modules_route.py` covers them; test_workspace + test_budget unchanged and green (54 passed).
+
 ### Docs
 - **LOOP.md: the journey's findings queued for wave 3** (VFR exports from off-grid edit points, grade-only shots not kept by a re-run, a trimmed block's dark thumbnail tail, a Status flicker).
 

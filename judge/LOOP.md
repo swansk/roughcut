@@ -49,6 +49,13 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-15 04:20: **VERDICT 3 = FAIL** (rev `28eca35`; 1:7 2:6 3:7 4:7 5:7 6:5 7:5 8:7 9:6 10:6 11:3 12:2 — 12 was
+  judged before JOURNEY merged). K1 resolved on evidence (Karl to confirm), K2 open. Rulings: FINISH letterbox floor
+  honest; its header-ellipsis exemption LENIENT (#flowNext reads "Next Make t…"); +3 words, measured budgets, EFFECTS
+  budget honest. **Wave 3 lanes** from the scaffold: ORIENT (punch 1), RENDER (3 + CFR export at the sequence rate +
+  Match Sequence preset + size estimate + test fps fix), PROGRAM (4), PASS (5 + grade-only = hand edit + proposal
+  ranges on the frame grid + carry `controls` through re-runs), TLAUDIO (6 + filmstrip tail + trims on the frame grid),
+  PICKS (7), HEADER (8 + 9 + remove the ellipsis exemption).
 - 2026-10-15 03:50: gate GREEN on `28eca35` (after the monitor-wait fix: two owners of #monWait, now reasons);
   judge 3 launched on it. JOURNEY merged (`tools/journey.py`, 13 steps, green, 12 mutation checks each red at the
   right step; a gate check in quick + full). Journey findings for wave 3: exports are VFR (r_frame_rate 120/1) because
