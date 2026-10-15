@@ -331,3 +331,220 @@ def test_without_proxies_the_monitors_wait_calmly_and_no_image_is_broken(live_se
         shutil.rmtree(work, ignore_errors=True)
         server.configure(project["edl"], project["footage"], project["sidecars"],
                          project["work"], proxies=False, assets=project["assets"])
+
+
+# ---------------------------------------------------------------- the finish (verdict 2, punch 9)
+#
+# "Looks like a shipped pro tool" (REDESIGN-GOAL dimension 9, scored 4 in verdict 2): no
+# truncated chrome ("not inde…", "Indexi… 9.", a tab cut to "Exp"), no browser-blue
+# underlined links, no ▶ parked on the picture, a Program picture that fills its panel,
+# and /open cards with the Project panel's posters.
+
+# Two jobs running in the app bar at once, the most it has to hold.
+FAKE_JOBS = [
+    {"id": "fake-index", "kind": "index", "state": "running", "label": "Indexing the footage",
+     "pct": 9.4, "eta_s": 400, "eta_source": "measured", "milestone": "heard 3/12", "detail": "",
+     "elapsed_s": 30},
+    {"id": "fake-render", "kind": "render", "state": "running", "label": "Rendering the quick look",
+     "pct": 86, "eta_s": 20, "eta_source": "measured", "milestone": "encoding", "detail": "",
+     "elapsed_s": 60},
+]
+
+# Every element under the app bar, a panel's tab strip or a Project row, and every
+# monitor readout, whose content is wider than its box. The app bar may shorten a text
+# that has no room (a job's name, Next's sentence) only on purpose: ellipsized, with the
+# whole text in a hover. Tabs, list cells and readouts may not shorten at all.
+OVERFLOW_JS = """() => {
+  const shown = (el) => { const s = getComputedStyle(el);
+    return el.getClientRects().length && s.display !== 'none' && s.visibility !== 'hidden'; };
+  const out = [];
+  const check = (sel, mayEllipsize) => {
+    for (const el of document.querySelectorAll(sel)) {
+      if (!shown(el) || el.clientWidth === 0 || el.scrollWidth <= el.clientWidth + 0.5) continue;
+      const titled = el.closest('[title]');
+      if (mayEllipsize && getComputedStyle(el).textOverflow === 'ellipsis' && titled && titled.title.trim()) continue;
+      out.push(`${sel} ${el.id || el.className}: "${el.textContent.trim().slice(0, 40)}" ${el.scrollWidth} > ${el.clientWidth}`);
+    }
+  };
+  check('header, header *', true);
+  check('.ws-tabs, .ws-tab, .ws-tab *', false);
+  check('.plist td, .plist th', false);
+  check('.transport, .transport *', false);
+  return out;
+}"""
+
+
+def _clips_with_one_unindexed(route):
+    """/api/clips as the server says it, with CLIP_C not yet indexed: the longest word
+    the Project panel's Status column has to fit."""
+    resp = route.fetch()
+    body = resp.json()
+    for c in body.get("clips", []):
+        if c["clip"] == "CLIP_C.MP4":
+            c["analysed"] = False
+    route.fulfill(response=resp, body=json.dumps(body), content_type="application/json")
+
+
+@pytest.mark.parametrize("size", VIEWPORTS, ids=lambda s: f"{s[0]}x{s[1]}")
+def test_no_chrome_is_cut_off(live_server, project, browser, size):
+    Path(project["edl"]).write_text(json.dumps(SEED, indent=1), encoding="utf-8")
+    ctx = browser.new_context(viewport={"width": size[0], "height": size[1]})
+    pg = ctx.new_page()
+    errors = []
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    pg.route("**/api/jobs", lambda r: r.fulfill(status=200, content_type="application/json",
+                                                 body=json.dumps({"jobs": FAKE_JOBS})))
+    pg.route("**/api/clips", _clips_with_one_unindexed)
+    pg.goto(live_server)
+    pg.wait_for_selector("#tl .blk", timeout=15000)
+    pg.wait_for_selector("#projList tr.row", timeout=15000)
+    pg.wait_for_function("document.querySelectorAll('#progress .job').length === 2", timeout=10000)
+    assert pg.locator("#progress").is_visible()
+    assert "not indexed" in pg.locator("#projList tr.row", has_text="CLIP_C").inner_text()
+    # badges on two of Effect Controls' neighbours, the widest that tab strip gets
+    pg.evaluate("dock.badge('fx', 3); dock.badge('ask', 1)")
+    pg.locator("#tl .blk").first.click()
+    pg.wait_for_timeout(800)
+    assert pg.evaluate(OVERFLOW_JS) == []
+    # every tab of every panel is wholly inside its strip
+    clipped = pg.evaluate("""() => [...document.querySelectorAll('.ws-tab')].filter(t => t.getClientRects().length)
+        .filter(t => { const s = t.closest('.ws-tabs').getBoundingClientRect(), r = t.getBoundingClientRect();
+                       return r.left < s.left - 0.5 || r.right > s.right + 0.5; })
+        .map(t => t.textContent.trim())""")
+    assert clipped == []
+    # the job's numbers are never the part that gives: "9% · ~7 min left", whole
+    nums = pg.locator("#progress .job[data-job=fake-index] .jnums")
+    assert nums.is_visible() and nums.inner_text().startswith("9%"), nums.inner_text()
+    # the app bar's children sit side by side in one row, none over another
+    kids = pg.evaluate("""() => [...document.querySelectorAll('header > *')].filter(e => e.getClientRects().length)
+        .map(e => { const r = e.getBoundingClientRect(); return [e.id || e.className, r.left, r.right, r.top, r.bottom]; })""")
+    for (a, b) in zip(kids, kids[1:]):
+        assert a[2] <= b[1] + 0.5, (a, b)
+    assert all(k[4] <= 50 for k in kids), kids
+    # icon-only buttons say what they do on hover
+    bare = pg.evaluate("""() => [...document.querySelectorAll('header button, .ws-panel button')]
+        .filter(b => b.getClientRects().length && (b.innerText || '').trim().length <= 2
+                     && !b.title && !b.getAttribute('aria-label'))
+        .map(b => b.id || b.className || b.outerHTML.slice(0, 60))""")
+    assert bare == []
+    assert errors == []
+    ctx.close()
+
+
+UA_LINK_JS = """() => [...document.querySelectorAll('a')].filter(a => a.getClientRects().length).map(a => {
+    const s = getComputedStyle(a);
+    return {text: a.textContent.trim().slice(0, 40), color: s.color, line: s.textDecorationLine}; })"""
+UA_LINK_COLOURS = {"rgb(0, 0, 238)", "rgb(85, 26, 139)", "rgb(0, 0, 255)", "rgb(238, 0, 0)"}
+
+
+def test_no_link_wears_the_browsers_blue_underline(live_server, project, browser):
+    """Verdict 2: "Open a footage folder", "The footage →" and "keep moments on the pass →"
+    were default blue underlined links. A link on the board is one of its own text buttons."""
+    seen = []
+    pg = _open(browser, live_server, project, (1440, 900))
+    for tool in ("project", "bin", "inspect", "fx", "sound", "ask", "out"):
+        pg.evaluate(f"dock.open('{tool}')")
+        pg.wait_for_timeout(250)
+        seen += pg.evaluate(UA_LINK_JS)
+    pg.context.close()
+    # the empty sequence's first action, and the empty bin's
+    pg = _open(browser, live_server, project, (1440, 900), seed={**SEED, "segments": []})
+    pg.wait_for_selector("#tlEmpty .empty", timeout=15000)
+    seen += pg.evaluate(UA_LINK_JS)
+    pg.evaluate("""(() => { const b = document.querySelector('#projList');
+        b.innerHTML = '<div class="pempty">No footage in this bin yet. <a href="/open">Open a footage folder</a></div>'; })()""")
+    seen += pg.evaluate(UA_LINK_JS)
+    assert any(s["text"] == "Open a footage folder" for s in seen)
+    for s in seen:
+        assert s["color"] not in UA_LINK_COLOURS, s
+        assert "underline" not in s["line"], s
+    pg.context.close()
+
+
+def test_the_program_picture_fills_its_panel_at_1440x900(live_server, project, browser):
+    """Rubric log 2026-10-15 (wave 2): the replacement for the dropped "Program >= 425 px
+    tall" check. In the default layout at 1440×900 the Program picture is at least 380 px
+    wide and the black letterbox above and below it is at most 30 % of its room (verdict 2
+    measured 389×219 in a 447 px tall room: 51 %). The ▶ is not parked on the picture: it
+    shows only while the pointer is over a paused picture."""
+    pg = _open(browser, live_server, project, (1440, 900))
+    m = pg.evaluate("""() => { const room = document.querySelector('#pProgram .screenbox').getBoundingClientRect(),
+        pic = document.querySelector('#pProgram .screen').getBoundingClientRect();
+        return {w: pic.width, h: pic.height, rw: room.width, rh: room.height,
+                left: pic.left - room.left, right: room.right - pic.right,
+                top: pic.top - room.top, bottom: room.bottom - pic.bottom}; }""")
+    assert m["w"] >= 380, m
+    assert 1 - m["h"] / m["rh"] <= 0.30, m
+    assert abs(m["left"] - m["right"]) <= 1 and abs(m["top"] - m["bottom"]) <= 1, m
+    # the Source monitor is the same size (Premiere's two monitors, side by side)
+    assert box(pg, "#pSource")["w"] == pytest.approx(box(pg, "#pProgram")["w"], abs=2)
+    # the ▶: there at rest for the pointer, invisible until it is over the picture
+    big = pg.locator("#bigPlay")
+    assert big.count() == 1 and not pg.evaluate("document.querySelector('#bigPlay').hidden")
+    pg.mouse.move(5, 5)
+    pg.wait_for_timeout(250)
+    assert pg.evaluate("getComputedStyle(document.querySelector('#bigPlay')).opacity") == "0"
+    pic = box(pg, "#pProgram .screen")
+    pg.mouse.move(pic["x"] + pic["w"] / 2, pic["y"] + pic["h"] / 2)
+    pg.wait_for_timeout(300)
+    assert pg.evaluate("getComputedStyle(document.querySelector('#bigPlay')).opacity") == "1"
+    # a layout the editor dragged still wins over the defaults
+    pg.evaluate("localStorage.setItem('roughcut.ws.layout', JSON.stringify({proj: 0.2, insp: 0.245, src: null, top: 0.6}))")
+    pg.reload()
+    pg.wait_for_selector("#tl .blk", timeout=15000)
+    assert box(pg, "#pProgram")["h"] > 480
+    assert pg.errors == []
+    pg.context.close()
+
+
+def test_open_cards_show_the_project_panels_posters(live_server, project, browser, tmp_path):
+    """Verdict 2: /open still showed blank stripes for thumbnails after 6 min while the
+    Project panel had every poster. On a fresh work dir (no proxies, no posters yet) every
+    /open card has a loaded picture within 10 s, at the Project panel's own URL."""
+    import server
+    work = tmp_path / "work"
+    work.mkdir()
+    server.configure(project["edl"], project["footage"], project["sidecars"], work,
+                     proxies=False, assets=project["assets"])
+    try:
+        ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+        pg = ctx.new_page()
+        errors = []
+        pg.on("pageerror", lambda e: errors.append(str(e)))
+        t0 = time.time()
+        pg.goto(live_server + "/open")
+        pg.wait_for_selector("#sessions .card", timeout=10000)
+        pg.wait_for_function("""[...document.querySelectorAll('#sessions .card')].every(c => {
+            const i = c.querySelector('.frame img'); return i && i.complete && i.naturalWidth > 0; })""",
+                             timeout=max(1000, int((10 - (time.time() - t0)) * 1000)))
+        cards = pg.evaluate("""() => [...document.querySelectorAll('#sessions .card')].map(c => [c.dataset.clip,
+            (c.querySelector('.frame img') || {}).getAttribute ? c.querySelector('.frame img').getAttribute('src') : null,
+            c.querySelectorAll('.ph').length])""")
+        assert len(cards) == 3, cards
+        for clip, src, ph in cards:
+            assert src == f"/media/poster/{clip.rsplit('.', 1)[0]}.jpg?t=0.00" and ph == 0, (clip, src, ph)
+        # the same URL the Project panel's icon view asks for
+        board = ctx.new_page()
+        board.goto(live_server)
+        board.wait_for_selector("#projList [data-clip]", timeout=15000)
+        board.locator("#projView button[data-view=icon]").click()
+        icons = board.evaluate("[...document.querySelectorAll('#projList .picon img')].map(i => i.getAttribute('src'))")
+        assert sorted(icons) == sorted(src for _c, src, _p in cards)
+        assert errors == []
+        ctx.close()
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        server.configure(project["edl"], project["footage"], project["sidecars"],
+                         project["work"], proxies=False, assets=project["assets"])
+
+
+def test_the_workspace_styles_are_a_module_not_an_inline_block(live_server):
+    """Punch 9: the workspace CSS moved out of index.html to /modules/workspace.css."""
+    import urllib.request
+    html = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(encoding="utf-8")
+    assert "<style" not in html
+    assert 'href="/modules/workspace.css"' in html
+    with urllib.request.urlopen(live_server + "/modules/workspace.css") as r:
+        assert r.headers["content-type"].startswith("text/css")
+        css = r.read().decode("utf-8")
+    assert "#ws {" in css and ".ws-tab" in css
