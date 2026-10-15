@@ -645,9 +645,13 @@
    * range its "+ add" puts in). null when there is none, or its clip is not usable. */
   function sourceShot() {
     const clips = (H.clips && H.clips()) || {};
-    const ok = (clip) => !!clip && !!clips[clip];
+    // any clip in the folder is usable, heard or not: the dock lists one the index has
+    // not heard yet in the board's clips (empty transcript) — verdict 2, punch 7
+    const ok = (clip) => !!clip && (!!clips[clip]
+      || (typeof window.rcEnsureClip === 'function' && !!window.rcEnsureClip(clip) && !!clips[clip]));
     const src = window.rcSource;
     if (src && src.clip) {
+      ok(src.clip);
       const c = clips[src.clip];
       const dur = (c && c.duration) || 0;
       const a = Number.isFinite(Number(src.inPoint)) && src.inPoint != null ? Number(src.inPoint) : 0;

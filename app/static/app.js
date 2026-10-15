@@ -1390,6 +1390,13 @@ function syncPlayer() {
   // A first cut's proposal plays in the monitor too, before there is a cut.
   const progEmpty = $('#progEmpty');
   if (progEmpty) progEmpty.hidden = !!(segs.length || pendingPlan);
+  // the empty Program says how to fill it, in Premiere's words (verdict 2, punch 8)
+  if (progEmpty && !progEmpty.hidden && !progEmpty.dataset.said) {
+    progEmpty.dataset.said = '1';
+    // only the words: firstpass.js keeps its Run first pass button in here too
+    const words = [...progEmpty.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim());
+    if (words) words.textContent = 'the sequence is empty · drag a clip to the Timeline or press ,';
+  }
   if (player.idx >= segs.length) { pauseCut(); player.idx = -1; }
   if (player.playing && player.idx >= 0) {
     const seg = segs[player.idx];
@@ -1481,14 +1488,19 @@ function emptyState() {
   const el = document.createElement('div');
   el.className = 'empty';
   const analysed = S ? S.analysed : 0;
+  // Footage goes in before the AI has heard it (verdict 2, punch 8): the first action
+  // is the editor's — a drag or `,`. "Run first pass" beside it is lane FPUI's button,
+  // which firstpass.js puts into this box (`.fp-empty`) after every render.
+  const lead = 'Drag a clip here or press <kbd>,</kbd>';
   if (!analysed) {
-    el.innerHTML = `<h3>Nothing indexed yet</h3><div><a href="/open">The footage →</a></div>`;
+    el.innerHTML = `<h3>${lead}</h3>`;
     return el;
   }
   // One sentence about the film (INTAKE M16 I16.4): the EDL's story — the Ask tool's
   // field, /open's, this one — and ONE priced button. With keeps it is Cut from the bin
   // (heroes fixed, keeps as bounds); without, the first cut from the index.
   el.innerHTML = `<h3>No cut yet</h3>
+    <div class="hint" style="margin-bottom:8px">${lead}</div>
     <label class="ask-q" for="firstNote">What is this film about?</label>
     <textarea id="firstNote" style="min-height:60px"
       placeholder="optional — a sentence is enough"></textarea>
@@ -1497,10 +1509,32 @@ function emptyState() {
       <span class="hint" id="firstAims">${escapeHtml(aimsFor())}</span>
     </div>
     <div class="hint" id="firstState" style="margin-top:8px"></div>`;
+  // The first pass makes a first cut too: while one runs, this button waits rather than
+  // start an overlapping cut (FPUI's `rcFirstPass.state()`; re-checked each second while
+  // the empty state is on screen, since a run starts and ends without a render).
+  const fc = el.querySelector('#firstCut');
+  const gate = () => {
+    const fp = window.rcFirstPass && typeof window.rcFirstPass.state === 'function'
+      ? window.rcFirstPass.state() : null;
+    const busy = !!fp && fp.state === 'running';
+    if (fc.dataset.fpBusy !== String(busy)) {
+      fc.dataset.fpBusy = String(busy);
+      fc.disabled = busy;
+      fc.title = busy ? 'the first pass is running — it makes a first cut too' : '';
+    }
+    return busy;
+  };
+  gate();
+  let ticks = 0;
+  const gateTimer = setInterval(() => {
+    if (!el.isConnected && ticks++ > 0) clearInterval(gateTimer);   // rebuilt or filled
+    else gate();
+  }, 1000);
   const box = el.querySelector('#firstNote');
   box.value = $('#story').value;
   box.oninput = () => { $('#story').value = box.value; touch(); };
   el.querySelector('#firstCut').onclick = () => {
+    if (gate()) return undefined;
     const opts = { button: el.querySelector('#firstCut'), state: el.querySelector('#firstState') };
     return keepsUsable().length ? cutFromBin(opts) : ask({ ...opts, note: '' });
   };

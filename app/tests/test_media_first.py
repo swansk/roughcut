@@ -255,7 +255,7 @@ def test_the_clip_the_human_opened_gets_its_proxy_next(fresh, monkeypatch):
 def test_the_background_walk_makes_posters_and_previews_when_proxies_are_on(
         media_bin, tmp_path, monkeypatch):
     """With proxies enabled (how `main()` runs) the bin is walked at open: a poster at
-    0 s for every clip, then a preview for every clip that needs one. Proxies are
+    the card frame (`POSTER_AT_S`, 1 s in: many clips open on black) for every clip, then a preview for every clip that needs one. Proxies are
     stubbed out here so only the walk is measured."""
     import server
     monkeypatch.setattr(server, "ensure_proxies", lambda clips, progress=None: None)
@@ -266,7 +266,7 @@ def test_the_background_walk_makes_posters_and_previews_when_proxies_are_on(
                      proxies=True, orient="none", visual=work / "no-visual")
     try:
         deadline = time.monotonic() + 30
-        want = {f"{s}@{0:09.2f}.jpg" for s in media_bin["stems"]}
+        want = {f"{s}@{server.POSTER_AT_S:09.2f}.jpg" for s in media_bin["stems"]}
         while time.monotonic() < deadline:
             have = {p.name for p in Path(server.STATE["posters"]).glob("*.jpg")}
             if want <= have and all(server.preview_path(s).exists()

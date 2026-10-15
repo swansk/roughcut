@@ -436,7 +436,8 @@ def test_an_empty_timeline_offers_a_first_cut_and_gets_one(page):
         # one sentence (INTAKE M16 I16.4): the empty state asks it in the same words as
         # the Ask tool, and both are the EDL's story; ONE priced button, Next's to mark
         assert "What is this film about?" in page.locator(".empty").inner_text()
-        assert page.locator(".empty button").count() == 1
+        # (lane FPUI's "Run first pass", `.fp-empty-btn`, sits beside it in the box)
+        assert page.locator(".empty button:not(.fp-empty-btn)").count() == 1
         assert page.locator("#firstCut").get_attribute("data-next-for") == "cut"
         assert "aims for" in page.locator("#firstAims").inner_text()
 
@@ -1771,7 +1772,7 @@ def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
         page.keyboard.press("x")
         page.wait_for_selector("#tlEmpty .empty")
         assert not page.locator("#askPanel").is_visible()
-        assert page.locator(".empty button").count() == 1
+        assert page.locator(".empty button:not(.fp-empty-btn)").count() == 1
         assert_priced(page, "#firstCut", "Make the first cut from your 1 keep", "bin")
         page.locator("#firstCut").click()
         page.wait_for_selector("#proposal:visible", timeout=30000)

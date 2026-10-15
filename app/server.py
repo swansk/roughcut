@@ -724,6 +724,12 @@ def project_payload() -> dict:
     # server made on an apply, listed like any other clip so the monitor plays them
     # and an effect can be designed on one.
     clips.update(generated_clips(referenced))
+    # A footage clip the editor put in the cut before the index heard it (redesign
+    # wave 2, INGEST): listed with the free facts and an empty transcript, so the
+    # monitor plays it and the Ask keeps it; the transcript arrives with the sidecar.
+    for clip in sorted(referenced - clips.keys()):
+        if not edits.is_generated(clip) and (STATE["footage"] / clip).is_file():
+            clips[clip] = unheard_clip(clip, used=True)
     return {
         "title": edl.get("title", ""),
         "variant": edl.get("variant", ""),
@@ -4304,14 +4310,151 @@ def bin_telemetry() -> dict[str, dict]:
     return out
 
 
+# Cold land (redesign wave 2, INGEST): /api/clips is the Project panel's first paint, so
+# it never waits on a pass and never runs its probes one after another. Each clip's
+# free facts (length, capture time, telemetry, frame rate, size, codec) are probed once
+# on a small pool, started at configure(); a request waits at most CLIP_FACTS_WAIT_S for
+# the ones still running and answers with the rest as null and `probing` > 0, and the
+# board asks again a second later.
+CLIP_FACTS_WAIT_S = 1.0
+CLIP_FACTS_WORKERS = 4
+CLIP_FACTS: dict = {"lock": threading.Lock(), "pool": None, "running": {}}
+
+
+def _probe_clip_facts(clip: str, footage: Path) -> dict | None:
+    """Every free fact of one clip, with as few ffprobes as the caches allow: one for
+    length + creation time + data streams (seeding clip_duration / capture_time /
+    has_telemetry's caches), then MEDIA's cached `media_facts` for the picture."""
+    if STATE.get("footage") != footage:
+        return None                      # re-pointed at another bin meanwhile
+    src = footage / clip
+    if not src.is_file():
+        return None
+    durations = STATE.setdefault("durations", {})
+    capture = STATE.setdefault("capture", {})
+    tele = STATE.setdefault("telemetry", {})
+    if clip not in durations or clip not in capture or clip not in tele:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries",
+             "format=duration:format_tags=creation_time:stream=codec_type,codec_tag_string",
+             "-of", "json", str(src)], capture_output=True, text=True)
+        try:
+            info = json.loads(r.stdout or "{}") if r.returncode == 0 else {}
+        except ValueError:
+            info = {}
+        fmt = info.get("format") or {}
+        if STATE.get("footage") != footage:
+            return None
+        if clip not in durations:
+            d = load_sidecar(clip).get("duration_s")
+            if d is None:
+                try:
+                    d = round(float(fmt.get("duration")), 2)
+                except (TypeError, ValueError):
+                    d = None
+            durations[clip] = d
+        if clip not in capture:
+            when = None
+            raw = str((fmt.get("tags") or {}).get("creation_time") or "")
+            if raw:
+                try:
+                    when = datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+                except ValueError:
+                    when = None
+            capture[clip] = when if when is not None else src.stat().st_mtime
+        if clip not in tele and info:
+            tele[clip] = any(s.get("codec_tag_string") == "gpmd"
+                             for s in info.get("streams") or [])
+    f = media_facts(src) or {}
+    facts = {"fps": round(f["fps"], 3) if f.get("fps") else None,
+             "width": f.get("width") or None, "height": f.get("height") or None,
+             "codec": f.get("vcodec")}
+    if STATE.get("footage") == footage:
+        STATE.setdefault("clip_facts", {})[clip] = facts
+    return facts
+
+
+def warm_clip_facts(clips: list[str]) -> list:
+    """Start probing every clip whose facts are not known yet; the futures still
+    running. Called at configure() (the boot path) and by each /api/clips."""
+    from concurrent.futures import ThreadPoolExecutor
+    known = STATE.setdefault("clip_facts", {})
+    footage = STATE["footage"]
+    out = []
+    with CLIP_FACTS["lock"]:
+        if CLIP_FACTS["pool"] is None:
+            CLIP_FACTS["pool"] = ThreadPoolExecutor(CLIP_FACTS_WORKERS,
+                                                    thread_name_prefix="clipfacts")
+        running = CLIP_FACTS["running"]
+        fresh = []
+        for clip in clips:
+            if clip in known:
+                continue
+            key = (str(footage), clip)
+            fut = running.get(key)
+            if fut is None or (fut.done() and clip not in known):
+                fut = running[key] = CLIP_FACTS["pool"].submit(_probe_clip_facts, clip, footage)
+                fresh.append(clip)
+            if not fut.done():
+                out.append(fut)
+        # then the colour tags /api/colour reads (one ffprobe a clip, sequential there):
+        # queued behind every clip's facts, so the Project panel is never kept waiting
+        for clip in fresh:
+            CLIP_FACTS["pool"].submit(_warm_colour_probe, clip, footage)
+    return out
+
+
+def _warm_colour_probe(clip: str, footage: Path) -> None:
+    if STATE.get("footage") == footage:
+        clip_probe(clip)
+
+
+# A clip's card picture (the Project panel's and /open's): 1 s in, not the first frame,
+# which is black on many camera clips (Killington CLIP_12 is black for its first three
+# frames). No decode to find it: a fixed offset the background walk pre-builds.
+POSTER_AT_S = 1.0
+
+
+def poster_time(clip: str) -> float:
+    """Where a clip's card frame is taken: POSTER_AT_S, or half a shorter clip; 0 while
+    its length is not known yet (cached lengths only — this never probes)."""
+    d = STATE.get("durations", {}).get(clip)
+    if not d:
+        return 0.0
+    return round(min(POSTER_AT_S, float(d) / 2), 2)
+
+
+def unheard_clip(clip: str, used: bool = False) -> dict:
+    """A footage clip as `project_payload` lists one, before its sound is heard: the
+    free facts, no transcript, no candidates. `heard: False` says which."""
+    stem = Path(clip).stem
+    return {
+        "clip": clip, "stem": stem, "duration": clip_duration(clip),
+        "proxy": f"/media/proxy/{stem}.mp4", "poster": f"/media/poster/{stem}.jpg",
+        "transcript": [], "visual": load_visual(clip), "captured": capture_time(clip),
+        "candidates": [],
+        "summary": {"speech_fraction": None, "wind_dominant_fraction": None,
+                    "integrated_lufs": None, "audio_usable": None},
+        "used": used, "heard": False,
+    }
+
+
 @app.get("/api/clips")
 def api_clips() -> JSONResponse:
     """The folder as a contact sheet would show it (design §2): every clip with the
     free facts — length, when it was shot and which session that makes it, what exists
-    for it on disk, whether it carries telemetry — and the journal's word on it when
-    the bin has been indexed. Nothing here costs a model call."""
+    for it on disk, whether it carries telemetry, its frame rate, size and codec — and
+    the journal's word on it when the bin has been indexed. Nothing here costs a model
+    call, and nothing waits on the index: a clip still being probed after
+    CLIP_FACTS_WAIT_S comes back with null facts (`probing` counts them)."""
+    from concurrent.futures import wait as _wait
     clips = footage_clips()
-    stamped = sorted(((capture_time(c) or 0.0), c) for c in clips)
+    pending = warm_clip_facts(clips)
+    if pending:
+        _wait(pending, timeout=CLIP_FACTS_WAIT_S)
+    known = STATE.setdefault("clip_facts", {})
+    ready = {c for c in clips if c in known}
+    stamped = sorted(((capture_time(c) or 0.0), c) for c in clips if c in ready)
     session, prev, session_of = 0, None, {}
     for when, clip in stamped:
         if prev is None or when - prev > SESSION_GAP_S:
@@ -4327,21 +4470,26 @@ def api_clips() -> JSONResponse:
     released = set(released_clips())
     # The junk band I5.1 wanted on the wire: the proposal's one word per clip.
     junk_of = {r["clip"]: r["state"] for r in junk_rows()}
+    heard, looked, closed = analysed_stems(), visual_stems(), fine_stems()
     out = []
     for clip in clips:
         stem = Path(clip).stem
         rec = j.clips.get(clip) if j else None
+        ok = clip in ready
+        f = known.get(clip) or {}
         out.append({
             "clip": clip, "stem": stem,
-            "duration": clip_duration(clip),
-            "captured": capture_time(clip),
+            "duration": clip_duration(clip) if ok else None,
+            "captured": capture_time(clip) if ok else None,
             "session": session_of.get(clip),
             "proxy": (STATE["proxy_dir"] / f"{stem}.mp4").exists(),
-            "poster": f"/media/poster/{stem}.jpg?t=0.00",
-            "analysed": stem in analysed_stems(),
-            "looked": stem in visual_stems(),
-            "closed": stem in fine_stems(),
-            "telemetry": has_telemetry(clip),
+            "poster": f"/media/poster/{stem}.jpg?t={poster_time(clip) if ok else 0.0:.2f}",
+            "analysed": stem in heard,
+            "looked": stem in looked,
+            "closed": stem in closed,
+            "telemetry": has_telemetry(clip) if ok else None,
+            "fps": f.get("fps"), "width": f.get("width"), "height": f.get("height"),
+            "codec": f.get("codec"),
             "released": clip in released,
             "junk": junk_of.get(clip, "clean"),
             "journal": None if rec is None else {
@@ -4353,7 +4501,8 @@ def api_clips() -> JSONResponse:
                          "footage": str(STATE["footage"]),
                          "total_s": round(sum(c["duration"] or 0.0 for c in out), 2),
                          "journal": journal_path().exists(),
-                         "paused_priced": bool(j and j.paused_priced)})
+                         "paused_priced": bool(j and j.paused_priced),
+                         "probing": len(clips) - len(ready)})
 
 
 @app.post("/api/index")
@@ -5790,7 +5939,8 @@ def _media_walk() -> None:
             if STATE["footage"] != footage:
                 return                      # re-pointed at another bin: its own walk
             try:
-                ensure_poster(Path(clip).stem, 0.0, slots=WALK_POSTER_SLOTS)
+                clip_duration(clip)         # cached: the card frame is 1 s in
+                ensure_poster(Path(clip).stem, poster_time(clip), slots=WALK_POSTER_SLOTS)
             except RuntimeError as exc:
                 print(f"  !! {exc}", flush=True)
 
@@ -7677,8 +7827,11 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
         REVIEW_STATE.clear()
     # Per-clip caches are keyed by clip name, and two bins can share a GoPro stem: a
     # re-point must not serve the last bin's durations or capture times for this one.
-    for key in ("capture", "durations", "telemetry", "render_res_cache"):
+    for key in ("capture", "durations", "telemetry", "render_res_cache", "clip_facts"):
         STATE.pop(key, None)
+    # The Project panel's first /api/clips finds the free facts probed or probing
+    # (redesign wave 2, INGEST): the probes start now, in the background.
+    warm_clip_facts(footage_clips())
     STATE["proxies_enabled"] = proxies
     remember_project(footage, edl_path)
     STATE["asks"].mkdir(parents=True, exist_ok=True)
