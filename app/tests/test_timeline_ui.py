@@ -326,10 +326,12 @@ def test_move_reorders_and_the_ids_travel_with_the_shots(page, project):
     assert ids(page) == [b, a]
     assert page.evaluate("segs.map(s => s.clip)") == ["CLIP_B.MP4", "CLIP_A.MP4"]
     assert block_ids(page) == [b, a]
-    # a block is named by the first words spoken in it, never the camera's file name
-    assert page.locator("#tl .blk").first.locator(".name").inner_text() == "hello there"
-    # whole words, at most two lines: on a ~45 px block "goodbye" is not "goodb / ye",
-    # and "how are you" is not stacked three high
+    # a block is named by its clip, as in Premiere (verdict 2 punch 3; it was the first
+    # words spoken, INTAKE M16); the words are the hover's first line
+    assert page.locator("#tl .blk").first.locator(".name").inner_text() == "CLIP_B"
+    assert "hello there" in page.locator("#tl .blk").first.get_attribute("title")
+    # one line, never a word broken across two: the label is a single ellipsized line
+    # along the top of the block, as Premiere draws a clip's name (verdict 2 punch 3)
     lines = page.evaluate("""(texts) => texts.map((t) => {
         const b = document.querySelector('#tl .blk').cloneNode(true);
         b.style.width = '45px'; b.classList.add('narrow');
@@ -340,7 +342,7 @@ def test_move_reorders_and_the_ids_travel_with_the_shots(page, project):
         const shown = [...tops].filter((y) => y < n.getBoundingClientRect().bottom - 1).length;
         b.remove();
         return shown; })""", ["goodbye", "how are you"])
-    assert lines == [1, 2], lines
+    assert lines == [1, 1], lines
     assert "CLIP_B" in page.locator("#tl .blk").first.get_attribute("title")
     wait_saved(page)
     assert [(s["id"], s["clip"]) for s in on_disk(project)] == [

@@ -10,9 +10,6 @@
   user-select: none;
 }
 #tl.tl-empty { display: none; }
-/* a short window gets a shorter lane, so the monitor and its timeline still fit under
-   the sticky header when a play from far down the list brings the monitor back */
-@media (max-height: 560px) { #tl { --tl-lane: 48px; } }
 #tl .tl-view {
   position: relative;
   height: calc(var(--tl-ruler) + var(--tl-lane) + 10px);
@@ -31,14 +28,14 @@
 #tl .tick { position: absolute; bottom: 0; width: 1px; height: 5px; background: #33333f;
             pointer-events: none; }
 #tl .tick.major { height: 9px; background: #55556a; }
-#tl .tick.major label { position: absolute; left: 3px; bottom: 7px; font-size: 10px;
+#tl .tick.major label { position: absolute; left: 3px; bottom: 7px; font-size: 11px;
                         color: var(--dim); white-space: nowrap;
                         font-variant-numeric: tabular-nums; }
 #tl .tl-end { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed #3e3e4c;
               pointer-events: none; z-index: 2; }
 /* the film's total, on the lane row just past the end line — never on top of a tick label */
 #tl .tl-end label { position: absolute; left: 5px; top: calc(var(--tl-ruler) + 8px);
-                    font-size: 10px; color: var(--dim); white-space: nowrap;
+                    font-size: 11px; color: var(--dim); white-space: nowrap;
                     font-variant-numeric: tabular-nums; }
 
 /* V1: shot blocks positioned by film time */
@@ -192,9 +189,7 @@
    the view by --tl-below (ghost, A1, bin); both are set on #tl by the module, 0 until a
    lane has something to show. The lanes' own tops are calc()s of the same variables. */
 #tl { --tl-above: 0px; --tl-below: 0px; }
-#tl .tl-view { height: calc(var(--tl-ruler) + var(--tl-lane) + 10px + var(--tl-above) + var(--tl-below)); }
-#tl .tl-lane[data-lane=V1] { top: calc(var(--tl-ruler) + 5px + var(--tl-above)); }
-#tl .tl-end label { top: calc(var(--tl-ruler) + 8px + var(--tl-above)); }
+#tl .tl-end label { top: calc(var(--tl-v1top, 30px) + 3px); }
 #tl .tl-xlane { position: absolute; left: 0; right: 0; z-index: 1; }
 #tl .tl-xlane[hidden] { display: none; }
 /* a lane's label sticks to the viewport's left edge as the canvas scrolls under it */
@@ -212,17 +207,23 @@
                             border: 1px solid var(--line); cursor: pointer; }
 #tl .tl-xlane .lbl button.on { color: var(--text); border-color: var(--accent); }
 
-/* A1: the bed bar, its fades as ramps, a dip under every speech region, the level curve */
-#tl .tl-xlane[data-lane=A1] { cursor: pointer; background: rgba(110, 168, 254, .04); border-radius: 3px; }
-#tl .tl-xlane[data-lane=A1] .bed { position: absolute; top: 3px; bottom: 3px; border-radius: 3px;
-                                   background: hsl(210 45% 32%); opacity: .55; }
-#tl .tl-xlane[data-lane=A1] .duck { position: absolute; top: 3px; background: #0d0d11;
-                                    border-bottom: 1px solid var(--accent); box-sizing: border-box; }
-#tl .tl-xlane[data-lane=A1] .fade { position: absolute; top: 3px; bottom: 3px; background: #0d0d11; opacity: .8; }
-#tl .tl-xlane[data-lane=A1] .fade.in { clip-path: polygon(0 0, 100% 0, 0 100%); }
-#tl .tl-xlane[data-lane=A1] .fade.out { clip-path: polygon(0 0, 100% 0, 100% 100%); }
-#tl .tl-xlane[data-lane=A1] .curve { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
-#tl .tl-xlane[data-lane=A1] .curve polyline { fill: none; stroke: var(--accent); stroke-width: 1.2; opacity: .9; }
+/* A2: the music bed — its bar, the fades as ramps, a dip under every speech region, the
+   level curve (timeline-lanes.js draws inside the foundation's A2 row) */
+#tl .tl-track[data-track=A2] .bed { position: absolute; top: 2px; bottom: 2px; border-radius: 3px;
+                                    background: hsl(150 30% 26%); border: 1px solid hsl(150 30% 38%);
+                                    box-sizing: border-box; cursor: pointer; overflow: hidden; }
+#tl .tl-track[data-track=A2] .bedname { position: sticky; left: 4px; display: inline-block; font-size: 11px;
+                                        line-height: 14px; padding: 1px 5px; color: var(--text);
+                                        white-space: nowrap; z-index: 1; }
+#tl .tl-track[data-track=A2] .duck { position: absolute; top: 2px; background: #0d0d11; opacity: .55;
+                                     border-bottom: 1px solid var(--accent); box-sizing: border-box;
+                                     pointer-events: none; }
+#tl .tl-track[data-track=A2] .fade { position: absolute; top: 2px; bottom: 2px; background: #0d0d11; opacity: .8;
+                                     pointer-events: none; }
+#tl .tl-track[data-track=A2] .fade.in { clip-path: polygon(0 0, 100% 0, 0 100%); }
+#tl .tl-track[data-track=A2] .fade.out { clip-path: polygon(0 0, 100% 0, 100% 100%); }
+#tl .tl-track[data-track=A2] .curve { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
+#tl .tl-track[data-track=A2] .curve polyline { fill: none; stroke: var(--accent); stroke-width: 1.2; opacity: .9; }
 
 /* the proposal ghost lane, under V1, aligned by the proposal's film time */
 #tl .tl-xlane[data-lane=ghost] .ghost { position: absolute; top: 0; bottom: 0; box-sizing: border-box;
@@ -236,7 +237,7 @@
 #tl .tl-xlane[data-lane=ghost] .ghost.trimmed { border-bottom: 2px solid var(--warn); }
 #tl .tl-xlane[data-lane=ghost] .ghost:hover { opacity: 1; }
 /* over V1: a removed shot wears a red strike; moved shots get an arrow old → new */
-#tl .tl-over { position: absolute; left: 0; right: 0; height: var(--tl-lane); pointer-events: none; z-index: 3; }
+#tl .tl-over { position: absolute; left: 0; right: 0; height: var(--tl-v1h, var(--tl-lane)); pointer-events: none; z-index: 3; }
 #tl .tl-over .strike { position: absolute; top: 0; bottom: 0; box-sizing: border-box; border-radius: 4px;
                        border: 1px solid var(--bad);
                        background: linear-gradient(to top right, transparent 48%, var(--bad) 48%,
@@ -294,8 +295,8 @@
                                background: rgba(255, 255, 255, .22); border: 1px solid rgba(255, 255, 255, .5); }
 /* the ghost: the first shot an extend would push, drawn GHOST_S later, over the lane;
    `.end` when nothing follows the shot — the film's end moving instead */
-#tl .tl-edge-ghost { position: absolute; top: calc(var(--tl-ruler) + 5px + var(--tl-above));
-                     height: var(--tl-lane); box-sizing: border-box; border-radius: 4px;
+#tl .tl-edge-ghost { position: absolute; top: var(--tl-v1top, 30px);
+                     height: var(--tl-v1h, var(--tl-lane)); box-sizing: border-box; border-radius: 4px;
                      border: 1px dashed hsl(var(--hue) 45% 65% / .75);
                      background: hsl(var(--hue) 45% 58% / .1); pointer-events: none; z-index: 4; }
 #tl .tl-edge-ghost.end { border-style: dotted; }
@@ -303,7 +304,8 @@
 /* the one-line hint under the timeline: an overlay in the gap the monitor card leaves under
    #tl (its 10 px padding, its 12 px margin), never a line of its own — the monitor and its
    timeline fitting a short window is a budget, and a reserved line broke it at 380 px */
-#tl .tl-hint { position: absolute; left: 0; right: 0; top: calc(100% + 11px); height: 12px;
+#tl .tl-hint { position: absolute; left: var(--tl-side); right: 0; bottom: 14px; height: 14px;
+               background: rgba(13, 13, 17, .9); padding: 1px 6px; box-sizing: border-box;
                font-size: 10px; line-height: 12px; color: var(--dim); white-space: nowrap;
                overflow: hidden; text-overflow: ellipsis; visibility: hidden; pointer-events: none;
                z-index: 8; }
@@ -313,18 +315,23 @@
 /* ---- Premiere keymap, markers, timecode (REDESIGN-GOAL dimension 5) */
 /* The side column: Premiere's top-left corner of the Timeline panel — the playhead's
    timecode over the tool in hand. The view moves right to make room; nothing grows. */
-#tl { --tl-side: 104px; }
+#tl { --tl-side: 150px; }
 #tl .tl-view { margin-left: var(--tl-side); }
-#tl .tl-side { position: absolute; left: 0; top: 0; width: calc(var(--tl-side) - 6px);
-               display: flex; flex-direction: column; gap: 6px; z-index: 9; }
-#tl .tl-tc { font: 600 13px/22px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+#tl .tl-side { position: absolute; left: 0; top: 0; bottom: 0; width: calc(var(--tl-side) - 2px);
+               z-index: 9; overflow: hidden; }
+/* the corner over the headers: the playhead's timecode and the tool in hand, one row the
+   ruler's height, as Premiere's Timeline panel has it */
+#tl .tl-corner { position: relative; height: var(--tl-ruler); display: flex; align-items: center;
+                 gap: 6px; padding: 0 4px 0 6px; box-sizing: border-box; z-index: 2;
+                 background: #131318; border: 1px solid var(--line); border-right: 0; border-radius: 6px 0 0 0; }
+#tl .tl-tc { font: 600 12px/22px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
              font-variant-numeric: tabular-nums; color: var(--accent); letter-spacing: .02em;
-             white-space: nowrap; height: 22px; }
-#tl .tl-toolbtn { width: 30px; height: 26px; padding: 0; font-size: 15px; line-height: 1;
+             white-space: nowrap; height: 22px; flex: 1 1 auto; overflow: hidden; }
+#tl .tl-toolbtn { width: 26px; height: 20px; padding: 0; font-size: 12px; line-height: 1; flex: none;
                   border-radius: 4px; cursor: pointer; background: #1c1c24; color: var(--text);
                   border: 1px solid var(--line); }
 #tl .tl-toolbtn:hover { border-color: var(--accent); }
-#tl .tl-toolmenu { position: absolute; left: 0; top: 54px; min-width: 230px; padding: 4px;
+#tl .tl-toolmenu { position: absolute; left: 0; top: calc(var(--tl-ruler) + 2px); min-width: 230px; padding: 4px;
                    background: #16161c; border: 1px solid var(--line); border-radius: 6px;
                    box-shadow: 0 6px 24px rgba(0, 0, 0, .5); }
 #tl .tl-toolmenu[hidden] { display: none; }
@@ -350,3 +357,101 @@
                           background: rgba(110, 168, 254, .16); box-sizing: border-box; }
 #tl .tl-ruler .tl-inout.has-in { border-left: 2px solid var(--accent); }
 #tl .tl-ruler .tl-inout.has-out { border-right: 2px solid var(--accent); }
+
+/* ---- the tracks: V2 V1 A1 A2 and their headers (verdict 2, punch 3; roughcut/tracks.py) */
+/* #tl fills the Timeline panel and the rows fill #tl: the foundation's layoutTracks sizes
+   every row (and its header) from the view's height, so a taller panel is taller tracks. */
+#pTimeline #tlBody { padding: 0; overflow: hidden; }
+#pTimeline #tl { height: 100%; margin: 0; }
+#tl .tl-view { height: 100%; overflow-y: auto; box-sizing: border-box; border-radius: 0 6px 6px 0; }
+#tl .tl-canvas { height: auto; min-height: 100%; }
+#tl .tl-ruler { height: var(--tl-ruler); z-index: 6; position: sticky; top: 0; }
+#tl .tl-lane[data-lane=V1], #tl .tl-track { position: absolute; left: 0; right: 0; box-sizing: border-box;
+                                            background: #121217; }
+#tl .tl-track { z-index: 1; }
+/* a row's own shade, as Premiere separates its tracks; the row under the heads is the
+   view's background between them */
+#tl .tl-track[data-track=A1], #tl .tl-track[data-track=A2] { background: #101215; }
+#tl .tl-avdiv { position: absolute; left: 0; right: 0; height: 2px; background: #2a2a34; pointer-events: none; }
+#tl .tl-track .ablk, #tl .tl-track .oblk { top: 1px; bottom: 1px; }
+#tl .tl-lane[data-lane=V1].hidden-out .blk, #tl .tl-track[data-track=V2].hidden-out .oblk { opacity: .3; }
+#tl .tl-lane[data-lane=V1].locked, #tl .tl-track.locked {
+  background-image: repeating-linear-gradient(-45deg, transparent 0 6px, rgba(255, 255, 255, .035) 6px 8px); }
+#tl .tl-track.muted .ablk, #tl .tl-track.muted .bed { opacity: .35; filter: saturate(.3); }
+/* the clip's name, as in Premiere; the transcript is the hover */
+#tl .blk .name { font-weight: 600; }
+#tl .blk .sync, #tl .ablk .sync { display: inline-block; margin-right: 4px; padding: 0 3px; border-radius: 2px;
+                                  font-size: 9px; line-height: 13px; font-weight: 700; color: #fff;
+                                  background: #c0392b; font-variant-numeric: tabular-nums; }
+#tl .blk .sync[hidden], #tl .ablk .sync[hidden] { display: none; }
+#tl .blk.unlinked .name, #tl .ablk.unlinked .name { text-decoration: underline dotted; }
+
+/* A1: each shot's own sound — Premiere's audio green, the speech in it as brighter bands */
+#tl .ablk { position: absolute; box-sizing: border-box; overflow: hidden; cursor: pointer;
+            border-radius: 3px; padding: 2px 5px; font-size: 11px; line-height: 14px;
+            color: #dff3e6; white-space: nowrap; z-index: 1;
+            background: hsl(152 32% 22%); border: 1px solid hsl(152 30% 34%);
+            border-left: 3px solid hsl(var(--hue) 45% 58%); }
+#tl .ablk:hover { background: hsl(152 34% 25%); }
+#tl .ablk.live { border-color: hsl(152 40% 48%); border-left-color: hsl(var(--hue) 45% 58%); }
+#tl .ablk.sel { outline: 2px solid var(--text); outline-offset: -2px; }
+#tl .ablk.unlinked { border-style: dashed; border-left-style: solid; }
+#tl .ablk.gen { background: #18181e; color: var(--dim); border-color: #2c2c36; }
+#tl .ablk.dragging { opacity: .7; z-index: 3; }
+#tl .ablk .name { position: relative; z-index: 1; }
+#tl .ablk.narrow .name { display: none; }
+#tl .ablk .wave { position: absolute; left: 0; right: 0; top: 16px; bottom: 3px; pointer-events: none; }
+#tl .ablk.narrow .wave, #tl .ablk .wave:only-child { top: 3px; }
+#tl .ablk .wave::before { content: ''; position: absolute; left: 0; right: 0; top: 50%;
+                          border-top: 1px solid hsl(152 40% 45% / .55); }
+/* where the clip speaks: a band per line of its transcript, louder-looking in the middle */
+#tl .ablk .wave i { position: absolute; top: 12%; bottom: 12%; border-radius: 2px;
+                    background: repeating-linear-gradient(90deg, hsl(152 50% 58% / .55) 0 1px, transparent 1px 3px),
+                                linear-gradient(hsl(152 45% 50% / .0), hsl(152 45% 50% / .35) 50%, hsl(152 45% 50% / .0)); }
+
+/* V2: clips over the cut — the picture's blue, a poster at the head */
+#tl .oblk { position: absolute; box-sizing: border-box; overflow: hidden; cursor: grab; display: flex;
+            gap: 5px; align-items: stretch; border-radius: 3px; padding: 2px 4px; font-size: 11px;
+            line-height: 14px; color: var(--text); white-space: nowrap; z-index: 1;
+            background: hsl(220 30% 24%); border: 1px solid hsl(220 35% 40%);
+            border-left: 3px solid hsl(var(--hue) 45% 58%); }
+#tl .oblk.sel { outline: 2px solid var(--text); outline-offset: -2px; }
+#tl .oblk .poster { height: 100%; aspect-ratio: 16/9; max-width: 45%; object-fit: cover; border-radius: 2px; background: #000;
+                    pointer-events: none; flex: none; }
+#tl .oblk.narrow .poster { display: none; }
+#tl .oblk .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+
+/* the headers: lock · name (the target) · eye, or lock · name · M · S, Premiere's order */
+#tl .tl-heads { position: absolute; left: 0; right: 0; top: 0; bottom: 0; pointer-events: none; }
+#tl .tl-thead { position: absolute; left: 0; right: 0; display: flex; align-items: center; gap: 3px;
+                padding: 0 5px; box-sizing: border-box; pointer-events: auto; overflow: hidden;
+                background: #1a1a20; border-left: 1px solid var(--line); border-top: 1px solid #22222a; }
+#tl .tl-thead.audio { background: #18191d; }
+#tl .tl-thead button { height: 18px; min-width: 20px; padding: 0 4px; font: 600 11px/16px system-ui, sans-serif;
+                       border-radius: 3px; cursor: pointer; background: #24242c; color: var(--dim);
+                       border: 1px solid #30303a; display: inline-flex; align-items: center; justify-content: center; }
+#tl .tl-thead button:hover { border-color: var(--accent); color: var(--text); }
+#tl .tl-thead button svg { width: 11px; height: 11px; fill: currentColor; }
+#tl .tl-thead button svg .off { display: none; }
+#tl .tl-thead button.tname { min-width: 30px; color: var(--text); background: #2a2a33; }
+/* targeted: Premiere's blue track name */
+#tl .tl-thead button.tname.on { background: #2f5d9e; border-color: #4b7fc8; color: #fff; }
+#tl .tl-thead button.lock.on { color: #ffd479; border-color: #8a6d2d; background: #33291a; }
+#tl .tl-thead button.eye.on { color: var(--bad); }
+#tl .tl-thead button.eye.on svg .off { display: inline; }
+#tl .tl-thead button.mute.on { background: #2e7d4f; border-color: #3fa166; color: #fff; }
+#tl .tl-thead button.solo.on { background: #a68a1f; border-color: #c9a92c; color: #111; }
+#tl .tl-thead .tinfo { margin-left: auto; font-size: 10px; color: var(--dim); white-space: nowrap;
+                       font-variant-numeric: tabular-nums; }
+
+/* V1: the clip's name along the top, over its pictures (Premiere's clip label), the
+   poster filling the block's height from its head */
+#tl .tl-lane[data-lane=V1] .blk { padding: 0; gap: 0; }
+#tl .tl-lane[data-lane=V1] .blk .poster { border-radius: 0; height: 100%; max-width: 100%; }
+#tl .tl-lane[data-lane=V1] .blk .txt { position: absolute; left: 0; right: 0; top: 0; z-index: 1;
+                                       padding: 1px 5px 3px; line-height: 14px; font-size: 11px;
+                                       background: linear-gradient(rgba(10, 10, 14, .85), rgba(10, 10, 14, .55) 70%, transparent);
+                                       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#tl .tl-lane[data-lane=V1] .blk .name { display: inline; -webkit-line-clamp: unset; }
+#tl .tl-lane[data-lane=V1] .blk.narrow .poster { display: block; }
+#tl .tl-lane[data-lane=V1] .blk.tiny .poster { display: none; }

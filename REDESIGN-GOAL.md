@@ -144,3 +144,12 @@ next judge runs, and the next judge rules it honest or lenient.
   with a hover title), no link in the browser's blue or underline on `/`, and every `/open`
   card has a loaded picture within 10 s of opening a fresh work dir.
 - 2026-10-15 (lead, wave 2): `test_budget.py` words in view `/ film` 104→107 and `/ jobs` 122→125, i.e. +3 each, exactly the words of the header control K1 requires ("Re-run first pass"). Measured on the merged branch: 106 and 124. `/ fx` unchanged (130). Controls budgets unchanged.
+- 2026-10-15 (wave 2, lane TRACKS): `test_budget.py` board budgets raised for the track
+  headers (Premiere's V2/V1/A1/A2 headers: lock, target, eye or mute/solo — 14 controls,
+  ~9 words). Measured on the merged branch: / 103 · 49, / shot 154 · 61, / film 111 · 48,
+  / jobs 129 · 49, / fx 131 · 52. Controls: / 38 → 54, / shot 51 → 67, / film 37 → 53,
+  / jobs 38 → 54, / fx 41 → 57; words: / film 104 → 122, / jobs 122 → 142, / fx 130 → 144
+  (measured +~10 %, so growth still fails); words on / and / shot unchanged (still under).
+  /floor and /open unchanged; every other check unchanged.
+- 2026-10-15 (lead, merging TRACKS onto FPUI): the two raises above are replaced by the measured counts on the merged tree, with NO headroom (TRACKS had added ~10 %): words / 106, / shot 157, / film 114, / fx 134, / jobs 132; controls / 50, / shot 62, / film 49, / fx 53, / jobs 50. /floor and /open unchanged. Cause: the four track headers (14 controls, ~9 words) and the Re-run first pass control (3 words).
+- 2026-10-15 (lead, merging EFFECTS): `/ shot` (a shot selected, Effect Controls showing) words 157→196, controls 62→85, the measured counts with no headroom. Cause: Premiere-style Effect Controls (dimension 7): Motion x/y/scale/rotation, Opacity, Volume, five Lumetri values, each a scrubbable value with a reset, plus section twirls and resets. Verdict 1 noted the inherited budget pulls against Premiere density; the judge should rule whether this panel's density is earned.

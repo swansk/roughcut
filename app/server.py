@@ -71,6 +71,7 @@ from roughcut import junk as junkmod  # noqa: E402
 from roughcut import flow as flowmod  # noqa: E402
 from roughcut import deep as deepmod  # noqa: E402
 from roughcut import firstpass as fpmod  # noqa: E402
+from roughcut import tracks as tracksmod  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent / "research" / "tools"
@@ -296,7 +297,8 @@ def api_lut(sid: str, n: int = 17) -> JSONResponse:
     table = colourmod.cube_table(res["fn"], n)
     return JSONResponse({"id": sid, "size": n, "identity": res["identity"],
                          "look": res["look"], "strength": res["strength"],
-                         "table": [round(float(v), 5) for v in table.reshape(-1)]})
+                         "balance": res["balance"],   # what was baked: the monitor previews the rest
+                         "table":[round(float(v), 5) for v in table.reshape(-1)]})
 
 
 # ---------------------------------------------------------------- proxies
@@ -749,6 +751,42 @@ def project_payload() -> dict:
         "colour": edl.get("colour") or {},
         # The accepted effects (INTAKE M12); proposals are /api/fx.
         "effects": edl.get("effects") or [],
+        # The tracks (REDESIGN-GOAL dimension 5, roughcut/tracks.py): the headers'
+        # state in full, V2's clips, the sequence's markers and In / Out, and the
+        # sequence rate the timecode counts in.
+        **sequence_payload(edl, segments),
+    }
+
+
+def sequence_fps(segments: list[dict]) -> float:
+    """The sequence rate: the most common frame rate among the footage clips the cut
+    uses (the first clip in the bin when the cut is empty), as ffprobe reads it — cached
+    per file version by `media_facts`. 23.976 when nothing can be probed."""
+    clips = [s.get("clip") for s in segments if not edits.is_generated(str(s.get("clip")))]
+    if not clips:
+        clips = footage_clips()[:1]
+    rates: dict[float, int] = {}
+    for clip in dict.fromkeys(clips):
+        src = STATE["footage"] / str(clip)
+        facts = media_facts(src) if src.exists() else None
+        r = (facts or {}).get("fps")
+        if r:
+            key = round(float(r), 3)
+            rates[key] = rates.get(key, 0) + sum(1 for c in clips if c == clip)
+    if not rates:
+        return 23.976
+    return max(rates.items(), key=lambda kv: (kv[1], kv[0]))[0]
+
+
+def sequence_payload(edl: dict, segments: list[dict]) -> dict:
+    overlays = [dict(o) for o in edl.get("overlays") or [] if isinstance(o, dict)]
+    return {
+        "tracks": tracksmod.resolve_tracks(edl.get("tracks")),
+        "overlays": overlays,
+        "markers": list(edl.get("markers") or []),
+        "in": edl.get("in"),
+        "out": edl.get("out"),
+        "fps": sequence_fps(segments),
     }
 
 
@@ -813,6 +851,12 @@ def clean_segments(raw: list) -> list[dict]:
             raise HTTPException(400, f"speed: {exc}")
         if speed is not None:
             seg["speed"] = speed
+        # Linked A/V (roughcut/tracks.py): an unlinked pair and its A1 offset ride the
+        # shot; in sync and linked is the absence of both keys.
+        try:
+            tracksmod.validate_link(s, seg)
+        except ValueError as exc:
+            raise HTTPException(400, f"{seg['clip']}: {exc}")
         # The id round-trips (I9.0): a shot keeps its identity across reorder, undo and a
         # proposal; a duplicate (a copied shot) or a missing one gets a fresh id.
         sid = s.get("id")
@@ -825,14 +869,121 @@ def clean_segments(raw: list) -> list[dict]:
     return clean
 
 
+def apply_sequence(edl: dict, body: dict) -> None:
+    """The track model's keys of a save (roughcut/tracks.py), each validated; a bad one is
+    a 400 and nothing is written. Absent leaves it alone; null (or an empty value) clears.
+    Called before anything is written, so a 400 here writes nothing."""
+    try:
+        if "tracks" in body:
+            spec = tracksmod.validate_tracks(body["tracks"])
+            if spec:
+                edl["tracks"] = spec
+            else:
+                edl.pop("tracks", None)
+        if "overlays" in body:
+            ovs = tracksmod.validate_overlays(body["overlays"], edits.validate_speed)
+            for o in ovs:
+                if not o["id"]:
+                    o["id"] = segment_id()
+            if ovs:
+                edl["overlays"] = ovs
+            else:
+                edl.pop("overlays", None)
+        if "markers" in body:
+            marks = tracksmod.validate_markers(body["markers"])
+            if marks:
+                edl["markers"] = marks
+            else:
+                edl.pop("markers", None)
+        for k in ("in", "out"):
+            if k in body:
+                v = tracksmod.validate_point(body[k], f"the sequence {k}")
+                if v is None:
+                    edl.pop(k, None)
+                else:
+                    edl[k] = v
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if edl.get("in") is not None and edl.get("out") is not None and edl["out"] <= edl["in"]:
+        raise HTTPException(400, "the sequence out is not after its in")
+
+
+# Effect Controls (redesign wave 2, lane EFFECTS): a shot's Motion, Opacity, Volume, the
+# Lumetri values the colour block has no key for, and its fx stack (which designed
+# effects are bypassed, and their order). They ride the segment as `controls`, holding
+# only what differs from the default, so a shot keeps them through reorder, split and
+# undo the way it keeps its speed. Ranges are Premiere's. Unknown keys are a 400.
+CONTROL_RANGES = {
+    "scale": (0.0, 1000.0, 100.0), "rotation": (-3600.0, 3600.0, 0.0),
+    "opacity": (0.0, 100.0, 100.0), "volume_db": (-60.0, 6.0, 0.0),
+    "contrast": (-100.0, 100.0, 0.0), "saturation": (0.0, 200.0, 100.0),
+}
+
+
+def clean_controls(raw) -> dict | None:
+    """One segment's `controls`, validated; None when everything is the default."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("controls must be an object")
+    extra = set(raw) - set(CONTROL_RANGES) - {"position", "fx_off", "fx_order"}
+    if extra:
+        raise ValueError(f"unknown control {sorted(extra)[0]!r}")
+    out: dict = {}
+    for k, (lo, hi, default) in CONTROL_RANGES.items():
+        if raw.get(k) is None:
+            continue
+        v = float(raw[k])
+        if not (lo <= v <= hi):
+            raise ValueError(f"{k} must be {lo:g}..{hi:g}")
+        if round(v, 3) != default:
+            out[k] = round(v, 3)
+    pos = raw.get("position")
+    if pos is not None:
+        if not (isinstance(pos, list) and len(pos) == 2):
+            raise ValueError("position must be [x, y], fractions of the frame")
+        p = [round(float(v), 6) for v in pos]
+        if not all(-10.0 <= v <= 10.0 for v in p):
+            raise ValueError("position is outside -10..10 frames")
+        if p != [0.5, 0.5]:
+            out["position"] = p
+    for k in ("fx_off", "fx_order"):
+        ids = raw.get(k)
+        if ids is None:
+            continue
+        if not (isinstance(ids, list) and all(isinstance(i, str) and 0 < len(i) <= 64 for i in ids)):
+            raise ValueError(f"{k} must be a list of effect ids")
+        if ids:
+            out[k] = list(dict.fromkeys(ids))[:64]
+    return out or None
+
+
+def attach_controls(clean: list[dict], raw: list) -> None:
+    """Carry each saved segment's validated `controls` onto its clean copy (same order)."""
+    for seg, s in zip(clean, raw):
+        try:
+            c = clean_controls(s.get("controls") if isinstance(s, dict) else None)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, f"controls: {exc}")
+        if c:
+            seg["controls"] = c
+
+
 @app.put("/api/project")
 async def api_save(request: Request) -> JSONResponse:
     body = await request.json()
     edl = read_edl()
     edl["story"] = body.get("story", edl.get("story", ""))
-    clean = clean_segments(body["segments"])
-    note_accept(edl, clean)              # provenance: before the segments are replaced
-    edl["segments"] = clean
+    # A body without segments leaves the cut alone: the timeline saves its tracks,
+    # V2 and markers on their own when nothing else changed (roughcut/tracks.py).
+    if "segments" in body:
+        clean = clean_segments(body["segments"])
+        attach_controls(clean, body["segments"])   # Effect Controls (wave 2 EFFECTS)
+        note_accept(edl, clean)          # provenance: before the segments are replaced
+        edl["segments"] = clean
+    else:
+        clean = edl.get("segments") or []
+    apply_sequence(edl, body)
     # Music is the same `effects_music` key assemble.py reads, validated the way a
     # segment is: an asset that is not in the library, or a gain outside range, is a 400
     # and nothing is written. A body that does not mention music leaves it alone; an
