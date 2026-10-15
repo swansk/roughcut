@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Docs
+- **LOOP.md: RANGEPROXY and PLAY3 merged; the perf measurement still waits on a quiet box.**
+
 ### Added
 - **A parked Program buffer swaps the preview for the range or whole proxy (wave 8, lane PLAY3; RANGEPROXY's request).** `/media/proxy/<stem>.mp4` is a redirect, so a buffer that opened a clip as the 360p preview kept it for as long as it held that clip, every shot of it, after the 1280 range proxy or the whole proxy had landed. A buffer now notes what `/media/status` said it was served when it opened the URL (`_kind`: preview < range < proxy / original), and at a park (`armNext`, `cueAt`, `pauseCut`; never the buffer on screen while playing, never one prerolling; at most one ask per buffer every 3 s) re-opens it at the same clip time when the server serves a better kind. New test in `test_perf_latency.py`: parked on shot 1 of the 4K fixture, the next (0.4 s, file B) and the one after (file C) sit in two buffers of their own, each parked <= 0.4 s ahead of its in-point; a live buffer marked `preview` is re-opened once /media/status says `proxy`, at the same time (+-0.05 s), and a later park leaves it alone. `test_latency_under_load` also asserts that both cuts went to the buffer parked for them (`cut_log[].parked`, two different buffers).
 

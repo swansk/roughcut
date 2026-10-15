@@ -49,6 +49,10 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-16 07:30: RANGEPROXY `0daab17`, PLAY3 `6139b41` merged. Playback on the 4K fixture: cut holes <= 67 ms in 12/12
+  (rolled + parked every cut), fps 25-30, seeks median 64-120; residual mid-shot 83-100 ms holes at load 15-21 (two
+  decoders during a 0.4 s shot). No perf run has yet measured at load <= 2x cores: the box has been at 15-50 from parallel
+  lanes all day. YIELD (SIGSTOP background encodes while playing) running; RENDER3 running. Then: quiet box -> gate -> judge 7.
 - 2026-10-16 05:00: SMALL `d4015ff`, REVIEW3 `76d8242`, SAVESAFE merged. SAVESAFE's root cause of the lost cut: Chrome's 6 connections
   per host all held by /media/poster builds after a pass; the Accept's PUT queued 11.5 s and the reload cancelled it (fix:
   saves go credentials:'omit', a separate connection group). Queued (wave 9): posters still starve every credentialed GET
