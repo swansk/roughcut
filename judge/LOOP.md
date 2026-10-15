@@ -49,6 +49,11 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-16 01:30: KEYANCHOR `524a4a5` (+ lead `c7a83b7` trim keys via setRange), LUTCACHE `fa7624c` merged (the LUT hypothesis
+  REFUTED: upload 0.1 ms; the real cost was the WebGL canvas draw + headless commit read-back, now in a worker; and a wrong
+  LUT drawn 70-200 ms after a cut fixed by prefetch) + lead: meters draw their scale once. Perf at load 16-23 (3x cores):
+  cut gaps <= 67 ms in 8/8, one mid-shot 83-100 ms gap in 5/8; at the test's design load (~cores) still to re-run. Queued:
+  the preroll still misses at load ~20 (`rolled: false`, 130-243 ms held at the second cut): player/decoder contention.
 - 2026-10-15 23:40: lead fixes after wave 6: `bc8d5d7` (a video idle after a seek is nudged: /floor's recurring flaky test was a
   real Chromium stall) and Playback Resolution in grade.js (<= 640 px while playing). test_perf_latency at the judge's 67 ms bar
   is still MARGINAL at load 9-10 (5/6): the residual hole sits ~45 ms after a cut. Wave-7 hypothesis: the per-shot LUT's

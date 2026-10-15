@@ -196,39 +196,66 @@
     return Math.min(1, (db - FLOOR_DB) / -FLOOR_DB);
   }
 
-  function draw() {
-    if (!cv || !g2) return;
-    const W = cv.width, H = cv.height, dpr = window.devicePixelRatio || 1;
-    g2.setTransform(1, 0, 0, 1, 0, 0);
-    g2.fillStyle = COL.bg;
-    g2.fillRect(0, 0, W, H);
-    g2.scale(dpr, dpr);
-    const w = W / dpr, h = H / dpr;
-    g2.font = '8px system-ui, sans-serif';
-    g2.fillStyle = COL.txt;
+  /* The scale (background, ticks, dB labels) never moves while playing: drawn once into a
+   * cached canvas, rebuilt only when the size, the orientation or the pixel ratio changes.
+   * Setting a canvas font and drawing text every frame made Chromium resolve the font through
+   * style — a forced style recalc on every frame while playing (LUTCACHE's trace, 3-10 ms per
+   * frame at load 20, the next-largest main-thread cost after the grade). */
+  let scaleCv = null, scaleKey = '';
+  function geometry(w, h) {
     const bars = [];
     if (mode === 'v') {
       const top = 6, bot = h - 4, len = bot - top;
       for (let ch = 0; ch < 2; ch++) bars.push({ x: 3 + ch * 7, y: top, w: 5, h: len, v: true });
-      g2.textAlign = 'right'; g2.textBaseline = 'middle';
+      return { bars, top, bot, len };
+    }
+    const left = 4, right = w - 4, len = right - left;
+    for (let ch = 0; ch < 2; ch++) bars.push({ x: left, y: 2 + ch * 6, w: len, h: 4, v: false });
+    return { bars, left, right, len };
+  }
+  function drawScale(W, H, dpr) {
+    const key = `${W}x${H}|${mode}|${dpr}`;
+    if (scaleCv && key === scaleKey) return scaleCv;
+    scaleKey = key;
+    scaleCv = scaleCv || document.createElement('canvas');
+    scaleCv.width = W; scaleCv.height = H;
+    const s2 = scaleCv.getContext('2d');
+    s2.setTransform(1, 0, 0, 1, 0, 0);
+    s2.fillStyle = COL.bg;
+    s2.fillRect(0, 0, W, H);
+    s2.scale(dpr, dpr);
+    const w = W / dpr, h = H / dpr;
+    const gm = geometry(w, h);
+    s2.font = '8px system-ui, sans-serif';
+    if (mode === 'v') {
+      s2.textAlign = 'right'; s2.textBaseline = 'middle';
       for (const d of SCALE) {
-        const y = bot - frac(d) * len;
-        g2.fillStyle = COL.tick; g2.fillRect(17, y, 2, 1);
-        if (len > 80 || d % 12 === 0) { g2.fillStyle = COL.txt; g2.fillText(String(-d), w - 1, y); }
+        const y = gm.bot - frac(d) * gm.len;
+        s2.fillStyle = COL.tick; s2.fillRect(17, y, 2, 1);
+        if (gm.len > 80 || d % 12 === 0) { s2.fillStyle = COL.txt; s2.fillText(String(-d), w - 1, y); }
       }
     } else {
-      const left = 4, right = w - 4, len = right - left;
-      for (let ch = 0; ch < 2; ch++) bars.push({ x: left, y: 2 + ch * 6, w: len, h: 4, v: false });
-      g2.textAlign = 'center'; g2.textBaseline = 'alphabetic';
+      s2.textAlign = 'center'; s2.textBaseline = 'alphabetic';
       for (const d of SCALE) {
-        const x = left + frac(d) * len;
-        g2.fillStyle = COL.tick; g2.fillRect(x, 13, 1, 2);
-        if (len > 160 || d % 12 === 0) { g2.fillStyle = COL.txt; g2.fillText(String(d), Math.min(right - 4, Math.max(left + 4, x)), h - 1); }
+        const x = gm.left + frac(d) * gm.len;
+        s2.fillStyle = COL.tick; s2.fillRect(x, 13, 1, 2);
+        if (gm.len > 160 || d % 12 === 0) { s2.fillStyle = COL.txt; s2.fillText(String(d), Math.min(gm.right - 4, Math.max(gm.left + 4, x)), h - 1); }
       }
     }
+    for (const b of gm.bars) { s2.fillStyle = COL.off; s2.fillRect(b.x, b.y, b.w, b.h); }
+    return scaleCv;
+  }
+
+  function draw() {
+    if (!cv || !g2) return;
+    const W = cv.width, H = cv.height, dpr = window.devicePixelRatio || 1;
+    if (!W || !H) return;
+    g2.setTransform(1, 0, 0, 1, 0, 0);
+    g2.drawImage(drawScale(W, H, dpr), 0, 0);
+    g2.scale(dpr, dpr);
+    const w = W / dpr, h = H / dpr;
+    const bars = geometry(w, h).bars;
     bars.forEach((b, ch) => {
-      g2.fillStyle = COL.off;
-      g2.fillRect(b.x, b.y, b.w, b.h);
       const f = frac(lvl.shown[ch]);
       const zones = [[0, frac(-18), COL.g], [frac(-18), frac(-6), COL.y], [frac(-6), 1, COL.r]];
       for (const [a, z, c] of zones) {

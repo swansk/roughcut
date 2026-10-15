@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Changed
+- **The audio meters draw their scale once.** meters.js set a canvas font and drew the dB labels every frame, which made Chromium resolve the font through style: a forced style recalc on every played frame (LUTCACHE's trace: 3-10 ms per frame at load 20, the next-largest main-thread cost after the grade, which now draws in a worker). The background, ticks and labels go into a cached canvas rebuilt only on a size, orientation or pixel-ratio change; each frame copies it and draws the bars. test_timeline_audio + workspace + program_a3: 43 passed.
+
 ### Fixed
 - **The strip's trim keys (`[` `]` `{` `}`) go through `tl.setRange`.** app.js `nudge` wrote `seg.in`/`seg.out` itself, rounded to 0.01 s: off the frame grid, keyframes left where they were (KEYANCHOR's request). It now calls the timeline like every other trim: clamped, on the grid, keys kept on the media, posters re-taken, one undo. New `test_the_trim_keys_keep_the_keys_on_the_media_and_the_grid`; ui_flow + colour_ui + keyframes_anchor: 88 passed.
 
