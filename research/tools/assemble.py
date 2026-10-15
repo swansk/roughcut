@@ -70,10 +70,23 @@ DELIVERY_MAX_W, DELIVERY_MAX_H = 3840, 2160
 PROFILES = {
     "preview": {"preset": "veryfast", "crf": "20", "audio_bitrate": "192k"},
     "delivery": {"preset": "slow", "crf": "18", "audio_bitrate": "256k"},
+    # The Export dialog's YouTube 1080p (REDESIGN-GOAL dimension 8): the bin's own frame
+    # rate like `delivery` (YouTube wants the native rate), capped at 1920x1080 and
+    # never upscaled, with YouTube's recommended 384 kbps stereo AAC.
+    "youtube": {"preset": "medium", "crf": "18", "audio_bitrate": "384k"},
 }
+YOUTUBE_MAX_W, YOUTUBE_MAX_H = 1920, 1080
+
+# `--progress`: every part's encode writes ffmpeg's `-progress` beside it
+# (`part_007.progress`), so whoever asked for the render can read how many seconds of
+# the film are encoded rather than guess from a clock (Export dialog, verdict 2 punch 5).
+PART_PROGRESS = False
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess:
+    if PART_PROGRESS and cmd[:1] == ["ffmpeg"] and Path(cmd[-1]).name.startswith("part_"):
+        cmd = ["ffmpeg", "-progress", str(Path(cmd[-1]).with_suffix(".progress")),
+               *cmd[1:]]
     return subprocess.run(cmd, capture_output=True, text=True, check=False)
 
 
@@ -274,12 +287,13 @@ def bin_profile(footage: Path, segments: list[dict]) -> tuple[str, int, int]:
     return fps, w, h
 
 
-def delivery_resolution(native_w: int, native_h: int) -> tuple[int, int]:
+def delivery_resolution(native_w: int, native_h: int,
+                        max_w: int = DELIVERY_MAX_W, max_h: int = DELIVERY_MAX_H) -> tuple[int, int]:
     """Capped at DELIVERY_MAX_W x DELIVERY_MAX_H, never upscaled past the bin's own
     native size. A source already at or below 4K (Killington is 3840x2160; the test
     suite's synthetic clips are 320x180) must render at its own resolution, not be
     stretched up to fill a bigger canvas that carries no more real detail."""
-    scale = min(1.0, DELIVERY_MAX_W / native_w, DELIVERY_MAX_H / native_h)
+    scale = min(1.0, max_w / native_w, max_h / native_h)
     w = max(2, int(native_w * scale) // 2 * 2)      # even dims: yuv420p needs it
     h = max(2, int(native_h * scale) // 2 * 2)
     return w, h
@@ -291,6 +305,9 @@ def resolve_video_profile(name: str, footage: Path, segments: list[dict]) -> dic
     if name == "delivery":
         fps, native_w, native_h = bin_profile(footage, segments)
         w, h = delivery_resolution(native_w, native_h)
+    elif name == "youtube":
+        fps, native_w, native_h = bin_profile(footage, segments)
+        w, h = delivery_resolution(native_w, native_h, YOUTUBE_MAX_W, YOUTUBE_MAX_H)
     else:
         fps, w, h = FPS, W, H
     num, _, den = fps.partition("/")
@@ -423,7 +440,12 @@ def main() -> int:
                          "veryfast/crf20 — what the board's quick versions use. "
                          "delivery: the bin's own majority frame rate and up to 4K "
                          "resolution (never upscaled), preset slow, crf 18.")
+    ap.add_argument("--progress", action="store_true",
+                    help="write ffmpeg -progress beside each part (part_NNN.progress) "
+                         "so a caller can read encoded seconds")
     args = ap.parse_args()
+    global PART_PROGRESS
+    PART_PROGRESS = args.progress
 
     for tool in ("ffmpeg", "ffprobe"):
         if shutil.which(tool) is None:

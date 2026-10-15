@@ -201,7 +201,9 @@ def _set_up(pg, state: str) -> None:
         pg.wait_for_function("tl.state.sel.size === 1", timeout=5000)
     elif state == "/ film":
         pg.wait_for_selector("#tl .blk", timeout=15000)
-        pg.locator("#makeFilm").click()                     # the header's Make the film
+        # Window › Export: the films panel (the header's Export opens the Export dialog)
+        pg.locator("#menubar .menu[data-menu=window] .mtop").click()
+        pg.locator("#menubar button[data-cmd='w:out']").click()
         pg.wait_for_function("dock.current() === 'out'", timeout=5000)
     elif state == "/ fx":
         pg.wait_for_selector("#tl .blk", timeout=15000)
