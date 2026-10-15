@@ -1651,7 +1651,14 @@ def api_picks(order: str = "rank") -> JSONResponse:
         p["released"] = p["clip"] in released
         p["junk"] = junk_of.get(p["clip"], "clean")
     ordered = picks.order(rows, order)
+    # Whether a first pass has made its picks (it finished, or stopped or failed in the
+    # cut step, or one is running past them): the board lists the picks in Selects and
+    # marks them on the cut from then on (verdict 4, punch 1).
+    rec, live = _fp_record() or {}, _fp_live()
+    made = ((rec.get("produced") or {}).get("picks") is not None or rec.get("step") == "cut"
+            or bool(live and live.get("picks") is not None))
     return JSONResponse({
+        "firstpass_picked": made,
         "picks": _pick_rows(ordered),
         "rounds": len(picks.rounds([p for p in ordered if p["released"]])),
         "round_size": picks.ROUND_SIZE,

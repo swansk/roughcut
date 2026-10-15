@@ -1953,6 +1953,50 @@ function keepsUsable() {
   return ((bin && bin.selects) || []).filter((s) => !s.missing && P && P.clips[s.clip]);
 }
 
+/* The first pass's picks (verdict 4, punch 1): every moment the pass found is a row in
+ * Selects and a marker on the cut — not only what a /floor review kept. GET /api/picks
+ * builds them from the index on the server; a pick a keep already covers is that keep's
+ * row (the keep is yours: your range, your note), and one rejected on /floor is gone.
+ * Re-read with the bin (at most every PICKS_TTL_MS: picks change with the index, not
+ * with an edit); the lanes redraw when they arrive. They are the first pass's: until a
+ * pass has made them (`firstpass_picked`), Selects is the keeps alone, as before. */
+let passPicks = null;         // /api/picks' rows, by clip; null before the first read
+let picksRead = 0;
+let picksBusy = null;
+const PICKS_TTL_MS = 4000;
+
+function fetchPicks(force) {
+  if (picksBusy) return picksBusy;
+  if (!force && passPicks && Date.now() - picksRead < PICKS_TTL_MS) return Promise.resolve(passPicks);
+  picksBusy = fetch('/api/picks?order=clip').then((r) => (r.ok ? r.json() : null)).then((d) => {
+    if (d && Array.isArray(d.picks)) {
+      const was = JSON.stringify((passPicks || []).map((p) => [p.id, p.verdict, p.released]));
+      // the picks are the first pass's: until one has made them, Selects is the keeps
+      passPicks = d.firstpass_picked ? d.picks.map((p) => ({ ...p, pick: true })) : [];
+      picksRead = Date.now();
+      if (JSON.stringify(passPicks.map((p) => [p.id, p.verdict, p.released])) !== was
+          && P && window.tl && tl.state) {
+        if (window.tlLanes) tlLanes.redraw();
+        if (keepsTab()) renderLibrary();
+        else if (window.dock) dock.badge('bin', keepsUsable().concat(picksUsable()).filter((s) => shotOf(s) < 0).length);
+      }
+    }
+    return passPicks;
+  }).catch(() => passPicks).finally(() => { picksBusy = null; });
+  return picksBusy;
+}
+
+/* The pass's picks the board can act on: footage here, not rejected on /floor, and not
+ * already one of the editor's keeps. All of them, as the pass counts them — not only the
+ * clips /floor's rounds have released (their previews may still be building). */
+function picksUsable() {
+  if (!passPicks || !P) return [];
+  const keeps = (bin && bin.selects) || [];
+  return passPicks.filter((p) => P.clips[p.clip]
+    && p.verdict !== 'reject' && p.verdict !== 'pick'
+    && !keeps.some((k) => k.clip === p.clip && overlapRatio([k.start, k.end], [p.start, p.end]) >= 0.5));
+}
+
 function heroesWaiting() {
   return keepsUsable().filter((s) => s.hero && shotOf(s) < 0);
 }
@@ -2118,6 +2162,11 @@ const SEL_CSS = `
 #library table.sel-list button.use.add { padding: 0 6px; line-height: 15px; }
 #library table.sel-list .gone { display: inline; margin: 0; font-size: 11px; }
 #library table.sel-list .junkq { margin: 0; flex-wrap: nowrap; }
+#library table.sel-list .who { flex: none; font-size: 10px; line-height: 14px; padding: 0 4px; border-radius: 2px;
+  color: #e0b04a; border: 1px solid rgba(224, 176, 74, .45); white-space: nowrap; }
+#library table.sel-list .who.yours { color: var(--text); background: #2c3a2c; border-color: #4a6a4a; }
+#libHint .floorlink { color: var(--dim); text-decoration: underline dotted; margin-left: 6px; }
+#libHint .floorlink:hover { color: var(--text); }
 `;
 
 /* The list's table, appended to `lib`; returns its body. */
@@ -2189,7 +2238,8 @@ function reuseStill(row) {
 function keepRow(s, cols) {
   cols = cols || selCols(($('#library') || {}).clientWidth || 300);
   const d = document.createElement('tr');
-  d.className = 'keep row' + (s.missing ? ' missing' : '') + (binSel === keepKey(s) ? ' sel' : '');
+  d.className = 'keep row' + (s.pick ? ' pick' : s.whole ? '' : ' yours')
+    + (s.missing ? ' missing' : '') + (binSel === keepKey(s) ? ' sel' : '');
   d._keep = s;                  // the lanes read the keep off its row, whatever the filter shows
   d.tabIndex = 0;
   const clip = P.clips[s.clip] || {};
@@ -2204,7 +2254,11 @@ function keepRow(s, cols) {
         ? `<a href="#" class="use" data-shot="${at}" title="in the cut · shot ${at + 1} — click to select it on the timeline">shot ${at + 1}</a>`
         : '<button class="use add" title="add it at the playhead · enter · , · or drag it onto the timeline">+ add</button>';
   d.title = `${stem(s.clip)} ${fmt(s.start)}–${fmt(s.end)}${s.why ? `\n${s.why}` : ''}`
+    + (s.pick ? `\nthe first pass's pick · ${s.kind || 'moment'}` : s.whole ? '' : '\nkept by you on the pass')
     + '\ndouble-click: open in the Source monitor with its In and Out';
+  // who it is from: the pass's kind on a pick, "yours" on a keep (a whole clip is neither)
+  const who = s.pick ? `<span class="who pass" title="the first pass found this — ${escapeHtml(s.kind || 'a moment')}">${escapeHtml(s.kind || 'pick')}</span>`
+    : s.whole ? '' : '<span class="who yours" title="you kept this on the pass">yours</span>';
   // the still loads with the row, not lazily: a 30 px thumbnail of a frame the server
   // caches on disk; a lazy one in a tab opened later was fetched again mid-edit
   const cell = (k) => {
@@ -2212,7 +2266,7 @@ function keepRow(s, cols) {
       return `<td class="name"><span class="n">${still
         ? `<img class="still" loading="eager" decoding="async" draggable="false"
                alt="${escapeHtml(stem(s.clip))} at ${s.start.toFixed(1)}s" src="${still}">`
-        : '<span class="still"></span>'}<span class="w${s.note ? ' note' : ''}">${
+        : '<span class="still"></span>'}${who}<span class="w${s.note ? ' note' : ''}">${
         s.hero ? '<span class="hero">★</span> ' : ''}${escapeHtml(keepLabel(s))}</span></span></td>`;
     }
     if (k === 'clip') return `<td>${escapeHtml(stem(s.clip))}</td>`;
@@ -2287,7 +2341,9 @@ function addKeep(s) {
 }
 
 function renderKept(lib) {
-  const every = binOrder((bin && bin.selects) || []);
+  // the editor's keeps and the first pass's picks, one list (verdict 4, punch 1)
+  const picked = picksUsable();
+  const every = binOrder(((bin && bin.selects) || []).concat(picked));
   const isOut = (s) => s.missing || !P.clips[s.clip] || shotOf(s) < 0;
   const nOut = every.filter((s) => isOut(s) && junkState(s.clip) !== 'confirmed').length;
   const nAll = every.filter((s) => junkState(s.clip) !== 'confirmed').length;
@@ -2311,7 +2367,15 @@ function renderKept(lib) {
   $('#libHint').textContent = binChip === 'junk'
     ? 'Junk — proposed by a measurement, yours to confirm. Confirmed clips are out of the Ask, Find and this grid, and the index skips their look.'
     : !all.length || !keeps.length || keeps.length === all.length ? ''
-      : `${keeps.length} of ${all.length} keeps match`;
+      : `${keeps.length} of ${all.length} ${picked.length ? 'match' : 'keeps match'}`;
+  // where the rows come from, and the pass's own view of them one click away (optional)
+  if (binChip !== 'junk' && picked.length) {
+    const nKeeps = every.length - picked.length;
+    const said = $('#libHint').textContent;
+    $('#libHint').innerHTML = `${said ? `${escapeHtml(said)} · ` : ''}${picked.length} pick${picked.length === 1 ? '' : 's'} from the first pass`
+      + ` · ${nKeeps ? `${nKeeps} kept by you` : 'none kept yet'}`
+      + '<a class="floorlink" href="/floor" title="the pass: each pick played, with keep / reject — optional">review on the pass ↗</a>';
+  }
   lib.innerHTML = '';
   // one list: the junk rows first, then the keeps in the bin's order or the column's
   const list = (rows) => {
@@ -2354,8 +2418,8 @@ function footageRows(lib, text) {
   // the tab says what the grid holds: the footage, not "not in the cut · 0" over three cards
   const tabOut = $('#binTabs .tab[data-tab=out]');
   if (tabOut) tabOut.textContent = `footage · ${clips.length}`;
-  lib.innerHTML = `<div class="hint">nothing kept yet — the footage, whole clips ·
-    <a href="/floor" style="color:var(--accent)">keep moments on the pass →</a></div>`;
+  lib.innerHTML = `<div class="hint">nothing kept yet — the footage, whole clips; the first
+    pass lists its picks here · <a href="/floor" style="color:var(--accent)">keep moments on the pass →</a></div>`;
   if (clips.length) {
     const body = selTable(lib);
     sortKeeps(clips.map(([c, v]) => ({ clip: c, start: 0, end: v.duration || 0, why: 'whole clip', whole: true })))
@@ -2439,7 +2503,7 @@ async function junkVerdict(clip, verdict) {
 
 /* The Project panel's one line about the bin, from the server's own summary. */
 function paintBinLine() {
-  if (window.dock) dock.badge('bin', keepsUsable().filter((s) => shotOf(s) < 0).length);
+  if (window.dock) dock.badge('bin', keepsUsable().concat(picksUsable()).filter((s) => shotOf(s) < 0).length);
   const el = $('#binLine');
   if (!el) return;
   const sm = bin && bin.summary;
@@ -2454,6 +2518,7 @@ function paintBinLine() {
 }
 
 async function fetchBin() {
+  fetchPicks();                     // the pass's picks, alongside: they paint when they land
   try {
     return await (await fetch('/api/selects')).json();
   } catch (e) {
