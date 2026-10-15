@@ -132,6 +132,41 @@ function jobRow(j) {
 
 function paintJob(row, j) {
   row.className = `job ${j.state}`;
+  // Stop means stop (verdict 4, punch 8): a job that can be stopped carries an × that
+  // calls its own cancel: the index (proxies, close looks, previews) and a render. A
+  // stopped job says nothing more: its row goes, and the next poll does not bring it back.
+  const CANCEL = { index: () => '/api/index/cancel', render: (x) => `/api/render/${x.id}/cancel` };
+  if (j.state === 'cancelled') { row.style.display = 'none'; return; }
+  row.style.display = '';
+  let x = row.querySelector('.jx');
+  if (CANCEL[j.kind] && j.state === 'running') {
+    if (!x) {
+      x = document.createElement('span');
+      x.className = 'jx';
+      x.setAttribute('role', 'button');
+      x.dataset.testid = 'job-cancel';
+      x.textContent = '×';
+      x.title = j.kind === 'index' ? 'Stop indexing (proxies, close looks, previews): what finished is kept'
+        : 'Stop this render: nothing is written';
+      x.style.cssText = 'cursor:pointer;color:var(--dim);padding:0 0 0 2px;font-size:13px;line-height:1';
+      x.onclick = async (e) => {
+        e.stopPropagation();
+        if (x.dataset.busy) return;
+        x.dataset.busy = '1';
+        x.textContent = '…';
+        x.title = 'stopping…';
+        try {
+          await fetch(CANCEL[j.kind](j), { method: 'POST' });
+        } catch (_) { /* the next poll says how it went */ }
+        const seen = strip.seen.get(j.id);
+        if (seen) strip.seen.set(j.id, { ...seen, state: 'cancelled' });
+        row.style.display = 'none';
+      };
+      row.appendChild(x);
+    }
+  } else if (x) {
+    x.remove();
+  }
   row.querySelector('.jname').textContent = j.label;
   row.querySelector('.caret').textContent = strip.open.has(j.id) ? '▾' : '▸';
   row.querySelector('.jbar i').style.width = `${j.pct}%`;
@@ -391,6 +426,10 @@ function commitWhy(box) {
  * and [ ] { }), the white-point numbers, the film's look in every shot and the six-lane
  * coverage strip with its legend — is gone or folded. */
 const SPEEDS = [0.25, 0.5, 0.75, 1, 1.5, 2];
+let assistOpen = false;          // the strip's "Assistant" section, open or closed
+/* Undo's key as this platform spells it: ⌘Z on macOS, Ctrl+Z everywhere else. */
+const ON_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
+const undoKey = () => (ON_MAC ? '⌘Z' : 'Ctrl+Z');
 const speedText = (v) => ({ 0.25: '¼×', 0.5: '½×', 0.75: '¾×' }[v] || `${v}×`);
 
 function buildShot(seg) {
@@ -402,21 +441,15 @@ function buildShot(seg) {
     <div class="sbody">
       <div class="srow top">
         <span class="sname"></span>
-        <button data-act="play" title="play this shot only, then stop · enter">▶ play</button>
-        <button data-act="ask" title="ask for a change to this one shot — opens a box; nothing is spent until its Ask">Ask about this shot${priceTag('shot')}</button>
-        <span class="lookhost"></span>
-        <button data-act="del" title="take this shot out of the cut — ⌘Z brings it back">Remove</button>
       </div>
-      <div class="why" contenteditable title="why this shot — yours to edit, saved with the cut"></div>
-      <div class="said"></div>
       <div class="warns"></div>
       <div class="srow ctl ecx">
         <select class="speed" title="the shot's speed"></select>
         <span class="nudge"${gen ? ' hidden' : ''}>
-          <button data-act="cwarm" title="warmer — ⌘Z undoes it">warmer</button>
-          <button data-act="ccool" title="cooler — ⌘Z undoes it">cooler</button>
-          <button data-act="cbright" title="brighter — ⌘Z undoes it">brighter</button>
-          <button data-act="cdark" title="darker — ⌘Z undoes it">darker</button>
+          <button data-act="cwarm" title="warmer — ${undoKey()} undoes it">warmer</button>
+          <button data-act="ccool" title="cooler — ${undoKey()} undoes it">cooler</button>
+          <button data-act="cbright" title="brighter — ${undoKey()} undoes it">brighter</button>
+          <button data-act="cdark" title="darker — ${undoKey()} undoes it">darker</button>
           <button data-act="creset" class="ghost" title="back to the auto balance">reset</button>
         </span>
         <button class="disc" data-disc="look"${gen ? ' hidden' : ''}>colour &amp; look ▸</button>
@@ -430,7 +463,17 @@ function buildShot(seg) {
         <button data-act="csetref" title="make this the shot others match to (again: none)">set as reference</button>
       </div>
       </div>
-      <div class="srow"><button class="disc" data-disc="why">why? ▸</button></div>
+      <details class="assist" data-testid="ec-assistant">
+      <summary>Assistant</summary>
+      <div class="srow acts">
+        <button data-act="play" title="play this shot only, then stop · enter">▶ play</button>
+        <button data-act="ask" title="ask for a change to this one shot — opens a box; nothing is spent until its Ask">Ask about this shot${priceTag('shot')}</button>
+        <span class="lookhost"></span>
+        <button data-act="del" title="take this shot out of the cut — ${undoKey()} brings it back">Remove</button>
+      </div>
+      <div class="why" contenteditable title="why this shot — yours to edit, saved with the cut"></div>
+      <div class="said"></div>
+      <div class="srow"><button class="disc" data-disc="why" title="the evidence: what is said and seen in the shot, and its colour">why? ▸</button></div>
       <div class="whybox" data-pane="why" hidden>
         <div class="from"><span class="clip"></span> · <span class="times"></span></div>
         <div class="lines"></div>
@@ -448,7 +491,15 @@ function buildShot(seg) {
           <span class="hint shotState"></span>
         </div>
       </div>
+      </details>
     </div>`;
+  // The AI's and the shot's own chrome sit in one collapsed "Assistant" section at the
+  // foot of Effect Controls (verdict 4, punch 10): the panel opens on Premiere's
+  // properties, not on Ask / Look deeper / Remove / a quote. Its open state carries
+  // from shot to shot, as Premiere's twirl-downs do.
+  const assist = el.querySelector('details.assist');
+  assist.open = assistOpen;
+  assist.addEventListener('toggle', () => { assistOpen = assist.open; });
   el.querySelector('.why').addEventListener('blur', (ev) => {
     const text = ev.target.textContent.trim();
     if (seg.why === text) return;
@@ -621,6 +672,7 @@ function fillShot(box, seg) {
 
   const askBox = q('.shotAsk');
   askBox.hidden = !shotAskOpen.has(seg);
+  if (!askBox.hidden && !q('details.assist').open) q('details.assist').open = true;
   const note = q('.shotNote');
   if (document.activeElement !== note) note.value = shotAskDraft.get(seg) || '';
 
@@ -1777,6 +1829,7 @@ function emptyState() {
   const lead = 'Drag a clip here or press <kbd>,</kbd>';
   if (!analysed) {
     el.innerHTML = `<h3>${lead}</h3>`;
+    el.dataset.ai = 'pass';
     return el;
   }
   // One sentence about the film (INTAKE M16 I16.4): the EDL's story — the Ask tool's
@@ -1787,19 +1840,26 @@ function emptyState() {
     <label class="ask-q" for="firstNote">What is this film about?</label>
     <textarea id="firstNote" style="min-height:60px"
       placeholder="optional — a sentence is enough"></textarea>
-    <div style="display:flex;gap:10px;align-items:center;justify-content:center;margin-top:10px;flex-wrap:wrap">
+    <div class="firstRow" style="display:flex;gap:10px;align-items:center;justify-content:center;margin-top:10px;flex-wrap:wrap">
       <button id="firstCut" data-next-for="cut"${unpricedAttr(firstMode())}>${firstLabel()}${priceTag(firstMode())}</button>
       <span class="hint" id="firstAims">${escapeHtml(aimsFor())}</span>
     </div>
     <div class="hint" id="firstState" style="margin-top:8px"></div>`;
-  // The first pass makes a first cut too: while one runs, this button waits rather than
-  // start an overlapping cut (FPUI's `rcFirstPass.state()`; re-checked each second while
-  // the empty state is on screen, since a run starts and ends without a render).
+  // The first pass makes a first cut too, so the empty Timeline offers ONE AI action
+  // (verdict 4, punch 10: "Make a first cut" sat beside "First pass running — see it"):
+  // the first pass's (firstpass.js puts it in this box) until a pass has finished, then
+  // this button — the first cut from the keeps or the index — and the pass's box steps
+  // aside (`data-ai`, workspace.css). Re-checked each second while the empty state is on
+  // screen, since a run starts and ends without a render. While one runs this button
+  // also waits rather than start an overlapping cut.
   const fc = el.querySelector('#firstCut');
   const gate = () => {
     const fp = window.rcFirstPass && typeof window.rcFirstPass.state === 'function'
       ? window.rcFirstPass.state() : null;
     const busy = !!fp && fp.state === 'running';
+    const ai = window.rcFirstPass && !(fp && ['done', 'stale-after-edits'].includes(fp.state))
+      ? 'pass' : 'cut';
+    if (el.dataset.ai !== ai) el.dataset.ai = ai;
     if (fc.dataset.fpBusy !== String(busy)) {
       fc.dataset.fpBusy = String(busy);
       fc.disabled = busy;
@@ -2056,6 +2116,50 @@ function keepsUsable() {
   return ((bin && bin.selects) || []).filter((s) => !s.missing && P && P.clips[s.clip]);
 }
 
+/* The first pass's picks (verdict 4, punch 1): every moment the pass found is a row in
+ * Selects and a marker on the cut — not only what a /floor review kept. GET /api/picks
+ * builds them from the index on the server; a pick a keep already covers is that keep's
+ * row (the keep is yours: your range, your note), and one rejected on /floor is gone.
+ * Re-read with the bin (at most every PICKS_TTL_MS: picks change with the index, not
+ * with an edit); the lanes redraw when they arrive. They are the first pass's: until a
+ * pass has made them (`firstpass_picked`), Selects is the keeps alone, as before. */
+let passPicks = null;         // /api/picks' rows, by clip; null before the first read
+let picksRead = 0;
+let picksBusy = null;
+const PICKS_TTL_MS = 4000;
+
+function fetchPicks(force) {
+  if (picksBusy) return picksBusy;
+  if (!force && passPicks && Date.now() - picksRead < PICKS_TTL_MS) return Promise.resolve(passPicks);
+  picksBusy = fetch('/api/picks?order=clip').then((r) => (r.ok ? r.json() : null)).then((d) => {
+    if (d && Array.isArray(d.picks)) {
+      const was = JSON.stringify((passPicks || []).map((p) => [p.id, p.verdict, p.released]));
+      // the picks are the first pass's: until one has made them, Selects is the keeps
+      passPicks = d.firstpass_picked ? d.picks.map((p) => ({ ...p, pick: true })) : [];
+      picksRead = Date.now();
+      if (JSON.stringify(passPicks.map((p) => [p.id, p.verdict, p.released])) !== was
+          && P && window.tl && tl.state) {
+        if (window.tlLanes) tlLanes.redraw();
+        if (keepsTab()) renderLibrary();
+        else if (window.dock) dock.badge('bin', keepsUsable().concat(picksUsable()).filter((s) => shotOf(s) < 0).length);
+      }
+    }
+    return passPicks;
+  }).catch(() => passPicks).finally(() => { picksBusy = null; });
+  return picksBusy;
+}
+
+/* The pass's picks the board can act on: footage here, not rejected on /floor, and not
+ * already one of the editor's keeps. All of them, as the pass counts them — not only the
+ * clips /floor's rounds have released (their previews may still be building). */
+function picksUsable() {
+  if (!passPicks || !P) return [];
+  const keeps = (bin && bin.selects) || [];
+  return passPicks.filter((p) => P.clips[p.clip]
+    && p.verdict !== 'reject' && p.verdict !== 'pick'
+    && !keeps.some((k) => k.clip === p.clip && overlapRatio([k.start, k.end], [p.start, p.end]) >= 0.5));
+}
+
 function heroesWaiting() {
   return keepsUsable().filter((s) => s.hero && shotOf(s) < 0);
 }
@@ -2221,6 +2325,11 @@ const SEL_CSS = `
 #library table.sel-list button.use.add { padding: 0 6px; line-height: 15px; }
 #library table.sel-list .gone { display: inline; margin: 0; font-size: 11px; }
 #library table.sel-list .junkq { margin: 0; flex-wrap: nowrap; }
+#library table.sel-list .who { flex: none; font-size: 10px; line-height: 14px; padding: 0 4px; border-radius: 2px;
+  color: #e0b04a; border: 1px solid rgba(224, 176, 74, .45); white-space: nowrap; }
+#library table.sel-list .who.yours { color: var(--text); background: #2c3a2c; border-color: #4a6a4a; }
+#libHint .floorlink { color: var(--dim); text-decoration: underline dotted; margin-left: 6px; }
+#libHint .floorlink:hover { color: var(--text); }
 `;
 
 /* The list's table, appended to `lib`; returns its body. */
@@ -2292,7 +2401,8 @@ function reuseStill(row) {
 function keepRow(s, cols) {
   cols = cols || selCols(($('#library') || {}).clientWidth || 300);
   const d = document.createElement('tr');
-  d.className = 'keep row' + (s.missing ? ' missing' : '') + (binSel === keepKey(s) ? ' sel' : '');
+  d.className = 'keep row' + (s.pick ? ' pick' : s.whole ? '' : ' yours')
+    + (s.missing ? ' missing' : '') + (binSel === keepKey(s) ? ' sel' : '');
   d._keep = s;                  // the lanes read the keep off its row, whatever the filter shows
   d.tabIndex = 0;
   const clip = P.clips[s.clip] || {};
@@ -2307,7 +2417,11 @@ function keepRow(s, cols) {
         ? `<a href="#" class="use" data-shot="${at}" title="in the cut · shot ${at + 1} — click to select it on the timeline">shot ${at + 1}</a>`
         : '<button class="use add" title="add it at the playhead · enter · , · or drag it onto the timeline">+ add</button>';
   d.title = `${stem(s.clip)} ${fmt(s.start)}–${fmt(s.end)}${s.why ? `\n${s.why}` : ''}`
+    + (s.pick ? `\nthe first pass's pick · ${s.kind || 'moment'}` : s.whole ? '' : '\nkept by you on the pass')
     + '\ndouble-click: open in the Source monitor with its In and Out';
+  // who it is from: the pass's kind on a pick, "yours" on a keep (a whole clip is neither)
+  const who = s.pick ? `<span class="who pass" title="the first pass found this — ${escapeHtml(s.kind || 'a moment')}">${escapeHtml(s.kind || 'pick')}</span>`
+    : s.whole ? '' : '<span class="who yours" title="you kept this on the pass">yours</span>';
   // the still loads with the row, not lazily: a 30 px thumbnail of a frame the server
   // caches on disk; a lazy one in a tab opened later was fetched again mid-edit
   const cell = (k) => {
@@ -2315,7 +2429,7 @@ function keepRow(s, cols) {
       return `<td class="name"><span class="n">${still
         ? `<img class="still" loading="eager" decoding="async" draggable="false"
                alt="${escapeHtml(stem(s.clip))} at ${s.start.toFixed(1)}s" src="${still}">`
-        : '<span class="still"></span>'}<span class="w${s.note ? ' note' : ''}">${
+        : '<span class="still"></span>'}${who}<span class="w${s.note ? ' note' : ''}">${
         s.hero ? '<span class="hero">★</span> ' : ''}${escapeHtml(keepLabel(s))}</span></span></td>`;
     }
     if (k === 'clip') return `<td>${escapeHtml(stem(s.clip))}</td>`;
@@ -2390,7 +2504,9 @@ function addKeep(s) {
 }
 
 function renderKept(lib) {
-  const every = binOrder((bin && bin.selects) || []);
+  // the editor's keeps and the first pass's picks, one list (verdict 4, punch 1)
+  const picked = picksUsable();
+  const every = binOrder(((bin && bin.selects) || []).concat(picked));
   const isOut = (s) => s.missing || !P.clips[s.clip] || shotOf(s) < 0;
   const nOut = every.filter((s) => isOut(s) && junkState(s.clip) !== 'confirmed').length;
   const nAll = every.filter((s) => junkState(s.clip) !== 'confirmed').length;
@@ -2414,7 +2530,15 @@ function renderKept(lib) {
   $('#libHint').textContent = binChip === 'junk'
     ? 'Junk — proposed by a measurement, yours to confirm. Confirmed clips are out of the Ask, Find and this grid, and the index skips their look.'
     : !all.length || !keeps.length || keeps.length === all.length ? ''
-      : `${keeps.length} of ${all.length} keeps match`;
+      : `${keeps.length} of ${all.length} ${picked.length ? 'match' : 'keeps match'}`;
+  // where the rows come from, and the pass's own view of them one click away (optional)
+  if (binChip !== 'junk' && picked.length) {
+    const nKeeps = every.length - picked.length;
+    const said = $('#libHint').textContent;
+    $('#libHint').innerHTML = `${said ? `${escapeHtml(said)} · ` : ''}${picked.length} pick${picked.length === 1 ? '' : 's'} from the first pass`
+      + ` · ${nKeeps ? `${nKeeps} kept by you` : 'none kept yet'}`
+      + '<a class="floorlink" href="/floor" title="the pass: each pick played, with keep / reject — optional">review on the pass ↗</a>';
+  }
   lib.innerHTML = '';
   // one list: the junk rows first, then the keeps in the bin's order or the column's
   const list = (rows) => {
@@ -2457,8 +2581,8 @@ function footageRows(lib, text) {
   // the tab says what the grid holds: the footage, not "not in the cut · 0" over three cards
   const tabOut = $('#binTabs .tab[data-tab=out]');
   if (tabOut) tabOut.textContent = `footage · ${clips.length}`;
-  lib.innerHTML = `<div class="hint">nothing kept yet — the footage, whole clips ·
-    <a href="/floor" style="color:var(--accent)">keep moments on the pass →</a></div>`;
+  lib.innerHTML = `<div class="hint">nothing kept yet — the footage, whole clips; the first
+    pass lists its picks here · <a href="/floor" style="color:var(--accent)">keep moments on the pass →</a></div>`;
   if (clips.length) {
     const body = selTable(lib);
     sortKeeps(clips.map(([c, v]) => ({ clip: c, start: 0, end: v.duration || 0, why: 'whole clip', whole: true })))
@@ -2542,7 +2666,7 @@ async function junkVerdict(clip, verdict) {
 
 /* The Project panel's one line about the bin, from the server's own summary. */
 function paintBinLine() {
-  if (window.dock) dock.badge('bin', keepsUsable().filter((s) => shotOf(s) < 0).length);
+  if (window.dock) dock.badge('bin', keepsUsable().concat(picksUsable()).filter((s) => shotOf(s) < 0).length);
   const el = $('#binLine');
   if (!el) return;
   const sm = bin && bin.summary;
@@ -2557,6 +2681,7 @@ function paintBinLine() {
 }
 
 async function fetchBin() {
+  fetchPicks();                     // the pass's picks, alongside: they paint when they land
   try {
     return await (await fetch('/api/selects')).json();
   } catch (e) {
@@ -2866,7 +2991,7 @@ async function snap() {
   const before = total();
   segs = data.segments;
   render();
-  toast(`snapped: ${fmt(before)} → ${fmt(total())} (undo with ⌘Z)`, 4000);
+  toast(`snapped: ${fmt(before)} → ${fmt(total())} (undo with ${undoKey()})`, 4000);
 }
 
 /* Ask — the interject loop. A revision arrives as a *proposal*: shown as a diff,
@@ -3150,10 +3275,10 @@ function acceptProposal(everything) {
   save();                       // straight to disk; a 16-shot cut is not "in progress"
   answerProposal('accept', partial ? { accepted: r.accepted, of: r.total,
                                        rejected: r.rejectedShots, kept: r.keptRemoved } : null);
-  toast(partial ? `applied ${r.accepted} of ${r.total} shots${graded ? ' and the colour' : ''} — undo with ⌘Z`
-    : !graded ? 'applied — undo with ⌘Z'
-      : cutToo ? 'applied, cut and colour — ⌘Z undoes both'
-        : 'colour applied — ⌘Z undoes it');
+  toast(partial ? `applied ${r.accepted} of ${r.total} shots${graded ? ' and the colour' : ''} — undo with ${undoKey()}`
+    : !graded ? `applied — undo with ${undoKey()}`
+      : cutToo ? `applied, cut and colour — ${undoKey()} undoes both`
+        : `colour applied — ${undoKey()} undoes it`);
 }
 
 /* ▶ Play it (INTAKE M16 I16.4): the proposed cut plays in the monitor from its ghost
@@ -3178,7 +3303,13 @@ function rejectProposal() {
  * thrown-away proposal "waiting for you". */
 function answerProposal(answer, partial) {
   // `partial`: which shots an Accept took ({accepted, of, rejected: [k], kept: [ids]}) —
-  // on the record for the server to read; it answers the record the same either way
+  // on the record for the server to read; it answers the record the same either way.
+  // With it go the ranges the editor rejected (verdict 4: a re-run brought one back),
+  // from the review the Accept just read (tlLanes.reviewed).
+  const lanes = window.tlLanes;
+  if (partial && !partial.ranges && lanes && lanes.reviewed && Array.isArray(lanes.reviewed.lastRanges)) {
+    partial = { ...partial, ranges: lanes.reviewed.lastRanges };
+  }
   fetch('/api/asks/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(partial ? { answer, partial } : { answer }) }).then(flowSoon, () => {});
 }

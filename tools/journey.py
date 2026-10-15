@@ -15,21 +15,27 @@ The steps, each one a screenshot at 1440×900 in `<out dir>/NN-step.png`:
   01 open           the board lands; the bin holds the fixture; "Run first pass" in the header
   02 firstpass      one click on [data-testid=firstpass-button] opens its panel (steps, cost)
   03 run            [data-testid=firstpass-run] → the index (stubbed) → picks → the proposal opens
-  04 accept         Accept puts the proposed cut on V1 and on disk
-  05 trim-out       a ripple trim of shot 1's out, dragged on the cut's edge column
-  06 trim-in        a ripple trim of shot 3's in, the same way
-  07 razor          the playhead into shot 2 by a click on the ruler, then C: two pieces
-  08 move           shot 4 dragged by its body to the head of the film
-  09 warmer         Effect Controls › Lumetri Color › Temperature on a trimmed shot
-  10 rerun-panel    the header reads "Re-run first pass"; its panel names both trimmed shots as kept
-  11 rerun-accept   Run, accept: every kept shot (the trimmed two among them) has the same in/out
-  12 export         Ctrl+M → export-dialog, export-name, export-go, export-progress → 100, export-done
-  13 ffprobe        the file's duration is within one frame of tl.total()
+  04 reject         ✗ on the proposal's 5th shot (its ghost's `.rv.no`): Accept reads "Accept 4 of 5"
+  05 accept         Accept puts the 4 accepted shots on V1 and on disk; the EDL's
+                    provenance.rejected records the 5th shot's range (verdict 4, punch 2)
+  06 selects        Selects lists the pass's picks (> 0 rows, one per pick); an amber marker
+                    on the cut wherever a pick overlaps a shot (verdict 4, punch 1)
+  07 trim-out       a ripple trim of shot 1's out, dragged on the cut's edge column
+  08 trim-in        a ripple trim of shot 3's in, the same way
+  09 razor          the playhead into shot 2 by a click on the ruler, then C: two pieces
+  10 move           shot 4 dragged by its body to the head of the film
+  11 warmer         Effect Controls › Lumetri Color › Temperature on a trimmed shot
+  12 rerun-panel    the header reads "Re-run first pass"; its panel names both trimmed shots as kept
+  13 rerun-accept   Run (the model re-proposes the rejected range): the proposal leaves it out,
+                    says so in plan.firstpass.rejected and the notes; accept: every kept shot
+                    (the trimmed two among them) has the same in/out
+  14 export         Ctrl+M → export-dialog, export-name, export-go, export-progress → 100, export-done
+  15 ffprobe        the file's duration is within one frame of tl.total()
 
 The first failing step stops the journey. Zero page errors are allowed: an error thrown
 in the page fails the step it happened in. `<out dir>/journey.json` has each step's name,
 ok, ms, PNG, why it failed and the page errors; the last line printed is the gate's:
-`journey ✓ 13 steps · 74 s` or `journey ✗ step 7 razor: <why>`. Exit 0 only when green.
+`journey ✓ 15 steps · 74 s` or `journey ✗ step 7 razor: <why>`. Exit 0 only when green.
 
 The script needs fastapi, uvicorn, httpx, numpy, pytest and playwright; when the Python
 running it lacks them it re-runs itself under `uv run --with …` (as the gate's suite does).
@@ -131,13 +137,19 @@ FIRST_CUT = [
     {"clip": "CLIP_B.MP4", "in": 2.4, "out": 4.0, "why": "the reply"},
     {"clip": "CLIP_C.MP4", "in": 0.5, "out": 4.0, "why": "the walk"},
     {"clip": "CLIP_B.MP4", "in": 4.4, "out": 5.6, "why": "goodbye"},
+    # the shot the editor rejects in the review (step 04); last, so the cut the later
+    # steps trim, razor and move is the same four shots
+    {"clip": "CLIP_C.MP4", "in": 4.4, "out": 5.6, "why": "the wave"},
 ]
+REJECTED = FIRST_CUT[-1]
 # The re-run's answer tampers with the editor's shots on purpose (the server must put
-# each locked one back exactly) and offers one new shot.
+# each locked one back exactly), offers one new shot, and proposes the rejected range
+# again — the server must leave it out (verdict 4, punch 2), or the check is vacuous.
 RE_CUT = [
     {"clip": "CLIP_A.MP4", "in": 0.4, "out": 2.2, "why": "the greeting, longer"},
     {"clip": "CLIP_C.MP4", "in": 0.2, "out": 3.0, "why": "the walk, earlier"},
     {"clip": "CLIP_A.MP4", "in": 4.6, "out": 5.8, "why": "a new ending"},
+    {"clip": "CLIP_C.MP4", "in": 4.4, "out": 5.6, "why": "the wave, again"},
 ]
 
 
@@ -244,6 +256,21 @@ class Journey:
         import httpx
         return httpx.get(self.base + "/api/project", timeout=30).json()
 
+    def wait_edl(self, cond, why: str, timeout=15.0) -> dict:
+        """Wait for the EDL file itself (what the server writes, provenance and all)."""
+        import server
+        deadline = time.time() + timeout
+        d = {}
+        while time.time() < deadline:
+            try:
+                d = json.loads(Path(server.STATE["edl"]).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                d = {}
+            if cond(d):
+                return d
+            time.sleep(0.2)
+        raise StepFailed(why)
+
     def fp_state(self) -> dict:
         import httpx
         return httpx.get(self.base + "/api/firstpass", timeout=30).json()
@@ -291,6 +318,10 @@ class Journey:
                              f" · stage {s.get('stage')} · {str(s.get('error') or '')[:120]})")
         plan = self.js("pendingPlan ? pendingPlan.segments.map(s => ({id: s.id, clip: s.clip, in: s.in, out: s.out})) : null")
         need(plan, "the proposal is showing but holds no plan")
+        # the shots the review rejected (✗ on their ghosts) are not applied
+        out = set(self.js("[...document.querySelectorAll('#tl .tl-xlane[data-lane=ghost] .ghost')]"
+                          ".map((g, k) => g.classList.contains('rejected') ? k : -1).filter(k => k >= 0)"))
+        plan = [p for k, p in enumerate(plan) if k not in out]
         self.pg.locator("#acceptProposal").click()
         want = [(p["clip"], round(p["in"], 3), round(p["out"], 3)) for p in plan]
         self.wait_disk(lambda d: [(s["clip"], round(s["in"], 3), round(s["out"], 3))
@@ -366,6 +397,21 @@ class Journey:
             n = self.js("pendingPlan ? pendingPlan.segments.length : 0")
             need(n == len(FIRST_CUT), f"the proposal holds {n} shots, the model proposed {len(FIRST_CUT)}")
 
+        def reject():
+            # ✗ on the 5th proposed shot, by its ghost's own review button
+            ghosts = pg.locator("#tl .tl-xlane[data-lane=ghost] .ghost")
+            need(ghosts.count() == len(FIRST_CUT),
+                 f"the ghost lane shows {ghosts.count()} shots, not {len(FIRST_CUT)}")
+            k = len(FIRST_CUT) - 1
+            ghosts.nth(k).locator("button.rv.no").click()
+            self.until(f"document.querySelectorAll('#tl .tl-xlane[data-lane=ghost] .ghost')[{k}]"
+                       ".classList.contains('rejected')", "the ✗ did not mark the shot rejected", 5000)
+            label = pg.locator("#acceptProposal").inner_text().strip()
+            need(label == f"Accept {k} of {k + 1}", f"after one ✗ the button reads {label!r}")
+            s = self.js(f"(s => ({{clip: s.clip, in: s.in, out: s.out}}))(pendingPlan.segments[{k}])")
+            need(s["clip"] == REJECTED["clip"], f"the 5th proposed shot is {s}, not the model's {REJECTED}")
+            F["rejected"] = s
+
         def accept():
             plan = self.accept_proposal()
             self.until(f"document.querySelectorAll('#tl .tl-lane[data-lane=V1] .blk').length === {len(plan)}",
@@ -376,14 +422,46 @@ class Journey:
             need([(s["clip"], s["in"], s["out"]) for s in got]
                  == [(s["clip"], s["in"], s["out"]) for s in plan],
                  f"the accepted cut is not the proposal shown: {got} vs {plan}")
-            need([s["clip"] for s in got] == [s["clip"] for s in FIRST_CUT],
+            need([s["clip"] for s in got] == [s["clip"] for s in FIRST_CUT[:-1]],
                  f"the accepted cut is not the model's: {[s['clip'] for s in got]}")
             need(all(s["id"] for s in got), "an accepted shot has no id")
+            need(not any(s["clip"] == F["rejected"]["clip"] and s["in"] == F["rejected"]["in"]
+                         for s in got), f"the rejected shot {F['rejected']} was applied")
             F["accepted"] = got
             self.wait_saved()
+            # the rejection is remembered on the cut (provenance.rejected), for the re-run
+            r = F["rejected"]
+            edl = self.wait_edl(lambda e: any(
+                x.get("clip") == r["clip"] and abs(x.get("in", -1) - r["in"]) < 0.01
+                and abs(x.get("out", -1) - r["out"]) < 0.01
+                for x in ((e.get("provenance") or {}).get("rejected") or [])),
+                f"the EDL's provenance.rejected never recorded {r['clip']} {r['in']}–{r['out']}")
+            F["provenance_rejected"] = (edl.get("provenance") or {}).get("rejected")
             # the edge columns over the cuts are what the trims drag
             self.sel("#tl .tl-edge .q.t.l", "no edge columns over the cuts to trim with", state="attached")
             pg.evaluate("Promise.all(segs.map(s => tl.snapsFor(s.clip)))")
+
+        def selects():
+            # the first pass's picks are editor objects: rows in Selects, markers on the cut
+            import httpx
+            d = httpx.get(self.base + "/api/picks?order=clip", timeout=30).json()
+            need(d.get("firstpass_picked"), "/api/picks does not know the first pass made its picks")
+            picks = [p for p in d["picks"] if p.get("verdict") not in ("reject", "pick")]
+            need(len(picks) > 0, "the first pass made no picks to list")
+            pg.evaluate("dock.open('bin')")
+            pg.locator("#binTabs .tab[data-tab=all]").click()
+            self.until(f"document.querySelectorAll('#library tr.keep.pick').length === {len(picks)}",
+                       f"Selects does not list the pass's {len(picks)} picks", 15000)
+            n = self.js("document.querySelectorAll('#library tr.keep.pick').length")
+            need(n > 0, "Selects shows none of the pass's picks")
+            F["selects_picks"] = n
+            want = sum(1 for s in self.segs() for p in picks
+                       if p["clip"] == s["clip"] and p["end"] > s["in"] and p["start"] < s["out"])
+            self.until(f"document.querySelectorAll('#tl .tl-pick').length === {want}",
+                       f"the cut does not carry one marker per pick over a shot ({want})")
+            F["pick_markers"] = want
+            # the step's screenshot is Selects with the picks; the steps after are the
+            # timeline's and the other panels', and do not care which tab Project shows
 
         def trim(i: int, side: str, dt: float):
             def go():
@@ -537,6 +615,22 @@ class Journey:
 
         def rerun_accept():
             pg.locator('[data-testid="firstpass-run"]').click()
+            self.sel("#proposal", "the re-run opened no proposal", 180000)
+            self.until("pendingPlan && pendingPlan.firstpass", "the re-run's proposal has no first-pass facts", 30000)
+            # the model proposed the rejected range again (RE_CUT); the proposal leaves it
+            # out and says so — in plan.firstpass.rejected and in the notes
+            r = F["rejected"]
+            p = self.js("({segs: pendingPlan.segments.map(s => ({clip: s.clip, in: s.in, out: s.out})),"
+                        " left: (pendingPlan.firstpass || {}).rejected || [], notes: pendingPlan.notes || ''})")
+            back = [s for s in p["segs"] if s["clip"] == r["clip"]
+                    and min(s["out"], r["out"]) - max(s["in"], r["in"]) > 0.5 * (r["out"] - r["in"])]
+            need(not back, f"the re-run proposes the rejected range again: {back}")
+            need(any(x.get("clip") == r["clip"] and x.get("action") in ("dropped", "kept as it is")
+                     for x in p["left"]),
+                 f"plan.firstpass.rejected does not name the left-out range: {p['left']}")
+            need("you rejected" in p["notes"] and r["clip"].split(".")[0] in p["notes"],
+                 f"the notes do not say the rejected shot was left out: {p['notes'][-200:]!r}")
+            F["rerun_left_out"] = p["left"]
             self.accept_proposal(timeout=180000)
             after = self.segs()
             by = {s["id"]: s for s in after}
@@ -618,7 +712,7 @@ class Journey:
                  f"the video stream is {vd:.3f} s, the sequence {want:.3f} s (one frame = {frame:.4f} s)")
 
         plan = [("open", open_board), ("firstpass", firstpass_panel), ("run", run_firstpass),
-                ("accept", accept), ("trim-out", trim(0, "out", -0.35)),
+                ("reject", reject), ("accept", accept), ("selects", selects), ("trim-out", trim(0, "out", -0.35)),
                 ("trim-in", trim(2, "in", 0.4)), ("razor", razor), ("move", move),
                 ("warmer", warmer), ("rerun-panel", rerun_panel), ("rerun-accept", rerun_accept),
                 ("export", export), ("ffprobe", ffprobe)]
@@ -743,7 +837,7 @@ def main() -> int:
         mp.undo()
     j.facts["stopped_children"] = len(_stop_children())     # e.g. the export's review copy
 
-    planned = getattr(j, "planned", 13)
+    planned = getattr(j, "planned", 15)
     fail = next((s for s in j.steps if not s["ok"]), None)
     total = time.time() - t_all
     if fail:

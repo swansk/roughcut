@@ -686,14 +686,22 @@
     settle();
     const at = clamp(tl.state.playhead, 0, tl.total());
     const seg = { clip: s.clip, in: s.in, out: s.out, why: s.why };
-    // The track targets (the headers): V2 targeted and V1 not lays the clip over the cut
-    // on V2 at the playhead — V2 is not magnetic, so insert and overwrite are the same.
+    // The track targets (the headers): an upper video track (V2, V3…) targeted and V1 not
+    // lays the clip over the cut there at the playhead — those tracks are not magnetic,
+    // so insert and overwrite are the same. No video track targeted and an added audio
+    // track (A3…) targeted: the clip's sound goes there.
     const tr = tl.tracks ? tl.tracks() : null;
-    if (tr && tr.V2.target && !tr.V1.target) {
-      const oid = tl.addOverlay(seg, at);
-      if (oid == null) { say(`could not lay that on V2`); return true; }
+    const names = tl.trackNames ? tl.trackNames() : ['V2', 'V1', 'A1', 'A2'];
+    const upper = tr && !tr.V1.target
+      ? names.filter((n) => n[0] === 'V' && n !== 'V1').reverse().find((n) => tr[n] && tr[n].target) : null;
+    const sound = tr && !upper && !tr.V1.target
+      ? names.find((n) => /^A[3-9]$/.test(n) && tr[n] && tr[n].target) : null;
+    if (upper || sound) {
+      const track = upper || sound;
+      const oid = tl.addOverlay(seg, at, track);
+      if (oid == null) { say(`could not lay that on ${track}`); return true; }
       tl.setPlayhead(clamp(at + tl.dur(seg), 0, tl.total()));
-      say(`laid ${stem(s.clip)} ${tl.fmt(s.in)}–${tl.fmt(s.out)} on V2 at ${tl.tc(at)} · from ${s.from}`);
+      say(`laid ${stem(s.clip)} ${tl.fmt(s.in)}–${tl.fmt(s.out)} on ${track} at ${tl.tc(at)} · from ${s.from}`);
       return true;
     }
     const id = kind === 'insert' ? tl.insertAt(seg, at) : tl.overwrite(seg, at);

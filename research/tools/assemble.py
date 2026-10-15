@@ -85,6 +85,22 @@ YOUTUBE_MAX_W, YOUTUBE_MAX_H = 1920, 1080
 MATCH_MAX_W, MATCH_MAX_H = 8192, 8192
 AUDIO_RATE = 48000
 
+# The sound is AAC-encoded exactly once (verdict 4, punch 6). Every part carries its
+# sound as 16-bit PCM — lossless, so levelling, retiming and the effects' sounds cost no
+# generation — and the join encodes it, unless a later pass re-lays it anyway (A1 rebuilt
+# from the parts, a music bed mixed under it): then the join writes PCM too and that pass
+# is the one encode. An AAC part re-encoded at the join was two generations, and a third
+# with a bed under it.
+AUDIO_PCM = ["-c:a", "pcm_s16le", "-ac", "2", "-ar", str(AUDIO_RATE)]
+
+
+def audio_codec(video: dict, final: bool) -> list[str]:
+    """The film's sound: AAC at the profile's bitrate when this pass is the last to
+    touch it, PCM when a later pass will encode it."""
+    if final:
+        return ["-c:a", "aac", "-b:a", video["audio_bitrate"], "-ac", "2"]
+    return AUDIO_PCM
+
 # `--progress`: every part's encode writes ffmpeg's `-progress` beside it
 # (`part_007.progress`), so whoever asked for the render can read how many seconds of
 # the film are encoded rather than guess from a clock (Export dialog, verdict 2 punch 5).
@@ -399,7 +415,8 @@ def encode_part(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path
             "-c:v", "libx264", "-preset", video["preset"], "-crf", video["crf"],
             "-fps_mode", "cfr",
             *COLOUR_TAGS,
-            "-c:a", "aac", "-b:a", video["audio_bitrate"], "-ac", "2",
+            # PCM, not AAC: the film's sound is encoded once, at the end (`AUDIO_PCM`)
+            *AUDIO_PCM,
             "-video_track_timescale", str(video["timescale"]),
             # -dn drops the source telemetry stream; -write_tmcd stops the mov muxer
             # from synthesising a fresh timecode track out of the source metadata.
@@ -433,13 +450,15 @@ def cut_with_effects(src: Path, t_in: float, t_out: float, gain_db: float, dest:
 
 
 def join_parts(parts: list[Path], spans: list[tuple[int, int]], video: dict,
-               out: Path, workdir: Path) -> None:
+               out: Path, workdir: Path, *, final_audio: bool = True) -> None:
     """The film from its parts: the pictures stream-copied end to end through the
     concat demuxer, each placed by its `duration` on the frame grid (its own
     microseconds, rounded off the cumulative time so nothing drifts), and the sound
     re-joined as one stream — each part's own, exactly its frames long — and encoded
     once. The parts' sound used to ride the concat too, and a part whose AAC ran a few
-    ms past its picture pushed every later picture off the grid."""
+    ms past its picture pushed every later picture off the grid. The parts' sound is
+    PCM, so this is the sound's one AAC encode — or, with `final_audio=False` (a later
+    pass re-lays the sound), PCM again and no encode at all."""
     rate = rate_of(video["fps"])
     lines = []
     for p, (a, b) in zip(parts, spans):
@@ -463,7 +482,7 @@ def join_parts(parts: list[Path], spans: list[tuple[int, int]], video: dict,
              # (0.021 s) after the sound; the first frame is the film's zero
              "-map", "0:v:0", "-map", "[aout]", "-c:v", "copy",
              "-bsf:v", "setts=pts=PTS-STARTPTS:dts=DTS-STARTPTS",
-             "-c:a", "aac", "-b:a", video["audio_bitrate"], "-ac", "2",
+             *audio_codec(video, final_audio),
              "-t", f"{float(total):.6f}", "-write_tmcd", "0",
              "-movflags", "+faststart", str(out)])
     if r.returncode != 0:
@@ -472,7 +491,8 @@ def join_parts(parts: list[Path], spans: list[tuple[int, int]], video: dict,
 
 def tracks_pass(film: Path, edl: dict, segments: list[dict], parts: list[Path],
                 video: dict, orient: str, footage: Path, generated_dir: Path | None,
-                workdir: Path, film_s: float | None = None) -> list[str]:
+                workdir: Path, film_s: float | None = None, *,
+                final_audio: bool = True) -> list[str]:
     """The sequence's tracks over the concatenated film (roughcut/tracks.py), in ONE pass
     and only when the tracks ask for something the plain concat is not:
 
@@ -484,7 +504,9 @@ def tracks_pass(film: Path, edl: dict, segments: list[dict], parts: list[Path],
         over V1, full frame, from its film second for its length; picture only.
       * V1's eye off: V1 is black under whatever V2 holds.
 
-    The video is copied when only the sound changed. Returns the lines to print."""
+    The video is copied when only the sound changed. A rebuilt A1 is encoded here, from
+    the parts' PCM — the film's one AAC encode — unless `final_audio` is False (a bed
+    goes under it next: PCM, and the bed's pass encodes). Returns the lines to print."""
     trk = edl.get("tracks") or {}
     plan = tracksmod.a1_plan(segments, trk, edits.dur)
     # the film's own length — whole frames on the grid (`frame_spans`) — not the sum of
@@ -492,12 +514,19 @@ def tracks_pass(film: Path, edl: dict, segments: list[dict], parts: list[Path],
     total = float(film_s) if film_s is not None else plan["total"]
     v1_eye = tracksmod.visible(trk, "V1")
     overlays = []
-    if tracksmod.visible(trk, "V2"):
-        for o in edl.get("overlays") or []:
-            length = min(edits.dur(o), total - float(o["at"]))
-            if length > 0.05:
-                overlays.append((o, length))
-    if not plan["needed"] and v1_eye and not overlays:
+    # V2 and the added video tracks (V3…), bottom to top: a higher track covers a lower
+    # one; a hidden track's clips are left out (tracksmod.video_layers)
+    for o in tracksmod.video_layers(trk, edl.get("overlays") or []):
+        length = min(edits.dur(o), total - float(o["at"]))
+        if length > 0.05:
+            overlays.append((o, length))
+    # the added audio tracks' clips (A3…), each at its track's gain, mixed with A1
+    extra_audio = []
+    for c, gain_db in tracksmod.audio_layers(trk, edl.get("audio") or []):
+        length = min(edits.dur(c), total - float(c["at"]))
+        if length > 0.05:
+            extra_audio.append((c, length, gain_db))
+    if not plan["needed"] and v1_eye and not overlays and not extra_audio:
         return []
     said: list[str] = []
     inputs: list[str] = ["-i", str(film)]
@@ -528,13 +557,16 @@ def tracks_pass(film: Path, edl: dict, segments: list[dict], parts: list[Path],
                          f"enable='between(t,{at:.3f},{at + length:.3f})'[v{j}]")
             base = f"[v{j}]"
             n += 1
-            said.append(f"V2 {j:02d} {o['clip']} {o['in']:.1f}-{o['out']:.1f} over "
+            said.append(f"{o.get('track') or 'V2'} {j:02d} {o['clip']} {o['in']:.1f}-{o['out']:.1f} over "
                         f"{at:.2f}-{at + length:.2f}s")
         graph.append(f"{base}format=yuv420p[vout]")
         vmap = "[vout]"
         vcodec = ["-c:v", "libx264", "-preset", video["preset"], "-crf", video["crf"],
                   "-fps_mode", "cfr", "-r", str(video["fps"]), *COLOUR_TAGS]
     amap, acodec = "0:a:0", ["-c:a", "copy"]
+    if extra_audio and not plan["needed"]:
+        # A1 as cut is the film's own sound; the added tracks mix over it
+        graph.append("[0:a]anull[a1]")
     if plan["needed"]:
         if plan["audible"]:
             first = n
@@ -548,7 +580,27 @@ def tracks_pass(film: Path, edl: dict, segments: list[dict], parts: list[Path],
             graph.append(f"anullsrc=r=48000:cl=stereo,atrim=0:{max(0.01, total):.3f}[a1]")
             said.append("A1 muted: the film's sound is silence")
         amap = "[a1]"
-        acodec = ["-c:a", "aac", "-b:a", video["audio_bitrate"], "-ac", "2"]
+        acodec = audio_codec(video, final_audio)
+    if extra_audio:
+        labels = ["[a1]"]
+        for j, (c, length, gain_db) in enumerate(extra_audio):
+            src = source_of(footage, generated_dir, c["clip"])
+            if not src.exists():
+                raise SystemExit(f"missing footage for {c['track']}: {src}")
+            spd = edits.speed_of(c)
+            inputs += ["-ss", f"{float(c['in']):.3f}", "-t", f"{length * spd:.3f}", "-i", str(src)]
+            ms = int(round(float(c["at"]) * 1000))
+            tempo = f",{atempo_chain(spd)}" if abs(spd - 1.0) > 1e-9 else ""
+            graph.append(f"[{n}:a]aresample={AUDIO_RATE},asetpts=PTS-STARTPTS{tempo},"
+                         f"volume={gain_db:.2f}dB,adelay={ms}|{ms}[x{j}]")
+            labels.append(f"[x{j}]")
+            n += 1
+            said.append(f"{c['track']} {j:02d} {c['clip']} {c['in']:.1f}-{c['out']:.1f} at "
+                        f"{float(c['at']):.2f}s, {gain_db:+.1f} dB")
+        graph.append(f"{''.join(labels)}amix=inputs={len(labels)}:normalize=0:"
+                     f"dropout_transition=0,apad,atrim=0:{max(0.01, total):.3f}[amix]")
+        amap = "[amix]"
+        acodec = audio_codec(video, final_audio)
     out = film.with_name(film.stem + ".tracks.mp4")
     cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin", *inputs,
            "-filter_complex", ";".join(graph), "-map", vmap, "-map", amap, "-dn",
@@ -890,20 +942,9 @@ def main() -> int:
                 print(f"      fx: {e.get('name', 'effect')} × {len(evs)} at "
                       + ", ".join(f"{ev['t_part']:.2f}s" for ev in evs))
 
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        join_parts(parts, spans, video, args.out, workdir)
-
-        assert_no_rotation(args.out, orient)
-
-        # The tracks (roughcut/tracks.py): A1's mute / gain / unlinked offsets, V2 over
-        # V1, V1's eye — one pass, only when one of them is not the default.
-        for line in tracks_pass(args.out, edl, segments, parts, video, orient,
-                                args.footage, args.generated_dir, workdir, film_s):
-            print(f"tracks: {line}")
-        assert_no_rotation(args.out, orient)
-
-        # Film-wide effects run here, after the picture is assembled: the video stream
-        # is copied through, so the bed costs no generation of quality.
+        # Film-wide effects run after the picture is assembled: the video stream is
+        # copied through, so the bed costs no generation of quality. Resolved before
+        # the join because it decides which pass encodes the sound (`AUDIO_PCM`).
         music = (edl.get("effects_music") or {}) if isinstance(edl, dict) else {}
         if args.music:
             music = {**music, "asset": str(args.music)}
@@ -919,6 +960,24 @@ def main() -> int:
             g = float(spec["gain_db"]) + float(a2["gain_db"])
             music = {**music, "gain_db": round(max(effects.MIN_GAIN_DB,
                                                    min(effects.MAX_GAIN_DB, g)), 2)}
+        # Who encodes the sound, once: the bed's pass, else the tracks pass when it
+        # re-lays A1 from the parts, else the join.
+        relays_a1 = tracksmod.a1_plan(segments, edl.get("tracks") or {}, edits.dur)["needed"]
+        encoder = "music" if music.get("asset") else "tracks" if relays_a1 else "join"
+
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        join_parts(parts, spans, video, args.out, workdir, final_audio=encoder == "join")
+
+        assert_no_rotation(args.out, orient)
+
+        # The tracks (roughcut/tracks.py): A1's mute / gain / unlinked offsets, V2 over
+        # V1, V1's eye — one pass, only when one of them is not the default.
+        for line in tracks_pass(args.out, edl, segments, parts, video, orient,
+                                args.footage, args.generated_dir, workdir, film_s,
+                                final_audio=encoder == "tracks"):
+            print(f"tracks: {line}")
+        assert_no_rotation(args.out, orient)
+
         if music.get("asset"):
             scored = args.out.with_name(args.out.stem + ".scored.mp4")
             # The transcripts know where the talking is; ducking on the film's
@@ -926,7 +985,7 @@ def main() -> int:
             speech = (effects.speech_regions(segments, args.sidecars)
                       if args.sidecars else None)
             applied = effects.add_music(args.out, music, scored, args.assets,
-                                        speech=speech)
+                                        speech=speech, audio_bitrate=video["audio_bitrate"])
             scored.replace(args.out)
             assert_no_rotation(args.out, orient)
             how = "flat"

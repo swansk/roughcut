@@ -190,13 +190,13 @@ def test_a_click_on_a_block_selects_it_and_the_inspector_and_the_index_selects_t
     assert page.locator("#tl .blk.sel").get_attribute("data-id") == second
     assert page.evaluate("[...tl.state.sel]") == [second]
     assert page.evaluate("sel") == 1, "app.js's index follows the timeline's id"
-    assert page.locator("#inspector .clip").inner_text() == "CLIP_B"
+    assert page.locator("#inspector .clip").text_content() == "CLIP_B"
     # the other way: app.js moving its index (playback, a kept row's link) selects the block
     page.evaluate("sel = 0; paint()")
     assert page.evaluate("sel") == 0
     assert page.locator("#tl .blk.sel").get_attribute("data-id") == ids(page)[0]
     assert page.evaluate("tl.state.anchor") == ids(page)[0]
-    assert page.locator("#inspector .clip").inner_text() == "CLIP_A"
+    assert page.locator("#inspector .clip").text_content() == "CLIP_A"
 
 
 def test_a_double_click_on_a_block_plays_the_cut_from_it(page):

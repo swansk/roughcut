@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import shutil
 import sys
 import threading
@@ -708,3 +709,191 @@ def test_a_partial_accept_records_a_base_and_a_rerun_keeps_only_the_hand_edits(f
     assert {m["id"]: m["how"] for m in s["manual_edits"]} == prior
     assert sorted(s["would"]["locked"]) == sorted(prior), s["would"]["locked"]
     assert b["id"] not in s["would"]["locked"] and "gnew" not in s["would"]["locked"]
+
+
+# ------------------------------------------------------------------ verdict 4, punch 2
+#
+# The judge's re-run on Killington kept the hand trim exactly, but rounded 12 "kept"
+# shots to hundredths (off the frame grid), brought back a shot the editor had
+# ✗-rejected a minute earlier, and labelled the trim "added by hand".
+
+FIRST_FIVE = [                                 # every edit point between 24 fps frames
+    {"clip": "CLIP_A.MP4", "in": 0.45, "out": 1.95, "why": "one"},
+    {"clip": "CLIP_B.MP4", "in": 0.45, "out": 1.95, "why": "two"},
+    {"clip": "CLIP_C.MP4", "in": 0.45, "out": 1.95, "why": "three — rejected"},
+    {"clip": "CLIP_A.MP4", "in": 3.05, "out": 4.55, "why": "four"},
+    {"clip": "CLIP_B.MP4", "in": 3.05, "out": 4.55, "why": "five — rejected"},
+]
+CUT_LINE = re.compile(r"^\s*\d+\. (\S+) (\d+\.\d\d)-(\d+\.\d\d) ", re.M)
+
+
+class Echoing(Scripted):
+    """The first pass proposes FIRST_FIVE; a re-run types every shot of the cut back the
+    way the prompt prints it (hundredths) and re-adds the first rejected range, saying
+    so as a choice — the Killington re-run."""
+
+    def complete(self, request):
+        self.seen.append(request)
+        prompt = request.prompt
+        if "segments" not in (request.schema or {}):
+            text = "{}"
+        elif "Re-run the first pass" in prompt:
+            cut = prompt.split("## The current edit, in order", 1)[1].split("##", 1)[0]
+            segs = [{"clip": c, "in": float(a), "out": float(b), "why": "kept"}
+                    for c, a, b in CUT_LINE.findall(cut)]
+            segs.insert(1, {"clip": "CLIP_C.MP4", "in": 0.45, "out": 1.95,
+                            "why": "the vow"})
+            text = json.dumps({"segments": segs,
+                               "notes": "I also added the CLIP_C vow back in."})
+        else:
+            text = json.dumps({"segments": FIRST_FIVE, "notes": "five shots"})
+        return inference.Result(content=text, input_tokens=10, output_tokens=5,
+                                backend="scripted", model=config.model_for(request.role),
+                                projected_usd=1e-4, latency_ms=1, raw=text)
+
+
+def _on_grid(t: float, fps: float) -> bool:
+    return abs(t * fps - round(t * fps)) < 1e-3
+
+
+@pytest.mark.parametrize("order", ["save-then-answer", "answer-then-save"])
+def test_a_rerun_keeps_what_it_says_and_remembers_rejections(fp, order):
+    import server
+
+    m = Echoing()
+    inference.set_backend(m)
+    assert fp.post("/api/firstpass", json={"mode": "run"}).status_code == 200
+    s = _wait(fp)
+    assert s["state"] == "done", s
+    plan = _plan(fp, s["proposal"]["job"])
+    fps = revise.exact_rate(fp.get("/api/project").json()["fps"])
+    assert len(plan["segments"]) == 5
+    assert all(_on_grid(t, fps) for x in plan["segments"] for t in (x["in"], x["out"]))
+
+    # ---- the editor ✗-rejects shots 3 and 5 and accepts the other three, as the board
+    # does: the reviewed cut saved, the answer naming the rejected shots and ranges
+    rej = [2, 4]
+    saved = [dict(x) for k, x in enumerate(plan["segments"]) if k not in rej]
+    ranges = [{k2: plan["segments"][k][k2] for k2 in ("clip", "in", "out")} for k in rej]
+    answer = {"answer": "accept", "partial": {"accepted": 3, "of": 5, "rejected": rej,
+                                              "kept": [], "ranges": ranges}}
+    steps = [lambda: fp.put("/api/project", json={"segments": saved, "story": ""}),
+             lambda: fp.post("/api/asks/answer", json=answer)]
+    for step in (steps if order == "save-then-answer" else steps[::-1]):
+        assert step().status_code == 200
+    edl = json.loads(server.STATE["edl"].read_text(encoding="utf-8"))
+    remembered = firstpass.rejections(edl)
+    assert sorted((r["clip"], r["in"], r["out"]) for r in remembered) == sorted(
+        (r["clip"], r["in"], r["out"]) for r in ranges)
+    assert all(r["at"] and r["job"] == s["proposal"]["job"] for r in remembered)
+    assert fp.get("/api/firstpass").json()["manual_edits"] == []
+
+    # ---- a hand trim of shot 1, two frames off its out (on the grid, as the board trims)
+    segs = _segs(fp)
+    trimmed = dict(segs[0], out=round(segs[0]["out"] - 2 / fps, 4))
+    cut = [trimmed] + segs[1:]
+    assert fp.put("/api/project", json={"segments": cut, "story": ""}).status_code == 200
+    st = fp.get("/api/firstpass").json()
+    assert [(r["id"], r["how"], r["words"]) for r in st["manual_edits"]] == [
+        (trimmed["id"], ["trim"], "trimmed")], "a trim reads trimmed, not added by hand"
+    assert st["would"]["locked"] == [trimmed["id"]]
+
+    # ---- the re-run: the model echoes every shot in hundredths and re-adds a rejected one
+    assert fp.post("/api/firstpass", json={"mode": "rerun"}).status_code == 200
+    s = _wait(fp)
+    assert s["state"] == "done", s
+    prompt = m.seen[-1].prompt
+    assert "REJECTED" in prompt, "the brief names the ranges not to propose"
+    for r in ranges:
+        assert f"{r['clip']} {r['in']:.2f}-{r['out']:.2f}" in prompt
+    plan = _plan(fp, s["proposal"]["job"])
+    now = {x["id"]: x for x in _segs(fp)}
+    # kept shots are the cut's values exactly, on the frame grid, whatever was typed
+    assert [x.get("id") for x in plan["segments"]] == [x["id"] for x in cut]
+    for x in plan["segments"]:
+        want = now[x["id"]]
+        assert (x["clip"], x["in"], x["out"]) == (want["clip"], want["in"], want["out"]), x
+        assert _on_grid(x["in"], fps) and _on_grid(x["out"], fps), x
+    rows = plan["firstpass"]["diff"]["shots"]
+    assert [r["status"] for r in rows] == ["kept"] * len(cut)
+    assert [r["locked"] for r in rows] == [True] + [False] * (len(cut) - 1)
+    assert rows[0]["hand"] == ["trim"]
+    # the rejected range is not back; the notes say it was left out, and why
+    assert not any(x["clip"] == "CLIP_C.MP4" for x in plan["segments"])
+    left = plan["firstpass"]["rejected"]
+    assert [(r["clip"], r["action"]) for r in left] == [("CLIP_C.MP4", "dropped")]
+    assert plan["notes_check"]["rejected"] == left
+    assert "Left out: CLIP_C 0:00." in plan["notes"], plan["notes"]
+    assert "you rejected this shot before, so it stays out" in plan["notes"]
+    assert plan["firstpass"]["diff"]["counts"]["new"] == 0
+
+
+def test_rejections_are_ranges_the_proposal_made_and_hold_a_rerun():
+    """The pure rules: only a range the proposal made is a rejection (a rejected shot
+    it kept as it is stays in the cut); a re-proposed rejected range is dropped, a
+    rejected change to a shot of the cut leaves that shot as it is; a shot in the cut
+    now is never touched; and accepting the exact range later forgets the rejection."""
+    plan_segs = [dict(CURRENT[0]),                                   # kept as it is
+                 dict(CURRENT[1], out=45.0),                         # a change
+                 {"clip": "CLIP_09.MP4", "in": 1.0, "out": 4.0}]     # new
+    plan = {"segments": plan_segs, "diff": revise.shot_diff(CURRENT, plan_segs)}
+    got = firstpass.rejected_ranges(plan, {"rejected": [0, 1, 2], "ranges": [
+        {"clip": "CLIP_02.MP4", "in": 10.0, "out": 16.0},             # kept: not one
+        {"clip": "CLIP_99.MP4", "in": 0.0, "out": 1.0}]})            # not proposed
+    assert [(r["clip"], r["in"], r["out"]) for r in got] == [
+        ("CLIP_04.MP4", 40.0, 45.0), ("CLIP_09.MP4", 1.0, 4.0)]
+    edl = _edl(CURRENT)
+    assert firstpass.record_rejections(edl, got, job="j1", at=1.0)
+    assert not firstpass.record_rejections(edl, got[:1], job="j2"), "each range once"
+
+    proposed = [{"id": "g02", "clip": "CLIP_04.MP4", "in": 40.0, "out": 45.1},  # change again
+                {"clip": "CLIP_09.MP4", "in": 1.2, "out": 4.0},                 # mostly it
+                {"clip": "CLIP_09.MP4", "in": 8.0, "out": 12.0},                # elsewhere
+                dict(CURRENT[4])]
+    out, left = firstpass.drop_rejected(proposed, CURRENT, firstpass.rejections(edl))
+    assert [(x.get("id"), x["clip"], x["in"], x["out"]) for x in out] == [
+        ("g02", "CLIP_04.MP4", 40.0, 47.5), (None, "CLIP_09.MP4", 8.0, 12.0),
+        ("g05", "CLIP_07.MP4", 3.0, 9.0)]
+    assert [r["action"] for r in left] == ["kept as it is", "dropped"]
+    lines = firstpass.rejected_lines(left)
+    assert "you rejected this change before" in lines[0]
+    assert "you rejected this shot before" in lines[1]
+    # a rejected range the cut holds now (added back by hand) is the editor's latest word
+    cut = CURRENT + [{"id": "gb", "clip": "CLIP_09.MP4", "in": 1.0, "out": 4.0}]
+    out, left = firstpass.drop_rejected([dict(cut[-1])], cut, firstpass.rejections(edl))
+    assert left == [] and out == [cut[-1]]
+    # accepting that exact range later forgets the rejection
+    firstpass.record_base(edl, cut, job="j3")
+    assert [(r["clip"], r["in"]) for r in firstpass.rejections(edl)] == [("CLIP_04.MP4", 40.0)]
+    # the brief
+    note = firstpass.plan_note(0, "rerun", "", firstpass.rejections(edl))
+    assert "REJECTED" in note and "CLIP_04.MP4 40.00-45.00" in note
+
+
+def test_a_trim_after_the_ids_were_reminted_reads_trimmed():
+    """Killington: after a partial Accept the board saved again before re-keying its
+    temporary ids, so every shot came back under a fresh id, and the one the editor
+    then trimmed read "added by hand". A base shot is found again by its footage."""
+    edl = firstpass.record_base(_edl(CURRENT), CURRENT, job="j1")
+    fresh = [dict(s, id=f"n{i}") for i, s in enumerate(CURRENT)]
+    edl["segments"] = fresh
+    assert firstpass.manual_edits(edl) == []
+    fresh[2]["out"] = 165.0                                        # a trim
+    fresh.append({"id": "nadd", "clip": "CLIP_09.MP4", "in": 1.0, "out": 4.0})
+    rows = {r["id"]: (r["how"], r["words"]) for r in firstpass.manual_edits(edl)}
+    assert rows == {"n2": (["trim"], "trimmed"), "nadd": (["add"], "added by hand")}
+    # the panel's rows carry the cut's own values, not hundredths
+    fresh[2]["out"] = 165.0417
+    row = next(r for r in firstpass.manual_edits(edl) if r["id"] == "n2")
+    assert row["out"] == 165.0417
+
+
+def test_an_echo_in_hundredths_snaps_back_to_the_cut():
+    cur = [{"id": "g1", "clip": "A.MP4", "in": 1.4014, "out": 10.2102}]
+    echo = {"id": "g1", "clip": "A.MP4", "in": 1.4, "out": 10.21}
+    out = revise.to_sequence({"segments": [echo]}, cur, 59.94)["segments"]
+    assert (out[0]["in"], out[0]["out"]) == (1.4014, 10.2102)
+    # a deliberate change of a frame or more is not an echo: it snaps to the grid instead
+    moved = revise.to_sequence({"segments": [dict(echo, out=10.19)]}, cur, 59.94)["segments"]
+    assert moved[0]["in"] == 1.4014 or _on_grid(moved[0]["in"], 60000 / 1001)
+    assert moved[0]["out"] != 10.2102 and _on_grid(moved[0]["out"], 60000 / 1001)

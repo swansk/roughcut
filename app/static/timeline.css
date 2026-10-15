@@ -9,7 +9,10 @@
   -webkit-user-select: none;
   user-select: none;
 }
-#tl.tl-empty { display: none; }
+/* An empty sequence still draws its ruler and its V2 / V1 / A1 / A2 headers, as
+   Premiere's does: the first action floats over it (#tlEmpty), and a clip dropped beside
+   that box lands on the tracks (verdict 4, punch 9). */
+#tl.tl-empty .tl-end label { display: none; }
 #tl .tl-view {
   position: relative;
   height: calc(var(--tl-ruler) + var(--tl-lane) + 10px);
@@ -478,3 +481,15 @@
                                              border-radius: 0; background: #000; display: block; }
 #tl .tl-lane[data-lane=V1] .blk .strip img:not([src]) { visibility: hidden; }
 #tl .tl-lane[data-lane=V1] .blk .warn { z-index: 3; }
+
+/* A gap on V1 (verdict 4, punch 9): empty film time — nothing drawn but the track until
+   it is hovered or selected; its A1 half is silence and is not drawn at all. */
+#tl .blk.gap { background: transparent; border: 1px dashed transparent; opacity: 1; }
+#tl .blk.gap > * { visibility: hidden; }
+#tl .blk.gap:hover { border-color: #3e3e4c; }
+#tl .blk.gap.sel { border-color: var(--accent); background: rgba(110, 168, 254, .10); outline: none; }
+#tl .ablk.gap { visibility: hidden; }
+/* an added track (V3…, A3…): the rows V2 and A2 are, a clip's sound drawn like A1's */
+#tl .tl-xtrack.audio { background: #101215; }
+#tl .tl-xtrack.hidden-out .oblk, #tl .tl-xtrack.muted .oblk { opacity: .3; }
+#tl .oblk.aclip { background: hsl(var(--hue) 25% 18%); }
