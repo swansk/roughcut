@@ -3164,6 +3164,61 @@ async function flushSave() {
   else if (saveRun) await saveRun;
 }
 
+/* Nothing is lost on a reload or a close (wave 8, SAVESAFE; verdict 6 punch 1: an
+ * Accept's save had not left the browser 5 s later, the reload dropped the whole cut and
+ * nothing warned). While an edit waits for its autosave, a save is in flight, the last
+ * one failed, the tracks have unsaved changes or an Accept's answer has not gone:
+ *   · `beforeunload` asks first (and starts the waiting save, so it has the dialog's
+ *     time to land);
+ *   · `pagehide` and `visibilitychange: hidden` send the latest cut, tracks and the
+ *     answer as ONE keepalive PUT, which the browser delivers after the page is gone.
+ *     It carries the page's next save tag, so the server applies it like any save and
+ *     never writes an older PUT of this page over it (and names its `tmp-N` as the
+ *     earlier one did). A body over KEEPALIVE_MAX bytes cannot ride a keepalive (the
+ *     browser's 64 KB budget for them): then the prompt is the only guard. */
+const KEEPALIVE_MAX = 60000;
+let pendingAnswer = null;          // an Accept's answer, until its save has landed
+let flushing = null;               // the keepalive body in flight, so it goes once
+
+function savePending() {
+  const st = ($('#saveState') || { dataset: {} }).dataset.state;
+  return !!(saveTimer || saveRun || pendingAnswer || st === 'unsaved' || st === 'failed'
+            || (tl.seqDirty && tl.seqDirty()));
+}
+
+function flushOnHide(kind) {
+  if (!savePending()) return false;
+  const body = { ...((tl.seqForFlush && tl.seqForFlush()) || {}), ...saveBody() };
+  if (pendingAnswer) body.answer = pendingAnswer;
+  const text = JSON.stringify(body);
+  if (text === flushing) return true;                       // already on its way
+  if (new Blob([text]).size > KEEPALIVE_MAX) return false;  // the prompt was the guard
+  flushing = text;
+  const answered = pendingAnswer;
+  try {
+    fetch('/api/project', {
+      method: 'PUT', keepalive: true, credentials: 'omit',
+      headers: tl.saveHeaders({ 'x-roughcut-flush': kind }), body: text,
+    }).then((r) => r.json()).then((d) => {
+      // the page may live on (a tab switch): the ids are the ones its own save gets
+      if (d && d.ids) { tl.applyIds(d.ids); colour = colourIds(colour); }
+    }).catch(() => {}).finally(() => { if (flushing === text) flushing = null; });
+  } catch (e) { flushing = null; return false; }
+  if (answered && pendingAnswer === answered) pendingAnswer = null;   // it went with the cut
+  return true;
+}
+
+window.addEventListener('beforeunload', (e) => {
+  if (!savePending()) return;
+  if (saveTimer) save();
+  e.preventDefault();
+  e.returnValue = '';
+});
+window.addEventListener('pagehide', () => { flushOnHide('pagehide'); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushOnHide('hidden');
+});
+
 /* The colour block keyed by the ids the server knows (tl.idFor): a per-shot grade set
  * on a shot laid in a moment ago follows the shot's re-key instead of being orphaned. */
 function colourIds(block) {
@@ -3183,17 +3238,22 @@ function colourIds(block) {
 
 /* One PUT, in its turn: the body is built now (after the reply before it re-keyed), and
  * new shots go as `tmp-N`; the reply's `ids` names them. True when it landed. */
+function saveBody() {
+  // The colour block rides the same body (INTAKE M10): an empty object removes it.
+  // The timeline's markers and sequence In / Out ride along (lane KEYS).
+  return { segments: tl.forSave(), story: $('#story').value, music,
+           colour: colourIds(colour),
+           markers: tl.markers ? tl.markers() : [],
+           in: tl.state.seqIn ?? null, out: tl.state.seqOut ?? null };
+}
+
 async function saveOnce() {
   let r = null;
   try {
+    // tagged and uncredentialed: see tl.saveHeaders (wave 8, SAVESAFE)
     r = await fetch('/api/project', {
-      method: 'PUT', headers: { 'content-type': 'application/json' },
-      // The colour block rides the same body (INTAKE M10): an empty object removes it.
-      // The timeline's markers and sequence In / Out ride along (lane KEYS).
-      body: JSON.stringify({ segments: tl.forSave(), story: $('#story').value, music,
-                             colour: colourIds(colour),
-                             markers: tl.markers ? tl.markers() : [],
-                             in: tl.state.seqIn ?? null, out: tl.state.seqOut ?? null }),
+      method: 'PUT', headers: tl.saveHeaders(), credentials: 'omit',
+      body: JSON.stringify(saveBody()),
     });
   } catch (e) { r = null; }
   if (!r || !r.ok) {
@@ -3824,7 +3884,13 @@ function acceptProposal(everything) {
   const took = partial ? { accepted: r.accepted, of: r.total, rejected: r.rejectedShots,
                            kept: r.keptRemoved, ...(ranges ? { ranges } : {}) } : null;
   queueMicrotask(() => {
-    const answer = () => answerProposal('accept', took);
+    // pending until it is sent: a flush on unload carries it with the cut (SAVESAFE)
+    const mine = pendingAnswer = took ? { answer: 'accept', partial: took } : { answer: 'accept' };
+    const answer = () => {
+      if (pendingAnswer !== mine) return;          // it went with a flush
+      pendingAnswer = null;
+      answerProposal('accept', took);
+    };
     save().then(answer, answer);
   });
   toast(partial ? `applied ${r.accepted} of ${r.total} shots${graded ? ' and the colour' : ''} — undo with ${undoKey()}`
@@ -3862,7 +3928,9 @@ function answerProposal(answer, partial) {
   if (partial && !partial.ranges && lanes && lanes.reviewed && Array.isArray(lanes.reviewed.lastRanges)) {
     partial = { ...partial, ranges: lanes.reviewed.lastRanges };
   }
+  // uncredentialed like the save, so it is never queued behind the posters (SAVESAFE)
   fetch('/api/asks/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    credentials: 'omit',
     body: JSON.stringify(partial ? { answer, partial } : { answer }) }).then(flowSoon, () => {});
 }
 

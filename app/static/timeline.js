@@ -201,6 +201,13 @@
  *   tl.applyIds({tmp: id})      The save reply's `ids`: re-key exactly (wave 5, SAVE).
  *   tl.idFor(id)                The id the server knows a shot by (a re-keyed tmp's real).
  *   tl.putTurn(fn)              Run fn when no other PUT /api/project is in flight.
+ *   tl.saveHeaders(extra)       The headers of a PUT /api/project: JSON, and the page's
+ *                               `x-roughcut-save: <page>:<n>` tag, n counting up per body
+ *                               built (wave 8, SAVESAFE: the server never applies an older
+ *                               body of a page over a newer one).
+ *   tl.seqForFlush()            The tracks' save body as an object (null before mount),
+ *                               for the keepalive flush on unload; tl.seqDirty() says
+ *                               whether it differs from what was last saved.
  *
  *   — events —
  *   tl.on(event, fn) → off()    `change` {label, kind, ids} · `select` {ids, anchor,
@@ -1390,8 +1397,10 @@
     const body = seqBody();
     if (body === seqSaved) return true;
     try {
+      // credentials 'omit': its own connections, never queued behind the posters
+      // (wave 8, SAVESAFE — see saveHeaders)
       const r = await fetch('/api/project', {
-        method: 'PUT', headers: { 'content-type': 'application/json' }, body,
+        method: 'PUT', headers: saveHeaders(), body, credentials: 'omit',
       });
       if (!r.ok) {
         const msg = await r.text().catch(() => '');
@@ -2483,6 +2492,23 @@
     return p;
   }
 
+  /* Every PUT /api/project carries `x-roughcut-save: <page>:<n>` (wave 8, SAVESAFE): a
+   * page that unloads with a save in flight flushes its latest body once more as a
+   * keepalive PUT, and the server must never write the older one over it — whichever
+   * lands last. And every one goes with credentials 'omit': Chrome keeps uncredentialed
+   * requests on their own connections (six per host, a separate group from the page's
+   * images and video), so a save is never queued behind the timeline's filmstrip
+   * posters. Verdict 6's lost Accept was exactly that: its PUT waited in the browser
+   * behind poster builds and the reload cancelled it before it was sent. */
+  const PAGE = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  let saveN = 0;
+  function saveHeaders(extra) {
+    return { 'content-type': 'application/json', 'x-roughcut-save': `${PAGE}:${++saveN}`,
+             ...(extra || {}) };
+  }
+  function seqForFlush() { return seqSaved == null ? null : JSON.parse(seqBody()); }
+  function seqDirty() { return seqSaved != null && seqBody() !== seqSaved; }
+
   function rekey(oldId, newId) {
     if (oldId === newId) return;
     const b = blocks.get(oldId);
@@ -2779,7 +2805,7 @@
     begin, commit, cancel, undo, redo, clearHistory,
     setRange, move, split, remove, insert, setSpeed, insertAt, overwrite,
     select, syncSel, seek, setPlayhead, zoomTo, fit,
-    forSave, needsRekey, afterSave, applyIds, idFor, putTurn,
+    forSave, needsRekey, afterSave, applyIds, idFor, putTurn, saveHeaders, seqForFlush, seqDirty,
     fmt, hueOf, blockName, blockSays,
     // the tracks (roughcut/tracks.py)
     TRACKS, tracks, setTrack, audible, isLinked, aOff, setLink, toggleLink, setAudioOffset,
