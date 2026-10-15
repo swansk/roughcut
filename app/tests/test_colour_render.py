@@ -149,7 +149,7 @@ def test_auto_with_a_look_bakes_a_cube_and_moves_the_picture(project, colour_dir
     assert _duration(graded) == pytest.approx(_duration(off), abs=0.05)
 
 
-def test_off_is_the_identity_byte_for_byte(project, colour_dir, tmp_path):
+def test_off_is_the_identity_byte_for_byte(project, colour_dir, tmp_path, monkeypatch):
     """`colour: {"mode": "off"}` with colour files reproduces today's render — an EDL
     with no `colour` block and no colour dir — byte for byte (INTAKE I10.1).
 
@@ -157,6 +157,11 @@ def test_off_is_the_identity_byte_for_byte(project, colour_dir, tmp_path):
     `mode: auto` (decision 5 — the auto is on by default and the off switch beats
     it), and the inspector resolves it the same way, so that render grades. The
     identity is the off switch, and the pre-M10 render is what it must equal."""
+    # Both renders on the CPU decode path: since wave 8 a render decodes on the GPU when it
+    # can and falls back to the CPU when the decoder is busy, and the two paths agree to ~1
+    # code value, not to the byte. This test is about the off switch, not the decoder; it
+    # failed once while another GPU export ran beside it (V2EC).
+    monkeypatch.setenv("ROUGHCUT_GPU", "0")
     off = tmp_path / "off.mp4"
     log = _render(_edl(TWO_SHOTS, {"mode": "off"}), tmp_path / "off.json", off, project,
                   colour_dir, tmp_path / "parts_off")

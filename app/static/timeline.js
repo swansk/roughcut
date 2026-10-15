@@ -988,6 +988,13 @@
     toast(`${name} is locked — unlock it in its track header to edit`);
     return null;
   }
+  /* for the panels that edit a clip outside the timeline (effects.js): true, with the
+   * toast, when `name` is locked */
+  function refuseIfLocked(name) {
+    if (!trackState(name).lock) return false;
+    refuseLocked(name);
+    return true;
+  }
 
   function makeABlock(id) {
     const b = document.createElement('div');
@@ -2896,7 +2903,7 @@
     fmt, hueOf, blockName, blockSays,
     // the tracks (roughcut/tracks.py)
     TRACKS, tracks, setTrack, audible, isLinked, aOff, setLink, toggleLink, setAudioOffset,
-    trackNames, addTrack, deleteTrack, placeAt, isGap,
+    trackNames, addTrack, deleteTrack, placeAt, isGap, refuseIfLocked,
     audioClips: () => state.audio.map((c) => ({ ...c })),
     overlays: () => state.overlays.map((o) => ({ ...o })), overlayById,
     addOverlay, moveOverlay, trimOverlay, removeOverlay, selectOverlay, layoutTracks, saveSeq,

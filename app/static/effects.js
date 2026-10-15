@@ -399,9 +399,18 @@
     const t = TL();
     if (t && isOv(seg || cur()) && typeof t.saveSeq === 'function') t.saveSeq();
   }
-  function begin(p) {
+  /* Every edit here opens through this: a locked track refuses it, as the timeline's
+   * own edits do (a V2+ clip's track; a V1 shot's V1, or A1 for its volume). */
+  function opens(label, audio, target) {
     const t = TL();
-    return !!(t && t.begin(labelOf(p)));
+    if (!t) return false;
+    const seg = target || cur();
+    const name = seg && isOv(seg) ? seg.track || 'V2' : audio ? 'A1' : 'V1';   // V2 is implied
+    if (name && typeof t.refuseIfLocked === 'function' && t.refuseIfLocked(name)) return false;
+    return !!t.begin(label);
+  }
+  function begin(p, seg) {
+    return opens(labelOf(p), p.key === 'volume_db', seg);
   }
   function finish(p) {
     const t = TL();
@@ -414,7 +423,7 @@
   function change(p, seg, v) {
     seg = cur(seg);
     if (!seg || !Number.isFinite(v)) return false;
-    if (!begin(p)) return false;
+    if (!begin(p, seg)) return false;
     p.set(seg, v);
     preview(seg);
     finish(p);
@@ -710,7 +719,7 @@
     if (!seg || !t || !GROUPS[group]) return;
     const kps = GROUPS[group];
     const on = animated(seg, group);
-    if (!t.begin(on ? `stop animating ${GROUP_NAME[group]}` : `animate ${GROUP_NAME[group]}`)) return;
+    if (!opens(on ? `stop animating ${GROUP_NAME[group]}` : `animate ${GROUP_NAME[group]}`, group === 'volume_db')) return;
     if (on) {                                 // Premiere: the keys go, the value at the playhead stays
       const tv = shownT(seg);
       const vals = kps.map((kp) => valAt(seg, kp, tv));
@@ -750,7 +759,7 @@
     }
     const at = keyT(seg);
     const has = ts.some((x) => sameT(x, at));
-    if (!t.begin(has ? 'remove keyframe' : 'add keyframe')) return;
+    if (!opens(has ? 'remove keyframe' : 'add keyframe', group === 'volume_db')) return;
     GROUPS[group].forEach((kp) => {
       const k = keysOf(seg, kp);
       if (!k) return;
@@ -792,7 +801,7 @@
         if (!kfDrag) return;
         if (!kfDrag.began) {
           if (Math.abs(ev.clientX - kfDrag.x0) < 3) return;
-          if (!TL() || !TL().begin('move keyframe')) { kfDrag = null; return; }
+          if (!opens('move keyframe', group === 'volume_db')) { kfDrag = null; return; }
           kfDrag.began = true;
           kf.classList.add('drag');
         }
@@ -923,7 +932,7 @@
     if (key === 'time') { const t = TL(); if (t) t.setSpeed(seg.id, 1); return; }
     const ps = PROPS.filter((p) => p.sec === key);
     const t = TL();
-    if (!ps.length || !t || !t.begin(key === 'lumetri' ? 'colour reset' : key)) return;
+    if (!ps.length || !t || !opens(key === 'lumetri' ? 'colour reset' : key, key === 'volume')) return;
     ps.filter((p) => !p.colour).forEach((p) => p.set(seg, p.dflt));
     if (key === 'lumetri') {
       const so = g('shotOverride');
@@ -1038,7 +1047,7 @@
     if (!seg || !t) return;
     if (act === 'open') { if (window.dock && dock.open) dock.open('fx'); return; }
     const list = fxOf(seg).map((e) => e.id);
-    if (!t.begin(act === 'bypass' ? 'fx on/off' : 'fx order')) return;
+    if (!opens(act === 'bypass' ? 'fx on/off' : 'fx order')) return;
     if (act === 'bypass') {
       const off = new Set(ctl(seg).fx_off || []);
       if (off.has(id)) off.delete(id); else off.add(id);

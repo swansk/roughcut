@@ -361,6 +361,36 @@ def test_each_change_is_one_undo_entry(page):
     assert page.evaluate("effects.value('rotation')") == 30
 
 
+def test_a_locked_track_refuses_effect_controls(page):
+    """As the timeline does: a locked V1 refuses its shots' Motion/Opacity/Lumetri, a locked
+    A1 their volume, a locked V2 its clips' controls — a toast, no undo entry, no change."""
+    sid = select_first(page)
+    toast = "document.querySelector('#toast').textContent.includes(%s)"
+    page.evaluate("tl.setTrack('V1', 'lock', true)")
+    assert page.evaluate("effects.set('opacity', 50)") is False
+    page.wait_for_function(toast % "'V1 is locked'", timeout=3000)
+    assert page.evaluate("effects.value('opacity')") == 100
+    assert page.evaluate("effects.animate('scale'); effects.keys('scale')") == []
+    assert page.evaluate("segs[0].controls") is None
+    page.evaluate("tl.setTrack('V1', 'lock', false); tl.setTrack('A1', 'lock', true)")
+    assert page.evaluate("effects.set('volume_db', -6)") is False
+    page.wait_for_function(toast % "'A1 is locked'", timeout=3000)
+    assert page.evaluate("effects.set('opacity', 50)") is not False, "A1 holds only the sound"
+    assert page.evaluate("effects.value('opacity')") == 50
+    page.evaluate("tl.setTrack('A1', 'lock', false)")
+    # a V2 clip (no `track` field: V2 is implied), given as the target
+    page.evaluate("tl.addOverlay({clip: 'CLIP_B.MP4', in: 0.5, out: 1.5}, 0.5, 'V2')")
+    ov = page.evaluate("tl.overlays()[0]")
+    page.evaluate("tl.setTrack('V2', 'lock', true)")
+    assert page.evaluate("(o) => effects.set('opacity', 40, o)", ov) is False
+    page.wait_for_function(toast % "'V2 is locked'", timeout=3000)
+    assert (page.evaluate("tl.overlayById(%r).controls" % ov["id"]) or {}).get("opacity") is None
+    page.evaluate("tl.setTrack('V2', 'lock', false)")
+    assert page.evaluate("(o) => effects.set('opacity', 40, o)", ov) is not False
+    assert page.evaluate("tl.overlayById(%r).controls.opacity" % ov["id"]) == 40
+    assert sid == "shot-a"
+
+
 def test_arrow_keys_step_a_value(page):
     select_first(page)
     page.locator("#inspector .ec-v[data-k=opacity]").focus()
