@@ -742,12 +742,20 @@ function renderInspector() {
   }
   const selIds = [...tl.state.sel].filter((id) => tl.indexOf(id) >= 0);
   const seg = selIds.length > 1 ? null : inspected();
-  const want = selIds.length > 1 ? 'multi' : seg || 'none';
+  // A clip on V2+ selected (and no V1 shot): its own Effect Controls (wave 9, V2EC).
+  // Keyed by id: a V2 edit or an undo replaces the clip's object, not the panel.
+  const ov = !seg && !selIds.length ? selectedOverlay() : null;
+  const want = selIds.length > 1 ? 'multi' : seg || (ov ? `ov:${ov.id}` : 'none');
   if (inspecting !== want) {
     commitWhy(box);
     inspecting = want;
     box.replaceChildren(want === 'multi' ? buildMulti() : want === 'none' ? buildNone()
-      : buildShot(seg));
+      : ov ? buildOverlay(ov) : buildShot(seg));
+  }
+  if (ov) {
+    paintEcHead(null, 0, ov);
+    fillOverlay(box, ov);
+    return;
   }
   paintEcHead(want === 'multi' ? null : seg, selIds.length);
   if (want === 'multi') {
@@ -760,12 +768,53 @@ function renderInspector() {
   }
 }
 
+/* The picture clip selected on V2, V3… (tl.state.osel), or null: an A3+ sound clip
+ * has no Effect Controls here. */
+function selectedOverlay() {
+  const id = tl.state.osel;
+  if (id == null || typeof tl.overlayById !== 'function') return null;
+  const o = tl.overlayById(id);
+  return o && !(o.track && o.track[0] === 'A') ? o : null;
+}
+
+/* A V2+ clip's strip: its still, its name, and Effect Controls' Motion and Opacity
+ * (/modules/effects.js with `overlay`), which write `overlays[i].controls`. */
+function buildOverlay(o) {
+  const el = document.createElement('div');
+  el.className = 'shot ovl';
+  el.dataset.ov = o.id;
+  el.innerHTML = `
+    <img class="poster" draggable="false" decoding="async" alt="">
+    <div class="sbody">
+      <div class="srow top"><span class="sname"></span></div>
+      <div class="srow ctl ecx"></div>
+    </div>`;
+  if (window.effects && typeof effects.build === 'function') effects.build(el.querySelector('.ecx'), o, { overlay: true });
+  return el;
+}
+
+function fillOverlay(box, o) {
+  const name = box.querySelector('.sname');
+  const txt = `${o.track || 'V2'} · ${stem(o.clip)} · ${tl.dur(o).toFixed(1)} s`;
+  if (name && name.textContent !== txt) name.textContent = txt;
+  const img = box.querySelector('img.poster');
+  const base = (P.clips[o.clip] || {}).poster;
+  const src = base ? `${base}${base.includes('?') ? '&' : '?'}t=${Math.max(0, o.in).toFixed(2)}` : '';
+  if (img && src && img.getAttribute('src') !== src) { img.setAttribute('src', src); img.alt = `${stem(o.clip)} at ${o.in.toFixed(2)}s`; }
+  if (window.effects && typeof effects.fill === 'function') effects.fill(box, o);
+}
+
 /* The Effect Controls panel's head line, Premiere's "Source · clip" / "Sequence": the
  * selected shot's clip and its range, the selection's size, or the sequence. */
-function paintEcHead(seg, n) {
+function paintEcHead(seg, n, ov) {
   const lab = document.querySelector('#ecHead span'), what = $('#ecWhat');
   if (!lab || !what) return;
-  if (seg) {
+  if (ov) {
+    // a V2+ clip: its track, the clip and its source In / Out
+    lab.textContent = `${ov.track || 'V2'} clip`;
+    what.textContent = `${stem(ov.clip)} · ${tcOf(ov.in)} – ${tcOf(ov.out)}`;
+    what.title = `source In ${tcOf(ov.in)} · Out ${tcOf(ov.out)} · at ${tcOf(ov.at)} in the sequence, ${tcOf(tl.dur(ov))} long`;
+  } else if (seg) {
     // Premiere's head: the clip, and its source In / Out in timecode
     lab.textContent = `Shot ${tl.indexOf(seg.id) + 1}`;
     what.textContent = `${stem(seg.clip)} · ${tcOf(seg.in)} – ${tcOf(seg.out)}`;
@@ -5079,3 +5128,40 @@ window.roughcutRefresh = async () => {
   if (window.fx && typeof fx.refresh === 'function') fx.refresh();
 };
 boot();
+
+/* Background work yields to playback (verdict 6 punch 3, lane YIELD): while the Program
+ * (or the Source monitor) plays, the server pauses its own proxy / preview / range /
+ * close-look encodes and lets them run again on pause. It only reads `player.playing`
+ * and #srcVideo, so it is independent of how the player plays: 'on' at once and every
+ * PLAY_BEAT_MS while playing (the heartbeat: a closed tab lapses in 5 s server-side),
+ * 'off' once playback has stayed stopped OFF_DEBOUNCE_MS (a J/K/L burst or a seek does not
+ * flap the encodes). Uncredentialed and keepalive like the save, so it never queues
+ * behind posters (SAVESAFE). */
+(function playingNotifier() {
+  const PLAY_BEAT_MS = 2000, OFF_DEBOUNCE_MS = 800;
+  const tab = Math.random().toString(36).slice(2, 10);
+  let sent = false, sentAt = 0, offSince = 0;
+  const send = (on) => {
+    sent = on; sentAt = Date.now();
+    try {
+      fetch('/api/playing', { method: 'POST', credentials: 'omit', keepalive: true,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ on, tab }) }).catch(() => {});
+    } catch (_) { /* a page going away */ }
+  };
+  const now = () => {
+    const src = document.getElementById('srcVideo');
+    return !!(player.playing || (src && !src.paused && !src.ended));
+  };
+  setInterval(() => {
+    const on = now();
+    if (on) {
+      offSince = 0;
+      if (!sent || Date.now() - sentAt >= PLAY_BEAT_MS) send(true);
+    } else if (sent) {
+      if (!offSince) offSince = Date.now();
+      else if (Date.now() - offSince >= OFF_DEBOUNCE_MS) send(false);
+    }
+  }, 200);
+  window.addEventListener('pagehide', () => { if (sent) send(false); });
+})();

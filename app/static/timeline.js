@@ -811,6 +811,95 @@
    * grow or shrink in number and take their frames when it settles. */
   const STRIP_MAX = 48;              // tiles in one block, at most
   let stripH = 0;                    // V1's height, read once a render
+
+  /* The filmstrip tiles' loader (lane YIELD; SAVESAFE's request): a pass leaves dozens of
+   * tiles whose frames the server has to build, one ffmpeg each, and as plain <img> loads
+   * they held all six of Chrome's connections to the host for seconds: every credentialed
+   * GET (the first pass's poll, /api/project) queued behind them. Tiles now load through
+   * this queue, at most POSTER_INFLIGHT at once, and only once they are within the
+   * timeline's view (± 1250 px, Chrome's own lazy-load distance; an IntersectionObserver
+   * on the scroller): the head frames (one a block) and every other picture load as
+   * before, so a board leaves at least two connections free for its own requests. A frame
+   * loaded once this session is set at once (the browser has it). V1's tiles and the
+   * ghost lane's share it (`tl.posterLoad`). */
+  const POSTER_INFLIGHT = 2;
+  const posterQ = { busy: 0, loaded: new Set(), waiting: new Set(), ios: new Map() };
+  function posterRelease(img) {
+    if (!img._rcBusy) return;
+    img._rcBusy = false;
+    img.onload = img.onerror = null;
+    posterQ.busy--;
+  }
+  function posterPump() {
+    for (const img of [...posterQ.waiting]) {
+      if (posterQ.busy >= POSTER_INFLIGHT) return;
+      posterQ.waiting.delete(img);
+      const src = img._rcWant;
+      if (!src || !img.isConnected || !img._rcVis || img.getAttribute('src') === src) continue;
+      img._rcBusy = true;
+      posterQ.busy++;
+      const fin = (ok) => {
+        if (img._rcWant !== src) return;
+        if (ok) posterQ.loaded.add(src);
+        posterRelease(img);
+        posterPump();
+      };
+      img.onload = () => fin(true);
+      img.onerror = () => fin(false);
+      img.setAttribute('src', src);
+    }
+  }
+  function posterSeen(entries) {
+    for (const e of entries) {
+      const img = e.target;
+      img._rcVis = e.isIntersecting;
+      if (!img.isConnected) {
+        e.target._rcObs = null;
+        posterQ.ios.forEach((io) => io.unobserve(img));
+        posterQ.waiting.delete(img);
+        posterRelease(img);
+      } else if (e.isIntersecting && img._rcWant && img.getAttribute('src') !== img._rcWant) {
+        posterQ.waiting.add(img);
+      } else if (!e.isIntersecting) {
+        posterQ.waiting.delete(img);
+      }
+    }
+    posterPump();
+  }
+  function posterObserve(img, tries = 0) {
+    if (img._rcObs) return;
+    if (!img.isConnected) {                 // a strip built before it is attached
+      if (tries < 30) requestAnimationFrame(() => posterObserve(img, tries + 1));
+      return;
+    }
+    const root = el.view && el.view.contains(img) ? el.view : null;
+    let io = posterQ.ios.get(root);
+    if (!io) {
+      io = new IntersectionObserver(posterSeen, { root, rootMargin: '0px 1250px 0px 1250px' });
+      posterQ.ios.set(root, io);
+    }
+    img._rcObs = io;
+    io.observe(img);
+  }
+  function posterLoad(img, src) {
+    if (!src) {
+      img._rcWant = null;
+      posterQ.waiting.delete(img);
+      posterRelease(img);
+      img.removeAttribute('src');
+      return;
+    }
+    if (img._rcWant === src) return;
+    img._rcWant = src;
+    if (img._rcBusy) { posterRelease(img); posterPump(); }    // the browser drops the old load
+    if (posterQ.loaded.has(src) || typeof IntersectionObserver !== 'function') {
+      if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+      return;
+    }
+    img.loading = 'eager';                  // the queue decides when, not the browser
+    if (img._rcVis) { posterQ.waiting.add(img); posterPump(); }
+    posterObserve(img);
+  }
   function paintStrip(b, seg, settle) {
     const strip = b.querySelector('.strip');
     if (!strip) return;
@@ -835,9 +924,7 @@
     for (let k = 1; k < n; k++) {
       const img = strip.children[k];
       const t = Math.min(seg.out - 0.05, seg.in + k * tileS);
-      const src = posterUrl(seg, Math.max(seg.in, Math.round(t / q) * q));
-      if (!src) img.removeAttribute('src');
-      else if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+      posterLoad(img, posterUrl(seg, Math.max(seg.in, Math.round(t / q) * q)));
     }
   }
 
@@ -3252,6 +3339,8 @@
       paintTransitions();
       return selectedEdit();
     },
+    posterLoad,                     // the filmstrip tiles' loader (lane YIELD)
+    get posterBusy() { return posterQ.busy; },
   };
   window.tl = tl;
 })();

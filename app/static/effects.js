@@ -89,6 +89,7 @@
     inspected: () => (typeof inspected === 'function' ? inspected : undefined),
     gradeApi: () => (typeof gradeApi === 'function' ? gradeApi : undefined),
     liveVideo: () => (typeof liveVideo === 'function' ? liveVideo : undefined),
+    programSync: () => (typeof programSync === 'function' ? programSync : undefined),
   };
   const g = (name) => { try { return GLOBALS[name](); } catch (e) { return undefined; } };
   /* eslint-enable no-undef */
@@ -147,6 +148,28 @@
     out.exposure = r4(clamp(out.exposure, EXPOSURE[0], EXPOSURE[1]));
     void gg;
     return out;
+  }
+
+  /* ------------------------------------------------------------ V2+ clips (wave 9, V2EC)
+   * A clip on V2, V3… is a target too: selected (tl.state.osel, no V1 shot selected) it
+   * gets Motion and Opacity with their keyframes, written to `overlays[i].controls` by
+   * the same rules (server.py `clean_controls`), one undo entry each; the Program's
+   * #pvV2 follows (app.js `v2Look`) and the export composites it by alpha (assemble.py
+   * `overlay_controls_graph`). Its keys count from the clip's own first frame (`at`).
+   * Lumetri, Volume and Time Remapping stay V1's: a V2+ clip has no grade path (the
+   * render conforms it as shot) and no sound. */
+  function isOv(seg) {
+    const t = TL();
+    return !!(seg && t && typeof t.overlayById === 'function' && t.indexOf(seg.id) < 0
+      && t.overlayById(seg.id));
+  }
+  /* the picture clip selected on V2+, when no V1 shot is */
+  function ovSel() {
+    const t = TL();
+    if (!t || t.state.osel == null || typeof t.overlayById !== 'function') return null;
+    if (t.state.sel && t.state.sel.size) return null;
+    const o = t.overlayById(t.state.osel);
+    return o && !(o.track && o.track[0] === 'A') ? o : null;
   }
 
   /* ------------------------------------------------------------ the properties */
@@ -225,6 +248,7 @@
   function span(seg) {
     const t = TL();
     if (!t || !seg) return null;
+    if (isOv(seg)) return { start: Number(seg.at) || 0, dur: t.dur(seg) };
     const s = t.filmStart(seg.id);
     return s < 0 ? null : { start: s, dur: t.dur(seg) };
   }
@@ -364,9 +388,16 @@
   let gesture = null;                       // {p, seg, began} while a value is dragged
   function cur(seg) {
     const t = TL();
-    if (seg && t) return t.byId(seg.id) || seg;
+    // an overlay's object is replaced by each V2 edit (and an undo): find it by id
+    if (seg && t) return t.byId(seg.id) || (typeof t.overlayById === 'function' && t.overlayById(seg.id)) || seg;
     const insp = g('inspected');
-    return typeof insp === 'function' ? insp() : null;
+    return (typeof insp === 'function' ? insp() : null) || ovSel();
+  }
+  /* After a commit: a V2+ clip's controls ride the sequence's save (tl.saveSeq — the
+   * cut's autosave carries only V1), so they reach the disk with the edit. */
+  function saved(seg) {
+    const t = TL();
+    if (t && isOv(seg || cur()) && typeof t.saveSeq === 'function') t.saveSeq();
   }
   function begin(p) {
     const t = TL();
@@ -376,6 +407,7 @@
     const t = TL();
     if (p.colour) { const td = g('tidyColour'); if (typeof td === 'function') td(); }
     if (t) t.commit();                      // touch → autosave; 'change' → the inspector repaints
+    saved();
     const ri = g('renderInspector');
     if (typeof ri === 'function') ri();
   }
@@ -432,6 +464,14 @@
    * first frame (Premiere users park on the clip they adjust; here one change does it). */
   function preview(seg) {
     const t = TL();
+    if (seg && t && isOv(seg)) {
+      // a V2+ clip: park inside it when the playhead is elsewhere (its first frame, as
+      // a V1 shot's edit parks there), then the Program's #pvV2 takes the new look
+      if (localT(seg) == null && !(g('player') || {}).playing) t.seek(span(seg).start);
+      const ps = g('programSync');
+      if (typeof ps === 'function') ps();
+      return;
+    }
     if (seg && t && monitorShot() !== String(seg.id)) {
       const i = t.indexOf(seg.id);
       const cue = g('cueAt');
@@ -562,7 +602,13 @@
     const pane = host.querySelector('.colour[data-pane=look]');
     const wrap = document.createElement('div');
     wrap.className = 'ec';
-    wrap.innerHTML = SECTIONS.map((s) => sectionHtml(s, gen)).join('');
+    // a V2+ clip (`opts.overlay`): Motion and Opacity, and a line on what stays V1's
+    wrap.innerHTML = opts.overlay
+      ? SECTIONS.filter((s) => s.key === 'motion' || s.key === 'opacity').map((s) => sectionHtml(s, true)).join('')
+        + '<div class="ec-empty ec-ovnote" data-testid="ec-ovnote" title="the export conforms a V2+ clip as shot and composites it over the tracks below by its Opacity">'
+        + 'Lumetri Color, Volume and Time Remapping apply to V1 shots: a clip on V2+ renders as shot, picture only.</div>'
+      : SECTIONS.map((s) => sectionHtml(s, gen)).join('');
+    if (opts.overlay) wrap.dataset.ov = String(seg && seg.id);
     const slot = (n) => wrap.querySelector(`[data-slot="${n}"]`);
     if (speed && slot('speed')) slot('speed').appendChild(speed);
     if (nudge && slot('nudge')) { slot('nudge').appendChild(nudge); }
@@ -654,6 +700,7 @@
   function finishK() {
     const t = TL();
     if (t) t.commit();
+    saved();
     const ri = g('renderInspector');
     if (typeof ri === 'function') ri();
   }
@@ -844,8 +891,7 @@
     const live = liveId ? t.byId(liveId) : null;
     if (live && ctl(live).keys) apply();
     const box = document.querySelector('#inspector .shot');
-    const insp = g('inspected');
-    const seg = box && typeof insp === 'function' ? insp() : null;
+    const seg = box ? cur() : null;
     if (!seg || !box.querySelector('.ec')) return;
     if (ctl(seg).keys) {
       paintKeys(box, seg);

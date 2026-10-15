@@ -327,3 +327,110 @@ def test_the_program_composites_the_overlays_controls(live_server, proj):
         assert within(program_rgb(pg), red, 6)
         assert not errors, errors
         browser.close()
+
+
+# ------------------------------------------------------------------ Effect Controls on V2
+
+def test_effect_controls_target_a_v2_clip(live_server, proj, films):
+    """Wave 9 (V2EC): a click on the V2 clip shows ITS Effect Controls (Motion, Opacity
+    and their keyframes; Lumetri, Volume and Time Remapping stay V1's and say so). A
+    typed Opacity 50 and a Scale key (100 at 1 s into the clip, 50 at 2 s) are one undo
+    entry each, reach `overlays[0].controls` on disk, #pvV2 follows (CSS and the
+    screenshot's pixels: the mix over V1 inside the half-size box, V1 outside it), and
+    the export of the saved EDL draws the same."""
+    playwright_api = pytest.importorskip("playwright.sync_api")
+    plain = {**EDL, "overlays": [{k: v for k, v in EDL["overlays"][0].items() if k != "controls"}]}
+    proj["edl"].write_text(json.dumps(plain, indent=1), encoding="utf-8")
+    undo = "document.querySelector('#undo').getAttribute('title') || ''"
+    pv = """(() => { const v = document.querySelector('#pvV2');
+        return {tf: v.style.transform, op: v.style.opacity}; })()"""
+    shown = """(() => { const v = document.querySelector('#pvV2');
+        return v.style.visibility !== 'hidden' && v.readyState >= 2 && !v.seeking; })()"""
+    with playwright_api.sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        pg = browser.new_page(viewport={"width": 1440, "height": 900})
+        errors: list[str] = []
+        pg.on("pageerror", lambda e: errors.append(str(e)))
+        pg.goto(live_server)
+        pg.wait_for_selector("#tl .blk")
+        pg.wait_for_function("tl.overlays().length === 1 && window.effects && tl.el.tracks.V2.querySelector('.oblk')")
+        pg.evaluate("tl.seek(0.2)")
+        pg.wait_for_timeout(500)
+        red = program_rgb(pg)                                   # V1 alone, for the mix
+
+        # select the V2 clip: its own panel
+        pg.locator("#tl .oblk[data-id='o1']").click()
+        pg.wait_for_selector("#inspector .ec[data-ov='o1']")
+        ec = pg.locator("#inspector .ec")
+        for sec, n in (("motion", 1), ("opacity", 1), ("lumetri", 0), ("volume", 0), ("time", 0), ("fxs", 0)):
+            assert ec.locator(f"[data-sec={sec}]").count() == n, sec
+        assert "V1 shots" in pg.locator("[data-testid=ec-ovnote]").inner_text()
+        assert pg.locator("#ecHead span").inner_text() == "V2 clip"
+
+        # Opacity 50, typed: one undo entry, #pvV2 at half
+        pg.evaluate("tl.seek(1.5)")                             # 1 s into the clip
+        v = pg.locator("#inspector .ec-v[data-k=opacity]")
+        v.click()
+        v.fill("50")
+        v.press("Enter")
+        assert pg.evaluate(undo).startswith("undo: opacity"), pg.evaluate(undo)
+        pg.wait_for_function("document.querySelector('#pvV2').style.opacity === '0.5'")
+        assert pg.evaluate("tl.overlayById('o1').controls") == {"opacity": 50}
+        assert pg.evaluate("segs[0].controls || null") is None  # V1 untouched
+
+        # a Scale key: the stopwatch at 1 s in (100), then 50 at 2 s in — one entry each
+        pg.evaluate("effects.animate('scale')")
+        assert pg.evaluate(undo).startswith("undo: animate scale"), pg.evaluate(undo)
+        pg.evaluate("tl.seek(2.5)")                             # 2 s into the clip
+        assert pg.evaluate("effects.set('scale', 50)")
+        assert pg.evaluate(undo).startswith("undo: scale"), pg.evaluate(undo)
+        assert pg.evaluate("effects.keys('scale')") == [[1, 100], [2, 50]]
+        assert pg.locator("#inspector .ec-anim[data-g=scale] .ec-kf").count() == 2
+        look = pg.evaluate(pv)
+        assert "scale(0.5)" in look["tf"] and look["op"] == "0.5", look
+
+        # undo takes back the key alone, redo puts it back
+        pg.evaluate("tl.undo()")
+        assert pg.evaluate("effects.keys('scale')") == [[1, 100]]
+        pg.evaluate("tl.redo()")
+        assert pg.evaluate("effects.keys('scale')") == [[1, 100], [2, 50]]
+
+        # on disk: the sequence's save carries the clip's controls
+        want = {"opacity": 50.0, "keys": {"scale": [[1.0, 100.0], [2.0, 50.0]]}}
+        for _ in range(50):
+            ov = (json.loads(proj["edl"].read_text(encoding="utf-8")).get("overlays") or [{}])[0]
+            if ov.get("controls") == want:
+                break
+            time.sleep(0.2)
+        assert ov.get("controls") == want, ov
+
+        # the Program's pixels at 2.5: the mix inside the half-size box, V1 outside it
+        pg.wait_for_function(shown)
+        pg.evaluate("v2Look({controls: {}}, 2.0)")
+        pg.wait_for_timeout(300)
+        blue = program_rgb(pg)
+        assert blue[2] > 150 and blue[0] < 60, blue
+        pg.evaluate("programSync()")
+        pg.wait_for_timeout(300)
+        mix = 0.5 * red + 0.5 * blue
+        assert within(program_rgb(pg), mix), (program_rgb(pg), mix)
+        assert within(program_rgb(pg, 0.1, 0.5), red, 6)
+
+        # a V1 shot selected again: V1's panel, Lumetri and all
+        pg.locator("#tl .blk").nth(0).click()
+        pg.wait_for_selector("#inspector .ec [data-sec=lumetri]")
+        assert pg.locator("#inspector .ec[data-ov]").count() == 0
+        assert not errors, errors
+        browser.close()
+
+    # the export of what the board saved draws the same
+    saved = json.loads(proj["edl"].read_text(encoding="utf-8"))
+    out, log = render(proj, saved, "from-board")
+    assert "opacity 50%" in log, log
+    red, blue, mix = expected_mix(films)
+    a = rgb(out, 2.5 + 0.5 / FPS)                               # scale 50, opacity 50
+    assert within(box(a, 0.5, 0.5), mix), (box(a, 0.5, 0.5), mix)
+    assert within(box(a, 0.1, 0.1, 3), red, 4)                  # half size: V1 outside
+    b = rgb(out, 1.5 + 0.5 / FPS)                               # scale 100 at 1 s in
+    assert within(box(b, 0.1, 0.1, 3), mix), box(b, 0.1, 0.1, 3)
+    proj["edl"].write_text(json.dumps(EDL, indent=1), encoding="utf-8")

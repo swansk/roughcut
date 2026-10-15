@@ -50,11 +50,14 @@ import mimetypes
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
 import time
 import uuid
+from contextlib import contextmanager, nullcontext
+from fractions import Fraction
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -321,7 +324,11 @@ PROXY_GOP_S = 0.5
 # original. At 59.94 a loaded box played the monitor at ~7 frames a second around a cut;
 # half the frames is half the decoding and half the grade's uploads.
 # v3 (verdict 6 punch 2): a keyframe every 0.5 s (PROXY_GOP_S), not every 1 s.
-PROXY_V = "v3"
+# v4 (wave 8, lane YIELD; RANGEPROXY's request): on a GPU the whole proxy is decoded,
+# scaled and encoded on the card (NVDEC → scale_cuda → NVENC, the range proxy's encoder
+# settings) instead of a 4K/5.3K decode and x264 on the CPU — the same profile (1280
+# wide, the rate rule, the orient rule, a keyframe every PROXY_GOP_S), another encoder.
+PROXY_V = "v4"
 PROXY_MAX_FPS = 30.5
 
 
@@ -337,7 +344,48 @@ def proxy_rate(src: Path) -> str | None:
     return f"{rate.numerator}/{rate.denominator}"
 
 
-def build_proxy(src: Path, dest: Path, orient: str) -> None:
+def proxy_gpu_args(src: Path, orient: str) -> list[str] | None:
+    """The all-GPU proxy encode's arguments (between `-nostdin` and the output), or None
+    when this source cannot take it: no NVENC here, an HDR source (its tone map is a CPU
+    filter), not 8-bit 4:2:0, or a turn that is not a quarter. The profile is the CPU
+    path's: PROXY_W wide at most (never up), `proxy_rate`'s rate, a keyframe every
+    PROXY_GOP_S, AAC 128k. The orient rule is gpu-turn's (`build_preview`): autorotate does
+    nothing to CUDA frames, so the matrix is overridden on the input and the turn is done
+    explicitly on the 1280 frame after it comes down (the decode and the scale stay on the
+    card); under `orient: none` it is overridden and nothing turns."""
+    if not preview_gpu() or source_normalise(src):
+        return None
+    f = media_facts(src) or {}
+    if f.get("pix_fmt") not in ("yuv420p", "yuvj420p", "nv12"):
+        return None
+    if not f.get("width") or not f.get("height"):
+        return None
+    turn = turn_needed(f, orient)
+    if turn and turn not in TURN_VF:
+        return None
+    quarter = turn % 180 != 0
+    ow, oh = (f["height"], f["width"]) if quarter else (f["width"], f["height"])
+    w = min(PROXY_W, ow) // 2 * 2
+    h = max(2, round(oh * w / ow / 2) * 2)
+    sw, sh = (h, w) if quarter else (w, h)
+    rate = proxy_rate(src)
+    fps = float(Fraction(rate)) if rate else float(f.get("fps") or 30.0)
+    gop = max(1, round(fps * PROXY_GOP_S))
+    vf = f"scale_cuda={sw}:{sh}:format=nv12"
+    if rate:
+        vf = f"fps={rate},{vf}"            # first: the frames it drops are never scaled
+    if turn:
+        vf += f",hwdownload,format=nv12,{TURN_VF[turn]}"
+    pre = ["-display_rotation", "0"] if (turn or orient == "none") else []
+    return [*pre, "-hwaccel", "cuda", "-hwaccel_output_format", "cuda", "-i", str(src),
+            "-map", "0:v:0", "-map", "0:a:0", "-dn", "-vf", vf,
+            "-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "23", "-b:v", "0",
+            "-g", str(gop), "-bf", "0",
+            "-c:a", "aac", "-b:a", "128k", "-write_tmcd", "0", "-movflags", "+faststart"]
+
+
+def build_proxy(src: Path, dest: Path, orient: str) -> str:
+    """The 1280 proxy of `src` at `dest`; returns the path it took ("gpu" or "cpu")."""
     # Written to a temp name and renamed, because the server is already serving while
     # this thread runs: a half-written file at the final path is handed to a <video>
     # element as a truncated stream, which fails to decode and is then cached as
@@ -346,6 +394,16 @@ def build_proxy(src: Path, dest: Path, orient: str) -> None:
     # two servers pointed at the same bin — easily done — would otherwise both write
     # the same .part path and hand the survivor a file interleaved from two encodes.
     tmp = dest.with_suffix(f".{os.getpid()}.part.mp4")
+    gpu = proxy_gpu_args(src, orient)
+    if gpu is not None:
+        r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", *gpu, str(tmp)],
+                           capture_output=True, text=True)
+        if r.returncode == 0 and tmp.exists() and tmp.stat().st_size:
+            tmp.replace(dest)
+            return "gpu"
+        tmp.unlink(missing_ok=True)
+        print(f"  proxy {src.name}: GPU path failed, CPU instead: {r.stderr[-200:]}",
+              flush=True)
     cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin"]
     if orient == "none":
         # Same lesson as assemble.py: -noautorotate leaves the display matrix on the
@@ -382,6 +440,7 @@ def build_proxy(src: Path, dest: Path, orient: str) -> None:
         tmp.unlink(missing_ok=True)
         raise RuntimeError(f"proxy failed for {src.name}: {r.stderr[-300:]}")
     tmp.replace(dest)
+    return "cpu"
 
 
 def ensure_proxies(clips: list[str], progress=None) -> None:
@@ -3444,9 +3503,10 @@ def _analyze_job(job: str, cmd: list[str], wanted: set[str]) -> None:
             entry.advance("previews", done / max(1, total),
                           detail=f"building preview {done} of {total}")
 
-        ensure_proxies(
-            sorted(c for c in footage_clips() if Path(c).stem in analysed_stems()),
-            progress=previews)
+        with procscope.active(procscope.Scope(f"proxies {job}", background=True)):
+            ensure_proxies(
+                sorted(c for c in footage_clips() if Path(c).stem in analysed_stems()),
+                progress=previews)
     entry["stage"] = "done"
     entry.finish("done", detail=f"{entry['done']} clips analysed")
 
@@ -4648,7 +4708,8 @@ def _index_job(job: str, order: str) -> None:
     contact-sheet reads beside the audio pass), every tool inside the job's process
     scope. `entry["coarse"]` (the first pass sets it) asks the journal for the coarse
     tier first; `entry["coarse_ready"]` says when every clip is heard and looked at."""
-    scope = INDEX_SCOPES.setdefault(job, procscope.Scope(f"index {job}"))
+    # background: its proxy encodes and close looks yield to playback (lane YIELD)
+    scope = INDEX_SCOPES.setdefault(job, procscope.Scope(f"index {job}", background=True))
     kick_previews()          # a walk a cancel ended starts again with the index
     try:
         with procscope.active(scope):
@@ -6544,7 +6605,10 @@ def media_poster(name: str, t: float = 0.0) -> Response:
     dest = poster_path(stem, t)
     if not dest.exists():
         try:
-            ensure_poster(stem, t)
+            # the board's own: never paused for playback (not background), but in a
+            # scope so its ffmpeg dies with the server
+            with procscope.active(poster_scope()):
+                ensure_poster(stem, t)
         except RuntimeError as exc:
             raise HTTPException(500, str(exc)) from exc
     if not dest.exists():
@@ -6600,13 +6664,15 @@ def ensure_poster(stem: str, t: float, slots: threading.BoundedSemaphore | None 
         if owner:
             ev = POSTER_BUILDING[key] = threading.Event()
     if not owner:
-        ev.wait(30)
+        with media_waiting(key):        # a paused (playback) walk build resumes for it
+            ev.wait(30)
         if dest.exists():
             return dest
     try:
         with slots or POSTER_SLOTS:
             if not dest.exists():      # another request may have built it while we waited
-                build_poster(src, dest, t, original=original)
+                with procscope.tagged(key):
+                    build_poster(src, dest, t, original=original)
     finally:
         if owner:
             with MEDIA["lock"]:
@@ -6653,12 +6719,16 @@ MEDIA: dict = {"lock": threading.Lock(), "wanted": [], "building": {}, "failed":
                "kick": threading.Event()}
 
 
-def media_scope() -> procscope.Scope:
-    """The scope preview and poster encodes run in: a fresh one after a stop."""
+def media_scope(asked: bool = False) -> procscope.Scope:
+    """The scope preview and poster encodes run in: a fresh one after a stop. The walk's
+    work is background (nice 19, paused while the Program plays); a preview a monitor
+    asked for (`start_preview`: somebody is looking at "preparing preview…") is not."""
+    slot = "ask_scope" if asked else "scope"
     with MEDIA["lock"]:
-        sc = MEDIA.get("scope")
+        sc = MEDIA.get(slot)
         if sc is None or sc.cancelled:
-            sc = MEDIA["scope"] = procscope.Scope("previews")
+            sc = MEDIA[slot] = procscope.Scope("asked previews" if asked else "previews",
+                                               background=not asked)
         return sc
 
 
@@ -6670,9 +6740,182 @@ def stop_media() -> int:
     with MEDIA["lock"]:
         MEDIA["walk_gen"] += 1
         sc, MEDIA["scope"] = MEDIA.get("scope"), None
-    n = sc.kill() if sc is not None else 0
+        ask, MEDIA["ask_scope"] = MEDIA.get("ask_scope"), None
+    n = sum(x.kill() for x in (sc, ask) if x is not None)
     MEDIA["stopped"] += n
     return n
+
+
+# ---------------------------------------------------------------- yield to playback
+#
+# Verdict 6, punch 3: the app's own proxy / preview / range / close-look / poster-walk
+# ffmpeg ran beside the Program on the same box, and the cut's holes grew with the load
+# they made. Now every such encode runs at nice 19 (procscope's background scopes), and
+# while any board's Program plays (POST /api/playing {on: true} on play and every
+# PLAY_BEAT_S while it plays, {on: false} on pause) the server SIGSTOPs those ffmpegs and
+# SIGCONTs them on pause, or PLAY_LAPSE_S after the last beat (a closed tab, a crashed
+# browser: work can never stay stopped for good). Never paused: the export (its own
+# group, no scope), a poster the board asked for (`poster_scope`, not background), and a
+# background build somebody is waiting on right now (`media_waiting`: a monitor holding
+# /media/proxy for its preview, a card waiting on the walk's poster).
+
+PLAY_LAPSE_S = 5.0          # a playing board that stops beating is taken as paused
+YIELD_TICK_S = 0.2          # how often the yield thread looks (a new encode, a lapse)
+PLAYING: dict = {"lock": threading.Lock(), "tabs": {}, "stopped": {}, "thread": None,
+                 "log": []}
+
+
+@contextmanager
+def media_waiting(key: str):
+    """Somebody (a request) is waiting on the background build of `key` for this block:
+    the yield thread leaves that build running (or resumes it) while the Program plays."""
+    with MEDIA["lock"]:
+        w = MEDIA.setdefault("waiters", {})
+        w[key] = w.get(key, 0) + 1
+    try:
+        yield
+    finally:
+        with MEDIA["lock"]:
+            w = MEDIA["waiters"]
+            w[key] -= 1
+            if w[key] <= 0:
+                w.pop(key, None)
+
+
+def _waited_on() -> set[str]:
+    with MEDIA["lock"]:
+        return set(MEDIA.get("waiters") or {})
+
+
+SLOT_WAIT = "*preview-slot*"     # an asked-for preview waits for PREVIEW_SLOTS
+
+
+class _Held:
+    """Release an already-acquired semaphore at the end of a `with` block."""
+
+    def __init__(self, sem) -> None:
+        self.sem = sem
+
+    def __enter__(self):
+        return self.sem
+
+    def __exit__(self, *exc) -> None:
+        self.sem.release()
+
+
+def poster_scope() -> procscope.Scope:
+    """The scope a poster the board asked for builds in: not background (never paused,
+    never niced), but its ffmpeg dies with the server. Fresh after a shutdown's kill."""
+    with MEDIA["lock"]:
+        sc = MEDIA.get("poster_scope")
+        if sc is None or sc.cancelled:
+            sc = MEDIA["poster_scope"] = procscope.Scope("posters")
+        return sc
+
+
+def playing_now() -> bool:
+    now = time.monotonic()
+    with PLAYING["lock"]:
+        tabs = PLAYING["tabs"]
+        for k in [k for k, until in tabs.items() if until <= now]:
+            del tabs[k]
+        return bool(tabs)
+
+
+def _signal_pid(pid: int, sig: int) -> bool:
+    try:
+        os.kill(pid, sig)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
+def yield_tick() -> dict:
+    """One look: while the Program plays, pause every background ffmpeg nobody waits on;
+    otherwise (and for a build somebody now waits on) let the paused ones run again.
+    Every background ffmpeg, a close look's own included, is at nice 19."""
+    play = playing_now()
+    procs = procscope.background_procs()
+    waited = _waited_on()
+    slot = SLOT_WAIT in waited       # every media build (tagged) runs until the slot frees
+    want = {pid for pid, tag in procs
+            if play and tag not in waited and not (slot and tag is not None)}
+    stopped: dict = PLAYING["stopped"]
+    for pid, _tag in procs:
+        try:
+            if os.getpriority(os.PRIO_PROCESS, pid) < procscope.BACKGROUND_NICE:
+                os.setpriority(os.PRIO_PROCESS, pid, procscope.BACKGROUND_NICE)
+        except OSError:
+            pass
+    for pid in want - set(stopped):
+        if _signal_pid(pid, signal.SIGSTOP):
+            stopped[pid] = time.monotonic()
+    for pid in set(stopped) - want:
+        _signal_pid(pid, signal.SIGCONT)
+        stopped.pop(pid, None)
+    return {"playing": play, "stopped": sorted(stopped), "background": [p for p, _ in procs]}
+
+
+def _yield_loop() -> None:
+    while True:
+        try:
+            yield_tick()
+        except Exception as exc:  # noqa: BLE001 — the loop must outlive one bad look
+            print(f"  !! yield: {exc}", flush=True)
+        time.sleep(YIELD_TICK_S)
+
+
+def start_yield() -> None:
+    with PLAYING["lock"]:
+        t = PLAYING["thread"]
+        if t is not None and t.is_alive():
+            return
+        t = PLAYING["thread"] = threading.Thread(target=_yield_loop, daemon=True,
+                                                 name="yield")
+    t.start()
+
+
+@app.post("/api/playing")
+async def api_playing(request: Request) -> JSONResponse:
+    """The board's Program started or stopped playing (`{on, tab}`). `on: true` again
+    every couple of seconds while it plays is the heartbeat."""
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    on = bool(body.get("on"))
+    tab = str(body.get("tab") or "board")[:64]
+    with PLAYING["lock"]:
+        if on:
+            PLAYING["tabs"][tab] = time.monotonic() + PLAY_LAPSE_S
+        else:
+            PLAYING["tabs"].pop(tab, None)
+        PLAYING["log"].append((time.time(), tab, on))     # the last beats, for a look
+        del PLAYING["log"][:-50]
+    start_yield()
+    tick = await asyncio.to_thread(yield_tick)     # act now, not on the next tick
+    return JSONResponse({"playing": tick["playing"], "paused_jobs": len(tick["stopped"])})
+
+
+def _shutdown_children() -> None:
+    """The server is going away: every encode it started goes with it (RANGEPROXY's
+    orphans: encodes that kept the GPU busy after the server died)."""
+    with PLAYING["lock"]:
+        PLAYING["tabs"].clear()
+    for pid in list(PLAYING["stopped"]):
+        _signal_pid(pid, signal.SIGCONT)
+    PLAYING["stopped"].clear()
+    for proc in list(RENDER_PROCS.values()):
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+    procscope.kill_all()
+
+
+app.router.on_shutdown.append(_shutdown_children)
 
 
 def clip_for_stem(stem: str) -> str | None:
@@ -7032,17 +7275,22 @@ def _claim_preview(key: str) -> tuple[threading.Event, bool]:
         return ev, True
 
 
-def _build_claimed(src: Path, dest: Path, orient: str, ev: threading.Event) -> None:
+def _build_claimed(src: Path, dest: Path, orient: str, ev: threading.Event,
+                   asked: bool = False) -> None:
     """Paths fixed by the caller, not read from STATE here: a board re-pointed at
     another bin mid-build must not have this write that bin's preview from this one."""
     key = str(dest)
     scope = None
     try:
-        with PREVIEW_SLOTS:
+        # An asked-for preview waiting for a slot the walk's paused builds hold: they run
+        # again until it has one (a Program playing must not starve the Source monitor).
+        with (media_waiting(SLOT_WAIT) if asked else nullcontext()):
+            PREVIEW_SLOTS.acquire()
+        with _Held(PREVIEW_SLOTS):
             if not dest.exists():
                 t0 = time.monotonic()
-                scope = media_scope()
-                with procscope.active(scope):
+                scope = media_scope(asked)
+                with procscope.active(scope), procscope.tagged(key):
                     how = build_preview(src, dest, orient)
                 print(f"  preview {dest.stem} ({how}) in {time.monotonic() - t0:.1f}s",
                       flush=True)
@@ -7078,7 +7326,8 @@ def ensure_preview(clip: str) -> Path | None:
     if owner:
         _build_claimed(STATE["footage"] / clip, dest, STATE.get("orient", "auto"), ev)
     else:
-        ev.wait()
+        with media_waiting(str(dest)):
+            ev.wait()
     return dest if dest.exists() else None
 
 
@@ -7098,7 +7347,7 @@ def start_preview(clip: str) -> threading.Event | None:
     ev, owner = _claim_preview(key)
     if owner:
         threading.Thread(target=_build_claimed, daemon=True, args=(
-            STATE["footage"] / clip, dest, STATE.get("orient", "auto"), ev)).start()
+            STATE["footage"] / clip, dest, STATE.get("orient", "auto"), ev, True)).start()
     return ev
 
 
@@ -7120,7 +7369,8 @@ def media_fallback(clip: str, wait_s: float = 0.0) -> tuple[str, str | None]:
     if ev is None:
         return "failed", None
     if wait_s > 0:
-        ev.wait(wait_s)
+        with media_waiting(str(preview_path(stem))):   # a monitor holds this request
+            ev.wait(wait_s)
     if (STATE["proxy_dir"] / f"{stem}.mp4").exists():
         return "proxy", None
     if preview_path(stem).exists():
@@ -7430,7 +7680,7 @@ def ensure_range(clip: str, cut: dict | None = None) -> dict | None:
         with PREVIEW_SLOTS:
             t0 = time.monotonic()
             scope = media_scope()
-            with procscope.active(scope):
+            with procscope.active(scope), procscope.tagged(key):
                 how = build_range_proxy(src, preview, dest, spans, orient)
             took = time.monotonic() - t0
             meta = {"stem": stem, "clip": clip, "v": RANGE_V, "proxy_v": PROXY_V,
