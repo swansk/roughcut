@@ -80,3 +80,6 @@
 #exportDialog video[hidden], #exportDialog .ex-file[hidden] { display: none; }
 #exportDialog .ex-file { display: flex; gap: 6px; }
 #exportDialog .ex-file input[type=text] { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+/* the first open's size sample, while it encodes (verdict 4, punch 6) */
+#exportDialog .ex-measuring { display: block; font-style: normal; font-weight: 400; font-size: 10.5px;
+                              color: var(--dim, #94949c); }
