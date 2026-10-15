@@ -2173,13 +2173,16 @@ def ask_pending(edl_mtime: float) -> dict | None:
 
 
 def _same_shots(a: list[dict] | None, b: list[dict]) -> bool:
-    """A render's shot list against the cut — the board's own `isThisCut` rule."""
+    """A render's shot list against the cut — the board's own `isThisCut` rule, and
+    the same Effect Controls (they render now: a film made before a shot was scaled
+    is not that cut)."""
     if not a or len(a) != len(b):
         return False
     return all(x.get("clip") == y.get("clip")
                and abs(float(x.get("in", 0)) - float(y.get("in", 0))) < 0.005
                and abs(float(x.get("out", 0)) - float(y.get("out", 0))) < 0.005
                and float(x.get("speed") or 1) == float(y.get("speed") or 1)
+               and (x.get("controls") or {}) == (y.get("controls") or {})
                for x, y in zip(a, b))
 
 
@@ -4824,6 +4827,8 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
            "--colour-dir", str(colour_dir()),
            "--generated-dir", str(generated_dir()),
            "--parts-dir", str(parts_dir), "--progress", "-o", str(write_to)]
+    if meta.get("fps"):
+        cmd[-2:-2] = ["--fps", str(meta["fps"])]
     durs = [edits.dur(s) for s in meta.get("shots") or []]
     planned = sum(durs) or 1e-9
 
@@ -5107,7 +5112,7 @@ def download_name(meta: dict, path: Path, size: tuple[int, int] | None) -> str:
     return f"{stem or path.stem}.mp4"
 
 
-RENDER_PROFILES = ("preview", "delivery", "youtube")
+RENDER_PROFILES = ("preview", "delivery", "youtube", "match")
 # Seconds of wall clock per second of finished cut. Preview is measured: a 17-shot,
 # 181s cut of the Killington bin rendered in 160.8s while an Ask and a second render
 # shared the machine. Delivery comes from Karl's 17-minute render of a ~2:50 cut and is
@@ -5115,17 +5120,17 @@ RENDER_PROFILES = ("preview", "delivery", "youtube")
 # first milestone replaces with measurement off the run in front of it. YouTube (the
 # Export dialog's preset: 1080p at the bin's own rate, preset medium) is provisional too,
 # between the two.
-RENDER_S_PER_CUT_S = {"preview": 0.9, "delivery": 6.0, "youtube": 2.0}
+RENDER_S_PER_CUT_S = {"preview": 0.9, "delivery": 6.0, "youtube": 2.0, "match": 3.0}
 # What share of that the join is worth. Measured at 5% on the preview above (7.9s of
 # 160.8s); given more on delivery, where the join re-encodes at source resolution with
 # the music mix rather than stream-copying 1080p parts. Provisional, and the reason the
 # join is a milestone at all: the bar used to hit 100% the moment cutting ended.
-RENDER_JOIN_SHARE = {"preview": 0.1, "delivery": 0.3, "youtube": 0.1}
+RENDER_JOIN_SHARE = {"preview": 0.1, "delivery": 0.3, "youtube": 0.1, "match": 0.1}
 # And what the review copy costs, in the same units, measured on this box against the
 # 181s Killington cut with the box otherwise idle: 39.7s off the 1080p preview master
 # and 95.4s off the 4K delivery one. It is a phase of the render because the players
 # stream it — the render is not usable until it exists.
-REVIEW_S_PER_CUT_S = {"preview": 0.22, "delivery": 0.53, "youtube": 0.25}
+REVIEW_S_PER_CUT_S = {"preview": 0.22, "delivery": 0.53, "youtube": 0.25, "match": 0.4}
 
 # ---------------------------------------------------------------- the Export dialog
 #
@@ -5135,18 +5140,35 @@ REVIEW_S_PER_CUT_S = {"preview": 0.22, "delivery": 0.53, "youtube": 0.25}
 # profiles; `mbps` is the video bitrate at `ref` pixels (CRF encodes, so it is an
 # estimate, scaled by the frame the bin actually renders at). Quick: 49.7 MB for a
 # 28.1 s cut of Killington at 1080p (verdict 2) = 14 Mbps. Master: Karl's 987 MB 4K
-# delivery of 181 s = 43.6 Mbps. YouTube: crf 18 at medium, provisional.
+# delivery of 181 s = 43.6 Mbps. YouTube: crf 18 at medium, provisional. `fps` is the
+# rate each was measured at; the estimate scales by the square root of the rate asked
+# for over it (a CRF encode spends less per frame as frames get closer together).
+#
+# Verdict 3, punch 10: the estimate was 64 % high on Killington (128 vs 78 MB), so a
+# preset's figure is a fallback only: once the bin has a file made with it, the
+# estimate is that file's measured bits per pixel per frame (`export_measured`).
+#
+# Every preset renders at the sequence's frame rate (`/api/project` `fps`), constant
+# frame rate (assemble.py `--fps`): the journey found 23.976 exports of a 24 fps
+# sequence that were not even constant. Match Sequence is also the sequence's frame
+# size: what Premiere's "Match Source" gives.
 EXPORT_PRESETS = {
-    "quick": {"label": "Quick 1080p", "profile": "preview", "mbps": 14.0,
+    "quick": {"label": "Quick 1080p", "profile": "preview", "mbps": 14.0, "fps": 24000 / 1001,
               "audio_kbps": 192, "ref": (1920, 1080), "max": (1920, 1080), "fixed": True,
-              "about": "H.264 · 1920×1080 · 23.976 fps · fast encode, to watch the cut"},
-    "master": {"label": "Master 4K", "profile": "delivery", "mbps": 44.0,
+              "about": "H.264 · 1920×1080 at the sequence's frame rate · fast encode, to watch the cut"},
+    "match": {"label": "Match Sequence", "profile": "match", "mbps": 48.0, "fps": 30000 / 1001,
+              "audio_kbps": 320, "ref": (3840, 2160), "max": (8192, 8192), "fixed": False,
+              "about": "H.264 · the sequence's own frame size and frame rate · crf 18, medium encode"},
+    "master": {"label": "Master 4K", "profile": "delivery", "mbps": 44.0, "fps": 30000 / 1001,
                "audio_kbps": 256, "ref": (3840, 2160), "max": (3840, 2160), "fixed": False,
-               "about": "H.264 · up to 3840×2160 at the footage's own frame rate, never upscaled · slow encode"},
-    "youtube": {"label": "YouTube 1080p", "profile": "youtube", "mbps": 16.0,
+               "about": "H.264 · up to 3840×2160 at the sequence's frame rate, never upscaled · slow encode"},
+    "youtube": {"label": "YouTube 1080p", "profile": "youtube", "mbps": 16.0, "fps": 30000 / 1001,
                 "audio_kbps": 384, "ref": (1920, 1080), "max": (1920, 1080), "fixed": False,
-                "about": "H.264 · up to 1920×1080 at the footage's own frame rate · AAC 384 kbps"},
+                "about": "H.264 · up to 1920×1080 at the sequence's frame rate · AAC 384 kbps"},
 }
+# a render made by the film tool (no preset) calibrates the preset of its profile
+PROFILE_PRESET = {"preview": "quick", "match": "match", "delivery": "master",
+                  "youtube": "youtube"}
 EXPORT_NAME_MAX = 80
 
 
@@ -5212,28 +5234,115 @@ def export_default_name(edl: dict) -> str:
     return export_component(" - ".join(bits), "export")
 
 
+def fps_rational(fps: float | None) -> str:
+    """The sequence's rate as assemble.py's `--fps` takes it: a decimal NTSC rate
+    (23.976, 29.97, 59.94 …) is the /1001 rate it stands for, a whole one is itself."""
+    f = float(fps or 24000 / 1001)
+    if abs(f - round(f)) < 1e-6:
+        return str(int(round(f)))
+    ntsc = round(f * 1.001)
+    if abs(f - ntsc / 1.001) < 0.002:
+        return f"{ntsc * 1000}/1001"
+    return f"{round(f * 1000)}/1000"
+
+
+def _rate_value(text: str | None) -> float | None:
+    try:
+        num, _, den = str(text).partition("/")
+        return float(num) / float(den or 1)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+EXPORT_CALIBRATE_N = 3          # the newest files of a preset that set its estimate
+
+
+def export_measured(key: str, seq_fps: float) -> tuple[float | None, int]:
+    """Bits per pixel per frame of the newest files this bin made with preset `key`
+    (an export names it; a film-tool render counts for its profile's preset), as the
+    median of up to EXPORT_CALIBRATE_N, and how many there were. Only files that are
+    still on disk, with their length and frame on record."""
+    root = export_root()
+    rows = []
+    if root.exists():
+        for meta_path in root.glob("*/*.json"):
+            try:
+                m = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(m, dict):
+                continue
+            k = m.get("preset") or PROFILE_PRESET.get(m.get("profile") or "preview")
+            if k != key:
+                continue
+            # this bin's: an export says which; an older render is in the bin's folder
+            if m.get("footage", STATE["footage"].name if meta_path.parent == STATE["renders"]
+                     else None) != STATE["footage"].name:
+                continue
+            mp4 = meta_path.with_suffix(".mp4")
+            dur, w, h = m.get("duration_s"), m.get("width"), m.get("height")
+            if not (mp4.exists() and dur and w and h):
+                continue
+            fps = _rate_value(m.get("fps")) or (24000 / 1001 if m.get("profile") == "preview"
+                                                else seq_fps)
+            bits = mp4.stat().st_size * 8.0
+            rows.append((float(m.get("created") or 0), bits / (float(dur) * w * h * fps)))
+    rows.sort(reverse=True)
+    vals = sorted(v for _, v in rows[:EXPORT_CALIBRATE_N])
+    if not vals:
+        return None, 0
+    mid = len(vals) // 2
+    bppf = vals[mid] if len(vals) % 2 else (vals[mid - 1] + vals[mid]) / 2
+    return bppf, len(vals)
+
+
+def export_folders() -> list[dict]:
+    """The folders under `--work/renders`, the most recently written first: name, how
+    many films are in it and when the newest was made."""
+    root = export_root()
+    out = []
+    if root.exists():
+        for d in root.iterdir():
+            if not d.is_dir() or d.name.startswith("."):
+                continue
+            films = [f for f in d.glob("*.mp4") if not f.name.startswith(".")]
+            when = max([f.stat().st_mtime for f in films] or [d.stat().st_mtime])
+            out.append({"name": d.name, "films": len(films), "when": round(when, 1)})
+    out.sort(key=lambda r: (-r["when"], r["name"]))
+    return out
+
+
 @app.get("/api/export")
 def api_export() -> JSONResponse:
-    """What the Export dialog offers: the presets (with the frame each renders at and
-    its bitrate, for the size estimate), the default file name (from the cut's name),
-    the default folder (the bin's own, where the versions list looks) and the folders
-    already under `--work/renders`."""
+    """What the Export dialog offers: the presets (with the frame and rate each renders
+    at and its bitrate, for the size estimate — measured off this bin's own earlier
+    files of that preset when there are any), the default file name (from the cut's
+    name), the default folder (the bin's own, where the versions list looks) and the
+    folders already under `--work/renders`, the most recently used first."""
     edl = read_edl()
     native = _native_frame()
+    seq_fps = sequence_fps(edl.get("segments") or [])
     presets = []
     for key, p in EXPORT_PRESETS.items():
         w, h = export_frame(p, native)
         rw, rh = p["ref"]
-        mbps = max(0.5, p["mbps"] * (w * h) / (rw * rh))
+        bppf, n = export_measured(key, seq_fps)
+        if bppf:
+            total = bppf * w * h * seq_fps / 1e6
+            mbps = max(0.05, total - p["audio_kbps"] / 1000)
+        else:
+            mbps = max(0.5, p["mbps"] * (w * h) / (rw * rh) * math.sqrt(seq_fps / p["fps"]))
         presets.append({"key": key, "label": p["label"], "profile": p["profile"],
                         "about": p["about"], "width": w, "height": h,
-                        "video_mbps": round(mbps, 2), "audio_kbps": p["audio_kbps"]})
+                        "fps": round(seq_fps, 3), "fps_rational": fps_rational(seq_fps),
+                        "video_mbps": round(mbps, 3), "audio_kbps": p["audio_kbps"],
+                        "measured": n})
     root = export_root()
-    folders = sorted(d.name for d in root.iterdir()
-                     if d.is_dir() and not d.name.startswith(".")) if root.exists() else []
+    folders = export_folders()
     return JSONResponse({
         "presets": presets, "preset": "quick", "name": export_default_name(edl),
-        "folder": STATE["footage"].name, "folders": folders, "root": str(root),
+        "folder": STATE["footage"].name, "folders": [f["name"] for f in folders],
+        "recent": folders[:6], "root": str(root), "fps": round(seq_fps, 3),
     })
 
 
@@ -5269,7 +5378,23 @@ async def api_render(request: Request) -> JSONResponse:
     if not body.get("segments"):
         raise HTTPException(400, "nothing to export: the sequence is empty")
     edl = read_edl()
-    edl["segments"] = body["segments"]
+    # Effect Controls ride each segment to the render (verdict 3, punch 3), validated by
+    # the same rule a save uses, so the film is what the Program monitor showed.
+    segments = []
+    for s in body["segments"]:
+        if not isinstance(s, dict):
+            raise HTTPException(400, "a segment must be an object")
+        s = dict(s)
+        try:
+            c = clean_controls(s.get("controls"))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, f"controls: {exc}")
+        if c:
+            s["controls"] = c
+        else:
+            s.pop("controls", None)
+        segments.append(s)
+    edl["segments"] = segments
     job = uuid.uuid4().hex[:8]
     edl_path = STATE["work"] / f"render_{job}.json"
     if export:
@@ -5297,12 +5422,16 @@ async def api_render(request: Request) -> JSONResponse:
         # reported that the board "doesn't seem to reflect the render" — it did not,
         # and nothing on screen said which of the renders it did reflect.
         "shots": [{"clip": s["clip"], "in": s["in"], "out": s["out"],
-                   **({"speed": s["speed"]} if s.get("speed") else {})}
+                   **({"speed": s["speed"]} if s.get("speed") else {}),
+                   **({"controls": s["controls"]} if s.get("controls") else {})}
                   for s in edl["segments"]],
+        "footage": STATE["footage"].name,
     }
     if export:
+        # An export is constant frame rate at the sequence's rate, whatever the preset.
         meta.update(export=True, preset=preset_key,
-                    preset_label=EXPORT_PRESETS[preset_key]["label"])
+                    preset_label=EXPORT_PRESETS[preset_key]["label"],
+                    fps=fps_rational(sequence_fps(edl["segments"])))
     shots = len(edl["segments"])
     planned = meta["planned_s"]
     RENDERS[job] = progress.Job(
@@ -5580,7 +5709,9 @@ POSTER_CACHE = {"cache-control": "public, max-age=31536000, immutable"}
 
 
 def poster_path(stem: str, t: float) -> Path:
-    return STATE["posters"] / f"{stem}@{t:09.2f}.jpg"
+    # PICTURE_V in the name: a poster cut from a v1 preview of a rotation-flagged clip is
+    # upside down, and an old cache must be rebuilt rather than served (verdict 3 punch 1).
+    return STATE["posters"] / f"{stem}@{t:09.2f}.{PICTURE_V}.jpg"
 
 
 def build_poster(src: Path, dest: Path, t: float, original: bool = False) -> None:
@@ -5593,7 +5724,11 @@ def build_poster(src: Path, dest: Path, t: float, original: bool = False) -> Non
 
     From an `original` it is the proxy's frame: the same rotation rule and HDR tone map
     build_proxy applies, decoded on the GPU when there is one (a 4K HEVC GoPro frame:
-    0.8 s that way, 1.8 s on a loaded CPU; byte-identical JPEG either way).
+    0.8 s that way, 1.8 s on a loaded CPU; byte-identical JPEG either way). Only
+    `-hwaccel cuda`, never `-hwaccel_output_format cuda`: the frames come back to system
+    memory, where ffmpeg's autorotate turns them as it does for the proxy and the export
+    (on CUDA frames it silently does not — verdict 3's upside-down previews). A proxy or
+    preview source is already upright and carries no rotation tag.
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part.jpg")
@@ -5883,9 +6018,19 @@ def browser_playable(src: Path) -> bool:
         return False
     if max(f["width"], f["height"]) > PLAYABLE_MAX_EDGE or f["bit_rate"] > PLAYABLE_MAX_BPS:
         return False
-    if STATE.get("orient") == "none" and f["rotation"] % 360:
+    # The browser turns a tagged original itself, exactly as the export's autorotate does
+    # (`orient: auto`), but only by quarter turns; `orient: none` says the tag is wrong
+    # and the browser would honour it anyway. Either way: a preview, built by the rule.
+    if f["rotation"] % 360 and (STATE.get("orient") == "none" or f["rotation"] % 90):
         return False
     return True
+
+
+# The picture cache's version, in every preview's and poster's file name. v1 previews of
+# rotation-flagged clips were made on the all-GPU path, which does not apply the flag, and
+# posters were cut from them: upside down next to an upright export (verdict 3 punch 1).
+# Bump it whenever what a preview or poster shows changes, so an old --work rebuilds.
+PICTURE_V = "v2"
 
 
 def preview_dir() -> Path:
@@ -5894,7 +6039,25 @@ def preview_dir() -> Path:
 
 
 def preview_path(stem: str) -> Path:
-    return preview_dir() / f"{stem}.mp4"
+    return preview_dir() / f"{stem}.{PICTURE_V}.mp4"
+
+
+def preview_url(stem: str) -> str:
+    return f"/media/preview/{preview_path(stem).name}"
+
+
+def turn_needed(f: dict, orient: str) -> int:
+    """The quarter-turns a clip's display matrix asks for, as the counter-clockwise
+    degrees ffprobe reports (0, 90, 180, 270) — 0 under `orient: none`, which overrides
+    the matrix with `-display_rotation 0` everywhere (proxy, poster, export)."""
+    if orient == "none":
+        return 0
+    return int(round(float(f.get("rotation") or 0))) % 360
+
+
+# The filter that does what ffmpeg's autorotate does for a matrix of that many
+# counter-clockwise degrees (ffmpeg's own mapping; tested against it by pixels).
+TURN_VF = {90: "transpose=cclock", 180: "hflip,vflip", 270: "transpose=clock"}
 
 
 def preview_gpu() -> bool:
@@ -5917,16 +6080,27 @@ def preview_gpu() -> bool:
 
 def build_preview(src: Path, dest: Path, orient: str) -> str:
     """A 360p, keyframe-every-half-second h264/aac mp4 of `src` at `dest`; returns the
-    path it took. Three paths, fastest first, each falling through on failure: all on
-    the GPU (NVDEC + scale_cuda + NVENC; SDR 8-bit, no rotation to apply), GPU decode
-    with the CPU filters an HDR or rotated clip needs, then all software. Temp name and
-    rename, as build_proxy: the server serves while this runs."""
+    path it took. Fastest first, each falling through on failure: all on the GPU
+    (NVDEC + scale_cuda + NVENC; SDR 8-bit, no rotation to apply), the same with the
+    frames brought down after the scale for a CPU quarter-turn (a rotation-flagged SDR
+    clip: Karl's GoPro bins, flagged −180°), GPU decode with the CPU filters an HDR clip
+    needs, then all software. Temp name and rename, as build_proxy: the server serves
+    while this runs.
+
+    The orient rule is build_proxy's and the export's: under `orient: auto` the display
+    matrix is applied to the pixels and none is left on the file; under `orient: none`
+    it is overridden to 0 and the stored pixels play as they are. ffmpeg's autorotate
+    does the first on the CPU paths; on CUDA frames it silently does nothing, so the
+    all-GPU path is taken only for a clip that needs no turn (verdict 3 punch 1: 9 of
+    12 Killington clips played upside down in every monitor), and the GPU-turn path
+    overrides the matrix and turns explicitly with TURN_VF."""
     f = media_facts(src) or {}
     norm = source_normalise(src)
     fps = f.get("fps") or 30.0
     gop = max(1, round(fps * PREVIEW_GOP_S))
     w, h = f.get("width") or 0, f.get("height") or 0
-    rotated = orient != "none" and (f.get("rotation") or 0) % 180 != 0
+    turn = turn_needed(f, orient)
+    rotated = turn % 180 != 0                  # a quarter turn swaps the edges
     if rotated:
         w, h = h, w
     # the short edge to PREVIEW_H, never up; the other edge follows, even
@@ -5946,19 +6120,27 @@ def build_preview(src: Path, dest: Path, orient: str) -> str:
     paths: list[tuple[str, list[str]]] = []
     if preview_gpu():
         eight_bit = f.get("pix_fmt") in ("yuv420p", "yuvj420p", "nv12")
-        if not norm and not rotated and eight_bit:
-            paths.append(("gpu", ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda",
-                                  "-i", str(src), *io, "-vf", f"scale_cuda={tw}:{th}",
-                                  *nvenc]))
-        paths.append(("gpu-decode", ["-hwaccel", "cuda", "-i", str(src), *io,
+        cuda = ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda", "-i", str(src), *io]
+        if not norm and eight_bit and not turn:
+            paths.append(("gpu", [*pre, *cuda, "-vf", f"scale_cuda={tw}:{th}", *nvenc]))
+        elif not norm and eight_bit and turn in TURN_VF:
+            # scaled on the GPU in stored orientation (edges swapped back for a quarter
+            # turn), then a 360p frame comes down for the turn: the 5.3K decode and the
+            # scale stay on the card. The matrix is overridden so none is left on the
+            # file for the browser to apply a second time.
+            sw, sh = (th, tw) if rotated else (tw, th)
+            paths.append(("gpu-turn", [
+                "-display_rotation", "0", *cuda, "-vf",
+                f"scale_cuda={sw}:{sh},hwdownload,format=nv12,{TURN_VF[turn]}", *nvenc]))
+        paths.append(("gpu-decode", [*pre, "-hwaccel", "cuda", "-i", str(src), *io,
                                      "-vf", cpu_vf, *nvenc]))
-    paths.append(("cpu", ["-i", str(src), *io, "-vf", cpu_vf, "-c:v", "libx264",
+    paths.append(("cpu", [*pre, "-i", str(src), *io, "-vf", cpu_vf, "-c:v", "libx264",
                           "-preset", "ultrafast", "-crf", "30"]))
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part.mp4")
     err = ""
     for name, args in paths:
-        r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", *pre, *args, *tail,
+        r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", *args, *tail,
                             str(tmp)], capture_output=True, text=True)
         if r.returncode == 0 and tmp.exists() and tmp.stat().st_size:
             tmp.replace(dest)
@@ -6061,7 +6243,7 @@ def media_fallback(clip: str, wait_s: float = 0.0) -> tuple[str, str | None]:
     if browser_playable(STATE["footage"] / clip):
         return "original", f"/media/original/{stem}.mp4"
     if preview_path(stem).exists():
-        return "preview", f"/media/preview/{stem}.mp4"
+        return "preview", preview_url(stem)
     ev = start_preview(clip)
     if ev is None:
         return "failed", None
@@ -6070,7 +6252,7 @@ def media_fallback(clip: str, wait_s: float = 0.0) -> tuple[str, str | None]:
     if (STATE["proxy_dir"] / f"{stem}.mp4").exists():
         return "proxy", None
     if preview_path(stem).exists():
-        return "preview", f"/media/preview/{stem}.mp4"
+        return "preview", preview_url(stem)
     return "building", None
 
 
@@ -6138,8 +6320,15 @@ def media_original(name: str, request: Request) -> Response:
 
 @app.get("/media/preview/{name}")
 def media_preview(name: str, request: Request) -> Response:
-    """A clip's 360p preview — what plays until its 720p proxy exists."""
-    return ranged_file(preview_dir() / Path(name).name, request)
+    """A clip's 360p preview — what plays until its 720p proxy exists. Only the current
+    PICTURE_V's file: an older one may be upside down, and a page still holding its
+    URL gets a 404 and asks /media/proxy again rather than playing it."""
+    name = Path(name).name
+    tail = f".{PICTURE_V}.mp4"
+    stem = name[:-len(tail)] if name.endswith(tail) else ""
+    if not stem or name != preview_path(stem).name:
+        raise HTTPException(404, f"not found: {name}")
+    return ranged_file(preview_path(stem), request)
 
 
 @app.get("/media/status/{name}")

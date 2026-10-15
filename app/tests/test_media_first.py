@@ -168,7 +168,7 @@ def test_a_clip_the_browser_cannot_play_gets_a_preview_first(fresh, tmp_path):
     r = c.get("/media/proxy/CLIP_M.mp4", follow_redirects=False)
     took = time.monotonic() - t0
     assert r.status_code == 307, (r.status_code, r.text[:200])
-    assert r.headers["location"] == "/media/preview/CLIP_M.mp4"
+    assert r.headers["location"] == server.preview_url("CLIP_M")
     assert r.headers["x-roughcut-media"] == "preview"
     assert took < 5.0, f"first playable media took {took:.2f}s"
     full = c.get("/media/proxy/CLIP_M.mp4")
@@ -212,7 +212,7 @@ def test_status_says_what_plays_and_wanting_a_clip_starts_its_preview(fresh):
     while time.monotonic() < deadline and not n["ready"]:
         time.sleep(0.1)
         n = c.get("/media/status/CLIP_N.mp4").json()
-    assert n["ready"] and n["serves"] == "preview" and n["url"] == "/media/preview/CLIP_N.mp4"
+    assert n["ready"] and n["serves"] == "preview" and n["url"] == server.preview_url("CLIP_N")
     assert server.MEDIA["wanted"][0] == "CLIP_N"
     assert c.get("/media/status/NOPE.mp4").status_code == 404
 
@@ -266,7 +266,7 @@ def test_the_background_walk_makes_posters_and_previews_when_proxies_are_on(
                      proxies=True, orient="none", visual=work / "no-visual")
     try:
         deadline = time.monotonic() + 30
-        want = {f"{s}@{server.POSTER_AT_S:09.2f}.jpg" for s in media_bin["stems"]}
+        want = {server.poster_path(s, server.POSTER_AT_S).name for s in media_bin["stems"]}
         while time.monotonic() < deadline:
             have = {p.name for p in Path(server.STATE["posters"]).glob("*.jpg")}
             if want <= have and all(server.preview_path(s).exists()
