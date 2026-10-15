@@ -4863,6 +4863,30 @@ function scrollSel() {
   if (blk) blk.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
 }
 
+/* The "building proxies" toast, once per pass (verdict 7, punch 8: it parked over the
+ * Timeline on every reload for the hour Killington's previews took). A pass is this
+ * project's proxies building: the first page to see it says so; a reload while the
+ * same pass runs (its count only grows) stays quiet; a page that sees the previews
+ * ready ends the pass, so the next one is said again. Per viewer, in localStorage —
+ * a convenience: with no storage it says it every time, as before. */
+const PROXY_TOAST_KEY = 'rc.proxyToast';
+const PROXY_PASS_MAX_MS = 6 * 3600 * 1000;      // a pass never seen to end is forgotten
+function proxyPassNew() {
+  const key = String((P && P.edl_path) || '');
+  const done = Number(S && S.proxies && S.proxies.done) || 0;
+  let rec = null;
+  try { rec = JSON.parse(localStorage.getItem(PROXY_TOAST_KEY) || 'null'); } catch (_) { rec = null; }
+  const same = !!rec && rec.key === key && done >= (Number(rec.done) || 0)
+    && Date.now() - (Number(rec.at) || 0) < PROXY_PASS_MAX_MS;
+  try {
+    localStorage.setItem(PROXY_TOAST_KEY, JSON.stringify({ key, done, at: same ? rec.at : Date.now() }));
+  } catch (_) { /* private window: said every time */ }
+  return !same;
+}
+function proxyPassOver() {
+  try { localStorage.removeItem(PROXY_TOAST_KEY); } catch (_) { /* nothing kept */ }
+}
+
 /* A poster that 404s while its proxy is still building stays broken until the page is
  * reloaded — the <img> does not retry on its own, any more than the <video> it replaced
  * did. Poll until the server says building is done, then re-point the ones that never
@@ -4874,6 +4898,7 @@ function waitForProxies() {
     if (!p.proxies_ready) return;
     clearInterval(iv);
     P.proxies_ready = true;
+    proxyPassOver();
     let fixed = 0;
     document.querySelectorAll('#inspector img.poster, #tl .blk img.poster, #tl .blk img.ftile').forEach((img) => {
       const src = img.getAttribute('src');
@@ -5045,8 +5070,10 @@ async function boot() {
   fetchFindPrice();
   setInterval(pollJobs, 1000);
   if (!P.proxies_ready) {
-    toast('building proxies in the background — previews appear as they finish', 6000);
+    if (proxyPassNew()) toast('building proxies in the background — previews appear as they finish', 6000);
     waitForProxies();
+  } else {
+    proxyPassOver();
   }
   // The same box filters the bin as you type (the kept tab) — Find is one keypress on.
   let filterTimer = null;
