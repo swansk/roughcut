@@ -4996,3 +4996,40 @@ window.roughcutRefresh = async () => {
   if (window.fx && typeof fx.refresh === 'function') fx.refresh();
 };
 boot();
+
+/* Background work yields to playback (verdict 6 punch 3, lane YIELD): while the Program
+ * (or the Source monitor) plays, the server pauses its own proxy / preview / range /
+ * close-look encodes and lets them run again on pause. It only reads `player.playing`
+ * and #srcVideo, so it is independent of how the player plays: 'on' at once and every
+ * PLAY_BEAT_MS while playing (the heartbeat: a closed tab lapses in 5 s server-side),
+ * 'off' once playback has stayed stopped OFF_DEBOUNCE_MS (a J/K/L burst or a seek does not
+ * flap the encodes). Uncredentialed and keepalive like the save, so it never queues
+ * behind posters (SAVESAFE). */
+(function playingNotifier() {
+  const PLAY_BEAT_MS = 2000, OFF_DEBOUNCE_MS = 800;
+  const tab = Math.random().toString(36).slice(2, 10);
+  let sent = false, sentAt = 0, offSince = 0;
+  const send = (on) => {
+    sent = on; sentAt = Date.now();
+    try {
+      fetch('/api/playing', { method: 'POST', credentials: 'omit', keepalive: true,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ on, tab }) }).catch(() => {});
+    } catch (_) { /* a page going away */ }
+  };
+  const now = () => {
+    const src = document.getElementById('srcVideo');
+    return !!(player.playing || (src && !src.paused && !src.ended));
+  };
+  setInterval(() => {
+    const on = now();
+    if (on) {
+      offSince = 0;
+      if (!sent || Date.now() - sentAt >= PLAY_BEAT_MS) send(true);
+    } else if (sent) {
+      if (!offSince) offSince = Date.now();
+      else if (Date.now() - offSince >= OFF_DEBOUNCE_MS) send(false);
+    }
+  }, 200);
+  window.addEventListener('pagehide', () => { if (sent) send(false); });
+})();
