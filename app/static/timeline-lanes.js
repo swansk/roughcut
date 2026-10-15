@@ -671,8 +671,11 @@
       const img = document.createElement('img');
       img.draggable = false; img.loading = 'lazy'; img.decoding = 'async'; img.alt = '';
       img.style.width = px(tw);
-      img.src = `${poster}${sep}t=${Math.max(0, t).toFixed(2)}`;
+      const src = `${poster}${sep}t=${Math.max(0, t).toFixed(2)}`;
+      // the head frame at once (as V1's); the rest through V1's queue (lane YIELD)
+      if (k === 0 || typeof tl.posterLoad !== 'function') img.src = src;
       strip.appendChild(img);
+      if (k > 0 && typeof tl.posterLoad === 'function') tl.posterLoad(img, src);
     }
     return strip;
   }
