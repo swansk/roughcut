@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Fixed
+- **"Preparing preview…" no longer vanishes the moment it appears.** A monitor's wait line had two owners: app.js put it up when the video failed, and dock.js took it down when the poster at the playhead loaded. A cached poster loads at once, so on a media error the line showed and hid in the same millisecond (instrumented: 3 runs in 4) and the person saw nothing. The wait now holds its reasons (`poster`, `media`) separately and shows while either holds (`dock.wait`), on the Program and the Source monitor. Found by the wave-2 gate (`test_a_media_error_is_shown_on_the_monitor_not_swallowed` passed and failed on alternate commits); the test also now breaks the live buffer, not a fixed `#pv0`, and holds `/media/status` at "building". 8/8 runs pass; test_ui_flow + workspace + dock_ui + ingest + media_first: 112 passed.
+
 ### Docs
 - **LOOP.md: wave 2 merged** (FINISH, EXPORT, FPUI, TRACKS, EFFECTS, INGEST) and the open list for wave 3.
 

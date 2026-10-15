@@ -1188,6 +1188,8 @@ function mediaErrorText(v) {
 
 /* The calm wait on the Program monitor: the poster stays, one line under it. */
 function monWait(on) {
+  // the media's own reason; dock.js holds the poster's (see dock.wait)
+  if (window.dock && typeof dock.wait === 'function') { dock.wait('#monWait', on, 'media'); return; }
   const el = $('#monWait');
   if (el) el.hidden = !on;
 }

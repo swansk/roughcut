@@ -1061,10 +1061,19 @@ def test_a_media_error_is_shown_on_the_monitor_not_swallowed(page):
     """The monitor had one way of reporting anything — a black rectangle — and a proxy
     that will not open looked exactly like one that is merely slow. What the browser
     actually said has to reach the screen, in this app's terms and with its code."""
+    # Hold the media "still building" so the wait stays up long enough to be read: the
+    # fixture's CLIP_A is playable, and a status poll that says ready at once recovers the
+    # monitor before a check can see the wait (the second race the gate hit).
+    page.route("**/media/status/**", lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        body='{"serves": "building", "ready": false, "url": null}'))
     page.locator("#playCut").click()
     page.wait_for_function("player.playing && player.idx === 0", timeout=10000)
+    # The monitor double-buffers (#pv0 / #pv1) and only the buffer on screen may put up the
+    # wait: break the LIVE one, not a fixed #pv0 that may be the preloading buffer (the
+    # gate saw this pass and fail on alternate commits for exactly that reason).
     page.evaluate("""() => {
-        const v = document.querySelector('#pv0');
+        const v = liveVideo();
         v.dataset.src = '/media/proxy/CLIP_A.mp4';
         v.src = '/media/proxy/NOT_A_CLIP.mp4';        // 404: MEDIA_ERR_SRC_NOT_SUPPORTED
         v.load();

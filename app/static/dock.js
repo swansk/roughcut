@@ -312,7 +312,21 @@ const DEFAULTS = { proj: 0.195, insp: 0.255, src: null, top: 0.42 };
       probe.src = src;
     });
   }
-  function waitOn(sel, on) { const el = $(sel); if (el) el.hidden = !on; }
+  /* A monitor's "preparing preview…" has more than one reason to be up: its poster still
+   * loading ('poster') and its video not playable yet ('media'). Each reason is set and
+   * cleared on its own and the line shows while any is held; a poster that loads (cached,
+   * at once) must not take down the wait a failed video put up (the gate's
+   * test_a_media_error_is_shown_on_the_monitor_not_swallowed, flaky by exactly that).
+   * on === null clears every reason (a fresh clip, a live picture). */
+  function waitOn(sel, on, why = 'poster') {
+    const el = $(sel);
+    if (!el) return;
+    const held = el._waitWhy || (el._waitWhy = new Set());
+    if (on === null) held.clear();
+    else if (on) held.add(why);
+    else held.delete(why);
+    el.hidden = held.size === 0;
+  }
   function initImages() {
     document.addEventListener('error', (e) => {
       if (e.target && e.target.tagName === 'IMG') onImgError(e.target);
@@ -613,7 +627,7 @@ const DEFAULTS = { proj: 0.195, insp: 0.255, src: null, top: 0.42 };
       poster.setAttribute('src', c.poster && !marked ? c.poster
         : c.poster ? c.poster.replace(/t=[\d.]+/, `t=${a.toFixed(2)}`) : `/media/poster/${c.stem}.jpg?t=${a.toFixed(2)}`);
       poster.hidden = false;
-      $('#srcWait').hidden = true;
+      waitOn('#srcWait', null);
       this.paint();
       this.publish();
       if (opts.play) this.play();
@@ -688,7 +702,7 @@ const DEFAULTS = { proj: 0.195, insp: 0.255, src: null, top: 0.42 };
     init() {
       const v = this.v = $('#srcVideo');
       if (!v) return;
-      const live = () => { v.classList.add('live'); $('#srcPoster').hidden = true; $('#srcWait').hidden = true; };
+      const live = () => { v.classList.add('live'); $('#srcPoster').hidden = true; waitOn('#srcWait', null); };
       v.addEventListener('loadeddata', live);
       v.addEventListener('seeked', () => { if (v.readyState >= 2) live(); this.paint(); });
       v.addEventListener('timeupdate', () => {
@@ -709,7 +723,7 @@ const DEFAULTS = { proj: 0.195, insp: 0.255, src: null, top: 0.42 };
         if (c) poster.setAttribute('src', `/media/poster/${c.stem}.jpg?t=${(v.currentTime || this.marksFor(c)[0]).toFixed(2)}`);
         poster.hidden = false;
         $('#srcWait span').textContent = 'preparing preview…';
-        $('#srcWait').hidden = false;
+        waitOn('#srcWait', true, 'media');
         if (this.stopWait) this.stopWait();
         this.stopWait = mediaWait(v.dataset.src, () => {
           this.stopWait = null;
@@ -902,6 +916,7 @@ const DEFAULTS = { proj: 0.195, insp: 0.255, src: null, top: 0.42 };
   }
 
   window.dock = {
+    wait: waitOn,
     open, reveal, badge, keys, fit, isOpen, setTitles, mediaWait,
     current: () => cur,
     focused: focusedName,
