@@ -42,8 +42,13 @@
  *   Q W          the selected shot's in / out to the playhead.
  *   X ⌫ Del      ripple delete the selection (multi-select included); ⌫ Del only a
  *                selection somebody chose, never one the board adopted (I16.0 n).
- *   ⌘A  ⌘D  Esc  select every shot · duplicate the selection after itself · clear the
- *                selection and the marks.
+ *   ⌘A  ⌘⌥D Esc  select every shot · duplicate the selection after itself · clear the
+ *                selection and the marks. (Duplicate was ⌘D until wave 9: ⌘D is
+ *                Premiere's, below.)
+ *   ⌘D ⇧D ⌘⇧D    Premiere's default transitions (verdict 6, punch 6): a 1 s Cross
+ *                Dissolve, a Constant Power audio crossfade, both — at the selected edit
+ *                (a click on its column, or a selected transition), else the edit nearest
+ *                the playhead. One undo entry. Del / ⌫ removes a selected transition.
  *   ⌘Z ⌘⇧Z       the foundation's — not bound twice here.
  *   ?            the map.
  *
@@ -87,7 +92,8 @@
     ['Q W', 'the selected shot’s in / out to the playhead', '', 'trim'],
     ['X ⇧Del', 'ripple delete the selection (⌫ Del: only a shot you chose)', '', 'trim'],
     ['⌘Z ⌘⇧Z', 'undo / redo', 'foundation', 'trim'],
-    ['⌘A ⌘D Esc', 'select all · duplicate · clear the selection and marks', '', 'trim'],
+    ['⌘A ⌘⌥D Esc', 'select all · duplicate · clear the selection and marks', '', 'trim'],
+    ['⌘D ⇧D ⌘⇧D', 'Cross Dissolve · Constant Power crossfade · both, 1 s at the selected edit (else the one nearest the playhead) · drag its ends, double-click to type its length, Del removes it', '', 'trim'],
     ['M ⇧M ⌘⇧M', 'marker at the playhead · next · previous (⌘⌥M clears)', '', 'move'],
     ['S', 'the magnet on / off', 'trim', 'trim'],
     ['+ − \\', 'zoom in / out · fit · ⌥ / ⌘ wheel zooms', 'foundation', 'move'],
@@ -566,6 +572,13 @@
     return true;
   }
 
+  /* ⌘D / ⇧D / ⌘⇧D: the timeline's applyTransition does the work (and the undo entry). */
+  function transition(which) {
+    if (typeof tl.applyTransition !== 'function') return false;
+    tl.applyTransition(which);
+    return true;
+  }
+
   function clearAll() {
     tl.select([]);
     clearMarks();
@@ -798,11 +811,12 @@
     let handled = false;
     if (mod && e.altKey) {
       if (e.code === 'KeyM') handled = e.shiftKey ? clearAllMarkers() : clearMarker();
+      else if (e.code === 'KeyD' && !e.shiftKey) handled = duplicate();
     } else if (mod) {
       if (e.code === 'KeyM' && e.shiftKey) handled = jumpMarker(-1);
       else if (e.code === 'KeyX' && e.shiftKey) handled = clearInOut();
       else if (k === 'a' && !e.shiftKey) handled = selectAll();
-      else if (k === 'd' && !e.shiftKey) handled = duplicate();
+      else if (k === 'd') handled = transition(e.shiftKey ? 'both' : 'video');
       else if (k === 'k' && !e.shiftKey) handled = addEdit();
       // ⌘Z / ⌘⇧Z are the foundation's; they are not bound twice
     } else if (e.altKey) {
@@ -833,7 +847,10 @@
         case 'q': handled = trimTo('in'); break;
         case 'w': handled = trimTo('out'); break;
         case 'x': handled = rippleDelete(); break;
-        case 'Delete': case 'Backspace': handled = backspace(); break;
+        case 'd': handled = e.shiftKey ? transition('audio') : false; break;
+        case 'Delete': case 'Backspace':
+          handled = tl.tsel && tl.removeTransition ? (tl.removeTransition(tl.tsel), true) : backspace();
+          break;
         case 'Escape':                     // the switcher's picker and a trim drag in progress come first
           handled = (pickerOpen() || (window.tl && tl.trim && tl.trim.dragging)) ? false : clearAll();
           break;

@@ -877,6 +877,8 @@ def sequence_payload(edl: dict, segments: list[dict]) -> dict:
         "overlays": overlays,
         # the added audio tracks' clips (A3…, Sequence › Add Track)
         "audio": [dict(c) for c in edl.get("audio") or [] if isinstance(c, dict)],
+        # transitions at the edits (verdict 6, punch 6): only those still on an edit
+        "transitions": tracksmod.prune_transitions(edl.get("transitions"), segments),
         "markers": list(edl.get("markers") or []),
         "in": edl.get("in"),
         "out": edl.get("out"),
@@ -1250,6 +1252,23 @@ async def api_save(request: Request) -> JSONResponse:
     else:
         clean = edl.get("segments") or []
     apply_sequence(edl, body)
+    # Transitions (verdict 6, punch 6) name their edit by its two shots, so they are
+    # validated against the cut this save writes, their `tmp-N` ids renamed as the shots'
+    # were; a save that changes the cut without sending them keeps those still on an edit.
+    if "transitions" in body or "segments" in body:
+        try:
+            if "transitions" in body:
+                named = {**(page["ids"] if page is not None else {}), **minted}
+                trs = tracksmod.validate_transitions(body["transitions"], clean, named,
+                                                     edits.dur)
+            else:
+                trs = tracksmod.prune_transitions(edl.get("transitions"), clean)
+        except ValueError as exc:
+            raise HTTPException(400, f"transitions: {exc}")
+        if trs:
+            edl["transitions"] = trs
+        else:
+            edl.pop("transitions", None)
     # Music is the same `effects_music` key assemble.py reads, validated the way a
     # segment is: an asset that is not in the library, or a gain outside range, is a 400
     # and nothing is written. A body that does not mention music leaves it alone; an

@@ -345,3 +345,132 @@ def a1_filter(n_parts: int, plan: dict, first_input: int = 1) -> str:
     tail = f",volume={gain:.2f}dB" if abs(gain) > 1e-9 else ""
     chains.append(f"{mix}{tail},apad,atrim=0:{total:.3f},aresample=48000[a1]")
     return ";".join(chains)
+
+
+# ---------------------------------------------------------------- transitions
+#
+# Premiere's default transitions at an edit point (verdict 6, punch 6): Ctrl+D a Cross
+# Dissolve, Shift+D a Constant Power crossfade, Ctrl+Shift+D both. The EDL's
+#
+#   transitions: [{"a": id, "b": id, "kind": "cross_dissolve" | "audio_crossfade",
+#                  "dur": seconds, "align": "center"}]
+#
+# names the edit by the two shots on either side of it (`a` right before `b` in
+# `segments`), so a transition stays on its cut through a trim, a split elsewhere or an
+# insert elsewhere, and leaves with it when either shot is deleted or the two are no
+# longer neighbours (Premiere deletes a transition whose clips are moved apart). One of
+# each kind per edit. Centre-aligned only: the transition spans dur/2 of film either side
+# of the cut and the film's length does not change, so it eats dur/2 of each shot's
+# *handles* — media past the outgoing shot's out and before the incoming shot's in. Where
+# a shot has less than that (`transition_halves`) the transition is shortened to what the
+# media allows (Premiere's "insufficient media"), and the render says so.
+
+TRANSITION_KINDS = {"cross_dissolve": "Cross Dissolve", "audio_crossfade": "Constant Power"}
+TRANSITION_DEFAULT_S = 1.0          # Premiere's default duration
+TRANSITION_MIN_S = 0.04
+TRANSITION_MAX_S = 10.0
+
+
+def validate_transitions(raw: Any, segments: list[dict], ids: dict | None = None,
+                         dur=None) -> list[dict]:
+    """The transitions a save keeps: each `{a, b, kind, dur, align?}` validated (a bad
+    kind, duration or alignment raises ValueError — the 400's sentence), its shot ids
+    renamed through `ids` (a save's `{tmp-N: minted}`), and kept only while `a` is right
+    before `b` in `segments` (a pair a reorder or a delete split is dropped, not an
+    error). The last of a kind at an edit wins. With `dur` (the film length of a shot),
+    no longer than twice the shorter shot."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("transitions is not a list")
+    ids = ids or {}
+    order = {s.get("id"): k for k, s in enumerate(segments) if isinstance(s, dict)}
+    kept: dict[tuple, dict] = {}
+    for i, t in enumerate(raw):
+        if not isinstance(t, dict):
+            raise ValueError(f"transition {i + 1} is not an object")
+        kind = t.get("kind")
+        if kind not in TRANSITION_KINDS:
+            raise ValueError(f"transition {i + 1}: kind {kind!r} is not one of "
+                             + ", ".join(TRANSITION_KINDS))
+        d = _finite(t.get("dur", TRANSITION_DEFAULT_S), f"transition {i + 1} duration")
+        if not TRANSITION_MIN_S - 1e-9 <= d <= TRANSITION_MAX_S + 1e-9:
+            raise ValueError(f"transition {i + 1}: {d:g} s is outside "
+                             f"{TRANSITION_MIN_S:g}–{TRANSITION_MAX_S:g} s")
+        align = t.get("align", "center")
+        if align not in (None, "center"):
+            raise ValueError(f"transition {i + 1}: only centre-aligned transitions "
+                             f"(align 'center') are supported, not {align!r}")
+        a, b = t.get("a"), t.get("b")
+        a, b = ids.get(a, a), ids.get(b, b)
+        if not (isinstance(a, str) and isinstance(b, str)):
+            raise ValueError(f"transition {i + 1} does not name the two shots of its edit")
+        ka, kb = order.get(a), order.get(b)
+        if ka is None or kb is None or kb != ka + 1:
+            continue                                  # no longer an edit: it went with it
+        if dur is not None:
+            d = min(d, 2 * dur(segments[ka]), 2 * dur(segments[kb]))
+        kept[(a, b, kind)] = {"a": a, "b": b, "kind": kind,
+                              "dur": round(max(TRANSITION_MIN_S, d), 4), "align": "center"}
+    return sorted(kept.values(), key=lambda t: (order[t["a"]], t["kind"]))
+
+
+def prune_transitions(transitions: Any, segments: list[dict]) -> list[dict]:
+    """What is left of stored transitions after the cut changed under them (a save that
+    sent no `transitions`, an accepted proposal): only the ones still on an edit."""
+    try:
+        return validate_transitions(transitions or [], segments)
+    except ValueError:
+        return []
+
+
+def transition_halves(segments: list[dict], transitions: list[dict], dur,
+                      clip_len) -> list[dict]:
+    """Per edit (between segments k and k+1, k = 0 … n-2): `{"video": h, "audio": h,
+    "asked": {kind: dur}, "short": [kind, …]}` — h the half-duration in film seconds the
+    render and the Program use, 0 for none. A half is cut down, in order, to: the media
+    past the outgoing shot's out (`clip_len(clip) - out`, at its speed), the media before
+    the incoming shot's in (`in`, at its speed), and what each shot has left beside the
+    transition at its other edge (half its film length, at most). `short` names the kinds
+    that were shortened ("insufficient media"); a kind with no media at all is 0."""
+    order = {s.get("id"): k for k, s in enumerate(segments)}
+    cuts = [{"video": 0.0, "audio": 0.0, "asked": {}, "short": []}
+            for _ in range(max(0, len(segments) - 1))]
+    for t in transitions or []:
+        k = order.get(t.get("a"))
+        if k is None or k + 1 >= len(segments) or segments[k + 1].get("id") != t.get("b"):
+            continue
+        key = "video" if t["kind"] == "cross_dissolve" else "audio"
+        cuts[k]["asked"][t["kind"]] = float(t["dur"])
+        cuts[k][key] = float(t["dur"]) / 2
+    for k, c in enumerate(cuts):
+        a, b = segments[k], segments[k + 1]
+        sa, sb = speed(a), speed(b)
+        la = clip_len(a["clip"])
+        tail = max(0.0, (la - float(a["out"])) / sa) if la is not None else 0.0
+        head = max(0.0, float(b["in"]) / sb)
+        for key, kind in (("video", "cross_dissolve"), ("audio", "audio_crossfade")):
+            h = c[key]
+            if h <= 0:
+                continue
+            # a shot shares itself between the transitions at its two edges
+            room_a = dur(a) / (2 if k > 0 and _has(cuts[k - 1], key) else 1)
+            room_b = dur(b) / (2 if k + 2 < len(segments) and _has(cuts[k + 1], key) else 1)
+            got = max(0.0, min(h, tail, head, room_a, room_b))
+            if got < h - 1e-6:
+                c["short"].append(kind)
+            c[key] = got
+    return cuts
+
+
+def _has(cut: dict, key: str) -> bool:
+    return cut[key] > 0 or any(
+        (k == "cross_dissolve") == (key == "video") for k in cut["asked"])
+
+
+def speed(seg: dict) -> float:
+    try:
+        s = float(seg.get("speed") or 1.0)
+    except (TypeError, ValueError):
+        return 1.0
+    return s if 0.1 <= s <= 4 else 1.0

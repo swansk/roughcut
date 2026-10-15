@@ -398,7 +398,7 @@ def test_plain_u_does_not_undo_on_the_board(page):
 def test_cmd_d_duplicates_the_selection_after_itself(page, project):
     a, b = ids(page)
     page.evaluate(f"tl.select(['{a}'])")
-    page.keyboard.press("Control+d")
+    page.keyboard.press("Control+Alt+d")
     assert ranges(page) == [["CLIP_A.MP4", 1.0, 3.0], ["CLIP_A.MP4", 1.0, 3.0],
                             ["CLIP_B.MP4", 0.0, 2.0]]
     new = page.evaluate("segs[1].id")
@@ -412,7 +412,7 @@ def test_cmd_d_duplicates_the_selection_after_itself(page, project):
     page.keyboard.press("Control+z")
     assert ids(page) == [a, b]
     page.keyboard.press("Control+a")
-    page.keyboard.press("Control+d")
+    page.keyboard.press("Control+Alt+d")
     assert [r[0] for r in ranges(page)] == ["CLIP_A.MP4", "CLIP_B.MP4", "CLIP_A.MP4", "CLIP_B.MP4"]
     assert page.evaluate("tl.state.sel.size") == 2
     page.keyboard.press("Control+z")        # one entry for the pair

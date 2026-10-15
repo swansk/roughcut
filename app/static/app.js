@@ -1600,7 +1600,7 @@ function pauseCut() {
  *
  * V1's eye off hides the pv0/pv1 pair, the grade and the rest poster: black under V2.
  * While playing, a follower is re-seeked only when it drifts past a threshold. */
-const prog = { v2: null, a1: null, tracks: null, ax: new Map() };
+const prog = { v2: null, a1: null, tracks: null, ax: new Map(), tx: null };
 
 function progTrack(name) {
   const t = (prog.tracks || {})[name];
@@ -1618,7 +1618,8 @@ function a1Moved(seg) {
 }
 
 function progPause() {
-  [prog.v2, prog.a1, ...prog.ax.values()].forEach((el) => { if (el && !el.paused) el.pause(); });
+  const tx = prog.tx ? [prog.tx.in, prog.tx.out] : [];
+  [prog.v2, prog.a1, ...prog.ax.values(), ...tx].forEach((el) => { if (el && !el.paused) el.pause(); });
 }
 
 function progHide(el) {
@@ -1754,6 +1755,135 @@ function programSync(filmT) {
     progFollow(prog.a1, hit.seg.clip, hit.clipT, speedOf(hit.seg), play, 0.12);
   } else progHide(prog.a1);
   programSyncAx(t, play, proposal);
+  programMix(t, play, proposal);
+}
+
+/* Transitions in the Program (verdict 6, punch 6). The cut's buffers still cut at the
+ * edit (pv0-pv2: preroll, advance, the grade's live shot all as before); two followers
+ * of their own carry the transition's other halves, as #pvV2 carries V2:
+ *
+ *   prog.tx.in   the INCOMING shot's media before its in-point, over the window's first
+ *                half [C - h, C) — at `in + (t - C) * speed`;
+ *   prog.tx.out  the OUTGOING shot's media past its out-point, over the second half
+ *                [C, C + h) — at `out + (t - C) * speed`.
+ *
+ * Each is parked TX_PRE before its half and starts playing there (muted, unseen), so it
+ * is running when it shows (an open file, no seek at the edit). A Cross Dissolve shows it
+ * at the incoming shot's weight x = (t - (C - h)) / 2h (the outgoing's 1 - x), the
+ * render's x (assemble.py): the mean of the two on the edit's frame. How the GRADED
+ * picture dissolves: the grade's worker draws it (grade.setMix) — the follower's frame
+ * through its own shot's LUT, blended at constant alpha over the live shot's graded
+ * frame — so a dissolve between two graded shots mixes what the render mixes; the
+ * follower itself is then hidden. Only while neither shot is graded (the canvas is off,
+ * the raw buffers are the picture) is the follower shown, at CSS opacity x, which is
+ * then exact. A Constant Power crossfade sets the levels (rcAudio 'xfade'): the outgoing
+ * shot at cos(πx/2), the incoming at sin(πx/2) — the live buffer and the follower. */
+const TX_PRE = 0.35;
+
+function txEl(name) {
+  const v = document.createElement('video');
+  v.className = 'pvtx';
+  v.id = `pvTx${name}`;
+  v.preload = 'auto';
+  v.playsInline = true;
+  v.dataset.src = '';
+  v.style.cssText = 'display:block;visibility:hidden;z-index:1;pointer-events:none';
+  v.addEventListener('loadedmetadata', () => progMeet(v));
+  v.addEventListener('seeked', () => { if (prog.tx && prog.tx.drawn === v) { const g = gradeApi(); if (g) g.draw(); } });
+  const anchor = $('#pvV2');
+  if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(v, anchor);
+  return v;
+}
+
+/* The window under film time t: `{k, c, a, b}` (c = tl.transitionHalves()[k]) when t is
+ * within TX_PRE of either half, else null; `next` the next one ahead (to park on). */
+function txWindow(t) {
+  const halves = window.tl && typeof tl.transitionHalves === 'function' ? tl.transitionHalves() : [];
+  let at = null, next = null;
+  halves.forEach((c, k) => {
+    const h = Math.max(c.video, c.audio);
+    if (!(h > 0) || !segs[k] || !segs[k + 1]) return;
+    if (t >= c.at - h - TX_PRE && t < c.at + h) { if (!at) at = { k, c, h }; }
+    else if (c.at - h - TX_PRE > t && (!next || c.at < next.c.at)) next = { k, c, h };
+  });
+  return { at, next };
+}
+
+function programMix(t, play, proposal) {
+  if (!prog.v2 || !segs.length) return;
+  const { at, next } = proposal ? { at: null, next: null } : txWindow(t);
+  if (!prog.tx && !at && !next) return;            // no transition yet: nothing made
+  if (!prog.tx) prog.tx = { in: txEl('In'), out: txEl('Out'), drawn: null };
+  const tx = prog.tx;
+  const lv = liveVideo();
+  const g = gradeApi();
+  let xin = null, xout = null;     // {w, lvl, seg} for each follower this frame
+  let liveLvl = 1;
+  if (at) {
+    const { k, c } = at;
+    const a = segs[k], b = segs[k + 1], C = c.at;
+    const xv = c.video > 0 ? Math.max(0, Math.min(1, (t - (C - c.video)) / (2 * c.video))) : null;
+    const xa = c.audio > 0 ? Math.max(0, Math.min(1, (t - (C - c.audio)) / (2 * c.audio))) : null;
+    const inV = xv != null && t >= C - c.video && t < C;
+    const outV = xv != null && t >= C && t < C + c.video;
+    const inA = xa != null && t >= C - c.audio && t < C;
+    const outA = xa != null && t >= C && t < C + c.audio;
+    // the incoming follower: from TX_PRE before its half to the edit
+    if (t < C) {
+      xin = { seg: b, clipT: Math.max(0, b.in + (t - C) * speedOf(b)),
+              w: inV ? xv : 0, lvl: inA ? Math.sin(Math.PI / 2 * xa) : 0 };
+    }
+    // the outgoing follower: from TX_PRE before the edit to the end of its half
+    if (t >= C - TX_PRE && t < C + at.h) {
+      xout = { seg: a, clipT: a.out + (t - C) * speedOf(a),
+               w: outV ? 1 - xv : 0, lvl: outA ? Math.cos(Math.PI / 2 * xa) : 0 };
+    }
+    // the live buffer's share of a crossfade: outgoing cos, incoming sin
+    const liveIdx = player.playing && segs[player.idx] ? player.idx : (tl.shotAt(t) || {}).index;
+    if (inA && liveIdx === k) liveLvl = Math.cos(Math.PI / 2 * xa);
+    else if (outA && liveIdx === k + 1) liveLvl = Math.sin(Math.PI / 2 * xa);
+  }
+  for (const v of player.vids) {
+    if (window.rcAudio) rcAudio.setLevel(v, 'xfade', v === lv ? liveLvl : 1);
+  }
+  let drawn = null, drawnW = 0, drawnId = null;
+  for (const [el, x, side] of [[tx.in, xin, 'in'], [tx.out, xout, 'out']]) {
+    if (x) {
+      const spd = speedOf(x.seg);
+      progFollow(el, x.seg.clip, x.clipT, spd, play, 0.08);
+      el.muted = !(x.lvl > 0);
+      const a1 = progA1Level();
+      if (window.rcAudio) rcAudio.setLevel(el, 'track', a1 * x.lvl);
+      else el.volume = Math.min(1, a1 * x.lvl);
+      if (x.w > 0 && !drawn) { drawn = el; drawnW = x.w; drawnId = x.seg.id; }
+      el.dataset.w = String(Math.round(x.w * 1e4) / 1e4);
+    } else {
+      el.dataset.w = '0';
+      if (!el.paused) el.pause();
+      el.muted = true;
+      // parked where the next window's half starts, so entering it is a play, not a seek
+      const nx = next && next.c;
+      if (nx) {
+        const a = segs[next.k], b = segs[next.k + 1];
+        const pre = side === 'in' ? Math.max(0, b.in - (next.h + TX_PRE) * speedOf(b))
+          : a.out - TX_PRE * speedOf(a);
+        progFollow(el, (side === 'in' ? b : a).clip, pre, 1, false, 0);
+      }
+    }
+  }
+  // the dissolve's picture: the grade draws it (both graded through their own LUTs), else
+  // the follower's own layer at CSS opacity over the raw live buffer
+  const graded = g && typeof g.setMix === 'function'
+    ? g.setMix(drawn ? { video: drawn, id: drawnId, w: drawnW, onChange: () => programSync() } : null)
+    : false;
+  tx.drawn = drawn;
+  for (const el of [tx.in, tx.out]) {
+    const show = el === drawn && !graded && progTrack('V1').eye !== false;
+    const op = show ? String(Math.round(drawnW * 1e4) / 1e4) : '';
+    if (el.style.opacity !== op) el.style.opacity = op;
+    const vis = show ? '' : 'hidden';
+    if (el.style.visibility !== vis) el.style.visibility = vis;
+  }
 }
 
 /* A3 and up (wave 4 POLISH's added audio tracks; verdict 5 punch 5: "the Program plays
@@ -3456,6 +3586,8 @@ function saveBody() {
   return { segments: tl.forSave(), story: $('#story').value, music,
            colour: colourIds(colour),
            markers: tl.markers ? tl.markers() : [],
+           // the transitions name their edits by the shots' ids: they ride the cut's save
+           ...(tl.transitionsForSave ? { transitions: tl.transitionsForSave() } : {}),
            in: tl.state.seqIn ?? null, out: tl.state.seqOut ?? null };
 }
 

@@ -493,3 +493,28 @@
 #tl .tl-xtrack.audio { background: #101215; }
 #tl .tl-xtrack.hidden-out .oblk, #tl .tl-xtrack.muted .oblk { opacity: .3; }
 #tl .oblk.aclip { background: hsl(var(--hue) 25% 18%); }
+
+/* Transitions on the cut (verdict 6, punch 6): Premiere's box spanning the edit — over
+   both blocks, under the trim lane's edge column (z 3), its ends drag its length. */
+#tl .tl-trans { position: absolute; top: 18%; bottom: 18%; z-index: 2; box-sizing: border-box;
+                display: flex; align-items: center; justify-content: center; overflow: hidden;
+                border-radius: 3px; cursor: pointer; font-size: 10px; color: #f4f0ff;
+                background: linear-gradient(to bottom right, hsl(265 45% 46% / .92) 49.5%,
+                                            hsl(265 30% 30% / .92) 50.5%);
+                border: 1px solid hsl(265 50% 70%); white-space: nowrap; }
+#tl .tl-trans.audio { background: linear-gradient(to top right, hsl(220 12% 46% / .92) 49.5%,
+                                                  hsl(220 10% 30% / .92) 50.5%);
+                      border-color: hsl(220 15% 70%); }
+#tl .tl-trans.sel { outline: 2px solid var(--text); outline-offset: -1px; }
+#tl .tl-trans.short { background-image: repeating-linear-gradient(45deg, transparent 0 4px,
+                                                                  rgba(255,80,80,.45) 4px 6px); }
+#tl .tl-trans .lbl { pointer-events: none; padding: 0 8px; text-overflow: ellipsis; overflow: hidden; }
+#tl .tl-trans.narrow .lbl { display: none; }
+#tl .tl-trans .te { position: absolute; top: 0; bottom: 0; width: 6px; cursor: ew-resize; }
+#tl .tl-trans .te.l { left: 0; } #tl .tl-trans .te.r { right: 0; }
+#tl .tl-trans .tl-trans-dur { position: absolute; inset: 1px; width: auto; font: inherit; font-size: 11px;
+                              text-align: center; background: var(--bg, #111); color: var(--text, #eee);
+                              border: 1px solid var(--accent, #8af); border-radius: 2px; }
+#tl .tl-editsel { position: absolute; top: -2px; bottom: -2px; width: 6px; margin-left: -3px; z-index: 2;
+                  border: 2px solid var(--warn, #e66); border-top: 0; border-bottom: 0; pointer-events: none; }
+#tl .tl-editsel[hidden] { display: none; }
