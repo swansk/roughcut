@@ -49,6 +49,12 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-15 03:50: gate GREEN on `28eca35` (after the monitor-wait fix: two owners of #monWait, now reasons);
+  judge 3 launched on it. JOURNEY merged (`tools/journey.py`, 13 steps, green, 12 mutation checks each red at the
+  right step; a gate check in quick + full). Journey findings for wave 3: exports are VFR (r_frame_rate 120/1) because
+  edit points are off the frame grid (round proposal ranges + trims/snaps to 1/fps; render CFR at the sequence rate;
+  test_export_dialog's "one frame" should be the sequence fps); a grade-only shot is not a hand edit for a re-run;
+  trimmed block's thumbnail strip has a dark tail; Status flickered indexed->heard during a re-run.
 - 2026-10-15 05:30: **wave 2 merged** (`9309f9b`): FINISH `93c5c5e`, EXPORT `70ea941`, FPUI `10758af`, TRACKS `f187c33`,
   EFFECTS `d0edabe`, INGEST `9309f9b`. Board budgets now = measured counts, no headroom (rubric log). Open for wave 3:
   journey.py (punch 2, blocker); the render honours segments[i].controls (opacity, motion, volume_db, contrast,
