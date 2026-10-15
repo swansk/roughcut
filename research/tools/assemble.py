@@ -12,8 +12,9 @@ cheap enough that the waste does not matter.
 The grade rides on that re-encode (INTAKE M10): each shot's colour is resolved the
 way the board's inspector resolves it (`roughcut.colour.resolve_shot` over the clip's
 `<stem>.colour.json` from `--colour-dir`), baked to one 33³ `.cube` next to the part
-and applied with `lut3d` inside the part's own `-vf`, so it costs no generation of
-quality. An HDR source (iPhone HLG) is tone mapped to SDR 709 *before* the scale,
+and applied with `lut3d` inside the part's own `-vf` — or, when the grade is a balance
+alone, as three 1D tables (`colour.balance_lutrgb`, no cube) — so it costs no
+generation of quality. An HDR source (iPhone HLG) is tone mapped to SDR 709 *before* the scale,
 grade or no grade — normalising is not a grade, and an HLG part must never reach the
 concat un-tone-mapped. Every part is tagged limited-range bt709 so concat sees
 identical stream properties; the picture was always limited 709, just untagged.
@@ -1535,10 +1536,13 @@ def main() -> int:
             normalise = None if generated else colour.normalise_vf(probe)
             lut = None
             if not generated and not res["identity"]:
-                cube = colour.write_cube(colour.cube_table(res["fn"], 33),
-                                         workdir / f"part_{i:03d}.cube",
-                                         title=f"roughcut {seg.get('id') or i}")
-                lut = colour.lut_vf(cube, colour.in_range(probe))
+                # A balance alone (the auto's, a hand's) is three 1D tables, ~2.5x
+                # cheaper at 4K than the 33³ cube a match or a look still goes through.
+                bal = colour.balance_only(res)
+                cube = None if bal else colour.write_cube(
+                    colour.cube_table(res["fn"], 33), workdir / f"part_{i:03d}.cube",
+                    title=f"roughcut {seg.get('id') or i}")
+                lut = colour.lut_vf(cube, colour.in_range(probe), balance=bal)
             # The shot's accepted effects (INTAKE M12) fold into this same encode;
             # an event outside the shot's range is simply not drawn. In a retimed
             # part (INTAKE M13) an event's `t_part` moves with the picture.

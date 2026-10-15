@@ -551,14 +551,56 @@ def apply_cube(rgb: np.ndarray, table: np.ndarray) -> np.ndarray:
     return np.clip(c0 * (1 - fb) + c1 * fb, 0, 1)
 
 
-def lut_vf(cube: Path, src_range: str = "full") -> str:
-    """The part's filter fragment: the range stated on the way into RGB float, the LUT,
-    the range stated on the way back to limited yuv420p. `src_range` is `in_range()`
-    of the source (after `normalise_vf`, limited). The naive `lut3d,format=yuv420p`
-    squeezed a full-range frame's levels silently — the lab measured YAVG 146.8 → 141.5;
-    this chain passes the grey self-test (a full-range 128 reads 126 limited)."""
-    return (f"scale=in_range={src_range}:out_range=full:flags=spline+accurate_rnd+full_chroma_int,"
-            f"format=gbrpf32le,lut3d=file={cube}:interp=tetrahedral,"
+def balance_only(res: dict) -> dict | None:
+    """The shot's balance when it is the whole grade (no match, no look at a strength
+    above 0), else None. A balance is per channel — gain × exposure, the shoulder, the
+    lift, each of r, g, b on its own — so it needs no 3D table (`lut_vf`'s `balance`)."""
+    if res.get("match") or (res.get("look") and float(res.get("strength") or 0) > 0):
+        return None
+    return res.get("balance") or None
+
+
+def _balance_expr(gain: float, P: dict) -> str:
+    """One channel of `apply_balance` as an ffmpeg expression over `val` (0..maxval),
+    rounded to the nearest code: x·gain·exposure, the soft shoulder above the knee,
+    the lift, clipped to 0..1."""
+    k = float(gain) * float(P["exposure"])
+    knee = float(P.get("knee", KNEE))
+    lift = float(P.get("lift", 0.0))
+    e = f"st(0,val/maxval*{k:.9g})"
+    if knee < 1.0 - 1e-9:
+        e += (f";st(0,if(gt(ld(0),{knee:.9g}),{knee:.9g}+{1 - knee:.9g}"
+              f"*(1-exp(-(ld(0)-{knee:.9g})/{1 - knee:.9g})),ld(0)))")
+    return e + f";clip(ld(0)+({lift:.9g}),0,1)*maxval+0.5"
+
+
+def balance_lutrgb(P: dict) -> str:
+    """`apply_balance` as one `lutrgb`: three 1D tables ffmpeg builds once per part, exact
+    to the formula at 16 bits, where a 33³ tetrahedral `lut3d` cost ~2.5× the CPU."""
+    return "lutrgb=" + ":".join(f"{c}='{_balance_expr(g, P)}'"
+                                for c, g in zip("rgb", P["gain"]))
+
+
+def lut_vf(cube: Path | None, src_range: str = "full", balance: dict | None = None) -> str:
+    """The part's filter fragment: the range stated on the way into 16-bit planar RGB,
+    the grade, the range stated on the way back to limited yuv420p. `src_range` is
+    `in_range()` of the source (after `normalise_vf`, limited). The naive
+    `lut3d,format=yuv420p` squeezed a full-range frame's levels silently — the lab
+    measured YAVG 146.8 → 141.5; this chain passes the grey self-test (a full-range 128
+    reads 126 limited).
+
+    The grade is the shot's `.cube` through a tetrahedral `lut3d`, or — when the shot's
+    grade is its balance alone (`balance_only`), as the auto's is — `balance_lutrgb`, three
+    1D tables (no `cube` needed). Measured on 4K Killington frames (wave 9, V2EC): the old
+    chain (float RGB, spline chroma) cost 172–179 ms of CPU a frame; this one 70 ms for a
+    balance and 145 ms through a cube, the picture within 0.27 code values of the old
+    chain on average (at most 1 on luma, 3 on chroma)."""
+    if balance is None and cube is None:
+        raise ValueError("lut_vf needs a cube or a balance")
+    grade = balance_lutrgb(balance) if balance is not None \
+        else f"lut3d=file={cube}:interp=tetrahedral"
+    return (f"scale=in_range={src_range}:out_range=full:flags=bilinear+accurate_rnd,"
+            f"format=gbrp16le,{grade},"
             f"scale=in_range=full:out_range=limited:flags=accurate_rnd,format=yuv420p")
 
 
