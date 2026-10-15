@@ -87,7 +87,10 @@ ORDERS = ("priority", "capture")
 # stands between the editor and a proposed cut; proxies, close looks and picks run
 # after, in the background.
 COARSE = ("probe", "telemetry", "asr", "look")
-COARSE_DEPENDS: dict[str, tuple[str, ...]] = {**DEPENDS, "look": ("probe",)}
+# ...and the close look, which reads the proxy (`server.fine_cmd`), names the proxy it
+# no longer gets through the look.
+COARSE_DEPENDS: dict[str, tuple[str, ...]] = {**DEPENDS, "look": ("probe",),
+                                              "close": ("look", "proxy")}
 
 # The skip reason `set_junk` writes, and the only skip it will undo.
 JUNK_REASON = "junk — confirmed by the editor"

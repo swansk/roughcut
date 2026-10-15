@@ -257,3 +257,45 @@ def test_a_scan_with_nothing_to_look_at_skips_the_close_look(tmp_path, project, 
         j = journal.Journal.load(server.journal_path())
         assert j.state("CLIP_A.MP4", "close") == "skipped"
         assert not (server.STATE["visual"] / "CLIP_A.fine.json").exists()
+
+
+# ------------------------------------------------------------------ the coarse look's frames
+
+
+def _gop_clip(path: Path, gop: int) -> None:
+    import subprocess
+    r = subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=11",
+         "-c:v", "libx264", "-g", str(gop), "-keyint_min", str(gop), "-sc_threshold", "0",
+         "-pix_fmt", "yuv420p", str(path)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
+def _sheet(clip: Path, out: Path, interval: float) -> dict:
+    import subprocess
+    tool = Path(__file__).resolve().parents[2] / "research" / "tools" / "contact_sheet.py"
+    r = subprocess.run(["uv", "run", "--quiet", str(tool), str(clip), "-o", str(out),
+                        "--interval", f"{interval:g}"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return json.loads((out / "index.json").read_text(encoding="utf-8"))["clips"][0]
+
+
+def test_a_coarse_look_samples_keyframes_and_labels_them_with_their_own_time(tmp_path):
+    """Verdict 3: one coarse look of a 3.4-minute Killington clip was 12 minutes, nearly
+    all of it decoding every frame of the master to keep one in 240. With a keyframe
+    every second (GoPro's 1.001 s), a coarse sheet decodes the keyframes only, each
+    cell labelled with its keyframe's own time (never a time it was not taken at); a
+    file whose keyframes are sparser than the interval is decoded in full, as before."""
+    dense = tmp_path / "DENSE.MP4"
+    _gop_clip(dense, 30)                               # a keyframe every 1 s
+    got = _sheet(dense, tmp_path / "a", 4.0)
+    times = [c["t"] for s in got["sheets"] for c in s["cells"]]
+    assert got["sampling"] == "keyframes" and got["n_samples"] == 3
+    assert times == [0.0, 4.0, 8.0]
+    sparse = tmp_path / "SPARSE.MP4"
+    _gop_clip(sparse, 400)                             # one keyframe in 11 s
+    got = _sheet(sparse, tmp_path / "b", 4.0)
+    assert got["sampling"] == "decode" and got["n_samples"] == 3
+    assert [c["t"] for s in got["sheets"] for c in s["cells"]] == [0.0, 4.0, 8.0]
+    # the close look's 1 s interval never takes the keyframe path
+    assert _sheet(dense, tmp_path / "c", 1.0)["sampling"] == "decode"

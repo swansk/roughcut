@@ -508,6 +508,8 @@ def test_a_proposal_forms_while_the_proxies_never_finish(fp, monkeypatch):
         j = server.load_journal()
         assert all(j.state(c, "look") == "done" for c in j.clips)
         assert any(j.state(c, "proxy") == "running" for c in j.clips)
+        # the close look reads the proxy: it waits for it, never skips for want of it
+        assert all(j.state(c, "close") == "queued" for c in j.clips)
     finally:
         gate.set()
         _end_jobs(server)
