@@ -107,16 +107,31 @@ def journey(snap: Path, out: Path, log: Path, env: dict, timeout: int = 900) -> 
             os.killpg(p.pid, signal.SIGKILL)
             p.wait()
             return False, f"timed out after {timeout} s — see {log}"
-    line = ""
+    line, slow = "", None
     try:
-        line = json.loads((out / "journey.json").read_text()).get("line", "")
+        res = json.loads((out / "journey.json").read_text())
+        line, slow = res.get("line", ""), res.get("slow")
     except (OSError, ValueError):
         said = [ln for ln in log.read_text(errors="replace").splitlines() if ln.startswith("journey ")]
         line = said[-1] if said else ""
     if not line.startswith(("journey ✓ ", "journey ✗ ")):
         return False, f"step 0 setup: no result line (rc={rc}, {time.time() - t0:.0f} s) — see {log}"
     green = rc == 0 and line.startswith("journey ✓ ")
+    # wave 8 SAVESAFE: the slowest request the server answered during the journey (to its
+    # first byte; `GET /api/debug/slow`), red over JOURNEY_SLOWEST_S
+    top = (slow or {}).get("slowest_api") if isinstance(slow, dict) else None
+    if top:
+        s = float(top.get("ms") or 0) / 1000.0
+        line += f" · slowest request {s:.2f} s {top.get('method')} {top.get('path')}"
+        if s > JOURNEY_SLOWEST_S:
+            green = False
+            line += f" (over {JOURNEY_SLOWEST_S:g} s)"
+    else:
+        line += " · slowest request: not measured (the server has no /api/debug/slow)"
     return green, line[len("journey ✓ "):]
+
+
+JOURNEY_SLOWEST_S = 1.0
 
 
 PERF_ID = "app/tests/test_perf_latency.py::test_latency_under_load"

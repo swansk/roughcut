@@ -1081,7 +1081,7 @@ def attach_controls(clean: list[dict], raw: list) -> None:
             seg["controls"] = c
 
 
-def mint_board_ids(body: dict) -> dict[str, str]:
+def mint_board_ids(body: dict, memo: dict[str, str] | None = None) -> dict[str, str]:
     """Name the shots the board laid in since its last save (wave 5, lane SAVE).
 
     A shot made on the board (an insert, a split) carries a temporary `tmp-N` id until
@@ -1091,7 +1091,11 @@ def mint_board_ids(body: dict) -> dict[str, str]:
     was written under a name no shot had. Now the board sends `tmp-N`; this mints one id
     per temporary id, renames the colour block's per-shot keys (and its reference) in the
     same body, drops a `tmp-` key no shot in the save carries, and returns the map, which
-    the reply echoes so the board re-keys exactly. Rewrites `body` in place."""
+    the reply echoes so the board re-keys exactly. Rewrites `body` in place.
+
+    `memo` (wave 8, SAVESAFE): the ids already minted for this page's `tmp-N`. A page
+    that unloads while a save is in flight flushes its latest cut again (a keepalive
+    PUT) carrying the same `tmp-N`, and both must name the shot alike."""
     ids: dict[str, str] = {}
     segs = body.get("segments")
     if isinstance(segs, list):
@@ -1099,7 +1103,9 @@ def mint_board_ids(body: dict) -> dict[str, str]:
             sid = s.get("id") if isinstance(s, dict) else None
             if isinstance(sid, str) and sid.startswith("tmp-"):
                 if sid not in ids:
-                    ids[sid] = segment_id()
+                    ids[sid] = (memo.get(sid) if memo is not None else None) or segment_id()
+                    if memo is not None:
+                        memo[sid] = ids[sid]
                 s["id"] = ids[sid]
     col = body.get("colour")
     if isinstance(col, dict):
@@ -1113,12 +1119,56 @@ def mint_board_ids(body: dict) -> dict[str, str]:
     return ids
 
 
+# A save that never lands on a reload (wave 8, SAVESAFE; verdict 6 punch 1). The board
+# tags each PUT `x-roughcut-save: <page>:<n>` (n counts up per page load) and, when the
+# page is hidden or unloads with a save waiting or in flight, sends its latest cut once
+# more as a keepalive PUT. That flush can land while an earlier PUT of the same page is
+# still being processed (or is held up on its way), so a save older than one already
+# applied for its page is never written over it: it is answered `stale` with the ids
+# the newer one minted for its `tmp-N`. A PUT without the tag is applied as it comes.
+SAVE_PAGES: dict[str, dict] = {}       # page -> {"seq": last applied n, "ids": {tmp: id}}
+SAVE_PAGES_MAX = 64
+# Test hook: hold every PUT /api/project this long after its body is read, as a stalled
+# server would (test_save_reload.py; ROUGHCUT_TEST_PUT_DELAY_S for a subprocess server).
+PUT_DELAY_S = float(os.environ.get("ROUGHCUT_TEST_PUT_DELAY_S") or 0.0)
+
+
+def put_delay(request: Request) -> float:
+    """The test hook's hold for this PUT (a test may hold only some of them)."""
+    return PUT_DELAY_S
+
+
+def save_tag(request: Request) -> tuple[str, int] | None:
+    raw = request.headers.get("x-roughcut-save") or ""
+    m = re.fullmatch(r"([A-Za-z0-9_-]{1,40}):(\d{1,12})", raw.strip())
+    return (m.group(1), int(m.group(2))) if m else None
+
+
+def save_page(page: str) -> dict:
+    rec = SAVE_PAGES.pop(page, None) or {"seq": 0, "ids": {}}
+    SAVE_PAGES[page] = rec                         # newest last
+    while len(SAVE_PAGES) > SAVE_PAGES_MAX:
+        SAVE_PAGES.pop(next(iter(SAVE_PAGES)))
+    return rec
+
+
 @app.put("/api/project")
 async def api_save(request: Request) -> JSONResponse:
     body = await request.json()
+    hold = put_delay(request)
+    if hold > 0:
+        await asyncio.sleep(hold)
+    # From here to the reply nothing awaits: one save is applied whole before the next.
+    tag = save_tag(request)
+    page = save_page(tag[0]) if tag else None
+    if page is not None and tag[1] <= page["seq"]:
+        segs = body.get("segments") if isinstance(body.get("segments"), list) else []
+        named = {s["id"]: page["ids"][s["id"]] for s in segs
+                 if isinstance(s, dict) and s.get("id") in page["ids"]}
+        return JSONResponse({"ok": True, "stale": True, "saved": len(segs), "ids": named})
     edl = read_edl()
     edl["story"] = body.get("story", edl.get("story", ""))
-    minted = mint_board_ids(body)
+    minted = mint_board_ids(body, page["ids"] if page is not None else None)
     # A body without segments leaves the cut alone: the timeline saves its tracks,
     # V2 and markers on their own when nothing else changed (roughcut/tracks.py).
     if "segments" in body:
@@ -1186,8 +1236,124 @@ async def api_save(request: Request) -> JSONResponse:
     if edl.get("selects") is not None or edl.get("floor") is not None:
         selects.sync_timeline(edl)
     write_edl(edl)
+    if page is not None:
+        page["seq"] = tag[1]
+    # A flush on unload carries the Accept's answer when the page could not wait for
+    # this reply to send it (the answer goes after the cut, as the board's own does).
+    if isinstance(body.get("answer"), dict):
+        try:
+            answer_ask(body["answer"])
+        except (HTTPException, OSError, ValueError) as exc:
+            print(f"  !! save: the answer it carried was not recorded: {exc}", flush=True)
     # `ids`: {tmp-N: minted id}, so the board re-keys its new shots from this reply
     return JSONResponse({"ok": True, "saved": len(clean), "ids": minted})
+
+
+# Request timing (wave 8, SAVESAFE). Verdict 6 lost an accepted cut whose save "never
+# replied" right after a first pass, and nothing said where the time went. Every request
+# is timed to its first byte (the handler's work, not a video's streaming), any over
+# SLOW_MS is printed with its handler and kept (the last 50, `GET /api/debug/slow`), and
+# the slowest of all is remembered. A watcher notes the event loop itself held up for
+# LOOP_LAG_MS or more (sync work in an async handler), the stall that delays every
+# async handler at once.
+SLOW_MS = 500.0
+LOOP_LAG_MS = 250.0
+SLOW_KEEP = 50
+SLOW: list[dict] = []
+SLOWEST: dict = {"all": None, "api": None}
+_LOOP_WATCH: dict = {"task": None}
+# Read your own save: a reload sends its keepalive flush and then asks for the page (and
+# the cut) at once, on different connections; the page is served once the saves that
+# had arrived are applied (waiting at most READ_AFTER_SAVE_S), never the cut before it.
+SAVES_IN_FLIGHT = {"n": 0}
+READ_AFTER_SAVE_S = 5.0
+
+
+def note_request(row: dict) -> None:
+    for key in ("all", "api") if row["path"].startswith("/api/") else ("all",):
+        top = SLOWEST[key]
+        if top is None or row["ms"] > top["ms"]:
+            SLOWEST[key] = row
+    if row["ms"] >= SLOW_MS:
+        SLOW.append(row)
+        del SLOW[:-SLOW_KEEP]
+        print(f"  !! slow request: {row['ms']:.0f} ms {row['method']} {row['path']} "
+              f"({row['handler']})", flush=True)
+
+
+async def _loop_lag() -> None:
+    tick = 0.1
+    while True:
+        t0 = time.perf_counter()
+        await asyncio.sleep(tick)
+        lag = (time.perf_counter() - t0 - tick) * 1000.0
+        if lag >= LOOP_LAG_MS:
+            row = {"method": "LOOP", "path": "(the event loop was held)", "handler": "-",
+                   "ms": round(lag, 1), "status": None, "at": time.time()}
+            SLOW.append(row)
+            del SLOW[:-SLOW_KEEP]
+            print(f"  !! the event loop was held {lag:.0f} ms", flush=True)
+
+
+def _watch_loop() -> None:
+    loop = asyncio.get_running_loop()
+    task = _LOOP_WATCH["task"]
+    if task is None or task.done() or task.get_loop() is not loop:
+        _LOOP_WATCH["task"] = loop.create_task(_loop_lag())
+
+
+class RequestTiming:
+    """Pure ASGI (a BaseHTTPMiddleware would buffer the media streams)."""
+
+    def __init__(self, app_) -> None:
+        self.app = app_
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        if (scope.get("client") or ("",))[0] != "testclient":   # a real server's loop
+            _watch_loop()
+        t0 = time.perf_counter()
+        first: list = [None, None]
+        method, where = scope.get("method"), scope.get("path")
+        saving = method == "PUT" and where == "/api/project"
+
+        async def timed(msg) -> None:
+            if msg["type"] == "http.response.start" and first[0] is None:
+                first[0], first[1] = time.perf_counter(), msg.get("status")
+            await send(msg)
+
+        if saving:
+            SAVES_IN_FLIGHT["n"] += 1
+        elif method == "GET" and where in ("/", "/api/project") and SAVES_IN_FLIGHT["n"]:
+            until = time.perf_counter() + READ_AFTER_SAVE_S
+            while SAVES_IN_FLIGHT["n"] and time.perf_counter() < until:
+                await asyncio.sleep(0.02)
+        try:
+            await self.app(scope, receive, timed)
+        finally:
+            if saving:
+                SAVES_IN_FLIGHT["n"] -= 1
+            path = scope.get("path") or ""
+            if path != "/api/debug/slow":
+                end = first[0] if first[0] is not None else time.perf_counter()
+                ep = scope.get("endpoint")
+                note_request({"method": scope.get("method"), "path": path,
+                              "handler": getattr(ep, "__name__", None) or "-",
+                              "ms": round((end - t0) * 1000.0, 1), "status": first[1],
+                              "at": time.time()})
+
+
+app.add_middleware(RequestTiming)
+
+
+@app.get("/api/debug/slow")
+def api_debug_slow() -> JSONResponse:
+    """Read-only: the last 50 requests over SLOW_MS (and event-loop holds), and the
+    slowest request (`slowest`) and slowest `/api/` request (`slowest_api`) seen."""
+    return JSONResponse({"threshold_ms": SLOW_MS, "slowest": SLOWEST["all"],
+                         "slowest_api": SLOWEST["api"], "slow": list(SLOW)})
 
 
 @app.post("/api/snap")
@@ -2479,13 +2645,19 @@ async def api_asks_answer(request: Request) -> JSONResponse:
     record — so the flow stops calling a discarded proposal "waiting for you". Accept
     also saves the cut, which answers it on its own; this makes Discard say so too."""
     body = await request.json() if int(request.headers.get("content-length") or 0) else {}
+    return JSONResponse(answer_ask(body if isinstance(body, dict) else {}))
+
+
+def answer_ask(body: dict) -> dict:
+    """`POST /api/asks/answer`'s work, also done by a save that carries `answer` (the
+    board's flush on unload, wave 8 SAVESAFE). Raises HTTPException(400) on a bad one."""
     answer = str(body.get("answer") or "")
     if answer not in ("accept", "discard"):
         raise HTTPException(400, "answer must be accept or discard")
     files = sorted(STATE["asks"].glob("*.json"), key=lambda p: p.stat().st_mtime,
                    reverse=True)
     if not files:
-        return JSONResponse({"ok": True, "job": None})
+        return {"ok": True, "job": None}
     rec = json.loads(files[0].read_text(encoding="utf-8"))
     rec["answered"] = {"answer": answer, "at": time.time()}
     partial = body.get("partial")
@@ -2497,7 +2669,7 @@ async def api_asks_answer(request: Request) -> JSONResponse:
     if rec["answered"].get("partial"):
         note_partial_accept(rec)                  # provenance: the save may have landed
         note_rejections(rec)                      # verdict 4: a rejection is remembered
-    return JSONResponse({"ok": True, "job": rec.get("job")})
+    return {"ok": True, "job": rec.get("job")}
 
 
 def note_rejections(rec: dict, edl: dict | None = None) -> None:
