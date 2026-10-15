@@ -25,12 +25,13 @@ Two design rules, both learned the hard way earlier in this project:
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Callable
 
 from . import colour as colourmod
 from . import config, edits
-from .boundaries import polish_plan
+from .boundaries import polish, polish_plan, summarise  # noqa: F401 — polish_plan re-exported
 from .estimate import Estimate, estimate
 from .inference import complete
 from .progress import milestone
@@ -458,15 +459,30 @@ def carry_ids(new: list[dict], current: list[dict]) -> list[dict]:
     return out
 
 
+LOCKED_MARK = "[LOCKED — the editor's own work: keep exactly]"
+
+LOCKED_GUIDANCE = """\
+Shots marked LOCKED are the editor's own work (trimmed, split, moved or added by hand).
+Return each of them exactly as it is — the same clip, the same in and out, to the
+hundredth of a second — and keep the locked shots in the same order relative to each
+other. Everything else is yours to replace, re-order or drop. Do not describe a shot as
+kept or unchanged unless its in and out are exactly what they were."""
+
+
 def build_prompt(segments: list[dict], clips: dict[str, dict], story: str,
                  note: str, target: tuple[float, float],
                  events: list[dict] | None = None,
                  selects: list[dict] | None = None,
-                 colour: dict | None = None) -> str:
+                 colour: dict | None = None,
+                 locked: set[str] | None = None) -> str:
+    locked = set(locked or ())
     current = "\n".join(
         f"  {i + 1:2d}. {s['clip']} {s['in']:.2f}-{s['out']:.2f} "
         f"({edits.dur(s):.1f}s) — {s.get('why', '')}"
+        + (f"  {LOCKED_MARK}" if s.get("id") in locked else "")
         for i, s in enumerate(segments))
+    if locked:
+        current = f"{current}\n\n{LOCKED_GUIDANCE}"
     total = sum(edits.dur(s) for s in segments)
     timeline = shot_timeline(clips)
     inventory = "\n\n".join(_clip_block(c, timeline) for c in clips.values())
@@ -911,7 +927,7 @@ def _ask(prompt: str, system: str, clips: dict[str, dict],
     # off a transcript is asking it to do arithmetic the sidecar already knows.
     # A colour-only plan is the cut as it stands: nothing the model chose to polish.
     plan = (dict(result.content) if result.content.get("unchanged")
-            else polish_plan(result.content, clips))
+            else polish_kept_alone(result.content, clips, current))
     plan["usage"] = {
         "input_tokens": result.input_tokens, "output_tokens": result.output_tokens,
         "projected_usd": result.projected_usd, "model": result.model,
@@ -925,7 +941,8 @@ def propose(segments: list[dict], clips: dict[str, dict], story: str, note: str,
             events: list[dict] | None = None,
             on_partial: Callable[[str, str], None] | None = None,
             selects: list[dict] | None = None,
-            colour: dict | None = None) -> dict:
+            colour: dict | None = None,
+            locked: set[str] | None = None) -> dict:
     """Ask for a revision. Returns {'segments', 'notes', 'usage'}, plus `colour` (a
     patch on the EDL's colour block) when the note asked for a change to the picture.
 
@@ -934,12 +951,211 @@ def propose(segments: list[dict], clips: dict[str, dict], story: str, note: str,
     `colour` — `{"film": the EDL's block, "looks": the library, "shots": the server's
     resolved rows}` — offers the grade (INTAKE I10.5); without it the Ask is cut-only.
     The plan's shots carry the ids of the cut's shots they continue (`carry_ids`).
+    `locked` — shot ids the model is told to return exactly (the first pass's re-run
+    keeps the editor's hand edits); the caller enforces it (`firstpass.enforce_locks`),
+    the prompt only asks.
     """
     if not note.strip():
         raise ValueError("empty note")
     return _ask(build_prompt(segments, clips, story, note, target, events, selects,
-                             colour),
+                             colour, locked),
                 SYSTEM, clips, on_partial, colour=colour, current=segments)
+
+
+# ------------------------------------------------------------------ the truth of a plan
+#
+# Judge verdict 1 (punch item 10): an Ask's notes said "I've kept your CLIP_11 razor cut
+# exactly as it was" and "the second half is unchanged" while the diff showed CLIP_11
+# 159.2-166.2 become 159.2-164.8. Two causes, both fixed here: boundary polish moved a
+# shot the model had copied verbatim (`polish_kept_alone`), and nothing compared what
+# the notes claim with what the plan does (`check_notes`).
+
+SAME_EPS = 0.005
+
+
+def _same_range(a: dict, b: dict) -> bool:
+    return (a.get("clip") == b.get("clip")
+            and abs(float(a["in"]) - float(b["in"])) < SAME_EPS
+            and abs(float(a["out"]) - float(b["out"])) < SAME_EPS)
+
+
+def polish_kept_alone(plan: dict, clips: dict[str, dict],
+                      current: list[dict] | None) -> dict:
+    """`polish_plan`, except a shot the model returned exactly as it is in the current
+    cut is left exactly as it is. Polish exists to fix cut points the model read off a
+    transcript; a range copied verbatim from the cut was the editor's (or an accepted
+    earlier plan's), and snapping it is a change nobody asked for — the source of the
+    "unchanged" shot that lost 1.34 s."""
+    before = [dict(s) for s in plan.get("segments") or []]
+    cur = [s for s in (current or []) if isinstance(s, dict) and "in" in s and "out" in s]
+    after = polish(before, clips)
+    for i, s in enumerate(before):
+        if any(_same_range(s, c) and (not s.get("id") or not c.get("id")
+                                      or s.get("id") == c.get("id")) for c in cur):
+            after[i] = dict(s)
+    out = dict(plan)
+    out["segments"] = after
+    line = summarise(before, after)
+    if line:
+        notes = (plan.get("notes") or "").strip()
+        out["notes"] = f"{notes}\n\n{line}".strip() if notes else line
+    return out
+
+
+def shot_diff(current: list[dict], proposed: list[dict]) -> dict:
+    """What a plan does to the cut, shot by shot, from the ranges alone — the machine's
+    account the notes are held to. A proposed shot is `kept` (same id or same range,
+    identical in and out), `changed` (it continues a current shot — same id — with a
+    different range; `was` holds the old one) or `new`; a current shot no proposed shot
+    continues is `removed`. Positions are 1-based."""
+    by_id = {c.get("id"): (i, c) for i, c in enumerate(current) if c.get("id")}
+    claimed: set[int] = set()
+    rows = []
+    for j, s in enumerate(proposed):
+        hit = by_id.get(s.get("id")) if s.get("id") else None
+        if hit is None:
+            hit = next(((i, c) for i, c in enumerate(current)
+                        if i not in claimed and _same_range(s, c)), None)
+        row = {"pos": j + 1, "id": s.get("id"), "clip": s.get("clip"),
+               "in": round(float(s["in"]), 2), "out": round(float(s["out"]), 2)}
+        if hit is None or hit[0] in claimed:
+            row["status"] = "new"
+        else:
+            i, c = hit
+            claimed.add(i)
+            row["was_pos"] = i + 1
+            if _same_range(s, c):
+                row["status"] = "kept"
+            else:
+                row["status"] = "changed"
+                row["was"] = {"in": round(float(c["in"]), 2), "out": round(float(c["out"]), 2)}
+                row["delta_in"] = round(float(s["in"]) - float(c["in"]), 2)
+                row["delta_out"] = round(float(s["out"]) - float(c["out"]), 2)
+        rows.append(row)
+    removed = [{"pos": i + 1, "id": c.get("id"), "clip": c.get("clip"),
+                "in": round(float(c["in"]), 2), "out": round(float(c["out"]), 2),
+                "status": "removed"}
+               for i, c in enumerate(current) if i not in claimed]
+    counts = {k: sum(1 for r in rows if r["status"] == k) for k in ("kept", "changed", "new")}
+    counts["removed"] = len(removed)
+    return {"shots": rows, "removed": removed, "counts": counts}
+
+
+# A sentence claims a shot was left alone when it says one of these.
+KEPT_CLAIM = re.compile(
+    r"\b(unchanged|untouched|as it was|as they were|as-is|as is|left (?:it |them )?alone|"
+    r"kept (?:it |them |your |the |that |those |this )?[^.;]*?(?:exactly|intact|as it|"
+    r"as they|the same|unchanged|in place)|"
+    r"(?:kept|keep|keeping|left|leaving) [^.;]*?(?:exactly|intact|in place)|"
+    r"did(?:n't| not) (?:touch|change)|no changes? to|same as before)\b",
+    re.IGNORECASE)
+# …and covers more than the shots it names when it says one of these.
+BROAD_CLAIM = re.compile(
+    r"\b(everything else|the rest|all (?:the )?other|otherwise|remaining|"
+    r"(?:first|second|last|back|front) half|the ending|the opening)\b", re.IGNORECASE)
+SHOT_NUMBER = re.compile(r"\bshots? (\d{1,3})(?:\s*(?:-|–|to|and)\s*(\d{1,3}))?", re.IGNORECASE)
+
+
+def _sentences(text: str) -> list[str]:
+    parts = re.split(r"(?<=[.!?])\s+|\n+", text or "")
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _clock(t: float) -> str:
+    m, s = divmod(max(0.0, float(t)), 60)
+    return f"{int(m)}:{s:04.1f}"
+
+
+def _named_rows(sentence: str, rows: list[dict], n_current: int) -> list[dict]:
+    """The rows (of `shot_diff`, current-side positions) a sentence names: by clip
+    file name or stem, or by shot number ("shot 3", "shots 4-6"), read as the cut's
+    positions before the change."""
+    low = sentence.lower()
+    out = [r for r in rows if r.get("clip") and (
+        str(r["clip"]).lower() in low or Path(str(r["clip"])).stem.lower() in low)]
+    for m in SHOT_NUMBER.finditer(sentence):
+        a = int(m.group(1))
+        b = int(m.group(2) or a)
+        for r in rows:
+            pos = r.get("was_pos") or (r["pos"] if r.get("status") == "removed" else 0)
+            if a <= int(pos) <= b and r not in out:
+                out.append(r)
+    return out
+
+
+def check_notes(plan: dict, current: list[dict]) -> dict:
+    """Hold the plan's notes to its diff. Every sentence that says a shot was kept or
+    left unchanged is checked against the ranges: a named shot (by clip or number) that
+    changed or was removed, or — for a broad claim ("the rest is unchanged", "second
+    half … unchanged") — any changed shot the notes do not mention elsewhere, makes the
+    claim false. False claims are flagged and the notes get one correcting line per
+    shot, in numbers; the model's words are kept in `notes_model`.
+
+    Adds `diff` (the `shot_diff`) and `notes_check` {ok, flags: [{claim, shots, why}]}
+    to a copy of the plan. A plan with nothing to compare (a first cut) passes."""
+    out = dict(plan)
+    cur = [s for s in (current or []) if isinstance(s, dict) and "in" in s and "out" in s]
+    proposed = [s for s in plan.get("segments") or [] if isinstance(s, dict)]
+    diff = shot_diff(cur, proposed)
+    out["diff"] = diff
+    if not cur:
+        out["notes_check"] = {"ok": True, "flags": [], "checked": 0}
+        return out
+    changed = [r for r in diff["shots"] if r["status"] == "changed"]
+    gone = diff["removed"]
+    # current-side rows: what each shot of the cut became
+    side = changed + gone
+    notes = str(plan.get("notes") or "")
+    sentences = _sentences(notes)
+    claims = [s for s in sentences if KEPT_CLAIM.search(s)]
+    plain = [s for s in sentences if s not in claims]
+    mentioned_elsewhere = {id(r) for s in plain for r in _named_rows(s, side, len(cur))}
+    flags = []
+    for sentence in claims:
+        named = _named_rows(sentence, side, len(cur))
+        broad = bool(BROAD_CLAIM.search(sentence))
+        bad = list(named)
+        if broad:
+            for r in side:
+                if r not in bad and id(r) not in mentioned_elsewhere:
+                    bad.append(r)
+        if not bad:
+            continue
+        shots = []
+        for r in bad:
+            if r["status"] == "removed":
+                shots.append({"id": r.get("id"), "clip": r["clip"], "pos": r["pos"],
+                              "was": {"in": r["in"], "out": r["out"]}, "now": None})
+            else:
+                shots.append({"id": r.get("id"), "clip": r["clip"], "pos": r["was_pos"],
+                              "was": r["was"], "now": {"in": r["in"], "out": r["out"]},
+                              "delta_in": r["delta_in"], "delta_out": r["delta_out"]})
+        flags.append({"claim": sentence, "shots": shots,
+                      "why": "says kept/unchanged, but the ranges differ"})
+    lines = []
+    seen: set = set()
+    for f in flags:
+        for s in f["shots"]:
+            key = (s.get("id"), s["clip"], s["pos"])
+            if key in seen:
+                continue
+            seen.add(key)
+            stem = Path(str(s["clip"])).stem
+            was = f"{_clock(s['was']['in'])}–{_clock(s['was']['out'])}"
+            if s["now"] is None:
+                lines.append(f"Check: shot {s['pos']} ({stem} {was}) is removed by this "
+                             "plan — the notes call it kept.")
+            else:
+                now = f"{_clock(s['now']['in'])}–{_clock(s['now']['out'])}"
+                bits = [f"{k} {v:+.2f} s" for k, v in (("in", s["delta_in"]),
+                                                       ("out", s["delta_out"])) if abs(v) >= 0.01]
+                lines.append(f"Check: shot {s['pos']} ({stem}) changes {was} → {now} "
+                             f"({', '.join(bits)}) — the notes call it unchanged.")
+    if lines:
+        out["notes_model"] = notes
+        out["notes"] = (notes.strip() + "\n\n" + "\n".join(lines)).strip()
+    out["notes_check"] = {"ok": not flags, "flags": flags, "checked": len(claims)}
+    return out
 
 
 def originate(clips: dict[str, dict], story: str, note: str = "",

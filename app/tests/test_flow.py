@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import json
+import random
 import sys
 from pathlib import Path
 
@@ -281,6 +282,44 @@ def test_while_the_index_runs_the_pass_can_start_on_what_is_released():
     f["pass"]["on_pass"] = 0
     out = flow.compute(f)
     assert out["next"]["kind"] == "wait" and out["next"]["stage"] == "index"
+
+
+def test_index_progress_is_never_ahead_of_the_counts():
+    """Verdict 1: the chip read "Indexing — 87%" while the server said heard 0/12 and
+    looked at 0/12 — the run's % counted probes and skipped telemetry as work."""
+    f = fresh(12)
+    f["proxies"] = {"done": 0, "total": 12}
+    f["index"].update(close_need=12)
+    f["jobs"] = {"index": {"pct": 87.0, "detail": "CLIP_01 · asr"}}
+    out = flow.compute(f)
+    ix = by_key(out)["index"]
+    assert ix["state"] == "running"
+    assert ix["progress"] == 0.0, ix
+    assert ix["counts"]["pct"] == 0.0 and ix["counts"]["proxied"] == 0
+    nxt = out["next"]
+    assert nxt["kind"] == "wait"
+    assert "heard 0/12" in nxt["sentence"] and "(0%)" in nxt["sentence"], nxt
+    assert "87" not in nxt["sentence"]
+
+
+def test_progress_is_bounded_by_the_counts_whatever_the_run_says():
+    rng = random.Random(14)
+    for _ in range(300):
+        n = rng.randint(1, 20)
+        f = fresh(n)
+        look_need = n
+        f["proxies"] = {"done": rng.randint(0, n), "total": n}
+        f["index"].update(listened=rng.randint(0, n), looked=rng.randint(0, look_need),
+                          close=0, close_need=rng.randint(0, n))
+        f["index"]["close"] = rng.randint(0, f["index"]["close_need"])
+        f["jobs"] = {"index": {"pct": rng.uniform(0, 100), "detail": ""}}
+        out = flow.compute(f)
+        ix = by_key(out)["index"]
+        honest = flow.honest_pct(ix["counts"])
+        assert ix["progress"] <= honest + 5e-4, (ix["counts"], ix["progress"])
+        if out["next"].get("kind") == "wait" and out["next"]["stage"] == "index":
+            shown = int(out["next"]["sentence"].split("(")[1].split("%")[0])
+            assert shown <= honest * 100 + 1e-9
 
 
 def test_granularity_in_words_from_the_sidecars_intervals():

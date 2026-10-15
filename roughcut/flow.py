@@ -195,6 +195,34 @@ def footage_stage(f: dict) -> dict:
                   counts=counts)
 
 
+def honest_pct(counts: dict) -> float:
+    """The share of the index the counts prove done, 0–1: clips heard, clips looked at,
+    close looks and previews (proxies) built, each clip-stage weighted the same. Every
+    percentage the flow shows for the index is at most this — it is computed from the
+    counts it is shown beside, so it can never be ahead of them."""
+    n = int(counts.get("clips") or 0)
+    look_need = int(counts.get("look_need") or 0)
+    close_need = int(counts.get("close_need") or 0)
+    denom = n + look_need + close_need + n
+    if not denom:
+        return 0.0
+    done = (min(int(counts.get("listened") or 0), n)
+            + min(int(counts.get("looked") or 0), look_need)
+            + min(int(counts.get("close") or 0), close_need)
+            + min(int(counts.get("proxied") or 0), n))
+    return done / denom
+
+
+def index_counts_words(counts: dict) -> str:
+    """"heard 3/12 · looked at 1/12 · previews 2/12" — the counts a progress line rests
+    on, in the order the index buys them."""
+    n = int(counts.get("clips") or 0)
+    return " · ".join([f"heard {int(counts.get('listened') or 0)}/{n}",
+                       f"looked at {int(counts.get('looked') or 0)}/"
+                       f"{int(counts.get('look_need') or 0)}",
+                       f"previews {int(counts.get('proxied') or 0)}/{n}"])
+
+
 def index_stage(f: dict) -> dict:
     ix = f.get("index") or {}
     n = int(f.get("clips") or 0)
@@ -204,7 +232,10 @@ def index_stage(f: dict) -> dict:
     close_need = ix.get("close_need")
     close_need = looked_need if close_need is None else int(close_need)
     how = interval_words(ix.get("intervals"), ix.get("interval_s"))
+    px = f.get("proxies") or {}
+    proxied = min(n, int(px.get("done") or 0))
     counts = {"clips": n, "listened": listened, "looked": looked, "close": close,
+              "proxied": proxied,
               "junk": junk, "look_need": looked_need, "close_need": close_need,
               "on_pass": int(ix.get("on_pass") or 0), "released": int(ix.get("released") or 0),
               "parked": int(ix.get("parked") or 0)}
@@ -214,11 +245,7 @@ def index_stage(f: dict) -> dict:
              + (f" ({how})" if looked and how else ""),
              f"close looks {close}/{close_need}"]
     summary = " · ".join(parts)
-    # Stage-level percentage over the three things an index buys, each weighted the
-    # same: it is a summary of where the bin is, the journal's own % is the run's.
-    denom = n + looked_need + close_need
-    pct = (min(listened, n) + min(looked, looked_need) + min(close, close_need)) / denom \
-        if denom else 0.0
+    pct = honest_pct(counts)
     counts["pct"] = round(100.0 * pct, 1)
     if n == 0:
         return _stage("index", "waiting", "Nothing to index yet.", counts=counts,
@@ -226,10 +253,15 @@ def index_stage(f: dict) -> dict:
     job = _job(f, "index", "analyse", "visual")
     if job:
         detail = str(job.get("detail") or "").strip()
+        # The run's own % (the journal's settled stages over all stages) counts probes
+        # and skipped telemetry as work done, so it read 87% while 0/12 clips were heard
+        # (judge verdict 1). The bar never says more than the counts support: it is the
+        # smaller of the two, and the counts' share when the run gives none.
         run_pct = job.get("pct")
+        progress = pct if run_pct is None else min(pct, float(run_pct) / 100.0)
         return _stage("index", "running", f"Indexing — {summary}"
                       + (f" · {detail}" if detail else ""), counts=counts,
-                      progress=float(run_pct) / 100.0 if run_pct is not None else pct)
+                      progress=progress)
     complete = listened >= n and looked >= looked_need and close >= close_need
     if complete:
         return _stage("index", "done", f"Indexed — {summary}", counts=counts, progress=1.0)
@@ -478,7 +510,10 @@ def _next(stages: dict[str, dict], f: dict, blocked: list[dict]) -> dict:
         if on_pass and shots == 0 and stages["pass"]["counts"].get("passed", 0) < on_pass:
             return action("pass", f"Start the pass on {_plural(on_pass, 'clip')} — the "
                           "rest keep indexing", "Pass")
-        return action("index", f"Indexing — {int(round((ix.get('progress') or 0) * 100))}%; "
+        # The counts first, the % after and only as computed from them (verdict 1: the
+        # chip read "Indexing — 87%" while 0 of 12 clips had been heard).
+        pct = int(min(ix.get("progress") or 0.0, honest_pct(c)) * 100)
+        return action("index", f"Indexing — {index_counts_words(c)} ({pct}%); "
                       "the pass opens on the first clip released", "Watch", kind="wait")
     if ix["state"] == "ready" and (never or c.get("listened", 0) < c.get("clips", 0)):
         return priced(ix["action"])
