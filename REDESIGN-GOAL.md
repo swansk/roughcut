@@ -208,3 +208,4 @@ next judge runs, and the next judge rules it honest or lenient.
   400s) and in `test_effect_controls.py` highlights / shadows / whites / blacks move
   `grade.probe()` within 150 ms, a slider drag is live and one undo, and no Effect Controls
   property name is ellipsized at 1440.
+- 2026-10-16 (lead, after verdict 6's ruling): Playback Resolution in grade.js (the graded picture drawn <= 640 px wide while playing, full size parked) logged here as the judge asked; wave 8 makes it a visible Program-monitor setting (Full / 1/2 / 1/4) like Premiere's.

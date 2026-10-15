@@ -908,12 +908,12 @@ function onInspectorClick(e) {
 /* The `[` `]` `{` `}` keys' nudge — the trims the strip no longer has buttons for. */
 function nudge(i, edge, d) {
   const seg = segs[i];
-  const dur = (P.clips[seg.clip] || {}).duration ?? 1e9;
-  if (edge === 'in') seg.in = Math.max(0, Math.min(seg.out - 0.2, seg.in + d));
-  else seg.out = Math.max(seg.in + 0.2, Math.min(dur, seg.out + d));
-  seg.in = Math.round(seg.in * 100) / 100;
-  seg.out = Math.round(seg.out * 100) / 100;
-  if (edge === 'in') refreshPosters();   // debounced: one frame per trim, not per press
+  if (!seg) return;
+  // Through the timeline's setRange, like every other trim: clamped, on the frame grid
+  // (this rounded to 0.01 s, off the grid), keyframes kept on the media (KEYANCHOR), and
+  // the posters re-taken. Writing seg.in/out here skipped all three.
+  if (edge === 'in') tl.setRange(seg.id, seg.in + d, null);
+  else tl.setRange(seg.id, null, seg.out + d);
 }
 
 /* ------------------------------------------------------------ colour (INTAKE M10, I10.4)
@@ -1684,6 +1684,9 @@ function prerollAt(seg, room = Infinity) {
 
 function armNext(v, seg, room) {
   const at = prerollAt(seg, room);
+  // the grade fetches the next shot's LUT and makes its texture now, not at the cut
+  const gr = gradeApi();
+  if (gr && typeof gr.prefetch === 'function') gr.prefetch(seg.id);
   // Already paused a little ahead of the in-point in that clip (a cutaway and back: the
   // buffer stopped at the out-point the next shot starts from): it is parked; a seek
   // would only cost a decode from the keyframe.
