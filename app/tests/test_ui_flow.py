@@ -263,7 +263,8 @@ def test_a_warning_sits_on_its_shot_with_a_fix_that_is_one_undo_entry(page, proj
     assert page.locator("#undo").get_attribute("title").startswith("undo: fix")
     assert "starts mid-sentence" not in warns.inner_text()
     insp.locator("button[data-act=fixout]").click()
-    assert page.evaluate("[segs[0].in, segs[0].out]") == [0.25, 4.45]
+    # on the 24 fps frame grid, rounded OUT so the line is never clipped: 4.45 -> 107/24
+    assert page.evaluate("[segs[0].in, segs[0].out]") == pytest.approx([0.25, 4.4583], abs=1e-4)
     assert warns.is_hidden()
     assert page.locator("#tl .blk .warn:not([hidden])").count() == 0
     page.keyboard.press("Control+z")
@@ -1216,7 +1217,8 @@ def test_what_the_visual_pass_saw_shows_in_the_inspector_and_in_the_library(page
         assert insp.locator(".warns .w", has_text="lens").get_attribute("title") == "lens covered"
         insp.locator("button[data-act=trimbad]").click()
         assert page.evaluate("segs[sel].clip") == "CLIP_C.MP4"
-        assert page.evaluate("segs[sel].in") == pytest.approx(0.6)
+        # past the covered lens on the frame grid, never into it: 0.6 -> 15/24 (not 14/24)
+        assert page.evaluate("segs[sel].in") == pytest.approx(0.625, abs=1e-4)
         assert "lens" not in insp.locator(".warns").inner_text()
     finally:
         sidecar.unlink(missing_ok=True)

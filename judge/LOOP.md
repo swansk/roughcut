@@ -49,6 +49,13 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-15 08:40: **wave 3 merged**: JOURNEY `f04798a`, ORIENT `c31089f`, PROGRAM `bc13ac4`, RENDER `dfe009c`,
+  HEADER `bf1aa31`, PICKS `6e21dd6`, TLAUDIO `885d39f` (+ lead `1c7af03`: one level owner, 4-place saves), PASS `2f89ad2`
+  (+ lead: fixes round away from what they fix). Added to the wave-4 queue: `/api/index/cancel` so the background index
+  (proxies, close looks) can be stopped from its job pill after the pass has moved on; the PICKS-noted test-order
+  dependence (test_budget fails after test_ui_flow in one process); Project panel too narrow at 1440 for Selects' Media
+  In/Out and Reason columns; a full 12-clip Killington first pass has never been timed (PASS estimates 12-15 min at load
+  ~25). Full gate next, then judge 4.
 - 2026-10-15 06:10: wave 3 merges so far: ORIENT `c31089f`, PROGRAM `bc13ac4`, RENDER (this). Queued for wave 4 (lead's
   notes): audio is AAC-encoded twice since RENDER's join (per part, then at the join): keep part audio as PCM and encode
   once; app.js `isThisCut` should compare `controls` like the server's `_same_shots`; the size estimate is ~4x high until

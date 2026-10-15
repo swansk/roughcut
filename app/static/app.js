@@ -767,14 +767,29 @@ function nextWarned() {
  * tool's head and tail rule (research/tools/edl_snap.py: a breath before the first word,
  * the last word let land). One undo entry, and only on the click. */
 const PAD_HEAD = 0.25, PAD_TAIL = 0.45;
+/* A fix's edge on the frame grid, rounded AWAY from what it fixes: the timeline snaps a
+ * drag to the nearest frame, but a fix that rounded inward would leave one frame of the
+ * covered lens in, or clip the last frame of the line it was meant to keep. 'down' =
+ * earlier, 'up' = later; the value is already on the grid, so the timeline keeps it. */
+function gridAway(t, dir) {
+  const r = window.tl && typeof tl.gridRate === 'function' ? tl.gridRate() : 0;
+  if (!r) return t;
+  const f = dir === 'up' ? Math.ceil(t * r - 1e-6) : Math.floor(t * r + 1e-6);
+  return Math.round((f / r) * 1e4) / 1e4;
+}
+
 function fixEdge(seg, edge) {
   const clip = P.clips[seg.clip] || {};
   const t = edge === 'in' ? seg.in : seg.out;
   const u = (clip.transcript || []).find((x) => x.start + 0.05 < t && t < x.end - 0.05);
   if (!u) return;
   tl.begin('fix');
-  if (edge === 'in') tl.setRange(seg.id, Math.max(0, u.start - PAD_HEAD), null);
-  else tl.setRange(seg.id, null, Math.min(clip.duration ?? 1e9, u.end + PAD_TAIL));
+  if (edge === 'in') tl.setRange(seg.id, gridAway(Math.max(0, u.start - PAD_HEAD), 'down'), null);
+  else {
+    const end = clip.duration ?? 1e9;
+    const want = gridAway(u.end + PAD_TAIL, 'up');
+    tl.setRange(seg.id, null, want <= end ? want : gridAway(end, 'down'));
+  }
   tl.commit();
 }
 
@@ -784,8 +799,9 @@ function trimBad(seg, k) {
   if (!u) return;
   const keepHead = u.start - seg.in, keepTail = seg.out - u.end;
   tl.begin('trim it out');
-  if (keepTail >= keepHead) tl.setRange(seg.id, Math.min(seg.out - 0.2, u.end), null);
-  else tl.setRange(seg.id, null, Math.max(seg.in + 0.2, u.start));
+  // past the bad stretch, never into it (gridAway): no frame of it stays in the shot
+  if (keepTail >= keepHead) tl.setRange(seg.id, Math.min(seg.out - 0.2, gridAway(u.end, 'up')), null);
+  else tl.setRange(seg.id, null, Math.max(seg.in + 0.2, gridAway(u.start, 'down')));
   tl.commit();
 }
 

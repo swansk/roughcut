@@ -10,6 +10,12 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **A fix rounds to the frame grid away from what it fixes.** Since edits snap to frames (wave 3), "Trim it out" on a covered lens rounded its new In to the NEAREST frame, 0.6 s -> 0.5833 at 24 fps: one frame of the covered lens stayed in the shot. "Cuts a line off" could likewise round inward and clip the line it meant to keep. `gridAway` in app.js rounds a trim-out past the bad stretch and a line fix outward (0.6 -> 0.625; 4.45 -> 4.4583); drags still snap to the nearest frame. test_ui_flow's two expectations follow (they were left at the pre-grid values by the merges).
+
+### Docs
+- **LOOP.md: wave 3 merged.**
+
+### Fixed
 - **One owner for every Program element's level, and saves that keep the frame grid** (the lead's integration of TLAUDIO's requests). Effect Controls' Volume and the moved-sound element `#pvA1` now set their level through `rcAudio.setLevel` (meters.js) instead of writing `volume`, so a shot's Volume and A1's gain multiply instead of the last writer winning, and both can go above 0 dB through the gain node. `roughcut/tracks.py` keeps A1 offsets, V2 in/out/at, markers and the sequence In/Out to 4 places (was 2), so frame-grid values at 29.97 survive a save. The filmstrip's tiles are retried after a failed load like the posters. `test_program_tracks.py` reads the heard level (`rcAudio.levelOf`), not the element's raw `volume`. test_tracks + effect_controls + program_tracks + timeline_audio green.
 - **A partial Accept records provenance (lane PASS, after PICKS merged).** Accepting some of a proposal's shots saved a cut that was not the plan verbatim, so `is_accept` failed, no base was recorded, and a later re-run counted the accepted AI shots as the editor's own hand edits. `/api/asks/answer` now keeps the board's `partial` ({accepted, of, rejected, kept}) on the record, and whichever of the save and the answer lands second records the base: shots the editor took from the proposal (changed or new in its diff) are the machine's; every other shot (kept by the proposal, a rejected change, a refused removal) keeps the provenance it had (`firstpass.partial_hand`, `plan_changes`). `test_firstpass.py` +2 (2 of 5 accepted, in both arrival orders: the re-run's keep list is exactly the prior hand edits).
 
