@@ -1272,7 +1272,7 @@ function playFrom(i, { single = false } = {}) {
   // The shot's media is not ready (no proxy yet, waiting on /media/status): the poster at
   // the playhead and the calm line stay; the wait loads it, and the next play plays.
   if (v.error) { mediaWaitFor(v); monWait(true); player.playing = false; paintTransport(); return; }
-  v.muted = false;
+  v.muted = a1Moved(seg);           // a moved sound plays from #pvA1 (programSync)
   const go = () => {
     if (g !== player.gen || !player.playing) return;   // pause, or a later command, won
     if (!resume) v.currentTime = seg.in;
@@ -1320,8 +1320,168 @@ function pauseCut() {
   if (bed.el) bed.el.pause();
   player.playing = false;
   cancelAnimationFrame(player.raf);
+  progPause();
   screenMsg('');       // callers that have something to say set it after this
   paintTransport();
+}
+
+/* The Program monitor shows the sequence, not only V1 (verdict 3 punch 4): what the
+ * export composites, the monitor draws. Two followers ride beside the pv0/pv1 pair and
+ * are driven from the playhead (tl's `playhead` event, which every tick, cue and scrub
+ * emits), never the other way round, so V1 stays the clock:
+ *
+ *   #pvV2  V2's picture. Inside an overlay (V2's eye on) it is shown over V1 — above the
+ *          grade canvas, under the fx canvas — at `in + (t - at) * speed`; outside one it
+ *          is hidden and parked on the next overlay's in-point, so entering one is a seek
+ *          inside an open file. Ungraded, and the Effect Controls of V1 do not move it.
+ *   #pvA1  A1's sound where it is not under its picture. A shot with `a_off` (unlinked
+ *          and moved — relinking keeps the offset) has its picture element muted, and
+ *          this audio-only element plays that shot's sound at `in + (t - start - a_off)
+ *          * speed` while the film time is inside the moved sound: the gap before it is
+ *          silent and its tail sounds over the next shot's own, as assemble.py's amix
+ *          lays A1. A1's mute / solo / gain_db set its volume.
+ *
+ * V1's eye off hides the pv0/pv1 pair, the grade and the rest poster: black under V2.
+ * While playing, a follower is re-seeked only when it drifts past a threshold. */
+const prog = { v2: null, a1: null, tracks: null };
+
+function progTrack(name) {
+  const t = (prog.tracks || {})[name];
+  return t || {};
+}
+
+function progA1Level() {
+  if (!window.tl || typeof tl.audible !== 'function' || !tl.audible('A1')) return 0;
+  return Math.min(1, Math.pow(10, (Number(progTrack('A1').gain_db) || 0) / 20));
+}
+
+/* A shot whose sound sits away from its picture: its picture element is muted. */
+function a1Moved(seg) {
+  return !!(seg && window.tl && typeof tl.aOff === 'function' && tl.aOff(seg));
+}
+
+function progPause() {
+  [prog.v2, prog.a1].forEach((el) => { if (el && !el.paused) el.pause(); });
+}
+
+function progHide(el) {
+  if (!el) return;
+  if (!el.paused) el.pause();
+  if (el.tagName === 'VIDEO' && el.style.visibility !== 'hidden') el.style.visibility = 'hidden';
+}
+
+/* Keep one follower on `clip` at clip time `clipT`, at `rate`, playing with the monitor
+ * or parked. A file still opening keeps the latest wish and meets it on loadedmetadata. */
+function progFollow(el, clip, clipT, rate, play, slack) {
+  const src = (P.clips[clip] || {}).proxy || '';
+  if (!src) { progHide(el); return false; }
+  if (el.dataset.src !== src) {
+    el.dataset.src = src;
+    el.src = `${src}#t=${Math.max(0, clipT).toFixed(2)}`;
+    el.load();
+  }
+  const lv = liveVideo();
+  const r = ((lv && lv.defaultPlaybackRate) || 1) * rate;
+  el._goal = { src, t: clipT, at: performance.now(), play, rate: r };
+  if (el.readyState < 1) return true;
+  if (Math.abs(el.playbackRate - r) > 1e-3) el.playbackRate = r;
+  const off = Math.abs(el.currentTime - clipT);
+  if (play) {
+    if (el.paused) { el.currentTime = clipT; el.play().catch(() => {}); }
+    else if (off > slack && !el.seeking) el.currentTime = clipT;
+  } else {
+    if (!el.paused) el.pause();
+    if (off > 0.01) el.currentTime = clipT;
+  }
+  return true;
+}
+
+function progMeet(el) {
+  const g = el._goal;
+  if (!g || el.dataset.src !== g.src) return;
+  el.playbackRate = g.rate;
+  el.currentTime = g.t + (g.play ? ((performance.now() - g.at) / 1000) * g.rate : 0);
+  if (g.play && player.playing) el.play().catch(() => {});
+}
+
+/* The overlay on V2 at film time t (the last laid wins), and the next one after it. */
+function v2At(t) {
+  let at = null, next = null;
+  const list = window.tl && typeof tl.overlays === 'function' ? tl.overlays() : [];
+  for (const o of list) {
+    const end = o.at + (o.out - o.in) / (Number(o.speed) || 1);
+    if (t >= o.at - 1e-6 && t < end) at = o;
+    else if (o.at > t && (!next || o.at < next.at)) next = o;
+  }
+  return { at, next };
+}
+
+/* The moved A1 sound under film time t: `{seg, clipT}`, the latest-starting one. */
+function a1At(t) {
+  let start = 0, hit = null;
+  for (const s of segs) {
+    const d = tl.dur(s);
+    const off = tl.aOff(s);
+    if (off) {
+      const from = start + off;
+      if (t >= from && t < from + d) hit = { seg: s, clipT: s.in + (t - from) * speedOf(s) };
+    }
+    start += d;
+  }
+  return hit;
+}
+
+function programSync(filmT) {
+  if (!prog.v2 || !window.tl || !segs.length) { progPause(); return; }
+  const t = filmT == null ? (tl.state.playhead || 0) : filmT;
+  const proposal = window.tlLanes && typeof tlLanes.mode === 'function' && tlLanes.mode() === 'proposal'
+    && !player.playing;
+  // V1's eye: the pair, the grade and the rest poster go dark; V2 still draws over black.
+  const v1 = proposal || progTrack('V1').eye !== false ? '' : 'hidden';
+  ['#pv0', '#pv1', '#gradeCanvas', '#monPoster'].forEach((s) => {
+    const el = $(s);
+    if (el && el.style.visibility !== v1) el.style.visibility = v1;
+  });
+  const play = player.playing;
+  const { at: o, next } = proposal || progTrack('V2').eye === false ? { at: null, next: null } : v2At(t);
+  if (o) {
+    const spd = Number(o.speed) || 1;
+    if (progFollow(prog.v2, o.clip, o.in + (t - o.at) * spd, spd, play, 0.2)) prog.v2.style.visibility = '';
+  } else {
+    progHide(prog.v2);
+    if (next) progFollow(prog.v2, next.clip, next.in, Number(next.speed) || 1, false, 0);
+  }
+  // A1: the live picture is silent when its own sound was moved; the moved sound plays here.
+  const at = player.playing && segs[player.idx] ? player.idx : (tl.shotAt(t) || {}).index;
+  const lv = liveVideo();
+  if (lv && segs[at] && !proposal) {
+    const mute = a1Moved(segs[at]);
+    if (lv.muted !== mute) lv.muted = mute;
+  }
+  const hit = proposal ? null : a1At(t);
+  if (hit) {
+    const lvl = progA1Level();
+    if (Math.abs(prog.a1.volume - lvl) > 1e-3) prog.a1.volume = lvl;
+    progFollow(prog.a1, hit.seg.clip, hit.clipT, speedOf(hit.seg), play, 0.12);
+  } else progHide(prog.a1);
+}
+
+function programInit() {
+  prog.v2 = $('#pvV2');
+  prog.a1 = $('#pvA1');
+  if (!prog.v2 || !prog.a1) return;
+  prog.tracks = tl.tracks();
+  // laid out always and hidden by visibility: a layer that stays composited presents
+  // its sought frame the moment it is shown (display:none dropped the frame callback)
+  prog.v2.style.display = 'block';
+  prog.v2.style.visibility = 'hidden';
+  [prog.v2, prog.a1].forEach((el) => {
+    el.dataset.src = '';
+    el.addEventListener('loadedmetadata', () => progMeet(el));
+  });
+  tl.on('playhead', (ev) => programSync(ev && ev.t));
+  tl.on('tracks', (ev) => { prog.tracks = (ev && ev.tracks) || tl.tracks(); programSync(); });
+  tl.on('change', () => programSync());
 }
 
 function toggleCut() {
@@ -1359,6 +1519,7 @@ function advance() {
     player.playing = false;
     if (bed.el) bed.el.pause();
     cancelAnimationFrame(player.raf);
+    progPause();
     screenMsg('');
     if (!player.single) { sel = 0; player.idx = -1; paint(); }   // the end: space restarts
     paintTransport();
@@ -1370,7 +1531,7 @@ function advance() {
   paint();
   const nv = liveVideo();
   arm(nv, segs[next]);          // normally armed already; re-arming survives edits made mid-play
-  nv.muted = false;
+  nv.muted = a1Moved(segs[next]);
   showLive();
   const go = () => {
     if (g !== player.gen || !player.playing) return;
@@ -3305,6 +3466,7 @@ async function boot() {
   });
   tl.on('change', renderInspector);           // a trim changes the header; an undo the why
   tl.on('playhead', () => { if (!player.playing) restSoon(); });
+  programInit();                              // V2 and moved A1 sound on the Program
   $('#inspector').addEventListener('click', onInspectorClick);
   // The Bin's tabs and "more found ▸" work from the first paint: bound after the awaits
   // below, a click in the first second (the board drawn, the jobs and prices still
