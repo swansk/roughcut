@@ -180,7 +180,8 @@ def test_off_is_the_identity_byte_for_byte(project, colour_dir, tmp_path):
     _render(_edl(TWO_SHOTS), tmp_path / "plain.json", plain, project,
             colour_dir, tmp_path / "parts_plain")
     assert _video_md5(plain) == _video_md5(auto) != _video_md5(off)
-    assert (tmp_path / "parts_plain" / "part_000.cube").exists()
+    # a balance alone is three 1D tables (`colour.balance_lutrgb`), not a 33³ cube
+    assert not (tmp_path / "parts_plain" / "part_000.cube").exists()
 
 
 def _hlg_clip(path: Path) -> None:
