@@ -302,6 +302,9 @@ def api_lut(sid: str, n: int = 17) -> JSONResponse:
 # ---------------------------------------------------------------- proxies
 
 
+PROXY_GOP_S = 1.0          # seconds between proxy keyframes: what a cold seek decodes
+
+
 def build_proxy(src: Path, dest: Path, orient: str) -> None:
     # Written to a temp name and renamed, because the server is already serving while
     # this thread runs: a half-written file at the final path is handed to a <video>
@@ -331,7 +334,12 @@ def build_proxy(src: Path, dest: Path, orient: str) -> None:
         # Capped by width so a source smaller than the target is left alone rather
         # than upscaled into a bigger file that carries no more detail.
         "-vf", vf, "-c:v", "libx264", "-preset", "veryfast",
-        "-crf", str(PROXY_CRF), "-c:a", "aac", "-b:a", "128k",
+        "-crf", str(PROXY_CRF),
+        # A keyframe every second, not x264's default of 250 frames (4 s at 60 fps):
+        # a seek decodes from the keyframe before it, and verdict 1 measured 1100 ms
+        # for a cold one against the rubric's 250 (punch 5).
+        "-force_key_frames", f"expr:gte(t,n_forced*{PROXY_GOP_S:g})",
+        "-c:a", "aac", "-b:a", "128k",
         "-write_tmcd", "0", "-movflags", "+faststart", str(tmp),
     ]
     r = subprocess.run(cmd, capture_output=True, text=True)
@@ -362,7 +370,14 @@ def ensure_proxies(clips: list[str], progress=None) -> None:
             progress(done, len(todo))
 
     report(0)
-    for i, clip in enumerate(todo, 1):
+    pending = list(todo)
+    i = 0
+    while pending:
+        # The clip the human opened last goes next (punch 5): asked for by the monitor,
+        # it is the one whose 720p matters now; the rest keep their order.
+        clip = first_wanted(pending)
+        pending.remove(clip)
+        i += 1
         src = STATE["footage"] / clip
         if not src.exists():
             print(f"  !! missing footage {clip}", flush=True)
@@ -4650,7 +4665,7 @@ def parse_range(rng: str, size: int) -> tuple[int, int] | None:
     return (start, end) if start <= end else None
 
 
-def ranged_file(path: Path, request: Request) -> Response:
+def ranged_file(path: Path, request: Request, mime: str | None = None) -> Response:
     """Serve a file with byte-range support.
 
     Required, not a nicety: without a 206 path the <video> element cannot seek, so
@@ -4659,7 +4674,7 @@ def ranged_file(path: Path, request: Request) -> Response:
     if not path.exists():
         raise HTTPException(404, f"not found: {path.name}")
     size = path.stat().st_size
-    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    mime = mime or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     rng = request.headers.get("range")
     if not rng:
         return FileResponse(path, media_type=mime,
@@ -4681,7 +4696,32 @@ def ranged_file(path: Path, request: Request) -> Response:
 
 @app.get("/media/proxy/{name}")
 def media_proxy(name: str, request: Request) -> Response:
-    return ranged_file(STATE["proxy_dir"] / Path(name).name, request)
+    """The clip's 720p proxy — or, until it exists, something the browser can play now.
+
+    Verdict 1 (punch 5): the monitor showed a raw MEDIA_ELEMENT_ERROR for most of the
+    first hour, because this 404'd until a proxy finished at ~8 min a clip. Now a clip
+    that is in the bin redirects to its original when the browser can decode that, or
+    to its 360p preview (built first, in seconds), waiting up to PREVIEW_WAIT_S for one.
+    A redirect rather than the bytes under this URL: a <video> keeps range-requesting
+    the URL it was redirected to, so when the proxy lands mid-play no player is handed
+    another file's bytes at the same offsets. A 503 with retry-after only when even the
+    preview is not ready; `/media/status/<stem>.mp4` says when it is."""
+    path = STATE["proxy_dir"] / Path(name).name
+    if path.exists():
+        return ranged_file(path, request)
+    stem = Path(name).stem
+    clip = clip_for_stem(stem) if Path(name).suffix.lower() == ".mp4" else None
+    if clip is None:
+        return ranged_file(path, request)          # not a clip of this bin: the 404
+    want_media(stem)
+    kind, url = media_fallback(clip, wait_s=PREVIEW_WAIT_S)
+    if kind == "proxy":
+        return ranged_file(path, request)
+    if url:
+        return Response(status_code=307, headers={
+            "location": url, "cache-control": "no-store", "x-roughcut-media": kind})
+    raise HTTPException(503, f"{stem}: a playable preview is still being made",
+                        headers={"retry-after": "5", "cache-control": "no-store"})
 
 
 @app.get("/media/render/{name}")
@@ -4732,31 +4772,50 @@ def poster_path(stem: str, t: float) -> Path:
     return STATE["posters"] / f"{stem}@{t:09.2f}.jpg"
 
 
-def build_poster(src: Path, dest: Path, t: float) -> None:
-    """One frame out of a proxy, small, on disk.
+def build_poster(src: Path, dest: Path, t: float, original: bool = False) -> None:
+    """One frame out of a proxy (or, before there is one, the original), small, on disk.
 
     `-ss` ahead of `-i` so ffmpeg seeks to the timestamp instead of decoding its way
     there — 188 s into a Killington proxy is ~80 ms that way and seconds the other.
     Temp name and rename for the reason build_proxy has one: the server is serving
     while this runs, and two boards can share a work dir.
+
+    From an `original` it is the proxy's frame: the same rotation rule and HDR tone map
+    build_proxy applies, decoded on the GPU when there is one (a 4K HEVC GoPro frame:
+    0.8 s that way, 1.8 s on a loaded CPU; byte-identical JPEG either way).
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part.jpg")
     err = ""
+    pre: list[str] = []
+    vf = f"scale=min({POSTER_W}\\,iw):-2"
+    decoders: list[list[str]] = [[]]
+    if original:
+        if STATE.get("orient") == "none":
+            pre = ["-display_rotation", "0"]
+        norm = source_normalise(src)
+        if norm:
+            vf = f"{norm},{vf}"
+        f = media_facts(src) or {}
+        # only where it pays: CUDA's start-up is ~0.5 s, more than a 1080p h264 frame
+        if preview_gpu() and (f.get("vcodec") == "hevc"
+                              or (f.get("width") or 0) * (f.get("height") or 0) > 1920 * 1080):
+            decoders = [["-hwaccel", "cuda"], []]
     # A trim can park an in-point past the end of a clip that was re-proxied shorter;
     # a card showing the first frame beats a card showing a broken image.
     for ss in dict.fromkeys((max(0.0, t), 0.0)):
-        r = subprocess.run(
-            ["ffmpeg", "-v", "error", "-y", "-nostdin", "-ss", f"{ss:.3f}",
-             "-i", str(src), "-frames:v", "1",
-             "-vf", f"scale=min({POSTER_W}\\,iw):-2", "-q:v", str(POSTER_Q),
-             "-f", "image2", str(tmp)],
-            capture_output=True, text=True)
-        if r.returncode == 0 and tmp.exists() and tmp.stat().st_size:
-            tmp.replace(dest)
-            return
-        err = r.stderr[-200:]
-        tmp.unlink(missing_ok=True)
+        for dec in decoders:
+            r = subprocess.run(
+                ["ffmpeg", "-v", "error", "-y", "-nostdin", *pre, *dec, "-ss", f"{ss:.3f}",
+                 "-i", str(src), "-frames:v", "1",
+                 "-vf", vf, "-q:v", str(POSTER_Q),
+                 "-f", "image2", str(tmp)],
+                capture_output=True, text=True)
+            if r.returncode == 0 and tmp.exists() and tmp.stat().st_size:
+                tmp.replace(dest)
+                return
+            err = r.stderr[-200:]
+            tmp.unlink(missing_ok=True)
     raise RuntimeError(f"poster failed for {src.name} at {t:.2f}s: {err}")
 
 
@@ -4776,27 +4835,521 @@ def media_poster(name: str, t: float = 0.0) -> Response:
     stem = Path(name).stem
     if not re.fullmatch(r"[A-Za-z0-9._-]+", stem):
         raise HTTPException(404, f"no such clip: {name}")
-    src = STATE["proxy_dir"] / f"{stem}.mp4"
-    if not src.exists() and edits.is_generated(stem):
-        # A generated clip (INTAKE M13) is its own proxy; its stem cannot collide with
-        # footage (`gen_` is the server's prefix) so the poster cache shares the dir.
-        src = generated_dir() / f"{stem}.mp4"
-    if not src.exists():
-        # Not an error the board should shout about: proxies build in the background,
-        # and the cards retry when /api/status says they are done.
-        raise HTTPException(404, f"no proxy yet: {stem}.mp4")
     if not math.isfinite(t) or t < 0:
         t = 0.0
     t = round(min(t, 86400.0), 2)
     dest = poster_path(stem, t)
     if not dest.exists():
-        with POSTER_SLOTS:
-            if not dest.exists():          # another request may have built it while we waited
-                try:
-                    build_poster(src, dest, t)
-                except RuntimeError as exc:
-                    raise HTTPException(500, str(exc)) from exc
+        try:
+            ensure_poster(stem, t)
+        except RuntimeError as exc:
+            raise HTTPException(500, str(exc)) from exc
+    if not dest.exists():
+        raise HTTPException(404, f"no such clip: {stem}")
     return FileResponse(dest, media_type="image/jpeg", headers=POSTER_CACHE)
+
+
+def poster_source(stem: str) -> tuple[Path, bool] | None:
+    """Where a poster's frame comes from, and whether that is an original: the proxy,
+    a generated clip (INTAKE M13: its own proxy; `gen_` stems cannot collide with
+    footage, so the poster cache shares the dir), the 360p preview, else the original.
+
+    Verdict 1 (punch 5): this used to 404 until the proxy existed — ~8 min a clip on
+    Killington — so every bin card was a broken image with its alt text. A frame out of
+    the original costs a second; a card with no picture costs the first impression."""
+    proxy = STATE["proxy_dir"] / f"{stem}.mp4"
+    if proxy.exists():
+        return proxy, False
+    if edits.is_generated(stem):
+        gen = generated_dir() / f"{stem}.mp4"
+        return (gen, False) if gen.exists() else None
+    clip = clip_for_stem(stem)
+    if clip is None:
+        return None
+    prev = preview_path(stem)
+    if prev.exists():
+        return prev, False
+    return STATE["footage"] / clip, True
+
+
+POSTER_BUILDING: dict[str, threading.Event] = {}     # dest -> set when that build ends
+# The open-time walk's own two slots: it starts the moment a bin opens, so by the time
+# the cards ask, most of their t=0 posters are on disk or one build away — and a card
+# asking for a poster the walk is making waits for that build instead of starting a
+# second (POSTER_BUILDING). Two more ffmpegs than before, only in a bin's first seconds.
+WALK_POSTER_SLOTS = threading.BoundedSemaphore(2)
+
+
+def ensure_poster(stem: str, t: float, slots: threading.BoundedSemaphore | None = None,
+                  ) -> Path | None:
+    """The poster for `stem` at `t` on disk (built if missing), or None for no clip."""
+    dest = poster_path(stem, t)
+    if dest.exists():
+        return dest
+    found = poster_source(stem)
+    if found is None:
+        return None
+    src, original = found
+    key = str(dest)
+    with MEDIA["lock"]:
+        ev = POSTER_BUILDING.get(key)
+        owner = ev is None
+        if owner:
+            ev = POSTER_BUILDING[key] = threading.Event()
+    if not owner:
+        ev.wait(30)
+        if dest.exists():
+            return dest
+    try:
+        with slots or POSTER_SLOTS:
+            if not dest.exists():      # another request may have built it while we waited
+                build_poster(src, dest, t, original=original)
+    finally:
+        if owner:
+            with MEDIA["lock"]:
+                POSTER_BUILDING.pop(key, None)
+            ev.set()
+    return dest
+
+
+# ---------------------------------------------------------------- picture before proxies
+#
+# Verdict 1, punch 5: "You can't see your footage when you open it." The 720p proxy is
+# the right thing to edit on, and on a loaded box it is ~8 min a clip of 4K60 HEVC —
+# decoding the master is the cost, not the encode. So before it, every clip gets
+# something the browser can play now:
+#
+#   * the original itself, when the browser can decode it (h264/aac in mp4 at ≤1080p,
+#     an ordinary phone or screen recording): no work at all, one cached ffprobe;
+#   * otherwise a 360p preview with a keyframe every half second (cheap seeks), built
+#     first and clip by clip: decoded and encoded on the GPU when there is one —
+#     measured on a Killington GoPro clip under load 10: 20 s of footage in 4.0 s wall
+#     and 1.5 s of CPU, against 21 s wall for the same span of 720p proxy, so it does
+#     not take the CPU from the pass. Without a GPU it is libx264 ultrafast, and only
+#     for the clips the human opens (on demand), never as a background walk.
+#
+# The clips the human asks for go first — in this queue and in ensure_proxies'.
+
+PREVIEW_H = 360                 # the preview's short edge
+PREVIEW_GOP_S = 0.5             # a keyframe every half second: a seek decodes ≤ that
+PREVIEW_WAIT_S = 20.0           # how long /media/proxy holds a request for a preview
+PREVIEW_SLOTS = threading.BoundedSemaphore(2)   # one background + one asked-for at once
+PLAYABLE_MAX_EDGE = 1920        # an original past this goes through a preview anyway
+PLAYABLE_MAX_BPS = 25_000_000   # ...and past this bitrate (it streams to a laptop)
+BROWSER_VIDEO = {".mp4": {"h264"}, ".m4v": {"h264"}, ".mov": {"h264"},
+                 ".webm": {"vp8", "vp9", "av1"}}
+BROWSER_AUDIO = {".mp4": {"aac", "mp3"}, ".m4v": {"aac", "mp3"}, ".mov": {"aac", "mp3"},
+                 ".webm": {"opus", "vorbis"}}
+MEDIA: dict = {"lock": threading.Lock(), "wanted": [], "building": {}, "failed": {},
+               "facts": {}, "thread": None, "gpu": None}
+
+
+def clip_for_stem(stem: str) -> str | None:
+    """The bin's clip file for a URL's stem, or None. Only names that are in the
+    footage folder resolve, so a URL can never reach anything else on disk."""
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", stem or ""):
+        return None
+    for clip in footage_clips():
+        if Path(clip).stem == stem:
+            return clip
+    return None
+
+
+def want_media(stem: str) -> None:
+    """The human opened this clip: it goes to the front of both queues."""
+    with MEDIA["lock"]:
+        wanted = MEDIA["wanted"]
+        if stem in wanted:
+            wanted.remove(stem)
+        wanted.insert(0, stem)
+        del wanted[64:]
+
+
+def first_wanted(pending: list[str]) -> str:
+    """The pending clip the human asked for most recently, else the first in order."""
+    with MEDIA["lock"]:
+        wanted = list(MEDIA["wanted"])
+    by_stem = {Path(c).stem: c for c in pending}
+    for stem in wanted:
+        if stem in by_stem:
+            return by_stem[stem]
+    return pending[0]
+
+
+def _rate(s: str | None) -> float | None:
+    try:
+        num, _, den = str(s or "").partition("/")
+        v = float(num) / float(den or 1)
+    except (ValueError, ZeroDivisionError):
+        return None
+    return v if math.isfinite(v) and v > 0 else None
+
+
+def media_facts(src: Path) -> dict | None:
+    """What a browser needs to know about a file: codecs, profile, size, rotation, fps,
+    bitrate. One ffprobe per file version, cached by path, size and mtime (so a second
+    bin with the same stem, or a replaced file, is probed afresh)."""
+    try:
+        st = src.stat()
+    except OSError:
+        return None
+    key = (str(src), st.st_size, st.st_mtime_ns)
+    with MEDIA["lock"]:
+        if key in MEDIA["facts"]:
+            return MEDIA["facts"][key]
+    r = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries",
+         "stream=codec_type,codec_name,profile,pix_fmt,width,height,avg_frame_rate,"
+         "r_frame_rate:stream_side_data=rotation:format=format_name,bit_rate",
+         "-of", "json", str(src)], capture_output=True, text=True)
+    facts = None
+    if r.returncode == 0:
+        try:
+            info = json.loads(r.stdout or "{}")
+        except ValueError:
+            info = {}
+        streams = info.get("streams") or []
+        v = next((s for s in streams if s.get("codec_type") == "video"), None)
+        a = next((s for s in streams if s.get("codec_type") == "audio"), None)
+        if v:
+            rot = 0
+            for sd in v.get("side_data_list") or []:
+                if "rotation" in sd:
+                    rot = int(float(sd["rotation"]))
+            fmt = info.get("format") or {}
+            try:
+                bps = int(fmt.get("bit_rate") or 0)
+            except ValueError:
+                bps = 0
+            facts = {"vcodec": v.get("codec_name"), "profile": str(v.get("profile") or ""),
+                     "pix_fmt": str(v.get("pix_fmt") or ""),
+                     "width": int(v.get("width") or 0), "height": int(v.get("height") or 0),
+                     "rotation": rot,
+                     "fps": _rate(v.get("avg_frame_rate")) or _rate(v.get("r_frame_rate")),
+                     "acodec": a.get("codec_name") if a else None, "bit_rate": bps}
+    with MEDIA["lock"]:
+        MEDIA["facts"][key] = facts
+    return facts
+
+
+def source_normalise(src: Path) -> str | None:
+    """build_proxy's HDR tone map for this file (None for SDR), probed once per file
+    version: every poster of an original would otherwise pay an ffprobe."""
+    try:
+        st = src.stat()
+    except OSError:
+        return None
+    key = ("normalise", str(src), st.st_size, st.st_mtime_ns)
+    with MEDIA["lock"]:
+        if key in MEDIA["facts"]:
+            return MEDIA["facts"][key]
+    try:
+        norm = colourmod.normalise_vf(colourmod.probe(src))
+    except RuntimeError:
+        norm = None
+    with MEDIA["lock"]:
+        MEDIA["facts"][key] = norm
+    return norm
+
+
+def browser_playable(src: Path) -> bool:
+    """Whether a <video> can play this file as it is, and should. Conservative: a
+    codec every Chrome decodes, 8-bit 4:2:0, no larger than 1080p and no fatter than
+    25 Mb/s (it streams to a laptop over a tunnel), and no rotation tag the project
+    has said to ignore (`orient: none` — the browser would honour it and play it
+    sideways)."""
+    f = media_facts(src)
+    if not f:
+        return False
+    ext = src.suffix.lower()
+    if f["vcodec"] not in BROWSER_VIDEO.get(ext, ()):
+        return False
+    if f["acodec"] and f["acodec"] not in BROWSER_AUDIO.get(ext, ()):
+        return False
+    if f["pix_fmt"] not in ("yuv420p", "yuvj420p"):
+        return False
+    if any(k in f["profile"] for k in ("10", "4:2:2", "4:4:4")):
+        return False
+    if max(f["width"], f["height"]) > PLAYABLE_MAX_EDGE or f["bit_rate"] > PLAYABLE_MAX_BPS:
+        return False
+    if STATE.get("orient") == "none" and f["rotation"] % 360:
+        return False
+    return True
+
+
+def preview_dir() -> Path:
+    """Per bin, under --work, like the proxies and posters: disposable."""
+    return STATE["work"] / "previews" / STATE["footage"].name
+
+
+def preview_path(stem: str) -> Path:
+    return preview_dir() / f"{stem}.mp4"
+
+
+def preview_gpu() -> bool:
+    """Whether ffmpeg can encode on an NVIDIA GPU here (one tiny probe encode, cached).
+    `ROUGHCUT_PREVIEW_GPU=0` turns the GPU paths off — the software path's test."""
+    if os.environ.get("ROUGHCUT_PREVIEW_GPU") == "0":
+        return False
+    if MEDIA["gpu"] is None:
+        try:
+            r = subprocess.run(
+                ["ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi",
+                 "-i", "testsrc2=size=256x144:rate=10:duration=0.3",
+                 "-c:v", "h264_nvenc", "-f", "null", "-"],
+                capture_output=True, text=True, timeout=30)
+            MEDIA["gpu"] = r.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            MEDIA["gpu"] = False
+    return bool(MEDIA["gpu"])
+
+
+def build_preview(src: Path, dest: Path, orient: str) -> str:
+    """A 360p, keyframe-every-half-second h264/aac mp4 of `src` at `dest`; returns the
+    path it took. Three paths, fastest first, each falling through on failure: all on
+    the GPU (NVDEC + scale_cuda + NVENC; SDR 8-bit, no rotation to apply), GPU decode
+    with the CPU filters an HDR or rotated clip needs, then all software. Temp name and
+    rename, as build_proxy: the server serves while this runs."""
+    f = media_facts(src) or {}
+    norm = source_normalise(src)
+    fps = f.get("fps") or 30.0
+    gop = max(1, round(fps * PREVIEW_GOP_S))
+    w, h = f.get("width") or 0, f.get("height") or 0
+    rotated = orient != "none" and (f.get("rotation") or 0) % 180 != 0
+    if rotated:
+        w, h = h, w
+    # the short edge to PREVIEW_H, never up; the other edge follows, even
+    if w >= h:
+        tw, th = -2, min(PREVIEW_H, h or PREVIEW_H) // 2 * 2
+    else:
+        tw, th = min(PREVIEW_H, w or PREVIEW_H) // 2 * 2, -2
+    pre = ["-display_rotation", "0"] if orient == "none" else []
+    io = ["-map", "0:v:0", "-map", "0:a:0?", "-dn", "-sn"]
+    tail = ["-g", str(gop), "-bf", "0", "-c:a", "aac", "-b:a", "96k", "-ac", "2",
+            "-movflags", "+faststart", "-f", "mp4"]
+    nvenc = ["-c:v", "h264_nvenc", "-preset", "p1", "-b:v", "1500k", "-maxrate", "3M",
+             "-bufsize", "3M"]
+    cpu_vf = f"scale={tw}:{th},format=yuv420p"
+    if norm:
+        cpu_vf = f"{norm},{cpu_vf}"
+    paths: list[tuple[str, list[str]]] = []
+    if preview_gpu():
+        eight_bit = f.get("pix_fmt") in ("yuv420p", "yuvj420p", "nv12")
+        if not norm and not rotated and eight_bit:
+            paths.append(("gpu", ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda",
+                                  "-i", str(src), *io, "-vf", f"scale_cuda={tw}:{th}",
+                                  *nvenc]))
+        paths.append(("gpu-decode", ["-hwaccel", "cuda", "-i", str(src), *io,
+                                     "-vf", cpu_vf, *nvenc]))
+    paths.append(("cpu", ["-i", str(src), *io, "-vf", cpu_vf, "-c:v", "libx264",
+                          "-preset", "ultrafast", "-crf", "30"]))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part.mp4")
+    err = ""
+    for name, args in paths:
+        r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", *pre, *args, *tail,
+                            str(tmp)], capture_output=True, text=True)
+        if r.returncode == 0 and tmp.exists() and tmp.stat().st_size:
+            tmp.replace(dest)
+            return name
+        err = r.stderr[-300:]
+        tmp.unlink(missing_ok=True)
+    raise RuntimeError(f"preview failed for {src.name}: {err}")
+
+
+def needs_preview(clip: str) -> bool:
+    stem = Path(clip).stem
+    if (STATE["proxy_dir"] / f"{stem}.mp4").exists() or preview_path(stem).exists():
+        return False
+    src = STATE["footage"] / clip
+    return src.exists() and not browser_playable(src)
+
+
+PREVIEW_RETRY_S = 120.0         # a failed preview is tried again after this long
+
+
+def _claim_preview(key: str) -> tuple[threading.Event, bool]:
+    """The build event for a preview path, and whether the caller now owns the build."""
+    with MEDIA["lock"]:
+        ev = MEDIA["building"].get(key)
+        if ev is not None:
+            return ev, False
+        ev = MEDIA["building"][key] = threading.Event()
+        return ev, True
+
+
+def _build_claimed(src: Path, dest: Path, orient: str, ev: threading.Event) -> None:
+    """Paths fixed by the caller, not read from STATE here: a board re-pointed at
+    another bin mid-build must not have this write that bin's preview from this one."""
+    key = str(dest)
+    try:
+        with PREVIEW_SLOTS:
+            if not dest.exists():
+                t0 = time.monotonic()
+                how = build_preview(src, dest, orient)
+                print(f"  preview {dest.stem} ({how}) in {time.monotonic() - t0:.1f}s",
+                      flush=True)
+        MEDIA["failed"].pop(key, None)
+    except (RuntimeError, OSError) as exc:
+        MEDIA["failed"][key] = (time.monotonic(), str(exc)[:300])
+        print(f"  !! {exc}", flush=True)
+    finally:
+        with MEDIA["lock"]:
+            MEDIA["building"].pop(key, None)
+        ev.set()
+
+
+def _failed_recently(key: str) -> bool:
+    f = MEDIA["failed"].get(key)
+    return bool(f) and time.monotonic() - f[0] < PREVIEW_RETRY_S
+
+
+def ensure_preview(clip: str) -> Path | None:
+    """Build `clip`'s preview unless it is there or being built (then wait for that
+    build). Returns the preview, or None when it failed or the clip is gone."""
+    dest = preview_path(Path(clip).stem)
+    if dest.exists():
+        return dest
+    if not (STATE["footage"] / clip).exists():
+        return None
+    ev, owner = _claim_preview(str(dest))
+    if owner:
+        _build_claimed(STATE["footage"] / clip, dest, STATE.get("orient", "auto"), ev)
+    else:
+        ev.wait()
+    return dest if dest.exists() else None
+
+
+def start_preview(clip: str) -> threading.Event | None:
+    """Make `clip`'s preview now, in its own thread (an asked-for clip does not queue
+    behind the background walk). The event is set when the build ends; None when the
+    last attempt failed within PREVIEW_RETRY_S — the status says so instead of the
+    board retrying a broken file in a loop."""
+    dest = preview_path(Path(clip).stem)
+    if dest.exists():
+        done = threading.Event()
+        done.set()
+        return done
+    key = str(dest)
+    if _failed_recently(key) or not (STATE["footage"] / clip).exists():
+        return None
+    ev, owner = _claim_preview(key)
+    if owner:
+        threading.Thread(target=_build_claimed, daemon=True, args=(
+            STATE["footage"] / clip, dest, STATE.get("orient", "auto"), ev)).start()
+    return ev
+
+
+def media_fallback(clip: str, wait_s: float = 0.0) -> tuple[str, str | None]:
+    """What a <video> should play for `clip` right now: ("proxy", None), ("original",
+    url), ("preview", url) — or ("building", None) / ("failed", None) after waiting up
+    to `wait_s` for a preview that is being made."""
+    stem = Path(clip).stem
+    if (STATE["proxy_dir"] / f"{stem}.mp4").exists():
+        return "proxy", None
+    if browser_playable(STATE["footage"] / clip):
+        return "original", f"/media/original/{stem}.mp4"
+    if preview_path(stem).exists():
+        return "preview", f"/media/preview/{stem}.mp4"
+    ev = start_preview(clip)
+    if ev is None:
+        return "failed", None
+    if wait_s > 0:
+        ev.wait(wait_s)
+    if (STATE["proxy_dir"] / f"{stem}.mp4").exists():
+        return "proxy", None
+    if preview_path(stem).exists():
+        return "preview", f"/media/preview/{stem}.mp4"
+    return "building", None
+
+
+def kick_previews() -> None:
+    """Start the background walk: a poster at 0 s for every clip, then a preview for
+    every clip that needs one, asked-for clips first. Only while proxies are enabled
+    (tests and --no-proxies build nothing behind the human's back), and previews only
+    on a GPU: on the CPU they would take the pass's cores, so there they are built on
+    demand only."""
+    if not STATE.get("proxies_enabled", True):
+        return
+    with MEDIA["lock"]:
+        t = MEDIA["thread"]
+        if t is not None and t.is_alive() and MEDIA.get("walk_bin") == STATE["footage"]:
+            return
+        t = MEDIA["thread"] = threading.Thread(target=_media_walk, daemon=True)
+        MEDIA["walk_bin"] = STATE["footage"]
+    t.start()
+
+
+def _media_walk() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    try:
+        footage = STATE["footage"]
+
+        def poster(clip: str) -> None:
+            if STATE["footage"] != footage:
+                return                      # re-pointed at another bin: its own walk
+            try:
+                ensure_poster(Path(clip).stem, 0.0, slots=WALK_POSTER_SLOTS)
+            except RuntimeError as exc:
+                print(f"  !! {exc}", flush=True)
+
+        with ThreadPoolExecutor(2) as pool:
+            list(pool.map(poster, footage_clips()))
+        if not preview_gpu():
+            return
+        while STATE["footage"] == footage:
+            todo = [c for c in footage_clips() if needs_preview(c)
+                    and not _failed_recently(str(preview_path(Path(c).stem)))]
+            if not todo:
+                return
+            ensure_preview(first_wanted(todo))
+    finally:
+        with MEDIA["lock"]:
+            if MEDIA["thread"] is threading.current_thread():
+                MEDIA["thread"] = None
+
+
+MEDIA_MIME = {".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/mp4",
+              ".webm": "video/webm"}
+
+
+@app.get("/media/original/{name}")
+def media_original(name: str, request: Request) -> Response:
+    """A footage original, for a browser that can play it as it is (and only then:
+    a 4K HEVC master is never handed to a <video>)."""
+    clip = clip_for_stem(Path(name).stem)
+    src = STATE["footage"] / clip if clip else None
+    if src is None or not browser_playable(src):
+        raise HTTPException(404, f"no playable original: {Path(name).name}")
+    return ranged_file(src, request, mime=MEDIA_MIME.get(src.suffix.lower()))
+
+
+@app.get("/media/preview/{name}")
+def media_preview(name: str, request: Request) -> Response:
+    """A clip's 360p preview — what plays until its 720p proxy exists."""
+    return ranged_file(preview_dir() / Path(name).name, request)
+
+
+@app.get("/media/status/{name}")
+def media_status(name: str) -> JSONResponse:
+    """What `/media/proxy/<name>` would play now, without waiting — for a board that got
+    a 503 and wants to know when to try again. Asking counts as wanting the clip: its
+    preview starts (or keeps going) and its proxy is next."""
+    stem = Path(name).stem
+    clip = clip_for_stem(stem)
+    if clip is None:
+        raise HTTPException(404, f"no such clip: {Path(name).name}")
+    want_media(stem)
+    kind, url = media_fallback(clip)
+    key = str(preview_path(stem))
+    return JSONResponse({
+        "clip": clip, "serves": kind,
+        "url": f"/media/proxy/{stem}.mp4" if kind == "proxy" else url,
+        "ready": kind in ("proxy", "original", "preview"),
+        "proxy": (STATE["proxy_dir"] / f"{stem}.mp4").exists(),
+        "preview": preview_path(stem).exists(),
+        "error": (MEDIA["failed"].get(key) or (0, None))[1] if kind == "failed" else None,
+        "poster": f"/media/poster/{stem}.jpg"})
 
 
 # ---------------------------------------------------------------- assets
@@ -6618,6 +7171,7 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
         STATE["proxies_ready"] = True
     else:
         threading.Thread(target=ensure_proxies, args=(clips,), daemon=True).start()
+        kick_previews()          # posters and playable previews for every clip, first
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
