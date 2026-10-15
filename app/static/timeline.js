@@ -213,6 +213,7 @@
 
   const PAD = 12;                  // px of canvas before 0:00
   const PAD_R = 72;                // px after the end: room for the total's timecode
+  const PAST_END_S = 3600;         // s the playhead may sit past the film's end (setPlayhead)
   const MIN_LEN = 0.2;             // s — the shortest shot, as nudge() clamps
   const MIN_SPEED = 0.1, MAX_SPEED = 4;    // edits.py's bounds: outside them a speed reads as 1
   const MIN_ZOOM = 0.5, MAX_ZOOM = 4000;   // px per second
@@ -1594,7 +1595,7 @@
     const at = el.view.scrollLeft;
     stripH = lane.clientHeight;
     if (autoFit && vw > 0 && list.length) state.zoom = fitZoom(vw, tot);
-    const width = Math.max(vw, PAD + tot * state.zoom + PAD_R);
+    const width = Math.max(vw, PAD + Math.max(tot, state.playhead || 0) * state.zoom + PAD_R);
     el.canvas.style.width = `${width}px`;
     canvasW = width;
     paintRuler(width);
@@ -1625,7 +1626,7 @@
     el.end.style.left = `${timeToX(tot)}px`;
     el.total.textContent = tc(tot);
     el.root.classList.toggle('tl-empty', !list.length);   // not `.empty`: the board's empty state owns that
-    state.playhead = clamp(state.playhead, 0, tot);
+    state.playhead = clamp(state.playhead, 0, tot + PAST_END_S);   // past the end stays (punch 8)
     positionHead();
     // the scroll as read above, clamped to the new width (no read after the writes)
     state.scrollX = Math.min(at, Math.max(0, width - vw));
@@ -1713,19 +1714,35 @@
   }
 
   /* ------------------------------------------------------------ playhead and view */
+  /* The playhead sits anywhere on the ruler, past the film's end too, as Premiere's does
+   * (verdict 5, punch 8: it was clamped to the end, so `,` / `.` there left no gap) —
+   * up to PAST_END_S past the end, so a stray seek cannot make the canvas absurd. */
+  const headAt = (t) => clamp(Number(t) || 0, 0, total() + PAST_END_S);
+  /* The canvas runs to a playhead past the film's end, so it is drawn and scrolls there. */
+  function reachHead(t) {
+    const need = Math.ceil(timeToX(t) + PAD_R);
+    if (need <= canvasW) return;
+    canvasW = need;
+    el.canvas.style.width = `${need}px`;
+    paintRuler(need);
+  }
+
   function setPlayhead(t, opts = {}) {
-    t = clamp(Number(t) || 0, 0, total());
+    t = headAt(t);
     state.playhead = t;
     if (!el.head) return;
+    if (t > total()) reachHead(t);
     positionHead();
     if (opts.reveal !== false) keepInView(timeToX(t));
     emit('playhead', { t });
   }
 
   function seek(t) {
-    t = clamp(Number(t) || 0, 0, total());
+    t = headAt(t);
     setPlayhead(t);
-    const at = shotAt(t);
+    // past the film's end there is nothing to cue: the monitor's cue of the last frame
+    // would put the playhead back at the end
+    const at = t > total() + 1e-9 ? null : shotAt(t);
     if (at && hooks.cue) {
       inCue = true;
       try { hooks.cue(at.index, at.clipT); } finally { inCue = false; }

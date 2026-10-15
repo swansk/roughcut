@@ -2399,7 +2399,9 @@ function openPickInSource(s) {
   if (!src || !src.v) { playKeep(s); return false; }
   const c = (dock.project.clips().find((x) => x.clip === s.clip)) || P.clips[s.clip];
   if (!c) { toast('this clip is not in the footage folder'); return false; }
-  const a = Math.round(s.start * 1000) / 1000, b = Math.round(s.end * 1000) / 1000;
+  // on the clip's own frames, as a mark made in the Source monitor is (verdict 5, punch 8)
+  const on = (t) => (typeof src.snap === 'function' ? src.snap(t, c) : Math.round(t * 1000) / 1000);
+  const a = on(s.start), b = on(s.end);
   src.marks[s.clip] = [a, b];
   try { localStorage.setItem('roughcut.ws.marks', JSON.stringify(src.marks)); } catch (e) { /* private mode */ }
   const same = src.clip && src.clip.clip === s.clip;

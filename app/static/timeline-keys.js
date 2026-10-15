@@ -704,13 +704,22 @@
       say(`laid ${stem(s.clip)} ${tl.fmt(s.in)}–${tl.fmt(s.out)} on ${track} at ${tl.tc(at)} · from ${s.from}`);
       return true;
     }
-    const id = kind === 'insert' ? tl.insertAt(seg, at) : tl.overwrite(seg, at);
-    if (id == null) { say(`could not ${kind} that`); return true; }
-    chosen = true;                   // the editor put it there
-    const end = tl.filmStart(id) + tl.dur(tl.byId(id));
-    tl.seek(clamp(end, 0, tl.total()));
-    tl.setPlayhead(clamp(end, 0, tl.total()));
-    say(`${kind === 'insert' ? 'inserted' : 'overwrote with'} ${stem(s.clip)} ${tl.fmt(s.in)}–${tl.fmt(s.out)} at ${tl.tc(at)} · from ${s.from}`);
+    const landed = (id, where) => {
+      if (id == null) { say(`could not ${kind} that`); return; }
+      chosen = true;                 // the editor put it there
+      const end = tl.filmStart(id) + tl.dur(tl.byId(id));
+      tl.seek(clamp(end, 0, tl.total()));
+      tl.setPlayhead(clamp(end, 0, tl.total()));
+      say(`${kind === 'insert' ? 'inserted' : 'overwrote with'} ${stem(s.clip)} ${tl.fmt(s.in)}–${tl.fmt(s.out)} at ${tl.tc(where)} · from ${s.from}`);
+    };
+    // The playhead past the film's end (verdict 5, punch 8): the clip lands there, the
+    // time between the end and it a gap on V1, as Premiere leaves one (tl.placeAt).
+    const ph = Math.max(0, tl.state.playhead || 0);
+    if (tl.placeAt && ph > tl.total() + tl.frame() / 2) {
+      tl.placeAt(seg, ph, kind).then((id) => landed(id, ph));
+      return true;
+    }
+    landed(kind === 'insert' ? tl.insertAt(seg, at) : tl.overwrite(seg, at), at);
     return true;
   }
 
