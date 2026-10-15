@@ -919,9 +919,17 @@ def apply_sequence(edl: dict, body: dict) -> None:
                 edl.pop("tracks", None)
         if "overlays" in body:
             ovs = tracksmod.validate_overlays(body["overlays"], edits.validate_speed)
-            for o in ovs:
+            for o, raw in zip(ovs, body["overlays"] or []):
                 if not o["id"]:
                     o["id"] = segment_id()
+                # a V2+ clip's own Effect Controls (verdict 6, punch 8), by V1's rule;
+                # the render and the Program composite them over what is under it
+                try:
+                    c = clean_controls(raw.get("controls"))
+                except TypeError as exc:
+                    raise ValueError(f"overlay controls: {exc}")
+                if c:
+                    o["controls"] = c
             if ovs:
                 edl["overlays"] = ovs
             else:
@@ -5439,7 +5447,7 @@ REVIEW_S_PER_CUT_S = {"preview": 0.22, "delivery": 0.53, "youtube": 0.25, "match
 EXPORT_PRESETS = {
     "quick": {"label": "Quick 1080p", "profile": "preview", "mbps": 14.0, "fps": 24000 / 1001,
               "audio_kbps": 192, "ref": (1920, 1080), "max": (1920, 1080), "fixed": True,
-              "about": "H.264 · 1920×1080 at the sequence's frame rate · fast encode, to watch the cut"},
+              "about": "H.264 · 1920×1080 at the sequence's frame rate · fast GPU encode (NVENC) when there is one, to watch the cut"},
     "match": {"label": "Match Sequence", "profile": "match", "mbps": 48.0, "fps": 30000 / 1001,
               "audio_kbps": 320, "ref": (3840, 2160), "max": (8192, 8192), "fixed": False,
               "about": "H.264 · the sequence's own frame size and frame rate · crf 18, medium encode"},
@@ -5448,7 +5456,7 @@ EXPORT_PRESETS = {
                "about": "H.264 · up to 3840×2160 at the sequence's frame rate, never upscaled · slow encode"},
     "youtube": {"label": "YouTube 1080p", "profile": "youtube", "mbps": 16.0, "fps": 30000 / 1001,
                 "audio_kbps": 384, "ref": (1920, 1080), "max": (1920, 1080), "fixed": False,
-                "about": "H.264 · up to 1920×1080 at the sequence's frame rate · AAC 384 kbps"},
+                "about": "H.264 · up to 1920×1080 at the sequence's frame rate · GPU encode (NVENC) when there is one · AAC 384 kbps"},
 }
 # a render made by the film tool (no preset) calibrates the preset of its profile
 PROFILE_PRESET = {"preview": "quick", "match": "match", "delivery": "master",
@@ -5713,7 +5721,11 @@ def _sample_job(preset: str, key: str, scope: procscope.Scope) -> None:
                "--footage", str(STATE["footage"]), "--sidecars", str(STATE["sidecars"]),
                "--assets", str(STATE["assets"]), "--profile", p["profile"],
                "--colour-dir", str(colour_dir()), "--generated-dir", str(generated_dir()),
-               "--parts-dir", str(work / "parts"), "--fps", rate, "-o", str(out)]
+               "--parts-dir", str(work / "parts"), "--fps", rate, "-o", str(out),
+               # every slice at once (verdict 6, punch 7): a slice is a quarter second, so
+               # what it waits on is its ffmpeg's start and seek, not the cores. Measured,
+               # Killington's sample at load ~25: Quick 43 → 12 s, Match 4K 80 → 30 s.
+               "--jobs", str(max(1, len(segs)))]
         t0 = time.time()
         with procscope.active(scope):
             r = subprocess.run(cmd, capture_output=True, text=True,

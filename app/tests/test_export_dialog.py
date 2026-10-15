@@ -548,7 +548,10 @@ def test_a_v3_overlay_composites_inside_the_parts_with_no_second_film_pass(proje
                    check=True, capture_output=True)
     inside = gray(v3_film, 6.0)
     assert np.abs(inside - gray(clip_c, 0.5)).mean() < 8
-    assert np.abs(inside - gray(base_film, 6.0)).mean() > 2 * np.abs(inside - gray(clip_c, 0.5)).mean()
+    # CLIP_B under it is the same testsrc2 half a second away, so V1 differs from C by
+    # ~10.7 here; the Quick render's own error against C is ~5.2 (x264) / ~5.4 (NVENC +
+    # GPU scale, wave 8 RENDER3), which sat right on a 2x margin: 1.5x still tells them apart
+    assert np.abs(inside - gray(base_film, 6.0)).mean() > 1.5 * np.abs(inside - gray(clip_c, 0.5)).mean()
     for t in (5.2, 6.8, 12.0):                             # V1 untouched outside its range
         assert np.abs(gray(v3_film, t) - gray(base_film, t)).mean() < 3, t
     # the film is still CFR at the sequence's rate and the sequence's length

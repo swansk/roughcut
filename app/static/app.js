@@ -1530,6 +1530,37 @@ function a1At(t) {
   return hit;
 }
 
+/* A V2+ clip's own Effect Controls on #pvV2 (verdict 6, punch 8): the CSS V1's layers
+ * take (effects.js `apply`), at `lt` seconds into the clip with its keys evaluated
+ * (linear, held outside; keys win). The element's opacity composites it over V1, as the
+ * render's alpha does. */
+function v2Look(o, lt) {
+  const c = o.controls || {};
+  const keys = c.keys || {};
+  const at = (k, v) => {
+    const ks = keys[k];
+    if (!Array.isArray(ks) || !ks.length) return v;
+    if (lt <= ks[0][0]) return ks[0][1];
+    for (let i = 1; i < ks.length; i++) {
+      const [t0, v0] = ks[i - 1], [t1, v1] = ks[i];
+      if (lt <= t1) return t1 > t0 ? v0 + (v1 - v0) * (lt - t0) / (t1 - t0) : v1;
+    }
+    return ks[ks.length - 1][1];
+  };
+  const pos = c.position || [0.5, 0.5];
+  const x = at('position_x', pos[0]), y = at('position_y', pos[1]);
+  const s = at('scale', c.scale ?? 100), r = at('rotation', c.rotation ?? 0);
+  const op = at('opacity', c.opacity ?? 100);
+  const r4 = (n) => Math.round(n * 1e4) / 1e4;
+  const moved = x !== 0.5 || y !== 0.5 || s !== 100 || r !== 0;
+  const tf = moved ? `translate(${r4((x - 0.5) * 100)}%, ${r4((y - 0.5) * 100)}%) rotate(${r4(r)}deg) scale(${r4(s / 100)})` : '';
+  const opc = op !== 100 ? String(r4(Math.max(0, Math.min(100, op)) / 100)) : '';
+  if (prog.v2._look === `${tf}|${opc}`) return;
+  prog.v2._look = `${tf}|${opc}`;
+  prog.v2.style.transform = tf;
+  prog.v2.style.opacity = opc;
+}
+
 function programSync(filmT) {
   if (!prog.v2 || !window.tl || !segs.length) { progPause(); return; }
   const t = filmT == null ? (tl.state.playhead || 0) : filmT;
@@ -1546,6 +1577,7 @@ function programSync(filmT) {
   if (o) {
     const spd = Number(o.speed) || 1;
     if (progFollow(prog.v2, o.clip, o.in + (t - o.at) * spd, spd, play, 0.2)) prog.v2.style.visibility = '';
+    v2Look(o, t - o.at);
   } else {
     progHide(prog.v2);
     if (next) progFollow(prog.v2, next.clip, next.in, Number(next.speed) || 1, false, 0);
