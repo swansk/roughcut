@@ -85,6 +85,7 @@ def page(live_server, project):
         pg = browser.new_page(viewport={"width": 1280, "height": 900})
         pg.goto(live_server)
         pg.wait_for_selector("#tl .blk")
+        pg.evaluate("dock.open('bin')")   # the workspace opens on Project; these drive its Selects tab
         yield pg
         browser.close()
 
@@ -114,7 +115,7 @@ def test_the_ruler_and_the_total_match_the_seed_edl(page):
     """Two shots of 2 s: the film is 0:04.0 on the ruler's end mark, on the transport,
     and the ruler's labels count the seconds at the fit zoom."""
     assert page.locator("#tl .tl-total").inner_text() == "00:00:04:00"   # timecode (REDESIGN dim 5)
-    assert page.locator("#posTotal").inner_text() == "0:04.0"
+    assert page.locator("#posTotal").inner_text() == tc(4.0)   # the monitors read timecode
     labels = page.evaluate(
         "[...document.querySelectorAll('#tl .tl-ruler .major label')].map(l => l.textContent)")
     assert labels[:5] == ["00:00:00:00", "00:00:01:00", "00:00:02:00", "00:00:03:00",
@@ -229,7 +230,7 @@ def test_a_click_on_the_ruler_cues_the_monitor_paused_at_that_film_time(page):
     assert page.evaluate("player.idx") == 1
     assert not page.evaluate("player.playing")
     assert page.evaluate("tl.state.playhead") == pytest.approx(3.0, abs=0.02)
-    assert page.locator("#pos").inner_text() == "0:03.0"
+    assert page.locator("#pos").inner_text() == tc(3.0)
     assert page.evaluate("document.querySelector('.screen video.live').id") == \
         page.evaluate("liveVideo().id")
     page.wait_for_function(
@@ -267,7 +268,7 @@ def test_set_range_reaches_the_disk_and_undo_redo_walk_it_back_and_forth(page, p
         f"tl.commit(); return c; }}")
     assert changed is True
     assert page.evaluate("segs[0].out") == 3.5
-    assert page.locator("#total").inner_text() == "0:04.5"
+    assert page.locator("#total").inner_text() == tc(4.5)
     assert page.locator("#tl .tl-total").inner_text() == tc(4.5)
     assert page.locator("#undo").get_attribute("title").startswith("undo: trim")
     wait_saved(page)

@@ -84,6 +84,7 @@ def page(live_server, project):
         pg = browser.new_page(viewport={"width": 1280, "height": 900})
         pg.goto(live_server)
         pg.wait_for_selector("#tl .blk")
+        pg.evaluate("dock.open('bin')")   # the workspace opens on Project; these drive its Selects tab
         # the keys module has mounted — its map lives in the `?` overlay now (INTAKE M11),
         # so attached, not visible
         pg.wait_for_selector("#tlKeys", state="attached")
@@ -162,7 +163,7 @@ def test_j_drives_the_monitor_backwards_and_crosses_the_cut(page):
     t = live_time(page)
     assert t < 0.95, f"expected currentTime to have moved back from 1.0, got {t}"
     assert page.evaluate("tl.state.playhead") < 2.95
-    assert page.locator("#pos").inner_text() != "0:03.0"
+    assert page.locator("#pos").inner_text() != tc(3.0)
     page.keyboard.press("j")                # again: stacks
     assert page.evaluate("tlKeys.shuttle.rate") == -2
     # reversing past CLIP_B's in-point lands on CLIP_A's out-point (3.0) and carries on

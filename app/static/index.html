@@ -5,430 +5,473 @@
 <title>Roughcut — cut board</title>
 <link rel="stylesheet" href="/timeline/timeline.css">
 <link rel="stylesheet" href="/fx.css">
-<style>
+<!-- The workspace (redesign wave 1, REDESIGN-GOAL dimension 4): Premiere's editing
+     arrangement — Project top-left, Source and Program monitors across the top, the
+     Timeline along the bottom, Effect Controls down the right — each a titled panel with
+     draggable splitters (sizes kept per browser by /dock.js). One dark, dense theme.
+     The styles live in this page because the server serves the board's files by name
+     and has no route for a separate workspace.css yet (a request to the server's lane). -->
+<style id="workspace-css">
   :root {
-    --bg: #101013; --panel: #17171c; --card: #1e1e25; --card-hi: #26262f;
-    --line: #2e2e38; --text: #e8e8ee; --dim: #9a9aa8; --accent: #6ea8fe;
-    --good: #64d08a; --warn: #e0b050; --bad: #e06a6a;
-    --hd: 64px;                 /* the header's height, kept current by /dock.js */
-    --dock-w: 380px;            /* the dock's width — dragged on its left edge, remembered */
+    --bg: #111112; --panel: #1d1d1f; --head: #252527; --card: #28282b; --card-hi: #313135;
+    --line: #333337; --line-hi: #46464c; --text: #dcdcdf; --dim: #94949c; --faint: #66666e;
+    --accent: #4a9df8; --tc: #4a9df8; --good: #5fcf86; --warn: #e2b14f; --bad: #e46a6a;
+    --hd: 36px;                 /* the app bar's height (plus the CLI banner), kept by /dock.js */
+    --split: 4px;
+    --c-proj: 300px; --c-src: 400px; --c-insp: 330px; --r-top: 470px;   /* /dock.js sets these */
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; overflow: clip; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
-    font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    font: 12px/1.4 "Segoe UI", system-ui, -apple-system, ui-sans-serif, sans-serif;
   }
-  header {
-    position: sticky; top: 0; z-index: 20; background: var(--panel);
-    border-bottom: 1px solid var(--line); padding: 7px 16px;
-    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  }
-  header > button { padding: 5px 11px; }
-  #undo, #redo { min-width: 34px; }
-  #saveState[data-state="saved"], #saveState[data-state="unsaved"]:not([data-late]) { display: none; }
-  #saveState[data-state="failed"] { color: var(--bad); }
-  #makeFilm .dot { color: var(--accent); margin-left: 6px; }
-  .grow { flex: 1; }
   button {
     background: var(--card); color: var(--text); border: 1px solid var(--line);
-    border-radius: 7px; padding: 6px 11px; font: inherit; cursor: pointer;
+    border-radius: 4px; padding: 3px 9px; font: inherit; cursor: pointer; line-height: 18px;
   }
-  button:hover { background: var(--card-hi); }
-  /* No blue button of its own (INTAKE M16, one blue per screen): the one blue element is
-     Next's `is-next`, put on by /flow.js. */
-  button.ghost { border-color: transparent; color: var(--dim); }
+  button:hover { background: var(--card-hi); border-color: var(--line-hi); }
+  button.ghost { border-color: transparent; background: transparent; color: var(--dim); }
+  button.ghost:hover { color: var(--text); }
   button:disabled { opacity: .45; cursor: default; }
-
-  main { display: grid; grid-template-columns: minmax(0,1fr) var(--dock-w); gap: 16px;
-         padding: 16px; align-items: start; }
-  @media (max-width: 1100px) { main { grid-template-columns: minmax(0,1fr); } }
-
-  /* The shot strip (INTAKE M16 I16.4): one panel under the timeline for the selected
-     shot — or, with nothing selected, the film — sized so the header, the picture, the
-     timeline and the strip fit 900 px without the page scrolling. */
-  #inspector { margin-bottom: 10px; }
-  #inspector .shot {
-    display: grid; grid-template-columns: 150px minmax(0,1fr); gap: 10px;
-    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
-    padding: 8px 10px;
+  select, input[type=number], input[type=text], input[type=search] {
+    background: #151517; color: var(--text); border: 1px solid var(--line);
+    border-radius: 4px; padding: 3px 7px; font: inherit;
   }
-  #inspector .none, #inspector .multi {
-    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
-    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
-    padding: 9px 12px; color: var(--dim);
-  }
-  #inspector .multi .count, #inspector .none .totals { color: var(--text);
-                                                       font-variant-numeric: tabular-nums; }
-  #inspector .none select { padding: 3px 6px; font-size: 12px; }
-  #inspector .none .fstrength { display: inline-flex; }
-  #inspector .none [hidden] { display: none; }
-  #inspector .none .fstrength button { border-radius: 0; margin-left: -1px; }
-  #inspector .none .fstrength button:first-child { border-radius: 7px 0 0 7px; }
-  #inspector .none .fstrength button:last-child { border-radius: 0 7px 7px 0; }
-  #inspector button { padding: 3px 9px; font-size: 12px; }
-  #inspector button.on { border-color: var(--accent); color: var(--text); }
-  #inspector .fwarn { color: var(--warn); }
-  /* The picture is a still, not a stream: sixteen live proxies on one board took every
-     connection Chrome had and the monitor played sound over black. */
-  #inspector .poster { width: 100%; border-radius: 6px; background: #000; display: block;
-                       aspect-ratio: 16/9; object-fit: cover; cursor: pointer;
-                       -webkit-user-select: none; user-select: none; }
-  .srow { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-  .srow.top > .dv-res { order: 9; flex-basis: 100%; }
-  .sname { font-weight: 600; font-variant-numeric: tabular-nums; margin-right: 4px; }
-  .lookhost:empty { display: none; }
-  .why { color: var(--dim); margin: 4px 0 2px; min-height: 1.3em; }
-  .why[contenteditable]:focus { outline: 1px solid var(--accent); border-radius: 4px;
-                                color: var(--text); }
-  .why[contenteditable]:empty::before { content: "why this shot — click to write";
-                                        opacity: .5; }
-  .said { color: var(--dim); font-style: italic; white-space: nowrap; overflow: hidden;
-          text-overflow: ellipsis; margin-bottom: 4px; }
-  .warns { display: flex; gap: 12px; flex-wrap: wrap; color: var(--warn); font-size: 12px;
-           margin-bottom: 4px; }
-  .warns[hidden] { display: none; }
-  .srow.ctl select.speed { padding: 3px 6px; font-size: 12px; }
-  .srow.ctl .nudge { display: inline-flex; gap: 4px; }
-  .srow.ctl .nudge[hidden] { display: none; }
-  #inspector .disc { border-color: transparent; color: var(--accent); background: transparent; }
-  #inspector .disc[hidden] { display: none; }
-  .colour[data-pane], .whybox { display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
-                                margin-top: 6px; border-top: 1px solid var(--line); padding-top: 6px; }
-  .colour[data-pane][hidden], .whybox[hidden] { display: none; }
-  .whybox { display: block; color: var(--dim); font-size: 12px; }
-  .whybox .lines { margin: 4px 0 0; max-height: 92px; overflow: auto; }
-  .whybox .lines b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums;
-                     margin-right: 4px; }
-  .colour select { padding: 3px 6px; font-size: 12px; max-width: 170px; }
-  .colour input[type=range] { width: 90px; }
-  .colour .cstrengthVal { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums;
-                          min-width: 28px; }
-  .colour label { font-size: 12px; color: var(--dim); display: inline-flex; gap: 4px;
-                  align-items: center; }
-  .deepline:empty { display: none; }
-  .deepline .dl-open { border-color: transparent; background: transparent; color: var(--dim);
-                       padding: 2px 0; }
-  .shotAsk { margin-top: 6px; }
-
-  /* The dock (INTAKE M11): the sidebar was eight panels stacked 2,900 px tall beside a
-     900 px viewport, "sticky" at its top so the bin — panel seven — was reached by
-     scrolling the monitor away. Now it is a rail of tools and ONE panel exactly the
-     viewport's height that scrolls inside itself; the page never scrolls for it. A new
-     tool is one rail button and one <section data-tool>. */
-  #dock { position: sticky; top: calc(var(--hd) + 16px);
-          height: calc(100vh - var(--hd) - 32px); min-height: 320px;
-          display: grid; grid-template-columns: 50px minmax(0,1fr);
-          background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-          overflow: hidden; }
-  #rail { display: flex; flex-direction: column; gap: 4px; padding: 6px 4px;
-          background: #131318; border-right: 1px solid var(--line); }
-  /* the label sits low so the badge in the top-right corner never covers it */
-  #rail .tool { width: 40px; height: 48px; border: 0; border-radius: 8px; padding: 6px 0 4px;
-                background: transparent; color: var(--dim); font-size: 9px;
-                letter-spacing: .08em; text-transform: uppercase; position: relative;
-                display: flex; flex-direction: column; align-items: center;
-                justify-content: center; gap: 3px; }
-  #rail .tool svg { width: 18px; height: 18px; display: block; }
-  #rail .tool:hover { background: var(--card); color: var(--text); }
-  #rail .tool.on { background: var(--card); color: var(--accent);
-                   box-shadow: inset 2px 0 0 var(--accent); }
-  #rail .tool.on span { color: var(--text); }
-  #rail .badge { position: absolute; top: 1px; right: 1px; font-size: 9px; line-height: 13px;
-                 letter-spacing: 0; text-transform: none; background: var(--accent);
-                 color: #0b0b0f; font-weight: 600; border-radius: 999px; padding: 0 4px;
-                 font-variant-numeric: tabular-nums; }
-  #rail .badge:empty { display: none; }
-  /* The dock's left edge drags its width; the main column takes the rest and the
-     timeline re-fits (its own ResizeObserver). Double-click puts it back. */
-  #dockHandle { position: absolute; left: -7px; top: 0; bottom: 0; width: 14px;
-                cursor: col-resize; z-index: 6; }
-  #dockHandle::after { content: ""; position: absolute; left: 6px; top: 0; bottom: 0;
-                       width: 2px; background: transparent; transition: background .15s; }
-  #dockHandle:hover::after, body.dock-resizing #dockHandle::after { background: var(--accent); }
-  body.dock-resizing { cursor: col-resize; user-select: none; }
-  body.dock-resizing video { pointer-events: none; }
-  @media (max-width: 1100px) { #dockHandle { display: none; } }
-  #tools { min-height: 0; overflow: auto; padding: 10px 12px; scrollbar-width: thin; }
-  #tools h2 { font-size: 11px; letter-spacing: .1em; }
-  #tools > section[data-tool][hidden] { display: none; }
-  #tools .panel { margin-bottom: 12px; }
-  #tools .panel.flat { border: 0; padding: 0; background: transparent; }
-  @media (max-width: 1100px) {
-    #dock { position: static; height: auto; }
-    #tools { max-height: 70vh; }
-  }
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-           padding: 12px; margin-bottom: 12px; }
-  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
-              color: var(--dim); margin: 0 0 8px; }
   textarea {
-    width: 100%; min-height: 110px; background: #131318; color: var(--text);
-    border: 1px solid var(--line); border-radius: 7px; padding: 8px; font: inherit;
+    width: 100%; min-height: 80px; background: #151517; color: var(--text);
+    border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font: inherit;
     resize: vertical;
   }
-  select, input[type=number], input[type=text] {
-    background: #131318; color: var(--text); border: 1px solid var(--line);
-    border-radius: 7px; padding: 5px 8px; font: inherit;
-  }
-  /* The bin's search line: typing filters the keeps as you type; Find and Ask the
-     model search the whole footage the way the old Find panel did. */
-  .findbar { display: flex; gap: 6px; align-items: center; }
-  .findbar input { flex: 1; min-width: 0; padding: 6px 10px; border-radius: 8px; }
-  .findbar input:focus { outline: none; border-color: var(--accent); }
-  .findbar button { padding: 6px 10px; font-size: 12px; white-space: nowrap; border-radius: 8px; }
-  #tools button { border-radius: 8px; }
-  #tools .keep button.use { border-color: var(--accent); color: var(--accent); background: transparent;
-                            font-weight: 600; padding: 3px 10px; }
-  #tools .keep button.use:hover { background: var(--accent); color: #0b0b0f; }
-  #tools textarea { border-radius: 8px; }
-  #tools textarea:focus { outline: none; border-color: var(--accent); }
-  #tools select { border-radius: 8px; padding: 6px 8px; }
-  /* The finder's player shows the WHOLE clip, seeked to the match — a window is
-     somewhere to look, and looking means scrubbing around it. */
-  #findVideo { width: 100%; border-radius: 6px; background: #000; display: block;
-               aspect-ratio: 16/9; }
-  .shotAsk textarea { min-height: 44px; }
-  .ask-q { display: block; font-weight: 600; margin-bottom: 6px; }
+  textarea:focus, input:focus, select:focus { outline: none; border-color: var(--accent); }
   input[type=range] { accent-color: var(--accent); }
-  .tabs { display: flex; gap: 4px; margin: 10px 0 6px; }
-  .tab { font-size: 12px; color: var(--dim); border: 1px solid var(--line);
-         border-radius: 999px; padding: 3px 11px; cursor: pointer; }
-  .tab:hover { color: var(--text); }
-  /* a chosen tab is plain: the one blue control on a screen is Next's (INTAKE M16) */
-  .tab.sel { color: var(--text); background: var(--card-hi); border-color: var(--text); font-weight: 600; }
-  .kind { font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
-          color: var(--dim); border: 1px solid var(--line); border-radius: 4px;
-          padding: 0 4px; margin-right: 5px; font-style: normal; }
-  .kind.hot { color: var(--warn); border-color: #4c4026; }
-  .lib { overflow: auto; }
-  .cand { border-top: 1px solid var(--line); padding: 7px 0; cursor: pointer; display: flex;
-          gap: 8px; align-items: center; }
-  .cand .still { width: 64px; aspect-ratio: 16/9; object-fit: cover; border-radius: 3px;
-                 background: #000; flex: none; }
-  .cand .body { min-width: 0; }
-  .cand:first-child { border-top: 0; }
-  .cand:hover { background: var(--card-hi); }
-  .cand .t { color: var(--dim); font-variant-numeric: tabular-nums; font-size: 12px; }
-  .cand .w { display: block; }
-  /* The bin as a labelled grid (INTAKE M11): a card per keep — the still, the range,
-     the pass's reason and the editor's note, the labels the pass gave it as chips, and
-     where it is in the cut or the one control that puts it there. The chips above the
-     grid are the same labels as a filter. */
-  #binFilter { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; }
-  #binFilter[hidden] { display: none; }
-  .chip { font-size: 10.5px; border: 1px solid var(--line); border-radius: 999px;
-          padding: 0 7px; color: var(--dim); cursor: pointer; white-space: nowrap;
-          line-height: 17px; }
-  .chip:hover { color: var(--text); }
-  .chip.on { border-color: var(--accent); color: var(--text); background: var(--card-hi); }
-  .chip.hero { color: var(--warn); }
-  .chip.in { color: var(--good); border-color: #2c4c39; }
-  #library.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-  #library.grid > .hint { grid-column: 1 / -1; }   /* a line over the cards, not a card */
-  /* + add shows on the card under the pointer or the selected one (INTAKE M16) */
-  .keep:not(:hover):not(.sel):not(:focus-within) button.use.add { visibility: hidden; }
-  #findDeep { margin-top: 6px; }
-  #findDeep[hidden], #more[hidden], #libHint:empty { display: none; }
-  #moreFound { margin-top: 8px; padding: 2px 0; color: var(--accent); }
-  .keep { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
-          overflow: hidden; cursor: grab; outline: none; }
-  .keep:focus-visible, .keep.sel { border-color: var(--accent);
-                                   box-shadow: 0 0 0 1px var(--accent); }
-  .keep .still { width: 100%; aspect-ratio: 16/9; object-fit: cover; background: #000;
-                 display: block; }
-  .keep .body { padding: 6px 8px 8px; }
-  .keep .t { color: var(--dim); font-variant-numeric: tabular-nums; font-size: 11px; }
-  .keep .hero { color: var(--warn); font-weight: 600; font-size: 11px; margin-left: 6px;
-                letter-spacing: .04em; }
-  .keep .w { margin-top: 2px; font-size: 12px; overflow: hidden;
-             display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  .keep .note { color: var(--dim); font-style: italic; }
-  .keep .chips { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 5px; }
-  .keep .chips:empty { display: none; }
-  .keep .use { display: inline-block; margin-top: 6px; font-size: 12px; }
-  .keep a.use { color: var(--accent); text-decoration: none; }
-  .keep a.use:hover { text-decoration: underline; }
-  .keep button.use { padding: 2px 9px; }
-  .keep.missing { opacity: .6; }
-  .keep .gone { color: var(--bad); font-size: 12px; margin-top: 5px; display: block; }
-  /* Junk (HANDOFF item 5): a proposal wears "junk?" and the two answers; a junk card
-     is a clip, not a keep — no add, no drag, just the question. */
-  .chip.junk { color: var(--bad); border-color: #4c2c2c; }
-  .junkq { display: flex; align-items: center; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
-  .junkq .jb { color: var(--bad); font-weight: 600; font-size: 11px; letter-spacing: .04em;
-               cursor: help; }
-  .junkq .jb.done { cursor: default; }
-  #tools .junkq button.jv { padding: 1px 8px; font-size: 11.5px; }
-  .keep.junkcard { cursor: default; border-style: dashed; }
-  .keep.junkcard.confirmed { opacity: .65; }
-  kbd { background: #222; border: 1px solid var(--line); border-bottom-width: 2px;
-        border-radius: 4px; padding: 0 4px; font-size: 11px; }
-  .hint { color: var(--dim); font-size: 12px; }
+  kbd { background: #222226; border: 1px solid var(--line); border-bottom-width: 2px;
+        border-radius: 3px; padding: 0 4px; font-size: 10.5px; font-family: inherit; }
+  a { color: var(--accent); }
+  .hint { color: var(--dim); font-size: 11.5px; }
+  .hint.warn { color: var(--warn); }
+  .hint.bad { color: var(--bad); }
+  .grow { flex: 1; }
   .kv { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
   .kv b { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
   .path { color: var(--dim); font-size: 11px; word-break: break-all; margin-top: 6px; }
-  .empty { border: 1px dashed var(--line); border-radius: 10px; padding: 28px 20px;
-           text-align: center; color: var(--dim); }
-  .empty h3 { color: var(--text); font-size: 15px; margin: 0 0 6px; }
-  #filmWhat { margin-bottom: 10px; }
-  .filmGo { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
-  #filmNewest video { width: 100%; border-radius: 6px; background: #000; display: block;
-                      aspect-ratio: 16/9; }
-  /* the payoff of the tool: a full-width Download, the size on it — it was a bare <a> in
-     the browser's own dark blue, underlined, ~2:1 on this panel */
-  #filmNewest .dl { display: block; margin-top: 8px; padding: 6px 11px; text-align: center;
-                    color: var(--accent); text-decoration: none; border: 1px solid var(--line);
-                    border-radius: 7px; background: var(--card); }
-  #filmNewest .dl:hover { border-color: var(--accent); background: var(--card-hi); }
-  #outPanel details { margin-top: 10px; }
-  #outPanel summary { cursor: pointer; color: var(--accent); font-size: 12px; }
-  .ab select { width: 100%; margin-bottom: 4px; font-size: 12px; }
-  .ab { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
-  .ab video { width: 100%; border-radius: 6px; background: #000; display: block;
-              aspect-ratio: 16/9; }
-  .ver { border-top: 1px solid var(--line); padding: 7px 0; display: flex;
-         align-items: baseline; gap: 8px; }
-  .ver:first-child { border-top: 0; }
-  .ver .t { flex: 1; font-variant-numeric: tabular-nums; }
-  .ver button { padding: 1px 8px; font-size: 12px; }
-  /* Getting a finished cut off the board was folklore until now: the only URL it
-     exposed is served inline, so a click played the file instead of saving it. */
-  .ver .dl { color: var(--accent); text-decoration: none; font-size: 12px;
-             border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px;
-             white-space: nowrap; }
-  .ver .dl:hover { border-color: var(--accent); }
-  .hint.warn { color: var(--warn); }
-  .hint.bad { color: var(--bad); }
-  /* Next (/flow.js): in the header's one row, after the bin · cut name. */
+  /* An image is never drawn broken (punch 5): /dock.js swaps a failed one for a neutral
+     frame and puts it back once it loads; one with nothing to show is not drawn. */
+  img:not([src]), img[src=""] { visibility: hidden; }
+
+  /* ------------------------------------------------------------ the app bar */
+  header {
+    position: relative; z-index: 20; height: 36px; background: #19191b;
+    border-bottom: 1px solid #000; padding: 0 8px;
+    display: flex; align-items: center; gap: 6px; white-space: nowrap;
+  }
+  header .brand { font-weight: 700; letter-spacing: .02em; color: var(--text); padding: 0 6px 0 2px;
+                  display: inline-flex; align-items: center; gap: 6px; }
+  header .brand svg { width: 16px; height: 16px; color: var(--accent); }
+  header > button { padding: 2px 9px; }
+  #undo, #redo, #keysBtn { min-width: 28px; padding: 2px 6px; }
+  #saveState[data-state="saved"], #saveState[data-state="unsaved"]:not([data-late]) { display: none; }
+  #saveState[data-state="failed"] { color: var(--bad); }
+  #makeFilm .dot { color: var(--accent); margin-left: 6px; }
+  /* the menu bar: File · Edit · Clip · Sequence · Window · Help, each a drop-down */
+  #menubar { display: flex; align-items: center; gap: 0; margin-right: 6px; }
+  #menubar .menu { position: relative; }
+  #menubar .mtop { background: transparent; border: 0; color: var(--text); padding: 3px 8px;
+                   border-radius: 3px; }
+  #menubar .mtop:hover, #menubar .menu.open .mtop { background: var(--card-hi); }
+  #menubar .mdrop { position: absolute; left: 0; top: calc(100% + 4px); z-index: 70;
+                    min-width: 230px; padding: 4px; background: #232326;
+                    border: 1px solid var(--line-hi); border-radius: 5px;
+                    box-shadow: 0 10px 30px rgba(0,0,0,.55); display: none; }
+  #menubar .menu.open .mdrop { display: block; }
+  #menubar .mdrop button { display: flex; width: 100%; justify-content: space-between; gap: 18px;
+                           background: transparent; border: 0; border-radius: 3px;
+                           padding: 4px 10px; text-align: left; }
+  #menubar .mdrop button:hover { background: var(--accent); color: #08111c; }
+  #menubar .mdrop button:hover .k { color: #08111c; }
+  #menubar .mdrop .k { color: var(--dim); font-size: 11px; }
+  #menubar .mdrop hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
+  #menubar .mdrop button.on::before { content: "✓"; position: absolute; left: 0; }
+  /* Next (/flow.js), in the app bar's one row after the bin · cut switcher */
   header #flow { flex: 0 1 auto; min-width: 0; overflow: hidden; }
-  .pill { border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px;
-          font-size: 12px; color: var(--dim); cursor: pointer; white-space: nowrap; }
+  .pill { border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px;
+          font-size: 11.5px; color: var(--dim); cursor: pointer; white-space: nowrap; }
   .pill.ok { color: var(--good); border-color: #2c4c39; }
   .pill.bad { color: var(--bad); border-color: #4c2c2c; }
-  .bar { height: 5px; background: #131318; border-radius: 3px; margin-top: 8px;
-         overflow: hidden; }
-  .bar i { display: block; height: 100%; width: 0; background: var(--accent);
-           transition: width .3s; }
-  #keysBtn { min-width: 34px; }
-  /* The key map: an overlay on `?`, like the pass's — not a panel spending 800 px of
-     sidebar on the thing read least. timeline-keys.js appends its own section to the
-     panel inside (it finds it by the `Keys` heading). */
-  #keysOverlay { position: fixed; inset: 0; z-index: 60; background: rgba(4,4,6,.72);
-                 display: flex; align-items: center; justify-content: center; padding: 24px; }
-  #keysOverlay[hidden] { display: none; }
-  #keysOverlay .panel { width: 900px; max-width: 100%; max-height: 86vh; overflow: auto;
-                        margin: 0; background: #12121a; padding: 18px 22px; }
-  #keysOverlay .panel h2 { font-size: 14px; color: var(--text); text-transform: none;
-                           letter-spacing: 0; display: flex; align-items: baseline; gap: 10px; }
-  #keysOverlay .panel h2 .hint { font-weight: 400; }
-  #keysOverlay .panel > .hint { margin-top: 10px; }
-  #keysOverlay #tlKeys { display: none; }
-  /* the groups in two columns, each group whole, like the pass's map: in one column the
-     sheet ran 959 px in a 772 px box and cut its last row in half, with nothing to say
-     it scrolled */
-  #keyTable { columns: 2; column-gap: 32px; }
-  #keyTable table { border-collapse: collapse; width: 100%; font-size: 13px;
-                    break-inside: avoid; }
-  #keyTable th { text-align: left; color: var(--dim); font-size: 11px; font-weight: 600;
-                 text-transform: uppercase; letter-spacing: .08em; padding: 12px 0 4px; }
-  #keyTable td { padding: 3px 0; vertical-align: top; color: var(--text); }
-  #keyTable td.k { white-space: nowrap; padding-right: 14px; width: 1%; }
+  .bar { height: 5px; background: #131316; border-radius: 3px; margin-top: 8px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
 
-  /* The progress strip — Karl: "consider a progress tracking bar up top for anything
-     which may take time to complete — re-use across app." It holds more than one at a
-     time on purpose: a render and an Ask overlap routinely. It lives IN the header's one
-     row (INTAKE M16 C1), beside Next: one compact line per job (label · bar · % · time
-     left); what the job is on now is its hover, and ▸ opens its steps in a panel under
-     the header, over the page rather than pushing it down. A job that finished well
-     leaves at once (its result is on the screen); a failed one stays, saying why. As a
-     full-width second row it made the header 102 px for a whole render, the monitor
-     shrinking and the board jumping 55 px when it cleared. */
-  #progress { flex: 20 1 0; max-width: 880px; min-width: 0; display: flex; align-items: center;
-              gap: 16px; position: relative; }
+  /* The progress strip — one compact line per running job, in the app bar's row; what
+     the job is on now is its hover, and ▸ opens its steps over the page. */
+  #progress { flex: 20 1 0; max-width: 760px; min-width: 0; display: flex; align-items: center;
+              gap: 14px; position: relative; }
   #progress[hidden] { display: none; }
-  .job { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px;
-         white-space: nowrap; }
+  .job { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; gap: 7px; white-space: nowrap; }
   .job .jlabel { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-                 font-weight: 600; font-size: 12px; cursor: pointer; user-select: none; }
+                 font-weight: 600; font-size: 11.5px; cursor: pointer; user-select: none; }
   .job .jlabel .caret { color: var(--dim); font-size: 10px; margin-right: 4px; }
-  /* a fixed bar: a shrinkable empty box made Chrome size each line short of its words */
-  .job .jbar { flex: none; width: 56px; height: 6px; background: #0d0d11;
+  .job .jbar { flex: none; width: 56px; height: 6px; background: #0d0d10;
                border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
-  .job .jbar i { display: block; height: 100%; width: 0; background: var(--accent);
-                 transition: width .5s ease; }
+  .job .jbar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .5s ease; }
   .job.estimating .jbar i { background: var(--dim); }
   .job.done .jbar i { background: var(--good); }
   .job.failed .jbar { display: none; }
   .job .jnums { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-                font-variant-numeric: tabular-nums; color: var(--dim); font-size: 11.5px; }
+                font-variant-numeric: tabular-nums; color: var(--dim); font-size: 11px; }
   .job .jdetail { display: none; }
   .job.failed .jdetail { display: block; flex: 0 1 auto; min-width: 0; overflow: hidden;
-                         text-overflow: ellipsis; color: var(--bad); font-size: 12px; }
-  .job .jmore { position: absolute; top: calc(100% + 12px); left: 0; z-index: 25;
-                width: min(520px, 80vw); white-space: normal; background: #131318;
-                border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px;
-                font-size: 12px; box-shadow: 0 10px 28px rgba(0,0,0,.5); }
+                         text-overflow: ellipsis; color: var(--bad); font-size: 11.5px; }
+  .job .jmore { position: absolute; top: calc(100% + 10px); left: 0; z-index: 25;
+                width: min(520px, 80vw); white-space: normal; background: #18181b;
+                border: 1px solid var(--line); border-radius: 5px; padding: 7px 9px;
+                font-size: 11.5px; box-shadow: 0 10px 28px rgba(0,0,0,.5); }
   .job .jmore .jnow { color: var(--text); margin-bottom: 6px; }
   .job .jmore ol { margin: 0; padding-left: 18px; }
   .job .jmore li { color: var(--dim); }
   .job .jmore li.at { color: var(--text); }
   .job .jmore li.was { color: var(--good); }
-  .job .jmore pre { margin: 7px 0 0; white-space: pre-wrap; color: var(--dim);
-                    max-height: 120px; overflow: auto; }
-  /* The monitor: one place where the whole cut plays, fed from the proxies. */
-  #player { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
-            padding: 10px; margin-bottom: 12px; }
-  /* About half the window, and never so tall that the transport, the timeline and the
-     shot strip under it leave the screen (INTAKE M16): ~420 px is what sits below with a
-     shot selected (the strip's measured bottom left ~80 px spare under the old 450).
-     Centred in its panel: at the height cap the picture is narrower than the panel, and
-     left-aligned it left a ~270 px gutter on one side. */
-  .screen { position: relative; background: #000; border-radius: 6px; overflow: hidden;
-            aspect-ratio: 16/9; max-height: min(48vh, calc(100vh - var(--hd) - 420px));
-            min-height: 160px; margin-inline: auto; }
-  .screen video { position: absolute; inset: 0; width: 100%; height: 100%; display: none;
+  .job .jmore pre { margin: 7px 0 0; white-space: pre-wrap; color: var(--dim); max-height: 120px; overflow: auto; }
+
+  /* ------------------------------------------------------------ the workspace grid */
+  #ws {
+    height: calc(100vh - var(--hd)); padding: 4px; display: grid; gap: 0;
+    grid-template-columns: var(--c-proj) var(--split) var(--c-src) var(--split)
+                           minmax(0, 1fr) var(--split) var(--c-insp);
+    grid-template-rows: var(--r-top) var(--split) minmax(0, 1fr);
+    grid-template-areas:
+      "proj s1 src s2 prog s3 insp"
+      "h    h  h   h  h    s3 insp"
+      "tl   tl tl  tl tl   s3 insp";
+  }
+  #pProject { grid-area: proj; } #pSource { grid-area: src; } #pProgram { grid-area: prog; }
+  #pInspector { grid-area: insp; } #pTimeline { grid-area: tl; }
+  .ws-split[data-split=proj] { grid-area: s1; } .ws-split[data-split=src] { grid-area: s2; }
+  .ws-split[data-split=insp] { grid-area: s3; } .ws-split[data-split=top] { grid-area: h; }
+  .ws-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column;
+              background: var(--panel); border: 1px solid #0a0a0b; border-radius: 4px;
+              overflow: clip; position: relative; }
+  .ws-panel.focus { box-shadow: 0 0 0 1px var(--accent); }
+  .ws-head { flex: none; height: 28px; display: flex; align-items: stretch; gap: 4px;
+             background: var(--head); border-bottom: 1px solid #0f0f10; padding: 0 4px 0 2px; }
+  .ws-tabs { display: flex; align-items: stretch; min-width: 0; flex: 1 1 auto; overflow-x: auto;
+             overflow-y: hidden; scrollbar-width: none; }
+  .ws-tabs::-webkit-scrollbar { display: none; }
+  .ws-tab { flex: none; display: inline-flex; align-items: center; gap: 5px;
+            padding: 0 9px; border: 0; border-radius: 0; background: transparent;
+            color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden;
+            text-overflow: ellipsis; position: relative; cursor: pointer; line-height: 1.35; }
+  .ws-tab:hover { background: transparent; color: var(--text); }
+  .ws-tab.on { color: var(--text); }
+  .ws-tab.on::after { content: ""; position: absolute; left: 8px; right: 8px; bottom: 0;
+                      height: 2px; background: var(--accent); border-radius: 2px 2px 0 0; }
+  .ws-tab span.lbl { overflow: hidden; text-overflow: ellipsis; }
+  .ws-tab .badge { font-size: 10px; line-height: 14px; letter-spacing: 0; background: var(--accent);
+                   color: #08111c; font-weight: 700; border-radius: 999px; padding: 0 5px;
+                   font-variant-numeric: tabular-nums; }
+  .ws-tab .badge:empty { display: none; }
+  .ws-head .ws-tools { display: flex; align-items: center; gap: 2px; flex: none; }
+  .ws-head .ws-tools[hidden] { display: none; }
+  .ws-head .ws-tools button { padding: 1px 5px; background: transparent; border-color: transparent;
+                              color: var(--dim); line-height: 16px; }
+  .ws-head .ws-tools button:hover { color: var(--text); background: var(--card); }
+  .ws-head .ws-tools button.on { color: var(--text); background: var(--card-hi); }
+  .ws-head .ws-tools svg { width: 14px; height: 14px; display: block; }
+  .ws-body { flex: 1 1 auto; min-height: 0; overflow: auto; position: relative;
+             scrollbar-width: thin; scrollbar-color: #45454b transparent; }
+  .ws-body > section[data-tool][hidden] { display: none; }
+  .ws-body > section[data-tool] { padding: 8px 10px; }
+  .ws-split { position: relative; z-index: 5; }
+  .ws-split::after { content: ""; position: absolute; inset: 0; background: transparent;
+                     transition: background .12s; border-radius: 2px; }
+  .ws-split[data-split=top] { cursor: row-resize; }
+  .ws-split:not([data-split=top]) { cursor: col-resize; }
+  .ws-split:hover::after, .ws-split.drag::after { background: var(--accent); }
+  /* a wider grip than the 4 px gap shows */
+  .ws-split::before { content: ""; position: absolute; inset: -3px; }
+  body.ws-resizing { user-select: none; }
+  body.ws-resizing video, body.ws-resizing iframe { pointer-events: none; }
+  body.ws-resizing.col { cursor: col-resize; } body.ws-resizing.row { cursor: row-resize; }
+
+  /* ------------------------------------------------------------ monitors */
+  .mon-body { display: flex; flex-direction: column; overflow: clip; }
+  /* the Program monitor is `.screen` (app.js, grade.js and fx.js find it by that); the
+     Source monitor is `.mon`, so nothing that means the Program picture finds it */
+  /* The picture is exactly a 16:9 box, as large as the panel allows and centred in it
+     (Premiere's monitor): the grade and effect canvases, the sketch's clicks and the
+     poster all line up with the frame, never with a letterbox around it. */
+  .screenbox { flex: 1 1 auto; min-height: 60px; position: relative; background: #000;
+               display: flex; align-items: center; justify-content: center; overflow: hidden;
+               container-type: size; }
+  .screen, .mon { position: relative; flex: none; background: #000; overflow: hidden;
+                  aspect-ratio: 16 / 9; width: min(100cqw, calc(100cqh * 16 / 9)); }
+  .screen video, .mon video { position: absolute; inset: 0; width: 100%; height: 100%; display: none;
                   object-fit: contain; }
-  .screen video.live { display: block; }
-  /* The grade (INTAKE M10, I10.4): a canvas over the live video, drawn by /grade.js
-     through the shot's LUT. Shown only while there is a grade to show; the videos
-     underneath keep playing, and clicks fall through to them. */
+  .screen video.live, .mon video.live { display: block; }
   .screen canvas#gradeCanvas { position: absolute; inset: 0; width: 100%; height: 100%;
-                         display: none; object-fit: contain; z-index: 1;
-                         pointer-events: none; }
+                               display: none; object-fit: contain; z-index: 1; pointer-events: none; }
   .screen canvas#gradeCanvas.on { display: block; }
   .screen canvas#fxCanvas { position: absolute; inset: 0; width: 100%; height: 100%;
-                            display: none; object-fit: contain; z-index: 3;
-                            pointer-events: none; }
+                            display: none; object-fit: contain; z-index: 3; pointer-events: none; }
   .screen canvas#fxCanvas.live { display: block; }
-  .screen canvas#fxCanvas.sketch { display: block; pointer-events: auto; cursor: crosshair;
-                                   z-index: 4; }
-  /* Whatever the monitor is doing that is not showing a picture — opening a proxy,
-     buffering, or being refused permission to play — said on the screen itself. A black
-     rectangle that never moves reads as a broken board, and that is what it was taken for. */
-  #screenMsg { position: absolute; inset: 0; z-index: 2; display: flex;
+  .screen canvas#fxCanvas.sketch { display: block; pointer-events: auto; cursor: crosshair; z-index: 4; }
+  #screenMsg, .monMsg { position: absolute; inset: 0; z-index: 2; display: flex;
                align-items: center; justify-content: center; text-align: center;
-               padding: 16px; background: rgba(10,10,14,.72); color: var(--dim); }
-  #screenMsg.bad { color: var(--bad); }
-  #screenMsg[hidden] { display: none; }
-  .transport { display: flex; gap: 10px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
-  .transport .pos { font-variant-numeric: tabular-nums; }
-  #monPoster { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+               padding: 16px; background: rgba(10,10,12,.6); color: var(--dim); }
+  #screenMsg.bad { color: var(--warn); }
+  #screenMsg[hidden], .monMsg[hidden] { display: none; }
+  /* the calm wait (punch 5): a poster or a dark frame and one line — never a media error */
+  .monWait { position: absolute; left: 0; right: 0; bottom: 10px; z-index: 2; text-align: center;
+             color: var(--dim); font-size: 11.5px; pointer-events: none; }
+  .monWait[hidden] { display: none; }
+  .monWait span { background: rgba(10,10,12,.7); border-radius: 3px; padding: 2px 8px; }
+  #monPoster, #srcPoster { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
                -webkit-user-select: none; user-select: none; }
-  #monPoster[hidden] { display: none; }
-  #bigPlay { position: absolute; left: 50%; top: 50%; z-index: 2; width: 64px; height: 64px;
-             margin: -32px 0 0 -32px; border-radius: 50%; background: rgba(10,10,14,.6);
-             color: #fff; font-size: 26px; line-height: 64px; text-align: center;
-             padding-left: 4px; pointer-events: none; }
+  #monPoster[hidden], #srcPoster[hidden] { display: none; }
+  #bigPlay { position: absolute; left: 50%; top: 50%; z-index: 2; width: 52px; height: 52px;
+             margin: -26px 0 0 -26px; border-radius: 50%; background: rgba(10,10,12,.55);
+             color: #fff; font-size: 20px; line-height: 52px; text-align: center;
+             padding-left: 3px; pointer-events: none; }
   #bigPlay[hidden] { display: none; }
-  #ungraded { position: absolute; right: 8px; top: 8px; z-index: 2; font-size: 11px;
-              letter-spacing: .06em; color: var(--dim); background: rgba(10,10,14,.7);
-              border-radius: 4px; padding: 1px 6px; pointer-events: none; }
+  #ungraded { position: absolute; right: 8px; top: 8px; z-index: 2; font-size: 10.5px;
+              letter-spacing: .06em; color: var(--dim); background: rgba(10,10,12,.7);
+              border-radius: 3px; padding: 1px 6px; pointer-events: none; }
   #ungraded[hidden] { display: none; }
-  /* the timeline under the transport is styled by /timeline/timeline.css */
+  .monEmpty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+              color: var(--faint); font-size: 12px; z-index: 1; pointer-events: none; }
+  .monEmpty[hidden] { display: none; }
+  /* the transport: timecode left, the buttons centred, the duration right, like Premiere's */
+  .transport { flex: none; display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr);
+               align-items: center; gap: 6px; padding: 4px 8px; background: var(--panel);
+               border-top: 1px solid #0f0f10; height: 34px; }
+  .transport .tcl { font-variant-numeric: tabular-nums; color: var(--tc); font-size: 12.5px;
+                    font-weight: 600; white-space: nowrap; overflow: hidden; min-width: 86px; }
+  .transport .tcr { text-align: right; font-variant-numeric: tabular-nums; color: var(--dim);
+                    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 76px; }
+  .transport .btns { display: flex; gap: 1px; align-items: center; }
+  .transport .btns button { padding: 1px 5px; min-width: 24px; background: transparent;
+                            border-color: transparent; color: var(--text); }
+  .transport .btns button:hover { background: var(--card-hi); }
+  .transport .btns svg { width: 14px; height: 14px; display: block; margin: 0 auto; }
+  .transport .pos { font-variant-numeric: tabular-nums; }
+  #playingWhat { margin-left: 8px; font-size: 11px; }
+  #playingWhat:empty { display: none; }
+  /* the source monitor's scrub bar, with its In/Out range shaded */
+  .srcbar { flex: none; position: relative; height: 16px; margin: 0 8px; cursor: pointer;
+            touch-action: none; }
+  .srcbar .track { position: absolute; left: 0; right: 0; top: 7px; height: 2px; background: #3a3a40; }
+  .srcbar .range { position: absolute; top: 4px; height: 8px; background: rgba(74,157,248,.35);
+                   border-left: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+  .srcbar .range[hidden] { display: none; }
+  .srcbar .head { position: absolute; top: 0; width: 2px; height: 16px; background: var(--tc);
+                  margin-left: -1px; }
+  #source .transport .btns .ins { width: auto; padding: 1px 8px; border-color: var(--line); }
+
+  /* ------------------------------------------------------------ project panel */
+  .projbar { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+  .projbar input { flex: 1; min-width: 0; }
+  .projbar .count { color: var(--dim); font-size: 11px; white-space: nowrap; }
+  table.plist { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11.5px; }
+  table.plist th { text-align: left; font-weight: 500; color: var(--dim); padding: 3px 6px;
+                   border-bottom: 1px solid var(--line); position: sticky; top: -8px;
+                   background: var(--panel); z-index: 1; white-space: nowrap; overflow: hidden;
+                   text-overflow: ellipsis; }
+  table.plist td { padding: 3px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+                   font-variant-numeric: tabular-nums; border-bottom: 1px solid #222225; }
+  table.plist tr.row { cursor: default; }
+  table.plist tr.row:hover td { background: #232327; }
+  table.plist tr.row.sel td { background: #26405e; color: #fff; }
+  table.plist td.name .n { display: flex; gap: 6px; align-items: center; min-width: 0; }
+  table.plist td.name svg { width: 13px; height: 13px; flex: none; color: #8fb8e8; }
+  table.plist td.name span { overflow: hidden; text-overflow: ellipsis; }
+  table.plist .st { color: var(--dim); }
+  table.plist .st.ok { color: var(--good); }
+  .picons { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; }
+  .picon { background: var(--card); border: 1px solid var(--line); border-radius: 4px; overflow: hidden;
+           cursor: default; }
+  .picon.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .picon .thumb { position: relative; aspect-ratio: 16/9; background: #0c0c0e; }
+  .picon .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .picon .thumb .d { position: absolute; right: 4px; bottom: 3px; font-size: 10.5px;
+                     background: rgba(0,0,0,.7); border-radius: 2px; padding: 0 4px;
+                     font-variant-numeric: tabular-nums; }
+  .picon .nm { padding: 3px 6px; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pempty { color: var(--dim); padding: 20px 6px; text-align: center; }
+
+  /* ------------------------------------------------------------ the Selects (the pass's keeps) */
+  .findbar { display: flex; gap: 6px; align-items: center; }
+  .findbar input { flex: 1; min-width: 0; }
+  .findbar button { font-size: 11.5px; white-space: nowrap; }
+  #findVideo { width: 100%; background: #000; display: block; aspect-ratio: 16/9; }
+  .ask-q { display: block; font-weight: 600; margin-bottom: 6px; }
+  .tabs { display: flex; gap: 4px; margin: 8px 0 6px; }
+  .tab { font-size: 11.5px; color: var(--dim); border: 1px solid var(--line);
+         border-radius: 999px; padding: 1px 10px; cursor: pointer; }
+  .tab:hover { color: var(--text); }
+  .tab.sel { color: var(--text); background: var(--card-hi); border-color: var(--line-hi); font-weight: 600; }
+  .kind { font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+          color: var(--dim); border: 1px solid var(--line); border-radius: 3px;
+          padding: 0 4px; margin-right: 5px; font-style: normal; }
+  .kind.hot { color: var(--warn); border-color: #4c4026; }
+  .lib { overflow: auto; }
+  .cand { border-top: 1px solid var(--line); padding: 6px 0; cursor: pointer; display: flex;
+          gap: 8px; align-items: center; }
+  .cand .still { width: 64px; aspect-ratio: 16/9; object-fit: cover; border-radius: 2px;
+                 background: #000; flex: none; }
+  .cand .body { min-width: 0; }
+  .cand:first-child { border-top: 0; }
+  .cand:hover { background: var(--card-hi); }
+  .cand .t { color: var(--dim); font-variant-numeric: tabular-nums; font-size: 11px; }
+  .cand .w { display: block; }
+  #binFilter { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; }
+  #binFilter[hidden] { display: none; }
+  .chip { font-size: 10.5px; border: 1px solid var(--line); border-radius: 999px;
+          padding: 0 7px; color: var(--dim); cursor: pointer; white-space: nowrap; line-height: 17px; }
+  .chip:hover { color: var(--text); }
+  .chip.on { border-color: var(--accent); color: var(--text); background: var(--card-hi); }
+  .chip.hero { color: var(--warn); }
+  .chip.in { color: var(--good); border-color: #2c4c39; }
+  #library.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+  #library.grid > .hint { grid-column: 1 / -1; }
+  .keep:not(:hover):not(.sel):not(:focus-within) button.use.add { visibility: hidden; }
+  #findDeep { margin-top: 6px; }
+  #findDeep[hidden], #more[hidden], #libHint:empty { display: none; }
+  #moreFound { margin-top: 8px; padding: 2px 0; color: var(--accent); }
+  .keep { background: var(--card); border: 1px solid var(--line); border-radius: 4px;
+          overflow: hidden; cursor: grab; outline: none; }
+  .keep:focus-visible, .keep.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .keep .still { width: 100%; aspect-ratio: 16/9; object-fit: cover; background: #0c0c0e; display: block; }
+  .keep .body { padding: 5px 7px 7px; }
+  .keep .t { color: var(--dim); font-variant-numeric: tabular-nums; font-size: 11px; }
+  .keep .hero { color: var(--warn); font-weight: 600; font-size: 11px; margin-left: 6px; letter-spacing: .04em; }
+  .keep .w { margin-top: 2px; font-size: 11.5px; overflow: hidden;
+             display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .keep .note { color: var(--dim); font-style: italic; }
+  .keep .chips { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 5px; }
+  .keep .chips:empty { display: none; }
+  .keep .use { display: inline-block; margin-top: 5px; font-size: 11.5px; }
+  .keep a.use { color: var(--accent); text-decoration: none; }
+  .keep a.use:hover { text-decoration: underline; }
+  .keep button.use { padding: 1px 8px; }
+  .keep button.use.add { border-color: var(--accent); color: var(--accent); background: transparent; font-weight: 600; }
+  .keep button.use.add:hover { background: var(--accent); color: #08111c; }
+  .keep.missing { opacity: .6; }
+  .keep .gone { color: var(--bad); font-size: 11.5px; margin-top: 5px; display: block; }
+  .chip.junk { color: var(--bad); border-color: #4c2c2c; }
+  .junkq { display: flex; align-items: center; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
+  .junkq .jb { color: var(--bad); font-weight: 600; font-size: 11px; letter-spacing: .04em; cursor: help; }
+  .junkq .jb.done { cursor: default; }
+  .junkq button.jv { padding: 0 7px; font-size: 11px; }
+  .keep.junkcard { cursor: default; border-style: dashed; }
+  .keep.junkcard.confirmed { opacity: .65; }
+
+  /* ------------------------------------------------------------ Effect Controls */
+  .panel { background: transparent; border: 0; padding: 0; margin-bottom: 12px; }
+  .panel h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 0 0 8px; }
+  .panel.flat { border: 0; padding: 0; background: transparent; }
+  .ec-head { display: flex; gap: 6px; align-items: baseline; padding: 0 0 6px; margin: 0 0 8px;
+             border-bottom: 1px solid var(--line); color: var(--dim); font-size: 11px; }
+  .ec-head b { color: var(--text); font-weight: 600; font-size: 12px; overflow: hidden;
+               text-overflow: ellipsis; white-space: nowrap; }
+  #inspector .shot { display: grid; grid-template-columns: minmax(0,1fr); gap: 8px; }
+  #inspector .none, #inspector .multi { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; color: var(--dim); }
+  #inspector .none.nosq { display: block; padding: 18px 4px; text-align: center; }
+  #inspector .multi .count, #inspector .none .totals { color: var(--text); font-variant-numeric: tabular-nums; flex-basis: 100%; }
+  #inspector .none select { padding: 2px 6px; font-size: 11.5px; }
+  #inspector .none .fstrength { display: inline-flex; }
+  #inspector .none [hidden] { display: none; }
+  #inspector .none .fstrength button { border-radius: 0; margin-left: -1px; }
+  #inspector .none .fstrength button:first-child { border-radius: 4px 0 0 4px; }
+  #inspector .none .fstrength button:last-child { border-radius: 0 4px 4px 0; }
+  #inspector button { padding: 1px 8px; font-size: 11.5px; }
+  #inspector button.on { border-color: var(--accent); color: var(--text); }
+  #inspector .fwarn { color: var(--warn); }
+  #inspector .poster { width: 100%; max-height: 150px; background: #0c0c0e; display: block;
+                       aspect-ratio: 16/9; object-fit: contain; cursor: pointer; border-radius: 3px;
+                       -webkit-user-select: none; user-select: none; }
+  .srow { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+  .srow.top > .dv-res { order: 9; flex-basis: 100%; }
+  .sname { font-weight: 600; font-variant-numeric: tabular-nums; margin-right: 4px; flex-basis: 100%; }
+  .lookhost:empty { display: none; }
+  .why { color: var(--dim); margin: 2px 0; min-height: 1.3em; }
+  .why[contenteditable]:focus { outline: 1px solid var(--accent); border-radius: 3px; color: var(--text); }
+  .why[contenteditable]:empty::before { content: "why this shot — click to write"; opacity: .5; }
+  .said { color: var(--dim); font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .warns { display: flex; gap: 10px; flex-wrap: wrap; color: var(--warn); font-size: 11.5px; }
+  .warns[hidden] { display: none; }
+  .srow.ctl select.speed { padding: 2px 6px; font-size: 11.5px; }
+  .srow.ctl .nudge { display: inline-flex; gap: 3px; flex-wrap: wrap; }
+  .srow.ctl .nudge[hidden] { display: none; }
+  #inspector .disc { border-color: transparent; color: var(--accent); background: transparent; }
+  #inspector .disc[hidden] { display: none; }
+  .colour[data-pane], .whybox { display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+                                border-top: 1px solid var(--line); padding-top: 6px; }
+  .colour[data-pane][hidden], .whybox[hidden] { display: none; }
+  .whybox { display: block; color: var(--dim); font-size: 11.5px; }
+  .whybox .lines { margin: 4px 0 0; max-height: 120px; overflow: auto; }
+  .whybox .lines b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; margin-right: 4px; }
+  .colour select { padding: 2px 6px; font-size: 11.5px; max-width: 170px; }
+  .colour input[type=range] { width: 90px; }
+  .colour .cstrengthVal { font-size: 11.5px; color: var(--dim); font-variant-numeric: tabular-nums; min-width: 28px; }
+  .colour label { font-size: 11.5px; color: var(--dim); display: inline-flex; gap: 4px; align-items: center; }
+  .deepline:empty { display: none; }
+  .deepline .dl-open { border-color: transparent; background: transparent; color: var(--dim); padding: 2px 0; }
+  .shotAsk textarea { min-height: 44px; }
+
+  /* ------------------------------------------------------------ Export (the film tool) */
+  #filmWhat { margin-bottom: 10px; }
+  .filmGo { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+  #filmNewest video { width: 100%; background: #000; display: block; aspect-ratio: 16/9; }
+  #filmNewest .dl { display: block; margin-top: 8px; padding: 4px 10px; text-align: center;
+                    color: var(--accent); text-decoration: none; border: 1px solid var(--line);
+                    border-radius: 4px; background: var(--card); }
+  #filmNewest .dl:hover { border-color: var(--accent); background: var(--card-hi); }
+  #outPanel details { margin-top: 10px; }
+  #outPanel summary { cursor: pointer; color: var(--accent); font-size: 11.5px; }
+  .ab select { width: 100%; margin-bottom: 4px; font-size: 11.5px; }
+  .ab { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
+  .ab video { width: 100%; background: #000; display: block; aspect-ratio: 16/9; }
+  .ver { border-top: 1px solid var(--line); padding: 6px 0; display: flex; align-items: baseline; gap: 8px; }
+  .ver:first-child { border-top: 0; }
+  .ver .t { flex: 1; font-variant-numeric: tabular-nums; }
+  .ver button { padding: 0 7px; font-size: 11.5px; }
+  .ver .dl { color: var(--accent); text-decoration: none; font-size: 11.5px;
+             border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; white-space: nowrap; }
+  .ver .dl:hover { border-color: var(--accent); }
+
+  /* ------------------------------------------------------------ timeline panel */
+  #tlBody { overflow: clip; padding: 6px 8px 18px; }
+  #tl { margin-top: 0; }
+  #tlEmpty { position: absolute; inset: 0; overflow: auto; padding: 14px; display: flex;
+             align-items: center; justify-content: center; }
+  #tlEmpty[hidden] { display: none; }
+  .empty { border: 1px dashed var(--line-hi); border-radius: 6px; padding: 18px 22px;
+           text-align: center; color: var(--dim); width: min(560px, 100%); }
+  .empty h3 { color: var(--text); font-size: 14px; margin: 0 0 6px; font-weight: 600; }
+  .empty a { color: var(--accent); text-decoration: none; }
+  .empty a:hover { text-decoration: underline; }
+  .empty textarea { min-height: 52px; text-align: left; }
+
+  /* ------------------------------------------------------------ overlays */
+  #keysOverlay { position: fixed; inset: 0; z-index: 60; background: rgba(4,4,6,.72);
+                 display: flex; align-items: center; justify-content: center; padding: 24px; }
+  #keysOverlay[hidden] { display: none; }
+  #keysOverlay .panel { width: 900px; max-width: 100%; max-height: 86vh; overflow: auto;
+                        margin: 0; background: #1b1b1e; padding: 16px 20px;
+                        border: 1px solid var(--line-hi); border-radius: 6px; }
+  #keysOverlay .panel h2 { font-size: 14px; color: var(--text); text-transform: none;
+                           letter-spacing: 0; display: flex; align-items: baseline; gap: 10px; }
+  #keysOverlay .panel > .hint { margin-top: 10px; }
+  #keysOverlay #tlKeys { display: none; }
+  #keyTable { columns: 2; column-gap: 32px; }
+  #keyTable table { border-collapse: collapse; width: 100%; font-size: 12.5px; break-inside: avoid; }
+  #keyTable th { text-align: left; color: var(--dim); font-size: 11px; font-weight: 600;
+                 text-transform: uppercase; letter-spacing: .08em; padding: 12px 0 4px; }
+  #keyTable td { padding: 3px 0; vertical-align: top; color: var(--text); }
+  #keyTable td.k { white-space: nowrap; padding-right: 14px; width: 1%; }
   #toast {
     position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
-    background: var(--card-hi); border: 1px solid var(--line); border-radius: 8px;
-    padding: 8px 14px; opacity: 0; transition: opacity .18s; pointer-events: none;
+    background: var(--card-hi); border: 1px solid var(--line-hi); border-radius: 5px;
+    padding: 7px 14px; opacity: 0; transition: opacity .18s; pointer-events: none;
     z-index: 50; max-width: 70vw;
   }
   #toast.show { opacity: 1; }
@@ -436,106 +479,89 @@
 </head>
 <body>
 <header>
-  <!-- ONE row (INTAKE M16 I16.1): the bin and the cut (/switcher.js — its menu holds the
-       footage, the pass and the project's facts), Next (/flow.js), then undo, redo, the
-       keys and Make the film. Status shows only when something is wrong. -->
+  <!-- ONE row: the menus, the bin · cut switcher (/switcher.js), Next (/flow.js), running
+       jobs, then undo, redo, the keys and Export. -->
+  <span class="brand" title="Roughcut"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M8 5v4M13 5v4M18 5v4"/></svg>Roughcut</span>
+  <nav id="menubar" aria-label="menus">
+    <div class="menu" data-menu="file"><button type="button" class="mtop">File</button><div class="mdrop" role="menu">
+      <button type="button" data-cmd="open">Open bin or cut… <span class="k">O</span></button>
+      <button type="button" data-cmd="footage">Footage and index…</button>
+      <button type="button" data-cmd="pass">Review the pass…</button>
+      <hr><button type="button" data-cmd="export">Export… <span class="k">Export panel</span></button>
+    </div></div>
+    <div class="menu" data-menu="edit"><button type="button" class="mtop">Edit</button><div class="mdrop" role="menu">
+      <button type="button" data-cmd="undo">Undo <span class="k">Ctrl+Z</span></button>
+      <button type="button" data-cmd="redo">Redo <span class="k">Ctrl+Shift+Z</span></button>
+      <hr><button type="button" data-cmd="keys">Keyboard shortcuts <span class="k">?</span></button>
+    </div></div>
+    <div class="menu" data-menu="clip"><button type="button" class="mtop">Clip</button><div class="mdrop" role="menu">
+      <button type="button" data-cmd="markin">Mark In (Source) <span class="k">I</span></button>
+      <button type="button" data-cmd="markout">Mark Out (Source) <span class="k">O</span></button>
+      <button type="button" data-cmd="insert">Insert into sequence <span class="k">,</span></button>
+      <hr><button type="button" data-cmd="ec">Speed and colour… <span class="k">Effect Controls</span></button>
+    </div></div>
+    <div class="menu" data-menu="sequence"><button type="button" class="mtop">Sequence</button><div class="mdrop" role="menu">
+      <button type="button" data-cmd="play">Play / Stop <span class="k">Space</span></button>
+      <button type="button" data-cmd="ask">Ask for a change… <span class="k">Assistant</span></button>
+      <button type="button" data-cmd="music">Music bed… <span class="k">Audio</span></button>
+      <button type="button" data-cmd="fx">Design an effect… <span class="k">Effects</span></button>
+    </div></div>
+    <div class="menu" data-menu="window"><button type="button" class="mtop">Window</button><div class="mdrop" role="menu">
+      <button type="button" data-cmd="w:project">Project</button>
+      <button type="button" data-cmd="w:bin">Selects</button>
+      <button type="button" data-cmd="w:source">Source Monitor</button>
+      <button type="button" data-cmd="w:program">Program Monitor</button>
+      <button type="button" data-cmd="w:timeline">Timeline</button>
+      <button type="button" data-cmd="w:inspect">Effect Controls</button>
+      <button type="button" data-cmd="w:fx">Effects</button>
+      <button type="button" data-cmd="w:sound">Audio</button>
+      <button type="button" data-cmd="w:ask">Assistant</button>
+      <button type="button" data-cmd="w:out">Export</button>
+      <hr><button type="button" data-cmd="reset">Reset workspace layout</button>
+    </div></div>
+    <div class="menu" data-menu="help"><button type="button" class="mtop">Help</button><div class="mdrop" role="menu">
+      <button type="button" data-cmd="keys">Keyboard shortcuts <span class="k">?</span></button>
+    </div></div>
+  </nav>
   <button type="button" id="hdBin" title="switch bins or cuts, save a copy · O"></button>
   <div id="flow"></div>
-  <!-- Every long operation in the app draws itself here, in this row: label, bar,
-       percentage and time left; what it is doing on hover and under ▸. Empty and
-       hidden when nothing is running. -->
+  <!-- Every long operation in the app draws itself here, in this row. -->
   <div id="progress" hidden></div>
   <div class="grow"></div>
-  <!-- "save failed", or "unsaved…" when the save is late; a good save says nothing -->
   <span class="hint" id="saveState" data-state="saved">saved</span>
-  <button id="undo" title="Undo (⌘Z)" aria-label="undo">↶</button>
-  <button id="redo" title="Redo (⌘⇧Z)" aria-label="redo">↷</button>
-  <button type="button" id="keysBtn" title="the keys · ?">?</button>
-  <!-- Opens the film tool; once a film of this cut exists it is that film's Download.
-       The dot: the cut changed since its last film. -->
-  <button type="button" id="makeFilm">Make the film</button>
+  <button id="undo" title="Undo (Ctrl+Z)" aria-label="undo">↶</button>
+  <button id="redo" title="Redo (Ctrl+Shift+Z)" aria-label="redo">↷</button>
+  <button type="button" id="keysBtn" title="keyboard shortcuts · ?">?</button>
+  <!-- Opens Export; once a film of this cut exists it is that film's Download. The dot:
+       the cut changed since its last film. -->
+  <button type="button" id="makeFilm">Export</button>
 </header>
 
-<main>
-  <section>
-    <!-- The monitor. The whole edit plays here from the proxies, shot after shot, so a
-         cut is judged by watching it rather than by rendering it first. -->
-    <div id="player" style="display:none">
-      <!-- preload="metadata", not "auto": an element told to preload everything starts
-           at byte 0, and the shot it is about to play may start three minutes in. On
-           Killington that meant 0-15s buffered for a shot at 188.2s, with the seek
-           queued behind the download. arm() puts the in-point in the URL as a media
-           fragment, so the first request after the header lands on the shot. -->
-      <div class="screen">
-        <!-- At rest the monitor shows the frame under the playhead (the poster endpoint),
-             never a black box, with a big ▶ — the screen is the button. -->
-        <img id="monPoster" alt="" draggable="false" hidden>
-        <video id="pv0" preload="metadata" playsinline></video>
-        <video id="pv1" preload="metadata" playsinline></video>
-        <!-- The grade: /grade.js draws the live video through the shot's LUT here
-             (INTAKE M10). Hidden while the shot's LUT is the identity or G is off. -->
-        <canvas id="gradeCanvas"></canvas>
-        <!-- The effects over the live video (INTAKE M12): /fx.js draws every effect
-             of the live shot here at the live time — `.live` while there is something
-             to draw; `.sketch` while the human draws a reference on the frame, when
-             it takes the pointer. -->
-        <canvas id="fxCanvas"></canvas>
-        <span id="bigPlay" aria-hidden="true">▶</span>
-        <!-- G's state, on the picture while the grade is off (/grade.js) -->
-        <span id="ungraded" hidden>ungraded</span>
-        <div id="screenMsg" hidden></div>
+<main id="ws">
+  <!-- PROJECT: every clip in the footage folder (list or icons), and the pass's Selects. -->
+  <section class="ws-panel" id="pProject" data-panel="project">
+    <div class="ws-head">
+      <div class="ws-tabs" role="tablist">
+        <button type="button" class="ws-tab tool" data-tool="project" role="tab"><span class="lbl">Project</span></button>
+        <button type="button" class="ws-tab tool" data-tool="bin" role="tab" title="what the pass kept, and Find"><span class="lbl">Selects</span><b class="badge"></b></button>
       </div>
-      <div class="transport">
-        <button id="playCut">▶ Play</button>
-        <span class="pos"><span id="pos">0:00.0</span> / <span id="posTotal"><span id="total">0:00.0</span></span></span>
-        <span class="hint" id="playingWhat"></span>
-      </div>
-      <!-- The timeline: a ruler, the V1 lane of shot blocks by film time, the playhead
-           across the whole cut. The module is /timeline/timeline.js (window.tl); app.js
-           mounts it here once the project has loaded. -->
-      <div id="tl"></div>
-    </div>
-    <!-- Both of these belong to the main column, not the dock: the recovery offer
-         matters most when the timeline is empty, which is exactly when the dock's Ask
-         panel is hidden. -->
-    <div id="lastAsk" class="hint" style="display:none;margin-bottom:10px"></div>
-    <!-- The proposal is the thing you have to read before deciding, so it sits in the
-         main column at full width rather than in the dock. -->
-    <div id="proposal" class="panel" style="display:none">
-      <h2>Proposed cut</h2>
-      <div id="proposalNotes" style="margin-bottom:10px"></div>
-      <div id="proposalDiff" style="max-height:340px;overflow:auto"></div>
-      <div style="display:flex;gap:8px;margin-top:10px">
-        <button id="playProposal" data-next-for="cut" title="play the proposed cut in the monitor">▶ Play it</button>
-        <button id="acceptProposal">Accept</button>
-        <button id="rejectProposal">Discard</button>
+      <div class="ws-tools" id="projView">
+        <button type="button" data-view="list" title="list view"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12M2 8h12M2 12h12"/></svg></button>
+        <button type="button" data-view="icon" title="icon view"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="5" height="5"/><rect x="9" y="2" width="5" height="5"/><rect x="2" y="9" width="5" height="5"/><rect x="9" y="9" width="5" height="5"/></svg></button>
       </div>
     </div>
-    <!-- The inspector: the selected shot's still, header, lines, why, trims and scoped
-         ask — one panel for the timeline's anchor, where the list of one card per shot
-         used to be. The board's empty state (no cut yet) renders here too. -->
-    <div id="inspector"></div>
-  </section>
-
-  <!-- The dock (INTAKE M11): a rail of tools and one panel the height of the viewport.
-       The rail is the shelf for what comes next — effects, titles, a beat grid,
-       transitions — each one more button here and one more section below. -->
-  <aside id="dock">
-    <div id="dockHandle" title="drag to resize the dock · double-click to reset"></div>
-    <nav id="rail" aria-label="tools">
-      <button type="button" class="tool on" data-tool="bin" title="the bin — what the pass kept, and Find"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 7l2-4h14l2 4"/><path d="M9 12h6"/></svg><span>Bin</span><b class="badge"></b></button>
-      <button type="button" class="tool" data-tool="ask" title="ask for a change · the story"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="M15 8l.7 1.8 1.8.7-1.8.7L15 13l-.7-1.8-1.8-.7 1.8-.7z" fill="currentColor" stroke="none"/></svg><span>Ask</span></button>
-      <button type="button" class="tool" data-tool="sound" title="the music bed"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10v4h4l5 4V6L8 10z"/><path d="M16 9a4 4 0 0 1 0 6"/><path d="M18.5 6.5a8 8 0 0 1 0 11"/></svg><span>Sound</span></button>
-      <button type="button" class="tool" data-tool="fx" title="effects — markers, titles, tints, glows, sounds: designed by the model, checked by the machine, accepted by you"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2.5l1.9 4.9 4.9 1.9-4.9 1.9L12 16.1l-1.9-4.9-4.9-1.9 4.9-1.9z"/><path d="M5 15l.9 2.3 2.3.9-2.3.9L5 21.4l-.9-2.3-2.3-.9 2.3-.9z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg><span>FX</span><b class="badge"></b></button>
-      <button type="button" class="tool" data-tool="out" title="make the film · download it"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/><path d="M12 3v12"/><path d="M7 8l5-5 5 5"/></svg><span>Film</span></button>
-    </nav>
-    <div id="tools">
-      <!-- BIN — the pass's keeps, two to a row, with one find box (INTAKE M16 I16.4):
-           typing filters the keeps, Enter finds a moment anywhere in the footage, and
-           the priced model search sits under any find. "not in the cut" is the default
-           (C10); the machine's offers — heard, seen, the evidence chips — are behind
-           "more found ▸". -->
-      <section data-tool="bin">
+    <div class="ws-body" id="projBody">
+      <section data-tool="project">
+        <div class="projbar">
+          <input type="search" id="projQ" placeholder="search clips" aria-label="search clips">
+          <span class="count" id="projCount"></span>
+        </div>
+        <div id="projList"></div>
+      </section>
+      <!-- SELECTS — the pass's keeps, with one find box: typing filters the keeps, Enter
+           finds a moment anywhere in the footage, and the priced model search sits under
+           any find. The machine's offers are behind "more found ▸". -->
+      <section data-tool="bin" hidden>
         <div class="findbar">
           <input type="text" id="findQ" placeholder="find a moment…"
                  title="typing filters the keeps · Enter finds a moment anywhere in the footage">
@@ -552,7 +578,6 @@
             <span class="hint" id="findInfo"></span>
           </div>
         </div>
-        <!-- the audit: priced, in view until it has been used once, then under more found -->
         <div id="auditRow" style="display:none;gap:8px;align-items:center;margin:8px 0 0">
           <button id="auditClaims"
             title="A 1 s close look at the highest-ranked jump / fall / crash claims nobody has checked, then the rank is rebuilt">Audit the claims</button>
@@ -573,33 +598,93 @@
         <div class="lib" id="library"></div>
         <button type="button" id="moreFound" class="ghost">more found ▸</button>
       </section>
+    </div>
+  </section>
+  <div class="ws-split" data-split="proj" title="drag to resize · double-click to reset"></div>
 
-      <!-- ASK — the one sentence about the film (the EDL's story, the same field and
-           words as /open's), and a change asked of the whole cut, priced on its button. -->
-      <section data-tool="ask" hidden>
-        <!-- on an empty board the sentence is the empty state's, under the timeline, with
-             the first cut: asked once, not here as well -->
-        <div class="hint" id="askFirst" hidden>No cut yet: the sentence and the first cut are under the timeline.</div>
-        <div class="panel flat" id="askStory">
-          <label class="ask-q" for="story">What is this film about?</label>
-          <textarea id="story" style="min-height:66px"
-            placeholder="optional — a sentence is enough"></textarea>
-        </div>
-        <div class="panel flat" id="askPanel">
-          <textarea id="note" style="min-height:66px"
-            placeholder="tighten the intro · more of the rocks, less of the lift · end on the fall"></textarea>
-          <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
-            <button id="ask" disabled data-await-price="1">Ask for a change</button>
-            <span class="hint" id="askAims"></span>
-            <span class="hint" id="askState"></span>
-          </div>
-        </div>
+  <!-- SOURCE: the clip chosen in the Project panel, with its own In and Out. -->
+  <section class="ws-panel" id="pSource" data-panel="source">
+    <div class="ws-head"><div class="ws-tabs"><span class="ws-tab on" id="srcTitle"><span class="lbl">Source: (no clip)</span></span></div></div>
+    <div class="ws-body mon-body" id="source">
+      <div class="screenbox"><div class="mon" id="srcScreen">
+        <img id="srcPoster" alt="" draggable="false" hidden>
+        <video id="srcVideo" preload="metadata" playsinline></video>
+        <div class="monEmpty" id="srcEmpty">pick a clip in the Project panel</div>
+        <div class="monWait" id="srcWait" hidden><span>preparing preview…</span></div>
+      </div></div>
+      <div class="srcbar" id="srcBar"><div class="track"></div><div class="range" hidden></div><div class="head"></div></div>
+      <div class="transport">
+        <span class="tcl" id="srcPos">00:00:00:00</span>
+        <span class="btns">
+          <button type="button" data-src="in" title="Mark In · I"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 2H4v12h2"/><path d="M9 8h5M11 5l3 3-3 3"/></svg></button>
+          <button type="button" data-src="out" title="Mark Out · O"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 2h2v12h-2"/><path d="M2 8h5M5 5l2 3-2 3"/></svg></button>
+          <button type="button" data-src="back" title="Step back one frame · ←"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M4 3h1.5v10H4zM13 3v10L6.5 8z"/></svg></button>
+          <button type="button" data-src="play" id="srcPlay" title="Play / Stop · Space"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5v11L13 8z"/></svg></button>
+          <button type="button" data-src="fwd" title="Step forward one frame · →"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M10.5 3H12v10h-1.5zM3 3v10l6.5-5z"/></svg></button>
+          <button type="button" data-src="insert" class="ins" title="Insert the In–Out range into the sequence at the playhead · ,">Insert</button>
+        </span>
+        <span class="tcr" id="srcDur"></span>
+      </div>
+    </div>
+  </section>
+  <div class="ws-split" data-split="src" title="drag to resize · double-click to reset"></div>
+
+  <!-- PROGRAM: the cut at the playhead, played from the proxies shot after shot. -->
+  <section class="ws-panel" id="pProgram" data-panel="program">
+    <div class="ws-head"><div class="ws-tabs"><span class="ws-tab on" id="progTitle"><span class="lbl">Program</span></span></div></div>
+    <div class="ws-body mon-body" id="player">
+      <div class="screenbox"><div class="screen">
+        <img id="monPoster" alt="" draggable="false" hidden>
+        <video id="pv0" preload="metadata" playsinline></video>
+        <video id="pv1" preload="metadata" playsinline></video>
+        <canvas id="gradeCanvas"></canvas>
+        <canvas id="fxCanvas"></canvas>
+        <span id="bigPlay" aria-hidden="true">▶</span>
+        <span id="ungraded" hidden>ungraded</span>
+        <div class="monEmpty" id="progEmpty" hidden>the sequence is empty</div>
+        <div class="monWait" id="monWait" hidden><span>preparing preview…</span></div>
+        <div id="screenMsg" hidden></div>
+      </div></div>
+      <div class="transport">
+        <span class="tcl pos"><span id="pos">00:00:00:00</span></span>
+        <span class="btns">
+          <button type="button" id="progBack" title="Previous edit · ↑"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 3h1.5v10H3zM13 3v10L5.5 8z"/></svg></button>
+          <button id="playCut" title="Play / Stop · Space">▶ Play</button>
+          <button type="button" id="progFwd" title="Next edit · ↓"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M11.5 3H13v10h-1.5zM3 3v10l7.5-5z"/></svg></button>
+        </span>
+        <span class="tcr"><span class="pos" id="posTotal"><span id="total">00:00:00:00</span></span><span class="hint" id="playingWhat"></span></span>
+      </div>
+    </div>
+  </section>
+  <div class="ws-split" data-split="insp" title="drag to resize · double-click to reset"></div>
+
+  <!-- EFFECT CONTROLS and its neighbours: the selected shot's properties; the effects
+       the model designs; the music bed; the assistant; the export. -->
+  <section class="ws-panel" id="pInspector" data-panel="inspector">
+    <div class="ws-head">
+      <div class="ws-tabs" role="tablist">
+        <button type="button" class="ws-tab tool" data-tool="inspect" role="tab"><span class="lbl">Effect Controls</span></button>
+        <button type="button" class="ws-tab tool" data-tool="fx" role="tab" title="effects — designed by the model, checked by the machine, accepted by you"><span class="lbl">Effects</span><b class="badge"></b></button>
+        <button type="button" class="ws-tab tool" data-tool="sound" role="tab" title="the music bed"><span class="lbl">Audio</span></button>
+        <button type="button" class="ws-tab tool" data-tool="ask" role="tab" title="ask for a change · the story"><span class="lbl">Assistant</span><b class="badge"></b></button>
+        <button type="button" class="ws-tab tool" data-tool="out" role="tab" title="export the film · download it"><span class="lbl">Export</span></button>
+      </div>
+    </div>
+    <div class="ws-body" id="tools">
+      <section data-tool="inspect">
+        <div class="ec-head" id="ecHead"><span>Sequence</span><b id="ecWhat"></b></div>
+        <!-- The selected shot's still, name, play, ask, speed, colour & look, why; the
+             film's look with nothing selected. -->
+        <div id="inspector"></div>
       </section>
 
-      <!-- SOUND — the music bed, in one line: the track, what it does under the cut,
-           how far it dips under talk; the fades behind "more". -->
+      <section data-tool="fx" hidden>
+        <div id="fx"><div class="hint">effects load with /fx.js</div></div>
+      </section>
+
       <section data-tool="sound" hidden>
         <div class="panel flat" id="musicPanel">
+          <label class="ask-q" for="musicTrack">Music bed</label>
           <select id="musicTrack" style="width:100%"><option value="">no music</option></select>
           <div class="hint" id="musicHint" style="margin-top:6px"></div>
           <div id="musicOpts" style="display:none">
@@ -615,29 +700,46 @@
         </div>
       </section>
 
-      <!-- FX — effects the model designs and the machine verifies (INTAKE M12). The
-           tool's whole body is drawn by /fx.js into #fx. -->
-      <section data-tool="fx" hidden>
-        <div id="fx"><div class="hint">effects load with /fx.js</div></div>
+      <!-- ASSISTANT — the one sentence about the film, a change asked of the whole cut
+           (priced on its button), and the proposal it comes back with. -->
+      <section data-tool="ask" hidden>
+        <div class="hint" id="askFirst" hidden>No cut yet: the sentence and the first cut are in the Timeline panel.</div>
+        <div class="panel flat" id="askStory">
+          <label class="ask-q" for="story">What is this film about?</label>
+          <textarea id="story" style="min-height:56px" placeholder="optional — a sentence is enough"></textarea>
+        </div>
+        <div class="panel flat" id="askPanel">
+          <textarea id="note" style="min-height:56px"
+            placeholder="tighten the intro · more of the rocks, less of the lift · end on the fall"></textarea>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+            <button id="ask" disabled data-await-price="1">Ask for a change</button>
+            <span class="hint" id="askAims"></span>
+            <span class="hint" id="askState"></span>
+          </div>
+        </div>
+        <div id="lastAsk" class="hint" style="display:none;margin-bottom:10px"></div>
+        <div id="proposal" class="panel" style="display:none">
+          <h2>Proposed cut</h2>
+          <div id="proposalNotes" style="margin-bottom:10px"></div>
+          <div id="proposalDiff" style="max-height:340px;overflow:auto"></div>
+          <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+            <button id="playProposal" data-next-for="cut" title="play the proposed cut in the Program monitor">▶ Play it</button>
+            <button id="acceptProposal">Accept</button>
+            <button id="rejectProposal">Discard</button>
+          </div>
+        </div>
       </section>
 
-      <!-- FILM (the tool key stays `out`: #tool=out and the flow keep working) — what
-           will be made, the two ways to make it, this cut's newest film and its
-           Download; every older film folded away, with Compare two inside. Progress is
-           the header's strip, the one progress surface. -->
+      <!-- EXPORT (the tool key stays `out`: #tool=out and the flow keep working). -->
       <section data-tool="out" hidden>
         <div class="panel flat" id="outPanel">
           <div id="filmWhat"><b id="filmCut"></b><div class="hint" id="filmSince"></div></div>
           <div class="filmGo">
-            <!-- #render is the free quick look Next may press; Final 4K is only ever
-                 Karl's own click (M14 decision 3). -->
             <button id="render" data-profile="preview" data-next-for="render"
                     title="1920x1080 at 24 fps — quick to make, to watch the cut through">Quick look · 1080p · ~1 min</button>
             <button id="renderFinal" data-profile="delivery"
                     title="the bin's own frame rate, up to 4K, never upscaled — slower, bigger, for the final file">Final 4K · ~17 min</button>
           </div>
-          <!-- These play the 720p review copy, never the master: a delivery render is
-               4K at ~44 Mbps and no browser streams that off this box. -->
           <div id="filmNewest" hidden>
             <video id="previewA" controls preload="metadata"></video>
             <div class="hint" id="labelA"></div>
@@ -658,13 +760,21 @@
         </div>
       </section>
     </div>
-  </aside>
+  </section>
+  <div class="ws-split" data-split="top" title="drag to resize · double-click to reset"></div>
+
+  <!-- TIMELINE: the sequence. The module is /timeline/timeline.js (window.tl); app.js
+       mounts it here once the project has loaded. An empty sequence shows its first
+       action here. -->
+  <section class="ws-panel" id="pTimeline" data-panel="timeline">
+    <div class="ws-head"><div class="ws-tabs"><span class="ws-tab on" id="tlTitle"><span class="lbl">Timeline</span></span></div></div>
+    <div class="ws-body" id="tlBody">
+      <div id="tl"></div>
+      <div id="tlEmpty" hidden></div>
+    </div>
+  </section>
 </main>
 
-<!-- The keys, on ? — an overlay, the way the pass shows its map: one table grouped by
-     task, drawn by /dock.js from the board's keys and the timeline's own table. The
-     `Keys` heading stays: timeline-keys.js finds the panel by it and mounts its own
-     section (#tlKeys), which the table replaces on screen. -->
 <div id="keysOverlay" hidden>
   <div class="panel" role="dialog" aria-label="keys">
     <h2>Keys</h2>
@@ -673,7 +783,6 @@
   </div>
 </div>
 <div id="toast"></div>
-<!-- The music bed, heard under the monitor. -->
 <audio id="bed" loop preload="auto"></audio>
 <script src="/cli.js"></script>
 <script src="/switcher.js"></script>
@@ -683,10 +792,7 @@
 <script src="/timeline/timeline-trim.js"></script>
 <script src="/timeline/timeline-keys.js"></script>
 <script src="/timeline/timeline-lanes.js"></script>
-<!-- The grade over the monitor (INTAKE M10): loaded before app.js, which calls into
-     window.grade when the monitor moves and after a colour save. -->
 <script src="/grade.js"></script>
-<!-- The effects (INTAKE M12): the FX tool, the monitor overlay, the sketch. -->
 <script src="/fx.js"></script>
 <script src="/deep.js"></script>
 <script src="/app.js"></script>

@@ -476,7 +476,7 @@ def test_design_makes_a_proposal_card_and_never_touches_the_edl(page):
     assert card.locator("button[data-act=accept]").is_visible()
     assert card.locator("button[data-act=discard]").is_visible()
     assert card.locator("button[data-act=remove]").count() == 0
-    assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == "1"
+    assert page.locator(".ws-tab[data-tool=fx] .badge").inner_text() == "1"
     # the server: a proposal, on the shot, with its sound; the EDL untouched
     assert e["status"] == "proposed" and e["shot"] == shot_ids(page)[0]
     assert e["sound_url"].endswith("/sound.wav")
@@ -485,7 +485,7 @@ def test_design_makes_a_proposal_card_and_never_touches_the_edl(page):
     # shot 1: it is what waits across the cut, not the selected shot's (INTAKE M16)
     open_fx(page, 1)
     assert page.locator("#fx .fxcard").count() == 0
-    assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == "1"
+    assert page.locator(".ws-tab[data-tool=fx] .badge").inner_text() == "1"
 
 
 def test_the_nudges_move_a_hit_one_frame_through_put(page):
@@ -553,17 +553,17 @@ def test_the_check_runs_by_itself_then_change_accept_and_remove(page):
     card.locator("button[data-act=moments]").click()
     page.wait_for_function("document.querySelectorAll('#fx .fxev').length === 2")
     # the badge counts what waits on you: an accepted effect is answered (INTAKE M16)
-    assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == ""
+    assert page.locator(".ws-tab[data-tool=fx] .badge").inner_text() == ""
     # remove keeps it (Karl: reversible), out of the cut, with Restore; Delete is for good
     card.locator("button[data-act=remove]").click()
     page.wait_for_function("document.querySelector('#fx .fxcard .fxchip.removed') !== null")
     assert api(page, "/api/project")["effects"] == []
-    assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == ""
+    assert page.locator(".ws-tab[data-tool=fx] .badge").inner_text() == ""
     assert card.locator("button[data-act=restore]").is_visible()
     card.locator("button[data-act=restore]").click()
     page.wait_for_function("document.querySelector('#fx .fxcard .fxchip.accepted') !== null")
     assert len(api(page, "/api/project")["effects"]) == 1
-    assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == ""
+    assert page.locator(".ws-tab[data-tool=fx] .badge").inner_text() == ""
     card.locator("button[data-act=remove]").click()
     page.wait_for_function("document.querySelector('#fx .fxcard .fxchip.removed') !== null")
     card.locator("button[data-act=discard]").click()
@@ -838,7 +838,7 @@ def test_next_lands_on_the_waiting_effect_not_the_anchored_shot(page, live_serve
     # the board on shot 1, which has no effects: the badge still says one waits
     sid1 = open_fx(page, 0)
     assert page.evaluate("fx.state.shot") == sid1
-    assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == "1"
+    assert page.locator(".ws-tab[data-tool=fx] .badge").inner_text() == "1"
     page.evaluate("dock.open('bin')")
     page.evaluate("flowBar.poll()")
     page.wait_for_function(
@@ -865,7 +865,7 @@ def test_next_lands_on_the_waiting_effect_not_the_anchored_shot(page, live_serve
             return {{ct: c.top, tt: t.top, tb: t.bottom}}; }})()""")
         assert box["tt"] - 1 <= box["ct"] < box["tb"] - 40, box   # the card's head is in view
         assert page.evaluate("window.scrollY") == 0          # only the dock scrolled
-        assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == "1"
+        assert page.locator(".ws-tab[data-tool=fx] .badge").inner_text() == "1"
 
     # the waiting card is the first one now (I16.5); fx.focus still brings it into view
     # from a dock scrolled past it — the accepted cards' why? open makes the tool tall
@@ -937,14 +937,14 @@ def test_a_proposal_whose_shot_left_the_cut_neither_counts_nor_holds_next(page):
     e = design(page, shot=1)
     sid2 = shot_ids(page)[1]
     assert e["status"] == "proposed" and e["shot"] == sid2
-    assert page.locator("#rail .tool[data-tool=fx] .badge").inner_text() == "1"
+    assert page.locator(".ws-tab[data-tool=fx] .badge").inner_text() == "1"
     page.locator(f'#tl .blk[data-id="{sid2}"]').click()
     page.keyboard.press("x")
     page.wait_for_function(f"!segs.some(s => s.id === '{sid2}')")
     page.wait_for_function(
         "document.querySelector('#saveState').textContent.startsWith('saved')", timeout=8000)
     page.wait_for_function(
-        "document.querySelector('#rail .tool[data-tool=fx] .badge').textContent === ''",
+        "document.querySelector('.ws-tab[data-tool=fx] .badge').textContent === ''",
         timeout=5000)
     page.evaluate("flowBar.poll()")
     page.wait_for_function(
@@ -958,7 +958,7 @@ def test_a_proposal_whose_shot_left_the_cut_neither_counts_nor_holds_next(page):
     page.keyboard.press("Control+z")
     page.wait_for_function(f"segs.some(s => s.id === '{sid2}')")
     page.wait_for_function(
-        "document.querySelector('#rail .tool[data-tool=fx] .badge').textContent === '1'",
+        "document.querySelector('.ws-tab[data-tool=fx] .badge').textContent === '1'",
         timeout=5000)
 
 
