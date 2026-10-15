@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Fixed
+- **A quiet console on inserts (redesign wave 3, lane HEADER; verdict 3 punch 9, dimension 10).** A shot laid in by `,` or a drag carries a temporary `tmp-N` id until its save re-keys it, and Effects and the grade asked the server about it at once: `400 /api/fx/peaks?shot=tmp-1`, `400 /api/fx/price?…shot=tmp-1`, `404 /api/lut/tmp-1`, three console errors per insert. `fx.js` asks nothing per-shot for an unsaved id and fetches when the re-keyed anchor arrives; `grade.js` draws a fresh shot plain and takes its LUT once `tl.byId` resolves the re-key. New `app/tests/test_quiet_console.py`: three inserts (two `,`, one drag) with Effects open, 0 requests naming a `tmp-` id, 0 responses >= 400, 0 console errors, and Effects priced the shot by its real id after.
+
 ### Added
 - **Redesign verdict 3: FAIL, most dimensions now 6-7** (`judge/verdict-3.md` on `28eca35`; 1:7 2:6 3:7 4:7 5:7 6:5 7:5 8:7 9:6 10:6 11:3 12:2). K1 resolved on evidence (for Karl to confirm); K2 open. Its top finding: 9 of Killington's 12 clips (rotated 180°) preview upside down while the export is upright. Punch list drives wave 3.
 - **Wave 3 scaffold:** a `#meters` slot beside the Program picture and `meters.js` / `meters.css` stubs served from `/modules/`. `test_modules_route.py` covers them; test_workspace + test_budget unchanged and green (54 passed).

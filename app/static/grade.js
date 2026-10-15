@@ -395,6 +395,23 @@
       settle();
       return;
     }
+    if (G.shot.startsWith('tmp-')) {
+      // Laid in a moment ago: no grade yet, and the server has never heard of `tmp-N`
+      // (a 404 per insert, verdict 3 punch 9). Draw it plain and take the LUT once
+      // the save has re-keyed it (timeline.js `afterSave`; tl.byId resolves the old id).
+      G.lut = null;
+      settle();
+      const tmp = G.shot;
+      let tries = 0;
+      const wait = () => {
+        if (gen !== G.gen || G.shot !== tmp) return;
+        const s = window.tl && typeof tl.byId === 'function' ? tl.byId(tmp) : null;
+        if (s && s.id && !String(s.id).startsWith('tmp-')) { setShot(s.id); return; }
+        if (++tries < 60) setTimeout(wait, 250);
+      };
+      setTimeout(wait, 250);
+      return;
+    }
     const rec = await fetchLut(G.shot);
     if (gen !== G.gen) return;          // the monitor moved on while this was loading
     G.lut = rec;
