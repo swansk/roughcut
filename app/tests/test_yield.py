@@ -272,7 +272,7 @@ def test_the_board_says_when_it_plays(live_server):
                     for t, tab, on in list(server.PLAYING["log"])]
         try:
             pg.goto(live_server)
-            pg.wait_for_function("typeof player === 'object' && player.vids.length === 2")
+            pg.wait_for_function("typeof player === 'object' && player.vids.length >= 2")
             assert server.playing_now() is False
             pg.evaluate("player.playing = true")
             assert until(server.playing_now, 1.5), "the server never heard the Program play"
