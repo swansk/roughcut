@@ -203,7 +203,8 @@ def test_fresh_bin_offers_run_first_pass_in_the_header_and_both_empty_states(pag
     hover = pg.locator(f"{PANEL} .fp-scost").first.get_attribute("title") or ""
     assert "$" in hover and "no charge on your plan" in hover
     assert pg.locator(RUN).inner_text().strip() == "Run first pass"
-    # Esc closes it; the Timeline's and the Program monitor's empty states open it too
+    # Esc closes it; the Timeline's empty state opens it too (the Program monitor's copy
+    # is not drawn: two "Run first pass" on a cold screen, not three — verdict 5, punch 9)
     pg.keyboard.press("Escape")
     assert not pg.locator(PANEL).is_visible()
     tl = pg.locator('#tlEmpty [data-testid="firstpass-empty-timeline"]')
@@ -212,10 +213,7 @@ def test_fresh_bin_offers_run_first_pass_in_the_header_and_both_empty_states(pag
     tl.click()
     pg.wait_for_selector(PANEL, state="visible", timeout=5000)
     pg.keyboard.press("Escape")
-    mon = pg.locator('#progEmpty [data-testid="firstpass-empty-program"]')
-    assert mon.is_visible() and mon.inner_text().strip() == "Run first pass"
-    mon.click()
-    pg.wait_for_selector(PANEL, state="visible", timeout=5000)
+    assert not pg.locator('#progEmpty [data-testid="firstpass-empty-program"]').is_visible()
     # a bin without a cut: the first pass is THE first action, so its header button is
     # the screen's one blue button and Next's chip yields to it
     pg.keyboard.press("Escape")

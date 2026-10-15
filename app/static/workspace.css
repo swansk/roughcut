@@ -342,17 +342,10 @@ table.plist tr.row.sel td { background: #26405e; color: #fff; }
 table.plist td.name .n { display: flex; gap: 5px; align-items: center; min-width: 0; }
 table.plist td.name svg { width: 13px; height: 13px; flex: none; color: #8fb8e8; }
 table.plist td.name span { overflow: hidden; text-overflow: ellipsis; }
-/* Selects: a row's name is the clip and its line ("CLIP_01 · “i…" at 1440, verdict 4
-   punch 10) — it wraps to a second line rather than being cut off */
-#library table.plist td.name { white-space: normal; overflow: visible; }
-#library table.plist td.name .n { align-items: flex-start; }
-#library table.plist td.name span.w { white-space: normal; overflow: visible; overflow-wrap: anywhere;
-                                      text-overflow: clip; }
-/* With Reason shown (a 560 px list: Selects opened wide, wave 4 LAYOUT) the name, which
-   carries a still and a who-tag, gets more of the room than the one-line Reason, which
-   ellipsizes with the whole reason in its row's hover; equal halves wrapped a short line
-   over five rows at 1440 */
-#library table.sel-list:has(th[data-sort=why]) col:first-child { width: 31%; }
+/* Selects: one line per row, as a Premiere bin's list (verdict 5, punch 7 — the wrapped
+   name ran to five lines at 1440 while Reason was cut to a dozen characters). The name
+   (the kind chip and the quote) and the reason ellipsize; the row's hover says them whole.
+   Every other column is a fixed width (app.js SEL_COLS), the name takes the rest. */
 table.plist .st { color: var(--dim); }
 table.plist .st.ok { color: var(--good); }
 .picons { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; }
@@ -408,7 +401,15 @@ table.plist .st.ok { color: var(--good); }
 .keep:not(:hover):not(.sel):not(:focus-within) button.use.add { visibility: hidden; }
 #findDeep { margin-top: 6px; }
 #findDeep[hidden], #more[hidden], #libHint:empty { display: none; }
-#moreFound { margin-top: 8px; padding: 2px 0; color: var(--accent); }
+/* "more found" and "review on the pass" are the panel's own buttons (verdict 5, punch 7:
+   one read as a link in the accent blue, the other as an underlined link) */
+#moreFound { margin-top: 8px; padding: 1px 9px; font-size: 11.5px; line-height: 17px;
+             background: var(--card); border-color: var(--line); color: var(--text); }
+#moreFound:hover { background: var(--card-hi); border-color: var(--line-hi); }
+a.floorbtn, a.floorbtn:visited { display: inline-block; margin-left: 6px; padding: 0 8px;
+             font-size: 11px; line-height: 17px; color: var(--text); background: var(--card);
+             border: 1px solid var(--line); border-radius: 4px; white-space: nowrap; }
+a.floorbtn:hover { color: var(--text); background: var(--card-hi); border-color: var(--line-hi); }
 .keep { background: var(--card); border: 1px solid var(--line); border-radius: 4px;
         overflow: hidden; cursor: grab; outline: none; }
 .keep:focus-visible, .keep.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
@@ -528,8 +529,15 @@ table.plist .st.ok { color: var(--good); }
 #tlBody { overflow: clip; padding: 6px 8px 18px;
           background: linear-gradient(#0d0d11, #0d0d11) no-repeat 8px 6px / calc(100% - 16px) calc(100% - 24px); }
 #tl { margin-top: 0; }
+/* The track header column is one surface down to the panel's foot, as Premiere's is: the
+   seam between two tracks' headers (8 px between V1 and A1) showed the sequence area's
+   near-black through it — the dark stripe under the V1 header (verdict 5, punch 9). */
+#tl .tl-side { background: #18191d; }
 #tlEmpty { position: absolute; inset: 0; overflow: auto; padding: 14px; display: flex;
            align-items: center; justify-content: center; pointer-events: none; z-index: 8; }
+/* centred over the tracks, right of the header column (timeline.css --tl-side, 150 px,
+   plus the body's 8 px), so the column never covers the box's left edge */
+#tlEmpty { padding-left: 172px; }
 /* the box floats over the empty sequence's tracks; around it a drop reaches them */
 #tlEmpty > * { pointer-events: auto; background: rgba(19,19,22,.94); }
 #tlEmpty[hidden] { display: none; }
@@ -540,6 +548,10 @@ table.plist .st.ok { color: var(--good); }
 /* one AI action in the empty Timeline (verdict 4, punch 10): the first pass's box until a
    pass has finished, then "Make a first cut" (app.js emptyState sets data-ai) */
 #tlEmpty .empty[data-ai="pass"] .firstRow, #tlEmpty .empty[data-ai="cut"] .fp-empty { display: none !important; }
+/* Cold, "Run first pass" is the header's and the Timeline card's — two, not three
+   (verdict 5, punch 9): the empty Program monitor says how to fill it and offers no
+   button of its own (firstpass.js still mounts one there; it is not drawn). */
+#progEmpty .fp-empty-btn { display: none; }
 
 /* ------------------------------------------------------------ overlays */
 #keysOverlay { position: fixed; inset: 0; z-index: 60; background: rgba(4,4,6,.72);

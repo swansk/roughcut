@@ -631,6 +631,24 @@
     clip: null, marks: store.get(MARKS_KEY, {}), retry: 0,
     v: null,
     fps(c) { return Number((c || this.clip || {}).fps) || 24; },
+    /* The clip's own frame rate, exactly: the server keeps 3 places (29.97), the frames
+     * are 30000/1001 (the timeline's gridRate rule, for the clip instead of the
+     * sequence). null when the clip's rate is not known. */
+    rate(c) {
+      const r = Number((c || this.clip || {}).fps);
+      if (!(r > 0)) return null;
+      const n = Math.round(r * 1.001);
+      return Math.abs(r - Math.round(r)) > 0.004 && Math.abs(r - n / 1.001) < 0.004 ? n / 1.001 : r;
+    },
+    /* A Source In / Out on the clip's own frame grid (verdict 5, punch 8: a 29.97 clip in
+     * a 59.94 sequence was marked on the sequence's frames, 0.4 of its own frame off),
+     * kept to the 4 places the server keeps. A clip frame is always a frame of a sequence
+     * at the same or a multiple of its rate, so the insert's grid leaves it where it is. */
+    snap(t, c) {
+      const r = this.rate(c);
+      const x = Math.max(0, Number(t) || 0);
+      return r ? Math.round((Math.round(x * r) / r) * 1e4) / 1e4 : Math.round(x * 1000) / 1000;
+    },
     marksFor(c) {
       const m = this.marks[c.clip] || [];
       const dur = Number(c.duration) || 0;
@@ -702,7 +720,7 @@
       const c = this.clip, v = this.v;
       if (!c || !v) return;
       const m = this.marks[c.clip] || [null, null];
-      const t = Math.round(v.currentTime * 1000) / 1000;
+      const t = this.snap(v.currentTime, c);
       if (which === 'in') { m[0] = t; if (Number.isFinite(m[1]) && m[1] <= t) m[1] = null; }
       else { m[1] = t; if (Number.isFinite(m[0]) && m[0] >= t) m[0] = null; }
       this.marks[c.clip] = m;

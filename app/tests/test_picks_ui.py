@@ -205,6 +205,9 @@ def _all_tab(pg, n: int) -> None:
     pg.locator("#binTabs .tab[data-tab=all]").click()
     pg.wait_for_function(f"document.querySelectorAll('#library tr.keep').length === {n}",
                          timeout=10000)
+    # the tab's click re-reads the bin (refreshBin) and rebuilds the rows ~20 ms later:
+    # a row measured across that rebuild is a detached one (bounding_box None)
+    pg.wait_for_timeout(250)
 
 
 def test_before_a_first_pass_selects_is_the_keeps_alone(browser, live, bin5):
@@ -360,3 +363,119 @@ def test_keeps_and_picks_both_show_and_are_told_apart(browser, live, bin5):
     finally:
         pg.close()
         _seed(bin5, [], selects=[])
+
+
+# The colours a link must never wear in the Selects panel: the browser's own (blue,
+# visited purple, active red) and the board's accent, which read as "link blue" there.
+LINK_COLOURS = {"rgb(0, 0, 238)", "rgb(85, 26, 139)", "rgb(0, 0, 255)", "rgb(238, 0, 0)",
+                "rgb(74, 157, 248)"}
+LONG_NOTE = ("the whole crew piles off the chair at the top and somebody shouts that the "
+             "snow is perfect, then the camera swings round to the valley and the cloud lifts")
+LONG_WHY = ("the best reaction of the day: everyone is in frame, the light is right, the line "
+            "lands and it gives the film its turn from the lift ride into the first run")
+
+ROWS_JS = """() => [...document.querySelectorAll('#library tr.keep')].map((r) => {
+    const td = r.querySelector('td');
+    const w = r.querySelector('td.name .w');
+    const why = r.querySelector('td.why');
+    return {h: r.getBoundingClientRect().height, lh: parseFloat(getComputedStyle(td).lineHeight),
+            pad: parseFloat(getComputedStyle(td).paddingTop) + parseFloat(getComputedStyle(td).paddingBottom),
+            wh: w ? w.getBoundingClientRect().height : 0,
+            cut: w ? w.scrollWidth > w.clientWidth : false,
+            why: why ? why.getBoundingClientRect().width : 0,
+            tc: [...r.querySelectorAll('td.tc')].every((c) => c.scrollWidth <= c.clientWidth),
+            title: r.title}; })"""
+LINKS_JS = """() => [...document.querySelectorAll('#library a, #libHint a, #moreFound')]
+    .filter((a) => a.getClientRects().length).map((a) => {
+      const s = getComputedStyle(a);
+      return {tag: a.tagName, text: a.textContent.trim(), color: s.color, line: s.textDecorationLine,
+              bg: s.backgroundColor, border: s.borderTopStyle + ' ' + s.borderTopWidth}; })"""
+
+
+def test_selects_reads_like_a_bin_at_1440(browser, live, bin5):
+    """Verdict 5, punch 7: at 1440×900 the Selects rows wrapped the quote over up to five
+    lines while Reason was cut to about 12 characters; "review on the pass ↗" was an
+    underlined link and "more found ▸" link-blue. Now every row is one line (the kind chip
+    and the quote, ellipsized, the whole of it in the row's hover), Reason is ≥ 180 px,
+    and the panel's two extra routes are its own buttons — no link in browser blue,
+    the accent, or underlined."""
+    _record(True)
+    keeps = [{"clip": "CLIP_C.MP4", "start": 8.0, "end": 10.0, "note": LONG_NOTE, "why": LONG_WHY}]
+    _seed(bin5, CUT)
+    assert httpx.put(live + "/api/selects", json={"selects": keeps}, timeout=30).json().get("ok")
+    pg = browser.new_page(viewport={"width": 1440, "height": 900})
+    errors: list[str] = []
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    try:
+        pg.goto(live)                    # the default layout: Selects widens itself
+        pg.wait_for_function("window.tlLanes && typeof P !== 'undefined' && P && P.clips"
+                             " && window.tl && tl.state", timeout=20000)
+        pg.wait_for_selector("#tl .blk")
+        _all_tab(pg, 6)
+        pg.wait_for_timeout(300)
+        heads = pg.locator("#library table.sel-list th").all_inner_texts()
+        assert "Reason" in heads and "Name" in heads, heads
+        rows = pg.evaluate(ROWS_JS)
+        assert len(rows) == 6
+        for r in rows:
+            assert r["h"] <= 2 * r["lh"] + r["pad"] + 2, r          # ≤ 2 text lines tall
+            assert r["wh"] <= 1.5 * r["lh"], r                      # the name is one line
+            assert r["why"] >= 180, r                               # Reason ≥ 180 px
+            assert r["tc"], r                                       # a timecode is never cut
+        long = next(r for r in rows if LONG_NOTE in r["title"])
+        assert long["cut"], "the long quote ellipsizes"
+        assert LONG_WHY in long["title"], "the whole reason is in the hover"
+        # the kind chip is in the name
+        assert pg.locator("#library tr.keep.pick td.name .who.pass").count() == 5
+        # the routes out of the panel are its buttons: no browser blue, no accent, no underline
+        links = pg.evaluate(LINKS_JS)
+        texts = {x["text"] for x in links}
+        assert "review on the pass" in texts and any(t.startswith("more found") for t in texts), links
+        for x in links:
+            assert x["color"] not in LINK_COLOURS, x
+            assert "underline" not in x["line"], x
+        for x in links:
+            if x["text"] == "review on the pass" or x["text"].startswith("more found"):
+                assert x["bg"] not in ("rgba(0, 0, 0, 0)", "transparent"), x   # a button's face
+                assert x["border"].startswith("solid"), x
+        _shot(pg, "05-selects-at-1440")
+        assert errors == []
+    finally:
+        pg.close()
+        _seed(bin5, [], selects=[])
+
+
+def test_selects_shows_the_picks_opened_a_second_after_they_land(browser, live, bin5):
+    """JOURNEY2's flaky `selects` step: a picks read made before the first pass had picked
+    (`firstpass_picked` false: no rows) was kept for PICKS_TTL_MS (4 s), and showing the
+    Selects tab did not re-read, so Selects said "nothing kept yet" after a pass. A read
+    that says "not picked yet" is never kept now, and `rcPicksStale()` (called when the
+    pass's result lands) forces one."""
+    _record(False)
+    _seed(bin5, CUT)
+    pg = _open(browser, live)
+    try:
+        pg.wait_for_selector("#tl .blk")
+        assert pg.evaluate("typeof window.rcPicksStale") == "function"
+        pg.evaluate("dock.open('bin')")
+        pg.wait_for_function(
+            "document.querySelector('#library').textContent.length > 0", timeout=8000)
+        pg.wait_for_timeout(300)                     # the pre-pass read has landed: no picks
+        assert pg.locator("#library tr.keep.pick").count() == 0
+        _record(True)                                # the (mocked) pass makes its picks
+        t0 = time.monotonic()
+        pg.evaluate("dock.open('project')")
+        pg.evaluate("dock.open('bin')")              # Selects shown again, well within 4 s
+        pg.locator("#binTabs .tab[data-tab=all]").click()
+        pg.wait_for_function("document.querySelectorAll('#library tr.keep.pick').length === 5",
+                             timeout=1000)
+        assert time.monotonic() - t0 < 1.5
+        # the pass's result handler forces the re-read too, however fresh the cache
+        _record(False)
+        pg.evaluate("rcPicksStale()")
+        pg.wait_for_function("document.querySelectorAll('#library tr.keep.pick').length === 0",
+                             timeout=2000)
+        assert pg.errors == []
+    finally:
+        pg.close()
+        _record(False)

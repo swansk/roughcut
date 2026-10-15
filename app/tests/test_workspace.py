@@ -736,7 +736,7 @@ def test_a_layout_saved_before_the_new_arrangement_keeps_its_widths_once(live_se
 @pytest.mark.parametrize("size", VIEWPORTS, ids=lambda s: f"{s[0]}x{s[1]}")
 def test_selects_opens_wide_enough_for_its_media_in_out_and_reason(live_server, project, browser, size):
     """Verdict 4's note: at 1440 the Project group was too narrow for the Selects list's
-    Media In / Media Out and Reason columns (app.js shows them from a 440 / 560 px list).
+    Media In and Reason columns (app.js shows them from a 440 / 560 px list).
     While Selects is the group's open tab the group is wide enough for them, taken from
     the Timeline (which keeps >= 460 px); the Project tab gives the width back."""
     pg = _open(browser, live_server, project, size)
@@ -747,7 +747,9 @@ def test_selects_opens_wide_enough_for_its_media_in_out_and_reason(live_server, 
     assert pg.evaluate("document.querySelector('#library').clientWidth") >= 560
     assert box(pg, "#pTimeline")["w"] >= 460
     head = pg.locator("#library table.sel-list th").all_inner_texts()
-    assert {"Media In", "Media Out", "Reason"} <= {h.strip() for h in head}, head
+    # Media Out is In plus Duration, and in the row's hover: from a 640 px list (verdict 5,
+    # punch 7 gave its room to a one-line name and a Reason of >= 180 px)
+    assert {"Media In", "Duration", "Reason"} <= {h.strip() for h in head}, head
     s = pg.evaluate("[document.documentElement.scrollWidth, innerWidth]")
     assert s[0] <= s[1], s
     pg.locator(".ws-tab[data-tool=project]").click()
@@ -881,3 +883,134 @@ def test_the_workspace_styles_are_a_module_not_an_inline_block(live_server):
         assert r.headers["content-type"].startswith("text/css")
         css = r.read().decode("utf-8")
     assert "#ws {" in css and ".ws-tab" in css
+
+
+RUN_FIRST_PASS_JS = """() => [...document.querySelectorAll('button, a[href], [role=button]')]
+    .filter((b) => { const r = b.getBoundingClientRect(), s = getComputedStyle(b);
+      return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'
+        && /Run first pass/.test(b.textContent); })
+    .map((b) => b.closest('header') ? 'header' : b.closest('#pTimeline') ? 'timeline'
+      : b.closest('#pProgram') ? 'program' : b.id || b.className)"""
+
+
+def test_the_cold_screen_offers_run_first_pass_twice_and_says_what_comma_does(
+        live_server, project, browser):
+    """Verdict 5, punch 9: cold, "Run first pass" showed three times (the header, the
+    Timeline card and the Program monitor), the Program read "… or press ," and a dark
+    stripe sat under the V1 header. Now: the header's and the Timeline's, no more; both
+    empty states say "press , (Insert)"; the track header column is one colour down to
+    the panel's foot."""
+    import os
+    pg = _open(browser, live_server, project, (1440, 900), seed={**SEED, "segments": []})
+    pg.wait_for_selector("#tlEmpty .fp-empty-btn:visible", timeout=15000)
+    pg.wait_for_function("window.rcFirstPass && rcFirstPass.state()", timeout=15000)
+    pg.wait_for_timeout(500)
+    shots = os.environ.get("ROUGHCUT_COLD_SHOTS")
+    if shots:
+        Path(shots).mkdir(parents=True, exist_ok=True)
+        pg.screenshot(path=str(Path(shots) / "cold-1440.png"))
+    where = pg.evaluate(RUN_FIRST_PASS_JS)
+    assert sorted(where) == ["header", "timeline"], where
+    assert "press , (Insert)" in pg.locator("#progEmpty").inner_text()
+    assert "press , (Insert)" in pg.locator("#tlEmpty .empty").inner_text()
+    # the track header column under V1: the seam down to A1's header is the column's own
+    # surface, never the sequence area's near-black showing through
+    seam = pg.evaluate(SEAM_JS)
+    assert seam["gap"] >= 0, seam
+    assert seam["seam"] >= seam["head"] - 6, seam          # no dark band between V1 and A1
+    assert pg.errors == []
+    pg.context.close()
+
+
+SEAM_JS = r"""() => {
+    const heads = [...document.querySelectorAll('#tl .tl-thead')];
+    const named = (n) => heads.find((h) => h.querySelector('.tname')
+      && h.querySelector('.tname').textContent.trim() === n);
+    const rv = named('V1').getBoundingClientRect(), ra = named('A1').getBoundingClientRect();
+    const lum = (c) => { const m = c.match(/[\d.]+/g).map(Number);
+      return m.length > 3 && m[3] === 0 ? null : (m[0] + m[1] + m[2]) / 3; };
+    // the first painted layer under the point: a background colour, or a gradient's
+    // (the sequence area's near-black is #tlBody's background-image)
+    const paint = (x, y) => { for (const e of document.elementsFromPoint(x, y)) {
+      const s = getComputedStyle(e), g = s.backgroundImage.match(/rgba?\([^)]*\)/);
+      const l = lum(g ? g[0] : s.backgroundColor); if (l != null) return l; } return null; };
+    const x = rv.left + rv.width / 2;
+    return {gap: ra.top - rv.bottom, seam: paint(x, (rv.bottom + ra.top) / 2),
+            head: paint(x, rv.top + 3)}; }"""
+
+
+NTSC = 30000 / 1001
+
+
+def _source_marks(pg, clip: str, a: float, b: float) -> dict:
+    """CLIP open in the Source monitor, its In at `a` and its Out at `b` — I and O pressed
+    with the Source monitor focused, as an editor marks them."""
+    pg.locator("#projList tr.row", has_text=clip.split(".")[0]).click()
+    pg.wait_for_function("document.querySelector('#srcVideo').readyState >= 1", timeout=10000)
+    pg.locator("#pSource .ws-head").click()
+    for t, key in ((a, "i"), (b, "o")):
+        pg.evaluate(f"document.querySelector('#srcVideo').currentTime = {t}")
+        pg.wait_for_function(f"Math.abs(document.querySelector('#srcVideo').currentTime - {t}) < 0.002")
+        pg.keyboard.press(key)
+    return pg.evaluate("({...rcSource})")
+
+
+def test_source_in_out_land_on_the_clips_own_frames(live_server, project, browser):
+    """Verdict 5, punch 8: a Source In/Out on a 29.97 clip in a 59.94 sequence landed on
+    the sequence's frames (CLIP_11 127.3439 s, 0.4 of its own frame off). The marks are
+    on the clip's own grid — `in × 29.97` a whole number — and `,` keeps them there."""
+    pg = _open(browser, live_server, project, (1440, 900))
+    pg.evaluate("tl.setFps(59.94)")                         # a 59.94 sequence
+    pg.locator("#projList tr.row", has_text="CLIP_C").click()
+    pg.evaluate("dock.source.clip.fps = 29.97")              # a 29.97 clip (the server's 3 places)
+    src = _source_marks(pg, "CLIP_C.MP4", 1.2345, 3.4567)
+    for k in ("inPoint", "outPoint"):
+        f = src[k] * NTSC
+        assert abs(f - round(f)) < 0.01, (k, src[k], f)       # on a 29.97 frame
+    assert src["inPoint"] == pytest.approx(1.2345, abs=0.5 / NTSC)
+    assert src["outPoint"] == pytest.approx(3.4567, abs=0.5 / NTSC)
+    # `,` at the head: the shot's in and out are the marks, still on the clip's frames
+    pg.evaluate("document.activeElement && document.activeElement.blur()")
+    pg.locator("#pTimeline .ws-head").click()
+    pg.evaluate("tl.seek(0)")
+    n = pg.evaluate("segs.length")
+    pg.keyboard.press(",")
+    pg.wait_for_function(f"segs.length === {n + 1}", timeout=5000)
+    seg = pg.evaluate("({clip: segs[0].clip, in: segs[0].in, out: segs[0].out})")
+    assert seg["clip"] == "CLIP_C.MP4", seg
+    for k in ("in", "out"):
+        f = seg[k] * NTSC
+        assert abs(f - round(f)) < 0.01, (k, seg[k], f)
+    assert seg["in"] == pytest.approx(src["inPoint"], abs=1e-4)
+    assert seg["out"] == pytest.approx(src["outPoint"], abs=1e-4)
+    assert pg.errors == []
+    pg.context.close()
+
+
+@pytest.mark.parametrize("key", [".", ","])
+def test_overwrite_or_insert_past_the_end_leaves_a_gap(live_server, project, browser, key):
+    """Verdict 5, punch 8: `.` with the playhead past the film's end clamped to the end.
+    As in Premiere the playhead sits past the end, and `.` (or `,`) there leaves a gap of
+    exactly that length on V1, the clip after it."""
+    pg = _open(browser, live_server, project, (1440, 900))
+    tot = pg.evaluate("tl.total()")
+    src = _source_marks(pg, "CLIP_C.MP4", 1.0, 3.0)
+    assert [src["inPoint"], src["outPoint"]] == [1.0, 3.0]
+    pg.locator("#pTimeline .ws-head").click()
+    pg.evaluate(f"tl.seek({tot} + 10)")
+    assert pg.evaluate("tl.state.playhead") == pytest.approx(tot + 10, abs=1e-6), "past the end"
+    pg.wait_for_timeout(200)                                  # a render keeps it there
+    assert pg.evaluate("tl.state.playhead") == pytest.approx(tot + 10, abs=1e-6)
+    n = pg.evaluate("segs.length")
+    pg.keyboard.press(key)
+    pg.wait_for_function(f"segs.length === {n + 2}", timeout=8000)
+    gap, shot = pg.evaluate("[segs[segs.length - 2], segs[segs.length - 1]]"
+                            ".map(s => ({clip: s.clip, in: s.in, out: s.out, gap: !!s.gap}))")
+    assert gap["gap"] is True and gap["out"] - gap["in"] == pytest.approx(10, abs=0.5 / 24), gap
+    assert shot == {"clip": "CLIP_C.MP4", "in": 1.0, "out": 3.0, "gap": False}, shot
+    assert pg.evaluate("tl.total()") == pytest.approx(tot + 10 + 2, abs=0.05)
+    # one undo takes the gap and the clip away together
+    pg.keyboard.press("Control+z")
+    pg.wait_for_function(f"segs.length === {n}", timeout=5000)
+    assert pg.errors == []
+    pg.context.close()
