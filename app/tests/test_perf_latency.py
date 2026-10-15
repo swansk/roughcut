@@ -467,3 +467,71 @@ def test_latency_under_load(live_server):
         xs = facts[k]
         assert statistics.median(xs) <= LIMIT_MS, f"{k}: {xs}"
         assert max(xs) <= LIMIT_MS * 1.5, f"{k}: {xs}"
+
+
+SCREEN_MEAN_JS = """async (b64) => {
+  const blob = await (await fetch('data:image/png;base64,' + b64)).blob();
+  const bm = await createImageBitmap(blob);
+  const c = document.createElement('canvas');
+  c.width = bm.width; c.height = bm.height;
+  const x = c.getContext('2d');
+  x.drawImage(bm, 0, 0);
+  const d = x.getImageData(0, 0, c.width, c.height).data;
+  const m = [0, 0, 0];
+  for (let i = 0; i < d.length; i += 4) { m[0] += d[i]; m[1] += d[i + 1]; m[2] += d[i + 2]; }
+  return m.map((v) => v / (d.length / 4));
+}"""
+
+
+def test_the_grade_draws_in_a_worker_shows_what_probe_reads_and_prefetches(live_server):
+    """Wave 7: the monitor's grade canvas belongs to a worker (OffscreenCanvas), so its
+    draw and the software-GL read-back at commit are off the main thread; probe() reads a
+    canvas of its own. What the screen shows is what probe() reads (the screenshot of the
+    canvas, decoded in the page), and the next shot's LUT is fetched when the player parks
+    the buffer for it (app.js armNext → grade.prefetch), not at the cut."""
+    import base64
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            luts: list[str] = []
+            page.on("request", lambda r: luts.append(r.url.split("/api/lut/")[1].split("?")[0])
+                    if "/api/lut/" in r.url else None)
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(live_server)
+            page.wait_for_function("window.grade && grade.ready && window.effects && C && C.shots",
+                                   timeout=15000)
+            assert page.evaluate("grade.mode") == "worker"
+            page.evaluate("cueAt(0, segs[0].in + 0.5)")
+            page.wait_for_function("liveVideo() && liveVideo().readyState >= 2 && grade.lut"
+                                   " && document.querySelector('#gradeCanvas.on')", timeout=15000)
+            # parked on shot 1, the buffer for shot 2 is armed: its LUT is asked for already
+            page.wait_for_function("player.vids[1 - player.cur].readyState >= 2", timeout=15000)
+            page.wait_for_timeout(600)
+            assert "s2" in luts, luts
+
+            def screen() -> list[float]:
+                png = page.locator("#gradeCanvas").screenshot()
+                return page.evaluate(SCREEN_MEAN_JS, base64.b64encode(png).decode())
+
+            graded, probed = screen(), page.evaluate("grade.probe()")
+            page.evaluate("grade.enabled = false")
+            page.wait_for_timeout(300)
+            raw = page.evaluate("grade.probe()")
+            page.evaluate("grade.enabled = true")
+            page.wait_for_timeout(500)
+            print("\nGRADE screen", graded, "probe", probed, "raw", raw, flush=True)
+            # the hand balance moves the picture (warmer: less blue) and the screen shows it
+            assert raw[2] - probed[2] > 3, (raw, probed)
+            assert all(abs(a - b) < 2.0 for a, b in zip(graded, probed)), (graded, probed)
+            # through the cut into shot 2: no LUT is fetched there, it was fetched while parked
+            n = len(luts)
+            page.keyboard.press("Space")
+            page.wait_for_function("player.idx >= 2", timeout=10000)
+            page.keyboard.press("Space")
+            assert "s2" not in luts[n:], luts
+            assert errors == [], errors
+        finally:
+            browser.close()

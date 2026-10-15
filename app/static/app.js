@@ -1684,6 +1684,9 @@ function prerollAt(seg, room = Infinity) {
 
 function armNext(v, seg, room) {
   const at = prerollAt(seg, room);
+  // the grade fetches the next shot's LUT and makes its texture now, not at the cut
+  const gr = gradeApi();
+  if (gr && typeof gr.prefetch === 'function') gr.prefetch(seg.id);
   // Already paused a little ahead of the in-point in that clip (a cutaway and back: the
   // buffer stopped at the out-point the next shot starts from): it is parked; a seek
   // would only cost a decode from the keyframe.
