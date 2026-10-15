@@ -2434,6 +2434,8 @@ function showProposal(plan) {
   if (window.dock) dock.reveal('#proposal');
   if (window.dock) dock.badge('ask', 0);
 }
+/* The first pass's hook (/modules/firstpass.js): its result is an ordinary proposal. */
+window.rcShowProposal = (plan) => { if (plan && Array.isArray(plan.segments)) showProposal(plan); };
 
 /* An elapsed count, not a frozen string. "building a first cut — about a minute…"
  * sitting there unchanged is indistinguishable from a hung app, which is exactly how

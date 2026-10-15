@@ -2253,8 +2253,14 @@ def note_accept(edl: dict, saved: list[dict]) -> None:
     try:
         for rec in _ask_records(newest=3):
             plan = rec.get("plan") or {}
-            if rec.get("answered") or plan.get("unchanged"):
+            # The board's Accept saves the cut and answers the record in two requests
+            # that race: an "accept" answer that landed first is still this save's.
+            answer = (rec.get("answered") or {}).get("answer")
+            if (answer and answer != "accept") or plan.get("unchanged"):
                 continue
+            if answer == "accept" and any(b.get("job") == rec.get("job")
+                                          for b in fpmod.bases(edl)[:1]):
+                return                        # recorded already
             if not fpmod.is_accept(saved, plan.get("segments") or []):
                 continue
             before = {s.get("id"): s for s in fpmod._segments(edl) if s.get("id")}
@@ -2461,6 +2467,32 @@ async def api_firstpass_post(request: Request) -> JSONResponse:
                          "would": would})
 
 
+@app.post("/api/firstpass/cancel")
+def api_firstpass_cancel() -> JSONResponse:
+    """Stop the running first pass (the header control's ×). It stops between steps:
+    an index it is on stops after the clip-stage in hand (the journal keeps what
+    finished); a proposal being written is discarded when it lands. The pass's record
+    goes back to what it was before this run, so the control reads as it did."""
+    live = _fp_live()
+    if live is None:
+        raise HTTPException(409, "the first pass is not running")
+    live["cancel"] = True
+    if live["stage"] == "index":
+        for x in INDEXES.values():
+            if x["state"] not in progress.TERMINAL:
+                x["cancel"] = True
+    return JSONResponse({"job": live["id"], "stage": live["stage"], "cancelling": True})
+
+
+class _FpCancelled(Exception):
+    """The editor stopped the first pass."""
+
+
+def _fp_check(fp: dict) -> None:
+    if fp.get("cancel"):
+        raise _FpCancelled()
+
+
 def firstpass_index() -> str | None:
     """The index step: join an index already running, or run one on this thread.
     Returns the index job id, None when the index had nothing to do."""
@@ -2486,6 +2518,7 @@ def _fp_step(fp: dict, key: str, state: str, **extra) -> None:
 
 def _firstpass_job(job: str) -> None:
     fp = FIRSTPASS[job]
+    before = _fp_record()                  # what a cancel puts back
     rec = {"job": job, "mode": fp["mode"], "keep": fp["keep"], "state": "running",
            "started": fp["started"], "clips": len(footage_clips()),
            "cut": cut_name_of(read_edl(), STATE["edl"])}
@@ -2504,6 +2537,7 @@ def _firstpass_job(job: str) -> None:
             ix_job = firstpass_index()
             stages = {s["key"]: s for s in flowmod.compute(flow_facts())["stages"]}
             counts = _fp_index_counts(stages["index"])
+            _fp_check(fp)
             if ix_job and INDEXES.get(ix_job, {}).get("state") == "failed":
                 raise RuntimeError(f"the index failed: {INDEXES[ix_job].get('detail')}")
             _fp_step(fp, "index", "done", job=ix_job, counts=counts)
@@ -2522,6 +2556,7 @@ def _firstpass_job(job: str) -> None:
         rows = bin_picks()
         fp["picks"] = len(rows)
         _fp_step(fp, "picks", "done", picks=len(rows))
+        _fp_check(fp)
 
         # 3 · the proposed cut — the Ask's own call, locks enforced, notes checked
         _fp_step(fp, "cut", "running")
@@ -2559,6 +2594,17 @@ def _firstpass_job(job: str) -> None:
                  (float(target[0]), float(target[1])), payload["events"], None,
                  locked=locked, finish=finish, originate=originate)
         entry = ASKS[ask]
+        if fp.get("cancel"):
+            # stopped while the model wrote: the proposal is discarded, never offered
+            try:
+                p = STATE["asks"] / f"{ask}.json"
+                r = json.loads(p.read_text(encoding="utf-8"))
+                r["answered"] = {"answer": "discard", "at": time.time(), "why": "cancelled"}
+                p.write_text(json.dumps(r, indent=1), encoding="utf-8")
+            except (OSError, ValueError):
+                pass
+            entry.finish("cancelled", detail="the first pass was stopped")
+            raise _FpCancelled()
         if entry["state"] != "done":
             raise RuntimeError(f"the cut failed: {entry.get('detail')}")
         plan = entry["plan"] or {}
@@ -2575,6 +2621,10 @@ def _firstpass_job(job: str) -> None:
                                      "length_s": round(sum(edits.dur(s) for s in
                                                            plan.get("segments") or []), 2)}})
         fp["state"] = "done"
+    except _FpCancelled:
+        _fp_step(fp, fp.get("stage") or "index", "cancelled")
+        fp["state"] = "cancelled"
+        rec = before                       # as it stood before this run
     except Exception as exc:  # noqa: BLE001 — deliberately total: the job must end
         step = fp.get("stage") or "index"
         _fp_step(fp, step, "failed", error=str(exc)[:300])
@@ -2582,7 +2632,10 @@ def _firstpass_job(job: str) -> None:
         fp["state"] = "failed"
         fp["error"] = str(exc)[:300]
     finally:
-        _fp_save(rec)
+        if rec is not None:
+            _fp_save(rec)
+        else:
+            firstpass_path().unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------- analysis
@@ -3965,7 +4018,7 @@ def _index_job(job: str, order: str) -> None:
         except (OSError, ValueError, journal.JournalError) as exc:
             entry.note(f"junk check skipped: {str(exc)[:80]}")
         nxt = j.next()
-        if nxt is None:
+        if nxt is None or entry.get("cancel"):     # the first pass's × stops between stages
             break
         clip, stage = nxt
         stem = Path(clip).stem
@@ -3999,6 +4052,9 @@ def _index_job(job: str, order: str) -> None:
             report(f"{stem} released")
     prog = j.progress()
     entry["journal"] = prog
+    if entry.get("cancel"):
+        entry.finish("cancelled", detail="stopped — what finished is kept; index the rest any time")
+        return
     entry.complete("index")
     n = len([c for c in j.clips if not j.clips[c].get("missing")])
     tail = (f" — priced stages paused: {j.data.get('paused_reason') or 'budget cap'}"
@@ -4188,9 +4244,13 @@ def index_entry() -> str:
     INDEXES[job] = progress.Job(
         "index", "Indexing the footage", id=job, state="running", journal=None,
         released=0, cost_usd=0.0, detail="opening the journal")
+    # No clock estimate: a fixed 60 s called "measured" drew 18 % at 7 s and 90 % for
+    # 12 min with nothing heard (verdict 2). The bar is held to the journal's counted
+    # clip-stages and the time left is the journal's measured one, or none.
     INDEXES[job].set_estimate(
-        60.0, [progress.milestone("index", "indexing, clip by clip", 1.0)],
-        source="measured")
+        None, [progress.milestone("index", "indexing, clip by clip", 1.0)],
+        source="none")
+    flowmod.honest_index_job(INDEXES[job])
     return job
 
 

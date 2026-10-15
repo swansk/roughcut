@@ -213,6 +213,72 @@ def honest_pct(counts: dict) -> float:
     return done / denom
 
 
+# The four clip-stages `honest_pct` counts, as the journal names them.
+JOURNAL_COUNTED = ("asr", "look", "close", "proxy")
+
+
+def journal_counts(prog: dict | None) -> dict:
+    """The journal's own progress (`journal.progress()`) as `honest_pct`'s counts: a
+    clip-stage counts once it is settled (done or skipped). Only the four stages the
+    flow counts; probes and telemetry are never work done."""
+    prog = prog or {}
+    stages = prog.get("stages") or {}
+    n = max(0, int(prog.get("clips") or 0) - int(prog.get("missing") or 0))
+
+    def settled(s: str) -> int:
+        st = stages.get(s) or {}
+        return int(st.get("done") or 0) + int(st.get("skipped") or 0)
+
+    return {"clips": n, "listened": settled("asr"), "looked": settled("look"),
+            "look_need": n, "close": settled("close"), "close_need": n,
+            "proxied": settled("proxy")}
+
+
+def index_eta(prog: dict | None, elapsed_s: float, since_s: float = 0.0) -> float | None:
+    """The index's time left, only when it is measured (verdict 2: "about 0:07 left" at
+    6 min with 0 of 12 ready, and a fixed 60 s guess called "measured"). None until
+    every counted stage still to run has finished on at least one clip (the journal's
+    per-stage means), and never less than the run's own pace says: at a share `f`
+    done after `elapsed_s`, the rest takes at least `elapsed_s · (1 − f) / f`.
+    `since_s` is how long ago the journal's numbers were read."""
+    prog = prog or {}
+    if set(prog.get("eta_unmeasured") or []) & set(JOURNAL_COUNTED):
+        return None
+    eta = prog.get("eta_s")
+    f = honest_pct(journal_counts(prog))
+    if eta is None or f <= 0.0 or f >= 1.0:
+        return None
+    pace = float(elapsed_s) * (1.0 - f) / f
+    return round(max(float(eta) - max(0.0, float(since_s)), pace), 1)
+
+
+def honest_index_job(job) -> None:
+    """Hold an index job (`progress.Job`) to its counts: its bar never above the share
+    the journal's clip-stages prove, its time left `index_eta` or nothing. The job's
+    `journal` key is the progress the index last reported."""
+    import time as _time
+
+    seen: dict = {"prog": None, "at": 0.0}
+
+    def prog_of(j) -> dict | None:
+        prog = j.get("journal")
+        if prog is not seen["prog"]:
+            seen.update(prog=prog, at=_time.time())
+        return prog
+
+    def bound(j) -> float:
+        return 100.0 * honest_pct(journal_counts(prog_of(j)))
+
+    def eta(j) -> float | None:
+        prog = prog_of(j)
+        left = index_eta(prog, j.elapsed(), _time.time() - seen["at"]) if prog else None
+        j["eta_source"] = "measured" if left is not None else "none"
+        return left
+
+    job.bound_fn = bound
+    job.eta_fn = eta
+
+
 def index_counts_words(counts: dict) -> str:
     """"heard 3/12 · looked at 1/12 · previews 2/12" — the counts a progress line rests
     on, in the order the index buys them."""
