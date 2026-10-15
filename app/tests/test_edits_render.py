@@ -127,7 +127,8 @@ def test_a_half_speed_part_is_twice_as_long(cut):
     other = _mad(frame, _gray(cut["proxy_a"], 4.0))
     assert same < other, (same, other)
     a = next(s for s in _probe(slow)["streams"] if s["codec_type"] == "audio")
-    assert (a["codec_name"], a["sample_rate"], a["channels"]) == ("aac", "48000", 2)
+    # a part's sound is PCM since wave 4 (EXPORTSTOP): the film's one AAC encode is at the join
+    assert (a["codec_name"], a["sample_rate"], a["channels"]) == ("pcm_s16le", "48000", 2)
     assert "×0.5" in cut["log"] and "×2" in cut["log"]
 
 

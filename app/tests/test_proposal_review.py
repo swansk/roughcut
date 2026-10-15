@@ -211,9 +211,11 @@ def test_a_waiting_first_cut_opens_on_reload_as_an_edit(browser, live_server, pr
         pg.wait_for_function(
             f"[...document.querySelectorAll('{GHOST} .gstrip img')].every(i => i.complete && i.naturalWidth > 0)",
             timeout=20000)
-        # every row on screen without scrolling the panel
+        # rows on screen without scrolling the panel: since wave 4's LAYOUT the Assistant
+        # lives in the bottom row (~410 px at 1440x900), so 4 of the 5 rows fit and the
+        # panel scrolls like Premiere's do; the ghost lane above shows every shot
         body_box = pg.evaluate("document.querySelector('#proposal').closest('.ws-body').getBoundingClientRect().bottom")
-        last = rows.nth(4).bounding_box()
+        last = rows.nth(3).bounding_box()
         assert last["y"] + last["height"] <= body_box + 1, (last, body_box)
 
         # a rejection, from the table: the lane and Accept follow; every button on one row

@@ -49,6 +49,10 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-15 16:00: the wave-4 gate (`89060ed`) was RED: 4 broken = 3 stale expectations (PCM parts, versioned poster,
+  proposal rows vs LAYOUT's bottom-row Assistant) + 1 real lag (live highlight deferred with PERF's repaint; fixed). Trade-off
+  for judge 5 to rule on: with Premiere-sized monitors the Assistant (proposal table) sits in the bottom row and shows ~4
+  rows before it scrolls; the ghost lane shows every shot.
 - 2026-10-15 15:10: **wave 4 merged**: RERUN `3349be3`, PICKS2 `bca9671`+`5bcdf33` (journey 15 steps), EXPORTSTOP `e1a3b2e`
   (+ lead `51cc176` bed bitrate), POLISH `5c322bf`, PERF `5f5a309` (+ lead `e8a1484` poster test), LAYOUT `7907718`,
   REVIEW `ad00a46` (+ lead: fp fixture clears INDEXES). Wave-5 queue adds: the double save (acceptProposal saves, then

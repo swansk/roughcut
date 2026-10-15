@@ -1679,7 +1679,13 @@ function advance() {
   // threads the new shot is using), Effect Controls rebuilds for the new shot and the
   // timeline repaints — at load 20 those were ~100 ms of main thread in the cut's frame.
   // The inspector and the timeline catch up even if the monitor was stopped meanwhile.
-  // One piece per frame, so no frame carries all three.
+  // One piece per frame, so no frame carries all three. The block highlight is not one of
+  // them: it is a class flip with no layout, so it moves AT the cut (deferred with the
+  // repaint it lagged the picture by up to half a second; the wave-4 gate caught it).
+  for (const b of document.querySelectorAll('#tl .live[data-i]')) b.classList.remove('live');
+  for (const b of document.querySelectorAll(`#tl .blk[data-i="${next}"], #tl .ablk[data-i="${next}"]`)) {
+    b.classList.add('live');
+  }
   afterFirstFrames(nv, () => {
     if (g === player.gen && segs[next + 1]) armNext(v, segs[next + 1]);
     afterFirstFrames(nv, () => {

@@ -188,7 +188,8 @@ def test_the_folder_reads_as_a_contact_sheet(client, project):
     assert a["proxy"] and a["analysed"] and not a["looked"] and not a["closed"]
     assert a["telemetry"] is False, "the synthetic clips carry no gpmd stream"
     assert a["released"] is True
-    assert a["journal"] is None and a["poster"].startswith("/media/poster/CLIP_A.jpg")
+    # versioned in the name since wave 4 (a browser drops a pre-ORIENT upside-down poster)
+    assert a["journal"] is None and a["poster"].startswith("/media/poster/CLIP_A.v2.jpg")
     # three files written seconds apart are one session
     assert d["sessions"] == 1 and {c["session"] for c in d["clips"]} == {1}
     assert d["total_s"] == pytest.approx(18.0, abs=0.3)

@@ -10,6 +10,10 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **The timeline's live-shot highlight moves at the cut again.** PERF deferred the whole timeline repaint past a cut to keep the cut's frame light, and the `.live` block highlight rode along: it still marked the previous shot 0.2 s after the cut (caught by the wave-4 gate, `test_the_playhead_follows_playback_across_the_whole_film`, instrumented). `advance()` now flips the class itself at the cut, a class change with no layout; the repaint stays deferred.
+- **Three tests caught up with merged changes** the wave-4 gate found broken: a render part's sound is PCM since EXPORTSTOP (`test_edits_render`); the index listing's poster is the versioned URL (`test_index`); the proposal table's "rows on screen" check counts the 4 rows that fit in the bottom-row Assistant of LAYOUT's arrangement (`test_proposal_review`; logged as a trade-off for the judge). The four files: 31 passed.
+
+### Fixed
 - **`test_firstpass.py` no longer depends on file order.** Index jobs that `test_firstpass_ui.py` cancels stayed in `server.INDEXES`, so `test_run_then_hand_trim_then_rerun_keeps_the_trim` failed whenever that file ran first (found by REVIEW). The `fp` fixture clears `INDEXES` like it clears `FIRSTPASS`; firstpass_ui then firstpass in one process: 35 passed.
 
 ### Docs
