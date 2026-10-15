@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Fixed
+- **`test_project_offers_a_poster_url_per_clip` expects the versioned poster URL** (`/media/poster/CLIP_A.v2.jpg`) that POLISH's `poster_url()` hands out; it still expected the old name and failed on the integration branch (found by PERF's sweep).
+
 ### Docs
 - **LOOP.md: wave 4 progress and POLISH's open items queued for wave 5.**
 

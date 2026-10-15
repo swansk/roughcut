@@ -344,8 +344,10 @@ def test_poster_time_is_validated(client):
 
 
 def test_project_offers_a_poster_url_per_clip(client):
+    import server
     clips = client.get("/api/project").json()["clips"]
-    assert clips["CLIP_A.MP4"]["poster"] == "/media/poster/CLIP_A.jpg"
+    # versioned in the name (wave 4): a browser holding a pre-ORIENT poster drops it
+    assert clips["CLIP_A.MP4"]["poster"] == f"/media/poster/CLIP_A.{server.PICTURE_V}.jpg"
 
 
 # ------------------------------------------------------------------ proxies
