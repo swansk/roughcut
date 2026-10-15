@@ -49,6 +49,13 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-15 17:20: **VERDICT 5 = FAIL** (rev `867f694`: eight dims at 8, K1 at 9; 6:7 7:7 9:7 10:6). Since: SAVE `83781c6`
+  (punch 1's cause), perf test load-aware `41a98c5`. **Wave 6 lanes** (from this commit): PLAYBACK (punch 2 + Program plays
+  A3+), PROPOSAL2 (3), KEYUI (4, UI + EDL), RENDER2 (4's render + 6), KEYS2 (5 minus A3 playback), BINPOLISH (7 + 8 + 9
+  minus the journey line), JOURNEY2 (10 + punch 1's test_id_race + the journey's "!!" line). Keyframe schema fixed for
+  KEYUI and RENDER2: `segments[i].controls.keys = {prop: [[t, v], ...]}` (t = seconds from the shot's start in film time,
+  sorted, linear between keys, held outside them; prop in position_x, position_y, scale, rotation, opacity, volume_db);
+  Lumetri basic adds `highlights`, `shadows`, `whites`, `blacks` (-100..100, 0 = off) to `controls` beside contrast/saturation.
 - 2026-10-15 16:00: the wave-4 gate (`89060ed`) was RED: 4 broken = 3 stale expectations (PCM parts, versioned poster,
   proposal rows vs LAYOUT's bottom-row Assistant) + 1 real lag (live highlight deferred with PERF's repaint; fixed). Trade-off
   for judge 5 to rule on: with Premiere-sized monitors the Assistant (proposal table) sits in the bottom row and shows ~4

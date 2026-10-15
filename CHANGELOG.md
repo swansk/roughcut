@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Added
+- **Redesign verdict 5: FAIL, closest yet** (`judge/verdict-5.md` on `867f694`; 1:8 2:9 3:8 4:8 5:8 6:7 7:7 8:8 9:7 10:6 11:8 12:8). Real 12-clip first pass 811 s at load ~20; wave 4 held up on real footage. Blockers: K2 and the lost grade on a just-added clip (the double save, fixed by SAVE after the judged rev). Rulings: LAYOUT floors and budgets honest; PERF's 100 ms gap limit and the proposal-rows trade-off lenient (the judge sets 67 ms and >= 5 rows). Punch list drives wave 6.
+
 ### Changed
 - **The playback latency test measures the board, not the box.** It tops the machine up to about one runnable task per core instead of stacking a burner per core on top of other jobs, and skips with the measured load in its reason when the box is already past twice its cores. Limits unchanged; logged in REDESIGN-GOAL.md's rubric log for the judge.
 
