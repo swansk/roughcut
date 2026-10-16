@@ -228,6 +228,74 @@ def test_an_export_reaches_100_and_is_the_sequence_at_the_path_it_says(page, pro
     page.wait_for_function("!document.getElementById('exportDialog').open", timeout=3000)
 
 
+def test_escape_closes_the_finished_dialog_with_no_click_first(page, project):
+    """Verdict 8, punch 8: Escape left the "Exported" dialog open, 3 of 3. The done screen
+    replaced the body under the focused Export button and focus fell to the page, where
+    the timeline's keys took Escape. Here nothing is clicked between the end and Escape."""
+    page.keyboard.press("Control+m")
+    export(page, "escape cut", "lane-tests")
+    assert page.evaluate("!!(document.activeElement && document.activeElement.closest('dialog'))"), \
+        "focus stays in the finished dialog"
+    page.keyboard.press("Escape")
+    page.wait_for_function("!document.getElementById('exportDialog').open", timeout=3000)
+    # and it opens again, on its settings, ready for the next export
+    page.keyboard.press("Control+m")
+    wait_settings(page)
+    assert page.evaluate("exportDialog.phase") == "settings"
+    page.keyboard.press("Escape")
+    page.wait_for_function("!document.getElementById('exportDialog').open", timeout=3000)
+
+
+# The first frame painted with the dialog open: a frame's rAF, then a task after it.
+PAINTED_JS = """() => new Promise((res) => {
+  const d = document.getElementById('exportDialog');
+  const check = () => {
+    if (!d.open) return requestAnimationFrame(check);
+    requestAnimationFrame(() => setTimeout(() => res(performance.now()), 0));
+  };
+  check();
+})"""
+# The key's own timestamp, taken when the dialog is asked to show (window.event is the
+# keydown then)
+STAMP_JS = """() => { const d = document.getElementById('exportDialog');
+  window.__t0 = null;
+  if (!d.__stamped) {
+    const sm = d.showModal.bind(d);
+    d.showModal = () => { window.__t0 = window.event ? window.event.timeStamp : null; sm(); };
+    d.__stamped = true;
+  }
+}"""
+
+
+def test_ctrl_m_shows_the_dialog_within_100_ms(page):
+    """Verdict 8, punch 8: Ctrl+M → dialog took 138-193 ms (with the Playwright round trip).
+    The median of 5 is ≤ 100 ms, measured the judge's way (press, then wait until it is on
+    screen) and in the page (the keydown's timestamp to the first frame painted open)."""
+    page.keyboard.press("Control+m")                     # the first open reads /api/export
+    wait_settings(page)
+    page.keyboard.press("Escape")
+    page.wait_for_function("!document.getElementById('exportDialog').open", timeout=3000)
+    walls, inpage = [], []
+    for _ in range(5):
+        page.wait_for_timeout(250)
+        page.evaluate(STAMP_JS)
+        t0 = time.perf_counter()
+        page.keyboard.press("Control+m")
+        painted = page.evaluate(PAINTED_JS)
+        walls.append((time.perf_counter() - t0) * 1000)
+        t_key = page.evaluate("window.__t0")
+        assert t_key is not None, "the dialog was not opened by the key"
+        inpage.append(painted - t_key)
+        wait_settings(page)
+        page.keyboard.press("Escape")
+        page.wait_for_function("!document.getElementById('exportDialog').open", timeout=3000)
+    walls.sort()
+    inpage.sort()
+    print(f"\nCtrl+M → dialog: wall {[round(w) for w in walls]} ms, in page {[round(w, 1) for w in inpage]} ms")
+    assert walls[2] <= 100, f"median {walls[2]:.0f} ms from the key to the dialog painted: {walls}"
+    assert inpage[2] <= 100, f"median {inpage[2]:.0f} ms in the page: {inpage}"
+
+
 def test_a_name_clash_gets_a_suffix_and_never_overwrites(page, project):
     folder = Path(project["work"]) / "renders" / "clash"
     folder.mkdir(parents=True, exist_ok=True)
