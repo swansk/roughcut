@@ -75,6 +75,7 @@ from roughcut import flow as flowmod  # noqa: E402
 from roughcut import deep as deepmod  # noqa: E402
 from roughcut import firstpass as fpmod  # noqa: E402
 from roughcut import procscope  # noqa: E402
+from roughcut import dirwatch  # noqa: E402
 from roughcut import tracks as tracksmod  # noqa: E402
 
 # Stop means stop (verdict 3, punch 5): a job thread inside a `procscope.active` block
@@ -1025,17 +1026,33 @@ def api_project() -> JSONResponse:
 
 
 @app.get("/api/status")
-def api_status() -> JSONResponse:
+async def api_status() -> JSONResponse:
     """Where this project actually is, in terms of the steps it has to go through.
 
     The board used to answer only "what is in the edit"; a human who had not run the
     terminal steps got an empty screen with nothing to explain it. This says how many
-    clips exist, how many are analysed, and where the files are.
-    """
+    clips exist, how many are analysed, and where the files are. From the snapshot
+    (`_snapped`); the proxy walk's counters are merged in from memory."""
+    return await snap_respond("status", status_payload, live=lambda: (
+        STATE.get("proxies_ready"), STATE.get("proxy_done"), STATE.get("proxy_total")))
+
+
+def status_payload() -> dict:
+    out = dict(_snapped("status", _status_disk))
+    out.update({
+        "proxies_ready": STATE.get("proxies_ready", False),
+        "proxies": {"done": STATE.get("proxy_done", 0),
+                    "total": STATE.get("proxy_total", 0),
+                    "ready": STATE.get("proxies_ready", False)},
+    })
+    return out
+
+
+def _status_disk() -> dict:
     clips = footage_clips()
     done = analysed_stems()
     pending = [c for c in clips if Path(c).stem not in done]
-    return JSONResponse({
+    return ({
         "footage": str(STATE["footage"]),
         "footage_exists": STATE["footage"].is_dir(),
         "sidecars": str(STATE["sidecars"]),
@@ -1046,10 +1063,6 @@ def api_status() -> JSONResponse:
         "analysed": len(clips) - len(pending),
         "pending": pending,
         "segments": len(read_edl().get("segments", [])),
-        "proxies_ready": STATE.get("proxies_ready", False),
-        "proxies": {"done": STATE.get("proxy_done", 0),
-                    "total": STATE.get("proxy_total", 0),
-                    "ready": STATE.get("proxies_ready", False)},
         "tools": {t: shutil.which(t) is not None
                   for t in ("ffmpeg", "ffprobe", "uv")},
         "backend": backend_preflight(),
@@ -2781,10 +2794,11 @@ def fx_target(proposed: list[dict], segments: list[dict]) -> dict | None:
     return out
 
 
-def flow_facts() -> dict:
+def _flow_disk_facts() -> dict:
     """Everything `flow.compute` reads, off the files: footage, proxies, the journal,
     the sidecars, the EDL's brief / selects / cut / polish blocks, the asks and the
-    renders on disk, the running jobs and the CLI's fix. Nothing here spends."""
+    renders on disk, and the CLI's fix (`flow_facts` adds the running jobs). Nothing
+    here spends."""
     clips = footage_clips()
     edl = read_edl()
     edl_mtime = STATE["edl"].stat().st_mtime
@@ -2859,15 +2873,180 @@ def flow_facts() -> dict:
     return {"clips": len(clips), "junk": len(junk),
             "proxies": {"done": proxies, "total": len(clips)},
             "index": ix, "brief": brief, "pass": pas, "cut": cut, "polish": polish,
-            "render": render_facts(segments), "jobs": running_jobs(),
-            "fix": backend_preflight().get("fix")}
+            "render": render_facts(segments), "fix": backend_preflight().get("fix")}
+
+
+# ---------------------------------------------------------------- status snapshots (wave 11 CHEAP)
+#
+# Verdict 8, punch 10: during an export and the proxy builds `/api/flow`, `/api/status`
+# and `/api/firstpass` took 0.5-1.5 s. Measured (lane CHEAP, Killington's work dir):
+# 14 / 12 / 17 ms idle, but each answer is a few hundred small file reads and every one
+# drops the GIL; with one busy Python thread beside it (an export's range reads, the
+# proxy walk, the review copy) each read waits a switch interval to get it back, and
+# the same answers took 128 / 121 / 144 ms (p95 213-318) — with the judge's several,
+# the 0.5-1.5 s. So the three are served from a snapshot of what they read on disk:
+#
+#   * `_snapped(name, build)` keeps `build()`'s result under a key that changes when
+#     anything it reads changes: `SNAP["gen"]`, bumped by the directory watch
+#     (`roughcut.dirwatch`: inotify on the folders and files these read, drained with
+#     one non-blocking read; the kernel queued a write the moment it happened, so a
+#     file written just before a poll is that poll's news), plus the in-memory things
+#     they read (the job registries' states, the first pass, the backend probe, the
+#     ROUGHCUT_ settings, and the helpers themselves — a monkeypatched one is new code);
+#   * what changes every second — the running jobs' progress, the proxy walk's
+#     counters, a running pass's Ask detail — is merged in from memory per call;
+#   * the endpoints are `async`: a snapshot hit answers on the event loop without a
+#     thread hop (the last bytes, when nothing live moved); a miss rebuilds on a worker
+#     thread (`snap_respond`).
+# Without inotify every call is a miss: as correct, and as slow, as before.
+
+SNAP: dict = {"gen": 0, "armed": None, "rearm": True, "dirty": [], "cache": {},
+              "bytes": {}, "lock": threading.Lock()}
+SNAP_WATCH = dirwatch.DirWatch()
+# a helper the snapshot reads, replaced (the suite's monkeypatch), is a change
+_SNAP_FNS = ("footage_clips", "analysed_stems", "visual_stems", "fine_stems",
+             "released_clips", "load_journal", "journal_waiting", "junk_block",
+             "confirmed_junk", "junk_rows", "clip_duration", "look_interval",
+             "look_intervals", "priced_waiting", "ask_pending", "ask_plans", "ask_price",
+             "_ask_records", "_fp_record", "_fx_all", "fx_target", "render_facts",
+             "backend_preflight", "backend_fix", "cli_facts", "project_spent",
+             "budget_cap", "visual_status", "audit_plan", "audit_price", "firstpass_plan",
+             "read_edl", "sheets_for", "running_jobs")
+
+
+def _snap_paths() -> tuple:
+    return tuple(str(STATE.get(k)) for k in ("edl", "footage", "work", "sidecars", "visual",
+                                              "asks", "proxy_dir", "renders"))
+
+
+def _snap_targets() -> list[tuple[Path, tuple[str, ...]]]:
+    """The folders the snapshot reads and the names in them that matter."""
+    files = [STATE["edl"], journal_path(), proposal_path(), firstpass_path(), spend_path(),
+             settings_path()]
+    return ([(STATE["footage"], ("*",)), (STATE["sidecars"], ("*.audio.json",)),
+             (STATE["visual"], ("*",)), (STATE["asks"], ("*.json",)),
+             (fx_home(), ("fx_*",)), (STATE["proxy_dir"], ("*.mp4",)),
+             (STATE["renders"], ("cut_*",)), (generated_dir(), ("*.mp4",))]
+            + [(f.parent, (f.name,)) for f in files])
+
+
+def snap_poll() -> None:
+    """Drain the watch (one non-blocking read; safe on the event loop). A change bumps
+    the generation and is kept for `_snap_settle`."""
+    ch = SNAP_WATCH.changes()
+    if ch is None or ch:
+        SNAP["gen"] += 1
+        SNAP["rearm"] = True
+        if ch:
+            SNAP["dirty"].extend(ch)
+
+
+def _snap_settle() -> None:
+    """Off the event loop: re-arm the watch after a change (a folder may have appeared)
+    or a re-point, and act on what changed (a clip's sound heard → its peaks)."""
+    with SNAP["lock"]:
+        paths = _snap_paths()
+        if not SNAP["rearm"] and SNAP["armed"] == paths:
+            return
+        dirty, SNAP["dirty"] = SNAP["dirty"], []
+        SNAP["rearm"] = False               # a change from here on asks for another
+        try:
+            SNAP_WATCH.arm(_snap_targets())
+        except (KeyError, OSError):         # not configured yet
+            pass
+        SNAP["armed"] = paths
+        SNAP["gen"] += 1                    # whatever happened while arming is read now
+    peaks_changed(dirty)
+
+
+def _snap_key() -> tuple:
+    g = globals()
+    return (SNAP["gen"], SNAP["armed"] == _snap_paths(),
+            tuple((id(j), j.get("state"), bool(j.get("proposal"))) for j in all_jobs()),
+            tuple((k, x.get("state"), x.get("stage"), x.get("picks"), x.get("ask"),
+                   repr(x.get("steps"))) for k, x in FIRSTPASS.items()),
+            tuple(id(g.get(n)) for n in _SNAP_FNS),
+            (id(shutil.which), id(inference.last_problem)),
+            repr(sorted(BACKEND.items())), repr(inference.last_problem()),
+            tuple(sorted((k, v) for k, v in os.environ.items()
+                         if k.startswith("ROUGHCUT_"))),
+            bool(os.environ.get("ANTHROPIC_API_KEY")),
+            # the CLI's sign-in is re-asked once its cache is stale (`cli_facts`)
+            int(time.time() // CLI_FACTS_TTL_S) if STATE.get("cli_facts") else 0,
+            STATE.get("edl_created"), _snap_paths())
+
+
+def snap_hit(name: str) -> bool:
+    """Is `name`'s snapshot current? Event-loop safe: no disk, one read of the watch."""
+    snap_poll()
+    if SNAP["rearm"] or SNAP["armed"] != _snap_paths():
+        return False
+    hit = SNAP["cache"].get(name)
+    return hit is not None and hit[0] == _snap_key()
+
+
+def _snapped(name: str, build: Callable[[], dict]) -> dict:
+    """`build()`'s result, rebuilt only when something it reads has changed. The key is
+    taken before the build, so a change during it makes the next call rebuild. The
+    result is shared: callers copy before they change it."""
+    if not getattr(_SNAP_LOCAL, "fresh", False):     # `snap_respond` just looked
+        snap_poll()
+        _snap_settle()
+    key = _snap_key()
+    hit = SNAP["cache"].get(name)
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    val = build()
+    SNAP["cache"][name] = (key, val)
+    return val
+
+
+_SNAP_LOCAL = threading.local()
+
+
+def _json_bytes(content) -> bytes:
+    """What JSONResponse would send."""
+    return json.dumps(content, ensure_ascii=False, allow_nan=False, indent=None,
+                      separators=(",", ":")).encode("utf-8")
+
+
+async def snap_respond(name: str, fn: Callable[[], dict],
+                       live: Callable[[], object] = lambda: None) -> Response:
+    """`fn()`'s answer. When `name`'s snapshot is current it is made on the event loop
+    without a thread hop or a disk read — and when `live()` (the in-memory part fn
+    merges in) is unchanged too, it is the last answer's bytes; else on a worker
+    thread, where the rebuild may read the disk."""
+    if snap_hit(name):
+        _SNAP_LOCAL.fresh = True
+        try:
+            lk = (SNAP["cache"][name][0], live())
+            hit = SNAP["bytes"].get(name)
+            if hit is not None and hit[0] == lk:
+                return Response(hit[1], media_type="application/json")
+            body = _json_bytes(fn())
+            SNAP["bytes"][name] = (lk, body)
+            return Response(body, media_type="application/json")
+        finally:
+            _SNAP_LOCAL.fresh = False
+    return JSONResponse(await asyncio.to_thread(fn))
+
+
+def flow_facts() -> dict:
+    """`_flow_disk_facts` from the snapshot (rebuilt only when something it reads
+    changed: `_snapped`), with the running jobs merged in from memory on every call —
+    their progress changes every second and costs nothing to read."""
+    facts = dict(_snapped("flow", _flow_disk_facts))
+    facts["jobs"] = running_jobs()
+    return facts
 
 
 @app.get("/api/flow")
-def api_flow() -> JSONResponse:
+async def api_flow() -> JSONResponse:
     """Where the project is, as seven stages and one next action — what /flow.js draws
-    on every screen. Read from files on every call; nothing here is cached state."""
-    return JSONResponse(flowmod.compute(flow_facts()))
+    on every screen. The facts are the files' (a snapshot rebuilt when one changes, off
+    the event loop) and the running jobs' (memory); see `_snapped`."""
+    return await snap_respond("flow", lambda: flowmod.compute(flow_facts()),
+                              live=lambda: repr(running_jobs()))
 
 
 @app.post("/api/asks/answer")
@@ -3224,7 +3403,7 @@ def firstpass_state() -> dict:
 
 
 @app.get("/api/firstpass")
-def api_firstpass() -> JSONResponse:
+async def api_firstpass() -> JSONResponse:
     """Where the first pass stands, what a run would do, and what it costs.
 
     `state`: `never-run` · `running` (with `stage` index|picks|cut, `steps`, `counts` —
@@ -3233,8 +3412,28 @@ def api_firstpass() -> JSONResponse:
     (done, and the cut has shots edited by hand since — `stale` says what) · `failed`
     (`error`). Always: `label` (Run / Re-run first pass), `would` (the steps a run takes
     now with their `cost` words, `keep` — the shots a re-run locks — and `replace`),
-    `manual_edits` (the editor's own shots and how), `backend` / `charged`."""
-    return JSONResponse(firstpass_state())
+    `manual_edits` (the editor's own shots and how), `backend` / `charged`. From the
+    snapshot (`_snapped`); a running pass's Ask detail is merged in from memory."""
+    return await snap_respond("firstpass", firstpass_payload, live=_fp_live_ask)
+
+
+def _fp_live_ask() -> dict | None:
+    """A running pass's Ask, as its counts show it: what changes while it thinks."""
+    live = _fp_live()
+    ask = ASKS.get((live or {}).get("ask") or "")
+    if ask is None:
+        return None
+    snap = ask.snapshot()
+    return {"detail": snap.get("detail") or "", "state": snap.get("state")}
+
+
+def firstpass_payload() -> dict:
+    out = _snapped("firstpass", firstpass_state)
+    if out.get("state") == "running":
+        cut = _fp_live_ask()
+        if cut is not None:
+            out = {**out, "counts": {**(out.get("counts") or {}), "cut": cut}}
+    return out
 
 
 @app.post("/api/firstpass")
@@ -8342,6 +8541,13 @@ def module_static(name: str) -> Response:
 # original's size and mtime. A request asks for a coarser rate (`pps`, or `spp` samples
 # per peak at PEAKS_SR) and gets the pairs for the whole clip as int8 (-127..127): the
 # timeline slices a shot's range out of them itself, so a trim never asks again.
+#
+# Never inside the GET (wave 11 CHEAP; verdict 8: up to 10.4 s a request while an
+# export ran): a background worker (`queue_peaks`, one decode at a time, nice 19 in a
+# procscope) writes the file when the clip's sound is first heard (its sidecar lands,
+# seen by the snapshot's watch) or first asked for, and keeps the pairs in memory. The
+# GET answers from memory; until they exist, `202 {"pending": true}` at once, and the
+# timeline asks again.
 
 PEAKS_SR = 16000                 # Hz the PCM is decoded at (a waveform, not a master)
 PEAKS_BASE = 100                 # pairs a second on disk
@@ -8372,20 +8578,46 @@ def peaks_source(stem: str) -> Path | None:
     return None
 
 
+def peaks_dest(stem: str, src: Path | None = None) -> Path | None:
+    """The peaks file for the clip's current version: keyed by the ORIGINAL's size and
+    mtime when there is one (the proxy carries the same sound, so a proxy finishing
+    never invalidates peaks made from the original), else by `src`'s (a generated
+    clip's file). None when there is nothing to key on."""
+    orig = clip_for_stem(stem)
+    key_src = STATE["footage"] / orig if orig and (STATE["footage"] / orig).exists() else src
+    if key_src is None:
+        return None
+    kst = key_src.stat()
+    return peaks_dir() / f"{stem}.{kst.st_size}-{kst.st_mtime_ns}.peaks"
+
+
+def peaks_built(stem: str):
+    """The pairs from the clip's peaks file when it is already written (no ffmpeg, no
+    ffprobe), else None."""
+    import numpy as np
+
+    gen = generated_dir() / f"{stem}.mp4" if edits.is_generated(stem) else None
+    try:
+        dest = peaks_dest(stem, gen if gen is not None and gen.exists() else None)
+        if dest is not None and dest.exists():
+            return np.frombuffer(dest.read_bytes(), dtype=np.int8).reshape(-1, 2)
+    except OSError:
+        pass
+    return None
+
+
 def build_peaks(stem: str):
     """The clip's base peaks (int8 array, shape (n, 2): min, max), from the cache or
     decoded now. None when the clip has no sound."""
     import numpy as np
 
+    built = peaks_built(stem)
+    if built is not None:
+        return built
     src = peaks_source(stem)
     if src is None:
         return None
-    orig = clip_for_stem(stem)
-    # keyed by the ORIGINAL's version when there is one: the proxy carries the same
-    # sound, so a proxy finishing never invalidates peaks made from the original
-    key_src = STATE["footage"] / orig if orig and (STATE["footage"] / orig).exists() else src
-    kst = key_src.stat()
-    dest = peaks_dir() / f"{stem}.{kst.st_size}-{kst.st_mtime_ns}.peaks"
+    dest = peaks_dest(stem, src)
     lock = PEAKS_LOCKS.setdefault(stem, threading.Lock())
     with lock:
         if dest.exists():
@@ -8417,37 +8649,165 @@ def build_peaks(stem: str):
         return out
 
 
+# stem -> the base pairs (int8, (n, 2)), or None for a clip with no sound; filled by
+# the worker only, read by the GET; cleared on a re-point and when the clip's file changes
+PEAKS_MEM: dict = {}
+PEAKS_JSON: dict[tuple[str, int], bytes] = {}      # (stem, rate) -> the answer's bytes
+PEAKS_Q: dict = {"lock": threading.Lock(), "pending": [], "failed": {}, "thread": None,
+                 "scope": None}
+PEAKS_PENDING = {"cache-control": "no-store", "retry-after": "1"}
+
+
+def queue_peaks(stems: list[str], front: bool = False) -> None:
+    """Have the worker make (or read) these clips' peaks; `front`: somebody is waiting.
+    Never blocks and never touches the disk: the worker checks the stems."""
+    with PEAKS_Q["lock"]:
+        pend = PEAKS_Q["pending"]
+        for s in (reversed(stems) if front else stems):
+            if s in PEAKS_MEM or s in PEAKS_Q["failed"]:
+                continue
+            if s in pend:
+                if not front:
+                    continue
+                pend.remove(s)
+            if front:
+                pend.insert(0, s)
+            else:
+                pend.append(s)
+        t = PEAKS_Q["thread"]
+        if pend and (t is None or not t.is_alive()):
+            t = PEAKS_Q["thread"] = threading.Thread(target=_peaks_loop, daemon=True,
+                                                     name="peaks")
+            t.start()
+
+
+def _peaks_scope() -> procscope.Scope:
+    with PEAKS_Q["lock"]:
+        sc = PEAKS_Q["scope"]
+        if sc is None or sc.cancelled:
+            sc = PEAKS_Q["scope"] = procscope.Scope("peaks", background=True)
+        return sc
+
+
+def _peaks_loop() -> None:
+    while True:
+        with PEAKS_Q["lock"]:
+            if not PEAKS_Q["pending"]:
+                PEAKS_Q["thread"] = None
+                return
+            stem = PEAKS_Q["pending"][0]
+        scope = _peaks_scope()
+        try:
+            if edits.is_generated(stem) or clip_for_stem(stem) is not None:
+                with procscope.active(scope):
+                    base = build_peaks(stem)
+                if not scope.cancelled:
+                    PEAKS_MEM[stem] = base
+        except Exception as exc:  # noqa: BLE001 — one bad clip must not end the queue
+            if not scope.cancelled:
+                PEAKS_Q["failed"][stem] = str(exc)[:300]
+                print(f"  !! peaks: {stem}: {exc}", flush=True)
+        finally:
+            with PEAKS_Q["lock"]:
+                if stem in PEAKS_Q["pending"]:
+                    PEAKS_Q["pending"].remove(stem)
+                if scope.cancelled:              # the server is going away
+                    PEAKS_Q["pending"].clear()
+                    PEAKS_Q["thread"] = None
+                    return
+
+
+def forget_peaks(stem: str | None = None) -> None:
+    """Drop a clip's peaks from memory (all of them: a re-point)."""
+    with PEAKS_Q["lock"]:
+        for d in (PEAKS_MEM, PEAKS_Q["failed"]):
+            if stem is None:
+                d.clear()
+            else:
+                d.pop(stem, None)
+        for k in [k for k in PEAKS_JSON if stem is None or k[0] == stem]:
+            PEAKS_JSON.pop(k, None)
+
+
+def peaks_changed(changes: list[tuple[Path, str]]) -> None:
+    """The snapshot's watch saw these names change: a clip's sidecar landing (its sound
+    heard) queues its peaks; a clip's file replaced forgets them."""
+    heard = []
+    for d, name in changes:
+        if not name:
+            continue
+        if str(d) == str(STATE.get("sidecars")) and name.endswith(".audio.json"):
+            heard.append(name[: -len(".audio.json")])
+        elif str(d) in (str(STATE.get("footage")), str(generated_dir())):
+            forget_peaks(Path(name).stem)
+    if heard:
+        queue_peaks(heard)
+
+
+def _peaks_answer(stem: str, rate: int) -> bytes:
+    import numpy as np
+
+    got = PEAKS_JSON.get((stem, rate))
+    if got is not None:
+        return got
+    base = PEAKS_MEM[stem]
+    if base is None or not len(base):
+        body = {"stem": stem, "pps": rate, "duration": 0.0, "min": [], "max": [],
+                "silent": True}
+    else:
+        k = PEAKS_BASE // rate
+        n = -(-len(base) // k)
+        padded = np.zeros((n * k, 2), dtype=np.int8)
+        padded[:len(base)] = base
+        g = padded.reshape(n, k, 2)
+        lo, hi = g[:, :, 0].min(axis=1), g[:, :, 1].max(axis=1)
+        body = {"stem": stem, "pps": rate, "duration": round(len(base) / PEAKS_BASE, 3),
+                "min": lo.astype(int).tolist(), "max": hi.astype(int).tolist()}
+    out = json.dumps(body, separators=(",", ":")).encode("utf-8")
+    PEAKS_JSON[(stem, rate)] = out
+    return out
+
+
+def _peaks_miss(stem: str) -> None:
+    """A clip asked for whose peaks are not in memory: 404 when it is not one of the
+    bin's; its file read now when it is already written (once per clip); else queued
+    to the front."""
+    if not edits.is_generated(stem) and clip_for_stem(stem) is None:
+        raise HTTPException(404, f"no such clip: {stem}")
+    with PEAKS_Q["lock"]:
+        failed = PEAKS_Q["failed"].get(stem)
+    if failed:
+        raise HTTPException(500, failed)
+    built = peaks_built(stem)
+    if built is not None:
+        PEAKS_MEM.setdefault(stem, built)
+        return
+    queue_peaks([stem], front=True)
+
+
 @app.get("/api/peaks/{stem}")
-def api_peaks(stem: str, pps: int = 0, spp: int = 0) -> JSONResponse:
+async def api_peaks(stem: str, pps: int = 0, spp: int = 0) -> Response:
     """A clip's waveform: `pps` min/max pairs a second (10, 20, 25, 50 or 100; `spp`, the
     samples per peak at 16 kHz, is the other way to ask), int8 -127..127, for the whole
     clip: `{"stem", "pps", "duration", "min", "max"}`. A clip with no sound has empty
-    lists and `"silent": true`."""
-    import numpy as np
-
+    lists and `"silent": true`. Until the clip's peaks are made (a background worker,
+    never this request): `202 {"stem", "pps", "pending": true}`, uncached — ask again."""
     if re.search(r"\.(mp4|mov|mxf|mkv)$", stem, re.I):
         stem = Path(stem).stem
-    if not re.fullmatch(r"[A-Za-z0-9._-]+", stem) or (
-            not edits.is_generated(stem) and clip_for_stem(stem) is None):
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", stem):
         raise HTTPException(404, f"no such clip: {stem}")
     want = pps if pps > 0 else (PEAKS_SR / spp if spp > 0 else 50)
     rate = min(PEAKS_RATES, key=lambda r: abs(r - want))
-    try:
-        base = build_peaks(stem)
-    except RuntimeError as exc:
-        raise HTTPException(500, str(exc)) from exc
-    if base is None or not len(base):
-        return JSONResponse({"stem": stem, "pps": rate, "duration": 0.0, "min": [], "max": [],
-                             "silent": True}, headers=PEAKS_CACHE)
-    k = PEAKS_BASE // rate
-    n = -(-len(base) // k)
-    padded = np.zeros((n * k, 2), dtype=np.int8)
-    padded[:len(base)] = base
-    g = padded.reshape(n, k, 2)
-    lo, hi = g[:, :, 0].min(axis=1), g[:, :, 1].max(axis=1)
-    return JSONResponse({"stem": stem, "pps": rate, "duration": round(len(base) / PEAKS_BASE, 3),
-                         "min": lo.astype(int).tolist(), "max": hi.astype(int).tolist()},
-                        headers=PEAKS_CACHE)
+    if stem not in PEAKS_MEM:
+        await asyncio.to_thread(_peaks_miss, stem)
+    if stem not in PEAKS_MEM:
+        return JSONResponse({"stem": stem, "pps": rate, "pending": True}, status_code=202,
+                            headers=PEAKS_PENDING)
+    if (stem, rate) in PEAKS_JSON:
+        body = PEAKS_JSON[(stem, rate)]
+    else:
+        body = await asyncio.to_thread(_peaks_answer, stem, rate)
+    return Response(body, media_type="application/json", headers=PEAKS_CACHE)
 
 
 
@@ -10134,6 +10494,13 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
     # re-point must not serve the last bin's durations or capture times for this one.
     for key in ("capture", "durations", "telemetry", "render_res_cache", "clip_facts"):
         STATE.pop(key, None)
+    # the status snapshots and the peaks in memory are this bin's (wave 11 CHEAP)
+    forget_peaks()
+    with SNAP["lock"]:
+        SNAP["cache"].clear()
+        SNAP["bytes"].clear()
+        SNAP["rearm"] = True
+        SNAP["gen"] += 1
     # The Project panel's first /api/clips finds the free facts probed or probing
     # (redesign wave 2, INGEST): the probes start now, in the background.
     warm_clip_facts(footage_clips())
