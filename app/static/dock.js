@@ -8,7 +8,8 @@
  *   - the panels, in Premiere's Editing arrangement (wave 4): Source (top left) and
  *     Program (top right) share the top row, half each; Project (bottom left, with
  *     Selects as its second tab), the Timeline (bottom centre) and Effect Controls
- *     (bottom right, with Effects · Audio · Assistant · Export as its neighbouring tabs)
+ *     (bottom right, with Designed Effects · Audio · Assistant · Export as its neighbouring
+ *     tabs; Premiere's Effects bin of transitions is the Project group's third tab)
  *     share the bottom row. Each has
  *     a title tab; the splitters between them drag, double-click resets, and the sizes
  *     are kept per browser (localStorage) as fractions of the window, so they survive a
@@ -625,6 +626,146 @@
     loadClips();
   }
 
+  /* ================================================================ the effects bin */
+  /* Premiere's Effects panel (verdict 8 punch 5; was verdict 7's punch 6): the transitions
+   * in Premiere's folders and order — Audio Transitions › Crossfade, Video Transitions ›
+   * Dissolve — with a search box that filters them. An item drags onto the Timeline
+   * (timeline.js: centred on an edit, or one-sided at a clip's start or end; one undo);
+   * right-click → "Set Selected as Default Transition" makes it what Ctrl+D (video) or
+   * Shift+D (audio) lays, and the default's icon is outlined, as Premiere's is. The kinds
+   * and their maths are roughcut/tracks.py's. The AI effect designer is "Designed
+   * Effects", beside Effect Controls. */
+  const FX_TREE = [
+    { id: 'audio', name: 'Audio Transitions', folders: [
+      { id: 'crossfade', name: 'Crossfade', items: [
+        ['constant_gain', 'Constant Gain', 'linear: each side −6 dB at the middle'],
+        ['audio_crossfade', 'Constant Power', 'cos / sin: each side −3 dB at the middle (the default)'],
+        ['exponential_fade', 'Exponential Fade', 'exponential curves: each side −21 dB at the middle'],
+      ] }] },
+    { id: 'video', name: 'Video Transitions', folders: [
+      { id: 'dissolve', name: 'Dissolve', items: [
+        ['cross_dissolve', 'Cross Dissolve', 'a linear mix of the two shots (the default)'],
+        ['dip_to_black', 'Dip to Black', 'out to black, then in: black on the edit'],
+        ['dip_to_white', 'Dip to White', 'out to white, then in: white on the edit'],
+        ['film_dissolve', 'Film Dissolve', 'the mix in linear light, as film blends'],
+      ] }] },
+  ];
+  const FXBIN_OPEN = 'roughcut.fxbin.open';
+  const fxbin = { open: store.get(FXBIN_OPEN, { audio: true, crossfade: true, video: true, dissolve: true }),
+                  sel: null, q: '' };
+
+  function fxDefaults() {
+    return window.tl && tl.transitionDefaults ? tl.transitionDefaults
+      : { video: 'cross_dissolve', audio: 'audio_crossfade' };
+  }
+
+  const FX_ICON = '<svg viewBox="0 0 16 12" aria-hidden="true"><path d="M1 11L15 1v10z" fill="currentColor" opacity=".45"/>'
+    + '<path d="M1 1h14v10H1z" fill="none" stroke="currentColor"/></svg>';
+
+  function paintFxBin() {
+    const box = $('#fxbin');
+    if (!box) return;
+    const q = fxbin.q.trim().toLowerCase();
+    const def = fxDefaults();
+    const hit = (name) => !q || name.toLowerCase().includes(q);
+    const twisty = (id, name, depth, open) => `<div class="fxb-folder" role="treeitem" aria-expanded="${open}"`
+      + ` data-folder="${id}" style="--d:${depth}"><span class="tw">${open ? '▾' : '▸'}</span>`
+      + `<svg class="fold" viewBox="0 0 16 12" aria-hidden="true"><path d="M1 2h5l1.5 1.5H15V11H1z" fill="currentColor"/></svg>`
+      + `<span class="nm">${esc(name)}</span></div>`;
+    let html = '', shown = 0;
+    for (const top of FX_TREE) {
+      // a folder whose name matches shows all its items, as Premiere's search does
+      const subs = top.folders.map((f) => ({ ...f, items: hit(f.name) ? f.items : f.items.filter(([, name]) => hit(name)) }))
+        .filter((f) => f.items.length);
+      if (q && !subs.length && !hit(top.name)) continue;
+      const openTop = q ? true : !!fxbin.open[top.id];
+      html += twisty(top.id, top.name, 0, openTop);
+      if (!openTop) continue;
+      for (const f of (q ? subs : top.folders)) {
+        const openF = q ? true : !!fxbin.open[f.id];
+        html += twisty(f.id, f.name, 1, openF);
+        if (!openF) continue;
+        for (const [kind, name, what] of f.items) {
+          shown++;
+          const isDef = def[top.id] === kind;
+          html += `<div class="fxb-item${fxbin.sel === kind ? ' sel' : ''}${isDef ? ' def' : ''}" role="treeitem"`
+            + ` draggable="true" data-kind="${kind}" style="--d:2"`
+            + ` title="${esc(name)}: ${esc(what)} · drag onto an edit, or a clip's start or end`
+            + `${isDef ? ' · the default transition' : ' · right-click to make it the default'}">`
+            + `<span class="ic">${FX_ICON}</span><span class="nm">${esc(name)}</span></div>`;
+        }
+      }
+    }
+    if (q && !shown) html += `<div class="hint fxb-none">no effect matches “${esc(fxbin.q.trim())}”</div>`;
+    box.innerHTML = html;
+  }
+
+  function fxMenu(e, kind) {
+    let m = $('#fxbinMenu');
+    if (!m) {
+      m = document.createElement('div');
+      m.id = 'fxbinMenu';
+      m.className = 'tl-ctx';
+      m.setAttribute('role', 'menu');
+      document.body.appendChild(m);
+      m.addEventListener('click', (ev) => {
+        const it = ev.target.closest('button[data-kind]');
+        m.hidden = true;
+        if (it && window.tl && tl.setDefaultTransition) { tl.setDefaultTransition(it.dataset.kind); paintFxBin(); }
+      });
+      document.addEventListener('pointerdown', (ev) => { if (!m.contains(ev.target)) m.hidden = true; }, true);
+      document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') m.hidden = true; }, true);
+    }
+    const fam = window.tl && tl.VIDEO_KINDS && tl.VIDEO_KINDS[kind] ? 'video' : 'audio';
+    const isDef = fxDefaults()[fam] === kind;
+    m.innerHTML = `<button type="button" role="menuitem" data-kind="${kind}"${isDef ? ' disabled' : ''}>`
+      + 'Set Selected as Default Transition</button>';
+    m.hidden = false;
+    m.style.left = `${Math.min(e.clientX, innerWidth - 240)}px`;
+    m.style.top = `${Math.min(e.clientY, innerHeight - 40)}px`;
+  }
+
+  function initEffects() {
+    const box = $('#fxbin'), q = $('#fxbinQ');
+    if (!box) return;
+    paintFxBin();
+    if (window.tl && typeof tl.on === 'function') tl.on('transitiondefault', paintFxBin);
+    else window.addEventListener('load', () => { if (window.tl && tl.on) tl.on('transitiondefault', paintFxBin); paintFxBin(); });
+    if (q) q.addEventListener('input', () => { fxbin.q = q.value; paintFxBin(); });
+    box.addEventListener('click', (e) => {
+      const f = e.target.closest('.fxb-folder');
+      if (f) {
+        if (fxbin.q.trim()) return;                    // a search shows every match open
+        fxbin.open[f.dataset.folder] = !fxbin.open[f.dataset.folder];
+        store.set(FXBIN_OPEN, fxbin.open);
+        paintFxBin();
+        return;
+      }
+      const it = e.target.closest('.fxb-item');
+      if (it) { fxbin.sel = it.dataset.kind; paintFxBin(); }
+    });
+    box.addEventListener('contextmenu', (e) => {
+      const it = e.target.closest('.fxb-item');
+      if (!it) return;
+      e.preventDefault();
+      fxbin.sel = it.dataset.kind;
+      paintFxBin();
+      fxMenu(e, it.dataset.kind);
+    });
+    box.addEventListener('dragstart', (e) => {
+      const it = e.target.closest && e.target.closest('.fxb-item');
+      if (!it) return;
+      const mime = (window.tl && tl.TRANS_MIME) || 'application/x-roughcut-transition';
+      e.dataTransfer.setData(mime, JSON.stringify({ kind: it.dataset.kind }));
+      e.dataTransfer.setData('text/plain', it.querySelector('.nm').textContent);
+      e.dataTransfer.effectAllowed = 'copy';
+      // the Timeline's drop preview needs the kind before the drop (Chromium hides the data)
+      window.rcDragTransition = it.dataset.kind;
+      it.classList.add('dragging');
+      it.addEventListener('dragend', () => { it.classList.remove('dragging'); window.rcDragTransition = null; }, { once: true });
+    });
+  }
+
   /* ================================================================ the source monitor */
   const MARKS_KEY = 'roughcut.ws.marks';
   const source = {
@@ -898,6 +1039,7 @@
     initSplitters();
     source.init();
     initProject();
+    initEffects();
     // the editor picked a keep or a Find match while the Source showed only the clip the
     // board opened on landing: `,` / `.` take the pick (timeline-keys' sourceShot order)
     document.addEventListener('click', (e) => {

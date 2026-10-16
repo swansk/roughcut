@@ -262,7 +262,8 @@ def test_the_project_panel_lists_the_footage_and_opens_a_clip_in_the_source_moni
 def test_the_menu_bar_reaches_every_tool_the_rail_held(live_server, project, browser):
     pg = _open(browser, live_server, project, (1440, 900))
     for item, tool, shows in [("Selects", "bin", "#library"), ("Assistant", "ask", "#askPanel"),
-                              ("Audio", "sound", "#musicPanel"), ("Effects", "fx", "#fx"),
+                              ("Audio", "sound", "#musicPanel"), ("Designed Effects", "fx", "#fx"),
+                              ("Effects", "effects", "#fxbin"),
                               ("Export", "out", "#outPanel"), ("Effect Controls", "inspect", "#inspector"),
                               ("Project", "project", "#projList")]:
         pg.locator("#menubar .mtop", has_text="Window").click()

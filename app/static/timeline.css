@@ -515,6 +515,29 @@
 #tl .tl-trans .tl-trans-dur { position: absolute; inset: 1px; width: auto; font: inherit; font-size: 11px;
                               text-align: center; background: var(--bg, #111); color: var(--text, #eee);
                               border: 1px solid var(--accent, #8af); border-radius: 2px; }
+/* The Effects bin's kinds (verdict 8 punch 5): a dip reads dark or light, a one-sided
+   transition is a half-box against its clip's edge, and frames repeated for want of media
+   are hatched (Premiere's insufficient-media lines). */
+#tl .tl-trans[data-kind=dip_to_black] { background: linear-gradient(to bottom right, hsl(265 45% 46% / .92) 40%,
+                                        #111 50%, hsl(265 45% 30% / .92) 60%); }
+#tl .tl-trans[data-kind=dip_to_white] { background: linear-gradient(to bottom right, hsl(265 45% 46% / .92) 40%,
+                                        #eee 50%, hsl(265 45% 30% / .92) 60%); }
+#tl .tl-trans.side[data-align=start] { border-radius: 0 3px 3px 0; }
+#tl .tl-trans.side[data-align=end] { border-radius: 3px 0 0 3px; }
+#tl .tl-trans.rep { background-image: repeating-linear-gradient(45deg, transparent 0 4px, rgba(255,80,80,.6) 4px 6px),
+                    linear-gradient(to bottom right, hsl(265 45% 46% / .92) 49.5%, hsl(265 30% 30% / .92) 50.5%); }
+#tl .tl-trans.rep.audio { background-image: repeating-linear-gradient(45deg, transparent 0 4px, rgba(255,80,80,.6) 4px 6px),
+                          linear-gradient(to top right, hsl(220 12% 46% / .92) 49.5%, hsl(220 10% 30% / .92) 50.5%); }
+#tl .tl-tdrop { position: absolute; top: 12%; bottom: 12%; z-index: 3; pointer-events: none;
+                border: 2px solid var(--accent, #8af); border-radius: 3px; background: hsl(220 80% 60% / .18); }
+#tl .tl-tdrop[hidden] { display: none; }
+.tl-ctx { position: fixed; z-index: 90; min-width: 180px; padding: 4px 0; background: var(--panel, #232327);
+          border: 1px solid var(--line, #444); border-radius: 4px; box-shadow: 0 6px 18px rgba(0,0,0,.45); }
+.tl-ctx[hidden] { display: none; }
+.tl-ctx button { display: block; width: 100%; text-align: left; padding: 5px 12px; border: 0; border-radius: 0;
+                 background: none; color: var(--text, #ddd); font: inherit; font-size: 12px; cursor: pointer; }
+.tl-ctx button:hover:not(:disabled) { background: var(--accent, #2d6cdf); color: #fff; }
+.tl-ctx button:disabled { color: var(--dim, #888); cursor: default; }
 #tl .tl-editsel { position: absolute; top: -2px; bottom: -2px; width: 6px; margin-left: -3px; z-index: 2;
                   border: 2px solid var(--warn, #e66); border-top: 0; border-bottom: 0; pointer-events: none; }
 #tl .tl-editsel[hidden] { display: none; }

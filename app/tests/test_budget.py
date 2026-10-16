@@ -105,10 +105,18 @@ HEADER_MAX_PX = 50
 # / film 101 → 103, / fx 124 → 126, / jobs 102 → 104; and 1 control on each: / 51 → 52,
 # / shot 66 → 67, / film 50 → 51, / fx 54 → 55, / jobs 52 → 53. Curves, Color Wheels and
 # HSL Secondary sit below the fold, closed.
-WORDS_IN_VIEW = {"/": 95, "/floor": 58, "/open": 59, "/ shot": 121, "/ film": 103, "/ fx": 126,
-                 "/ jobs": 104}
-CONTROLS_IN_VIEW = {"/": 52, "/floor": 8, "/open": 9, "/ shot": 67, "/ film": 51, "/ fx": 55,
-                    "/ jobs": 53}
+# Wave 11, lane FXBIN (verdict 8 punch 5), measured, no headroom: Premiere's Effects bin is
+# the Project group's third tab ("Effects": one control, one word, on every board screen; its
+# tree is in view only while the tab is open) and the AI designer's tab reads "Designed
+# Effects" (one more word): words / 93 → 95, / shot 119 → 121, / film 101 → 103, / fx 124 →
+# 126, / jobs 102 → 104; controls / 51 → 52, / shot 66 → 67, / film 50 → 51, / fx 54 → 55,
+# / jobs 52 → 53. /floor and /open are unchanged.
+# Both wave 11 lanes together (the lead's merge, measured): / 97 · 53, / shot 123 · 68,
+# / film 105 · 52, / fx 128 · 56, / jobs 106 · 54 (each lane's +2 words / +1 control above).
+WORDS_IN_VIEW = {"/": 97, "/floor": 58, "/open": 59, "/ shot": 123, "/ film": 105, "/ fx": 128,
+                 "/ jobs": 106}
+CONTROLS_IN_VIEW = {"/": 53, "/floor": 8, "/open": 9, "/ shot": 68, "/ film": 52, "/ fx": 56,
+                    "/ jobs": 54}
 
 # Contracts another lane delivers (M16 stage 1, C1): until that lane is merged the
 # check is an expected failure on that screen. Every stage-1 lane is merged, so this is
