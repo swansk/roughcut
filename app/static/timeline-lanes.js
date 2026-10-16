@@ -162,6 +162,7 @@
 #tl .tl-xlane[data-lane=ghost] .ghost.added, #tl .tl-xlane[data-lane=ghost] .ghost.moved { opacity: .92; }
 #tl .tl-xlane[data-lane=ghost] .ghost .gstrip { position: absolute; inset: 0; display: flex; overflow: hidden; pointer-events: none; }
 #tl .tl-xlane[data-lane=ghost] .ghost .gstrip img { flex: none; height: 100%; object-fit: cover; display: block; background: #000; }
+#tl .tl-xlane[data-lane=ghost] .ghost .dur:empty { display: none; }
 #tl .tl-xlane[data-lane=ghost] .ghost .gtxt { position: absolute; left: 0; right: 0; top: 0; z-index: 1; padding: 1px 5px 3px;
   line-height: 14px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   background: linear-gradient(rgba(10, 10, 14, .85), rgba(10, 10, 14, .55) 70%, transparent); }
@@ -683,20 +684,34 @@
   /* A ghost's label, measured rather than left to an ellipsis (verdict 7, punch 8: at fit
    * zoom Killington's ghosts read "C…"): the clip's name when it fits beside the speed
    * badge and the notes' "!", else its number ("05" for CLIP_05), else nothing — the
-   * tooltip always names it. Widths from a canvas, no layout read: the .gtxt band is
-   * 11 px text with 5 px padding a side, inside the ghost's 1 px border. */
-  let textCtx = null;
-  function textW(s, italic, family) {
-    if (!s) return 0;
-    if (!textCtx) textCtx = document.createElement('canvas').getContext('2d');
-    if (!textCtx) return s.length * 7;
-    textCtx.font = `${italic ? 'italic ' : ''}11px ${family}`;
-    return textCtx.measureText(s).width;
+   * tooltip always names it. Widths from a canvas (tl.textWidth), no layout read, in the
+   * font the label renders in: the computed style of a real .name in the lane.
+   *
+   * Verdict 8, punch 6: one ghost still read "0…" on Killington. The canvas was right
+   * about "05"; the band was not what it assumed — an empty .dur span kept its 5 px
+   * margin-left, so a label that fitted by less than 5 px overflowed and CSS cut it. An
+   * empty badge now takes no room (display: none, CSS above), and every box beside the
+   * name is counted: the .gtxt band is 5 px of padding a side inside the ghost's 1 px
+   * border; the badge sits 5 px after the name; the "!" is a bold glyph, 3 px of padding
+   * a side and a 3 px margin. */
+  const GHOST_FONT = { name: '', bold: '' };
+  function ghostFonts(nameEl) {
+    const f = tl.fontOf ? tl.fontOf(nameEl, 'normal') : '';
+    if (f) {
+      GHOST_FONT.name = f;
+      GHOST_FONT.bold = f.replace(/^(\S+)\s+\S+/, '$1 700');
+    }
+    return GHOST_FONT;
   }
-  function ghostLabel(name, badge, width, flagged, italic, family) {
-    const room = width - 2 - 10 - (flagged ? 14 : 0) - 1;    // border, padding, the "!", a pixel clear
-    const bw = badge ? 5 + textW(badge, false, family) : 0;  // the badge and its 5 px margin
-    const fits = (s) => textW(s, italic, family) <= room - bw;
+  function measure(s, font) {
+    return tl.textWidth ? tl.textWidth(s, font) : String(s || '').length * 7.5;
+  }
+  function ghostLabel(name, badge, width, flagged, italic, fonts = GHOST_FONT) {
+    const font = italic ? fonts.name.replace(/^\S+/, 'italic') : fonts.name;
+    const flagW = flagged ? 3 + 6 + measure('!', fonts.bold) : 0;
+    const room = width - 2 - 10 - flagW - 1;                  // border, padding, the "!", a pixel clear
+    const bw = badge ? 5 + measure(badge, fonts.name) : 0;    // the badge and its 5 px margin
+    const fits = (t) => measure(t, font) <= room - bw;
     const num = (/(\d{2,})$/.exec(String(name || '')) || [])[1] || '';
     const pick = name && fits(name) ? name : num && fits(num) ? num : '';
     return { name: pick, badge: bw <= room ? badge : '' };
@@ -740,7 +755,7 @@
     const laneH = tl.el.lanes.V1.offsetHeight || 72;
     const canReview = reviewable(plan);
     lane.classList.toggle('reviewing', canReview);
-    const font = getComputedStyle(lane).fontFamily || 'sans-serif';   // one style read per draw
+    let fonts = null;                    // one style read per draw, on the first ghost's .name
 
     for (const g of ghost.ghosts) {
       const d = div(`ghost ${g.cls}${g.trimmed ? ' trimmed' : ''}${isGen(g.seg.clip) ? ' gen' : ''}`);
@@ -760,9 +775,10 @@
       const f = canReview ? shotFacts(plan, g.k) : null;
       // like V1: a badge only when the shot is retimed; the length is the tooltip's.
       // The label is never cut to "C…" (verdict 7, punch 8): it is what fits.
+      if (!fonts) { lane.appendChild(d); fonts = ghostFonts(d.querySelector('.name')); }
       const lab = ghostLabel(tl.blockName(g.seg, a && a.P && a.P.clips ? a.P.clips[g.seg.clip] || null : null),
                              s === 1 ? '' : `${round2(s)}×`, Math.max(3, dur * z),
-                             !!(f && f.flags.length), isGen(g.seg.clip), font);
+                             !!(f && f.flags.length), isGen(g.seg.clip), fonts);
       d.querySelector('.name').textContent = lab.name;
       d.querySelector('.dur').textContent = lab.badge;
       d.title = `proposal ${g.k + 1}. ${nameOf(g.seg.clip)} ${tl.fmt(g.seg.in)}–${tl.fmt(g.seg.out)} (${dur.toFixed(1)}s`
@@ -1421,7 +1437,8 @@
     setVerdict, verdict, keepRemoved, reviewed, shotFacts,
     // a ghost's label at a width (tests): {name, badge}, what drawGhost writes
     ghostLabel: (name, width, badge = '', flagged = false) => ghostLabel(name, badge, width, flagged, false,
-      getComputedStyle(el.ghost || document.body).fontFamily || 'sans-serif'),
+      GHOST_FONT.name ? GHOST_FONT : { name: `normal 400 11px ${getComputedStyle(el.ghost || document.body).fontFamily}`,
+                                       bold: `normal 700 11px ${getComputedStyle(el.ghost || document.body).fontFamily}` }),
     picks: () => [...document.querySelectorAll('#tl .tl-pick')].map((m) => ({
       t: Number(m.dataset.t), title: m.title, ghost: m.classList.contains('on-ghost') })),
     ghost: () => ghost,
