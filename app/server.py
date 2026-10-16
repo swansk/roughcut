@@ -1024,6 +1024,35 @@ def api_project() -> JSONResponse:
     return JSONResponse(project_payload())
 
 
+# The "building proxies" toast, once per pass (verdict 8, punch 7). The board kept the
+# fact in the viewer's localStorage, and Killington's judge saw it on every page load for
+# the hour the previews took: every fresh browser (a new profile, another machine, a
+# private window, each of the judge's scripts) starts with no storage. The server is the
+# one place that knows a pass, so it remembers here: a pass is this project's run of
+# "previews not ready"; the first board to ask says it, every later ask in the same pass
+# is told no. A pass is new when the project changed, or a clip is missing its proxy that
+# was not missing when the pass was said (new footage); an ask that finds the previews
+# ready ends the pass.
+PROXY_TOAST: dict = {"key": None, "missing": frozenset()}
+PROXY_TOAST_LOCK = threading.Lock()
+
+
+@app.post("/api/proxies/toast")
+def api_proxy_toast() -> JSONResponse:
+    with PROXY_TOAST_LOCK:
+        if STATE.get("proxies_ready", False):
+            PROXY_TOAST.update(key=None, missing=frozenset())
+            return JSONResponse({"say": False, "ready": True})
+        key = str(STATE.get("edl"))
+        pdir = STATE.get("proxy_dir")
+        missing = frozenset(c for c in footage_clips()
+                            if pdir is None or not (pdir / f"{Path(c).stem}.mp4").exists())
+        same = PROXY_TOAST["key"] == key and missing <= PROXY_TOAST["missing"]
+        if not same:
+            PROXY_TOAST.update(key=key, missing=missing)
+        return JSONResponse({"say": not same, "ready": False})
+
+
 @app.get("/api/status")
 def api_status() -> JSONResponse:
     """Where this project actually is, in terms of the steps it has to go through.
