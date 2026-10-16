@@ -1865,7 +1865,10 @@ function programMix(t, play, proposal) {
   if (!prog.v2 || !segs.length) return;
   const { at, next } = proposal ? { at: null, next: null } : txWindow(t);
   if (!prog.tx && !at && !next) return;            // no transition yet: nothing made
-  if (!prog.tx) prog.tx = { in: txEl('In'), out: txEl('Out'), drawn: null };
+  if (!prog.tx) {
+    const own = txEl('In');
+    prog.tx = { in: own, inOwn: own, out: txEl('Out'), drawn: null, hand: null };
+  }
   const tx = prog.tx;
   const lv = liveVideo();
   const g = gradeApi();
@@ -1895,8 +1898,15 @@ function programMix(t, play, proposal) {
     if (inA && liveIdx === k) liveLvl = Math.cos(Math.PI / 2 * xa);
     else if (outA && liveIdx === k + 1) liveLvl = Math.sin(Math.PI / 2 * xa);
   }
+  // The incoming picture while playing: the buffer that will play the shot, prerolling from
+  // its park at the handle's start (prerollAt / preroll), when it is there; else the
+  // follower of its own (a cue inside the window, a park that did not land in time).
+  const hand = txHand(tx, at, xin, lv);
+  if (tx.hand && tx.hand !== hand) txUnhand(tx, lv);
+  tx.hand = hand;
+  tx.in = hand || tx.inOwn;
   for (const v of player.vids) {
-    if (window.rcAudio) rcAudio.setLevel(v, 'xfade', v === lv ? liveLvl : 1);
+    if (window.rcAudio) rcAudio.setLevel(v, 'xfade', v === lv ? liveLvl : v === hand ? xin.lvl : 1);
   }
   let drawn = null, drawnW = 0, drawnId = null;
   // Both shots' LUTs, before the window: the grade's mix never waits on a cold one
@@ -1909,7 +1919,14 @@ function programMix(t, play, proposal) {
       g.prefetch(segs[soon.k + 1].id);
     }
   }
-  for (const [el, x, side] of [[tx.in, xin, 'in'], [tx.out, xout, 'out']]) {
+  if (hand) {
+    txFollow(hand, xin.seg, xin.clipT, true);
+    hand.muted = !(xin.lvl > 0);              // its sound: A1's level (timeline) x sin (xfade)
+    hand._roll.gen = player.gen;              // still the preroll of its cut (advance: rolled)
+    if (xin.w > 0) { drawn = hand; drawnW = xin.w; drawnId = xin.seg.id; }
+    hand.dataset.w = String(Math.round(xin.w * 1e4) / 1e4);
+  }
+  for (const [el, x, side] of [[tx.inOwn, hand ? null : xin, 'in'], [tx.out, xout, 'out']]) {
     if (x) {
       txFollow(el, x.seg, x.clipT, play);
       el.muted = !(x.lvl > 0);
@@ -1918,6 +1935,10 @@ function programMix(t, play, proposal) {
       else el.volume = Math.min(1, a1 * x.lvl);
       if (x.w > 0 && !drawn) { drawn = el; drawnW = x.w; drawnId = x.seg.id; }
       el.dataset.w = String(Math.round(x.w * 1e4) / 1e4);
+    } else if (side === 'in' && hand) {
+      el.dataset.w = '0';                     // handed over: idle, not decoding
+      if (!el.paused) el.pause();
+      el.muted = true;
     } else {
       el.dataset.w = '0';
       if (!el.paused) el.pause();
@@ -1940,13 +1961,55 @@ function programMix(t, play, proposal) {
     ? g.setMix(drawn ? { video: drawn, id: drawnId, w: drawnW, onChange: () => programSync() } : null)
     : false;
   tx.drawn = drawn;
-  for (const el of [tx.in, tx.out]) {
+  for (const el of [tx.inOwn, tx.out]) {
     const show = el === drawn && !graded && progTrack('V1').eye !== false;
     const op = show ? String(Math.round(drawnW * 1e4) / 1e4) : '';
     if (el.style.opacity !== op) el.style.opacity = op;
     const vis = show ? '' : 'hidden';
     if (el.style.visibility !== vis) el.style.visibility = vis;
   }
+  // A handed buffer is laid out like the follower (display block, hidden by visibility: a
+  // display:none video is not composited, its frames neither called back nor current for
+  // the grade's VideoFrame), and is a layer over the live one while it is the picture's
+  // other half and the grade does not draw it (ungraded: CSS opacity, as the follower's).
+  if (hand) {
+    const show = hand === drawn && !graded && progTrack('V1').eye !== false;
+    if (hand.style.display !== 'block') hand.style.display = 'block';
+    if (hand.style.zIndex !== '1') hand.style.zIndex = '1';
+    const vis = show ? '' : 'hidden';
+    if (hand.style.visibility !== vis) hand.style.visibility = vis;
+    const op = show ? String(Math.round(drawnW * 1e4) / 1e4) : '';
+    if (hand.style.opacity !== op) hand.style.opacity = op;
+  }
+}
+
+/* The buffer prerolling the incoming shot of the dissolve under the playhead, when it can
+ * be the incoming picture this frame: playing (its preroll from the dissolve's park), not
+ * the live one, on that shot's media, its frame decoded, and at the film's frame (within
+ * 0.12 s; one already handed keeps the role, txFollow steers it). */
+function txHand(tx, at, xin, lv) {
+  if (!at || !xin || !player.playing) return null;
+  const b = xin.seg;
+  const hb = player.vids.find((v) => v !== lv && v._roll && v._roll.seg === b);
+  if (!hb || hb.paused || hb.error || hb.readyState < 2 || hb.classList.contains('live')
+      || hb.dataset.src !== proxyOf(b)) return null;
+  if (tx.hand === hb) return hb;
+  if (hb.seeking || Math.abs(hb.currentTime - xin.clipT) / speedOf(b) > 0.12) return null;
+  return hb;
+}
+
+/* A handed buffer goes back to being a buffer (its cut came, the window ended, a pause):
+ * no layer styles of the dissolve's, Effect Controls' opacity as the live one wears it. */
+function txUnhand(tx, lv) {
+  const hb = tx.hand;
+  tx.hand = null;
+  if (!hb) return;
+  hb.style.display = '';
+  hb.style.zIndex = '';
+  hb.style.visibility = progTrack('V1').eye !== false ? '' : 'hidden';   // programSync's rule
+  hb.style.opacity = lv && lv !== hb ? lv.style.opacity : (player.vids.find((v) => v !== hb) || {}).style?.opacity || '';
+  hb.dataset.w = '0';
+  if (window.rcAudio) rcAudio.setLevel(hb, 'xfade', 1);
 }
 
 /* A3 and up (wave 4 POLISH's added audio tracks; verdict 5 punch 5: "the Program plays
@@ -2060,8 +2123,25 @@ const SHORT_S = 1.0;
  * `room` film seconds before the cut (the shot on screen is short), as far ahead as a
  * park and a start leave time for, so the preroll can still begin before the cut. */
 function prerollAt(seg, room = Infinity) {
+  const tx = txLeadIn(seg);
+  if (tx > 0) return Math.max(0, seg.in - tx * speedOf(seg));
   const lead = Math.max(0.04, Math.min(PREROLL_S, room - roll.seek - roll.lat - 0.05));
   return Math.max(0, seg.in - lead * speedOf(seg));
+}
+
+/* A shot a Cross Dissolve (or a crossfade) comes into (wave 11 CANVAS; verdict 8 punch 3):
+ * its buffer is parked where the incoming follower would start (the handle's half plus
+ * TX_PRE before its in-point, in film seconds; 0 when no transition comes into it) and its
+ * preroll starts there, so the buffer that will play the shot plays its head as the
+ * dissolve's incoming picture too (programMix `txHand`), and the separate follower does
+ * not decode the same frames beside it: one decoder fewer through the first half. */
+function txLeadIn(seg) {
+  if (player.single || !seg || !window.tl || typeof tl.transitionHalves !== 'function') return 0;
+  const i = segs.indexOf(seg);
+  if (i < 1) return 0;
+  const c = tl.transitionHalves()[i - 1];
+  const h = c ? Math.max(c.video, c.audio) : 0;
+  return h > 0 ? h + TX_PRE : 0;
 }
 
 function armNext(v, seg, room) {
@@ -2081,9 +2161,12 @@ function armNext(v, seg, room) {
   // A park further ahead than `room` wants (up to PREROLL_S) is kept too: preroll() runs
   // a late start faster until the cut, which costs less than a second seek.
   const lead = (seg.in - v.currentTime) / speedOf(seg);
+  // (a dissolve's park is exact: the buffer starts as the incoming picture from it)
+  const tx = txLeadIn(seg);
+  const near = tx > 0 ? Math.abs(lead - (seg.in - at) / speedOf(seg)) < 0.04
+    : lead <= Math.max(seg.in - at, PREROLL_S * speedOf(seg)) / speedOf(seg) + 1e-3;
   if (v.dataset.src === proxyOf(seg) && !v.error && v.paused
-      && !v._roll && !v.seeking && v.readyState >= 2 && lead >= 0
-      && lead <= Math.max(seg.in - at, PREROLL_S * speedOf(seg)) / speedOf(seg) + 1e-3) {
+      && !v._roll && !v.seeking && v.readyState >= 2 && lead >= 0 && near) {
     setShotRate(v, seg);
     v._for = seg;
     freshen(v);
@@ -2148,7 +2231,8 @@ function preroll(left) {
   if (nb.classList.contains('live')) return;                  // still on screen (held)
   if (nb.dataset.src !== proxyOf(nseg)) return;
   const lead = (nseg.in - nb.currentTime) / speedOf(nseg);    // film seconds to its in-point
-  if (lead < -0.01 || lead > PREROLL_S + 0.05) return;        // not parked for this cut
+  const tx = txLeadIn(nseg);                                    // a dissolve's park: further ahead
+  if (lead < -0.01 || lead > Math.max(PREROLL_S, tx) + 0.05) return;   // not parked for this cut
   // boundary() cuts 0.04 s before the out; the start's latency is real time, the
   // rest film time, so it scales with the J/L shuttle's rate
   const shuttle = (liveVideo() && liveVideo().defaultPlaybackRate) || 1;
@@ -2228,7 +2312,8 @@ function advance() {
     // take the decoder threads the new shot is using).
     if (g !== player.gen || !segs[next + 1]) return;
     if (short) armUpcoming(next, g, Math.max(0, (nseg.out - nv.currentTime) / speedOf(nseg)));
-    else afterFirstFrames(nv, () => { if (g === player.gen) armUpcoming(next, g); });
+    // into a dissolve's second half: the park waits for its end (afterTxWindow)
+    else afterFirstFrames(nv, () => afterTxWindow(next, g, () => { if (g === player.gen) armUpcoming(next, g); }));
   });
   const go = () => {
     if (g !== player.gen || !player.playing) return;
@@ -2265,9 +2350,32 @@ function advance() {
     afterFirstFrames(nv, () => tl.render(), 1);
   };
   if (short) setTimeout(settle, (tl.dur(nseg) + 0.1) * 1000);
-  else afterFirstFrames(nv, () => afterFirstFrames(nv, settle, 1));
+  // (inside a dissolve, after it: its ~100 ms of main thread held the followers' frames)
+  else afterFirstFrames(nv, () => afterFirstFrames(nv, () => afterTxWindow(next, g, settle), 1));
   paintTransport();
   schedule();
+}
+
+/* The cut into shot i came inside a dissolve (wave 11 CANVAS; verdict 8 punch 3): the
+ * park of the shot after it — a seek, a decode from the keyframe — waits until the
+ * dissolve's second half is over, so it never decodes beside the live shot and the
+ * outgoing follower (three decoders in the window, TXHITCH's measured fourth). At once
+ * when there is no dissolve there, when the monitor stops, or when the shot has too
+ * little left after the window for the park and its preroll to land in time. */
+function afterTxWindow(i, g, fn) {
+  const halves = window.tl && typeof tl.transitionHalves === 'function' ? tl.transitionHalves() : [];
+  const c = halves[i - 1];
+  const h = c ? Math.max(c.video, c.audio) : 0;
+  const seg = segs[i];
+  if (!(h > 0) || !seg) { fn(); return; }
+  const end = c.at + h;                                      // film time the window ends
+  const room = filmStart(i) + tl.dur(seg) - end;             // film left in the shot after it
+  if (room < roll.seek + roll.lat + Math.max(PREROLL_S, txLeadIn(segs[i + 1])) + 0.15) { fn(); return; }
+  const wait = () => {
+    if (g !== player.gen || !player.playing || (tl.state.playhead || 0) >= end) { fn(); return; }
+    requestAnimationFrame(wait);
+  };
+  wait();
 }
 
 /* Run fn once the buffer has presented `frames` more frames (a paused one presents
