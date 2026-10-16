@@ -1024,6 +1024,35 @@ def api_project() -> JSONResponse:
     return JSONResponse(project_payload())
 
 
+# The "building proxies" toast, once per pass (verdict 8, punch 7). The board kept the
+# fact in the viewer's localStorage, and Killington's judge saw it on every page load for
+# the hour the previews took: every fresh browser (a new profile, another machine, a
+# private window, each of the judge's scripts) starts with no storage. The server is the
+# one place that knows a pass, so it remembers here: a pass is this project's run of
+# "previews not ready"; the first board to ask says it, every later ask in the same pass
+# is told no. A pass is new when the project changed, or a clip is missing its proxy that
+# was not missing when the pass was said (new footage); an ask that finds the previews
+# ready ends the pass.
+PROXY_TOAST: dict = {"key": None, "missing": frozenset()}
+PROXY_TOAST_LOCK = threading.Lock()
+
+
+@app.post("/api/proxies/toast")
+def api_proxy_toast() -> JSONResponse:
+    with PROXY_TOAST_LOCK:
+        if STATE.get("proxies_ready", False):
+            PROXY_TOAST.update(key=None, missing=frozenset())
+            return JSONResponse({"say": False, "ready": True})
+        key = str(STATE.get("edl"))
+        pdir = STATE.get("proxy_dir")
+        missing = frozenset(c for c in footage_clips()
+                            if pdir is None or not (pdir / f"{Path(c).stem}.mp4").exists())
+        same = PROXY_TOAST["key"] == key and missing <= PROXY_TOAST["missing"]
+        if not same:
+            PROXY_TOAST.update(key=key, missing=missing)
+        return JSONResponse({"say": not same, "ready": False})
+
+
 @app.get("/api/status")
 def api_status() -> JSONResponse:
     """Where this project actually is, in terms of the steps it has to go through.
@@ -1123,7 +1152,7 @@ def apply_sequence(edl: dict, body: dict) -> None:
                 # a V2+ clip's own Effect Controls (verdict 6, punch 8), by V1's rule;
                 # the render and the Program composite them over what is under it
                 try:
-                    c = clean_controls(raw.get("controls"))
+                    c = clean_controls(raw.get("controls"), overlay=True)
                 except TypeError as exc:
                     raise ValueError(f"overlay controls: {exc}")
                 if c:
@@ -1235,15 +1264,26 @@ def clean_keys(raw) -> dict | None:
     return out or None
 
 
-def clean_controls(raw) -> dict | None:
-    """One segment's `controls`, validated; None when everything is the default."""
+# Lumetri beyond Basic (wave 11, LUMETRI): Curves, Color Wheels, HSL Secondary — the
+# schema and THE formula are roughcut/colour.py's ("Lumetri beyond Basic"); each value's
+# validator is there too. V1's only: a V2+ clip renders as shot (V2EC).
+LUMETRI_CREATIVE = {"curves": colourmod.clean_curves, "wheels": colourmod.clean_wheels,
+                    "hsl": colourmod.clean_hsl}
+
+
+def clean_controls(raw, overlay: bool = False) -> dict | None:
+    """One segment's `controls`, validated; None when everything is the default.
+    `overlay`: a V2+ clip's, which takes no Lumetri Curves, Wheels or HSL."""
     if raw is None:
         return None
     if not isinstance(raw, dict):
         raise ValueError("controls must be an object")
-    extra = set(raw) - set(CONTROL_RANGES) - {"position", "fx_off", "fx_order", "keys"}
+    extra = set(raw) - set(CONTROL_RANGES) - {"position", "fx_off", "fx_order", "keys"} \
+        - set(LUMETRI_CREATIVE)
     if extra:
         raise ValueError(f"unknown control {sorted(extra)[0]!r}")
+    if overlay and any(raw.get(k) is not None for k in LUMETRI_CREATIVE):
+        raise ValueError("Lumetri Color applies to V1 shots: a clip on V2+ renders as shot")
     out: dict = {}
     for k, (lo, hi, default) in CONTROL_RANGES.items():
         if raw.get(k) is None:
@@ -1273,6 +1313,10 @@ def clean_controls(raw) -> dict | None:
     keys = clean_keys(raw.get("keys"))
     if keys:
         out["keys"] = keys
+    for k, clean in LUMETRI_CREATIVE.items():
+        v = clean(raw.get(k))
+        if v:
+            out[k] = v
     return out or None
 
 
@@ -8320,7 +8364,7 @@ def timeline_static(name: str) -> Response:
 # The workspace's own modules (redesign wave 2): one route and a fixed list, like the
 # timeline's, so a lane adds a panel by adding a file here instead of a route each.
 MODULE_FILES = {"firstpass.js", "firstpass.css", "export.js", "export.css", "meters.js",
-                "meters.css", "effects.js", "effects.css", "workspace.css"}
+                "meters.css", "effects.js", "effects.css", "workspace.css", "scopes.js"}
 
 
 @app.get("/modules/{name}")

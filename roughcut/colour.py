@@ -920,3 +920,292 @@ def shot_context(res: dict) -> dict | None:
     if not res.get("summary"):
         return None
     return {"summary": res["summary"], "balance": res.get("balance")}
+
+
+# ------------------------------------------- Lumetri beyond Basic (redesign wave 11, LUMETRI)
+#
+# Premiere's Lumetri Color after Basic Correction: Curves (RGB master + R, G, B), Color
+# Wheels (Shadows, Midtones, Highlights, each with a lightness slider) and HSL Secondary
+# (one key and its correction). They ride the segment's `controls` (server.py
+# `clean_controls` validates them with the `clean_*` below):
+#
+#   "curves": {"master" | "r" | "g" | "b": [[x, y], ...]}   2..16 points, x and y on 0..1,
+#             x strictly increasing; an identity curve [[0, 0], [1, 1]] is dropped
+#   "wheels": {"shadows" | "midtones" | "highlights": [cb, cr, lightness]}   the puck in
+#             the unit disc (cb right = blue, cr up = red, the vectorscope's axes) and
+#             the wheel's slider -100..100; an all-zero wheel is dropped
+#   "hsl":    {"hue", "width", "sat_lo", "sat_hi", "light_lo", "light_hi", "soft",
+#              "shift", "saturation", "temperature", "tint"}   see HSL_FIELDS; only what
+#             differs from its default (a key with a neutral correction does nothing)
+#
+# THE formula. It runs per pixel on RGB 0..1, after the shot's LUT and Basic Correction
+# (contrast, tone, saturation, then a clamp to 0..1), in Premiere's panel order:
+#
+#   1. Curves, per channel:     y_c = curve_c(curve_master(x_c))
+#      a curve is a monotone piecewise cubic Hermite through its points (PCHIP: the slope
+#      at an inner point is the weighted harmonic mean of the two secants beside it, 0
+#      where they differ in sign; at an end point the secant), held flat beyond its first
+#      and last points, clamped to 0..1.
+#   2. Color Wheels, per channel, with o = the puck as an RGB offset of zero luma
+#      (YCbCr → RGB, BT.709, Cb = cb/2, Cr = cr/2) and l = lightness/100:
+#         gain  g_c = 0.5·o_h,c + 0.5·l_h     y = x·(1 + g_c)              highlights
+#         lift  s_c = 0.25·o_s,c + 0.25·l_s   y = y + s_c·(1 − y)          shadows
+#         gamma m_c = 0.6·o_m,c + 0.6·l_m     y = clamp(y, 0, 1)^(2^(−m_c)) midtones
+#      Steps 1 and 2 are one function of each channel alone: the board draws them as one
+#      256-entry table per channel (`creative_table`), the render as one `lutrgb`.
+#   3. HSL Secondary, across channels (`hsl_secondary`): the pixel's HSL hue H (degrees),
+#      saturation S and lightness L (0..1); the key
+#         w = (1 − smoothstep(width, width + fh, dist(H, hue))) · band(S, sat_lo, sat_hi, fs)
+#             · band(L, light_lo, light_hi, fs)
+#         band(v, lo, hi, f) = smoothstep(lo − f, lo, v) · (1 − smoothstep(hi, hi + f, v))
+#         fh = max(0.5°, 60°·soft/100), fs = max(0.002, 0.25·soft/100)
+#      and the correction in BT.709 YCbCr (luma kept): (Cb, Cr) rotated by `shift`
+#      degrees, times saturation/100, plus temperature t and tint n (/100):
+#      Cr += 0.1·t, Cb −= 0.1·t; Cb += 0.1·n, Cr += 0.1·n; back to RGB; out = mix(x,
+#      corrected, w), clamped to 0..1. The render bakes this step into a 33³ cube.
+#
+# app/static/grade.js holds the same formula for the Program's shader (`LUMETRI` there),
+# step for step; app/tests/test_lumetri.py checks the two agree.
+
+CURVE_CHANNELS = ("master", "r", "g", "b")
+CURVE_MAX_POINTS = 16
+WHEEL_NAMES = ("shadows", "midtones", "highlights")
+# field: (lo, hi, default)
+HSL_FIELDS = {
+    "hue": (0.0, 360.0, 0.0), "width": (0.0, 180.0, 30.0),
+    "sat_lo": (0.0, 100.0, 10.0), "sat_hi": (0.0, 100.0, 100.0),
+    "light_lo": (0.0, 100.0, 0.0), "light_hi": (0.0, 100.0, 100.0),
+    "soft": (0.0, 100.0, 20.0),
+    "shift": (-180.0, 180.0, 0.0), "saturation": (0.0, 200.0, 100.0),
+    "temperature": (-100.0, 100.0, 0.0), "tint": (-100.0, 100.0, 0.0),
+}
+HSL_CORRECTION = ("shift", "saturation", "temperature", "tint")
+WHEEL_K = {"shadows": 0.25, "midtones": 0.6, "highlights": 0.5}
+KB, KR = 0.0722, 0.2126
+
+
+def _num(v, what: str) -> float:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise ValueError(f"{what} must be a number")
+    f = float(v)
+    if not math.isfinite(f):
+        raise ValueError(f"{what} must be finite")
+    return f
+
+
+def clean_curves(raw) -> dict | None:
+    """`controls.curves`, validated; None when every curve is the identity."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("curves must be an object of {channel: [[x, y], ...]}")
+    extra = set(raw) - set(CURVE_CHANNELS)
+    if extra:
+        raise ValueError(f"no curve {sorted(extra)[0]!r} (master, r, g, b)")
+    out: dict = {}
+    for ch in CURVE_CHANNELS:
+        pts = raw.get(ch)
+        if pts is None:
+            continue
+        if not isinstance(pts, list) or not (2 <= len(pts) <= CURVE_MAX_POINTS):
+            raise ValueError(f"curves.{ch} must be 2..{CURVE_MAX_POINTS} points [x, y]")
+        clean: list = []
+        for p in pts:
+            if not (isinstance(p, list) and len(p) == 2):
+                raise ValueError(f"curves.{ch}: each point is [x, y]")
+            x, y = (round(_num(v, f"curves.{ch}"), 4) for v in p)
+            if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+                raise ValueError(f"curves.{ch}: x and y must be 0..1")
+            if clean and x <= clean[-1][0]:
+                raise ValueError(f"curves.{ch}: x must be strictly increasing")
+            clean.append([x, y])
+        if clean != [[0.0, 0.0], [1.0, 1.0]]:
+            out[ch] = clean
+    return out or None
+
+
+def clean_wheels(raw) -> dict | None:
+    """`controls.wheels`, validated; None when every wheel is at rest."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("wheels must be an object of {wheel: [cb, cr, lightness]}")
+    extra = set(raw) - set(WHEEL_NAMES)
+    if extra:
+        raise ValueError(f"no wheel {sorted(extra)[0]!r} (shadows, midtones, highlights)")
+    out: dict = {}
+    for name in WHEEL_NAMES:
+        w = raw.get(name)
+        if w is None:
+            continue
+        if not (isinstance(w, list) and len(w) == 3):
+            raise ValueError(f"wheels.{name} must be [cb, cr, lightness]")
+        cb, cr, li = (_num(v, f"wheels.{name}") for v in w)
+        if cb * cb + cr * cr > 1.0 + 1e-6:
+            raise ValueError(f"wheels.{name}: the puck must be inside the wheel (cb² + cr² ≤ 1)")
+        if not (-100.0 <= li <= 100.0):
+            raise ValueError(f"wheels.{name}: lightness must be -100..100")
+        v = [round(cb, 4), round(cr, 4), round(li, 3)]
+        if any(abs(x) > 0 for x in v):
+            out[name] = v
+    return out or None
+
+
+def clean_hsl(raw) -> dict | None:
+    """`controls.hsl`, validated; only what differs from HSL_FIELDS' defaults, None when
+    every field is its default. A key set before its correction is kept (the editor sets
+    up the key first); `hsl_of` says whether it does anything."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("hsl must be an object")
+    extra = set(raw) - set(HSL_FIELDS)
+    if extra:
+        raise ValueError(f"no hsl field {sorted(extra)[0]!r}")
+    vals = {}
+    for k, (lo, hi, dflt) in HSL_FIELDS.items():
+        v = raw.get(k)
+        v = dflt if v is None else _num(v, f"hsl.{k}")
+        if not (lo <= v <= hi):
+            raise ValueError(f"hsl.{k} must be {lo:g}..{hi:g}")
+        vals[k] = round(v, 3)
+    for a, b in (("sat_lo", "sat_hi"), ("light_lo", "light_hi")):
+        if vals[a] > vals[b]:
+            raise ValueError(f"hsl.{a} must not be above hsl.{b}")
+    out = {k: v for k, v in vals.items() if v != HSL_FIELDS[k][2]}
+    return out or None
+
+
+def hsl_of(hsl: dict | None) -> dict | None:
+    """Every HSL field with its default filled in, or None when the secondary is off."""
+    if not hsl:
+        return None
+    vals = {k: float(hsl.get(k, d)) for k, (_, _, d) in HSL_FIELDS.items()}
+    if all(abs(vals[k] - HSL_FIELDS[k][2]) < 1e-9 for k in HSL_CORRECTION):
+        return None
+    return vals
+
+
+def curve_eval(points, x: np.ndarray) -> np.ndarray:
+    """A curve (sorted [[x, y], ...]) at `x`: PCHIP through the points, held flat past
+    the ends, clamped to 0..1 (THE formula, step 1)."""
+    x = np.asarray(x, np.float64)
+    px = np.array([p[0] for p in points], np.float64)
+    py = np.array([p[1] for p in points], np.float64)
+    n = len(px)
+    h = np.diff(px)
+    d = np.diff(py) / h
+    m = np.zeros(n)
+    m[0], m[-1] = d[0], d[-1]
+    for k in range(1, n - 1):
+        if d[k - 1] * d[k] <= 0:
+            m[k] = 0.0
+        else:
+            w1, w2 = 2 * h[k] + h[k - 1], h[k] + 2 * h[k - 1]
+            m[k] = (w1 + w2) / (w1 / d[k - 1] + w2 / d[k])
+    xc = np.clip(x, px[0], px[-1])
+    k = np.clip(np.searchsorted(px, xc, side="right") - 1, 0, n - 2)
+    t = (xc - px[k]) / h[k]
+    t2, t3 = t * t, t * t * t
+    y = ((2 * t3 - 3 * t2 + 1) * py[k] + (t3 - 2 * t2 + t) * h[k] * m[k]
+         + (-2 * t3 + 3 * t2) * py[k + 1] + (t3 - t2) * h[k] * m[k + 1])
+    return np.clip(y, 0.0, 1.0)
+
+
+def wheel_rgb(cb: float, cr: float) -> np.ndarray:
+    """The puck as an RGB offset of zero luma (BT.709, Cb = cb/2, Cr = cr/2)."""
+    Cb, Cr = 0.5 * cb, 0.5 * cr
+    r = 2 * (1 - KR) * Cr
+    b = 2 * (1 - KB) * Cb
+    g = -(KR * r + KB * b) / (1 - KR - KB)
+    return np.array([r, g, b])
+
+
+def wheel_params(wheels: dict | None) -> dict[str, np.ndarray]:
+    """Each wheel's per-channel amount (gain, lift, gamma), THE formula, step 2."""
+    out = {}
+    for name in WHEEL_NAMES:
+        cb, cr, li = (wheels or {}).get(name) or (0.0, 0.0, 0.0)
+        k = WHEEL_K[name]
+        out[name] = k * wheel_rgb(cb, cr) + k * li / 100.0
+    return out
+
+
+def creative_channels(rgb: np.ndarray, controls: dict | None) -> np.ndarray:
+    """Steps 1 and 2 on (..., 3) RGB 0..1: the curves, then the wheels."""
+    c = controls or {}
+    y = np.clip(np.asarray(rgb, np.float64), 0.0, 1.0)
+    curves = c.get("curves") or {}
+    if curves.get("master"):
+        y = curve_eval(curves["master"], y)
+    for i, ch in enumerate("rgb"):
+        if curves.get(ch):
+            y[..., i] = curve_eval(curves[ch], y[..., i])
+    if c.get("wheels"):
+        P = wheel_params(c["wheels"])
+        y = y * (1.0 + P["highlights"])
+        y = y + P["shadows"] * (1.0 - y)
+        y = np.clip(y, 0.0, 1.0) ** (2.0 ** (-P["midtones"]))
+    return np.clip(y, 0.0, 1.0)
+
+
+def creative_on(controls: dict | None) -> bool:
+    c = controls or {}
+    return bool(c.get("curves") or c.get("wheels"))
+
+
+def creative_table(controls: dict | None, n: int = 256) -> np.ndarray | None:
+    """Steps 1 and 2 as a (3, n) table: channel c at code v/(n-1). None when neither
+    curves nor wheels are set. grade.js builds the same table for the shader."""
+    if not creative_on(controls):
+        return None
+    v = np.linspace(0.0, 1.0, n)
+    return creative_channels(np.stack([v, v, v], -1), controls).T
+
+
+def _smoothstep(e0, e1, x):
+    t = np.clip((x - e0) / (e1 - e0), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def hsl_secondary(rgb: np.ndarray, hsl: dict | None) -> np.ndarray:
+    """Step 3 on (..., 3) RGB 0..1 (THE formula's HSL Secondary)."""
+    x = np.clip(np.asarray(rgb, np.float64), 0.0, 1.0)
+    P = hsl_of(hsl)
+    if P is None:
+        return x
+    r, g, b = x[..., 0], x[..., 1], x[..., 2]
+    mx, mn = x.max(-1), x.min(-1)
+    C = mx - mn
+    L = (mx + mn) / 2
+    S = np.where(C > 1e-6, C / np.maximum(1e-6, 1 - np.abs(2 * L - 1)), 0.0)
+    S = np.clip(S, 0.0, 1.0)
+    Cs = np.maximum(C, 1e-6)
+    H = np.where(mx == r, np.mod((g - b) / Cs, 6.0),
+                 np.where(mx == g, (b - r) / Cs + 2.0, (r - g) / Cs + 4.0)) * 60.0
+    H = np.where(C > 1e-6, H, 0.0)
+    soft = P["soft"] / 100.0
+    fh, fs = max(0.5, 60.0 * soft), max(0.002, 0.25 * soft)
+    dist = np.abs(np.mod(H - P["hue"] + 540.0, 360.0) - 180.0)
+    wh = 1.0 - _smoothstep(P["width"], P["width"] + fh, dist)
+
+    def band(v, lo, hi):
+        return _smoothstep(lo - fs, lo, v) * (1.0 - _smoothstep(hi, hi + fs, v))
+    w = wh * band(S, P["sat_lo"] / 100.0, P["sat_hi"] / 100.0) \
+        * band(L, P["light_lo"] / 100.0, P["light_hi"] / 100.0)
+    Y = KR * r + (1 - KR - KB) * g + KB * b
+    Cb = (b - Y) / (2 * (1 - KB))
+    Cr = (r - Y) / (2 * (1 - KR))
+    a = math.radians(P["shift"])
+    ca, sa = math.cos(a), math.sin(a)
+    k = P["saturation"] / 100.0
+    Cb2 = (Cb * ca - Cr * sa) * k
+    Cr2 = (Cb * sa + Cr * ca) * k
+    t, n = P["temperature"] / 100.0, P["tint"] / 100.0
+    Cb2 = Cb2 - 0.1 * t + 0.1 * n
+    Cr2 = Cr2 + 0.1 * t + 0.1 * n
+    r2 = Y + 2 * (1 - KR) * Cr2
+    b2 = Y + 2 * (1 - KB) * Cb2
+    g2 = (Y - KR * r2 - KB * b2) / (1 - KR - KB)
+    out = np.stack([r2, g2, b2], -1)
+    return np.clip(x + w[..., None] * (out - x), 0.0, 1.0)

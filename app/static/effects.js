@@ -11,6 +11,11 @@
  *                   Highlights, Shadows, Whites, Blacks), Saturation — Temperature / Tint /
  *                   Exposure are the colour block's hand balance; the auto, the look and the
  *                   match behind "Creative & match"
+ *                   › Curves (RGB: master + R, G, B — click to add a point, drag it,
+ *                     Ctrl/⌘-click to delete it), › Color Wheels & Match (Shadows,
+ *                     Midtones, Highlights, each a puck and a lightness slider; a
+ *                     double-click centres the puck), › HSL Secondary (a hue /
+ *                     saturation / lightness key and its correction) — wave 11, LUMETRI
  *   fx stack        the designed effects on the shot: bypass (fx) and order
  *
  * Keyframes (wave 6, verdict 5 punch 4): Position, Scale, Rotation, Opacity and Level each
@@ -36,7 +41,9 @@
  *        "rotation": degrees, "opacity": %, "volume_db": dB, "contrast": -100..100,
  *        "highlights" / "shadows" / "whites" / "blacks": -100..100 (grade.js has the
  *        formula), "saturation": 0..200, "fx_off": [effect ids], "fx_order": [effect ids],
- *        "keys": {prop: [[t, v], ...]} (see "keyframes" below)}
+ *        "keys": {prop: [[t, v], ...]} (see "keyframes" below),
+ *        "curves" / "wheels" / "hsl" (roughcut/colour.py "Lumetri beyond Basic" has the
+ *        schema and THE formula; grade.js the shader's twin)}
  *     validated by server.py's `clean_controls` on every save. The export draws every
  *     one of them (research/tools/assemble.py `encode_part`); each row says so on hover.
  *
@@ -56,6 +63,10 @@
  *   now(seg?)                 the shot's controls with its keys evaluated at the playhead
  *   animate(group)            the stopwatch: pos | scale | rotation | opacity | volume_db
  *   key(act, group)           ◀ ◆ ▶: 'prev' | 'key' (add or remove at the playhead) | 'next'
+ *   curve(ch, points?, seg?)  Lumetri Curves: a channel's points (master | r | g | b), or
+ *                             one undoable change to them (null = the identity)
+ *   wheel(name, v?, seg?)     Color Wheels: [cb, cr, lightness] of shadows | midtones |
+ *                             highlights, or one undoable change to it
  */
 (() => {
   'use strict';
@@ -70,7 +81,8 @@
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* fine */ } },
   };
   const OPEN_KEY = 'roughcut.ec.open';
-  const open = Object.assign({ motion: true, opacity: true, time: true, volume: true, lumetri: true, basic: true, fxs: true },
+  const open = Object.assign({ motion: true, opacity: true, time: true, volume: true, lumetri: true, basic: true, fxs: true,
+                               curves: false, wheels: false, hsl: false },
     store.get(OPEN_KEY) || {});
 
   /* app.js's top-level bindings share the global lexical scope with this script; each is
@@ -350,6 +362,31 @@
       },
     };
   }
+  /* HSL Secondary's values (wave 11): `controls.hsl[field]`, only what differs from its
+   * default (roughcut/colour.py HSL_FIELDS); a min never above its max. */
+  const HSL_DEFAULT = { hue: 0, width: 30, sat_lo: 10, sat_hi: 100, light_lo: 0, light_hi: 100,
+                        soft: 20, shift: 0, saturation: 100, temperature: 0, tint: 0 };
+  const HSL_PAIR = { sat_lo: ['sat_hi', 1], sat_hi: ['sat_lo', -1], light_lo: ['light_hi', 1], light_hi: ['light_lo', -1] };
+  function hslProp(field, label, lo, hi, digits, unit, hover) {
+    const dflt = HSL_DEFAULT[field];
+    return {
+      key: `hsl_${field}`, sec: 'lumetri', sub: 'hsl', label, lo, hi, step: 0.5, digits, unit, dflt,
+      undo: `hsl ${label.toLowerCase()}`, hover: `${hover} · ${RENDERED}`,
+      get: (seg) => ((ctl(seg).hsl || {})[field] ?? dflt),
+      set: (seg, v) => {
+        const h = { ...(ctl(seg).hsl || {}) };
+        v = Math.round(clamp(v, lo, hi) * 1000) / 1000;
+        const put = (f, x) => { if (x === HSL_DEFAULT[f]) delete h[f]; else h[f] = x; };
+        put(field, v);
+        const pair = HSL_PAIR[field];
+        if (pair) {                              // a min above its max pushes the max along
+          const [o, sign] = pair, ov = h[o] ?? HSL_DEFAULT[o];
+          if (sign > 0 ? ov < v : ov > v) put(o, v);
+        }
+        setCtl(seg, 'hsl', Object.keys(h).length ? h : null, null);
+      },
+    };
+  }
   const PROPS = [
     keyed(posProp('x'), 'position_x', 'pos'), keyed(posProp('y'), 'position_y', 'pos'),
     keyed(plain('scale', 100, 0, 1000, 0.1, 1, '', 'Scale', 'motion'), 'scale', 'scale'),
@@ -368,7 +405,20 @@
     plain('whites', 0, -100, 100, 0.5, 1, '', 'Whites', 'lumetri'),
     plain('blacks', 0, -100, 100, 0.5, 1, '', 'Blacks', 'lumetri'),
     plain('saturation', 100, 0, 200, 0.5, 1, '', 'Saturation', 'lumetri'),
+    hslProp('hue', 'Hue', 0, 360, 1, '°', 'the key\'s centre hue'),
+    hslProp('width', 'Hue range', 0, 180, 1, '°', 'how far either side of the centre the key reaches'),
+    hslProp('sat_lo', 'Sat min', 0, 100, 1, '', 'the least saturated colour keyed'),
+    hslProp('sat_hi', 'Sat max', 0, 100, 1, '', 'the most saturated colour keyed'),
+    hslProp('light_lo', 'Light min', 0, 100, 1, '', 'the darkest colour keyed'),
+    hslProp('light_hi', 'Light max', 0, 100, 1, '', 'the brightest colour keyed'),
+    hslProp('soft', 'Softness', 0, 100, 1, '', 'how gradually the key fades out at its edges'),
+    hslProp('shift', 'Hue shift', -180, 180, 1, '°', 'turns the keyed colours round the wheel'),
+    hslProp('saturation', 'Saturation', 0, 200, 1, '', 'the keyed colours\' saturation'),
+    hslProp('temperature', 'Temperature', -100, 100, 1, '', 'warms or cools the keyed colours'),
+    hslProp('tint', 'Tint', -100, 100, 1, '', 'green ↔ magenta on the keyed colours'),
   ];
+  const HSL_ROWS = [['Key', ['hsl_hue', 'hsl_width', 'hsl_sat_lo', 'hsl_sat_hi', 'hsl_light_lo', 'hsl_light_hi', 'hsl_soft']],
+                    ['Correction', ['hsl_shift', 'hsl_saturation', 'hsl_temperature', 'hsl_tint']]];
   // Lumetri Color › Basic Correction, in Premiere's order
   const BASIC = [['White Balance', ['temperature', 'tint']],
                  ['Tone', ['exposure', 'contrast', 'highlights', 'shadows', 'whites', 'blacks']],
@@ -378,7 +428,7 @@
   BY_KEY.get('volume_db').hover = `the shot's level · above 0.00 dB is heard only in the export (the monitor plays at most full level) · ${RENDERED}`;
 
   const LABELS = { posx: 'position', posy: 'position', volume_db: 'volume' };
-  const labelOf = (p) => LABELS[p.key] || p.key;
+  const labelOf = (p) => p.undo || LABELS[p.key] || p.key;
   const fmtVal = (p, v) => {
     const s = Number(v).toFixed(p.digits);
     return (p.key === 'exposure' && v > 0 ? '+' : '') + (s === '-0.0' || s === '-0.00' ? s.slice(1) : s) + p.unit;
@@ -414,6 +464,8 @@
     return !!t.begin(label);
   }
   function begin(p, seg) {
+    // Lumetri is V1's (V2EC): a clip on V2+ renders as shot, picture only
+    if (p.sec === 'lumetri' && isOv(seg || cur())) return false;
     return opens(labelOf(p), p.key === 'volume_db', seg);
   }
   function finish(p) {
@@ -513,6 +565,10 @@
     const out = { pre: [1, 1, 1], con: 1 + (c.contrast ?? 0) / 200, sat: (c.saturation ?? 100) / 100,
                   // Lumetri's tone (grade.js's shader has the formula): blacks, shadows, highlights, whites
                   tone: ['blacks', 'shadows', 'highlights', 'whites'].map((k) => (c[k] ?? 0) / 100) };
+    // Curves, Color Wheels, HSL Secondary (wave 11): grade.js turns them into its table
+    if (c.curves) out.curves = c.curves;
+    if (c.wheels) out.wheels = c.wheels;
+    if (c.hsl) out.hslKey = c.hsl;
     const gr = typeof g('gradeApi') === 'function' ? g('gradeApi')() : null;
     const lut = gr ? gr.lut : null;
     if (lut && seg) {
@@ -595,7 +651,11 @@
           <div class="ec-ssh"><button type="button" class="ec-twirl ec-subtw" data-twirl="basic" aria-expanded="${!!open.basic}"><i class="ec-tri"></i><span>Basic Correction</span></button></div>
           <div class="ec-ssb">${basic}<div class="ec-slot ec-quick" data-slot="nudge"></div></div>
         </div>`
-        + '<div class="ec-slot ec-creative" data-slot="look"></div>';
+        + '<div class="ec-slot ec-creative" data-slot="look"></div>'
+        + subHtml('curves', 'Curves', curvesHtml())
+        + subHtml('wheels', 'Color Wheels & Match', wheelsHtml())
+        + subHtml('hsl', 'HSL Secondary', HSL_ROWS.map(([head, keys]) => `<div class="ec-grp">${esc(head)}</div>`
+          + keys.map((k) => slRow(BK(k))).join('')).join(''));
     } else if (s.key === 'fxs') {
       body = '<div class="ec-stack"></div>';
     }
@@ -603,6 +663,276 @@
     return `<section class="ec-sec${open[s.key] ? ' open' : ''}" data-sec="${s.key}">
       <div class="ec-sh"><button type="button" class="ec-twirl" data-twirl="${s.key}" aria-expanded="${!!open[s.key]}"><i class="ec-tri"></i><b class="ec-fx">fx</b><span>${esc(s.name)}</span></button>${reset}</div>
       <div class="ec-sb">${body}</div></section>`;
+  }
+
+  /* ------------------------------------------------------------ Lumetri beyond Basic
+   * (wave 11, lane LUMETRI; verdict 8 punch 4). Curves, Color Wheels & Match and HSL
+   * Secondary, closed until twirled open as Premiere's are. Every gesture is one undo
+   * entry and previews on the next frame (grade.js's shader, `adjust` above); the export
+   * draws the same formula (roughcut/colour.py). */
+  function subHtml(key, name, body) {
+    return `<div class="ec-sub${open[key] ? ' open' : ''}" data-sub="${key}">
+        <div class="ec-ssh"><button type="button" class="ec-twirl ec-subtw" data-twirl="${key}" aria-expanded="${!!open[key]}"><i class="ec-tri"></i><span>${esc(name)}</span></button></div>
+        <div class="ec-ssb">${body}</div>
+      </div>`;
+  }
+
+  /* Curves: RGB master + R, G, B, a PCHIP through each channel's points (THE formula,
+   * step 1). A press off the points adds one there and drags it; a press on one drags
+   * it (between its neighbours); Ctrl/⌘-click deletes it (the two end points stay); a
+   * double-click puts the channel back to the diagonal. */
+  const CURVE_CH = ['master', 'r', 'g', 'b'];
+  const CURVE_NAME = { master: 'RGB master', r: 'red', g: 'green', b: 'blue' };
+  const CURVE_ID = [[0, 0], [1, 1]];
+  const CURVE_MAX = 16, CURVE_GAP = 0.02;
+  let curveCh = 'master';
+  let curveDrag = null;
+  const curvesOf = (seg) => ctl(seg).curves || {};
+  const curvePts = (seg, ch) => (curvesOf(seg)[ch] || CURVE_ID).map((q) => [q[0], q[1]]);
+  function setCurve(seg, ch, pts) {
+    const c = { ...curvesOf(seg) };
+    const clean = pts ? pts.map((q) => [r4(clamp(q[0], 0, 1)), r4(clamp(q[1], 0, 1))]) : null;
+    if (!clean || JSON.stringify(clean) === JSON.stringify(CURVE_ID)) delete c[ch]; else c[ch] = clean;
+    setCtl(seg, 'curves', Object.keys(c).length ? c : null, null);
+  }
+  function curvesHtml() {
+    const grid = [25, 50, 75].map((v) => `<line x1="${v}" y1="0" x2="${v}" y2="100"/><line x1="0" y1="${v}" x2="100" y2="${v}"/>`).join('');
+    return `<div class="lm-curves">
+        <div class="lm-cgrp"><span class="ec-grp">RGB Curves</span>
+          <span class="lm-chans" role="radiogroup" aria-label="curve channel">${CURVE_CH.map((ch) =>
+            `<button type="button" class="lm-ch" data-ch="${ch}" role="radio" aria-checked="false" title="${CURVE_NAME[ch]} curve"></button>`).join('')}</span></div>
+        <svg class="lm-cgraph" data-cgraph viewBox="0 0 100 100" preserveAspectRatio="none" role="img"
+          aria-label="RGB curve" title="click to add a point, drag to move it · Ctrl/⌘-click deletes it · double-click resets the channel">
+          <rect class="lm-cbg" x="0" y="0" width="100" height="100"/>
+          <g class="lm-cgrid">${grid}<line class="lm-cdiag" x1="0" y1="100" x2="100" y2="0"/></g>
+          <g class="lm-cothers"></g><path class="lm-cpath" d=""/><g class="lm-cpts"></g>
+        </svg></div>`;
+  }
+  function curvePath(pts) {
+    const lm = window.grade && grade.lumetri;
+    if (!lm) return 'M' + pts.map((q) => `${q[0] * 100},${100 - q[1] * 100}`).join('L');
+    const f = lm.curve(pts);
+    let d = '';
+    for (let i = 0; i <= 64; i++) { const x = i / 64; d += `${i ? 'L' : 'M'}${(x * 100).toFixed(2)},${(100 - f(x) * 100).toFixed(2)}`; }
+    return d;
+  }
+  function paintCurves(box, seg) {
+    const svg = box && box.querySelector('[data-cgraph]');
+    if (!svg || !seg) return;
+    const cv = curvesOf(seg);
+    const key = JSON.stringify([curveCh, cv]);
+    box.querySelectorAll('.lm-ch').forEach((b) => {
+      const on = b.dataset.ch === curveCh;
+      b.classList.toggle('on', on);
+      b.classList.toggle('set', !!cv[b.dataset.ch]);
+      b.setAttribute('aria-checked', String(on));
+    });
+    if (svg.dataset.key === key) return;
+    svg.dataset.key = key;
+    svg.dataset.ch = curveCh;
+    svg.querySelector('.lm-cothers').innerHTML = CURVE_CH.filter((ch) => ch !== curveCh && cv[ch])
+      .map((ch) => `<path class="lm-cother" data-ch="${ch}" d="${curvePath(cv[ch])}"/>`).join('');
+    const pts = curvePts(seg, curveCh);
+    svg.querySelector('.lm-cpath').setAttribute('d', curvePath(pts));
+    svg.querySelector('.lm-cpts').innerHTML = pts.map((q, i) =>
+      `<circle class="lm-cpt" data-i="${i}" cx="${(q[0] * 100).toFixed(2)}" cy="${(100 - q[1] * 100).toFixed(2)}" r="2.6"/>`).join('');
+  }
+  function onCurveDown(e, svg) {
+    if (e.button !== 0) return;
+    const seg = cur();
+    if (!seg || isOv(seg)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const box = svg.closest('.shot') || svg.closest('.ec');
+    const r = svg.getBoundingClientRect();          // one layout read per press
+    const at = (ev) => [clamp((ev.clientX - r.left) / (r.width || 1), 0, 1),
+                        clamp(1 - (ev.clientY - r.top) / (r.height || 1), 0, 1)];
+    const ch = curveCh;
+    const pts = curvePts(seg, ch);
+    const hit = e.target.closest('.lm-cpt');
+    let i = hit ? Number(hit.dataset.i) : -1;
+    const show = (s2) => { preview(s2); paintCurves(box, s2); };
+    if (hit && (e.ctrlKey || e.metaKey)) {          // Premiere: Ctrl/⌘-click deletes a point
+      if (i <= 0 || i >= pts.length - 1 || !opens('delete curve point', false, seg)) return;
+      pts.splice(i, 1);
+      setCurve(seg, ch, pts);
+      show(seg);
+      finishK();
+      return;
+    }
+    let began = false;
+    if (i < 0) {                                    // off the points: a new one, there
+      const [x, y] = at(e);
+      const j = pts.findIndex((q) => q[0] > x);
+      if (pts.length >= CURVE_MAX || j <= 0 || x - pts[j - 1][0] < CURVE_GAP || pts[j][0] - x < CURVE_GAP) return;
+      if (!opens('add curve point', false, seg)) return;
+      began = true;
+      pts.splice(j, 0, [x, y]);
+      i = j;
+      setCurve(seg, ch, pts);
+      show(seg);
+    }
+    try { svg.setPointerCapture(e.pointerId); } catch (err) { /* fine */ }
+    const x0 = e.clientX, y0 = e.clientY;
+    curveDrag = { ch, i };
+    const move = (ev) => {
+      if (!began) {
+        if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 3) return;
+        if (!opens('move curve point', false, seg)) { done(); return; }
+        began = true;
+      }
+      const s2 = cur(seg);
+      const [x, y] = at(ev);
+      const lo = i > 0 ? pts[i - 1][0] + CURVE_GAP : 0;
+      const hi = i < pts.length - 1 ? pts[i + 1][0] - CURVE_GAP : 1;
+      pts[i] = [clamp(x, lo, hi), y];
+      setCurve(s2, ch, pts);
+      show(s2);
+    };
+    const done = () => {
+      svg.removeEventListener('pointermove', move);
+      svg.removeEventListener('pointerup', done);
+      svg.removeEventListener('pointercancel', done);
+      curveDrag = null;
+      if (began) finishK();
+    };
+    svg.addEventListener('pointermove', move);
+    svg.addEventListener('pointerup', done);
+    svg.addEventListener('pointercancel', done);
+  }
+  function curveReset(ch) {
+    const seg = cur();
+    if (!seg || isOv(seg) || !curvesOf(seg)[ch] || !opens(`reset ${CURVE_NAME[ch]} curve`, false, seg)) return;
+    setCurve(seg, ch, null);
+    preview(seg);
+    finishK();
+  }
+
+  /* Color Wheels: Shadows (lift), Midtones (gamma), Highlights (gain), each a puck in
+   * the unit disc laid out as the vectorscope is (blue right, red up-left) and a
+   * lightness slider (THE formula, step 2). A drag moves the puck by the pointer's
+   * travel (one undo); a double-click centres it. */
+  const WHEELS = [['shadows', 'Shadows'], ['midtones', 'Midtones'], ['highlights', 'Highlights']];
+  const wheelsOf = (seg) => ctl(seg).wheels || {};
+  const wheelVal = (seg, n) => (wheelsOf(seg)[n] || [0, 0, 0]).slice();
+  function setWheel(seg, n, v) {
+    const w = { ...wheelsOf(seg) };
+    let cb = Number(v[0]) || 0, cr = Number(v[1]) || 0;
+    const rad = Math.hypot(cb, cr);
+    if (rad > 0.9999) { cb *= 0.9999 / rad; cr *= 0.9999 / rad; }
+    const c = [r4(cb), r4(cr), Math.round(clamp(Number(v[2]) || 0, -100, 100) * 1000) / 1000];
+    if (c.every((x) => x === 0)) delete w[n]; else w[n] = c;
+    setCtl(seg, 'wheels', Object.keys(w).length ? w : null, null);
+  }
+  function wheelsHtml() {
+    return `<div class="lm-wheels">${WHEELS.map(([n, label]) => `<div class="lm-wheel" data-wheel="${n}">
+        <div class="lm-wname">${label}</div>
+        <div class="lm-wbox">
+          <input type="range" class="lm-wl" data-wl="${n}" min="-100" max="100" step="1" value="0" aria-label="${label} lightness" title="${label} lightness · ${RENDERED}">
+          <div class="lm-wdisc" data-wd="${n}" title="${label}: drag to push the colour · double-click to centre · ${RENDERED}"><i class="lm-wx"></i><i class="lm-puck"></i></div>
+        </div></div>`).join('')}</div>`;
+  }
+  function paintWheels(box, seg) {
+    if (!box || !seg) return;
+    WHEELS.forEach(([n]) => {
+      const [cb, cr, l] = wheelVal(seg, n);
+      const puck = box.querySelector(`[data-wd="${n}"] .lm-puck`);
+      if (puck) {
+        const left = `${(50 + cb * 50).toFixed(2)}%`, top = `${(50 - cr * 50).toFixed(2)}%`;
+        if (puck.style.left !== left) puck.style.left = left;
+        if (puck.style.top !== top) puck.style.top = top;
+        puck.closest('.lm-wheel').classList.toggle('changed', cb !== 0 || cr !== 0 || l !== 0);
+      }
+      const sl = box.querySelector(`[data-wl="${n}"]`);
+      if (sl && sl !== wlDrag && sl.value !== String(l)) sl.value = String(l);
+    });
+  }
+  function onWheelDown(e, disc) {
+    if (e.button !== 0) return;
+    const seg = cur();
+    if (!seg || isOv(seg)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const n = disc.dataset.wd;
+    const box = disc.closest('.shot') || disc.closest('.ec');
+    const r = disc.getBoundingClientRect();
+    const R = (r.width || 2) / 2;
+    const v0 = wheelVal(seg, n);
+    const x0 = e.clientX, y0 = e.clientY;
+    let began = false;
+    try { disc.setPointerCapture(e.pointerId); } catch (err) { /* fine */ }
+    const move = (ev) => {
+      if (!began) {
+        if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 2) return;
+        if (!opens(`${n} wheel`, false, seg)) { done(); return; }
+        began = true;
+        disc.classList.add('drag');
+      }
+      const s2 = cur(seg);
+      const fine = ev.shiftKey ? 0.25 : 1;
+      setWheel(s2, n, [v0[0] + (ev.clientX - x0) / R * fine, v0[1] - (ev.clientY - y0) / R * fine, v0[2]]);
+      preview(s2);
+      paintWheels(box, s2);
+    };
+    const done = () => {
+      disc.removeEventListener('pointermove', move);
+      disc.removeEventListener('pointerup', done);
+      disc.removeEventListener('pointercancel', done);
+      disc.classList.remove('drag');
+      if (began) finishK();
+    };
+    disc.addEventListener('pointermove', move);
+    disc.addEventListener('pointerup', done);
+    disc.addEventListener('pointercancel', done);
+  }
+  function wheelCentre(n) {
+    const seg = cur();
+    if (!seg || isOv(seg)) return;
+    const v = wheelVal(seg, n);
+    if ((v[0] === 0 && v[1] === 0) || !opens(`centre ${n} wheel`, false, seg)) return;
+    setWheel(seg, n, [0, 0, v[2]]);
+    preview(seg);
+    finishK();
+  }
+  /* the lightness slider: a drag is one undo entry, as Basic's sliders are */
+  let wlDrag = null;
+  function bindWheelSlider(el) {
+    const n = el.dataset.wl;
+    el.addEventListener('input', () => {
+      const seg = cur();
+      const v = parseFloat(el.value);
+      if (!seg || isOv(seg) || !Number.isFinite(v)) return;
+      if (wlDrag !== el) {
+        if (!opens(`${n} lightness`, false, seg)) { el.value = String(wheelVal(seg, n)[2]); return; }
+        wlDrag = el;
+      }
+      const w = wheelVal(seg, n);
+      setWheel(seg, n, [w[0], w[1], v]);
+      preview(seg);
+    });
+    el.addEventListener('change', () => {
+      if (wlDrag !== el) return;
+      wlDrag = null;
+      finishK();
+    });
+    el.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        const t = TL();
+        if (t) { if (e.shiftKey) t.redo(); else t.undo(); }
+      }
+    });
+  }
+  /* one undoable change from the API (tests and the judge), as a gesture makes it */
+  function apiChange(label, seg, fn) {
+    seg = cur(seg);
+    if (!seg || isOv(seg) || !opens(label, false, seg)) return false;
+    fn(seg);
+    preview(seg);
+    finishK();
+    return true;
   }
 
   function build(host, seg, opts = {}) {
@@ -668,6 +998,21 @@
       el.addEventListener('blur', () => { const p = BY_KEY.get(el.dataset.k); if (p && !el.readOnly) close(el, p, true); });
     });
     wrap.querySelectorAll('.ec-sl').forEach((el) => bindSlider(el));
+    wrap.querySelectorAll('[data-cgraph]').forEach((el) => {
+      el.addEventListener('pointerdown', (e) => onCurveDown(e, el));
+      el.addEventListener('dblclick', (e) => { if (!e.target.closest('.lm-cpt')) curveReset(curveCh); });
+    });
+    wrap.querySelectorAll('.lm-ch').forEach((b) => b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      curveCh = b.dataset.ch;
+      const box = b.closest('.shot') || wrap;
+      paintCurves(box, cur());
+    }));
+    wrap.querySelectorAll('.lm-wdisc').forEach((el) => {
+      el.addEventListener('pointerdown', (e) => onWheelDown(e, el));
+      el.addEventListener('dblclick', () => wheelCentre(el.dataset.wd));
+    });
+    wrap.querySelectorAll('.lm-wl').forEach((el) => bindWheelSlider(el));
     wrap.querySelectorAll('.ec-lane').forEach((el) => {
       el.addEventListener('pointerdown', (e) => onLaneDown(e, el));
     });
@@ -997,6 +1342,8 @@
     if (!ps.length || !t || !opens(key === 'lumetri' ? 'colour reset' : key, key === 'volume')) return;
     ps.filter((p) => !p.colour).forEach((p) => p.set(seg, p.dflt));
     if (key === 'lumetri') {
+      setCtl(seg, 'curves', null, null);       // Curves and Color Wheels too
+      setCtl(seg, 'wheels', null, null);
       const so = g('shotOverride');
       const o = typeof so === 'function' ? so(seg.id) : null;
       if (o) delete o.balance;               // back to the auto, as "reset" always meant
@@ -1163,6 +1510,8 @@
       if (el.value !== v) el.value = v;
     });
     paintKeys(box, seg);
+    if (!curveDrag) paintCurves(box, seg);
+    paintWheels(box, seg);
     const spd = box.querySelector('[data-row=speed]');
     if (spd) spd.classList.toggle('changed', Number(seg.speed || 1) !== 1);
     paintStack(box, seg);
@@ -1188,6 +1537,18 @@
     now: (seg) => { const s = cur(seg); return s ? ctlNow(s) : null; },
     animate: (group) => toggleAnim(group),
     key: (act, group) => keyAct(act, group),
+    // Lumetri beyond Basic (wave 11): read with one argument, one undoable change with two
+    curve: (ch, pts, seg) => {
+      if (!CURVE_CH.includes(ch)) return false;
+      if (pts === undefined) { const s2 = cur(seg); return s2 ? curvePts(s2, ch) : null; }
+      return apiChange(`${CURVE_NAME[ch]} curve`, seg, (s2) => setCurve(s2, ch, pts));
+    },
+    wheel: (n, v, seg) => {
+      if (!WHEELS.some((w) => w[0] === n)) return false;
+      if (v === undefined) { const s2 = cur(seg); return s2 ? wheelVal(s2, n) : null; }
+      return apiChange(`${n} wheel`, seg, (s2) => setWheel(s2, n, v));
+    },
+    get curveChannel() { return curveCh; },
   };
 
   // The inspector may already be on a shot built without the sections: build it again.
