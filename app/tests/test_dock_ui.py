@@ -189,7 +189,7 @@ def test_the_dock_resizes_by_its_left_edge_and_the_timeline_refits(page):
     assert width() == pytest.approx(w0, abs=2)
     # the tools are named tabs
     assert [t.strip() for t in page.locator("#pInspector .ws-tab").all_inner_texts()] == \
-        ["Effect Controls", "Effects", "Audio", "Assistant", "Export"]
+        ["Effect Controls", "Designed Effects", "Audio", "Assistant", "Export"]
 
 
 def test_the_rail_opens_one_tool_at_a_time_and_remembers_it(page):
@@ -212,7 +212,7 @@ def test_the_rail_opens_one_tool_at_a_time_and_remembers_it(page):
     page.wait_for_selector("#tl .blk")
     assert page.evaluate("dock.isOpen('sound') && dock.isOpen('bin')") is True
     # an unknown tool is refused, the open one stays
-    assert page.evaluate("dock.open('effects')") is False
+    assert page.evaluate("dock.open('nonesuch')") is False
     assert page.evaluate("dock.current()") == "bin"      # a reload starts on the Project group's tab
     # reveal() opens the tool holding an element in a closed tool
     assert page.evaluate("dock.reveal('#story')") is True
@@ -463,9 +463,12 @@ def test_the_rail_names_its_tools_and_badges_only_what_waits(page):
     waits on Karl — the old Out badge counted every film ever made. The Project ▾
     popover is gone (its facts are the switcher's menu)."""
     # in the workspace's words (redesign wave 1): Project · Selects, and Effect Controls ·
-    # Effects · Audio · Assistant · Export; the keys stay bin / fx / sound / ask / out
+    # Effects · Audio · Assistant · Export; the keys stay bin / fx / sound / ask / out. The
+    # AI designer is "Designed Effects" and Premiere's Effects bin (the transitions) is the
+    # Project group's third tab (verdict 8 punch 5)
     names = page.eval_on_selector_all(".ws-tab[data-tool]", "els => els.map(e => e.textContent.trim())")
-    assert names == ["Project", "Selects", "Effect Controls", "Effects", "Audio", "Assistant", "Export"], names
+    assert names == ["Project", "Selects", "Effects", "Effect Controls", "Designed Effects", "Audio",
+                     "Assistant", "Export"], names
     assert page.locator(".ws-tab[data-tool=out] .badge").count() == 0
     assert page.locator("#projectBtn").count() == 0 and page.locator("#projectPop").count() == 0
     page.evaluate("location.hash = '#tool=out'")

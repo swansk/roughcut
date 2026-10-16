@@ -7,7 +7,7 @@ its edges trim its duration. With solid-colour clips (CLIP_A red with a 440 Hz t
 CLIP_B blue with 880 Hz, CLIP_C green and silent), the picture on the edit's frame is
 the mean of the two shots (±10 %) in the export and in the Program monitor; the export
 is as long as the cut without the transition; the crossfade's levels follow cos / sin
-(volumedetect windows); a shot without enough media shortens it.
+(volumedetect windows); a shot without enough media repeats its first or last frame.
 """
 
 from __future__ import annotations
@@ -188,16 +188,17 @@ def test_the_audio_crossfade_is_constant_power(proj):
     assert abs(duration(xf, "a:0") - duration(cut, "a:0")) < 0.03
 
 
-def test_insufficient_media_shortens_it(proj):
-    # B from 0.2: only 0.2 s of media before its in — the 1 s dissolve becomes 2 × 4
-    # frames (whole frames inside the media), 0.33 s
+def test_insufficient_media_repeats_frames(proj):
+    # B from 0.2: only 4 frames of media before its in — the 1 s dissolve keeps its length
+    # and B's first frame is repeated for the other 8 (Premiere's "insufficient media")
     segs = [SEGS[0], {**SEGS[1], "in": 0.2, "out": 2.2}]
     out, log = render(proj, {**EDL, "segments": segs, "transitions": [DISSOLVE]}, "short")
-    assert "insufficient media, shortened from 1.00s" in log and "Cross Dissolve 0.33s" in log, log
+    assert "Cross Dissolve 1.00s" in log and "insufficient media: 8 repeated frames" in log, log
     assert frames_of(out) == 4 * FPS
     red, blue = rgb(out, mid(1.0)), rgb(out, mid(3.0))
     assert within(rgb(out, mid(CUT)), 0.5 * (red + blue))
-    assert within(rgb(out, mid(1.7)), red, 3)          # outside the shortened window
+    x = (38 - 36) / 24                                   # frame 38 of the window 36-59
+    assert within(rgb(out, mid(38 / FPS)), (1 - x) * red + x * blue), rgb(out, mid(38 / FPS))
 
 
 def test_the_halves_model():
@@ -206,7 +207,9 @@ def test_the_halves_model():
     assert h[0]["video"] == 0.5 and h[0]["audio"] == 0.5 and not h[0]["short"]
     h = tracksmod.transition_halves([SEGS[0], {**SEGS[1], "in": 0.0}], [DISSOLVE],
                                     edits.dur, clip_len)
-    assert h[0]["video"] == 0 and h[0]["short"] == ["cross_dissolve"]
+    # no media before B's in: the half stays, its frames are B's first frame repeated
+    assert h[0]["video"] == 0.5 and h[0]["short"] == [] and h[0]["repeat"] == {
+        "cross_dissolve": {"a": 0.0, "b": 0.5}}
     # validation: a pair no longer adjacent goes; tmp ids are renamed; bad kinds are errors
     segs3 = [*SEGS, {"id": "s9", "clip": "CLIP_A.MP4", "in": 0, "out": 1}]
     got = tracksmod.validate_transitions(
@@ -216,7 +219,8 @@ def test_the_halves_model():
     assert [(t["a"], t["b"], t["kind"]) for t in got] == [
         ("s1", "s2", "cross_dissolve"), ("s2", "s9", "audio_crossfade")]
     for bad in ({**DISSOLVE, "kind": "wipe"}, {**DISSOLVE, "dur": 0},
-                {**DISSOLVE, "align": "start"}, {**DISSOLVE, "dur": "x"}):
+                {**DISSOLVE, "align": "start"}, {**DISSOLVE, "dur": "x"},
+                {**DISSOLVE, "a": None, "b": None}, {**DISSOLVE, "a": None, "align": "end"}):
         with pytest.raises(ValueError):
             tracksmod.validate_transitions([bad], SEGS)
 
@@ -390,26 +394,31 @@ def test_dragging_an_end_changes_its_duration_and_double_click_types_it(board, p
     assert abs(pg.evaluate("tl.transitions()[0].dur") - 0.5) < 1e-6
 
 
-def test_insufficient_media_shortens_or_refuses_it(board, proj):
+def test_insufficient_media_repeats_frames_and_says_so(board, proj):
     pg = board
-    # B from 0.2 s: 4 frames of media before its in at 24 fps — 8 frames in all
+    # B from 0.2 s: 4 frames of media before its in at 24 fps — the 1 s dissolve is laid
+    # whole, B's first frame repeated for the rest (Premiere), and the toast says so
     pg.evaluate("tl.setRange('s2', 0.2, 2.2)")
     pg.evaluate("tl.selectEdit(0)")
     pg.keyboard.press("Control+d")
-    d = pg.evaluate("tl.transitions()[0].dur")
-    assert abs(d - 8 / FPS) < 1e-3, d
-    assert "insufficient media" in pg.locator("#toast, .toast").first.inner_text()
+    assert pg.evaluate("tl.transitions()[0].dur") == 1
+    assert "insufficient media — repeated frames" in pg.locator("#toast, .toast").first.inner_text()
+    assert pg.locator("#tl .tl-trans.rep").count() == 1
     pg.keyboard.press("Control+z")
-    # B from 0: no media at all — nothing laid, and it says why
+    # B from 0: no media at all — still laid, hatched, its half whole
     pg.evaluate("tl.setRange('s2', 0, 2)")
     pg.keyboard.press("Control+d")
-    assert pg.evaluate("tl.transitions()") == []
-    # a trim that eats a handle later: the box is hatched and narrower, the render shortens it
+    assert [t["dur"] for t in pg.evaluate("tl.transitions()")] == [1]
+    assert pg.locator("#tl .tl-trans.rep").count() == 1
+    assert pg.evaluate("tl.transitionHalves()[0].rep") == ["cross_dissolve"]
+    pg.keyboard.press("Control+z")
+    # a trim that eats a handle later: the box is hatched, the length kept
     pg.evaluate("tl.setRange('s2', 2, 4)")
     pg.keyboard.press("Control+d")
+    assert pg.locator("#tl .tl-trans.rep").count() == 0
     pg.evaluate("tl.setRange('s2', 0.25, 2.25)")
-    assert pg.locator("#tl .tl-trans.short").count() == 1
-    assert abs(pg.evaluate("tl.transitionHalves()[0].video") - 0.25) < 1e-6
+    assert pg.locator("#tl .tl-trans.rep").count() == 1
+    assert abs(pg.evaluate("tl.transitionHalves()[0].video") - 0.5) < 1e-6
 
 
 def program_rgb(pg) -> np.ndarray:

@@ -349,43 +349,101 @@ def a1_filter(n_parts: int, plan: dict, first_input: int = 1) -> str:
 
 # ---------------------------------------------------------------- transitions
 #
-# Premiere's default transitions at an edit point (verdict 6, punch 6): Ctrl+D a Cross
-# Dissolve, Shift+D a Constant Power crossfade, Ctrl+Shift+D both. The EDL's
+# Premiere's transitions at an edit point (verdict 6 punch 6; the Effects bin: verdict 8
+# punch 5). The EDL's
 #
-#   transitions: [{"a": id, "b": id, "kind": "cross_dissolve" | "audio_crossfade",
-#                  "dur": seconds, "align": "center"}]
+#   transitions: [{"a": id, "b": id, "kind": <kind>, "dur": seconds, "align": "center"}]
 #
 # names the edit by the two shots on either side of it (`a` right before `b` in
 # `segments`), so a transition stays on its cut through a trim, a split elsewhere or an
 # insert elsewhere, and leaves with it when either shot is deleted or the two are no
-# longer neighbours (Premiere deletes a transition whose clips are moved apart). One of
-# each kind per edit. Centre-aligned only: the transition spans dur/2 of film either side
-# of the cut and the film's length does not change, so it eats dur/2 of each shot's
-# *handles* — media past the outgoing shot's out and before the incoming shot's in. Where
-# a shot has less than that (`transition_halves`) the transition is shortened to what the
-# media allows (Premiere's "insufficient media"), and the render says so.
+# longer neighbours (Premiere deletes a transition whose clips are moved apart).
+# Centre-aligned: the transition spans dur/2 of film either side of the cut and the
+# film's length does not change, so a dissolve eats dur/2 of each shot's *handles* —
+# media past the outgoing shot's out and before the incoming shot's in. Where a shot has
+# less than that the transition keeps its length and the missing frames are REPEATED
+# (the outgoing shot's last frame, the incoming shot's first), as Premiere does with its
+# "insufficient media — repeated frames" warning (`transition_halves` names them), and
+# the box is drawn hatched.
+#
+# One-sided (a clip's start or end, Premiere's single-sided transition):
+#
+#   {"a": null, "b": id, "kind": ..., "dur": s, "align": "start"}   the first dur of b
+#   {"a": id, "b": null, "kind": ..., "dur": s, "align": "end"}     the last dur of a
+#
+# lies inside the shot and needs no handle: a video kind fades the picture from (start)
+# or to (end) black — white for Dip to White — and an audio kind fades the sound in or
+# out along its curve.
+#
+# One video and one audio transition per edge: a centred one holds the end of `a` and the
+# start of `b`, a one-sided one its own edge; a later one on an edge replaces the earlier.
+#
+# The kinds and their maths (x the incoming shot's weight across the window: 0 at its
+# first frame, exactly 0.5 on the edit's frame, `transition_x`):
+#   cross_dissolve   out = (1 − x)·A + x·B, per channel (Premiere's Cross Dissolve)
+#   film_dissolve    the same mix in linear light: out = g⁻¹((1 − x)·g(A) + x·g(B)),
+#                    g(v) = v^2.2 on R'G'B' in 0-1 (Premiere's Film Dissolve)
+#   dip_to_black     x < ½: out = A + 2x·(K − A); x ≥ ½: out = K + (2x − 1)·(B − K),
+#   dip_to_white     K black (Y' 16, Cb Cr 128) or white (Y' 235): K alone on the edit's frame
+#   audio_crossfade  Constant Power: A at cos(πx/2), B at sin(πx/2) (−3 dB each at ½)
+#   constant_gain    Constant Gain: A at 1 − x, B at x (−6.02 dB each at ½)
+#   exponential_fade Exponential Fade: B at e(x) = (100^x − 1)/99, A at e(1 − x)
+#                    (−20.8 dB each at ½)
 
-TRANSITION_KINDS = {"cross_dissolve": "Cross Dissolve", "audio_crossfade": "Constant Power"}
+VIDEO_KINDS = {"cross_dissolve": "Cross Dissolve", "dip_to_black": "Dip to Black",
+               "dip_to_white": "Dip to White", "film_dissolve": "Film Dissolve"}
+AUDIO_KINDS = {"audio_crossfade": "Constant Power", "constant_gain": "Constant Gain",
+               "exponential_fade": "Exponential Fade"}
+TRANSITION_KINDS = {**VIDEO_KINDS, **AUDIO_KINDS}
+DIP_KINDS = ("dip_to_black", "dip_to_white")      # no handle: each shot fades to K itself
 TRANSITION_DEFAULT_S = 1.0          # Premiere's default duration
 TRANSITION_MIN_S = 0.04
 TRANSITION_MAX_S = 10.0
+FILM_GAMMA = 2.2
+EXP_BASE = 100.0
+
+
+def family(kind: str) -> str:
+    """'video' for a picture transition, 'audio' for a sound one."""
+    return "video" if kind in VIDEO_KINDS else "audio"
+
+
+def audio_gains(kind: str, x: float) -> tuple[float, float]:
+    """(outgoing, incoming) amplitude at x for an audio kind (the maths above)."""
+    x = min(1.0, max(0.0, float(x)))
+    if kind == "constant_gain":
+        return 1.0 - x, x
+    if kind == "exponential_fade":
+        e = lambda u: (EXP_BASE ** u - 1.0) / (EXP_BASE - 1.0)  # noqa: E731
+        return e(1.0 - x), e(x)
+    return math.cos(math.pi / 2 * x), math.sin(math.pi / 2 * x)
+
+
+def _slots(t: dict) -> set:
+    if t["align"] == "start":
+        return {("start", t["b"])}
+    if t["align"] == "end":
+        return {("end", t["a"])}
+    return {("end", t["a"]), ("start", t["b"])}
 
 
 def validate_transitions(raw: Any, segments: list[dict], ids: dict | None = None,
                          dur=None) -> list[dict]:
     """The transitions a save keeps: each `{a, b, kind, dur, align?}` validated (a bad
     kind, duration or alignment raises ValueError — the 400's sentence), its shot ids
-    renamed through `ids` (a save's `{tmp-N: minted}`), and kept only while `a` is right
-    before `b` in `segments` (a pair a reorder or a delete split is dropped, not an
-    error). The last of a kind at an edit wins. With `dur` (the film length of a shot),
-    no longer than twice the shorter shot."""
+    renamed through `ids` (a save's `{tmp-N: minted}`), a centred one kept only while `a`
+    is right before `b` in `segments` (a pair a reorder or a delete split is dropped, not
+    an error), a one-sided one while its shot is in the cut. A later transition on an
+    edge of the same family (video / audio) replaces an earlier one. With `dur` (the film
+    length of a shot), a centred one is no longer than twice the shorter shot and a
+    one-sided one no longer than its shot."""
     if raw is None:
         return []
     if not isinstance(raw, list):
         raise ValueError("transitions is not a list")
     ids = ids or {}
     order = {s.get("id"): k for k, s in enumerate(segments) if isinstance(s, dict)}
-    kept: dict[tuple, dict] = {}
+    kept: list[dict] = []
     for i, t in enumerate(raw):
         if not isinstance(t, dict):
             raise ValueError(f"transition {i + 1} is not an object")
@@ -397,22 +455,41 @@ def validate_transitions(raw: Any, segments: list[dict], ids: dict | None = None
         if not TRANSITION_MIN_S - 1e-9 <= d <= TRANSITION_MAX_S + 1e-9:
             raise ValueError(f"transition {i + 1}: {d:g} s is outside "
                              f"{TRANSITION_MIN_S:g}–{TRANSITION_MAX_S:g} s")
-        align = t.get("align", "center")
-        if align not in (None, "center"):
-            raise ValueError(f"transition {i + 1}: only centre-aligned transitions "
-                             f"(align 'center') are supported, not {align!r}")
         a, b = t.get("a"), t.get("b")
         a, b = ids.get(a, a), ids.get(b, b)
-        if not (isinstance(a, str) and isinstance(b, str)):
-            raise ValueError(f"transition {i + 1} does not name the two shots of its edit")
+        sided = {(True, True): "center", (False, True): "start", (True, False): "end"}.get(
+            (isinstance(a, str), isinstance(b, str)))
+        if sided is None or a is not None and not isinstance(a, str) \
+                or b is not None and not isinstance(b, str):
+            raise ValueError(f"transition {i + 1} does not name the two shots of its edit "
+                             "(or one shot, for a clip's start or end)")
+        align = t.get("align") or sided
+        if align != sided:
+            raise ValueError(f"transition {i + 1}: align {align!r} does not fit it — "
+                             "'center' between two shots, 'start' with only b, 'end' with "
+                             "only a")
         ka, kb = order.get(a), order.get(b)
-        if ka is None or kb is None or kb != ka + 1:
-            continue                                  # no longer an edit: it went with it
-        if dur is not None:
-            d = min(d, 2 * dur(segments[ka]), 2 * dur(segments[kb]))
-        kept[(a, b, kind)] = {"a": a, "b": b, "kind": kind,
-                              "dur": round(max(TRANSITION_MIN_S, d), 4), "align": "center"}
-    return sorted(kept.values(), key=lambda t: (order[t["a"]], t["kind"]))
+        if sided == "center":
+            if ka is None or kb is None or kb != ka + 1:
+                continue                              # no longer an edit: it went with it
+            if dur is not None:
+                d = min(d, 2 * dur(segments[ka]), 2 * dur(segments[kb]))
+        else:
+            k = kb if sided == "start" else ka
+            if k is None:
+                continue                              # its shot left the cut
+            if dur is not None:
+                d = min(d, dur(segments[k]))
+        new = {"a": a, "b": b, "kind": kind, "dur": round(max(TRANSITION_MIN_S, d), 4),
+               "align": sided}
+        fam, slots = family(kind), _slots(new)
+        kept = [x for x in kept if family(x["kind"]) != fam or not (_slots(x) & slots)]
+        kept.append(new)
+
+    def pos(t: dict) -> tuple:
+        k = order[t["a"]] + 1 if t["a"] is not None else order[t["b"]]
+        return (k, {"end": 0, "center": 1, "start": 2}[t["align"]], t["kind"])
+    return sorted(kept, key=pos)
 
 
 def prune_transitions(transitions: Any, segments: list[dict]) -> list[dict]:
@@ -424,48 +501,93 @@ def prune_transitions(transitions: Any, segments: list[dict]) -> list[dict]:
         return []
 
 
+def transition_x(f: float, cut: float, half: float) -> float:
+    """The incoming shot's weight at film time (or frame) f of a centred window of
+    half-length `half` around `cut`: 0 at its start, ½ on the cut, 1 at its end."""
+    return min(1.0, max(0.0, (f - (cut - half)) / (2 * half))) if half > 0 else 1.0
+
+
+def _edge_has(transitions: list[dict], seg_id: str, edge: str, fam: str) -> bool:
+    for t in transitions or []:
+        if family(t.get("kind", "")) != fam:
+            continue
+        al = t.get("align", "center")
+        if edge == "start" and t.get("b") == seg_id and al in ("center", "start"):
+            return True
+        if edge == "end" and t.get("a") == seg_id and al in ("center", "end"):
+            return True
+    return False
+
+
 def transition_halves(segments: list[dict], transitions: list[dict], dur,
                       clip_len) -> list[dict]:
     """Per edit (between segments k and k+1, k = 0 … n-2): `{"video": h, "audio": h,
-    "asked": {kind: dur}, "short": [kind, …]}` — h the half-duration in film seconds the
-    render and the Program use, 0 for none. A half is cut down, in order, to: the media
-    past the outgoing shot's out (`clip_len(clip) - out`, at its speed), the media before
-    the incoming shot's in (`in`, at its speed), and what each shot has left beside the
-    transition at its other edge (half its film length, at most). `short` names the kinds
-    that were shortened ("insufficient media"); a kind with no media at all is 0."""
+    "kinds": {"video": kind, "audio": kind}, "asked": {kind: dur}, "short": [kind, …],
+    "repeat": {kind: {"a": s, "b": s}}}` — h the half-duration in film seconds the render
+    and the Program use, 0 for none. A half is cut down only to what each shot has left
+    beside the transition at its other edge (half its film length when there is one, all
+    of it otherwise): `short` names those. Media is never a limit: where the outgoing
+    shot has less than h past its out (`clip_len(clip) - out`, at its speed) or the
+    incoming less than h before its in, `repeat[kind]` says how many film seconds of each
+    side are its last / first frame repeated (Premiere's "insufficient media — repeated
+    frames"). A dip needs no handle, so it never repeats."""
     order = {s.get("id"): k for k, s in enumerate(segments)}
-    cuts = [{"video": 0.0, "audio": 0.0, "asked": {}, "short": []}
+    cuts = [{"video": 0.0, "audio": 0.0, "kinds": {}, "asked": {}, "short": [], "repeat": {}}
             for _ in range(max(0, len(segments) - 1))]
     for t in transitions or []:
+        if t.get("align", "center") != "center":
+            continue
         k = order.get(t.get("a"))
         if k is None or k + 1 >= len(segments) or segments[k + 1].get("id") != t.get("b"):
             continue
-        key = "video" if t["kind"] == "cross_dissolve" else "audio"
+        fam = family(t["kind"])
         cuts[k]["asked"][t["kind"]] = float(t["dur"])
-        cuts[k][key] = float(t["dur"]) / 2
+        cuts[k]["kinds"][fam] = t["kind"]
+        cuts[k][fam] = float(t["dur"]) / 2
     for k, c in enumerate(cuts):
         a, b = segments[k], segments[k + 1]
         sa, sb = speed(a), speed(b)
         la = clip_len(a["clip"])
         tail = max(0.0, (la - float(a["out"])) / sa) if la is not None else 0.0
         head = max(0.0, float(b["in"]) / sb)
-        for key, kind in (("video", "cross_dissolve"), ("audio", "audio_crossfade")):
-            h = c[key]
-            if h <= 0:
+        for fam in ("video", "audio"):
+            h = c[fam]
+            kind = c["kinds"].get(fam)
+            if h <= 0 or kind is None:
                 continue
             # a shot shares itself between the transitions at its two edges
-            room_a = dur(a) / (2 if k > 0 and _has(cuts[k - 1], key) else 1)
-            room_b = dur(b) / (2 if k + 2 < len(segments) and _has(cuts[k + 1], key) else 1)
-            got = max(0.0, min(h, tail, head, room_a, room_b))
+            room_a = dur(a) / (2 if _edge_has(transitions, a.get("id"), "start", fam) else 1)
+            room_b = dur(b) / (2 if _edge_has(transitions, b.get("id"), "end", fam) else 1)
+            got = max(0.0, min(h, room_a, room_b))
             if got < h - 1e-6:
                 c["short"].append(kind)
-            c[key] = got
+            c[fam] = got
+            if kind not in DIP_KINDS:
+                rep_a, rep_b = max(0.0, got - tail), max(0.0, got - head)
+                if rep_a > 1e-6 or rep_b > 1e-6:
+                    c["repeat"][kind] = {"a": round(rep_a, 6), "b": round(rep_b, 6)}
     return cuts
 
 
-def _has(cut: dict, key: str) -> bool:
-    return cut[key] > 0 or any(
-        (k == "cross_dissolve") == (key == "video") for k in cut["asked"])
+def transition_fades(segments: list[dict], transitions: list[dict], dur) -> list[dict]:
+    """The one-sided transitions, per segment k: `{"start": {fam: (kind, s)}, "end":
+    {fam: (kind, s)}}` — s the film seconds the fade lasts at the shot's start or end,
+    cut down to the shot (half of it when its other edge has one of the family too)."""
+    order = {s.get("id"): k for k, s in enumerate(segments)}
+    out = [{"start": {}, "end": {}} for _ in segments]
+    for t in transitions or []:
+        al = t.get("align")
+        if al not in ("start", "end"):
+            continue
+        sid = t.get("b") if al == "start" else t.get("a")
+        k = order.get(sid)
+        if k is None:
+            continue
+        fam = family(t["kind"])
+        other = "end" if al == "start" else "start"
+        room = dur(segments[k]) / (2 if _edge_has(transitions, sid, other, fam) else 1)
+        out[k][al][fam] = (t["kind"], max(0.0, min(float(t["dur"]), room)))
+    return out
 
 
 def speed(seg: dict) -> float:

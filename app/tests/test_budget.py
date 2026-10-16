@@ -99,10 +99,16 @@ HEADER_MAX_PX = 50
 # Resolution menu on the Program's transport (Auto / Full / 1/2 / 1/4) is one control on every
 # board screen: controls / 50 → 51, / shot 65 → 66, / film 49 → 50, / fx 53 → 54, / jobs
 # 51 → 52. Words unchanged (the closed menu's "Auto" is not counted).
-WORDS_IN_VIEW = {"/": 93, "/floor": 58, "/open": 59, "/ shot": 119, "/ film": 101, "/ fx": 124,
-                 "/ jobs": 102}
-CONTROLS_IN_VIEW = {"/": 51, "/floor": 8, "/open": 9, "/ shot": 66, "/ film": 50, "/ fx": 54,
-                    "/ jobs": 52}
+# Wave 11, lane FXBIN (verdict 8 punch 5), measured, no headroom: Premiere's Effects bin is
+# the Project group's third tab ("Effects": one control, one word, on every board screen; its
+# tree is in view only while the tab is open) and the AI designer's tab reads "Designed
+# Effects" (one more word): words / 93 → 95, / shot 119 → 121, / film 101 → 103, / fx 124 →
+# 126, / jobs 102 → 104; controls / 51 → 52, / shot 66 → 67, / film 50 → 51, / fx 54 → 55,
+# / jobs 52 → 53. /floor and /open are unchanged.
+WORDS_IN_VIEW = {"/": 95, "/floor": 58, "/open": 59, "/ shot": 121, "/ film": 103, "/ fx": 126,
+                 "/ jobs": 104}
+CONTROLS_IN_VIEW = {"/": 52, "/floor": 8, "/open": 9, "/ shot": 67, "/ film": 51, "/ fx": 55,
+                    "/ jobs": 53}
 
 # Contracts another lane delivers (M16 stage 1, C1): until that lane is merged the
 # check is an expected failure on that screen. Every stage-1 lane is merged, so this is
