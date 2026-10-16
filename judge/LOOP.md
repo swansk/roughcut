@@ -49,6 +49,16 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- **2026-10-16 ~00:45 EDT: PAUSED by Karl.** The 30-min tick cron is deleted. Branch `redesign/2026-10-14` holds verdict 8 +
+  wave 11's SMALL2, LUMETRI, FXBIN (pushed). Unmerged lane branches, each told to commit what is green (or a WIP commit
+  naming what remains) and stop: `redesign-w11-black` (punch 1, silent black Program), `redesign-w11-cheap` (punch 10,
+  status endpoints), `redesign-w11-canvas` (punch 2 + 3, graded canvas + dissolve holes). See the lane notes below for
+  their state at pause. **To resume:** (1) read this State and verdict-8.md; (2) for each w11 lane branch: if its head is
+  green, merge it (CHANGELOG union; re-measure test_budget if it changed counts), else finish it in its worktree
+  (roughcut-wt/w11-<lane>) or relaunch a lane with its remaining steps; (3) re-run `test_perf_latency -k grade_draws` x10
+  (9/10 before BLACK); (4) full gate `python3 tools/gate.py HEAD`; (5) judge 9 via judge/JUDGE.md; (6) recreate the tick
+  cron from "Cadence" if running unattended. K2 stays Karl's: he can try the branch (stop roughcut-board, run
+  `uv run app/server.py --footage ~/footage/killington-neutral` in this worktree, restart the service after).
 - 2026-10-16 00:35 EDT: FXBIN merged `e6fe1bc` (Effects bin, seven kinds with exact maths, drops on edits + clip ends,
   defaults, repeated frames hatched). Budget re-measured with both tabs (97·53 etc.), logged. Queued from FXBIN: Film
   Dissolve's two-shot mix previews in gamma space (needs a linear-light setMix mode, CANVAS asked); transition_handles
