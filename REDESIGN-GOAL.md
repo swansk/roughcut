@@ -270,3 +270,11 @@ next judge runs, and the next judge rules it honest or lenient.
   own two standalone runs while building this both FAILED: at load 21.4 before the settle
   existed (83.3 ms inside a shot) and at 16.6 after a 75 s settle (116.7 ms at a cut, 20
   fps); the second, under these rules, reads AMBER, not GREEN.
+
+- 2026-10-15 (wave 11, lane LUMETRI; logged by the lead): **the screens budget grows by the Lumetri
+  Scopes tab: +2 words and +1 control on each board screen** (`/` 93·51 → 95·52, `/ shot` 119·66 →
+  121·67, `/ film` 101·50 → 103·51, `/ fx` 124·54 → 126·55, `/ jobs` 102·52 → 104·53; `/floor` and
+  `/open` unchanged). More lenient by exactly the measured count, no headroom: the tab is one
+  Premiere control (Lumetri Scopes beside the Source monitor, as the Color workspace places it).
+  Curves, Color Wheels and HSL Secondary sit below the fold in closed sections and add nothing to the
+  first screen.
