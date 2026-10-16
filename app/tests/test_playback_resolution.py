@@ -99,7 +99,7 @@ def res_server(tmp_path_factory):
 def _ready(page) -> None:
     page.wait_for_selector("#tl .tl-lane[data-lane=V1] .blk")
     page.wait_for_function("window.grade && grade.ready && window.effects && typeof C !== 'undefined'"
-                           " && C && C.shots", timeout=20000)
+                           " && C && C.shots && segs.length", timeout=20000)
 
 
 def _drawn_while_playing(page) -> dict:

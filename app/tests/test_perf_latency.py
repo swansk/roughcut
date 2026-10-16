@@ -468,7 +468,7 @@ def test_latency_under_load(perf_record, live_server):
             page.goto(live_server)
             page.wait_for_selector("#tl .tl-lane[data-lane=V1] .blk")
             page.wait_for_function(
-                "typeof C !== 'undefined' && C && C.shots && window.effects && window.grade && grade.ready",
+                "typeof C !== 'undefined' && C && C.shots && segs.length && window.effects && window.grade && grade.ready",
                 timeout=15000)
             facts = {"proxy": page.evaluate("P.clips['P60_A.MP4'].proxy")}
             # the box before the test adds anything: in the record before a single number
@@ -568,7 +568,7 @@ def test_the_grade_draws_in_a_worker_shows_what_probe_reads_and_prefetches(live_
             errors: list[str] = []
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.goto(live_server)
-            page.wait_for_function("window.grade && grade.ready && window.effects && C && C.shots",
+            page.wait_for_function("window.grade && grade.ready && window.effects && C && C.shots && segs.length",
                                    timeout=15000)
             assert page.evaluate("grade.mode") == "worker"
             page.evaluate("cueAt(0, segs[0].in + 0.5)")

@@ -894,6 +894,9 @@ def test_a_clicked_verdict_drops_a_pending_batch_question(page, project):
     assert page.locator("#hudAsk").inner_text() == "reject 3 picks? ⇧X again · Esc"
     page.locator("#keys .vkey[data-v=reject]").click()
     wait_edl(project, lambda d: len(d.get("floor", {}).get("verdicts", [])) == 1)
+    # the disk has it before the page has read the reply (`verdict()` marks the pick after
+    # its POST returns): wait for the page too, or ⇧X still counts the clicked pick
+    page.wait_for_function("floor.state.queue.filter((q) => q.verdict).length === 1", timeout=5000)
     page.wait_for_selector("#hudAsk", state="hidden")
     assert page.evaluate("floor.state.ask") is None
     page.keyboard.press("Shift+X")                              # asks again, does not reject
