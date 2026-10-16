@@ -39,8 +39,18 @@ playwright_api = pytest.importorskip("playwright.sync_api", reason="playwright n
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 from test_perf_latency import (  # noqa: E402
-    FPS, GAP_LIMIT_MS, GRAIN, SRC_H, SRC_W, Burners, _burners, _free_port, _load, _too_busy,
+    FPS, GAP_LIMIT_MS, GRAIN, SRC_H, SRC_W, Burners, _burners, _free_port, _load,
 )
+
+
+def _too_busy() -> str | None:
+    """Already past twice the cores before the test adds anything: a frame gap then says
+    how busy the box is, not how the board plays. (test_perf_latency had this until wave 10
+    PERFGATE made the perf test measure at any load; this test keeps the skip, visibly.)"""
+    cores, load = os.cpu_count() or 4, _load()
+    if load > 2 * cores and not os.environ.get("ROUGHCUT_PERF_BURNERS"):
+        return f"box already at load {load:.1f} on {cores} cores before any burner: not a measurement of the app"
+    return None
 
 CLIP_S = 8.0
 DUR = 1.0                      # the dissolve: 0.5 s of handle each side
