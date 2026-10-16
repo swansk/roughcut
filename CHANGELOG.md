@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Loop pause notes for the stopped lanes** (judge/LOOP.md): BLACK and CANVAS's branch heads, what each finished, and what is open (both need a quiet-box perf A/B before merging); CHEAP merged at the pause.
 - **Loop paused (judge/LOOP.md).** Karl paused the redesign loop after verdict 8 and wave 11's first three merges; the State entry lists the three unmerged lanes and the exact resume steps.
 - **Rubric log + budget for both wave 11 tabs together** (lead's merge of FXBIN over LUMETRI): each lane measured +2 words / +1 control from the same base; the merged board measures `/` 97·53, `/ shot` 123·68, `/ film` 105·52, `/ fx` 128·56, `/ jobs` 106·54, now the limits exactly; FXBIN's share logged in REDESIGN-GOAL.md.
 - **Rubric log: the screens budget's +2 words / +1 control for the Lumetri Scopes tab** (REDESIGN-GOAL.md, logged by the lead for lane LUMETRI, measured counts, no headroom).
