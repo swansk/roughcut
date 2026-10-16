@@ -87,10 +87,23 @@ measured against the Premiere reference in each dimension, and say what you comp
 - Karl's footage and work dirs are never written by tests or the judge (`--work` under
   `~/roughcut-loop/`).
 - INTAKE "Decisions (do not re-litigate)" still hold unless section K overrides one.
+- The Premiere-style pro controls built in the redesign stay (Karl, K3: "don't remove!"); AI-first means the AI
+  can also do what they do, not that they go away.
 - No Co-Authored-By lines in this repo; every commit carries a CHANGELOG `[Unreleased]` entry.
 
 ## K. Karl's notes (verbatim, newest first; only Karl adds here, the builder may only mark one resolved with evidence)
 
+- **K3 (2026-10-16, after trying the paused branch; Karl said "no need to start yet"):** "off what we have
+  currently, I still don't like the way the footage and pass look, there is no clear way to add new footage
+  or to run the AI tooling on this - remember, it needs to have that premiere pro quality (I like having the
+  controls you added! don't remove!) but with an AI-first operation. While I CAN use the pro tools here (good),
+  AI should also be capable of all of it, and this whole thing needs to be easy to learn how to use,
+  especially how to use those AI features" → (a) the footage and the pass's look: dimensions 1, 3, 9;
+  (b) adding new footage is obvious (Premiere's Import / drag-in, not hidden): dimension 3; (c) running the AI
+  tooling is obvious from anywhere: dimensions 1, 2, 11; (d) AI-first: every pro control (timeline edits,
+  Effect Controls, Lumetri, transitions, export) can also be done by the AI on request, as reviewable edits:
+  dimension 11 and beyond it; (e) easy to learn, the AI features above all: dimension 1. Standing: the pro
+  controls stay ("don't remove!").
 - **K1 (2026-10-14):** "it is not clear how to re run the first pass" → dimension 2.
 - **K2 (2026-10-14):** "this is not something that I feel meets 'premier pro quality'. The system might
   have to do a complete redesign." → the whole of B and C; the judge must not PASS a build that a
@@ -285,3 +298,7 @@ next judge runs, and the next judge rules it honest or lenient.
   the measured totals are `/` 97·53, `/ shot` 123·68, `/ film` 105·52, `/ fx` 128·56, `/ jobs`
   106·54; `/floor` and `/open` unchanged. More lenient by exactly the measured count, no headroom:
   each is one Premiere tab where Premiere has it.
+
+- 2026-10-16 (lead, recording Karl's K3): **a new open K line, so the loop cannot PASS until K3 is resolved
+  with evidence.** Stricter. K3 also adds a standing decision (the pro controls stay). No dimension's bar
+  text changed yet; when the loop resumes, the lead turns K3 (a)-(e) into rubric items and logs them here.
