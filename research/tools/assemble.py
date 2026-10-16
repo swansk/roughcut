@@ -606,13 +606,17 @@ def adjust_vf(controls: dict | None) -> str | None:
     1 before the saturation mix; the shader clamps only after it.)"""
     k = 1.0 + ctl_num(controls, "contrast", 0.0) / 200.0
     sat = ctl_num(controls, "saturation", 100.0) / 100.0
-    if tone_of(controls):
-        t = table_expr(channel_table(controls))
+    creative = creative_vf(controls)
+    if tone_of(controls) or creative:
         chain = ["scale=in_range=tv:in_color_matrix=bt709:flags=accurate_rnd+full_chroma_int",
-                 "format=gbrp", f"lutrgb=r='{t}':g='{t}':b='{t}'"]
+                 "format=gbrp"]
+        if tone_of(controls) or abs(k - 1.0) > 1e-9:
+            t = table_expr(channel_table(controls))
+            chain.append(f"lutrgb=r='{t}':g='{t}':b='{t}'")
         mix = saturation_mixer(sat)
         if mix:
             chain.append(mix)
+        chain += creative
         chain += ["scale=out_range=tv:out_color_matrix=bt709:flags=accurate_rnd",
                   "format=yuv420p"]
         return ",".join(chain)
@@ -622,6 +626,55 @@ def adjust_vf(controls: dict | None) -> str | None:
     return (f"lutyuv=y='clip((val-125.5)*{k:.6g}+125.5,16,235)'"
             f":u='clip((val-128)*{ks:.6g}+128,16,240)'"
             f":v='clip((val-128)*{ks:.6g}+128,16,240)'")
+
+
+# ------------------------------------- Lumetri beyond Basic (redesign wave 11, LUMETRI)
+#
+# Curves, Color Wheels and HSL Secondary, after Basic Correction's saturation, as
+# grade.js's shader draws them; THE formula is `roughcut/colour.py`'s (its comment block
+# "Lumetri beyond Basic"). Curves and wheels are a function of each channel alone: one
+# `lutrgb` of `colour.creative_table` (three tables, one per channel, 8-bit as the tone's
+# is). The HSL Secondary mixes channels: a 33³ cube of `colour.hsl_secondary` through a
+# tetrahedral `lut3d`, written once per key into HSL_CUBE_DIR (content-addressed, so a
+# re-render and every part with the same key share it).
+
+HSL_CUBE_DIR = Path(tempfile.gettempdir()) / "roughcut-hsl"
+
+
+def creative_lutrgb(controls: dict | None) -> str | None:
+    """Curves then wheels as one `lutrgb`, or None when neither is set."""
+    tab = colour.creative_table(controls, 256)
+    if tab is None:
+        return None
+    codes = [[int(min(255, max(0, math.floor(255.0 * v + 0.5)))) for v in row] for row in tab]
+    return "lutrgb=" + ":".join(f"{c}='{table_expr(t)}'" for c, t in zip("rgb", codes))
+
+
+def hsl_cube(hsl: dict) -> Path:
+    """The HSL Secondary as a 33³ `.cube`, written once per key."""
+    import hashlib
+    key = hashlib.sha1(json.dumps(hsl, sort_keys=True).encode()).hexdigest()[:16]
+    path = HSL_CUBE_DIR / f"hsl-{key}.cube"
+    if not path.exists():
+        HSL_CUBE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
+        colour.write_cube(colour.cube_table(lambda x: colour.hsl_secondary(x, hsl), 33), tmp,
+                          title="roughcut hsl secondary")
+        os.replace(tmp, path)
+    return path
+
+
+def creative_vf(controls: dict | None) -> list[str]:
+    """The filters of Lumetri's Curves, Color Wheels and HSL Secondary on 8-bit planar
+    RGB, in that order; [] when none is set."""
+    out = []
+    lr = creative_lutrgb(controls)
+    if lr:
+        out.append(lr)
+    hsl = colour.hsl_of((controls or {}).get("hsl"))
+    if hsl:
+        out.append(f"lut3d=file={hsl_cube(hsl)}:interp=tetrahedral")
+    return out
 
 
 def volume_db(controls: dict | None) -> float:
@@ -1664,6 +1717,12 @@ def describe_controls(c: dict) -> str:
         if keys:
             bits.append(f"{k} keyed ×{len(keys)} "
                         + "→".join(f"{v:g}@{t:g}s" for t, v in keys))
+    if c.get("curves"):
+        bits.append("curves " + "/".join(k for k in colour.CURVE_CHANNELS if c["curves"].get(k)))
+    if c.get("wheels"):
+        bits.append("wheels " + "/".join(k for k in colour.WHEEL_NAMES if c["wheels"].get(k)))
+    if c.get("hsl"):
+        bits.append("hsl secondary")
     if c.get("fx_off"):
         bits.append(f"fx off {len(c['fx_off'])}")
     if c.get("fx_order"):
