@@ -755,6 +755,36 @@
     return stem(seg.clip);
   }
 
+  /* A label that fits its block (verdict 8, punch 6: V1 read "CLI…" at fit zoom, a ghost
+   * "0…"): the name when it fits, else the clip's number ("02" for CLIP_02), else nothing
+   * — the tooltip always names it. Measured on a canvas in the font the label renders in:
+   * the computed style of a real label element (style, weight, size and the board's own
+   * family stack, resolved by the browser exactly as the DOM text is), not a guess. */
+  let textCtx = null;
+  function fontOf(node, style) {          // style: 'normal' / 'italic' in place of the node's
+    if (!node) return '';
+    const cs = getComputedStyle(node);
+    if (!cs.fontFamily) return '';
+    return `${style || cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+  }
+  function textWidth(s, font) {
+    if (!s) return 0;
+    if (!textCtx) textCtx = document.createElement('canvas').getContext('2d');
+    if (!textCtx || !font) return s.length * 7.5;
+    if (textCtx._rcFont !== font) { textCtx.font = font; textCtx._rcFont = font; }
+    return textCtx.measureText(s).width;
+  }
+  function fitLabel(name, room, font) {
+    const s = String(name || '');
+    const fits = (t) => textWidth(t, font) <= room;
+    if (s && fits(s)) return s;
+    const num = (/(\d{2,})$/.exec(s) || [])[1] || '';
+    return num && fits(num) ? num : '';
+  }
+  // V1's label band: 5 px of padding a side (timeline.css), a pixel clear of the edge
+  const V1_LABEL_PAD = 11;
+  let v1Font = '';
+
   function blockSays(seg, clip) {
     if (isGen(seg.clip)) return genLine(seg, clip);
     const line = strongestLine(seg, clip);
@@ -950,12 +980,23 @@
         + ` (X or ${keyLabel('⇧')}Del) to close it`;
       return;
     }
-    b.querySelector('.name').textContent = blockName(seg, clip);
     // the badge: only when the shot is retimed, so a 1× cut looks the way it always did
     const badge = b.querySelector('.speed');
     badge.hidden = spd === 1;
     badge.textContent = spd === 1 ? '' : `${speedLabel(spd)}×`;
     paintSync(b.querySelector('.sync'), seg);
+    // what fits beside the badges: the name, its number, or nothing (never "CLI…").
+    // The badges' widths are their own text in their own fonts plus their boxes.
+    const nameEl = b.querySelector('.name');
+    if (!v1Font && !gen) v1Font = fontOf(nameEl, 'normal');
+    const fam = v1Font.replace(/^.*?[\d.]+px\s+/, '');
+    const sync = b.querySelector('.sync');
+    // .speed: 600 10px, 4 px of padding a side, 4 px margin; .sync: 700 9px, 3 + 3, 4 margin
+    const badgesW = (badge.hidden ? 0 : 12 + textWidth(badge.textContent, `normal 600 10px ${fam}`))
+      + (sync.hidden ? 0 : 10 + textWidth(sync.textContent, `normal 700 9px ${fam}`));
+    const full = blockName(seg, clip);
+    const lab = fitLabel(full, w - V1_LABEL_PAD - badgesW, gen ? v1Font.replace(/^\S+/, 'italic') : v1Font);
+    nameEl.textContent = lab;
     b.classList.toggle('unlinked', !isLinked(seg));
     const says = blockSays(seg, clip);
     b.title = (says ? `“${says}”\n` : '')
@@ -2003,6 +2044,8 @@
     const vw = viewWidth();
     const at = el.view.scrollLeft;
     stripH = lane.clientHeight;
+    // the labels' font, read here with the other reads (a style read, no layout)
+    v1Font = fontOf(lane.querySelector('.blk:not(.gen) .name'), 'normal');
     if (autoFit && vw > 0 && list.length) state.zoom = fitZoom(vw, tot);
     const width = Math.max(vw, PAD + Math.max(tot, state.playhead || 0) * state.zoom + PAD_R);
     el.canvas.style.width = `${width}px`;
@@ -3344,7 +3387,7 @@
     setRange, move, split, remove, insert, setSpeed, insertAt, overwrite,
     select, syncSel, seek, setPlayhead, zoomTo, fit,
     forSave, needsRekey, afterSave, applyIds, idFor, putTurn, saveHeaders, seqForFlush, seqDirty,
-    fmt, hueOf, blockName, blockSays,
+    fmt, hueOf, blockName, blockSays, fitLabel, textWidth, fontOf,
     // the tracks (roughcut/tracks.py)
     TRACKS, tracks, setTrack, audible, isLinked, aOff, setLink, toggleLink, setAudioOffset,
     trackNames, addTrack, deleteTrack, placeAt, isGap, refuseIfLocked,
