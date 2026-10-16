@@ -14,11 +14,17 @@ Checks (each one line in summary.md, exit 0 only if all are green):
            here means suite and screens are not run (they would only measure the box).
   suite    pytest app/tests (API + real Chromium). A test that fails in the full run is
            re-run alone; it counts as flaky (green, but named) only if it passes alone.
-           The perf test (test_perf_latency::test_latency_under_load) writes a JSON
-           (perf-*.json: outcome, load, burners, its numbers); its line names it with the
-           load it ran at. Skipped (load-aware, or ROUGHCUT_PERF_FORCE_SKIP=1) it is
-           retried once after the rest of the suite at a quieter moment, and a second
-           skip makes the suite AMBER, not green (verdict 6 punch 9).
+           The perf test (test_perf_latency::test_latency_under_load) is not in that run:
+           it runs alone BEFORE the suite and again AFTER it (verdict 7 punch 3), each
+           writing a JSON (perf-pre.json, perf-post.json: outcome, load, burners, its
+           numbers). The better-conditioned run that measured (the lower load before the
+           test added anything) counts, and its line names which and the load. A pass is
+           green wherever it ran — above 2x the cores ("shared box") it runs with 0
+           burners rather than skip; a fail above 2x the cores is AMBER and named, a fail
+           at or below it RED; nothing measured (ROUGHCUT_PERF_FORCE_SKIP=1) is AMBER,
+           never green (verdict 6 punch 9). The after run waits up to
+           $ROUGHCUT_PERF_RETRY_WAIT s (300) for load <= 2x cores unless the before run
+           already measured on a box that was not shared.
   screens  test_budget.py again with ROUGHCUT_BUDGET_SHOTS set: the screen budget (one
            header row, one blue button, no board scroll, words/controls in view) plus a PNG
            of every screen and board state for the judge to look at.
@@ -39,7 +45,8 @@ Checks (each one line in summary.md, exit 0 only if all are green):
 ~40-60 s on the fixture, so it runs in both).
 
 The run is GREEN (exit 0) only when every check is green; AMBER (exit 2) when every check
-passed but one is not proven (a skipped perf test); else RED (exit 1).
+passed but one is not proven (a skipped perf test, or one that failed on a shared box
+above 2x the cores); else RED (exit 1).
 ROUGHCUT_GATE_SUITE=<path> narrows the suite (for checking the gate itself; the summary
 says so).
 
@@ -157,55 +164,135 @@ def _perf_rec(p: Path) -> dict | None:
         return None
 
 
-def perf_said(rec: dict | None) -> str:
+def _num(v) -> float | None:
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0 else None
+
+
+def perf_conditions(rec: dict) -> float | None:
+    """The box's load before the perf test added anything: the test's own 1-minute reading
+    just before its burners (`load_pre`, taken after it has let its fixture's 4K encodes
+    drain for up to ROUGHCUT_PERF_SETTLE s whenever it read shared). Older revs' records
+    have no `load_pre`: the gate's reading just before it launched the run
+    (`load_launch`), else the fixture's `load_setup`."""
+    for k in ("load_pre", "load_launch", "load_setup"):
+        v = _num(rec.get(k))
+        if v is not None:
+            return v
+    return None
+
+
+def perf_shared(rec: dict, cores: int) -> bool:
+    """Wave 10 (verdict 7 punch 3): a SHARED box is one already above 2x its cores before
+    the test added anything. Other loops own it: a fail there says how busy it was."""
+    c = perf_conditions(rec)
+    return c is not None and c > 2 * cores
+
+
+def perf_said(rec: dict | None, cores: int | None = None) -> str:
     """One perf record (test_perf_latency's $ROUGHCUT_PERF_JSON) in words, with its load."""
     if rec is None:
         return "no record: the test did not run (not collected, or no Playwright)"
+    cores = cores or rec.get("cores") or os.cpu_count() or 4
     o = str(rec.get("outcome")).upper() if rec.get("outcome") != "passed" else "passed"
-    if rec.get("outcome") == "skipped":
+    if rec.get("outcome") not in ("passed", "failed"):
         return f"{o} at load {rec.get('load_setup')} on {rec.get('cores')} cores — {rec.get('reason')}"
+    c = perf_conditions(rec)
     f = rec.get("facts") or {}
     play = f.get("play") or {}
     med = lambda xs: sorted(xs)[len(xs) // 2] if xs else None   # noqa: E731
-    return (f"{o} at load {rec.get('load_start', rec.get('load_setup'))} → {rec.get('load_end', '?')}"
-            f" with {rec.get('burners', '?')} burners ({rec.get('load_setup')} before them,"
-            f" {rec.get('cores')} cores) · worst gap {play.get('longest_gap_ms')} ms"
+    shared = " (shared box: above 2× the cores before it started)" if perf_shared(rec, cores) else ""
+    at = f"{c:.1f}" if c is not None else "?"
+    s = _num(rec.get("settled_s"))
+    settle = f" after {s:.0f} s letting its fixture's encodes drain" if s and s >= 1 else ""
+    return (f"{o} at load {at} with {rec.get('burners', '?')} burners{shared}, {cores} cores"
+            f" (load {rec.get('load_launch', '?')} at launch, {rec.get('load_pre', '?')} before it"
+            f" measured{settle}; {rec.get('load_start', '?')} → {rec.get('load_end', '?')} while measuring)"
+            f" · worst gap {play.get('longest_gap_ms')} ms"
             f" · seek median {med(f.get('seek') or [])} ms")
 
 
-def perf_check(snap: Path, run_dir: Path, env: dict, jsons: list[Path]) -> tuple[bool, bool, str]:
-    """(ok, amber, line) for test_latency_under_load — verdict 6 punch 9: the perf gate
-    cannot pass by skipping. The last record (the full run's, or its re-run alone when it
-    failed there) decides; a skip, forced or load-aware, or no record at all, is retried
-    once after the rest of the suite, once the load is under 2x the cores (up to
-    $ROUGHCUT_PERF_RETRY_WAIT s). A retry that passes is green; one that skips again
-    leaves the suite AMBER, named here; one that fails is broken."""
-    recs = [r for r in (_perf_rec(p) for p in jsons if p.exists()) if r is not None]
-    rec = recs[-1] if recs else None
+def perf_verdict(runs: list[tuple[str, dict | None]], cores: int) -> tuple[bool, bool, str]:
+    """(ok, amber, line) from the perf test's runs, e.g. [("before the suite", rec),
+    ("after the suite", rec)]. Wave 10 (verdict 7 punch 3):
+
+      * the run that COUNTS is the better-conditioned one that measured (passed or failed):
+        the lowest `perf_conditions` load; on a tie the earlier run. Its result stands even
+        when the other run did better (a fail at the quieter moment is not rescued by a
+        pass at a busier one);
+      * passed → green, wherever it ran: on a shared box (> 2x cores before it started,
+        0 burners) the line says the load;
+      * failed at > 2x cores → AMBER, named (the box was not ours), never green;
+      * failed at <= 2x cores → RED;
+      * nothing measured (a skip, forced by ROUGHCUT_PERF_FORCE_SKIP=1, or no record)
+        → AMBER: a skipped perf test is not a pass (verdict 6 punch 9)."""
     name = "perf " + PERF_ID.split("::")[1]
-    if rec is not None and rec.get("outcome") in ("passed", "failed"):
-        return rec["outcome"] == "passed", False, f"{name}: {perf_said(rec)}"
+    said = [f"{label}: {perf_said(rec, cores)}" for label, rec in runs]
+    measured = [(i, label, rec) for i, (label, rec) in enumerate(runs)
+                if rec is not None and rec.get("outcome") in ("passed", "failed")]
+    if not measured:
+        return True, True, (f"{name}: " + "; ".join(said)
+                            + " → the suite is AMBER: a skipped perf test is not a pass")
+    i, label, rec = min(measured, key=lambda m: (perf_conditions(m[2]) if perf_conditions(m[2])
+                                                is not None else float("inf"), m[0]))
+    others = [s for j, s in enumerate(said) if j != i]
+    why = "the better-conditioned run" if len(measured) > 1 else "the only run that measured"
+    line = (f"{name}: {perf_said(rec, cores)} — counted: {label} ({why})"
+            + (" · " + "; ".join(others) if others else ""))
+    if rec["outcome"] == "passed":
+        return True, False, line
+    if perf_shared(rec, cores):
+        return True, True, (line + " → the suite is AMBER: it failed on a shared box (above 2× the"
+                            " cores before it started, other loops' load), not a pass and not"
+                            " the app's red")
+    return False, False, line
+
+
+def perf_run(snap: Path, run_dir: Path, env: dict, tag: str) -> dict | None:
+    """test_latency_under_load alone on the frozen copy; its record, with the load the gate
+    read just before launching it (`load_launch`) added and written back."""
+    pj = run_dir / f"perf-{tag}.json"
+    launch = round(_load(), 2)
+    try:
+        run(UV + [PERF_ID, "-q", "-rs", "-p", "no:cacheprovider"], snap, run_dir / f"perf-{tag}.log",
+            dict(env, ROUGHCUT_PERF_JSON=str(pj)), timeout=900)
+    except subprocess.TimeoutExpired:
+        pass
+    rec = _perf_rec(pj)
+    if rec is not None:
+        rec["load_launch"] = launch
+        pj.write_text(json.dumps(rec, indent=1))
+    return rec
+
+
+def perf_forced(env: dict) -> bool:
+    return any(e.get("ROUGHCUT_PERF_FORCE_SKIP", "").strip() not in ("", "0") for e in (os.environ, env))
+
+
+def perf_after(snap: Path, run_dir: Path, env: dict, before: dict | None) -> tuple[dict | None, float]:
+    """The after-the-suite run. Unless the skip is forced or the before run already measured
+    on a box that was not shared, it first waits (up to $ROUGHCUT_PERF_RETRY_WAIT s) for the
+    load to fall to 2x the cores: a quieter moment can only make the counted run stricter."""
     cores = os.cpu_count() or 4
-    forced = os.environ.get("ROUGHCUT_PERF_FORCE_SKIP", "").strip() not in ("", "0") or \
-        env.get("ROUGHCUT_PERF_FORCE_SKIP", "").strip() not in ("", "0")
     t0 = time.time()
-    if not forced:
-        print(f"suite: the perf test did not measure ({perf_said(rec)}); waiting for load "
-              f"<= {2 * cores} to retry it…", flush=True)
+    good = before is not None and before.get("outcome") in ("passed", "failed") \
+        and not perf_shared(before, cores)
+    if not perf_forced(env) and not good:
+        print(f"perf: waiting for load <= {2 * cores} (up to {PERF_RETRY_WAIT_S} s) before the"
+              " after-the-suite run…", flush=True)
         while _load() > 2 * cores and time.time() - t0 < PERF_RETRY_WAIT_S:
             time.sleep(15)
     waited = time.time() - t0
-    pj = run_dir / "perf-retry.json"
-    run(UV + [PERF_ID, "-q", "-rs", "-p", "no:cacheprovider"], snap, run_dir / "perf-retry.log",
-        dict(env, ROUGHCUT_PERF_JSON=str(pj)), timeout=900)
-    retry = _perf_rec(pj)
-    line = (f"{name}: in the full run {perf_said(rec)}; retried after the suite"
-            f"{f' (waited {waited:.0f} s for a quieter box)' if waited >= 1 else ''}: {perf_said(retry)}")
-    if retry is not None and retry.get("outcome") == "passed":
-        return True, False, line
-    if retry is not None and retry.get("outcome") == "failed":
-        return False, False, line
-    return True, True, line + " → the suite is AMBER: a skipped perf test is not a pass"
+    return perf_run(snap, run_dir, env, "post"), waited
+
+
+def run_status(results: list[tuple[str, bool, str]], amber: set[str]) -> tuple[str, int]:
+    """GREEN (exit 0) only when every check is green and none is amber; AMBER (exit 2) when
+    every check passed but one is not proven; else RED (exit 1)."""
+    if not all(g for _, g, _ in results):
+        return "RED", 1
+    if amber:
+        return "AMBER", 2
+    return "GREEN", 0
 
 
 def browser_preflight(cwd: Path, log: Path, env: dict) -> tuple[bool, str]:
@@ -321,23 +408,28 @@ def main() -> int:
     # ---- suite ----
     if not quick and browser_ok:
         t0 = time.time()
+        # wave 10 (verdict 7 punch 3): the perf test runs alone BEFORE the suite heats the
+        # box and again AFTER it, not inside it; the better-conditioned run counts
+        print("perf: test_latency_under_load before the suite…", flush=True)
+        perf_before = perf_run(snap, run_dir, env, "pre")
         junit = run_dir / "suite.xml"
-        perf_jsons = [run_dir / "perf-suite.json"]
         suite = os.environ.get("ROUGHCUT_GATE_SUITE", "app/tests")
-        rc = run(UV + [suite, "-q", "-p", "no:cacheprovider", f"--junitxml={junit}"],
-                 snap, run_dir / "suite.log", dict(env, ROUGHCUT_PERF_JSON=str(perf_jsons[0])))
+        rc = run(UV + [suite, "-q", "-p", "no:cacheprovider", f"--junitxml={junit}",
+                       "--deselect", PERF_ID], snap, run_dir / "suite.log", env)
         c = counts(junit) if junit.exists() else {"passed": 0, "failed": -1, "skipped": 0}
         flaky, broken = [], []
         for tid in failed_ids(junit):
             n = len(flaky) + len(broken)
-            pj = run_dir / f"perf-rerun-{n}.json"
             ok = run(UV + [tid, "-q", "-p", "no:cacheprovider"], snap, run_dir / f"rerun-{n}.log",
-                     dict(env, ROUGHCUT_PERF_JSON=str(pj)), timeout=900) == 0
+                     env, timeout=900) == 0
             (flaky if ok else broken).append(tid)
-            if pj.exists():
-                perf_jsons.append(pj)
-        # verdict 6 punch 9: the perf test cannot pass by skipping (see perf_check)
-        perf_ok, perf_amber, perf_line = perf_check(snap, run_dir, env, perf_jsons)
+        print("perf: test_latency_under_load after the suite…", flush=True)
+        perf_after_rec, waited = perf_after(snap, run_dir, env, perf_before)
+        after_label = "after the suite" + (f" (waited {waited:.0f} s for a quieter box)"
+                                           if waited >= 1 else "")
+        # verdict 6 punch 9 + verdict 7 punch 3: see perf_verdict
+        perf_ok, perf_amber, perf_line = perf_verdict(
+            [("before the suite", perf_before), (after_label, perf_after_rec)], os.cpu_count() or 4)
         if not perf_ok and PERF_ID not in broken:
             broken.append(PERF_ID)
         green = c["failed"] >= 0 and not broken and (rc == 0 or c["failed"] > 0)
@@ -394,9 +486,8 @@ def main() -> int:
             problems.append(f"Windows path literal in {rel}")
     results.append(("hygiene", not problems, "clean" if not problems else "; ".join(problems)))
 
-    passing = all(g for _, g, _ in results)
-    ok = passing and not amber
-    status = "GREEN" if ok else "AMBER" if passing else "RED"
+    status, code = run_status(results, amber)
+    ok = code == 0
     summary = [f"# gate {sha} · {stamp} · {status} · {time.time() - t_all:.0f} s",
                f"ref {ref} = {sha}; frozen copy {snap}", ""]
     summary += [f"- **{name}** {'◐ AMBER' if name in amber else '✓' if g else '✗'} {line}"
@@ -410,7 +501,7 @@ def main() -> int:
         indent=1))
     print("\n".join(summary))
     print(f"\n{run_dir / 'summary.md'}")
-    return 0 if ok else 2 if passing else 1
+    return code
 
 
 if __name__ == "__main__":

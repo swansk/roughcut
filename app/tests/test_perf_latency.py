@@ -17,7 +17,11 @@ Killington slow and the three-clip suite fixture does not:
     frame the way it does on an auto-balanced GoPro bin
   * CPU burners: `ROUGHCUT_PERF_BURNERS` children (default: enough to bring the box to
     about one runnable task per core) spinning `while 1: pass` for the whole
-    measurement, started and stopped by the test
+    measurement, started and stopped by the test. A box already past that (other loops'
+    jobs) gets none; one already past twice its cores is a SHARED box (wave 10 PERFGATE,
+    verdict 7 punch 3): the test still runs there, with 0 burners, and records
+    `shared: true` with the load it saw, so tools/gate.py can count a pass there as a pass
+    and a fail there as AMBER, not RED (it used to skip, and the gate could not go green)
 
   * a 0.4 s shot between two shots from DIFFERENT files (A, B 0.4 s, C; verdict 5: a
     12-frame Killington shot held a black "buffering…" for 400-483 ms at 1920; verdict 6:
@@ -69,6 +73,9 @@ GAP_LIMIT_MS = 67
 SEEK_MEDIAN_MS = 250
 SEEK_MAX_MS = 400
 SHORT_S = 0.4                 # the sub-second shot between the two cuts (Killington's 12 frames)
+# wave 10: how long a box reading above 2x the cores waits for the fixture's own encodes
+# to drain out of the 1-minute load average before it counts as shared
+SETTLE_S = float(os.environ.get("ROUGHCUT_PERF_SETTLE", "75"))
 CLIP_S = 8.0
 FPS = "60000/1001"
 SRC_W, SRC_H = 3840, 2160     # verdict 6 punch 2: the fixture is 4K 59.94 with a 1 s GOP
@@ -197,12 +204,15 @@ def _burners() -> int:
     return max(0, cores - int(round(max(0.0, _load()))))
 
 
-def _too_busy() -> str | None:
-    """Already past twice the cores before the test adds anything: a frame gap then says
-    how busy the box is, not how the board plays. Skipped, visibly, with the numbers."""
-    cores, load = os.cpu_count() or 4, _load()
-    if load > 2 * cores and not os.environ.get("ROUGHCUT_PERF_BURNERS"):
-        return f"box already at load {load:.1f} on {cores} cores before any burner: not a measurement of the app"
+def _shared_box(load: float) -> str | None:
+    """Already past twice the cores before the test adds anything: other loops own the
+    box. Wave 10 (verdict 7 punch 3): the test no longer skips there. It runs with 0
+    burners (`_burners()` is 0 past the cores anyway) — a busier box is a harder test, and
+    the judge's three 0-burner runs at load 14-16 passed — and says so, with the load."""
+    cores = os.cpu_count() or 4
+    if load > 2 * cores:
+        return (f"shared box: load {load:.1f} on {cores} cores (> 2x) before the test added "
+                f"anything; measured with {_burners()} burners")
     return None
 
 
@@ -461,10 +471,26 @@ def test_latency_under_load(perf_record, live_server):
                 "typeof C !== 'undefined' && C && C.shots && window.effects && window.grade && grade.ready",
                 timeout=15000)
             facts = {"proxy": page.evaluate("P.clips['P60_A.MP4'].proxy")}
-            busy = _too_busy()
-            if busy:
-                pytest.skip(busy)
-            with Burners(_burners()) as b:
+            # the box before the test adds anything: in the record before a single number
+            # is measured, so a fail of any kind is classified by the load it ran at
+            # The fixture's own three 4K encodes and proxies have just pushed the 1-minute
+            # average up (measured: 11.3 at launch, 21.4 here). A reading that says
+            # "shared" waits up to SETTLE_S for that to drain, so our own work does not make
+            # the box read as shared; one that falls to 2x the cores is not shared.
+            cores = os.cpu_count() or 4
+            load_pre, t_settle = _load(), time.time()
+            while load_pre > 2 * cores and time.time() - t_settle < SETTLE_S:
+                time.sleep(5)
+                load_pre = _load()
+            perf_record["settled_s"] = round(time.time() - t_settle, 1)
+            shared = _shared_box(load_pre)
+            n = _burners()
+            perf_record.update(load_pre=round(load_pre, 2), shared=shared is not None,
+                               burners=n)
+            facts.update(load_pre=load_pre, shared=shared is not None)
+            if shared:
+                print(f"\nPERF {shared}", flush=True)
+            with Burners(n) as b:
                 facts["burners"] = b.n
                 facts["load_start"] = _load()
                 facts["play"] = measure_play(page)
@@ -582,10 +608,12 @@ def test_the_grade_draws_in_a_worker_shows_what_probe_reads_and_prefetches(live_
 # Verdict 6 punch 9: a skipped perf test left the gate green, and the summary said only
 # "1 skipped". `perf_record` writes $ROUGHCUT_PERF_JSON (when set) after the test: its
 # outcome (passed / failed / skipped, and whether the skip was forced), the load at
-# setup, when the burners started, when they stopped and at teardown, the burners and
-# every measured number. tools/gate.py reads it, names a skip, marks the suite amber and
-# retries the test after the rest of the suite. ROUGHCUT_PERF_FORCE_SKIP=1 skips it on
-# purpose, so the gate's amber path can be shown on demand.
+# setup, just before the burners (`load_pre`, and `shared`: above 2x the cores there),
+# when the burners started, when they stopped and at teardown, the burners and every
+# measured number. tools/gate.py runs the test alone before the suite and after it, counts
+# the better-conditioned of the two (wave 10), names a skip and marks the suite amber for
+# it. ROUGHCUT_PERF_FORCE_SKIP=1 skips it on purpose (the only skip left), so the gate's
+# amber path can be shown on demand.
 
 def _write_perf_json(rec: dict) -> None:
     out = os.environ.get("ROUGHCUT_PERF_JSON")
@@ -623,7 +651,7 @@ def perf_record(request, tmp_path, monkeypatch):
     failed = request.session.testsfailed > failed_before
     rec["outcome"] = "failed" if failed else ("passed" if facts is not None else "skipped")
     if rec["outcome"] == "skipped":
-        rec["reason"] = _too_busy() or "skipped before it measured anything"
+        rec["reason"] = "skipped before it measured anything"
     rec["load_teardown"] = round(_load(), 2)
     if facts is not None:
         rec["facts"] = facts

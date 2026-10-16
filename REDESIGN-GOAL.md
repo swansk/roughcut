@@ -210,3 +210,63 @@ next judge runs, and the next judge rules it honest or lenient.
   property name is ellipsized at 1440.
 - 2026-10-16 (lead, after verdict 6's ruling): Playback Resolution in grade.js (the graded picture drawn <= 640 px wide while playing, full size parked) logged here as the judge asked; wave 8 makes it a visible Program-monitor setting (Full / 1/2 / 1/4) like Premiere's.
 - 2026-10-16 (wave 8, lane SMALL; verdict 6 punches 9 and 10a): the gate is STRICTER. `tools/gate.py` reads `test_perf_latency`'s record (`$ROUGHCUT_PERF_JSON`: outcome, load, burners, numbers), prints the perf test's line with the load it ran at, retries a skipped perf test once after the rest of the suite at a quieter moment, and a second skip makes the run AMBER (exit 2), never GREEN; `ROUGHCUT_PERF_FORCE_SKIP=1` exercises that path. Playback Resolution is now a Program-monitor menu (Auto = the old <= 640 px rule and the default, Full, 1/2, 1/4); `test_perf_latency` keeps asserting the default (<= 640 playing, full parked) and `test_playback_resolution.py` asserts Full = the monitor's picture width, 1/4 a quarter of it, and the choice kept across a reload. test_budget's control numbers +1 on the board screens (the menu), measured.
+- 2026-10-15 (wave 10, lane PERFGATE; verdict 7 ruling 3 asked for these two, logged late): **two
+  stricter gate changes from wave 8 that were never logged.** (a) `tools/gate.py`
+  `JOURNEY_SLOWEST_S = 1.0` (lane SAVESAFE): the journey line now adds the slowest request
+  the server answered during the journey, timed to its first byte (`GET /api/debug/slow` →
+  `slowest_api`), and the journey is RED when it is over 1.0 s. Stricter: a new way for the
+  journey to go red; nothing that was red before is green now. What it cannot see: only
+  `/api/` paths count (not `/media`, posters or proxies); it is the journey's own 3-clip
+  suite fixture with a scripted model, so a stall that needs real footage never happens in
+  it (verdict 7's 27-35 s `GET /api/junk` on Killington, blocker 3, read 0.34 s here); it
+  is time to first byte, not the whole transfer; it is one number (the slowest), not a
+  distribution; and a rev whose server has no `/api/debug/slow` reads "not measured" and
+  stays green. (b) `test_perf_latency.py`'s fixture (lane PLAY3, `f4a9016`): two 1920×1080
+  59.94 testsrc2 sources became **three 3840×2160 H.264 59.94 sources with a 1 s GOP**
+  (Killington's GoPro clips), grain so the 1280 proxy runs at a real proxy's ~2 Mbps (a
+  clean one is 0.6), and the 0.4 s shot (wave 6) now sits between shots from DIFFERENT
+  files (A, B 0.4 s, C), so both files after it must be open and parked before it plays.
+  New asserts: every cut went to a parked buffer and the two cuts used two different
+  buffers; the proxy test asks for a keyframe every ≤ 0.5 s (+20 ms) on the 29.97 proxy.
+  Stricter: the same limits (67 ms gap, seek median 250 / max 400, 100 ms medians) on a
+  heavier fixture with more asserts; the fixture's 4K encodes also make the test's own
+  start-up load heavier (see the next entry).
+- 2026-10-15 (wave 10, lane PERFGATE; verdict 7 punch 3): **the perf gate can turn green on a
+  shared box; mixed, stricter in three places and more lenient in one, said plainly.** The
+  box is shared with other loops at load ~10-20 on 6 cores, so `test_latency_under_load`
+  skipped above 2× the cores and the gate could only be AMBER; the judge's three 0-burner
+  runs at load 14.2 / 15.7 / 16.4 passed (worst gap 50 ms). What changed:
+  (1) `test_perf_latency.py` no longer skips above 2× the cores: it runs there with **0
+  burners** (cores − load is already 0 past the cores) and records `load_pre` (the
+  1-minute load just before its burners), `shared` (`load_pre` > 2× cores) and
+  `settled_s`. Because its own fixture (three 4K encodes + proxies) pushes the 1-minute
+  average up (measured: 11.3 when launched, 21.4 after the fixture), a first reading above
+  2× waits up to 75 s (`ROUGHCUT_PERF_SETTLE`) for that to drain (measured 22.8 → 16.6);
+  a reading that falls to 2× the cores is not shared. The only skip left is
+  `ROUGHCUT_PERF_FORCE_SKIP=1`.
+  (2) `tools/gate.py` runs the perf test alone **before the suite and again after it**
+  (deselected from the suite run itself, so the suite's count is one smaller); the run that
+  counts is the **better-conditioned one that measured** (the lower `load_pre`; a tie goes to
+  the before run), and the line says which counted and gives both runs' loads and numbers.
+  The after run first waits up to 300 s for load ≤ 2× cores unless the before run already
+  measured on a box that was not shared.
+  (3) Status: a counted **pass is green wherever it ran**, and on a shared box the line says
+  so ("passed at load 14.2 with 0 burners (shared box …)"); a counted **fail above 2× the
+  cores is AMBER**, named ("it failed on a shared box … not a pass and not the app's red");
+  a counted **fail at or below 2× is RED** (as before); **nothing measured is AMBER** (as
+  before: `ROUGHCUT_PERF_FORCE_SKIP=1` still gives AMBER). `app/tests/test_gate_status.py`
+  pins every one of these rules and the GREEN/AMBER/RED/exit-code function.
+  Stricter: the test now measures where it used to skip, so a regression on a shared box is
+  seen (as AMBER, with its numbers) instead of hidden behind a skip; the counted run is the
+  better-conditioned one, not the better result, so a fail at the quieter moment is not
+  rescued by a pass at a busier one (two chances at a quiet box, not two chances to pass);
+  and the settle keeps the test's own encodes from making a box read as shared. More
+  lenient: **a pass on a shared box now makes the gate GREEN**, where before nothing above
+  2× could. The limits are unchanged, and a busier box is a harder test of them, but above
+  2× the cores the box's load is other loops' (bursty, uncontrolled) rather than the
+  test's steady one-task-per-core burners, so a GREEN there is a pass under a different,
+  unrepeatable load, and the line gives that load so the judge can weigh it. A fail above 2×
+  is AMBER, which is what it was before (then a skip); before wave 5 any fail was red. My
+  own two standalone runs while building this both FAILED: at load 21.4 before the settle
+  existed (83.3 ms inside a shot) and at 16.6 after a 75 s settle (116.7 ms at a cut, 20
+  fps); the second, under these rules, reads AMBER, not GREEN.
