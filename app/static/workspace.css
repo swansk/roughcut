@@ -219,6 +219,11 @@ body > header > #firstpass { flex-shrink: 0; min-width: 0; }
           padding: 0 6px; border: 0; border-radius: 0; background: transparent;
           color: var(--dim); font-size: 11.5px; white-space: nowrap;
           position: relative; cursor: pointer; line-height: 1.35; }
+/* Effect Controls' group holds five tabs, one of them "Designed Effects" (the AI designer,
+   renamed when Premiere's Effects bin arrived: verdict 8 punch 5): a little tighter there,
+   so the strip still fits its default 365 px at 1440 with two badges. */
+#pInspector .ws-tab { padding: 0 3px; gap: 3px; }
+#pInspector .ws-tab.on::after { left: 3px; right: 3px; }
 .ws-tab:hover { background: transparent; color: var(--text); }
 .ws-tab.on { color: var(--text); }
 .ws-tab.on::after { content: ""; position: absolute; left: 6px; right: 6px; bottom: 0;
@@ -352,6 +357,21 @@ body.ws-resizing.col { cursor: col-resize; } body.ws-resizing.row { cursor: row-
 @container (max-width: 440px) { #srcDur { display: none; } }
 
 /* ------------------------------------------------------------ project panel */
+/* The Effects bin (dock.js, verdict 8 punch 5): Premiere's tree of folders and items. */
+#fxbin { font-size: 12px; user-select: none; -webkit-user-select: none; }
+#fxbin .fxb-folder, #fxbin .fxb-item { display: flex; align-items: center; gap: 6px; height: 22px;
+                   padding-left: calc(4px + var(--d, 0) * 16px); border-radius: 2px; cursor: default; white-space: nowrap; }
+#fxbin .fxb-folder .tw { width: 10px; color: var(--dim); font-size: 10px; }
+#fxbin .fxb-folder .fold { width: 14px; height: 11px; color: hsl(45 35% 55%); flex: none; }
+#fxbin .fxb-item { padding-left: calc(18px + var(--d, 0) * 16px); cursor: grab; }
+#fxbin .fxb-item .ic { display: inline-flex; width: 18px; height: 14px; align-items: center; justify-content: center;
+                       color: hsl(265 45% 70%); border: 1px solid transparent; border-radius: 2px; flex: none; }
+#fxbin .fxb-item .ic svg { width: 14px; height: 10px; }
+#fxbin .fxb-item.def .ic { border-color: var(--accent, #2d8cff); }
+#fxbin .fxb-item:hover { background: rgba(255,255,255,.05); }
+#fxbin .fxb-item.sel { background: var(--sel, hsl(215 45% 32%)); }
+#fxbin .fxb-item.dragging { opacity: .5; }
+#fxbin .fxb-none { padding: 8px 4px; }
 .projbar { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
 .projbar input { flex: 1; min-width: 0; }
 .projbar .count { color: var(--dim); font-size: 11px; white-space: nowrap; }

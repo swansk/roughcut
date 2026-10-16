@@ -278,3 +278,10 @@ next judge runs, and the next judge rules it honest or lenient.
   Premiere control (Lumetri Scopes beside the Source monitor, as the Color workspace places it).
   Curves, Color Wheels and HSL Secondary sit below the fold in closed sections and add nothing to the
   first screen.
+
+- 2026-10-15 (wave 11, lane FXBIN; logged by the lead): **the screens budget grows again by
+  Premiere's Effects bin: +2 words and +1 control on each board screen** (the Project group's
+  "Effects" tab, and the AI designer's tab renamed "Designed Effects"). With LUMETRI's entry above,
+  the measured totals are `/` 97·53, `/ shot` 123·68, `/ film` 105·52, `/ fx` 128·56, `/ jobs`
+  106·54; `/floor` and `/open` unchanged. More lenient by exactly the measured count, no headroom:
+  each is one Premiere tab where Premiere has it.

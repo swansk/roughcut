@@ -1485,7 +1485,7 @@
           <span class="ec-name">${esc(e.name)}${e.status === 'proposed' ? ' <i class="ec-prop">proposed</i>' : ''}</span>
           <span class="ec-ord"><button type="button" data-fxact="up" data-id="${esc(e.id)}"${i ? '' : ' disabled'} title="move up the stack">▲</button><button type="button" data-fxact="down" data-id="${esc(e.id)}"${i < list.length - 1 ? '' : ' disabled'} title="move down the stack">▼</button></span>
         </div>`).join('')
-      : '<div class="ec-empty">No designed effects on this shot. <button type="button" class="ec-link" data-fxact="open">Design one in Effects ▸</button></div>';
+      : '<div class="ec-empty">No designed effects on this shot. <button type="button" class="ec-link" data-fxact="open">Design one in Designed Effects ▸</button></div>';
   }
 
   /* ------------------------------------------------------------ fill */
