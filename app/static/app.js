@@ -2361,6 +2361,16 @@ function paintTransport() {
 /* The playhead is the timeline's, in film time (the strip used to carry it as a
  * percentage inside one block). */
 function paintPos(filmT, clipT, seg) {
+  // While playing, the playhead moves a sequence frame at a time, as Premiere's does: the
+  // ticks between two frames (the board's animation frames run at the display's 60 Hz, the
+  // sequence at 29.97) repainted the same frame's playhead and readout and re-ran the
+  // Program's followers — half the board's main-thread rendering while a graded shot
+  // played, the thread that also feeds the grade its frames (wave 11 CANVAS, traced).
+  if (player.playing && window.tl && typeof tl.gridRate === 'function') {
+    const f = Math.floor(filmT * tl.gridRate() + 1e-6);
+    if (f === posFrame) return;
+    posFrame = f;
+  } else posFrame = -1;
   // While playing, the timeline is asked to keep the playhead in view four times a
   // second rather than every frame: its check reads the view's width, and after this
   // frame's writes that read was a forced layout of the whole board on every tick
@@ -2373,6 +2383,7 @@ function paintPos(filmT, clipT, seg) {
   if (el.textContent !== s) el.textContent = s;
 }
 let posReveal = 0;
+let posFrame = -1;
 
 /* The monitors read Premiere's HH:MM:SS:FF, the timeline's own timecode (tl.tc). */
 function tcOf(t) { return window.tl && typeof tl.tc === 'function' ? tl.tc(t) : fmt(t); }

@@ -83,11 +83,29 @@
 
     // WebGL2: a 3D texture, trilinear by the sampler; the half-texel offset puts 0 and 1
     // on the first and last grid points rather than half a cell inside them.
-    const FS2 = `#version 300 es
+    // Two sources (wave 11 CANVAS): `rgb` reads u_video (a frame scaled into RGBA on the CPU,
+    // uploaded flipped); `yuv` reads the decoder's own planes (I420: Y, U, V; NV12: Y, UV),
+    // uploaded as they are, and converts them here with the frame's matrix and range
+    // (u_yuv: column-major, u_yoff: the black and the chroma zero) — no CPU colour
+    // conversion, no CPU scale, no CPU flip (the rows are read top-down: 1 - y).
+    const YUV_SRC = `
+      uniform sampler2D u_py;
+      uniform sampler2D u_pu;
+      uniform sampler2D u_pv;
+      uniform float u_nv12;
+      uniform mat3 u_yuv;
+      uniform vec3 u_yoff;
+      vec3 yuvAt(vec2 p) {
+        vec2 q = vec2(p.x, 1.0 - p.y);
+        float y = texture(u_py, q).r;
+        vec2 c = u_nv12 > 0.5 ? texture(u_pu, q).rg : vec2(texture(u_pu, q).r, texture(u_pv, q).r);
+        return clamp(u_yuv * (vec3(y, c) - u_yoff), 0.0, 1.0);
+      }`;
+    const FS2 = (yuv) => `#version 300 es
       precision mediump float;
       precision mediump sampler3D;
       in vec2 v_uv;
-      uniform sampler2D u_video;
+      uniform sampler2D u_video;${yuv ? YUV_SRC : ''}
       uniform sampler3D u_lut;
       uniform float u_n;
       uniform vec3 u_pre;
@@ -99,7 +117,7 @@
       uniform float u_toneOn;
       out vec4 outColor;
       void main() {
-        vec3 c = texture(u_video, v_uv).rgb * u_pre;
+        vec3 c = ${yuv ? 'yuvAt(v_uv)' : 'texture(u_video, v_uv).rgb'} * u_pre;
         if (u_knee < 1.0) {
           vec3 o = u_knee + (1.0 - u_knee) * (1.0 - exp(-(c - u_knee) / (1.0 - u_knee)));
           c = mix(c, o, step(u_knee, c)) + u_lift;
@@ -183,34 +201,57 @@
       catch (e) { gl = null; }
     }
     if (!gl) return null;
-    const prog = gl.createProgram();
-    gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, gl2 ? VS2 : VS));
-    gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, gl2 ? FS2 : FS1));
-    gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-      throw new Error(`grade: link failed — ${gl.getProgramInfoLog(prog)}`);
+    // One program per source kind (rgb always; yuv on WebGL2), the quad at attribute 0.
+    function program(fs) {
+      const p = gl.createProgram();
+      gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, gl2 ? VS2 : VS));
+      gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, fs));
+      gl.bindAttribLocation(p, 0, 'a_pos');
+      gl.linkProgram(p);
+      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+        throw new Error(`grade: link failed — ${gl.getProgramInfoLog(p)}`);
+      }
+      gl.useProgram(p);
+      const U = { p, n: null };
+      ['u_n', 'u_pre', 'u_con', 'u_sat', 'u_knee', 'u_lift', 'u_tone', 'u_toneOn',
+       'u_yuv', 'u_yoff', 'u_nv12'].forEach((k) => { U[k] = gl.getUniformLocation(p, k); });
+      [['u_video', 0], ['u_lut', 1], ['u_py', 2], ['u_pu', 3], ['u_pv', 4]].forEach(([k, i]) => {
+        const loc = gl.getUniformLocation(p, k);
+        if (loc) gl.uniform1i(loc, i);
+      });
+      return U;
     }
-    gl.useProgram(prog);
+    const PR = program(gl2 ? FS2(false) : FS1);
+    let PY = null;
+    if (gl2) {
+      try { PY = program(FS2(true)); } catch (e) { PY = null; }   // the rgb path still draws
+    }
+    let U = PR;                   // the program in use, and its uniforms
+    gl.useProgram(PR.p);
     const buf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-    const aPos = gl.getAttribLocation(prog, 'a_pos');
-    gl.enableVertexAttribArray(aPos);
-    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
-    gl.uniform1i(gl.getUniformLocation(prog, 'u_video'), 0);
-    gl.uniform1i(gl.getUniformLocation(prog, 'u_lut'), 1);
-    const U = {};
-    ['u_n', 'u_pre', 'u_con', 'u_sat', 'u_knee', 'u_lift', 'u_tone', 'u_toneOn'].forEach((k) => {
-      U[k] = gl.getUniformLocation(prog, k);
-    });
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    function use(P) {
+      if (U !== P) { U = P; gl.useProgram(P.p); }
+    }
 
-    const texVideo = gl.createTexture();
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, texVideo);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    function texture2d(unit) {
+      const t = gl.createTexture();
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      return t;
+    }
+    // the planes, on units 2-4 (unit 0 is the rgb frame, unit 1 the LUT); each remembers its
+    // size so a frame of the same size is a texSubImage2D into it, not a new allocation
+    const planeTex = PY ? [texture2d(2), texture2d(3), texture2d(4)] : [];
+    planeTex.forEach((t) => { t._w = 0; t._h = 0; t._f = 0; });
+    const texVideo = texture2d(0);
     const lutTarget = gl2 ? gl.TEXTURE_3D : gl.TEXTURE_2D;
 
     const texs = new Map();       // LUT key → texture, oldest first (LRU, TEX_KEEP)
@@ -268,6 +309,7 @@
      * already there (`key`) is not sent again: an Effect Controls change on a paused
      * monitor redraws with new uniforms only. */
     function upload(src, sw, sh, w, h, key) {
+      if (src && src.yuv) { frameKey = null; return planes(src); }
       if (key && key === frameKey) return true;
       frameKey = null;
       try {
@@ -291,6 +333,50 @@
       return true;
     }
 
+    /* A decoded frame's own planes (`yuvPlanes` below: I420 or NV12, each plane `{buf, offset,
+     * stride, w, h}`) into the plane textures, each at its own size: the shader converts (and
+     * scales, when the picture is not drawn at the planes' size). Measured on Killington's
+     * 1280x720 proxy in headless Chromium at load 13-20 (wave 11 CANVAS), the worker's own
+     * time per frame: 0.4-2.7 ms, where the CPU scale into the 2D stage and its RGBA upload
+     * took 10-12 ms (21 ms on the board's busier page). */
+    function planes(f) {
+      if (!PY) return false;
+      const nv12 = f.format === 'NV12';
+      const filt = f.nearest ? gl.NEAREST : gl.LINEAR;
+      try {
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        f.planes.forEach((P, i) => {
+          const t = planeTex[i];
+          const two = nv12 && i === 1;              // NV12's UV: two bytes a texel
+          const ifmt = two ? gl.RG8 : gl.R8, fmt = two ? gl.RG : gl.RED;
+          gl.activeTexture(gl.TEXTURE2 + i);
+          gl.bindTexture(gl.TEXTURE_2D, t);
+          if (t._filt !== filt) {
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filt);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filt);
+            t._filt = filt;
+          }
+          gl.pixelStorei(gl.UNPACK_ROW_LENGTH, two ? P.stride / 2 : P.stride);
+          if (t._w === P.w && t._h === P.h && t._f === ifmt) {
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, P.w, P.h, fmt, gl.UNSIGNED_BYTE, P.buf, P.offset);
+          } else {
+            gl.texImage2D(gl.TEXTURE_2D, 0, ifmt, P.w, P.h, 0, fmt, gl.UNSIGNED_BYTE, P.buf, P.offset);
+            t._w = P.w; t._h = P.h; t._f = ifmt;
+          }
+        });
+        gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+      } catch (e) {
+        gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+        return false;
+      }
+      use(PY);
+      gl.uniformMatrix3fv(U.u_yuv, false, f.mat);
+      gl.uniform3f(U.u_yoff, f.off[0], f.off[1], f.off[2]);
+      gl.uniform1f(U.u_nv12, nv12 ? 1 : 0);
+      return true;
+    }
+
     /* Draw `src` (a <video> or a VideoFrame, sw×sh) at w×h through the LUT `key` (made
      * from n/data when this renderer has not seen it) with the live preview's `adj`. */
     function render(src, sw, sh, w, h, key, n, data, adj, parkedKey, mix) {
@@ -303,8 +389,10 @@
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, texVideo);
       if (!upload(src, sw, sh, w, h, parkedKey)) return false;   // no frame yet; the next one will be
+      if (!src.yuv) use(PR);
       if (!lut(key, n, data)) return false;
-      if (current !== key) { current = key; gl.uniform1f(U.u_n, n); }
+      current = key;
+      if (U.n !== n) { U.n = n; gl.uniform1f(U.u_n, n); }
       const a = adj || NO_ADJUST;
       gl.uniform3f(U.u_pre, a.pre[0], a.pre[1], a.pre[2]);
       gl.uniform1f(U.u_con, a.con);
@@ -327,9 +415,10 @@
       gl.bindTexture(gl.TEXTURE_2D, texVideo);
       if (!upload(mix.src, mix.sw, mix.sh, w, h, null)) return;
       frameKey = null;                       // the texture holds the other frame now
+      if (!mix.src.yuv) use(PR);
       if (!lut(mix.key, mix.n, mix.data)) return;
       current = mix.key;
-      gl.uniform1f(U.u_n, mix.n);
+      if (U.n !== mix.n) { U.n = mix.n; gl.uniform1f(U.u_n, mix.n); }
       const a = mix.adj || NO_ADJUST;          // its Lumetri contrast, tone, saturation
       gl.uniform3f(U.u_pre, 1, 1, 1);
       gl.uniform1f(U.u_con, a.con);
@@ -358,29 +447,129 @@
       return m.map((x) => Math.round((x / k) * 100) / 100);
     }
 
-    return { gl2, lut, forget, render, mean };
+    /* One draw of each kind a played frame takes (the planes, plain and blended over, at
+     * both filters) on a 2x2 picture, so a software GL compiles its routines for them now
+     * and not on the first frame of the first play (measured: a 156 ms hole at the start
+     * of the first graded play at load 30). Leaves the canvas as it was. */
+    function warm() {
+      if (!PY) return;
+      const cw0 = canvas.width, ch0 = canvas.height;
+      const b = new Uint8Array(16).fill(128);
+      const f = { yuv: true, format: 'I420', nearest: false, mat: [1, 1, 1, 0, -0.19, 1.86, 1.57, -0.47, 0],
+                  off: [0, 0.5, 0.5], planes: [{ buf: b, offset: 0, stride: 2, w: 2, h: 2 },
+                                               { buf: b, offset: 4, stride: 1, w: 1, h: 1 },
+                                               { buf: b, offset: 8, stride: 1, w: 1, h: 1 }] };
+      const id = new Uint8Array([0, 0, 0, 255, 0, 0, 0, 255, 0, 255, 255, 0,
+                                 0, 0, 255, 255, 0, 255, 0, 255, 255, 255, 255, 255]);
+      try {
+        for (const nearest of [false, true]) {
+          f.nearest = nearest;
+          render(f, 2, 2, 2, 2, '__warm', 2, id, null, null, { src: f, w: 0.5, key: '__warm', n: 2, data: id });
+        }
+        gl.finish();
+      } catch (e) { /* the first frame compiles them instead */ }
+      if (canvas.width !== cw0 || canvas.height !== ch0) { canvas.width = cw0; canvas.height = ch0; }
+      frameKey = null;
+    }
+
+    return { gl2, yuv: !!PY, lut, forget, render, mean, warm };
+  }
+
+  /* A playing frame's planes, for the renderer's yuv path (wave 11 CANVAS): copied out of
+   * the VideoFrame as the decoder made them (VideoFrame.copyTo, its visible rect) into a
+   * buffer kept per slot (0 the live shot, 1 a dissolve's other one), with the matrix and the
+   * offsets that turn them into the RGB the browser's own conversion makes (BT.709 full range
+   * on Killington's proxies: within 2 levels of drawImage's, mean 0.2). Null — the rgb path —
+   * for any other layout (a GPU frame, 10-bit, alpha) or a matrix it does not know. Self-
+   * contained: its source is the worker's too. */
+  async function yuvPlanes(frame, slot, bufs, ow, oh) {
+    const fmt = frame.format;
+    if (fmt !== 'I420' && fmt !== 'NV12') return null;
+    const vr = frame.visibleRect;
+    if (!vr || !vr.width || !vr.height) return null;
+    const cs = frame.colorSpace || {};
+    const KS = { bt709: [0.2126, 0.0722], smpte170m: [0.299, 0.114], bt470bg: [0.299, 0.114],
+                 'bt2020-ncl': [0.2627, 0.0593] };
+    const K = KS[cs.matrix || (vr.height >= 720 ? 'bt709' : 'smpte170m')];
+    if (!K) return null;
+    const size = frame.allocationSize();
+    let buf = bufs[slot];
+    if (!buf || buf.length < size) buf = bufs[slot] = new Uint8Array(size);
+    const layout = await frame.copyTo(buf);
+    const W = vr.width, H = vr.height, cw = (W + 1) >> 1, ch = (H + 1) >> 1;
+    const pl = [{ buf, offset: layout[0].offset, stride: layout[0].stride, w: W, h: H }];
+    if (fmt === 'NV12') pl.push({ buf, offset: layout[1].offset, stride: layout[1].stride, w: cw, h: ch });
+    else for (const i of [1, 2]) pl.push({ buf, offset: layout[i].offset, stride: layout[i].stride, w: cw, h: ch });
+    // Drawn at half the frame's size or less (Auto while playing: 640 of a 1280 proxy): the
+    // luma is boxed to the chroma's size here (2x2 means, ~1 ms of the worker at 1280x720),
+    // so all the planes go up at the size the shader reads them — a third of the bytes, and
+    // at exactly half size one texel a pixel (nearest), where the GPU's own bilinear
+    // minification of the whole luma cost twice the shading (software GL, measured).
+    let nearest = false;
+    if (ow * 2 <= W + 1 && oh * 2 <= H + 1 && !(W & 1) && !(H & 1)) {
+      const k = slot + 2;
+      if (!bufs[k] || bufs[k].length < cw * ch) bufs[k] = new Uint8Array(cw * ch);
+      const D = bufs[k], st = layout[0].stride, o0 = layout[0].offset;
+      for (let y = 0; y < ch; y++) {
+        let a = o0 + 2 * y * st, b = a + st;
+        const o = y * cw;
+        for (let x = 0; x < cw; x++, a += 2, b += 2) D[o + x] = (buf[a] + buf[a + 1] + buf[b] + buf[b + 1] + 2) >> 2;
+      }
+      pl[0] = { buf: D, offset: 0, stride: cw, w: cw, h: ch };
+      nearest = ow === cw && oh === ch;
+    }
+    const [kr, kb] = K, kg = 1 - kr - kb;
+    const full = !!cs.fullRange;
+    const ys = full ? 1 : 255 / 219, c = full ? 1 : 255 / 224;
+    // column-major: the Y, U and V columns of R, G, B
+    const mat = [ys, ys, ys,
+                 0, -2 * (1 - kb) * kb / kg * c, 2 * (1 - kb) * c,
+                 2 * (1 - kr) * c, -2 * (1 - kr) * kr / kg * c, 0];
+    return { yuv: true, format: fmt, planes: pl, nearest, mat,
+             off: [full ? 0 : 16 / 255, 128 / 255, 128 / 255] };
   }
 
   /* The worker: the renderer on the monitor's OffscreenCanvas. One message kind each way:
-   * `frame` in (drawn, then closed), `drawn` back; `lut` in makes a texture ahead of a cut;
-   * `forget` drops them all (a colour save). Committed at the end of its task, off the
-   * page's main thread. */
+   * `frame` in (drawn, then closed), `drawn` back (when, and how long the draw took: the
+   * page's draw log); `lut` in makes a texture ahead of a cut; `forget` drops them all (a
+   * colour save). A playing frame (`yuv`) goes up as its planes, any other as before.
+   * Committed at the end of its task, off the page's main thread. */
   const WORKER_SRC = `'use strict';
 const Renderer = ${Renderer.toString()};
+const yuvPlanes = ${yuvPlanes.toString()};
 let R = null;
-onmessage = (e) => {
+const bufs = [null, null, null, null];
+onmessage = async (e) => {
   const m = e.data;
   if (m.t === 'init') {
     try { R = Renderer(m.canvas, (w, h) => new OffscreenCanvas(w, h)); }
     catch (err) { R = null; }
-    postMessage({ t: 'ready', ok: !!R });
+    if (R) R.warm();
+    postMessage({ t: 'ready', ok: !!R, yuv: !!(R && R.yuv) });
     return;
   }
   if (m.t === 'frame') {
-    try { if (R) R.render(m.frame, m.sw, m.sh, m.w, m.h, m.key, m.n, m.data, m.adj, null, m.mix); }
-    catch (err) { /* a frame that will not draw: the next one will */ }
-    finally { m.frame.close(); if (m.mix) m.mix.src.close(); }
-    postMessage({ t: 'drawn' });
+    const t0 = performance.now();
+    const got = performance.timeOrigin + t0;
+    let ok = false, src = m.frame, mix = m.mix, yuv = false;
+    const ts = m.frame.timestamp;
+    try {
+      if (R && R.yuv && m.yuv) {
+        // copied out, the decoder's frame goes back to it at once
+        const p = await yuvPlanes(m.frame, 0, bufs, m.w, m.h).catch(() => null);
+        if (p) { m.frame.close(); src = p; yuv = true; }
+        if (mix) {
+          const q = await yuvPlanes(mix.src, 1, bufs, m.w, m.h).catch(() => null);
+          if (q) { mix.src.close(); mix = { ...mix, src: q }; }
+        }
+      }
+      if (R) ok = R.render(src, m.sw, m.sh, m.w, m.h, m.key, m.n, m.data, m.adj, null, mix);
+    } catch (err) { /* a frame that will not draw: the next one will */ }
+    finally {
+      try { m.frame.close(); if (m.mix) m.mix.src.close(); } catch (err) { /* closed */ }
+    }
+    postMessage({ t: 'drawn', ok: !!ok, ts, yuv, ms: performance.now() - t0, sent: m.sent, made: m.made, got,
+                  at: performance.timeOrigin + performance.now() });
     return;
   }
   if (!R) return;
@@ -410,7 +599,9 @@ onmessage = (e) => {
     frameGen: 0,             // bumps per re-arm of the frame callback
     epoch: 0,                // bumps per invalidate: a fetch from before it is not cached
     drawReq: 0,              // the pending coalesced draw (drawSoon), a rAF id
-    draws: 0,                // frames drawn (tests read it)
+    draws: 0,                // frames drawn (tests read it): in worker mode, when it says so
+    drawLog: [],             // worker mode: the last DRAW_LOG draws {t, ts, ms, yuv} (page clock)
+    yuv: false,              // the worker draws playing frames from their planes
     box: { w: 0, h: 0 },     // the monitor's box (ResizeObserver), CSS px
     mix: null,               // a transition's other shot: {video, id, w, rec} (setMix)
   };
@@ -469,8 +660,14 @@ onmessage = (e) => {
     const bw = G.box.w * dpr, bh = G.box.h * dpr;
     if (!bw || !bh) return [vw, vh];
     let s = Math.min(1, bw / vw, bh / vh);
-    if (playing) s = RES[G.res] == null ? Math.min(s, (mixing ? MIX_W : PLAY_W) / vw) : s * RES[G.res];
+    // (the worker's planes path uploads each frame at the size it is read, a third of the
+    // RGBA bytes: a dissolve's two frames fit at PLAY_W, and the canvas keeps its size)
+    const mixW = mixing && !G.yuv ? MIX_W : PLAY_W;
+    if (playing) s = RES[G.res] == null ? Math.min(s, mixW / vw) : s * RES[G.res];
     if (s > 0.9) return [vw, vh];   // near full size: the scale costs more than it saves
+    // within 3 % of half the frame: exactly half, where the worker's planes are one texel a
+    // pixel (yuvPlanes; a 674-px monitor drew 638 of a 1280 proxy and sampled it bilinear)
+    if (playing && Math.abs(s - 0.5) <= 0.015 && !(vw & 3) && !(vh & 3)) return [vw / 2, vh / 2];
     return [Math.max(2, Math.round(vw * s / 2) * 2), Math.max(2, Math.round(vh * s / 2) * 2)];
   }
 
@@ -487,7 +684,8 @@ onmessage = (e) => {
     if (!vw || !vh) return null;
     const m = G.mix;
     const mixing = !!(m && m.rec && m.w > 0 && m.video.readyState >= 2 && m.video.videoWidth);
-    const [w, h] = drawSize(vw, vh, (!v.paused && !v.ended) || playerPlaying(), mixing);
+    const playing = (!v.paused && !v.ended) || playerPlaying();
+    const [w, h] = drawSize(vw, vh, playing, mixing);
     const rec = raw || G.lut.identity ? IDENTITY_TABLE : G.lut;
     const parked = v.paused && !v.seeking
       ? `${v.id}|${v.currentSrc}|${v.currentTime}|${w}x${h}` : null;
@@ -496,7 +694,7 @@ onmessage = (e) => {
           key: m.rec.identity ? IDENTITY_TABLE.key : m.rec.key, n: m.rec.identity ? IDENTITY_TABLE.n : m.rec.n,
           data: m.rec.identity ? IDENTITY_TABLE.data : m.rec.data, w: m.w, adj: mixAdjust() }
       : null;
-    return { v, vw, vh, w, h, rec, adj, parked: mix ? null : parked, mix };
+    return { v, vw, vh, w, h, rec, adj, parked: mix ? null : parked, mix, playing };
   }
 
   function drawOn(R, j) {
@@ -526,7 +724,7 @@ onmessage = (e) => {
       } catch (e) { mix = null; }
     }
     const m = { t: 'frame', frame, sw: frame.displayWidth, sh: frame.displayHeight,
-                w: j.w, h: j.h, rec: j.rec, adj: j.adj, mix };
+                w: j.w, h: j.h, rec: j.rec, adj: j.adj, mix, playing: j.playing, made: performance.now() };
     // a worker that never answered (it died) does not hold the picture for good
     if (G.inflight && performance.now() - G.sentAt < 1000) {
       if (G.pending) { G.pending.frame.close(); if (G.pending.mix) G.pending.mix.src.close(); }
@@ -540,7 +738,8 @@ onmessage = (e) => {
     const rec = m.rec;
     const msg = { t: 'frame', frame: m.frame, sw: m.sw, sh: m.sh, w: m.w, h: m.h,
                   key: rec.key, n: rec.n, data: rec.key !== G.sentKey ? rec.data : null,
-                  adj: m.adj ? JSON.parse(JSON.stringify(m.adj)) : null, mix: m.mix || null };
+                  adj: m.adj ? JSON.parse(JSON.stringify(m.adj)) : null, mix: m.mix || null,
+                  yuv: !!m.playing, sent: performance.now(), made: m.made };
     G.sentKey = rec.key;
     G.inflight = true;
     G.sentAt = performance.now();
@@ -550,14 +749,23 @@ onmessage = (e) => {
       try { m.frame.close(); if (m.mix) m.mix.src.close(); } catch (e2) { /* gone */ }
       return;
     }
-    G.draws++;
   }
 
+  const DRAW_LOG = 600;
   function fromWorker(e) {
     const m = e.data || {};
     if (m.t === 'drawn') {
       G.inflight = false;
+      if (m.ok) {
+        G.draws++;
+        const r1 = (x) => Math.round(x * 10) / 10;
+        G.drawLog.push({ t: r1(m.at - performance.timeOrigin), ts: m.ts, ms: r1(m.ms), yuv: !!m.yuv,
+                         made: r1(m.made || 0), sent: r1(m.sent || 0), got: r1(m.got - performance.timeOrigin) });
+        if (G.drawLog.length > DRAW_LOG) G.drawLog.splice(0, G.drawLog.length - DRAW_LOG);
+      }
       if (G.pending) { const p = G.pending; G.pending = null; post(p); }
+    } else if (m.t === 'ready' && m.ok) {
+      G.yuv = !!m.yuv;
     } else if (m.t === 'ready' && !m.ok) {
       // no WebGL in the worker: the canvas is the worker's, so the raw video shows
       G.ok = false;
@@ -632,6 +840,14 @@ onmessage = (e) => {
     if (!G.canvas) return;
     const was = G.canvas.classList.contains('on');
     G.canvas.classList.toggle('on', !!on);
+    // The canvas is opaque over the buffers: while it is on they are not drawn (wave 11
+    // CANVAS). On a software compositor every buffer frame under it was still converted to
+    // RGB (VideoResourceUpdater) and drawn by the display compositor, under a picture that
+    // hides it — CPU the box's decoders then lacked (Killington at load 13-20: the live
+    // buffer itself fell to 23-26 fps while the canvas played). Hidden by visibility, a
+    // buffer keeps decoding, presenting and calling back (the dissolve's followers do the
+    // same), and comes back in the same style pass as the canvas goes.
+    if (G.canvas.parentElement) G.canvas.parentElement.classList.toggle('rc-graded', !!on);
     // a transition's layer is the page's while the canvas is off, the canvas's while it
     // is on (setMix): the page is told when that flips under it (a cut's LUT landing)
     if (was !== !!on && G.mix && typeof G.mix.onChange === 'function') setTimeout(G.mix.onChange, 0);
@@ -855,6 +1071,10 @@ onmessage = (e) => {
     G.videos = [...document.querySelectorAll('#player video.pvbuf')];   // app.js player.vids
     if (!canvas || !G.videos.length) return;
     G.canvas = canvas;
+    // show(): the buffers under an opaque canvas are not drawn (over any inline visibility)
+    const css = document.createElement('style');
+    css.textContent = '.rc-graded > video.pvbuf { visibility: hidden !important; }';
+    document.head.appendChild(css);
     if (!startWorker(canvas)) {
       try {
         G.R = Renderer(canvas, stage2d);
@@ -939,6 +1159,8 @@ onmessage = (e) => {
     draw: settle,
     probe,
     get draws() { return G.draws; },
+    get drawLog() { return G.drawLog; },
+    get yuv() { return G.yuv; },
     get mode() { return G.worker ? 'worker' : (G.R ? 'main' : 'off'); },
     get playRes() { return G.res; },
     set playRes(v) { setRes(String(v)); },
