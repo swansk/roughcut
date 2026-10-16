@@ -49,6 +49,13 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-15 22:40 EDT: VERDICT 8 FAIL on `1e99342` (1:8 2:9 3:9 4:9 5:9 6:7 7:8 8:9 9:8 10:7 11:9 12:9); judge's gate GREEN.
+  Blockers: K2; the Program silently black >= 11.5 s on shots whose preview is building (/media/proxy holds 20 s before
+  its 503); dims 6 and 10 at 7. Wave 11 lanes: BLACK (1: never black without a word, accepted cut previews first),
+  CHEAP (10: status endpoints + peaks from cached snapshots), CANVAS (2 + 3: measure + fix graded-canvas holes, dissolve
+  followers), LUMETRI (4: curves, wheels, HSL, scopes), FXBIN (5: Effects bin, dips, crossfade kinds, repeated-frame
+  transitions), SMALL2 (6 labels, 7 proxies toast once per pass, 8 export Esc + Ctrl+M). Lead: punch 9 flakes (fixed in
+  `8dbfb7f`, needs 20/20).
 - 2026-10-15 21:05 EDT: PERFGATE merged: perf runs at any load with 0 burners above 2x cores, before + after the suite,
   the better-conditioned run counts; pass = green (load named), fail above 2x = AMBER, fail at <= 2x = RED; rubric log
   entries for JOURNEY_SLOWEST_S and the 4K fixture. Lane gate on 3648975 GREEN. Wave 10 complete -> lead full gate -> judge 8.
