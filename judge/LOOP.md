@@ -49,6 +49,24 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-15 21:05 EDT: PERFGATE merged: perf runs at any load with 0 burners above 2x cores, before + after the suite,
+  the better-conditioned run counts; pass = green (load named), fail above 2x = AMBER, fail at <= 2x = RED; rubric log
+  entries for JOURNEY_SLOWEST_S and the 4K fixture. Lane gate on 3648975 GREEN. Wave 10 complete -> lead full gate -> judge 8.
+  Watch: test_floor_ui::test_a_clicked_verdict_drops_a_pending_batch_question flaked once in PERFGATE's forced run.
+- 2026-10-15 20:10 EDT: TXHITCH merged `d3f0881`. Cause of the dissolve hitch: followers driven by V2's progFollow seeked
+  every 110-150 ms (8-11 seeks/play). Now rate-corrected followers, LUT prefetch, TX_PRE 0.25 s, transition_handles widen
+  range proxies. Killington worst 83 ms (was 275) at load 12-15. Queued: the graded canvas holds 89-228 ms at plain cuts on
+  Killington (the perf test never measures the canvas); defer the next shot's park until a dissolve ends; hand the preroll
+  buffer to the incoming follower (one decoder less); a cheaper second upload in the grade worker.
+- 2026-10-15 20:45 EDT: CRAFT merged (stopwatch-off confirm dialog; Source transport 4 px gaps + container query; ghost
+  labels name / number / nothing; proxies toast once per pass; whole-clip drop on the clip's own grid). Queued: proxy count
+  has no job-pill home (S.proxies fetched, never shown); trims + Source In/Out on a mixed-rate sequence snap only to the
+  sequence grid (gridRange). Waiting on PERFGATE, TXHITCH.
+- 2026-10-15 19:40 EDT: BOOT merged `1b307a9` (cut on screen 0.8 s after a proxy lands, was 28.9 s; colour measured in the
+  proxy job + a niced background queue; gate line "board shows its cut"). EXPORTOK merged `e0f05ad` (held keys fold to
+  static, no empty sendcmd; failed export names the shot + Go to shot / Show log; review copy in a procscope; journey 20
+  steps with an opacity-key step). Queued: a V1 clip with no audio stream fails its part (Premiere exports silence);
+  boot still awaits /api/colour, which ffprobes every clip on a cold server; niced colour queue can take minutes at load 15.
 - 2026-10-15 19:05 EDT: VERDICT 7 FAIL on `273b1f1` (1:8 2:9 3:9 4:9 5:9 6:8 7:8 8:5 9:8 10:5 11:9 12:9). Blockers: K2; one Opacity
   key breaks every export (empty sendcmd); the board blank ~30 s after a proxy lands (boot awaits /api/junk, which measures
   colour inside the GET); gate AMBER (perf skipped at load 14). Wave 10 lanes (punch 1-4, 7-10):
