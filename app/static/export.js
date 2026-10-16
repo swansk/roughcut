@@ -372,6 +372,9 @@
       } catch (_) { dlg.querySelector('#exFilePath').select(); }
     });
     dlg.querySelector('#exClose').addEventListener('click', () => close());
+    // focus stays in the dialog (its body was just replaced under the focused button):
+    // Escape then reaches the dialog's own cancel, and Enter is Close, Premiere's default
+    dlg.querySelector('#exClose').focus();
   }
 
   /* ------------------------------------------------------------ the job */
@@ -547,19 +550,59 @@
   }
 
   /* ------------------------------------------------------------ open / close */
+  /* Ctrl+M shows the dialog at once (verdict 8, punch 8: 138-193 ms on Killington). The
+   * shell is built once and kept; a second open paints the settings from the last
+   * /api/export at once, in the same frame as showModal, and the fresh answer repaints
+   * them when it lands — unless a field was already touched, when only the figures the
+   * answer feeds (presets, recent folders) are taken from it. The first open of a page
+   * shows "Reading the sequence…" until the answer is here, as before. */
+  let touched = false;
+  dlg.addEventListener('input', () => { touched = true; });
+  dlg.addEventListener('change', () => { touched = true; });
+  let opening = 0;
+  let infoText = '';            // /api/export's last answer, as sent
   async function open() {
     if (dlg.open) return;
     if (phase === 'running' && job) { dlg.showModal(); return; }
-    shell();
-    dlg.querySelector('#exBody').innerHTML = '<div class="ex-note">Reading the sequence…</div>';
-    dlg.showModal();
+    if (!dlg.querySelector('#exBody')) shell();
+    const seq = ++opening;
+    touched = false;
+    if (info) {
+      paintSettings();
+      dlg.showModal();
+      focusName();
+    } else {
+      dlg.querySelector('#exBody').innerHTML = '<div class="ex-note">Reading the sequence…</div>';
+      dlg.querySelector('#exFoot').innerHTML = '';
+      dlg.showModal();
+    }
+    let fresh, text = '';
     try {
-      info = await (await fetch('/api/export')).json();
+      text = await (await fetch('/api/export')).text();
+      fresh = JSON.parse(text);
     } catch (err) {
-      dlg.querySelector('#exBody').innerHTML = `<div class="ex-note">Export is not available: ${esc(err.message)}</div>`;
+      if (!info && dlg.open && seq === opening) {
+        dlg.querySelector('#exBody').innerHTML = `<div class="ex-note">Export is not available: ${esc(err.message)}</div>`;
+      }
       return;
     }
+    const had = !!info;
+    // the same answer as last time: what is on screen is already it (no second paint —
+    // a repaint under a modal costs a whole-page style pass, ~8 ms on a 1.2k-node board)
+    if (had && text === infoText) return;
+    infoText = text;
+    if (had && touched) {
+      if (fresh && Array.isArray(fresh.presets)) info.presets = fresh.presets;
+      info.recent = fresh.recent; info.folders = fresh.folders;
+    } else {
+      info = fresh;
+    }
+    if (!dlg.open || seq !== opening || phase !== 'settings') return;
+    if (had && touched) { paintEstimate(); return; }
     paintSettings();
+    focusName();
+  }
+  function focusName() {
     const name = dlg.querySelector('#exName');
     if (name) { name.focus(); name.select(); }
   }
@@ -580,6 +623,18 @@
   });
   // Keys typed in the dialog stay in it: app.js plays and steps the cut from document.
   dlg.addEventListener('keydown', (e) => { if (e.key !== 'Escape') e.stopPropagation(); });
+  /* Verdict 8, punch 8: Escape left the finished dialog open (3 of 3). The done screen
+   * replaced the body under the focused Export button, so focus fell to <body>; there
+   * the timeline's keys (window, capture) took Escape as "clear the selection" and
+   * prevented it, and the dialog never heard its cancel. paintDone now focuses Close;
+   * and an Escape that lands outside the dialog while it is open (focus lost to the page
+   * some other way) closes it on keyup, as the first-pass panel does. */
+  window.addEventListener('keyup', (e) => {
+    if (e.key !== 'Escape' || !dlg.open || phase === 'running') return;
+    const t = e.target;
+    if (t && t.closest && t.closest('dialog')) return;     // the dialog's own cancel has it
+    close();
+  });
 
   /* Ctrl+M (Cmd+M on a Mac), Premiere's Export Media. On window in the capture phase;
    * timeline-keys.js binds ⌘⇧M and ⌘⌥M to markers, never a plain ⌘M. */
