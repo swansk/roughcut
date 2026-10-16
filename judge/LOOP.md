@@ -49,6 +49,14 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-16 00:35 EDT: FXBIN merged `e6fe1bc` (Effects bin, seven kinds with exact maths, drops on edits + clip ends,
+  defaults, repeated frames hatched). Budget re-measured with both tabs (97·53 etc.), logged. Queued from FXBIN: Film
+  Dissolve's two-shot mix previews in gamma space (needs a linear-light setMix mode, CANVAS asked); transition_handles
+  widens range proxies for dips (no handle needed). Running: BLACK, CHEAP, CANVAS.
+- 2026-10-15 23:35 EDT: SMALL2 merged `724e9a2`, LUMETRI merged `d6ae8e2` (Curves, Wheels, HSL, Scopes; budget +2 words +1
+  control logged). Punch 9: floor flake fix 10/10 at load 20-28; grade-worker test 9/10 (one 15 s timeout waiting for a
+  first frame at load 28: likely blocker 2's 20 s /media/proxy hold; re-run after BLACK). test_timeline_keys failed once in
+  SMALL2's run (unnamed), passed 3 reruns: watch. Running: BLACK, CHEAP, CANVAS, FXBIN.
 - 2026-10-15 22:40 EDT: VERDICT 8 FAIL on `1e99342` (1:8 2:9 3:9 4:9 5:9 6:7 7:8 8:9 9:8 10:7 11:9 12:9); judge's gate GREEN.
   Blockers: K2; the Program silently black >= 11.5 s on shots whose preview is building (/media/proxy holds 20 s before
   its 503); dims 6 and 10 at 7. Wave 11 lanes: BLACK (1: never black without a word, accepted cut previews first),
