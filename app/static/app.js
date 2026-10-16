@@ -1291,9 +1291,12 @@ function arm(v, seg, at = seg.in) {
   v._for = null;                    // armNext says which upcoming shot it holds
   v._used = performance.now();
   if (v.dataset.src !== src || (v.error && !v._waitStop)) {
+    if (v.dataset.src !== src) v._posterUp = false;
     v.dataset.src = src;
     if (v._waitStop) { v._waitStop(); v._waitStop = null; }
     v.src = src ? `${src}#t=${Math.max(0, at).toFixed(2)}` : src;
+    v._shown = false;               // a new file: no frame on screen until loadeddata
+    v._status = null;
     v.load();
     noteKind(v, src);
   }
@@ -1336,7 +1339,19 @@ async function mediaKind(src) {
 function noteKind(v, src) {
   v._kind = null;
   if (!src || !src.startsWith('/media/proxy/')) return;
-  mediaKind(src).then((k) => { if (v.dataset.src === src && v._kind == null) v._kind = k; });
+  fetch(statusUrl(src), { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).then((j) => {
+    if (!j || v.dataset.src !== src) return;
+    if (v._kind == null) v._kind = j.serves || null;
+    if (j.serves !== 'building') return;
+    // Verdict 8: its preview is still being made — on screen, the poster and the line at
+    // once (not NOFRAME_MS later), and a play goes on past it on the film clock.
+    v._status = j;
+    const seg = segs[player.idx];
+    if (v !== liveVideo() || !seg || proxyOf(seg) !== src || v._shown) return;
+    if (!v._posterUp) posterUp(v);
+    waitLine(seg, j);
+    if (player.playing && !player.off) offStart(player.idx);
+  }).catch(() => {});
 }
 
 async function freshen(v) {
@@ -1351,6 +1366,7 @@ async function freshen(v) {
   const t = v.currentTime;
   v._kind = k;
   v.src = `${src}#t=${Math.max(0, t).toFixed(2)}`;
+  v._shown = false;
   v.load();
   const park = () => {
     if (v.dataset.src === src && Math.abs(v.currentTime - t) > 0.002) { v.currentTime = t; seekTimed(v); }
@@ -1377,7 +1393,9 @@ function setShotRate(v, seg) {
 }
 
 function showLive() {
-  player.vids.forEach((v, k) => v.classList.toggle('live', k === player.cur));
+  // a buffer with no frame of its shot stays off screen: its poster shows (posterUp)
+  player.vids.forEach((v, k) => v.classList.toggle('live', k === player.cur && !v._posterUp));
+  if (liveVideo() && liveVideo()._posterUp) { clearTimeout(restT); paintRestStill(); }
   // The grade follows the monitor (INTAKE M10): the live video's shot picks the LUT.
   const g = gradeApi();
   if (g) g.setShot(segs[player.idx] ? segs[player.idx].id : null);
@@ -1446,28 +1464,177 @@ function monWait(on) {
 function mediaWaitFor(v) {
   const src = v.dataset.src;
   if (v._waitStop && v._waitFor === src) {
-    if (v === liveVideo()) { v.classList.remove('live'); clearTimeout(restT); paintRestStill(); }
+    if (v === liveVideo()) { posterUp(v); waitLine(segs[player.idx], v._status); }
     return;
   }
   if (v._waitStop) v._waitStop();
   v._waitFor = src;
+  v._status = { serves: 'building' };
   if (!src || !window.dock || typeof dock.mediaWait !== 'function') return;
   if (v === liveVideo()) {
-    v.classList.remove('live');            // the poster shows through, not a black box
-    clearTimeout(restT);
-    paintRestStill();
+    posterUp(v);                           // the poster shows through, not a black box
+    waitLine(segs[player.idx], v._status);
   }
   v._waitStop = dock.mediaWait(src, () => {
     v._waitStop = null;
+    v._status = null;
     if (v.dataset.src !== src) return;
     v.dataset.src = '';
     const seg = v === liveVideo() ? segs[player.idx] : null;
-    if (seg) { arm(v, seg); showLive(); return; }
+    if (seg) {
+      // Playing past the shot on the film clock: open it a little ahead of the clock and
+      // join there (offTick). Otherwise park on the playhead's frame; the buffer goes back
+      // on screen with its first frame (frameBack), so no black box shows meanwhile.
+      const o = player.off;
+      if (o && o.seg === seg) {
+        o.join = Math.min(seg.out - 0.05, offClip(o) + OFF_JOIN_S * speedOf(seg));
+        arm(v, seg, o.join);
+      } else {
+        arm(v, seg, playheadClip(player.idx));
+      }
+      v._posterUp = true;                  // the poster stays up until its frame (frameBack)
+      return;
+    }
     v.dataset.src = src;
     v.src = src;
+    v._shown = false;
     v.load();
     noteKind(v, src);
-  }, (why) => { const el = $('#monWait span'); if (el && v === liveVideo()) el.textContent = why; });
+  }, (why) => {
+    // no preview can be made for this clip: say so, and a play stops here
+    const el = $('#monWait span');
+    if (el && v === liveVideo()) {
+      el.textContent = why;
+      if (player.off) { player.off = null; pauseCut(); monWait(true); el.textContent = why; }
+    }
+  }, (j) => {
+    v._status = j;
+    if (v === liveVideo() && v.dataset.src === src) waitLine(segs[player.idx], j);
+  }, 1500);
+}
+
+/* ---------------------------------------------------------------- offline media
+ * Verdict 8 (blocker 2): right after the first pass, a shot whose clip's preview was still
+ * being made left the Program plain black for 11.5 s and more, with no word, and Play gave
+ * 0 frames: /media/proxy held the request 20 s before its 503, and only that 503 started
+ * the wait. The server answers within a second now; and the monitor never shows a buffer
+ * with no frame. NOFRAME_MS after a seek or a cut, a live buffer that has not shown a
+ * frame of its file (or errored) is taken off screen and the shot's poster at the
+ * playhead goes up with "preparing preview… CLIP_09 · ~N s" (the server's estimate).
+ * Playing, such a shot is played past on the film clock, as Premiere plays past offline
+ * media: the playhead, the timecode and the music bed run, the poster and the line stay,
+ * and at the shot's out-point the next shot plays. When the preview lands mid-shot the
+ * buffer opens a little ahead of the clock and takes over there. */
+const NOFRAME_MS = 300;
+const OFF_JOIN_S = 0.6;            // film seconds ahead of the clock a landed preview is opened
+
+function playheadClip(i) {
+  const seg = segs[i];
+  if (!seg) return 0;
+  const at = tl.shotAt(tl.state.playhead || 0);
+  return at && at.index === i ? Math.max(seg.in, Math.min(seg.out, at.clipT)) : seg.in;
+}
+
+/* The shot's poster at the playhead, and the calm line, instead of a buffer with no frame. */
+function posterUp(v) {
+  if (!v || v !== liveVideo()) return;
+  v._posterUp = true;
+  // every buffer: one still held on screen for the cut (showWhenReady) shows another shot
+  player.vids.forEach((b) => b.classList.remove('live'));
+  clearTimeout(restT);
+  paintRestStill();
+  monWait(true);
+}
+
+/* The buffer has its frame again: back on screen (not while the clock plays past it). */
+function frameBack(v) {
+  if (!v._posterUp || v !== liveVideo() || player.off || v.error || v.readyState < 2) return;
+  v._posterUp = false;
+  showLive();
+  paintRest();
+  monWait(false);
+}
+
+function waitLine(seg, j) {
+  const el = $('#monWait span');
+  if (!el || !seg) return;
+  const ready = j && j.ready && j.serves !== 'building';
+  const eta = j && j.eta_s != null ? ` · ~${Math.max(1, Math.round(j.eta_s))} s` : '';
+  el.textContent = ready ? `opening ${stem(seg.clip)}…` : `preparing preview… ${stem(seg.clip)}${eta}`;
+}
+
+/* NOFRAME_MS after a seek or a cut onto shot `seg` in buffer v: no frame yet → the poster
+ * and the line; the media still being made → playing, the clock plays past it. */
+function frameWatch(v, seg) {
+  setTimeout(() => {
+    if (v !== liveVideo() || segs[player.idx] !== seg || v._posterUp) return;
+    // its frame is up (a seek inside an open file keeps the last one on screen)
+    if (!v.error && (v._shown === true || (v._shown === undefined && v.readyState >= 2))) return;
+    posterUp(v);
+    waitLine(seg, v._status || (v.error ? { serves: 'building' } : null));
+    if (v.error) { mediaWaitFor(v); if (player.playing && !player.off) offStart(player.idx); return; }
+    const src = v.dataset.src;
+    if (!src || !src.startsWith('/media/proxy/')) return;
+    fetch(statusUrl(src), { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).then((j) => {
+      if (!j || v.dataset.src !== src || v !== liveVideo() || !v._posterUp) return;
+      v._status = j;
+      waitLine(seg, j);
+      if (j.serves === 'building' && player.playing && !player.off && segs[player.idx] === seg) offStart(player.idx);
+    }).catch(() => {});
+  }, NOFRAME_MS);
+}
+
+/* Play shot i past its missing media on the film clock, from clip time clipT. */
+function offStart(i, clipT) {
+  const seg = segs[i];
+  if (!seg) return;
+  const at = clipT == null ? playheadClip(i) : clipT;
+  player.off = { seg, t0: performance.now(), clip0: Math.max(seg.in, Math.min(seg.out, at)), join: null };
+  player.playing = true;
+  screenMsg('');
+  posterUp(liveVideo());
+  waitLine(seg, liveVideo() && liveVideo()._status);
+  paintTransport();
+  schedule();
+}
+
+function offClip(o) {
+  const v = liveVideo();
+  const shuttle = Math.max(0.1, (v && v.defaultPlaybackRate) || 1);
+  return o.clip0 + ((performance.now() - o.t0) / 1000) * shuttle * speedOf(o.seg);
+}
+
+/* One frame of the film clock (boundary()'s twin): true when the shot ended and the
+ * monitor moved on, or the clock gave way to a buffer that now has the shot. */
+function offTick() {
+  const o = player.off;
+  const seg = segs[player.idx];
+  if (!seg || seg !== o.seg) { player.off = null; return false; }   // edited out from under it
+  const clipT = Math.min(seg.out, offClip(o));
+  const filmT = filmAt(player.idx, clipT);
+  paintPos(filmT, clipT, seg);
+  bedTick(filmT, clipT, seg);
+  const v = liveVideo();
+  if (o.join != null && v.dataset.src === proxyOf(seg) && !v.error) {
+    if (v.readyState >= 2 && !v.seeking && clipT >= o.join - 0.03) {
+      player.off = null;                   // the preview landed: the buffer takes over
+      v._posterUp = false;
+      showLive();
+      paintRest();
+      monWait(false);
+      setShotRate(v, seg);
+      v.muted = a1Moved(seg);
+      const g = player.gen;
+      v.play().catch((err) => { if (g === player.gen) playRefused(err); });
+      return false;
+    }
+    if (clipT > o.join + 0.25 && seg.out - clipT > 1 && v.readyState >= 1) {   // late: again, ahead
+      o.join = Math.min(seg.out - 0.05, clipT + OFF_JOIN_S * speedOf(seg));
+      v.currentTime = o.join;
+    }
+  }
+  if (clipT >= seg.out - 0.04) { player.off = null; advance(); return true; }
+  return false;
 }
 
 /* A refused play is a fact about the browser, not about the cut, and it has to reach
@@ -1477,6 +1644,12 @@ function playRefused(err) {
   // No playable source yet (the proxy is building): the calm wait, not a refusal.
   if (err && (err.name === 'NotSupportedError' || err.name === 'AbortError')) {
     const v = liveVideo();
+    // the shot's preview is still being made: play past it on its poster (offline media)
+    if (err.name === 'NotSupportedError' && player.playing && v && v.error && segs[player.idx]) {
+      mediaWaitFor(v);
+      if (!player.off) offStart(player.idx);
+      return;
+    }
     pauseCut();
     monWait(true);
     if (v) mediaWaitFor(v);
@@ -1519,7 +1692,18 @@ function playFrom(i, { single = false } = {}) {
   });
   // The shot's media is not ready (no proxy yet, waiting on /media/status): the poster at
   // the playhead and the calm line stay; the wait loads it, and the next play plays.
-  if (v.error) { mediaWaitFor(v); monWait(true); player.playing = false; paintTransport(); return; }
+  // Verdict 8: Play plays past it on the film clock, as Premiere plays past offline media.
+  if (v.error) {
+    mediaWaitFor(v);
+    const filmT0 = filmAt(i, playheadClip(i));
+    cueBed(filmT0);
+    tl.setPlayhead(filmT0);
+    offStart(i, playheadClip(i));
+    tl.render();
+    return;
+  }
+  player.off = null;
+  frameWatch(v, seg);
   v.muted = a1Moved(seg);           // a moved sound plays from #pvA1 (programSync)
   const go = () => {
     if (g !== player.gen || !player.playing) return;   // pause, or a later command, won
@@ -1564,7 +1748,7 @@ function cueAt(i, clipT) {
   showWhenReady(g, (b) => b.readyState >= 2 && !b.seeking, () => {
     if (g === player.gen) armUpcoming(i, g);
   });
-  if (v.error) { mediaWaitFor(v); monWait(true); }
+  if (v.error) { mediaWaitFor(v); monWait(true); } else frameWatch(v, seg);
   paintPos(filmAt(i, at), at, seg);
   paintTransport();
   tl.render();
@@ -1572,6 +1756,7 @@ function cueAt(i, clipT) {
 
 function pauseCut() {
   player.gen++;                     // any shot still opening must not start behind this
+  player.off = null;                // a clock playing past a shot stops where it is
   player.vids.forEach((v) => v.pause());
   if (bed.el) bed.el.pause();
   player.playing = false;
@@ -2030,6 +2215,7 @@ function toggleCut() {
  * shot ends at its `out` in CLIP time whatever its speed; the film position it reports
  * is the clip offset at the rate. */
 function boundary() {
+  if (player.off) return offTick();   // a shot whose preview is being made: the film clock
   const v = liveVideo();
   const seg = segs[player.idx];
   if (!seg) { pauseCut(); return true; }
@@ -2066,6 +2252,7 @@ function prerollAt(seg, room = Infinity) {
 
 function armNext(v, seg, room) {
   const at = prerollAt(seg, room);
+  v._posterUp = false;              // off screen: whatever poster stood in for it is gone
   // the grade fetches the next shot's LUT and makes its texture now, not at the cut
   const gr = gradeApi();
   if (gr && typeof gr.prefetch === 'function') gr.prefetch(seg.id);
@@ -2179,6 +2366,7 @@ function tick() {
 /* The shot ended: stop, or hand over to the buffer that is holding the next one. */
 function advance() {
   const v = liveVideo();
+  player.off = null;
   v.pause();
   const g = ++player.gen;           // the shot we are leaving must not restart itself
   const next = player.idx + 1;
@@ -2244,6 +2432,10 @@ function advance() {
   };
   screenMsg('');                    // mid-play: the held frame, never words over it
   if (nv.readyState >= 1) go(); else nv.addEventListener('loadedmetadata', go, { once: true });
+  // Verdict 8: the next shot's media is still being made (its park got the 503): played
+  // past on its poster and the film clock; not known yet: looked at NOFRAME_MS from now.
+  if (nv.error || nv._waitStop) { mediaWaitFor(nv); offStart(next, segs[next].in); }
+  else frameWatch(nv, segs[next]);
   // What the cut does not need on its own frame waits for the new shot's first frames:
   // the buffer we left takes the shot after this one (above), Effect Controls rebuilds
   // for the new shot and the timeline repaints — at load 20 those were ~100 ms of main
@@ -2299,7 +2491,7 @@ function syncPlayer() {
     if (words) words.textContent = 'the sequence is empty · drag a clip to the Timeline or press , (Insert)';
   }
   if (player.idx >= segs.length) { pauseCut(); player.idx = -1; }
-  if (player.playing && player.idx >= 0) {
+  if (player.playing && player.idx >= 0 && !player.off) {
     const seg = segs[player.idx];
     const v = liveVideo();
     const src = (P.clips[seg.clip] || {}).proxy || '';
@@ -5032,22 +5224,33 @@ async function boot() {
     // A proxy that is missing or half-built is a wait, not an error (punch 5): the
     // poster at the playhead with "preparing preview…", and the same URL again once the
     // server says it is ready. Never MEDIA_ELEMENT_ERROR.
+    // Verdict 8: playing, a shot whose media is not there (the 503 of a preview still
+    // being made: MEDIA_ERR_SRC_NOT_SUPPORTED) is played past on its poster and the film
+    // clock rather than stopping the cut; anything else stops it, as before.
     v.addEventListener('error', () => {
-      if (v === liveVideo()) { pauseCut(); monWait(true); }
+      const off = v === liveVideo() && player.playing && v.error && v.error.code === 4
+        && !!segs[player.idx];
+      if (v === liveVideo() && !off) { pauseCut(); monWait(true); }
       mediaWaitFor(v);
+      if (off && !player.off) offStart(player.idx);
     });
     v.addEventListener('playing', () => {
       clearTimeout(v._stallT);
-      if (v === liveVideo()) { screenMsg(''); monWait(false); }
+      if (v === liveVideo() && !player.off) { screenMsg(''); monWait(false); }
     });
-    v.addEventListener('loadeddata', () => { if (v === liveVideo()) monWait(false); });
+    v.addEventListener('loadeddata', () => {
+      v._shown = true;
+      if (v === liveVideo() && !player.off) monWait(false);
+      frameBack(v);
+    });
+    v.addEventListener('seeked', () => frameBack(v));
     // A stall mid-play holds the frame on screen and says nothing (verdict 5 punch 2: a
     // dimmed "buffering…" over a black box at a short shot); only a stall long enough to
     // notice gets the calm line under the picture.
     v.addEventListener('waiting', () => {
       clearTimeout(v._stallT);
       v._stallT = setTimeout(() => {
-        if (v === liveVideo() && player.playing && (v.readyState < 3 || v.seeking)) monWait(true);
+        if (v === liveVideo() && player.playing && !player.off && (v.readyState < 3 || v.seeking)) monWait(true);
         // Chromium can leave an element idle after a seek (readyState < 3, networkState IDLE):
         // waiting forever, fetching nothing. Re-issuing the seek makes it fetch again (the same
         // stall /floor's band replay hit in the gate; instrumented there).

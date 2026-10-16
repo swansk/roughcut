@@ -165,7 +165,16 @@ def test_a_clip_the_browser_cannot_play_gets_a_preview_first(fresh, tmp_path):
     smaller h264 preview with a keyframe every half second, and redirects to it."""
     c, server = fresh["client"], fresh["server"]
     t0 = time.monotonic()
-    r = c.get("/media/proxy/CLIP_M.mp4", follow_redirects=False)
+    # Verdict 8: the ask never holds more than a second; while the preview is still being
+    # made it is a 503 with retry-after, and the board asks again (here: at once)
+    while True:
+        a0 = time.monotonic()
+        r = c.get("/media/proxy/CLIP_M.mp4", follow_redirects=False)
+        assert time.monotonic() - a0 <= 1.0, "held the request"
+        if r.status_code != 503 or time.monotonic() - t0 > 5.0:
+            break
+        assert 1 <= int(r.headers["retry-after"]) <= 10
+        time.sleep(0.1)
     took = time.monotonic() - t0
     assert r.status_code == 307, (r.status_code, r.text[:200])
     assert r.headers["location"] == server.preview_url("CLIP_M")
@@ -323,9 +332,17 @@ def test_a_video_element_has_a_frame_within_five_seconds_with_no_proxies(media_b
                     document.body.appendChild(v);
                     const t0 = performance.now();
                     v.src = `/media/proxy/${stem}.mp4`;
+                    // a 503 while the preview is made (verdict 8: answered at once, not
+                    // held): the board asks /media/status and loads the URL again
+                    let tries = 0;
+                    v.addEventListener('error', async () => {
+                        if (++tries > 20) return;
+                        await new Promise(r => setTimeout(r, 150));
+                        v.src = `/media/proxy/${stem}.mp4`;
+                    });
                     await new Promise((ok, bad) => {
                         const tick = () => v.readyState >= 2 ? ok() :
-                            v.error ? bad(new Error('media error ' + v.error.code)) :
+                            v.error && tries > 20 ? bad(new Error('media error ' + v.error.code)) :
                             performance.now() - t0 > 5000 ? bad(new Error('timeout rs=' + v.readyState)) :
                             setTimeout(tick, 20);
                         tick();

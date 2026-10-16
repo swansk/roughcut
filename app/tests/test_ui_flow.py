@@ -1105,8 +1105,12 @@ def test_a_media_error_is_shown_on_the_monitor_not_swallowed(page):
     assert "preparing preview" in page.locator("#monWait").inner_text()
     text = page.locator("#pProgram").inner_text()
     assert "MEDIA_ELEMENT_ERROR" not in text and "code 4" not in text, text
-    page.wait_for_function("!player.playing", timeout=5000)   # a dead buffer stops it
-    assert page.locator("#playCut").inner_text().startswith("▶")
+    # Verdict 8: a shot whose media is still being made is played past on the film clock
+    # (Premiere's offline media), not stopped on: the playhead runs with the line up, and
+    # the cut ends (this fixture's shot 1 is the last one that plays) or moves on.
+    ph0 = page.evaluate("tl.state.playhead")
+    page.wait_for_function(f"tl.state.playhead > {ph0} + 0.3 || !player.playing", timeout=5000)
+    assert page.evaluate("!!player.off || !player.playing")
 
 
 def test_a_refused_play_is_named_on_the_monitor(page):
