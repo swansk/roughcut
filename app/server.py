@@ -2959,10 +2959,11 @@ def _snap_targets() -> list[tuple[Path, tuple[str, ...]]]:
             + [(f.parent, (f.name,)) for f in files])
 
 
-def snap_poll() -> None:
-    """Drain the watch (one non-blocking read; safe on the event loop). A change bumps
-    the generation and is kept for `_snap_settle`."""
-    ch = SNAP_WATCH.changes()
+def snap_poll(blocking: bool = True) -> None:
+    """Drain the watch (one non-blocking read; safe on the event loop with `blocking`
+    False, which never waits for a re-arm). A change bumps the generation and is kept
+    for `_snap_settle`."""
+    ch = SNAP_WATCH.changes(blocking)
     if ch is None or ch:
         SNAP["gen"] += 1
         SNAP["rearm"] = True
@@ -3007,7 +3008,7 @@ def _snap_key() -> tuple:
 
 def snap_hit(name: str) -> bool:
     """Is `name`'s snapshot current? Event-loop safe: no disk, one read of the watch."""
-    snap_poll()
+    snap_poll(blocking=False)
     if SNAP["rearm"] or SNAP["armed"] != _snap_paths():
         return False
     hit = SNAP["cache"].get(name)

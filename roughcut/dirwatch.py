@@ -119,13 +119,16 @@ class DirWatch:
                 off += EVENT.size + n
                 out.append((wd, mask, os.fsdecode(name)))
 
-    def changes(self) -> list[tuple[Path, str]] | None:
+    def changes(self, blocking: bool = True) -> list[tuple[Path, str]] | None:
         """The (directory, name) pairs that changed since the last call, filtered by
         the targets' patterns; `(dir, "")` for a watched directory itself going away
-        or the queue overflowing. None when there is no inotify."""
+        or the queue overflowing. None when there is no inotify — or, `blocking`
+        False, when `arm` holds the watch right now (the caller cannot know: a miss)."""
         if self.fd is None:
             return None
-        with self.lock:
+        if not self.lock.acquire(blocking=blocking):
+            return None
+        try:
             raw = self._drain()
             out: list[tuple[Path, str]] = []
             for wd, mask, name in raw:
@@ -145,3 +148,5 @@ class DirWatch:
                 if any(fnmatch.fnmatchcase(name, p) for p in pats):
                     out.append((d, name))
             return out
+        finally:
+            self.lock.release()
