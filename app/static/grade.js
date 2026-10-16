@@ -773,7 +773,7 @@ onmessage = async (e) => {
     let s = Math.min(1, bw / vw, bh / vh);
     // (the worker's planes path uploads each frame at the size it is read, a third of the
     // RGBA bytes: a dissolve's two frames fit at PLAY_W, and the canvas keeps its size)
-    const mixW = mixing && !G.yuv ? MIX_W : PLAY_W;
+    const mixW = mixing && !G.yuv ? MIX_W : (G.yuv ? G.autoW : PLAY_W);
     if (playing) s = RES[G.res] == null ? Math.min(s, mixW / vw) : s * RES[G.res];
     if (s > 0.9) return [vw, vh];   // near full size: the scale costs more than it saves
     // within 3 % of half the frame: exactly half, where the worker's planes are one texel a
@@ -862,6 +862,31 @@ onmessage = async (e) => {
     }
   }
 
+  /* Auto, learned (wave 11 CANVAS): on the planes path the worker's frame is gated by the
+   * GL's own work (the software GL of a headless box: shading and the commit's read-back,
+   * 20-30 ms a frame at load 15 on Killington, where the worker's JS is 0.5-5). When a
+   * played frame's draw lands more than AUTO_SLOW_MS after it was posted (a running mean),
+   * Auto draws the picture one step smaller (640 → 544 → 448 px wide, the shading scales
+   * with it); when it lands well inside the frame for a while, one step back up. Only Auto
+   * learns (Full, 1/2 and 1/4 are what they say), and a paused frame is always full size. */
+  const AUTO_STEPS = [PLAY_W, 544, 448];
+  const AUTO_SLOW_MS = 28, AUTO_FAST_MS = 14;
+  G.autoW = PLAY_W;
+  const auto = { ema: 0, n: 0 };
+  function autoLearn(m) {
+    if (!m.yuv || G.res !== 'auto' || G.mix) return;
+    const lag = (m.at - performance.timeOrigin) - (m.sent || 0);
+    if (!(lag >= 0 && lag < 1000)) return;
+    auto.ema = auto.n ? auto.ema * 0.85 + lag * 0.15 : lag;
+    auto.n++;
+    const i = AUTO_STEPS.indexOf(G.autoW);
+    if (auto.n >= 10 && auto.ema > AUTO_SLOW_MS && i < AUTO_STEPS.length - 1) {
+      G.autoW = AUTO_STEPS[i + 1]; auto.n = 0;
+    } else if (auto.n >= 90 && auto.ema < AUTO_FAST_MS && i > 0) {
+      G.autoW = AUTO_STEPS[i - 1]; auto.n = 0;
+    }
+  }
+
   const DRAW_LOG = 600;
   function fromWorker(e) {
     const m = e.data || {};
@@ -873,6 +898,7 @@ onmessage = async (e) => {
         G.drawLog.push({ t: r1(m.at - performance.timeOrigin), ts: m.ts, ms: r1(m.ms), yuv: !!m.yuv,
                          made: r1(m.made || 0), sent: r1(m.sent || 0), got: r1(m.got - performance.timeOrigin) });
         if (G.drawLog.length > DRAW_LOG) G.drawLog.splice(0, G.drawLog.length - DRAW_LOG);
+        autoLearn(m);
       }
       if (G.pending) { const p = G.pending; G.pending = null; post(p); }
     } else if (m.t === 'ready' && m.ok) {
@@ -1105,14 +1131,6 @@ onmessage = async (e) => {
     if (!G.canvas) return;
     const was = G.canvas.classList.contains('on');
     G.canvas.classList.toggle('on', !!on);
-    // The canvas is opaque over the buffers: while it is on they are not drawn (wave 11
-    // CANVAS). On a software compositor every buffer frame under it was still converted to
-    // RGB (VideoResourceUpdater) and drawn by the display compositor, under a picture that
-    // hides it — CPU the box's decoders then lacked (Killington at load 13-20: the live
-    // buffer itself fell to 23-26 fps while the canvas played). Hidden by visibility, a
-    // buffer keeps decoding, presenting and calling back (the dissolve's followers do the
-    // same), and comes back in the same style pass as the canvas goes.
-    if (G.canvas.parentElement) G.canvas.parentElement.classList.toggle('rc-graded', !!on);
     // a transition's layer is the page's while the canvas is off, the canvas's while it
     // is on (setMix): the page is told when that flips under it (a cut's LUT landing)
     if (was !== !!on && G.mix && typeof G.mix.onChange === 'function') setTimeout(G.mix.onChange, 0);
@@ -1337,10 +1355,6 @@ onmessage = async (e) => {
     G.videos = [...document.querySelectorAll('#player video.pvbuf')];   // app.js player.vids
     if (!canvas || !G.videos.length) return;
     G.canvas = canvas;
-    // show(): the buffers under an opaque canvas are not drawn (over any inline visibility)
-    const css = document.createElement('style');
-    css.textContent = '.rc-graded > video.pvbuf { visibility: hidden !important; }';
-    document.head.appendChild(css);
     if (!startWorker(canvas)) {
       try {
         G.R = Renderer(canvas, stage2d);
@@ -1431,6 +1445,7 @@ onmessage = async (e) => {
     get draws() { return G.draws; },
     get drawLog() { return G.drawLog; },
     get yuv() { return G.yuv; },
+    get autoW() { return G.autoW; },
     get mode() { return G.worker ? 'worker' : (G.R ? 'main' : 'off'); },
     get playRes() { return G.res; },
     set playRes(v) { setRes(String(v)); },
