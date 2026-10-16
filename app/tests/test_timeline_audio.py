@@ -136,7 +136,15 @@ def test_peaks_are_the_clips_real_sound_and_are_cached(server_url, tproject):
     import httpx
     import server
 
-    r = httpx.get(f"{server_url}/api/peaks/TONE?pps=50", timeout=60)
+    # made by the server's worker, never inside the request (wave 11 CHEAP): 202
+    # {pending} at once until they exist, then the clip's pairs
+    deadline = time.time() + 60
+    while True:
+        r = httpx.get(f"{server_url}/api/peaks/TONE?pps=50", timeout=60)
+        if r.status_code != 202 or time.time() > deadline:
+            break
+        assert r.json()["pending"] is True and "no-store" in r.headers["cache-control"]
+        time.sleep(0.1)
     assert r.status_code == 200, r.text
     p = r.json()
     assert p["pps"] == 50 and p["duration"] == pytest.approx(4.0, abs=0.06)
