@@ -343,6 +343,13 @@ body.ws-resizing.col { cursor: col-resize; } body.ws-resizing.row { cursor: row-
 .srcbar .head { position: absolute; top: 0; width: 2px; height: 16px; background: var(--tc);
                 margin-left: -1px; }
 #source .transport .btns .ins { width: auto; padding: 1px 8px; border-color: var(--line); }
+/* At least 4 px between any two of the Source's controls (verdict 7, punch 8: at the
+   343 px a waiting proposal leaves it, the timecode touched Mark In and Insert touched
+   the duration). The buttons stand 4 px apart; when the panel is too narrow for the
+   timecode, the six buttons and the duration side by side, the duration goes first
+   (the timecode and the scrub bar still say where you are). */
+#source .transport .btns { gap: 4px; }
+@container (max-width: 440px) { #srcDur { display: none; } }
 
 /* ------------------------------------------------------------ project panel */
 .projbar { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }

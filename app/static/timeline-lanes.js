@@ -680,6 +680,28 @@
     return strip;
   }
 
+  /* A ghost's label, measured rather than left to an ellipsis (verdict 7, punch 8: at fit
+   * zoom Killington's ghosts read "C…"): the clip's name when it fits beside the speed
+   * badge and the notes' "!", else its number ("05" for CLIP_05), else nothing — the
+   * tooltip always names it. Widths from a canvas, no layout read: the .gtxt band is
+   * 11 px text with 5 px padding a side, inside the ghost's 1 px border. */
+  let textCtx = null;
+  function textW(s, italic, family) {
+    if (!s) return 0;
+    if (!textCtx) textCtx = document.createElement('canvas').getContext('2d');
+    if (!textCtx) return s.length * 7;
+    textCtx.font = `${italic ? 'italic ' : ''}11px ${family}`;
+    return textCtx.measureText(s).width;
+  }
+  function ghostLabel(name, badge, width, flagged, italic, family) {
+    const room = width - 2 - 10 - (flagged ? 14 : 0) - 1;    // border, padding, the "!", a pixel clear
+    const bw = badge ? 5 + textW(badge, false, family) : 0;  // the badge and its 5 px margin
+    const fits = (s) => textW(s, italic, family) <= room - bw;
+    const num = (/(\d{2,})$/.exec(String(name || '')) || [])[1] || '';
+    const pick = name && fits(name) ? name : num && fits(num) ? num : '';
+    return { name: pick, badge: bw <= room ? badge : '' };
+  }
+
   function drawGhost(a) {
     const plan = pendingPlanOf(a);
     const lane = el.ghost;
@@ -718,6 +740,7 @@
     const laneH = tl.el.lanes.V1.offsetHeight || 72;
     const canReview = reviewable(plan);
     lane.classList.toggle('reviewing', canReview);
+    const font = getComputedStyle(lane).fontFamily || 'sans-serif';   // one style read per draw
 
     for (const g of ghost.ghosts) {
       const d = div(`ghost ${g.cls}${g.trimmed ? ' trimmed' : ''}${isGen(g.seg.clip) ? ' gen' : ''}`);
@@ -733,11 +756,15 @@
       const txt = div('gtxt');
       txt.innerHTML = '<span class="name"></span><span class="dur"></span>';
       d.appendChild(txt);
-      d.querySelector('.name').textContent = tl.blockName(g.seg, a && a.P && a.P.clips ? a.P.clips[g.seg.clip] || null : null);
-      // like V1: a badge only when the shot is retimed; the length is the tooltip's
-      d.querySelector('.dur').textContent = s === 1 ? '' : `${round2(s)}×`;
       const what = g.cls === 'added' ? 'added' : g.cls === 'moved' ? 'moved' : g.trimmed ? 'trimmed' : 'unchanged';
       const f = canReview ? shotFacts(plan, g.k) : null;
+      // like V1: a badge only when the shot is retimed; the length is the tooltip's.
+      // The label is never cut to "C…" (verdict 7, punch 8): it is what fits.
+      const lab = ghostLabel(tl.blockName(g.seg, a && a.P && a.P.clips ? a.P.clips[g.seg.clip] || null : null),
+                             s === 1 ? '' : `${round2(s)}×`, Math.max(3, dur * z),
+                             !!(f && f.flags.length), isGen(g.seg.clip), font);
+      d.querySelector('.name').textContent = lab.name;
+      d.querySelector('.dur').textContent = lab.badge;
       d.title = `proposal ${g.k + 1}. ${nameOf(g.seg.clip)} ${tl.fmt(g.seg.in)}–${tl.fmt(g.seg.out)} (${dur.toFixed(1)}s`
         + `${s === 1 ? '' : ` at ${round2(s)}×`}) · ${what}${f && f.words ? ` · ${f.words}` : ''}`
         + (g.seg.why ? `\nwhy: ${g.seg.why}` : '')
@@ -983,7 +1010,9 @@
   function insertAt(shot, beforeId) {
     if (!shot || !shot.clip || !(shot.end > shot.start)) return null;
     tl.begin('insert');
-    const id = tl.insert({ clip: shot.clip, in: round2(shot.start), out: round2(shot.end), why: shot.why || '' }, null);
+    // the range as it came (tl.insert puts it on the grid and inside the clip's media);
+    // rounding it to 0.01 first moved a whole clip's end past its last frame (verdict 7)
+    const id = tl.insert({ clip: shot.clip, in: Number(shot.start), out: Number(shot.end), why: shot.why || '' }, null);
     if (id != null && beforeId != null) tl.move([id], beforeId);
     tl.commit();
     const toast = fn('toast');
@@ -1390,6 +1419,9 @@
     redraw, slotAt, playRange, playPlan, insertAt, MIME,
     showGhost, clearGhost,
     setVerdict, verdict, keepRemoved, reviewed, shotFacts,
+    // a ghost's label at a width (tests): {name, badge}, what drawGhost writes
+    ghostLabel: (name, width, badge = '', flagged = false) => ghostLabel(name, badge, width, flagged, false,
+      getComputedStyle(el.ghost || document.body).fontFamily || 'sans-serif'),
     picks: () => [...document.querySelectorAll('#tl .tl-pick')].map((m) => ({
       t: Number(m.dataset.t), title: m.title, ghost: m.classList.contains('on-ghost') })),
     ghost: () => ghost,

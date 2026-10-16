@@ -2793,11 +2793,25 @@
     return r4(seg.in + (n / gridRate()) * speedOf(seg));
   }
 
-  /* A shot about to go in: its range on the grid. */
+  /* The end of a clip's media on its OWN frame grid (verdict 7, punch 9): its length
+   * floored to whole frames of the clip's rate when the record has one, so a whole-clip
+   * drop on a sequence of another rate (CLIP_05, 29.97, on a 59.94 sequence ended at
+   * 35.1851, half a frame) still ends on one of the clip's frames. NTSC rates as
+   * gridRate reads them (29.97 is 30000/1001). Unrounded: gridRange floors it to the
+   * sequence's grid. */
+  function clipEnd(c) {
+    const d = c && Number(c.duration) > 0 ? Number(c.duration) : undefined;
+    let r = c ? Number(c.fps) : 0;
+    if (d === undefined || !(r > 0 && r < 1000)) return d;
+    const n = Math.round(r * 1.001);
+    if (Math.abs(r - Math.round(r)) > 0.004 && Math.abs(r - n / 1.001) < 0.004) r = n / 1.001;
+    return Math.floor(d * r + 1e-4) / r;
+  }
+
+  /* A shot about to go in: its range on the grid, inside the clip's media. */
   function gridded(seg) {
-    const c = clipOf(seg.clip);
     const [a, b] = gridRange(Number(seg.in), Number(seg.out), speedOf(seg), null,
-                             c && c.duration ? c.duration : undefined);
+                             clipEnd(clipOf(seg.clip)));
     return { ...seg, in: a, out: b };
   }
 

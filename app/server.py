@@ -760,6 +760,37 @@ def clip_duration(clip: str) -> float | None:
     return d
 
 
+def on_clip_grid(d: float | None, fps) -> float | None:
+    """A clip's length as whole frames of its own rate (verdict 7, punch 9).
+
+    The sidecar's `duration_s` is the sound's length (CLIP_05: 35.2 s against 1057
+    frames of picture), so a whole-clip drop on a 59.94 sequence ended at 35.1851, half
+    a 29.97 frame — and the 29.97 export came out 16 ms shorter than the timeline said.
+    The length the board is told is floor(d × fps) / fps; written up to the microsecond,
+    so `out × fps` reads back as the whole count (never a hair under it). Unchanged when
+    the rate is not known."""
+    if d is None or fps is None:
+        return d
+    try:
+        f = float(fps)
+    except (TypeError, ValueError):
+        return d
+    if not 1.0 <= f <= 1000.0:
+        return d
+    r = float(Fraction(fps_rational(f)))
+    n = math.floor(float(d) * r + 1e-6)
+    x = round(n / r, 6)
+    if x * r < n - 1e-7:
+        x = round(x + 1e-6, 6)
+    return x
+
+
+def clip_rate(clip: str) -> float | None:
+    """The clip's frame rate when its free facts are already known — never a probe, so
+    nothing that serves the board waits on one (they are warmed at configure)."""
+    return (STATE.get("clip_facts", {}).get(clip) or {}).get("fps")
+
+
 def look_interval() -> float:
     """The sample interval the look pass runs at for this project — the open screen's one
     slider. Kept in the EDL (`look.interval_s`) because it is a property of the project,
@@ -894,10 +925,13 @@ def project_payload() -> dict:
     for p in sorted(STATE["sidecars"].glob("*.audio.json")):
         d = json.loads(p.read_text(encoding="utf-8"))
         clip = d["clip"]
+        rate = clip_rate(clip)
         clips[clip] = {
             "clip": clip,
             "stem": Path(clip).stem,
-            "duration": d["duration_s"],
+            # whole frames of the clip's own rate (verdict 7, punch 9), and that rate
+            "duration": on_clip_grid(d["duration_s"], rate),
+            "fps": rate,
             "proxy": f"/media/proxy/{Path(clip).stem}.mp4",
             # The card's picture: this URL plus ?t=<in-point>. A card is a still, not
             # a stream — see /media/poster for what sixteen streams cost the monitor.
@@ -5194,7 +5228,8 @@ def unheard_clip(clip: str, used: bool = False) -> dict:
     free facts, no transcript, no candidates. `heard: False` says which."""
     stem = Path(clip).stem
     return {
-        "clip": clip, "stem": stem, "duration": clip_duration(clip),
+        "clip": clip, "stem": stem, "duration": on_clip_grid(clip_duration(clip), clip_rate(clip)),
+        "fps": clip_rate(clip),
         "proxy": f"/media/proxy/{stem}.mp4", "poster": poster_url(stem),
         "transcript": [], "visual": load_visual(clip), "captured": capture_time(clip),
         "candidates": [],
@@ -5244,7 +5279,7 @@ def api_clips() -> JSONResponse:
         f = known.get(clip) or {}
         out.append({
             "clip": clip, "stem": stem,
-            "duration": clip_duration(clip) if ok else None,
+            "duration": on_clip_grid(clip_duration(clip), f.get("fps")) if ok else None,
             "captured": capture_time(clip) if ok else None,
             "session": session_of.get(clip),
             "proxy": (STATE["proxy_dir"] / f"{stem}.mp4").exists(),
