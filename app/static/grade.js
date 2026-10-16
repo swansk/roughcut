@@ -73,6 +73,52 @@
         gl_Position = vec4(a_pos, 0.0, 1.0);
       }`;
 
+    /* Lumetri beyond Basic (wave 11, LUMETRI): Curves and Color Wheels as one 256-entry
+     * table per channel (u_ctab, built from THE formula by LUMETRI below), then the HSL
+     * Secondary (u_hsl0..3). roughcut/colour.py has the formula in words and the render's
+     * twin; `tex` is the GLSL texture call of the version. */
+    const CREATIVE = (tex) => `
+      uniform sampler2D u_ctab;
+      uniform float u_ctabOn;
+      uniform vec4 u_hsl0;      // hue°, width°, hue softness°, sat/light softness
+      uniform vec4 u_hsl1;      // sat lo, sat hi, light lo, light hi (0..1)
+      uniform vec4 u_hsl2;      // cos(shift), sin(shift), saturation/100
+      uniform vec4 u_hsl3;      // the Cb, Cr offsets of temperature and tint
+      uniform float u_hslOn;
+      float ctabAt(float v, int ch) {
+        vec4 t = ${tex}(u_ctab, vec2(clamp(v, 0.0, 1.0) * (255.0 / 256.0) + 0.5 / 256.0, 0.5));
+        return ch == 0 ? t.r : (ch == 1 ? t.g : t.b);
+      }
+      vec3 creative(vec3 y) {
+        y = clamp(y, 0.0, 1.0);
+        if (u_ctabOn > 0.5) y = vec3(ctabAt(y.r, 0), ctabAt(y.g, 1), ctabAt(y.b, 2));
+        if (u_hslOn > 0.5) {
+          float mx = max(y.r, max(y.g, y.b)), mn = min(y.r, min(y.g, y.b));
+          float C = mx - mn, L = (mx + mn) * 0.5;
+          float S = C > 1e-6 ? clamp(C / max(1e-6, 1.0 - abs(2.0 * L - 1.0)), 0.0, 1.0) : 0.0;
+          float Cs = max(C, 1e-6);
+          float H = 0.0;
+          if (C > 1e-6) {
+            if (mx == y.r) H = mod((y.g - y.b) / Cs, 6.0);
+            else if (mx == y.g) H = (y.b - y.r) / Cs + 2.0;
+            else H = (y.r - y.g) / Cs + 4.0;
+            H *= 60.0;
+          }
+          float d = abs(mod(H - u_hsl0.x + 540.0, 360.0) - 180.0);
+          float w = 1.0 - smoothstep(u_hsl0.y, u_hsl0.y + u_hsl0.z, d);
+          w *= smoothstep(u_hsl1.x - u_hsl0.w, u_hsl1.x, S) * (1.0 - smoothstep(u_hsl1.y, u_hsl1.y + u_hsl0.w, S));
+          w *= smoothstep(u_hsl1.z - u_hsl0.w, u_hsl1.z, L) * (1.0 - smoothstep(u_hsl1.w, u_hsl1.w + u_hsl0.w, L));
+          float Y = dot(y, vec3(0.2126, 0.7152, 0.0722));
+          float cb = (y.b - Y) / 1.8556, cr = (y.r - Y) / 1.5748;
+          float cb2 = (cb * u_hsl2.x - cr * u_hsl2.y) * u_hsl2.z + u_hsl3.x;
+          float cr2 = (cb * u_hsl2.y + cr * u_hsl2.x) * u_hsl2.z + u_hsl3.y;
+          float r2 = Y + 1.5748 * cr2, b2 = Y + 1.8556 * cb2;
+          vec3 o = vec3(r2, (Y - 0.2126 * r2 - 0.0722 * b2) / 0.7152, b2);
+          y = clamp(mix(y, o, w), 0.0, 1.0);
+        }
+        return y;
+      }`;
+
     const VS2 = `#version 300 es
       in vec2 a_pos;
       out vec2 v_uv;
@@ -98,6 +144,7 @@
       uniform vec4 u_tone;      // Lumetri blacks, shadows, highlights, whites, each /100
       uniform float u_toneOn;
       out vec4 outColor;
+      ${CREATIVE('texture')}
       void main() {
         vec3 c = texture(u_video, v_uv).rgb * u_pre;
         if (u_knee < 1.0) {
@@ -113,7 +160,7 @@
                 + 1.5 * u_tone.z * x * x * ix + 0.25 * u_tone.w * x * x * x;
         }
         y = mix(vec3(dot(y, vec3(0.2126, 0.7152, 0.0722))), y, u_sat);
-        outColor = vec4(clamp(y, 0.0, 1.0), 1.0);
+        outColor = vec4(creative(y), 1.0);
       }`;
 
     // WebGL1: the table as an n × n² image. Bilinear inside a blue slice (red across,
@@ -131,6 +178,7 @@
       uniform float u_lift;
       uniform vec4 u_tone;
       uniform float u_toneOn;
+      ${CREATIVE('texture2D')}
       void main() {
         vec3 c = texture2D(u_video, v_uv).rgb * u_pre;
         if (u_knee < 1.0) {
@@ -154,7 +202,7 @@
                 + 1.5 * u_tone.z * x * x * ix + 0.25 * u_tone.w * x * x * x;
         }
         y = mix(vec3(dot(y, vec3(0.2126, 0.7152, 0.0722))), y, u_sat);
-        gl_FragColor = vec4(clamp(y, 0.0, 1.0), 1.0);
+        gl_FragColor = vec4(creative(y), 1.0);
       }`;
 
 
@@ -200,9 +248,60 @@
     gl.uniform1i(gl.getUniformLocation(prog, 'u_video'), 0);
     gl.uniform1i(gl.getUniformLocation(prog, 'u_lut'), 1);
     const U = {};
-    ['u_n', 'u_pre', 'u_con', 'u_sat', 'u_knee', 'u_lift', 'u_tone', 'u_toneOn'].forEach((k) => {
+    ['u_n', 'u_pre', 'u_con', 'u_sat', 'u_knee', 'u_lift', 'u_tone', 'u_toneOn',
+     'u_ctabOn', 'u_hsl0', 'u_hsl1', 'u_hsl2', 'u_hsl3', 'u_hslOn'].forEach((k) => {
       U[k] = gl.getUniformLocation(prog, k);
     });
+    gl.uniform1i(gl.getUniformLocation(prog, 'u_ctab'), 2);
+
+    /* Lumetri's Curves + Wheels table (wave 11): a 256×1 RGBA texture per table key on
+     * TEXTURE2 (a few kept), the identity bound when none is in use. */
+    const ctabs = new Map();
+    function ctabTex(key, data) {
+      gl.activeTexture(gl.TEXTURE2);
+      let tex = ctabs.get(key);
+      if (!tex) {
+        if (!data) return false;
+        tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE,
+          data instanceof Uint8Array ? data : new Uint8Array(data));
+        ctabs.set(key, tex);
+        for (const [k, t] of ctabs) {
+          if (ctabs.size <= 6) break;
+          if (k === key || k === 'identity') continue;
+          ctabs.delete(k);
+          gl.deleteTexture(t);
+        }
+      } else gl.bindTexture(gl.TEXTURE_2D, tex);
+      return true;
+    }
+    {
+      const id = new Uint8Array(1024);
+      for (let i = 0; i < 256; i++) { id[i * 4] = id[i * 4 + 1] = id[i * 4 + 2] = i; id[i * 4 + 3] = 255; }
+      ctabTex('identity', id);
+    }
+    /* The creative uniforms of `a` (its `ctab` {key, data} and `hsl` 16 numbers). */
+    function creative(a) {
+      const t = a && a.ctab;
+      const on = !!(t && ctabTex(t.key, t.data));
+      if (!on) ctabTex('identity', null);
+      gl.uniform1f(U.u_ctabOn, on ? 1 : 0);
+      const h = a && a.hsl;
+      if (h && h.length === 16) {
+        gl.uniform4f(U.u_hsl0, h[0], h[1], h[2], h[3]);
+        gl.uniform4f(U.u_hsl1, h[4], h[5], h[6], h[7]);
+        gl.uniform4f(U.u_hsl2, h[8], h[9], h[10], h[11]);
+        gl.uniform4f(U.u_hsl3, h[12], h[13], h[14], h[15]);
+        gl.uniform1f(U.u_hslOn, 1);
+      } else gl.uniform1f(U.u_hslOn, 0);
+    }
 
     const texVideo = gl.createTexture();
     gl.activeTexture(gl.TEXTURE0);
@@ -314,6 +413,7 @@
       const tone = a.tone || NO_TONE;
       gl.uniform4f(U.u_tone, tone[0], tone[1], tone[2], tone[3]);
       gl.uniform1f(U.u_toneOn, tone.some((x) => x !== 0) ? 1 : 0);
+      creative(a);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       if (mix && mix.w > 0) drawMix(mix, w, h);
       return true;
@@ -339,6 +439,7 @@
       const tone = a.tone || NO_TONE;
       gl.uniform4f(U.u_tone, tone[0], tone[1], tone[2], tone[3]);
       gl.uniform1f(U.u_toneOn, tone.some((x) => x !== 0) ? 1 : 0);
+      creative(a);                             // its Curves, Wheels and HSL Secondary
       gl.enable(gl.BLEND);
       gl.blendColor(0, 0, 0, Math.max(0, Math.min(1, mix.w)));
       gl.blendFunc(gl.CONSTANT_ALPHA, gl.ONE_MINUS_CONSTANT_ALPHA);
@@ -358,7 +459,16 @@
       return m.map((x) => Math.round((x / k) * 100) / 100);
     }
 
-    return { gl2, lut, forget, render, mean };
+    /* What was just drawn, RGBA bottom row first (same task), for the scopes. */
+    function pixels() {
+      const w = canvas.width, h = canvas.height;
+      if (!w || !h) return null;
+      const px = new Uint8Array(w * h * 4);
+      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      return { w, h, data: px };
+    }
+
+    return { gl2, lut, forget, render, mean, pixels };
   }
 
   /* The worker: the renderer on the monitor's OffscreenCanvas. One message kind each way:
@@ -396,6 +506,7 @@ onmessage = (e) => {
     canvas: null,
     R: null,                 // the main-thread renderer on #gradeCanvas (fallback mode)
     P: null,                 // probe()'s renderer, on a canvas of its own (worker mode)
+    S: null,                 // sample()'s (Lumetri Scopes), on a canvas of its own
     worker: null,            // the worker holding #gradeCanvas (worker mode)
     inflight: false,         // a frame is with the worker
     sentAt: 0,               // when it went
@@ -593,15 +704,146 @@ onmessage = (e) => {
    * skipped, so contrast and saturation render exactly as before. */
   const NO_TONE = [0, 0, 0, 0];
   const NO_ADJUST = { pre: [1, 1, 1], con: 1, sat: 1, knee: 1, lift: 0, tone: NO_TONE };
+
+  /* ------------------------------------------------------------ Lumetri beyond Basic
+   * Curves, Color Wheels and HSL Secondary (wave 11, lane LUMETRI): THE formula, as
+   * roughcut/colour.py states it ("Lumetri beyond Basic") and the render draws it,
+   * after Basic's saturation and a clamp:
+   *   1. curves  y_c = curve_c(curve_master(x_c)), each a PCHIP through its points
+   *   2. wheels  gain (highlights), lift (shadows), gamma (midtones) per channel
+   *   3. HSL Secondary: a hue / saturation / lightness key and its correction
+   * 1 and 2 are a function of each channel alone: `table` builds them as 256 codes per
+   * channel (the shader's u_ctab; the render's `lutrgb` is the same table). 3 is the
+   * shader's `creative()`; `hslUniforms` turns the controls into its uniforms. */
+  const LUMETRI = (() => {
+    const KR = 0.2126, KB = 0.0722;
+    const WHEEL_K = { shadows: 0.25, midtones: 0.6, highlights: 0.5 };
+    const HSL = { hue: 0, width: 30, sat_lo: 10, sat_hi: 100, light_lo: 0, light_hi: 100,
+                  soft: 20, shift: 0, saturation: 100, temperature: 0, tint: 0 };
+    const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+    /* a curve's evaluator: PCHIP, held flat past its ends, clamped */
+    function curve(points) {
+      const n = points.length;
+      const px = points.map((p) => p[0]), py = points.map((p) => p[1]);
+      const h = [], d = [];
+      for (let k = 0; k < n - 1; k++) { h.push(px[k + 1] - px[k]); d.push((py[k + 1] - py[k]) / h[k]); }
+      const m = new Array(n).fill(0);
+      m[0] = d[0]; m[n - 1] = d[n - 2];
+      for (let k = 1; k < n - 1; k++) {
+        if (d[k - 1] * d[k] <= 0) m[k] = 0;
+        else {
+          const w1 = 2 * h[k] + h[k - 1], w2 = h[k] + 2 * h[k - 1];
+          m[k] = (w1 + w2) / (w1 / d[k - 1] + w2 / d[k]);
+        }
+      }
+      return (x) => {
+        const xc = Math.min(px[n - 1], Math.max(px[0], x));
+        let k = 0;
+        while (k < n - 2 && xc >= px[k + 1]) k++;
+        const t = (xc - px[k]) / h[k], t2 = t * t, t3 = t2 * t;
+        return clamp01((2 * t3 - 3 * t2 + 1) * py[k] + (t3 - 2 * t2 + t) * h[k] * m[k]
+          + (-2 * t3 + 3 * t2) * py[k + 1] + (t3 - t2) * h[k] * m[k + 1]);
+      };
+    }
+    /* the puck as an RGB offset of zero luma (Cb = cb/2, Cr = cr/2, BT.709) */
+    function wheelRgb(cb, cr) {
+      const r = 2 * (1 - KR) * 0.5 * cr, b = 2 * (1 - KB) * 0.5 * cb;
+      return [r, -(KR * r + KB * b) / (1 - KR - KB), b];
+    }
+    function wheelParams(wheels) {
+      const out = {};
+      Object.keys(WHEEL_K).forEach((nm) => {
+        const [cb, cr, li] = (wheels && wheels[nm]) || [0, 0, 0];
+        const k = WHEEL_K[nm];
+        out[nm] = wheelRgb(cb, cr).map((o) => k * o + k * li / 100);
+      });
+      return out;
+    }
+    /* steps 1 and 2 as [[r × 256], [g × 256], [b × 256]] floats 0..1, or null */
+    function channels(c) {
+      const cv = (c && c.curves) || {}, wh = c && c.wheels;
+      if (!Object.keys(cv).length && !(wh && Object.keys(wh).length)) return null;
+      const f = {};
+      ['master', 'r', 'g', 'b'].forEach((k) => { if (cv[k] && cv[k].length >= 2) f[k] = curve(cv[k]); });
+      const P = wh ? wheelParams(wh) : null;
+      return ['r', 'g', 'b'].map((ch, i) => {
+        const row = new Array(256);
+        for (let v = 0; v < 256; v++) {
+          let y = v / 255;
+          if (f.master) y = f.master(y);
+          if (f[ch]) y = f[ch](y);
+          if (P) {
+            y *= 1 + P.highlights[i];
+            y += P.shadows[i] * (1 - y);
+            y = clamp01(y) ** (2 ** -P.midtones[i]);
+          }
+          row[v] = clamp01(y);
+        }
+        return row;
+      });
+    }
+    /* the shader's table: 256 RGBA codes, as a plain array (it goes to the worker) */
+    function table(c) {
+      const rows = channels(c);
+      if (!rows) return null;
+      const data = new Array(1024);
+      for (let v = 0; v < 256; v++) {
+        for (let i = 0; i < 3; i++) data[v * 4 + i] = Math.min(255, Math.max(0, Math.floor(255 * rows[i][v] + 0.5)));
+        data[v * 4 + 3] = 255;
+      }
+      return data;
+    }
+    /* the HSL Secondary's 16 uniforms, or null when its correction is neutral */
+    function hslUniforms(hsl) {
+      if (!hsl) return null;
+      const P = { ...HSL, ...hsl };
+      if (P.shift === 0 && P.saturation === 100 && P.temperature === 0 && P.tint === 0) return null;
+      const soft = P.soft / 100;
+      const a = P.shift * Math.PI / 180;
+      const t = P.temperature / 100, n = P.tint / 100;
+      return [P.hue, P.width, Math.max(0.5, 60 * soft), Math.max(0.002, 0.25 * soft),
+              P.sat_lo / 100, P.sat_hi / 100, P.light_lo / 100, P.light_hi / 100,
+              Math.cos(a), Math.sin(a), P.saturation / 100, 0,
+              -0.1 * t + 0.1 * n, 0.1 * t + 0.1 * n, 0, 0];
+    }
+    return { curve, channels, table, hslUniforms, wheelRgb, HSL };
+  })();
+
+  /* `a` (effects.adjust's) with its Lumetri curves / wheels / hsl turned into the shader's
+   * `ctab` {key, data} and `hsl` uniforms; the table is built once per set of values. */
+  const ctabMemo = new Map();
+  let ctabSerial = 0;
+  function withCreative(a) {
+    if (!a || (!a.curves && !a.wheels && !a.hslKey)) return a;
+    const out = { ...a };
+    delete out.curves; delete out.wheels; delete out.hslKey;
+    if (a.curves || a.wheels) {
+      const key = JSON.stringify([a.curves || null, a.wheels || null]);
+      let rec = ctabMemo.get(key);
+      if (!rec) {
+        const data = LUMETRI.table({ curves: a.curves, wheels: a.wheels });
+        rec = data ? { key: `ctab${++ctabSerial}`, data } : null;
+        ctabMemo.set(key, rec);
+        if (ctabMemo.size > 64) ctabMemo.delete(ctabMemo.keys().next().value);
+      }
+      if (rec) out.ctab = rec;
+    }
+    const h = a.hslKey ? LUMETRI.hslUniforms(a.hslKey) : null;
+    if (h) out.hsl = h;
+    return out;
+  }
+  const creativeOn = (a) => !!(a && (a.ctab || a.hsl));
+
   function adjustNow() {
     const fx = window.effects;
     if (!G.shot || !fx || typeof fx.adjust !== 'function') return null;
     let a = null;
-    try { a = fx.adjust(G.shot, G.lut); } catch (e) { a = null; }
+    try { a = withCreative(fx.adjust(G.shot, G.lut)); } catch (e) { a = null; }
     if (!a) return null;
     const near = (x, y) => Math.abs(x - y) < 1e-4;
     const trivial = a.pre.every((x) => near(x, 1)) && near(a.con, 1) && near(a.sat, 1)
-      && !((a.knee ?? 1) < 1) && near(a.lift ?? 0, 0) && (a.tone || NO_TONE).every((x) => x === 0);
+      && !((a.knee ?? 1) < 1) && near(a.lift ?? 0, 0) && (a.tone || NO_TONE).every((x) => x === 0)
+      && !creativeOn(a);
     return trivial ? null : a;
   }
 
@@ -626,6 +868,29 @@ onmessage = (e) => {
     if (!j || !drawOn(R, j)) return null;
     if (!G.worker) G.draws++;
     return R.mean();
+  }
+
+  /* The picture the Program shows now, at most `maxW` wide (Lumetri Scopes, wave 11):
+   * {w, h, data} RGBA, bottom row first — graded when the canvas is on, else the raw
+   * frame through the identity, as probe() reads it. Drawn by a renderer of its own on a
+   * canvas of its own (never the monitor's), in this task. */
+  function sample(maxW = 256) {
+    if (!G.ok) return null;
+    const v = live();
+    if (!v || v.readyState < 2) return null;
+    if (!G.S) {
+      try { G.S = Renderer(document.createElement('canvas'), stage2d); } catch (e) { G.S = null; }
+      if (!G.S) return null;
+    }
+    const on = !!(G.canvas && G.canvas.classList.contains('on'));
+    const j = job(!on) || (on ? job(true) : null);
+    if (!j) return null;
+    const s = Math.min(1, maxW / j.vw);
+    j.w = Math.max(2, Math.round(j.vw * s));
+    j.h = Math.max(2, Math.round(j.vh * s));
+    if (j.parked) j.parked += `|s${j.w}`;
+    if (!drawOn(G.S, j)) return null;
+    return G.S.pixels();
   }
 
   function show(on) {
@@ -775,12 +1040,12 @@ onmessage = (e) => {
     const fx = window.effects;
     if (!G.mix || !fx || typeof fx.adjust !== 'function') return null;
     let a = null;
-    try { a = fx.adjust(G.mix.id); } catch (e) { a = null; }
+    try { a = withCreative(fx.adjust(G.mix.id)); } catch (e) { a = null; }
     if (!a) return null;
     const near = (x, y) => Math.abs(x - y) < 1e-4;
     const tone = a.tone || NO_TONE;
-    if (near(a.con, 1) && near(a.sat, 1) && tone.every((x) => x === 0)) return null;
-    return { pre: [1, 1, 1], con: a.con, sat: a.sat, knee: 1, lift: 0, tone };
+    if (near(a.con, 1) && near(a.sat, 1) && tone.every((x) => x === 0) && !creativeOn(a)) return null;
+    return { pre: [1, 1, 1], con: a.con, sat: a.sat, knee: 1, lift: 0, tone, ctab: a.ctab, hsl: a.hsl };
   }
 
   function mixIsGraded() {
@@ -831,6 +1096,7 @@ onmessage = (e) => {
     if (G.worker) G.worker.postMessage({ t: 'forget' });
     else if (G.R) G.R.forget();
     if (G.P) G.P.forget();
+    if (G.S) G.S.forget();
     G.sentKey = null;
     return setShot(G.shot);
   }
@@ -938,6 +1204,10 @@ onmessage = (e) => {
     get mix() { return G.mix ? { id: G.mix.id, w: G.mix.w, graded: mixIsGraded() } : null; },
     draw: settle,
     probe,
+    sample,
+    lumetri: LUMETRI,
+    // the adjust the shader draws the shot with now (tests read its table and uniforms)
+    get adjust() { return adjustNow(); },
     get draws() { return G.draws; },
     get mode() { return G.worker ? 'worker' : (G.R ? 'main' : 'off'); },
     get playRes() { return G.res; },

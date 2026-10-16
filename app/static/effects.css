@@ -152,3 +152,60 @@
 .ec-confirm .ecq-btn:focus-visible { outline: 2px solid var(--accent, #4a9df8); outline-offset: 1px; }
 .ec-confirm .ecq-btn.primary { background: var(--accent, #4a9df8); border-color: var(--accent, #4a9df8);
   color: #08111c; font-weight: 600; }
+
+/* Lumetri beyond Basic (wave 11, lane LUMETRI): Curves, Color Wheels & Match, HSL Secondary */
+.lm-curves { padding: 2px 8px 6px 25px; }
+.lm-cgrp { display: flex; align-items: center; justify-content: space-between; height: 18px; }
+.lm-cgrp .ec-grp { padding: 0; }
+.lm-chans { display: inline-flex; gap: 5px; }
+#inspector .lm-ch { width: 11px; height: 11px; padding: 0; border-radius: 50%; border: 1px solid var(--line-hi);
+                    background: #d8d8d8; opacity: .55; cursor: pointer; }
+#inspector .lm-ch[data-ch=r] { background: #e0463c; }
+#inspector .lm-ch[data-ch=g] { background: #3fbf5a; }
+#inspector .lm-ch[data-ch=b] { background: #3f7fe0; }
+#inspector .lm-ch.set { opacity: .8; }
+#inspector .lm-ch.on { opacity: 1; box-shadow: 0 0 0 1.5px var(--text); }
+.lm-cgraph { display: block; width: 100%; max-width: 232px; aspect-ratio: 1; margin-top: 3px; cursor: crosshair;
+             touch-action: none; user-select: none; }
+.lm-cbg { fill: #19191b; stroke: var(--line-hi); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.lm-cgrid line { stroke: rgba(255,255,255,.07); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.lm-cgrid .lm-cdiag { stroke: rgba(255,255,255,.14); }
+.lm-cpath, .lm-cother { fill: none; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.lm-cgraph .lm-cpath { stroke: #e8e8e8; }
+.lm-cgraph[data-ch=r] .lm-cpath, .lm-cother[data-ch=r] { stroke: #e0463c; }
+.lm-cgraph[data-ch=g] .lm-cpath, .lm-cother[data-ch=g] { stroke: #3fbf5a; }
+.lm-cgraph[data-ch=b] .lm-cpath, .lm-cother[data-ch=b] { stroke: #3f7fe0; }
+.lm-cother { opacity: .35; }
+.lm-cother[data-ch=master] { stroke: #e8e8e8; }
+.lm-cpt { fill: #19191b; stroke: #e8e8e8; stroke-width: 1.2; vector-effect: non-scaling-stroke; cursor: move; }
+.lm-wheels { display: flex; gap: 6px; padding: 4px 6px 8px 21px; }
+.lm-wheel { flex: 1 1 0; min-width: 0; }
+.lm-wname { color: var(--dim); font-size: 10.5px; text-align: center; padding-bottom: 2px; }
+.lm-wheel.changed .lm-wname { color: var(--text); }
+.lm-wbox { display: flex; align-items: center; gap: 3px; }
+.lm-wl { -webkit-appearance: none; appearance: none; writing-mode: vertical-lr; direction: rtl; width: 12px;
+         height: 64px; margin: 0; background: transparent; flex: none; }
+.lm-wl::-webkit-slider-runnable-track { width: 2px; background: var(--line-hi); border-radius: 1px; }
+.lm-wl::-webkit-slider-thumb { -webkit-appearance: none; width: 9px; height: 9px; margin-left: -3.5px; border-radius: 50%;
+                               background: var(--text); border: 0; }
+.lm-wdisc { position: relative; flex: 1 1 auto; min-width: 0; aspect-ratio: 1; max-width: 84px; border-radius: 50%;
+            cursor: grab; touch-action: none; border: 1px solid #2b2b2e;
+            background: radial-gradient(circle closest-side, #5c5c5e 0%, rgba(92,92,94,.82) 45%, rgba(92,92,94,.25) 100%),
+                        conic-gradient(#f00 -12.9deg, #f0f 40.3deg, #00f 95.2deg, #0ff 167.1deg, #0f0 220.3deg, #ff0 275.2deg, #f00 347.1deg); }
+.lm-wdisc.drag { cursor: grabbing; }
+.lm-wx { position: absolute; left: 50%; top: 50%; width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; pointer-events: none;
+         background: linear-gradient(rgba(0,0,0,.45), rgba(0,0,0,.45)) center / 1px 100% no-repeat,
+                     linear-gradient(rgba(0,0,0,.45), rgba(0,0,0,.45)) center / 100% 1px no-repeat; }
+.lm-puck { position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; margin: -5px 0 0 -5px; border-radius: 50%;
+           border: 1px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.6); pointer-events: none; }
+
+/* Lumetri Scopes (wave 11, LUMETRI; /modules/scopes.js): a tab beside the Source monitor */
+#scopes.sc-body { display: flex; gap: 6px; padding: 6px; overflow: clip; background: var(--panel); }
+#scopes.sc-body[hidden] { display: none; }
+.sc-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.sc-wave { flex: 1.6 1 0; }
+.sc-vec { flex: 1 1 0; }
+.sc-name { color: var(--dim); font-size: 10.5px; padding: 0 2px 3px; white-space: nowrap; }
+.sc-pane canvas { flex: 1 1 auto; min-height: 0; width: 100%; display: block; background: #0c0c0d;
+                  border: 1px solid var(--line); border-radius: 2px; }
+#pSource #srcTitle:not(.on) { cursor: pointer; }
