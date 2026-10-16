@@ -7558,13 +7558,18 @@ def _build_claimed(src: Path, dest: Path, orient: str, ev: threading.Event,
     another bin mid-build must not have this write that bin's preview from this one."""
     key = str(dest)
     scope = None
+    gen = MEDIA["walk_gen"]
     try:
         # An asked-for preview waiting for a slot the walk's paused builds hold: they run
         # again until it has one (a Program playing must not starve the Source monitor).
         with (media_waiting(SLOT_WAIT) if asked else nullcontext()):
             PREVIEW_SLOTS.acquire()
         with _Held(PREVIEW_SLOTS):
-            if not dest.exists():
+            # a Stop while it waited for the slot: it does not start after the Stop (the
+            # walk no longer waits on a build another thread owns, so it can be queued here)
+            if MEDIA["walk_gen"] != gen:
+                print(f"  preview {dest.stem} stopped", flush=True)
+            elif not dest.exists():
                 t0 = time.monotonic()
                 # what preview_eta reads: when this build started and what it should take
                 dur = clip_duration(src.name) if src.parent == STATE.get("footage") else None
