@@ -1866,7 +1866,8 @@ function txWindow(t) {
   const halves = window.tl && typeof tl.transitionHalves === 'function' ? tl.transitionHalves() : [];
   let at = null, next = null;
   halves.forEach((c, k) => {
-    const h = Math.max(c.video, c.audio);
+    // a dip mixes no other shot (the K layer, txLayer): only a dissolve or a sound needs a follower
+    const h = Math.max(TX_DIPS.has(c.vkind) ? 0 : c.video, c.audio);
     if (!(h > 0) || !segs[k] || !segs[k + 1]) return;
     if (t >= c.at - h - TX_PRE && t < c.at + h) { if (!at) at = { k, c, h }; }
     else if (c.at - h - TX_PRE > t && (!next || c.at < next.c.at)) next = { k, c, h };
@@ -1874,10 +1875,67 @@ function txWindow(t) {
   return { at, next };
 }
 
+/* The Effects bin's kinds in the Program (verdict 8 punch 5; the maths: roughcut/tracks.py).
+ * A dip, and every one-sided video transition, mixes no other shot: a black (white for
+ * Dip to White) layer over V1 (#pvDip, under V2, over the grade's canvas) at the K weight
+ * — 2x then 2 - 2x across a dip (K alone on the edit's frame), 1 - p / p across a fade at
+ * a clip's start / end, p^(1/2.2) for Film Dissolve's (exact: CSS composites over K in
+ * R'G'B', a scale). The sound's curves are txGains'; a one-sided sound fade scales the
+ * live shot (txFade). A follower past its media holds its first / last frame (the
+ * render's repeated frames). Film Dissolve's two-shot mix is drawn as the Cross
+ * Dissolve's weights (the CSS / grade-worker mix is in R'G'B'; the export's is linear). */
+const TX_DIPS = new Set(['dip_to_black', 'dip_to_white']);
+function txGains(kind, x) {
+  x = Math.max(0, Math.min(1, x));
+  if (kind === 'constant_gain') return [1 - x, x];
+  if (kind === 'exponential_fade') { const e = (u) => (100 ** u - 1) / 99; return [e(1 - x), e(x)]; }
+  return [Math.cos(Math.PI / 2 * x), Math.sin(Math.PI / 2 * x)];
+}
+function txLayer(t, proposal) {
+  let k = 0, white = false, gain = 1;
+  if (!proposal && window.tl && typeof tl.transitionHalves === 'function') {
+    for (const c of tl.transitionHalves()) {
+      if (TX_DIPS.has(c.vkind) && c.video > 0 && t >= c.at - c.video && t < c.at + c.video) {
+        const x = (t - (c.at - c.video)) / (2 * c.video);
+        k = x < 0.5 ? 2 * x : 2 - 2 * x;
+        white = c.vkind === 'dip_to_white';
+      }
+    }
+    for (const f of (typeof tl.transitionFades === 'function' ? tl.transitionFades() : [])) {
+      if (!(f.dur > 0) || t < f.t0 || t >= f.t1) continue;
+      const fr = 1 / ((tl.gridRate && tl.gridRate()) || 30);
+      // the render's frames: from K on a start's first frame, to K on an end's last
+      const p = Math.max(0, Math.min(1, f.edge === 'start' ? (t - f.t0) / f.dur : (f.t1 - fr - t) / f.dur));
+      if (f.fam === 'audio') { gain *= txGains(f.kind, p)[1]; continue; }
+      k = 1 - (f.kind === 'film_dissolve' ? p ** (1 / 2.2) : p);
+      white = f.kind === 'dip_to_white';
+    }
+  }
+  let el = prog.dip;
+  if (!el && k > 0) {
+    el = prog.dip = document.createElement('div');
+    el.id = 'pvDip';
+    el.style.cssText = 'position:absolute;inset:0;z-index:1;pointer-events:none;opacity:0';
+    const anchor = $('#pvV2');
+    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(el, anchor);
+  }
+  if (el) {
+    const op = progTrack('V1').eye === false ? '0' : String(Math.round(k * 1e4) / 1e4);
+    if (el.style.opacity !== op) el.style.opacity = op;
+    const bg = white ? '#fff' : '#000';
+    if (el.dataset.bg !== bg) { el.dataset.bg = bg; el.style.background = bg; }
+  }
+  return gain;
+}
+
 function programMix(t, play, proposal) {
   if (!prog.v2 || !segs.length) return;
+  const fadeLvl = txLayer(t, proposal);
   const { at, next } = proposal ? { at: null, next: null } : txWindow(t);
-  if (!prog.tx && !at && !next) return;            // no transition yet: nothing made
+  if (!prog.tx && !at && !next) {                  // no transition yet: nothing made
+    if (window.rcAudio) { const lv = liveVideo(); for (const v of player.vids) rcAudio.setLevel(v, 'xfade', v === lv ? fadeLvl : 1); }
+    return;
+  }
   if (!prog.tx) prog.tx = { in: txEl('In'), out: txEl('Out'), drawn: null };
   const tx = prog.tx;
   const lv = liveVideo();
@@ -1887,29 +1945,37 @@ function programMix(t, play, proposal) {
   if (at) {
     const { k, c } = at;
     const a = segs[k], b = segs[k + 1], C = c.at;
-    const xv = c.video > 0 ? Math.max(0, Math.min(1, (t - (C - c.video)) / (2 * c.video))) : null;
+    const vh = TX_DIPS.has(c.vkind) ? 0 : c.video;   // a dip draws no follower (txLayer)
+    const xv = vh > 0 ? Math.max(0, Math.min(1, (t - (C - vh)) / (2 * vh))) : null;
     const xa = c.audio > 0 ? Math.max(0, Math.min(1, (t - (C - c.audio)) / (2 * c.audio))) : null;
-    const inV = xv != null && t >= C - c.video && t < C;
-    const outV = xv != null && t >= C && t < C + c.video;
+    const inV = xv != null && t >= C - vh && t < C;
+    const outV = xv != null && t >= C && t < C + vh;
     const inA = xa != null && t >= C - c.audio && t < C;
     const outA = xa != null && t >= C && t < C + c.audio;
-    // the incoming follower: from TX_PRE before its half to the edit
+    const ga = xa != null ? txGains(c.akind, xa) : [1, 1];
+    // the incoming follower: from TX_PRE before its half to the edit; before its media
+    // starts it holds its first frame (the render repeats it)
     if (t < C) {
-      xin = { seg: b, clipT: Math.max(0, b.in + (t - C) * speedOf(b)),
-              w: inV ? xv : 0, lvl: inA ? Math.sin(Math.PI / 2 * xa) : 0 };
+      const ct = b.in + (t - C) * speedOf(b);
+      xin = { seg: b, clipT: Math.max(0, ct), hold: ct < 0,
+              w: inV ? xv : 0, lvl: inA ? ga[1] : 0 };
     }
-    // the outgoing follower: from TX_PRE_OUT before the edit to the end of its half
+    // the outgoing follower: from TX_PRE_OUT before the edit to the end of its half; past
+    // its media it holds its last frame
     if (t >= C - TX_PRE_OUT && t < C + at.h) {
-      xout = { seg: a, clipT: a.out + (t - C) * speedOf(a),
-               w: outV ? 1 - xv : 0, lvl: outA ? Math.cos(Math.PI / 2 * xa) : 0 };
+      const ct = a.out + (t - C) * speedOf(a);
+      const end = tx.out && Number.isFinite(tx.out.duration) && tx.out.dataset.src === proxyOf(a)
+        ? tx.out.duration - 0.05 : Infinity;
+      xout = { seg: a, clipT: Math.min(ct, end), hold: ct > end,
+               w: outV ? 1 - xv : 0, lvl: outA ? ga[0] : 0 };
     }
-    // the live buffer's share of a crossfade: outgoing cos, incoming sin
+    // the live buffer's share of a crossfade: the outgoing curve, then the incoming
     const liveIdx = player.playing && segs[player.idx] ? player.idx : (tl.shotAt(t) || {}).index;
-    if (inA && liveIdx === k) liveLvl = Math.cos(Math.PI / 2 * xa);
-    else if (outA && liveIdx === k + 1) liveLvl = Math.sin(Math.PI / 2 * xa);
+    if (inA && liveIdx === k) liveLvl = ga[0];
+    else if (outA && liveIdx === k + 1) liveLvl = ga[1];
   }
   for (const v of player.vids) {
-    if (window.rcAudio) rcAudio.setLevel(v, 'xfade', v === lv ? liveLvl : 1);
+    if (window.rcAudio) rcAudio.setLevel(v, 'xfade', v === lv ? liveLvl * fadeLvl : 1);
   }
   let drawn = null, drawnW = 0, drawnId = null;
   // Both shots' LUTs, before the window: the grade's mix never waits on a cold one
@@ -1924,7 +1990,7 @@ function programMix(t, play, proposal) {
   }
   for (const [el, x, side] of [[tx.in, xin, 'in'], [tx.out, xout, 'out']]) {
     if (x) {
-      txFollow(el, x.seg, x.clipT, play);
+      txFollow(el, x.seg, x.clipT, play && !x.hold);
       el.muted = !(x.lvl > 0);
       const a1 = progA1Level();
       if (window.rcAudio) rcAudio.setLevel(el, 'track', a1 * x.lvl);

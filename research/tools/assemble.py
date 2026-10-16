@@ -606,13 +606,17 @@ def adjust_vf(controls: dict | None) -> str | None:
     1 before the saturation mix; the shader clamps only after it.)"""
     k = 1.0 + ctl_num(controls, "contrast", 0.0) / 200.0
     sat = ctl_num(controls, "saturation", 100.0) / 100.0
-    if tone_of(controls):
-        t = table_expr(channel_table(controls))
+    creative = creative_vf(controls)
+    if tone_of(controls) or creative:
         chain = ["scale=in_range=tv:in_color_matrix=bt709:flags=accurate_rnd+full_chroma_int",
-                 "format=gbrp", f"lutrgb=r='{t}':g='{t}':b='{t}'"]
+                 "format=gbrp"]
+        if tone_of(controls) or abs(k - 1.0) > 1e-9:
+            t = table_expr(channel_table(controls))
+            chain.append(f"lutrgb=r='{t}':g='{t}':b='{t}'")
         mix = saturation_mixer(sat)
         if mix:
             chain.append(mix)
+        chain += creative
         chain += ["scale=out_range=tv:out_color_matrix=bt709:flags=accurate_rnd",
                   "format=yuv420p"]
         return ",".join(chain)
@@ -622,6 +626,55 @@ def adjust_vf(controls: dict | None) -> str | None:
     return (f"lutyuv=y='clip((val-125.5)*{k:.6g}+125.5,16,235)'"
             f":u='clip((val-128)*{ks:.6g}+128,16,240)'"
             f":v='clip((val-128)*{ks:.6g}+128,16,240)'")
+
+
+# ------------------------------------- Lumetri beyond Basic (redesign wave 11, LUMETRI)
+#
+# Curves, Color Wheels and HSL Secondary, after Basic Correction's saturation, as
+# grade.js's shader draws them; THE formula is `roughcut/colour.py`'s (its comment block
+# "Lumetri beyond Basic"). Curves and wheels are a function of each channel alone: one
+# `lutrgb` of `colour.creative_table` (three tables, one per channel, 8-bit as the tone's
+# is). The HSL Secondary mixes channels: a 33³ cube of `colour.hsl_secondary` through a
+# tetrahedral `lut3d`, written once per key into HSL_CUBE_DIR (content-addressed, so a
+# re-render and every part with the same key share it).
+
+HSL_CUBE_DIR = Path(tempfile.gettempdir()) / "roughcut-hsl"
+
+
+def creative_lutrgb(controls: dict | None) -> str | None:
+    """Curves then wheels as one `lutrgb`, or None when neither is set."""
+    tab = colour.creative_table(controls, 256)
+    if tab is None:
+        return None
+    codes = [[int(min(255, max(0, math.floor(255.0 * v + 0.5)))) for v in row] for row in tab]
+    return "lutrgb=" + ":".join(f"{c}='{table_expr(t)}'" for c, t in zip("rgb", codes))
+
+
+def hsl_cube(hsl: dict) -> Path:
+    """The HSL Secondary as a 33³ `.cube`, written once per key."""
+    import hashlib
+    key = hashlib.sha1(json.dumps(hsl, sort_keys=True).encode()).hexdigest()[:16]
+    path = HSL_CUBE_DIR / f"hsl-{key}.cube"
+    if not path.exists():
+        HSL_CUBE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
+        colour.write_cube(colour.cube_table(lambda x: colour.hsl_secondary(x, hsl), 33), tmp,
+                          title="roughcut hsl secondary")
+        os.replace(tmp, path)
+    return path
+
+
+def creative_vf(controls: dict | None) -> list[str]:
+    """The filters of Lumetri's Curves, Color Wheels and HSL Secondary on 8-bit planar
+    RGB, in that order; [] when none is set."""
+    out = []
+    lr = creative_lutrgb(controls)
+    if lr:
+        out.append(lr)
+    hsl = colour.hsl_of((controls or {}).get("hsl"))
+    if hsl:
+        out.append(f"lut3d=file={hsl_cube(hsl)}:interp=tetrahedral")
+    return out
 
 
 def volume_db(controls: dict | None) -> float:
@@ -980,16 +1033,8 @@ def encode_part(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path
     if mg:
         graph.append(mg)
         vcur = "vmo"
-    n_in = 1 + extra.count("-i")
-    for j, bl in enumerate(blends or []):
-        # a transition's half (verdict 6, punch 6): the neighbour's handle as input n_in
-        extra += ["-ss", f"{bl['src_in']:.4f}", "-t", f"{bl['src_len'] + 1.0:.4f}",
-                  "-i", str(bl["src"])]
-        if bl["kind"] == "video":
-            vcur = blend_video(graph, bl, video, n_in, vcur, frames, rate, j)
-        else:
-            acur = blend_audio(graph, bl, n_in, acur, rate, j)
-        n_in += 1
+    # transitions (verdict 6 punch 6; the kinds: verdict 8 punch 5): `apply_blends`
+    vcur, acur = apply_blends(graph, extra, blends or [], video, vcur, acur, frames, rate)
     if v1_hidden:
         # V1's eye off: its picture (and its effects) black under whatever V2+ holds
         graph.append(f"[{vcur}]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[v1off]")
@@ -1067,55 +1112,128 @@ def encode_part(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path
 # still stream-copied end to end, and the film's length does not change. The incoming
 # shot's weight at film frame f is x = (f - (C - hf)) / 2hf: 0 at the window's first
 # frame, exactly 0.5 on the edit's frame, the incoming shot whole from C + hf on (the
-# Program monitor mixes by the same x). Picture: a linear mix (Premiere's Cross
-# Dissolve) of the two graded, conformed frames. Sound: constant power, the outgoing
-# shot at cos(πx/2) and the incoming at sin(πx/2) (Premiere's Constant Power).
+# Program monitor mixes by the same x). The kinds' maths are tracks.py's (the Effects
+# bin, verdict 8 punch 5):
+#   Cross Dissolve  a linear mix of the two graded, conformed frames (Y'CbCr, per plane);
+#   Film Dissolve   the same weights in linear light: both frames to R'G'B' (BT.709),
+#                   g(v) = v^2.2, mixed, back — only the window's frames are converted;
+#   Dip to Black / White   no handle at all: each part blends its OWN frames toward K
+#                   (Y' 16 / 235, Cb Cr 128: drawbox's black / white), part k's K weight
+#                   2x, part k+1's 2 - 2x — K alone on the edit's frame;
+#   sound           Constant Power cos / sin, Constant Gain 1 - x / x, Exponential Fade
+#                   e(1 - x) / e(x), e(u) = (100^u - 1) / 99.
+# A handle shorter than hf frames is padded with REPEATED frames (Premiere's
+# "insufficient media"): the incoming shot's first frame before its media starts, the
+# outgoing shot's last frame after it ends (its sound is silence there).
+# A one-sided transition (a clip's start or end) lies inside its part: the picture blends
+# toward K (black; white for Dip to White; Film Dissolve fades in linear light, a scale
+# of p^(1/2.2)) from its first frame / to its last, the sound along the kind's curve.
 # The neighbour's handle takes its own grade (LUT), Lumetri and speed; not its Motion,
 # Opacity or effects (a dissolve between two moved shots mixes the moved one with the
 # other's unmoved handle).
+
+FILM_G = tracksmod.FILM_GAMMA
+
+
+def _handle_input(graph: list[str], bl: dict, video: dict, k: int, frames: int,
+                  rate: Fraction, tag: str) -> None:
+    """The neighbour's handle (input k) as `[tag]`, on the part's grid: `pre` repeated
+    first frames (missing media before an incoming in), `take` frames of media, its last
+    frame repeated after (missing media past an outgoing out), placed from frame `offset`."""
+    off, n = bl["offset"], bl["frames"]
+    chain = video_filter(video, bl.get("normalise"), bl.get("lut"), bl["speed"],
+                         bl.get("controls"), None)
+    pad_s = (frames / float(rate)) + 2.0
+    take, pre = bl.get("take", n), bl.get("pre", 0)
+    graph.append(f"[{k}:v]{chain},tpad=stop_mode=clone:stop_duration=2,trim=end_frame={take},"
+                 f"setpts=PTS-STARTPTS,tpad=start={off + pre}:start_mode=clone:"
+                 f"stop_mode=clone:stop_duration={pad_s:.3f}[{tag}]")
+
+
+def _frame_no(rate: Fraction) -> str:
+    # the frame's own number on the part's grid (blend's N counts from 1 on ffmpeg 6)
+    return f"floor(T*{float(rate):.6f}+0.5)"
 
 
 def blend_video(graph: list[str], bl: dict, video: dict, k: int, vcur: str,
                 frames: int, rate: Fraction, j: int) -> str:
     """Mix input k (the neighbour's handle) into `vcur` over the part's frames
-    [off, off + n): the other's weight is x (it comes in) or 1 - x (it goes out)."""
+    [off, off + n): the other's weight is x (it comes in) or 1 - x (it goes out).
+    Cross Dissolve per Y'CbCr plane; Film Dissolve in linear light (only those frames
+    leave Y'CbCr: split, mixed in R'G'B', laid back over the part)."""
     off, n, n0, tot = bl["offset"], bl["frames"], bl["n0"], bl["total"]
-    chain = video_filter(video, bl.get("normalise"), bl.get("lut"), bl["speed"],
-                         bl.get("controls"), None)
-    pad_s = (frames / float(rate)) + 2.0
-    graph.append(f"[{k}:v]{chain},tpad=stop_mode=clone:stop_duration=2,trim=end_frame={n},"
-                 f"setpts=PTS-STARTPTS,tpad=start={off}:start_mode=clone:"
-                 f"stop_mode=clone:stop_duration={pad_s:.3f}[tro{j}]")
-    # by the frame's own time on the part's grid (blend's N counts from 1 on ffmpeg 6)
-    x = f"clip((floor(T*{float(rate):.6f}+0.5)-({n0}))/{tot},0,1)"
+    _handle_input(graph, bl, video, k, frames, rate, f"tro{j}")
+    x = f"clip(({_frame_no(rate)}-({n0}))/{tot},0,1)"
     w = x if bl["incoming"] else f"(1-{x})"
     t0 = (off - 0.25) / float(rate)
     t1 = (off + n - 0.5) / float(rate)
+    if bl.get("vkind") == "film_dissolve":
+        to_rgb = "scale=in_color_matrix=bt709:in_range=tv,format=gbrp"
+        to_yuv = "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p"
+        g = FILM_G
+        graph += [
+            f"[{vcur}]split[trs{j}][trw{j}]",
+            f"[trw{j}]trim=start_frame={off}:end_frame={off + n},{to_rgb}[trwa{j}]",
+            f"[tro{j}]trim=start_frame={off}:end_frame={off + n},{to_rgb}[trwb{j}]",
+            f"[trwa{j}][trwb{j}]blend=all_expr='255*pow((1-{w})*pow(A/255,{g})"
+            f"+({w})*pow(B/255,{g}),1/{g})'[trwm{j}]",
+            f"[trwm{j}]{to_yuv}[trwy{j}]",
+            f"[trs{j}][trwy{j}]overlay=0:0:eof_action=pass[trv{j}]",
+        ]
+        return f"trv{j}"
     graph.append(f"[{vcur}][tro{j}]blend=all_expr='A+({w})*(B-A)':shortest=1:"
                  f"enable='between(t,{t0:.6f},{t1:.6f})'[trv{j}]")
     return f"trv{j}"
 
 
+def toward_video(graph: list[str], bl: dict, vcur: str, rate: Fraction, j: int) -> str:
+    """The part's own frames [f0, f1) blended toward K (black or white) by the weight
+    expression `wk` of the frame number (a dip's half, a one-sided fade)."""
+    f0, f1 = bl["f0"], bl["f1"]
+    wk = bl["wk"].replace("N", _frame_no(rate))
+    t0 = (f0 - 0.25) / float(rate)
+    t1 = (f1 - 0.5) / float(rate)
+    graph += [f"[{vcur}]split[tka{j}][tkb{j}]",
+              f"[tkb{j}]drawbox=x=0:y=0:w=iw:h=ih:color={bl['colour']}:t=fill[tkk{j}]",
+              f"[tka{j}][tkk{j}]blend=all_expr='A+({wk})*(B-A)':shortest=1:"
+              f"enable='between(t,{t0:.6f},{t1:.6f})'[tkv{j}]"]
+    return f"tkv{j}"
+
+
+def gain_expr(akind: str, x: str, incoming: bool) -> str:
+    """The amplitude of the incoming (or outgoing) side at x for an audio kind."""
+    u = x if incoming else f"(1-{x})"
+    if akind == "constant_gain":
+        return u
+    if akind == "exponential_fade":
+        b = tracksmod.EXP_BASE
+        return f"((pow({b:g},{u})-1)/{b - 1:g})"
+    return f"sin(PI/2*{x})" if incoming else f"cos(PI/2*{x})"
+
+
 def blend_audio(graph: list[str], bl: dict, k: int, acur: str, rate: Fraction,
                 j: int) -> str:
-    """The part's sound and input k's (the neighbour's handle) under a constant-power
-    crossfade: x by the part's own clock, the base at cos / sin of it, the other at the
-    complement, laid from its first sample (`adelay` in samples) and summed."""
+    """The part's sound and input k's (the neighbour's handle) under the kind's
+    crossfade: x by the part's own clock, the base at the outgoing / incoming curve of
+    it, the other at the complement, laid from its first sample (`adelay` in samples) and
+    summed. A handle with no media is silence (`mute`)."""
     off, n, n0, tot = bl["offset"], bl["frames"], bl["n0"], bl["total"]
+    pre, take = bl.get("pre", 0), bl.get("take", n)
+    ak = bl.get("akind", "audio_crossfade")
     fr = float(rate)
     x = f"clip((t*{fr:.6f}-({n0}))/{tot},0,1)"
-    base = f"sin(PI/2*{x})" if not bl["incoming"] else f"cos(PI/2*{x})"
-    ns = samples_at(off + n, rate) - samples_at(off, rate)
-    delay = samples_at(off, rate)
+    base = gain_expr(ak, x, incoming=not bl["incoming"])
+    ns = samples_at(off + pre + take, rate) - samples_at(off + pre, rate)
+    delay = samples_at(off + pre, rate)
     # the other's own clock starts `delay` samples into the part
     xo = f"clip(((t+{delay / AUDIO_RATE:.6f})*{fr:.6f}-({n0}))/{tot},0,1)"
-    other = f"sin(PI/2*{xo})" if bl["incoming"] else f"cos(PI/2*{xo})"
+    other = "0" if bl.get("mute") else gain_expr(ak, xo, incoming=bl["incoming"])
     # stereo first, as the encode's `-ac 2` would make it (a mono source's level kept)
     graph.append(f"[{acur}]asetpts=PTS-STARTPTS,aformat=channel_layouts=stereo,"
                  f"aeval=exprs='val(0)*{base}|val(1)*{base}':channel_layout=stereo[trb{j}]")
     graph.append(f"[{k}:a]{audio_filter(bl['gain_db'], bl['speed'])},asetpts=PTS-STARTPTS,"
                  "aformat=channel_layouts=stereo,"
-                 f"apad,atrim=end_sample={ns},"
+                 f"apad,atrim=end_sample={max(1, ns)},"
                  f"aeval=exprs='val(0)*{other}|val(1)*{other}':channel_layout=stereo,"
                  f"adelay=delays={delay}S:all=1[tra{j}]")
     graph.append(f"[trb{j}][tra{j}]amix=inputs=2:normalize=0:duration=first:"
@@ -1123,12 +1241,54 @@ def blend_audio(graph: list[str], bl: dict, k: int, acur: str, rate: Fraction,
     return f"trm{j}"
 
 
+def fade_audio(graph: list[str], bl: dict, acur: str, rate: Fraction, j: int) -> str:
+    """A one-sided audio transition: the part's sound over frames [f0, f1) along the
+    kind's fade-in (start) or fade-out (end) curve, whole outside it."""
+    fr = float(rate)
+    f0, f1 = bl["f0"], bl["f1"]
+    x = f"clip((t*{fr:.6f}-({f0}))/{f1 - f0},0,1)"
+    g = gain_expr(bl["akind"], x, incoming=bl["side"] == "start")
+    graph.append(f"[{acur}]asetpts=PTS-STARTPTS,aformat=channel_layouts=stereo,"
+                 f"aeval=exprs='val(0)*{g}|val(1)*{g}':channel_layout=stereo[tfa{j}]")
+    return f"tfa{j}"
+
+
+def apply_blends(graph: list[str], extra: list[str], blends: list[dict], video: dict,
+                 vcur: str, acur: str, frames: int, rate: Fraction) -> tuple[str, str]:
+    """encode_part's transitions: each blend in turn (inputs appended to `extra`)."""
+    n_in = 1 + extra.count("-i")
+    for j, bl in enumerate(blends or []):
+        mode = bl.get("mode", "mix")
+        if mode == "toward":
+            vcur = toward_video(graph, bl, vcur, rate, j)
+            continue
+        if mode == "fade":
+            acur = fade_audio(graph, bl, acur, rate, j)
+            continue
+        # a transition's half (verdict 6, punch 6): the neighbour's handle as input n_in
+        extra += ["-ss", f"{bl['src_in']:.4f}", "-t", f"{bl['src_len'] + 1.0:.4f}",
+                  "-i", str(bl["src"])]
+        if bl["kind"] == "video":
+            vcur = blend_video(graph, bl, video, n_in, vcur, frames, rate, j)
+        else:
+            acur = blend_audio(graph, bl, n_in, acur, rate, j)
+        n_in += 1
+    return vcur, acur
+
+
+def _p_expr(p: str, vkind: str) -> str:
+    """The picture's share p of a fade toward K: Film Dissolve's p^(1/2.2) (a fade from
+    black in linear light is a scale of the R'G'B' values by that), else p."""
+    return f"pow({p},1/{FILM_G})" if vkind == "film_dissolve" else p
+
+
 def transition_blends(edl: dict, segments: list[dict], spans: list[tuple[int, int]],
                       rate: Fraction, sources: list[Path], looks: list[dict],
                       gains: list[float]) -> tuple[list[list[dict]], list[str]]:
     """Each part's halves of the transitions at its two edits (`tracksmod.
-    transition_halves`, which shortens one the media cannot cover), and the lines to
-    print. `looks[i]` is part i's {normalise, lut, controls}; `gains[i]` its level (dB)."""
+    transition_halves`, which names the frames the media cannot cover: those are
+    repeated), its one-sided fades (`tracksmod.transition_fades`), and the lines to print.
+    `looks[i]` is part i's {normalise, lut, controls}; `gains[i]` its level (dB)."""
     lens: dict[str, float | None] = {}
 
     def clip_len(clip: str) -> float | None:
@@ -1140,47 +1300,105 @@ def transition_blends(edl: dict, segments: list[dict], spans: list[tuple[int, in
                 lens[clip] = None
         return lens[clip]
 
-    halves = tracksmod.transition_halves(segments, edl.get("transitions") or [], edits.dur,
-                                         clip_len)
+    trs = edl.get("transitions") or []
+    halves = tracksmod.transition_halves(segments, trs, edits.dur, clip_len)
     out: list[list[dict]] = [[] for _ in segments]
     said: list[str] = []
+    fr = float(rate)
     for k, c in enumerate(halves):
         a, b = segments[k], segments[k + 1]
         cut = spans[k][1]
         for key in ("video", "audio"):
+            kind = c["kinds"].get(key)
+            if kind is None:
+                continue
             h = c[key]
-            kind = "cross_dissolve" if key == "video" else "audio_crossfade"
-            # cut down to the media: whole frames inside it (the board's rule too)
+            # whole frames inside the shots (the board's rule too)
             n = math.floor(h * rate + 1e-6) if kind in c["short"] else round(h * rate)
             hf = min(n, spans[k][1] - spans[k][0], spans[k + 1][1] - spans[k + 1][0])
             asked = c["asked"].get(kind)
-            if asked is None:
-                continue
             name = tracksmod.TRANSITION_KINDS[kind]
             if hf < 1:
                 said.append(f"{name} at {cut / rate:.2f}s ({a['clip']} → {b['clip']}): "
-                            "insufficient media — a cut")
+                            "too short for a frame — a cut")
                 continue
             tot = 2 * hf
-            sa, sb = edits.speed_of(a), edits.speed_of(b)
-            span_s = hf / float(rate)
-            # part k (outgoing): the incoming shot's media before its in, over its last hf
             fa = spans[k][1] - spans[k][0]
-            out[k].append({
-                "kind": key, "incoming": True, "src": sources[k + 1],
-                "src_in": max(0.0, float(b["in"]) - span_s * sb), "src_len": span_s * sb,
-                "speed": sb, "offset": fa - hf, "frames": hf, "n0": fa - hf, "total": tot,
-                "gain_db": gains[k + 1], **looks[k + 1]})
-            # part k+1 (incoming): the outgoing shot's media past its out, over its first hf
-            out[k + 1].append({
-                "kind": key, "incoming": False, "src": sources[k],
-                "src_in": float(a["out"]), "src_len": span_s * sa,
-                "speed": sa, "offset": 0, "frames": hf, "n0": -hf, "total": tot,
-                "gain_db": gains[k], **looks[k]})
-            short = (f" — insufficient media, shortened from {asked:.2f}s"
+            rep = c["repeat"].get(kind)
+            note = ""
+            if kind in tracksmod.DIP_KINDS:
+                colour = "white" if kind == "dip_to_white" else "black"
+                out[k].append({"kind": "video", "mode": "toward", "colour": colour,
+                               "f0": fa - hf, "f1": fa,
+                               "wk": f"clip((N-({fa - hf}))/{hf},0,1)"})
+                out[k + 1].append({"kind": "video", "mode": "toward", "colour": colour,
+                                   "f0": 0, "f1": hf, "wk": f"clip(1-N/{hf},0,1)"})
+            else:
+                sa, sb = edits.speed_of(a), edits.speed_of(b)
+                span_s = hf / fr
+                # media in whole frames: before b's in, past a's out (the rest repeats)
+                la = clip_len(a["clip"])
+                tail_f = (math.floor(max(0.0, (la - float(a["out"])) / sa) * fr + 1e-6)
+                          if la is not None else 0)
+                head_f = math.floor(max(0.0, float(b["in"]) / sb) * fr + 1e-6)
+                take_b = hf if head_f >= hf else max(1, head_f)
+                take_a = hf if tail_f >= hf else max(1, tail_f)
+                common = {"kind": key, "total": tot, "frames": hf}
+                if key == "video":
+                    common["vkind"] = kind
+                else:
+                    common["akind"] = kind
+                # part k (outgoing): the incoming shot's media before its in, over its last hf
+                out[k].append({
+                    **common, "incoming": True, "src": sources[k + 1],
+                    "src_in": max(0.0, float(b["in"]) - (min(take_b, head_f) / fr) * sb),
+                    "src_len": take_b / fr * sb, "take": take_b, "pre": hf - take_b,
+                    "mute": head_f == 0,
+                    "speed": sb, "offset": fa - hf, "n0": fa - hf,
+                    "gain_db": gains[k + 1], **looks[k + 1]})
+                # part k+1 (incoming): the outgoing shot's media past its out, over its first hf
+                a_in = float(a["out"]) if tail_f > 0 else max(0.0, float(a["out"]) - sa / fr)
+                out[k + 1].append({
+                    **common, "incoming": False, "src": sources[k],
+                    "src_in": a_in, "src_len": take_a / fr * sa, "take": take_a, "pre": 0,
+                    "mute": tail_f == 0,
+                    "speed": sa, "offset": 0, "n0": -hf,
+                    "gain_db": gains[k], **looks[k]})
+                if rep or head_f < hf or tail_f < hf:
+                    miss = max(0, hf - head_f) + max(0, hf - tail_f)
+                    note = (f" — insufficient media: {miss} repeated frame"
+                            f"{'s' if miss != 1 else ''}"
+                            + (" (silence)" if key == "audio" else ""))
+            short = (f" — shortened from {asked:.2f}s to fit the shots"
                      if kind in c["short"] else "")
             said.append(f"{name} {tot / rate:.2f}s at {cut / rate:.2f}s "
-                        f"({a['clip']} → {b['clip']}){short}")
+                        f"({a['clip']} → {b['clip']}){short}{note}")
+    # one-sided: a clip's start or end
+    fades = tracksmod.transition_fades(segments, trs, edits.dur)
+    for k, f in enumerate(fades):
+        frames = spans[k][1] - spans[k][0]
+        for side in ("start", "end"):
+            for key, (kind, s) in f[side].items():
+                n = min(frames, round(s * rate))
+                name = tracksmod.TRANSITION_KINDS[kind]
+                if n < 1:
+                    continue
+                f0, f1 = (0, n) if side == "start" else (frames - n, frames)
+                if key == "video":
+                    colour = "white" if kind == "dip_to_white" else "black"
+                    p = (f"clip(N/{n},0,1)" if side == "start"
+                         else f"clip(({frames - 1}-N)/{n},0,1)")
+                    out[k].append({"kind": "video", "mode": "toward", "colour": colour,
+                                   "f0": f0, "f1": f1, "wk": f"(1-{_p_expr(p, kind)})"})
+                else:
+                    out[k].append({"kind": "audio", "mode": "fade", "akind": kind,
+                                   "side": side, "f0": f0, "f1": f1})
+                said.append(f"{name} {n / rate:.2f}s at the {side} of shot {k + 1} "
+                            f"({segments[k]['clip']}): "
+                            + ("fades " + ("from " if side == "start" else "to ")
+                               + ("white" if kind == "dip_to_white" else "black")
+                               if key == "video" else
+                               ("fade in" if side == "start" else "fade out")))
     return out, said
 
 
@@ -1664,6 +1882,12 @@ def describe_controls(c: dict) -> str:
         if keys:
             bits.append(f"{k} keyed ×{len(keys)} "
                         + "→".join(f"{v:g}@{t:g}s" for t, v in keys))
+    if c.get("curves"):
+        bits.append("curves " + "/".join(k for k in colour.CURVE_CHANNELS if c["curves"].get(k)))
+    if c.get("wheels"):
+        bits.append("wheels " + "/".join(k for k in colour.WHEEL_NAMES if c["wheels"].get(k)))
+    if c.get("hsl"):
+        bits.append("hsl secondary")
     if c.get("fx_off"):
         bits.append(f"fx off {len(c['fx_off'])}")
     if c.get("fx_order"):
