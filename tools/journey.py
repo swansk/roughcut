@@ -89,6 +89,32 @@ in the page fails the step it happened in. `<out dir>/journey.json` has each ste
 ok, ms, PNG, why it failed and the page errors; the last line printed is the gate's:
 `journey ✓ 24 steps · 74 s` or `journey ✗ step 7 razor: <why>`. Exit 0 only when green.
 
+When the page or the browser goes away under a step (verdict 9, punch 1: the gate's
+step 15 died on "TargetClosedError … has been closed" and passed alone), the step's line
+says why: the page's `crash`, the context's `close`, the browser's `disconnected`, how
+the browser process ended and the last lines it wrote to stderr (Playwright's driver
+runs with DEBUG=pw:browser into `<out dir>/browser.log`: every stderr line and the
+"<process did exit: exitCode=…, signal=…>" line), and the page's last console errors.
+Only a crash of Chromium itself (the renderer's `crash` event, or the browser process
+ending on SIGTRAP / SIGSEGV / SIGABRT / SIGBUS / SIGILL / SIGFPE) is retried, once: a fresh
+page (and browser, if it died) on the cut as it was on disk before the step, and the line
+reads "… crashed (…); retried: ✓" (the last line adds "step N <name> retried once after
+…") or "retried: ✗ <why>". A browser killed from outside (SIGKILL / SIGTERM: the OOM
+killer, a stray pkill), a clean exit, or a page that closed while its browser lives, is
+never retried.
+
+The gate's step 15 (journalctl, 2026-10-18 18:28:45-49): GNOME Shell segfaulted, the user
+session's D-Bus was restarted, and the journey's headless Chromium, connected to that bus,
+aborted ("FATAL:dbus/bus.cc:1245 D-Bus connection was disconnected. Aborting.", SIGTRAP;
+the same on 2026-10-15 11:14). So the journey's Chromium gets no session or system bus
+(DBUS_*_BUS_ADDRESS point at nothing): it needs neither, and a desktop that falls over
+can no longer take the gate's browser with it.
+
+`ROUGHCUT_JOURNEY_CRASH=<step>:renderer|bus|kill` breaks Chromium at that step's first
+attempt, for app/tests/test_journey_tool.py: renderer → chrome://crash; bus → the first
+browser runs on a private session bus, killed at that step (the gate's death); kill →
+SIGKILL to the browser process (not a crash: not retried).
+
     python3 tools/journey.py <snapshot dir> <out dir> --steps=open,drop
 
 runs only the named steps, in the journey's order (the mutation checks in
@@ -137,6 +163,102 @@ def _reexec_under_uv() -> None:
 
 class StepFailed(Exception):
     pass
+
+
+# ------------------------------------------------------------------ Chromium, and why it went away
+
+# The browser's environment: no D-Bus. A session bus that restarts under it (GNOME Shell
+# crashed on foxtrot and took the user bus with it) aborts a connected Chromium.
+NO_BUS = "unix:path=/nonexistent/roughcut-journey-no-bus"
+CRASH_SIGNALS = ("SIGTRAP", "SIGSEGV", "SIGABRT", "SIGBUS", "SIGILL", "SIGFPE")
+# stderr lines that are the bus-less environment or GPU chatter, never a reason
+_NOISE = re.compile(r"Failed to connect to the bus|object_proxy\.cc|bluez|Floss|GL Driver Message"
+                    r"|portal\.cc|sandbox_linux|InitializeSandbox")
+_EXIT = re.compile(r"<process did exit: exitCode=(\w+), signal=(\w+)>")
+
+
+def browser_env(bus: str | None = None) -> dict:
+    """The browser's environment: ours, with no D-Bus (or `bus`, a private session bus)."""
+    env = dict(os.environ)
+    env["DBUS_SESSION_BUS_ADDRESS"] = bus or NO_BUS
+    env["DBUS_SYSTEM_BUS_ADDRESS"] = NO_BUS
+    return env
+
+
+def start_playwright(log: Path):
+    """sync_playwright(), entered with its driver's stderr in `log` and DEBUG=pw:browser:
+    every line the browser writes to stderr, and how its process exited. Returns (the
+    context manager, the Playwright object)."""
+    from playwright.sync_api import sync_playwright
+    cm = sync_playwright()
+    real, old = sys.stderr, os.environ.get("DEBUG")
+    os.environ["DEBUG"] = "pw:browser"
+    f = log.open("w")
+    sys.stderr = f                      # the driver is spawned with this fd as its stderr
+    try:
+        pw = cm.__enter__()
+    finally:
+        sys.stderr = real
+        f.close()
+        if old is None:
+            os.environ.pop("DEBUG", None)
+        else:
+            os.environ["DEBUG"] = old
+    return cm, pw
+
+
+def _stamp(ln: str) -> float | None:
+    # the driver's DEBUG lines open with an ISO time: "2026-10-18T22:28:49.096Z pw:browser …"
+    m = re.match(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?)Z", ln)
+    if not m:
+        return None
+    import datetime as dt
+    return dt.datetime.fromisoformat(m.group(1) + "+00:00").timestamp()
+
+
+def browser_said(log: Path, since: int = 0, pid: int | None = None) -> dict:
+    """What `log` (start_playwright's) says from byte `since` on, of the browser process
+    `pid` only when given: the pid last launched, how its process ended ({code, signal},
+    once it did) and its telling stderr lines (once it ended, those of its last 5 s)."""
+    try:
+        with log.open("rb") as f:
+            f.seek(since)
+            text = f.read().decode("utf-8", "replace")
+    except OSError:
+        text = ""
+    out: dict = {"exit": None, "lines": [], "pid": None}
+    seen: list[tuple[float | None, str]] = []
+    end_at = None
+    for ln in text.splitlines():
+        if pid is not None and f"[pid={pid}]" not in ln and f"<launched> pid={pid}" not in ln:
+            continue
+        m = _EXIT.search(ln)
+        if m:
+            out["exit"] = {"code": None if m.group(1) == "null" else m.group(1),
+                           "signal": None if m.group(2) == "null" else m.group(2)}
+            end_at = _stamp(ln)
+            continue
+        m = re.search(r"<launched> pid=(\d+)", ln)
+        if m:
+            out["pid"] = int(m.group(1))
+        if "[err]" in ln and re.search(r":(FATAL|ERROR):|Check failed|Aborting|Segmentation", ln) \
+                and not _NOISE.search(ln):
+            said = ln.split("[err]", 1)[1].strip()
+            # "[1018/182849.096232:FATAL:dbus/bus.cc:1245] D-Bus …" → "FATAL:dbus/bus.cc:1245 D-Bus …"
+            m = re.match(r"\[\d+/[\d.]+:(\w+:[^\]]+)\]\s*(.*)", said)
+            seen.append((_stamp(ln), f"{m.group(1)} {m.group(2)}" if m else said))
+    if end_at is not None:                  # what it said as it died, not an hour before
+        seen = [(t, x) for t, x in seen if t is None or t >= end_at - 5]
+    out["lines"] = [x for _, x in seen]
+    return out
+
+
+def _private_bus() -> tuple[str, int]:
+    """A session bus of our own (ROUGHCUT_JOURNEY_CRASH=<step>:bus): its address and pid."""
+    p = subprocess.run(["dbus-daemon", "--session", "--fork", "--nopidfile", "--print-address=1",
+                        "--print-pid=1"], capture_output=True, text=True, check=True, timeout=30)
+    addr, pid = p.stdout.split("\n")[:2]
+    return addr.strip(), int(pid)
 
 
 # The steps, in order (the docstring says what each asserts; --steps picks some of them).
@@ -510,20 +632,199 @@ class Journey:
         self.bin = list(CLIPS)               # the clips the Project panel must list now
         self.only: list[str] | None = None   # --steps: a shorter session
         self.fixture = self.out / "fixture"
+        # Chromium going away (verdict 9, punch 1): what happened, and a retry after a crash
+        self.browser = None
+        self.browser_pid: int | None = None
+        self.browser_log = self.out / "browser.log"   # the driver's stderr (start_playwright)
+        self.gone: list[str] = []            # this attempt: crash / close / disconnected, in order
+        self.closing = False                 # we close it ourselves: not a reason
+        self.console_at = 0                  # len(self.console) when the attempt began
+        self.log_at = 0                      # browser.log's size when the attempt began
+        self.edl0: bytes | None = None       # the EDL file before the step, for a retry
+        self.recover = None                  # run() sets it: a fresh page (and browser)
+        self.retried: list[dict] = []
+        crash = os.environ.get("ROUGHCUT_JOURNEY_CRASH", "")
+        self.crash_at = tuple(crash.split(":", 1)) if ":" in crash else None
+        self.bus: tuple[str, int] | None = None      # the private session bus (crash `bus`)
+
+    # ---- the browser and its page: no D-Bus, and every way of going away noted
+    def launch(self, pw, bus: str | None = None):
+        b = pw.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"],
+                               env=browser_env(bus))
+        b.on("disconnected", lambda *_: self._went(b, "the browser disconnected"))
+        self.browser = b
+        self.browser_pid = browser_said(self.browser_log)["pid"]    # the one just launched
+        return b
+
+    def _went(self, who, what: str) -> None:
+        # only the live browser and page, and never while we close them ourselves
+        if not self.closing and who in (self.browser, self.pg):
+            self.gone.append(what)
+
+    def open_page(self, b):
+        pg = b.new_page(viewport={"width": W, "height": H})
+        # the first-run walk-through (tour.js) is not part of this session: its flag, set
+        pg.add_init_script("try { localStorage.setItem('roughcut.tour', 'seen') } catch (e) {}")
+        pg.on("pageerror", lambda e: self.errors.append(str(e)))
+        pg.on("console", lambda m: self.console.append(m.text) if m.type == "error" else None)
+        # what the server hands the monitors: original, preview or proxy (its header)
+        pg.on("response", lambda r: self.media.append((r.url, r.headers.get("x-roughcut-media")))
+              if "/media/" in r.url else None)
+        pg.on("crash", lambda *_: self._went(pg, "the page's renderer crashed"))
+        pg.on("close", lambda *_: self._went(pg, "the page closed"))
+        pg.context.on("close", lambda *_: self._went(pg, "its context closed"))
+        pg.set_default_timeout(30000)
+        self.pg = pg
+        return pg
+
+    def went_away(self) -> dict | None:
+        """Why the page or the browser went away during this attempt, if it did:
+        {kind, words, retry, …}. kind: `renderer` (the page's crash event, the browser up),
+        `crash` (the browser process ended on a crash signal, or with a FATAL line),
+        `killed` (SIGKILL / SIGTERM from outside), `exit` (it exited by itself), `lost`
+        (gone, and its process said nothing), `closed` (the page or its context closed
+        with the browser up). Only `renderer` and `crash` are Chromium's own crashes."""
+        b, pg = self.browser, self.pg
+        dead = b is not None and not b.is_connected()
+        if not self.gone and not dead and not (pg is not None and pg.is_closed()):
+            return None
+        # a dead browser: its whole log (it may have died between two steps); a crashed
+        # renderer: what the browser wrote during this attempt
+        def read():
+            if dead:
+                return browser_said(self.browser_log, 0, self.browser_pid)
+            return browser_said(self.browser_log, self.log_at)
+        said = read()
+        deadline = time.time() + 5
+        while dead and said["exit"] is None and time.time() < deadline:
+            time.sleep(0.2)                 # the driver writes the exit line once it saw it
+            said = read()
+        ex = said["exit"] or {}
+        sig, code = ex.get("signal"), ex.get("code")
+        fatal = any(re.search(r"FATAL|Check failed", ln) for ln in said["lines"])
+        if dead:
+            if sig in CRASH_SIGNALS or (fatal and sig not in ("SIGKILL", "SIGTERM")):
+                kind, head = "crash", f"Chromium crashed (browser process {sig or f'exit {code}'}"
+            elif sig in ("SIGKILL", "SIGTERM"):
+                kind, head = "killed", (f"the browser was killed from outside ({sig}: not a crash,"
+                                        " e.g. the OOM killer or a pkill")
+            elif said["exit"] is None:
+                kind, head = "lost", "the browser went away (its process left no exit line"
+            else:
+                kind, head = "exit", f"the browser exited by itself (exit {code}"
+        elif "the page's renderer crashed" in self.gone:
+            kind, head = "renderer", "the page's renderer crashed (the browser still up"
+        else:
+            what = " and ".join(dict.fromkeys(self.gone)) or "the page closed"
+            kind, head = "closed", f"{what} (the browser still up: not a crash"
+        tail = said["lines"][-2:]
+        if tail:
+            head += " · " + " · ".join(t[:160] for t in tail)
+        head += ")"
+        con = self.console[self.console_at:][-2:]
+        if con:
+            head += " · console: " + " | ".join(c[:120] for c in con)
+        return {"kind": kind, "words": head, "retry": kind in ("renderer", "crash"),
+                "exit": said["exit"], "stderr": said["lines"][-6:], "events": list(self.gone),
+                "console": con}
+
+    def note_edl(self) -> None:
+        """The cut on disk before a step: a retry after a crash starts from it."""
+        try:
+            import server
+            self.edl0 = Path(server.STATE["edl"]).read_bytes()
+        except Exception:                               # noqa: BLE001 — no cut yet
+            self.edl0 = None
+
+    def restore_edl(self) -> None:
+        if self.edl0 is None:
+            return
+        import server
+        path = Path(server.STATE["edl"])
+        tmp = path.with_name(path.name + ".journey.tmp")
+        tmp.write_bytes(self.edl0)
+        tmp.replace(path)
+
+    def reopened(self) -> None:
+        """The board on a fresh page after a crash: its state, the bin, V1 as on disk."""
+        self.until("window.rcFirstPass && rcFirstPass.state() && window.effects && window.tl && tl.state",
+                   "the board never loaded on the fresh page", 30000)
+        self.until(f"document.querySelectorAll('#projList [data-clip]').length >= {len(self.bin)}",
+                   f"the fresh page never listed the {len(self.bin)} clips", 20000)
+        self.until("document.querySelectorAll('#tl .tl-lane[data-lane=V1] .blk').length === segs.length",
+                   "V1 never drew the cut on the fresh page", 20000)
+
+    def break_chromium(self, how: str) -> None:
+        """ROUGHCUT_JOURNEY_CRASH: break Chromium here, as the gate's run was broken."""
+        if how == "renderer":
+            try:
+                self.pg.goto("chrome://crash", timeout=5000)
+            except Exception:                           # noqa: BLE001 — it crashes
+                pass
+        elif how == "bus" and self.bus:
+            os.kill(self.bus[1], signal.SIGTERM)
+        elif how == "kill":
+            os.kill(self.browser_pid, signal.SIGKILL)
+        else:
+            raise RuntimeError(f"ROUGHCUT_JOURNEY_CRASH: no such way to break Chromium: {how!r}")
+        deadline = time.time() + 10
+        while time.time() < deadline and not self.gone and self.browser.is_connected():
+            try:
+                self.pg.wait_for_timeout(100)
+            except Exception:                           # noqa: BLE001 — it went
+                break
 
     # ---- a step: time it, screenshot it, fail it on an exception or a page error.
     # A step may return a callable: it runs after the screenshot (a menu the PNG shows
-    # open is closed there); if it fails, the step does.
+    # open is closed there); if it fails, the step does. A step that Chromium itself
+    # crashed under is run again, once, on a fresh page, and says so.
     def step(self, name: str, fn) -> bool:
         n = len(self.steps) + 1
+        self.note_edl()
+        rec = self._attempt(n, name, fn, first=True)
+        gone = None if rec["ok"] else self.went_away()
+        if gone:
+            rec["gone"] = gone
+            if gone["retry"] and self.recover is not None:
+                first = rec
+                try:
+                    self.recover(gone)
+                except Exception as e:                  # noqa: BLE001
+                    rec = {**first, "why": f"{gone['words']}; retried: ✗ no fresh page: "
+                                           f"{type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}"}
+                else:
+                    rec = self._attempt(n, name, fn)
+                    again = None if rec["ok"] else self.went_away()
+                    if again:
+                        rec["gone"] = again
+                    rec["why"] = f"{gone['words']}; retried: " + (
+                        "✓" if rec["ok"] else f"✗ {rec['why']}" + (f" — {again['words']}" if again else ""))
+                rec["retried"] = {"after": gone, "first_why": first["why"], "first_ms": first["ms"],
+                                  "first_trace": first.get("trace")}
+                self.retried.append({"n": n, "name": name, "words": gone["words"], "ok": rec["ok"]})
+            else:
+                rec["why"] = f"{rec['why']} — {gone['words']}"
+        self.steps.append(rec)
+        mark = "✓" if rec["ok"] else "✗"
+        print(f"  {n:02d} {name:<13} {mark} {rec['ms']:>6} ms  {rec['why']}", flush=True)
+        return rec["ok"]
+
+    def _attempt(self, n: int, name: str, fn, first: bool = False) -> dict:
         png = self.out / f"{n:02d}-{name}.png"
         seen = len(self.errors)
+        self.gone, self.console_at = [], len(self.console)
+        try:
+            self.log_at = self.browser_log.stat().st_size
+        except OSError:
+            self.log_at = 0
         t0 = time.time()
         rec = {"n": n, "name": name, "ok": False, "ms": 0, "png": png.name, "why": "",
                "errors": []}
         after = None
         self.current = (n, name, rec)
         try:
+            if first and self.crash_at and self.crash_at[0] == name:
+                self.break_chromium(self.crash_at[1])
             after = fn()
             rec["ok"] = True
         except StepFailed as e:
@@ -555,10 +856,7 @@ class Journey:
             except Exception as e:
                 rec["ok"], rec["why"] = False, f"after its screenshot: {type(e).__name__}: {e}"
             rec["ms"] = round((time.time() - t0) * 1000)
-        self.steps.append(rec)
-        mark = "✓" if rec["ok"] else "✗"
-        print(f"  {n:02d} {name:<13} {mark} {rec['ms']:>6} ms  {rec['why']}", flush=True)
-        return rec["ok"]
+        return rec
 
     def extra_png(self, what: str) -> None:
         """A second picture inside the step (`NN-<step>-<what>.png`): a state the step
@@ -744,19 +1042,38 @@ class Journey:
 
     # ------------------------------------------------------------------ the steps
     def run(self, pw) -> None:
-        b = pw.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
-        self.browser = b
-        pg = b.new_page(viewport={"width": W, "height": H})
-        # the first-run walk-through (tour.js) is not part of this session: its flag, set
-        pg.add_init_script("try { localStorage.setItem('roughcut.tour', 'seen') } catch (e) {}")
-        self.pg = pg
-        pg.on("pageerror", lambda e: self.errors.append(str(e)))
-        pg.on("console", lambda m: self.console.append(m.text) if m.type == "error" else None)
-        # what the server hands the monitors: original, preview or proxy (its header)
-        pg.on("response", lambda r: self.media.append((r.url, r.headers.get("x-roughcut-media")))
-              if "/media/" in r.url else None)
-        pg.set_default_timeout(30000)
+        if self.crash_at and self.crash_at[1] == "bus":
+            self.bus = _private_bus()           # the first browser on a bus that will go
+        b = self.launch(pw, bus=self.bus[0] if self.bus else None)
+        pg = self.open_page(b)
         F = self.facts
+
+        def recover(gone: dict) -> None:
+            """After Chromium crashed under a step: a fresh page (a fresh browser if the
+            old one died, never on a bus), the cut on disk as before the step, the board."""
+            nonlocal b, pg
+            self.closing = True
+            try:
+                if gone["kind"] == "renderer" and b.is_connected():
+                    try:
+                        pg.context.close()
+                    except Exception:                   # noqa: BLE001 — crashed
+                        pass
+                else:
+                    try:
+                        b.close()
+                    except Exception:                   # noqa: BLE001 — dead
+                        pass
+                    b = self.launch(pw)
+            finally:
+                self.closing = False
+            time.sleep(0.3)                             # a save the crash cut short lands first
+            self.restore_edl()
+            pg = self.open_page(b)
+            pg.goto(self.base + "/")
+            self.reopened()
+
+        self.recover = recover
 
         def open_board():
             t0 = time.time()
@@ -1684,7 +2001,11 @@ class Journey:
         for name, fn in plan:
             if not self.step(name, fn):
                 break
-        b.close()
+        self.closing = True
+        try:
+            b.close()
+        except Exception:                               # noqa: BLE001 — it died under a step
+            pass
 
 
 # ------------------------------------------------------------------ the harness
@@ -1802,14 +2123,25 @@ def main() -> int:
         traceback.print_exc()
 
     if setup_err is None:
-        from playwright.sync_api import sync_playwright
         print(f"journey: {snap} → {out} (server {j.base})", flush=True)
+        cm = None
         try:
-            with sync_playwright() as pw:
-                j.run(pw)
+            cm, pw = start_playwright(j.browser_log)
+            j.run(pw)
         except Exception as e:                      # the browser itself
             setup_err = f"browser: {type(e).__name__}: {str(e).splitlines()[0]}"
             traceback.print_exc()
+        finally:
+            if cm is not None:
+                try:
+                    cm.__exit__(None, None, None)
+                except Exception:                   # noqa: BLE001 — a driver already gone
+                    pass
+            if j.bus:
+                try:
+                    os.kill(j.bus[1], signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
 
     t_down = time.time()
     # ---- the backend was the scripted one, every call
@@ -1884,8 +2216,12 @@ def main() -> int:
         line = f"journey ✗ step {planned} {j.steps[-1]['name']}: the review copy of {name} is {st}, not ready"
     else:
         line = f"journey ✓ {len(j.steps)} steps · {total:.0f} s"
+        # a step Chromium crashed under passed on its retry: said, never hidden
+        for r in j.retried:
+            line += f" · step {r['n']} {r['name']} retried once after {r['words']}"
     result.update(ok=line.startswith("journey ✓"), line=line, total_s=round(total, 1),
-                  setup_error=setup_err, ledger_bad=ledger_bad)
+                  setup_error=setup_err, ledger_bad=ledger_bad, retried=j.retried,
+                  browser_log=str(j.browser_log))
     (out / "journey.json").write_text(json.dumps(result, indent=1, default=str))
     print(line, flush=True)
     sys.stdout.flush()

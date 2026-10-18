@@ -395,6 +395,12 @@ def main() -> int:
     if deps.exists():
         env["LD_LIBRARY_PATH"] = f"{deps}:{env.get('LD_LIBRARY_PATH', '')}"
     env["ROUGHCUT_BOOT_JSON"] = str(run_dir / "boot.json")     # test_boot_wait's record (boot_check)
+    # No D-Bus for anything the gate starts (wave 13 SMALL4): a GNOME Shell crash restarts the
+    # user bus and every Chromium connected to it aborts ("FATAL:dbus/bus.cc … Aborting.",
+    # SIGTRAP), which killed the verdict-9 gate's journey at step 15. The suite, the screens
+    # and boot need no bus; the journey already gives its own browser none.
+    env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/nonexistent/roughcut-gate-no-bus"
+    env["DBUS_SYSTEM_BUS_ADDRESS"] = "unix:path=/nonexistent/roughcut-gate-no-bus"
     results: list[tuple[str, bool, str]] = []
     amber: set[str] = set()          # green, but not proven: the run is AMBER, not GREEN
     t_all = time.time()

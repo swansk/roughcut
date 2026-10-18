@@ -579,7 +579,9 @@ function buildNone() {
 }
 
 /* The shots the strip warns about: a cut inside a sentence, or a stretch the visual pass
- * said not to use. */
+ * said not to use. A stretch shorter than a frame is a moment (the pass flags single
+ * frames as start === end): one time, never "0:13.2–0:13.2" (verdict 9, punch 3); a moment
+ * that does not say what is wrong with it is not shown at all. */
 function shotWarnings(seg) {
   const out = [];
   const clip = P.clips[seg.clip];
@@ -588,12 +590,16 @@ function shotWarnings(seg) {
     if (cutsInto(seg.in)) out.push({ kind: 'in', text: 'starts mid-sentence', fix: 'Fix' });
     if (cutsInto(seg.out)) out.push({ kind: 'out', text: 'cuts a line off', fix: 'Fix' });
   }
+  const frame = 1 / (tl.fps() || 24);
   unusableFor(seg).forEach((u, k) => {
     const spd = speedOf(seg);
     const a = Math.max(0, (u.start - seg.in) / spd), b = Math.min(tl.dur(seg), (u.end - seg.in) / spd);
     const whole = u.start <= seg.in + 0.05 && u.end >= seg.out - 0.05;
     const at = (t) => (b - a >= 1 ? clock(t) : fmt(t));      // a short stretch keeps its tenths
-    out.push({ kind: 'bad', k, why: u.why, text: `${at(a)}–${at(b)} ${badWords(u.why)}`,
+    const moment = b - a < frame;
+    if (moment && !String(u.why || '').trim()) return;     // `k` stays the stretch's own (trimBad)
+    const when = moment || at(a) === at(b) ? at(a) : `${at(a)}–${at(b)}`;
+    out.push({ kind: 'bad', k, why: u.why, text: `${when} ${badWords(u.why)}`,
                fix: whole ? '' : 'Trim it out' });
   });
   return out;

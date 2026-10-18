@@ -171,6 +171,8 @@ STEP_JS = """() => {
   }
   return {step: t.dataset.step, key: t.dataset.key, which: t.dataset.which, anchor: t.dataset.anchor,
           side: t.dataset.side, callout: box(t), ring: ring && !ring.hidden ? box(ring) : null,
+          heads: box(document.querySelector('#tl .tl-side')),
+          transports: [...document.querySelectorAll('#pSource .transport, #pProgram .transport')].map(box),
           target: ab, tag: a ? (a.id || a.className || a.tagName) : null,
           isMenu: !!(a && a.classList && a.classList.contains('mtop')),
           covered, vw: innerWidth, vh: innerHeight,
@@ -182,6 +184,10 @@ STEP_JS = """() => {
 
 def _on_screen(b, vw, vh) -> bool:
     return b and b["l"] >= 0 and b["t"] >= 0 and b["r"] <= vw + 0.5 and b["b"] <= vh + 0.5
+
+
+def _overlap(a, b) -> bool:
+    return bool(a and b and a["l"] < b["r"] and a["r"] > b["l"] and a["t"] < b["b"] and a["b"] > b["t"])
 
 
 # ---------------------------------------------------------------- the first run
@@ -200,6 +206,11 @@ def test_the_first_run_opens_step_one_on_the_workspace_and_only_once(live, bins,
     # never a modal: small, and the workspace answers under it (a tab, the ruler)
     c = info["callout"]
     assert c["w"] * c["h"] < 0.08 * info["vw"] * info["vh"], c
+    # and never over the Timeline's track headers (verdict 9, dimension 1: it covered V1 / V2)
+    # nor the monitors' transport rows
+    assert info["heads"] and not _overlap(c, info["heads"]), f"step 1 covers the track headers: {info}"
+    assert len(info["transports"]) == 2 and not any(_overlap(c, b) for b in info["transports"]), \
+        f"step 1 covers a monitor's transport: {info}"
     pg.locator('#pProject .ws-tab[data-tool="bin"]').click()
     pg.wait_for_selector('#pProject section[data-tool="bin"]:not([hidden])', timeout=3000)
     hit = pg.evaluate("""(() => { const r = document.querySelector('#tl .tl-ruler').getBoundingClientRect();
@@ -305,6 +316,7 @@ def test_every_step_points_at_something_on_screen(live, bins, tmp_path, browser,
         assert _on_screen(info["callout"], vw, vh), f"callout off screen: {info}"
         assert info["ring"] and _on_screen(info["ring"], vw, vh), info
         assert not info["covered"], f"the callout covers what it points at: {info}"
+        assert not _overlap(info["callout"], info["heads"]), f"the callout covers the track headers: {info}"
         if shots:
             Path(shots).mkdir(parents=True, exist_ok=True)
             pg.screenshot(path=str(Path(shots) / f"{which}-{state}-{size[0]}-{i + 1}-{info['key']}.png"))
@@ -374,6 +386,69 @@ def test_show_me_opens_things_and_never_asks_a_model(live, bins, tmp_path, brows
     assert showed == want, showed
     pg.wait_for_timeout(500)
     assert priced == [], f"Show me reached a priced endpoint: {priced}"
+    _done(pg)
+
+
+# ---------------------------------------------------------------- Show me over a dialog
+
+DIALOG_JS = """() => {
+  const t = document.querySelector('[data-testid="tour"]');
+  const d = document.querySelector('dialog[open]');
+  const r = t.getBoundingClientRect(), q = d ? d.getBoundingClientRect() : null;
+  const hits = [[0.5, 0.5], [0.15, 0.2], [0.85, 0.8]].map(([fx, fy]) => {
+    const el = document.elementFromPoint(r.left + r.width * fx, r.top + r.height * fy);
+    return !!(el && el.closest('[data-testid="tour"]'));
+  });
+  return {dialog: d ? (d.id || d.dataset.testid) : null, inDialog: !!(d && d.contains(t)),
+          anchor: t.dataset.anchor, side: t.dataset.side, step: t.dataset.step, hits,
+          callout: {l: r.left, t: r.top, r: r.right, b: r.bottom, w: r.width, h: r.height},
+          box: q && {l: q.left, t: q.top, r: q.right, b: q.bottom}, vw: innerWidth, vh: innerHeight};
+}"""
+
+
+@pytest.mark.parametrize("size", SIZES, ids=lambda s: f"{s[0]}x{s[1]}")
+def test_show_me_keeps_the_callout_above_the_dialog_it_opened(live, bins, tmp_path, browser, size):
+    """Verdict 9, dimension 16: "Show me on step 1 hides the callout under the modal". The
+    Import dialog is a modal <dialog> (the top layer, above every z-index): the callout
+    goes into it, docked beside it, on top and answering; Esc closes the dialog and the
+    callout comes back to the workspace, the walk-through still up."""
+    _state(bins, tmp_path, "fresh")
+    pg = _page(browser, live, size)
+    pg.wait_for_timeout(600)
+    pg.evaluate("rcTour.start()")
+    pg.wait_for_selector(TOUR, timeout=3000)
+    pg.locator('[data-testid="tour-show"]').click()
+    pg.wait_for_selector('[data-testid="import-dialog"][open]', timeout=5000)
+    pg.wait_for_function("document.querySelector('[data-testid=tour]').dataset.anchor === 'dialog'",
+                         timeout=3000)
+    pg.wait_for_timeout(300)
+    d = pg.evaluate(DIALOG_JS)
+    assert d["dialog"] == "importDialog" and d["inDialog"], d
+    assert all(d["hits"]), f"the dialog covers the callout: {d}"
+    assert _on_screen(d["callout"], d["vw"], d["vh"]), d
+    # docked to its edge, beside it: none of the dialog's list, path bar or buttons under it
+    assert not _overlap(d["callout"], d["box"]), f"the callout sits on the dialog: {d}"
+    assert d["callout"]["w"] >= 200, d
+    shots = os.environ.get("ROUGHCUT_TOUR_SHOTS")
+    if shots:
+        Path(shots).mkdir(parents=True, exist_ok=True)
+        pg.screenshot(path=str(Path(shots) / f"show-me-import-{size[0]}.png"))
+    # its buttons answer while the dialog is up: Next moves the walk-through on
+    pg.locator('[data-testid="tour-next"]').click()
+    pg.wait_for_function("document.querySelector('[data-testid=tour]').dataset.step === '2'", timeout=3000)
+    assert pg.locator('[data-testid="import-dialog"][open]').count() == 1
+    pg.locator('[data-testid="tour-back"]').click()
+    pg.wait_for_function("document.querySelector('[data-testid=tour]').dataset.step === '1'", timeout=3000)
+    # Esc closes the dialog only; the callout is back on the workspace, beside its anchor
+    pg.keyboard.press("Escape")
+    pg.wait_for_selector('[data-testid="import-dialog"]', state="hidden", timeout=3000)
+    pg.wait_for_function("(() => { const t = document.querySelector('[data-testid=tour]');"
+                         " return t && t.parentElement === document.body && t.dataset.anchor !== 'dialog'; })()",
+                         timeout=3000)
+    info = pg.evaluate(STEP_JS)
+    assert info["step"] == "1" and _on_screen(info["callout"], info["vw"], info["vh"]), info
+    assert info["ring"] and not _overlap(info["callout"], info["heads"]), info
+    assert pg.evaluate("rcTour.active") is True
     _done(pg)
 
 

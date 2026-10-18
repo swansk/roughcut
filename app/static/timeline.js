@@ -3093,13 +3093,25 @@
     return { ok: true, value, committed: closeEntry() };
   }
 
+  /* After an undo or a redo the film can end before the playhead (an insert at the end,
+   * undone): a playhead that was on the film comes back to its new end and the monitor is
+   * cued on the cut as it is now, so the Program never keeps showing a shot that is gone
+   * (verdict 9, punch 10). One the editor had put past the old end stays where it is. */
+  function headBack(was) {
+    const tot = total(), at = state.playhead;
+    if (!(at > tot + 1e-6) || at > was + 1e-6) return;
+    seek(tot);
+  }
+
   function undo() {
     const e = undoStack.pop();
     if (!e) { toast('nothing to undo'); return false; }
     pending = null;
+    const was = total();
     restore(e.before);
     redoStack.push(e);
     if (hooks.render) hooks.render();
+    headBack(was);
     if (hooks.touch) hooks.touch();     // undoing is an edit too, and must reach the disk
     paintUndo();
     emit('change', { label: e.label, kind: 'undo' });
@@ -3111,9 +3123,11 @@
     const e = redoStack.pop();
     if (!e) { toast('nothing to redo'); return false; }
     pending = null;
+    const was = total();
     restore(e.after);
     undoStack.push(e);
     if (hooks.render) hooks.render();
+    headBack(was);
     if (hooks.touch) hooks.touch();
     paintUndo();
     emit('change', { label: e.label, kind: 'redo' });
