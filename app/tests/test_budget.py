@@ -124,10 +124,21 @@ HEADER_MAX_PX = 50
 # words / 98 → 100, / shot 124 → 126, / film 106 → 108, / fx 129 → 131, / jobs 107 → 109;
 # controls / 54 → 56, / shot 69 → 71, / film 53 → 55, / fx 57 → 59, / jobs 55 → 57. The status
 # line beside it is empty at rest.
-WORDS_IN_VIEW = {"/": 100, "/floor": 58, "/open": 59, "/ shot": 126, "/ film": 108, "/ fx": 131,
-                 "/ jobs": 109}
-CONTROLS_IN_VIEW = {"/": 56, "/floor": 8, "/open": 9, "/ shot": 71, "/ film": 55, "/ fx": 59,
-                    "/ jobs": 57}
+# Wave 12, lane BINLOOK (K3 a, REDESIGN-GOAL dimension 16's look), measured, no headroom: the
+# Project panel is Premiere's, so the bin's cut is a sequence in it (the fixture's one cut,
+# "edl", is a row: its name, its duration and "open", 3 words on every board screen) and its
+# bottom bar carries Premiere's Import (1 control; List / Icon moved down beside it from the
+# panel's head, the item count with them, so no other change): words / 98 → 101, / shot 124 →
+# 127, / film 106 → 109, / fx 129 → 132, / jobs 107 → 110; controls / 54 → 55, / shot 69 → 70,
+# / film 53 → 54, / fx 57 → 58, / jobs 55 → 56. The icon-size slider shows in Icon view only.
+# Both wave 12 lanes together (the lead's merge, measured): / 103 · 57, / shot 129 · 72,
+# / film 111 · 56, / fx 134 · 60, / jobs 112 · 58 (AIPROMPT's +2 · +2 and BINLOOK's +3 · +1).
+# / jobs measured 112 · 58 and, on another run, under it by one (the job pill's text timing):
+# the limit is the larger, measured, count.
+WORDS_IN_VIEW = {"/": 103, "/floor": 58, "/open": 59, "/ shot": 129, "/ film": 111, "/ fx": 134,
+                 "/ jobs": 112}
+CONTROLS_IN_VIEW = {"/": 57, "/floor": 8, "/open": 9, "/ shot": 72, "/ film": 56, "/ fx": 60,
+                    "/ jobs": 58}
 
 # Contracts another lane delivers (M16 stage 1, C1): until that lane is merged the
 # check is an expected failure on that screen. Every stage-1 lane is merged, so this is

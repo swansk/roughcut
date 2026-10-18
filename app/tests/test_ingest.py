@@ -237,12 +237,12 @@ def test_the_project_list_shows_frame_rate_and_resolution_when_wide(live_server,
     assert d["probing"] == 0
     assert a["fps"] == pytest.approx(24.0) and (a["width"], a["height"]) == (320, 180)
     assert a["codec"] == "h264"
-    # 470 px and up: Frame Rate and Resolution, filled in
+    # 470 px and up: Frame Rate and Video Info (the size), filled in
     pg = _page(browser, live_server, size=(1440, 900), layout={"proj": 0.36})
     pg.wait_for_function("document.querySelectorAll('#projList tr.row').length === 3")
     assert pg.evaluate("document.querySelector('#projList').clientWidth") >= 470
     head = pg.locator("#projList th").all_inner_texts()
-    assert "Frame Rate" in head and "Resolution" in head, head
+    assert "Frame Rate" in head and "Video Info" in head, head          # Premiere's names (BINLOOK)
     first = _rows(pg).first.inner_text()
     assert "24 fps" in first and "320×180" in first, first
     # the default (narrower) panel keeps to Name / Duration / Status

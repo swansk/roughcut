@@ -207,7 +207,9 @@ def test_the_project_panel_lists_the_footage_and_opens_a_clip_in_the_source_moni
     head = pg.locator("#projList th").all_inner_texts()
     assert head[:2] == ["Name", "Duration"] and "Status" in head, head
     assert pg.evaluate("tl.tc(6)") in rows.first.inner_text()     # durations in timecode
-    assert pg.locator("#projCount").inner_text() == "3 items"
+    # Premiere's count: every item in the bin, its three clips and its one sequence (wave 12
+    # BINLOOK: the cut is a sequence in the bin)
+    pg.wait_for_function("document.querySelector('#projCount').textContent === '4 items'", timeout=5000)
     # the search box filters
     pg.locator("#projQ").fill("clip_b")
     assert pg.locator("#projList tr.row").count() == 1

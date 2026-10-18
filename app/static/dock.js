@@ -21,10 +21,11 @@
  *     and reaches every tool;
  *   - the focused panel (Premiere's blue outline): the Source monitor's keys (I, O, space,
  *     ← →) act on it only while it is focused;
- *   - the Project panel: every clip in the footage folder from GET /api/clips, as a list
- *     (name, duration, frame rate and size when the server knows them, when it was shot,
- *     its state) or as icons; a click opens the clip in the Source monitor, a drag puts its
- *     In–Out range on the timeline;
+ *   - the Project panel (wave 12, BINLOOK: Premiere's own): every clip in the footage
+ *     folder from GET /api/clips, the bin's cuts as sequences (a waiting proposal one of
+ *     them), the pass's picks as subclips; a sortable List view of Premiere's metadata
+ *     columns or an Icon view with hover scrub; a click opens a clip in the Source monitor,
+ *     a drag puts its In–Out range (or a subclip's) on the timeline;
  *   - the Source monitor: the clip, its own transport, and In/Out marks kept per clip.
  *     `window.rcSource = {clip, inPoint, outPoint}` is the live answer for the insert and
  *     overwrite keys (another lane binds them); `rcsource` fires on window when it changes;
@@ -417,11 +418,51 @@
   }
 
   /* ================================================================ the project panel */
+  /* Premiere's Project panel (wave 12, lane BINLOOK; REDESIGN-GOAL dimension 16's look, Karl's
+   * K3 a: "I still don't like the way the footage and pass look"). The bin holds editor
+   * objects, and the pass's result is among them, not in a view of its own:
+   *   - List view: Premiere's metadata columns — Name (label swatch, type icon), Frame Rate,
+   *     Media Start, Media End, Media Duration, Video Info, Status and the pass's Description
+   *     — as many as the panel's width holds, numbers right-aligned in timecode; a click on
+   *     a heading sorts by it, again the other way, the arrow on the sorted one; ↑ / ↓ walk
+   *     the rows and Enter opens one while the panel has the blue outline (→ / ← open and
+   *     close a clip's subclips);
+   *   - Icon view: a poster per item with its name and duration under it; moving across a
+   *     clip's poster scrubs through the clip (Premiere's hover scrub); the bottom bar's
+   *     slider sizes the posters;
+   *   - the bin's cuts are sequences in it, the open one marked; a double-click opens one
+   *     through the switcher's own path (/api/cuts/open). A proposal waiting for review is a
+   *     sequence too — "First pass" with its "proposed" badge — whose double-click shows its
+   *     ghost lane on the Timeline and its review in the Assistant;
+   *   - the pass's picks and the editor's keeps are subclips under their clip (the
+   *     disclosure triangle): name, In, Out, duration and why (a column and the hover). A
+   *     subclip drags onto the Timeline as its range, a click opens it in the Source
+   *     monitor with its In and Out, so `,` / `.` cut exactly it;
+   *   - the bottom bar, as Premiere's: List / Icon, the icon size, the item count, Import;
+   *   - no footage: "Import media to start", Import (window.rcImport, lane IMPORT), or drop
+   *     files here.
+   * The clips re-read on `rc:clips-changed` (whoever adds footage fires it) and on
+   * `dock.project.reload()`; the sequences follow the switcher's own listing; the subclips
+   * and the proposal follow the board's (app.js `passPicks`, `bin`, `pendingPlan`). */
   const VIEW_KEY = 'roughcut.ws.projview';
+  const SORT_KEY = 'roughcut.ws.projsort';
+  const ZOOM_KEY = 'roughcut.ws.projzoom';
+  const OPEN_KEY = 'roughcut.ws.projopen';
+  const ZOOM = { min: 72, max: 240, def: 120 };
+  const SORTS = ['name', 'fps', 'start', 'end', 'dur', 'size', 'state', 'note', 'shot'];
+  const sortOf = (s) => (s && SORTS.includes(s.col) && (s.dir === 1 || s.dir === -1)
+    ? { col: s.col, dir: s.dir } : { col: 'name', dir: 1 });
+  const zoomOf = (z) => (Number.isFinite(Number(z)) && z !== null
+    ? clamp(Math.round(Number(z)), ZOOM.min, ZOOM.max) : ZOOM.def);
+  const openOf = (v) => new Set(Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []);
   // `read` is false until /api/clips has answered once: before that the panel says it is
-  // reading the folder, never that the bin is empty (verdict 2, punch 8).
+  // reading the folder, never that the bin is empty (verdict 2, punch 8). `sel` is the
+  // selected item's key: `c|<clip>`, `s|<subclip id>`, `q|<cut path>` or `p|` (the proposal).
   const project = { clips: [], view: store.get(VIEW_KEY, 'list'), sel: null, q: '', timer: 0,
-                    read: false, failed: false };
+                    read: false, failed: false, sort: sortOf(store.get(SORT_KEY, null)),
+                    zoom: zoomOf(store.get(ZOOM_KEY, ZOOM.def)), open: openOf(store.get(OPEN_KEY, [])),
+                    cuts: null, cutsSig: '', cutsSoon: null, proposal: null, propSig: '',
+                    subs: new Map(), subsSig: '', cols: '' };
 
   async function loadClips() {
     clearTimeout(project.timer);
@@ -438,9 +479,13 @@
       project.timer = setTimeout(loadClips, project.read ? 10000 : 2000);
       return;
     }
+    // the first paint lists the bin's sequences with its clips (their read started with
+    // this one, and waits at most a moment), so the item count never changes under you
+    if (project.cutsSoon) { const soon = project.cutsSoon; project.cutsSoon = null; await soon; }
     // a newly listed clip gets its facts into the board's clips, where one was stubbed
     project.clips.forEach((c) => { if (stubs.has(c.clip)) ensureClip(c.clip, true); });
     heardSince();
+    subsChanged();
     paintProject();
     // facts still being probed: ask again in a second; a clip still being indexed: now and then
     if (j && j.probing) project.timer = setTimeout(loadClips, 1000);
@@ -514,6 +559,16 @@
   }
 
   const FILM_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="3" width="13" height="10" rx="1.2"/><path d="M1.5 6h13M5 3v3M8 3v3M11 3v3"/></svg>';
+  // Premiere's other two bin icons: a sequence (tracks in a frame) and a subclip (a clip
+  // between its In and Out brackets); and the bottom bar's Import (a folder taking a file)
+  const SEQ_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="2.5" width="13" height="11" rx="1.2"/><path d="M1.5 6.2h13M1.5 9.8h13"/><path d="M3.6 4.35h5.2M6.4 8h5.8M3.6 11.65h3.8" stroke-width="1.7"/></svg>';
+  const SUB_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4.2 2.5H2.2v11h2M11.8 2.5h2v11h-2"/><rect x="5.4" y="5" width="5.2" height="6" rx=".8"/></svg>';
+  const IMPORT_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.5 4v8.8a.8.8 0 0 0 .8.8h11.4a.8.8 0 0 0 .8-.8V5.9a.8.8 0 0 0-.8-.8H7.6L6.1 3.2H2.3a.8.8 0 0 0-.8.8z"/><path d="M8 6.9v4.6M5.9 9.5 8 11.6l2.1-2.1"/></svg>';
+  // Premiere's label colours, by its own defaults: a movie (picture and sound) is Violet,
+  // a sequence Forest; a subclip wears its clip's label
+  const LABELS = { violet: ['Violet', '#a58fe8'], forest: ['Forest', '#5c9f46'] };
+  const lab = (k) => (LABELS[k] || LABELS.violet);
+  const nOf = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
   function capturedText(t) {
     if (!t) return '';
@@ -531,104 +586,789 @@
     if (c.looked) return ['looked', 'part'];
     return ['not indexed', ''];
   }
-  const fpsOf = (c) => (c.fps ? `${Number(c.fps).toFixed(Number(c.fps) % 1 ? 2 : 0)} fps` : '');
-  const sizeOf = (c) => (c.width && c.height ? `${c.width}×${c.height}` : '');
+  const fpsText = (r) => (r ? `${Number(r).toFixed(Number(r) % 1 ? 2 : 0)} fps` : '');
+  const tcOf = (t, rate) => tcode(Math.max(0, Number(t) || 0), rate);
+  // Media End is the last frame's timecode, as Premiere writes it (In + Duration − 1 frame)
+  const lastFrame = (t, rate) => Math.max(0, (Number(t) || 0) - 1 / (Number(rate) > 0 ? Number(rate) : 24));
+  // Premiere's Icon view writes a duration short: 00:00:06:00 → 6:00, 00:01:23:12 → 1:23:12
+  const shortTc = (s) => String(s).replace(/^(?:00[:;]){1,2}/, '').replace(/^0(?=\d)/, '');
+  const overlap = (a, b) => Math.max(0, Math.min(a[1], b[1]) - Math.max(a[0], b[0]))
+    / Math.max(1e-6, Math.min(a[1] - a[0], b[1] - b[0]));
+  const stemOf = (name) => String(name || '').replace(/\.[^.]+$/, '');
 
-  function columns(width) {
-    const cols = [{ k: 'name', h: 'Name' }, { k: 'dur', h: 'Duration', w: 80 }];
-    if (width > 220) cols.push({ k: 'state', h: 'Status', w: 78 });
-    if (width >= 400 && project.clips.some((c) => c.fps)) cols.push({ k: 'fps', h: 'Frame Rate', w: 76 });
-    if (width >= 470 && project.clips.some((c) => c.width)) cols.push({ k: 'size', h: 'Resolution', w: 88 });
-    if (width > 560) cols.push({ k: 'shot', h: 'Captured', w: 118 });
+  /* The board's own state, read where app.js keeps it (classic-script globals, as `P` is
+   * read above): the pass's picks (`passPicks`, GET /api/picks), the editor's keeps (`bin`,
+   * GET /api/selects), the cut (`segs`) and a proposal waiting for review (`pendingPlan`).
+   * Read only; a page without them (or before they exist) has none. */
+  /* eslint-disable no-undef */
+  const boardClip = (name) => { try { return typeof P !== 'undefined' && P && P.clips ? P.clips[name] || null : null; } catch (e) { return null; } };
+  const boardPicks = () => { try { return typeof passPicks !== 'undefined' && Array.isArray(passPicks) ? passPicks : []; } catch (e) { return []; } };
+  const boardKeeps = () => { try { return typeof bin !== 'undefined' && bin && Array.isArray(bin.selects) ? bin.selects : []; } catch (e) { return []; } };
+  const boardSegs = () => { try { return typeof segs !== 'undefined' && Array.isArray(segs) ? segs : []; } catch (e) { return []; } };
+  const boardPlan = () => { try { return typeof pendingPlan !== 'undefined' ? pendingPlan : null; } catch (e) { return null; } };
+  /* eslint-enable no-undef */
+  const seqRate = () => { try { return window.tl && typeof tl.gridRate === 'function' && tl.state ? tl.gridRate() : 0; } catch (e) { return 0; } };
+  function liveCut() {
+    try {
+      if (!window.tl || !tl.state || typeof tl.total !== 'function') return null;
+      const list = boardSegs();
+      return { dur: tl.total(), n: list.length, first: list[0] || null };
+    } catch (e) { return null; }
+  }
+  const segDur = (s) => { try { return window.tl && tl.dur ? tl.dur(s) : Number(s.out) - Number(s.in); } catch (e) { return Number(s.out) - Number(s.in); } };
+
+  /* ---------------------------------------------------------- the items
+   * Every row (List view) and poster (Icon view) is an item: {type: clip | sub | seq |
+   * prop, key, name, label, rate, fps, start, end, dur, w, h, state, note, title, …}, so
+   * the columns, the sort and both views read one shape. */
+
+  /* A subclip's name: the editor's note; else, for a moment somebody said, the line said
+   * inside it (as the Selects tab names a keep); for one the pass saw, what it saw (the
+   * pick's claim, without its frame list); else its kind and In. */
+  function subName(s) {
+    if (s.note) return s.note;
+    const pc = boardClip(s.clip) || {};
+    const u = (pc.transcript || []).find((x) => x && x.end > s.in && x.start < s.out && String(x.text || '').trim());
+    const said = u ? `“${String(u.text).trim()}”` : '';
+    const m = ((pc.visual || {}).moments || []).find((x) => x && x.end > s.in && x.start < s.out && x.what);
+    const seen = m ? String(m.what) : '';
+    const claim = s.why ? s.why.split(/\s+—\s+|\s+\(frames/)[0].replace(/^(speech|interest marker):\s*/i, '').trim() : '';
+    const spoken = !s.kind || s.kind === 'speech';
+    const name = spoken ? (said || seen || claim) : (claim || seen || said);
+    if (name) return name;
+    return `${s.kind || stemOf(s.clip)} · ${shortTc(tcOf(s.in, (clipByName(s.clip) || {}).fps || pc.fps))}`;
+  }
+
+  /* The subclips under each clip: the editor's keeps, then the pass's picks that no keep
+   * already covers and nobody rejected (the Selects tab's rows, app.js picksUsable). True
+   * when they changed since the last look. */
+  function subsChanged() {
+    const keeps = boardKeeps().filter((s) => s && s.clip && !s.missing && Number(s.end) > Number(s.start));
+    const picks = boardPicks().filter((p) => p && p.clip && Number(p.end) > Number(p.start)
+      && p.verdict !== 'reject' && p.verdict !== 'pick'
+      && !keeps.some((k) => k.clip === p.clip
+        && overlap([Number(k.start), Number(k.end)], [Number(p.start), Number(p.end)]) >= 0.5));
+    const cut = boardSegs();
+    const by = new Map();
+    const add = (s, mine) => {
+      const a = Number(s.start), b = Number(s.end);
+      const id = `${mine ? 'k' : 'p'}:${s.id != null ? s.id : `${s.clip}@${a}-${b}`}`;
+      const sub = { id, clip: s.clip, in: a, out: b, mine, hero: !!s.hero, note: String(s.note || '').trim(),
+                    why: String(s.why || '').trim(), kind: String(s.kind || ''),
+                    inCut: cut.some((g) => g && g.clip === s.clip && overlap([a, b], [Number(g.in), Number(g.out)]) >= 0.5) };
+      sub.name = subName(sub);
+      if (!by.has(s.clip)) by.set(s.clip, []);
+      by.get(s.clip).push(sub);
+    };
+    keeps.forEach((s) => add(s, true));
+    picks.forEach((p) => add(p, false));
+    by.forEach((list) => list.sort((x, y) => x.in - y.in || x.out - y.out));
+    const sig = JSON.stringify([...by.entries()].map(([k, l]) => [k, l.map((s) => [s.id, s.in, s.out, s.name, s.inCut, s.hero])]));
+    project.subs = by;
+    if (sig === project.subsSig) return false;
+    project.subsSig = sig;
+    return true;
+  }
+
+  /* What the pass said about a clip, in a line: the visual pass's summary, else its picks,
+   * else the first thing said in it. */
+  function clipNote(c) {
+    const pc = boardClip(c.clip) || {};
+    const v = pc.visual || {};
+    if (v.summary) return String(v.summary);
+    const subs = project.subs.get(c.clip) || [];
+    if (subs.length) return `${nOf(subs.length, subs.every((s) => s.mine) ? 'keep' : 'pick')}: ${subs.map((s) => s.name).join(' · ')}`;
+    const said = (pc.transcript || []).find((u) => u && String(u.text || '').trim());
+    return said ? `“${String(said.text).trim()}”` : '';
+  }
+
+  function clipItem(c, subs, forced) {
+    const [state, stCls] = stateOf(c);
+    const rate = Number(c.fps) || 0;
+    const dur = Number(c.duration) || 0;
+    const note = clipNote(c);
+    return { type: 'clip', key: `c|${c.clip}`, name: c.clip, c, label: 'violet', rate, fps: rate,
+             start: 0, end: lastFrame(dur, rate), dur, w: c.width || 0, h: c.height || 0, state, stCls,
+             note, shot: c.captured, subs, forced,
+             title: [c.clip, [dur ? tcOf(dur, rate) : '', fpsText(rate), c.width ? `${c.width} × ${c.height}` : '']
+               .filter(Boolean).join(' · '), state + (subs.length ? ` · ${nOf(subs.length, 'subclip')}` : ''), note]
+               .filter(Boolean).join('\n') };
+  }
+
+  function subItem(s, parent) {
+    const rate = parent.rate;
+    const dur = Math.max(0, s.out - s.in);
+    const state = s.inCut ? 'in cut' : s.mine ? (s.hero ? 'hero' : 'kept') : 'pick';
+    const note = s.mine && s.note ? `your note: ${s.note}${s.why ? ` — ${s.why}` : ''}` : s.why;
+    return { type: 'sub', key: `s|${s.id}`, id: s.id, clip: s.clip, name: s.name, label: parent.label, rate,
+             fps: rate, start: s.in, end: lastFrame(s.out, rate), dur, in: s.in, out: s.out,
+             w: parent.w, h: parent.h, state, stCls: s.inCut ? 'ok' : '', note, why: s.why || s.note,
+             shot: parent.shot,
+             title: [`${s.name} — a subclip of ${s.clip}`,
+                     `In ${tcOf(s.in, rate)} · Out ${tcOf(lastFrame(s.out, rate), rate)} · ${tcOf(dur, rate)}`,
+                     `${s.mine ? (s.hero ? 'your hero keep' : 'your keep') : 'a pick the first pass made'}${s.inCut ? ', in the cut' : ''}`,
+                     note ? `why: ${note}` : '', 'drag it onto the Timeline, or click it and press , or .']
+               .filter(Boolean).join('\n') };
+  }
+
+  /* A proposal waiting for review (app.js showProposal / accept / discard), as the bin's
+   * sequence it would become; null when none waits. A colour-only proposal is no cut. */
+  function proposalNow() {
+    const box = $('#proposal');
+    const plan = boardPlan();
+    if (!box || box.style.display !== 'block' || !plan || !Array.isArray(plan.segments)
+        || plan.unchanged || !plan.segments.length) return null;
+    const dur = plan.segments.reduce((a, s) => a + segDur(s), 0);
+    const fp = !!plan.firstpass;
+    const line = (fp && plan.firstpass.diff && plan.firstpass.diff.sentence)
+      || String(plan.notes_model || plan.notes || '').trim().split(/(?<=[.!?])\s+|\n/)[0] || '';
+    // the name a narrow bin shows whole; "proposed" is its badge (the Status column's pill)
+    return { name: fp ? 'First pass' : 'AI revision', n: plan.segments.length, dur,
+             line: String(line).trim(), first: plan.segments[0] || null };
+  }
+
+  function seqItems() {
+    const out = [];
+    const rate = seqRate();
+    const p = project.proposal;
+    if (p) {
+      out.push({ type: 'prop', key: 'p|', cut: 'proposed', name: p.name, label: 'forest', rate, fps: rate,
+                 start: 0, end: lastFrame(p.dur, rate), dur: p.dur, state: 'proposed', stCls: 'warn',
+                 note: p.line || nOf(p.n, 'shot'), first: p.first,
+                 title: `${p.name} (proposed): ${nOf(p.n, 'shot')} · ${tcOf(p.dur, rate)}\n${p.line ? `${p.line}\n` : ''}`
+                   + 'double-click to review it: its shots on the Timeline (the ghost lane), Accept or Discard in the Assistant' });
+    }
+    const cuts = project.cuts && Array.isArray(project.cuts.cuts) ? project.cuts.cuts : [];
+    for (const c of cuts) {
+      const live = c.current ? liveCut() : null;
+      const dur = live ? live.dur : Number(c.duration_s) || 0;
+      const n = live ? live.n : Number(c.segments) || 0;
+      out.push({ type: 'seq', key: `q|${c.path}`, cut: c.path, name: c.name || 'cut', cur: !!c.current,
+                 label: 'forest', rate, fps: c.current ? rate : 0, start: 0, end: n ? lastFrame(dur, rate) : 0,
+                 dur: n ? dur : 0, n, state: c.current ? 'open' : '', stCls: c.current ? 'ok' : '',
+                 note: [n ? nOf(n, 'shot') : 'empty', c.story, c.from ? `copied from ${c.from}` : ''].filter(Boolean).join(' · '),
+                 first: live ? live.first : null, shot: c.created,
+                 title: `${c.name}: ${n ? `${nOf(n, 'shot')} · ${tcOf(dur, rate)}` : 'empty'}`
+                   + `${c.current ? ' — open in the Timeline' : ' — double-click to open it in the Timeline'}`
+                   + `${c.story ? `\n${c.story}` : ''}` });
+    }
+    return out;
+  }
+
+  /* ---------------------------------------------------------- the columns and the sort
+   * Premiere's columns in Premiere's order. Every one but Name and Description is a fixed
+   * width, as a Premiere bin's are, wide enough for its heading and its longest value
+   * (no cell is ever cut). Name, Duration and Status always show; a wider list adds Frame
+   * Rate, Video Info, Description, Media Start, Media End and Captured, in that order, while
+   * Name keeps NAME_MIN; the rest are in each row's hover. The defaults (1440: 286 px, 1920:
+   * 382 px) show Name, Duration and Status; below 360 px the duration's heading is
+   * "Duration" (its full name would leave Name too little), above it "Media Duration". */
+  const COLS = {
+    name: { k: 'name', h: 'Name' },
+    fps: { k: 'fps', h: 'Frame Rate', w: 86, num: true },
+    start: { k: 'start', h: 'Media Start', w: 88, num: true },
+    end: { k: 'end', h: 'Media End', w: 88, num: true },
+    dur: { k: 'dur', h: 'Media Duration', w: 108, num: true },
+    size: { k: 'size', h: 'Video Info', w: 84 },
+    state: { k: 'state', h: 'Status', w: 80 },
+    note: { k: 'note', h: 'Description', w: 170 },          // its least: it takes what Name leaves
+    shot: { k: 'shot', h: 'Captured', w: 120 },
+  };
+  const COL_ORDER = ['name', 'fps', 'start', 'end', 'dur', 'size', 'state', 'note', 'shot'];
+  const COL_MORE = ['fps', 'size', 'note', 'start', 'end', 'shot'];
+  const NAME_MIN = 150;
+  function columns(width, items) {
+    const dur = width < 360 ? { ...COLS.dur, h: 'Duration', w: 78 } : COLS.dur;
+    const on = new Set(['name', 'dur']);
+    let used = NAME_MIN + dur.w;
+    if (width > 220) { on.add('state'); used += COLS.state.w; }
+    for (const k of COL_MORE) {
+      if ((k === 'fps' && !items.some((x) => x.fps)) || (k === 'size' && !items.some((x) => x.w))) continue;
+      if (used + COLS[k].w > width) break;
+      on.add(k);
+      used += COLS[k].w;
+    }
+    const cols = COL_ORDER.filter((k) => on.has(k)).map((k) => ({ ...(k === 'dur' ? dur : COLS[k]) }));
+    if (on.has('note')) {
+      // Name and Description share what the fixed columns leave, Name a little more
+      const fixed = cols.reduce((a, c) => a + (c.k === 'name' || c.k === 'note' ? 0 : c.w), 0);
+      cols[0].w = Math.round(clamp((width - fixed) * 0.52, NAME_MIN, 340));
+      cols.find((c) => c.k === 'note').w = 0;
+    }
     return cols;
   }
 
-  function cell(k, c) {
-    if (k === 'name') return `<td class="name"><span class="n">${FILM_ICON}<span>${esc(c.clip)}</span></span></td>`;
-    if (k === 'dur') return `<td>${c.duration ? tcode(c.duration, c.fps) : ''}</td>`;
-    if (k === 'state') { const [t, cls] = stateOf(c); return `<td class="st ${cls}">${t}</td>`; }
-    if (k === 'fps') return `<td>${fpsOf(c)}</td>`;
-    if (k === 'size') return `<td>${sizeOf(c)}</td>`;
-    return `<td>${capturedText(c.captured)}</td>`;
+  const collate = (typeof Intl !== 'undefined' && Intl.Collator)
+    ? new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }).compare
+    : (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  function sortVal(it, col) {
+    if (col === 'name') return String(it.name);
+    if (col === 'size') return (it.w || 0) * (it.h || 0);
+    if (col === 'state' || col === 'note') return String(it[col] || '');
+    if (col === 'shot') return Number(it.shot) || 0;
+    return Number(it[col]) || 0;
+  }
+  // by the sorted column, that way round; equal ones by name, A to Z
+  function sortItems(list) {
+    const { col, dir } = project.sort;
+    return list.slice().sort((a, b) => {
+      const x = sortVal(a, col), y = sortVal(b, col);
+      const d = typeof x === 'number' ? x - y : collate(x, y);
+      return (d * dir) || collate(String(a.name), String(b.name));
+    });
+  }
+  function sortBy(col) {
+    if (!SORTS.includes(col)) return;
+    project.sort = project.sort.col === col ? { col, dir: -project.sort.dir } : { col, dir: 1 };
+    store.set(SORT_KEY, project.sort);
+    paintProject();
   }
 
-  function shown() {
+  function shownItems() {
     const q = project.q.trim().toLowerCase();
-    return q ? project.clips.filter((c) => c.clip.toLowerCase().includes(q)) : project.clips;
+    const seqs = seqItems().filter((it) => !q || it.name.toLowerCase().includes(q));
+    const clips = [];
+    for (const c of project.clips) {
+      const subs = project.subs.get(c.clip) || [];
+      const hit = !q || c.clip.toLowerCase().includes(q);
+      // a search that finds a subclip shows its clip, open on what it found
+      const found = hit ? subs : subs.filter((s) => `${s.name} ${s.why} ${s.note}`.toLowerCase().includes(q));
+      if (hit || found.length) clips.push(clipItem(c, found, !hit));
+    }
+    const prop = seqs.filter((s) => s.type === 'prop');
+    return { seqs: prop.concat(sortItems(seqs.filter((s) => s.type !== 'prop'))), clips: sortItems(clips) };
+  }
+  const isOpenClip = (it) => it.subs.length > 0 && (it.forced || project.open.has(it.name));
+
+  /* ---------------------------------------------------------- painting */
+  function twisty(it, chip) {
+    if (!it.subs || !it.subs.length) return chip ? '' : '<span class="tw"></span>';
+    const open = isOpenClip(it);
+    // the triangle is drawn by the stylesheet, so a row's text starts with its name
+    return `<span class="tw${open ? ' open' : ''}${chip ? ' chip' : ''}" role="button" aria-expanded="${open}"`
+      + ` data-tw="${esc(it.name)}" title="${open ? 'hide' : 'show'} its ${nOf(it.subs.length, 'subclip')}">${chip ? it.subs.length : ''}</span>`;
+  }
+  const iconOf = (it) => (it.type === 'clip' ? FILM_ICON : it.type === 'sub' ? SUB_ICON : SEQ_ICON);
+  const swatch = (it) => `<i class="lab" style="--lab:${lab(it.label)[1]}" title="Label: ${lab(it.label)[0]}"></i>`;
+  const seqBadge = (it) => (it.type === 'prop' ? '<b class="pbadge" title="waiting for your review">proposed</b>' : '');
+
+  // `tree`: some clip in view has subclips, so every row keeps the triangle's room
+  function nameCell(it, tree) {
+    const lead = !tree ? (it.type === 'sub' ? '<span class="tw"></span>' : '')
+      : it.type === 'clip' ? twisty(it, false)
+        : it.type === 'sub' ? '<span class="tw"></span><span class="tw"></span>' : '<span class="tw"></span>';
+    return `<td class="name"><span class="n">${lead}${swatch(it)}${iconOf(it)}<span class="nm">${esc(it.name)}</span></span></td>`;
+  }
+  // a cell's text never widens its cell (test_workspace's OVERFLOW_JS): it ellipsizes inside
+  const ell = (s) => `<span class="ell">${s}</span>`;
+  function cell(k, it, tree) {
+    const rate = it.rate;
+    if (k === 'name') return nameCell(it, tree);
+    if (k === 'fps') return `<td class="num">${fpsText(it.fps)}</td>`;
+    if (k === 'start') return `<td class="num">${it.dur ? tcOf(it.start, rate) : ''}</td>`;
+    if (k === 'end') return `<td class="num">${it.dur ? tcOf(it.end, rate) : ''}</td>`;
+    if (k === 'dur') return `<td class="num dur">${it.dur ? tcOf(it.dur, rate) : ''}</td>`;
+    if (k === 'size') return `<td>${it.w && it.h ? `${it.w}×${it.h}` : ''}</td>`;
+    // the proposal's status is its badge: it waits for you
+    if (k === 'state') return `<td class="st ${it.stCls || ''}">${it.type === 'prop' ? seqBadge(it) : esc(it.state || '')}</td>`;
+    if (k === 'note') return `<td class="note">${ell(esc(it.note || ''))}</td>`;
+    return `<td>${capturedText(it.shot)}</td>`;
+  }
+
+  function rowHtml(it, cols, tree) {
+    const sel = project.sel === it.key ? ' sel' : '';
+    const td = cols.map((c) => cell(c.k, it, tree)).join('');
+    const t = ` title="${esc(it.title || it.name)}"`;
+    if (it.type === 'clip') {
+      return `<tr class="row${sel}" data-key="${esc(it.key)}" data-clip="${esc(it.name)}" data-testid="project-row"`
+        + ` draggable="true"${t}>${td}</tr>`;
+    }
+    if (it.type === 'sub') {
+      return `<tr class="sub${sel}" data-key="${esc(it.key)}" data-sub="${esc(it.id)}" data-of="${esc(it.clip)}"`
+        + ` data-testid="project-subclip" draggable="true"${t}>${td}</tr>`;
+    }
+    return `<tr class="seq${it.cur ? ' cur' : ''}${it.type === 'prop' ? ' prop' : ''}${sel}" data-key="${esc(it.key)}"`
+      + ` data-cut="${esc(it.cut)}" data-testid="project-sequence"${t}>${td}</tr>`;
+  }
+
+  // the columns as painted: which, and Name's width to the nearest 24 px (a splitter drag
+  // re-lays the list only when that changes)
+  const colsSig = (cols) => cols.map((c) => `${c.k}${c.k === 'name' && c.w ? Math.round(c.w / 24) : ''}`).join();
+
+  function paintList(box, seqs, clips) {
+    const all = seqs.concat(clips);
+    clips.forEach((it) => { if (isOpenClip(it)) it.subs.forEach((s) => all.push(subItem(s, it))); });
+    const cols = columns(box.clientWidth || 300, all);
+    project.cols = colsSig(cols);
+    const tree = clips.some((it) => it.subs.length);
+    const { col, dir } = project.sort;
+    const head = cols.map((c) => {
+      const on = col === c.k;
+      const way = dir > 0 ? 'ascending' : 'descending';
+      return `<th data-col="${c.k}" data-testid="project-sort" class="${c.num ? 'num' : ''}${on ? ` on ${dir > 0 ? 'asc' : 'desc'}` : ''}"`
+        + ` aria-sort="${on ? way : 'none'}" title="sort by ${c.h}${on ? ` (${way} — click for ${dir > 0 ? 'descending' : 'ascending'})` : ''}">${c.h}</th>`;
+    }).join('');
+    const rows = [];
+    seqs.forEach((it) => rows.push(rowHtml(it, cols, tree)));
+    clips.forEach((it) => {
+      rows.push(rowHtml(it, cols, tree));
+      if (isOpenClip(it)) it.subs.forEach((s) => rows.push(rowHtml(subItem(s, it), cols, tree)));
+    });
+    box.innerHTML = `<table class="plist"><colgroup>${cols.map((c) => `<col${c.w ? ` style="width:${c.w}px"` : ''}>`).join('')}</colgroup>`
+      + `<thead><tr>${head}</tr></thead><tbody>${rows.join('')}</tbody></table>`;
+    return all;
+  }
+
+  function tileHtml(it) {
+    const sel = project.sel === it.key ? ' sel' : '';
+    const t = ` title="${esc(it.title || it.name)}"`;
+    const cap = `<div class="cap">${swatch(it)}<span class="nm">${esc(it.name)}</span>`
+      + `<span class="d">${it.dur ? shortTc(tcOf(it.dur, it.rate)) : ''}</span></div>`;
+    const img = (src) => `<img alt="" loading="lazy" decoding="async" draggable="false" src="${esc(src)}">`;
+    const ty = `<span class="ty">${iconOf(it)}</span>`;
+    if (it.type === 'clip') {
+      const c = it.c;
+      return `<div class="ptile picon${sel}" data-key="${esc(it.key)}" data-clip="${esc(it.name)}" data-testid="project-row"`
+        + ` draggable="true"${t}><div class="thumb">${img(c.poster || posterAt(c, 0))}${ty}${twisty(it, true)}`
+        + `<span class="bar" hidden><i></i></span></div>${cap}</div>`;
+    }
+    if (it.type === 'sub') {
+      const c = clipByName(it.clip) || { clip: it.clip };
+      return `<div class="ptile psub${sel}" data-key="${esc(it.key)}" data-sub="${esc(it.id)}" data-of="${esc(it.clip)}"`
+        + ` data-testid="project-subclip" draggable="true"${t}><div class="thumb">${img(posterAt(c, it.in))}${ty}</div>${cap}</div>`;
+    }
+    const f = it.first && (clipByName(it.first.clip) || boardClip(it.first.clip));
+    const pic = f ? img(posterAt(f, Number(it.first.in) || 0)) : `<span class="ph">${SEQ_ICON}</span>`;
+    return `<div class="ptile pseq${it.cur ? ' cur' : ''}${it.type === 'prop' ? ' prop' : ''}${sel}" data-key="${esc(it.key)}"`
+      + ` data-cut="${esc(it.cut)}" data-testid="project-sequence"${t}><div class="thumb">${pic}${ty}${seqBadge(it)}</div>${cap}</div>`;
+  }
+
+  function paintIcons(box, seqs, clips) {
+    const all = seqs.concat(clips);
+    const tiles = seqs.map(tileHtml);
+    clips.forEach((it) => {
+      tiles.push(tileHtml(it));
+      if (isOpenClip(it)) it.subs.forEach((s) => { const x = subItem(s, it); all.push(x); tiles.push(tileHtml(x)); });
+    });
+    box.innerHTML = `<div class="picons" style="--tile:${project.zoom}px">${tiles.join('')}</div>`;
+    return all;
+  }
+
+  function paintCount(shown) {
+    const n = project.clips.length + seqItems().length;
+    $('#projCount').textContent = project.clips.length
+      ? `${shown === n ? n : `${shown} of ${n}`} item${n === 1 ? '' : 's'}` : '';
   }
 
   function paintProject() {
     const box = $('#projList');
     if (!box) return;
-    const list = shown();
-    const n = project.clips.length;
-    $('#projCount').textContent = n ? `${list.length === n ? n : `${list.length} of ${n}`} item${n === 1 ? '' : 's'}` : '';
+    project.dirty = false;
+    stopScrub(true);
     $$('#projView button').forEach((b) => b.classList.toggle('on', b.dataset.view === project.view));
+    const zoom = $('#projZoom');
+    if (zoom) { zoom.hidden = project.view !== 'icon'; zoom.value = String(project.zoom); }
+    const n = project.clips.length;
     if (!n) {
+      paintCount(0);
+      project.items = new Map();
       box.innerHTML = !project.read
         ? `<div class="pempty">${project.failed ? 'Could not read the footage folder — trying again…' : 'Reading the footage folder…'}</div>`
-        : '<div class="pempty">No footage in this bin yet. <a href="/open">Open a footage folder</a></div>';
+        : `<div class="pempty pnone" data-testid="project-empty"><span class="big">${IMPORT_ICON}</span>`
+          + '<div class="t">Import media to start</div>'
+          + '<button type="button" data-import="empty" data-testid="project-empty-import"'
+          + ' title="Import… (Ctrl+I): footage from this machine, or files from yours">Import…</button>'
+          + '<div class="hint">or drop files here</div></div>';
       return;
     }
-    if (project.view === 'icon') {
-      box.innerHTML = `<div class="picons">${list.map((c) => `
-        <div class="picon${project.sel === c.clip ? ' sel' : ''}" data-clip="${esc(c.clip)}" draggable="true" title="${esc(c.clip)}">
-          <div class="thumb"><img alt="" loading="lazy" decoding="async" draggable="false" src="${esc(c.poster || posterAt(c, 0))}"><span class="d">${c.duration ? tcode(c.duration, c.fps) : ''}</span></div>
-          <div class="nm">${esc(c.clip)}</div></div>`).join('')}</div>`;
-      return;
-    }
-    const cols = columns(box.clientWidth || 300);
-    box.innerHTML = `<table class="plist"><colgroup>${cols.map((c) => `<col${c.w ? ` style="width:${c.w}px"` : ''}>`).join('')}</colgroup>
-      <thead><tr>${cols.map((c) => `<th>${c.h}</th>`).join('')}</tr></thead>
-      <tbody>${list.map((c) => `<tr class="row${project.sel === c.clip ? ' sel' : ''}" data-clip="${esc(c.clip)}" draggable="true" title="${esc(c.clip)}">${cols.map((k) => cell(k.k, c)).join('')}</tr>`).join('')}</tbody></table>`;
+    const { seqs, clips } = shownItems();
+    const all = project.view === 'icon' ? paintIcons(box, seqs, clips) : paintList(box, seqs, clips);
+    project.items = new Map(all.map((it) => [it.key, it]));
+    project.live = liveSig();
+    paintCount(seqs.length + clips.length);
+  }
+
+  /* A repaint the editor did not ask for (the pass's picks landed, a proposal came or
+   * went, the cut changed length) waits while a poster is being scrubbed or a row dragged. */
+  function paintSoon() {
+    if (scrub.tile || project.dragging) { project.dirty = true; return; }
+    paintProject();
+  }
+
+  // the open sequence's length and shots, as the list last showed them
+  function liveSig() {
+    const l = liveCut();
+    return l ? `${l.n}|${l.dur.toFixed(3)}` : '';
   }
 
   function clipByName(name) { return project.clips.find((c) => c.clip === name) || null; }
 
+  /* ---------------------------------------------------------- choosing and opening */
+  function setSel(key) {
+    project.sel = key;
+    $$('#projList [data-key]').forEach((r) => r.classList.toggle('sel', r.dataset.key === key));
+  }
+
   function selectClip(name, play) {
-    project.sel = name;
-    $$('#projList [data-clip]').forEach((r) => r.classList.toggle('sel', r.dataset.clip === name));
+    setSel(`c|${name}`);
     const c = clipByName(name);
     if (c) source.load(c, { play });
+  }
+
+  /* A subclip in the Source monitor: its clip, with its In and Out as the marks, parked on
+   * the In (app.js openPickInSource, a pick's double-click in Selects, does the same). */
+  function openSub(it, play) {
+    const c = clipByName(it.clip);
+    if (!c) return toastSay('this clip is not in the footage folder');
+    const a = source.snap(it.in, c), b = source.snap(it.out, c);
+    source.marks[c.clip] = [a, b];
+    store.set(MARKS_KEY, source.marks);
+    const same = source.clip && source.clip.clip === c.clip;
+    source.load(c, {});
+    if (same && source.v && source.v.readyState >= 1) source.v.currentTime = a;
+    source.paint();
+    source.publish();
+    if (play) source.play();
+    return true;
+  }
+
+  /* A sequence: the open one is the Timeline's already; another opens through the
+   * switcher's own path (POST /api/cuts/open, unsaved edits written first). */
+  async function openSeq(it) {
+    if (it.cur) { focusPanel($('#pTimeline')); return; }
+    const sw = window.switcher;
+    if (!sw || typeof sw.openCut !== 'function') return;
+    // the switcher reports a move in its own panel: mount it (shut) if it never opened
+    if (!document.getElementById('picker') && typeof sw.open === 'function') { sw.open(); sw.close(); }
+    await sw.openCut(it.cut);
+    if (takeCuts(sw.state && sw.state.cuts)) paintProject();
+  }
+
+  /* The proposal: its review in the Assistant, its shots as the Timeline's ghost lane. */
+  function revealProposal() {
+    reveal('#proposal');
+    const tlp = $('#pTimeline');
+    if (tlp) focusPanel(tlp);
+    const lane = document.querySelector('#tl .tl-xlane[data-lane=ghost]');
+    if (lane && !lane.hidden) {
+      lane.scrollIntoView({ block: 'nearest' });
+      if (typeof lane.animate === 'function') {
+        lane.animate([{ boxShadow: 'inset 0 0 0 2px #4a9df8' }, { boxShadow: 'inset 0 0 0 2px rgba(74,157,248,0)' }],
+                     { duration: 1200, easing: 'ease-out' });
+      }
+    }
+  }
+
+  function importMedia() {
+    if (window.rcImport && typeof window.rcImport.open === 'function') window.rcImport.open();
+  }
+
+  // a click (open: false) or a double-click / Enter (open: true) on an item
+  function act(row, open, play) {
+    if (row.dataset.clip !== undefined) { selectClip(row.dataset.clip, !!play); return; }
+    const it = project.items && project.items.get(row.dataset.key);
+    if (!it) return;
+    setSel(it.key);
+    if (it.type === 'sub') openSub(it, !!play);
+    else if (open && it.type === 'seq') openSeq(it);
+    else if (open && it.type === 'prop') revealProposal();
+  }
+
+  function toggleOpen(name, want) {
+    const open = want === undefined ? !project.open.has(name) : want;
+    if (open) project.open.add(name); else project.open.delete(name);
+    store.set(OPEN_KEY, [...project.open]);
+    paintProject();
+  }
+
+  /* ↑ / ↓ (and ← / → in Icon view) walk the items; Enter opens the selected one (a clip or
+   * subclip in the Source monitor, a sequence in the Timeline); → / ← open and close a
+   * clip's subclips in List view. Only while the Project panel has the focus and its own
+   * tab shows (dock's keydown, below). True when the key was the panel's. */
+  function projectKey(e) {
+    const k = e.key;
+    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter'].includes(k)) return false;
+    const rows = $$('#projList [data-key]');
+    if (!rows.length) return false;
+    const i = rows.findIndex((r) => r.dataset.key === project.sel);
+    if (k === 'Enter') {
+      if (i < 0) return false;
+      act(rows[i], true, false);
+      return true;
+    }
+    let step;
+    if (project.view === 'icon') {
+      const per = Math.max(1, rows.filter((r) => r.offsetTop === rows[0].offsetTop).length);
+      step = k === 'ArrowLeft' ? -1 : k === 'ArrowRight' ? 1 : k === 'ArrowUp' ? -per : per;
+    } else if (k === 'ArrowLeft' || k === 'ArrowRight') {
+      if (i < 0) return true;
+      const it = project.items.get(rows[i].dataset.key);
+      if (it && it.type === 'clip' && it.subs.length) {
+        if ((k === 'ArrowRight') !== isOpenClip(it)) toggleOpen(it.name, k === 'ArrowRight');
+      } else if (it && it.type === 'sub' && k === 'ArrowLeft') {
+        setSel(`c|${it.clip}`);
+      }
+      return true;
+    } else {
+      step = k === 'ArrowUp' ? -1 : 1;
+    }
+    const j = i < 0 ? (step > 0 ? 0 : rows.length - 1) : clamp(i + step, 0, rows.length - 1);
+    const row = $$('#projList [data-key]')[j];
+    if (!row) return true;
+    setSel(row.dataset.key);
+    row.scrollIntoView({ block: 'nearest' });
+    return true;
+  }
+
+  /* ---------------------------------------------------------- hover scrub (Icon view)
+   * Premiere scrubs a clip as the pointer crosses its poster. Here a clip is SCRUB_STEPS
+   * stills across its length (the poster route, cached on disk and immutable in the
+   * browser), loaded one at a time — the frame under the pointer first, then the rest —
+   * so a scrub never holds more than one of the board's connections. The poster under
+   * the pointer shows the nearest frame loaded; leaving puts the clip's own poster back. */
+  const SCRUB_STEPS = 20;
+  const scrub = { tile: null, img: null, c: null, base: '', want: '', busy: false, have: new Set(),
+                  queue: [], bar: null, d: null, dText: '' };
+  const scrubUrl = (c, k) => posterAt(c, (k / (SCRUB_STEPS - 1)) * Math.max(0, Number(c.duration) - 1 / source.fps(c)));
+
+  function scrubPump() {
+    if (scrub.busy || !scrub.tile) return;
+    let next = scrub.want && !scrub.have.has(scrub.want) ? scrub.want : null;
+    while (!next && scrub.queue.length) {
+      const u = scrub.queue.shift();
+      if (!scrub.have.has(u)) next = u;
+    }
+    if (!next) return;
+    scrub.busy = true;
+    const probe = new Image();
+    const done = (ok) => {
+      scrub.busy = false;
+      if (ok) scrub.have.add(next);
+      if (ok && scrub.tile && scrub.want === next && scrub.img.isConnected) scrub.img.setAttribute('src', next);
+      scrubPump();
+    };
+    probe.onload = () => done(true);
+    probe.onerror = () => done(false);
+    probe.src = next;
+  }
+
+  function startScrub(tile, c) {
+    stopScrub();
+    scrub.tile = tile;
+    scrub.c = c;
+    scrub.img = tile.querySelector('.thumb img');
+    scrub.base = scrub.img ? scrub.img.getAttribute('src') : '';
+    scrub.bar = tile.querySelector('.thumb .bar');
+    scrub.d = tile.querySelector('.cap .d');
+    scrub.dText = scrub.d ? scrub.d.textContent : '';
+    // the rest of the clip, coarse to fine: the ends and the middle first
+    const order = [];
+    for (let step = SCRUB_STEPS - 1; step >= 1; step = Math.floor(step / 2)) {
+      for (let k = 0; k < SCRUB_STEPS; k += step) if (!order.includes(k)) order.push(k);
+      if (step === 1) break;
+    }
+    for (let k = 0; k < SCRUB_STEPS; k++) if (!order.includes(k)) order.push(k);
+    scrub.queue = order.map((k) => scrubUrl(c, k));
+  }
+
+  function stopScrub(quiet) {
+    const t = scrub.tile;
+    if (!t) return;
+    if (scrub.img && scrub.img.isConnected && scrub.base) scrub.img.setAttribute('src', scrub.base);
+    if (scrub.bar) scrub.bar.hidden = true;
+    if (scrub.d) scrub.d.textContent = scrub.dText;
+    t.classList.remove('scrubbing');
+    Object.assign(scrub, { tile: null, img: null, c: null, base: '', want: '', queue: [], bar: null, d: null });
+    if (!quiet && project.dirty) paintProject();
+  }
+
+  function scrubMove(e) {
+    if (project.view !== 'icon' || e.buttons) return;
+    const th = e.target.closest && e.target.closest('.picon .thumb');
+    const tile = th && th.closest('.picon');
+    if (!tile) { stopScrub(); return; }
+    const c = clipByName(tile.dataset.clip);
+    if (!c || !(Number(c.duration) > 0)) return;
+    if (scrub.tile !== tile) startScrub(tile, c);
+    tile.classList.add('scrubbing');
+    const r = th.getBoundingClientRect();
+    const f = clamp((e.clientX - r.left) / Math.max(1, r.width), 0, 1);
+    if (scrub.bar) { scrub.bar.hidden = false; scrub.bar.firstChild.style.width = `${(f * 100).toFixed(1)}%`; }
+    if (scrub.d) scrub.d.textContent = shortTc(tcOf(f * Number(c.duration), c.fps));
+    scrub.want = scrubUrl(c, Math.round(f * (SCRUB_STEPS - 1)));
+    if (scrub.have.has(scrub.want)) { if (scrub.img.getAttribute('src') !== scrub.want) scrub.img.setAttribute('src', scrub.want); }
+    else scrubPump();
+  }
+
+  /* ---------------------------------------------------------- what the board says changed */
+  function fetchCuts() {
+    return fetch('/api/cuts').then((r) => (r.ok ? r.json() : null))
+      .then((c) => { if (takeCuts(c)) paintSoon(); }).catch(() => { /* the switcher's read fills it in */ });
+  }
+  /* The bin's cuts (GET /api/cuts' shape). The switcher's placeholder while it re-points
+   * (no paths yet) is not a listing. True when they changed. */
+  function takeCuts(c) {
+    if (!c || !Array.isArray(c.cuts) || (!c.cuts.length && !(c.current && c.current.path))) return false;
+    const sig = JSON.stringify(c.cuts.map((x) => [x.path, x.name, x.segments, x.duration_s, !!x.current, x.story]));
+    if (sig === project.cutsSig) return false;
+    project.cutsSig = sig;
+    project.cuts = c;
+    return true;
+  }
+
+  // the picks, the keeps, a proposal, the switcher's cuts and the open cut's length: a
+  // look every second at what the board already holds (no request), a repaint on a change
+  let boardSeen = null;
+  function lookAgain() {
+    let dirty = false;
+    // the board's clips (what each was heard and seen saying) arrived or were re-read
+    const pc = (() => { try { return typeof P !== 'undefined' ? P : null; } catch (e) { return null; } })();  // eslint-disable-line no-undef
+    if (pc !== boardSeen) { boardSeen = pc; dirty = true; }
+    const p = proposalNow();
+    const ps = p ? `${p.name}|${p.n}|${p.dur.toFixed(3)}|${p.line}` : '';
+    if (ps !== project.propSig) { project.propSig = ps; project.proposal = p; dirty = true; }
+    if (subsChanged()) dirty = true;
+    const sw = window.switcher;
+    if (sw && sw.state && takeCuts(sw.state.cuts)) dirty = true;
+    if (!dirty && project.items && liveSig() !== project.live) dirty = true;
+    if (dirty && project.read) paintSoon();
+  }
+
+  function mountFoot() {
+    const sec = $('#projBody > section[data-tool=project]');
+    if (!sec || $('#projFoot')) return;
+    const foot = document.createElement('div');
+    foot.className = 'projfoot';
+    foot.id = 'projFoot';
+    const view = $('#projView');
+    if (view) {
+      view.querySelectorAll('button[data-view]').forEach((b) => {
+        b.dataset.testid = `project-view-${b.dataset.view}`;
+        b.title = b.dataset.view === 'icon' ? 'Icon view: posters, scrub one by moving across it' : 'List view: a row per item, sorted by any column';
+      });
+      foot.appendChild(view);
+    }
+    foot.insertAdjacentHTML('beforeend',
+      `<input type="range" id="projZoom" data-testid="project-zoom" min="${ZOOM.min}" max="${ZOOM.max}" step="4"`
+      + ` value="${project.zoom}" title="icon size" aria-label="icon size" hidden>`);
+    const count = $('#projCount');
+    if (count) foot.appendChild(count);
+    foot.insertAdjacentHTML('beforeend',
+      `<button type="button" id="projImport" data-import="bar" data-testid="project-import" aria-label="import"`
+      + ` title="Import… (Ctrl+I): add footage to this project">${IMPORT_ICON}</button>`);
+    sec.appendChild(foot);
   }
 
   function initProject() {
     const box = $('#projList');
     if (!box) return;
+    mountFoot();
+    box.tabIndex = -1;
     box.addEventListener('click', (e) => {
-      const r = e.target.closest('[data-clip]');
-      if (r) selectClip(r.dataset.clip, false);
+      const tw = e.target.closest('[data-tw]');
+      if (tw) { e.stopPropagation(); toggleOpen(tw.dataset.tw); return; }
+      if (e.target.closest('[data-import]')) { importMedia(); return; }
+      const th = e.target.closest('th[data-col]');
+      if (th) { sortBy(th.dataset.col); return; }
+      const r = e.target.closest('[data-key]');
+      if (r) act(r, false, false);
     });
     box.addEventListener('dblclick', (e) => {
-      const r = e.target.closest('[data-clip]');
-      if (r) selectClip(r.dataset.clip, true);
+      if (e.target.closest('[data-tw], th, [data-import]')) return;
+      const r = e.target.closest('[data-key]');
+      if (r) { act(r, true, true); return; }
+      // Premiere: a double-click on an empty part of the bin is Import
+      if (project.read && !e.target.closest('.pempty')) importMedia();
     });
     box.addEventListener('dragstart', (e) => {
-      const r = e.target.closest('[data-clip]');
+      const r = e.target.closest && e.target.closest('[data-key]');
       if (!r) return;
-      const c = clipByName(r.dataset.clip);
-      if (!c) return;
-      ensureClip(c.clip);                  // heard or not, it can go in the sequence now
-      const [a, b] = source.marksFor(c);
-      e.dataTransfer.setData('application/x-roughcut-shot',
-        JSON.stringify({ clip: c.clip, start: a, end: b, why: '' }));
+      let shot = null;
+      if (r.dataset.clip !== undefined) {
+        const c = clipByName(r.dataset.clip);
+        if (c) {
+          ensureClip(c.clip);              // heard or not, it can go in the sequence now
+          const [a, b] = source.marksFor(c);
+          shot = { clip: c.clip, start: a, end: b, why: '' };
+        }
+      } else if (r.dataset.sub !== undefined) {
+        const it = project.items && project.items.get(r.dataset.key);
+        if (it && clipByName(it.clip)) {
+          ensureClip(it.clip);
+          shot = { clip: it.clip, start: it.in, end: it.out, why: it.why || '' };
+        }
+      }
+      if (!shot) { e.preventDefault(); return; }
+      stopScrub(true);
+      project.dragging = true;
+      e.dataTransfer.setData('application/x-roughcut-shot', JSON.stringify(shot));
       e.dataTransfer.effectAllowed = 'copy';
     });
+    const dragged = () => {
+      if (!project.dragging) return;
+      project.dragging = false;
+      if (project.dirty) setTimeout(paintSoon, 0);
+    };
+    document.addEventListener('dragend', dragged, true);
+    document.addEventListener('drop', dragged, true);
+    box.addEventListener('pointermove', scrubMove);
+    box.addEventListener('pointerleave', () => stopScrub());
     $('#projQ').addEventListener('input', (e) => { project.q = e.target.value; paintProject(); });
-    $('#projView').addEventListener('click', (e) => {
-      const b = e.target.closest('button[data-view]');
-      if (!b) return;
-      project.view = b.dataset.view;
-      store.set(VIEW_KEY, project.view);
-      paintProject();
-    });
+    const foot = $('#projFoot');
+    if (foot) {
+      foot.addEventListener('click', (e) => {
+        const b = e.target.closest('button[data-view]');
+        if (b) {
+          project.view = b.dataset.view;
+          store.set(VIEW_KEY, project.view);
+          paintProject();
+          return;
+        }
+        if (e.target.closest('[data-import]')) importMedia();
+      });
+      const z = $('#projZoom');
+      if (z) {
+        z.addEventListener('input', () => {
+          project.zoom = zoomOf(z.value);
+          const grid = box.querySelector('.picons');
+          if (grid) grid.style.setProperty('--tile', `${project.zoom}px`);
+        });
+        z.addEventListener('change', () => store.set(ZOOM_KEY, project.zoom));
+      }
+    }
     if ('ResizeObserver' in window) {
-      let w = 0;
       new ResizeObserver(() => {
-        const nw = box.clientWidth;
-        if (Math.abs(nw - w) > 30) { w = nw; if (project.view === 'list') paintProject(); }
+        if (project.view !== 'list' || !project.items || !project.items.size) return;
+        if (colsSig(columns(box.clientWidth || 300, [...project.items.values()])) !== project.cols) paintProject();
       }).observe(box);
     }
+    // footage added (Import, a drop, the Media Browser — lane IMPORT's contract): the bin
+    // re-reads, and what came in is selected and in view, as Premiere's Import leaves it
+    window.addEventListener('rc:clips-changed', (e) => {
+      const added = (e && e.detail && Array.isArray(e.detail.added)) ? e.detail.added : [];
+      loadClips().then(() => {
+        const first = added.find((n) => clipByName(n));
+        if (!first) return;
+        setSel(`c|${first}`);
+        const row = $$('#projList [data-clip]').find((r) => r.dataset.clip === first);
+        if (row) row.scrollIntoView({ block: 'nearest' });
+      });
+    });
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') loadClips(); });
+    // the sequences: read with the first look at the clips, then the switcher's listing
+    project.cutsSoon = Promise.race([fetchCuts(), new Promise((res) => setTimeout(res, 1500))]);
+    if ('MutationObserver' in window) {
+      const hd = $('#hdBin');
+      if (hd) new MutationObserver(lookAgain).observe(hd, { childList: true, subtree: true, characterData: true });
+      const prop = $('#proposal');
+      if (prop) new MutationObserver(lookAgain).observe(prop, { attributes: true, attributeFilter: ['style'] });
+    }
+    setInterval(lookAgain, 1000);
+    let soon = 0;
+    const onChange = () => { clearTimeout(soon); soon = setTimeout(lookAgain, 300); };
+    if (window.tl && typeof tl.on === 'function') tl.on('change', onChange);
+    else window.addEventListener('load', () => { if (window.tl && tl.on) tl.on('change', onChange); });
+    paintProject();                          // "Reading the footage folder…" until it answers
     loadClips();
   }
 
@@ -1105,6 +1845,14 @@
       }
       if (inField(e.target)) return;
       if (e.key === '?' && !e.metaKey && !e.ctrlKey) { keys(); return; }
+      // The Project panel's keys (↑ ↓ ← → Enter), while it has the blue outline and its own
+      // tab shows; `,` / `.` stay the Timeline's (they cut what the Source monitor holds).
+      if (focusedName() === 'project' && isOpen('project') && !e.metaKey && !e.ctrlKey && !e.altKey
+          && !e.shiftKey && projectKey(e)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return;
+      }
       // The Source monitor's keys, while it is the focused panel (Premiere's rule: a key
       // acts on the panel with the blue outline).
       if (focusedName() === 'source' && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -1146,7 +1894,11 @@
     layout: () => ({ ...px, frac: { ...frac } }),
     resetLayout,
     project: { reload: loadClips, select: selectClip, clips: () => project.clips.slice(),
-               view: (v) => { if (v) { project.view = v; store.set(VIEW_KEY, v); paintProject(); } return project.view; } },
+               view: (v) => { if (v) { project.view = v; store.set(VIEW_KEY, v); paintProject(); } return project.view; },
+               // the sorted column and its direction ({col, dir: 1 | -1}); the items as painted
+               sort: () => ({ ...project.sort }),
+               items: () => [...(project.items || new Map()).values()].map((it) => ({
+                 type: it.type, key: it.key, name: it.name, in: it.in, out: it.out, dur: it.dur, cur: !!it.cur })) },
     source,
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

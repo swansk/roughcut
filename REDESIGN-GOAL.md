@@ -374,3 +374,13 @@ next judge runs, and the next judge rules it honest or lenient.
   Also dimension 13's index line now reads "the free part of the index starts on its own; a priced step is
   offered with its cost line, never run unasked", because INTAKE's standing decision is that the priced
   visual pass is never automatic; the earlier wording would have broken it.
+
+- 2026-10-18 (wave 12, lanes AIPROMPT and BINLOOK; logged by the lead): **the screens budget grows by the AI
+  prompt (+2 words, +2 controls: its input and scope chip, the chip's scope word and the "Ctrl+J" hint) and by
+  Premiere's Project panel (+3 words, +1 control: the bin's cut as a sequence row, its name, duration and
+  "open", and Import in the panel's bottom bar)**. Merged and measured: `/` 103·57, `/ shot` 129·72, `/ film`
+  111·56, `/ fx` 134·60, `/ jobs` 112·58 (`/ jobs` read one under on one run; the limit is the larger
+  count); `/floor` and `/open` unchanged. More lenient by exactly the measured counts, no headroom: the
+  prompt is dimension 14's bar itself, and the sequence row and Import are what Premiere's Project panel
+  shows. TEACH measured a zero delta with the tour closed (the tour adds +36 words / +9 controls while open,
+  which is why test browsers set its seen flag; the judge's fresh browser does not).
