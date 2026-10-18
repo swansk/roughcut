@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Loop state: all five wave-12 lanes merged; tail lanes SMALL3, AIGLUE, JOURNEY3 running** (judge/LOOP.md).
 - **Merge: wave 12 lane AIOPS** (one action vocabulary in roughcut/actions.py for every pro-tool family, /api/assist + price + cancel, the AI edit review panel with ghost-lane and Before/After previews and per-op accept as one undo, Designed Effects edits undoable); server.py's import and assist sections both kept.
 - **Merge: wave 12 lane IMPORT** (File › Import… / Ctrl+I and the Media Browser over the board's machine, referenced in place; Upload Files / Folder and OS drops streamed under --work; imports persist; one `clip_path` resolver; "N new clips: add them to the cut?" after a pass).
 - **Loop state: wave 12's first three merges and the tail queue** (judge/LOOP.md).

@@ -49,6 +49,17 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-18 ~17:30 EDT: **all five wave-12 lanes merged**: IMPORT `bbd01b5` (Import / Ctrl+I + Media Browser over the board's
+  machine, referenced in place; upload + OS drop streamed under --work/media/<bin>/uploads; `sources.json` persists; one
+  `clip_path` resolver for ~25 call sites + a symlink view folder for the folder-taking tools; the "N new clips" offer),
+  AIOPS `a7c428d` (roughcut/actions.py: 14 timeline ops + set/keys + curve/wheel/look/match + transition/fade +
+  design_effect + export; /api/assist + price + cancel; the AI edit panel in the Assistant tab with ghost-lane and
+  Before/After previews, per-op accept = one undo; Designed Effects edits undoable). Tail running from `a7c428d`: SMALL3
+  (tc_start + audio facts, rcBoard accessor, switcher crash, flow.py Import, one clip refresh), AIGLUE (the AIPROMPT x
+  AIOPS junction tested without fakes, assist price/cancel in the prompt, markers + In/Out on the undo stack, a
+  re-entrant tl.begin, undone fx edits, hover cards), JOURNEY3 (import, drop, ask + per-op review + undo, AI menu steps
+  in tools/journey.py + mutation checks). Known gaps (AIOPS): Look / Color Match have no live preview (baked into the LUT
+  on save); Stop can't end a model call already sent (inference has no cancel handle). W11FINISH still running.
 - 2026-10-18 ~15:40 EDT: wave 12 merged so far: AIPROMPT `962ac76` (prompt in the Timeline header, Ctrl+J, scope chip, AI
   menu commands, right-click "Ask AI about this…"; 24 tests), TEACH `b94dee5` (6-step first run + 5-step AI tour, hover
   cards with section S cost wording, empty states -> Import / Run first pass / Review; conftest + journey set
