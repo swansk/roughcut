@@ -16,43 +16,67 @@ tools are the suite's stubs (app/tests/test_index._stub_tools).
 The steps, each one a screenshot at 1440×900 in `<out dir>/NN-step.png`:
 
   01 open           the board lands; the bin holds the fixture; "Run first pass" in the header
-  02 preview        CLIP_R opened in the Source monitor before any index ran: the server's
+  02 import         Ctrl+I → the Import dialog at the bin's folder's parent; a double-click on
+                    the second card's folder (card2/, two clips and a text file, built under
+                    <out dir>) lists its two clips and not the text; Ctrl+A, Import: two new
+                    Project rows, each with its poster in Icon view within 5 s of Import, and
+                    the clips' length, rate and size (REDESIGN-GOAL dimension 13)
+  03 preview        CLIP_R opened in the Source monitor before any index ran: the server's
                     360p preview plays (an HEVC original is never handed to the browser),
                     each quadrant its colour, the right way up (verdict 3 punch 1's picture)
-  03 firstpass      one click on [data-testid=firstpass-button] opens its panel (steps, cost)
-  04 run            [data-testid=firstpass-run] → the index (stubbed) → picks → the proposal opens
-  05 reject         ✗ on the proposal's 5th shot (its ghost's `.rv.no`): Accept reads "Accept 4 of 5"
-  06 accept         Accept puts the 4 accepted shots on V1 and on disk; the EDL's
+  04 firstpass      one click on [data-testid=firstpass-button] opens its panel (steps, cost)
+  05 run            [data-testid=firstpass-run] → the index (stubbed) → picks → the proposal opens
+  06 reject         ✗ on the proposal's 5th shot (its ghost's `.rv.no`): Accept reads "Accept 4 of 5"
+  07 accept         Accept puts the 4 accepted shots on V1 and on disk; the EDL's
                     provenance.rejected records the 5th shot's range (verdict 4, punch 2)
-  07 selects        Selects lists the pass's picks (> 0 rows, one per pick); an amber marker
+  08 selects        Selects lists the pass's picks (> 0 rows, one per pick); an amber marker
                     on the cut wherever a pick overlaps a shot (verdict 4, punch 1)
-  08 trim-out       a ripple trim of shot 1's out, dragged on the cut's edge column
-  09 trim-in        a ripple trim of shot 3's in, the same way
-  10 razor          the playhead into shot 2 by a click on the ruler, C (the razor, no cut),
+  09 trim-out       a ripple trim of shot 1's out, dragged on the cut's edge column
+  10 trim-in        a ripple trim of shot 3's in, the same way
+  11 razor          the playhead into shot 2 by a click on the ruler, C (the razor, no cut),
                     then a razor click on shot 2 at the playhead: two pieces
-  11 move           shot 4 dragged by its body to the head of the film
-  12 warmer         Effect Controls › Lumetri Color › Temperature on a trimmed shot
-  13 rerun-panel    the header reads "Re-run first pass"; its panel names both trimmed shots as kept
-  14 rerun-accept   Run (the model re-proposes the rejected range): the proposal leaves it out,
+  12 move           shot 4 dragged by its body to the head of the film
+  13 warmer         Effect Controls › Lumetri Color › Temperature on a trimmed shot
+  14 drop           a small file dragged from the OS onto the Project panel (a DataTransfer
+                    File, as Chromium hands one over): "Drop to import 1 file", then the
+                    upload's progress strip says "Imported 1 clip" and the clip has a row;
+                    its bytes are under --work, never in the bin's folder (mid-session, after
+                    the pass: the re-run below offers it)
+  15 ask            Ctrl+J → the AI prompt (scope: Sequence) → the request, ↵: "working" within
+                    100 ms of ↵; "4 changes ready · Review"; Review → the AI edit panel, one row
+                    per op (a razor, a Temperature, a dissolve, an Exposure: three families),
+                    "free on your plan", the razor drawn as a ghost under V1 and nothing on
+                    disk yet; ✗ on the Temperature, Accept 3 of 4: the EDL holds exactly the
+                    three accepted ops and the review is on the record; ONE Ctrl+Z takes all
+                    three back (the EDL as before the ask), Ctrl+Shift+Z puts them back
+                    (dimensions 14 and 15)
+  16 ai-menu        the AI menu in the menu bar lists every AI action (first pass, Ask, shot
+                    ask, colour Ask, Designed Effects, Look deeper, audit …); each item is
+                    enabled, or greyed with the reason it says; the first-pass item reads
+                    Re-run once the pass ran (PNG with the menu open; it closes after)
+  17 rerun-panel    "1 new clip: add it to the cut?" under the header control; its Re-run
+                    first pass… opens the panel, which names the new clip and both trimmed
+                    shots as kept
+  18 rerun-accept   Run (the model re-proposes the rejected range): the proposal leaves it out,
                     says so in plan.firstpass.rejected and the notes; accept: every kept shot
                     (the trimmed two among them) has the same in/out
-  15 drop-grade     CLIP_R dragged from the Project panel to the film's end, and within 100 ms
+  19 drop-grade     CLIP_R dragged from the Project panel to the film's end, and within 100 ms
                     of it landing `effects.set('temperature', 40)` on the shot Effect Controls
                     shows; idle, reload: the shot is on disk under a server id with the warm
                     balance, colour.shots has no `tmp-` key, Effect Controls shows 40
                     (verdict 5, punch 1: the grade judge 5 lost)
-  16 upright        CLIP_R in the Program monitor (its graded frame, as shown) and in the
+  20 upright        CLIP_R in the Program monitor (its graded frame, as shown) and in the
                     Source monitor: each quadrant is its colour, the right way up
-  17 short-shot     a 0.4 s range of CLIP_R marked I / O in the Source monitor and inserted
+  21 short-shot     a 0.4 s range of CLIP_R marked I / O in the Source monitor and inserted
                     with `,` at the first cut; ▶ from 0.6 s before it plays through it into
                     the next shot
-  18 opacity-key    one click on Opacity's stopwatch on the first shot (Premiere's "start
+  22 opacity-key    one click on Opacity's stopwatch on the first shot (Premiere's "start
                     animating"): ONE key, on disk — and the export below carries it
                     (verdict 7, blocker 2: one such key made every export fail)
-  19 export         Ctrl+M → Quick 1080p, the whole sequence; the size estimate settles
+  23 export         Ctrl+M → Quick 1080p, the whole sequence; the size estimate settles
                     (no "measuring…"); export-go, export-progress → 100, export-done; a
                     failed export fails the step at once with the shot the dialog names
-  20 ffprobe        the file's duration is within one frame of tl.total(); its size within
+  24 ffprobe        the file's duration is within one frame of tl.total(); its size within
                     ±25 % of the dialog's estimate; CLIP_R's frame in it is upright; the
                     keyed shot's frame is the shot at 100 %, not black
 
@@ -63,7 +87,15 @@ fails the journey.
 The first failing step stops the journey. Zero page errors are allowed: an error thrown
 in the page fails the step it happened in. `<out dir>/journey.json` has each step's name,
 ok, ms, PNG, why it failed and the page errors; the last line printed is the gate's:
-`journey ✓ 19 steps · 74 s` or `journey ✗ step 7 razor: <why>`. Exit 0 only when green.
+`journey ✓ 24 steps · 74 s` or `journey ✗ step 7 razor: <why>`. Exit 0 only when green.
+
+    python3 tools/journey.py <snapshot dir> <out dir> --steps=open,drop
+
+runs only the named steps, in the journey's order (the mutation checks in
+app/tests/test_journey_tool.py use it: a short session that reaches the step a mutant
+breaks). Each step then asserts what that shorter session did; the gate never passes it.
+`--fixture-from=<an earlier out dir>/fixture` copies that run's footage instead of
+encoding it again (the mutation checks build it once).
 
 The script needs fastapi, uvicorn, httpx, numpy, pytest and playwright; when the Python
 running it lacks them it re-runs itself under `uv run --with …` (as the gate's suite does).
@@ -71,9 +103,11 @@ running it lacks them it re-runs itself under `uv run --with …` (as the gate's
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -103,6 +137,13 @@ def _reexec_under_uv() -> None:
 
 class StepFailed(Exception):
     pass
+
+
+# The steps, in order (the docstring says what each asserts; --steps picks some of them).
+STEPS = ("open", "import", "preview", "firstpass", "run", "reject", "accept", "selects",
+         "trim-out", "trim-in", "razor", "move", "warmer", "drop", "ask", "ai-menu",
+         "rerun-panel", "rerun-accept", "drop-grade", "upright", "short-shot", "opacity-key",
+         "export", "ffprobe")
 
 
 def need(cond, why: str) -> None:
@@ -163,6 +204,12 @@ def _load(name: str, path: Path):
 ROT = "CLIP_R.MP4"
 CLIPS = ["CLIP_A.MP4", "CLIP_B.MP4", "CLIP_C.MP4", ROT]
 ROT_S = 6.0
+# Footage that comes in during the session (REDESIGN-GOAL dimension 13): a second card the
+# Import dialog browses to (two clips and a file that is not video), and one small file
+# dropped from the viewer's own disk onto the Project panel. All under <out dir>/fixture.
+CARD = "card2"
+IMPORTED = ["CARD2_A.MP4", "CARD2_B.MP4"]
+DROPPED = "DROP_D.MP4"
 # The picture as it must be SEEN, by quadrant. No two alike, so an upside-down picture
 # (the bug ORIENT fixed), a mirror and a vertical flip each read wrong.
 QUADS = {"tl": (255, 0, 0), "tr": (0, 255, 0), "bl": (0, 0, 255), "br": (255, 255, 0)}
@@ -288,6 +335,71 @@ DROP_THEN_GRADE = """async ([clip, value]) => {
 }"""
 
 
+# A file from the viewer's disk over the Project panel: a File in a DataTransfer (what
+# Chromium hands a page for an OS drag), dragenter + dragover on the panel's list; the
+# drop itself is sent once the overlay has been read. The upload strip's lines are kept.
+DROP_FILE = r"""([b64, name]) => {
+  const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const dt = new DataTransfer();
+  dt.items.add(new File([bin], name, { type: 'video/mp4' }));
+  window.__drop = dt;
+  window.__strip = [];
+  new MutationObserver(() => {
+    const s = document.querySelector('[data-testid=import-progress]');
+    if (s && !s.hidden) window.__strip.push(s.innerText.replace(/\s+/g, ' ').trim());
+  }).observe(document.getElementById('pProject'), { subtree: true, childList: true,
+                                                     attributes: true, characterData: true });
+  const el = document.getElementById('projList');
+  el.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt }));
+  el.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+}"""
+
+# When ↵ went down in the AI prompt and when its status first said "working" (and
+# "done"), on the page's own clock: dimension 14's "a working state within 100 ms".
+ASK_WATCH = r"""() => {
+  const st = document.querySelector('[data-testid=ai-status]');
+  const inp = document.querySelector('[data-testid=ai-prompt-input]');
+  const T = window.__ask = { enter: null, working: null, done: null, states: [] };
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target === inp && T.enter === null) T.enter = performance.now();
+  }, true);
+  if (!st) return;
+  new MutationObserver(() => {
+    const s = st.dataset.state;
+    if (T.states[T.states.length - 1] !== s) T.states.push(s);
+    if (s === 'working' && T.working === null) T.working = performance.now();
+    if ((s === 'done' || s === 'failed') && T.done === null) T.done = performance.now();
+  }).observe(st, { attributes: true, attributeFilter: ['data-state'] });
+}"""
+
+# The AI menu's items dimension 14 names: first pass / re-run, Ask, shot ask, colour Ask,
+# Designed Effects, Look deeper, the claims audit (and Find, the prompt itself).
+AI_MENU = ["ai:prompt", "ai:firstpass", "ai:ask", "ai:shot", "ai:colour", "ai:fx", "ai:deep",
+           "ai:find", "ai:audit"]
+
+
+def _no_ids(cut: dict) -> dict:
+    """A cut on disk without its shots' ids (a redo may re-mint a new shot's id)."""
+    return {**cut, "segs": [s[1:] for s in cut["segs"]]}
+
+
+def _cut_diff(a: dict, b: dict) -> str:
+    """What differs between two cuts on disk, in a line."""
+    out = []
+    if a["segs"] != b["segs"]:
+        out.append(f"shots {len(a['segs'])} → {len(b['segs'])}: "
+                   f"{[s for s in b['segs'] if s not in a['segs']][:3]} new, "
+                   f"{[s for s in a['segs'] if s not in b['segs']][:3]} gone")
+    if a["transitions"] != b["transitions"]:
+        out.append(f"transitions {a['transitions']} → {b['transitions']}")
+    ch = sorted(k for k in set(a["shots"]) | set(b["shots"]) if a["shots"].get(k) != b["shots"].get(k))
+    if ch:
+        out.append(f"colour of {ch}")
+    if a.get("marks") != b.get("marks"):
+        out.append(f"marks {a.get('marks')} → {b.get('marks')}")
+    return "; ".join(out) or "nothing"
+
+
 # ------------------------------------------------------------------ the scripted model
 
 FIRST_CUT = [
@@ -311,18 +423,64 @@ RE_CUT = [
 ]
 
 
+# The editor's words to the AI prompt (step `ask`). The scripted model does not read them:
+# it answers from the sequence the prompt lists (assist_ops), as a model would from
+# what the editor named.
+ASK_TEXT = "cut shot 1 in half, cool shot 3 down and brighten it, and dissolve into the last shot"
+# one row of roughcut/assist.py's sequence block:
+#   "    3  g0012  CLIP_B.MP4  clip 2.40–3.20 s  film 2.70–3.50 s (00:00:02:17–…)"
+SEQ_ROW = re.compile(r"^\s*(\d+)\s+(\S+)\s+(\S+)\s+clip (-?[\d.]+)–(-?[\d.]+) s\s+"
+                     r"film (-?[\d.]+)–(-?[\d.]+) s")
+REJECT_OP = 1            # the op the editor rejects in the review: the Temperature
+
+
+def assist_ops(prompt: str) -> list[dict] | None:
+    """The scripted answer to an assist call: four ops from three families, on the shots
+    the prompt's sequence block lists — the first shot razored at its middle (timeline),
+    shot 3 cooled (the op the editor rejects) and brightened (Effect Controls), a dissolve
+    on the edit into the last shot (transitions). None when the sequence has fewer than
+    three shots (the model then answers in words, and the step says so)."""
+    head = prompt.split("## The sequence", 1)[-1].split("## ", 1)[0]
+    rows = []
+    for ln in head.splitlines():
+        m = SEQ_ROW.match(ln)
+        if m:
+            rows.append({"n": int(m[1]), "id": m[2], "clip": m[3], "in": float(m[4]),
+                         "out": float(m[5]), "t0": float(m[6]), "t1": float(m[7])})
+    if len(rows) < 3:
+        return None
+    first, third, a, b = rows[0], rows[2], rows[-2], rows[-1]
+    return [
+        {"op": "razor", "id": first["id"], "at": round((first["t0"] + first["t1"]) / 2, 3)},
+        {"op": "set", "id": third["id"], "prop": "temperature", "value": -30},
+        {"op": "transition", "a": a["id"], "b": b["id"], "kind": "cross_dissolve", "dur": 0.5},
+        {"op": "set", "id": third["id"], "prop": "exposure", "value": 0.3},
+    ]
+
+
 def scripted_model(inference, config):
     class JourneyModel:
         """Answers the cut call of a run and of a re-run (a re-run's prompt says LOCKED
-        when shots are locked); every other call gets "{}" and falls back."""
+        when shots are locked) and the AI prompt's assist call (its schema asks for a
+        `kind`: assist_ops); every other call gets "{}" and falls back."""
         name = "journey-scripted"
 
         def __init__(self):
             self.calls: list[str] = []
+            self.assist: list[list[dict] | None] = []      # what each assist call answered
 
         def complete(self, request):
             prompt = request.prompt or ""
-            if "segments" not in (request.schema or {}):
+            schema = request.schema or {}
+            if "kind" in schema and "ops" in schema:
+                ops = assist_ops(prompt)
+                self.assist.append(ops)
+                ans = ({"kind": "ops", "ops": ops,
+                        "summary": "razor shot 1, cool and brighten shot 3, dissolve into the last shot"}
+                       if ops else {"kind": "answer",
+                                    "text": "There are fewer than three shots in the sequence to work on."})
+                text, kind = json.dumps(ans), "assist"
+            elif "segments" not in schema:
                 text, kind = "{}", "other"
             elif "LOCKED" in prompt:
                 text, kind = json.dumps({"segments": RE_CUT, "notes": "a re-cut around your shots"}), "rerun"
@@ -349,8 +507,13 @@ class Journey:
         self.media: list[tuple[str, str | None]] = []
         self.pg = None
         self.base = ""
+        self.bin = list(CLIPS)               # the clips the Project panel must list now
+        self.only: list[str] | None = None   # --steps: a shorter session
+        self.fixture = self.out / "fixture"
 
-    # ---- a step: time it, screenshot it, fail it on an exception or a page error
+    # ---- a step: time it, screenshot it, fail it on an exception or a page error.
+    # A step may return a callable: it runs after the screenshot (a menu the PNG shows
+    # open is closed there); if it fails, the step does.
     def step(self, name: str, fn) -> bool:
         n = len(self.steps) + 1
         png = self.out / f"{n:02d}-{name}.png"
@@ -358,8 +521,10 @@ class Journey:
         t0 = time.time()
         rec = {"n": n, "name": name, "ok": False, "ms": 0, "png": png.name, "why": "",
                "errors": []}
+        after = None
+        self.current = (n, name, rec)
         try:
-            fn()
+            after = fn()
             rec["ok"] = True
         except StepFailed as e:
             rec["why"] = str(e)
@@ -382,10 +547,29 @@ class Journey:
                 rec["png"] = None
                 rec["why"] = rec["why"] or f"no screenshot: {e}"
                 rec["ok"] = False
+        if rec["ok"] and callable(after):
+            try:
+                after()
+            except StepFailed as e:
+                rec["ok"], rec["why"] = False, f"after its screenshot: {e}"
+            except Exception as e:
+                rec["ok"], rec["why"] = False, f"after its screenshot: {type(e).__name__}: {e}"
+            rec["ms"] = round((time.time() - t0) * 1000)
         self.steps.append(rec)
         mark = "✓" if rec["ok"] else "✗"
         print(f"  {n:02d} {name:<13} {mark} {rec['ms']:>6} ms  {rec['why']}", flush=True)
         return rec["ok"]
+
+    def extra_png(self, what: str) -> None:
+        """A second picture inside the step (`NN-<step>-<what>.png`): a state the step
+        moves past before its own screenshot, e.g. the AI's review before Accept."""
+        n, name, rec = self.current
+        png = self.out / f"{n:02d}-{name}-{what}.png"
+        try:
+            self.pg.screenshot(path=str(png))
+            rec.setdefault("extra_png", []).append(png.name)
+        except Exception:
+            pass
 
     # ---- the page's own state
     def js(self, expr: str, arg=None):
@@ -453,8 +637,8 @@ class Journey:
         """The board after a (re)load: its state, the bin, the cut on V1."""
         self.until("window.rcFirstPass && rcFirstPass.state() && window.effects && window.tl && tl.state",
                    "the board never loaded after a reload", 30000)
-        self.until(f"document.querySelectorAll('#projList [data-clip]').length === {len(CLIPS)}",
-                   "the Project panel never listed the clips after a reload", 20000)
+        self.until(f"document.querySelectorAll('#projList [data-clip]').length === {len(self.bin)}",
+                   f"the Project panel never listed the {len(self.bin)} clips after a reload", 20000)
         self.until("segs.length > 0 && document.querySelectorAll('#tl .tl-lane[data-lane=V1] .blk').length === segs.length",
                    "V1 never drew the cut after a reload", 20000)
 
@@ -471,6 +655,21 @@ class Journey:
                    f"the Source monitor never showed {ROT}'s frame", 120000)
         pg.wait_for_timeout(300)
         return quadrants(png_rgb(pg.locator("#srcScreen").screenshot()), why)
+
+    def cut_on_disk(self) -> dict:
+        """The cut as the EDL file holds it: the shots (id, clip, in, out), the
+        transitions (a, b, kind) and the per-shot colour (the hand balance rides there)."""
+        import server
+        d = json.loads(Path(server.STATE["edl"]).read_text(encoding="utf-8"))
+        return {"segs": [(str(s.get("id")), s.get("clip"), round(float(s.get("in")), 4),
+                          round(float(s.get("out")), 4)) for s in d.get("segments") or []],
+                "transitions": sorted((str(t.get("a")), str(t.get("b")), str(t.get("kind")))
+                                      for t in d.get("transitions") or []),
+                "shots": ((d.get("colour") or {}).get("shots") or {}),
+                "marks": {k: d.get(k) for k in ("markers", "in", "out", "overlays", "tracks")}}
+
+    def project_rows(self) -> list[str]:
+        return self.js("[...document.querySelectorAll('#projList [data-clip]')].map(r => r.dataset.clip)")
 
     def media_kinds(self) -> list[str]:
         """What the server said it served for CLIP_R so far (x-roughcut-media)."""
@@ -575,6 +774,82 @@ class Journey:
             self.fp_label("Run first pass")
             need(pg.locator('header [data-testid="firstpass-button"]').count() == 1,
                  "the first-pass control is not in the header")
+
+        def import_folder():
+            # File › Import as Premiere has it: Ctrl+I, the machine's folders, the second
+            # card's clips selected and imported in place (REDESIGN-GOAL dimension 13)
+            import httpx
+            card = self.fixture / CARD
+            dlg = "[data-testid=import-dialog]"
+            row = "[data-testid=media-browser-row]"
+            pg.locator(".ws-tab[data-tool=project]").click()
+            pg.keyboard.press("Control+i")
+            self.sel(f"{dlg}[open] {row}", "Ctrl+I opened no Import dialog with a folder in it", 10000)
+            title = self.js("(() => { const d = document.querySelector('[data-testid=import-dialog]');"
+                            " const t = d && document.getElementById(d.getAttribute('aria-labelledby'));"
+                            " return t ? t.textContent.trim() : ''; })()")
+            need(title == "Import", f"Ctrl+I opened {title!r}, not the Import dialog")
+            at = pg.locator("[data-testid=media-browser-path]").input_value()
+            need(at == str(self.fixture), f"the Import dialog opened at {at}, not the folder that "
+                                          f"holds the bin ({self.fixture})")
+            folder = pg.locator(f"{dlg} {row}").filter(has_text=CARD)
+            need(folder.count() == 1, f"the Import dialog at {at} does not list {CARD}/: "
+                 f"{pg.locator(f'{dlg} {row}').all_inner_texts()}")
+            folder.dblclick()
+            self.until(f"document.querySelector('[data-testid=media-browser-path]').value === {json.dumps(str(card))}",
+                       f"a double-click on {CARD}/ did not open it", 8000)
+            self.until(f"document.querySelectorAll('{dlg} {row}').length > 0",
+                       f"the Import dialog lists nothing in {CARD}/", 8000)
+            listed = [" ".join(t.split()) for t in pg.locator(f"{dlg} {row}").all_inner_texts()]
+            need(len(listed) == len(IMPORTED) and all(sum(c in t for t in listed) == 1 for c in IMPORTED)
+                 and not any("notes.txt" in t for t in listed),
+                 f"{CARD}/ lists {listed}, not its two clips (and never its notes.txt)")
+            pg.locator("[data-testid=media-browser]").focus()
+            pg.keyboard.press("Control+a")
+            status = " ".join(pg.locator(dlg).inner_text().split())
+            need(f"{len(IMPORTED)} clips selected" in status, f"Ctrl+A did not select both clips: {status!r}")
+            t0 = time.time()
+            pg.locator("[data-testid=import-go]").click()
+            self.until(f"!document.querySelector('{dlg}').open", "Import did not close the dialog", 8000)
+            self.until(f"{json.dumps(IMPORTED)}.every(c => [...document.querySelectorAll('#projList [data-clip]')]"
+                       ".some(r => r.dataset.clip === c))",
+                       f"the Project panel never listed {IMPORTED} after Import", 5000)
+            self.bin += IMPORTED
+            F["import_rows_s"] = round(time.time() - t0, 2)
+            # Icon view: each new clip's poster, within 5 s of Import (a lazy <img>: on screen)
+            pg.locator("[data-testid=project-view-icon]").click()
+            shown = ("(c) => { const el = [...document.querySelectorAll('#projList [data-clip]')]"
+                     ".find(e => e.dataset.clip === c); if (!el) return false;"
+                     " el.scrollIntoView({block: 'nearest'}); const img = el.querySelector('img');"
+                     " return !!img && img.complete && img.naturalWidth > 0; }")
+            for clip in IMPORTED:
+                left = max(0.1, 5.0 - (time.time() - t0))
+                try:
+                    pg.wait_for_function(shown, arg=clip, timeout=left * 1000)
+                except Exception:
+                    raise StepFailed(f"{clip} has no poster in the Project panel's Icon view "
+                                     f"{time.time() - t0:.1f} s after Import (the goal: 5 s)")
+            F["import_poster_s"] = round(time.time() - t0, 2)
+            need(F["import_poster_s"] <= 5.0, f"the posters took {F['import_poster_s']} s, not 5")
+            # the clips carry their facts (the List view's Duration / Frame Rate / Resolution)
+            clips = {c["clip"]: c for c in httpx.get(self.base + "/api/clips", timeout=30).json()["clips"]}
+            for c in IMPORTED:
+                got = clips.get(c) or {}
+                need(got.get("source") == "import", f"{c} is not an import in /api/clips: {got.get('source')}")
+                need(abs(float(got.get("duration") or 0) - 6.0) < 0.1
+                     and abs(float(got.get("fps") or 0) - 24.0) < 0.01 and got.get("width") == 320,
+                     f"{c} lacks its length, rate or size: "
+                     f"{ {k: got.get(k) for k in ('duration', 'fps', 'width', 'height')} }")
+                need(Path(got.get("path") or "/").resolve().parent == card.resolve(),
+                     f"{c} was not referenced in place: {got.get('path')}")
+            F["imported"] = {"rows": self.project_rows()}
+
+            def back_to_list():
+                # the List view again: the steps after read the Project panel's rows
+                pg.locator("[data-testid=project-view-list]").click()
+                self.until(f"document.querySelectorAll('#projList tr.row[data-clip]').length === {len(self.bin)}",
+                           f"the List view does not show the bin's {len(self.bin)} clips", 5000)
+            return back_to_list
 
         def preview():
             # CLIP_R before the index has made its proxy: the Source monitor plays the
@@ -822,19 +1097,270 @@ class Journey:
                 F["warmed"]["probe"] = [p0, p1]
             pg.keyboard.press("Escape")
 
+        def drop_file():
+            # a file from the viewer's own disk dragged onto the Project panel: the
+            # browser hands the page a File in a DataTransfer, which is what this builds
+            import httpx
+            src = self.fixture / "desktop" / DROPPED
+            pg.locator(".ws-tab[data-tool=project]").click()
+            self.js(DROP_FILE, [base64.b64encode(src.read_bytes()).decode("ascii"), DROPPED])
+            over = pg.locator("[data-testid=project-drop]")
+            need(over.count() == 1 and over.is_visible(),
+                 "a file dragged over the Project panel showed no drop overlay (project-drop)")
+            words = " ".join(over.inner_text().split())
+            need("Drop to import 1 file" in words, f"the drop overlay says {words!r}")
+            t0 = time.time()
+            self.js("() => document.getElementById('projList').dispatchEvent(new DragEvent('drop',"
+                    " {bubbles: true, cancelable: true, dataTransfer: window.__drop}))")
+            self.until("!document.querySelector('[data-testid=project-drop]') ||"
+                       " document.querySelector('[data-testid=project-drop]').hidden",
+                       "the drop overlay stayed up after the drop", 3000)
+            self.until(f"!![...document.querySelectorAll('#projList [data-clip]')].find(r => r.dataset.clip === {json.dumps(DROPPED)})",
+                       f"the dropped {DROPPED} never got a Project row", 15000)
+            self.until("(() => { const s = document.querySelector('[data-testid=import-progress]');"
+                       " return !!s && !s.hidden && /Imported 1 clip/.test(s.innerText); })()",
+                       "the upload's strip at the Project panel's foot never said \"Imported 1 clip\"", 10000)
+            F["drop_s"] = round(time.time() - t0, 2)
+            strip = self.js("window.__strip || []")
+            need(any(f"Uploading 1 of 1 · {DROPPED}" in x for x in strip),
+                 f"the upload showed no progress for {DROPPED}: {strip[:4]}")
+            got = next((c for c in httpx.get(self.base + "/api/clips", timeout=30).json()["clips"]
+                        if c["clip"] == DROPPED), {})
+            need(got.get("source") == "upload", f"{DROPPED} is not an upload in /api/clips: {got}")
+            path = Path(got.get("path") or "/")
+            need(str(path.resolve()).startswith(str((self.out / "work").resolve()))
+                 and path.read_bytes() == src.read_bytes(),
+                 f"the upload is not the dropped file's bytes under --work: {path}")
+            need(not (self.fixture / "footage" / DROPPED).exists(), "the drop wrote into the bin's folder")
+            self.bin.append(DROPPED)
+            F.setdefault("since_pass", []).append(DROPPED)
+            F["dropped_file"] = {"path": str(path), "strip": strip[-3:], "s": F["drop_s"]}
+
+        def ask():
+            # Ctrl+J, words, ↵ — the AI's answer reviewed op by op, one accept, one undo
+            import httpx
+            import server
+            self.idle()
+            before = self.segs()
+            need(len(before) >= 3, f"the cut has {len(before)} shots, too few to ask for these edits")
+            disk0 = self.cut_on_disk()
+            pg.locator("#pProgram .ws-head").click()
+            pg.keyboard.press("Escape")                      # nothing selected: the whole sequence
+            pg.keyboard.press("Control+j")
+            self.until("!!document.activeElement && document.activeElement.matches('[data-testid=ai-prompt-input]')",
+                       "Ctrl+J did not put the focus in the AI prompt", 3000)
+            chip = pg.locator("[data-testid=ai-scope]")
+            if chip.get_attribute("data-kind") != "sequence":  # the chip changes it, as a person would
+                chip.click()
+                pg.locator("[data-testid=ai-scope-menu] [data-scope=sequence]").click()
+            need(chip.get_attribute("data-kind") == "sequence" and chip.inner_text().strip(),
+                 f"the AI prompt's scope reads {chip.inner_text().strip()!r}, not the whole sequence")
+            F["ask_scope"] = chip.inner_text().strip()
+            third = before[2]["id"]
+            look = ("(id) => ({t: effects.value('temperature', {id}), e: effects.value('exposure', {id})})")
+            look0 = self.js(look, third)
+            self.js(ASK_WATCH)
+            pg.keyboard.type(ASK_TEXT)
+            pg.keyboard.press("Enter")
+            try:
+                pg.wait_for_selector("[data-testid=ai-result]", state="visible", timeout=30000)
+            except Exception:
+                st = self.js("(() => { const s = document.querySelector('[data-testid=ai-status]');"
+                             " return s ? s.dataset.state + ': ' + s.innerText : 'no ai-status'; })()")
+                raise StepFailed(f"the AI prompt never showed its result (status {st!r})")
+            w = self.js("window.__ask")
+            F["ask_watch"] = w
+            need(w.get("enter") is not None and w.get("working") is not None,
+                 f"the AI prompt never said it was working: {w}")
+            need(w["working"] - w["enter"] < 100,
+                 f"\"working\" showed {w['working'] - w['enter']:.0f} ms after ↵, not within 100")
+            answered = self.model.assist[-1] if self.model.assist else None
+            need(answered, "the scripted model answered no ops (it saw too few shots in the prompt)")
+            said = " ".join(pg.locator("[data-testid=ai-result]").inner_text().split())
+            need(f"{len(answered)} changes ready" in said and "Review" in said,
+                 f"the result line reads {said!r}, not \"{len(answered)} changes ready · Review\"")
+            pg.locator("[data-testid=ai-result]").get_by_role("button", name="Review").click()
+            panel = "[data-testid=ai-review]"
+            self.until(f"(() => {{ const r = document.querySelector('{panel}'); return !!r && !r.hidden"
+                       f" && r.querySelectorAll('[data-testid=ai-op-row]').length === {len(answered)}; }})()",
+                       f"Review opened no AI edit panel with one row per op ({len(answered)})", 8000)
+            need(pg.locator(panel).is_visible(), "the AI edit panel is open but not on screen (its tab is behind)")
+            # the review settles on the cut as it is (its preview call): every op stays on
+            self.until(f"(() => {{ const b = document.querySelector('{panel} [data-testid=ai-accept-all]');"
+                       " return !!b && !b.disabled && /^Accept all$/.test(b.textContent.trim()); })()",
+                       "the review's Accept never read \"Accept all\" for the four ops", 8000)
+            rows = self.js(f"[...document.querySelectorAll('{panel} [data-testid=ai-op-row]')].map(r =>"
+                           " ({i: Number(r.dataset.opIndex), op: r.dataset.op, family: r.dataset.family,"
+                           " on: r.getAttribute('aria-checked'), line: r.innerText.replace(/\\s+/g, ' ').trim()}))")
+            F["ask_rows"] = rows
+            need([r["op"] for r in rows] == [o["op"] for o in answered],
+                 f"the review lists {[r['op'] for r in rows]}, the AI answered {[o['op'] for o in answered]}")
+            need(len({r["family"] for r in rows}) >= 3, f"the ops are not from three families: {rows}")
+            need(all(r["on"] == "true" for r in rows), f"an op is off before the editor chose: {rows}")
+            words = " ".join(pg.locator(panel).inner_text().split())
+            need("free on your plan" in words and "$" not in words,
+                 f"the review does not say \"free on your plan\" (section S): {words[-160:]!r}")
+            # it shows before it lands: the razor's cut as the ghost lane, nothing on disk
+            self.until(f"document.querySelectorAll('#tl .tl-xlane[data-lane=ghost] .ghost').length === {len(before) + 1}",
+                       f"the review does not draw the razor's cut ({len(before) + 1} shots) as a ghost under V1", 8000)
+            need("After" in words, "the review offers no Before / After for its colour edits")
+            pg.wait_for_timeout(300)
+            need(self.cut_on_disk() == disk0, "an AI edit reached the disk before it was accepted: "
+                 + _cut_diff(disk0, self.cut_on_disk()))
+            # ✗ on the Temperature, then Accept 3 of 4
+            pg.locator(f"{panel} [data-testid=ai-op-row][data-op-index='{REJECT_OP}'] [data-testid=ai-op-reject]").click()
+            n = len(answered)
+            self.until(f"(() => {{ const r = document.querySelector('{panel} [data-testid=ai-op-row][data-op-index=\"{REJECT_OP}\"]');"
+                       f" const b = document.querySelector('{panel} [data-testid=ai-accept-all]');"
+                       f" return !!r && r.getAttribute('aria-checked') === 'false' && !!b"
+                       f" && b.textContent.trim() === 'Accept {n - 1} of {n}'; }})()",
+                       f"✗ on op {REJECT_OP + 1} did not leave it out (Accept {n - 1} of {n})", 5000)
+            self.extra_png("review")
+            pg.locator(f"{panel} [data-testid=ai-accept-all]").click()
+            self.until(f"document.querySelector('{panel}').hidden", "Accept did not close the review", 5000)
+            self.until(f"segs.length === {len(before) + 1}", "Accept did not apply the AI's razor", 5000)
+            self.idle()
+            disk1 = self.cut_on_disk()
+            # the EDL holds exactly the accepted ops: the razor …
+            rz, cold, tr, bright = answered
+            ids0 = [s[0] for s in disk0["segs"]]
+            need(rz["id"] in ids0, f"the razored shot {rz['id']} was not in the cut")
+            k = ids0.index(rz["id"])
+            need(len(disk1["segs"]) == len(disk0["segs"]) + 1
+                 and disk1["segs"][:k] == disk0["segs"][:k] and disk1["segs"][k + 2:] == disk0["segs"][k + 1:],
+                 "the accepted razor is not the one change to the shots: " + _cut_diff(disk0, disk1))
+            was, a, b = disk0["segs"][k], disk1["segs"][k], disk1["segs"][k + 1]
+            start = sum(s[3] - s[2] for s in disk0["segs"][:k])
+            need(a[0] == was[0] and a[1] == b[1] == was[1] and a[2] == was[2] and b[3] == was[3]
+                 and abs(a[3] - b[2]) < 1e-3 and abs((a[3] - was[2]) - (rz["at"] - start)) <= 1 / 24 + 1e-3,
+                 f"the razor at {rz['at']} s cut {was} into {a} and {b}")
+            # … the dissolve …
+            want_tr = sorted(disk0["transitions"] + [(tr["a"], tr["b"], tr["kind"])])
+            need(disk1["transitions"] == want_tr,
+                 f"the EDL's transitions are {disk1['transitions']}, not {want_tr}")
+            # … the Exposure, and NOT the rejected Temperature; no other shot's colour
+            look1 = self.js(look, third)
+            need(abs((look1["t"] or 0) - (look0["t"] or 0)) < 0.6,
+                 f"the rejected op was applied: shot 3's Temperature reads {look1['t']}, was {look0['t']}")
+            need(abs((look1["e"] or 0) - bright["value"]) < 0.02,
+                 f"shot 3's Exposure reads {look1['e']}, not the accepted +{bright['value']}")
+            bal = (disk1["shots"].get(third) or {}).get("balance") or {}
+            need(abs(float(bal.get("exposure") or 0) - 2 ** bright["value"]) < 0.01,
+                 f"the EDL's balance for shot 3 is {bal}, not Exposure +{bright['value']}")
+            need({k_: v for k_, v in disk1["shots"].items() if k_ != third}
+                 == {k_: v for k_, v in disk0["shots"].items() if k_ != third},
+                 "the AI's colour edit touched another shot")
+            need(disk1["marks"] == disk0["marks"], f"the AI's ops moved markers, In/Out or tracks: "
+                 f"{disk0['marks']} → {disk1['marks']}")
+            job = list(server.ASSISTS)[-1]
+            rec = httpx.get(f"{self.base}/api/assist/{job}", timeout=30).json().get("answer") or {}
+            took = [i for i in range(n) if i != REJECT_OP]
+            need(rec.get("accepted") == took and rec.get("rejected") == [REJECT_OP],
+                 f"the review on the record is {rec}, not accepted {took} rejected [{REJECT_OP}]")
+            undo = pg.get_attribute("#undo", "title") or ""
+            need("AI" in undo, f"the header's undo reads {undo!r}, not the AI's edit")
+            # ONE Ctrl+Z takes the three back; Ctrl+Shift+Z puts them back
+            pg.locator("#pProgram .ws-head").click()
+            pg.keyboard.press("Control+z")
+            try:
+                self.until(f"segs.length === {len(before)} && tl.transitions().length === {len(disk0['transitions'])}",
+                           "", 5000)
+            except StepFailed:
+                try:                                  # what reached the disk, said briefly
+                    self.idle(quiet_ms=300, timeout=5000)
+                except StepFailed:
+                    pass
+                raise StepFailed("one Ctrl+Z did not take back every AI edit: "
+                                 + _cut_diff(disk0, self.cut_on_disk()))
+            self.idle()
+            disk2 = self.cut_on_disk()
+            need(disk2 == disk0, "one Ctrl+Z did not put the EDL back as it was before the ask: "
+                 + _cut_diff(disk0, disk2))
+            redo = pg.get_attribute("#redo", "title") or ""
+            need("AI" in redo, f"after Ctrl+Z the header's redo reads {redo!r}, not the AI's edit")
+            pg.keyboard.press("Control+Shift+z")
+            self.until(f"segs.length === {len(before) + 1}", "Ctrl+Shift+Z did not put the AI's edits back", 5000)
+            self.idle()
+            disk3 = self.cut_on_disk()
+            need(_no_ids(disk3) == _no_ids(disk1), "Ctrl+Shift+Z did not put back exactly the accepted edits: "
+                 + _cut_diff(disk1, disk3))
+            F["ask"] = {"answered": answered, "rows": rows, "job": job, "record": rec,
+                        "working_ms": round(w["working"] - w["enter"], 1),
+                        "look": [look0, look1], "transitions": disk1["transitions"]}
+
+        def ai_menu():
+            pg.locator("[data-testid=menu-ai]").click()
+            self.until("document.querySelector('#menubar .menu[data-menu=ai]').classList.contains('open')",
+                       "a click on AI in the menu bar did not open the AI menu", 3000)
+            pg.wait_for_timeout(150)                         # it paints itself as it opens
+            items = self.js("[...document.querySelectorAll('#menubar .menu[data-menu=ai] .mdrop button[data-cmd]')]"
+                            ".map(b => ({cmd: b.dataset.cmd, label: b.innerText.replace(/\\s+/g, ' ').trim(),"
+                            " disabled: b.disabled, title: (b.title || '').trim(),"
+                            " shown: !!(b.offsetWidth || b.offsetHeight)}))")
+            F["ai_menu"] = items
+            cmds = [i["cmd"] for i in items]
+            # dimension 14: first pass and re-run, Ask, shot ask, colour Ask, Look deeper,
+            # Designed Effects, audit — every one in the menu
+            missing = [c for c in AI_MENU if c not in cmds]
+            need(not missing, f"the AI menu lacks {missing} (it lists {[i['label'] for i in items]})")
+            for i in items:
+                need(i["shown"], f"the AI menu's {i['label']!r} is not on screen")
+                if i["disabled"]:
+                    need(i["title"], f"the AI menu's {i['label']!r} is greyed out and says no reason why")
+                elif i["cmd"].startswith("ai:"):
+                    need(i["title"], f"the AI menu's {i['label']!r} has no hover saying what it does")
+            fp = next(i for i in items if i["cmd"] == "ai:firstpass")
+            ran = self.fp_state().get("state") not in ("never-run", None)
+            want = "Re-run first pass" if ran else "Run first pass"
+            need(fp["label"].startswith(want), f"the AI menu's first-pass item reads {fp['label']!r}, not {want}")
+
+            def close():
+                pg.keyboard.press("Escape")
+                self.until("!document.querySelector('#menubar .menu.open')", "Esc did not close the AI menu", 3000)
+            return close
+
         def rerun_panel():
             s = self.fp_state()
-            need(s.get("state") == "stale-after-edits",
-                 f"after hand edits the first pass is {s.get('state')!r}, not stale-after-edits")
+            edited = bool(F.get("trimmed"))
+            if edited:
+                need(s.get("state") == "stale-after-edits",
+                     f"after hand edits the first pass is {s.get('state')!r}, not stale-after-edits")
+            new = F.get("since_pass") or []
+            if new:
+                need(s.get("new_clips") == new, f"the first pass names {s.get('new_clips')} as new, not {new}")
             self.js("rcFirstPass.refresh()")
             self.fp_label("Re-run first pass")
-            text = self.open_fp_panel()
+            if new:
+                # "1 new clip: add it to the cut?" under the control; its Re-run first pass…
+                # opens the panel, which says what a re-run keeps before anything runs
+                offer = pg.locator('[data-testid="firstpass-new-clips"]')
+                want = f"{len(new)} new clip{'s' if len(new) != 1 else ''}: add {'it' if len(new) == 1 else 'them'} to the cut?"
+                try:
+                    offer.wait_for(state="visible", timeout=10000)
+                except Exception:
+                    raise StepFailed(f"no \"{want}\" offer under the first-pass control after {new} came in")
+                line = " ".join(offer.inner_text().split())
+                need(line.startswith(want), f"the new-clips offer reads {line!r}, not {want!r}")
+                F["new_clips_offer"] = line
+                pg.locator('[data-testid="firstpass-new-clips-go"]').click()
+                self.sel('[data-testid="firstpass-panel"]', "the offer's Re-run first pass… opened no panel", 5000)
+                self.until("document.querySelector('[data-testid=\"firstpass-panel\"] .fp-steps li') !== null",
+                           "the first-pass panel lists no steps", 15000)
+                text = pg.locator('[data-testid="firstpass-panel"]').inner_text()
+                listed = pg.locator('[data-testid="firstpass-new-list"]')
+                need(listed.count() == 1 and all(Path(c).stem in listed.inner_text() for c in new),
+                     f"the panel does not say a re-run hears and looks at {new}: {text[:200]!r}")
+                need(not offer.is_visible(), "the new-clips offer is still up with the panel open")
+            else:
+                text = self.open_fp_panel()
+            need(pg.locator('[data-testid="firstpass-keep"]').is_visible(),
+                 "the re-run panel does not say what a re-run keeps")
             kept = pg.locator('[data-testid="firstpass-kept"] li')
             rows = [{"id": kept.nth(k).get_attribute("data-shot"), "text": kept.nth(k).inner_text()}
                     for k in range(kept.count())]
             F["kept_listed"] = rows
             ids = {r["id"] for r in rows}
-            for sid in F["trimmed"]:
+            for sid in F.get("trimmed", []):
                 need(sid in ids, f"the re-run panel does not name trimmed shot {sid} as kept "
                                  f"(it lists {[r['text'] for r in rows]}; {text[:160]!r})")
                 line = next(r["text"] for r in rows if r["id"] == sid)
@@ -1137,12 +1663,17 @@ class Journey:
             need(rgb.mean() > 40, f"the shot with one Opacity key at 100 % is dark in the file "
                                   f"(mean {rgb.mean():.1f})")
 
-        plan = [("open", open_board), ("preview", preview), ("firstpass", firstpass_panel), ("run", run_firstpass),
+        plan = [("open", open_board), ("import", import_folder), ("preview", preview),
+                ("firstpass", firstpass_panel), ("run", run_firstpass),
                 ("reject", reject), ("accept", accept), ("selects", selects), ("trim-out", trim(0, "out", -0.35)),
                 ("trim-in", trim(2, "in", 0.4)), ("razor", razor), ("move", move),
-                ("warmer", warmer), ("rerun-panel", rerun_panel), ("rerun-accept", rerun_accept),
+                ("warmer", warmer), ("drop", drop_file), ("ask", ask), ("ai-menu", ai_menu),
+                ("rerun-panel", rerun_panel), ("rerun-accept", rerun_accept),
                 ("drop-grade", drop_grade), ("upright", upright), ("short-shot", short_shot),
                 ("opacity-key", opacity_key), ("export", export), ("ffprobe", ffprobe)]
+        assert [n for n, _ in plan] == list(STEPS), "STEPS is the plan's names, in order"
+        if self.only:
+            plan = [(n, f) for n, f in plan if n in self.only]
         self.planned = len(plan)
         for name, fn in plan:
             if not self.step(name, fn):
@@ -1152,10 +1683,48 @@ class Journey:
 
 # ------------------------------------------------------------------ the harness
 
+def build_fixture(conftest, fx: Path) -> dict:
+    """The session's footage under `fx`: the suite's three clips with their sidecars,
+    CLIP_R (GoPro-shaped), a second card to import and a file to drop. Returns what
+    ffprobe read off CLIP_R (also in fx/fixture.json, for --fixture-from)."""
+    footage, sidecars = fx / "footage", fx / "sidecars"
+    footage.mkdir(parents=True)
+    sidecars.mkdir()
+    for stem in ("CLIP_A", "CLIP_B", "CLIP_C"):
+        conftest._make_clip(footage / f"{stem}.MP4")
+        (sidecars / f"{stem}.audio.json").write_text(
+            json.dumps(conftest._sidecar(stem), indent=1), encoding="utf-8")
+    # the GoPro-shaped clip: HEVC 59.94, upside down under a −180° matrix, no words
+    rotated = make_rotated_clip(footage / ROT, fx / "raw")
+    side = conftest._sidecar("CLIP_R")
+    side.update(duration_s=ROT_S, transcript=[], candidates=[])
+    side["summary"] = {**side["summary"], "n_words": 0, "speech_fraction": 0.0}
+    (sidecars / "CLIP_R.audio.json").write_text(json.dumps(side, indent=1), encoding="utf-8")
+    # the footage that comes in mid-session: a second card (two clips, and a file the
+    # Import dialog must not offer), and one small file on the viewer's "desktop"
+    (fx / CARD).mkdir()
+    for name in IMPORTED:
+        conftest._make_clip(fx / CARD / name)
+    (fx / CARD / "notes.txt").write_text("the second card's log\n", encoding="utf-8")
+    (fx / "desktop").mkdir()
+    conftest._make_clip(fx / "desktop" / DROPPED)
+    (fx / "fixture.json").write_text(json.dumps({"rotated": rotated}), encoding="utf-8")
+    return rotated
+
+
 def main() -> int:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    if len(args) != 2:
+    only = fixture_from = None
+    for a in sys.argv[1:]:
+        if a.startswith("--steps="):
+            only = [s for s in a.split("=", 1)[1].split(",") if s]
+        elif a.startswith("--fixture-from="):
+            fixture_from = Path(a.split("=", 1)[1]).resolve()
+    bad = [s for s in only or [] if s not in STEPS]
+    if len(args) != 2 or bad or only == []:
         print(__doc__.split("\n\n")[1])
+        if bad:
+            print(f"no such step: {', '.join(bad)} (the steps: {', '.join(STEPS)})")
         return 2
     _reexec_under_uv()
     snap, out = Path(args[0]).resolve(), Path(args[1]).resolve()
@@ -1174,7 +1743,8 @@ def main() -> int:
         sys.path.insert(0, str(p))
 
     j = Journey(snap, out)
-    result = {"snapshot": str(snap), "out": str(out), "ok": False, "steps": j.steps,
+    j.only = only
+    result = {"snapshot": str(snap), "out": str(out), "ok": False, "steps": j.steps, "only": only,
               "page_errors": j.errors, "console_errors": j.console, "facts": j.facts}
     srv = th = server = mp = None
     setup_err = None
@@ -1183,19 +1753,14 @@ def main() -> int:
         import uvicorn
         conftest = _load("journey_conftest", snap / "app" / "tests" / "conftest.py")
         fx = out / "fixture"
+        t_fx = time.time()
+        if fixture_from is not None:                 # the mutation checks build it once
+            shutil.copytree(fixture_from, fx, symlinks=True)
+            j.facts["rotated_fixture"] = json.loads((fx / "fixture.json").read_text())["rotated"]
+        else:
+            j.facts["rotated_fixture"] = build_fixture(conftest, fx)
+        j.facts["fixture_s"] = round(time.time() - t_fx, 1)
         footage, sidecars = fx / "footage", fx / "sidecars"
-        footage.mkdir(parents=True)
-        sidecars.mkdir()
-        for stem in ("CLIP_A", "CLIP_B", "CLIP_C"):
-            conftest._make_clip(footage / f"{stem}.MP4")
-            (sidecars / f"{stem}.audio.json").write_text(
-                json.dumps(conftest._sidecar(stem), indent=1), encoding="utf-8")
-        # the GoPro-shaped clip: HEVC 59.94, upside down under a −180° matrix, no words
-        j.facts["rotated_fixture"] = make_rotated_clip(footage / ROT, fx / "raw")
-        side = conftest._sidecar("CLIP_R")
-        side.update(duration_s=ROT_S, transcript=[], candidates=[])
-        side["summary"] = {**side["summary"], "n_words": 0, "speech_fraction": 0.0}
-        (sidecars / "CLIP_R.audio.json").write_text(json.dumps(side, indent=1), encoding="utf-8")
 
         import server
         from roughcut import config, inference
@@ -1225,6 +1790,7 @@ def main() -> int:
         if not srv.started:
             raise RuntimeError("the server did not start")
         j.base = f"http://127.0.0.1:{port}"
+        j.facts["setup_s"] = round(time.time() - t_all, 1)
     except Exception as e:
         setup_err = f"{type(e).__name__}: {e}"
         traceback.print_exc()
@@ -1239,6 +1805,7 @@ def main() -> int:
             setup_err = f"browser: {type(e).__name__}: {str(e).splitlines()[0]}"
             traceback.print_exc()
 
+    t_down = time.time()
     # ---- the backend was the scripted one, every call
     ledger_bad = []
     lp = out / "ledger.jsonl"
@@ -1292,6 +1859,7 @@ def main() -> int:
     if mp is not None:
         mp.undo()
     j.facts["stopped_children"] = len(_stop_children())     # e.g. the export's review copy
+    j.facts["teardown_s"] = round(time.time() - t_down, 1)
 
     planned = getattr(j, "planned", 19)
     fail = next((s for s in j.steps if not s["ok"]), None)
