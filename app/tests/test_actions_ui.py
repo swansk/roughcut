@@ -187,6 +187,26 @@ def norm(edl: dict) -> dict:
     return out
 
 
+# Verdict 9, punch 3: an AI accept's undo entry is a short op summary ("undo: AI: trim +
+# move"), at most 40 characters with the key, made of whole words — never the model's
+# sentence cut mid-word ("undo: AI: Shot 1 is only 1.92 s now, so 'about 3 s' means").
+UNDO_WORDS = set("""AI: + more edit edits insert inserts overwrite overwrites move moves razor cut cuts
+ripple delete deletes trim trims roll rolls slip slips speed changes change marker markers In/Out
+new track tracks overlay overlays keyframes keyframe sets colour transition transitions fade fades
+effect effects export exports opacity volume motion""".split())
+
+
+def check_undo_title(title: str) -> str:
+    """The header's undo title for an AI accept: ≤ 40 characters, "undo: AI: … (Ctrl+Z)",
+    every word of its label one of the op vocabulary's (so none is cut). Returns the label."""
+    assert len(title) <= 40, (len(title), title)
+    assert title.startswith("undo: AI: ") and title.endswith(" (Ctrl+Z)"), title
+    label = title[len("undo: "):-len(" (Ctrl+Z)")]
+    for w in label.split(" "):
+        assert w.isdigit() or w in UNDO_WORDS, (w, title)
+    return label
+
+
 def ai_then_hand(browser, url, project, ops, hand_js, *, extra=None):
     """The AI's ops reviewed and accepted, against the same edit made by hand, each on a
     fresh board on the same seed. Returns (ai, hand, seeded) normalised EDLs and checks
@@ -203,7 +223,7 @@ def ai_then_hand(browser, url, project, ops, hand_js, *, extra=None):
             extra(b)
         ai = norm(b.settle())
         assert ai != seeded, "the AI's accept changed nothing"
-        assert (b.page.locator("#undo").get_attribute("title") or "").startswith("undo: AI: the edit")
+        check_undo_title(b.page.locator("#undo").get_attribute("title") or "")
         b.undo()
         back = norm(b.settle())
         assert back == seeded, "one Ctrl+Z did not take the whole accept back"
@@ -861,5 +881,48 @@ def test_a_transition_on_a_shot_the_review_makes_is_drawn_on_the_new_cut(browser
         p.wait_for_function("document.querySelectorAll('#tl .tx-ghost').length === 0")
         p.locator("[data-testid=ai-reject-all]").click()
         p.wait_for_function("!rcActions.open")
+    finally:
+        b.close()
+
+
+# ---------------------------------------------------------------- the undo entry's name
+
+def test_an_ai_accept_s_undo_reads_as_its_ops_never_the_model_s_sentence(browser, live_server, project):
+    """Verdict 9, punch 3: the header's ↶ said "undo: AI: Shot 1 is only 1.92 s now, so
+    'about 3 s' means". Each accept's entry is named for its ops, whole words within 40
+    characters, however long the model's summary; one Ctrl+Z still takes it all back."""
+    sentence = "Shot 1 is only 1.92 s now, so 'about 3 s' means lengthening it rather than trimming"
+    cases = [
+        ([{"op": "trim", "id": "shot-a", "in": 1.5},
+          {"op": "move", "ids": ["shot-c"], "before": "shot-a"}], "AI: trim + move"),
+        ([{"op": "set", "id": "shot-b", "prop": "temperature", "value": 20},
+          {"op": "set", "id": "shot-b", "prop": "shadows", "value": 25},
+          {"op": "curve", "id": "shot-b", "channel": "master", "points": [[0, 0], [0.5, 0.6], [1, 1]]}],
+         "AI: 3 colour changes"),
+        ([{"op": "razor", "id": "shot-c", "at": 5.5},
+          {"op": "trim", "id": "shot-a", "in": 1.25},
+          {"op": "speed", "id": "shot-b", "rate": 0.5},
+          {"op": "set", "id": "shot-b", "prop": "temperature", "value": 10},
+          {"op": "transition", "a": "shot-a", "b": "shot-b", "kind": "cross_dissolve", "dur": 0.5},
+          {"op": "marker", "at": 1.0}], "AI: razor cut + 5 more"),
+        ([{"op": "fade", "id": "shot-c", "edge": "end", "kind": "dip_to_black", "dur": 1.0}], "AI: fade"),
+    ]
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+        seeded = norm(b.settle())
+        for ops, want in cases:
+            res = b.ask(ops, summary=sentence)
+            assert res["refused"] == [], res["refused"]
+            b.review(res)
+            assert sentence in p.locator("[data-testid=ai-review]").inner_text()     # still said, in the review
+            b.accept()
+            title = p.locator("#undo").get_attribute("title") or ""
+            assert check_undo_title(title) == want, title
+            assert "Shot 1 is only" not in title
+            assert p.evaluate("(ops) => rcActions.label(ops)", ops) == want
+            b.undo()
+            p.wait_for_function("document.querySelector('#undo').disabled")
+            assert norm(b.settle()) == seeded, want
     finally:
         b.close()

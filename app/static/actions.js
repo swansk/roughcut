@@ -363,10 +363,51 @@
     return { applied, refused, after: done, label, committed: !!out.committed };
   }
 
+  /* The undo entry's name for an op list (verdict 9, punch 3: "undo: AI: Shot 1 is only
+   * 1.92 s now, so 'about 3 s' means" — the model's sentence cut mid-word): what the ops
+   * are, in the tools' words — "AI: trim + move", "AI: 3 colour changes" — short enough
+   * that the header's "undo: … (Ctrl+Z)" stays within 40 characters, and shortened only
+   * by whole items ("AI: trim + move + 2 more"), never inside a word. */
+  const LABEL_MAX = 25;              // 40 − "undo: " − " (Ctrl+Z)"
+  const COLOUR_PROP = /^(temperature|tint|exposure|contrast|highlights|shadows|whites|blacks|saturation|hsl_)/;
+  const NOUN = {
+    insert: ['insert', 'inserts'], overwrite: ['overwrite', 'overwrites'], append: ['insert', 'inserts'],
+    move: ['move', 'moves'], razor: ['razor cut', 'razor cuts'], ripple_delete: ['ripple delete', 'ripple deletes'],
+    trim: ['trim', 'trims'], roll: ['roll', 'rolls'], slip: ['slip', 'slips'], speed: ['speed', 'speed changes'],
+    marker: ['marker', 'markers'], in_out: ['In/Out', 'In/Out'], track_add: ['new track', 'new tracks'],
+    overlay: ['overlay', 'overlays'], keys: ['keyframes', 'keyframe sets'],
+    curve: ['colour change', 'colour changes'], wheel: ['colour change', 'colour changes'],
+    look: ['colour change', 'colour changes'], match: ['colour change', 'colour changes'],
+    transition: ['transition', 'transitions'], fade: ['fade', 'fades'],
+    design_effect: ['effect', 'effects'], export: ['export', 'exports'],
+  };
+  function nounOf(op) {
+    if (op.op !== 'set') return NOUN[op.op] || ['edit', 'edits'];
+    const p = String(op.prop || '');
+    if (COLOUR_PROP.test(p)) return ['colour change', 'colour changes'];
+    if (p === 'opacity') return ['opacity', 'opacity changes'];
+    if (p === 'volume_db') return ['volume', 'volume changes'];
+    return ['motion', 'motion changes'];
+  }
   function labelFor(ops) {
-    const names = [...new Set(ops.map((o) => o && o.op).filter(Boolean))].map((n) => n.replace('_', ' '));
-    if (!names.length) return 'AI edit';
-    return `AI: ${names.slice(0, 2).join(', ')}${names.length > 2 ? ` +${names.length - 2}` : ''}`;
+    const groups = [];                 // [one, many, count], in the order the ops come
+    for (const op of ops) {
+      if (!op || !op.op) continue;
+      const [one, many] = nounOf(op);
+      const g = groups.find((x) => x[0] === one);
+      if (g) g[2] += 1; else groups.push([one, many, 1]);
+    }
+    if (!groups.length) return 'AI edit';
+    const word = ([one, many, n]) => (n === 1 ? one : `${n} ${many}`);
+    const all = `AI: ${groups.map(word).join(' + ')}`;
+    if (all.length <= LABEL_MAX) return all;
+    for (let k = groups.length - 1; k >= 1; k -= 1) {
+      const more = groups.slice(k).reduce((a, g) => a + g[2], 0);
+      const s = `AI: ${groups.slice(0, k).map(word).join(' + ')} + ${more} more`;
+      if (s.length <= LABEL_MAX) return s;
+    }
+    const n = groups.reduce((a, g) => a + g[2], 0);
+    return `AI: ${n} edit${n === 1 ? '' : 's'}`;
   }
 
   /* ------------------------------------------------------------ the ops that run after */
@@ -925,7 +966,9 @@
     lookOff();
     if (window.tlLanes && tlLanes.clearGhost) tlLanes.clearGhost();
     clearTx();
-    const label = R.res.summary ? `AI: ${String(R.res.summary).slice(0, 48)}` : labelFor(idx.map((i) => R.ops[i]));
+    // the entry is named for what the ops are, never the model's summary cut to fit (the
+    // summary stays the review's own line)
+    const label = labelFor(idx.map((i) => R.ops[i]));
     const out = applyOps(idx.map((i) => R.ops[i]), { label });
     const failed = new Set(out.refused.map((x) => idx[x.i]));
     const took = idx.filter((i) => !failed.has(i));
@@ -972,6 +1015,7 @@
     apply: (ops, opts) => applyOps(ops, opts || {}),
     review,
     describe,
+    label: (ops) => labelFor(Array.isArray(ops) ? ops : []),
     accept,
     reject,
     close: closeQuiet,
