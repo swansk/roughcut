@@ -257,6 +257,7 @@ def measure_play(page) -> dict:
       // IS the picture, so what the viewer sees is its draws, not the live buffer's frames.
       // `grade.draws` on every animation frame, with whether the canvas is on.
       window.__cv = [];
+      window.__wl0 = window.grade && grade.drawLog ? grade.drawLog.length : 0;
       const look = () => {
         if (!window.__flOn) return;
         window.__cv.push({ t: performance.now() - t0, playing: player.playing,
@@ -285,6 +286,14 @@ def measure_play(page) -> dict:
     log = page.evaluate("window.__fl")
     screen = page.evaluate("window.__scr")
     canvas = canvas_gaps(page.evaluate("window.__cv"))
+    # (wave 13 CANVAS2, a record only, nothing asserted on it) the same play's draws by the
+    # worker's own clock (`grade.drawLog`: when each graded frame was drawn, before its
+    # commit), so a hole the page counted late can be told from one the worker drew late
+    canvas["worker"] = worker_gaps(page.evaluate(
+        "(() => { const t0 = window.__fl0, cv = window.__cv, p = cv.filter((s) => s.playing);"
+        " if (!p.length || !window.grade) return null;"
+        " const a = t0 + p[0].t, b = t0 + p[p.length - 1].t;"
+        " return grade.drawLog.slice(window.__wl0).filter((d) => d.t >= a && d.t <= b).map((d) => d.t); })()"))
     live = [f for f in log if f["live"]]
     live.sort(key=lambda f: f["t"])
     gaps = [(live[i]["t"] - live[i - 1]["t"], live[i - 1], live[i]) for i in range(1, len(live))]
@@ -339,6 +348,16 @@ def canvas_gaps(samples: list[dict]) -> dict:
             "fps": round((len(at) - 1) / (span / 1000), 1) if span > 0 else 0,
             "draws": len(at), "holes_over": len([g for g, _ in gaps if g > GAP_LIMIT_MS]),
             "on": on}
+
+
+def worker_gaps(ts: list[float] | None) -> dict | None:
+    """The longest time between two graded draws by the worker's clock, and how many over
+    the limit (a record beside canvas_gaps' page-side numbers; not asserted)."""
+    if not ts or len(ts) < 2:
+        return None
+    g = [b - a for a, b in zip(ts, ts[1:])]
+    return {"longest_ms": round(max(g), 1), "holes_over": len([x for x in g if x > GAP_LIMIT_MS]),
+            "draws": len(ts)}
 
 
 def measure_seeks(page) -> list[float]:
