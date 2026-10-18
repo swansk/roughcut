@@ -525,7 +525,7 @@
   }
 
   const T = { steps: null, which: null, i: 0, root: null, ring: null, tick: 0, point: null,
-              anchorWhy: '', anchorEl: null, wasOpen: false, bodyKey: null };
+              anchorWhy: '', anchorEl: null, wasOpen: false, bodyKey: null, natW: 304 };
 
   function anchorOf(step) {
     for (const a of step.anchor || []) {
@@ -575,6 +575,7 @@
     document.body.append(ring, root);
     T.root = root;
     T.ring = ring;
+    T.natW = root.offsetWidth || 304;        // the stylesheet's width (a dock may narrow it)
   }
 
   function paint() {
@@ -598,23 +599,60 @@
     place();
   }
 
+  /* What the callout never sits on, whatever it points at: the Timeline's track headers
+   * (V1 / V2's lock, eye and target), which step 1 covered on a first land (verdict 9,
+   * dimensions 1 and 16), and the monitors' transport rows. */
+  const KEEP_CLEAR = ['#tl .tl-side', '#pSource .transport', '#pProgram .transport'];
+  const DOCK_MIN_W = 200;                 // px: narrowest the callout gets beside a dialog
+
+  /* The modal dialog on top (Import, Export…), if one is up. A modal is in the top layer,
+   * above every z-index, and the page outside it is inert: the callout goes INSIDE it
+   * while it is up (fixed, so still placed against the window), docked to its edge, and
+   * its buttons answer there; back to the body when the dialog closes. */
+  function topModal() {
+    const open = $$('dialog[open]').filter((d) => {
+      try { return d.matches(':modal') && visible(d); } catch (e) { return false; }
+    });
+    return open.length ? open[open.length - 1] : null;
+  }
+  function hostIn(modal) {
+    const want = modal || document.body;
+    if (T.root.parentNode === want) return;
+    want.appendChild(T.root);
+    if (modal) modal.addEventListener('close', () => { if (T.root) place(); }, { once: true });
+  }
+
   /* The callout beside its anchor (below, right, left or above: the first side it fits
-   * on, clear of whatever the step opened), its arrow on the anchor; the ring on the
-   * anchor itself. Both re-placed while the workspace moves under them. */
+   * on, clear of whatever the step opened and of the track headers), its arrow on the
+   * anchor; the ring on the anchor itself. Both re-placed while the workspace moves under
+   * them. With a modal dialog up (Show me's Import, Export) the callout sits beside the
+   * dialog, above its backdrop, narrower if that is what the room beside it allows. */
   function place() {
     if (!T.root) return;
     const step = T.steps[T.i];
+    const modal = topModal();
+    hostIn(modal);
     const pointed = T.point && visible(T.point);
-    const anchor = pointed ? T.point : anchorOf(step);
+    const own = pointed ? T.point : anchorOf(step);
+    const docked = !!(modal && !(own && modal.contains(own)));
+    const anchor = docked ? modal : own;
     T.anchorEl = anchor;
-    T.root.dataset.anchor = pointed ? 'show' : T.anchorWhy;
+    T.root.dataset.anchor = docked ? 'dialog' : pointed ? 'show' : T.anchorWhy;
     // the words follow what is pointed at: the control itself, or the menu that opens it
     const fb = !pointed && T.anchorWhy === 'fallback';
     const bodyKey = `${T.i}:${fb}:${T.anchorWhy}:${terms ? terms.charged : '?'}`;
     if (T.bodyKey !== bodyKey) { T.bodyKey = bodyKey; $('.rt-body', T.root).innerHTML = step.body(fb); }
     const ar = anchor ? seenRect(anchor) : null;
     const ring = T.ring;
-    const w = T.root.offsetWidth, h = T.root.offsetHeight, gap = 12, m = 10;
+    const gap = 12, m = 10;
+    // beside a dialog: the stylesheet's width, or the room beside it when that is less
+    let width = '';
+    if (docked && ar) {
+      const room = Math.floor(Math.max(ar.left - gap - m, innerWidth - m - ar.right - gap));
+      if (room < T.natW && room >= DOCK_MIN_W) width = `${room}px`;
+    }
+    if (T.root.style.width !== width) T.root.style.width = width;
+    const w = T.root.offsetWidth, h = T.root.offsetHeight;
     if (!ar) {
       ring.hidden = true;
       T.root.style.left = `${Math.round(innerWidth / 2 - w / 2)}px`;
@@ -622,7 +660,8 @@
       T.root.dataset.side = 'none';
       return;
     }
-    ring.hidden = false;
+    // the anchor behind a dialog's backdrop: no ring (the ring is not in the top layer)
+    ring.hidden = docked;
     const pad = 3;
     const rl = Math.max(1, ar.left - pad), rt = Math.max(1, ar.top - pad);
     ring.style.left = `${Math.round(rl)}px`;
@@ -631,13 +670,18 @@
     ring.style.height = `${Math.round(Math.min(innerHeight - 1, ar.bottom + pad) - rt)}px`;
     // clear of the anchor and of what "Show me" opened (the first pass's panel, a menu)
     let box = { left: ar.left, top: ar.top, right: ar.right, bottom: ar.bottom };
-    const extra = [step.avoid && step.avoid(), $('#menubar .menu.open .mdrop')].filter((x) => x && visible(x));
+    const extra = docked ? []
+      : [step.avoid && step.avoid(), $('#menubar .menu.open .mdrop')].filter((x) => x && visible(x));
     for (const x of extra) {
       const r = x.getBoundingClientRect();
       box = { left: Math.min(box.left, r.left), top: Math.min(box.top, r.top),
               right: Math.max(box.right, r.right), bottom: Math.max(box.bottom, r.bottom) };
     }
-    const fits = (x, y) => x >= m && y >= m && x + w <= innerWidth - m && y + h <= innerHeight - m;
+    // and never on the track headers (behind a dialog's backdrop they do not matter)
+    const clear = docked ? [] : KEEP_CLEAR.map((sel) => seenRect($(sel))).filter(Boolean);
+    const onClear = (x, y) => clear.some((r) => x < r.right && x + w > r.left && y < r.bottom && y + h > r.top);
+    const inWindow = (x, y) => x >= m && y >= m && x + w <= innerWidth - m && y + h <= innerHeight - m;
+    const fits = (x, y) => inWindow(x, y) && !onClear(x, y);
     // what the arrow points at: a control's middle; a whole panel's upper part (below its
     // tabs, so the callout beside it leaves the neighbour's tabs readable)
     const tall = ar.bottom - ar.top > 160, wide = ar.right - ar.left > 400;
@@ -652,9 +696,29 @@
       ['left', box.left - gap - w, vy],
       ['above', vx, box.top - gap - h],
     ];
-    // a panel almost as big as the window: inside it, in its top-right corner
+    // a side that lands on a keep-clear row: moved on along its own axis, past the row
+    // (above the Source's transport rather than on it), the arrow still on the anchor
+    const slide = ([sd, tx, ty]) => {
+      let x0 = tx, y0 = ty;
+      for (let k = 0; k < 3; k++) {
+        const r = clear.find((c) => x0 < c.right && x0 + w > c.left && y0 < c.bottom && y0 + h > c.top);
+        if (!r) break;
+        if (sd === 'above') y0 = r.top - gap / 2 - h;
+        else if (sd === 'below') y0 = r.bottom + gap / 2;
+        else if (sd === 'right') x0 = r.right + gap / 2;
+        else x0 = r.left - gap / 2 - w;
+      }
+      return [sd, x0, y0];
+    };
+    const bySide = Object.fromEntries(tries.map((t) => [t[0], t]));
+    // no side clear of them: the first that is on screen; a panel almost as big as the
+    // window: inside it, in its top-right corner (a dialog: its bottom-left, over the
+    // places list, clear of its title bar and its buttons)
     const [side, x, y] = tries.find(([, tx, ty]) => fits(tx, ty))
-      || ['inside', clampX(ar.right - w - gap), clampY(ar.top + gap)];
+      || ['above', 'below', 'left', 'right'].map((sd) => slide(bySide[sd])).find(([, tx, ty]) => fits(tx, ty))
+      || tries.find(([, tx, ty]) => inWindow(tx, ty))
+      || (docked ? ['inside', clampX(ar.left + gap), clampY(ar.bottom - h - 56)]
+        : ['inside', clampX(ar.right - w - gap), clampY(ar.top + gap)]);
     T.root.style.left = `${Math.round(x)}px`;
     T.root.style.top = `${Math.round(y)}px`;
     T.root.dataset.side = side;
