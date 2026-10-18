@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **The orientation tests ask again on a 503, as the board does** (app/tests/test_preview_orientation.py `_ready`; the full gate on ba49465 had 5 of them BROKEN): since wave 11 BLACK, `/media/proxy` answers 503 + `retry-after` while a preview is made instead of holding the request up to 20 s; the tests expected the hold. The Chromium test waits for the preview before it sets a bare `<video>`'s src. 17 passed.
 - **Ctrl+Shift+X (Clear In and Out) is one undo step** (timeline-keys.js `clearInOut` in `tl.batch`; AIGLUE's note: one key made two entries). Test: test_timeline_keys::test_clearing_in_and_out_is_one_undo_step.
 - **Merge: wave 12 tail lane JOURNEY3** (tools/journey.py 24 steps: import, drop, ask with a per-op review + one undo, the AI menu, the new-clips offer; six mutation checks in test_journey_tool.py). The re-run step hovers the first-pass control before reading the offer, which now tucks away after 8 s.
 - **Merge: wave 12 tail lane AIGLUE** (the AI prompt and the AI edit review tested together through the real server; assist price/cancel in the prompt; markers and In/Out on the undo stack; `tl.batch`; undone Designed Effects edits take the effect back; AI hover cards and tour anchors; the prompt's line after Accept / Reject).

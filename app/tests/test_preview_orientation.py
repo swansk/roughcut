@@ -147,8 +147,20 @@ def board(rot_bin, tmp_path):
     server.MEDIA["wanted"].clear()
 
 
+def _ready(client, url: str, **kw):
+    """GET the way the board does since wave 11 BLACK: `/media/proxy` answers 503 with a
+    `retry-after` while a clip's preview is being made (it no longer holds the request for
+    up to 20 s), so ask again until it answers otherwise."""
+    end = time.time() + 90
+    while True:
+        r = client.get(url, **kw)
+        if r.status_code != 503 or time.time() > end:
+            return r
+        time.sleep(min(1.0, float(r.headers.get("retry-after") or 1)))
+
+
 def _fetch(client, url: str, dest: Path, **kw) -> Path:
-    r = client.get(url, **kw)
+    r = _ready(client, url, **kw)
     assert r.status_code == 200, (url, r.status_code, r.text[:200])
     dest.write_bytes(r.content)
     return dest
@@ -233,7 +245,7 @@ def test_monitor_poster_proxy_and_export_all_agree(board, rot_bin, tmp_path, mon
     p0 = _fetch(c, f"/media/poster/{stem}.jpg", tmp_path / "p0.jpg", params={"t": 1.0})
     _same(_quads(p0), want, f"{stem} poster from the original")
 
-    r = c.get(f"/media/proxy/{stem}.mp4", follow_redirects=False)
+    r = _ready(c, f"/media/proxy/{stem}.mp4", follow_redirects=False)
     assert r.status_code == 307 and r.headers["x-roughcut-media"] == "preview", r.headers
     assert r.headers["location"] == server.preview_url(stem)
     assert f".{server.PICTURE_V}." in r.headers["location"]
@@ -246,7 +258,7 @@ def test_monitor_poster_proxy_and_export_all_agree(board, rot_bin, tmp_path, mon
 
     monkeypatch.setattr(server, "measure_colour", lambda clip, force=False: None)
     server.ensure_proxies([f"{stem}.MP4"])
-    r = c.get(f"/media/proxy/{stem}.mp4", follow_redirects=False)
+    r = _ready(c, f"/media/proxy/{stem}.mp4", follow_redirects=False)
     assert r.status_code == 200 and "x-roughcut-media" not in r.headers
     prox = tmp_path / "proxy.mp4"
     prox.write_bytes(r.content)
@@ -310,7 +322,7 @@ def test_a_rotated_original_is_served_only_where_the_browser_turns_it_right(
     work = tmp_path / "work-auto"
     _open(server, rot_bin, work, "auto")
     with TestClient(server.app) as c:
-        r = c.get("/media/proxy/PLAY180.mp4", follow_redirects=False)
+        r = _ready(c, "/media/proxy/PLAY180.mp4", follow_redirects=False)
         assert r.status_code == 307 and r.headers["x-roughcut-media"] == "original"
         got = _fetch(c, "/media/proxy/PLAY180.mp4", tmp_path / "orig.mp4")
         _same(_quads(got), _upright(src), "the original as a browser shows it")
@@ -320,7 +332,7 @@ def test_a_rotated_original_is_served_only_where_the_browser_turns_it_right(
     work = tmp_path / "work-none"
     _open(server, rot_bin, work, "none")
     with TestClient(server.app) as c:
-        r = c.get("/media/proxy/PLAY180.mp4", follow_redirects=False)
+        r = _ready(c, "/media/proxy/PLAY180.mp4", follow_redirects=False)
         assert r.status_code == 307 and r.headers["x-roughcut-media"] == "preview", \
             "orient none must not hand the browser a tag it would honour"
         assert c.get("/media/original/PLAY180.mp4").status_code == 404
@@ -371,6 +383,11 @@ def test_chromium_shows_every_served_picture_upright(rot_bin, tmp_path):
             page.goto(f"http://127.0.0.1:{port}/media/status/FLAT.mp4")
             page.set_content("<body style='margin:0;background:#000'></body>")
             for stem in ("PLAY180", "ROT180", "ROT90"):
+                # a bare <video> does not retry a 503 the way the board does: wait for the
+                # preview to exist first (this test is about the picture's way up)
+                import httpx
+                with httpx.Client(base_url=f"http://127.0.0.1:{port}") as hc:
+                    _ready(hc, f"/media/proxy/{stem}.mp4", follow_redirects=False)
                 page.evaluate("""async ([port, stem]) => {
                     document.body.innerHTML = '';
                     const v = document.createElement('video');
