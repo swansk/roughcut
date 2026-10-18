@@ -79,6 +79,48 @@ def no_cli_problem_carried_over():
     yield
 
 
+# The walk-through's switch (wave 12, lane TEACH; REDESIGN-GOAL dimension 16). The board opens
+# its first-run walk-through (app/static/tour.js) on a browser's first visit, over what a test
+# would click. Every browser context and page the suite opens gets the flag the walk-through
+# reads, as an init script; a test that wants the first run opens its context through the
+# `first_run_context` fixture. The judge's own fresh browser has no flag: it sees the first
+# run, as Karl would.
+TOUR_SEEN_JS = "try { localStorage.setItem('roughcut.tour', 'seen') } catch (e) {}"
+_PLAIN_CONTEXT = {}
+
+
+@pytest.fixture(scope="session", autouse=True)
+def tour_seen_in_every_browser():
+    try:
+        from playwright.sync_api._generated import Browser
+    except ImportError:            # a run without Playwright has no browser to switch
+        yield
+        return
+    new_context, new_page = Browser.new_context, Browser.new_page
+    _PLAIN_CONTEXT["new_context"] = new_context
+
+    def seen_context(self, *args, **kwargs):
+        ctx = new_context(self, *args, **kwargs)
+        ctx.add_init_script(TOUR_SEEN_JS)
+        return ctx
+
+    def seen_page(self, *args, **kwargs):
+        page = new_page(self, *args, **kwargs)
+        page.add_init_script(TOUR_SEEN_JS)
+        return page
+
+    Browser.new_context, Browser.new_page = seen_context, seen_page
+    yield
+    Browser.new_context, Browser.new_page = new_context, new_page
+
+
+@pytest.fixture
+def first_run_context():
+    """`first_run_context(browser, **new_context_kwargs)`: a context as a first-time
+    viewer's, without the walk-through's flag."""
+    return lambda browser, **kwargs: _PLAIN_CONTEXT["new_context"](browser, **kwargs)
+
+
 CLIP_S = 6.0
 
 # Fabricated so that snap's three passes each have something to bite on:

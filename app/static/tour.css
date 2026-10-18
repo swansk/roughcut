@@ -1,1 +1,86 @@
-/* tour (wave 12 scaffold; its lane fills it) */
+/* The walk-through, the AI hovers and the empty states' Import (redesign wave 12, lane
+ * TEACH; REDESIGN-GOAL dimension 16). A coach mark the size of a Premiere tooltip family:
+ * dark, dense, one accent; nothing dims or locks the workspace under it. */
+
+/* ------------------------------------------------------------ the walk-through callout */
+.rc-tour {
+  position: fixed; z-index: 1000; left: 0; top: 0; width: 304px;
+  background: #242427; color: var(--text, #dcdcdf);
+  border: 1px solid #4b4b53; border-radius: 6px; padding: 9px 12px 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .55), 0 0 0 1px rgba(0, 0, 0, .35);
+  font: 12px/1.45 "Segoe UI", system-ui, -apple-system, ui-sans-serif, sans-serif;
+  white-space: normal;
+}
+.rc-tour .rt-top { display: flex; align-items: center; justify-content: space-between; height: 14px; }
+.rc-tour .rt-dots { display: inline-flex; gap: 5px; align-items: center; }
+.rc-tour .rt-dot {
+  width: 7px; height: 7px; min-width: 0; padding: 0; border: 0; border-radius: 50%;
+  background: #4c4c54; cursor: pointer; line-height: 0;
+}
+.rc-tour .rt-dot:hover { background: #6c6c76; }
+.rc-tour .rt-dot.done { background: #80808a; }
+.rc-tour .rt-dot.on { background: var(--accent, #4a9df8); width: 16px; border-radius: 4px; }
+.rc-tour .rt-count { color: var(--dim, #94949c); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.rc-tour .rt-title { font-size: 13px; font-weight: 600; margin: 7px 0 3px; color: #f0f0f2; }
+.rc-tour .rt-body { color: #b8b8c0; }
+.rc-tour .rt-body kbd { font-size: 10px; padding: 0 3px; color: var(--text, #dcdcdf); }
+.rc-tour .rt-foot { display: flex; align-items: center; gap: 6px; margin-top: 11px; }
+.rc-tour .rt-foot .grow { flex: 1; }
+.rc-tour .rt-foot button { padding: 2px 10px; line-height: 18px; }
+.rc-tour .rt-skip { padding-left: 0 !important; padding-right: 4px !important; }
+.rc-tour .rt-next {
+  background: var(--accent, #4a9df8); border-color: var(--accent, #4a9df8); color: #fff;
+  font-weight: 600; min-width: 58px;
+}
+.rc-tour .rt-next:hover { background: #63adfa; border-color: #63adfa; }
+/* the arrow: a square turned 45°, on the edge that faces the anchor */
+.rc-tour .rt-arrow {
+  position: absolute; width: 10px; height: 10px; background: #242427;
+  border: 1px solid #4b4b53; transform: translate(-50%, -50%) rotate(45deg); pointer-events: none;
+}
+.rc-tour[data-side="below"] .rt-arrow { top: 0 !important; border-right-color: transparent; border-bottom-color: transparent; }
+.rc-tour[data-side="above"] .rt-arrow { top: 100% !important; border-left-color: transparent; border-top-color: transparent; }
+.rc-tour[data-side="right"] .rt-arrow { left: 0 !important; border-right-color: transparent; border-top-color: transparent; }
+.rc-tour[data-side="left"] .rt-arrow { left: 100% !important; border-left-color: transparent; border-bottom-color: transparent; }
+.rc-tour[data-side="none"] .rt-arrow, .rc-tour[data-side="inside"] .rt-arrow { display: none; }
+
+/* the outline on the real control: drawn over it, never in its way; a soft glow that
+   breathes, so it never reads as the focused panel's plain blue border */
+.rc-tour-ring {
+  position: fixed; z-index: 999; pointer-events: none; border-radius: 5px;
+  border: 2px solid #7cb9fa;
+  box-shadow: 0 0 0 3px rgba(74, 157, 248, .30), 0 0 16px 2px rgba(74, 157, 248, .40);
+  transition: left .12s ease, top .12s ease, width .12s ease, height .12s ease;
+  animation: rc-tour-glow 2.4s ease-in-out infinite;
+}
+@keyframes rc-tour-glow {
+  50% { box-shadow: 0 0 0 4px rgba(74, 157, 248, .16), 0 0 22px 4px rgba(74, 157, 248, .22); }
+}
+@media (prefers-reduced-motion: reduce) { .rc-tour-ring { animation: none; transition: none; } }
+
+/* ------------------------------------------------------------ the AI hover card */
+.rc-hc {
+  position: fixed; z-index: 1001; left: 0; top: 0; width: max-content; max-width: 292px;
+  background: #2a2a2e; color: var(--text, #dcdcdf);
+  border: 1px solid #4b4b53; border-radius: 4px; padding: 7px 9px 7px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .5);
+  font: 11.5px/1.4 "Segoe UI", system-ui, -apple-system, ui-sans-serif, sans-serif;
+  pointer-events: none; white-space: normal;
+}
+.rc-hc .hc-name { display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: #f0f0f2; }
+.rc-hc .hc-ai { width: 12px; height: 12px; color: var(--accent, #4a9df8); flex: none; }
+.rc-hc .hc-what { color: #bdbdc4; margin: 3px 0 6px; }
+.rc-hc .hc-row { display: grid; grid-template-columns: 54px 1fr; gap: 6px; padding-top: 2px; }
+.rc-hc .hc-k { color: var(--faint, #66666e); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; line-height: 16px; }
+.rc-hc .hc-v { color: var(--text, #dcdcdf); }
+
+/* ------------------------------------------------------------ the empty states' next action */
+/* No footage, or a proposal waiting: the first pass has nothing to offer in the Timeline's
+   empty box (app.js emptyState sets data-ai; firstpass.js mounts .fp-empty) */
+#tlEmpty .empty[data-ai="import"] .fp-empty, #tlEmpty .empty[data-ai="review"] .fp-empty { display: none !important; }
+#tlEmpty .empty .emptyRow { display: flex; gap: 8px; align-items: center; justify-content: center; margin-top: 10px; }
+#tlEmpty .empty .emptyRow .k, #srcEmpty .k { color: var(--dim, #94949c); margin-left: 8px; font-size: 11px; }
+#srcEmpty .se-none { display: inline-flex; flex-direction: column; align-items: center; gap: 6px; }
+#srcEmpty .se-none[hidden], #srcEmpty .se-pick[hidden] { display: none; }
+/* the monitors' empty lines let clicks through to the picture; their Import does not */
+#srcEmpty [data-rc-import], #progEmpty [data-rc-import] { pointer-events: auto; }
