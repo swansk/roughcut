@@ -1,13 +1,1015 @@
 /* Actions (redesign wave 12, lane AIOPS; REDESIGN-GOAL dimension 15, Karl's K3 d).
- * One vocabulary for every edit: an op list ({op: …}, judge/WAVE12.md) is applied through the
- * same window.tl / window.effects calls a human edit makes, inside one tl.begin/commit (one
- * undo), and an AI's op list is reviewed here (preview, per-op accept / reject) before it
- * lands. Scaffold: the contract only; lane AIOPS builds it. */
+ *
+ * Karl, 2026-10-16: "While I CAN use the pro tools here (good), AI should also be capable
+ * of all of it." One vocabulary for every edit (roughcut/actions.py documents it): an op
+ * list is applied through the SAME window.tl / window.effects / colour / Export calls a
+ * human edit makes, inside one tl.begin … tl.commit (one undo entry), and an AI's answer
+ * (GET /api/assist/{job}) is reviewed here, op by op, before anything lands.
+ *
+ *   window.rcActions = {
+ *     apply(ops, {label})   run the ops through the human paths as ONE undo entry;
+ *                           returns {applied, refused: [{i, why}], after} — `after` is the
+ *                           promise of the ops that run outside the cut once it has landed
+ *                           (a Designed Effects request, an export), in that order
+ *     review(result)        an /api/assist result (the GET body, plus `job`, `asked` and
+ *                           `scope` from the AI prompt): `ops` opens the review panel
+ *                           (Assistant tab), `plan` follows the Ask job into the proposal
+ *                           panel, `answer` shows the words, a failed or stopped job says so
+ *     describe(op)          one line for an op against the cut as it is now
+ *     accept() / reject() / close()   what the panel's buttons do
+ *     get open()            whether a review is up
+ *   }
+ *
+ * How each op lands (the human path it shares):
+ *   insert / overwrite / append → tl.insertAt / tl.overwrite / tl.insert; move → tl.move;
+ *   razor → tl.split; ripple_delete → tl.remove; trim → tl.setRange; roll and slip → the
+ *   trim lane's tl.setRange calls (timeline-trim.js `step`), on frames; speed →
+ *   tl.setSpeed; marker → tl.addMarker; in_out → tl.setSeqIn / setSeqOut; track_add →
+ *   tl.addTrack; overlay → tl.addOverlay; set → effects.set; keys → the stopwatch
+ *   (effects.animate) and a value typed with the playhead on each key (effects.set);
+ *   curve / wheel → effects.curve / effects.wheel; look / match → app.js colourEdit, as
+ *   the colour pane's selects and buttons; transition / fade → tl.addTransition /
+ *   tl.addFade; design_effect → the Designed Effects tool on that shot, its Design
+ *   pressed (its own proposal and review follow); export → the Export dialog, filled in
+ *   and its Export pressed — only after Accept.
+ *
+ * One undo entry: the panel's own begin/commit wrap them all; while they run the nested
+ * tl.begin / commit / cancel the human paths call are no-ops (the timeline's own mutations
+ * already fold into an open entry). Markers and In / Out are not on the timeline's undo
+ * stack, so an op list that moves them is taken back with its entry here (a marker-only
+ * list by Ctrl+Z itself) — one accept is one undo step either way.
+ *
+ * The review shows every op before it lands: the cut's ops as the ghost lane under V1
+ * (tlLanes.showGhost, the server's simulation of the accepted ops on the board's cut,
+ * POST /api/assist/preview), the colour and Effect Controls ops as the After picture on
+ * the Program monitor (applied in memory with nothing saved; ◐ flips Before / After; any
+ * edit elsewhere takes the preview down first, so it never rides another edit to disk),
+ * and an export as the file it will write. ✓ / ✗ per op; Accept applies the accepted
+ * ones as one undo entry and POSTs the review to /api/assist/{job}/answer; Reject all
+ * puts everything back as it was and writes nothing.
+ */
 (function () {
   'use strict';
+
+  const TL = () => window.tl || null;
+  const FX = () => window.effects || null;
+  const $ = (s, el = document) => el.querySelector(s);
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const MIN_LEN = 0.2;
+
+  /* app.js's top-level bindings share the global lexical scope; reached by name, guarded */
+  /* eslint-disable no-undef */
+  const app = {
+    segs: () => (typeof segs !== 'undefined' && Array.isArray(segs) ? segs : []),
+    clips: () => (typeof P !== 'undefined' && P && P.clips ? P.clips : {}),
+    colour: () => (typeof colour !== 'undefined' && colour && typeof colour === 'object' ? colour : null),
+    setColour: (c) => { try { colour = c; } catch (e) { /* no board */ } },
+    shotOverride: (id, create) => (typeof shotOverride === 'function' ? shotOverride(id, create) : null),
+    colourEdit: (label, fn) => {
+      if (typeof colourEdit === 'function') colourEdit(label, fn);
+      else { const t = TL(); if (t) t.begin(label); fn(); if (t) t.commit(); }
+    },
+    renderInspector: () => { if (typeof renderInspector === 'function') renderInspector(); },
+    toast: (m, ms) => { if (typeof toast === 'function') toast(m, ms); },
+    undoKey: () => (typeof undoKey === 'function' ? undoKey() : 'Ctrl+Z'),
+    flush: () => (typeof window.roughcutFlush === 'function' ? window.roughcutFlush() : Promise.resolve()),
+    playing: () => (typeof player !== 'undefined' && player && player.playing),
+  };
+  /* eslint-enable no-undef */
+
+  const KEY_GROUP = { posx: 'pos', posy: 'pos', scale: 'scale', rotation: 'rotation', opacity: 'opacity', volume_db: 'volume_db' };
+  const KEY_PROP = { posx: 'position_x', posy: 'position_y', scale: 'scale', rotation: 'rotation', opacity: 'opacity', volume_db: 'volume_db' };
+  const CUT_OPS = new Set(['insert', 'overwrite', 'append', 'move', 'razor', 'ripple_delete', 'trim', 'roll', 'slip', 'speed']);
+  const LOOK_OPS = new Set(['set', 'keys', 'curve', 'wheel', 'look', 'match']);   // shown on the Program
+  const FAMILY = {
+    insert: 'timeline', overwrite: 'timeline', append: 'timeline', move: 'timeline', razor: 'timeline',
+    ripple_delete: 'timeline', trim: 'timeline', roll: 'timeline', slip: 'timeline', speed: 'timeline',
+    marker: 'timeline', in_out: 'timeline', track_add: 'timeline', overlay: 'timeline',
+    set: 'effect_controls', keys: 'effect_controls',
+    curve: 'lumetri', wheel: 'lumetri', look: 'lumetri', match: 'lumetri',
+    transition: 'transitions', fade: 'transitions', design_effect: 'designed_effects', export: 'export',
+  };
+  const FAMILY_NAME = { timeline: 'Timeline', effect_controls: 'Effect Controls', lumetri: 'Lumetri Color',
+                        transitions: 'Transitions', designed_effects: 'Designed Effects', export: 'Export' };
+  // one glyph per family (14 px, currentColor), in the panels' own icon style
+  const ICON = {
+    timeline: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="4" width="6" height="3.5" rx=".6"/><rect x="8.5" y="4" width="6" height="3.5" rx=".6"/><rect x="1.5" y="9.5" width="13" height="3" rx=".6"/></svg>',
+    effect_controls: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4h7M12 4h2M2 8h2M7 8h7M2 12h9"/><circle cx="10.5" cy="4" r="1.5"/><circle cx="5.5" cy="8" r="1.5"/><circle cx="12.5" cy="12" r="1.5"/></svg>',
+    lumetri: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><path d="M8 2v12M2 8h12" opacity=".45"/><circle cx="10" cy="6" r="1.4" fill="currentColor"/></svg>',
+    transitions: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="4" width="7" height="8" rx=".8"/><rect x="7.5" y="4" width="7" height="8" rx=".8" opacity=".55"/><path d="M7.5 4l1 8"/></svg>',
+    designed_effects: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M8 1.8l1.5 3.6 3.7 1.1-3.7 1.2L8 11.3 6.5 7.7 2.8 6.5l3.7-1.1z"/><path d="M12.5 11.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z"/></svg>',
+    export: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 2v8M5 7l3 3 3-3"/><path d="M2.5 11v2.5h11V11"/></svg>',
+  };
+
+  /* ------------------------------------------------------------ the cut's arithmetic */
+  function clipDur(name) {
+    const c = app.clips()[name];
+    const d = c && Number(c.duration);
+    return d > 0 ? d : 1e9;
+  }
+  function gridRate() {
+    const t = TL();
+    const r = t && typeof t.gridRate === 'function' ? Number(t.gridRate()) : 0;
+    return r > 0 ? r : 24;
+  }
+  /* timeline-trim.js `toFrames`: whole frames of the film, inside [lo, hi] */
+  function toFrames(v, lo, hi) {
+    const r = gridRate();
+    let n = Math.round(v * r);
+    if (n / r > hi + 1e-9) n = Math.floor(hi * r + 1e-9);
+    if (n / r < lo - 1e-9) n = Math.ceil(lo * r - 1e-9);
+    return n / r;
+  }
+  const tc = (t) => { const tt = TL(); return tt && tt.tc ? tt.tc(t) : `${Number(t).toFixed(2)} s`; };
+  const stem = (clip) => {
+    const c = String(clip || '');
+    if (c.startsWith('gen_')) return `a ${c.split('_')[1] || 'generated'} slide`;
+    return c.replace(/\.[^.]+$/, '');
+  };
+
+  /* ------------------------------------------------------------ one undo entry */
+  /* While `fn` runs, the human paths' own tl.begin / commit / cancel are no-ops: their
+   * changes fold into the one entry the caller holds open (or, for the in-memory preview,
+   * into none). The timeline's internal mutations need nothing: they already fold into an
+   * open entry. Restored however fn ends. */
+  function nested(fn) {
+    const t = TL();
+    const real = { begin: t.begin, commit: t.commit, cancel: t.cancel };
+    t.begin = () => true;
+    t.commit = () => true;
+    t.cancel = () => true;
+    try { return fn(); } finally { Object.assign(t, real); }
+  }
+
+  const marks = () => {
+    const t = TL();
+    const st = t ? t.state : {};
+    return JSON.stringify({ m: t ? t.markers() : [], i: st.seqIn ?? null, o: st.seqOut ?? null });
+  };
+  function putMarks(json) {
+    const t = TL();
+    const v = JSON.parse(json);
+    t.setMarkers(v.m);
+    t.setSeqIn(v.i);
+    t.setSeqOut(v.o);
+  }
+
+  /* ------------------------------------------------------------ the ops, as a human makes them */
+  function refuse(why) { const e = new Error(why); e.refused = true; throw e; }
+
+  function makeCtx() {
+    const map = new Map();
+    return {
+      map,
+      later: [],
+      id: (x) => (x == null ? x : map.get(String(x)) || String(x)),
+      shot(x, what = 'id') {
+        const t = TL();
+        if (x == null || x === '') refuse(`needs ${what}`);
+        const s = t.byId(this.id(x));
+        if (!s || t.indexOf(s.id) < 0) refuse(`shot ${x} is not in the cut`);
+        return s;
+      },
+      target(x) {          // a V1 shot, or a clip on V2+ (Motion and Opacity)
+        const t = TL();
+        const id = this.id(x);
+        const s = t.byId(id);
+        if (s && t.indexOf(s.id) >= 0) return { seg: s, ov: false };
+        const o = typeof t.overlayById === 'function' ? t.overlayById(id) : null;
+        if (o) return { seg: o, ov: true };
+        refuse(`shot ${x} is not in the cut`);
+        return null;
+      },
+    };
+  }
+
+  const range = (op) => ({ clip: op.clip, in: Number(op.in), out: Number(op.out) });
+
+  const DO = {
+    insert(op, c) {
+      const id = TL().insertAt(range(op), Number(op.at));
+      if (!id) refuse('the timeline refused the insert (is V1 locked?)');
+      if (op.makes) c.map.set(op.makes, id);
+    },
+    overwrite(op, c) {
+      const id = TL().overwrite(range(op), Number(op.at));
+      if (!id) refuse('the timeline refused the overwrite (is V1 locked?)');
+      if (op.makes) c.map.set(op.makes, id);
+    },
+    append(op, c) {
+      const after = op.after == null ? null : c.shot(op.after, 'after').id;
+      const id = TL().insert(range(op), after);
+      if (!id) refuse('the timeline refused the clip (is V1 locked?)');
+      if (op.makes) c.map.set(op.makes, id);
+    },
+    move(op, c) {
+      const ids = (op.ids || []).map((x) => c.shot(x, 'ids').id);
+      const before = op.before == null ? null : c.shot(op.before, 'before').id;
+      if (!TL().move(ids, before)) refuse('the shots are already there');
+    },
+    razor(op, c) {
+      const t = TL();
+      let s = op.id != null ? c.shot(op.id) : null;
+      if (!s) { const at = t.shotAt(Number(op.at)); s = at ? t.byId(at.id) : null; }
+      if (!s) refuse('there is no shot under that time');
+      const id = t.split(s.id, Number(op.at));
+      if (!id) refuse(`${tc(op.at)} is too close to an edge of that shot`);
+      if (op.makes) c.map.set(op.makes, id);
+    },
+    ripple_delete(op, c) {
+      const ids = (op.ids || []).map((x) => c.shot(x, 'ids').id);
+      if (!TL().remove(ids)) refuse('nothing to delete');
+    },
+    trim(op, c) {
+      const s = c.shot(op.id);
+      if (!TL().setRange(s.id, op.in == null ? null : Number(op.in), op.out == null ? null : Number(op.out))) {
+        refuse('the shot already has that range');
+      }
+    },
+    roll(op, c) {
+      const t = TL();
+      const L = c.shot(op.a, 'a'), R = c.shot(op.b, 'b');
+      if (t.indexOf(R.id) !== t.indexOf(L.id) + 1) refuse('the two shots are not neighbours any more');
+      // timeline-trim.js rollParams + step: film seconds, each side at its rate, on frames
+      const spdL = t.speedOf(L), spdR = t.speedOf(R);
+      const outL0 = L.out, inR0 = R.in;
+      const lo = Math.max((L.in + MIN_LEN - L.out) / spdL, -R.in / spdR);
+      const hi = Math.min((clipDur(L.clip) - L.out) / spdL, (R.out - MIN_LEN - R.in) / spdR);
+      const v = toFrames(clamp(Number(op.by), lo, hi), lo, hi);
+      if (!v) refuse('there is no media to roll into');
+      t.setRange(L.id, null, outL0 + v * spdL);
+      t.setRange(R.id, inR0 + v * spdR, null);
+    },
+    slip(op, c) {
+      const s = c.shot(op.id);
+      // timeline-trim.js step (slip): in and out together, clip seconds, on frames
+      const in0 = s.in, out0 = s.out, d = clipDur(s.clip);
+      const v = toFrames(clamp(Number(op.by), -in0, d - out0), -in0, d - out0);
+      if (!v) refuse('there is no media to slip into');
+      TL().setRange(s.id, in0 + v, out0 + v);
+    },
+    speed(op, c) {
+      const s = c.shot(op.id);
+      if (!TL().setSpeed(s.id, Number(op.rate))) refuse('the shot already plays at that speed');
+    },
+    marker(op) {
+      if (TL().addMarker(Number(op.at)) == null) refuse('there is a marker there already');
+    },
+    in_out(op) {
+      const t = TL();
+      if ('in' in op) t.setSeqIn(op.in == null ? null : Number(op.in));
+      if ('out' in op) t.setSeqOut(op.out == null ? null : Number(op.out));
+    },
+    track_add(op) {
+      if (!TL().addTrack(op.kind === 'audio' ? 'audio' : 'video')) refuse('no more tracks of that kind');
+    },
+    overlay(op) {
+      if (!TL().addOverlay(range(op), Number(op.at), op.track || 'V2')) refuse(`${op.track || 'V2'} refused the clip (locked, or no such track)`);
+    },
+    set(op, c) {
+      const { seg } = c.target(op.id);
+      if (!FX() || !FX().set(op.prop, Number(op.value), seg)) refuse('Effect Controls refused it (is the track locked?)');
+    },
+    keys(op, c) {
+      const t = TL(), fx = FX();
+      const { seg, ov } = c.target(op.id);
+      const group = KEY_GROUP[op.prop], kp = KEY_PROP[op.prop];
+      if (!fx || !group) refuse(`${op.prop} has no stopwatch`);
+      // the human: select the clip, park the playhead on the key's frame, stopwatch on,
+      // type the value — the stopwatch keys it at the playhead
+      if (ov) { t.select([]); t.selectOverlay(seg.id); } else t.select([seg.id], { source: 'api' });
+      const start = ov ? Number(seg.at) || 0 : t.filmStart(seg.id);
+      const keys = (op.keys || []).slice().sort((a, b) => a[0] - b[0]);
+      keys.forEach(([kt, v], n) => {
+        t.seek(start + Number(kt));
+        if (!fx.keys(kp, c.target(op.id).seg).length) fx.animate(group);
+        // a V2 edit replaces the clip's object: look it up again each time
+        if (!fx.set(op.prop, Number(v), c.target(op.id).seg)) refuse(`key ${n + 1} was refused (is the track locked?)`);
+      });
+    },
+    curve(op, c) {
+      const { seg } = c.target(op.id);
+      if (!FX() || !FX().curve(op.channel || 'master', op.points, seg)) refuse('Lumetri refused the curve');
+    },
+    wheel(op, c) {
+      const { seg } = c.target(op.id);
+      const fx = FX();
+      const cur = (fx && fx.wheel(op.range, undefined, seg)) || [0, 0, 0];
+      const level = op.level == null ? cur[2] : Number(op.level);
+      if (!fx || !fx.wheel(op.range, [Number(op.x) || 0, Number(op.y) || 0, level], seg)) refuse('Lumetri refused the wheel');
+    },
+    look(op, c) {
+      const name = String(op.name);
+      const strength = op.strength == null ? null : Number(op.strength);
+      if (op.ids === 'all') {
+        // the film's look select and its strength buttons (app.js buildNone)
+        app.colourEdit('film look', () => {
+          const col = app.colour();
+          col.look = name === 'none' ? null : name;
+          if (strength != null) col.strength = strength;
+        });
+        return;
+      }
+      const ids = (op.ids || []).map((x) => c.shot(x, 'ids').id);
+      // the shot's look select and its strength slider (app.js bindColour)
+      app.colourEdit('look', () => ids.forEach((id) => {
+        const o = app.shotOverride(id, true);
+        if (name === 'film') delete o.look; else o.look = name === 'none' ? null : name;
+        if (strength != null) o.strength = strength;
+      }));
+    },
+    match(op, c) {
+      const ids = (op.ids || []).map((x) => c.shot(x, 'ids').id);
+      const ref = op.reference == null ? null : c.shot(op.reference, 'reference').id;
+      // "set as reference", then "match to the shot before" / "match to reference"
+      app.colourEdit('match', () => {
+        if (ref) app.colour().reference = ref;
+        ids.forEach((id) => { app.shotOverride(id, true).match = op.to === 'previous' ? 'previous' : 'reference'; });
+      });
+    },
+    transition(op, c) {
+      const t = TL();
+      const a = c.shot(op.a, 'a'), b = c.shot(op.b, 'b');
+      const k = t.indexOf(a.id);
+      if (t.idAt(k + 1) !== b.id) refuse('the two shots are not neighbours any more');
+      if (!t.addTransition(k, op.kind, op.dur == null ? undefined : Number(op.dur))) refuse('the shots are too short for it (or the track is locked)');
+    },
+    fade(op, c) {
+      const t = TL();
+      const s = c.shot(op.id);
+      if (!t.addFade(t.indexOf(s.id), op.edge, op.kind, op.dur == null ? undefined : Number(op.dur))) refuse('the fade was refused (is the track locked?)');
+    },
+    design_effect(op, c) {
+      const s = c.shot(op.id);
+      c.later.push(() => designEffect(s.id, op.note));
+    },
+    export(op, c) {
+      if (!app.segs().length) refuse('the sequence is empty');
+      c.later.push(() => runExport(op));
+    },
+  };
+
+  /* Marker / In / Out changes taken back with their entry (they are not on the
+   * timeline's stack). `stack` follows the entries the AI made; `lone` is a list that
+   * moved only markers (no entry was made), undone by the next Ctrl+Z here. */
+  const markUndo = { stack: [], redo: [], lone: null, loneRedo: null, mine: false };
+
+  function applyOps(ops, opts = {}) {
+    const t = TL();
+    const list = Array.isArray(ops) ? ops : [];
+    if (!t || typeof t.begin !== 'function') {
+      return { applied: 0, refused: list.map((_, i) => ({ i, why: 'the timeline is not loaded' })), after: Promise.resolve([]) };
+    }
+    const label = opts.label || labelFor(list);
+    const ctx = makeCtx();
+    const refused = [];
+    let applied = 0;
+    const before = marks();
+    if (!t.begin(label)) {
+      return { applied: 0, refused: list.map((_, i) => ({ i, why: 'another edit is in progress — finish it first' })), after: Promise.resolve([]) };
+    }
+    markUndo.mine = true;
+    try {
+      nested(() => list.forEach((op, i) => {
+        const fn = op && DO[op.op];
+        if (!fn) { refused.push({ i, why: `unknown op ${op && op.op}` }); return; }
+        try { fn(op, ctx); applied += 1; } catch (e) { refused.push({ i, why: e.refused ? e.message : `failed: ${e.message}` }); }
+      }));
+    } finally {
+      const committed = t.commit();
+      markUndo.mine = false;
+      const after = marks();
+      if (after !== before) {
+        if (committed) { markUndo.stack.push({ label, before, after }); markUndo.redo.length = 0; markUndo.lone = null; }
+        else { markUndo.lone = { label, before, after }; markUndo.loneRedo = null; }
+      }
+    }
+    const later = ctx.later.slice();
+    const done = (async () => {
+      const out = [];
+      for (const fn of later) {
+        try { out.push(await fn()); } catch (e) { out.push({ ok: false, why: e.message }); app.toast(e.message, 5000); }
+      }
+      return out;
+    })();
+    return { applied, refused, after: done, label };
+  }
+
+  /* The undo stack's events: the entry this module made going back (or forward) takes the
+   * markers with it. */
+  function hookUndo() {
+    const t = TL();
+    if (!t || hookUndo.done) return;
+    hookUndo.done = true;
+    t.on('change', (ev) => {
+      if (markUndo.mine) return;
+      if (ev.kind === 'undo') {
+        const top = markUndo.stack[markUndo.stack.length - 1];
+        if (top && top.label === ev.label && marks() === top.after) { putMarks(top.before); markUndo.redo.push(markUndo.stack.pop()); }
+      } else if (ev.kind === 'redo') {
+        const top = markUndo.redo[markUndo.redo.length - 1];
+        if (top && top.label === ev.label && marks() === top.before) { putMarks(top.after); markUndo.stack.push(markUndo.redo.pop()); }
+      } else if (ev.kind === 'commit') {
+        markUndo.lone = null; markUndo.loneRedo = null;
+      }
+    });
+  }
+  /* A marker-only list made no entry: Ctrl+Z (and ↶) takes it back first. */
+  function loneUndo(redo) {
+    if (!redo && markUndo.lone && marks() === markUndo.lone.after) {
+      putMarks(markUndo.lone.before);
+      markUndo.loneRedo = markUndo.lone; markUndo.lone = null;
+      app.toast(`undone: ${markUndo.loneRedo.label}`);
+      return true;
+    }
+    if (redo && markUndo.loneRedo && marks() === markUndo.loneRedo.before) {
+      putMarks(markUndo.loneRedo.after);
+      markUndo.lone = markUndo.loneRedo; markUndo.loneRedo = null;
+      app.toast(`redone: ${markUndo.lone.label}`);
+      return true;
+    }
+    return false;
+  }
+  window.addEventListener('keydown', (e) => {
+    if (!(e.metaKey || e.ctrlKey) || String(e.key).toLowerCase() !== 'z') return;
+    const tg = e.target;
+    if (tg && (['INPUT', 'TEXTAREA', 'SELECT'].includes(tg.tagName) || tg.isContentEditable)) return;
+    if (loneUndo(e.shiftKey)) { e.preventDefault(); e.stopImmediatePropagation(); }
+  }, true);
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest && e.target.closest('#undo, #redo');
+    if (b && loneUndo(b.id === 'redo')) { e.preventDefault(); e.stopImmediatePropagation(); }
+  }, true);
+
+  function labelFor(ops) {
+    const names = [...new Set(ops.map((o) => o && o.op).filter(Boolean))].map((n) => n.replace('_', ' '));
+    if (!names.length) return 'AI edit';
+    return `AI: ${names.slice(0, 2).join(', ')}${names.length > 2 ? ` +${names.length - 2}` : ''}`;
+  }
+
+  /* ------------------------------------------------------------ the ops that run after */
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function until(fn, ms = 8000, step = 60) {
+    const end = Date.now() + ms;
+    for (;;) {
+      let v = null;
+      try { v = fn(); } catch (e) { v = null; }
+      if (v) return v;
+      if (Date.now() > end) return null;
+      await sleep(step);
+    }
+  }
+
+  /* Designed Effects, as a person asks it: the shot selected, the tool open on it, the
+   * note typed, Design pressed (once it carries its price). */
+  async function designEffect(id, note) {
+    const t = TL();
+    t.select([id], { source: 'api' });
+    if (window.dock && dock.open) dock.open('fx');
+    const fx = window.fx;
+    if (!fx || !fx.state) throw new Error('Designed Effects is not loaded');
+    if (!await until(() => String(fx.state.shot) === String(id))) throw new Error('Designed Effects did not open on that shot');
+    fx.state.note = note;
+    fx.state.designOpen = true;
+    if (typeof fx.refresh === 'function') await fx.refresh();
+    const box = await until(() => $('#fxNote'));
+    if (box) { box.value = note; box.dispatchEvent(new Event('input', { bubbles: true })); }
+    const go = await until(() => { const b = $('#fxDesign'); return b && !b.disabled ? b : null; }, 15000);
+    if (!go) throw new Error('Design has no price yet — the note is in Designed Effects, press Design there');
+    go.click();
+    return { ok: true, op: 'design_effect' };
+  }
+
+  /* Export, as a person makes one: the dialog, its preset, range and name, Export. */
+  async function runExport(op) {
+    const ex = window.exportDialog;
+    if (!ex || typeof ex.open !== 'function') throw new Error('Export is not loaded');
+    ex.open();
+    const sel = await until(() => $('#exportDialog #exPreset'));
+    if (!sel) throw new Error('the Export dialog did not open');
+    if (op.preset && [...sel.options].some((o) => o.value === op.preset)) {
+      sel.value = op.preset;
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    const rng = $('#exportDialog #exRange');
+    if (rng) {
+      const want = op.range === 'in_out' ? 'inout' : 'all';
+      const opt = [...rng.options].find((o) => o.value === want);
+      if (opt && !opt.disabled) { rng.value = want; rng.dispatchEvent(new Event('change', { bubbles: true })); }
+    }
+    if (op.name) {
+      const nm = $('#exportDialog #exName');
+      if (nm) { nm.value = op.name; nm.dispatchEvent(new Event('input', { bubbles: true })); }
+    }
+    const go = await until(() => { const b = $('#exportDialog #exGo'); return b && !b.disabled ? b : null; }, 60000, 150);
+    if (!go) throw new Error('Export is still measuring the size — press Export in the dialog');
+    go.click();
+    return { ok: true, op: 'export' };
+  }
+
+  /* ------------------------------------------------------------ describe (a line per op) */
+  function describe(op) {
+    const t = TL();
+    if (!op || !op.op) return '';
+    const shot = (id) => {
+      const i = t ? t.indexOf(id) : -1;
+      return i >= 0 ? `shot ${i + 1} (${stem(t.byId(id).clip)})` : `shot ${id}`;
+    };
+    const Shot = (id) => { const s = shot(id); return s[0].toUpperCase() + s.slice(1); };
+    const r = (o) => `${stem(o.clip)} (${Number(o.in).toFixed(2)}–${Number(o.out).toFixed(2)} s)`;
+    const sgn = (v) => `${Number(v) >= 0 ? '+' : '−'}${Math.abs(Number(v)).toFixed(2)} s`;
+    const kind = (k) => (t && t.TRANS_NAMES && t.TRANS_NAMES[k]) || k;
+    switch (op.op) {
+      case 'insert': return `Insert ${r(op)} at ${tc(op.at)}`;
+      case 'overwrite': return `Overwrite with ${r(op)} at ${tc(op.at)}`;
+      case 'append': return `Add ${r(op)} ${op.after ? `after ${shot(op.after)}` : 'at the end'}`;
+      case 'move': return `Move ${(op.ids || []).map(shot).join(', ')} ${op.before ? `before ${shot(op.before)}` : 'to the end'}`;
+      case 'razor': return `Razor ${op.id ? shot(op.id) : 'the shot'} at ${tc(op.at)}`;
+      case 'ripple_delete': return `Ripple delete ${(op.ids || []).map(shot).join(', ')}`;
+      case 'trim': return `Trim ${shot(op.id)}:${op.in != null ? ` in → ${Number(op.in).toFixed(2)} s` : ''}${op.out != null ? ` out → ${Number(op.out).toFixed(2)} s` : ''}`;
+      case 'roll': return `Roll the edit between ${shot(op.a)} and ${shot(op.b)} by ${sgn(op.by)}`;
+      case 'slip': return `Slip ${shot(op.id)} by ${sgn(op.by)}`;
+      case 'speed': return `${Shot(op.id)}: Speed ${Math.round(Number(op.rate) * 100)} %`;
+      case 'marker': return `Marker at ${tc(op.at)}`;
+      case 'in_out': return `Sequence${'in' in op ? ` In ${op.in == null ? 'cleared' : tc(op.in)}` : ''}${'out' in op ? ` Out ${op.out == null ? 'cleared' : tc(op.out)}` : ''}`;
+      case 'track_add': return `Add a ${op.kind} track`;
+      case 'overlay': return `${r(op)} on ${op.track || 'V2'} at ${tc(op.at)}`;
+      case 'set': return `${Shot(op.id)}: ${op.prop} ${op.value}`;
+      case 'keys': return `${Shot(op.id)}: ${op.prop} keyframes (${(op.keys || []).length})`;
+      case 'curve': return `${Shot(op.id)}: Lumetri ${op.channel || 'master'} curve`;
+      case 'wheel': return `${Shot(op.id)}: Lumetri ${op.range} wheel`;
+      case 'look': return `${op.ids === 'all' ? 'The film' : (op.ids || []).map(Shot).join(', ')}: look ${op.name}`;
+      case 'match': return `${(op.ids || []).map(Shot).join(', ')}: Color Match to the ${op.to === 'previous' ? 'shot before' : 'reference'}`;
+      case 'transition': return `${kind(op.kind)} between ${shot(op.a)} and ${shot(op.b)}`;
+      case 'fade': return `${kind(op.kind)} at the ${op.edge} of ${shot(op.id)}`;
+      case 'design_effect': return `Designed effect on ${shot(op.id)}: “${op.note}”`;
+      case 'export': return `Export ${op.preset}, ${op.range === 'in_out' ? 'Sequence In/Out' : 'Entire Sequence'}`;
+      default: return op.op;
+    }
+  }
+
+  /* ------------------------------------------------------------ the review */
+  const R = {
+    res: null,             // the /api/assist result under review
+    ops: [],               // its ops
+    lines: [],
+    verdict: [],           // per op: true (accept) | false (reject)
+    blocked: new Map(),    // op index → why it cannot be applied to the cut as it is now
+    after: true,           // the Program shows the After picture
+    saved: null,           // the in-memory preview's snapshot (Before), while After is up
+    ghostGen: 0,
+    planTimer: 0,
+    planWhat: '',
+    exportInfo: null,      // GET /api/export, when an export op is under review
+    el: null,
+  };
+
+  const opIsLook = (op) => LOOK_OPS.has(op.op);
+  const livePreview = (op) => opIsLook(op) && op.op !== 'look' && op.op !== 'match';
+  const depsOf = (op) => {
+    const out = [];
+    ['id', 'a', 'b', 'before', 'after', 'reference'].forEach((k) => { if (typeof op[k] === 'string' && op[k].startsWith('new:')) out.push(op[k]); });
+    (Array.isArray(op.ids) ? op.ids : []).forEach((x) => { if (String(x).startsWith('new:')) out.push(String(x)); });
+    return out;
+  };
+  const makerOf = (ph) => R.ops.findIndex((o) => o.makes === ph);
+  const accepted = () => R.ops.map((_, i) => i).filter((i) => R.verdict[i] && !R.blocked.has(i));
+
+  function panel() {
+    if (R.el && R.el.isConnected) return R.el;
+    const host = document.querySelector('#tools section[data-tool="ask"]') || document.body;
+    const el = document.createElement('div');
+    el.id = 'aiReview';
+    el.className = 'air';
+    el.setAttribute('data-testid', 'ai-review');
+    el.setAttribute('role', 'region');
+    el.setAttribute('aria-label', 'AI edit review');
+    el.hidden = true;
+    host.insertBefore(el, host.firstChild);
+    el.addEventListener('click', onClick);
+    R.el = el;
+    return el;
+  }
+
+  /* The call's price in section S's words: "free on your plan" on the subscription
+   * backend, the API-equivalent estimate in the hover; the estimate itself on the API. */
+  function costLine(cost) {
+    if (!cost || typeof cost.usd !== 'number' || !window.rcCost) return '';
+    const p = { charged: cost.charged, backend: cost.backend };
+    const hover = cost.measured ? rcCost.spent(cost.usd, p) : rcCost.note(cost.usd, p);
+    return `<span class="air-cost" data-testid="ai-cost" title="${esc(hover)}">${esc(rcCost.tag(cost.usd, p))}</span>`;
+  }
+
+  function rowHtml(op, i) {
+    const fam = FAMILY[op.op] || 'timeline';
+    const line = R.lines[i] || describe(op);
+    const block = R.blocked.get(i);
+    const on = !!R.verdict[i] && !block;
+    const shows = CUT_OPS.has(op.op) ? 'shown as the ghost lane under V1 until you accept'
+      : livePreview(op) ? 'shown on the Program monitor (◐ Before / After) until you accept'
+        : opIsLook(op) ? 'the look is baked when it is saved: the Program shows it once you accept'
+          : op.op === 'export' ? 'runs only when you accept'
+            : op.op === 'design_effect' ? 'opens Designed Effects on this shot with this note; its own review follows'
+              : 'applied when you accept';
+    return `<li class="air-op${on ? '' : ' off'}${block ? ' blocked' : ''}" data-testid="ai-op-row" data-op-index="${i}" data-op="${esc(op.op)}" data-family="${fam}" aria-checked="${on}">
+        <span class="air-fam" title="${esc(FAMILY_NAME[fam])}">${ICON[fam]}</span>
+        <span class="air-line" title="${esc(block ? `can't apply now: ${block}` : shows)}">${esc(line)}${block ? `<span class="air-why">can't apply now: ${esc(block)}</span>` : ''}</span>
+        <span class="air-vote" role="group" aria-label="this edit">
+          <button type="button" class="air-yes${on ? ' on' : ''}" data-testid="ai-op-accept" data-i="${i}" title="keep this edit"${block ? ' disabled' : ''} aria-pressed="${on}">✓</button>
+          <button type="button" class="air-no${on ? '' : ' on'}" data-testid="ai-op-reject" data-i="${i}" title="leave this edit out" aria-pressed="${!on}">✗</button>
+        </span></li>`;
+  }
+
+  /* What an export op will write: the Export dialog's own path rule (export.js
+   * `component`, the folder it remembers, GET /api/export's defaults) and the length. */
+  function component(text, fallback) {
+    let t = String(text || '').trim().replace(/\.mp4$/i, '');
+    t = t.replace(/[^A-Za-z0-9 ._()-]+/g, '-').replace(/\s+/g, ' ').replace(/^[ .-]+|[ .-]+$/g, '');
+    t = t.slice(0, 80).replace(/^[ .-]+|[ .-]+$/g, '');
+    return t || fallback;
+  }
+  function exportWords(op) {
+    const t = TL();
+    const st = t ? t.state : {};
+    const total = t ? t.total() : 0;
+    const a = op.range === 'in_out' ? (st.seqIn ?? 0) : 0;
+    const b = op.range === 'in_out' ? (st.seqOut ?? total) : total;
+    const info = R.exportInfo;
+    const preset = info && (info.presets || []).find((p) => p.key === op.preset);
+    let folder = info ? info.folder : '';
+    try { folder = localStorage.getItem('rc.export.folder') || folder; } catch (e) { /* private window */ }
+    const path = info ? `${info.root}/${component(folder, info.folder)}/${component(op.name, info.name)}.mp4`
+      : `${op.name ? `${op.name}.mp4` : 'a new file'} under --work/renders`;
+    return `${path} · ${preset ? `${preset.label} · ` : ''}${tc(Math.max(0, b - a))}`;
+  }
+  async function loadExportInfo() {
+    if (!R.ops.some((op) => op.op === 'export')) return;
+    try { R.exportInfo = await (await fetch('/api/export')).json(); } catch (e) { R.exportInfo = null; }
+    if (R.res) paint();
+  }
+
+  function paint() {
+    const el = panel();
+    const res = R.res;
+    syncTall();
+    if (!res) { el.hidden = true; return; }
+    el.hidden = false;
+    el.dataset.kind = res.kind || '';
+    const n = R.ops.length, acc = accepted().length;
+    const asked = res.asked || res.text_asked || '';      // AIPROMPT sends `asked`, the GET `text_asked`
+    const count = res.kind === 'ops' ? `<span class="air-n">${n} edit${n === 1 ? '' : 's'}</span>` : '';
+    const head = `<div class="air-head"><span class="air-title">${ICON.designed_effects}<b>AI edit</b></span>${count}</div>
+      ${asked ? `<div class="air-asked" title="what you asked">“${esc(asked)}”</div>` : ''}`;
+    const cost = costLine(res.cost);
+    if (!['ops', 'plan', 'answer'].includes(res.kind)) {
+      // a job that failed or was stopped: say so, never an empty review
+      const why = res.status === 'cancelled' ? 'Stopped — nothing was changed.'
+        : `The AI could not answer: ${res.error || res.detail || 'no detail'}`;
+      el.innerHTML = `${head}<div class="air-answer air-failed">${esc(why)}</div>
+        <div class="air-foot">${cost}<span class="air-grow"></span><button type="button" class="air-btn" data-act="close" data-testid="ai-review-close">Close</button></div>`;
+      return;
+    }
+    if (res.kind === 'answer') {
+      el.innerHTML = `${head}<div class="air-answer">${esc(res.text || res.summary || '')}</div>
+        <div class="air-foot">${cost}<span class="air-grow"></span><button type="button" class="air-btn" data-act="close" data-testid="ai-review-close">Close</button></div>`;
+      return;
+    }
+    if (res.kind === 'plan') {
+      el.innerHTML = `${head}<div class="air-sum">${esc(res.summary || 'Re-cutting the sequence')}</div>
+        <div class="air-plan" data-testid="ai-plan"><span class="air-spin" aria-hidden="true"></span><span class="air-plan-what">${esc(R.planWhat || 'the proposal opens here when it is ready')}</span></div>
+        <div class="air-foot">${cost}<span class="air-grow"></span><button type="button" class="air-btn" data-act="close" data-testid="ai-review-close">Close</button></div>`;
+      return;
+    }
+    const looks = R.ops.some((op, i) => livePreview(op) && R.verdict[i] && !R.blocked.has(i));
+    const cut = R.ops.some((op, i) => CUT_OPS.has(op.op) && R.verdict[i] && !R.blocked.has(i));
+    const exp = R.ops.find((op, i) => op.op === 'export' && R.verdict[i] && !R.blocked.has(i));
+    const refused = (res.refused || []).filter((x) => x && x.why);
+    const preview = [cut ? '<span class="air-pv" title="the cut with these edits, drawn under V1 — nothing has changed yet"><i class="air-ghost" aria-hidden="true"></i>New cut under V1</span>' : '',
+      looks ? `<button type="button" class="air-ab${R.after ? ' on' : ''}" data-act="ab" data-testid="ai-before-after" aria-pressed="${R.after}" title="the Program monitor shows the colour and Effect Controls changes (After) or the shot as it is (Before) — nothing is saved until you accept">◐ ${R.after ? 'After' : 'Before'}</button>` : '',
+      exp ? `<span class="air-pv air-file" data-testid="ai-export-what" title="the Export dialog writes this file when you accept — never over an existing one (it becomes -2, -3 …)">writes ${esc(exportWords(exp))}</span>` : ''].filter(Boolean).join('');
+    el.innerHTML = `${head}
+      ${res.summary ? `<div class="air-sum">${esc(res.summary)}</div>` : ''}
+      <ol class="air-ops">${R.ops.map(rowHtml).join('')}${refused.map((x) => `<li class="air-op refused" data-testid="ai-op-refused" data-op="${esc(x.op || '')}"><span class="air-fam" aria-hidden="true">⊘</span><span class="air-line">${esc(String(x.op || 'an op').replace('_', ' '))} not applied: ${esc(x.why)}</span></li>`).join('')}</ol>
+      ${preview ? `<div class="air-preview">${preview}</div>` : ''}
+      <div class="air-foot">
+        <button type="button" class="air-btn" data-act="reject" data-testid="ai-reject-all" title="put everything back as it was — nothing is written (Esc)">Reject all</button>
+        ${cost}
+        <span class="air-grow"></span>
+        <button type="button" class="air-btn primary" data-act="accept" data-testid="ai-accept-all"${acc ? '' : ' disabled'} title="apply the edits you kept as one undo step (${esc(app.undoKey())} takes them all back)">${acc === n ? (n === 1 ? 'Accept' : 'Accept all') : `Accept ${acc} of ${n}`}</button>
+      </div>`;
+    if (window.dock && dock.badge) dock.badge('ask', acc || 0);
+  }
+
+  /* While a review is up and the Assistant is the group's open tab, the Effect Controls
+   * column runs the window's full height, as it does for a waiting proposal (app.js
+   * `ptall`): the Program and the Timeline keep their size, the Source monitor gives the
+   * room. Its own class, so the two never fight over one. */
+  let tallWatch = null;
+  function syncTall() {
+    const ws = document.getElementById('ws');
+    const sec = R.el && R.el.closest('section[data-tool]');
+    if (!ws) return;
+    if (sec && !tallWatch && typeof MutationObserver !== 'undefined') {
+      tallWatch = new MutationObserver(() => syncTall());
+      tallWatch.observe(sec, { attributes: true, attributeFilter: ['hidden'] });
+    }
+    ws.classList.toggle('aitall', !!R.res && !!sec && !sec.hidden);
+    // while it waits the review owns the Assistant, as a waiting proposal does: the story
+    // and the Ask form under it step aside (the AI prompt is where a new ask starts)
+    if (sec) sec.classList.toggle('aiup', !!R.res);
+  }
+
+  /* Esc with the focus in the review rejects it. On window, capture phase, registered
+   * when this file loads: ahead of the timeline's keys (timeline-keys.js, registered at
+   * mount), whose Escape clears the selection and stops the event. */
+  function onKeys(e) {
+    if (e.key !== 'Escape' || !R.res || !R.el) return;
+    const tg = e.target instanceof Element ? e.target : null;
+    if (!tg || !R.el.contains(tg)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    reject();
+  }
+  window.addEventListener('keydown', onKeys, true);
+
+  function setVerdict(i, on) {
+    if (R.blocked.has(i) && on) return;
+    R.verdict[i] = on;
+    const op = R.ops[i];
+    if (!on && op && op.makes) {             // what names its shot goes with it
+      R.ops.forEach((o, j) => { if (depsOf(o).includes(op.makes)) R.verdict[j] = false; });
+    }
+    if (on && op) depsOf(op).forEach((ph) => { const m = makerOf(ph); if (m >= 0) R.verdict[m] = true; });
+    refreshPreview();
+  }
+
+  function onClick(e) {
+    const b = e.target.closest('button');
+    if (!b || !R.el.contains(b)) return;
+    const tid = b.getAttribute('data-testid');
+    if (tid === 'ai-op-accept') setVerdict(Number(b.dataset.i), true);
+    else if (tid === 'ai-op-reject') setVerdict(Number(b.dataset.i), false);
+    else if (b.dataset.act === 'accept') accept();
+    else if (b.dataset.act === 'reject') reject();
+    else if (b.dataset.act === 'close') closeQuiet();
+    else if (b.dataset.act === 'ab') { R.after = !R.after; refreshLook(); paint(); }
+  }
+
+  /* --------------- the cut's preview: the ghost lane, from the server's simulation */
+  function boardSeq() {
+    const t = TL();
+    const st = t.state;
+    return { segments: t.forSave ? t.forSave() : app.segs(), markers: t.markers(), in: st.seqIn ?? null,
+             out: st.seqOut ?? null, transitions: t.transitions(), overlays: t.overlays(),
+             tracks: t.tracks ? t.tracks() : {}, colour: app.colour() || {} };
+  }
+
+  async function check(ops) {
+    const r = await fetch('/api/assist/preview', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ops, ...boardSeq() }),
+    });
+    if (!r.ok) throw new Error(`the preview failed (${r.status})`);
+    return r.json();
+  }
+
+  async function refreshGhost() {
+    const gen = ++R.ghostGen;
+    const lanes = window.tlLanes;
+    const idx = accepted();
+    if (!idx.some((i) => CUT_OPS.has(R.ops[i].op))) { if (lanes && lanes.clearGhost) lanes.clearGhost(); return; }
+    let d;
+    try { d = await check(idx.map((i) => R.ops[i])); } catch (e) { return; }
+    if (gen !== R.ghostGen || !R.res) return;
+    if (d.preview && lanes && lanes.showGhost) lanes.showGhost(d.preview.segments);
+  }
+
+  /* --------------- the look's preview: After on the Program, nothing saved */
+  function lookTargetOk(op) {
+    const t = TL();
+    const s = t && t.byId(op.id);
+    return !!(s && t.indexOf(s.id) >= 0);   // V1 shots (a V2+ clip's controls save with the tracks)
+  }
+  function lookOn() {
+    if (R.saved || !R.after || !R.res) return;
+    const t = TL();
+    const ops = accepted().map((i) => R.ops[i]).filter((op) => livePreview(op) && lookTargetOk(op));
+    if (!ops.length) return;
+    const list = app.segs();
+    R.saved = {
+      controls: new Map(list.map((s) => [s.id, s.controls ? JSON.stringify(s.controls) : null])),
+      colour: JSON.stringify(app.colour() || {}),
+      sel: [...t.state.sel], playhead: t.state.playhead,
+    };
+    const ctx = makeCtx();
+    nested(() => ops.forEach((op) => { try { DO[op.op](op, ctx); } catch (e) { /* its row says so */ } }));
+    if (R.el) R.el.classList.add('previewing');
+    const first = t.byId(ops[0].id);
+    if (first && !app.playing()) {
+      const at = t.filmStart(first.id);
+      if (!(t.state.playhead >= at && t.state.playhead < at + t.dur(first))) t.seek(at);
+    }
+  }
+  function lookOff() {
+    if (!R.saved) return false;
+    const t = TL();
+    const s = R.saved;
+    R.saved = null;
+    app.segs().forEach((seg) => {
+      if (!s.controls.has(seg.id)) return;
+      const c = s.controls.get(seg.id);
+      if (c == null) delete seg.controls; else seg.controls = JSON.parse(c);
+    });
+    app.setColour(JSON.parse(s.colour));
+    t.select(s.sel, { source: 'api' });
+    t.setPlayhead(Math.min(s.playhead, t.total()));
+    app.renderInspector();
+    if (FX() && FX().apply) FX().apply();
+    if (window.grade && grade.draw) grade.draw();
+    if (R.el) R.el.classList.remove('previewing');
+    return true;
+  }
+  function refreshLook() { lookOff(); lookOn(); }
+
+  function refreshPreview() {
+    paint();
+    refreshLook();
+    refreshGhost();
+  }
+
+  /* An edit anywhere else takes the look's preview down first, so the Before state is the
+   * one that edit starts from (and the one any save writes). Playing and looking around
+   * the Program does not. */
+  function guard(e) {
+    if (!R.saved) return;
+    const tg = e.target instanceof Element ? e.target : null;
+    if (tg && (tg.closest('#aiReview') || tg.closest('#pProgram'))) return;
+    if (e.type === 'keydown') {
+      const k = e.key;
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && [' ', 'j', 'k', 'l', 'J', 'K', 'L', 'ArrowLeft', 'ArrowRight',
+        'Home', 'End', 'Shift', 'Control', 'Alt', 'Meta', 'Escape'].includes(k)) return;
+    }
+    lookOff();
+    R.after = false;
+    paint();
+  }
+  ['pointerdown', 'keydown', 'dragstart', 'drop'].forEach((ev) => window.addEventListener(ev, guard, true));
+  window.addEventListener('pagehide', () => lookOff(), true);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) lookOff(); }, true);
+
+  /* The board's cut changed under the review (an edit, an undo): the rows and the ghost
+   * are checked again against it. */
+  let recheckT = 0;
+  function recheckSoon() {
+    if (!R.res || R.res.kind !== 'ops' || markUndo.mine || R.saved) return;
+    clearTimeout(recheckT);
+    recheckT = setTimeout(recheck, 250);
+  }
+  async function recheck() {
+    if (!R.res || R.res.kind !== 'ops') return;
+    const res = R.res;
+    let d;
+    try { d = await check(R.ops); } catch (e) { return; }
+    if (R.res !== res) return;
+    const ok = new Set(d.index || []);
+    R.blocked = new Map();
+    (d.refused || []).forEach((x) => { if (x.i != null) R.blocked.set(x.i, x.why); });
+    R.ops.forEach((_, i) => { if (!ok.has(i) && !R.blocked.has(i)) R.blocked.set(i, 'not valid on the cut as it is now'); });
+    (d.index || []).forEach((src, k) => { if (d.lines && d.lines[k]) R.lines[src] = d.lines[k]; });
+    paint();
+    refreshGhost();
+  }
+
+  /* --------------- opening, answering */
+  async function review(result) {
+    const res = result && typeof result === 'object' ? result : null;
+    if (!res) return false;
+    hookUndo();
+    if (R.res) closeQuiet();
+    R.res = res;
+    R.after = true;
+    R.blocked = new Map();
+    R.planWhat = '';
+    if (res.kind === 'ops') {
+      R.ops = Array.isArray(res.ops) ? res.ops.slice() : [];
+      R.lines = Array.isArray(res.lines) ? res.lines.slice() : R.ops.map(describe);
+      R.verdict = R.ops.map(() => true);
+    } else {
+      R.ops = []; R.lines = []; R.verdict = [];
+    }
+    paint();
+    if (window.dock && dock.reveal) dock.reveal('#aiReview');
+    if (res.kind === 'plan') { followPlan(res); return true; }
+    loadExportInfo();
+    if (res.kind !== 'ops') return true;
+    // nothing waiting in the autosave rides the preview; then the review opens on the cut
+    // the board holds now
+    try { await app.flush(); } catch (e) { /* the save says so itself */ }
+    if (R.res !== res) return true;
+    await recheck();
+    if (R.res !== res) return true;
+    lookOn();
+    paint();
+    return true;
+  }
+
+  function followPlan(res) {
+    clearInterval(R.planTimer);
+    if (!res.plan_ask) { R.planWhat = 'the re-cut did not start'; paint(); return; }
+    R.planWhat = 'reading the footage for the new cut…';
+    paint();
+    R.planTimer = setInterval(async () => {
+      let s;
+      try { s = await (await fetch(`/api/ask/${encodeURIComponent(res.plan_ask)}`)).json(); } catch (e) { return; }
+      if (R.res !== res) { clearInterval(R.planTimer); return; }
+      if (s.state === 'done' && s.plan) {
+        clearInterval(R.planTimer);
+        closeQuiet();
+        if (typeof window.rcShowProposal === 'function') window.rcShowProposal(s.plan);
+        return;
+      }
+      if (s.state === 'failed' || s.state === 'cancelled') {
+        clearInterval(R.planTimer);
+        R.planWhat = `the re-cut failed: ${s.detail || 'no detail'}`;
+        paint();
+        return;
+      }
+      R.planWhat = s.detail || 'reading the footage for the new cut…';
+      const w = R.el && R.el.querySelector('.air-plan-what');
+      if (w) w.textContent = R.planWhat;
+    }, 1000);
+  }
+
+  function answer(acc, rej) {
+    const job = R.res && R.res.job;
+    if (!job) return;
+    fetch(`/api/assist/${encodeURIComponent(job)}/answer`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'omit',
+      body: JSON.stringify({ accepted: acc, rejected: rej }),
+    }).catch(() => {});
+  }
+
+  function accept() {
+    if (!R.res || R.res.kind !== 'ops') return null;
+    const idx = accepted();
+    if (!idx.length) return null;
+    lookOff();
+    if (window.tlLanes && tlLanes.clearGhost) tlLanes.clearGhost();
+    const label = R.res.summary ? `AI: ${String(R.res.summary).slice(0, 48)}` : labelFor(idx.map((i) => R.ops[i]));
+    const out = applyOps(idx.map((i) => R.ops[i]), { label });
+    const failed = new Set(out.refused.map((x) => idx[x.i]));
+    const took = idx.filter((i) => !failed.has(i));
+    const rej = R.ops.map((_, i) => i).filter((i) => !took.includes(i));
+    answer(took, rej);
+    const n = took.length;
+    const said = out.refused.length
+      ? `applied ${n} of ${idx.length} — ${out.refused[0].why}`
+      : `applied ${n === 1 ? 'the edit' : `${n} edits`} — ${app.undoKey()} undoes ${n === 1 ? 'it' : 'them'}`;
+    closeQuiet();
+    app.toast(said, out.refused.length ? 6000 : 3000);
+    return out;
+  }
+
+  function reject() {
+    if (!R.res) return;
+    if (R.res.kind === 'ops') answer([], R.ops.map((_, i) => i));
+    const was = R.res.kind;
+    closeQuiet();
+    if (was === 'ops') app.toast('discarded — nothing changed');
+  }
+
+  function closeQuiet() {
+    lookOff();
+    clearInterval(R.planTimer);
+    clearTimeout(recheckT);
+    R.ghostGen += 1;
+    if (R.res && R.res.kind === 'ops' && window.tlLanes && tlLanes.clearGhost) tlLanes.clearGhost();
+    R.res = null; R.ops = []; R.lines = []; R.verdict = []; R.blocked = new Map();
+    if (R.el) { R.el.hidden = true; R.el.innerHTML = ''; R.el.classList.remove('previewing'); }
+    syncTall();
+    if (window.dock && dock.badge) dock.badge('ask', 0);
+  }
+
+  function init() {
+    const t = TL();
+    if (!t || typeof t.on !== 'function') { setTimeout(init, 200); return; }
+    hookUndo();
+    t.on('change', () => recheckSoon());
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+
   window.rcActions = {
-    apply(ops, opts) { return { applied: 0, refused: [] }; },   // one undo entry, label opts.label
-    review(result) {},                                          // an /api/assist "ops" result
-    describe(op) { return String(op && op.op || ''); },         // one line per op, for the diff
+    apply: (ops, opts) => applyOps(ops, opts || {}),
+    review,
+    describe,
+    accept,
+    reject,
+    close: closeQuiet,
+    get open() { return !!R.res; },
+    get previewing() { return !!R.saved; },
+    state: () => ({ kind: R.res && R.res.kind, ops: R.ops.slice(), verdict: R.verdict.slice(),
+                    blocked: [...R.blocked.entries()], after: R.after, previewing: !!R.saved }),
   };
 })();

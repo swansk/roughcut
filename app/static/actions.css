@@ -1,1 +1,104 @@
-/* actions (wave 12 scaffold; its lane fills it) */
+/* The AI edit review (actions.js, redesign wave 12 AIOPS; REDESIGN-GOAL dimension 15).
+   It sits at the top of the Assistant tab, in the Effect Controls group beside the
+   Timeline, so the timeline it previews (the ghost lane under V1) and the Program monitor
+   (Before / After) stay in view. Dense, dark, one row per op: Premiere's History and
+   Effect Controls rows, not a chat bubble. Its head and its buttons stay put while a
+   long list scrolls under them. */
+
+#aiReview.air { display: flex; flex-direction: column; margin: 0 0 8px;
+  background: #1a1a1c; border: 1px solid var(--line); border-radius: 4px; }
+#aiReview[hidden] { display: none; }
+#aiReview.previewing { border-color: #3d5f86; }
+
+#aiReview .air-head { position: sticky; top: 0; z-index: 2; display: flex; align-items: center;
+  gap: 8px; min-width: 0; padding: 4px 8px; background: var(--head);
+  border-bottom: 1px solid #0f0f10; border-radius: 4px 4px 0 0; }
+#aiReview .air-title { display: inline-flex; align-items: center; gap: 5px; flex: 1 1 auto;
+  font-size: 11.5px; color: var(--text); }
+#aiReview .air-title svg { width: 13px; height: 13px; color: var(--accent); }
+#aiReview .air-title b { font-weight: 600; letter-spacing: .01em; }
+#aiReview .air-n { flex: none; color: var(--dim); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+#aiReview .air-asked { padding: 6px 8px 0; color: var(--dim); font-style: italic;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+#aiReview .air-sum { padding: 3px 8px 2px; color: var(--text); font-size: 12px; }
+#aiReview .air-answer { padding: 8px; color: var(--text); white-space: pre-wrap; line-height: 1.5; }
+#aiReview .air-answer.air-failed { color: var(--warn); }
+
+#aiReview .air-ops { list-style: none; margin: 4px 0 0; padding: 0 0 2px; counter-reset: airop; }
+#aiReview .air-op { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center;
+  gap: 6px; min-height: 26px; padding: 2px 6px 2px 8px; border-top: 1px solid #232326;
+  counter-increment: airop; }
+#aiReview .air-op:first-child { border-top: 0; }
+#aiReview .air-op:hover { background: #222225; }
+#aiReview .air-fam { display: inline-flex; justify-content: center; color: var(--dim); }
+#aiReview .air-fam svg { width: 14px; height: 14px; }
+#aiReview .air-op[data-family=lumetri] .air-fam { color: #d39b5c; }
+#aiReview .air-op[data-family=transitions] .air-fam { color: #9a8cf0; }
+#aiReview .air-op[data-family=effect_controls] .air-fam { color: #6fb7d9; }
+#aiReview .air-op[data-family=timeline] .air-fam { color: #7fbf8e; }
+#aiReview .air-op[data-family=designed_effects] .air-fam { color: #e0a3d8; }
+#aiReview .air-op[data-family=export] .air-fam { color: var(--accent); }
+#aiReview .air-line { min-width: 0; color: var(--text); font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere; line-height: 1.35; }
+#aiReview .air-line::before { content: counter(airop) "  "; color: var(--faint); font-size: 10.5px; }
+#aiReview .air-op.off .air-line { color: var(--faint); text-decoration: line-through;
+  text-decoration-color: #55555c; }
+#aiReview .air-op.off .air-fam { opacity: .45; }
+#aiReview .air-why { display: block; color: var(--warn); font-size: 10.5px; }
+#aiReview .air-op.refused { grid-template-columns: 18px minmax(0, 1fr); }
+#aiReview .air-op.refused .air-line { color: var(--faint); font-size: 11px; }
+#aiReview .air-op.refused .air-line::before { content: ""; }
+#aiReview .air-op.refused .air-fam { color: #8c5a5a; }
+
+#aiReview .air-vote { display: inline-flex; border: 1px solid var(--line); border-radius: 3px; overflow: hidden; }
+#aiReview .air-vote button { padding: 0 6px; min-width: 22px; height: 20px; line-height: 18px;
+  border: 0; border-radius: 0; background: transparent; color: var(--faint); font-size: 11.5px; }
+#aiReview .air-vote button + button { border-left: 1px solid var(--line); }
+#aiReview .air-vote button:hover { color: var(--text); background: var(--card-hi); }
+#aiReview .air-vote .air-yes.on { color: #0b1a10; background: var(--good); }
+#aiReview .air-vote .air-no.on { color: var(--text); background: #4a2a2a; }
+
+#aiReview .air-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px;
+  padding: 5px 8px; border-top: 1px solid #232326; color: var(--dim); font-size: 11px; }
+#aiReview .air-pv { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+#aiReview .air-ghost { display: inline-block; flex: none; width: 18px; height: 8px; border-radius: 2px;
+  border: 1px dashed #5fcf86; background: rgba(95, 207, 134, .16); }
+#aiReview .air-ab { padding: 0 7px; height: 20px; line-height: 18px; font-size: 11px; color: var(--dim); }
+#aiReview .air-ab.on { color: var(--text); border-color: #3d5f86; background: #1f3046; }
+#aiReview .air-file { display: block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px; color: var(--dim); overflow-wrap: anywhere; }
+
+#aiReview .air-plan { display: flex; align-items: center; gap: 8px; padding: 8px; color: var(--dim); }
+#aiReview .air-spin { width: 12px; height: 12px; flex: none; border-radius: 50%;
+  border: 2px solid #3a3a40; border-top-color: var(--accent); animation: airspin .9s linear infinite; }
+@keyframes airspin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { #aiReview .air-spin { animation: none; } }
+
+#aiReview .air-foot { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center;
+  gap: 8px; padding: 6px 8px; border-top: 1px solid #232326; background: #19191b;
+  border-radius: 0 0 4px 4px; }
+#aiReview .air-grow { flex: 1 1 auto; }
+#aiReview .air-cost { color: var(--faint); font-size: 10.5px; white-space: nowrap; cursor: help; }
+#aiReview .air-btn { padding: 1px 10px; }
+#aiReview .air-btn.primary { background: var(--accent); border-color: var(--accent); color: #08111c; font-weight: 600; }
+#aiReview .air-btn.primary:hover { background: #64aef9; }
+#aiReview .air-btn.primary:disabled { background: var(--card); border-color: var(--line); color: var(--faint); }
+
+/* the column runs the full height while a review waits (actions.js `syncTall`; the same
+   arrangement as a waiting proposal's `ptall` in workspace.css) */
+#ws.aitall {
+  grid-template-areas:
+    "mon  mon mon s3  insp"
+    "h    h   h   s3  insp"
+    "proj s1  tl  s3  insp";
+  --c-src-t: max(180px, calc(var(--c-src) - var(--c-insp) - var(--split)));
+}
+#ws.aitall #pSource { width: var(--c-src-t); }
+#ws.aitall .ws-split[data-split=src] { margin-left: var(--c-src-t); pointer-events: none; }
+#ws.aitall #pProgram { width: calc(100% - var(--c-src-t) - var(--split)); }
+
+/* the review owns the Assistant while it waits (actions.js `syncTall`) */
+section[data-tool=ask].aiup #askFold, section[data-tool=ask].aiup #askStory,
+section[data-tool=ask].aiup #askPanel, section[data-tool=ask].aiup #askFirst,
+section[data-tool=ask].aiup #lastAsk { display: none !important; }
