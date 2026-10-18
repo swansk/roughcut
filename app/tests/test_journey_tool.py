@@ -1,18 +1,25 @@
-"""tools/journey.py's contract with tools/gate.py, without a browser.
+"""tools/journey.py's contract with tools/gate.py, and its new steps' mutation checks.
 
 The journey itself is driven by the gate on the frozen snapshot (its `journey` line);
-running all nineteen steps again inside the suite would only spend a minute or two on
+running all twenty-four steps again inside the suite would only spend a minute or two on
 what the gate already measures. What the gate relies on is checked here: a usage error is rc 2,
 anything that stops the journey is rc 1 with a `journey ✗ step K <name>: <why>` line and
 a journey.json that says so, and gate.journey() turns that into its summary line. And
 the GoPro-shaped fixture is what the upright steps need it to be: a picture read the
 right way up passes, the same picture as stored (upside down) fails.
+
+The steps wave 12 added for Karl's K3 (import, drop, ask, ai-menu, and the re-run's
+new-clips offer) are proven not vacuous at the bottom of this file: one product change
+that breaks a step's feature, a short session that reaches the step (`--steps`), and the
+journey must go red AT that step, with that step's own reason.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +34,48 @@ def test_no_arguments_is_a_usage_error():
     r = subprocess.run([sys.executable, str(JOURNEY)], capture_output=True, text=True, timeout=60)
     assert r.returncode == 2
     assert "journey.py <snapshot dir> <out dir>" in r.stdout
+
+
+def test_an_unknown_step_is_a_usage_error(tmp_path):
+    r = subprocess.run([sys.executable, str(JOURNEY), str(tmp_path), str(tmp_path / "out"),
+                        "--steps=open,no-such-step"], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 2
+    assert "no such step: no-such-step" in r.stdout
+    assert not (tmp_path / "out").exists()
+
+
+def test_the_steps_are_the_plan_in_order():
+    j = _journey_module()
+    assert j.STEPS[:2] == ("open", "import")
+    assert j.STEPS.index("warmer") < j.STEPS.index("drop") < j.STEPS.index("ask") \
+        < j.STEPS.index("ai-menu") < j.STEPS.index("rerun-panel") < j.STEPS.index("rerun-accept")
+    assert len(j.STEPS) == len(set(j.STEPS)) == 24
+    # the gate's own words for the step count come from the docstring's list
+    for k, name in enumerate(j.STEPS, 1):
+        assert f"  {k:02d} {name} " in j.__doc__, name
+
+
+def test_the_scripted_model_answers_an_ask_from_the_sequence_it_is_shown():
+    """The AI prompt's call (its schema asks for a `kind`) gets four ops in three
+    families on the shots the prompt lists; fewer than three shots, words instead."""
+    j = _journey_module()
+    prompt = ("The editor asked:\n“x”\n\n## Scope\nThe whole sequence\n\n## The sequence\n"
+              "5 shots, 7.00 s (00:00:07:00) at 24 fps.\n"
+              "   #  id  clip  clip range  film time  [effect controls, colour, why]\n"
+              "    1  g01  CLIP_B.MP4  clip 4.40–6.00 s  film 0.00–1.60 s (00:00:00:00–00:00:01:14)\n"
+              "    2  g02  CLIP_A.MP4  clip 0.50–2.00 s  film 1.60–3.10 s (00:00:01:14–00:00:03:02)  [hand balance]\n"
+              "    3  g03  CLIP_B.MP4  clip 2.40–3.20 s  film 3.10–3.90 s (00:00:03:02–00:00:03:22)\n"
+              "    4  g04  CLIP_B.MP4  clip 3.20–4.00 s  film 3.90–4.70 s (00:00:03:22–00:00:04:17)\n"
+              "    5  g05  CLIP_C.MP4  clip 0.90–4.00 s  film 4.70–7.80 s (00:00:04:17–00:00:07:19)\n"
+              "Markers: none\n\n## The clips in the project\n  CLIP_A.MP4  6.00 s\n")
+    ops = j.assist_ops(prompt)
+    assert ops == [{"op": "razor", "id": "g01", "at": 0.8},
+                   {"op": "set", "id": "g03", "prop": "temperature", "value": -30},
+                   {"op": "transition", "a": "g04", "b": "g05", "kind": "cross_dissolve", "dur": 0.5},
+                   {"op": "set", "id": "g03", "prop": "exposure", "value": 0.3}]
+    assert ops[j.REJECT_OP]["prop"] == "temperature"
+    two = prompt.split("    3  g03")[0] + "Markers: none\n"
+    assert j.assist_ops(two) is None
 
 
 def test_a_snapshot_it_cannot_set_up_is_red_at_step_1_with_a_reason(tmp_path):
@@ -80,3 +129,115 @@ def test_the_rotated_fixture_reads_upright_only_when_its_matrix_is_applied(tmp_p
     stored = np.frombuffer(raw, np.uint8).reshape(180, 320, 3)
     with pytest.raises(j.StepFailed, match="is not upright: tl looks br"):
         j.quadrants(stored, "the stored frame")
+
+
+# ---------------------------------------------------------------- the mutation checks
+#
+# A copy of this tree (the dirs the board runs from) with ONE product change that breaks
+# what a new step checks; a short session (journey.py --steps) that reaches that step;
+# the journey must go red AT that step with that step's own reason, every step before it
+# green. The footage is encoded once, by a control session on the unchanged copy (which
+# must be green), and copied into each mutant's session (--fixture-from). One browser at
+# a time, ~15-30 s a session. A mutant whose text is gone from its file fails with a
+# line saying so: update the mutant with the code it was written against.
+
+SNAP_DIRS = ("app", "roughcut", "research", "assets")
+CONTROL = "open,import,drop,ai-menu"
+ASK = "open,firstpass,run,reject,accept,ask"
+
+# name: (file, the text, what it becomes, the session, the step that goes red, its reason)
+MUTANTS = {
+    # Ctrl+I's handler opens nothing (as a stubbed rcImport.open would)
+    "ctrl-i-opens-nothing": (
+        "app/static/import.js",
+        "    e.stopImmediatePropagation();\n    open();\n  }, true);",
+        "    e.stopImmediatePropagation();\n  }, true);",
+        "open,import", "import", "Ctrl+I opened no Import dialog"),
+    # a file dragged from the OS finds no drop target on the Project panel
+    "no-drop-on-the-project-panel": (
+        "app/static/import.js",
+        "attach(document.getElementById('pProject'), 'project');",
+        "void 0;",
+        "open,drop", "drop", "showed no drop overlay"),
+    # Accept applies every op of the answer, the one the editor rejected among them
+    "the-review-applies-a-rejected-op": (
+        "app/static/actions.js",
+        "    if (!R.res || R.res.kind !== 'ops') return null;\n    const idx = accepted();",
+        "    if (!R.res || R.res.kind !== 'ops') return null;\n    const idx = R.ops.map((_, i) => i);",
+        ASK, "ask", "the rejected op was applied"),
+    # one Accept lands as two undo entries
+    "one-accept-is-two-undo-steps": (
+        "app/static/actions.js",
+        "    const out = applyOps(idx.map((i) => R.ops[i]), { label });",
+        "    applyOps(idx.slice(0, 1).map((i) => R.ops[i]), { label });\n"
+        "    const out = applyOps(idx.slice(1).map((i) => R.ops[i]), { label });",
+        ASK, "ask", "one Ctrl+Z did not take back every AI edit"),
+    # an AI menu item greyed out that does not say why
+    "an-ai-menu-item-greyed-without-a-reason": (
+        "app/static/aiprompt.js",
+        "set('fx', 'Design an effect…', 'Designed Effects');",
+        "set('fx', 'Design an effect…', 'Designed Effects', true, '');",
+        "open,ai-menu", "ai-menu", "is greyed out and says no reason why"),
+    # footage added after the pass is never offered to a re-run
+    "no-new-clips-offer": (
+        "app/static/firstpass.js",
+        "const show = list.length && !FP.open",
+        "const show = false && !FP.open",
+        "open,firstpass,run,reject,accept,drop,rerun-panel", "rerun-panel",
+        "offer under the first-pass control"),
+}
+
+
+def _session(snap: Path, out: Path, steps: str, fixture: Path | None = None,
+             timeout: int = 420) -> tuple[int, dict, str]:
+    cmd = [sys.executable, str(JOURNEY), str(snap), str(out), f"--steps={steps}"]
+    if fixture is not None:
+        cmd.append(f"--fixture-from={fixture}")
+    r = subprocess.run(cmd, cwd=snap, capture_output=True, text=True, timeout=timeout,
+                       env={**os.environ})
+    try:
+        rec = json.loads((out / "journey.json").read_text())
+    except (OSError, ValueError):
+        rec = {}
+    return r.returncode, rec, r.stdout + r.stderr
+
+
+@pytest.fixture(scope="module")
+def unchanged(tmp_path_factory):
+    """The board's dirs copied once, and a green control session on them (it encodes the
+    footage the mutants' sessions copy)."""
+    pytest.importorskip("playwright")
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("no ffmpeg")
+    base = tmp_path_factory.mktemp("journey-mutants")
+    snap = base / "snap"
+    for d in SNAP_DIRS:
+        if (ROOT / d).is_dir():
+            shutil.copytree(ROOT / d, snap / d, ignore=shutil.ignore_patterns(
+                "__pycache__", ".pytest_cache", "*.pyc"))
+    rc, rec, said = _session(snap, base / "control", CONTROL)
+    assert rc == 0 and rec.get("ok"), f"the unchanged copy is not green on {CONTROL}: " \
+        f"{rec.get('line')}\n{said[-2000:]}"
+    return snap, base / "control" / "fixture"
+
+
+@pytest.mark.parametrize("name", list(MUTANTS))
+def test_a_new_step_goes_red_at_itself_when_its_feature_is_broken(name, unchanged, tmp_path):
+    path, text, becomes, steps, step, why = MUTANTS[name]
+    snap0, fixture = unchanged
+    snap = tmp_path / "snap"
+    shutil.copytree(snap0, snap, symlinks=True)
+    src = (snap / path).read_text(encoding="utf-8")
+    assert src.count(text) == 1, f"mutant {name}: its text is gone from {path} (or not unique) — " \
+                                 "update MUTANTS in test_journey_tool.py with the code it breaks now"
+    (snap / path).write_text(src.replace(text, becomes), encoding="utf-8")
+    rc, rec, said = _session(snap, tmp_path / "out", steps, fixture)
+    order = steps.split(",")
+    k = order.index(step) + 1
+    line = rec.get("line", "")
+    assert rc == 1 and line.startswith(f"journey ✗ step {k} {step}: "), \
+        f"mutant {name} is not red at step {k} {step}: {line or said[-1500:]}"
+    ran = rec["steps"]
+    assert [s["name"] for s in ran] == order[:k] and all(s["ok"] for s in ran[:-1]), \
+        [(s["name"], s["ok"], s["why"]) for s in ran]
+    assert why in ran[-1]["why"], f"mutant {name}: step {step} is red for another reason: {ran[-1]['why']}"
