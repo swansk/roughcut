@@ -1956,9 +1956,16 @@ function programMix(t, play, proposal) {
     const inA = xa != null && t >= C - c.audio && t < C;
     const outA = xa != null && t >= C && t < C + c.audio;
     const ga = xa != null ? txGains(c.akind, xa) : [1, 1];
+    // Playing, the cut into the incoming shot comes a moment before the edit (boundary()
+    // cuts at the out less 0.04 s): from then the live buffer IS the incoming picture, so
+    // no follower stands in for it (the handed buffer would give the role back and the idle
+    // #pvTxIn restart with a seek, at the cut), and the outgoing follower carries the other
+    // half at 1 - x up to the edit, as after it: the mix the render makes.
+    const liveIdx = player.playing && segs[player.idx] ? player.idx : (tl.shotAt(t) || {}).index;
+    const liveIsIn = liveIdx === k + 1 && t < C;
     // the incoming follower: from TX_PRE before its half to the edit; before its media
     // starts it holds its first frame (the render repeats it)
-    if (t < C) {
+    if (t < C && !liveIsIn) {
       const ct = b.in + (t - C) * speedOf(b);
       xin = { seg: b, clipT: Math.max(0, ct), hold: ct < 0,
               w: inV ? xv : 0, lvl: inA ? ga[1] : 0 };
@@ -1970,12 +1977,11 @@ function programMix(t, play, proposal) {
       const end = tx.out && Number.isFinite(tx.out.duration) && tx.out.dataset.src === proxyOf(a)
         ? tx.out.duration - 0.05 : Infinity;
       xout = { seg: a, clipT: Math.min(ct, end), hold: ct > end,
-               w: outV ? 1 - xv : 0, lvl: outA ? ga[0] : 0 };
+               w: outV || (liveIsIn && inV) ? 1 - xv : 0, lvl: outA || (liveIsIn && inA) ? ga[0] : 0 };
     }
     // the live buffer's share of a crossfade: the outgoing curve, then the incoming
-    const liveIdx = player.playing && segs[player.idx] ? player.idx : (tl.shotAt(t) || {}).index;
     if (inA && liveIdx === k) liveLvl = ga[0];
-    else if (outA && liveIdx === k + 1) liveLvl = ga[1];
+    else if ((outA || (liveIsIn && inA)) && liveIdx === k + 1) liveLvl = ga[1];
   }
   // The incoming picture while playing: the buffer that will play the shot, prerolling from
   // its park at the handle's start (prerollAt / preroll), when it is there; else the
@@ -2383,11 +2389,15 @@ function advance() {
   // opening its file, or rolled in a little late keeps the outgoing frame up meanwhile
   // (verdict 5: the black "buffering…" at a 12-frame shot was a buffer swapped in empty).
   const eps = (0.5 / 30) * speedOf(nseg);
+  // A dissolve's incoming buffer plays on the film clock (programMix's hand), so at the cut
+  // (boundary()'s 0.04 s before the edit) it is that far short of its in-point, showing the
+  // dissolve's own frame of the shot: on screen at once, not a frame or two later.
+  const early = rolled && txLeadIn(nseg) > 0 ? 0.05 * speedOf(nseg) : 0;
   const short = tl.dur(nseg) < SHORT_S;
   // the last few cuts, for the judge and the perf test: prerolled or not, how long held
   const rec = { shot: next, rolled, parked, buf: nv.id, held_ms: 0, t: performance.now() };
   player.cutLog = [...(player.cutLog || []).slice(-7), rec];
-  showWhenReady(g, (b) => b.readyState >= 2 && !b.seeking && b.currentTime >= nseg.in - eps, () => {
+  showWhenReady(g, (b) => b.readyState >= 2 && !b.seeking && b.currentTime >= nseg.in - eps - early, () => {
     rec.held_ms = Math.round(performance.now() - rec.t);
     // Off screen now, the buffers take the shots after this one (armUpcoming): after a
     // short shot at once (normally the shot after it was parked during the shot before,
