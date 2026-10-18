@@ -2253,10 +2253,14 @@
     paintRuler(need);
   }
 
+  /* `opts.quiet` (wave 13 CANVAS2): the playhead's time and its event, without moving the
+   * drawn playhead or its readout (the monitor's frames between two painted ones while it
+   * plays, app.js paintPos); listeners that only paint read `ev.quiet` and skip too. */
   function setPlayhead(t, opts = {}) {
     t = headAt(t);
     state.playhead = t;
     if (!el.head) return;
+    if (opts.quiet) { emit('playhead', { t, quiet: true }); return; }
     if (t > total()) reachHead(t);
     positionHead();
     if (opts.reveal !== false) keepInView(timeToX(t));

@@ -1686,7 +1686,7 @@
     setInterval(onSelect, 500);          // playback moves the anchor without a select event
     if (t && typeof t.on === 'function') {
       t.on('zoom', paintBand);
-      t.on('playhead', () => { paintBand(); updatePlayheadDom(); if (!S.drag) paint(); });
+      t.on('playhead', (ev) => { if (ev && ev.quiet) return; paintBand(); updatePlayheadDom(); if (!S.drag) paint(); });
     }
     setInterval(paintBand, 700);         // the dock's tool changes without an event
     mountOverlay();

@@ -1777,6 +1777,8 @@ function pauseCut() {
   player.vids.forEach((v) => v.pause());
   if (bed.el) bed.el.pause();
   player.playing = false;
+  // stopped on a frame whose playhead was not drawn (paintPos `quiet`): drawn where it is
+  if (posQuiet && window.tl) { posQuiet = false; tl.setPlayhead(tl.state.playhead, { reveal: false }); }
   freshen(liveVideo());               // parked: a better kind of its media can go in now
   cancelAnimationFrame(player.raf);
   progPause();
@@ -2555,6 +2557,7 @@ function advance() {
   const next = player.idx + 1;
   if (player.single || next >= segs.length) {
     player.playing = false;
+    if (posQuiet && window.tl) { posQuiet = false; tl.setPlayhead(tl.state.playhead, { reveal: false }); }
     if (bed.el) bed.el.pause();
     cancelAnimationFrame(player.raf);
     progPause();
@@ -2780,19 +2783,32 @@ function paintPos(filmT, clipT, seg) {
   // sequence at 29.97) repainted the same frame's playhead and readout and re-ran the
   // Program's followers — half the board's main-thread rendering while a graded shot
   // played, the thread that also feeds the grade its frames (wave 11 CANVAS, traced).
+  // Wave 13 CANVAS2: while playing, the Timeline's playhead, its readout and Effect
+  // Controls' lane playheads are drawn on every `every`-th sequence frame (~15 Hz);
+  // the frames between move the playhead's time and run its listeners (the Program's
+  // followers, a dissolve's weights) without drawing it (`quiet`). On a software-composited
+  // display (the headless box) every drawn playhead step made the compositor redraw the
+  // bounding box of the Program and the playhead: 1133x825 px of a 1440 board, 1517x1005
+  // of a 1920, on every sequence frame; traced, half the display compositor's time while a
+  // graded shot played, the thread whose late BeginFrames drop the Program's video frames.
+  let quiet = false;
   if (player.playing && window.tl && typeof tl.gridRate === 'function') {
-    const f = Math.floor(filmT * tl.gridRate() + 1e-6);
+    const rate = tl.gridRate();
+    const f = Math.floor(filmT * rate + 1e-6);
     if (f === posFrame) return;
     posFrame = f;
+    const every = Math.max(1, Math.round(rate / 15));
+    quiet = f % every !== 0;
   } else posFrame = -1;
   // While playing, the timeline is asked to keep the playhead in view four times a
   // second rather than every frame: its check reads the view's width, and after this
   // frame's writes that read was a forced layout of the whole board on every tick
   // (verdict 4 punch 5). The readout is written after the playhead, once, if it changed.
   const now = performance.now();
-  const reveal = !player.playing || now - posReveal > 250;
+  const reveal = !quiet && (!player.playing || now - posReveal > 250);
   if (reveal) posReveal = now;
-  tl.setPlayhead(filmT, { reveal });
+  tl.setPlayhead(filmT, { reveal, quiet });
+  posQuiet = quiet;
   const s = tcOf(filmT), el = $('#pos');
   if (el.textContent !== s) {
     // the text node's data in place, not a new node (a child-list change; timeline.js setText)
@@ -2802,6 +2818,7 @@ function paintPos(filmT, clipT, seg) {
 }
 let posReveal = 0;
 let posFrame = -1;
+let posQuiet = false;               // the drawn playhead is a frame behind its time (paintPos)
 
 /* The monitors read Premiere's HH:MM:SS:FF, the timeline's own timecode (tl.tc). */
 function tcOf(t) { return window.tl && typeof tl.tc === 'function' ? tl.tc(t) : fmt(t); }
