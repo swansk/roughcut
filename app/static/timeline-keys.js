@@ -611,7 +611,9 @@
 
   function clearInOut() {
     if (tl.state.seqIn == null && tl.state.seqOut == null) return true;
-    tl.setSeqIn(null); tl.setSeqOut(null);
+    // one undo step for one key (Premiere's Ctrl+Shift+X), not one per mark
+    if (typeof tl.batch === 'function') tl.batch('clear in and out', () => { tl.setSeqIn(null); tl.setSeqOut(null); });
+    else { tl.setSeqIn(null); tl.setSeqOut(null); }
     say('sequence in and out cleared');
     return true;
   }

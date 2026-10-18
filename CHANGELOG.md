@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **Ctrl+Shift+X (Clear In and Out) is one undo step** (timeline-keys.js `clearInOut` in `tl.batch`; AIGLUE's note: one key made two entries). Test: test_timeline_keys::test_clearing_in_and_out_is_one_undo_step.
 - **Merge: wave 12 tail lane JOURNEY3** (tools/journey.py 24 steps: import, drop, ask with a per-op review + one undo, the AI menu, the new-clips offer; six mutation checks in test_journey_tool.py). The re-run step hovers the first-pass control before reading the offer, which now tucks away after 8 s.
 - **Merge: wave 12 tail lane AIGLUE** (the AI prompt and the AI edit review tested together through the real server; assist price/cancel in the prompt; markers and In/Out on the undo stack; `tl.batch`; undone Designed Effects edits take the effect back; AI hover cards and tour anchors; the prompt's line after Accept / Reject).
 - **Merge: wave 11 lanes BLACK and CANVAS** (via the trial branch `redesign-w11-trial`; quiet-box A/B in judge/LOOP.md): the Program never black without a word while a preview builds, and the dissolve's followers and handed buffer fixed (Killington: no live or follower hole > 67 ms in 10 dissolve plays at load 5-7). Loop state records the A/B numbers and the wave-13 queue (judge/LOOP.md).

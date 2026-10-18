@@ -604,3 +604,20 @@ def test_keys_are_ignored_while_typing(page):
     page.locator("#inspector .why").focus()
     page.keyboard.press("c")
     assert page.evaluate("segs.length") == 2
+
+
+def test_clearing_in_and_out_is_one_undo_step(page, project):
+    """Ctrl+Shift+X clears the sequence In and Out with one key, so one Ctrl+Z puts both
+    back (Premiere's Clear In and Out; AIGLUE's note: it was two entries)."""
+    page.evaluate("localStorage.clear(); tl.clearHistory()")
+    page.evaluate("tl.seek(0.5)")
+    page.keyboard.press("i")
+    page.evaluate("tl.seek(3.0)")
+    page.keyboard.press("o")
+    both = page.evaluate("[tl.state.seqIn, tl.state.seqOut]")
+    assert both[0] == pytest.approx(0.5, abs=0.03) and both[1] == pytest.approx(3.0, abs=0.03)
+    page.keyboard.press("Control+Shift+x")
+    assert page.evaluate("[tl.state.seqIn, tl.state.seqOut]") == [None, None]
+    assert (page.locator("#undo").get_attribute("title") or "").startswith("undo: clear in and out")
+    page.keyboard.press("Control+z")
+    assert page.evaluate("[tl.state.seqIn, tl.state.seqOut]") == both
