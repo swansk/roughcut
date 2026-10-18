@@ -309,10 +309,16 @@
         paint(true);
         await pollJobs();
       } else if (name === 'accept') {
+        const edits = Array.isArray(e.edits) && e.edits.length;
+        // an edit to the cut lands on the server's copy of it: anything the autosave still
+        // holds goes first, so the server applies the edit to the cut on screen and the
+        // board's undo entry (refreshCut) starts from exactly that cut (wave 12, AIOPS)
+        if (edits && typeof window.roughcutFlush === 'function') await window.roughcutFlush();
         await api('POST', '/api/fx/accept', { id: e.id });
         if (window.tlLanes && typeof tlLanes.clearGhost === 'function') tlLanes.clearGhost();
-        if (Array.isArray(e.edits) && e.edits.length && !(await refreshCut(e))) return;
-        say(`${e.name}: accepted — in the cut`);
+        if (edits && !(await refreshCut(e))) return;
+        say(edits ? `${e.name}: accepted — in the cut · ${undoWord()} undoes the edit`
+          : `${e.name}: accepted — in the cut`);
         await refresh();
       } else if (name === 'discard') {
         await api('POST', '/api/fx/discard', { id: e.id });
@@ -340,10 +346,14 @@
   /* The cut changed under the board (an edit accepted): the board repaints it in place
    * — timeline, shot strip and bin, keeping the selection and the playhead — through
    * the shell's window.roughcutRefresh (INTAKE M16 I16.5, contract C5). A whole-page
-   * reload is the fallback where there is none, or it fails. */
+   * reload is the fallback where there is none, or it fails. The read-back is ONE undo
+   * entry named after the effect (redesign wave 12, AIOPS; REDESIGN-GOAL dimension 15:
+   * "one accept is one undo step"): Ctrl+Z puts the cut back as it was before Accept,
+   * and Ctrl+Shift+Z brings the edit back. */
+  const undoWord = () => (/Mac|iPhone|iPad/.test(navigator.platform || '') ? '⌘Z' : 'Ctrl+Z');
   async function refreshCut(e) {
     if (typeof window.roughcutRefresh === 'function') {
-      try { await window.roughcutRefresh(); return true; } catch (err) { /* reload below */ }
+      try { await window.roughcutRefresh({ undo: `effect: ${e.name}` }); return true; } catch (err) { /* reload below */ }
     }
     if (typeof location === 'undefined') return true;
     say(`${e.name}: the cut changed — reloading`);

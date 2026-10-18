@@ -677,12 +677,15 @@ def test_accepting_an_edit_changes_the_cut_in_place(page):
                            timeout=15000)
 
 
-def test_undo_after_an_in_place_accept_cannot_take_the_edit_back(page, project):
-    """INTAKE M16, contract C5. The in-place Accept re-reads the cut through the board's
-    real roughcutRefresh. The timeline's undo stack still held snapshots of the cut from
-    before it, so ⌘Z of a trim made earlier saved that old cut over the accepted slow
-    motion — and the effect stayed 'applied', so it never came back to be accepted again.
-    The reload this replaced emptied the stack; the refresh empties it now."""
+def test_undo_after_an_in_place_accept_takes_back_exactly_the_accept(page, project):
+    """INTAKE M16, contract C5, and redesign wave 12 (AIOPS; REDESIGN-GOAL dimension 15:
+    "one accept is one undo step"). The in-place Accept re-reads the cut through the
+    board's real roughcutRefresh. It used to empty the undo stack, because an older entry
+    restored over the server's change saved that old cut over the accepted slow motion.
+    Now the read-back is itself ONE entry, named after the effect, whose `before` is the
+    cut the server's edit started from: the first ⌘Z takes back the slow motion and
+    nothing else (the trim made before it stays), the second takes back the trim, and
+    ⌘⇧Z brings the slow motion back — each entry's cut is the one before it."""
     import server
 
     def disk():
@@ -719,14 +722,19 @@ def test_undo_after_an_in_place_accept_cannot_take_the_edit_back(page, project):
     page.wait_for_function("segs.some(s => s.speed === 0.5)")
     assert page.evaluate("window.__stay") == 1                # in place, not reloaded
     wait_disk(lambda d: any(s.get("speed") == 0.5 for s in d))
-    assert page.locator("#undo").is_disabled()
-    page.locator("body").click(position={"x": 5, "y": 5})
-    page.keyboard.press("Control+z")
-    page.wait_for_function("document.querySelector('#toast').textContent.includes('nothing to undo')")
-    time.sleep(1.5)                                           # past the 700 ms autosave
-    d = disk()
+    assert (page.locator("#undo").get_attribute("title") or "").startswith("undo: effect: slow motion")
+    page.evaluate("document.activeElement && document.activeElement.blur()")
+    page.keyboard.press("Control+z")                          # the accept, and only it
+    d = wait_disk(lambda d: not any(s.get("speed") for s in d))
+    assert [(s["clip"], s["in"], s["out"]) for s in d] == [("CLIP_A.MP4", 1.5, 3.0), ("CLIP_B.MP4", 0.0, 2.0)]
+    page.keyboard.press("Control+z")                          # then the trim
+    d = wait_disk(lambda d: d[0]["in"] == 1.0)
+    assert len(d) == 2
+    page.keyboard.press("Control+Shift+z")
+    page.keyboard.press("Control+Shift+z")                    # the slow motion is back, the trim too
+    d = wait_disk(lambda d: any(s.get("speed") == 0.5 for s in d))
     assert [s.get("speed") for s in d] == [None, None, 0.5, None], d
-    assert d[0]["in"] == 1.5                                  # the trim stays too
+    assert d[0]["in"] == 1.5
 
 
 def test_a_proposal_waiting_when_the_board_opens_is_checked_by_itself(page):
