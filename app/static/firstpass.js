@@ -185,6 +185,7 @@
     const n = Number(s.new_count) || 0;
     return n > 0 ? Array.from({ length: n }, (_, i) => `#${i + 1}`) : [];
   }
+  const OFFER_SHOW_MS = 8000;
   function offerKey(list) { return list.slice().sort().join('|'); }
   function dismissed(list) {
     try { return localStorage.getItem(OFFER_KEY) === offerKey(list); } catch (_) { return false; }
@@ -224,6 +225,17 @@
     if (span.textContent !== line) span.textContent = line;
     span.title = named.length ? named.join('\n') : '';
     box.hidden = false;
+    // The offer floats over the Program monitor's top, so it says its line for OFFER_SHOW_MS
+    // and then tucks away: the button's dot stays, and hovering or focusing the first-pass
+    // control brings the offer back until it is answered (JOURNEY3: it covered the Program
+    // through a whole AI review).
+    const key = offerKey(list);
+    if (box.dataset.key !== key) {
+      box.dataset.key = key;
+      box.classList.remove('tucked');
+      clearTimeout(FP.offerTimer);
+      FP.offerTimer = setTimeout(() => box.classList.add('tucked'), OFFER_SHOW_MS);
+    }
   }
 
   /* ------------------------------------------------------------ the panel */

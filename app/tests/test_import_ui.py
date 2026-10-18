@@ -320,6 +320,18 @@ def test_after_a_pass_imported_clips_are_offered_to_the_rerun(page, live, cards)
     s = httpx.get(base + "/api/firstpass", timeout=20).json()
     assert s["new_clips"] == ["CLIP_A-card2.MP4", "RUN_2.MP4"]
     assert "2 new clips since the last run" in s["stale"]
+    # it says its line, then tucks away so it never sits over the Program monitor; the
+    # button's dot stays and a hover on the first-pass control brings the offer back
+    offer.wait_for(state="hidden", timeout=12000)
+    assert pg.locator("#firstpass .fp-dot").is_visible()
+    pg.locator('[data-testid="firstpass-button"]').hover()
+    offer.wait_for(state="visible", timeout=2000)
+    # a pointer moving down from the button onto the offer, in steps, keeps it open
+    b, o = (pg.locator(sel).bounding_box() for sel in
+            ('[data-testid="firstpass-button"]', '[data-testid="firstpass-new-clips-go"]'))
+    pg.mouse.move(b["x"] + 20, b["y"] + b["height"] / 2)
+    pg.mouse.move(o["x"] + o["width"] / 2, o["y"] + o["height"] / 2, steps=12)
+    assert offer.is_visible()
 
     # Re-run first pass… opens the panel: what a re-run keeps, the new clips, its price
     pg.locator('[data-testid="firstpass-new-clips-go"]').click()

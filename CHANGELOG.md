@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **The "N new clips" offer tucks away after 8 s** (firstpass.js, import.css; found by JOURNEY3: it sat over the Program monitor until answered, through a whole AI review). The first-pass button keeps its dot; hovering or focusing the control brings the offer back, and a pointer moving down onto it keeps it open.
 - **Merge: wave 12 tail lane SMALL3** (camera timecode + audio facts in the bin, `window.rcBoard`, the switcher's move without its panel, Next opens Import on an empty bin, one clip refresh per import).
 - **Loop state: all five wave-12 lanes merged; tail lanes SMALL3, AIGLUE, JOURNEY3 running** (judge/LOOP.md).
 - **One read of the bin per landed import (redesign wave 12 tail, lane SMALL3; lane IMPORT's note).** import.js `landed()` fired `rc:clips-changed` and also called `dock.project.reload()`; the Project panel already re-reads on the event, so the direct reload is gone: one `/api/clips` per landing instead of two. Test: `test_import_ui.py::test_a_file_dropped_on_the_project_panel_is_uploaded_with_progress` counts the `/api/clips` reads made in the landing's task (1; 2 with the old call, measured).

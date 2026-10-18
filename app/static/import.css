@@ -164,6 +164,12 @@
   box-shadow: 0 10px 28px rgba(0, 0, 0, .55);
 }
 #firstpass .fp-offer[hidden] { display: none; }
+#firstpass .fp-offer.tucked { display: none; }
+/* the 9 px between the button and the offer stays "inside" the control, so a pointer moving
+   down onto Re-run first pass… keeps it open */
+#firstpass .fp-offer::after { content: ""; position: absolute; left: 0; right: 0; top: -10px; height: 10px; }
+#firstpass:hover .fp-offer.tucked:not([hidden]),
+#firstpass:focus-within .fp-offer.tucked:not([hidden]) { display: flex; }
 #firstpass .fp-offer::before {
   content: ""; position: absolute; top: -6px; left: 22px; width: 10px; height: 10px;
   background: var(--card-hi, #313135); border-left: 1px solid var(--accent, #4a9df8);
