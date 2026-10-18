@@ -49,6 +49,22 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-18 ~19:00 EDT: **W11 BLACK + CANVAS merged** `bf6ba36` (trial branch `redesign-w11-trial` @ 429f404: BLACK onto
+  14e559d with IMPORT's `clip_path` for its two footage paths, then CANVAS c6c81d1). Quiet-box A/B (lane W11FINISH,
+  logs in ~/roughcut-loop/lane-{black,canvas}/q1018/): BLACK `test_latency_under_load` 5/5 both arms at load 4-6, 3/3 vs
+  base 1/3 under 12 burners: the pause-time failures were the box. Killington: "preparing preview…" 6-56 ms after a seek
+  on all 20 building shots, never plain black; NOT met: the poster lands 0.7-1.3 s (made from the 4K original each
+  time). CANVAS: dissolve live/follower holes > 67 ms 0/10 (base 1/40 and 35/40) at load 5-7; graded canvas at 1440
+  already within the bar on base; the lane's stricter canvas checks (1920 canvas in test_latency_under_load, graded
+  dissolve canvas in test_tx_playback) fail on base too at load 6-12, so expect perf AMBER/RED on a busy box. On the
+  merge: test_latency_under_load failed once at load ~10 (lanes running), passed alone. Also merged: SMALL3 `9a9d511`,
+  lead fixes from JOURNEY3's findings (`684b778` new-clips offer tucks after 8 s instead of covering the Program;
+  `9c77488` Selects learns imported clips). QUIET lifted 18:50. Running: AIGLUE (+ JOURNEY3's stale "N changes ready"
+  line sent to it). Waiting to merge: JOURNEY3 `479c712` (24 steps, 73 s; merge after AIGLUE, re-check its MUTANTS text
+  matches). Queued for wave 13: poster within 300 ms on a fresh open (cache the clip's poster or make it from the
+  preview); a missing generated clip says "preparing preview…" forever and Play from mid-shot jumps to its start; the
+  1920 graded canvas under load (frame delivery off the main thread is lane-sized); gate.py's docstring describes the
+  old 20-step journey.
 - 2026-10-18 ~17:30 EDT: **all five wave-12 lanes merged**: IMPORT `bbd01b5` (Import / Ctrl+I + Media Browser over the board's
   machine, referenced in place; upload + OS drop streamed under --work/media/<bin>/uploads; `sources.json` persists; one
   `clip_path` resolver for ~25 call sites + a symlink view folder for the folder-taking tools; the "N new clips" offer),
