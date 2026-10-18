@@ -49,6 +49,17 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-18 17:55 (box clock; the two entries below stamped ~17:30 and ~19:00 were the lead's mis-reads of the time: they
+  were ~16:00 and ~16:15): **tail merged** AIGLUE `0b94a29`, JOURNEY3 `360efbe` (journey 24 steps), lead `ba49465`
+  (Ctrl+Shift+X one undo). **Lead full gate on `ba49465`: RED** (2193 s): suite 1589 passed, 7 broken = 5
+  test_preview_orientation (stale: expected `/media/proxy` to hold 20 s, BLACK now 503 + retry-after; fixed in
+  `a426586`, 17 passed), test_tx_playback ungraded dissolve (live 83 ms, load-noisy), and the perf line: test_latency_under_load
+  FAILED at load 8.0 / 8.6, live 66.7 / 50.1 ms but the graded canvas 79.5 ms (1440) / 87.2 ms (1920) = RED at <= 2x cores.
+  screens, journey (24 steps, 53 s), boot (0.65 s), hygiene green. **Deviation from Cadence step 3 (judge only on green):
+  judge 9 launched on `a426586` with the perf line known RED**, because wave 12 is the biggest change since verdict 8 and
+  its K3 feedback steers wave 13; the RED is a blocker the judge will see. Lane CANVAS2 (wave 13, `w13-canvas2`) works the
+  canvas gap + dissolve follower + poster-within-300 ms; it holds perf runs while `~/roughcut-loop/QUIET` exists (a
+  watcher deletes it when the judge's gate summary lands).
 - 2026-10-18 ~19:00 EDT: **W11 BLACK + CANVAS merged** `bf6ba36` (trial branch `redesign-w11-trial` @ 429f404: BLACK onto
   14e559d with IMPORT's `clip_path` for its two footage paths, then CANVAS c6c81d1). Quiet-box A/B (lane W11FINISH,
   logs in ~/roughcut-loop/lane-{black,canvas}/q1018/): BLACK `test_latency_under_load` 5/5 both arms at load 4-6, 3/3 vs
