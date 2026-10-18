@@ -235,7 +235,7 @@ def measure_dissolve(page, k: int = 0) -> dict:
         frames = [f["t"] for f in fl if f["v"] in ids and a - 40 <= f["t"] <= b]
         tx_g[vid] = _gaps([a] + frames + [b]) if frames else [b - a]
         # from its start (TX_PRE / TX_PRE_OUT before its half) to its end
-        lead = 250 if side == "tin" else 200
+        lead = 250 if side == "tin" else 450
         tx_seeks += [x for x in seeks if x["v"] in ids and a - lead <= x["t"] <= b]
         # the follower when its half starts: running, not seeking, frames already presented
         first = on[0][side]

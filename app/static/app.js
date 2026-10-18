@@ -1799,9 +1799,14 @@ function programSync(filmT) {
 // outgoing one plays the same frames as the live buffer until the edit, so it starts
 // later. Measured on Killington's dissolve at load 16-19, three runs each: 0.35 / 0.35
 // held 67-100 ms (live and followers, the canvas up to 253), 0.25 / 0.2 held <= 67 (the
-// canvas <= 143).
+// canvas <= 143). Since the incoming half is the handed buffer (one decoder fewer), the
+// outgoing one starts earlier: at 0.2 its play() from the park began ~180 ms before the
+// edit, its first frames came at the edit and then held 90-170 ms while it caught up
+// (Killington, 1440 + 1920, load 5-7: 8 of 10 plays over 67 ms); at 0.45, 33-50 ms in
+// 10 of 10, the canvas through the dissolve 51-73 ms (was 53-103). Under 8 burners (load
+// 13-16) both fail alike (pvTxOut 50-138 ms, the canvas 114-214).
 const TX_PRE = 0.25;
-const TX_PRE_OUT = 0.2;
+const TX_PRE_OUT = 0.45;
 
 /* A follower is never seeked while it plays (verdict 7 punch 4). progFollow's rule for V2
  * (start with `currentTime = t; play()`, re-seek past 0.08 s of drift) was measured on a
