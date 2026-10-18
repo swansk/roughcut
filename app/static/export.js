@@ -190,7 +190,9 @@
     phase = 'settings';
     dlg.dataset.phase = 'settings';
     const n = sequence().length;
-    dlg.querySelector('#exSeq').textContent = `Sequence · ${cutName()} · ${n} shot${n === 1 ? '' : 's'}`;
+    const seqEl = dlg.querySelector('#exSeq');
+    seqEl.textContent = `Sequence · ${cutName()} · ${n} shot${n === 1 ? '' : 's'}`;
+    seqEl.title = seqEl.textContent;
     const presets = info.presets.map((p) =>
       `<option value="${esc(p.key)}">${esc(p.label)}</option>`).join('');
     const folders = info.folders.map((f) => `<option value="${esc(f)}"></option>`).join('');
@@ -267,8 +269,9 @@
     const secs = exportLength();
     const vMbps = videoMbps(p, secs);
     const mb = secs * (vMbps + p.audio_kbps / 1000) / 8;
-    // the sequence's rate, constant: every preset renders at it
-    const rate = p.fps ? `${Number(p.fps).toFixed(Number.isInteger(Number(p.fps)) ? 0 : 3)} fps` : '';
+    // the sequence's rate, constant: every preset renders at it — as Premiere writes it
+    // (59.94, not 59.940), on a line of its own under the frame (verdict 9, punch 3)
+    const rate = p.fps ? `${Number(p.fps).toFixed(3).replace(/\.?0+$/, '')} fps` : '';
     const measuring = p.source === 'typical' && p.sample_state === 'running';
     const how = p.source === 'measured'
       ? `measured from this bin's last ${p.measured === 1 ? 'file' : `${p.measured} files`} with this preset`
@@ -278,8 +281,8 @@
           : 'from the preset\'s typical bitrate; it learns from the first file you export with it';
     dlg.querySelector('#exSummary').innerHTML = `
       <div><span>Duration</span><b id="exDur">${esc(tc(secs))}</b></div>
-      <div><span>Frame</span><b id="exFrame">${p.width}×${p.height}${rate ? ` · ${esc(rate)}` : ''}</b></div>
-      <div><span>Bitrate</span><b>≈ ${vMbps.toFixed(vMbps < 10 ? 1 : 0)} Mbps</b></div>
+      <div><span>Frame</span><b id="exFrame">${p.width}×${p.height}${rate ? `<i class="ex-sub">${esc(rate)}</i>` : ''}</b></div>
+      <div><span>Bitrate</span><b id="exBitrateShown">≈ ${vMbps.toFixed(vMbps < 10 ? 1 : 0)} Mbps<i class="ex-sub">preset quality</i></b></div>
       <div title="${esc(how)}"><span>Estimated size</span><b id="exSize" data-mb="${mb.toFixed(3)}"
         data-source="${esc(measuring ? 'measuring' : p.source || 'typical')}">≈ ${esc(human(mb))}${measuring ? ' <i class="ex-measuring">measuring…</i>' : ''}</b></div>`;
     // Export never guesses (verdict 5, punch 6: "≈ 773 MB" said, 306 MB written): while

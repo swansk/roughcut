@@ -172,8 +172,8 @@ def test_ctrl_m_opens_the_export_dialog_with_name_folder_duration_and_size(page,
     mb = size_estimate_mb(page)
     secs = page.evaluate("tl.total()")
     assert abs(mb - secs * (quick["video_mbps"] + quick["audio_kbps"] / 1000) / 8) < 0.05, (mb, secs)
-    # the frame says the rate: the sequence's
-    assert page.inner_text("#exFrame") == "1920×1080 · 24 fps"
+    # the frame says the rate: the sequence's (on a line of its own, verdict 9 punch 3)
+    assert page.inner_text("#exFrame").splitlines() == ["1920×1080", "24 fps"]
     # another preset re-estimates
     page.select_option("[data-testid=export-preset]", "youtube")
     assert page.inner_text("#exSize").splitlines()[0] != size
@@ -456,7 +456,7 @@ def test_match_sequence_exports_at_the_sources_rate_and_frame(page, project):
     page.keyboard.press("Control+m")
     wait_settings(page)
     page.select_option("[data-testid=export-preset]", "match")
-    assert page.inner_text("#exFrame") == f"{src['width']}×{src['height']} · 24 fps"
+    assert page.inner_text("#exFrame").splitlines() == [f"{src['width']}×{src['height']}", "24 fps"]
     path = export(page, "matched", "lane-tests", preset="match")
     got = ffprobe_rates(path)
     assert got["r_frame_rate"] == src["r_frame_rate"] == got["avg_frame_rate"], (got, src)
@@ -526,7 +526,7 @@ def test_an_in_out_export_is_written_at_the_rate_the_dialog_says(page, project, 
     assert page.input_value("#exRange") == "inout"
     page.select_option("[data-testid=export-preset]", "quick")
     frame = page.inner_text("#exFrame")
-    assert frame.endswith("· 24 fps"), frame
+    assert frame.splitlines()[-1] == "24 fps", frame
     path = export(page, "in out rate", "lane-tests", preset="quick")
     rates = ffprobe_rates(path)
     assert rates["r_frame_rate"] == rates["avg_frame_rate"] == "24/1", rates
