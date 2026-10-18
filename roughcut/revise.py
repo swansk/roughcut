@@ -33,6 +33,7 @@ from . import colour as colourmod
 from . import config, edits
 from .boundaries import polish, polish_plan, summarise  # noqa: F401 — polish_plan re-exported
 from .estimate import Estimate, estimate
+from .firstpass import clip_name
 from .inference import complete
 from .progress import milestone
 
@@ -1304,7 +1305,7 @@ def check_notes(plan: dict, current: list[dict]) -> dict:
             if key in seen:
                 continue
             seen.add(key)
-            stem = Path(str(s["clip"])).stem
+            stem = clip_name(s["clip"])          # "Black Video", never gen_black_<hash>
             was = f"{_clock(s['was']['in'])}–{_clock(s['was']['out'])}"
             if s["now"] is None:
                 lines.append(f"Check: shot {s['pos']} ({stem} {was}) is removed by this "

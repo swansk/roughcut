@@ -3394,6 +3394,7 @@ def firstpass_plan(mode: str | None = None, keep=None, *, facts: dict | None = N
     keep_rows.sort(key=lambda r: r["pos"])
     replace_rows = [fpmod._row(s, i, []) | {"words": "may be replaced"}
                     for i, s in enumerate(segments) if s.get("id") not in lock_set]
+    _fp_names(keep_rows + replace_rows)
     originate = not segments or (mode == "run" and not locked)
     cut_usd = float(ask_price("first" if originate else "full")["usd"])
     if not segments:
@@ -3421,6 +3422,18 @@ def firstpass_plan(mode: str | None = None, keep=None, *, facts: dict | None = N
             "produces": "a proposed rough cut you accept, discard or adjust"}
 
 
+def _fp_names(rows: list[dict]) -> list[dict]:
+    """A generated still's row named by the clip it was taken from (its record says
+    which); the other rows already carry `fpmod.clip_name`. In place; returns `rows`."""
+    for r in rows:
+        if str(r.get("clip") or "").startswith("gen_still_"):
+            try:
+                r["name"] = fpmod.clip_name(r["clip"], _generated_spec(r["clip"]))
+            except OSError:
+                pass
+    return rows
+
+
 def firstpass_state() -> dict:
     """The first pass as the UI shows it — see `GET /api/firstpass`."""
     edl = read_edl()
@@ -3433,7 +3446,7 @@ def firstpass_state() -> dict:
     with FIRSTPASS_LOCK:
         live = _fp_live()
         rec = _fp_record()
-    out: dict = {"manual_edits": manual, "last": rec, **config.cost_terms()}
+    out: dict = {"manual_edits": _fp_names(manual), "last": rec, **config.cost_terms()}
     try:
         out["would"] = firstpass_plan(None, None, facts=facts, edl=edl, manual=manual)
     except ValueError as exc:                     # a cut with an id the keep cannot name

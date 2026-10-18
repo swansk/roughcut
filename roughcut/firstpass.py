@@ -287,11 +287,36 @@ def _realias(segs: list[dict], shots: dict) -> dict[str, str]:
     return alias
 
 
+# What a generated clip is called where the editor reads a clip's name (verdict 9, punch
+# 3: the re-run panel listed "gen_black_78a418d8 · added by hand"). Premiere's own names
+# for the same things: Black Video and Color Matte; a still by the clip it was taken
+# from. The file keeps its `gen_<kind>_<key>` name; only the words change.
+GENERATED_NAMES = {"black": "Black Video", "colour": "Color Matte", "color": "Color Matte",
+                   "still": "Still"}
+
+
+def clip_name(clip, spec: dict | None = None) -> str:
+    """A clip as the editor reads it: a footage clip by its name without the extension,
+    a generated one by what it is (`GENERATED_NAMES`; a still with the name of the clip
+    it was taken from, when `spec` — the generated file's record — says which)."""
+    c = str(clip or "")
+    if not c.startswith("gen_"):
+        return _stem(c)
+    kind = (spec or {}).get("kind") or (c.split("_")[1] if c.count("_") >= 2 else "")
+    name = GENERATED_NAMES.get(kind, "Generated clip")
+    src = (spec or {}).get("from_clip")
+    if kind == "still" and src:
+        return f"{_stem(src)} {name}"
+    return name
+
+
 def _row(s: dict, i: int, how: list[str]) -> dict:
     """A shot as the panel lists it. `in` / `out` are the cut's own values, exactly
     (verdict 4: rounding them to hundredths moved kept shots off the frame grid
-    wherever a row was read back as a range); the board rounds for display."""
+    wherever a row was read back as a range); the board rounds for display. `name` is
+    the clip as the editor reads it (`clip_name`)."""
     return {"id": s.get("id"), "pos": i + 1, "clip": s.get("clip"),
+            "name": clip_name(s.get("clip")),
             "in": float(s["in"]), "out": float(s["out"]),
             "how": how, "words": ", ".join(HOW_WORDS[h] for h in how)}
 
@@ -453,7 +478,7 @@ def rejected_lines(left: list[dict]) -> list[str]:
     """One line of the notes per rejected range the proposal brought back."""
     lines = []
     for r in left:
-        what = (f"{_stem(r['clip'])} {_clock(r['in'])}–{_clock(r['out'])}")
+        what = (f"{clip_name(r['clip'])} {_clock(r['in'])}–{_clock(r['out'])}")
         if r.get("action") == "flagged":
             lines.append(f"Check: {what} — you rejected this shot before.")
         elif r.get("action") == "kept as it is":
