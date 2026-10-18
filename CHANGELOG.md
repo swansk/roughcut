@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Wave 12 contracts: `rc:clips-changed` and the walk-through's test switch** (judge/WAVE12.md).
 - **Wave 12 scaffold for K3** (judge/WAVE12.md: five lanes, the files each owns, and their contracts): File › Import… (Ctrl+I) and Import from Media Browser…, an AI menu listing every AI action, Help › Learn Roughcut…, the `#aiPrompt` mount, four module stubs (`import`, `actions`, `aiprompt`, `tour`) on `/modules/`, dock.js routes for their commands and a `window.rcExtraKeys` hook for the keys sheet. Screens budget +1 word / +1 control for the AI menu, measured, logged.
 - **Loop resumed (judge/LOOP.md State)** on Karl's 2026-10-18 "Resume roughcut project loop".
 - **K3 as rubric section E, dimensions 13-16** (REDESIGN-GOAL.md, logged in its rubric changes log; judge/JUDGE.md drives them): footage in from anywhere (Import, Ctrl+I, Media Browser, OS drop, mid-session); one always-visible AI prompt with a scope and an AI menu; one action vocabulary so the AI can do every pro-tool edit as a reviewed edit; a first-run teach-through, hovers, empty states, and the bin and the pass's result as Premiere's own objects. PASS now needs all 16 at 8 or more.
