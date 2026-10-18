@@ -1099,8 +1099,6 @@
     if (it.cur) { focusPanel($('#pTimeline')); return; }
     const sw = window.switcher;
     if (!sw || typeof sw.openCut !== 'function') return;
-    // the switcher reports a move in its own panel: mount it (shut) if it never opened
-    if (!document.getElementById('picker') && typeof sw.open === 'function') { sw.open(); sw.close(); }
     await sw.openCut(it.cut);
     if (takeCuts(sw.state && sw.state.cuts)) paintProject();
   }

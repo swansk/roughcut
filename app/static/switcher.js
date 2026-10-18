@@ -391,12 +391,20 @@
 
   /* ------------------------------------------------------------ the moves */
 
+  // The panel dims while a move runs — when it is mounted: a move can start without it
+  // (the Project panel's double-click on a sequence calls openCut on a page whose panel
+  // never opened).
+  function busy(on) {
+    const el = $('#picker');
+    if (el) el.classList.toggle('busy', on);
+  }
+
   // The page's word: write what is unsaved, then re-point. Every move goes through
   // here so no page can forget the flush.
   async function move(fn, after, opts = {}) {
     if (S.busy) return;
     S.busy = true;
-    $('#picker').classList.add('busy');
+    busy(true);
     try {
       if (typeof window.roughcutFlush === 'function') await window.roughcutFlush();
       const r = await fn();
@@ -427,8 +435,7 @@
       say(String(e.message || e), 5000);        // 400 / 404 / 409: the server's word; the panel stays
     } finally {
       S.busy = false;
-      const el = $('#picker');
-      if (el) el.classList.remove('busy');
+      busy(false);
     }
   }
 
@@ -477,7 +484,7 @@
     // A checkpoint: nothing re-points, the list just gains a row.
     if (S.busy) return;
     S.busy = true;
-    $('#picker').classList.add('busy');
+    busy(true);
     try {
       if (typeof window.roughcutFlush === 'function') await window.roughcutFlush();
       const r = await send('/api/cuts/copy', { name, open: false });
@@ -489,7 +496,7 @@
       say(String(e.message || e), 5000);
     } finally {
       S.busy = false;
-      $('#picker').classList.remove('busy');
+      busy(false);
     }
   }
 

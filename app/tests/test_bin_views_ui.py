@@ -441,7 +441,9 @@ def test_the_bins_cuts_are_sequences_and_a_double_click_opens_one(live_server, p
         # the item count is Premiere's: every clip and sequence in the bin
         assert pg.locator("#projCount").inner_text() == "5 items"
         assert seqs.count() == 2
-        # a double-click opens the other one, through the switcher (the board reloads on it)
+        # a double-click opens the other one, through the switcher (the board reloads on
+        # it) — on a page whose switcher panel never opened (it used to throw on #picker)
+        assert pg.locator("#picker").count() == 0
         with pg.expect_navigation(timeout=15000):
             pg.locator(f"#projList tr.seq[data-cut='{alt}']").dblclick()
         pg.wait_for_selector("#projList tr.seq.cur", timeout=15000)
