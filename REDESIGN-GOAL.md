@@ -91,7 +91,8 @@ tools. The bar is a Premiere editor who has never seen Roughcut and never reads 
     footage to the open project without leaving the workspace, restarting anything, or typing a path
     on a command line. New clips show a poster within 5 s of landing on the fixture, carry duration,
     frame rate and size, can be cut at once, and the free part of the index (posters, proxies, sound)
-    starts on its own; a priced step is offered with its cost line, never run unasked (INTAKE). Footage added after a first pass is
+    starts on its own; a priced step is offered with its cost line, never run unasked (the lead's rule, stricter than
+    INTAKE's "index unattended"; verdict 9 ruled it honest). Footage added after a first pass is
     offered to the pass ("3 new clips: add them to the cut?") through the dimension-2 re-run, which
     says what it will keep. Proven by a driven test that imports a second folder mid-session and by
     one that drops a file.
@@ -384,3 +385,8 @@ next judge runs, and the next judge rules it honest or lenient.
   prompt is dimension 14's bar itself, and the sequence row and Import are what Premiere's Project panel
   shows. TEACH measured a zero delta with the tour closed (the tour adds +36 words / +9 controls while open,
   which is why test browsers set its seen flag; the judge's fresh browser does not).
+
+- 2026-10-18 (lead, after verdict 9's ruling 5b): **dimension 13's "a priced step … never run unasked" is the lead's
+  rule, not INTAKE's.** INTAKE decisions 3-4 say the index runs unattended and added footage resumes it; the rule
+  added on 2026-10-18 is stricter on spend than that, and the attribution in the bar now says so. No change to the
+  bar itself (verdict 9 ruled it honest as a rule; the build does not meet it yet: punch 2).

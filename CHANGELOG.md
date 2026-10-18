@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **Redesign verdict 9: FAIL, 13 of 16 at 8-9** (`judge/verdict-9.md` on 7436562; the judge's gate RED on perf, the ungraded dissolve and a journey browser close). Lowest: 6 playback, 9 looks shipped, 13 footage in (the priced look ran unasked on imported clips). K3 "substantially delivered", open for Karl. Dimension 13's spend rule re-attributed to the lead (ruling 5b). Wave 13 lanes in judge/WAVE13.md.
 - **Loop state: the lead's full gate on ba49465 (RED: stale orientation tests, fixed; the graded-canvas perf gap), judge 9 launched on a426586 with the perf RED known, lane CANVAS2 on the gap** (judge/LOOP.md).
 - **The orientation tests ask again on a 503, as the board does** (app/tests/test_preview_orientation.py `_ready`; the full gate on ba49465 had 5 of them BROKEN): since wave 11 BLACK, `/media/proxy` answers 503 + `retry-after` while a preview is made instead of holding the request up to 20 s; the tests expected the hold. The Chromium test waits for the preview before it sets a bare `<video>`'s src. 17 passed.
 - **Ctrl+Shift+X (Clear In and Out) is one undo step** (timeline-keys.js `clearInOut` in `tl.batch`; AIGLUE's note: one key made two entries). Test: test_timeline_keys::test_clearing_in_and_out_is_one_undo_step.
