@@ -292,8 +292,9 @@ def test_timeline_markers_in_out_track_and_overlay(browser, live_server, project
 
 
 def test_a_marker_only_answer_is_one_ctrl_z_too(browser, live_server, project):
-    """Markers are not on the timeline's undo stack; a list that only moves them is taken
-    back by the next Ctrl+Z all the same (one accept, one undo step)."""
+    """A list that only moves markers is one undo entry like any other (markers and In /
+    Out are on the timeline's undo stack since lane AIGLUE): one accept, one Ctrl+Z, and
+    Ctrl+Shift+Z brings it back."""
     b = Board(browser, live_server, project)
     try:
         seeded = b.settle()

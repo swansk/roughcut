@@ -35,9 +35,8 @@
  *
  * One undo entry: the panel's own begin/commit wrap them all; while they run the nested
  * tl.begin / commit / cancel the human paths call are no-ops (the timeline's own mutations
- * already fold into an open entry). Markers and In / Out are not on the timeline's undo
- * stack, so an op list that moves them is taken back with its entry here (a marker-only
- * list by Ctrl+Z itself) — one accept is one undo step either way.
+ * already fold into an open entry). Markers and In / Out are on the timeline's undo stack
+ * (timeline.js's snapshot), so they ride the same entry: one accept is one undo step.
  *
  * The review shows every op before it lands: the cut's ops as the ghost lane under V1
  * (tlLanes.showGhost, the server's simulation of the accepted ops on the board's cut,
@@ -141,19 +140,6 @@
     t.commit = () => true;
     t.cancel = () => true;
     try { return fn(); } finally { Object.assign(t, real); }
-  }
-
-  const marks = () => {
-    const t = TL();
-    const st = t ? t.state : {};
-    return JSON.stringify({ m: t ? t.markers() : [], i: st.seqIn ?? null, o: st.seqOut ?? null });
-  };
-  function putMarks(json) {
-    const t = TL();
-    const v = JSON.parse(json);
-    t.setMarkers(v.m);
-    t.setSeqIn(v.i);
-    t.setSeqOut(v.o);
   }
 
   /* ------------------------------------------------------------ the ops, as a human makes them */
@@ -351,10 +337,7 @@
     },
   };
 
-  /* Marker / In / Out changes taken back with their entry (they are not on the
-   * timeline's stack). `stack` follows the entries the AI made; `lone` is a list that
-   * moved only markers (no entry was made), undone by the next Ctrl+Z here. */
-  const markUndo = { stack: [], redo: [], lone: null, loneRedo: null, mine: false };
+  let applying = false;          // an op list is landing: its own changes are not a recheck
 
   function applyOps(ops, opts = {}) {
     const t = TL();
@@ -366,11 +349,10 @@
     const ctx = makeCtx();
     const refused = [];
     let applied = 0;
-    const before = marks();
     if (!t.begin(label)) {
       return { applied: 0, refused: list.map((_, i) => ({ i, why: 'another edit is in progress — finish it first' })), after: Promise.resolve([]) };
     }
-    markUndo.mine = true;
+    applying = true;
     try {
       nested(() => list.forEach((op, i) => {
         const fn = op && DO[op.op];
@@ -378,13 +360,8 @@
         try { fn(op, ctx); applied += 1; } catch (e) { refused.push({ i, why: e.refused ? e.message : `failed: ${e.message}` }); }
       }));
     } finally {
-      const committed = t.commit();
-      markUndo.mine = false;
-      const after = marks();
-      if (after !== before) {
-        if (committed) { markUndo.stack.push({ label, before, after }); markUndo.redo.length = 0; markUndo.lone = null; }
-        else { markUndo.lone = { label, before, after }; markUndo.loneRedo = null; }
-      }
+      t.commit();
+      applying = false;
     }
     const later = ctx.later.slice();
     const done = (async () => {
@@ -396,52 +373,6 @@
     })();
     return { applied, refused, after: done, label };
   }
-
-  /* The undo stack's events: the entry this module made going back (or forward) takes the
-   * markers with it. */
-  function hookUndo() {
-    const t = TL();
-    if (!t || hookUndo.done) return;
-    hookUndo.done = true;
-    t.on('change', (ev) => {
-      if (markUndo.mine) return;
-      if (ev.kind === 'undo') {
-        const top = markUndo.stack[markUndo.stack.length - 1];
-        if (top && top.label === ev.label && marks() === top.after) { putMarks(top.before); markUndo.redo.push(markUndo.stack.pop()); }
-      } else if (ev.kind === 'redo') {
-        const top = markUndo.redo[markUndo.redo.length - 1];
-        if (top && top.label === ev.label && marks() === top.before) { putMarks(top.after); markUndo.stack.push(markUndo.redo.pop()); }
-      } else if (ev.kind === 'commit') {
-        markUndo.lone = null; markUndo.loneRedo = null;
-      }
-    });
-  }
-  /* A marker-only list made no entry: Ctrl+Z (and ↶) takes it back first. */
-  function loneUndo(redo) {
-    if (!redo && markUndo.lone && marks() === markUndo.lone.after) {
-      putMarks(markUndo.lone.before);
-      markUndo.loneRedo = markUndo.lone; markUndo.lone = null;
-      app.toast(`undone: ${markUndo.loneRedo.label}`);
-      return true;
-    }
-    if (redo && markUndo.loneRedo && marks() === markUndo.loneRedo.before) {
-      putMarks(markUndo.loneRedo.after);
-      markUndo.lone = markUndo.loneRedo; markUndo.loneRedo = null;
-      app.toast(`redone: ${markUndo.lone.label}`);
-      return true;
-    }
-    return false;
-  }
-  window.addEventListener('keydown', (e) => {
-    if (!(e.metaKey || e.ctrlKey) || String(e.key).toLowerCase() !== 'z') return;
-    const tg = e.target;
-    if (tg && (['INPUT', 'TEXTAREA', 'SELECT'].includes(tg.tagName) || tg.isContentEditable)) return;
-    if (loneUndo(e.shiftKey)) { e.preventDefault(); e.stopImmediatePropagation(); }
-  }, true);
-  document.addEventListener('click', (e) => {
-    const b = e.target.closest && e.target.closest('#undo, #redo');
-    if (b && loneUndo(b.id === 'redo')) { e.preventDefault(); e.stopImmediatePropagation(); }
-  }, true);
 
   function labelFor(ops) {
     const names = [...new Set(ops.map((o) => o && o.op).filter(Boolean))].map((n) => n.replace('_', ' '));
@@ -863,7 +794,7 @@
    * are checked again against it. */
   let recheckT = 0;
   function recheckSoon() {
-    if (!R.res || R.res.kind !== 'ops' || markUndo.mine || R.saved) return;
+    if (!R.res || R.res.kind !== 'ops' || applying || R.saved) return;
     clearTimeout(recheckT);
     recheckT = setTimeout(recheck, 250);
   }
@@ -886,7 +817,6 @@
   async function review(result) {
     const res = result && typeof result === 'object' ? result : null;
     if (!res) return false;
-    hookUndo();
     if (R.res) closeQuiet();
     R.res = res;
     R.after = true;
@@ -999,7 +929,6 @@
   function init() {
     const t = TL();
     if (!t || typeof t.on !== 'function') { setTimeout(init, 200); return; }
-    hookUndo();
     t.on('change', () => recheckSoon());
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();

@@ -159,6 +159,8 @@
  *                               shaded on the ruler. Both persist in localStorage per
  *                               project and cut, or come from `P.markers` / `P.in` /
  *                               `P.out` once the server sends them. Emit `markers`.
+ *                               Each is one undo entry outside begin/commit (`add marker`,
+ *                               `mark in`, `clear out` …); undo and redo put them back.
  *
  *   — the tracks: V2 V1 A1 A2 (verdict 2 punch 3; the model is roughcut/tracks.py) —
  *   The cut is still one magnetic list, and each shot is two clips: its picture on V1 and,
@@ -1938,46 +1940,70 @@
     state.seqOut = Number.isFinite(v.out) ? v.out : null;
   }
 
-  function saveMarks() {
+  function storeMarks() {
     try {
       localStorage.setItem(markStoreKey(), JSON.stringify(
         { markers: state.markers, in: state.seqIn, out: state.seqOut }));
     } catch (err) { /* private mode: they last the session */ }
+  }
+
+  const emitMarks = () => emit('markers', { markers: [...state.markers], in: state.seqIn, out: state.seqOut });
+
+  function saveMarks() {
+    storeMarks();
     scheduleSeqSave();
     render();
-    emit('markers', { markers: [...state.markers], in: state.seqIn, out: state.seqOut });
+    emitMarks();
+  }
+
+  /* Markers and the sequence In / Out are on the undo stack (redesign wave 12, AIGLUE): as
+   * in Premiere, M, I and O made by hand are each one ⌘Z, labelled; inside a begin …
+   * commit (an AI answer, a drag) they fold into that one entry. */
+  function marksEdit(label, fn) {
+    const own = begin(label);
+    const out = fn();
+    if (own) commit();
+    return out;
   }
 
   const sameFrame = (a, b) => Math.abs(a - b) < 0.5 / fps();
 
   function addMarker(t) {
-    const m = onFrame(t == null ? state.playhead : Number(t));
-    if (!Number.isFinite(m) || state.markers.some((x) => sameFrame(x, m))) return null;
-    state.markers = [...state.markers, m].sort((a, b) => a - b);
-    saveMarks();
-    return m;
+    return marksEdit('add marker', () => {
+      const m = onFrame(t == null ? state.playhead : Number(t));
+      if (!Number.isFinite(m) || state.markers.some((x) => sameFrame(x, m))) return null;
+      state.markers = [...state.markers, m].sort((a, b) => a - b);
+      saveMarks();
+      return m;
+    });
   }
 
   function removeMarker(t) {
-    const at = t == null ? state.playhead : Number(t);
-    const keep = state.markers.filter((x) => !sameFrame(x, at));
-    if (keep.length === state.markers.length) return false;
-    state.markers = keep;
-    saveMarks();
-    return true;
+    return marksEdit('clear marker', () => {
+      const at = t == null ? state.playhead : Number(t);
+      const keep = state.markers.filter((x) => !sameFrame(x, at));
+      if (keep.length === state.markers.length) return false;
+      state.markers = keep;
+      saveMarks();
+      return true;
+    });
   }
 
   function clearMarkers() {
-    if (!state.markers.length) return false;
-    state.markers = [];
-    saveMarks();
-    return true;
+    return marksEdit('clear markers', () => {
+      if (!state.markers.length) return false;
+      state.markers = [];
+      saveMarks();
+      return true;
+    });
   }
 
   function setMarkers(list) {
-    state.markers = (Array.isArray(list) ? list : []).map((m) => onFrame(Number(m)))
-      .filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
-    saveMarks();
+    marksEdit('markers', () => {
+      state.markers = (Array.isArray(list) ? list : []).map((m) => onFrame(Number(m)))
+        .filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
+      saveMarks();
+    });
   }
 
   function nextMarker(t) {
@@ -1993,19 +2019,23 @@
   }
 
   function setSeqIn(t) {
-    const v = t == null ? null : onFrame(Number(t));
-    state.seqIn = v;
-    if (v != null && state.seqOut != null && state.seqOut <= v) state.seqOut = null;
-    saveMarks();
-    return v;
+    return marksEdit(t == null ? 'clear in' : 'mark in', () => {
+      const v = t == null ? null : onFrame(Number(t));
+      state.seqIn = v;
+      if (v != null && state.seqOut != null && state.seqOut <= v) state.seqOut = null;
+      saveMarks();
+      return v;
+    });
   }
 
   function setSeqOut(t) {
-    const v = t == null ? null : onFrame(Number(t));
-    state.seqOut = v;
-    if (v != null && state.seqIn != null && state.seqIn >= v) state.seqIn = null;
-    saveMarks();
-    return v;
+    return marksEdit(t == null ? 'clear out' : 'mark out', () => {
+      const v = t == null ? null : onFrame(Number(t));
+      state.seqOut = v;
+      if (v != null && state.seqIn != null && state.seqIn >= v) state.seqIn = null;
+      saveMarks();
+      return v;
+    });
   }
 
   /* No layout read here (wave 5, SAVE): it runs right after positionHead's write, so a
@@ -2917,14 +2947,18 @@
    * track headers' toggles do not — as in Premiere, a mute or a lock is not an edit. */
   /* The added tracks' names ride it too (wave 6, KEYS2): Add / Delete Track is one ⌘Z. */
   /* The transitions ride it too (verdict 6, punch 6): Ctrl+D is one ⌘Z. */
+  /* So do the markers and the sequence In / Out (wave 12, AIGLUE): M, I, O are each one ⌘Z,
+   * and an AI answer that adds a marker or sets In / Out is one ⌘Z with its other edits. */
+  const marksOf = () => ({ m: state.markers, i: state.seqIn, o: state.seqOut });
   const snapshot = () => JSON.stringify(hooks && hooks.extra
     ? { segs: segs(), extra: hooks.extra(), overlays: state.overlays, audio: state.audio,
-        xtracks: trackNames().filter(isExtra), transitions: state.transitions }
+        xtracks: trackNames().filter(isExtra), transitions: state.transitions, marks: marksOf() }
     : { segs: segs(), overlays: state.overlays, audio: state.audio, xtracks: trackNames().filter(isExtra),
-        transitions: state.transitions });
+        transitions: state.transitions, marks: marksOf() });
 
   function restore(json) {
     const v = JSON.parse(json);
+    let marksMoved = false;
     if (v && !Array.isArray(v) && Array.isArray(v.segs)) {
       hooks.setSegs(v.segs);
       if (hooks.setExtra && 'extra' in v) hooks.setExtra(v.extra);
@@ -2932,11 +2966,19 @@
       if (Array.isArray(v.audio)) state.audio = v.audio;
       if (Array.isArray(v.xtracks)) setExtraTracks(v.xtracks);
       state.transitions = Array.isArray(v.transitions) ? v.transitions.map((t) => ({ ...t })) : [];
+      if (v.marks && typeof v.marks === 'object') {
+        const was = JSON.stringify(marksOf());
+        state.markers = Array.isArray(v.marks.m) ? v.marks.m.slice() : [];
+        state.seqIn = Number.isFinite(v.marks.i) ? v.marks.i : null;
+        state.seqOut = Number.isFinite(v.marks.o) ? v.marks.o : null;
+        marksMoved = JSON.stringify(marksOf()) !== was;
+      }
     } else {
       hooks.setSegs(v);
     }
     ensureIds();
     scheduleSeqSave();
+    if (marksMoved) { storeMarks(); emitMarks(); }
   }
 
   function begin(label) {
