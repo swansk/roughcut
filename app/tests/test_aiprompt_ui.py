@@ -317,11 +317,11 @@ def test_the_scope_chip_follows_the_selection_then_in_out_then_the_source(live_s
     # one block → its clip; ctrl-click a second → "2 clips"
     blocks = pg.locator("#tl .blk")
     blocks.nth(0).click()
-    pg.wait_for_function(f"document.querySelector('{SCOPE}').innerText.trim() === 'CLIP_A'", timeout=3000)
+    pg.wait_for_function(f"document.querySelector('{SCOPE}').innerText.trim() === 'Shot 1 · CLIP_A'", timeout=3000)
     s = pg.evaluate("rcAI.scope()")
     assert s["kind"] == "selection" and s["ids"] == ["aip0000001"] and "playhead" in s, s
     blocks.nth(1).click(modifiers=["Control"])
-    pg.wait_for_function(f"document.querySelector('{SCOPE}').innerText.trim() === '2 clips'", timeout=3000)
+    pg.wait_for_function(f"document.querySelector('{SCOPE}').innerText.trim() === 'Shots 1–2'", timeout=3000)
     assert pg.evaluate("rcAI.scope().ids") == ["aip0000001", "aip0000002"]
     # nothing selected, an In/Out on the sequence → the range
     pg.evaluate("tl.select([])")
@@ -329,7 +329,11 @@ def test_the_scope_chip_follows_the_selection_then_in_out_then_the_source(live_s
     pg.wait_for_function(f"document.querySelector('{SCOPE}').innerText.trim().startsWith('In/Out')", timeout=3000)
     s = pg.evaluate("rcAI.scope()")
     assert s["kind"] == "range" and abs(s["in"] - 0.5) < 0.05 and abs(s["out"] - 2.5) < 0.05, s
-    assert _scope_text(pg) == "In/Out 2.0s"
+    # the In/Out reads as its timecodes, the ruler's (verdict 9, punch 7), whole
+    want = pg.evaluate("(s) => `In/Out ${tl.tc(s.in)}–${tl.tc(s.out)}`", s)
+    assert want.startswith("In/Out 00:00:00:") and _scope_text(pg) == want, (want, _scope_text(pg))
+    assert pg.evaluate("(s) => { const l = document.querySelector(s + ' .aip-scope-l');"
+                       " return l.scrollWidth <= l.clientWidth; }", SCOPE), "the In/Out chip is cut"
     # no marks, the Source monitor in use → its clip
     pg.evaluate("tl.setSeqIn(null); tl.setSeqOut(null)")
     pg.locator("#projList tr.row", has_text="CLIP_C").click()
@@ -350,7 +354,7 @@ def test_the_scope_chip_follows_the_selection_then_in_out_then_the_source(live_s
 def test_a_click_on_the_chip_changes_the_scope_until_the_selection_moves(live_server, project, browser):
     pg = _open(browser, live_server, project)
     pg.locator("#tl .blk").nth(0).click()
-    pg.wait_for_function(f"document.querySelector('{SCOPE}').innerText.trim() === 'CLIP_A'", timeout=3000)
+    pg.wait_for_function(f"document.querySelector('{SCOPE}').innerText.trim() === 'Shot 1 · CLIP_A'", timeout=3000)
     pg.locator(SCOPE).click()
     menu = pg.locator('[data-testid="ai-scope-menu"]')
     assert menu.is_visible()
@@ -362,7 +366,7 @@ def test_a_click_on_the_chip_changes_the_scope_until_the_selection_moves(live_se
     assert pg.evaluate("document.activeElement.dataset.testid") == "ai-prompt-input"
     # the selection moves: the chip follows it again
     pg.locator("#tl .blk").nth(1).click()
-    pg.wait_for_function(f"document.querySelector('{SCOPE}').innerText.trim() === 'CLIP_B'", timeout=3000)
+    pg.wait_for_function(f"document.querySelector('{SCOPE}').innerText.trim() === 'Shot 2 · CLIP_B'", timeout=3000)
     _close(pg)
 
 
@@ -558,7 +562,7 @@ def test_every_ai_menu_item_does_something_visible(live_server, project, browser
     # the selected clip: the prompt, scoped to it
     pg.locator("#tl .blk").nth(1).click()
     _menu(pg, "shot").click()
-    assert pg.evaluate(active) == "ai-prompt-input" and _scope_text(pg) == "CLIP_B"
+    assert pg.evaluate(active) == "ai-prompt-input" and _scope_text(pg) == "Shot 2 · CLIP_B"
     pg.keyboard.press("Escape")
 
     # a colour change: the prompt, pre-filled
@@ -662,7 +666,7 @@ def test_right_click_a_block_asks_about_it_or_looks_deeper(live_server, project,
     pg.locator('[data-testid="ai-ctx-ask"]').click()
     assert not menu.is_visible()
     assert pg.evaluate("document.activeElement.dataset.testid") == "ai-prompt-input"
-    assert _scope_text(pg) == "CLIP_B"
+    assert _scope_text(pg) == "Shot 2 · CLIP_B"
     assert pg.evaluate("[...tl.state.sel]") == ["aip0000002"]          # Premiere's right-click selects it
     # what goes out names that block, not a description retyped
     pg.assist.answer = {"status": "running"}
@@ -701,7 +705,7 @@ def test_right_click_a_project_clip_and_the_monitors(live_server, project, brows
     pg.locator('[data-testid="ai-ctx-ask"]').click()
     s = pg.evaluate("rcAI.scope()")
     assert s["kind"] == "clip" and s["clip"] == "CLIP_C.MP4", s
-    assert _scope_text(pg) in ("CLIP_C.MP4", "Source: CLIP_C")
+    assert _scope_text(pg) in ("CLIP_C", "Source: CLIP_C")
     pg.keyboard.press("Escape")
     # the Program monitor: the shot under the playhead
     pg.evaluate("tl.seek(2.5)")                                 # inside shot 2

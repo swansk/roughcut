@@ -926,3 +926,49 @@ def test_an_ai_accept_s_undo_reads_as_its_ops_never_the_model_s_sentence(browser
             assert norm(b.settle()) == seeded, want
     finally:
         b.close()
+
+
+# ---------------------------------------------------------------- the chip speaks the timeline's language
+
+def test_the_scope_chip_names_a_block_as_the_review_does(browser, live_server, project):
+    """Verdict 9, punch 7: the chip read "KX_05" (the clip) where the review called the
+    same block "Shot 2". A selected block is "Shot N · CLIP" and the review's rows about
+    it say "shot N (CLIP)"; several are "Shots 2–3"; an In/Out is its timecodes; a
+    Project panel clip is its name. None is cut short at 1440."""
+    chip = "[data-testid=ai-scope]"
+    whole = ("(s) => { const l = document.querySelector(s + ' .aip-scope-l');"
+             " return l.scrollWidth <= l.clientWidth; }")
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+        text = lambda: p.locator(chip).inner_text().strip()          # noqa: E731
+        p.locator('#tl .blk[data-id="shot-b"]').click()
+        p.wait_for_function("(s) => document.querySelector(s).innerText.trim() === 'Shot 2 · CLIP_B'", arg=chip)
+        assert p.evaluate(whole, chip)
+        n, clip = text().split(" · ")[0].split(" ")[1], text().split(" · ")[1]
+        res = b.ask([{"op": "set", "id": "shot-b", "prop": "temperature", "value": 20},
+                     {"op": "trim", "id": "shot-b", "out": 1.5}])
+        b.review(res)
+        rows = p.locator("[data-testid=ai-op-row]")
+        assert rows.count() == 2
+        for i in range(2):
+            assert f"shot {n} ({clip})" in rows.nth(i).inner_text().lower().replace("clip_b", "CLIP_B"), \
+                rows.nth(i).inner_text()
+        p.locator("[data-testid=ai-reject-all]").click()
+        p.wait_for_function("!rcActions.open")
+        # two neighbours: one run of shots
+        p.locator('#tl .blk[data-id="shot-b"]').click()
+        p.locator('#tl .blk[data-id="shot-c"]').click(modifiers=["Control"])
+        p.wait_for_function("(s) => document.querySelector(s).innerText.trim() === 'Shots 2–3'", arg=chip)
+        # an In/Out: its two timecodes, whole
+        p.evaluate("tl.select([]); tl.setSeqIn(1.0); tl.setSeqOut(4.5)")
+        want = p.evaluate("`In/Out ${tl.tc(1.0)}–${tl.tc(4.5)}`")
+        p.wait_for_function("([s, w]) => document.querySelector(s).innerText.trim() === w", arg=[chip, want])
+        assert p.evaluate(whole, chip), "the In/Out chip is cut"
+        p.evaluate("tl.setSeqIn(null); tl.setSeqOut(null)")
+        # a Project panel clip, asked about: its name, as its row reads
+        p.locator("#projList [data-clip]", has_text="CLIP_C").first.click(button="right")
+        p.locator("[data-testid=ai-ctx-ask]").click()
+        assert text() in ("CLIP_C", "Source: CLIP_C"), text()
+    finally:
+        b.close()
