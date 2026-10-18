@@ -1725,6 +1725,11 @@ function playFrom(i, { single = false } = {}) {
     setShotRate(v, seg);
     v.play().catch((err) => { if (g === player.gen) playRefused(err); });
   };
+  // The timeline's render before the play, not after it (wave 13 CANVAS2): after play()
+  // its style and layout pass ran in the play's first frames, the main thread the live
+  // buffer's first frame callbacks and the grade's first draws wait on (the perf test's
+  // play opened with an 83 ms hole at load 12 once).
+  tl.render();
   player.playing = true;            // before go(), which refuses to start a paused monitor
   screenMsg(v.readyState >= 2 ? '' : `opening ${stem(seg.clip)}…`);
   if (v.readyState >= 1) go(); else v.addEventListener('loadedmetadata', go, { once: true });
@@ -1732,7 +1737,6 @@ function playFrom(i, { single = false } = {}) {
   cueBed(filmT);
   tl.setPlayhead(filmT);            // the playhead jumps with the click, not on the first tick
   schedule();
-  tl.render();
   paintTransport();
 }
 
