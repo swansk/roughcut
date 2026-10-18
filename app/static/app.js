@@ -2790,7 +2790,11 @@ function paintPos(filmT, clipT, seg) {
   if (reveal) posReveal = now;
   tl.setPlayhead(filmT, { reveal });
   const s = tcOf(filmT), el = $('#pos');
-  if (el.textContent !== s) el.textContent = s;
+  if (el.textContent !== s) {
+    // the text node's data in place, not a new node (a child-list change; timeline.js setText)
+    const tn = el.firstChild;
+    if (tn && tn.nodeType === 3 && !tn.nextSibling) tn.data = s; else el.textContent = s;
+  }
 }
 let posReveal = 0;
 let posFrame = -1;

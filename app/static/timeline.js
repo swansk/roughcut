@@ -1873,7 +1873,16 @@
   function paintTc() {
     if (!el.tc) return;
     const s = tc(state.playhead);
-    if (el.tc.textContent !== s) el.tc.textContent = s;
+    if (el.tc.textContent !== s) setText(el.tc, s);
+  }
+  /* A readout written on every played frame changes its text node's data in place: a new
+   * text node is a child-list mutation inside #tl, and the timeline's `:has()` rules
+   * re-match every <i> under it for each one (wave 13 CANVAS2, traced: ~1,700 restyled
+   * ruler ticks and handles per second of play). */
+  function setText(node, s) {
+    const t = node.firstChild;
+    if (t && t.nodeType === 3 && !t.nextSibling) t.data = s;
+    else node.textContent = s;
   }
 
   /* ---- tools (Premiere's V C B N Y A) */
