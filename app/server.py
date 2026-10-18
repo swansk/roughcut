@@ -10083,6 +10083,305 @@ async def api_edits_undo(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "segments": clean})
 
 
+# ------------------------------------------------------------------------ the AI's edits
+#
+# Redesign wave 12, lane AIOPS (REDESIGN-GOAL dimension 15, Karl's K3 d): the editor asks
+# in words, from anywhere (the AI prompt, lane AIPROMPT), and the answer is a list of the
+# pro tools' own operations (roughcut/actions.py), applied on the board through the same
+# `window.tl` / `window.effects` calls a human edit makes — after a review, op by op
+# (/modules/actions.js). Nothing here writes the cut: the server asks the model, checks
+# the ops against the cut on disk, and keeps a record of the question, the answer and the
+# review under `--work/assist/<bin>/`, as the Ask keeps its own.
+#
+#   POST /api/assist {text, scope}          → {job} at once; the model runs on a thread
+#   GET  /api/assist/{job}                  → {status, kind, ops, lines, refused, preview,
+#                                              plan_ask, text, summary, cost, error}
+#   POST /api/assist/{job}/answer {accepted, rejected}   the review, recorded
+#   POST /api/assist/{job}/cancel           stop waiting: the job reads `cancelled` at once
+#                                              and whatever the call returns is dropped
+#   GET  /api/assist/price?text=&scope=     the call's price before it is made (no model)
+#   POST /api/assist/preview {ops, segments?, …}   the ops checked against the board's
+#                                              cut as it is now (the review opens on it)
+#
+# `kind: "plan"` (a whole-cut rewrite) starts an ordinary Ask job with the model's brief;
+# `plan_ask` is its id and the existing proposal panel reviews it.
+
+from roughcut import actions as actionsmod  # noqa: E402
+from roughcut import assist as assistmod  # noqa: E402
+
+ASSISTS: dict[str, progress.Job] = {}
+ASSIST_SCOPES = ("selection", "range", "sequence", "clip")
+ASSIST_LOCK = threading.Lock()          # a job's end and its cancel: one of them, whole
+
+
+def assist_home() -> Path:
+    d = STATE["work"] / "assist" / STATE["asks"].name
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def assist_state(payload: dict | None = None) -> dict:
+    """What an op is checked against: the cut, its clips' lengths, the sequence's
+    markers, In / Out, tracks, V2+ clips and transitions, the looks and the presets."""
+    payload = payload if payload is not None else project_payload()
+    presets = {k: v["label"] for k, v in EXPORT_PRESETS.items()}
+    looks = [k for k, v in looks_library().items() if v.get("kind") != "broken"]
+    return actionsmod.state_from(payload, looks=looks, presets=presets)
+
+
+def clean_scope(raw) -> dict:
+    """`{kind, ids?, in?, out?, clip?, playhead}` as WAVE12.md has it; anything else is
+    the whole sequence."""
+    if not isinstance(raw, dict):
+        return {"kind": "sequence"}
+    kind = raw.get("kind") if raw.get("kind") in ASSIST_SCOPES else "sequence"
+    out: dict = {"kind": kind}
+    if isinstance(raw.get("ids"), list):
+        out["ids"] = [str(x)[:40] for x in raw["ids"][:200]]
+    for k in ("in", "out", "playhead"):
+        v = raw.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v):
+            out[k] = float(v)
+    if raw.get("clip"):
+        out["clip"] = str(raw["clip"])[:200]
+    return out
+
+
+def _assist_record_path(job: str) -> Path:
+    if not re.fullmatch(r"[0-9a-f]{8,32}", job or ""):
+        raise HTTPException(404, "no such job")
+    return assist_home() / f"{job}.json"
+
+
+def _assist_write(job: str, record: dict) -> None:
+    path = _assist_record_path(job)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(record, indent=1), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _assist_start_ask(note: str) -> str:
+    """A whole-cut rewrite: an ordinary Ask job (the /api/ask path, the whole cut), so
+    the proposal panel reviews it exactly as it reviews an Ask."""
+    clips, payload = _ask_clips(None, drop_junk=True)
+    if not clips:
+        raise ValueError("no analysed clips yet — run the audio pass first")
+    segments = payload["segments"]
+    target = payload["target"]
+    refuse_past_cap("re-cutting the sequence", ask_price("full")["usd"])
+    job = uuid.uuid4().hex[:8]
+    ASKS[job] = progress.Job(
+        "ask", "Revising the cut" if segments else "Building the first cut", id=job,
+        state="estimating", plan=None, code=0, detail="estimating how long this will take",
+        ask_kind="revision" if segments else "first cut", estimate=None)
+    threading.Thread(
+        target=_ask_job,
+        args=(job, segments, clips, payload.get("story", ""), note,
+              (float(target[0]), float(target[1])), payload["events"], None),
+        daemon=True).start()
+    return job
+
+
+def _assist_job(job: str, text: str, scope: dict) -> None:
+    entry = ASSISTS[job]
+    record = {"job": job, "created": time.time(), "text": text, "scope": scope}
+    try:
+        clips, payload = _ask_clips(None, drop_junk=True)
+        state = assist_state(payload)
+        entry["cost"] = assistmod.estimate_cost(
+            assistmod.build_prompt(text, scope, state, clips))
+        entry.note("asking the model")
+        res = assistmod.run(text, scope, state, clips)
+        if entry.get("state") == "cancelled":
+            return                                   # stopped: the answer is not wanted
+        if res["kind"] == "plan":
+            res["plan_ask"] = _assist_start_ask(res.get("note") or text)
+    except HTTPException as exc:
+        if entry.get("state") == "cancelled":
+            return
+        entry.update(error=str(exc.detail), code=exc.status_code)
+        entry.finish("failed", detail=str(exc.detail))
+        _assist_write(job, {**record, "status": "failed", "error": str(exc.detail)})
+        return
+    except inference.BudgetExceeded as exc:
+        if entry.get("state") == "cancelled":
+            return
+        entry.update(error=str(exc), code=429)
+        entry.finish("failed", detail=str(exc))
+        _assist_write(job, {**record, "status": "failed", "error": str(exc)})
+        return
+    except (inference.InferenceError, ValueError) as exc:
+        if entry.get("state") == "cancelled":
+            return
+        entry.update(error=str(exc)[:300], code=502)
+        entry.finish("failed", detail=str(exc)[:300])
+        _assist_write(job, {**record, "status": "failed", "error": str(exc)[:300]})
+        return
+    except Exception as exc:  # noqa: BLE001 — a thread that dies must still end its job
+        if entry.get("state") == "cancelled":
+            return
+        msg = f"{type(exc).__name__}: {exc}"[:300]
+        entry.update(error=msg, code=500)
+        entry.finish("failed", detail=msg)
+        _assist_write(job, {**record, "status": "failed", "error": msg})
+        return
+    with ASSIST_LOCK:
+        if entry.get("state") == "cancelled":
+            return
+        record.update(status="done", result=res)
+        _assist_write(job, record)
+        entry.update(result=res, cost=res.get("cost"))
+        entry.finish("done", detail=res.get("summary") or res["kind"])
+
+
+def _assist_view(job: str) -> dict:
+    """The job as GET /api/assist/{job} answers it: live while it runs, from its record
+    on disk after (so a restart or a reload keeps the answer)."""
+    entry = ASSISTS.get(job)
+    path = _assist_record_path(job)
+    try:
+        rec = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    except (OSError, ValueError):
+        rec = None
+    if entry is None:
+        if rec is None:
+            raise HTTPException(404, "no such job")
+        res = rec.get("result") or {}
+        out = {"job": job, "status": rec.get("status") or "failed", "text_asked": rec.get("text"),
+               "scope": rec.get("scope"), "error": rec.get("error")}
+    else:
+        snap = entry.snapshot()
+        status = {"done": "done", "failed": "failed", "cancelled": "cancelled"}.get(snap["state"], "running")
+        res = entry.get("result") or {}
+        out = {"job": job, "status": status, "text_asked": entry.get("text"),
+               "scope": entry.get("scope"), "error": entry.get("error"),
+               "detail": snap.get("detail"), "elapsed_s": snap.get("elapsed_s"),
+               "eta_s": snap.get("eta_s")}
+        if status == "running" and entry.get("cost"):
+            out["cost"] = entry["cost"]
+    if rec is not None and rec.get("answer"):
+        out["answer"] = rec["answer"]
+    for k in ("kind", "ops", "lines", "refused", "index", "families", "preview", "plan_ask",
+              "text", "note", "summary", "cost"):
+        if k in res:
+            out[k] = res[k]
+    if out.get("plan_ask") and out["plan_ask"] in ASKS:
+        a = ASKS[out["plan_ask"]].snapshot()
+        out["plan_state"] = a.get("state")
+        out["plan_detail"] = a.get("detail")
+    return out
+
+
+@app.post("/api/assist")
+async def api_assist(request: Request) -> JSONResponse:
+    """The editor's words in, a job out — at once. The model call, the cut's facts and
+    the op checks all run on the job's thread, so this never waits on the model."""
+    body = await request.json()
+    text = str(body.get("text") or "").strip()[:assistmod.TEXT_MAX]
+    if not text:
+        raise HTTPException(400, "say what you want done")
+    scope = clean_scope(body.get("scope"))
+    job = uuid.uuid4().hex[:12]
+    ASSISTS[job] = progress.Job(
+        "assist", "Asking the AI", id=job, state="running",
+        detail="reading the sequence", eta_s=assistmod.ETA_S, text=text, scope=scope,
+        result=None, error=None, code=0)
+    threading.Thread(target=_assist_job, args=(job, text, scope), daemon=True).start()
+    return JSONResponse({"job": job, "status": "running", "scope": scope,
+                         **config.cost_terms()})
+
+
+@app.post("/api/assist/preview")
+async def api_assist_preview(request: Request) -> JSONResponse:
+    """The ops checked against the cut the board holds now — its `segments` (and, when
+    sent, its markers, In / Out, transitions, V2+ clips and tracks) over the project's
+    clips — so the review opens on what Accept would really do. Nothing is written."""
+    body = await request.json()
+    state = assist_state()
+    for k in ("segments", "markers", "transitions", "overlays", "tracks"):
+        if isinstance(body.get(k), (list, dict)):
+            state[k] = body[k]
+    for k in ("in", "out"):
+        if k in body:
+            state[k] = body[k]
+    if isinstance(body.get("colour"), dict):
+        state["colour"] = body["colour"]
+    return JSONResponse(actionsmod.check(body.get("ops"), state))
+
+
+@app.get("/api/assist/price")
+def api_assist_price(text: str = "", scope: str = "") -> JSONResponse:
+    """What an ask would cost before it is sent: the prompt it would build (the cut, the
+    clips, the scope, the vocabulary) priced at the role's model — never a model call.
+    `scope` is the JSON of the POST's scope. Declared before /api/assist/{job}."""
+    try:
+        sc = json.loads(scope) if scope else None
+    except ValueError:
+        sc = None
+    clips, payload = _ask_clips(None, drop_junk=True)
+    state = assist_state(payload)
+    prompt = assistmod.build_prompt(text.strip()[:assistmod.TEXT_MAX] or "…", clean_scope(sc),
+                                    state, clips)
+    return JSONResponse(assistmod.estimate_cost(prompt))
+
+
+@app.get("/api/assist/{job}")
+def api_assist_status(job: str) -> JSONResponse:
+    return JSONResponse(_assist_view(job))
+
+
+@app.post("/api/assist/{job}/cancel")
+def api_assist_cancel(job: str) -> JSONResponse:
+    """Stop waiting for an answer (the prompt's Stop). The job reads `cancelled` at once
+    and its record says so; the model call already sent finishes on its thread and what
+    it returns is dropped — nothing reaches the review. A finished job is left as it is."""
+    entry = ASSISTS.get(job)
+    path = _assist_record_path(job)
+    if entry is None:
+        if not path.exists():
+            raise HTTPException(404, "no such job")
+        return JSONResponse({"ok": False, "status": json.loads(path.read_text(encoding="utf-8")).get("status")})
+    with ASSIST_LOCK:
+        if entry.get("state") in progress.TERMINAL:
+            return JSONResponse({"ok": False, "status": entry["state"]})
+        entry.update(error="cancelled by the editor")
+        entry.finish("cancelled", detail="cancelled")
+        _assist_write(job, {"job": job, "created": entry.get("started"), "text": entry.get("text"),
+                            "scope": entry.get("scope"), "status": "cancelled",
+                            "error": "cancelled by the editor"})
+    return JSONResponse({"ok": True, "status": "cancelled"})
+
+
+@app.post("/api/assist/{job}/answer")
+async def api_assist_answer(job: str, request: Request) -> JSONResponse:
+    """The review, on the record: which ops (indices into the answer's `ops`) the editor
+    accepted and which they rejected. Applying them is the board's (one undo entry)."""
+    body = await request.json()
+    path = _assist_record_path(job)
+    if not path.exists():
+        if job in ASSISTS:
+            raise HTTPException(409, "the answer is not in yet")
+        raise HTTPException(404, "no such job")
+    rec = json.loads(path.read_text(encoding="utf-8"))
+    n = len(((rec.get("result") or {}).get("ops")) or [])
+
+    def picks(key: str) -> list[int]:
+        v = body.get(key) or []
+        if not isinstance(v, list) or any(isinstance(i, bool) or not isinstance(i, int) for i in v):
+            raise HTTPException(400, f"{key} must be a list of op indices")
+        bad = [i for i in v if not (0 <= i < n)]
+        if bad:
+            raise HTTPException(400, f"{key}: no op {bad[0]} in an answer of {n}")
+        return sorted(set(v))
+
+    acc, rej = picks("accepted"), picks("rejected")
+    if set(acc) & set(rej):
+        raise HTTPException(400, "an op cannot be both accepted and rejected")
+    rec["answer"] = {"accepted": acc, "rejected": rej, "at": time.time()}
+    _assist_write(job, rec)
+    return JSONResponse({"ok": True, "answer": rec["answer"]})
+
+
 # ------------------------------------------------------------------------ cuts
 #
 # One bin, several cuts. The EDL has always been the whole project file — the
