@@ -160,6 +160,7 @@ def rbin(tmp_path_factory):
 def _open(server, rbin, work: Path, cut: dict | None = None, proxies: bool = False) -> None:
     server.MEDIA["failed"].clear()
     server.MEDIA["wanted"].clear()
+    server.MEDIA.setdefault("holds", {}).clear()     # an earlier test's monitor waits are over
     edl = work / "cut.edl.json"
     work.mkdir(parents=True, exist_ok=True)
     edl.write_text(json.dumps(cut or CUT), encoding="utf-8")
@@ -292,7 +293,13 @@ def test_the_whole_clip_proxy_frame_grid_matches_frame_for_frame(board, rbin):
 
 def test_the_program_is_served_the_range_proxy_and_status_says_so(board):
     c, server = board["client"], board["server"]
-    r = c.get("/media/proxy/FLAT.mp4", follow_redirects=False)
+    # verdict 8: while the preview is being made the ask is a 503 at once; the board asks again
+    deadline = time.monotonic() + 60
+    while True:
+        r = c.get("/media/proxy/FLAT.mp4", follow_redirects=False)
+        if r.status_code != 503 or time.monotonic() > deadline:
+            break
+        time.sleep(0.2)
     assert r.status_code == 307
     assert r.headers["x-roughcut-media"] == "preview", "before the range proxy: the floor"
     assert c.get("/media/status/FLAT.mp4").json()["cut_sharp"] is False
@@ -369,9 +376,9 @@ def test_turned_off_it_is_todays_preview(board, monkeypatch):
 
 
 def test_the_cuts_shots_get_range_proxies_before_whole_clip_proxies(rbin, tmp_path, monkeypatch):
-    """The background walk (how `main()` runs, GPU box): for each clip the cut plays, in
-    film order, its preview and then its range proxy; only then the rest of the bin's
-    previews. The whole-clip proxies are not touched by it (stubbed here: they are the
+    """The background walk (how `main()` runs, GPU box): the preview of every clip the cut
+    plays, in film order (verdict 8: every shot has a picture before any is made sharp),
+    then their range proxies in film order; only then the rest of the bin's previews. The whole-clip proxies are not touched by it (stubbed here: they are the
     index's proxy pool, minutes behind)."""
     import server
     if not _gpu():
@@ -398,8 +405,8 @@ def test_the_cuts_shots_get_range_proxies_before_whole_clip_proxies(rbin, tmp_pa
             time.sleep(0.2)
         took = time.monotonic() - t0
         assert server.range_record("FLAT") and server.range_record("ROT180"), jobs
-        assert jobs[:5] == [("preview", "FLAT.MP4"), ("range", "FLAT.MP4"),
-                            ("preview", "ROT180.MP4"), ("range", "ROT180.MP4"),
+        assert jobs[:5] == [("preview", "FLAT.MP4"), ("preview", "ROT180.MP4"),
+                            ("range", "FLAT.MP4"), ("range", "ROT180.MP4"),
                             ("preview", "CLIP_X.MP4")], jobs
         assert not list(Path(server.STATE["proxy_dir"]).glob("*.mp4")), "no whole proxy yet"
         print(f"walk: both cut clips sharp in {took:.1f}s")

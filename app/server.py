@@ -3175,6 +3175,8 @@ def answer_ask(body: dict) -> dict:
     if rec["answered"].get("partial"):
         note_partial_accept(rec)                  # provenance: the save may have landed
         note_rejections(rec)                      # verdict 4: a rejection is remembered
+    if answer == "accept":
+        MEDIA["kick"].set()     # verdict 8: an idle media walk looks at the accepted cut now
     return {"ok": True, "job": rec.get("job")}
 
 
@@ -5672,6 +5674,7 @@ def api_clips() -> JSONResponse:
             # where it lives (wave 12 IMPORT): the bin's folder, imported in place, or
             # uploaded from the viewer's computer — Premiere's Media Path
             **_clip_origin(clip, sources),
+            "media": media_state(clip),       # the bin's "preview building" (verdict 8)
             "journal": None if rec is None else {
                 "priority": rec.get("priority"), "missing": bool(rec.get("missing")),
                 "parked": rec.get("parked"),
@@ -7059,7 +7062,19 @@ def media_proxy(name: str, request: Request) -> Response:
     another file's bytes at the same offsets. A 503 with retry-after only when even the
     preview is not ready; `/media/status/<stem>.mp4` says when it is. Between the preview
     and the proxy, a clip the cut plays redirects to its range proxy (`x-roughcut-media:
-    range`, wave 7): the cut's shots sharp at 1280 on the clip's own timeline."""
+    range`, wave 7): the cut's shots sharp at 1280 on the clip's own timeline.
+
+    Verdict 8 (blocker 2): this held the request PREVIEW_WAIT_S (20 s) for a preview still
+    being made, and the board's wait (poster + "preparing preview…") only starts on the
+    error that answer gives: a black, wordless Program for 20 s a shot. Now it answers
+    within PROXY_ANSWER_S: the best thing that plays now (proxy, a playable original, a
+    range proxy, the preview) or, while even the preview is being made, a 503 at once
+    with `retry-after` (the preview's estimate, also in `x-roughcut-eta`). Not a 307 to
+    the original of such a clip: `browser_playable` already said no (4K HEVC Chrome does
+    not decode here, or 4K H.264 at ~60 Mb/s that stalls the Program on the viewer's CPU
+    and over the laptop's tunnel); the preview, asked for now at normal priority, plays
+    sooner than that original would, and the board plays past the shot on its poster
+    until it lands (as Premiere plays past offline media)."""
     path = STATE["proxy_dir"] / Path(name).name
     if path.exists():
         return ranged_file(path, request)
@@ -7068,14 +7083,19 @@ def media_proxy(name: str, request: Request) -> Response:
     if clip is None:
         return ranged_file(path, request)          # not a clip of this bin: the 404
     want_media(stem)
-    kind, url = media_fallback(clip, wait_s=PREVIEW_WAIT_S)
+    kind, url = media_fallback(clip, wait_s=PROXY_ANSWER_S)
     if kind == "proxy":
         return ranged_file(path, request)
     if url:
         return Response(status_code=307, headers={
             "location": url, "cache-control": "no-store", "x-roughcut-media": kind})
+    eta = preview_eta(clip) if kind == "building" else None
+    if kind == "building":
+        hold_media(clip)                 # a monitor waits on this build: never paused
     raise HTTPException(503, f"{stem}: a playable preview is still being made",
-                        headers={"retry-after": "5", "cache-control": "no-store"})
+                        headers={"retry-after": str(max(1, min(10, math.ceil(eta or 5)))),
+                                 "x-roughcut-eta": "" if eta is None else f"{eta:.0f}",
+                                 "x-roughcut-media": kind, "cache-control": "no-store"})
 
 
 @app.get("/media/render/{name}")
@@ -7309,7 +7329,10 @@ def ensure_poster(stem: str, t: float, slots: threading.BoundedSemaphore | None 
 
 PREVIEW_H = 360                 # the preview's short edge
 PREVIEW_GOP_S = 0.5             # a keyframe every half second: a seek decodes ≤ that
-PREVIEW_WAIT_S = 20.0           # how long /media/proxy holds a request for a preview
+PREVIEW_WAIT_S = 20.0           # (before verdict 8) how long /media/proxy held a request
+PROXY_ANSWER_S = 0.3            # /media/proxy holds a building clip this long (a preview landing in it is served)
+HOLD_S = 8.0                    # a monitor told "building" keeps that build unpaused this long
+PREVIEW_RATE = {True: 0.25, False: 1.0}   # build s per footage s before one is measured (GPU, CPU)
 PREVIEW_SLOTS = threading.BoundedSemaphore(2)   # one background + one asked-for at once
 PLAYABLE_MAX_EDGE = 1920        # an original past this goes through a preview anyway
 PLAYABLE_MAX_BPS = 25_000_000   # ...and past this bitrate (it streams to a laptop)
@@ -7391,8 +7414,45 @@ def media_waiting(key: str):
 
 
 def _waited_on() -> set[str]:
+    now = time.monotonic()
     with MEDIA["lock"]:
-        return set(MEDIA.get("waiters") or {})
+        holds = MEDIA.setdefault("holds", {})
+        for k in [k for k, until in holds.items() if until <= now]:
+            del holds[k]
+        return set(MEDIA.get("waiters") or {}) | set(holds)
+
+
+def hold_media(clip: str) -> None:
+    """A monitor was told `clip`'s preview is still being made (a 503 or a status that
+    says building) and now waits on it while the board plays past the shot: for HOLD_S
+    (the board asks again well inside it) that build is waited on — the yield thread
+    leaves it running while the Program plays, and the walk builds it before the rest.
+    Before verdict 8 the 20 s held request itself was the waiter."""
+    with MEDIA["lock"]:
+        MEDIA.setdefault("holds", {})[str(preview_path(Path(clip).stem))] = (
+            time.monotonic() + HOLD_S)
+
+
+def preview_eta(clip: str) -> float | None:
+    """Seconds until `clip`'s preview is likely there: its build's estimate (footage
+    length × the measured build rate, PREVIEW_RATE until one is measured) less how long
+    it has run; not started yet, plus the sooner of the two builds holding the slots."""
+    stem = Path(clip).stem
+    key = str(preview_path(stem))
+    if preview_path(stem).exists():
+        return 0.0
+    dur = clip_duration(clip) or 60.0
+    rate = MEDIA.get("preview_rate") or PREVIEW_RATE[bool(MEDIA.get("gpu"))]
+    est = 1.0 + dur * rate
+    now = time.monotonic()
+    with MEDIA["lock"]:
+        started = dict(MEDIA.get("started") or {})
+    if key in started:
+        t0, e = started[key]
+        return round(max(1.0, e - (now - t0)), 1)
+    if len(started) >= 2:
+        est += min(max(0.0, e - (now - t0)) for t0, e in started.values())
+    return round(est, 1)
 
 
 SLOT_WAIT = "*preview-slot*"     # an asked-for preview waits for PREVIEW_SLOTS
@@ -7889,19 +7949,35 @@ def _build_claimed(src: Path, dest: Path, orient: str, ev: threading.Event,
     another bin mid-build must not have this write that bin's preview from this one."""
     key = str(dest)
     scope = None
+    gen = MEDIA["walk_gen"]
     try:
         # An asked-for preview waiting for a slot the walk's paused builds hold: they run
         # again until it has one (a Program playing must not starve the Source monitor).
         with (media_waiting(SLOT_WAIT) if asked else nullcontext()):
             PREVIEW_SLOTS.acquire()
         with _Held(PREVIEW_SLOTS):
-            if not dest.exists():
+            # a Stop while it waited for the slot: it does not start after the Stop (the
+            # walk no longer waits on a build another thread owns, so it can be queued here)
+            if MEDIA["walk_gen"] != gen:
+                print(f"  preview {dest.stem} stopped", flush=True)
+            elif not dest.exists():
                 t0 = time.monotonic()
+                # what preview_eta reads: when this build started and what it should take
+                dur = clip_duration(src.name) if clip_path(src.name) == src else None
+                rate = MEDIA.get("preview_rate") or PREVIEW_RATE[bool(MEDIA.get("gpu"))]
+                with MEDIA["lock"]:
+                    MEDIA.setdefault("started", {})[key] = (t0, 1.0 + (dur or 60.0) * rate)
                 scope = media_scope(asked)
-                with procscope.active(scope), procscope.tagged(key):
-                    how = build_preview(src, dest, orient)
-                print(f"  preview {dest.stem} ({how}) in {time.monotonic() - t0:.1f}s",
-                      flush=True)
+                try:
+                    with procscope.active(scope), procscope.tagged(key):
+                        how = build_preview(src, dest, orient)
+                finally:
+                    with MEDIA["lock"]:
+                        MEDIA["started"].pop(key, None)
+                took = time.monotonic() - t0
+                if dur and dur > 5:      # the measured rate, smoothed, for the next estimate
+                    MEDIA["preview_rate"] = round(0.6 * rate + 0.4 * (took / dur), 4)
+                print(f"  preview {dest.stem} ({how}) in {took:.1f}s", flush=True)
         MEDIA["failed"].pop(key, None)
     except (RuntimeError, OSError) as exc:
         if scope is not None and scope.cancelled:
@@ -7957,6 +8033,39 @@ def start_preview(clip: str) -> threading.Event | None:
         threading.Thread(target=_build_claimed, daemon=True, args=(
             clip_path(clip), dest, STATE.get("orient", "auto"), ev, True)).start()
     return ev
+
+
+def media_state(clip: str) -> str | None:
+    """The bin's word on a clip's picture (verdict 8: it said "indexed" while the Program
+    sat black on the clip's still-building preview), without probing anything:
+    "proxy" / "range" / "preview" / "original" when something plays, "building" while
+    its preview is being made or a monitor waits on it, "queued" when the walk (GPU box)
+    will make it, "failed", or None when not known yet (no facts cached, nothing asked)."""
+    stem = Path(clip).stem
+    if (STATE["proxy_dir"] / f"{stem}.mp4").exists():
+        return "proxy"
+    key = str(preview_path(stem))
+    if preview_path(stem).exists():
+        return "range" if range_record(stem) is not None else "preview"
+    with MEDIA["lock"]:
+        building = key in MEDIA["building"]
+    if building or key in _waited_on():
+        return "building"
+    if _failed_recently(key):
+        return "failed"
+    src = clip_path(clip)        # wave 12 IMPORT: an import's own path
+    try:
+        st = src.stat()
+    except OSError:
+        return None
+    with MEDIA["lock"]:
+        known = (str(src), st.st_size, st.st_mtime_ns) in MEDIA["facts"]
+    if not known:
+        return None
+    if browser_playable(src):
+        return "original"
+    walk = bool(MEDIA.get("gpu")) and STATE.get("proxies_enabled", True)
+    return "queued" if walk else None
 
 
 def media_fallback(clip: str, wait_s: float = 0.0) -> tuple[str, str | None]:
@@ -8388,18 +8497,33 @@ def prune_ranges(stem: str | None = None) -> int:
 
 
 def _next_media_job() -> tuple[str, str] | None:
-    """The walk's next piece of work after the posters: a preview the human asked for;
-    then, for each clip the cut plays in film order, its preview and then its range
-    proxy; then every other clip's preview (`first_wanted` order). None when idle."""
+    """The walk's next piece of work after the posters, skipping a preview another
+    thread is building (an asked-for one: the walk would only sit waiting on it):
+
+      1. a preview a monitor is waiting on now (`hold_media`: the Program played onto a
+         shot with no picture), cut clips among those in film order;
+      2. the preview of every clip the cut plays, in film order (verdict 8: after the
+         Accept, every shot of the cut has a picture before any of them is made sharp —
+         the range proxies used to go between them, ~13 s each on Killington, so the
+         ninth clip's preview waited behind eight range builds);
+      3. then each cut clip's range proxy, in film order;
+      4. then every other clip's preview (`first_wanted` order: one the human opened
+         first). None when idle."""
     def failed(c: str) -> bool:
         return _failed_recently(str(preview_path(Path(c).stem)))
-    todo = [c for c in footage_clips() if needs_preview(c) and not failed(c)]
     with MEDIA["lock"]:
-        wanted = list(MEDIA["wanted"])
-    by_stem = {Path(c).stem: c for c in todo}
-    for stem in wanted:
-        if stem in by_stem:
-            return "preview", by_stem[stem]
+        busy = set(MEDIA["building"])
+    todo = [c for c in footage_clips() if needs_preview(c) and not failed(c)
+            and str(preview_path(Path(c).stem)) not in busy]
+    held = _waited_on()
+    cut_order = list(cut_ranges()) if ranges_enabled() else cut_clips()
+    rank = {c: i for i, c in enumerate(cut_order)}
+    waiting = [c for c in todo if str(preview_path(Path(c).stem)) in held]
+    if waiting:
+        return "preview", min(waiting, key=lambda c: rank.get(c, len(rank)))
+    for clip in cut_order:
+        if clip in todo:
+            return "preview", clip
     if ranges_enabled():
         cut = cut_ranges()
         settled = True
@@ -8407,14 +8531,10 @@ def _next_media_job() -> tuple[str, str] | None:
             settled = time.time() - STATE["edl"].stat().st_mtime >= RANGE_SETTLE_S
         except (OSError, KeyError, TypeError):
             pass
-        # film order, except that a cut clip the human just opened goes first
-        rank = {stem: i for i, stem in enumerate(wanted)}
-        order = sorted(cut, key=lambda c: rank.get(Path(c).stem, len(rank)))
-        for clip in order:
-            if clip in todo:
-                return "preview", clip
-            if settled and needs_range(clip, cut):
-                return "range", clip
+        if settled:
+            for clip in cut:
+                if needs_range(clip, cut):
+                    return "range", clip
     if todo:
         return "preview", first_wanted(todo)
     return None
@@ -8525,8 +8645,12 @@ def media_status(name: str) -> JSONResponse:
     key = str(preview_path(stem))
     rec = range_record(stem)
     want = range_wanted(clip)
+    if kind == "building":
+        hold_media(clip)            # asked about while it builds: a monitor waits on it
     return JSONResponse({
         "clip": clip, "serves": kind,
+        # verdict 8: the board's wait line says how long ("preparing preview… CLIP_09 · ~N s")
+        "eta_s": preview_eta(clip) if kind == "building" else None,
         "url": f"/media/proxy/{stem}.mp4" if kind == "proxy" else url,
         "ready": kind in ("proxy", "original", "range", "preview"),
         "proxy": (STATE["proxy_dir"] / f"{stem}.mp4").exists(),
