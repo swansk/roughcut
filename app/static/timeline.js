@@ -1231,7 +1231,7 @@
         }
       }
       const says = blockSays(seg, clip);
-      b.title = `A1 · ${stem(seg.clip)} ${fmt(seg.in)}–${fmt(seg.out)} — its own sound`
+      b.title = `A1 · ${window.rcClipName ? window.rcClipName(seg.clip) : stem(seg.clip)} ${fmt(seg.in)}–${fmt(seg.out)} — its own sound`
         + (isLinked(seg) ? ', linked to the picture on V1' : ', unlinked: drag to move it alone')
         + (aOff(seg) ? ` · ${aOff(seg) > 0 ? '+' : '−'}${Math.abs(aOff(seg)).toFixed(2)} s out of sync` : '')
         + (says ? `\n“${says}”` : '')

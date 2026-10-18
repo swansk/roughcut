@@ -825,12 +825,12 @@ function paintEcHead(seg, n, ov) {
   if (ov) {
     // a V2+ clip: its track, the clip and its source In / Out
     lab.textContent = `${ov.track || 'V2'} clip`;
-    what.textContent = `${stem(ov.clip)} · ${tcOf(ov.in)} – ${tcOf(ov.out)}`;
+    what.textContent = `${clipLabel(ov.clip)} · ${tcOf(ov.in)} – ${tcOf(ov.out)}`;
     what.title = `source In ${tcOf(ov.in)} · Out ${tcOf(ov.out)} · at ${tcOf(ov.at)} in the sequence, ${tcOf(tl.dur(ov))} long`;
   } else if (seg) {
     // Premiere's head: the clip, and its source In / Out in timecode
     lab.textContent = `Shot ${tl.indexOf(seg.id) + 1}`;
-    what.textContent = `${stem(seg.clip)} · ${tcOf(seg.in)} – ${tcOf(seg.out)}`;
+    what.textContent = `${clipLabel(seg.clip)} · ${tcOf(seg.in)} – ${tcOf(seg.out)}`;
     what.title = `source In ${tcOf(seg.in)} · Out ${tcOf(seg.out)} · ${tcOf(tl.dur(seg))} in the sequence`;
   } else if (n > 1) {
     lab.textContent = 'Selection';
@@ -1206,6 +1206,10 @@ function bindColour(el, seg) {
 const player = { vids: [], cur: 0, idx: -1, playing: false, single: false, raf: 0, gen: 0 };
 
 const stem = (clip) => String(clip).replace(/\.[^.]+$/, '');
+// a clip's name as the editor reads it: a generated clip is "Black Video" / "Color Matte" /
+// "<clip> Still" (firstpass.js `rcClipName`, wave 13 PRICED), never its gen_<hash> file;
+// stem() stays the file's own stem, which the media URLs need
+const clipLabel = (clip) => (window.rcClipName ? window.rcClipName(clip) : stem(clip));
 
 function filmStart(i) {
   let t = 0;

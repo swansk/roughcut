@@ -157,6 +157,14 @@ def test_a_generated_black_clip_reads_black_video_in_the_panel(page, live):
     assert "gen_" not in text, text
     html = pg.locator(PANEL).inner_html()
     assert "gen_" not in html, "nor in a hover"
+    # nor in Effect Controls' head for the selected gap, nor on its A1 block's hover
+    gid = str(gap["id"])
+    pg.evaluate(f"tl.select(['{gid}'])")
+    pg.wait_for_function("(document.querySelector('#ecWhat') || {}).textContent", timeout=5000)
+    ec = pg.evaluate("[document.querySelector('#ecWhat').textContent, document.querySelector('#ecWhat').title]")
+    assert ec[0].startswith("Black Video") and not any("gen_" in t for t in ec), ec
+    a1 = pg.evaluate(f"[...document.querySelectorAll('#tl [data-id=\"{gid}\"]')].map(b => b.title).join(' | ')")
+    assert "gen_" not in a1 and "A1 · Black Video" in a1, a1
 
 
 def test_new_clips_carry_the_looks_price_and_the_rerun_says_what_it_did(page, live, card):
