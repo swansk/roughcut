@@ -266,8 +266,8 @@ DF_FACTS = {"CLIP_C.MP4": {"fps": 29.97, "duration": 5.0, "tc_start": "00:00:59;
 def test_media_start_and_end_follow_the_cameras_timecode(live_server, project, browser):
     """BINLOOK's ask (wave 12 SMALL3): Media Start is the clip's source timecode, Media End
     its last frame (start + duration − 1 frame, as Premiere writes it), drop-frame counted
-    as drop-frame; a subclip's are its In and Out on that timecode; Audio Info shows only
-    once the list is wide enough for every other column."""
+    as drop-frame; a subclip's are its In and Out on that timecode; Audio Info is a column at
+    any width (wave 13 BINLOOK2: a narrow list scrolls its columns sideways)."""
     def facts(route):
         resp = route.fetch()
         body = resp.json()
@@ -297,10 +297,11 @@ def test_media_start_and_end_follow_the_cameras_timecode(live_server, project, b
     assert pg.evaluate(OVERFLOW_JS) == []
     assert pg.errors == []
     pg.context.close()
-    # a narrower list: every other column still, and no Audio Info
-    pg = _open(browser, live_server, project, size=(2560, 1300), proj=0.42)
+    # a narrower list: every column still, Audio Info too, scrolled sideways
+    pg = _open(browser, live_server, project, size=(2560, 1300), proj=0.2)
     heads = pg.locator("#projList th").all_inner_texts()
-    assert "Captured" in heads and "Audio Info" not in heads, heads
+    assert "Captured" in heads and "Audio Info" in heads, heads
+    assert pg.evaluate("(() => { const b = document.querySelector('#projList'); return b.scrollWidth > b.clientWidth; })()")
     pg.context.close()
 
 
@@ -308,9 +309,10 @@ def test_media_start_and_end_follow_the_cameras_timecode(live_server, project, b
 def test_the_list_is_dense_aligned_and_walked_with_the_arrows(live_server, project, browser, size):
     pg = _open(browser, live_server, project, size=size, picks=True, proposal=True)
     pg.wait_for_selector("#projList [data-cut=proposed]", timeout=10000)
-    # the default columns: Name, the duration, Status (test_workspace's narrow rule)
+    # every one of Premiere's columns, at the default widths too (verdict 9, punch 9)
     head = pg.locator("#projList th").all_inner_texts()
-    assert head[0] == "Name" and head[-1] == "Status" and head[1] in ("Duration", "Media Duration"), head
+    assert head == ["Name", "Frame Rate", "Media Start", "Media End", "Media Duration", "Video Info",
+                    "Audio Info", "Status", "Description", "Captured"], head
     # Premiere's dense rows; numbers right-aligned
     h = pg.evaluate("[...document.querySelectorAll('#projList tr[data-key]')].map(r => r.getBoundingClientRect().height)")
     assert h and all(19 <= x <= 23 for x in h), h
@@ -458,6 +460,65 @@ def test_every_status_reads_whole_and_its_hover_says_the_rest(live_server, proje
     assert all(c["title"] for c in cells if c["text"]), cells
     # the row's hover says it whole too
     assert "preview building" in pg.locator("#projList tr.row[data-clip='CLIP_A.MP4']").get_attribute("title")
+    assert pg.evaluate(OVERFLOW_JS) == []
+    assert pg.errors == []
+    pg.context.close()
+
+
+# ---------------------------------------------------------------- the columns scroll (verdict 9, punch 9)
+
+SCROLL_JS = """() => { const box = document.querySelector('#projList'), t = box.querySelector('table.plist');
+  const r = (el) => { const b = el.getBoundingClientRect(); return { l: b.left, r: b.right }; };
+  const th = (k) => box.querySelector(`th[data-col=${k}]`);
+  const td = (k) => box.querySelector(`tr.row[data-clip='CLIP_A.MP4'] td:nth-child(${[...th(k).parentElement.children].indexOf(th(k)) + 1})`);
+  return { box: r(box), cw: box.clientWidth, sw: box.scrollWidth, left: box.scrollLeft, table: t.offsetWidth,
+           name: r(th('name')), nameTd: r(box.querySelector("tr.row[data-clip='CLIP_A.MP4'] td.name")),
+           fps: r(th('fps')), fpsTd: r(td('fps')), shot: r(th('shot')), shotTd: r(td('shot')),
+           scrolled: box.classList.contains('hscrolled') }; }"""
+
+
+@pytest.mark.parametrize("size", [(1440, 900), (1920, 1080)], ids=lambda s: f"{s[0]}x{s[1]}")
+def test_the_list_keeps_premieres_columns_scrolled_sideways_under_a_pinned_name(live_server, project, browser, size):
+    """Verdict 9, punch 9: "at 1440 the List view has >= 6 columns reachable by horizontal
+    scroll". Every column is in the list at the default width, the panel scrolls them
+    sideways, Name stays pinned at the left, the headings move with the body, and a sort
+    keeps the place."""
+    pg = _open(browser, live_server, project, size=size, wait=False)
+    pg.route("**/api/clips", _faked_facts)
+    pg.reload()
+    pg.wait_for_selector("#projList tr.row", timeout=15000)
+    heads = pg.locator("#projList th").all_inner_texts()
+    assert len(heads) >= 6 and heads[:4] == ["Name", "Frame Rate", "Media Start", "Media End"], heads
+    assert "Video Info" in heads and "Media Duration" in heads and "Status" in heads, heads
+    a = pg.evaluate(SCROLL_JS)
+    assert a["sw"] > a["cw"] + 100 and a["table"] == a["sw"], a          # wider than the panel: it scrolls
+    assert a["left"] == 0 and not a["scrolled"]
+    assert abs(a["name"]["l"] - a["box"]["l"]) < 1.5 and abs(a["nameTd"]["l"] - a["box"]["l"]) < 1.5, a
+    assert a["shot"]["l"] > a["box"]["r"], a                               # Captured is past the edge
+    # the page itself never scrolls sideways
+    assert pg.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    # scrolled to the far end: Name still at the left, every heading over its column
+    pg.evaluate("document.querySelector('#projList').scrollLeft = 1e6")
+    pg.wait_for_function("document.querySelector('#projList').classList.contains('hscrolled')", timeout=2000)
+    b = pg.evaluate(SCROLL_JS)
+    assert b["left"] == a["sw"] - a["cw"], b
+    assert abs(b["name"]["l"] - b["box"]["l"]) < 1.5 and abs(b["nameTd"]["l"] - b["box"]["l"]) < 1.5, b
+    for k in ("fps", "shot"):
+        assert abs(b[k]["l"] - b[f"{k}Td"]["l"]) < 0.5, (k, b)              # the headings scroll with the body
+        assert abs((a[k]["l"] - b[k]["l"]) - b["left"]) < 1.5, (k, a, b)
+    assert b["shot"]["r"] <= b["box"]["r"] + 1, b                          # the last column in reach
+    # Name is over the columns scrolled under it: the point just inside its right edge is Name's
+    hit = pg.evaluate("""() => { const n = document.querySelector("#projList tr.row[data-clip='CLIP_A.MP4'] td.name").getBoundingClientRect();
+        const el = document.elementFromPoint(n.right - 3, n.top + n.height / 2); return el && !!el.closest('td.name'); }""")
+    assert hit
+    # a sort from a scrolled heading: sorted, and still scrolled where it was
+    pg.locator("#projList th[data-col=shot]").click()
+    assert pg.evaluate("dock.project.sort()") == {"col": "shot", "dir": 1}
+    assert _clip_order(pg) == _expect("shot", 1)
+    assert pg.evaluate("document.querySelector('#projList').scrollLeft") == b["left"]
+    pg.locator("#projList th[data-col=shot]").click()
+    assert _clip_order(pg) == _expect("shot", -1)
+    # no cell is cut, scrolled or not
     assert pg.evaluate(OVERFLOW_JS) == []
     assert pg.errors == []
     pg.context.close()

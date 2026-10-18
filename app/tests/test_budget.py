@@ -135,8 +135,17 @@ HEADER_MAX_PX = 50
 # / film 111 · 56, / fx 134 · 60, / jobs 112 · 58 (AIPROMPT's +2 · +2 and BINLOOK's +3 · +1).
 # / jobs measured 112 · 58 and, on another run, under it by one (the job pill's text timing):
 # the limit is the larger, measured, count.
-WORDS_IN_VIEW = {"/": 103, "/floor": 58, "/open": 59, "/ shot": 129, "/ film": 111, "/ fx": 134,
-                 "/ jobs": 112}
+# Wave 13, lane BINLOOK2 (verdict 9 punch 9), measured, no headroom: the Project panel's List
+# view keeps every one of Premiere's columns and scrolls them sideways under its pinned Name,
+# so at 1440 the panel shows Name, Frame Rate and the start of Media Start where it showed
+# Name, Duration and Status: the headings +2 words ("Frame Rate", "Media Start" for
+# "Duration", "Status") and each of the 4 rows +1 ("24 fps" and its Media Start for its
+# duration and its status): / 103 → 109, / shot 129 → 135, / film 111 → 117, / fx 134 → 140,
+# / jobs 112 → 118. Controls unchanged. The count no longer takes a cell scrolled out of a
+# scroller as in view (INVENTORY_JS's `inView`; the columns past the panel's edge are inside
+# the window but unseen): on b7848ec that rule measures exactly the numbers above it.
+WORDS_IN_VIEW = {"/": 109, "/floor": 58, "/open": 59, "/ shot": 135, "/ film": 117, "/ fx": 140,
+                 "/ jobs": 118}
 CONTROLS_IN_VIEW = {"/": 57, "/floor": 8, "/open": 9, "/ shot": 72, "/ film": 56, "/ fx": 60,
                     "/ jobs": 58}
 
@@ -156,8 +165,25 @@ INVENTORY_JS = r"""
     const s = getComputedStyle(el);
     return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0';
   };
+  // In the window, and not scrolled out of a scroller it sits in (wave 13 BINLOOK2: the
+  // Project list's columns scroll sideways under its pinned Name; a cell scrolled past the
+  // panel's edge is inside the window but nobody sees it). A fixed element escapes every
+  // scroller; an absolute one is clipped only by a scroller it is positioned inside.
   const inView = el => { const r = el.getBoundingClientRect();
-    return r.top < innerHeight && r.bottom > 0 && r.left < innerWidth && r.right > 0; };
+    if (!(r.top < innerHeight && r.bottom > 0 && r.left < innerWidth && r.right > 0)) return false;
+    let pos = getComputedStyle(el).position;
+    for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
+      if (pos === 'fixed') return true;
+      const s = getComputedStyle(a);
+      const scrolls = /(auto|scroll)/.test(s.overflowX + s.overflowY);
+      if (scrolls && (pos !== 'absolute' || s.position !== 'static')) {
+        const b = a.getBoundingClientRect();
+        if (!(r.top < b.bottom && r.bottom > b.top && r.left < b.right && r.right > b.left)) return false;
+      }
+      if (pos === 'absolute' && s.position !== 'static') pos = s.position;
+      else if (pos !== 'absolute') pos = s.position;
+    }
+    return true; };
   const ctrls = [...document.querySelectorAll('button, a[href], input, select, textarea, [role=button], summary, label.chip, .chip')].filter(vis);
   let words = 0;
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);

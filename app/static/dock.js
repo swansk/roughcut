@@ -850,12 +850,12 @@
   /* ---------------------------------------------------------- the columns and the sort
    * Premiere's columns in Premiere's order. Every one but Name and Description is a fixed
    * width, as a Premiere bin's are, wide enough for its heading and its longest value
-   * (no cell is ever cut). Name, Duration and Status always show; a wider list adds Frame
-   * Rate, Video Info, Description, Media Start, Media End and Captured, in that order, while
-   * Name keeps NAME_MIN, and Audio Info last, when every other one fits; the rest are in
-   * each row's hover. The defaults (1440: 286 px, 1920:
-   * 382 px) show Name, Duration and Status; below 360 px the duration's heading is
-   * "Duration" (its full name would leave Name too little), above it "Media Duration". */
+   * (no cell is ever cut). Every column is always there (verdict 9, punch 9: at 1440 the
+   * list dropped all but Name, Duration and Status): a panel too narrow for them all
+   * scrolls them sideways under Premiere's pinned Name, the headings with the body; a
+   * wider one gives what the fixed columns leave to Name and Description, Name a little
+   * more. Frame Rate, Video Info and Audio Info wait for a clip that has one (the facts
+   * probe's answer, or a clip with sound). */
   const COLS = {
     name: { k: 'name', h: 'Name' },
     fps: { k: 'fps', h: 'Frame Rate', w: 86, num: true },
@@ -869,29 +869,20 @@
     shot: { k: 'shot', h: 'Captured', w: 120 },
   };
   const COL_ORDER = ['name', 'fps', 'start', 'end', 'dur', 'size', 'audio', 'state', 'note', 'shot'];
-  const COL_MORE = ['fps', 'size', 'note', 'start', 'end', 'shot', 'audio'];
   const NAME_MIN = 150;
   function columns(width, items) {
-    const dur = width < 360 ? { ...COLS.dur, h: 'Duration', w: 78 } : COLS.dur;
-    const on = new Set(['name', 'dur']);
-    let used = NAME_MIN + dur.w;
-    if (width > 220) { on.add('state'); used += COLS.state.w; }
-    for (const k of COL_MORE) {
-      if ((k === 'fps' && !items.some((x) => x.fps)) || (k === 'size' && !items.some((x) => x.w))
-          || (k === 'audio' && !items.some((x) => x.audio))) continue;
-      if (used + COLS[k].w > width) break;
-      on.add(k);
-      used += COLS[k].w;
-    }
-    const cols = COL_ORDER.filter((k) => on.has(k)).map((k) => ({ ...(k === 'dur' ? dur : COLS[k]) }));
-    if (on.has('note')) {
-      // Name and Description share what the fixed columns leave, Name a little more
-      const fixed = cols.reduce((a, c) => a + (c.k === 'name' || c.k === 'note' ? 0 : c.w), 0);
-      cols[0].w = Math.round(clamp((width - fixed) * 0.52, NAME_MIN, 340));
-      cols.find((c) => c.k === 'note').w = 0;
-    }
+    const cols = COL_ORDER.filter((k) => !((k === 'fps' && !items.some((x) => x.fps))
+      || (k === 'size' && !items.some((x) => x.w)) || (k === 'audio' && !items.some((x) => x.audio))))
+      .map((k) => ({ ...COLS[k] }));
+    const fixed = cols.reduce((a, c) => a + (c.k === 'name' || c.k === 'note' ? 0 : c.w), 0);
+    // the pinned Name keeps at least ~45 % of a narrow panel for the columns it scrolls past
+    const least = Math.min(NAME_MIN, Math.max(100, Math.round(width * 0.55)));
+    const name = cols[0], note = cols.find((c) => c.k === 'note');
+    name.w = Math.round(clamp((width - fixed) * 0.52, least, 340));
+    note.w = Math.max(COLS.note.w, width - fixed - name.w);
     return cols;
   }
+  const colsWidth = (cols) => cols.reduce((a, c) => a + c.w, 0);
 
   const collate = (typeof Intl !== 'undefined' && Intl.Collator)
     ? new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }).compare
@@ -994,7 +985,7 @@
 
   // the columns as painted: which, and Name's width to the nearest 24 px (a splitter drag
   // re-lays the list only when that changes)
-  const colsSig = (cols) => cols.map((c) => `${c.k}${c.k === 'name' && c.w ? Math.round(c.w / 24) : ''}`).join();
+  const colsSig = (cols) => cols.map((c) => `${c.k}${c.k === 'name' || c.k === 'note' ? Math.round(c.w / 24) : ''}`).join();
 
   function paintList(box, seqs, clips) {
     const all = seqs.concat(clips);
@@ -1015,8 +1006,15 @@
       rows.push(rowHtml(it, cols, tree));
       if (isOpenClip(it)) it.subs.forEach((s) => rows.push(rowHtml(subItem(s, it), cols, tree)));
     });
-    box.innerHTML = `<table class="plist"><colgroup>${cols.map((c) => `<col${c.w ? ` style="width:${c.w}px"` : ''}>`).join('')}</colgroup>`
+    // the table is as wide as its columns: wider than the panel, it scrolls sideways
+    // inside it (Name pinned), and a repaint (a sort, a poll) keeps where it was scrolled
+    const sl = box.scrollLeft, st = box.scrollTop;
+    box.innerHTML = `<table class="plist" style="width:${colsWidth(cols)}px">`
+      + `<colgroup>${cols.map((c) => `<col style="width:${c.w}px">`).join('')}</colgroup>`
       + `<thead><tr>${head}</tr></thead><tbody>${rows.join('')}</tbody></table>`;
+    if (sl) box.scrollLeft = sl;
+    if (st) box.scrollTop = st;
+    box.classList.toggle('hscrolled', box.scrollLeft > 0);
     return all;
   }
 
@@ -1066,6 +1064,7 @@
     if (!box) return;
     project.dirty = false;
     stopScrub(true);
+    box.classList.remove('hscrolled');
     $$('#projView button').forEach((b) => b.classList.toggle('on', b.dataset.view === project.view));
     const zoom = $('#projZoom');
     if (zoom) { zoom.hidden = project.view !== 'icon'; zoom.value = String(project.zoom); }
@@ -1410,6 +1409,9 @@
     };
     document.addEventListener('dragend', dragged, true);
     document.addEventListener('drop', dragged, true);
+    // the pinned Name's edge shadow, while the columns are scrolled under it
+    box.addEventListener('scroll', () => box.classList.toggle('hscrolled', project.view === 'list' && box.scrollLeft > 0),
+                         { passive: true });
     box.addEventListener('pointermove', scrubMove);
     box.addEventListener('pointerleave', () => stopScrub());
     $('#projQ').addEventListener('input', (e) => { project.q = e.target.value; paintProject(); });

@@ -10,8 +10,9 @@ waits for the test to let it go):
   * `,`, `.`, the Source monitor's Insert and a drag from the Project panel each put a
     clip the AI has not heard on V1 within 1 s, with an empty transcript; the shot
     survives a save and a reload;
-  * the Status column says heard / not indexed truthfully, and at >= 470 px the
-    Project list has Frame Rate and Resolution columns filled from /api/clips;
+  * the Status column says heard / not indexed truthfully, and the Project list has
+    Frame Rate and Video Info columns filled from /api/clips (a narrow one scrolls them
+    sideways);
   * with a fresh --work: no "No footage" text while /api/clips is pending (held with
     page.route), rows within 2 s, a picture in the Source monitor within 5 s, and the
     empty Timeline offers "Drag a clip here or press , · Run first pass".
@@ -245,11 +246,14 @@ def test_the_project_list_shows_frame_rate_and_resolution_when_wide(live_server,
     assert "Frame Rate" in head and "Video Info" in head, head          # Premiere's names (BINLOOK)
     first = _rows(pg).first.inner_text()
     assert "24 fps" in first and "320×180" in first, first
-    # the default (narrower) panel keeps to Name / Duration / Status
+    # the default (narrower) panel has them too, scrolled sideways under the pinned Name
+    # (verdict 9 punch 9; it used to keep to Name / Duration / Status)
     pg2 = _page(browser, live_server, size=(1440, 900))
     pg2.wait_for_function("document.querySelectorAll('#projList tr.row').length === 3")
+    head = pg2.locator("#projList th").all_inner_texts()
+    assert "Frame Rate" in head and "Video Info" in head, head
     if pg2.evaluate("document.querySelector('#projList').clientWidth") < 400:
-        assert "Frame Rate" not in pg2.locator("#projList th").all_inner_texts()
+        assert pg2.evaluate("(() => { const b = document.querySelector('#projList'); return b.scrollWidth > b.clientWidth; })()")
     assert pg.errors == [] and pg2.errors == []
     pg.context.close()
     pg2.context.close()

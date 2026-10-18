@@ -205,7 +205,8 @@ def test_the_project_panel_lists_the_footage_and_opens_a_clip_in_the_source_moni
     assert rows.count() == 3
     assert [r.split()[0] for r in rows.all_inner_texts()] == ["CLIP_A.MP4", "CLIP_B.MP4", "CLIP_C.MP4"]
     head = pg.locator("#projList th").all_inner_texts()
-    assert head[:2] == ["Name", "Duration"] and "Status" in head, head
+    # Premiere's columns, every one (a narrow panel scrolls them sideways: wave 13 BINLOOK2)
+    assert head[:2] == ["Name", "Frame Rate"] and "Media Duration" in head and "Status" in head, head
     assert pg.evaluate("tl.tc(6)") in rows.first.inner_text()     # durations in timecode
     # Premiere's count: every item in the bin, its three clips and its one sequence (wave 12
     # BINLOOK: the cut is a sequence in the bin)

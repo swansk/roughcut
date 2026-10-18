@@ -439,6 +439,16 @@ table.plist .st.ok { color: var(--good); }
 #projList table.plist tr[data-key]:hover td { background: #262629; }
 #projList table.plist tr[data-key].sel td { background: #34343a; color: #fff; }
 .ws-panel.focus #projList table.plist tr[data-key].sel td { background: #2b4f78; }
+/* Premiere's pinned Name (verdict 9, punch 9): every column is in the list, and a panel too
+   narrow for them scrolls them sideways under it; the headings stay on top and move with
+   the body. The pinned cells are opaque (the rows' own colours win: hover, selection), and
+   a shadow marks the edge while columns are scrolled under it. */
+#projList table.plist th[data-col=name], #projList table.plist td.name { position: sticky; left: 0; }
+#projList table.plist td.name { z-index: 1; background: var(--panel); }
+#projList table.plist th { z-index: 2; }
+#projList table.plist th[data-col=name] { z-index: 3; }
+#projList.hscrolled table.plist td.name,
+#projList.hscrolled table.plist th[data-col=name] { box-shadow: 1px 0 0 #38383e, 6px 0 6px -4px rgba(0,0,0,.85); }
 #projList table.plist td.name .n { gap: 3px; }
 #projList table.plist td.name svg { width: 13px; height: 13px; color: #b4b4bd; }
 #projList table.plist td.name .nm { min-width: 0; white-space: nowrap; }
