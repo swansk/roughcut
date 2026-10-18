@@ -51,6 +51,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -77,6 +78,7 @@ from roughcut import firstpass as fpmod  # noqa: E402
 from roughcut import procscope  # noqa: E402
 from roughcut import dirwatch  # noqa: E402
 from roughcut import tracks as tracksmod  # noqa: E402
+from roughcut import media as mediamod  # noqa: E402
 
 # Stop means stop (verdict 3, punch 5): a job thread inside a `procscope.active` block
 # starts its tools in their own process groups, and its cancel kills them.
@@ -115,7 +117,7 @@ def all_jobs() -> list[progress.Job]:
     """
     return [*ANALYSES.values(), *VISUALS.values(), *INDEXES.values(), *ASKS.values(),
             *FINDS.values(), *THEMES.values(), *FX.values(), *RENDERS.values(),
-            *DEEPS.values()]
+            *DEEPS.values(), *IMPORTS.values()]
 
 
 # Polled once a second by every open board, so it carries no payloads: a finished Ask
@@ -138,7 +140,8 @@ def api_jobs() -> JSONResponse:
 
 @app.get("/api/job/{job}")
 def api_job(job: str) -> JSONResponse:
-    for registry in (ANALYSES, VISUALS, INDEXES, ASKS, FINDS, THEMES, FX, RENDERS, DEEPS):
+    for registry in (ANALYSES, VISUALS, INDEXES, ASKS, FINDS, THEMES, FX, RENDERS, DEEPS,
+                     IMPORTS):
         if job in registry:
             return JSONResponse(registry[job].snapshot())
     raise HTTPException(404, "no such job")
@@ -171,7 +174,7 @@ def clip_probe(clip: str) -> dict | None:
     per poll."""
     cache = STATE.setdefault("probes", {})
     if clip not in cache:
-        src = STATE["footage"] / clip
+        src = clip_path(clip)
         try:
             cache[clip] = colourmod.probe(src) if src.exists() else None
         except RuntimeError:
@@ -206,7 +209,7 @@ def _measure_colour(clip: str, force: bool = False) -> dict | None:
         except ValueError:
             pass
     p = clip_probe(clip)
-    src = STATE["footage"] / clip
+    src = clip_path(clip)
     proxy = STATE["proxy_dir"] / f"{Path(clip).stem}.mp4"
     if proxy.exists():
         d = colourmod.measure_clip(proxy, COLOUR_EVERY_S, clip_probe=p, normalise=None)
@@ -565,7 +568,7 @@ def ensure_proxies(clips: list[str], progress=None) -> None:
         clip = first_wanted(pending)
         pending.remove(clip)
         i += 1
-        src = STATE["footage"] / clip
+        src = clip_path(clip)
         if not src.exists():
             print(f"  !! missing footage {clip}", flush=True)
             continue
@@ -613,12 +616,57 @@ def scaffold_edl(path: Path, footage: Path, orient: str) -> dict:
     return edl
 
 
-def footage_clips() -> list[str]:
+def folder_clips() -> list[str]:
+    """The video files in the bin's own folder (`--footage`), by name."""
     footage: Path = STATE["footage"]
     if not footage.is_dir():
         return []
     return sorted(p.name for p in footage.iterdir()
                   if p.suffix.lower() in VIDEO_SUFFIXES)
+
+
+def media_sources() -> mediamod.Sources:
+    """The bin's imports and uploads (REDESIGN-GOAL dimension 13, `roughcut/media.py`):
+    read once per bin (configure), kept in memory, written by this process only."""
+    src = STATE.get("media_sources")
+    if src is None or src.bin != STATE["footage"].name or src.dir.parent.parent != STATE["work"]:
+        src = STATE["media_sources"] = mediamod.Sources(STATE["work"], STATE["footage"].name)
+    return src
+
+
+def footage_clips() -> list[str]:
+    """Every clip of the bin: the folder's own files and what was imported or uploaded
+    into it (names fixed at import, `roughcut/media.py`), whose files are there now.
+    An imported clip keeps its name if a file with the same stem is dropped into the
+    folder later; that newcomer is not listed (a clip's name is its identity: its
+    sidecars, proxies and shots are keyed by it)."""
+    own = folder_clips()
+    extra = media_sources().present()
+    if not extra:
+        return own
+    taken = {mediamod.stem_key(c) for c, _p in extra}
+    return sorted([c for c in own if mediamod.stem_key(c) not in taken]
+                  + [c for c, _p in extra])
+
+
+def clip_path(clip: str) -> Path:
+    """The file a clip name stands for: an import's or an upload's own path, else the
+    bin's folder joined with the name. Every place that turns a clip name into a path
+    goes through here (wave 12 IMPORT), so a clip imported from another card plays,
+    probes, proxies and renders like one in the folder."""
+    p = media_sources().path_of(str(clip))
+    return p if p is not None else STATE["footage"] / clip
+
+
+def tool_footage() -> Path:
+    """The folder the tools are given (assemble.py's `--footage`, the audio and visual
+    passes, telemetry): the bin's own folder while nothing is imported, else the bin's
+    view under `--work` — one symlink per clip, named as the clip — because each tool
+    joins clip names onto its one folder. Rebuilt per call (a listing, a few links)."""
+    if not media_sources():
+        return STATE["footage"]
+    return mediamod.sync_view(mediamod.view_dir(STATE["work"], STATE["footage"].name),
+                              {c: clip_path(c) for c in footage_clips()})
 
 
 def analysed_stems() -> set[str]:
@@ -637,7 +685,7 @@ def capture_time(clip: str) -> float | None:
     cache: dict = STATE.setdefault("capture", {})
     if clip in cache:
         return cache[clip]
-    src: Path = STATE["footage"] / clip
+    src: Path = clip_path(clip)
     when: float | None = None
     if src.exists():
         r = subprocess.run(
@@ -755,7 +803,7 @@ def clip_duration(clip: str) -> float | None:
         return cache[clip]
     d = load_sidecar(clip).get("duration_s")
     if d is None:
-        src: Path = STATE["footage"] / clip
+        src: Path = clip_path(clip)
         d = probe_duration(src) if src.exists() else None
     cache[clip] = d
     return d
@@ -954,7 +1002,7 @@ def project_payload() -> dict:
     # wave 2, INGEST): listed with the free facts and an empty transcript, so the
     # monitor plays it and the Ask keeps it; the transcript arrives with the sidecar.
     for clip in sorted(referenced - clips.keys()):
-        if not edits.is_generated(clip) and (STATE["footage"] / clip).is_file():
+        if not edits.is_generated(clip) and clip_path(clip).is_file():
             clips[clip] = unheard_clip(clip, used=True)
     return {
         "title": edl.get("title", ""),
@@ -993,7 +1041,7 @@ def sequence_fps(segments: list[dict]) -> float:
         clips = footage_clips()[:1]
     rates: dict[float, int] = {}
     for clip in dict.fromkeys(clips):
-        src = STATE["footage"] / str(clip)
+        src = clip_path(str(clip))
         facts = media_facts(src) if src.exists() else None
         r = (facts or {}).get("fps")
         if r:
@@ -2967,10 +3015,13 @@ def _snap_targets() -> list[tuple[Path, tuple[str, ...]]]:
     """The folders the snapshot reads and the names in them that matter."""
     files = [STATE["edl"], journal_path(), proposal_path(), firstpass_path(), spend_path(),
              settings_path()]
+    media = mediamod.media_dir(STATE["work"], STATE["footage"].name)
     return ([(STATE["footage"], ("*",)), (STATE["sidecars"], ("*.audio.json",)),
              (STATE["visual"], ("*",)), (STATE["asks"], ("*.json",)),
              (fx_home(), ("fx_*",)), (STATE["proxy_dir"], ("*.mp4",)),
-             (STATE["renders"], ("cut_*",)), (generated_dir(), ("*.mp4",))]
+             (STATE["renders"], ("cut_*",)), (generated_dir(), ("*.mp4",)),
+             # imports and uploads (wave 12 IMPORT): the list, and the uploaded files
+             (media, (mediamod.SOURCES_FILE,)), (media / "uploads", ("*",))]
             + [(f.parent, (f.name,)) for f in files])
 
 
@@ -3437,13 +3488,23 @@ def firstpass_state() -> dict:
     if since and not pending:
         stale.append(f"{len(since)} shot{'s' if len(since) != 1 else ''} edited by hand "
                      "since")
-    new_clips = int(facts.get("clips") or 0) - int(rec.get("clips") or 0)
-    if new_clips > 0:
-        stale.append(f"{new_clips} new clip{'s' if new_clips != 1 else ''} in the folder")
+    # Footage added since the run (wave 12 IMPORT: imported, uploaded or dropped into the
+    # folder): by name when the record kept the names, else by count. The board offers
+    # them to a re-run ("3 new clips: add them to the cut?"), which says what it keeps.
+    names = rec.get("clip_names")
+    if isinstance(names, list):
+        then_clips = set(names)
+        fresh = [c for c in footage_clips() if c not in then_clips]
+        n_new = len(fresh)
+    else:
+        fresh = []
+        n_new = int(facts.get("clips") or 0) - int(rec.get("clips") or 0)
+    if n_new > 0:
+        stale.append(f"{n_new} new clip{'s' if n_new != 1 else ''} since the last run")
     out.update(state="stale-after-edits" if (since and not pending) else "done",
                when=rec.get("finished"), produced=rec.get("produced") or {},
                proposal={**prop, "pending": pending, "answer": answered}, stale=stale,
-               edited_since=since)
+               edited_since=since, new_clips=fresh, new_count=max(0, n_new))
     return out
 
 
@@ -3576,17 +3637,44 @@ def firstpass_index(fp: dict) -> str | None:
         return None
     if running is not None and not running.get("cancel"):
         running["coarse"] = True
+        if running.get("free"):              # started by an import: the pass needs looks
+            running["free"] = False
+            running["label"] = "Indexing the footage"
+        # The running index read the clip list when it began (often the last pass's,
+        # still building previews): footage imported since joins it before this pass
+        # counts the bin as heard (wave 12 IMPORT — a re-run once cut without them).
         job = running["id"]
+        want = index_ask_intake(running)
     else:
         job = index_entry()
         INDEXES[job]["coarse"] = True
         threading.Thread(target=_index_run, args=(job, ""), daemon=True).start()
+        want = 0
     fp["index_job"] = job
     while True:
         e = INDEXES[job]
-        if fp.get("cancel") or e["state"] in progress.TERMINAL or e.get("coarse_ready"):
+        if fp.get("cancel"):
+            return job
+        if e["state"] in progress.TERMINAL:
+            if int(e.get("took") or 0) < want and not e.get("cancel"):
+                # it ended before it took the new footage in: one more run for it
+                job = index_entry()
+                INDEXES[job]["coarse"] = True
+                threading.Thread(target=_index_run, args=(job, ""), daemon=True).start()
+                fp["index_job"] = job
+                want = 0
+                continue
+            return job
+        if e.get("coarse_ready") and int(e.get("took") or 0) >= want:
             return job
         time.sleep(FIRSTPASS_POLL_S)
+
+
+def index_ask_intake(entry: progress.Job) -> int:
+    """Ask a running index to take in the bin's clips again (footage imported since it
+    began). Returns the number its `took` reaches once it has (`_index_walk`)."""
+    entry["asked"] = int(entry.get("asked") or 0) + 1
+    return entry["asked"]
 
 
 def _fp_step(fp: dict, key: str, state: str, **extra) -> None:
@@ -3615,6 +3703,8 @@ def _firstpass_job(job: str) -> None:
 def _firstpass_walk(job: str, fp: dict) -> None:
     rec = {"job": job, "mode": fp["mode"], "keep": fp["keep"], "state": "running",
            "started": fp["started"], "clips": len(footage_clips()),
+           # which clips the run saw: what an import afterwards is new against
+           "clip_names": footage_clips(),
            "cut": cut_name_of(read_edl(), STATE["edl"])}
     try:
         rec["manual"] = [{k: r[k] for k in ("id", "clip", "in", "out")}
@@ -3764,7 +3854,7 @@ def analyze_cmd(skip: list[str], force: bool) -> list[str]:
     faster-whisper for real would mean a GPU, a 3GB model download and minutes per
     suite — none of which says anything about whether the job plumbing works."""
     cmd = ["uv", "run", "--quiet", str(TOOLS / "audio_analyze.py"),
-           str(STATE["footage"]), "-o", str(STATE["sidecars"])]
+           str(tool_footage()), "-o", str(STATE["sidecars"])]
     if skip:
         cmd += ["--skip", ",".join(skip)]
     if force:
@@ -3948,7 +4038,7 @@ def api_analyze_status(job: str) -> JSONResponse:
 def visual_cmd(only: list[str], force: bool) -> list[str]:
     """The visual pass, as a command. A function so the tests can replace it: the real
     tool spends a model call per contact sheet."""
-    cmd = ["uv", "run", "--quiet", str(TOOLS / "visual_pass.py"), str(STATE["footage"]),
+    cmd = ["uv", "run", "--quiet", str(TOOLS / "visual_pass.py"), str(tool_footage()),
            "-o", str(STATE["visual"]), "--orient", STATE["orient"],
            "--interval", f"{look_interval():g}"]
     if only:
@@ -4772,6 +4862,11 @@ async def api_settings_put(request: Request) -> JSONResponse:
 
 
 INDEXES: dict[str, progress.Job] = {}
+# A free index (one an import starts, wave 12 IMPORT): `Journal.next`'s per-call worker
+# limits with the sheet pool — the look and the close look, the priced stages — at 0.
+# Nothing is written to the journal, so the next index the editor starts is priced as
+# ever and a restart forgets the hold.
+FREE_ONLY = {"sheet": 0}
 
 
 def journal_path() -> Path:
@@ -4842,7 +4937,7 @@ def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
     """Run one stage for one clip with the existing tools. Returns the cost in USD.
     Raises on failure; the caller records it and the journal decides on retries."""
     stem = Path(clip).stem
-    src = STATE["footage"] / clip
+    src = clip_path(clip)
     if stage == "probe":
         if clip_duration(clip) is None:
             raise RuntimeError("ffprobe could not read the clip")
@@ -5103,6 +5198,26 @@ def _index_job(job: str, order: str) -> None:
         INDEX_SCOPES.pop(job, None)
 
 
+def _index_take_in(j: journal.Journal, entry: progress.Job) -> list[str]:
+    """Footage imported while this index runs: into the journal and probed, so the walk
+    hears and previews it in this run (the walk read the clip list when it began)."""
+    more = [c for c in footage_clips() if c not in j.clips or j.clips[c].get("missing")]
+    if not more:
+        return []
+    j.add_clips(more, captured={c: capture_time(c) for c in more})
+    for clip in more:
+        if j.state(clip, "probe") in journal.RETRYABLE:
+            j.start(clip, "probe")
+            try:
+                _index_stage(j, clip, "probe")
+            except Exception as exc:  # noqa: BLE001
+                j.fail(clip, "probe", str(exc)[:200])
+            else:
+                j.finish(clip, "probe")
+    entry.note(f"added {len(more)} imported clip{'s' if len(more) != 1 else ''}")
+    return more
+
+
 def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
     entry = INDEXES[job]
     j = load_journal()
@@ -5211,6 +5326,13 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
             except (OSError, ValueError, journal.JournalError) as exc:
                 entry.note(f"junk check skipped: {str(exc)[:80]}")
             coarse = bool(entry.get("coarse"))
+            # Footage imported while the index runs (wave 12 IMPORT) joins this run:
+            # added to the journal, probed, then walked like the rest.
+            asked = int(entry.get("asked") or 0)
+            if asked > int(entry.get("took") or 0):
+                _index_take_in(j, entry)
+                entry["coarse_ready"] = j.coarse_ready()
+                entry["took"] = asked
             # The cut's clips take the proxy pool first, in film order (verdict 5 punch 2:
             # the Program shows a 360p preview until a clip's 720p proxy lands) — once the
             # first pass's coarse tier, what its proposal waits on, is through.
@@ -5226,7 +5348,9 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
                 running[(pick, "proxy")] = th
                 th.start()
             while True:
-                nxt = j.next(coarse=coarse)
+                # a free run (started by an import) holds the priced stages for this
+                # run only: the sheet pool at 0, never the journal's own pause
+                nxt = j.next(coarse=coarse, workers=FREE_ONLY if entry.get("free") else None)
                 if nxt is None:
                     break
                 clip, stage = nxt
@@ -5245,6 +5369,8 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
                 running[(clip, stage)] = th
                 th.start()
             if not running:
+                if int(entry.get("asked") or 0) > int(entry.get("took") or 0):
+                    continue                 # new footage asked in meanwhile: take it
                 break
         with cond:
             if not landed:
@@ -5259,6 +5385,12 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
     n = len([c for c in j.clips if not j.clips[c].get("missing")])
     tail = (f" — priced stages paused: {j.data.get('paused_reason') or 'budget cap'}"
             if j.paused_priced else "")
+    if entry.get("free") and not tail:
+        held = sum(1 for c in j.clips if not j.clips[c].get("missing")
+                   and j.state(c, "look") in journal.RETRYABLE)
+        if held:
+            tail = (f" — {held} clip{'s' if held != 1 else ''} not looked at yet: the look "
+                    "is priced, so it waits for you (Run first pass)")
     parked = prog.get("parked", 0)
     if parked:
         tail += f" — {parked} clip{'s' if parked != 1 else ''} parked"
@@ -5275,7 +5407,7 @@ def has_telemetry(clip: str) -> bool | None:
     cache: dict = STATE.setdefault("telemetry", {})
     if clip in cache:
         return cache[clip]
-    src: Path = STATE["footage"] / clip
+    src: Path = clip_path(clip)
     if not src.exists():
         return None
     r = subprocess.run(
@@ -5301,7 +5433,7 @@ def telemetry_dir() -> Path:
 def telemetry_cmd(stem: str) -> list[str]:
     """R11's tool over one clip — a function so the tests can replace it. Free: ffmpeg
     and pure Python, no model call."""
-    return ["uv", "run", "--quiet", str(TOOLS / "telemetry.py"), str(STATE["footage"]),
+    return ["uv", "run", "--quiet", str(TOOLS / "telemetry.py"), str(tool_footage()),
             "-o", str(telemetry_dir()), "--only", stem]
 
 
@@ -5370,7 +5502,7 @@ def _probe_clip_facts(clip: str, footage: Path) -> dict | None:
     has_telemetry's caches), then MEDIA's cached `media_facts` for the picture."""
     if STATE.get("footage") != footage:
         return None                      # re-pointed at another bin meanwhile
-    src = footage / clip
+    src = clip_path(clip)
     if not src.is_file():
         return None
     durations = STATE.setdefault("durations", {})
@@ -5515,6 +5647,7 @@ def api_clips() -> JSONResponse:
     # The junk band I5.1 wanted on the wire: the proposal's one word per clip.
     junk_of = {r["clip"]: r["state"] for r in junk_rows()}
     heard, looked, closed = analysed_stems(), visual_stems(), fine_stems()
+    sources = media_sources()
     out = []
     for clip in clips:
         stem = Path(clip).stem
@@ -5536,6 +5669,9 @@ def api_clips() -> JSONResponse:
             "codec": f.get("codec"),
             "released": clip in released,
             "junk": junk_of.get(clip, "clean"),
+            # where it lives (wave 12 IMPORT): the bin's folder, imported in place, or
+            # uploaded from the viewer's computer — Premiere's Media Path
+            **_clip_origin(clip, sources),
             "journal": None if rec is None else {
                 "priority": rec.get("priority"), "missing": bool(rec.get("missing")),
                 "parked": rec.get("parked"),
@@ -5555,7 +5691,17 @@ async def api_index(request: Request) -> JSONResponse:
     the state, so a second call after a crash is a resume and a call after new footage
     is dropped into the folder is "index what isn't done"."""
     body = await request.json() if int(request.headers.get("content-length") or 0) else {}
-    if any(x["state"] not in progress.TERMINAL for x in INDEXES.values()):
+    live = next((x for x in INDEXES.values() if x["state"] not in progress.TERMINAL), None)
+    if live is not None and live.get("free") and not live.get("cancel") \
+            and not body.get("pause_priced"):
+        # the free run an import started: asking for the index is asking for its priced
+        # stages too, so that run takes them on (no second index, no 409)
+        live["free"] = False
+        live["label"] = "Indexing the footage"
+        if body.get("resume_priced"):
+            load_journal().resume_priced()
+        return JSONResponse({"job": live["id"], "joined": True})
+    if live is not None:
         raise HTTPException(409, "the index is already running")
     if not footage_clips():
         raise HTTPException(400, "no footage to index")
@@ -5591,11 +5737,12 @@ def _index_run(job: str, order: str) -> None:
             INDEXES[job].finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
 
 
-def index_entry() -> str:
+def index_entry(free: bool = False) -> str:
     """A new index job in INDEXES, the way /api/index and the first pass start one."""
     job = uuid.uuid4().hex[:8]
     INDEXES[job] = progress.Job(
-        "index", "Indexing the footage", id=job, state="running", journal=None,
+        "index", "Indexing the new footage (free)" if free else "Indexing the footage",
+        id=job, state="running", journal=None, free=free,
         released=0, cost_usd=0.0, detail="opening the journal")
     # No clock estimate: a fixed 60 s called "measured" drew 18 % at 7 s and 90 % for
     # 12 min with nothing heard (verdict 2). The bar is held to the journal's counted
@@ -5807,7 +5954,7 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
     # listing the folder (the versions list, a file manager) ever sees half a file.
     write_to = out_path.with_name(f".{out_path.stem}.{job}.partial.mp4") if export else out_path
     cmd = ["uv", "run", "--quiet", str(TOOLS / "assemble.py"), str(edl_path),
-           "--footage", str(STATE["footage"]), "--sidecars", str(STATE["sidecars"]),
+           "--footage", str(tool_footage()), "--sidecars", str(STATE["sidecars"]),
            "--assets", str(STATE["assets"]), "--profile", meta.get("profile", "preview"),
            "--colour-dir", str(colour_dir()),
            "--generated-dir", str(generated_dir()),
@@ -6219,7 +6366,7 @@ def _native_frame() -> tuple[int, int] | None:
     for seg in edl.get("segments") or []:
         if edits.is_generated(seg.get("clip", "")):
             continue
-        src = STATE["footage"] / seg["clip"]
+        src = clip_path(seg["clip"])
         cache = STATE.setdefault("export_frames", {})
         if str(src) not in cache:
             cache[str(src)] = probe_resolution(src) if src.exists() else None
@@ -6435,7 +6582,7 @@ def _sample_job(preset: str, key: str, scope: procscope.Scope) -> None:
         edl_path, out = work / "sample.json", work / "sample.mp4"
         edl_path.write_text(json.dumps(sample), encoding="utf-8")
         cmd = ["uv", "run", "--quiet", str(TOOLS / "assemble.py"), str(edl_path),
-               "--footage", str(STATE["footage"]), "--sidecars", str(STATE["sidecars"]),
+               "--footage", str(tool_footage()), "--sidecars", str(STATE["sidecars"]),
                "--assets", str(STATE["assets"]), "--profile", p["profile"],
                "--colour-dir", str(colour_dir()), "--generated-dir", str(generated_dir()),
                "--parts-dir", str(work / "parts"), "--fps", rate, "-o", str(out),
@@ -7097,7 +7244,7 @@ def poster_source(stem: str) -> tuple[Path, bool] | None:
     prev = preview_path(stem)
     if prev.exists():
         return prev, False
-    return STATE["footage"] / clip, True
+    return clip_path(clip), True
 
 
 POSTER_BUILDING: dict[str, threading.Event] = {}     # dest -> set when that build ends
@@ -7719,7 +7866,7 @@ def needs_preview(clip: str) -> bool:
     stem = Path(clip).stem
     if (STATE["proxy_dir"] / f"{stem}.mp4").exists() or preview_path(stem).exists():
         return False
-    src = STATE["footage"] / clip
+    src = clip_path(clip)
     return src.exists() and not browser_playable(src)
 
 
@@ -7781,11 +7928,11 @@ def ensure_preview(clip: str) -> Path | None:
     dest = preview_path(Path(clip).stem)
     if dest.exists():
         return dest
-    if not (STATE["footage"] / clip).exists():
+    if not clip_path(clip).exists():
         return None
     ev, owner = _claim_preview(str(dest))
     if owner:
-        _build_claimed(STATE["footage"] / clip, dest, STATE.get("orient", "auto"), ev)
+        _build_claimed(clip_path(clip), dest, STATE.get("orient", "auto"), ev)
     else:
         with media_waiting(str(dest)):
             ev.wait()
@@ -7803,12 +7950,12 @@ def start_preview(clip: str) -> threading.Event | None:
         done.set()
         return done
     key = str(dest)
-    if _failed_recently(key) or not (STATE["footage"] / clip).exists():
+    if _failed_recently(key) or not clip_path(clip).exists():
         return None
     ev, owner = _claim_preview(key)
     if owner:
         threading.Thread(target=_build_claimed, daemon=True, args=(
-            STATE["footage"] / clip, dest, STATE.get("orient", "auto"), ev, True)).start()
+            clip_path(clip), dest, STATE.get("orient", "auto"), ev, True)).start()
     return ev
 
 
@@ -7819,7 +7966,7 @@ def media_fallback(clip: str, wait_s: float = 0.0) -> tuple[str, str | None]:
     stem = Path(clip).stem
     if (STATE["proxy_dir"] / f"{stem}.mp4").exists():
         return "proxy", None
-    if browser_playable(STATE["footage"] / clip):
+    if browser_playable(clip_path(clip)):
         return "original", f"/media/original/{stem}.mp4"
     rec = range_record(stem)
     if rec is not None:
@@ -8015,7 +8162,7 @@ def range_record(stem: str) -> dict | None:
     clip = clip_for_stem(stem)
     if d is None or clip is None or not (d / "ranges").is_dir():
         return None
-    src_id = _range_src_id(STATE["footage"] / clip)
+    src_id = _range_src_id(clip_path(clip))
     best = None
     for js in (d / "ranges").glob(f"{stem}.*.json"):
         try:
@@ -8139,7 +8286,7 @@ def needs_range(clip: str, cut: dict | None = None) -> bool:
         return False
     want = range_wanted(clip, cut)
     stem = Path(clip).stem
-    src = STATE["footage"] / clip
+    src = clip_path(clip)
     if not want or clip_for_stem(stem) != clip or not src.exists():
         return False
     if (STATE["proxy_dir"] / f"{stem}.mp4").exists() or browser_playable(src):
@@ -8160,7 +8307,7 @@ def ensure_range(clip: str, cut: dict | None = None) -> dict | None:
     or the build failed)."""
     want = range_wanted(clip, cut)
     stem = Path(clip).stem
-    src = STATE["footage"] / clip
+    src = clip_path(clip)
     if not want or not src.exists():
         return None
     dur = clip_duration(clip)
@@ -8345,7 +8492,7 @@ def media_original(name: str, request: Request) -> Response:
     """A footage original, for a browser that can play it as it is (and only then:
     a 4K HEVC master is never handed to a <video>)."""
     clip = clip_for_stem(Path(name).stem)
-    src = STATE["footage"] / clip if clip else None
+    src = clip_path(clip) if clip else None
     if src is None or not browser_playable(src):
         raise HTTPException(404, f"no playable original: {Path(name).name}")
     return ranged_file(src, request, mime=MEDIA_MIME.get(src.suffix.lower()))
@@ -8620,7 +8767,7 @@ def peaks_source(stem: str) -> Path | None:
     clip = clip_for_stem(stem)
     if clip is None:
         return None
-    for p in (STATE["proxy_dir"] / f"{stem}.mp4", preview_path(stem), STATE["footage"] / clip):
+    for p in (STATE["proxy_dir"] / f"{stem}.mp4", preview_path(stem), clip_path(clip)):
         if p.exists() and (media_facts(p) or {}).get("acodec"):
             return p
     return None
@@ -8632,7 +8779,7 @@ def peaks_dest(stem: str, src: Path | None = None) -> Path | None:
     never invalidates peaks made from the original), else by `src`'s (a generated
     clip's file). None when there is nothing to key on."""
     orig = clip_for_stem(stem)
-    key_src = STATE["footage"] / orig if orig and (STATE["footage"] / orig).exists() else src
+    key_src = clip_path(orig) if orig and clip_path(orig).exists() else src
     if key_src is None:
         return None
     kst = key_src.stat()
@@ -8786,7 +8933,8 @@ def peaks_changed(changes: list[tuple[Path, str]]) -> None:
             continue
         if str(d) == str(STATE.get("sidecars")) and name.endswith(".audio.json"):
             heard.append(name[: -len(".audio.json")])
-        elif str(d) in (str(STATE.get("footage")), str(generated_dir())):
+        elif str(d) in (str(STATE.get("footage")), str(generated_dir()),
+                        str(mediamod.uploads_dir(STATE["work"], STATE["footage"].name))):
             forget_peaks(Path(name).stem)
     if heard:
         queue_peaks(heard)
@@ -8899,7 +9047,7 @@ def _fx_proxy(clip: str) -> Path | None:
         g = generated_dir() / clip
         if g.exists():
             return g
-    src = STATE["footage"] / clip
+    src = clip_path(clip)
     return src if src.exists() else None
 
 
@@ -9759,7 +9907,7 @@ def _generated_source(clip: str) -> Path:
     else:
         p = STATE["proxy_dir"] / f"{Path(clip).stem}.mp4"
         if not p.exists():
-            p = STATE["footage"] / clip
+            p = clip_path(clip)
     if not p.exists():
         raise RuntimeError(f"no footage to take a still from: {clip}")
     return p
@@ -10081,6 +10229,445 @@ async def api_edits_undo(request: Request) -> JSONResponse:
         selects.sync_timeline(edl)
     write_edl(edl)
     return JSONResponse({"ok": True, "segments": clean})
+
+
+# ------------------------------------------------------------ import (wave 12, K3 b)
+#
+# REDESIGN-GOAL dimension 13, Karl 2026-10-16: *"there is no clear way to add new
+# footage."* Footage comes in three ways, all into the open bin, none needing a restart:
+#
+#   * POST /api/import {paths}: files, or every video under a folder, on the machine that
+#     runs the board, referenced in place (never copied) — File › Import and the Media
+#     Browser (GET /api/media/browse lists a folder: names, sizes, dates; no ffprobe);
+#   * POST /api/upload {files} then PUT /api/upload/{batch}/{i} per file: from the
+#     viewer's own computer (Karl opens foxtrot's board from a laptop), each file's bytes
+#     streamed to disk under the bin's --work media dir in 4 MB writes off the event loop,
+#     never held in memory; the batch is a job in /api/jobs, so the header's job row shows
+#     it and a second tab sees it;
+#   * a file dropped into the bin's folder by hand, as before.
+#
+# Whatever lands goes through `media_added`: the snapshots see it, its free facts are
+# probed (duration, rate, size), its poster is made, previews start, and the free part of
+# the index (probe, telemetry, the sound, proxies) starts — the priced look never does on
+# its own (INTAKE): it waits for Run first pass, whose panel prices it.
+
+IMPORTS: dict[str, progress.Job] = {}       # upload batches, as jobs (kind "import")
+UPLOADS: dict[str, dict] = {}               # batch -> {rows, job, last, got, total}
+UPLOAD_WRITE = 4 << 20                      # bytes per write (and the most held in memory)
+UPLOAD_SPARE = 512 << 20                    # what an upload must leave free on the disk
+UPLOAD_STALL_S = 30.0                       # a batch with nothing arriving this long ends
+IMPORT_MAX_PATHS = 500
+UPLOAD_MAX_FILES = 500
+
+
+def _clip_origin(clip: str, sources: mediamod.Sources | None = None) -> dict:
+    """Where a clip lives: `source` folder | import | upload, and its `path`."""
+    e = (sources or media_sources()).entry(clip)
+    if e is None:
+        return {"source": "folder", "path": str(STATE["footage"] / clip)}
+    return {"source": e.get("kind") or "import", "path": e["path"],
+            "came_as": e.get("from") or Path(e["path"]).name}
+
+
+def media_changed() -> None:
+    """The clip list changed: every snapshot is rebuilt on its next read."""
+    with SNAP["lock"]:
+        SNAP["gen"] += 1
+        SNAP["rearm"] = True
+
+
+def media_added(clips: list[str]) -> dict:
+    """New clips are in the bin: the free work on them starts now, in the background.
+    Returns {index: the job id of the index that will hear them, or None}."""
+    clips = [c for c in clips if c]
+    if not clips:
+        return {"index": None}
+    media_changed()
+    warm_clip_facts(clips)                   # the Project panel's columns: length, rate, size
+    threading.Thread(target=_import_posters, args=(clips, STATE["footage"]),
+                     daemon=True).start()
+    kick_previews()                          # previews on a GPU; the walk re-reads the list
+    MEDIA["kick"].set()
+    return {"index": start_free_index()}
+
+
+def _import_posters(clips: list[str], footage: Path) -> None:
+    """Each new clip's card picture, at the frame the panel will ask for (1 s in), made
+    before it asks: the panel's request then finds it on disk or joins this build."""
+    for clip in clips:
+        if STATE.get("footage") != footage:
+            return
+        try:
+            clip_duration(clip)
+            with procscope.active(media_scope()):
+                ensure_poster(Path(clip).stem, poster_time(clip), slots=WALK_POSTER_SLOTS)
+        except (RuntimeError, OSError) as exc:
+            print(f"  !! poster: {clip}: {exc}", flush=True)
+
+
+def start_free_index() -> str | None:
+    """The free part of the index for new footage: join a running index (it takes the
+    new clips in on its next turn), else start one that holds the priced stages for this
+    run (`FREE_ONLY`). Off where nothing is built behind the human's back (--no-proxies,
+    the suite) unless `STATE["index_on_import"]` says otherwise."""
+    if not STATE.get("index_on_import", STATE.get("proxies_enabled", True)):
+        return None
+    live = next((x for x in INDEXES.values() if x["state"] not in progress.TERMINAL), None)
+    if live is not None:
+        if live.get("cancel"):
+            return None
+        want = index_ask_intake(live)
+        threading.Thread(target=_intake_after, args=(live, want), daemon=True).start()
+        return live["id"]
+    if not footage_clips():
+        return None
+    job = index_entry(free=True)
+    threading.Thread(target=_index_run, args=(job, ""), daemon=True).start()
+    return job
+
+
+def _intake_after(entry: progress.Job, want: int) -> None:
+    """An index asked to take new footage in that ended first (its last stage landed as
+    the import did): a free run for what it missed."""
+    while entry["state"] not in progress.TERMINAL:
+        time.sleep(0.5)
+    if int(entry.get("took") or 0) < want and not entry.get("cancel") \
+            and not any(x["state"] not in progress.TERMINAL for x in INDEXES.values()):
+        start_free_index()
+
+
+def _in_project_paths() -> set[str]:
+    return ({os.path.realpath(STATE["footage"] / c) for c in folder_clips()}
+            | media_sources().real_paths())
+
+
+@app.get("/api/media/browse")
+def api_media_browse(path: str = "") -> JSONResponse:
+    """One folder of the machine that runs the board, as the Media Browser lists it: its
+    folders and video files (name, size, modified; `in_project` on what the bin already
+    has), the places to start from (`roots`), and this machine's name. A plain `def`, so
+    it runs on a worker thread: a big folder never holds the event loop."""
+    want = (path or "").strip() or str(STATE["footage"].parent)
+    try:
+        d = mediamod.browse(Path(want), in_project=_in_project_paths())
+    except FileNotFoundError:
+        raise HTTPException(404, f"no such folder: {want}")
+    except NotADirectoryError:
+        raise HTTPException(400, f"not a folder: {want}")
+    except PermissionError:
+        raise HTTPException(403, f"no permission to read {want}")
+    except OSError as exc:
+        raise HTTPException(400, f"cannot read {want}: {exc.strerror or exc}")
+    d["roots"] = mediamod.roots(STATE["footage"])
+    d["host"] = socket.gethostname()
+    d["bin"] = {"name": STATE["footage"].name, "folder": str(STATE["footage"])}
+    return JSONResponse(d)
+
+
+@app.get("/api/media/sources")
+def api_media_sources() -> JSONResponse:
+    """What was imported or uploaded into this bin, where each file is, and whether it
+    is there now (an unplugged drive's clips are not listed in /api/clips)."""
+    rows = []
+    for e in media_sources().entries:
+        p = Path(e["path"])
+        rows.append({**e, "present": p.is_file()})
+    return JSONResponse({"bin": STATE["footage"].name, "folder": str(STATE["footage"]),
+                         "entries": rows, "uploads": str(mediamod.uploads_dir(
+                             STATE["work"], STATE["footage"].name))})
+
+
+def _import_paths(paths: list[str]) -> dict:
+    """POST /api/import's work, off the event loop: expand, de-duplicate, name, save."""
+    files, skipped = mediamod.scan([Path(p) for p in paths])
+    own = {os.path.realpath(STATE["footage"] / c) for c in folder_clips()}
+    keep = []
+    for f, hint in files:
+        if os.path.realpath(f) in own:
+            skipped.append({"path": str(f), "why": "already in the project (the bin's folder)"})
+        else:
+            keep.append((f, hint))
+    added, more = media_sources().add(keep, "import", folder_clips())
+    started = media_added(added)
+    return {"added": added, "skipped": skipped + more, "clips": len(footage_clips()),
+            "index": started["index"]}
+
+
+@app.post("/api/import")
+async def api_import(request: Request) -> JSONResponse:
+    """Import files or folders from the machine that runs the board into the open bin,
+    referenced in place (Premiere's File › Import). Body `{paths: [...]}`: a file is
+    itself, a folder is every video under it. Answers at once with the clips added (each
+    one's name: its own, or `<stem>-<folder>` when the stem is taken) and what was
+    skipped and why; posters, facts, previews and the free index follow in the
+    background."""
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(400, "expected a JSON object")
+    paths = body.get("paths") if isinstance(body, dict) else None
+    if isinstance(paths, str):
+        paths = [paths]
+    if not isinstance(paths, list) or not paths \
+            or not all(isinstance(p, str) and p.strip() for p in paths):
+        raise HTTPException(400, "paths: a list of files or folders to import")
+    if len(paths) > IMPORT_MAX_PATHS:
+        raise HTTPException(400, f"at most {IMPORT_MAX_PATHS} paths at once")
+    return JSONResponse(await asyncio.to_thread(_import_paths, [p.strip() for p in paths]))
+
+
+@app.post("/api/media/remove")
+async def api_media_remove(request: Request) -> JSONResponse:
+    """Take imported or uploaded clips out of the bin (Premiere's Clear). A clip a cut
+    uses is refused; a referenced file is never touched; an uploaded file goes to the
+    uploads' trash/, where a hand can get it back. The bin's own folder is never edited."""
+    body = await request.json()
+    clips = body.get("clips") if isinstance(body, dict) else None
+    if not isinstance(clips, list) or not all(isinstance(c, str) for c in clips):
+        raise HTTPException(400, "clips: which clips to remove")
+    src = media_sources()
+    mine = [c for c in clips if src.entry(c) is not None]
+    used = {s.get("clip") for s in read_edl().get("segments") or []}
+    if used & set(mine):
+        raise HTTPException(409, "the cut uses " + ", ".join(sorted(used & set(mine)))
+                            + " — take it out of the cut first")
+
+    def work() -> list[dict]:
+        gone = src.remove(mine)
+        trash = mediamod.uploads_dir(STATE["work"], STATE["footage"].name) / "trash"
+        for e in gone:
+            if e.get("kind") == "upload" and Path(e["path"]).is_file():
+                trash.mkdir(parents=True, exist_ok=True)
+                Path(e["path"]).replace(trash / f"{int(time.time())}-{Path(e['path']).name}")
+        media_changed()
+        return gone
+
+    gone = await asyncio.to_thread(work)
+    return JSONResponse({"removed": [e["clip"] for e in gone],
+                         "not_imported": [c for c in clips if c not in mine],
+                         "clips": len(footage_clips())})
+
+
+def _disk_free(d: Path) -> int:
+    p = d
+    while not p.exists() and p != p.parent:
+        p = p.parent
+    try:
+        return shutil.disk_usage(p).free
+    except OSError:
+        return 0
+
+
+def _fmt_bytes(n: float) -> str:
+    n = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.0f} {unit}" if unit in ("B", "KB") else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+
+def _upload_tick(up: dict) -> None:
+    """The batch's job, from its rows: bytes in, files landed, ended when every file has
+    landed or failed. Called per chunk, so it only adds and compares."""
+    job: progress.Job = up["job"]
+    if job["state"] in progress.TERMINAL:
+        return
+    rows = [r for r in up["rows"] if not r.get("skip")]
+    got = up["landed_bytes"] + sum(r["got"] for r in rows if r["state"] == "uploading")
+    total = max(1, up["total"])
+    landed = sum(1 for r in rows if r["state"] == "done")
+    job["done"] = landed
+    job["got"] = got
+    cur = next((r for r in rows if r["state"] == "uploading"), None)
+    detail = (f"{cur['clip']} · {_fmt_bytes(got)} of {_fmt_bytes(up['total'])}" if cur
+              else f"{landed} of {len(rows)} files in")
+    job.advance("upload", got / total, detail=detail)
+    if all(r["state"] in ("done", "failed") for r in rows):
+        failed = [r for r in rows if r["state"] == "failed"]
+        if landed:
+            job.finish("done", detail=f"{landed} clip{'s' if landed != 1 else ''} imported"
+                       + (f" — {len(failed)} failed" if failed else ""))
+        else:
+            job.finish("failed", detail="failed: no file arrived whole")
+
+
+def _upload_eta(up: dict) -> float | None:
+    job = up["job"]
+    el = job.elapsed()
+    got = float(job.get("got") or 0)
+    if el < 1.0 or got <= 0:
+        return None
+    return max(0.0, (up["total"] - got) / (got / el))
+
+
+def _upload_watch(batch: str) -> None:
+    """A batch whose page went away (closed, reloaded) ends instead of holding the
+    header and the bin switch: nothing uploading and nothing new for UPLOAD_STALL_S."""
+    while True:
+        time.sleep(1.0)
+        up = UPLOADS.get(batch)
+        if up is None or up["job"]["state"] in progress.TERMINAL:
+            return
+        busy = any(r["state"] == "uploading" for r in up["rows"])
+        if not busy and time.time() - up["last"] > UPLOAD_STALL_S:
+            for r in up["rows"]:
+                if not r.get("skip") and r["state"] == "waiting":
+                    r["state"] = "failed"
+                    r["why"] = "never arrived"
+            _upload_tick(up)
+
+
+@app.post("/api/upload")
+async def api_upload_plan(request: Request) -> JSONResponse:
+    """Start an upload from the viewer's computer. Body `{files: [{name, size, rel?}]}`
+    (`rel`: the path inside a dropped folder, whose folder name tells two same-named
+    files apart). Answers `{batch, files: [{i, clip, skip?}], bytes}`: the clip name each
+    file will have, or why it is skipped (not a video; the same file, by name and size,
+    uploaded already). Then PUT each file's bytes to /api/upload/{batch}/{i}. Refused when
+    the disk would be left with less than 512 MB."""
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(400, "expected a JSON object")
+    files = body.get("files") if isinstance(body, dict) else None
+    if not isinstance(files, list) or not files or len(files) > UPLOAD_MAX_FILES:
+        raise HTTPException(400, f"files: 1 to {UPLOAD_MAX_FILES} of {{name, size}}")
+    src = media_sources()
+    folder = folder_clips()
+    rows, pending = [], set()
+    for i, f in enumerate(files):
+        if not isinstance(f, dict) or not isinstance(f.get("name"), str):
+            raise HTTPException(400, f"files[{i}]: {{name, size}}")
+        try:
+            size = int(f.get("size"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"files[{i}].size: bytes")
+        name = Path(str(f["name"]).replace("\\", "/")).name
+        if size < 0 or not name:
+            raise HTTPException(400, f"files[{i}]: a name and a size")
+        if not mediamod.is_video(name):
+            rows.append({"i": i, "name": name, "size": size, "skip": "not a video file"})
+            continue
+        dup = src.find_upload(name, size)
+        if dup:
+            rows.append({"i": i, "name": name, "size": size, "clip": dup,
+                         "skip": "already imported"})
+            continue
+        rel = str(f.get("rel") or "").replace("\\", "/")
+        hint = Path(rel).parent.name if "/" in rel else "upload"
+        clip = src.reserve(name, hint, folder, pending)
+        pending.add(mediamod.stem_key(clip))
+        rows.append({"i": i, "name": name, "size": size, "clip": clip, "rel": rel,
+                     "state": "waiting", "got": 0})
+    todo = [r for r in rows if not r.get("skip")]
+    total = sum(r["size"] for r in todo)
+    updir = mediamod.uploads_dir(STATE["work"], STATE["footage"].name)
+    free = await asyncio.to_thread(_disk_free, updir)
+    if todo and total + UPLOAD_SPARE > free:
+        raise HTTPException(507, f"not enough space on {socket.gethostname()}: "
+                            f"{_fmt_bytes(total)} to upload, {_fmt_bytes(free)} free")
+    batch = uuid.uuid4().hex[:10]
+    out = [{k: r[k] for k in ("i", "name", "size", "clip", "skip") if k in r} for r in rows]
+    if not todo:
+        return JSONResponse({"batch": None, "files": out, "bytes": 0})
+    n = len(todo)
+    job = progress.Job("import", f"Importing {n} file{'s' if n != 1 else ''}", id=batch,
+                       state="running", detail="starting", total=n, done=0, got=0,
+                       bytes=total)
+    job.set_estimate(None, [progress.milestone("upload", "uploading", 1.0)], source="none")
+    up = {"rows": rows, "job": job, "last": time.time(), "landed_bytes": 0, "total": total,
+          "bin": STATE["footage"].name}
+    job.eta_fn = lambda _j, up=up: _upload_eta(up)
+    UPLOADS[batch] = up
+    IMPORTS[batch] = job
+    threading.Thread(target=_upload_watch, args=(batch,), daemon=True).start()
+    return JSONResponse({"batch": batch, "files": out, "bytes": total, "job": batch})
+
+
+@app.put("/api/upload/{batch}/{i}")
+async def api_upload_file(batch: str, i: int, request: Request) -> JSONResponse:
+    """One file's bytes, streamed to disk as they arrive: written in UPLOAD_WRITE pieces
+    on a worker thread into the uploads' `.incoming/` (unwatched), renamed into place
+    whole, then added to the bin. A short body, a long one, a closed connection or the
+    batch's Stop leaves nothing behind."""
+    up = UPLOADS.get(batch)
+    if up is None or up.get("bin") != STATE["footage"].name:
+        raise HTTPException(404, "no such upload")
+    row = next((r for r in up["rows"] if r["i"] == i), None)
+    if row is None or row.get("skip"):
+        raise HTTPException(404, f"no file {i} in this upload")
+    job = up["job"]
+    if job["state"] in progress.TERMINAL:
+        raise HTTPException(409, "this upload has ended")
+    if row["state"] in ("uploading", "done"):
+        raise HTTPException(409, f"{row['clip']} is {row['state']}")
+    updir = mediamod.uploads_dir(STATE["work"], STATE["footage"].name)
+    incoming = updir / ".incoming"
+    await asyncio.to_thread(incoming.mkdir, parents=True, exist_ok=True)
+    part = incoming / f"{row['clip']}.{batch}.part"
+    dest = updir / row["clip"]
+    row.update(state="uploading", got=0)
+    up["last"] = time.time()
+    f = await asyncio.to_thread(open, part, "wb")
+    held: list[bytes] = []
+    n_held = 0
+    try:
+        async for chunk in request.stream():
+            if not chunk:
+                continue
+            row["got"] += len(chunk)
+            now = up["last"] = time.time()
+            if now - up.get("ticked", 0.0) > 0.25:      # the job's bar, four times a second
+                up["ticked"] = now
+                _upload_tick(up)
+            if row["got"] > row["size"]:
+                raise HTTPException(413, f"more than the {row['size']} bytes announced")
+            if job["state"] in progress.TERMINAL:
+                raise HTTPException(409, "the upload was stopped")
+            held.append(chunk)
+            n_held += len(chunk)
+            if n_held >= UPLOAD_WRITE:
+                data, held, n_held = b"".join(held), [], 0
+                await asyncio.to_thread(f.write, data)
+        if held:
+            await asyncio.to_thread(f.write, b"".join(held))
+        await asyncio.to_thread(f.close)
+        if row["got"] != row["size"]:
+            raise HTTPException(400, f"{row['got']} of {row['size']} bytes arrived")
+        await asyncio.to_thread(os.replace, part, dest)
+    except BaseException as exc:           # a disconnect, a Stop, a bad length: no trace
+        await asyncio.to_thread(f.close)
+        await asyncio.to_thread(part.unlink, missing_ok=True)
+        row.update(state="failed", got=0,
+                   why=str(getattr(exc, "detail", "") or type(exc).__name__)[:120])
+        _upload_tick(up)
+        raise
+    row["state"] = "done"
+    up["landed_bytes"] += row["size"]
+    await asyncio.to_thread(media_sources().add_upload, row["clip"], dest, row["name"])
+    started = await asyncio.to_thread(media_added, [row["clip"]])
+    _upload_tick(up)
+    return JSONResponse({"clip": row["clip"], "bytes": row["got"], "index": started["index"],
+                         "clips": len(footage_clips())})
+
+
+@app.post("/api/upload/{batch}/cancel")
+def api_upload_cancel(batch: str) -> JSONResponse:
+    """Stop an upload: the file in flight is dropped at its next chunk; what landed stays."""
+    up = UPLOADS.get(batch)
+    if up is None:
+        raise HTTPException(404, "no such upload")
+    job = up["job"]
+    if job["state"] not in progress.TERMINAL:
+        for r in up["rows"]:
+            if not r.get("skip") and r["state"] == "waiting":
+                r["state"] = "failed"
+                r["why"] = "stopped"
+        landed = sum(1 for r in up["rows"] if r.get("state") == "done")
+        job.finish("cancelled", detail=f"stopped — {landed} file{'s' if landed != 1 else ''} "
+                   "imported before the stop")
+    return JSONResponse(job.snapshot())
 
 
 # ------------------------------------------------------------------------ cuts
@@ -10416,7 +11003,10 @@ def list_projects() -> dict:
         n_cuts = len(_cut_paths(folder.name))
         if here and STATE["edl"] not in _cut_paths(folder.name):
             n_cuts += 1
-        out.append({**r, "exists": folder.is_dir(), "clips": _count_videos(folder),
+        clips = (len(footage_clips()) if here
+                 else _count_videos(folder) + len(mediamod.Sources(STATE["work"],
+                                                                   folder.name).present()))
+        out.append({**r, "exists": folder.is_dir(), "clips": clips,
                     "cut": edl_path.exists(), "segments": segments,
                     "cut_name": cut_name, "cuts": n_cuts,
                     "journal": (STATE["work"] / "index" / f"{folder.name}.json").exists(),
@@ -10462,7 +11052,7 @@ async def api_projects_open(request: Request) -> JSONResponse:
         if isinstance(rec, dict) and rec.get("edl") and Path(rec["edl"]).is_file() \
                 and Path(rec.get("footage", "")) == folder:
             edl = Path(rec["edl"])
-    for reg in (ANALYSES, VISUALS, INDEXES, ASKS, FINDS, THEMES, RENDERS, DEEPS):
+    for reg in (ANALYSES, VISUALS, INDEXES, ASKS, FINDS, THEMES, RENDERS, DEEPS, IMPORTS):
         reg.clear()
     configure(edl, folder, None, STATE["work"],
               proxies=STATE.get("proxies_enabled", True), orient="auto")
@@ -10511,6 +11101,9 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
         "reviews": work / "reviews" / footage.name,
         "proxies_ready": False, "edl_created": created,
         "probes": {},                        # clip_probe's cache: per bin, like the rest
+        # What was imported or uploaded into this bin (wave 12 IMPORT, roughcut/media.py):
+        # work/media/<bin>/sources.json, read here once and kept in memory
+        "media_sources": mediamod.Sources(work, footage.name),
     })
     STATE["sidecars"].mkdir(parents=True, exist_ok=True)
     if created:
@@ -10556,8 +11149,9 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
     remember_project(footage, edl_path)
     STATE["asks"].mkdir(parents=True, exist_ok=True)
 
-    clips = sorted({p.name.replace(".audio.json", ".MP4")
-                    for p in STATE["sidecars"].glob("*.audio.json")})
+    # the heard clips, by their real names (an imported .mov is not `<stem>.MP4`)
+    heard = analysed_stems()
+    clips = [c for c in footage_clips() if Path(c).stem in heard]
     if not proxies:
         STATE["proxies_ready"] = True
     else:
