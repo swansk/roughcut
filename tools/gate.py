@@ -204,10 +204,16 @@ def perf_said(rec: dict | None, cores: int | None = None) -> str:
     at = f"{c:.1f}" if c is not None else "?"
     s = _num(rec.get("settled_s"))
     settle = f" after {s:.0f} s letting its fixture's encodes drain" if s and s >= 1 else ""
+    # verdict 8 punch 2: the graded canvas (what a coloured shot shows), same 67 ms limit
+    cvs = f.get("canvas") or ({"1440": play["canvas"]} if play.get("canvas") else {})
+    canvas = (" · graded canvas worst gap " + ", ".join(
+        f"{(c or {}).get('longest_ms')} ms at {(c or {}).get('fps')} fps ({size})" for size, c in cvs.items())
+        if cvs else " · graded canvas not measured")
     return (f"{o} at load {at} with {rec.get('burners', '?')} burners{shared}, {cores} cores"
             f" (load {rec.get('load_launch', '?')} at launch, {rec.get('load_pre', '?')} before it"
             f" measured{settle}; {rec.get('load_start', '?')} → {rec.get('load_end', '?')} while measuring)"
             f" · worst gap {play.get('longest_gap_ms')} ms"
+            f"{canvas}"
             f" · seek median {med(f.get('seek') or [])} ms")
 
 

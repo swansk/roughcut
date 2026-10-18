@@ -36,6 +36,11 @@ and measures, inside the page:
            frames are not on screen and do not count), ≤ 67 ms (two frame periods at
            29.97); and on every animation frame, that the live buffer has a picture and
            no "buffering…" / wait line is on the Program
+  canvas   the same play's GRADED canvas (verdict 8 punch 2: on a coloured shot the
+           canvas over the buffers is the picture, and the buffers' frames said nothing
+           about it): `grade.draws` sampled on every animation frame, the longest time
+           between two draws while the canvas is on (and after the last one), <= 67 ms,
+           on a 1440 board and again on a 1920 one; its draw rate beside it
   seek     `tl.seek(t)` → the live buffer presents the frame at t, six seeks inside a
            shot, into the next, onto the other clip and back: median ≤ 250 ms, max ≤ 400
   set      `effects.set(k, v)` → the second animation frame after it
@@ -248,8 +253,15 @@ def measure_play(page) -> dict:
       // "buffering…" / "opening…" over it (verdict 5's black hold at the 12-frame shot)
       const shown = (el) => !!el && !el.hidden && getComputedStyle(el).display !== 'none'
         && el.getBoundingClientRect().width > 0;
+      // the graded canvas (verdict 8 punch 2): on a graded shot the canvas over the buffers
+      // IS the picture, so what the viewer sees is its draws, not the live buffer's frames.
+      // `grade.draws` on every animation frame, with whether the canvas is on.
+      window.__cv = [];
       const look = () => {
         if (!window.__flOn) return;
+        window.__cv.push({ t: performance.now() - t0, playing: player.playing,
+                           draws: window.grade ? grade.draws : null,
+                           on: !!document.querySelector('#gradeCanvas.on') });
         if (player.playing) {
           const lv = document.querySelector('#player .screen video.live');
           const words = [...document.querySelectorAll('#screenMsg, #monWait')]
@@ -272,6 +284,7 @@ def measure_play(page) -> dict:
     page.evaluate("window.__flOn = false")
     log = page.evaluate("window.__fl")
     screen = page.evaluate("window.__scr")
+    canvas = canvas_gaps(page.evaluate("window.__cv"))
     live = [f for f in log if f["live"]]
     live.sort(key=lambda f: f["t"])
     gaps = [(live[i]["t"] - live[i - 1]["t"], live[i - 1], live[i]) for i in range(1, len(live))]
@@ -289,11 +302,43 @@ def measure_play(page) -> dict:
         # the longest hole inside a shot (one buffer to itself), apart from the cuts
         "mid_gap_ms": round(max([g[0] for g in gaps if g[1]["v"] == g[2]["v"]] or [0]), 1),
         "cuts": len(switches),
+        # the graded canvas across both cuts: its longest hole and its frame rate
+        "canvas": canvas,
         "screen_bad": screen[:8],
         "screen_bad_n": len(screen),
         "roll": page.evaluate("typeof roll === 'object' ? { ...roll } : null"),
         "cut_log": page.evaluate("(player.cutLog || []).map(({ t, ...c }) => c)"),
     }
+
+
+def canvas_gaps(samples: list[dict]) -> dict:
+    """The graded canvas from per-animation-frame samples of `grade.draws` (verdict 8
+    punch 2): a draw lands on the first sample whose count moved; the longest time between
+    two draws while the canvas was on at every sample between them, and after the last
+    draw to the end of the play; the draws' rate. Only while the player plays, and from its
+    first draw (before that the canvas shows the parked frame: the start, not a hole)."""
+    play = [s for s in samples if s.get("playing")]
+    if len(play) < 2 or play[0].get("draws") is None:
+        return {"longest_ms": None, "fps": 0, "draws": 0, "holes_over": 0, "on": False}
+    at = [play[i]["t"] for i in range(1, len(play)) if play[i]["draws"] != play[i - 1]["draws"]]
+    on = all(s["on"] for s in play)
+    if not at:
+        return {"longest_ms": round(play[-1]["t"] - play[0]["t"], 1), "fps": 0, "draws": 0,
+                "holes_over": 1, "on": on}
+
+    def lit(a: float, b: float) -> bool:
+        return all(s["on"] for s in play if a <= s["t"] <= b)
+
+    edges = at + [play[-1]["t"]]
+    gaps = [(edges[i] - edges[i - 1], edges[i - 1]) for i in range(1, len(edges))
+            if lit(edges[i - 1], edges[i])]
+    worst = max(gaps, default=(0.0, None))
+    span = at[-1] - at[0]
+    return {"longest_ms": round(worst[0], 1),
+            "longest_at_ms": round(worst[1]) if worst[1] is not None else None,
+            "fps": round((len(at) - 1) / (span / 1000), 1) if span > 0 else 0,
+            "draws": len(at), "holes_over": len([g for g, _ in gaps if g > GAP_LIMIT_MS]),
+            "on": on}
 
 
 def measure_seeks(page) -> list[float]:
@@ -495,6 +540,15 @@ def test_latency_under_load(perf_record, live_server):
                 facts["load_start"] = _load()
                 facts["play"] = measure_play(page)
                 page.evaluate("pauseCut()")
+                # the same play on a 1920 board (verdict 8: the judge's 1920 canvas held
+                # 100-115 ms where 1440 held 92-98): the canvas only, then back to 1440
+                page.set_viewport_size({"width": 1920, "height": 1080})
+                page.wait_for_timeout(600)
+                facts["play_1920"] = measure_play(page)
+                page.evaluate("pauseCut()")
+                page.set_viewport_size({"width": 1440, "height": 900})
+                page.wait_for_timeout(600)
+                facts["canvas"] = {"1440": facts["play"]["canvas"], "1920": facts["play_1920"]["canvas"]}
                 page.wait_for_function("document.querySelector('#gradeCanvas').width > 640", timeout=5000)
                 facts["canvas_w_paused"] = page.evaluate("document.querySelector('#gradeCanvas').width")
                 facts["grade_on"] = page.evaluate(
@@ -521,6 +575,12 @@ def test_latency_under_load(perf_record, live_server):
     assert all(c.get("parked") for c in play["cut_log"]), play["cut_log"]
     assert len({c.get("buf") for c in play["cut_log"]}) == 2, play["cut_log"]
     assert play["longest_gap_ms"] <= GAP_LIMIT_MS, f"frame gap across the two cuts: {play}"
+    # verdict 8 punch 2: on a graded shot the canvas is the picture; it holds no longer,
+    # on a 1440 and a 1920 board
+    for size, cv in facts["canvas"].items():
+        assert cv["on"], f"the grade canvas went off while the graded shots played ({size}): {cv}"
+        assert cv["longest_ms"] is not None and cv["longest_ms"] <= GAP_LIMIT_MS, \
+            f"the graded canvas held across the two cuts ({size}): {cv}"
     # Premiere's Playback Resolution: smaller while playing, the monitor's full size parked
     if play.get("canvas_w_play") is not None:
         assert play["canvas_w_play"] <= 640, play["canvas_w_play"]
