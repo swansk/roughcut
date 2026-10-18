@@ -690,7 +690,15 @@
 
   /* Labelled ticks in HH:MM:SS:FF at the sequence rate; minor ticks split a step into
    * its frames (under a second) or into fifths, tenths once fifths are 100 px apart. */
+  /* The ruler is rebuilt only when what it shows changed (wave 13 CANVAS2): every render
+   * rebuilt its ticks — hundreds of new elements, all restyled and laid out — and the
+   * monitor renders the timeline on Play and at every cut, the frames a hitch shows on. */
+  let rulerKey = '';
   function paintRuler(width) {
+    const key = [width, state.zoom, fps(), state.seqIn, state.seqOut, state.markers.join(','),
+                 keyLabel('⇧M')].join('|');
+    if (key === rulerKey && el.ruler.childElementCount) return;
+    rulerKey = key;
     const r = fps(), n = Math.max(1, Math.round(r));
     const sf = stepFrames(state.zoom);
     const step = sf / r;
