@@ -207,9 +207,19 @@ def start_playwright(log: Path):
     return cm, pw
 
 
-def browser_said(log: Path, since: int = 0) -> dict:
-    """What `log` (start_playwright's) says from byte `since` on: the browser's pid, how
-    its process ended ({code, signal}, once it did) and its last telling stderr lines."""
+def _stamp(ln: str) -> float | None:
+    # the driver's DEBUG lines open with an ISO time: "2026-10-18T22:28:49.096Z pw:browser …"
+    m = re.match(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?)Z", ln)
+    if not m:
+        return None
+    import datetime as dt
+    return dt.datetime.fromisoformat(m.group(1) + "+00:00").timestamp()
+
+
+def browser_said(log: Path, since: int = 0, pid: int | None = None) -> dict:
+    """What `log` (start_playwright's) says from byte `since` on, of the browser process
+    `pid` only when given: the pid last launched, how its process ended ({code, signal},
+    once it did) and its telling stderr lines (once it ended, those of its last 5 s)."""
     try:
         with log.open("rb") as f:
             f.seek(since)
@@ -217,11 +227,16 @@ def browser_said(log: Path, since: int = 0) -> dict:
     except OSError:
         text = ""
     out: dict = {"exit": None, "lines": [], "pid": None}
+    seen: list[tuple[float | None, str]] = []
+    end_at = None
     for ln in text.splitlines():
+        if pid is not None and f"[pid={pid}]" not in ln and f"<launched> pid={pid}" not in ln:
+            continue
         m = _EXIT.search(ln)
         if m:
             out["exit"] = {"code": None if m.group(1) == "null" else m.group(1),
                            "signal": None if m.group(2) == "null" else m.group(2)}
+            end_at = _stamp(ln)
             continue
         m = re.search(r"<launched> pid=(\d+)", ln)
         if m:
@@ -231,7 +246,10 @@ def browser_said(log: Path, since: int = 0) -> dict:
             said = ln.split("[err]", 1)[1].strip()
             # "[1018/182849.096232:FATAL:dbus/bus.cc:1245] D-Bus …" → "FATAL:dbus/bus.cc:1245 D-Bus …"
             m = re.match(r"\[\d+/[\d.]+:(\w+:[^\]]+)\]\s*(.*)", said)
-            out["lines"].append(f"{m.group(1)} {m.group(2)}" if m else said)
+            seen.append((_stamp(ln), f"{m.group(1)} {m.group(2)}" if m else said))
+    if end_at is not None:                  # what it said as it died, not an hour before
+        seen = [(t, x) for t, x in seen if t is None or t >= end_at - 5]
+    out["lines"] = [x for _, x in seen]
     return out
 
 
@@ -616,6 +634,7 @@ class Journey:
         self.fixture = self.out / "fixture"
         # Chromium going away (verdict 9, punch 1): what happened, and a retry after a crash
         self.browser = None
+        self.browser_pid: int | None = None
         self.browser_log = self.out / "browser.log"   # the driver's stderr (start_playwright)
         self.gone: list[str] = []            # this attempt: crash / close / disconnected, in order
         self.closing = False                 # we close it ourselves: not a reason
@@ -634,6 +653,7 @@ class Journey:
                                env=browser_env(bus))
         b.on("disconnected", lambda *_: self._went(b, "the browser disconnected"))
         self.browser = b
+        self.browser_pid = browser_said(self.browser_log)["pid"]    # the one just launched
         return b
 
     def _went(self, who, what: str) -> None:
@@ -668,11 +688,17 @@ class Journey:
         dead = b is not None and not b.is_connected()
         if not self.gone and not dead and not (pg is not None and pg.is_closed()):
             return None
-        said = browser_said(self.browser_log, self.log_at)
+        # a dead browser: its whole log (it may have died between two steps); a crashed
+        # renderer: what the browser wrote during this attempt
+        def read():
+            if dead:
+                return browser_said(self.browser_log, 0, self.browser_pid)
+            return browser_said(self.browser_log, self.log_at)
+        said = read()
         deadline = time.time() + 5
         while dead and said["exit"] is None and time.time() < deadline:
             time.sleep(0.2)                 # the driver writes the exit line once it saw it
-            said = browser_said(self.browser_log, self.log_at)
+            said = read()
         ex = said["exit"] or {}
         sig, code = ex.get("signal"), ex.get("code")
         fatal = any(re.search(r"FATAL|Check failed", ln) for ln in said["lines"])
@@ -738,7 +764,7 @@ class Journey:
         elif how == "bus" and self.bus:
             os.kill(self.bus[1], signal.SIGTERM)
         elif how == "kill":
-            os.kill(browser_said(self.browser_log)["pid"], signal.SIGKILL)
+            os.kill(self.browser_pid, signal.SIGKILL)
         else:
             raise RuntimeError(f"ROUGHCUT_JOURNEY_CRASH: no such way to break Chromium: {how!r}")
         deadline = time.time() + 10

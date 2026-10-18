@@ -282,6 +282,25 @@ def test_the_browser_log_says_how_chromium_ended(tmp_path):
     assert j.browser_said(log, len(GATE_LOG.encode()))["lines"] == []
 
 
+def test_the_browser_log_is_read_per_browser_and_as_it_died(tmp_path):
+    """A retry's fresh browser writes to the same log: each browser's end is read by its
+    pid, and only what it said in its last 5 s counts (not an old line from an hour before)."""
+    j = _journey_module()
+    log = tmp_path / "browser.log"
+    log.write_text(GATE_LOG
+                   + "2026-10-18T22:29:00.000Z pw:browser <launched> pid=4000\n"
+                   + "2026-10-18T22:29:01.000Z pw:browser [pid=4000][err] [1018/182901.000000:ERROR:media/x.cc:12]"
+                     " a complaint ten minutes before\n"
+                   + "2026-10-18T22:39:01.000Z pw:browser [pid=4000] <process did exit: exitCode=null, signal=SIGKILL>\n",
+                   encoding="utf-8")
+    assert j.browser_said(log)["pid"] == 4000                      # the last one launched
+    gate = j.browser_said(log, 0, 2132202)
+    assert gate["exit"] == {"code": None, "signal": "SIGTRAP"}
+    assert gate["lines"] == ["FATAL:dbus/bus.cc:1245 D-Bus connection was disconnected. Aborting."]
+    later = j.browser_said(log, 0, 4000)
+    assert later["exit"] == {"code": None, "signal": "SIGKILL"} and later["lines"] == []
+
+
 def test_the_journeys_browser_has_no_d_bus():
     j = _journey_module()
     env = j.browser_env()
