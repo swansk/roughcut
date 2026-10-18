@@ -208,7 +208,8 @@ def test_the_scope_reaches_the_prompt(board):
     scope = model.prompts[-1].split("## Scope", 1)[1].split("## The sequence", 1)[0]
     assert f"The range 0.50–1.50 s (00:00:00:12–00:00:01:12) of the sequence: shot 1 ({a})" in scope
     ask(c, "use the good bit", {"kind": "clip", "clip": "CLIP_C.MP4", "in": 2.4, "out": 4.0})
-    assert "The clip CLIP_C.MP4 in the Source monitor, its In 2.40 s to Out 4.00 s" in model.prompts[-1]
+    assert ("The clip CLIP_C.MP4 (in the Source monitor or the Project panel; not a shot in the sequence),"
+            " its In 2.40 s to Out 4.00 s") in model.prompts[-1]
     ask(c, "anything", {"kind": "bogus"})
     assert "The whole sequence" in model.prompts[-1].split("## The sequence", 1)[0]
 

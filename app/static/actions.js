@@ -942,9 +942,13 @@
     }, 1000);
   }
 
+  /* The review on the record, and said to the page: the AI prompt's line (aiprompt.js)
+   * turns "3 changes ready · Review" into what landed, so the same answer is never
+   * reviewed — and applied — twice. */
   function answer(acc, rej) {
     const job = R.res && R.res.job;
     if (!job) return;
+    window.dispatchEvent(new CustomEvent('rc:assist-answered', { detail: { job, accepted: acc, rejected: rej } }));
     fetch(`/api/assist/${encodeURIComponent(job)}/answer`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'omit',
       body: JSON.stringify({ accepted: acc, rejected: rej }),

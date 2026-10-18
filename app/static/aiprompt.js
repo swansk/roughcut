@@ -72,7 +72,7 @@
 
   const AI = {
     state: 'idle',          // idle | working | done | failed | stopped
-    job: null, text: '', scope: null, t0: 0, timer: 0, tick: 0, gen: 0,
+    job: null, text: '', scope: null, t0: 0, timer: 0, tick: 0, gen: 0, planTimer: 0,
     result: null,           // the finished GET /api/assist/{job}, plus its job id
     error: '', hint: '',    // a failure's words, and what to do about it
     override: null, overrideKey: '',   // a scope chosen on the chip, until the auto one changes
@@ -296,14 +296,25 @@
     status.hidden = !html;
   }
 
-  /* One line for what came back. */
+  /* One line for what came back. Once the review is answered (lane AIOPS's panel fires
+   * `rc:assist-answered`) it says what landed, and offers no second review of ops that
+   * are already in the cut. A whole-cut rewrite is an Ask job of its own: "ready" only
+   * once that job is done. */
   function resultLine(d) {
     if (d.kind === 'ops') {
       const n = (d.ops || []).length;
       if (!n) return { line: 'No changes needed', act: d.summary || d.text ? 'Why' : '', what: 'answer' };
+      if (d.answered) {
+        const k = d.answered.accepted;
+        return k ? { line: `${plural(k, 'change')} applied`, act: '', what: '' }
+          : { line: 'Rejected — nothing changed', act: '', what: '' };
+      }
       return { line: `${plural(n, 'change')} ready`, act: 'Review', what: 'review' };
     }
-    if (d.kind === 'plan') return { line: 'A new cut is ready', act: 'Review', what: 'plan' };
+    if (d.kind === 'plan') {
+      return d.planReady ? { line: 'A new cut is ready', act: 'Review', what: 'plan' }
+        : { line: 'Re-cutting the sequence', act: 'Show', what: 'plan' };
+    }
     return { line: 'Answered', act: 'Show', what: 'answer' };
   }
 
@@ -533,13 +544,21 @@
   function finish(gen, d) {
     if (gen !== AI.gen) return;
     stopTimers();
-    AI.result = { ...d, job: AI.job, asked: AI.text, scope: AI.scope };
+    AI.result = { ...d, job: AI.job, asked: AI.text, scope: AI.scope, planReady: d.plan_state === 'done' };
     AI.state = 'done';
     paintStatus();
     const r = resultLine(AI.result);
     if (r.what === 'review') review(AI.result);
     else if (r.what === 'plan') showPlan(AI.result);
     else if (r.what === 'answer' && r.act) showPop('answer');
+  }
+
+  /* The review panel answered this ask: the line says what landed. */
+  function onAnswered(e) {
+    const d = e && e.detail;
+    if (!d || !AI.result || AI.result.job !== d.job) return;
+    AI.result.answered = { accepted: (d.accepted || []).length, rejected: (d.rejected || []).length };
+    paintStatus();
   }
 
   function review(d) {
@@ -549,16 +568,66 @@
     else say('the review panel did not load — reload the page');
   }
 
-  /* A whole-cut rewrite is an Ask record: the first pass's path (firstpass.js showResult). */
+  /* A whole-cut rewrite is an Ask job (`plan_ask`) the server started with the model's
+   * brief, and it takes its own time. Done: the proposal opens through the first pass's
+   * path (firstpass.js showResult). Still running: lane AIOPS's review follows it ("reading
+   * the footage for the new cut…") and opens the proposal when it lands, while this line
+   * watches the same job to say when it is ready. */
+  async function askState(id) {
+    try { return await (await fetch(`/api/ask/${encodeURIComponent(id)}`)).json(); } catch (e) { return null; }
+  }
+
+  function openProposal(plan) {
+    if (typeof window.rcShowProposal !== 'function') return false;
+    window.rcShowProposal(plan);
+    if (window.dock) dock.open('ask', { focus: false });
+    return true;
+  }
+
   async function showPlan(d) {
     if (!d || !d.plan_ask) { say('the new cut has no proposal to show'); return; }
-    try {
-      const a = await (await fetch(`/api/ask/${encodeURIComponent(d.plan_ask)}`)).json();
-      if (a && a.plan && typeof window.rcShowProposal === 'function') {
-        window.rcShowProposal(a.plan);
-        if (window.dock) dock.open('ask', { focus: false });
-      } else say('the proposal is not ready yet');
-    } catch (e) { say('could not read the proposal — try Review again'); }
+    const a = await askState(d.plan_ask);
+    if (AI.result !== d) return;
+    if (a && a.state === 'done' && a.plan) {
+      d.planReady = true;
+      paintStatus();
+      openProposal(a.plan);
+      return;
+    }
+    if (a && (a.state === 'failed' || a.state === 'cancelled')) { planFailed(d, a); return; }
+    if (!a) { say('could not read the proposal — try again'); return; }
+    const A = window.rcActions;
+    if (A && typeof A.review === 'function') A.review(d);
+    else say('the new cut is still being made — it opens here when it is ready');
+    followPlan(d);
+  }
+
+  function planFailed(d, a) {
+    if (AI.result !== d) return;
+    AI.state = 'failed';
+    AI.error = `The re-cut did not finish: ${(a && (a.detail || a.error)) || 'no detail'}`;
+    AI.hint = 'Try other words, or Sequence › Ask for a change.';
+    paintStatus();
+  }
+
+  function followPlan(d) {
+    clearTimeout(AI.planTimer);
+    const step = async () => {
+      if (AI.result !== d || d.planReady) return;
+      const a = await askState(d.plan_ask);
+      if (AI.result !== d) return;
+      if (a && a.state === 'done' && a.plan) {
+        d.planReady = true;
+        paintStatus();
+        // the review panel opens it while it follows the job; without one, this does
+        const A = window.rcActions;
+        if (!A || typeof A.review !== 'function') openProposal(a.plan);
+        return;
+      }
+      if (a && (a.state === 'failed' || a.state === 'cancelled')) { planFailed(d, a); return; }
+      AI.planTimer = setTimeout(step, 1000);
+    };
+    AI.planTimer = setTimeout(step, 1000);
   }
 
   /* ------------------------------------------------------------ the keys */
@@ -922,6 +991,7 @@
     window.addEventListener('blur', closeFloating);
     window.addEventListener('resize', () => { closeFloating(); closePop(); });
     window.addEventListener('rcsource', paintScope);
+    window.addEventListener('rc:assist-answered', onAnswered);
     if (window.tl && typeof tl.on === 'function') {
       tl.on('select', paintScope);
       tl.on('markers', paintScope);
