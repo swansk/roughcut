@@ -369,6 +369,46 @@ def test_design_effect_and_export():
     assert not bad and ok[1]["range"] == "in_out"
 
 
+def test_export_takes_frame_size_frame_rate_and_bitrate():
+    """Verdict 9, punch 5: "a 720p review copy" was impossible ("There's no 720p preset in
+    the library … Quick is the closest"). The export op takes the Export dialog's Video
+    settings — Frame Size, Frame Rate, a target bitrate — in the dialog's own keys, and
+    says them in its review line; the preset's own when they are left out."""
+    e = accepted({"op": "export", "preset": "quick", "range": "all", "name": "review copy",
+                  "size": "720", "fps": "29.97"})
+    assert e == {"op": "export", "preset": "quick", "range": "all", "name": "review copy",
+                 "size": "720", "fps": "29.97"}
+    assert actions.describe(e, state()) == \
+        "Export Quick 1080p at 720p, 29.97 fps, Entire Sequence → review copy.mp4, on accept"
+    # what a model writes for the same thing comes out as the dialog's keys
+    for size, key in ((720, "720"), ("720p", "720"), ("1280x720", "720"), ("1280×720", "720"),
+                      ("4K", "2160"), ("match", "match"), ("540", "540")):
+        assert accepted({"op": "export", "preset": "quick", "size": size})["size"] == key, size
+    for fps, key in ((29.97, "29.97"), ("30000/1001", "29.97"), (30, "29.97"), ("59.94 fps", "59.94"),
+                     (23.976, "23.976"), (24, "23.976"), (25, "25"), ("match", "match")):
+        assert accepted({"op": "export", "preset": "quick", "fps": fps})["fps"] == key, fps
+    b = accepted({"op": "export", "preset": "youtube", "bitrate": "8 Mbps"})
+    assert b["bitrate"] == 8.0 and "size" not in b and "fps" not in b
+    assert actions.describe(b, state()) == \
+        "Export YouTube 1080p at 8 Mbps target, Entire Sequence, on accept"
+    # no preset said: the dialog's default, Quick
+    assert accepted({"op": "export", "size": "720"})["preset"] == "quick"
+    # and what the dialog cannot do is refused with the choices it has
+    assert "Frame Size is match, 2160, 1080, 720, 540" in refused({"op": "export", "preset": "quick", "size": "480"})
+    assert "Frame Rate is match, 23.976, 25, 29.97, 59.94" in refused({"op": "export", "preset": "quick", "fps": 50})
+    assert "0.5–200" in refused({"op": "export", "preset": "quick", "bitrate": 900})
+    assert "0.5–200" in refused({"op": "export", "preset": "quick", "bitrate": "fast"})
+
+
+def test_the_model_is_told_the_export_settings():
+    """The schema the model reads names size / fps / bitrate with their choices, and the
+    720p review copy as the example of them."""
+    text = actions.schema_text()
+    line = next(ln for ln in text.splitlines() if '"op":"export"' in ln)
+    for word in ('"size"?', '"fps"?', '"bitrate"?', '"720"', '"29.97"', "Mbps", "720p review copy"):
+        assert word in line, (word, line)
+
+
 # ---------------------------------------------------------------- the list as a whole
 
 def test_unknown_ops_bad_shapes_and_the_cap():

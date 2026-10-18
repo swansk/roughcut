@@ -399,7 +399,9 @@
     return { ok: true, op: 'design_effect' };
   }
 
-  /* Export, as a person makes one: the dialog, its preset, range and name, Export. */
+  /* Export, as a person makes one: the dialog, its preset, its Frame Size / Frame Rate /
+   * Bitrate (verdict 9, punch 5: set after the preset, which fills them with its own, as
+   * a person would), range and name, Export. */
   async function runExport(op) {
     const ex = window.exportDialog;
     if (!ex || typeof ex.open !== 'function') throw new Error('Export is not loaded');
@@ -409,6 +411,18 @@
     if (op.preset && [...sel.options].some((o) => o.value === op.preset)) {
       sel.value = op.preset;
       sel.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    const pick = (q, v) => {
+      const el = $(`#exportDialog ${q}`);
+      if (!el || v == null || ![...el.options].some((o) => o.value === String(v) && !o.disabled)) return;
+      el.value = String(v);
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    pick('[data-testid=export-size]', op.size);
+    pick('[data-testid=export-fps]', op.fps);
+    if (op.bitrate != null) {
+      const br = $('#exportDialog [data-testid=export-bitrate]');
+      if (br) { br.value = String(op.bitrate); br.dispatchEvent(new Event('input', { bubbles: true })); }
     }
     const rng = $('#exportDialog #exRange');
     if (rng) {
@@ -420,7 +434,8 @@
       const nm = $('#exportDialog #exName');
       if (nm) { nm.value = op.name; nm.dispatchEvent(new Event('input', { bubbles: true })); }
     }
-    const go = await until(() => { const b = $('#exportDialog #exGo'); return b && !b.disabled ? b : null; }, 60000, 150);
+    // a Frame Size / Frame Rate of its own is measured first (a sample at exactly them)
+    const go = await until(() => { const b = $('#exportDialog #exGo'); return b && !b.disabled ? b : null; }, 120000, 150);
     if (!go) throw new Error('Export is still measuring the size — press Export in the dialog');
     go.click();
     return { ok: true, op: 'export' };

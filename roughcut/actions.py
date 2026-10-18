@@ -69,8 +69,10 @@ THE OPS (each maps to the human path named after the arrow)
     design_effect {id, note}                 → the Designed Effects tool, on that shot, with
                                                  that note: its own proposal and review follow
   Export
-    export        {preset, range: all|in_out, name?}  → the Export dialog's Export; it runs
-                                                 only when the editor accepts it
+    export        {preset, range: all|in_out, name?, size?, fps?, bitrate?}  → the Export
+                                                 dialog's Export, its Frame Size / Frame
+                                                 Rate / Bitrate set first; it runs only
+                                                 when the editor accepts it
 
 A whole-cut rewrite ("make it a 30 s teaser") is not an op list: the assistant answers
 `kind: "plan"` and the existing Ask path proposes the new cut (roughcut/assist.py).
@@ -174,6 +176,8 @@ def schema_text() -> str:
     props = ", ".join(f"{k} ({v[1]:g}..{v[2]:g}{v[3].strip() and ' ' + v[3].strip()})"
                       for k, v in SET_PROPS.items())
     kinds = ", ".join(f"{k} ({v})" for k, v in TRANSITION_KINDS.items())
+    sizes = "|".join(f'"{k}"' for k in EXPORT_SIZES)
+    rates = "|".join(f'"{k}"' for k in EXPORT_RATES)
     return f"""\
 Every op is a JSON object with "op" and its fields. Film seconds (`at`, `t`, roll's `by`)
 count from the start of the sequence, after each shot's speed; clip seconds (`in`, `out`,
@@ -210,7 +214,7 @@ Transitions
 Designed Effects
   {{"op":"design_effect","id","note"}}           ask the effect designer for a drawn effect on a shot (titles, markers, graphics); its own review follows
 Export
-  {{"op":"export","preset","range":"all"|"in_out","name"?}}   render a file (runs only once the editor accepts it)
+  {{"op":"export","preset","range":"all"|"in_out","name"?,"size"?,"fps"?,"bitrate"?}}   render a file (runs only once the editor accepts it). The preset's own frame, rate and quality unless you set them: size {sizes} (the frame height, at the sequence's aspect; "match" is the footage's own frame), fps {rates}, bitrate a target in Mbps ({EXPORT_BITRATE_MIN:g}–{EXPORT_BITRATE_MAX:g}). "A 720p review copy" is quick with "size":"720"
 """
 
 
@@ -951,8 +955,61 @@ def _c_design_effect(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
     return {"op": "design_effect", "id": seg["id"], "note": note}, line
 
 
+# What editors call the NTSC rates: "30 fps" off a GoPro is 29.97, "60" 59.94, "24" 23.976.
+_NOMINAL_RATES = {24.0: "23.976", 30.0: "29.97", 60.0: "59.94"}
+
+
+def export_size_key(v: Any) -> str:
+    """Frame Size from what the model wrote ("720", 720, "720p", "1280x720", "match")."""
+    t = str(v).strip().lower().replace("×", "x")
+    if t in ("match", "source", "sequence", "match sequence", "match source"):
+        return "match"
+    t = {"4k": "2160", "uhd": "2160", "fhd": "1080", "full hd": "1080"}.get(t, t)
+    if "x" in t:
+        t = t.split("x", 1)[1]
+    t = t.rstrip("p").strip()
+    if t in EXPORT_SIZES and t != "match":
+        return t
+    raise Refused(f"Frame Size is {', '.join(EXPORT_SIZES)} (got {v!r})")
+
+
+def export_rate_key(v: Any) -> str:
+    """Frame Rate from what the model wrote (29.97, "29.97", "30000/1001", 30, "match")."""
+    t = str(v).strip().lower().removesuffix("fps").strip()
+    if t in ("match", "source", "sequence"):
+        return "match"
+    if t in EXPORT_RATES:
+        return t
+    num, _, den = t.partition("/")
+    f = _f(num)
+    d = _f(den) if den else 1.0
+    if f is not None and d:
+        x = f / d
+        for key, rational in EXPORT_RATES.items():
+            if rational:
+                n2, _, d2 = rational.partition("/")
+                if abs(x - float(n2) / float(d2 or 1)) < 0.01:
+                    return key
+        nominal = _NOMINAL_RATES.get(round(x, 3))
+        if nominal:
+            return nominal
+    raise Refused(f"Frame Rate is {', '.join(EXPORT_RATES)} (got {v!r})")
+
+
+def export_bitrate_mbps(v: Any) -> float:
+    """A target bitrate in Mbps (8, "8", "8 Mbps")."""
+    t = str(v).strip().lower()
+    for unit in ("mbps", "mb/s", "m"):
+        t = t.removesuffix(unit).strip()
+    f = _f(t)
+    if f is None or not (EXPORT_BITRATE_MIN <= f <= EXPORT_BITRATE_MAX):
+        raise Refused(f"`bitrate` is a target in Mbps, {EXPORT_BITRATE_MIN:g}–{EXPORT_BITRATE_MAX:g} "
+                      f"(got {v!r})")
+    return _r(f, 3)
+
+
 def _c_export(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
-    preset = raw.get("preset")
+    preset = raw.get("preset") or "quick"           # the dialog's own default
     if sim.presets and preset not in sim.presets:
         raise Refused(f"unknown preset {preset!r} (Export has {', '.join(sim.presets)})")
     rng = raw.get("range", "all")
@@ -965,10 +1022,23 @@ def _c_export(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
     clean: dict = {"op": "export", "preset": str(preset), "range": rng}
     if raw.get("name"):
         clean["name"] = str(raw["name"]).strip()[:80]
+    # Export Settings › Video (verdict 9, punch 5): what is not said is the preset's own
+    video: list[str] = []
+    if raw.get("size") not in (None, ""):
+        clean["size"] = export_size_key(raw["size"])
+        video.append("Match Sequence frame" if clean["size"] == "match"
+                     else EXPORT_SIZES[clean["size"]])
+    if raw.get("fps") not in (None, ""):
+        clean["fps"] = export_rate_key(raw["fps"])
+        video.append("the sequence's frame rate" if clean["fps"] == "match"
+                     else f"{clean['fps']} fps")
+    if raw.get("bitrate") not in (None, ""):
+        clean["bitrate"] = export_bitrate_mbps(raw["bitrate"])
+        video.append(f"{clean['bitrate']:g} Mbps target")
     label = sim.presets.get(str(preset), str(preset))
     where = "Entire Sequence" if rng == "all" else "Sequence In/Out"
-    line = f"Export {label}, {where}" + (f" → {clean['name']}.mp4" if clean.get("name") else "") \
-        + ", on accept"
+    line = (f"Export {label}" + (f" at {', '.join(video)}" if video else "") + f", {where}"
+            + (f" → {clean['name']}.mp4" if clean.get("name") else "") + ", on accept")
     return clean, line
 
 

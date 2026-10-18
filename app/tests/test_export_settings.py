@@ -16,7 +16,10 @@ In real Chromium on the suite's fixture bin, through the real server and assembl
   * a target bitrate reaches the encoder (VBR) and the estimate is the target's;
   * the dialog never draws one thing over another (`#exportDialog *`), at 1440×900 and
     1920×1080, on a 59.94 sequence, with a 4K frame, a custom size / rate / bitrate and a
-    bitrate that is not one.
+    bitrate that is not one;
+  * asking the AI (a scripted model, never a real call) for "a 720p review copy" yields
+    the export op with `size: "720"`, its review line says so, nothing runs before
+    Accept, and Accept sends the request the dialog sends by hand.
 """
 from __future__ import annotations
 
@@ -24,6 +27,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import threading
 import time
 from fractions import Fraction
@@ -34,12 +38,46 @@ import pytest
 pytest.importorskip("playwright.sync_api", reason="playwright not installed")
 from playwright.sync_api import sync_playwright  # noqa: E402
 
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+from roughcut import config, inference  # noqa: E402
+
 SEGMENTS = [
     {"id": "e1", "clip": "CLIP_A.MP4", "in": 0.5, "out": 4.5, "why": "one"},
     {"id": "e2", "clip": "CLIP_B.MP4", "in": 0.0, "out": 4.0, "why": "two"},
     {"id": "e3", "clip": "CLIP_C.MP4", "in": 1.0, "out": 4.5, "why": "three"},
 ]
 DIALOG = "[data-testid=export-dialog]"
+REVIEW_OP = {"op": "export", "preset": "quick", "range": "all", "name": "review copy",
+             "size": "720", "fps": "29.97"}
+
+
+class Model:
+    """The assist call answers the 720p review copy once the prompt teaches the op's
+    Frame Size (the schema the model reads); anything else falls back ("{}")."""
+    name = "export-settings-scripted"
+
+    def __init__(self):
+        self.asks: list[str] = []
+
+    def complete(self, request):
+        if "kind" in (request.schema or {}):
+            self.asks.append(request.prompt)
+            if '"size"?' in request.prompt and "720p review copy" in request.prompt:
+                answer = {"kind": "ops", "summary": "a 720p review copy of the whole sequence",
+                          "ops": [dict(REVIEW_OP)]}
+            else:
+                answer = {"kind": "answer", "text": "There's no 720p preset — Quick is the closest."}
+            text = json.dumps(answer)
+        else:
+            text = "{}"
+        model = config.model_for(request.role)
+        return inference.Result(content=text, input_tokens=4000, output_tokens=300, backend=self.name,
+                                model=model, projected_usd=config.projected_usd(model, 4000, 300),
+                                latency_ms=1, raw=text)
+
+
+MODEL = Model()
 
 
 def _free_port() -> int:
@@ -64,6 +102,7 @@ def live_server(project):
     server.configure(project["edl"], project["footage"], project["sidecars"],
                      project["work"], proxies=False, assets=project["assets"])
     server.ensure_proxies([f"{s}.MP4" for s in project["stems"]])
+    inference.set_backend(MODEL)
     port = _free_port()
     srv = uvicorn.Server(uvicorn.Config(server.app, host="127.0.0.1", port=port,
                                         log_level="error"))
@@ -77,6 +116,7 @@ def live_server(project):
     yield f"http://127.0.0.1:{port}"
     srv.should_exit = True
     thread.join(timeout=10)
+    inference.set_backend(None)
     project["edl"].write_text(original, encoding="utf-8")
 
 
@@ -370,3 +410,72 @@ def test_nothing_in_the_dialog_overlaps_on_a_5994_sequence(board, monkeypatch, s
         assert bad == [], bad
     finally:
         hold.set()
+
+
+# ---------------------------------------------------------------- the AI's export op
+
+def test_asking_for_a_720p_review_copy_is_the_export_op_with_size_720(board, project):
+    """"Export a 720p review copy of the whole sequence": the model, told the op's Frame
+    Size by the schema it reads, answers the export op with `size: "720"`; the review line
+    says 720p and 29.97 fps; nothing is exported until Accept; Accept fills the Export
+    dialog the way a person does and sends the same request a person's Export sends — and
+    the file is 1280×720 at 30000/1001."""
+    sent: list[dict] = []
+
+    def watch(pg):
+        pg.on("request", lambda r: sent.append(json.loads(r.post_data or "{}"))
+              if r.method == "POST" and r.url.endswith("/api/render") else None)
+
+    MODEL.asks.clear()
+    pg = board()
+    watch(pg)
+    pg.wait_for_selector('[data-testid="ai-prompt-input"]')
+    pg.locator("#tl .tl-ruler").click(position={"x": 5, "y": 5})
+    pg.keyboard.press("Control+j")
+    pg.keyboard.type("Export a 720p review copy of the whole sequence")
+    pg.keyboard.press("Enter")
+    pg.wait_for_function("document.querySelector('[data-testid=ai-status]').dataset.state === 'done'",
+                         timeout=30000)
+    assert MODEL.asks and '"size"?' in MODEL.asks[0], "the model was not told the export's Frame Size"
+    review = pg.locator("[data-testid=ai-review]")
+    review.wait_for(state="visible", timeout=8000)
+    rows = pg.locator("[data-testid=ai-op-row]")
+    assert rows.count() == 1 and rows.first.get_attribute("data-op") == "export"
+    line = " ".join(rows.first.inner_text().split())
+    assert "Export Quick 1080p at 720p, 29.97 fps, Entire Sequence → review copy.mp4, on accept" in line, line
+    job = pg.evaluate("rcAI.state().job")
+    rec = pg.evaluate("(j) => fetch('/api/assist/' + j).then(r => r.json())", job)
+    assert rec["ops"] == [REVIEW_OP], rec
+    assert rec["lines"] == ["Export Quick 1080p at 720p, 29.97 fps, Entire Sequence → review copy.mp4, on accept"], rec
+    pg.wait_for_timeout(400)
+    assert sent == [] and not pg.evaluate("document.getElementById('exportDialog').open")
+    pg.locator("[data-testid=ai-accept-all]").click()
+    pg.wait_for_selector("[data-testid=export-done]", timeout=300000)
+    path = pg.get_attribute("[data-testid=export-done]", "data-path")
+    got = ffprobe(path)
+    assert (int(got["width"]), int(got["height"])) == (1280, 720), got
+    assert got["r_frame_rate"] == got["avg_frame_rate"] == "30000/1001", got
+    assert int(got["nb_read_packets"]) == grid_frames(SEGMENTS, Fraction(30000, 1001)), got
+    assert Path(path).name == "review copy.mp4"
+    ai = sent[0]
+    # the same export by hand: Ctrl+M, Quick, 720, 29.97, the name, Export
+    hand = board()
+    watch(hand)
+    open_dialog(hand)
+    hand.select_option("[data-testid=export-preset]", "quick")
+    hand.select_option("[data-testid=export-size]", "720")
+    hand.select_option("[data-testid=export-fps]", "29.97")
+    hand.fill("[data-testid=export-name]", "review copy")
+    measured(hand)
+    hand.route("**/api/render", lambda r: r.fulfill(status=200, content_type="application/json",
+                                                    body=json.dumps({"job": "hand0001", "planned_s": 11.5})))
+    hand.route("**/api/render/hand0001", lambda r: r.fulfill(
+        status=200, content_type="application/json", body=json.dumps({"state": "cancelled"})))
+    hand.click("[data-testid=export-go]")
+    hand.wait_for_function("((document.querySelector('#exNote') || {}).textContent || '').includes('cancelled')",
+                           timeout=10000)
+    by_hand = sent[1]
+    keys = ("preset", "size", "fps", "bitrate", "name", "folder")
+    assert {k: ai.get(k) for k in keys} == {k: by_hand.get(k) for k in keys}, (ai, by_hand)
+    assert ai["size"] == "720" and ai["fps"] == "30000/1001" and "bitrate" not in ai
+    assert len(ai["segments"]) == len(SEGMENTS)
