@@ -316,7 +316,12 @@
         if (edits && typeof window.roughcutFlush === 'function') await window.roughcutFlush();
         await api('POST', '/api/fx/accept', { id: e.id });
         if (window.tlLanes && typeof tlLanes.clearGhost === 'function') tlLanes.clearGhost();
-        if (edits && !(await refreshCut(e))) return;
+        // the read-back's undo entry is this accept's: known by its commit, the moment it
+        // is made (a Ctrl+Z can come before the rest of the refresh has)
+        if (edits) followUndo.expect = { id: e.id, label: `effect: ${e.name}` };
+        const back = !edits || await refreshCut(e);
+        followUndo.expect = null;
+        if (!back) return;
         say(edits ? `${e.name}: accepted — in the cut · ${undoWord()} undoes the edit`
           : `${e.name}: accepted — in the cut`);
         await refresh();
@@ -359,6 +364,34 @@
     say(`${e.name}: the cut changed — reloading`);
     setTimeout(() => location.reload(), 600);
     return false;
+  }
+
+  /* The record follows the board's undo (wave 12, AIGLUE). The accept's read-back is one
+   * entry on the timeline's stack, labelled `effect: <name>`; when Ctrl+Z takes that entry
+   * back, the server is told (POST /api/fx/undo): the effect reads proposed again, its
+   * edits waiting, and the EDL's effects are as they were before it — the copies its
+   * re-keying made gone. Ctrl+Shift+Z puts it back (POST /api/fx/redo). An entry is
+   * found by its label, newest first, the way the stack is walked; a new edit empties the
+   * timeline's redo stack, and with it the accepts that can no longer be redone. */
+  const followUndo = { done: [], undone: [], expect: null };
+  function onUndoStack(ev) {
+    if (!ev) return;
+    if (ev.kind === 'commit') {
+      followUndo.undone.length = 0;
+      const x = followUndo.expect;
+      if (x && ev.label === x.label) { followUndo.done.push(x); followUndo.expect = null; }
+      return;
+    }
+    if ((ev.kind !== 'undo' && ev.kind !== 'redo') || !/^effect: /.test(String(ev.label || ''))) return;
+    const from = ev.kind === 'undo' ? followUndo.done : followUndo.undone;
+    let k = from.length - 1;
+    while (k >= 0 && from[k].label !== ev.label) k -= 1;
+    if (k < 0) return;
+    const [entry] = from.splice(k, 1);
+    (ev.kind === 'undo' ? followUndo.undone : followUndo.done).push(entry);
+    api('POST', ev.kind === 'undo' ? '/api/fx/undo' : '/api/fx/redo', { id: entry.id })
+      .then(() => refresh())
+      .catch((err) => say(err.message));
   }
 
   /* Every model button shows its price first (INTAKE I16.0f): Design and Go are
@@ -1648,6 +1681,7 @@
     if (t && typeof t.on === 'function') {
       t.on('select', onSelect);
       t.on('change', () => { onSelect(); paint(); badge(); });
+      t.on('change', onUndoStack);
     }
     setInterval(onSelect, 500);          // playback moves the anchor without a select event
     if (t && typeof t.on === 'function') {
