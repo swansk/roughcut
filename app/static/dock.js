@@ -444,7 +444,7 @@
    *     files here.
    * The clips re-read on `rc:clips-changed` (whoever adds footage fires it) and on
    * `dock.project.reload()`; the sequences follow the switcher's own listing; the subclips
-   * and the proposal follow the board's (app.js `passPicks`, `bin`, `pendingPlan`). */
+   * and the proposal follow the board's (app.js's read-only `window.rcBoard`). */
   const VIEW_KEY = 'roughcut.ws.projview';
   const SORT_KEY = 'roughcut.ws.projsort';
   const ZOOM_KEY = 'roughcut.ws.projzoom';
@@ -639,17 +639,22 @@
     / Math.max(1e-6, Math.min(a[1] - a[0], b[1] - b[0]));
   const stemOf = (name) => String(name || '').replace(/\.[^.]+$/, '');
 
-  /* The board's own state, read where app.js keeps it (classic-script globals, as `P` is
-   * read above): the pass's picks (`passPicks`, GET /api/picks), the editor's keeps (`bin`,
-   * GET /api/selects), the cut (`segs`) and a proposal waiting for review (`pendingPlan`).
-   * Read only; a page without them (or before they exist) has none. */
-  /* eslint-disable no-undef */
+  /* The board's own state, through app.js's read-only accessor (`window.rcBoard`: frozen
+   * copies, never its live arrays): the pass's picks (GET /api/picks), the editor's keeps
+   * (GET /api/selects), the cut and a proposal waiting for review. A page without it (or
+   * before app.js has run) has none. The clips' words and moments are `P`'s (as above). */
+  const board = (k, none) => {
+    try {
+      const v = window.rcBoard && typeof window.rcBoard[k] === 'function' ? window.rcBoard[k]() : none;
+      return Array.isArray(none) ? (Array.isArray(v) ? v : none) : v || none;
+    } catch (e) { return none; }
+  };
+  /* eslint-disable-next-line no-undef */
   const boardClip = (name) => { try { return typeof P !== 'undefined' && P && P.clips ? P.clips[name] || null : null; } catch (e) { return null; } };
-  const boardPicks = () => { try { return typeof passPicks !== 'undefined' && Array.isArray(passPicks) ? passPicks : []; } catch (e) { return []; } };
-  const boardKeeps = () => { try { return typeof bin !== 'undefined' && bin && Array.isArray(bin.selects) ? bin.selects : []; } catch (e) { return []; } };
-  const boardSegs = () => { try { return typeof segs !== 'undefined' && Array.isArray(segs) ? segs : []; } catch (e) { return []; } };
-  const boardPlan = () => { try { return typeof pendingPlan !== 'undefined' ? pendingPlan : null; } catch (e) { return null; } };
-  /* eslint-enable no-undef */
+  const boardPicks = () => board('picks', []);
+  const boardKeeps = () => board('keeps', []);
+  const boardSegs = () => board('segs', []);
+  const boardPlan = () => board('plan', null);
   const seqRate = () => { try { return window.tl && typeof tl.gridRate === 'function' && tl.state ? tl.gridRate() : 0; } catch (e) { return 0; } };
   function liveCut() {
     try {

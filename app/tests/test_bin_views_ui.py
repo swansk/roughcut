@@ -528,6 +528,37 @@ def test_the_passs_picks_are_subclips_with_their_why(live_server, project, brows
     pg.context.close()
 
 
+def test_the_panel_reads_the_board_through_a_read_only_accessor(live_server, project, browser):
+    """BINLOOK's ask (wave 12 SMALL3): app.js answers `window.rcBoard = {picks, keeps, segs,
+    plan}` with frozen copies, and dock.js reads the board through it, not through app.js's
+    globals by name. The subclips and the waiting proposal still show."""
+    pg = _open(browser, live_server, project, picks=True, proposal=True)
+    pg.wait_for_selector("#projList [data-cut=proposed]", timeout=10000)
+    pg.wait_for_selector("#projList tr.row[data-clip='CLIP_C.MP4'] [data-tw]", timeout=10000)
+    got = pg.evaluate("""() => {
+      const b = window.rcBoard, p = b.picks(), s = b.segs(), plan = b.plan(), k = b.keeps();
+      const was = segs[0].in;
+      try { s[0].in = 99; } catch (e) { /* frozen: a strict caller is told */ }
+      try { p.push({}); } catch (e) { /* frozen */ }
+      return {
+        keys: Object.keys(b).sort(), frozen: Object.isFrozen(b),
+        same: p === passPicks || s === segs || plan === pendingPlan || (!!bin && k === bin.selects),
+        equal: JSON.stringify(p) === JSON.stringify(passPicks) && JSON.stringify(s) === JSON.stringify(segs)
+          && JSON.stringify(plan) === JSON.stringify(pendingPlan),
+        deep: Object.isFrozen(p) && Object.isFrozen(p[0]) && Object.isFrozen(s[0]) && Object.isFrozen(plan.segments),
+        untouched: segs[0].in === was && passPicks.length === p.length && Array.isArray(k),
+      };
+    }""")
+    assert got == {"keys": ["keeps", "picks", "plan", "segs"], "frozen": True, "same": False,
+                   "equal": True, "deep": True, "untouched": True}, got
+    # dock.js names none of app.js's globals any more
+    src = pg.evaluate("fetch('/dock.js').then(r => r.text())")
+    for name in ("passPicks", "pendingPlan", "typeof segs", "typeof bin"):
+        assert name not in src, name
+    assert pg.errors == []
+    pg.context.close()
+
+
 def test_a_subclip_dragged_onto_the_timeline_goes_in_as_its_range(live_server, project, browser):
     pg = _open(browser, live_server, project, picks=True)
     pg.locator("#projList tr.row[data-clip='CLIP_A.MP4'] [data-tw]").click()
