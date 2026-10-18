@@ -49,6 +49,15 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-18 ~18:50 (box clock): **VERDICT 9 FAIL on `7436562`** (= a426586's code; 1:9 2:9 3:9 4:9 5:9 6:7 7:8 8:8 9:7 10:8
+  11:9 12:8 13:7 14:8 15:8 16:8; judge's gate RED: perf counted run at load 6.5 live 100 ms / canvas 94.6-118.6 ms, the
+  ungraded dissolve 83.3 ms alone, journey step 15 TargetClosedError in the gate, green alone (the lead re-ran it 2/2
+  green)). K1 resolved (Karl to confirm), K2 open, K3 "substantially delivered", open for Karl. Ruling 5b: dimension 13's
+  spend rule is the lead's, not INTAKE's (re-attributed). **Wave 13** (judge/WAVE13.md) from `b7848ec`: PRICED (punch 2 +
+  gen_black name), EXPORT2 (5 + dialog overlap), BINLOOK2 (9 + Status column), AIUX (6's transition ghost, 7, AI undo
+  labels), SMALL4 (journey crash diagnosis, playhead clamp, zero-length warnings, tour callout); CANVAS2 still running
+  from a426586 (punch 1 + poster). All lanes test at nice 19 so CANVAS2's perf A/B keeps the CPU. Deferred to wave 14:
+  punch 4 fast play of fresh clips, 6's Look/Match preview, 8 video effects, 10's event-loop holds.
 - 2026-10-18 17:55 (box clock; the two entries below stamped ~17:30 and ~19:00 were the lead's mis-reads of the time: they
   were ~16:00 and ~16:15): **tail merged** AIGLUE `0b94a29`, JOURNEY3 `360efbe` (journey 24 steps), lead `ba49465`
   (Ctrl+Shift+X one undo). **Lead full gate on `ba49465`: RED** (2193 s): suite 1589 passed, 7 broken = 5
