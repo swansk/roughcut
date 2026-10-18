@@ -607,14 +607,18 @@
   // every clip plays (the server serves the original or a preview until the proxy is
   // built), so the state is the index's, not the proxy's
   // heard = the sound is transcribed, looked = the pictures are read, indexed = both
+  // [the cell's word, its colour, the whole sentence its hover and the row's hover say].
+  // Verdict 9 (punch 3): "preview q…" was cut at 1440. Premiere's bin words are short, so
+  // the cell says one word (never ellipsized; test_workspace's overflow check) and the
+  // hover the rest.
   function stateOf(c) {
     // verdict 8: the Program sat black on a clip the bin called "indexed"
-    if (c.media === 'building') return ['preview building', 'wait'];
-    if (c.media === 'queued') return ['preview queued', 'wait'];
-    if (c.analysed && c.looked) return ['indexed', 'ok'];
-    if (c.analysed) return ['heard', 'part'];
-    if (c.looked) return ['looked', 'part'];
-    return ['not indexed', ''];
+    if (c.media === 'building') return ['building', 'wait', 'preview building: the monitors show its poster until it plays; it can be cut now'];
+    if (c.media === 'queued') return ['queued', 'wait', 'preview queued: made in the background; it can be cut now'];
+    if (c.analysed && c.looked) return ['indexed', 'ok', 'indexed: its sound heard and its pictures read'];
+    if (c.analysed) return ['heard', 'part', 'heard: its sound is transcribed, its pictures not read yet'];
+    if (c.looked) return ['looked', 'part', 'looked: its pictures are read, its sound not heard yet'];
+    return ['not indexed', '', 'not indexed: the index has not heard or looked at it yet; it can be cut now'];
   }
   const fpsText = (r) => (r ? `${Number(r).toFixed(Number(r) % 1 ? 2 : 0)} fps` : '');
   // Premiere's Audio Info: "48000 Hz · Stereo" (GET /api/clips' `audio`, the facts probe's)
@@ -760,7 +764,7 @@
   }
 
   function clipItem(c, subs, forced) {
-    const [state, stCls] = stateOf(c);
+    const [state, stCls, stTitle] = stateOf(c);
     const rate = Number(c.fps) || 0;
     const dur = Number(c.duration) || 0;
     const note = clipNote(c);
@@ -769,11 +773,11 @@
     const audio = audioText(c.audio);
     return { type: 'clip', key: `c|${c.clip}`, name: c.clip, c, label: 'violet', rate, fps: rate, tc0,
              start: mt ? mt.sv : 0, end: mt ? mt.ev : lastFrame(dur, rate), sTc: mt && mt.s, eTc: mt && mt.e,
-             dur, w: c.width || 0, h: c.height || 0, audio, state, stCls,
+             dur, w: c.width || 0, h: c.height || 0, audio, state, stCls, stTitle,
              note, shot: c.captured, subs, forced,
              title: [c.clip, [dur ? tcOf(dur, rate) : '', fpsText(rate), c.width ? `${c.width} × ${c.height}` : '', audio]
                .filter(Boolean).join(' · '), mt ? `Media Start ${mt.s} · Media End ${mt.e}` : '',
-               state + (subs.length ? ` · ${nOf(subs.length, 'subclip')}` : ''), note]
+               stTitle + (subs.length ? ` · ${nOf(subs.length, 'subclip')}` : ''), note]
                .filter(Boolean).join('\n') };
   }
 
@@ -787,6 +791,8 @@
              fps: rate, start: mt ? mt.sv : s.in, end: mt ? mt.ev : lastFrame(s.out, rate),
              sTc: mt && mt.s, eTc: mt && mt.e, dur, in: s.in, out: s.out,
              w: parent.w, h: parent.h, audio: parent.audio, state, stCls: s.inCut ? 'ok' : '', note, why: s.why || s.note,
+             stTitle: s.inCut ? 'in cut: the sequence plays this range' : s.mine
+               ? (s.hero ? 'hero: your hero keep' : 'kept: your keep') : 'pick: a pick the first pass made',
              shot: parent.shot,
              title: [`${s.name} — a subclip of ${s.clip}`,
                      `In ${tcOf(s.in, rate)} · Out ${tcOf(lastFrame(s.out, rate), rate)} · ${tcOf(dur, rate)}`,
@@ -818,6 +824,7 @@
     if (p) {
       out.push({ type: 'prop', key: 'p|', cut: 'proposed', name: p.name, label: 'forest', rate, fps: rate,
                  start: 0, end: lastFrame(p.dur, rate), dur: p.dur, state: 'proposed', stCls: 'warn',
+                 stTitle: 'proposed: waiting for your review',
                  note: p.line || nOf(p.n, 'shot'), first: p.first,
                  title: `${p.name} (proposed): ${nOf(p.n, 'shot')} · ${tcOf(p.dur, rate)}\n${p.line ? `${p.line}\n` : ''}`
                    + 'double-click to review it: its shots on the Timeline (the ghost lane), Accept or Discard in the Assistant' });
@@ -830,6 +837,7 @@
       out.push({ type: 'seq', key: `q|${c.path}`, cut: c.path, name: c.name || 'cut', cur: !!c.current,
                  label: 'forest', rate, fps: c.current ? rate : 0, start: 0, end: n ? lastFrame(dur, rate) : 0,
                  dur: n ? dur : 0, n, state: c.current ? 'open' : '', stCls: c.current ? 'ok' : '',
+                 stTitle: c.current ? 'open in the Timeline' : '',
                  note: [n ? nOf(n, 'shot') : 'empty', c.story, c.from ? `copied from ${c.from}` : ''].filter(Boolean).join(' · '),
                  first: live ? live.first : null, shot: c.created,
                  title: `${c.name}: ${n ? `${nOf(n, 'shot')} · ${tcOf(dur, rate)}` : 'empty'}`
@@ -960,7 +968,10 @@
     if (k === 'size') return `<td>${it.w && it.h ? `${it.w}×${it.h}` : ''}</td>`;
     if (k === 'audio') return `<td>${esc(it.audio || '')}</td>`;
     // the proposal's status is its badge: it waits for you
-    if (k === 'state') return `<td class="st ${it.stCls || ''}">${it.type === 'prop' ? seqBadge(it) : esc(it.state || '')}</td>`;
+    if (k === 'state') {
+      const t = it.stTitle ? ` title="${esc(it.stTitle)}"` : '';
+      return `<td class="st ${it.stCls || ''}" data-state="${esc(it.state || '')}"${t}>${it.type === 'prop' ? seqBadge(it) : esc(it.state || '')}</td>`;
+    }
     if (k === 'note') return `<td class="note">${ell(esc(it.note || ''))}</td>`;
     return `<td>${capturedText(it.shot)}</td>`;
   }

@@ -418,6 +418,51 @@ def test_icon_view_scrubs_a_clip_under_the_pointer_and_sizes_with_the_slider(liv
     pg.context.close()
 
 
+# ---------------------------------------------------------------- the Status column (verdict 9, punch 3)
+
+def _every_status(route):
+    resp = route.fetch()
+    body = resp.json()
+    for c in body.get("clips", []):
+        c["media"] = {"CLIP_A.MP4": "building", "CLIP_B.MP4": "queued"}.get(c["clip"], c.get("media"))
+        if c["clip"] == "CLIP_C.MP4":
+            c["analysed"] = c["looked"] = False
+    route.fulfill(response=resp, body=json.dumps(body), content_type="application/json")
+
+
+@pytest.mark.parametrize("size", [(1440, 900), (1920, 1080)], ids=lambda s: f"{s[0]}x{s[1]}")
+def test_every_status_reads_whole_and_its_hover_says_the_rest(live_server, project, browser, size):
+    """"preview q…" at 1440 (verdict 9): every Status is one short word, Premiere-style, and
+    the cell's hover says the whole of it."""
+    pg = _open(browser, live_server, project, size=size, picks=True, proposal=True, wait=False)
+    pg.route("**/api/clips", _every_status)
+    pg.reload()
+    pg.wait_for_selector("#projList tr.row td.st[data-state=building]", timeout=15000)
+    pg.wait_for_selector("#projList [data-cut=proposed]", timeout=10000)
+    for tw in pg.locator("#projList [data-tw]").all():
+        tw.click()
+    pg.wait_for_selector("#projList tr.sub", timeout=5000)
+    cells = pg.evaluate("""() => [...document.querySelectorAll('#projList tr[data-key] td.st')].map((td) => ({
+        key: td.parentElement.dataset.key, text: td.textContent.trim(), title: td.title,
+        sw: td.scrollWidth, cw: td.clientWidth }))""")
+    by = {c["key"]: c for c in cells}
+    assert by["c|CLIP_A.MP4"]["text"] == "building" and by["c|CLIP_A.MP4"]["title"].startswith("preview building"), by
+    assert by["c|CLIP_B.MP4"]["text"] == "queued" and by["c|CLIP_B.MP4"]["title"].startswith("preview queued"), by
+    assert by["c|CLIP_C.MP4"]["text"] == "not indexed" and by["c|CLIP_C.MP4"]["title"].startswith("not indexed"), by
+    assert by["p|"]["text"] == "proposed" and by["p|"]["title"].startswith("proposed"), by
+    assert [c["text"] for c in cells if c["key"].startswith("q|")] == ["open"], cells
+    subs = {c["text"] for c in cells if c["key"].startswith("s|")}
+    assert subs and subs <= {"pick", "kept", "hero", "in cut"}, subs
+    # every one whole, in its column
+    assert all(c["sw"] <= c["cw"] + 0.5 for c in cells), [c for c in cells if c["sw"] > c["cw"] + 0.5]
+    assert all(c["title"] for c in cells if c["text"]), cells
+    # the row's hover says it whole too
+    assert "preview building" in pg.locator("#projList tr.row[data-clip='CLIP_A.MP4']").get_attribute("title")
+    assert pg.evaluate(OVERFLOW_JS) == []
+    assert pg.errors == []
+    pg.context.close()
+
+
 # ---------------------------------------------------------------- sequences
 
 def test_the_bins_cuts_are_sequences_and_a_double_click_opens_one(live_server, project, browser):
