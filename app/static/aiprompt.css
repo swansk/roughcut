@@ -1,1 +1,121 @@
-/* aiprompt (wave 12 scaffold; its lane fills it) */
+/* aiprompt.css: the AI prompt in the Timeline panel's header row, its scope chip and status
+   line, the answer popover, the scope menu and "Ask AI about this…" (aiprompt.js,
+   REDESIGN-GOAL dimension 14). One field the size of a panel's search box, Premiere's
+   dark density; the context menus reuse the timeline's .tl-ctx look. */
+
+/* ---------------------------------------------------------------- the home: the Timeline's header row */
+/* The title tab gives way (ellipsis) before the prompt does. */
+#pTimeline > .ws-head > .ws-tabs { flex: 0 10 auto; }
+/* The field takes the right half of the row and never moves; the status line, when there
+   is one, grows leftward from it into the empty half (the panel's own title and grab area
+   stay clear: a click on the header's middle still just focuses the Timeline). */
+#aiPrompt { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: flex-end;
+            gap: 8px; padding: 0 2px 0 10px; container: aiprompt / inline-size; }
+
+/* ---------------------------------------------------------------- the field */
+#aiPrompt .aip-field { flex: 0 1 auto; width: calc(50cqw + 40px); max-width: 520px; min-width: 200px; height: 22px; display: flex; align-items: center;
+                       gap: 5px; padding: 0 4px 0 6px; box-sizing: border-box; cursor: text;
+                       background: #151517; border: 1px solid #3a3a48; border-radius: 4px;
+                       transition: border-color .12s, box-shadow .12s; }
+#aiPrompt .aip-field:hover { border-color: var(--line-hi, #46464c); }
+#aiPrompt.focus .aip-field { border-color: var(--accent, #4a9df8);
+                             box-shadow: 0 0 0 2px rgba(74, 157, 248, .18); }
+#aiPrompt .aip-ico { flex: none; width: 13px; height: 13px; color: var(--accent, #4a9df8); }
+#aiPrompt .aip-input { flex: 1 1 auto; min-width: 60px; height: 20px; padding: 0 2px; border: 0;
+                       background: transparent; color: var(--text, #dcdcdf); font: inherit; font-size: 12px;
+                       outline: none; box-shadow: none; }
+#aiPrompt .aip-input:focus { border: 0; outline: none; }
+#aiPrompt .aip-input::placeholder { color: #808089; opacity: 1; }
+#aiPrompt.focus .aip-input::placeholder { color: #55555c; }
+#aiPrompt .aip-key { flex: none; font-size: 10px; line-height: 13px; padding: 0 4px; color: var(--dim, #94949c);
+                     background: #1f1f23; border-color: var(--line, #333337); }
+#aiPrompt.focus .aip-key, #aiPrompt.typed .aip-key { display: none; }
+@keyframes aip-nudge { 25% { transform: translateX(-3px); } 75% { transform: translateX(3px); } }
+#aiPrompt .aip-field.nudge { animation: aip-nudge .18s ease-in-out 2; }
+
+/* the scope chip, inside the field at its left: what the AI will work on */
+#aiPrompt .aip-scope { flex: 0 1 auto; min-width: 0; max-width: 170px; height: 16px; display: inline-flex;
+                       align-items: center; gap: 3px; padding: 0 4px 0 6px; border-radius: 3px;
+                       border: 1px solid #3d4a5c; background: #1c2633; color: #b9d4f5;
+                       font-size: 11px; line-height: 14px; white-space: nowrap; cursor: pointer; }
+#aiPrompt .aip-scope:hover, #aiPrompt .aip-scope[aria-expanded="true"] { background: #23324a; border-color: #4f6a8f;
+                                                                          color: #dbe9fb; }
+#aiPrompt .aip-scope[data-kind="sequence"] { border-color: var(--line, #333337); background: #202024;
+                                             color: var(--dim, #94949c); }
+#aiPrompt .aip-scope[data-kind="sequence"]:hover { color: var(--text, #dcdcdf); background: var(--card-hi, #313135); }
+#aiPrompt .aip-scope-l { overflow: hidden; text-overflow: ellipsis; }
+#aiPrompt .aip-chev { flex: none; width: 9px; height: 9px; opacity: .8; }
+
+/* ---------------------------------------------------------------- the status line */
+#aiPrompt .aip-status { flex: none; display: flex; align-items: center; gap: 6px;
+                        font-size: 11.5px; color: var(--dim, #94949c); white-space: nowrap; }
+#aiPrompt .aip-status[hidden] { display: none; }
+#aiPrompt .aip-status b { font-weight: 600; color: var(--text, #dcdcdf); font-variant-numeric: tabular-nums; }
+#aiPrompt .aip-what { color: var(--text, #dcdcdf); }
+#aiPrompt .aip-cost { color: var(--dim, #94949c); }
+#aiPrompt .aip-cost::before { content: "· "; }
+#aiPrompt .aip-dim .aip-cost::before { content: ""; }
+#aiPrompt .aip-dim { color: var(--dim, #94949c); }
+#aiPrompt .aip-bad { color: var(--bad, #e46a6a); }
+#aiPrompt .aip-ok { color: var(--good, #5fcf86); margin-right: 5px; }
+#aiPrompt .aip-result { display: inline-flex; align-items: center; color: var(--text, #dcdcdf); min-width: 0; }
+#aiPrompt .aip-sep { margin: 0 5px; color: var(--faint, #66666e); }
+#aiPrompt .aip-spin { flex: none; width: 11px; height: 11px; border-radius: 50%; box-sizing: border-box;
+                      border: 1.5px solid rgba(74, 157, 248, .25); border-top-color: var(--accent, #4a9df8);
+                      animation: aip-spin .8s linear infinite; }
+@keyframes aip-spin { to { transform: rotate(360deg); } }
+#aiPrompt .aip-btn, .aip-pop .aip-btn { height: 20px; padding: 0 8px; line-height: 18px; font-size: 11.5px; }
+#aiPrompt .aip-link { border: 0; background: transparent; padding: 0 2px; height: 18px; line-height: 18px;
+                      color: var(--accent, #4a9df8); font-size: 11.5px; font-weight: 600; }
+#aiPrompt .aip-link:hover { background: transparent; color: #7cb9fa; }
+#aiPrompt .aip-x, .aip-pop .aip-x { border: 0; background: transparent; color: var(--dim, #94949c);
+                                    padding: 0 3px; height: 18px; line-height: 16px; font-size: 14px; }
+#aiPrompt .aip-x:hover, .aip-pop .aip-x:hover { color: var(--text, #dcdcdf); background: transparent; }
+
+/* a narrow Timeline (the panels dragged): the key hint goes, then the status's words */
+@container aiprompt (max-width: 520px) {
+  #aiPrompt .aip-key { display: none; }
+  #aiPrompt .aip-cost, #aiPrompt .aip-sep { display: none; }
+}
+@container aiprompt (max-width: 380px) {
+  #aiPrompt .aip-field { min-width: 160px; }
+  #aiPrompt .aip-what { display: none; }
+}
+
+/* ---------------------------------------------------------------- the answer popover */
+.aip-pop { position: fixed; z-index: 88; width: 440px; max-width: calc(100vw - 16px);
+           background: #202023; border: 1px solid var(--line-hi, #46464c); border-radius: 6px;
+           box-shadow: 0 12px 32px rgba(0, 0, 0, .6); color: var(--text, #dcdcdf); font-size: 12px; }
+.aip-pop[hidden] { display: none; }
+.aip-pop .aip-phead { display: flex; align-items: center; gap: 7px; padding: 8px 8px 6px 10px;
+                      border-bottom: 1px solid var(--line, #333337); }
+.aip-pop .aip-ico { flex: none; width: 13px; height: 13px; color: var(--accent, #4a9df8); }
+.aip-pop .aip-pq { flex: 1; min-width: 0; color: var(--dim, #94949c); overflow: hidden; text-overflow: ellipsis;
+                   white-space: nowrap; }
+.aip-pop .aip-pbody { padding: 8px 12px; max-height: 260px; overflow: auto; line-height: 1.5; }
+.aip-pop .aip-pbody p { margin: 0 0 6px; white-space: pre-wrap; }
+.aip-pop .aip-bad { color: var(--bad, #e46a6a); }
+.aip-pop .aip-pfoot { display: flex; justify-content: flex-end; gap: 6px; padding: 0 10px 9px; }
+
+/* ---------------------------------------------------------------- the scope menu and the context menu */
+.aip-scopemenu, .aip-ctx { min-width: 210px; }
+.aip-scopemenu .aip-mhead { padding: 3px 12px 4px; color: var(--dim, #94949c); font-size: 10.5px;
+                            letter-spacing: .03em; text-transform: uppercase; }
+.aip-scopemenu button, .aip-ctx button { display: flex !important; align-items: center; gap: 8px; }
+.aip-scopemenu .aip-check { flex: none; width: 10px; color: var(--accent, #4a9df8); }
+.aip-scopemenu button:hover:not(:disabled) .aip-check { color: #fff; }
+.aip-scopemenu .k, .aip-ctx .k { margin-left: auto; padding-left: 14px; color: var(--dim, #94949c); font-size: 11px; }
+.aip-ctx button:hover .k { color: #fff; }
+.aip-ctx .aip-ico { flex: none; width: 13px; height: 13px; color: var(--accent, #4a9df8); }
+.aip-ctx button:hover .aip-ico { color: #fff; }
+.aip-ctx .aip-noico { flex: none; width: 13px; }
+
+/* ---------------------------------------------------------------- the AI menu */
+#menubar .menu[data-menu=ai] .mdrop { min-width: 290px; }
+#menubar .menu[data-menu=ai] .mdrop button:disabled:hover { background: transparent; color: var(--text, #dcdcdf); }
+#menubar .menu[data-menu=ai] .mdrop button:disabled:hover .k { color: var(--dim, #94949c); }
+
+/* a control the AI menu took you to: one short ring */
+@keyframes aip-flash { 0% { box-shadow: 0 0 0 0 rgba(74, 157, 248, .9); }
+                       100% { box-shadow: 0 0 0 7px rgba(74, 157, 248, 0); } }
+.aip-flash { animation: aip-flash .7s ease-out 2; }

@@ -426,7 +426,7 @@ def test_the_keys_are_an_overlay_on_question_mark(page):
     # one table grouped by task (INTAKE M16 I16.4), the timeline's rows read from its
     # own table: no second section, no module tags, no row twice
     groups = page.eval_on_selector_all("#keyTable th", "els => els.map(e => e.textContent)")
-    assert groups == ["Play", "Trim and cut", "Move around", "The bin", "Source monitor"], groups
+    assert groups == ["Play", "Trim and cut", "Move around", "The bin", "Source monitor", "AI"], groups
     assert not page.locator("#keysOverlay #tlKeys").is_visible()   # mounted, not shown
     text = page.locator("#keysOverlay").inner_text()
     assert "razor" in text                         # a row from window.tlKeys.KEYS
