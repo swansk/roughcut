@@ -124,6 +124,8 @@ class Assist:
         pg.route("**/api/assist", self._post)
         pg.route("**/api/assist/*", self._get)
         pg.route("**/api/assist/*/cancel", self._get)
+        # the price before an ask is the real server's (it never calls the model)
+        pg.route("**/api/assist/price?*", lambda route: route.continue_())
 
     def _post(self, route):
         if route.request.method != "POST":

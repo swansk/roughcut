@@ -286,6 +286,8 @@ def test_ask_review_accept_and_one_ctrl_z_through_the_real_server(browser, live_
         pg.wait_for_function("tl.byId('shot-a').in === 1.0")
         assert _cut(b.settle()) == seeded, "one Ctrl+Z did not take the whole accept back"
         # what went out: the words, the scope (the whole sequence: nothing selected) and the playhead
+        assert any(r.startswith("GET ") and "/api/assist/price?" in r for r in b.requests), b.requests
+        assert not any("/api/ask/price" in r for r in b.requests)
         assert "tighten the intro" in MODEL.asks[0] and "The whole sequence" in MODEL.asks[0]
     finally:
         b.close()
@@ -423,5 +425,99 @@ def test_stop_cancels_the_job_on_the_server_and_its_late_answer_is_dropped(brows
         assert not pg.evaluate("rcActions.open")
         assert b.state() == "stopped"
         assert any(r == f"POST {live_server}/api/assist/{job}/cancel" for r in b.requests), b.requests
+    finally:
+        b.close()
+
+
+def test_a_job_cancelled_elsewhere_reads_as_stopped(browser, live_server, project):
+    """The fourth status: the job was cancelled by another tab (or the server); the
+    prompt stops waiting and says nothing changed."""
+    MODEL.gate = threading.Event()
+    b = Board(browser, live_server, project)
+    try:
+        pg = b.page
+        b.ask("anything")
+        pg.wait_for_function("rcAI.state().job", timeout=5000)
+        job = pg.evaluate("rcAI.state().job")
+        pg.evaluate("(j) => fetch('/api/assist/' + j + '/cancel', {method: 'POST'})", job)
+        b.wait_state("stopped", timeout=5000)
+        assert "nothing changed" in pg.locator(STATUS).inner_text()
+        MODEL.gate.set()
+    finally:
+        b.close()
+
+
+def test_stop_before_the_job_id_comes_back_still_cancels_it(browser, live_server, project):
+    """Stop pressed while the POST is still on its way: once the server answers with the
+    job, the page tells it to cancel (the POST is only held here, then passed through to
+    the real server)."""
+    MODEL.gate = threading.Event()
+    b = Board(browser, live_server, project)
+    held = []
+    try:
+        pg = b.page
+        pg.route("**/api/assist", lambda route: held.append(route) if route.request.method == "POST"
+                 else route.continue_())
+        b.ask("cut shot 1 at one second")
+        b.wait_state("working")
+        end = time.time() + 5
+        while not held and time.time() < end:
+            pg.wait_for_timeout(50)
+        assert held, "the POST never left"
+        pg.locator('[data-testid="ai-stop"]').click()
+        assert b.state() == "stopped"
+        held.pop().continue_()
+        end = time.time() + 5
+        while not any(r.endswith("/cancel") for r in b.requests) and time.time() < end:
+            pg.wait_for_timeout(50)
+        cancel = [r for r in b.requests if r.endswith("/cancel")]
+        assert cancel, b.requests
+        job = cancel[0].rsplit("/", 2)[-2]
+        pg.wait_for_function("(j) => fetch('/api/assist/' + j).then(r => r.json()).then(d => window.__s = d.status)",
+                             arg=job)
+        pg.wait_for_function("window.__s === 'cancelled'", timeout=5000)
+        MODEL.gate.set()
+        pg.wait_for_timeout(800)
+        assert b.state() == "stopped" and not pg.evaluate("rcActions.open")
+    finally:
+        b.page.unroute_all(behavior="ignoreErrors")
+        b.close()
+
+
+def test_the_price_is_the_assists_own_before_and_while_it_runs(browser, live_server, project):
+    """Before: GET /api/assist/price with the words and the scope, its `words` on the line
+    and its `hover` in the hover. While it runs: the job's own estimate, the same way."""
+    MODEL.gate = threading.Event()
+    b = Board(browser, live_server, project)
+    try:
+        pg = b.page
+        pg.locator("#tl .blk").nth(2).click()
+        pg.keyboard.press("Control+j")
+        pg.keyboard.type("dissolve into this one")
+        cost = pg.locator(f"{STATUS} .aip-cost")
+        # the price follows the words once they rest, for the selected shot
+        end = time.time() + 6
+        while time.time() < end and not any("/api/assist/price?" in r and "dissolve" in r for r in b.requests):
+            pg.wait_for_timeout(100)
+        priced = [r for r in b.requests if "/api/assist/price?" in r and "dissolve" in r]
+        assert priced, b.requests
+        assert "shot-c" in priced[-1] and "selection" in priced[-1]
+        q = priced[-1].split("?", 1)[1]
+        price = pg.evaluate("(q) => fetch('/api/assist/price?' + q).then(r => r.json())", q)
+        assert price["words"] == "free on your plan" and "API" in price["hover"]
+        pg.wait_for_function(f"(w) => (document.querySelector('{STATUS} .aip-cost') || {{}}).textContent === w",
+                             arg=price["words"])
+        assert cost.get_attribute("title") == price["hover"]
+        pg.keyboard.press("Enter")
+        b.wait_state("working")
+        pg.wait_for_function("rcAI.state().job", timeout=5000)
+        job = pg.evaluate("rcAI.state().job")
+        live = pg.evaluate("(j) => fetch('/api/assist/' + j).then(r => r.json())", job)
+        assert live["status"] == "running" and live["cost"]["measured"] is False
+        pg.wait_for_function(f"(h) => (document.querySelector('{STATUS} .aip-cost') || {{}}).title === h",
+                             arg=live["cost"]["hover"], timeout=5000)
+        assert "$" not in pg.locator(STATUS).inner_text()
+        MODEL.gate.set()
+        b.wait_state("done")
     finally:
         b.close()

@@ -16,13 +16,16 @@
  *     use, else the whole sequence. A click on the chip changes it; a change to the
  *     selection or the marks puts it back to following them.
  *   - running: POST /api/assist {text, scope} → {job}, then GET /api/assist/{job} until
- *     it is done (judge/WAVE12.md). The status line beside the field says "Working" at
- *     once with the honest cost (rcCost: "free on your plan" on the subscription
- *     backend, the API-equivalent estimate in the hover) and a Stop; when done one line
- *     says what came back ("4 changes ready · Review"): an op list goes to the review
- *     (window.rcActions.review, lane AIOPS), a whole-cut rewrite to the existing proposal
- *     (rcShowProposal, as the first pass's does), an answer in words to a small popover.
- *     A failure says what to do.
+ *     it is done, failed or cancelled (judge/WAVE12.md; lane AIOPS's server). The
+ *     status line beside the field says "Working" at once with the honest cost (the
+ *     server's own words: GET /api/assist/price before, the job's estimate while it
+ *     runs — "free on your plan" on the subscription backend, the API-equivalent
+ *     estimate in the hover) and a Stop (POST /api/assist/{job}/cancel); when done one
+ *     line says what came back ("4 changes ready · Review"): an op list goes to the
+ *     review (window.rcActions.review, lane AIOPS), a whole-cut rewrite to the existing
+ *     proposal once its Ask job is done (rcShowProposal, as the first pass's does), an
+ *     answer in words to a small popover. A failure says what to do; once the review is
+ *     answered the line says what landed.
  *   - the AI menu (index.html): `rcAI.command(name)` for each item, routed to the
  *     existing features — none reachable only from a panel you must first find.
  *   - "Ask AI about this…": a right-click on a timeline block, a Project panel clip, or
@@ -71,14 +74,16 @@
     + ' stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4l2.5 2.5L7.5 4"/></svg>';
 
   const AI = {
-    state: 'idle',          // idle | working | done | failed | stopped
+    state: 'idle',          // idle | working | done | failed | stopped (Stop, or cancelled elsewhere)
     job: null, text: '', scope: null, t0: 0, timer: 0, tick: 0, gen: 0, planTimer: 0,
     result: null,           // the finished GET /api/assist/{job}, plus its job id
     error: '', hint: '',    // a failure's words, and what to do about it
     override: null, overrideKey: '',   // a scope chosen on the chip, until the auto one changes
     lastPanel: 'timeline',  // the panel in use before the prompt took the focus
     hist: store.get(HIST_KEY, []), histAt: -1, draft: '',
-    price: null,            // {usd, charged, …} for the cost line before a run
+    price: null,            // GET /api/assist/price: {usd, charged, words, hover, …} before a run
+    runCost: null,          // the running job's own estimate (GET /api/assist/{job} `cost`)
+    stoppedGen: 0,          // the ask Stop was pressed on (its job id may not be back yet)
     back: null,             // the element to give the focus back to on Esc
     ready: false,
   };
@@ -172,23 +177,35 @@
 
   /* ------------------------------------------------------------ the price */
 
-  // What an ask costs, for the line before and while it runs: the Ask's price (the same
-  // kind of call: the cut and the footage's index in, an answer out; free, it reads
-  // records), so the words are "free on your plan" on the subscription backend
-  // (REDESIGN-GOAL S) and the API estimate is in the hover. A finished ask's own `cost`
-  // replaces it on the result line.
-  async function fetchPrice() {
+  // What an ask costs, for the line before it runs: the assist's own price (lane AIOPS,
+  // GET /api/assist/price?text=&scope=), the prompt it would send priced at the role's
+  // model — never a model call — worded by the server (`words` / `hover`): "free on your
+  // plan" on the subscription backend (REDESIGN-GOAL S), the API estimate in the hover.
+  // While it runs the job's own estimate (GET /api/assist/{job} `cost`) takes over; a
+  // finished ask's measured `cost` is in the result line's hover.
+  let priceGen = 0, priceTimer = 0, priceKey = '';
+  async function fetchPrice(text, sc) {
+    const q = `text=${encodeURIComponent(String(text == null ? '' : text).trim())}`
+      + `&scope=${encodeURIComponent(JSON.stringify(sc || scope()))}`;
+    if (q === priceKey && AI.price) return;
+    const gen = ++priceGen;
     try {
-      const r = await fetch('/api/ask/price?mode=full');
-      if (!r.ok) return;
+      const r = await fetch(`/api/assist/price?${q}`);
+      if (!r.ok || gen !== priceGen) return;
       const d = await r.json();
-      if (d && typeof d === 'object') { AI.price = d; paintStatus(); paintTitle(); }
+      if (d && typeof d === 'object' && gen === priceGen) { AI.price = d; priceKey = q; paintStatus(); paintTitle(); }
     } catch (e) { /* no price: the line says none, it never guesses */ }
+  }
+  // the words being typed and the scope move the price a little: asked again once they rest
+  function priceSoon() {
+    clearTimeout(priceTimer);
+    priceTimer = setTimeout(() => fetchPrice(input ? input.value : '', scope()), 700);
   }
 
   function costOf(c) {
     const C = window.rcCost;
     if (!C) return { words: '', title: '' };
+    if (c == null) c = AI.state === 'working' && AI.runCost ? AI.runCost : AI.price;
     if (c && typeof c === 'object' && c.words) return { words: String(c.words), title: String(c.hover || c.title || '') };
     const terms = c && typeof c === 'object' ? { ...(AI.price || {}), ...c } : (AI.price || {});
     const usd = typeof c === 'number' ? c
@@ -223,9 +240,9 @@
     });
     chip.addEventListener('click', (e) => { e.stopPropagation(); toggleScopeMenu(); });
     input.addEventListener('keydown', onInputKey);
-    input.addEventListener('focus', () => { host.classList.add('focus'); paintStatus(); if (!AI.price) fetchPrice(); });
+    input.addEventListener('focus', () => { host.classList.add('focus'); paintStatus(); fetchPrice(input.value, scope()); });
     input.addEventListener('blur', () => { host.classList.remove('focus'); paintStatus(); });
-    input.addEventListener('input', () => { host.classList.toggle('typed', !!input.value); AI.histAt = -1; });
+    input.addEventListener('input', () => { host.classList.toggle('typed', !!input.value); AI.histAt = -1; priceSoon(); });
     status.addEventListener('click', onStatusClick);
     if ('ResizeObserver' in window) new ResizeObserver(fitPlaceholder).observe(input);
     paintScope();
@@ -255,9 +272,13 @@
     if (input.placeholder !== fit) input.placeholder = fit;
   }
 
+  let scopeKey = '';
   function paintScope() {
     if (!chip) return;
     const s = scope();
+    // a new scope is a new prompt to price (the playhead alone is not)
+    const k = keyOf({ ...s, playhead: 0 });
+    if (k !== scopeKey) { const first = !scopeKey; scopeKey = k; if (!first && AI.ready) priceSoon(); }
     const w = scopeWords(s);
     const l = $('.aip-scope-l', chip);
     if (l.textContent !== w.text) l.textContent = w.text;
@@ -462,6 +483,7 @@
     AI.job = null;
     AI.result = null;
     AI.error = '';
+    AI.runCost = null;
     paintStatus();                      // the working state, before anything goes out
     remember(text);
     clearInterval(AI.tick);
@@ -479,7 +501,12 @@
     } catch (e) {
       return fail(gen, 'The board did not answer.', 'Check that Roughcut is still running, then Retry.');
     }
-    if (gen !== AI.gen) return false;
+    if (gen !== AI.gen) {
+      // Stop was pressed before the job's id came back: the server is told now, so the
+      // model's answer is dropped there too (and nothing waits on it)
+      if (AI.stoppedGen === gen && d && d.job) cancelJob(d.job);
+      return false;
+    }
     if (r.status === 404 || r.status === 405) {
       return fail(gen, 'This board has no AI prompt service yet.',
         'Use Sequence › Ask for a change, or the AI menu, until the board is updated.');
@@ -507,6 +534,18 @@
     } catch (e) { d = null; }                  // a blip is not a failure: keep waiting
     if (gen !== AI.gen || AI.state !== 'working') return;
     if (d && d.status === 'done') { finish(gen, d); return; }
+    if (d && d.status === 'cancelled') {
+      // stopped somewhere else (another tab's Stop, the server): nothing will come
+      stopTimers();
+      AI.state = 'stopped';
+      paintStatus();
+      return;
+    }
+    if (d && d.cost && d.cost.words && (!AI.runCost || AI.runCost.words !== d.cost.words
+        || AI.runCost.hover !== d.cost.hover)) {
+      AI.runCost = d.cost;               // the job's own estimate, from the prompt it sent
+      paintStatus();
+    }
     if (d && d.status === 'failed') {
       fail(gen, String(d.error || d.summary || 'the model call failed'),
         'Try other words or a smaller scope, then Retry.');
@@ -531,14 +570,21 @@
     return false;
   }
 
+  /* POST /api/assist/{job}/cancel (lane AIOPS): the job reads `cancelled` at once and
+   * whatever the model returns is dropped on the server. */
+  function cancelJob(job) {
+    fetch(`/api/assist/${encodeURIComponent(job)}/cancel`, { method: 'POST' }).catch(() => {});
+  }
+
   function stop() {
     if (AI.state !== 'working') return;
     const job = AI.job;
+    AI.stoppedGen = AI.gen;
     AI.gen++;
     stopTimers();
     AI.state = 'stopped';
     paintStatus();
-    if (job) fetch(`/api/assist/${encodeURIComponent(job)}/cancel`, { method: 'POST' }).catch(() => {});
+    if (job) cancelJob(job);
   }
 
   function finish(gen, d) {
