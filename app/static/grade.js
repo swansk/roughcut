@@ -825,8 +825,10 @@ onmessage = (e) => {
     if (!bw || !bh) return [vw, vh];
     let s = Math.min(1, bw / vw, bh / vh);
     // (the worker's planes path uploads each frame at the size it is read, a third of the
-    // RGBA bytes: a dissolve's two frames fit at PLAY_W, and the canvas keeps its size)
-    const mixW = mixing && !G.yuv ? MIX_W : (G.yuv ? G.autoW : PLAY_W);
+    // RGBA bytes; wave 13 CANVAS2: a dissolve's two frames are still two copies, two uploads
+    // and two passes, and on Killington at load 9-16 the worker fell a frame behind through
+    // the window (a frame waited 30-35 ms for it), so on Auto the pair is MIX_W wide too)
+    const mixW = mixing ? Math.min(MIX_W, G.yuv ? G.autoW : PLAY_W) : (G.yuv ? G.autoW : PLAY_W);
     if (playing) s = RES[G.res] == null ? Math.min(s, mixW / vw) : s * RES[G.res];
     if (s > 0.9) return [vw, vh];   // near full size: the scale costs more than it saves
     // within 3 % of half the frame: exactly half, where the worker's planes are one texel a
