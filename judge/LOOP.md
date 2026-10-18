@@ -49,6 +49,15 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-18 ~14:10 EDT: **wave 12 (K3) launched** from the scaffold `ee8cea1` (+ contracts `909a5d4`; judge/WAVE12.md is
+  the lanes' file table and contracts): IMPORT (13: multi-source bin, Media Browser, upload + OS drop, Ctrl+I), AIOPS
+  (15: roughcut/actions.py vocabulary + assist.py + /api/assist + actions.js dispatcher and per-op review; Designed
+  Effects edits made undoable), AIPROMPT (14: the always-visible prompt, scope chip, AI menu commands, "Ask AI about
+  this…"), TEACH (16 learn: first-run walk-through, AI hover cards, empty states, the tests' tour switch), BINLOOK (16 look:
+  Premiere Project panel List/Icon views, sequences + "First pass (proposed)" in the bin, picks as subclips). Worktrees
+  roughcut-wt/w12-<lane>. `~/roughcut-loop/QUIET` holds lanes to single nice-19 test files until W11FINISH's A/B is done.
+  Merge order plan: W11 BLACK + CANVAS (trial branch) -> AIOPS -> AIPROMPT -> IMPORT -> BINLOOK -> TEACH (tour anchors last),
+  re-measuring test_budget at each merge; then a JOURNEY3 lane adds K3 steps (import, ask, review per op) to the journey.
 - **2026-10-18 13:40 EDT: RESUMED on Karl's "Resume roughcut project loop".** Box quiet (load 0.5, NOITA/STICKFIGHT
   idle). K3 turned into rubric section E, dimensions 13-16 (`cc53ad4`; JUDGE.md drives them; PASS now needs all 16 >= 8).
   Running: lane W11FINISH (quiet-box A/B of BLACK and CANVAS vs base, merges base into CANVAS, a trial merge of both in
