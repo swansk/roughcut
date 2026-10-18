@@ -12,6 +12,10 @@ The steps wave 12 added for Karl's K3 (import, drop, ask, ai-menu, and the re-ru
 new-clips offer) are proven not vacuous at the bottom of this file: one product change
 that breaks a step's feature, a short session that reaches the step (`--steps`), and the
 journey must go red AT that step, with that step's own reason.
+
+And when Chromium goes away under a step (verdict 9, punch 1), the step's line says why;
+a crash of Chromium itself (its session bus killed under it, as in the gate; the renderer)
+is retried once and said in the gate's line; a browser killed from outside is not retried.
 """
 
 from __future__ import annotations
@@ -189,12 +193,12 @@ MUTANTS = {
 
 
 def _session(snap: Path, out: Path, steps: str, fixture: Path | None = None,
-             timeout: int = 420) -> tuple[int, dict, str]:
+             timeout: int = 420, env: dict | None = None) -> tuple[int, dict, str]:
     cmd = [sys.executable, str(JOURNEY), str(snap), str(out), f"--steps={steps}"]
     if fixture is not None:
         cmd.append(f"--fixture-from={fixture}")
     r = subprocess.run(cmd, cwd=snap, capture_output=True, text=True, timeout=timeout,
-                       env={**os.environ})
+                       env={**os.environ, **(env or {})})
     try:
         rec = json.loads((out / "journey.json").read_text())
     except (OSError, ValueError):
@@ -241,3 +245,84 @@ def test_a_new_step_goes_red_at_itself_when_its_feature_is_broken(name, unchange
     assert [s["name"] for s in ran] == order[:k] and all(s["ok"] for s in ran[:-1]), \
         [(s["name"], s["ok"], s["why"]) for s in ran]
     assert why in ran[-1]["why"], f"mutant {name}: step {step} is red for another reason: {ran[-1]['why']}"
+
+
+# ---------------------------------------------------------------- Chromium going away
+#
+# Verdict 9, punch 1: in the gate the journey died at step 15 on "TargetClosedError: …
+# Target page, context or browser has been closed" and passed alone. The cause (journalctl):
+# GNOME Shell crashed, the user's D-Bus restarted, and Chromium, connected to it, aborted.
+# The journey now names why a page went away, retries a step once only when Chromium itself
+# crashed, and gives its browser no D-Bus at all.
+
+# the browser's lines around the gate's step-15 death (gate-7436562-20261018T1747's
+# journey.json trace), in the shape the driver writes them with DEBUG=pw:browser, plus one
+# line of the noise a bus-less Chromium prints at start
+GATE_LOG = """\
+2026-10-18T22:28:27.840Z pw:browser <launched> pid=2132202
+2026-10-18T22:28:27.849Z pw:browser [pid=2132202][err] [1018/182827.848689:WARNING:sandbox/policy/linux/sandbox_linux.cc:405] InitializeSandbox() called with multiple threads in process gpu-process.
+2026-10-18T22:28:28.205Z pw:browser [pid=2132202][err] [1018/182828.205379:ERROR:gpu/command_buffer/service/gl_utils.cc:431] [.WebGL-0x298c00fda200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
+2026-10-18T22:28:29.001Z pw:browser [pid=2132202][err] [1018/182829.001000:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/roughcut-journey-no-bus: No such file or directory
+2026-10-18T22:28:49.096Z pw:browser [pid=2132202][err] [1018/182849.096232:FATAL:dbus/bus.cc:1245] D-Bus connection was disconnected. Aborting.
+2026-10-18T22:28:49.230Z pw:browser [pid=2132202] <process did exit: exitCode=null, signal=SIGTRAP>
+"""
+
+
+def test_the_browser_log_says_how_chromium_ended(tmp_path):
+    j = _journey_module()
+    log = tmp_path / "browser.log"
+    log.write_text(GATE_LOG, encoding="utf-8")
+    said = j.browser_said(log)
+    assert said["pid"] == 2132202
+    assert said["exit"] == {"code": None, "signal": "SIGTRAP"}
+    # the reason, with its place in Chromium; GPU chatter and the bus-less noise left out
+    assert said["lines"] == ["FATAL:dbus/bus.cc:1245 D-Bus connection was disconnected. Aborting."]
+    assert "SIGTRAP" in j.CRASH_SIGNALS and "SIGKILL" not in j.CRASH_SIGNALS
+    # read from a byte offset: an earlier step's lines are not this step's
+    assert j.browser_said(log, len(GATE_LOG.encode()))["lines"] == []
+
+
+def test_the_journeys_browser_has_no_d_bus():
+    j = _journey_module()
+    env = j.browser_env()
+    assert env["DBUS_SESSION_BUS_ADDRESS"] == env["DBUS_SYSTEM_BUS_ADDRESS"] == j.NO_BUS
+    assert not Path(j.NO_BUS.split("=", 1)[1]).exists()
+
+
+CRASHED = {
+    # the gate's death itself: the browser's session bus goes away under it
+    "bus": ("Chromium crashed (browser process SIGTRAP · FATAL:dbus/bus.cc:1245 "
+            "D-Bus connection was disconnected. Aborting.)"),
+    # the renderer: chrome://crash
+    "renderer": "the page's renderer crashed (the browser still up",
+}
+
+
+@pytest.mark.parametrize("how", list(CRASHED))
+def test_a_chromium_crash_under_a_step_is_named_and_the_step_retried_once(how, unchanged, tmp_path):
+    if how == "bus" and shutil.which("dbus-daemon") is None:
+        pytest.skip("no dbus-daemon")
+    snap, fixture = unchanged
+    rc, rec, said = _session(snap, tmp_path / "out", "open,firstpass", fixture,
+                             env={"ROUGHCUT_JOURNEY_CRASH": f"firstpass:{how}"})
+    line = rec.get("line", "")
+    assert rc == 0 and line.startswith("journey ✓ 2 steps"), f"{line or said[-1500:]}"
+    # the step's own line says what happened and that it ran again
+    step = rec["steps"][1]
+    assert step["name"] == "firstpass" and step["ok"], step
+    assert step["why"].startswith(CRASHED[how]) and step["why"].endswith("; retried: ✓"), step["why"]
+    assert step["retried"]["first_why"], step["retried"]
+    # and the gate's line carries it: a retry is never silent
+    assert f" · step 2 firstpass retried once after {CRASHED[how]}" in line, line
+    assert rec["retried"] == [{"n": 2, "name": "firstpass", "words": step["retried"]["after"]["words"],
+                               "ok": True}]
+
+
+def test_a_browser_killed_from_outside_is_named_and_not_retried(unchanged, tmp_path):
+    snap, fixture = unchanged
+    rc, rec, said = _session(snap, tmp_path / "out", "open,firstpass", fixture,
+                             env={"ROUGHCUT_JOURNEY_CRASH": "firstpass:kill"})
+    line = rec.get("line", "")
+    assert rc == 1 and line.startswith("journey ✗ step 2 firstpass: "), f"{line or said[-1500:]}"
+    assert "the browser was killed from outside (SIGKILL: not a crash" in line, line
+    assert "retried" not in line and rec["retried"] == [], line
