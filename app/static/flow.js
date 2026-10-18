@@ -310,6 +310,17 @@
     tryIt();
   }
 
+  /* A free page command Next names (`do`, flow.py DO): Import's dialog where this page
+   * has it (the board, window.rcImport). False where it has not: the chip's href goes
+   * to the board, `/#do=import`, which runs it on arrival (honourHash). */
+  function runDo(cmd) {
+    if (cmd === 'import' && window.rcImport && typeof window.rcImport.open === 'function') {
+      window.rcImport.open();
+      return true;
+    }
+    return false;
+  }
+
   function onClick(e) {
     const a = e.target.closest('#flow a');
     if (!a || !last) return;
@@ -330,6 +341,11 @@
         b.animate([{ outline: '2px solid #ffd27a' }, { outline: '2px solid transparent' }],
           { duration: 900 });
       }
+      return;
+    }
+    // A page command (Import): run here when this page has it, never a navigation
+    if (n.do && runDo(n.do)) {
+      e.preventDefault();
       return;
     }
     // Free, on this screen: open its tool and press its button (a quick look of the
@@ -359,6 +375,14 @@
         try { q[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1)); } catch (err) { /* skip */ }
       }
     });
+    if (q.do) {
+      // `#do=import`: Next's Import, from another screen — run once, then off the hash
+      try { history.replaceState(null, '', location.pathname + location.search); } catch (err) { /* fine */ }
+      const until = Date.now() + 3000;
+      const tryDo = () => { if (!runDo(q.do) && Date.now() < until) setTimeout(tryDo, 100); };
+      tryDo();
+      return;
+    }
     if (!/^[a-z]+$/.test(q.tool || '') || !window.dock) return;
     window.dock.open(q.tool);
     const target = {};

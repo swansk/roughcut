@@ -5496,6 +5496,25 @@ CLIP_FACTS_WORKERS = 4
 CLIP_FACTS: dict = {"lock": threading.Lock(), "pool": None, "running": {}}
 
 
+_SOURCE_TC = re.compile(r"^(\d{1,2}):(\d{2}):(\d{2})([:;.,])(\d{2,3})$")
+
+
+def source_tc(tag: str | None, fps: float | None) -> str | None:
+    """A camera's timecode tag as the Project panel's Media Start writes it: HH:MM:SS:FF
+    at the clip's own rate, HH:MM:SS;FF when it counts drop-frame (29.97 / 59.94, the
+    tag's `;` or `,`); None when the file has none, or one that is not a timecode at that
+    rate (a frame field past the rate's last frame)."""
+    m = _SOURCE_TC.match(str(tag or "").strip())
+    if not m:
+        return None
+    hh, mm, ss, sep, ff = m.groups()
+    nominal = max(1, round(float(fps))) if fps else 0
+    if int(mm) > 59 or int(ss) > 59 or (nominal and int(ff) >= nominal):
+        return None
+    drop = sep in ";," and nominal in (30, 60)
+    return f"{int(hh):02d}:{mm}:{ss}{';' if drop else ':'}{int(ff):02d}"
+
+
 def _probe_clip_facts(clip: str, footage: Path) -> dict | None:
     """Every free fact of one clip, with as few ffprobes as the caches allow: one for
     length + creation time + data streams (seeding clip_duration / capture_time /
@@ -5543,7 +5562,11 @@ def _probe_clip_facts(clip: str, footage: Path) -> dict | None:
     f = media_facts(src) or {}
     facts = {"fps": round(f["fps"], 3) if f.get("fps") else None,
              "width": f.get("width") or None, "height": f.get("height") or None,
-             "codec": f.get("vcodec")}
+             "codec": f.get("vcodec"),
+             "tc_start": source_tc(f.get("timecode"), f.get("fps")),
+             "audio": ({"channels": f.get("channels"), "rate": f.get("sample_rate")}
+                       if f.get("acodec") and (f.get("channels") or f.get("sample_rate"))
+                       else None)}
     if STATE.get("footage") == footage:
         STATE.setdefault("clip_facts", {})[clip] = facts
     return facts
@@ -5619,7 +5642,8 @@ def unheard_clip(clip: str, used: bool = False) -> dict:
 def api_clips() -> JSONResponse:
     """The folder as a contact sheet would show it (design §2): every clip with the
     free facts — length, when it was shot and which session that makes it, what exists
-    for it on disk, whether it carries telemetry, its frame rate, size and codec — and
+    for it on disk, whether it carries telemetry, its frame rate, size and codec, its
+    source timecode and its sound's channels and rate — and
     the journal's word on it when the bin has been indexed. Nothing here costs a model
     call, and nothing waits on the index: a clip still being probed after
     CLIP_FACTS_WAIT_S comes back with null facts (`probing` counts them)."""
@@ -5667,6 +5691,9 @@ def api_clips() -> JSONResponse:
             "telemetry": has_telemetry(clip) if ok else None,
             "fps": f.get("fps"), "width": f.get("width"), "height": f.get("height"),
             "codec": f.get("codec"),
+            # Media Start's source timecode (the camera's, HH:MM:SS:FF at the clip's rate;
+            # null without one) and Audio Info's channels + sample rate (null: no sound)
+            "tc_start": f.get("tc_start"), "audio": f.get("audio"),
             "released": clip in released,
             "junk": junk_of.get(clip, "clean"),
             # where it lives (wave 12 IMPORT): the bin's folder, imported in place, or
@@ -7635,8 +7662,10 @@ def _rate(s: str | None) -> float | None:
 
 def media_facts(src: Path) -> dict | None:
     """What a browser needs to know about a file: codecs, profile, size, rotation, fps,
-    bitrate. One ffprobe per file version, cached by path, size and mtime (so a second
-    bin with the same stem, or a replaced file, is probed afresh)."""
+    bitrate; and what the Project panel shows of it: the camera's source timecode (the
+    `timecode` tag on the picture, a timecode track, or the container) and the sound's
+    channels and sample rate. One ffprobe per file version, cached by path, size and
+    mtime (so a second bin with the same stem, or a replaced file, is probed afresh)."""
     try:
         st = src.stat()
     except OSError:
@@ -7648,7 +7677,8 @@ def media_facts(src: Path) -> dict | None:
     r = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries",
          "stream=codec_type,codec_name,profile,pix_fmt,width,height,avg_frame_rate,"
-         "r_frame_rate:stream_side_data=rotation:format=format_name,bit_rate",
+         "r_frame_rate,channels,sample_rate:stream_tags=timecode:stream_side_data=rotation"
+         ":format=format_name,bit_rate:format_tags=timecode",
          "-of", "json", str(src)], capture_output=True, text=True)
     facts = None
     if r.returncode == 0:
@@ -7669,12 +7699,23 @@ def media_facts(src: Path) -> dict | None:
                 bps = int(fmt.get("bit_rate") or 0)
             except ValueError:
                 bps = 0
+            # the picture's own tag first, then a timecode track's (tmcd), then the file's
+            tc = next((str((x.get("tags") or {}).get("timecode") or "")
+                       for x in [v] + streams if (x.get("tags") or {}).get("timecode")),
+                      str((fmt.get("tags") or {}).get("timecode") or ""))
+            try:
+                arate = int(a.get("sample_rate") or 0) if a else 0
+            except ValueError:
+                arate = 0
             facts = {"vcodec": v.get("codec_name"), "profile": str(v.get("profile") or ""),
                      "pix_fmt": str(v.get("pix_fmt") or ""),
                      "width": int(v.get("width") or 0), "height": int(v.get("height") or 0),
                      "rotation": rot,
                      "fps": _rate(v.get("avg_frame_rate")) or _rate(v.get("r_frame_rate")),
-                     "acodec": a.get("codec_name") if a else None, "bit_rate": bps}
+                     "acodec": a.get("codec_name") if a else None, "bit_rate": bps,
+                     "timecode": tc or None,
+                     "channels": int(a.get("channels") or 0) or None if a else None,
+                     "sample_rate": arate or None}
     with MEDIA["lock"]:
         MEDIA["facts"][key] = facts
     return facts

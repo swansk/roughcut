@@ -223,6 +223,51 @@ def test_when_next_names_an_effect_only_its_card_is_blue(browser, live):
     pg.close()
 
 
+def _empty_bin_flow(route):
+    """GET /api/flow as an empty bin answers it: Next is the footage stage's Import."""
+    import server
+
+    resp = route.fetch()
+    body = resp.json()
+    body["next"] = server.flowmod.footage_stage({"clips": 0})["needs"]["action"]
+    route.fulfill(response=resp, body=json.dumps(body), content_type="application/json")
+
+
+def test_next_on_an_empty_bin_opens_import_in_place(browser, live):
+    """Wave 12 (TEACH + IMPORT; REDESIGN-GOAL dimension 16: "no footage → Import"): on an
+    empty bin the chip reads "Next Import footage (Ctrl+I)" and a click opens File ›
+    Import's dialog on the board (window.rcImport), no navigation; from /open the chip
+    goes to the board, which opens Import on arrival and takes `#do=import` off the URL."""
+    pg = browser.new_page(viewport={"width": 1440, "height": 900})
+    errors = []
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    pg.route("**/api/flow", _empty_bin_flow)
+    pg.goto(live + "/")
+    pg.wait_for_function("window.flowBar && flowBar.state() && flowBar.state().next"
+                         " && flowBar.state().next.do === 'import'", timeout=15000)
+    pg.wait_for_selector("#flowNext[data-next=footage]", timeout=5000)
+    said = pg.evaluate("document.querySelector('#flowNext').innerText.replace(/\\s+/g, ' ').trim()")
+    assert said == "Next Import footage (Ctrl+I)", said
+    assert "compact" not in (pg.locator("#flowNext").get_attribute("class") or "")
+    pg.evaluate("window.__stay = 1")
+    pg.locator("#flowNext").click()
+    pg.wait_for_function("rcImport.state().open", timeout=5000)
+    assert pg.evaluate("window.__stay") == 1 and pg.url == live + "/", pg.url
+    assert pg.locator("[data-testid=import-dialog]").is_visible()
+    pg.keyboard.press("Escape")
+    pg.wait_for_function("!rcImport.state().open", timeout=3000)
+    # from the footage screen: to the board, Import open there, the hash taken off
+    pg.goto(live + "/open")
+    pg.wait_for_function("window.flowBar && flowBar.state() && flowBar.state().next", timeout=15000)
+    pg.wait_for_selector("#flowNext", timeout=5000)
+    with pg.expect_navigation(timeout=15000):
+        pg.locator("#flowNext").click()
+    pg.wait_for_function("window.rcImport && rcImport.state().open", timeout=10000)
+    assert not pg.url.endswith("#do=import"), pg.url
+    assert errors == [], errors
+    pg.close()
+
+
 def test_mid_round_the_pass_says_how_many_are_left_and_nothing_is_blue(browser, live):
     """M16 C3: while a round of the pass has undecided moments, the chip on /floor is
     the round ("N left"), plain — the choice is P / X / U — and a click on it does not

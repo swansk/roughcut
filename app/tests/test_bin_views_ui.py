@@ -59,13 +59,19 @@ PROPOSAL = {"pending": True, "record": {"job": "fp_binlook", "plan": {
     "firstpass": {"diff": {"sentence": "proposes 2 shots, 0:04"}}}}}
 
 # /api/clips with every column telling the three clips apart (the sort test): A 30 fps
-# 1920×1080 6 s indexed, B 24 fps 320×180 4 s heard, C 60 fps 1280×720 5 s not indexed.
+# 1920×1080 6 s indexed, from 01:00:00:00, 48 kHz stereo; B 24 fps 320×180 4 s heard, no
+# timecode, 44.1 kHz mono; C 60 fps 1280×720 5 s not indexed, from 00:00:10:00, 48 kHz 5.1.
 FACTS = {"CLIP_A.MP4": {"fps": 30.0, "width": 1920, "height": 1080, "duration": 6.0,
-                        "analysed": True, "looked": True, "captured": 3000.0},
+                        "analysed": True, "looked": True, "captured": 3000.0,
+                        "tc_start": "01:00:00:00", "audio": {"channels": 2, "rate": 48000}},
          "CLIP_B.MP4": {"fps": 24.0, "width": 320, "height": 180, "duration": 4.0,
-                        "analysed": True, "looked": False, "captured": 1000.0},
+                        "analysed": True, "looked": False, "captured": 1000.0,
+                        "tc_start": None, "audio": {"channels": 1, "rate": 44100}},
          "CLIP_C.MP4": {"fps": 60.0, "width": 1280, "height": 720, "duration": 5.0,
-                        "analysed": False, "looked": False, "captured": 2000.0}}
+                        "analysed": False, "looked": False, "captured": 2000.0,
+                        "tc_start": "00:00:10:00", "audio": {"channels": 6, "rate": 48000}}}
+# the timecode a FACTS clip starts at, in seconds as it reads (B has none: its own 0)
+TC_S = {"CLIP_A.MP4": 3600.0, "CLIP_B.MP4": 0.0, "CLIP_C.MP4": 10.0}
 # what the pass saw in each (the Description column), through /api/project
 SUMMARY = {"CLIP_A.MP4": "snow falling on the lift", "CLIP_B.MP4": "a chairlift ride",
            "CLIP_C.MP4": "moguls, then a jump"}
@@ -181,8 +187,10 @@ def _expect(col: str, way: int) -> list[str]:
     name, A to Z (dock.js sortItems)."""
     def val(name):
         f = FACTS[name]
-        return {"name": name, "fps": f["fps"], "start": 0.0, "end": f["duration"],
+        return {"name": name, "fps": f["fps"], "start": TC_S[name],
+                "end": TC_S[name] + f["duration"] - 1 / f["fps"],
                 "dur": f["duration"], "size": f["width"] * f["height"],
+                "audio": f["audio"]["rate"] * 100 + f["audio"]["channels"],
                 "state": "indexed" if f["analysed"] and f["looked"] else "heard" if f["analysed"] else "not indexed",
                 "note": SUMMARY[name], "shot": f["captured"]}[col]
     by_name = sorted(CLIPS)
@@ -190,7 +198,7 @@ def _expect(col: str, way: int) -> list[str]:
 
 
 def test_the_list_sorts_by_every_column_both_ways(live_server, project, browser):
-    pg = _open(browser, live_server, project, size=(2560, 1300), proj=0.42, wait=False)
+    pg = _open(browser, live_server, project, size=(3200, 1300), proj=0.42, wait=False)
     pg.route("**/api/clips", _faked_facts)
     pg.route("**/api/project", _faked_summaries)
     pg.reload()
@@ -202,7 +210,7 @@ def test_the_list_sorts_by_every_column_both_ways(live_server, project, browser)
     texts = heads.all_inner_texts()
     # Premiere's columns, in Premiere's order, every one of them at this width
     assert texts == ["Name", "Frame Rate", "Media Start", "Media End", "Media Duration", "Video Info",
-                     "Status", "Description", "Captured"], texts
+                     "Audio Info", "Status", "Description", "Captured"], texts
     # the default: Name, A to Z, the arrow on it
     assert pg.evaluate("dock.project.sort()") == {"col": "name", "dir": 1}
     assert "asc" in pg.locator("#projList th[data-col=name]").get_attribute("class")
@@ -227,17 +235,72 @@ def test_the_list_sorts_by_every_column_both_ways(live_server, project, browser)
     # the sort is kept per browser
     pg.reload()
     pg.wait_for_selector("#projList tr.row", timeout=15000)
+    pg.wait_for_function("[...document.querySelectorAll('#projList tr.row td.note')].every(td => td.textContent.length > 0)",
+                         timeout=10000)
     assert pg.evaluate("dock.project.sort()") == {"col": cols[-1], "dir": -1}
     assert _clip_order(pg) == _expect(cols[-1], -1)
     # the values, as Premiere writes them
     row = pg.locator("#projList tr.row[data-clip='CLIP_A.MP4']")
     cells = dict(zip(cols, row.locator("td").all_inner_texts()))
     assert cells["fps"] == "30 fps" and cells["size"] == "1920×1080", cells
-    assert cells["start"] == "00:00:00:00" and cells["dur"] == "00:00:06:00", cells
-    assert cells["end"] == "00:00:05:29", cells                   # the last frame, at 30 fps
+    # Media Start is the camera's timecode; Media End its last frame (start + duration − 1)
+    assert cells["start"] == "01:00:00:00" and cells["dur"] == "00:00:06:00", cells
+    assert cells["end"] == "01:00:05:29", cells                   # the last frame, at 30 fps
+    assert cells["audio"] == "48000 Hz · Stereo", cells
     assert cells["state"] == "indexed" and cells["note"] == SUMMARY["CLIP_A.MP4"], cells
+    # a clip without a timecode starts at its own 00:00:00:00
+    row = pg.locator("#projList tr.row[data-clip='CLIP_B.MP4']")
+    cells = dict(zip(cols, row.locator("td").all_inner_texts()))
+    assert (cells["start"], cells["end"], cells["audio"]) == ("00:00:00:00", "00:00:03:23", "44100 Hz · Mono"), cells
     assert pg.evaluate(OVERFLOW_JS) == []
     assert pg.errors == []
+    pg.context.close()
+
+
+# a camera at 29.97 drop-frame, its clip starting two frames before minute 1 (which has
+# no ;00 or ;01)
+DF_FACTS = {"CLIP_C.MP4": {"fps": 29.97, "duration": 5.0, "tc_start": "00:00:59;28",
+                           "audio": {"channels": 2, "rate": 48000}}}
+
+
+def test_media_start_and_end_follow_the_cameras_timecode(live_server, project, browser):
+    """BINLOOK's ask (wave 12 SMALL3): Media Start is the clip's source timecode, Media End
+    its last frame (start + duration − 1 frame, as Premiere writes it), drop-frame counted
+    as drop-frame; a subclip's are its In and Out on that timecode; Audio Info shows only
+    once the list is wide enough for every other column."""
+    def facts(route):
+        resp = route.fetch()
+        body = resp.json()
+        for c in body.get("clips", []):
+            c.update(DF_FACTS.get(c["clip"], {}))
+        route.fulfill(response=resp, body=json.dumps(body), content_type="application/json")
+
+    pg = _open(browser, live_server, project, size=(3200, 1300), proj=0.42, picks=True, wait=False)
+    pg.route("**/api/clips", facts)
+    pg.reload()
+    pg.wait_for_selector("#projList tr.row[data-clip='CLIP_C.MP4'] [data-tw]", timeout=15000)
+    pg.locator("#projList tr.row[data-clip='CLIP_C.MP4'] [data-tw]").click()
+    pg.wait_for_selector("#projList tr.sub[data-of='CLIP_C.MP4']", timeout=5000)
+    heads = pg.locator("#projList th").all_inner_texts()
+    row = dict(zip(heads, pg.locator("#projList tr.row[data-clip='CLIP_C.MP4'] td").all_inner_texts()))
+    # 150 frames from 00:00:59;28: ;28 ;29, then 00:01:00;02 (no ;00 ;01), … 00:01:04;29
+    assert (row["Media Start"], row["Media End"]) == ("00:00:59;28", "00:01:04;29"), row
+    assert row["Audio Info"] == "48000 Hz · Stereo", row
+    assert "Media Start 00:00:59;28 · Media End 00:01:04;29" in \
+        pg.locator("#projList tr.row[data-clip='CLIP_C.MP4']").get_attribute("title")
+    # the pick at 1.0-3.5 s: frames 30 to 104 past the clip's start
+    sub = dict(zip(heads, pg.locator("#projList tr.sub[data-of='CLIP_C.MP4'] td").all_inner_texts()))
+    assert (sub["Media Start"], sub["Media End"]) == ("00:01:01;00", "00:01:03;14"), sub
+    # a clip with no timecode keeps its own zero
+    a = dict(zip(heads, pg.locator("#projList tr.row[data-clip='CLIP_A.MP4'] td").all_inner_texts()))
+    assert a["Media Start"] == "00:00:00:00", a
+    assert pg.evaluate(OVERFLOW_JS) == []
+    assert pg.errors == []
+    pg.context.close()
+    # a narrower list: every other column still, and no Audio Info
+    pg = _open(browser, live_server, project, size=(2560, 1300), proj=0.42)
+    heads = pg.locator("#projList th").all_inner_texts()
+    assert "Captured" in heads and "Audio Info" not in heads, heads
     pg.context.close()
 
 
@@ -378,7 +441,9 @@ def test_the_bins_cuts_are_sequences_and_a_double_click_opens_one(live_server, p
         # the item count is Premiere's: every clip and sequence in the bin
         assert pg.locator("#projCount").inner_text() == "5 items"
         assert seqs.count() == 2
-        # a double-click opens the other one, through the switcher (the board reloads on it)
+        # a double-click opens the other one, through the switcher (the board reloads on
+        # it) — on a page whose switcher panel never opened (it used to throw on #picker)
+        assert pg.locator("#picker").count() == 0
         with pg.expect_navigation(timeout=15000):
             pg.locator(f"#projList tr.seq[data-cut='{alt}']").dblclick()
         pg.wait_for_selector("#projList tr.seq.cur", timeout=15000)
@@ -461,6 +526,37 @@ def test_the_passs_picks_are_subclips_with_their_why(live_server, project, brows
     assert pg.locator("#projList tr.row").get_attribute("data-clip") == "CLIP_A.MP4"
     assert pg.locator("#projList tr.sub[data-of='CLIP_A.MP4'] .nm").inner_text() == "“hello there”"
     pg.locator("#projQ").fill("")
+    assert pg.errors == []
+    pg.context.close()
+
+
+def test_the_panel_reads_the_board_through_a_read_only_accessor(live_server, project, browser):
+    """BINLOOK's ask (wave 12 SMALL3): app.js answers `window.rcBoard = {picks, keeps, segs,
+    plan}` with frozen copies, and dock.js reads the board through it, not through app.js's
+    globals by name. The subclips and the waiting proposal still show."""
+    pg = _open(browser, live_server, project, picks=True, proposal=True)
+    pg.wait_for_selector("#projList [data-cut=proposed]", timeout=10000)
+    pg.wait_for_selector("#projList tr.row[data-clip='CLIP_C.MP4'] [data-tw]", timeout=10000)
+    got = pg.evaluate("""() => {
+      const b = window.rcBoard, p = b.picks(), s = b.segs(), plan = b.plan(), k = b.keeps();
+      const was = segs[0].in;
+      try { s[0].in = 99; } catch (e) { /* frozen: a strict caller is told */ }
+      try { p.push({}); } catch (e) { /* frozen */ }
+      return {
+        keys: Object.keys(b).sort(), frozen: Object.isFrozen(b),
+        same: p === passPicks || s === segs || plan === pendingPlan || (!!bin && k === bin.selects),
+        equal: JSON.stringify(p) === JSON.stringify(passPicks) && JSON.stringify(s) === JSON.stringify(segs)
+          && JSON.stringify(plan) === JSON.stringify(pendingPlan),
+        deep: Object.isFrozen(p) && Object.isFrozen(p[0]) && Object.isFrozen(s[0]) && Object.isFrozen(plan.segments),
+        untouched: segs[0].in === was && passPicks.length === p.length && Array.isArray(k),
+      };
+    }""")
+    assert got == {"keys": ["keeps", "picks", "plan", "segs"], "frozen": True, "same": False,
+                   "equal": True, "deep": True, "untouched": True}, got
+    # dock.js names none of app.js's globals any more
+    src = pg.evaluate("fetch('/dock.js').then(r => r.text())")
+    for name in ("passPicks", "pendingPlan", "typeof segs", "typeof bin"):
+        assert name not in src, name
     assert pg.errors == []
     pg.context.close()
 

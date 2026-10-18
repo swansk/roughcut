@@ -91,6 +91,24 @@ def test_an_empty_folder_needs_you():
     assert out["next"]["stage"] == "footage"
 
 
+def test_an_empty_bin_names_import_as_next():
+    """Wave 12 (REDESIGN-GOAL dimension 16: "no footage → Import"): Next on an empty bin is
+    File › Import's dialog, run in place on the board (`do: import`), and from another
+    screen the board's `/#do=import`; it never says to drop clips into a folder."""
+    out = flow.compute(fresh(0))
+    st = by_key(out)["footage"]
+    assert st["summary"] == "No footage in this bin yet."
+    nxt = out["next"]
+    assert nxt["sentence"] == "Import footage (Ctrl+I)" and nxt["verb"] == "Import", nxt
+    assert nxt["do"] == "import" and nxt["screen"] == "/" and nxt["href"] == "/#do=import", nxt
+    assert "click" not in nxt and "usd" not in nxt and nxt["kind"] == "go"
+    words = json.dumps(out)
+    assert "Drop clips" not in words and "folder" not in nxt["sentence"]
+    # a command nobody runs is no command: the action keeps its plain href
+    a = flow.action("footage", "x", "y", do="format-the-disk")
+    assert "do" not in a and a["href"] == "/open"
+
+
 def test_an_indexed_bin_with_no_cut_says_make_the_first_cut():
     out = flow.compute(indexed())
     st = by_key(out)

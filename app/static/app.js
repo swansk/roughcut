@@ -4326,6 +4326,29 @@ window.addEventListener('tlreview', paintReview);
 /* The first pass's hook (/modules/firstpass.js): its result is an ordinary proposal. */
 window.rcShowProposal = (plan) => { if (plan && Array.isArray(plan.segments)) showProposal(plan); };
 
+/* The board's state, read-only, for the panels that show it (dock.js's Project panel:
+ * the subclips, the open sequence, the waiting proposal) instead of reading this
+ * script's globals by name: the pass's picks (`passPicks`, GET /api/picks), the editor's
+ * keeps (`bin.selects`, GET /api/selects), the cut (`segs`) and a proposal waiting for
+ * review (`pendingPlan`). Every call answers a frozen copy, never the live array, so
+ * nothing outside app.js can edit the board by accident; empty (or null) before the
+ * first read. */
+const rcFrozen = (x) => {
+  if (!x || typeof x !== 'object' || Object.isFrozen(x)) return x;
+  Object.values(x).forEach(rcFrozen);
+  return Object.freeze(x);
+};
+const rcCopy = (x) => {
+  if (x == null) return x;
+  try { return rcFrozen(structuredClone(x)); } catch (e) { return rcFrozen(JSON.parse(JSON.stringify(x))); }
+};
+window.rcBoard = Object.freeze({
+  picks: () => rcCopy(Array.isArray(passPicks) ? passPicks : []),
+  keeps: () => rcCopy(bin && Array.isArray(bin.selects) ? bin.selects : []),
+  segs: () => rcCopy(Array.isArray(segs) ? segs : []),
+  plan: () => rcCopy(pendingPlan || null),
+});
+
 /* The transport keys' hook (/timeline-keys.js): on an empty sequence with a proposal
  * waiting, L / K / Space play and pause the proposal as ▶ Play it does (verdict 6, punch
  * 4: L toasted "nothing to play yet" over a visible proposal frame). Play resumes from

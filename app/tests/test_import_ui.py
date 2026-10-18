@@ -248,10 +248,30 @@ def test_a_file_dropped_on_the_project_panel_is_uploaded_with_progress(page, liv
     drop = pg.locator('[data-testid="project-drop"]')
     assert drop.is_visible()
     assert "Drop to import 1 file" in drop.inner_text()
+    # the bin's reads a landing makes: every /api/clips asked in the same task as an
+    # `rc:clips-changed` (import.js landed() and whatever it calls, synchronously)
+    pg.evaluate("""() => {
+      window.__landings = 0; window.__landingReads = 0;
+      const send = window.dispatchEvent.bind(window), get = window.fetch;
+      window.dispatchEvent = (ev) => {
+        if (ev && ev.type === 'rc:clips-changed') {
+          window.__landings += 1; window.__landing = true;
+          setTimeout(() => { window.__landing = false; }, 0);
+        }
+        return send(ev);
+      };
+      window.fetch = (url, opts) => {
+        if (window.__landing && String(url).startsWith('/api/clips')) window.__landingReads += 1;
+        return get(url, opts);
+      };
+    }""")
     pg.evaluate("""() => document.getElementById('projList').dispatchEvent(
       new DragEvent('drop', {bubbles: true, cancelable: true, dataTransfer: window.__dt}))""")
     assert not drop.is_visible()
     pg.wait_for_selector('#projList [data-clip="phone.mp4"]', timeout=10000)
+    # one landing, one read of the bin (the Project panel's, on the event) — not two
+    pg.wait_for_function("window.__landings >= 1", timeout=10000)
+    assert pg.evaluate("[window.__landings, window.__landingReads]") == [1, 1]
     pg.wait_for_function("(() => { const s = document.querySelector('[data-testid=import-progress]');"
                          " return s && !s.hidden && s.innerText.includes('Imported 1 clip'); })()",
                          timeout=10000)
