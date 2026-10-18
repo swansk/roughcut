@@ -49,6 +49,19 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-18 ~15:40 EDT: wave 12 merged so far: AIPROMPT `962ac76` (prompt in the Timeline header, Ctrl+J, scope chip, AI
+  menu commands, right-click "Ask AI about this…"; 24 tests), TEACH `b94dee5` (6-step first run + 5-step AI tour, hover
+  cards with section S cost wording, empty states -> Import / Run first pass / Review; conftest + journey set
+  `localStorage['roughcut.tour']='seen'`; 18 tests; journey 20 green), BINLOOK `66f8257` (Premiere Project panel: List
+  columns + sort, Icon hover-scrub, sequences + "First pass" proposed item, subclips from picks/keeps, Import in the
+  bottom bar; 10 tests). Budget for both visible lanes measured `/` 103·57 … `/ jobs` 112·58 (logged). Still running:
+  W11FINISH, IMPORT, AIOPS. Queued wave-12 tail (SMALL3 after IMPORT + AIOPS): `/api/clips` source timecode `tc_start`
+  (+ audio facts) for Media Start/End (server.py `_probe_clip_facts` ~5368); a read-only `window.rcBoard = {picks, keeps,
+  segs, plan}` in app.js so dock.js stops reading app.js globals by name; switcher.js `move()` crashes on `#picker`
+  when the picker was never opened (dock.js opens + closes it first); flow.py:188 empty-bin Next says "Drop clips into
+  the folder" (-> "Import footage (Ctrl+I)"); hover cards for AIPROMPT's context-menu items (`rcTour.card`); V2+ overlay
+  scope kind for "Ask AI about this…"; an `/api/assist/price` endpoint for the prompt's pre-run cost. Note: the lead sent
+  two lane messages to the wrong agents (TEACH's went to BINLOOK, BINLOOK's to IMPORT); corrected.
 - 2026-10-18 ~14:10 EDT: **wave 12 (K3) launched** from the scaffold `ee8cea1` (+ contracts `909a5d4`; judge/WAVE12.md is
   the lanes' file table and contracts): IMPORT (13: multi-source bin, Media Browser, upload + OS drop, Ctrl+I), AIOPS
   (15: roughcut/actions.py vocabulary + assist.py + /api/assist + actions.js dispatcher and per-op review; Designed

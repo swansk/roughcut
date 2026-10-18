@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Loop state: wave 12's first three merges and the tail queue** (judge/LOOP.md).
 - **Merge: wave 12 lane BINLOOK** (Premiere's Project panel: List columns + sort, Icon view hover-scrub, the bin's cuts and a waiting proposal as sequences, picks and keeps as subclips, Import in the bottom bar and the empty state). Screens budget for AIPROMPT + BINLOOK together, measured: `/` 103·57, `/ shot` 129·72, `/ film` 111·56, `/ fx` 134·60, `/ jobs` 112·58.
 - **Merge: wave 12 lane TEACH** (first-run walk-through, AI hover cards, empty states that name Import / Run first pass / Review, the tests' tour switch).
 - **Merge: wave 12 lane AIPROMPT** (the AI prompt in the Timeline header, Ctrl+J, scope chip, AI menu commands, "Ask AI about this…"); the keys sheet's test expects the new AI group.
