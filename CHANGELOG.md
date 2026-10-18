@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Selects shows a pick on a just-imported clip at once** (app.js `learnClips`; found by JOURNEY3: picks on imported clips appeared ~4.5 s late because `P.clips` had not heard of the clip): a picks read that names an unknown clip merges `/api/project`'s clips in, one read at a time, and repaints.
 - **The "N new clips" offer tucks away after 8 s** (firstpass.js, import.css; found by JOURNEY3: it sat over the Program monitor until answered, through a whole AI review). The first-pass button keeps its dot; hovering or focusing the control brings the offer back, and a pointer moving down onto it keeps it open.
 - **Merge: wave 12 tail lane SMALL3** (camera timecode + audio facts in the bin, `window.rcBoard`, the switcher's move without its panel, Next opens Import on an empty bin, one clip refresh per import).
 - **Loop state: all five wave-12 lanes merged; tail lanes SMALL3, AIGLUE, JOURNEY3 running** (judge/LOOP.md).

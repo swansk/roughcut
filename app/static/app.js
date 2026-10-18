@@ -2871,6 +2871,10 @@ function fetchPicks(force) {
       picksMade = !!d.firstpass_picked;
       passPicks = picksMade ? d.picks.map((p) => ({ ...p, pick: true })) : [];
       picksRead = Date.now();
+      // a pick on a clip the board has not loaded yet (imported since it booted, heard by
+      // this pass): learn the clips now rather than hide the pick until the next reload
+      // (JOURNEY3: Selects was 4.5 s late after an import)
+      if (P && passPicks.some((p) => !P.clips[p.clip])) learnClips();
       if (JSON.stringify(passPicks.map((p) => [p.id, p.verdict, p.released])) !== was
           && P && window.tl && tl.state) {
         if (window.tlLanes) tlLanes.redraw();
@@ -2885,6 +2889,23 @@ function fetchPicks(force) {
   });
   return picksBusy;
 }
+/* The board's clips (P.clips: the heard ones) from /api/project, merged in, once at a
+ * time; Selects, the bin's badge and the timeline's pick markers repaint after. */
+let clipsBusy = null;
+function learnClips() {
+  if (clipsBusy) return clipsBusy;
+  clipsBusy = fetch('/api/project').then((r) => (r.ok ? r.json() : null)).then((d) => {
+    if (!d || !d.clips || !P) return;
+    const before = Object.keys(P.clips).length;
+    P.clips = { ...P.clips, ...d.clips };
+    if (Object.keys(P.clips).length === before) return;
+    if (window.tlLanes) tlLanes.redraw();
+    if (keepsTab()) renderLibrary();
+    else if (window.dock) dock.badge('bin', keepsUsable().concat(picksUsable()).filter((x) => shotOf(x) < 0).length);
+  }).catch(() => {}).finally(() => { clipsBusy = null; });
+  return clipsBusy;
+}
+
 /* The first pass has made (or re-made) its picks: re-read them now, whatever the cache
  * says (firstpass.js calls it when a run lands; showProposal may too). */
 window.rcPicksStale = () => fetchPicks(true);
