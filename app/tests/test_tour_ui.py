@@ -347,10 +347,11 @@ def test_show_me_opens_things_and_never_asks_a_model(live, bins, tmp_path, brows
             showed.append(key)
             if which == "loop" and key == "import":
                 assert pg.evaluate("window.__imports") == 1
-                # no Import module here, or its dialog: either way Import is what is shown
-                assert pg.evaluate("""(() => !!document.querySelector('dialog[open]')
-                    || (document.querySelector('#menubar .menu[data-menu=file]').classList.contains('open')
-                        && document.querySelector('[data-testid=tour]').dataset.anchor === 'show'))()""")
+                # Import's dialog, or (no Import module) File › Import… opened and pointed at
+                assert pg.evaluate("""(() => { const d = document.querySelector('[data-testid=import-dialog]');
+                    return !!document.querySelector('dialog[open]') || !!(d && d.getClientRects().length)
+                      || (document.querySelector('#menubar .menu[data-menu=file]').classList.contains('open')
+                          && document.querySelector('[data-testid=tour]').dataset.anchor === 'show'); })()""")
             if key == "firstpass":
                 assert pg.locator('[data-testid="firstpass-panel"]').is_visible()
                 assert pg.evaluate("document.querySelector('[data-testid=tour]').dataset.side") != "none"
@@ -362,6 +363,9 @@ def test_show_me_opens_things_and_never_asks_a_model(live, bins, tmp_path, brows
                     "!!document.querySelector('[data-testid=ai-prompt-input]')")):
                 assert pg.evaluate("document.querySelector('#menubar .menu[data-menu=ai]').classList.contains('open')")
             # put away what it opened (a modal dialog would hold the callout's buttons)
+            cancel = pg.locator('[data-testid="import-cancel"]')
+            if cancel.count() and cancel.first.is_visible():
+                cancel.first.click()
             pg.evaluate("document.querySelectorAll('dialog[open]').forEach(d => d.close())")
         pg.locator('[data-testid="tour-next"]').click()
     pg.wait_for_selector(TOUR, state="detached", timeout=3000)

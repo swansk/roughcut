@@ -512,8 +512,10 @@
   }
 
   // what Esc closes before it ends the walk-through: a menu, the first pass's panel, a dialog
+  // (Import's and the Media Browser's by their wave-12 hooks, whatever element they are)
   const othersOpen = () => !!($('#menubar .menu.open') || first('#firstpass .fp-panel')
-    || $$('dialog[open]').length || first('#keysOverlay'));
+    || $$('dialog[open]').length || first('#keysOverlay')
+    || first('[data-testid="import-dialog"]') || first('[data-testid="media-browser"]'));
 
   function build() {
     const root = document.createElement('div');
