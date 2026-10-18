@@ -7236,8 +7236,23 @@ def build_poster(src: Path, dest: Path, t: float, original: bool = False) -> Non
     raise RuntimeError(f"poster failed for {src.name} at {t:.2f}s: {err}")
 
 
+def nearest_poster(stem: str, t: float) -> tuple[Path, float] | None:
+    """The poster of `stem` already on disk whose time is nearest `t` (any time), or None."""
+    best: tuple[float, Path, float] | None = None
+    tail = f".{PICTURE_V}.jpg"
+    for p in STATE["posters"].glob(f"{stem}@*{tail}"):
+        try:
+            pt = float(p.name[len(stem) + 1: -len(tail)])
+        except ValueError:
+            continue
+        d = abs(pt - t)
+        if best is None or d < best[0]:
+            best = (d, p, pt)
+    return (best[1], best[2]) if best else None
+
+
 @app.get("/media/poster/{name}")
-def media_poster(name: str, t: float = 0.0) -> Response:
+def media_poster(name: str, t: float = 0.0, near: int = 0) -> Response:
     """A still frame from a proxy, at a shot's in-point.
 
     The shot cards used to be `<video preload="metadata">` elements pointed at the
@@ -7248,6 +7263,13 @@ def media_poster(name: str, t: float = 0.0) -> Response:
     time while the audio played — Karl's *"I can hear the videos... but the preview
     window still shows up blank"*. A card needs a picture, not a stream. This is a few
     kilobytes, cached on disk under --work and immutable for a given clip and time.
+
+    `near=1` (the Program monitor's ask, wave 13 CANVAS2): when this frame is not on disk
+    and would be cut from the ORIGINAL (no proxy or preview yet: a 4K GoPro frame is
+    0.7-1.3 s on a loaded box, every seek a new time), the clip's poster already on disk
+    nearest `t` is answered at once instead, not cached (`no-store`, `x-roughcut-poster:
+    near <its t>`): the shot shows a picture of itself within a request, not black, while
+    the monitor asks for the exact frame beside it. Otherwise it is the exact frame.
     """
     stem = Path(name).stem
     if stem.endswith(f".{PICTURE_V}"):          # poster_url's versioned name
@@ -7258,6 +7280,13 @@ def media_poster(name: str, t: float = 0.0) -> Response:
         t = 0.0
     t = round(min(t, 86400.0), 2)
     dest = poster_path(stem, t)
+    if not dest.exists() and near:
+        found = poster_source(stem)
+        alt = nearest_poster(stem, t) if found is not None and found[1] else None
+        if alt is not None:
+            return FileResponse(alt[0], media_type="image/jpeg",
+                                headers={"cache-control": "no-store",
+                                         "x-roughcut-poster": f"near {alt[1]:.2f}"})
     if not dest.exists():
         try:
             # the board's own: never paused for playback (not background), but in a

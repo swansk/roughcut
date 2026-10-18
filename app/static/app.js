@@ -2737,6 +2737,7 @@ function syncPlayer() {
  * re-pointed once the edits and the playhead settle (restSoon, the inspector's 450 ms),
  * never per nudge — the same frame the inspector asks for, so one request serves both. */
 let restT = 0;
+const stillsHad = new Set();          // exact stills the browser holds (immutable URLs)
 function paintRest() {
   const big = $('#bigPlay');
   if (big) big.hidden = player.playing || !segs.length;
@@ -2754,9 +2755,25 @@ function paintRestStill() {
   const seg = at && segs[at.index];
   const base = seg && (P.clips[seg.clip] || {}).poster;
   if (live || !base) { img.hidden = true; return; }
-  const src = `${base}${base.includes('?') ? '&' : '?'}t=${Math.max(0, at.clipT).toFixed(2)}`;
-  if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+  const sep = base.includes('?') ? '&' : '?';
+  const t = Math.max(0, at.clipT).toFixed(2);
+  const src = `${base}${sep}t=${t}`;
   img.hidden = false;
+  if (img.getAttribute('src') === src || img._want === src) return;
+  img._want = src;
+  if (stillsHad.has(src)) { img.setAttribute('src', src); return; }
+  // A frame the server has not cut yet is cut from the original while the clip has no
+  // preview (0.7-1.3 s a 4K GoPro frame on a loaded box; BLACK's follow-up, wave 13): the
+  // nearest still of the clip it has is shown at once (`near=1`), and the exact frame
+  // replaces it when it lands. A clip with a preview or a proxy answers the exact frame.
+  img.setAttribute('src', `${base}${sep}near=1&t=${t}`);
+  const pre = new Image();
+  pre.onload = () => {
+    stillsHad.add(src);
+    if (stillsHad.size > 400) stillsHad.delete(stillsHad.values().next().value);
+    if (img._want === src) img.setAttribute('src', src);
+  };
+  pre.src = src;
 }
 
 /* The playhead moved while nothing is live (a scrub before the first play, an undo):
