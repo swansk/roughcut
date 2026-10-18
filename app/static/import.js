@@ -8,9 +8,9 @@
  *        Browser…                   back / forward / up and the places to start from), and
  *                                   "Upload from this computer" for files on the viewer's
  *                                   own disk (the browser's file picker: files or a folder)
- *   the Project panel's Import, its  the same dialog: dock.js (BINLOOK) and the empty
- *        empty states, the walk-     states (TEACH) call `rcImport.open()`; any control
- *        through                    with `data-rc-import` opens it too
+ *   the Project panel's Import, its  the same dialog: dock.js (BINLOOK), the empty states
+ *        empty states, the walk-     and the walk-through (tour.js, TEACH: `[data-rc-import]`)
+ *        through                    call `rcImport.open()`
  *   files or a folder dragged from  "Drop to import 3 files" over the Project panel; the
  *        the OS                     drop uploads them, with progress at the panel's foot
  *                                   (and in the header's job row, a server job); a drop on
@@ -736,15 +736,6 @@
   function mountProject() {
     attach(document.getElementById('pProject'), 'project');
   }
-
-  /* Any control anywhere that carries `data-rc-import` opens the dialog ("import" or
-   * "browse"): an empty state's Import button needs no code of its own. */
-  document.addEventListener('click', (e) => {
-    const t = e.target.closest && e.target.closest('[data-rc-import]');
-    if (!t) return;
-    e.preventDefault();
-    open(t.dataset.rcImport === 'browse' ? 'browse' : 'import');
-  });
 
   window.addEventListener('keydown', (e) => {
     if (S.dlg && S.dlg.open) {
