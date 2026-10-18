@@ -394,17 +394,108 @@ table.plist td.name span { overflow: hidden; text-overflow: ellipsis; }
    Every other column is a fixed width (app.js SEL_COLS), the name takes the rest. */
 table.plist .st { color: var(--dim); }
 table.plist .st.ok { color: var(--good); }
-.picons { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; }
-.picon { background: var(--card); border: 1px solid var(--line); border-radius: 4px; overflow: hidden;
-         cursor: default; }
-.picon.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-.picon .thumb { position: relative; aspect-ratio: 16/9; background: #0c0c0e; }
-.picon .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.picon .thumb .d { position: absolute; right: 4px; bottom: 3px; font-size: 10.5px;
-                   background: rgba(0,0,0,.7); border-radius: 2px; padding: 0 4px;
+/* Premiere's Project panel (dock.js, wave 12 lane BINLOOK; REDESIGN-GOAL dimension 16): the
+   search on top, the list or the posters in the middle (they scroll, the heading row stays),
+   Premiere's bottom bar under them (List / Icon, the icon size, the item count, Import).
+   Rows are 21 px, as dense as Premiere's; numbers right-aligned in timecode; the label
+   swatch and the type icon lead each name. */
+#pProject { --lab: #a58fe8; }
+#projBody > section[data-tool=project] { display: flex; flex-direction: column; height: 100%; padding: 0; }
+#projBody > section[data-tool=project][hidden] { display: none; }
+#projBody > section[data-tool=project] > .projbar { flex: none; margin: 0; padding: 5px 6px; }
+#projList { flex: 1 1 auto; min-height: 0; overflow: auto; outline: none; position: relative;
+            scrollbar-width: thin; scrollbar-color: #45454b transparent; user-select: none;
+            -webkit-user-select: none; }
+.projfoot { flex: none; height: 26px; display: flex; align-items: center; gap: 2px; padding: 0 4px;
+            border-top: 1px solid #0f0f10; background: var(--head); }
+.projfoot #projView { display: flex; align-items: center; gap: 2px; }
+.projfoot #projView[hidden] { display: none; }
+.projfoot button { padding: 1px 5px; background: transparent; border-color: transparent; color: var(--dim);
+                   line-height: 16px; }
+.projfoot button:hover { color: var(--text); background: var(--card); border-color: transparent; }
+.projfoot button.on { color: var(--text); background: var(--card-hi); }
+.projfoot svg { width: 14px; height: 14px; display: block; }
+.projfoot input[type=range] { width: 92px; height: 14px; margin: 0 4px 0 8px; }
+.projfoot input[type=range][hidden] { display: none; }
+.projfoot .count { margin-left: auto; padding: 0 6px; color: var(--dim); font-size: 11px; white-space: nowrap;
                    font-variant-numeric: tabular-nums; }
-.picon .nm { padding: 3px 6px; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the list: a heading row that stays, Premiere's 21 px rows */
+#projList table.plist { font-size: 11px; }
+#projList table.plist th { top: 0; height: 22px; padding: 0 13px 0 5px; background: var(--head);
+                           border-bottom: 1px solid #0f0f10; border-right: 1px solid #2c2c30; color: var(--dim);
+                           font-weight: 400; cursor: default; }
+#projList table.plist th:last-child { border-right: 0; }
+#projList table.plist th:hover { color: var(--text); background: #2c2c2f; }
+#projList table.plist th.num, #projList table.plist td.num { text-align: right; }
+#projList table.plist th.on { color: var(--text); }
+/* the sorted column's arrow, as Premiere draws it: up for A to Z, down for Z to A */
+#projList table.plist th.on::after { content: ""; position: absolute; right: 4px; top: 50%; margin-top: -2px;
+                                     border: 3.5px solid transparent; border-top-width: 0; border-bottom: 4px solid currentColor; }
+#projList table.plist th.on.desc::after { border-bottom-width: 0; border-top: 4px solid currentColor; }
+#projList table.plist td { height: 21px; padding: 0 5px; line-height: 20px; border-bottom: 1px solid #242427; }
+#projList table.plist tr[data-key] { cursor: default; scroll-margin-top: 23px; }
+#projList table.plist tr[data-key]:hover td { background: #262629; }
+#projList table.plist tr[data-key].sel td { background: #34343a; color: #fff; }
+.ws-panel.focus #projList table.plist tr[data-key].sel td { background: #2b4f78; }
+#projList table.plist td.name .n { gap: 3px; }
+#projList table.plist td.name svg { width: 13px; height: 13px; color: #b4b4bd; }
+#projList table.plist td.name .nm { min-width: 0; white-space: nowrap; }
+#projList table.plist td .ell { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#projList table.plist td.note { color: var(--dim); }
+#projList table.plist .st.warn { color: var(--warn); }
+#projList tr.seq.cur td.name .nm { font-weight: 600; }
+#projList tr.sub td { color: #c9c9cf; }
+/* the disclosure triangle (a clip's subclips) and the label swatch */
+#projList .tw { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 10px;
+                height: 14px; color: var(--dim); cursor: default; overflow: visible; }
+#projList .tw[data-tw] { cursor: pointer; }
+#projList .tw[data-tw]::before { content: ""; border: 3.5px solid transparent; border-right-width: 0;
+                                 border-left: 5px solid currentColor; }
+#projList .tw.open[data-tw]::before { border: 3.5px solid transparent; border-bottom-width: 0;
+                                      border-top: 5px solid currentColor; }
+#projList .tw[data-tw]:hover { color: var(--text); }
+#projList .lab { flex: none; width: 8px; height: 8px; border-radius: 1.5px; background: var(--lab);
+                 box-shadow: inset 0 0 0 1px rgba(0,0,0,.35); }
+#projList .pbadge { flex: none; display: inline-block; padding: 0 6px; border-radius: 999px; background: var(--accent);
+                    color: #08111c; font-size: 9.5px; font-weight: 700; line-height: 13px; letter-spacing: .02em; }
+/* the posters: Premiere's Icon view, sized by the bottom bar's slider (--tile) */
+#projList .picons { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile, 120px), 1fr));
+                    gap: 6px 6px; padding: 6px; align-content: start; }
+#projList .ptile { min-width: 0; padding: 3px 3px 0; border: 1px solid transparent; border-radius: 3px;
+                   cursor: default; scroll-margin: 4px; }
+#projList .ptile:hover { background: #262629; }
+#projList .ptile.sel { background: #34343a; border-color: #55555c; }
+.ws-panel.focus #projList .ptile.sel { background: #253a54; border-color: var(--accent); }
+#projList .ptile .thumb { position: relative; aspect-ratio: 16/9; background: #0c0c0e; overflow: hidden;
+                          border-radius: 2px; }
+#projList .ptile .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+#projList .ptile .thumb .ty { position: absolute; left: 3px; bottom: 3px; display: inline-flex; padding: 1px;
+                              border-radius: 2px; background: rgba(0,0,0,.62); color: #d2d2d8; }
+#projList .ptile .thumb .ty svg { width: 12px; height: 12px; display: block; }
+#projList .ptile.scrubbing .thumb .ty { opacity: 0; }
+#projList .ptile .thumb .ph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+                              color: #4a4a52; background: #151517; }
+#projList .ptile .thumb .ph svg { width: 30%; height: 30%; }
+#projList .ptile .thumb .tw.chip { position: absolute; right: 3px; top: 3px; width: auto; height: 15px; gap: 3px;
+                                   padding: 0 4px; border-radius: 2px; background: rgba(0,0,0,.72); color: #e0e0e6;
+                                   font-size: 10px; line-height: 15px; font-variant-numeric: tabular-nums; }
+#projList .ptile .thumb .pbadge { position: absolute; right: 3px; top: 3px; }
+/* the hover scrub's place in the clip, along the poster's foot */
+#projList .ptile .thumb .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(0,0,0,.55); }
+#projList .ptile .thumb .bar[hidden] { display: none; }
+#projList .ptile .thumb .bar i { display: block; height: 100%; width: 0; background: var(--tc); }
+#projList .ptile .cap { display: flex; align-items: center; gap: 4px; height: 21px; padding: 0 2px; font-size: 11px; }
+#projList .ptile .cap .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#projList .ptile .cap .d { flex: none; color: var(--dim); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+#projList .ptile.pseq.cur .cap .nm { font-weight: 600; }
+/* the empty bin: Premiere's own words and its Import */
 .pempty { color: var(--dim); padding: 20px 6px; text-align: center; }
+#projList .pempty.pnone { min-height: 100%; display: flex; flex-direction: column; align-items: center;
+                          justify-content: center; gap: 6px; padding: 16px 10px; }
+#projList .pempty .big svg { width: 34px; height: 34px; display: block; color: #5c5c64; }
+#projList .pempty .t { color: var(--text); font-size: 12.5px; }
+#projList .pempty button { padding: 3px 14px; }
+#projList .pempty .hint { font-size: 11px; }
 .pempty a, .empty a { display: inline-block; margin: 6px 2px 0; padding: 3px 10px; color: var(--text);
                       background: var(--card); border: 1px solid var(--line-hi); border-radius: 4px; }
 .pempty a:hover, .empty a:hover { background: var(--card-hi); color: var(--text); }
