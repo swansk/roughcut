@@ -1742,11 +1742,12 @@ def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
              target: tuple[float, float], ranked: list[dict] | None = None,
              focus: int | None = None, *, locked: list[str] | None = None,
              finish: Callable[[dict], dict] | None = None,
-             originate: bool = False) -> None:
+             originate: bool = False, new_clips: list[str] | None = None) -> None:
     """The Ask's work, on its thread. The first pass (`/api/firstpass`) runs the same
     call: `locked` marks the shots a re-run must return exactly, `finish` turns the plan
     into the re-run's proposal (locks enforced, the per-shot diff) before it is checked
-    and saved, and `originate` asks for a first cut even when there is one."""
+    and saved, `originate` asks for a first cut even when there is one, and `new_clips`
+    (footage imported since the last pass) asks it to say what it did with each."""
     entry = ASKS[job]
     # Step one is not the edit, it is the estimate. Karl: *"the first step the AI must
     # complete is an estimate of how long it will take to apply the changes. This will
@@ -1798,12 +1799,14 @@ def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
                                   note=note, target=target, events=ranked,
                                   selects=read_edl().get("selects"),
                                   on_partial=watcher, colour=grade,
-                                  **({"locked": set(locked)} if locked else {}))
+                                  **({"locked": set(locked)} if locked else {}),
+                                  **({"new_clips": new_clips} if new_clips else {}))
         else:
             plan = revise.originate(clips=clips, story=story, note=note,
                                     target=target, events=ranked,
                                     selects=read_edl().get("selects"),
-                                    on_partial=watcher)
+                                    on_partial=watcher,
+                                    **({"new_clips": new_clips} if new_clips else {}))
     except inference.BudgetExceeded as exc:
         entry.update(code=429)
         entry.finish("failed", detail=str(exc))
@@ -3434,6 +3437,42 @@ def _fp_names(rows: list[dict]) -> list[dict]:
     return rows
 
 
+def new_clips_cost(fresh: list[str]) -> dict | None:
+    """What a re-run's priced stages cost for the footage new since the last pass: the
+    look and the close look each clip still needs (held since its import, or never
+    run), the index job's own arithmetic (`priced_waiting`), worded for this backend
+    (`fpmod.cost_words`: "free on your plan" on the subscription, the API estimate in
+    the hover). None when nothing priced is left for them."""
+    if not fresh:
+        return None
+    j = None
+    if journal_path().exists():
+        try:
+            j = load_journal()
+        except journal.JournalError:
+            j = None
+    looked, closed = visual_stems(), fine_stems()
+    junk = confirmed_junk()
+    look, close = [], []
+    for c in fresh:
+        if c in junk:
+            continue
+        if j is not None and c in j.clips:
+            if j.state(c, "look") in journal.RETRYABLE:
+                look.append(c)
+            if j.state(c, "close") in journal.RETRYABLE:
+                close.append(c)
+        else:
+            if Path(c).stem not in looked:
+                look.append(c)
+            if Path(c).stem not in closed:
+                close.append(c)
+    w = priced_waiting(look, close)
+    if not (w["looks"] or w["close"]):
+        return None
+    return {**fpmod.cost_words(w["usd"]), "looks": w["looks"], "close": w["close"]}
+
+
 def firstpass_state() -> dict:
     """The first pass as the UI shows it — see `GET /api/firstpass`."""
     edl = read_edl()
@@ -3519,7 +3558,9 @@ def firstpass_state() -> dict:
     out.update(state="stale-after-edits" if (since and not pending) else "done",
                when=rec.get("finished"), produced=rec.get("produced") or {},
                proposal={**prop, "pending": pending, "answer": answered}, stale=stale,
-               edited_since=since, new_clips=fresh, new_count=max(0, n_new))
+               edited_since=since, new_clips=fresh, new_count=max(0, n_new),
+               # the priced part of taking them in (their looks wait for the re-run)
+               new_cost=new_clips_cost(fresh))
     return out
 
 
@@ -3659,7 +3700,7 @@ def firstpass_index(fp: dict) -> str | None:
         # still building previews): footage imported since joins it before this pass
         # counts the bin as heard (wave 12 IMPORT — a re-run once cut without them).
         job = running["id"]
-        want = index_ask_intake(running)
+        want = index_ask_intake(running, release=True)    # the re-run asks for the looks
     else:
         job = index_entry()
         INDEXES[job]["coarse"] = True
@@ -3685,11 +3726,20 @@ def firstpass_index(fp: dict) -> str | None:
         time.sleep(FIRSTPASS_POLL_S)
 
 
-def index_ask_intake(entry: progress.Job) -> int:
+def index_ask_intake(entry: progress.Job, *, release: bool = False) -> int:
     """Ask a running index to take in the bin's clips again (footage imported since it
-    began). Returns the number its `took` reaches once it has (`_index_walk`)."""
-    entry["asked"] = int(entry.get("asked") or 0) + 1
-    return entry["asked"]
+    began). Returns the number its `took` reaches once it has (`_index_walk`).
+
+    What it takes in this way joins with its priced stages held (`journal.hold_priced`,
+    verdict 9 punch 2): an import is not the editor asking for the look, so the clips
+    are heard and previewed exactly as a fresh free run would take them, and their look
+    waits. `release` is the editor asking — the first pass's re-run, the Index button:
+    once the run has taken the new footage in it lifts every hold its journal has."""
+    n = int(entry.get("asked") or 0) + 1
+    if release:
+        entry["release_at"] = n              # set before `asked`: the walk reads asked first
+    entry["asked"] = n
+    return n
 
 
 def _fp_step(fp: dict, key: str, state: str, **extra) -> None:
@@ -3716,10 +3766,17 @@ def _firstpass_job(job: str) -> None:
 
 
 def _firstpass_walk(job: str, fp: dict) -> None:
+    # The clips the last finished pass saw: what is new to this one, which its cut is
+    # told about and its notes account for (verdict 9, punch 2). A run that stopped or
+    # failed passes on the names it was new against, so its re-run still knows.
+    prev = _fp_record() or {}
+    base = (prev.get("clip_names") if prev.get("state") == "done"
+            else prev.get("base_names", prev.get("clip_names")))
     rec = {"job": job, "mode": fp["mode"], "keep": fp["keep"], "state": "running",
            "started": fp["started"], "clips": len(footage_clips()),
            # which clips the run saw: what an import afterwards is new against
            "clip_names": footage_clips(),
+           "base_names": base if isinstance(base, list) else None,
            "cut": cut_name_of(read_edl(), STATE["edl"])}
     try:
         rec["manual"] = [{k: r[k] for k in ("id", "clip", "in", "out")}
@@ -3779,6 +3836,17 @@ def _firstpass_walk(job: str, fp: dict) -> None:
                 if not originate else
                 "\n\n".join(x for x in ((fp["note"] or "").strip(),
                                          fpmod.rejected_brief(rejected)) if x))
+        # Footage new since the last pass: the cut is told which clips those are and
+        # says what it did with each; one it could not use (not heard yet, confirmed
+        # junk) still gets its line.
+        base = rec.get("base_names")
+        new = ([c for c in footage_clips() if c not in set(base)]
+               if isinstance(base, list) else [])
+        junk = confirmed_junk() if new else set()
+        unavailable = {c: ("you confirmed it as junk" if c in junk else
+                           "it is not heard yet, so this run could not use it")
+                       for c in new if c not in clips}
+        offered = [c for c in new if c in clips]
 
         def finish(plan: dict) -> dict:
             plan = dict(plan)
@@ -3795,6 +3863,13 @@ def _firstpass_walk(job: str, fp: dict) -> None:
                 "manual": [r for r in manual if r.get("id") in set(locked)],
                 "rejected": left,
                 "diff": fpmod.rerun_diff(segments, plan["segments"], locked, manual)}
+            if new:
+                rows = fpmod.new_clip_rows(plan["segments"], new, plan.get("new_clips"),
+                                           unavailable)
+                plan["firstpass"]["new_clips"] = rows
+                plan["notes"] = "\n\n".join(x for x in (
+                    str(plan.get("notes") or "").strip(),
+                    "\n".join(r["line"] for r in rows)) if x)
             return plan
 
         ask = uuid.uuid4().hex[:8]
@@ -3808,7 +3883,8 @@ def _firstpass_walk(job: str, fp: dict) -> None:
         target = payload["target"]
         _ask_job(ask, segments, clips, payload.get("story", ""), note,
                  (float(target[0]), float(target[1])), payload["events"], None,
-                 locked=locked, finish=finish, originate=originate)
+                 locked=locked, finish=finish, originate=originate,
+                 new_clips=offered)
         entry = ASKS[ask]
         with FIRSTPASS_LOCK:
             if fp.get("cancel"):
@@ -3826,6 +3902,9 @@ def _firstpass_walk(job: str, fp: dict) -> None:
                        proposal={"job": ask, "shots": len(plan.get("segments") or []),
                                  "counts": diff.get("counts"),
                                  "sentence": diff.get("sentence"),
+                                 # what it did with each clip new since the last pass
+                                 "new_clips": (plan.get("firstpass") or {}).get("new_clips")
+                                 or [],
                                  "notes_ok": (plan.get("notes_check") or {}).get("ok", True)},
                        produced={"index": fp["steps"]["index"].get("counts"),
                                  "picks": fp["picks"],
@@ -5229,7 +5308,10 @@ def _index_take_in(j: journal.Journal, entry: progress.Job) -> list[str]:
                 j.fail(clip, "probe", str(exc)[:200])
             else:
                 j.finish(clip, "probe")
-    entry.note(f"added {len(more)} imported clip{'s' if len(more) != 1 else ''}")
+    # an import is not the editor asking for the look: held, as a free run holds it
+    held = j.hold_priced(more, "imported while the index ran")
+    entry.note(f"added {len(more)} imported clip{'s' if len(more) != 1 else ''}"
+               + (" — their looks wait for you (priced)" if held else ""))
     return more
 
 
@@ -5246,6 +5328,13 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
         j.remove_missing(gone)
     if order in journal.ORDERS:
         j.set_order(order)
+    if not entry.get("free"):
+        # An index the editor started (the first pass, the Index button) is the ask the
+        # held clips wait for: an import while an earlier index ran held their looks.
+        freed = j.release_held()
+        if freed:
+            entry.note(f"looking at {len(freed)} imported clip{'s' if len(freed) != 1 else ''}"
+                       " now")
     changes = j.reconcile(index_files())
     if changes["requeued"] or changes["lost"]:
         entry.note("resumed — " + ", ".join(
@@ -5281,6 +5370,7 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
         entry["released"] = prog.get("released", 0)
         entry["cost_usd"] = prog.get("cost_usd", 0.0)
         entry["coarse_ready"] = j.coarse_ready()
+        entry["held"] = len(prog.get("held") or [])
         entry.advance("index", max(0.0, min(1.0, float(prog.get("pct") or 0.0) / 100.0)),
                       detail=detail)
 
@@ -5343,10 +5433,19 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
             coarse = bool(entry.get("coarse"))
             # Footage imported while the index runs (wave 12 IMPORT) joins this run:
             # added to the journal, probed, then walked like the rest.
+            # Their priced stages are held (an import is not an ask for the look) unless
+            # the editor asked with this intake (`index_ask_intake(release=True)`).
             asked = int(entry.get("asked") or 0)
-            if asked > int(entry.get("took") or 0):
+            took = int(entry.get("took") or 0)
+            if asked > took:
                 _index_take_in(j, entry)
+                if took < int(entry.get("release_at") or 0) <= asked:
+                    freed = j.release_held()
+                    if freed:
+                        entry.note(f"looking at {len(freed)} imported "
+                                   f"clip{'s' if len(freed) != 1 else ''} now")
                 entry["coarse_ready"] = j.coarse_ready()
+                entry["held"] = len(j.held_clips())
                 entry["took"] = asked
             # The cut's clips take the proxy pool first, in film order (verdict 5 punch 2:
             # the Program shows a 360p preview until a clip's 720p proxy lands) — once the
@@ -5406,6 +5505,11 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
         if held:
             tail = (f" — {held} clip{'s' if held != 1 else ''} not looked at yet: the look "
                     "is priced, so it waits for you (Run first pass)")
+    elif not tail:
+        held = len(j.held_clips())
+        if held:
+            tail = (f" — {held} imported clip{'s' if held != 1 else ''} not looked at yet: "
+                    "the look is priced, so it waits for you (Re-run first pass)")
     parked = prog.get("parked", 0)
     if parked:
         tail += f" — {parked} clip{'s' if parked != 1 else ''} parked"
@@ -5735,12 +5839,14 @@ async def api_index(request: Request) -> JSONResponse:
     is dropped into the folder is "index what isn't done"."""
     body = await request.json() if int(request.headers.get("content-length") or 0) else {}
     live = next((x for x in INDEXES.values() if x["state"] not in progress.TERMINAL), None)
-    if live is not None and live.get("free") and not live.get("cancel") \
-            and not body.get("pause_priced"):
-        # the free run an import started: asking for the index is asking for its priced
-        # stages too, so that run takes them on (no second index, no 409)
+    if live is not None and (live.get("free") or live.get("held")) \
+            and not live.get("cancel") and not body.get("pause_priced"):
+        # the free run an import started, or a run holding the looks of footage imported
+        # into it: asking for the index is asking for those priced stages, so that run
+        # takes them on (no second index, no 409)
         live["free"] = False
         live["label"] = "Indexing the footage"
+        index_ask_intake(live, release=True)
         if body.get("resume_priced"):
             load_journal().resume_priced()
         return JSONResponse({"job": live["id"], "joined": True})
@@ -10567,9 +10673,11 @@ def _import_posters(clips: list[str], footage: Path) -> None:
 
 def start_free_index() -> str | None:
     """The free part of the index for new footage: join a running index (it takes the
-    new clips in on its next turn), else start one that holds the priced stages for this
-    run (`FREE_ONLY`). Off where nothing is built behind the human's back (--no-proxies,
-    the suite) unless `STATE["index_on_import"]` says otherwise."""
+    new clips in on its next turn, their priced stages held — `index_ask_intake`), else
+    start one that holds the priced stages for this run (`FREE_ONLY`). Either way the
+    look waits for the editor (the re-run, the Index button). Off where nothing is built
+    behind the human's back (--no-proxies, the suite) unless `STATE["index_on_import"]`
+    says otherwise."""
     if not STATE.get("index_on_import", STATE.get("proxies_enabled", True)):
         return None
     live = next((x for x in INDEXES.values() if x["state"] not in progress.TERMINAL), None)

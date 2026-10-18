@@ -490,6 +490,67 @@ def rejected_lines(left: list[dict]) -> list[str]:
     return lines
 
 
+# ------------------------------------------------------------------ new footage
+#
+# Verdict 9, punch 2: a re-run after four imports "used none of the 4 new clips, and its
+# notes say nothing about them". The re-run's prompt lists the clips new since the last
+# pass (`revise.new_clips_section`) and its answer says per clip what it did; these turn
+# that into one line per clip for the notes and the first-pass panel — the verb from the
+# plan itself ("used … in shot 7" only when a shot of the proposal draws on it), the
+# reason from the model when it agrees with the plan, else the board's own words.
+
+
+def new_clip_rows(segments: list[dict], new: list[str], said: list[dict] | None = None,
+                  unavailable: dict[str, str] | None = None) -> list[dict]:
+    """Per clip new since the last pass: `{clip, name, used, shots, note, source, line}`.
+    `shots` are the 1-based positions of the proposal's shots that use it; `note` is the
+    model's sentence (`source` "model") when its `used` matches the plan, else the
+    used shot's own `why` ("shot"), or why the re-run could not use it ("unavailable":
+    not heard yet, confirmed junk), else None ("none")."""
+    by = {}
+    for x in said or []:
+        if isinstance(x, dict) and x.get("clip"):
+            by.setdefault(x["clip"], x)
+    rows = []
+    for c in new:
+        shots = [i + 1 for i, s in enumerate(segments or [])
+                 if isinstance(s, dict) and s.get("clip") == c]
+        m = by.get(c)
+        note, source = None, "none"
+        if m and bool(m.get("used")) == bool(shots) and str(m.get("note") or "").strip():
+            note, source = str(m["note"]).strip(), "model"
+        elif shots:
+            why = next((str(s.get("why") or "").strip() for s in segments
+                        if isinstance(s, dict) and s.get("clip") == c
+                        and str(s.get("why") or "").strip()), "")
+            if why:
+                note, source = why, "shot"
+        elif (unavailable or {}).get(c):
+            note, source = unavailable[c], "unavailable"
+        row = {"clip": c, "name": clip_name(c), "used": bool(shots), "shots": shots,
+               "note": note, "source": source}
+        row["line"] = new_clip_line(row)
+        rows.append(row)
+    return rows
+
+
+def new_clip_line(r: dict) -> str:
+    """"Used new clip KX_10 in shot 7: the cliff jump." / "Left out new clip KX_05: a
+    near-duplicate of CLIP_05." / "Left out new clip KX_03 (no reason given)." """
+    name = r.get("name") or clip_name(r.get("clip"))
+    shots = r.get("shots") or []
+    if r.get("used"):
+        where = (f"shot {shots[0]}" if len(shots) == 1
+                 else "shots " + ", ".join(str(n) for n in shots))
+        head = f"Used new clip {name} in {where}"
+    else:
+        head = f"Left out new clip {name}"
+    note = " ".join(str(r.get("note") or "").split())
+    if not note:
+        return f"{head}." if r.get("used") else f"{head} (no reason given)."
+    return f"{head}: {note}" + ("" if note[-1:] in ".!?…" else ".")
+
+
 def resolve_keep(keep, segments: list[dict], manual: list[dict], mode: str) -> list[str]:
     """`keep` as the request gave it — a list of shot ids, "manual", "none" or absent —
     as the ids to lock. Absent means "manual" on a re-run and nothing on a run.

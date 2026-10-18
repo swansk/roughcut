@@ -1,10 +1,13 @@
-"""The first-pass panel speaks the editor's words, in a real browser (verdict 9, punch 3).
+"""The first-pass panel speaks the editor's words, in a real browser (verdict 9, punches 2 and 3).
 
   * A generated black clip — what an overwrite past the end of the sequence leaves in the
     gap (Premiere's own behaviour, `tl.placeAt`) — reads "Black Video" in the panel's
-    "added by hand" list, never its file name `gen_black_<hash>`.
+    "added by hand" list, never its file name `gen_black_<hash>` (punch 3).
+  * After imports, the "N new clips" offer and the panel carry the price of the looks
+    they wait on ("free on your plan", the API estimate in the hover), and once the
+    re-run lands the panel says what it did with each new clip (punch 2).
 
-Every model call is scripted (test_firstpass.Scripted); the index runs with
+Every model call is scripted (test_import_held.Model); the index runs with
 test_index's stubbed tools over a copy of the fixture bin under tmp_path.
 """
 
@@ -25,7 +28,8 @@ from playwright.sync_api import sync_playwright  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from roughcut import inference  # noqa: E402
-from test_firstpass import Scripted, _end_jobs  # noqa: E402
+from test_firstpass import _end_jobs  # noqa: E402
+from test_import_held import Model, _make  # noqa: E402
 from test_index import _stub_tools  # noqa: E402
 
 BTN = '[data-testid="firstpass-button"]'
@@ -38,12 +42,20 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+@pytest.fixture(scope="module")
+def card(tmp_path_factory) -> Path:
+    root = tmp_path_factory.mktemp("names-card")
+    _make(root / "KX_05.MP4", "color=c=red")
+    _make(root / "KX_10.MP4", "color=c=blue")
+    return root
+
+
 @pytest.fixture
 def live(tmp_path, project, monkeypatch):
     import uvicorn
     import server
 
-    model = Scripted()
+    model = Model(say=True)
     inference.set_backend(model)
     inference.reset_spend()
     monkeypatch.setenv("ROUGHCUT_BACKEND", "claude_cli")
@@ -145,6 +157,49 @@ def test_a_generated_black_clip_reads_black_video_in_the_panel(page, live):
     assert "gen_" not in text, text
     html = pg.locator(PANEL).inner_html()
     assert "gen_" not in html, "nor in a hover"
+
+
+def test_new_clips_carry_the_looks_price_and_the_rerun_says_what_it_did(page, live, card):
+    pg = page
+    pg.locator(BTN).click()
+    pg.wait_for_selector('[data-testid="firstpass-run"]:not([disabled])', timeout=10000)
+    pg.locator('[data-testid="firstpass-run"]').click()
+    _wait_state(live, ("done", "stale-after-edits"))
+    pg.wait_for_selector("#proposal", state="visible", timeout=30000)
+    got = httpx.post(live + "/api/import", json={"paths": [str(card)]}, timeout=20).json()
+    assert got["added"] == ["KX_05.MP4", "KX_10.MP4"], got
+
+    # the offer: its line, then the price of the looks the clips wait on
+    pg.evaluate("rcFirstPass.refresh()")
+    offer = pg.locator('[data-testid="firstpass-new-clips"]')
+    offer.wait_for(state="visible", timeout=10000)
+    assert offer.inner_text().startswith("2 new clips: add them to the cut?")
+    tag = offer.locator(".fp-offer-cost")
+    assert tag.inner_text() == "Looking at them: free on your plan"
+    hover = tag.get_attribute("title")
+    assert "if it went through the API — no charge on your plan" in hover and "~$" in hover
+
+    # the panel: which clips a re-run hears and looks at, and what looking costs
+    pg.locator('[data-testid="firstpass-new-clips-go"]').click()
+    pg.wait_for_selector(PANEL, state="visible", timeout=5000)
+    cost = pg.locator('[data-testid="firstpass-new-cost"]')
+    assert cost.inner_text() == "Looking at them: free on your plan."
+    assert cost.get_attribute("title") == hover
+    assert "A re-run hears and looks at KX_05, KX_10" in pg.locator(PANEL).inner_text()
+    pg.locator('[data-testid="firstpass-run"]').click()
+    s = _wait_state(live, ("done", "stale-after-edits"))
+    assert [r["line"] for r in s["proposal"]["new_clips"]] == [
+        "Left out new clip KX_05: a near-duplicate of CLIP_B.",
+        "Used new clip KX_10 in shot 2: the blue run, as shot 2."]
+
+    # after it lands, the panel says what it did with each of them
+    pg.wait_for_timeout(500)
+    text = _open_panel(pg)
+    did = pg.locator('[data-testid="firstpass-new-result"] li')
+    assert did.all_inner_texts() == [
+        "Left out new clip KX_05: a near-duplicate of CLIP_B.",
+        "Used new clip KX_10 in shot 2: the blue run, as shot 2."], text
+    assert not pg.locator('[data-testid="firstpass-new-cost"]').count(), "nothing new now"
 
 
 def test_a_generated_clip_reads_as_premiere_names_it():

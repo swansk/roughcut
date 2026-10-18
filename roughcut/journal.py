@@ -56,7 +56,8 @@ DEPENDS: dict[str, tuple[str, ...]] = {
     "picks": ("asr", "look", "close"),
 }
 
-# The stages that spend money. `pause_priced()` holds exactly these.
+# The stages that spend money. `pause_priced()` holds exactly these, for the whole bin;
+# `hold_priced()` holds them for some clips (footage imported while an index runs).
 PRICED = frozenset({"look", "close"})
 
 # Which worker pool a stage draws from. Proxies and sheets have separate limits because
@@ -164,7 +165,7 @@ def _stage_record() -> dict:
 def _clip_record(clip: str, now: float, captured: float | None) -> dict:
     return {"clip": clip, "added": now, "captured": captured, "facts": None,
             "priority": None, "missing": False, "parked": None, "junk": None,
-            "stages": {s: _stage_record() for s in STAGES}}
+            "held": None, "stages": {s: _stage_record() for s in STAGES}}
 
 
 class Journal:
@@ -229,6 +230,7 @@ class Journal:
             rec.setdefault("priority", None)
             rec.setdefault("captured", None)
             rec.setdefault("junk", None)
+            rec.setdefault("held", None)
         return j
 
     @_locked
@@ -287,6 +289,19 @@ class Journal:
     def priority(self, clip: str) -> float | None:
         """The clip's score, or None until its free stages have reported."""
         return self._rec(clip).get("priority")
+
+    def held(self, clip: str) -> bool:
+        """Its priced stages wait for the editor (`hold_priced`)."""
+        return bool(self._rec(clip).get("held"))
+
+    @_locked
+    def held_clips(self) -> list[str]:
+        """The present clips whose priced stages are held and not all settled, in the
+        queue's order — what a re-run (or the Index button) would look at and price."""
+        return [c for c in self.ordered()
+                if self.clips[c].get("held") and not self.clips[c].get("missing")
+                and any(self.clips[c]["stages"][s]["state"] not in SETTLED
+                        for s in PRICED)]
 
     # ---------------------------------------------------------------- clips
 
@@ -444,6 +459,48 @@ class Journal:
         self._log(now, f"{clip} unparked")
         self._touch()
 
+    @_locked
+    def hold_priced(self, clips: Iterable[str], reason: str = "imported", *,
+                    now: float | None = None) -> list[str]:
+        """Hold these clips' priced stages (the look, the close look) until the editor
+        asks for them — footage imported while an index runs joins it the way a fresh
+        free run would take it (verdict 9, punch 2): heard, proxied, never looked at
+        unasked. The free stages go on; the clip waits on the pass from its words, the
+        way the bin's priced pause makes it wait. Written to the journal, so a restart
+        or the next free run keeps the hold; `release_held` (the re-run, the Index
+        button) lifts it. A clip whose priced stages are all settled is not held.
+        Returns the clips it held."""
+        now = time.time() if now is None else now
+        marked = []
+        for clip in clips:
+            rec = self._rec(clip)
+            if rec.get("held") or all(rec["stages"][s]["state"] in SETTLED for s in PRICED):
+                continue
+            rec["held"] = {"why": reason, "at": now}
+            marked.append(clip)
+        if marked:
+            self._log(now, f"priced stages held ({reason}): {', '.join(marked)}")
+        self._touch()
+        return marked
+
+    @_locked
+    def release_held(self, clips: Iterable[str] | None = None, *,
+                     now: float | None = None) -> list[str]:
+        """The editor asked: these clips' priced stages (every held clip's, with no
+        argument) join the queue as ever. Returns the clips it released."""
+        now = time.time() if now is None else now
+        names = list(self.clips) if clips is None else list(clips)
+        out = []
+        for clip in names:
+            rec = self.clips.get(clip)
+            if rec is not None and rec.get("held"):
+                rec["held"] = None
+                out.append(clip)
+        if out:
+            self._log(now, f"priced stages released: {', '.join(out)}")
+        self._touch()
+        return out
+
     # ----------------------------------------------------------- reconcile
 
     @_locked
@@ -573,7 +630,7 @@ class Journal:
                 st = rec["stages"][stage]
                 if st["state"] not in RETRYABLE:
                     continue
-                if self.paused_priced and stage in PRICED:
+                if stage in PRICED and (self.paused_priced or rec.get("held")):
                     continue
                 if st.get("not_before") and float(st["not_before"]) > now:
                     continue
@@ -684,7 +741,8 @@ class Journal:
         live = [r for r in self.clips.values() if not r.get("missing")]
         return bool(live) and all(
             r.get("parked") or (r["stages"]["asr"]["state"] in SETTLED and (
-                r["stages"]["look"]["state"] in SETTLED or self.paused_priced))
+                r["stages"]["look"]["state"] in SETTLED or self.paused_priced
+                or r.get("held")))
             for r in live)
 
     # ------------------------------------------------------------- the budget
@@ -733,7 +791,8 @@ class Journal:
         `released` and `queued` — and the one the open screen lacked when it said "9
         queued" over cards the pass was already showing (INTAKE M14, I14.3)."""
         rec = self._rec(clip)
-        if not self.paused_priced or rec.get("missing") or rec.get("parked"):
+        if not (self.paused_priced or rec.get("held")) or rec.get("missing") \
+                or rec.get("parked"):
             return False
         if self.released(clip):
             return False
@@ -805,7 +864,7 @@ class Journal:
                     continue
                 if st["state"] == "parked" or rec.get("parked"):
                     continue
-                if self.paused_priced and s in PRICED:
+                if s in PRICED and (self.paused_priced or rec.get("held")):
                     continue
                 mean = self.mean_duration(s)
                 if mean is None:
@@ -816,7 +875,7 @@ class Journal:
                     left = max(0.0, mean - (now - float(st["started"])))
                 pool_s[KIND[s]] = pool_s.get(KIND[s], 0.0) + left
             rows.append({"clip": clip, "priority": rec.get("priority"), "state": state,
-                         "junk": rec.get("junk"),
+                         "junk": rec.get("junk"), "held": bool(rec.get("held")),
                          "captured": rec.get("captured"),
                          "stages": {s: rec["stages"][s]["state"] for s in STAGES},
                          "attempts": {s: rec["stages"][s]["attempts"] for s in STAGES
@@ -844,6 +903,8 @@ class Journal:
                        for s in STAGES for m in [self.mean_duration(s)]},
             "paused_priced": self.paused_priced,
             "paused_reason": self.data.get("paused_reason"),
+            # imported while an index ran: their priced stages wait for the editor
+            "held": self.held_clips(),
             "order": self.order, "workers": dict(self.workers),
             "rows": rows,
             "log": list(self.data.get("log") or [])[-20:],
