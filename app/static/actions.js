@@ -506,7 +506,13 @@
       case 'transition': return `${kind(op.kind)} between ${shot(op.a)} and ${shot(op.b)}`;
       case 'fade': return `${kind(op.kind)} at the ${op.edge} of ${shot(op.id)}`;
       case 'design_effect': return `Designed effect on ${shot(op.id)}: “${op.note}”`;
-      case 'export': return `Export ${op.preset}, ${op.range === 'in_out' ? 'Sequence In/Out' : 'Entire Sequence'}`;
+      case 'export': {
+        const v = exportVideo(op, R.exportInfo, R.exportInfo && (R.exportInfo.presets || []).find((p) => p.key === op.preset));
+        const own = [op.size != null && op.size !== '' ? v.frame : '', op.fps != null && op.fps !== '' ? v.fps : '', v.bitrate]
+          .filter(Boolean);
+        return `Export ${op.preset || 'quick'}${own.length ? ` at ${own.join(', ')}` : ''}, `
+          + `${op.range === 'in_out' ? 'Sequence In/Out' : 'Entire Sequence'}${op.name ? ` → ${op.name}.mp4` : ''}`;
+      }
       default: return op.op;
     }
   }
@@ -592,6 +598,42 @@
     t = t.slice(0, 80).replace(/^[ .-]+|[ .-]+$/g, '');
     return t || fallback;
   }
+  /* Export Settings › Video on an export op (lane EXPORT2, verdict 9 punch 5: `size` a
+   * Frame Size key — "720" — or "match", `fps` a Frame Rate key — "29.97" — or "match",
+   * `bitrate` a target in Mbps; roughcut/actions.py EXPORT_SIZES / EXPORT_RATES): the
+   * frame, rate and bitrate the file is written at, in the dialog's words — the chosen
+   * Frame Size's pixels from GET /api/export's `sizes` (else its name, "720p"), the
+   * preset's own frame and rate when the op leaves them, a bitrate only when one is set. */
+  const SIZE_WORDS = { match: 'Match Sequence frame', 2160: '2160p', 1080: '1080p', 720: '720p', 540: '540p' };
+  const fpsWords = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? `${String(Math.round(n * 1000) / 1000)} fps` : '';
+  };
+  function exportVideo(op, info, preset) {
+    const out = { frame: '', fps: '', bitrate: '' };
+    const sizes = (info && Array.isArray(info.sizes)) ? info.sizes : [];
+    const rates = (info && Array.isArray(info.rates)) ? info.rates : [];
+    if (op.size != null && op.size !== '') {
+      const k = String(op.size);
+      const sz = sizes.find((x) => String(x.key) === k);
+      out.frame = sz && sz.width && sz.height ? `${sz.width}×${sz.height}` : (SIZE_WORDS[k] || `${k}p`);
+    } else if (preset && preset.width && preset.height) {
+      out.frame = `${preset.width}×${preset.height}`;
+    }
+    if (op.fps != null && op.fps !== '') {
+      const k = String(op.fps);
+      const r = rates.find((x) => String(x.key) === k);
+      out.fps = k === 'match' ? (fpsWords(r ? r.fps : info && info.fps) || 'the sequence\'s frame rate')
+        : (fpsWords(k) || `${k} fps`);
+    } else if (preset && preset.fps) {
+      out.fps = fpsWords(preset.fps);
+    }
+    if (op.bitrate != null && op.bitrate !== '' && Number(op.bitrate) > 0) out.bitrate = `${Number(op.bitrate)} Mbps`;
+    return out;
+  }
+  // a preset by its name, its frame being said beside it: "Quick 1080p" → "Quick"
+  const presetName = (label) => String(label || '').replace(/\s+(\d{3,4}p|\d+K)$/i, '');
+
   function exportWords(op) {
     const t = TL();
     const st = t ? t.state : {};
@@ -604,7 +646,9 @@
     try { folder = localStorage.getItem('rc.export.folder') || folder; } catch (e) { /* private window */ }
     const path = info ? `${info.root}/${component(folder, info.folder)}/${component(op.name, info.name)}.mp4`
       : `${op.name ? `${op.name}.mp4` : 'a new file'} under --work/renders`;
-    return `${path} · ${preset ? `${preset.label} · ` : ''}${tc(Math.max(0, b - a))}`;
+    const v = exportVideo(op, info, preset);
+    const name = preset ? presetName(preset.label) : (op.preset ? presetName(String(op.preset)) : '');
+    return [path, v.frame, v.fps, v.bitrate, name, tc(Math.max(0, b - a))].filter(Boolean).join(' · ');
   }
   async function loadExportInfo() {
     if (!R.ops.some((op) => op.op === 'export')) return;

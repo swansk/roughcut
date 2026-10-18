@@ -1092,3 +1092,58 @@ def test_at_most_one_box_asks_the_ai_in_any_state(browser, live_server, project)
         one("an empty sequence")
     finally:
         b.close()
+
+
+# ---------------------------------------------------------------- an export's Video settings, said
+
+def test_an_export_op_s_review_says_its_frame_rate_and_bitrate(browser, live_server, project):
+    """Lane EXPORT2's `export` op carries Export Settings › Video (`size`, `fps`, `bitrate`;
+    verdict 9, punch 5): the review's "writes …" line says the file, its frame (the Frame
+    Size's pixels from GET /api/export's `sizes`), its rate, its target bitrate and the
+    preset — "… review copy.mp4 · 1280×720 · 29.97 fps · 8 Mbps · Quick · …" — and an op
+    that leaves them says the preset's own frame and rate. The line per op says them too
+    when the server's line is not there (rcActions.describe)."""
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+
+        def info(route):                      # the Video choices as EXPORT2's server lists them
+            body = route.fetch().json()
+            body["sizes"] = [{"key": "match", "label": "Match Sequence", "width": 1920, "height": 1080},
+                             {"key": "720", "label": "720p", "width": 1280, "height": 720}]
+            body["rates"] = [{"key": "match", "label": "Match Sequence", "fps": 23.976},
+                             {"key": "29.97", "label": "29.97", "fps": 29.97}]
+            for pr in body["presets"]:
+                if pr["key"] == "quick":
+                    pr.update({"width": 1920, "height": 1080, "fps": 23.976})
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+        p.route("**/api/export", info)
+        op = {"op": "export", "preset": "quick", "range": "all", "name": "review copy",
+              "size": "720", "fps": "29.97", "bitrate": 8}
+        what = "[data-testid=ai-export-what]"
+        p.evaluate("(r) => rcActions.review(r)", {"job": "abcdef0e0001", "status": "done", "kind": "ops",
+                                                    "summary": "a 720p review copy", "ops": [op]})
+        p.wait_for_function("(s) => (document.querySelector(s) || {}).textContent"
+                            " && document.querySelector(s).textContent.includes('1280×720')", arg=what)
+        line = p.locator(what).inner_text()
+        assert "review copy.mp4 · 1280×720 · 29.97 fps · 8 Mbps · Quick · 00:00:" in line, line
+        assert "1080p" not in line                                     # the preset's name, not its frame
+        assert p.evaluate("(o) => rcActions.describe(o)", op) == \
+            "Export quick at 1280×720, 29.97 fps, 8 Mbps, Entire Sequence → review copy.mp4"
+        p.locator("[data-testid=ai-review-close], [data-testid=ai-reject-all]").first.click()
+        p.wait_for_function("!rcActions.open")
+        # the preset's own Video settings when the op leaves them; a Match rate says the sequence's
+        own = {"op": "export", "preset": "quick", "range": "all", "name": "plain"}
+        p.evaluate("(r) => rcActions.review(r)", {"job": "abcdef0e0002", "status": "done", "kind": "ops",
+                                                    "summary": "a quick copy", "ops": [own]})
+        p.wait_for_function("(s) => (document.querySelector(s) || {}).textContent"
+                            " && document.querySelector(s).textContent.includes('1920×1080')", arg=what)
+        line = p.locator(what).inner_text()
+        assert "plain.mp4 · 1920×1080 · 23.976 fps · Quick · 00:00:" in line and "Mbps" not in line, line
+        assert p.evaluate("(o) => rcActions.describe(o)", own) == "Export quick, Entire Sequence → plain.mp4"
+        assert p.evaluate("(o) => rcActions.describe(o)", {**own, "fps": "match"}) == \
+            "Export quick at 23.976 fps, Entire Sequence → plain.mp4"
+        p.locator("[data-testid=ai-reject-all]").click()
+        p.wait_for_function("!rcActions.open")
+    finally:
+        b.close()
