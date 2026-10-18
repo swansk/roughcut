@@ -83,6 +83,14 @@ header #firstpass { flex: 0 0 auto; position: relative; display: flex;
 #firstpass .fp-stop:hover { color: var(--bad, #e46a6a); }
 #firstpass .fp-cost { color: var(--dim, #94949c); cursor: help; }
 #firstpass .fp-note { color: var(--faint, #66666e); font-size: 11px; flex-basis: 100%; }
+/* what the last run did with the clips new to it (verdict 9, punch 2), one line each */
+#firstpass .fp-newdone { margin: 4px 0 0; padding: 0 0 0 16px; color: var(--text, #dcdcdf); }
+#firstpass .fp-newdone li { padding: 1px 0; }
+/* the new-clips offer's price of taking them in ("Looking at them: free on your plan"),
+   under its line */
+#firstpass .fp-offer-text { display: flex; flex-direction: column; line-height: 1.3; }
+#firstpass .fp-offer-cost { color: var(--dim, #94949c); font-size: 11px; cursor: help; }
+#firstpass .fp-offer-cost:empty { display: none; }
 
 /* ---------------------------------------------------------------- empty states */
 .fp-empty { display: flex; flex-direction: column; align-items: center; gap: 4px;

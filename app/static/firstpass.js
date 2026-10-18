@@ -35,6 +35,15 @@
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
   const stem = (c) => String(c || '').replace(/\.[^.]+$/, '');
+  /* A clip as the editor reads it (verdict 9, punch 3: never `gen_black_78a418d8`): a
+   * generated clip by Premiere's name for it, Black Video / Color Matte / a still; the
+   * server's `name` on a row wins (a still there carries its source clip's name). */
+  const GEN_NAMES = { black: 'Black Video', colour: 'Color Matte', color: 'Color Matte', still: 'Still' };
+  function clipName(c, name) {
+    if (name) return String(name);
+    const m = /^gen_([a-z]+)_/i.exec(String(c || ''));
+    return m ? (GEN_NAMES[m[1].toLowerCase()] || 'Generated clip') : stem(c);
+  }
   function clockS(t) {
     const v = Math.max(0, Number(t) || 0);
     const m = Math.floor(v / 60);
@@ -122,13 +131,13 @@
   function rejectedLine(w) {
     const rej = (w && w.rejected) || [];
     if (!rej.length) return '';
-    const list = rej.map((r) => `${stem(r.clip)} ${clockS(r.in)}–${clockS(r.out)}`).join('\n');
+    const list = rej.map((r) => `${clipName(r.clip, r.name)} ${clockS(r.in)}–${clockS(r.out)}`).join('\n');
     return `<div class="fp-keep fp-rejected" data-testid="firstpass-rejected" title="${esc(list)}">`
       + `Won't re-propose ${esc(plural(rej.length, 'range'))} you rejected</div>`;
   }
 
   function shotLine(r) {
-    return `shot ${r.pos} · ${stem(r.clip)} ${clockS(r.in)}–${clockS(r.out)}`
+    return `shot ${r.pos} · ${clipName(r.clip, r.name)} ${clockS(r.in)}–${clockS(r.out)}`
       + (r.words ? ` · ${r.words}` : '');
   }
 
@@ -203,7 +212,10 @@
       box.className = 'fp-offer';
       box.dataset.testid = 'firstpass-new-clips';
       box.setAttribute('role', 'status');
-      box.innerHTML = '<span class="fp-offer-line"></span>'
+      // the price sits under the line, so the buttons stay where a pointer heading for
+      // Re-run first pass… expects them (the offer tucks when the pointer leaves it)
+      box.innerHTML = '<span class="fp-offer-text"><span class="fp-offer-line"></span>'
+        + '<span class="fp-offer-cost"></span></span>'
         + '<button type="button" class="fp-offer-go" data-testid="firstpass-new-clips-go"'
         + ' title="Opens the first pass: it says which of your shots a re-run keeps exactly, and what it costs, before anything runs">Re-run first pass…</button>'
         + '<button type="button" class="fp-offer-no" data-testid="firstpass-new-clips-later">Not now</button>';
@@ -224,6 +236,12 @@
     const span = box.querySelector('.fp-offer-line');
     if (span.textContent !== line) span.textContent = line;
     span.title = named.length ? named.join('\n') : '';
+    // Their looks are held since the import (verdict 9, punch 2): the price of taking
+    // them in, worded for this backend, the API estimate in the hover.
+    const cost = s.new_cost, tag = box.querySelector('.fp-offer-cost');
+    const words = cost && cost.words ? `Looking at them: ${cost.words}` : '';
+    if (tag.textContent !== words) tag.textContent = words;
+    tag.title = (cost && cost.hover) || '';
     box.hidden = false;
     // The offer floats over the Program monitor's top, so it says its line for OFFER_SHOW_MS
     // and then tucks away: the button's dot stays, and hovering or focusing the first-pass
@@ -279,9 +297,19 @@
     }
     const fresh = newClips(s).filter((c) => !c.startsWith('#'));
     if (fresh.length) {
+      const cost = s.new_cost;
+      const priced = cost && cost.words
+        ? ` <span class="fp-cost" data-testid="firstpass-new-cost" title="${esc(cost.hover || '')}">`
+          + `Looking at them: ${esc(cost.words)}.</span>` : '';
       out += ` <span class="fp-new" data-testid="firstpass-new-list">A re-run hears and looks at `
-        + `${esc(fresh.length > 4 ? `${fresh.slice(0, 3).map(stem).join(', ')} and ${fresh.length - 3} more`
-          : fresh.map(stem).join(', '))} and may use ${fresh.length === 1 ? 'it' : 'them'}.</span>`;
+        + `${esc(fresh.length > 4 ? `${fresh.slice(0, 3).map((c) => clipName(c)).join(', ')} and ${fresh.length - 3} more`
+          : fresh.map((c) => clipName(c)).join(', '))} and may use ${fresh.length === 1 ? 'it' : 'them'}.</span>${priced}`;
+    }
+    // What the last run did with the clips that were new to it (verdict 9, punch 2)
+    const did = (p.new_clips || []).filter((r) => r && r.line);
+    if (did.length) {
+      out += '<ul class="fp-newdone" data-testid="firstpass-new-result">'
+        + did.map((r) => `<li data-clip="${esc(r.clip)}">${esc(r.line)}</li>`).join('') + '</ul>';
     }
     return out;
   }
@@ -508,6 +536,8 @@
 
   window.rcFirstPass = { open, close, toggle, refresh, run, cancel,
                          state: () => FP.s, label: () => label(FP.s) };
+  // the one rule for a clip's name on screen (a generated clip by Premiere's name for it)
+  window.rcClipName = clipName;
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
 })();

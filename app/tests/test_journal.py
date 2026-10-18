@@ -404,6 +404,45 @@ def test_a_clip_held_only_by_the_pause_is_waiting_not_queued(tmp_path):
     assert j.progress(now=15.0)["waiting"] == 0
 
 
+def test_a_held_clip_waits_for_the_editor_and_the_rest_runs_priced(tmp_path):
+    """Verdict 9, punch 2: footage imported while an index runs joins it with its look
+    and close look held (`hold_priced`), per clip — the rest of the bin's priced stages
+    go on, the bin is not paused, the hold survives a restart, and `release_held` (the
+    editor asking) puts them back in the queue. A held clip does not stand between the
+    first pass and its cut (coarse-ready once heard) and reads `waiting`."""
+    j = _journal(tmp_path, "A.MP4", "NEW.MP4")
+    _listen(j, "A.MP4", facts={"candidates": 1})
+    _listen(j, "NEW.MP4", t=5.0, facts={"candidates": 9})     # the higher priority
+    assert j.hold_priced(["NEW.MP4"], "imported while the index ran", now=6.0) == ["NEW.MP4"]
+    assert j.hold_priced(["NEW.MP4"], now=6.5) == [], "held once"
+    assert j.held("NEW.MP4") and not j.held("A.MP4") and not j.paused_priced
+    assert j.held_clips() == ["NEW.MP4"]
+    assert not j.coarse_ready(), "A is heard but not looked at"
+    ran = _drain(j, t=10.0, cost=0.09)
+    assert ("A.MP4", "look") in ran and ("A.MP4", "close") in ran
+    assert ("NEW.MP4", "proxy") in ran, "its free stages run"
+    assert not any(c == "NEW.MP4" and s in J.PRICED for c, s in ran), ran
+    assert j.state("NEW.MP4", "look") == "queued" and j.state("NEW.MP4", "close") == "queued"
+    assert sum(j.clips["NEW.MP4"]["stages"][s]["cost_usd"] for s in J.PRICED) == 0.0
+    assert j.coarse_ready(), "a held clip, heard, does not hold the pass's cut"
+    assert j.waiting_on_priced("NEW.MP4") and not j.released("NEW.MP4")
+    p = j.progress(now=40.0)
+    rows = {r["clip"]: r for r in p["rows"]}
+    assert rows["NEW.MP4"]["state"] == "waiting" and rows["NEW.MP4"]["held"] is True
+    assert rows["A.MP4"]["state"] == "released" and p["held"] == ["NEW.MP4"]
+    # persisted: a restart (or the next free run) keeps it held
+    k = Journal.load(tmp_path / "bin.json")
+    assert k.held("NEW.MP4") and k.next(now=41.0) is None
+    # the editor asks: the look runs, then the close look, and the clip is released
+    assert k.release_held(now=42.0) == ["NEW.MP4"]
+    assert not k.held_clips() and k.release_held(now=43.0) == []
+    assert _drain(k, t=50.0, cost=0.09) == [("NEW.MP4", "look"), ("NEW.MP4", "close"),
+                                             ("NEW.MP4", "picks")]
+    assert k.released("NEW.MP4")
+    # a clip whose priced stages are settled is never held
+    assert k.hold_priced(["A.MP4"], now=60.0) == []
+
+
 # ---------------------------------------------------------------- progress
 
 def test_progress_counts_cost_and_a_rolling_mean_eta(tmp_path):

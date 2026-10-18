@@ -33,6 +33,7 @@ from . import colour as colourmod
 from . import config, edits
 from .boundaries import polish, polish_plan, summarise  # noqa: F401 — polish_plan re-exported
 from .estimate import Estimate, estimate
+from .firstpass import clip_name
 from .inference import complete
 from .progress import milestone
 
@@ -60,6 +61,15 @@ CHECKS_MAX = 6
 # against a runaway answer, not a layout limit; it is applied at a sentence end, else a
 # word's (verdict 6, punch 4: "…someone the viewer can ide" was cut at 200 characters).
 CHECK_TEXT_MAX = 300
+
+# What a re-run says about footage imported since the last pass (verdict 9, punch 2: "it
+# used none of the 4 new clips, and its notes say nothing about them"). Asked for only
+# when the prompt lists new clips (`new_clips_section`); one item per clip, `used` and a
+# sentence the editor reads beside it — the board words the verb from the plan itself.
+NEW_CLIPS_SHAPE = [{"clip": "GX010495.MP4", "used": True,
+                    "note": "one short sentence: the shot you used it in (by its number "
+                            "in your edit) and what for, or why you left it out"}]
+NEW_NOTE_MAX = 200
 
 # The same plan when the prompt carries the colour section (INTAKE I10.5). The key is
 # described, not exemplified: an example patch in the shape would be copied into answers
@@ -488,12 +498,58 @@ other. Everything else is yours to replace, re-order or drop. Do not describe a 
 kept or unchanged unless its in and out are exactly what they were."""
 
 
+def new_clips_section(new_clips: list[str] | None) -> str:
+    """The re-run's paragraph on footage imported since the last pass: which clips are
+    new, that each is worth a look, and that each gets an item in `new_clips`."""
+    if not new_clips:
+        return ""
+    rows = "\n".join(f"  - {c}" for c in new_clips)
+    return f"""## New footage since the last pass
+The editor added these clips to the bin after the last first pass. Consider each of
+them for the cut on its merits — use one where it beats what is there, leave it out
+where it does not:
+{rows}
+
+For EVERY clip in this list, add one item to `new_clips`: the `clip`, `used` (true when
+a segment of your edit draws on it) and a `note` — one short sentence naming the shot
+you used it in (its number in your edit) and what it is for, or why you left it out (a
+near-duplicate of another clip, nothing usable in it, off the story)."""
+
+
+def validate_new_clips(raw: Any, new_clips: list[str]) -> list[dict]:
+    """The model's `new_clips`, forgiving like `checks`: an item is kept when it names a
+    clip of the list (exactly, or by its name without the extension, any case) and has
+    words; the first item per clip wins; nothing here costs a re-ask — a clip the model
+    says nothing about gets the board's own line (`firstpass.new_clip_rows`). Each is
+    `{clip, used, note}`."""
+    if not isinstance(raw, list) or not new_clips:
+        return []
+    by_name = {c: c for c in new_clips}
+    by_name.update({Path(c).stem.lower(): c for c in new_clips})
+    by_name.update({c.lower(): c for c in new_clips})
+    out: list[dict] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("clip") or "").strip()
+        clip = by_name.get(name) or by_name.get(name.lower()) \
+            or by_name.get(Path(name).stem.lower())
+        note = trim_check(item.get("note"), NEW_NOTE_MAX)
+        if clip is None or clip in seen or not note:
+            continue
+        seen.add(clip)
+        out.append({"clip": clip, "used": bool(item.get("used")), "note": note})
+    return out
+
+
 def build_prompt(segments: list[dict], clips: dict[str, dict], story: str,
                  note: str, target: tuple[float, float],
                  events: list[dict] | None = None,
                  selects: list[dict] | None = None,
                  colour: dict | None = None,
-                 locked: set[str] | None = None) -> str:
+                 locked: set[str] | None = None,
+                 new_clips: list[str] | None = None) -> str:
     locked = set(locked or ())
     current = "\n".join(
         f"  {i + 1:2d}. {s['clip']} {s['in']:.2f}-{s['out']:.2f} "
@@ -519,6 +575,8 @@ def build_prompt(segments: list[dict], clips: dict[str, dict], story: str,
     colour_only = ("\n\nIf the note asks only for a change to the picture, you may leave "
                    "out `segments` entirely: the cut then stays exactly as it is and only "
                    "`colour` changes." if graded else "")
+    fresh = new_clips_section(new_clips)
+    fresh = f"{fresh}\n\n" if fresh else ""
 
     return f"""The editor is cutting a short film from one bin of footage.
 
@@ -535,7 +593,7 @@ def build_prompt(segments: list[dict], clips: dict[str, dict], story: str,
 ## The editor's note
 {note.strip()}
 
-{graded}{kept}{ranked}## Every clip available, with its transcript
+{fresh}{graded}{kept}{ranked}## Every clip available, with its transcript
 {inventory}
 
 ## What to return
@@ -552,9 +610,12 @@ reads as a mistake. Say in the `why` when a move is deliberate.
 def build_first_prompt(clips: dict[str, dict], story: str, note: str,
                        target: tuple[float, float],
                        events: list[dict] | None = None,
-                       selects: list[dict] | None = None) -> str:
+                       selects: list[dict] | None = None,
+                       new_clips: list[str] | None = None) -> str:
     """The originating prompt: no current edit, so the material and the brief carry it
-    — and the bin, when the editor has culled, which then outranks both."""
+    — and the bin, when the editor has culled, which then outranks both. `new_clips`
+    (a re-run that starts over): the footage imported since the last pass, each to be
+    accounted for in `new_clips`."""
     timeline = shot_timeline(clips)
     inventory = "\n\n".join(_clip_block(c, timeline) for c in clips.values())
     kept = selects_section(selects, clips, first=True)
@@ -569,6 +630,8 @@ def build_first_prompt(clips: dict[str, dict], story: str, note: str,
         "(the editor has not written this yet — infer what this film is about from "
         "the material, and say what you inferred in your notes so they can correct it)")
     ask = note.strip() or "(no further direction — use your judgement)"
+    fresh = new_clips_section(new_clips)
+    fresh = f"{fresh}\n\n" if fresh else ""
 
     return f"""The editor is starting a short film from one bin of footage. There is no \
 edit yet; you are making the first one.
@@ -586,7 +649,7 @@ edit yet; you are making the first one.
 ## How to read this material
 {guidance}
 
-{kept}{ranked}## Every clip available, with its transcript
+{fresh}{kept}{ranked}## Every clip available, with its transcript
 {inventory}
 
 ## What to return
@@ -790,7 +853,8 @@ def validate_checks(raw: Any, clips: dict[str, dict]) -> list[dict]:
 def validate_plan(payload: Any, clips: dict[str, dict],
                   heroes: list[dict] | None = None, *,
                   colour: dict | None = None, current: list[dict] | None = None,
-                  focus_id: str | None = None) -> dict:
+                  focus_id: str | None = None,
+                  new_clips: list[str] | None = None) -> dict:
     """Strict. A plausible-looking plan that names a clip we do not have, or runs
     past the end of one, is worse than a loud failure — it renders as a crash or,
     worse, as silently missing footage.
@@ -807,7 +871,12 @@ def validate_plan(payload: Any, clips: dict[str, dict],
     leave `segments` out to mean "the cut as it is": a colour-only note need not make
     the model re-type every shot. Without it a `colour` key is dropped — the model was
     never shown the vocabulary, so nothing it wrote there can be trusted.
+
+    `new_clips` (a re-run with footage imported since the last pass) admits the
+    model's per-clip word on them, forgivingly (`validate_new_clips`), as `new_clips`.
     """
+    said = ({"new_clips": validate_new_clips(payload.get("new_clips"), new_clips)}
+            if new_clips and isinstance(payload, dict) else {})
     patch: dict = {}
     if isinstance(payload, dict) and colour is not None and payload.get("colour"):
         ids = ({focus_id} if focus_id else
@@ -823,7 +892,7 @@ def validate_plan(payload: Any, clips: dict[str, dict],
         return {"segments": [dict(s) for s in current],
                 "notes": str(payload.get("notes", "")).strip()[:1200],
                 "checks": validate_checks(payload.get("checks"), clips),
-                "colour": patch, "unchanged": True}
+                "colour": patch, "unchanged": True, **said}
     if not isinstance(payload, dict) or "segments" not in payload:
         raise ValueError("expected an object with a 'segments' list")
     segments = payload["segments"]
@@ -857,7 +926,7 @@ def validate_plan(payload: Any, clips: dict[str, dict],
                 f"keep it (trimming inside its range is fine) or name {h['clip']} "
                 f"in notes and explain")
     plan: dict = {"segments": clean, "notes": notes,
-                  "checks": validate_checks(payload.get("checks"), clips)}
+                  "checks": validate_checks(payload.get("checks"), clips), **said}
     if current:
         plan["segments"] = carry_ids(clean, current)
     if patch:
@@ -988,12 +1057,16 @@ thinking enabled, and it must return the whole edit as JSON.
 def _ask(prompt: str, system: str, clips: dict[str, dict],
          on_partial: Callable[[str, str], None] | None = None,
          heroes: list[dict] | None = None, *, colour: dict | None = None,
-         current: list[dict] | None = None, focus_id: str | None = None) -> dict:
+         current: list[dict] | None = None, focus_id: str | None = None,
+         new_clips: list[str] | None = None) -> dict:
+    schema = PLAN_SCHEMA_COLOUR if colour is not None else PLAN_SCHEMA
+    if new_clips:
+        schema = {**schema, "new_clips": NEW_CLIPS_SHAPE}
     result = complete(
-        prompt, role=config.ROLE_SKELETON,
-        schema=PLAN_SCHEMA_COLOUR if colour is not None else PLAN_SCHEMA, system=system,
+        prompt, role=config.ROLE_SKELETON, schema=schema, system=system,
         validate=lambda payload: validate_plan(payload, clips, heroes, colour=colour,
-                                               current=current, focus_id=focus_id),
+                                               current=current, focus_id=focus_id,
+                                               new_clips=new_clips),
         retries=1, on_partial=on_partial)
     # Boundary polish runs on the *validated* plan, so it can assume in/out are
     # real numbers inside a real clip and worry only about where they land in the
@@ -1017,7 +1090,8 @@ def propose(segments: list[dict], clips: dict[str, dict], story: str, note: str,
             on_partial: Callable[[str, str], None] | None = None,
             selects: list[dict] | None = None,
             colour: dict | None = None,
-            locked: set[str] | None = None) -> dict:
+            locked: set[str] | None = None,
+            new_clips: list[str] | None = None) -> dict:
     """Ask for a revision. Returns {'segments', 'notes', 'usage'}, plus `colour` (a
     patch on the EDL's colour block) when the note asked for a change to the picture.
 
@@ -1028,13 +1102,16 @@ def propose(segments: list[dict], clips: dict[str, dict], story: str, note: str,
     The plan's shots carry the ids of the cut's shots they continue (`carry_ids`).
     `locked` — shot ids the model is told to return exactly (the first pass's re-run
     keeps the editor's hand edits); the caller enforces it (`firstpass.enforce_locks`),
-    the prompt only asks.
+    the prompt only asks. `new_clips` — footage imported since the last pass (a
+    re-run): the prompt lists it and the answer says, per clip, what it did with it
+    (`new_clips` in the plan).
     """
     if not note.strip():
         raise ValueError("empty note")
     return _ask(build_prompt(segments, clips, story, note, target, events, selects,
-                             colour, locked),
-                SYSTEM, clips, on_partial, colour=colour, current=segments)
+                             colour, locked, new_clips),
+                SYSTEM, clips, on_partial, colour=colour, current=segments,
+                new_clips=new_clips)
 
 
 # ------------------------------------------------------------------ the truth of a plan
@@ -1304,7 +1381,7 @@ def check_notes(plan: dict, current: list[dict]) -> dict:
             if key in seen:
                 continue
             seen.add(key)
-            stem = Path(str(s["clip"])).stem
+            stem = clip_name(s["clip"])          # "Black Video", never gen_black_<hash>
             was = f"{_clock(s['was']['in'])}–{_clock(s['was']['out'])}"
             if s["now"] is None:
                 lines.append(f"Check: shot {s['pos']} ({stem} {was}) is removed by this "
@@ -1405,7 +1482,8 @@ def originate(clips: dict[str, dict], story: str, note: str = "",
               target: tuple[float, float] = (120.0, 180.0),
               events: list[dict] | None = None,
               on_partial: Callable[[str, str], None] | None = None,
-              selects: list[dict] | None = None) -> dict:
+              selects: list[dict] | None = None,
+              new_clips: list[str] | None = None) -> dict:
     """Ask for a *first* cut. Same return shape as `propose`.
 
     Neither `story` nor `note` is required. Intent is the human's half of the loop and
@@ -1420,5 +1498,6 @@ def originate(clips: dict[str, dict], story: str, note: str = "",
     """
     if not clips:
         raise ValueError("no analysed clips to cut from")
-    return _ask(build_first_prompt(clips, story, note, target, events, selects),
-                FIRST_SYSTEM, clips, on_partial, heroes=heroes_of(selects, clips))
+    return _ask(build_first_prompt(clips, story, note, target, events, selects, new_clips),
+                FIRST_SYSTEM, clips, on_partial, heroes=heroes_of(selects, clips),
+                new_clips=new_clips)
