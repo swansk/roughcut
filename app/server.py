@@ -8564,7 +8564,10 @@ def timeline_static(name: str) -> Response:
 # The workspace's own modules (redesign wave 2): one route and a fixed list, like the
 # timeline's, so a lane adds a panel by adding a file here instead of a route each.
 MODULE_FILES = {"firstpass.js", "firstpass.css", "export.js", "export.css", "meters.js",
-                "meters.css", "effects.js", "effects.css", "workspace.css", "scopes.js"}
+                "meters.css", "effects.js", "effects.css", "workspace.css", "scopes.js",
+                # wave 12 (K3): Import, actions (the AI's vocabulary + review), the AI prompt, the walk-through
+                "import.js", "import.css", "actions.js", "actions.css", "aiprompt.js", "aiprompt.css",
+                "tour.js", "tour.css"}
 
 
 @app.get("/modules/{name}")

@@ -10,6 +10,8 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- **Wave 12 scaffold for K3** (judge/WAVE12.md: five lanes, the files each owns, and their contracts): File › Import… (Ctrl+I) and Import from Media Browser…, an AI menu listing every AI action, Help › Learn Roughcut…, the `#aiPrompt` mount, four module stubs (`import`, `actions`, `aiprompt`, `tour`) on `/modules/`, dock.js routes for their commands and a `window.rcExtraKeys` hook for the keys sheet. Screens budget +1 word / +1 control for the AI menu, measured, logged.
+- **Loop resumed (judge/LOOP.md State)** on Karl's 2026-10-18 "Resume roughcut project loop".
 - **K3 as rubric section E, dimensions 13-16** (REDESIGN-GOAL.md, logged in its rubric changes log; judge/JUDGE.md drives them): footage in from anywhere (Import, Ctrl+I, Media Browser, OS drop, mid-session); one always-visible AI prompt with a scope and an AI menu; one action vocabulary so the AI can do every pro-tool edit as a reviewed edit; a first-run teach-through, hovers, empty states, and the bin and the pass's result as Premiere's own objects. PASS now needs all 16 at 8 or more.
 - **Karl's K3 in REDESIGN-GOAL.md** (verbatim, 2026-10-16): the footage and pass still don't look right, adding footage and running the AI aren't obvious, the pro controls stay, the AI must be able to do everything the pro tools do, and it must be easy to learn, the AI features above all. A new open K line and a standing decision; logged in the rubric changes log. The loop stays paused.
 - **Loop pause notes for the stopped lanes** (judge/LOOP.md): BLACK and CANVAS's branch heads, what each finished, and what is open (both need a quiet-box perf A/B before merging); CHEAP merged at the pause.

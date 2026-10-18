@@ -113,10 +113,14 @@ HEADER_MAX_PX = 50
 # / jobs 52 → 53. /floor and /open are unchanged.
 # Both wave 11 lanes together (the lead's merge, measured): / 97 · 53, / shot 123 · 68,
 # / film 105 · 52, / fx 128 · 56, / jobs 106 · 54 (each lane's +2 words / +1 control above).
-WORDS_IN_VIEW = {"/": 97, "/floor": 58, "/open": 59, "/ shot": 123, "/ film": 105, "/ fx": 128,
-                 "/ jobs": 106}
-CONTROLS_IN_VIEW = {"/": 53, "/floor": 8, "/open": 9, "/ shot": 68, "/ film": 52, "/ fx": 56,
-                    "/ jobs": 54}
+# Wave 12 scaffold (K3, REDESIGN-GOAL dimension 14), measured, no headroom: the menu bar's "AI"
+# menu (every AI action in one place) is one word and one control on every board screen:
+# / 97 → 98, / shot 123 → 124, / film 105 → 106, / fx 128 → 129, / jobs 106 → 107; controls
+# / 53 → 54, / shot 68 → 69, / film 52 → 53, / fx 56 → 57, / jobs 54 → 55.
+WORDS_IN_VIEW = {"/": 98, "/floor": 58, "/open": 59, "/ shot": 124, "/ film": 106, "/ fx": 129,
+                 "/ jobs": 107}
+CONTROLS_IN_VIEW = {"/": 54, "/floor": 8, "/open": 9, "/ shot": 69, "/ film": 53, "/ fx": 57,
+                    "/ jobs": 55}
 
 # Contracts another lane delivers (M16 stage 1, C1): until that lane is merged the
 # check is an expected failure on that screen. Every stage-1 lane is merged, so this is

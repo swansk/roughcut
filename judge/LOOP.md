@@ -49,6 +49,12 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- **2026-10-18 13:40 EDT: RESUMED on Karl's "Resume roughcut project loop".** Box quiet (load 0.5, NOITA/STICKFIGHT
+  idle). K3 turned into rubric section E, dimensions 13-16 (`cc53ad4`; JUDGE.md drives them; PASS now needs all 16 >= 8).
+  Running: lane W11FINISH (quiet-box A/B of BLACK and CANVAS vs base, merges base into CANVAS, a trial merge of both in
+  `roughcut-wt/w11-trial` with test_tx_playback + test_preview_building + test_perf_latency) and a read-only survey of the
+  import / AI-entry / edit-op surfaces for the K3 wave. Next: merge BLACK + CANVAS -> launch wave 12 (K3: IMPORT, AIPROMPT,
+  AIOPS, TEACH, BINLOOK) -> full gate -> judge 9. Tick cron recreated (:13/:43, session-only, 7-day expiry).
 - **2026-10-16 ~00:45 EDT: PAUSED by Karl.** The 30-min tick cron is deleted. Branch `redesign/2026-10-14` holds verdict 8 +
   wave 11's SMALL2, LUMETRI, FXBIN and CHEAP (merged at pause as `9be0fd2`: status endpoints p95 <= 10 ms under an export,
   peaks 202-pending then a nice-19 background build; test_status_cheap 4 green; journey 20 green on the merged HEAD).

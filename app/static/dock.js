@@ -290,6 +290,11 @@
     'w:source': () => flashPanel('#pSource'),
     'w:program': () => flashPanel('#pProgram'),
     'w:timeline': () => flashPanel('#pTimeline'),
+    // wave 12 (K3): each module owns its command; a module not loaded yet is a no-op
+    import: () => { if (window.rcImport) window.rcImport.open(); },
+    mediabrowser: () => { if (window.rcImport) window.rcImport.browse(); },
+    tour: () => { if (window.rcTour) window.rcTour.start(); },
+    'tour:ai': () => { if (window.rcTour) window.rcTour.start('ai'); },
   };
 
   function initMenus() {
@@ -309,6 +314,7 @@
       closeMenus();
       const cmd = item.dataset.cmd;
       if (COMMANDS[cmd]) COMMANDS[cmd]();
+      else if (cmd.startsWith('ai:')) { if (window.rcAI) window.rcAI.command(cmd.slice(3)); }
       else if (cmd.startsWith('w:')) open(cmd.slice(2));
     });
     bar.addEventListener('mouseover', (e) => {
@@ -990,7 +996,7 @@
   /* One table, grouped by task: the board's own keys and the timeline's
    * (`window.tlKeys.KEYS`, read, never copied), each row once. */
   const GROUPS = [['play', 'Play'], ['trim', 'Trim and cut'], ['move', 'Move around'],
-                  ['bin', 'The bin'], ['source', 'Source monitor']];
+                  ['bin', 'The bin'], ['source', 'Source monitor'], ['ai', 'AI']];
   const BOARD_KEYS = [
     ['space', 'play / pause the cut from here', 'play'],
     ['↵', 'play this shot only', 'play'],
@@ -1017,6 +1023,12 @@
       if (k === '?' || seen.has(`${k}|${what}`)) return;
       seen.add(`${k}|${what}`);
       rows.push({ k, what, g: GROUPS.some(([g]) => g === row[3]) ? row[3] : 'move' });
+    });
+    // a module's own keys (wave 12): window.rcExtraKeys = [[key, what, group], ...]
+    (Array.isArray(window.rcExtraKeys) ? window.rcExtraKeys : []).forEach(([k, what, g]) => {
+      if (seen.has(`${k}|${what}`)) return;
+      seen.add(`${k}|${what}`);
+      rows.push({ k, what, g: GROUPS.some(([x]) => x === g) ? g : 'move' });
     });
     box.innerHTML = GROUPS.map(([g, name]) => {
       const mine = rows.filter((r) => r.g === g);

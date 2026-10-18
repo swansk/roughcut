@@ -90,8 +90,8 @@ tools. The bar is a Premiere editor who has never seen Roughcut and never reads 
     the board, and dropping files or a folder from the viewer's OS onto the Project panel all add
     footage to the open project without leaving the workspace, restarting anything, or typing a path
     on a command line. New clips show a poster within 5 s of landing on the fixture, carry duration,
-    frame rate and size, can be cut at once, and the AI's index of them starts on its own (no model
-    call is ever made without the cost line of section S). Footage added after a first pass is
+    frame rate and size, can be cut at once, and the free part of the index (posters, proxies, sound)
+    starts on its own; a priced step is offered with its cost line, never run unasked (INTAKE). Footage added after a first pass is
     offered to the pass ("3 new clips: add them to the cut?") through the dimension-2 re-run, which
     says what it will keep. Proven by a driven test that imports a second folder mid-session and by
     one that drops a file.
@@ -366,3 +366,11 @@ next judge runs, and the next judge rules it honest or lenient.
   specific fault, so the lead read it as "make them Premiere's own objects"; that is an interpretation,
   and K3 stays open until Karl looks, as K2 does. A deterministic test backend for the AI-op tests is
   not a leniency on the model: the judge still asks the real model for edits on Killington.
+
+- 2026-10-18 (wave 12 scaffold, lead): **the screens budget grows by the menu bar's "AI" menu: +1 word and
+  +1 control on each board screen** (`/` 98·54, `/ shot` 124·69, `/ film` 106·53, `/ fx` 129·57, `/ jobs`
+  107·55; `/floor` and `/open` unchanged). More lenient by exactly the measured count, no headroom. Premiere
+  has no AI menu; dimension 14 asks for one menu that lists every AI action, and this is its one title.
+  Also dimension 13's index line now reads "the free part of the index starts on its own; a priced step is
+  offered with its cost line, never run unasked", because INTAKE's standing decision is that the priced
+  visual pass is never automatic; the earlier wording would have broken it.
