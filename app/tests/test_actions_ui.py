@@ -187,6 +187,26 @@ def norm(edl: dict) -> dict:
     return out
 
 
+# Verdict 9, punch 3: an AI accept's undo entry is a short op summary ("undo: AI: trim +
+# move"), at most 40 characters with the key, made of whole words — never the model's
+# sentence cut mid-word ("undo: AI: Shot 1 is only 1.92 s now, so 'about 3 s' means").
+UNDO_WORDS = set("""AI: + more edit edits insert inserts overwrite overwrites move moves razor cut cuts
+ripple delete deletes trim trims roll rolls slip slips speed changes change marker markers In/Out
+new track tracks overlay overlays keyframes keyframe sets colour transition transitions fade fades
+effect effects export exports opacity volume motion""".split())
+
+
+def check_undo_title(title: str) -> str:
+    """The header's undo title for an AI accept: ≤ 40 characters, "undo: AI: … (Ctrl+Z)",
+    every word of its label one of the op vocabulary's (so none is cut). Returns the label."""
+    assert len(title) <= 40, (len(title), title)
+    assert title.startswith("undo: AI: ") and title.endswith(" (Ctrl+Z)"), title
+    label = title[len("undo: "):-len(" (Ctrl+Z)")]
+    for w in label.split(" "):
+        assert w.isdigit() or w in UNDO_WORDS, (w, title)
+    return label
+
+
 def ai_then_hand(browser, url, project, ops, hand_js, *, extra=None):
     """The AI's ops reviewed and accepted, against the same edit made by hand, each on a
     fresh board on the same seed. Returns (ai, hand, seeded) normalised EDLs and checks
@@ -203,7 +223,7 @@ def ai_then_hand(browser, url, project, ops, hand_js, *, extra=None):
             extra(b)
         ai = norm(b.settle())
         assert ai != seeded, "the AI's accept changed nothing"
-        assert (b.page.locator("#undo").get_attribute("title") or "").startswith("undo: AI: the edit")
+        check_undo_title(b.page.locator("#undo").get_attribute("title") or "")
         b.undo()
         back = norm(b.settle())
         assert back == seeded, "one Ctrl+Z did not take the whole accept back"
@@ -730,5 +750,400 @@ def test_an_answer_and_a_failure_read_as_words(browser, live_server, project):
         assert "The AI could not answer: claude CLI timed out" in p.locator("[data-testid=ai-review]").inner_text()
         p.locator("[data-testid=ai-review-close]").click()
         assert p.locator("#undo").is_disabled()
+    finally:
+        b.close()
+
+
+# ---------------------------------------------------------------- a transition shows before it lands
+# Verdict 9, punch 6: "a transition shows only as a line. Nothing is drawn on the timeline
+# before Accept." A transition or fade op under review is its dashed box on the edit it
+# will sit on (or against its clip's edge), in the transition's colour, labelled with its
+# kind and length — and none is left once the review is answered.
+
+TX_GHOSTS = """() => [...document.querySelectorAll('#tl .tx-ghost')].map((n) => {
+  const r = n.getBoundingClientRect(), cs = getComputedStyle(n);
+  return {kind: n.dataset.kind, lane: n.dataset.lane, align: n.dataset.align, a: n.dataset.a || null,
+          b: n.dataset.b || null, id: n.dataset.id || null, edge: n.dataset.edge || null,
+          dur: n.dataset.dur, label: n.querySelector('.tx-lbl').textContent,
+          left: r.left, right: r.right, mid: (r.left + r.right) / 2, top: r.top, bottom: r.bottom,
+          width: r.width, style: cs.borderTopStyle, colour: cs.borderTopColor};
+})"""
+
+
+def _box(page, sel):
+    return page.evaluate("(s) => { const r = document.querySelector(s).getBoundingClientRect();"
+                         " return {left: r.left, right: r.right, top: r.top, bottom: r.bottom}; }", sel)
+
+
+def test_a_transition_and_fades_show_on_their_edit_before_accept(browser, live_server, project):
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+        b.settle()
+        time.sleep(0.3)
+        before = b.raw()
+        res = b.ask([{"op": "transition", "a": "shot-b", "b": "shot-c", "kind": "cross_dissolve", "dur": 0.5},
+                     {"op": "fade", "id": "shot-a", "edge": "start", "kind": "dip_to_black", "dur": 1.0},
+                     {"op": "fade", "id": "shot-c", "edge": "end", "kind": "audio_crossfade", "dur": 0.5}])
+        assert res["refused"] == [], res["refused"]
+        b.review(res)
+        p.wait_for_function("document.querySelectorAll('#tl .tx-ghost').length === 3")
+        g = {x["kind"]: x for x in p.evaluate(TX_GHOSTS)}
+        zoom = p.evaluate("tl.state.zoom")
+        v1 = _box(p, "#tl .tl-lane[data-lane=V1]")
+        a1 = p.evaluate("(() => { const r = tl.el.tracks.A1.getBoundingClientRect();"
+                        " return {left: r.left, right: r.right, top: r.top, bottom: r.bottom}; })()")
+        # the dissolve: centred on the edit between shots 2 and 3, on V1, its length wide
+        x = g["cross_dissolve"]
+        assert (x["lane"], x["align"], x["a"], x["b"]) == ("V1", "center", "shot-b", "shot-c"), x
+        assert x["label"] == "Cross Dissolve · 0.50 s"
+        assert x["style"] == "dashed"
+        edit = _box(p, '#tl .blk[data-id="shot-c"]')["left"]
+        assert abs(x["mid"] - edit) <= 1.5, (x, edit)
+        assert abs(x["width"] - 0.5 * zoom) <= 2, (x["width"], zoom)
+        assert v1["top"] <= x["top"] and x["bottom"] <= v1["bottom"], (x, v1)
+        # the fade from black: against shot 1's start, inside it
+        f = g["dip_to_black"]
+        assert (f["lane"], f["align"], f["id"], f["edge"]) == ("V1", "start", "shot-a", "start"), f
+        assert f["label"] == "Dip to Black · 1.00 s"
+        assert abs(f["left"] - _box(p, '#tl .blk[data-id="shot-a"]')["left"]) <= 1.5
+        assert abs(f["width"] - 1.0 * zoom) <= 2
+        # the sound's fade: on A1, against shot 3's end, in the audio colour (not the video's)
+        s = g["audio_crossfade"]
+        assert (s["lane"], s["align"], s["id"], s["edge"]) == ("A1", "end", "shot-c", "end"), s
+        assert s["label"] == "Constant Power · 0.50 s"
+        assert abs(s["right"] - _box(p, '#tl .blk[data-id="shot-c"]')["right"]) <= 1.5
+        assert a1["top"] <= s["top"] and s["bottom"] <= a1["bottom"], (s, a1)
+        assert s["colour"] != x["colour"]
+        # the review says where to look; nothing has landed
+        assert "3 transitions on the timeline" in p.locator("[data-testid=ai-tx-preview]").inner_text()
+        assert p.locator("#tl .tl-trans").count() == 0 and p.evaluate("tl.transitions().length") == 0
+        # ✗ on the fade's row takes its box away, the others stay
+        p.locator("[data-testid=ai-op-row][data-op-index='1'] [data-testid=ai-op-reject]").click()
+        p.wait_for_function("document.querySelectorAll('#tl .tx-ghost').length === 2")
+        assert sorted(x["kind"] for x in p.evaluate(TX_GHOSTS)) == ["audio_crossfade", "cross_dissolve"]
+        # a zoom redraws them on the same edit
+        p.evaluate("tl.zoomTo(tl.state.zoom * 1.5)")
+        p.wait_for_function("(z) => Math.abs(tl.state.zoom - z) < 1e-6", arg=zoom * 1.5)
+        p.wait_for_timeout(120)
+        x2 = {x["kind"]: x for x in p.evaluate(TX_GHOSTS)}["cross_dissolve"]
+        assert abs(x2["mid"] - _box(p, '#tl .blk[data-id="shot-c"]')["left"]) <= 1.5
+        # Reject all: none left, nothing written
+        p.locator("[data-testid=ai-reject-all]").click()
+        p.wait_for_function("!rcActions.open")
+        p.wait_for_function("document.querySelectorAll('#tl .tx-ghost').length === 0")
+        p.wait_for_timeout(900)
+        assert p.locator("#tl .tl-trans").count() == 0
+        assert b.raw() == before
+    finally:
+        b.close()
+
+
+def test_an_accepted_transition_lands_where_its_ghost_was(browser, live_server, project):
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+        b.review(b.ask([{"op": "transition", "a": "shot-a", "b": "shot-b", "kind": "dip_to_black", "dur": 0.5}]))
+        p.wait_for_function("document.querySelectorAll('#tl .tx-ghost').length === 1")
+        ghost = p.evaluate(TX_GHOSTS)[0]
+        assert ghost["label"] == "Dip to Black · 0.50 s" and ghost["lane"] == "V1"
+        assert "Dip to Black on the timeline" in p.locator("[data-testid=ai-tx-preview]").inner_text()
+        row = p.locator("[data-testid=ai-op-row][data-op-index='0'] .air-line")
+        assert "dashed on the timeline" in row.get_attribute("title")
+        b.accept()
+        p.wait_for_function("document.querySelectorAll('#tl .tx-ghost').length === 0")
+        p.wait_for_selector("#tl .tl-trans[data-kind=dip_to_black]")
+        real = _box(p, "#tl .tl-trans[data-kind=dip_to_black]")
+        assert abs((real["left"] + real["right"]) / 2 - ghost["mid"]) <= 1.5, (real, ghost)
+        assert abs((real["right"] - real["left"]) - ghost["width"]) <= 2, (real, ghost)
+    finally:
+        b.close()
+
+
+def test_a_transition_on_a_shot_the_review_makes_is_drawn_on_the_new_cut(browser, live_server, project):
+    """Razor shot 3, then a dissolve on the new edit: the edit exists only in the cut Accept
+    makes, so the box is drawn on the ghost lane (the new cut under V1), on that edit."""
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+        b.review(b.ask([{"op": "razor", "id": "shot-c", "at": 5.5},
+                        {"op": "transition", "a": "shot-c", "b": "new:1", "kind": "cross_dissolve", "dur": 0.5}]))
+        p.wait_for_function("tlLanes.ghost() && tlLanes.ghost().ghosts.length === 4")
+        p.wait_for_function("[...document.querySelectorAll('#tl .tx-ghost')].some((n) => n.dataset.lane === 'ghost')")
+        (x,) = p.evaluate(TX_GHOSTS)
+        assert (x["a"], x["b"], x["align"]) == ("shot-c", "new:1", "center"), x
+        half = _box(p, "#tl .tl-xlane[data-lane=ghost] .ghost[data-k='3']")
+        lane = _box(p, "#tl .tl-xlane[data-lane=ghost]")
+        assert abs(x["mid"] - half["left"]) <= 1.5, (x, half)
+        assert lane["top"] <= x["top"] and x["bottom"] <= lane["bottom"]
+        # ✗ on the razor takes the dissolve with it (it names the razor's shot)
+        p.locator("[data-testid=ai-op-row][data-op-index='0'] [data-testid=ai-op-reject]").click()
+        p.wait_for_function("document.querySelectorAll('#tl .tx-ghost').length === 0")
+        p.locator("[data-testid=ai-reject-all]").click()
+        p.wait_for_function("!rcActions.open")
+    finally:
+        b.close()
+
+
+# ---------------------------------------------------------------- the undo entry's name
+
+def test_an_ai_accept_s_undo_reads_as_its_ops_never_the_model_s_sentence(browser, live_server, project):
+    """Verdict 9, punch 3: the header's ↶ said "undo: AI: Shot 1 is only 1.92 s now, so
+    'about 3 s' means". Each accept's entry is named for its ops, whole words within 40
+    characters, however long the model's summary; one Ctrl+Z still takes it all back."""
+    sentence = "Shot 1 is only 1.92 s now, so 'about 3 s' means lengthening it rather than trimming"
+    cases = [
+        ([{"op": "trim", "id": "shot-a", "in": 1.5},
+          {"op": "move", "ids": ["shot-c"], "before": "shot-a"}], "AI: trim + move"),
+        ([{"op": "set", "id": "shot-b", "prop": "temperature", "value": 20},
+          {"op": "set", "id": "shot-b", "prop": "shadows", "value": 25},
+          {"op": "curve", "id": "shot-b", "channel": "master", "points": [[0, 0], [0.5, 0.6], [1, 1]]}],
+         "AI: 3 colour changes"),
+        ([{"op": "razor", "id": "shot-c", "at": 5.5},
+          {"op": "trim", "id": "shot-a", "in": 1.25},
+          {"op": "speed", "id": "shot-b", "rate": 0.5},
+          {"op": "set", "id": "shot-b", "prop": "temperature", "value": 10},
+          {"op": "transition", "a": "shot-a", "b": "shot-b", "kind": "cross_dissolve", "dur": 0.5},
+          {"op": "marker", "at": 1.0}], "AI: razor cut + 5 more"),
+        ([{"op": "fade", "id": "shot-c", "edge": "end", "kind": "dip_to_black", "dur": 1.0}], "AI: fade"),
+    ]
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+        seeded = norm(b.settle())
+        for ops, want in cases:
+            res = b.ask(ops, summary=sentence)
+            assert res["refused"] == [], res["refused"]
+            b.review(res)
+            assert sentence in p.locator("[data-testid=ai-review]").inner_text()     # still said, in the review
+            b.accept()
+            title = p.locator("#undo").get_attribute("title") or ""
+            assert check_undo_title(title) == want, title
+            assert "Shot 1 is only" not in title
+            assert p.evaluate("(ops) => rcActions.label(ops)", ops) == want
+            b.undo()
+            p.wait_for_function("document.querySelector('#undo').disabled")
+            assert norm(b.settle()) == seeded, want
+    finally:
+        b.close()
+
+
+# ---------------------------------------------------------------- the chip speaks the timeline's language
+
+def test_the_scope_chip_names_a_block_as_the_review_does(browser, live_server, project):
+    """Verdict 9, punch 7: the chip read "KX_05" (the clip) where the review called the
+    same block "Shot 2". A selected block is "Shot N · CLIP" and the review's rows about
+    it say "shot N (CLIP)"; several are "Shots 2–3"; an In/Out is its timecodes; a
+    Project panel clip is its name. None is cut short at 1440."""
+    chip = "[data-testid=ai-scope]"
+    whole = ("(s) => { const l = document.querySelector(s + ' .aip-scope-l');"
+             " return l.scrollWidth <= l.clientWidth; }")
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+        text = lambda: p.locator(chip).inner_text().strip()          # noqa: E731
+        p.locator('#tl .blk[data-id="shot-b"]').click()
+        p.wait_for_function("(s) => document.querySelector(s).innerText.trim() === 'Shot 2 · CLIP_B'", arg=chip)
+        assert p.evaluate(whole, chip)
+        n, clip = text().split(" · ")[0].split(" ")[1], text().split(" · ")[1]
+        res = b.ask([{"op": "set", "id": "shot-b", "prop": "temperature", "value": 20},
+                     {"op": "trim", "id": "shot-b", "out": 1.5}])
+        b.review(res)
+        rows = p.locator("[data-testid=ai-op-row]")
+        assert rows.count() == 2
+        for i in range(2):
+            assert f"shot {n} ({clip})" in rows.nth(i).inner_text().lower().replace("clip_b", "CLIP_B"), \
+                rows.nth(i).inner_text()
+        p.locator("[data-testid=ai-reject-all]").click()
+        p.wait_for_function("!rcActions.open")
+        # two neighbours: one run of shots
+        p.locator('#tl .blk[data-id="shot-b"]').click()
+        p.locator('#tl .blk[data-id="shot-c"]').click(modifiers=["Control"])
+        p.wait_for_function("(s) => document.querySelector(s).innerText.trim() === 'Shots 2–3'", arg=chip)
+        # an In/Out: its two timecodes, whole
+        p.evaluate("tl.select([]); tl.setSeqIn(1.0); tl.setSeqOut(4.5)")
+        want = p.evaluate("`In/Out ${tl.tc(1.0)}–${tl.tc(4.5)}`")
+        p.wait_for_function("([s, w]) => document.querySelector(s).innerText.trim() === w", arg=[chip, want])
+        assert p.evaluate(whole, chip), "the In/Out chip is cut"
+        p.evaluate("tl.setSeqIn(null); tl.setSeqOut(null)")
+        # a Project panel clip, asked about: its name, as its row reads
+        p.locator("#projList [data-clip]", has_text="CLIP_C").first.click(button="right")
+        p.locator("[data-testid=ai-ctx-ask]").click()
+        assert text() in ("CLIP_C", "Source: CLIP_C"), text()
+        p.keyboard.press("Escape")
+        # a generated clip is never its internal file name ("gen_black_78a418d8", the lead's
+        # wave-13 note): on a block, and asked about as a clip
+        gen = "gen_black_0a1b2c3d.mp4"
+        new_id = p.evaluate("(c) => tl.insert({clip: c, in: 0, out: 1}, null)", gen)
+        assert new_id, "the generated block was not inserted"
+        p.evaluate("(id) => tl.select([id], {source: 'click'})", new_id)
+        p.wait_for_function("(s) => document.querySelector(s).innerText.trim().startsWith('Shot 4 · ')", arg=chip)
+        said = p.evaluate("(s) => document.querySelector(s).innerText + ' ' + document.querySelector(s).title", chip)
+        assert "gen_" not in said and "0a1b2c3d" not in said, said
+        p.evaluate("(c) => rcAI.askAbout({kind: 'clip', clip: c})", gen)
+        said = p.evaluate("(s) => document.querySelector(s).innerText + ' ' + document.querySelector(s).title", chip)
+        assert "gen_" not in said and "0a1b2c3d" not in said, said
+        p.keyboard.press("Escape")
+        # the board's own name for a clip (lane PRICED's rcClipName) is the one the chip says
+        p.evaluate("""(c) => { window.__rcClipNameWas = window.rcClipName;
+          window.rcClipName = (x) => (x === c ? 'Black Video (test)' : (window.__rcClipNameWas ? window.__rcClipNameWas(x) : null)); }""", gen)
+        p.evaluate("(id) => { tl.select([]); tl.select([id], {source: 'click'}); }", new_id)
+        p.wait_for_function("(s) => document.querySelector(s).innerText.trim() === 'Shot 4 · Black Video (test)'", arg=chip)
+        p.evaluate("window.rcClipName = window.__rcClipNameWas")
+    finally:
+        b.close()
+
+
+# ---------------------------------------------------------------- one ask box
+
+# Verdict 9, punch 7: "a second ask box ('Ask for a change · What is this film about?')
+# still sits in the Assistant tab". The AI prompt (the Timeline panel's header, Ctrl+J) is
+# the one place a request to the AI is typed. Every other visible text field is counted as
+# an AI ask unless it is one of these, each a different tool that asks the AI nothing:
+NOT_AI_ASKS = {
+    "#story": "the film's one sentence, saved with the project (the brief every ask reads); typing asks nothing",
+    "#firstNote": "the same sentence in the empty sequence's first-cut box (it mirrors #story)",
+    "#projQ": "the Project panel's search: filters the clip list",
+    "#fxbinQ": "the Effects bin's search: filters the effect list",
+    "#findQ": "Find a moment: searches the transcripts; its own priced model search is a button",
+    "#fxNote": "Designed Effects' note: the effect designer, a different tool (its own review and price)",
+    ".fxiter input": "Designed Effects: a note to revise one effect card",
+    "#fxGoal": "Designed Effects' sketch: what the marks mean",
+    "#fxHudGoal": "Designed Effects' sketch HUD: what the marks mean",
+    "#inspector .why": "the shot's why, the editor's own note, saved with the cut",
+    ".ec-v": "Effect Controls' and Lumetri's property values, typed as numbers",
+}
+TEXT_BOXES = """(skip) => [...document.querySelectorAll(
+    'textarea, input:not([type]), input[type=text], input[type=search], [contenteditable]:not([contenteditable=false])')]
+  .filter((el) => { const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none'
+      && r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth; })
+  .filter((el) => !skip.some((s) => el.matches(s)))
+  .map((el) => el.dataset.testid || el.id || el.className || el.tagName)"""
+
+
+def test_at_most_one_box_asks_the_ai_in_any_state(browser, live_server, project):
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+        skip = list(NOT_AI_ASKS)
+
+        def one(state):
+            boxes = p.evaluate(TEXT_BOXES, skip)
+            assert boxes == ["ai-prompt-input"], (state, boxes)
+
+        one("the board at rest")
+        # the Assistant tab: the story and a button to the prompt — no box of its own
+        p.evaluate("dock.open('ask')")
+        p.wait_for_selector("#ask:visible")
+        assert p.locator("#askPanel textarea, #askPanel input").count() == 0
+        assert p.locator("#ask").inner_text().startswith("Ask for a change…")
+        # the fold line is a waiting proposal's, never the tab's at rest (it read "Ask for a
+        # change · What is this film about?" above the form until a proposal had shown)
+        assert not p.locator("#askFold").is_visible()
+        one("the Assistant tab")
+        # its button: the AI prompt, on the whole sequence, even with a block selected
+        p.locator('#tl .blk[data-id="shot-b"]').click()
+        p.evaluate("dock.open('ask')")
+        p.locator("#ask").click()
+        assert p.evaluate("document.activeElement.dataset.testid") == "ai-prompt-input"
+        assert p.locator("[data-testid=ai-scope]").inner_text().strip() == "Sequence"
+        assert p.evaluate("rcAI.scope().kind") == "sequence"
+        one("the Assistant's Ask, pressed")
+        p.keyboard.press("Escape")
+        # Effect Controls' Assistant section: Ask about this shot is the prompt on that shot
+        p.evaluate("dock.open('inspect')")
+        p.locator('#tl .blk[data-id="shot-b"]').click()
+        p.evaluate("document.querySelectorAll('#inspector details.assist').forEach((d) => { d.open = true; })")
+        p.locator("#inspector button[data-act=ask]").click()
+        assert p.evaluate("document.activeElement.dataset.testid") == "ai-prompt-input"
+        assert p.locator("[data-testid=ai-scope]").inner_text().strip() == "Shot 2 · CLIP_B"
+        assert p.locator("#inspector textarea").count() == 0
+        one("Effect Controls' Ask about this shot")
+        p.keyboard.press("Escape")
+        # every AI menu item that asks: the same prompt
+        for cmd in ("prompt", "ask", "shot", "colour"):
+            p.evaluate("(c) => rcAI.command(c)", cmd)
+            assert p.evaluate("document.activeElement.dataset.testid") == "ai-prompt-input", cmd
+            one(f"AI › {cmd}")
+            p.keyboard.press("Escape")
+        p.locator("[data-testid=ai-prompt-input]").fill("")
+        # a proposal waiting, its fold opened (the story and the button under it)
+        p.evaluate("rcShowProposal({segments: [{clip: 'CLIP_C.MP4', in: 0.5, out: 4.0, why: 'x'}], notes: 'n'})")
+        p.wait_for_selector("#proposal:visible")
+        one("a proposal waiting")
+        p.locator("#askFold").click()
+        p.wait_for_selector("#ask:visible")
+        one("a proposal waiting, the fold open")
+        p.locator("#rejectProposal").click()
+        # an AI edit review up
+        b.review(b.ask([{"op": "trim", "id": "shot-a", "in": 1.5}]))
+        one("an AI review")
+        p.locator("[data-testid=ai-reject-all]").click()
+        p.wait_for_function("!rcActions.open")
+        # Designed Effects open: its note is a different tool (NOT_AI_ASKS says why)
+        p.evaluate("dock.open('fx')")
+        p.wait_for_timeout(300)
+        one("Designed Effects")
+        # an empty sequence: the first-cut box asks for the film's sentence, not an edit
+        p.evaluate("dock.open('ask')")
+        p.evaluate("tl.select(tl.state.segs.map((s) => s.id)); tl.remove(tl.state.segs.map((s) => s.id))")
+        p.wait_for_selector("#tlEmpty .empty")
+        one("an empty sequence")
+    finally:
+        b.close()
+
+
+# ---------------------------------------------------------------- an export's Video settings, said
+
+def test_an_export_op_s_review_says_its_frame_rate_and_bitrate(browser, live_server, project):
+    """Lane EXPORT2's `export` op carries Export Settings › Video (`size`, `fps`, `bitrate`;
+    verdict 9, punch 5): the review's "writes …" line says the file, its frame (the Frame
+    Size's pixels from GET /api/export's `sizes`), its rate, its target bitrate and the
+    preset — "… review copy.mp4 · 1280×720 · 29.97 fps · 8 Mbps · Quick · …" — and an op
+    that leaves them says the preset's own frame and rate. The line per op says them too
+    when the server's line is not there (rcActions.describe)."""
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+
+        def info(route):                      # the Video choices as EXPORT2's server lists them
+            body = route.fetch().json()
+            body["sizes"] = [{"key": "match", "label": "Match Sequence", "width": 1920, "height": 1080},
+                             {"key": "720", "label": "720p", "width": 1280, "height": 720}]
+            body["rates"] = [{"key": "match", "label": "Match Sequence", "fps": 23.976},
+                             {"key": "29.97", "label": "29.97", "fps": 29.97}]
+            for pr in body["presets"]:
+                if pr["key"] == "quick":
+                    pr.update({"width": 1920, "height": 1080, "fps": 23.976})
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+        p.route("**/api/export", info)
+        op = {"op": "export", "preset": "quick", "range": "all", "name": "review copy",
+              "size": "720", "fps": "29.97", "bitrate": 8}
+        what = "[data-testid=ai-export-what]"
+        p.evaluate("(r) => rcActions.review(r)", {"job": "abcdef0e0001", "status": "done", "kind": "ops",
+                                                    "summary": "a 720p review copy", "ops": [op]})
+        p.wait_for_function("(s) => (document.querySelector(s) || {}).textContent"
+                            " && document.querySelector(s).textContent.includes('1280×720')", arg=what)
+        line = p.locator(what).inner_text()
+        assert "review copy.mp4 · 1280×720 · 29.97 fps · 8 Mbps · Quick · 00:00:" in line, line
+        assert "1080p" not in line                                     # the preset's name, not its frame
+        assert p.evaluate("(o) => rcActions.describe(o)", op) == \
+            "Export quick at 1280×720, 29.97 fps, 8 Mbps, Entire Sequence → review copy.mp4"
+        p.locator("[data-testid=ai-review-close], [data-testid=ai-reject-all]").first.click()
+        p.wait_for_function("!rcActions.open")
+        # the preset's own Video settings when the op leaves them; a Match rate says the sequence's
+        own = {"op": "export", "preset": "quick", "range": "all", "name": "plain"}
+        p.evaluate("(r) => rcActions.review(r)", {"job": "abcdef0e0002", "status": "done", "kind": "ops",
+                                                    "summary": "a quick copy", "ops": [own]})
+        p.wait_for_function("(s) => (document.querySelector(s) || {}).textContent"
+                            " && document.querySelector(s).textContent.includes('1920×1080')", arg=what)
+        line = p.locator(what).inner_text()
+        assert "plain.mp4 · 1920×1080 · 23.976 fps · Quick · 00:00:" in line and "Mbps" not in line, line
+        assert p.evaluate("(o) => rcActions.describe(o)", own) == "Export quick, Entire Sequence → plain.mp4"
+        assert p.evaluate("(o) => rcActions.describe(o)", {**own, "fps": "match"}) == \
+            "Export quick at 23.976 fps, Entire Sequence → plain.mp4"
+        p.locator("[data-testid=ai-reject-all]").click()
+        p.wait_for_function("!rcActions.open")
     finally:
         b.close()

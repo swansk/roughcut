@@ -397,12 +397,6 @@ function refreshPosters() {
   }, 450);
 }
 
-/* Per-shot ask state. Keyed by the segment object (like posterAt) so it survives the
- * re-render after every edit; the draft survives too, because a render can land while
- * someone is mid-sentence about a shot. */
-const shotAskOpen = new WeakSet();
-const shotAskDraft = new WeakMap();
-
 /* The shot the inspector is about: the timeline's anchor, or null. */
 function inspected() {
   return tl.state.anchor == null ? null : tl.byId(tl.state.anchor);
@@ -480,7 +474,7 @@ function buildShot(seg) {
       <summary>Assistant</summary>
       <div class="srow acts">
         <button data-act="play" title="play this shot only, then stop · enter">▶ play</button>
-        <button data-act="ask" title="ask for a change to this one shot — opens a box; nothing is spent until its Ask">Ask about this shot${priceTag('shot')}</button>
+        <button data-act="ask" title="the AI prompt (the Timeline panel's header, Ctrl+J), on this shot: say what should change in it; nothing is asked until you press ↵ there">Ask about this shot…</button>
         <span class="lookhost"></span>
         <button data-act="del" title="take this shot out of the cut — ${undoKey()} brings it back">Remove</button>
       </div>
@@ -496,14 +490,6 @@ function buildShot(seg) {
         <div class="prov" hidden></div>
       </div>
       <div class="deepline"${gen ? ' hidden' : ''}></div>
-      <div class="shotAsk" hidden>
-        <textarea class="shotNote"
-          placeholder="what should change in this shot — start later · hold through the reaction · just keep the punchline"></textarea>
-        <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
-          <button data-act="shotgo"${unpricedAttr('shot')}>Ask${priceTag('shot')}</button>
-          <span class="hint shotState"></span>
-        </div>
-      </div>
       </details>
     </div>`;
   // The AI's and the shot's own chrome sit in one collapsed "Assistant" section at the
@@ -519,9 +505,6 @@ function buildShot(seg) {
     seg.why = text;
     touch();
     tl.render();                // the block's tooltip and fallback line carry the why
-  });
-  el.querySelector('.shotNote').addEventListener('input', (ev) => {
-    shotAskDraft.set(seg, ev.target.value);
   });
   // Effect Controls (/modules/effects.js): the speed, the colour and the new properties
   // in Premiere's sections; without the module the row above stays as it is.
@@ -688,12 +671,6 @@ function fillShot(box, seg) {
     const src = posterSrc(seg);
     if (src) img.setAttribute('src', src);
   }
-
-  const askBox = q('.shotAsk');
-  askBox.hidden = !shotAskOpen.has(seg);
-  if (!askBox.hidden && !q('details.assist').open) q('details.assist').open = true;
-  const note = q('.shotNote');
-  if (document.activeElement !== note) note.value = shotAskDraft.get(seg) || '';
 
   if (!gen) fillColour(box, seg);
   else q('.witness').textContent = '';
@@ -957,17 +934,11 @@ function onInspectorClick(e) {
   if (act === 'del') { tl.remove([seg.id]); return; }
   if (act === 'fixin' || act === 'fixout') { fixEdge(seg, act.slice(3)); return; }
   if (act === 'trimbad') { trimBad(seg, Number(b.dataset.k)); return; }
+  // One way to ask the AI (verdict 9, punch 7): the prompt, scoped to this shot ("Shot 2
+  // · CLIP_B"), not a second box here
   if (act === 'ask') {
-    if (shotAskOpen.has(seg)) shotAskOpen.delete(seg); else shotAskOpen.add(seg);
-    renderInspector();
-    const note = $('#inspector .shotNote');
-    if (note && shotAskOpen.has(seg)) note.focus();
-    return;
-  }
-  if (act === 'shotgo') {
-    const note = $('#inspector .shotNote').value.trim();
-    if (!note) return toast('say what should change in this shot');
-    ask({ note, focus: i, button: b, state: $('#inspector .shotState') });
+    if (window.rcAI && typeof rcAI.askAbout === 'function') rcAI.askAbout({ kind: 'segment', id: seg.id });
+    else toast('the AI prompt did not load — reload the page');
     return;
   }
   if (act && act.startsWith('c')) onColourAct(act, seg);
@@ -3875,15 +3846,11 @@ function paintAskPrices() {
     el.textContent = name + priceTag(mode);
     if (basis && priced(mode)) el.title = `${rcCost.note(askPrice[mode].usd, askPrice[mode])} — ${askPrice[mode].basis}`;
   };
-  label($('#ask'), 'Ask for a change', 'full', true);
+  // the Assistant's "Ask for a change…" and the shot's "Ask about this shot…" spend
+  // nothing: they take you to the AI prompt, which carries the ask's price
   label($('#firstCut'), firstLabel(), firstMode(), true);
-  document.querySelectorAll('#inspector button[data-act=shotgo]').forEach((b) => label(b, 'Ask', 'shot', true));
-  document.querySelectorAll('#inspector button[data-act=ask]').forEach((b) => label(b, 'Ask about this shot', 'shot', false));
-  for (const [sel, mode] of [['#ask', 'full'], ['#firstCut', firstMode()]]) {
-    const el = $(sel);
-    if (el) holdForPrice(el, mode);
-  }
-  document.querySelectorAll('#inspector button[data-act=shotgo]').forEach((b) => holdForPrice(b, 'shot'));
+  const fc = $('#firstCut');
+  if (fc) holdForPrice(fc, firstMode());
   paintCutFromBin();                    // its keeps and its price, together
 }
 
@@ -4274,6 +4241,7 @@ const PROPOSAL_CSS = `
   border: 1px solid var(--line); border-radius: 3px; padding: 3px 8px; margin: 0 0 8px; font-size: 11.5px;
   white-space: nowrap; overflow: hidden; }
 #askFold::before { content: '▸ '; }
+#ask .k { color: var(--dim); margin-left: 8px; font-size: 11px; }
 #askFold:hover { color: var(--text); }
 section[data-tool=ask].pup:not(.nocut) #askFold { display: block; }
 section[data-tool=ask].pup.askopen #askFold::before { content: '▾ '; }
@@ -4362,11 +4330,7 @@ function watchProposalUp() {
       const open = !sec.classList.contains('askopen');
       sec.classList.toggle('askopen', open);
       fold.setAttribute('aria-expanded', String(open));
-      if (open) {
-        const n = $('#note');
-        if (n && n.offsetParent !== null) n.focus({ preventScroll: true });
-        fold.scrollIntoView({ block: 'nearest' });
-      }
+      if (open) fold.scrollIntoView({ block: 'nearest' });
     };
   }
   const sync = () => {
@@ -4809,23 +4773,23 @@ async function reattachAsk() {
     (j) => j.kind === 'ask' && (j.state === 'running' || j.state === 'estimating'));
   if (!running) return;
   strip.owned.add(running.id);
-  $('#ask').disabled = true;
   $('#askState').textContent = 'picking up where you left off…';
   try {
     showProposal(await pollAsk(running.id, 'thinking', $('#askState')));
   } catch (e) {
     $('#askState').textContent = '';
     toast(`the ask that was running failed: ${e.message}`, 6000);
-  } finally {
-    $('#ask').disabled = false;
-    holdForPrice($('#ask'), 'full');          // still never an unpriced spend
   }
 }
 
+/* An Ask job (POST /api/ask): a first cut, a cut from the bin, a change to the whole cut
+ * (the AI prompt's whole-cut answer starts one on the server) or to one shot (`focus`).
+ * Its words come from its caller — the Assistant has no box of its own any more (verdict
+ * 9, punch 7: one way to ask the AI, the prompt). */
 async function ask(opts = {}) {
-  const button = opts.button || $('#ask');
+  const button = opts.button || null;
   const stateEl = opts.state || $('#askState');
-  const note = opts.note !== undefined ? opts.note : $('#note').value.trim();
+  const note = String(opts.note == null ? '' : opts.note).trim();
   const focus = opts.focus;                 // a shot index: revise that one shot only
   const first = !segs.length;
   if (!note && !first) return toast('type what you want changed first');
@@ -4836,7 +4800,7 @@ async function ask(opts = {}) {
   // this app, so a first-cut note becomes the story rather than being thrown away.
   // A fixed note (Cut from the bin) is the app's words, not theirs, and never does.
   if (first && note && !opts.fixed && !$('#story').value.trim()) $('#story').value = note;
-  button.disabled = true;
+  if (button) button.disabled = true;
   const verb = focus !== undefined ? 'revising this shot'
     : opts.fixed ? 'cutting from the bin'
       : first ? 'building a first cut' : 'thinking';
@@ -4869,8 +4833,10 @@ async function ask(opts = {}) {
     stateEl.textContent = '';
     toast(`ask failed: ${e.message}`, 6000);
   } finally {
-    button.disabled = false;
-    holdForPrice(button, mode);
+    if (button) {
+      button.disabled = false;
+      holdForPrice(button, mode);
+    }
     fetchAskPrices();
   }
 }
@@ -5691,7 +5657,17 @@ async function boot() {
   $('#makeFilm').onclick = onMakeFilm;
   $('#compare').addEventListener('toggle', () => { if ($('#compare').open) loadCompare(); });
   ['#cmpPickA', '#cmpPickB'].forEach((sel) => { $(sel).onchange = loadCompare; });
-  $('#ask').onclick = () => ask();   // not `ask` — a MouseEvent has a `.button` too
+  // the Assistant's "Ask for a change…": the AI prompt, on the whole sequence (verdict 9,
+  // punch 7: one ask box), its key as this platform spells it
+  $('#ask').onclick = () => {
+    if (window.rcAI && typeof rcAI.command === 'function') rcAI.command('ask');
+    else toast('the AI prompt did not load — reload the page');
+  };
+  if (ON_MAC && $('#ask .k')) $('#ask .k').textContent = '⌘J';
+  // the Assistant's rules from the start, not from the first proposal: until one had shown,
+  // the fold line meant for a waiting proposal ("Ask for a change · What is this film
+  // about?") stood at the top of the tab at rest — the judge's "second ask box"
+  proposalCss();
   $('#playProposal').onclick = playProposal;
   $('#acceptProposal').onclick = () => acceptProposal();
   $('#acceptAll').onclick = () => acceptProposal(true);

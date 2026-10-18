@@ -315,7 +315,7 @@ def test_a_selection_scopes_the_ask_and_one_accept_of_two(browser, live_server, 
     try:
         pg = b.page
         pg.locator("#tl .blk").nth(1).click()
-        assert pg.locator('[data-testid="ai-scope"]').inner_text().strip() == "CLIP_B"
+        assert pg.locator('[data-testid="ai-scope"]').inner_text().strip() == "Shot 2 · CLIP_B"
         pg.keyboard.press("Control+j")
         pg.keyboard.type("slow it down and darken it")
         pg.keyboard.press("Enter")

@@ -135,7 +135,11 @@ HEADER_MAX_PX = 50
 # / film 111 · 56, / fx 134 · 60, / jobs 112 · 58 (AIPROMPT's +2 · +2 and BINLOOK's +3 · +1).
 # / jobs measured 112 · 58 and, on another run, under it by one (the job pill's text timing):
 # the limit is the larger, measured, count.
-WORDS_IN_VIEW = {"/": 103, "/floor": 58, "/open": 59, "/ shot": 129, "/ film": 111, "/ fx": 134,
+# Wave 13 lane AIUX (verdict 9, punch 7: the chip speaks the timeline's language): with a
+# block selected the AI prompt's scope chip reads "Shot 1 · CLIP_A" where it read "CLIP_A",
+# the review's own name for the block: +3 words on the two screens with a shot selected,
+# measured: / shot 129 → 132, / fx 134 → 137. Controls unchanged.
+WORDS_IN_VIEW = {"/": 103, "/floor": 58, "/open": 59, "/ shot": 132, "/ film": 111, "/ fx": 137,
                  "/ jobs": 112}
 CONTROLS_IN_VIEW = {"/": 57, "/floor": 8, "/open": 9, "/ shot": 72, "/ film": 56, "/ fx": 60,
                     "/ jobs": 58}

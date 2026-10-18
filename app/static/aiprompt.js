@@ -52,6 +52,19 @@
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const stem = (c) => String(c || '').replace(/\.[^.]+$/, '');
+  // A clip's name as the editor reads it, never an internal file name ("gen_black_
+  // 78a418d8"): lane PRICED's `rcClipName` (firstpass.js: "Black Video", "Color Matte",
+  // "<clip> Still") when it is loaded, else the same words from the generated name's kind
+  // (roughcut/edits.py KINDS), else the file's stem.
+  const GEN_WORDS = { black: 'Black Video', colour: 'Color Matte', still: 'Still' };
+  function clipName(c) {
+    if (typeof window.rcClipName === 'function') {
+      const n = window.rcClipName(c);
+      if (n) return String(n);
+    }
+    const g = /^gen_([a-z]+)_/i.exec(String(c || ''));
+    return g ? (GEN_WORDS[g[1].toLowerCase()] || 'Generated clip') : stem(c);
+  }
   const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
   const secs = (t) => `${(Math.round(Math.max(0, Number(t) || 0) * 10) / 10).toFixed(1)}s`;
   const clock = (ms) => {
@@ -147,30 +160,51 @@
     paintScope();
   }
 
-  /* The chip's words (short) and its hover (whole). */
+  /* The chip's words (short) and its hover (whole), in the timeline's language (verdict
+   * 9, punch 7: the chip read "KX_05" where the review called the same block "Shot 2"):
+   * a selected block is "Shot 5 · CLIP_02" — its place in the cut, as the review and its
+   * ghost lane number it, then its clip — several are "Shots 2–4" (or "Shots 2, 5"); the
+   * sequence In/Out is its timecodes, "In/Out 00:00:12:04–00:00:16:04"; a Project panel
+   * clip is its name, "CLIP_02", as its row reads; the Source clip says "Source:". */
+  function shotNo(t, id) {
+    const i = t && typeof t.indexOf === 'function' ? t.indexOf(id) : -1;
+    return i >= 0 ? i + 1 : null;
+  }
+  function shotList(nums) {
+    const n = nums.slice().sort((a, b) => a - b);
+    const run = n.every((v, k) => k === 0 || v === n[k - 1] + 1);
+    if (run) return `Shots ${n[0]}–${n[n.length - 1]}`;
+    return n.length <= 3 ? `Shots ${n.join(', ')}` : plural(n.length, 'shot');
+  }
   function scopeWords(s) {
     const t = TL();
     if (s.kind === 'selection') {
       const ids = s.ids || [];
+      const segOf = (id) => (t && typeof t.byId === 'function' ? t.byId(id) : null);
       if (ids.length === 1) {
-        const seg = t && typeof t.byId === 'function' ? t.byId(ids[0]) : null;
-        const i = t && typeof t.indexOf === 'function' ? t.indexOf(ids[0]) : -1;
-        const name = seg ? stem(seg.clip) : 'clip';
-        return { text: name, title: `the selected clip: shot ${i + 1}, ${name}`
-          + (seg ? ` ${tc(seg.in)}–${tc(seg.out)} of the clip` : '') };
+        const seg = segOf(ids[0]);
+        const no = shotNo(t, ids[0]);
+        const name = seg ? clipName(seg.clip) : 'clip';
+        return { text: no ? `Shot ${no} · ${name}` : name,
+          title: `the selected shot: ${no ? `shot ${no} (${name})` : name}`
+            + (seg ? `, ${tc(seg.in)}–${tc(seg.out)} of the clip` : '') };
       }
-      return { text: plural(ids.length, 'clip'), title: `the ${ids.length} selected clips` };
+      const nums = ids.map((id) => shotNo(t, id)).filter((v) => v != null);
+      const each = ids.map((id) => { const seg = segOf(id), no = shotNo(t, id);
+        return seg && no ? `shot ${no} (${clipName(seg.clip)})` : null; }).filter(Boolean);
+      return { text: nums.length === ids.length && nums.length ? shotList(nums) : plural(ids.length, 'shot'),
+        title: `the ${ids.length} selected shots${each.length ? `: ${each.join(', ')}` : ''}` };
     }
     if (s.kind === 'range') {
-      return { text: `In/Out ${secs(s.out - s.in)}`,
-        title: `the sequence In/Out: ${tc(s.in)} to ${tc(s.out)}` };
+      return { text: `In/Out ${tc(s.in)}–${tc(s.out)}`,
+        title: `the sequence In/Out: ${tc(s.in)} to ${tc(s.out)} (${secs(s.out - s.in)})` };
     }
     if (s.kind === 'clip') {
       const span = s.in != null && s.out != null ? `, its In/Out ${secs(s.in)}–${secs(s.out)}` : '';
       // the Source monitor's clip says so; a Project panel clip reads as its row does
       const src = window.rcSource && window.rcSource.clip === s.clip;
-      return src ? { text: `Source: ${stem(s.clip)}`, title: `the Source clip ${stem(s.clip)}${span}` }
-        : { text: String(s.clip), title: `the clip ${s.clip} in the Project panel${span}` };
+      return src ? { text: `Source: ${clipName(s.clip)}`, title: `the Source clip ${clipName(s.clip)}${span}` }
+        : { text: clipName(s.clip), title: `the clip ${clipName(s.clip)} in the Project panel${span}` };
     }
     return { text: 'Sequence', title: 'the whole sequence' };
   }
@@ -415,7 +449,7 @@
         cur.kind === 'selection', !ids.length, 'select clips first')
       + item('range', r ? `In/Out ${tc(r.in)} – ${tc(r.out)}` : 'Sequence In/Out',
         cur.kind === 'range', !r, 'mark I and O first')
-      + item('clip', src ? `Source clip: ${stem(src.clip)}` : 'Source clip',
+      + item('clip', src ? `Source clip: ${clipName(src.clip)}` : 'Source clip',
         cur.kind === 'clip', !src, 'open one in Source')
       + item('sequence', 'Whole sequence', cur.kind === 'sequence', false, '');
     m.setAttribute('role', 'menu');
@@ -517,7 +551,9 @@
     }
     if (r.status === 404 || r.status === 405) {
       return fail(gen, 'This board has no AI prompt service yet.',
-        'Use Sequence › Ask for a change, or the AI menu, until the board is updated.');
+        // the Assistant has no ask box of its own any more (verdict 9, punch 7): what still
+        // works without the service is the AI menu's other tools
+        'Until the board is updated, the AI menu\'s Run first pass, Design an effect and Find a moment still work.');
     }
     if (!r.ok || !d.job) {
       return fail(gen, String(d.detail || d.error || `the board answered ${r.status}`),
@@ -690,7 +726,7 @@
     if (AI.result !== d) return;
     AI.state = 'failed';
     AI.error = `The re-cut did not finish: ${(a && (a.detail || a.error)) || 'no detail'}`;
-    AI.hint = 'Try other words, or Sequence › Ask for a change.';
+    AI.hint = 'Try other words, or ask for a smaller change.';
     paintStatus();
   }
 

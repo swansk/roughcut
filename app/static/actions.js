@@ -43,7 +43,9 @@
  * POST /api/assist/preview), the colour and Effect Controls ops as the After picture on
  * the Program monitor (applied in memory with nothing saved; ◐ flips Before / After; any
  * edit elsewhere takes the preview down first, so it never rides another edit to disk),
- * and an export as the file it will write. ✓ / ✗ per op; Accept applies the accepted
+ * a transition or a fade as its dashed box on the edit it will sit on (tlLanes.
+ * showTransitions: on the ghost lane while that is up, else on V1 / A1; verdict 9,
+ * punch 6), and an export as the file it will write. ✓ / ✗ per op; Accept applies the accepted
  * ones as one undo entry and POSTs the review to /api/assist/{job}/answer; Reject all
  * puts everything back as it was and writes nothing.
  */
@@ -82,6 +84,7 @@
   const KEY_PROP = { posx: 'position_x', posy: 'position_y', scale: 'scale', rotation: 'rotation', opacity: 'opacity', volume_db: 'volume_db' };
   const CUT_OPS = new Set(['insert', 'overwrite', 'append', 'move', 'razor', 'ripple_delete', 'trim', 'roll', 'slip', 'speed']);
   const LOOK_OPS = new Set(['set', 'keys', 'curve', 'wheel', 'look', 'match']);   // shown on the Program
+  const TX_OPS = new Set(['transition', 'fade']);                                // drawn on the timeline
   const FAMILY = {
     insert: 'timeline', overwrite: 'timeline', append: 'timeline', move: 'timeline', razor: 'timeline',
     ripple_delete: 'timeline', trim: 'timeline', roll: 'timeline', slip: 'timeline', speed: 'timeline',
@@ -360,10 +363,51 @@
     return { applied, refused, after: done, label, committed: !!out.committed };
   }
 
+  /* The undo entry's name for an op list (verdict 9, punch 3: "undo: AI: Shot 1 is only
+   * 1.92 s now, so 'about 3 s' means" — the model's sentence cut mid-word): what the ops
+   * are, in the tools' words — "AI: trim + move", "AI: 3 colour changes" — short enough
+   * that the header's "undo: … (Ctrl+Z)" stays within 40 characters, and shortened only
+   * by whole items ("AI: trim + move + 2 more"), never inside a word. */
+  const LABEL_MAX = 25;              // 40 − "undo: " − " (Ctrl+Z)"
+  const COLOUR_PROP = /^(temperature|tint|exposure|contrast|highlights|shadows|whites|blacks|saturation|hsl_)/;
+  const NOUN = {
+    insert: ['insert', 'inserts'], overwrite: ['overwrite', 'overwrites'], append: ['insert', 'inserts'],
+    move: ['move', 'moves'], razor: ['razor cut', 'razor cuts'], ripple_delete: ['ripple delete', 'ripple deletes'],
+    trim: ['trim', 'trims'], roll: ['roll', 'rolls'], slip: ['slip', 'slips'], speed: ['speed', 'speed changes'],
+    marker: ['marker', 'markers'], in_out: ['In/Out', 'In/Out'], track_add: ['new track', 'new tracks'],
+    overlay: ['overlay', 'overlays'], keys: ['keyframes', 'keyframe sets'],
+    curve: ['colour change', 'colour changes'], wheel: ['colour change', 'colour changes'],
+    look: ['colour change', 'colour changes'], match: ['colour change', 'colour changes'],
+    transition: ['transition', 'transitions'], fade: ['fade', 'fades'],
+    design_effect: ['effect', 'effects'], export: ['export', 'exports'],
+  };
+  function nounOf(op) {
+    if (op.op !== 'set') return NOUN[op.op] || ['edit', 'edits'];
+    const p = String(op.prop || '');
+    if (COLOUR_PROP.test(p)) return ['colour change', 'colour changes'];
+    if (p === 'opacity') return ['opacity', 'opacity changes'];
+    if (p === 'volume_db') return ['volume', 'volume changes'];
+    return ['motion', 'motion changes'];
+  }
   function labelFor(ops) {
-    const names = [...new Set(ops.map((o) => o && o.op).filter(Boolean))].map((n) => n.replace('_', ' '));
-    if (!names.length) return 'AI edit';
-    return `AI: ${names.slice(0, 2).join(', ')}${names.length > 2 ? ` +${names.length - 2}` : ''}`;
+    const groups = [];                 // [one, many, count], in the order the ops come
+    for (const op of ops) {
+      if (!op || !op.op) continue;
+      const [one, many] = nounOf(op);
+      const g = groups.find((x) => x[0] === one);
+      if (g) g[2] += 1; else groups.push([one, many, 1]);
+    }
+    if (!groups.length) return 'AI edit';
+    const word = ([one, many, n]) => (n === 1 ? one : `${n} ${many}`);
+    const all = `AI: ${groups.map(word).join(' + ')}`;
+    if (all.length <= LABEL_MAX) return all;
+    for (let k = groups.length - 1; k >= 1; k -= 1) {
+      const more = groups.slice(k).reduce((a, g) => a + g[2], 0);
+      const s = `AI: ${groups.slice(0, k).map(word).join(' + ')} + ${more} more`;
+      if (s.length <= LABEL_MAX) return s;
+    }
+    const n = groups.reduce((a, g) => a + g[2], 0);
+    return `AI: ${n} edit${n === 1 ? '' : 's'}`;
   }
 
   /* ------------------------------------------------------------ the ops that run after */
@@ -477,7 +521,13 @@
       case 'transition': return `${kind(op.kind)} between ${shot(op.a)} and ${shot(op.b)}`;
       case 'fade': return `${kind(op.kind)} at the ${op.edge} of ${shot(op.id)}`;
       case 'design_effect': return `Designed effect on ${shot(op.id)}: “${op.note}”`;
-      case 'export': return `Export ${op.preset}, ${op.range === 'in_out' ? 'Sequence In/Out' : 'Entire Sequence'}`;
+      case 'export': {
+        const v = exportVideo(op, R.exportInfo, R.exportInfo && (R.exportInfo.presets || []).find((p) => p.key === op.preset));
+        const own = [op.size != null && op.size !== '' ? v.frame : '', op.fps != null && op.fps !== '' ? v.fps : '', v.bitrate]
+          .filter(Boolean);
+        return `Export ${op.preset || 'quick'}${own.length ? ` at ${own.join(', ')}` : ''}, `
+          + `${op.range === 'in_out' ? 'Sequence In/Out' : 'Entire Sequence'}${op.name ? ` → ${op.name}.mp4` : ''}`;
+      }
       default: return op.op;
     }
   }
@@ -542,6 +592,7 @@
     const shows = CUT_OPS.has(op.op) ? 'shown as the ghost lane under V1 until you accept'
       : livePreview(op) ? 'shown on the Program monitor (◐ Before / After) until you accept'
         : opIsLook(op) ? 'the look is baked when it is saved: the Program shows it once you accept'
+          : TX_OPS.has(op.op) ? 'drawn dashed on the timeline, where it will sit, until you accept'
           : op.op === 'export' ? 'runs only when you accept'
             : op.op === 'design_effect' ? 'opens Designed Effects on this shot with this note; its own review follows'
               : 'applied when you accept';
@@ -562,6 +613,42 @@
     t = t.slice(0, 80).replace(/^[ .-]+|[ .-]+$/g, '');
     return t || fallback;
   }
+  /* Export Settings › Video on an export op (lane EXPORT2, verdict 9 punch 5: `size` a
+   * Frame Size key — "720" — or "match", `fps` a Frame Rate key — "29.97" — or "match",
+   * `bitrate` a target in Mbps; roughcut/actions.py EXPORT_SIZES / EXPORT_RATES): the
+   * frame, rate and bitrate the file is written at, in the dialog's words — the chosen
+   * Frame Size's pixels from GET /api/export's `sizes` (else its name, "720p"), the
+   * preset's own frame and rate when the op leaves them, a bitrate only when one is set. */
+  const SIZE_WORDS = { match: 'Match Sequence frame', 2160: '2160p', 1080: '1080p', 720: '720p', 540: '540p' };
+  const fpsWords = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? `${String(Math.round(n * 1000) / 1000)} fps` : '';
+  };
+  function exportVideo(op, info, preset) {
+    const out = { frame: '', fps: '', bitrate: '' };
+    const sizes = (info && Array.isArray(info.sizes)) ? info.sizes : [];
+    const rates = (info && Array.isArray(info.rates)) ? info.rates : [];
+    if (op.size != null && op.size !== '') {
+      const k = String(op.size);
+      const sz = sizes.find((x) => String(x.key) === k);
+      out.frame = sz && sz.width && sz.height ? `${sz.width}×${sz.height}` : (SIZE_WORDS[k] || `${k}p`);
+    } else if (preset && preset.width && preset.height) {
+      out.frame = `${preset.width}×${preset.height}`;
+    }
+    if (op.fps != null && op.fps !== '') {
+      const k = String(op.fps);
+      const r = rates.find((x) => String(x.key) === k);
+      out.fps = k === 'match' ? (fpsWords(r ? r.fps : info && info.fps) || 'the sequence\'s frame rate')
+        : (fpsWords(k) || `${k} fps`);
+    } else if (preset && preset.fps) {
+      out.fps = fpsWords(preset.fps);
+    }
+    if (op.bitrate != null && op.bitrate !== '' && Number(op.bitrate) > 0) out.bitrate = `${Number(op.bitrate)} Mbps`;
+    return out;
+  }
+  // a preset by its name, its frame being said beside it: "Quick 1080p" → "Quick"
+  const presetName = (label) => String(label || '').replace(/\s+(\d{3,4}p|\d+K)$/i, '');
+
   function exportWords(op) {
     const t = TL();
     const st = t ? t.state : {};
@@ -574,7 +661,9 @@
     try { folder = localStorage.getItem('rc.export.folder') || folder; } catch (e) { /* private window */ }
     const path = info ? `${info.root}/${component(folder, info.folder)}/${component(op.name, info.name)}.mp4`
       : `${op.name ? `${op.name}.mp4` : 'a new file'} under --work/renders`;
-    return `${path} · ${preset ? `${preset.label} · ` : ''}${tc(Math.max(0, b - a))}`;
+    const v = exportVideo(op, info, preset);
+    const name = preset ? presetName(preset.label) : (op.preset ? presetName(String(op.preset)) : '');
+    return [path, v.frame, v.fps, v.bitrate, name, tc(Math.max(0, b - a))].filter(Boolean).join(' · ');
   }
   async function loadExportInfo() {
     if (!R.ops.some((op) => op.op === 'export')) return;
@@ -617,8 +706,12 @@
     const looks = R.ops.some((op, i) => livePreview(op) && R.verdict[i] && !R.blocked.has(i));
     const cut = R.ops.some((op, i) => CUT_OPS.has(op.op) && R.verdict[i] && !R.blocked.has(i));
     const exp = R.ops.find((op, i) => op.op === 'export' && R.verdict[i] && !R.blocked.has(i));
+    const txs = txList();
+    const tkind = (k) => { const t = TL(); return (t && t.TRANS_NAMES && t.TRANS_NAMES[k]) || 'transition'; };
+    const txWords = txs.length === 1 ? `${tkind(txs[0].kind)} on the timeline` : `${txs.length} transitions on the timeline`;
     const refused = (res.refused || []).filter((x) => x && x.why);
     const preview = [cut ? '<span class="air-pv" title="the cut with these edits, drawn under V1 — nothing has changed yet"><i class="air-ghost" aria-hidden="true"></i>New cut under V1</span>' : '',
+      txs.length ? `<span class="air-pv" data-testid="ai-tx-preview" title="drawn dashed where ${txs.length === 1 ? 'it' : 'they'} will sit${cut ? ', on the new cut under V1' : ''} — nothing has changed yet"><i class="air-txg" aria-hidden="true"></i>${esc(txWords)}</span>` : '',
       looks ? `<button type="button" class="air-ab${R.after ? ' on' : ''}" data-act="ab" data-testid="ai-before-after" aria-pressed="${R.after}" title="the Program monitor shows the colour and Effect Controls changes (After) or the shot as it is (Before) — nothing is saved until you accept">◐ ${R.after ? 'After' : 'Before'}</button>` : '',
       exp ? `<span class="air-pv air-file" data-testid="ai-export-what" title="the Export dialog writes this file when you accept — never over an existing one (it becomes -2, -3 …)">writes ${esc(exportWords(exp))}</span>` : ''].filter(Boolean).join('');
     el.innerHTML = `${head}
@@ -718,6 +811,26 @@
     if (d.preview && lanes && lanes.showGhost) lanes.showGhost(d.preview.segments);
   }
 
+  /* --------------- a transition's preview: its dashed box on the edit (verdict 9, punch 6) */
+  /* The accepted transition and fade ops, as the lane draws them: ids as the review has
+   * them (a `new:n` is found on the ghost lane, where the shot that names it is drawn). */
+  function txList() {
+    if (!R.res || R.res.kind !== 'ops') return [];
+    return accepted().map((i) => R.ops[i]).filter((op) => op && TX_OPS.has(op.op)).map((op) => (op.op === 'transition'
+      ? { kind: op.kind, dur: op.dur, a: op.a, b: op.b }
+      : { kind: op.kind, dur: op.dur, id: op.id, edge: op.edge }));
+  }
+  function refreshTx() {
+    const lanes = window.tlLanes;
+    if (!lanes || typeof lanes.showTransitions !== 'function') return;
+    const list = txList();
+    if (list.length) lanes.showTransitions(list); else lanes.clearTransitions();
+  }
+  function clearTx() {
+    const lanes = window.tlLanes;
+    if (lanes && typeof lanes.clearTransitions === 'function') lanes.clearTransitions();
+  }
+
   /* --------------- the look's preview: After on the Program, nothing saved */
   function lookTargetOk(op) {
     const t = TL();
@@ -773,6 +886,7 @@
     paint();
     refreshLook();
     refreshGhost();
+    refreshTx();
   }
 
   /* An edit anywhere else takes the look's preview down first, so the Before state is the
@@ -816,6 +930,7 @@
     (d.index || []).forEach((src, k) => { if (d.lines && d.lines[k]) R.lines[src] = d.lines[k]; });
     paint();
     refreshGhost();
+    refreshTx();
   }
 
   /* --------------- opening, answering */
@@ -843,6 +958,7 @@
       R.ops = []; R.lines = []; R.verdict = [];
     }
     paint();
+    refreshTx();
     if (window.dock && dock.reveal) dock.reveal('#aiReview');
     if (res.kind === 'plan') { followPlan(res); return true; }
     loadExportInfo();
@@ -908,7 +1024,10 @@
     if (!idx.length) return null;
     lookOff();
     if (window.tlLanes && tlLanes.clearGhost) tlLanes.clearGhost();
-    const label = R.res.summary ? `AI: ${String(R.res.summary).slice(0, 48)}` : labelFor(idx.map((i) => R.ops[i]));
+    clearTx();
+    // the entry is named for what the ops are, never the model's summary cut to fit (the
+    // summary stays the review's own line)
+    const label = labelFor(idx.map((i) => R.ops[i]));
     const out = applyOps(idx.map((i) => R.ops[i]), { label });
     const failed = new Set(out.refused.map((x) => idx[x.i]));
     const took = idx.filter((i) => !failed.has(i));
@@ -937,6 +1056,7 @@
     clearTimeout(recheckT);
     R.ghostGen += 1;
     if (R.res && R.res.kind === 'ops' && window.tlLanes && tlLanes.clearGhost) tlLanes.clearGhost();
+    if (R.res && R.res.kind === 'ops') clearTx();
     R.res = null; R.ops = []; R.lines = []; R.verdict = []; R.blocked = new Map();
     if (R.el) { R.el.hidden = true; R.el.innerHTML = ''; R.el.classList.remove('previewing'); }
     syncTall();
@@ -954,6 +1074,7 @@
     apply: (ops, opts) => applyOps(ops, opts || {}),
     review,
     describe,
+    label: (ops) => labelFor(Array.isArray(ops) ? ops : []),
     accept,
     reject,
     close: closeQuiet,

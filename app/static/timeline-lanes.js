@@ -29,6 +29,14 @@
  *             id is `new:n` (a shot the edit would make) or whose clip is not in the cut
  *             is drawn as added; `playPlan` plays it, at each shot's `speed`. While an
  *             explicit list is up it wins over a pending Ask's plan.
+ *   tx ghost  (verdict 9, punch 6) a transition or fade an AI review proposes, drawn
+ *             where it will land before Accept: `tlLanes.showTransitions(list)` puts a
+ *             dashed box (`.tx-ghost`) in the transition's colour on its edit — or against
+ *             its clip's edge for a one-sided one — labelled with its kind and length;
+ *             `tlLanes.clearTransitions()` takes them down (Accept, Reject, a ✗ on the
+ *             row). With the review's ghost lane up (an explicit showGhost list: the cut
+ *             after its ops) they are drawn on it, at the edit Accept makes; else on V1
+ *             (video kinds) or A1 (audio kinds) of the cut as it is. Drawn, never edited.
  *
  * Film time everywhere here is `tl.dur(seg)` — `(out − in) / speed` — never `out − in`,
  * which is a clip length (INTAKE M13). A clip offset inside a shot (a keep's start, a
@@ -82,6 +90,7 @@
   let ghost = null;                    // the matched proposal, while one is pending
   let shown = null;                    // an explicit plan from showGhost(), while one is up
   let shownGen = 0;                    // bumps per showGhost / clearGhost, for the poll
+  let txShown = [];                    // the transitions an AI review proposes (showTransitions)
   // the per-shot review of the pending proposal (verdict 3, punch 7): which proposed
   // shots are rejected (by index) and which removals are refused (by the cut's shot id)
   let review = { plan: null, rej: new Set(), keep: new Set() };
@@ -196,6 +205,22 @@
   background: #e0a63a; cursor: help; clip-path: polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%); }
 #tl .tl-pick.hero { background: #f2c94c; }
 #tl .tl-pick.on-ghost { z-index: 2; }
+/* a proposed transition (verdict 9, punch 6): the real box's colour, dashed, over the
+   edit it will sit on; its label never cut — it may run past a narrow box, on its own
+   dark ground */
+#tl .tx-ghost { position: absolute; top: 18%; bottom: 18%; z-index: 5; box-sizing: border-box; pointer-events: none;
+  display: flex; align-items: center; justify-content: center; overflow: visible; border-radius: 3px;
+  border: 1.5px dashed hsl(265 70% 78%); background: hsl(265 45% 46% / .34); }
+#tl .tx-ghost.audio { border-color: hsl(220 30% 78%); background: hsl(220 12% 46% / .34); }
+#tl .tx-ghost[data-kind=dip_to_black] { background: linear-gradient(to right, hsl(265 45% 46% / .34), rgba(0, 0, 0, .7) 50%, hsl(265 45% 46% / .34)); }
+#tl .tx-ghost[data-kind=dip_to_white] { background: linear-gradient(to right, hsl(265 45% 46% / .34), rgba(255, 255, 255, .55) 50%, hsl(265 45% 46% / .34)); }
+#tl .tx-ghost[data-align=start] { border-radius: 0 3px 3px 0; }
+#tl .tx-ghost[data-align=end] { border-radius: 3px 0 0 3px; }
+#tl .tx-ghost .tx-lbl { flex: none; white-space: nowrap; font-size: 10px; line-height: 14px; padding: 0 5px;
+  border-radius: 2px; color: #f4f0ff; background: rgba(24, 18, 36, .94); border: 1px dashed hsl(265 70% 78%); }
+#tl .tx-ghost.audio .tx-lbl { border-color: hsl(220 30% 78%); background: rgba(16, 20, 30, .94); }
+#tl .tx-ghost[data-align=start] { justify-content: flex-start; }  /* the label runs into its own clip */
+#tl .tx-ghost[data-align=end] { justify-content: flex-end; }
 `;
   function injectCss() {
     if (document.getElementById('tl-review-css')) return;
@@ -217,6 +242,7 @@
     drawHeroes(a);
     drawA1(a);
     drawGhost(a);
+    drawTxGhosts();
     drawPicks(a);
     layout();
     seen = snapshot(a);
@@ -397,6 +423,87 @@
     shownGen++;
     schedule();
     return true;
+  }
+
+  /* ------------------------------------------------------------ a proposed transition */
+  /* `list`: `{kind, dur?, a, b}` centred on the edit between shots a and b, or
+   * `{kind, dur?, id, edge: 'start' | 'end'}` against shot id's edge — the review's own
+   * op fields; ids are the cut's, or `new:n` for a shot the same review makes. */
+  const TX_DEFAULT_S = 1.0;            // the foundation's (Premiere's) default length
+  const txName = (kind) => (tl.TRANS_NAMES && tl.TRANS_NAMES[kind]) || '';
+  const txAudio = (kind) => !!(tl.AUDIO_KINDS && kind in tl.AUDIO_KINDS);
+
+  function showTransitions(list) {
+    txShown = (Array.isArray(list) ? list : []).filter((x) => x && txName(x.kind)).map((x) => ({ ...x }));
+    schedule();
+    return txShown.length;
+  }
+
+  function clearTransitions() {
+    const had = txShown.length > 0 || !!document.querySelector('#tl .tx-ghost');
+    txShown = [];
+    if (had) document.querySelectorAll('#tl .tx-ghost').forEach((n) => n.remove());
+    schedule();
+    return had;
+  }
+
+  /* Where one lands on a run of shots `rows` ({id, start, len} in film seconds, in
+   * order): [t0, t1) on the film, its edit's time, and its length cut to the shots, as
+   * tl.addTransition / tl.addFade cut it. Null when its shots are not there (or not
+   * neighbours). */
+  function txSpot(x, rows) {
+    const want = x.dur == null || !(Number(x.dur) > 0) ? TX_DEFAULT_S : Number(x.dur);
+    const at = (id) => rows.findIndex((r) => String(r.id) === String(id));
+    if (x.edge === 'start' || x.edge === 'end') {
+      const r = rows[at(x.id)];
+      if (!r) return null;
+      const d = Math.min(want, r.len);
+      return x.edge === 'start' ? { t0: r.start, t1: r.start + d, at: r.start, d, align: 'start' }
+        : { t0: r.start + r.len - d, t1: r.start + r.len, at: r.start + r.len, d, align: 'end' };
+    }
+    const i = at(x.a);
+    const L = rows[i], R = rows[i + 1];
+    if (!L || !R || String(R.id) !== String(x.b)) return null;
+    const half = Math.min(want / 2, L.len, R.len);
+    return { t0: R.start - half, t1: R.start + half, at: R.start, d: 2 * half, align: 'center' };
+  }
+
+  function drawTxGhosts() {
+    document.querySelectorAll('#tl .tx-ghost').forEach((n) => n.remove());
+    if (!txShown.length) return;
+    const z = tl.state.zoom;
+    // on the review's ghost lane (the cut after its ops) while it is up, else on the cut
+    const onGhost = !!(shown && ghost && ghost.plan === shown && el.ghost && !el.ghost.hidden);
+    const rows = onGhost ? ghost.ghosts.map((g) => ({ id: g.seg.id, start: g.start, len: tl.dur(g.seg) }))
+      : tl.state.segs.map((s) => ({ id: s.id, start: tl.filmStart(s.id), len: tl.dur(s) }));
+    for (const x of txShown) {
+      const spot = txSpot(x, rows);
+      if (!spot) continue;
+      const audio = txAudio(x.kind);
+      const laneName = onGhost ? 'ghost' : audio ? 'A1' : 'V1';
+      const lane = onGhost ? el.ghost : audio ? tl.el.tracks && tl.el.tracks.A1 : tl.el.lanes.V1;
+      if (!lane) continue;
+      const name = txName(x.kind);
+      const secsTxt = `${spot.d.toFixed(2)} s`;
+      const b = div(`tx-ghost${audio ? ' audio' : ''}`);
+      b.dataset.kind = x.kind;
+      b.dataset.lane = laneName;
+      b.dataset.align = spot.align;
+      if (spot.align === 'center') { b.dataset.a = String(x.a); b.dataset.b = String(x.b); }
+      else { b.dataset.id = String(x.id); b.dataset.edge = x.edge; }
+      b.dataset.at = String(round2(spot.at));
+      b.dataset.dur = spot.d.toFixed(2);
+      b.style.left = px(tl.timeToX(spot.t0));
+      b.style.width = px(Math.max(6, (spot.t1 - spot.t0) * z));
+      const lbl = document.createElement('span');
+      lbl.className = 'tx-lbl';
+      lbl.textContent = `${name} · ${secsTxt}`;
+      b.appendChild(lbl);
+      const where = spot.align === 'center' ? 'on the edit'
+        : spot.align === 'start' ? 'at the clip\'s start' : 'at the clip\'s end';
+      b.setAttribute('aria-label', `proposed: ${name}, ${secsTxt}, ${where} — not applied until you accept`);
+      lane.appendChild(b);
+    }
   }
 
   /* Longest increasing subsequence: the positions (in `seq`) that keep their order. */
@@ -1433,7 +1540,8 @@
 
   window.tlLanes = {
     redraw, slotAt, playRange, playPlan, insertAt, MIME,
-    showGhost, clearGhost,
+    showGhost, clearGhost, showTransitions, clearTransitions,
+    transitions: () => txShown.map((x) => ({ ...x })),
     setVerdict, verdict, keepRemoved, reviewed, shotFacts,
     // a ghost's label at a width (tests): {name, badge}, what drawGhost writes
     ghostLabel: (name, width, badge = '', flagged = false) => ghostLabel(name, badge, width, flagged, false,

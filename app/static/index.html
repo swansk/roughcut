@@ -276,8 +276,9 @@
         </div>
       </section>
 
-      <!-- ASSISTANT — the one sentence about the film, a change asked of the whole cut
-           (priced on its button), and the proposal it comes back with. -->
+      <!-- ASSISTANT — the one sentence about the film, the way to the AI prompt for a change
+           asked of the whole cut, and the proposal (or the AI's edit review) it comes back
+           with. -->
       <section data-tool="ask" hidden>
         <!-- The proposal, reviewed as an edit (verdict 4, punch 4): its buttons on one row
              that stays in view, Things to check, the notes folded, a row per shot. While
@@ -301,11 +302,13 @@
           <label class="ask-q" for="story">What is this film about?</label>
           <textarea id="story" style="min-height:56px" placeholder="optional — a sentence is enough"></textarea>
         </div>
+        <!-- One way to ask the AI (verdict 9, punch 7): a change is typed in the AI prompt in
+             the Timeline panel's header (Ctrl+J), never in a second box here. This button
+             takes you there, on the whole sequence; what comes back is reviewed in this tab. -->
         <div class="panel flat" id="askPanel">
-          <textarea id="note" style="min-height:56px"
-            placeholder="tighten the intro · more of the rocks, less of the lift · end on the fall"></textarea>
-          <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
-            <button id="ask" disabled data-await-price="1">Ask for a change</button>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button type="button" id="ask" data-testid="assistant-ask"
+              title="type the change in the AI prompt (the Timeline panel's header), on the whole sequence; nothing is asked until you press ↵ there">Ask for a change…<span class="k">Ctrl+J</span></button>
             <span class="hint" id="askAims"></span>
             <span class="hint" id="askState"></span>
           </div>

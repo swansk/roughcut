@@ -21,7 +21,7 @@
 #aiPrompt.focus .aip-field { border-color: var(--accent, #4a9df8);
                              box-shadow: 0 0 0 2px rgba(74, 157, 248, .18); }
 #aiPrompt .aip-ico { flex: none; width: 13px; height: 13px; color: var(--accent, #4a9df8); }
-#aiPrompt .aip-input { flex: 1 1 auto; min-width: 60px; height: 20px; padding: 0 2px; border: 0;
+#aiPrompt .aip-input { flex: 1 1 0; min-width: 60px; height: 20px; padding: 0 2px; border: 0;
                        background: transparent; color: var(--text, #dcdcdf); font: inherit; font-size: 12px;
                        outline: none; box-shadow: none; }
 #aiPrompt .aip-input:focus { border: 0; outline: none; }
@@ -43,6 +43,9 @@
 #aiPrompt .aip-scope[data-kind="sequence"] { border-color: var(--line, #333337); background: #202024;
                                              color: var(--dim, #94949c); }
 #aiPrompt .aip-scope[data-kind="sequence"]:hover { color: var(--text, #dcdcdf); background: var(--card-hi, #313135); }
+/* an In/Out reads as its two timecodes (verdict 9, punch 7): room for them whole — the
+   input (flex-basis 0) gives way first, the chip only once the input is at its least */
+#aiPrompt .aip-scope[data-kind="range"] { max-width: 240px; }
 #aiPrompt .aip-scope-l { overflow: hidden; text-overflow: ellipsis; }
 #aiPrompt .aip-chev { flex: none; width: 9px; height: 9px; opacity: .8; }
 

@@ -149,6 +149,16 @@ def select_shot(page, i: int) -> None:
     page.evaluate(f"tl.select([tl.idAt({i})])")
 
 
+def ask_for_change(page, note: str, *, focus=None) -> None:
+    """A change asked of the whole cut (or of shot `focus`), down the Ask path a proposal
+    comes back on (app.js `ask` → POST /api/ask → the proposal). The words are typed in
+    the AI prompt now — wave 13 (verdict 9, punch 7) took the Assistant's own box and the
+    shot's away; the prompt's whole-cut answer starts this same Ask job on the server — so
+    these tests drive the path below the prompt, once its price is in (never unpriced)."""
+    page.wait_for_function("priced('full') && priced('shot')", timeout=5000)
+    page.evaluate("([n, f]) => { ask(f == null ? {note: n} : {note: n, focus: f}); }", [note, focus])
+
+
 def open_assistant(page) -> None:
     """The strip's ▶ play / Ask / Look deeper / Remove / why sit in its collapsed
     "Assistant" section at the foot of Effect Controls (verdict 4, punch 10)."""
@@ -368,9 +378,7 @@ def test_ask_shows_a_proposal_that_can_be_accepted_or_discarded(page):
     try:
         before = page.evaluate("JSON.stringify(segs)")
         page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
-        page.locator("#note").fill("use the clip that isn't in the cut")
-        assert_priced(page, "#ask", "Ask for a change", "full")
-        page.locator("#ask").click()
+        ask_for_change(page, "use the clip that isn't in the cut")
         page.wait_for_selector("#proposal:visible", timeout=30000)
         # one blue button per screen is Next's (INTAKE M16): the proposal's are plain,
         # and ▶ Play it is the one Next may mark
@@ -386,7 +394,7 @@ def test_ask_shows_a_proposal_that_can_be_accepted_or_discarded(page):
         assert not page.locator("#proposal").is_visible()
         assert page.evaluate("JSON.stringify(segs)") == before
 
-        page.locator("#ask").click()
+        ask_for_change(page, "use the clip that isn't in the cut")
         page.wait_for_selector("#proposal:visible", timeout=30000)
         page.locator("#acceptProposal").click()
         assert page.locator("#tl .blk").count() == 1
@@ -497,14 +505,13 @@ def test_ask_failure_is_reported_not_swallowed(page):
     inference.set_backend(Broken())
     try:
         page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
-        page.locator("#note").fill("tighten the intro")
-        page.locator("#ask").click()
+        ask_for_change(page, "tighten the intro")
         page.wait_for_function(
             "document.querySelector('#toast').textContent.includes('ask failed')",
             timeout=30000)
         assert "Not logged in" in page.locator("#toast").inner_text()
         assert not page.locator("#proposal").is_visible()
-        assert page.locator("#ask").is_enabled(), "button must not stay disabled"
+        assert page.locator("#ask").is_enabled(), "the Assistant's Ask must not stay disabled"
     finally:
         inference.set_backend(None)
 
@@ -534,15 +541,17 @@ def test_the_inspector_asks_about_the_selected_shot(page):
     try:
         select_shot(page, 0)
         insp = page.locator("#inspector")
-        assert insp.locator(".shotAsk").is_hidden()
         open_assistant(page)
-        # the opener carries the shot's price too; it spends nothing itself
-        assert_priced(page, "#inspector button[data-act=ask]", "Ask about this shot", "shot")
+        # Ask about this shot is the AI prompt on this shot (verdict 9, punch 7: one ask
+        # box): no box opens here, and the button spends nothing itself
+        assert insp.locator("button[data-act=ask]").inner_text() == "Ask about this shot…"
         insp.locator("button[data-act=ask]").click()
-        page.wait_for_selector("#inspector .shotAsk:visible")
-        insp.locator(".shotNote").fill("start this on the line instead")
-        assert_priced(page, "#inspector button[data-act=shotgo]", "Ask", "shot")
-        insp.locator("button[data-act=shotgo]").click()
+        assert page.evaluate("document.activeElement.dataset.testid") == "ai-prompt-input"
+        assert page.locator("[data-testid=ai-scope]").inner_text().strip() == "Shot 1 · CLIP_A"
+        assert insp.locator("textarea").count() == 0
+        page.keyboard.press("Escape")
+        # the one-shot revision path below it still proposes for that shot alone
+        ask_for_change(page, "start this on the line instead", focus=0)
         page.wait_for_selector("#proposal:visible", timeout=30000)
 
         # scoped: the panel names the shot, the untouched shot is in the diff
@@ -591,8 +600,7 @@ def test_a_colour_proposal_reads_as_words_and_accept_writes_the_grade(page, live
     try:
         before = page.evaluate("JSON.stringify(segs)")
         page.evaluate("dock.open('ask')")
-        page.locator("#note").fill("make it filmic")
-        page.locator("#ask").click()
+        ask_for_change(page, "make it filmic")
         page.wait_for_selector("#proposal:visible", timeout=30000)
         diff = page.locator("#proposalDiff").inner_text()
         assert "look: filmic at 0.6" in diff
@@ -602,7 +610,7 @@ def test_a_colour_proposal_reads_as_words_and_accept_writes_the_grade(page, live
         page.wait_for_timeout(300)
         assert not project().get("colour"), "Discard must leave the grade alone"
 
-        page.locator("#ask").click()
+        ask_for_change(page, "make it filmic")
         page.wait_for_selector("#proposal:visible", timeout=30000)
         page.locator("#acceptProposal").click()
         deadline = time.time() + 10
@@ -1476,8 +1484,7 @@ def test_the_top_bar_tracks_an_ask_and_clears_when_everything_is_idle(page,
     inference.reset_spend()
     try:
         page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
-        page.locator("#note").fill("tighten the intro")
-        page.locator("#ask").click()
+        ask_for_change(page, "tighten the intro")
         page.wait_for_selector(row, timeout=20000)
         assert "cut" in page.locator(f"{row} .jname").inner_text().lower()
         # a real bar, moving
@@ -1583,8 +1590,7 @@ def test_a_running_ask_is_picked_back_up_after_a_reload(page):
     inference.reset_spend()
     try:
         page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
-        page.locator("#note").fill("tighten the intro")
-        page.locator("#ask").click()
+        ask_for_change(page, "tighten the intro")
         page.wait_for_selector(row, timeout=20000)
 
         page.reload()
@@ -1793,7 +1799,8 @@ def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
     inference.set_backend(Scripted())
     inference.reset_spend()
     try:
-        # with a cut on the board: the Ask tool has one priced button, Ask for a change
+        # with a cut on the board: the Ask tool has one button, Ask for a change… (to the
+        # AI prompt, which carries the price)
         page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
         assert page.locator("#cutFromBin").count() == 0
         assert page.locator("#askPanel button").count() == 1
@@ -1941,13 +1948,17 @@ def test_ask_the_model_in_the_bin_is_priced_before_it_can_be_clicked(page, live_
 def test_ask_buttons_wait_for_their_price_and_never_spend_without_one(page, live_server):
     """INTAKE I16.0f / decision 7, review: an Ask-family button whose price had not
     arrived kept its plain name and stayed clickable — a click in the first second
-    spent with no price shown, and a failed price fetch left it so for good. It is
-    disabled until priced; with no price to be had it says so, stays disabled, and an
-    ask that gets through anyway (a key, a script) refuses before any POST."""
-    assert_priced(page, "#ask", "Ask for a change", "full")
-    assert page.locator("#ask").is_enabled()
+    spent with no price shown, and a failed price fetch left it so for good. A button
+    that spends is disabled until priced (the first cut's: test_cut_from_the_bin…), and
+    an ask that gets through anyway (a key, a script) refuses before any POST.
+
+    Since wave 13 (verdict 9, punch 7: one ask box) the Assistant's "Ask for a change…"
+    and the shot's "Ask about this shot…" spend nothing: they take you to the AI prompt,
+    which carries the ask's price — so neither waits for one, and both work without it."""
     html = page.evaluate("fetch('/').then(r => r.text())")
-    assert '<button id="ask" disabled data-await-price="1">Ask for a change</button>' in html
+    tag = html[html.index('<button type="button" id="ask"'):]
+    tag = tag[:tag.index('>')]
+    assert "disabled" not in tag and "data-await-price" not in tag, tag
 
     posts = []
     page.on("request", lambda r: posts.append(r.url)
@@ -1955,18 +1966,19 @@ def test_ask_buttons_wait_for_their_price_and_never_spend_without_one(page, live
     page.route("**/api/ask/price*", lambda route: route.abort())
     page.reload()
     page.wait_for_selector("#tl .blk")
-    page.wait_for_function(
-        "document.querySelector('#ask').textContent === 'Ask for a change · price unavailable'", timeout=5000)
-    assert page.locator("#ask").is_disabled()
+    page.wait_for_timeout(500)                        # past the price fetch that fails
+    page.evaluate("dock.open('ask')")
+    ask = page.locator("#ask")
+    assert ask.is_enabled() and ask.inner_text().startswith("Ask for a change…"), ask.inner_text()
+    ask.click()
+    assert page.evaluate("document.activeElement.dataset.testid") == "ai-prompt-input"
+    page.keyboard.press("Escape")
     select_shot(page, 0)
     open_assistant(page)
-    insp = page.locator("#inspector")
-    insp.locator("button[data-act=ask]").click()
-    page.wait_for_selector("#inspector .shotAsk:visible")
-    go = insp.locator("button[data-act=shotgo]")
-    assert go.is_disabled() and go.inner_text() == "Ask · price unavailable"
-    page.evaluate("document.querySelector('#note').value = 'tighten it'")
-    page.evaluate("ask()")
+    shot = page.locator("#inspector button[data-act=ask]")
+    assert shot.is_enabled() and shot.inner_text() == "Ask about this shot…"
+    # an Ask that gets through without its price refuses before any POST
+    page.evaluate("ask({note: 'tighten it'})")
     page.wait_for_function(
         "document.querySelector('#toast').textContent.includes('no price yet')", timeout=3000)
     page.wait_for_timeout(300)
@@ -2254,9 +2266,7 @@ def test_a_proposed_cut_plays_before_it_is_accepted(page):
     try:
         before = page.evaluate("JSON.stringify(segs)")
         page.evaluate("dock.open('ask')")
-        page.locator("#note").fill("open on the other clip")
-        assert_priced(page, "#ask", "Ask for a change", "full")
-        page.locator("#ask").click()
+        ask_for_change(page, "open on the other clip")
         page.wait_for_selector("#proposal:visible", timeout=30000)
         assert "CLIP_C" in page.locator("#proposalDiff").inner_text()   # the diff stays
         # (the rows' ✓ / ✗ are the per-shot review's, and Accept all shows only once a
