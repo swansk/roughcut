@@ -81,8 +81,6 @@
   <div id="flow"></div>
   <!-- The first pass: Run / Re-run, always here (firstpass.js, REDESIGN-GOAL dimension 2). -->
   <div id="firstpass" data-testid="firstpass"></div>
-  <!-- The AI prompt: one always-visible way to ask the AI (aiprompt.js, REDESIGN-GOAL dimension 14). -->
-  <div id="aiPrompt" data-testid="ai-prompt"></div>
   <!-- Every long operation in the app draws itself here, in this row. -->
   <div id="progress" hidden></div>
   <div class="grow"></div>
@@ -350,7 +348,13 @@
        mounts it here once the project has loaded. An empty sequence shows its first
        action here. -->
   <section class="ws-panel" id="pTimeline" data-panel="timeline">
-    <div class="ws-head"><div class="ws-tabs"><span class="ws-tab on" id="tlTitle"><span class="lbl">Timeline</span></span></div></div>
+    <div class="ws-head"><div class="ws-tabs"><span class="ws-tab on" id="tlTitle"><span class="lbl">Timeline</span></span></div>
+      <!-- The AI prompt: one always-visible way to ask the AI, scoped by the selection
+           (aiprompt.js, REDESIGN-GOAL dimension 14). Its home is the Timeline's header
+           row, where the edits it asks for land: the app bar has no room for a usable
+           field at 1440. -->
+      <div id="aiPrompt" data-testid="ai-prompt"></div>
+    </div>
     <div class="ws-body" id="tlBody">
       <div id="tl"></div>
       <div id="tlEmpty" hidden></div>
