@@ -403,6 +403,8 @@ table.plist .st.ok { color: var(--good); }
 #projBody > section[data-tool=project] { display: flex; flex-direction: column; height: 100%; padding: 0; }
 #projBody > section[data-tool=project][hidden] { display: none; }
 #projBody > section[data-tool=project] > .projbar { flex: none; margin: 0; padding: 5px 6px; }
+/* Premiere's bin search: a magnifier in the field */
+#projQ { padding-left: 23px; background: #151517 no-repeat 7px 50% / 11px 11px url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%2394949c' stroke-width='1.4'%3E%3Ccircle cx='5' cy='5' r='3.6'/%3E%3Cpath d='M7.7 7.7 11 11'/%3E%3C/svg%3E"); }
 #projList { flex: 1 1 auto; min-height: 0; overflow: auto; outline: none; position: relative;
             scrollbar-width: thin; scrollbar-color: #45454b transparent; user-select: none;
             -webkit-user-select: none; }
