@@ -670,13 +670,51 @@
    * `frame` in (drawn, then closed), `drawn` back (when, and how long the draw took: the
    * page's draw log); `lut` in makes a texture ahead of a cut; `forget` drops them all (a
    * colour save). A playing frame (`yuv`) goes up as its planes, any other as before.
-   * Committed at the end of its task, off the page's main thread. */
+   * Committed at the end of its task, off the page's main thread.
+   *
+   * The worker keeps its own queue (wave 13 CANVAS2): every frame is posted the moment the
+   * page has it; one is drawn at a time and the newest waits (a waiting one a newer frame
+   * replaces is closed undrawn, its LUT made all the same). It used to be the page that held
+   * the newest frame back until the worker's `drawn` reached it, so a frame that came while
+   * the worker was busy waited for the page's main thread as well — a style and layout pass
+   * of the board, at load 8 the hole's other half. */
   const WORKER_SRC = `'use strict';
 const Renderer = ${Renderer.toString()};
 const yuvPlanes = ${yuvPlanes.toString()};
 let R = null;
 const bufs = [null, null, null, null];
-onmessage = async (e) => {
+let busy = false, next = null;
+function closeFrame(m) {
+  try { m.frame.close(); if (m.mix) m.mix.src.close(); } catch (err) { /* closed */ }
+}
+async function drawFrame(m) {
+  const t0 = performance.now();
+  const got = m.got || performance.timeOrigin + t0;
+  let ok = false, src = m.frame, mix = m.mix, yuv = false;
+  const ts = m.frame.timestamp;
+  try {
+    if (R && R.yuv && m.yuv) {
+      // copied out, the decoder's frame goes back to it at once
+      const p = await yuvPlanes(m.frame, 0, bufs, m.w, m.h).catch(() => null);
+      if (p) { m.frame.close(); src = p; yuv = true; }
+      if (mix) {
+        const q = await yuvPlanes(mix.src, 1, bufs, m.w, m.h).catch(() => null);
+        if (q) { mix.src.close(); mix = { ...mix, src: q }; }
+      }
+    }
+    if (R) ok = R.render(src, m.sw, m.sh, m.w, m.h, m.key, m.n, m.data, m.adj, null, mix);
+  } catch (err) { /* a frame that will not draw: the next one will */ }
+  finally { closeFrame(m); }
+  postMessage({ t: 'drawn', ok: !!ok, ts, yuv, ms: performance.now() - t0, sent: m.sent, made: m.made, got,
+                start: performance.timeOrigin + t0, at: performance.timeOrigin + performance.now(),
+                skipped: m.skipped || 0 });
+}
+async function pump(m) {
+  busy = true;
+  try { await drawFrame(m); } finally { busy = false; }
+  if (next) { const n = next; next = null; pump(n); }
+}
+onmessage = (e) => {
   const m = e.data;
   if (m.t === 'init') {
     try { R = Renderer(m.canvas, (w, h) => new OffscreenCanvas(w, h), { full: !!m.full }); }
@@ -686,27 +724,16 @@ onmessage = async (e) => {
     return;
   }
   if (m.t === 'frame') {
-    const t0 = performance.now();
-    const got = performance.timeOrigin + t0;
-    let ok = false, src = m.frame, mix = m.mix, yuv = false;
-    const ts = m.frame.timestamp;
-    try {
-      if (R && R.yuv && m.yuv) {
-        // copied out, the decoder's frame goes back to it at once
-        const p = await yuvPlanes(m.frame, 0, bufs, m.w, m.h).catch(() => null);
-        if (p) { m.frame.close(); src = p; yuv = true; }
-        if (mix) {
-          const q = await yuvPlanes(mix.src, 1, bufs, m.w, m.h).catch(() => null);
-          if (q) { mix.src.close(); mix = { ...mix, src: q }; }
-        }
-      }
-      if (R) ok = R.render(src, m.sw, m.sh, m.w, m.h, m.key, m.n, m.data, m.adj, null, mix);
-    } catch (err) { /* a frame that will not draw: the next one will */ }
-    finally {
-      try { m.frame.close(); if (m.mix) m.mix.src.close(); } catch (err) { /* closed */ }
+    m.got = performance.timeOrigin + performance.now();
+    if (!busy) { pump(m); return; }
+    if (next) {
+      // replaced before it was drawn: closed, but its LUT (sent once per key) is kept
+      if (R && next.data && next.key !== m.key) { try { R.lut(next.key, next.n, next.data); } catch (err) { /* lost */ } }
+      if (next.data && !m.data && next.key === m.key) { m.data = next.data; m.n = next.n; }
+      m.skipped = (next.skipped || 0) + 1;
+      closeFrame(next);
     }
-    postMessage({ t: 'drawn', ok: !!ok, ts, yuv, ms: performance.now() - t0, sent: m.sent, made: m.made, got,
-                  at: performance.timeOrigin + performance.now() });
+    next = m;
     return;
   }
   if (!R) return;
@@ -724,9 +751,8 @@ onmessage = async (e) => {
     P: null,                 // probe()'s renderer, on a canvas of its own (worker mode)
     S: null,                 // sample()'s (Lumetri Scopes), on a canvas of its own
     worker: null,            // the worker holding #gradeCanvas (worker mode)
-    inflight: false,         // a frame is with the worker
-    sentAt: 0,               // when it went
-    pending: null,           // the newest frame waiting for it
+    inflight: false,         // a frame is with the worker (its queue: WORKER_SRC)
+    sentAt: 0,               // when the last one went
     sentKey: null,           // the LUT key the worker was last sent the data of
     videos: [],
     shot: null,              // the segment id the monitor is on
@@ -848,8 +874,8 @@ onmessage = async (e) => {
   }
 
   /* The frame to the worker: a VideoFrame of the live video (a reference to the decoded
-   * frame), the LUT's data the first time after a change of LUT, the uniforms. One in
-   * flight; a newer frame replaces the one waiting, which is closed unsent. */
+   * frame), the LUT's data the first time after a change of LUT, the uniforms. Posted at
+   * once; the worker draws one at a time and keeps the newest waiting (WORKER_SRC). */
   function toWorker(j) {
     let frame;
     try { frame = new VideoFrame(j.v, { timestamp: Math.round((j.v.currentTime || 0) * 1e6) }); }
@@ -861,15 +887,8 @@ onmessage = async (e) => {
         mix = { ...j.mix, src: f, sw: f.displayWidth, sh: f.displayHeight };
       } catch (e) { mix = null; }
     }
-    const m = { t: 'frame', frame, sw: frame.displayWidth, sh: frame.displayHeight,
-                w: j.w, h: j.h, rec: j.rec, adj: j.adj, mix, playing: j.playing, made: performance.now() };
-    // a worker that never answered (it died) does not hold the picture for good
-    if (G.inflight && performance.now() - G.sentAt < 1000) {
-      if (G.pending) { G.pending.frame.close(); if (G.pending.mix) G.pending.mix.src.close(); }
-      G.pending = m;
-      return;
-    }
-    post(m);
+    post({ t: 'frame', frame, sw: frame.displayWidth, sh: frame.displayHeight,
+           w: j.w, h: j.h, rec: j.rec, adj: j.adj, mix, playing: j.playing, made: performance.now() });
   }
 
   function post(m) {
@@ -884,8 +903,8 @@ onmessage = async (e) => {
     try { G.worker.postMessage(msg, m.mix ? [m.frame, m.mix.src] : [m.frame]); }
     catch (e) {
       G.inflight = false;
+      G.sentKey = null;
       try { m.frame.close(); if (m.mix) m.mix.src.close(); } catch (e2) { /* gone */ }
-      return;
     }
   }
 
@@ -902,7 +921,9 @@ onmessage = async (e) => {
   const auto = { ema: 0, n: 0 };
   function autoLearn(m) {
     if (!m.yuv || G.res !== 'auto' || G.mix) return;
-    const lag = (m.at - performance.timeOrigin) - (m.sent || 0);
+    // posted to drawn, less any time it waited in the worker's queue behind the frame before
+    // (the GL's own pace, as when the page held the newest frame back until `drawn`)
+    const lag = (m.at - performance.timeOrigin) - (m.sent || 0) - Math.max(0, (m.start || m.got || 0) - (m.got || 0));
     if (!(lag >= 0 && lag < 1000)) return;
     auto.ema = auto.n ? auto.ema * 0.85 + lag * 0.15 : lag;
     auto.n++;
@@ -923,11 +944,11 @@ onmessage = async (e) => {
         G.draws++;
         const r1 = (x) => Math.round(x * 10) / 10;
         G.drawLog.push({ t: r1(m.at - performance.timeOrigin), ts: m.ts, ms: r1(m.ms), yuv: !!m.yuv,
-                         made: r1(m.made || 0), sent: r1(m.sent || 0), got: r1(m.got - performance.timeOrigin) });
+                         made: r1(m.made || 0), sent: r1(m.sent || 0), got: r1(m.got - performance.timeOrigin),
+                         start: r1((m.start || m.got) - performance.timeOrigin), skipped: m.skipped || 0 });
         if (G.drawLog.length > DRAW_LOG) G.drawLog.splice(0, G.drawLog.length - DRAW_LOG);
         autoLearn(m);
       }
-      if (G.pending) { const p = G.pending; G.pending = null; post(p); }
     } else if (m.t === 'ready' && m.ok) {
       G.yuv = !!m.yuv;
     } else if (m.t === 'ready' && !m.ok) {
