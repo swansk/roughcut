@@ -34,6 +34,17 @@ TRUE today:
    - put a clip on the timeline two ways; trim, ripple, razor, move, undo/redo; try Premiere's keys
      (J/K/L, I/O, C, V, `,`, `.`, +/-, \); select a clip and look for an Inspector; change its colour;
    - play across a cut; seek and time the first frame; export and `ffprobe` the result.
+   - **AI-first (Karl's K3, dimensions 13-16), as a Premiere editor who has never seen Roughcut and
+     reads no doc.** From a FRESH `--work` (a second server run, or a new project): follow whatever
+     first-run teaching appears. Mid-session, import a second folder (make one under `$J/import2/` by
+     copying two Killington clips; never write `~/footage`) and drop a file on the Project panel
+     (Playwright: a DataTransfer drop or the file chooser). Find the AI prompt without hunting and ask,
+     in your own words, for one edit of each family: a timeline edit, an Effect Controls / keyframe
+     change, a colour change, a transition, and an export. Review each one: does it show before it
+     lands, can you accept / reject / adjust it per op with the normal tools, is accept one undo? Open
+     the AI menu and check every AI action is listed. Count every step where you had to guess. The
+     subscription backend (`claude_cli`) is free on the plan, so real asks are fine; on `anthropic_api`
+     score from the dry runs.
    Record timings with `performance.now()` around interactions and capture console errors. Stop your
    server when done (`kill` the pid you started; nothing else).
 
@@ -52,7 +63,7 @@ TRUE today:
    - line 1: `VERDICT: PASS` or `VERDICT: FAIL`
    - the rev judged, the gate summary (each check green/red), what Karl's live board serves
      (`git -C ~/Documents/Projects/roughcut rev-parse --short HEAD`) and how far apart they are
-   - a table of all 12 dimensions: score 0-10, evidence (PNG name, timing, gate line, file:line), and
+   - a table of all 16 dimensions: score 0-10, evidence (PNG name, timing, gate line, file:line), and
      the Premiere comparison in one line
    - section K: each line resolved or open, with the evidence
    - section S: each standing decision intact or broken

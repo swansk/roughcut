@@ -49,6 +49,34 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- **2026-10-16 ~00:45 EDT: PAUSED by Karl.** The 30-min tick cron is deleted. Branch `redesign/2026-10-14` holds verdict 8 +
+  wave 11's SMALL2, LUMETRI, FXBIN and CHEAP (merged at pause as `9be0fd2`: status endpoints p95 <= 10 ms under an export,
+  peaks 202-pending then a nice-19 background build; test_status_cheap 4 green; journey 20 green on the merged HEAD).
+  Unmerged, both stopped cleanly with everything committed: `redesign-w11-black` (punch 1, silent black Program) and
+  `redesign-w11-canvas` (punch 2 + 3, graded canvas + dissolve holes). See the lane notes below for
+  their state at pause. **To resume:** (1) read this State and verdict-8.md; (2) for each of the two w11 lane branches: if its head is
+  green, merge it (CHANGELOG union; re-measure test_budget if it changed counts), else finish it in its worktree
+  (roughcut-wt/w11-<lane>) or relaunch a lane with its remaining steps; (3) re-run `test_perf_latency -k grade_draws` x10
+  (9/10 before BLACK); test_server's 6 analysis tests time out at load >= 15 on base too (nice-19 proxies): watch; (4) full gate `python3 tools/gate.py HEAD`; (5) judge 9 via judge/JUDGE.md; (6) recreate the tick
+  cron from "Cadence" if running unattended. K2 stays Karl's: he can try the branch (stop roughcut-board, run
+  `uv run app/server.py --footage ~/footage/killington-neutral` in this worktree, restart the service after).
+  - Lane BLACK at pause: `redesign-w11-black` @ `4a3d9c3` (base merged, clean, journey 20 green). /media/proxy waits <= 0.3 s
+    then 503 + retry-after/x-roughcut-eta; poster + "preparing preview… CLIP · ~N s" within 300 ms, Play plays past on the
+    film clock; queue = waited-on clip, cut previews in film order, then cut ranges, then the rest (last cut clip job 3/9,
+    was 6/9); bin Status "preview building". test_preview_building 5 green. OPEN before merging: test_latency_under_load
+    failed 3x on HEAD (83.4 ms mid-shot, load 14.6-18.6; once 133 ms at a cut) while the base passed once at 17.7: run HEAD
+    vs base ~5x each on a quieter box (suspects: noteKind's status-JSON parse, the 300 ms frameWatch timer); re-run
+    test_media_first x3 (one 30 s walk miss at load 25); Killington check not done.
+  - Lane CANVAS at pause: `redesign-w11-canvas` @ `24408ca` (LUMETRI + FXBIN merged in, clean; journey NOT run). Canvas
+    check in the perf record + gate line (fails on base at load >= 15). Fixes: worker copies YUV planes + shader converts
+    (worker JS 21 ms -> 0.4-4.6 ms/frame), warm-up draw, Auto snaps/learns 640->544->448, paintPos once per sequence frame,
+    incoming dissolve buffer handed (one decoder less), next park deferred past the dissolve. Killington 1440 at load ~15:
+    base 70-165 ms / 21-29 fps, fix 62-107 ms / 25-30 fps. NOT shown: a pass <= 67 ms (load never < 13; NOITA tourney +
+    lanes). Next: quiet-box A/B base vs 24408ca (scripts in ~/roughcut-loop/lane-canvas: kab.sh, kpb.py, dec.py) incl. 1920
+    + 5 dissolve plays; journey; if holes remain, frame delivery off the main thread (MediaStreamTrackProcessor in the
+    worker). Queued: linear-light setMix for Film Dissolve; a 21-shot perf fixture (the 4-shot one passes base at load 12).
+    Merge order hint: BLACK and CANVAS both touch app.js's player (posterUp/showLive vs followers/txHand): merge one,
+    then rebase/merge the other and re-run test_tx_playback + test_preview_building together.
 - 2026-10-16 00:35 EDT: FXBIN merged `e6fe1bc` (Effects bin, seven kinds with exact maths, drops on edits + clip ends,
   defaults, repeated frames hatched). Budget re-measured with both tabs (97·53 etc.), logged. Queued from FXBIN: Film
   Dissolve's two-shot mix previews in gamma space (needs a linear-light setMix mode, CANVAS asked); transition_handles

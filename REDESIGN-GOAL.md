@@ -79,6 +79,56 @@ measured against the Premiere reference in each dimension, and say what you comp
     see exactly what would change) → export → ffprobe the file. Recorded as PNGs per step for the
     judge, and as `tools/journey.py` in the gate.
 
+## E. AI-first, on top of the pro tools (Karl's K3)
+
+Premiere's surface stays (section S). What changes is who can drive it: everything an editor can do
+with the pro tools, they can also ask for in words, and get back as edits they review with those same
+tools. The bar is a Premiere editor who has never seen Roughcut and never reads a doc.
+
+13. **Footage in, from anywhere.** (K3 b.) File › Import (Ctrl+I, as in Premiere), an Import action in
+    the Project panel (and in its empty state), a Media Browser for folders on the machine that runs
+    the board, and dropping files or a folder from the viewer's OS onto the Project panel all add
+    footage to the open project without leaving the workspace, restarting anything, or typing a path
+    on a command line. New clips show a poster within 5 s of landing on the fixture, carry duration,
+    frame rate and size, can be cut at once, and the AI's index of them starts on its own (no model
+    call is ever made without the cost line of section S). Footage added after a first pass is
+    offered to the pass ("3 new clips: add them to the cut?") through the dimension-2 re-run, which
+    says what it will keep. Proven by a driven test that imports a second folder mid-session and by
+    one that drops a file.
+14. **One way to ask the AI, from anywhere.** (K3 c.) One always-visible AI prompt in the workspace
+    (a fixed home, a key to focus it, listed in the keys sheet) takes plain words about anything in the
+    editor: "tighten the intro to 20 s", "warm up the snow shots", "dissolve between 4 and 5", "export
+    a 1080p review copy". It shows its scope (the selection, the In/Out range, or the whole sequence)
+    before it runs, a working state within 100 ms, honest cost (section S), and what it changed when
+    it is done. An **AI menu** in the menu bar lists every AI action the app has (first pass, re-run,
+    Ask, shot ask, colour Ask, Look deeper, Designed Effects, audit): none is reachable only from a
+    panel you must first find. Asking about the clip under the cursor or the selected block needs no
+    retyping of what it is (a right-click "Ask AI about this…" or the prompt's scope chip).
+15. **The AI can do everything the pro tools do, as reviewable edits.** (K3 d.) One action vocabulary:
+    the AI's answer is a list of the same operations the Timeline, Effect Controls, Lumetri, the Effects
+    bin and Export apply when a human uses them, applied through the same code path. It covers at
+    least: insert / overwrite / move / razor / ripple delete / trim / roll / slip, markers and In/Out,
+    track add, speed, Motion / Opacity / Volume including keyframes, Lumetri (Basic, Curves, Wheels,
+    HSL), transitions, Designed Effects, and an export with a preset. Every AI change shows before it
+    lands (ghost blocks, a before/after on the Program monitor, a diff line per op in the proposal),
+    and is accepted, rejected or adjusted per op with the same tools; one accept is one undo step;
+    nothing the AI does reaches the timeline or the disk without that review (an export runs only
+    when accepted). Proven by a driven test that asks, through a deterministic test backend, for one
+    edit of each family and checks that the AI's op and the same op done by hand give the same EDL;
+    and by the judge asking for real edits on Killington on the subscription backend.
+16. **Easy to learn, the AI features above all.** (K3 e, a.) A first run teaches the loop in at most six
+    short steps, each done on the real workspace, skippable, and re-openable from Help: import footage,
+    run the first pass, read why a pick was made, review and adjust the proposed cut, ask the AI for an
+    edit, export. Every AI control has a hover that says what it does, what it costs and what it will
+    change. Every empty state names its next action (no footage → Import; footage, no pass → Run first
+    pass; a pass, no cut → review the proposal). And it looks like it belongs (K3 a): the bin is
+    Premiere's Project panel (List view with sortable metadata columns, Icon view with posters and
+    hover-scrub), and the pass's result reads as editor objects in it: the proposed cut is a sequence
+    in the bin, picks are subclips or labelled markers with their why, not a separate view. The judge,
+    as a Premiere editor who has never seen Roughcut and reads no doc, does "import a folder → first
+    pass → ask for two edits → adjust one by hand → export" and names every step where they had to
+    guess; any guess at an AI step caps this dimension at 6.
+
 ## S. Standing decisions (do not re-litigate; a broken one is a blocker)
 
 - All inference goes through `roughcut.inference`; no model ID literal outside `roughcut/config.py`.
@@ -87,10 +137,23 @@ measured against the Premiere reference in each dimension, and say what you comp
 - Karl's footage and work dirs are never written by tests or the judge (`--work` under
   `~/roughcut-loop/`).
 - INTAKE "Decisions (do not re-litigate)" still hold unless section K overrides one.
+- The Premiere-style pro controls built in the redesign stay (Karl, K3: "don't remove!"); AI-first means the AI
+  can also do what they do, not that they go away.
 - No Co-Authored-By lines in this repo; every commit carries a CHANGELOG `[Unreleased]` entry.
 
 ## K. Karl's notes (verbatim, newest first; only Karl adds here, the builder may only mark one resolved with evidence)
 
+- **K3 (2026-10-16, after trying the paused branch; Karl said "no need to start yet"):** "off what we have
+  currently, I still don't like the way the footage and pass look, there is no clear way to add new footage
+  or to run the AI tooling on this - remember, it needs to have that premiere pro quality (I like having the
+  controls you added! don't remove!) but with an AI-first operation. While I CAN use the pro tools here (good),
+  AI should also be capable of all of it, and this whole thing needs to be easy to learn how to use,
+  especially how to use those AI features" → (a) the footage and the pass's look: dimensions 1, 3, 9;
+  (b) adding new footage is obvious (Premiere's Import / drag-in, not hidden): dimension 3; (c) running the AI
+  tooling is obvious from anywhere: dimensions 1, 2, 11; (d) AI-first: every pro control (timeline edits,
+  Effect Controls, Lumetri, transitions, export) can also be done by the AI on request, as reviewable edits:
+  dimension 11 and beyond it; (e) easy to learn, the AI features above all: dimension 1. Standing: the pro
+  controls stay ("don't remove!").
 - **K1 (2026-10-14):** "it is not clear how to re run the first pass" → dimension 2.
 - **K2 (2026-10-14):** "this is not something that I feel meets 'premier pro quality'. The system might
   have to do a complete redesign." → the whole of B and C; the judge must not PASS a build that a
@@ -285,3 +348,21 @@ next judge runs, and the next judge rules it honest or lenient.
   the measured totals are `/` 97·53, `/ shot` 123·68, `/ film` 105·52, `/ fx` 128·56, `/ jobs`
   106·54; `/floor` and `/open` unchanged. More lenient by exactly the measured count, no headroom:
   each is one Premiere tab where Premiere has it.
+
+- 2026-10-16 (lead, recording Karl's K3): **a new open K line, so the loop cannot PASS until K3 is resolved
+  with evidence.** Stricter. K3 also adds a standing decision (the pro controls stay). No dimension's bar
+  text changed yet; when the loop resumes, the lead turns K3 (a)-(e) into rubric items and logs them here.
+
+- 2026-10-18 (lead, loop resumed on Karl's "Resume roughcut project loop"): **K3 becomes section E, four
+  new dimensions 13-16; PASS now needs all 16 at ≥ 8.** (b) → 13 footage in from anywhere (Import, Ctrl+I,
+  Media Browser, OS drop, mid-session, offered to the pass). (c) → 14 one always-visible AI prompt with
+  a scope, plus an AI menu listing every AI action. (d) → 15 one action vocabulary shared by the pro
+  tools and the AI, every family listed, each AI op reviewed before it lands, proven by an AI-op ==
+  hand-op EDL test on a deterministic test backend. (e) and (a) → 16 a first-run teach-through, hovers,
+  empty states, and the look: Premiere's Project panel views and the pass's result as editor objects
+  (a sequence in the bin, subclips or labelled markers). Strictly stricter: nothing in 1-12 is
+  relaxed, four bars are added, and 16 carries a hard cap (a guess at an AI step caps it at 6).
+  Judgement call to rule on: K3 (a) "I still don't like the way the footage and pass look" names no
+  specific fault, so the lead read it as "make them Premiere's own objects"; that is an interpretation,
+  and K3 stays open until Karl looks, as K2 does. A deterministic test backend for the AI-op tests is
+  not a leniency on the model: the judge still asks the real model for edits on Killington.

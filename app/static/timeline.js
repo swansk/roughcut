@@ -1087,12 +1087,22 @@
     const key = `${clip}@${pps}`;
     let p = peaks.get(key);
     if (p) return p;
-    p = { done: false, data: null };
+    p = { done: false, data: null, tries: 0 };
     peaks.set(key, p);
-    fetch(`/api/peaks/${encodeURIComponent(stem(clip))}?pps=${pps}`)
+    /* 202 {pending}: the server's worker is still making them (never in the request,
+     * wave 11 CHEAP) — ask again, sooner at first; the block reads "loading" meanwhile */
+    const ask = () => fetch(`/api/peaks/${encodeURIComponent(stem(clip))}?pps=${pps}`)
       .then((r) => (r.ok ? r.json() : null))
       .catch(() => null)
-      .then((d) => { p.data = d; p.done = true; scheduleA1(); });
+      .then((d) => {
+        if (d && d.pending) {
+          p.tries += 1;
+          setTimeout(ask, Math.min(2000, 250 * p.tries));
+          return;
+        }
+        p.data = d; p.done = true; scheduleA1();
+      });
+    ask();
     return p;
   }
   function scheduleA1() {
