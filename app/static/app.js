@@ -2369,13 +2369,24 @@ function syncPlayer() {
   // A first cut's proposal plays in the monitor too, before there is a cut.
   const progEmpty = $('#progEmpty');
   if (progEmpty) progEmpty.hidden = !!(segs.length || pendingPlan);
-  // the empty Program says how to fill it, in Premiere's words (verdict 2, punch 8)
-  if (progEmpty && !progEmpty.hidden && !progEmpty.dataset.said) {
-    progEmpty.dataset.said = '1';
+  // the empty Program says how to fill it, in Premiere's words (verdict 2, punch 8): with
+  // no footage that is Import (REDESIGN-GOAL dimension 16; tour.js opens it on
+  // [data-rc-import]), else a drag or `,`
+  const want = S && S.clips === 0 ? 'import' : 'cut';
+  if (progEmpty && !progEmpty.hidden && progEmpty.dataset.said !== want) {
+    progEmpty.dataset.said = want;
     // only the words: firstpass.js mounts its button in here too, which workspace.css
     // does not draw (verdict 5, punch 9: Run first pass is the header's and the Timeline's)
     const words = [...progEmpty.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim());
-    if (words) words.textContent = 'the sequence is empty · drag a clip to the Timeline or press , (Insert)';
+    let say = progEmpty.querySelector('.pe-say');
+    if (!say) {
+      say = document.createElement('span');
+      say.className = 'pe-say';
+      if (words) words.replaceWith(say); else progEmpty.prepend(say);
+    }
+    say.innerHTML = want === 'import'
+      ? 'the sequence is empty · <a data-rc-import data-testid="program-import">Import footage</a> (Ctrl+I) to start'
+      : 'the sequence is empty · drag a clip to the Timeline or press , (Insert)';
   }
   if (player.idx >= segs.length) { pauseCut(); player.idx = -1; }
   if (player.playing && player.idx >= 0) {
@@ -2472,11 +2483,77 @@ function paint() {
 
 /* The board opened on a hand-authored EDL, so an empty timeline used to be an
  * impossible state. Now that a project can start from nothing but a footage folder it
- * is the *first* state, and it has to say what to do next rather than show a blank. */
+ * is the *first* state, and it has to say what to do next rather than show a blank.
+ * Every empty state names its next action (REDESIGN-GOAL dimension 16): no footage →
+ * Import (Ctrl+I, File › Import's own: tour.js opens `rcImport` on [data-rc-import]);
+ * footage and no pass → Run first pass (firstpass.js's box), beside a drag or `,`; a
+ * proposed cut waiting that is not on screen → Review the proposed cut. The Source
+ * monitor's empty line follows the same fact. */
 function emptyState() {
   const el = document.createElement('div');
   el.className = 'empty';
   const analysed = S ? S.analysed : 0;
+  const footage = !(S && S.clips === 0);
+  const fpNow = () => (window.rcFirstPass && typeof window.rcFirstPass.state === 'function'
+    ? window.rcFirstPass.state() : null);
+  // a proposal the pass left waiting, not on screen (an open one hides this box)
+  const waiting = () => {
+    const fp = fpNow();
+    return !!(footage && !pendingPlan && fp && fp.proposal && fp.proposal.pending && fp.proposal.job);
+  };
+  const kind = !footage ? 'import' : waiting() ? 'review' : 'cut';
+  const src = $('#srcEmpty');
+  if (src) {
+    src.querySelector('.se-pick').hidden = !footage;
+    src.querySelector('.se-none').hidden = footage;
+  }
+  // The box re-checks each second while it is on screen (a run starts and ends without a
+  // render); new footage (Import's `rc:clips-changed`) re-reads the status and redraws it.
+  let ticks = 0;
+  let gate = () => false;
+  const onClips = () => { if (el.isConnected) refreshStatus().then(() => { if (el.isConnected) render(); }); };
+  window.addEventListener('rc:clips-changed', onClips);
+  const timer = setInterval(() => {
+    if (!el.isConnected && ticks++ > 0) {                         // rebuilt or filled
+      clearInterval(timer);
+      window.removeEventListener('rc:clips-changed', onClips);
+      return;
+    }
+    const now = !footage ? 'import' : waiting() ? 'review' : 'cut';
+    if (now !== kind && el.isConnected && el.parentElement) el.parentElement.replaceChildren(emptyState());
+    else gate();
+  }, 1000);
+  if (kind === 'import') {
+    el.innerHTML = `<h3>Import footage to start</h3>
+      <div class="emptyRow"><button type="button" data-rc-import data-testid="empty-import">Import footage…<span class="k">Ctrl+I</span></button></div>
+      <div class="hint" style="margin-top:8px">or drop files or a folder onto the Project panel</div>`;
+    el.dataset.ai = 'import';
+    return el;
+  }
+  if (kind === 'review') {
+    el.innerHTML = `<h3>A proposed cut is waiting</h3>
+      <div class="emptyRow"><button type="button" id="reviewCut" data-testid="empty-review">Review the proposed cut</button></div>
+      <div class="hint" style="margin-top:8px">play it, ✓ or ✗ each shot, then Accept · or drag a clip here</div>`;
+    el.dataset.ai = 'review';
+    const b = el.querySelector('#reviewCut');
+    // reading it is free (GET): the same record the first pass's own "Show it" opens
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        const fp = fpNow();
+        const job = fp && fp.proposal && fp.proposal.job;
+        const d = job ? await (await fetch(`/api/ask/${encodeURIComponent(job)}`)).json()
+          : ((await (await fetch('/api/asks/latest')).json()) || {}).record;
+        if (d && d.plan && Array.isArray(d.plan.segments)) showProposal(d.plan);
+        else toast('the proposed cut could not be read — Re-run first pass proposes a new one', 5000);
+      } catch (e) {
+        toast(`could not open the proposed cut: ${e.message || e}`, 5000);
+      } finally {
+        b.disabled = false;
+      }
+    };
+    return el;
+  }
   // Footage goes in before the AI has heard it (verdict 2, punch 8): the first action
   // is the editor's — a drag or `,`. "Run first pass" beside it is lane FPUI's button,
   // which firstpass.js puts into this box (`.fp-empty`) after every render.
@@ -2503,13 +2580,11 @@ function emptyState() {
   // (verdict 4, punch 10: "Make a first cut" sat beside "First pass running — see it"):
   // the first pass's (firstpass.js puts it in this box) until a pass has finished, then
   // this button — the first cut from the keeps or the index — and the pass's box steps
-  // aside (`data-ai`, workspace.css). Re-checked each second while the empty state is on
-  // screen, since a run starts and ends without a render. While one runs this button
-  // also waits rather than start an overlapping cut.
+  // aside (`data-ai`, workspace.css). While one runs this button also waits rather than
+  // start an overlapping cut.
   const fc = el.querySelector('#firstCut');
-  const gate = () => {
-    const fp = window.rcFirstPass && typeof window.rcFirstPass.state === 'function'
-      ? window.rcFirstPass.state() : null;
+  gate = () => {
+    const fp = fpNow();
     const busy = !!fp && fp.state === 'running';
     const ai = window.rcFirstPass && !(fp && ['done', 'stale-after-edits'].includes(fp.state))
       ? 'pass' : 'cut';
@@ -2522,11 +2597,6 @@ function emptyState() {
     return busy;
   };
   gate();
-  let ticks = 0;
-  const gateTimer = setInterval(() => {
-    if (!el.isConnected && ticks++ > 0) clearInterval(gateTimer);   // rebuilt or filled
-    else gate();
-  }, 1000);
   const box = el.querySelector('#firstNote');
   box.value = $('#story').value;
   box.oninput = () => { $('#story').value = box.value; touch(); };
