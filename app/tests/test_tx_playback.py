@@ -5,14 +5,19 @@ the cuts around it held 17-34 ms. This plays across a 1 s dissolve on test_perf_
 kind of footage (4K 59.94 H.264 with a 1 s GOP and grain, proxied by the server's own
 `ensure_proxies`) and measures what is on screen in the window: the live buffer's frames
 (the shot the cut is on) AND the frames of the follower the dissolve draws over it
-(`#pvTxIn` before the edit, `#pvTxOut` after it), each by `requestVideoFrameCallback`.
-A dissolve shows both pictures, so a hole in either one is a hitch on screen; the longest
-gap of each must be <= GAP_LIMIT_MS (two frame periods at 29.97). Two variants:
+(`prog.tx.in` before the edit, `#pvTxOut` after it), each by `requestVideoFrameCallback`.
+Since wave 11 (CANVAS, verdict 8 punch 3) the incoming follower is the buffer prerolling
+the incoming shot, handed the role from the dissolve's park (one decoder fewer), or
+`#pvTxIn` when that buffer is not at the frame; the test follows whichever element plays
+each half. A dissolve shows both pictures, so a hole in either one is a hitch on screen;
+the longest gap of each follower inside its half of the mix window must be <= GAP_LIMIT_MS
+(two frame periods at 29.97), with no seek on it. Two variants:
 
   * ungraded (colour off): the follower is its own layer at CSS opacity over the raw
     buffer — what the judge's Killington cut does
   * graded (a hand balance on both shots): the grade worker draws the follower's frame
-    through its own LUT over the live one (grade.setMix); also the canvas's draws
+    through its own LUT over the live one (grade.setMix); also the canvas's draws, held to
+    the same limit through the dissolve and across a plain graded cut
 
 And: each follower is decoded and running BEFORE its half starts (no seek, no open at the
 window's edge), the incoming shot's LUT is fetched before the window (the mix never waits
@@ -163,10 +168,10 @@ RECORD = """() => {
   const look = () => {
     if (!window.__flOn) return;
     const tx = prog.tx;
-    const st = (v) => v ? { w: Number(v.dataset.w || 0), p: v.paused, s: v.seeking, rs: v.readyState,
-                            ct: v.currentTime } : null;
+    const st = (v) => v ? { id: v.id, w: Number(v.dataset.w || 0), p: v.paused, s: v.seeking,
+                            rs: v.readyState, ct: v.currentTime } : null;
     window.__raf.push({ t: performance.now() - t0, ph: tl.state.playhead, playing: player.playing,
-                        draws: window.grade ? grade.draws : null,
+                        draws: window.grade ? grade.draws : null, live: liveVideo() ? liveVideo().id : null,
                         on: !!document.querySelector('#gradeCanvas.on'),
                         mix: window.grade && grade.mix ? grade.mix.graded : null,
                         tin: st(tx && tx.in), tout: st(tx && tx.out) });
@@ -211,20 +216,31 @@ def measure_dissolve(page, k: int = 0) -> dict:
     fl = [f for f in fl if t_play0 <= f["t"] <= t_play1]
     live = [f["t"] for f in fl if f["live"] and f["v"].startswith("pv") and not f["v"].startswith("pvTx")]
     live_g = _gaps(live)
-    # the dissolve's other picture: each follower's frames while it is drawn (w > 0)
+    # The dissolve's other picture: each follower's frames while it is drawn (w > 0), inside
+    # its half of the mix window. The incoming one is `prog.tx.in`: wave 11 (CANVAS) hands
+    # it the buffer prerolling the incoming shot (pv0-pv2) when that one is at the frame,
+    # else it is #pvTxIn; the results are keyed by side ("pvTxIn" / "pvTxOut") either way,
+    # with the element that played it (`tx_el`).
     tx_g: dict[str, list[float]] = {}
     tx_first: dict[str, dict] = {}
+    tx_el: dict[str, list[str]] = {}
+    tx_seeks: list[dict] = []
     for vid, side in (("pvTxIn", "tin"), ("pvTxOut", "tout")):
         on = [r for r in playing if r[side] and r[side]["w"] > 0]
         if not on:
             continue
         a, b = on[0]["t"], on[-1]["t"]
-        frames = [f["t"] for f in fl if f["v"] == vid and a - 40 <= f["t"] <= b]
+        ids = sorted({r[side]["id"] for r in on})
+        tx_el[vid] = ids
+        frames = [f["t"] for f in fl if f["v"] in ids and a - 40 <= f["t"] <= b]
         tx_g[vid] = _gaps([a] + frames + [b]) if frames else [b - a]
+        # from its start (TX_PRE / TX_PRE_OUT before its half) to its end
+        lead = 250 if side == "tin" else 450
+        tx_seeks += [x for x in seeks if x["v"] in ids and a - lead <= x["t"] <= b]
         # the follower when its half starts: running, not seeking, frames already presented
         first = on[0][side]
         tx_first[vid] = {"paused": first["p"], "seeking": first["s"], "rs": first["rs"],
-                         "frames_before": len([f for f in fl if f["v"] == vid and f["t"] < a])}
+                         "frames_before": len([f for f in fl if f["v"] in ids and a - 400 <= f["t"] < a])}
     def at(ms):
         hit = min(playing, key=lambda r: abs(r["t"] - ms)) if playing else None
         return round(hit["ph"], 3) if hit else None
@@ -262,7 +278,9 @@ def measure_dissolve(page, k: int = 0) -> dict:
         "longest_live_window_ms": round(max(live_win_g), 1) if live_win_g else None,
         "window_film_s": [round(c["at"] - hh, 3), round(c["at"] + hh, 3)],
         "longest_tx_ms": {k: round(max(v), 1) for k, v in tx_g.items() if v},
-        "tx_frames": {k: len([f for f in fl if f["v"] == k]) for k in ("pvTxIn", "pvTxOut")},
+        "tx_el": tx_el,
+        "tx_seeks": tx_seeks,
+        "tx_frames": {k: len([f for f in fl if f["v"] in tx_el.get(k, [k])]) for k in ("pvTxIn", "pvTxOut")},
         "tx_first": tx_first,
         "longest_draw_ms": round(max(draw_g), 1) if draw_g else None,
         "longest_draw_at_film_s": draw_at,
@@ -348,8 +366,10 @@ def _limits(rec: dict, extra=None) -> None:
         # playing (started from its park, before the half), its frame decoded, no seek
         assert not first["paused"] and not first["seeking"] and first["rs"] >= 2, \
             f"{vid} was not running when its half began: {rec}"
-    # no follower seeks while it plays (the measured cause of the judge's hole)
+    # no follower seeks while it plays (the measured cause of the judge's hole), whichever
+    # element plays it (the dedicated follower or the handed buffer)
     assert not [x for x in rec["seeks"] if x["v"].startswith("pvTx")], rec["seeks"]
+    assert not rec["tx_seeks"], rec["tx_seeks"]
     for vid in ("pvTxIn", "pvTxOut"):
         assert rec["longest_tx_ms"][vid] <= GAP_LIMIT_MS, f"{vid}'s frames held while drawn: {rec}"
     assert rec["longest_live_ms"] is not None and rec["longest_live_ms"] <= GAP_LIMIT_MS, \
@@ -369,15 +389,16 @@ def test_playing_through_a_graded_dissolve_has_no_hole(tx_project, tx_server):
     assert "s2" in rec["luts_before"] and "s2" not in rec["luts_during"], rec
 
     def canvas(r):
-        # The graded canvas (one worker draw per live frame; the dissolve's frames are two
-        # uploads each) holds no longer through the dissolve than through a plain graded cut
-        # on the same page at the same load, plus a frame. Not GAP_LIMIT_MS flat: headless
-        # Chromium's software GL upload is 10-50 ms a frame on this box at load 15+, and a
-        # plain cut's canvas already holds 90-230 ms on Killington there (measured; the perf
-        # test reads the buffers' frames, never the canvas's).
-        lim = max(GAP_LIMIT_MS, (plain["longest_draw_ms"] or 0) + 34)
-        assert r["longest_draw_ms"] is not None and r["longest_draw_ms"] <= lim, \
+        # The graded canvas — what the viewer sees through a graded dissolve: the live shot's
+        # frame and the follower's, each through its own grade, drawn by the worker — holds
+        # no longer than GAP_LIMIT_MS, as the buffers' frames (wave 11 CANVAS, verdict 8
+        # punch 2-3: the worker uploads each frame's planes at the size they are read, so a
+        # dissolve's two frames fit where TXHITCH could only ask for "no worse than a plain
+        # graded cut + a frame"). And no worse than that plain cut on the same page.
+        assert r["longest_draw_ms"] is not None and r["longest_draw_ms"] <= GAP_LIMIT_MS, \
             f"the graded canvas's frames held through the dissolve (plain cut {plain['longest_draw_ms']}): {r}"
+        assert plain["longest_draw_ms"] is not None and plain["longest_draw_ms"] <= GAP_LIMIT_MS, \
+            f"the graded canvas's frames held across the plain cut: {plain}"
     _check(rec, canvas)
 
 

@@ -140,3 +140,12 @@ def test_the_forced_skip_env_is_read_from_the_gate_or_its_env(monkeypatch):
 ])
 def test_the_run_status(checks, amber, want):
     assert gate.run_status(checks, amber) == want
+
+
+def test_the_perf_line_names_the_graded_canvas():
+    """Verdict 8 punch 2: the line says what the graded canvas did, beside the live gap."""
+    r = rec("passed", 8.0)
+    r["facts"]["canvas"] = {"1440": {"longest_ms": 50.2, "fps": 29.6}, "1920": {"longest_ms": 60.1, "fps": 29.9}}
+    assert "graded canvas worst gap 50.2 ms at 29.6 fps (1440), 60.1 ms at 29.9 fps (1920)" \
+        in gate.perf_said(r, CORES), gate.perf_said(r, CORES)
+    assert "graded canvas not measured" in gate.perf_said(rec("passed", 8.0), CORES)

@@ -395,9 +395,13 @@
    * every ~3 s and calls `ready()` when it may load the same URL again; `failed(text)`
    * gets a calm line for a clip that cannot be previewed. Returns a stop function. A
    * server without the status route (an older board) is simply tried again. */
-  function mediaWait(url, ready, failed) {
+  /* `progress(j)` (verdict 8) gets every answer — the Program's line says the clip and the
+   * server's estimate ("preparing preview… CLIP_09 · ~N s"), and the Project bin's Status
+   * follows it — and with `every` (ms) the first look is at once and then that often. */
+  function mediaWait(url, ready, failed, progress, every) {
     const name = String(url).split('#')[0].split('?')[0].split('/').pop();
     let stop = false, misses = 0, t = 0;
+    const gap = every || 3000;
     const tick = async () => {
       if (stop) return;
       let j = null;
@@ -406,15 +410,36 @@
         if (r.ok) j = await r.json(); else misses++;
       } catch (e) { misses++; }
       if (stop) return;
+      if (j) noteMedia(name, j);
+      if (j && progress) progress(j);
       if (j && j.serves === 'failed') {
         if (failed) failed('no preview for this clip — it can still be cut');
         return;
       }
       if ((j && j.ready) || misses >= 2) { ready(); return; }
-      t = setTimeout(tick, 3000);
+      t = setTimeout(tick, gap);
     };
-    t = setTimeout(tick, 3000);
+    t = setTimeout(tick, every ? 0 : gap);
     return () => { stop = true; clearTimeout(t); };
+  }
+
+  /* A clip's preview is being made: read the bin again in a few seconds, so its Status
+   * moves on from "preview building" once the preview is there. */
+  function pollBuilding() {
+    clearTimeout(project.timer);
+    project.timer = setTimeout(loadClips, 5000);
+  }
+
+  /* What a status answer says about a clip's picture, into the bin's row (its Status). */
+  function noteMedia(name, j) {
+    const st = String(name).replace(/\.[^.]+$/, '');
+    const c = project.clips.find((x) => x.stem === st || String(x.clip).replace(/\.[^.]+$/, '') === st);
+    if (!c) return;
+    const m = j.serves === 'building' ? 'building' : (j.ready ? j.serves : c.media);
+    if (m === c.media) return;
+    c.media = m;
+    paintProject();
+    if (m === 'building') pollBuilding();
   }
 
   /* ================================================================ the project panel */
@@ -490,6 +515,7 @@
     paintProject();
     // facts still being probed: ask again in a second; a clip still being indexed: now and then
     if (j && j.probing) project.timer = setTimeout(loadClips, 1000);
+    else if (project.clips.some((c) => c.media === 'building' || c.media === 'queued')) project.timer = setTimeout(loadClips, 5000);
     else if (project.clips.some((c) => !c.analysed || !c.looked)) project.timer = setTimeout(loadClips, 15000);
     // the Source monitor opens on the clip it showed last, else the first one, so there
     // is a picture (its poster) the moment the bin is read
@@ -582,6 +608,9 @@
   // built), so the state is the index's, not the proxy's
   // heard = the sound is transcribed, looked = the pictures are read, indexed = both
   function stateOf(c) {
+    // verdict 8: the Program sat black on a clip the bin called "indexed"
+    if (c.media === 'building') return ['preview building', 'wait'];
+    if (c.media === 'queued') return ['preview queued', 'wait'];
     if (c.analysed && c.looked) return ['indexed', 'ok'];
     if (c.analysed) return ['heard', 'part'];
     if (c.looked) return ['looked', 'part'];
