@@ -43,7 +43,9 @@
  * POST /api/assist/preview), the colour and Effect Controls ops as the After picture on
  * the Program monitor (applied in memory with nothing saved; ◐ flips Before / After; any
  * edit elsewhere takes the preview down first, so it never rides another edit to disk),
- * and an export as the file it will write. ✓ / ✗ per op; Accept applies the accepted
+ * a transition or a fade as its dashed box on the edit it will sit on (tlLanes.
+ * showTransitions: on the ghost lane while that is up, else on V1 / A1; verdict 9,
+ * punch 6), and an export as the file it will write. ✓ / ✗ per op; Accept applies the accepted
  * ones as one undo entry and POSTs the review to /api/assist/{job}/answer; Reject all
  * puts everything back as it was and writes nothing.
  */
@@ -82,6 +84,7 @@
   const KEY_PROP = { posx: 'position_x', posy: 'position_y', scale: 'scale', rotation: 'rotation', opacity: 'opacity', volume_db: 'volume_db' };
   const CUT_OPS = new Set(['insert', 'overwrite', 'append', 'move', 'razor', 'ripple_delete', 'trim', 'roll', 'slip', 'speed']);
   const LOOK_OPS = new Set(['set', 'keys', 'curve', 'wheel', 'look', 'match']);   // shown on the Program
+  const TX_OPS = new Set(['transition', 'fade']);                                // drawn on the timeline
   const FAMILY = {
     insert: 'timeline', overwrite: 'timeline', append: 'timeline', move: 'timeline', razor: 'timeline',
     ripple_delete: 'timeline', trim: 'timeline', roll: 'timeline', slip: 'timeline', speed: 'timeline',
@@ -527,6 +530,7 @@
     const shows = CUT_OPS.has(op.op) ? 'shown as the ghost lane under V1 until you accept'
       : livePreview(op) ? 'shown on the Program monitor (◐ Before / After) until you accept'
         : opIsLook(op) ? 'the look is baked when it is saved: the Program shows it once you accept'
+          : TX_OPS.has(op.op) ? 'drawn dashed on the timeline, where it will sit, until you accept'
           : op.op === 'export' ? 'runs only when you accept'
             : op.op === 'design_effect' ? 'opens Designed Effects on this shot with this note; its own review follows'
               : 'applied when you accept';
@@ -602,8 +606,12 @@
     const looks = R.ops.some((op, i) => livePreview(op) && R.verdict[i] && !R.blocked.has(i));
     const cut = R.ops.some((op, i) => CUT_OPS.has(op.op) && R.verdict[i] && !R.blocked.has(i));
     const exp = R.ops.find((op, i) => op.op === 'export' && R.verdict[i] && !R.blocked.has(i));
+    const txs = txList();
+    const tkind = (k) => { const t = TL(); return (t && t.TRANS_NAMES && t.TRANS_NAMES[k]) || 'transition'; };
+    const txWords = txs.length === 1 ? `${tkind(txs[0].kind)} on the timeline` : `${txs.length} transitions on the timeline`;
     const refused = (res.refused || []).filter((x) => x && x.why);
     const preview = [cut ? '<span class="air-pv" title="the cut with these edits, drawn under V1 — nothing has changed yet"><i class="air-ghost" aria-hidden="true"></i>New cut under V1</span>' : '',
+      txs.length ? `<span class="air-pv" data-testid="ai-tx-preview" title="drawn dashed where ${txs.length === 1 ? 'it' : 'they'} will sit${cut ? ', on the new cut under V1' : ''} — nothing has changed yet"><i class="air-txg" aria-hidden="true"></i>${esc(txWords)}</span>` : '',
       looks ? `<button type="button" class="air-ab${R.after ? ' on' : ''}" data-act="ab" data-testid="ai-before-after" aria-pressed="${R.after}" title="the Program monitor shows the colour and Effect Controls changes (After) or the shot as it is (Before) — nothing is saved until you accept">◐ ${R.after ? 'After' : 'Before'}</button>` : '',
       exp ? `<span class="air-pv air-file" data-testid="ai-export-what" title="the Export dialog writes this file when you accept — never over an existing one (it becomes -2, -3 …)">writes ${esc(exportWords(exp))}</span>` : ''].filter(Boolean).join('');
     el.innerHTML = `${head}
@@ -703,6 +711,26 @@
     if (d.preview && lanes && lanes.showGhost) lanes.showGhost(d.preview.segments);
   }
 
+  /* --------------- a transition's preview: its dashed box on the edit (verdict 9, punch 6) */
+  /* The accepted transition and fade ops, as the lane draws them: ids as the review has
+   * them (a `new:n` is found on the ghost lane, where the shot that names it is drawn). */
+  function txList() {
+    if (!R.res || R.res.kind !== 'ops') return [];
+    return accepted().map((i) => R.ops[i]).filter((op) => op && TX_OPS.has(op.op)).map((op) => (op.op === 'transition'
+      ? { kind: op.kind, dur: op.dur, a: op.a, b: op.b }
+      : { kind: op.kind, dur: op.dur, id: op.id, edge: op.edge }));
+  }
+  function refreshTx() {
+    const lanes = window.tlLanes;
+    if (!lanes || typeof lanes.showTransitions !== 'function') return;
+    const list = txList();
+    if (list.length) lanes.showTransitions(list); else lanes.clearTransitions();
+  }
+  function clearTx() {
+    const lanes = window.tlLanes;
+    if (lanes && typeof lanes.clearTransitions === 'function') lanes.clearTransitions();
+  }
+
   /* --------------- the look's preview: After on the Program, nothing saved */
   function lookTargetOk(op) {
     const t = TL();
@@ -758,6 +786,7 @@
     paint();
     refreshLook();
     refreshGhost();
+    refreshTx();
   }
 
   /* An edit anywhere else takes the look's preview down first, so the Before state is the
@@ -801,6 +830,7 @@
     (d.index || []).forEach((src, k) => { if (d.lines && d.lines[k]) R.lines[src] = d.lines[k]; });
     paint();
     refreshGhost();
+    refreshTx();
   }
 
   /* --------------- opening, answering */
@@ -828,6 +858,7 @@
       R.ops = []; R.lines = []; R.verdict = [];
     }
     paint();
+    refreshTx();
     if (window.dock && dock.reveal) dock.reveal('#aiReview');
     if (res.kind === 'plan') { followPlan(res); return true; }
     loadExportInfo();
@@ -893,6 +924,7 @@
     if (!idx.length) return null;
     lookOff();
     if (window.tlLanes && tlLanes.clearGhost) tlLanes.clearGhost();
+    clearTx();
     const label = R.res.summary ? `AI: ${String(R.res.summary).slice(0, 48)}` : labelFor(idx.map((i) => R.ops[i]));
     const out = applyOps(idx.map((i) => R.ops[i]), { label });
     const failed = new Set(out.refused.map((x) => idx[x.i]));
@@ -922,6 +954,7 @@
     clearTimeout(recheckT);
     R.ghostGen += 1;
     if (R.res && R.res.kind === 'ops' && window.tlLanes && tlLanes.clearGhost) tlLanes.clearGhost();
+    if (R.res && R.res.kind === 'ops') clearTx();
     R.res = null; R.ops = []; R.lines = []; R.verdict = []; R.blocked = new Map();
     if (R.el) { R.el.hidden = true; R.el.innerHTML = ''; R.el.classList.remove('previewing'); }
     syncTall();

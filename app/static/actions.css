@@ -64,6 +64,9 @@
 #aiReview .air-pv { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
 #aiReview .air-ghost { display: inline-block; flex: none; width: 18px; height: 8px; border-radius: 2px;
   border: 1px dashed #5fcf86; background: rgba(95, 207, 134, .16); }
+/* the timeline's dashed transition box (timeline-lanes.js .tx-ghost), small */
+#aiReview .air-txg { display: inline-block; flex: none; width: 14px; height: 8px; border-radius: 2px;
+  border: 1px dashed hsl(265 70% 78%); background: hsl(265 45% 46% / .34); }
 #aiReview .air-ab { padding: 0 7px; height: 20px; line-height: 18px; font-size: 11px; color: var(--dim); }
 #aiReview .air-ab.on { color: var(--text); border-color: #3d5f86; background: #1f3046; }
 #aiReview .air-file { display: block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

@@ -732,3 +732,134 @@ def test_an_answer_and_a_failure_read_as_words(browser, live_server, project):
         assert p.locator("#undo").is_disabled()
     finally:
         b.close()
+
+
+# ---------------------------------------------------------------- a transition shows before it lands
+# Verdict 9, punch 6: "a transition shows only as a line. Nothing is drawn on the timeline
+# before Accept." A transition or fade op under review is its dashed box on the edit it
+# will sit on (or against its clip's edge), in the transition's colour, labelled with its
+# kind and length — and none is left once the review is answered.
+
+TX_GHOSTS = """() => [...document.querySelectorAll('#tl .tx-ghost')].map((n) => {
+  const r = n.getBoundingClientRect(), cs = getComputedStyle(n);
+  return {kind: n.dataset.kind, lane: n.dataset.lane, align: n.dataset.align, a: n.dataset.a || null,
+          b: n.dataset.b || null, id: n.dataset.id || null, edge: n.dataset.edge || null,
+          dur: n.dataset.dur, label: n.querySelector('.tx-lbl').textContent,
+          left: r.left, right: r.right, mid: (r.left + r.right) / 2, top: r.top, bottom: r.bottom,
+          width: r.width, style: cs.borderTopStyle, colour: cs.borderTopColor};
+})"""
+
+
+def _box(page, sel):
+    return page.evaluate("(s) => { const r = document.querySelector(s).getBoundingClientRect();"
+                         " return {left: r.left, right: r.right, top: r.top, bottom: r.bottom}; }", sel)
+
+
+def test_a_transition_and_fades_show_on_their_edit_before_accept(browser, live_server, project):
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+        b.settle()
+        time.sleep(0.3)
+        before = b.raw()
+        res = b.ask([{"op": "transition", "a": "shot-b", "b": "shot-c", "kind": "cross_dissolve", "dur": 0.5},
+                     {"op": "fade", "id": "shot-a", "edge": "start", "kind": "dip_to_black", "dur": 1.0},
+                     {"op": "fade", "id": "shot-c", "edge": "end", "kind": "audio_crossfade", "dur": 0.5}])
+        assert res["refused"] == [], res["refused"]
+        b.review(res)
+        p.wait_for_function("document.querySelectorAll('#tl .tx-ghost').length === 3")
+        g = {x["kind"]: x for x in p.evaluate(TX_GHOSTS)}
+        zoom = p.evaluate("tl.state.zoom")
+        v1 = _box(p, "#tl .tl-lane[data-lane=V1]")
+        a1 = p.evaluate("(() => { const r = tl.el.tracks.A1.getBoundingClientRect();"
+                        " return {left: r.left, right: r.right, top: r.top, bottom: r.bottom}; })()")
+        # the dissolve: centred on the edit between shots 2 and 3, on V1, its length wide
+        x = g["cross_dissolve"]
+        assert (x["lane"], x["align"], x["a"], x["b"]) == ("V1", "center", "shot-b", "shot-c"), x
+        assert x["label"] == "Cross Dissolve · 0.50 s"
+        assert x["style"] == "dashed"
+        edit = _box(p, '#tl .blk[data-id="shot-c"]')["left"]
+        assert abs(x["mid"] - edit) <= 1.5, (x, edit)
+        assert abs(x["width"] - 0.5 * zoom) <= 2, (x["width"], zoom)
+        assert v1["top"] <= x["top"] and x["bottom"] <= v1["bottom"], (x, v1)
+        # the fade from black: against shot 1's start, inside it
+        f = g["dip_to_black"]
+        assert (f["lane"], f["align"], f["id"], f["edge"]) == ("V1", "start", "shot-a", "start"), f
+        assert f["label"] == "Dip to Black · 1.00 s"
+        assert abs(f["left"] - _box(p, '#tl .blk[data-id="shot-a"]')["left"]) <= 1.5
+        assert abs(f["width"] - 1.0 * zoom) <= 2
+        # the sound's fade: on A1, against shot 3's end, in the audio colour (not the video's)
+        s = g["audio_crossfade"]
+        assert (s["lane"], s["align"], s["id"], s["edge"]) == ("A1", "end", "shot-c", "end"), s
+        assert s["label"] == "Constant Power · 0.50 s"
+        assert abs(s["right"] - _box(p, '#tl .blk[data-id="shot-c"]')["right"]) <= 1.5
+        assert a1["top"] <= s["top"] and s["bottom"] <= a1["bottom"], (s, a1)
+        assert s["colour"] != x["colour"]
+        # the review says where to look; nothing has landed
+        assert "3 transitions on the timeline" in p.locator("[data-testid=ai-tx-preview]").inner_text()
+        assert p.locator("#tl .tl-trans").count() == 0 and p.evaluate("tl.transitions().length") == 0
+        # ✗ on the fade's row takes its box away, the others stay
+        p.locator("[data-testid=ai-op-row][data-op-index='1'] [data-testid=ai-op-reject]").click()
+        p.wait_for_function("document.querySelectorAll('#tl .tx-ghost').length === 2")
+        assert sorted(x["kind"] for x in p.evaluate(TX_GHOSTS)) == ["audio_crossfade", "cross_dissolve"]
+        # a zoom redraws them on the same edit
+        p.evaluate("tl.zoomTo(tl.state.zoom * 1.5)")
+        p.wait_for_function("(z) => Math.abs(tl.state.zoom - z) < 1e-6", arg=zoom * 1.5)
+        p.wait_for_timeout(120)
+        x2 = {x["kind"]: x for x in p.evaluate(TX_GHOSTS)}["cross_dissolve"]
+        assert abs(x2["mid"] - _box(p, '#tl .blk[data-id="shot-c"]')["left"]) <= 1.5
+        # Reject all: none left, nothing written
+        p.locator("[data-testid=ai-reject-all]").click()
+        p.wait_for_function("!rcActions.open")
+        p.wait_for_function("document.querySelectorAll('#tl .tx-ghost').length === 0")
+        p.wait_for_timeout(900)
+        assert p.locator("#tl .tl-trans").count() == 0
+        assert b.raw() == before
+    finally:
+        b.close()
+
+
+def test_an_accepted_transition_lands_where_its_ghost_was(browser, live_server, project):
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+        b.review(b.ask([{"op": "transition", "a": "shot-a", "b": "shot-b", "kind": "dip_to_black", "dur": 0.5}]))
+        p.wait_for_function("document.querySelectorAll('#tl .tx-ghost').length === 1")
+        ghost = p.evaluate(TX_GHOSTS)[0]
+        assert ghost["label"] == "Dip to Black · 0.50 s" and ghost["lane"] == "V1"
+        assert "Dip to Black on the timeline" in p.locator("[data-testid=ai-tx-preview]").inner_text()
+        row = p.locator("[data-testid=ai-op-row][data-op-index='0'] .air-line")
+        assert "dashed on the timeline" in row.get_attribute("title")
+        b.accept()
+        p.wait_for_function("document.querySelectorAll('#tl .tx-ghost').length === 0")
+        p.wait_for_selector("#tl .tl-trans[data-kind=dip_to_black]")
+        real = _box(p, "#tl .tl-trans[data-kind=dip_to_black]")
+        assert abs((real["left"] + real["right"]) / 2 - ghost["mid"]) <= 1.5, (real, ghost)
+        assert abs((real["right"] - real["left"]) - ghost["width"]) <= 2, (real, ghost)
+    finally:
+        b.close()
+
+
+def test_a_transition_on_a_shot_the_review_makes_is_drawn_on_the_new_cut(browser, live_server, project):
+    """Razor shot 3, then a dissolve on the new edit: the edit exists only in the cut Accept
+    makes, so the box is drawn on the ghost lane (the new cut under V1), on that edit."""
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+        b.review(b.ask([{"op": "razor", "id": "shot-c", "at": 5.5},
+                        {"op": "transition", "a": "shot-c", "b": "new:1", "kind": "cross_dissolve", "dur": 0.5}]))
+        p.wait_for_function("tlLanes.ghost() && tlLanes.ghost().ghosts.length === 4")
+        p.wait_for_function("[...document.querySelectorAll('#tl .tx-ghost')].some((n) => n.dataset.lane === 'ghost')")
+        (x,) = p.evaluate(TX_GHOSTS)
+        assert (x["a"], x["b"], x["align"]) == ("shot-c", "new:1", "center"), x
+        half = _box(p, "#tl .tl-xlane[data-lane=ghost] .ghost[data-k='3']")
+        lane = _box(p, "#tl .tl-xlane[data-lane=ghost]")
+        assert abs(x["mid"] - half["left"]) <= 1.5, (x, half)
+        assert lane["top"] <= x["top"] and x["bottom"] <= lane["bottom"]
+        # ✗ on the razor takes the dissolve with it (it names the razor's shot)
+        p.locator("[data-testid=ai-op-row][data-op-index='0'] [data-testid=ai-op-reject]").click()
+        p.wait_for_function("document.querySelectorAll('#tl .tx-ghost').length === 0")
+        p.locator("[data-testid=ai-reject-all]").click()
+        p.wait_for_function("!rcActions.open")
+    finally:
+        b.close()
