@@ -300,6 +300,79 @@ def test_set_range_reaches_the_disk_and_undo_redo_walk_it_back_and_forth(page, p
     assert page.evaluate("[segs[0].in, segs[0].out]") == [grid(5.8), 6.0]
 
 
+def test_batch_folds_nested_begins_into_one_entry(page, project):
+    """tl.batch(label, fn) (redesign wave 12, lane AIGLUE; lane AIOPS's request): the
+    begin / commit / cancel the human paths make inside it nest — every nested begin
+    folds into the batch's ONE entry, a nested cancel puts back only its own level, a
+    stray commit cannot close the batch early, a throw puts the cut back as the batch
+    found it; `record: false` leaves the edits in memory with no entry and no save; and a
+    batch is refused (fn never runs) while a gesture outside it holds an entry open.
+    Outside a batch the old rules stand: a second begin is a no-op, cancel restores."""
+    a, b = ids(page)
+    page.evaluate("tl.clearHistory()")
+    got = page.evaluate(f"""() => {{
+      const seen = [];
+      tl.on('change', (ev) => {{ if (ev.kind === 'commit') seen.push(ev.label); }});
+      const r = tl.batch('AI: three edits', () => {{
+        const own = tl.begin('trim');                       // a human path's own gesture
+        tl.setRange('{a}', 1.5, null);
+        const folded = tl.commit();
+        tl.begin('speed'); tl.setSpeed('{b}', 0.5); tl.commit();
+        tl.begin('slip'); tl.setRange('{b}', 0.5, 1.5); tl.cancel();   // only this level goes
+        const stray = tl.commit();                          // no level open: the batch's own
+        tl.addMarker(1.0);
+        tl.batch('inner', () => tl.setRange('{a}', null, 2.75));
+        return {{ own, folded, stray }};
+      }});
+      return {{ r, seen, title: document.querySelector('#undo').title, cut: segs.map(s => [s.in, s.out, s.speed || 1]),
+               markers: tl.markers() }};
+    }}""")
+    assert got["r"]["ok"] and got["r"]["committed"]
+    assert got["r"]["value"] == {"own": True, "folded": True, "stray": False}
+    assert got["seen"] == ["AI: three edits"], got["seen"]        # one entry, one commit
+    assert got["title"].startswith("undo: AI: three edits")
+    assert got["cut"] == [[1.5, 2.75, 1], [0.0, 2.0, 0.5]]
+    assert len(got["markers"]) == 1
+    page.keyboard.press("Control+z")                              # one step takes it all
+    assert page.evaluate("segs.map(s => [s.in, s.out, s.speed || 1])") == [[1.0, 3.0, 1], [0.0, 2.0, 1]]
+    assert page.evaluate("tl.markers()") == []
+    assert page.locator("#undo").is_disabled()
+    page.keyboard.press("Control+Shift+z")
+    assert page.evaluate("segs.map(s => [s.in, s.out, s.speed || 1])") == [[1.5, 2.75, 1], [0.0, 2.0, 0.5]]
+    page.keyboard.press("Control+z")
+
+    # a throw: the cut back as the batch found it, nothing on the stack, the error out
+    thrown = page.evaluate(f"""() => {{
+      try {{ tl.batch('boom', () => {{ tl.setRange('{a}', 2.0, null); throw new Error('boom'); }}); }}
+      catch (e) {{ return [e.message, segs[0].in, document.querySelector('#undo').title]; }}
+      return null;
+    }}""")
+    assert thrown[0] == "boom" and thrown[1] == 1.0 and not thrown[2].startswith("undo: boom")
+
+    # busy: a drag's open entry refuses a batch, and fn never runs
+    busy = page.evaluate(f"""() => {{
+      tl.begin('drag'); tl.setRange('{a}', 1.25, null);
+      let ran = false;
+      const r = tl.batch('AI', () => {{ ran = true; }});
+      const second = tl.begin('again');                   // outside a batch: still a no-op
+      tl.cancel();                                         // and cancel restores the outermost
+      return [r.ok, ran, second, segs[0].in, tl.begin('x') && tl.cancel()];
+    }}""")
+    assert busy == [False, False, False, 1.0, True]
+
+    # record: false — in memory, no entry, no autosave
+    wait_saved(page)
+    before = Path(project["edl"]).read_text(encoding="utf-8")
+    pv = page.evaluate(f"""() => {{
+      const r = tl.batch('AI preview', () => tl.setRange('{b}', 0.5, null), {{ record: false }});
+      return [r.ok, r.committed, segs[1].in, document.querySelector('#undo').disabled];
+    }}""")
+    assert pv == [True, False, 0.5, True]
+    page.wait_for_timeout(1500)                                    # past the autosave's delay
+    assert Path(project["edl"]).read_text(encoding="utf-8") == before
+    page.evaluate(f"tl.batch('back', () => tl.setRange('{b}', 0.0, null), {{ record: false }})")
+
+
 def test_a_split_makes_two_shots_that_survive_a_save_with_distinct_ids(page, project):
     first, second = ids(page)
     new = page.evaluate(f"tl.split('{first}', 1.0)")     # 1 s of film = 2.0 s into CLIP_A

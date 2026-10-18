@@ -33,10 +33,10 @@
  *   pressed (its own proposal and review follow); export → the Export dialog, filled in
  *   and its Export pressed — only after Accept.
  *
- * One undo entry: the panel's own begin/commit wrap them all; while they run the nested
- * tl.begin / commit / cancel the human paths call are no-ops (the timeline's own mutations
- * already fold into an open entry). Markers and In / Out are on the timeline's undo stack
- * (timeline.js's snapshot), so they ride the same entry: one accept is one undo step.
+ * One undo entry: `tl.batch(label, fn)` wraps them all (timeline.js); the tl.begin /
+ * commit / cancel the human paths make while they run nest inside it and fold into its
+ * one entry. Markers and In / Out are on the timeline's undo stack (timeline.js's
+ * snapshot), so they ride the same entry: one accept is one undo step.
  *
  * The review shows every op before it lands: the cut's ops as the ghost lane under V1
  * (tlLanes.showGhost, the server's simulation of the accepted ops on the board's cut,
@@ -127,20 +127,6 @@
     if (c.startsWith('gen_')) return `a ${c.split('_')[1] || 'generated'} slide`;
     return c.replace(/\.[^.]+$/, '');
   };
-
-  /* ------------------------------------------------------------ one undo entry */
-  /* While `fn` runs, the human paths' own tl.begin / commit / cancel are no-ops: their
-   * changes fold into the one entry the caller holds open (or, for the in-memory preview,
-   * into none). The timeline's internal mutations need nothing: they already fold into an
-   * open entry. Restored however fn ends. */
-  function nested(fn) {
-    const t = TL();
-    const real = { begin: t.begin, commit: t.commit, cancel: t.cancel };
-    t.begin = () => true;
-    t.commit = () => true;
-    t.cancel = () => true;
-    try { return fn(); } finally { Object.assign(t, real); }
-  }
 
   /* ------------------------------------------------------------ the ops, as a human makes them */
   function refuse(why) { const e = new Error(why); e.refused = true; throw e; }
@@ -342,26 +328,26 @@
   function applyOps(ops, opts = {}) {
     const t = TL();
     const list = Array.isArray(ops) ? ops : [];
-    if (!t || typeof t.begin !== 'function') {
+    if (!t || typeof t.batch !== 'function') {
       return { applied: 0, refused: list.map((_, i) => ({ i, why: 'the timeline is not loaded' })), after: Promise.resolve([]) };
     }
     const label = opts.label || labelFor(list);
     const ctx = makeCtx();
     const refused = [];
     let applied = 0;
-    if (!t.begin(label)) {
-      return { applied: 0, refused: list.map((_, i) => ({ i, why: 'another edit is in progress — finish it first' })), after: Promise.resolve([]) };
-    }
+    let out;
     applying = true;
     try {
-      nested(() => list.forEach((op, i) => {
+      out = t.batch(label, () => list.forEach((op, i) => {
         const fn = op && DO[op.op];
         if (!fn) { refused.push({ i, why: `unknown op ${op && op.op}` }); return; }
         try { fn(op, ctx); applied += 1; } catch (e) { refused.push({ i, why: e.refused ? e.message : `failed: ${e.message}` }); }
       }));
     } finally {
-      t.commit();
       applying = false;
+    }
+    if (!out.ok) {
+      return { applied: 0, refused: list.map((_, i) => ({ i, why: 'another edit is in progress — finish it first' })), after: Promise.resolve([]) };
     }
     const later = ctx.later.slice();
     const done = (async () => {
@@ -735,7 +721,11 @@
       sel: [...t.state.sel], playhead: t.state.playhead,
     };
     const ctx = makeCtx();
-    nested(() => ops.forEach((op) => { try { DO[op.op](op, ctx); } catch (e) { /* its row says so */ } }));
+    // in memory only: no undo entry, no autosave (lookOff puts every control back itself)
+    const out = t.batch('AI preview', () => ops.forEach((op) => {
+      try { DO[op.op](op, ctx); } catch (e) { /* its row says so */ }
+    }), { record: false });
+    if (!out.ok) { R.saved = null; return; }    // a drag holds the timeline: no preview now
     if (R.el) R.el.classList.add('previewing');
     const first = t.byId(ops[0].id);
     if (first && !app.playing()) {
