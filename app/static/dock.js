@@ -422,7 +422,8 @@
    * K3 a: "I still don't like the way the footage and pass look"). The bin holds editor
    * objects, and the pass's result is among them, not in a view of its own:
    *   - List view: Premiere's metadata columns — Name (label swatch, type icon), Frame Rate,
-   *     Media Start, Media End, Media Duration, Video Info, Status and the pass's Description
+   *     Media Start, Media End (from the camera's timecode when the clip has one), Media
+   *     Duration, Video Info, Audio Info, Status and the pass's Description
    *     — as many as the panel's width holds, numbers right-aligned in timecode; a click on
    *     a heading sorts by it, again the other way, the arrow on the sorted one; ↑ / ↓ walk
    *     the rows and Enter opens one while the panel has the blue outline (→ / ← open and
@@ -449,7 +450,7 @@
   const ZOOM_KEY = 'roughcut.ws.projzoom';
   const OPEN_KEY = 'roughcut.ws.projopen';
   const ZOOM = { min: 72, max: 240, def: 120 };
-  const SORTS = ['name', 'fps', 'start', 'end', 'dur', 'size', 'state', 'note', 'shot'];
+  const SORTS = ['name', 'fps', 'start', 'end', 'dur', 'size', 'audio', 'state', 'note', 'shot'];
   const sortOf = (s) => (s && SORTS.includes(s.col) && (s.dir === 1 || s.dir === -1)
     ? { col: s.col, dir: s.dir } : { col: 'name', dir: 1 });
   const zoomOf = (z) => (Number.isFinite(Number(z)) && z !== null
@@ -587,6 +588,48 @@
     return ['not indexed', ''];
   }
   const fpsText = (r) => (r ? `${Number(r).toFixed(Number(r) % 1 ? 2 : 0)} fps` : '');
+  // Premiere's Audio Info: "48000 Hz · Stereo" (GET /api/clips' `audio`, the facts probe's)
+  const CHANNELS = { 1: 'Mono', 2: 'Stereo', 6: '5.1', 8: '7.1' };
+  const audioText = (a) => (a && (a.rate || a.channels)
+    ? [a.rate ? `${a.rate} Hz` : '', a.channels ? CHANNELS[a.channels] || `${a.channels} ch` : '']
+      .filter(Boolean).join(' · ') : '');
+  /* The camera's source timecode (GET /api/clips' `tc_start`, HH:MM:SS:FF at the clip's
+   * rate, `;` when it counts drop-frame): Media Start is it, Media End the clip's last
+   * frame from it (start + duration − 1 frame), as Premiere writes them. `tcBase` is its
+   * frame count; `tcAt` that count plus some frames, written back the same way; `tcVal`
+   * a written timecode's seconds as it reads (the sort's value). */
+  function tcBase(tc, rate) {
+    const m = /^(\d{1,2}):(\d{2}):(\d{2})([:;.,])(\d{2,3})$/.exec(String(tc || ''));
+    if (!m || !(Number(rate) > 0)) return null;
+    const nom = Math.max(1, Math.round(Number(rate)));
+    const df = /[;,]/.test(m[4]) && (nom === 30 || nom === 60);
+    const [hh, mm, ss, ff] = [m[1], m[2], m[3], m[5]].map(Number);
+    let n = ((hh * 60 + mm) * 60 + ss) * nom + ff;
+    if (df) { const mins = hh * 60 + mm; n -= (nom / 15) * (mins - Math.floor(mins / 10)); }
+    return { n, nom, df };
+  }
+  function tcAt(b, frames) {
+    let n = b.n + Math.max(0, Math.round(Number(frames) || 0));
+    if (b.df) {                    // drop-frame: no ;00 or ;01 (;00-;03 at 59.94) but every tenth minute
+      const drop = b.nom / 15, per10 = b.nom * 600 - drop * 9, perMin = b.nom * 60 - drop;
+      const d = Math.floor(n / per10), r = n % per10;
+      n += drop * 9 * d + (r > drop ? drop * Math.floor((r - drop) / perMin) : 0);
+    }
+    const ff = n % b.nom; n = (n - ff) / b.nom;
+    const ss = n % 60; n = (n - ss) / 60;
+    const mm = n % 60;
+    const p = (x) => String(x).padStart(2, '0');
+    return `${p(((n - mm) / 60) % 24)}:${p(mm)}:${p(ss)}${b.df ? ';' : ':'}${p(ff)}`;
+  }
+  const tcVal = (s, nom) => { const x = String(s).split(/[:;]/).map(Number); return ((x[0] * 60 + x[1]) * 60 + x[2]) + x[3] / nom; };
+  // an item's Media Start / Media End from its clip's source timecode: In and Out (clip
+  // seconds) as frames past it; null without one (the clip's own 00:00:00:00 then)
+  function mediaTc(b, rate, a, z) {
+    if (!b) return null;
+    const fa = Math.round(Math.max(0, a) * rate), fz = Math.max(fa, Math.round(Math.max(0, z) * rate) - 1);
+    const s = tcAt(b, fa), e = tcAt(b, fz);
+    return { s, e, sv: tcVal(s, b.nom), ev: tcVal(e, b.nom) };
+  }
   const tcOf = (t, rate) => tcode(Math.max(0, Number(t) || 0), rate);
   // Media End is the last frame's timecode, as Premiere writes it (In + Duration − 1 frame)
   const lastFrame = (t, rate) => Math.max(0, (Number(t) || 0) - 1 / (Number(rate) > 0 ? Number(rate) : 24));
@@ -687,11 +730,16 @@
     const rate = Number(c.fps) || 0;
     const dur = Number(c.duration) || 0;
     const note = clipNote(c);
-    return { type: 'clip', key: `c|${c.clip}`, name: c.clip, c, label: 'violet', rate, fps: rate,
-             start: 0, end: lastFrame(dur, rate), dur, w: c.width || 0, h: c.height || 0, state, stCls,
+    const tc0 = tcBase(c.tc_start, rate);
+    const mt = dur ? mediaTc(tc0, rate, 0, dur) : null;
+    const audio = audioText(c.audio);
+    return { type: 'clip', key: `c|${c.clip}`, name: c.clip, c, label: 'violet', rate, fps: rate, tc0,
+             start: mt ? mt.sv : 0, end: mt ? mt.ev : lastFrame(dur, rate), sTc: mt && mt.s, eTc: mt && mt.e,
+             dur, w: c.width || 0, h: c.height || 0, audio, state, stCls,
              note, shot: c.captured, subs, forced,
-             title: [c.clip, [dur ? tcOf(dur, rate) : '', fpsText(rate), c.width ? `${c.width} × ${c.height}` : '']
-               .filter(Boolean).join(' · '), state + (subs.length ? ` · ${nOf(subs.length, 'subclip')}` : ''), note]
+             title: [c.clip, [dur ? tcOf(dur, rate) : '', fpsText(rate), c.width ? `${c.width} × ${c.height}` : '', audio]
+               .filter(Boolean).join(' · '), mt ? `Media Start ${mt.s} · Media End ${mt.e}` : '',
+               state + (subs.length ? ` · ${nOf(subs.length, 'subclip')}` : ''), note]
                .filter(Boolean).join('\n') };
   }
 
@@ -700,9 +748,11 @@
     const dur = Math.max(0, s.out - s.in);
     const state = s.inCut ? 'in cut' : s.mine ? (s.hero ? 'hero' : 'kept') : 'pick';
     const note = s.mine && s.note ? `your note: ${s.note}${s.why ? ` — ${s.why}` : ''}` : s.why;
+    const mt = dur ? mediaTc(parent.tc0, rate, s.in, s.out) : null;
     return { type: 'sub', key: `s|${s.id}`, id: s.id, clip: s.clip, name: s.name, label: parent.label, rate,
-             fps: rate, start: s.in, end: lastFrame(s.out, rate), dur, in: s.in, out: s.out,
-             w: parent.w, h: parent.h, state, stCls: s.inCut ? 'ok' : '', note, why: s.why || s.note,
+             fps: rate, start: mt ? mt.sv : s.in, end: mt ? mt.ev : lastFrame(s.out, rate),
+             sTc: mt && mt.s, eTc: mt && mt.e, dur, in: s.in, out: s.out,
+             w: parent.w, h: parent.h, audio: parent.audio, state, stCls: s.inCut ? 'ok' : '', note, why: s.why || s.note,
              shot: parent.shot,
              title: [`${s.name} — a subclip of ${s.clip}`,
                      `In ${tcOf(s.in, rate)} · Out ${tcOf(lastFrame(s.out, rate), rate)} · ${tcOf(dur, rate)}`,
@@ -760,7 +810,8 @@
    * width, as a Premiere bin's are, wide enough for its heading and its longest value
    * (no cell is ever cut). Name, Duration and Status always show; a wider list adds Frame
    * Rate, Video Info, Description, Media Start, Media End and Captured, in that order, while
-   * Name keeps NAME_MIN; the rest are in each row's hover. The defaults (1440: 286 px, 1920:
+   * Name keeps NAME_MIN, and Audio Info last, when every other one fits; the rest are in
+   * each row's hover. The defaults (1440: 286 px, 1920:
    * 382 px) show Name, Duration and Status; below 360 px the duration's heading is
    * "Duration" (its full name would leave Name too little), above it "Media Duration". */
   const COLS = {
@@ -770,12 +821,13 @@
     end: { k: 'end', h: 'Media End', w: 88, num: true },
     dur: { k: 'dur', h: 'Media Duration', w: 108, num: true },
     size: { k: 'size', h: 'Video Info', w: 84 },
+    audio: { k: 'audio', h: 'Audio Info', w: 118 },
     state: { k: 'state', h: 'Status', w: 80 },
     note: { k: 'note', h: 'Description', w: 170 },          // its least: it takes what Name leaves
     shot: { k: 'shot', h: 'Captured', w: 120 },
   };
-  const COL_ORDER = ['name', 'fps', 'start', 'end', 'dur', 'size', 'state', 'note', 'shot'];
-  const COL_MORE = ['fps', 'size', 'note', 'start', 'end', 'shot'];
+  const COL_ORDER = ['name', 'fps', 'start', 'end', 'dur', 'size', 'audio', 'state', 'note', 'shot'];
+  const COL_MORE = ['fps', 'size', 'note', 'start', 'end', 'shot', 'audio'];
   const NAME_MIN = 150;
   function columns(width, items) {
     const dur = width < 360 ? { ...COLS.dur, h: 'Duration', w: 78 } : COLS.dur;
@@ -783,7 +835,8 @@
     let used = NAME_MIN + dur.w;
     if (width > 220) { on.add('state'); used += COLS.state.w; }
     for (const k of COL_MORE) {
-      if ((k === 'fps' && !items.some((x) => x.fps)) || (k === 'size' && !items.some((x) => x.w))) continue;
+      if ((k === 'fps' && !items.some((x) => x.fps)) || (k === 'size' && !items.some((x) => x.w))
+          || (k === 'audio' && !items.some((x) => x.audio))) continue;
       if (used + COLS[k].w > width) break;
       on.add(k);
       used += COLS[k].w;
@@ -805,6 +858,8 @@
     if (col === 'name') return String(it.name);
     if (col === 'size') return (it.w || 0) * (it.h || 0);
     if (col === 'state' || col === 'note') return String(it[col] || '');
+    // by the rate, then the channels (an item with no sound first)
+    if (col === 'audio') { const a = (it.c && it.c.audio) || {}; return (Number(a.rate) || 0) * 100 + (Number(a.channels) || 0); }
     if (col === 'shot') return Number(it.shot) || 0;
     return Number(it[col]) || 0;
   }
@@ -865,10 +920,11 @@
     const rate = it.rate;
     if (k === 'name') return nameCell(it, tree);
     if (k === 'fps') return `<td class="num">${fpsText(it.fps)}</td>`;
-    if (k === 'start') return `<td class="num">${it.dur ? tcOf(it.start, rate) : ''}</td>`;
-    if (k === 'end') return `<td class="num">${it.dur ? tcOf(it.end, rate) : ''}</td>`;
+    if (k === 'start') return `<td class="num">${it.dur ? it.sTc || tcOf(it.start, rate) : ''}</td>`;
+    if (k === 'end') return `<td class="num">${it.dur ? it.eTc || tcOf(it.end, rate) : ''}</td>`;
     if (k === 'dur') return `<td class="num dur">${it.dur ? tcOf(it.dur, rate) : ''}</td>`;
     if (k === 'size') return `<td>${it.w && it.h ? `${it.w}×${it.h}` : ''}</td>`;
+    if (k === 'audio') return `<td>${esc(it.audio || '')}</td>`;
     // the proposal's status is its badge: it waits for you
     if (k === 'state') return `<td class="st ${it.stCls || ''}">${it.type === 'prop' ? seqBadge(it) : esc(it.state || '')}</td>`;
     if (k === 'note') return `<td class="note">${ell(esc(it.note || ''))}</td>`;

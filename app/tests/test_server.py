@@ -91,6 +91,64 @@ def test_clips_carry_a_capture_time(client):
     assert all(isinstance(t, float) and t > 0 for t in stamps.values()), stamps
 
 
+def _tc_clip(path: Path, rate: str, tc: str | None, audio: str | None) -> None:
+    """A two-second clip at `rate`, with the camera timecode `tc` (ffmpeg's -timecode: the
+    picture's tag and a tmcd track) and `audio` ("<channels>:<rate>") or no sound."""
+    sound = (["-f", "lavfi", "-i", f"sine=frequency=440:duration=2:sample_rate={audio.split(':')[1]}",
+              "-ac", audio.split(":")[0], "-c:a", "aac"] if audio else [])
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-nostdin",
+         "-f", "lavfi", "-i", f"testsrc2=size=320x180:rate={rate}:duration=2", *sound,
+         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+         *(["-timecode", tc] if tc else []), "-shortest", str(path)],
+        check=True, capture_output=True)
+
+
+def test_clips_carry_the_cameras_timecode_and_audio_facts(tmp_path, monkeypatch):
+    """The Project panel's Media Start / Media End and Audio Info (wave 12 SMALL3, lane
+    BINLOOK's ask): /api/clips says where each clip's source timecode starts, as
+    HH:MM:SS:FF at its own rate (`;` for drop-frame), and what its sound is — null when
+    the file has no timecode, or no sound. They come from the facts probe the bin already
+    runs at boot, never from an ffprobe inside the GET."""
+    from fastapi.testclient import TestClient
+    import server
+
+    footage = tmp_path / "card"
+    footage.mkdir()
+    _tc_clip(footage / "TC.MP4", "24", "01:00:00:00", "2:48000")
+    _tc_clip(footage / "DF.MOV", "30000/1001", "00:59:59;28", None)
+    _tc_clip(footage / "PLAIN.MP4", "24", None, "1:44100")
+    server.configure(None, footage, None, tmp_path / "work", proxies=False,
+                     visual=tmp_path / "no-visual")
+    with TestClient(server.app) as c:
+        deadline = time.time() + 30
+        while c.get("/api/clips").json()["probing"] and time.time() < deadline:
+            time.sleep(0.2)
+        probes: list[list[str]] = []
+        real_run = server.subprocess.run
+
+        def run(cmd, *a, **kw):
+            if cmd and str(cmd[0]).endswith("ffprobe"):
+                probes.append([str(x) for x in cmd])
+            return real_run(cmd, *a, **kw)
+
+        monkeypatch.setattr(server.subprocess, "run", run)
+        got = {r["clip"]: r for r in c.get("/api/clips").json()["clips"]}
+    assert got["TC.MP4"]["tc_start"] == "01:00:00:00", got["TC.MP4"]
+    assert got["TC.MP4"]["audio"] == {"channels": 2, "rate": 48000}
+    assert got["DF.MOV"]["tc_start"] == "00:59:59;28", got["DF.MOV"]   # drop-frame, as written
+    assert got["DF.MOV"]["audio"] is None                              # no sound
+    assert got["PLAIN.MP4"]["tc_start"] is None                        # no timecode
+    assert got["PLAIN.MP4"]["audio"] == {"channels": 1, "rate": 44100}
+    # the GET read what the boot's probe found: no ffprobe asked for a timecode or a rate
+    assert not [p for p in probes if any("timecode" in x or "sample_rate" in x for x in p)], probes
+    # a tag that is no timecode at the clip's rate is none
+    assert server.source_tc("01:00:00:30", 30.0) is None
+    assert server.source_tc("1:00:00:00", 23.976) == "01:00:00:00"
+    assert server.source_tc("00:10:00,00", 59.94) == "00:10:00;00"
+    assert server.source_tc("garbage", 24.0) is None and server.source_tc(None, 24.0) is None
+
+
 def test_transcript_and_candidates_exposed(client):
     clip = client.get("/api/project").json()["clips"]["CLIP_A.MP4"]
     assert [u["text"] for u in clip["transcript"]] == ["hello there", "how are you",
