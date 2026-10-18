@@ -495,6 +495,75 @@ def test_i_o_and_enter_on_a_playing_clip_insert_the_marked_range(page):
     page.evaluate("pauseCut()")
 
 
+def test_m_i_and_o_are_each_one_undo_step_and_redo_brings_them_back(page, project):
+    """Markers and the sequence In / Out are on the undo stack (redesign wave 12, lane
+    AIGLUE), as in Premiere: M, I and O made by hand are each one Ctrl+Z, named on the
+    undo button; Ctrl+Shift+Z brings them back; the undo of an edit made after them leaves
+    them where they are; and what the undo leaves is what reaches the disk."""
+    def undo_title():
+        return page.locator("#undo").get_attribute("title") or ""
+
+    def marks():
+        return page.evaluate("[tl.markers(), tl.state.seqIn, tl.state.seqOut]")
+
+    page.evaluate("localStorage.clear(); tl.clearHistory()")
+    assert marks() == [[], None, None]
+    page.evaluate("tl.seek(1.0)")
+    page.keyboard.press("m")
+    assert undo_title().startswith("undo: add marker"), undo_title()
+    page.evaluate("tl.seek(0.5)")
+    page.keyboard.press("i")
+    assert undo_title().startswith("undo: mark in"), undo_title()
+    page.evaluate("tl.seek(3.0)")
+    page.keyboard.press("o")
+    assert undo_title().startswith("undo: mark out"), undo_title()
+    m, i, o = marks()
+    assert m == [pytest.approx(1.0, abs=0.03)] and i == pytest.approx(0.5, abs=0.03) \
+        and o == pytest.approx(3.0, abs=0.03)
+    a = ids(page)[0]
+    page.evaluate(f"tl.setRange('{a}', 1.5, null)")           # an edit after them
+    page.keyboard.press("Control+z")                          # takes back the trim only
+    assert page.evaluate("segs[0].in") == 1.0
+    assert marks() == [m, i, o]
+    page.keyboard.press("Control+z")                          # O
+    assert marks() == [m, i, None]
+    assert page.locator("#tl .tl-ruler .tl-inout").count() == 1
+    page.keyboard.press("Control+z")                          # I
+    assert marks() == [m, None, None]
+    assert page.locator("#tl .tl-ruler .tl-inout").count() == 0
+    page.keyboard.press("Control+z")                          # M
+    assert marks() == [[], None, None]
+    assert page.locator("#tl .tl-ruler .tl-marker").count() == 0
+    page.keyboard.press("Control+Shift+z")
+    page.keyboard.press("Control+Shift+z")
+    assert marks() == [m, i, None]
+    assert page.locator("#tl .tl-ruler .tl-marker").count() == 1
+    # what the undo leaves is what is saved
+    page.evaluate("tl.saveSeq()")
+    end = time.time() + 8
+    while time.time() < end:
+        edl = json.loads(Path(project["edl"]).read_text(encoding="utf-8"))
+        if edl.get("markers") == m and edl.get("in") == i and edl.get("out") is None:
+            break
+        time.sleep(0.1)
+    assert (edl.get("markers"), edl.get("in"), edl.get("out")) == (m, i, None), edl
+    # the clears are one step each too
+    page.keyboard.press("Alt+i")
+    assert undo_title().startswith("undo: clear in"), undo_title()
+    page.keyboard.press("Control+z")
+    assert marks() == [m, i, None]
+    page.evaluate(f"tl.seek({m[0]})")
+    page.keyboard.press("Control+Alt+m")
+    assert undo_title().startswith("undo: clear marker"), undo_title()
+    page.keyboard.press("Control+z")
+    assert marks() == [m, i, None]
+    # a mark that changes nothing makes no entry
+    page.evaluate(f"tl.seek({i})")
+    before = undo_title()
+    page.keyboard.press("i")
+    assert undo_title() == before
+
+
 # ------------------------------------------------------------------ the map, the guards
 
 def test_the_keys_panel_lists_the_timeline_keys_from_the_table(page):

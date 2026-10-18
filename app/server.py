@@ -9809,6 +9809,7 @@ async def api_fx_accept(request: Request) -> JSONResponse:
     body = await request.json()
     fx_id = str(body.get("id") or "")
     e = fx.load(fx_home(), fx_id) or _fx_get(fx_id)
+    undo = None
     # The edits first (INTAKE M13): applied to the cut in one write by the edits
     # section's apply_edits, the effect re-keyed from `new:n` to the minted id, and the
     # effect then validated against the cut as it now is.
@@ -9816,6 +9817,10 @@ async def api_fx_accept(request: Request) -> JSONResponse:
         applier = globals().get("apply_edits")
         if applier is None:
             raise HTTPException(501, "this build cannot apply edits to the cut yet")
+        # what the board's Ctrl+Z of this accept takes back (POST /api/fx/undo): the
+        # record as proposed and the EDL's effects as they were, before the re-keying
+        undo = {"proposal": json.loads(json.dumps(e)),
+                "effects_before": json.loads(json.dumps(read_edl().get("effects") or []))}
         says = _fx_edit_says(e["edits"], _fx_segments())     # the cut as Karl saw it
         try:
             applied = applier(e["edits"])
@@ -9838,6 +9843,7 @@ async def api_fx_accept(request: Request) -> JSONResponse:
             # of every list; `applied.before` is what an undo takes back.
             e["status"] = "applied"
             fx.save(fx_home(), e)
+            _fx_accept_record(fx_id, undo, e)
             return JSONResponse({"ok": True, "effect": _fx_urls(e)})
     segments = _fx_segments()
     current = next((x for x in read_edl().get("effects") or [] if x.get("id") == fx_id), None)
@@ -9850,7 +9856,83 @@ async def api_fx_accept(request: Request) -> JSONResponse:
     e["status"] = "accepted"
     e = fx.validate_effect(e, segments)
     _fx_put(e)
+    if undo is not None:
+        _fx_accept_record(fx_id, undo, e)
     return JSONResponse({"ok": True, "effect": _fx_urls(e)})
+
+
+# An accepted effect's edit to the cut is one entry on the board's undo stack (wave 12,
+# AIOPS: roughcutRefresh({undo})). The cut on the board follows Ctrl+Z; these make the
+# effect follow it too (wave 12, AIGLUE): its record reads proposed again (its edits
+# waiting to be accepted) and the EDL's effects are as they were before the accept —
+# the copies the re-keying made gone, the re-keyed ones back on their shot — and Ctrl+Shift+Z
+# puts the accept back. Kept beside the effect's files, as `<id>/accept.json`.
+
+def _fx_accept_path(fx_id: str) -> Path:
+    if not re.fullmatch(r"fx_[A-Za-z0-9_-]{1,48}", fx_id or ""):
+        raise HTTPException(404, f"no effect {fx_id!r}")
+    return fx_home() / fx_id / "accept.json"
+
+
+def _fx_accept_record(fx_id: str, undo: dict | None, accepted: dict) -> None:
+    if undo is None:
+        return
+    path = _fx_accept_path(fx_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rec = {**undo, "accepted": accepted, "effects_after": read_edl().get("effects") or [],
+           "state": "done"}
+    path.write_text(json.dumps(rec, indent=1), encoding="utf-8")
+
+
+def _fx_patch(current: list[dict], frm: list[dict], to: list[dict]) -> list[dict]:
+    """`current` with every effect that differs between `frm` and `to` made as in `to`
+    (put back, replaced or taken out); the effects nobody touched in between stay."""
+    f = {str(x.get("id")): x for x in frm}
+    t = {str(x.get("id")): x for x in to}
+    moved = {i for i in {*f, *t} if f.get(i) != t.get(i)}
+    out = [t[str(x.get("id"))] if str(x.get("id")) in moved else x
+           for x in current if str(x.get("id")) not in moved or str(x.get("id")) in t]
+    have = {str(x.get("id")) for x in out}
+    out.extend(x for x in to if str(x.get("id")) in moved and str(x.get("id")) not in have)
+    return out
+
+
+def _fx_follow(fx_id: str, back: bool) -> dict:
+    path = _fx_accept_path(fx_id)
+    if not path.exists():
+        raise HTTPException(404, f"{fx_id} has no accepted edit to take back")
+    rec = json.loads(path.read_text(encoding="utf-8"))
+    want = "undone" if back else "done"
+    if rec.get("state") == want:
+        return {"ok": True, "state": want, "changed": False}
+    edl = read_edl()
+    frm, to = ((rec["effects_after"], rec["effects_before"]) if back
+               else (rec["effects_before"], rec["effects_after"]))
+    effects = _fx_patch(list(edl.get("effects") or []), frm, to)
+    if effects:
+        edl["effects"] = effects
+    else:
+        edl.pop("effects", None)
+    write_edl(edl)
+    fx.save(fx_home(), rec["proposal"] if back else rec["accepted"])
+    rec["state"] = want
+    path.write_text(json.dumps(rec, indent=1), encoding="utf-8")
+    return {"ok": True, "state": want, "changed": True}
+
+
+@app.post("/api/fx/undo")
+async def api_fx_undo(request: Request) -> JSONResponse:
+    """The board's Ctrl+Z took an effect's edit out of the cut: the effect reads proposed
+    again and the EDL's effects are as they were before its accept."""
+    body = await request.json()
+    return JSONResponse(_fx_follow(str(body.get("id") or ""), back=True))
+
+
+@app.post("/api/fx/redo")
+async def api_fx_redo(request: Request) -> JSONResponse:
+    """Ctrl+Shift+Z put the edit back: the effect and the EDL's effects as accepted."""
+    body = await request.json()
+    return JSONResponse(_fx_follow(str(body.get("id") or ""), back=False))
 
 
 @app.post("/api/fx/revert")

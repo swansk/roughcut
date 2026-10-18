@@ -71,6 +71,20 @@
  *   tl.commit()                 Close the entry (nothing is pushed when nothing changed),
  *                               drop the redo stack, touch the autosave, emit `change`.
  *   tl.cancel()                 Put the cut back the way begin() found it.
+ *   tl.batch(label, fn, {record})   Run fn() as ONE entry, re-entrantly (wave 12, AIGLUE):
+ *                               every begin / commit / cancel the code it calls makes nests
+ *                               inside it — a begin opens a level, its commit folds the
+ *                               level into the entry, its cancel puts back what that level
+ *                               changed — and the entry closes when fn returns (a commit,
+ *                               or with `record: false` none: no entry, nothing touched for
+ *                               the autosave or the tracks' save, no `commit` change — for a
+ *                               preview that puts the cut back itself).
+ *                               fn throwing puts the cut back as the batch found it and
+ *                               rethrows. A batch inside a batch is a level of it. Returns
+ *                               {ok, value, committed}; {ok: false} (fn not run) while a
+ *                               gesture outside any batch holds an entry open. The batch's
+ *                               own level is the batch's: a commit or cancel with no level
+ *                               of its own open inside fn is a no-op (false).
  *   tl.undo() / tl.redo()       ⌘Z / ⌘⇧Z (ctrl on Windows), `u`, the header's #undo /
  *                               #redo — whose tooltips carry the label (`undo: trim`).
  *   tl.clearHistory()           Forget every undo and redo entry. For a cut the server
@@ -159,6 +173,8 @@
  *                               shaded on the ruler. Both persist in localStorage per
  *                               project and cut, or come from `P.markers` / `P.in` /
  *                               `P.out` once the server sends them. Emit `markers`.
+ *                               Each is one undo entry outside begin/commit (`add marker`,
+ *                               `mark in`, `clear out` …); undo and redo put them back.
  *
  *   — the tracks: V2 V1 A1 A2 (verdict 2 punch 3; the model is roughcut/tracks.py) —
  *   The cut is still one magnetic list, and each shot is two clips: its picture on V1 and,
@@ -1559,6 +1575,7 @@
 
   function scheduleSeqSave() {
     if (seqSaved == null) return;              // not mounted yet
+    if (previewing()) return;                  // a `record: false` batch saves nothing
     clearTimeout(seqTimer);
     seqTimer = setTimeout(saveSeq, SEQ_SAVE_MS);
   }
@@ -1938,46 +1955,70 @@
     state.seqOut = Number.isFinite(v.out) ? v.out : null;
   }
 
-  function saveMarks() {
+  function storeMarks() {
     try {
       localStorage.setItem(markStoreKey(), JSON.stringify(
         { markers: state.markers, in: state.seqIn, out: state.seqOut }));
     } catch (err) { /* private mode: they last the session */ }
+  }
+
+  const emitMarks = () => emit('markers', { markers: [...state.markers], in: state.seqIn, out: state.seqOut });
+
+  function saveMarks() {
+    storeMarks();
     scheduleSeqSave();
     render();
-    emit('markers', { markers: [...state.markers], in: state.seqIn, out: state.seqOut });
+    emitMarks();
+  }
+
+  /* Markers and the sequence In / Out are on the undo stack (redesign wave 12, AIGLUE): as
+   * in Premiere, M, I and O made by hand are each one ⌘Z, labelled; inside a begin …
+   * commit (an AI answer, a drag) they fold into that one entry. */
+  function marksEdit(label, fn) {
+    const own = begin(label);
+    const out = fn();
+    if (own) commit();
+    return out;
   }
 
   const sameFrame = (a, b) => Math.abs(a - b) < 0.5 / fps();
 
   function addMarker(t) {
-    const m = onFrame(t == null ? state.playhead : Number(t));
-    if (!Number.isFinite(m) || state.markers.some((x) => sameFrame(x, m))) return null;
-    state.markers = [...state.markers, m].sort((a, b) => a - b);
-    saveMarks();
-    return m;
+    return marksEdit('add marker', () => {
+      const m = onFrame(t == null ? state.playhead : Number(t));
+      if (!Number.isFinite(m) || state.markers.some((x) => sameFrame(x, m))) return null;
+      state.markers = [...state.markers, m].sort((a, b) => a - b);
+      saveMarks();
+      return m;
+    });
   }
 
   function removeMarker(t) {
-    const at = t == null ? state.playhead : Number(t);
-    const keep = state.markers.filter((x) => !sameFrame(x, at));
-    if (keep.length === state.markers.length) return false;
-    state.markers = keep;
-    saveMarks();
-    return true;
+    return marksEdit('clear marker', () => {
+      const at = t == null ? state.playhead : Number(t);
+      const keep = state.markers.filter((x) => !sameFrame(x, at));
+      if (keep.length === state.markers.length) return false;
+      state.markers = keep;
+      saveMarks();
+      return true;
+    });
   }
 
   function clearMarkers() {
-    if (!state.markers.length) return false;
-    state.markers = [];
-    saveMarks();
-    return true;
+    return marksEdit('clear markers', () => {
+      if (!state.markers.length) return false;
+      state.markers = [];
+      saveMarks();
+      return true;
+    });
   }
 
   function setMarkers(list) {
-    state.markers = (Array.isArray(list) ? list : []).map((m) => onFrame(Number(m)))
-      .filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
-    saveMarks();
+    marksEdit('markers', () => {
+      state.markers = (Array.isArray(list) ? list : []).map((m) => onFrame(Number(m)))
+        .filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
+      saveMarks();
+    });
   }
 
   function nextMarker(t) {
@@ -1993,19 +2034,23 @@
   }
 
   function setSeqIn(t) {
-    const v = t == null ? null : onFrame(Number(t));
-    state.seqIn = v;
-    if (v != null && state.seqOut != null && state.seqOut <= v) state.seqOut = null;
-    saveMarks();
-    return v;
+    return marksEdit(t == null ? 'clear in' : 'mark in', () => {
+      const v = t == null ? null : onFrame(Number(t));
+      state.seqIn = v;
+      if (v != null && state.seqOut != null && state.seqOut <= v) state.seqOut = null;
+      saveMarks();
+      return v;
+    });
   }
 
   function setSeqOut(t) {
-    const v = t == null ? null : onFrame(Number(t));
-    state.seqOut = v;
-    if (v != null && state.seqIn != null && state.seqIn >= v) state.seqIn = null;
-    saveMarks();
-    return v;
+    return marksEdit(t == null ? 'clear out' : 'mark out', () => {
+      const v = t == null ? null : onFrame(Number(t));
+      state.seqOut = v;
+      if (v != null && state.seqIn != null && state.seqIn >= v) state.seqIn = null;
+      saveMarks();
+      return v;
+    });
   }
 
   /* No layout read here (wave 5, SAVE): it runs right after positionHead's write, so a
@@ -2917,14 +2962,18 @@
    * track headers' toggles do not — as in Premiere, a mute or a lock is not an edit. */
   /* The added tracks' names ride it too (wave 6, KEYS2): Add / Delete Track is one ⌘Z. */
   /* The transitions ride it too (verdict 6, punch 6): Ctrl+D is one ⌘Z. */
+  /* So do the markers and the sequence In / Out (wave 12, AIGLUE): M, I, O are each one ⌘Z,
+   * and an AI answer that adds a marker or sets In / Out is one ⌘Z with its other edits. */
+  const marksOf = () => ({ m: state.markers, i: state.seqIn, o: state.seqOut });
   const snapshot = () => JSON.stringify(hooks && hooks.extra
     ? { segs: segs(), extra: hooks.extra(), overlays: state.overlays, audio: state.audio,
-        xtracks: trackNames().filter(isExtra), transitions: state.transitions }
+        xtracks: trackNames().filter(isExtra), transitions: state.transitions, marks: marksOf() }
     : { segs: segs(), overlays: state.overlays, audio: state.audio, xtracks: trackNames().filter(isExtra),
-        transitions: state.transitions });
+        transitions: state.transitions, marks: marksOf() });
 
   function restore(json) {
     const v = JSON.parse(json);
+    let marksMoved = false;
     if (v && !Array.isArray(v) && Array.isArray(v.segs)) {
       hooks.setSegs(v.segs);
       if (hooks.setExtra && 'extra' in v) hooks.setExtra(v.extra);
@@ -2932,21 +2981,38 @@
       if (Array.isArray(v.audio)) state.audio = v.audio;
       if (Array.isArray(v.xtracks)) setExtraTracks(v.xtracks);
       state.transitions = Array.isArray(v.transitions) ? v.transitions.map((t) => ({ ...t })) : [];
+      if (v.marks && typeof v.marks === 'object') {
+        const was = JSON.stringify(marksOf());
+        state.markers = Array.isArray(v.marks.m) ? v.marks.m.slice() : [];
+        state.seqIn = Number.isFinite(v.marks.i) ? v.marks.i : null;
+        state.seqOut = Number.isFinite(v.marks.o) ? v.marks.o : null;
+        marksMoved = JSON.stringify(marksOf()) !== was;
+      }
     } else {
       hooks.setSegs(v);
     }
     ensureIds();
     scheduleSeqSave();
+    if (marksMoved) { storeMarks(); emitMarks(); }
   }
 
+  /* `pending` is the open entry. Opened by tl.batch it carries `levels`: the snapshots of
+   * the begins nested inside it, innermost last (each one's cancel goes back to it); a
+   * `record: false` batch is `quiet`: nothing it changes is touched for the autosave or
+   * the tracks' save (the caller puts it back itself). */
+  function previewing() { return !!(pending && pending.quiet); }
   function begin(label) {
-    if (pending) return false;
+    if (pending) {
+      if (!pending.levels) return false;       // a gesture's second begin: a no-op, as always
+      pending.levels.push(snapshot());         // inside a batch: a level of its entry
+      return true;
+    }
     pending = { label: label || 'edit', before: snapshot() };
     return true;
   }
 
-  function commit() {
-    if (!pending) return false;
+  /* Close the open entry: pushed when the cut changed. */
+  function closeEntry() {
     const p = pending;
     pending = null;
     const after = snapshot();
@@ -2960,16 +3026,71 @@
     return true;
   }
 
+  function commit() {
+    if (!pending) return false;
+    if (pending.levels) {                      // inside a batch: the level folds into it
+      if (!pending.levels.length) return false;
+      pending.levels.pop();
+      return true;
+    }
+    return closeEntry();
+  }
+
+  /* Back to `before`, painted; the autosave touched when `touch` (a level inside a batch
+   * leaves that to the batch's own closing). */
+  function putBack(before, touch) {
+    if (snapshot() === before) return;
+    restore(before);
+    if (hooks.render) hooks.render();
+    if (touch && hooks.touch) hooks.touch();
+  }
+
   function cancel() {
     if (!pending) return false;
+    if (pending.levels) {                      // inside a batch: that level's changes only
+      if (!pending.levels.length) return false;
+      putBack(pending.levels.pop(), false);
+      return true;
+    }
     const p = pending;
     pending = null;
-    if (snapshot() !== p.before) {
-      restore(p.before);
-      if (hooks.render) hooks.render();
-      if (hooks.touch) hooks.touch();
-    }
+    putBack(p.before, true);
     return true;
+  }
+
+  function batch(label, fn, opts = {}) {
+    if (pending && !pending.levels) return { ok: false, value: undefined, committed: false };
+    if (pending) {                             // a batch inside a batch: a level of it
+      const mine = pending;
+      mine.levels.push(snapshot());
+      const depth = mine.levels.length;
+      try {
+        const value = fn();
+        if (pending === mine && mine.levels.length >= depth) mine.levels.length = depth - 1;
+        return { ok: true, value, committed: false };
+      } catch (err) {
+        if (pending === mine && mine.levels.length >= depth) {
+          const before = mine.levels[depth - 1];
+          mine.levels.length = depth - 1;
+          putBack(before, false);
+        }
+        throw err;
+      }
+    }
+    const mine = { label: label || 'edit', before: snapshot(), levels: [], quiet: !!(opts && opts.record === false) };
+    pending = mine;
+    let value;
+    try {
+      value = fn();
+    } catch (err) {
+      if (pending === mine) { pending = null; putBack(mine.before, !mine.quiet); }
+      throw err;
+    }
+    // an undo or a clearHistory inside fn took the entry: nothing of it is left to close
+    if (pending !== mine) return { ok: true, value, committed: false };
+    mine.levels.length = 0;                    // a begin fn left open folds in too
+    if (mine.quiet) { pending = null; return { ok: true, value, committed: false }; }
+    return { ok: true, value, committed: closeEntry() };
   }
 
   function undo() {
@@ -3022,7 +3143,7 @@
       if (i >= 0) { lastAppSel = i; if (hooks.setSel) hooks.setSel(i); }
     }
     if (hooks.render) hooks.render(); else render();
-    if (hooks.touch) hooks.touch();
+    if (hooks.touch && !previewing()) hooks.touch();
     if (own) commit();
     emit('change', { label: kind, kind, ids: [...state.sel] });
     return result;
@@ -3696,7 +3817,7 @@
   const tl = {
     state, el, mount, render, on,
     byId, indexOf, idAt, dur, speedOf, filmStart, total, shotAt, timeToX, xToTime, eventTime, snapsFor,
-    begin, commit, cancel, undo, redo, clearHistory,
+    begin, commit, cancel, batch, undo, redo, clearHistory,
     setRange, move, split, remove, insert, setSpeed, insertAt, overwrite,
     select, syncSel, seek, setPlayhead, zoomTo, fit,
     forSave, needsRekey, afterSave, applyIds, idFor, putTurn, saveHeaders, seqForFlush, seqDirty,

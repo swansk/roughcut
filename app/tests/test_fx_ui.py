@@ -737,6 +737,88 @@ def test_undo_after_an_in_place_accept_takes_back_exactly_the_accept(page, proje
     assert d[0]["in"] == 1.5
 
 
+def test_an_undone_effect_edit_takes_the_effect_back_with_the_cut(page, project):
+    """Redesign wave 12, lane AIGLUE (lane AIOPS's report). After Ctrl+Z of an effect's
+    edit to the cut, the cut went back but the effect did not: its record still read
+    "applied" and the copies the accept's re-keying made of the shot's other effects
+    stayed in the EDL, keyed to pieces no longer in the cut, until the next edit. Now the
+    record follows the board's undo and redo: Ctrl+Z puts the slow motion back to a
+    proposal (its edits waiting, its card back in Designed Effects) and the EDL's effects
+    back as they were before the accept; Ctrl+Shift+Z brings both back as accepted."""
+    import server
+
+    def edl():
+        return json.loads(Path(project["edl"]).read_text(encoding="utf-8"))
+
+    def wait_edl(pred, timeout=10.0):
+        end = time.time() + timeout
+        last = None
+        while time.time() < end:
+            try:
+                last = edl()
+                if pred(last):
+                    return last
+            except ValueError:
+                pass
+            time.sleep(0.1)
+        raise AssertionError(f"the EDL never matched: {last}")
+
+    def record():
+        return fx.load(server.fx_home(), "fx_slow1")
+
+    sid1, sid2 = shot_ids(page)
+    hit = json.loads(json.dumps(HIT))
+    hit.update(id="fx_hit1", shot=sid2, clip="CLIP_B.MP4", status="accepted", created="2026-09-20T12:00:00",
+               events=[{"t": 0.5, "x": 0.5, "y": 0.7}, {"t": 1.7, "x": 0.55, "y": 0.72}])
+    server._fx_put(fx.validate_effect(hit, server._fx_segments()))
+    before = edl()["effects"]
+    assert [e["id"] for e in before] == ["fx_hit1"]
+    fx.save(server.fx_home(), {
+        "id": "fx_slow1", "shot": sid2, "clip": "CLIP_B.MP4", "name": "slow motion",
+        "note": "slow motion on the hit", "why": "", "events": [{"t": 1.1, "x": 0.5, "y": 0.5}],
+        "status": "proposed", "edits": [{"op": "speed", "shot": sid2, "rate": 0.5,
+                                         "from": 1.0, "to": 1.4}],
+        "created": "2026-09-20T22:42:23"})
+    open_fx(page, 1)
+    page.evaluate("fx.refresh()")
+    page.locator("#fx .fxcard[data-id='fx_slow1'] button[data-act=accept]").click()
+    page.wait_for_function("segs.length === 4 && segs.some(s => s.speed === 0.5)")
+    after = wait_edl(lambda d: len(d["segments"]) == 4 and len(d.get("effects") or []) == 2)["effects"]
+    assert record()["status"] == "applied" and "edits" not in record()
+    copy = next(e for e in after if e["id"] != "fx_hit1")          # the hit at 1.7 s, on its piece
+    assert copy["shot"] not in (sid1, sid2) and [ev["t"] for ev in copy["events"]] == [1.7]
+
+    page.evaluate("document.activeElement && document.activeElement.blur()")
+    page.keyboard.press("Control+z")
+    d = wait_edl(lambda d: len(d["segments"]) == 2 and d.get("effects") == before)
+    assert [s["id"] for s in d["segments"]] == [sid1, sid2]
+    end = time.time() + 5
+    while time.time() < end and record()["status"] != "proposed":
+        time.sleep(0.1)
+    rec = record()
+    assert rec["status"] == "proposed" and rec["edits"][0]["op"] == "speed" and "applied" not in rec
+    listed = wait_effect(page, "fx_slow1", "e => e.status === 'proposed'")
+    assert listed["edits"]
+    open_fx(page, 1)
+    page.wait_for_selector("#fx .fxcard[data-id='fx_slow1'] button[data-act=accept]")
+
+    page.keyboard.press("Control+Shift+z")
+    d = wait_edl(lambda d: len(d["segments"]) == 4 and d.get("effects") == after)
+    assert [s.get("speed") for s in d["segments"]] == [None, None, 0.5, None]
+    end = time.time() + 5
+    while time.time() < end and record()["status"] != "applied":
+        time.sleep(0.1)
+    assert record()["status"] == "applied"
+    # a second Ctrl+Z (after a redo) takes it back again: the same record, the same EDL
+    page.keyboard.press("Control+z")
+    wait_edl(lambda d: len(d["segments"]) == 2 and d.get("effects") == before)
+    # a new edit then empties the redo stack: the accept stays undone
+    page.evaluate(f"tl.setRange('{sid1}', 1.5, null)")
+    page.keyboard.press("Control+Shift+z")                          # nothing to redo
+    page.wait_for_timeout(500)
+    assert record()["status"] == "proposed"
+
+
 def test_a_proposal_waiting_when_the_board_opens_is_checked_by_itself(page):
     """INTAKE M16 I16.5: the free check runs itself. The server checks every new design,
     and the tool checks a proposal made before it did — but the tool read /api/fx at

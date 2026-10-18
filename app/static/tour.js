@@ -387,6 +387,12 @@
     return isFree(terms) ? 'free on your plan' : 'priced before it runs';
   };
 
+  /* Lane AIOPS's review of the AI's edits (actions.js), by its test hooks. */
+  const AI_REVIEW = '[data-testid="ai-review"]';
+  const AI_ROW = '[data-testid="ai-review"] [data-testid="ai-op-row"]';
+  const AI_BEFORE_AFTER = '[data-testid="ai-review"] [data-testid="ai-before-after"]';
+  const AI_ACCEPT = '[data-testid="ai-review"] [data-testid="ai-accept-all"]';
+
   /* A step's `anchor` is tried in order (a selector, or a function); the first one on
    * screen is pointed at, else `fallback` (the menu that opens it). `show` is "Show me":
    * it only ever opens things. */
@@ -415,12 +421,21 @@
     },
     {
       key: 'review', title: 'Review the proposed cut',
-      body: () => 'The proposed cut lands on a Proposal track under V1: ✓ or ✗ each shot, ▶ Play it, then'
-        + ' Accept, which <kbd>Ctrl+Z</kbd> undoes in one step. Then trim, razor and move it like any sequence.',
-      anchor: ['#tl .tl-xlane[data-lane="ghost"]', '[data-testid="ai-review"]', '#proposal', '#pTimeline'],
+      // the AI's edits waiting in lane AIOPS's review are the same step: ✓ / ✗, then one accept
+      body: () => (T.anchorWhy === AI_REVIEW
+        ? 'The AI’s edits wait here, each shown before it lands (the new cut under V1, ◐ Before / After on'
+          + ' the Program): ✓ or ✗ each one, then Accept all, which <kbd>Ctrl+Z</kbd> undoes in one step.'
+        : 'The proposed cut lands on a Proposal track under V1: ✓ or ✗ each shot, ▶ Play it, then'
+          + ' Accept, which <kbd>Ctrl+Z</kbd> undoes in one step. Then trim, razor and move it like any sequence.'),
+      anchor: [AI_REVIEW, '#tl .tl-xlane[data-lane="ghost"]', '#proposal', '#pTimeline'],
       fallback: () => menuTop('window'),
-      show: () => { if (window.dock) { dock.open('ask', { remember: false }); dock.reveal('#proposal'); } },
-      canShow: () => !!appPlan(),
+      show: () => {
+        if (!window.dock) return;
+        dock.open('ask', { remember: false });
+        if (first(AI_REVIEW)) { T.point = first(AI_ACCEPT); return; }
+        dock.reveal('#proposal');
+      },
+      canShow: () => !!appPlan() || !!first(AI_REVIEW),
     },
     {
       key: 'ask', title: 'Ask the AI for an edit',
@@ -452,12 +467,22 @@
     },
     {
       key: 'review', title: 'Review each change',
-      body: () => 'Every answer is a list of edits, shown before they land. Accept or reject each one, or adjust'
-        + ' it with the normal tools; an accept is one <kbd>Ctrl+Z</kbd>.',
-      anchor: ['[data-testid="ai-review"]', '#tl .tl-xlane[data-lane="ghost"]', '#proposal',
+      // on lane AIOPS's review when one is up: its first row, the ◐ Before / After, Accept all
+      body: () => (T.anchorWhy === AI_ROW || T.anchorWhy === AI_REVIEW
+        ? 'Each row is one edit, shown before it lands: the new cut under V1, colour and Effect Controls'
+          + ' changes on the Program (◐ flips Before / After). ✓ keeps it, ✗ leaves it out; Accept all lands'
+          + ' the ones you kept as one <kbd>Ctrl+Z</kbd>.'
+        : 'Every answer is a list of edits, shown before they land. Accept or reject each one, or adjust'
+          + ' it with the normal tools; an accept is one <kbd>Ctrl+Z</kbd>.'),
+      anchor: [AI_ROW, AI_REVIEW, '#tl .tl-xlane[data-lane="ghost"]', '#proposal',
                '#pInspector .ws-tab[data-tool="ask"]'],
       fallback: () => menuTop('window'),
-      show: () => { if (window.dock) dock.open('ask', { remember: false }); },
+      show: () => {
+        if (window.dock) dock.open('ask', { remember: false });
+        // with a review up: where to compare (◐ Before / After), else where it lands
+        const at = first(AI_BEFORE_AFTER) || first(AI_ACCEPT);
+        if (at) T.point = at;
+      },
     },
     {
       key: 'menu', title: 'Every AI action, one menu',
@@ -585,7 +610,7 @@
     T.root.dataset.anchor = pointed ? 'show' : T.anchorWhy;
     // the words follow what is pointed at: the control itself, or the menu that opens it
     const fb = !pointed && T.anchorWhy === 'fallback';
-    const bodyKey = `${T.i}:${fb}:${terms ? terms.charged : '?'}`;
+    const bodyKey = `${T.i}:${fb}:${T.anchorWhy}:${terms ? terms.charged : '?'}`;
     if (T.bodyKey !== bodyKey) { T.bodyKey = bodyKey; $('.rt-body', T.root).innerHTML = step.body(fb); }
     const ar = anchor ? seenRect(anchor) : null;
     const ring = T.ring;

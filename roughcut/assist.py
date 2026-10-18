@@ -185,7 +185,10 @@ def scope_block(scope: dict | None, state: dict) -> str:
         rng = ""
         if sc.get("in") is not None and sc.get("out") is not None:
             rng = f", its In {float(sc['in']):.2f} s to Out {float(sc['out']):.2f} s"
-        out.append(f"The clip {clip} in the Source monitor{rng}")
+        # the prompt's 'clip' scope is the Source monitor's clip or a Project panel clip
+        # ("Ask AI about this…" on its row): a clip of the project, not a shot of the cut
+        out.append(f"The clip {clip} (in the Source monitor or the Project panel; not a shot in the "
+                   f"sequence){rng}")
     else:
         out.append("The whole sequence")
     ph = sc.get("playhead")

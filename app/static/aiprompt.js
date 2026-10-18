@@ -16,13 +16,16 @@
  *     use, else the whole sequence. A click on the chip changes it; a change to the
  *     selection or the marks puts it back to following them.
  *   - running: POST /api/assist {text, scope} → {job}, then GET /api/assist/{job} until
- *     it is done (judge/WAVE12.md). The status line beside the field says "Working" at
- *     once with the honest cost (rcCost: "free on your plan" on the subscription
- *     backend, the API-equivalent estimate in the hover) and a Stop; when done one line
- *     says what came back ("4 changes ready · Review"): an op list goes to the review
- *     (window.rcActions.review, lane AIOPS), a whole-cut rewrite to the existing proposal
- *     (rcShowProposal, as the first pass's does), an answer in words to a small popover.
- *     A failure says what to do.
+ *     it is done, failed or cancelled (judge/WAVE12.md; lane AIOPS's server). The
+ *     status line beside the field says "Working" at once with the honest cost (the
+ *     server's own words: GET /api/assist/price before, the job's estimate while it
+ *     runs — "free on your plan" on the subscription backend, the API-equivalent
+ *     estimate in the hover) and a Stop (POST /api/assist/{job}/cancel); when done one
+ *     line says what came back ("4 changes ready · Review"): an op list goes to the
+ *     review (window.rcActions.review, lane AIOPS), a whole-cut rewrite to the existing
+ *     proposal once its Ask job is done (rcShowProposal, as the first pass's does), an
+ *     answer in words to a small popover. A failure says what to do; once the review is
+ *     answered the line says what landed.
  *   - the AI menu (index.html): `rcAI.command(name)` for each item, routed to the
  *     existing features — none reachable only from a panel you must first find.
  *   - "Ask AI about this…": a right-click on a timeline block, a Project panel clip, or
@@ -71,14 +74,16 @@
     + ' stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4l2.5 2.5L7.5 4"/></svg>';
 
   const AI = {
-    state: 'idle',          // idle | working | done | failed | stopped
-    job: null, text: '', scope: null, t0: 0, timer: 0, tick: 0, gen: 0,
+    state: 'idle',          // idle | working | done | failed | stopped (Stop, or cancelled elsewhere)
+    job: null, text: '', scope: null, t0: 0, timer: 0, tick: 0, gen: 0, planTimer: 0,
     result: null,           // the finished GET /api/assist/{job}, plus its job id
     error: '', hint: '',    // a failure's words, and what to do about it
     override: null, overrideKey: '',   // a scope chosen on the chip, until the auto one changes
     lastPanel: 'timeline',  // the panel in use before the prompt took the focus
     hist: store.get(HIST_KEY, []), histAt: -1, draft: '',
-    price: null,            // {usd, charged, …} for the cost line before a run
+    price: null,            // GET /api/assist/price: {usd, charged, words, hover, …} before a run
+    runCost: null,          // the running job's own estimate (GET /api/assist/{job} `cost`)
+    stoppedGen: 0,          // the ask Stop was pressed on (its job id may not be back yet)
     back: null,             // the element to give the focus back to on Esc
     ready: false,
   };
@@ -172,23 +177,35 @@
 
   /* ------------------------------------------------------------ the price */
 
-  // What an ask costs, for the line before and while it runs: the Ask's price (the same
-  // kind of call: the cut and the footage's index in, an answer out; free, it reads
-  // records), so the words are "free on your plan" on the subscription backend
-  // (REDESIGN-GOAL S) and the API estimate is in the hover. A finished ask's own `cost`
-  // replaces it on the result line.
-  async function fetchPrice() {
+  // What an ask costs, for the line before it runs: the assist's own price (lane AIOPS,
+  // GET /api/assist/price?text=&scope=), the prompt it would send priced at the role's
+  // model — never a model call — worded by the server (`words` / `hover`): "free on your
+  // plan" on the subscription backend (REDESIGN-GOAL S), the API estimate in the hover.
+  // While it runs the job's own estimate (GET /api/assist/{job} `cost`) takes over; a
+  // finished ask's measured `cost` is in the result line's hover.
+  let priceGen = 0, priceTimer = 0, priceKey = '';
+  async function fetchPrice(text, sc) {
+    const q = `text=${encodeURIComponent(String(text == null ? '' : text).trim())}`
+      + `&scope=${encodeURIComponent(JSON.stringify(sc || scope()))}`;
+    if (q === priceKey && AI.price) return;
+    const gen = ++priceGen;
     try {
-      const r = await fetch('/api/ask/price?mode=full');
-      if (!r.ok) return;
+      const r = await fetch(`/api/assist/price?${q}`);
+      if (!r.ok || gen !== priceGen) return;
       const d = await r.json();
-      if (d && typeof d === 'object') { AI.price = d; paintStatus(); paintTitle(); }
+      if (d && typeof d === 'object' && gen === priceGen) { AI.price = d; priceKey = q; paintStatus(); paintTitle(); }
     } catch (e) { /* no price: the line says none, it never guesses */ }
+  }
+  // the words being typed and the scope move the price a little: asked again once they rest
+  function priceSoon() {
+    clearTimeout(priceTimer);
+    priceTimer = setTimeout(() => fetchPrice(input ? input.value : '', scope()), 700);
   }
 
   function costOf(c) {
     const C = window.rcCost;
     if (!C) return { words: '', title: '' };
+    if (c == null) c = AI.state === 'working' && AI.runCost ? AI.runCost : AI.price;
     if (c && typeof c === 'object' && c.words) return { words: String(c.words), title: String(c.hover || c.title || '') };
     const terms = c && typeof c === 'object' ? { ...(AI.price || {}), ...c } : (AI.price || {});
     const usd = typeof c === 'number' ? c
@@ -223,9 +240,9 @@
     });
     chip.addEventListener('click', (e) => { e.stopPropagation(); toggleScopeMenu(); });
     input.addEventListener('keydown', onInputKey);
-    input.addEventListener('focus', () => { host.classList.add('focus'); paintStatus(); if (!AI.price) fetchPrice(); });
+    input.addEventListener('focus', () => { host.classList.add('focus'); paintStatus(); fetchPrice(input.value, scope()); });
     input.addEventListener('blur', () => { host.classList.remove('focus'); paintStatus(); });
-    input.addEventListener('input', () => { host.classList.toggle('typed', !!input.value); AI.histAt = -1; });
+    input.addEventListener('input', () => { host.classList.toggle('typed', !!input.value); AI.histAt = -1; priceSoon(); });
     status.addEventListener('click', onStatusClick);
     if ('ResizeObserver' in window) new ResizeObserver(fitPlaceholder).observe(input);
     paintScope();
@@ -255,9 +272,18 @@
     if (input.placeholder !== fit) input.placeholder = fit;
   }
 
+  let scopeKey = '';
   function paintScope() {
     if (!chip) return;
     const s = scope();
+    // a new scope is a new prompt to price (the playhead alone is not) — asked while the
+    // prompt is in use; a focus asks anyway, so a selection click elsewhere costs nothing
+    const k = keyOf({ ...s, playhead: 0 });
+    if (k !== scopeKey) {
+      const first = !scopeKey;
+      scopeKey = k;
+      if (!first && AI.ready && host && host.classList.contains('focus')) priceSoon();
+    }
     const w = scopeWords(s);
     const l = $('.aip-scope-l', chip);
     if (l.textContent !== w.text) l.textContent = w.text;
@@ -296,14 +322,27 @@
     status.hidden = !html;
   }
 
-  /* One line for what came back. */
+  /* One line for what came back. Once the review is answered (lane AIOPS's panel fires
+   * `rc:assist-answered`) it says what landed, and offers no second review of ops that
+   * are already in the cut. A whole-cut rewrite is an Ask job of its own: "ready" only
+   * once that job is done. */
   function resultLine(d) {
     if (d.kind === 'ops') {
       const n = (d.ops || []).length;
       if (!n) return { line: 'No changes needed', act: d.summary || d.text ? 'Why' : '', what: 'answer' };
+      if (d.answered) {
+        const a = d.answered;
+        if (!a.accepted) return { line: 'Rejected — nothing changed', act: '', what: '' };
+        const line = a.accepted === a.total ? `${plural(a.accepted, 'change')} applied` : `${a.accepted} of ${a.total} applied`;
+        // Undo while the accept is still the last thing on the undo stack
+        return { line, act: a.top ? 'Undo' : '', what: a.top ? 'undo' : '' };
+      }
       return { line: `${plural(n, 'change')} ready`, act: 'Review', what: 'review' };
     }
-    if (d.kind === 'plan') return { line: 'A new cut is ready', act: 'Review', what: 'plan' };
+    if (d.kind === 'plan') {
+      return d.planReady ? { line: 'A new cut is ready', act: 'Review', what: 'plan' }
+        : { line: 'Re-cutting the sequence', act: 'Show', what: 'plan' };
+    }
     return { line: 'Answered', act: 'Show', what: 'answer' };
   }
 
@@ -329,6 +368,7 @@
     else if (what === 'review') review(AI.result);
     else if (what === 'plan') showPlan(AI.result);
     else if (what === 'answer') showPop('answer');
+    else if (what === 'undo') undoAccept();
   }
 
   /* ------------------------------------------------------------ floating bits */
@@ -451,6 +491,7 @@
     AI.job = null;
     AI.result = null;
     AI.error = '';
+    AI.runCost = null;
     paintStatus();                      // the working state, before anything goes out
     remember(text);
     clearInterval(AI.tick);
@@ -468,7 +509,12 @@
     } catch (e) {
       return fail(gen, 'The board did not answer.', 'Check that Roughcut is still running, then Retry.');
     }
-    if (gen !== AI.gen) return false;
+    if (gen !== AI.gen) {
+      // Stop was pressed before the job's id came back: the server is told now, so the
+      // model's answer is dropped there too (and nothing waits on it)
+      if (AI.stoppedGen === gen && d && d.job) cancelJob(d.job);
+      return false;
+    }
     if (r.status === 404 || r.status === 405) {
       return fail(gen, 'This board has no AI prompt service yet.',
         'Use Sequence › Ask for a change, or the AI menu, until the board is updated.');
@@ -496,6 +542,18 @@
     } catch (e) { d = null; }                  // a blip is not a failure: keep waiting
     if (gen !== AI.gen || AI.state !== 'working') return;
     if (d && d.status === 'done') { finish(gen, d); return; }
+    if (d && d.status === 'cancelled') {
+      // stopped somewhere else (another tab's Stop, the server): nothing will come
+      stopTimers();
+      AI.state = 'stopped';
+      paintStatus();
+      return;
+    }
+    if (d && d.cost && d.cost.words && (!AI.runCost || AI.runCost.words !== d.cost.words
+        || AI.runCost.hover !== d.cost.hover)) {
+      AI.runCost = d.cost;               // the job's own estimate, from the prompt it sent
+      paintStatus();
+    }
     if (d && d.status === 'failed') {
       fail(gen, String(d.error || d.summary || 'the model call failed'),
         'Try other words or a smaller scope, then Retry.');
@@ -520,26 +578,71 @@
     return false;
   }
 
+  /* POST /api/assist/{job}/cancel (lane AIOPS): the job reads `cancelled` at once and
+   * whatever the model returns is dropped on the server. */
+  function cancelJob(job) {
+    fetch(`/api/assist/${encodeURIComponent(job)}/cancel`, { method: 'POST' }).catch(() => {});
+  }
+
   function stop() {
     if (AI.state !== 'working') return;
     const job = AI.job;
+    AI.stoppedGen = AI.gen;
     AI.gen++;
     stopTimers();
     AI.state = 'stopped';
     paintStatus();
-    if (job) fetch(`/api/assist/${encodeURIComponent(job)}/cancel`, { method: 'POST' }).catch(() => {});
+    if (job) cancelJob(job);
   }
 
   function finish(gen, d) {
     if (gen !== AI.gen) return;
     stopTimers();
-    AI.result = { ...d, job: AI.job, asked: AI.text, scope: AI.scope };
+    AI.result = { ...d, job: AI.job, asked: AI.text, scope: AI.scope, planReady: d.plan_state === 'done' };
+    if (d.answer && Array.isArray(d.answer.accepted)) {            // reviewed already (another tab)
+      const n = d.answer.accepted.length;
+      AI.result.answered = { accepted: n, rejected: (d.answer.rejected || []).length,
+        total: n + (d.answer.rejected || []).length, label: '', top: false };
+    }
     AI.state = 'done';
     paintStatus();
     const r = resultLine(AI.result);
     if (r.what === 'review') review(AI.result);
     else if (r.what === 'plan') showPlan(AI.result);
     else if (r.what === 'answer' && r.act) showPop('answer');
+  }
+
+  /* The review panel answered this ask: the line says what landed, and offers Undo while
+   * the accept's entry is the top of the undo stack. */
+  function onAnswered(e) {
+    const d = e && e.detail;
+    if (!d || !AI.result || AI.result.job !== d.job) return;
+    const acc = (d.accepted || []).length, rej = (d.rejected || []).length;
+    AI.result.answered = { accepted: acc, rejected: rej, total: acc + rej, label: d.label || '',
+      top: !!(acc && d.committed) };
+    paintStatus();
+  }
+
+  /* The undo stack moved: another entry on top takes the line's Undo away; that accept's
+   * own undo (the line's Undo, Ctrl+Z, the header's ↶) puts the prompt back to idle. */
+  function onUndoStack(ev) {
+    const a = AI.result && AI.result.answered;
+    if (!ev || !a || !a.top) return;
+    if (ev.kind === 'undo' && ev.label === a.label) {
+      AI.state = 'idle';
+      AI.result = null;
+      closePop();
+      paintStatus();
+    } else if (ev.kind === 'commit' || ev.kind === 'undo' || ev.kind === 'redo') {
+      a.top = false;
+      paintStatus();
+    }
+  }
+
+  function undoAccept() {
+    const a = AI.result && AI.result.answered;
+    if (!a || !a.top || !TL() || typeof tl.undo !== 'function') return;
+    tl.undo();
   }
 
   function review(d) {
@@ -549,16 +652,66 @@
     else say('the review panel did not load — reload the page');
   }
 
-  /* A whole-cut rewrite is an Ask record: the first pass's path (firstpass.js showResult). */
+  /* A whole-cut rewrite is an Ask job (`plan_ask`) the server started with the model's
+   * brief, and it takes its own time. Done: the proposal opens through the first pass's
+   * path (firstpass.js showResult). Still running: lane AIOPS's review follows it ("reading
+   * the footage for the new cut…") and opens the proposal when it lands, while this line
+   * watches the same job to say when it is ready. */
+  async function askState(id) {
+    try { return await (await fetch(`/api/ask/${encodeURIComponent(id)}`)).json(); } catch (e) { return null; }
+  }
+
+  function openProposal(plan) {
+    if (typeof window.rcShowProposal !== 'function') return false;
+    window.rcShowProposal(plan);
+    if (window.dock) dock.open('ask', { focus: false });
+    return true;
+  }
+
   async function showPlan(d) {
     if (!d || !d.plan_ask) { say('the new cut has no proposal to show'); return; }
-    try {
-      const a = await (await fetch(`/api/ask/${encodeURIComponent(d.plan_ask)}`)).json();
-      if (a && a.plan && typeof window.rcShowProposal === 'function') {
-        window.rcShowProposal(a.plan);
-        if (window.dock) dock.open('ask', { focus: false });
-      } else say('the proposal is not ready yet');
-    } catch (e) { say('could not read the proposal — try Review again'); }
+    const a = await askState(d.plan_ask);
+    if (AI.result !== d) return;
+    if (a && a.state === 'done' && a.plan) {
+      d.planReady = true;
+      paintStatus();
+      openProposal(a.plan);
+      return;
+    }
+    if (a && (a.state === 'failed' || a.state === 'cancelled')) { planFailed(d, a); return; }
+    if (!a) { say('could not read the proposal — try again'); return; }
+    const A = window.rcActions;
+    if (A && typeof A.review === 'function') A.review(d);
+    else say('the new cut is still being made — it opens here when it is ready');
+    followPlan(d);
+  }
+
+  function planFailed(d, a) {
+    if (AI.result !== d) return;
+    AI.state = 'failed';
+    AI.error = `The re-cut did not finish: ${(a && (a.detail || a.error)) || 'no detail'}`;
+    AI.hint = 'Try other words, or Sequence › Ask for a change.';
+    paintStatus();
+  }
+
+  function followPlan(d) {
+    clearTimeout(AI.planTimer);
+    const step = async () => {
+      if (AI.result !== d || d.planReady) return;
+      const a = await askState(d.plan_ask);
+      if (AI.result !== d) return;
+      if (a && a.state === 'done' && a.plan) {
+        d.planReady = true;
+        paintStatus();
+        // the review panel opens it while it follows the job; without one, this does
+        const A = window.rcActions;
+        if (!A || typeof A.review !== 'function') openProposal(a.plan);
+        return;
+      }
+      if (a && (a.state === 'failed' || a.state === 'cancelled')) { planFailed(d, a); return; }
+      AI.planTimer = setTimeout(step, 1000);
+    };
+    AI.planTimer = setTimeout(step, 1000);
   }
 
   /* ------------------------------------------------------------ the keys */
@@ -901,6 +1054,35 @@
     };
   }
 
+  /* ------------------------------------------------------------ hover cards */
+
+  // Lane TEACH's AI hover cards (tour.js `rcTour.card`): what the context menu's items do,
+  // cost and change, in section S's words.
+  const CARDS = [
+    ['[data-testid="ai-ctx-ask"]', {
+      name: 'Ask AI about this',
+      what: 'Points the AI prompt at this clip, block or monitor and puts the cursor in it: type what'
+        + ' should change, in plain words.',
+      change: 'Nothing by itself; the ask comes back as edits you review one by one, and nothing changes'
+        + ' until you accept.',
+      // what the ask will cost, from GET /api/assist/price (free on the subscription)
+      price: () => (AI.price && typeof AI.price.usd === 'number' ? { usd: AI.price.usd, terms: AI.price } : null),
+    }],
+    ['[data-testid="ai-ctx-deep"]', {
+      name: 'Look deeper',
+      what: 'Opens this shot’s Look deeper, which reads a stretch of the clip frame by frame to see what the'
+        + ' first look missed.',
+      change: 'Nothing until you press Look deeper there (its price is on its button); it adds to what the'
+        + ' AI knows about the clip, and the cut does not change.',
+    }],
+  ];
+  function registerCards() {
+    const T = window.rcTour;
+    if (!T || typeof T.card !== 'function') return false;
+    CARDS.forEach(([sel, spec]) => T.card(sel, spec));
+    return true;
+  }
+
   /* ------------------------------------------------------------ init */
 
   function init() {
@@ -922,10 +1104,12 @@
     window.addEventListener('blur', closeFloating);
     window.addEventListener('resize', () => { closeFloating(); closePop(); });
     window.addEventListener('rcsource', paintScope);
+    window.addEventListener('rc:assist-answered', onAnswered);
     if (window.tl && typeof tl.on === 'function') {
       tl.on('select', paintScope);
       tl.on('markers', paintScope);
       tl.on('change', paintScope);
+      tl.on('change', onUndoStack);
     }
     // the menu's words follow the board each time it opens
     const menu = document.querySelector('#menubar .menu[data-menu=ai]');
@@ -944,6 +1128,7 @@
     // the scope follows what changes without an event (playback, a Source mark): cheap
     setInterval(paintScope, 1000);
     fetchPrice();
+    if (!registerCards()) window.addEventListener('load', registerCards, { once: true });
   }
 
   window.rcAI = {
