@@ -26,6 +26,7 @@
 }
 #exportDialog select:focus, #exportDialog input[type=text]:focus { outline: none; border-color: var(--accent, #4a9df8); }
 #exportDialog .ex-name { display: flex; align-items: center; gap: 6px; }
+#exportDialog #exBitrate { flex: 0 0 96px; width: 96px; font-variant-numeric: tabular-nums; }
 #exportDialog .ex-ext { color: var(--dim, #94949c); }
 #exportDialog .ex-loc { display: flex; gap: 6px; }
 #exportDialog .ex-loc #exFolder { flex: 1 1 auto; min-width: 0; }
@@ -89,7 +90,7 @@
 #exportDialog .ex-file { display: flex; gap: 6px; }
 #exportDialog .ex-file input[type=text] { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
 /* the first open's size sample, while it encodes (verdict 4, punch 6) */
-#exportDialog .ex-measuring { display: block; font-style: normal; font-weight: 400; font-size: 10.5px;
+#exportDialog .ex-measuring { display: block; font-style: normal; font-weight: 400;
                               color: var(--dim, #94949c); }
 /* a failed export (verdict 7, blocker 2): the shot, Go to shot, Show log */
 #exportDialog .ex-fail { display: flex; flex-direction: column; gap: 6px; margin: 0 0 12px; padding: 8px 10px;

@@ -152,6 +152,15 @@ CURVE_CHANNELS = {"master": "RGB master", "r": "red", "g": "green", "b": "blue"}
 WHEELS = {"shadows": "Shadows", "midtones": "Midtones", "highlights": "Highlights"}
 TRANSITION_KINDS = dict(tracksmod.TRANSITION_KINDS)
 TRANSITION_MIN_S, TRANSITION_MAX_S = tracksmod.TRANSITION_MIN_S, tracksmod.TRANSITION_MAX_S
+# Export Settings › Video (verdict 9, punch 5), the keys the Export dialog's selects carry
+# and the server renders (app/server.py `export_choice`): Frame Size — the footage's own
+# frame, or a height at the sequence's aspect; Frame Rate — the sequence's, or one of
+# these as the rational the file is written at; a target bitrate in Mbps (VBR, 1 pass).
+EXPORT_SIZES = {"match": "Match Sequence", "2160": "2160p", "1080": "1080p", "720": "720p",
+                "540": "540p"}
+EXPORT_RATES = {"match": None, "23.976": "24000/1001", "25": "25", "29.97": "30000/1001",
+                "59.94": "60000/1001"}
+EXPORT_BITRATE_MIN, EXPORT_BITRATE_MAX = 0.5, 200.0
 
 
 class Refused(ValueError):

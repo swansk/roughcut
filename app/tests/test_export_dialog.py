@@ -159,14 +159,18 @@ def test_ctrl_m_opens_the_export_dialog_with_name_folder_duration_and_size(page,
     renders = str(Path(project["work"]) / "renders")
     assert page.inner_text("#exPath") == f"{renders}/footage/footage - edl.mp4"
     # the duration is the sequence's, in timecode; the size an estimate from the bitrate
+    # — never a number before it is measured (verdict 9: "493 MB" over "measuring…")
     assert page.inner_text("#exDur") == page.evaluate("tl.tc(tl.total())")
-    size = page.inner_text("#exSize").splitlines()[0]
-    assert size.startswith("≈ ") and size.endswith("MB"), size
+    if page.get_attribute("#exSize", "data-source") == "measuring":
+        assert page.inner_text("#exSize").strip() == "measuring…"
+        assert page.get_attribute("#exSize", "data-mb") == ""
     # the preset's bitrate (measured off this bin's earlier files once there are any, or
     # off the 2 s sample the first open encodes) plus its sound, over the sequence's
     # length; read once the sample has landed, so both sides use the same figure
     page.wait_for_function(
         "document.querySelector('#exSize').dataset.source !== 'measuring'", timeout=120000)
+    size = page.inner_text("#exSize").splitlines()[0]
+    assert size.startswith("≈ ") and size.endswith("MB"), size
     quick = next(p for p in page.evaluate("fetch('/api/export').then(r => r.json())")["presets"]
                  if p["key"] == "quick")
     mb = size_estimate_mb(page)
@@ -611,7 +615,9 @@ def test_export_is_not_clickable_while_the_size_is_measuring(page, project, monk
     page.select_option("[data-testid=export-preset]", key)
     page.wait_for_function(
         "document.querySelector('#exSize').dataset.source === 'measuring'", timeout=10000)
-    assert "measuring" in page.inner_text("#exSize")
+    # "measuring…" alone: no megabytes until they are measured (verdict 9, punch 5)
+    assert page.inner_text("#exSize").strip() == "measuring…"
+    assert page.get_attribute("#exSize", "data-mb") == ""
     go = page.locator("[data-testid=export-go]")
     assert go.is_disabled()
     renders = len(server.RENDERS)

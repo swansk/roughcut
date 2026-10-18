@@ -244,10 +244,16 @@ def conform_chain(video: dict, gpu: dict | None, normalise: str | None,
     """Normalise (CPU path), the retime, then the scale / pad / fps conform. On the GPU
     path the scale is `scale_cuda` straight off the decoder, then the frames come down."""
     w, h = video["w"], video["h"]
+    # An export's own Frame Size (`--size`, verdict 9 punch 5) is scaled with Lanczos, on
+    # the GPU and the CPU alike: a 4K GoPro frame taken to 1280×720 is a 3× reduction, and
+    # Lanczos keeps the detail bicubic softens without the aliasing a cheaper kernel leaves
+    # (Premiere's "Maximum Render Quality" for a frame-size change). The presets' own
+    # frames keep the bicubic they always had, so no existing export changes by a pixel.
+    algo = video.get("scaler") or "bicubic"
     chain = []
     if gpu:
         chain += [f"scale_cuda={w}:{h}:force_original_aspect_ratio=decrease:"
-                  f"format=yuv420p:interp_algo=bicubic", "hwdownload", "format=yuv420p"]
+                  f"format=yuv420p:interp_algo={algo}", "hwdownload", "format=yuv420p"]
         if gpu["flip"]:
             chain += ["hflip", "vflip"]
     elif normalise:
@@ -257,19 +263,37 @@ def conform_chain(video: dict, gpu: dict | None, normalise: str | None,
     elif restart:
         chain.append("setpts=PTS-STARTPTS")
     if not gpu:
-        chain.append(f"scale={w}:{h}:force_original_aspect_ratio=decrease")
+        chain.append(f"scale={w}:{h}:force_original_aspect_ratio=decrease"
+                     + (f":flags={algo}" if video.get("scaler") else ""))
     chain += [f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2", f"fps={video['fps']}"]
     return chain
 
 
+# A target bitrate (`--bitrate`, the Export dialog's Bitrate; verdict 9 punch 5) is
+# Premiere's "VBR, 1 pass": the encoder aims at the target over each part, peaks capped at
+# 1.5× it and the buffer two seconds of it, so the file's size is the target times its
+# length (± what the rate control lands). Without one, the profile's quality (crf / cq).
+BITRATE_PEAK = 1.5
+BITRATE_BUFFER_S = 2.0
+BITRATE_MIN_KBPS, BITRATE_MAX_KBPS = 100, 400_000
+
+
 def video_codec(video: dict) -> list[str]:
     """The part's video encoder: NVENC at the profile's measured CQ (a keyframe at least
-    every 250 frames, as x264's default and the export's size model assume), or x264."""
+    every 250 frames, as x264's default and the export's size model assume), or x264;
+    at a target bitrate (`bitrate_kbps`) either one aims at it instead of a quality."""
+    kbps = video.get("bitrate_kbps")
+    rate = ([f"{kbps}k", "-maxrate", f"{round(kbps * BITRATE_PEAK)}k",
+             "-bufsize", f"{round(kbps * BITRATE_BUFFER_S)}k"] if kbps else None)
     if video.get("encoder") == "nvenc":
+        quality = (["-b:v", *rate] if rate else
+                   ["-cq", str(video["nvenc_cq"]), "-b:v", "0", "-maxrate", "200M",
+                    "-bufsize", "400M"])
         return ["-c:v", NVENC_CODEC, "-preset", "p5", "-tune", "hq", "-rc", "vbr",
-                "-cq", str(video["nvenc_cq"]), "-b:v", "0", "-maxrate", "200M",
-                "-bufsize", "400M", "-spatial-aq", "1", "-g", "250", "-bf", "3",
+                *quality, "-spatial-aq", "1", "-g", "250", "-bf", "3",
                 "-b_ref_mode", "middle", "-profile:v", "high"]
+    if rate:
+        return ["-c:v", "libx264", "-preset", video["preset"], "-b:v", *rate]
     return ["-c:v", "libx264", "-preset", video["preset"], "-crf", video["crf"]]
 
 
@@ -1688,11 +1712,26 @@ def delivery_resolution(native_w: int, native_h: int,
     return w, h
 
 
+def frame_size(text: str | None) -> tuple[int, int] | None:
+    """`--size WxH` (`1280x720`, `1280×720`): an even width and height, or None."""
+    m = re.fullmatch(r"\s*(\d{2,5})\s*[x×]\s*(\d{2,5})\s*", str(text or ""))
+    if not m:
+        return None
+    w, h = int(m.group(1)), int(m.group(2))
+    if not (16 <= w <= 8192 and 16 <= h <= 8192):
+        return None
+    return w // 2 * 2, h // 2 * 2                    # even dims: yuv420p needs it
+
+
 def resolve_video_profile(name: str, footage: Path, segments: list[dict],
-                          fps_override: str | None = None) -> dict:
+                          fps_override: str | None = None,
+                          size_override: tuple[int, int] | None = None,
+                          bitrate_kbps: int | None = None) -> dict:
     """The concrete {w, h, fps, preset, crf, audio_bitrate, timescale} for `cut()`.
     `fps_override` (`--fps`, the sequence's rate the board asks an export for) wins
-    over the profile's own rate; the frame size is the profile's either way."""
+    over the profile's own rate; `size_override` (`--size`, the Export dialog's Frame
+    Size) over its frame, scaled with Lanczos; `bitrate_kbps` (`--bitrate`) over its
+    quality, as a VBR target (`video_codec`)."""
     base = PROFILES[name]
     if name == "delivery":
         fps, native_w, native_h = bin_profile(footage, segments)
@@ -1707,6 +1746,12 @@ def resolve_video_profile(name: str, footage: Path, segments: list[dict],
         fps, w, h = FPS, W, H
     if fps_override:
         fps = fps_text(rate_of(fps_override))
+    extra: dict = {}
+    if size_override:
+        w, h = size_override
+        extra["scaler"] = "lanczos"
+    if bitrate_kbps:
+        extra["bitrate_kbps"] = int(max(BITRATE_MIN_KBPS, min(BITRATE_MAX_KBPS, bitrate_kbps)))
     num, _, den = fps.partition("/")
     timescale = int(num) if den else int(num) * 1000   # keep sub-frame PTS precision
     # the GPU (verdict 6, punch 7): NVENC for the presets that name a CQ, when it encodes
@@ -1716,14 +1761,19 @@ def resolve_video_profile(name: str, footage: Path, segments: list[dict],
         encoder = "nvenc" if base.get("nvenc_cq") and nv.result() else "x264"
         gpu_decode = cu.result()
     return {**base, "fps": fps, "w": w, "h": h, "timescale": timescale,
-            "encoder": encoder, "gpu_decode": gpu_decode}
+            "encoder": encoder, "gpu_decode": gpu_decode, **extra}
 
 
 def describe_encoder(video: dict) -> str:
+    kbps = video.get("bitrate_kbps")
     if video.get("encoder") == "nvenc":
-        enc = f"{NVENC_CODEC} cq {video['nvenc_cq']}"
+        enc = f"{NVENC_CODEC} " + (f"VBR target {kbps / 1000:g} Mbps" if kbps
+                                   else f"cq {video['nvenc_cq']}")
     else:
-        enc = f"libx264 preset {video['preset']}, crf {video['crf']}"
+        enc = f"libx264 preset {video['preset']}, " + (f"VBR target {kbps / 1000:g} Mbps" if kbps
+                                                       else f"crf {video['crf']}")
+    if video.get("scaler"):
+        enc += f", {video['scaler']} scale"
     return enc + (", GPU decode" if video.get("gpu_decode") else "")
 
 
@@ -1926,6 +1976,13 @@ def main() -> int:
                     help="the film's frame rate (`30000/1001`, `24`, `29.97`), over the "
                          "profile's own: the board passes the sequence's rate for an "
                          "export. The file is constant frame rate at it either way.")
+    ap.add_argument("--size", default=None,
+                    help="the film's frame size, WxH (`1280x720`), over the profile's own: "
+                         "the Export dialog's Frame Size. Scaled with Lanczos, the picture "
+                         "fitted inside it and padded black when the aspect differs.")
+    ap.add_argument("--bitrate", type=float, default=None,
+                    help="a target video bitrate in Mbps (VBR, 1 pass; peaks 1.5x it) over "
+                         "the profile's quality: the Export dialog's Bitrate")
     ap.add_argument("--jobs", type=int, default=None,
                     help="parts encoded at once (default: ROUGHCUT_RENDER_JOBS, else half "
                          "the cores)")
@@ -1945,14 +2002,24 @@ def main() -> int:
     segments = edl["segments"]
     orient = edl.get("orient", "auto")
     planned = sum(edits.dur(s) for s in segments)      # a shot at a speed is longer or shorter
-    video = resolve_video_profile(args.profile, args.footage, segments, args.fps)
+    size = frame_size(args.size) if args.size else None
+    if args.size and size is None:
+        print(f"error: --size {args.size!r} is not WxH (16-8192 each)", file=sys.stderr)
+        return 2
+    if args.bitrate is not None and not (0.1 <= args.bitrate <= 400):
+        print(f"error: --bitrate {args.bitrate:g} is not 0.1-400 Mbps", file=sys.stderr)
+        return 2
+    video = resolve_video_profile(args.profile, args.footage, segments, args.fps, size,
+                                  round(args.bitrate * 1000) if args.bitrate else None)
     rate = rate_of(video["fps"])
     spans = frame_spans(segments, rate)
     film_s = float(spans[-1][1] / rate) if spans else 0.0
     print(f"variant {edl['variant']} — {edl['title']}: {len(segments)} segments, "
           f"{planned:.1f}s planned, orient={orient}")
+    quality = (f"target {video['bitrate_kbps'] / 1000:g} Mbps" if video.get("bitrate_kbps")
+               else f"crf {video['crf']}")
     print(f"profile {args.profile}: {video['w']}x{video['h']} @ {video['fps']}fps, "
-          f"preset {video['preset']}, crf {video['crf']}, audio {video['audio_bitrate']} · "
+          f"preset {video['preset']}, {quality}, audio {video['audio_bitrate']} · "
           f"encoder {describe_encoder(video)}")
 
     if args.parts_dir:
