@@ -52,6 +52,19 @@
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const stem = (c) => String(c || '').replace(/\.[^.]+$/, '');
+  // A clip's name as the editor reads it, never an internal file name ("gen_black_
+  // 78a418d8"): lane PRICED's `rcClipName` (firstpass.js: "Black Video", "Color Matte",
+  // "<clip> Still") when it is loaded, else the same words from the generated name's kind
+  // (roughcut/edits.py KINDS), else the file's stem.
+  const GEN_WORDS = { black: 'Black Video', colour: 'Color Matte', still: 'Still' };
+  function clipName(c) {
+    if (typeof window.rcClipName === 'function') {
+      const n = window.rcClipName(c);
+      if (n) return String(n);
+    }
+    const g = /^gen_([a-z]+)_/i.exec(String(c || ''));
+    return g ? (GEN_WORDS[g[1].toLowerCase()] || 'Generated clip') : stem(c);
+  }
   const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
   const secs = (t) => `${(Math.round(Math.max(0, Number(t) || 0) * 10) / 10).toFixed(1)}s`;
   const clock = (ms) => {
@@ -171,14 +184,14 @@
       if (ids.length === 1) {
         const seg = segOf(ids[0]);
         const no = shotNo(t, ids[0]);
-        const name = seg ? stem(seg.clip) : 'clip';
+        const name = seg ? clipName(seg.clip) : 'clip';
         return { text: no ? `Shot ${no} · ${name}` : name,
           title: `the selected shot: ${no ? `shot ${no} (${name})` : name}`
             + (seg ? `, ${tc(seg.in)}–${tc(seg.out)} of the clip` : '') };
       }
       const nums = ids.map((id) => shotNo(t, id)).filter((v) => v != null);
       const each = ids.map((id) => { const seg = segOf(id), no = shotNo(t, id);
-        return seg && no ? `shot ${no} (${stem(seg.clip)})` : null; }).filter(Boolean);
+        return seg && no ? `shot ${no} (${clipName(seg.clip)})` : null; }).filter(Boolean);
       return { text: nums.length === ids.length && nums.length ? shotList(nums) : plural(ids.length, 'shot'),
         title: `the ${ids.length} selected shots${each.length ? `: ${each.join(', ')}` : ''}` };
     }
@@ -190,8 +203,8 @@
       const span = s.in != null && s.out != null ? `, its In/Out ${secs(s.in)}–${secs(s.out)}` : '';
       // the Source monitor's clip says so; a Project panel clip reads as its row does
       const src = window.rcSource && window.rcSource.clip === s.clip;
-      return src ? { text: `Source: ${stem(s.clip)}`, title: `the Source clip ${stem(s.clip)}${span}` }
-        : { text: stem(s.clip), title: `the clip ${stem(s.clip)} in the Project panel${span}` };
+      return src ? { text: `Source: ${clipName(s.clip)}`, title: `the Source clip ${clipName(s.clip)}${span}` }
+        : { text: clipName(s.clip), title: `the clip ${clipName(s.clip)} in the Project panel${span}` };
     }
     return { text: 'Sequence', title: 'the whole sequence' };
   }
@@ -436,7 +449,7 @@
         cur.kind === 'selection', !ids.length, 'select clips first')
       + item('range', r ? `In/Out ${tc(r.in)} – ${tc(r.out)}` : 'Sequence In/Out',
         cur.kind === 'range', !r, 'mark I and O first')
-      + item('clip', src ? `Source clip: ${stem(src.clip)}` : 'Source clip',
+      + item('clip', src ? `Source clip: ${clipName(src.clip)}` : 'Source clip',
         cur.kind === 'clip', !src, 'open one in Source')
       + item('sequence', 'Whole sequence', cur.kind === 'sequence', false, '');
     m.setAttribute('role', 'menu');

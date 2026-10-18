@@ -970,6 +970,26 @@ def test_the_scope_chip_names_a_block_as_the_review_does(browser, live_server, p
         p.locator("#projList [data-clip]", has_text="CLIP_C").first.click(button="right")
         p.locator("[data-testid=ai-ctx-ask]").click()
         assert text() in ("CLIP_C", "Source: CLIP_C"), text()
+        p.keyboard.press("Escape")
+        # a generated clip is never its internal file name ("gen_black_78a418d8", the lead's
+        # wave-13 note): on a block, and asked about as a clip
+        gen = "gen_black_0a1b2c3d.mp4"
+        new_id = p.evaluate("(c) => tl.insert({clip: c, in: 0, out: 1}, null)", gen)
+        assert new_id, "the generated block was not inserted"
+        p.evaluate("(id) => tl.select([id], {source: 'click'})", new_id)
+        p.wait_for_function("(s) => document.querySelector(s).innerText.trim().startsWith('Shot 4 · ')", arg=chip)
+        said = p.evaluate("(s) => document.querySelector(s).innerText + ' ' + document.querySelector(s).title", chip)
+        assert "gen_" not in said and "0a1b2c3d" not in said, said
+        p.evaluate("(c) => rcAI.askAbout({kind: 'clip', clip: c})", gen)
+        said = p.evaluate("(s) => document.querySelector(s).innerText + ' ' + document.querySelector(s).title", chip)
+        assert "gen_" not in said and "0a1b2c3d" not in said, said
+        p.keyboard.press("Escape")
+        # the board's own name for a clip (lane PRICED's rcClipName) is the one the chip says
+        p.evaluate("""(c) => { window.__rcClipNameWas = window.rcClipName;
+          window.rcClipName = (x) => (x === c ? 'Black Video (test)' : (window.__rcClipNameWas ? window.__rcClipNameWas(x) : null)); }""", gen)
+        p.evaluate("(id) => { tl.select([]); tl.select([id], {source: 'click'}); }", new_id)
+        p.wait_for_function("(s) => document.querySelector(s).innerText.trim() === 'Shot 4 · Black Video (test)'", arg=chip)
+        p.evaluate("window.rcClipName = window.__rcClipNameWas")
     finally:
         b.close()
 
