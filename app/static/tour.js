@@ -669,7 +669,19 @@
     }
   }
 
+  /* While the Program plays (app.js `player`), the ring holds still and the callout is
+   * re-placed twice a second, not eight times (wave 13 CANVAS2): the glow's breathing is a
+   * box-shadow animation, which repainted the board on every display frame — traced on the
+   * perf fixture with the walk-through up, the display compositor redrew 1435x831 px of
+   * the window on 132 of 215 frames in 4 s, the cost that held the graded picture 70-115 ms
+   * on a shared box. At rest it breathes as before. */
+  const appPlaying = () => { try { return typeof player === 'object' && !!player && !!player.playing; } catch (e) { return false; } };  // eslint-disable-line no-undef
   function tick() {
+    const playing = appPlaying();
+    if (T.ring && T.ring.classList.contains('still') !== playing) T.ring.classList.toggle('still', playing);
+    const now = performance.now();
+    if (playing && now - (T.placed || 0) < 480) return;
+    T.placed = now;
     place();
     T.wasOpen = othersOpen();
   }

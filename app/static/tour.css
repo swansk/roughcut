@@ -56,6 +56,9 @@
 @keyframes rc-tour-glow {
   50% { box-shadow: 0 0 0 4px rgba(74, 157, 248, .16), 0 0 22px 4px rgba(74, 157, 248, .22); }
 }
+/* still while the Program plays (tour.js tick): a breathing box-shadow repaints the board
+   on every display frame */
+.rc-tour-ring.still { animation: none; }
 @media (prefers-reduced-motion: reduce) { .rc-tour-ring { animation: none; transition: none; } }
 
 /* ------------------------------------------------------------ the AI hover card */
