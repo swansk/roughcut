@@ -272,17 +272,30 @@ def test_ask_review_accept_and_one_ctrl_z_through_the_real_server(browser, live_
         assert segs[1]["controls"]["contrast"] == 20
         assert [(t["kind"], t["a"], t["b"]) for t in edl["transitions"]] == [("cross_dissolve", "shot-b", "shot-c")]
         assert (pg.locator("#undo").get_attribute("title") or "").startswith("undo: AI: ")
-        # the line says they landed; there is nothing left to review (a second Accept of
-        # the same answer would razor twice)
+        # the line says they landed and offers Undo; there is nothing left to review (a
+        # second Accept of the same answer would apply it twice)
         pg.wait_for_function(f"document.querySelector('{RESULT}').textContent.includes('3 changes applied')",
                              timeout=3000)
-        assert pg.locator('[data-testid="ai-result-open"]').count() == 0
+        assert "Review" not in pg.locator(RESULT).inner_text()
+        assert pg.locator(f'{STATUS} [data-ai="undo"]').inner_text().strip() == "Undo"
         b.shot("4-accepted")
+        landed = _cut(b.settle())
+        assert pg.evaluate("rcActions.review(rcAI.state().result)") is False   # a re-open never re-applies
+        assert not pg.evaluate("rcActions.open")
+        assert _cut(b.settle()) == landed
         # the review is on the record: all three accepted
         job = pg.evaluate("rcAI.state().job")
         rec = pg.evaluate("(j) => fetch('/api/assist/' + j).then(r => r.json())", job)
         assert rec["answer"]["accepted"] == [0, 1, 2] and rec["answer"]["rejected"] == []
-        b.undo()
+        # the line's Undo is that one Ctrl+Z: the whole accept back, the prompt idle
+        pg.locator(f'{STATUS} [data-ai="undo"]').click()
+        pg.wait_for_function("tl.byId('shot-a').in === 1.0")
+        assert _cut(b.settle()) == seeded, "one undo did not take the whole accept back"
+        assert b.state() == "idle" and pg.locator(STATUS).is_hidden()
+        pg.keyboard.press("Control+Shift+z")                               # redo: all of it again
+        pg.wait_for_function("tl.byId('shot-a').in === 1.5")
+        assert _cut(b.settle()) == landed
+        b.undo()                                                           # and Ctrl+Z, the same
         pg.wait_for_function("tl.byId('shot-a').in === 1.0")
         assert _cut(b.settle()) == seeded, "one Ctrl+Z did not take the whole accept back"
         # what went out: the words, the scope (the whole sequence: nothing selected) and the playhead
@@ -314,6 +327,13 @@ def test_a_selection_scopes_the_ask_and_one_accept_of_two(browser, live_server, 
         pg.wait_for_function("!rcActions.open")
         seg = b.settle()["segments"][1]
         assert seg.get("speed") == 0.5 and "exposure" not in (seg.get("controls") or {})
+        pg.wait_for_function(f"document.querySelector('{RESULT}').textContent.includes('1 of 2 applied')",
+                             timeout=3000)
+        assert pg.locator(f'{STATUS} [data-ai="undo"]').is_visible()
+        # another edit on top: the line's Undo would take back the wrong thing, so it goes
+        pg.evaluate("tl.setRange('shot-a', 1.25, null)")
+        pg.wait_for_function(f"!document.querySelector('{STATUS} [data-ai=undo]')", timeout=3000)
+        assert "1 of 2 applied" in pg.locator(RESULT).inner_text()
         job = pg.evaluate("rcAI.state().job")
         rec = pg.evaluate("(j) => fetch('/api/assist/' + j).then(r => r.json())", job)
         assert rec["answer"] == {**rec["answer"], "accepted": [0], "rejected": [1]}

@@ -326,9 +326,11 @@
       const n = (d.ops || []).length;
       if (!n) return { line: 'No changes needed', act: d.summary || d.text ? 'Why' : '', what: 'answer' };
       if (d.answered) {
-        const k = d.answered.accepted;
-        return k ? { line: `${plural(k, 'change')} applied`, act: '', what: '' }
-          : { line: 'Rejected — nothing changed', act: '', what: '' };
+        const a = d.answered;
+        if (!a.accepted) return { line: 'Rejected — nothing changed', act: '', what: '' };
+        const line = a.accepted === a.total ? `${plural(a.accepted, 'change')} applied` : `${a.accepted} of ${a.total} applied`;
+        // Undo while the accept is still the last thing on the undo stack
+        return { line, act: a.top ? 'Undo' : '', what: a.top ? 'undo' : '' };
       }
       return { line: `${plural(n, 'change')} ready`, act: 'Review', what: 'review' };
     }
@@ -361,6 +363,7 @@
     else if (what === 'review') review(AI.result);
     else if (what === 'plan') showPlan(AI.result);
     else if (what === 'answer') showPop('answer');
+    else if (what === 'undo') undoAccept();
   }
 
   /* ------------------------------------------------------------ floating bits */
@@ -591,6 +594,11 @@
     if (gen !== AI.gen) return;
     stopTimers();
     AI.result = { ...d, job: AI.job, asked: AI.text, scope: AI.scope, planReady: d.plan_state === 'done' };
+    if (d.answer && Array.isArray(d.answer.accepted)) {            // reviewed already (another tab)
+      const n = d.answer.accepted.length;
+      AI.result.answered = { accepted: n, rejected: (d.answer.rejected || []).length,
+        total: n + (d.answer.rejected || []).length, label: '', top: false };
+    }
     AI.state = 'done';
     paintStatus();
     const r = resultLine(AI.result);
@@ -599,12 +607,37 @@
     else if (r.what === 'answer' && r.act) showPop('answer');
   }
 
-  /* The review panel answered this ask: the line says what landed. */
+  /* The review panel answered this ask: the line says what landed, and offers Undo while
+   * the accept's entry is the top of the undo stack. */
   function onAnswered(e) {
     const d = e && e.detail;
     if (!d || !AI.result || AI.result.job !== d.job) return;
-    AI.result.answered = { accepted: (d.accepted || []).length, rejected: (d.rejected || []).length };
+    const acc = (d.accepted || []).length, rej = (d.rejected || []).length;
+    AI.result.answered = { accepted: acc, rejected: rej, total: acc + rej, label: d.label || '',
+      top: !!(acc && d.committed) };
     paintStatus();
+  }
+
+  /* The undo stack moved: another entry on top takes the line's Undo away; that accept's
+   * own undo (the line's Undo, Ctrl+Z, the header's ↶) puts the prompt back to idle. */
+  function onUndoStack(ev) {
+    const a = AI.result && AI.result.answered;
+    if (!ev || !a || !a.top) return;
+    if (ev.kind === 'undo' && ev.label === a.label) {
+      AI.state = 'idle';
+      AI.result = null;
+      closePop();
+      paintStatus();
+    } else if (ev.kind === 'commit' || ev.kind === 'undo' || ev.kind === 'redo') {
+      a.top = false;
+      paintStatus();
+    }
+  }
+
+  function undoAccept() {
+    const a = AI.result && AI.result.answered;
+    if (!a || !a.top || !TL() || typeof tl.undo !== 'function') return;
+    tl.undo();
   }
 
   function review(d) {
@@ -1042,6 +1075,7 @@
       tl.on('select', paintScope);
       tl.on('markers', paintScope);
       tl.on('change', paintScope);
+      tl.on('change', onUndoStack);
     }
     // the menu's words follow the board each time it opens
     const menu = document.querySelector('#menubar .menu[data-menu=ai]');

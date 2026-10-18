@@ -357,7 +357,7 @@
       }
       return out;
     })();
-    return { applied, refused, after: done, label };
+    return { applied, refused, after: done, label, committed: !!out.committed };
   }
 
   function labelFor(ops) {
@@ -807,6 +807,14 @@
   async function review(result) {
     const res = result && typeof result === 'object' ? result : null;
     if (!res) return false;
+    // an answer whose edits were accepted is in the cut: a second review would apply
+    // them again (its razor twice). Ctrl+Z is the way back; a rejected one may reopen.
+    const took = res.kind === 'ops' && res.job
+      ? (answered.has(res.job) ? answered.get(res.job) : ((res.answer && res.answer.accepted) || []).length) : 0;
+    if (took) {
+      app.toast(`${took === 1 ? 'that edit is' : 'those edits are'} already in the cut — ${app.undoKey()} takes ${took === 1 ? 'it' : 'them'} back`, 4000);
+      return false;
+    }
     if (R.res) closeQuiet();
     R.res = res;
     R.after = true;
@@ -863,12 +871,16 @@
   }
 
   /* The review on the record, and said to the page: the AI prompt's line (aiprompt.js)
-   * turns "3 changes ready · Review" into what landed, so the same answer is never
-   * reviewed — and applied — twice. */
-  function answer(acc, rej) {
+   * turns "3 changes ready · Review" into what landed ("3 of 4 applied · Undo",
+   * "Rejected — nothing changed"), so the same answer is never reviewed — and applied —
+   * twice; `label` / `committed` name the undo entry the accept made. */
+  const answered = new Map();      // job → ops accepted, once its review is answered
+  function answer(acc, rej, made = {}) {
     const job = R.res && R.res.job;
     if (!job) return;
-    window.dispatchEvent(new CustomEvent('rc:assist-answered', { detail: { job, accepted: acc, rejected: rej } }));
+    answered.set(job, acc.length);
+    window.dispatchEvent(new CustomEvent('rc:assist-answered', {
+      detail: { job, accepted: acc, rejected: rej, label: made.label || '', committed: !!made.committed } }));
     fetch(`/api/assist/${encodeURIComponent(job)}/answer`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'omit',
       body: JSON.stringify({ accepted: acc, rejected: rej }),
@@ -886,7 +898,7 @@
     const failed = new Set(out.refused.map((x) => idx[x.i]));
     const took = idx.filter((i) => !failed.has(i));
     const rej = R.ops.map((_, i) => i).filter((i) => !took.includes(i));
-    answer(took, rej);
+    answer(took, rej, { label, committed: out.committed });
     const n = took.length;
     const said = out.refused.length
       ? `applied ${n} of ${idx.length} — ${out.refused[0].why}`
