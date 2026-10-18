@@ -168,8 +168,17 @@
     }
   }
 
+  /* At most DRAW_MS apart (wave 13 CANVAS2): every other frame of a 60 Hz display, the
+   * rate the Program's picture changes at. A meter drawn on every display frame was a paint,
+   * a raster and a redraw of the display on each one, half of them for the meters alone,
+   * while a graded shot plays. The analyser's 2048 samples (43 ms at 48 kHz) still cover the
+   * time between two reads, so no peak is missed. */
+  const DRAW_MS = 30;
+  let drawnAt = -Infinity;
   function tick(now) {
     raf = 0;
+    if (now - drawnAt < DRAW_MS) { raf = requestAnimationFrame(tick); return; }
+    drawnAt = now;
     sample(now);
     draw();
     const loud = lvl.shown.some((x) => x > -Infinity) || lvl.hold.some((x) => x > -Infinity);
