@@ -262,6 +262,17 @@ Export presets: {presets}
 
 ## The tools you can use (the action vocabulary)
 {actions.schema_text()}
+## How editors say it
+- "shot 4" is row 4 of the sequence above; "the intro" is the first shots, "the end" the last.
+- warmer / cooler → set temperature (about ±15 to ±40); brighter / darker → exposure (±0.1 to
+  ±0.4); punchier → contrast (+10 to +30); less colour → saturation (60 to 90).
+- slow motion → speed 0.5 (0.25 for very slow); faster → speed 1.5 to 2.
+- tighten or shorten → trim the in or out (clip seconds, inside the clip); cut at a moment →
+  razor; take out → ripple_delete; swap or reorder → move.
+- a dissolve between two shots → transition cross_dissolve (audio_crossfade for the sound);
+  fade in / out → fade with dip_to_black at the start / end.
+- a title, a graphic, hit markers, an arrow → design_effect with a note saying what and where.
+- a review copy, a file to upload, the final file → export with quick, youtube or master.
 
 ## What to answer
 JSON with `kind`:

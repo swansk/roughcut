@@ -10297,16 +10297,19 @@ async def api_assist_preview(request: Request) -> JSONResponse:
     sent, its markers, In / Out, transitions, V2+ clips and tracks) over the project's
     clips — so the review opens on what Accept would really do. Nothing is written."""
     body = await request.json()
-    state = assist_state()
-    for k in ("segments", "markers", "transitions", "overlays", "tracks"):
-        if isinstance(body.get(k), (list, dict)):
-            state[k] = body[k]
-    for k in ("in", "out"):
-        if k in body:
-            state[k] = body[k]
-    if isinstance(body.get("colour"), dict):
-        state["colour"] = body["colour"]
-    return JSONResponse(actionsmod.check(body.get("ops"), state))
+
+    def run() -> dict:                 # the project's files are read off the event loop
+        state = assist_state()
+        for k in ("segments", "markers", "transitions", "overlays", "tracks"):
+            if isinstance(body.get(k), (list, dict)):
+                state[k] = body[k]
+        for k in ("in", "out"):
+            if k in body:
+                state[k] = body[k]
+        if isinstance(body.get("colour"), dict):
+            state["colour"] = body["colour"]
+        return actionsmod.check(body.get("ops"), state)
+    return JSONResponse(await asyncio.to_thread(run))
 
 
 @app.get("/api/assist/price")
