@@ -34,6 +34,13 @@ lead unions them), `REDESIGN-GOAL.md` rubric log (the lead writes entries from y
   audit`. `askAbout({kind:'segment'|'clip'|'range', id, clip, in, out})` pre-scopes the prompt.
 - `window.rcTour = { start(which), active }` (TEACH). `start()` = the whole loop, `start('ai')`
   = the AI features.
+- Clips changed: whoever adds footage (IMPORT) fires `window.dispatchEvent(new CustomEvent('rc:clips-changed',
+  {detail:{added:[clip names]}}))`; the Project panel (BINLOOK) reloads on it (and keeps
+  `window.dock.project.reload()` working).
+- The walk-through and the tests: TEACH's first-run tour must not open in test browsers that did not ask
+  for it, or it covers what other tests click. TEACH owns that switch: a `localStorage` flag set by an
+  init script in `app/tests/conftest.py`'s browser contexts and in `tools/journey.py`'s context (only
+  those lines), so a test or the judge that wants the first run starts without the flag.
 - Key rows: a module pushes `[key, what, group]` onto `window.rcExtraKeys` (groups: play, trim,
   move, bin, source, ai); dock.js's keys sheet shows them. Re-check the sheet fits at 1366×768.
 

@@ -548,6 +548,8 @@ class Journey:
         b = pw.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
         self.browser = b
         pg = b.new_page(viewport={"width": W, "height": H})
+        # the first-run walk-through (tour.js) is not part of this session: its flag, set
+        pg.add_init_script("try { localStorage.setItem('roughcut.tour', 'seen') } catch (e) {}")
         self.pg = pg
         pg.on("pageerror", lambda e: self.errors.append(str(e)))
         pg.on("console", lambda m: self.console.append(m.text) if m.type == "error" else None)

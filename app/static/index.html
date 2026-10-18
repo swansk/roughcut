@@ -81,8 +81,6 @@
   <div id="flow"></div>
   <!-- The first pass: Run / Re-run, always here (firstpass.js, REDESIGN-GOAL dimension 2). -->
   <div id="firstpass" data-testid="firstpass"></div>
-  <!-- The AI prompt: one always-visible way to ask the AI (aiprompt.js, REDESIGN-GOAL dimension 14). -->
-  <div id="aiPrompt" data-testid="ai-prompt"></div>
   <!-- Every long operation in the app draws itself here, in this row. -->
   <div id="progress" hidden></div>
   <div class="grow"></div>
@@ -177,7 +175,9 @@
       <div class="screenbox"><div class="mon" id="srcScreen">
         <img id="srcPoster" alt="" draggable="false" hidden>
         <video id="srcVideo" preload="metadata" playsinline></video>
-        <div class="monEmpty" id="srcEmpty">pick a clip in the Project panel</div>
+        <!-- Its next action (REDESIGN-GOAL dimension 16): with no footage, Import (app.js
+             emptyState shows .se-none; tour.js opens rcImport on [data-rc-import]). -->
+        <div class="monEmpty" id="srcEmpty"><span class="se-pick">pick a clip in the Project panel</span><span class="se-none" hidden><button type="button" data-rc-import data-testid="source-import">Import footage…<span class="k">Ctrl+I</span></button></span></div>
         <div class="monWait" id="srcWait" hidden><span>preparing preview…</span></div>
       </div></div>
       <div class="srcbar" id="srcBar"><div class="track"></div><div class="range" hidden></div><div class="head"></div></div>
@@ -350,7 +350,13 @@
        mounts it here once the project has loaded. An empty sequence shows its first
        action here. -->
   <section class="ws-panel" id="pTimeline" data-panel="timeline">
-    <div class="ws-head"><div class="ws-tabs"><span class="ws-tab on" id="tlTitle"><span class="lbl">Timeline</span></span></div></div>
+    <div class="ws-head"><div class="ws-tabs"><span class="ws-tab on" id="tlTitle"><span class="lbl">Timeline</span></span></div>
+      <!-- The AI prompt: one always-visible way to ask the AI, scoped by the selection
+           (aiprompt.js, REDESIGN-GOAL dimension 14). Its home is the Timeline's header
+           row, where the edits it asks for land: the app bar has no room for a usable
+           field at 1440. -->
+      <div id="aiPrompt" data-testid="ai-prompt"></div>
+    </div>
     <div class="ws-body" id="tlBody">
       <div id="tl"></div>
       <div id="tlEmpty" hidden></div>
