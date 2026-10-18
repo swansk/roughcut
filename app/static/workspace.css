@@ -492,6 +492,9 @@ table.plist .st.ok { color: var(--good); }
                                    padding: 0 4px; border-radius: 2px; background: rgba(0,0,0,.72); color: #e0e0e6;
                                    font-size: 10px; line-height: 15px; font-variant-numeric: tabular-nums; }
 #projList .ptile .thumb .pbadge { position: absolute; right: 3px; top: 3px; }
+/* the hover scrub's frame: the clip's filmstrip sprite cell, drawn over the poster */
+#projList .ptile .thumb canvas.spr { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#projList .ptile .thumb canvas.spr[hidden] { display: none; }
 /* the hover scrub's place in the clip, along the poster's foot */
 #projList .ptile .thumb .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(0,0,0,.55); }
 #projList .ptile .thumb .bar[hidden] { display: none; }

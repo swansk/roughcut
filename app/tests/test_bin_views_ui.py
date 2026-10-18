@@ -97,6 +97,9 @@ def live_server(project, tmp_path_factory):
     server.configure(project["edl"], project["footage"], project["sidecars"],
                      work, proxies=False, assets=project["assets"])
     server.ensure_proxies([f"{s}.MP4" for s in project["stems"]])
+    # the clips' filmstrip sprites are made here although the suite runs with proxies off
+    # (wave 13 BINLOOK2; test_icon_view_scrubs_from_the_clips_sprite_at_once)
+    server.SPRITES["force"] = True
     port = _free_port()
     srv = uvicorn.Server(uvicorn.Config(server.app, host="127.0.0.1", port=port, log_level="error"))
     thread = threading.Thread(target=srv.run, daemon=True)
@@ -110,6 +113,13 @@ def live_server(project, tmp_path_factory):
     srv.should_exit = True
     thread.join(timeout=10)
     project["edl"].write_text(original, encoding="utf-8")
+    # no sprite ffmpeg runs on into the next module
+    server.SPRITES["force"] = None
+    for _ in range(600):
+        t = server.SPRITES["thread"]
+        if not server.SPRITES["pending"] and (t is None or not t.is_alive()):
+            break
+        time.sleep(0.05)
 
 
 @pytest.fixture
@@ -363,7 +373,13 @@ FRAME_JS = """(sel) => { const img = document.querySelector(sel);
 
 
 def test_icon_view_scrubs_a_clip_under_the_pointer_and_sizes_with_the_slider(live_server, project, browser):
-    pg = _open(browser, live_server, project, size=(1920, 1080))
+    """Before a clip's sprite is listed (GET /api/sprites answered empty here), the scrub
+    steps through the poster route's stills; test_icon_view_scrubs_from_the_clips_sprite
+    is the scrub once it is."""
+    pg = _open(browser, live_server, project, size=(1920, 1080), wait=False)
+    pg.route("**/api/sprites", lambda r: _json(r, {"sprites": {}, "pending": 0, "waiting": 0, "n": 20}))
+    pg.reload()
+    pg.wait_for_selector("#projList [data-clip]", timeout=15000)
     assert not pg.locator("#projZoom").is_visible()            # the slider is the posters'
     pg.locator("[data-testid=project-view-icon]").click()
     assert pg.evaluate("dock.project.view()") == "icon"
@@ -416,6 +432,97 @@ def test_icon_view_scrubs_a_clip_under_the_pointer_and_sizes_with_the_slider(liv
     pg.locator("[data-testid=project-view-list]").click()
     assert pg.evaluate("dock.project.view()") == "list"
     assert pg.locator("#projList tr.row").count() == 3 and not pg.locator("#projZoom").is_visible()
+    assert pg.errors == []
+    pg.context.close()
+
+
+# The scrub from the sprite, timed on the page's own clock: when the pointer moved (the
+# thumb's capture listener, before dock.js's), when the canvas held the cell for it, and
+# the start of the animation frame AFTER the one that painted it (the frame is on screen
+# by then: an upper bound); the canvas's pixels each time.
+SCRUB_WATCH = """(sel) => {
+  const th = document.querySelector(sel);
+  window.__scrub = { moves: [], shown: [] };
+  th.addEventListener('pointermove', (e) => { window.__scrub.moves.push(e.timeStamp); }, true);
+  new MutationObserver(() => {
+    const cv = th.querySelector('canvas.spr');
+    if (!cv || cv.hidden || cv.dataset.cell === undefined) return;
+    const at = performance.now(), cell = Number(cv.dataset.cell);
+    requestAnimationFrame(() => requestAnimationFrame((ts) => window.__scrub.shown.push({ cell, at, next: ts })));
+  }).observe(th, { subtree: true, attributes: true, attributeFilter: ['data-cell', 'hidden'] });
+}"""
+
+CANVAS_PX = """(sel) => { const cv = document.querySelector(sel);
+  if (!cv || cv.hidden) return null;
+  const c = document.createElement('canvas'); c.width = 32; c.height = 18;
+  const g = c.getContext('2d'); g.drawImage(cv, 0, 0, 32, 18);
+  return Array.from(g.getImageData(0, 0, 32, 18).data); }"""
+
+# a sprite cell's pixels, drawn straight from the sprite image (32×18, as CANVAS_PX)
+CELL_PX = """async ([url, k, cols, rows]) => { const img = new Image(); img.src = url; await img.decode();
+  const cw = img.naturalWidth / cols, ch = img.naturalHeight / rows;
+  const c = document.createElement('canvas'); c.width = 32; c.height = 18;
+  const g = c.getContext('2d'); g.drawImage(img, (k % cols) * cw, Math.floor(k / cols) * ch, cw, ch, 0, 0, 32, 18);
+  return Array.from(g.getImageData(0, 0, 32, 18).data); }"""
+
+
+def _mad(a, b) -> float:
+    return sum(abs(x - y) for x, y in zip(a, b)) / max(1, len(a))
+
+
+@pytest.mark.parametrize("size", [(1440, 900), (1920, 1080)], ids=lambda s: f"{s[0]}x{s[1]}")
+def test_icon_view_scrubs_from_the_clips_sprite_at_once(live_server, project, browser, size):
+    """Verdict 9, punch 9: "moving across a tile changes the shown frame within 50 ms at 5
+    positions", and never the 0 s frame at 90 %. The clip's sprite (made in the background
+    once the board listed the clip) is loaded with the tile in view; each move draws its
+    cell under the pointer with no request."""
+    pg = _open(browser, live_server, project, size=size)
+    pg.locator("[data-testid=project-view-icon]").click()
+    pg.wait_for_function("(() => { const s = dock.project.sprite('CLIP_A'); return !!s && s.ok; })()", timeout=60000)
+    sp = pg.evaluate("dock.project.sprite('CLIP_A')")
+    assert sp["n"] == 20 and sp["url"].startswith("/media/sprite/CLIP_A."), sp
+    tile = "#projList .picon[data-clip='CLIP_A.MP4']"
+    pg.evaluate(SCRUB_WATCH, f"{tile} .thumb")
+    poster = pg.evaluate(FRAME_JS, f"{tile} .thumb img")
+    first_cell = pg.evaluate(CELL_PX, [sp["url"], 0, sp["cols"], sp["rows"]])
+    asked = []
+    pg.on("request", lambda r: asked.append(r.url) if "/media/" in r.url else None)
+    box = pg.locator(f"{tile} .thumb").bounding_box()
+    y = box["y"] + box["height"] / 2
+    shown, ms, drawn, pix = [], [], [], []
+    # five places across the tile, each in the middle of its cell's span (the last ~90 %)
+    for i, want in enumerate((2, 6, 10, 13, 17)):
+        f = want / (sp["n"] - 1)
+        pg.mouse.move(box["x"] + box["width"] * f, y)
+        pg.wait_for_function(f"window.__scrub.shown.some((s) => s.cell === {want}) && window.__scrub.moves.length > {i}",
+                             timeout=3000)
+        got = pg.evaluate(f"""(() => {{ const s = window.__scrub, m = s.moves[s.moves.length - 1];
+            const hit = s.shown.find((x) => x.cell === {want} && x.at >= m - 0.5);
+            return hit ? {{ cell: hit.cell, ms: hit.next - m, drawn: hit.at - m }} : null; }})()""")
+        assert got is not None, (f, pg.evaluate("window.__scrub"))
+        shown.append(got["cell"])
+        ms.append(round(got["ms"], 1))
+        drawn.append(round(got["drawn"], 1))
+        pix.append(pg.evaluate(CANVAS_PX, f"{tile} .thumb canvas.spr"))
+        # the time under the poster is the frame's own
+        assert pg.locator(f"{tile} .cap .d").inner_text() != ""
+    print(f"\n{size[0]}: cells {shown}, pointer move → cell drawn (ms): {drawn}, → on screen by: {ms}")
+    assert shown == [2, 6, 10, 13, 17], shown
+    assert all(x <= 50.0 for x in ms), ms
+    # five different frames, none of them the clip's poster, and at 90 % not the first frame
+    assert all(p is not None for p in pix)
+    for a in range(5):
+        for b in range(a + 1, 5):
+            assert _mad(pix[a], pix[b]) > 4.0, (a, b, _mad(pix[a], pix[b]))
+    assert _mad(pix[4], first_cell) > 10.0 and _mad(pix[4], [int(x) for x in poster.split(",")]) > 10.0
+    # the canvas covers the poster while it scrubs
+    cv = pg.locator(f"{tile} .thumb canvas.spr").bounding_box()
+    assert abs(cv["width"] - box["width"]) < 1 and abs(cv["height"] - box["height"]) < 1, (cv, box)
+    assert not [u for u in asked if "/media/poster/" in u or "/media/sprite/" in u], asked
+    # leaving: the clip's poster again, no canvas
+    pg.mouse.move(5, 5)
+    pg.wait_for_function(f"document.querySelector(\"{tile} .thumb canvas.spr\").hidden", timeout=3000)
+    assert "6:00" in pg.locator(f"{tile} .cap").inner_text()
     assert pg.errors == []
     pg.context.close()
 

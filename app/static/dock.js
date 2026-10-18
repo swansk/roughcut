@@ -513,6 +513,7 @@
     heardSince();
     subsChanged();
     paintProject();
+    loadSprites();
     // facts still being probed: ask again in a second; a clip still being indexed: now and then
     if (j && j.probing) project.timer = setTimeout(loadClips, 1000);
     else if (project.clips.some((c) => c.media === 'building' || c.media === 'queued')) project.timer = setTimeout(loadClips, 5000);
@@ -1050,6 +1051,7 @@
       if (isOpenClip(it)) it.subs.forEach((s) => { const x = subItem(s, it); all.push(x); tiles.push(tileHtml(x)); });
     });
     box.innerHTML = `<div class="picons" style="--tile:${project.zoom}px">${tiles.join('')}</div>`;
+    watchTiles();
     return all;
   }
 
@@ -1219,15 +1221,116 @@
   }
 
   /* ---------------------------------------------------------- hover scrub (Icon view)
-   * Premiere scrubs a clip as the pointer crosses its poster. Here a clip is SCRUB_STEPS
-   * stills across its length (the poster route, cached on disk and immutable in the
-   * browser), loaded one at a time — the frame under the pointer first, then the rest —
-   * so a scrub never holds more than one of the board's connections. The poster under
-   * the pointer shows the nearest frame loaded; leaving puts the clip's own poster back. */
+   * Premiere scrubs a clip as the pointer crosses its poster, at once. Each clip has a
+   * filmstrip sprite (verdict 9, punch 9; server.py "filmstrip sprites"): ONE JPEG of its
+   * frames in a grid, made in the background after the clip's poster and preview and
+   * listed by GET /api/sprites. It loads (and decodes) as the tile comes into view, and a
+   * scrub draws the cell under the pointer onto a canvas over the poster: no request, the
+   * frame there the moment the pointer moves. Until a clip's sprite is listed and loaded,
+   * the scrub is SCRUB_STEPS stills across its length (the poster route, cached on disk
+   * and immutable in the browser), loaded one at a time — the frame under the pointer
+   * first, then the rest — so it never holds more than one of the board's connections;
+   * the poster shows the nearest frame loaded. Leaving puts the clip's own poster back. */
   const SCRUB_STEPS = 20;
   const scrub = { tile: null, img: null, c: null, base: '', want: '', busy: false, have: new Set(),
-                  queue: [], bar: null, d: null, dText: '' };
-  const scrubUrl = (c, k) => posterAt(c, (k / (SCRUB_STEPS - 1)) * Math.max(0, Number(c.duration) - 1 / source.fps(c)));
+                  queue: [], bar: null, d: null, dText: '', th: null, f: 0 };
+  // to the hundredth below: the last frame's time rounded up (5.958 → 5.96) is past the
+  // clip's end, where the poster route answers its first frame
+  const scrubUrl = (c, k) => posterAt(c, Math.floor((k / (SCRUB_STEPS - 1))
+    * Math.max(0, Number(c.duration) - 1 / source.fps(c)) * 100) / 100);
+
+  // stem -> {url, n, cols, rows, w, h, times, img, ok}: the sprites /api/sprites lists
+  const sprites = { map: new Map(), timer: 0, io: null };
+  const spriteFor = (c) => (c && sprites.map.get(c.stem || stemOf(c.clip))) || null;
+
+  /* What is built (the server queues the rest, and makes them in the background): asked
+   * with every look at the clips, and again in a moment while some are being made. */
+  async function loadSprites() {
+    clearTimeout(sprites.timer);
+    let j = null;
+    try {
+      const r = await fetch('/api/sprites');
+      if (r.ok) j = await r.json();
+    } catch (e) { /* the next look at the clips asks again */ }
+    if (!j || !j.sprites || typeof j.sprites !== 'object') return;
+    for (const [stem, sp] of Object.entries(j.sprites)) {
+      const have = sprites.map.get(stem);
+      if (!have || have.url !== sp.url) sprites.map.set(stem, { ...sp, img: null, ok: false });
+    }
+    if (project.view === 'icon') watchTiles();
+    if (j.pending > 0) sprites.timer = setTimeout(loadSprites, 2000);
+  }
+
+  // a sprite's image, loaded and decoded once; a scrub already on its clip switches to it
+  function loadSprite(sp) {
+    if (!sp || sp.img) return;
+    const img = new Image();
+    img.decoding = 'async';
+    sp.img = img;
+    const ready = () => {
+      sp.ok = img.naturalWidth > 0;
+      if (sp.ok && scrub.th && spriteFor(scrub.c) === sp) {
+        scrub.queue = [];                 // no more stills for this clip
+        drawCell(scrub.th, sp, scrub.f);
+      }
+    };
+    img.src = sp.url;
+    if (typeof img.decode === 'function') img.decode().then(ready, () => { sp.ok = false; });
+    else { img.onload = ready; img.onerror = () => { sp.ok = false; }; }
+  }
+
+  // the Icon view's tiles load their sprites as they come into view (a long bin never
+  // fetches every sprite at once)
+  function watchTiles() {
+    const box = $('#projList');
+    if (!box || project.view !== 'icon') return;
+    const tiles = $$('#projList .picon[data-clip]');
+    if (!('IntersectionObserver' in window)) {
+      tiles.forEach((t) => loadSprite(spriteFor(clipByName(t.dataset.clip))));
+      return;
+    }
+    if (!sprites.io) {
+      sprites.io = new IntersectionObserver((seen) => seen.forEach((e) => {
+        if (!e.isIntersecting) return;
+        const sp = spriteFor(clipByName(e.target.dataset.clip));
+        if (sp) { loadSprite(sp); sprites.io.unobserve(e.target); }
+      }), { root: box, rootMargin: '240px' });
+    }
+    sprites.io.disconnect();
+    tiles.forEach((t) => { const sp = spriteFor(clipByName(t.dataset.clip)); if (sp && !sp.img) sprites.io.observe(t); });
+  }
+
+  /* The cell for `f` (0..1 across the tile) on the tile's canvas, cropped to the tile's
+   * shape as the poster is (object-fit: cover). False when it could not draw. */
+  function drawCell(th, sp, f) {
+    const img = sp.img;
+    if (!img || !sp.ok || !th.isConnected) return false;
+    let cv = th.querySelector('canvas.spr');
+    if (!cv) {
+      cv = document.createElement('canvas');
+      cv.className = 'spr';
+      cv.setAttribute('aria-hidden', 'true');
+      const pic = th.querySelector('img');
+      th.insertBefore(cv, pic ? pic.nextSibling : th.firstChild);
+    }
+    const dpr = window.devicePixelRatio || 1;
+    const pw = Math.max(1, Math.round(th.clientWidth * dpr)), ph = Math.max(1, Math.round(th.clientHeight * dpr));
+    if (cv.width !== pw || cv.height !== ph) { cv.width = pw; cv.height = ph; }
+    const g = cv.getContext('2d');
+    if (!g) return false;
+    const k = clamp(Math.round(f * (sp.n - 1)), 0, sp.n - 1);
+    const cw = img.naturalWidth / sp.cols, ch = img.naturalHeight / sp.rows;
+    let sw = cw, sh = ch;
+    if (cw / ch > pw / ph) sw = ch * pw / ph; else sh = cw * ph / pw;
+    g.drawImage(img, (k % sp.cols) * cw + (cw - sw) / 2, Math.floor(k / sp.cols) * ch + (ch - sh) / 2, sw, sh, 0, 0, pw, ph);
+    cv.dataset.cell = String(k);
+    cv.hidden = false;
+    // the time under the poster is the frame's own
+    if (scrub.d && Array.isArray(sp.times) && Number.isFinite(sp.times[k])) {
+      scrub.d.textContent = shortTc(tcOf(sp.times[k], scrub.c && scrub.c.fps));
+    }
+    return true;
+  }
 
   function scrubPump() {
     if (scrub.busy || !scrub.tile) return;
@@ -1255,11 +1358,16 @@
     scrub.tile = tile;
     scrub.c = c;
     scrub.img = tile.querySelector('.thumb img');
+    scrub.th = tile.querySelector('.thumb');
     scrub.base = scrub.img ? scrub.img.getAttribute('src') : '';
     scrub.bar = tile.querySelector('.thumb .bar');
     scrub.d = tile.querySelector('.cap .d');
     scrub.dText = scrub.d ? scrub.d.textContent : '';
-    // the rest of the clip, coarse to fine: the ends and the middle first
+    const sp = spriteFor(c);
+    if (sp) loadSprite(sp);
+    // the stills, while there is no sprite: the rest of the clip, coarse to fine (the
+    // ends and the middle first)
+    if (sp && sp.ok) return;
     const order = [];
     for (let step = SCRUB_STEPS - 1; step >= 1; step = Math.floor(step / 2)) {
       for (let k = 0; k < SCRUB_STEPS; k += step) if (!order.includes(k)) order.push(k);
@@ -1273,10 +1381,13 @@
     const t = scrub.tile;
     if (!t) return;
     if (scrub.img && scrub.img.isConnected && scrub.base) scrub.img.setAttribute('src', scrub.base);
+    const cv = t.querySelector('canvas.spr');
+    if (cv) { cv.hidden = true; delete cv.dataset.cell; }
     if (scrub.bar) scrub.bar.hidden = true;
     if (scrub.d) scrub.d.textContent = scrub.dText;
     t.classList.remove('scrubbing');
-    Object.assign(scrub, { tile: null, img: null, c: null, base: '', want: '', queue: [], bar: null, d: null });
+    Object.assign(scrub, { tile: null, img: null, c: null, base: '', want: '', queue: [], bar: null, d: null,
+                           th: null, f: 0 });
     if (!quiet && project.dirty) paintProject();
   }
 
@@ -1291,8 +1402,12 @@
     tile.classList.add('scrubbing');
     const r = th.getBoundingClientRect();
     const f = clamp((e.clientX - r.left) / Math.max(1, r.width), 0, 1);
+    scrub.f = f;
     if (scrub.bar) { scrub.bar.hidden = false; scrub.bar.firstChild.style.width = `${(f * 100).toFixed(1)}%`; }
     if (scrub.d) scrub.d.textContent = shortTc(tcOf(f * Number(c.duration), c.fps));
+    // the sprite's cell, drawn now
+    const sp = spriteFor(c);
+    if (sp && sp.ok && drawCell(th, sp, f)) return;
     scrub.want = scrubUrl(c, Math.round(f * (SCRUB_STEPS - 1)));
     if (scrub.have.has(scrub.want)) { if (scrub.img.getAttribute('src') !== scrub.want) scrub.img.setAttribute('src', scrub.want); }
     else scrubPump();
@@ -1999,7 +2114,10 @@
                // the sorted column and its direction ({col, dir: 1 | -1}); the items as painted
                sort: () => ({ ...project.sort }),
                items: () => [...(project.items || new Map()).values()].map((it) => ({
-                 type: it.type, key: it.key, name: it.name, in: it.in, out: it.out, dur: it.dur, cur: !!it.cur })) },
+                 type: it.type, key: it.key, name: it.name, in: it.in, out: it.out, dur: it.dur, cur: !!it.cur })),
+               // a clip's filmstrip sprite as the Icon view holds it (null: not listed yet)
+               sprite: (stem) => { const sp = sprites.map.get(stem);
+                 return sp ? { url: sp.url, n: sp.n, cols: sp.cols, rows: sp.rows, times: sp.times, ok: !!sp.ok } : null; } },
     source,
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
