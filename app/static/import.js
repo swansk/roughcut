@@ -412,14 +412,12 @@
   }
 
   /* New clips are in the bin: the panel shows them, the board can cut them. */
+  // the Project panel re-reads the bin on the event (dock.js): one /api/clips a landing
   function landed(added, info) {
     info = info || {};
     try {
       window.dispatchEvent(new CustomEvent('rc:clips-changed', { detail: { added: added.slice() } }));
     } catch (_) { /* old browser */ }
-    if (window.dock && window.dock.project && typeof window.dock.project.reload === 'function') {
-      window.dock.project.reload();
-    }
     if (window.rcFirstPass && typeof window.rcFirstPass.refresh === 'function') {
       setTimeout(() => window.rcFirstPass.refresh(), 300);    // "3 new clips: add them…?"
     }
