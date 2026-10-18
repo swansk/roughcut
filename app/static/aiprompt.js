@@ -276,9 +276,14 @@
   function paintScope() {
     if (!chip) return;
     const s = scope();
-    // a new scope is a new prompt to price (the playhead alone is not)
+    // a new scope is a new prompt to price (the playhead alone is not) — asked while the
+    // prompt is in use; a focus asks anyway, so a selection click elsewhere costs nothing
     const k = keyOf({ ...s, playhead: 0 });
-    if (k !== scopeKey) { const first = !scopeKey; scopeKey = k; if (!first && AI.ready) priceSoon(); }
+    if (k !== scopeKey) {
+      const first = !scopeKey;
+      scopeKey = k;
+      if (!first && AI.ready && host && host.classList.contains('focus')) priceSoon();
+    }
     const w = scopeWords(s);
     const l = $('.aip-scope-l', chip);
     if (l.textContent !== w.text) l.textContent = w.text;
