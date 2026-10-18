@@ -538,7 +538,9 @@
     }
     if (r.status === 404 || r.status === 405) {
       return fail(gen, 'This board has no AI prompt service yet.',
-        'Use Sequence › Ask for a change, or the AI menu, until the board is updated.');
+        // the Assistant has no ask box of its own any more (verdict 9, punch 7): what still
+        // works without the service is the AI menu's other tools
+        'Until the board is updated, the AI menu\'s Run first pass, Design an effect and Find a moment still work.');
     }
     if (!r.ok || !d.job) {
       return fail(gen, String(d.detail || d.error || `the board answered ${r.status}`),
@@ -711,7 +713,7 @@
     if (AI.result !== d) return;
     AI.state = 'failed';
     AI.error = `The re-cut did not finish: ${(a && (a.detail || a.error)) || 'no detail'}`;
-    AI.hint = 'Try other words, or Sequence › Ask for a change.';
+    AI.hint = 'Try other words, or ask for a smaller change.';
     paintStatus();
   }
 

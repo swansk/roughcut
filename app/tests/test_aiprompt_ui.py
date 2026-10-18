@@ -515,7 +515,9 @@ def test_a_failure_says_what_to_do_and_retry_asks_again(live_server, project, br
     pg.locator('[data-ai="retry"]').click()
     pg.wait_for_function("rcAI.state().error.includes('no AI prompt service')", timeout=5000)
     pg.locator('[data-testid="ai-details"]').click()
-    assert "Sequence › Ask for a change" in pop.inner_text()
+    # (not the Assistant's own box: there is none since wave 13, one ask box)
+    assert "AI menu" in pop.inner_text() and "Run first pass" in pop.inner_text()
+    assert "Sequence › Ask for a change" not in pop.inner_text()
     assert pg.errors == []
     _close(pg)
 

@@ -972,3 +972,103 @@ def test_the_scope_chip_names_a_block_as_the_review_does(browser, live_server, p
         assert text() in ("CLIP_C", "Source: CLIP_C"), text()
     finally:
         b.close()
+
+
+# ---------------------------------------------------------------- one ask box
+
+# Verdict 9, punch 7: "a second ask box ('Ask for a change · What is this film about?')
+# still sits in the Assistant tab". The AI prompt (the Timeline panel's header, Ctrl+J) is
+# the one place a request to the AI is typed. Every other visible text field is counted as
+# an AI ask unless it is one of these, each a different tool that asks the AI nothing:
+NOT_AI_ASKS = {
+    "#story": "the film's one sentence, saved with the project (the brief every ask reads); typing asks nothing",
+    "#firstNote": "the same sentence in the empty sequence's first-cut box (it mirrors #story)",
+    "#projQ": "the Project panel's search: filters the clip list",
+    "#fxbinQ": "the Effects bin's search: filters the effect list",
+    "#findQ": "Find a moment: searches the transcripts; its own priced model search is a button",
+    "#fxNote": "Designed Effects' note: the effect designer, a different tool (its own review and price)",
+    ".fxiter input": "Designed Effects: a note to revise one effect card",
+    "#fxGoal": "Designed Effects' sketch: what the marks mean",
+    "#fxHudGoal": "Designed Effects' sketch HUD: what the marks mean",
+    "#inspector .why": "the shot's why, the editor's own note, saved with the cut",
+    ".ec-v": "Effect Controls' and Lumetri's property values, typed as numbers",
+}
+TEXT_BOXES = """(skip) => [...document.querySelectorAll(
+    'textarea, input:not([type]), input[type=text], input[type=search], [contenteditable]:not([contenteditable=false])')]
+  .filter((el) => { const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none'
+      && r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth; })
+  .filter((el) => !skip.some((s) => el.matches(s)))
+  .map((el) => el.dataset.testid || el.id || el.className || el.tagName)"""
+
+
+def test_at_most_one_box_asks_the_ai_in_any_state(browser, live_server, project):
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+        skip = list(NOT_AI_ASKS)
+
+        def one(state):
+            boxes = p.evaluate(TEXT_BOXES, skip)
+            assert boxes == ["ai-prompt-input"], (state, boxes)
+
+        one("the board at rest")
+        # the Assistant tab: the story and a button to the prompt — no box of its own
+        p.evaluate("dock.open('ask')")
+        p.wait_for_selector("#ask:visible")
+        assert p.locator("#askPanel textarea, #askPanel input").count() == 0
+        assert p.locator("#ask").inner_text().startswith("Ask for a change…")
+        # the fold line is a waiting proposal's, never the tab's at rest (it read "Ask for a
+        # change · What is this film about?" above the form until a proposal had shown)
+        assert not p.locator("#askFold").is_visible()
+        one("the Assistant tab")
+        # its button: the AI prompt, on the whole sequence, even with a block selected
+        p.locator('#tl .blk[data-id="shot-b"]').click()
+        p.evaluate("dock.open('ask')")
+        p.locator("#ask").click()
+        assert p.evaluate("document.activeElement.dataset.testid") == "ai-prompt-input"
+        assert p.locator("[data-testid=ai-scope]").inner_text().strip() == "Sequence"
+        assert p.evaluate("rcAI.scope().kind") == "sequence"
+        one("the Assistant's Ask, pressed")
+        p.keyboard.press("Escape")
+        # Effect Controls' Assistant section: Ask about this shot is the prompt on that shot
+        p.evaluate("dock.open('inspect')")
+        p.locator('#tl .blk[data-id="shot-b"]').click()
+        p.evaluate("document.querySelectorAll('#inspector details.assist').forEach((d) => { d.open = true; })")
+        p.locator("#inspector button[data-act=ask]").click()
+        assert p.evaluate("document.activeElement.dataset.testid") == "ai-prompt-input"
+        assert p.locator("[data-testid=ai-scope]").inner_text().strip() == "Shot 2 · CLIP_B"
+        assert p.locator("#inspector textarea").count() == 0
+        one("Effect Controls' Ask about this shot")
+        p.keyboard.press("Escape")
+        # every AI menu item that asks: the same prompt
+        for cmd in ("prompt", "ask", "shot", "colour"):
+            p.evaluate("(c) => rcAI.command(c)", cmd)
+            assert p.evaluate("document.activeElement.dataset.testid") == "ai-prompt-input", cmd
+            one(f"AI › {cmd}")
+            p.keyboard.press("Escape")
+        p.locator("[data-testid=ai-prompt-input]").fill("")
+        # a proposal waiting, its fold opened (the story and the button under it)
+        p.evaluate("rcShowProposal({segments: [{clip: 'CLIP_C.MP4', in: 0.5, out: 4.0, why: 'x'}], notes: 'n'})")
+        p.wait_for_selector("#proposal:visible")
+        one("a proposal waiting")
+        p.locator("#askFold").click()
+        p.wait_for_selector("#ask:visible")
+        one("a proposal waiting, the fold open")
+        p.locator("#rejectProposal").click()
+        # an AI edit review up
+        b.review(b.ask([{"op": "trim", "id": "shot-a", "in": 1.5}]))
+        one("an AI review")
+        p.locator("[data-testid=ai-reject-all]").click()
+        p.wait_for_function("!rcActions.open")
+        # Designed Effects open: its note is a different tool (NOT_AI_ASKS says why)
+        p.evaluate("dock.open('fx')")
+        p.wait_for_timeout(300)
+        one("Designed Effects")
+        # an empty sequence: the first-cut box asks for the film's sentence, not an edit
+        p.evaluate("dock.open('ask')")
+        p.evaluate("tl.select(tl.state.segs.map((s) => s.id)); tl.remove(tl.state.segs.map((s) => s.id))")
+        p.wait_for_selector("#tlEmpty .empty")
+        one("an empty sequence")
+    finally:
+        b.close()

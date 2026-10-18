@@ -501,7 +501,7 @@ def test_a_pending_rerun_proposal_owns_the_assistant(browser, live_server, proje
         }""")
         assert all(t > top["p"] for t, _ in top["forms"]), top
         assert pg.locator("#story").is_visible() is False, "the story box folds while a proposal is up"
-        assert pg.locator("#note").is_visible() is False, "the change box folds while a proposal is up"
+        assert pg.locator("#ask").is_visible() is False, "the Ask button folds while a proposal is up"
         fold = pg.locator("#askFold")
         assert fold.is_visible()
         fb = fold.bounding_box()
@@ -526,7 +526,7 @@ def test_a_pending_rerun_proposal_owns_the_assistant(browser, live_server, proje
         assert pg.locator("#proposalChecks li:visible").count() == 6
         # the fold opens the form again (the proposal stays up, above it)
         fold.click()
-        assert pg.locator("#note").is_visible()
+        assert pg.locator("#ask").is_visible()
         assert pg.locator("#proposal").is_visible()
         assert pg.errors == []
     finally:

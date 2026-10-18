@@ -283,8 +283,11 @@ def test_a_pending_proposal_is_a_ghost_lane_you_can_play_either_side_of(page):
         before = page.evaluate("JSON.stringify(segs)")
         assert page.evaluate(f"document.querySelector('{ghost}').hidden") is True
         page.evaluate("dock.open('ask')")   # the dock's tool (INTAKE M11)
-        page.locator("#note").fill("swap the opening, close on the unused clip")
-        page.locator("#ask").click()
+        # the change is typed in the AI prompt since wave 13 (one ask box); its whole-cut
+        # answer is this same Ask job, so the test asks down that path, once it is priced
+        note = "swap the opening, close on the unused clip"
+        page.wait_for_function("priced('full')", timeout=5000)
+        page.evaluate("(n) => { ask({note: n}); }", note)
         page.wait_for_selector("#proposal:visible", timeout=30000)
         page.wait_for_function(
             f"document.querySelectorAll('{ghost} .ghost').length === 3", timeout=8000)
@@ -352,7 +355,7 @@ def test_a_pending_proposal_is_a_ghost_lane_you_can_play_either_side_of(page):
 
         # and a proposal that drops a shot strikes it out on V1
         page.evaluate("segs.push({clip: 'CLIP_C.MP4', in: 4.5, out: 5.5, why: 'gone soon'}); render()")
-        page.locator("#ask").click()
+        page.evaluate("(n) => { ask({note: n}); }", note)
         page.wait_for_selector("#proposal:visible", timeout=30000)
         page.wait_for_function("document.querySelectorAll('#tl .tl-over .strike').length === 1", timeout=8000)
         assert left(page, "#tl .tl-over .strike") == pytest.approx(x_of(page, 4.0), abs=0.5)
