@@ -166,10 +166,64 @@
     $('.fp-label', host).textContent = label(s);
     btn.title = title(s);
     host.dataset.state = s ? s.state : 'unknown';
-    $('.fp-dot', host).hidden = !(s && s.state === 'stale-after-edits');
+    $('.fp-dot', host).hidden = !(s && (s.state === 'stale-after-edits' || newClips(s).length));
     $('.fp-x', host).hidden = !running(s);
     btn.setAttribute('aria-expanded', FP.open ? 'true' : 'false');
     paintEmpties();
+    paintOffer();
+  }
+
+  /* ------------------------------------------------------------ new footage (wave 12)
+   * Footage imported after a pass (REDESIGN-GOAL dimension 13): "3 new clips: add them
+   * to the cut?" under the control, until it is answered. "Re-run first pass…" opens the
+   * panel — which says what a re-run keeps and what it costs before anything runs; "Not
+   * now" puts this set of clips away (a new import asks again). */
+  const OFFER_KEY = 'rc.fp.newclips';
+  function newClips(s) {
+    if (!s || running(s) || !(s.state === 'done' || s.state === 'stale-after-edits')) return [];
+    if (Array.isArray(s.new_clips) && s.new_clips.length) return s.new_clips;
+    const n = Number(s.new_count) || 0;
+    return n > 0 ? Array.from({ length: n }, (_, i) => `#${i + 1}`) : [];
+  }
+  function offerKey(list) { return list.slice().sort().join('|'); }
+  function dismissed(list) {
+    try { return localStorage.getItem(OFFER_KEY) === offerKey(list); } catch (_) { return false; }
+  }
+  function paintOffer() {
+    const host = mount();
+    if (!host) return;
+    const s = FP.s;
+    const list = newClips(s);
+    const show = list.length && !FP.open && !FP.busy && !dismissed(list);
+    let box = host.querySelector('.fp-offer');
+    if (!show) { if (box) box.hidden = true; return; }
+    if (!box) {
+      box = document.createElement('div');
+      box.className = 'fp-offer';
+      box.dataset.testid = 'firstpass-new-clips';
+      box.setAttribute('role', 'status');
+      box.innerHTML = '<span class="fp-offer-line"></span>'
+        + '<button type="button" class="fp-offer-go" data-testid="firstpass-new-clips-go"'
+        + ' title="Opens the first pass: it says which of your shots a re-run keeps exactly, and what it costs, before anything runs">Re-run first pass…</button>'
+        + '<button type="button" class="fp-offer-no" data-testid="firstpass-new-clips-later">Not now</button>';
+      box.querySelector('.fp-offer-go').addEventListener('click', (e) => {
+        e.stopPropagation();
+        try { localStorage.setItem(OFFER_KEY, offerKey(newClips(FP.s))); } catch (_) { /* private window */ }
+        open();
+      });
+      box.querySelector('.fp-offer-no').addEventListener('click', (e) => {
+        e.stopPropagation();
+        try { localStorage.setItem(OFFER_KEY, offerKey(newClips(FP.s))); } catch (_) { /* private window */ }
+        paintOffer();
+      });
+      host.appendChild(box);
+    }
+    const named = list.filter((c) => !c.startsWith('#'));
+    const line = `${plural(list.length, 'new clip')}: add ${list.length === 1 ? 'it' : 'them'} to the cut?`;
+    const span = box.querySelector('.fp-offer-line');
+    if (span.textContent !== line) span.textContent = line;
+    span.title = named.length ? named.join('\n') : '';
+    box.hidden = false;
   }
 
   /* ------------------------------------------------------------ the panel */
@@ -208,8 +262,14 @@
         : p.answer === 'accept' ? 'you accepted its proposal'
           : p.job ? 'its proposal was answered' : '';
     let out = `Last run ${esc(ago(s.when))}${what ? ` — ${what}` : ''}.`;
-    if (s.state === 'stale-after-edits' && (s.stale || []).length) {
+    if ((s.state === 'stale-after-edits' || newClips(s).length) && (s.stale || []).length) {
       out += ` <span class="fp-warn">${esc(s.stale.join(' · '))}.</span>`;
+    }
+    const fresh = newClips(s).filter((c) => !c.startsWith('#'));
+    if (fresh.length) {
+      out += ` <span class="fp-new" data-testid="firstpass-new-list">A re-run hears and looks at `
+        + `${esc(fresh.length > 4 ? `${fresh.slice(0, 3).map(stem).join(', ')} and ${fresh.length - 3} more`
+          : fresh.map(stem).join(', '))} and may use ${fresh.length === 1 ? 'it' : 'them'}.</span>`;
     }
     return out;
   }

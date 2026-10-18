@@ -1,1 +1,179 @@
-/* import (wave 12 scaffold; its lane fills it) */
+/* import.css: the Import dialog / Media Browser, the Project panel's Import… button, its
+ * drop overlay and its upload progress (import.js, REDESIGN-GOAL dimension 13). Premiere's
+ * Import and Media Browser: a dense dark file list, places on the left, a path bar, one
+ * blue button. */
+#importDialog {
+  padding: 0; width: min(940px, calc(100vw - 32px)); height: min(620px, calc(100vh - 48px));
+  max-width: none; max-height: none;
+  background: var(--panel, #1d1d1f); color: var(--text, #dcdcdf);
+  border: 1px solid var(--line-hi, #46464c); border-radius: 6px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .55); font-size: 12px; overflow: hidden;
+}
+#importDialog::backdrop { background: rgba(4, 4, 6, .62); }
+#importDialog .im { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+#importDialog .im-grow { flex: 1 1 auto; }
+#importDialog .im-head {
+  flex: none; display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 6px 0 14px;
+  background: var(--head, #252527); border-bottom: 1px solid var(--line, #333337);
+}
+#importDialog .im-title { font-weight: 600; font-size: 13px; }
+#importDialog .im-host { color: var(--dim, #94949c); font-size: 11.5px; }
+#importDialog .im-x { background: transparent; border: 0; color: var(--dim, #94949c); font-size: 17px;
+                      line-height: 1; width: 26px; height: 26px; padding: 0; border-radius: 3px; }
+#importDialog .im-x:hover { color: var(--text, #dcdcdf); background: var(--card-hi, #313135); }
+
+/* the path bar: back · forward · up · the folder · refresh */
+#importDialog .im-bar {
+  flex: none; display: flex; align-items: center; gap: 4px; padding: 6px 10px;
+  border-bottom: 1px solid var(--line, #333337); background: #1a1a1c;
+}
+#importDialog .im-nav {
+  width: 26px; height: 24px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid transparent; color: var(--dim, #94949c); font-size: 15px; line-height: 1;
+}
+#importDialog .im-nav svg { width: 14px; height: 14px; }
+#importDialog .im-nav:hover:not(:disabled) { color: var(--text, #dcdcdf); background: var(--card, #28282b);
+                                             border-color: var(--line, #333337); }
+#importDialog .im-nav:disabled { opacity: .35; }
+#importDialog .im-path {
+  flex: 1 1 auto; min-width: 0; height: 24px; padding: 2px 8px; border-radius: 3px;
+  background: var(--bg, #111112); border: 1px solid var(--line-hi, #46464c); color: var(--text, #dcdcdf);
+  font: 11.5px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+#importDialog .im-path:focus { outline: none; border-color: var(--accent, #4a9df8); }
+
+#importDialog .im-main { flex: 1 1 auto; min-height: 0; display: flex; }
+
+/* the places (Premiere's Media Browser's left column) */
+#importDialog .im-places {
+  flex: none; width: 196px; overflow: auto; padding: 8px 6px 10px;
+  border-right: 1px solid var(--line, #333337); background: #19191b;
+  display: flex; flex-direction: column; gap: 1px;
+}
+#importDialog .im-group { color: var(--faint, #66666e); font-size: 10px; letter-spacing: .07em;
+                          text-transform: uppercase; padding: 8px 8px 4px; }
+#importDialog .im-group:first-child { padding-top: 2px; }
+#importDialog .im-roots { display: flex; flex-direction: column; gap: 1px; }
+#importDialog .im-place {
+  display: flex; align-items: center; gap: 7px; width: 100%; text-align: left; height: 24px;
+  padding: 0 8px; background: transparent; border: 0; border-radius: 3px; color: var(--text, #dcdcdf);
+  white-space: nowrap; overflow: hidden; font-size: 12px;
+}
+#importDialog .im-place span { overflow: hidden; text-overflow: ellipsis; }
+#importDialog .im-place svg { width: 14px; height: 14px; flex: none; color: #8fb8e8; }
+#importDialog .im-place:hover { background: var(--card, #28282b); }
+#importDialog .im-place.on { background: #26405e; color: #fff; }
+#importDialog .im-upload svg { color: var(--accent, #4a9df8); }
+#importDialog .im-tip { margin: 6px 8px 0; color: var(--faint, #66666e); font-size: 11px; line-height: 1.35; }
+
+/* the list: Name · Size · Date Modified */
+#importDialog .im-list { flex: 1 1 auto; min-width: 0; overflow: auto; position: relative; outline: none;
+                         scrollbar-width: thin; scrollbar-color: #45454b transparent; }
+#importDialog .im-list:focus-visible { box-shadow: inset 0 0 0 1px var(--accent, #4a9df8); }
+#importDialog .im-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+#importDialog .im-table th {
+  position: sticky; top: 0; z-index: 1; background: var(--head, #252527); text-align: left;
+  font-weight: 500; color: var(--dim, #94949c); font-size: 11px; padding: 4px 8px;
+  border-bottom: 1px solid var(--line, #333337); white-space: nowrap;
+}
+#importDialog .im-table th + th { border-left: 1px solid #2c2c30; }
+#importDialog .im-table td { padding: 0 8px; height: 22px; white-space: nowrap; overflow: hidden;
+                             text-overflow: ellipsis; font-variant-numeric: tabular-nums;
+                             border-bottom: 1px solid #202023; }
+#importDialog .im-table .r { text-align: right; }
+#importDialog .im-table td.dt, #importDialog .im-table td.r { color: var(--dim, #94949c); font-size: 11.5px; }
+#importDialog .im-row { cursor: default; user-select: none; }
+#importDialog .im-row:hover td { background: #232327; }
+#importDialog .im-row.sel td { background: #26405e; color: #fff; }
+#importDialog .im-row.sel td.dt, #importDialog .im-row.sel td.r { color: #cfe0f5; }
+#importDialog .im-list:focus .im-row.cur td:first-child { box-shadow: inset 2px 0 0 var(--accent, #4a9df8); }
+#importDialog .im-row.have td { color: var(--faint, #66666e); }
+#importDialog .nn { display: flex; align-items: center; gap: 7px; min-width: 0; }
+#importDialog .nn .nm { overflow: hidden; text-overflow: ellipsis; }
+#importDialog .nn svg { width: 14px; height: 14px; flex: none; }
+#importDialog .im-row.dir .nn svg { color: #d9b36a; }
+#importDialog .im-row.video .nn svg { color: #8fb8e8; }
+#importDialog .im-have { flex: none; margin-left: 4px; font-size: 10px; color: var(--good, #5fcf86);
+                         border: 1px solid color-mix(in srgb, var(--good, #5fcf86) 40%, transparent);
+                         border-radius: 3px; padding: 0 4px; line-height: 14px; }
+#importDialog .im-empty { padding: 28px 16px; color: var(--dim, #94949c); text-align: center; }
+
+/* the foot: what is selected · Import Folder · Cancel · Import */
+#importDialog .im-foot {
+  flex: none; display: flex; align-items: center; gap: 8px; padding: 9px 12px;
+  border-top: 1px solid var(--line, #333337); background: var(--head, #252527);
+}
+#importDialog .im-status { color: var(--dim, #94949c); font-size: 11.5px; min-width: 0; overflow: hidden;
+                           text-overflow: ellipsis; white-space: nowrap; }
+#importDialog .im-status.bad { color: var(--warn, #e2b14f); }
+#importDialog .im-btn {
+  height: 26px; padding: 0 14px; border-radius: 3px; cursor: pointer; flex: none;
+  background: var(--card-hi, #313135); color: var(--text, #dcdcdf); border: 1px solid var(--line-hi, #46464c);
+}
+#importDialog .im-btn:hover:not(:disabled) { border-color: var(--accent, #4a9df8); }
+#importDialog .im-btn:focus-visible { outline: 2px solid var(--accent, #4a9df8); outline-offset: 1px; }
+#importDialog .im-btn.primary { background: var(--accent, #4a9df8); border-color: var(--accent, #4a9df8);
+                                color: #08111c; font-weight: 600; min-width: 84px; }
+#importDialog .im-btn:disabled { opacity: .45; cursor: default; }
+#importDialog .im-btn.primary:disabled { background: var(--card-hi, #313135); border-color: var(--line-hi, #46464c);
+                                         color: var(--dim, #94949c); font-weight: 500; opacity: .7; }
+
+/* files dragged from the OS over the Project panel (or the Timeline) */
+.project-drop {
+  position: absolute; inset: 0; z-index: 30; pointer-events: none;
+  background: color-mix(in srgb, var(--accent, #4a9df8) 14%, rgba(10, 10, 12, .78));
+  border: 2px dashed var(--accent, #4a9df8); border-radius: 4px;
+  display: flex; align-items: center; justify-content: center; padding: 12px;
+}
+.project-drop[hidden] { display: none; }
+.project-drop .pd-box { display: flex; flex-direction: column; align-items: center; gap: 6px;
+                        text-align: center; max-width: 280px; }
+.project-drop svg { width: 28px; height: 28px; color: var(--accent, #4a9df8); }
+.project-drop .pd-line { font-size: 13px; font-weight: 600; color: #fff; }
+.project-drop .pd-sub { font-size: 11px; color: #c9d3df; }
+
+/* an upload's progress, at the Project panel's foot */
+.import-progress {
+  flex: none; padding: 6px 8px 7px; border-top: 1px solid var(--line, #333337);
+  background: var(--head, #252527); font-size: 11.5px;
+}
+.import-progress[hidden] { display: none; }
+.import-progress .ip-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.import-progress .ip-row svg { width: 13px; height: 13px; flex: none; color: var(--accent, #4a9df8); }
+.import-progress .ip-line { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                            white-space: nowrap; }
+.import-progress .ip-stop { flex: none; padding: 0 8px; height: 20px; line-height: 18px; font-size: 11px; }
+.import-progress .ip-stop[hidden] { display: none; }
+.import-progress .ip-bar { height: 4px; margin: 5px 0 3px; border-radius: 2px; background: var(--bg, #111112);
+                           overflow: hidden; }
+.import-progress .ip-fill { display: block; height: 100%; width: 0; background: var(--accent, #4a9df8);
+                            transition: width .2s linear; }
+.import-progress.done .ip-fill { background: var(--good, #5fcf86); }
+.import-progress.bad .ip-line { color: var(--warn, #e2b14f); }
+.import-progress .ip-sub { color: var(--dim, #94949c); font-variant-numeric: tabular-nums; font-size: 11px; }
+.import-progress .ip-sub:empty { display: none; }
+
+/* After a pass, footage imported since: "3 new clips: add them to the cut?" under the
+   first pass control (firstpass.js paintOffer), Re-run first pass… / Not now. */
+#firstpass .fp-btn:has(.fp-dot:not([hidden])) { padding-right: 13px; }
+#firstpass .fp-offer {
+  position: absolute; top: calc(100% + 9px); left: 0; z-index: 45;
+  display: flex; align-items: center; gap: 8px; white-space: nowrap;
+  padding: 6px 6px 6px 12px; font-size: 12px; color: var(--text, #dcdcdf);
+  background: var(--card-hi, #313135); border: 1px solid var(--accent, #4a9df8); border-radius: 6px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .55);
+}
+#firstpass .fp-offer[hidden] { display: none; }
+#firstpass .fp-offer::before {
+  content: ""; position: absolute; top: -6px; left: 22px; width: 10px; height: 10px;
+  background: var(--card-hi, #313135); border-left: 1px solid var(--accent, #4a9df8);
+  border-top: 1px solid var(--accent, #4a9df8); transform: rotate(45deg);
+}
+#firstpass .fp-offer-line { font-weight: 600; }
+#firstpass .fp-offer button { height: 24px; padding: 0 10px; border-radius: 4px; font-size: 12px; }
+#firstpass .fp-offer-go { background: transparent; border: 1px solid var(--accent, #4a9df8);
+                          color: #8cc0fb; font-weight: 600; }
+#firstpass .fp-offer-go:hover { background: color-mix(in srgb, var(--accent, #4a9df8) 18%, transparent); }
+#firstpass .fp-offer-no { background: transparent; border: 1px solid transparent; color: var(--dim, #94949c); }
+#firstpass .fp-offer-no:hover { color: var(--text, #dcdcdf); background: var(--card, #28282b); }
+#firstpass .fp-new { display: block; margin-top: 3px; color: var(--dim, #94949c); }
