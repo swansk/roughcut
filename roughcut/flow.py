@@ -148,22 +148,32 @@ def href(screen: str, tool: str | None, target: dict | None = None) -> str:
     return f"{screen}#tool={tool}{extra}"
 
 
+# The page commands an action may name (`do`): what /flow.js runs where the page has
+# it, instead of navigating — Import's dialog (window.rcImport, the board's).
+DO = ("import",)
+
+
 def action(stage: str, sentence: str, verb: str, *, tool: str | None = None,
            screen: str | None = None, click: str | None = None,
            usd: float | None = None, kind: str = "go",
-           target: dict | None = None) -> dict:
+           target: dict | None = None, do: str | None = None) -> dict:
     """One thing to do. `click` is a selector the bar may click *on its own screen*
     — only ever for free, non-spending actions (a render on the board); anything
     priced navigates to the button that carries its price, because nothing spends
     without the click on that button (Karl's rule). `target` is what it lands on
     (`{shot, fx}` or `{ask}`), carried in the href too, so Next opens the waiting
-    proposal itself and not whatever shot the board had selected (INTAKE M16)."""
+    proposal itself and not whatever shot the board had selected (INTAKE M16). `do`
+    is a free page command (`DO`): the chip runs it on a page that has it, and from
+    another screen goes to `screen#do=<it>`, where the board runs it on arrival."""
     scr, default_tool = SCREENS[stage]
     scr = screen or scr
     t = tool if tool is not None else default_tool
     tgt = {k: str(v) for k, v in (target or {}).items() if k in TARGET_KEYS and v}
+    cmd = do if do in DO else None
     out = {"stage": stage, "sentence": sentence, "verb": verb, "screen": scr,
-           "tool": t, "href": href(scr, t, tgt), "kind": kind}
+           "tool": t, "href": f"{scr}#do={cmd}" if cmd else href(scr, t, tgt), "kind": kind}
+    if cmd:
+        out["do"] = cmd
     if tgt and t:
         out["target"] = tgt
     if click:
@@ -182,11 +192,13 @@ def footage_stage(f: dict) -> dict:
     done, total = int(px.get("done") or 0), int(px.get("total") or n)
     counts = {"clips": n, "previews": done}
     if n == 0:
-        return _stage("footage", "needs-you", "No footage in this folder yet.",
+        # Next is Import (File › Import, Ctrl+I, as in Premiere): the board's dialog, run
+        # in place (wave 12, REDESIGN-GOAL dimension 16: "no footage → Import")
+        return _stage("footage", "needs-you", "No footage in this bin yet.",
                       counts=counts, needs={
-                          "reason": "There is no video in this folder.",
-                          "action": action("footage", "Drop clips into the folder, or "
-                                           "open another bin", "Open a bin")})
+                          "reason": "There is no video in this bin.",
+                          "action": action("footage", "Import footage (Ctrl+I)", "Import",
+                                           screen="/", do="import")})
     if done < total:
         return _stage("footage", "running",
                       f"{_plural(n, 'clip')} — building previews {done}/{total}",
