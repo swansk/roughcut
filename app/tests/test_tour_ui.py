@@ -500,6 +500,78 @@ def test_every_ai_control_has_a_hover_card(live, bins, tmp_path, browser):
     _done(pg)
 
 
+def test_the_ai_context_menu_items_have_hover_cards(live, bins, tmp_path, browser):
+    """Lane AIPROMPT's right-click "Ask AI about this…" and "Look deeper…" carry cards too
+    (registered from aiprompt.js with `rcTour.card`, wave 12 lane AIGLUE)."""
+    _state(bins, tmp_path, "cut")
+    pg = _page(browser, live)
+    pg.wait_for_selector("#tl .blk", timeout=15000)
+    pg.wait_for_timeout(800)
+    pg.locator("#tl .blk").first.click(button="right")
+    pg.wait_for_selector('[data-testid="ai-context-menu"] [data-testid="ai-ctx-ask"]', state="visible")
+    ask = _card(pg, '[data-testid="ai-ctx-ask"]')
+    assert ask["name"].strip() == "Ask AI about this" and ask["for"] == "ai-ctx-ask", ask
+    _says_section_s(ask)
+    assert "until you accept" in ask["change"], ask
+    assert ask["cost"].startswith("free on your Claude plan — about $"), ask   # the assist's own price
+    deep = _card(pg, '[data-testid="ai-ctx-deep"]')
+    assert deep["name"].strip() == "Look deeper" and deep["for"] == "ai-ctx-deep", deep
+    _says_section_s(deep)
+    assert "does not change" in deep["change"], deep
+    _done(pg)
+
+
+@pytest.mark.parametrize("size", SIZES)
+def test_the_review_steps_point_at_the_ai_review_when_one_is_up(live, bins, tmp_path, browser, size):
+    """With lane AIOPS's review of an AI answer up, the AI walk-through's "Review each
+    change" points at its first row (Show me: the ◐ Before / After), and the loop's
+    "Review the proposed cut" at the review itself (Show me: Accept all), in words that
+    name what is there; each callout wholly on screen and clear of what it points at."""
+    _state(bins, tmp_path, "cut")
+    pg = _page(browser, live, size)
+    pg.wait_for_selector("#tl .blk", timeout=15000)
+    ids = pg.evaluate("segs.map(s => s.id)")
+    pg.evaluate("""(ids) => rcActions.review({kind: 'ops', status: 'done', summary: 'punchier, tighter',
+      ops: [{op: 'set', id: ids[1], prop: 'contrast', value: 20}, {op: 'trim', id: ids[0], in: 1.5}]})""", ids)
+    pg.wait_for_selector('[data-testid="ai-review"] [data-testid="ai-op-row"]', state="visible", timeout=5000)
+    pg.wait_for_selector('[data-testid="ai-before-after"]', state="visible", timeout=5000)
+
+    def at(step: int, which: str) -> dict:
+        pg.evaluate(f"rcTour.start({'undefined' if which == 'loop' else repr(which)})")
+        pg.wait_for_selector(TOUR, timeout=3000)
+        for _ in range(step - 1):
+            pg.locator('[data-testid="tour-next"]').click()
+        pg.wait_for_timeout(300)
+        info = pg.evaluate(STEP_JS)
+        info["testid"] = pg.evaluate("(() => { const a = rcTour.anchor(); return a && a.dataset.testid; })()")
+        assert _on_screen(info["callout"], info["vw"], info["vh"]), info
+        assert not info["covered"], info
+        return info
+
+    info = at(2, "ai")
+    assert info["key"] == "review" and info["testid"] == "ai-op-row", info
+    assert "Each row is one edit" in info["body"] and "◐" in info["body"], info
+    pg.locator('[data-testid="tour-show"]').click()
+    pg.wait_for_timeout(300)
+    assert pg.evaluate("rcTour.anchor().dataset.testid") == "ai-before-after"
+    assert pg.evaluate(STEP_JS)["anchor"] == "show"
+    pg.evaluate("rcTour.stop()")
+
+    info = at(4, "loop")
+    assert info["key"] == "review" and info["testid"] == "ai-review", info
+    assert "The AI’s edits wait here" in info["body"] and "Accept all" in info["body"], info
+    show = pg.locator('[data-testid="tour-show"]')
+    assert show.is_visible()
+    show.click()
+    pg.wait_for_timeout(300)
+    assert pg.evaluate("rcTour.anchor().dataset.testid") == "ai-accept-all"
+    pg.evaluate("rcTour.stop()")
+    # the review untouched by the walk-through: still waiting, nothing applied
+    assert pg.evaluate("rcActions.open") and pg.evaluate("segs[0].in") == 1.0
+    pg.evaluate("rcActions.reject()")
+    _done(pg)
+
+
 # ---------------------------------------------------------------- the empty states
 
 

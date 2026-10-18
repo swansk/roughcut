@@ -1049,6 +1049,35 @@
     };
   }
 
+  /* ------------------------------------------------------------ hover cards */
+
+  // Lane TEACH's AI hover cards (tour.js `rcTour.card`): what the context menu's items do,
+  // cost and change, in section S's words.
+  const CARDS = [
+    ['[data-testid="ai-ctx-ask"]', {
+      name: 'Ask AI about this',
+      what: 'Points the AI prompt at this clip, block or monitor and puts the cursor in it: type what'
+        + ' should change, in plain words.',
+      change: 'Nothing by itself; the ask comes back as edits you review one by one, and nothing changes'
+        + ' until you accept.',
+      // what the ask will cost, from GET /api/assist/price (free on the subscription)
+      price: () => (AI.price && typeof AI.price.usd === 'number' ? { usd: AI.price.usd, terms: AI.price } : null),
+    }],
+    ['[data-testid="ai-ctx-deep"]', {
+      name: 'Look deeper',
+      what: 'Opens this shot’s Look deeper, which reads a stretch of the clip frame by frame to see what the'
+        + ' first look missed.',
+      change: 'Nothing until you press Look deeper there (its price is on its button); it adds to what the'
+        + ' AI knows about the clip, and the cut does not change.',
+    }],
+  ];
+  function registerCards() {
+    const T = window.rcTour;
+    if (!T || typeof T.card !== 'function') return false;
+    CARDS.forEach(([sel, spec]) => T.card(sel, spec));
+    return true;
+  }
+
   /* ------------------------------------------------------------ init */
 
   function init() {
@@ -1094,6 +1123,7 @@
     // the scope follows what changes without an event (playback, a Source mark): cheap
     setInterval(paintScope, 1000);
     fetchPrice();
+    if (!registerCards()) window.addEventListener('load', registerCards, { once: true });
   }
 
   window.rcAI = {
