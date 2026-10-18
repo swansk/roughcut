@@ -64,7 +64,8 @@
    * Self-contained: its source is also the worker's (Function.prototype.toString), so it
    * closes over nothing. `canvas` is a <canvas> or an OffscreenCanvas; `makeStage(w, h)`
    * the 2D canvas a frame is scaled into before its upload. */
-  function Renderer(canvas, makeStage) {
+  function Renderer(canvas, makeStage, ropts) {
+    const FULL = !!(ropts && ropts.full);     // never lean (a comparison switch: ?grade=full)
     const VS = `
       attribute vec2 a_pos;
       varying vec2 v_uv;
@@ -147,7 +148,13 @@
         vec2 c = u_nv12 > 0.5 ? texture(u_pu, q).rg : vec2(texture(u_pu, q).r, texture(u_pv, q).r);
         return clamp(u_yuv * (vec3(y, c) - u_yoff), 0.0, 1.0);
       }`;
-    const FS2 = (yuv) => `#version 300 es
+    /* `lean` (wave 13 CANVAS2): the same program without the steps that are the identity for
+     * the frame in hand — the balance's shoulder (knee 1), Lumetri's tone (all four 0), the
+     * Curves/Wheels table and the HSL Secondary (off) — chosen per draw (`leanFor`), so the
+     * usual played frame (a baked LUT, nothing on top) is not shaded through branches it
+     * skips: a software GL shades both sides of a branch for every pixel. The output is the
+     * full program's, value for value (each removed step is skipped there too). */
+    const FS2 = (yuv, lean) => `#version 300 es
       precision mediump float;
       precision mediump sampler3D;
       in vec2 v_uv;
@@ -162,28 +169,28 @@
       uniform vec4 u_tone;      // Lumetri blacks, shadows, highlights, whites, each /100
       uniform float u_toneOn;
       out vec4 outColor;
-      ${CREATIVE('texture')}
+      ${lean ? '' : CREATIVE('texture')}
       void main() {
-        vec3 c = ${yuv ? 'yuvAt(v_uv)' : 'texture(u_video, v_uv).rgb'} * u_pre;
+        vec3 c = ${yuv ? 'yuvAt(v_uv)' : 'texture(u_video, v_uv).rgb'} * u_pre;${lean ? '' : `
         if (u_knee < 1.0) {
           vec3 o = u_knee + (1.0 - u_knee) * (1.0 - exp(-(c - u_knee) / (1.0 - u_knee)));
           c = mix(c, o, step(u_knee, c)) + u_lift;
-        }
+        }`}
         c = clamp(c, 0.0, 1.0);
         vec3 p = c * ((u_n - 1.0) / u_n) + 0.5 / u_n;
-        vec3 y = (texture(u_lut, p).rgb - 0.5) * u_con + 0.5;
+        vec3 y = (texture(u_lut, p).rgb - 0.5) * u_con + 0.5;${lean ? '' : `
         if (u_toneOn > 0.5) {
           vec3 x = clamp(y, 0.0, 1.0), ix = 1.0 - x;
           y = x + 0.25 * u_tone.x * ix * ix * ix + 1.5 * u_tone.y * x * ix * ix
                 + 1.5 * u_tone.z * x * x * ix + 0.25 * u_tone.w * x * x * x;
-        }
+        }`}
         y = mix(vec3(dot(y, vec3(0.2126, 0.7152, 0.0722))), y, u_sat);
-        outColor = vec4(creative(y), 1.0);
+        outColor = vec4(${lean ? 'clamp(y, 0.0, 1.0)' : 'creative(y)'}, 1.0);
       }`;
 
     // WebGL1: the table as an n × n² image. Bilinear inside a blue slice (red across,
     // green down), the blue interpolation by hand between the two neighbouring slices.
-    const FS1 = `
+    const FS1 = (lean) => `
       precision mediump float;
       varying vec2 v_uv;
       uniform sampler2D u_video;
@@ -196,13 +203,13 @@
       uniform float u_lift;
       uniform vec4 u_tone;
       uniform float u_toneOn;
-      ${CREATIVE('texture2D')}
+      ${lean ? '' : CREATIVE('texture2D')}
       void main() {
-        vec3 c = texture2D(u_video, v_uv).rgb * u_pre;
+        vec3 c = texture2D(u_video, v_uv).rgb * u_pre;${lean ? '' : `
         if (u_knee < 1.0) {
           vec3 o = u_knee + (1.0 - u_knee) * (1.0 - exp(-(c - u_knee) / (1.0 - u_knee)));
           c = mix(c, o, step(u_knee, c)) + u_lift;
-        }
+        }`}
         c = clamp(c, 0.0, 1.0);
         float bf = c.b * (u_n - 1.0);
         float b0 = floor(bf);
@@ -213,14 +220,14 @@
         float y1 = (b1 * u_n + c.g * (u_n - 1.0) + 0.5) / (u_n * u_n);
         vec3 s0 = texture2D(u_lut, vec2(x, y0)).rgb;
         vec3 s1 = texture2D(u_lut, vec2(x, y1)).rgb;
-        vec3 y = (mix(s0, s1, t) - 0.5) * u_con + 0.5;
+        vec3 y = (mix(s0, s1, t) - 0.5) * u_con + 0.5;${lean ? '' : `
         if (u_toneOn > 0.5) {
           vec3 x = clamp(y, 0.0, 1.0), ix = 1.0 - x;
           y = x + 0.25 * u_tone.x * ix * ix * ix + 1.5 * u_tone.y * x * ix * ix
                 + 1.5 * u_tone.z * x * x * ix + 0.25 * u_tone.w * x * x * x;
-        }
+        }`}
         y = mix(vec3(dot(y, vec3(0.2126, 0.7152, 0.0722))), y, u_sat);
-        gl_FragColor = vec4(creative(y), 1.0);
+        gl_FragColor = vec4(${lean ? 'clamp(y, 0.0, 1.0)' : 'creative(y)'}, 1.0);
       }`;
 
 
@@ -271,10 +278,24 @@
       });
       return U;
     }
-    const PR = program(gl2 ? FS2(false) : FS1);
-    let PY = null;
+    const PR = program(gl2 ? FS2(false, false) : FS1(false));
+    // the lean twins (FS2's note); a failed lean compile draws with the full one
+    let PRL = PR;
+    try { PRL = FULL ? PR : program(gl2 ? FS2(false, true) : FS1(true)); } catch (e) { PRL = PR; }
+    let PY = null, PYL = null;
     if (gl2) {
-      try { PY = program(FS2(true)); } catch (e) { PY = null; }   // the rgb path still draws
+      try { PY = program(FS2(true, false)); } catch (e) { PY = null; }   // the rgb path still draws
+      try { PYL = PY && !FULL ? program(FS2(true, true)) : PY; } catch (e) { PYL = PY; }
+    }
+    /* Whether a draw with the live-preview `a` can use the lean program: no shoulder, no
+     * tone, no Curves/Wheels table, no HSL Secondary (each the identity in the full one). */
+    function leanFor(a) {
+      if (!a) return true;
+      if ((a.knee ?? 1) < 1) return false;
+      if (a.tone && a.tone.some((x) => x !== 0)) return false;
+      if (a.ctab && a.ctab.key) return false;
+      if (a.hsl && a.hsl.length === 16) return false;
+      return true;
     }
     let U = PR;                   // the program in use, and its uniforms
     gl.useProgram(PR.p);
@@ -407,8 +428,8 @@
      * process, measured 3 ms against 7-14 ms a frame at 384 px wide). A parked frame
      * already there (`key`) is not sent again: an Effect Controls change on a paused
      * monitor redraws with new uniforms only. */
-    function upload(src, sw, sh, w, h, key) {
-      if (src && src.yuv) { frameKey = null; return planes(src); }
+    function upload(src, sw, sh, w, h, key, lean) {
+      if (src && src.yuv) { frameKey = null; return planes(src, lean); }
       if (key && key === frameKey) return true;
       frameKey = null;
       try {
@@ -438,7 +459,7 @@
      * 1280x720 proxy in headless Chromium at load 13-20 (wave 11 CANVAS), the worker's own
      * time per frame: 0.4-2.7 ms, where the CPU scale into the 2D stage and its RGBA upload
      * took 10-12 ms (21 ms on the board's busier page). */
-    function planes(f) {
+    function planes(f, lean) {
       if (!PY) return false;
       const nv12 = f.format === 'NV12';
       const filt = f.nearest ? gl.NEAREST : gl.LINEAR;
@@ -469,7 +490,7 @@
         gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
         return false;
       }
-      use(PY);
+      use(lean ? PYL : PY);
       gl.uniformMatrix3fv(U.u_yuv, false, f.mat);
       gl.uniform3f(U.u_yoff, f.off[0], f.off[1], f.off[2]);
       gl.uniform1f(U.u_nv12, nv12 ? 1 : 0);
@@ -487,8 +508,9 @@
       gl.viewport(0, 0, w, h);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, texVideo);
-      if (!upload(src, sw, sh, w, h, parkedKey)) return false;   // no frame yet; the next one will be
-      if (!src.yuv) use(PR);
+      const lean = leanFor(adj);
+      if (!upload(src, sw, sh, w, h, parkedKey, lean)) return false;   // no frame yet; the next one will be
+      if (!src.yuv) use(lean ? PRL : PR);
       if (!lut(key, n, data)) return false;
       current = key;
       if (U.n !== n) { U.n = n; gl.uniform1f(U.u_n, n); }
@@ -513,9 +535,10 @@
     function drawMix(mix, w, h) {
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, texVideo);
-      if (!upload(mix.src, mix.sw, mix.sh, w, h, null)) return;
+      const lean = leanFor(mix.adj);
+      if (!upload(mix.src, mix.sw, mix.sh, w, h, null, lean)) return;
       frameKey = null;                       // the texture holds the other frame now
-      if (!mix.src.yuv) use(PR);
+      if (!mix.src.yuv) use(lean ? PRL : PR);
       if (!lut(mix.key, mix.n, mix.data)) return;
       current = mix.key;
       if (U.n !== mix.n) { U.n = mix.n; gl.uniform1f(U.u_n, mix.n); }
@@ -562,10 +585,14 @@
                                                { buf: b, offset: 8, stride: 1, w: 1, h: 1 }] };
       const id = new Uint8Array([0, 0, 0, 255, 0, 0, 0, 255, 0, 255, 255, 0,
                                  0, 0, 255, 255, 0, 255, 0, 255, 255, 255, 255, 255]);
+      // the lean program (the usual played frame) and the full one (a tone on: Lumetri live)
+      const toned = { pre: [1, 1, 1], con: 1, sat: 1, knee: 1, lift: 0, tone: [0.01, 0, 0, 0] };
       try {
-        for (const nearest of [false, true]) {
-          f.nearest = nearest;
-          render(f, 2, 2, 2, 2, '__warm', 2, id, null, null, { src: f, w: 0.5, key: '__warm', n: 2, data: id });
+        for (const a of FULL ? [null] : [null, toned]) {
+          for (const nearest of [false, true]) {
+            f.nearest = nearest;
+            render(f, 2, 2, 2, 2, '__warm', 2, id, a, null, { src: f, w: 0.5, key: '__warm', n: 2, data: id, adj: a });
+          }
         }
         gl.finish();
       } catch (e) { /* the first frame compiles them instead */ }
@@ -652,7 +679,7 @@ const bufs = [null, null, null, null];
 onmessage = async (e) => {
   const m = e.data;
   if (m.t === 'init') {
-    try { R = Renderer(m.canvas, (w, h) => new OffscreenCanvas(w, h)); }
+    try { R = Renderer(m.canvas, (w, h) => new OffscreenCanvas(w, h), { full: !!m.full }); }
     catch (err) { R = null; }
     if (R) R.warm();
     postMessage({ t: 'ready', ok: !!R, yuv: !!(R && R.yuv) });
@@ -1412,7 +1439,9 @@ onmessage = async (e) => {
     try { oc = canvas.transferControlToOffscreen(); } catch (e) { w.terminate(); return false; }
     w.onmessage = fromWorker;
     w.onerror = () => { G.ok = false; G.ready = false; show(false); };
-    w.postMessage({ t: 'init', canvas: oc }, [oc]);
+    // ?grade=full (or window.ROUGHCUT_GRADE_FULL): never the lean programs, for comparison
+    const full = !!(window.ROUGHCUT_GRADE_FULL || /[?&]grade=full\b/.test(location.search));
+    w.postMessage({ t: 'init', canvas: oc, full }, [oc]);
     G.worker = w;
     G.ok = G.ready = true;          // the worker says otherwise if its WebGL fails
     return true;
