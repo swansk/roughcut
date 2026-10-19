@@ -7702,6 +7702,25 @@ def export_layers(clips: list | None, whole: list[dict], sent: list[dict]) -> li
     return out
 
 
+def export_music(music: dict | None, whole: list[dict], sent: list[dict]) -> dict | None:
+    """The A2 bed (`effects_music`) on the clock of the film a render makes (wave 16,
+    lane FRAMEACC): the bed has no `at` — it runs from the sequence's 0, looped, its
+    fades at the sequence's two ends (app.js `cueBed` / `bedGainAt`) — so an In/Out
+    range's film is `in` seconds into it (`range_start`) and its fades are where the
+    `seq_s`-long sequence has them (effects.py `_bed_chain`). The whole sequence's, and
+    a range that cannot be placed, as they are."""
+    if not music:
+        return music
+    start = range_start(whole, sent)
+    if start is None:
+        return music
+    seq = sum(edits.dur(s) for s in whole)
+    end = start + sum(edits.dur(s) for s in sent)
+    if start <= 1e-9 and end >= seq - 1e-6:
+        return music
+    return {**music, "in": round(start, 6), "seq_s": round(seq, 6)}
+
+
 @app.post("/api/render")
 async def api_render(request: Request) -> JSONResponse:
     body = await request.json()
@@ -7778,6 +7797,9 @@ async def api_render(request: Request) -> JSONResponse:
             edl[key] = layer
         else:
             edl.pop(key, None)
+    # and the A2 bed (lane FRAMEACC): the film starts at the In's point in it
+    if edl.get("effects_music"):
+        edl["effects_music"] = export_music(edl["effects_music"], whole, segments)
     edl["segments"] = segments
     job = uuid.uuid4().hex[:8]
     edl_path = STATE["work"] / f"render_{job}.json"
