@@ -555,3 +555,29 @@ def test_the_status_never_ffprobes_a_clip_the_warm_up_has_not_reached(tmp_path, 
     assert v["pending"] and v["coarse_calls"] >= len(v["pending"])
     server.STATE["durations"][clip] = known
     assert server._snap_key() != key_before, "a length landing does not refresh the status"
+
+
+def test_a_request_over_the_budget_says_what_the_process_ran_and_the_load(tmp_path, project, monkeypatch):
+    """An over-budget row names what the whole process ran meanwhile and the box's load, so
+    a request the server worked through (hundreds of ms of CPU) reads apart from one the
+    box starved (a few): the Killington import's rows at load 20-26 were the second kind."""
+    from fastapi.testclient import TestClient
+    import server
+
+    server.configure(None, project["footage"], None, tmp_path / "work", proxies=False,
+                     visual=tmp_path / "no-visual")
+    real = server._price_inputs
+
+    def slow():
+        time.sleep(0.35)                        # waiting, not working
+        return real()
+
+    monkeypatch.setattr(server, "_price_inputs", slow)
+    server.OVER_BUDGET.clear()
+    with TestClient(server.app) as c:
+        assert c.get("/api/assist/price", params={"text": "x"}).status_code == 200
+    rows = [r for r in server.OVER_BUDGET if r["path"] == "/api/assist/price"]
+    assert rows, list(server.OVER_BUDGET)
+    r = rows[-1]
+    assert r["ms"] >= 300 and "load" in r and r["load"] >= 0, r
+    assert 0 <= r["proc_cpu_ms"] < r["ms"] / 2, r       # it slept: little of it was CPU

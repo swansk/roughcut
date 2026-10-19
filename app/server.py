@@ -1942,6 +1942,10 @@ async def _loop_lag() -> None:
         if lag >= LOOP_BUDGET_MS:
             row = {"method": "LOOP", "path": "(the event loop was held)", "handler": "-",
                    "ms": round(lag, 1), "status": None, "at": time.time(), "where": where}
+            try:
+                row["load"] = round(os.getloadavg()[0], 1)
+            except OSError:
+                pass
             OVER_BUDGET.append(row)
             del OVER_BUDGET[:-SLOW_KEEP]
             if lag >= LOOP_LAG_MS:
@@ -1973,6 +1977,7 @@ class RequestTiming:
         if (scope.get("client") or ("",))[0] != "testclient":   # a real server's loop
             _watch_loop()
         t0 = time.perf_counter()
+        c0 = time.process_time()
         first: list = [None, None]
         method, where = scope.get("method"), scope.get("path")
         saving = method == "PUT" and where == "/api/project"
@@ -2019,6 +2024,15 @@ class RequestTiming:
                 if waited[0] >= 0.001:
                     row.update(body_ms=round(waited[0] * 1000.0, 1),
                                wall_ms=round((end - t0) * 1000.0, 1))
+                if row["ms"] >= REQUEST_BUDGET_MS:
+                    # over the budget: what the whole process ran meanwhile (every thread)
+                    # and how busy the box was — a request the server worked through
+                    # reads hundreds of ms, one the box starved reads a few (wave 15)
+                    row["proc_cpu_ms"] = round((time.process_time() - c0) * 1000.0, 1)
+                    try:
+                        row["load"] = round(os.getloadavg()[0], 1)
+                    except OSError:
+                        pass
                 note_request(row)
 
 
