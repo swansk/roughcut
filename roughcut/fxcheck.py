@@ -41,17 +41,21 @@ from roughcut import fx
 
 # The functions the child would run. A test that replaces one of them in the server's
 # process (the suite's stubbed renderer) means "run what I gave you": the check then
-# runs on the job's thread, where the replacement is (`unpatched`).
-_ORIGINAL = {name: getattr(fx, name) for name in
-             ("part_graph", "verify", "render_overlay_mov", "render_overlay_still",
-              "render_overlay_frame", "synth_sound")}
+# runs on the job's thread, where the replacement is (`unpatched`). Known by where the
+# function was defined, not by identity: this module may be first imported while a
+# test's replacement is in place.
+_RENDERER = ("part_graph", "verify", "render_overlay_mov", "render_overlay_still",
+             "render_overlay_frame", "synth_sound")
 
 STAGES = ("base", "overlay", "proof", "measure")
 X264_THREADS = 3            # half the box at most: the check is not an export
 
 
 def unpatched() -> bool:
-    return all(getattr(fx, name) is fn for name, fn in _ORIGINAL.items())
+    return all(getattr(getattr(fx, name), "__module__", None) == fx.__name__
+               and getattr(getattr(fx, name), "__code__", None) is not None
+               and getattr(fx, name).__code__.co_filename == fx.__file__
+               for name in _RENDERER)
 
 
 Progress = Callable[[str, float, bool], None]      # (stage, part 0..1, done)
