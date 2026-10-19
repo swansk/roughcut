@@ -2915,7 +2915,28 @@ function preroll(left) {
   if (!nseg) return;
   const lv = liveVideo();
   const nb = player.vids.find((b) => b !== lv && b._for === nseg);
-  if (!nb || nb._roll || !nb.paused || nb.seeking || nb.readyState < 2) return;
+  if (nb) rollStart(nb, nseg, left);
+  // (wave 16 PERF7, verdict 12 punch 3) The shot after a short one is parked in the third
+  // buffer (armUpcoming) and its start waited for the short shot to be on screen. From there
+  // a 0.4 s shot left less than its lead and a start take, so it always ran late, at 1.1-1.3x,
+  // and advance() put its rate back at the cut: a pipeline call on the picture's first frames
+  // (the speed test's second cut, measured: the incoming buffer's next frame one frame period
+  // later, 66.7-100 ms by the frame callbacks). It starts on the short shot's own clock now,
+  // while that buffer prerolls for its cut, when it has its own lead and a start left, at the
+  // film's rate. (Not where a transition leads into either shot: those parks are the
+  // dissolve's own, prerollAt / txLeadIn.)
+  const n2 = segs[player.idx + 2];
+  if (!n2 || !nb || !nb._roll || nb.paused || nb.seeking || tl.dur(nseg) >= SHORT_S) return;
+  if (txLeadIn(nseg) > 0 || txLeadIn(n2) > 0) return;
+  const nb2 = player.vids.find((b) => b !== lv && b !== nb && b._for === n2);
+  if (nb2) rollStart(nb2, n2, (nseg.out - nb.currentTime) / speedOf(nseg));
+}
+
+/* Start buffer nb playing toward its shot's in-point (muted, unseen) when the shot before it
+ * has `left` film seconds to its out-point: its lead from the park and a start's latency. */
+const LATE_OK_S = 0.035;            // (wave 16 PERF7) late by up to a frame: no faster rate
+function rollStart(nb, nseg, left) {
+  if (nb._roll || !nb.paused || nb.seeking || nb.readyState < 2) return;
   if (nb.classList.contains('live')) return;                  // still on screen (held)
   if (nb.dataset.src !== proxyOf(nseg)) return;
   const lead = (nseg.in - nb.currentTime) / speedOf(nseg);    // film seconds to its in-point
@@ -2925,22 +2946,25 @@ function preroll(left) {
   // rest film time, so it scales with the J/L shuttle's rate
   const shuttle = (liveVideo() && liveVideo().defaultPlaybackRate) || 1;
   if (left - 0.04 > lead + roll.lat * shuttle) return;
-  const g = player.gen;
-  nb._roll = { gen: g, seg: nseg };
+  const r0 = nb._roll = { gen: player.gen, seg: nseg };
   hush(nb, true, a1Moved(nseg));    // silent until its cut, by its gain (a paused buffer: no jump)
   setShotRate(nb, nseg);
   // Late — the park after a short shot landed with less time left than its lead needs —
   // it runs faster until the cut, so it is on its in-point there rather than frames
   // behind it (which showWhenReady would hold); advance() puts the shot's rate back.
+  // (wave 16 PERF7) Only when it is more than a frame late: roll.lat is play() to the first
+  // NEW frame, a frame period more than the clock's own start, so a start a tick late still
+  // lands on its in-point (measured: the speed test's prerolls came in 1-2 frames past it),
+  // and each faster rate is a second rate change at the cut, on the picture's first frames.
   const avail = left - 0.04 - roll.lat * shuttle;
-  if (lead > 0.02 && avail < lead - 0.01) nb.playbackRate *= Math.min(4, lead / Math.max(0.05, avail));
+  if (lead > 0.02 && avail < lead - LATE_OK_S) nb.playbackRate *= Math.min(4, lead / Math.max(0.05, avail));
   const t0 = performance.now();
   if (typeof nb.requestVideoFrameCallback === 'function') {
     nb.requestVideoFrameCallback(() => {
       roll.lat = Math.min(0.25, roll.lat * 0.7 + ((performance.now() - t0) / 1000) * 0.3);
     });
   }
-  nb.play().catch(() => { if (nb._roll && nb._roll.gen === g) nb._roll = null; });
+  nb.play().catch(() => { if (nb._roll === r0) nb._roll = null; });
 }
 
 function tick() {
@@ -2998,6 +3022,11 @@ function advance() {
   const rolled = !!nv._roll && nv._roll.gen === g - 1 && nv._roll.seg === segs[next] && !nv.paused;
   const parked = nv._for === nseg;
   nv._for = null;                   // on screen: it holds no upcoming shot
+  // (wave 16 PERF7) a buffer already rolling for the shot after this one (started on this short
+  // shot's clock: preroll) is that cut's preroll now
+  for (const b of player.vids) {
+    if (b !== nv && b !== v && b._roll && b._roll.seg === segs[next + 1] && !b.paused) b._roll.gen = g;
+  }
   if (rolled) {
     nv._roll = null;
     // a start that went badly wrong is put right; a frame or two either side is not
