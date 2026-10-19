@@ -3841,6 +3841,33 @@ def firstpass_plan(mode: str | None = None, keep=None, *, facts: dict | None = N
             "produces": "a proposed rough cut you accept, discard or adjust"}
 
 
+_AI_CUTS: dict = {"key": None, "cuts": {}}
+
+
+def _fp_by(rows: list[dict]) -> list[dict]:
+    """Who cut each of the editor's shots (verdict 12, punch 10): `by` "ai" on a row whose
+    edits are all ones the editor accepted from an AI review (the assist records under
+    `assist_home()`, `fpmod.ai_cuts`), else "hand". The records are read again only when
+    their folder changed (a new ask or answer renames a file into it). In place."""
+    try:
+        d = assist_home()
+        key = (str(d), d.stat().st_mtime_ns)
+        if key != _AI_CUTS["key"]:
+            recs = []
+            for p in d.glob("*.json"):
+                try:
+                    rec = json.loads(p.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if isinstance(rec, dict) and (rec.get("answer") or {}).get("accepted"):
+                    recs.append(rec)
+            _AI_CUTS.update(key=key, cuts=fpmod.ai_cuts(recs))
+        cuts = _AI_CUTS["cuts"]
+    except (OSError, KeyError, TypeError):
+        cuts = {}
+    return fpmod.mark_by(rows, cuts)
+
+
 def _fp_names(rows: list[dict]) -> list[dict]:
     """A generated still's row named by the clip it was taken from (its record says
     which); the other rows already carry `fpmod.clip_name`. In place; returns `rows`."""
@@ -3894,7 +3921,7 @@ def firstpass_state() -> dict:
     edl = read_edl()
     ensure_segment_ids(edl)
     facts = flow_facts()
-    manual = fpmod.manual_edits(edl, ask_plans())
+    manual = _fp_by(fpmod.manual_edits(edl, ask_plans()))
     # one consistent pair: a run that ends sets its state and saves its record under
     # this lock, so a poll between the two read a "running" record with no live run and
     # called it interrupted by a restart (a flake in test_firstpass)
@@ -3956,8 +3983,12 @@ def firstpass_state() -> dict:
              not in then]
     stale = []
     if since and not pending:
-        stale.append(f"{len(since)} shot{'s' if len(since) != 1 else ''} cut by hand "
-                     "since")
+        # who cut them (verdict 12, punch 10): an accepted AI trim reads "edited by the AI"
+        ai = sum(1 for r in since if r.get("by") == "ai")
+        hand = len(since) - ai
+        said = ([f"{hand} shot{'s' if hand != 1 else ''} cut by hand"] if hand else []) + \
+            ([f"{ai} shot{'s' if ai != 1 else ''} edited by the AI"] if ai else [])
+        stale.append(" and ".join(said) + " since")
     # Footage added since the run (wave 12 IMPORT: imported, uploaded or dropped into the
     # folder): by name when the record kept the names, else by count. The board offers
     # them to a re-run ("3 new clips: add them to the cut?"), which says what it keeps.

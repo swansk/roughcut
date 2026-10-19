@@ -252,6 +252,48 @@ def manual_edits(edl: dict, plans: list[list[dict]] | None = None) -> list[dict]
     return out
 
 
+# Who cut a shot (verdict 12, punch 10): an AI trim or speed change, reviewed and accepted
+# in the board's AI review, read "cut by hand" in the re-run panel. It still locks the
+# shot (a cut is a cut, whoever made it), and the words now say who made it. The AI's ops
+# (roughcut/actions.py) that cut a shot already in the cut, by the field naming the shot
+# and the edit `manual_edits` sees on it. An op that makes a new shot (an insert, the
+# right half of a razor) names it only on the board, so that shot reads as the editor's.
+AI_CUT_OPS = {"trim": (("id",), "trim"), "slip": (("id",), "trim"), "roll": (("a", "b"), "trim"),
+              "speed": (("id",), "speed"), "razor": (("id",), "razor"), "move": (("ids",), "move")}
+
+
+def ai_cuts(records: list[dict] | None) -> dict[str, set[str]]:
+    """`{shot id: {how, ...}}`: every cut edit the editor accepted from an AI review — an
+    assist record's `result.ops` at the indices of its `answer.accepted` — on the shot it
+    names."""
+    out: dict[str, set[str]] = {}
+    for rec in records or []:
+        if not isinstance(rec, dict):
+            continue
+        ops = (rec.get("result") or {}).get("ops") or []
+        for i in (rec.get("answer") or {}).get("accepted") or []:
+            op = ops[i] if isinstance(i, int) and 0 <= i < len(ops) and isinstance(ops[i], dict) else None
+            kind = AI_CUT_OPS.get((op or {}).get("op"))
+            if not kind:
+                continue
+            fields, how = kind
+            for f in fields:
+                v = op.get(f)
+                for sid in (v if isinstance(v, list) else [v]):
+                    if isinstance(sid, str) and sid:
+                        out.setdefault(sid, set()).add(how)
+    return out
+
+
+def mark_by(rows: list[dict], ai: dict[str, set[str]]) -> list[dict]:
+    """Each `manual_edits` row's `by`: "ai" when every edit found on it is one the AI made
+    and the editor accepted (`ai_cuts`), else "hand". In place; returns `rows`."""
+    for r in rows:
+        how = set(r.get("how") or [])
+        r["by"] = "ai" if how and how <= (ai.get(r.get("id")) or set()) else "hand"
+    return rows
+
+
 def _realias(segs: list[dict], shots: dict) -> dict[str, str]:
     """The cut's shots that are base shots under a fresh id, `{id now: base id}`.
 
