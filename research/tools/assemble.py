@@ -63,6 +63,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from roughcut import colour, edits, effects, fx    # noqa: E402  (after sys.path)
 from roughcut import tracks as tracksmod           # noqa: E402
+from roughcut import vfx as vfxmod                 # noqa: E402
 
 TARGET_LUFS = -16.0
 MAX_GAIN_DB = 12.0          # refuse to amplify near-silence into hiss
@@ -723,9 +724,11 @@ def dim_vf(opacity: float) -> str:
     return f"lutyuv=y='16+(val-16)*{a}':u='128+(val-128)*{a}':v='128+(val-128)*{a}'"
 
 
-def motion_graph(controls: dict | None, w: int, h: int, vin: str, vout: str) -> str | None:
+def motion_graph(controls: dict | None, w: int, h: int, vin: str, vout: str,
+                 tag: str = "mo") -> str | None:
     """Motion and Opacity as a filter-graph fragment from `[vin]` to `[vout]`, or None
-    at the defaults. The monitor's CSS is `translate((x-0.5)·W, (y-0.5)·H) rotate(r)
+    at the defaults (`tag` names its inner pads: a Transform effect's graph is a second
+    one in the same part). The monitor's CSS is `translate((x-0.5)·W, (y-0.5)·H) rotate(r)
     scale(s)` about the picture's centre: a source point p lands at
     `q = (x·W, y·H) + s·R(r)·(p − centre)`. Only the part of the source that can land
     in the frame is cropped (so a 1000 % scale never builds a 19200-wide frame), scaled,
@@ -741,10 +744,10 @@ def motion_graph(controls: dict | None, w: int, h: int, vin: str, vout: str) -> 
     op = motion_opacity(controls)
     if op < 1.0 - 1e-9:
         chain = chain + [dim_vf(op)]
-    return (f"[{vin}]split[mo_c][mo_f];"
-            f"[mo_c]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[mo_bg];"
-            f"[mo_f]{','.join(chain)}[mo_fg];"
-            f"[mo_bg][mo_fg]overlay=x={ox}:y={oy}:eof_action=pass,format=yuv420p[{vout}]")
+    return (f"[{vin}]split[{tag}_c][{tag}_f];"
+            f"[{tag}_c]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[{tag}_bg];"
+            f"[{tag}_f]{','.join(chain)}[{tag}_fg];"
+            f"[{tag}_bg][{tag}_fg]overlay=x={ox}:y={oy}:eof_action=pass,format=yuv420p[{vout}]")
 
 
 def motion_opacity(controls: dict | None) -> float:
@@ -893,7 +896,7 @@ def filter_path(p: Path) -> str:
 
 
 def controls_graph(controls: dict | None, w: int, h: int, rate: Fraction, frames: int,
-                   vin: str, vout: str, cmd_file: Path) -> str | None:
+                   vin: str, vout: str, cmd_file: Path, tag: str = "mo") -> str | None:
     """Motion and Opacity from `[vin]` to `[vout]`, keyed or not. Nothing keyed: the
     static `motion_graph`. Motion keyed: `keyed_motion_graph`, then the Opacity. Opacity
     keyed: the static motion at full opacity, then the blend toward black re-set per
@@ -904,19 +907,20 @@ def controls_graph(controls: dict | None, w: int, h: int, rate: Fraction, frames
     op_keys = keys_of(controls, "opacity")
     moved = any(keys_of(controls, p) for p in MOTION_PROPS)
     if not moved and not op_keys:
-        return motion_graph(controls, w, h, vin, vout)
-    graph, cur = [], vin
+        return motion_graph(controls, w, h, vin, vout, tag)
+    graph, cur, km = [], vin, f"k{tag}"
     if moved:
-        graph.append(keyed_motion_graph(controls, w, h, rate, cur, "kmo"))
-        cur = "kmo"
+        graph.append(keyed_motion_graph(controls, w, h, rate, cur, km))
+        cur = km
     else:
         still = motion_graph({k: v for k, v in (controls or {}).items() if k != "opacity"},
-                             w, h, cur, "kmo")
+                             w, h, cur, km, tag)
         if still:
             graph.append(still)
-            cur = "kmo"
+            cur = km
     if op_keys:
-        lut, changes = opacity_commands(op_keys, frames, rate, cmd_file)
+        target = "lutyuv@kop" if tag == "mo" else f"lutyuv@{tag}op"
+        lut, changes = opacity_commands(op_keys, frames, rate, cmd_file, target)
         cmd = f"sendcmd=f={filter_path(cmd_file)}," if changes else ""
         graph.append(f"[{cur}]{cmd}{lut}[{vout}]")
     else:
@@ -969,6 +973,166 @@ def overlay_controls_graph(controls: dict | None, w: int, h: int, rate: Fraction
         else:
             graph.append(f"[{cur}]null[{vout}]")
     return ";".join(graph), x, y
+
+
+# ---------------------------------------------- video effects (verdict 10, punch 8)
+#
+# A shot's Crop / Transform / Gaussian Blur stack (`controls.vfx`; roughcut/vfx.py has
+# the schema and THE formulas, app/static/effects.js draws the same on the Program), on
+# its graded picture, top of the stack first — before its designed effects and its
+# Motion / Opacity, as Premiere renders its fixed effects (Motion, Opacity) after the
+# standard ones. A bypassed effect (`off`) is not drawn. A transition's neighbour handle
+# takes none of them, as it takes no Motion. A keyed parameter is drawn per frame (film
+# time from the shot's first frame, as Motion's keys); one that holds a single value over
+# the part is drawn as that value.
+
+def _vfx_param(controls: dict | None, e: dict, key: str, frames: int,
+               rate: Fraction) -> tuple[float | None, list[tuple[float, float]] | None]:
+    """A parameter over the part: `(value, None)` when it is one value for every frame,
+    else `(None, keys)`."""
+    ks = vfxmod.keys_of(controls, e, key)
+    if ks:
+        v = held_value(ks, 0.0, (max(1, frames) - 1) / float(rate))
+        return (v, None) if v is not None else (None, ks)
+    return float(vfxmod.value(e, key)), None
+
+
+def crop_graph(controls: dict | None, e: dict, w: int, h: int, rate: Fraction, frames: int,
+               vin: str, vout: str, tag: str) -> str | None:
+    """Crop: the sides black, `l = Left·W/100` … from each edge; Edge Feather a linear ramp
+    `f = Feather·W/1920` px wide inside them. Hard and still: four `drawbox`es. Feathered
+    or keyed: the mask `rx(x)·ry(y)` (vfx.py's formula) built per frame from a one-pixel
+    row and column of `geq` — cheap at any frame size — and the picture laid by it over
+    black."""
+    sides = ("left", "top", "right", "bottom", "feather")
+    vals = {k: _vfx_param(controls, e, k, frames, rate) for k in sides}
+    keyed = any(ks for _, ks in vals.values())
+    if not keyed:
+        L, T, R, B, F = (vals[k][0] for k in sides)
+        if max(L, T, R, B, F) <= 0:
+            return None
+        if F <= 0:
+            if L + R >= 100 or T + B >= 100:
+                return f"[{vin}]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[{vout}]"
+            lp, rp = round(L * w / 100), round(R * w / 100)
+            tp, bp = round(T * h / 100), round(B * h / 100)
+            boxes = []
+            if lp > 0:
+                boxes.append(f"drawbox=x=0:y=0:w={lp}:h={h}:color=black:t=fill")
+            if rp > 0:
+                boxes.append(f"drawbox=x={w - rp}:y=0:w={rp}:h={h}:color=black:t=fill")
+            if tp > 0:
+                boxes.append(f"drawbox=x=0:y=0:w={w}:h={tp}:color=black:t=fill")
+            if bp > 0:
+                boxes.append(f"drawbox=x=0:y={h - bp}:w={w}:h={bp}:color=black:t=fill")
+            return f"[{vin}]{','.join(boxes) or 'null'}[{vout}]"
+    tv = f"(N*{float(1 / rate):.12g})"
+
+    def val(k: str) -> str:
+        v, ks = vals[k]
+        return lerp_expr(ks, tv) if ks else f"{v:.6g}"
+    f = f"max({val('feather')}*{w / vfxmod.REF_W:.9g},0.001)"
+    lx, rx = f"({val('left')}*{w / 100:.9g})", f"({w}-{val('right')}*{w / 100:.9g})"
+    ty, by = f"({val('top')}*{h / 100:.9g})", f"({h}-{val('bottom')}*{h / 100:.9g})"
+    mx = f"255*clip((X+0.5-{lx})/{f},0,1)*clip(({rx}-X-0.5)/{f},0,1)"
+    my = f"255*clip((Y+0.5-{ty})/{f},0,1)*clip(({by}-Y-0.5)/{f},0,1)"
+    t = tag
+    return (f"[{vin}]split=4[{t}p][{t}q][{t}r][{t}s];"
+            f"[{t}q]crop={w}:2:0:0,format=gray,crop={w}:1:0:0,geq=lum='{mx}',"
+            f"scale={w}:{h}:flags=neighbor[{t}mx];"
+            f"[{t}r]crop=2:{h}:0:0,format=gray,crop=1:{h}:0:0,geq=lum='{my}',"
+            f"scale={w}:{h}:flags=neighbor[{t}my];"
+            f"[{t}mx][{t}my]blend=all_mode=multiply[{t}m];"
+            f"[{t}p][{t}m]alphamerge[{t}fg];"
+            f"[{t}s]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[{t}bg];"
+            f"[{t}bg][{t}fg]overlay=format=yuv420,format=yuv420p[{vout}]")
+
+
+def transform_graph(controls: dict | None, e: dict, w: int, h: int, rate: Fraction,
+                    frames: int, vin: str, vout: str, tag: str, cmd_file: Path) -> str | None:
+    """Transform: Motion's own maths (`controls_graph`: the static crop / scale / rotate
+    over black, or the keyed per-frame warp; its Opacity over black, static or by
+    `sendcmd`) with the effect's parameters and keys, under its own pad names."""
+    synth: dict = {}
+    keys: dict = {}
+    for k in ("position_x", "position_y", "scale", "rotation", "opacity"):
+        ks = vfxmod.keys_of(controls, e, k)
+        if ks:
+            keys[k] = [[t, v] for t, v in ks]
+    px, py = float(vfxmod.value(e, "position_x")), float(vfxmod.value(e, "position_y"))
+    if (px, py) != (0.5, 0.5):
+        synth["position"] = [px, py]
+    for k in ("scale", "rotation", "opacity"):
+        synth[k] = float(vfxmod.value(e, k))
+    if keys:
+        synth["keys"] = keys
+    return controls_graph(synth, w, h, rate, frames, vin, vout, cmd_file, tag)
+
+
+def blur_graph(controls: dict | None, e: dict, w: int, h: int, rate: Fraction, frames: int,
+               vin: str, vout: str, tag: str, cmd_file: Path) -> str | None:
+    """Gaussian Blur: `gblur` of σ = Blurriness·W/1920 px across, down or both, on the
+    picture padded with black (outside the frame reads black: the edges soften toward it,
+    Premiere's default with Repeat Edge Pixels off) and cropped back. Keyed: σ re-set on
+    the frames where it changes (`sendcmd`), the pad sized for the largest."""
+    v, ks = _vfx_param(controls, e, "blurriness", frames, rate)
+    dims = vfxmod.value(e, "dimensions")
+    k = w / vfxmod.REF_W
+
+    def sig(b: float) -> tuple[float, float]:
+        s = max(0.0, b) * k
+        return (s, s) if dims == "both" else (s, 0.0) if dims == "horizontal" else (0.0, s)
+    top = max(x for _, x in ks) if ks else v
+    if top * k <= 0.05:
+        return None
+    pad = int(math.ceil(3.0 * top * k)) + 2
+    pad += pad % 2
+    hs, vs = sig(ks[0][1] if ks else v)
+    cmd = ""
+    if ks:
+        lines, last = [], None
+        for n in range(max(1, frames)):
+            s = tuple(round(x, 4) for x in sig(value_at(ks, n / float(rate))))
+            if s == last:
+                continue
+            if last is not None:
+                lines.append(f"{(n - 0.5) / float(rate):.6f} [enter] gblur@{tag} sigma {s[0]:g}, "
+                             f"[enter] gblur@{tag} sigmaV {s[1]:g};")
+            else:
+                hs, vs = s
+            last = s
+        if lines:
+            cmd_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            cmd = f"sendcmd=f={filter_path(cmd_file)},"
+    return (f"[{vin}]pad={w + 2 * pad}:{h + 2 * pad}:{pad}:{pad}:black,{cmd}"
+            f"gblur@{tag}=sigma={hs:.6g}:sigmaV={vs:.6g}:steps=3,"
+            f"crop={w}:{h}:{pad}:{pad}[{vout}]")
+
+
+def vfx_graph(controls: dict | None, w: int, h: int, rate: Fraction, frames: int,
+              vin: str, vout: str, dest: Path) -> str | None:
+    """The shot's video effects, top of the stack first, from `[vin]` to `[vout]`; None
+    when none of them draws (none, all bypassed, all at their defaults)."""
+    parts: list[str] = []
+    cur = vin
+    for i, e in enumerate(vfxmod.stack(controls)):
+        if e.get("off"):
+            continue
+        tag, out = f"vx{i}", f"vx{i}o"
+        cmd = dest.with_name(f"{dest.stem}.{tag}.cmd")
+        if e["kind"] == "crop":
+            g = crop_graph(controls, e, w, h, rate, frames, cur, out, tag)
+        elif e["kind"] == "transform":
+            g = transform_graph(controls, e, w, h, rate, frames, cur, out, tag, cmd)
+        else:
+            g = blur_graph(controls, e, w, h, rate, frames, cur, out, tag, cmd)
+        if g:
+            parts.append(g)
+            cur = out
+    if not parts:
+        return None
+    parts.append(f"[{cur}]null[{vout}]")
+    return ";".join(parts)
 
 
 def ordered_effects(edl: dict, seg: dict) -> list[dict]:
@@ -1044,9 +1208,15 @@ def encode_part(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path
     controls = held_controls(controls, 0.0, frames / float(rate))
     vol = volume_vf(controls)
     gpu = gpu_input(src, orient, normalise, video) if gpu_decode else None
-    graph = [f"[0:v]{video_filter(video, normalise, lut, speed, controls, gpu)}[vbase]",
+    # the video effects (verdict 10 punch 8) on the graded picture, ahead of the designed
+    # effects and Motion: `vfx_graph` from the conform's [vsrc] to [vbase]
+    vg = vfx_graph(controls, video["w"], video["h"], rate, frames, "vsrc", "vbase", dest)
+    graph = [f"[0:v]{video_filter(video, normalise, lut, speed, controls, gpu)}"
+             f"[{'vsrc' if vg else 'vbase'}]",
              f"[0:a]{audio_filter(gain_db + volume_db(controls), speed)}"
              f"{',' + vol if vol else ''}[abase]"]
+    if vg:
+        graph.append(vg)
     if shot_effects:
         extra, fxg, vcur, acur = fx.part_graph(shot_effects, video["w"], video["h"],
                                                video["fps"], workdir or dest.parent)
@@ -1942,6 +2112,8 @@ def describe_controls(c: dict) -> str:
         bits.append(f"fx off {len(c['fx_off'])}")
     if c.get("fx_order"):
         bits.append("fx order")
+    if c.get("vfx"):
+        bits.append(vfxmod.describe(c))
     return " · ".join(bits) or "defaults"
 
 

@@ -1598,13 +1598,30 @@
    * right-click → "Set Selected as Default Transition" makes it what Ctrl+D (video) or
    * Shift+D (audio) lays, and the default's icon is outlined, as Premiere's is. The kinds
    * and their maths are roughcut/tracks.py's. The AI effect designer is "Designed
-   * Effects", beside Effect Controls. */
+   * Effects", beside Effect Controls.
+   *
+   * Video Effects (wave 14, VFX; verdict 10 punch 8), between the two as Premiere lists
+   * them, in Premiere's own folders: Blur & Sharpen › Gaussian Blur, Distort › Transform,
+   * Transform › Crop. One drags onto a clip on V1 (or onto Effect Controls), or a
+   * double-click puts it on the selected clips: it lands at the bottom of the clip's
+   * stack in Effect Controls, one undo (effects.js `vfxAdd`; roughcut/vfx.py the maths). */
+  const VFX_MIME = 'application/x-roughcut-video-effect';
   const FX_TREE = [
     { id: 'audio', name: 'Audio Transitions', folders: [
       { id: 'crossfade', name: 'Crossfade', items: [
         ['constant_gain', 'Constant Gain', 'linear: each side −6 dB at the middle'],
         ['audio_crossfade', 'Constant Power', 'cos / sin: each side −3 dB at the middle (the default)'],
         ['exponential_fade', 'Exponential Fade', 'exponential curves: each side −21 dB at the middle'],
+      ] }] },
+    { id: 'veffects', name: 'Video Effects', vfx: true, folders: [
+      { id: 'vblur', name: 'Blur & Sharpen', items: [
+        ['gaussian_blur', 'Gaussian Blur', 'softens the picture: Blurriness, across, down or both'],
+      ] },
+      { id: 'vdistort', name: 'Distort', items: [
+        ['transform', 'Transform', 'position, scale, rotation and opacity of its own, apart from Motion'],
+      ] },
+      { id: 'vtransform', name: 'Transform', items: [
+        ['crop', 'Crop', 'trims each edge to black by a percentage, with an Edge Feather'],
       ] }] },
     { id: 'video', name: 'Video Transitions', folders: [
       { id: 'dissolve', name: 'Dissolve', items: [
@@ -1615,7 +1632,10 @@
       ] }] },
   ];
   const FXBIN_OPEN = 'roughcut.fxbin.open';
-  const fxbin = { open: store.get(FXBIN_OPEN, { audio: true, crossfade: true, video: true, dissolve: true }),
+  // Video Effects starts folded, as Premiere's folders do (its own three open inside it):
+  // one click shows them, and the transitions keep their place in view
+  const fxbin = { open: { audio: true, crossfade: true, veffects: false, vblur: true, vdistort: true, vtransform: true,
+                          video: true, dissolve: true, ...(store.get(FXBIN_OPEN, null) || {}) },
                   sel: null, q: '' };
 
   function fxDefaults() {
@@ -1625,6 +1645,10 @@
 
   const FX_ICON = '<svg viewBox="0 0 16 12" aria-hidden="true"><path d="M1 11L15 1v10z" fill="currentColor" opacity=".45"/>'
     + '<path d="M1 1h14v10H1z" fill="none" stroke="currentColor"/></svg>';
+  // a video effect's: Premiere's frame with the effect's mark in it
+  const VFX_ICON = '<svg viewBox="0 0 16 12" aria-hidden="true"><path d="M1 1h14v10H1z" fill="none" stroke="currentColor"/>'
+    + '<path d="M5 3.5h4M5 3.5v5M5 6h3" fill="none" stroke="currentColor" stroke-width="1.3"/>'
+    + '<path d="M9.6 6l2.4 2.6M12 6l-2.4 2.6" fill="none" stroke="currentColor" stroke-width="1.1"/></svg>';
 
   function paintFxBin() {
     const box = $('#fxbin');
@@ -1651,6 +1675,13 @@
         if (!openF) continue;
         for (const [kind, name, what] of f.items) {
           shown++;
+          if (top.vfx) {
+            html += `<div class="fxb-item vfx${fxbin.sel === kind ? ' sel' : ''}" role="treeitem"`
+              + ` draggable="true" data-kind="${kind}" data-vfx="${kind}" style="--d:2"`
+              + ` title="${esc(name)}: ${esc(what)} · drag onto a clip, or double-click to put it on the selected clips">`
+              + `<span class="ic">${VFX_ICON}</span><span class="nm">${esc(name)}</span></div>`;
+            continue;
+          }
           const isDef = def[top.id] === kind;
           html += `<div class="fxb-item${fxbin.sel === kind ? ' sel' : ''}${isDef ? ' def' : ''}" role="treeitem"`
             + ` draggable="true" data-kind="${kind}" style="--d:2"`
@@ -1692,6 +1723,8 @@
   function initEffects() {
     const box = $('#fxbin'), q = $('#fxbinQ');
     if (!box) return;
+    const tab = $('.ws-tab[data-tool=effects]');
+    if (tab) tab.title = 'video effects and transitions: drag an effect onto a clip, a transition onto an edit';
     paintFxBin();
     if (window.tl && typeof tl.on === 'function') tl.on('transitiondefault', paintFxBin);
     else window.addEventListener('load', () => { if (window.tl && tl.on) tl.on('transitiondefault', paintFxBin); paintFxBin(); });
@@ -1706,11 +1739,21 @@
         return;
       }
       const it = e.target.closest('.fxb-item');
-      if (it) { fxbin.sel = it.dataset.kind; paintFxBin(); }
+      if (!it) return;
+      // the selection moves without drawing the tree again: a double-click's second press
+      // must land on the node its first did, or it is not a double-click
+      fxbin.sel = it.dataset.kind;
+      box.querySelectorAll('.fxb-item.sel').forEach((x) => { if (x !== it) x.classList.remove('sel'); });
+      it.classList.add('sel');
+    });
+    // a video effect, double-clicked: on the selected clips (Premiere's way without a drag)
+    box.addEventListener('dblclick', (e) => {
+      const it = e.target.closest('.fxb-item[data-vfx]');
+      if (it && window.effects && typeof effects.vfxAdd === 'function') effects.vfxAdd(it.dataset.vfx, null, { reveal: true });
     });
     box.addEventListener('contextmenu', (e) => {
       const it = e.target.closest('.fxb-item');
-      if (!it) return;
+      if (!it || it.dataset.vfx) return;
       e.preventDefault();
       fxbin.sel = it.dataset.kind;
       paintFxBin();
@@ -1719,6 +1762,14 @@
     box.addEventListener('dragstart', (e) => {
       const it = e.target.closest && e.target.closest('.fxb-item');
       if (!it) return;
+      if (it.dataset.vfx) {                           // a video effect: onto a clip (effects.js)
+        e.dataTransfer.setData(VFX_MIME, JSON.stringify({ kind: it.dataset.vfx }));
+        e.dataTransfer.setData('text/plain', it.querySelector('.nm').textContent);
+        e.dataTransfer.effectAllowed = 'copy';
+        it.classList.add('dragging');
+        it.addEventListener('dragend', () => it.classList.remove('dragging'), { once: true });
+        return;
+      }
       const mime = (window.tl && tl.TRANS_MIME) || 'application/x-roughcut-transition';
       e.dataTransfer.setData(mime, JSON.stringify({ kind: it.dataset.kind }));
       e.dataTransfer.setData('text/plain', it.querySelector('.nm').textContent);

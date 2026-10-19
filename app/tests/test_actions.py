@@ -289,6 +289,55 @@ def test_keys_refusals(op, why):
 
 # ---------------------------------------------------------------- Lumetri
 
+def test_video_effects():
+    """Wave 14, VFX (verdict 10 punch 8): `effect` puts one of the Effects bin's video
+    effects on a shot — its first of that kind, added when it has none — in the panel's
+    own units, with keys, its fx toggle or Clear."""
+    op = accepted({"op": "effect", "id": "s1", "kind": "crop", "params": {"left": 10, "feather": 20}})
+    assert op == {"op": "effect", "id": "s1", "kind": "crop", "params": {"left": 10.0, "feather": 20.0}}
+    assert actions.describe(op, state()) == "Shot 1 (CLIP_A): add Crop — Left 10 %, Edge Feather 20 px"
+    op = accepted({"op": "effect", "id": "s2", "kind": "gaussian_blur", "params": {"dimensions": "vertical"},
+                   "keys": {"blurriness": [[0.01, 0], [1.5, 30]]}})
+    assert op["keys"] == {"blurriness": [[0.0, 0.0], [1.5, 30.0]]}      # on the frame grid
+    assert actions.describe(op, state()) == ("Shot 2 (CLIP_B): add Gaussian Blur — Vertical, "
+                                              "Blurriness keyframes 0 px → 30 px")
+    op = accepted({"op": "effect", "id": "s3", "kind": "transform", "params": {"posx": 1440, "scale": 50}, "on": False})
+    assert op["on"] is False and op["params"] == {"posx": 1440.0, "scale": 50.0}
+    # the second op meets the shot the first left: the Crop is there to change, then to clear
+    ok, bad = actions.validate([{"op": "effect", "id": "s1", "kind": "crop"},
+                                {"op": "effect", "id": "s1", "kind": "crop", "params": {"top": 5}},
+                                {"op": "effect", "id": "s1", "kind": "crop", "remove": True},
+                                {"op": "effect", "id": "s1", "kind": "crop", "remove": True}], state())
+    assert [o.get("remove", False) for o in ok] == [False, False, True] and len(bad) == 1
+    assert "has no Crop to clear" in bad[0]["why"]
+    seeded = state(segments=[{**state()["segments"][0],
+                              "controls": {"vfx": [{"id": "crop", "kind": "crop", "params": {"left": 5}}]}},
+                             *state()["segments"][1:]])
+    assert "has its Crop already" in refused({"op": "effect", "id": "s1", "kind": "crop"}, seeded)
+    assert actions.describe({"op": "effect", "id": "s1", "kind": "crop", "params": {"left": 20}}, seeded) \
+        == "Shot 1 (CLIP_A): Crop — Left 20 %"
+    assert "effect" in actions.FAMILIES["effect_controls"]
+    text = actions.schema_text()
+    for word in ("Transform › Crop", "Distort › Transform", "Blur & Sharpen › Gaussian Blur",
+                 "posx", "blurriness", "dimensions both|horizontal|vertical", '"remove"'):
+        assert word in text, word
+
+
+@pytest.mark.parametrize("op,why", [
+    ({"op": "effect", "id": "s1", "kind": "mosaic"}, "unknown video effect"),
+    ({"op": "effect", "id": "s1", "kind": "crop", "params": {"left": 120}}, "Crop Left is 0 to 100"),
+    ({"op": "effect", "id": "s1", "kind": "crop", "params": {"zoom": 1}}, "Crop has no 'zoom'"),
+    ({"op": "effect", "id": "s1", "kind": "gaussian_blur", "params": {"dimensions": "diagonal"}}, "one of both"),
+    ({"op": "effect", "id": "s1", "kind": "gaussian_blur", "keys": {"blurriness": [[9, 1]]}}, "outside the shot"),
+    ({"op": "effect", "id": "s1", "kind": "gaussian_blur", "keys": {"dimensions": [[0, 1]]}}, "no stopwatch"),
+    ({"op": "effect", "id": "zz", "kind": "crop"}, "not in the cut"),
+    ({"op": "effect", "id": "ov1", "kind": "crop"}, "apply to shots on V1"),
+])
+def test_video_effect_refusals(op, why):
+    st = state(overlays=[{"id": "ov1", "clip": "CLIP_C.MP4", "in": 0, "out": 1, "at": 0.5, "track": "V2"}])
+    assert why in refused(op, st)
+
+
 def test_curves_wheels_looks_and_match():
     c = accepted({"op": "curve", "id": "s1", "channel": "master",
                   "points": [[0, 0], [0.5, 0.6], [1, 1]]})
