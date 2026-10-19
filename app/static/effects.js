@@ -1729,12 +1729,55 @@
     });
     paintHead(box, seg, sp, now);
   }
-  /* the lanes' playhead: one style write per lane, only when it moved */
+  /* The lanes' playhead: one style write per lane, only when it moved. Each is a layer of its
+   * own (effects.css `will-change: transform`) moved by its transform, in px of the lane's
+   * width, so a step while playing is no layout and no paint of the panel (wave 15 PERF6,
+   * verdict 11 punch 3: moved by `left`, every ~15 Hz step relaid and repainted the panel on
+   * the main thread that hands the grade its frames). The lanes share one width (one
+   * column), told by a ResizeObserver on the first lane, whose callback runs after the layout
+   * and before the paint of the same frame: never read here, where the panel was usually just
+   * built (that read was a forced layout of the new panel inside fillShot, ~10 ms, and then a
+   * second one after the writes that follow it). `dataset.f` is where it is drawn, as a
+   * fraction of the shot. */
+  const laneSize = { lane: null, w: 0, ro: null, last: null };
+  function laneWidth(box) {
+    const lane = box.querySelector('.ec-lane');
+    if (!lane) return 0;
+    if (lane !== laneSize.lane) {
+      laneSize.lane = lane;
+      laneSize.w = 0;                            // told by the observer, in this frame
+      if (typeof ResizeObserver === 'undefined') laneSize.w = lane.clientWidth;
+      else {
+        if (!laneSize.ro) {
+          laneSize.ro = new ResizeObserver((es) => {
+            for (const e of es) {
+              if (e.target !== laneSize.lane) continue;
+              const w = e.target.clientWidth;    // laid out already: no forced layout
+              if (w === laneSize.w) continue;
+              laneSize.w = w;
+              const l = laneSize.last;
+              if (l && l.box.isConnected) paintHead(l.box, l.seg, l.sp, l.now);
+            }
+          });
+        }
+        laneSize.ro.disconnect();
+        laneSize.ro.observe(lane);
+      }
+    }
+    return laneSize.w;
+  }
   function paintHead(box, seg, sp, now) {
-    const left = sp && now != null && sp.dur ? `${(now / sp.dur) * 100}%` : '';
+    const f = sp && now != null && sp.dur ? Math.max(0, Math.min(1, now / sp.dur)) : null;
+    laneSize.last = { box, seg, sp, now };
+    const w = f == null ? 0 : laneWidth(box);
+    // (on the device-pixel grid, as `left` was painted: no line half in two columns)
+    const dpr = window.devicePixelRatio || 1;
+    const tr = f == null ? '' : `translateX(${Math.round(f * w * dpr) / dpr}px)`;
+    const fs = f == null ? '' : String(Math.round(f * 1e4) / 1e4);
     box.querySelectorAll('.ec-ph').forEach((ph) => {
-      if (ph.style.left !== left) ph.style.left = left;
-      ph.hidden = !left;
+      if (ph.style.transform !== tr) ph.style.transform = tr;
+      if (ph.dataset.f !== fs) ph.dataset.f = fs;
+      if (ph.hidden !== (f == null)) ph.hidden = f == null;
     });
   }
   /* The playhead moved (a tick of playback, a scrub, a cue): the monitor shows the keyed

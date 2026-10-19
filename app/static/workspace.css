@@ -283,6 +283,9 @@ body.ws-resizing.col { cursor: col-resize; } body.ws-resizing.row { cursor: row-
 .screen canvas#gradeCanvas { position: absolute; inset: 0; width: 100%; height: 100%;
                              display: none; object-fit: contain; z-index: 1; pointer-events: none; }
 .screen canvas#gradeCanvas.on { display: block; }
+/* the opaque grade canvas is up and has drawn (grade.js cover): the live buffer under it is
+   unseen, so the compositor neither converts nor draws it (it still plays and calls back) */
+.screen.rc-cover video.pvbuf.live { visibility: hidden; }
 .screen canvas#fxCanvas { position: absolute; inset: 0; width: 100%; height: 100%;
                           display: none; object-fit: contain; z-index: 3; pointer-events: none; }
 .screen canvas#fxCanvas.live { display: block; }
@@ -336,6 +339,8 @@ body.ws-resizing.col { cursor: col-resize; } body.ws-resizing.row { cursor: row-
 .transport .btns button:hover { background: var(--card-hi); }
 .transport .btns svg { width: 14px; height: 14px; display: block; margin: 0 auto; }
 .transport .pos { font-variant-numeric: tabular-nums; }
+/* its own size, fixed once as drawn (app.js boxReadout): a new timecode relays only it */
+.transport .tcl.rc-box { contain: size layout style; overflow: visible; }
 #playingWhat { margin-left: 8px; font-size: 11px; }
 /* Playback Resolution, Premiere's small menu beside the duration (grade.js) */
 #playRes { margin-right: 8px; padding: 0 2px; height: 20px; font-size: 11px; color: var(--dim);

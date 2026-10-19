@@ -101,8 +101,10 @@
 .ec-lane { position: relative; height: 18px; background: rgba(255,255,255,.035); border-left: 1px solid var(--line-hi);
            border-right: 1px solid var(--line-hi); cursor: pointer; touch-action: none; }
 .ec-anim.animated .ec-lane { background: rgba(74,157,248,.07); }
-.ec-ph { position: absolute; top: -3px; bottom: -3px; width: 1px; margin-left: -0.5px; background: #4a9df8;
-         pointer-events: none; }
+.ec-ph { position: absolute; top: -3px; bottom: -3px; left: 0; width: 1px; margin-left: -0.5px; background: #4a9df8;
+         pointer-events: none;
+         /* moved by its transform on a layer of its own (effects.js paintHead) */
+         will-change: transform; }
 .ec-ph[hidden] { display: none; }
 .ec-kf { position: absolute; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px; transform: rotate(45deg);
          background: var(--text); border: 1px solid #000; cursor: ew-resize; }

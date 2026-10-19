@@ -1438,8 +1438,21 @@ function showLive() {
   if (liveVideo() && liveVideo()._posterUp) { clearTimeout(restT); paintRestStill(); }
   // The grade follows the monitor (INTAKE M10): the live video's shot picks the LUT.
   const g = gradeApi();
-  if (g) g.setShot(segs[player.idx] ? segs[player.idx].id : null);
+  const id = segs[player.idx] ? segs[player.idx].id : null;
+  const lv = liveVideo();
+  // (wave 15 PERF6, verdict 11 punch 3) The same shot on the same buffer, its LUT in (a play
+  // from where the monitor is parked, a resume): the canvas has its frame and follows that
+  // buffer's frames already. setShot's draw there was the parked frame again, at full size,
+  // as the play's first frames came: 70-100 ms of the grade worker's and the GL's time at
+  // the play's start (traced: a 34 ms draw and a 39 ms read-back 3 ms after the Space), the
+  // perf test's first canvas hole of a play (made -> got 39-43 ms at 90-160 ms in).
+  const same = id != null && id === shownShot.id && lv === shownShot.v
+    && g && g.shot === String(id) && !!g.lut;
+  shownShot.id = id;
+  shownShot.v = lv;
+  if (g && !same) g.setShot(id);
 }
+const shownShot = { id: null, v: null };   // what showLive last gave the grade
 
 /* The monitor sits at the top of the column. When the shot list ran a long way below
  * it, clicking shot 12's poster on the Killington cut started playback 3,163 px above
@@ -1986,7 +1999,10 @@ function pauseCut() {
   progPause();
   screenMsg('');       // callers that have something to say set it after this
   paintTransport();
+  // Effect Controls catches up on the shot the playback moved to (advance's settle)
+  if (inspectorBehind) { inspectorBehind = false; renderInspector(); }
 }
+let inspectorBehind = false;        // the selection moved while playing; the panel waits (advance)
 
 /* The Program monitor shows the sequence, not only V1 (verdict 3 punch 4): what the
  * export composites, the monitor draws. Two followers ride beside the pv0/pv1 pair and
@@ -2970,8 +2986,14 @@ function advance() {
   player.cur = player.vids.indexOf(bufFor(nseg));
   player.idx = next;
   sel = next;
-  tl.syncSel();                 // paint()'s first half; the inspector waits (below)
   const nv = liveVideo();
+  // The timeline's selection follows two frames into the new shot (paint()'s first half; the
+  // inspector waits for the monitor to stop, below). Wave 15 PERF6 (verdict 11 punch 3 + 9): at
+  // the cut it was 2.5-7 ms of the cut's 3.5-10 ms tick at load 0-2 (the selection's listeners:
+  // the FX tool's rebuild and price fetch, the AI prompt's scope chip, which measures its words),
+  // in the frame whose callbacks give the grade the new shot's first frame. The block that plays
+  // is highlighted AT the cut (below); the selection's outline comes 1-2 frames after it.
+  afterFirstFrames(nv, () => { if (g === player.gen || !player.playing) tl.syncSel(); }, 2);
   // Prerolled for this cut (see preroll): it is playing, near its in-point; keep it so.
   const rolled = !!nv._roll && nv._roll.gen === g - 1 && nv._roll.seg === segs[next] && !nv.paused;
   const parked = nv._for === nseg;
@@ -3048,7 +3070,13 @@ function advance() {
   // the preroll of the shot after it.
   const settle = () => {
     if (g !== player.gen && player.playing) return;           // a later cut settles its own
-    renderInspector();
+    // (wave 15 PERF6, verdict 11 punch 3 + 9) While the monitor plays, Effect Controls keeps
+    // the shot it shows and catches up when it stops (pauseCut), as Premiere's does not follow
+    // playback at all: its rebuild for the new shot was 5-28 ms of script while playing (and its
+    // frame's style, layout and paint of the new panel, ~6 ms more at load 2), on the thread
+    // that hands the grade its frames: moved later in the shot it was still a lost canvas frame
+    // (a 53-57 ms long frame there, the perf test at load 9-11).
+    if (player.playing) inspectorBehind = true; else renderInspector();
     afterFirstFrames(nv, () => tl.render(), 1);
   };
   if (short) setTimeout(settle, (tl.dur(nseg) + 0.1) * 1000);
@@ -3195,13 +3223,24 @@ function restSoon() {
 }
 
 function paintTransport() {
-  $('#playCut').textContent = player.playing ? '❚❚ Pause' : '▶ Play';
+  const pc = $('#playCut'), pw = $('#playingWhat');
+  const play = player.playing ? '❚❚ Pause' : '▶ Play';
+  if (pc.textContent !== play) pc.textContent = play;
   paintRest();
   const seg = segs[player.idx];
   // the clip by the name the editor reads (a generated clip: "Black Video", verdict 10)
-  $('#playingWhat').textContent = seg
+  const what = seg
     ? `${player.idx + 1}/${segs.length} · ${clipLabel(seg.clip)}${player.single ? ' · this shot only' : ''}`
     : '';
+  // (written only when it changes: a cut calls this, and a new text node is a child-list
+  // change the board's `:has()` rules re-match on, in the cut's own frame)
+  if (pw.textContent !== what) pw.textContent = what;
+  // While the Program plays, the board's own fades (the trim handles' grips, which follow
+  // the selection the playback moves at every cut) are instant (timeline.css
+  // `.rc-playing`): each was a composited opacity animation, and starting one at a cut
+  // re-layered the Timeline and redrew its whole panel in software, 16-58 ms of the display
+  // compositor's frames in the cut's first 150 ms (wave 15 PERF6, traced at 1920).
+  document.body.classList.toggle('rc-playing', !!player.playing);
 }
 
 /* The playhead is the timeline's, in film time (the strip used to carry it as a
@@ -3239,12 +3278,28 @@ function paintPos(filmT, clipT, seg) {
   tl.setPlayhead(filmT, { reveal, quiet });
   posQuiet = quiet;
   const s = tcOf(filmT), el = $('#pos');
+  if (!posBoxed) posBoxed = boxReadout(el);
   if (el.textContent !== s) {
     // the text node's data in place, not a new node (a child-list change; timeline.js setText)
     const tn = el.firstChild;
     if (tn && tn.nodeType === 3 && !tn.nextSibling) tn.data = s; else el.textContent = s;
   }
 }
+/* (wave 15 PERF6, verdict 11 punch 3) The Program's timecode is a box of its own size,
+ * measured once as drawn (a timecode in tabular figures is as wide whatever it reads), with
+ * size and layout containment (workspace.css `.rc-box`): written on every played frame, it
+ * relays only itself, not the transport row and the board's layout around it. */
+function boxReadout(el) {
+  const box = el && el.parentElement;
+  if (!box) return false;
+  const r = box.getBoundingClientRect();
+  if (!(r.width > 0 && r.height > 0)) return false;   // not laid out yet: the next frame
+  box.style.width = `${r.width}px`;
+  box.style.height = `${r.height}px`;
+  box.classList.add('rc-box');
+  return true;
+}
+let posBoxed = false;
 let posReveal = 0;
 let posFrame = -1;
 let posQuiet = false;               // the drawn playhead is a frame behind its time (paintPos)

@@ -312,15 +312,30 @@ def test_a_large_open_ended_range_is_never_read_whole(client, tmp_path):
     assert peak < 6 * server.RANGE_CHUNK, \
         f"{peak / 1e6:.1f} MB to take 2 MB off the front of a {size / 1e6:.0f} MB file"
 
-    # end to end, the bytes still have to be right
+    # end to end, the bytes still have to be right. A proxy's open-ended range is answered
+    # RANGE_CAP at a time (wave 15 PERF6: a <video> asks again from where an answer ends, and
+    # Chrome hands each whole answer's body to the page's main thread): the file, read the way
+    # the element reads it, range after range, is the file
     shutil.copy(big, Path(server.STATE["proxy_dir"]) / "BIG.bin")
     try:
         r = client.get("/media/proxy/BIG.bin", headers={"Range": "bytes=0-"})
-        assert r.status_code == 206 and len(r.content) == size
-        assert r.content == big.read_bytes()
+        assert r.status_code == 206 and len(r.content) == server.RANGE_CAP
+        assert r.headers["content-range"] == f"bytes 0-{server.RANGE_CAP - 1}/{size}"
+        got, at = [], 0
+        while at < size:
+            part = client.get("/media/proxy/BIG.bin", headers={"Range": f"bytes={at}-"})
+            assert part.status_code == 206, part.status_code
+            first, last = map(int, part.headers["content-range"].split()[1].split("/")[0].split("-"))
+            assert first == at and last - first + 1 == len(part.content) <= server.RANGE_CAP
+            got.append(part.content)
+            at = last + 1
+        assert b"".join(got) == big.read_bytes()
         tail = client.get("/media/proxy/BIG.bin",
                           headers={"Range": f"bytes={size - 3}-"})
         assert tail.content == bytes([(size >> 20) - 1]) * 3
+        # an explicit range is answered as asked, past the cap too
+        mid = client.get("/media/proxy/BIG.bin", headers={"Range": f"bytes=0-{3 << 20}"})
+        assert len(mid.content) == (3 << 20) + 1
     finally:
         (Path(server.STATE["proxy_dir"]) / "BIG.bin").unlink(missing_ok=True)
 

@@ -933,7 +933,7 @@ onmessage = (e) => {
     G.drawnAt = performance.now();
     G.drawNo++;
     if (G.worker) { toWorker(j); return; }
-    if (drawOn(G.R, j)) G.draws++;
+    if (drawOn(G.R, j)) { G.draws++; drewOn(); }
   }
 
   /* The frame to the worker: a VideoFrame of the live video (a reference to the decoded
@@ -1009,6 +1009,7 @@ onmessage = (e) => {
       }
       if (m.ok) {
         G.draws++;
+        drewOn();
         const r1 = (x) => Math.round(x * 10) / 10;
         G.drawLog.push({ t: r1(m.at - performance.timeOrigin), ts: m.ts, ms: r1(m.ms), yuv: !!m.yuv,
                          made: r1(m.made || 0), sent: r1(m.sent || 0), got: r1(m.got - performance.timeOrigin),
@@ -1246,9 +1247,30 @@ onmessage = (e) => {
     if (!G.canvas) return;
     const was = G.canvas.classList.contains('on');
     G.canvas.classList.toggle('on', !!on);
+    // the live buffer under it is unseen once the canvas has drawn (cover); off: seen at once
+    if (!on) cover(false);
+    else if (!was) G.coverPending = true;
     // a transition's layer is the page's while the canvas is off, the canvas's while it
     // is on (setMix): the page is told when that flips under it (a cut's LUT landing)
     if (was !== !!on && G.mix && typeof G.mix.onChange === 'function') setTimeout(G.mix.onChange, 0);
+  }
+
+  /* (wave 15 PERF6, verdict 11 punch 3 + 9) The canvas is opaque and covers the picture: while
+   * it is up and has drawn, the live <video> under it is unseen (workspace.css `.rc-cover`,
+   * by visibility: it still plays, calls back and gives the grade its VideoFrames, as a
+   * dissolve's hidden followers do). Under the canvas the software compositor still converted
+   * and drew that video every frame, and on a shot with a rotation or an opacity from Effect
+   * Controls each of the two pictures was a render surface of its own: Killington's dissolve
+   * into its rotated shot, 7.8 ms a frame of the display compositor for the Program alone;
+   * covered, the compositor's busy share of a play went from 36-37 % to 27-32 % (traced, load
+   * 0.5-0.7). Off (ungraded, the grade disabled, no renderer): at once. */
+  function cover(on) {
+    if (!on) G.coverPending = false;
+    const scr = G.canvas && G.canvas.closest('.screen');
+    if (scr && scr.classList.contains('rc-cover') !== !!on) scr.classList.toggle('rc-cover', !!on);
+  }
+  function drewOn() {
+    if (G.coverPending && G.canvas && G.canvas.classList.contains('on')) { G.coverPending = false; cover(true); }
   }
 
   /* Whether the canvas should be visible right now, and make it so. */
