@@ -7762,6 +7762,17 @@ def api_render_status(job: str) -> JSONResponse:
 
 
 RANGE_CHUNK = 1 << 20            # 1 MiB
+# (wave 15 PERF6, verdict 11 punch 3) An open-ended range of a proxy (`bytes=N-`, what a
+# <video> sends) is answered with at most RANGE_CAP bytes; the element asks again from where
+# that ends. A Program buffer parked on its shot asks for the rest of its file at its first
+# play() (the next cut's preroll), and Chrome hands a <video>'s response body to the page's
+# main thread: whole, 5-6 MB on localhost came in ~30 ms as 18-20 ms of main-thread tasks,
+# and the answer's end (ResponseBodyLoader::DidFinishLoadingBody) was one task of ~1.7 ms a
+# MB, 9-10 ms, in the frames where that thread gives the grade its frames (traced: the perf
+# test's 1440 play 0.7-0.9 s in, a 68-71 ms long animation frame with no script, an 83-85 ms
+# hold). At 1 MiB an answer, no task of it is over ~2 ms. A shot's first frames (a GOP of a
+# Killington proxy is ~0.2 MB) are inside one answer.
+RANGE_CAP = 1 << 20
 
 
 def iter_range(path: Path, start: int, end: int, chunk: int = RANGE_CHUNK):
@@ -7803,8 +7814,10 @@ def parse_range(rng: str, size: int) -> tuple[int, int] | None:
     return (start, end) if start <= end else None
 
 
-def ranged_file(path: Path, request: Request, mime: str | None = None) -> Response:
-    """Serve a file with byte-range support.
+def ranged_file(path: Path, request: Request, mime: str | None = None,
+                cap: int | None = None) -> Response:
+    """Serve a file with byte-range support (`cap`: an open-ended range is answered with
+    at most that many bytes — RANGE_CAP, the Program's proxies).
 
     Required, not a nicety: without a 206 path the <video> element cannot seek, so
     every segment preview would have to stream from the start of the clip.
@@ -7824,6 +7837,8 @@ def ranged_file(path: Path, request: Request, mime: str | None = None) -> Respon
         return FileResponse(path, media_type=mime,
                             headers={"accept-ranges": "bytes"})
     start, end = span
+    if cap and re.fullmatch(r"\s*bytes=\s*\d+\s*-\s*", rng):
+        end = min(end, start + cap - 1)               # open-ended: the element asks again
     return StreamingResponse(
         iter_range(path, start, end), status_code=206, media_type=mime, headers={
             "content-range": f"bytes {start}-{end}/{size}",
@@ -7860,7 +7875,7 @@ def media_proxy(name: str, request: Request) -> Response:
     until it lands (as Premiere plays past offline media)."""
     path = STATE["proxy_dir"] / Path(name).name
     if path.exists():
-        return ranged_file(path, request)
+        return ranged_file(path, request, cap=RANGE_CAP)
     stem = Path(name).stem
     clip = clip_for_stem(stem) if Path(name).suffix.lower() == ".mp4" else None
     if clip is None:
@@ -7868,7 +7883,7 @@ def media_proxy(name: str, request: Request) -> Response:
     want_media(stem)
     kind, url = media_fallback(clip, wait_s=PROXY_ANSWER_S)
     if kind == "proxy":
-        return ranged_file(path, request)
+        return ranged_file(path, request, cap=RANGE_CAP)
     if url:
         return Response(status_code=307, headers={
             "location": url, "cache-control": "no-store", "x-roughcut-media": kind})
