@@ -704,11 +704,44 @@ def capture_time(clip: str) -> float | None:
     return when
 
 
+# Parsed sidecars, kept per file version (wave 14). The board's polls, the price of an
+# ask, the picks and every model call's inventory re-read every clip's sidecars: on
+# Killington 52-85 JSON files a call (5 MB, ~70 ms of json.loads, each holding the GIL
+# while it parses), the bulk of /api/project, /api/picks and /api/assist/price — 0.4-0.8 s
+# under load in verdicts 9 and 10. A file whose mtime, size and inode are unchanged is
+# not parsed again: its value is kept as marshal bytes and each caller gets its own copy
+# (4× faster than parsing: 54 → 12 ms over those 66 files), so no caller can change
+# what another reads.
+_JSON_FILES: dict[str, tuple[tuple, bytes]] = {}
+JSON_FILES_KEEP = 512
+
+
+def read_json_file(p: Path):
+    """`json.loads(p.read_text())` for a file this process may have parsed before;
+    raises as that would (OSError, ValueError)."""
+    import marshal
+    key = str(p)
+    st = os.stat(key)
+    sig = (st.st_mtime_ns, st.st_size, st.st_ino)
+    hit = _JSON_FILES.get(key)
+    if hit is not None and hit[0] == sig:
+        return marshal.loads(hit[1])
+    obj = json.loads(Path(key).read_text(encoding="utf-8"))
+    try:
+        blob = marshal.dumps(obj)
+    except ValueError:
+        return obj
+    if len(_JSON_FILES) >= JSON_FILES_KEEP:
+        _JSON_FILES.pop(next(iter(_JSON_FILES)), None)
+    _JSON_FILES[key] = (sig, blob)
+    return obj
+
+
 def load_sidecar(clip: str) -> dict:
     p: Path = STATE["sidecars"] / f"{Path(clip).stem}.audio.json"
     if not p.exists():
         return {}
-    return json.loads(p.read_text(encoding="utf-8"))
+    return read_json_file(p)
 
 
 def load_visual(clip: str) -> dict:
@@ -723,7 +756,7 @@ def load_visual(clip: str) -> dict:
     deep = deepmod.load(STATE["visual"], stem)
     if not p.exists() and not deep:
         return {}
-    d = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    d = read_json_file(p) if p.exists() else {}
     fine = load_fine(stem)
     # The close look replaces the coarse account of the same seconds rather than
     # joining it. An inventory that still lists a backflip the 1s read found to be a
@@ -738,7 +771,7 @@ def load_fine(stem: str) -> dict:
     p: Path = STATE["visual"] / f"{stem}.fine.json"
     if not p.exists():
         return {}
-    return json.loads(p.read_text(encoding="utf-8"))
+    return read_json_file(p)
 
 
 def visual_stems() -> set[str]:
@@ -973,7 +1006,7 @@ def project_payload() -> dict:
     # Every clip with a sidecar is offered, not just the ones already used — adding a
     # shot you forgot is as much a part of fine-tuning as trimming one you have.
     for p in sorted(STATE["sidecars"].glob("*.audio.json")):
-        d = json.loads(p.read_text(encoding="utf-8"))
+        d = read_json_file(p)
         clip = d["clip"]
         rate = clip_rate(clip)
         clips[clip] = {
@@ -5562,7 +5595,7 @@ def load_telemetry(clip: str) -> dict | None:
     if not p.exists():
         return None
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        return read_json_file(p)
     except (ValueError, OSError):
         return None
 
