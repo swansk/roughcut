@@ -34,13 +34,17 @@ and measures, inside the page:
            player parks both files after the short shot before it plays: three buffers); the
            longest gap between frames the LIVE buffer presented (the parked buffer's seek
            frames are not on screen and do not count), ≤ 67 ms (two frame periods at
-           29.97); and on every animation frame, that the live buffer has a picture and
-           no "buffering…" / wait line is on the Program
+           29.97) by the frame callbacks' `now` and by their `expectedDisplayTime`, both
+           (wave 15); and on every animation frame, that the live buffer has a picture
+           and no "buffering…" / wait line is on the Program
   canvas   the same play's GRADED canvas (verdict 8 punch 2: on a coloured shot the
            canvas over the buffers is the picture, and the buffers' frames said nothing
            about it): `grade.draws` sampled on every animation frame, the longest time
            between two draws while the canvas is on (and after the last one), <= 67 ms,
-           on a 1440 board and again on a 1920 one; its draw rate beside it
+           on a 1440 board and again on a 1920 one; its draw rate beside it. Asserted by
+           the animation frames' own clock (rAF's timestamp) AND by the grade worker's
+           (`grade.drawLog`, when each frame was drawn), both (wave 15, verdict 11 punch
+           3); the page-callback clock is in the record only
   seek     `tl.seek(t)` → the live buffer presents the frame at t, six seeks inside a
            shot, into the next, onto the other clip and back: median ≤ 250 ms, max ≤ 400
   set      `effects.set(k, v)` → the second animation frame after it
@@ -242,7 +246,10 @@ def measure_play(page) -> dict:
       window.__fl0 = t0;
       player.vids.forEach((v) => {
         const cb = (now, md) => {
+          // `now` (vsync-aligned) and `expectedDisplayTime` (when the compositor expects to
+          // show the frame): both stand for the screen, so both are asserted (wave 15)
           window.__fl.push({ t: now - t0, v: v.id, live: v.classList.contains('live'),
+                             ed: md.expectedDisplayTime != null ? md.expectedDisplayTime - t0 : null,
                              mt: md.mediaTime, dropped: v.getVideoPlaybackQuality
                                ? v.getVideoPlaybackQuality().droppedVideoFrames : null });
           if (window.__flOn) v.requestVideoFrameCallback(cb);
@@ -295,24 +302,32 @@ def measure_play(page) -> dict:
     page.evaluate("window.__flOn = false")
     log = page.evaluate("window.__fl")
     screen = page.evaluate("window.__scr")
-    canvas = canvas_gaps(page.evaluate("window.__cv"))
-    # (wave 13 CANVAS2, a record only, nothing asserted on it) the same play's draws by the
-    # worker's own clock (`grade.drawLog`: when each graded frame was drawn, before its
-    # commit), so a hole the page counted late can be told from one the worker drew late
-    # and the same samples on the animation frames' own clock (the frame time rAF passes,
-    # as the live buffer's gaps above use the frame callbacks' `now`), not the moment each
-    # callback happened to run
+    samples = page.evaluate("window.__cv")
+    # The graded canvas by three clocks (wave 15, verdict 11 punch 3; REDESIGN-GOAL rubric log
+    # 2026-10-19). The page clock (performance.now() inside each animation-frame callback) is
+    # kept as a record: it adds the callback's own jitter (a 4-vsync hold, 66.7 ms, read
+    # 68.6-77.9 ms by it). ASSERTED, both: the animation frames' own clock (the frame time rAF
+    # passes, as the live buffer's gaps use the frame callbacks' `now`), and the worker's
+    # (`grade.drawLog`: when each graded frame was drawn, before its commit), so a hole the
+    # page saw late and one the worker drew late both count.
+    canvas = canvas_gaps(samples)
     canvas["frame_clock"] = {k: v for k, v in canvas_gaps(
-        [dict(c, t=c["ft"]) for c in page.evaluate("window.__cv")]).items()
-        if k in ("longest_ms", "holes_over")}
+        [dict(c, t=c["ft"]) for c in samples]).items()
+        if k in ("longest_ms", "longest_at_ms", "holes_over")}
     canvas["worker"] = worker_gaps(page.evaluate(
         "(() => { const t0 = window.__fl0, cv = window.__cv, p = cv.filter((s) => s.playing);"
         " if (!p.length || !window.grade) return null;"
         " const a = t0 + p[0].t, b = t0 + p[p.length - 1].t;"
-        " return grade.drawLog.filter((d) => d.t >= a && d.t <= b).map((d) => d.t); })()"))
+        " const r = (x) => Math.round((x - t0) * 10) / 10;"
+        " return { end: b - t0, log: grade.drawLog.filter((d) => d.t >= a && d.t <= b).map((d) =>"
+        " ({ t: r(d.t), made: r(d.made), sent: r(d.sent), got: r(d.got), start: r(d.start), ms: d.ms,"
+        " skipped: d.skipped })) }; })()"))
     live = [f for f in log if f["live"]]
     live.sort(key=lambda f: f["t"])
     gaps = [(live[i]["t"] - live[i - 1]["t"], live[i - 1], live[i]) for i in range(1, len(live))]
+    # the same frames by when the compositor expected to show each one
+    eds = sorted(f["ed"] for f in live if f.get("ed") is not None)
+    ed_gaps = [b - a for a, b in zip(eds, eds[1:])]
     worst = max(gaps, key=lambda g: g[0]) if gaps else (None, None, None)
     switches = [g for g in gaps if g[1]["v"] != g[2]["v"]]
     span = (live[-1]["t"] - live[0]["t"]) if len(live) > 1 else 0
@@ -321,6 +336,9 @@ def measure_play(page) -> dict:
         "frames": len(live),
         "fps": round((len(live) - 1) / (span / 1000), 1) if span else 0,
         "longest_gap_ms": round(worst[0], 1) if worst[0] is not None else None,
+        # the live buffer by rVFC's expectedDisplayTime (asserted with `now`'s, wave 15)
+        "longest_gap_expected_ms": round(max(ed_gaps), 1) if ed_gaps else None,
+        "expected_frames": len(eds),
         "longest_at": [worst[1] and worst[1]["v"], worst[2] and worst[2]["v"],
                        worst[1] and round(worst[1]["t"]), worst[1] and worst[1]["mt"]],
         # (wave 13 CANVAS2, a record) the media time across that gap: ~33 ms, the frame came
@@ -370,14 +388,26 @@ def canvas_gaps(samples: list[dict]) -> dict:
             "on": on}
 
 
-def worker_gaps(ts: list[float] | None) -> dict | None:
-    """The longest time between two graded draws by the worker's clock, and how many over
-    the limit (a record beside canvas_gaps' page-side numbers; not asserted)."""
-    if not ts or len(ts) < 2:
+def worker_gaps(rec: dict | None) -> dict | None:
+    """The graded canvas by the worker's clock (`rec`: the play's draws, `log`, each with `t`
+    when the worker finished it, and the play's last animation frame, `end`, all ms from the
+    arm): the longest time between two draws, and from the last one to the end of the play,
+    as canvas_gaps counts its own; how many over the limit. Asserted (wave 15). None when the
+    worker drew fewer than two frames in the play (the test then fails on it). `hole` (a
+    record): the draw that ended the longest gap, decomposed — when the page made its frame
+    (`made`), posted it, the worker got it, began and finished it, and how many newer frames
+    had replaced a waiting one (`skipped`) — so a hole the page posted late can be told from
+    one the worker drew late."""
+    log = sorted((rec or {}).get("log") or [], key=lambda d: d["t"])
+    if len(log) < 2:
         return None
-    g = [b - a for a, b in zip(ts, ts[1:])]
-    return {"longest_ms": round(max(g), 1), "holes_over": len([x for x in g if x > GAP_LIMIT_MS]),
-            "draws": len(ts)}
+    ts = [d["t"] for d in log]
+    edges = ts + ([rec["end"]] if rec.get("end") is not None and rec["end"] > ts[-1] else [])
+    g = [(edges[i] - edges[i - 1], i) for i in range(1, len(edges))]
+    worst, i = max(g)
+    return {"longest_ms": round(worst, 1), "longest_at_ms": round(edges[i - 1]),
+            "holes_over": len([x for x, _ in g if x > GAP_LIMIT_MS]), "draws": len(ts),
+            "hole": log[i] if i < len(log) else {"end": rec["end"]}}
 
 
 def measure_seeks(page) -> list[float]:
@@ -614,12 +644,21 @@ def test_latency_under_load(perf_record, live_server):
     assert all(c.get("parked") for c in play["cut_log"]), play["cut_log"]
     assert len({c.get("buf") for c in play["cut_log"]}) == 2, play["cut_log"]
     assert play["longest_gap_ms"] <= GAP_LIMIT_MS, f"frame gap across the two cuts: {play}"
-    # verdict 8 punch 2: on a graded shot the canvas is the picture; it holds no longer,
-    # on a 1440 and a 1920 board
+    # wave 15 (rubric log 2026-10-19): the live buffer by expectedDisplayTime as well as `now`
+    assert play["longest_gap_expected_ms"] is not None \
+        and play["longest_gap_expected_ms"] <= GAP_LIMIT_MS, \
+        f"frame gap across the two cuts by expectedDisplayTime: {play}"
+    # verdict 8 punch 2: on a graded shot the canvas is the picture; it holds no longer, on
+    # a 1440 and a 1920 board. Wave 15 (verdict 11 punch 3): by the animation frames' own
+    # clock AND the worker's, both (a hold counts if either clock that stands for the
+    # screen shows it); the page-callback clock stays in the record.
     for size, cv in facts["canvas"].items():
         assert cv["on"], f"the grade canvas went off while the graded shots played ({size}): {cv}"
-        assert cv["longest_ms"] is not None and cv["longest_ms"] <= GAP_LIMIT_MS, \
-            f"the graded canvas held across the two cuts ({size}): {cv}"
+        fc, wk = cv.get("frame_clock") or {}, cv.get("worker") or {}
+        assert fc.get("longest_ms") is not None and fc["longest_ms"] <= GAP_LIMIT_MS, \
+            f"the graded canvas held across the two cuts by the frame clock ({size}): {cv}"
+        assert wk.get("longest_ms") is not None and wk["longest_ms"] <= GAP_LIMIT_MS, \
+            f"the graded canvas held across the two cuts by the worker's clock ({size}): {cv}"
     # Premiere's Playback Resolution: smaller while playing, the monitor's full size parked
     if play.get("canvas_w_play") is not None:
         assert play["canvas_w_play"] <= 640, play["canvas_w_play"]
@@ -710,8 +749,8 @@ def test_the_grade_draws_in_a_worker_shows_what_probe_reads_and_prefetches(live_
 # setup, just before the burners (`load_pre`, and `shared`: above 2x the cores there),
 # when the burners started, when they stopped and at teardown, the burners and every
 # measured number. tools/gate.py runs the test alone before the suite and after it, counts
-# the better-conditioned of the two (wave 10), names a skip and marks the suite amber for
-# it. ROUGHCUT_PERF_FORCE_SKIP=1 skips it on purpose (the only skip left), so the gate's
+# both (wave 15; wave 10 counted the better-conditioned of the two), names a skip and marks
+# the suite amber for it. ROUGHCUT_PERF_FORCE_SKIP=1 skips it on purpose (the only skip left), so the gate's
 # amber path can be shown on demand.
 
 def _write_perf_json(rec: dict) -> None:

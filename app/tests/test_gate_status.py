@@ -4,12 +4,14 @@ Verdict 7 punch 3: on a box shared with other loops (load ~14 on 6 cores) the pe
 skipped, the gate stayed AMBER and could never go green. Now the test runs there with 0
 burners and the gate decides from its records:
 
-  * the perf test runs alone before the suite and after it; the better-conditioned run
-    that measured (the lower load before the test added anything, read by the test after
-    its fixture's encodes drained) counts, ties to the earlier one, and the line says which
+  * the perf test runs alone before the suite and after it; wave 15 (verdict 11 punch 3):
+    BOTH runs count (wave 10 counted the better-conditioned one, and a GREEN gate depended
+    on which of the two it was), each judged on the load the test read before it added
+    anything (after its fixture's encodes drained); the line names each run
   * a pass is green wherever it ran; above 2x the cores the line says "shared box"
-  * a fail above 2x the cores is AMBER and named; at or below 2x it is RED
-  * nothing measured (ROUGHCUT_PERF_FORCE_SKIP=1, or no record) is AMBER
+  * a fail above 2x the cores is AMBER and named; at or below 2x it is RED, whatever the
+    other run did
+  * a run that measured nothing (ROUGHCUT_PERF_FORCE_SKIP=1, or no record) is AMBER
   * the run is GREEN only when every check is green and none amber
   * a journey step that passed only on its retry after a Chromium crash is AMBER (verdict 10)
 """
@@ -54,8 +56,9 @@ def verdict(before, after):
 def test_a_pass_on_a_shared_box_is_green_and_says_the_load():
     ok, amber, line = verdict(rec("passed", 14.2, launch=14.6), rec("passed", 15.1, launch=15.3))
     assert ok and not amber, line
-    assert "passed at load 14.2 with 0 burners (shared box" in line, line
-    assert "counted: before the suite (the better-conditioned run)" in line, line
+    assert "before the suite: passed at load 14.2 with 0 burners (shared box" in line, line
+    assert "after the suite: passed at load 15.1" in line, line
+    assert "every run counts" in line and "every run passed" in line, line
     assert "worst gap 50.1 ms" in line and "seek median 92 ms" in line, line
 
 
@@ -64,7 +67,7 @@ def test_a_fail_on_a_shared_box_is_amber_and_named_not_red():
                               rec("failed", 15.0, launch=15.2, gap=210.0))
     assert ok and amber, line
     assert "FAILED at load 14.2" in line and "shared box" in line, line
-    assert "AMBER: it failed on a shared box" in line, line
+    assert "AMBER: before the suite and after the suite failed on a shared box" in line, line
 
 
 def test_a_fail_at_or_below_twice_the_cores_is_red():
@@ -74,24 +77,30 @@ def test_a_fail_at_or_below_twice_the_cores_is_red():
         assert "shared box" not in line, line
 
 
-def test_the_better_conditioned_run_counts_even_when_it_failed():
-    # a fail at the quieter moment is not rescued by a pass at a busier one
-    ok, amber, line = verdict(rec("passed", 14.5, launch=14.5), rec("failed", 9.0, launch=9.2))
-    assert not ok and not amber, line
-    assert "counted: after the suite" in line, line
-    assert "before the suite: passed at load 14.5" in line, line
+def test_every_run_counts_a_fail_is_not_rescued_by_a_pass():
+    # wave 15 (verdict 11 punch 3): the gate's before run failed at 7.5 and its after run
+    # passed at 5.8, and the after run (better conditioned) counted: GREEN. Now RED, either way.
+    for before, after, who in [(rec("failed", 7.5, launch=7.4, gap=68.6), rec("passed", 5.8, launch=5.6), "before"),
+                               (rec("passed", 5.8, launch=5.6), rec("failed", 7.5, launch=7.4, gap=68.6), "after"),
+                               (rec("passed", 14.5, launch=14.5), rec("failed", 9.0, launch=9.2), "after")]:
+        ok, amber, line = verdict(before, after)
+        assert not ok and not amber, line
+        assert f"RED: {who} the suite failed at or below 2× the cores" in line, line
+        assert "before the suite: " in line and "after the suite: " in line, line
 
 
-def test_a_pass_at_the_quieter_moment_beats_a_shared_fail():
-    ok, amber, line = verdict(rec("failed", 15.0, launch=15.0, gap=150.0), rec("passed", 11.0, launch=11.4))
-    assert ok and not amber, line
-    assert "counted: after the suite" in line and "passed at load 11.0" in line, line
+def test_a_shared_fail_is_not_rescued_by_a_pass_either():
+    # wave 10 counted the quieter run's pass: GREEN. It is AMBER now: one run is not a pass.
+    for before, after in [(rec("failed", 15.0, launch=15.0, gap=150.0), rec("passed", 11.0, launch=11.4)),
+                          (rec("passed", 13.0, launch=13.0), rec("failed", 13.0, launch=13.0))]:
+        ok, amber, line = verdict(before, after)
+        assert ok and amber, line
+        assert "failed on a shared box" in line and "→ the suite is AMBER" in line, line
 
 
-def test_a_tie_counts_the_earlier_run():
-    ok, amber, line = verdict(rec("passed", 13.0, launch=13.0), rec("failed", 13.0, launch=13.0))
-    assert ok and not amber, line
-    assert "counted: before the suite" in line, line
+def test_two_passes_are_green():
+    ok, amber, line = verdict(rec("passed", 7.5, launch=7.4), rec("passed", 5.8, launch=5.6))
+    assert ok and not amber and "every run passed" in line, line
 
 
 def test_the_box_reads_from_the_test_s_own_settled_reading_else_the_gates():
@@ -112,8 +121,9 @@ def test_a_skip_or_no_record_is_amber_never_green():
         ok, amber, line = verdict(before, after)
         assert ok and amber, line
         assert "AMBER: a skipped perf test is not a pass" in line, line
+    # one run that measured nothing is not a pass, beside a pass (wave 15: every run counts)
     ok, amber, line = verdict(skipped(), rec("passed", 8.0, launch=8.0))
-    assert ok and not amber and "the only run that measured" in line, line
+    assert ok and amber and "before the suite measured nothing" in line, line
 
 
 def test_an_older_revs_skip_record_still_reads():
@@ -150,6 +160,13 @@ def test_the_perf_line_names_the_graded_canvas():
     assert "graded canvas worst gap 50.2 ms at 29.6 fps (1440), 60.1 ms at 29.9 fps (1920)" \
         in gate.perf_said(r, CORES), gate.perf_said(r, CORES)
     assert "graded canvas not measured" in gate.perf_said(rec("passed", 8.0), CORES)
+    # wave 15: the clocks the test asserts are on the line too
+    r["facts"]["canvas"]["1440"].update(frame_clock={"longest_ms": 50.0}, worker={"longest_ms": 57.5})
+    r["facts"]["canvas"]["1920"].update(frame_clock={"longest_ms": 66.7}, worker={"longest_ms": 78.4})
+    r["facts"]["play"]["longest_gap_expected_ms"] = 66.6
+    said = gate.perf_said(r, CORES)
+    assert "by frame/worker clock 50.0/57.5 ms (1440), 66.7/78.4 ms (1920)" in said, said
+    assert "worst gap 50.1 ms (66.6 ms by expectedDisplayTime)" in said, said
 
 
 # ---------------------------------------------------------------- the journey's retry
