@@ -266,6 +266,35 @@ def test_the_vignette_check_runs_in_a_child_with_a_moving_percent_and_one_job(sc
     assert not list((server.fx_home() / fx_id).glob("check.*"))      # spec and answer cleaned up
 
 
+def test_a_vignette_at_the_shots_start_passes_its_own_check(monkeypatch, scripted, client):
+    """Verdict 11, punch 2, end to end through the server's check (the child, the real
+    proof and `verify`): judge 11's vignette on Killington sat on a shot from 194.5944 s,
+    and the designer anchored it at 194.59, the in-point to 2 decimals; its check read
+    "✗ a moment is outside the shot" and measured the picture at no event at all ("(0)").
+    The same here on a shot from 1.5944 s: the proposal sits on the in-point, every check
+    passes, and the picture is measured at its one event."""
+    def rounded_start(note, seg, clip, sidecar, **kw):
+        e = _vignette_design(note, seg, clip, sidecar, **kw)
+        e["events"] = [{"t": round(float(seg["in"]), 2), "x": 0.5, "y": 0.5, "label": "whole shot"}]
+        return fx.validate_effect(e, kw.get("segments") or [seg], kw.get("clips"))
+
+    monkeypatch.setattr(fx, "design", rounded_start)
+    shot = _seed(scripted, client, [{"clip": "CLIP_A.MP4", "in": 1.5944, "out": 5.0, "why": "all"}])[0]
+    r = client.post("/api/fx/design", json={"shot": shot, "note": "put a soft vignette on this shot"})
+    fx_id = _wait(client, r.json()["job"])["result"]["id"]
+    t0 = time.time()
+    while time.time() - t0 < 60:
+        e = next(x for x in client.get("/api/fx").json()["effects"] if x["id"] == fx_id)
+        if (e.get("verify") or {}).get("at"):
+            break
+        time.sleep(0.1)
+    assert [ev["t"] for ev in e["events"]] == [1.5944]
+    by = {c["key"]: c for c in e["verify"]["checks"]}
+    assert by["in_shot"]["ok"] is True, by["in_shot"]
+    assert by["picture_landed"]["ok"] is True and "(1)" in by["picture_landed"]["detail"], by["picture_landed"]
+    assert e["verify"]["ok"] is True, e["verify"]
+
+
 def test_one_check_per_change_while_one_runs(monkeypatch, scripted, client):
     """The rule, deterministic (the check held on its thread): an ask for the effect as
     it is joins the running check; a change queues one more — one, however many asks

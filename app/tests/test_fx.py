@@ -415,6 +415,76 @@ def test_verify_skips_what_it_cannot_measure_and_fails_what_it_can():
     assert by["sync"]["ok"] is None and by["audio_landed"]["ok"] is None
 
 
+# judge 11's soft vignette on Killington (work/fx/killington-neutral/fx_05ee6598.json): shot
+# gf556bee3b9 is CLIP_07 194.5944–210.7772, and the designer put its one "whole shot" event
+# at 194.59, the in-point as the prompt gave it (2 decimals)
+START = {"id": "s7", "clip": "CLIP_A.MP4", "in": 194.5944, "out": 210.7772}
+RING = [{"type": "ring", "color": "#000000", "opacity": 0.05, "width": 0.08, "at": [0, 0], "r": 1.5, "r2": 0.5}]
+
+
+def test_an_effect_at_the_shots_start_is_in_the_shot_and_drawn_from_its_first_frame():
+    """Verdict 11, punch 2: `in_shot` tested `in <= t` strictly, so every effect the
+    designer anchored "at the start of this shot" failed its own check ("✗ a moment is
+    outside the shot") — and `events_in_shot` dropped its event, so the export and the
+    proof drew nothing on that shot. Half a frame's slack at each edge (EDGE_TOL_S, half a
+    frame at 60 fps) now puts it on the shot's first frame; validation moves it onto the
+    in-point; an event a frame out is still outside, and says so."""
+    vig = {"shot": "s7", "clip": "CLIP_A.MP4", "name": "soft feathered vignette",
+           "events": [{"t": 194.59, "x": 0.5, "y": 0.5, "label": "whole shot"}],
+           "overlay": {"duration": 16.19, "size": 1.6, "shapes": RING}, "sound": None}
+    # as it was written (an effect from before this fix, or a shot re-gridded after Accept)
+    by = {c["key"]: c for c in fx.verify(vig, START)["checks"]}
+    assert by["in_shot"]["ok"] is True, by["in_shot"]
+    assert [ev["t_part"] for ev in fx.events_in_shot(vig, START)] == [0.0]
+    # validated (design, revise, a nudge, Accept): on the in-point exactly
+    clean = fx.validate_effect(vig, [START])
+    assert [ev["t"] for ev in clean["events"]] == [194.5944]
+    assert {c["key"]: c["ok"] for c in fx.verify(clean, START)["checks"]}["in_shot"] is True
+    # the out-point the same way: 210.78 for 210.7772 is on the shot's last frame
+    end = {**vig, "events": [{"t": 210.78, "x": 0.5, "y": 0.5}]}
+    assert {c["key"]: c["ok"] for c in fx.verify(end, START)["checks"]}["in_shot"] is True
+    (last,) = fx.events_in_shot(end, START)
+    dur = START["out"] - START["in"]
+    assert dur - 1 / 60 < last["t_part"] < dur
+    assert fx.validate_effect(end, [START])["events"][0]["t"] == pytest.approx(210.7772 - fx.EDGE_TOL_S, abs=1e-4)
+    # half a frame is all: 194.58 is a frame before the shot at 59.94, and stays outside
+    early = {**vig, "events": [{"t": 194.58, "x": 0.5, "y": 0.5}]}
+    by = {c["key"]: c for c in fx.verify(early, START)["checks"]}
+    assert by["in_shot"]["ok"] is False and by["in_shot"]["detail"] == "outside the shot: 194.58s"
+    assert fx.events_in_shot(early, START) == []
+    assert fx.validate_effect(early, [START])["events"][0]["t"] == 194.58
+    assert fx.EDGE_TOL_S < 0.5 / 59.94 + 1e-9                     # ≤ half a frame at any sequence rate
+
+
+def test_the_design_prompt_gives_the_shots_edges_as_the_edl_keeps_them():
+    """Verdict 11, punch 2 (the designer's rounding): the prompt gave the shot as "from
+    194.59s", and the designer anchored "at the start of this shot" there, before the
+    shot. It gives the edges to 4 decimals now, and says the first frame is the in-point."""
+    clip = {"clip": "CLIP_A.MP4", "duration": 300.0}
+    _, prompt = fx.build_design_prompt("put a soft vignette on this shot", START, clip, peaks=[],
+                                       cut=[START, {"id": "s8", "clip": "CLIP_B.MP4", "in": 0.6006, "out": 8.7754}])
+    assert "from 194.5944s to 210.7772s" in prompt
+    assert "194.5944–210.7772s" in prompt and "0.6006–8.7754s" in prompt
+    assert "from 194.5944 (its first frame) to before 210.7772" in prompt
+    assert "194.59s" not in prompt
+    assert [fx._secs(t) for t in (1.0, 1.5, 0.6006, 0.0, 12.25)] == ["1.00", "1.50", "0.6006", "0.00", "12.25"]
+
+
+def test_design_puts_a_shot_start_event_on_the_in_point(scripted):
+    """The designer's answer at the in-point read to 2 decimals (judge 11's "SEND IT" title:
+    0.60 on a shot from 0.6006) is a proposal on the in-point, and its check passes."""
+    seg = {"id": "s1", "clip": "CLIP_A.MP4", "in": 0.6006, "out": 3.0, "why": "first"}
+    title = {"name": "SEND IT pop title", "why": "a title as the shot starts",
+             "events": [{"t": 0.6, "x": 0.3, "y": 0.22, "label": "shot start"}],
+             "overlay": {"duration": 2.0, "size": 0.5, "shapes": [{"type": "text", "text": "SEND IT"}]},
+             "sound": None}
+    scripted(title)
+    e = fx.design("A big white SEND IT title at the start of this shot", seg, CLIP,
+                  {"frame_hz": 10, "tracks": {}}, segments=[seg, SEGS[1]], clips=CLIPS)
+    assert [ev["t"] for ev in e["events"]] == [0.6006]
+    assert {c["key"]: c["ok"] for c in fx.verify(e, seg)["checks"]}["in_shot"] is True
+
+
 # ------------------------------------------------------------ frames and strips
 
 def test_frames_for_and_contact_strip(project, tmp_path):

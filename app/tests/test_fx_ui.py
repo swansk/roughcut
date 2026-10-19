@@ -819,6 +819,85 @@ def test_an_undone_effect_edit_takes_the_effect_back_with_the_cut(page, project)
     assert record()["status"] == "proposed"
 
 
+def test_accepting_a_title_is_one_ctrl_z_and_ctrl_shift_z_puts_it_back(page, project):
+    """Verdict 11, punch 2 (dimension 10: "every edit is one undo"). An effect that only
+    draws (judge 11's "SEND IT" title, the AI's vignette) changes no shot, so its Accept
+    pushed no entry: Edit read "nothing to undo" and Ctrl+Z left it accepted. Now every
+    accept is ONE entry, `effect: <name>` on a whole word in ≤ 40 characters with the key:
+    Ctrl+Z puts the effect back to a proposal and the EDL exactly as it was, Ctrl+Shift+Z
+    accepts it again, and an earlier trim is still the entry under it."""
+    import server
+
+    def edl():
+        return json.loads(Path(project["edl"]).read_text(encoding="utf-8"))
+
+    def wait_until(pred, what, timeout=10.0):
+        end = time.time() + timeout
+        last = None
+        while time.time() < end:
+            try:
+                last = pred()
+                if last:
+                    return last
+            except ValueError:
+                pass
+            time.sleep(0.1)
+        raise AssertionError(f"{what} never happened: {edl()}")
+
+    def record():
+        return fx.load(server.fx_home(), "fx_title1")
+
+    sid1, sid2 = shot_ids(page)
+    page.evaluate(f"tl.setRange('{sid1}', 1.5, null)")           # a trim: the entry under it
+    wait_until(lambda: edl()["segments"][0]["in"] == 1.5, "the trim's save")
+    before = edl()
+    assert "effects" not in before
+    fx.save(server.fx_home(), {
+        "id": "fx_title1", "shot": sid2, "clip": "CLIP_B.MP4", "name": "SEND IT pop-in title with a fade",
+        "note": "a big white SEND IT title at the start of this shot", "why": "",
+        "events": [{"t": 0.0, "x": 0.5, "y": 0.3, "label": "shot start"}],
+        "overlay": {"duration": 2.0, "size": 0.5,
+                    "shapes": [{"type": "text", "text": "SEND IT", "h": 0.3, "fade": 0.2}]},
+        "sound": None, "status": "proposed", "created": "2026-10-19T09:00:00"})
+    open_fx(page, 1)
+    page.evaluate("fx.refresh()")
+    wait_effect(page, "fx_title1", "e => !!e.verify", timeout=20)     # its own check is done
+    page.wait_for_selector("#fx .fxcard[data-id='fx_title1'] button[data-act=accept]")
+    page.locator("#fx .fxcard[data-id='fx_title1'] button[data-act=accept]").click()
+    after = wait_until(lambda: [e for e in edl().get("effects") or [] if e["id"] == "fx_title1"]
+                       and edl(), "the accept")
+    assert after["effects"][0]["status"] == "accepted"
+    assert after["segments"] == before["segments"]                  # no shot changed
+    page.wait_for_function("(document.querySelector('#undo').title || '').startsWith('undo: effect: ')")
+    title = page.locator("#undo").get_attribute("title")
+    assert len(title) <= 40, (len(title), title)
+    assert title == "undo: effect: SEND IT pop-in… (Ctrl+Z)", title     # whole words, then …
+
+    page.evaluate("document.activeElement && document.activeElement.blur()")
+    page.keyboard.press("Control+z")                                # the accept, and only it
+    wait_until(lambda: record()["status"] == "proposed", "the record going back to proposed")
+    d = wait_until(lambda: "effects" not in edl() and edl(), "the EDL going back")
+    assert d["segments"] == before["segments"] and d.get("effects") == before.get("effects")
+    listed = wait_effect(page, "fx_title1", "e => e.status === 'proposed'")
+    assert listed["events"] == [{"t": 0.0, "x": 0.5, "y": 0.3, "label": "shot start"}]
+    page.wait_for_selector("#fx .fxcard[data-id='fx_title1'] button[data-act=accept]")
+    assert page.locator("#undo").get_attribute("title") == "undo: trim (Ctrl+Z)"
+    assert page.locator("#redo").get_attribute("title") == "redo: effect: SEND IT pop-in… (Ctrl+Shift+Z)"
+
+    page.keyboard.press("Control+Shift+z")                          # accepted again
+    wait_until(lambda: record()["status"] == "accepted", "the redo")
+    d = wait_until(lambda: [e for e in edl().get("effects") or [] if e["id"] == "fx_title1"] and edl(),
+                   "the effect back in the EDL")
+    assert d["effects"] == after["effects"] and d["segments"] == before["segments"]
+    wait_effect(page, "fx_title1", "e => e.status === 'accepted'")
+    # and a second Ctrl+Z after the redo takes it back again, then the next takes the trim
+    page.keyboard.press("Control+z")
+    wait_until(lambda: record()["status"] == "proposed" and "effects" not in edl(), "the second undo")
+    page.keyboard.press("Control+z")
+    wait_until(lambda: edl()["segments"][0]["in"] == 1.0, "the trim's undo")
+    assert record()["status"] == "proposed"
+
+
 def test_a_proposal_waiting_when_the_board_opens_is_checked_by_itself(page):
     """INTAKE M16 I16.5: the free check runs itself. The server checks every new design,
     and the tool checks a proposal made before it did — but the tool read /api/fx at
@@ -1121,6 +1200,34 @@ def test_the_monitor_draws_the_effect_at_its_hit_and_only_then(page):
     # the other shot has no effects: the canvas is not live
     page.evaluate("tl.seek(2.5)")
     page.wait_for_function("!document.querySelector('#fxCanvas').classList.contains('live')")
+
+
+def test_the_monitor_draws_an_effect_anchored_on_the_shots_first_frame(page):
+    """Verdict 11, punch 2: an effect the designer anchored "at the start of this shot" on
+    the in-point read to 2 decimals sat a few ms before the shot, and the monitor skipped
+    it (`ev.t >= sg.in`) as the export did. Within half a frame of an edge an event is on
+    the shot (fx.js `onShot`, roughcut/fx.py EDGE_TOL_S): an accepted hit at clip 0.996 on
+    a shot from 1.0 (written as it was before validation moved such events) is drawn from
+    the shot's first frame; one a frame out is not on the shot."""
+    import server
+    assert page.evaluate("fx.onShot({t: 0.996}, {in: 1.0, out: 3.0})") == 1.0
+    assert page.evaluate("fx.onShot({t: 1.5}, {in: 1.0, out: 3.0})") == 1.5
+    assert page.evaluate("fx.onShot({t: 3.004}, {in: 1.0, out: 3.0})") == pytest.approx(3.0 - 0.5 / 60, abs=1e-4)
+    assert page.evaluate("fx.onShot({t: 0.98}, {in: 1.0, out: 3.0})") is None
+    assert page.evaluate("fx.onShot({t: 3.0}, {in: 1.0, out: 3.0})") is not None
+    sid1 = shot_ids(page)[0]
+    hit = json.loads(json.dumps(HIT))
+    hit.update(id="fx_start1", shot=sid1, clip="CLIP_A.MP4", status="accepted", sound=None,
+               created="2026-10-19T09:00:00", events=[{"t": 0.996, "x": 0.5, "y": 0.7}])
+    server._fx_put(hit)                       # as on disk before the fix: not re-validated
+    open_fx(page, 0)
+    page.evaluate("fx.refresh()")
+    wait_effect(page, "fx_start1", "e => e.status === 'accepted'")
+    page.evaluate("tl.seek(0.1)")             # clip 1.1: 0.1 s into the hit from the first frame
+    page.wait_for_function(
+        "Math.abs(document.querySelector('.screen video.live').currentTime - 1.1) < 0.02", timeout=10000)
+    page.wait_for_function("document.querySelector('#fxCanvas').classList.contains('live')")
+    page.wait_for_function(f"({PIXELS})([0.5, 0.7, 30]) > 0", timeout=10000)
 
 
 def test_preview_plays_the_shot_and_sounds_each_hit_once_per_pass(page):

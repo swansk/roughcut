@@ -91,6 +91,13 @@ MIN_GAIN_DB, MAX_GAIN_DB = -30.0, 6.0
 NUDGE_S = 1 / 24                        # one frame at 24 fps — the human's step
 ONSET_HZ = 10                           # the audio sidecar's frame_hz
 ONSET_TOL_S = 0.15                      # "on an onset peak" — 100 ms resolution + one hop
+# An event within half a frame of the shot's edge is ON the shot (verdict 11, punch 2):
+# the designer anchors "at the start of this shot" on the in-point as the prompt gave it,
+# and an in-point of 194.5944 s given as 194.59 put every such effect 4 ms before its
+# shot: outside it for the check (`in_shot`) and not drawn by the export or the monitor
+# (`events_in_shot`). Half a frame at 60 fps, the fastest rate a sequence runs at
+# (tracks.py TIMEBASES): at 29.97 or 24 it is a quarter of a frame or less.
+EDGE_TOL_S = 0.5 / 60
 
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 
@@ -404,6 +411,8 @@ def validate_effect(raw: Any, segments: list[dict], clips: dict[str, dict] | Non
         raise ValueError("an effect needs an overlay, a sound, or edits to the cut")
     if (out["overlay"] or out["sound"]) and not out["events"]:
         raise ValueError("an overlay or a sound needs at least one event")
+    # an event a rounding put just outside its shot is on it (verdict 11, punch 2)
+    out["events"] = snap_events(out["events"], seg)
     if ops:
         out["edits"] = ops
         out["edit_words"] = editsmod.apply_ops(segments, clips, ops)["words"]
@@ -495,11 +504,34 @@ def nearest_onset(onset: list[float], hz: float, t: float, *, tol_s: float = ONS
     return round(best / hz, 2)
 
 
-def events_in_shot(effect: dict, seg: dict) -> list[dict]:
-    """The events that fall inside the shot's range, each with `t_part` — seconds from
-    the shot's in-point — added. An event outside is not drawn."""
+def snap_events(events: list[dict], seg: dict) -> list[dict]:
+    """The events with any within EDGE_TOL_S outside the shot's range [in, out) moved onto
+    it: one before the in-point to the in-point (the shot's first frame), one at or past
+    the out-point to `out − EDGE_TOL_S` (inside the last frame at every sequence rate).
+    Every other event is as it was: one further out stays outside, for the check to say."""
+    t0, t1 = float(seg["in"]), float(seg["out"])
     out = []
-    for ev in effect.get("events", []):
+    for ev in events:
+        t = float(ev["t"])
+        if t0 - EDGE_TOL_S <= t < t0:
+            ev = {**ev, "t": t0}
+        elif t1 <= t < t1 + EDGE_TOL_S:
+            ev = {**ev, "t": max(t0, round(t1 - EDGE_TOL_S, 4))}
+        out.append(ev)
+    return out
+
+
+def in_shot(t: float, seg: dict) -> bool:
+    """`t` (clip seconds) is on the shot: inside [in, out) or within EDGE_TOL_S of an edge."""
+    return float(seg["in"]) - EDGE_TOL_S <= float(t) < float(seg["out"]) + EDGE_TOL_S
+
+
+def events_in_shot(effect: dict, seg: dict) -> list[dict]:
+    """The events that fall inside the shot's range (`snap_events`: half a frame's slack
+    at each edge), each with `t_part` — seconds from the shot's in-point — added. An
+    event outside is not drawn."""
+    out = []
+    for ev in snap_events(effect.get("events", []), seg):
         if seg["in"] <= ev["t"] < seg["out"]:
             out.append({**ev, "t_part": round(ev["t"] - seg["in"], 4)})
     return out
@@ -1364,6 +1396,15 @@ def _transcript_in(transcript: list[dict] | None, t0: float, t1: float) -> list[
     return out
 
 
+def _secs(t: float) -> str:
+    """A shot's edge for the prompt, as exact as the EDL keeps it (4 decimals), never
+    fewer than 2: `194.5944`, `1.50`. Given at 2 the in-point 194.5944 read 194.59, and
+    the designer's "at the start of this shot" landed before the shot (verdict 11)."""
+    text = f"{float(t):.4f}".rstrip("0")
+    whole, _, frac = text.partition(".")
+    return f"{whole}.{frac.ljust(2, '0')}"
+
+
 def build_design_prompt(note: str, seg: dict, clip: dict, *, peaks: list[dict],
                         transcript: list[dict] | None = None,
                         reference: dict | None = None,
@@ -1381,7 +1422,7 @@ def build_design_prompt(note: str, seg: dict, clip: dict, *, peaks: list[dict],
     decaying in 90 ms, -6 dB)."""
     t0, t1 = float(seg["in"]), float(seg["out"])
     lines = [f"THE NOTE: {note.strip()}", "",
-             f"THE SHOT: id {seg.get('id')} · clip {seg.get('clip')} from {t0:.2f}s to {t1:.2f}s"
+             f"THE SHOT: id {seg.get('id')} · clip {seg.get('clip')} from {_secs(t0)}s to {_secs(t1)}s"
              + (f" (clip length {float(clip['duration']):.1f}s)" if clip and clip.get("duration") else "")
              + (f" at {editsmod.speed_of(seg):g}×" if editsmod.speed_of(seg) != 1 else "")
              + (f" — why it is in the cut: {seg['why']}" if seg.get("why") else "")]
@@ -1390,7 +1431,7 @@ def build_design_prompt(note: str, seg: dict, clip: dict, *, peaks: list[dict],
         for k, s in enumerate(cut):
             mark = "►" if str(s.get("id")) == str(seg.get("id")) else " "
             lines.append(f"  {mark} {k + 1:2d} · {s.get('id')} · {s.get('clip')} · "
-                         f"{float(s['in']):.2f}–{float(s['out']):.2f}s · {editsmod.dur(s):.1f}s"
+                         f"{_secs(s['in'])}–{_secs(s['out'])}s · {editsmod.dur(s):.1f}s"
                          + (f" · {editsmod.speed_of(s):g}×" if editsmod.speed_of(s) != 1 else ""))
     said = _transcript_in(transcript if transcript is not None else (clip or {}).get("transcript"), t0, t1)
     if said:
@@ -1410,7 +1451,8 @@ def build_design_prompt(note: str, seg: dict, clip: dict, *, peaks: list[dict],
                       + (f": \"{reference['goal']}\"" if reference.get("goal") else "")
                       + f". The marks' centres, as fractions of the frame: {marks}. These ARE the anchors: "
                         "one event per mark at those x, y — design the look and the sound, do not move them."]
-    lines += ["", "Every event's t must lie inside the shot. Answer with one JSON effect object only."]
+    lines += ["", f"Every event's t must lie inside the shot: from {_secs(t0)} (its first frame) to before "
+                  f"{_secs(t1)}. Answer with one JSON effect object only."]
     return _system_design(), "\n".join(lines)
 
 
@@ -1504,7 +1546,7 @@ def design(note: str, seg: dict, clip: dict, sidecar: dict | None, *,
         w0, w1 = max(t0, float(window[0])), min(t1, float(window[1]))
         if w1 > w0:
             t0, t1 = w0, w1
-            note = (f"{note}\n\nOnly between {t0:.2f}s and {t1:.2f}s of the clip: the editor marked "
+            note = (f"{note}\n\nOnly between {_secs(t0)}s and {_secs(t1)}s of the clip: the editor marked "
                     f"that window, and there are no hits outside it.")
     peaks = onset_peaks(onset, hz, t0, t1)
     has_marks = bool(reference and reference.get("marks"))
@@ -1747,7 +1789,8 @@ def verify(effect: dict, seg: dict, *, onset: list[float] | None = None,
            impact: bool = True) -> dict:
     """The definition of done as a checklist the machine runs. Returns
     `{"ok": bool, "at": iso, "checks": [{"key", "label", "ok", "detail"}, …]}` with:
-    `in_shot` (every event inside the shot's range), `in_frame` (every anchor inside
+    `in_shot` (every event inside the shot's range, or within half a frame of its edge:
+    EDGE_TOL_S), `in_frame` (every anchor inside
     0..1 with the sprite's box not more than half off the edge), `sync` (the sound and
     the overlay share `t`, and the sound is not longer than the overlay + 0.25 s),
     `on_onset` (each event within ONSET_TOL_S of an onset peak — only when `impact`
@@ -1764,8 +1807,8 @@ def verify(effect: dict, seg: dict, *, onset: list[float] | None = None,
     def add(key: str, label: str, ok: bool | None, detail: str) -> None:
         checks.append({"key": key, "label": label, "ok": ok, "detail": detail})
 
-    # in_shot
-    outside = [ev["t"] for ev in events if not (t0 <= ev["t"] < t1)]
+    # in_shot: half a frame's slack at each edge (`in_shot`), as the render draws them
+    outside = [ev["t"] for ev in events if not in_shot(ev["t"], seg)]
     add("in_shot", "every event inside the shot",
         not outside and bool(events),
         (f"{len(events)} event(s) within {t0:.2f}–{t1:.2f}s" if not outside and events

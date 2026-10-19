@@ -10865,10 +10865,17 @@ def _fx_reference(fx_id: str, reference: dict | None) -> dict | None:
     return out
 
 
+# The words that make a note an impact, whole words with their endings: matched as
+# substrings, "white" held "hit", so judge 11's "a big white SEND IT title" had its check
+# fail "not on a peak" (verdict 11, punch 2), and "island" was a landing.
+_FX_IMPACT = re.compile(
+    r"\b(?:hit(?:s|ting)?|impacts?|crash(?:es|ed|ing)?|rocks?|rocky|strik(?:e|es|ing)|struck"
+    r"|bang(?:s|ed|ing)?|land(?:s|ed|ing|ings)?|smack(?:s|ed|ing)?|slam(?:s|med|ming)?)\b")
+
+
 def _fx_impact(e: dict) -> bool:
-    words = ("hit", "impact", "crash", "rock", "strike", "bang", "land", "smack", "slam")
     text = f"{e.get('note', '')} {e.get('name', '')}".lower()
-    return any(w in text for w in words)
+    return bool(_FX_IMPACT.search(text))
 
 
 def _fx_window(raw, seg: dict) -> tuple[float, float] | None:
@@ -11330,7 +11337,14 @@ async def api_fx_accept(request: Request) -> JSONResponse:
     body = await request.json()
     fx_id = str(body.get("id") or "")
     e = fx.load(fx_home(), fx_id) or _fx_get(fx_id)
+    # What the board's Ctrl+Z of this accept takes back (POST /api/fx/undo): the record
+    # as proposed and the EDL's effects as they were, before the re-keying. Every accept
+    # keeps it (verdict 11, punch 2): one that only draws or sounds (a title, a vignette)
+    # is one undo entry on the board, as one that edits the cut is.
     undo = None
+    if e.get("status") != "accepted":
+        undo = {"proposal": json.loads(json.dumps(e)),
+                "effects_before": json.loads(json.dumps(read_edl().get("effects") or []))}
     # The edits first (INTAKE M13): applied to the cut in one write by the edits
     # section's apply_edits, the effect re-keyed from `new:n` to the minted id, and the
     # effect then validated against the cut as it now is.
@@ -11338,10 +11352,6 @@ async def api_fx_accept(request: Request) -> JSONResponse:
         applier = globals().get("apply_edits")
         if applier is None:
             raise HTTPException(501, "this build cannot apply edits to the cut yet")
-        # what the board's Ctrl+Z of this accept takes back (POST /api/fx/undo): the
-        # record as proposed and the EDL's effects as they were, before the re-keying
-        undo = {"proposal": json.loads(json.dumps(e)),
-                "effects_before": json.loads(json.dumps(read_edl().get("effects") or []))}
         says = _fx_edit_says(e["edits"], _fx_segments())     # the cut as Karl saw it
         try:
             applied = applier(e["edits"])
@@ -11377,17 +11387,18 @@ async def api_fx_accept(request: Request) -> JSONResponse:
     e["status"] = "accepted"
     e = fx.validate_effect(e, segments)
     _fx_put(e)
-    if undo is not None:
-        _fx_accept_record(fx_id, undo, e)
+    _fx_accept_record(fx_id, undo, e)
     return JSONResponse({"ok": True, "effect": _fx_urls(e)})
 
 
-# An accepted effect's edit to the cut is one entry on the board's undo stack (wave 12,
-# AIOPS: roughcutRefresh({undo})). The cut on the board follows Ctrl+Z; these make the
-# effect follow it too (wave 12, AIGLUE): its record reads proposed again (its edits
-# waiting to be accepted) and the EDL's effects are as they were before the accept —
-# the copies the re-keying made gone, the re-keyed ones back on their shot — and Ctrl+Shift+Z
-# puts the accept back. Kept beside the effect's files, as `<id>/accept.json`.
+# An accepted effect is one entry on the board's undo stack: its edit to the cut read
+# back (wave 12, AIOPS: roughcutRefresh({undo})), or, for one that only draws or sounds,
+# an entry of its own (verdict 11 punch 2: fx.js → tl.mark). The cut on the board follows
+# Ctrl+Z; these make the effect follow it too (wave 12, AIGLUE): its record reads proposed
+# again (any edits waiting to be accepted) and the EDL's effects are as they were before
+# the accept — the copies the re-keying made gone, the re-keyed ones back on their shot —
+# and Ctrl+Shift+Z puts the accept back. Kept beside the effect's files, as
+# `<id>/accept.json`.
 
 def _fx_accept_path(fx_id: str) -> Path:
     if not re.fullmatch(r"fx_[A-Za-z0-9_-]{1,48}", fx_id or ""):

@@ -148,6 +148,19 @@
     return t && t.state && t.state.anchor != null ? String(t.state.anchor) : null;
   }
   function seg(id) { return SEGS().find((s) => String(s.id) === String(id)) || null; }
+  /* An event's clip time on its shot, or null when it is not on it: inside [in, out), or
+   * within half a frame of an edge and moved onto it, as the render draws it (roughcut/
+   * fx.py EDGE_TOL_S, snap_events; verdict 11 punch 2: an in-point of 194.5944 given to
+   * the designer as 194.59 put "at the start of this shot" 4 ms before the shot). */
+  const EDGE_TOL_S = 0.5 / 60;
+  function onShot(ev, sg) {
+    const t = Number(ev && ev.t);
+    if (!sg || !Number.isFinite(t)) return null;
+    if (t >= sg.in && t < sg.out) return t;
+    if (t >= sg.in - EDGE_TOL_S && t < sg.in) return sg.in;
+    if (t >= sg.out && t < sg.out + EDGE_TOL_S) return Math.max(sg.in, round4(sg.out - EDGE_TOL_S));
+    return null;
+  }
   /* the shot's effects — and the proposals keyed to a shot the edits will create, which
    * sit on the shot they are anchored to until Accept (`anchor_shot`, the server's) */
   function forShot(id) {
@@ -258,9 +271,10 @@
     S.sel = { id, i };
     const e = byId(id), sg = e && seg(e.shot), ev = e && e.events[i];
     const t = TL();
-    if (e && sg && ev && t && ev.t >= sg.in && ev.t < sg.out) {
+    const at = e && sg && ev ? onShot(ev, sg) : null;
+    if (t && at != null) {
       const start = t.filmStart(sg.id);
-      if (start >= 0) t.seek(start + (ev.t - sg.in));
+      if (start >= 0) t.seek(start + (at - sg.in));
     }
     paint();
   }
@@ -316,14 +330,17 @@
         if (edits && typeof window.roughcutFlush === 'function') await window.roughcutFlush();
         await api('POST', '/api/fx/accept', { id: e.id });
         if (window.tlLanes && typeof tlLanes.clearGhost === 'function') tlLanes.clearGhost();
-        // the read-back's undo entry is this accept's: known by its commit, the moment it
-        // is made (a Ctrl+Z can come before the rest of the refresh has)
-        if (edits) followUndo.expect = { id: e.id, label: `effect: ${e.name}` };
-        const back = !edits || await refreshCut(e);
+        // ONE undo entry `effect: <name>`, always (verdict 11, punch 2): the read-back of
+        // an edit to the cut, or, for an effect that only draws or sounds (a title, a
+        // vignette: no shot changes), an entry of its own (tl.mark). Known by its commit
+        // the moment it is made (a Ctrl+Z can come before the rest of the refresh has),
+        // under the label the stack shows (`shortName`, so a long name still matches).
+        const label = undoLabel(e);
+        followUndo.expect = { id: e.id, label };
+        const back = edits ? await refreshCut(e, label) : markAccept(label);
         followUndo.expect = null;
         if (!back) return;
-        say(edits ? `${e.name}: accepted — in the cut · ${undoWord()} undoes the edit`
-          : `${e.name}: accepted — in the cut`);
+        say(`${e.name}: accepted — in the cut · ${undoWord()} undoes it`);
         await refresh();
       } else if (name === 'discard') {
         await api('POST', '/api/fx/discard', { id: e.id });
@@ -356,17 +373,29 @@
    * "one accept is one undo step"): Ctrl+Z puts the cut back as it was before Accept,
    * and Ctrl+Shift+Z brings the edit back. */
   // the undo button reads "undo: effect: <name> (Ctrl+Z)" in ≤ 40 characters, on a whole word
-  // (verdict 9 punch 3: undo labels are never a sentence cut mid-word)
-  function shortName(name, max = 22) {
+  // (verdict 9 punch 3: undo labels are never a sentence cut mid-word): "undo: effect: " and
+  // " (Ctrl+Z)" are 23 of them, so a name of up to 17 shows whole and a longer one is cut
+  // to its whole words in 16 and an ellipsis (verdict 11 punch 2: it was cut at 22, and
+  // "soft feathered vignette" read 46 characters)
+  function shortName(name, max = 17) {
     const n = String(name || 'effect').trim().replace(/\s+/g, ' ');
     if (n.length <= max) return n;
-    const cut = n.slice(0, max + 1).replace(/\s+\S*$/, '');
-    return (cut || n.slice(0, max)).replace(/[\s,;:.\-–—]+$/, '') + '…';
+    const room = max - 1;                          // the ellipsis is the last one
+    const cut = n.slice(0, room + 1).replace(/\s+\S*$/, '');
+    return (cut && cut.length <= room ? cut : n.slice(0, room)).replace(/[\s,;:.\-–—]+$/, '') + '…';
   }
   const undoWord = () => (/Mac|iPhone|iPad/.test(navigator.platform || '') ? '⌘Z' : 'Ctrl+Z');
-  async function refreshCut(e) {
+  const undoLabel = (e) => `effect: ${shortName(e.name)}`;
+  /* An accept that changes no shot: its own entry on the timeline's stack. Without a
+   * timeline (a page with no board) the accept still stands; there is no stack to join. */
+  function markAccept(label) {
+    const t = TL();
+    if (t && typeof t.mark === 'function') t.mark(label);
+    return true;
+  }
+  async function refreshCut(e, label = undoLabel(e)) {
     if (typeof window.roughcutRefresh === 'function') {
-      try { await window.roughcutRefresh({ undo: `effect: ${shortName(e.name)}` }); return true; } catch (err) { /* reload below */ }
+      try { await window.roughcutRefresh({ undo: label }); return true; } catch (err) { /* reload below */ }
     }
     if (typeof location === 'undefined') return true;
     say(`${e.name}: the cut changed — reloading`);
@@ -858,8 +887,8 @@
     band.style.width = `${Math.max(2, x1 - x0)}px`;
     band.classList.toggle('whole', !windowFor(S.shot));
     const ticks = activeForShot(S.shot).flatMap((e) => (e.events || [])
-      .filter((ev) => ev.t >= sg.in && ev.t < sg.out)
-      .map((ev) => tl.timeToX(start + (ev.t - sg.in)) - x0));
+      .map((ev) => onShot(ev, sg)).filter((at) => at != null)
+      .map((at) => tl.timeToX(start + (at - sg.in)) - x0));
     band.innerHTML = ticks.map((x) => `<i style="left:${x.toFixed(1)}px"></i>`).join('')
       + (windowFor(S.shot) ? `<span>${esc(`${shotFilm(w.t0)}–${shotFilm(w.t1)}`)}</span>` : '');
   }
@@ -1235,8 +1264,9 @@
     const B = (ov.size || 0.12) * W;
     const dur = ov.duration || 0.35;
     for (const ev of e.events || []) {
-      if (!(ev.t >= sg.in && ev.t < sg.out)) continue;
-      const dt = t - ev.t;
+      const at = onShot(ev, sg);
+      if (at == null) continue;
+      const dt = t - at;
       if (dt < 0 || dt >= dur) continue;
       if (ov.flash && dt < (ov.flash.duration || 0)) {
         ctx.save();
@@ -1337,7 +1367,8 @@
       if (prev != null && !v.paused && t > prev) {
         for (const e of drawnForShot(sg.id)) {
           (e.events || []).forEach((ev, i) => {
-            if (ev.t >= sg.in && ev.t < sg.out && ev.t >= prev && ev.t < t) sound(e, i);
+            const at = onShot(ev, sg);
+            if (at != null && at >= prev && at < t) sound(e, i);
           });
         }
       }
@@ -1718,6 +1749,7 @@
     move: (id, i, x, y) => { const e = byId(id); return e ? moveEvent(e, i, x, y) : Promise.resolve(null); },
     fmtT,
     poseAt,
+    onShot,                 // an event's time on its shot (half a frame's slack at each edge)
     draw,
     redraw: draw,
     audio: (id) => { const a = S.audio.get(id); return a && a.el ? a.el : null; },
