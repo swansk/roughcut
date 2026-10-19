@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **Loop state: wave 15 merged; the gate's perf line GREEN in both runs under the stricter bar; judge 12 launched** (judge/LOOP.md).
 - **Three test expectations wave 15 made stale** (the lead's gate on 1de6024 had them BROKEN): test_preview_orientation asks again until a poster is the frame, not BUDGET's stand-in (`x-roughcut-poster`); test_projects' interval prices stub `clip_duration_known` too, since the status prices from lengths it already knows. 17 + 13 passed.
 - **"cut by hand" wherever the re-run's lock is named** (server.py's first-pass stale line, tour.js's first-pass card; RERUN2's note: since wave 15 only a hand cut locks a shot, and a kept shot keeps its grade). test_firstpass 31, test_firstpass_ui 6, test_firstpass_regrade_ui 1, test_tour_ui 25, test_import_ui 4, test_server 109.
 - **Loop state: wave 15 merged except BUDGET; PERF6 launched** (judge/LOOP.md).

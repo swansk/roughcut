@@ -49,6 +49,17 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-19 ~13:30 (box clock): **wave 15 fully merged**: BUDGET `f6866d9` (posters never cut in a request: stand-ins +
+  `srcset` swap; price/gap/cancel cheap; `gc.freeze()`; the yield thread reads /proc children; the gate's journey line
+  watches the loop; fresh imports play within 10 s 6/6 with an ETA within 2x), lead `f4c1789` ("cut by hand"), PERF6
+  `1de6024` (playheads on their own layers; a first play's 5-6 MB response capped at 1 MiB a range so it no longer floods
+  the main thread; grips don't fade while playing; Effect Controls rests while playing; no parked-frame redraw on
+  Play). **Lead full gate on `1de6024`: suite RED only on 3 stale expectations (fixed next commit); every other check
+  GREEN, incl. the stricter perf bar in BOTH runs** (load 7.3: live 50.1 / rVFC 33.4 ms, canvas frame/worker 50.0/55.4
+  (1440), 50.1/50.4 (1920); load 11.6: canvas 66.7/65.8 at 1920), journey 24 steps 52 s, slowest loop hold 14 ms, boot
+  0.64 s. Judge 12 launched on the fixed HEAD (deviation noted: the RED was test-only). Open: real Killington dissolves
+  still 2-3/24 graded (PERF6: video frames presented late inside a shot; next idea: park on the keyframe before the
+  in-point); revise.py writes gen_ stems into check sentences (the board renames); "a black slide" in actions.py.
 - 2026-10-19 ~09:10 (box clock): **wave 15 merged except BUDGET**: RERUN2 `d431309` (a grade/effect no longer locks a shot from a
   re-run; only hand cuts do), FXUNDO `b4a8bb4` (every Designed Effects accept is one Ctrl+Z incl. overlay-only, via
   `tl.mark`; effects at a shot's first frame pass and draw; Killington vignette green), VIGNETTE `c7ff9e7` (Lumetri Vignette
