@@ -195,13 +195,22 @@ def cuda_ok() -> bool:
 _DECODE_FACTS: dict[str, dict] = {}
 
 
+def _rate_text(text: str | None) -> float:
+    try:
+        num, _, den = str(text or "").partition("/")
+        return float(num) / float(den or 1)
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+
+
 def decode_facts(src: Path) -> dict:
-    """codec, pixel format, range and rotation of a source's first video stream."""
+    """codec, pixel format, range, rotation and frame rate of a source's first video
+    stream (`fps`: its average rate, 0.0 when it says none)."""
     key = str(src)
     if key not in _DECODE_FACTS:
         r = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-                 "stream=codec_name,pix_fmt,color_range:stream_side_data=rotation",
-                 "-of", "json", key])
+                 "stream=codec_name,pix_fmt,color_range,avg_frame_rate,r_frame_rate"
+                 ":stream_side_data=rotation", "-of", "json", key])
         try:
             st = (json.loads(r.stdout or "{}").get("streams") or [{}])[0]
         except ValueError:
@@ -213,8 +222,50 @@ def decode_facts(src: Path) -> dict:
         pix = st.get("pix_fmt") or ""
         _DECODE_FACTS[key] = {
             "codec": st.get("codec_name"), "pix_fmt": pix, "rotation": rot,
-            "full": st.get("color_range") == "pc" or pix.startswith("yuvj")}
+            "full": st.get("color_range") == "pc" or pix.startswith("yuvj"),
+            "fps": _rate_text(st.get("avg_frame_rate")) or _rate_text(st.get("r_frame_rate"))}
     return _DECODE_FACTS[key]
+
+
+# ------------------------------------------- the frame a time names (wave 16, FRAMEACC)
+#
+# A shot's `in` names the source frame on screen at that time: the last one that starts
+# at or before it — the Program monitor's <video> shows that frame parked there, and
+# Premiere's frame sampling the same — give or take SEEK_TOL_S, more than any rounding
+# an EDL keeps (the edit grid's 4 places: 0.05 ms; an old 3-place time: 0.5 ms) and far
+# less than a frame at any rate (4.2 ms at 240). The read used to start with `-ss <in>`,
+# which keeps the frames from that time on: whenever the in (to 3 places) landed past its
+# frame's exact start — 7 ins in 16 at 59.94, 29.97 and 23.976 — that frame was dropped
+# and the shot opened on the next one. Now every read is sought SEEK_LEAD_FRAMES of the
+# source early (`seek_plan`), its timestamps are moved so the in is 0 (`conform_chain`'s
+# `lead`), and the conform's `fps` (`start_time=0`, `round=up`) puts on each of the
+# film's frames the last source frame at or before its time: the in's own frame first,
+# on the CPU and the GPU path alike. The sound starts at the in itself (`audio_lead`).
+SEEK_TOL_S = 0.001
+SEEK_LEAD_FRAMES = 3
+SEEK_LEAD_MIN_S, SEEK_LEAD_MAX_S, SEEK_LEAD_UNKNOWN_S = 0.05, 0.5, 0.25
+
+
+def seek_plan(src: Path, t: float) -> tuple[str, float]:
+    """The input `-ss` for a read of `src` that must start on the frame `t` names, and
+    the lead: the source seconds from that seek to `t` (exact against the `-ss` text).
+    Sought SEEK_LEAD_FRAMES frames early, so the frame that holds `t` is never the one a
+    seek drops; at most `t` (a read from the clip's head starts at 0)."""
+    t = max(0.0, float(t))
+    fps = decode_facts(src).get("fps") or 0.0
+    lead = (min(SEEK_LEAD_MAX_S, max(SEEK_LEAD_MIN_S, SEEK_LEAD_FRAMES / fps))
+            if fps > 0 else SEEK_LEAD_UNKNOWN_S)
+    text = f"{max(0.0, t - lead):.6f}"
+    return text, max(0.0, t - float(text))
+
+
+def audio_lead(lead: float) -> str:
+    """The sound of a read sought `lead` seconds early, from the in itself and re-timed
+    to start at 0 (`aresample=first_pts=0` after it then pads a late start, never moves
+    it); empty for a read sought at the in."""
+    if lead <= 1e-9:
+        return ""
+    return f"atrim=start={lead:.6f},asetpts=PTS-{lead:.6f}/TB,"
 
 
 def gpu_input(src: Path, orient: str, normalise: str | None, video: dict) -> dict | None:
@@ -243,9 +294,16 @@ def input_args(src: Path, orient: str, gpu: dict | None) -> list[str]:
 
 
 def conform_chain(video: dict, gpu: dict | None, normalise: str | None,
-                  speed: float = 1.0, restart: bool = False) -> list[str]:
+                  speed: float = 1.0, restart: bool = False,
+                  lead: float | None = None) -> list[str]:
     """Normalise (CPU path), the retime, then the scale / pad / fps conform. On the GPU
-    path the scale is `scale_cuda` straight off the decoder, then the frames come down."""
+    path the scale is `scale_cuda` straight off the decoder, then the frames come down.
+
+    `lead` (`seek_plan`'s: the read was sought that many source seconds before the in):
+    the timestamps move so the in (plus SEEK_TOL_S) is 0 — at a speed, the source
+    seconds from it divided by the speed — and `fps` starts there, each film frame the
+    last source frame at or before its time (`round=up`): the in's own frame first,
+    whatever its time's rounding. Without one, the read starts at the in as it did."""
     w, h = video["w"], video["h"]
     # An export's own Frame Size (`--size`, verdict 9 punch 5) is scaled with Lanczos, on
     # the GPU and the CPU alike: a 4K GoPro frame taken to 1280×720 is a 3× reduction, and
@@ -261,14 +319,20 @@ def conform_chain(video: dict, gpu: dict | None, normalise: str | None,
             chain += ["hflip", "vflip"]
     elif normalise:
         chain.append(normalise)
-    if abs(speed - 1.0) > 1e-9:
+    fps = f"fps={video['fps']}"
+    if lead is not None:
+        zero = f"PTS-{float(lead) + SEEK_TOL_S:.6f}/TB"
+        chain.append(f"setpts=({zero})/{speed:g}" if abs(speed - 1.0) > 1e-9
+                     else f"setpts={zero}")
+        fps += ":start_time=0:round=up"
+    elif abs(speed - 1.0) > 1e-9:
         chain.append(f"setpts=(PTS-STARTPTS)/{speed:g}")
     elif restart:
         chain.append("setpts=PTS-STARTPTS")
     if not gpu:
         chain.append(f"scale={w}:{h}:force_original_aspect_ratio=decrease"
                      + (f":flags={algo}" if video.get("scaler") else ""))
-    chain += [f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2", f"fps={video['fps']}"]
+    chain += [f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2", fps]
     return chain
 
 
@@ -1330,7 +1394,8 @@ def ordered_effects(edl: dict, seg: dict) -> list[dict]:
 
 def video_filter(video: dict, normalise: str | None = None,
                  lut: str | None = None, speed: float = 1.0,
-                 controls: dict | None = None, gpu: dict | None = None) -> str:
+                 controls: dict | None = None, gpu: dict | None = None,
+                 lead: float | None = None) -> str:
     """The part's `-vf`: normalise (HDR → SDR 709, before anything sees the frame),
     the retime when the shot has a speed (`setpts` — so the *frame count* changes,
     not the rate: the `fps` conform after it duplicates or drops to the film's rate;
@@ -1341,8 +1406,9 @@ def video_filter(video: dict, normalise: str | None = None,
     shot's Lumetri contrast and saturation (`adjust_vf`), after the table as on the
     monitor. With `gpu` (`gpu_input`) the decode and the scale are the GPU's
     (`conform_chain`); a full-range source with no LUT is put in limited range here,
-    which the CPU path's `format=yuv420p` did by converting from `yuvj420p`."""
-    chain = conform_chain(video, gpu, normalise, speed)
+    which the CPU path's `format=yuv420p` did by converting from `yuvj420p`. `lead`:
+    the read was sought early (`seek_plan`) and starts on the in's own frame."""
+    chain = conform_chain(video, gpu, normalise, speed, lead=lead)
     if gpu and gpu["full"] and not lut:
         chain.append(FULL_TO_LIMITED)
     chain.append(lut if lut else "format=yuv420p")
@@ -1385,15 +1451,17 @@ def encode_part(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path
     controls = held_controls(controls, 0.0, frames / float(rate))
     vol = volume_vf(controls)
     gpu = gpu_input(src, orient, normalise, video) if gpu_decode else None
+    # sought a few frames early: the shot opens on the frame its in names (FRAMEACC)
+    ss, lead = seek_plan(src, t_in)
     # the video effects (verdict 10 punch 8) on the graded picture, ahead of the designed
     # effects and Motion: `vfx_graph` from the conform's [vsrc] to [vbase]
     vg = vfx_graph(controls, video["w"], video["h"], rate, frames, "vsrc", "vbase", dest)
     # Lumetri › Vignette (wave 15, VIGNETTE): the last of the grade, before the effects
     graded = "vsrc" if vg else "vbase"
     vig = vignette_graph(controls, video["w"], video["h"], rate, frames, "vlum", graded, "vig", dest)
-    graph = [f"[0:v]{video_filter(video, normalise, lut, speed, controls, gpu)}"
+    graph = [f"[0:v]{video_filter(video, normalise, lut, speed, controls, gpu, lead)}"
              f"[{'vlum' if vig else graded}]",
-             f"[0:a]{audio_filter(gain_db + volume_db(controls), speed)}"
+             f"[0:a]{audio_lead(lead)}{audio_filter(gain_db + volume_db(controls), speed)}"
              f"{',' + vol if vol else ''}[abase]"]
     if vig:
         graph.append(vig)
@@ -1428,14 +1496,17 @@ def encode_part(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path
         if ctl == "empty":
             continue                            # nothing of it shows: not even decoded
         ogpu = gpu_input(o["src"], orient, o.get("normalise"), video) if gpu_decode else None
+        oss, olead = seek_plan(o["src"], o["src_in"])
         extra += [*input_args(o["src"], orient, ogpu),
-                  "-ss", f"{o['src_in']:.4f}", "-t", f"{o['src_len'] + 1.0:.4f}",
+                  "-ss", oss, "-t", f"{o['src_len'] + olead + 1.0:.4f}",
                   "-i", str(o["src"])]
-        chain = conform_chain(video, ogpu, o.get("normalise"), o["speed"], restart=True)
+        chain = conform_chain(video, ogpu, o.get("normalise"), o["speed"], lead=olead)
         if ogpu and ogpu["full"]:
             chain.append(FULL_TO_LIMITED)
         chain += ["format=yuv420p", f"tpad=stop_mode=clone:stop_duration=2,trim=end_frame={n}"]
-        shift = f"setpts=PTS-STARTPTS+{off}/({fps_text(rate)})/TB"
+        # its first frame on the part's frame `off`: rounded, since setpts truncates
+        # (42 frames at 59.94 is 41.99999… of TB, and the clip was a frame early)
+        shift = f"setpts=PTS-STARTPTS+floor({off}/({fps_text(rate)})/TB+0.5)"
         x = y = 0
         if ctl is None:
             graph.append(f"[{n_in}:v]{','.join(chain + [shift])}[ov{j}]")
@@ -1458,7 +1529,7 @@ def encode_part(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path
     else:
         tail = ["-t", f"{part_seconds(t_in, t_out, speed):.3f}"]
     cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin", *input_args(src, orient, gpu)]
-    cmd += ["-ss", f"{t_in:.3f}", "-t", f"{max(0.05, t_out - t_in) + 1.0:.3f}",
+    cmd += ["-ss", ss, "-t", f"{max(0.05, t_out - t_in) + lead + 1.0:.3f}",
             "-i", str(src), *extra, *tail,
             "-filter_complex", ";".join(graph),
             "-map", f"[{vcur}]", "-map", f"[{acur}]", "-dn",   # drop GoPro's telemetry track
@@ -1518,7 +1589,7 @@ def _handle_input(graph: list[str], bl: dict, video: dict, k: int, frames: int,
     frame repeated after (missing media past an outgoing out), placed from frame `offset`."""
     off, n = bl["offset"], bl["frames"]
     chain = video_filter(video, bl.get("normalise"), bl.get("lut"), bl["speed"],
-                         bl.get("controls"), None)
+                         bl.get("controls"), None, bl.get("lead"))
     head = f"[{k}:v]{chain}"
     # its Lumetri › Vignette (wave 15) too, at the value it has at that end of its shot
     hc = bl.get("controls")
@@ -1617,7 +1688,8 @@ def blend_audio(graph: list[str], bl: dict, k: int, acur: str, rate: Fraction,
     # stereo first, as the encode's `-ac 2` would make it (a mono source's level kept)
     graph.append(f"[{acur}]asetpts=PTS-STARTPTS,aformat=channel_layouts=stereo,"
                  f"aeval=exprs='val(0)*{base}|val(1)*{base}':channel_layout=stereo[trb{j}]")
-    graph.append(f"[{k}:a]{audio_filter(bl['gain_db'], bl['speed'])},asetpts=PTS-STARTPTS,"
+    graph.append(f"[{k}:a]{audio_lead(bl.get('lead') or 0.0)}"
+                 f"{audio_filter(bl['gain_db'], bl['speed'])},asetpts=PTS-STARTPTS,"
                  "aformat=channel_layouts=stereo,"
                  f"apad,atrim=end_sample={max(1, ns)},"
                  f"aeval=exprs='val(0)*{other}|val(1)*{other}':channel_layout=stereo,"
@@ -1651,8 +1723,11 @@ def apply_blends(graph: list[str], extra: list[str], blends: list[dict], video: 
         if mode == "fade":
             acur = fade_audio(graph, bl, acur, rate, j)
             continue
-        # a transition's half (verdict 6, punch 6): the neighbour's handle as input n_in
-        extra += ["-ss", f"{bl['src_in']:.4f}", "-t", f"{bl['src_len'] + 1.0:.4f}",
+        # a transition's half (verdict 6, punch 6): the neighbour's handle as input n_in,
+        # sought a few frames early so it opens on the frame its src_in names (FRAMEACC)
+        hss, hlead = seek_plan(bl["src"], bl["src_in"])
+        bl = {**bl, "lead": hlead}
+        extra += ["-ss", hss, "-t", f"{bl['src_len'] + hlead + 1.0:.4f}",
                   "-i", str(bl["src"])]
         if bl["kind"] == "video":
             vcur = blend_video(graph, bl, video, n_in, vcur, frames, rate, j)

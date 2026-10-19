@@ -14,6 +14,7 @@ the part encode that assemble.py already performs.
 
 from __future__ import annotations
 
+import math
 import subprocess
 from pathlib import Path
 
@@ -111,6 +112,16 @@ def music_spec(raw: dict) -> dict:
         gain = float(gain)
         if not (MIN_GAIN_DB <= gain <= MAX_GAIN_DB):
             raise ValueError(f"gain_db {gain} outside {MIN_GAIN_DB}..{MAX_GAIN_DB}")
+    # The film's own clock on the bed's (wave 16, FRAMEACC): an In/Out export starts
+    # `in` seconds into the sequence, so into the bed; its fades are where the sequence
+    # (`seq_s` long) has them. Absent: the film is the whole sequence, as always.
+    clock = {}
+    for key, low in (("in", 0.0), ("seq_s", 1e-6)):
+        if raw.get(key) is not None:
+            v = float(raw[key])
+            if not (math.isfinite(v) and v >= low):
+                raise ValueError(f"{key} {raw[key]!r} is not a time")
+            clock[key] = v
     return {
         "asset": str(raw["asset"]),
         "gain_db": gain,                                # None → measure and compute
@@ -119,6 +130,8 @@ def music_spec(raw: dict) -> dict:
         "duck_db": float(raw.get("duck_db", SPEECH_DUCK_DB)),
         "fade_in": max(0.0, float(raw.get("fade_in", 1.5))),
         "fade_out": max(0.0, float(raw.get("fade_out", 4.0))),
+        "in": clock.get("in"),
+        "seq_s": clock.get("seq_s"),
     }
 
 
@@ -193,12 +206,37 @@ def _bed_chain(s: dict, film_s: float) -> str:
 
     Looping so a short track does not end the bed early; trimming so a long one does
     not run past the picture.
+
+    With `in` / `seq_s` (an In/Out export, wave 16 FRAMEACC) the film is a range of the
+    sequence: the bed starts `in` seconds into its loop — what the Program monitor plays
+    at the In (app.js `cueBed`: film time mod the track) — and its fades are on the
+    sequence's clock (`bedGainAt`): the fade in only where the range holds the
+    sequence's first `fade_in` seconds (from part way up when the In is inside it), the
+    fade out only where it holds the last `fade_out` (an Out before them cuts the bed
+    at full level, as Premiere's export of a range does).
     """
-    return (f"[1:a]aloop=loop=-1:size=2e9,atrim=0:{film_s:.3f},"
-            f"asetpts=N/SR/TB,volume={s['gain_db']:.2f}dB,"
-            f"afade=t=in:st=0:d={s['fade_in']:.2f},"
-            f"afade=t=out:st={max(0.0, film_s - s['fade_out']):.3f}:"
-            f"d={s['fade_out']:.2f}[bed]")
+    start = float(s.get("in") or 0.0)
+    seq = s.get("seq_s")
+    if start <= 1e-9 and seq is None:
+        return (f"[1:a]aloop=loop=-1:size=2e9,atrim=0:{film_s:.3f},"
+                f"asetpts=N/SR/TB,volume={s['gain_db']:.2f}dB,"
+                f"afade=t=in:st=0:d={s['fade_in']:.2f},"
+                f"afade=t=out:st={max(0.0, film_s - s['fade_out']):.3f}:"
+                f"d={s['fade_out']:.2f}[bed]")
+    seq = float(seq) if seq is not None else start + film_s
+    fi, fo = s["fade_in"], s["fade_out"]
+    chain = [f"[1:a]aloop=loop=-1:size=2e9,atrim=start={start:.6f}:end={start + film_s:.6f}",
+             "asetpts=N/SR/TB", f"volume={s['gain_db']:.2f}dB"]
+    if fi > 0 and start <= 1e-9:
+        chain.append(f"afade=t=in:st=0:d={fi:.2f}")
+    elif fi > 0 and start < fi:
+        chain.append(f"volume='min(1,(t+{start:.6f})/{fi:.4f})':eval=frame")
+    st = seq - start - fo                     # the fade out's start on the film's clock
+    if fo > 0 and st >= 0 and st < film_s:
+        chain.append(f"afade=t=out:st={st:.3f}:d={fo:.2f}")
+    elif fo > 0 and st < 0:
+        chain.append(f"volume='max(0,min(1,({seq - start:.6f}-t)/{fo:.4f}))':eval=frame")
+    return ",".join(chain) + "[bed]"
 
 
 def _resolved(spec: dict, film_s: float) -> dict:
