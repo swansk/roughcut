@@ -74,7 +74,8 @@ let saveTimer = null;
  * request or a slow disk. The autosave's own 700 ms wait is nothing wrong, and saying
  * "unsaved…" through it flashed a word in the header after every trim. `data-state`
  * still moves at once (hidden until late), so whoever waits on "saved" waits for the
- * save; its text stays for them too. */
+ * save; its text stays for them too. Once it shows, it is amber (workspace.css): the
+ * board holds an edit the disk has not got (verdict 10, punch 2). */
 let lateTimer = 0;
 const LATE_MS = 2000;
 function saveSays(state, text) {
@@ -84,6 +85,12 @@ function saveSays(state, text) {
   clearTimeout(lateTimer);
   delete el.dataset.late;
   if (state === 'unsaved') lateTimer = setTimeout(() => { el.dataset.late = '1'; }, LATE_MS);
+}
+function saveLate() {
+  const el = $('#saveState');
+  if (el.dataset.state === 'failed') return;
+  if (el.dataset.state !== 'unsaved') saveSays('unsaved', 'unsaved…');
+  el.dataset.late = '1';
 }
 
 function touch() {
@@ -4142,11 +4149,68 @@ function save() {
   return saveRun;
 }
 
-/* Write what is waiting: the autosave's timer now, else the save in flight. */
+/* Write what is waiting: the autosave's timer now, else the save in flight — and the
+ * timeline's own save of the tracks, V2+, markers and In / Out when it holds a change
+ * (an export reads those from the EDL on disk: Export flushes through here first,
+ * verdict 10 punch 2). */
 async function flushSave() {
   if (saveTimer) await save();
   else if (saveRun) await saveRun;
+  if (tl.seqDirty && tl.seqDirty() && tl.saveSeq) await tl.saveSeq();
 }
+
+/* The board never holds an edit the disk has not got without saying so, and never for
+ * long (verdict 10, punch 2). Every save notes the body it wrote (`savedText`: the JSON
+ * with each `tmp-N` read as the id the server gave it, so a re-key is not a change);
+ * twice a second the board's body is compared with it. A difference the autosave is not
+ * already writing — an edit whose path forgot to touch it — is saved now (`saveHeals`
+ * counts them: none is the healthy number), and whatever the board has held for more
+ * than UNSAVED_MS turns the header amber "unsaved…" until it lands. Not while a button is
+ * down (a drag is not an edit until it is let go), not while the AI review's After
+ * picture is up (in memory on purpose, rcActions.previewing), not while the Program
+ * plays; and only a difference that held still for a whole tick. */
+const UNSAVED_MS = 3000;
+let savedText = null;
+let dirtyAt = 0;                  // when the board first held what the disk has not
+let dirtyKey = null;              // what it held at the last tick
+let pointerHeld = false;
+window.saveHeals = 0;
+const idsNormal = (text) => text.replace(/"(tmp-\d+)"/g, (m, id) => JSON.stringify(tl.idFor(id)));
+function bodyKey() { return idsNormal(JSON.stringify(saveBody())); }
+function noteSaved(text) { savedText = idsNormal(text); }
+function unsavedTick() {
+  if (savedText == null || !P) return;
+  const busy = pointerHeld || (window.rcActions && window.rcActions.previewing) || player.playing;
+  if (busy) { dirtyKey = null; return; }
+  let now;
+  try { now = bodyKey(); } catch (e) { return; }
+  const cut = now !== savedText;
+  const seq = !!(tl.seqDirty && tl.seqDirty());
+  if (!cut && !seq) {
+    dirtyAt = 0; dirtyKey = null;
+    // the tracks' save landed (the cut's own save says "saved" itself)
+    const st = $('#saveState').dataset.state;
+    if (st === 'unsaved' && !saveTimer && !saveRun) {
+      const t = new Date();
+      saveSays('saved', `saved ${t.getHours()}:${String(t.getMinutes()).padStart(2, '0')}`);
+    }
+    return;
+  }
+  // a failed save has said so (and its toast): the next edit tries again, as before
+  if ($('#saveState').dataset.state === 'failed') return;
+  if (!dirtyAt) dirtyAt = Date.now();
+  if (Date.now() - dirtyAt > UNSAVED_MS) saveLate();
+  const key = `${seq ? 's' : ''}${now}`;
+  const still = key === dirtyKey;
+  dirtyKey = key;
+  if (!still) return;
+  if (cut && !saveTimer && !saveRun) { window.saveHeals += 1; touch(); }
+  if (seq && tl.saveSeq && Date.now() - seqTried > UNSAVED_MS) { seqTried = Date.now(); tl.saveSeq(); }
+}
+let seqTried = 0;
+window.addEventListener('pointerdown', () => { pointerHeld = true; }, true);
+['pointerup', 'pointercancel', 'blur'].forEach((ev) => window.addEventListener(ev, () => { pointerHeld = false; }, true));
+setInterval(unsavedTick, 500);
 
 /* Nothing is lost on a reload or a close (wave 8, SAVESAFE; verdict 6 punch 1: an
  * Accept's save had not left the browser 5 s later, the reload dropped the whole cut and
@@ -4235,11 +4299,12 @@ function saveBody() {
 
 async function saveOnce() {
   let r = null;
+  let text = null;
   try {
+    text = JSON.stringify(saveBody());
     // tagged and uncredentialed: see tl.saveHeaders (wave 8, SAVESAFE)
     r = await fetch('/api/project', {
-      method: 'PUT', headers: tl.saveHeaders(), credentials: 'omit',
-      body: JSON.stringify(saveBody()),
+      method: 'PUT', headers: tl.saveHeaders(), credentials: 'omit', body: text,
     });
   } catch (e) { r = null; }
   if (!r || !r.ok) {
@@ -4256,6 +4321,9 @@ async function saveOnce() {
     const p = await (await fetch('/api/project')).json();
     tl.afterSave(p.segments);
   }
+  // what the disk holds now (a `stale` answer: a newer body of this page's was applied
+  // instead — the unsaved watch compares against the last one it knows went in)
+  if (!(d && d.stale)) noteSaved(text);
   return true;
 }
 
@@ -5676,6 +5744,7 @@ async function boot() {
     extra: () => colour,
     setExtra: (c) => { colour = c && typeof c === 'object' ? c : {}; },
   });
+  noteSaved(JSON.stringify(saveBody()));      // the cut as the disk has it: the unsaved watch's start
   tl.on('select', (ev) => {
     if (ev.source === 'app') return;          // paint() already ran; it told the module
     paint();                                  // the inspector follows the anchor
@@ -5835,6 +5904,7 @@ window.roughcutRefresh = async (opts = {}) => {
   segs = P.segments.map((s) => ({ ...s }));
   music = P.music || null;
   colour = P.colour || {};
+  noteSaved(JSON.stringify(saveBody()));      // the board is the disk again
   // Otherwise the undo stack holds snapshots of the cut before the server's change: ⌘Z
   // of an earlier trim would save that old cut over it (the reload this replaced
   // emptied the stack too).

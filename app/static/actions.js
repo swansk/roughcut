@@ -42,7 +42,9 @@
  * (tlLanes.showGhost, the server's simulation of the accepted ops on the board's cut,
  * POST /api/assist/preview), the colour and Effect Controls ops as the After picture on
  * the Program monitor (applied in memory with nothing saved; ◐ flips Before / After; any
- * edit elsewhere takes the preview down first, so it never rides another edit to disk),
+ * edit elsewhere takes the preview down first, so it never rides another edit to disk) —
+ * a look or a Color Match too, through the LUT baked from the colour block held in
+ * memory (grade.preview; verdict 10, punch 7: they used to show only once saved),
  * a transition or a fade as its dashed box on the edit it will sit on (tlLanes.
  * showTransitions: on the ghost lane while that is up, else on V1 / A1; verdict 9,
  * punch 6), and an export as the file it will write. ✓ / ✗ per op; Accept applies the accepted
@@ -549,7 +551,8 @@
   };
 
   const opIsLook = (op) => LOOK_OPS.has(op.op);
-  const livePreview = (op) => opIsLook(op) && op.op !== 'look' && op.op !== 'match';
+  const livePreview = (op) => opIsLook(op);
+  const LUT_OPS = new Set(['look', 'match']);          // shown through a preview LUT (grade.preview)
   const depsOf = (op) => {
     const out = [];
     ['id', 'a', 'b', 'before', 'after', 'reference'].forEach((k) => { if (typeof op[k] === 'string' && op[k].startsWith('new:')) out.push(op[k]); });
@@ -591,8 +594,7 @@
     const on = !!R.verdict[i] && !block;
     const shows = CUT_OPS.has(op.op) ? 'shown as the ghost lane under V1 until you accept'
       : livePreview(op) ? 'shown on the Program monitor (◐ Before / After) until you accept'
-        : opIsLook(op) ? 'the look is baked when it is saved: the Program shows it once you accept'
-          : TX_OPS.has(op.op) ? 'drawn dashed on the timeline, where it will sit, until you accept'
+        : TX_OPS.has(op.op) ? 'drawn dashed on the timeline, where it will sit, until you accept'
           : op.op === 'export' ? 'runs only when you accept'
             : op.op === 'design_effect' ? 'opens Designed Effects on this shot with this note; its own review follows'
               : 'applied when you accept';
@@ -834,9 +836,15 @@
   /* --------------- the look's preview: After on the Program, nothing saved */
   function lookTargetOk(op) {
     const t = TL();
-    const s = t && t.byId(op.id);
-    return !!(s && t.indexOf(s.id) >= 0);   // V1 shots (a V2+ clip's controls save with the tracks)
+    // V1 shots (a V2+ clip's controls save with the tracks; a `new:` shot is not made yet)
+    const onV1 = (x) => { const s = t && x != null && t.byId(x); return !!(s && t.indexOf(s.id) >= 0); };
+    const ids = Array.isArray(op.ids) ? op.ids : [];
+    if (op.op === 'look') return op.ids === 'all' || (ids.length > 0 && ids.every(onV1));
+    if (op.op === 'match') return ids.length > 0 && ids.every(onV1) && (op.reference == null || onV1(op.reference));
+    return onV1(op.id);
   }
+  // the shot a preview parks on: its op's shot (a look on the whole film: none)
+  const shotOf = (op) => (LUT_OPS.has(op.op) ? (Array.isArray(op.ids) ? op.ids[0] : null) : op.id);
   function lookOn() {
     if (R.saved || !R.after || !R.res) return;
     const t = TL();
@@ -855,13 +863,20 @@
     }), { record: false });
     if (!out.ok) { R.saved = null; return; }    // a drag holds the timeline: no preview now
     if (R.el) R.el.classList.add('previewing');
-    const first = t.byId(ops[0].id);
+    // a look or a Color Match is in no LUT the server baked: the monitor takes the LUTs
+    // baked from the colour block as it is now, in memory (grade.js `preview`)
+    R.saved.graded = ops.some((op) => LUT_OPS.has(op.op));
+    if (R.saved.graded && window.grade && typeof grade.preview === 'function') grade.preview(app.colour() || {});
+    const fid = ops.map(shotOf).find((x) => x != null);
+    const first = fid == null ? null : t.byId(ctx.id(fid));
     if (first && !app.playing()) {
       const at = t.filmStart(first.id);
       if (!(t.state.playhead >= at && t.state.playhead < at + t.dur(first))) t.seek(at);
     }
   }
-  function lookOff() {
+  /* `keepGrade` (Accept): the preview LUT stays on the monitor while the accepted ops are
+   * applied for real; accept() then hands it the block they made. */
+  function lookOff(opts) {
     if (!R.saved) return false;
     const t = TL();
     const s = R.saved;
@@ -872,6 +887,7 @@
       if (c == null) delete seg.controls; else seg.controls = JSON.parse(c);
     });
     app.setColour(JSON.parse(s.colour));
+    if (s.graded && !(opts && opts.keepGrade) && window.grade && typeof grade.preview === 'function') grade.preview(null);
     t.select(s.sel, { source: 'api' });
     t.setPlayhead(Math.min(s.playhead, t.total()));
     app.renderInspector();
@@ -1022,7 +1038,7 @@
     if (!R.res || R.res.kind !== 'ops') return null;
     const idx = accepted();
     if (!idx.length) return null;
-    lookOff();
+    lookOff({ keepGrade: true });
     if (window.tlLanes && tlLanes.clearGhost) tlLanes.clearGhost();
     clearTx();
     // the entry is named for what the ops are, never the model's summary cut to fit (the
@@ -1031,6 +1047,12 @@
     const out = applyOps(idx.map((i) => R.ops[i]), { label });
     const failed = new Set(out.refused.map((x) => idx[x.i]));
     const took = idx.filter((i) => !failed.has(i));
+    // the accepted look shows through the block it made until its save lands (then the
+    // saved LUT, baked by the same function, takes over): no blink back to Before
+    if (window.grade && typeof grade.preview === 'function') {
+      if (took.some((i) => LUT_OPS.has(R.ops[i].op))) grade.preview(app.colour() || {}, { untilSave: true });
+      else if (grade.previewing) grade.preview(null);
+    }
     const rej = R.ops.map((_, i) => i).filter((i) => !took.includes(i));
     answer(took, rej, { label, committed: out.committed });
     const n = took.length;

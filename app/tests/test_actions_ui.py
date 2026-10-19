@@ -728,6 +728,139 @@ def test_the_program_shows_after_then_before(browser, live_server, project):
         b.close()
 
 
+# ---------------------------------------------------------------- a look and a match, before Accept
+
+MOVED = ("(base) => { const q = grade.probe(); return !!q && "
+         "Math.abs(q[0]-base[0]) + Math.abs(q[1]-base[1]) + Math.abs(q[2]-base[2]) > 6; }")
+BACK = ("(base) => { const q = grade.probe(); return !!q && "
+        "Math.abs(q[0]-base[0]) + Math.abs(q[1]-base[1]) + Math.abs(q[2]-base[2]) < 2; }")
+
+
+def _park(p, index: int, sid: str):
+    """The Program parked inside the shot, its grade drawn; returns the picture's mean."""
+    p.locator("#tl .blk").nth(index).click()
+    p.evaluate(f"cueAt({index}, segs[{index}].in + 0.5)")
+    p.wait_for_function(f"liveVideo() && liveVideo().readyState >= 2 && grade.shot === '{sid}' && grade.probe()",
+                        timeout=10000)
+    p.wait_for_timeout(400)
+    return p.evaluate("grade.probe()")
+
+
+def _lut_table(p, sid: str) -> list:
+    return p.evaluate("(id) => fetch('/api/lut/' + id + '?n=17').then(r => r.json()).then(d => d.table)", sid)
+
+
+def _preview_matches_the_saved_lut(b, p, sid: str) -> None:
+    """After Accept the saved LUT (what /api/lut and the render bake, from the EDL on
+    disk) is the preview's: the same table, cell for cell."""
+    shown = p.evaluate("Array.from(grade.lut.data)")
+    b.settle()
+    p.wait_for_function("!grade.previewing", timeout=8000)        # the save landed: the saved LUT is back
+    saved = [max(0, min(255, round(v * 255))) for v in _lut_table(p, sid)]
+    assert shown == saved, "the After picture is not the LUT Accept saved"
+    assert p.evaluate("Array.from(grade.lut.data)") == saved
+
+
+def test_a_look_shows_on_the_program_before_accept_and_goes_on_reject(browser, live_server, project):
+    """Verdict 10, punch 7: a `look` op was baked only on save — the review could not show
+    it. Now the Program shows it (After, through the LUT baked from the colour block held
+    in memory), ◐ shows Before, Reject puts the picture back and nothing was written, and
+    after Accept the saved LUT — the export's — is the preview's."""
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+        before_disk = b.raw()
+        base = _park(p, 1, "shot-b")
+        b.review(b.ask([{"op": "look", "ids": ["shot-b"], "name": "filmic", "strength": 1.0}]))
+        assert "Program monitor" in p.locator("[data-testid=ai-op-row] .air-line").get_attribute("title")
+        p.wait_for_function("rcActions.previewing && grade.previewing")
+        p.wait_for_function(MOVED, arg=base, timeout=8000)              # After
+        after = p.evaluate("grade.probe()")
+        p.locator("[data-testid=ai-before-after]").click()
+        p.wait_for_function(BACK, arg=base, timeout=5000)               # Before
+        p.locator("[data-testid=ai-before-after]").click()
+        p.wait_for_function(MOVED, arg=base, timeout=5000)              # After again, no second bake needed
+        p.wait_for_timeout(800)
+        assert b.raw() == before_disk                                   # nothing saved
+        p.locator("[data-testid=ai-reject-all]").click()
+        p.wait_for_function("!rcActions.open && !grade.previewing")
+        p.wait_for_function(BACK, arg=base, timeout=5000)               # Reject: the picture as it was
+        p.wait_for_timeout(800)
+        assert b.raw() == before_disk
+        # accepted: it stays (no blink back to Before), and the export's LUT is the preview's
+        b.review(b.ask([{"op": "look", "ids": ["shot-b"], "name": "filmic", "strength": 1.0}]))
+        p.wait_for_function(MOVED, arg=base, timeout=8000)
+        b.accept()
+        assert p.evaluate(MOVED, base), "the accepted look blinked back to Before"
+        _preview_matches_the_saved_lut(b, p, "shot-b")
+        q = p.evaluate("grade.probe()")
+        assert sum(abs(x - y) for x, y in zip(q, after)) < 2
+        assert b.settle()["colour"]["shots"]["shot-b"]["look"] == "filmic"
+    finally:
+        b.close()
+
+
+def test_a_color_match_shows_on_the_program_before_accept_and_goes_on_reject(browser, live_server, project):
+    """The same for a `match` op: shot C matched to a reference (shot A, brightened by
+    hand) shows brighter on the Program before Accept, Reject puts it back, and the
+    saved LUT after Accept is the preview's."""
+    import server
+    for c in ("CLIP_A.MP4", "CLIP_B.MP4", "CLIP_C.MP4"):
+        assert server.measure_colour(c), c                 # the match reads each clip's colour
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+        # the reference made brighter by hand (Lumetri Exposure), saved like any edit
+        assert p.evaluate("effects.set('exposure', 1.5, tl.byId('shot-a'))")
+        b.settle()
+        before_disk = b.raw()
+        base = _park(p, 2, "shot-c")
+        op = {"op": "match", "ids": ["shot-c"], "to": "reference", "reference": "shot-a"}
+        b.review(b.ask([op]))
+        p.wait_for_function("rcActions.previewing && grade.previewing")
+        p.wait_for_function(MOVED, arg=base, timeout=8000)              # After: matched to the bright reference
+        after = p.evaluate("grade.probe()")
+        assert sum(after) > sum(base)
+        p.wait_for_timeout(800)
+        assert b.raw() == before_disk
+        p.locator("[data-testid=ai-reject-all]").click()
+        p.wait_for_function("!rcActions.open && !grade.previewing")
+        p.wait_for_function(BACK, arg=base, timeout=5000)
+        p.wait_for_timeout(800)
+        assert b.raw() == before_disk
+        b.review(b.ask([op]))
+        p.wait_for_function(MOVED, arg=base, timeout=8000)
+        b.accept()
+        _preview_matches_the_saved_lut(b, p, "shot-c")
+        col = b.settle()["colour"]
+        assert col["reference"] == "shot-a" and col["shots"]["shot-c"]["match"] == "reference"
+    finally:
+        b.close()
+
+
+def test_the_preview_lut_is_baked_from_the_posted_block_and_writes_nothing(live_server, project):
+    """POST /api/lut/{id} {colour}: the shot's LUT for a block the board holds in memory —
+    the same bake as GET once that block is saved, a 400 for a block a save would refuse,
+    and the EDL untouched."""
+    import httpx
+    _seed(project)
+    raw = Path(project["edl"]).read_bytes()
+    block = {"look": None, "shots": {"shot-b": {"look": "alpine", "strength": 0.8}}}
+    with httpx.Client(base_url=live_server, timeout=20) as c:
+        plain = c.get("/api/lut/shot-b").json()
+        pv = c.post("/api/lut/shot-b", json={"colour": block}).json()
+        assert pv["preview"] is True and pv["look"] == "alpine" and pv["strength"] == 0.8
+        assert pv["table"] != plain["table"]
+        assert c.post("/api/lut/shot-b", json={"colour": {"look": "no-such-look"}}).status_code == 400
+        assert c.post("/api/lut/nope", json={"colour": block}).status_code == 404
+        assert Path(project["edl"]).read_bytes() == raw                  # nothing written
+        edl = json.loads(raw)
+        edl["colour"] = block
+        Path(project["edl"]).write_text(json.dumps(edl), encoding="utf-8")
+        assert c.get("/api/lut/shot-b").json()["table"] == pv["table"]   # what a save of it bakes
+    _seed(project)
+
+
 def test_an_answer_and_a_failure_read_as_words(browser, live_server, project):
     b = Board(browser, live_server, project)
     try:

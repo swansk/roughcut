@@ -359,7 +359,14 @@
   /* One line for what came back. Once the review is answered (lane AIOPS's panel fires
    * `rc:assist-answered`) it says what landed, and offers no second review of ops that
    * are already in the cut. A whole-cut rewrite is an Ask job of its own: "ready" only
-   * once that job is done. */
+   * once that job is done.
+   *
+   * What landed says how to take it back — "Ctrl+Z undoes", while the accept is the top of
+   * the undo stack — in words, not a button (verdict 10, punch 2). This line sits in the
+   * Timeline panel's header row, where a click gives the timeline the keys; with Selects
+   * open at 1440 the header's centre was the line's "Undo" link, so the judge's click
+   * before Ctrl+M took an accepted colour change back, and the autosave and the export
+   * followed. A click anywhere on this line now changes nothing in the cut. */
   function resultLine(d) {
     if (d.kind === 'ops') {
       const n = (d.ops || []).length;
@@ -368,8 +375,8 @@
         const a = d.answered;
         if (!a.accepted) return { line: 'Rejected — nothing changed', act: '', what: '' };
         const line = a.accepted === a.total ? `${plural(a.accepted, 'change')} applied` : `${a.accepted} of ${a.total} applied`;
-        // Undo while the accept is still the last thing on the undo stack
-        return { line, act: a.top ? 'Undo' : '', what: a.top ? 'undo' : '' };
+        // how to undo it, while the accept is still the last thing on the undo stack
+        return { line, act: '', what: '', hint: a.top ? `${IS_MAC ? '⌘Z' : 'Ctrl+Z'} undoes` : '' };
       }
       return { line: `${plural(n, 'change')} ready`, act: 'Review', what: 'review' };
     }
@@ -387,6 +394,7 @@
     return `<span class="aip-result" data-testid="ai-result" data-kind="${esc(d.kind || '')}" title="${esc(title)}">`
       + `<span class="aip-ok" aria-hidden="true">✓</span>${esc(r.line)}`
       + (r.act ? `<span class="aip-sep">·</span><button type="button" class="aip-link" data-ai="${r.what}" data-testid="ai-result-open">${esc(r.act)}</button>` : '')
+      + (r.hint ? `<span class="aip-sep">·</span><span class="aip-dim" data-testid="ai-undo-hint" title="one undo takes the whole accept back (Edit › Undo, the header's ↶)">${esc(r.hint)}</span>` : '')
       + '</span><button type="button" class="aip-x" data-ai="dismiss" aria-label="dismiss" title="dismiss">×</button>';
   }
 
@@ -402,7 +410,6 @@
     else if (what === 'review') review(AI.result);
     else if (what === 'plan') showPlan(AI.result);
     else if (what === 'answer') showPop('answer');
-    else if (what === 'undo') undoAccept();
   }
 
   /* ------------------------------------------------------------ floating bits */
@@ -648,8 +655,8 @@
     else if (r.what === 'answer' && r.act) showPop('answer');
   }
 
-  /* The review panel answered this ask: the line says what landed, and offers Undo while
-   * the accept's entry is the top of the undo stack. */
+  /* The review panel answered this ask: the line says what landed, and how to undo it
+   * while the accept's entry is the top of the undo stack. */
   function onAnswered(e) {
     const d = e && e.detail;
     if (!d || !AI.result || AI.result.job !== d.job) return;
@@ -659,8 +666,8 @@
     paintStatus();
   }
 
-  /* The undo stack moved: another entry on top takes the line's Undo away; that accept's
-   * own undo (the line's Undo, Ctrl+Z, the header's ↶) puts the prompt back to idle. */
+  /* The undo stack moved: another entry on top takes the line's undo hint away; that
+   * accept's own undo (Ctrl+Z, Edit › Undo, the header's ↶) puts the prompt back to idle. */
   function onUndoStack(ev) {
     const a = AI.result && AI.result.answered;
     if (!ev || !a || !a.top) return;
@@ -673,12 +680,6 @@
       a.top = false;
       paintStatus();
     }
-  }
-
-  function undoAccept() {
-    const a = AI.result && AI.result.answered;
-    if (!a || !a.top || !TL() || typeof tl.undo !== 'function') return;
-    tl.undo();
   }
 
   function review(d) {

@@ -72,6 +72,8 @@ header > button { padding: 2px 9px; }
 #undo, #redo, #keysBtn { min-width: 28px; padding: 2px 6px; }
 #saveState[data-state="saved"], #saveState[data-state="unsaved"]:not([data-late]) { display: none; }
 #saveState[data-state="failed"] { color: var(--bad); }
+/* the board holds an edit the disk has not got, for longer than an autosave takes (verdict 10, punch 2) */
+#saveState[data-state="unsaved"][data-late] { color: var(--warn); }
 #makeFilm .dot { color: var(--accent); margin-left: 6px; }
 /* the menu bar: File · Edit · Clip · Sequence · Window · Help, each a drop-down */
 #menubar { display: flex; align-items: center; gap: 0; margin-right: 6px; }

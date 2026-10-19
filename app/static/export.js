@@ -600,10 +600,19 @@
   }
 
   /* ------------------------------------------------------------ the job */
+  let flushing = false;
   async function start() {
-    if (phase !== 'settings') return;
-    const go = dlg.querySelector('#exGo');
+    if (phase !== 'settings' || flushing) return;
+    let go = dlg.querySelector('#exGo');
     if (!go || go.disabled) return;
+    // What the autosave still holds reaches the disk first: the render takes the shots
+    // from here but the colour block, the tracks and V2+ from the EDL on disk, so an edit
+    // accepted a moment ago would be in one and not the other (verdict 10, punch 2).
+    flushing = true;
+    try { if (typeof window.roughcutFlush === 'function') await window.roughcutFlush(); } catch (e) { /* the save says so */ }
+    flushing = false;
+    go = dlg.querySelector('#exGo');
+    if (phase !== 'settings' || !go || go.disabled) return;
     const segments = exportSegments();
     if (!segments.length) return;
     const p = preset();
