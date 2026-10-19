@@ -49,6 +49,20 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-19 (box clock ~03:00): **wave 14 merged except PLAY4**: AIOPS3 `8f5b441` (verdict 10's lost colour = the AI line's
+  clickable Undo under a Timeline-header click with Selects open; now text; Export flushes saves; an unsaved-edit watch
+  heals + flags amber > 3 s, `window.saveHeals`; Look/Match Before/After via an in-memory LUT, `POST /api/lut/{sid}`),
+  VFX `6280b25` (Crop, Transform, Gaussian Blur: bin, Effect Controls stack, CSS preview, assemble.py export, AI `effect`
+  op), TIMEBASE `6962888` (EDL `fps` kept from the first clip / Sequence Settings; whole-frame edit points everywhere;
+  old EDLs get their derived rate once at open), SERVERPERF `4bcb714` (fx checks in a child process; vignette 7.1 s, was
+  ~22 min; 0 requests > 300 ms / 0 holds > 200 ms under first pass + export + check + 110 MB upload; verdict 10's
+  "slow upload" was the judge script's own 90 s wait), POLISH10 `37dede7` (retried journey step -> AMBER; status_cheap's
+  flake = the clip-facts warm-up; polish leftovers). Lead fixes in merges: `write_timebase_once` keeps the EDL mtime (the
+  one-time fps write held range proxies back; test_preview_building film-order broke at 6962888); `tl.unrecorded()` so
+  the unsaved watch never saves a `record: false` preview. Rubric log: request timing excludes body wait, 50 ms loop
+  sampling. Queued: card posters from 4K originals still 0.5-0.9 s before a preview (cards should ask `near=1`, as the
+  Program does); PLAY4's waitLine/playFrom still use `stem()` (a generated clip without a preview would read gen_…);
+  `api_save`'s colour validation is the slowest remaining hold (81 ms). Karl: preview restart on 8766 still awaiting his yes.
 - 2026-10-18 ~23:10 (box clock): **VERDICT 10 FAIL on `9470064`** (= 69fb0f0; 1:9 2:9 3:9 4:9 5:8 6:8 7:8 8:9 9:8 10:7
   11:9 12:9 13:9 14:9 15:8 16:9; the judge's gate GREEN, perf passed both runs, journey green with no retry).
   Blockers: dimension 10 at 7, K2 + K3 open (Karl's). Rulings: inView, wave-13 budgets, no D-Bus honest; the journey's
