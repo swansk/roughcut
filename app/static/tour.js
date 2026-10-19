@@ -6,7 +6,9 @@
  *    localStorage) a callout walks the loop in six steps ON the real workspace: import
  *    footage, run the first pass, why a pick was made, review the proposed cut, ask the AI,
  *    export. Each step is a small dark callout beside the real control, with that control
- *    outlined; Next / Back / Skip, step dots, Esc skips. Nothing is locked or dimmed: the
+ *    outlined; Next / Back / Skip, step dots. Esc closes what Show me opened (a dialog, a
+ *    menu, the first pass's panel) and never ends the walk-through: only Skip tour does
+ *    (verdict 10: an Esc to clear the AI prompt ended it). Nothing is locked or dimmed: the
  *    workspace stays usable under it. "Show me" opens the thing (the Import dialog, the
  *    first pass's panel, Selects, the AI prompt…) and never starts a model call or spends
  *    anything itself. A step whose control is not on screen (a closed panel, a control
@@ -216,6 +218,19 @@
     price: NO_CALL,
   };
 
+  /* A menu item's card is titled by the item's own words as the menu shows them now, less
+   * its trailing "…" and its shortcut (verdict 10: the AI menu's "Re-run first pass…" had a
+   * card titled "Run first pass"). */
+  function itemLabel(el) {
+    const host = el && (el.querySelector('.aip-ml') || el);
+    if (!host) return '';
+    const words = Array.from(host.childNodes)
+      .filter((n) => !(n.nodeType === 1 && n.classList.contains('k')))
+      .map((n) => n.textContent).join('');
+    return words.replace(/\s+/g, ' ').trim().replace(/\s*…$/, '');
+  }
+  const item = (spec) => ({ ...spec, name: (el) => itemLabel(el) || val(spec.name, el) });
+
   // [selector, spec]; from the hovered element outwards, the first match wins
   const CARDS = [
     ['#firstpass .fp-btn', FIRSTPASS],
@@ -244,20 +259,21 @@
       change: 'All of it lands as one edit; one Ctrl+Z undoes it.' }],
     ['[data-testid="ai-op-reject"]', OP_REJECT],
     ['[data-testid="ai-reject-all"]', { ...OP_REJECT, name: 'Reject all', what: 'Leaves the whole answer out.' }],
-    // the menus: the AI menu's actions, and the Sequence menu's two AI entries
-    ['#menubar [data-cmd="ai:prompt"]', PROMPT],
-    ['#menubar [data-cmd="ai:firstpass"]', { ...FIRSTPASS, name: 'Run first pass' }],
-    ['#menubar [data-cmd="ai:ask"]', ASK],
-    ['#menubar [data-cmd="ai:shot"]', { ...SHOT, name: 'Ask about the selected clip' }],
-    ['#menubar [data-cmd="ai:colour"]', COLOUR],
-    ['#menubar [data-cmd="ai:fx"]', FX],
-    ['#menubar [data-cmd="ai:deep"]', { ...DEEP, name: 'Look deeper at the selected clip' }],
-    ['#menubar [data-cmd="ai:find"]', FIND],
-    ['#menubar [data-cmd="ai:audit"]', AUDIT],
-    ['#menubar [data-cmd="ask"]', { ...ASK, name: 'Ask for a change…',
-      change: 'Puts the cursor in the AI prompt; nothing is asked until you press Enter.' }],
-    ['#menubar [data-cmd="fx"]', { ...FX, name: 'Design an effect…',
-      change: 'Opens Designed Effects; nothing is designed until you press Design.' }],
+    // the menus: the AI menu's actions, and the Sequence menu's two AI entries, each card
+    // titled by its item (`item`)
+    ['#menubar [data-cmd="ai:prompt"]', item(PROMPT)],
+    ['#menubar [data-cmd="ai:firstpass"]', item(FIRSTPASS)],
+    ['#menubar [data-cmd="ai:ask"]', item(ASK)],
+    ['#menubar [data-cmd="ai:shot"]', item(SHOT)],
+    ['#menubar [data-cmd="ai:colour"]', item(COLOUR)],
+    ['#menubar [data-cmd="ai:fx"]', item(FX)],
+    ['#menubar [data-cmd="ai:deep"]', item(DEEP)],
+    ['#menubar [data-cmd="ai:find"]', item(FIND)],
+    ['#menubar [data-cmd="ai:audit"]', item(AUDIT)],
+    ['#menubar [data-cmd="ask"]', item({ ...ASK,
+      change: 'Puts the cursor in the AI prompt; nothing is asked until you press Enter.' })],
+    ['#menubar [data-cmd="fx"]', item({ ...FX,
+      change: 'Opens Designed Effects; nothing is designed until you press Design.' })],
   ];
   function cardFor(el) {
     for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
@@ -525,7 +541,7 @@
   }
 
   const T = { steps: null, which: null, i: 0, root: null, ring: null, tick: 0, point: null,
-              anchorWhy: '', anchorEl: null, wasOpen: false, bodyKey: null, natW: 304 };
+              anchorWhy: '', anchorEl: null, bodyKey: null, natW: 304 };
 
   function anchorOf(step) {
     for (const a of step.anchor || []) {
@@ -535,12 +551,6 @@
     T.anchorWhy = 'fallback';
     return step.fallback ? step.fallback() : null;
   }
-
-  // what Esc closes before it ends the walk-through: a menu, the first pass's panel, a dialog
-  // (Import's and the Media Browser's by their wave-12 hooks, whatever element they are)
-  const othersOpen = () => !!($('#menubar .menu.open') || first('#firstpass .fp-panel')
-    || $$('dialog[open]').length || first('#keysOverlay')
-    || first('[data-testid="import-dialog"]') || first('[data-testid="media-browser"]'));
 
   function build() {
     const root = document.createElement('div');
@@ -747,7 +757,6 @@
     if (playing && now - (T.placed || 0) < 480) return;
     T.placed = now;
     place();
-    T.wasOpen = othersOpen();
   }
 
   function go(i) {
@@ -761,18 +770,18 @@
     const step = T.steps[T.i];
     if (!step.show) return;
     step.show();
-    T.wasOpen = true;
     // what it opened lays out a frame later
     requestAnimationFrame(() => requestAnimationFrame(tick));
   }
 
   /* Esc: the timeline's keys take Escape's keydown first (and stop it), so this listens on
-   * keyup, as the first pass's panel does. An Esc that closed something the walk-through
-   * opened (a menu, the first pass's panel, a dialog) only closes that. */
+   * keyup, as the first pass's panel does. Esc belongs to what it closes — the dialog, the
+   * menu or the panel Show me opened, the AI prompt it cleared, the timeline's selection —
+   * and never ends the walk-through (verdict 10, punch 9: Esc pressed to clear the prompt
+   * ended the whole tour). Skip tour ends it. The callout follows what is still open. */
   function onKey(e) {
     if (!T.root || e.key !== 'Escape') return;
-    if (T.wasOpen && !othersOpen()) { T.wasOpen = false; place(); return; }
-    stop('skipped');
+    place();
   }
 
   function start(which) {
@@ -783,7 +792,6 @@
     if (seen() == null) remember('shown');
     build();
     paint();
-    T.wasOpen = othersOpen();
     // the cost words depend on the backend: say them once it has answered
     if (!terms) backendTerms().then(() => { if (T.root) place(); });
     window.rcTour.active = true;
