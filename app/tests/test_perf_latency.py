@@ -257,9 +257,20 @@ def measure_play(page) -> dict:
       // IS the picture, so what the viewer sees is its draws, not the live buffer's frames.
       // `grade.draws` on every animation frame, with whether the canvas is on.
       window.__cv = [];
-      const look = () => {
+      // (a record) the play's long animation frames, with what ran in them
+      window.__laf = [];
+      try {
+        if (window.__lafObs) window.__lafObs.disconnect();
+        window.__lafObs = new PerformanceObserver((l) => { for (const e of l.getEntries()) {
+          window.__laf.push({ t: Math.round(e.startTime - t0), ms: Math.round(e.duration),
+            blocking: Math.round(e.blockingDuration || 0),
+            scripts: (e.scripts || []).filter((x) => x.duration >= 5).slice(0, 4).map((x) =>
+              `${x.sourceFunctionName || x.invoker || '?'}@${(x.sourceURL || '').split('/').pop()} ${Math.round(x.duration)}`) }); } });
+        window.__lafObs.observe({ type: 'long-animation-frame' });
+      } catch (e) { /* no LoAF in this browser */ }
+      const look = (ft) => {
         if (!window.__flOn) return;
-        window.__cv.push({ t: performance.now() - t0, playing: player.playing,
+        window.__cv.push({ t: performance.now() - t0, ft: ft - t0, playing: player.playing,
                            draws: window.grade ? grade.draws : null,
                            on: !!document.querySelector('#gradeCanvas.on') });
         if (player.playing) {
@@ -285,6 +296,20 @@ def measure_play(page) -> dict:
     log = page.evaluate("window.__fl")
     screen = page.evaluate("window.__scr")
     canvas = canvas_gaps(page.evaluate("window.__cv"))
+    # (wave 13 CANVAS2, a record only, nothing asserted on it) the same play's draws by the
+    # worker's own clock (`grade.drawLog`: when each graded frame was drawn, before its
+    # commit), so a hole the page counted late can be told from one the worker drew late
+    # and the same samples on the animation frames' own clock (the frame time rAF passes,
+    # as the live buffer's gaps above use the frame callbacks' `now`), not the moment each
+    # callback happened to run
+    canvas["frame_clock"] = {k: v for k, v in canvas_gaps(
+        [dict(c, t=c["ft"]) for c in page.evaluate("window.__cv")]).items()
+        if k in ("longest_ms", "holes_over")}
+    canvas["worker"] = worker_gaps(page.evaluate(
+        "(() => { const t0 = window.__fl0, cv = window.__cv, p = cv.filter((s) => s.playing);"
+        " if (!p.length || !window.grade) return null;"
+        " const a = t0 + p[0].t, b = t0 + p[p.length - 1].t;"
+        " return grade.drawLog.filter((d) => d.t >= a && d.t <= b).map((d) => d.t); })()"))
     live = [f for f in log if f["live"]]
     live.sort(key=lambda f: f["t"])
     gaps = [(live[i]["t"] - live[i - 1]["t"], live[i - 1], live[i]) for i in range(1, len(live))]
@@ -298,12 +323,16 @@ def measure_play(page) -> dict:
         "longest_gap_ms": round(worst[0], 1) if worst[0] is not None else None,
         "longest_at": [worst[1] and worst[1]["v"], worst[2] and worst[2]["v"],
                        worst[1] and round(worst[1]["t"]), worst[1] and worst[1]["mt"]],
+        # (wave 13 CANVAS2, a record) the media time across that gap: ~33 ms, the frame came
+        # late; ~67 ms or more, the decoder or the compositor dropped one
+        "longest_dmt_ms": round((worst[2]["mt"] - worst[1]["mt"]) * 1000, 1) if worst[1] and worst[2] else None,
         "cut_gaps_ms": [round(g[0], 1) for g in switches],
         # the longest hole inside a shot (one buffer to itself), apart from the cuts
         "mid_gap_ms": round(max([g[0] for g in gaps if g[1]["v"] == g[2]["v"]] or [0]), 1),
         "cuts": len(switches),
         # the graded canvas across both cuts: its longest hole and its frame rate
         "canvas": canvas,
+        "long_frames": page.evaluate("(window.__laf || []).slice(0, 12)"),
         "screen_bad": screen[:8],
         "screen_bad_n": len(screen),
         "roll": page.evaluate("typeof roll === 'object' ? { ...roll } : null"),
@@ -339,6 +368,16 @@ def canvas_gaps(samples: list[dict]) -> dict:
             "fps": round((len(at) - 1) / (span / 1000), 1) if span > 0 else 0,
             "draws": len(at), "holes_over": len([g for g, _ in gaps if g > GAP_LIMIT_MS]),
             "on": on}
+
+
+def worker_gaps(ts: list[float] | None) -> dict | None:
+    """The longest time between two graded draws by the worker's clock, and how many over
+    the limit (a record beside canvas_gaps' page-side numbers; not asserted)."""
+    if not ts or len(ts) < 2:
+        return None
+    g = [b - a for a, b in zip(ts, ts[1:])]
+    return {"longest_ms": round(max(g), 1), "holes_over": len([x for x in g if x > GAP_LIMIT_MS]),
+            "draws": len(ts)}
 
 
 def measure_seeks(page) -> list[float]:

@@ -1706,6 +1706,11 @@ function playFrom(i, { single = false } = {}) {
     setShotRate(v, seg);
     v.play().catch((err) => { if (g === player.gen) playRefused(err); });
   };
+  // The timeline's render before the play, not after it (wave 13 CANVAS2): after play()
+  // its style and layout pass ran in the play's first frames, the main thread the live
+  // buffer's first frame callbacks and the grade's first draws wait on (the perf test's
+  // play opened with an 83 ms hole at load 12 once).
+  tl.render();
   player.playing = true;            // before go(), which refuses to start a paused monitor
   screenMsg(v.readyState >= 2 ? '' : `opening ${stem(seg.clip)}…`);
   if (v.readyState >= 1) go(); else v.addEventListener('loadedmetadata', go, { once: true });
@@ -1713,7 +1718,6 @@ function playFrom(i, { single = false } = {}) {
   cueBed(filmT);
   tl.setPlayhead(filmT);            // the playhead jumps with the click, not on the first tick
   schedule();
-  tl.render();
   paintTransport();
 }
 
@@ -1754,6 +1758,8 @@ function pauseCut() {
   player.vids.forEach((v) => v.pause());
   if (bed.el) bed.el.pause();
   player.playing = false;
+  // stopped on a frame whose playhead was not drawn (paintPos `quiet`): drawn where it is
+  if (posQuiet && window.tl) { posQuiet = false; tl.setPlayhead(tl.state.playhead, { reveal: false }); }
   freshen(liveVideo());               // parked: a better kind of its media can go in now
   cancelAnimationFrame(player.raf);
   progPause();
@@ -1988,6 +1994,7 @@ const TX_PRE_OUT = 0.45;
 const TX_RESEEK_S = 0.5;
 const TX_CATCH_S = 0.3;      // a drift is taken out over about this much film
 const TX_STEER = 0.6;        // the rate moves at most this far from the film's
+const TX_RATE_MS = 250;      // a steered rate changes at most this often (txFollow)
 
 function txFollow(el, seg, clipT, play) {
   const spd = speedOf(seg);
@@ -2011,7 +2018,18 @@ function txFollow(el, seg, clipT, play) {
   let k = 1;
   if (Math.abs(d) > 1 / 60) k = Math.max(1 - TX_STEER, Math.min(1 + TX_STEER, 1 - d / TX_CATCH_S));
   k = Math.round(k * 20) / 20;                       // steps of 5 %: no rate change per tick
-  if (Math.abs(el.playbackRate - r * k) > 1e-3) el.playbackRate = r * k;
+  // A rate change is a pipeline call (the renderer's SetPlaybackRate; the video renderer
+  // re-learns its cadence and drops frames meanwhile). Steered every few frames, 0.9 → 1 →
+  // 0.95 → 1 and then 1.1 → 1.15 → 1.2 → 1.15 → 1.25 → 1.2 … through the fixture's
+  // dissolve (traced, wave 13 CANVAS2: 13 changes in 0.6 s, the followers dropping frames
+  // and the live shot holding 83 ms among them). Now a new rate waits TX_RATE_MS after the
+  // last one, unless it is the film's own rate (the drift is gone) or a big step.
+  const want = r * k, cur = el.playbackRate, now = performance.now();
+  if (Math.abs(cur - want) > 1e-3
+      && (k === 1 || Math.abs(cur - want) >= 0.15 * r || now - (el._rateAt || 0) >= TX_RATE_MS)) {
+    el.playbackRate = want;
+    el._rateAt = now;
+  }
   if (el.paused) el.play().catch(() => {});
   return true;
 }
@@ -2532,6 +2550,7 @@ function advance() {
   const next = player.idx + 1;
   if (player.single || next >= segs.length) {
     player.playing = false;
+    if (posQuiet && window.tl) { posQuiet = false; tl.setPlayhead(tl.state.playhead, { reveal: false }); }
     if (bed.el) bed.el.pause();
     cancelAnimationFrame(player.raf);
     progPause();
@@ -2711,6 +2730,7 @@ function syncPlayer() {
  * re-pointed once the edits and the playhead settle (restSoon, the inspector's 450 ms),
  * never per nudge — the same frame the inspector asks for, so one request serves both. */
 let restT = 0;
+const stillsHad = new Set();          // exact stills the browser holds (immutable URLs)
 function paintRest() {
   const big = $('#bigPlay');
   if (big) big.hidden = player.playing || !segs.length;
@@ -2728,9 +2748,29 @@ function paintRestStill() {
   const seg = at && segs[at.index];
   const base = seg && (P.clips[seg.clip] || {}).poster;
   if (live || !base) { img.hidden = true; return; }
-  const src = `${base}${base.includes('?') ? '&' : '?'}t=${Math.max(0, at.clipT).toFixed(2)}`;
-  if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+  const sep = base.includes('?') ? '&' : '?';
+  const t = Math.max(0, at.clipT).toFixed(2);
+  const src = `${base}${sep}t=${t}`;
   img.hidden = false;
+  if (img.getAttribute('src') === src || img._want === src) return;
+  img._want = src;
+  if (stillsHad.has(src)) { img.setAttribute('src', src); return; }
+  // A frame the server has not cut yet is cut from the original while the clip has no
+  // preview (0.7-1.3 s a 4K GoPro frame on a loaded box; BLACK's follow-up, wave 13): the
+  // nearest still of the clip it has is shown at once (`near=1`), and the exact frame
+  // replaces it when it lands. A clip with a preview or a proxy answers the exact frame at
+  // once, so it asks for that alone (one request per settled frame, as the inspector's).
+  const row = window.dock && dock.project ? dock.project.clips().find((c) => c.clip === seg.clip) : null;
+  const plays = row && ['proxy', 'range', 'preview', 'original'].includes(row.media);
+  if (plays) { img.setAttribute('src', src); stillsHad.add(src); return; }
+  img.setAttribute('src', `${base}${sep}near=1&t=${t}`);
+  const pre = new Image();
+  pre.onload = () => {
+    stillsHad.add(src);
+    if (stillsHad.size > 400) stillsHad.delete(stillsHad.values().next().value);
+    if (img._want === src) img.setAttribute('src', src);
+  };
+  pre.src = src;
 }
 
 /* The playhead moved while nothing is live (a scrub before the first play, an undo):
@@ -2757,24 +2797,42 @@ function paintPos(filmT, clipT, seg) {
   // sequence at 29.97) repainted the same frame's playhead and readout and re-ran the
   // Program's followers — half the board's main-thread rendering while a graded shot
   // played, the thread that also feeds the grade its frames (wave 11 CANVAS, traced).
+  // Wave 13 CANVAS2: while playing, the Timeline's playhead, its readout and Effect
+  // Controls' lane playheads are drawn on every `every`-th sequence frame (~15 Hz);
+  // the frames between move the playhead's time and run its listeners (the Program's
+  // followers, a dissolve's weights) without drawing it (`quiet`). On a software-composited
+  // display (the headless box) every drawn playhead step made the compositor redraw the
+  // bounding box of the Program and the playhead: 1133x825 px of a 1440 board, 1517x1005
+  // of a 1920, on every sequence frame; traced, half the display compositor's time while a
+  // graded shot played, the thread whose late BeginFrames drop the Program's video frames.
+  let quiet = false;
   if (player.playing && window.tl && typeof tl.gridRate === 'function') {
-    const f = Math.floor(filmT * tl.gridRate() + 1e-6);
+    const rate = tl.gridRate();
+    const f = Math.floor(filmT * rate + 1e-6);
     if (f === posFrame) return;
     posFrame = f;
+    const every = Math.max(1, Math.round(rate / 15));
+    quiet = f % every !== 0;
   } else posFrame = -1;
   // While playing, the timeline is asked to keep the playhead in view four times a
   // second rather than every frame: its check reads the view's width, and after this
   // frame's writes that read was a forced layout of the whole board on every tick
   // (verdict 4 punch 5). The readout is written after the playhead, once, if it changed.
   const now = performance.now();
-  const reveal = !player.playing || now - posReveal > 250;
+  const reveal = !quiet && (!player.playing || now - posReveal > 250);
   if (reveal) posReveal = now;
-  tl.setPlayhead(filmT, { reveal });
+  tl.setPlayhead(filmT, { reveal, quiet });
+  posQuiet = quiet;
   const s = tcOf(filmT), el = $('#pos');
-  if (el.textContent !== s) el.textContent = s;
+  if (el.textContent !== s) {
+    // the text node's data in place, not a new node (a child-list change; timeline.js setText)
+    const tn = el.firstChild;
+    if (tn && tn.nodeType === 3 && !tn.nextSibling) tn.data = s; else el.textContent = s;
+  }
 }
 let posReveal = 0;
 let posFrame = -1;
+let posQuiet = false;               // the drawn playhead is a frame behind its time (paintPos)
 
 /* The monitors read Premiere's HH:MM:SS:FF, the timeline's own timecode (tl.tc). */
 function tcOf(t) { return window.tl && typeof tl.tc === 'function' ? tl.tc(t) : fmt(t); }

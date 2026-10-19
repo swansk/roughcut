@@ -1301,11 +1301,14 @@
     following = true;
     t.on('playhead', onPlayhead);
   }
-  function onPlayhead() {
+  function onPlayhead(ev) {
     const t = TL();
     if (!t) return;
     const live = liveId ? t.byId(liveId) : null;
     if (live && ctl(live).keys) apply();
+    // a playing frame whose playhead is not drawn (timeline.js `quiet`): the Program follows
+    // the keys above, the panel's lanes and numbers wait for the next drawn one
+    if (ev && ev.quiet) return;
     const box = document.querySelector('#inspector .shot');
     const seg = box ? cur() : null;
     if (!seg || !box.querySelector('.ec')) return;

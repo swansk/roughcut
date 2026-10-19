@@ -690,7 +690,15 @@
 
   /* Labelled ticks in HH:MM:SS:FF at the sequence rate; minor ticks split a step into
    * its frames (under a second) or into fifths, tenths once fifths are 100 px apart. */
+  /* The ruler is rebuilt only when what it shows changed (wave 13 CANVAS2): every render
+   * rebuilt its ticks — hundreds of new elements, all restyled and laid out — and the
+   * monitor renders the timeline on Play and at every cut, the frames a hitch shows on. */
+  let rulerKey = '';
   function paintRuler(width) {
+    const key = [width, state.zoom, fps(), state.seqIn, state.seqOut, state.markers.join(','),
+                 keyLabel('⇧M')].join('|');
+    if (key === rulerKey && el.ruler.childElementCount) return;
+    rulerKey = key;
     const r = fps(), n = Math.max(1, Math.round(r));
     const sf = stepFrames(state.zoom);
     const step = sf / r;
@@ -1873,7 +1881,16 @@
   function paintTc() {
     if (!el.tc) return;
     const s = tc(state.playhead);
-    if (el.tc.textContent !== s) el.tc.textContent = s;
+    if (el.tc.textContent !== s) setText(el.tc, s);
+  }
+  /* A readout written on every played frame changes its text node's data in place: a new
+   * text node is a child-list mutation inside #tl, and the timeline's `:has()` rules
+   * re-match every <i> under it for each one (wave 13 CANVAS2, traced: ~1,700 restyled
+   * ruler ticks and handles per second of play). */
+  function setText(node, s) {
+    const t = node.firstChild;
+    if (t && t.nodeType === 3 && !t.nextSibling) t.data = s;
+    else node.textContent = s;
   }
 
   /* ---- tools (Premiere's V C B N Y A) */
@@ -2236,10 +2253,14 @@
     paintRuler(need);
   }
 
+  /* `opts.quiet` (wave 13 CANVAS2): the playhead's time and its event, without moving the
+   * drawn playhead or its readout (the monitor's frames between two painted ones while it
+   * plays, app.js paintPos); listeners that only paint read `ev.quiet` and skip too. */
   function setPlayhead(t, opts = {}) {
     t = headAt(t);
     state.playhead = t;
     if (!el.head) return;
+    if (opts.quiet) { emit('playhead', { t, quiet: true }); return; }
     if (t > total()) reachHead(t);
     positionHead();
     if (opts.reveal !== false) keepInView(timeToX(t));

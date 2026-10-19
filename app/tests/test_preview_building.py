@@ -225,6 +225,106 @@ def test_a_seek_onto_a_building_shot_shows_its_poster_and_the_wait_line(building
             browser.close()
 
 
+def _slow_original_posters(server, monkeypatch, delay_s: float) -> None:
+    """A poster cut from an original takes `delay_s` longer (Killington's 4K GoPro frame:
+    0.7-1.3 s on a loaded box, BLACK's follow-up), so a seek's own frame is slow to come."""
+    real = server.build_poster
+
+    def slow(src, dest, t, original=False):
+        if original:
+            time.sleep(delay_s)
+        return real(src, dest, t, original=original)
+
+    monkeypatch.setattr(server, "build_poster", slow)
+
+
+def test_a_poster_cut_from_the_original_answers_the_nearest_still_at_once(building, monkeypatch):
+    """Wave 13 CANVAS2: `near=1` answers a clip's still already on disk at once when the
+    asked frame is not cut yet and would come from the original (no preview, no proxy);
+    not cached, and it says which time it shows. The exact frame is still the exact frame,
+    and a clip with a proxy always answers its exact frame."""
+    url, server = building["url"], building["server"]
+    with urllib.request.urlopen(f"{url}/media/poster/CLIP_B.jpg?t=0.40", timeout=30) as r:
+        assert r.status == 200
+    _slow_original_posters(server, monkeypatch, 1.5)
+    t0 = time.monotonic()
+    with urllib.request.urlopen(f"{url}/media/poster/CLIP_B.v2.jpg?near=1&t=2.37", timeout=30) as r:
+        took = time.monotonic() - t0
+        assert r.status == 200 and r.read(3) == b"\xff\xd8\xff"
+        assert (r.headers["x-roughcut-poster"] or "").startswith("near "), dict(r.headers)
+        assert "no-store" in r.headers["cache-control"]
+    print(f"near still for CLIP_B at 2.37 in {took * 1000:.0f} ms")
+    assert took < 0.3, f"the near still took {took:.2f}s"
+    # the exact frame: cut (slowly) from the original, immutable
+    t0 = time.monotonic()
+    with urllib.request.urlopen(f"{url}/media/poster/CLIP_B.v2.jpg?t=2.37", timeout=30) as r:
+        assert r.status == 200 and "x-roughcut-poster" not in r.headers
+        assert "immutable" in r.headers["cache-control"]
+    assert time.monotonic() - t0 >= 1.4
+    # now on disk: near=1 answers it, exact
+    with urllib.request.urlopen(f"{url}/media/poster/CLIP_B.v2.jpg?near=1&t=2.37", timeout=30) as r:
+        assert "x-roughcut-poster" not in r.headers
+    # a clip with a proxy: its exact frame (cut from the proxy), never a near one
+    with urllib.request.urlopen(f"{url}/media/poster/CLIP_A.v2.jpg?t=0.00", timeout=30) as r:
+        assert r.status == 200
+    with urllib.request.urlopen(f"{url}/media/poster/CLIP_A.v2.jpg?near=1&t=1.73", timeout=30) as r:
+        assert "x-roughcut-poster" not in r.headers
+    assert server.poster_path("CLIP_A", 1.73).exists()
+
+
+def test_a_seek_onto_a_building_shot_shows_a_picture_within_300_ms(building, monkeypatch):
+    """BLACK's follow-up (wave 13): on a fresh Killington open the poster landed 0.7-1.3 s
+    after a seek onto a building shot (every seek a new frame, cut from the 4K original), so
+    "preparing preview…" stood on black until then. The Program shows the clip's nearest
+    still at once and the exact frame when it lands."""
+    sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed")
+    server = building["server"]
+    with urllib.request.urlopen(f"{building['url']}/media/poster/CLIP_B.jpg?t=0.40", timeout=30) as r:
+        assert r.status == 200
+    _slow_original_posters(server, monkeypatch, 1.2)
+    with sync_api.sync_playwright() as pw:
+        browser, page, errors = _board(pw, building["url"])
+        try:
+            page.evaluate("cueAt(0, segs[0].in + 0.2)")
+            page.wait_for_function("liveVideo().readyState >= 2 && !liveVideo().seeking", timeout=10000)
+            res = []
+            for k in range(3):
+                got = page.evaluate("""async (k) => {
+                    const t0 = performance.now();
+                    cueAt(1, segs[1].in + 0.37 + k * 0.41);
+                    return await new Promise((ok) => {
+                      const look = () => {
+                        const img = document.querySelector('#monPoster');
+                        const src = img ? img.getAttribute('src') || '' : '';
+                        if (img && !img.hidden && src.includes('CLIP_B') && img.complete && img.naturalWidth > 0) {
+                          ok({ ms: performance.now() - t0, src }); return;
+                        }
+                        if (performance.now() - t0 > 5000) { ok({ ms: null, src, hidden: img && img.hidden }); return; }
+                        requestAnimationFrame(look);
+                      };
+                      look();
+                    });
+                }""", k)
+                exact = page.evaluate("""() => new Promise((ok) => { const t0 = performance.now();
+                    const look = () => { const s = document.querySelector('#monPoster').getAttribute('src') || '';
+                      if (!s.includes('near=1') && document.querySelector('#monPoster').complete) { ok({ ms: performance.now() - t0, s }); return; }
+                      if (performance.now() - t0 > 8000) { ok({ ms: null, s }); return; }
+                      requestAnimationFrame(look); };
+                    look(); })""")
+                res.append((got, exact))
+                page.evaluate("cueAt(2, segs[2].in + 0.2)")
+                page.wait_for_function(
+                    "liveVideo().readyState >= 2 && liveVideo().classList.contains('live')", timeout=10000)
+            print("seek onto the building shot → a picture:", [None if g["ms"] is None else round(g["ms"]) for g, _ in res],
+                  "then the exact frame:", [e["ms"] and round(e["ms"]) for _, e in res])
+            for got, exact in res:
+                assert got["ms"] is not None and got["ms"] <= SEEK_LIMIT_MS, got
+                assert exact["ms"] is not None and "CLIP_B" in exact["s"], exact
+            assert not [e for e in errors if "Error" in e], errors
+        finally:
+            browser.close()
+
+
 def test_play_plays_past_a_building_shot_and_reaches_the_next(building):
     sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed")
     with sync_api.sync_playwright() as pw:

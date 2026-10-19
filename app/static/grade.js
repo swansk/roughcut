@@ -64,7 +64,8 @@
    * Self-contained: its source is also the worker's (Function.prototype.toString), so it
    * closes over nothing. `canvas` is a <canvas> or an OffscreenCanvas; `makeStage(w, h)`
    * the 2D canvas a frame is scaled into before its upload. */
-  function Renderer(canvas, makeStage) {
+  function Renderer(canvas, makeStage, ropts) {
+    const FULL = !!(ropts && ropts.full);     // never lean (a comparison switch: ?grade=full)
     const VS = `
       attribute vec2 a_pos;
       varying vec2 v_uv;
@@ -147,7 +148,13 @@
         vec2 c = u_nv12 > 0.5 ? texture(u_pu, q).rg : vec2(texture(u_pu, q).r, texture(u_pv, q).r);
         return clamp(u_yuv * (vec3(y, c) - u_yoff), 0.0, 1.0);
       }`;
-    const FS2 = (yuv) => `#version 300 es
+    /* `lean` (wave 13 CANVAS2): the same program without the steps that are the identity for
+     * the frame in hand — the balance's shoulder (knee 1), Lumetri's tone (all four 0), the
+     * Curves/Wheels table and the HSL Secondary (off) — chosen per draw (`leanFor`), so the
+     * usual played frame (a baked LUT, nothing on top) is not shaded through branches it
+     * skips: a software GL shades both sides of a branch for every pixel. The output is the
+     * full program's, value for value (each removed step is skipped there too). */
+    const FS2 = (yuv, lean) => `#version 300 es
       precision mediump float;
       precision mediump sampler3D;
       in vec2 v_uv;
@@ -162,28 +169,28 @@
       uniform vec4 u_tone;      // Lumetri blacks, shadows, highlights, whites, each /100
       uniform float u_toneOn;
       out vec4 outColor;
-      ${CREATIVE('texture')}
+      ${lean ? '' : CREATIVE('texture')}
       void main() {
-        vec3 c = ${yuv ? 'yuvAt(v_uv)' : 'texture(u_video, v_uv).rgb'} * u_pre;
+        vec3 c = ${yuv ? 'yuvAt(v_uv)' : 'texture(u_video, v_uv).rgb'} * u_pre;${lean ? '' : `
         if (u_knee < 1.0) {
           vec3 o = u_knee + (1.0 - u_knee) * (1.0 - exp(-(c - u_knee) / (1.0 - u_knee)));
           c = mix(c, o, step(u_knee, c)) + u_lift;
-        }
+        }`}
         c = clamp(c, 0.0, 1.0);
         vec3 p = c * ((u_n - 1.0) / u_n) + 0.5 / u_n;
-        vec3 y = (texture(u_lut, p).rgb - 0.5) * u_con + 0.5;
+        vec3 y = (texture(u_lut, p).rgb - 0.5) * u_con + 0.5;${lean ? '' : `
         if (u_toneOn > 0.5) {
           vec3 x = clamp(y, 0.0, 1.0), ix = 1.0 - x;
           y = x + 0.25 * u_tone.x * ix * ix * ix + 1.5 * u_tone.y * x * ix * ix
                 + 1.5 * u_tone.z * x * x * ix + 0.25 * u_tone.w * x * x * x;
-        }
+        }`}
         y = mix(vec3(dot(y, vec3(0.2126, 0.7152, 0.0722))), y, u_sat);
-        outColor = vec4(creative(y), 1.0);
+        outColor = vec4(${lean ? 'clamp(y, 0.0, 1.0)' : 'creative(y)'}, 1.0);
       }`;
 
     // WebGL1: the table as an n × n² image. Bilinear inside a blue slice (red across,
     // green down), the blue interpolation by hand between the two neighbouring slices.
-    const FS1 = `
+    const FS1 = (lean) => `
       precision mediump float;
       varying vec2 v_uv;
       uniform sampler2D u_video;
@@ -196,13 +203,13 @@
       uniform float u_lift;
       uniform vec4 u_tone;
       uniform float u_toneOn;
-      ${CREATIVE('texture2D')}
+      ${lean ? '' : CREATIVE('texture2D')}
       void main() {
-        vec3 c = texture2D(u_video, v_uv).rgb * u_pre;
+        vec3 c = texture2D(u_video, v_uv).rgb * u_pre;${lean ? '' : `
         if (u_knee < 1.0) {
           vec3 o = u_knee + (1.0 - u_knee) * (1.0 - exp(-(c - u_knee) / (1.0 - u_knee)));
           c = mix(c, o, step(u_knee, c)) + u_lift;
-        }
+        }`}
         c = clamp(c, 0.0, 1.0);
         float bf = c.b * (u_n - 1.0);
         float b0 = floor(bf);
@@ -213,14 +220,14 @@
         float y1 = (b1 * u_n + c.g * (u_n - 1.0) + 0.5) / (u_n * u_n);
         vec3 s0 = texture2D(u_lut, vec2(x, y0)).rgb;
         vec3 s1 = texture2D(u_lut, vec2(x, y1)).rgb;
-        vec3 y = (mix(s0, s1, t) - 0.5) * u_con + 0.5;
+        vec3 y = (mix(s0, s1, t) - 0.5) * u_con + 0.5;${lean ? '' : `
         if (u_toneOn > 0.5) {
           vec3 x = clamp(y, 0.0, 1.0), ix = 1.0 - x;
           y = x + 0.25 * u_tone.x * ix * ix * ix + 1.5 * u_tone.y * x * ix * ix
                 + 1.5 * u_tone.z * x * x * ix + 0.25 * u_tone.w * x * x * x;
-        }
+        }`}
         y = mix(vec3(dot(y, vec3(0.2126, 0.7152, 0.0722))), y, u_sat);
-        gl_FragColor = vec4(creative(y), 1.0);
+        gl_FragColor = vec4(${lean ? 'clamp(y, 0.0, 1.0)' : 'creative(y)'}, 1.0);
       }`;
 
 
@@ -271,10 +278,24 @@
       });
       return U;
     }
-    const PR = program(gl2 ? FS2(false) : FS1);
-    let PY = null;
+    const PR = program(gl2 ? FS2(false, false) : FS1(false));
+    // the lean twins (FS2's note); a failed lean compile draws with the full one
+    let PRL = PR;
+    try { PRL = FULL ? PR : program(gl2 ? FS2(false, true) : FS1(true)); } catch (e) { PRL = PR; }
+    let PY = null, PYL = null;
     if (gl2) {
-      try { PY = program(FS2(true)); } catch (e) { PY = null; }   // the rgb path still draws
+      try { PY = program(FS2(true, false)); } catch (e) { PY = null; }   // the rgb path still draws
+      try { PYL = PY && !FULL ? program(FS2(true, true)) : PY; } catch (e) { PYL = PY; }
+    }
+    /* Whether a draw with the live-preview `a` can use the lean program: no shoulder, no
+     * tone, no Curves/Wheels table, no HSL Secondary (each the identity in the full one). */
+    function leanFor(a) {
+      if (!a) return true;
+      if ((a.knee ?? 1) < 1) return false;
+      if (a.tone && a.tone.some((x) => x !== 0)) return false;
+      if (a.ctab && a.ctab.key) return false;
+      if (a.hsl && a.hsl.length === 16) return false;
+      return true;
     }
     let U = PR;                   // the program in use, and its uniforms
     gl.useProgram(PR.p);
@@ -407,8 +428,8 @@
      * process, measured 3 ms against 7-14 ms a frame at 384 px wide). A parked frame
      * already there (`key`) is not sent again: an Effect Controls change on a paused
      * monitor redraws with new uniforms only. */
-    function upload(src, sw, sh, w, h, key) {
-      if (src && src.yuv) { frameKey = null; return planes(src); }
+    function upload(src, sw, sh, w, h, key, lean) {
+      if (src && src.yuv) { frameKey = null; return planes(src, lean); }
       if (key && key === frameKey) return true;
       frameKey = null;
       try {
@@ -438,7 +459,7 @@
      * 1280x720 proxy in headless Chromium at load 13-20 (wave 11 CANVAS), the worker's own
      * time per frame: 0.4-2.7 ms, where the CPU scale into the 2D stage and its RGBA upload
      * took 10-12 ms (21 ms on the board's busier page). */
-    function planes(f) {
+    function planes(f, lean) {
       if (!PY) return false;
       const nv12 = f.format === 'NV12';
       const filt = f.nearest ? gl.NEAREST : gl.LINEAR;
@@ -469,7 +490,7 @@
         gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
         return false;
       }
-      use(PY);
+      use(lean ? PYL : PY);
       gl.uniformMatrix3fv(U.u_yuv, false, f.mat);
       gl.uniform3f(U.u_yoff, f.off[0], f.off[1], f.off[2]);
       gl.uniform1f(U.u_nv12, nv12 ? 1 : 0);
@@ -487,8 +508,9 @@
       gl.viewport(0, 0, w, h);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, texVideo);
-      if (!upload(src, sw, sh, w, h, parkedKey)) return false;   // no frame yet; the next one will be
-      if (!src.yuv) use(PR);
+      const lean = leanFor(adj);
+      if (!upload(src, sw, sh, w, h, parkedKey, lean)) return false;   // no frame yet; the next one will be
+      if (!src.yuv) use(lean ? PRL : PR);
       if (!lut(key, n, data)) return false;
       current = key;
       if (U.n !== n) { U.n = n; gl.uniform1f(U.u_n, n); }
@@ -513,9 +535,10 @@
     function drawMix(mix, w, h) {
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, texVideo);
-      if (!upload(mix.src, mix.sw, mix.sh, w, h, null)) return;
+      const lean = leanFor(mix.adj);
+      if (!upload(mix.src, mix.sw, mix.sh, w, h, null, lean)) return;
       frameKey = null;                       // the texture holds the other frame now
-      if (!mix.src.yuv) use(PR);
+      if (!mix.src.yuv) use(lean ? PRL : PR);
       if (!lut(mix.key, mix.n, mix.data)) return;
       current = mix.key;
       if (U.n !== mix.n) { U.n = mix.n; gl.uniform1f(U.u_n, mix.n); }
@@ -562,10 +585,14 @@
                                                { buf: b, offset: 8, stride: 1, w: 1, h: 1 }] };
       const id = new Uint8Array([0, 0, 0, 255, 0, 0, 0, 255, 0, 255, 255, 0,
                                  0, 0, 255, 255, 0, 255, 0, 255, 255, 255, 255, 255]);
+      // the lean program (the usual played frame) and the full one (a tone on: Lumetri live)
+      const toned = { pre: [1, 1, 1], con: 1, sat: 1, knee: 1, lift: 0, tone: [0.01, 0, 0, 0] };
       try {
-        for (const nearest of [false, true]) {
-          f.nearest = nearest;
-          render(f, 2, 2, 2, 2, '__warm', 2, id, null, null, { src: f, w: 0.5, key: '__warm', n: 2, data: id });
+        for (const a of FULL ? [null] : [null, toned]) {
+          for (const nearest of [false, true]) {
+            f.nearest = nearest;
+            render(f, 2, 2, 2, 2, '__warm', 2, id, a, null, { src: f, w: 0.5, key: '__warm', n: 2, data: id, adj: a });
+          }
         }
         gl.finish();
       } catch (e) { /* the first frame compiles them instead */ }
@@ -643,43 +670,70 @@
    * `frame` in (drawn, then closed), `drawn` back (when, and how long the draw took: the
    * page's draw log); `lut` in makes a texture ahead of a cut; `forget` drops them all (a
    * colour save). A playing frame (`yuv`) goes up as its planes, any other as before.
-   * Committed at the end of its task, off the page's main thread. */
+   * Committed at the end of its task, off the page's main thread.
+   *
+   * The worker keeps its own queue (wave 13 CANVAS2): every frame is posted the moment the
+   * page has it; one is drawn at a time and the newest waits (a waiting one a newer frame
+   * replaces is closed undrawn, its LUT made all the same). It used to be the page that held
+   * the newest frame back until the worker's `drawn` reached it, so a frame that came while
+   * the worker was busy waited for the page's main thread as well — a style and layout pass
+   * of the board, at load 8 the hole's other half. */
   const WORKER_SRC = `'use strict';
 const Renderer = ${Renderer.toString()};
 const yuvPlanes = ${yuvPlanes.toString()};
 let R = null;
 const bufs = [null, null, null, null];
-onmessage = async (e) => {
+let busy = false, next = null;
+function closeFrame(m) {
+  try { m.frame.close(); if (m.mix) m.mix.src.close(); } catch (err) { /* closed */ }
+}
+async function drawFrame(m) {
+  const t0 = performance.now();
+  const got = m.got || performance.timeOrigin + t0;
+  let ok = false, src = m.frame, mix = m.mix, yuv = false;
+  const ts = m.frame.timestamp;
+  try {
+    if (R && R.yuv && m.yuv) {
+      // copied out, the decoder's frame goes back to it at once
+      const p = await yuvPlanes(m.frame, 0, bufs, m.w, m.h).catch(() => null);
+      if (p) { m.frame.close(); src = p; yuv = true; }
+      if (mix) {
+        const q = await yuvPlanes(mix.src, 1, bufs, m.w, m.h).catch(() => null);
+        if (q) { mix.src.close(); mix = { ...mix, src: q }; }
+      }
+    }
+    if (R) ok = R.render(src, m.sw, m.sh, m.w, m.h, m.key, m.n, m.data, m.adj, null, mix);
+  } catch (err) { /* a frame that will not draw: the next one will */ }
+  finally { closeFrame(m); }
+  postMessage({ t: 'drawn', ok: !!ok, ts, yuv, ms: performance.now() - t0, sent: m.sent, made: m.made, got,
+                start: performance.timeOrigin + t0, at: performance.timeOrigin + performance.now(),
+                skipped: m.skipped || 0 });
+}
+async function pump(m) {
+  busy = true;
+  try { await drawFrame(m); } finally { busy = false; }
+  if (next) { const n = next; next = null; pump(n); }
+}
+onmessage = (e) => {
   const m = e.data;
   if (m.t === 'init') {
-    try { R = Renderer(m.canvas, (w, h) => new OffscreenCanvas(w, h)); }
+    try { R = Renderer(m.canvas, (w, h) => new OffscreenCanvas(w, h), { full: !!m.full }); }
     catch (err) { R = null; }
     if (R) R.warm();
     postMessage({ t: 'ready', ok: !!R, yuv: !!(R && R.yuv) });
     return;
   }
   if (m.t === 'frame') {
-    const t0 = performance.now();
-    const got = performance.timeOrigin + t0;
-    let ok = false, src = m.frame, mix = m.mix, yuv = false;
-    const ts = m.frame.timestamp;
-    try {
-      if (R && R.yuv && m.yuv) {
-        // copied out, the decoder's frame goes back to it at once
-        const p = await yuvPlanes(m.frame, 0, bufs, m.w, m.h).catch(() => null);
-        if (p) { m.frame.close(); src = p; yuv = true; }
-        if (mix) {
-          const q = await yuvPlanes(mix.src, 1, bufs, m.w, m.h).catch(() => null);
-          if (q) { mix.src.close(); mix = { ...mix, src: q }; }
-        }
-      }
-      if (R) ok = R.render(src, m.sw, m.sh, m.w, m.h, m.key, m.n, m.data, m.adj, null, mix);
-    } catch (err) { /* a frame that will not draw: the next one will */ }
-    finally {
-      try { m.frame.close(); if (m.mix) m.mix.src.close(); } catch (err) { /* closed */ }
+    m.got = performance.timeOrigin + performance.now();
+    if (!busy) { pump(m); return; }
+    if (next) {
+      // replaced before it was drawn: closed, but its LUT (sent once per key) is kept
+      if (R && next.data && next.key !== m.key) { try { R.lut(next.key, next.n, next.data); } catch (err) { /* lost */ } }
+      if (next.data && !m.data && next.key === m.key) { m.data = next.data; m.n = next.n; }
+      m.skipped = (next.skipped || 0) + 1;
+      closeFrame(next);
     }
-    postMessage({ t: 'drawn', ok: !!ok, ts, yuv, ms: performance.now() - t0, sent: m.sent, made: m.made, got,
-                  at: performance.timeOrigin + performance.now() });
+    next = m;
     return;
   }
   if (!R) return;
@@ -697,9 +751,8 @@ onmessage = async (e) => {
     P: null,                 // probe()'s renderer, on a canvas of its own (worker mode)
     S: null,                 // sample()'s (Lumetri Scopes), on a canvas of its own
     worker: null,            // the worker holding #gradeCanvas (worker mode)
-    inflight: false,         // a frame is with the worker
-    sentAt: 0,               // when it went
-    pending: null,           // the newest frame waiting for it
+    inflight: false,         // a frame is with the worker (its queue: WORKER_SRC)
+    sentAt: 0,               // when the last one went
     sentKey: null,           // the LUT key the worker was last sent the data of
     videos: [],
     shot: null,              // the segment id the monitor is on
@@ -772,8 +825,10 @@ onmessage = async (e) => {
     if (!bw || !bh) return [vw, vh];
     let s = Math.min(1, bw / vw, bh / vh);
     // (the worker's planes path uploads each frame at the size it is read, a third of the
-    // RGBA bytes: a dissolve's two frames fit at PLAY_W, and the canvas keeps its size)
-    const mixW = mixing && !G.yuv ? MIX_W : (G.yuv ? G.autoW : PLAY_W);
+    // RGBA bytes; wave 13 CANVAS2: a dissolve's two frames are still two copies, two uploads
+    // and two passes, and on Killington at load 9-16 the worker fell a frame behind through
+    // the window (a frame waited 30-35 ms for it), so on Auto the pair is MIX_W wide too)
+    const mixW = mixing ? Math.min(MIX_W, G.yuv ? G.autoW : PLAY_W) : (G.yuv ? G.autoW : PLAY_W);
     if (playing) s = RES[G.res] == null ? Math.min(s, mixW / vw) : s * RES[G.res];
     if (s > 0.9) return [vw, vh];   // near full size: the scale costs more than it saves
     // within 3 % of half the frame: exactly half, where the worker's planes are one texel a
@@ -821,8 +876,8 @@ onmessage = async (e) => {
   }
 
   /* The frame to the worker: a VideoFrame of the live video (a reference to the decoded
-   * frame), the LUT's data the first time after a change of LUT, the uniforms. One in
-   * flight; a newer frame replaces the one waiting, which is closed unsent. */
+   * frame), the LUT's data the first time after a change of LUT, the uniforms. Posted at
+   * once; the worker draws one at a time and keeps the newest waiting (WORKER_SRC). */
   function toWorker(j) {
     let frame;
     try { frame = new VideoFrame(j.v, { timestamp: Math.round((j.v.currentTime || 0) * 1e6) }); }
@@ -834,15 +889,8 @@ onmessage = async (e) => {
         mix = { ...j.mix, src: f, sw: f.displayWidth, sh: f.displayHeight };
       } catch (e) { mix = null; }
     }
-    const m = { t: 'frame', frame, sw: frame.displayWidth, sh: frame.displayHeight,
-                w: j.w, h: j.h, rec: j.rec, adj: j.adj, mix, playing: j.playing, made: performance.now() };
-    // a worker that never answered (it died) does not hold the picture for good
-    if (G.inflight && performance.now() - G.sentAt < 1000) {
-      if (G.pending) { G.pending.frame.close(); if (G.pending.mix) G.pending.mix.src.close(); }
-      G.pending = m;
-      return;
-    }
-    post(m);
+    post({ t: 'frame', frame, sw: frame.displayWidth, sh: frame.displayHeight,
+           w: j.w, h: j.h, rec: j.rec, adj: j.adj, mix, playing: j.playing, made: performance.now() });
   }
 
   function post(m) {
@@ -857,8 +905,8 @@ onmessage = async (e) => {
     try { G.worker.postMessage(msg, m.mix ? [m.frame, m.mix.src] : [m.frame]); }
     catch (e) {
       G.inflight = false;
+      G.sentKey = null;
       try { m.frame.close(); if (m.mix) m.mix.src.close(); } catch (e2) { /* gone */ }
-      return;
     }
   }
 
@@ -875,7 +923,9 @@ onmessage = async (e) => {
   const auto = { ema: 0, n: 0 };
   function autoLearn(m) {
     if (!m.yuv || G.res !== 'auto' || G.mix) return;
-    const lag = (m.at - performance.timeOrigin) - (m.sent || 0);
+    // posted to drawn, less any time it waited in the worker's queue behind the frame before
+    // (the GL's own pace, as when the page held the newest frame back until `drawn`)
+    const lag = (m.at - performance.timeOrigin) - (m.sent || 0) - Math.max(0, (m.start || m.got || 0) - (m.got || 0));
     if (!(lag >= 0 && lag < 1000)) return;
     auto.ema = auto.n ? auto.ema * 0.85 + lag * 0.15 : lag;
     auto.n++;
@@ -896,11 +946,11 @@ onmessage = async (e) => {
         G.draws++;
         const r1 = (x) => Math.round(x * 10) / 10;
         G.drawLog.push({ t: r1(m.at - performance.timeOrigin), ts: m.ts, ms: r1(m.ms), yuv: !!m.yuv,
-                         made: r1(m.made || 0), sent: r1(m.sent || 0), got: r1(m.got - performance.timeOrigin) });
+                         made: r1(m.made || 0), sent: r1(m.sent || 0), got: r1(m.got - performance.timeOrigin),
+                         start: r1((m.start || m.got) - performance.timeOrigin), skipped: m.skipped || 0 });
         if (G.drawLog.length > DRAW_LOG) G.drawLog.splice(0, G.drawLog.length - DRAW_LOG);
         autoLearn(m);
       }
-      if (G.pending) { const p = G.pending; G.pending = null; post(p); }
     } else if (m.t === 'ready' && m.ok) {
       G.yuv = !!m.yuv;
     } else if (m.t === 'ready' && !m.ok) {
@@ -1412,7 +1462,9 @@ onmessage = async (e) => {
     try { oc = canvas.transferControlToOffscreen(); } catch (e) { w.terminate(); return false; }
     w.onmessage = fromWorker;
     w.onerror = () => { G.ok = false; G.ready = false; show(false); };
-    w.postMessage({ t: 'init', canvas: oc }, [oc]);
+    // ?grade=full (or window.ROUGHCUT_GRADE_FULL): never the lean programs, for comparison
+    const full = !!(window.ROUGHCUT_GRADE_FULL || /[?&]grade=full\b/.test(location.search));
+    w.postMessage({ t: 'init', canvas: oc, full }, [oc]);
     G.worker = w;
     G.ok = G.ready = true;          // the worker says otherwise if its WebGL fails
     return true;
