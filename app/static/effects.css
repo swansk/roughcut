@@ -209,3 +209,29 @@
 .sc-pane canvas { flex: 1 1 auto; min-height: 0; width: 100%; display: block; background: #0c0c0d;
                   border: 1px solid var(--line); border-radius: 2px; }
 #pSource #srcTitle:not(.on) { cursor: pointer; }
+
+/* Video effects (wave 14, VFX; verdict 10 punch 8): a section per effect on the clip,
+   Premiere's header — twirl, the fx toggle, the name, its place in the stack, reset, clear */
+.ec-vsec .ec-sh { gap: 3px; }
+#inspector .ec-vtw { flex: none; width: 18px; padding: 0 0 0 4px; }
+.ec-vname { flex: 1 1 auto; min-width: 0; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden;
+            text-overflow: ellipsis; cursor: default; line-height: 24px; padding-left: 3px; }
+.ec-vsec.off .ec-vname { color: var(--faint); text-decoration: line-through; }
+.ec-vsec.off .ec-sb { opacity: .55; }
+#inspector .ec-vsec .ec-fxtog { flex: none; }
+#inspector .ec-vsec .ec-ord { flex: none; }
+#inspector .ec-vclear { flex: none; width: 22px; height: 20px; padding: 0; border: 0; background: none; color: var(--faint);
+                        display: inline-flex; align-items: center; justify-content: center; }
+#inspector .ec-vclear svg { width: 11px; height: 11px; }
+#inspector .ec-vclear:hover { color: var(--warn, #e0a03c); background: none; }
+.ec-vsel .ec-vchoice { padding: 0 4px; font-size: 11.5px; color: var(--tc); background: transparent; border-color: transparent;
+                       height: 20px; max-width: 100%; }
+.ec-vsel .ec-vchoice:hover { border-color: var(--line-hi); }
+/* a video effect dragged over a clip on V1, or over Effect Controls */
+#tl .blk.vfx-drop { outline: 2px solid var(--accent, #4a9df8); outline-offset: -2px; z-index: 3; }
+#inspector.vfx-drop { outline: 2px solid var(--accent, #4a9df8); outline-offset: -2px; }
+#fxbin .fxb-item.vfx .ic svg { width: 14px; height: 10px; }
+/* Premiere's fx badge on a clip with a video effect on */
+#tl .tl-lane[data-lane=V1] .blk.has-vfx::before { content: 'fx'; position: absolute; right: 3px; top: 2px; z-index: 3;
+  font: italic 600 9px/11px ui-sans-serif, system-ui, sans-serif; color: #f0d36a; border: 1px solid rgba(240,211,106,.8);
+  border-radius: 2px; padding: 0 2px; background: rgba(0,0,0,.5); pointer-events: none; }

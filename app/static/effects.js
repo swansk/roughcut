@@ -16,6 +16,9 @@
  *                     Midtones, Highlights, each a puck and a lightness slider; a
  *                     double-click centres the puck), › HSL Secondary (a hue /
  *                     saturation / lightness key and its correction) — wave 11, LUMETRI
+ *   Video effects   the Effects bin's Crop / Transform / Gaussian Blur on the shot, a
+ *                   section each in its stack's order: fx toggle, ▲ ▼, reset, clear, a
+ *                   stopwatch on every number (wave 14, VFX: "video effects" below)
  *   fx stack        the designed effects on the shot: bypass (fx) and order
  *
  * Keyframes (wave 6, verdict 5 punch 4): Position, Scale, Rotation, Opacity and Level each
@@ -67,6 +70,15 @@
  *                             one undoable change to them (null = the identity)
  *   wheel(name, v?, seg?)     Color Wheels: [cb, cr, lightness] of shadows | midtones |
  *                             highlights, or one undoable change to it
+ *   VFX, VFX_MIME             the video effects' kinds (roughcut/vfx.py's), the bin's drag type
+ *   vfx(seg?)                 the shot's video effects, top first
+ *   vfxAdd(kind, ids?, {reveal}?)  the bin's drop / double-click: one undo for all the clips
+ *   vfxAct(act, id, seg?)     a section's button: 'off' | 'up' | 'down' | 'reset' | 'clear'
+ *   vfxChoice(id, key, v, seg?)  a section's select (Blur Dimensions)
+ *   vfxOp(op, seg)            the AI's `effect` op through the paths above (actions.js)
+ *   vfxLook()                 the CSS the Program wears for the shot on it now
+ *   set / value / keys / animate also take a video effect's `<param>@<id>` (`left@crop`,
+ *   `posx@transform`; groups `pos@transform`, `blurriness@gaussian_blur`)
  */
 (() => {
   'use strict';
@@ -210,12 +222,34 @@
                    opacity: ['opacity'], volume_db: ['volume_db'] };
   const GROUP_NAME = { pos: 'position', scale: 'scale', rotation: 'rotation', opacity: 'opacity', volume_db: 'volume' };
   const MAX_KEYS = 64;
+  /* A video effect's parameter keys the same way (wave 14, VFX: roughcut/vfx.py): its
+   * prop is `<param>@<effect id>` in the same `controls.keys` — `left@crop` — so a trim or
+   * a razor moves them with the media as it moves Motion's (timeline.js keysWindow); its
+   * stopwatch group is `<param>@<id>`, Position's `pos@<id>` (x and y share one). */
+  const atOf = (k) => { const i = String(k).indexOf('@'); return i < 0 ? null : [k.slice(0, i), k.slice(i + 1)]; };
+  function groupKps(group) {
+    if (GROUPS[group]) return GROUPS[group];
+    const a = atOf(group);
+    if (!a) return null;
+    return a[0] === 'pos' ? [`position_x@${a[1]}`, `position_y@${a[1]}`] : [group];
+  }
+  function groupName(group) {
+    if (GROUP_NAME[group]) return GROUP_NAME[group];
+    const a = atOf(group);
+    const seg = cur();
+    const e = a && seg ? vfxEntry(seg, a[1]) : null;
+    const k = e ? VFX[e.kind] : null;
+    const prm = k ? (a[0] === 'pos' ? { label: 'Position' } : k.params.find((x) => x.key === a[0])) : null;
+    return k && prm ? `${k.name.toLowerCase()} ${prm.label.toLowerCase()}` : String(group);
+  }
   const keysOf = (seg, kp) => {
     const k = ctl(seg).keys;
     return k && Array.isArray(k[kp]) && k[kp].length ? k[kp] : null;
   };
-  const animated = (seg, group) => GROUPS[group].some((kp) => keysOf(seg, kp));
+  const animated = (seg, group) => (groupKps(group) || []).some((kp) => keysOf(seg, kp));
   function staticOf(seg, kp) {
+    const a = atOf(kp);
+    if (a) { const e = vfxEntry(seg, a[1]); return e ? vfxValue(e, a[0]) : 0; }
     const c = ctl(seg);
     if (kp === 'position_x' || kp === 'position_y') return (c.position || [0.5, 0.5])[kp === 'position_x' ? 0 : 1];
     return c[kp] ?? KDEF[kp];
@@ -242,6 +276,8 @@
     if (Object.keys(c).length) seg.controls = c; else delete seg.controls;
   }
   function setStatic(seg, kp, v) {
+    const a = atOf(kp);
+    if (a) { vfxPut(seg, a[1], a[0], kround(kp, v)); return; }
     if (kp === 'position_x' || kp === 'position_y') {
       const p = [...(ctl(seg).position || [0.5, 0.5])];
       p[kp === 'position_x' ? 0 : 1] = kround(kp, v);
@@ -296,7 +332,8 @@
    * gets one at the same time, holding its value there, so x and y keep one set of times. */
   function keyValue(seg, kp, v) {
     const t = keyT(seg);
-    const grp = kp.startsWith('position') ? GROUPS.pos : [kp];
+    const a = atOf(kp);
+    const grp = kp.startsWith('position') ? (a ? groupKps(`pos@${a[1]}`) : GROUPS.pos) : [kp];
     const other = grp.filter((k) => k !== kp && keysOf(seg, k)).map((k) => [k, valAt(seg, k, t)]);
     putKey(seg, kp, t, v);
     other.forEach(([k, ov]) => { if (!keysOf(seg, k).some((x) => sameT(x[0], t))) putKey(seg, k, t, ov); });
@@ -343,6 +380,7 @@
     return {
       key: `pos${axis}`, sec: 'motion', label: 'Position', lo: -10 * size, hi: 10 * size, step: 1, digits: 1,
       unit: '', dflt: size / 2, hover: `${axis.toUpperCase()} in a ${FRAME_W}×${FRAME_H} frame · ${RENDERED}`,
+      pos: ['posx', 'posy'],
       get: (seg) => ((ctl(seg).position || [0.5, 0.5])[k]) * size,
       set: (seg, v) => {
         const p = [...(ctl(seg).position || [0.5, 0.5])];
@@ -434,6 +472,147 @@
     return (p.key === 'exposure' && v > 0 ? '+' : '') + (s === '-0.0' || s === '-0.00' ? s.slice(1) : s) + p.unit;
   };
 
+  /* ------------------------------------------------------------ video effects (wave 14, VFX)
+   * Premiere's Effects panel › Video Effects (verdict 10, punch 8): Blur & Sharpen ›
+   * Gaussian Blur, Distort › Transform, Transform › Crop. Dragged from the Effects bin
+   * onto a V1 clip (or double-clicked with clips selected), each lands in the clip's
+   * Effect Controls below Lumetri Color, as its own section with Premiere's fx toggle,
+   * order, reset, clear and a stopwatch on every number. roughcut/vfx.py has the schema
+   * and THE formulas; the export draws them (research/tools/assemble.py `vfx_graph`):
+   *
+   *   controls.vfx = [{id, kind, params?, off?}, …]   the stack, top first; params only
+   *                                                   what differs from the default
+   *   controls.keys['<param>@<id>'] = [[t, v], …]     a keyed parameter (Motion's schema)
+   *
+   * The Program shows them as CSS on the picture's layers (the video buffers and the grade
+   * canvas, not the designed effects' canvas: the render draws those after the stack):
+   * a Transform is one more transform in the picture's CSS transform, after Motion's
+   * (Premiere draws Motion last); a Crop is the picture's clip-path — a polygon, so a
+   * Crop under a Transform crops the moved frame — and an Edge Feather its mask's ramps;
+   * a Gaussian Blur a CSS blur() (an SVG feGaussianBlur for one axis) of σ scaled to the
+   * monitor. Why CSS and not the grade worker: grade.js is another lane's, CSS is the
+   * compositor's (no frame upload, no shader pass, nothing on the main thread while it
+   * plays), it composes with Motion's own CSS, and it applies alike to the live video
+   * and the graded canvas. Not exact: a Crop
+   * ABOVE a Gaussian Blur shows its edge sharp (CSS blurs before it clips; the export
+   * blurs the edge); an Edge Feather under a Transform shows hard. */
+  const VFX_MIME = 'application/x-roughcut-video-effect';
+  const VFX = {
+    gaussian_blur: { name: 'Gaussian Blur', folder: 'Blur & Sharpen',
+      what: 'softens the picture: a Gaussian blur, across, down or both',
+      params: [{ key: 'blurriness', label: 'Blurriness', lo: 0, hi: 500, dflt: 0, step: 0.1, digits: 1, unit: '',
+                 hover: 'the blur\'s width: the Gaussian\'s standard deviation in pixels of a 1920×1080 frame' }],
+      choices: { dimensions: { label: 'Blur Dimensions', options: [['both', 'Horizontal and Vertical'],
+        ['horizontal', 'Horizontal'], ['vertical', 'Vertical']] } } },
+    transform: { name: 'Transform', folder: 'Distort',
+      what: 'moves, scales, turns and fades the picture, apart from Motion',
+      params: [{ key: 'position_x', label: 'Position', lo: -10, hi: 10, dflt: 0.5 },
+               { key: 'position_y', label: 'Position', lo: -10, hi: 10, dflt: 0.5 },
+               { key: 'scale', label: 'Scale', lo: 0, hi: 1000, dflt: 100, step: 0.1, digits: 1, unit: '' },
+               { key: 'rotation', label: 'Rotation', lo: -3600, hi: 3600, dflt: 0, step: 0.1, digits: 1, unit: '°' },
+               { key: 'opacity', label: 'Opacity', lo: 0, hi: 100, dflt: 100, step: 0.1, digits: 1, unit: ' %' }],
+      choices: {} },
+    crop: { name: 'Crop', folder: 'Transform',
+      what: 'trims the frame\'s edges to black, with a soft edge if you feather it',
+      params: [{ key: 'left', label: 'Left', lo: 0, hi: 100, dflt: 0, step: 0.1, digits: 1, unit: ' %' },
+               { key: 'top', label: 'Top', lo: 0, hi: 100, dflt: 0, step: 0.1, digits: 1, unit: ' %' },
+               { key: 'right', label: 'Right', lo: 0, hi: 100, dflt: 0, step: 0.1, digits: 1, unit: ' %' },
+               { key: 'bottom', label: 'Bottom', lo: 0, hi: 100, dflt: 0, step: 0.1, digits: 1, unit: ' %' },
+               { key: 'feather', label: 'Edge Feather', lo: 0, hi: 1000, dflt: 0, step: 0.1, digits: 0, unit: '',
+                 hover: 'a soft edge inside the crop, in pixels of a 1920×1080 frame' }],
+      choices: {} },
+  };
+  const VFX_MAX = 16;
+  const vfxList = (seg) => (Array.isArray(ctl(seg).vfx) ? ctl(seg).vfx.filter((e) => e && VFX[e.kind]) : []);
+  const vfxEntry = (seg, id) => vfxList(seg).find((e) => e.id === id) || null;
+  function vfxDef(kind, key) {
+    const k = VFX[kind];
+    return k ? k.params.find((x) => x.key === key) || null : null;
+  }
+  function vfxValue(e, key) {
+    const k = VFX[e.kind];
+    const v = e.params ? e.params[key] : undefined;
+    if (k.choices[key]) return v || k.choices[key].options[0][0];
+    const d = vfxDef(e.kind, key);
+    return v == null ? (d ? d.dflt : 0) : v;
+  }
+  /* the new effect's id on a shot (roughcut/vfx.py `next_id`): the kind, then _2, _3… */
+  function vfxId(kind, taken) {
+    if (!taken.includes(kind)) return kind;
+    let n = 2;
+    while (taken.includes(`${kind}_${n}`)) n += 1;
+    return `${kind}_${n}`;
+  }
+  /* the stack replaced: new objects all the way down, never one another shot shares */
+  function setVfx(seg, list) { setCtl(seg, 'vfx', list.length ? list : null, null); }
+  /* one parameter's static value (a number, or a choice's word), only what differs */
+  function vfxPut(seg, id, key, v) {
+    setVfx(seg, vfxList(seg).map((e) => {
+      if (e.id !== id) return e;
+      const params = { ...(e.params || {}) };
+      const k = VFX[e.kind];
+      const dflt = k.choices[key] ? k.choices[key].options[0][0] : (vfxDef(e.kind, key) || {}).dflt;
+      if (v == null || v === dflt) delete params[key]; else params[key] = v;
+      const out = { id: e.id, kind: e.kind };
+      if (Object.keys(params).length) out.params = params;
+      if (e.off) out.off = true;
+      return out;
+    }));
+  }
+  /* an effect's keys gone (its reset, its clear) */
+  function vfxDropKeys(seg, id) {
+    const c = ctl(seg);
+    if (!c.keys) return;
+    Object.keys(c.keys).filter((kp) => (atOf(kp) || [])[1] === id).forEach((kp) => setKeys(seg, kp, null));
+  }
+
+  /* Its numbers, as Motion's are: a blue value to drag or type, a stopwatch each. The
+   * Transform's Position reads in pixels of a 1920×1080 frame, as Motion's does. */
+  const vfxProps = new Map();
+  function vfxProp(ui, id, kind) {
+    const ck = `${ui}@${id}|${kind}`;
+    if (vfxProps.has(ck)) return vfxProps.get(ck);
+    const K = VFX[kind];
+    const posAxis = ui === 'posx' ? 'x' : ui === 'posy' ? 'y' : null;
+    const key = posAxis ? `position_${posAxis}` : ui;
+    const d = vfxDef(kind, key);
+    if (!K || !d) return null;
+    const size = posAxis === 'x' ? FRAME_W : posAxis === 'y' ? FRAME_H : 1;
+    const label = posAxis ? 'Position' : d.label;
+    const p = {
+      key: `${ui}@${id}`, sec: 'vfx', vfx: id, label, unit: posAxis ? '' : d.unit,
+      lo: d.lo * size, hi: d.hi * size, step: posAxis ? 1 : d.step, digits: posAxis ? 1 : d.digits,
+      dflt: d.dflt * size, undo: `${K.name.toLowerCase()} ${label.toLowerCase()}`,
+      hover: `${K.name} › ${posAxis ? `${label} ${posAxis.toUpperCase()} in a ${FRAME_W}×${FRAME_H} frame` : label}`
+        + `${d.hover ? ` — ${d.hover}` : ''} · ${RENDERED}`,
+      get: (seg) => { const e = vfxEntry(seg, id); return (e ? vfxValue(e, key) : d.dflt) * size; },
+      set: (seg, v) => vfxPut(seg, id, key, kround(key, clamp(v, d.lo * size, d.hi * size) / size)),
+    };
+    if (posAxis) p.pos = [`posx@${id}`, `posy@${id}`];
+    keyed(p, `${key}@${id}`, posAxis ? `pos@${id}` : `${key}@${id}`);
+    if (posAxis) {                                  // keyed() reads a pixel value: scale it
+      const kp = `${key}@${id}`;
+      p.get = (seg) => (keysOf(seg, kp) ? valAt(seg, kp, shownT(seg)) * size
+        : (() => { const e = vfxEntry(seg, id); return (e ? vfxValue(e, key) : d.dflt) * size; })());
+      p.set = (seg, v) => {
+        if (!keysOf(seg, kp)) { vfxPut(seg, id, key, kround(kp, clamp(v, p.lo, p.hi) / size)); return; }
+        keyValue(seg, kp, clamp(v, p.lo, p.hi) / size);
+      };
+    }
+    vfxProps.set(ck, p);
+    return p;
+  }
+  /* A row's property by its key: Motion's, Lumetri's, or a video effect's `<ui>@<id>`
+   * (its kind read off the shot) */
+  function propOf(k, seg) {
+    const p = BY_KEY.get(k);
+    if (p) return p;
+    const a = atOf(k);
+    const s = seg || cur();
+    const e = a && s ? vfxEntry(s, a[1]) : null;
+    return e ? vfxProp(a[0], e.id, e.kind) : null;
+  }
+
   /* ------------------------------------------------------------ one change, one undo */
   let gesture = null;                       // {p, seg, began} while a value is dragged
   function cur(seg) {
@@ -464,8 +643,8 @@
     return !!t.begin(label);
   }
   function begin(p, seg) {
-    // Lumetri is V1's (V2EC): a clip on V2+ renders as shot, picture only
-    if (p.sec === 'lumetri' && isOv(seg || cur())) return false;
+    // Lumetri and the video effects are V1's (V2EC): a clip on V2+ renders as shot
+    if ((p.sec === 'lumetri' || p.sec === 'vfx') && isOv(seg || cur())) return false;
     return opens(labelOf(p), p.key === 'volume_db', seg);
   }
   function finish(p) {
@@ -488,7 +667,12 @@
 
   /* ------------------------------------------------------------ the live preview */
   // the Program's buffers (app.js player.vids, `video.pvbuf`) and the canvases over them
-  const LAYERS = ['#player video.pvbuf', '#gradeCanvas', '#fxCanvas'];
+  // the picture (the video effects draw on these; the still at rest too, while no video is
+  // live, so a parked monitor shows the look before the clip's preview can play) and the
+  // designed effects' canvas over it (Motion and Opacity move both: the render draws the
+  // designed effects before Motion)
+  const PICTURE = ['#player video.pvbuf', '#gradeCanvas', '#monPoster'];
+  const OVER = ['#fxCanvas'];
   let liveId = null;
   let lastStyle = '';
   function monitorShot() {
@@ -497,6 +681,149 @@
     const pl = g('player'), ss = g('segs');
     return pl && Array.isArray(ss) && ss[pl.idx] ? String(ss[pl.idx].id) : null;
   }
+  /* ------------------------------------------------------------ the video effects' look
+   * The stack at the playhead as CSS for the picture's layers (see "video effects" above
+   * for why CSS). Worked in the frame's own pixels (1920×1080, Effect Controls' frame):
+   * `M` maps the picture to where the Transforms above have put it, so a Crop under a
+   * Transform crops the moved frame (its rectangle mapped back through M⁻¹, as the
+   * clip-path is drawn before the transform), a Transform's output is the frame (what it
+   * moved off the frame is gone, as the export's is) and a blur under a Transform is not
+   * scaled by it. */
+  const FW = FRAME_W, FH = FRAME_H;
+  const FRAME_POLY = [[0, 0], [FW, 0], [FW, FH], [0, FH]];
+  const ID = [1, 0, 0, 1, 0, 0];
+  const mul = (A, B) => [A[0] * B[0] + A[2] * B[1], A[1] * B[0] + A[3] * B[1], A[0] * B[2] + A[2] * B[3],
+    A[1] * B[2] + A[3] * B[3], A[0] * B[4] + A[2] * B[5] + A[4], A[1] * B[4] + A[3] * B[5] + A[5]];
+  const at = (M, p) => [M[0] * p[0] + M[2] * p[1] + M[4], M[1] * p[0] + M[3] * p[1] + M[5]];
+  function inv(M) {
+    const det = M[0] * M[3] - M[1] * M[2];
+    if (Math.abs(det) < 1e-12) return null;
+    return [M[3] / det, -M[1] / det, -M[2] / det, M[0] / det,
+      (M[2] * M[5] - M[3] * M[4]) / det, (M[1] * M[4] - M[0] * M[5]) / det];
+  }
+  const area = (P) => P.reduce((a, p, i) => { const q = P[(i + 1) % P.length]; return a + p[0] * q[1] - q[0] * p[1]; }, 0) / 2;
+  /* Sutherland–Hodgman: the subject polygon inside the convex `clip` */
+  function clipPoly(subject, clip) {
+    let out = subject;
+    const sgn = area(clip) >= 0 ? 1 : -1;
+    for (let i = 0; i < clip.length && out.length; i++) {
+      const A = clip[i], B = clip[(i + 1) % clip.length];
+      const side = (P) => sgn * ((B[0] - A[0]) * (P[1] - A[1]) - (B[1] - A[1]) * (P[0] - A[0]));
+      const input = out;
+      out = [];
+      for (let j = 0; j < input.length; j++) {
+        const P = input[j], Q = input[(j + 1) % input.length];
+        const sp = side(P), sq = side(Q);
+        if (sp >= -1e-9) out.push(P);
+        if ((sp >= -1e-9) !== (sq >= -1e-9)) {
+          const k = sp / (sp - sq);
+          out.push([P[0] + (Q[0] - P[0]) * k, P[1] + (Q[1] - P[1]) * k]);
+        }
+      }
+    }
+    return out;
+  }
+  let screenW = 0;
+  function monitorWidth() {
+    if (screenW) return screenW;
+    const el = document.querySelector('#player .screen');
+    if (!el) return FW;
+    if (typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver(() => { screenW = el.clientWidth || 0; lastStyle = ''; apply(); }).observe(el);
+    }
+    screenW = el.clientWidth || FW;
+    return screenW;
+  }
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  function axisBlur(i, sx, sy) {
+    let svg = document.getElementById('ecVfxDefs');
+    if (!svg) {
+      svg = document.createElementNS(SVGNS, 'svg');
+      svg.id = 'ecVfxDefs';
+      svg.setAttribute('width', '0');
+      svg.setAttribute('height', '0');
+      svg.setAttribute('aria-hidden', 'true');
+      svg.style.position = 'absolute';
+      document.body.appendChild(svg);
+    }
+    let f = svg.querySelector(`#ecvb${i}`);
+    if (!f) {
+      f = document.createElementNS(SVGNS, 'filter');
+      f.id = `ecvb${i}`;
+      ['x', 'y'].forEach((a) => f.setAttribute(a, '-0.25'));
+      ['width', 'height'].forEach((a) => f.setAttribute(a, '1.5'));
+      f.setAttribute('color-interpolation-filters', 'sRGB');
+      f.appendChild(document.createElementNS(SVGNS, 'feGaussianBlur'));
+      svg.appendChild(f);
+    }
+    const sd = `${r4(sx)} ${r4(sy)}`;
+    const gb = f.firstChild;
+    if (gb.getAttribute('stdDeviation') !== sd) gb.setAttribute('stdDeviation', sd);
+    return `url(#ecvb${i})`;
+  }
+  function vfxLook(seg) {
+    const list = seg && !isOv(seg) ? vfxList(seg).filter((e) => !e.off) : [];
+    if (!list.length) return null;
+    const sp = span(seg);
+    const tt = sp ? clamp((TL().state.playhead || 0) - sp.start, 0, sp.dur) : 0;
+    const val = (e, key) => { const k = keysOf(seg, `${key}@${e.id}`); return k ? interp(k, tt) : vfxValue(e, key); };
+    let M = ID, poly = FRAME_POLY, clipped = false, op = 1, nb = 0;
+    const css = [], filters = [], masks = [];
+    const cut = (P) => {
+      const before = Math.abs(area(poly));
+      poly = clipPoly(poly, P);
+      if (Math.abs(area(poly)) < before - 0.01) clipped = true;
+    };
+    const back = (P) => { const Mi = inv(M); return Mi ? P.map((p) => at(Mi, p)) : null; };
+    for (const e of list) {
+      if (e.kind === 'transform') {
+        const px = val(e, 'position_x'), py = val(e, 'position_y'), s = val(e, 'scale') / 100, r = val(e, 'rotation');
+        op *= clamp(val(e, 'opacity'), 0, 100) / 100;
+        if (px === 0.5 && py === 0.5 && s === 1 && r === 0) continue;
+        const th = r * Math.PI / 180, co = Math.cos(th) * s, si = Math.sin(th) * s;
+        const T = [co, si, -si, co, px * FW - (co * FW / 2 - si * FH / 2), py * FH - (si * FW / 2 + co * FH / 2)];
+        css.push(`translate(${r4((px - 0.5) * 100)}%, ${r4((py - 0.5) * 100)}%) rotate(${r4(r)}deg) scale(${r4(s)})`);
+        M = mul(T, M);
+        const fr = back(FRAME_POLY);
+        if (!fr) { poly = []; clipped = true; break; }
+        cut(fr);
+      } else if (e.kind === 'crop') {
+        const L = clamp(val(e, 'left'), 0, 100), T = clamp(val(e, 'top'), 0, 100);
+        const R = clamp(val(e, 'right'), 0, 100), B = clamp(val(e, 'bottom'), 0, 100);
+        const F = Math.max(0, val(e, 'feather'));
+        if (L <= 0 && T <= 0 && R <= 0 && B <= 0 && F <= 0) continue;
+        const x0 = L * FW / 100, x1 = FW - R * FW / 100, y0 = T * FH / 100, y1 = FH - B * FH / 100;
+        if (x1 <= x0 || y1 <= y0) { poly = []; clipped = true; break; }
+        const rect = back([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
+        if (!rect) { poly = []; clipped = true; break; }
+        cut(rect);
+        if (F > 0 && M === ID) {                 // the feather's ramps (vfx.py: rx · ry)
+          const fx = F / FW * 100, fy = F / FH * 100;
+          const l = L, r = 100 - R, t = T, b = 100 - B;
+          masks.push(`linear-gradient(to right, transparent ${r4(l)}%, #000 ${r4(l + fx)}%, #000 ${r4(r - fx)}%, transparent ${r4(r)}%)`,
+            `linear-gradient(to bottom, transparent ${r4(t)}%, #000 ${r4(t + fy)}%, #000 ${r4(b - fy)}%, transparent ${r4(b)}%)`);
+        }
+      } else {
+        const bl = Math.max(0, val(e, 'blurriness'));
+        if (bl <= 0.05) continue;
+        const k = monitorWidth() / FW / Math.sqrt(Math.abs(M[0] * M[3] - M[1] * M[2]) || 1);
+        const sg = bl * k;
+        const dim = vfxValue(e, 'dimensions');
+        filters.push(dim === 'both' ? `blur(${r4(sg)}px)`
+          : axisBlur(nb, dim === 'horizontal' ? sg : 0, dim === 'vertical' ? sg : 0));
+        nb += 1;
+      }
+    }
+    const pct = (p) => `${r4(p[0] / FW * 100)}% ${r4(p[1] / FH * 100)}%`;
+    return {
+      transform: css.reverse().join(' '),
+      clip: !clipped ? '' : poly.length >= 3 ? `polygon(${poly.map(pct).join(', ')})` : 'polygon(0 0, 0 0, 0 0)',
+      mask: masks.join(', '),
+      filter: filters.join(' '),
+      opacity: op,
+    };
+  }
+
   function apply() {
     const t = TL();
     liveId = monitorShot();
@@ -508,10 +835,26 @@
       ? `translate(${r4((pos[0] - 0.5) * 100)}%, ${r4((pos[1] - 0.5) * 100)}%) rotate(${c.rotation ?? 0}deg) scale(${r4((c.scale ?? 100) / 100)})`
       : '';
     const opacity = (c.opacity ?? 100) !== 100 ? String(r4(c.opacity / 100)) : '';
-    const key = `${transform}|${opacity}`;
+    // the video effects (wave 14): the picture's own layers only; Motion moves them all
+    const v = vfxLook(seg);
+    const picT = v && v.transform ? `${transform} ${v.transform}`.trim() : transform;
+    const po = ((c.opacity ?? 100) / 100) * (v ? v.opacity : 1);
+    const picO = Math.abs(po - 1) > 1e-6 ? String(r4(po)) : '';
+    const clip = v ? v.clip : '', mask = v ? v.mask : '', filter = v ? v.filter : '';
+    const key = `${transform}|${opacity}|${picT}|${picO}|${clip}|${mask}|${filter}`;
     if (key !== lastStyle) {
       lastStyle = key;
-      LAYERS.forEach((s) => document.querySelectorAll(s).forEach((el) => {
+      PICTURE.forEach((s) => document.querySelectorAll(s).forEach((el) => {
+        el.style.transform = picT;
+        el.style.opacity = picO;
+        el.style.clipPath = clip;
+        el.style.filter = filter;
+        el.style.webkitMaskImage = mask;
+        el.style.maskImage = mask;
+        el.style.webkitMaskComposite = mask ? 'source-in' : '';
+        el.style.maskComposite = mask ? 'intersect' : '';
+      }));
+      OVER.forEach((s) => document.querySelectorAll(s).forEach((el) => {
         el.style.transform = transform;
         el.style.opacity = opacity;
       }));
@@ -593,6 +936,7 @@
     { key: 'time', name: 'Time Remapping', fx: true },
     { key: 'volume', name: 'Volume', fx: true },
     { key: 'lumetri', name: 'Lumetri Color', fx: true, colour: true },
+    { key: 'vfx', name: 'Video effects' },           // the clip's own stack: a section each
     { key: 'fxs', name: 'Designed effects', fx: true },
   ];
   const RESET_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3a5 5 0 1 1-4.6 3H5.2A3.5 3.5 0 1 0 8 4.5V6.5L5 4l3-2.5z" fill="currentColor"/></svg>';
@@ -610,7 +954,7 @@
    * once it is animated), the reset, and its lane of the mini timeline — the shot's span,
    * the playhead, a diamond per key. */
   function animRow(group, label, vals, resetKeysList, hover) {
-    const name = GROUP_NAME[group];
+    const name = groupName(group);
     return `<div class="ec-row ec-anim" data-row="${group === 'pos' ? 'pos' : group}" data-g="${group}" title="${esc(hover)}">
       <button type="button" class="ec-sw" data-sw="${group}" aria-pressed="false" title="toggle animation: keyframes for ${name}">${WATCH_SVG}</button>
       <span class="ec-name">${esc(label)}</span>
@@ -631,6 +975,7 @@
   }
   function sectionHtml(s, gen) {
     if (s.colour && gen) return '';
+    if (s.key === 'vfx') return '<div class="ec-vfx" data-testid="ec-vfx"></div>';
     let body = '';
     const BK = (k) => BY_KEY.get(k);
     if (s.key === 'motion') {
@@ -978,7 +1323,7 @@
         store.set(OPEN_KEY, open);
         const sec = tw.closest('.ec-sub, .ec-sec');
         sec.classList.toggle('open', open[k]);
-        tw.setAttribute('aria-expanded', String(open[k]));
+        sec.querySelectorAll(`[data-twirl="${k}"]`).forEach((x) => x.setAttribute('aria-expanded', String(open[k])));
         return;
       }
       const sw = e.target.closest('[data-sw]');
@@ -990,13 +1335,11 @@
       const sr = e.target.closest('[data-sreset]');
       if (sr) { e.stopPropagation(); resetSection(sr.dataset.sreset); return; }
       const fb = e.target.closest('[data-fxact]');
-      if (fb) { e.stopPropagation(); stackAct(fb.dataset.fxact, fb.dataset.id); }
+      if (fb) { e.stopPropagation(); stackAct(fb.dataset.fxact, fb.dataset.id); return; }
+      const vb = e.target.closest('[data-vfxact]');
+      if (vb) { e.stopPropagation(); vfxAct(vb.dataset.vfxact, vb.dataset.id); }
     });
-    wrap.querySelectorAll('.ec-v').forEach((el) => {
-      el.addEventListener('pointerdown', (e) => onDown(e, el));
-      el.addEventListener('keydown', (e) => onKey(e, el));
-      el.addEventListener('blur', () => { const p = BY_KEY.get(el.dataset.k); if (p && !el.readOnly) close(el, p, true); });
-    });
+    bindVals(wrap);
     wrap.querySelectorAll('.ec-sl').forEach((el) => bindSlider(el));
     wrap.querySelectorAll('[data-cgraph]').forEach((el) => {
       el.addEventListener('pointerdown', (e) => onCurveDown(e, el));
@@ -1013,8 +1356,21 @@
       el.addEventListener('dblclick', () => wheelCentre(el.dataset.wd));
     });
     wrap.querySelectorAll('.lm-wl').forEach((el) => bindWheelSlider(el));
-    wrap.querySelectorAll('.ec-lane').forEach((el) => {
+  }
+  /* the values and the keyframe lanes (the video effects' sections bind their own when
+   * the stack is drawn again) */
+  function bindVals(root) {
+    root.querySelectorAll('.ec-v').forEach((el) => {
+      el.addEventListener('pointerdown', (e) => onDown(e, el));
+      el.addEventListener('keydown', (e) => onKey(e, el));
+      el.addEventListener('blur', () => { const p = propOf(el.dataset.k); if (p && !el.readOnly) close(el, p, true); });
+    });
+    root.querySelectorAll('.ec-lane').forEach((el) => {
       el.addEventListener('pointerdown', (e) => onLaneDown(e, el));
+    });
+    root.querySelectorAll('select[data-vfxsel]').forEach((el) => {
+      el.addEventListener('change', () => vfxChoice(el.dataset.id, el.dataset.vfxsel, el.value));
+      el.addEventListener('keydown', (e) => e.stopPropagation());
     });
   }
 
@@ -1111,22 +1467,22 @@
   function toggleAnim(group, sure) {
     const seg = cur();
     const t = TL();
-    if (!seg || !t || !GROUPS[group]) return;
-    const kps = GROUPS[group];
+    if (!seg || !t || !groupKps(group)) return;
+    const kps = groupKps(group);
     const on = animated(seg, group);
     if (on && !sure) {
       // a locked track refuses at once: it never asks a question it will then refuse
       if (refused(group === 'volume_db')) return;
       if (askDlg && askDlg.open) return;
       const n = keyTimes(seg, group).length;
-      const nm = GROUP_NAME[group];
+      const nm = groupName(group);
       askDeleteKeys(`${nm[0].toUpperCase()}${nm.slice(1)}: ${n} keyframe${n === 1 ? '' : 's'}.`).then((ok) => {
         const now = ok ? cur() : null;            // still the same shot, still keyed
         if (now && now.id === seg.id && animated(now, group)) toggleAnim(group, true);
       });
       return;
     }
-    if (!opens(on ? `stop animating ${GROUP_NAME[group]}` : `animate ${GROUP_NAME[group]}`, group === 'volume_db')) return;
+    if (!opens(on ? `stop animating ${groupName(group)}` : `animate ${groupName(group)}`, group === 'volume_db')) return;
     if (on) {                                 // Premiere: the keys go, the value at the playhead stays
       const tv = shownT(seg);
       const vals = kps.map((kp) => valAt(seg, kp, tv));
@@ -1140,7 +1496,7 @@
   }
   function keyTimes(seg, group) {
     const ts = [];
-    GROUPS[group].forEach((kp) => (keysOf(seg, kp) || []).forEach((k) => {
+    (groupKps(group) || []).forEach((kp) => (keysOf(seg, kp) || []).forEach((k) => {
       if (!ts.some((x) => sameT(x, k[0]))) ts.push(k[0]);
     }));
     return ts.sort((a, b) => a - b);
@@ -1154,7 +1510,7 @@
   function keyAct(act, group) {
     const seg = cur();
     const t = TL();
-    if (!seg || !t || !GROUPS[group] || !animated(seg, group)) return;
+    if (!seg || !t || !groupKps(group) || !animated(seg, group)) return;
     const ts = keyTimes(seg, group);
     const now = localT(seg);
     const eps = 0.5 / rate();
@@ -1167,7 +1523,7 @@
     const at = keyT(seg);
     const has = ts.some((x) => sameT(x, at));
     if (!opens(has ? 'remove keyframe' : 'add keyframe', group === 'volume_db')) return;
-    GROUPS[group].forEach((kp) => {
+    groupKps(group).forEach((kp) => {
       const k = keysOf(seg, kp);
       if (!k) return;
       if (has) {
@@ -1216,7 +1572,7 @@
         const to = tOf(ev.clientX);
         if (sameT(to, kfDrag.at)) return;
         if (keyTimes(s2, group).some((x) => sameT(x, to))) return;   // never onto another key
-        GROUPS[group].forEach((kp) => {
+        groupKps(group).forEach((kp) => {
           const k = keysOf(s2, kp);
           if (!k) return;
           setKeys(s2, kp, k.map((x) => (sameT(x[0], kfDrag.at) ? [to, x[1]] : [x[0], x[1]]))
@@ -1300,6 +1656,24 @@
     if (following || !t || typeof t.on !== 'function') return;
     following = true;
     t.on('playhead', onPlayhead);
+    t.on('change', badgesSoon);
+    badgesSoon();
+  }
+  /* Premiere's fx badge: a clip on V1 with a video effect on (not bypassed) wears one, at
+   * its top right, after every edit and undo (the timeline draws its blocks first). */
+  let badgeQ = 0;
+  function badgesSoon() {
+    if (badgeQ) return;
+    badgeQ = requestAnimationFrame(() => {
+      badgeQ = 0;
+      const t = TL();
+      if (!t) return;
+      document.querySelectorAll('#tl .tl-lane[data-lane=V1] .blk').forEach((b) => {
+        const sg = t.byId(b.dataset.id);
+        const on = !!(sg && vfxList(sg).some((e) => !e.off));
+        if (b.classList.contains('has-vfx') !== on) b.classList.toggle('has-vfx', on);
+      });
+    });
   }
   function onPlayhead(ev) {
     const t = TL();
@@ -1315,7 +1689,7 @@
     if (ctl(seg).keys) {
       paintKeys(box, seg);
       box.querySelectorAll('.ec-anim.animated .ec-v').forEach((el) => {
-        const p = BY_KEY.get(el.dataset.k);
+        const p = propOf(el.dataset.k, seg);
         if (!p || !el.readOnly || (gesture && gesture.p === p)) return;
         const txt = fmtVal(p, p.get(seg));
         if (el.value !== txt) el.value = txt;
@@ -1330,7 +1704,7 @@
     const seg = cur();
     if (!seg) return;
     if (keys[0] === 'speed') { const t = TL(); if (t) t.setSpeed(seg.id, 1); return; }
-    const ps = keys.map((k) => BY_KEY.get(k)).filter(Boolean);
+    const ps = keys.map((k) => propOf(k, seg)).filter(Boolean);
     if (!ps.length || !begin(ps[0])) return;
     ps.forEach((p) => p.set(seg, p.dflt));
     preview(seg);
@@ -1360,8 +1734,8 @@
    * it alone while it has the focus, and its own keys step it. */
   function onDown(e, el) {
     if (e.button !== 0 || !el.readOnly) return;     // typing: the caret is the input's
-    const p = BY_KEY.get(el.dataset.k);
     const seg = cur();
+    const p = propOf(el.dataset.k, seg);
     if (!p || !seg) return;
     e.preventDefault();
     const x0 = e.clientX, v0 = p.get(seg);
@@ -1396,8 +1770,8 @@
     el.addEventListener('pointercancel', up);
   }
   function onKey(e, el) {
-    const p = BY_KEY.get(el.dataset.k);
     const seg = cur();
+    const p = propOf(el.dataset.k, seg);
     if (!p || !seg) return;
     e.stopPropagation();                       // a value's keys are its own
     if (!el.readOnly) {                        // typing
@@ -1491,19 +1865,273 @@
       : '<div class="ec-empty">No designed effects on this shot. <button type="button" class="ec-link" data-fxact="open">Design one in Designed Effects ▸</button></div>';
   }
 
+  /* ------------------------------------------------------------ the video effects' sections
+   * One section per effect on the shot, in its stack's order, Premiere's: the twirl, the
+   * fx toggle (bypass: kept, not drawn), the name, then ▲ ▼ (its place in the stack), the
+   * reset and Clear. Every number is an animatable row (a stopwatch each); Blur
+   * Dimensions is a select. Each click is one undo entry. */
+  const CLEAR_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+  function vfxRows(e) {
+    const K = VFX[e.kind];
+    const id = e.id;
+    const hov = (ui) => (vfxProp(ui, id, e.kind) || {}).hover || '';
+    let rows = '';
+    if (e.kind === 'transform') {
+      rows += animRow(`pos@${id}`, 'Position', valInput(`posx@${id}`, 'X') + valInput(`posy@${id}`, 'Y'),
+        `posx@${id},posy@${id}`, hov('posx'));
+    }
+    K.params.forEach((d) => {
+      if (d.key.startsWith('position')) return;
+      rows += animRow(`${d.key}@${id}`, d.label, valInput(`${d.key}@${id}`), `${d.key}@${id}`, hov(d.key));
+    });
+    Object.entries(K.choices).forEach(([key, c]) => {
+      const v = vfxValue(e, key);
+      rows += `<div class="ec-row ec-vsel${v !== c.options[0][0] ? ' changed' : ''}" data-row="${key}@${id}" title="${esc(`${K.name} › ${c.label} · ${RENDERED}`)}">
+          <span class="ec-name">${esc(c.label)}</span>
+          <span class="ec-vals"><select class="ec-vchoice" data-vfxsel="${key}" data-id="${esc(id)}" aria-label="${esc(c.label)}">${c.options.map(([val, name]) =>
+            `<option value="${val}"${val === v ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select></span>
+          <span></span></div>`;
+    });
+    return rows;
+  }
+  function vfxSectionHtml(e, i, n) {
+    const K = VFX[e.kind];
+    const tk = `vfx:${e.id}`;
+    if (open[tk] === undefined) open[tk] = true;          // a new effect opens, as Premiere's does
+    const on = !e.off;
+    return `<section class="ec-sec ec-vsec${open[tk] ? ' open' : ''}${on ? '' : ' off'}" data-sec="${tk}" data-vfx="${esc(e.id)}" data-kind="${e.kind}" data-testid="ec-vfx-sec">
+      <div class="ec-sh">
+        <button type="button" class="ec-twirl ec-vtw" data-twirl="${tk}" aria-expanded="${!!open[tk]}" title="${esc(K.what)}"><i class="ec-tri"></i></button>
+        <button type="button" class="ec-fxtog${on ? ' on' : ''}" data-vfxact="off" data-id="${esc(e.id)}" aria-pressed="${on}" title="${on ? `${K.name} is on — click to bypass it` : `${K.name} is bypassed — click to turn it on`}">fx</button>
+        <span class="ec-vname" data-twirl="${tk}" title="${esc(`${K.name}: ${K.what} · ${RENDERED}`)}">${esc(K.name)}</span>
+        <span class="ec-ord"><button type="button" data-vfxact="up" data-id="${esc(e.id)}"${i ? '' : ' disabled'} title="move ${esc(K.name)} up the stack">▲</button><button type="button" data-vfxact="down" data-id="${esc(e.id)}"${i < n - 1 ? '' : ' disabled'} title="move ${esc(K.name)} down the stack">▼</button></span>
+        <button type="button" class="ec-reset ec-sreset" data-vfxact="reset" data-id="${esc(e.id)}" title="reset ${esc(K.name)}">${RESET_SVG}</button>
+        <button type="button" class="ec-vclear" data-vfxact="clear" data-id="${esc(e.id)}" title="clear ${esc(K.name)}: take it off this clip">${CLEAR_SVG}</button>
+      </div>
+      <div class="ec-sb">${vfxRows(e)}</div></section>`;
+  }
+  /* the stack's sections, drawn again only when the stack changes (an effect added,
+   * cleared, moved or bypassed, or a choice) — never under a drag */
+  function paintVfx(box, seg) {
+    const host = box && box.querySelector('.ec-vfx');
+    if (!host || !seg) return;
+    const list = isOv(seg) ? [] : vfxList(seg);
+    const key = JSON.stringify(list.map((e) => [e.id, e.kind, !!e.off,
+      Object.keys(VFX[e.kind].choices).map((c) => vfxValue(e, c))]));
+    if (host.dataset.key === key || gesture) return;
+    host.dataset.key = key;
+    host.innerHTML = list.map((e, i) => vfxSectionHtml(e, i, list.length)).join('');
+    bindVals(host);
+  }
+
+  /* fx on/off · up · down · reset · clear: one undo entry each */
+  function vfxAct(act, id, target) {
+    const seg = cur(target);
+    const e = seg ? vfxEntry(seg, id) : null;
+    if (!e || isOv(seg)) return false;
+    const K = VFX[e.kind];
+    const list = vfxList(seg);
+    const i = list.indexOf(e);
+    if ((act === 'up' && i <= 0) || (act === 'down' && i >= list.length - 1)) return false;
+    const label = act === 'off' ? `${K.name} ${e.off ? 'on' : 'off'}` : act === 'reset' ? `reset ${K.name}`
+      : act === 'clear' ? `clear ${K.name}` : act === 'up' || act === 'down' ? 'effect order' : null;
+    if (!label || !opens(label, false, seg)) return false;
+    if (act === 'off') {
+      setVfx(seg, list.map((x) => (x.id === id ? (x.off ? (({ off, ...rest }) => rest)(x) : { ...x, off: true }) : x)));
+    } else if (act === 'up' || act === 'down') {
+      const out = list.slice();
+      const j = act === 'up' ? i - 1 : i + 1;
+      [out[i], out[j]] = [out[j], out[i]];
+      setVfx(seg, out);
+    } else if (act === 'reset') {
+      vfxDropKeys(seg, id);
+      setVfx(seg, vfxList(seg).map((x) => (x.id === id ? (x.off ? { id: x.id, kind: x.kind, off: true } : { id: x.id, kind: x.kind }) : x)));
+    } else {
+      vfxDropKeys(seg, id);
+      setVfx(seg, vfxList(seg).filter((x) => x.id !== id));
+    }
+    preview(seg);
+    finishK();
+    return true;
+  }
+  /* a choice (Blur Dimensions): one undo entry */
+  function vfxChoice(id, key, v, target) {
+    const seg = cur(target);
+    const e = seg ? vfxEntry(seg, id) : null;
+    const c = e && VFX[e.kind].choices[key];
+    if (!c || !c.options.some((o) => o[0] === v) || vfxValue(e, key) === v) return false;
+    if (!opens(`${VFX[e.kind].name.toLowerCase()} ${c.label.toLowerCase()}`, false, seg)) return false;
+    vfxPut(seg, id, key, v);
+    preview(seg);
+    finishK();
+    return true;
+  }
+  /* The bin's drop (or its double-click): the effect at the bottom of each clip's stack,
+   * one undo entry for them all, labelled with the effect's name ("undo: Crop"). The
+   * clips are `ids`, else the selected V1 shots, else the one in Effect Controls. A V2+
+   * clip takes none (it renders as shot). Returns the new effects' ids. `reveal` (the
+   * bin's gestures): Effect Controls comes forward on the first clip, its new section in
+   * view, as Premiere's panel follows the clip an effect lands on. */
+  function vfxAdd(kind, ids, opts = {}) {
+    const t = TL();
+    const K = VFX[kind];
+    if (!t || !K) return [];
+    let want = Array.isArray(ids) ? ids : ids != null ? [ids] : [...(t.state.sel || [])];
+    if (!want.length) { const s = cur(); if (s && !isOv(s)) want = [s.id]; }
+    const segs = want.map((x) => t.byId(x)).filter((s) => s && t.indexOf(s.id) >= 0);
+    if (!segs.length) {
+      const ov = want.some((x) => typeof t.overlayById === 'function' && t.overlayById(x)) || (!want.length && ovSel());
+      say(ov ? `${K.name} applies to clips on V1: a clip on V2+ renders as shot`
+        : `select a clip on V1 first, then double-click ${K.name} — or drag it onto the clip`);
+      return [];
+    }
+    const room = segs.filter((s) => vfxList(s).length < VFX_MAX);
+    if (!room.length) { say(`a clip takes at most ${VFX_MAX} video effects`); return []; }
+    if (!opens(K.name, false, room[0])) return [];
+    const made = room.map((s) => {
+      const list = vfxList(s);
+      const id = vfxId(kind, list.map((e) => e.id));
+      setVfx(s, [...list, { id, kind }]);
+      open[`vfx:${id}`] = true;
+      return id;
+    });
+    preview(room[0]);
+    finishK();
+    if (opts.reveal) vfxReveal(room[0].id, made[0]);
+    return made;
+  }
+  function vfxReveal(id, eid) {
+    const t = TL();
+    if (!t.state.sel || !t.state.sel.has(id)) t.select([id], { source: 'api' });
+    if (window.dock && typeof dock.open === 'function') dock.open('inspect');
+    const ri = g('renderInspector');
+    if (typeof ri === 'function') ri();
+    const sec = document.querySelector(`#inspector .ec-vsec[data-vfx="${CSS.escape(eid)}"]`);
+    if (sec && sec.scrollIntoView) sec.scrollIntoView({ block: 'nearest' });
+  }
+  function say(msg) {
+    /* eslint-disable-next-line no-undef */
+    if (typeof toast === 'function') toast(msg, 3500);
+  }
+
+  /* The AI's `effect` op (roughcut/actions.py), through the hand's own paths: the bin's
+   * drop when the shot has no effect of that kind (else its first one), then each value
+   * typed in its row (effects.set), each keyframe as the stopwatch and a value typed with
+   * the playhead on it, the fx toggle, or Clear. Inside the review's one undo entry.
+   * Throws (with the reason) when a step is refused. */
+  function vfxOp(op, target) {
+    const t = TL();
+    const seg0 = cur(target);
+    const no = (why) => { const err = new Error(why); err.refused = true; throw err; };
+    if (!t || !seg0 || isOv(seg0)) no('video effects apply to clips on V1');
+    const K = VFX[op.kind];
+    if (!K) no(`unknown video effect ${op.kind}`);
+    let e = vfxList(seg0).find((x) => x.kind === op.kind);
+    if (op.remove) {
+      if (!e || !vfxAct('clear', e.id, seg0)) no(`the shot has no ${K.name}`);
+      return e.id;
+    }
+    if (!e) {
+      const made = vfxAdd(op.kind, [seg0.id]);
+      if (!made.length) no(`${K.name} was refused (is V1 locked?)`);
+      e = vfxEntry(cur(seg0), made[0]);
+    }
+    const id = e.id;
+    Object.entries(op.params || {}).forEach(([k, v]) => {
+      if (K.choices[k]) { if (vfxValue(vfxEntry(cur(seg0), id), k) !== v && !vfxChoice(id, k, v, seg0)) no(`${K.name} ${k} was refused`); return; }
+      const p = propOf(`${k}@${id}`, cur(seg0));
+      if (!p) no(`${K.name} has no ${k}`);
+      if (Math.abs(p.get(cur(seg0)) - Number(v)) > 1e-9 && !change(p, seg0, Number(v))) no(`${K.name} ${p.label} was refused`);
+    });
+    const start = t.filmStart(seg0.id);
+    Object.entries(op.keys || {}).forEach(([k, list]) => {
+      const p = propOf(`${k}@${id}`, cur(seg0));
+      if (!p || !p.group) no(`${K.name} has no stopwatch for ${k}`);
+      t.select([seg0.id], { source: 'api' });
+      (list || []).slice().sort((a, b) => a[0] - b[0]).forEach(([kt, v], n) => {
+        t.seek(start + Number(kt));
+        if (!animated(cur(seg0), p.group)) toggleAnim(p.group);
+        if (!change(p, seg0, Number(v))) no(`${K.name} ${p.label} key ${n + 1} was refused`);
+      });
+    });
+    if (op.on != null && !!op.on === !!vfxEntry(cur(seg0), id).off) vfxAct('off', id, seg0);
+    return id;
+  }
+
+  /* ------------------------------------------------------------ dropped from the bin
+   * Onto a clip on V1 (the block under the pointer, outlined while it is over it), or
+   * onto Effect Controls (the clip it shows). The drop selects that clip and shows its
+   * Effect Controls with the new section open, as Premiere's panel follows the clip. */
+  const carriesVfx = (e) => !!(e.dataTransfer && e.dataTransfer.types
+    && Array.prototype.includes.call(e.dataTransfer.types, VFX_MIME));
+  let dropEl = null;
+  function dropMark(el) {
+    if (dropEl === el) return;
+    if (dropEl) dropEl.classList.remove('vfx-drop');
+    dropEl = el;
+    if (el) el.classList.add('vfx-drop');
+  }
+  function vfxDropTarget(e) {
+    const t = TL();
+    const tg = e.target instanceof Element ? e.target : null;
+    if (!t || !tg) return null;
+    const b = tg.closest('#tl .blk');
+    if (b && b.dataset.id && t.indexOf(b.dataset.id) >= 0) return { id: b.dataset.id, el: b };
+    if (tg.closest('#tl .tl-lane[data-lane=V1]')) {
+      const at = t.shotAt(t.eventTime(e));
+      const el = at ? document.querySelector(`#tl .blk[data-id="${CSS.escape(String(at.id))}"]`) : null;
+      return at ? { id: at.id, el } : null;
+    }
+    const ec = tg.closest('#inspector');
+    if (ec) {
+      const s = cur();
+      return s && !isOv(s) ? { id: s.id, el: ec } : null;
+    }
+    return null;
+  }
+  function onVfxOver(e) {
+    if (!carriesVfx(e)) return;
+    const hit = vfxDropTarget(e);
+    if (!hit) { dropMark(null); return; }
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    dropMark(hit.el);
+  }
+  function onVfxDrop(e) {
+    if (!carriesVfx(e)) return;
+    const hit = vfxDropTarget(e);
+    dropMark(null);
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    let kind = null;
+    try { kind = JSON.parse(e.dataTransfer.getData(VFX_MIME)).kind; } catch (err) { kind = null; }
+    if (!hit) {
+      const tg = e.target instanceof Element ? e.target : null;
+      if (tg && tg.closest('#tl') && VFX[kind]) say(`${VFX[kind].name} goes on a clip on V1: drop it on the clip`);
+      return;
+    }
+    vfxAdd(kind, [hit.id], { reveal: true });
+  }
+  document.addEventListener('dragover', onVfxOver, true);
+  document.addEventListener('drop', onVfxDrop, true);
+  document.addEventListener('dragend', () => dropMark(null), true);
+  document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) dropMark(null); }, true);
+
   /* ------------------------------------------------------------ fill */
   function fill(box, seg) {
     if (!box || !seg) return;
+    paintVfx(box, seg);                      // the video effects' sections first: their rows fill below
     box.querySelectorAll('.ec-v').forEach((el) => {
-      const p = BY_KEY.get(el.dataset.k);
+      const p = propOf(el.dataset.k, seg);
       if (!p || !el.readOnly || (gesture && gesture.p === p)) return;
       const v = p.get(seg);
       const txt = fmtVal(p, v);
       if (el.value !== txt) el.value = txt;
       el.setAttribute('aria-valuenow', String(v));
       const r = el.closest('.ec-row');
-      if (r) r.classList.toggle('changed', (p.group && animated(seg, p.group)) || (p.key.startsWith('pos')
-        ? BY_KEY.get('posx').get(seg) !== FRAME_W / 2 || BY_KEY.get('posy').get(seg) !== FRAME_H / 2
+      const pair = p.pos ? p.pos.map((k) => propOf(k, seg)) : null;
+      if (r) r.classList.toggle('changed', (p.group && animated(seg, p.group)) || (pair
+        ? pair[0].get(seg) !== FRAME_W / 2 || pair[1].get(seg) !== FRAME_H / 2
         : Math.abs(v - p.dflt) > 1e-6));
     });
     box.querySelectorAll('.ec-sl').forEach((el) => {
@@ -1532,8 +2160,8 @@
 
   window.effects = {
     build, fill, adjust, onShot, apply, refreshStack,
-    value: (key, seg) => { const p = BY_KEY.get(key); const s = cur(seg); return p && s ? p.get(s) : null; },
-    set: (key, v, seg) => { const p = BY_KEY.get(key); return p ? change(p, seg, v) : false; },
+    value: (key, seg) => { const s = cur(seg); const p = propOf(key, s); return p && s ? p.get(s) : null; },
+    set: (key, v, seg) => { const p = propOf(key, cur(seg)); return p ? change(p, seg, v) : false; },
     get live() { return liveId; },
     // keyframes (tests and the judge): a prop's keys, and the controls the monitor shows now
     keys: (kp, seg) => { const s = cur(seg); const k = s ? keysOf(s, kp) : null; return k ? k.map((x) => [x[0], x[1]]) : []; },
@@ -1552,6 +2180,16 @@
       return apiChange(`${n} wheel`, seg, (s2) => setWheel(s2, n, v));
     },
     get curveChannel() { return curveCh; },
+    // the video effects (wave 14, VFX): the bin's kinds, a shot's stack, and one undoable
+    // change each — the bin's drop, the section's buttons and select, the AI's op
+    VFX, VFX_MIME,
+    vfx: (seg) => { const s = cur(seg); return s ? JSON.parse(JSON.stringify(vfxList(s))) : []; },
+    vfxAdd: (kind, ids, opts) => vfxAdd(kind, ids, opts || {}),
+    vfxAct: (act, id, seg) => vfxAct(act, id, seg),
+    vfxChoice: (id, key, v, seg) => vfxChoice(id, key, v, seg),
+    vfxOp: (op, seg) => vfxOp(op, seg),
+    // what the Program wears for the shot on it now (tests and the judge)
+    vfxLook: () => { const t = TL(); const s = t && liveId ? t.byId(liveId) : null; return vfxLook(s); },
   };
 
   // The inspector may already be on a shot built without the sections: build it again.

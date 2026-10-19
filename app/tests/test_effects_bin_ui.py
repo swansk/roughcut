@@ -28,6 +28,8 @@ from test_transitions import (CUT, EDL, board, live_server, on_disk, proj,  # no
 
 ITEMS = ["Constant Gain", "Constant Power", "Exponential Fade",
          "Cross Dissolve", "Dip to Black", "Dip to White", "Film Dissolve"]
+# Video Effects (wave 14, VFX: test_video_effects.py) sit between the two, as in Premiere,
+# folded until opened
 
 
 def luma(c) -> float:
@@ -62,7 +64,7 @@ def test_the_bin_has_premieres_folders_and_its_search_filters_them(board):
     assert tabs[:3] == ["Project", "Selects", "Effects"] and "Designed Effects" in tabs, tabs
     open_bin(pg)
     folders = [t.strip() for t in pg.locator("#fxbin .fxb-folder .nm").all_inner_texts()]
-    assert folders == ["Audio Transitions", "Crossfade", "Video Transitions", "Dissolve"], folders
+    assert folders == ["Audio Transitions", "Crossfade", "Video Effects", "Video Transitions", "Dissolve"], folders
     assert [t.strip() for t in pg.locator("#fxbin .fxb-item .nm").all_inner_texts()] == ITEMS
     # the defaults are outlined
     assert sorted(pg.eval_on_selector_all("#fxbin .fxb-item.def", "els => els.map(e => e.dataset.kind)")) == \
