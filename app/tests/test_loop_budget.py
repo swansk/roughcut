@@ -524,3 +524,34 @@ def test_a_clips_free_facts_are_one_ffprobe_and_the_list_never_waits_long(tmp_pa
     assert len(probes) == 1, "media_facts probed again"
     assert server.CLIP_FACTS_WAIT_S <= 0.2
 
+
+def test_the_status_never_ffprobes_a_clip_the_warm_up_has_not_reached(tmp_path, project, monkeypatch):
+    """The first /api/status after a start (or an import) priced the look by every clip's
+    length, ffprobing the ones the facts warm-up had not reached: 300-970 ms on Killington.
+    It reads the lengths known; one not known yet counts a sheet, and the status is read
+    again once it lands (the snapshot's key counts the known lengths)."""
+    import server
+
+    server.configure(None, project["footage"], None, tmp_path / "work", proxies=False,
+                     visual=tmp_path / "no-visual")
+    probes: list[list[str]] = []
+    real_run = subprocess.run
+
+    def watched(cmd, *a, **kw):
+        if isinstance(cmd, list) and cmd and cmd[0] == "ffprobe":
+            probes.append(cmd)
+        return real_run(cmd, *a, **kw)
+
+    deadline = time.time() + 20                       # the configure's own warm-up, done
+    while time.time() < deadline and len(server.STATE.get("clip_facts") or {}) < len(server.footage_clips()):
+        time.sleep(0.05)
+    clip = server.footage_clips()[0]
+    known = server.STATE["durations"].pop(clip)
+    monkeypatch.setattr(server.subprocess, "run", watched)
+    monkeypatch.setattr(server, "load_sidecar", lambda c: {})       # as a clip not heard yet
+    key_before = server._snap_key()
+    v = server.visual_status()
+    assert not probes, probes
+    assert v["pending"] and v["coarse_calls"] >= len(v["pending"])
+    server.STATE["durations"][clip] = known
+    assert server._snap_key() != key_before, "a length landing does not refresh the status"

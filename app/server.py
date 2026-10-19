@@ -931,9 +931,16 @@ def set_look_interval(interval: float) -> None:
     write_edl(edl)
 
 
-def sheets_for(clip: str, interval: float | None = None) -> int:
-    return max(1, math.ceil((clip_duration(clip) or 0.0)
-                            / sheet_seconds(interval or look_interval())))
+def clip_duration_known(clip: str) -> float | None:
+    """A clip's length when it is known already (cached, or its sidecar's) — never an
+    ffprobe, for what a polled request reads (the status's look price)."""
+    d = STATE.get("durations", {}).get(clip)
+    return d if d is not None else load_sidecar(clip).get("duration_s")
+
+
+def sheets_for(clip: str, interval: float | None = None, probe: bool = True) -> int:
+    d = clip_duration(clip) if probe else clip_duration_known(clip)
+    return max(1, math.ceil((d or 0.0) / sheet_seconds(interval or look_interval())))
 
 
 def audit_plan(ranked: list[dict], n: int = AUDIT_CLAIMS) -> list[dict]:
@@ -973,7 +980,10 @@ def visual_status(fine: bool = True, interval: float | None = None) -> dict:
     done = visual_stems()
     pending = [c for c in clips if Path(c).stem not in done]
     interval = float(interval or look_interval())
-    sheets = sum(sheets_for(c, interval) for c in pending)
+    # lengths already known only (verdict 11 punch 4: a status right after a start or an
+    # import ffprobed every clip the warm-up had not reached, 300-970 ms); one still being
+    # probed counts a sheet until its length lands, and the snapshot is read again then
+    sheets = sum(sheets_for(c, interval, probe=False) for c in pending)
     # The close look is per clip, not per pending clip: a clip already read coarsely
     # but never audited is exactly the one whose loudest claim is unchecked.
     seen_closely = fine_stems()
@@ -990,7 +1000,7 @@ def visual_status(fine: bool = True, interval: float | None = None) -> dict:
         # the same pending clips (the close look does not depend on it).
         "interval_s": interval,
         "intervals": list(VISUAL_INTERVALS),
-        "by_interval": {f"{i:g}": round(sum(sheets_for(c, i) for c in pending)
+        "by_interval": {f"{i:g}": round(sum(sheets_for(c, i, probe=False) for c in pending)
                                         * VISUAL_USD_PER_SHEET
                                         + fine_calls * FINE_USD_PER_WINDOW, 2)
                         for i in VISUAL_INTERVALS},
@@ -3451,7 +3461,9 @@ def _snap_key() -> tuple:
             bool(os.environ.get("ANTHROPIC_API_KEY")),
             # the CLI's sign-in is re-asked once its cache is stale (`cli_facts`)
             (int(time.time() // CLI_FACTS_TTL_S), _CLI_FACTS["gen"]) if STATE.get("cli_facts") else 0,
-            STATE.get("edl_created"), _snap_paths())
+            STATE.get("edl_created"), _snap_paths(),
+            # a clip's length landing (the facts warm-up) re-prices the look (visual_status)
+            len(STATE.get("durations") or {}))
 
 
 def snap_hit(name: str) -> bool:
