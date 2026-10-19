@@ -88,7 +88,9 @@ def test_source_transport_keeps_4px_between_controls(browser, live_server, proje
     try:
         _source_clip(pg)
         m = pg.evaluate(GAPS_JS)
-        assert m["panel"] <= 420, f"the proposal state squeezes the Source: {m['panel']} px"
+        # the waiting proposal leaves the Source its width (verdict 11, punch 8: the Assistant's
+        # full-height column squeezed it to ~345 px at 1440); a narrow Source is forced below
+        assert m["panel"] >= 560, f"the proposal state squeezes the Source: {m['panel']} px"
         names = [i["id"] for i in m["items"]]
         for want in ("srcPos", "in", "out", "back", "play", "fwd", "insert"):
             assert want in names, (want, names)
@@ -99,8 +101,9 @@ def test_source_transport_keeps_4px_between_controls(browser, live_server, proje
             assert i["l"] >= m["left"] - 0.5 and i["r"] <= m["right"] + 0.5, f"{i['id']} spills: {m}"
         _shot(pg, "chrome-source-transport-1440")
 
-        # and narrower still, down to 340 px, the same holds (the duration goes first)
-        for w in (380, 340):
+        # and narrow, down to 340 px (a dragged splitter, a small window), the same holds (the
+        # duration goes first)
+        for w in (420, 380, 340):
             pg.evaluate("(w) => { const p = document.querySelector('#pSource');"
                         " p.style.flex = `0 0 ${w}px`; p.style.width = `${w}px`;"
                         " p.style.maxWidth = `${w}px`; }", w)
