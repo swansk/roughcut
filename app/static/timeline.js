@@ -847,7 +847,7 @@
     posterAt.set(seg.id, seg.in);
     const img = b.querySelector('.poster');
     const src = posterUrl(seg, seg.in);
-    img.alt = `${stem(seg.clip)} at ${seg.in.toFixed(2)}s`;
+    img.alt = `${window.rcClipName ? window.rcClipName(seg.clip) : stem(seg.clip)} at ${seg.in.toFixed(2)}s`;
     // No src at all rather than an empty one: src="" fetches the page itself.
     if (!src) img.removeAttribute('src');
     else if (img.getAttribute('src') !== src) img.setAttribute('src', src);
@@ -1287,7 +1287,7 @@
       const src = posterUrl(o, o.in);
       if (!src) img.removeAttribute('src'); else if (img.getAttribute('src') !== src) img.setAttribute('src', src);
       const says = blockSays(o, clipOf(o.clip));
-      b.title = `${name} · ${stem(o.clip)} ${fmt(o.in)}–${fmt(o.out)} at ${tc(o.at)}–${tc(o.at + d)}`
+      b.title = `${name} · ${window.rcClipName ? window.rcClipName(o.clip) : stem(o.clip)} ${fmt(o.in)}–${fmt(o.out)} at ${tc(o.at)}–${tc(o.at + d)}`
         + (o.sound ? ' — its sound, mixed with A1' : name === 'V2' ? ' — composited over V1, picture only'
           : ' — composited over the tracks below it, picture only') + (says ? `\n“${says}”` : '')
         + (name === 'V2' ? '\ndrag to move · Delete removes it' : '\ndrag to move, an edge to trim · Delete removes it');

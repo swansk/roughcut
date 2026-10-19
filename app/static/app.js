@@ -653,7 +653,7 @@ function fillShot(box, seg) {
 
   // why? — the evidence: where the shot came from, the timed transcript, what was seen
   // with times, the colour in words, and the proposal's polish when it carries one
-  q('.clip').textContent = stem(seg.clip);
+  q('.clip').textContent = clipLabel(seg.clip);       // "Black Video", never gen_black_<hash>
   q('.times').textContent = `${fmt(seg.in)}–${fmt(seg.out)}`;
   const genClip = gen ? (P.clips[seg.clip] || {}) : null;
   const lines = genClip
@@ -683,7 +683,7 @@ function fillShot(box, seg) {
   // The still: at the in-point when the shot arrives, and catching up to a trimmed
   // in-point once the trimming settles — never a frame per nudge.
   const img = q('img.poster');
-  img.alt = `${stem(seg.clip)} at ${seg.in.toFixed(2)}s`;
+  img.alt = `${clipLabel(seg.clip)} at ${seg.in.toFixed(2)}s`;
   if (!posterAt.has(seg)) {
     const src = posterSrc(seg);
     // No src at all rather than an empty one for a clip with no sidecar: src="" makes
@@ -815,12 +815,12 @@ function buildOverlay(o) {
 
 function fillOverlay(box, o) {
   const name = box.querySelector('.sname');
-  const txt = `${o.track || 'V2'} · ${stem(o.clip)} · ${tl.dur(o).toFixed(1)} s`;
+  const txt = `${o.track || 'V2'} · ${clipLabel(o.clip)} · ${tl.dur(o).toFixed(1)} s`;
   if (name && name.textContent !== txt) name.textContent = txt;
   const img = box.querySelector('img.poster');
   const base = (P.clips[o.clip] || {}).poster;
   const src = base ? `${base}${base.includes('?') ? '&' : '?'}t=${Math.max(0, o.in).toFixed(2)}` : '';
-  if (img && src && img.getAttribute('src') !== src) { img.setAttribute('src', src); img.alt = `${stem(o.clip)} at ${o.in.toFixed(2)}s`; }
+  if (img && src && img.getAttribute('src') !== src) { img.setAttribute('src', src); img.alt = `${clipLabel(o.clip)} at ${o.in.toFixed(2)}s`; }
   if (window.effects && typeof effects.fill === 'function') effects.fill(box, o);
 }
 
@@ -2808,8 +2808,9 @@ function paintTransport() {
   $('#playCut').textContent = player.playing ? '❚❚ Pause' : '▶ Play';
   paintRest();
   const seg = segs[player.idx];
+  // the clip by the name the editor reads (a generated clip: "Black Video", verdict 10)
   $('#playingWhat').textContent = seg
-    ? `${player.idx + 1}/${segs.length} · ${stem(seg.clip)}${player.single ? ' · this shot only' : ''}`
+    ? `${player.idx + 1}/${segs.length} · ${clipLabel(seg.clip)}${player.single ? ' · this shot only' : ''}`
     : '';
 }
 
@@ -4585,7 +4586,7 @@ function proposalTableHtml(plan, reviewable) {
     const f = facts(i);
     const spd = speedOf(s);
     const status = f && f.status ? f.status : '';
-    const hover = `${String(i + 1).padStart(2, '0')} ${stem(s.clip)} ${fmt(s.in)}–${fmt(s.out)}`
+    const hover = `${String(i + 1).padStart(2, '0')} ${clipLabel(s.clip)} ${fmt(s.in)}–${fmt(s.out)}`
       + ` (${tl.dur(s).toFixed(1)}s${spd === 1 ? '' : ` at ${spd}×`})${f && f.words ? ` · ${f.words}` : ''}`
       + (s.why ? `\nwhy: ${s.why}` : '')
       + (s.polished_from ? `\n↳ polished from ${s.polished_from[0].toFixed(2)}–${s.polished_from[1].toFixed(2)}`
@@ -4602,7 +4603,7 @@ function proposalTableHtml(plan, reviewable) {
       + `<td>${reviewable ? `<span class="pv" role="checkbox" aria-checked="true" tabindex="0" data-k="${i}"`
         + ' title="accept / reject this shot — the ghost lane\'s ✓ ✗ (Enter / ⌫ there)">✓</span>' : ''}</td>`
       + `<td class="pn">${String(i + 1).padStart(2, '0')}</td>`
-      + `<td class="pc">${escapeHtml(stem(s.clip))}${spd === 1 ? '' : ` ${spd}×`}</td>`
+      + `<td class="pc">${escapeHtml(clipLabel(s.clip))}${spd === 1 ? '' : ` ${spd}×`}</td>`
       + `<td class="tc">${keepTc(s.in, s.clip)}</td><td class="tc">${keepTc(s.out, s.clip)}</td>`
       + `<td class="pw">${f && f.flags.length ? '<span class="pflag">⚠</span>' : ''}${tag}${escapeHtml(s.why || '')}</td></tr>`;
   });
@@ -4614,13 +4615,13 @@ function proposalTableHtml(plan, reviewable) {
     ? g.removed.map((i) => segs[i]).filter(Boolean)
     : segs.filter((s) => !kept.has(summarise([s])[0]));
   const gone = dropped.map((s) =>
-    `<tr class="pgone" title="${escapeHtml(`${stem(s.clip)} ${fmt(s.in)}–${fmt(s.out)} — removed by the proposal`)}">`
-    + `<td>−</td><td class="pn"></td><td class="pc">${escapeHtml(stem(s.clip))}</td>`
+    `<tr class="pgone" title="${escapeHtml(`${clipLabel(s.clip)} ${fmt(s.in)}–${fmt(s.out)} — removed by the proposal`)}">`
+    + `<td>−</td><td class="pn"></td><td class="pc">${escapeHtml(clipLabel(s.clip))}</td>`
     + `<td class="tc">${keepTc(s.in, s.clip)}</td><td class="tc">${keepTc(s.out, s.clip)}</td><td class="pw">removed</td></tr>`);
   // what the re-run left out because the editor rejected it before, greyed
   rejectedOf(plan).filter((r) => r.action !== 'flagged').forEach((r) => gone.push(
-    `<tr class="prej" title="${escapeHtml(`${stem(r.clip)} ${fmt(r.in)}–${fmt(r.out)} — you rejected this before; the re-run left it out`)}">`
-    + `<td>✗</td><td class="pn"></td><td class="pc">${escapeHtml(stem(r.clip))}</td>`
+    `<tr class="prej" title="${escapeHtml(`${clipLabel(r.clip)} ${fmt(r.in)}–${fmt(r.out)} — you rejected this before; the re-run left it out`)}">`
+    + `<td>✗</td><td class="pn"></td><td class="pc">${escapeHtml(clipLabel(r.clip))}</td>`
     + `<td class="tc">${keepTc(r.in, r.clip)}</td><td class="tc">${keepTc(r.out, r.clip)}</td>`
     + `<td class="pw">you rejected this${r.action === 'kept as it is' ? ' change — the shot stays as it is' : ' — left out'}</td></tr>`));
   // a row is two lines (a grid): ✓ / ✗ · # · clip · In · Out, and the why under them at
