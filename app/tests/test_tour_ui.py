@@ -758,6 +758,110 @@ def test_the_review_steps_point_at_the_ai_review_when_one_is_up(live, bins, tmp_
     _done(pg)
 
 
+# ---------------------------------------------------------------- what a callout never covers
+
+# Verdict 12, punch 8: with Selects open (step 3's Show me) and a proposed cut waiting in the
+# Assistant, step 5's callout covered its Accept ("ccept"); step 1's covered the Source's
+# "preparing preview…". Every visible Accept / Discard and monitor status line, as boxes.
+KEEP_JS = """() => [...document.querySelectorAll('#acceptProposal, #rejectProposal, .monWait span,'
+    + ' [data-testid="ai-accept-all"]')]
+  .filter(e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden')
+  .map(e => { const r = e.getBoundingClientRect();
+    return {id: e.id || e.closest('[id]').id, l: r.left, t: r.top, r: r.right, b: r.bottom}; })"""
+
+
+@pytest.mark.parametrize("which", ["loop", "ai"])
+@pytest.mark.parametrize("size", [(1440, 900), (1280, 800), (1920, 1080)], ids=lambda s: f"{s[0]}x{s[1]}")
+def test_no_callout_covers_an_accept_or_a_status_line(live, bins, tmp_path, browser, size, which):
+    """Every step of both walk-throughs, as they stand and with each Show me pressed (but the
+    two that open a modal dialog), at 1280, 1440 and 1920: the callout never lies over the
+    proposal's Accept or Discard or a monitor's "preparing preview…" (`#monWait`, `#srcWait`),
+    while a proposed cut waits in the Assistant and Selects is open beside the Timeline."""
+    _state(bins, tmp_path, "cut")
+    pg = _page(browser, live, size)
+    pg.wait_for_selector("#tl .blk", timeout=15000)
+    pg.evaluate(f"rcShowProposal({json.dumps(PLAN)})")
+    pg.wait_for_selector("#acceptProposal", state="visible", timeout=5000)
+    setup = ("dock.open('bin', {remember: false, focus: false}); dock.open('ask', {remember: false, focus: false});"
+             " dock.wait('#monWait', true, 'test'); dock.wait('#srcWait', true, 'test')")
+    pg.evaluate(setup)
+    pg.wait_for_timeout(500)
+    ids = {k["id"] for k in pg.evaluate(KEEP_JS)}
+    assert {"acceptProposal", "monWait", "srcWait"} <= ids, ids
+    start = f"rcTour.start({'undefined' if which == 'loop' else repr(which)})"
+    for show in (False, True):
+        pg.evaluate(setup)
+        pg.evaluate(start)
+        pg.wait_for_selector(TOUR, timeout=3000)
+        n = pg.evaluate(STEP_JS)["n"]
+        for i in range(n):
+            key = pg.evaluate(STEP_JS)["key"]
+            if show and key not in ("import", "export") and pg.locator('[data-testid="tour-show"]').is_visible():
+                pg.locator('[data-testid="tour-show"]').click()
+            pg.wait_for_timeout(350)                          # the callout follows what opened
+            info = pg.evaluate(STEP_JS)
+            assert _on_screen(info["callout"], info["vw"], info["vh"]), info
+            assert not info["covered"], info
+            for k in pg.evaluate(KEEP_JS):
+                assert not _overlap(info["callout"], k), \
+                    f"{which} step {info['step']} ({key}, show me: {show}) covers {k['id']}: {info['callout']} {k}"
+            pg.locator('[data-testid="tour-next"]').click()
+            if i < n - 1:
+                pg.wait_for_function(f"document.querySelector('{TOUR}').dataset.step === '{i + 2}'",
+                                     timeout=3000)
+        pg.wait_for_selector(TOUR, state="detached", timeout=3000)
+    _done(pg)
+
+
+def test_a_hover_card_goes_when_its_button_is_clicked_and_stays_gone(live, bins, tmp_path, browser):
+    """Verdict 12: "the header button's 'Run first pass' hover card stays up over the open
+    panel and hides the line under Stop". A click takes the card down; a move inside the
+    button, or the button repainting under a still pointer, does not bring it back; leaving
+    and coming back does. A card whose control is hidden goes with it."""
+    _state(bins, tmp_path, "cut")
+    pg = _page(browser, live)
+    pg.wait_for_selector("#tl .blk", timeout=15000)
+    pg.wait_for_timeout(600)
+    shown = "(() => { const c = document.querySelector('[data-testid=ai-hover]'); return !!c && !c.hidden; })()"
+    btn = pg.locator('[data-testid="firstpass-button"]')
+    pg.mouse.move(2, 890)
+    pg.wait_for_timeout(450)
+    btn.hover()
+    pg.wait_for_function(shown, timeout=3000)
+    b = btn.bounding_box()
+    cx, cy = b["x"] + b["width"] / 2, b["y"] + b["height"] / 2
+    pg.mouse.move(cx, cy)
+    pg.mouse.down()
+    pg.mouse.up()
+    pg.wait_for_selector('[data-testid="firstpass-panel"]', state="visible", timeout=3000)
+    assert not pg.evaluate(shown)
+    # a move inside the button, then its label redrawn under the still pointer
+    for dx in (-12, 6, 14):
+        pg.mouse.move(cx + dx, cy + 1)
+        pg.wait_for_timeout(150)
+    pg.evaluate("(() => { const l = document.querySelector('#firstpass .fp-label');"
+                " l.replaceWith(l.cloneNode(true)); })()")
+    pg.mouse.move(cx + 2, cy)
+    pg.wait_for_timeout(1000)
+    assert not pg.evaluate(shown), "the card came back over the panel its click opened"
+    # out and back in: the card again
+    pg.mouse.move(2, 890)
+    pg.wait_for_timeout(450)
+    btn.hover()
+    pg.wait_for_function(shown, timeout=3000)
+    # a card whose control goes away goes with it
+    pg.mouse.move(2, 890)
+    pg.keyboard.press("Escape")
+    pg.evaluate(f"rcShowProposal({json.dumps(PLAN)}); dock.open('ask')")
+    pg.wait_for_selector("#acceptProposal", state="visible", timeout=5000)
+    pg.wait_for_timeout(450)
+    pg.locator("#acceptProposal").hover()
+    pg.wait_for_function(shown, timeout=3000)
+    pg.evaluate("document.querySelector('#acceptProposal').style.display = 'none'")
+    pg.wait_for_function(f"!{shown}", timeout=2000)
+    _done(pg)
+
+
 # ---------------------------------------------------------------- the empty states
 
 

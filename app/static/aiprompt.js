@@ -270,6 +270,7 @@
   /* ------------------------------------------------------------ the DOM */
 
   let host = null, field = null, input = null, chip = null, status = null, statusHtml = '';
+  let under = null;           // the row under the Timeline's header the status line moves to
 
   function mount() {
     host = document.getElementById('aiPrompt');
@@ -287,6 +288,21 @@
     input = $('.aip-input', host);
     chip = $('.aip-scope', host);
     status = $('.aip-status', host);
+    // verdict 12, punch 8: with Selects open the header had no room for the line, the chip
+    // and the field at once ("A new cut is ready · Review" beside "Sequ…" and "Ask the A").
+    // The line moves to its own row under the header when the header cannot hold it whole
+    // beside the field at its least; the field never gives up its least for it.
+    const head = host.closest('.ws-head');
+    under = document.getElementById('aiUnder');
+    if (head && !under) {
+      under = document.createElement('div');
+      under.id = 'aiUnder';
+      under.className = 'aip-under';
+      under.dataset.testid = 'ai-under';
+      under.hidden = true;
+      head.after(under);
+    }
+    fitLeast();
     paintTitle();
     field.addEventListener('mousedown', (e) => {
       if (e.target === field || e.target.closest('.aip-ico, .aip-key')) { e.preventDefault(); input.focus(); }
@@ -299,14 +315,83 @@
     status.addEventListener('click', onStatusClick);
     if ('ResizeObserver' in window) {
       new ResizeObserver(fitPlaceholder).observe(input);
-      new ResizeObserver((es) => {                              // the chip's room
-        chipRoom = Math.round(es[es.length - 1].contentRect.width);
+      const roomy = new ResizeObserver(() => {                  // the chip's room: the row, the field
+        if (!least) fitLeast();
         paintScope();
-      }).observe(field);
+      });
+      roomy.observe(field);
+      roomy.observe(host);
+      if (head) new ResizeObserver(() => placeStatus()).observe(head);   // the line's room
     }
     paintScope();
     paintStatus();
     return true;
+  }
+
+  /* The field's least width (verdict 12, punch 8): the input keeps INPUT_LEAST to type in and
+   * the chip its words whole in the widest of the chip's shortest forms ("Source clip",
+   * "Sequence", "99 shots"…), so the least is one width whatever the scope and the
+   * workspace can keep the Timeline wide enough for it (dock.js asks `rcAI.least()`).
+   * Measured in the chip's own font once the field is laid out. */
+  const CHIP_SHORTEST = ['Sequence', 'Source clip', '99 shots', 'Shot 99', 'In/Out', 'Clip'];
+  let least = 0, leastPad = 0, leastMeasure = null;
+  const px = (v) => parseFloat(v) || 0;
+  function fitLeast() {
+    if (!field || !field.getClientRects().length) return least;
+    const label = $('.aip-scope-l', chip), ico = $('.aip-ico', field), chev = $('.aip-chev', chip);
+    leastMeasure = leastMeasure || document.createElement('canvas').getContext('2d');
+    leastMeasure.font = getComputedStyle(label).font;
+    const words = Math.max(...CHIP_SHORTEST.map((w) => leastMeasure.measureText(w).width));
+    const fcs = getComputedStyle(field), ccs = getComputedStyle(chip);
+    const chipFixed = px(ccs.paddingLeft) + px(ccs.paddingRight) + px(ccs.borderLeftWidth)
+      + px(ccs.borderRightWidth) + px(ccs.columnGap) + (chev ? chev.getBoundingClientRect().width : 9);
+    // the icon, the chip and the input: two gaps (the key hint is not shown at the least)
+    const want = Math.ceil(px(fcs.paddingLeft) + px(fcs.paddingRight) + px(fcs.borderLeftWidth)
+      + px(fcs.borderRightWidth) + (ico ? ico.getBoundingClientRect().width : 13) + 2 * px(fcs.columnGap)
+      + chipFixed + words + INPUT_LEAST + 1);
+    const hcs = getComputedStyle(host);
+    leastPad = Math.ceil(px(hcs.paddingLeft) + px(hcs.paddingRight));
+    if (want !== least) {
+      least = want;
+      host.style.setProperty('--aip-least', `${least}px`);
+      // the workspace keeps the Timeline wide enough for the header (dock.js layout)
+      if (window.dock && typeof dock.fit === 'function') dock.fit();
+      placeStatus();
+    }
+    return least;
+  }
+
+  /* The panel's title tabs at their own width, whole ("Timeline: <cut>"), however the row
+   * squeezes them now: what the header row must keep for them. */
+  function titleWidth(head) {
+    const tabs = head && head.querySelector('.ws-tabs');
+    if (!tabs) return 0;
+    return [...tabs.children].reduce((a, t) => {
+      const l = t.querySelector('.lbl');
+      return a + t.getBoundingClientRect().width + (l ? Math.max(0, l.scrollWidth - l.clientWidth) : 0);
+    }, 0);
+  }
+
+  /* The status line in the header when the header holds it whole beside the panel's title
+   * and the field at its least; else in its own row under the header (#aiUnder), still in
+   * the Timeline panel: the field never shrinks for it and nothing is laid over the ruler. */
+  function placeStatus() {
+    if (!status || !host || !field) return;
+    const head = host.closest('.ws-head');
+    let below = false;
+    if (!status.hidden && statusHtml && head && under) {
+      const hcs = getComputedStyle(head), acs = getComputedStyle(host);
+      const room = head.clientWidth - px(hcs.paddingLeft) - px(hcs.paddingRight) - px(hcs.columnGap)
+        - titleWidth(head) - leastPad - px(acs.columnGap) - (least || fitLeast());
+      // its own width, wherever it is (flex: none: its max-content)
+      below = status.getBoundingClientRect().width > room + 0.5;
+    }
+    const want = below ? under : host;
+    if (status.parentElement !== want) {
+      if (below) under.appendChild(status);
+      else host.insertBefore(status, field);
+    }
+    if (under && under.hidden === below) under.hidden = !below;
   }
 
   /* The field's hover: what it does, what it costs, what it changes (dimension 16). */
@@ -332,16 +417,22 @@
   }
 
   /* The chip's words whole, never cut with "…" (verdict 11, punch 8): the longest of its
-   * forms that fits the chip's room — its max-width, and the field's width less what the
-   * field's other parts need (the input keeps its least) — else its shortest ("Shot 5",
-   * "In/Out"). Measured in the label's own font; the hover always has the whole scope. */
+   * forms that fits the chip's room — its max-width, and the most the field can take (its
+   * own max-width, or its row less the status line beside it) less what the field's other
+   * parts need (the input keeps its 160 px) — else its shortest ("Shot 5", "In/Out"). The
+   * field is then at least wide enough for the words chosen (`--aip-need`): the chip never
+   * shrinks under them (verdict 12, punch 8: "Sequ…"). Measured in the label's own font;
+   * the hover always has the whole scope. */
   let chipMeasure = null, chipKey = '', chipSaid = '';
   function chipFit(el, forms) {
     const label = $('.aip-scope-l', el);
-    if (!label || forms.length < 2 || !field) return forms[0];
-    // measured again only when the words, the field's width (chipRoom) or the key hint change:
-    // paintScope runs every second, during playback too, and a measure is a layout read
-    const key = `${forms.join('|')}|${chipRoom}|${host.classList.contains('focus')}|${host.classList.contains('typed')}`;
+    if (!label || !field) return forms[0];
+    const beside = status && status.parentElement === host && !status.hidden;
+    // measured again only when the words, the row's width, the line beside the field or the
+    // key hint change: paintScope runs every second, during playback too, and a measure is a
+    // layout read
+    const key = `${forms.join('|')}|${host.clientWidth}|${beside ? status.offsetWidth : 0}|${least}`
+      + `|${host.classList.contains('focus')}|${host.classList.contains('typed')}`;
     if (key === chipKey) return chipSaid;
     const cs = getComputedStyle(el);
     const fixed = el.offsetWidth - label.offsetWidth;          // padding, border, gap, chevron
@@ -351,19 +442,23 @@
     const parts = [...field.children].filter((c) => c !== el
       && (c === input || c.getBoundingClientRect().width > 0));
     const others = parts.reduce((a, c) => a + (c === input ? INPUT_LEAST : c.getBoundingClientRect().width), 0);
-    const fcs = getComputedStyle(field);
-    const gaps = parseFloat(fcs.columnGap || fcs.gap || '0') * parts.length;
-    const pad = parseFloat(fcs.paddingLeft) + parseFloat(fcs.paddingRight);
-    let room = field.clientWidth - pad - gaps - others - fixed;
+    const fcs = getComputedStyle(field), hcs = getComputedStyle(host);
+    const gaps = px(fcs.columnGap) * parts.length;
+    const pad = px(fcs.paddingLeft) + px(fcs.paddingRight) + px(fcs.borderLeftWidth) + px(fcs.borderRightWidth);
+    const row = host.clientWidth - px(hcs.paddingLeft) - px(hcs.paddingRight)
+      - (beside ? status.getBoundingClientRect().width + px(hcs.columnGap) : 0);
+    const most = Math.min(px(fcs.maxWidth) || Infinity, Math.max(field.getBoundingClientRect().width, row));
+    let room = most - pad - gaps - others - fixed;
     if (Number.isFinite(max)) room = Math.min(room, max - fixed);
     chipMeasure = chipMeasure || document.createElement('canvas').getContext('2d');
     chipMeasure.font = getComputedStyle(label).font;
     chipKey = key;
     chipSaid = forms.find((f) => chipMeasure.measureText(f).width <= room + 0.5) || forms[forms.length - 1];
+    const need = Math.ceil(pad + gaps + others + fixed + chipMeasure.measureText(chipSaid).width + 1);
+    field.style.setProperty('--aip-need', `${Math.min(need, Math.max(row, 0))}px`);
     return chipSaid;
   }
-  const INPUT_LEAST = 60;     // aiprompt.css .aip-input min-width
-  let chipRoom = 0;           // the field's width, from its ResizeObserver
+  const INPUT_LEAST = 160;    // aiprompt.css .aip-input min-width (verdict 12, punch 8)
 
   let scopeKey = '';
   function paintScope() {
@@ -416,6 +511,7 @@
     // rewrite between a press and its release would swallow a click on Stop or Review
     if (statusHtml !== html) { status.innerHTML = html; statusHtml = html; }
     status.hidden = !html;
+    placeStatus();
   }
 
   /* One line for what came back. Once the review is answered (lane AIOPS's panel fires
@@ -1250,6 +1346,9 @@
     command,
     askAbout,
     scope,
+    // the least width the prompt takes in the Timeline's header row (its padding and the field
+    // at its least): dock.js keeps the Timeline wide enough for it and the panel's title
+    least: () => (fitLeast() ? least + leastPad : 0),
     state: () => ({ state: AI.state, job: AI.job, text: AI.text, scope: AI.scope, result: AI.result,
       error: AI.error }),
     stop,

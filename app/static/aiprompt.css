@@ -9,11 +9,15 @@
 /* The field takes the right half of the row and never moves; the status line, when there
    is one, grows leftward from it into the empty half (the panel's own title and grab area
    stay clear: a click on the header's middle still just focuses the Timeline). */
-#aiPrompt { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: flex-end;
-            gap: 8px; padding: 0 2px 0 10px; container: aiprompt / inline-size; }
+#aiPrompt { flex: 1 1 auto; min-width: calc(var(--aip-least, 200px) + 12px); display: flex; align-items: center;
+            justify-content: flex-end; gap: 8px; padding: 0 2px 0 10px; container: aiprompt / inline-size; }
 
 /* ---------------------------------------------------------------- the field */
-#aiPrompt .aip-field { flex: 0 1 auto; width: calc(50cqw + 40px); max-width: 520px; min-width: 200px; height: 22px; display: flex; align-items: center;
+/* never under its least (aiprompt.js fitLeast: the input's 160 px and the chip's words whole;
+   verdict 12, punch 8: Selects open, it read "Sequ…" and "Ask the A") */
+#aiPrompt .aip-field { flex: 0 1 auto; width: calc(50cqw + 40px); max-width: 520px;
+                       min-width: max(var(--aip-least, 200px), var(--aip-need, 0px));
+                       height: 22px; display: flex; align-items: center;
                        gap: 5px; padding: 0 4px 0 6px; box-sizing: border-box; cursor: text;
                        background: #151517; border: 1px solid #3a3a48; border-radius: 4px;
                        transition: border-color .12s, box-shadow .12s; }
@@ -21,7 +25,7 @@
 #aiPrompt.focus .aip-field { border-color: var(--accent, #4a9df8);
                              box-shadow: 0 0 0 2px rgba(74, 157, 248, .18); }
 #aiPrompt .aip-ico { flex: none; width: 13px; height: 13px; color: var(--accent, #4a9df8); }
-#aiPrompt .aip-input { flex: 1 1 0; min-width: 60px; height: 20px; padding: 0 2px; border: 0;
+#aiPrompt .aip-input { flex: 1 1 0; min-width: 160px; height: 20px; padding: 0 2px; border: 0;
                        background: transparent; color: var(--text, #dcdcdf); font: inherit; font-size: 12px;
                        outline: none; box-shadow: none; }
 #aiPrompt .aip-input:focus { border: 0; outline: none; }
@@ -34,7 +38,8 @@
 #aiPrompt .aip-field.nudge { animation: aip-nudge .18s ease-in-out 2; }
 
 /* the scope chip, inside the field at its left: what the AI will work on */
-#aiPrompt .aip-scope { flex: 0 1 auto; min-width: 0; max-width: 170px; height: 16px; display: inline-flex;
+/* its words are chosen to fit (aiprompt.js chipFit), so it never shrinks under them */
+#aiPrompt .aip-scope { flex: none; min-width: 0; max-width: 170px; height: 16px; display: inline-flex;
                        align-items: center; gap: 3px; padding: 0 4px 0 6px; border-radius: 3px;
                        border: 1px solid #3d4a5c; background: #1c2633; color: #b9d4f5;
                        font-size: 11px; line-height: 14px; white-space: nowrap; cursor: pointer; }
@@ -50,30 +55,36 @@
 #aiPrompt .aip-chev { flex: none; width: 9px; height: 9px; opacity: .8; }
 
 /* ---------------------------------------------------------------- the status line */
-#aiPrompt .aip-status { flex: none; display: flex; align-items: center; gap: 6px;
+/* In the header row beside the field, or (a header too narrow to hold it whole beside the
+   field at its least: Selects open at 1440) in its own row under the header, right-aligned
+   under the field (#aiUnder, aiprompt.js placeStatus). */
+.aip-under { flex: none; height: 24px; display: flex; align-items: center; justify-content: flex-end;
+             padding: 0 6px; background: var(--head); border-bottom: 1px solid #0f0f10; }
+.aip-under[hidden] { display: none; }
+:is(#aiPrompt, #aiUnder) .aip-status { flex: none; display: flex; align-items: center; gap: 6px;
                         font-size: 11.5px; color: var(--dim, #94949c); white-space: nowrap; }
-#aiPrompt .aip-status[hidden] { display: none; }
-#aiPrompt .aip-status b { font-weight: 600; color: var(--text, #dcdcdf); font-variant-numeric: tabular-nums; }
-#aiPrompt .aip-what { color: var(--text, #dcdcdf); }
-#aiPrompt .aip-cost { color: var(--dim, #94949c); }
-#aiPrompt .aip-cost::before { content: "· "; }
-#aiPrompt .aip-dim .aip-cost::before { content: ""; }
-#aiPrompt .aip-dim { color: var(--dim, #94949c); }
-#aiPrompt .aip-bad { color: var(--bad, #e46a6a); }
-#aiPrompt .aip-ok { color: var(--good, #5fcf86); margin-right: 5px; }
-#aiPrompt .aip-result { display: inline-flex; align-items: center; color: var(--text, #dcdcdf); min-width: 0; }
-#aiPrompt .aip-sep { margin: 0 5px; color: var(--faint, #66666e); }
-#aiPrompt .aip-spin { flex: none; width: 11px; height: 11px; border-radius: 50%; box-sizing: border-box;
+:is(#aiPrompt, #aiUnder) .aip-status[hidden] { display: none; }
+:is(#aiPrompt, #aiUnder) .aip-status b { font-weight: 600; color: var(--text, #dcdcdf); font-variant-numeric: tabular-nums; }
+:is(#aiPrompt, #aiUnder) .aip-what { color: var(--text, #dcdcdf); }
+:is(#aiPrompt, #aiUnder) .aip-cost { color: var(--dim, #94949c); }
+:is(#aiPrompt, #aiUnder) .aip-cost::before { content: "· "; }
+:is(#aiPrompt, #aiUnder) .aip-dim .aip-cost::before { content: ""; }
+:is(#aiPrompt, #aiUnder) .aip-dim { color: var(--dim, #94949c); }
+:is(#aiPrompt, #aiUnder) .aip-bad { color: var(--bad, #e46a6a); }
+:is(#aiPrompt, #aiUnder) .aip-ok { color: var(--good, #5fcf86); margin-right: 5px; }
+:is(#aiPrompt, #aiUnder) .aip-result { display: inline-flex; align-items: center; color: var(--text, #dcdcdf); min-width: 0; }
+:is(#aiPrompt, #aiUnder) .aip-sep { margin: 0 5px; color: var(--faint, #66666e); }
+:is(#aiPrompt, #aiUnder) .aip-spin { flex: none; width: 11px; height: 11px; border-radius: 50%; box-sizing: border-box;
                       border: 1.5px solid rgba(74, 157, 248, .25); border-top-color: var(--accent, #4a9df8);
                       animation: aip-spin .8s linear infinite; }
 @keyframes aip-spin { to { transform: rotate(360deg); } }
-#aiPrompt .aip-btn, .aip-pop .aip-btn { height: 20px; padding: 0 8px; line-height: 18px; font-size: 11.5px; }
-#aiPrompt .aip-link { border: 0; background: transparent; padding: 0 2px; height: 18px; line-height: 18px;
+:is(#aiPrompt, #aiUnder) .aip-btn, .aip-pop .aip-btn { height: 20px; padding: 0 8px; line-height: 18px; font-size: 11.5px; }
+:is(#aiPrompt, #aiUnder) .aip-link { border: 0; background: transparent; padding: 0 2px; height: 18px; line-height: 18px;
                       color: var(--accent, #4a9df8); font-size: 11.5px; font-weight: 600; }
-#aiPrompt .aip-link:hover { background: transparent; color: #7cb9fa; }
-#aiPrompt .aip-x, .aip-pop .aip-x { border: 0; background: transparent; color: var(--dim, #94949c);
+:is(#aiPrompt, #aiUnder) .aip-link:hover { background: transparent; color: #7cb9fa; }
+:is(#aiPrompt, #aiUnder) .aip-x, .aip-pop .aip-x { border: 0; background: transparent; color: var(--dim, #94949c);
                                     padding: 0 3px; height: 18px; line-height: 16px; font-size: 14px; }
-#aiPrompt .aip-x:hover, .aip-pop .aip-x:hover { color: var(--text, #dcdcdf); background: transparent; }
+:is(#aiPrompt, #aiUnder) .aip-x:hover, .aip-pop .aip-x:hover { color: var(--text, #dcdcdf); background: transparent; }
 
 /* a narrow Timeline (the panels dragged, Selects open): the key hint goes, then the running
    line's cost and the result's dots — never the price before ↵ ("↵ ask · free on your plan"
@@ -83,7 +94,6 @@
   #aiPrompt .aip-status[data-state=working] .aip-cost, #aiPrompt .aip-sep { display: none; }
 }
 @container aiprompt (max-width: 380px) {
-  #aiPrompt .aip-field { min-width: 160px; }
   #aiPrompt .aip-what { display: none; }
 }
 

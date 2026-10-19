@@ -292,10 +292,14 @@
   const MIN_SPEED = 0.1, MAX_SPEED = 4;    // edits.py's bounds: outside them a speed reads as 1
   const MIN_ZOOM = 0.5, MAX_ZOOM = 4000;   // px per second
   /* Labelled ruler steps in FRAMES at the nominal rate (24 for 23.976): 1, 2, 5, 10
-   * frames, then 1 s … 1 h of timecode. A label is HH:MM:SS:FF, so it needs LABEL_PX. */
+   * frames, then 1 s … 1 h of timecode. A label is HH:MM:SS:FF: a step is never closer than
+   * the label's own width (measured in the ruler's font, `labelPx`; LABEL_PX until the ruler
+   * is drawn) plus LABEL_GAP of clear ruler, at any zoom or panel width (verdict 12, punch 8:
+   * with Selects open the labels read as one run). */
   const STEP_FRAMES = [1, 2, 5, 10];
   const STEP_SECONDS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600];
   const LABEL_PX = 84;
+  const LABEL_GAP = 24;
   const DEFAULT_FPS = 23.976;      // the sequence rate when the project does not say
   const UNDO_LIMIT = 100;
   const POSTER_SETTLE_MS = 450;    // the same debounce app.js's cards use
@@ -748,12 +752,34 @@
   }
 
   /* ------------------------------------------------------------ the picture */
+  /* The room one ruler label takes: its width in the ruler's own font (a label's every
+   * digit is tabular, so one timecode measures them all) and LABEL_GAP of clear ruler before
+   * the next (each sits the same offset right of its tick). Measured once the ruler is in
+   * the page. */
+  let labelRoom = 0;
+  function labelPx() {
+    if (labelRoom) return labelRoom;
+    if (!el.ruler || !el.ruler.isConnected || !el.ruler.getClientRects().length) return LABEL_PX;
+    const tick = document.createElement('i');
+    tick.className = 'tick major';
+    tick.style.visibility = 'hidden';
+    const lab = document.createElement('label');
+    lab.textContent = tc(36000 - 1 / fps(), fps());            // 09:59:59:FF, the widest digits
+    tick.appendChild(lab);
+    el.ruler.appendChild(tick);
+    const w = lab.getBoundingClientRect().width;
+    tick.remove();
+    if (w > 0) labelRoom = Math.ceil(w + LABEL_GAP);
+    return labelRoom || LABEL_PX;
+  }
+
   /* A labelled step in frames: 1, 2, 5 or 10 frames, else whole seconds of timecode —
-   * whichever first gives a label LABEL_PX of room. */
+   * whichever first gives a label its room (`labelPx`). */
   function stepFrames(zoom) {
     const r = fps(), n = Math.max(1, Math.round(r));
-    for (const f of STEP_FRAMES) if (f < n && (f / r) * zoom >= LABEL_PX) return f;
-    for (const s of STEP_SECONDS) if ((s * n / r) * zoom >= LABEL_PX) return s * n;
+    const room = labelPx();
+    for (const f of STEP_FRAMES) if (f < n && (f / r) * zoom >= room) return f;
+    for (const s of STEP_SECONDS) if ((s * n / r) * zoom >= room) return s * n;
     return STEP_SECONDS[STEP_SECONDS.length - 1] * n;
   }
 
@@ -765,7 +791,7 @@
   let rulerKey = '';
   function paintRuler(width) {
     const key = [width, state.zoom, fps(), state.seqIn, state.seqOut, state.markers.join(','),
-                 keyLabel('⇧M')].join('|');
+                 keyLabel('⇧M'), labelPx()].join('|');
     if (key === rulerKey && el.ruler.childElementCount) return;
     rulerKey = key;
     const r = fps(), n = Math.max(1, Math.round(r));
