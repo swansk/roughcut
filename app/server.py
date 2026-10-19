@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import gc
 import json
 import math
 import mimetypes
@@ -931,9 +932,18 @@ def set_look_interval(interval: float) -> None:
     write_edl(edl)
 
 
-def sheets_for(clip: str, interval: float | None = None) -> int:
-    return max(1, math.ceil((clip_duration(clip) or 0.0)
-                            / sheet_seconds(interval or look_interval())))
+def clip_duration_known(clip: str) -> float | None:
+    """A clip's length when it is known already (cached, or its sidecar's: clip_duration
+    then reads it without an ffprobe), else None — for what a polled request reads (the
+    status's look price)."""
+    if clip in STATE.get("durations", {}) or load_sidecar(clip).get("duration_s") is not None:
+        return clip_duration(clip)
+    return None
+
+
+def sheets_for(clip: str, interval: float | None = None, probe: bool = True) -> int:
+    d = clip_duration(clip) if probe else clip_duration_known(clip)
+    return max(1, math.ceil((d or 0.0) / sheet_seconds(interval or look_interval())))
 
 
 def audit_plan(ranked: list[dict], n: int = AUDIT_CLAIMS) -> list[dict]:
@@ -973,7 +983,10 @@ def visual_status(fine: bool = True, interval: float | None = None) -> dict:
     done = visual_stems()
     pending = [c for c in clips if Path(c).stem not in done]
     interval = float(interval or look_interval())
-    sheets = sum(sheets_for(c, interval) for c in pending)
+    # lengths already known only (verdict 11 punch 4: a status right after a start or an
+    # import ffprobed every clip the warm-up had not reached, 300-970 ms); one still being
+    # probed counts a sheet until its length lands, and the snapshot is read again then
+    sheets = sum(sheets_for(c, interval, probe=False) for c in pending)
     # The close look is per clip, not per pending clip: a clip already read coarsely
     # but never audited is exactly the one whose loudest claim is unchecked.
     seen_closely = fine_stems()
@@ -990,7 +1003,7 @@ def visual_status(fine: bool = True, interval: float | None = None) -> dict:
         # the same pending clips (the close look does not depend on it).
         "interval_s": interval,
         "intervals": list(VISUAL_INTERVALS),
-        "by_interval": {f"{i:g}": round(sum(sheets_for(c, i) for c in pending)
+        "by_interval": {f"{i:g}": round(sum(sheets_for(c, i, probe=False) for c in pending)
                                         * VISUAL_USD_PER_SHEET
                                         + fine_calls * FINE_USD_PER_WINDOW, 2)
                         for i in VISUAL_INTERVALS},
@@ -1939,6 +1952,10 @@ async def _loop_lag() -> None:
         if lag >= LOOP_BUDGET_MS:
             row = {"method": "LOOP", "path": "(the event loop was held)", "handler": "-",
                    "ms": round(lag, 1), "status": None, "at": time.time(), "where": where}
+            try:
+                row["load"] = round(os.getloadavg()[0], 1)
+            except OSError:
+                pass
             OVER_BUDGET.append(row)
             del OVER_BUDGET[:-SLOW_KEEP]
             if lag >= LOOP_LAG_MS:
@@ -1970,6 +1987,7 @@ class RequestTiming:
         if (scope.get("client") or ("",))[0] != "testclient":   # a real server's loop
             _watch_loop()
         t0 = time.perf_counter()
+        c0 = time.process_time()
         first: list = [None, None]
         method, where = scope.get("method"), scope.get("path")
         saving = method == "PUT" and where == "/api/project"
@@ -2016,6 +2034,15 @@ class RequestTiming:
                 if waited[0] >= 0.001:
                     row.update(body_ms=round(waited[0] * 1000.0, 1),
                                wall_ms=round((end - t0) * 1000.0, 1))
+                if row["ms"] >= REQUEST_BUDGET_MS:
+                    # over the budget: what the whole process ran meanwhile (every thread)
+                    # and how busy the box was — a request the server worked through
+                    # reads hundreds of ms, one the box starved reads a few (wave 15)
+                    row["proc_cpu_ms"] = round((time.process_time() - c0) * 1000.0, 1)
+                    try:
+                        row["load"] = round(os.getloadavg()[0], 1)
+                    except OSError:
+                        pass
                 note_request(row)
 
 
@@ -3459,7 +3486,9 @@ def _snap_key() -> tuple:
             bool(os.environ.get("ANTHROPIC_API_KEY")),
             # the CLI's sign-in is re-asked once its cache is stale (`cli_facts`)
             (int(time.time() // CLI_FACTS_TTL_S), _CLI_FACTS["gen"]) if STATE.get("cli_facts") else 0,
-            STATE.get("edl_created"), _snap_paths())
+            STATE.get("edl_created"), _snap_paths(),
+            # a clip's length landing (the facts warm-up) re-prices the look (visual_status)
+            len(STATE.get("durations") or {}))
 
 
 def snap_hit(name: str) -> bool:
@@ -4024,7 +4053,8 @@ def api_firstpass_cancel() -> JSONResponse:
     """Stop the running first pass (the header control's ×), now: the tools it is
     running — the index's ffmpeg encodes, its contact-sheet reads, the `claude -p`
     writing the cut — are killed with their process groups, the way the export's
-    cancel kills its render, and the state is `stopped` before this returns. What
+    cancel kills its render (signalled before this returns, SIGKILLed after the grace
+    beside it), and the state is `stopped` before this returns. What
     finished is kept (the journal), a stage that was killed goes back in the queue,
     and a proposal that lands after the stop is discarded, never offered."""
     with FIRSTPASS_LOCK:
@@ -4049,10 +4079,18 @@ def api_firstpass_cancel() -> JSONResponse:
     killers.append(threading.Thread(target=stop_media, daemon=True))
     for t in killers:
         t.start()
+    # Each killer sends its SIGTERMs as it starts and then waits out the grace (up to
+    # GRACE_S) before a SIGKILL: the reply waits only for the signals to go out, not for
+    # the tools to die (verdict 11 punch 4: 562 ms of the Stop was that wait, against the
+    # 300 ms budget). The state is `stopped` already, and a late result is discarded.
+    until = time.monotonic() + CANCEL_REPLY_S
     for t in killers:
-        t.join(timeout=procscope.GRACE_S + 1.0)
+        t.join(timeout=max(0.0, until - time.monotonic()))
     return JSONResponse({"job": live["id"], "stage": live.get("stage"), "stopped": True,
                          "state": "stopped"})
+
+
+CANCEL_REPLY_S = 0.1     # a Stop's reply waits this long at most for its killers' SIGTERMs
 
 
 class _FpCancelled(Exception):
@@ -5997,7 +6035,7 @@ def bin_telemetry() -> dict[str, dict]:
 # on a small pool, started at configure(); a request waits at most CLIP_FACTS_WAIT_S for
 # the ones still running and answers with the rest as null and `probing` > 0, and the
 # board asks again a second later.
-CLIP_FACTS_WAIT_S = 1.0
+CLIP_FACTS_WAIT_S = 0.1
 CLIP_FACTS_WORKERS = 4
 CLIP_FACTS: dict = {"lock": threading.Lock(), "pool": None, "running": {}}
 
@@ -6034,14 +6072,22 @@ def _probe_clip_facts(clip: str, footage: Path) -> dict | None:
     capture = STATE.setdefault("capture", {})
     tele = STATE.setdefault("telemetry", {})
     if clip not in durations or clip not in capture or clip not in tele:
+        # one ffprobe for these and the picture's facts both, when neither is known (a clip
+        # just imported: verdict 11 punch 4, two ffprobes of a 4 GB GoPro file one after the
+        # other kept its row's facts — and /api/clips, which waits for them — past 300 ms)
+        both = not media_facts_known(src)
         r = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries",
+             (MEDIA_FACTS_ENTRIES + ":format=duration:format_tags=creation_time"
+              ":stream=codec_tag_string") if both else
              "format=duration:format_tags=creation_time:stream=codec_type,codec_tag_string",
              "-of", "json", str(src)], capture_output=True, text=True)
         try:
             info = json.loads(r.stdout or "{}") if r.returncode == 0 else {}
         except ValueError:
             info = {}
+        if both and r.returncode == 0:
+            seed_media_facts(src, info)
         fmt = info.get("format") or {}
         if STATE.get("footage") != footage:
             return None
@@ -7872,7 +7918,7 @@ def media_proxy(name: str, request: Request) -> Response:
     if url:
         return Response(status_code=307, headers={
             "location": url, "cache-control": "no-store", "x-roughcut-media": kind})
-    eta = preview_eta(clip) if kind == "building" else None
+    eta = wait_eta(clip) if kind == "building" else None
     if kind == "building":
         hold_media(clip)                 # a monitor waits on this build: never paused
     raise HTTPException(503, f"{stem}: a playable preview is still being made",
@@ -8021,11 +8067,20 @@ def media_poster(name: str, t: float = 0.0, near: int = 0) -> Response:
     kilobytes, cached on disk under --work and immutable for a given clip and time.
 
     `near=1` (the Program monitor's ask, wave 13 CANVAS2): when this frame is not on disk
-    and would be cut from the ORIGINAL (no proxy or preview yet: a 4K GoPro frame is
-    0.7-1.3 s on a loaded box, every seek a new time), the clip's poster already on disk
-    nearest `t` is answered at once instead, not cached (`no-store`, `x-roughcut-poster:
-    near <its t>`): the shot shows a picture of itself within a request, not black, while
-    the monitor asks for the exact frame beside it. Otherwise it is the exact frame.
+    yet, the clip's poster already on disk nearest `t` is answered at once instead, not
+    cached (`no-store`, `x-roughcut-poster: near <its t>`): the shot shows a picture of
+    itself within a request, not black, while the exact frame is cut beside it.
+
+    Never a decode the request waits on (verdict 11 punch 4: posters 1.1-2.1 s after a
+    first pass on Killington, up to 3.9 s for a just-imported clip, against the server's
+    300 ms budget): a frame not on disk is cut in the background (`queue_poster`, newest
+    asked first), and the request waits for it at most POSTER_WAIT_S, and only when it
+    comes from a proxy, a preview, a generated clip or (asked exactly) a small original
+    (tens of milliseconds); a frame of a 4K / HEVC original (0.7-1.3 s on a loaded box) is
+    never waited on. Not cut in that time, the answer is a stand-in at once, never an error:
+    the clip's nearest still on disk, else a neutral frame (`no-store`, `x-roughcut-poster:
+    near <t>` / `pending`, Server-Timing `standin`), and the board puts the exact frame in
+    when it is cut (dock.js `posterStandins` / `posterSoon`).
     """
     stem = Path(name).stem
     if stem.endswith(f".{PICTURE_V}"):          # poster_url's versioned name
@@ -8036,24 +8091,152 @@ def media_poster(name: str, t: float = 0.0, near: int = 0) -> Response:
         t = 0.0
     t = round(min(t, 86400.0), 2)
     dest = poster_path(stem, t)
-    if not dest.exists() and near:
-        found = poster_source(stem)
-        alt = nearest_poster(stem, t) if found is not None and found[1] else None
-        if alt is not None:
-            return FileResponse(alt[0], media_type="image/jpeg",
-                                headers={"cache-control": "no-store",
-                                         "x-roughcut-poster": f"near {alt[1]:.2f}"})
-    if not dest.exists():
-        try:
-            # the board's own: never paused for playback (not background), but in a
-            # scope so its ffmpeg dies with the server
-            with procscope.active(poster_scope()):
-                ensure_poster(stem, t)
-        except RuntimeError as exc:
-            raise HTTPException(500, str(exc)) from exc
-    if not dest.exists():
+    if dest.exists():
+        return FileResponse(dest, media_type="image/jpeg", headers=POSTER_CACHE)
+    found = poster_source(stem)
+    if found is None:
         raise HTTPException(404, f"no such clip: {stem}")
-    return FileResponse(dest, media_type="image/jpeg", headers=POSTER_CACHE)
+    src, original = found
+    costly = poster_costly(src, original)
+    key = str(dest)
+    with MEDIA["lock"]:
+        bad = POSTER_FAILED.get(key)
+        # asked for: a walk build of it paused for playback runs again (the yield thread)
+        MEDIA.setdefault("holds", {})[key] = time.monotonic() + POSTER_HOLD_S
+    if bad is not None and time.monotonic() - bad[0] < POSTER_FAIL_S:
+        raise HTTPException(500, bad[1])
+    ev = queue_poster(stem, t, src, dest, original, costly is not False)
+    # waited on: a frame of a proxy / preview / generated clip, or (asked exactly) of a
+    # small original; `near=1` of an original has its nearest still at once (CANVAS2)
+    if costly is not True and not (near and original):
+        ev.wait(POSTER_WAIT_S)
+    if dest.exists():
+        return FileResponse(dest, media_type="image/jpeg", headers=POSTER_CACHE)
+    # a stand-in, now, never an error (a 503 is a console error and a broken image): the
+    # clip's nearest still on disk, else a neutral frame; not cached, and marked both ways
+    # (`x-roughcut-poster` for a fetch, Server-Timing `standin` for the board's <img>s,
+    # which read it from their Resource Timing entry: dock.js `posterStandins`)
+    alt = nearest_poster(stem, t)
+    said = f"near {alt[1]:.2f}" if alt is not None else "pending"
+    head = {"cache-control": "no-store", "x-roughcut-poster": said,
+            "server-timing": f'standin;desc="{said}"'}
+    if alt is not None:
+        return FileResponse(alt[0], media_type="image/jpeg", headers=head)
+    return Response(POSTER_STANDIN, media_type="image/jpeg", headers=head)
+
+
+# The neutral frame a poster is while there is no still of its clip yet (a clip just in): a
+# 32x18 JPEG of the board's dark grey (#151517), stretched by the card.
+POSTER_STANDIN = base64.b64decode(
+    "/9j/4AAQSkZJRgABAgAAAQABAAD//gAQTGF2YzYwLjMxLjEwMgD/2wBDAAgQEBMQExYWFhYWFhoYGhsbGxoaGhobGxsdHR0iIiIdHR0bGx0dICAiIiUmJSMjIiMmJigoKDAwLi44ODpFRVP/xABMAAEBAAAAAAAAAAAAAAAAAAAABwEBAQAAAAAAAAAAAAAAAAAAAAEQAQAAAAAAAAAAAAAAAAAAAAARAQAAAAAAAAAAAAAAAAAAAAD/wAARCAASACADASIAAhEAAxEA/9oADAMBAAIRAxEAPwCKAKAAAAAAP//Z")
+
+
+# The posters the board asks for, cut in the background (wave 15 BUDGET). Two queues, each
+# newest-asked first (a scrub, a seek, a pass's subclips: the frame asked last is the one
+# on screen), each with its own workers: frames from a proxy / preview / small original
+# (`cheap`, tens of ms: the request waits up to POSTER_WAIT_S for one) and frames from a 4K
+# or HEVC original (`costly`, a second each; never waited on, and never more than
+# POSTER_ORIGINAL_WORKERS at once, so they do not take the decoder from a just-imported
+# clip's head). A frame nobody re-asked for is dropped past POSTER_QUEUE_MAX (the board asks
+# again for what it still shows); the open-time walk's own builds are ensure_poster's.
+POSTER_WAIT_S = 0.2
+POSTER_CHEAP_WORKERS = 2
+POSTER_ORIGINAL_WORKERS = 2
+POSTER_QUEUE_MAX = 32
+POSTER_HOLD_S = 5.0           # an asked-for walk poster stays unpaused this long
+POSTER_FAIL_S = 30.0          # a frame that would not cut answers its error this long
+POSTER_HEAD_YIELD_S = 15.0    # a frame of an original waits this long at most for a head
+POSTER_FAILED: dict[str, tuple[float, str]] = {}
+POSTER_QUEUES: dict[bool, dict] = {
+    flag: {"cv": threading.Condition(), "todo": [], "workers": 0,
+           "max": POSTER_ORIGINAL_WORKERS if flag else POSTER_CHEAP_WORKERS}
+    for flag in (False, True)}
+
+
+def poster_costly(src: Path, original: bool) -> bool | None:
+    """Whether a frame of `src` is a decode a request must never wait on: True for an
+    original the facts say is HEVC or bigger than 1080p (a 4K HEVC GoPro frame: 0.7-1.3 s
+    on a loaded box; build_poster's own line for the GPU), False for a proxy, a preview, a
+    generated clip or a small original, None for an original whose facts are not probed
+    yet (finding out is an ffprobe: it is waited on, as a small one, but queued as a big one)."""
+    if not original:
+        return False
+    try:
+        st = src.stat()
+    except OSError:
+        return None
+    with MEDIA["lock"]:
+        f = MEDIA["facts"].get((str(src), st.st_size, st.st_mtime_ns))
+    if not f:
+        return None
+    return f.get("vcodec") == "hevc" or (f.get("width") or 0) * (f.get("height") or 0) > 1920 * 1080
+
+
+def queue_poster(stem: str, t: float, src: Path, dest: Path, original: bool,
+                 costly: bool) -> threading.Event:
+    """Ask for `dest` (the frame of `src` at `t`) to be cut in the background; returns the
+    event set when that build ends (the build already under way, if one is: the walk's,
+    or this queue's). Asked again while it waits, it goes back to the front."""
+    key = str(dest)
+    q = POSTER_QUEUES[costly]
+    with MEDIA["lock"]:
+        ev = POSTER_BUILDING.get(key)
+        mine = ev is None
+        if mine:
+            ev = POSTER_BUILDING[key] = threading.Event()
+    with q["cv"]:
+        todo = q["todo"]
+        for k, job in enumerate(todo):
+            if job["key"] == key:            # queued already: to the front
+                todo.append(todo.pop(k))
+                return job["ev"]
+        if not mine:
+            return ev                        # being built (the walk's, or a worker's)
+        todo.append({"key": key, "stem": stem, "t": t, "src": src, "dest": dest,
+                     "original": original, "ev": ev})
+        drop = todo[:-POSTER_QUEUE_MAX]
+        del todo[:-POSTER_QUEUE_MAX]
+        if q["workers"] < q["max"]:
+            q["workers"] += 1
+            threading.Thread(target=_poster_worker, args=(q,), daemon=True,
+                             name=f"posters{'-original' if costly else ''}").start()
+        q["cv"].notify()
+    for job in drop:                         # nobody asked again: asked again, it is queued again
+        with MEDIA["lock"]:
+            POSTER_BUILDING.pop(job["key"], None)
+        job["ev"].set()
+    return ev
+
+
+def _poster_worker(q: dict) -> None:
+    while True:
+        with q["cv"]:
+            if not q["todo"]:
+                q["cv"].wait(10.0)
+            if not q["todo"]:
+                q["workers"] -= 1            # under the lock queue_poster starts one in
+                return
+            job = q["todo"].pop()            # the newest asked
+        # a frame of a 4K original waits while a just-imported clip's head is made: the
+        # head is what plays, and both want the one decoder (verdict 11 punch 5)
+        until = time.monotonic() + POSTER_HEAD_YIELD_S
+        while job["original"] and heads_building() and time.monotonic() < until:
+            time.sleep(0.1)
+        try:
+            if not job["dest"].exists():
+                # the board's own: never paused for playback (not background), but in a
+                # scope so its ffmpeg dies with the server
+                with procscope.active(poster_scope()), procscope.tagged(job["key"]):
+                    build_poster(job["src"], job["dest"], job["t"], original=job["original"])
+            POSTER_FAILED.pop(job["key"], None)
+        except Exception as exc:  # noqa: BLE001 — a frame that would not cut is said, not fatal
+            POSTER_FAILED[job["key"]] = (time.monotonic(), str(exc)[:300])
+            print(f"  !! poster: {exc}", flush=True)
+        finally:
+            with MEDIA["lock"]:
+                if POSTER_BUILDING.get(job["key"]) is job["ev"]:
+                    POSTER_BUILDING.pop(job["key"], None)
+            job["ev"].set()
 
 
 def poster_source(stem: str) -> tuple[Path, bool] | None:
@@ -8142,7 +8325,8 @@ def ensure_poster(stem: str, t: float, slots: threading.BoundedSemaphore | None 
 PREVIEW_H = 360                 # the preview's short edge
 PREVIEW_GOP_S = 0.5             # a keyframe every half second: a seek decodes ≤ that
 PREVIEW_WAIT_S = 20.0           # (before verdict 8) how long /media/proxy held a request
-PROXY_ANSWER_S = 0.3            # /media/proxy holds a building clip this long (a preview landing in it is served)
+PROXY_ANSWER_S = 0.15           # /media/proxy holds a building clip this long (a preview landing in it is served;
+                                # was 0.3: the whole 300 ms budget, verdict 11 punch 4)
 HOLD_S = 8.0                    # a monitor told "building" keeps that build unpaused this long
 PREVIEW_RATE = {True: 0.25, False: 1.0}   # build s per footage s before one is measured (GPU, CPU)
 PREVIEW_SLOTS = threading.BoundedSemaphore(2)   # one background + one asked-for at once
@@ -8205,6 +8389,7 @@ def stop_media() -> int:
 
 PLAY_LAPSE_S = 5.0          # a playing board that stops beating is taken as paused
 YIELD_TICK_S = 0.2          # how often the yield thread looks (a new encode, a lapse)
+YIELD_IDLE_S = 2.0          # ...and, with nothing playing or paused, how often it walks them
 PLAYING: dict = {"lock": threading.Lock(), "tabs": {}, "stopped": {}, "thread": None,
                  "log": []}
 
@@ -8319,12 +8504,19 @@ def yield_tick() -> dict:
     # encodes give it the GPU's decoder, as they do a playing Program, for its few seconds
     playing = playing_now()
     play = playing or heads_building()
+    stopped: dict = PLAYING["stopped"]
+    # nothing plays and nothing is paused: the look only renices a tool's own ffmpegs (the
+    # app's start at nice 19 already), so it is taken every YIELD_IDLE_S, not every tick —
+    # each look walks the background processes on this thread, beside the event loop
+    now = time.monotonic()
+    if not play and not stopped and now - PLAYING.get("idle_look", 0.0) < YIELD_IDLE_S:
+        return {"playing": False, "stopped": [], "background": None}
+    PLAYING["idle_look"] = now
     procs = procscope.background_procs()
     waited = _waited_on()
     slot = SLOT_WAIT in waited       # every media build (tagged) runs until the slot frees
     want = {pid for pid, tag in procs
             if play and tag not in waited and not (slot and tag is not None)}
-    stopped: dict = PLAYING["stopped"]
     for pid, _tag in procs:
         try:
             if os.getpriority(os.PRIO_PROCESS, pid) < procscope.BACKGROUND_NICE:
@@ -8509,6 +8701,20 @@ def _rate(s: str | None) -> float | None:
     return v if math.isfinite(v) and v > 0 else None
 
 
+MEDIA_FACTS_ENTRIES = ("stream=codec_type,codec_name,profile,pix_fmt,width,height,avg_frame_rate,"
+                       "r_frame_rate,channels,sample_rate:stream_tags=timecode:stream_side_data=rotation"
+                       ":format=format_name,bit_rate:format_tags=timecode")
+
+
+def media_facts_known(src: Path) -> bool:
+    try:
+        st = src.stat()
+    except OSError:
+        return False
+    with MEDIA["lock"]:
+        return (str(src), st.st_size, st.st_mtime_ns) in MEDIA["facts"]
+
+
 def media_facts(src: Path) -> dict | None:
     """What a browser needs to know about a file: codecs, profile, size, rotation, fps,
     bitrate; and what the Project panel shows of it: the camera's source timecode (the
@@ -8523,18 +8729,35 @@ def media_facts(src: Path) -> dict | None:
     with MEDIA["lock"]:
         if key in MEDIA["facts"]:
             return MEDIA["facts"][key]
-    r = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries",
-         "stream=codec_type,codec_name,profile,pix_fmt,width,height,avg_frame_rate,"
-         "r_frame_rate,channels,sample_rate:stream_tags=timecode:stream_side_data=rotation"
-         ":format=format_name,bit_rate:format_tags=timecode",
-         "-of", "json", str(src)], capture_output=True, text=True)
-    facts = None
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", MEDIA_FACTS_ENTRIES,
+                        "-of", "json", str(src)], capture_output=True, text=True)
+    info = None
     if r.returncode == 0:
         try:
             info = json.loads(r.stdout or "{}")
         except ValueError:
             info = {}
+    facts = _media_facts_of(info)
+    with MEDIA["lock"]:
+        MEDIA["facts"][key] = facts
+    return facts
+
+
+def seed_media_facts(src: Path, info: dict) -> None:
+    """`media_facts`' cache for `src` from an ffprobe answer that has MEDIA_FACTS_ENTRIES in
+    it already (the clip facts' one probe, `_probe_clip_facts`)."""
+    try:
+        st = src.stat()
+    except OSError:
+        return
+    facts = _media_facts_of(info)
+    with MEDIA["lock"]:
+        MEDIA["facts"].setdefault((str(src), st.st_size, st.st_mtime_ns), facts)
+
+
+def _media_facts_of(info: dict | None) -> dict | None:
+    facts = None
+    if info is not None:
         streams = info.get("streams") or []
         v = next((s for s in streams if s.get("codec_type") == "video"), None)
         a = next((s for s in streams if s.get("codec_type") == "audio"), None)
@@ -8565,8 +8788,6 @@ def media_facts(src: Path) -> dict | None:
                      "timecode": tc or None,
                      "channels": int(a.get("channels") or 0) or None if a else None,
                      "sample_rate": arate or None}
-    with MEDIA["lock"]:
-        MEDIA["facts"][key] = facts
     return facts
 
 
@@ -9014,13 +9235,39 @@ def media_fallback(clip: str, wait_s: float = 0.0) -> tuple[str, str | None]:
 # lands. One head per clip, the newest; heads go HEAD_KEEP_S after the clip's preview.
 
 HEAD_PRE_S = 2.0         # a head starts this far before the clip time the monitor waits at
-HEAD_S = 12.0            # and runs this far past it (14 s of a 4K GoPro clip: ~4-6 s of GPU encode)
+# ...and runs this far past it. 8 s of a 4K HEVC GoPro clip is ~2.5 s of GPU encode here at
+# load 7-9 (14 s, the wave 14 head, was 3.2-3.8 s, and 7.3 s at load 16: verdict 11 punch 5,
+# a just-imported clip playing within 10 s at load ~8); the next head is asked HEAD_NEXT_S
+# (app.js, 6 s) before this one ends, so it is made while this one plays.
+HEAD_S = 6.0
 HEAD_FIRST_S = 2.0       # an asked whole preview waits this long for a head to be asked for first
 HEAD_WAIT_S = 15.0       # ...and then for that head's encode, at most this long
 HEAD_HINT_WAIT_S = 8.0   # the board's `?at=` hint is answered when its head is made, or after this
 HEAD_KEEP_S = 120.0      # a clip's heads outlive its whole preview this long (a buffer may hold one)
 HEAD_SLOTS = threading.BoundedSemaphore(1)    # one head encode at a time (each is seconds)
 HEAD_NAME = re.compile(r"^(?P<stem>[A-Za-z0-9._-]+)\.head(?P<a>\d+)\.(?P<v>[a-z0-9]+)\.mp4$")
+# What the wait line says while a head is what will play (verdict 11 punch 5: "~60 s", the
+# whole preview's estimate, over a clip that played ~11 s later from its head): a head's
+# encode is HEAD_START_S of start-up and the measured seconds per footage second
+# (`head_rate`, HEAD_RATE until one is measured: 8 s of a 4K HEVC GoPro clip took 1.8-3.5 s
+# on the GPU here at load 6-14, 0.1-0.3 s a second past the start-up), slower in proportion
+# past HEAD_LOAD_CORES x the cores busy (14 s took 7.3 s at load 16 on 6 cores), and
+# HEAD_PLAY_S more until its first frame is on screen (the board's long-poll answers, the
+# buffer loads the head and shows its frame: 0.3-0.5 s on Killington).
+HEAD_START_S = 1.0
+HEAD_RATE = {True: 0.15, False: 1.0}
+HEAD_PLAY_S = 0.5
+HEAD_LOAD_CORES = 1.5
+HEAD_STOP_S = 0.2        # a head for a time the monitor left, stopped before the next starts
+
+
+def _head_load() -> float:
+    """How much slower than on an unhurried box a head encodes now: 1, or the 1-minute
+    load past HEAD_LOAD_CORES x the cores."""
+    try:
+        return max(1.0, os.getloadavg()[0] / (HEAD_LOAD_CORES * (os.cpu_count() or 1)))
+    except OSError:
+        return 1.0
 
 
 def head_dir() -> Path:
@@ -9086,6 +9333,38 @@ def _span_holds(clip: str, span: tuple[float, float], t: float) -> bool:
 def heads_building() -> bool:
     with MEDIA["lock"]:
         return any(str(k).startswith("head:") for k in MEDIA["building"])
+
+
+def _head_est(span: tuple[float, float]) -> float:
+    rate = MEDIA.get("head_rate") or HEAD_RATE[bool(MEDIA.get("gpu"))]
+    return HEAD_START_S + max(0.5, span[1] - span[0]) * rate * _head_load()
+
+
+def head_eta(clip: str) -> float | None:
+    """Seconds until the head being made for `clip` plays (its encode's estimate less how
+    long it has run, plus the head encode ahead of it in HEAD_SLOTS), or None when no head
+    is being made for it."""
+    stem = Path(clip).stem
+    now = time.monotonic()
+    with MEDIA["lock"]:
+        if f"head:{stem}" not in MEDIA["building"]:
+            return None
+        builds = {k: dict(v) for k, v in (MEDIA.get("head_build") or {}).items()}
+        want = (MEDIA.get("head_want") or {}).get(stem)
+    mine = builds.get(stem)
+    if mine is None:                       # claimed, its encode not set up yet
+        span = head_span(clip, want if want is not None else 0.0)
+        return round(_head_est(span) + HEAD_PLAY_S, 1)
+    if want is not None and not _span_holds(clip, mine["span"], want):
+        # the one being made is for a time the monitor has left (a seek): it is stopped,
+        # and the one for the newest time is made next (_build_heads)
+        return round(HEAD_STOP_S + _head_est(head_span(clip, want)) + HEAD_PLAY_S, 1)
+    if mine.get("t0") is not None:
+        return round(max(1.0, _head_est(mine["span"]) - (now - mine["t0"])) + HEAD_PLAY_S, 1)
+    # waiting for the one slot: the running head's time left, then its own
+    ahead = [max(0.0, _head_est(b["span"]) - (now - b["t0"])) for b in builds.values()
+             if b.get("t0") is not None]
+    return round(min(ahead, default=0.0) + _head_est(mine["span"]) + HEAD_PLAY_S, 1)
 
 
 def want_head(clip: str, t: float) -> None:
@@ -9174,15 +9453,24 @@ def _build_head(clip: str, src: Path, dest: Path, span: tuple[float, float], ori
     # this one alone (want_head) and a Stop all of them (stop_media)
     scope = procscope.Scope(f"head {stem}")
     with MEDIA["lock"]:
-        MEDIA.setdefault("head_build", {})[stem] = {"scope": scope, "span": span}
+        MEDIA.setdefault("head_build", {})[stem] = {"scope": scope, "span": span, "t0": None}
     try:
         with HEAD_SLOTS:
             t0 = time.monotonic()
+            with MEDIA["lock"]:
+                cur = (MEDIA.get("head_build") or {}).get(stem)
+                if cur is not None and cur.get("scope") is scope:
+                    cur["t0"] = t0           # the encode began: head_eta counts from here
             if scope.cancelled:
                 raise RuntimeError("stopped before it started")
             with procscope.active(scope), procscope.tagged(str(preview_path(stem))):
                 how = build_preview(src, dest, orient, span=span)
             took = time.monotonic() - t0
+            # what a head costs here, for the wait line's estimate (head_eta)
+            per = max(0.02, (took - HEAD_START_S) / max(0.5, span[1] - span[0]) / _head_load())
+            with MEDIA["lock"]:
+                old = MEDIA.get("head_rate")
+                MEDIA["head_rate"] = round(per if old is None else 0.6 * old + 0.4 * per, 4)
             meta = {"stem": Path(clip).stem, "clip": clip, "a": span[0], "b": span[1],
                     "picture_v": PICTURE_V, "orient": orient, "src": _range_src_id(src),
                     "how": how, "built_s": round(took, 2), "made": time.time()}
@@ -9770,6 +10058,20 @@ def media_preview(name: str, request: Request) -> Response:
     return ranged_file(preview_path(stem), request)
 
 
+def wait_eta(clip: str) -> float | None:
+    """How long a monitor waiting on `clip` waits: for the head being made for it (or, made
+    already where it waits, the moment the board takes it to play), else for its whole
+    preview, whichever comes first."""
+    h, p = head_eta(clip), preview_eta(clip)
+    if h is None:
+        stem = Path(clip).stem
+        with MEDIA["lock"]:
+            want = (MEDIA.get("head_want") or {}).get(stem)
+        if want is not None and head_covers(head_record(stem), want):
+            h = HEAD_PLAY_S
+    return h if h is not None and (p is None or h < p) else p
+
+
 @app.get("/media/status/{name}")
 def media_status(name: str, at: float | None = None) -> JSONResponse:
     """What `/media/proxy/<name>` would play now, without waiting — for a board that got
@@ -9801,8 +10103,10 @@ def media_status(name: str, at: float | None = None) -> JSONResponse:
         "head": {"url": head["url"], "a": head["a"], "b": head["b"]} if head else None,
         "head_building": f"head:{stem}" in MEDIA["building"] if kind == "building" else False,
         "clip": clip, "serves": kind,
-        # verdict 8: the board's wait line says how long ("preparing preview… CLIP_09 · ~N s")
-        "eta_s": preview_eta(clip) if kind == "building" else None,
+        # verdict 8: the board's wait line says how long ("preparing preview… CLIP_09 · ~N s"):
+        # the head's time while a head is what will play (verdict 11 punch 5), else the
+        # whole preview's
+        "eta_s": wait_eta(clip) if kind == "building" else None,
         "url": f"/media/proxy/{stem}.mp4" if kind == "proxy" else url,
         "ready": kind in ("proxy", "original", "range", "preview"),
         "proxy": (STATE["proxy_dir"] / f"{stem}.mp4").exists(),
@@ -11783,21 +12087,91 @@ def materialise_generated(spec: dict) -> Path:
                    f"color=c=0x{hexcolour}:s={GEN_W}x{GEN_H}:r={GEN_FPS}:d={seconds:.3f}",
                    "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
                    "-t", f"{seconds:.3f}", *_GEN_ENCODE, str(tmp)]
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        # black: the head of the bin's black master, copied (no encode: ~50 ms, where the
+        # encode is ~35 ms a second of black and 587 ms for a gap on a loaded Killington box)
+        copied = kind == "black" and _black_from_master(seconds, tmp)
+        r = None if copied else subprocess.run(cmd, capture_output=True, text=True)
         if png is not None:
             png.unlink(missing_ok=True)
-        if r.returncode != 0 or not tmp.exists() or not tmp.stat().st_size:
+        if r is not None and (r.returncode != 0 or not tmp.exists() or not tmp.stat().st_size):
             tmp.unlink(missing_ok=True)
             raise RuntimeError(f"generated clip failed ({name}): {r.stderr[-300:]}")
         tmp.replace(dest)
         record = {k: spec.get(k) for k in ("kind", "seconds", "color", "from_clip", "at")}
         record["clip"] = name
-        record["duration"] = probe_duration(dest) or seconds
+        # a copy's length is its frames' (whole GEN_FPS frames, the picture the cut trims)
+        record["duration"] = (round(math.ceil(seconds * GEN_FPS - 1e-6) / GEN_FPS, 2) if copied
+                              else probe_duration(dest) or seconds)
         generated_spec_path(name).write_text(json.dumps(record, indent=1), encoding="utf-8")
     return dest
 
 
 GAP_MAX_S = 3600.0
+# The black a gap is made of, ready before it is asked for (wave 15 BUDGET, verdict 11
+# punch 4: /api/gap took 587 ms on a loaded Killington box, an encode of N seconds of
+# black inside the request). One master per bin, GAP_MASTER_S of black at the generated
+# clips' size and rate with no B-frames (any head of it decodes on its own), made once in
+# the background when the board opens a bin; a gap up to that long is its head, a stream
+# copy. Longer, or before the master is there: the encode, as before.
+GAP_MASTER_S = 120.0
+_BLACK_MASTER = {"lock": threading.Lock()}
+
+
+def black_master_path() -> Path:
+    # not `gen_*`: never listed among the clips (generated_clips)
+    return generated_dir() / f"black-master.{GEN_W}x{GEN_H}.{GEN_FPS}.v1.mp4"
+
+
+def ensure_black_master() -> Path | None:
+    """The bin's black master on disk (made now if missing, niced in the background
+    scope); None when another thread is making it or the encode failed."""
+    dest = black_master_path()
+    if dest.exists() and dest.stat().st_size:
+        return dest
+    if not _BLACK_MASTER["lock"].acquire(blocking=False):
+        return None
+    try:
+        if dest.exists() and dest.stat().st_size:
+            return dest
+        tmp = dest.with_name(f"{dest.stem}.{os.getpid()}.part.mp4")
+        with procscope.active(media_scope()):
+            r = subprocess.run(
+                ["ffmpeg", "-v", "error", "-y", "-nostdin", "-f", "lavfi", "-i",
+                 f"color=c=0x000000:s={GEN_W}x{GEN_H}:r={GEN_FPS}:d={GAP_MASTER_S:.0f}",
+                 "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", f"{GAP_MASTER_S:.0f}",
+                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20", "-pix_fmt", "yuv420p",
+                 "-r", str(GEN_FPS), "-bf", "0", "-g", str(GEN_FPS * 10),
+                 "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+                 "-shortest", "-movflags", "+faststart", str(tmp)],
+                capture_output=True, text=True)
+        if r.returncode != 0 or not tmp.exists() or not tmp.stat().st_size:
+            tmp.unlink(missing_ok=True)
+            print(f"  !! black master: {r.stderr[-200:]}", flush=True)
+            return None
+        tmp.replace(dest)
+        return dest
+    finally:
+        _BLACK_MASTER["lock"].release()
+
+
+def _black_from_master(seconds: float, tmp: Path) -> bool:
+    """`tmp` = the first `seconds` of the bin's black master (a stream copy); False when
+    there is no master yet (one is started) or the copy failed."""
+    master = black_master_path()
+    if not (master.exists() and master.stat().st_size):
+        if STATE.get("proxies_enabled", True):      # nothing built behind a suite's back
+            threading.Thread(target=ensure_black_master, daemon=True, name="black master").start()
+        return False
+    if seconds > GAP_MASTER_S - 1.0:
+        return False
+    r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-i", str(master),
+                        "-t", f"{seconds:.3f}", "-c", "copy", "-movflags", "+faststart", str(tmp)],
+                       capture_output=True, text=True)
+    if r.returncode == 0 and tmp.exists() and tmp.stat().st_size:
+        return True
+    tmp.unlink(missing_ok=True)
+    return False
+
 
 
 @app.post("/api/gap")
@@ -12797,17 +13171,74 @@ async def api_assist_preview(request: Request) -> JSONResponse:
     return JSONResponse(await asyncio.to_thread(run))
 
 
+# What the price reads (the cut and the clips, as an ask's prompt has them), kept between
+# asks (wave 15 BUDGET, verdict 11 punch 4: /api/assist/price took 768 ms during a first
+# pass on Killington, every keystroke's pause re-reading ~45 sidecars). Fresh while the
+# cut file and the sidecar / visual folders are unchanged and for PRICE_FRESH_S; past that
+# a price is still answered at once from what was read, and read again beside it.
+PRICE_FRESH_S = 10.0
+_PRICE_INPUTS: dict = {"lock": threading.Lock(), "sig": None, "at": 0.0, "data": None,
+                       "busy": False}
+
+
+def _price_sig() -> tuple:
+    out = []
+    for p in (STATE.get("edl"), STATE.get("sidecars"), STATE.get("visual")):
+        try:
+            st = Path(p).stat()
+            out.append((str(p), st.st_mtime_ns, st.st_size))
+        except (OSError, TypeError):
+            out.append((str(p), None, None))
+    return tuple(out)
+
+
+def _price_read(sig: tuple) -> tuple[dict, dict]:
+    clips, payload = _ask_clips(None, drop_junk=True)
+    data = (clips, assist_state(payload))
+    with _PRICE_INPUTS["lock"]:
+        _PRICE_INPUTS.update(sig=sig, at=time.monotonic(), data=data)
+    return data
+
+
+def _price_inputs() -> tuple[dict, dict]:
+    """(clips, state) for the price: what was read, when it is fresh; read now only when
+    nothing was (the first price after a start); otherwise read again in a thread beside
+    the answer when the inputs changed or went stale."""
+    sig = _price_sig()
+    with _PRICE_INPUTS["lock"]:
+        old = _PRICE_INPUTS["sig"]
+        # another cut or bin is not a stale read of this one
+        data = _PRICE_INPUTS["data"] if old and [x[0] for x in old] == [x[0] for x in sig] else None
+        same = old == sig
+        fresh = same and time.monotonic() - _PRICE_INPUTS["at"] < PRICE_FRESH_S
+        stale = data is not None and not fresh and not _PRICE_INPUTS["busy"]
+        if stale:
+            _PRICE_INPUTS["busy"] = True
+    if data is None:
+        return _price_read(sig)
+    if stale:
+        def again() -> None:
+            try:
+                _price_read(sig)
+            except Exception as exc:  # noqa: BLE001 — the next price reads again
+                print(f"  !! price inputs: {exc}", flush=True)
+            finally:
+                _PRICE_INPUTS["busy"] = False
+        threading.Thread(target=again, daemon=True, name="price inputs").start()
+    return data
+
+
 @app.get("/api/assist/price")
 def api_assist_price(text: str = "", scope: str = "") -> JSONResponse:
     """What an ask would cost before it is sent: the prompt it would build (the cut, the
     clips, the scope, the vocabulary) priced at the role's model — never a model call.
-    `scope` is the JSON of the POST's scope. Declared before /api/assist/{job}."""
+    `scope` is the JSON of the POST's scope. Declared before /api/assist/{job}. The cut and
+    the clips are read once and kept (`_price_inputs`): an estimate, at once."""
     try:
         sc = json.loads(scope) if scope else None
     except ValueError:
         sc = None
-    clips, payload = _ask_clips(None, drop_junk=True)
-    state = assist_state(payload)
+    clips, state = _price_inputs()
     prompt = assistmod.build_prompt(text.strip()[:assistmod.TEXT_MAX] or "…", clean_scope(sc),
                                     state, clips)
     return JSONResponse(assistmod.estimate_cost(prompt))
@@ -13275,6 +13706,8 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
     """
     work = work.expanduser().resolve()
     footage = footage.expanduser().resolve()
+    with _PRICE_INPUTS["lock"]:
+        _PRICE_INPUTS.update(sig=None, data=None)        # another project's clips, never priced
     edl_path = (edl.resolve() if edl is not None
                 else work / "projects" / f"{footage.name}.edl.json")
     created = not edl_path.exists()
@@ -13365,6 +13798,8 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
     else:
         threading.Thread(target=ensure_proxies, args=(clips,), daemon=True).start()
         kick_previews()          # posters and playable previews for every clip, first
+        # the black a gap is cut from, before the first gap (a few seconds, niced, once)
+        threading.Thread(target=ensure_black_master, daemon=True, name="black master").start()
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -13438,6 +13873,12 @@ def main() -> int:
     if args.host not in ("127.0.0.1", "localhost", "::1"):
         print(f"  !! listening on {args.host}: anyone who can reach this machine can "
               f"open the board (no login)", flush=True)
+    # Wave 15 (verdict 11 punch 4): a full collection walks every object alive, and it
+    # holds the GIL, so the event loop with it (121 ms of the loop thread's CPU inside one
+    # 647 ms hold on Killington; ~70 000 objects here, nearly all the imports' and never
+    # garbage: 44-58 ms a collection, 0 once frozen). What is alive now is kept out of it.
+    gc.collect()
+    gc.freeze()
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     return 0
 

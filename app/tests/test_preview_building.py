@@ -243,38 +243,152 @@ def _slow_original_posters(server, monkeypatch, delay_s: float) -> None:
     monkeypatch.setattr(server, "build_poster", slow)
 
 
+def _get(url: str, timeout: float = 30):
+    """(status, headers, body) of a GET, a 4xx/5xx included."""
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return r.status, r.headers, r.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.headers, exc.read()
+
+
+def _exact_poster(url: str, wait_s: float = 20.0):
+    """Ask for a poster until the exact frame is there (a frame not cut yet is a stand-in:
+    wave 15, cut in the background); (seconds it took, headers, body)."""
+    t0 = time.monotonic()
+    while True:
+        st, h, body = _get(url)
+        if st == 200 and "x-roughcut-poster" not in h:
+            return time.monotonic() - t0, h, body
+        assert st == 200 and "standin" in (h["server-timing"] or ""), (st, dict(h))
+        assert time.monotonic() - t0 < wait_s, f"no exact frame in {wait_s} s: {url}"
+        time.sleep(0.1)
+
+
 def test_a_poster_cut_from_the_original_answers_the_nearest_still_at_once(building, monkeypatch):
     """Wave 13 CANVAS2: `near=1` answers a clip's still already on disk at once when the
     asked frame is not cut yet and would come from the original (no preview, no proxy);
-    not cached, and it says which time it shows. The exact frame is still the exact frame,
-    and a clip with a proxy always answers its exact frame."""
+    not cached, and it says which time it shows. Wave 15 BUDGET (verdict 11 punch 4): the
+    exact frame is cut in the background, never inside the request: asked before it is cut
+    it is that stand-in too (never an error: a 503 is a console error and a broken image),
+    then the exact frame, immutable. A clip with a proxy answers its exact frame, never a
+    near one."""
     url, server = building["url"], building["server"]
-    with urllib.request.urlopen(f"{url}/media/poster/CLIP_B.jpg?t=0.40", timeout=30) as r:
-        assert r.status == 200
+    _exact_poster(f"{url}/media/poster/CLIP_B.jpg?t=0.40")
     _slow_original_posters(server, monkeypatch, 1.5)
     t0 = time.monotonic()
-    with urllib.request.urlopen(f"{url}/media/poster/CLIP_B.v2.jpg?near=1&t=2.37", timeout=30) as r:
-        took = time.monotonic() - t0
-        assert r.status == 200 and r.read(3) == b"\xff\xd8\xff"
-        assert (r.headers["x-roughcut-poster"] or "").startswith("near "), dict(r.headers)
-        assert "no-store" in r.headers["cache-control"]
+    st, h, body = _get(f"{url}/media/poster/CLIP_B.v2.jpg?near=1&t=2.37")
+    took = time.monotonic() - t0
+    assert st == 200 and body[:3] == b"\xff\xd8\xff"
+    assert (h["x-roughcut-poster"] or "").startswith("near "), dict(h)
+    assert "no-store" in h["cache-control"]
     print(f"near still for CLIP_B at 2.37 in {took * 1000:.0f} ms")
     assert took < 0.3, f"the near still took {took:.2f}s"
-    # the exact frame: cut (slowly) from the original, immutable
+    # the exact frame: not waited on (a 503 within the wait), cut beside it, then immutable
     t0 = time.monotonic()
-    with urllib.request.urlopen(f"{url}/media/poster/CLIP_B.v2.jpg?t=2.37", timeout=30) as r:
-        assert r.status == 200 and "x-roughcut-poster" not in r.headers
-        assert "immutable" in r.headers["cache-control"]
-    assert time.monotonic() - t0 >= 1.4
+    st, h, body = _get(f"{url}/media/poster/CLIP_B.v2.jpg?t=2.37")
+    took = time.monotonic() - t0
+    assert st == 200 and h["x-roughcut-poster"].startswith("near ") and body[:3] == b"\xff\xd8\xff", (st, dict(h))
+    assert "no-store" in h["cache-control"] and 'standin;desc="near ' in h["server-timing"]
+    assert took < 0.3, f"an exact frame not cut yet held the request {took:.2f}s"
+    waited, h, _ = _exact_poster(f"{url}/media/poster/CLIP_B.v2.jpg?t=2.37")
+    assert "immutable" in h["cache-control"]
+    assert time.monotonic() - t0 >= 1.4, "the slow cut was not the one served"
     # now on disk: near=1 answers it, exact
-    with urllib.request.urlopen(f"{url}/media/poster/CLIP_B.v2.jpg?near=1&t=2.37", timeout=30) as r:
-        assert "x-roughcut-poster" not in r.headers
+    st, h, _ = _get(f"{url}/media/poster/CLIP_B.v2.jpg?near=1&t=2.37")
+    assert st == 200 and "x-roughcut-poster" not in h
     # a clip with a proxy: its exact frame (cut from the proxy), never a near one
-    with urllib.request.urlopen(f"{url}/media/poster/CLIP_A.v2.jpg?t=0.00", timeout=30) as r:
-        assert r.status == 200
-    with urllib.request.urlopen(f"{url}/media/poster/CLIP_A.v2.jpg?near=1&t=1.73", timeout=30) as r:
-        assert "x-roughcut-poster" not in r.headers
+    _exact_poster(f"{url}/media/poster/CLIP_A.v2.jpg?t=0.00")
+    _exact_poster(f"{url}/media/poster/CLIP_A.v2.jpg?near=1&t=1.73")
     assert server.poster_path("CLIP_A", 1.73).exists()
+
+
+def test_a_frame_of_a_4k_original_is_never_cut_inside_a_request(building, monkeypatch):
+    """Verdict 11 punch 4: on Killington the posters of clips with no preview yet took
+    1.1-2.1 s after a first pass and up to 3.9 s for a just-imported clip, each a 4K HEVC
+    frame decoded inside its request (the server's budget is 300 ms). Now such a frame is
+    never waited on: exact or `near=1`, the request answers at once (a 503, or the nearest
+    still), and the frame is cut on the poster queue's own thread, then served exact."""
+    url, server = building["url"], building["server"]
+    _exact_poster(f"{url}/media/poster/CLIP_B.jpg?t=0.40")
+    since = time.time()
+    src = server.clip_path("CLIP_B.MP4")
+    st_ = src.stat()
+    key = (str(src), st_.st_size, st_.st_mtime_ns)
+    facts = dict(server.MEDIA["facts"].get(key) or server.media_facts(src))
+    # what the facts of a Killington GoPro clip say: 4K HEVC
+    monkeypatch.setitem(server.MEDIA["facts"], key, {**facts, "vcodec": "hevc", "width": 3840, "height": 2160})
+    assert server.poster_costly(src, True) is True
+    cut_on: list[str] = []
+    real = server.build_poster
+
+    def slow(src_, dest, t, original=False):
+        cut_on.append(threading.current_thread().name)
+        time.sleep(1.0)
+        return real(src_, dest, t, original=original)
+
+    monkeypatch.setattr(server, "build_poster", slow)
+    for k, t in enumerate((3.11, 3.52, 4.07)):
+        for near in (False, True):
+            q = f"near=1&t={t:.2f}" if near else f"t={t:.2f}"
+            t0 = time.monotonic()
+            st, h, _ = _get(f"{url}/media/poster/CLIP_B.v2.jpg?{q}")
+            took = time.monotonic() - t0
+            assert took < 0.15, f"{q}: held {took:.2f}s for a 4K original's frame"
+            # both a stand-in at once: the clip's nearest still
+            assert st == 200 and h["x-roughcut-poster"].startswith("near "), (st, dict(h))
+            assert "standin" in h["server-timing"], dict(h)
+    # every one lands, exact, cut once each on the queue's own thread
+    _exact_poster(f"{url}/media/poster/CLIP_B.v2.jpg?t=4.07", wait_s=10)
+    for t in (3.11, 3.52):
+        _exact_poster(f"{url}/media/poster/CLIP_B.v2.jpg?t={t:.2f}", wait_s=10)
+    assert cut_on and all(n.startswith("posters") for n in cut_on), cut_on
+    assert len(cut_on) == 3, f"cut {len(cut_on)} times for 3 frames: {cut_on}"
+    slow_rows = [r for r in json.loads(_get(f"{url}/api/debug/slow")[2])["over_budget"]
+                 if r["path"].startswith("/media/poster/") and r["at"] >= since]
+    assert not slow_rows, slow_rows
+
+
+def test_a_poster_not_cut_yet_is_a_stand_in_and_the_board_puts_the_frame_in(building, monkeypatch):
+    """Wave 15 BUDGET: a frame the server has not cut is never an error (a 503 was a console
+    error and, until its retry, a broken image): the clip's nearest still, else a neutral
+    frame, at once, marked Server-Timing `standin`; the board's image keeps its `src` (the
+    frame asked for) and shows the exact frame, through `srcset`, once it is cut."""
+    sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed")
+    url, server = building["url"], building["server"]
+    for f in server.STATE["posters"].glob("CLIP_B@*"):
+        f.unlink()
+    _slow_original_posters(server, monkeypatch, 1.5)
+    st, h, body = _get(f"{url}/media/poster/CLIP_B.v2.jpg?t=4.21")
+    assert st == 200 and h["x-roughcut-poster"] == "pending" and body == server.POSTER_STANDIN, (st, dict(h))
+    _exact_poster(f"{url}/media/poster/CLIP_B.v2.jpg?t=4.21")
+    with sync_api.sync_playwright() as pw:
+        browser, page, errors = _board(pw, url)
+        bad, console = [], []
+        page.on("response", lambda r: bad.append(f"{r.status} {r.url}") if r.status >= 400 else None)
+        page.on("console", lambda m: console.append(m.text) if m.type == "error" else None)
+        try:
+            for t in ("2.83", "5.17"):           # a still of the clip on disk (4.21): near ones
+                page.evaluate("""(src) => { const i = document.createElement('img'); i.className = 'probe';
+                    i.style.cssText = 'position:fixed;left:0;top:0;width:64px'; i.src = src;
+                    document.body.appendChild(i); }""", f"/media/poster/CLIP_B.v2.jpg?t={t}")
+            page.wait_for_function("[...document.querySelectorAll('img.probe')].every(i => i.complete && i.naturalWidth > 0)",
+                                   timeout=5000)
+            early = page.evaluate("[...document.querySelectorAll('img.probe')].map(i => [i.getAttribute('src'), i.currentSrc, i.hasAttribute('srcset')])")
+            assert not any(e[2] for e in early), early
+            page.wait_for_function("""[...document.querySelectorAll('img.probe')].every(i => i.hasAttribute('srcset')
+                && i.complete && i.currentSrc.endsWith('cut=1') && i.naturalWidth === 320)""", timeout=15000)
+            late = page.evaluate("[...document.querySelectorAll('img.probe')].map(i => [i.getAttribute('src'), i.currentSrc])")
+            print("stand-ins, then the frames:", early, late)
+            for (src, cur), t in zip(late, ("2.83", "5.17")):
+                assert src == f"/media/poster/CLIP_B.v2.jpg?t={t}", src       # its src: as asked
+            # a new src drops the old frame's srcset
+            page.evaluate("document.querySelector('img.probe').src = '/media/poster/CLIP_B.v2.jpg?t=4.21'")
+            page.wait_for_function("!document.querySelector('img.probe').hasAttribute('srcset')", timeout=3000)
+            assert bad == [] and console == [], (bad, console)
+            assert not [e for e in errors if "Error" in e], errors
+        finally:
+            browser.close()
 
 
 def test_a_seek_onto_a_building_shot_shows_a_picture_within_300_ms(building, monkeypatch):
@@ -699,6 +813,115 @@ def test_a_missing_generated_clip_says_what_is_wrong(building):
             assert "Media offline" in line and "Black Video" in line and "missing" in line, line
             assert "preparing" not in again and again == line, again
             assert not __import__("re").search(r"gen_[a-z]+_[0-9a-f]{6}", line), line
+            assert not [e for e in errors if "Error" in e], errors
+        finally:
+            browser.close()
+
+
+# ---------------------------------------------------------------- the wait line's estimate
+#
+# Verdict 11 punch 5 (wave 15 BUDGET): a just-imported Killington clip played from its head
+# ~11 s after it went in, while the line said "~60 s" (the whole preview's estimate). While a
+# head is what will play, the line says the head's time: its encode's estimate (start-up +
+# the measured seconds per footage second) less how long it has run, and ~HEAD_PLAY_S once
+# it is made; a seek drops the old place's number until the server says the new one.
+
+HEAD_SLOW_S = 2.5            # the fixture's head encode, made to take a Killington head's time
+
+
+def _slow_heads(server, monkeypatch, delay_s: float = HEAD_SLOW_S) -> None:
+    real = server.build_preview
+
+    def slow(src, dest, orient, span=None):
+        if span is not None:
+            time.sleep(delay_s)
+        return real(src, dest, orient, span=span)
+
+    monkeypatch.setattr(server, "build_preview", slow)
+    # what the box measured a head at: the estimate this test checks against the real wait
+    # (on Killington the rate is measured from the heads it makes: head_rate)
+    span = server.head_span("CLIP_B.MP4", 1.0)
+    monkeypatch.setitem(server.MEDIA, "head_rate",
+                        max(0.02, (delay_s + 0.2 - server.HEAD_START_S) / (span[1] - span[0])))
+    monkeypatch.setattr(server, "_head_load", lambda: 1.0)     # the sleep is the encode here
+    # the whole preview: a long Killington clip's minute
+    monkeypatch.setitem(server.MEDIA, "preview_rate", 10.0)
+
+
+def test_the_status_says_the_heads_time_not_the_whole_previews(building, monkeypatch):
+    building["heads"]()
+    url, server = building["url"], building["server"]
+    _slow_heads(server, monkeypatch)
+    whole = _status(url, "CLIP_B")["eta_s"]
+    assert whole > 30, whole                          # the whole preview: ~a minute
+    asked = time.monotonic()
+    threading.Thread(target=_status, args=(url, "CLIP_B", 1.0), daemon=True).start()   # the hint
+    seen = []
+    while time.monotonic() - asked < 15:
+        st = _status(url, "CLIP_B")
+        seen.append((round(time.monotonic() - asked, 2), st["eta_s"], bool(st["head"])))
+        if st["head"]:
+            break
+        time.sleep(0.25)
+    real = time.monotonic() - asked
+    print(f"head in {real:.2f}s; eta_s as it was made: {seen}")
+    building_etas = [(t, e) for t, e, h in seen if not h and t >= 0.3]
+    assert building_etas, seen
+    for t, e in building_etas:
+        assert e < 10, f"at {t}s the status said the whole preview's {e}s"
+        assert (real - t) / 2 <= e <= 2 * (real - t) + server.HEAD_PLAY_S + 0.5, (t, e, real)
+    assert building_etas[-1][1] < building_etas[0][1] or len(building_etas) == 1, "no count down"
+    # made, where the board waits: it is about to play
+    st = _status(url, "CLIP_B")
+    assert st["head"] and st["eta_s"] <= 1.0, st
+
+
+def test_the_wait_line_says_how_long_the_head_takes(building, monkeypatch):
+    """On the board: a seek onto the building shot; the line's "~N s" is within 2x of the
+    wait until the shot's own frame is on the screen (from its head)."""
+    sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed")
+    import re
+    building["heads"]()
+    server = building["server"]
+    _slow_heads(server, monkeypatch)
+    with sync_api.sync_playwright() as pw:
+        browser, page, errors = _head_board(pw, building["url"])
+        seen = []
+        t_page = time.monotonic()
+
+        def status(r):
+            if "/media/status/CLIP_B" in r.url:
+                try:
+                    j = r.json()
+                    seen.append((round(time.monotonic() - t_page, 2), r.url.split("/")[-1], j.get("eta_s"),
+                                 j.get("head_building"), bool(j.get("head"))))
+                except Exception:  # noqa: BLE001
+                    pass
+        page.on("response", status)
+        try:
+            page.evaluate("""() => { const O = window.__wl = { lines: [], live: null };
+              let last = null; O.t0 = performance.now();
+              O.timer = setInterval(() => {
+                const w = document.querySelector('#monWait'); const s = w && !w.hidden ? w.textContent.trim() : '';
+                if (s !== last) { O.lines.push([performance.now() - O.t0, s]); last = s; }
+                const v = liveVideo();
+                if (O.live === null && v && /\\/media\\/head\\/CLIP_B/.test(decodeURIComponent(v.currentSrc || ''))
+                    && v.readyState >= 2 && !v._posterUp) O.live = performance.now() - O.t0;
+              }, 30); }""")
+            page.evaluate("cueAt(1, segs[1].in)")            # clip 1.0 s of CLIP_B
+            page.wait_for_function("window.__wl.live !== null", timeout=20000)
+            wl = page.evaluate("() => { clearInterval(window.__wl.timer); return window.__wl; }")
+            lines = [(round(t / 1000, 2), s) for t, s in wl["lines"]]
+            live = wl["live"] / 1000
+            said = [(t, int(m.group(1))) for t, s in lines
+                    if (m := re.search(r"CLIP_B · ~(\d+) s", s))]
+            print(f"picture from the head at {live:.2f}s; the line said {lines}; statuses {seen}")
+            assert said, lines
+            t, n = said[0]
+            assert t <= 1.0, f"no estimate on the line until {t}s"
+            assert n <= 10, f"the line said the whole preview's ~{n} s"
+            real = live - t
+            assert n / 2 <= real <= 2 * n, f"the line said ~{n} s at {t}s; the picture came {real:.2f}s later"
             assert not [e for e in errors if "Error" in e], errors
         finally:
             browser.close()

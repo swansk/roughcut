@@ -163,6 +163,12 @@ def journey_read(out: Path, log: Path, rc: int, took_s: float = 0.0) -> tuple[bo
         if s > JOURNEY_SLOWEST_S:
             green = False
             line += f" (over {JOURNEY_SLOWEST_S:g} s)"
+        # verdict 11 (REDESIGN-GOAL 2026-10-19): the longest the event loop was held, red
+        # over the logged 200 ms budget — a request's `ms` leaves out an upload's body
+        # wait, so a hold during one shows only here
+        line += journey_loop_said(slow.get("slowest_loop"))
+        if loop_over(slow.get("slowest_loop")):
+            green = False
     else:
         line += " · slowest request: not measured (the server has no /api/debug/slow)"
     if retried:
@@ -172,6 +178,26 @@ def journey_read(out: Path, log: Path, rc: int, took_s: float = 0.0) -> tuple[bo
 
 
 JOURNEY_SLOWEST_S = 1.0
+JOURNEY_LOOP_MS = 200.0      # the server's loop budget (server.py LOOP_BUDGET_MS)
+
+
+def loop_over(hold) -> bool:
+    return isinstance(hold, dict) and float(hold.get("ms") or 0) > JOURNEY_LOOP_MS
+
+
+def journey_loop_said(hold) -> str:
+    """The journey line's words for `/api/debug/slow`'s `slowest_loop`: its length and,
+    over the budget, where the loop was (the watcher's `where`: the loop thread's frame,
+    else the threads that ran, else nothing ran — the box starved the process)."""
+    if not isinstance(hold, dict) or hold.get("ms") is None:
+        return " · slowest loop hold: not measured"
+    ms = float(hold["ms"])
+    said = f" · slowest loop hold {ms:.0f} ms"
+    if ms > JOURNEY_LOOP_MS:
+        w = hold.get("where") or {}
+        why = w.get("loop") or "; ".join(w.get("busy") or []) or "nothing in the server ran"
+        said += f" (over {JOURNEY_LOOP_MS:g} ms: {why[:160]})"
+    return said
 
 
 PERF_ID = "app/tests/test_perf_latency.py::test_latency_under_load"

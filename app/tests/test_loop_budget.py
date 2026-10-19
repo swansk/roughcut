@@ -342,3 +342,247 @@ def test_an_upload_the_disk_refuses_fails_whole_and_leaves_nothing(tmp_path, pro
     up = server.UPLOADS[plan["batch"]]
     assert up["rows"][0]["state"] == "failed" and up["rows"][0]["why"] == "OSError"
     assert not list(tmp_path.rglob("*.part"))
+
+
+# ------------------------------------------------------------------------------ wave 15
+#
+# Verdict 11 punch 4 (lane BUDGET): on Killington, 24 requests over the 300 ms budget in a
+# session — posters (cut from 4K originals inside their requests; test_preview_building),
+# `/api/assist/price` 768 ms, `/api/gap` 587 ms, `/api/firstpass/cancel` 562 ms.
+
+def test_the_price_answers_from_what_it_read_and_reads_again_beside_it(tmp_path, project, monkeypatch):
+    """Every pause in the typing asked /api/assist/price, and each re-read the cut and ~45
+    sidecars (768 ms during a first pass). Now what it read is kept: a second price reads
+    nothing; once the cut changes, the price is still answered at once from what was read,
+    and read again beside it; the words still move the price."""
+    import server
+
+    edl = tmp_path / "edl.json"
+    shutil.copy(project["edl"], edl)
+    server.configure(edl, project["footage"], project["sidecars"], tmp_path / "work", proxies=False,
+                     visual=tmp_path / "no-visual", assets=project["assets"])
+    reads: list[float] = []
+    real = server._ask_clips
+    gate = threading.Event()
+    gate.set()
+
+    def counted(*a, **kw):
+        gate.wait(10)
+        reads.append(time.monotonic())
+        return real(*a, **kw)
+
+    monkeypatch.setattr(server, "_ask_clips", counted)
+
+    def price(text: str) -> dict:
+        return json.loads(server.api_assist_price(text, '{"kind": "sequence"}').body)
+
+    short = price("warm it up")
+    assert len(reads) == 1                                  # nothing kept yet: read now
+    assert short["projected_usd"] > 0 and short["measured"] is False
+    longer = price("warm it up " * 200)
+    assert len(reads) == 1, "a second price re-read the cut and the clips"
+    assert longer["projected_usd"] > short["projected_usd"]
+    # the cut changes (a save): answered at once from what was read, read again beside it
+    gate.clear()
+    cut = json.loads(edl.read_text())
+    cut["segments"] = cut["segments"] + [dict(cut["segments"][0], **{"in": 4.0, "out": 5.5})]
+    edl.write_text(json.dumps(cut))
+    os.utime(edl, ns=(time.time_ns(), time.time_ns() + 10_000_000))
+    t0 = time.perf_counter()
+    stale = price("warm it up")
+    assert time.perf_counter() - t0 < 0.2 and stale == short
+    gate.set()
+    deadline = time.time() + 10
+    while len(reads) < 2 and time.time() < deadline:
+        time.sleep(0.02)
+    assert len(reads) == 2, "the changed cut was not read again"
+    while server._PRICE_INPUTS["busy"] and time.time() < deadline:
+        time.sleep(0.02)
+    fresh = price("warm it up")
+    assert fresh["projected_usd"] > short["projected_usd"], "the new shot is not in the price"
+    assert len(reads) == 2
+    # another project's clips are never priced: a re-point reads its own
+    server.configure(edl, project["footage"], project["sidecars"], tmp_path / "work2", proxies=False,
+                     visual=tmp_path / "no-visual", assets=project["assets"])
+    price("warm it up")
+    assert len(reads) == 3
+
+
+def test_a_stop_replies_once_its_signals_are_out(tmp_path, project, monkeypatch):
+    """The Stop waited for its tools to die (up to procscope.GRACE_S for one that takes its
+    SIGTERM slowly): 562 ms on Killington. Now it replies once every SIGTERM is sent, the
+    state already `stopped`; the SIGKILL after the grace comes beside it."""
+    import server
+    from roughcut import procscope
+
+    server.configure(None, project["footage"], None, tmp_path / "work", proxies=False,
+                     visual=tmp_path / "no-visual")
+    server.FIRSTPASS.clear()
+    server.INDEXES.clear()
+    scope = procscope.Scope("first pass test")
+    # a tool that ignores its SIGTERM, as a busy encode or a model CLI mid-write can
+    with procscope.active(scope):
+        stubborn = subprocess.Popen([sys.executable, "-c",
+                                     "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                                     "print('up', flush=True); time.sleep(60)"],
+                                    stdout=subprocess.PIPE, text=True)
+    assert stubborn.stdout.readline().strip() == "up"
+    server.FIRSTPASS["t1"] = {"id": "t1", "state": "running", "stage": "index", "scope": scope,
+                              "steps": {k: {"state": "pending"} for k in ("index", "picks", "cut")},
+                              "started": time.time(), "index_job": None}
+    try:
+        t0 = time.perf_counter()
+        r = json.loads(server.api_firstpass_cancel().body)
+        took = time.perf_counter() - t0
+        assert r["state"] == "stopped" and r["stopped"] is True
+        assert took < 0.3, f"the Stop took {took * 1000:.0f} ms to reply"
+        assert server.FIRSTPASS["t1"]["state"] == "cancelled" and scope.cancelled
+        assert stubborn.poll() is None, "killed before the grace: not the stubborn case"
+        assert stubborn.wait(procscope.GRACE_S + 3) is not None      # the SIGKILL beside it
+    finally:
+        if stubborn.poll() is None:
+            stubborn.kill()
+        server.FIRSTPASS.clear()
+
+
+def test_a_gap_is_cut_from_the_bins_black_master(tmp_path, project, monkeypatch):
+    """A gap's black was an encode inside /api/gap (~35 ms a second of black; 587 ms for a
+    gap on a loaded Killington box). With the bin's black master on disk a gap is its head,
+    a stream copy: no encode, the length on the frame grid, black and silent as before."""
+    from fastapi.testclient import TestClient
+    import server
+
+    server.configure(None, project["footage"], None, tmp_path / "work", proxies=False,
+                     visual=tmp_path / "no-visual")
+    monkeypatch.setattr(server, "GAP_MASTER_S", 30.0)
+    assert server.ensure_black_master() is not None
+    runs: list[list[str]] = []
+    real_run = subprocess.run
+
+    def watched(cmd, *a, **kw):
+        # this bin's generated clips' ffmpegs only (other tests' threads may run their own)
+        if isinstance(cmd, list) and cmd and cmd[0] == "ffmpeg" \
+                and str(server.generated_dir()) in " ".join(map(str, cmd)):
+            runs.append(cmd)
+        return real_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(server.subprocess, "run", watched)
+    with TestClient(server.app) as c:
+        t0 = time.perf_counter()
+        r = c.post("/api/gap", json={"seconds": 7.33})
+        took = time.perf_counter() - t0
+    assert r.status_code == 200, r.text
+    g = r.json()
+    assert len(runs) == 1 and "copy" in runs[0] and "libx264" not in runs[0], runs
+    assert not any("lavfi" in x for x in runs[0])
+    print(f"a 7.33 s gap from the master in {took * 1000:.0f} ms")
+    path = server.generated_dir() / g["clip"]
+    probe = json.loads(real_run(["ffprobe", "-v", "error", "-show_entries",
+                                 "stream=codec_type,nb_frames,duration,width,height",
+                                 "-of", "json", str(path)], capture_output=True, text=True).stdout)
+    v = next(s for s in probe["streams"] if s["codec_type"] == "video")
+    assert int(v["nb_frames"]) == 176 and (v["width"], v["height"]) == (server.GEN_W, server.GEN_H)
+    assert any(s["codec_type"] == "audio" for s in probe["streams"])
+    assert g["record"]["duration"] == pytest.approx(176 / server.GEN_FPS, abs=0.01)
+    assert g["record"]["summary"]["generated"] == "generated: black 7.3 s"
+    # past the master's length: the encode, as before
+    runs.clear()
+    with TestClient(server.app) as c:
+        assert c.post("/api/gap", json={"seconds": 31.0}).status_code == 200
+    assert runs and "libx264" in runs[0]
+
+
+def test_a_clips_free_facts_are_one_ffprobe_and_the_list_never_waits_long(tmp_path, project, monkeypatch):
+    """A clip just imported had its free facts probed twice, one ffprobe after the other
+    (length, capture time and telemetry; then the picture's facts), and /api/clips waited
+    up to a second for them: 304-736 ms on Killington right after an import. Now one
+    ffprobe gives both, and the list waits at most CLIP_FACTS_WAIT_S (0.2 s) — a clip
+    still being probed comes with null facts and the board asks again 0.3 s later."""
+    import server
+
+    server.configure(None, project["footage"], None, tmp_path / "work", proxies=False,
+                     visual=tmp_path / "no-visual")
+    deadline = time.time() + 20                       # the configure's own warm-up, done
+    while time.time() < deadline and len(server.STATE.get("clip_facts") or {}) < len(server.footage_clips()):
+        time.sleep(0.05)
+    probes: list[list[str]] = []
+    real_run = subprocess.run
+    clip = server.footage_clips()[0]
+    src = str(server.clip_path(clip))
+
+    def watched(cmd, *a, **kw):
+        # the facts' ffprobes of this clip (not the colour tags' one, queued behind them)
+        if isinstance(cmd, list) and cmd and cmd[0] == "ffprobe" and src in cmd \
+                and any("duration" in str(x) or "codec_name" in str(x) for x in cmd):
+            probes.append(cmd)
+        return real_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(server.subprocess, "run", watched)
+    for d in ("durations", "capture", "telemetry", "clip_facts"):
+        server.STATE.setdefault(d, {}).pop(clip, None)
+    server.MEDIA["facts"].pop(next((k for k in list(server.MEDIA["facts"]) if k[0] == src), None), None)
+    facts = server._probe_clip_facts(clip, server.STATE["footage"])
+    assert len(probes) == 1, f"{len(probes)} ffprobes for one clip's facts: {probes}"
+    assert facts["fps"] and facts["width"] == 320 and facts["codec"] == "h264", facts
+    assert server.STATE["durations"][clip] and server.STATE["capture"][clip]
+    assert server.media_facts(server.clip_path(clip))["vcodec"] == "h264"
+    assert len(probes) == 1, "media_facts probed again"
+    assert server.CLIP_FACTS_WAIT_S <= 0.2
+
+
+def test_the_status_never_ffprobes_a_clip_the_warm_up_has_not_reached(tmp_path, project, monkeypatch):
+    """The first /api/status after a start (or an import) priced the look by every clip's
+    length, ffprobing the ones the facts warm-up had not reached: 300-970 ms on Killington.
+    It reads the lengths known; one not known yet counts a sheet, and the status is read
+    again once it lands (the snapshot's key counts the known lengths)."""
+    import server
+
+    server.configure(None, project["footage"], None, tmp_path / "work", proxies=False,
+                     visual=tmp_path / "no-visual")
+    probes: list[list[str]] = []
+    real_run = subprocess.run
+
+    def watched(cmd, *a, **kw):
+        if isinstance(cmd, list) and cmd and cmd[0] == "ffprobe":
+            probes.append(cmd)
+        return real_run(cmd, *a, **kw)
+
+    deadline = time.time() + 20                       # the configure's own warm-up, done
+    while time.time() < deadline and len(server.STATE.get("clip_facts") or {}) < len(server.footage_clips()):
+        time.sleep(0.05)
+    clip = server.footage_clips()[0]
+    known = server.STATE["durations"].pop(clip)
+    monkeypatch.setattr(server.subprocess, "run", watched)
+    monkeypatch.setattr(server, "load_sidecar", lambda c: {})       # as a clip not heard yet
+    key_before = server._snap_key()
+    v = server.visual_status()
+    assert not probes, probes
+    assert v["pending"] and v["coarse_calls"] >= len(v["pending"])
+    server.STATE["durations"][clip] = known
+    assert server._snap_key() != key_before, "a length landing does not refresh the status"
+
+
+def test_a_request_over_the_budget_says_what_the_process_ran_and_the_load(tmp_path, project, monkeypatch):
+    """An over-budget row names what the whole process ran meanwhile and the box's load, so
+    a request the server worked through (hundreds of ms of CPU) reads apart from one the
+    box starved (a few): the Killington import's rows at load 20-26 were the second kind."""
+    from fastapi.testclient import TestClient
+    import server
+
+    server.configure(None, project["footage"], None, tmp_path / "work", proxies=False,
+                     visual=tmp_path / "no-visual")
+    real = server._price_inputs
+
+    def slow():
+        time.sleep(0.35)                        # waiting, not working
+        return real()
+
+    monkeypatch.setattr(server, "_price_inputs", slow)
+    server.OVER_BUDGET.clear()
+    with TestClient(server.app) as c:
+        assert c.get("/api/assist/price", params={"text": "x"}).status_code == 200
+    rows = [r for r in server.OVER_BUDGET if r["path"] == "/api/assist/price"]
+    assert rows, list(server.OVER_BUDGET)
+    r = rows[-1]
+    assert r["ms"] >= 300 and "load" in r and r["load"] >= 0, r
+    assert 0 <= r["proc_cpu_ms"] < r["ms"] / 2, r       # it slept: little of it was CPU

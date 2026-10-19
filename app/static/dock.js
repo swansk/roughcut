@@ -347,6 +347,76 @@
     + '<g fill="none" stroke="#38383e" stroke-width="4" stroke-linejoin="round">'
     + '<rect x="128" y="66" width="64" height="48" rx="5"/><path d="M128 78h64M142 66v12M160 66v12M178 66v12"/></g></svg>');
   const failed = new Map();      // img → the src that failed
+  /* Posters (wave 15 BUDGET, verdict 11 punch 4): the server cuts a frame it does not have
+   * in the background and never makes a request wait on a 4K original's decode. A frame not
+   * cut yet is answered at once with a stand-in — the clip's nearest still on disk, else a
+   * neutral frame — marked in its Server-Timing (`standin`), never an error. Any poster on
+   * the board (a Project tile or subclip, the monitors' stills, the inspector's, the
+   * filmstrip) that came back a stand-in gets its exact frame the moment it is cut
+   * (posterSoon: probed off-screen, quick at first, then every few seconds while it is still
+   * shown) through `srcset`, so its `src` stays the frame the board asked for and a new `src`
+   * drops it; a still asked `near=1` (the Program's) gets the exact frame as its `src`, as
+   * the Program would put it. */
+  const POSTER_RE = /\/media\/poster\//;
+  const NEAR_RE = /([?&])near=1(&|$)/;
+  const POSTER_TRIES = 60;       // ~2.5 min of quick probes, then the 5 s sweep (retryImages)
+  const standins = new Set();    // poster URLs (absolute) answered with a stand-in, not cut yet
+  const cutNow = new Set();      // ...and cut since: an <img> still showing the stand-in takes it
+  const exactOf = (src) => src.replace(NEAR_RE, (m, a, b) => (b ? a : '')).replace(/[?&]$/, '');
+  const abs = (u) => new URL(u, location.href).href;
+  // the exact frame under a name of its own: never the stand-in this document holds for its URL
+  const cutName = (u) => `${u}${u.includes('?') ? '&' : '?'}cut=1`;
+  function posterCut(img) {
+    const src = img.getAttribute('src') || '';
+    if (NEAR_RE.test(src)) { img.setAttribute('src', exactOf(src)); return; }
+    img._posterFor = src;
+    img.setAttribute('srcset', cutName(src));
+  }
+  function posterSoon(img, k = 0) {
+    const src = img.getAttribute('src') || '';
+    if (!POSTER_RE.test(src) || img.hasAttribute('srcset')) return;
+    if (k === 0 && img._posterSoon === src) return;          // already probing for this picture
+    img._posterSoon = src;
+    img._posterAt = performance.now();
+    const exact = abs(exactOf(src));
+    const still = () => img.isConnected && img.getAttribute('src') === src && img._posterSoon === src
+      && !img.hasAttribute('srcset');
+    fetch(exact).then((r) => r.ok && !r.headers.get('x-roughcut-poster'), () => false).then((cut) => {
+      if (cut) { standins.delete(exact); cutNow.add(exact); }
+      if (!still()) return;
+      if (cut) { posterCut(img); return; }
+      if (k + 1 < POSTER_TRIES) {
+        setTimeout(() => { if (still()) posterSoon(img, k + 1); }, Math.min(3000, 400 + 200 * k));
+      }
+    });
+  }
+  // the stand-ins the server answered, read off each image's Resource Timing entry
+  function posterStandins(list) {
+    let any = false;
+    for (const e of list.getEntries()) {
+      if (POSTER_RE.test(e.name) && (e.serverTiming || []).some((x) => x.name === 'standin')) {
+        standins.add(e.name);
+        cutNow.delete(abs(exactOf(e.name)));
+        any = true;
+      }
+    }
+    if (any) document.querySelectorAll('img[src*="/media/poster/"]').forEach(posterLook);
+  }
+  function posterLook(img) {
+    if (img.hasAttribute('srcset')) return;
+    const shown = img.currentSrc;
+    if (!shown || !POSTER_RE.test(shown)) return;
+    if (cutNow.has(abs(exactOf(shown)))) posterCut(img);
+    else if (standins.has(shown)) posterSoon(img);
+  }
+  // a new src (the board moved the picture on): the exact frame of the old one goes
+  const posterSrcs = new MutationObserver((muts) => muts.forEach((m) => {
+    const img = m.target;
+    if (img._posterFor && img.getAttribute('src') !== img._posterFor) {
+      img._posterFor = null;
+      img.removeAttribute('srcset');
+    }
+  }));
   function onImgError(img) {
     const src = img.getAttribute('src');
     if (!src || src === BLANK) return;
@@ -362,6 +432,7 @@
     delete img.dataset.wait;
     if (img.id === 'monPoster') waitOn('#monWait', false);
     if (img.id === 'srcPoster') waitOn('#srcWait', false);
+    posterLook(img);              // a stand-in this document already holds (no new entry)
   }
   function retryImages() {
     failed.forEach((src, img) => {
@@ -371,6 +442,13 @@
         if (img.getAttribute('src') === BLANK && failed.get(img) === src) img.setAttribute('src', src);
       };
       probe.src = src;
+    });
+    // a poster still on its stand-in after its quick probes: the exact frame, now and then
+    document.querySelectorAll('img[src*="/media/poster/"]:not([srcset])').forEach((img) => {
+      if (standins.has(img.currentSrc) && performance.now() - (img._posterAt || 0) > 4000) {
+        img._posterSoon = null;
+        posterSoon(img, POSTER_TRIES - 1);
+      }
     });
   }
   /* A monitor's "preparing preview…" has more than one reason to be up: its poster still
@@ -395,6 +473,10 @@
     document.addEventListener('load', (e) => {
       if (e.target && e.target.tagName === 'IMG') onImgLoad(e.target);
     }, true);
+    posterSrcs.observe(document, { subtree: true, attributes: true, attributeFilter: ['src'] });
+    try {
+      new PerformanceObserver(posterStandins).observe({ type: 'resource', buffered: true });
+    } catch (e) { /* no Resource Timing: the stand-ins stay until the next paint asks again */ }
     setInterval(retryImages, 5000);
   }
 
@@ -520,12 +602,20 @@
     if (project.cutsSoon) { const soon = project.cutsSoon; project.cutsSoon = null; await soon; }
     // a newly listed clip gets its facts into the board's clips, where one was stubbed
     project.clips.forEach((c) => { if (stubs.has(c.clip)) ensureClip(c.clip, true); });
+    // the Source's clip opened before its facts were in (a clip just imported): its length
+    // and rate now, so its In / Out and `,` work without opening it again
+    if (source.clip && !(Number(source.clip.duration) > 0)) {
+      const fresh = project.clips.find((x) => x.clip === source.clip.clip);
+      if (fresh && Number(fresh.duration) > 0) { source.clip = fresh; source.paint(); source.publish(); }
+    }
     heardSince();
     subsChanged();
     paintProject();
     loadSprites();
     // facts still being probed: ask again in a second; a clip still being indexed: now and then
-    if (j && j.probing) project.timer = setTimeout(loadClips, 1000);
+    // (wave 15 BUDGET: /api/clips waits at most 0.2 s for a just-imported clip's facts, so
+    // the row's length and rate come with the next look, a third of a second on)
+    if (j && j.probing) project.timer = setTimeout(loadClips, 300);
     else if (project.clips.some((c) => c.media === 'building' || c.media === 'queued')) project.timer = setTimeout(loadClips, 5000);
     else if (project.clips.some((c) => !c.analysed || !c.looked)) project.timer = setTimeout(loadClips, 15000);
     // the Source monitor opens on the clip it showed last, else the first one, so there
