@@ -672,3 +672,33 @@ def test_past_its_head_the_shot_plays_on_the_film_clock_and_the_next_one_plays(b
         finally:
             browser.close()
 
+
+def test_a_missing_generated_clip_says_what_is_wrong(building):
+    """Wave 13's open note: a shot on a generated clip whose file is gone (a 404) said
+    "preparing preview…" for ever. It says the media is offline and why."""
+    sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed")
+    edl = json.loads(building["server"].STATE["edl"].read_text(encoding="utf-8"))
+    edl["segments"].insert(1, {"id": "g1", "clip": "gen_black_0123abcd.mp4", "in": 0.0, "out": 1.0,
+                               "why": "a black that is not there"})
+    building["server"].STATE["edl"].write_text(json.dumps(edl), encoding="utf-8")
+    with sync_api.sync_playwright() as pw:
+        browser = pw.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        try:
+            page.goto(building["url"])
+            page.wait_for_function("segs.length === 4 && player.vids.length >= 2", timeout=20000)
+            page.evaluate("cueAt(1, 0.3)")
+            page.wait_for_function("!document.querySelector('#monWait').hidden"
+                                   " && /offline/i.test(document.querySelector('#monWait').textContent)", timeout=5000)
+            line = page.locator("#monWait").inner_text()
+            page.wait_for_timeout(3500)                     # and it stays so: no "preparing" loop
+            again = page.locator("#monWait").inner_text()
+            print("missing generated clip:", line)
+            assert "Media offline" in line and "Black Video" in line and "missing" in line, line
+            assert "preparing" not in again and again == line, again
+            assert not __import__("re").search(r"gen_[a-z]+_[0-9a-f]{6}", line), line
+            assert not [e for e in errors if "Error" in e], errors
+        finally:
+            browser.close()

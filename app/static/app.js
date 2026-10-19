@@ -1477,7 +1477,10 @@ function mediaWaitFor(v) {
   if (v._waitStop) v._waitStop();
   v._waitFor = src;
   v._status = { serves: 'building' };
-  if (!src || !window.dock || typeof dock.mediaWait !== 'function') return;
+  // Not a clip of the bin (a generated clip's /media/generated file, or none at all): no
+  // preview will ever come for it, so the screen says what is wrong, never "preparing".
+  if (!src || !src.startsWith('/media/proxy/')) { mediaOffline(v); return; }
+  if (!window.dock || typeof dock.mediaWait !== 'function') return;
   if (v === liveVideo()) {
     posterUp(v);                           // the poster shows through, not a black box
     waitLine(segs[player.idx], v._status);
@@ -1629,6 +1632,27 @@ function headNext(v, seg, clipT) {
   headHint(v, v.dataset.src, v._head.b - 0.5);
 }
 
+/* A shot whose media no preview will ever be made for — a generated clip whose file is not
+ * in the project (its 404), a clip the bin does not list — said as Premiere says it, with
+ * what is wrong, instead of "preparing preview…" for ever (wave 13's open note). */
+function mediaOffline(v) {
+  v._status = { serves: 'offline' };
+  if (v !== liveVideo() || !segs[player.idx]) return;
+  posterUp(v);
+  waitLine(segs[player.idx], v._status);
+}
+
+function offlineWords(seg) {
+  const c = (P.clips || {})[seg.clip];
+  const name = clipLabel(seg.clip);
+  if (!c) return `Media offline · ${name}: not in this project's bin`;
+  if (c.generated) {
+    return c.missing || !c.proxy ? `Media offline · ${name}: its generated file is missing from this project`
+      : `Media offline · ${name}: its generated file would not open`;
+  }
+  return `Media offline · ${name}: its file would not open`;
+}
+
 /* ---------------------------------------------------------------- offline media
  * Verdict 8 (blocker 2): right after the first pass, a shot whose clip's preview was still
  * being made left the Program plain black for 11.5 s and more, with no word, and Play gave
@@ -1674,6 +1698,7 @@ function frameBack(v) {
 function waitLine(seg, j) {
   const el = $('#monWait span');
   if (!el || !seg) return;
+  if (j && j.serves === 'offline') { el.textContent = offlineWords(seg); return; }
   const ready = j && j.ready && j.serves !== 'building';
   const eta = j && j.eta_s != null ? ` · ~${Math.max(1, Math.round(j.eta_s))} s` : '';
   el.textContent = ready ? `opening ${stem(seg.clip)}…` : `preparing preview… ${stem(seg.clip)}${eta}`;
