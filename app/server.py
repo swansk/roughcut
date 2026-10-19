@@ -12878,17 +12878,74 @@ async def api_assist_preview(request: Request) -> JSONResponse:
     return JSONResponse(await asyncio.to_thread(run))
 
 
+# What the price reads (the cut and the clips, as an ask's prompt has them), kept between
+# asks (wave 15 BUDGET, verdict 11 punch 4: /api/assist/price took 768 ms during a first
+# pass on Killington, every keystroke's pause re-reading ~45 sidecars). Fresh while the
+# cut file and the sidecar / visual folders are unchanged and for PRICE_FRESH_S; past that
+# a price is still answered at once from what was read, and read again beside it.
+PRICE_FRESH_S = 10.0
+_PRICE_INPUTS: dict = {"lock": threading.Lock(), "sig": None, "at": 0.0, "data": None,
+                       "busy": False}
+
+
+def _price_sig() -> tuple:
+    out = []
+    for p in (STATE.get("edl"), STATE.get("sidecars"), STATE.get("visual")):
+        try:
+            st = Path(p).stat()
+            out.append((str(p), st.st_mtime_ns, st.st_size))
+        except (OSError, TypeError):
+            out.append((str(p), None, None))
+    return tuple(out)
+
+
+def _price_read(sig: tuple) -> tuple[dict, dict]:
+    clips, payload = _ask_clips(None, drop_junk=True)
+    data = (clips, assist_state(payload))
+    with _PRICE_INPUTS["lock"]:
+        _PRICE_INPUTS.update(sig=sig, at=time.monotonic(), data=data)
+    return data
+
+
+def _price_inputs() -> tuple[dict, dict]:
+    """(clips, state) for the price: what was read, when it is fresh; read now only when
+    nothing was (the first price after a start); otherwise read again in a thread beside
+    the answer when the inputs changed or went stale."""
+    sig = _price_sig()
+    with _PRICE_INPUTS["lock"]:
+        old = _PRICE_INPUTS["sig"]
+        # another cut or bin is not a stale read of this one
+        data = _PRICE_INPUTS["data"] if old and [x[0] for x in old] == [x[0] for x in sig] else None
+        same = old == sig
+        fresh = same and time.monotonic() - _PRICE_INPUTS["at"] < PRICE_FRESH_S
+        stale = data is not None and not fresh and not _PRICE_INPUTS["busy"]
+        if stale:
+            _PRICE_INPUTS["busy"] = True
+    if data is None:
+        return _price_read(sig)
+    if stale:
+        def again() -> None:
+            try:
+                _price_read(sig)
+            except Exception as exc:  # noqa: BLE001 — the next price reads again
+                print(f"  !! price inputs: {exc}", flush=True)
+            finally:
+                _PRICE_INPUTS["busy"] = False
+        threading.Thread(target=again, daemon=True, name="price inputs").start()
+    return data
+
+
 @app.get("/api/assist/price")
 def api_assist_price(text: str = "", scope: str = "") -> JSONResponse:
     """What an ask would cost before it is sent: the prompt it would build (the cut, the
     clips, the scope, the vocabulary) priced at the role's model — never a model call.
-    `scope` is the JSON of the POST's scope. Declared before /api/assist/{job}."""
+    `scope` is the JSON of the POST's scope. Declared before /api/assist/{job}. The cut and
+    the clips are read once and kept (`_price_inputs`): an estimate, at once."""
     try:
         sc = json.loads(scope) if scope else None
     except ValueError:
         sc = None
-    clips, payload = _ask_clips(None, drop_junk=True)
-    state = assist_state(payload)
+    clips, state = _price_inputs()
     prompt = assistmod.build_prompt(text.strip()[:assistmod.TEXT_MAX] or "…", clean_scope(sc),
                                     state, clips)
     return JSONResponse(assistmod.estimate_cost(prompt))
@@ -13356,6 +13413,8 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
     """
     work = work.expanduser().resolve()
     footage = footage.expanduser().resolve()
+    with _PRICE_INPUTS["lock"]:
+        _PRICE_INPUTS.update(sig=None, data=None)        # another project's clips, never priced
     edl_path = (edl.resolve() if edl is not None
                 else work / "projects" / f"{footage.name}.edl.json")
     created = not edl_path.exists()

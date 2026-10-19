@@ -342,3 +342,68 @@ def test_an_upload_the_disk_refuses_fails_whole_and_leaves_nothing(tmp_path, pro
     up = server.UPLOADS[plan["batch"]]
     assert up["rows"][0]["state"] == "failed" and up["rows"][0]["why"] == "OSError"
     assert not list(tmp_path.rglob("*.part"))
+
+
+# ------------------------------------------------------------------------------ wave 15
+#
+# Verdict 11 punch 4 (lane BUDGET): on Killington, 24 requests over the 300 ms budget in a
+# session — posters (cut from 4K originals inside their requests; test_preview_building),
+# `/api/assist/price` 768 ms, `/api/gap` 587 ms, `/api/firstpass/cancel` 562 ms.
+
+def test_the_price_answers_from_what_it_read_and_reads_again_beside_it(tmp_path, project, monkeypatch):
+    """Every pause in the typing asked /api/assist/price, and each re-read the cut and ~45
+    sidecars (768 ms during a first pass). Now what it read is kept: a second price reads
+    nothing; once the cut changes, the price is still answered at once from what was read,
+    and read again beside it; the words still move the price."""
+    import server
+
+    edl = tmp_path / "edl.json"
+    shutil.copy(project["edl"], edl)
+    server.configure(edl, project["footage"], project["sidecars"], tmp_path / "work", proxies=False,
+                     visual=tmp_path / "no-visual", assets=project["assets"])
+    reads: list[float] = []
+    real = server._ask_clips
+    gate = threading.Event()
+    gate.set()
+
+    def counted(*a, **kw):
+        gate.wait(10)
+        reads.append(time.monotonic())
+        return real(*a, **kw)
+
+    monkeypatch.setattr(server, "_ask_clips", counted)
+
+    def price(text: str) -> dict:
+        return json.loads(server.api_assist_price(text, '{"kind": "sequence"}').body)
+
+    short = price("warm it up")
+    assert len(reads) == 1                                  # nothing kept yet: read now
+    assert short["projected_usd"] > 0 and short["measured"] is False
+    longer = price("warm it up " * 200)
+    assert len(reads) == 1, "a second price re-read the cut and the clips"
+    assert longer["projected_usd"] > short["projected_usd"]
+    # the cut changes (a save): answered at once from what was read, read again beside it
+    gate.clear()
+    cut = json.loads(edl.read_text())
+    cut["segments"] = cut["segments"] + [dict(cut["segments"][0], **{"in": 4.0, "out": 5.5})]
+    edl.write_text(json.dumps(cut))
+    os.utime(edl, ns=(time.time_ns(), time.time_ns() + 10_000_000))
+    t0 = time.perf_counter()
+    stale = price("warm it up")
+    assert time.perf_counter() - t0 < 0.2 and stale == short
+    gate.set()
+    deadline = time.time() + 10
+    while len(reads) < 2 and time.time() < deadline:
+        time.sleep(0.02)
+    assert len(reads) == 2, "the changed cut was not read again"
+    while server._PRICE_INPUTS["busy"] and time.time() < deadline:
+        time.sleep(0.02)
+    fresh = price("warm it up")
+    assert fresh["projected_usd"] > short["projected_usd"], "the new shot is not in the price"
+    assert len(reads) == 2
+    # another project's clips are never priced: a re-point reads its own
+    server.configure(edl, project["footage"], project["sidecars"], tmp_path / "work2", proxies=False,
+                     visual=tmp_path / "no-visual", assets=project["assets"])
+    price("warm it up")
+    assert len(reads) == 3
+
