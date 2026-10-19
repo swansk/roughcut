@@ -382,3 +382,4 @@ def test_a_vignette_that_fades_up_is_checked_once_it_is_up(project, tmp_path):
     pic = next(c for c in res["verify"]["checks"] if c["key"] == "picture_landed")
     assert pic["ok"] is True, pic
     assert res["stats"]["overlay_frames"] <= 20                   # the fades, then one held frame
+    assert res["stats"]["sprites_drawn"] == 1                     # a fade reuses its sprite

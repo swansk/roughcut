@@ -10637,7 +10637,7 @@ def _fx_run_check(entry: progress.Job, e: dict, seg: dict, onset, hz: float) -> 
     stats["s"] = round(time.perf_counter() - t0, 2)
     _fx_check_learn(seg, stats)
     v = res["verify"]
-    v["proof"] = {k: stats[k] for k in ("overlay_frames", "s") if k in stats}
+    v["proof"] = {k: stats[k] for k in ("overlay_frames", "sprites_drawn", "s") if k in stats}
     return v
 
 

@@ -85,7 +85,8 @@ def proof(e: dict, seg: dict, src: Path, d: Path, *, w: int, h: int, fps,
     """The one shot rendered from `src` (its proxy) at w × h, with the effect
     (`proof.mp4`) and without (`base.mp4`), so the checks can measure a difference and
     the human can watch the result in seconds rather than after a whole render.
-    Returns the two paths and `{overlay_frames, base_s, overlay_s, proof_s}`."""
+    Returns the two paths and `{overlay_frames, sprites_drawn, base_s, overlay_s,
+    proof_s}`."""
     d.mkdir(parents=True, exist_ok=True)
     dur = float(seg["out"]) - float(seg["in"])
     vf = (f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
@@ -104,11 +105,12 @@ def proof(e: dict, seg: dict, src: Path, d: Path, *, w: int, h: int, fps,
             dur, "base", on_progress)
     t1 = time.perf_counter()
     evs = fx.events_in_shot(e, seg)
-    drawn = fx.RENDERED["frames"]
+    drawn, sprites = fx.RENDERED["frames"], fx.RENDERED["sprites"]
     on_progress("overlay", 0.0, False)
     extra, graph, vout, aout = fx.part_graph([(e, evs)], w, h, fps, d)
     on_progress("overlay", 1.0, True)
     stats["overlay_frames"] = fx.RENDERED["frames"] - drawn
+    stats["sprites_drawn"] = fx.RENDERED["sprites"] - sprites
     t2 = time.perf_counter()
     fc = f"[0:v]{vf}[vbase];[0:a]{af}[abase]" + (";" + graph if graph else "")
     # the extra inputs sit between the source and `-t`: after `-i` a `-t` is an input

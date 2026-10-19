@@ -660,9 +660,11 @@ def _draw_shape(layer, shape: dict, c, unit: float, t: float = 0.0,
 
 _PAD = 4                     # output px drawn past a window's edge: LANCZOS's reach at 2×
 
-# Frames actually drawn (not linked or looped) by this process: what a proof reports
-# and the tests read (wave 14, verdict 10: a static vignette was 240 identical frames).
-RENDERED = {"frames": 0}
+# Frames composed (not linked or looped) and sprites drawn by this process: what a proof
+# reports and the tests read (wave 14, verdict 10: a static vignette was 240 identical
+# frames). A frame that differs from another only in the sprite's opacity (a fade) reuses
+# its drawn sprite.
+RENDERED = {"frames": 0, "sprites": 0}
 
 
 def _sprite_image(overlay: dict, box_px: float, pose: dict, t: float = 0.0,
@@ -680,6 +682,7 @@ def _sprite_image(overlay: dict, box_px: float, pose: dict, t: float = 0.0,
     centre that holds the window at any angle."""
     from PIL import Image
 
+    RENDERED["sprites"] += 1
     half = box_px * pose["scale"] / 2                         # output px per box unit
     ext = int(math.ceil(half * 2.6 + 3))                      # ±1.5 units, rotated, plus caps
     side = 2 * ext
@@ -753,12 +756,15 @@ def overlay_static(overlay: dict, fps) -> bool:
 
 
 def render_overlay_frame(overlay: dict, w: int, h: int, t: float,
-                         *, anchor: tuple[float, float] = (0.5, 0.5)):
+                         *, anchor: tuple[float, float] = (0.5, 0.5),
+                         sprites: dict | None = None):
     """The full frame (w × h, RGBA) of the sprite at `t` seconds into the effect, at
     `anchor` (fractions of the frame). Geometry: the sprite's box is `overlay.size × w`
     pixels square; shapes are in -1..1 across it; `pose_at(t)` scales, fades, rotates
     and offsets it. A `flash` tints the whole frame for its duration. PIL,
-    anti-aliased (draw at 2× and downsample); only the part inside the frame is drawn."""
+    anti-aliased (draw at 2× and downsample); only the part inside the frame is drawn.
+    `sprites` (a dict the caller keeps across frames): sprites already drawn, by
+    everything but their opacity, so a fade draws its sprite once."""
     from PIL import Image
 
     RENDERED["frames"] += 1
@@ -780,8 +786,19 @@ def render_overlay_frame(overlay: dict, w: int, h: int, t: float,
         left, top = max(0, -x0), max(0, -y0)
         right, bottom = min(2 * ext, w - x0), min(2 * ext, h - y0)
         if right > left and bottom > top:
-            part, _ext, (pl, pt) = _sprite_image(overlay, box_px, pose, t,
-                                                 window=(left, top, right, bottom))
+            window = (left, top, right, bottom)
+            key = (tuple(round(float(pose[k]), 6) for k in ("scale", "rotate", "dx", "dy")),
+                   _frame_key(overlay, t)[2], window)
+            hit = sprites.get(key) if sprites is not None else None
+            if hit is None:
+                hit = _sprite_image(overlay, box_px, {**pose, "opacity": 1.0}, t, window=window)
+                if sprites is not None:
+                    sprites.clear()                      # the previous pose is not coming back
+                    sprites[key] = hit
+            part, _ext, (pl, pt) = hit
+            if pose["opacity"] < 1.0:
+                part = part.copy()
+                part.putalpha(part.getchannel("A").point(lambda v: int(v * pose["opacity"])))
             frame.alpha_composite(part, dest=(x0 + pl, y0 + pt))
     return frame
 
@@ -806,9 +823,10 @@ def render_overlay_frames(overlay: dict, w: int, h: int, fps: float, out_dir: Pa
     out_dir.mkdir(parents=True, exist_ok=True)
     rate = _fps_value(fps)
     paths: list[Path] = []
+    sprites: dict = {}
     for first, count in overlay_runs(overlay, fps):
         p = out_dir / f"f_{first:04d}.png"
-        render_overlay_frame(overlay, w, h, first / rate, anchor=anchor).save(
+        render_overlay_frame(overlay, w, h, first / rate, anchor=anchor, sprites=sprites).save(
             p, "PNG", compress_level=1)
         paths.append(p)
         for i in range(first + 1, first + count):
