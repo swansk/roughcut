@@ -49,6 +49,20 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-19 ~09:10 (box clock): **wave 15 merged except BUDGET**: RERUN2 `d431309` (a grade/effect no longer locks a shot from a
+  re-run; only hand cuts do), FXUNDO `b4a8bb4` (every Designed Effects accept is one Ctrl+Z incl. overlay-only, via
+  `tl.mark`; effects at a shot's first frame pass and draw; Killington vignette green), VIGNETTE `c7ff9e7` (Lumetri Vignette
+  live + exported + keyframeable; Sharpen; the AI's vignette is Lumetri's), POLISH11 `f908385` (Black Video in the checks;
+  chip never cut; the Assistant never squeezes the Source; test_media_first's 2 s head wait was the app's: fixed; two
+  more flakes), PERF5 `4b0d32b` (the perf test asserts frame + worker clocks and rVFC expectedDisplayTime; both gate runs
+  count; frame delivery from the rVFC callback; mix redraw; follower steering). **The stricter perf bar is NOT met yet**
+  (3/5 standalone; real dissolves 2/24 graded, 1/12 ungraded); expect the gate RED on perf until PERF6 lands. PERF5
+  found the judge's pb11.py dissolve plays crossed a plain cut (use lane-perf5/bin/pb11.py, DISSOLVE_AT=k1). Lane rule
+  breaches noted: POLISH11 ran nice-0 burners 06:43-06:46; BUDGET's Killington exports ran nice-0 ffmpeg (load 15-28,
+  08:00-08:55). **PERF6** launched (1920 playhead composites, the first-play WebAudio attach hitch, the cut's buffer
+  swap, the dissolve-cut main-thread stall). Queued: three "edited by hand" strings (server firstpass_state stale line,
+  the cut step, tour.js) now mean "cut by hand"; revise.py `plan_checks` writes gen_ stems (the board renames them);
+  actions.py's "a black slide" vs Premiere's "Black Video"; test_lumetri_ui's two 150 ms bars flake at load 8-12.
 - 2026-10-19 ~06:00 (box clock): **VERDICT 11 FAIL on `18944d0`** (1:9 2:9 3:9 4:9 5:9 6:8 7:8 8:9 9:8 10:7 11:9 12:9 13:9
   14:9 15:8 16:9; the judge's gate GREEN: 1720 passed, 1 flaky, journey 24 no retry; perf counted the after-suite pass at
   load 5.8, the before-suite failed at 7.5). Blockers: dimension 10 at 7 (a Designed Effects accept can't be undone,
