@@ -439,6 +439,16 @@ table.plist .st.ok { color: var(--good); }
 #projList table.plist tr[data-key]:hover td { background: #262629; }
 #projList table.plist tr[data-key].sel td { background: #34343a; color: #fff; }
 .ws-panel.focus #projList table.plist tr[data-key].sel td { background: #2b4f78; }
+/* Premiere's pinned Name (verdict 9, punch 9): every column is in the list, and a panel too
+   narrow for them scrolls them sideways under it; the headings stay on top and move with
+   the body. The pinned cells are opaque (the rows' own colours win: hover, selection), and
+   a shadow marks the edge while columns are scrolled under it. */
+#projList table.plist th[data-col=name], #projList table.plist td.name { position: sticky; left: 0; }
+#projList table.plist td.name { z-index: 1; background: var(--panel); }
+#projList table.plist th { z-index: 2; }
+#projList table.plist th[data-col=name] { z-index: 3; }
+#projList.hscrolled table.plist td.name,
+#projList.hscrolled table.plist th[data-col=name] { box-shadow: 1px 0 0 #38383e, 6px 0 6px -4px rgba(0,0,0,.85); }
 #projList table.plist td.name .n { gap: 3px; }
 #projList table.plist td.name svg { width: 13px; height: 13px; color: #b4b4bd; }
 #projList table.plist td.name .nm { min-width: 0; white-space: nowrap; }
@@ -482,6 +492,9 @@ table.plist .st.ok { color: var(--good); }
                                    padding: 0 4px; border-radius: 2px; background: rgba(0,0,0,.72); color: #e0e0e6;
                                    font-size: 10px; line-height: 15px; font-variant-numeric: tabular-nums; }
 #projList .ptile .thumb .pbadge { position: absolute; right: 3px; top: 3px; }
+/* the hover scrub's frame: the clip's filmstrip sprite cell, drawn over the poster */
+#projList .ptile .thumb canvas.spr { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#projList .ptile .thumb canvas.spr[hidden] { display: none; }
 /* the hover scrub's place in the clip, along the poster's foot */
 #projList .ptile .thumb .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(0,0,0,.55); }
 #projList .ptile .thumb .bar[hidden] { display: none; }

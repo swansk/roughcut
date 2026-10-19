@@ -390,3 +390,15 @@ next judge runs, and the next judge rules it honest or lenient.
   rule, not INTAKE's.** INTAKE decisions 3-4 say the index runs unattended and added footage resumes it; the rule
   added on 2026-10-18 is stricter on spend than that, and the attribution in the bar now says so. No change to the
   bar itself (verdict 9 ruled it honest as a rule; the build does not meet it yet: punch 2).
+
+- 2026-10-18 (wave 13, lanes AIUX and BINLOOK2; logged by the lead): **the screens budget grows by +3 words on the
+  two shot screens (AIUX: the scope chip reads "Shot 1 · CLIP_A", the review's own name for the block) and +6 words
+  on all five board screens (BINLOOK2: the List view keeps all ten of Premiere's columns, scrolled sideways under a
+  pinned Name, so at 1440 it shows Name, Frame Rate and Media Start where it showed Name, Duration and Status)**.
+  Merged and measured: `/` 109, `/ shot` 138, `/ film` 117, `/ fx` 143, `/ jobs` 118 words (each proven exact by
+  lowering it, `/ jobs` again one under on some runs: the limit is the larger count); controls unchanged.
+  More lenient by exactly the measured counts. **Also a measurement change to rule on:** `INVENTORY_JS`'s `inView`
+  no longer counts an element scrolled out of its scroller as in view (the columns past the Project panel's edge
+  are inside the window but unseen; without the rule they added ~58 words). BINLOOK2 measured that on `b7848ec`
+  the new rule gives exactly the old numbers on every screen, so it changes no earlier count; it is stricter on what
+  counts as seen only where something is actually scrolled away.

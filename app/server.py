@@ -8384,6 +8384,7 @@ def _build_claimed(src: Path, dest: Path, orient: str, ev: threading.Event,
                 if dur and dur > 5:      # the measured rate, smoothed, for the next estimate
                     MEDIA["preview_rate"] = round(0.6 * rate + 0.4 * (took / dur), 4)
                 print(f"  preview {dest.stem} ({how}) in {took:.1f}s", flush=True)
+                sprites_landed(dest)             # its Icon-view scrub sprite (BINLOOK2)
         MEDIA["failed"].pop(key, None)
     except (RuntimeError, OSError) as exc:
         if scope is not None and scope.cancelled:
@@ -9535,6 +9536,312 @@ async def api_peaks(stem: str, pps: int = 0, spp: int = 0) -> Response:
         body = await asyncio.to_thread(_peaks_answer, stem, rate)
     return Response(body, media_type="application/json", headers=PEAKS_CACHE)
 
+
+
+# ---------------------------------------------------------------- filmstrip sprites (wave 13 BINLOOK2)
+#
+# Verdict 9, punch 9: Premiere's Icon view scrubs a clip under the pointer at once. The
+# Project panel's scrub stepped through /media/poster stills, a request each (1-3 s apiece
+# on a loaded box, and at 90 % it still showed the 0 s frame). Now each clip gets ONE JPEG:
+# SPRITE_N frames in a SPRITE_COLS-wide grid, SPRITE_W px each, spread over the clip as the
+# scrub reads it (cell k at k / (N - 1) of the way to the last frame), and the tile draws
+# the cell under the pointer: no request while it scrubs (dock.js, "hover scrub").
+#
+# Made once per clip version (keyed, like the peaks, by the original's size and mtime,
+# plus PICTURE_V) by a background worker, never inside a GET: one clip at a time, its
+# ffmpeg in the media walk's own background scope (`media_scope`: nice 19, paused while
+# the Program plays, killed by a Stop like the posters and previews, and with the
+# server), and only while the board makes its pictures in the background at all
+# (proxies on, as the walk; a test or --no-proxies asks with SPRITES["force"]). It
+# reads the cheapest picture the clip has: its proxy, its 360p preview, else the original
+# when a browser could play that as it is (an ordinary phone clip: cheap to decode); a 4K
+# original the media walk will make a preview of waits for it (the preview's build queues
+# the sprite as it lands, `_build_claimed`), and is read itself only when no preview is
+# coming. One frame per ffmpeg, seeked (`-ss` before `-i`) and scaled on the way out as
+# raw RGB, so a 4K HEVC decoder is never held 20 times over; the grid is assembled here
+# and encoded once. GET /api/sprites answers what is built (and queues the rest);
+# /media/sprite/<name> serves a built one, immutable.
+
+SPRITE_N = 20                    # frames a clip is scrubbed through
+SPRITE_COLS = 5                  # the grid's width in cells (4 rows of 5)
+SPRITE_W = 240                   # a cell's width: the Icon view's largest tile at 1x
+SPRITE_Q = 5                     # mjpeg quality scale, as the posters'
+SPRITE_RETRY_S = 300.0           # a failed sprite is tried again after this long
+SPRITE_NAME = re.compile(r"([A-Za-z0-9._-]+)\.(\d+-\d+)\.(v\d+)\.jpg")
+SPRITES: dict = {"lock": threading.Lock(), "pending": [], "waiting": set(), "failed": {},
+                 "thread": None, "mem": {}, "force": None}
+
+
+def sprites_on() -> bool:
+    """Whether sprites are made: with the board's other background pictures (proxies on),
+    unless `SPRITES["force"]` says otherwise (the suite's sprite tests)."""
+    force = SPRITES.get("force")
+    return bool(force) if force is not None else bool(STATE.get("proxies_enabled", True))
+
+
+def sprite_dir() -> Path:
+    """Per bin, under --work, like the posters: disposable."""
+    return STATE["work"] / "sprites" / STATE["footage"].name
+
+
+def sprite_dest(clip: str) -> Path | None:
+    """The sprite of the clip's current version, or None when its file is gone."""
+    try:
+        st = clip_path(clip).stat()
+    except OSError:
+        return None
+    return sprite_dir() / f"{Path(clip).stem}.{st.st_size}-{st.st_mtime_ns}.{PICTURE_V}.jpg"
+
+
+def sprite_info(clip: str) -> dict | None:
+    """What the board needs to draw a built sprite (its URL, the grid, a cell's size, each
+    cell's time), or None while it is not built. Memory first; the sidecar JSON once."""
+    dest = sprite_dest(clip)
+    if dest is None:
+        return None
+    stem = Path(clip).stem
+    with SPRITES["lock"]:
+        hit = SPRITES["mem"].get(stem)
+    if hit is not None and hit[0] == dest:
+        return hit[1]
+    meta = dest.with_suffix(".json")
+    if not (meta.exists() and dest.exists()):
+        return None
+    try:
+        info = json.loads(meta.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    info["url"] = f"/media/sprite/{dest.name}"
+    with SPRITES["lock"]:
+        SPRITES["mem"][stem] = (dest, info)
+    return info
+
+
+def sprite_source(clip: str) -> tuple[Path, bool] | str | None:
+    """The file a clip's sprite is read from and whether it is the original; "wait" while a
+    preview the walk will make is the better source; None when the clip has no file."""
+    stem = Path(clip).stem
+    for p in (STATE["proxy_dir"] / f"{stem}.mp4", preview_path(stem)):
+        if p.exists():
+            return p, False
+    src = clip_path(clip)
+    if not src.exists():
+        return None
+    if browser_playable(src):
+        return src, True
+    if media_state(clip) in ("queued", "building"):
+        return "wait"
+    return src, True
+
+
+def _sprite_frame(src: Path, t: float, original: bool) -> bytes:
+    """One frame of `src` at `t` s, SPRITE_W wide, as raw RGB24 (the poster's rules for an
+    original: the orient override and the HDR tone map). Past the end of a file a hair
+    shorter than the clip, an earlier frame; b"" when there is none."""
+    pre: list[str] = []
+    vf = f"scale={SPRITE_W}:-2,setsar=1,format=rgb24"
+    if original:
+        if STATE.get("orient") == "none":
+            pre = ["-display_rotation", "0"]
+        norm = source_normalise(src)
+        if norm:
+            vf = f"{norm},{vf}"
+    for ss in dict.fromkeys((t, max(0.0, t - 0.3), max(0.0, t - 1.0), 0.0)):
+        r = subprocess.run(
+            ["ffmpeg", "-v", "error", "-nostdin", *pre, "-ss", f"{ss:.3f}", "-i", str(src),
+             "-map", "0:v:0", "-frames:v", "1", "-an", "-sn", "-dn", "-vf", vf,
+             "-f", "rawvideo", "-"], capture_output=True)
+        if r.returncode == 0 and r.stdout:
+            return r.stdout
+    return b""
+
+
+def build_sprite(clip: str) -> str:
+    """Make the clip's sprite (and its JSON) unless it is there: "built", "had", "wait" (a
+    better source is coming) or "gone". Raises RuntimeError when no frame decodes."""
+    import numpy as np
+
+    dest = sprite_dest(clip)
+    if dest is None:
+        return "gone"
+    if dest.exists() and dest.with_suffix(".json").exists():
+        return "had"
+    found = sprite_source(clip)
+    if found is None:
+        return "gone"
+    if found == "wait":
+        return "wait"
+    src, original = found
+    fps = clip_rate(clip) or (media_facts(clip_path(clip)) or {}).get("fps") or 30.0
+    dur = on_clip_grid(clip_duration(clip), fps) or 0.0
+    last = max(0.0, float(dur) - 1.0 / float(fps))
+    times = [round(last * k / (SPRITE_N - 1), 3) for k in range(SPRITE_N)]
+    cells: list[np.ndarray] = []
+    h = 0
+    for t in times:
+        raw = _sprite_frame(src, t, original)
+        if not h and raw:
+            h = len(raw) // (SPRITE_W * 3)
+        if raw and h and len(raw) >= SPRITE_W * h * 3:
+            cells.append(np.frombuffer(raw[: SPRITE_W * h * 3], np.uint8).reshape(h, SPRITE_W, 3))
+        elif cells:
+            cells.append(cells[-1])          # a frame that would not decode: its neighbour
+        else:
+            cells.append(None)               # filled in below, from the first that did
+    first = next((c for c in cells if c is not None), None)
+    if first is None:
+        raise RuntimeError(f"sprite failed for {clip}: no frame decoded from {src.name}")
+    cells = [first if c is None else c for c in cells]
+    rows = -(-SPRITE_N // SPRITE_COLS)
+    grid = np.zeros((rows * h, SPRITE_COLS * SPRITE_W, 3), np.uint8)
+    for k, c in enumerate(cells):
+        r, q = divmod(k, SPRITE_COLS)
+        grid[r * h:(r + 1) * h, q * SPRITE_W:(q + 1) * SPRITE_W] = c
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part.jpg")
+    r = subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-nostdin", "-f", "rawvideo", "-pix_fmt", "rgb24",
+         "-s", f"{SPRITE_COLS * SPRITE_W}x{rows * h}", "-i", "-", "-frames:v", "1",
+         "-q:v", str(SPRITE_Q), "-f", "image2", str(tmp)],
+        input=grid.tobytes(), capture_output=True)
+    if r.returncode != 0 or not tmp.exists() or not tmp.stat().st_size:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"sprite failed for {clip}: {r.stderr[-200:].decode(errors='replace')}")
+    tmp.replace(dest)
+    kind = "original" if original else ("proxy" if src.parent == STATE["proxy_dir"] else "preview")
+    meta = {"n": SPRITE_N, "cols": SPRITE_COLS, "rows": rows, "w": SPRITE_W, "h": h,
+            "duration": dur, "times": times, "from": kind}
+    mtmp = dest.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part.json")
+    mtmp.write_text(json.dumps(meta), encoding="utf-8")
+    mtmp.replace(dest.with_suffix(".json"))        # the JSON last: it says "built"
+    stem = Path(clip).stem
+    for old in dest.parent.glob("*.v*.j*"):                  # an earlier version's
+        m = SPRITE_NAME.fullmatch(old.with_suffix(".jpg").name)
+        if m and m.group(1) == stem and old.name not in (dest.name, dest.with_suffix(".json").name):
+            old.unlink(missing_ok=True)
+    return "built"
+
+
+def sprites_landed(preview: Path) -> None:
+    """A clip's preview landed at `preview` (`_build_claimed`): its sprite is made now if
+    it was waiting for it (or was never asked for)."""
+    tail = f".{PICTURE_V}.mp4"
+    if preview.name.endswith(tail):
+        queue_sprites([preview.name[: -len(tail)]])
+
+
+def queue_sprites(stems: list[str], front: bool = False) -> None:
+    """Have the worker make these clips' sprites (a clip whose sprite waited for its
+    preview is looked at again). Never blocks and never touches the disk."""
+    if not sprites_on():
+        return
+    with SPRITES["lock"]:
+        pend = SPRITES["pending"]
+        for s in (reversed(stems) if front else stems):
+            SPRITES["waiting"].discard(s)
+            if s in pend:
+                if not front:
+                    continue
+                pend.remove(s)
+            if front:
+                pend.insert(0, s)
+            else:
+                pend.append(s)
+        t = SPRITES["thread"]
+        if pend and (t is None or not t.is_alive()):
+            t = SPRITES["thread"] = threading.Thread(target=_sprites_loop, daemon=True,
+                                                     name="sprites")
+            t.start()
+
+
+def _sprites_loop() -> None:
+    while True:
+        with SPRITES["lock"]:
+            if not SPRITES["pending"]:
+                SPRITES["thread"] = None
+                return
+            stem = SPRITES["pending"][0]
+        scope = media_scope()                   # a Stop's (stop_media) as the posters'
+        try:
+            clip = clip_for_stem(stem)
+            if clip is not None:
+                t0 = time.monotonic()
+                # untagged: paused whenever the Program plays (no monitor waits on it)
+                with procscope.active(scope):
+                    how = build_sprite(clip)
+                if how == "wait":
+                    with SPRITES["lock"]:
+                        SPRITES["waiting"].add(stem)
+                elif how == "built":
+                    print(f"  sprite {stem} in {time.monotonic() - t0:.1f}s", flush=True)
+        except Exception as exc:  # noqa: BLE001 — one bad clip must not end the queue
+            if not scope.cancelled:
+                with SPRITES["lock"]:
+                    SPRITES["failed"][stem] = (time.monotonic(), str(exc)[:300])
+                print(f"  !! sprite: {stem}: {exc}", flush=True)
+        finally:
+            with SPRITES["lock"]:
+                if stem in SPRITES["pending"]:
+                    SPRITES["pending"].remove(stem)
+                if scope.cancelled:              # a Stop, or the server going away: the
+                    SPRITES["pending"].clear()   # board's next look asks again
+                    SPRITES["thread"] = None
+                    return
+
+
+def _sprites_answer() -> dict:
+    """Every clip's built sprite; the rest queued (a clip waiting for its preview once its
+    preview or proxy is there or none is coming; a failed one after SPRITE_RETRY_S)."""
+    out: dict = {}
+    todo: list[str] = []
+    waiting = 0
+    now = time.monotonic()
+    for clip in footage_clips():
+        stem = Path(clip).stem
+        info = sprite_info(clip)
+        if info is not None:
+            out[stem] = info
+            continue
+        with SPRITES["lock"]:
+            failed = SPRITES["failed"].get(stem)
+            wait = stem in SPRITES["waiting"]
+        if failed and now - failed[0] < SPRITE_RETRY_S:
+            continue
+        # still waiting while its preview is coming (a proxy or a preview there, or none
+        # coming any more — the walk stopped, the build failed: it is made now)
+        if wait and media_state(clip) in ("queued", "building"):
+            waiting += 1
+            continue
+        todo.append(stem)
+    if not sprites_on():
+        return {"sprites": out, "pending": 0, "waiting": 0, "n": SPRITE_N, "off": True}
+    if todo:
+        queue_sprites(todo)
+    return {"sprites": out, "pending": len(todo), "waiting": waiting, "n": SPRITE_N}
+
+
+@app.get("/api/sprites")
+async def api_sprites() -> JSONResponse:
+    """Every clip's filmstrip sprite that is built: `{"sprites": {stem: {url, n, cols, rows,
+    w, h, duration, times}}, "pending": <clips being made>, "waiting": <clips waiting for
+    their preview>}` (and `"off": true` while none are made: --no-proxies). The rest are
+    queued for the background worker, never made here: the Project panel scrubs a clip
+    through its stills until its sprite is listed."""
+    body = await asyncio.to_thread(_sprites_answer)
+    return JSONResponse(body, headers={"cache-control": "no-store"})
+
+
+@app.get("/media/sprite/{name}")
+def media_sprite(name: str) -> Response:
+    """A built sprite, by the name /api/sprites gave it (its clip's version in it, so it is
+    immutable); 404 for any other name."""
+    m = SPRITE_NAME.fullmatch(Path(name).name)
+    if not m or m.group(3) != PICTURE_V:
+        raise HTTPException(404, f"not found: {Path(name).name}")
+    path = sprite_dir() / m.group(0)
+    if not (path.exists() and path.with_suffix(".json").exists()):
+        raise HTTPException(404, f"not found: {m.group(0)}")
+    return FileResponse(path, media_type="image/jpeg", headers=POSTER_CACHE)
 
 
 # ---------------------------------------------------------------- effects (INTAKE M12)

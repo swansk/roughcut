@@ -513,6 +513,7 @@
     heardSince();
     subsChanged();
     paintProject();
+    loadSprites();
     // facts still being probed: ask again in a second; a clip still being indexed: now and then
     if (j && j.probing) project.timer = setTimeout(loadClips, 1000);
     else if (project.clips.some((c) => c.media === 'building' || c.media === 'queued')) project.timer = setTimeout(loadClips, 5000);
@@ -607,14 +608,18 @@
   // every clip plays (the server serves the original or a preview until the proxy is
   // built), so the state is the index's, not the proxy's
   // heard = the sound is transcribed, looked = the pictures are read, indexed = both
+  // [the cell's word, its colour, the whole sentence its hover and the row's hover say].
+  // Verdict 9 (punch 3): "preview q…" was cut at 1440. Premiere's bin words are short, so
+  // the cell says one word (never ellipsized; test_workspace's overflow check) and the
+  // hover the rest.
   function stateOf(c) {
     // verdict 8: the Program sat black on a clip the bin called "indexed"
-    if (c.media === 'building') return ['preview building', 'wait'];
-    if (c.media === 'queued') return ['preview queued', 'wait'];
-    if (c.analysed && c.looked) return ['indexed', 'ok'];
-    if (c.analysed) return ['heard', 'part'];
-    if (c.looked) return ['looked', 'part'];
-    return ['not indexed', ''];
+    if (c.media === 'building') return ['building', 'wait', 'preview building: the monitors show its poster until it plays; it can be cut now'];
+    if (c.media === 'queued') return ['queued', 'wait', 'preview queued: made in the background; it can be cut now'];
+    if (c.analysed && c.looked) return ['indexed', 'ok', 'indexed: its sound heard and its pictures read'];
+    if (c.analysed) return ['heard', 'part', 'heard: its sound is transcribed, its pictures not read yet'];
+    if (c.looked) return ['looked', 'part', 'looked: its pictures are read, its sound not heard yet'];
+    return ['not indexed', '', 'not indexed: the index has not heard or looked at it yet; it can be cut now'];
   }
   const fpsText = (r) => (r ? `${Number(r).toFixed(Number(r) % 1 ? 2 : 0)} fps` : '');
   // Premiere's Audio Info: "48000 Hz · Stereo" (GET /api/clips' `audio`, the facts probe's)
@@ -760,7 +765,7 @@
   }
 
   function clipItem(c, subs, forced) {
-    const [state, stCls] = stateOf(c);
+    const [state, stCls, stTitle] = stateOf(c);
     const rate = Number(c.fps) || 0;
     const dur = Number(c.duration) || 0;
     const note = clipNote(c);
@@ -769,11 +774,11 @@
     const audio = audioText(c.audio);
     return { type: 'clip', key: `c|${c.clip}`, name: c.clip, c, label: 'violet', rate, fps: rate, tc0,
              start: mt ? mt.sv : 0, end: mt ? mt.ev : lastFrame(dur, rate), sTc: mt && mt.s, eTc: mt && mt.e,
-             dur, w: c.width || 0, h: c.height || 0, audio, state, stCls,
+             dur, w: c.width || 0, h: c.height || 0, audio, state, stCls, stTitle,
              note, shot: c.captured, subs, forced,
              title: [c.clip, [dur ? tcOf(dur, rate) : '', fpsText(rate), c.width ? `${c.width} × ${c.height}` : '', audio]
                .filter(Boolean).join(' · '), mt ? `Media Start ${mt.s} · Media End ${mt.e}` : '',
-               state + (subs.length ? ` · ${nOf(subs.length, 'subclip')}` : ''), note]
+               stTitle + (subs.length ? ` · ${nOf(subs.length, 'subclip')}` : ''), note]
                .filter(Boolean).join('\n') };
   }
 
@@ -787,6 +792,8 @@
              fps: rate, start: mt ? mt.sv : s.in, end: mt ? mt.ev : lastFrame(s.out, rate),
              sTc: mt && mt.s, eTc: mt && mt.e, dur, in: s.in, out: s.out,
              w: parent.w, h: parent.h, audio: parent.audio, state, stCls: s.inCut ? 'ok' : '', note, why: s.why || s.note,
+             stTitle: s.inCut ? 'in cut: the sequence plays this range' : s.mine
+               ? (s.hero ? 'hero: your hero keep' : 'kept: your keep') : 'pick: a pick the first pass made',
              shot: parent.shot,
              title: [`${s.name} — a subclip of ${s.clip}`,
                      `In ${tcOf(s.in, rate)} · Out ${tcOf(lastFrame(s.out, rate), rate)} · ${tcOf(dur, rate)}`,
@@ -818,6 +825,7 @@
     if (p) {
       out.push({ type: 'prop', key: 'p|', cut: 'proposed', name: p.name, label: 'forest', rate, fps: rate,
                  start: 0, end: lastFrame(p.dur, rate), dur: p.dur, state: 'proposed', stCls: 'warn',
+                 stTitle: 'proposed: waiting for your review',
                  note: p.line || nOf(p.n, 'shot'), first: p.first,
                  title: `${p.name} (proposed): ${nOf(p.n, 'shot')} · ${tcOf(p.dur, rate)}\n${p.line ? `${p.line}\n` : ''}`
                    + 'double-click to review it: its shots on the Timeline (the ghost lane), Accept or Discard in the Assistant' });
@@ -830,6 +838,7 @@
       out.push({ type: 'seq', key: `q|${c.path}`, cut: c.path, name: c.name || 'cut', cur: !!c.current,
                  label: 'forest', rate, fps: c.current ? rate : 0, start: 0, end: n ? lastFrame(dur, rate) : 0,
                  dur: n ? dur : 0, n, state: c.current ? 'open' : '', stCls: c.current ? 'ok' : '',
+                 stTitle: c.current ? 'open in the Timeline' : '',
                  note: [n ? nOf(n, 'shot') : 'empty', c.story, c.from ? `copied from ${c.from}` : ''].filter(Boolean).join(' · '),
                  first: live ? live.first : null, shot: c.created,
                  title: `${c.name}: ${n ? `${nOf(n, 'shot')} · ${tcOf(dur, rate)}` : 'empty'}`
@@ -842,12 +851,12 @@
   /* ---------------------------------------------------------- the columns and the sort
    * Premiere's columns in Premiere's order. Every one but Name and Description is a fixed
    * width, as a Premiere bin's are, wide enough for its heading and its longest value
-   * (no cell is ever cut). Name, Duration and Status always show; a wider list adds Frame
-   * Rate, Video Info, Description, Media Start, Media End and Captured, in that order, while
-   * Name keeps NAME_MIN, and Audio Info last, when every other one fits; the rest are in
-   * each row's hover. The defaults (1440: 286 px, 1920:
-   * 382 px) show Name, Duration and Status; below 360 px the duration's heading is
-   * "Duration" (its full name would leave Name too little), above it "Media Duration". */
+   * (no cell is ever cut). Every column is always there (verdict 9, punch 9: at 1440 the
+   * list dropped all but Name, Duration and Status): a panel too narrow for them all
+   * scrolls them sideways under Premiere's pinned Name, the headings with the body; a
+   * wider one gives what the fixed columns leave to Name and Description, Name a little
+   * more. Frame Rate, Video Info and Audio Info wait for a clip that has one (the facts
+   * probe's answer, or a clip with sound). */
   const COLS = {
     name: { k: 'name', h: 'Name' },
     fps: { k: 'fps', h: 'Frame Rate', w: 86, num: true },
@@ -861,29 +870,20 @@
     shot: { k: 'shot', h: 'Captured', w: 120 },
   };
   const COL_ORDER = ['name', 'fps', 'start', 'end', 'dur', 'size', 'audio', 'state', 'note', 'shot'];
-  const COL_MORE = ['fps', 'size', 'note', 'start', 'end', 'shot', 'audio'];
   const NAME_MIN = 150;
   function columns(width, items) {
-    const dur = width < 360 ? { ...COLS.dur, h: 'Duration', w: 78 } : COLS.dur;
-    const on = new Set(['name', 'dur']);
-    let used = NAME_MIN + dur.w;
-    if (width > 220) { on.add('state'); used += COLS.state.w; }
-    for (const k of COL_MORE) {
-      if ((k === 'fps' && !items.some((x) => x.fps)) || (k === 'size' && !items.some((x) => x.w))
-          || (k === 'audio' && !items.some((x) => x.audio))) continue;
-      if (used + COLS[k].w > width) break;
-      on.add(k);
-      used += COLS[k].w;
-    }
-    const cols = COL_ORDER.filter((k) => on.has(k)).map((k) => ({ ...(k === 'dur' ? dur : COLS[k]) }));
-    if (on.has('note')) {
-      // Name and Description share what the fixed columns leave, Name a little more
-      const fixed = cols.reduce((a, c) => a + (c.k === 'name' || c.k === 'note' ? 0 : c.w), 0);
-      cols[0].w = Math.round(clamp((width - fixed) * 0.52, NAME_MIN, 340));
-      cols.find((c) => c.k === 'note').w = 0;
-    }
+    const cols = COL_ORDER.filter((k) => !((k === 'fps' && !items.some((x) => x.fps))
+      || (k === 'size' && !items.some((x) => x.w)) || (k === 'audio' && !items.some((x) => x.audio))))
+      .map((k) => ({ ...COLS[k] }));
+    const fixed = cols.reduce((a, c) => a + (c.k === 'name' || c.k === 'note' ? 0 : c.w), 0);
+    // the pinned Name keeps at least ~45 % of a narrow panel for the columns it scrolls past
+    const least = Math.min(NAME_MIN, Math.max(100, Math.round(width * 0.55)));
+    const name = cols[0], note = cols.find((c) => c.k === 'note');
+    name.w = Math.round(clamp((width - fixed) * 0.52, least, 340));
+    note.w = Math.max(COLS.note.w, width - fixed - name.w);
     return cols;
   }
+  const colsWidth = (cols) => cols.reduce((a, c) => a + c.w, 0);
 
   const collate = (typeof Intl !== 'undefined' && Intl.Collator)
     ? new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }).compare
@@ -960,7 +960,10 @@
     if (k === 'size') return `<td>${it.w && it.h ? `${it.w}×${it.h}` : ''}</td>`;
     if (k === 'audio') return `<td>${esc(it.audio || '')}</td>`;
     // the proposal's status is its badge: it waits for you
-    if (k === 'state') return `<td class="st ${it.stCls || ''}">${it.type === 'prop' ? seqBadge(it) : esc(it.state || '')}</td>`;
+    if (k === 'state') {
+      const t = it.stTitle ? ` title="${esc(it.stTitle)}"` : '';
+      return `<td class="st ${it.stCls || ''}" data-state="${esc(it.state || '')}"${t}>${it.type === 'prop' ? seqBadge(it) : esc(it.state || '')}</td>`;
+    }
     if (k === 'note') return `<td class="note">${ell(esc(it.note || ''))}</td>`;
     return `<td>${capturedText(it.shot)}</td>`;
   }
@@ -983,7 +986,7 @@
 
   // the columns as painted: which, and Name's width to the nearest 24 px (a splitter drag
   // re-lays the list only when that changes)
-  const colsSig = (cols) => cols.map((c) => `${c.k}${c.k === 'name' && c.w ? Math.round(c.w / 24) : ''}`).join();
+  const colsSig = (cols) => cols.map((c) => `${c.k}${c.k === 'name' || c.k === 'note' ? Math.round(c.w / 24) : ''}`).join();
 
   function paintList(box, seqs, clips) {
     const all = seqs.concat(clips);
@@ -1004,8 +1007,15 @@
       rows.push(rowHtml(it, cols, tree));
       if (isOpenClip(it)) it.subs.forEach((s) => rows.push(rowHtml(subItem(s, it), cols, tree)));
     });
-    box.innerHTML = `<table class="plist"><colgroup>${cols.map((c) => `<col${c.w ? ` style="width:${c.w}px"` : ''}>`).join('')}</colgroup>`
+    // the table is as wide as its columns: wider than the panel, it scrolls sideways
+    // inside it (Name pinned), and a repaint (a sort, a poll) keeps where it was scrolled
+    const sl = box.scrollLeft, st = box.scrollTop;
+    box.innerHTML = `<table class="plist" style="width:${colsWidth(cols)}px">`
+      + `<colgroup>${cols.map((c) => `<col style="width:${c.w}px">`).join('')}</colgroup>`
       + `<thead><tr>${head}</tr></thead><tbody>${rows.join('')}</tbody></table>`;
+    if (sl) box.scrollLeft = sl;
+    if (st) box.scrollTop = st;
+    box.classList.toggle('hscrolled', box.scrollLeft > 0);
     return all;
   }
 
@@ -1041,6 +1051,7 @@
       if (isOpenClip(it)) it.subs.forEach((s) => { const x = subItem(s, it); all.push(x); tiles.push(tileHtml(x)); });
     });
     box.innerHTML = `<div class="picons" style="--tile:${project.zoom}px">${tiles.join('')}</div>`;
+    watchTiles();
     return all;
   }
 
@@ -1055,6 +1066,7 @@
     if (!box) return;
     project.dirty = false;
     stopScrub(true);
+    box.classList.remove('hscrolled');
     $$('#projView button').forEach((b) => b.classList.toggle('on', b.dataset.view === project.view));
     const zoom = $('#projZoom');
     if (zoom) { zoom.hidden = project.view !== 'icon'; zoom.value = String(project.zoom); }
@@ -1209,15 +1221,116 @@
   }
 
   /* ---------------------------------------------------------- hover scrub (Icon view)
-   * Premiere scrubs a clip as the pointer crosses its poster. Here a clip is SCRUB_STEPS
-   * stills across its length (the poster route, cached on disk and immutable in the
-   * browser), loaded one at a time — the frame under the pointer first, then the rest —
-   * so a scrub never holds more than one of the board's connections. The poster under
-   * the pointer shows the nearest frame loaded; leaving puts the clip's own poster back. */
+   * Premiere scrubs a clip as the pointer crosses its poster, at once. Each clip has a
+   * filmstrip sprite (verdict 9, punch 9; server.py "filmstrip sprites"): ONE JPEG of its
+   * frames in a grid, made in the background after the clip's poster and preview and
+   * listed by GET /api/sprites. It loads (and decodes) as the tile comes into view, and a
+   * scrub draws the cell under the pointer onto a canvas over the poster: no request, the
+   * frame there the moment the pointer moves. Until a clip's sprite is listed and loaded,
+   * the scrub is SCRUB_STEPS stills across its length (the poster route, cached on disk
+   * and immutable in the browser), loaded one at a time — the frame under the pointer
+   * first, then the rest — so it never holds more than one of the board's connections;
+   * the poster shows the nearest frame loaded. Leaving puts the clip's own poster back. */
   const SCRUB_STEPS = 20;
   const scrub = { tile: null, img: null, c: null, base: '', want: '', busy: false, have: new Set(),
-                  queue: [], bar: null, d: null, dText: '' };
-  const scrubUrl = (c, k) => posterAt(c, (k / (SCRUB_STEPS - 1)) * Math.max(0, Number(c.duration) - 1 / source.fps(c)));
+                  queue: [], bar: null, d: null, dText: '', th: null, f: 0 };
+  // to the hundredth below: the last frame's time rounded up (5.958 → 5.96) is past the
+  // clip's end, where the poster route answers its first frame
+  const scrubUrl = (c, k) => posterAt(c, Math.floor((k / (SCRUB_STEPS - 1))
+    * Math.max(0, Number(c.duration) - 1 / source.fps(c)) * 100) / 100);
+
+  // stem -> {url, n, cols, rows, w, h, times, img, ok}: the sprites /api/sprites lists
+  const sprites = { map: new Map(), timer: 0, io: null };
+  const spriteFor = (c) => (c && sprites.map.get(c.stem || stemOf(c.clip))) || null;
+
+  /* What is built (the server queues the rest, and makes them in the background): asked
+   * with every look at the clips, and again in a moment while some are being made. */
+  async function loadSprites() {
+    clearTimeout(sprites.timer);
+    let j = null;
+    try {
+      const r = await fetch('/api/sprites');
+      if (r.ok) j = await r.json();
+    } catch (e) { /* the next look at the clips asks again */ }
+    if (!j || !j.sprites || typeof j.sprites !== 'object') return;
+    for (const [stem, sp] of Object.entries(j.sprites)) {
+      const have = sprites.map.get(stem);
+      if (!have || have.url !== sp.url) sprites.map.set(stem, { ...sp, img: null, ok: false });
+    }
+    if (project.view === 'icon') watchTiles();
+    if (j.pending > 0) sprites.timer = setTimeout(loadSprites, 2000);
+  }
+
+  // a sprite's image, loaded and decoded once; a scrub already on its clip switches to it
+  function loadSprite(sp) {
+    if (!sp || sp.img) return;
+    const img = new Image();
+    img.decoding = 'async';
+    sp.img = img;
+    const ready = () => {
+      sp.ok = img.naturalWidth > 0;
+      if (sp.ok && scrub.th && spriteFor(scrub.c) === sp) {
+        scrub.queue = [];                 // no more stills for this clip
+        drawCell(scrub.th, sp, scrub.f);
+      }
+    };
+    img.src = sp.url;
+    if (typeof img.decode === 'function') img.decode().then(ready, () => { sp.ok = false; });
+    else { img.onload = ready; img.onerror = () => { sp.ok = false; }; }
+  }
+
+  // the Icon view's tiles load their sprites as they come into view (a long bin never
+  // fetches every sprite at once)
+  function watchTiles() {
+    const box = $('#projList');
+    if (!box || project.view !== 'icon') return;
+    const tiles = $$('#projList .picon[data-clip]');
+    if (!('IntersectionObserver' in window)) {
+      tiles.forEach((t) => loadSprite(spriteFor(clipByName(t.dataset.clip))));
+      return;
+    }
+    if (!sprites.io) {
+      sprites.io = new IntersectionObserver((seen) => seen.forEach((e) => {
+        if (!e.isIntersecting) return;
+        const sp = spriteFor(clipByName(e.target.dataset.clip));
+        if (sp) { loadSprite(sp); sprites.io.unobserve(e.target); }
+      }), { root: box, rootMargin: '240px' });
+    }
+    sprites.io.disconnect();
+    tiles.forEach((t) => { const sp = spriteFor(clipByName(t.dataset.clip)); if (sp && !sp.img) sprites.io.observe(t); });
+  }
+
+  /* The cell for `f` (0..1 across the tile) on the tile's canvas, cropped to the tile's
+   * shape as the poster is (object-fit: cover). False when it could not draw. */
+  function drawCell(th, sp, f) {
+    const img = sp.img;
+    if (!img || !sp.ok || !th.isConnected) return false;
+    let cv = th.querySelector('canvas.spr');
+    if (!cv) {
+      cv = document.createElement('canvas');
+      cv.className = 'spr';
+      cv.setAttribute('aria-hidden', 'true');
+      const pic = th.querySelector('img');
+      th.insertBefore(cv, pic ? pic.nextSibling : th.firstChild);
+    }
+    const dpr = window.devicePixelRatio || 1;
+    const pw = Math.max(1, Math.round(th.clientWidth * dpr)), ph = Math.max(1, Math.round(th.clientHeight * dpr));
+    if (cv.width !== pw || cv.height !== ph) { cv.width = pw; cv.height = ph; }
+    const g = cv.getContext('2d');
+    if (!g) return false;
+    const k = clamp(Math.round(f * (sp.n - 1)), 0, sp.n - 1);
+    const cw = img.naturalWidth / sp.cols, ch = img.naturalHeight / sp.rows;
+    let sw = cw, sh = ch;
+    if (cw / ch > pw / ph) sw = ch * pw / ph; else sh = cw * ph / pw;
+    g.drawImage(img, (k % sp.cols) * cw + (cw - sw) / 2, Math.floor(k / sp.cols) * ch + (ch - sh) / 2, sw, sh, 0, 0, pw, ph);
+    cv.dataset.cell = String(k);
+    cv.hidden = false;
+    // the time under the poster is the frame's own
+    if (scrub.d && Array.isArray(sp.times) && Number.isFinite(sp.times[k])) {
+      scrub.d.textContent = shortTc(tcOf(sp.times[k], scrub.c && scrub.c.fps));
+    }
+    return true;
+  }
 
   function scrubPump() {
     if (scrub.busy || !scrub.tile) return;
@@ -1245,11 +1358,16 @@
     scrub.tile = tile;
     scrub.c = c;
     scrub.img = tile.querySelector('.thumb img');
+    scrub.th = tile.querySelector('.thumb');
     scrub.base = scrub.img ? scrub.img.getAttribute('src') : '';
     scrub.bar = tile.querySelector('.thumb .bar');
     scrub.d = tile.querySelector('.cap .d');
     scrub.dText = scrub.d ? scrub.d.textContent : '';
-    // the rest of the clip, coarse to fine: the ends and the middle first
+    const sp = spriteFor(c);
+    if (sp) loadSprite(sp);
+    // the stills, while there is no sprite: the rest of the clip, coarse to fine (the
+    // ends and the middle first)
+    if (sp && sp.ok) return;
     const order = [];
     for (let step = SCRUB_STEPS - 1; step >= 1; step = Math.floor(step / 2)) {
       for (let k = 0; k < SCRUB_STEPS; k += step) if (!order.includes(k)) order.push(k);
@@ -1263,10 +1381,13 @@
     const t = scrub.tile;
     if (!t) return;
     if (scrub.img && scrub.img.isConnected && scrub.base) scrub.img.setAttribute('src', scrub.base);
+    const cv = t.querySelector('canvas.spr');
+    if (cv) { cv.hidden = true; delete cv.dataset.cell; }
     if (scrub.bar) scrub.bar.hidden = true;
     if (scrub.d) scrub.d.textContent = scrub.dText;
     t.classList.remove('scrubbing');
-    Object.assign(scrub, { tile: null, img: null, c: null, base: '', want: '', queue: [], bar: null, d: null });
+    Object.assign(scrub, { tile: null, img: null, c: null, base: '', want: '', queue: [], bar: null, d: null,
+                           th: null, f: 0 });
     if (!quiet && project.dirty) paintProject();
   }
 
@@ -1281,8 +1402,12 @@
     tile.classList.add('scrubbing');
     const r = th.getBoundingClientRect();
     const f = clamp((e.clientX - r.left) / Math.max(1, r.width), 0, 1);
+    scrub.f = f;
     if (scrub.bar) { scrub.bar.hidden = false; scrub.bar.firstChild.style.width = `${(f * 100).toFixed(1)}%`; }
     if (scrub.d) scrub.d.textContent = shortTc(tcOf(f * Number(c.duration), c.fps));
+    // the sprite's cell, drawn now
+    const sp = spriteFor(c);
+    if (sp && sp.ok && drawCell(th, sp, f)) return;
     scrub.want = scrubUrl(c, Math.round(f * (SCRUB_STEPS - 1)));
     if (scrub.have.has(scrub.want)) { if (scrub.img.getAttribute('src') !== scrub.want) scrub.img.setAttribute('src', scrub.want); }
     else scrubPump();
@@ -1399,6 +1524,9 @@
     };
     document.addEventListener('dragend', dragged, true);
     document.addEventListener('drop', dragged, true);
+    // the pinned Name's edge shadow, while the columns are scrolled under it
+    box.addEventListener('scroll', () => box.classList.toggle('hscrolled', project.view === 'list' && box.scrollLeft > 0),
+                         { passive: true });
     box.addEventListener('pointermove', scrubMove);
     box.addEventListener('pointerleave', () => stopScrub());
     $('#projQ').addEventListener('input', (e) => { project.q = e.target.value; paintProject(); });
@@ -1986,7 +2114,10 @@
                // the sorted column and its direction ({col, dir: 1 | -1}); the items as painted
                sort: () => ({ ...project.sort }),
                items: () => [...(project.items || new Map()).values()].map((it) => ({
-                 type: it.type, key: it.key, name: it.name, in: it.in, out: it.out, dur: it.dur, cur: !!it.cur })) },
+                 type: it.type, key: it.key, name: it.name, in: it.in, out: it.out, dur: it.dur, cur: !!it.cur })),
+               // a clip's filmstrip sprite as the Icon view holds it (null: not listed yet)
+               sprite: (stem) => { const sp = sprites.map.get(stem);
+                 return sp ? { url: sp.url, n: sp.n, cols: sp.cols, rows: sp.rows, times: sp.times, ok: !!sp.ok } : null; } },
     source,
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

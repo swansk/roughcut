@@ -12,7 +12,7 @@ started the board's wait. Now:
   * Play plays past it on the film clock (the playhead runs, the poster and the line stay)
     and the next shot plays, as Premiere plays past offline media; when the preview lands
     the shot plays;
-  * the Project bin's Status reads "preview building" for that clip;
+  * the Project bin's Status reads "building" for that clip (its hover: "preview building…");
   * the media walk builds the cut's previews first, in film order, before any range proxy
     (the queue-order number below).
 
@@ -217,9 +217,9 @@ def test_a_seek_onto_a_building_shot_shows_its_poster_and_the_wait_line(building
             # the Project bin's Status for that clip
             page.wait_for_function(
                 "(() => { const r = document.querySelector('#projList [data-clip=\"CLIP_B.MP4\"]');"
-                " return r && r.textContent.includes('preview building'); })()", timeout=10000)
+                " return r && !!r.querySelector('td.st[data-state=building][title^=\"preview building\"]'); })()", timeout=10000)
             row_a = page.locator('#projList [data-clip="CLIP_A.MP4"]').inner_text()
-            assert "preview building" not in row_a, row_a
+            assert "building" not in row_a, row_a
             assert not [e for e in errors if "Error" in e], errors
         finally:
             browser.close()
@@ -297,7 +297,7 @@ def test_the_preview_landing_puts_the_shot_on_screen(building):
                 " && v.dataset.src.includes('CLIP_B'); })()", timeout=15000)
             page.wait_for_function(
                 "(() => { const r = document.querySelector('#projList [data-clip=\"CLIP_B.MP4\"]');"
-                " return r && !r.textContent.includes('preview building'); })()", timeout=15000)
+                " return r && !r.querySelector('td.st[data-state=building]'); })()", timeout=15000)
             assert not [e for e in errors if "Error" in e], errors
         finally:
             browser.close()

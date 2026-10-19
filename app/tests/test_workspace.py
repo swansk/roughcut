@@ -205,7 +205,8 @@ def test_the_project_panel_lists_the_footage_and_opens_a_clip_in_the_source_moni
     assert rows.count() == 3
     assert [r.split()[0] for r in rows.all_inner_texts()] == ["CLIP_A.MP4", "CLIP_B.MP4", "CLIP_C.MP4"]
     head = pg.locator("#projList th").all_inner_texts()
-    assert head[:2] == ["Name", "Duration"] and "Status" in head, head
+    # Premiere's columns, every one (a narrow panel scrolls them sideways: wave 13 BINLOOK2)
+    assert head[:2] == ["Name", "Frame Rate"] and "Media Duration" in head and "Status" in head, head
     assert pg.evaluate("tl.tc(6)") in rows.first.inner_text()     # durations in timecode
     # Premiere's count: every item in the bin, its three clips and its one sequence (wave 12
     # BINLOOK: the cut is a sequence in the bin)
@@ -386,13 +387,16 @@ OVERFLOW_JS = """() => {
 
 
 def _clips_with_one_unindexed(route):
-    """/api/clips as the server says it, with CLIP_C not yet indexed: the longest word
-    the Project panel's Status column has to fit."""
+    """/api/clips as the server says it, with CLIP_C not yet indexed (the longest word the
+    Project panel's Status column has to fit), CLIP_A's preview building and CLIP_B's
+    queued: verdict 9 (punch 3) read "preview q…" there at 1440, so every Status word is
+    in this screen, and the overflow check reads each whole."""
     resp = route.fetch()
     body = resp.json()
     for c in body.get("clips", []):
         if c["clip"] == "CLIP_C.MP4":
             c["analysed"] = False
+        c["media"] = {"CLIP_A.MP4": "building", "CLIP_B.MP4": "queued"}.get(c["clip"], c.get("media"))
     route.fulfill(response=resp, body=json.dumps(body), content_type="application/json")
 
 
@@ -412,6 +416,8 @@ def test_no_chrome_is_cut_off(live_server, project, browser, size):
     pg.wait_for_function("document.querySelectorAll('#progress .job').length === 2", timeout=10000)
     assert pg.locator("#progress").is_visible()
     assert "not indexed" in pg.locator("#projList tr.row", has_text="CLIP_C").inner_text()
+    states = pg.evaluate("[...document.querySelectorAll('#projList tr.row td.st')].map(td => td.textContent)")
+    assert sorted(states) == ["building", "not indexed", "queued"], states
     # badges on two of Effect Controls' neighbours, the widest that tab strip gets
     pg.evaluate("dock.badge('fx', 3); dock.badge('ask', 1)")
     pg.locator("#tl .blk").first.click()

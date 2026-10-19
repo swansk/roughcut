@@ -97,6 +97,9 @@ def live_server(project, tmp_path_factory):
     server.configure(project["edl"], project["footage"], project["sidecars"],
                      work, proxies=False, assets=project["assets"])
     server.ensure_proxies([f"{s}.MP4" for s in project["stems"]])
+    # the clips' filmstrip sprites are made here although the suite runs with proxies off
+    # (wave 13 BINLOOK2; test_icon_view_scrubs_from_the_clips_sprite_at_once)
+    server.SPRITES["force"] = True
     port = _free_port()
     srv = uvicorn.Server(uvicorn.Config(server.app, host="127.0.0.1", port=port, log_level="error"))
     thread = threading.Thread(target=srv.run, daemon=True)
@@ -110,6 +113,13 @@ def live_server(project, tmp_path_factory):
     srv.should_exit = True
     thread.join(timeout=10)
     project["edl"].write_text(original, encoding="utf-8")
+    # no sprite ffmpeg runs on into the next module
+    server.SPRITES["force"] = None
+    for _ in range(600):
+        t = server.SPRITES["thread"]
+        if not server.SPRITES["pending"] and (t is None or not t.is_alive()):
+            break
+        time.sleep(0.05)
 
 
 @pytest.fixture
@@ -266,8 +276,8 @@ DF_FACTS = {"CLIP_C.MP4": {"fps": 29.97, "duration": 5.0, "tc_start": "00:00:59;
 def test_media_start_and_end_follow_the_cameras_timecode(live_server, project, browser):
     """BINLOOK's ask (wave 12 SMALL3): Media Start is the clip's source timecode, Media End
     its last frame (start + duration − 1 frame, as Premiere writes it), drop-frame counted
-    as drop-frame; a subclip's are its In and Out on that timecode; Audio Info shows only
-    once the list is wide enough for every other column."""
+    as drop-frame; a subclip's are its In and Out on that timecode; Audio Info is a column at
+    any width (wave 13 BINLOOK2: a narrow list scrolls its columns sideways)."""
     def facts(route):
         resp = route.fetch()
         body = resp.json()
@@ -297,10 +307,11 @@ def test_media_start_and_end_follow_the_cameras_timecode(live_server, project, b
     assert pg.evaluate(OVERFLOW_JS) == []
     assert pg.errors == []
     pg.context.close()
-    # a narrower list: every other column still, and no Audio Info
-    pg = _open(browser, live_server, project, size=(2560, 1300), proj=0.42)
+    # a narrower list: every column still, Audio Info too, scrolled sideways
+    pg = _open(browser, live_server, project, size=(2560, 1300), proj=0.2)
     heads = pg.locator("#projList th").all_inner_texts()
-    assert "Captured" in heads and "Audio Info" not in heads, heads
+    assert "Captured" in heads and "Audio Info" in heads, heads
+    assert pg.evaluate("(() => { const b = document.querySelector('#projList'); return b.scrollWidth > b.clientWidth; })()")
     pg.context.close()
 
 
@@ -308,9 +319,10 @@ def test_media_start_and_end_follow_the_cameras_timecode(live_server, project, b
 def test_the_list_is_dense_aligned_and_walked_with_the_arrows(live_server, project, browser, size):
     pg = _open(browser, live_server, project, size=size, picks=True, proposal=True)
     pg.wait_for_selector("#projList [data-cut=proposed]", timeout=10000)
-    # the default columns: Name, the duration, Status (test_workspace's narrow rule)
+    # every one of Premiere's columns, at the default widths too (verdict 9, punch 9)
     head = pg.locator("#projList th").all_inner_texts()
-    assert head[0] == "Name" and head[-1] == "Status" and head[1] in ("Duration", "Media Duration"), head
+    assert head == ["Name", "Frame Rate", "Media Start", "Media End", "Media Duration", "Video Info",
+                    "Audio Info", "Status", "Description", "Captured"], head
     # Premiere's dense rows; numbers right-aligned
     h = pg.evaluate("[...document.querySelectorAll('#projList tr[data-key]')].map(r => r.getBoundingClientRect().height)")
     assert h and all(19 <= x <= 23 for x in h), h
@@ -361,7 +373,13 @@ FRAME_JS = """(sel) => { const img = document.querySelector(sel);
 
 
 def test_icon_view_scrubs_a_clip_under_the_pointer_and_sizes_with_the_slider(live_server, project, browser):
-    pg = _open(browser, live_server, project, size=(1920, 1080))
+    """Before a clip's sprite is listed (GET /api/sprites answered empty here), the scrub
+    steps through the poster route's stills; test_icon_view_scrubs_from_the_clips_sprite
+    is the scrub once it is."""
+    pg = _open(browser, live_server, project, size=(1920, 1080), wait=False)
+    pg.route("**/api/sprites", lambda r: _json(r, {"sprites": {}, "pending": 0, "waiting": 0, "n": 20}))
+    pg.reload()
+    pg.wait_for_selector("#projList [data-clip]", timeout=15000)
     assert not pg.locator("#projZoom").is_visible()            # the slider is the posters'
     pg.locator("[data-testid=project-view-icon]").click()
     assert pg.evaluate("dock.project.view()") == "icon"
@@ -414,6 +432,201 @@ def test_icon_view_scrubs_a_clip_under_the_pointer_and_sizes_with_the_slider(liv
     pg.locator("[data-testid=project-view-list]").click()
     assert pg.evaluate("dock.project.view()") == "list"
     assert pg.locator("#projList tr.row").count() == 3 and not pg.locator("#projZoom").is_visible()
+    assert pg.errors == []
+    pg.context.close()
+
+
+# The scrub from the sprite, timed on the page's own clock: when the pointer moved (the
+# thumb's capture listener, before dock.js's), when the canvas held the cell for it, and
+# the start of the animation frame AFTER the one that painted it (the frame is on screen
+# by then: an upper bound); the canvas's pixels each time.
+SCRUB_WATCH = """(sel) => {
+  const th = document.querySelector(sel);
+  window.__scrub = { moves: [], shown: [] };
+  th.addEventListener('pointermove', (e) => { window.__scrub.moves.push(e.timeStamp); }, true);
+  new MutationObserver(() => {
+    const cv = th.querySelector('canvas.spr');
+    if (!cv || cv.hidden || cv.dataset.cell === undefined) return;
+    const at = performance.now(), cell = Number(cv.dataset.cell);
+    requestAnimationFrame(() => requestAnimationFrame((ts) => window.__scrub.shown.push({ cell, at, next: ts })));
+  }).observe(th, { subtree: true, attributes: true, attributeFilter: ['data-cell', 'hidden'] });
+}"""
+
+CANVAS_PX = """(sel) => { const cv = document.querySelector(sel);
+  if (!cv || cv.hidden) return null;
+  const c = document.createElement('canvas'); c.width = 32; c.height = 18;
+  const g = c.getContext('2d'); g.drawImage(cv, 0, 0, 32, 18);
+  return Array.from(g.getImageData(0, 0, 32, 18).data); }"""
+
+# a sprite cell's pixels, drawn straight from the sprite image (32×18, as CANVAS_PX)
+CELL_PX = """async ([url, k, cols, rows]) => { const img = new Image(); img.src = url; await img.decode();
+  const cw = img.naturalWidth / cols, ch = img.naturalHeight / rows;
+  const c = document.createElement('canvas'); c.width = 32; c.height = 18;
+  const g = c.getContext('2d'); g.drawImage(img, (k % cols) * cw, Math.floor(k / cols) * ch, cw, ch, 0, 0, 32, 18);
+  return Array.from(g.getImageData(0, 0, 32, 18).data); }"""
+
+
+def _mad(a, b) -> float:
+    return sum(abs(x - y) for x, y in zip(a, b)) / max(1, len(a))
+
+
+@pytest.mark.parametrize("size", [(1440, 900), (1920, 1080)], ids=lambda s: f"{s[0]}x{s[1]}")
+def test_icon_view_scrubs_from_the_clips_sprite_at_once(live_server, project, browser, size):
+    """Verdict 9, punch 9: "moving across a tile changes the shown frame within 50 ms at 5
+    positions", and never the 0 s frame at 90 %. The clip's sprite (made in the background
+    once the board listed the clip) is loaded with the tile in view; each move draws its
+    cell under the pointer with no request."""
+    pg = _open(browser, live_server, project, size=size)
+    pg.locator("[data-testid=project-view-icon]").click()
+    pg.wait_for_function("(() => { const s = dock.project.sprite('CLIP_A'); return !!s && s.ok; })()", timeout=60000)
+    sp = pg.evaluate("dock.project.sprite('CLIP_A')")
+    assert sp["n"] == 20 and sp["url"].startswith("/media/sprite/CLIP_A."), sp
+    tile = "#projList .picon[data-clip='CLIP_A.MP4']"
+    pg.evaluate(SCRUB_WATCH, f"{tile} .thumb")
+    poster = pg.evaluate(FRAME_JS, f"{tile} .thumb img")
+    first_cell = pg.evaluate(CELL_PX, [sp["url"], 0, sp["cols"], sp["rows"]])
+    asked = []
+    pg.on("request", lambda r: asked.append(r.url) if "/media/" in r.url else None)
+    box = pg.locator(f"{tile} .thumb").bounding_box()
+    y = box["y"] + box["height"] / 2
+    shown, ms, drawn, pix = [], [], [], []
+    # five places across the tile, each in the middle of its cell's span (the last ~90 %)
+    for i, want in enumerate((2, 6, 10, 13, 17)):
+        f = want / (sp["n"] - 1)
+        pg.mouse.move(box["x"] + box["width"] * f, y)
+        pg.wait_for_function(f"window.__scrub.shown.some((s) => s.cell === {want}) && window.__scrub.moves.length > {i}",
+                             timeout=3000)
+        got = pg.evaluate(f"""(() => {{ const s = window.__scrub, m = s.moves[s.moves.length - 1];
+            const hit = s.shown.find((x) => x.cell === {want} && x.at >= m - 0.5);
+            return hit ? {{ cell: hit.cell, ms: hit.next - m, drawn: hit.at - m }} : null; }})()""")
+        assert got is not None, (f, pg.evaluate("window.__scrub"))
+        shown.append(got["cell"])
+        ms.append(round(got["ms"], 1))
+        drawn.append(round(got["drawn"], 1))
+        pix.append(pg.evaluate(CANVAS_PX, f"{tile} .thumb canvas.spr"))
+        # the time under the poster is the frame's own
+        assert pg.locator(f"{tile} .cap .d").inner_text() != ""
+    print(f"\n{size[0]}: cells {shown}, pointer move → cell drawn (ms): {drawn}, → on screen by: {ms}")
+    assert shown == [2, 6, 10, 13, 17], shown
+    assert all(x <= 50.0 for x in ms), ms
+    # five different frames, none of them the clip's poster, and at 90 % not the first frame
+    assert all(p is not None for p in pix)
+    for a in range(5):
+        for b in range(a + 1, 5):
+            assert _mad(pix[a], pix[b]) > 4.0, (a, b, _mad(pix[a], pix[b]))
+    assert _mad(pix[4], first_cell) > 10.0 and _mad(pix[4], [int(x) for x in poster.split(",")]) > 10.0
+    # the canvas covers the poster while it scrubs
+    cv = pg.locator(f"{tile} .thumb canvas.spr").bounding_box()
+    assert abs(cv["width"] - box["width"]) < 1 and abs(cv["height"] - box["height"]) < 1, (cv, box)
+    assert not [u for u in asked if "/media/poster/" in u or "/media/sprite/" in u], asked
+    # leaving: the clip's poster again, no canvas
+    pg.mouse.move(5, 5)
+    pg.wait_for_function(f"document.querySelector(\"{tile} .thumb canvas.spr\").hidden", timeout=3000)
+    assert "6:00" in pg.locator(f"{tile} .cap").inner_text()
+    assert pg.errors == []
+    pg.context.close()
+
+
+# ---------------------------------------------------------------- the Status column (verdict 9, punch 3)
+
+def _every_status(route):
+    resp = route.fetch()
+    body = resp.json()
+    for c in body.get("clips", []):
+        c["media"] = {"CLIP_A.MP4": "building", "CLIP_B.MP4": "queued"}.get(c["clip"], c.get("media"))
+        if c["clip"] == "CLIP_C.MP4":
+            c["analysed"] = c["looked"] = False
+    route.fulfill(response=resp, body=json.dumps(body), content_type="application/json")
+
+
+@pytest.mark.parametrize("size", [(1440, 900), (1920, 1080)], ids=lambda s: f"{s[0]}x{s[1]}")
+def test_every_status_reads_whole_and_its_hover_says_the_rest(live_server, project, browser, size):
+    """"preview q…" at 1440 (verdict 9): every Status is one short word, Premiere-style, and
+    the cell's hover says the whole of it."""
+    pg = _open(browser, live_server, project, size=size, picks=True, proposal=True, wait=False)
+    pg.route("**/api/clips", _every_status)
+    pg.reload()
+    pg.wait_for_selector("#projList tr.row td.st[data-state=building]", timeout=15000)
+    pg.wait_for_selector("#projList [data-cut=proposed]", timeout=10000)
+    for tw in pg.locator("#projList [data-tw]").all():
+        tw.click()
+    pg.wait_for_selector("#projList tr.sub", timeout=5000)
+    cells = pg.evaluate("""() => [...document.querySelectorAll('#projList tr[data-key] td.st')].map((td) => ({
+        key: td.parentElement.dataset.key, text: td.textContent.trim(), title: td.title,
+        sw: td.scrollWidth, cw: td.clientWidth }))""")
+    by = {c["key"]: c for c in cells}
+    assert by["c|CLIP_A.MP4"]["text"] == "building" and by["c|CLIP_A.MP4"]["title"].startswith("preview building"), by
+    assert by["c|CLIP_B.MP4"]["text"] == "queued" and by["c|CLIP_B.MP4"]["title"].startswith("preview queued"), by
+    assert by["c|CLIP_C.MP4"]["text"] == "not indexed" and by["c|CLIP_C.MP4"]["title"].startswith("not indexed"), by
+    assert by["p|"]["text"] == "proposed" and by["p|"]["title"].startswith("proposed"), by
+    assert [c["text"] for c in cells if c["key"].startswith("q|")] == ["open"], cells
+    subs = {c["text"] for c in cells if c["key"].startswith("s|")}
+    assert subs and subs <= {"pick", "kept", "hero", "in cut"}, subs
+    # every one whole, in its column
+    assert all(c["sw"] <= c["cw"] + 0.5 for c in cells), [c for c in cells if c["sw"] > c["cw"] + 0.5]
+    assert all(c["title"] for c in cells if c["text"]), cells
+    # the row's hover says it whole too
+    assert "preview building" in pg.locator("#projList tr.row[data-clip='CLIP_A.MP4']").get_attribute("title")
+    assert pg.evaluate(OVERFLOW_JS) == []
+    assert pg.errors == []
+    pg.context.close()
+
+
+# ---------------------------------------------------------------- the columns scroll (verdict 9, punch 9)
+
+SCROLL_JS = """() => { const box = document.querySelector('#projList'), t = box.querySelector('table.plist');
+  const r = (el) => { const b = el.getBoundingClientRect(); return { l: b.left, r: b.right }; };
+  const th = (k) => box.querySelector(`th[data-col=${k}]`);
+  const td = (k) => box.querySelector(`tr.row[data-clip='CLIP_A.MP4'] td:nth-child(${[...th(k).parentElement.children].indexOf(th(k)) + 1})`);
+  return { box: r(box), cw: box.clientWidth, sw: box.scrollWidth, left: box.scrollLeft, table: t.offsetWidth,
+           name: r(th('name')), nameTd: r(box.querySelector("tr.row[data-clip='CLIP_A.MP4'] td.name")),
+           fps: r(th('fps')), fpsTd: r(td('fps')), shot: r(th('shot')), shotTd: r(td('shot')),
+           scrolled: box.classList.contains('hscrolled') }; }"""
+
+
+@pytest.mark.parametrize("size", [(1440, 900), (1920, 1080)], ids=lambda s: f"{s[0]}x{s[1]}")
+def test_the_list_keeps_premieres_columns_scrolled_sideways_under_a_pinned_name(live_server, project, browser, size):
+    """Verdict 9, punch 9: "at 1440 the List view has >= 6 columns reachable by horizontal
+    scroll". Every column is in the list at the default width, the panel scrolls them
+    sideways, Name stays pinned at the left, the headings move with the body, and a sort
+    keeps the place."""
+    pg = _open(browser, live_server, project, size=size, wait=False)
+    pg.route("**/api/clips", _faked_facts)
+    pg.reload()
+    pg.wait_for_selector("#projList tr.row", timeout=15000)
+    heads = pg.locator("#projList th").all_inner_texts()
+    assert len(heads) >= 6 and heads[:4] == ["Name", "Frame Rate", "Media Start", "Media End"], heads
+    assert "Video Info" in heads and "Media Duration" in heads and "Status" in heads, heads
+    a = pg.evaluate(SCROLL_JS)
+    assert a["sw"] > a["cw"] + 100 and a["table"] == a["sw"], a          # wider than the panel: it scrolls
+    assert a["left"] == 0 and not a["scrolled"]
+    assert abs(a["name"]["l"] - a["box"]["l"]) < 1.5 and abs(a["nameTd"]["l"] - a["box"]["l"]) < 1.5, a
+    assert a["shot"]["l"] > a["box"]["r"], a                               # Captured is past the edge
+    # the page itself never scrolls sideways
+    assert pg.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    # scrolled to the far end: Name still at the left, every heading over its column
+    pg.evaluate("document.querySelector('#projList').scrollLeft = 1e6")
+    pg.wait_for_function("document.querySelector('#projList').classList.contains('hscrolled')", timeout=2000)
+    b = pg.evaluate(SCROLL_JS)
+    assert b["left"] == a["sw"] - a["cw"], b
+    assert abs(b["name"]["l"] - b["box"]["l"]) < 1.5 and abs(b["nameTd"]["l"] - b["box"]["l"]) < 1.5, b
+    for k in ("fps", "shot"):
+        assert abs(b[k]["l"] - b[f"{k}Td"]["l"]) < 0.5, (k, b)              # the headings scroll with the body
+        assert abs((a[k]["l"] - b[k]["l"]) - b["left"]) < 1.5, (k, a, b)
+    assert b["shot"]["r"] <= b["box"]["r"] + 1, b                          # the last column in reach
+    # Name is over the columns scrolled under it: the point just inside its right edge is Name's
+    hit = pg.evaluate("""() => { const n = document.querySelector("#projList tr.row[data-clip='CLIP_A.MP4'] td.name").getBoundingClientRect();
+        const el = document.elementFromPoint(n.right - 3, n.top + n.height / 2); return el && !!el.closest('td.name'); }""")
+    assert hit
+    # a sort from a scrolled heading: sorted, and still scrolled where it was
+    pg.locator("#projList th[data-col=shot]").click()
+    assert pg.evaluate("dock.project.sort()") == {"col": "shot", "dir": 1}
+    assert _clip_order(pg) == _expect("shot", 1)
+    assert pg.evaluate("document.querySelector('#projList').scrollLeft") == b["left"]
+    pg.locator("#projList th[data-col=shot]").click()
+    assert _clip_order(pg) == _expect("shot", -1)
+    # no cell is cut, scrolled or not
+    assert pg.evaluate(OVERFLOW_JS) == []
     assert pg.errors == []
     pg.context.close()
 
