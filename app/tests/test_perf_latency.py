@@ -908,3 +908,49 @@ def test_the_shot_after_a_short_one_rolls_at_the_films_rate(live_server):
             good += 1
     assert good >= 2, plays
 
+
+def test_the_canvas_follows_the_live_buffer_after_a_cue_that_found_none(live_server):
+    """grade.js follows the live buffer's frames by a frame callback that setShot arms on the
+    buffer live at that moment. One that came while no buffer was live (the poster up over a
+    buffer with no frame yet; a cue's swap still waiting) armed nothing, and app.js showLive
+    skips setShot for the shot the canvas already shows (wave 15 PERF6): the graded canvas then
+    froze while the shot played, until the next cut (the speed test, ~1 play in 30: 1.04-1.15 s
+    with no graded frame at a play's start). The callback is armed again when the buffer is
+    live again (showLive) or plays (its 'play')."""
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(live_server)
+            page.wait_for_function("window.grade && grade.ready && segs.length === 4", timeout=15000)
+            got = []
+            for via in ("showLive", "play"):
+                page.evaluate("cueAt(0, segs[0].in + 0.3)")
+                page.wait_for_function("liveVideo() && liveVideo().readyState >= 3 && !liveVideo().seeking"
+                                       " && document.querySelector('#gradeCanvas.on')", timeout=20000)
+                page.wait_for_timeout(300)
+                # setShot while no buffer is live: the callback is armed on nothing
+                page.evaluate("""() => { const lv = liveVideo();
+                    player.vids.forEach((v) => v.classList.remove('live'));
+                    grade.setShot(grade.shot);
+                    lv.classList.add('live'); }""")
+                assert page.evaluate("grade.rides") is None
+                if via == "showLive":
+                    page.evaluate("showLive()")
+                d0 = page.evaluate("grade.draws")
+                page.keyboard.press("Space")
+                page.wait_for_timeout(1000)
+                d1 = page.evaluate("grade.draws")
+                rides = page.evaluate("grade.rides === liveVideo().id")
+                page.keyboard.press("Space")
+                got.append({"via": via, "draws": d1 - d0, "rides": rides})
+            assert errors == [], errors
+        finally:
+            browser.close()
+    print("\nFOLLOW", got, flush=True)
+    for g in got:
+        # a second of a 29.97 proxy: a graded frame per video frame (a loaded box drops some)
+        assert g["draws"] >= 15, got
+        assert g["rides"], got

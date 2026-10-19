@@ -816,6 +816,7 @@ onmessage = (e) => {
     keys: 0,                 // LUT records are keyed by a serial (renderer textures)
     gen: 0,                  // bumps per setShot / invalidate: a late fetch is ignored
     frameGen: 0,             // bumps per re-arm of the frame callback
+    rides: null,             // the video the frame callback is armed on (armFrames), or null
     epoch: 0,                // bumps per invalidate: a fetch from before it is not cached
     drawReq: 0,              // the pending coalesced draw (drawSoon), a rAF id
     draws: 0,                // frames drawn (tests read it): in worker mode, when it says so
@@ -1327,9 +1328,11 @@ onmessage = (e) => {
   function armFrames() {
     const v = live();
     const gen = ++G.frameGen;
+    G.rides = v || null;
     if (!v) return;
     const again = () => {
-      if (gen !== G.frameGen || v !== live()) return;
+      if (gen !== G.frameGen) return;
+      if (v !== live()) { G.rides = null; return; }
       if (G.worker && !G.drawReq && !G.mix && !G.mixZone && playerPlaying() && !v.paused && !nearCut(v)) settle();
       else drawSoon();
       if ('requestVideoFrameCallback' in v) v.requestVideoFrameCallback(again);
@@ -1337,6 +1340,20 @@ onmessage = (e) => {
     };
     if ('requestVideoFrameCallback' in v) v.requestVideoFrameCallback(again);
     else requestAnimationFrame(again);
+  }
+
+  /* (wave 16 PERF7, verdict 12 punch 3) The frame callback rides the live video, or it is armed
+   * again. It is armed by setShot only, on the video that is live at that moment; one that came
+   * while no buffer was live (the poster up over a buffer with no frame yet, posterUp; a cue's
+   * buffer swap still waiting) armed nothing, and showLive skips setShot for the shot the canvas
+   * already shows (wave 15 PERF6): the canvas then drew only on media events while the shot
+   * played, until the next cut's setShot (the speed test, 1 play in ~30 on base and head alike:
+   * 1.04-1.15 s with no graded frame at a play's start while the live buffer played every one).
+   * Called on the live video's 'play' and by app.js showLive; nothing when it rides it already. */
+  function follow() {
+    const v = live();
+    if (!v || G.rides === v) return;
+    armFrames();
   }
 
   /* A dissolve's other half follows too (wave 15 PERF5, verdict 11 punch 9): while the canvas
@@ -1641,6 +1658,7 @@ onmessage = (e) => {
           // playing in a visible tab, the frame callback draws every frame already: a
           // timeupdate draw on top of it was a second upload four times a second
           if (ev === 'timeupdate' && !v.paused && !document.hidden) return;
+          if (ev === 'play') follow();
           settle();
         });
       });
@@ -1701,6 +1719,9 @@ onmessage = (e) => {
     get lut() { return G.lut; },
     toggle,
     setShot,
+    follow,
+    // (a record) the video the frame callback rides, or null
+    get rides() { return G.rides ? G.rides.id : null; },
     prefetch,
     invalidate,
     preview,

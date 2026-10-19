@@ -1451,6 +1451,8 @@ function showLive() {
   shownShot.id = id;
   shownShot.v = lv;
   if (g && !same) g.setShot(id);
+  // (wave 16 PERF7) the same shot: the canvas follows this buffer's frames, armed if it was not
+  else if (g && typeof g.follow === 'function') g.follow();
 }
 const shownShot = { id: null, v: null };   // what showLive last gave the grade
 
