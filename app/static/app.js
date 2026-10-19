@@ -2057,7 +2057,10 @@ function programSync(filmT) {
   const proposal = window.tlLanes && typeof tlLanes.mode === 'function' && tlLanes.mode() === 'proposal'
     && !player.playing;
   // V1's eye: the pair, the grade and the rest poster go dark; V2 still draws over black.
-  const v1 = proposal || progTrack('V1').eye !== false ? '' : 'hidden';
+  // Parked past the film's end (a click on the ruler there), the Program is black, as
+  // Premiere's: the last shot's frame stood there before (wave 13 SMALL4's note).
+  const past = !player.playing && !proposal && t > tl.total() + 0.5 / ((tl.gridRate && tl.gridRate()) || 30);
+  const v1 = !past && (proposal || progTrack('V1').eye !== false) ? '' : 'hidden';
   [...player.vids, $('#gradeCanvas'), $('#monPoster')].forEach((el) => {
     if (el && el.style.visibility !== v1) el.style.visibility = v1;
   });
