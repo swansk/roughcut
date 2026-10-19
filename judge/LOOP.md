@@ -49,6 +49,15 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-19 ~15:30 (box clock): **VERDICT 12 FAIL on `992ca33`** (1:9 2:9 3:9 4:9 5:8 6:7 7:8 8:9 9:8 10:8 11:9 12:9 13:9
+  14:9 15:8 16:9; the judge's gate GREEN, both perf runs passed, journey slowest loop hold 20 ms). Blockers: dimension 6
+  at 7 (Sharpen plays at 5-7 fps: an SVG filter in effects.js `vfxLook`); K2 + K3 (Karl's). Verified PERF5's pb11 claim:
+  real dissolves now 0/24 graded, 0/12 ungraded inside the mix. Ruling: the 2026-10-19 speed-bar entry honest in substance,
+  lenient in wording (it hid that the page-clock canvas assertion was dropped) -> said plainly in a new log entry.
+  Verdict 11's punch: done 2 5 6 7 9; partly 3 4 8; not done 1 (Karl's yes), 10. **Wave 16** (judge/WAVE16.md) from
+  `e049951`: VFXPLAY (2), PERF7 (3, 10a), MARKERS (4), AIHONEST (5, 6), SRVBUDGET2 (7, 10b), LAYOUT2 (8, 9, 10c). Every
+  lane told: no nice-0 load except VFXPLAY/PERF7's own measurements. FOR-KARL updated to 992ca33. Karl's 8766 restart
+  still waits for his yes (punch 1).
 - 2026-10-19 ~13:30 (box clock): **wave 15 fully merged**: BUDGET `f6866d9` (posters never cut in a request: stand-ins +
   `srcset` swap; price/gap/cancel cheap; `gc.freeze()`; the yield thread reads /proc children; the gate's journey line
   watches the loop; fresh imports play within 10 s 6/6 with an ETA within 2x), lead `f4c1789` ("cut by hand"), PERF6

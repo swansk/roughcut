@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **Loop state: verdict 12 and wave 16's six lanes** (judge/LOOP.md).
 - **Redesign verdict 12: FAIL, 15 of 16 at 8-9, the judge's gate GREEN in both perf runs** (`judge/verdict-12.md` on 992ca33): dimension 6 at 7 (Sharpen plays at 5-7 fps); real dissolves 0/24 graded, 0/12 ungraded inside the mix; K2, K3 open. Rubric log: the page-clock canvas assertion was removed (lenient part, said plainly now). FOR-KARL updated; wave 16 plan in judge/WAVE16.md.
 - **Loop state: wave 15 merged; the gate's perf line GREEN in both runs under the stricter bar; judge 12 launched** (judge/LOOP.md).
 - **Three test expectations wave 15 made stale** (the lead's gate on 1de6024 had them BROKEN): test_preview_orientation asks again until a poster is the frame, not BUDGET's stand-in (`x-roughcut-poster`); test_projects' interval prices stub `clip_duration_known` too, since the status prices from lengths it already knows. 17 + 13 passed.
