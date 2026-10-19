@@ -844,3 +844,113 @@ def test_three_buffers_park_both_files_after_a_short_shot_and_a_better_proxy_goe
             assert errors == [], errors
         finally:
             browser.close()
+
+
+# ---------------------------------------------------------------- wave 16 PERF7 (verdict 12 punch 3)
+
+ROLL_JS = """() => {
+  window.__rate = [];
+  player.vids.forEach((v) => {
+    if (v.__rate7) return;
+    v.__rate7 = true;
+    for (const e of ['play', 'ratechange']) v.addEventListener(e, () => window.__rate.push({
+      t: performance.now(), v: v.id, e, r: v.playbackRate, live: v.classList.contains('live'),
+      ct: v.currentTime }));
+  });
+}"""
+
+
+def test_the_shot_after_a_short_one_rolls_at_the_films_rate(live_server):
+    """The buffer parked for the shot after the 0.4 s one starts its preroll on the short
+    shot's own clock (app.js preroll), while that buffer rolls for its cut, at the film's rate,
+    and goes on screen at the second cut with no rate change there. It used to start only once
+    the short shot was on screen, where 0.4 s left less than its lead and a start: it always
+    ran at 1.1-1.3x and its rate went back at the cut, a pipeline call on the picture's first
+    frames (the speed test's second cut held 66.7-100 ms by the frame callbacks). Three plays;
+    a start that comes more than a frame late on a loaded box may still run faster (by design),
+    so two of the three must be at the film's rate throughout."""
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(live_server)
+            page.wait_for_function("player.vids.length === 3 && segs.length === 4 && window.grade && grade.ready",
+                                   timeout=15000)
+            plays = []
+            for _ in range(3):
+                page.evaluate("cueAt(0, segs[0].out - 1.0)")
+                page.wait_for_function(
+                    "liveVideo() && liveVideo().readyState >= 3 && !liveVideo().seeking"
+                    " && [1, 2].every((k) => { const b = upcomingVideo(k); return b && b.readyState >= 2 && !b.seeking; })",
+                    timeout=20000)
+                third = page.evaluate("upcomingVideo(2).id")
+                page.evaluate(ROLL_JS)
+                page.keyboard.press("Space")
+                page.wait_for_function("player.idx >= 2", timeout=10000)
+                page.wait_for_timeout(300)
+                page.keyboard.press("Space")
+                ev = [e for e in page.evaluate("window.__rate") if e["v"] == third]
+                plays.append({"third": third, "ev": ev, "cuts": page.evaluate(
+                    "(player.cutLog || []).slice(-2).map(({ t, ...c }) => c)")})
+            assert errors == [], errors
+        finally:
+            browser.close()
+    print("\nROLL", json.dumps(plays), flush=True)
+    good = 0
+    for p in plays:
+        starts = [e for e in p["ev"] if e["e"] == "play"]
+        # it prerolled (one start, before it was the picture) and went on screen at the cut
+        assert starts and not starts[0]["live"], p
+        assert p["cuts"][-1]["buf"] == p["third"] and p["cuts"][-1]["rolled"], p
+        if abs(starts[0]["r"] - 1) < 1e-3 and not any(e["e"] == "ratechange" for e in p["ev"]):
+            good += 1
+    assert good >= 2, plays
+
+
+def test_the_canvas_follows_the_live_buffer_after_a_cue_that_found_none(live_server):
+    """grade.js follows the live buffer's frames by a frame callback that setShot arms on the
+    buffer live at that moment. One that came while no buffer was live (the poster up over a
+    buffer with no frame yet; a cue's swap still waiting) armed nothing, and app.js showLive
+    skips setShot for the shot the canvas already shows (wave 15 PERF6): the graded canvas then
+    froze while the shot played, until the next cut (the speed test, ~1 play in 30: 1.04-1.15 s
+    with no graded frame at a play's start). The callback is armed again when the buffer is
+    live again (showLive) or plays (its 'play')."""
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(live_server)
+            page.wait_for_function("window.grade && grade.ready && segs.length === 4", timeout=15000)
+            got = []
+            for via in ("showLive", "play"):
+                page.evaluate("cueAt(0, segs[0].in + 0.3)")
+                page.wait_for_function("liveVideo() && liveVideo().readyState >= 3 && !liveVideo().seeking"
+                                       " && document.querySelector('#gradeCanvas.on')", timeout=20000)
+                page.wait_for_timeout(300)
+                # setShot while no buffer is live: the callback is armed on nothing
+                page.evaluate("""() => { const lv = liveVideo();
+                    player.vids.forEach((v) => v.classList.remove('live'));
+                    grade.setShot(grade.shot);
+                    lv.classList.add('live'); }""")
+                assert page.evaluate("grade.rides") is None
+                if via == "showLive":
+                    page.evaluate("showLive()")
+                d0 = page.evaluate("grade.draws")
+                page.keyboard.press("Space")
+                page.wait_for_timeout(1000)
+                d1 = page.evaluate("grade.draws")
+                rides = page.evaluate("grade.rides === liveVideo().id")
+                page.keyboard.press("Space")
+                got.append({"via": via, "draws": d1 - d0, "rides": rides})
+            assert errors == [], errors
+        finally:
+            browser.close()
+    print("\nFOLLOW", got, flush=True)
+    for g in got:
+        # a second of a 29.97 proxy: a graded frame per video frame (a loaded box drops some)
+        assert g["draws"] >= 15, got
+        assert g["rides"], got

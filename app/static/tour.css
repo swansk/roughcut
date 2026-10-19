@@ -59,6 +59,11 @@
 /* still while the Program plays (tour.js tick): a breathing box-shadow repaints the board
    on every display frame */
 .rc-tour-ring.still { animation: none; }
+/* (wave 16 PERF7) and from the play's first frame: app.js sets body.rc-playing in the Space's
+   own task, the tick above comes up to 120 ms later — at 1920 the breathing glow made every
+   display frame a redraw of the whole board (1915x1011, 10-35 ms each, traced) through the
+   play's first frames, where the speed test's live buffer dropped them */
+body.rc-playing .rc-tour-ring { animation: none; }
 @media (prefers-reduced-motion: reduce) { .rc-tour-ring { animation: none; transition: none; } }
 
 /* ------------------------------------------------------------ the AI hover card */
