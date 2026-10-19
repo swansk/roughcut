@@ -363,3 +363,32 @@ def test_each_new_clip_gets_one_line_and_the_plan_decides_the_verb():
                                        "run could not use it.")
     assert by["KX_07.MP4"]["line"] == "Left out new clip KX_07 (no reason given)."
     assert [r["clip"] for r in rows] == ["KX_10.MP4", "KX_05.MP4", "KX_03.MP4", "KX_07.MP4"]
+
+
+def test_a_new_clips_note_never_repeats_the_lines_verdict():
+    """Verdict 10, punch 9: Killington's re-run read "Left out new clip KX_10: Left out: it
+    looks like a duplicate of CLIP_10 (same length, same transcript)": the model's note
+    opened with the verdict the board's line already says. Its own verdict words go."""
+    from roughcut import firstpass
+
+    segs = [{"clip": "CLIP_10.MP4", "in": 0, "out": 1, "why": "the run"},
+            {"clip": "KX_07.MP4", "in": 0, "out": 1, "why": "Used in shot 2: the wide"}]
+    said = [{"clip": "KX_10.MP4", "used": False,
+             "note": "Left out: it looks like a duplicate of CLIP_10 (same length, same transcript)"},
+            {"clip": "KX_05.MP4", "used": False, "note": "Not used — Left out: off the story."},
+            {"clip": "KX_03.MP4", "used": False, "note": "Left out:"},
+            {"clip": "KX_04.MP4", "used": False, "note": "Leftover snow: nothing usable"}]
+    rows = firstpass.new_clip_rows(segs, ["KX_10.MP4", "KX_05.MP4", "KX_03.MP4", "KX_04.MP4",
+                                          "KX_07.MP4"], said)
+    by = {r["clip"]: r for r in rows}
+    assert by["KX_10.MP4"]["line"] == ("Left out new clip KX_10: it looks like a duplicate of "
+                                       "CLIP_10 (same length, same transcript).")
+    assert by["KX_10.MP4"]["note"].startswith("it looks like")
+    assert by["KX_05.MP4"]["line"] == "Left out new clip KX_05: off the story."
+    # a note that is only the verdict is no note
+    assert by["KX_03.MP4"]["line"] == "Left out new clip KX_03 (no reason given)."
+    # words that only look like one stay
+    assert by["KX_04.MP4"]["line"] == "Left out new clip KX_04: Leftover snow: nothing usable."
+    assert by["KX_07.MP4"]["line"] == "Used new clip KX_07 in shot 2: the wide."
+    for r in rows:
+        assert r["line"].lower().count("left out") <= 1 and r["line"].lower().count("used") <= 1, r

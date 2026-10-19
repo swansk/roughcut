@@ -24,6 +24,7 @@ edit, so a hook on each gesture would see nothing a diff does not.
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 
@@ -500,13 +501,35 @@ def rejected_lines(left: list[dict]) -> list[str]:
 # reason from the model when it agrees with the plan, else the board's own words.
 
 
+# The model's note can open with the verdict the board's line already words from the plan
+# (verdict 10: "Left out new clip KX_10: Left out: it looks like a duplicate of CLIP_10").
+# Its own verdict words in front of a colon or a dash ("Left out:", "Not used —", "Used in
+# shot 7:", "Left out new clip KX_10:") are dropped; the sentence after them stays.
+_NOTE_VERDICT = re.compile(
+    r"^\s*(?:left\s+(?:it\s+)?out|not\s+used|unused|skipped|excluded|dropped|omitted"
+    r"|used|kept|included)"
+    r"(?:\s+(?:the\s+)?(?:new\s+)?clip(?:\s+[\w.-]+)?)?"
+    r"(?:\s+(?:it\s+)?in\s+shots?\s+\d+(?:\s*(?:,|and|&)\s*\d+)*)?"
+    r"\s*(?::|\u2014|\u2013|\s-\s)\s*", re.I)
+
+
+def note_body(note) -> str:
+    """A new clip's note without a verdict of its own in front ("Left out: x" → "x");
+    a note that is only a verdict is no note ("")."""
+    text = " ".join(str(note or "").split())
+    while (m := _NOTE_VERDICT.match(text + " ")):
+        text = text[m.end():].strip()
+    return text
+
+
 def new_clip_rows(segments: list[dict], new: list[str], said: list[dict] | None = None,
                   unavailable: dict[str, str] | None = None) -> list[dict]:
     """Per clip new since the last pass: `{clip, name, used, shots, note, source, line}`.
     `shots` are the 1-based positions of the proposal's shots that use it; `note` is the
     model's sentence (`source` "model") when its `used` matches the plan, else the
     used shot's own `why` ("shot"), or why the re-run could not use it ("unavailable":
-    not heard yet, confirmed junk), else None ("none")."""
+    not heard yet, confirmed junk), else None ("none"). A note never repeats the line's
+    verdict ("Left out: …", `note_body`)."""
     by = {}
     for x in said or []:
         if isinstance(x, dict) and x.get("clip"):
@@ -517,16 +540,16 @@ def new_clip_rows(segments: list[dict], new: list[str], said: list[dict] | None 
                  if isinstance(s, dict) and s.get("clip") == c]
         m = by.get(c)
         note, source = None, "none"
-        if m and bool(m.get("used")) == bool(shots) and str(m.get("note") or "").strip():
-            note, source = str(m["note"]).strip(), "model"
+        if m and bool(m.get("used")) == bool(shots) and note_body(m.get("note")):
+            note, source = note_body(m["note"]), "model"
         elif shots:
-            why = next((str(s.get("why") or "").strip() for s in segments
+            why = next((note_body(s.get("why")) for s in segments
                         if isinstance(s, dict) and s.get("clip") == c
-                        and str(s.get("why") or "").strip()), "")
+                        and note_body(s.get("why"))), "")
             if why:
                 note, source = why, "shot"
         elif (unavailable or {}).get(c):
-            note, source = unavailable[c], "unavailable"
+            note, source = note_body(unavailable[c]), "unavailable"
         row = {"clip": c, "name": clip_name(c), "used": bool(shots), "shots": shots,
                "note": note, "source": source}
         row["line"] = new_clip_line(row)
