@@ -1079,7 +1079,10 @@
     const clip = clipOf(seg.clip);
     if (isGap(seg)) {
       b.querySelector('.name').textContent = '';
-      b.title = `gap · ${tc(filmLen)} of empty film — select it and ripple delete`
+      // its name as Effect Controls and the Program's readout say it (verdict 11, punch 8:
+      // the block's hover said "gap" over Effect Controls' "Black Video")
+      const name = window.rcClipName ? window.rcClipName(seg.clip) : 'Black Video';
+      b.title = `${name} · ${tc(filmLen)}, a gap in the sequence — select it and ripple delete`
         + ` (X or ${keyLabel('⇧')}Del) to close it`;
       return;
     }

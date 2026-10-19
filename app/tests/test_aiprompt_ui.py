@@ -329,11 +329,13 @@ def test_the_scope_chip_follows_the_selection_then_in_out_then_the_source(live_s
     pg.wait_for_function(f"document.querySelector('{SCOPE}').innerText.trim().startsWith('In/Out')", timeout=3000)
     s = pg.evaluate("rcAI.scope()")
     assert s["kind"] == "range" and abs(s["in"] - 0.5) < 0.05 and abs(s["out"] - 2.5) < 0.05, s
-    # the In/Out reads as its timecodes, the ruler's (verdict 9, punch 7), whole
-    want = pg.evaluate("(s) => `In/Out ${tl.tc(s.in)}–${tl.tc(s.out)}`", s)
-    assert want.startswith("In/Out 00:00:00:") and _scope_text(pg) == want, (want, _scope_text(pg))
+    # the In/Out reads as its two times, short enough to be whole (verdict 11, punch 8: two
+    # timecodes read "In/Out 00:00:00:00-00:00:0…"); its hover has the ruler's timecodes
+    assert _scope_text(pg) == "In/Out 0:00–0:02", _scope_text(pg)
     assert pg.evaluate("(s) => { const l = document.querySelector(s + ' .aip-scope-l');"
                        " return l.scrollWidth <= l.clientWidth; }", SCOPE), "the In/Out chip is cut"
+    hover = pg.locator(SCOPE).get_attribute("title")
+    assert pg.evaluate("(s) => `${tl.tc(s.in)} to ${tl.tc(s.out)}`", s) in hover, hover
     # no marks, the Source monitor in use → its clip
     pg.evaluate("tl.setSeqIn(null); tl.setSeqOut(null)")
     pg.locator("#projList tr.row", has_text="CLIP_C").click()
@@ -349,6 +351,78 @@ def test_the_scope_chip_follows_the_selection_then_in_out_then_the_source(live_s
     pg.wait_for_function(f"document.querySelector('{SCOPE}').innerText.trim() === 'Sequence'", timeout=3000)
     assert pg.errors == []
     _close(pg)
+
+
+CHIP_WHOLE_JS = """(s) => { const c = document.querySelector(s), l = c.querySelector('.aip-scope-l');
+  const fe = c.closest('.aip-field'), f = fe.getBoundingClientRect(), b = c.getBoundingClientRect();
+  return {text: l.textContent, whole: l.scrollWidth <= l.clientWidth + 0.5,
+          inside: b.left >= f.left - 0.5 && b.right <= f.right + 0.5, w: Math.round(b.width),
+          field: Math.round(f.width), kids: [...fe.children].map(k => [k.className.baseVal ?? k.className,
+            Math.round(k.getBoundingClientRect().width)])}; }"""
+
+
+@pytest.mark.parametrize("size", [(1440, 900), (1280, 800), (1024, 768)], ids=lambda s: f"{s[0]}x{s[1]}")
+def test_the_scope_chip_is_never_cut_short(live_server, project, browser, size):
+    """Verdict 11, punch 8: the chip read "In/Out 00:00:00:00-00:00:0…". Whatever the scope
+    and however narrow the Timeline (Selects open beside it, a small window), the chip's
+    words are whole: its own form where it fits ("In/Out 0:01–0:04", "Shot 1 · CLIP_A"),
+    else a shorter one ("In/Out", "Shot 1"), never an ellipsis; the whole scope is its hover."""
+    pg = _open(browser, live_server, project, size)
+    try:
+        for selects in (False, True):
+            pg.evaluate("(on) => dock.open(on ? 'bin' : 'project', {remember: false, focus: false})", selects)
+            pg.wait_for_timeout(250)
+            for set_scope, full, short in (
+                    ("tl.select([]); tl.setSeqIn(1.0); tl.setSeqOut(4.5)", "In/Out 0:01–0:04", "In/Out"),
+                    ("tl.setSeqIn(1.2); tl.setSeqOut(1.8)", "In/Out 0:01.2–0:01.8", "In/Out"),
+                    ("tl.setSeqIn(null); tl.setSeqOut(null); tl.select(['aip0000001'])",
+                     "Shot 1 · CLIP_A", "Shot 1")):
+                pg.evaluate(set_scope)
+                end = time.monotonic() + 3
+                while time.monotonic() < end:
+                    got = pg.evaluate(CHIP_WHOLE_JS, SCOPE)
+                    if got["text"] in (full, short):
+                        break
+                    pg.wait_for_timeout(50)
+                where = (size, "Selects" if selects else "Project", got)
+                assert got["text"] in (full, short), where
+                assert got["whole"] and got["inside"] and "…" not in got["text"], where
+                if size[0] >= 1440 and not selects:
+                    assert got["text"] == full, where          # room for the whole form
+                if got["text"] == short:            # the whole scope is the hover
+                    hover = pg.locator(SCOPE).get_attribute("title")
+                    assert "In/Out: 00:00:01" in hover or "shot 1 (CLIP_A)" in hover, (where, hover)
+            pg.evaluate("tl.select([])")
+        assert pg.errors == []
+    finally:
+        _close(pg)
+
+
+@pytest.mark.parametrize("seed", ["empty", "cut"])
+def test_the_price_before_enter_is_whole_with_selects_open(live_server, project, browser, seed):
+    """Verdict 11, punch 8: on a fresh project the line before ↵ read "↵ ask ·" — Selects
+    was open, the Timeline narrow, and its container query hid the price but not its dot.
+    With the narrowest Timeline the default layout gives (Selects open at 1440), focused,
+    the line is the price in the server's words, whole."""
+    pg = _open(browser, live_server, project, seed={**SEED, "segments": []} if seed == "empty" else SEED)
+    try:
+        pg.evaluate("dock.open('bin', {remember: false, focus: false})")
+        pg.wait_for_timeout(250)
+        assert pg.evaluate("document.querySelector('#aiPrompt').getBoundingClientRect().width") <= 520, \
+            "Selects open: the prompt's container is in its narrow width"
+        pg.keyboard.press("Control+j")
+        st = pg.locator(STATUS)
+        pg.wait_for_function("(s) => (document.querySelector(s + ' .aip-cost') || {}).textContent",
+                             arg=STATUS, timeout=5000)
+        assert st.inner_text().strip() == "↵ ask · free on your plan", st.inner_text()
+        cost = st.locator(".aip-cost")
+        assert cost.is_visible() and "API" in cost.get_attribute("title")
+        u = pg.evaluate(USABLE_JS)
+        for (a, b) in zip(u["prompt"], u["prompt"][1:]):      # the line beside the field, inside
+            assert a[2] <= b[1] + 0.5 and a[1] >= u["panel_l"] - 0.5, u["prompt"]
+        assert pg.errors == []
+    finally:
+        _close(pg)
 
 
 def test_a_click_on_the_chip_changes_the_scope_until_the_selection_moves(live_server, project, browser):

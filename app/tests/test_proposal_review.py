@@ -784,12 +784,13 @@ def test_a_real_length_first_cut_shows_five_rows_and_plays_on_l(browser, live_se
         pg.wait_for_selector("#proposal", state="visible", timeout=10000)
         pg.wait_for_function(f"document.querySelectorAll('{GHOST} .ghost').length === 19", timeout=8000)
         pg.wait_for_timeout(300)
-        # the Effect Controls column runs the full height while it waits
+        # it owns the Assistant; at 1440 the column stays in the bottom row and the Source
+        # monitor keeps its width (verdict 11, punch 8: the full-height column left it 343 px)
         assert pg.evaluate("document.getElementById('ws').classList.contains('ptall')")
         tile = _panels_tile(pg)
         assert tile["hits"] == [] and tile["out"] == [] and not tile["scroll"], tile
         insp, prog = tile["rects"]["pInspector"], tile["rects"]["pProgram"]
-        assert insp[1] <= prog[1] + 1 and insp[3] >= 800, tile
+        assert tile["rects"]["pSource"][2] >= SOURCE_MIN and insp[1] > prog[1] + 100, tile
         # each check one line, 3 shown and "+ 3 more"; the whole of each on its hover
         lines = _checks_one_line(pg)
         assert len(lines) == 3 and all(h <= 1.05 for h in lines), lines
@@ -886,6 +887,64 @@ def test_a_real_length_rerun_shows_five_rows(browser, live_server, project):
         assert pg.errors == []
     finally:
         path.unlink(missing_ok=True)
+        _seed(project, TWO)
+        pg.close()
+
+
+SOURCE_MIN = 560      # Premiere's monitor floor at 1440 (REDESIGN-GOAL rubric log, wave 4)
+
+SOURCE_JS = """() => { const r = (id) => document.getElementById(id).getBoundingClientRect();
+  return {src: Math.round(r('pSource').width), prog: Math.round(r('pProgram').width),
+          insp: [Math.round(r('pInspector').top), Math.round(r('pInspector').height)],
+          tall: document.getElementById('ws').classList.contains('tallroom')}; }"""
+
+
+@pytest.mark.parametrize("size", [(1440, 900), (1920, 1080), (2560, 1440)], ids=lambda s: f"{s[0]}x{s[1]}")
+def test_the_assistant_never_squeezes_the_source_monitor(browser, live_server, project, size):
+    """Verdict 11, punch 8 (dimension 4): the Assistant's review took the right column the
+    window's full height and the Source monitor gave it the width, 343 px at 1440. Now a
+    waiting proposal and an AI review leave the Source >= 560 px and the Program as it was;
+    the full-height column only where the Source keeps 560 beside it (a 2560 window)."""
+    _seed(project, TWO)
+    pg = _open(browser, live_server, size)
+    path = None
+    try:
+        pg.wait_for_function("document.querySelectorAll('#tl .blk').length >= 2", timeout=10000)
+        pg.evaluate("dock.open('ask')")
+        pg.wait_for_timeout(300)
+        rest = pg.evaluate(SOURCE_JS)
+        assert rest["src"] >= SOURCE_MIN, rest
+        # a waiting proposal in the Assistant
+        path = _waiting("rv-source", _real_first())
+        pg.evaluate("(p) => rcShowProposal(p)", _real_first())
+        pg.wait_for_selector("#proposal", state="visible", timeout=10000)
+        pg.wait_for_function("document.getElementById('ws').classList.contains('ptall')", timeout=3000)
+        pg.wait_for_timeout(300)
+        up = pg.evaluate(SOURCE_JS)
+        tile = _panels_tile(pg)
+        assert tile["hits"] == [] and tile["out"] == [] and not tile["scroll"], tile
+        assert up["src"] >= SOURCE_MIN and abs(up["prog"] - rest["prog"]) <= 1, (rest, up)
+        assert up["tall"] == (size[0] >= 2560), up          # the column: only with the room for it
+        if not up["tall"]:
+            assert up["src"] == rest["src"] and up["insp"] == rest["insp"], (rest, up)
+        assert _rows_in_view(pg)["n"] >= 5, _rows_in_view(pg)
+        pg.locator("#rejectProposal").click()
+        pg.wait_for_function("!document.getElementById('ws').classList.contains('ptall')", timeout=3000)
+        # an AI edit's review in the Assistant
+        pg.evaluate("""() => rcActions.review({kind: 'ops', job: 'rv-src-ai', asked: 'warm it up',
+            summary: 'warmer', ops: [{op: 'set', id: tl.state.segs[0].id, prop: 'temperature', value: 20}],
+            lines: ['Shot 1: temperature 20']})""")
+        pg.wait_for_function("document.getElementById('ws').classList.contains('aitall')", timeout=3000)
+        pg.wait_for_timeout(300)
+        ai = pg.evaluate(SOURCE_JS)
+        assert ai["src"] >= SOURCE_MIN and abs(ai["prog"] - rest["prog"]) <= 1, (rest, ai)
+        assert ai["tall"] == (size[0] >= 2560), ai
+        assert pg.locator("#aiReview").is_visible()
+        pg.evaluate("rcActions.reject()")
+        assert pg.errors == []
+    finally:
+        if path is not None:
+            path.unlink(missing_ok=True)
         _seed(project, TWO)
         pg.close()
 

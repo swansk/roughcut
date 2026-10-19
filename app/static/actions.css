@@ -89,17 +89,18 @@
 #aiReview .air-btn.primary:disabled { background: var(--card); border-color: var(--line); color: var(--faint); }
 
 /* the column runs the full height while a review waits (actions.js `syncTall`; the same
-   arrangement as a waiting proposal's `ptall` in workspace.css) */
-#ws.aitall {
+   arrangement as a waiting proposal's `ptall` in workspace.css), where the Source keeps
+   >= 560 px beside it (`tallroom`, dock.js `layout`; verdict 11, punch 8) */
+#ws.aitall.tallroom {
   grid-template-areas:
     "mon  mon mon s3  insp"
     "h    h   h   s3  insp"
     "proj s1  tl  s3  insp";
   --c-src-t: max(180px, calc(var(--c-src) - var(--c-insp) - var(--split)));
 }
-#ws.aitall #pSource { width: var(--c-src-t); }
-#ws.aitall .ws-split[data-split=src] { margin-left: var(--c-src-t); pointer-events: none; }
-#ws.aitall #pProgram { width: calc(100% - var(--c-src-t) - var(--split)); }
+#ws.aitall.tallroom #pSource { width: var(--c-src-t); }
+#ws.aitall.tallroom .ws-split[data-split=src] { margin-left: var(--c-src-t); pointer-events: none; }
+#ws.aitall.tallroom #pProgram { width: calc(100% - var(--c-src-t) - var(--split)); }
 
 /* the review owns the Assistant while it waits (actions.js `syncTall`) */
 section[data-tool=ask].aiup #askFold, section[data-tool=ask].aiup #askStory,

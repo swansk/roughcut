@@ -4826,8 +4826,15 @@ function watchProposalUp() {
 function notesChecks(notes) {
   const m = /things to check(?: first)?\s*:\s*([\s\S]*?)(?:\.(?=\s|$)|$)/i.exec(String(notes || ''));
   if (!m || !m[1].trim()) return [];
-  return m[1].split(/,\s*(?:and\s+)?(?=whether\b|if\b)/i).map((x) => x.trim()).filter(Boolean);
+  return m[1].split(/,\s*(?:and\s+)?(?=whether\b|if\b)/i).map((x) => clipNamed(x.trim())).filter(Boolean);
 }
+
+/* The proposal's words name a clip as the editor reads it (verdict 11, punch 8: its Things
+ * to check showed "gen_black_1e0f5341 0:00.0–0:10.0"): a generated clip's file name — the
+ * server's check sentences and the model's own words carry it — is its Premiere name,
+ * "Black Video" (`clipLabel`, firstpass.js `rcClipName`). */
+const GEN_FILE = /\bgen_[a-z]+_[0-9a-f]{4,}(?:\.[a-z0-9]{2,4})?\b/gi;
+const clipNamed = (text) => String(text == null ? '' : text).replace(GEN_FILE, (m) => clipLabel(m));
 
 /* What the notes check flags (`notes_check.flags`), one line per shot, with the
  * proposed shot it is about (k) when there is one. */
@@ -4841,12 +4848,12 @@ function flagChecks(plan) {
       seen.add(key);
       const was = s.was ? `${fmt(s.was.in)}–${fmt(s.was.out)}` : '';
       if (!s.now) {
-        out.push({ text: `shot ${s.pos} (${stem(s.clip)} ${was}) is removed — the notes say “${f.claim}”`, k: null });
+        out.push({ text: `shot ${s.pos} (${clipLabel(s.clip)} ${was}) is removed — the notes say “${f.claim}”`, k: null });
         continue;
       }
       const k = plan.segments.findIndex((p) => (s.id && p.id === s.id)
         || (p.clip === s.clip && Math.abs(p.in - s.now.in) < 0.02 && Math.abs(p.out - s.now.out) < 0.02));
-      out.push({ text: `shot ${s.pos} (${stem(s.clip)}) changes ${was} → ${fmt(s.now.in)}–${fmt(s.now.out)}`
+      out.push({ text: `shot ${s.pos} (${clipLabel(s.clip)}) changes ${was} → ${fmt(s.now.in)}–${fmt(s.now.out)}`
         + ` — the notes say “${f.claim}”`, k: k >= 0 ? k : null });
     }
   }
@@ -4863,7 +4870,7 @@ function rejectedOf(plan) {
 
 function rejectedChecks(plan) {
   return rejectedOf(plan).map((r) => {
-    const what = `${stem(r.clip)} ${fmt(r.in)}–${fmt(r.out)}`;
+    const what = `${clipLabel(r.clip)} ${fmt(r.in)}–${fmt(r.out)}`;
     if (r.action === 'flagged') {
       const k = plan.segments.findIndex((p) => p.clip === r.clip && Math.abs(p.in - r.in) < 0.02 && Math.abs(p.out - r.out) < 0.02);
       return { text: `${what} — you rejected this shot before, and it is proposed again`, k: k >= 0 ? k : null };
@@ -4910,8 +4917,8 @@ function planChecks(plan, notes) {
   return plan.checks.filter((c) => c && typeof c.text === 'string' && c.text.trim()).map((c) => {
     const model = c.kind !== 'flag' && c.kind !== 'rejected';
     const ranged = c.clip && typeof c.in === 'number' && typeof c.out === 'number';
-    return { text: wholeWords(c.text.trim()), k: checkShot(plan, c), cls: model ? 'ask' : 'flag',
-             where: model && ranged ? `${stem(c.clip)} ${fmt(c.in)}–${fmt(c.out)}` : '' };
+    return { text: clipNamed(wholeWords(c.text.trim())), k: checkShot(plan, c), cls: model ? 'ask' : 'flag',
+             where: model && ranged ? `${clipLabel(c.clip)} ${fmt(c.in)}–${fmt(c.out)}` : '' };
   });
 }
 
@@ -4936,13 +4943,13 @@ function proposalChecksHtml(plan, notes) {
 function proposalNotesHtml(plan) {
   const parts = [];
   const fpLine = plan.firstpass && plan.firstpass.diff && plan.firstpass.diff.sentence;
-  const fp = fpLine ? `First pass: ${fpLine}` : '';
+  const fp = fpLine ? `First pass: ${clipNamed(fpLine)}` : '';
   // A shot-scoped proposal says which shot it is about — the rest of the diff is
   // the untouched film, and without this line it reads as a whole-cut revision.
-  if (plan.focus) parts.push(`<div class="pline">[shot ${plan.focus.index + 1} · ${escapeHtml(stem(plan.focus.clip))}]</div>`);
+  if (plan.focus) parts.push(`<div class="pline">[shot ${plan.focus.index + 1} · ${escapeHtml(clipLabel(plan.focus.clip))}]</div>`);
   // the model's words: the server's "Check:" lines are the Things to check above
-  const words = String(plan.notes_model || plan.notes || '').split('\n')
-    .filter((l) => !/^(Check|Left out): /.test(l.trim())).join('\n').trim();
+  const words = clipNamed(String(plan.notes_model || plan.notes || '').split('\n')
+    .filter((l) => !/^(Check|Left out): /.test(l.trim())).join('\n').trim());
   // One line while a proposal waits (verdict 5, punch 3: the rows come first): the
   // first pass's sentence, else the notes' first sentence, opens to the whole.
   if (!words) parts.push(fp ? `<div class="fp-sentence pline">${escapeHtml(fp)}</div>`

@@ -165,6 +165,10 @@ def test_a_generated_black_clip_reads_black_video_in_the_panel(page, live):
     assert ec[0].startswith("Black Video") and not any("gen_" in t for t in ec), ec
     a1 = pg.evaluate(f"[...document.querySelectorAll('#tl [data-id=\"{gid}\"]')].map(b => b.title).join(' | ')")
     assert "gen_" not in a1 and "A1 · Black Video" in a1, a1
+    # and the gap's own block on V1 says what Effect Controls says (verdict 11, punch 8: its
+    # hover read "gap · …")
+    v1 = pg.evaluate(f"document.querySelector('#tl .tl-lane[data-lane=V1] .blk[data-id=\"{gid}\"]').title")
+    assert v1.startswith("Black Video · ") and "a gap" in v1 and "ripple delete" in v1, v1
 
 
 def test_new_clips_carry_the_looks_price_and_the_rerun_says_what_it_did(page, live, card):
@@ -347,4 +351,55 @@ def test_no_generated_clips_file_name_anywhere_visible(page, live):
     pg.wait_for_selector("#proposal", state="visible", timeout=10000)
     pg.wait_for_timeout(400)
     _scan(pg, "a proposal that keeps the gap", found)
+
+    # the Assistant's Things to check (verdict 11, punch 8: a re-run's checks showed
+    # "gen_black_1e0f5341 0:00.0–0:10.0"): every kind of check about the gap, the server's
+    # sentences carrying its file name as the server writes them, every check shown
+    for state, extra in _checks_plans(gap["clip"]):
+        want = extra.pop("_n")
+        pg.evaluate("(p) => rcShowProposal(p)", {**plan, **extra})
+        pg.wait_for_selector("#proposalChecks li", state="visible", timeout=10000)
+        more = pg.locator("#proposalChecks .pshowall")
+        if more.count() and more.is_visible():
+            more.click()
+        pg.locator("#proposalChecks li").last.wait_for(state="visible", timeout=3000)
+        checks = pg.locator("#proposalChecks").inner_text()
+        assert pg.locator("#proposalChecks li").count() == want, (state, checks)
+        assert checks.count("Black Video") >= 3, (state, checks)
+        pg.wait_for_timeout(200)
+        _scan(pg, state, found)
     _clean(found)
+
+
+def _checks_plans(gen: str) -> list:
+    """Proposals whose Things to check are about the generated clip `gen`: the list as data
+    (`plan.checks`: a notes-check flag, a range rejected before, the model's own with its
+    range), and a plan saved before that list (the flags, the rejected ranges and the notes'
+    "Things to check first:"); each scoped to the gap's shot, with notes that name it."""
+    stem = Path(gen).stem
+    words = (f"Kept {stem} as the pause. Things to check first: whether {stem} holds too long,"
+             " and whether the cut after it lands.")
+    common = {"notes": words, "notes_model": words, "focus": {"index": 1, "clip": gen}}
+    data = {**common,
+            "firstpass": {"diff": {"sentence": f"This keeps {stem} and 2 of your shots."}},
+            "checks": [
+                {"text": f"shot 2 ({stem}) changes 0:00.0–0:02.0 → 0:00.0–0:01.5 — the notes say "
+                         "“the pause is kept”", "clip": gen, "in": 0.0, "out": 1.5, "kind": "flag",
+                 "shot": 1},
+                {"text": f"{stem} 0:00.0–0:02.0 — you rejected this shot before: left out",
+                 "clip": gen, "in": 0.0, "out": 2.0, "kind": "rejected", "shot": None},
+                {"text": f"Whether {gen} is too long a pause before the second shot",
+                 "clip": gen, "in": 0.0, "out": 2.0, "kind": "model", "shot": 1},
+                {"text": "Whether the second shot's first word is clipped", "clip": "CLIP_B.MP4",
+                 "in": 0.5, "out": 1.5, "kind": "model", "shot": 2}],
+            "_n": 4}
+    old = {**common,
+           "notes_check": {"ok": False, "checked": 3,
+                           "flags": [{"claim": "the pause is kept",
+                                      "shots": [{"id": "g", "clip": gen, "pos": 2,
+                                                 "was": {"in": 0.0, "out": 2.0},
+                                                 "now": {"in": 0.0, "out": 1.5}}]}]},
+           "firstpass": {"rejected": [{"clip": gen, "in": 0.0, "out": 2.0, "action": "dropped"}]},
+           "_n": 4}
+    return [("the Assistant's Things to check, as data", data),
+            ("the Assistant's Things to check, a plan saved before the list", old)]

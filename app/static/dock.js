@@ -161,6 +161,13 @@
   // The Project tab gives the width back.
   const SELECTS_W = 592, SEL_TLW = 460;
   const SPLIT = 4;
+  // The Assistant's full-height column (a waiting proposal's `ptall`, app.js; an AI review's
+  // `aitall`, actions.js) takes its width from the Source monitor, the Program keeping its
+  // own. Verdict 11, punch 8: at 1440 that left the Source 343 px (the judge's look review)
+  // under Premiere's monitor floor. So the column runs the full height only where the Source
+  // keeps this beside it (`tallroom` on #ws; 2560-wide windows at the default split, a
+  // Source dragged wide); elsewhere the review stays in its group and nothing moves.
+  const SRC_TALL_MIN = 560;
   function loadLayout() {
     const raw = store.get(LAYOUT_KEY, null);
     if (!raw || typeof raw !== 'object') return {};
@@ -205,6 +212,7 @@
     root.setProperty('--c-insp', `${insp}px`);
     root.setProperty('--c-src', `${src}px`);
     root.setProperty('--r-top', `${top}px`);
+    a.ws.classList.toggle('tallroom', src - insp - SPLIT >= SRC_TALL_MIN);
   }
 
   function saveLayout() { store.set(LAYOUT_KEY, { ...frac, v: LAYOUT_V }); }

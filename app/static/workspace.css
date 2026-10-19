@@ -193,18 +193,20 @@ body > header > #firstpass { flex-shrink: 0; min-width: 0; }
 /* A pending proposal under the Assistant tab (verdict 6, punch 4: three rows of a real
    19-shot proposal in view at 1440×900): the Effect Controls column runs the full height,
    beside both rows. The Program monitor keeps its width (the proposal plays there); the
-   Source monitor gives up the column's width (never under 180 px) and its splitter rests
-   until the proposal is answered. app.js toggles `ptall`; nothing about it is stored. */
-#ws.ptall {
+   Source monitor gives up the column's width and its splitter rests until the proposal is
+   answered. app.js toggles `ptall`; nothing about it is stored. Only with `tallroom` (dock.js
+   `layout`: the Source keeps >= 560 px beside the column; verdict 11, punch 8) — at 1440 and
+   1920 the proposal stays in its group and no monitor moves. */
+#ws.ptall.tallroom {
   grid-template-areas:
     "mon  mon mon s3  insp"
     "h    h   h   s3  insp"
     "proj s1  tl  s3  insp";
   --c-src-t: max(180px, calc(var(--c-src) - var(--c-insp) - var(--split)));
 }
-#ws.ptall #pSource { width: var(--c-src-t); }
-#ws.ptall .ws-split[data-split=src] { margin-left: var(--c-src-t); pointer-events: none; }
-#ws.ptall #pProgram { width: calc(100% - var(--c-src-t) - var(--split)); }
+#ws.ptall.tallroom #pSource { width: var(--c-src-t); }
+#ws.ptall.tallroom .ws-split[data-split=src] { margin-left: var(--c-src-t); pointer-events: none; }
+#ws.ptall.tallroom #pProgram { width: calc(100% - var(--c-src-t) - var(--split)); }
 .ws-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column;
             background: var(--panel); border: 1px solid #0a0a0b; border-radius: 4px;
             overflow: clip; position: relative; }

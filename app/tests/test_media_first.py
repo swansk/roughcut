@@ -18,6 +18,7 @@ Killington. Here every test runs on a bin with **no proxies at all** and asserts
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -287,6 +288,103 @@ def test_the_background_walk_makes_posters_and_previews_when_proxies_are_on(
         assert not server.preview_path("CLIP_A").exists(), "a playable original needs none"
     finally:
         server.STATE["proxies_enabled"] = False
+        _quiet_media(server)
+
+
+def _fake_encodes(server, monkeypatch, hold: threading.Event) -> list:
+    """build_preview, recorded and held until `hold` is set: [(seconds since this was
+    called, the file it writes, its span or None)]."""
+    calls: list = []
+    t0 = time.monotonic()
+
+    def fake(src, dest, orient, span=None, **kw):
+        calls.append((time.monotonic() - t0, Path(dest).name, span))
+        hold.wait(10)
+        Path(dest).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(src, dest)
+        return "fake"
+    monkeypatch.setattr(server, "build_preview", fake)
+    return calls
+
+
+def _until(pred, timeout: float = 5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        got = pred()
+        if got:
+            return got
+        time.sleep(0.02)
+    return pred()
+
+
+def test_a_short_clips_asked_preview_starts_at_once_and_a_head_asked_meanwhile_joins_it(
+        fresh, monkeypatch):
+    """Verdict 11, punch 10 (the cause of this file's flake): an asked whole preview waited
+    HEAD_FIRST_S for a head ask before it started (wave 14), and a page that never asks for
+    one (the Source monitor, the browser test below) lost those 2 s every time. A clip no
+    longer than a head starts at once; the head the Program then asks for is that same
+    preview, never a second encode of the same frames beside it."""
+    c, server = fresh["client"], fresh["server"]
+    assert server.head_is_clip("CLIP_M.MP4"), "the fixture's 6 s clip is shorter than a head"
+    hold = threading.Event()
+    calls = _fake_encodes(server, monkeypatch, hold)
+    try:
+        r = c.get("/media/proxy/CLIP_M.mp4", follow_redirects=False)
+        assert r.status_code == 503, r.status_code
+        assert _until(lambda: calls), "the asked preview did not start"
+        assert calls[0][2] is None and calls[0][0] < server.HEAD_FIRST_S / 2, calls
+        # the Program's head ask while it encodes: answered when the preview lands
+        got: dict = {}
+        ask = threading.Thread(target=lambda: got.update(
+            c.get("/media/status/CLIP_M.mp4", params={"at": 2.0}).json()))
+        ask.start()
+        time.sleep(0.4)
+        hold.set()
+        ask.join(15)
+        assert got.get("ready") and got.get("serves") == "preview", got
+        assert [x[2] for x in calls] == [None], f"the same frames encoded twice: {calls}"
+    finally:
+        hold.set()
+
+
+def test_a_longer_clips_asked_preview_still_lets_its_head_go_first(fresh, monkeypatch):
+    """Past a head's length the wave-14 order stands: the asked whole preview waits for the
+    head the board asks for a moment later, and that head is encoded first."""
+    c, server = fresh["client"], fresh["server"]
+    monkeypatch.setattr(server, "HEAD_S", 3.0)            # 6 s is longer than a head now
+    assert not server.head_is_clip("CLIP_N.MP4")
+    hold = threading.Event()
+    calls = _fake_encodes(server, monkeypatch, hold)
+    try:
+        r = c.get("/media/proxy/CLIP_N.mp4", follow_redirects=False)
+        assert r.status_code == 503, r.status_code
+        time.sleep(0.3)
+        assert calls == [], f"it did not wait for the head: {calls}"
+        threading.Thread(target=lambda: c.get("/media/status/CLIP_N.mp4", params={"at": 3.0}),
+                         daemon=True).start()
+        assert _until(lambda: calls), "no encode after the head ask"
+        assert calls[0][2] is not None, f"the head was not first: {calls}"
+        hold.set()
+        assert _until(lambda: len(calls) >= 2), calls
+        assert calls[1][2] is None, calls
+        assert _until(lambda: server.preview_path("CLIP_N").exists())
+    finally:
+        hold.set()
+
+
+def _quiet_media(server, timeout: float = 15.0) -> None:
+    """End the walk and what it left running: a preview that landed queues its clip's
+    sprite, and the sprites (seconds of decode each) went on into the next test — the
+    browser test's 5 s frame bar (verdict 11, punch 10: CLIP_M and CLIP_N's sprites, 3.2
+    and 3.5 s, were built inside the gate's failing run)."""
+    server.stop_media()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        walk, sprites = server.MEDIA.get("thread"), server.SPRITES.get("thread")
+        if not (walk and walk.is_alive()) and not (sprites and sprites.is_alive()):
+            return
+        time.sleep(0.05)
+    raise AssertionError("the media walk or the sprites did not stop")
 
 
 # ------------------------------------------------------------------ in a browser
@@ -298,10 +396,18 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def test_a_video_element_has_a_frame_within_five_seconds_with_no_proxies(media_bin, tmp_path):
+def test_a_video_element_has_a_frame_within_five_seconds_with_no_proxies(media_bin, tmp_path,
+                                                                        monkeypatch):
     """Real Chromium: `<video src=/media/proxy/...>` on a bin with no proxies reaches
     readyState >= 2 (a decoded frame) within 5 s, for an original and for a preview,
-    and a seek lands."""
+    and a seek lands.
+
+    Verdict 11, punch 10: this failed in the judge's gate at load ~8-9 ("timeout rs=0" on
+    the preview). Its 5 s held the preview's encode plus 2 s the app waited for a head the
+    page never asks for (`_head_first`, wave 14) — fixed for a clip no longer than a head —
+    and the previous test's sprites still being built beside it (`_quiet_media`). So the
+    bar is also read apart: the app's own share (the frame less the encode the box gives
+    it, timed on the server) is at most APP_SHARE_MS, which the 2 s wait failed on any box."""
     sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed")
     import uvicorn
     import server
@@ -310,6 +416,16 @@ def test_a_video_element_has_a_frame_within_five_seconds_with_no_proxies(media_b
     server.MEDIA["failed"].clear()
     server.configure(None, media_bin["footage"], media_bin["sidecars"], work,
                      proxies=False, orient="none", visual=work / "no-visual")
+    encodes: dict[str, float] = {}
+    real_build = server.build_preview
+
+    def timed(src, dest, orient, *a, **kw):
+        t0 = time.monotonic()
+        try:
+            return real_build(src, dest, orient, *a, **kw)
+        finally:
+            encodes[Path(src).stem] = time.monotonic() - t0
+    monkeypatch.setattr(server, "build_preview", timed)
     port = _free_port()
     srv = uvicorn.Server(uvicorn.Config(server.app, host="127.0.0.1", port=port,
                                         log_level="error"))
@@ -336,28 +452,41 @@ def test_a_video_element_has_a_frame_within_five_seconds_with_no_proxies(media_b
                     // held): the board asks /media/status and loads the URL again
                     let tries = 0;
                     v.addEventListener('error', async () => {
-                        if (++tries > 20) return;
+                        if (++tries > 60) return;
                         await new Promise(r => setTimeout(r, 150));
                         v.src = `/media/proxy/${stem}.mp4`;
                     });
-                    await new Promise((ok, bad) => {
-                        const tick = () => v.readyState >= 2 ? ok() :
-                            v.error && tries > 20 ? bad(new Error('media error ' + v.error.code)) :
-                            performance.now() - t0 > 5000 ? bad(new Error('timeout rs=' + v.readyState)) :
+                    // waited for past the bar, so a miss says by how much
+                    const ok = await new Promise((done) => {
+                        const tick = () => v.readyState >= 2 ? done(true) :
+                            (v.error && tries > 60) || performance.now() - t0 > 30000 ? done(false) :
                             setTimeout(tick, 20);
                         tick();
                     });
                     const ready = performance.now() - t0;
+                    if (!ok) return {ready, tries, rs: v.readyState, err: v.error && v.error.code};
                     const s0 = performance.now();
                     v.currentTime = 4.0;
                     await new Promise(ok => v.addEventListener('seeked', ok, {once: true}));
-                    return {ready, seek: performance.now() - s0, w: v.videoWidth};
+                    return {ready, tries, seek: performance.now() - s0, w: v.videoWidth};
                 }""", stem)
-                assert ms["ready"] < 5000, (stem, ms)
-                assert ms["w"] > 0, (stem, ms)
-                assert ms["seek"] < 1000, (stem, ms)
+                enc = encodes.get(stem)
+                facts = (stem, ms, f"encode {enc:.2f} s" if enc is not None else "no encode",
+                         f"load {os.getloadavg()[0]:.1f}")
+                assert ms.get("w", 0) > 0, facts
+                assert ms["ready"] < 5000, facts
+                assert ms["seek"] < 1000, facts
+                if stem == "CLIP_M":
+                    assert enc is not None, facts
+                    assert ms["ready"] - enc * 1000 <= APP_SHARE_MS, facts
             browser.close()
     finally:
         srv.should_exit = True
         thread.join(timeout=10)
     assert list(Path(server.STATE["proxy_dir"]).glob("*.mp4")) == []
+
+
+# The frame less the preview's encode: the 503s and the retry, the redirect, Chromium's
+# first decode (0.0-0.2 s measured, on a quiet box and at load 12 with a 12.5 s encode).
+# The head wait alone was 2.0 s (3.27 s to a frame for a 1.22 s encode).
+APP_SHARE_MS = 1500
