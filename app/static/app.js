@@ -2933,8 +2933,14 @@ function advance() {
   player.cur = player.vids.indexOf(bufFor(nseg));
   player.idx = next;
   sel = next;
-  tl.syncSel();                 // paint()'s first half; the inspector waits (below)
   const nv = liveVideo();
+  // The timeline's selection follows two frames into the new shot (paint()'s first half; the
+  // inspector waits for the monitor to stop, below). Wave 15 PERF6 (verdict 11 punch 3 + 9): at
+  // the cut it was 2.5-7 ms of the cut's 3.5-10 ms tick at load 0-2 (the selection's listeners:
+  // the FX tool's rebuild and price fetch, the AI prompt's scope chip, which measures its words),
+  // in the frame whose callbacks give the grade the new shot's first frame. The block that plays
+  // is highlighted AT the cut (below); the selection's outline comes 1-2 frames after it.
+  afterFirstFrames(nv, () => { if (g === player.gen || !player.playing) tl.syncSel(); }, 2);
   // Prerolled for this cut (see preroll): it is playing, near its in-point; keep it so.
   const rolled = !!nv._roll && nv._roll.gen === g - 1 && nv._roll.seg === segs[next] && !nv.paused;
   const parked = nv._for === nseg;
@@ -3158,13 +3164,24 @@ function restSoon() {
 }
 
 function paintTransport() {
-  $('#playCut').textContent = player.playing ? '❚❚ Pause' : '▶ Play';
+  const pc = $('#playCut'), pw = $('#playingWhat');
+  const play = player.playing ? '❚❚ Pause' : '▶ Play';
+  if (pc.textContent !== play) pc.textContent = play;
   paintRest();
   const seg = segs[player.idx];
   // the clip by the name the editor reads (a generated clip: "Black Video", verdict 10)
-  $('#playingWhat').textContent = seg
+  const what = seg
     ? `${player.idx + 1}/${segs.length} · ${clipLabel(seg.clip)}${player.single ? ' · this shot only' : ''}`
     : '';
+  // (written only when it changes: a cut calls this, and a new text node is a child-list
+  // change the board's `:has()` rules re-match on, in the cut's own frame)
+  if (pw.textContent !== what) pw.textContent = what;
+  // While the Program plays, the board's own fades (the trim handles' grips, which follow
+  // the selection the playback moves at every cut) are instant (timeline.css
+  // `.rc-playing`): each was a composited opacity animation, and starting one at a cut
+  // re-layered the Timeline and redrew its whole panel in software, 16-58 ms of the display
+  // compositor's frames in the cut's first 150 ms (wave 15 PERF6, traced at 1920).
+  document.body.classList.toggle('rc-playing', !!player.playing);
 }
 
 /* The playhead is the timeline's, in film time (the strip used to carry it as a
