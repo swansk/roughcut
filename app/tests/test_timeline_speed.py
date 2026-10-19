@@ -372,7 +372,8 @@ def test_a_generated_clip_draws_a_block_that_says_what_it_is_and_plays(page, pro
     assert page.locator("#inspector .nudge").is_hidden()
     assert page.locator("#inspector [data-disc=look]").is_hidden()
     assert "black · 2.0 s" in page.locator("#inspector .lines:not(.seen)").text_content()
-    assert page.locator("#inspector .clip").text_content() == "gen_black_test"
+    # named as Premiere names it, never its file (verdict 9 punch 3; wave 14 POLISH10)
+    assert page.locator("#inspector .clip").text_content() == "Black Video"
     # it plays from the proxy like any other shot (a double-click plays, M16 decision 6)
     blk.dblclick()
     page.wait_for_function("player.playing && player.idx === 2", timeout=10000)

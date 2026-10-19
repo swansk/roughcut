@@ -216,7 +216,10 @@ def test_the_sections_are_premieres_and_the_head_is_timecode(page):
     ("rotation", 90, "getComputedStyle(liveVideo()).transform.startsWith('matrix(0')"),
     ("opacity", 40, "getComputedStyle(liveVideo()).opacity === '0.4'"
                     " && getComputedStyle(document.querySelector('#gradeCanvas')).opacity === '0.4'"),
-    ("volume_db", -6, "Math.abs(liveVideo().volume - Math.pow(10, -6 / 20)) < 1e-3"),
+    # the level has one owner (meters.js rcAudio): a GainNode once audio runs (wave 14 PLAY4
+    # hushes buffers through it), else the element's volume; levelOf is what plays either way
+    ("volume_db", -6, "Math.abs((window.rcAudio ? rcAudio.levelOf(liveVideo()) : liveVideo().volume)"
+                      " - Math.pow(10, -6 / 20)) < 1e-3"),
 ])
 def test_motion_opacity_volume_show_on_the_program_within_150_ms(page, key, value, cond):
     select_first(page)
