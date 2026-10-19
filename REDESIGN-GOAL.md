@@ -409,3 +409,13 @@ next judge runs, and the next judge rules it honest or lenient.
   in part, because a retried crash ended GREEN and the change was never logged here. **From wave 14 a retried step
   makes the gate AMBER** (lane POLISH10), so a crash can never pass silently; a GREEN journey means no retry. Also
   logged: the gate and the journey give their browsers no D-Bus (verdict 10: honest).
+
+- 2026-10-19 (wave 14, lane SERVERPERF; logged by the lead): **what the server's request timing counts.** `/api/debug/slow`
+  (read by the gate's journey line, "slowest request") now gives a request's `ms` without the time spent waiting for
+  the client's body (kept as `body_ms`, the whole as `wall_ms`): an upload's PUT is no longer "slow" because the
+  viewer's link is. The event-loop watch samples every 50 ms (was 100 ms), so a hold is caught sooner and attributed
+  (`where`: the loop thread's frame and the busiest threads); new `budget` / `over_budget` fields name verdict 10's
+  bars (300 ms a request, 200 ms a hold); `SLOW_MS` stays 500. Stricter on holds (finer sampling); more lenient on
+  uploads only by the body wait, which is the network's, not the server's. Also for the judge: verdict 10's
+  "110 MB drop at ~1.25 MB/s" was its own script waiting 90 s for an `<img>` in a List-view row (List rows have
+  none; `judge10/import.py:81`); the file landed 0.44 s after its PUT began.

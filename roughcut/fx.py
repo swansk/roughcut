@@ -547,6 +547,15 @@ def _fps_value(fps: Any) -> float:
     return float(fps)
 
 
+def _fps_text(fps: Any) -> str:
+    """The rate as ffmpeg reads one: `"30000/1001"` as given, 29.97 → `"30000/1001"`,
+    24 → `"24"`."""
+    if isinstance(fps, str) and "/" in fps:
+        return fps
+    from fractions import Fraction
+    return str(Fraction(float(fps)).limit_denominator(1001))
+
+
 def _font(px: int, bold: bool = True):
     from PIL import ImageFont
     px = max(4, int(px))
@@ -567,11 +576,13 @@ def _rgba(colour: str, opacity: float) -> tuple[int, int, int, int]:
             int(round(255 * max(0.0, min(1.0, opacity)))))
 
 
-def _draw_shape(layer, shape: dict, c: float, unit: float, t: float = 0.0,
+def _draw_shape(layer, shape: dict, c, unit: float, t: float = 0.0,
                 duration: float = MAX_DURATION) -> None:
-    """One shape onto its own transparent layer: `c` is the layer's centre (px), `unit`
-    the pixels per box unit (half the box side, already supersampled); `t` is the
-    time into the effect, for a shape's start / end / fade and a text's reveal."""
+    """One shape onto its own transparent layer: `c` is the sprite's centre on the
+    layer (px: one number when the layer is the sprite's whole square, `(cx, cy)` when
+    it is a window of it), `unit` the pixels per box unit (half the box side, already
+    supersampled); `t` is the time into the effect, for a shape's start / end / fade
+    and a text's reveal."""
     import math
     from PIL import ImageDraw
 
@@ -585,9 +596,10 @@ def _draw_shape(layer, shape: dict, c: float, unit: float, t: float = 0.0,
             return
     d = ImageDraw.Draw(layer)
     colour = _rgba(shape["color"], shape["opacity"] * alpha * talpha)
+    cx, cy = (c, c) if isinstance(c, (int, float)) else c
 
     def px(p):
-        return (c + p[0] * unit, c + p[1] * unit)
+        return (cx + p[0] * unit, cy + p[1] * unit)
 
     width = max(1, int(round(shape.get("width", 0.08) * 2 * unit)))   # fraction of the box
     kind = shape["type"]
@@ -646,16 +658,44 @@ def _draw_shape(layer, shape: dict, c: float, unit: float, t: float = 0.0,
                 d.text((x, top + i * gap), line, fill=colour, font=font, anchor="mm")
 
 
-def _sprite_image(overlay: dict, box_px: float, pose: dict, t: float = 0.0):
+_PAD = 4                     # output px drawn past a window's edge: LANCZOS's reach at 2×
+
+# Frames composed (not linked or looped) and sprites drawn by this process: what a proof
+# reports and the tests read (wave 14, verdict 10: a static vignette was 240 identical
+# frames). A frame that differs from another only in the sprite's opacity (a fade) reuses
+# its drawn sprite.
+RENDERED = {"frames": 0, "sprites": 0}
+
+
+def _sprite_image(overlay: dict, box_px: float, pose: dict, t: float = 0.0,
+                  window: tuple[int, int, int, int] | None = None):
     """The sprite at one pose as an RGBA image (already downsampled), plus the offset
-    of its centre inside it. `box_px` is the unscaled box side in output pixels."""
+    of its centre inside its whole square (`ext`) and where the image sits in that
+    square (`(left, top)`). `box_px` is the unscaled box side in output pixels.
+
+    `window` (left, top, right, bottom; output px inside the square, 0..2·ext) is the
+    part anyone will see — the frame's share of it — and only that much is drawn: the
+    square is ±1.5 box units with room to rotate, so a vignette's box of 1.6 frame
+    widths made a 10 672-px canvas per shape per frame at 720p (verdict 10: 5 s a
+    frame, the GIL held 250 ms at a time). Drawn a few pixels past the window so the
+    downsample sees what it would have; turned, the drawn square is the one around the
+    centre that holds the window at any angle."""
     from PIL import Image
 
+    RENDERED["sprites"] += 1
     half = box_px * pose["scale"] / 2                         # output px per box unit
     ext = int(math.ceil(half * 2.6 + 3))                      # ±1.5 units, rotated, plus caps
     side = 2 * ext
-    canvas = Image.new("RGBA", (side * _SUPER, side * _SUPER), (0, 0, 0, 0))
-    c = ext * _SUPER
+    wl, wt, wr, wb = window if window is not None else (0, 0, side, side)
+    if pose["rotate"]:
+        reach = max(math.hypot(x - ext, y - ext) for x in (wl, wr) for y in (wt, wb))
+        r = int(math.ceil(reach)) + _PAD
+        ul, ut, ur, ub = ext - r, ext - r, ext + r, ext + r
+    else:
+        ul, ut, ur, ub = wl - _PAD, wt - _PAD, wr + _PAD, wb + _PAD
+    ul, ut, ur, ub = max(0, ul), max(0, ut), min(side, ur), min(side, ub)
+    canvas = Image.new("RGBA", ((ur - ul) * _SUPER, (ub - ut) * _SUPER), (0, 0, 0, 0))
+    c = ((ext - ul) * _SUPER, (ext - ut) * _SUPER)
     unit = half * _SUPER
     if unit >= 0.5:
         for shape in overlay["shapes"]:
@@ -665,53 +705,138 @@ def _sprite_image(overlay: dict, box_px: float, pose: dict, t: float = 0.0):
             _draw_shape(layer, shape, c, unit, t, overlay["duration"])
             canvas.alpha_composite(layer)
         if pose["rotate"]:
-            canvas = canvas.rotate(-pose["rotate"], resample=Image.BICUBIC, center=(c, c))
-    sprite = canvas.resize((side, side), Image.LANCZOS)
+            canvas = canvas.rotate(-pose["rotate"], resample=Image.BICUBIC, center=c)
+    sprite = canvas.resize((ur - ul, ub - ut), Image.LANCZOS)
+    sprite = sprite.crop((wl - ul, wt - ut, wr - ul, wb - ut))
     if pose["opacity"] < 1.0:
         a = sprite.getchannel("A").point(lambda v: int(v * pose["opacity"]))
         sprite.putalpha(a)
-    return sprite, ext
+    return sprite, ext, (wl, wt)
+
+
+def _frame_key(overlay: dict, t: float) -> tuple:
+    """Everything one frame of the sprite depends on at `t`: its pose, the flash, and
+    each shape's presence (and a text's revealed characters). Two times with one key
+    draw the same picture."""
+    pose = pose_at(overlay, t)
+    flash = overlay.get("flash")
+    shapes = []
+    for s in overlay["shapes"]:
+        a = round(shape_alpha(s, t, overlay["duration"]), 6)
+        if s["type"] == "text":
+            text, ta = text_at(s, t)
+            shapes.append((a, text, round(ta, 6)))
+        else:
+            shapes.append(a)
+    return (tuple(round(float(pose[k]), 6) for k in ("scale", "opacity", "rotate", "dx", "dy")),
+            bool(flash and t < flash["duration"]), tuple(shapes))
+
+
+def overlay_runs(overlay: dict, fps) -> list[tuple[int, int]]:
+    """The overlay's frames at `fps` as runs of identical pictures: `[(first frame,
+    count), …]` in order, covering ceil(duration × fps) frames."""
+    rate = _fps_value(fps)
+    n = max(1, int(math.ceil(overlay["duration"] * rate - 1e-6)))
+    runs: list[tuple[int, int]] = []
+    prev = None
+    for i in range(n):
+        key = _frame_key(overlay, i / rate)
+        if runs and key == prev:
+            runs[-1] = (runs[-1][0], runs[-1][1] + 1)
+        else:
+            runs.append((i, 1))
+        prev = key
+    return runs
+
+
+def overlay_static(overlay: dict, fps) -> bool:
+    """One picture for the whole duration (no keyframe moves it, no shape comes or
+    goes, no text types, no flash ends): it renders as one frame, looped."""
+    return len(overlay_runs(overlay, fps)) == 1
+
+
+def render_overlay_frame(overlay: dict, w: int, h: int, t: float,
+                         *, anchor: tuple[float, float] = (0.5, 0.5),
+                         sprites: dict | None = None):
+    """The full frame (w × h, RGBA) of the sprite at `t` seconds into the effect, at
+    `anchor` (fractions of the frame). Geometry: the sprite's box is `overlay.size × w`
+    pixels square; shapes are in -1..1 across it; `pose_at(t)` scales, fades, rotates
+    and offsets it. A `flash` tints the whole frame for its duration. PIL,
+    anti-aliased (draw at 2× and downsample); only the part inside the frame is drawn.
+    `sprites` (a dict the caller keeps across frames): sprites already drawn, by
+    everything but their opacity, so a fade draws its sprite once."""
+    from PIL import Image
+
+    RENDERED["frames"] += 1
+    box_px = overlay["size"] * w
+    flash = overlay.get("flash")
+    pose = pose_at(overlay, t)
+    if flash and t < flash["duration"]:
+        frame = Image.new("RGBA", (w, h), _rgba(flash["color"], flash["opacity"]))
+    else:
+        frame = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    if pose["opacity"] > 0 and pose["scale"] > 0:
+        half = box_px * pose["scale"] / 2
+        ext = int(math.ceil(half * 2.6 + 3))
+        cx = anchor[0] * w + pose["dx"] * w
+        cy = anchor[1] * h + pose["dy"] * w
+        x0, y0 = int(round(cx)) - ext, int(round(cy)) - ext
+        # the frame's share of the sprite's square (alpha_composite needs a
+        # non-negative dest, and nothing outside the frame is worth drawing)
+        left, top = max(0, -x0), max(0, -y0)
+        right, bottom = min(2 * ext, w - x0), min(2 * ext, h - y0)
+        if right > left and bottom > top:
+            window = (left, top, right, bottom)
+            key = (tuple(round(float(pose[k]), 6) for k in ("scale", "rotate", "dx", "dy")),
+                   _frame_key(overlay, t)[2], window)
+            hit = sprites.get(key) if sprites is not None else None
+            if hit is None:
+                hit = _sprite_image(overlay, box_px, {**pose, "opacity": 1.0}, t, window=window)
+                if sprites is not None:
+                    sprites.clear()                      # the previous pose is not coming back
+                    sprites[key] = hit
+            part, _ext, (pl, pt) = hit
+            if pose["opacity"] < 1.0:
+                part = part.copy()
+                part.putalpha(part.getchannel("A").point(lambda v: int(v * pose["opacity"])))
+            frame.alpha_composite(part, dest=(x0 + pl, y0 + pt))
+    return frame
+
+
+def render_overlay_still(overlay: dict, w: int, h: int, out: Path,
+                         *, anchor: tuple[float, float] = (0.5, 0.5)) -> Path:
+    """A static overlay's one picture as an RGBA PNG (`part_graph` loops it)."""
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    render_overlay_frame(overlay, w, h, 0.0, anchor=anchor).save(out, "PNG", compress_level=1)
+    return out
 
 
 def render_overlay_frames(overlay: dict, w: int, h: int, fps: float, out_dir: Path,
                           *, anchor: tuple[float, float] = (0.5, 0.5)) -> list[Path]:
     """Rasterise the sprite for one event into RGBA PNG frames `out_dir/f_%04d.png`,
     full-frame (w × h) with the sprite at `anchor` (fractions of the frame), one file
-    per frame for `overlay.duration` seconds at `fps`. Geometry: the sprite's box is
-    `overlay.size × w` pixels square; shapes are in -1..1 across it; `pose_at(t)`
-    scales, fades, rotates and offsets it. A `flash` tints the whole frame for its
-    duration. PIL, anti-aliased (draw at 2× and downsample)."""
-    from PIL import Image
-
+    per frame for `overlay.duration` seconds at `fps` (`render_overlay_frame` draws
+    each). A run of identical frames (`overlay_runs`: a title holding after it typed,
+    a marker before its fade) is drawn once and the rest of its files are links to it."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     rate = _fps_value(fps)
-    n = max(1, int(math.ceil(overlay["duration"] * rate - 1e-6)))
-    box_px = overlay["size"] * w
-    flash = overlay.get("flash")
     paths: list[Path] = []
-    for i in range(n):
-        t = i / rate
-        pose = pose_at(overlay, t)
-        if flash and t < flash["duration"]:
-            frame = Image.new("RGBA", (w, h), _rgba(flash["color"], flash["opacity"]))
-        else:
-            frame = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        if pose["opacity"] > 0 and pose["scale"] > 0:
-            sprite, ext = _sprite_image(overlay, box_px, pose, t)
-            cx = anchor[0] * w + pose["dx"] * w
-            cy = anchor[1] * h + pose["dy"] * w
-            x0, y0 = int(round(cx)) - ext, int(round(cy)) - ext
-            # clip the sprite to the frame: alpha_composite needs a non-negative dest
-            left, top = max(0, -x0), max(0, -y0)
-            right = min(sprite.width, w - x0)
-            bottom = min(sprite.height, h - y0)
-            if right > left and bottom > top:
-                part = sprite.crop((left, top, right, bottom))
-                frame.alpha_composite(part, dest=(x0 + left, y0 + top))
-        p = out_dir / f"f_{i:04d}.png"
-        frame.save(p, "PNG", compress_level=1)
+    sprites: dict = {}
+    for first, count in overlay_runs(overlay, fps):
+        p = out_dir / f"f_{first:04d}.png"
+        render_overlay_frame(overlay, w, h, first / rate, anchor=anchor, sprites=sprites).save(
+            p, "PNG", compress_level=1)
         paths.append(p)
+        for i in range(first + 1, first + count):
+            q = out_dir / f"f_{i:04d}.png"
+            try:
+                q.unlink(missing_ok=True)
+                q.hardlink_to(p)
+            except OSError:
+                shutil.copyfile(p, q)
+            paths.append(q)
     return paths
 
 
@@ -910,7 +1035,11 @@ def part_graph(effects: list[tuple[dict, list[dict]]], w: int, h: int, fps: floa
     `[vout]`/`[aout]` — an `overlay` per event with `setpts` delaying the sprite to
     `t_part` and `enable=between(t, t_part, t_part + duration)`, an `adelay` per
     event and one `amix` (`normalize=0`) — and the two output labels. Input indexes
-    start at 1 (the part's source is input 0). No effects → `([], "", vin, ain)`."""
+    start at 1 (the part's source is input 0). No effects → `([], "", vin, ain)`.
+
+    A static overlay (`overlay_static`: a vignette, a held title card) is one PNG read
+    as `-loop 1 -framerate <fps> -t <duration>`, not a `.mov` of identical frames
+    (verdict 10: a soft vignette was 240 frames of 720p, 5 s each)."""
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
     extra: list[str] = []
@@ -925,11 +1054,18 @@ def part_graph(effects: list[tuple[dict, list[dict]]], w: int, h: int, fps: floa
             continue
         overlay = effect["overlay"]
         eid = str(effect.get("id") or "fx")
+        still = overlay_static(overlay, rate)
         for j, ev in enumerate(events):
             t0 = float(ev["t_part"])
-            mov = workdir / f"{eid}_ev{j:02d}.mov"
-            render_overlay_mov(overlay, w, h, rate, mov, anchor=(ev["x"], ev["y"]))
-            extra += ["-i", str(mov)]
+            if still:
+                png = workdir / f"{eid}_ev{j:02d}.png"
+                render_overlay_still(overlay, w, h, png, anchor=(ev["x"], ev["y"]))
+                extra += ["-loop", "1", "-framerate", _fps_text(fps),
+                          "-t", f"{overlay['duration']:.4f}", "-i", str(png)]
+            else:
+                mov = workdir / f"{eid}_ev{j:02d}.mov"
+                render_overlay_mov(overlay, w, h, rate, mov, anchor=(ev["x"], ev["y"]))
+                extra += ["-i", str(mov)]
             lab = f"fxv{idx}"
             nxt = f"fxo{idx}"
             vparts.append(f"[{idx}:v]setpts=PTS-STARTPTS+{t0:.4f}/TB[{lab}]")
@@ -1588,6 +1724,24 @@ def _revealed_at(overlay: dict, dur: float) -> float | None:
     return max(0.0, min(done, last))
 
 
+def _shown_at(overlay: dict, dur: float) -> float | None:
+    """Seconds into the effect when the sprite first shows at (nearly) its fullest, when
+    its opacity eases in: a vignette faded up over 0.4 s was measured 0.1 s in, a
+    quarter drawn, and failed its own check (wave 14, Killington's fx_6bfca884). None
+    when it is (nearly) all there by the usual 0.1 s: the check samples as before."""
+    track = (overlay.get("anim") or {}).get("opacity")
+    if not track:
+        return None
+    step = 1 / 24
+    times = [i * step for i in range(int(dur / step) + 1)]
+    shown = [sample_track(track, t, 1.0) for t in times]
+    peak = max(shown, default=0.0)
+    if peak <= 0 or sample_track(track, min(0.1, dur * 0.4), 1.0) >= 0.9 * peak:
+        return None
+    first = next(t for t, v in zip(times, shown) if v >= 0.9 * peak)
+    return max(0.0, min(first + 0.05, dur - 0.05))
+
+
 def verify(effect: dict, seg: dict, *, onset: list[float] | None = None,
            hz: float = ONSET_HZ, part: Path | None = None, base: Path | None = None,
            impact: bool = True) -> dict:
@@ -1686,6 +1840,10 @@ def verify(effect: dict, seg: dict, *, onset: list[float] | None = None,
         # has drawn its first two characters, high on the first line, nowhere near the
         # anchor its whole block is centred on (fx_b9e6a61c, I16.0 j)
         look = _revealed_at(overlay, dur)
+        # …and a sprite that fades up, once it is up
+        shown = _shown_at(overlay, dur)
+        if shown is not None:
+            look = shown if look is None else max(look, shown)
         for ev in evs:
             ts = ev["t_part"] + min(0.1, dur * 0.4)
             if look is not None:      # …and never past the shot's own end

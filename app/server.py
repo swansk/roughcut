@@ -76,6 +76,7 @@ from roughcut import flow as flowmod  # noqa: E402
 from roughcut import deep as deepmod  # noqa: E402
 from roughcut import firstpass as fpmod  # noqa: E402
 from roughcut import procscope  # noqa: E402
+from roughcut import fxcheck  # noqa: E402
 from roughcut import dirwatch  # noqa: E402
 from roughcut import tracks as tracksmod  # noqa: E402
 from roughcut import media as mediamod  # noqa: E402
@@ -740,11 +741,44 @@ def capture_time(clip: str) -> float | None:
     return when
 
 
+# Parsed sidecars, kept per file version (wave 14). The board's polls, the price of an
+# ask, the picks and every model call's inventory re-read every clip's sidecars: on
+# Killington 52-85 JSON files a call (5 MB, ~70 ms of json.loads, each holding the GIL
+# while it parses), the bulk of /api/project, /api/picks and /api/assist/price — 0.4-0.8 s
+# under load in verdicts 9 and 10. A file whose mtime, size and inode are unchanged is
+# not parsed again: its value is kept as marshal bytes and each caller gets its own copy
+# (4× faster than parsing: 54 → 12 ms over those 66 files), so no caller can change
+# what another reads.
+_JSON_FILES: dict[str, tuple[tuple, bytes]] = {}
+JSON_FILES_KEEP = 512
+
+
+def read_json_file(p: Path):
+    """`json.loads(p.read_text())` for a file this process may have parsed before;
+    raises as that would (OSError, ValueError)."""
+    import marshal
+    key = str(p)
+    st = os.stat(key)
+    sig = (st.st_mtime_ns, st.st_size, st.st_ino)
+    hit = _JSON_FILES.get(key)
+    if hit is not None and hit[0] == sig:
+        return marshal.loads(hit[1])
+    obj = json.loads(Path(key).read_text(encoding="utf-8"))
+    try:
+        blob = marshal.dumps(obj)
+    except ValueError:
+        return obj
+    if len(_JSON_FILES) >= JSON_FILES_KEEP:
+        _JSON_FILES.pop(next(iter(_JSON_FILES)), None)
+    _JSON_FILES[key] = (sig, blob)
+    return obj
+
+
 def load_sidecar(clip: str) -> dict:
     p: Path = STATE["sidecars"] / f"{Path(clip).stem}.audio.json"
     if not p.exists():
         return {}
-    return json.loads(p.read_text(encoding="utf-8"))
+    return read_json_file(p)
 
 
 def load_visual(clip: str) -> dict:
@@ -759,7 +793,7 @@ def load_visual(clip: str) -> dict:
     deep = deepmod.load(STATE["visual"], stem)
     if not p.exists() and not deep:
         return {}
-    d = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    d = read_json_file(p) if p.exists() else {}
     fine = load_fine(stem)
     # The close look replaces the coarse account of the same seconds rather than
     # joining it. An inventory that still lists a backflip the 1s read found to be a
@@ -774,7 +808,7 @@ def load_fine(stem: str) -> dict:
     p: Path = STATE["visual"] / f"{stem}.fine.json"
     if not p.exists():
         return {}
-    return json.loads(p.read_text(encoding="utf-8"))
+    return read_json_file(p)
 
 
 def visual_stems() -> set[str]:
@@ -1012,7 +1046,7 @@ def project_payload() -> dict:
     # Every clip with a sidecar is offered, not just the ones already used — adding a
     # shot you forgot is as much a part of fine-tuning as trimming one you have.
     for p in sorted(STATE["sidecars"].glob("*.audio.json")):
-        d = json.loads(p.read_text(encoding="utf-8"))
+        d = read_json_file(p)
         clip = d["clip"]
         rate = clip_rate(clip)
         clips[clip] = {
@@ -1146,6 +1180,23 @@ def edl_fps(edl: dict, segments: list[dict] | None = None) -> float:
     it (`segments`' first, else the bin's first), else 23.976."""
     return (sequence_rate(edl) or first_clip_fps(segments or [])
             or first_clip_fps([{"clip": c} for c in footage_clips()[:1]]) or 24000 / 1001)
+
+
+def write_timebase_once(edl: dict) -> None:
+    """Persist `ensure_timebase`'s rate without making it look like an edit: the file keeps
+    its modified time, which the media walk reads as "when the cut last changed" (range
+    proxies wait RANGE_SETTLE_S after an edit), so opening an old bin does not hold its
+    range proxies back (test_preview_building's film-order walk caught it)."""
+    try:
+        st = STATE["edl"].stat()
+    except OSError:
+        st = None
+    write_edl(edl)
+    if st is not None:
+        try:
+            os.utime(STATE["edl"], ns=(st.st_atime_ns, st.st_mtime_ns))
+        except OSError:
+            pass
 
 
 def ensure_timebase(edl: dict) -> bool:
@@ -1741,8 +1792,18 @@ SLOW_MS = 500.0
 LOOP_LAG_MS = 250.0
 SLOW_KEEP = 50
 SLOW: list[dict] = []
-SLOWEST: dict = {"all": None, "api": None}
-_LOOP_WATCH: dict = {"task": None}
+SLOWEST: dict = {"all": None, "api": None, "loop": None}
+_LOOP_WATCH: dict = {"task": None, "beat": None, "tid": None, "sampler": None, "hold": None,
+                     "cpu_base": None}
+# The budget (wave 14, verdict 10 punch 1: "no request > 300 ms and no loop hold > 200
+# ms" during a first pass, an export and an effect check): what is over it is kept apart
+# (`over_budget`, the last 50), each loop hold with `where` the loop was and which threads
+# ran meanwhile (`_loop_sampler`), so a hold names its cause rather than only its length.
+REQUEST_BUDGET_MS = 300.0
+LOOP_BUDGET_MS = 200.0
+OVER_BUDGET: list[dict] = []
+LOOP_TICK_S = 0.05
+LOOP_SAMPLE_S = 0.04
 # Read your own save: a reload sends its keepalive flush and then asks for the page (and
 # the cut) at once, on different connections; the page is served once the saves that
 # had arrived are applied (waiting at most READ_AFTER_SAVE_S), never the cut before it.
@@ -1755,6 +1816,9 @@ def note_request(row: dict) -> None:
         top = SLOWEST[key]
         if top is None or row["ms"] > top["ms"]:
             SLOWEST[key] = row
+    if row["ms"] >= REQUEST_BUDGET_MS:
+        OVER_BUDGET.append(row)
+        del OVER_BUDGET[:-SLOW_KEEP]
     if row["ms"] >= SLOW_MS:
         SLOW.append(row)
         del SLOW[:-SLOW_KEEP]
@@ -1762,18 +1826,120 @@ def note_request(row: dict) -> None:
               f"({row['handler']})", flush=True)
 
 
+_HERE_ROOT = str(HERE.parent)
+
+
+def _stack_words(frame, n: int = 4) -> list[str]:
+    """Where a thread is, said briefly: its innermost frame, then the innermost frames
+    of this repo's code (`file:line func`; not the `main` every request runs under).
+    A loop thread in `select` is idle — `["idle (select)"]`."""
+    words: list[str] = []
+    first = True
+    while frame is not None and len(words) < n:
+        code = frame.f_code
+        name = Path(code.co_filename).name
+        if first and name == "selectors.py":
+            return ["idle (select)"]
+        mine = code.co_filename.startswith(_HERE_ROOT) and code.co_name != "main"
+        if first or mine:
+            words.append(f"{name}:{frame.f_lineno} {code.co_name}")
+        first = False
+        frame = frame.f_back
+    return words
+
+
+def _thread_cpu() -> dict[int, float]:
+    out: dict[int, float] = {}
+    for t in threading.enumerate():
+        try:
+            out[t.ident] = time.clock_gettime(time.pthread_getcpuclockid(t.ident))
+        except (OSError, TypeError, AttributeError, OverflowError):
+            continue
+    return out
+
+
+def _loop_sampler() -> None:
+    """A thread beside the loop. While the loop keeps its beat it notes every thread's
+    CPU time (the baseline a hold is measured from); while the loop has missed its beat
+    by more than a tick it notes where the loop thread is — the loop running sync work
+    shows its own frames, a loop waiting for the GIL shows the selector."""
+    while True:
+        time.sleep(LOOP_SAMPLE_S)
+        beat, tid = _LOOP_WATCH.get("beat"), _LOOP_WATCH.get("tid")
+        now = time.perf_counter()
+        if beat is None or tid is None:
+            continue
+        if now - beat < LOOP_TICK_S * 2:
+            _LOOP_WATCH["cpu_base"] = (beat, _thread_cpu(), time.process_time())
+            continue
+        frames = sys._current_frames()
+        hold = _LOOP_WATCH.get("hold")
+        if hold is None or hold.get("beat") != beat:
+            hold = _LOOP_WATCH["hold"] = {"beat": beat, "loop": {}, "samples": 0}
+        hold["samples"] += 1
+        where = " < ".join(_stack_words(frames.get(tid)))
+        hold["loop"][where] = hold["loop"].get(where, 0) + 1
+
+
+def _hold_where(beat: float) -> dict:
+    """What a hold that began after `beat` was: where the loop was (the sampler's
+    commonest frame, when it ran during the hold), the loop thread's own CPU and the
+    threads that used the most CPU since the last kept beat — a hold with neither is the
+    box starving the process, not the server holding its loop."""
+    out: dict = {"loop": "", "samples": 0}
+    hold = _LOOP_WATCH.get("hold")
+    if hold and hold.get("beat") == beat and hold["loop"]:
+        out["loop"] = max(hold["loop"].items(), key=lambda kv: kv[1])[0]
+        out["samples"] = hold["samples"]
+    base = _LOOP_WATCH.get("cpu_base")
+    if base is None:
+        return out
+    cpu = _thread_cpu()
+    tid = _LOOP_WATCH.get("tid")
+    out["loop_cpu_ms"] = round((cpu.get(tid, 0.0) - base[1].get(tid, cpu.get(tid, 0.0))) * 1000.0, 1)
+    names = {t.ident: t.name for t in threading.enumerate()}
+    frames = sys._current_frames()
+    ran = sorted(((cpu[k] - base[1].get(k, 0.0), k) for k in cpu      # a new thread: all of it
+                  if k != tid and k != (_LOOP_WATCH.get("sampler") or threading).ident),
+                 reverse=True)
+    out["busy"] = [f"{names.get(k, k)} ({dt * 1000.0:.0f} ms cpu): "
+                   + " < ".join(_stack_words(frames.get(k), 3))
+                   for dt, k in ran[:3] if dt * 1000.0 >= 10]
+    out["busy_cpu_ms"] = round(ran[0][0] * 1000.0, 1) if ran else 0.0
+    # the whole process (threads that ended meanwhile, and work beside the GIL too)
+    out["proc_cpu_ms"] = round((time.process_time() - base[2]) * 1000.0, 1)
+    return out
+
+
 async def _loop_lag() -> None:
-    tick = 0.1
+    _LOOP_WATCH["tid"] = threading.get_ident()
+    sampler = _LOOP_WATCH.get("sampler")
+    if sampler is None or not sampler.is_alive():
+        sampler = _LOOP_WATCH["sampler"] = threading.Thread(
+            target=_loop_sampler, name="loop sampler", daemon=True)
+        sampler.start()
+    tick = LOOP_TICK_S
     while True:
         t0 = time.perf_counter()
+        _LOOP_WATCH["beat"] = t0
         await asyncio.sleep(tick)
         lag = (time.perf_counter() - t0 - tick) * 1000.0
-        if lag >= LOOP_LAG_MS:
+        top = SLOWEST["loop"]
+        where = _hold_where(t0) if lag >= 20.0 else None
+        if lag > 0 and (top is None or lag > top["ms"]):
+            SLOWEST["loop"] = {"ms": round(lag, 1), "at": time.time(), "where": where}
+        if lag >= LOOP_BUDGET_MS:
             row = {"method": "LOOP", "path": "(the event loop was held)", "handler": "-",
-                   "ms": round(lag, 1), "status": None, "at": time.time()}
-            SLOW.append(row)
-            del SLOW[:-SLOW_KEEP]
-            print(f"  !! the event loop was held {lag:.0f} ms", flush=True)
+                   "ms": round(lag, 1), "status": None, "at": time.time(), "where": where}
+            OVER_BUDGET.append(row)
+            del OVER_BUDGET[:-SLOW_KEEP]
+            if lag >= LOOP_LAG_MS:
+                SLOW.append(row)
+                del SLOW[:-SLOW_KEEP]
+                w = row["where"] or {}
+                print(f"  !! the event loop was held {lag:.0f} ms"
+                      + (f" — loop at {w.get('loop')}" if w.get("loop") else "")
+                      + (f"; ran: {'; '.join(w['busy'])}" if w.get("busy") else ""), flush=True)
 
 
 def _watch_loop() -> None:
@@ -1805,6 +1971,21 @@ class RequestTiming:
                 first[0], first[1] = time.perf_counter(), msg.get("status")
             await send(msg)
 
+        # The time spent waiting for the client's body is the client's (a 110 MB drop
+        # is its bytes on the wire, not the server's work): kept as `body_ms`, not in
+        # `ms` (wave 14). A request whose body is already here never waits in it.
+        waited = [0.0]
+        raw_receive = receive
+
+        async def body():
+            t = time.perf_counter()
+            msg = await raw_receive()
+            # only a body's bytes, before the reply began (a disconnect listener waits
+            # here for the whole response, and that is nobody's work)
+            if msg.get("type") == "http.request" and first[0] is None:
+                waited[0] += time.perf_counter() - t
+            return msg
+
         if saving:
             SAVES_IN_FLIGHT["n"] += 1
         elif method == "GET" and where in ("/", "/api/project") and SAVES_IN_FLIGHT["n"]:
@@ -1812,7 +1993,7 @@ class RequestTiming:
             while SAVES_IN_FLIGHT["n"] and time.perf_counter() < until:
                 await asyncio.sleep(0.02)
         try:
-            await self.app(scope, receive, timed)
+            await self.app(scope, body, timed)
         finally:
             if saving:
                 SAVES_IN_FLIGHT["n"] -= 1
@@ -1820,10 +2001,14 @@ class RequestTiming:
             if path != "/api/debug/slow":
                 end = first[0] if first[0] is not None else time.perf_counter()
                 ep = scope.get("endpoint")
-                note_request({"method": scope.get("method"), "path": path,
-                              "handler": getattr(ep, "__name__", None) or "-",
-                              "ms": round((end - t0) * 1000.0, 1), "status": first[1],
-                              "at": time.time()})
+                row = {"method": scope.get("method"), "path": path,
+                       "handler": getattr(ep, "__name__", None) or "-",
+                       "ms": round((end - t0 - min(waited[0], end - t0)) * 1000.0, 1),
+                       "status": first[1], "at": time.time()}
+                if waited[0] >= 0.001:
+                    row.update(body_ms=round(waited[0] * 1000.0, 1),
+                               wall_ms=round((end - t0) * 1000.0, 1))
+                note_request(row)
 
 
 app.add_middleware(RequestTiming)
@@ -1832,9 +2017,14 @@ app.add_middleware(RequestTiming)
 @app.get("/api/debug/slow")
 def api_debug_slow() -> JSONResponse:
     """Read-only: the last 50 requests over SLOW_MS (and event-loop holds), and the
-    slowest request (`slowest`) and slowest `/api/` request (`slowest_api`) seen."""
+    slowest request (`slowest`) and slowest `/api/` request (`slowest_api`) seen; the
+    budget (`budget`: a request's first byte within 300 ms, the loop never held 200 ms)
+    with the last 50 over it (`over_budget`, holds with `where`) and the longest hold
+    (`slowest_loop`)."""
     return JSONResponse({"threshold_ms": SLOW_MS, "slowest": SLOWEST["all"],
-                         "slowest_api": SLOWEST["api"], "slow": list(SLOW)})
+                         "slowest_api": SLOWEST["api"], "slowest_loop": SLOWEST["loop"],
+                         "budget": {"request_ms": REQUEST_BUDGET_MS, "loop_ms": LOOP_BUDGET_MS},
+                         "over_budget": list(OVER_BUDGET), "slow": list(SLOW)})
 
 
 @app.post("/api/snap")
@@ -2812,13 +3002,41 @@ def backend_preflight() -> dict:
 # both answered by the CLI itself without a model call. Cached because /api/status
 # carries this and is polled; a sign-in done at the terminal shows within the TTL, or
 # at once on *Check again*, which drops the cache.
+#
+# Asked again in the background once stale (wave 14: the two CLI calls are 0.4-0.6 s
+# on a loaded box, and the request that found the cache stale paid them — every 30 s a
+# slow /api/backend); only the first ask (at launch) waits for them.
 CLI_FACTS_TTL_S = 30.0
-_CLI_FACTS: dict = {"at": 0.0, "facts": {}}
+_CLI_FACTS: dict = {"at": 0.0, "facts": {}, "gen": 0, "asking": False}
+_CLI_FACTS_LOCK = threading.Lock()
 
 
 def cli_facts(fresh: bool = False) -> dict:
-    if not fresh and time.time() - _CLI_FACTS["at"] < CLI_FACTS_TTL_S:
-        return _CLI_FACTS["facts"]
+    """The CLI's version and sign-in (cached `CLI_FACTS_TTL_S`). Stale: what is known,
+    and a background ask; `fresh` (or nothing known yet): asked now."""
+    if fresh or not _CLI_FACTS["at"]:
+        return _cli_facts_ask()
+    if time.time() - _CLI_FACTS["at"] >= CLI_FACTS_TTL_S:
+        cli_facts_refresh()
+    return _CLI_FACTS["facts"]
+
+
+def cli_facts_refresh() -> None:
+    """Ask the CLI about itself on a thread of its own (one at a time)."""
+    with _CLI_FACTS_LOCK:
+        if _CLI_FACTS["asking"]:
+            return
+        _CLI_FACTS["asking"] = True
+
+    def run() -> None:
+        try:
+            _cli_facts_ask()
+        finally:
+            _CLI_FACTS["asking"] = False
+    threading.Thread(target=run, name="cli facts", daemon=True).start()
+
+
+def _cli_facts_ask() -> dict:
     facts: dict = {}
     try:
         out = subprocess.run(["claude", "--version"], capture_output=True, text=True,
@@ -2837,7 +3055,7 @@ def cli_facts(fresh: bool = False) -> dict:
         facts["plan"] = auth.get("subscriptionType")
     except (OSError, subprocess.TimeoutExpired, ValueError):
         facts["logged_in"] = None          # unknown is not "signed out"
-    _CLI_FACTS.update(at=time.time(), facts=facts)
+    _CLI_FACTS.update(at=time.time(), facts=facts, gen=_CLI_FACTS["gen"] + 1)
     return facts
 
 
@@ -2892,8 +3110,10 @@ def _probe_job() -> None:
 def probe_backend() -> None:
     if BACKEND["state"] == "checking":
         return
-    # *Check again* means everything: the cached CLI facts, the last job's diagnosis.
-    cli_facts(fresh=True)
+    # *Check again* means everything: the cached CLI facts (asked again beside the
+    # probe, not in the click's request), the last job's diagnosis.
+    if STATE.get("cli_facts"):
+        cli_facts_refresh()
     inference.clear_problem()
     BACKEND.update(state="checking", detail="", latency_ms=None, fix=None)
     threading.Thread(target=_probe_job, daemon=True).start()
@@ -3230,7 +3450,7 @@ def _snap_key() -> tuple:
                          if k.startswith("ROUGHCUT_"))),
             bool(os.environ.get("ANTHROPIC_API_KEY")),
             # the CLI's sign-in is re-asked once its cache is stale (`cli_facts`)
-            int(time.time() // CLI_FACTS_TTL_S) if STATE.get("cli_facts") else 0,
+            (int(time.time() // CLI_FACTS_TTL_S), _CLI_FACTS["gen"]) if STATE.get("cli_facts") else 0,
             STATE.get("edl_created"), _snap_paths())
 
 
@@ -5720,7 +5940,7 @@ def load_telemetry(clip: str) -> dict | None:
     if not p.exists():
         return None
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        return read_json_file(p)
     except (ValueError, OSError):
         return None
 
@@ -10423,70 +10643,60 @@ def _fx_revise_job(job: str, fx_id: str, note: str) -> None:
 PROOF_W, PROOF_H, PROOF_FPS = 1280, 720, 24
 
 
-def _fx_proof(e: dict, seg: dict) -> tuple[Path, Path]:
-    """The one shot rendered from its proxy at 720p, with the effect (`proof.mp4`) and
-    without (`base.mp4`), so the checks can measure a difference and the human can
-    watch the result in seconds rather than after a whole render."""
-    d = fx_home() / e["id"]
-    d.mkdir(parents=True, exist_ok=True)
-    src = _fx_proxy(seg["clip"])
-    if src is None:
-        raise RuntimeError(f"no proxy or source for {seg['clip']}")
-    dur = float(seg["out"]) - float(seg["in"])
-    vf = (f"scale={PROOF_W}:{PROOF_H}:force_original_aspect_ratio=decrease,"
-          f"pad={PROOF_W}:{PROOF_H}:(ow-iw)/2:(oh-ih)/2,fps={PROOF_FPS},format=yuv420p")
-    af = "aresample=48000:first_pts=0,aformat=channel_layouts=stereo"
-    head = ["ffmpeg", "-v", "error", "-y", "-nostdin", "-ss", f"{float(seg['in']):.3f}",
-            "-i", str(src)]
-    tail = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-movflags", "+faststart"]
-    base, proof = d / "base.mp4", d / "proof.mp4"
-    r = subprocess.run(head + ["-t", f"{dur:.3f}", "-vf", vf, "-af", af,
-                               "-map", "0:v:0", "-map", "0:a:0?", "-dn"] + tail + [str(base)],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        raise RuntimeError(f"base render failed: {r.stderr[-300:]}")
-    evs = fx.events_in_shot(e, seg)
-    extra, graph, vout, aout = fx.part_graph([(e, evs)], PROOF_W, PROOF_H, PROOF_FPS, d)
-    fc = f"[0:v]{vf}[vbase];[0:a]{af}[abase]" + (";" + graph if graph else "")
-    # the extra inputs sit between the source and `-t`: after `-i` a `-t` is an input
-    # option for the NEXT input, and the sprites must not be cut short
-    r = subprocess.run(head + extra + ["-t", f"{dur:.3f}", "-filter_complex", fc,
-                                       "-map", f"[{vout}]", "-map", f"[{aout}]", "-dn"]
-                       + tail + [str(proof)], capture_output=True, text=True)
-    if r.returncode != 0:
-        raise RuntimeError(f"proof render failed: {r.stderr[-300:]}")
-    return proof, base
-
-
 # The free check runs by itself (INTAKE M16 I16.5): after every design, revise, nudge
 # and revert, never a model call — a proof render of the one shot and the measured
 # checklist. Proposals arrived unchecked because the check waited for a Verify button
 # (the slow motion on Killington never had one run). One proof renders at a time, after
 # any render of the cut (a 4K encode owns the cores); a check already waiting for an
-# effect covers a newer change too, because it reads the effect when it starts.
+# effect covers a newer change too, because it reads the effect when it starts, and a
+# check already running covers an ask for the same effect unchanged (wave 14: the
+# board's card asks for a check of a proposal that has none yet — every proposal, while
+# its first check runs — and verdict 10 found a second identical check queued).
+#
+# It runs in a child process (`roughcut.fxcheck`, wave 14): verdict 10's vignette drew
+# 240 frames with PIL on a server thread for 12+ minutes, holding the GIL 250 ms at a
+# time — the event loop held 145 times, every request slow, an upload at ~1 MB/s. The
+# child reports each stage (the base render, the overlay, the proof render, the
+# measuring) as it goes, so the job's % moves and its ETA is the stages' own.
 FX_VERIFY_SLOT = threading.Lock()
 FX_VERIFY_GUARD = threading.Lock()
 FX_VERIFY_WAITING: dict[str, str] = {}      # fx id → the job queued for it, not started
+FX_VERIFY_RUNNING: dict[str, tuple[str, str]] = {}   # fx id → (job, the spec it checks)
 FX_VERIFY_POLL_S = 1.0
 FX_SPEC_CHECKED = ("shot", "events", "overlay", "sound", "window", "edits")
+FX_CHECK_CHILD = True       # False: the check runs on its job's thread (as the stubs do)
+FX_CHECK_SCOPE: dict = {"scope": None}
+# Seconds a stage takes, per second of the shot (base, proof) or per frame drawn (the
+# overlay), plus the measuring: first guesses, then what the last check measured.
+FX_CHECK_COST = {"base": 0.35, "proof": 0.45, "frame": 0.3, "measure": 1.5}
 
 
 def _fx_render_running() -> bool:
     return any(j["state"] not in progress.TERMINAL for j in RENDERS.values())
 
 
+def _fx_spec_key(e: dict) -> str:
+    """What a check reads of an effect: two effects with one key get one checklist."""
+    return json.dumps({k: e.get(k) for k in FX_SPEC_CHECKED}, sort_keys=True, default=str)
+
+
 def _fx_autoverify(fx_id: str) -> str | None:
-    """Queue the free check for an effect; returns its job id (the one already waiting
-    when there is one), or None when the effect is gone."""
+    """Queue the free check for an effect; returns its job id — the one already waiting
+    when there is one, or the one running on the effect as it is now — or None when
+    the effect is gone. One check per change of the effect, never two of one."""
     with FX_VERIFY_GUARD:
         waiting = FX_VERIFY_WAITING.get(fx_id)
         if waiting and waiting in FX and FX[waiting]["state"] not in progress.TERMINAL:
             return waiting
         try:
-            name = _fx_get(fx_id).get("name") or "the effect"
+            e = _fx_current(fx_id)
         except HTTPException:
             return None
+        running = FX_VERIFY_RUNNING.get(fx_id)
+        if (running and running[0] in FX and FX[running[0]]["state"] not in progress.TERMINAL
+                and running[1] == _fx_spec_key(e)):
+            return running[0]
+        name = e.get("name") or "the effect"
         job = _fx_start("verify", f"Checking {name}", _fx_verify_job, fx_id, fx_id=fx_id)
         FX_VERIFY_WAITING[fx_id] = job
         return job
@@ -10501,10 +10711,142 @@ def _fx_verify_wait(entry: progress.Job, job: str, fx_id: str) -> None:
             entry.note("waiting for the render to finish")
             waited = True
         time.sleep(FX_VERIFY_POLL_S)
+    if FX_VERIFY_SLOT.locked():
+        entry.note("waiting for another check to finish")
     FX_VERIFY_SLOT.acquire()
     with FX_VERIFY_GUARD:
         if FX_VERIFY_WAITING.get(fx_id) == job:
             FX_VERIFY_WAITING.pop(fx_id)
+
+
+def _fx_check_scope() -> procscope.Scope:
+    """The checks' child processes: their own group, ended with the server (not
+    background: somebody is watching the card's %)."""
+    sc = FX_CHECK_SCOPE["scope"]
+    if sc is None or sc.cancelled:
+        sc = FX_CHECK_SCOPE["scope"] = procscope.Scope("fx checks")
+    return sc
+
+
+def _fx_check_plan(entry: progress.Job, e: dict, seg: dict) -> None:
+    """The check's stages as the job's milestones, weighted by what each costs, and the
+    ETA they add up to — so its % is the stages' and the time left is theirs."""
+    dur = max(0.1, float(seg["out"]) - float(seg["in"]))
+    overlay = e.get("overlay")
+    frames = 0
+    if overlay:
+        n_ev = max(1, len(fx.events_in_shot(e, seg)))
+        frames = len(fx.overlay_runs(overlay, PROOF_FPS)) * n_ev
+    c = FX_CHECK_COST
+    # the clock starts with the check, not with the wait behind a render or another
+    # check (an ETA counted from the queueing was spent before the first frame)
+    now = time.time()
+    entry["waited_s"] = round(now - entry["started"], 1)
+    entry["started"] = now
+    w = {"base": c["base"] * dur, "overlay": 0.05 + c["frame"] * frames,
+         "proof": c["proof"] * dur, "measure": c["measure"]}
+    entry.set_estimate(round(sum(w.values()), 1),
+                       [progress.milestone(k, label, w[k]) for k, label in (
+                           ("base", "rendering the shot"), ("overlay", "drawing the overlay"),
+                           ("proof", "rendering the proof"), ("measure", "measuring the proof"))],
+                       source="model", detail="rendering the shot")
+    entry["frames_to_draw"] = frames
+
+
+def _fx_check_learn(seg: dict, stats: dict) -> None:
+    """The next check's guess is this one's measurement (a moving average)."""
+    dur = max(0.1, float(seg["out"]) - float(seg["in"]))
+    seen = {"base": stats.get("base_s", 0) / dur, "proof": stats.get("proof_s", 0) / dur,
+            "measure": stats.get("measure_s")}
+    if stats.get("overlay_frames"):
+        seen["frame"] = stats.get("overlay_s", 0) / stats["overlay_frames"]
+    for k, v in seen.items():
+        if isinstance(v, (int, float)) and v > 0:
+            FX_CHECK_COST[k] = round(0.5 * FX_CHECK_COST[k] + 0.5 * float(v), 4)
+
+
+_FX_STAGE_NOTE = {"base": "rendering the shot", "overlay": "drawing the overlay",
+                  "proof": "rendering the proof", "measure": "measuring the proof"}
+
+
+def _fx_check_progress(entry: progress.Job):
+    def on(stage: str, part: float, done: bool) -> None:
+        if done:
+            entry.complete(stage)
+            nxt = entry.current()
+            if nxt is not None:
+                entry.note(_FX_STAGE_NOTE.get(nxt["key"], nxt["label"]))
+        else:
+            entry.advance(stage, part, detail=_FX_STAGE_NOTE.get(stage))
+    return on
+
+
+def _fx_run_check(entry: progress.Job, e: dict, seg: dict, onset, hz: float) -> dict:
+    """Proof and checklist for `e` on `seg` (`fxcheck.check`): in a child process under
+    the checks' procscope, reading its progress lines into the job; on this thread when
+    the renderer is replaced (`fxcheck.unpatched`: the suite's stubs) or
+    FX_CHECK_CHILD is off. Returns the checklist with `proof` (frames drawn, seconds)."""
+    src = _fx_proxy(seg["clip"])
+    if src is None:
+        raise RuntimeError(f"no proxy or source for {seg['clip']}")
+    d = fx_home() / e["id"]
+    d.mkdir(parents=True, exist_ok=True)
+    _fx_check_plan(entry, e, seg)
+    on = _fx_check_progress(entry)
+    spec = {"effect": e, "seg": seg, "src": str(src), "dir": str(d), "w": PROOF_W,
+            "h": PROOF_H, "fps": PROOF_FPS, "onset": onset, "hz": hz, "impact": _fx_impact(e)}
+    t0 = time.perf_counter()
+    if not (FX_CHECK_CHILD and fxcheck.unpatched()):
+        res = fxcheck.check(spec, on)
+    else:
+        res = _fx_check_child(spec, d, on, entry)
+    stats = dict(res.get("stats") or {})
+    stats["s"] = round(time.perf_counter() - t0, 2)
+    _fx_check_learn(seg, stats)
+    v = res["verify"]
+    v["proof"] = {k: stats[k] for k in ("overlay_frames", "sprites_drawn", "s") if k in stats}
+    return v
+
+
+def _fx_check_child(spec: dict, d: Path, on, entry: progress.Job) -> dict:
+    spec_path = d / f"check.{os.getpid()}.{threading.get_ident()}.json"
+    out_path = spec_path.with_suffix(".out.json")
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    out_path.unlink(missing_ok=True)
+    cmd = [sys.executable, "-m", "roughcut.fxcheck", str(spec_path), str(out_path)]
+    setpriv = shutil.which("setpriv")
+    if setpriv and os.name == "posix":
+        cmd = [setpriv, "--pdeathsig", "TERM", "--", *cmd]    # dies with the server
+    env = {**os.environ, "ROUGHCUT_FX_PARENT": str(os.getpid()), "PYTHONUNBUFFERED": "1",
+           "PYTHONPATH": os.pathsep.join([str(HERE.parent)]
+                                         + [p for p in [os.environ.get("PYTHONPATH")] if p])}
+    try:
+        with procscope.active(_fx_check_scope()):
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    stdin=subprocess.DEVNULL, text=True, cwd=str(HERE.parent),
+                                    env=env)
+        entry["check_pid"] = proc.pid
+        tail: list[str] = []
+        err = threading.Thread(target=lambda: tail.extend(proc.stderr.read().splitlines()[-8:]),
+                               daemon=True)
+        err.start()
+        for line in proc.stdout:
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(msg, dict) and msg.get("stage"):
+                on(str(msg["stage"]), float(msg.get("part") or 0.0), bool(msg.get("done")))
+        proc.wait()
+        err.join(timeout=2)
+        res = json.loads(out_path.read_text(encoding="utf-8")) if out_path.exists() else {}
+        if proc.returncode != 0 or "verify" not in res:
+            raise RuntimeError(res.get("error") or f"the check stopped (exit {proc.returncode})"
+                               + (f": {tail[-1][:200]}" if tail else ""))
+        return res
+    finally:
+        spec_path.unlink(missing_ok=True)
+        out_path.unlink(missing_ok=True)
 
 
 def _fx_verify_job(job: str, fx_id: str) -> None:
@@ -10518,6 +10860,8 @@ def _fx_verify_job(job: str, fx_id: str) -> None:
         except HTTPException:                       # discarded while it waited
             entry.finish("done", detail="the effect is gone")
             return
+        with FX_VERIFY_GUARD:
+            FX_VERIFY_RUNNING[fx_id] = (job, _fx_spec_key(e))
         seg = _fx_seg(e["shot"]) if not str(e.get("shot", "")).startswith("new:") else {"id": e["shot"], "clip": e.get("clip"), "in": 0, "out": 0}
         sc = load_sidecar(e["clip"])
         onset = (sc.get("tracks") or {}).get("onset") or None
@@ -10542,10 +10886,7 @@ def _fx_verify_job(job: str, fx_id: str) -> None:
                  + [{"key": "proof", "label": "a proof render", "ok": None,
                      "detail": "skipped: the shot does not exist until the edits are accepted"}]}
         else:
-            entry.note("rendering a proof of the shot")
-            proof, base = _fx_proof(e, seg)
-            entry.note("measuring the proof")
-            v = fx.verify(e, seg, onset=onset, hz=hz, part=proof, base=base, impact=_fx_impact(e))
+            v = _fx_run_check(entry, e, seg, onset, hz)
             if edit_check:
                 v["checks"].insert(0, edit_check)
                 v["ok"] = bool(v["ok"]) and edit_check["ok"]
@@ -10572,13 +10913,21 @@ def _fx_verify_job(job: str, fx_id: str) -> None:
         entry.finish("done", detail="every check passed" if v.get("ok")
                      else "failed: " + ", ".join(failed)[:200])
     except Exception as exc:  # noqa: BLE001
+        try:
+            _fx_current(fx_id)
+        except HTTPException:            # discarded while its proof rendered: its files went
+            entry["result"] = {"id": fx_id, "ok": None}
+            entry.finish("done", detail="the effect is gone")
+            return
         entry.finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
     finally:
-        if slot:
-            FX_VERIFY_SLOT.release()
         with FX_VERIFY_GUARD:
             if FX_VERIFY_WAITING.get(fx_id) == job:
                 FX_VERIFY_WAITING.pop(fx_id)
+            if (FX_VERIFY_RUNNING.get(fx_id) or ("",))[0] == job:
+                FX_VERIFY_RUNNING.pop(fx_id)
+        if slot:
+            FX_VERIFY_SLOT.release()
 
 
 def _fx_start(kind: str, label: str, target, *args, fx_id: str | None = None) -> str:
@@ -10817,7 +11166,7 @@ async def api_fx_revert(request: Request) -> JSONResponse:
     e.pop("verify", None)
     e = fx.validate_effect(e, _fx_segments())
     _fx_put(e)
-    _fx_sound(e)
+    await asyncio.to_thread(_fx_sound, e)        # numpy, 50-230 ms for a long repeat
     _fx_autoverify(e["id"])
     return JSONResponse({"ok": True, "effect": _fx_urls(e)})
 
@@ -10858,7 +11207,7 @@ async def api_fx_discard(request: Request) -> JSONResponse:
     current = next((x for x in read_edl().get("effects") or [] if x.get("id") == fx_id), None)
     if current is not None and e.get("status") == "proposed":
         fx.save(fx_home(), current)                 # a revision dropped: the accepted one stays
-        _fx_sound(current)
+        await asyncio.to_thread(_fx_sound, current)
         return JSONResponse({"ok": True})
     if e.get("status") == "accepted" or current is not None:
         raise HTTPException(400, "that effect is accepted — remove it instead")
@@ -10905,7 +11254,7 @@ async def api_fx_update(fx_id: str, request: Request) -> JSONResponse:
         raise HTTPException(400, str(exc))
     _fx_put(new)
     if body.get("sound") is not None:
-        _fx_sound(new)
+        await asyncio.to_thread(_fx_sound, new)  # off the loop: a long synth holds it
     _fx_autoverify(fx_id)
     return JSONResponse(_fx_urls(new))
 
@@ -11716,12 +12065,64 @@ async def api_upload_plan(request: Request) -> JSONResponse:
     return JSONResponse({"batch": batch, "files": out, "bytes": total, "job": batch})
 
 
+class _UploadWriter:
+    """One file's bytes to disk on a thread of its own (wave 14, verdict 10: a 110 MB
+    drop ran at ~1.25 MB/s while the server was busy). The request hands it whole
+    UPLOAD_WRITE pieces without waiting; it joins and writes them, counts them onto the
+    batch's bar and keeps the batch alive, so a chunk arriving costs the event loop an
+    append and nothing else, and reading the network overlaps writing the disk."""
+
+    DEPTH = 8                    # pieces in flight: a slow disk slows the reading, not RAM
+
+    def __init__(self, f, up: dict) -> None:
+        import queue
+        self.f, self.up = f, up
+        self.q: "queue.Queue" = queue.Queue(maxsize=self.DEPTH)
+        self.error: BaseException | None = None
+        self.thread = threading.Thread(target=self._run, name="upload writer", daemon=True)
+        self.thread.start()
+
+    def _run(self) -> None:
+        while True:
+            piece = self.q.get()
+            if piece is None:
+                return
+            if self.error is not None:
+                continue
+            try:
+                self.f.write(b"".join(piece))
+            except BaseException as exc:  # noqa: BLE001 — the request raises it
+                self.error = exc
+            up = self.up
+            now = up["last"] = time.time()
+            if now - up.get("ticked", 0.0) > 0.25:      # the job's bar, four times a second
+                up["ticked"] = now
+                _upload_tick(up)
+
+    async def put(self, piece: list[bytes]) -> None:
+        import queue
+        try:
+            self.q.put_nowait(piece)
+        except queue.Full:
+            await asyncio.to_thread(self.q.put, piece)
+
+    def finish(self) -> None:
+        """On a worker: the last piece written, the file closed; raises a write's error.
+        Twice is once."""
+        if self.thread.is_alive():
+            self.q.put(None)
+            self.thread.join()
+        self.f.close()
+        if self.error is not None:
+            raise self.error
+
+
 @app.put("/api/upload/{batch}/{i}")
 async def api_upload_file(batch: str, i: int, request: Request) -> JSONResponse:
-    """One file's bytes, streamed to disk as they arrive: written in UPLOAD_WRITE pieces
-    on a worker thread into the uploads' `.incoming/` (unwatched), renamed into place
-    whole, then added to the bin. A short body, a long one, a closed connection or the
-    batch's Stop leaves nothing behind."""
+    """One file's bytes, streamed to disk as they arrive: handed in UPLOAD_WRITE pieces
+    to a writer thread (`_UploadWriter`) into the uploads' `.incoming/` (unwatched),
+    renamed into place whole, then added to the bin. A short body, a long one, a closed
+    connection or the batch's Stop leaves nothing behind."""
     up = UPLOADS.get(batch)
     if up is None or up.get("bin") != STATE["footage"].name:
         raise HTTPException(404, "no such upload")
@@ -11735,41 +12136,50 @@ async def api_upload_file(batch: str, i: int, request: Request) -> JSONResponse:
         raise HTTPException(409, f"{row['clip']} is {row['state']}")
     updir = mediamod.uploads_dir(STATE["work"], STATE["footage"].name)
     incoming = updir / ".incoming"
-    await asyncio.to_thread(incoming.mkdir, parents=True, exist_ok=True)
     part = incoming / f"{row['clip']}.{batch}.part"
     dest = updir / row["clip"]
     row.update(state="uploading", got=0)
     up["last"] = time.time()
-    f = await asyncio.to_thread(open, part, "wb")
+
+    def opened():
+        incoming.mkdir(parents=True, exist_ok=True)
+        return open(part, "wb")
+    writer = _UploadWriter(await asyncio.to_thread(opened), up)
     held: list[bytes] = []
     n_held = 0
+    size = row["size"]
     try:
         async for chunk in request.stream():
             if not chunk:
                 continue
             row["got"] += len(chunk)
-            now = up["last"] = time.time()
-            if now - up.get("ticked", 0.0) > 0.25:      # the job's bar, four times a second
-                up["ticked"] = now
-                _upload_tick(up)
-            if row["got"] > row["size"]:
-                raise HTTPException(413, f"more than the {row['size']} bytes announced")
-            if job["state"] in progress.TERMINAL:
-                raise HTTPException(409, "the upload was stopped")
+            if row["got"] > size:
+                raise HTTPException(413, f"more than the {size} bytes announced")
             held.append(chunk)
             n_held += len(chunk)
             if n_held >= UPLOAD_WRITE:
-                data, held, n_held = b"".join(held), [], 0
-                await asyncio.to_thread(f.write, data)
+                if job["state"] in progress.TERMINAL:
+                    raise HTTPException(409, "the upload was stopped")
+                if writer.error is not None:
+                    raise writer.error
+                await writer.put(held)
+                held, n_held = [], 0
         if held:
-            await asyncio.to_thread(f.write, b"".join(held))
-        await asyncio.to_thread(f.close)
-        if row["got"] != row["size"]:
-            raise HTTPException(400, f"{row['got']} of {row['size']} bytes arrived")
+            await writer.put(held)
+        await asyncio.to_thread(writer.finish)
+        if job["state"] in progress.TERMINAL:
+            raise HTTPException(409, "the upload was stopped")
+        if row["got"] != size:
+            raise HTTPException(400, f"{row['got']} of {size} bytes arrived")
         await asyncio.to_thread(os.replace, part, dest)
     except BaseException as exc:           # a disconnect, a Stop, a bad length: no trace
-        await asyncio.to_thread(f.close)
-        await asyncio.to_thread(part.unlink, missing_ok=True)
+        def drop():
+            try:
+                writer.finish()
+            except BaseException:  # noqa: BLE001 — the first error is the one reported
+                pass
+            part.unlink(missing_ok=True)
+        await asyncio.to_thread(drop)
         row.update(state="failed", got=0,
                    why=str(getattr(exc, "detail", "") or type(exc).__name__)[:120])
         _upload_tick(up)
@@ -12259,7 +12669,7 @@ def switch_cut(path: Path) -> None:
     edl = read_edl()
     STATE["orient"] = edl.get("orient", "auto")
     if ensure_timebase(edl):          # a cut from before the timebase was kept: once
-        write_edl(edl)
+        write_timebase_once(edl)
     remember_project(STATE["footage"], path)
 
 
@@ -12585,7 +12995,7 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
     # 10, punch 3): here, after this bin's caches are its own, and off any request.
     _edl = read_edl()
     if ensure_timebase(_edl):
-        write_edl(_edl)
+        write_timebase_once(_edl)
     STATE["proxies_enabled"] = proxies
     remember_project(footage, edl_path)
     STATE["asks"].mkdir(parents=True, exist_ok=True)
