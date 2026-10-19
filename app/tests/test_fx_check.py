@@ -315,3 +315,39 @@ def test_a_discard_while_the_child_renders_is_not_a_failed_check(scripted, clien
     assert client.post("/api/fx/discard", json={"id": fx_id}).status_code == 200
     snap = _wait(client, job)
     assert (snap["state"], snap["detail"]) == ("done", "the effect is gone"), snap
+
+
+def test_the_eta_counts_from_the_check_not_from_its_wait(monkeypatch, scripted, client):
+    """A check waits behind an export (a 4K encode owns the cores); its ETA once it runs
+    is the stages' own, not an estimate already spent while it waited (Killington, a
+    260 s export: the check ran at "30%" with no time left to show)."""
+    import server
+    from roughcut import progress
+    monkeypatch.setattr(server, "FX_VERIFY_POLL_S", 0.05)
+    # a quick check (~1 s planned) behind a longer wait: counted from the wait, the
+    # plan would be spent before the check began
+    monkeypatch.setattr(server, "FX_CHECK_COST", {"base": 0.05, "proof": 0.05, "frame": 0.05,
+                                                  "measure": 0.2})
+    shot = _seed(scripted, client, [{"clip": "CLIP_A.MP4", "in": 0.0, "out": 6.0, "why": "all"}])[0]
+    server.RENDERS["rwait001"] = progress.Job("render", "Exporting — test", id="rwait001")
+    try:
+        fx_id = _wait(client, client.post("/api/fx/design", json={"shot": shot, "note": "vignette"}).json()["job"])["result"]["id"]
+        job = _checks(fx_id)[0]["id"]
+        time.sleep(2.5)
+        snap = _job(client, job)
+        assert snap["detail"] == "waiting for the render to finish" and snap["pct"] == 0.0
+    finally:
+        server.RENDERS["rwait001"].finish("done")
+    etas = []
+    t0 = time.time()
+    while time.time() - t0 < 60:
+        snap = _job(client, job)
+        if snap["state"] != "running":
+            break
+        if snap.get("milestones_total"):
+            etas.append(snap["eta_s"])
+        time.sleep(0.03)
+    server.RENDERS.pop("rwait001", None)
+    assert snap["state"] == "done", snap
+    assert snap["waited_s"] >= 2.0 and snap["elapsed_s"] < snap["waited_s"] + 60
+    assert etas and etas[0] is not None and etas[0] > 0, etas

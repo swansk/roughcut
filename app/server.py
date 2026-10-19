@@ -10369,6 +10369,11 @@ def _fx_check_plan(entry: progress.Job, e: dict, seg: dict) -> None:
         n_ev = max(1, len(fx.events_in_shot(e, seg)))
         frames = len(fx.overlay_runs(overlay, PROOF_FPS)) * n_ev
     c = FX_CHECK_COST
+    # the clock starts with the check, not with the wait behind a render or another
+    # check (an ETA counted from the queueing was spent before the first frame)
+    now = time.time()
+    entry["waited_s"] = round(now - entry["started"], 1)
+    entry["started"] = now
     w = {"base": c["base"] * dur, "overlay": 0.05 + c["frame"] * frames,
          "proof": c["proof"] * dur, "measure": c["measure"]}
     entry.set_estimate(round(sum(w.values()), 1),
