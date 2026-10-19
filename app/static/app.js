@@ -1962,7 +1962,10 @@ function pauseCut() {
   progPause();
   screenMsg('');       // callers that have something to say set it after this
   paintTransport();
+  // Effect Controls catches up on the shot the playback moved to (advance's settle)
+  if (inspectorBehind) { inspectorBehind = false; renderInspector(); }
 }
+let inspectorBehind = false;        // the selection moved while playing; the panel waits (advance)
 
 /* The Program monitor shows the sequence, not only V1 (verdict 3 punch 4): what the
  * export composites, the monitor draws. Two followers ride beside the pv0/pv1 pair and
@@ -3030,7 +3033,13 @@ function advance() {
   // the preroll of the shot after it.
   const settle = () => {
     if (g !== player.gen && player.playing) return;           // a later cut settles its own
-    renderInspector();
+    // (wave 15 PERF6, verdict 11 punch 3 + 9) While the monitor plays, Effect Controls keeps
+    // the shot it shows and catches up when it stops (pauseCut), as Premiere's does not follow
+    // playback at all: its rebuild for the new shot was 5-28 ms of script while playing (and its
+    // frame's style, layout and paint of the new panel, ~6 ms more at load 2), on the thread
+    // that hands the grade its frames: moved later in the shot it was still a lost canvas frame
+    // (a 53-57 ms long frame there, the perf test at load 9-11).
+    if (player.playing) inspectorBehind = true; else renderInspector();
     afterFirstFrames(nv, () => tl.render(), 1);
   };
   if (short) setTimeout(settle, (tl.dur(nseg) + 0.1) * 1000);
