@@ -1438,8 +1438,21 @@ function showLive() {
   if (liveVideo() && liveVideo()._posterUp) { clearTimeout(restT); paintRestStill(); }
   // The grade follows the monitor (INTAKE M10): the live video's shot picks the LUT.
   const g = gradeApi();
-  if (g) g.setShot(segs[player.idx] ? segs[player.idx].id : null);
+  const id = segs[player.idx] ? segs[player.idx].id : null;
+  const lv = liveVideo();
+  // (wave 15 PERF6, verdict 11 punch 3) The same shot on the same buffer, its LUT in (a play
+  // from where the monitor is parked, a resume): the canvas has its frame and follows that
+  // buffer's frames already. setShot's draw there was the parked frame again, at full size,
+  // as the play's first frames came: 70-100 ms of the grade worker's and the GL's time at
+  // the play's start (traced: a 34 ms draw and a 39 ms read-back 3 ms after the Space), the
+  // perf test's first canvas hole of a play (made -> got 39-43 ms at 90-160 ms in).
+  const same = id != null && id === shownShot.id && lv === shownShot.v
+    && g && g.shot === String(id) && !!g.lut;
+  shownShot.id = id;
+  shownShot.v = lv;
+  if (g && !same) g.setShot(id);
 }
+const shownShot = { id: null, v: null };   // what showLive last gave the grade
 
 /* The monitor sits at the top of the column. When the shot list ran a long way below
  * it, clicking shot 12's poster on the Killington cut started playback 3,163 px above
