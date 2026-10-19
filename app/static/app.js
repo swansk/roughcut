@@ -123,6 +123,26 @@ function etaText(s) {
   return `about ${Math.round(s / 60)} min left`;
 }
 
+/* A job's time left, short, for a line in the header: "~10s left", "~2 min left". */
+function etaShort(j) {
+  return j.state === 'done' || j.state === 'failed' || j.state === 'cancelled' ? ''
+    : etaText(j.eta_s).replace(/^about /, '~').replace(/^~a minute/, '~1 min');
+}
+
+/* While a first pass runs, the jobs it is made of — the index it runs or joined (the
+ * looks and previews it goes on with while the cut is written are that same index) and
+ * the call writing its cut (an Ask carrying `firstpass`) — are the pass's: the header's
+ * first-pass control is their one readout (their time left on it, their % in its hover:
+ * firstpass.js `rcFirstPass.jobs`), never a pill each beside it. Verdict 10, punch 9: the
+ * header read "First pass · the cut ×", "54% ×" and "20% · ~2 min left" at once. A pass
+ * job that failed keeps its pill, saying why; any other job (an export, an effect's
+ * check, a find) is its own family and keeps its own. */
+function passJob(j, fp) {
+  if (!fp || fp.state !== 'running') return false;
+  if (j.state === 'failed' || j.state === 'done' || j.state === 'cancelled') return false;
+  return j.kind === 'index' || (j.kind === 'ask' && !!j.firstpass);
+}
+
 function jobRow(j) {
   let row = strip.rows.get(j.id);
   if (!row) {
@@ -185,10 +205,8 @@ function paintJob(row, j) {
   row.querySelector('.jbar i').style.width = `${j.pct}%`;
   // the row is one compact line in the header: how far and how long ("~10s left"); the
   // time it has taken so far is the hover's
-  const eta = j.state === 'done' || j.state === 'failed' ? ''
-    : etaText(j.eta_s).replace(/^about /, '~').replace(/^~a minute/, '~1 min');
   row.querySelector('.jnums').textContent =
-    [`${Math.round(j.pct)}%`, eta].filter(Boolean).join(' · ');
+    [`${Math.round(j.pct)}%`, etaShort(j)].filter(Boolean).join(' · ');
   // The milestone is what the operation is *on*; the detail is what it is doing inside
   // it. Both, because "choosing the shots" without "12 of ~18" is a spinner with words.
   // In the header's row they are the line's hover and the first line under ▸; a failed
@@ -271,6 +289,7 @@ async function pollJobs() {
     jobs = (await (await fetch('/api/jobs')).json()).jobs;
   } catch (e) { return; }                   // a blip is not a reason to blank the bar
   const live = new Set(jobs.map((j) => j.id));
+  const fp = window.rcFirstPass && typeof rcFirstPass.state === 'function' ? rcFirstPass.state() : null;
   strip.rows.forEach((row, id) => {
     if (live.has(id)) return;
     row.remove();
@@ -281,8 +300,9 @@ async function pollJobs() {
   for (const j of jobs) {
     const before = strip.seen.get(j.id);
     strip.seen.set(j.id, j);
-    if (quietJob(j)) {
-      // said nothing worth a row: none, and the strip is not a second header row for it
+    if (quietJob(j) || passJob(j, fp)) {
+      // said nothing worth a row (or the first-pass control says it): none, and the
+      // strip is not a second header row for it
       const row = strip.rows.get(j.id);
       if (row) { row.remove(); strip.rows.delete(j.id); }
     } else {
@@ -299,7 +319,11 @@ async function pollJobs() {
   jobTicks += 1;
   // Gone completely when there is nothing to say. A strip that lingers empty is one
   // more thing on a screen that already has plenty.
-  $('#progress').hidden = !jobs.some((j) => !quietJob(j));
+  $('#progress').hidden = !jobs.some((j) => !quietJob(j) && !passJob(j, fp));
+  if (window.rcFirstPass && typeof rcFirstPass.jobs === 'function') {
+    rcFirstPass.jobs(jobs.filter((j) => passJob(j, fp)).map((j) => ({
+      id: j.id, kind: j.kind, label: j.label, pct: Math.round(j.pct || 0), eta: etaShort(j) })));
+  }
   // Driven from the server's registry rather than from this tab's own click, so it is
   // right after a reload and right when the render was started somewhere else. The
   // pending flag covers the second between the click and the job existing to be seen.

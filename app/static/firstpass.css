@@ -19,6 +19,10 @@ header #firstpass { flex: 0 0 auto; position: relative; display: flex;
 #firstpass .fp-btn:hover { background: var(--card-hi, #313135); }
 #firstpass .fp-btn svg { flex: none; width: 13px; height: 13px; color: var(--accent, #4a9df8); }
 #firstpass .fp-label { font-variant-numeric: tabular-nums; }
+/* the pass's time left (its job's, app.js passJob): dim, like a job pill's numbers */
+#firstpass .fp-nums { flex: none; padding: 0 8px 0 0; font-variant-numeric: tabular-nums; font-size: 11px;
+                      color: var(--dim, #94949c); white-space: nowrap; }
+#firstpass .fp-nums[hidden] { display: none; }
 #firstpass[data-state="running"] .fp-btn { color: var(--dim, #94949c); }
 #firstpass[data-state="running"] .fp-btn svg { animation: fp-pulse 1.6s ease-in-out infinite; }
 #firstpass[data-state="stale-after-edits"] .fp-btn { padding-right: 13px; }

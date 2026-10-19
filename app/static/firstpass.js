@@ -28,7 +28,7 @@
   'use strict';
   const POLL_MS = 5000, FAST_MS = 1500;
   const FP = { s: null, open: false, keepMine: true, busy: false, watching: null,
-               shown: null, timer: 0, err: '' };
+               shown: null, timer: 0, err: '', jobs: [], jobsKey: '[]' };
 
   const $ = (sel, root) => (root || document).querySelector(sel);
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, (c) =>
@@ -150,6 +150,7 @@
       host.innerHTML = `<span class="fp-ctl">`
         + `<button type="button" class="fp-btn" data-testid="firstpass-button" aria-haspopup="dialog"`
         + ` aria-expanded="false">${ICON}<span class="fp-label">Run first pass</span><i class="fp-dot" hidden></i></button>`
+        + `<span class="fp-nums" data-testid="firstpass-left" hidden></span>`
         + `<button type="button" class="fp-x" data-testid="firstpass-cancel" hidden`
         + ` title="Stop the first pass now — what is finished is kept" aria-label="stop the first pass">×</button>`
         + `</span><div class="fp-panel" data-testid="firstpass-panel" role="dialog" aria-label="First pass" hidden></div>`;
@@ -173,7 +174,14 @@
     const s = FP.s;
     const btn = $('.fp-btn', host);
     $('.fp-label', host).textContent = label(s);
-    btn.title = title(s);
+    const pj = passJobOf(s);
+    const nums = $('.fp-nums', host);
+    if (nums) {
+      nums.textContent = (pj && pj.eta) || '';
+      nums.hidden = !nums.textContent;
+    }
+    btn.title = [title(s), pj ? `${pj.label}: ${pj.pct}%${pj.eta ? ` · ${pj.eta}` : ''}` : '']
+      .filter(Boolean).join(' — ');
     host.dataset.state = s ? s.state : 'unknown';
     $('.fp-dot', host).hidden = !(s && (s.state === 'stale-after-edits' || newClips(s).length));
     $('.fp-x', host).hidden = !running(s);
@@ -534,7 +542,25 @@
     loop();
   }
 
-  window.rcFirstPass = { open, close, toggle, refresh, run, cancel,
+  /* The jobs a running pass is made of, from the header's job strip (app.js `passJob`:
+   * its index, the call writing its cut), which leaves them to this control: one readout
+   * for the pass (verdict 10, punch 9), with the time left of the job its stage is on
+   * beside the label and that job's % in the hover. */
+  function jobs(list) {
+    const next = Array.isArray(list) ? list : [];
+    const key = JSON.stringify(next);
+    if (key === FP.jobsKey) return;
+    FP.jobsKey = key;
+    FP.jobs = next;
+    paintControl();
+  }
+  function passJobOf(s) {
+    if (!running(s)) return null;
+    const kind = s.stage === 'cut' ? 'ask' : s.stage === 'index' ? 'index' : null;
+    return (FP.jobs || []).find((j) => j.kind === kind) || null;
+  }
+
+  window.rcFirstPass = { open, close, toggle, refresh, run, cancel, jobs,
                          state: () => FP.s, label: () => label(FP.s) };
   // the one rule for a clip's name on screen (a generated clip by Premiere's name for it)
   window.rcClipName = clipName;

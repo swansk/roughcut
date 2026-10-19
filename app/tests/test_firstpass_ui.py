@@ -277,6 +277,94 @@ def test_mid_index_the_control_reads_the_counts_and_offers_a_stop(page, live):
     assert stops, "the × asks the server to stop the pass"
 
 
+def _job(id_, kind, label, pct, eta_s, **kw) -> dict:
+    return {"id": id_, "kind": kind, "state": "running", "label": label, "pct": pct,
+            "eta_s": eta_s, "elapsed_s": 30.0, "started": 1.0, "milestone": "", "detail": "",
+            "milestones": [], **kw}
+
+
+# Verdict 10's header mid-pass: the pass's index (54 %, its ×), the call writing its cut
+# (20 %, ~2 min) and, from another family, an export
+PASS_INDEX = _job("ix000001", "index", "Indexing the footage", 54.0, 300.0)
+PASS_ASK = _job("as000001", "ask", "First pass — proposing the cut", 20.0, 120.0,
+                firstpass="fp000001", ask_kind="first pass")
+EXPORT = _job("rn000001", "render", "Exporting — Quick 1080p", 40.0, 60.0)
+
+READOUTS_JS = """() => {
+  const vis = (el) => !!el && el.getClientRects().length > 0;
+  const fp = document.querySelector('#firstpass');
+  const left = fp.querySelector('[data-testid=firstpass-left]');
+  const head = document.querySelector('header');
+  const texts = [];
+  const walk = document.createTreeWalker(head, NodeFilter.SHOW_TEXT);
+  while (walk.nextNode()) {
+    const n = walk.currentNode;
+    if (n.textContent.trim() && vis(n.parentElement)) texts.push(n.textContent.trim());
+  }
+  return {pills: [...document.querySelectorAll('#progress .job')].filter(vis).map((el) => el.dataset.job),
+          left: vis(left) ? left.textContent : '', label: fp.querySelector('.fp-label').textContent,
+          title: fp.querySelector('.fp-btn').title, texts};
+}"""
+
+
+def test_while_a_pass_runs_the_header_has_one_readout_per_job_family(page, live):
+    """Verdict 10, punch 9: mid-pass the header read "First pass · the cut ×", "54% ×" and
+    "20% · ~2 min left" at once, three readouts for one pass. The pass's own jobs (its
+    index, the call writing its cut) are read on its control (time left beside it, the %
+    in its hover); another family's job (an export) keeps its pill; a pass job that
+    failed keeps its pill; once the pass is over the index's pill is back."""
+    pg = page
+    now = {"fp": {**RUNNING, "stage": "cut",
+                  "steps": {"index": {"state": "done"}, "picks": {"state": "done"},
+                            "cut": {"state": "running"}},
+                  "counts": {**RUNNING["counts"], "cut": {"detail": "choosing the shots",
+                                                          "state": "running"}}},
+           "jobs": [PASS_INDEX, PASS_ASK, EXPORT]}
+
+    def fp(route):
+        if route.request.method != "GET":
+            return route.continue_()
+        return route.fulfill(status=200, content_type="application/json", body=json.dumps(now["fp"]))
+    pg.route("**/api/firstpass", fp)
+    pg.route("**/api/jobs", lambda r: r.fulfill(
+        status=200, content_type="application/json", body=json.dumps({"jobs": now["jobs"]})))
+    pg.evaluate("rcFirstPass.refresh()")
+    _label(pg, "First pass · the cut")
+    left = "(t) => { const n = document.querySelector('[data-testid=firstpass-left]');" \
+           " return n && !n.hidden && n.textContent === t; }"
+    pg.wait_for_function(left, arg="~2 min left", timeout=10000)
+    r = pg.evaluate(READOUTS_JS)
+    assert r["pills"] == ["rn000001"], r            # the export's own; none for the pass's jobs
+    assert "First pass — proposing the cut: 20% · ~2 min left" in r["title"], r["title"]
+    pct = [t for t in r["texts"] if "%" in t]
+    assert pct == ["40%"] or pct == ["40% · ~1 min left"], r["texts"]   # the export's, alone
+    assert sum("left" in t for t in r["texts"]) == 2, r["texts"]        # the pass's, the export's
+
+    # the index stage: the index's time left on the control
+    now["fp"] = RUNNING
+    pg.evaluate("rcFirstPass.refresh()")
+    _label(pg, "First pass · 0/12")
+    pg.wait_for_function(left, arg="~5 min left", timeout=10000)
+    assert pg.evaluate(READOUTS_JS)["pills"] == ["rn000001"]
+
+    # a pass job that failed says so on its own pill
+    now["jobs"] = [{**PASS_INDEX, "state": "failed", "detail": "failed: ffmpeg exited 1"}, EXPORT]
+    pg.wait_for_function("!!document.querySelector('#progress .job[data-job=ix000001].failed')",
+                         timeout=10000)
+
+    # the pass over (the server's own state: never run): the index going on has its pill
+    now["jobs"] = [PASS_INDEX, EXPORT]
+    pg.unroute("**/api/firstpass")
+    pg.evaluate("rcFirstPass.refresh()")
+    _label(pg, "Run first pass")
+    pg.wait_for_function("(() => { const r = document.querySelector('#progress .job[data-job=ix000001]');"
+                         " return r && r.getClientRects().length && !r.classList.contains('failed'); })()",
+                         timeout=10000)
+    r = pg.evaluate(READOUTS_JS)
+    assert sorted(r["pills"]) == ["ix000001", "rn000001"] and r["left"] == "", r
+    pg.unroute("**/api/jobs")
+
+
 def test_stop_while_the_cut_is_written_discards_it(page, live, model):
     """A real run held at the model call: × stops it, the proposal it was writing is
     discarded (never shown), and the control remembers the run: Re-run first pass,
