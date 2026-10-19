@@ -3202,12 +3202,28 @@ function paintPos(filmT, clipT, seg) {
   tl.setPlayhead(filmT, { reveal, quiet });
   posQuiet = quiet;
   const s = tcOf(filmT), el = $('#pos');
+  if (!posBoxed) posBoxed = boxReadout(el);
   if (el.textContent !== s) {
     // the text node's data in place, not a new node (a child-list change; timeline.js setText)
     const tn = el.firstChild;
     if (tn && tn.nodeType === 3 && !tn.nextSibling) tn.data = s; else el.textContent = s;
   }
 }
+/* (wave 15 PERF6, verdict 11 punch 3) The Program's timecode is a box of its own size,
+ * measured once as drawn (a timecode in tabular figures is as wide whatever it reads), with
+ * size and layout containment (workspace.css `.rc-box`): written on every played frame, it
+ * relays only itself, not the transport row and the board's layout around it. */
+function boxReadout(el) {
+  const box = el && el.parentElement;
+  if (!box) return false;
+  const r = box.getBoundingClientRect();
+  if (!(r.width > 0 && r.height > 0)) return false;   // not laid out yet: the next frame
+  box.style.width = `${r.width}px`;
+  box.style.height = `${r.height}px`;
+  box.classList.add('rc-box');
+  return true;
+}
+let posBoxed = false;
 let posReveal = 0;
 let posFrame = -1;
 let posQuiet = false;               // the drawn playhead is a frame behind its time (paintPos)

@@ -27,6 +27,11 @@ playwright_api = pytest.importorskip("playwright.sync_api",
                                      reason="playwright not installed")
 from playwright.sync_api import sync_playwright  # noqa: E402
 
+# The Timeline's playhead line where it is drawn, in canvas px: the centre of its box less
+# the canvas's left (wave 15 PERF6: it is moved by its transform, not `left`).
+HEAD_X = ("(() => { const h = document.querySelector('#tl .tl-head').getBoundingClientRect();"
+          " return h.left + h.width / 2 - document.querySelector('#tl .tl-canvas').getBoundingClientRect().left; })()")
+
 
 def grid(t: float, fps: float = 24.0) -> float:
     """A time on the sequence's frame grid, as the timeline commits it (wave 3: edit
@@ -242,7 +247,8 @@ def test_a_click_on_the_ruler_cues_the_monitor_paused_at_that_film_time(page):
     page.wait_for_function(
         "Math.abs(document.querySelector('.screen video.live').currentTime - 1.0) < 0.1",
         timeout=10000)
-    head = page.evaluate("parseFloat(document.querySelector('#tl .tl-head').style.left)")
+    # where the line is drawn, in canvas px (wave 15: it moves by its transform)
+    head = page.evaluate(HEAD_X)
     # drawn where the playhead is — not where the click was asked for: the click lands
     # on a whole pixel and the magnet may take it a few ms, and both depend on the
     # column's width (the dock, INTAKE M11, changed it)
@@ -260,7 +266,7 @@ def test_the_playhead_follows_playback_across_the_whole_film(page):
     page.wait_for_function("tl.state.playhead >= 2.2", timeout=10000)
     t = page.evaluate("tl.state.playhead")
     assert 2.2 <= t <= 4.0
-    head = page.evaluate("parseFloat(document.querySelector('#tl .tl-head').style.left)")
+    head = page.evaluate(HEAD_X)
     assert head == pytest.approx(page.evaluate(f"tl.timeToX({t})"), abs=8)
     assert page.locator("#tl .blk.live").get_attribute("data-id") == ids(page)[1]
 

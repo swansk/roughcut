@@ -169,8 +169,13 @@ def test_every_animatable_property_has_a_stopwatch_and_a_lane(page):
     assert page.locator("#inspector .ec-kf").count() == 0
     assert page.locator("#inspector .ec-row[data-row=opacity] .ec-nav").evaluate(
         "e => getComputedStyle(e).visibility") == "hidden"
-    left = page.locator("#inspector .ec-lane[data-lane=opacity] .ec-ph").evaluate("e => e.style.left")
-    assert left == "0%", left
+    # (drawn where it is: the line's centre on the lane's left edge; wave 15 PERF6: it moves
+    # by its transform)
+    off = page.locator("#inspector .ec-lane[data-lane=opacity] .ec-ph").evaluate(
+        "e => { const r = e.getBoundingClientRect(), l = e.parentElement;"
+        " return r.left + r.width / 2 - (l.getBoundingClientRect().left + l.clientLeft); }")
+    assert abs(off) < 1, off
+    assert page.locator("#inspector .ec-lane[data-lane=opacity] .ec-ph").get_attribute("data-f") == "0"
     # the lanes line up in one column, on the right of the panel
     xs = page.locator("#inspector .ec-lane").evaluate_all(
         "els => els.filter(e => e.offsetParent).map(e => Math.round(e.getBoundingClientRect().right))")

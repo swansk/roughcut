@@ -121,8 +121,10 @@
 #tl .tl-xlane[data-lane=ghost] .ghost.gen .name { font-style: italic; }
 
 /* the playhead: one line across the ruler and every lane, at its film time */
-#tl .tl-head { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px;
-               background: #fff; pointer-events: none; z-index: 4; }
+#tl .tl-head { position: absolute; top: 0; bottom: 0; left: 0; width: 2px; margin-left: -1px;
+               background: #fff; pointer-events: none; z-index: 4;
+               /* moved by its transform on a layer of its own (timeline.js positionHead) */
+               will-change: transform; }
 #tl .tl-head::before { content: ''; position: absolute; top: 0; left: -5px;
                        border: 6px solid transparent; border-top: 8px solid #fff;
                        border-bottom: 0; }
@@ -361,7 +363,10 @@
                  background: #131318; border: 1px solid var(--line); border-right: 0; border-radius: 6px 0 0 0; }
 #tl .tl-tc { font: 600 12px/22px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
              font-variant-numeric: tabular-nums; color: var(--accent); letter-spacing: .02em;
-             white-space: nowrap; height: 22px; flex: 1 1 auto; overflow: hidden; }
+             white-space: nowrap; height: 22px; flex: 1 1 auto; overflow: hidden;
+             /* the flexible item of its row at a fixed height: contained, a new timecode
+                relays and repaints only its box (wave 15 PERF6) */
+             contain: strict; }
 #tl .tl-toolbtn { width: 26px; height: 20px; padding: 0; font-size: 12px; line-height: 1; flex: none;
                   border-radius: 4px; cursor: pointer; background: #1c1c24; color: var(--text);
                   border: 1px solid var(--line); }
