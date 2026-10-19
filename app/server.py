@@ -7629,6 +7629,79 @@ def export_markers(markers: list | None, whole: list[dict], sent: list[dict]) ->
     return out
 
 
+def _keys_from(lst, head: float):
+    """One property's keys `[[t, v], ...]` moved `head` seconds earlier; the keys that land
+    before 0 are one key at 0 with the value they make there (linear between keys, held
+    outside them: assemble.py `value_at`). A list that is not keys is left for
+    `clean_controls` to refuse."""
+    try:
+        pts = [(float(t) - head, float(v)) for t, v in lst]
+    except (TypeError, ValueError):
+        return lst
+    tiny = 1e-9
+    before = [p for p in pts if p[0] < -tiny]
+    after = [p for p in pts if p[0] >= -tiny]
+    out = []
+    if before and (not after or after[0][0] > tiny):
+        (t0, v0) = max(before, key=lambda p: p[0])          # the last before 0, a step's later
+        v = v0 if not after else v0 + (after[0][1] - v0) * (0.0 - t0) / (after[0][0] - t0)
+        out.append([0.0, round(v, 6)])
+    out += [[round(max(0.0, t), 6), v] for t, v in after]
+    return out
+
+
+def shift_keys(controls, head: float = 0.0):
+    """A clip's Effect Controls with its keys (seconds from its first frame in the film)
+    as a cut taking `head` film seconds off its start leaves them, export.js `shiftKeys`'s
+    rule, and none before 0: an In inside a keyed shot sent `[[-2, 0], [2, 100]]`, which
+    `clean_keys` refused (t must be 0..) and the export was a 400. `[[0, 50], [2, 100]]`
+    is the same ramp from the In on. The controls as they were when nothing moves."""
+    if not isinstance(controls, dict) or not isinstance(controls.get("keys"), dict):
+        return controls
+    keys = {p: (_keys_from(lst, head) if isinstance(lst, list) else lst)
+            for p, lst in controls["keys"].items()}
+    return {**controls, "keys": keys}
+
+
+def export_layers(clips: list | None, whole: list[dict], sent: list[dict]) -> list:
+    """V2+ (`overlays`) or the added audio tracks' clips (`audio`) on the clock of the film
+    a render makes (wave 16, lane INOUT): their `at` is film seconds on the WHOLE
+    sequence's clock and an In/Out range's film starts at its In (`range_start`). The whole
+    sequence's as they are; an In/Out range's moved back by where it starts, one that
+    straddles an edge cut there — its source in on by the head the In takes (at its
+    speed), its keys with it (`shift_keys`), its out back by what is past the Out — and
+    one wholly outside it left out. A range that cannot be placed leaves them where they
+    were (a whole-sequence render sent before an edit reached the disk), as before."""
+    if not clips:
+        return []
+    start = range_start(whole, sent)
+    if start is None:
+        return list(clips)
+    end = start + sum(edits.dur(s) for s in sent)
+    if start <= 1e-9 and end >= sum(edits.dur(s) for s in whole) - 1e-6:
+        return list(clips)
+    tiny = 1e-4                                   # the 4 places every time is kept to
+    out: list = []
+    for c in clips:
+        if not isinstance(c, dict):
+            continue
+        spd = edits.speed_of(c)
+        a = float(c["at"])
+        b = a + edits.dur(c)
+        if b <= start + tiny or a >= end - tiny:
+            continue
+        head, tail = max(0.0, start - a), max(0.0, b - end)
+        cin = round(float(c["in"]) + head * spd, 4)
+        cout = round(float(c["out"]) - tail * spd, 4)
+        if (cout - cin) / spd <= tiny:
+            continue
+        v = {**c, "in": cin, "out": cout, "at": round(max(0.0, a - start), 4)}
+        if head > 0 and c.get("controls"):
+            v["controls"] = shift_keys(c["controls"], head)
+        out.append(v)
+    return out
+
+
 @app.post("/api/render")
 async def api_render(request: Request) -> JSONResponse:
     body = await request.json()
@@ -7680,7 +7753,9 @@ async def api_render(request: Request) -> JSONResponse:
             raise HTTPException(400, "a segment must be an object")
         s = dict(s)
         try:
-            c = clean_controls(s.get("controls"))
+            # a shot the In cuts into carries its keys moved earlier (export.js
+            # `shiftKeys`): the ones before the In are one key at 0 (lane INOUT)
+            c = clean_controls(shift_keys(s.get("controls")))
         except (TypeError, ValueError) as exc:
             raise HTTPException(400, f"controls: {exc}")
         if c:
@@ -7689,11 +7764,20 @@ async def api_render(request: Request) -> JSONResponse:
             s.pop("controls", None)
         segments.append(s)
     # the markers on this film's own clock: an In/Out range's start at 0 (its chapters)
-    marks = export_markers(edl.get("markers"), edl.get("segments") or [], segments)
+    whole = edl.get("segments") or []
+    marks = export_markers(edl.get("markers"), whole, segments)
     if marks:
         edl["markers"] = marks
     else:
         edl.pop("markers", None)
+    # V2+ and A3+ on it too (lane INOUT): a title, a sound at the range's time, not the
+    # whole sequence's; cut at its edges, those outside it left out
+    for key in ("overlays", "audio"):
+        layer = export_layers(edl.get(key), whole, segments)
+        if layer:
+            edl[key] = layer
+        else:
+            edl.pop(key, None)
     edl["segments"] = segments
     job = uuid.uuid4().hex[:8]
     edl_path = STATE["work"] / f"render_{job}.json"

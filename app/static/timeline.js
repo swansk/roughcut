@@ -194,7 +194,8 @@
  *                               Delete / Cancel / OK — a double-click on a marker, or M on
  *                               one (timeline-keys.js). setSeqIn(t) /
  *                               setSeqOut(t) (null clears) are the sequence's in / out,
- *                               shaded on the ruler. Both persist in localStorage per
+ *                               on the edit grid (onGrid) as every cut is, shaded on the
+ *                               ruler. Both persist in localStorage per
  *                               project and cut, or come from `P.markers` / `P.in` /
  *                               `P.out` once the server sends them. Emit `markers`.
  *                               Each is one undo entry outside begin/commit (`add marker`,
@@ -513,10 +514,6 @@
     const hh = (n - mm) / 60;
     return [hh, mm, ss, ff].map((x) => String(x).padStart(2, '0')).join(':');
   }
-
-  /* A frame-grid time: markers and in / out sit on frames, as in Premiere — kept at
-   * the board's 0.01 s (the monitor parks at 0.01 s, so a jump lands exactly on it). */
-  const onFrame = (t) => round2(Math.round(Math.max(0, t) * fps()) / fps());
 
   /* The edit grid (wave 3, the journey's VFR export): every trim, roll, slip, razor cut,
    * insert, overwrite and move commits its points on the sequence's frames — exactly,
@@ -2338,9 +2335,13 @@
     return before.length ? before[before.length - 1].t : null;
   }
 
+  /* The sequence's In and Out are on the edit grid, a frame's own start at 4 places, as
+   * every cut is (lane INOUT): to 0.01 s an In at a 59.94 shot's first frame (1.63497 s)
+   * was 1.63, inside the shot before's last frame, and an In two frames into a shot
+   * (1.66833 s) was 1.67, so the export cut it after that frame and started a frame late. */
   function setSeqIn(t) {
     return marksEdit(t == null ? 'clear in' : 'mark in', () => {
-      const v = t == null ? null : onFrame(Number(t));
+      const v = t == null ? null : onGrid(Number(t));
       state.seqIn = v;
       if (v != null && state.seqOut != null && state.seqOut <= v) state.seqOut = null;
       saveMarks();
@@ -2350,7 +2351,7 @@
 
   function setSeqOut(t) {
     return marksEdit(t == null ? 'clear out' : 'mark out', () => {
-      const v = t == null ? null : onFrame(Number(t));
+      const v = t == null ? null : onGrid(Number(t));
       state.seqOut = v;
       if (v != null && state.seqIn != null && state.seqIn >= v) state.seqIn = null;
       saveMarks();
@@ -3803,8 +3804,8 @@
     state.overlays = state.overlays.map(clip);
     state.audio = state.audio.map(clip);
     state.markers = markerSet(state.markers, true);
-    if (state.seqIn != null) state.seqIn = onFrame(state.seqIn);
-    if (state.seqOut != null) state.seqOut = onFrame(state.seqOut);
+    if (state.seqIn != null) state.seqIn = onGrid(state.seqIn);
+    if (state.seqOut != null) state.seqOut = onGrid(state.seqOut);
     if (state.seqIn != null && state.seqOut != null && state.seqOut <= state.seqIn) state.seqOut = null;
   }
 
