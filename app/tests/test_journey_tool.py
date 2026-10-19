@@ -15,7 +15,8 @@ journey must go red AT that step, with that step's own reason.
 
 And when Chromium goes away under a step (verdict 9, punch 1), the step's line says why;
 a crash of Chromium itself (its session bus killed under it, as in the gate; the renderer)
-is retried once and said in the gate's line; a browser killed from outside is not retried.
+is retried once and said in the gate's line, which the gate then reads as AMBER (verdict
+10: a pass on a retry is not proven); a browser killed from outside is not retried.
 """
 
 from __future__ import annotations
@@ -99,9 +100,9 @@ def test_the_gate_reads_the_journeys_line(tmp_path):
 
     empty = tmp_path / "empty-snapshot"         # a snapshot with no board in it
     empty.mkdir()
-    green, line = gate.journey(empty, tmp_path / "j",
-                               tmp_path / "journey.log", env=None, timeout=300)
-    assert not green
+    green, line, amber = gate.journey(empty, tmp_path / "j",
+                                      tmp_path / "journey.log", env=None, timeout=300)
+    assert not green and not amber
     assert line.startswith("step 1 setup: "), line
     # the gate adds what it measured on the server (wave 8 SAVESAFE): nothing, with no board
     said, measured = line.split(" · slowest request", 1)
@@ -335,6 +336,17 @@ def test_a_chromium_crash_under_a_step_is_named_and_the_step_retried_once(how, u
     assert f" · step 2 firstpass retried once after {CRASHED[how]}" in line, line
     assert rec["retried"] == [{"n": 2, "name": "firstpass", "words": step["retried"]["after"]["words"],
                                "ok": True}]
+    # verdict 10's ruling: a pass on a retry is not proven: the journey says AMBER, and the
+    # gate reads it so (its run is AMBER, never GREEN)
+    assert rec["amber"] == "1 step passed only on a retry after Chromium crashed: step 2 firstpass"
+    assert line.endswith(" · AMBER: " + rec["amber"]), line
+    sys.path.insert(0, str(ROOT / "tools"))
+    import gate
+    green, gline, amber = gate.journey_read(tmp_path / "out", tmp_path / "journey.log", rc)
+    assert green and amber, gline
+    assert "→ the journey is AMBER: step 2 firstpass passed only on a retry after Chromium crashed" \
+        in gline, gline
+    assert gate.run_status([("journey", green, gline)], {"journey"}) == ("AMBER", 2)
 
 
 def test_a_browser_killed_from_outside_is_named_and_not_retried(unchanged, tmp_path):
@@ -344,4 +356,4 @@ def test_a_browser_killed_from_outside_is_named_and_not_retried(unchanged, tmp_p
     line = rec.get("line", "")
     assert rc == 1 and line.startswith("journey ✗ step 2 firstpass: "), f"{line or said[-1500:]}"
     assert "the browser was killed from outside (SIGKILL: not a crash" in line, line
-    assert "retried" not in line and rec["retried"] == [], line
+    assert "retried" not in line and rec["retried"] == [] and rec["amber"] is None, line

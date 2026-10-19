@@ -33,7 +33,9 @@ Checks (each one line in summary.md, exit 0 only if all are green):
            open, Run first pass, accept, trim ×2, razor, move, warmer, Re-run first pass
            keeping the hand edits, Export (Ctrl+M), ffprobe. The gate's own journey.py
            drives the snapshot's board, so an old rev is judged by today's journey. A PNG
-           per step + journey.json in journey/. Red on the first step that fails.
+           per step + journey.json in journey/. Red on the first step that fails;
+           AMBER (never green) when a step passed only on its retry after Chromium
+           crashed, the step named on the line (verdict 10's ruling).
   boot     "board shows its cut N s after a proxy lands" (verdict 7 blocker 3): the suite's
            test_boot_wait.py writes $ROUGHCUT_BOOT_JSON (boot.json) — a fresh page on a
            bin whose proxy just landed, the colour measurement patched to 10 s; green when
@@ -45,8 +47,9 @@ Checks (each one line in summary.md, exit 0 only if all are green):
 ~40-60 s on the fixture, so it runs in both).
 
 The run is GREEN (exit 0) only when every check is green; AMBER (exit 2) when every check
-passed but one is not proven (a skipped perf test, or one that failed on a shared box
-above 2x the cores); else RED (exit 1).
+passed but one is not proven (a skipped perf test, one that failed on a shared box above
+2x the cores, or a journey step that passed only on its retry after a Chromium crash);
+else RED (exit 1).
 ROUGHCUT_GATE_SUITE=<path> narrows the suite (for checking the gate itself; the summary
 says so).
 
@@ -103,8 +106,9 @@ def counts(junit: Path) -> dict:
     return {"passed": tests - fail - err - skip, "failed": fail + err, "skipped": skip}
 
 
-def journey(snap: Path, out: Path, log: Path, env: dict, timeout: int = 900) -> tuple[bool, str]:
-    """tools/journey.py against the frozen copy; (green, the line after "journey ✓/✗ ").
+def journey(snap: Path, out: Path, log: Path, env: dict, timeout: int = 900) -> tuple[bool, str, bool]:
+    """tools/journey.py against the frozen copy; (green, the line after "journey ✓/✗ ",
+    amber). See journey_read.
 
     Its own process group, so a timeout takes the browser, the server and any ffmpeg
     the journey started with it."""
@@ -118,8 +122,28 @@ def journey(snap: Path, out: Path, log: Path, env: dict, timeout: int = 900) -> 
         except subprocess.TimeoutExpired:
             os.killpg(p.pid, signal.SIGKILL)
             p.wait()
-            return False, f"timed out after {timeout} s — see {log}"
-    line, slow = "", None
+            return False, f"timed out after {timeout} s — see {log}", False
+    return journey_read(out, log, rc, time.time() - t0)
+
+
+def journey_retried(res: dict, line: str) -> list[str]:
+    """The steps of a green journey that passed only on a retry after Chromium crashed,
+    as "step N <name>" (journey.json's `retried`; a record without one: its line)."""
+    rows = res.get("retried")
+    if isinstance(rows, list):
+        return [f"step {r.get('n')} {r.get('name')}" for r in rows if isinstance(r, dict)]
+    return re.findall(r"(step \d+ \S+) retried once after", line)
+
+
+def journey_read(out: Path, log: Path, rc: int, took_s: float = 0.0) -> tuple[bool, str, bool]:
+    """(green, the line after "journey ✓/✗ ", amber) from a finished journey's
+    journey.json (else its log's last "journey " line).
+
+    Verdict 10's ruling (REDESIGN-GOAL, 2026-10-18): a step that passed only on its retry
+    after a Chromium crash is not proven (a page can crash its own renderer, so an app bug
+    that crashes half the time would pass three times in four). Such a journey is green
+    but AMBER, and its line says which step and why: the run is never GREEN on a retry."""
+    line, slow, res = "", None, {}
     try:
         res = json.loads((out / "journey.json").read_text())
         line, slow = res.get("line", ""), res.get("slow")
@@ -127,8 +151,9 @@ def journey(snap: Path, out: Path, log: Path, env: dict, timeout: int = 900) -> 
         said = [ln for ln in log.read_text(errors="replace").splitlines() if ln.startswith("journey ")]
         line = said[-1] if said else ""
     if not line.startswith(("journey ✓ ", "journey ✗ ")):
-        return False, f"step 0 setup: no result line (rc={rc}, {time.time() - t0:.0f} s) — see {log}"
+        return False, f"step 0 setup: no result line (rc={rc}, {took_s:.0f} s) — see {log}", False
     green = rc == 0 and line.startswith("journey ✓ ")
+    retried = journey_retried(res, line) if green else []
     # wave 8 SAVESAFE: the slowest request the server answered during the journey (to its
     # first byte; `GET /api/debug/slow`), red over JOURNEY_SLOWEST_S
     top = (slow or {}).get("slowest_api") if isinstance(slow, dict) else None
@@ -140,7 +165,10 @@ def journey(snap: Path, out: Path, log: Path, env: dict, timeout: int = 900) -> 
             line += f" (over {JOURNEY_SLOWEST_S:g} s)"
     else:
         line += " · slowest request: not measured (the server has no /api/debug/slow)"
-    return green, line[len("journey ✓ "):]
+    if retried:
+        line += (f" → the journey is AMBER: {', '.join(retried)} passed only on a retry after"
+                 " Chromium crashed (verdict 10: a page can crash its own renderer), not proven")
+    return green, line[len("journey ✓ "):], bool(green and retried)
 
 
 JOURNEY_SLOWEST_S = 1.0
@@ -476,7 +504,10 @@ def main() -> int:
     jdir = run_dir / "journey"
     if browser_ok:
         print("journey: one editing session, end to end…", flush=True)
-        results.append(("journey", *journey(snap, jdir, run_dir / "journey.log", env)))
+        j_green, j_line, j_amber = journey(snap, jdir, run_dir / "journey.log", env)
+        results.append(("journey", j_green, j_line))
+        if j_amber:
+            amber.add("journey")
 
     # ---- boot (verdict 7 blocker 3) ----
     if browser_ok:
