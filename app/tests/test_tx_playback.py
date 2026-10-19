@@ -406,15 +406,18 @@ def test_playing_through_a_short_graded_dissolve_has_no_hole(tx_project, tx_serv
     one. Now the outgoing half is the live buffer kept playing past the edit (advance,
     `txKeepsOut`), so nothing starts there but the preroll; and no buffer is muted or unmuted
     while it plays (`hush`: its clock jumped at the cut). The same limits as the 1 s one."""
-    rec, plain = _play(tx_project, tx_server, graded=True, plain=True, dur=0.4)
+    rec = _play(tx_project, tx_server, graded=True, dur=0.4)[0]
     assert rec["window_film_s"] == [round(CUT - 0.2, 3), round(CUT + 0.2, 3)], rec["window_film_s"]
     # the outgoing half was the buffer that played the outgoing shot, not #pvTxOut
-    assert rec["tx_el"].get("pvTxOut") and not rec["tx_el"]["pvTxOut"][0].startswith("pvTx"), rec["tx_el"]
-    assert rec["cut_log"][-1].get("kept") == rec["tx_el"]["pvTxOut"][0], rec["cut_log"]
-    _check(rec, _canvas_check(plain))
+    assert rec["tx_el"].get("pvTxOut") == [rec["cut_log"][-1].get("kept")], (rec["tx_el"], rec["cut_log"])
+    assert rec["tx_el"]["pvTxOut"][0].startswith("pv") and not rec["tx_el"]["pvTxOut"][0].startswith("pvTx")
+    # (the plain graded cut's canvas is the 1 s test's: not measured twice)
+    _check(rec, _canvas_check(None))
 
 
 def _canvas_check(plain):
+    """The graded canvas through the dissolve <= GAP_LIMIT_MS; with `plain`, across that plain
+    graded cut too."""
     def canvas(r):
         # The graded canvas — what the viewer sees through a graded dissolve: the live shot's
         # frame and the follower's, each through its own grade, drawn by the worker — holds
@@ -422,10 +425,12 @@ def _canvas_check(plain):
         # punch 2-3: the worker uploads each frame's planes at the size they are read, so a
         # dissolve's two frames fit where TXHITCH could only ask for "no worse than a plain
         # graded cut + a frame"). And no worse than that plain cut on the same page.
+        was = plain["longest_draw_ms"] if plain else None
         assert r["longest_draw_ms"] is not None and r["longest_draw_ms"] <= GAP_LIMIT_MS, \
-            f"the graded canvas's frames held through the dissolve (plain cut {plain['longest_draw_ms']}): {r}"
-        assert plain["longest_draw_ms"] is not None and plain["longest_draw_ms"] <= GAP_LIMIT_MS, \
-            f"the graded canvas's frames held across the plain cut: {plain}"
+            f"the graded canvas's frames held through the dissolve (plain cut {was}): {r}"
+        if plain is not None:
+            assert plain["longest_draw_ms"] is not None and plain["longest_draw_ms"] <= GAP_LIMIT_MS, \
+                f"the graded canvas's frames held across the plain cut: {plain}"
     return canvas
 
 
