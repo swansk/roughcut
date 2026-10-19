@@ -253,14 +253,14 @@ def _get(url: str, timeout: float = 30):
 
 
 def _exact_poster(url: str, wait_s: float = 20.0):
-    """Ask for a poster until the exact frame is there (a frame not cut yet is a 503:
+    """Ask for a poster until the exact frame is there (a frame not cut yet is a stand-in:
     wave 15, cut in the background); (seconds it took, headers, body)."""
     t0 = time.monotonic()
     while True:
         st, h, body = _get(url)
         if st == 200 and "x-roughcut-poster" not in h:
             return time.monotonic() - t0, h, body
-        assert st == 503 and h["x-roughcut-poster"] == "pending", (st, dict(h))
+        assert st == 200 and "standin" in (h["server-timing"] or ""), (st, dict(h))
         assert time.monotonic() - t0 < wait_s, f"no exact frame in {wait_s} s: {url}"
         time.sleep(0.1)
 
@@ -270,8 +270,9 @@ def test_a_poster_cut_from_the_original_answers_the_nearest_still_at_once(buildi
     asked frame is not cut yet and would come from the original (no preview, no proxy);
     not cached, and it says which time it shows. Wave 15 BUDGET (verdict 11 punch 4): the
     exact frame is cut in the background, never inside the request: asked before it is cut
-    it is a 503 at once (`x-roughcut-poster: pending`), then the exact frame, immutable. A
-    clip with a proxy answers its exact frame, never a near one."""
+    it is that stand-in too (never an error: a 503 is a console error and a broken image),
+    then the exact frame, immutable. A clip with a proxy answers its exact frame, never a
+    near one."""
     url, server = building["url"], building["server"]
     _exact_poster(f"{url}/media/poster/CLIP_B.jpg?t=0.40")
     _slow_original_posters(server, monkeypatch, 1.5)
@@ -285,10 +286,10 @@ def test_a_poster_cut_from_the_original_answers_the_nearest_still_at_once(buildi
     assert took < 0.3, f"the near still took {took:.2f}s"
     # the exact frame: not waited on (a 503 within the wait), cut beside it, then immutable
     t0 = time.monotonic()
-    st, h, _ = _get(f"{url}/media/poster/CLIP_B.v2.jpg?t=2.37")
+    st, h, body = _get(f"{url}/media/poster/CLIP_B.v2.jpg?t=2.37")
     took = time.monotonic() - t0
-    assert st == 503 and h["x-roughcut-poster"] == "pending" and h["retry-after"] == "1", (st, dict(h))
-    assert "no-store" in h["cache-control"]
+    assert st == 200 and h["x-roughcut-poster"].startswith("near ") and body[:3] == b"\xff\xd8\xff", (st, dict(h))
+    assert "no-store" in h["cache-control"] and 'standin;desc="near ' in h["server-timing"]
     assert took < 0.3, f"an exact frame not cut yet held the request {took:.2f}s"
     waited, h, _ = _exact_poster(f"{url}/media/poster/CLIP_B.v2.jpg?t=2.37")
     assert "immutable" in h["cache-control"]
@@ -334,10 +335,9 @@ def test_a_frame_of_a_4k_original_is_never_cut_inside_a_request(building, monkey
             st, h, _ = _get(f"{url}/media/poster/CLIP_B.v2.jpg?{q}")
             took = time.monotonic() - t0
             assert took < 0.15, f"{q}: held {took:.2f}s for a 4K original's frame"
-            if near:
-                assert st == 200 and h["x-roughcut-poster"].startswith("near "), (st, dict(h))
-            else:
-                assert st == 503 and h["x-roughcut-poster"] == "pending", (st, dict(h))
+            # both a stand-in at once: the clip's nearest still
+            assert st == 200 and h["x-roughcut-poster"].startswith("near "), (st, dict(h))
+            assert "standin" in h["server-timing"], dict(h)
     # every one lands, exact, cut once each on the queue's own thread
     _exact_poster(f"{url}/media/poster/CLIP_B.v2.jpg?t=4.07", wait_s=10)
     for t in (3.11, 3.52):
@@ -347,6 +347,48 @@ def test_a_frame_of_a_4k_original_is_never_cut_inside_a_request(building, monkey
     slow_rows = [r for r in json.loads(_get(f"{url}/api/debug/slow")[2])["over_budget"]
                  if r["path"].startswith("/media/poster/") and r["at"] >= since]
     assert not slow_rows, slow_rows
+
+
+def test_a_poster_not_cut_yet_is_a_stand_in_and_the_board_puts_the_frame_in(building, monkeypatch):
+    """Wave 15 BUDGET: a frame the server has not cut is never an error (a 503 was a console
+    error and, until its retry, a broken image): the clip's nearest still, else a neutral
+    frame, at once, marked Server-Timing `standin`; the board's image keeps its `src` (the
+    frame asked for) and shows the exact frame, through `srcset`, once it is cut."""
+    sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed")
+    url, server = building["url"], building["server"]
+    for f in server.STATE["posters"].glob("CLIP_B@*"):
+        f.unlink()
+    _slow_original_posters(server, monkeypatch, 1.5)
+    st, h, body = _get(f"{url}/media/poster/CLIP_B.v2.jpg?t=4.21")
+    assert st == 200 and h["x-roughcut-poster"] == "pending" and body == server.POSTER_STANDIN, (st, dict(h))
+    _exact_poster(f"{url}/media/poster/CLIP_B.v2.jpg?t=4.21")
+    with sync_api.sync_playwright() as pw:
+        browser, page, errors = _board(pw, url)
+        bad, console = [], []
+        page.on("response", lambda r: bad.append(f"{r.status} {r.url}") if r.status >= 400 else None)
+        page.on("console", lambda m: console.append(m.text) if m.type == "error" else None)
+        try:
+            for t in ("2.83", "5.17"):           # a still of the clip on disk (4.21): near ones
+                page.evaluate("""(src) => { const i = document.createElement('img'); i.className = 'probe';
+                    i.style.cssText = 'position:fixed;left:0;top:0;width:64px'; i.src = src;
+                    document.body.appendChild(i); }""", f"/media/poster/CLIP_B.v2.jpg?t={t}")
+            page.wait_for_function("[...document.querySelectorAll('img.probe')].every(i => i.complete && i.naturalWidth > 0)",
+                                   timeout=5000)
+            early = page.evaluate("[...document.querySelectorAll('img.probe')].map(i => [i.getAttribute('src'), i.currentSrc, i.hasAttribute('srcset')])")
+            assert not any(e[2] for e in early), early
+            page.wait_for_function("""[...document.querySelectorAll('img.probe')].every(i => i.hasAttribute('srcset')
+                && i.complete && i.currentSrc.endsWith('cut=1') && i.naturalWidth === 320)""", timeout=15000)
+            late = page.evaluate("[...document.querySelectorAll('img.probe')].map(i => [i.getAttribute('src'), i.currentSrc])")
+            print("stand-ins, then the frames:", early, late)
+            for (src, cur), t in zip(late, ("2.83", "5.17")):
+                assert src == f"/media/poster/CLIP_B.v2.jpg?t={t}", src       # its src: as asked
+            # a new src drops the old frame's srcset
+            page.evaluate("document.querySelector('img.probe').src = '/media/poster/CLIP_B.v2.jpg?t=4.21'")
+            page.wait_for_function("!document.querySelector('img.probe').hasAttribute('srcset')", timeout=3000)
+            assert bad == [] and console == [], (bad, console)
+            assert not [e for e in errors if "Error" in e], errors
+        finally:
+            browser.close()
 
 
 def test_a_seek_onto_a_building_shot_shows_a_picture_within_300_ms(building, monkeypatch):

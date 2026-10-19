@@ -338,15 +338,15 @@ def test_media_path_traversal_is_contained(client):
 # ------------------------------------------------------------------ posters
 
 def _poster(client, name: str, wait_s: float = 20.0, **params):
-    """GET a poster as the board does: a frame the server has not cut yet answers 503 at
-    once (wave 15: cut in the background, never waited on past POSTER_WAIT_S), so ask
-    again until it is there."""
+    """GET a poster as the board does: a frame the server has not cut yet is answered at
+    once with a stand-in (wave 15: cut in the background, never waited on past
+    POSTER_WAIT_S; `x-roughcut-poster` says so), so ask again until it is the frame."""
     deadline = time.monotonic() + wait_s
     while True:
         r = client.get(f"/media/poster/{name}", params=params or None)
-        if r.status_code != 503 or time.monotonic() > deadline:
+        if "x-roughcut-poster" not in r.headers or time.monotonic() > deadline:
             return r
-        assert r.headers.get("x-roughcut-poster") == "pending", dict(r.headers)
+        assert r.status_code == 200 and "standin" in r.headers["server-timing"], dict(r.headers)
         time.sleep(0.1)
 
 

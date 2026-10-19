@@ -8052,9 +8052,10 @@ def media_poster(name: str, t: float = 0.0, near: int = 0) -> Response:
     asked first), and the request waits for it at most POSTER_WAIT_S, and only when it
     comes from a proxy, a preview, a generated clip or (asked exactly) a small original
     (tens of milliseconds); a frame of a 4K / HEVC original (0.7-1.3 s on a loaded box) is
-    never waited on. Not cut in that time: `near=1` gets the nearest still, an exact ask a 503
-    (`retry-after: 1`, `x-roughcut-poster: pending`), and the board's posters show the
-    nearest still and put the exact frame in when it is cut (dock.js `posterSoon`).
+    never waited on. Not cut in that time, the answer is a stand-in at once, never an error:
+    the clip's nearest still on disk, else a neutral frame (`no-store`, `x-roughcut-poster:
+    near <t>` / `pending`, Server-Timing `standin`), and the board puts the exact frame in
+    when it is cut (dock.js `posterStandins` / `posterSoon`).
     """
     stem = Path(name).stem
     if stem.endswith(f".{PICTURE_V}"):          # poster_url's versioned name
@@ -8086,16 +8087,23 @@ def media_poster(name: str, t: float = 0.0, near: int = 0) -> Response:
         ev.wait(POSTER_WAIT_S)
     if dest.exists():
         return FileResponse(dest, media_type="image/jpeg", headers=POSTER_CACHE)
-    if near:
-        alt = nearest_poster(stem, t)
-        if alt is not None:
-            return FileResponse(alt[0], media_type="image/jpeg",
-                                headers={"cache-control": "no-store",
-                                         "x-roughcut-poster": f"near {alt[1]:.2f}"})
-    return Response(status_code=503, content=f"{stem} at {t:.2f} s: being cut",
-                    media_type="text/plain",
-                    headers={"retry-after": "1", "cache-control": "no-store",
-                             "x-roughcut-poster": "pending"})
+    # a stand-in, now, never an error (a 503 is a console error and a broken image): the
+    # clip's nearest still on disk, else a neutral frame; not cached, and marked both ways
+    # (`x-roughcut-poster` for a fetch, Server-Timing `standin` for the board's <img>s,
+    # which read it from their Resource Timing entry: dock.js `posterStandins`)
+    alt = nearest_poster(stem, t)
+    said = f"near {alt[1]:.2f}" if alt is not None else "pending"
+    head = {"cache-control": "no-store", "x-roughcut-poster": said,
+            "server-timing": f'standin;desc="{said}"'}
+    if alt is not None:
+        return FileResponse(alt[0], media_type="image/jpeg", headers=head)
+    return Response(POSTER_STANDIN, media_type="image/jpeg", headers=head)
+
+
+# The neutral frame a poster is while there is no still of its clip yet (a clip just in): a
+# 32x18 JPEG of the board's dark grey (#151517), stretched by the card.
+POSTER_STANDIN = base64.b64decode(
+    "/9j/4AAQSkZJRgABAgAAAQABAAD//gAQTGF2YzYwLjMxLjEwMgD/2wBDAAgQEBMQExYWFhYWFhoYGhsbGxoaGhobGxsdHR0iIiIdHR0bGx0dICAiIiUmJSMjIiMmJigoKDAwLi44ODpFRVP/xABMAAEBAAAAAAAAAAAAAAAAAAAABwEBAQAAAAAAAAAAAAAAAAAAAAEQAQAAAAAAAAAAAAAAAAAAAAARAQAAAAAAAAAAAAAAAAAAAAD/wAARCAASACADASIAAhEAAxEA/9oADAMBAAIRAxEAPwCKAKAAAAAAP//Z")
 
 
 # The posters the board asks for, cut in the background (wave 15 BUDGET). Two queues, each

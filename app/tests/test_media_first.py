@@ -100,12 +100,13 @@ def _no_proxies(server) -> None:
 
 
 def _poster(c, name: str, wait_s: float = 20.0, **params):
-    """A poster as the board gets it: a frame not cut yet is a 503 at once (wave 15: cut
-    in the background, never inside the request), so ask again until it is there."""
+    """A poster as the board gets it: a frame not cut yet is a stand-in at once (wave 15:
+    cut in the background, never inside the request; `x-roughcut-poster` says so), so ask
+    again until it is the frame."""
     deadline = time.monotonic() + wait_s
     while True:
         r = c.get(f"/media/poster/{name}", params=params or None)
-        if r.status_code != 503 or time.monotonic() > deadline:
+        if "x-roughcut-poster" not in r.headers or time.monotonic() > deadline:
             return r
         time.sleep(0.05)
 
