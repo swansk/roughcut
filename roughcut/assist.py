@@ -32,6 +32,7 @@ import re
 from typing import Any
 
 from . import actions, config
+from . import tracks as tracksmod
 from .firstpass import clip_name, cost_words
 from .inference import complete
 
@@ -166,6 +167,23 @@ def _named(out: dict, segments: list[dict]) -> dict:
     return out
 
 
+def _marker_text(m, tc) -> str:
+    """One marker as the model reads it: its time, and its name, colour, duration and
+    comment when it has them (an EDL marker is a bare time or {t, name?, …})."""
+    t = tracksmod.marker_time(m)
+    out = f"{t:.2f} s ({tc(t)})"
+    if isinstance(m, dict):
+        if m.get("name"):
+            out += f" “{str(m['name'])[:80]}”"
+        if m.get("colour") and m["colour"] != "green":
+            out += f" {str(m['colour']).title()}"
+        if isinstance(m.get("dur"), (int, float)) and m["dur"] > 0:
+            out += f" {float(m['dur']):.2f} s long"
+        if m.get("comment"):
+            out += f" comment: {str(m['comment'])[:80]}"
+    return out
+
+
 def sequence_block(state: dict) -> str:
     fps = float(state.get("fps") or 24.0)
     tc = lambda t: actions.timecode(t, fps)  # noqa: E731
@@ -189,8 +207,8 @@ def sequence_block(state: dict) -> str:
     lines = [f"{len(segs)} shots, {t:.2f} s ({tc(t)}) at {fps:g} fps."]
     lines.append("   #  id  clip  clip range  film time  [effect controls, colour, why]")
     lines.extend(rows or ["  (the sequence is empty)"])
-    mk = state.get("markers") or []
-    lines.append("Markers: " + (", ".join(f"{m:.2f} s ({tc(m)})" for m in mk[:40]) if mk else "none"))
+    mk = [m for m in state.get("markers") or [] if tracksmod.marker_time(m) is not None]
+    lines.append("Markers: " + ("; ".join(_marker_text(m, tc) for m in mk[:40]) if mk else "none"))
     a, b = state.get("in"), state.get("out")
     lines.append("Sequence In / Out: " + (f"{'none' if a is None else f'{a:.2f} s'} / "
                                           f"{'none' if b is None else f'{b:.2f} s'}"))
@@ -345,6 +363,11 @@ Export presets: {presets}
   heavy one; never a design_effect.
 - sharper / crisper → effect sharpen (amount 50 to 150); softer / dreamy → effect
   gaussian_blur; crop the edges → effect crop.
+- a marker (M) at a moment → marker at that film time (a shot's start is its film time in the
+  table above; "at 0:12" is 12 s); "called / named X" is its `name`, a note on it its
+  `comment`, "a red marker" its `colour`, "mark the whole jump" a `duration` to the moment it
+  ends; naming a marker already there is a marker op at its time with the name. A chapter of
+  the export is a named marker. Never a design_effect for a marker.
 - a title, a graphic, hit markers, an arrow → design_effect with a note saying what and where
   (only what no tool above draws).
 - a review copy, a file to upload, the final file → export with quick, youtube or master.

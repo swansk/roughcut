@@ -330,6 +330,58 @@ def test_a_marker_only_answer_is_one_ctrl_z_too(browser, live_server, project):
         b.close()
 
 
+def test_a_named_marker_from_the_ai_is_the_one_the_marker_dialog_makes(browser, live_server, project):
+    """Verdict 12, punch 4: "drop a marker … called best trick" could not be named, by the AI
+    or by hand. The AI's marker op now carries Premiere's Marker dialog fields, and the same
+    marker made by hand — M, M again (the Marker dialog), Name / Comments / Marker Color /
+    Duration typed, OK — lands the same EDL. One Ctrl+Z takes the AI's back; an op that names
+    a marker already there is that dialog's OK on it."""
+    ops = [{"op": "marker", "at": 2.5, "name": "best trick", "comment": "the 360", "colour": "red",
+            "duration": 1.0}]
+    want = [{"t": 2.5, "name": "best trick", "comment": "the 360", "colour": "red", "dur": 1.0}]
+    b = Board(browser, live_server, project)
+    try:
+        seeded = norm(b.settle())
+        res = b.ask(ops)
+        assert res["refused"] == [] and res["lines"] == [
+            "Marker at 00:00:02:12: “best trick”, Red, 1.00 s long, comment “the 360”"]
+        b.review(res)
+        b.accept()
+        ai = norm(b.settle())
+        assert ai["markers"] == want
+        assert check_undo_title(b.page.locator("#undo").get_attribute("title") or "") == "AI: marker"
+        assert b.page.locator("#tl .tl-ruler .tl-marker-name").inner_text() == "best trick"
+        b.undo()
+        assert norm(b.settle()) == seeded
+        # naming the marker that is already there
+        b.page.evaluate("tl.addMarker(1.0)")
+        b.settle()
+        res = b.ask([{"op": "marker", "at": 1.0, "name": "drop in", "colour": "Blue"}])
+        assert res["lines"] == ["The marker at 00:00:01:00: “drop in”, Blue"], res
+        b.review(res)
+        b.accept()
+        assert b.settle()["markers"] == [{"t": 1.0, "name": "drop in", "colour": "blue"}]
+    finally:
+        b.close()
+    h = Board(browser, live_server, project)
+    try:
+        pg = h.page
+        pg.evaluate("tl.seek(2.5); document.activeElement && document.activeElement.blur()")
+        pg.keyboard.press("m")                                           # M
+        pg.keyboard.press("m")                                           # M on it: the dialog
+        dlg = pg.locator("[data-testid=marker-dialog]")
+        dlg.wait_for(state="visible")
+        dlg.locator("[data-testid=marker-name]").fill("best trick")
+        dlg.locator("[data-testid=marker-comment]").fill("the 360")
+        dlg.locator("[data-testid=marker-colour][data-colour=red]").click()
+        dlg.locator("[data-testid=marker-duration]").fill("00:00:01:00")
+        dlg.locator("[data-testid=marker-ok]").click()
+        hand = norm(h.settle())
+    finally:
+        h.close()
+    assert ai == hand
+
+
 def test_effect_controls_values_and_keyframes(browser, live_server, project):
     ops = [{"op": "set", "id": "shot-a", "prop": "scale", "value": 125},
            {"op": "set", "id": "shot-a", "prop": "posx", "value": 1200},

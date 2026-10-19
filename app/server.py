@@ -7583,6 +7583,52 @@ def api_export() -> JSONResponse:
     })
 
 
+def range_start(whole: list[dict], sent: list[dict]) -> float | None:
+    """Where the shots a render was sent start on the sequence's clock: the whole sequence
+    at 0, an In/Out range (export.js `clipRange`: the shots inside it, cut at its edges,
+    their ids kept) at its first shot's place plus how far into it the range begins.
+    None when the first shot is not in the sequence (nothing to place it by)."""
+    if not sent:
+        return None
+    key = lambda s: (s.get("clip"), round(float(s.get("in", 0)), 4), round(float(s.get("out", 0)), 4))  # noqa: E731
+    if [key(s) for s in sent] == [key(s) for s in whole]:
+        return 0.0
+    first, t = sent[0], 0.0
+    for s in whole:
+        if first.get("id") is not None and s.get("id") == first.get("id"):
+            off = (float(first["in"]) - float(s["in"])) / edits.speed_of(s)
+            return t + off if off > -1e-6 else None
+        t += edits.dur(s)
+    return None
+
+
+def export_markers(markers: list | None, whole: list[dict], sent: list[dict]) -> list:
+    """The sequence's markers on the clock of the film a render makes (verdict 12, punch
+    4: the named ones are its chapters, assemble.py `chapters_of`): the whole sequence's
+    as they are; an In/Out range's moved back by where it starts, those outside it left
+    out and a duration cut at its end; none when the range cannot be placed."""
+    if not markers:
+        return []
+    start = range_start(whole, sent)
+    if start is None:
+        return []
+    end = start + sum(edits.dur(s) for s in sent)
+    out: list = []
+    for m in markers:
+        t = tracksmod.marker_time(m)
+        if t is None or t < start - 1e-6 or t >= end - 1e-6:
+            continue
+        nt = round(max(0.0, t - start), 4)
+        if isinstance(m, dict):
+            v = {**m, "t": nt}
+            if v.get("dur"):
+                v["dur"] = round(min(float(v["dur"]), end - t), 4)
+            out.append(v)
+        else:
+            out.append(nt)
+    return out
+
+
 @app.post("/api/render")
 async def api_render(request: Request) -> JSONResponse:
     body = await request.json()
@@ -7642,6 +7688,12 @@ async def api_render(request: Request) -> JSONResponse:
         else:
             s.pop("controls", None)
         segments.append(s)
+    # the markers on this film's own clock: an In/Out range's start at 0 (its chapters)
+    marks = export_markers(edl.get("markers"), edl.get("segments") or [], segments)
+    if marks:
+        edl["markers"] = marks
+    else:
+        edl.pop("markers", None)
     edl["segments"] = segments
     job = uuid.uuid4().hex[:8]
     edl_path = STATE["work"] / f"render_{job}.json"

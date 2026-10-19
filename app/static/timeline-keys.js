@@ -37,8 +37,9 @@
  *                slip, track select forward. As in Premiere, C only picks the razor (a
  *                click with it cuts there); ⌘K, Add Edit, cuts at the playhead (the
  *                selected shot, else the shot under it) without changing the tool.
- *   M            a marker at the playhead; ⇧M the next, ⌘⇧M the previous; ⌘⌥M clears the
- *                one at the playhead.
+ *   M            a marker at the playhead — on a marker, its Marker dialog (name, comments,
+ *                colour, duration); ⇧M the next, ⌘⇧M the previous; ⌘⌥M clears the one at
+ *                the playhead.
  *   Q W          the selected shot's in / out to the playhead.
  *   X ⌫ Del      ripple delete the selection (multi-select included); ⌫ Del only a
  *                selection somebody chose, never one the board adopted (I16.0 n).
@@ -94,7 +95,7 @@
     ['⌘Z ⌘⇧Z', 'undo / redo', 'foundation', 'trim'],
     ['⌘A ⌘⌥D Esc', 'select all · duplicate · clear the selection and marks', '', 'trim'],
     ['⌘D ⇧D ⌘⇧D', 'the default video · audio · both transitions, 1 s at the selected edit', '', 'trim'],
-    ['M ⇧M ⌘⇧M', 'marker at the playhead · next · previous (⌘⌥M clears)', '', 'move'],
+    ['M ⇧M ⌘⇧M', 'marker (M on one: edit it) · next · previous (⌘⌥M clears)', '', 'move'],
     ['S', 'the magnet on / off', 'trim', 'trim'],
     ['+ − \\', 'zoom in / out · fit · ⌥ / ⌘ wheel zooms', 'foundation', 'move'],
     ['?', 'this map', '', 'move'],
@@ -621,6 +622,8 @@
   /* ------------------------------------------------------------ markers: M */
   function addMarker() {
     if (!segs().length) { say('nothing on the timeline to mark'); return true; }
+    // M on a marker opens its Marker dialog, as in Premiere (verdict 12, punch 4)
+    if (tl.markerAt && tl.markerAt(tl.state.playhead) && tl.openMarkerDialog(tl.state.playhead)) return true;
     const m = tl.addMarker(tl.state.playhead);
     say(m == null ? `a marker is already at ${tl.tc(tl.state.playhead)}` : `marker at ${tl.tc(m)}`);
     return true;

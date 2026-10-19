@@ -26,7 +26,13 @@ Around the segments, the EDL gains four keys (each absent = the default below):
             V2: clips laid OVER the cut at film time `at` (picture only — their sound is
             not used; the cut's sound is A1's). The render composites each one over V1,
             full frame, for its own length.
-  markers:  [film seconds]                 sequence markers (the ruler's flags)
+  markers:  [film seconds | {"t", "name"?, "comment"?, "colour"?, "dur"?}]
+            sequence markers (the ruler's flags), sorted, one per time. A plain marker
+            (no name, no comment, Green, no duration) is its bare time, as every EDL
+            before verdict 12 has it; any other is an object carrying only what is not
+            the default — Premiere's Marker dialog: a name, comments, a colour (Green Red
+            Purple Orange Yellow White Blue Cyan) and a duration in film seconds. The
+            export writes the named ones as the file's chapters (assemble.py).
   in / out: film seconds or null           the sequence's In / Out
   fps:      the sequence's timebase        fixed: from its first clip or Sequence
                                            Settings, never from the shots ("the timebase")
@@ -64,6 +70,11 @@ MIN_GAIN_DB, MAX_GAIN_DB = -60.0, 12.0
 MAX_OFFSET_S = 600.0
 MIN_LEN_S = 0.2
 MAX_MARKERS = 500
+# Premiere's marker colours, in its Marker dialog's order; Green is the default
+MARKER_COLOURS = ("green", "red", "purple", "orange", "yellow", "white", "blue", "cyan")
+MARKER_NAME_MAX = 120
+MARKER_COMMENT_MAX = 1000
+MAX_MARKER_DUR_S = 24 * 3600.0
 _ID = re.compile(r"^[A-Za-z0-9:_-]{1,40}$")
 
 
@@ -229,23 +240,92 @@ def validate_audio_clips(raw: Any, speed_validator=None) -> list[dict]:
     return out
 
 
-def validate_markers(raw: Any) -> list[float]:
-    """Sequence markers: film seconds, >= 0, sorted, de-duplicated to the hundredth.
-    Accepts `{t: …}` objects as well as numbers (the client's older shape)."""
+def marker_colour(v: Any) -> str:
+    """A marker colour by Premiere's name, any case ("Red", "red"): one of MARKER_COLOURS."""
+    c = str(v).strip().lower() if isinstance(v, str) else ""
+    if c not in MARKER_COLOURS:
+        raise ValueError("a marker's colour is one of "
+                         + ", ".join(x.title() for x in MARKER_COLOURS))
+    return c
+
+
+def marker_value(m: Any) -> float | dict:
+    """One marker, cleaned: its bare time (4 places) when it is a plain one, else
+    `{t, name?, comment?, colour?, dur?}` with only what is not the default. Accepts
+    `color` / `duration` as an op spells them."""
+    if not isinstance(m, dict):
+        x = round(_finite(m, "a marker"), 4)
+        if x < 0:
+            raise ValueError("a marker is before the film starts")
+        return x
+    t = round(_finite(m.get("t"), "a marker"), 4)
+    if t < 0:
+        raise ValueError("a marker is before the film starts")
+    out: dict = {"t": t}
+    name = m.get("name")
+    if name is not None:
+        if not isinstance(name, str):
+            raise ValueError("a marker's name is not text")
+        name = " ".join(name.split())
+        if len(name) > MARKER_NAME_MAX:
+            raise ValueError(f"a marker's name is longer than {MARKER_NAME_MAX} characters")
+        if name:
+            out["name"] = name
+    comment = m.get("comment")
+    if comment is not None:
+        if not isinstance(comment, str):
+            raise ValueError("a marker's comment is not text")
+        comment = comment.strip()
+        if len(comment) > MARKER_COMMENT_MAX:
+            raise ValueError(f"a marker's comment is longer than {MARKER_COMMENT_MAX} characters")
+        if comment:
+            out["comment"] = comment
+    colour = m.get("colour", m.get("color"))
+    if colour is not None:
+        c = marker_colour(colour)
+        if c != "green":
+            out["colour"] = c
+    d = m.get("dur", m.get("duration"))
+    if d is not None:
+        d = round(_finite(d, "a marker's duration"), 4)
+        if d < 0 or d > MAX_MARKER_DUR_S:
+            raise ValueError("a marker's duration is 0 or more film seconds, under a day")
+        if d > 0:
+            out["dur"] = d
+    return out if len(out) > 1 else t
+
+
+def marker_time(m: Any) -> float | None:
+    """A marker's time from either shape (None when it has none)."""
+    v = m.get("t") if isinstance(m, dict) else m
+    if isinstance(v, bool):
+        return None
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    return x if math.isfinite(x) else None
+
+
+def validate_markers(raw: Any) -> list[float | dict]:
+    """Sequence markers, sorted and de-duplicated to the hundred-thousandth: a plain one
+    its bare time, a named / commented / coloured / long one an object (`marker_value`).
+    At one time a marker with a name, comment, colour or duration is never lost to a bare
+    duplicate; otherwise the later one wins."""
     if raw is None:
         return []
     if not isinstance(raw, list):
         raise ValueError("markers is not a list")
     if len(raw) > MAX_MARKERS:
         raise ValueError(f"more than {MAX_MARKERS} markers")
-    vals = set()
+    vals: dict[float, float | dict] = {}
     for m in raw:
-        t = m.get("t") if isinstance(m, dict) else m
-        x = round(_finite(t, "a marker"), 4)
-        if x < 0:
-            raise ValueError("a marker is before the film starts")
-        vals.add(x)
-    return sorted(vals)
+        v = marker_value(m)
+        t = v["t"] if isinstance(v, dict) else v
+        if isinstance(vals.get(t), dict) and not isinstance(v, dict):
+            continue
+        vals[t] = v
+    return [vals[t] for t in sorted(vals)]
 
 
 def validate_point(v: Any, what: str) -> float | None:

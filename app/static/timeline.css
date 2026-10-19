@@ -41,6 +41,49 @@
 #seqSettings .ss-btn:focus-visible { outline: 2px solid var(--accent, #4a9df8); outline-offset: 1px; }
 #seqSettings .ss-btn.primary { background: var(--accent, #4a9df8); border-color: var(--accent, #4a9df8);
   color: #08111c; font-weight: 600; min-width: 72px; }
+/* The Marker dialog (verdict 12, punch 4; timeline.js openMarkerDialog): Premiere's Name,
+   In, Duration, Comments and Marker Color, in the Sequence Settings dialog's dense modal. */
+#markerDlg {
+  padding: 0; width: 460px; max-width: calc(100vw - 32px);
+  background: var(--panel, #1d1d1f); color: var(--text, #dcdcdf);
+  border: 1px solid var(--line-hi, #46464c); border-radius: 6px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .55); font-size: 12.5px;
+}
+#markerDlg::backdrop { background: rgba(4, 4, 6, .62); }
+#markerDlg .mk { margin: 0; display: flex; flex-direction: column; }
+#markerDlg .mk-head { display: flex; align-items: baseline; gap: 12px; padding: 10px 16px;
+  background: var(--head, #252527); border-bottom: 1px solid var(--line, #333337); border-radius: 6px 6px 0 0; }
+#markerDlg .mk-title { font-weight: 600; font-size: 13px; }
+#markerDlg .mk-seq { color: var(--dim, #94949c); font-size: 11.5px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+#markerDlg .mk-body { padding: 14px 16px 8px; }
+#markerDlg .mk-grid { display: grid; grid-template-columns: 92px 1fr; gap: 9px 12px; align-items: center; }
+#markerDlg .mk-grid > label { color: var(--dim, #94949c); text-align: right; font-size: 12px; }
+#markerDlg .mk-grid > label[for=mkComment] { align-self: start; padding-top: 5px; }
+#markerDlg .mk-row { display: flex; align-items: center; gap: 10px; }
+#markerDlg .mk-inline { color: var(--dim, #94949c); font-size: 12px; margin-left: 6px; }
+#markerDlg input[type=text], #markerDlg textarea { box-sizing: border-box; padding: 3px 8px; font: inherit;
+  background: var(--bg, #111112); color: var(--text, #dcdcdf);
+  border: 1px solid var(--line-hi, #46464c); border-radius: 3px; }
+#markerDlg input[type=text] { height: 26px; width: 100%; }
+#markerDlg input.mk-tc { width: 112px; font-variant-numeric: tabular-nums; color: var(--accent, #4a9df8); }
+#markerDlg textarea { width: 100%; resize: vertical; min-height: 64px; line-height: 1.35; }
+#markerDlg input[type=text]:focus, #markerDlg textarea:focus { outline: none; border-color: var(--accent, #4a9df8); }
+#markerDlg .mk-swatches { display: flex; gap: 7px; }
+#markerDlg .mk-sw { width: 20px; height: 20px; padding: 0; border-radius: 3px; cursor: pointer;
+  background: var(--mk); border: 2px solid transparent; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .35); }
+#markerDlg .mk-sw.on { border-color: var(--text, #dcdcdf); }
+#markerDlg .mk-sw:focus-visible { outline: 2px solid var(--accent, #4a9df8); outline-offset: 1px; }
+#markerDlg .mk-note { min-height: 15px; margin-top: 8px; color: #f0a35a; font-size: 11.5px; }
+#markerDlg .mk-foot { display: flex; align-items: center; gap: 8px; padding: 10px 16px 12px;
+  border-top: 1px solid var(--line, #333337); }
+#markerDlg .mk-grow { flex: 1; }
+#markerDlg .mk-btn { height: 26px; padding: 0 14px; border-radius: 3px; font: inherit; cursor: pointer;
+  background: var(--card-hi, #313135); color: var(--text, #dcdcdf); border: 1px solid var(--line-hi, #46464c); }
+#markerDlg .mk-btn:hover { border-color: var(--accent, #4a9df8); }
+#markerDlg .mk-btn:focus-visible { outline: 2px solid var(--accent, #4a9df8); outline-offset: 1px; }
+#markerDlg .mk-btn.primary { background: var(--accent, #4a9df8); border-color: var(--accent, #4a9df8);
+  color: #08111c; font-weight: 600; min-width: 72px; }
 /* An empty sequence still draws its ruler and its V2 / V1 / A1 / A2 headers, as
    Premiere's does: the first action floats over it (#tlEmpty), and a clip dropped beside
    that box lands on the tracks (verdict 4, punch 9). */
@@ -390,11 +433,23 @@ body.rc-playing #tl .blk .tl-h::after { transition: none; }
 #tl.tl-tool-slip .tl-lane .blk { cursor: grab; }
 #tl.tl-tool-track .tl-lane .blk { cursor: e-resize; }
 #tl.tl-tool-ripple .tl-edge, #tl.tl-tool-ripple .tl-edge .q { cursor: ew-resize; }
-/* a marker: a green flag on the ruler (Premiere's default colour); a click goes there */
+/* a marker: a flag on the ruler in its colour (--mk: Premiere's eight, Green by default);
+   a click goes there, a double-click opens the Marker dialog (verdict 12, punch 4) */
 #tl .tl-ruler .tl-marker { position: absolute; bottom: 0; width: 9px; height: 11px; margin-left: -4.5px;
-                           background: #3fbf6a; cursor: pointer; z-index: 2;
+                           background: var(--mk, #3fbf6a); cursor: pointer; z-index: 2;
                            clip-path: polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%); }
-#tl .tl-ruler .tl-marker:hover { background: #6fe292; }
+#tl .tl-ruler .tl-marker:hover { filter: brightness(1.3); }
+/* a duration marker: a bar of its colour along the ruler's foot to its end (under its name) */
+#tl .tl-ruler .tl-marker-dur { position: absolute; bottom: 0; height: 4px; background: var(--mk, #3fbf6a);
+                               opacity: .7; pointer-events: none; z-index: 1; border-radius: 0 2px 2px 0; }
+/* its name beside the flag when there is room (cut with … before the next marker); the
+   timecode it would cover is hidden under it (`under-marker`) */
+#tl .tl-ruler .tl-marker-name { position: absolute; bottom: 4px; height: 13px; line-height: 13px; padding: 0 3px;
+                                box-sizing: border-box; font-size: 10.5px; font-weight: 600; color: var(--mk, #3fbf6a);
+                                background: #131318; border-radius: 2px; white-space: nowrap; overflow: hidden;
+                                text-overflow: ellipsis; cursor: pointer; z-index: 3; }
+#tl .tl-ruler .tl-marker-name:hover { filter: brightness(1.3); }
+#tl .tick.major label.under-marker { visibility: hidden; }
 /* the sequence's in / out: the ruler shaded between them, a bracket at each end */
 #tl .tl-ruler .tl-inout { position: absolute; top: 0; bottom: 0; pointer-events: none;
                           background: rgba(110, 168, 254, .16); box-sizing: border-box; }

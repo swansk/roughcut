@@ -178,9 +178,21 @@
  *                               splits it there. Track: a press selects that shot and every
  *                               one after. Ripple / roll / slip are read by the trim lane.
  *                               Emits `tool`. The side column's button shows it.
- *   tl.addMarker(t) removeMarker(t) clearMarkers() setMarkers(list) markers()
+ *   tl.addMarker(t, opts?) removeMarker(t) clearMarkers() setMarkers(list) markers()
  *   tl.nextMarker(t) prevMarker(t)  Sequence markers, film times on the frame grid, drawn
- *                               on the ruler (a click goes there). setSeqIn(t) /
+ *                               on the ruler (a click goes there). Premiere's (verdict
+ *                               12, punch 4): each has a name, comments, a colour (Green
+ *                               Red Purple Orange Yellow White Blue Cyan; tl.MARKER_COLOURS)
+ *                               and a duration — opts / tl.editMarker(t, {name, comment,
+ *                               colour, dur, t}) (one 'edit marker' entry); tl.markerAt(t)
+ *                               and tl.markerList() read them as {t, name, comment,
+ *                               colour, dur}; tl.markers() is the EDL's shape (a plain
+ *                               marker its bare time). The flag is drawn in its colour,
+ *                               a duration as a bar, the name beside it when there is
+ *                               room and everything in its hover. tl.openMarkerDialog(t)
+ *                               (#markerDlg): Name, In, Duration, Comments, Marker Color,
+ *                               Delete / Cancel / OK — a double-click on a marker, or M on
+ *                               one (timeline-keys.js). setSeqIn(t) /
  *                               setSeqOut(t) (null clears) are the sequence's in / out,
  *                               shaded on the ruler. Both persist in localStorage per
  *                               project and cut, or come from `P.markers` / `P.in` /
@@ -763,8 +775,15 @@
    * rebuilt its ticks — hundreds of new elements, all restyled and laid out — and the
    * monitor renders the timeline on Play and at every cut, the frames a hitch shows on. */
   let rulerKey = '';
+  /* The markers' part of the key, worked out once per list: `state.markers` and its
+   * markers are replaced, never changed in place, so the same array says the same. */
+  let marksKeyOf = null, marksKeyStr = '';
+  function marksKey() {
+    if (state.markers !== marksKeyOf) { marksKeyOf = state.markers; marksKeyStr = JSON.stringify(state.markers); }
+    return marksKeyStr;
+  }
   function paintRuler(width) {
-    const key = [width, state.zoom, fps(), state.seqIn, state.seqOut, state.markers.join(','),
+    const key = [width, state.zoom, fps(), state.seqIn, state.seqOut, marksKey(),
                  keyLabel('⇧M')].join('|');
     if (key === rulerKey && el.ruler.childElementCount) return;
     rulerKey = key;
@@ -801,16 +820,88 @@
       io.title = `sequence in ${state.seqIn != null ? tc(a, r) : '—'} · out ${state.seqOut != null ? tc(b, r) : '—'}`;
       frag.appendChild(io);
     }
-    // markers: a green flag on the ruler at each; a click goes there
-    for (const m of state.markers) {
+    paintMarkers(frag, r, width);
+    el.ruler.replaceChildren(frag);
+  }
+
+  /* The markers on the ruler (verdict 12, punch 4): each a flag in its colour (Premiere's
+   * eight), a duration marker's span a bar of it to its end, the name beside the flag
+   * when there is room before the next marker (cut with … when it is long), and all of
+   * it — the name, the timecode, the duration and the comments — in its hover. A click
+   * goes there; a double-click (or M with the playhead on it) opens the Marker dialog.
+   * A tick's timecode a name would cover is hidden under it, so nothing reads through. */
+  const MARKER_NAME_MIN = 26;           // px: room for a few letters and the …
+  function markerHover(m, r) {
+    const head = m.name ? `${m.name} · ${tc(m.t, r)}` : `marker ${tc(m.t, r)}`;
+    const bits = [head + (m.dur ? ` · Duration ${tc(m.dur, r)}` : '')
+      + (m.colour !== 'green' ? ` · ${colourWord(m.colour)}` : '')];
+    if (m.comment) bits.push(m.comment);
+    bits.push(`click to go there · double-click to edit · ${keyLabel('⇧M')} next · ${keyLabel('⌘⇧M')} previous`);
+    return bits.join('\n');
+  }
+  /* The fonts the names and the timecodes render in: a drawn one's computed style (the
+   * ruler being rebuilt still holds the last paint's), else the stylesheet's. */
+  let markerFont = '';
+  let tickFont = '';
+  function rulerFonts() {
+    const fam = getComputedStyle(el.ruler).fontFamily;
+    const nm = el.ruler.querySelector('.tl-marker-name');
+    const lab = el.ruler.querySelector('.tick.major label');
+    if (nm) markerFont = fontOf(nm, 'normal');
+    else if (!markerFont && fam) markerFont = `normal 600 10.5px ${fam}`;
+    if (lab) tickFont = fontOf(lab, 'normal');
+    else if (!tickFont && fam) tickFont = `normal 400 11px ${fam}`;
+  }
+  function paintMarkers(frag, r, width) {
+    if (!state.markers.length) return;
+    rulerFonts();
+    const names = [];                   // [x0, x1] of each name drawn
+    state.markers.forEach((m, k) => {
+      const x = timeToX(m.t);
+      const hover = markerHover(m, r);
+      if (m.dur > 0) {
+        const span = document.createElement('i');
+        span.className = 'tl-marker-dur';
+        span.dataset.colour = m.colour;
+        span.style.left = `${x}px`;
+        span.style.width = `${Math.max(1, m.dur * state.zoom)}px`;
+        span.style.setProperty('--mk', MARKER_HEX[m.colour]);
+        frag.appendChild(span);
+      }
       const mk = document.createElement('i');
       mk.className = 'tl-marker';
-      mk.dataset.t = String(m);
-      mk.style.left = `${timeToX(m)}px`;
-      mk.title = `marker ${tc(m, r)} — click to go there · ${keyLabel('⇧M')} next · ${keyLabel('⌘⇧M')} previous`;
+      mk.dataset.t = String(m.t);
+      mk.dataset.colour = m.colour;
+      mk.style.left = `${x}px`;
+      mk.style.setProperty('--mk', MARKER_HEX[m.colour]);
+      mk.title = hover;
+      if (m.name) mk.setAttribute('aria-label', `marker ${m.name}`);
       frag.appendChild(mk);
+      if (!m.name) return;
+      const next = state.markers[k + 1];
+      const x0 = x + 6;
+      const room = Math.min(next ? timeToX(next.t) - 4 : width, width) - x0;
+      if (room < MARKER_NAME_MIN) return;
+      const lab = document.createElement('span');
+      lab.className = 'tl-marker-name';
+      lab.dataset.t = String(m.t);
+      lab.style.left = `${x0}px`;
+      lab.style.maxWidth = `${Math.floor(room)}px`;
+      lab.style.setProperty('--mk', MARKER_HEX[m.colour]);
+      lab.textContent = m.name;
+      lab.title = hover;
+      frag.appendChild(lab);
+      names.push([x0 - 2, x0 + Math.min(room, textWidth(m.name, markerFont) + 8) + 2]);
+    });
+    if (!names.length) return;
+    // a tick's timecode under a name: hidden (its tick stays)
+    for (const tick of frag.querySelectorAll('.tick.major')) {
+      const lab = tick.querySelector('label');
+      if (!lab) continue;
+      const a = parseFloat(tick.style.left) + 3;
+      const b = a + textWidth(lab.textContent, tickFont) + 1;
+      if (names.some(([p, q]) => a < q && b > p)) lab.classList.add('under-marker');
     }
-    el.ruler.replaceChildren(frag);
   }
 
   function makeBlock(id) {
@@ -1649,7 +1740,7 @@
       tracks: tracksDiff(),
       overlays: state.overlays.map((o) => ({ ...o })),
       audio: state.audio.map((c) => ({ ...c })),
-      markers: [...state.markers], in: state.seqIn, out: state.seqOut,
+      markers: markersOut(), in: state.seqIn, out: state.seqOut,
       // the timebase, once this page gave the sequence one or changed it (verdict 10,
       // punch 3); a page that only shows the stored one leaves it to the server
       ...(rateTouched && seqRate && seqRateWhy !== 'preview' ? { fps: seqRate } : {}),
@@ -2037,6 +2128,70 @@
   /* They live in the client until the EDL carries them: the project's `markers` /
    * `in` / `out` (app.js's `P`) when the server sends them, else localStorage per
    * project and cut. Film times on the frame grid. */
+  /* A marker is Premiere's (verdict 12, punch 4): a time, a name, comments, a colour and a
+   * duration. `state.markers` holds `{t, name, comment, colour, dur}`, sorted by `t`; the
+   * EDL (roughcut/tracks.py `validate_markers`) and `tl.markers()` keep a plain marker —
+   * no name, no comment, Green, no duration — as its bare time, as they always have, and
+   * any other as `{t, name?, comment?, colour?, dur?}` (only what is not the default). */
+  const MARKER_COLOURS = ['green', 'red', 'purple', 'orange', 'yellow', 'white', 'blue', 'cyan'];
+  const MARKER_HEX = {
+    green: '#3fbf6a', red: '#e5484d', purple: '#b061dc', orange: '#f08a2c',
+    yellow: '#e8c83c', white: '#e8e8ec', blue: '#3f8ff2', cyan: '#35c6d6',
+  };
+  const MARKER_NAME_MAX = 120;          // roughcut/tracks.py MARKER_NAME_MAX
+  const MARKER_COMMENT_MAX = 1000;      // roughcut/tracks.py MARKER_COMMENT_MAX
+  const colourWord = (c) => c.charAt(0).toUpperCase() + c.slice(1);
+  const round4 = (x) => Math.round(x * 1e4) / 1e4;
+
+  /* A marker from any shape the EDL, an old page or an op has used: a bare time or
+   * `{t, name, comment, colour | color, dur | duration}`. `snap` puts its time and its
+   * duration on the edit grid (an edit): a frame's own start at 4 places, as every cut
+   * is, so a marker at a shot's first frame parks the playhead on that shot (on the 0.01 s
+   * grid a 59.94 shot starting at 1.635 had its marker at 1.63, the shot before's last
+   * frame); a load keeps what was saved. Null when the time is not one. */
+  function normMarker(raw, snap) {
+    const o = raw && typeof raw === 'object' ? raw : { t: raw };
+    let t = Number(o.t);
+    if (!Number.isFinite(t) || t < 0) return null;
+    t = snap ? onGrid(t) : round4(t);
+    const c = String(o.colour || o.color || 'green').toLowerCase();
+    let d = Number(o.dur != null ? o.dur : o.duration);
+    d = Number.isFinite(d) && d > 0 ? (snap ? onGrid(d) : round4(d)) : 0;
+    return {
+      t,
+      name: typeof o.name === 'string' ? o.name.replace(/\s+/g, ' ').trim().slice(0, MARKER_NAME_MAX) : '',
+      comment: typeof o.comment === 'string' ? o.comment.trim().slice(0, MARKER_COMMENT_MAX) : '',
+      colour: MARKER_COLOURS.includes(c) ? c : 'green',
+      dur: d,
+    };
+  }
+
+  /* The EDL's shape of one marker: its bare time when it is a plain one. */
+  function markerOut(m) {
+    if (!m.name && !m.comment && m.colour === 'green' && !m.dur) return m.t;
+    const o = { t: m.t };
+    if (m.name) o.name = m.name;
+    if (m.comment) o.comment = m.comment;
+    if (m.colour !== 'green') o.colour = m.colour;
+    if (m.dur) o.dur = m.dur;
+    return o;
+  }
+
+  /* Sorted, one per frame: a later one at the same frame replaces the earlier. */
+  function markerSet(list, snap) {
+    const out = [];
+    for (const raw of Array.isArray(list) ? list : []) {
+      const m = normMarker(raw, snap);
+      if (!m) continue;
+      const k = out.findIndex((x) => sameFrame(x.t, m.t));
+      if (k >= 0) out[k] = m; else out.push(m);
+    }
+    return out.sort((a, b) => a.t - b.t);
+  }
+
+  const markersOut = () => state.markers.map(markerOut);
+  const markerIndex = (t) => state.markers.findIndex((x) => sameFrame(x.t, Number(t)));
+
   function markStoreKey() {
     let id = '';
     try {
@@ -2052,15 +2207,14 @@
       // eslint-disable-next-line no-undef
       if (typeof P !== 'undefined' && P && Array.isArray(P.markers)
           && (P.markers.length || P.in != null || P.out != null)) {
-        v = { markers: P.markers.map((m) => (typeof m === 'object' && m ? m.t : m)), in: P.in, out: P.out };
+        v = { markers: P.markers, in: P.in, out: P.out };
       }
     } catch (err) { v = null; }
     if (!v) {
       try { v = JSON.parse(localStorage.getItem(markStoreKey()) || 'null'); } catch (err) { v = null; }
     }
     v = v || {};
-    state.markers = (Array.isArray(v.markers) ? v.markers : [])
-      .map(Number).filter((t) => Number.isFinite(t) && t >= 0).sort((a, b) => a - b);
+    state.markers = markerSet(v.markers, false);
     state.seqIn = Number.isFinite(v.in) ? v.in : null;
     state.seqOut = Number.isFinite(v.out) ? v.out : null;
   }
@@ -2068,11 +2222,11 @@
   function storeMarks() {
     try {
       localStorage.setItem(markStoreKey(), JSON.stringify(
-        { markers: state.markers, in: state.seqIn, out: state.seqOut }));
+        { markers: markersOut(), in: state.seqIn, out: state.seqOut }));
     } catch (err) { /* private mode: they last the session */ }
   }
 
-  const emitMarks = () => emit('markers', { markers: [...state.markers], in: state.seqIn, out: state.seqOut });
+  const emitMarks = () => emit('markers', { markers: markersOut(), in: state.seqIn, out: state.seqOut });
 
   function saveMarks() {
     storeMarks();
@@ -2093,20 +2247,55 @@
 
   const sameFrame = (a, b) => Math.abs(a - b) < 0.5 / fps();
 
-  function addMarker(t) {
+  /* M: a marker at `t` (the playhead when none), with `opts` {name, comment, colour, dur}
+   * when an AI op or a caller names it. Its time, or null when one is at that frame. */
+  function addMarker(t, opts) {
     return marksEdit('add marker', () => {
-      const m = onFrame(t == null ? state.playhead : Number(t));
-      if (!Number.isFinite(m) || state.markers.some((x) => sameFrame(x, m))) return null;
-      state.markers = [...state.markers, m].sort((a, b) => a - b);
+      const at = onGrid(t == null ? state.playhead : Number(t));
+      if (!Number.isFinite(at) || markerIndex(at) >= 0) return null;
+      const m = normMarker({ ...(opts && typeof opts === 'object' ? opts : {}), t: at }, true);
+      if (!m) return null;
+      state.markers = [...state.markers, m].sort((a, b) => a.t - b.t);
       saveMarks();
-      return m;
+      return m.t;
+    });
+  }
+
+  /* The fields a patch sets, under the names a marker keeps (`color` and `duration`
+   * are an op's spellings). */
+  function markerPatch(patch) {
+    const o = {};
+    if ('name' in patch) o.name = patch.name == null ? '' : String(patch.name);
+    if ('comment' in patch) o.comment = patch.comment == null ? '' : String(patch.comment);
+    if ('colour' in patch || 'color' in patch) o.colour = patch.colour != null ? patch.colour : patch.color;
+    if ('dur' in patch || 'duration' in patch) o.dur = patch.dur != null ? patch.dur : patch.duration;
+    return o;
+  }
+
+  /* The Marker dialog's OK (and an AI op that names a marker already there): the marker
+   * at `t` takes `patch`'s name / comment / colour / dur, ONE undo entry ('edit marker').
+   * False when there is none there or nothing changed. */
+  function editMarker(t, patch) {
+    return marksEdit('edit marker', () => {
+      const k = markerIndex(t);
+      if (k < 0 || !patch || typeof patch !== 'object') return false;
+      const was = state.markers[k];
+      // an In of its own moves it (the dialog's In), never onto another marker's frame
+      const at = patch.t != null && Number.isFinite(Number(patch.t)) ? onGrid(Number(patch.t)) : was.t;
+      const j = markerIndex(at);
+      if (j >= 0 && j !== k) return false;
+      const m = normMarker({ ...was, ...markerPatch(patch), t: at }, true);
+      if (!m || JSON.stringify(m) === JSON.stringify(was)) return false;
+      state.markers = state.markers.map((x, i) => (i === k ? m : x)).sort((a, b) => a.t - b.t);
+      saveMarks();
+      return true;
     });
   }
 
   function removeMarker(t) {
     return marksEdit('clear marker', () => {
       const at = t == null ? state.playhead : Number(t);
-      const keep = state.markers.filter((x) => !sameFrame(x, at));
+      const keep = state.markers.filter((x) => !sameFrame(x.t, at));
       if (keep.length === state.markers.length) return false;
       state.markers = keep;
       saveMarks();
@@ -2123,24 +2312,30 @@
     });
   }
 
+  /* Every marker at once: bare times or marker objects (the EDL's shapes). */
   function setMarkers(list) {
     marksEdit('markers', () => {
-      state.markers = (Array.isArray(list) ? list : []).map((m) => onFrame(Number(m)))
-        .filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
+      state.markers = markerSet(list, true);
       saveMarks();
     });
   }
 
+  /* The marker at `t`'s frame, as `{t, name, comment, colour, dur}`, else null. */
+  function markerAt(t) {
+    const k = markerIndex(t == null ? state.playhead : t);
+    return k < 0 ? null : { ...state.markers[k] };
+  }
+
   function nextMarker(t) {
     const at = t == null ? state.playhead : t;
-    const m = state.markers.find((x) => x > at && !sameFrame(x, at));
-    return m == null ? null : m;
+    const m = state.markers.find((x) => x.t > at && !sameFrame(x.t, at));
+    return m == null ? null : m.t;
   }
 
   function prevMarker(t) {
     const at = t == null ? state.playhead : t;
-    const before = state.markers.filter((x) => x < at && !sameFrame(x, at));
-    return before.length ? before[before.length - 1] : null;
+    const before = state.markers.filter((x) => x.t < at && !sameFrame(x.t, at));
+    return before.length ? before[before.length - 1].t : null;
   }
 
   function setSeqIn(t) {
@@ -3101,7 +3296,7 @@
       state.transitions = Array.isArray(v.transitions) ? v.transitions.map((t) => ({ ...t })) : [];
       if (v.marks && typeof v.marks === 'object') {
         const was = JSON.stringify(marksOf());
-        state.markers = Array.isArray(v.marks.m) ? v.marks.m.slice() : [];
+        state.markers = markerSet(v.marks.m, false);
         state.seqIn = Number.isFinite(v.marks.i) ? v.marks.i : null;
         state.seqOut = Number.isFinite(v.marks.o) ? v.marks.o : null;
         marksMoved = JSON.stringify(marksOf()) !== was;
@@ -3607,7 +3802,7 @@
     };
     state.overlays = state.overlays.map(clip);
     state.audio = state.audio.map(clip);
-    state.markers = [...new Set(state.markers.map(onFrame))].sort((x, y) => x - y);
+    state.markers = markerSet(state.markers, true);
     if (state.seqIn != null) state.seqIn = onFrame(state.seqIn);
     if (state.seqOut != null) state.seqOut = onFrame(state.seqOut);
     if (state.seqIn != null && state.seqOut != null && state.seqOut <= state.seqIn) state.seqOut = null;
@@ -3713,6 +3908,152 @@
       await saveSeq();
     }
     if (ssDlg.open) ssDlg.close();
+  }
+
+  /* ---- the Marker dialog (verdict 12, punch 4): Premiere's Marker dialog — Name, In,
+   * Duration, Comments, Marker Color; Delete, Cancel, OK. A double-click on a marker (its
+   * flag or its name) or M with the playhead on one opens it. OK is ONE undo entry ('edit
+   * marker'), Delete one ('clear marker'); Cancel and Esc change nothing. Keys typed in it
+   * stay in it (the timeline's keys are on window). Built on its first open. */
+  let mkDlg = null;
+  let mkAt = null;                      // the marker's time while the dialog is open
+  let mkColour = 'green';
+
+  /* A timecode (HH:MM:SS:FF, or its last fields: `1:00` is a second at 24 fps) or plain
+   * seconds (`1.5`, `1.5 s`) → film seconds on the sequence's rate; NaN when neither. */
+  function parseTc(text) {
+    const s = String(text == null ? '' : text).trim().replace(/\s*s(ec(onds?)?)?$/i, '');
+    if (!s) return 0;
+    if (/[:;]/.test(s)) {
+      const n = s.split(/[:;]/).map((x) => (x === '' ? 0 : Number(x)));
+      if (n.length > 4 || n.some((x) => !Number.isInteger(x) || x < 0)) return NaN;
+      while (n.length < 4) n.unshift(0);
+      const r = fps(), nominal = Math.max(1, Math.round(r));
+      if (n[3] >= nominal) return NaN;
+      return ((((n[0] * 60) + n[1]) * 60 + n[2]) * nominal + n[3]) / r;
+    }
+    const v = Number(s);
+    return Number.isFinite(v) && v >= 0 ? v : NaN;
+  }
+
+  function buildMarkerDialog() {
+    mkDlg = document.createElement('dialog');
+    mkDlg.id = 'markerDlg';
+    mkDlg.setAttribute('data-testid', 'marker-dialog');
+    mkDlg.setAttribute('aria-label', 'Marker');
+    const sw = MARKER_COLOURS.map((c) => `<button type="button" role="radio" class="mk-sw" data-colour="${c}"`
+      + ` data-testid="marker-colour" aria-label="${colourWord(c)}" title="${colourWord(c)}"`
+      + ` style="--mk:${MARKER_HEX[c]}"></button>`).join('');
+    mkDlg.innerHTML = `
+      <form method="dialog" class="mk" autocomplete="off">
+        <div class="mk-head"><span class="mk-title">Marker</span>
+          <span class="mk-seq" id="mkSeq"></span></div>
+        <div class="mk-body">
+          <div class="mk-grid">
+            <label for="mkName">Name</label>
+            <input id="mkName" type="text" maxlength="${MARKER_NAME_MAX}" spellcheck="false" data-testid="marker-name">
+            <label for="mkIn">In</label>
+            <div class="mk-row"><input id="mkIn" class="mk-tc" type="text" spellcheck="false" data-testid="marker-in">
+              <label for="mkDur" class="mk-inline">Duration</label>
+              <input id="mkDur" class="mk-tc" type="text" spellcheck="false" data-testid="marker-duration"></div>
+            <label for="mkComment">Comments</label>
+            <textarea id="mkComment" rows="4" maxlength="${MARKER_COMMENT_MAX}" data-testid="marker-comment"></textarea>
+            <label>Marker Color</label>
+            <div class="mk-swatches" role="radiogroup" aria-label="Marker Color">${sw}</div>
+          </div>
+          <div class="mk-note" id="mkNote" role="status"></div>
+        </div>
+        <div class="mk-foot">
+          <input type="button" class="mk-btn" id="mkDelete" data-testid="marker-delete" value="Delete">
+          <span class="mk-grow"></span>
+          <input type="button" class="mk-btn" id="mkCancel" data-testid="marker-cancel" value="Cancel">
+          <input type="button" class="mk-btn primary" id="mkOk" data-testid="marker-ok" value="OK">
+        </div>
+      </form>`;
+    document.body.appendChild(mkDlg);
+    mkDlg.querySelector('form').addEventListener('submit', (e) => e.preventDefault());
+    mkDlg.addEventListener('cancel', (e) => { e.preventDefault(); closeMarkerDialog(); });
+    mkDlg.addEventListener('keydown', (e) => {
+      const area = e.target && e.target.tagName === 'TEXTAREA';
+      if (e.key === 'Enter' && (!area || e.ctrlKey || e.metaKey)
+          && !(e.target && e.target.type === 'button')) { e.preventDefault(); markerOk(); }
+      if (e.key !== 'Escape') e.stopPropagation();
+    });
+    mkDlg.addEventListener('click', (e) => {
+      const s = e.target.closest('.mk-sw');
+      if (s) { paintSwatches(s.dataset.colour); return; }
+      const b = e.target.closest('input[type=button]');
+      if (!b) return;
+      if (b.id === 'mkOk') markerOk();
+      else if (b.id === 'mkDelete') markerDelete();
+      else closeMarkerDialog();
+    });
+  }
+
+  function paintSwatches(c) {
+    mkColour = MARKER_COLOURS.includes(c) ? c : 'green';
+    for (const b of mkDlg.querySelectorAll('.mk-sw')) {
+      const on = b.dataset.colour === mkColour;
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+      b.classList.toggle('on', on);
+    }
+  }
+
+  /* The dialog on the marker at `t` (the playhead's when none); false when there is no
+   * marker there. */
+  function openMarkerDialog(t) {
+    const m = markerAt(t == null ? state.playhead : t);
+    if (!m) return false;
+    if (!mkDlg) buildMarkerDialog();
+    mkAt = m.t;
+    let name = 'main';
+    try {
+      // eslint-disable-next-line no-undef
+      if (typeof P !== 'undefined' && P && P.cut) name = String(P.cut);
+    } catch (err) { /* the default */ }
+    mkDlg.querySelector('#mkSeq').textContent = `Sequence · ${name}`;
+    mkDlg.querySelector('#mkName').value = m.name;
+    mkDlg.querySelector('#mkIn').value = tc(m.t);
+    mkDlg.querySelector('#mkDur').value = tc(m.dur);
+    mkDlg.querySelector('#mkComment').value = m.comment;
+    mkDlg.querySelector('#mkNote').textContent = '';
+    paintSwatches(m.colour);
+    if (!mkDlg.open) mkDlg.showModal();
+    const nm = mkDlg.querySelector('#mkName');
+    nm.focus();
+    nm.select();
+    return true;
+  }
+
+  function closeMarkerDialog() {
+    mkAt = null;
+    if (mkDlg && mkDlg.open) mkDlg.close();
+  }
+
+  function markerOk() {
+    if (mkAt == null) { closeMarkerDialog(); return; }
+    const note = mkDlg.querySelector('#mkNote');
+    const at = parseTc(mkDlg.querySelector('#mkIn').value);
+    const d = parseTc(mkDlg.querySelector('#mkDur').value);
+    if (!Number.isFinite(at)) { note.textContent = `In is a timecode, ${tc(mkAt)}`; return; }
+    if (!Number.isFinite(d)) { note.textContent = 'Duration is a timecode (00:00:01:00) or seconds (1.5)'; return; }
+    const t = onGrid(at);
+    if (!sameFrame(t, mkAt) && markerIndex(t) >= 0) {
+      note.textContent = `A marker is already at ${tc(t)}`;
+      return;
+    }
+    editMarker(mkAt, {
+      t, name: mkDlg.querySelector('#mkName').value,
+      comment: mkDlg.querySelector('#mkComment').value, colour: mkColour, dur: d,
+    });
+    closeMarkerDialog();
+    saveSeq();
+  }
+
+  function markerDelete() {
+    if (mkAt != null) removeMarker(mkAt);
+    closeMarkerDialog();
+    saveSeq();
   }
 
   /* `0.5`, `0.25`, `2` — never `0.50`; the chips and the badge read the same. */
@@ -3956,7 +4297,7 @@
   function onRulerDown(e) {
     if (e.button !== 0) return;
     e.preventDefault();
-    const mk = e.target.closest('.tl-marker');
+    const mk = e.target.closest('.tl-marker, .tl-marker-name');
     if (mk) { seek(Number(mk.dataset.t)); return; }      // a marker: go there, no scrub
     scrubbing = true;
     try { el.ruler.setPointerCapture(e.pointerId); } catch (err) { /* not pointer-capable */ }
@@ -3972,6 +4313,14 @@
   }
 
   function onRulerUp() { scrubbing = false; }
+
+  /* A double-click on a marker (its flag or its name) opens its Marker dialog. */
+  function onRulerDbl(e) {
+    const mk = e.target.closest('.tl-marker, .tl-marker-name');
+    if (!mk) return;
+    e.preventDefault();
+    openMarkerDialog(Number(mk.dataset.t));
+  }
 
   /* Premiere's wheel: Alt or Ctrl/⌘ + wheel zooms around the cursor; a plain (or ⇧)
    * wheel scrolls the timeline along — unless there is nothing to scroll, when the page
@@ -4073,6 +4422,7 @@
     el.ruler.addEventListener('pointerdown', onRulerDown);
     el.ruler.addEventListener('pointermove', onRulerMove);
     el.ruler.addEventListener('pointerup', onRulerUp);
+    el.ruler.addEventListener('dblclick', onRulerDbl);
     el.ruler.addEventListener('pointercancel', onRulerUp);
     el.view.addEventListener('wheel', onWheel, { passive: false });
     el.view.addEventListener('scroll', () => {
@@ -4144,7 +4494,10 @@
     timebase, setTimebase, TIMEBASES, openSequenceSettings,
     TOOLS, setTool, get tool() { return state.tool; },
     addMarker, removeMarker, clearMarkers, setMarkers, nextMarker, prevMarker,
-    markers: () => [...state.markers],
+    // the EDL's shape: a plain marker its bare time, any other {t, name?, comment?, colour?, dur?}
+    markers: markersOut,
+    markerList: () => state.markers.map((m) => ({ ...m })),   // every one as {t, name, comment, colour, dur}
+    markerAt, editMarker, openMarkerDialog, MARKER_COLOURS,
     setSeqIn, setSeqOut,
     keysWindow,                     // keyframes on the media (KEYANCHOR; app.js's [ ] nudge)
     // transitions at the edits (verdict 6, punch 6; roughcut/tracks.py)

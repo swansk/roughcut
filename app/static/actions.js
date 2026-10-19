@@ -24,7 +24,8 @@
  *   insert / overwrite / append → tl.insertAt / tl.overwrite / tl.insert; move → tl.move;
  *   razor → tl.split; ripple_delete → tl.remove; trim → tl.setRange; roll and slip → the
  *   trim lane's tl.setRange calls (timeline-trim.js `step`), on frames; speed →
- *   tl.setSpeed; marker → tl.addMarker; in_out → tl.setSeqIn / setSeqOut; track_add →
+ *   tl.setSpeed; marker → tl.addMarker with its name / comment / colour / duration (on a
+ *   marker already there, tl.editMarker: the Marker dialog's OK); in_out → tl.setSeqIn / setSeqOut; track_add →
  *   tl.addTrack; overlay → tl.addOverlay; set → effects.set; keys → the stopwatch
  *   (effects.animate) and a value typed with the playhead on each key (effects.set);
  *   curve / wheel → effects.curve / effects.wheel; vignette → each Lumetri › Vignette
@@ -250,7 +251,18 @@
       if (!TL().setSpeed(s.id, Number(op.rate))) refuse('the shot already plays at that speed');
     },
     marker(op) {
-      if (TL().addMarker(Number(op.at)) == null) refuse('there is a marker there already');
+      // M, then the Marker dialog's fields (verdict 12, punch 4); at a marker already
+      // there, its dialog's OK (tl.editMarker): the same one undo entry either way
+      const f = {};
+      if (op.name != null) f.name = String(op.name);
+      if (op.comment != null) f.comment = String(op.comment);
+      if (op.colour != null || op.color != null) f.colour = String(op.colour != null ? op.colour : op.color);
+      if (op.duration != null || op.dur != null) f.dur = Number(op.duration != null ? op.duration : op.dur);
+      const t = TL();
+      if (t.addMarker(Number(op.at), f) != null) return;
+      if (!Object.keys(f).length || !t.editMarker || !t.editMarker(Number(op.at), f)) {
+        refuse('there is a marker there already');
+      }
     },
     in_out(op) {
       const t = TL();
@@ -554,7 +566,13 @@
       case 'roll': return `Roll the edit between ${shot(op.a)} and ${shot(op.b)} by ${sgn(op.by)}`;
       case 'slip': return `Slip ${shot(op.id)} by ${sgn(op.by)}`;
       case 'speed': return `${Shot(op.id)}: Speed ${Math.round(Number(op.rate) * 100)} %`;
-      case 'marker': return `Marker at ${tc(op.at)}`;
+      case 'marker': {
+        const bits = [op.name ? `“${op.name}”` : '',
+          op.colour && op.colour !== 'green' ? op.colour.charAt(0).toUpperCase() + op.colour.slice(1) : '',
+          Number(op.duration) > 0 ? `${Number(op.duration).toFixed(2)} s long` : '',
+          op.comment ? 'a comment' : ''].filter(Boolean);
+        return `Marker at ${tc(op.at)}${bits.length ? `: ${bits.join(', ')}` : ''}`;
+      }
       case 'in_out': return `Sequence${'in' in op ? ` In ${op.in == null ? 'cleared' : tc(op.in)}` : ''}${'out' in op ? ` Out ${op.out == null ? 'cleared' : tc(op.out)}` : ''}`;
       case 'track_add': return `Add a ${op.kind} track`;
       case 'overlay': return `${r(op)} on ${op.track || 'V2'} at ${tc(op.at)}`;
