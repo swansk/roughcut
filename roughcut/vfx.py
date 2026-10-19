@@ -33,8 +33,9 @@ Units. Crop's sides are percent of the frame; Edge Feather and Blurriness are pi
 look the same at any export size. Blurriness is the Gaussian's standard deviation. The
 Transform's position is a fraction of the frame (0.5 = centre), as Motion's is.
 
-THE FORMULAS (the Program's CSS in app/static/effects.js and the export's filters in
-research/tools/assemble.py `vfx_graph` are both these):
+THE FORMULAS (the Program's — CSS in app/static/effects.js for Crop and Transform, the grade
+canvas's shader stages in app/static/grade.js for Gaussian Blur and Sharpen — and the
+export's filters in research/tools/assemble.py `vfx_graph` are all these):
 
   Crop       a point (x, y) of the frame (pixel centres, a W × H frame) keeps
              m = rx(x)·ry(y) of itself over black, with, for feather f = F·W/1920 px and
@@ -52,10 +53,12 @@ research/tools/assemble.py `vfx_graph` are both these):
              the 3 × 3 binomial blur ([1 2 1]ᵀ[1 2 1]/16), out = x + a·(x − B∗x), per
              channel, the frame's edge pixels repeated past it — one 3 × 3 kernel,
              (1 + a)·δ − a·B: corners −a/16, sides −2a/16, centre 1 + 12a/16
-             (`sharpen_kernel`). The Program runs it as an SVG feConvolveMatrix on R'G'B';
-             the export as `convolution` on each Y'CbCr plane (the same linear map; the
-             chroma at its own 4:2:0 size). On the frame's own pixel grid, as Premiere's
-             is: the Program's monitor, smaller than the frame, shows it a little coarser.
+             (`sharpen_kernel`). The Program runs it in the grade canvas's shader on R'G'B'
+             (wave 16; an SVG feConvolveMatrix only where no grade canvas draws); the export
+             as `convolution` on each Y'CbCr plane (the same linear map; the chroma at its
+             own 4:2:0 size). On the frame's own pixel grid, as Premiere's is: the Program's
+             monitor, smaller than the frame, shows it a little coarser (and coarser again
+             while playing, at Playback Resolution).
 """
 
 from __future__ import annotations

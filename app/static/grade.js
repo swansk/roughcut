@@ -39,11 +39,15 @@
  *                  calls it after every change so its preview is on the next frame
  *   probe()        the mean [r, g, b] of the picture shown now (tests and the judge)
  *   draws          frames drawn so far
+ *   warmLog        the video effects' stage builds the renderer reported: {kinds, ms} (wave 16)
  *
  * The live preview (/modules/effects.js, `effects.adjust(id)`): what the shot's colour
  * is now but the LUT was not baked with — a gain before the table, the balance's
  * shoulder and lift when the table has none, Lumetri contrast and saturation after it —
  * drawn at once; the save's refetch bakes it in. /api/lut says which balance it baked.
+ * Its `vfx`: the shot's Sharpen and Gaussian Blur, drawn after the grade as the renderer's
+ * stages (wave 16, VFXPLAY; "the video effects' stages" below) — a shot with them is drawn
+ * by the canvas even when its LUT is the identity.
  *
  * Where it draws (wave 7). On a software GL — headless Chromium, the judge's and the
  * gate's box — a WebGL canvas costs the main thread twice a frame: the draw (the frame
@@ -547,10 +551,344 @@
       return true;
     }
 
+    /* ---------------------------------------------- the video effects' stages (wave 16)
+     * Blur & Sharpen › Sharpen and Gaussian Blur (verdict 12 punch 2): drawn here, after the
+     * grade, on the graded picture — the order the export draws them in (research/tools/
+     * assemble.py: the grade, then `vfx_graph`) — where they were an SVG feConvolveMatrix
+     * and a CSS blur() on the canvas, which the software compositor ran on every frame (a
+     * sharpened shot played at 5-7 fps). `adj.vfx` (effects.js `vfxLook`'s `stages`, top of
+     * the stack first): {k: 'sharp', a: Amount/100} | {k: 'blur', sx, sy: σ in px of a
+     * 1920 × 1080 frame}. A frame with stages is graded into a texture (`img`, framed by
+     * PAD texels of black) and the stages run from it, the last one onto the canvas. Their
+     * programs are their own (no other frame's program carries them) and are built while
+     * the Program is parked, for every kind the cut uses (the page's `warmCut` → warmStages,
+     * warmCanvas), else the first time a frame that has them is drawn; a failed compile
+     * draws the picture without its effects. THE formulas (roughcut/vfx.py):
+     *   Sharpen  out = x + a·(x − B∗x), B the 3 × 3 binomial blur, the edge pixels repeated —
+     *            B∗x as the mean of four bilinear reads half a texel off each diagonal (each
+     *            the mean of a 2 × 2 block; the four together [1 2 1]ᵀ[1 2 1]/16 exactly), the
+     *            reads clamped to the picture's edge texels (the edge repeated, exactly)
+     *   Blur     a Gaussian of σ = Blurriness·w/1920 px of the w px wide picture, across,
+     *            down or both, black outside the frame (the export pads with black: the edges
+     *            soften toward it). Separable: a pass across, a pass down, each pair of taps
+     *            one bilinear read between them (the weights' centre of mass). A σ of
+     *            2·BLUR_T px or more is blurred k = 2, 4, 8… times smaller (σ/k in [BLUR_T,
+     *            2·BLUR_T)) — the picture boxed down k× (2 × 2 means), blurred at
+     *            σ' = √(σ² − (k² − 1)/4)/k (less what the box and the bilinear way back up
+     *            add), and read back up bilinear — so every σ costs about the same: at most
+     *            2·BLUR_TAPS + 1 reads a pixel of the picture it blurs, a pass.
+     * On the frame's own pixel grid at the size the picture is drawn: Playback Resolution
+     * while playing (≤ 640 px wide), the monitor's size parked — the grid the CSS filter had. */
+    const STAGE_HEAD = `
+      #ifdef GL_FRAGMENT_PRECISION_HIGH
+      precision highp float;
+      #else
+      precision mediump float;
+      #endif
+      varying vec2 v_uv;
+      uniform sampler2D u_src;
+      uniform vec4 u_map;       // the source's uv = u_map.xy + v_uv * u_map.zw`;
+    const STAGE_FS = {
+      // a read at the mapped point: a copy (1:1), the 2 × 2 box down, the bilinear way up
+      copy: () => `${STAGE_HEAD}
+      void main() { gl_FragColor = vec4(texture2D(u_src, u_map.xy + v_uv * u_map.zw).rgb, 1.0); }`,
+      sharp: () => `${STAGE_HEAD}
+      uniform vec2 u_px;        // half a texel, in uv
+      uniform vec4 u_clip;      // the picture's first and last texel centres, in uv
+      uniform float u_amt;      // Sharpen Amount / 100
+      vec3 at(vec2 p) { return texture2D(u_src, clamp(p, u_clip.xy, u_clip.zw)).rgb; }
+      void main() {
+        vec2 p = u_map.xy + v_uv * u_map.zw;
+        vec3 c = at(p);
+        vec3 b = at(p - u_px) + at(p + u_px) + at(p + vec2(u_px.x, -u_px.y)) + at(p + vec2(-u_px.x, u_px.y));
+        gl_FragColor = vec4(clamp(c + u_amt * (c - 0.25 * b), 0.0, 1.0), 1.0);
+      }`,
+      // one direction of the Gaussian, n bilinear pairs (u_tap: offset in texels, weight)
+      blur: (n) => `${STAGE_HEAD}
+      uniform vec2 u_dir;       // one texel along the blur, in uv
+      uniform float u_w0;
+      uniform vec2 u_tap[${n}];
+      void main() {
+        vec2 p = u_map.xy + v_uv * u_map.zw;
+        vec3 c = u_w0 * texture2D(u_src, p).rgb;
+        for (int i = 0; i < ${n}; i++) {
+          vec2 d = u_tap[i].x * u_dir;
+          c += u_tap[i].y * (texture2D(u_src, p + d).rgb + texture2D(u_src, p - d).rgb);
+        }
+        gl_FragColor = vec4(c, 1.0);
+      }`,
+    };
+    const PAD = 12, BLUR_T = 1.5, BLUR_TAPS = 5;  // σ' < 2·BLUR_T: 3σ' ≤ 9 texels, five pairs a side
+    const STP = {};               // the stage programs, by name (null: failed to compile)
+    function stageProg(name, n) {
+      const key = n ? `${name}${n}` : name;
+      if (STP[key] !== undefined) return STP[key];
+      try {
+        const p = gl.createProgram();
+        gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, VS));       // GLSL 1.00 on both
+        gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, STAGE_FS[name](n)));
+        gl.bindAttribLocation(p, 0, 'a_pos');
+        gl.linkProgram(p);
+        if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+        gl.useProgram(p);
+        const P = { p };
+        ['u_map', 'u_px', 'u_clip', 'u_amt', 'u_dir', 'u_w0', 'u_tap'].forEach((k) => { P[k] = gl.getUniformLocation(p, k); });
+        gl.uniform1i(gl.getUniformLocation(p, 'u_src'), 6);
+        gl.useProgram(U.p);
+        STP[key] = P;
+      } catch (e) { STP[key] = null; }
+      return STP[key];
+    }
+    /* The stages' pictures: a texture and its framebuffer per slot ('a' / 'b' the drawn size,
+     * ping-pong; 'd1', 'd2'… a blur's smaller ones), grown as asked and never shrunk: the
+     * Program draws smaller while playing than parked, and a re-size at the play's first
+     * frames was more of the GL's time there (a picture uses its top-left corner). */
+    const IMG = {};
+    function img(slot, W, H) {
+      let m = IMG[slot];
+      if (!m) {
+        const tex = gl.createTexture();
+        gl.activeTexture(gl.TEXTURE6);
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        m = IMG[slot] = { tex, fb: gl.createFramebuffer(), W: 0, H: 0 };
+      }
+      if (m.W < W || m.H < H) {
+        W = Math.max(W, m.W); H = Math.max(H, m.H);
+        gl.activeTexture(gl.TEXTURE6);
+        gl.bindTexture(gl.TEXTURE_2D, m.tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, m.fb);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, m.tex, 0);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        m.W = W; m.H = H;
+      }
+      return m;
+    }
+    /* A picture of the stages: the slot's texture holding an iw × ih picture at (PAD, PAD),
+     * black around it. `into(pic)`: draw into it from here on (the picture and its PAD
+     * cleared, the box drawn its picture's, `rx`, `ry` wider each side). */
+    let SLOTS = '';               // warmStages draws in slots of its own ('w…'): no re-size here
+    const pic = (slot, iw, ih) => ({ m: img(SLOTS + slot, iw + 2 * PAD, ih + 2 * PAD), iw, ih });
+    function into(P, rx = 0, ry = 0) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, P.m.fb);
+      gl.enable(gl.SCISSOR_TEST);
+      gl.scissor(0, 0, P.iw + 2 * PAD, P.ih + 2 * PAD);
+      gl.clearColor(0, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.disable(gl.SCISSOR_TEST);
+      gl.viewport(PAD - rx, PAD - ry, P.iw + 2 * rx, P.ih + 2 * ry);
+    }
+    /* One stage pass: the program `P` reads picture `S` (on unit 6) into the box being drawn
+     * (`into`, or the canvas), `f` source texels a drawn pixel (2: the box down, 1/k: up),
+     * the box `rx`, `ry` pixels wider than the picture each side (a blur's spill, read back up). */
+    function pass(P, S, f, w, h, rx, ry, toCanvas) {
+      use(P);
+      gl.activeTexture(gl.TEXTURE6);
+      gl.bindTexture(gl.TEXTURE_2D, S.m.tex);
+      const W = S.m.W, H = S.m.H, ox = toCanvas ? 0 : -rx, oy = toCanvas ? 0 : -ry;
+      gl.uniform4f(P.u_map, (PAD + f[0] * ox) / W, (PAD + f[1] * oy) / H, f[0] * w / W, f[1] * h / H);
+      return { W, H };
+    }
+    function draw4() { gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); }
+    /* The discrete Gaussian of σ (texels) as the centre's weight and ≤ BLUR_TAPS bilinear
+     * pairs [offset, weight] (taps i, i + 1 read at their weights' centre of mass). */
+    function gaussTaps(s) {
+      const R = Math.max(1, Math.ceil(3 * s));
+      const g = [];
+      for (let i = 0; i <= R + 1; i++) g.push(i <= R && s > 1e-3 ? Math.exp(-0.5 * (i / s) * (i / s)) : (i ? 0 : 1));
+      const sum = g[0] + 2 * g.slice(1).reduce((x, y) => x + y, 0);
+      const taps = [];
+      for (let i = 1; i <= R; i += 2) {
+        const wt = g[i] + g[i + 1];
+        taps.push([wt > 0 ? (i * g[i] + (i + 1) * g[i + 1]) / wt : i, wt / sum]);
+      }
+      return { w0: g[0] / sum, taps: taps.slice(0, BLUR_TAPS) };
+    }
+    /* Draw into picture D (its box `rx`, `ry` wider each side), or onto the canvas (null). */
+    function target(D, w, h, rx = 0, ry = 0) {
+      if (D) into(D, rx, ry);
+      else { gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, w, h); }
+    }
+    /* One direction of the Gaussian (σ `s` texels of S) from S into D or the canvas: the box
+     * drawn is bw × bh, `rx`, `ry` beyond D's picture each side. */
+    function blurDir(S, D, s, axis, bw, bh, rx, ry) {
+      const t = gaussTaps(s);
+      const P = stageProg('blur', t.taps.length);
+      const { W, H } = pass(P, S, [1, 1], bw, bh, rx, ry, !D);
+      gl.uniform2f(P.u_dir, axis === 'x' ? 1 / W : 0, axis === 'y' ? 1 / H : 0);
+      gl.uniform1f(P.u_w0, t.w0);
+      gl.uniform2fv(P.u_tap, new Float32Array(t.taps.flat()));
+      draw4();
+    }
+    const kOf = (s) => (s < 2 * BLUR_T ? 1 : 2 ** Math.floor(Math.log2(s / BLUR_T)));
+    /* Gaussian Blur from picture S (w × h, σ sx across and sy down in its px) into D, or onto
+     * the canvas when D is null. */
+    function blurStage(S, D, sx, sy, w, h) {
+      const kx = kOf(sx), ky = kOf(sy);
+      const sp = (s, kk) => (s > 0 ? Math.sqrt(Math.max(0, s * s - (kk * kk - 1) / 4)) / kk : 0);
+      const copy = stageProg('copy');
+      // down: the picture boxed by 2 × 2 (or 2 × 1) means until it is kx × ky smaller
+      let cur = S, cx = 1, cy = 1, lv = 0;
+      while (cx < kx || cy < ky) {
+        const fx = cx < kx ? 2 : 1, fy = cy < ky ? 2 : 1;
+        const N = pic(`d${++lv}`, Math.ceil(cur.iw / fx), Math.ceil(cur.ih / fy));
+        into(N);
+        pass(copy, cur, [fx, fy], N.iw, N.ih, 0, 0, false);
+        draw4();
+        cur = N; cx *= fx; cy *= fy;
+      }
+      const small = lv > 0;
+      const r = small ? 1 : 0;              // the spill the way up reads at the picture's edge
+      const steps = [['x', sp(sx, kx)], ['y', sp(sy, ky)]].filter((s) => s[1] > 0);
+      steps.forEach(([axis, s], i) => {
+        // the full-size blur's last pass draws the stage's own target; any other, a picture
+        const out = !small && i === steps.length - 1;
+        const N = out ? D : pic(small ? `s${axis}` : 'c', cur.iw, cur.ih);
+        const rx = N && small ? r : 0, ry = N && small && axis === 'y' ? r : 0;
+        target(N, w, h, rx, ry);
+        blurDir(cur, N, s, axis, N ? cur.iw + 2 * rx : w, N ? cur.ih + 2 * ry : h, rx, ry);
+        if (N) cur = N;
+      });
+      if (!small) return;
+      // back up: the small picture read bilinear at the drawn size, onto D or the canvas
+      target(D, w, h);
+      pass(copy, cur, [1 / cx, 1 / cy], w, h, 0, 0, true);
+      draw4();
+    }
+    function sharpStage(S, D, a, w, h) {
+      const P = stageProg('sharp');
+      target(D, w, h);
+      const { W, H } = pass(P, S, [1, 1], w, h, 0, 0, true);
+      gl.uniform2f(P.u_px, 0.5 / W, 0.5 / H);
+      gl.uniform4f(P.u_clip, (PAD + 0.5) / W, (PAD + 0.5) / H, (PAD + S.iw - 0.5) / W, (PAD + S.ih - 0.5) / H);
+      gl.uniform1f(P.u_amt, a);
+      draw4();
+    }
+    /* The stages of `a` for a w-wide picture (σ in its px), or null: none that changes it. */
+    function stagesOf(a, w) {
+      const st = a && Array.isArray(a.vfx) ? a.vfx : null;
+      if (!st || !st.length) return null;
+      const k = w / 1920;
+      const out = [];
+      for (const s of st) {
+        if (s.k === 'sharp' && s.a > 5e-4) out.push({ k: 'sharp', a: s.a });
+        else if (s.k === 'blur' && (s.sx > 0 || s.sy > 0)) out.push({ k: 'blur', sx: Math.max(0, s.sx || 0) * k, sy: Math.max(0, s.sy || 0) * k });
+      }
+      return out.length ? out : null;
+    }
+    /* Whether every program the stages need compiles (the first frame that has them compiles
+     * them); a stage that will not is the picture without its effects, as a failed vignette. */
+    function stagesReady(st) {
+      let ok = !!stageProg('copy');
+      for (const s of st) {
+        if (s.k === 'sharp') ok = ok && !!stageProg('sharp');
+        else for (let n = 1; n <= BLUR_TAPS; n++) ok = ok && !!stageProg('blur', n);
+      }
+      return ok;
+    }
+    /* Compile the programs stages of these kinds ('sharp', 'blur') use and draw each once —
+     * the played frame's grade into a picture of the stages, then each stage pass — on small
+     * pictures of their own (never the canvas, which shows a frame now), so a software GL
+     * builds its routines for them here and not on the first frame of the shot that has them:
+     * the cut into it, while playing (measured: a 133 ms hold at that cut at 1920). The page
+     * asks while the Program is parked, for every kind the cut uses (`warmCut`). Returns the
+     * ms it took. */
+    function warmStages(kinds) {
+      const t0 = performance.now();
+      const ks = new Set(kinds || []);
+      const fake = [...ks].map((k) => (k === 'sharp' ? { k, a: 0.5 } : { k: 'blur', sx: 1, sy: 1 }));
+      if (!fake.length || !stagesReady(fake)) return 0;
+      SLOTS = 'w';
+      try {
+        if (PY) {
+          const f = warmFrame();
+          for (const a of FULL ? [NO_ADJUST] : [NO_ADJUST, WARM_TONED]) {
+            for (const nearest of [false, true]) {
+              f.nearest = nearest;
+              render(f, 2, 2, 24, 24, '__warm', 2, WARM_LUT, { ...a, vfx: fake }, null, null, true);
+            }
+          }
+        }
+        const S = pic('a', 24, 24), D = pic('b', 24, 24);
+        into(S);
+        if (ks.has('sharp')) sharpStage(S, D, 0.5, 24, 24);
+        // every pass count of the blur (σ' 0.3 … 2.9: one to five pairs), then the way down and up
+        if (ks.has('blur')) [0.3, 0.9, 1.5, 2.2, 2.9, 4].forEach((sg) => blurStage(S, D, sg, sg, 24, 24));
+        gl.finish();
+      } catch (e) { /* the first frame that has them builds them instead */ }
+      SLOTS = '';
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      frameKey = null;
+      return performance.now() - t0;
+    }
+    /* The stage programs whose routine for the canvas is built (a software GL builds one per
+     * program per target format, and the canvas's is not the stages' pictures'): `copy` by
+     * warm() at the start, the others by warmCanvas — only in a parked frame's own task, after
+     * its picture is drawn and before it is drawn again over the corner they touched (the
+     * canvas shows a frame at any other time). Until a program's is built, a stage that would
+     * end on the canvas with it ends in a picture and is copied there. */
+    const CANVAS_OK = new Set();
+    function warmCanvas() {
+      const want = ['sharp', 'blur1', 'blur2', 'blur3', 'blur4', 'blur5'].filter((k) => STP[k] && !CANVAS_OK.has(k));
+      const S = IMG.wa;
+      if (!want.length || !S) return false;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, 2, 2);
+      const src = { m: S, iw: 2, ih: 2 };
+      for (const k of want) {
+        const P = STP[k];
+        pass(P, src, [1, 1], 2, 2, 0, 0, true);
+        if (k === 'sharp') {
+          gl.uniform2f(P.u_px, 0.5 / S.W, 0.5 / S.H);
+          gl.uniform4f(P.u_clip, 0, 0, 1, 1);
+          gl.uniform1f(P.u_amt, 0.5);
+        } else {
+          gl.uniform2f(P.u_dir, 1 / S.W, 0);
+          gl.uniform1f(P.u_w0, 1);
+          gl.uniform2fv(P.u_tap, new Float32Array(2 * Number(k.slice(4))));
+        }
+        draw4();
+        CANVAS_OK.add(k);
+      }
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      return true;
+    }
+    /* Run the stages from the graded picture in slot 'a' (w × h); the last draws the canvas.
+     * Leaves the canvas bound with its viewport (a dissolve's other shot blends over it). */
+    function runStages(st, w, h, off) {
+      const A = IMG[`${SLOTS}a`];
+      let cur = { m: A, iw: w, ih: h };
+      st.forEach((s, i) => {
+        // the last stage onto the canvas itself when its programs' routines for it are built
+        // (CANVAS_OK: a blur done small comes back up by `copy`, built at the start), else into
+        // a picture, copied onto the canvas after it (one pass more: 2-4 ms at 640 px)
+        const small = s.k === 'blur' && (kOf(s.sx) > 1 || kOf(s.sy) > 1);
+        const direct = i === st.length - 1 && !off && (small || CANVAS_OK.has(s.k === 'sharp' ? 'sharp' : 'blur5'));
+        const D = direct ? null : pic(cur.m === A ? 'b' : 'a', w, h);
+        if (s.k === 'sharp') sharpStage(cur, D, s.a, w, h);
+        else blurStage(cur, D, s.sx, s.sy, w, h);
+        cur = D;
+      });
+      if (cur) {
+        target(off ? pic('e', w, h) : null, w, h);
+        pass(stageProg('copy'), cur, [1, 1], w, h, 0, 0, true);
+        draw4();
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, w, h);
+    }
+
     /* Draw `src` (a <video> or a VideoFrame, sw×sh) at w×h through the LUT `key` (made
-     * from n/data when this renderer has not seen it) with the live preview's `adj`. */
-    function render(src, sw, sh, w, h, key, n, data, adj, parkedKey, mix) {
-      if (canvas.width !== w || canvas.height !== h) {
+     * from n/data when this renderer has not seen it) with the live preview's `adj` —
+     * and its video effects' stages after the grade, when it has any (above). `off`
+     * (warmStages): the whole draw into the stages' own pictures, the canvas untouched. */
+    function render(src, sw, sh, w, h, key, n, data, adj, parkedKey, mix, off) {
+      if (!off && (canvas.width !== w || canvas.height !== h)) {
         canvas.width = w;
         canvas.height = h;
         frameKey = null;
@@ -574,8 +912,12 @@
       gl.uniform4f(U.u_tone, tone[0], tone[1], tone[2], tone[3]);
       gl.uniform1f(U.u_toneOn, tone.some((x) => x !== 0) ? 1 : 0);
       creative(a, w, h);
+      let st = stagesOf(adj, w);
+      if (st && !stagesReady(st)) st = null;
+      if (st) into(pic('a', w, h));            // graded into the stages' first picture
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-      if (mix && mix.w > 0) drawMix(mix, w, h);
+      if (st) runStages(st, w, h, off);
+      if (!off && mix && mix.w > 0) drawMix(mix, w, h);
       return true;
     }
 
@@ -621,6 +963,18 @@
       return m.map((x) => Math.round((x / k) * 100) / 100);
     }
 
+    // warm()'s and warmStages()'s frame: 2 × 2 grey planes, through a 2³ identity table
+    function warmFrame() {
+      const b = new Uint8Array(16).fill(128);
+      return { yuv: true, format: 'I420', nearest: false, mat: [1, 1, 1, 0, -0.19, 1.86, 1.57, -0.47, 0],
+               off: [0, 0.5, 0.5], planes: [{ buf: b, offset: 0, stride: 2, w: 2, h: 2 },
+                                            { buf: b, offset: 4, stride: 1, w: 1, h: 1 },
+                                            { buf: b, offset: 8, stride: 1, w: 1, h: 1 }] };
+    }
+    const WARM_LUT = new Uint8Array([0, 0, 0, 255, 0, 0, 0, 255, 0, 255, 255, 0,
+                                     0, 0, 255, 255, 0, 255, 0, 255, 255, 255, 255, 255]);
+    // the full program's adjust (a tone on: Lumetri live); the lean one is NO_ADJUST's
+    const WARM_TONED = { pre: [1, 1, 1], con: 1, sat: 1, knee: 1, lift: 0, tone: [0.01, 0, 0, 0] };
     /* One draw of each kind a played frame takes (the planes, plain and blended over, at
      * both filters) on a 2x2 picture, so a software GL compiles its routines for them now
      * and not on the first frame of the first play (measured: a 156 ms hole at the start
@@ -628,21 +982,26 @@
     function warm() {
       if (!PY) return;
       const cw0 = canvas.width, ch0 = canvas.height;
-      const b = new Uint8Array(16).fill(128);
-      const f = { yuv: true, format: 'I420', nearest: false, mat: [1, 1, 1, 0, -0.19, 1.86, 1.57, -0.47, 0],
-                  off: [0, 0.5, 0.5], planes: [{ buf: b, offset: 0, stride: 2, w: 2, h: 2 },
-                                               { buf: b, offset: 4, stride: 1, w: 1, h: 1 },
-                                               { buf: b, offset: 8, stride: 1, w: 1, h: 1 }] };
-      const id = new Uint8Array([0, 0, 0, 255, 0, 0, 0, 255, 0, 255, 255, 0,
-                                 0, 0, 255, 255, 0, 255, 0, 255, 255, 255, 255, 255]);
+      const f = warmFrame(), id = WARM_LUT;
       // the lean program (the usual played frame) and the full one (a tone on: Lumetri live)
-      const toned = { pre: [1, 1, 1], con: 1, sat: 1, knee: 1, lift: 0, tone: [0.01, 0, 0, 0] };
+      const toned = WARM_TONED;
       try {
         for (const a of FULL ? [null] : [null, toned]) {
           for (const nearest of [false, true]) {
             f.nearest = nearest;
             render(f, 2, 2, 2, 2, '__warm', 2, id, a, null, { src: f, w: 0.5, key: '__warm', n: 2, data: id, adj: a });
           }
+        }
+        // the video effects' `copy` onto the canvas (runStages: a blur done small comes back up
+        // by it; any other last stage is copied by it until warmCanvas has built its own)
+        const copy = stageProg('copy');
+        if (copy) {
+          const S = pic('a', 2, 2);
+          into(S);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+          gl.viewport(0, 0, 2, 2);
+          pass(copy, S, [1, 1], 2, 2, 0, 0, true);
+          draw4();
         }
         gl.finish();
       } catch (e) { /* the first frame compiles them instead */ }
@@ -659,7 +1018,7 @@
       return { w, h, data: px };
     }
 
-    return { gl2, yuv: !!PY, lut, forget, render, mean, pixels, warm };
+    return { gl2, yuv: !!PY, lut, forget, render, mean, pixels, warm, warmStages, warmCanvas };
   }
 
   /* A playing frame's planes, for the renderer's yuv path (wave 11 CANVAS): copied out of
@@ -753,6 +1112,9 @@ async function drawFrame(m) {
       }
     }
     if (R) ok = R.render(src, m.sw, m.sh, m.w, m.h, m.key, m.n, m.data, m.adj, null, mix);
+    // a parked frame drawn: the stages' routines for the canvas are built in its task, and the
+    // frame drawn again over the corner they touched (Renderer warmCanvas), never while playing
+    if (ok && !yuv && !m.yuv && R.warmCanvas()) ok = R.render(src, m.sw, m.sh, m.w, m.h, m.key, m.n, m.data, m.adj, null, mix);
   } catch (err) { /* a frame that will not draw: the next one will */ }
   finally { closeFrame(m); }
   postMessage({ t: 'drawn', ok: !!ok, ts, yuv, ms: performance.now() - t0, sent: m.sent, made: m.made, got,
@@ -789,6 +1151,7 @@ onmessage = (e) => {
   if (!R) return;
   if (m.t === 'lut') R.lut(m.key, m.n, m.data);
   else if (m.t === 'forget') R.forget();
+  else if (m.t === 'warm') postMessage({ t: 'warmed', kinds: m.kinds, ms: R.warmStages(m.kinds) });
 };
 `;
 
@@ -826,6 +1189,8 @@ onmessage = (e) => {
     mixGen: 0,               // bumps per new mix video: its frame callback (armMix) stops
     drawnAt: 0,              // when the last draw was asked of the renderer (armMix)
     drawNo: 0,               // draws asked of the renderer so far (setShot's cut in a mix)
+    warmed: new Set(),       // the video effects' stage kinds the renderer has built (warmStages)
+    warmLog: [],             // {kinds, ms}: each build, as the worker reports it (a record)
   };
 
   function $(s) { return document.querySelector(s); }
@@ -933,7 +1298,9 @@ onmessage = (e) => {
     G.drawnAt = performance.now();
     G.drawNo++;
     if (G.worker) { toWorker(j); return; }
-    if (drawOn(G.R, j)) { G.draws++; drewOn(); }
+    let ok = drawOn(G.R, j);
+    if (ok && !j.playing && G.R.warmCanvas()) ok = drawOn(G.R, j);   // (the worker's drawFrame)
+    if (ok) { G.draws++; drewOn(); }
   }
 
   /* The frame to the worker: a VideoFrame of the live video (a reference to the decoded
@@ -1017,6 +1384,8 @@ onmessage = (e) => {
         if (G.drawLog.length > DRAW_LOG) G.drawLog.splice(0, G.drawLog.length - DRAW_LOG);
         autoLearn(m);
       }
+    } else if (m.t === 'warmed') {
+      G.warmLog.push({ kinds: m.kinds, ms: Math.round(m.ms * 10) / 10 });
     } else if (m.t === 'ready' && m.ok) {
       G.yuv = !!m.yuv;
     } else if (m.t === 'ready' && !m.ok) {
@@ -1183,6 +1552,8 @@ onmessage = (e) => {
     return out;
   }
   const creativeOn = (a) => !!(a && (a.ctab || a.hsl || (a.vig && a.vig[0])));
+  // the shot's Sharpen / Gaussian Blur (wave 16): the renderer's stages draw them
+  const vfxOn = (a) => !!(a && Array.isArray(a.vfx) && a.vfx.length);
 
   function adjustNow() {
     const fx = window.effects;
@@ -1193,7 +1564,7 @@ onmessage = (e) => {
     const near = (x, y) => Math.abs(x - y) < 1e-4;
     const trivial = a.pre.every((x) => near(x, 1)) && near(a.con, 1) && near(a.sat, 1)
       && !((a.knee ?? 1) < 1) && near(a.lift ?? 0, 0) && (a.tone || NO_TONE).every((x) => x === 0)
-      && !creativeOn(a);
+      && !creativeOn(a) && !vfxOn(a);
     return trivial ? null : a;
   }
 
@@ -1247,6 +1618,11 @@ onmessage = (e) => {
     if (!G.canvas) return;
     const was = G.canvas.classList.contains('on');
     G.canvas.classList.toggle('on', !!on);
+    // the video effects' CSS stand-in is the videos' only while no canvas draws them (wave 16:
+    // effects.js `apply`), so the page restyles them when the canvas comes and goes
+    if (was !== !!on && window.effects && typeof window.effects.apply === 'function') {
+      try { window.effects.apply(); } catch (e) { /* the next apply styles them */ }
+    }
     // the live buffer under it is unseen once the canvas has drawn (cover); off: seen at once
     if (!on) cover(false);
     else if (!was) G.coverPending = true;
@@ -1275,6 +1651,7 @@ onmessage = (e) => {
 
   /* Whether the canvas should be visible right now, and make it so. */
   function settle() {
+    warmCut();
     const graded = !!(G.lut && (!G.lut.identity || adjustNow()));
     const mixGraded = mixDrawn();
     const on = !!(G.ok && G.enabled && live() && (graded || (mixGraded && G.lut)));
@@ -1505,6 +1882,31 @@ onmessage = (e) => {
     });
   }
 
+  /* The video effects' stage programs (wave 16), built before a frame needs them: every kind
+   * a shot of the cut uses, once a renderer (Renderer `warmStages`), and only while the
+   * Program is not playing — the build holds the worker for 10-30 ms (a software GL), which
+   * at the cut into the shot, or while the shot before it played, was a held frame. */
+  const VFX_STAGE = { sharpen: 'sharp', gaussian_blur: 'blur' };
+  function warmCut() {
+    if (!G.ok || playerPlaying()) return;
+    const t = window.tl;
+    const segs = t && t.state && Array.isArray(t.state.segs) ? t.state.segs : null;
+    if (!segs) return;
+    const kinds = [];
+    for (const sg of segs) {
+      const v = sg && sg.controls && sg.controls.vfx;
+      if (!Array.isArray(v)) continue;
+      for (const e of v) {
+        const k = e && !e.off && VFX_STAGE[e.kind];
+        if (k && !G.warmed.has(k) && !kinds.includes(k)) kinds.push(k);
+      }
+    }
+    if (!kinds.length) return;
+    kinds.forEach((k) => G.warmed.add(k));
+    if (G.worker) G.worker.postMessage({ t: 'warm', kinds });
+    else if (G.R) G.warmLog.push({ kinds, ms: G.R.warmStages(kinds) });
+  }
+
   /* The transition's other shot's Lumetri (contrast, tone, saturation: never baked in its
    * LUT), or null when it has none. Its balance is in its LUT already: no `pre`. */
   function mixAdjust() {
@@ -1716,6 +2118,7 @@ onmessage = (e) => {
     get adjust() { return adjustNow(); },
     get draws() { return G.draws; },
     get drawLog() { return G.drawLog; },
+    get warmLog() { return G.warmLog; },
     get yuv() { return G.yuv; },
     get autoW() { return G.autoW; },
     get mode() { return G.worker ? 'worker' : (G.R ? 'main' : 'off'); },

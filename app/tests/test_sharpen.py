@@ -4,8 +4,9 @@ REDESIGN-GOAL dimensions 7 and 15).
 Premiere's Effects bin has Sharpen beside Gaussian Blur; so does this one. One parameter,
 Sharpen Amount: THE formula is roughcut/vfx.py's — an unsharp mask on the frame's own
 pixels, out = x + (Amount/100)·(x − B∗x) with B the 3 × 3 binomial blur, one 3 × 3 kernel
-(`vfx.sharpen_kernel`). The Program runs it as an SVG feConvolveMatrix on the picture's
-layers (effects.js `vfxLook`); the export as `convolution` on each Y'CbCr plane
+(`vfx.sharpen_kernel`). The Program runs it in the grade canvas's shader after the grade
+(grade.js's stages, wave 16; effects.js `vfxLook` `stages`; an SVG feConvolveMatrix only on
+the layers no grade canvas draws); the export as `convolution` on each Y'CbCr plane
 (research/tools/assemble.py `sharpen_graph`). Measured: the export is THE kernel on the
 plain export's planes (mean |Δ| under a code value); the picture's detail rises in the
 Program and in the export; a keyed Amount follows its keys; the bin's double-click and a
@@ -199,8 +200,8 @@ def saved(pg, proj, want, timeout=8.0) -> dict:
 def test_sharpen_from_the_bin_sharpens_the_program_and_the_export(board, proj):
     """The bin lists Sharpen in Blur & Sharpen; a double-click with shot 2 selected puts it
     on (one undo, "undo: Sharpen"), its section has Sharpen Amount with a stopwatch; typing
-    150 (one undo) raises the Program's detail at once (an SVG feConvolveMatrix of THE
-    kernel) and the export of the saved cut is as crisp; Ctrl+Z twice takes it all back."""
+    150 (one undo) raises the Program's detail at once (THE kernel, in the grade canvas's
+    shader) and the export of the saved cut is as crisp; Ctrl+Z twice takes it all back."""
     pg = board
     pg.locator("#tl .blk[data-id=s2]").click()
     settle_program(pg, 2.5)
@@ -223,7 +224,12 @@ def test_sharpen_from_the_bin_sharpens_the_program_and_the_export(board, proj):
     assert sec.locator(".ec-sw").count() == 1
     type_value(pg, "amount@sharpen", 150)
     assert pg.locator("#undo").get_attribute("title").startswith("undo: sharpen sharpen amount")
-    assert "url(" in pg.evaluate("getComputedStyle(liveVideo()).filter")
+    # the grade canvas's shader draws it (wave 16, VFXPLAY: verdict 12 punch 2), no CSS filter
+    # on the canvas; the SVG kernel is the CSS stand-in for the layers no canvas draws
+    pg.wait_for_function("grade.adjust && grade.adjust.vfx && grade.adjust.vfx[0].k === 'sharp'"
+                         " && !!document.querySelector('#gradeCanvas.on')")
+    assert pg.evaluate("grade.adjust.vfx") == [{"k": "sharp", "a": 1.5}]
+    assert pg.evaluate("getComputedStyle(document.querySelector('#gradeCanvas')).filter") == "none"
     km = pg.evaluate("document.querySelector('#ecvs0 feConvolveMatrix').getAttribute('kernelMatrix')")
     assert [float(x) for x in km.split()] == pytest.approx(vfx.sharpen_kernel(150), abs=1e-4)
     settle_program(pg, 2.5)
@@ -241,4 +247,4 @@ def test_sharpen_from_the_bin_sharpens_the_program_and_the_export(board, proj):
     assert pg.evaluate("effects.vfx(tl.byId('s2'))") == [{"id": "sharpen", "kind": "sharpen"}]
     pg.keyboard.press("Control+z")
     assert pg.evaluate("effects.vfx(tl.byId('s2'))") == []
-    pg.wait_for_function("getComputedStyle(liveVideo()).filter === 'none'")
+    pg.wait_for_function("getComputedStyle(liveVideo()).filter === 'none' && !(grade.adjust && grade.adjust.vfx)")
