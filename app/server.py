@@ -6027,7 +6027,7 @@ def bin_telemetry() -> dict[str, dict]:
 # on a small pool, started at configure(); a request waits at most CLIP_FACTS_WAIT_S for
 # the ones still running and answers with the rest as null and `probing` > 0, and the
 # board asks again a second later.
-CLIP_FACTS_WAIT_S = 0.2
+CLIP_FACTS_WAIT_S = 0.1
 CLIP_FACTS_WORKERS = 4
 CLIP_FACTS: dict = {"lock": threading.Lock(), "pool": None, "running": {}}
 
