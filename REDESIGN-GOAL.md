@@ -429,3 +429,9 @@ next judge runs, and the next judge rules it honest or lenient.
   `/api/debug/slow`'s `slowest_loop` and turns RED over 200 ms. All three are stricter: verdict 11 found the GREEN gate
   depended on which of two runs counted, and that the page clock overstates holds by up to ~12 ms while every failing
   run also failed on the frame or worker clock.
+
+- 2026-10-19 (lead, after verdict 12's ruling that the previous entry was lenient in wording): **said plainly: the speed
+  test no longer asserts the graded canvas on the page-callback clock.** Since wave 15 PERF5 it asserts the canvas on the
+  rAF frame clock and the worker's own clock only (the page-callback number stays in the record). The page clock
+  overstates holds by up to ~12 ms (verdict 11) but was the stricter number: verdict 12's after-suite run would have
+  failed on it at 68.4 ms. That part of the change is more lenient, and the previous entry should have said so.

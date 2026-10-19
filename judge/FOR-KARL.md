@@ -4,8 +4,8 @@ The loop has done what K3 asked, and the judge agrees it is "substantially deliv
 close K2 ("Premiere Pro quality") and K3 ("AI-first, easy to learn, footage in obviously"). This page
 is the shortest way to look.
 
-**Judged rev:** `18944d0` (verdict 11: 15 of 16 dimensions at 8-9, the judge's gate green; only
-dimension 10 at 7, and your K2 / K3). Wave 15 is fixing what is left (below) on the same branch.
+**Judged rev:** `992ca33` (verdict 12: 15 of 16 dimensions at 8-9, the judge's gate green; playback at 7
+because Sharpen plays slowly, and your K2 / K3). Wave 16 is fixing what is left (below) on the same branch.
 
 ## Open it
 
@@ -33,13 +33,16 @@ is never touched). The preview needs a restart on the judged rev first: the lead
 8. **New since the last look:** Effects › Video Effects (Crop, Transform, Gaussian Blur: drag onto a clip);
    Sequence › Sequence Settings… (the timebase stays fixed as you add clips); AI Look and Color Match
    preview on the Program before you accept; a just-imported clip plays within seconds.
+9. **New in wave 15:** Lumetri › Vignette and Effects › Blur & Sharpen › Sharpen (ask the AI for "a soft
+   vignette"); every Designed Effect accept is one Ctrl+Z; after the AI re-colours the film a re-run can still
+   re-cut (only shots you cut by hand are kept as they are).
 
-## What the judge still sees (wave 15 is on these)
+## What the judge still sees (wave 16 is on these)
 
-- Accepting a Designed Effect can't be undone yet, and one placed at a shot's very start fails its own check.
-- A few thumbnail requests take up to 2 s on 4K originals; playback at 1920 can still hitch on a busy box.
-- After the AI re-colours every shot, a re-run treats all of them as "edited by hand" and won't re-cut.
-- No Lumetri Vignette yet (the AI fakes one with rings).
+- A shot with Sharpen plays at ~5-7 fps in the Program (it is drawn as a slow filter; moving it into the grade).
+- Markers have no names, comments or colours yet.
+- With Selects open, the AI prompt gets very narrow and a few labels crowd.
+- An AI "design an effect" ask says "applied" before the effect is designed.
 
 ## Tell me
 
