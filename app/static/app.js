@@ -1308,6 +1308,10 @@ function arm(v, seg, at = seg.in) {
     v._roll = null;
     if (!v.paused) v.pause();
   }
+  // parked: heard if it is the picture, else silent until its preroll's cut (hush; paused,
+  // so a change of `muted` here moves no clock)
+  const lv = liveVideo();
+  if (v.paused) hush(v, v !== lv, a1Moved(seg));
   setShotRate(v, seg);
   // Deferred, so by the time metadata arrives this buffer may have been pointed at a
   // different clip; parking the old shot would then seek the new one.
