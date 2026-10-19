@@ -76,6 +76,7 @@ from roughcut import flow as flowmod  # noqa: E402
 from roughcut import deep as deepmod  # noqa: E402
 from roughcut import firstpass as fpmod  # noqa: E402
 from roughcut import procscope  # noqa: E402
+from roughcut import fxcheck  # noqa: E402
 from roughcut import dirwatch  # noqa: E402
 from roughcut import tracks as tracksmod  # noqa: E402
 from roughcut import media as mediamod  # noqa: E402
@@ -10263,36 +10264,13 @@ PROOF_W, PROOF_H, PROOF_FPS = 1280, 720, 24
 def _fx_proof(e: dict, seg: dict) -> tuple[Path, Path]:
     """The one shot rendered from its proxy at 720p, with the effect (`proof.mp4`) and
     without (`base.mp4`), so the checks can measure a difference and the human can
-    watch the result in seconds rather than after a whole render."""
-    d = fx_home() / e["id"]
-    d.mkdir(parents=True, exist_ok=True)
+    watch the result in seconds rather than after a whole render (`fxcheck.proof`, on
+    this thread: the check itself runs it in a child process, `_fx_run_check`)."""
     src = _fx_proxy(seg["clip"])
     if src is None:
         raise RuntimeError(f"no proxy or source for {seg['clip']}")
-    dur = float(seg["out"]) - float(seg["in"])
-    vf = (f"scale={PROOF_W}:{PROOF_H}:force_original_aspect_ratio=decrease,"
-          f"pad={PROOF_W}:{PROOF_H}:(ow-iw)/2:(oh-ih)/2,fps={PROOF_FPS},format=yuv420p")
-    af = "aresample=48000:first_pts=0,aformat=channel_layouts=stereo"
-    head = ["ffmpeg", "-v", "error", "-y", "-nostdin", "-ss", f"{float(seg['in']):.3f}",
-            "-i", str(src)]
-    tail = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-movflags", "+faststart"]
-    base, proof = d / "base.mp4", d / "proof.mp4"
-    r = subprocess.run(head + ["-t", f"{dur:.3f}", "-vf", vf, "-af", af,
-                               "-map", "0:v:0", "-map", "0:a:0?", "-dn"] + tail + [str(base)],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        raise RuntimeError(f"base render failed: {r.stderr[-300:]}")
-    evs = fx.events_in_shot(e, seg)
-    extra, graph, vout, aout = fx.part_graph([(e, evs)], PROOF_W, PROOF_H, PROOF_FPS, d)
-    fc = f"[0:v]{vf}[vbase];[0:a]{af}[abase]" + (";" + graph if graph else "")
-    # the extra inputs sit between the source and `-t`: after `-i` a `-t` is an input
-    # option for the NEXT input, and the sprites must not be cut short
-    r = subprocess.run(head + extra + ["-t", f"{dur:.3f}", "-filter_complex", fc,
-                                       "-map", f"[{vout}]", "-map", f"[{aout}]", "-dn"]
-                       + tail + [str(proof)], capture_output=True, text=True)
-    if r.returncode != 0:
-        raise RuntimeError(f"proof render failed: {r.stderr[-300:]}")
+    proof, base, _stats = fxcheck.proof(e, seg, src, fx_home() / e["id"], w=PROOF_W,
+                                        h=PROOF_H, fps=PROOF_FPS)
     return proof, base
 
 
@@ -10301,29 +10279,55 @@ def _fx_proof(e: dict, seg: dict) -> tuple[Path, Path]:
 # checklist. Proposals arrived unchecked because the check waited for a Verify button
 # (the slow motion on Killington never had one run). One proof renders at a time, after
 # any render of the cut (a 4K encode owns the cores); a check already waiting for an
-# effect covers a newer change too, because it reads the effect when it starts.
+# effect covers a newer change too, because it reads the effect when it starts, and a
+# check already running covers an ask for the same effect unchanged (wave 14: the
+# board's card asks for a check of a proposal that has none yet — every proposal, while
+# its first check runs — and verdict 10 found a second identical check queued).
+#
+# It runs in a child process (`roughcut.fxcheck`, wave 14): verdict 10's vignette drew
+# 240 frames with PIL on a server thread for 12+ minutes, holding the GIL 250 ms at a
+# time — the event loop held 145 times, every request slow, an upload at ~1 MB/s. The
+# child reports each stage (the base render, the overlay, the proof render, the
+# measuring) as it goes, so the job's % moves and its ETA is the stages' own.
 FX_VERIFY_SLOT = threading.Lock()
 FX_VERIFY_GUARD = threading.Lock()
 FX_VERIFY_WAITING: dict[str, str] = {}      # fx id → the job queued for it, not started
+FX_VERIFY_RUNNING: dict[str, tuple[str, str]] = {}   # fx id → (job, the spec it checks)
 FX_VERIFY_POLL_S = 1.0
 FX_SPEC_CHECKED = ("shot", "events", "overlay", "sound", "window", "edits")
+FX_CHECK_CHILD = True       # False: the check runs on its job's thread (as the stubs do)
+FX_CHECK_SCOPE: dict = {"scope": None}
+# Seconds a stage takes, per second of the shot (base, proof) or per frame drawn (the
+# overlay), plus the measuring: first guesses, then what the last check measured.
+FX_CHECK_COST = {"base": 0.35, "proof": 0.45, "frame": 0.3, "measure": 1.5}
 
 
 def _fx_render_running() -> bool:
     return any(j["state"] not in progress.TERMINAL for j in RENDERS.values())
 
 
+def _fx_spec_key(e: dict) -> str:
+    """What a check reads of an effect: two effects with one key get one checklist."""
+    return json.dumps({k: e.get(k) for k in FX_SPEC_CHECKED}, sort_keys=True, default=str)
+
+
 def _fx_autoverify(fx_id: str) -> str | None:
-    """Queue the free check for an effect; returns its job id (the one already waiting
-    when there is one), or None when the effect is gone."""
+    """Queue the free check for an effect; returns its job id — the one already waiting
+    when there is one, or the one running on the effect as it is now — or None when
+    the effect is gone. One check per change of the effect, never two of one."""
     with FX_VERIFY_GUARD:
         waiting = FX_VERIFY_WAITING.get(fx_id)
         if waiting and waiting in FX and FX[waiting]["state"] not in progress.TERMINAL:
             return waiting
         try:
-            name = _fx_get(fx_id).get("name") or "the effect"
+            e = _fx_current(fx_id)
         except HTTPException:
             return None
+        running = FX_VERIFY_RUNNING.get(fx_id)
+        if (running and running[0] in FX and FX[running[0]]["state"] not in progress.TERMINAL
+                and running[1] == _fx_spec_key(e)):
+            return running[0]
+        name = e.get("name") or "the effect"
         job = _fx_start("verify", f"Checking {name}", _fx_verify_job, fx_id, fx_id=fx_id)
         FX_VERIFY_WAITING[fx_id] = job
         return job
@@ -10338,10 +10342,137 @@ def _fx_verify_wait(entry: progress.Job, job: str, fx_id: str) -> None:
             entry.note("waiting for the render to finish")
             waited = True
         time.sleep(FX_VERIFY_POLL_S)
+    if FX_VERIFY_SLOT.locked():
+        entry.note("waiting for another check to finish")
     FX_VERIFY_SLOT.acquire()
     with FX_VERIFY_GUARD:
         if FX_VERIFY_WAITING.get(fx_id) == job:
             FX_VERIFY_WAITING.pop(fx_id)
+
+
+def _fx_check_scope() -> procscope.Scope:
+    """The checks' child processes: their own group, ended with the server (not
+    background: somebody is watching the card's %)."""
+    sc = FX_CHECK_SCOPE["scope"]
+    if sc is None or sc.cancelled:
+        sc = FX_CHECK_SCOPE["scope"] = procscope.Scope("fx checks")
+    return sc
+
+
+def _fx_check_plan(entry: progress.Job, e: dict, seg: dict) -> None:
+    """The check's stages as the job's milestones, weighted by what each costs, and the
+    ETA they add up to — so its % is the stages' and the time left is theirs."""
+    dur = max(0.1, float(seg["out"]) - float(seg["in"]))
+    overlay = e.get("overlay")
+    frames = 0
+    if overlay:
+        n_ev = max(1, len(fx.events_in_shot(e, seg)))
+        frames = len(fx.overlay_runs(overlay, PROOF_FPS)) * n_ev
+    c = FX_CHECK_COST
+    w = {"base": c["base"] * dur, "overlay": 0.05 + c["frame"] * frames,
+         "proof": c["proof"] * dur, "measure": c["measure"]}
+    entry.set_estimate(round(sum(w.values()), 1),
+                       [progress.milestone(k, label, w[k]) for k, label in (
+                           ("base", "rendering the shot"), ("overlay", "drawing the overlay"),
+                           ("proof", "rendering the proof"), ("measure", "measuring the proof"))],
+                       source="model", detail="rendering the shot")
+    entry["frames_to_draw"] = frames
+
+
+def _fx_check_learn(seg: dict, stats: dict) -> None:
+    """The next check's guess is this one's measurement (a moving average)."""
+    dur = max(0.1, float(seg["out"]) - float(seg["in"]))
+    seen = {"base": stats.get("base_s", 0) / dur, "proof": stats.get("proof_s", 0) / dur,
+            "measure": stats.get("measure_s")}
+    if stats.get("overlay_frames"):
+        seen["frame"] = stats.get("overlay_s", 0) / stats["overlay_frames"]
+    for k, v in seen.items():
+        if isinstance(v, (int, float)) and v > 0:
+            FX_CHECK_COST[k] = round(0.5 * FX_CHECK_COST[k] + 0.5 * float(v), 4)
+
+
+_FX_STAGE_NOTE = {"base": "rendering the shot", "overlay": "drawing the overlay",
+                  "proof": "rendering the proof", "measure": "measuring the proof"}
+
+
+def _fx_check_progress(entry: progress.Job):
+    def on(stage: str, part: float, done: bool) -> None:
+        if done:
+            entry.complete(stage)
+            nxt = entry.current()
+            if nxt is not None:
+                entry.note(_FX_STAGE_NOTE.get(nxt["key"], nxt["label"]))
+        else:
+            entry.advance(stage, part, detail=_FX_STAGE_NOTE.get(stage))
+    return on
+
+
+def _fx_run_check(entry: progress.Job, e: dict, seg: dict, onset, hz: float) -> dict:
+    """Proof and checklist for `e` on `seg` (`fxcheck.check`): in a child process under
+    the checks' procscope, reading its progress lines into the job; on this thread when
+    the renderer is replaced (`fxcheck.unpatched`: the suite's stubs) or
+    FX_CHECK_CHILD is off. Returns the checklist with `proof` (frames drawn, seconds)."""
+    src = _fx_proxy(seg["clip"])
+    if src is None:
+        raise RuntimeError(f"no proxy or source for {seg['clip']}")
+    d = fx_home() / e["id"]
+    d.mkdir(parents=True, exist_ok=True)
+    _fx_check_plan(entry, e, seg)
+    on = _fx_check_progress(entry)
+    spec = {"effect": e, "seg": seg, "src": str(src), "dir": str(d), "w": PROOF_W,
+            "h": PROOF_H, "fps": PROOF_FPS, "onset": onset, "hz": hz, "impact": _fx_impact(e)}
+    t0 = time.perf_counter()
+    if not (FX_CHECK_CHILD and fxcheck.unpatched()):
+        res = fxcheck.check(spec, on)
+    else:
+        res = _fx_check_child(spec, d, on, entry)
+    stats = dict(res.get("stats") or {})
+    stats["s"] = round(time.perf_counter() - t0, 2)
+    _fx_check_learn(seg, stats)
+    v = res["verify"]
+    v["proof"] = {k: stats[k] for k in ("overlay_frames", "s") if k in stats}
+    return v
+
+
+def _fx_check_child(spec: dict, d: Path, on, entry: progress.Job) -> dict:
+    spec_path = d / f"check.{os.getpid()}.{threading.get_ident()}.json"
+    out_path = spec_path.with_suffix(".out.json")
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    out_path.unlink(missing_ok=True)
+    cmd = [sys.executable, "-m", "roughcut.fxcheck", str(spec_path), str(out_path)]
+    setpriv = shutil.which("setpriv")
+    if setpriv and os.name == "posix":
+        cmd = [setpriv, "--pdeathsig", "TERM", "--", *cmd]    # dies with the server
+    env = {**os.environ, "ROUGHCUT_FX_PARENT": str(os.getpid()), "PYTHONUNBUFFERED": "1",
+           "PYTHONPATH": os.pathsep.join([str(HERE.parent)]
+                                         + [p for p in [os.environ.get("PYTHONPATH")] if p])}
+    try:
+        with procscope.active(_fx_check_scope()):
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    stdin=subprocess.DEVNULL, text=True, cwd=str(HERE.parent),
+                                    env=env)
+        entry["check_pid"] = proc.pid
+        tail: list[str] = []
+        err = threading.Thread(target=lambda: tail.extend(proc.stderr.read().splitlines()[-8:]),
+                               daemon=True)
+        err.start()
+        for line in proc.stdout:
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(msg, dict) and msg.get("stage"):
+                on(str(msg["stage"]), float(msg.get("part") or 0.0), bool(msg.get("done")))
+        proc.wait()
+        err.join(timeout=2)
+        res = json.loads(out_path.read_text(encoding="utf-8")) if out_path.exists() else {}
+        if proc.returncode != 0 or "verify" not in res:
+            raise RuntimeError(res.get("error") or f"the check stopped (exit {proc.returncode})"
+                               + (f": {tail[-1][:200]}" if tail else ""))
+        return res
+    finally:
+        spec_path.unlink(missing_ok=True)
+        out_path.unlink(missing_ok=True)
 
 
 def _fx_verify_job(job: str, fx_id: str) -> None:
@@ -10355,6 +10486,8 @@ def _fx_verify_job(job: str, fx_id: str) -> None:
         except HTTPException:                       # discarded while it waited
             entry.finish("done", detail="the effect is gone")
             return
+        with FX_VERIFY_GUARD:
+            FX_VERIFY_RUNNING[fx_id] = (job, _fx_spec_key(e))
         seg = _fx_seg(e["shot"]) if not str(e.get("shot", "")).startswith("new:") else {"id": e["shot"], "clip": e.get("clip"), "in": 0, "out": 0}
         sc = load_sidecar(e["clip"])
         onset = (sc.get("tracks") or {}).get("onset") or None
@@ -10379,10 +10512,7 @@ def _fx_verify_job(job: str, fx_id: str) -> None:
                  + [{"key": "proof", "label": "a proof render", "ok": None,
                      "detail": "skipped: the shot does not exist until the edits are accepted"}]}
         else:
-            entry.note("rendering a proof of the shot")
-            proof, base = _fx_proof(e, seg)
-            entry.note("measuring the proof")
-            v = fx.verify(e, seg, onset=onset, hz=hz, part=proof, base=base, impact=_fx_impact(e))
+            v = _fx_run_check(entry, e, seg, onset, hz)
             if edit_check:
                 v["checks"].insert(0, edit_check)
                 v["ok"] = bool(v["ok"]) and edit_check["ok"]
@@ -10409,13 +10539,21 @@ def _fx_verify_job(job: str, fx_id: str) -> None:
         entry.finish("done", detail="every check passed" if v.get("ok")
                      else "failed: " + ", ".join(failed)[:200])
     except Exception as exc:  # noqa: BLE001
+        try:
+            _fx_current(fx_id)
+        except HTTPException:            # discarded while its proof rendered: its files went
+            entry["result"] = {"id": fx_id, "ok": None}
+            entry.finish("done", detail="the effect is gone")
+            return
         entry.finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
     finally:
-        if slot:
-            FX_VERIFY_SLOT.release()
         with FX_VERIFY_GUARD:
             if FX_VERIFY_WAITING.get(fx_id) == job:
                 FX_VERIFY_WAITING.pop(fx_id)
+            if (FX_VERIFY_RUNNING.get(fx_id) or ("",))[0] == job:
+                FX_VERIFY_RUNNING.pop(fx_id)
+        if slot:
+            FX_VERIFY_SLOT.release()
 
 
 def _fx_start(kind: str, label: str, target, *args, fx_id: str | None = None) -> str:

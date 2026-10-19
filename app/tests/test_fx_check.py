@@ -165,3 +165,153 @@ def test_an_accepted_vignette_exports_through_the_looped_frame(project, tmp_path
     probe = [subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
                              str(films[k])], capture_output=True, text=True).stdout for k in ("with", "without")]
     assert abs(float(probe[0]) - float(probe[1])) < 0.05
+
+
+# ------------------------------------------------------------ the check, in the server
+
+def _vignette_design(note, seg, clip, sidecar, *, reference=None, place=False, proxy=None,
+                     workdir=None, segments=None, clips=None, window=None):
+    """The model's design, scripted: verdict 10's vignette on the whole shot."""
+    e = {"name": "soft edge vignette", "why": "the edges fall off", "shot": seg["id"],
+         "clip": seg["clip"], "note": note,
+         "events": [{"t": float(seg["in"]), "x": 0.5, "y": 0.5, "label": "whole shot"}],
+         "overlay": {**VIGNETTE, "duration": round(float(seg["out"]) - float(seg["in"]), 3)},
+         "sound": None, "created": "2026-10-18T22:20:23",
+         "history": [{"note": note, "at": "2026-10-18T22:20:23"}]}
+    return fx.validate_effect(e, segments or [seg], clips)
+
+
+@pytest.fixture
+def scripted(monkeypatch, project):
+    """Only the model is scripted (fx.design / fx.revise): the proof, the overlay, the
+    measuring are the real ones, so the check runs where the server runs it."""
+    monkeypatch.setattr(fx, "design", _vignette_design)
+    monkeypatch.setattr(fx, "revise", lambda effect, note, segments, clips=None:
+                        fx.validate_effect({**effect, "note": note}, segments, clips))
+    return project
+
+
+def _seed(project, client, segments) -> list[str]:
+    import shutil
+    import server
+    edl = json.loads(project["edl"].read_text(encoding="utf-8"))
+    edl["segments"] = segments
+    edl.pop("effects", None)
+    project["edl"].write_text(json.dumps(edl, indent=1), encoding="utf-8")
+    server.configure(project["edl"], project["footage"], project["sidecars"],
+                     project["work"], proxies=False, assets=project["assets"])
+    shutil.rmtree(server.fx_home(), ignore_errors=True)
+    return [s["id"] for s in client.get("/api/project").json()["segments"]]
+
+
+def _job(client, job: str) -> dict:
+    return client.get(f"/api/job/{job}").json()
+
+
+def _wait(client, job: str, timeout: float = 30.0) -> dict:
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        snap = _job(client, job)
+        if snap["state"] in ("done", "failed"):
+            return snap
+        time.sleep(0.05)
+    raise AssertionError(f"job {job} did not finish: {_job(client, job)}")
+
+
+def _checks(fx_id: str) -> list[dict]:
+    import server
+    return [j for j in server.FX.values() if j.get("fx_kind") == "verify" and j.get("fx_id") == fx_id]
+
+
+def test_the_vignette_check_runs_in_a_child_with_a_moving_percent_and_one_job(scripted, client):
+    """Verdict 10's case end to end on the suite's bin: the design lands, its check
+    starts by itself, the board's card asks for a check of the proposal while it runs
+    (fx.js refresh: a proposal with no `verify` yet) and gets the same job, the job's %
+    moves with an ETA, the proof draws one overlay frame — in a child process, not in
+    the server's — and the checklist lands on the effect."""
+    import server
+    shot = _seed(scripted, client, [{"clip": "CLIP_A.MP4", "in": 0.0, "out": 6.0, "why": "all"}])[0]
+    drawn = fx.RENDERED["frames"]
+    r = client.post("/api/fx/design", json={"shot": shot, "note": "put a soft vignette on this shot"})
+    fx_id = _wait(client, r.json()["job"])["result"]["id"]
+    checks = _checks(fx_id)
+    assert len(checks) == 1
+    job = checks[0]["id"]
+    seen, asked = [], None
+    t0 = time.time()
+    while time.time() - t0 < 60:
+        snap = _job(client, job)
+        if asked is None:
+            asked = client.post("/api/fx/verify", json={"id": fx_id}).json()["job"]
+        if snap["state"] != "running":
+            break
+        seen.append((snap["pct"], snap["eta_s"], snap["detail"], snap.get("check_pid")))
+        time.sleep(0.03)
+    assert snap["state"] == "done", snap
+    assert asked == job, "a second check was queued for the same effect"
+    assert len(_checks(fx_id)) == 1
+    pcts = [p for p, _e, _d, _pid in seen if 0 < p < 100]
+    assert len(set(pcts)) >= 3 and pcts == sorted(pcts), seen
+    assert any(eta is not None and eta > 0 for _p, eta, _d, _pid in seen), seen
+    assert {"rendering the shot", "rendering the proof"} <= {d for _p, _e, d, _pid in seen}, seen
+    pids = {pid for *_x, pid in seen if pid}
+    assert pids and server.os.getpid() not in pids
+    assert fx.RENDERED["frames"] == drawn, "the overlay was drawn in the server's process"
+    e = next(x for x in client.get("/api/fx").json()["effects"] if x["id"] == fx_id)
+    assert e["verify"]["ok"] is True, e["verify"]
+    assert e["verify"]["proof"]["overlay_frames"] <= 2, e["verify"]["proof"]
+    pic = next(c for c in e["verify"]["checks"] if c["key"] == "picture_landed")
+    assert pic["ok"] is True, pic
+    assert (server.fx_home() / fx_id / "proof.mp4").exists()
+    assert not list((server.fx_home() / fx_id).glob("check.*"))      # spec and answer cleaned up
+
+
+def test_one_check_per_change_while_one_runs(monkeypatch, scripted, client):
+    """The rule, deterministic (the check held on its thread): an ask for the effect as
+    it is joins the running check; a change queues one more — one, however many asks
+    follow — and that one is what lands."""
+    import threading
+    import server
+    gate, entered = threading.Event(), threading.Event()
+    real = fx.verify
+
+    def held(effect, seg, **kw):
+        entered.set()
+        gate.wait(20)
+        return real(effect, seg, **kw)
+    monkeypatch.setattr(fx, "verify", held)                  # replaced: on the job's thread
+    shot = _seed(scripted, client, [{"clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0, "why": "a"}])[0]
+    fx_id = _wait(client, client.post("/api/fx/design", json={"shot": shot, "note": "vignette"}).json()["job"])["result"]["id"]
+    assert entered.wait(30)
+    first = _checks(fx_id)[0]["id"]
+    try:
+        for _ in range(3):
+            assert client.post("/api/fx/verify", json={"id": fx_id}).json()["job"] == first
+        assert len(_checks(fx_id)) == 1
+        assert client.put(f"/api/fx/{fx_id}", json={"events": [{"t": 2.0, "x": 0.4, "y": 0.5}]}).status_code == 200
+        second = {j["id"] for j in _checks(fx_id)} - {first}
+        assert len(second) == 1
+        for _ in range(3):
+            assert client.post("/api/fx/verify", json={"id": fx_id}).json()["job"] in second
+        assert len(_checks(fx_id)) == 2
+    finally:
+        gate.set()
+    snaps = [_wait(client, j["id"]) for j in _checks(fx_id)]
+    assert sorted(s["detail"] for s in snaps) == ["every check passed",
+                                                  "the effect changed meanwhile — checked again"]
+    assert server.FX_VERIFY_RUNNING.get(fx_id) is None and server.FX_VERIFY_WAITING.get(fx_id) is None
+
+
+def test_a_discard_while_the_child_renders_is_not_a_failed_check(scripted, client):
+    """A check starts by itself after every design, so a quick Discard lands while the
+    child renders into the effect's folder, which the Discard deletes: the check ends
+    "the effect is gone", never a red "failed" row."""
+    shot = _seed(scripted, client, [{"clip": "CLIP_A.MP4", "in": 0.0, "out": 6.0, "why": "all"}])[0]
+    fx_id = _wait(client, client.post("/api/fx/design", json={"shot": shot, "note": "vignette"}).json()["job"])["result"]["id"]
+    job = _checks(fx_id)[0]["id"]
+    t0 = time.time()
+    while _job(client, job)["detail"] in ("", "waiting for another check to finish") and time.time() - t0 < 20:
+        time.sleep(0.02)
+    assert client.post("/api/fx/discard", json={"id": fx_id}).status_code == 200
+    snap = _wait(client, job)
+    assert (snap["state"], snap["detail"]) == ("done", "the effect is gone"), snap
