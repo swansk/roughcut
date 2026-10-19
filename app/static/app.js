@@ -1195,10 +1195,14 @@ function filmStart(i) {
 }
 
 /* Where a clip time inside shot i sits in the film: its offset from the in-point at
- * the shot's rate — the transport's position and the playhead both read this. */
-function filmAt(i, clipT) {
+ * the shot's rate — the transport's position and the playhead both read this. `early`
+ * (clip s) lets a time that far before the in-point count as before the edit: a
+ * dissolve's incoming buffer goes live at boundary()'s cut 0.04 s short of its in-point,
+ * and clamped there the film clock jumped 0.04 s at the cut and stood still for as long,
+ * so the outgoing buffer, steered to it, sped up and dropped frames (wave 14 PLAY4). */
+function filmAt(i, clipT, early = 0) {
   const seg = segs[i];
-  return filmStart(i) + Math.max(0, clipT - seg.in) / speedOf(seg);
+  return filmStart(i) + Math.max(-early, clipT - seg.in) / speedOf(seg);
 }
 
 function liveVideo() { return player.vids[player.cur]; }
@@ -1211,7 +1215,9 @@ const proxyOf = (seg) => (P.clips[seg.clip] || {}).proxy || '';
  * seek); a seek inside an open one is not. */
 function bufFor(seg) {
   const lv = liveVideo();
-  const others = player.vids.filter((b) => b && b !== lv);
+  // (nor the buffer a dissolve's cut kept playing as its outgoing half: txKeepsOut)
+  const kept = prog.tx && prog.tx.outHand;
+  const others = player.vids.filter((b) => b && b !== lv && b !== kept);
   const mine = others.find((b) => b._for === seg);
   if (mine) return mine;
   const ahead = [segs[player.idx + 1], segs[player.idx + 2]].filter((x) => x && x !== seg);
@@ -1617,7 +1623,7 @@ function offTick() {
       paintRest();
       monWait(false);
       setShotRate(v, seg);
-      v.muted = a1Moved(seg);
+      hush(v, false, a1Moved(seg));
       const g = player.gen;
       v.play().catch((err) => { if (g === player.gen) playRefused(err); });
       return false;
@@ -1698,7 +1704,7 @@ function playFrom(i, { single = false } = {}) {
   }
   player.off = null;
   frameWatch(v, seg);
-  v.muted = a1Moved(seg);           // a moved sound plays from #pvA1 (programSync)
+  hush(v, false, a1Moved(seg));     // a moved sound plays from #pvA1 (programSync)
   const go = () => {
     if (g !== player.gen || !player.playing) return;   // pause, or a later command, won
     // parked on the in-point already (arm): the same time again would be a second seek
@@ -1755,6 +1761,7 @@ function cueAt(i, clipT) {
 function pauseCut() {
   player.gen++;                     // any shot still opening must not start behind this
   player.off = null;                // a clock playing past a shot stops where it is
+  if (prog.tx && prog.tx.outHand) txUnhandOut(prog.tx, liveVideo());
   player.vids.forEach((v) => v.pause());
   if (bed.el) bed.el.pause();
   player.playing = false;
@@ -1795,6 +1802,28 @@ function progTrack(name) {
 function progA1Level() {
   if (!window.tl || typeof tl.audible !== 'function' || !tl.audible('A1')) return 0;
   return Math.pow(10, (Number(progTrack('A1').gain_db) || 0) / 20);   // > 1 is fine: rcAudio's gain node
+}
+
+/* Silence a Program element, or let it be heard, through its gain node in the audio graph
+ * (meters.js `rcAudio`), never by toggling `muted` while it plays: toggling `muted` on a
+ * playing element switches Chrome's audio renderer to a sink or off it, and its clock jumps
+ * on the switch (measured on Killington's proxies, wave 14 PLAY4 bin/mute.py: an unmute
+ * +40 ms against the wall clock, a mute -14 / -20 ms, an 83 ms gap in its frames; a gain
+ * change: nothing), so the video renderer drops the frames it now calls late. The cut's
+ * prerolled buffer was muted for its preroll and unmuted at the cut, at every cut: through
+ * a dissolve the incoming shot's clock leapt ~60 ms at the edit (frames 0.768 and 0.834 of
+ * CLIP_08 never shown), the live picture held 66-117 ms and the outgoing one, steered to
+ * that clock, sped up and dropped frames. `muted` stays what `a1` says (the shot's sound
+ * was moved off its picture: programSync, test_program_tracks); without the graph (no
+ * audio context yet) `muted` does it all, as before. Returns whether the gain did it. */
+function hush(v, on, a1 = false) {
+  if (!v) return false;
+  const ra = window.rcAudio;
+  const g = ra && typeof ra.gainFor === 'function' ? ra.gainFor(v) : null;
+  if (!g) { if (v.muted !== (on || a1)) v.muted = on || a1; return false; }
+  if (v.muted !== a1) v.muted = a1;
+  ra.setLevel(v, 'hush', on ? 0 : 1);
+  return true;
 }
 
 /* A shot whose sound sits away from its picture: its picture element is muted. */
@@ -1977,6 +2006,10 @@ function programSync(filmT) {
 // (Killington, 1440 + 1920, load 5-7: 8 of 10 plays over 67 ms); at 0.45, 33-50 ms in
 // 10 of 10, the canvas through the dissolve 51-73 ms (was 53-103). Under 8 burners (load
 // 13-16) both fail alike (pvTxOut 50-138 ms, the canvas 114-214).
+// Wave 14 (PLAY4): while playing through the cut, the outgoing half is the live buffer
+// itself, kept playing past the edit (advance, txKeepsOut), and #pvTxOut does not start;
+// TX_PRE_OUT is its lead only when it does (a play started inside the window, a buffer
+// the clock plays past).
 const TX_PRE = 0.25;
 const TX_PRE_OUT = 0.45;
 
@@ -1995,8 +2028,9 @@ const TX_RESEEK_S = 0.5;
 const TX_CATCH_S = 0.3;      // a drift is taken out over about this much film
 const TX_STEER = 0.6;        // the rate moves at most this far from the film's
 const TX_RATE_MS = 250;      // a steered rate changes at most this often (txFollow)
+const TX_OUT_BAND = 0.07;    // the kept outgoing buffer's dead band (film s): two frames
 
-function txFollow(el, seg, clipT, play) {
+function txFollow(el, seg, clipT, play, band = 1 / 60) {
   const spd = speedOf(seg);
   const src = proxyOf(seg);
   // parked, or a file still opening: progFollow's rules (a park is a seek to the frame,
@@ -2016,7 +2050,7 @@ function txFollow(el, seg, clipT, play) {
     return true;
   }
   let k = 1;
-  if (Math.abs(d) > 1 / 60) k = Math.max(1 - TX_STEER, Math.min(1 + TX_STEER, 1 - d / TX_CATCH_S));
+  if (Math.abs(d) > band) k = Math.max(1 - TX_STEER, Math.min(1 + TX_STEER, 1 - d / TX_CATCH_S));
   k = Math.round(k * 20) / 20;                       // steps of 5 %: no rate change per tick
   // A rate change is a pipeline call (the renderer's SetPlaybackRate; the video renderer
   // re-learns its cadence and drops frames meanwhile). Steered every few frames, 0.9 → 1 →
@@ -2126,8 +2160,8 @@ function programMix(t, play, proposal) {
     return;
   }
   if (!prog.tx) {
-    const own = txEl('In');
-    prog.tx = { in: own, inOwn: own, out: txEl('Out'), drawn: null, hand: null };
+    const own = txEl('In'), out = txEl('Out');
+    prog.tx = { in: own, inOwn: own, out, outOwn: out, drawn: null, hand: null, outHand: null };
   }
   const tx = prog.tx;
   const lv = liveVideo();
@@ -2163,8 +2197,9 @@ function programMix(t, play, proposal) {
     // its media it holds its last frame
     if (t >= C - TX_PRE_OUT && t < C + at.h) {
       const ct = a.out + (t - C) * speedOf(a);
-      const end = tx.out && Number.isFinite(tx.out.duration) && tx.out.dataset.src === proxyOf(a)
-        ? tx.out.duration - 0.05 : Infinity;
+      const oe = tx.outHand || tx.outOwn;
+      const end = oe && Number.isFinite(oe.duration) && oe.dataset.src === proxyOf(a)
+        ? oe.duration - 0.05 : Infinity;
       xout = { seg: a, clipT: Math.min(ct, end), hold: ct > end,
                w: outV || (liveIsIn && inV) ? 1 - xv : 0, lvl: outA || (liveIsIn && inA) ? ga[0] : 0 };
     }
@@ -2179,8 +2214,20 @@ function programMix(t, play, proposal) {
   if (tx.hand && tx.hand !== hand) txUnhand(tx, lv);
   tx.hand = hand;
   tx.in = hand || tx.inOwn;
+  // The outgoing picture past the edit while playing: the buffer that played the outgoing
+  // shot, which the cut kept playing (advance, txKeepsOut), while it still can; else
+  // #pvTxOut. Before the cut, while the live buffer plays that shot and the cut will keep
+  // it on, #pvTxOut does not start at all (txWillKeep): no decoder joins the two buffers
+  // that play the two shots anyway (wave 14 PLAY4, verdict 10 punch 5).
+  const outHand = txOutHand(tx, at, xout, lv);
+  if (tx.outHand && tx.outHand !== outHand) txUnhandOut(tx, lv);
+  tx.outHand = outHand;
+  tx.out = outHand || tx.outOwn;
+  const outPlan = !outHand && !!xout && txWillKeep(at, lv);
   for (const v of player.vids) {
-    if (window.rcAudio) rcAudio.setLevel(v, 'xfade', v === lv ? liveLvl * fadeLvl : v === hand ? xin.lvl : 1);
+    if (window.rcAudio) {
+      rcAudio.setLevel(v, 'xfade', v === lv ? liveLvl * fadeLvl : v === hand ? xin.lvl : v === outHand ? xout.lvl : 1);
+    }
   }
   let drawn = null, drawnW = 0, drawnId = null;
   // Both shots' LUTs, before the window: the grade's mix never waits on a cold one
@@ -2195,28 +2242,39 @@ function programMix(t, play, proposal) {
   }
   if (hand) {
     txFollow(hand, xin.seg, xin.clipT, true);
-    hand.muted = !(xin.lvl > 0);              // its sound: A1's level (timeline) x sin (xfade)
+    // its sound: A1's level (timeline) x sin (xfade); muted only without the audio graph
+    if (!hush(hand, false, a1Moved(xin.seg))) hand.muted = !(xin.lvl > 0);
     hand._roll.gen = player.gen;              // still the preroll of its cut (advance: rolled)
     if (xin.w > 0) { drawn = hand; drawnW = xin.w; drawnId = xin.seg.id; }
     hand.dataset.w = String(Math.round(xin.w * 1e4) / 1e4);
   }
-  for (const [el, x, side] of [[tx.inOwn, hand ? null : xin, 'in'], [tx.out, xout, 'out']]) {
+  if (outHand) {
+    // It played the outgoing shot on its own clock up to the cut, which the incoming one
+    // was steered to: within TX_OUT_BAND it is left alone (a rate change is a pipeline
+    // call that drops frames, and its half lasts a fraction of a second).
+    txFollow(outHand, xout.seg, xout.clipT, play && !xout.hold, TX_OUT_BAND);
+    if (!hush(outHand, false, a1Moved(xout.seg))) outHand.muted = !(xout.lvl > 0);
+    if (xout.w > 0 && !drawn) { drawn = outHand; drawnW = xout.w; drawnId = xout.seg.id; }
+    outHand.dataset.w = String(Math.round(xout.w * 1e4) / 1e4);
+  }
+  const outIdle = !!(outHand || outPlan);
+  for (const [el, x, side] of [[tx.inOwn, hand ? null : xin, 'in'], [tx.outOwn, outIdle ? null : xout, 'out']]) {
     if (x) {
       txFollow(el, x.seg, x.clipT, play && !x.hold);
-      el.muted = !(x.lvl > 0);
+      if (!hush(el, false)) el.muted = !(x.lvl > 0);
       const a1 = progA1Level();
       if (window.rcAudio) rcAudio.setLevel(el, 'track', a1 * x.lvl);
       else el.volume = Math.min(1, a1 * x.lvl);
       if (x.w > 0 && !drawn) { drawn = el; drawnW = x.w; drawnId = x.seg.id; }
       el.dataset.w = String(Math.round(x.w * 1e4) / 1e4);
-    } else if (side === 'in' && hand) {
-      el.dataset.w = '0';                     // handed over: idle, not decoding
+    } else if ((side === 'in' && hand) || (side === 'out' && outIdle)) {
+      el.dataset.w = '0';                     // handed over: idle, not decoding, not re-parked
       if (!el.paused) el.pause();
-      el.muted = true;
+      hush(el, true);
     } else {
       el.dataset.w = '0';
       if (!el.paused) el.pause();
-      el.muted = true;
+      hush(el, true);
       // parked where its half starts, so entering it is a play, not a seek: the outgoing
       // follower, before its half of the window we are in, waits for THIS window (it used
       // to park on the next one, and come back with a seek); otherwise the next window's
@@ -2235,7 +2293,7 @@ function programMix(t, play, proposal) {
     ? g.setMix(drawn ? { video: drawn, id: drawnId, w: drawnW, onChange: () => programSync() } : null)
     : false;
   tx.drawn = drawn;
-  for (const el of [tx.inOwn, tx.out]) {
+  for (const el of [tx.inOwn, tx.outOwn]) {
     const show = el === drawn && !graded && progTrack('V1').eye !== false;
     const op = show ? String(Math.round(drawnW * 1e4) / 1e4) : '';
     if (el.style.opacity !== op) el.style.opacity = op;
@@ -2246,14 +2304,18 @@ function programMix(t, play, proposal) {
   // display:none video is not composited, its frames neither called back nor current for
   // the grade's VideoFrame), and is a layer over the live one while it is the picture's
   // other half and the grade does not draw it (ungraded: CSS opacity, as the follower's).
-  if (hand) {
-    const show = hand === drawn && !graded && progTrack('V1').eye !== false;
-    if (hand.style.display !== 'block') hand.style.display = 'block';
-    if (hand.style.zIndex !== '1') hand.style.zIndex = '1';
+  // The outgoing buffer the cut kept playing is such a layer too, once the incoming one is
+  // on screen (until then, showWhenReady holding the cut, it is still the picture itself).
+  for (const hb of [hand, outHand]) {
+    if (!hb) continue;
+    if (hb.style.display !== 'block') hb.style.display = 'block';
+    if (hb.classList.contains('live')) continue;
+    const show = hb === drawn && !graded && progTrack('V1').eye !== false;
+    if (hb.style.zIndex !== '1') hb.style.zIndex = '1';
     const vis = show ? '' : 'hidden';
-    if (hand.style.visibility !== vis) hand.style.visibility = vis;
+    if (hb.style.visibility !== vis) hb.style.visibility = vis;
     const op = show ? String(Math.round(drawnW * 1e4) / 1e4) : '';
-    if (hand.style.opacity !== op) hand.style.opacity = op;
+    if (hb.style.opacity !== op) hb.style.opacity = op;
   }
 }
 
@@ -2272,6 +2334,58 @@ function txHand(tx, at, xin, lv) {
   return hb;
 }
 
+/* The cut out of the outgoing shot of a dissolve (or a crossfade), while playing: the live
+ * buffer, which has played that shot up to here, keeps playing it past its out-point as the
+ * transition's outgoing half (advance does not pause it; programMix `txOutHand`), in the
+ * place of #pvTxOut. #pvTxOut started TX_PRE_OUT before the edit beside the live buffer
+ * and the incoming one, a third decoder playing frames the live buffer was playing anyway,
+ * and the live shot held 83-117 ms after its start (verdict 10: 4 of 6 plays through a
+ * 0.4 s Cross Dissolve on Killington, where it started at the same moment as the incoming
+ * preroll; CANVAS2's trace of the fixture's: just after its play()). Only while the
+ * buffer plays the outgoing shot's own media; a buffer the clock plays past (player.off),
+ * a stopped or errored one, or a single-shot play keep the old way. */
+function txKeepsOut(v) {
+  const i = player.idx;
+  if (!prog.tx || !v || player.single || player.off || !player.playing || !segs[i] || !segs[i + 1]) return false;
+  if (v.paused || v.ended || v.error || v.dataset.src !== proxyOf(segs[i])) return false;
+  const c = window.tl && typeof tl.transitionHalves === 'function' ? tl.transitionHalves()[i] : null;
+  return !!c && txHalf(c) > 0;
+}
+
+/* Before the cut: the live buffer plays the window's outgoing shot and the cut will keep it
+ * on as the outgoing half (txKeepsOut's rule, read before the cut), so #pvTxOut stays idle. */
+function txWillKeep(at, lv) {
+  if (!at || !lv || lv !== liveVideo() || player.idx !== at.k) return false;
+  return txKeepsOut(lv);
+}
+
+/* The buffer the cut kept playing as the outgoing half, while it still is one: playing, not
+ * the live one again, on the outgoing shot's media, and that shot still the window's. */
+function txOutHand(tx, at, xout, lv) {
+  const ob = tx.outHand;
+  if (!ob || !at || !xout || !player.playing || ob === lv || ob.error) return null;
+  if (ob._outFor !== xout.seg || ob.dataset.src !== proxyOf(xout.seg)) return null;
+  return ob;
+}
+
+/* The outgoing half is over (the window ended, a pause, a cue): the kept buffer stops and is
+ * a buffer again, free for the shots after (bufFor skipped it meanwhile). */
+function txUnhandOut(tx, lv) {
+  const ob = tx.outHand;
+  tx.outHand = null;
+  tx.out = tx.outOwn;
+  if (!ob) return;
+  ob._outFor = null;
+  ob.dataset.w = '0';
+  if (window.rcAudio) rcAudio.setLevel(ob, 'xfade', 1);
+  ob.style.display = '';
+  ob.style.zIndex = '';
+  if (ob === lv) return;            // live again (a cue picked it): the picture as it is
+  if (!ob.paused) ob.pause();
+  ob.style.visibility = progTrack('V1').eye !== false ? '' : 'hidden';   // programSync's rule
+  ob.style.opacity = lv ? lv.style.opacity : '';
+}
+
 /* A handed buffer goes back to being a buffer (its cut came, the window ended, a pause):
  * no layer styles of the dissolve's, Effect Controls' opacity as the live one wears it. */
 function txUnhand(tx, lv) {
@@ -2284,6 +2398,7 @@ function txUnhand(tx, lv) {
   hb.style.opacity = lv && lv !== hb ? lv.style.opacity : (player.vids.find((v) => v !== hb) || {}).style?.opacity || '';
   hb.dataset.w = '0';
   if (window.rcAudio) rcAudio.setLevel(hb, 'xfade', 1);
+  if (hb !== lv) hush(hb, true);     // a buffer again: silent until it is the picture
 }
 
 /* A3 and up (wave 4 POLISH's added audio tracks; verdict 5 punch 5: "the Program plays
@@ -2372,7 +2487,8 @@ function boundary() {
   const seg = segs[player.idx];
   if (!seg) { pauseCut(); return true; }
   const clipT = v.currentTime;
-  const filmT = filmAt(player.idx, clipT);
+  // (a shot a dissolve comes into is live from just before the edit: its own clock)
+  const filmT = filmAt(player.idx, clipT, clipT < seg.in && txLeadIn(seg) > 0 ? 0.1 * speedOf(seg) : 0);
   paintPos(filmT, clipT, seg);
   bedTick(filmT, clipT, seg);
   if (clipT >= seg.out - 0.04 || v.ended) { advance(); return true; }
@@ -2494,6 +2610,8 @@ function showWhenReady(g, ok, then) {
     }
     if (v.error || ok(v) || performance.now() - t0 > HOLD_MAX_MS) {
       if (swap) showLive();
+      // a dissolve's kept outgoing buffer becomes its layer in the same task (programMix)
+      if (swap && prog.tx && prog.tx.outHand) programSync();
       if (then) then();
       return;
     }
@@ -2520,7 +2638,7 @@ function preroll(left) {
   if (left - 0.04 > lead + roll.lat * shuttle) return;
   const g = player.gen;
   nb._roll = { gen: g, seg: nseg };
-  nb.muted = true;
+  hush(nb, true, a1Moved(nseg));    // silent until its cut, by its gain (a paused buffer: no jump)
   setShotRate(nb, nseg);
   // Late — the park after a short shot landed with less time left than its lead needs —
   // it runs faster until the cut, so it is on its in-point there rather than frames
@@ -2544,8 +2662,23 @@ function tick() {
 /* The shot ended: stop, or hand over to the buffer that is holding the next one. */
 function advance() {
   const v = liveVideo();
+  // into a dissolve: this buffer plays on as its outgoing half (txKeepsOut), unpaused
+  const keep = txKeepsOut(v);
   player.off = null;
-  v.pause();
+  if (keep) {
+    if (prog.tx.outHand && prog.tx.outHand !== v) txUnhandOut(prog.tx, v);
+    prog.tx.outHand = v;
+    prog.tx.out = v;
+    v._outFor = segs[player.idx];
+    v._for = null;
+    v._roll = null;
+    v.style.display = 'block';      // composited when it is no longer .live (programMix)
+    const c = tl.transitionHalves()[player.idx];
+    // a dissolve alone: the edit cuts the sound (its gain: programMix's 'xfade' level 0)
+    if (!(c && c.audio > 0) && !(window.rcMeters && rcMeters.has(v))) v.muted = true;
+  } else {
+    v.pause();
+  }
   const g = ++player.gen;           // the shot we are leaving must not restart itself
   const next = player.idx + 1;
   if (player.single || next >= segs.length) {
@@ -2577,7 +2710,7 @@ function advance() {
   } else {
     arm(nv, segs[next]);        // normally armed already; re-arming survives edits made mid-play
   }
-  nv.muted = a1Moved(segs[next]);
+  hush(nv, false, a1Moved(segs[next]));
   // The new shot goes on screen with its first frame: a buffer still seeking, still
   // opening its file, or rolled in a little late keeps the outgoing frame up meanwhile
   // (verdict 5: the black "buffering…" at a 12-frame shot was a buffer swapped in empty).
@@ -2588,7 +2721,8 @@ function advance() {
   const early = rolled && txLeadIn(nseg) > 0 ? 0.05 * speedOf(nseg) : 0;
   const short = tl.dur(nseg) < SHORT_S;
   // the last few cuts, for the judge and the perf test: prerolled or not, how long held
-  const rec = { shot: next, rolled, parked, buf: nv.id, held_ms: 0, t: performance.now() };
+  const rec = { shot: next, rolled, parked, buf: nv.id, held_ms: 0, t: performance.now(),
+                kept: keep ? v.id : null };
   player.cutLog = [...(player.cutLog || []).slice(-7), rec];
   showWhenReady(g, (b) => b.readyState >= 2 && !b.seeking && b.currentTime >= nseg.in - eps - early, () => {
     rec.held_ms = Math.round(performance.now() - rec.t);
