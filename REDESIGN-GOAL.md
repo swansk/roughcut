@@ -419,3 +419,13 @@ next judge runs, and the next judge rules it honest or lenient.
   uploads only by the body wait, which is the network's, not the server's. Also for the judge: verdict 10's
   "110 MB drop at ~1.25 MB/s" was its own script waiting 90 s for an `<img>` in a List-view row (List rows have
   none; `judge10/import.py:81`); the file landed 0.44 s after its PUT began.
+
+- 2026-10-19 (lead, before wave 15, at verdict 11's request): **the speed test's bar, stricter, and the gate watches the
+  loop.** (1) `test_latency_under_load` asserts the graded canvas on the rAF frame clock AND the grade worker's own clock
+  (both ≤ 67 ms, as the page-callback clock was), and the live buffer on `requestVideoFrameCallback`'s
+  `expectedDisplayTime` as well as `now`: a hold counts if any clock that stands for the screen shows it. (2) The
+  standalone bar is 5 of 5 back-to-back runs at the test's own load (load_pre 6-10), and the gate's before- and
+  after-suite runs must both pass (no more "the better-conditioned run counts"). (3) The gate's journey line prints
+  `/api/debug/slow`'s `slowest_loop` and turns RED over 200 ms. All three are stricter: verdict 11 found the GREEN gate
+  depended on which of two runs counted, and that the page clock overstates holds by up to ~12 ms while every failing
+  run also failed on the frame or worker clock.

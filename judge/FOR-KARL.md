@@ -4,8 +4,8 @@ The loop has done what K3 asked, and the judge agrees it is "substantially deliv
 close K2 ("Premiere Pro quality") and K3 ("AI-first, easy to learn, footage in obviously"). This page
 is the shortest way to look.
 
-**Judged rev:** `9470064` (verdict 10: 15 of 16 dimensions at 8-9, the gate green). Wave 14 is
-fixing what is left (below) on the same branch.
+**Judged rev:** `18944d0` (verdict 11: 15 of 16 dimensions at 8-9, the judge's gate green; only
+dimension 10 at 7, and your K2 / K3). Wave 15 is fixing what is left (below) on the same branch.
 
 ## Open it
 
@@ -30,15 +30,16 @@ is never touched). The preview needs a restart on the judged rev first: the lead
    takes it back. Right-click a block → **Ask AI about this…** scopes the ask to that shot.
 6. **The AI menu** lists every AI action in one place.
 7. **Export.** File › Export… (Ctrl+M): presets plus Frame Size / Frame Rate / Bitrate. Try 720p.
+8. **New since the last look:** Effects › Video Effects (Crop, Transform, Gaussian Blur: drag onto a clip);
+   Sequence › Sequence Settings… (the timebase stays fixed as you add clips); AI Look and Color Match
+   preview on the Program before you accept; a just-imported clip plays within seconds.
 
-## What the judge still sees (wave 14 is on these)
+## What the judge still sees (wave 15 is on these)
 
-- A Designed Effects check can run for minutes while the board waits; the server stalls up to ~1 s at
-  times; big uploads are slow while it is busy.
-- One accepted AI colour change once failed to save (not reproduced since).
-- The sequence frame rate can change as you add shots of another rate (Premiere keeps it fixed).
-- Dissolves can still drop a frame; a just-imported clip can take ~20 s before the Program plays it.
-- No video effects (Crop, Blur) in the Effects bin yet.
+- Accepting a Designed Effect can't be undone yet, and one placed at a shot's very start fails its own check.
+- A few thumbnail requests take up to 2 s on 4K originals; playback at 1920 can still hitch on a busy box.
+- After the AI re-colours every shot, a re-run treats all of them as "edited by hand" and won't re-cut.
+- No Lumetri Vignette yet (the AI fakes one with rings).
 
 ## Tell me
 
