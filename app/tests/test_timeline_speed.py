@@ -221,6 +221,11 @@ def test_a_trim_drag_on_a_slow_shot_moves_the_edge_at_the_rate(page):
     assert page.evaluate("segs.map(s => s.clip)") == ["CLIP_B.MP4", "CLIP_A.MP4"]
     zoom = page.evaluate("tl.state.zoom")
     handle = page.locator("#tl .blk[data-id='" + ids(page)[1] + "'] .tl-h.out")
+    # the trim lane marks the film's last block `.tl-last` (its out handle shown) one frame
+    # after the move's render (timeline-trim.js `layout`, a MutationObserver): read the
+    # handle once it is there — under load that frame came after this line and the box
+    # was None (verdict 11, punch 10: the lead's gate on 82d6854; 1 of 3 runs at load 13)
+    handle.wait_for(state="visible", timeout=5000)
     hb = handle.bounding_box()
     x0, y0 = hb["x"] + hb["width"] / 2, hb["y"] + hb["height"] / 2
     page.mouse.move(x0, y0)
@@ -262,14 +267,21 @@ def test_the_monitor_plays_a_slow_shot_at_its_rate_and_hands_over_at_its_out(pag
     assert page.evaluate("player.idx") == 0
     page.wait_for_function("Math.abs(liveVideo().currentTime - 2.0) < 0.1", timeout=10000)
     assert page.locator("#pos").inner_text() == tc(2.0)
-    # JKL's rate multiplies the shot's: L twice is 2× the shuttle, 1× on the buffer
+    # JKL's rate multiplies the shot's: L twice is 2× the shuttle, 1× on the buffer. Read in
+    # one go with the shot it is playing: at 2× the slow shot's last 2 s of film take 1 s,
+    # and under load the hand-over to CLIP_B (1×: 2× on the buffer) came before a second
+    # read (verdict 11, punch 10: "assert 2 == 1", 1 of 20 runs at load 14)
+    rates = ("(() => { const v = liveVideo(); return {idx: player.idx, rate: v.playbackRate,"
+             " shuttle: v.defaultPlaybackRate, speed: Number(v.dataset.speed)}; })()")
     page.keyboard.press("l")
     page.wait_for_function("player.playing", timeout=10000)
     page.keyboard.press("l")
-    assert page.evaluate("liveVideo().defaultPlaybackRate") == 2
-    assert page.evaluate("liveVideo().playbackRate") == 1
+    r = page.evaluate(rates)
+    assert r["shuttle"] == 2 and r["speed"] == (0.5 if r["idx"] == 0 else 1), r
+    assert r["rate"] == 2 * r["speed"], r              # 1× on the slow shot's buffer
     page.keyboard.press("k")
-    assert page.evaluate("liveVideo().playbackRate") == 0.5
+    r = page.evaluate(rates)
+    assert r["rate"] == r["speed"], r                  # 0.5 on the slow shot: its own rate
 
 
 # ------------------------------------------------------------------ the inspector
