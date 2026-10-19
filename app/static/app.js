@@ -1504,6 +1504,7 @@ function monWait(on) {
 function mediaWaitFor(v) {
   const src = v.dataset.src;
   if (v.error && v._head) v._head = null;  // a head that would not play: wait for the clip
+  v._waitAt = performance.now();           // the line's number: the server's, once it knows (etaKnown)
   if (v._waitStop && v._waitFor === src) {
     const hint = v._hint;
     headHint(v, src);                      // a seek while waiting: its head where it is now
@@ -1564,9 +1565,6 @@ function mediaWaitFor(v) {
       if (player.off) { player.off = null; pauseCut(); monWait(true); el.textContent = why; }
     }
   }, (j) => {
-    // an answer from before the server had the hint (the first look races it) has the
-    // whole preview's time, not the head's: no number until waitEtaSoon's look
-    if (j && !j.head_building && v._hint && performance.now() - v._hint.ms < WAIT_ETA_MS) j = { ...j, eta_s: null };
     v._status = j;
     if (v === liveVideo() && v.dataset.src === src) waitLine(segs[player.idx], j);
     if (j && j.head && v.dataset.src === src) headLoad(v, src, j.head);
@@ -1575,14 +1573,21 @@ function mediaWaitFor(v) {
 
 /* The wait line's estimate for where the buffer now waits: asked WAIT_ETA_MS after the head
  * hint (the server has the head under way by then, and says its time rather than the whole
- * preview's), instead of at the next of the 1.5 s looks. */
+ * preview's), instead of at the next of the 1.5 s looks; again while an answer is from
+ * before the server had the hint (a loaded box: the hint is a request like any other). */
 const WAIT_ETA_MS = 300;
+const HINT_GRACE_MS = 1500;          // a status without the head this soon after a hint: not yet
+function etaKnown(v, j) {
+  const since = Math.max(v._hint ? v._hint.ms : 0, v._waitAt || 0, v._lineAt || 0);
+  return !(j && !j.head_building && since && performance.now() - since < HINT_GRACE_MS);
+}
 function waitEtaSoon(v, src) {
   clearTimeout(v._etaSoon);
   v._etaSoon = setTimeout(() => {
     if (!v._waitStop || v._waitFor !== src || v.dataset.src !== src) return;
     fetch(statusUrl(src), { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).then((j) => {
       if (!j || !v._waitStop || v._waitFor !== src || v.dataset.src !== src || j.serves !== 'building') return;
+      if (!etaKnown(v, j)) { waitEtaSoon(v, src); return; }
       v._status = j;
       if (v === liveVideo()) waitLine(segs[player.idx], j);
     }).catch(() => {});
@@ -1761,7 +1766,13 @@ function waitLine(seg, j) {
   if (!el || !seg) return;
   if (j && j.serves === 'offline') { el.textContent = offlineWords(seg); return; }
   const ready = j && j.ready && j.serves !== 'building';
-  const eta = j && j.eta_s != null ? ` · ~${Math.max(1, Math.round(j.eta_s))} s` : '';
+  // an answer from before the server had the monitor's head hint has the whole preview's
+  // time, not the head's (verdict 11 punch 5): no number until one that knows (waitEtaSoon)
+  const src = proxyOf(seg);
+  const v = liveVideo();
+  if (v && v._lineFor !== src) { v._lineFor = src; v._lineAt = performance.now(); }   // on screen since
+  const known = !v || etaKnown(v, j);
+  const eta = j && j.eta_s != null && known ? ` · ~${Math.max(1, Math.round(j.eta_s))} s` : '';
   el.textContent = ready ? `opening ${stem(seg.clip)}…` : `preparing preview… ${stem(seg.clip)}${eta}`;
 }
 

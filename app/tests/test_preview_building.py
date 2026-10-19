@@ -886,6 +886,18 @@ def test_the_wait_line_says_how_long_the_head_takes(building, monkeypatch):
     _slow_heads(server, monkeypatch)
     with sync_api.sync_playwright() as pw:
         browser, page, errors = _head_board(pw, building["url"])
+        seen = []
+        t_page = time.monotonic()
+
+        def status(r):
+            if "/media/status/CLIP_B" in r.url:
+                try:
+                    j = r.json()
+                    seen.append((round(time.monotonic() - t_page, 2), r.url.split("/")[-1], j.get("eta_s"),
+                                 j.get("head_building"), bool(j.get("head"))))
+                except Exception:  # noqa: BLE001
+                    pass
+        page.on("response", status)
         try:
             page.evaluate("""() => { const O = window.__wl = { lines: [], live: null };
               let last = null; O.t0 = performance.now();
@@ -903,7 +915,7 @@ def test_the_wait_line_says_how_long_the_head_takes(building, monkeypatch):
             live = wl["live"] / 1000
             said = [(t, int(m.group(1))) for t, s in lines
                     if (m := re.search(r"CLIP_B · ~(\d+) s", s))]
-            print(f"picture from the head at {live:.2f}s; the line said {lines}")
+            print(f"picture from the head at {live:.2f}s; the line said {lines}; statuses {seen}")
             assert said, lines
             t, n = said[0]
             assert t <= 1.0, f"no estimate on the line until {t}s"
