@@ -344,7 +344,11 @@ class _Sim:
     the tracks, V2+'s clips and the transitions — the facts an op is checked against."""
 
     def __init__(self, state: dict):
-        self.fps = float(state.get("fps") or 24.0)
+        # the sequence's timebase (verdict 10, punch 3); None while it has none — a
+        # sequence that has never held a clip takes its first clip's (`adopt`), as the
+        # timeline does
+        self.timebase = tracksmod.timebase_value(state.get("fps"))
+        self.fps = float(self.timebase or 24.0)
         self.rate = grid_rate(self.fps)
         self.segs: list[dict] = []
         for s in state.get("segments") or []:
@@ -363,9 +367,12 @@ class _Sim:
                 seg["why"] = str(s["why"])
             self.segs.append(seg)
         self.clips: dict[str, float | None] = {}
+        self.clip_rates: dict[str, float | None] = {}
         for name, c in (state.get("clips") or {}).items():
             d = _f((c or {}).get("duration")) if isinstance(c, dict) else _f(c)
             self.clips[str(name)] = d
+            self.clip_rates[str(name)] = (tracksmod.timebase_value(c.get("fps"))
+                                          if isinstance(c, dict) else None)
         self.markers = sorted(t for t in (_f(m) for m in state.get("markers") or []) if t is not None)
         self.seq_in = _f(state.get("in"))
         self.seq_out = _f(state.get("out"))
@@ -430,6 +437,63 @@ class _Sim:
 
     def on_grid(self, t: float) -> float:
         return _r(_jround(max(0.0, t) * self.rate) / self.rate)
+
+    # ---- the edit grid (timeline.js gridRange / setRange), so the review's simulated cut
+    # is the one the board's Accept makes: every edit point a whole sequence frame
+    def adopt(self, clip: str) -> None:
+        """A sequence with no timebase takes the first clip put in it (timeline.js
+        `adoptRate`; server.keep_timebase)."""
+        if self.timebase is not None:
+            return
+        r = self.clip_rates.get(clip)
+        if r:
+            self.timebase, self.fps, self.rate = r, float(r), grid_rate(r)
+
+    def grid_range(self, a: float, b: float, spd: float, keep: str | None,
+                   max_out: float | None) -> tuple[float, float]:
+        """A clip range on the sequence's grid, as timeline.js `gridRange` makes it: a
+        `keep` edge ('in' / 'out') stays exactly where it is; at 1× a moved edge goes to
+        its nearest frame, retimed the shot's length in the film is whole frames at its
+        speed; never past `max_out`, never shorter than MIN_LEN."""
+        r, s = self.rate, spd or 1.0
+        hi = max_out if max_out is not None else 1e9
+
+        def top(x: float) -> float:
+            return _r(math.floor(hi * r + 1e-6) / r) if x > hi + 1e-9 else x
+
+        if s == 1:
+            a2 = a if keep == "in" else self.on_grid(a)
+            b2 = b if keep == "out" else top(self.on_grid(b))
+            if b2 - a2 < MIN_LEN - 1e-9:
+                if keep == "out":
+                    a2 = _r(math.floor((b2 - MIN_LEN) * r + 1e-6) / r)
+                else:
+                    b2 = top(_r(math.ceil((a2 + MIN_LEN) * r - 1e-6) / r))
+            return max(0.0, a2), b2
+        n_min = max(1, math.ceil((MIN_LEN / s) * r - 1e-6))
+        if keep == "out":
+            n = max(n_min, _jround(((b - a) / s) * r))
+            while n > n_min and b - (n / r) * s < -1e-9:
+                n -= 1
+            return _r(max(0.0, b - (n / r) * s)), b
+        a2 = a if keep == "in" else self.on_grid(a)
+        n = max(n_min, _jround(((b - a2) / s) * r))
+        while n > n_min and a2 + (n / r) * s > hi + 1e-9:
+            n -= 1
+        return a2, _r(a2 + (n / r) * s)
+
+    def set_range(self, seg: dict, tin: float | None, tout: float | None) -> tuple[float, float]:
+        """The range timeline.js `setRange(id, tin, tout)` gives `seg`: clamped into its
+        media, the untouched edge kept, on the grid."""
+        d = self.clip_len(seg["clip"])
+        dur_ = d if d is not None else 1e9
+        a = seg["in"] if tin is None else float(tin)
+        b = seg["out"] if tout is None else float(tout)
+        a = min(max(a, 0.0), max(0.0, dur_ - MIN_LEN))
+        b = min(max(b, a + MIN_LEN), dur_)
+        keep = ("out" if tout is None else "in" if tin is None
+                else "in" if a == seg["in"] else "out" if b == seg["out"] else None)
+        return self.grid_range(a, b, speed_of(seg), keep, dur_)
 
     def clip_len(self, clip: str) -> float | None:
         return self.clips.get(clip)
@@ -524,7 +588,12 @@ def _clip_range(raw: dict, sim: _Sim) -> tuple[str, float, float]:
         raise Refused(f"out {b:g} s is past the end of {_stem(clip)} ({length:.2f} s)")
     if b - a < MIN_LEN - 1e-9:
         raise Refused(f"the range is shorter than {MIN_LEN} s")
-    return clip, _r(max(0.0, a), 3), _r(b if length is None else min(b, length), 3)
+    # on the sequence's grid, inside the clip's media (timeline.js `gridded`); an empty
+    # sequence first takes this clip's timebase
+    sim.adopt(clip)
+    a, b = sim.grid_range(max(0.0, a), b if length is None else min(b, length), 1.0, None,
+                          length)
+    return clip, a, b
 
 
 def _film_time(raw: dict, key: str, sim: _Sim, *, past_end: bool = False) -> float:
@@ -656,7 +725,9 @@ def _c_trim(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
         raise Refused(f"out {b:g} s is past the end of {_stem(seg['clip'])} ({length:.2f} s)")
     if b - a < MIN_LEN - 1e-9:
         raise Refused(f"the shot would be shorter than {MIN_LEN} s")
-    a, b = _r(max(0.0, a), 3), _r(b, 3)
+    # the board's tl.setRange: the edge not named stays, the moved one on the grid
+    a, b = sim.set_range(seg, None if raw.get("in") is None else max(0.0, a),
+                         None if raw.get("out") is None else b)
     if abs(a - seg["in"]) < 1e-6 and abs(b - seg["out"]) < 1e-6:
         raise Refused(f"{sim.label(seg['id'])} is already {a:.2f}–{b:.2f} s")
     parts = []
@@ -695,8 +766,9 @@ def _c_roll(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
                       f"{'later' if by > 0 else 'earlier'} (the media runs out)")
     line = (f"Roll the edit between {sim.label(L['id'])} and {sim.label(R['id'])} "
             f"by {_signed(v, 2, ' s')}")
-    L["out"] = _r(L["out"] + v * sl)
-    R["in"] = _r(R["in"] + v * sr)
+    # actions.js applies a roll as two tl.setRange calls, each edge on the grid
+    L["in"], L["out"] = sim.set_range(L, None, L["out"] + v * sl)
+    R["in"], R["out"] = sim.set_range(R, R["in"] + v * sr, None)
     return {"op": "roll", "a": L["id"], "b": R["id"], "by": _r(v)}, line
 
 
@@ -711,8 +783,17 @@ def _c_slip(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
         room = hi if by > 0 else -lo
         raise Refused(f"{sim.label(seg['id'])} can slip at most {max(0.0, room):.2f} s "
                       f"{'later' if by > 0 else 'earlier'} in {_stem(seg['clip'])}")
+    # whole frames (actions.js `toFrames`), applied as the board's tl.setRange
+    n = _jround(by * sim.rate)
+    if n / sim.rate > hi + 1e-9:
+        n = math.floor(hi * sim.rate + 1e-9)
+    if n / sim.rate < lo - 1e-9:
+        n = math.ceil(lo * sim.rate - 1e-9)
+    if n == 0:
+        raise Refused(f"{sim.label(seg['id'])} cannot slip less than one frame")
+    by = n / sim.rate
     line = f"Slip {sim.label(seg['id'])} by {_signed(by, 2, ' s')}"
-    seg["in"], seg["out"] = _r(seg["in"] + by), _r(seg["out"] + by)
+    seg["in"], seg["out"] = sim.set_range(seg, seg["in"] + by, seg["out"] + by)
     return {"op": "slip", "id": seg["id"], "by": _r(by)}, line
 
 
@@ -727,6 +808,9 @@ def _c_speed(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
         seg.pop("speed", None)
     else:
         seg["speed"] = rate
+    # tl.setSpeed: the in stays, the shot's length in the film whole frames at the rate
+    seg["in"], seg["out"] = sim.grid_range(seg["in"], seg["out"], rate, "in",
+                                           sim.clip_len(seg["clip"]))
     return {"op": "speed", "id": seg["id"], "rate": rate}, line
 
 
@@ -1268,8 +1352,13 @@ def state_from(payload: dict, *, looks: Iterable[str] = (), presets: dict | None
     """The validation state from GET /api/project's payload (server.project_payload)."""
     return {
         "segments": payload.get("segments") or [],
-        "clips": {k: {"duration": (v or {}).get("duration")} for k, v in (payload.get("clips") or {}).items()},
-        "fps": payload.get("fps") or 24.0,
+        # each clip's length, and its own rate when known (a first clip sets the timebase
+        # of a sequence that has none)
+        "clips": {k: {"duration": (v or {}).get("duration"),
+                      **({"fps": v["fps"]} if (v or {}).get("fps") else {})}
+                  for k, v in (payload.get("clips") or {}).items()},
+        # the sequence's timebase, None while it has none (verdict 10, punch 3)
+        "fps": payload.get("fps"),
         "markers": payload.get("markers") or [],
         "in": payload.get("in"), "out": payload.get("out"),
         "tracks": payload.get("tracks") or {},
