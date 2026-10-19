@@ -1602,7 +1602,7 @@
    * Effects", beside Effect Controls.
    *
    * Video Effects (wave 14, VFX; verdict 10 punch 8), between the two as Premiere lists
-   * them, in Premiere's own folders: Blur & Sharpen › Gaussian Blur, Distort › Transform,
+   * them, in Premiere's own folders: Blur & Sharpen › Gaussian Blur and Sharpen (wave 15), Distort › Transform,
    * Transform › Crop. One drags onto a clip on V1 (or onto Effect Controls), or a
    * double-click puts it on the selected clips: it lands at the bottom of the clip's
    * stack in Effect Controls, one undo (effects.js `vfxAdd`; roughcut/vfx.py the maths). */
@@ -1617,6 +1617,7 @@
     { id: 'veffects', name: 'Video Effects', vfx: true, folders: [
       { id: 'vblur', name: 'Blur & Sharpen', items: [
         ['gaussian_blur', 'Gaussian Blur', 'softens the picture: Blurriness, across, down or both'],
+        ['sharpen', 'Sharpen', 'crispens the edges: Sharpen Amount (100 adds the fine detail once more)'],
       ] },
       { id: 'vdistort', name: 'Distort', items: [
         ['transform', 'Transform', 'position, scale, rotation and opacity of its own, apart from Motion'],

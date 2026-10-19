@@ -1114,7 +1114,7 @@ def overlay_controls_graph(controls: dict | None, w: int, h: int, rate: Fraction
 
 # ---------------------------------------------- video effects (verdict 10, punch 8)
 #
-# A shot's Crop / Transform / Gaussian Blur stack (`controls.vfx`; roughcut/vfx.py has
+# A shot's Crop / Transform / Gaussian Blur / Sharpen stack (`controls.vfx`; roughcut/vfx.py has
 # the schema and THE formulas, app/static/effects.js draws the same on the Program), on
 # its graded picture, top of the stack first — before its designed effects and its
 # Motion / Opacity, as Premiere renders its fixed effects (Motion, Opacity) after the
@@ -1246,6 +1246,44 @@ def blur_graph(controls: dict | None, e: dict, w: int, h: int, rate: Fraction, f
             f"crop={w}:{h}:{pad}:{pad}[{vout}]")
 
 
+SHARPEN_DIV = 1024          # the convolution's integer kernel is 1024 × vfx.sharpen_kernel
+
+
+def sharpen_matrix(amount: float) -> str:
+    """Sharpen's kernel as `convolution`'s integer matrix (its rdiv 1/SHARPEN_DIV)."""
+    return " ".join(str(int(round(k * SHARPEN_DIV))) for k in vfxmod.sharpen_kernel(amount))
+
+
+def sharpen_graph(controls: dict | None, e: dict, w: int, h: int, rate: Fraction, frames: int,
+                  vin: str, vout: str, tag: str, cmd_file: Path) -> str | None:
+    """Sharpen (wave 15, VIGNETTE): vfx.py's unsharp mask as one 3 × 3 `convolution` on each
+    Y'CbCr plane (the same linear map as on R'G'B'; the frame's edge pixels repeated).
+    Keyed: the matrices re-set on the frames where the Amount changes (`sendcmd`)."""
+    v, ks = _vfx_param(controls, e, "amount", frames, rate)
+    top = max(x for _, x in ks) if ks else v
+    if top <= 0.05:
+        return None
+    first = sharpen_matrix(ks[0][1] if ks else v)
+    cmd = ""
+    if ks:
+        lines, last = [], None
+        for n in range(max(1, frames)):
+            m = sharpen_matrix(value_at(ks, n / float(rate)))
+            if m == last:
+                continue
+            if last is not None:
+                lines.append(f"{(n - 0.5) / float(rate):.6f} "
+                             + ", ".join(f"[enter] convolution@{tag} {p}m '{m}'" for p in range(3)) + ";")
+            else:
+                first = m
+            last = m
+        if lines:
+            cmd_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            cmd = f"sendcmd=f={filter_path(cmd_file)},"
+    planes = ":".join(f"{p}m='{first}':{p}rdiv={1 / SHARPEN_DIV:.10g}" for p in range(3))
+    return f"[{vin}]{cmd}convolution@{tag}={planes}[{vout}]"
+
+
 def vfx_graph(controls: dict | None, w: int, h: int, rate: Fraction, frames: int,
               vin: str, vout: str, dest: Path) -> str | None:
     """The shot's video effects, top of the stack first, from `[vin]` to `[vout]`; None
@@ -1261,6 +1299,8 @@ def vfx_graph(controls: dict | None, w: int, h: int, rate: Fraction, frames: int
             g = crop_graph(controls, e, w, h, rate, frames, cur, out, tag)
         elif e["kind"] == "transform":
             g = transform_graph(controls, e, w, h, rate, frames, cur, out, tag, cmd)
+        elif e["kind"] == "sharpen":
+            g = sharpen_graph(controls, e, w, h, rate, frames, cur, out, tag, cmd)
         else:
             g = blur_graph(controls, e, w, h, rate, frames, cur, out, tag, cmd)
         if g:

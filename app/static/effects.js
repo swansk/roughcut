@@ -18,7 +18,7 @@
  *                     saturation / lightness key and its correction) — wave 11, LUMETRI
  *                   › Vignette (Amount, Midpoint, Roundness, Feather, each a slider, a
  *                     number and a stopwatch) — wave 15, VIGNETTE
- *   Video effects   the Effects bin's Crop / Transform / Gaussian Blur on the shot, a
+ *   Video effects   the Effects bin's Crop / Transform / Gaussian Blur / Sharpen on the shot, a
  *                   section each in its stack's order: fx toggle, ▲ ▼, reset, clear, a
  *                   stopwatch on every number (wave 14, VFX: "video effects" below)
  *   fx stack        the designed effects on the shot: bypass (fx) and order
@@ -532,6 +532,12 @@
                  hover: 'the blur\'s width: the Gaussian\'s standard deviation in pixels of a 1920×1080 frame' }],
       choices: { dimensions: { label: 'Blur Dimensions', options: [['both', 'Horizontal and Vertical'],
         ['horizontal', 'Horizontal'], ['vertical', 'Vertical']] } } },
+    // Blur & Sharpen › Sharpen (wave 15, VIGNETTE): roughcut/vfx.py's unsharp mask
+    sharpen: { name: 'Sharpen', folder: 'Blur & Sharpen',
+      what: 'crispens the picture\'s edges: an unsharp mask, Sharpen Amount 100 adds the detail once more',
+      params: [{ key: 'amount', label: 'Sharpen Amount', lo: 0, hi: 500, dflt: 0, step: 1, digits: 0, unit: '',
+                 hover: 'how much of the picture\'s fine detail is added back: 100 doubles it' }],
+      choices: {} },
     transform: { name: 'Transform', folder: 'Distort',
       what: 'moves, scales, turns and fades the picture, apart from Motion',
       params: [{ key: 'position_x', label: 'Position', lo: -10, hi: 10, dflt: 0.5 },
@@ -789,13 +795,39 @@
     if (gb.getAttribute('stdDeviation') !== sd) gb.setAttribute('stdDeviation', sd);
     return `url(#ecvb${i})`;
   }
+  /* Sharpen's look (wave 15): an SVG feConvolveMatrix of vfx.py's 3 × 3 kernel on R'G'B'
+   * (sRGB values, as the export's planes), the picture's edge pixels repeated */
+  function sharpFilter(i, amount) {
+    axisBlur(-1, 0, 0);                                   // the defs' <svg> is there
+    const svg = document.getElementById('ecVfxDefs');
+    let f = svg.querySelector(`#ecvs${i}`);
+    if (!f) {
+      f = document.createElementNS(SVGNS, 'filter');
+      f.id = `ecvs${i}`;
+      ['x', 'y'].forEach((a) => f.setAttribute(a, '0'));
+      ['width', 'height'].forEach((a) => f.setAttribute(a, '1'));
+      f.setAttribute('color-interpolation-filters', 'sRGB');
+      const cm = document.createElementNS(SVGNS, 'feConvolveMatrix');
+      cm.setAttribute('order', '3');
+      cm.setAttribute('divisor', '1');
+      cm.setAttribute('edgeMode', 'duplicate');
+      cm.setAttribute('preserveAlpha', 'true');
+      f.appendChild(cm);
+      svg.appendChild(f);
+    }
+    const a = Math.max(0, amount) / 100, c = -a / 16, e = -2 * a / 16;
+    const km = [c, e, c, e, 1 + 12 * a / 16, e, c, e, c].map((x) => r4(x)).join(' ');
+    const cm = f.firstChild;
+    if (cm.getAttribute('kernelMatrix') !== km) cm.setAttribute('kernelMatrix', km);
+    return `url(#ecvs${i})`;
+  }
   function vfxLook(seg) {
     const list = seg && !isOv(seg) ? vfxList(seg).filter((e) => !e.off) : [];
     if (!list.length) return null;
     const sp = span(seg);
     const tt = sp ? clamp((TL().state.playhead || 0) - sp.start, 0, sp.dur) : 0;
     const val = (e, key) => { const k = keysOf(seg, `${key}@${e.id}`); return k ? interp(k, tt) : vfxValue(e, key); };
-    let M = ID, poly = FRAME_POLY, clipped = false, op = 1, nb = 0;
+    let M = ID, poly = FRAME_POLY, clipped = false, op = 1, nb = 0, ns = 0;
     const css = [], filters = [], masks = [];
     const cut = (P) => {
       const before = Math.abs(area(poly));
@@ -831,6 +863,11 @@
           masks.push(`linear-gradient(to right, transparent ${r4(l)}%, #000 ${r4(l + fx)}%, #000 ${r4(r - fx)}%, transparent ${r4(r)}%)`,
             `linear-gradient(to bottom, transparent ${r4(t)}%, #000 ${r4(t + fy)}%, #000 ${r4(b - fy)}%, transparent ${r4(b)}%)`);
         }
+      } else if (e.kind === 'sharpen') {
+        const amt = Math.max(0, val(e, 'amount'));
+        if (amt <= 0.05) continue;
+        filters.push(sharpFilter(ns, amt));
+        ns += 1;
       } else {
         const bl = Math.max(0, val(e, 'blurriness'));
         if (bl <= 0.05) continue;
