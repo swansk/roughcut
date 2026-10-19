@@ -309,6 +309,22 @@ def _row(pg, clip: str):
     return pg.locator(f'#library tr.keep[title^="{clip}"]')
 
 
+def _box(loc, timeout: float = 5.0) -> dict:
+    """A Selects row's box once it has one. Selects rebuilds its rows when the pass's picks
+    land, when the board learns a clip, and when the widened panel brings a column in
+    (app.js renderLibrary); a row replaced between Playwright's lookup and its measure is
+    detached and has no box — `bounding_box()` is None (verdict 11, punch 10: the gate on
+    7436562, "'NoneType' object is not subscriptable"). The row put back is asked again."""
+    end = time.monotonic() + timeout
+    while True:
+        loc.wait_for(state="visible", timeout=timeout * 1000)
+        box = loc.bounding_box()
+        if box:
+            return box
+        assert time.monotonic() < end, "the row never held still long enough to be measured"
+        time.sleep(0.05)
+
+
 def test_selects_is_a_sortable_list_whose_rows_insert_by_comma_and_overwrite_by_period(
         browser, live_server, project):
     pg = _selects(browser, live_server, project)
@@ -390,7 +406,7 @@ def test_a_selects_row_drags_onto_v1_and_double_click_opens_it_in_source_with_in
             "document.querySelector('#library tr.keep[title^=\"CLIP_C\"]').draggable === true",
             timeout=5000)
         # a native drag onto V1 at the very start: before shot 1
-        box = row.bounding_box()
+        box = _box(row)
         sx, sy = box["x"] + 30, box["y"] + box["height"] / 2
         lane = pg.locator("#tl .tl-lane[data-lane=V1]").bounding_box()
         tx = pg.evaluate("(() => { const v = document.querySelector('#tl .tl-view');"
