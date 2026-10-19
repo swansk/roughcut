@@ -407,3 +407,40 @@ def test_the_price_answers_from_what_it_read_and_reads_again_beside_it(tmp_path,
     price("warm it up")
     assert len(reads) == 3
 
+
+def test_a_stop_replies_once_its_signals_are_out(tmp_path, project, monkeypatch):
+    """The Stop waited for its tools to die (up to procscope.GRACE_S for one that takes its
+    SIGTERM slowly): 562 ms on Killington. Now it replies once every SIGTERM is sent, the
+    state already `stopped`; the SIGKILL after the grace comes beside it."""
+    import server
+    from roughcut import procscope
+
+    server.configure(None, project["footage"], None, tmp_path / "work", proxies=False,
+                     visual=tmp_path / "no-visual")
+    server.FIRSTPASS.clear()
+    server.INDEXES.clear()
+    scope = procscope.Scope("first pass test")
+    # a tool that ignores its SIGTERM, as a busy encode or a model CLI mid-write can
+    with procscope.active(scope):
+        stubborn = subprocess.Popen([sys.executable, "-c",
+                                     "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                                     "print('up', flush=True); time.sleep(60)"],
+                                    stdout=subprocess.PIPE, text=True)
+    assert stubborn.stdout.readline().strip() == "up"
+    server.FIRSTPASS["t1"] = {"id": "t1", "state": "running", "stage": "index", "scope": scope,
+                              "steps": {k: {"state": "pending"} for k in ("index", "picks", "cut")},
+                              "started": time.time(), "index_job": None}
+    try:
+        t0 = time.perf_counter()
+        r = json.loads(server.api_firstpass_cancel().body)
+        took = time.perf_counter() - t0
+        assert r["state"] == "stopped" and r["stopped"] is True
+        assert took < 0.3, f"the Stop took {took * 1000:.0f} ms to reply"
+        assert server.FIRSTPASS["t1"]["state"] == "cancelled" and scope.cancelled
+        assert stubborn.poll() is None, "killed before the grace: not the stubborn case"
+        assert stubborn.wait(procscope.GRACE_S + 3) is not None      # the SIGKILL beside it
+    finally:
+        if stubborn.poll() is None:
+            stubborn.kill()
+        server.FIRSTPASS.clear()
+

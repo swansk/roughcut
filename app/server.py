@@ -4016,7 +4016,8 @@ def api_firstpass_cancel() -> JSONResponse:
     """Stop the running first pass (the header control's ×), now: the tools it is
     running — the index's ffmpeg encodes, its contact-sheet reads, the `claude -p`
     writing the cut — are killed with their process groups, the way the export's
-    cancel kills its render, and the state is `stopped` before this returns. What
+    cancel kills its render (signalled before this returns, SIGKILLed after the grace
+    beside it), and the state is `stopped` before this returns. What
     finished is kept (the journal), a stage that was killed goes back in the queue,
     and a proposal that lands after the stop is discarded, never offered."""
     with FIRSTPASS_LOCK:
@@ -4041,10 +4042,18 @@ def api_firstpass_cancel() -> JSONResponse:
     killers.append(threading.Thread(target=stop_media, daemon=True))
     for t in killers:
         t.start()
+    # Each killer sends its SIGTERMs as it starts and then waits out the grace (up to
+    # GRACE_S) before a SIGKILL: the reply waits only for the signals to go out, not for
+    # the tools to die (verdict 11 punch 4: 562 ms of the Stop was that wait, against the
+    # 300 ms budget). The state is `stopped` already, and a late result is discarded.
+    until = time.monotonic() + CANCEL_REPLY_S
     for t in killers:
-        t.join(timeout=procscope.GRACE_S + 1.0)
+        t.join(timeout=max(0.0, until - time.monotonic()))
     return JSONResponse({"job": live["id"], "stage": live.get("stage"), "stopped": True,
                          "state": "stopped"})
+
+
+CANCEL_REPLY_S = 0.1     # a Stop's reply waits this long at most for its killers' SIGTERMs
 
 
 class _FpCancelled(Exception):
