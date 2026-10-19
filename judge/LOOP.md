@@ -49,6 +49,22 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-18 ~21:30 (box clock): **wave 13 merged except CANVAS2**: PRICED `e24e499` (journal hold on priced stages for
+  clips joining a running index; released only by the re-run, a new index, or Index; re-run notes name every new clip;
+  "Black Video" via `rcClipName`) + lead `ef98558` (Effect Controls / A1 hover names); SMALL4 `1ce93ec` (verdict 9's
+  step-15 close = GNOME Shell segfault -> user D-Bus restart -> Chromium "FATAL dbus … Aborting" SIGTRAP, also 10-15;
+  the journey's and now the gate's browsers get no D-Bus; a Chromium crash is retried once and named; playhead
+  after undo; one-frame warnings; tour callout); EXPORT2 `dc193f5` (Frame Size / Rate / Bitrate, the AI export op
+  takes them; Killington 720p29.97 1280x720 30000/1001 5295 frames, estimate -4.7 %); AIUX `9bebd34` (transition /
+  fade ghosts on the edit, one ask box, "Shot N · CLIP" chip, short AI undo labels, export review words); BINLOOK2
+  `efc1ce4` (one-word Status, ten columns with a sideways scroll under a pinned Name, sprite hover-scrub 1-20 ms;
+  INVENTORY_JS `inView` ignores scrolled-away cells: logged for the judge); lead `d4a658c` follow-ups. Budget now
+  `/` 109·57, `/ shot` 138·72, `/ film` 117·56, `/ fx` 143·60, `/ jobs` 118·58. Queued for wave 14: punch 4 fresh
+  clips play within 10 s; 6's Look/Match preview; 8 video effects (Crop, Gaussian Blur); 10 event-loop holds
+  (pricing a prompt, posters) + Program black when the playhead is parked past the end by a click (app.js
+  programSync, CANVAS2's file); startup `ensure_proxies` ffmpeg outside a procscope (server.py ~542: survives the
+  server); the estimate for a short In/Out range samples the whole film (+36 %). FYI for Karl: Trip Scout NYE's
+  headed Chrome on :1 started 1 s before the 10-18 GNOME Shell crash that took his desktop session down.
 - 2026-10-18 ~18:50 (box clock): **VERDICT 9 FAIL on `7436562`** (= a426586's code; 1:9 2:9 3:9 4:9 5:9 6:7 7:8 8:8 9:7 10:8
   11:9 12:8 13:7 14:8 15:8 16:8; judge's gate RED: perf counted run at load 6.5 live 100 ms / canvas 94.6-118.6 ms, the
   ungraded dissolve 83.3 ms alone, journey step 15 TargetClosedError in the gate, green alone (the lead re-ran it 2/2
