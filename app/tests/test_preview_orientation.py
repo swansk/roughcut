@@ -161,6 +161,12 @@ def _ready(client, url: str, **kw):
 
 def _fetch(client, url: str, dest: Path, **kw) -> Path:
     r = _ready(client, url, **kw)
+    # a poster not cut yet is answered with a stand-in (`x-roughcut-poster`, wave 15 BUDGET:
+    # never a 4K decode inside the request): ask again until it is the frame
+    end = time.time() + 30
+    while r.status_code == 200 and "x-roughcut-poster" in r.headers and time.time() < end:
+        time.sleep(0.2)
+        r = _ready(client, url, **kw)
     assert r.status_code == 200, (url, r.status_code, r.text[:200])
     dest.write_bytes(r.content)
     return dest

@@ -28,6 +28,8 @@ def test_the_price_reprices_per_interval_and_the_default_is_the_tools(tmp_path, 
 
     with _fresh(tmp_path, project) as c:
         monkeypatch.setattr(server, "clip_duration", lambda clip: 100.0)
+        # the status prices from the lengths it already knows, never an ffprobe (wave 15 BUDGET)
+        monkeypatch.setattr(server, "clip_duration_known", lambda clip: 100.0)
         v = c.get("/api/status").json()["visual"]
         assert v["interval_s"] == 4.0 and v["intervals"] == [4.0, 3.0, 2.0, 1.0]
         fine = 3 * server.FINE_WINDOWS_PER_CLIP * server.FINE_USD_PER_WINDOW
