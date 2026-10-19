@@ -36,6 +36,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -232,16 +233,67 @@ _COUNT = {"on": False, "events": []}
 
 def _audit(event, args):
     if _COUNT["on"] and event in ("open", "os.listdir", "os.scandir", "glob.glob"):
-        _COUNT["events"].append((event, str(args[0])[-80:] if args else ""))
+        _COUNT["events"].append((event, str(args[0])[-80:] if args else "",
+                                 threading.current_thread().name))
 
 
 sys.addaudithook(_audit)
 
 
+def _background_idle(server, timeout: float = 60.0) -> None:
+    """Wait until the work `configure()` started behind the requests is over.
+
+    The audit hook counts every thread in the process, and `configure()` warms the clip
+    facts in the background (`warm_clip_facts`: two ffprobes a clip for its facts and one
+    for its colour tags, on a 4-thread pool); each ffprobe's pipes are an "open" of an
+    fd. This test flaked in the gates of verdicts 9 and 10 and the lead's on 69fb0f0, on those:
+    `[('open', '12'), ('open', '15'), ('open', '22'), ('open', '24')]`, the clipfacts
+    threads' `_warm_colour_probe → clip_probe → subprocess.run` (lane POLISH10 caught it
+    with the thread and stack on each event, in the gate's file order). Alone, the test
+    builds CLIP_A's peaks first (a second or two) and the warm-up is over by then; in
+    the full suite the session's work dir already holds the proxies and the peaks, so
+    the window opened ~50 ms after `configure()`, with the warm-up still probing on a
+    loaded box. Not the snapshot: every counted open was in a clipfacts thread.
+
+    The clip-facts pool is idle when nothing is queued and every worker waits for work
+    (its innermost frame the pool's `_worker` loop, blocked in the queue's get), twice
+    50 ms apart: a task taken between the two looks either ran before the window or
+    is caught by the second. The peaks, colour and sprite workers are idle when their
+    queues are empty and their threads gone."""
+    def pool_idle(pool) -> bool:
+        if not pool._work_queue.empty():
+            return False
+        frames = sys._current_frames()
+        return all(frames.get(t.ident) is None or frames[t.ident].f_code.co_name == "_worker"
+                   for t in list(pool._threads))
+
+    deadline = time.time() + timeout
+    pool = server.CLIP_FACTS["pool"]
+    while pool is not None:
+        if pool_idle(pool):
+            time.sleep(0.05)
+            if pool_idle(pool):
+                break
+        assert time.time() < deadline, f"the clip-facts warm-up still busy after {timeout} s"
+        time.sleep(0.05)
+    while True:
+        busy = [name for name, q in (("peaks", server.PEAKS_Q), ("colour", server.COLOUR_Q),
+                                     ("sprites", server.SPRITES))
+                if q["pending"] or (q.get("thread") is not None and q["thread"].is_alive())]
+        if not busy:
+            return
+        assert time.time() < deadline, f"background workers still busy after {timeout} s: {busy}"
+        time.sleep(0.05)
+
+
 def test_a_snapshot_hit_opens_no_file(client, project):
     """After one poll, the next polls of flow / status / firstpass (and a peaks answer
     already made) open nothing and list nothing — they are the snapshot. Before wave
-    11 each poll opened the EDL, the sidecars, the asks, the journal… every time."""
+    11 each poll opened the EDL, the sidecars, the asks, the journal… every time.
+    Counted in every thread, once the background work `configure()` started is over
+    (`_background_idle`: wave 14, the flake's cause)."""
+    import server
+
     paths = ("/api/flow", "/api/status", "/api/firstpass")
     for p in paths:
         assert client.get(p).status_code == 200
@@ -249,6 +301,7 @@ def test_a_snapshot_hit_opens_no_file(client, project):
     while client.get("/api/peaks/CLIP_A?pps=50").status_code == 202 and time.time() < deadline:
         time.sleep(0.1)
     assert client.get("/api/peaks/CLIP_A?pps=50").status_code == 200
+    _background_idle(server)
     _COUNT["events"].clear()
     _COUNT["on"] = True
     try:
