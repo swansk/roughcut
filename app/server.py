@@ -933,10 +933,12 @@ def set_look_interval(interval: float) -> None:
 
 
 def clip_duration_known(clip: str) -> float | None:
-    """A clip's length when it is known already (cached, or its sidecar's) — never an
-    ffprobe, for what a polled request reads (the status's look price)."""
-    d = STATE.get("durations", {}).get(clip)
-    return d if d is not None else load_sidecar(clip).get("duration_s")
+    """A clip's length when it is known already (cached, or its sidecar's: clip_duration
+    then reads it without an ffprobe), else None — for what a polled request reads (the
+    status's look price)."""
+    if clip in STATE.get("durations", {}) or load_sidecar(clip).get("duration_s") is not None:
+        return clip_duration(clip)
+    return None
 
 
 def sheets_for(clip: str, interval: float | None = None, probe: bool = True) -> int:
