@@ -17,14 +17,14 @@ Checks (each one line in summary.md, exit 0 only if all are green):
            The perf test (test_perf_latency::test_latency_under_load) is not in that run:
            it runs alone BEFORE the suite and again AFTER it (verdict 7 punch 3), each
            writing a JSON (perf-pre.json, perf-post.json: outcome, load, burners, its
-           numbers). The better-conditioned run that measured (the lower load before the
-           test added anything) counts, and its line names which and the load. A pass is
-           green wherever it ran — above 2x the cores ("shared box") it runs with 0
-           burners rather than skip; a fail above 2x the cores is AMBER and named, a fail
-           at or below it RED; nothing measured (ROUGHCUT_PERF_FORCE_SKIP=1) is AMBER,
-           never green (verdict 6 punch 9). The after run waits up to
-           $ROUGHCUT_PERF_RETRY_WAIT s (300) for load <= 2x cores unless the before run
-           already measured on a box that was not shared.
+           numbers). BOTH runs count (wave 15, verdict 11 punch 3: the "better-conditioned
+           run counts" rule let a GREEN gate depend on which run counted), and the line
+           names each with its load. A pass is green wherever it ran — above 2x the cores
+           ("shared box") it runs with 0 burners rather than skip; a fail above 2x the
+           cores is AMBER and named, a fail at or below it RED (whatever the other run
+           did); a run that measured nothing (ROUGHCUT_PERF_FORCE_SKIP=1, no record) is
+           AMBER, never green (verdict 6 punch 9). The after run waits up to
+           $ROUGHCUT_PERF_RETRY_WAIT s (300) for load <= 2x cores first.
   screens  test_budget.py again with ROUGHCUT_BUDGET_SHOTS set: the screen budget (one
            header row, one blue button, no board scroll, words/controls in view) plus a PNG
            of every screen and board state for the judge to look at.
@@ -237,48 +237,62 @@ def perf_said(rec: dict | None, cores: int | None = None) -> str:
     canvas = (" · graded canvas worst gap " + ", ".join(
         f"{(c or {}).get('longest_ms')} ms at {(c or {}).get('fps')} fps ({size})" for size, c in cvs.items())
         if cvs else " · graded canvas not measured")
+    # wave 15 (rubric log 2026-10-19): the clocks the test asserts — the canvas by the
+    # animation frames' clock and the worker's, the live buffer by rVFC's expectedDisplayTime
+    clocks = [(size, ((c or {}).get("frame_clock") or {}).get("longest_ms"),
+               ((c or {}).get("worker") or {}).get("longest_ms")) for size, c in cvs.items()]
+    if any(fc is not None or wk is not None for _, fc, wk in clocks):
+        canvas += " · by frame/worker clock " + ", ".join(f"{fc}/{wk} ms ({size})" for size, fc, wk in clocks)
+    exp = play.get("longest_gap_expected_ms")
+    live = f" · worst gap {play.get('longest_gap_ms')} ms" + (f" ({exp} ms by expectedDisplayTime)"
+                                                             if exp is not None else "")
     return (f"{o} at load {at} with {rec.get('burners', '?')} burners{shared}, {cores} cores"
             f" (load {rec.get('load_launch', '?')} at launch, {rec.get('load_pre', '?')} before it"
             f" measured{settle}; {rec.get('load_start', '?')} → {rec.get('load_end', '?')} while measuring)"
-            f" · worst gap {play.get('longest_gap_ms')} ms"
+            f"{live}"
             f"{canvas}"
             f" · seek median {med(f.get('seek') or [])} ms")
 
 
 def perf_verdict(runs: list[tuple[str, dict | None]], cores: int) -> tuple[bool, bool, str]:
     """(ok, amber, line) from the perf test's runs, e.g. [("before the suite", rec),
-    ("after the suite", rec)]. Wave 10 (verdict 7 punch 3):
+    ("after the suite", rec)]. Wave 15 (verdict 11 punch 3; REDESIGN-GOAL rubric log
+    2026-10-19): EVERY run counts, the before- and the after-suite run alike; wave 10's
+    "the better-conditioned run counts" is gone (a GREEN gate depended on which of two runs
+    counted). Each run is judged on its own:
 
-      * the run that COUNTS is the better-conditioned one that measured (passed or failed):
-        the lowest `perf_conditions` load; on a tie the earlier run. Its result stands even
-        when the other run did better (a fail at the quieter moment is not rescued by a
-        pass at a busier one);
       * passed → green, wherever it ran: on a shared box (> 2x cores before it started,
         0 burners) the line says the load;
+      * failed at <= 2x cores → RED, whatever the other run did;
       * failed at > 2x cores → AMBER, named (the box was not ours), never green;
-      * failed at <= 2x cores → RED;
       * nothing measured (a skip, forced by ROUGHCUT_PERF_FORCE_SKIP=1, or no record)
-        → AMBER: a skipped perf test is not a pass (verdict 6 punch 9)."""
+        → AMBER: a skipped perf test is not a pass (verdict 6 punch 9).
+
+    The whole: RED if any run is RED; else AMBER if any run is AMBER; else green."""
     name = "perf " + PERF_ID.split("::")[1]
     said = [f"{label}: {perf_said(rec, cores)}" for label, rec in runs]
-    measured = [(i, label, rec) for i, (label, rec) in enumerate(runs)
-                if rec is not None and rec.get("outcome") in ("passed", "failed")]
-    if not measured:
-        return True, True, (f"{name}: " + "; ".join(said)
-                            + " → the suite is AMBER: a skipped perf test is not a pass")
-    i, label, rec = min(measured, key=lambda m: (perf_conditions(m[2]) if perf_conditions(m[2])
-                                                is not None else float("inf"), m[0]))
-    others = [s for j, s in enumerate(said) if j != i]
-    why = "the better-conditioned run" if len(measured) > 1 else "the only run that measured"
-    line = (f"{name}: {perf_said(rec, cores)} — counted: {label} ({why})"
-            + (" · " + "; ".join(others) if others else ""))
-    if rec["outcome"] == "passed":
-        return True, False, line
-    if perf_shared(rec, cores):
-        return True, True, (line + " → the suite is AMBER: it failed on a shared box (above 2× the"
-                            " cores before it started, other loops' load), not a pass and not"
-                            " the app's red")
-    return False, False, line
+    red = [label for label, rec in runs
+           if rec is not None and rec.get("outcome") == "failed" and not perf_shared(rec, cores)]
+    shared_fail = [label for label, rec in runs
+                   if rec is not None and rec.get("outcome") == "failed" and perf_shared(rec, cores)]
+    unmeasured = [label for label, rec in runs
+                  if rec is None or rec.get("outcome") not in ("passed", "failed")]
+    line = f"{name} (every run counts): " + "; ".join(said)
+    if len(unmeasured) == len(runs):
+        return True, True, line + " → the suite is AMBER: a skipped perf test is not a pass"
+    if red:
+        return False, False, (line + " → RED: " + " and ".join(red)
+                              + " failed at or below 2× the cores")
+    notes = []
+    if shared_fail:
+        notes.append(" and ".join(shared_fail) + " failed on a shared box (above 2× the cores"
+                     " before it started, other loops' load), not a pass and not the app's red")
+    if unmeasured:
+        notes.append(" and ".join(unmeasured) + " measured nothing: a skipped perf test is not"
+                     " a pass")
+    if notes:
+        return True, True, line + " → the suite is AMBER: " + "; ".join(notes)
+    return True, False, line + " → every run passed"
 
 
 def perf_run(snap: Path, run_dir: Path, env: dict, tag: str) -> dict | None:
@@ -303,14 +317,13 @@ def perf_forced(env: dict) -> bool:
 
 
 def perf_after(snap: Path, run_dir: Path, env: dict, before: dict | None) -> tuple[dict | None, float]:
-    """The after-the-suite run. Unless the skip is forced or the before run already measured
-    on a box that was not shared, it first waits (up to $ROUGHCUT_PERF_RETRY_WAIT s) for the
-    load to fall to 2x the cores: a quieter moment can only make the counted run stricter."""
+    """The after-the-suite run. Unless the skip is forced, it first waits (up to
+    $ROUGHCUT_PERF_RETRY_WAIT s) for the load to fall to 2x the cores: the run counts on its
+    own now (wave 15), and a fail on a shared box would be AMBER, never a measurement of the
+    app. (`before` is kept for the call's shape; the wait no longer depends on it.)"""
     cores = os.cpu_count() or 4
     t0 = time.time()
-    good = before is not None and before.get("outcome") in ("passed", "failed") \
-        and not perf_shared(before, cores)
-    if not perf_forced(env) and not good:
+    if not perf_forced(env) and _load() > 2 * cores:
         print(f"perf: waiting for load <= {2 * cores} (up to {PERF_RETRY_WAIT_S} s) before the"
               " after-the-suite run…", flush=True)
         while _load() > 2 * cores and time.time() - t0 < PERF_RETRY_WAIT_S:
@@ -449,7 +462,7 @@ def main() -> int:
     if not quick and browser_ok:
         t0 = time.time()
         # wave 10 (verdict 7 punch 3): the perf test runs alone BEFORE the suite heats the
-        # box and again AFTER it, not inside it; the better-conditioned run counts
+        # box and again AFTER it, not inside it; wave 15 (verdict 11 punch 3): both count
         print("perf: test_latency_under_load before the suite…", flush=True)
         perf_before = perf_run(snap, run_dir, env, "pre")
         junit = run_dir / "suite.xml"

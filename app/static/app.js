@@ -2211,6 +2211,36 @@ const TX_RATE_MS = 250;      // a steered rate changes at most this often (txFol
 const TX_OUT_BAND = 0.07;    // the kept outgoing buffer's dead band (film s): two frames
 const MIX_ZONE_S = 1.2;      // the grade's mix size this long before a dissolve's follower starts and after it
 
+/* Film seconds until a follower's half of the window begins (<= 0 inside it): the incoming
+ * one (before its in-point) is drawn from h before the edit, the outgoing one from the edit
+ * (its out-point). txFollow's settling rule reads it. */
+let txHalvesMemo = { at: -1, v: [] };              // tl.transitionHalves(), once a frame for txLead
+function txLead(seg, clipT) {
+  const spd = speedOf(seg);
+  if (clipT < seg.in) {
+    const now = performance.now();
+    if (now - txHalvesMemo.at > 4) {
+      txHalvesMemo = { at: now, v: window.tl && typeof tl.transitionHalves === 'function' ? tl.transitionHalves() : [] };
+    }
+    const halves = txHalvesMemo.v;
+    const k = segs.indexOf(seg);
+    const c = k > 0 ? halves[k - 1] : null;
+    const h = c && !TX_DIPS.has(c.vkind) ? (c.video || 0) : 0;
+    return (seg.in - clipT) / spd - h;
+  }
+  return (seg.out - clipT) / spd;
+}
+
+/* (wave 15 PERF5, verdict 11 punch 9) A follower settles BEFORE its half: while its half is
+ * more than TX_SETTLE_S ahead, its drift is steered out by then (a faster catch; it is not on
+ * screen yet), and from TX_SETTLE_S before the half — and inside it — it plays at the film's
+ * rate and is left alone within TX_OUT_BAND (two frames). On Killington the handed incoming
+ * buffer started ahead of the film (the preroll's learned start latency; ~70 ms in the play
+ * worked through) and was steered 0.65-0.8 → 0.8-0.9 → 1 at 250 ms steps, the last change
+ * landing inside the window in 29 of 48 plays (lane-perf5 kd1), each change a pipeline call that
+ * drops frames while the half is on screen. */
+const TX_SETTLE_S = 0.12;
+
 function txFollow(el, seg, clipT, play, band = 1 / 60) {
   const spd = speedOf(seg);
   const src = proxyOf(seg);
@@ -2230,8 +2260,13 @@ function txFollow(el, seg, clipT, play, band = 1 / 60) {
     if (el.paused) el.play().catch(() => {});
     return true;
   }
+  const lead = txLead(seg, clipT);
+  const settled = !(lead > TX_SETTLE_S);
+  const dead = settled ? Math.max(band, TX_OUT_BAND) : band;
+  // before the settle point the drift is taken out by it (at most TX_CATCH_S of film)
+  const catchS = settled ? TX_CATCH_S : Math.max(0.08, Math.min(TX_CATCH_S, lead - TX_SETTLE_S));
   let k = 1;
-  if (Math.abs(d) > band) k = Math.max(1 - TX_STEER, Math.min(1 + TX_STEER, 1 - d / TX_CATCH_S));
+  if (Math.abs(d) > dead) k = Math.max(1 - TX_STEER, Math.min(1 + TX_STEER, 1 - d / catchS));
   k = Math.round(k * 20) / 20;                       // steps of 5 %: no rate change per tick
   // A rate change is a pipeline call (the renderer's SetPlaybackRate; the video renderer
   // re-learns its cadence and drops frames meanwhile). Steered every few frames, 0.9 → 1 →

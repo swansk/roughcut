@@ -823,6 +823,9 @@ onmessage = (e) => {
     yuv: false,              // the worker draws playing frames from their planes
     box: { w: 0, h: 0 },     // the monitor's box (ResizeObserver), CSS px
     mix: null,               // a transition's other shot: {video, id, w, rec} (setMix)
+    mixGen: 0,               // bumps per new mix video: its frame callback (armMix) stops
+    drawnAt: 0,              // when the last draw was asked of the renderer (armMix)
+    drawNo: 0,               // draws asked of the renderer so far (setShot's cut in a mix)
   };
 
   function $(s) { return document.querySelector(s); }
@@ -927,6 +930,8 @@ onmessage = (e) => {
   function draw(raw) {
     const j = job(raw);
     if (!j) return;
+    G.drawnAt = performance.now();
+    G.drawNo++;
     if (G.worker) { toWorker(j); return; }
     if (drawOn(G.R, j)) G.draws++;
   }
@@ -1277,19 +1282,59 @@ onmessage = (e) => {
 
   /* Follow the live video: a new frame → draw. Re-armed on every setShot so the
    * callback rides the element that is live now; a callback from a video that is no
-   * longer live simply stops. */
+   * longer live simply stops.
+   *
+   * Playing, the frame goes to the worker from the frame callback itself (wave 15 PERF5,
+   * verdict 11 punch 3), not from an animation-frame callback later in the step: those run
+   * after every video frame callback and every animation-frame callback queued before them —
+   * app.js's tick, the cut's advance(), the park and the inspector's rebuild that follow a
+   * cut (afterFirstFrames runs them in frame callbacks) — so the post waited 0.5-9 ms behind
+   * them (traced at 1920), a different wait each frame, and the canvas's draws, a frame
+   * period apart, came that much early or late: a frame the compositor held for 4 vsyncs
+   * (66.7 ms) read 69-78 ms on the worker's clock. Posted here, it waits for none of the
+   * step's animation-frame callbacks. Through a dissolve (the mix's weight is set in the
+   * tick), within CUT_NEAR_S of the shot's out-point (the cut's setShot draws the incoming
+   * frame in the same step: one draw, not two), and paused, it still coalesces (drawSoon). */
+  const CUT_NEAR_S = 0.08;
+  function nearCut(v) {
+    const t = window.tl;
+    const seg = t && typeof t.byId === 'function' && G.shot ? t.byId(G.shot) : null;
+    if (!seg || !Number.isFinite(seg.out)) return true;
+    return seg.out - v.currentTime < CUT_NEAR_S * (Number(seg.speed) || 1);
+  }
   function armFrames() {
     const v = live();
     const gen = ++G.frameGen;
     if (!v) return;
     const again = () => {
       if (gen !== G.frameGen || v !== live()) return;
-      drawSoon();
+      if (G.worker && !G.drawReq && !G.mix && !G.mixZone && playerPlaying() && !v.paused && !nearCut(v)) settle();
+      else drawSoon();
       if ('requestVideoFrameCallback' in v) v.requestVideoFrameCallback(again);
       else requestAnimationFrame(again);
     };
     if ('requestVideoFrameCallback' in v) v.requestVideoFrameCallback(again);
     else requestAnimationFrame(again);
+  }
+
+  /* A dissolve's other half follows too (wave 15 PERF5, verdict 11 punch 9): while the canvas
+   * draws a mix, that buffer's new frame draws it when the live buffer's own frame is late —
+   * none drawn for MIX_LATE_MS, more than a frame period at 29.97 — so the mixed picture
+   * changes when either half does. Only the live buffer's frames drew it, so a live frame the
+   * compositor held (3-4 vsyncs: on Killington the incoming buffer's first frames as the live
+   * one, at the cut inside the window) held the mix with it while the other half had a new
+   * frame. On time, the live buffer's callback draws and this one finds the draw recent: no
+   * second draw a frame (both late together, as after a main-thread stall, drawSoon makes one). */
+  const MIX_LATE_MS = 40;
+  function armMix(v) {
+    const gen = ++G.mixGen;
+    if (!v || !('requestVideoFrameCallback' in v)) return;
+    const again = () => {
+      if (gen !== G.mixGen || !G.mix || G.mix.video !== v) return;
+      if (playerPlaying() && mixDrawn() && performance.now() - G.drawnAt >= MIX_LATE_MS) drawSoon();
+      v.requestVideoFrameCallback(again);
+    };
+    v.requestVideoFrameCallback(again);
   }
 
   /* ------------------------------------------------------------ LUTs */
@@ -1409,7 +1454,16 @@ onmessage = (e) => {
     G.lut = rec;
     // A draw already asked for in this step (the outgoing buffer's frame callback) draws
     // the new shot after this; otherwise now. Never both: one draw per frame at a cut.
-    if (!G.drawReq) settle();
+    // A cut inside a dissolve (wave 15 PERF5): the mix still names the buffer that is now the
+    // live one (app.js sets the outgoing half after this, in the same tick), so a draw now was
+    // the incoming shot over itself and then, at setMix, a second mix draw (two frames each)
+    // in the cut's frame. It waits for the end of this task and is dropped if setMix drew.
+    if (!G.drawReq) {
+      if (G.mix && playerPlaying()) {
+        const n = G.drawNo;
+        queueMicrotask(() => { if (gen === G.gen && !G.drawReq && G.drawNo === n) settle(); });
+      } else settle();
+    }
   }
 
   /* The player parked the buffer for the next cut on this shot (app.js armNext): its LUT
@@ -1479,13 +1533,14 @@ onmessage = (e) => {
     const was = G.mix;
     if (!m || !m.video || !(m.w > 0) || m.id == null || !G.ok) {
       G.mix = null;
-      if (was) drawSoon();
+      if (was) { G.mixGen++; drawSoon(); }
       return false;
     }
     const id = String(m.id);
     const hit = G.cache.get(id);
     const rec = hit && typeof hit.then !== 'function' ? hit : (was && was.id === id ? was.rec : null);
     G.mix = { video: m.video, id, w: m.w, rec, onChange: m.onChange };
+    if (!was || was.video !== m.video) armMix(m.video);
     // Playing, the live buffer's frame callback draws every frame at the newest weight: a
     // draw here too (programMix runs every animation frame) was a second graded frame per
     // video frame, two uploads each, through the whole window — the worker fell behind
