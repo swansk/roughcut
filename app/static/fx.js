@@ -794,11 +794,18 @@
       `<li class="fxev${i === sel ? ' sel' : ''}" data-i="${i}" title="x ${Number(ev.x).toFixed(2)} y ${Number(ev.y).toFixed(2)} · click: park the monitor here, then click the picture to move it">`
       + `<button class="nudge" data-d="-1" title="one frame earlier">◀</button>`
       + `<span class="t">${filmT(e, ev.t)}</span>`
-      + (ev.label ? `<span class="hint">${esc(ev.label)}</span>` : '')
+      + (ev.label ? `<span class="hint">${esc(named(ev.label))}</span>` : '')
       + `<button class="nudge" data-d="1" title="one frame later">▶</button>`
       + `<button class="nudge del" data-act="delevent" title="not one — take it out">✕</button></li>`).join('');
     return `<ul class="fxevents">${rows}</ul>`
       + (sel >= 0 ? `<div class="fxpick hint">click the picture to move moment ${sel + 1}</div>` : '');
+  }
+
+  /* The model's words on a card say a shot as the editor does (verdict 12, punch 6: "the
+   * continuation into shot g0e2637544b…"): app.js `clipNamed`, reached by name. */
+  function named(text) {
+    try { if (typeof clipNamed === 'function') return clipNamed(text); } catch (e) { /* app.js not yet run */ }
+    return String(text == null ? '' : text);
   }
 
   /* Behind "why? ▸": Karl's note, what the machine made of it, what it could not do, the
@@ -811,9 +818,9 @@
     if (e.proof_url) extras.push(`<a href="${esc(e.proof_url)}" target="_blank" rel="noopener">proof</a>`);
     if (e.strip_url) extras.push(`<a href="${esc(e.strip_url)}" target="_blank" rel="noopener">strip</a>`);
     return `<div class="fxwhybox">`
-      + (e.note ? `<div class="fxnote">“${esc(e.note)}”</div>` : '')
-      + (e.says && e.why ? `<div class="hint">${esc(e.why)}</div>` : '')
-      + (e.limits && e.status !== 'proposed' ? `<div class="hint">couldn't: ${esc(e.limits)}</div>` : '')
+      + (e.note ? `<div class="fxnote">“${esc(named(e.note))}”</div>` : '')
+      + (e.says && e.why ? `<div class="hint">${esc(named(e.why))}</div>` : '')
+      + (e.limits && e.status !== 'proposed' ? `<div class="hint">couldn't: ${esc(named(e.limits))}</div>` : '')
       + (v && Array.isArray(v.checks) && v.checks.length ? `<ul class="fxchecks">${v.checks.map(checkRow).join('')}</ul>` : '')
       + (extras.length ? `<div class="fxextras hint">${extras.join(' · ')}</div>` : '')
       + (e.ref_url ? `<img class="fxrefimg" src="${esc(e.ref_url)}" alt="the reference drawn on the frame" title="the frame you drew on — the marks are the anchors">` : '')
@@ -829,7 +836,7 @@
     const proposed = e.status === 'proposed';
     const removed = e.status === 'removed';
     const prev = Array.isArray(e.previous) ? e.previous.length : 0;
-    const says = e.says || e.why || '';
+    const says = named(e.says || e.why || '');
     const moments = hasMoments(e) && !removed && (proposed || S.momentsOpen.has(e.id));
     const why = `<button class="fxlink" data-act="why">why? ${S.whyOpen.has(e.id) ? '▾' : '▸'}</button>`;
     const change = `<button data-act="iterate" title="tell the model what to change — the effect comes back as a proposal">`
@@ -855,12 +862,12 @@
         + `<button data-act="revise"${revisePriced() ? '' : ' disabled'} title="one model call — the effect comes back as a proposal">Go${revisePriced() ? ` · ${rcCost.tag(S.revisePrice.usd, S.revisePrice)}` : S.revisePriceFailed ? ' · price unavailable' : ''}</button></div>`
       : '';
     return `<div class="fxcard ${esc(e.status)}" data-id="${esc(e.id)}">`
-      + `<div class="fxhead"><b class="fxname">${esc(e.name || 'effect')}</b>${chip(e)}</div>`
+      + `<div class="fxhead"><b class="fxname">${esc(named(e.name || 'effect'))}</b>${chip(e)}</div>`
       + (says ? `<div class="fxsays"${proposed ? '' : ` title="${esc(says)}"`}>${esc(says)}</div>` : '')
       // what the model says it did not do, on the waiting card itself: "✓ checked" is the
       // free check of what was made, not of what was asked, and this shortfall is what
       // Accept vs Change turns on — behind why? ▸ it read as checked and complete
-      + (proposed && e.limits ? `<div class="fxlimits">didn't: ${esc(e.limits)}</div>` : '')
+      + (proposed && e.limits ? `<div class="fxlimits">didn't: ${esc(named(e.limits))}</div>` : '')
       + checkLine(e)
       + (moments ? momentsHtml(e) : '')
       + btns + iter

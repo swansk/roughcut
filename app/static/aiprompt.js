@@ -66,6 +66,10 @@
     return g ? (GEN_WORDS[g[1].toLowerCase()] || 'Generated clip') : stem(c);
   }
   const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const named = (text) => {
+    try { if (typeof clipNamed === 'function') return clipNamed(text); } catch (e) { /* app.js not yet run */ }
+    return String(text == null ? '' : text);
+  };
   const secs = (t) => `${(Math.round(Math.max(0, Number(t) || 0) * 10) / 10).toFixed(1)}s`;
   const clock = (ms) => {
     const s = Math.max(0, Math.floor(ms / 1000));
@@ -719,6 +723,9 @@
     if (gen !== AI.gen) return;
     stopTimers();
     AI.result = { ...d, job: AI.job, asked: AI.text, scope: AI.scope, planReady: d.plan_state === 'done' };
+    // the model's words say a shot as the editor does, never its id (verdict 12, punch 6):
+    // the line's hover, the answer and the review all read these (app.js `clipNamed`)
+    for (const k of ['summary', 'text']) if (typeof AI.result[k] === 'string') AI.result[k] = named(AI.result[k]);
     if (d.answer && Array.isArray(d.answer.accepted)) {            // reviewed already (another tab)
       const n = d.answer.accepted.length;
       AI.result.answered = { accepted: n, rejected: (d.answer.rejected || []).length,

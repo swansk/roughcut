@@ -1,4 +1,5 @@
-"""An AI design request says what it did (verdict 12, punch 5; wave 16 lane AIHONEST).
+"""An AI design request says what it did, and no shot id reaches the editor (verdict 12,
+punches 5 and 6; wave 16 lane AIHONEST).
 
 Punch 5, the judge's words: *"Put a big white KILLINGTON title over the first two seconds of
 the first shot" → 2 `design_effect` ops … Accept read "✓ 2 changes applied" though nothing
@@ -8,6 +9,13 @@ ONE undo entry of its own (`tl.mark`), so a Ctrl+Z right after it takes the requ
 the design still running is discarded the moment it lands, the one not asked yet is never
 asked — and the In/Out stays as it was. Ctrl+Shift+Z asks for them again; Ctrl+Z after they
 landed discards the proposals. An accept that also changes the cut rides one entry with them.
+
+Punch 6: the model saw shot ids and wrote them ("The last shot (g5848fde311) then moves…",
+"the continuation into shot g0e2637544b needs its own matching effect"). A page scan for
+`\\bg[0-9a-f]{10}\\b` over the Assistant, the AI prompt's line and its hover, the answer,
+Things to check and the Designed Effects cards finds nothing — with a scripted model whose
+every sentence carries ids, through the real server (roughcut/assist.py, roughcut/fx.py),
+and with the server's words faked to carry them raw (app.js `clipNamed`, the board's guard).
 
 In real Chromium on the fixture bin, the real uvicorn server, a scripted model behind
 `roughcut.inference.set_backend` — never a real call. The designer is the real `fx.design`
@@ -397,5 +405,143 @@ def test_a_design_beside_a_cut_edit_is_one_undo_with_it(browser, live_server, pr
         while b.effects() and time.time() < end:
             p.wait_for_timeout(200)
         assert b.effects() == []
+    finally:
+        b.close()
+
+
+# ---------------------------------------------------------------- punch 6
+
+SCAN = """() => {
+  const re = /\\bg[0-9a-f]{10}\\b/;
+  const out = [];
+  const look = (where, el) => {
+    if (!el) return;
+    const text = el.innerText || el.textContent || '';
+    if (re.test(text)) out.push(`${where}: ${text.match(re)[0]} in “${text.slice(0, 200)}”`);
+    for (const n of [el, ...el.querySelectorAll('[title], [aria-label]')]) {
+      for (const a of ['title', 'aria-label']) {
+        const v = n.getAttribute && n.getAttribute(a);
+        if (v && re.test(v)) out.push(`${where} [${a}]: ${v.slice(0, 200)}`);
+      }
+    }
+  };
+  look('the Assistant', document.querySelector('#tools section[data-tool="ask"]'));
+  look('the AI status', document.querySelector('[data-testid="ai-status"]'));
+  look('the answer', document.querySelector('.aip-pop'));
+  look('Things to check', document.querySelector('#proposalChecks'));
+  look('the proposal', document.querySelector('#proposal'));
+  look('Designed Effects', document.querySelector('#fx'));
+  return out;
+}"""
+
+
+def _scan(page) -> list[str]:
+    page.wait_for_timeout(150)
+    return page.evaluate(SCAN)
+
+
+def test_no_shot_id_reaches_the_page_from_the_model(browser, live_server, project):
+    """A scripted answer whose every sentence carries ids, through the real server: the
+    review, the line and its hover, the designed effect's card — no id anywhere."""
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+        b.ask([{"op": "move", "ids": [C], "before": A},
+               {"op": "design_effect", "id": A, "note": f"a KILLINGTON title over shot {A} until the cut to {B}"},
+               {"op": "trim", "id": GHOST, "out": 1.0}],
+              summary=f"The last shot ({C}) then moves to the start of the film; a title on {A}",
+              text="move the last shot first and title it")
+        review = p.locator("[data-testid=ai-review]").inner_text()
+        assert "The last shot (shot 3) then moves to the start of the film" in review, review
+        assert "shot 1 (CLIP_A) until the cut to shot 2 (CLIP_B)" in review, review
+        assert _scan(p) == []
+        b.accept()
+        p.wait_for_function("dock.current() === 'fx'", timeout=8000)
+        assert _scan(p) == []
+        end = time.time() + 15
+        while not b.effects() and time.time() < end:
+            p.wait_for_timeout(200)
+        b.designs_idle()
+        # the card, its why opened: the model's words said as the editor reads them
+        p.evaluate(f"tl.select(['{A}'], {{source: 'api'}})")
+        p.wait_for_selector("#fx .fxcard button[data-act=why]", timeout=8000)
+        p.locator("#fx .fxcard button[data-act=why]").first.click()
+        card = p.locator("#fx .fxcard").first.inner_text()
+        assert "the continuation into shot " in card and "matching effect" in card, card
+        assert _scan(p) == []
+        # a question answered in words, the answer open
+        MODEL.answer = {"kind": "answer", "text": f"Shot {B} is the brightest; {GHOST} is no longer in the cut"}
+        p.locator("#tl").first.click(position={"x": 5, "y": 5})
+        p.keyboard.press("Control+j")
+        p.keyboard.type("which is brightest?")
+        p.keyboard.press("Enter")
+        p.wait_for_selector(".aip-pop:not([hidden])", timeout=15000)
+        # numbered on the cut as it is now: the accepted move put shot 3 first, so B is third
+        assert "Shot 3 (CLIP_B) is the brightest; a shot is no longer in the cut" in p.locator(".aip-pop").inner_text()
+        assert _scan(p) == []
+    finally:
+        b.close()
+
+
+def test_the_board_names_ids_the_server_left_in(browser, live_server, project):
+    """The board's own guard (app.js `clipNamed`): the server's words faked to carry raw
+    ids — the ops review, the line's hover, Things to check, a Designed Effects card."""
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+        raw = {"status": "done", "kind": "ops", "summary": f"The last shot ({C}) then moves to the start; {A} follows",
+               "ops": [{"op": "move", "ids": [C], "before": A}],
+               "lines": [f"Move shot {C} before {A}"], "index": [0], "refused": [{"i": 1, "op": "trim",
+                                                                                 "why": f"shot {GHOST} is not in the cut"}],
+               "families": ["timeline"], "cost": None}
+        p.route("**/api/assist/*", lambda r: r.fulfill(status=200, content_type="application/json",
+                                                        body=json.dumps({**raw, "job": "0123456789ab"}))
+                if r.request.method == "GET" and "/price" not in r.request.url else r.continue_())
+        p.route("**/api/assist", lambda r: r.fulfill(status=200, content_type="application/json",
+                                                     body=json.dumps({"job": "0123456789ab", "charged": False}))
+                if r.request.method == "POST" else r.continue_())
+        p.route("**/api/assist/check", lambda r: r.fulfill(status=200, content_type="application/json",
+                                                           body=json.dumps({"ops": raw["ops"], "lines": raw["lines"],
+                                                                            "index": [0], "refused": []})))
+        p.locator("#tl").first.click(position={"x": 5, "y": 5})
+        p.keyboard.press("Control+j")
+        p.keyboard.type("move it")
+        p.keyboard.press("Enter")
+        p.wait_for_function(f"document.querySelector('{STATUS}').dataset.state === 'done'", timeout=15000)
+        p.wait_for_selector("[data-testid=ai-review] [data-testid=ai-op-row]")
+        review = p.locator("[data-testid=ai-review]").inner_text()
+        assert "The last shot (shot 3) then moves to the start; shot 1 (CLIP_A) follows" in review, review
+        assert _scan(p) == [], _scan(p)
+        title = p.locator(RESULT).get_attribute("title") or ""
+        assert "(shot 3)" in title and not SHOT_ID.search(title), title
+        # Things to check, the model's words carrying ids
+        plan = {"segments": [{"clip": s["clip"], "in": s["in"], "out": s["out"], "why": "kept"} for s in SEGS],
+                "notes": f"Kept {A} as the opener.",
+                "checks": [{"text": f"Whether {B} is too long a pause before shot {C}", "clip": "CLIP_B.MP4",
+                            "in": 0.0, "out": 2.0, "kind": "model", "shot": 1}]}
+        p.evaluate("rcActions.close()")
+        p.evaluate("(pl) => rcShowProposal(pl)", plan)
+        p.wait_for_selector("#proposalChecks li", state="visible", timeout=10000)
+        checks = p.locator("#proposalChecks").inner_text()
+        assert "Whether shot 2 (CLIP_B) is too long a pause before shot 3 (CLIP_C)" in checks, checks
+        assert _scan(p) == [], _scan(p)
+        # a Designed Effects card whose words the server left raw
+        card = {"id": "fx_raw00001", "shot": A, "clip": "CLIP_A.MP4", "name": f"title on {A}", "status": "proposed",
+                "note": "a title", "why": f"the continuation into shot {B} needs its own matching effect",
+                "limits": f"cannot reach ({C})", "events": [{"t": 1.5, "x": 0.5, "y": 0.5, "label": f"on {A}"}],
+                "overlay": TITLE["overlay"], "sound": None,
+                "verify": {"ok": True, "checks": [{"key": "in_shot", "label": "in", "ok": True, "detail": ""}]}}
+        p.route("**/api/fx", lambda r: r.fulfill(status=200, content_type="application/json",
+                                                 body=json.dumps({"effects": [card]}))
+                if r.request.method == "GET" else r.continue_())
+        p.evaluate("dock.open('fx')")
+        p.evaluate(f"tl.select(['{A}'], {{source: 'api'}})")
+        p.evaluate("fx.refresh()")
+        p.wait_for_selector("#fx .fxcard[data-id='fx_raw00001']", timeout=8000)
+        p.locator("#fx .fxcard[data-id='fx_raw00001'] button[data-act=why]").click()
+        text = p.locator("#fx .fxcard[data-id='fx_raw00001']").inner_text()
+        assert "title on shot 1 (CLIP_A)" in text and "the continuation into shot 2 (CLIP_B)" in text, text
+        assert "(shot 3)" in text, text
+        assert _scan(p) == [], _scan(p)
     finally:
         b.close()

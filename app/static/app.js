@@ -4959,9 +4959,30 @@ function notesChecks(notes) {
 /* The proposal's words name a clip as the editor reads it (verdict 11, punch 8: its Things
  * to check showed "gen_black_1e0f5341 0:00.0–0:10.0"): a generated clip's file name — the
  * server's check sentences and the model's own words carry it — is its Premiere name,
- * "Black Video" (`clipLabel`, firstpass.js `rcClipName`). */
+ * "Black Video" (`clipLabel`, firstpass.js `rcClipName`). A shot's id (`g` + ten hex
+ * digits, the server's) is the shot as the editor numbers it on the board's cut (verdict
+ * 12, punch 6: "The last shot (g5848fde311) then moves…"): "shot 22 (CLIP_05)", "(shot 22)"
+ * inside brackets, "a shot" / "that shot" for one no longer in the cut — roughcut/assist.py
+ * `name_shots`, the same rule, on the server's side. Every model sentence the board shows
+ * goes through here: the Assistant, the AI prompt's line and answer, Things to check, the
+ * notes, Designed Effects' cards. */
 const GEN_FILE = /\bgen_[a-z]+_[0-9a-f]{4,}(?:\.[a-z0-9]{2,4})?\b/gi;
-const clipNamed = (text) => String(text == null ? '' : text).replace(GEN_FILE, (m) => clipLabel(m));
+const SHOT_ID = /\((g[0-9a-f]{10})\)|\b([Ss]hot\s+)?(g[0-9a-f]{10})\b/g;
+const clipNamed = (text) => {
+  const s = String(text == null ? '' : text).replace(GEN_FILE, (m) => clipLabel(m));
+  if (!s.includes('g')) return s;
+  const list = Array.isArray(segs) ? segs : [];
+  const at = (id) => list.findIndex((x) => String(x.id) === id);
+  return s.replace(SHOT_ID, (m, paren, pre, sid, off) => {
+    if (paren) { const i = at(paren); return i >= 0 ? `(shot ${i + 1})` : '(another shot)'; }
+    const cap = pre ? pre[0] === 'S' : /(^|[.!?]\s+)$/.test(s.slice(0, off));
+    const i = at(sid);
+    // the clip follows unless the sentence names it already: "shot g… (CLIP_05)"
+    const w = i < 0 ? (pre ? 'that shot' : 'a shot')
+      : s.slice(off + m.length, off + m.length + 2) === ' (' ? `shot ${i + 1}` : `shot ${i + 1} (${clipLabel(list[i].clip)})`;
+    return cap ? w[0].toUpperCase() + w.slice(1) : w;
+  });
+};
 
 /* What the notes check flags (`notes_check.flags`), one line per shot, with the
  * proposed shot it is about (k) when there is one. */

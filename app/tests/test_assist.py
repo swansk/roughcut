@@ -201,12 +201,13 @@ def test_the_scope_reaches_the_prompt(board):
     ask(c, "warm these up", {"kind": "selection", "ids": [b], "playhead": 2.5})
     p = model.prompts[-1]
     scope = p.split("## Scope", 1)[1].split("## The sequence", 1)[0]
-    assert f"The selected shots: shot 2 ({b})" in scope
-    assert "The playhead is at 2.50 s (00:00:02:12) (shot 2, 0.50 s in)." in scope
+    # a shot is "shot N (CLIP)" to the model, as to the editor; its id rides beside it for the ops
+    assert f"The selected shots: shot 2 (CLIP_B) [id {b}]" in scope
+    assert "The playhead is at 2.50 s (00:00:02:12) (shot 2 (CLIP_B), 0.50 s in)." in scope
     assert "“warm these up”" in p
     ask(c, "tighten this", {"kind": "range", "in": 0.5, "out": 1.5})
     scope = model.prompts[-1].split("## Scope", 1)[1].split("## The sequence", 1)[0]
-    assert f"The range 0.50–1.50 s (00:00:00:12–00:00:01:12) of the sequence: shot 1 ({a})" in scope
+    assert f"The range 0.50–1.50 s (00:00:00:12–00:00:01:12) of the sequence: shot 1 (CLIP_A) [id {a}]" in scope
     ask(c, "use the good bit", {"kind": "clip", "clip": "CLIP_C.MP4", "in": 2.4, "out": 4.0})
     assert ("The clip CLIP_C.MP4 (in the Source monitor or the Project panel; not a shot in the sequence),"
             " its In 2.40 s to Out 4.00 s") in model.prompts[-1]
@@ -399,3 +400,56 @@ def test_the_price_is_on_the_ask_before_it_is_sent(board):
     assert d["model"] == config.model_for(assist.ROLE) and d["measured"] is False
     bare = c.get("/api/assist/price").json()          # no text yet: still a price
     assert bare["projected_usd"] > 0
+
+
+# ---------------------------------------------------------------- shots in the editor's words
+
+SHOT_ID = re.compile(r"\bg[0-9a-f]{10}\b")
+
+
+def test_the_answer_names_shots_never_by_id(board):
+    """Verdict 12, punch 6: the model saw ids and wrote them ("The last shot (g5848fde311)
+    then moves to the start of the film"). The prompt asks for "shot N (CLIP)"; whatever
+    the model writes, the summary, the text, the lines, the refusals and a design's note
+    come back in those words — and the ops keep their ids, which are the tools' arguments."""
+    c, (a, b) = board
+    assert SHOT_ID.fullmatch(a) and SHOT_ID.fullmatch(b), (a, b)   # the server's own ids
+    ghost = "g0e2637544b"                                            # one the cut does not have
+    model = Scripted({"kind": "ops",
+                      "summary": f"The last shot ({b}) then moves to the start of the film; {a} follows",
+                      "ops": [{"op": "move", "ids": [b], "before": a},
+                              {"op": "design_effect", "id": a,
+                               "note": f"a big white title over shot {a}, before the cut to {b}"},
+                              {"op": "trim", "id": ghost, "out": 1.0}]})
+    inference.set_backend(model)
+    d = ask(c, "move the last shot to the start and title the first")
+    p = model.prompts[-1]
+    assert "never its id" in p and '"shot N (CLIP)"' in p
+    assert d["summary"] == ("The last shot (shot 2) then moves to the start of the film; "
+                            "shot 1 (CLIP_A) follows")
+    assert d["ops"][0] == {"op": "move", "ids": [b], "before": a}
+    assert d["ops"][1]["id"] == a
+    assert d["ops"][1]["note"] == "a big white title over shot 1 (CLIP_A), before the cut to shot 2 (CLIP_B)"
+    assert [r["i"] for r in d["refused"]] == [2]
+    words = json.dumps({k: d.get(k) for k in ("summary", "lines", "refused")}) + d["ops"][1]["note"]
+    assert not SHOT_ID.search(words), words
+    # an answer in words, and every op refused (the refusals become the text)
+    inference.set_backend(Scripted({"kind": "answer", "text": f"Shot {b} is the brighter one; {ghost} is gone"}))
+    d = ask(c, "which is brighter?")
+    assert d["text"] == "Shot 2 (CLIP_B) is the brighter one; a shot is gone"
+    inference.set_backend(Scripted({"kind": "ops", "summary": f"trim {ghost}",
+                                    "ops": [{"op": "trim", "id": ghost, "out": 1.0}]}))
+    d = ask(c, "trim it")
+    assert d["kind"] == "answer" and not SHOT_ID.search(d["text"] + d["summary"]), d
+
+
+def test_name_shots_says_each_form_as_the_editor_reads_it():
+    segs = [{"id": "g0000000001", "clip": "CLIP_01.MP4"}, {"id": "g5848fde311", "clip": "CLIP_05.MP4"},
+            {"id": "gaaaaaaaaaa", "clip": "gen_black_1e0f5341.mp4"}]
+    n = lambda t: assist.name_shots(t, segs)  # noqa: E731
+    assert n("The last shot (g5848fde311) moves") == "The last shot (shot 2) moves"
+    assert n("g5848fde311 first. g0000000001 last") == "Shot 2 (CLIP_05) first. Shot 1 (CLIP_01) last"
+    assert n("Shot g5848fde311 (CLIP_05) and shot gaaaaaaaaaa") == "Shot 2 (CLIP_05) and shot 3 (Black Video)"
+    assert n("the continuation into shot g0e2637544b") == "the continuation into that shot"
+    assert n("hello g0000000001x") == "hello g0000000001x"          # not an id
+    assert n(None) is None and n("") == ""

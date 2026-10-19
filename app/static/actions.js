@@ -66,6 +66,13 @@
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const MIN_LEN = 0.2;
+  /* The model's words, and any line that falls back to an id, say a shot as the editor
+   * does — "shot 22 (CLIP_05)", never "g5848fde311" (verdict 12, punch 6): app.js
+   * `clipNamed`, reached by name. */
+  const named = (text) => {
+    try { if (typeof clipNamed === 'function') return clipNamed(text); } catch (e) { /* app.js not yet run */ }
+    return String(text == null ? '' : text);
+  };
 
   /* app.js's top-level bindings share the global lexical scope; reached by name, guarded */
   /* eslint-disable no-undef */
@@ -628,8 +635,8 @@
 
   function rowHtml(op, i) {
     const fam = FAMILY[op.op] || 'timeline';
-    const line = R.lines[i] || describe(op);
-    const block = R.blocked.get(i);
+    const line = named(R.lines[i] || describe(op));
+    const block = R.blocked.has(i) ? named(R.blocked.get(i)) : undefined;
     const on = !!R.verdict[i] && !block;
     const shows = CUT_OPS.has(op.op) ? 'shown as the ghost lane under V1 until you accept'
       : livePreview(op) ? 'shown on the Program monitor (◐ Before / After) until you accept'
@@ -728,18 +735,18 @@
     if (!['ops', 'plan', 'answer'].includes(res.kind)) {
       // a job that failed or was stopped: say so, never an empty review
       const why = res.status === 'cancelled' ? 'Stopped — nothing was changed.'
-        : `The AI could not answer: ${res.error || res.detail || 'no detail'}`;
+        : `The AI could not answer: ${named(res.error || res.detail || 'no detail')}`;
       el.innerHTML = `${head}<div class="air-answer air-failed">${esc(why)}</div>
         <div class="air-foot">${cost}<span class="air-grow"></span><button type="button" class="air-btn" data-act="close" data-testid="ai-review-close">Close</button></div>`;
       return;
     }
     if (res.kind === 'answer') {
-      el.innerHTML = `${head}<div class="air-answer">${esc(res.text || res.summary || '')}</div>
+      el.innerHTML = `${head}<div class="air-answer">${esc(named(res.text || res.summary || ''))}</div>
         <div class="air-foot">${cost}<span class="air-grow"></span><button type="button" class="air-btn" data-act="close" data-testid="ai-review-close">Close</button></div>`;
       return;
     }
     if (res.kind === 'plan') {
-      el.innerHTML = `${head}<div class="air-sum">${esc(res.summary || 'Re-cutting the sequence')}</div>
+      el.innerHTML = `${head}<div class="air-sum">${esc(named(res.summary || 'Re-cutting the sequence'))}</div>
         <div class="air-plan" data-testid="ai-plan"><span class="air-spin" aria-hidden="true"></span><span class="air-plan-what">${esc(R.planWhat || 'the proposal opens here when it is ready')}</span></div>
         <div class="air-foot">${cost}<span class="air-grow"></span><button type="button" class="air-btn" data-act="close" data-testid="ai-review-close">Close</button></div>`;
       return;
@@ -756,8 +763,8 @@
       looks ? `<button type="button" class="air-ab${R.after ? ' on' : ''}" data-act="ab" data-testid="ai-before-after" aria-pressed="${R.after}" title="the Program monitor shows the colour and Effect Controls changes (After) or the shot as it is (Before) — nothing is saved until you accept">◐ ${R.after ? 'After' : 'Before'}</button>` : '',
       exp ? `<span class="air-pv air-file" data-testid="ai-export-what" title="the Export dialog writes this file when you accept — never over an existing one (it becomes -2, -3 …)">writes ${esc(exportWords(exp))}</span>` : ''].filter(Boolean).join('');
     el.innerHTML = `${head}
-      ${res.summary ? `<div class="air-sum">${esc(res.summary)}</div>` : ''}
-      <ol class="air-ops">${R.ops.map(rowHtml).join('')}${refused.map((x) => `<li class="air-op refused" data-testid="ai-op-refused" data-op="${esc(x.op || '')}"><span class="air-fam" aria-hidden="true">⊘</span><span class="air-line">${esc(String(x.op || 'an op').replace('_', ' '))} not applied: ${esc(x.why)}</span></li>`).join('')}</ol>
+      ${res.summary ? `<div class="air-sum">${esc(named(res.summary))}</div>` : ''}
+      <ol class="air-ops">${R.ops.map(rowHtml).join('')}${refused.map((x) => `<li class="air-op refused" data-testid="ai-op-refused" data-op="${esc(x.op || '')}"><span class="air-fam" aria-hidden="true">⊘</span><span class="air-line">${esc(String(x.op || 'an op').replace('_', ' '))} not applied: ${esc(named(x.why))}</span></li>`).join('')}</ol>
       ${preview ? `<div class="air-preview">${preview}</div>` : ''}
       <div class="air-foot">
         <button type="button" class="air-btn" data-act="reject" data-testid="ai-reject-all" title="put everything back as it was — nothing is written (Esc)">Reject all</button>
@@ -1102,7 +1109,7 @@
     const d = out.designs || 0, cuts = n - d;
     const designing = d ? `${d === 1 ? 'an effect' : `${d} effects`} being designed — review ${d === 1 ? 'it' : 'them'} in Designed Effects` : '';
     const said = out.refused.length
-      ? `${[cuts ? `applied ${cuts} of ${idx.length}` : '', designing].filter(Boolean).join(' · ') || 'nothing applied'} — ${out.refused[0].why}`
+      ? `${[cuts ? `applied ${cuts} of ${idx.length}` : '', designing].filter(Boolean).join(' · ') || 'nothing applied'} — ${named(out.refused[0].why)}`
       : `${[cuts ? `applied ${cuts === 1 ? 'the edit' : `${cuts} edits`}` : '', designing].filter(Boolean).join(' · ')}`
         + (out.committed ? ` — ${app.undoKey()} undoes ${n === 1 ? 'it' : 'them'}` : '');
     closeQuiet();
