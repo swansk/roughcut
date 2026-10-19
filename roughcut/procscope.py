@@ -251,9 +251,37 @@ def comm(pid: int) -> str:
         return ""
 
 
+def _task_children(pid: int) -> list[int] | None:
+    """`pid`'s children from its threads' /proc children lists (no scan of every process on
+    the box); None where the kernel keeps none (CONFIG_PROC_CHILDREN off)."""
+    try:
+        tasks = os.listdir(f"/proc/{pid}/task")
+    except OSError:
+        return []                          # gone
+    out: list[int] = []
+    for t in tasks:
+        try:
+            with open(f"/proc/{pid}/task/{t}/children", encoding="utf-8") as fh:
+                out += [int(x) for x in fh.read().split()]
+        except FileNotFoundError:
+            if not os.path.isdir(f"/proc/{pid}/task/{t}"):
+                continue                   # a thread that ended meanwhile
+            return None
+        except (OSError, ValueError):
+            continue
+    return out
+
+
 def background_procs() -> list[tuple[int, str | None]]:
     """Every live ffmpeg of a background scope, as (pid, tag): its own children and
-    their descendants (a close look's tool runs its own ffmpeg)."""
+    their descendants (a close look's tool runs its own ffmpeg).
+
+    Wave 15 (verdict 11 punch 4): this ran 5 times a second on the server's yield thread
+    and read every process's /proc stat to find descendants (~9 ms of GIL-held Python a
+    look with ~400 processes on the box; 81 ms of that thread's CPU inside one 395 ms
+    hold of the event loop on Killington). An ffmpeg spawns nothing, so a root that is one
+    is taken as it is; another root's descendants come from its own /proc children lists,
+    and only where the kernel keeps none from the whole-box scan, once a look."""
     roots: list[tuple[int, str | None]] = []
     for sc in scopes():
         if sc.background and not sc.cancelled:
@@ -261,9 +289,23 @@ def background_procs() -> list[tuple[int, str | None]]:
     if not roots:
         return []
     out: list[tuple[int, str | None]] = []
-    kids = _kids_map()
+    kids: dict[int, list[int]] | None = None
     for pid, tag in roots:
-        for p in [pid, *children_of([pid], kids)]:
-            if comm(p) == "ffmpeg":
-                out.append((p, tag))
+        if comm(pid) == "ffmpeg":
+            out.append((pid, tag))
+            continue
+        found: list[int] = []
+        todo, seen = [pid], {pid}
+        while todo:
+            p = todo.pop()
+            got = _task_children(p) if kids is None else kids.get(p, [])
+            if got is None:                # no /proc children lists: the scan, once
+                kids = _kids_map()
+                got = kids.get(p, [])
+            for c in got:
+                if c not in seen:
+                    seen.add(c)
+                    found.append(c)
+                    todo.append(c)
+        out += [(p, tag) for p in found if comm(p) == "ffmpeg"]
     return out

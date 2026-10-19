@@ -8364,6 +8364,7 @@ def stop_media() -> int:
 
 PLAY_LAPSE_S = 5.0          # a playing board that stops beating is taken as paused
 YIELD_TICK_S = 0.2          # how often the yield thread looks (a new encode, a lapse)
+YIELD_IDLE_S = 2.0          # ...and, with nothing playing or paused, how often it walks them
 PLAYING: dict = {"lock": threading.Lock(), "tabs": {}, "stopped": {}, "thread": None,
                  "log": []}
 
@@ -8478,12 +8479,19 @@ def yield_tick() -> dict:
     # encodes give it the GPU's decoder, as they do a playing Program, for its few seconds
     playing = playing_now()
     play = playing or heads_building()
+    stopped: dict = PLAYING["stopped"]
+    # nothing plays and nothing is paused: the look only renices a tool's own ffmpegs (the
+    # app's start at nice 19 already), so it is taken every YIELD_IDLE_S, not every tick —
+    # each look walks the background processes on this thread, beside the event loop
+    now = time.monotonic()
+    if not play and not stopped and now - PLAYING.get("idle_look", 0.0) < YIELD_IDLE_S:
+        return {"playing": False, "stopped": [], "background": None}
+    PLAYING["idle_look"] = now
     procs = procscope.background_procs()
     waited = _waited_on()
     slot = SLOT_WAIT in waited       # every media build (tagged) runs until the slot frees
     want = {pid for pid, tag in procs
             if play and tag not in waited and not (slot and tag is not None)}
-    stopped: dict = PLAYING["stopped"]
     for pid, _tag in procs:
         try:
             if os.getpriority(os.PRIO_PROCESS, pid) < procscope.BACKGROUND_NICE:
