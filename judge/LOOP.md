@@ -49,6 +49,15 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-18 ~23:10 (box clock): **VERDICT 10 FAIL on `9470064`** (= 69fb0f0; 1:9 2:9 3:9 4:9 5:8 6:8 7:8 8:9 9:8 10:7
+  11:9 12:9 13:9 14:9 15:8 16:9; the judge's gate GREEN, perf passed both runs, journey green with no retry).
+  Blockers: dimension 10 at 7, K2 + K3 open (Karl's). Rulings: inView, wave-13 budgets, no D-Bus honest; the journey's
+  crash retry lenient in part -> logged, and a retried step will make the gate AMBER (POLISH10). Of verdict 9's punch:
+  done 2 5 7 9; partly 1 3 4 6 10; not done 8. **Wave 14** (judge/WAVE14.md) from `438b5a2`: SERVERPERF (1), AIOPS3 (2,
+  7), TIMEBASE (3), PLAY4 (5, 6 + black past the end + a missing generated clip), VFX (8), POLISH10 (9, 10, retry ->
+  AMBER). Punch 4 (Karl's look): judge/FOR-KARL.md written; Karl's preview `roughcut-redesign` (8766) has run since
+  2026-10-16 00:05 on pre-wave-12 server code while serving this worktree's live static files: it needs a restart
+  before he looks, ideally from a frozen snapshot so later merges don't change it under him (asked Karl).
 - 2026-10-18 21:35 (box clock): **CANVAS2 merged** `69fb0f0` (lean shaders, the worker's frame queue, the tour ring still
   while playing, timecode text nodes reused, ruler/meters/playheads throttled while playing, dissolve pairs at MIX_W,
   followers' rate changes ≤ 4/s, posters `near=1` 29-119 ms on Killington building shots, was 0.7-1.7 s; lead: near=1
