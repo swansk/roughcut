@@ -1331,6 +1331,11 @@ def clean_keys(raw) -> dict | None:
 LUMETRI_CREATIVE = {"curves": colourmod.clean_curves, "wheels": colourmod.clean_wheels,
                     "hsl": colourmod.clean_hsl}
 
+# Video effects (wave 14, VFX; verdict 10 punch 8): `controls.vfx`, the shot's Crop /
+# Transform / Gaussian Blur stack, and their keys in `controls.keys` as `<param>@<id>` —
+# the schema and its validators are roughcut/vfx.py's. V1's only, as Lumetri is.
+from roughcut import vfx as vfxmod  # noqa: E402
+
 
 def clean_controls(raw, overlay: bool = False) -> dict | None:
     """One segment's `controls`, validated; None when everything is the default.
@@ -1339,12 +1344,14 @@ def clean_controls(raw, overlay: bool = False) -> dict | None:
         return None
     if not isinstance(raw, dict):
         raise ValueError("controls must be an object")
-    extra = set(raw) - set(CONTROL_RANGES) - {"position", "fx_off", "fx_order", "keys"} \
+    extra = set(raw) - set(CONTROL_RANGES) - {"position", "fx_off", "fx_order", "keys", "vfx"} \
         - set(LUMETRI_CREATIVE)
     if extra:
         raise ValueError(f"unknown control {sorted(extra)[0]!r}")
     if overlay and any(raw.get(k) is not None for k in LUMETRI_CREATIVE):
         raise ValueError("Lumetri Color applies to V1 shots: a clip on V2+ renders as shot")
+    if overlay and raw.get("vfx"):
+        raise ValueError("video effects apply to V1 shots: a clip on V2+ renders as shot")
     out: dict = {}
     for k, (lo, hi, default) in CONTROL_RANGES.items():
         if raw.get(k) is None:
@@ -1371,7 +1378,16 @@ def clean_controls(raw, overlay: bool = False) -> dict | None:
             raise ValueError(f"{k} must be a list of effect ids")
         if ids:
             out[k] = list(dict.fromkeys(ids))[:64]
-    keys = clean_keys(raw.get("keys"))
+    # the video effects' keys (`<param>@<id>`) are vfx.py's to check; Motion's are here
+    raw_keys = raw.get("keys")
+    vfx_keys = None
+    if isinstance(raw_keys, dict) and any("@" in str(k) for k in raw_keys):
+        vfx_keys = {k: v for k, v in raw_keys.items() if "@" in str(k)}
+        raw_keys = {k: v for k, v in raw_keys.items() if "@" not in str(k)}
+    stack = vfxmod.clean(raw.get("vfx"))
+    if stack:
+        out["vfx"] = stack
+    keys = {**(clean_keys(raw_keys) or {}), **(vfxmod.clean_keys(vfx_keys, stack) or {})}
     if keys:
         out["keys"] = keys
     for k, clean in LUMETRI_CREATIVE.items():
