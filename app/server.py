@@ -9221,15 +9221,16 @@ HEAD_NAME = re.compile(r"^(?P<stem>[A-Za-z0-9._-]+)\.head(?P<a>\d+)\.(?P<v>[a-z0
 # What the wait line says while a head is what will play (verdict 11 punch 5: "~60 s", the
 # whole preview's estimate, over a clip that played ~11 s later from its head): a head's
 # encode is HEAD_START_S of start-up and the measured seconds per footage second
-# (`head_rate`, HEAD_RATE until one is measured: 14 s of a 4K HEVC GoPro clip took 3.8 s
-# on the GPU here at load 7), slower in proportion past HEAD_LOAD_CORES x the cores busy
-# (7.3 s at load 16 on 6 cores), and HEAD_PLAY_S more until its first frame is on screen
-# (~1 s here: the board's long-poll answers, the buffer loads the head and shows its frame).
+# (`head_rate`, HEAD_RATE until one is measured: 8 s of a 4K HEVC GoPro clip took 1.8-3.5 s
+# on the GPU here at load 6-14, 0.1-0.3 s a second past the start-up), slower in proportion
+# past HEAD_LOAD_CORES x the cores busy (14 s took 7.3 s at load 16 on 6 cores), and
+# HEAD_PLAY_S more until its first frame is on screen (the board's long-poll answers, the
+# buffer loads the head and shows its frame: 0.3-0.5 s on Killington).
 HEAD_START_S = 1.0
-HEAD_RATE = {True: 0.2, False: 1.0}
-HEAD_PLAY_S = 1.0
+HEAD_RATE = {True: 0.15, False: 1.0}
+HEAD_PLAY_S = 0.5
 HEAD_LOAD_CORES = 1.5
-HEAD_STOP_S = 0.3        # a head for a time the monitor left, stopped before the next starts
+HEAD_STOP_S = 0.2        # a head for a time the monitor left, stopped before the next starts
 
 
 def _head_load() -> float:
