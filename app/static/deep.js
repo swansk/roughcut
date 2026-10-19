@@ -438,8 +438,12 @@
       const pts = mv.map((v, i) => `${(1000 * Math.min(1, (i * step) / dur)).toFixed(1)},${(18 - 17 * v / max).toFixed(1)}`).join(' ');
       motion = `<svg viewBox="0 0 1000 18" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="#7a7a90" stroke-width="1" vector-effect="non-scaling-stroke"/></svg>`;
     }
-    const marks = cov.unusable.map((u) => `<i class="st-unusable" style="left:${pct(u.start, dur)};width:${pct(u.end - u.start, dur)}" title="${esc(`unusable ${u.start.toFixed(1)}–${u.end.toFixed(1)}: ${u.why}`)}"></i>`).join('')
-      + cov.moments.map((m) => `<i class="st-${esc(m.status || 'unseen')}" style="left:${pct(m.start, dur)};width:${pct(Math.max(0, m.end - m.start), dur)}" title="${esc(`${m.kind} ${m.start.toFixed(1)}–${m.end.toFixed(1)} · ${STATUS_WORD[m.status] || m.status} · ${m.source}\n${m.what}`)}"></i>`).join('');
+    // a single-frame moment (the visual pass writes start == end) is one time and a visible tick,
+    // never "72.1–72.1" on a 0-width mark (wave 13 SMALL4's note, as in Effect Controls)
+    const span = (a, b) => (b - a < 0.05 || a.toFixed(1) === b.toFixed(1) ? a.toFixed(1) : `${a.toFixed(1)}–${b.toFixed(1)}`);
+    const wide = (a, b) => `max(2px, ${pct(Math.max(0, b - a), dur)})`;
+    const marks = cov.unusable.map((u) => `<i class="st-unusable" style="left:${pct(u.start, dur)};width:${wide(u.start, u.end)}" title="${esc(`unusable ${span(u.start, u.end)}: ${u.why}`)}"></i>`).join('')
+      + cov.moments.map((m) => `<i class="st-${esc(m.status || 'unseen')}" style="left:${pct(m.start, dur)};width:${wide(m.start, m.end)}" title="${esc(`${m.kind} ${span(m.start, m.end)} · ${STATUS_WORD[m.status] || m.status} · ${m.source}\n${m.what}`)}"></i>`).join('');
     const keys = ['confirmed', 'deep', 'unseen', 'fine-only', 'contradicted'].filter((s) => cov.moments.some((m) => m.status === s));
     host.innerHTML = `<div class="dv-top"><span class="dv-title">HOW THE MACHINE SAW ${esc(stemOf(cov.clip).toUpperCase())} · ${esc(fmtT(dur))}</span></div>
       <div class="dv-wrap">

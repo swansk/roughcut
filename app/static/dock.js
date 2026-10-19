@@ -284,7 +284,9 @@
     insert: () => source.insert(),
     ec: () => open('inspect'),
     play: () => { if (typeof window.toggleCut === 'function') window.toggleCut(); },
-    ask: () => open('ask'),
+    // Sequence › Ask for a change…: the Assistant, where the answer is reviewed, and the cursor
+    // in the one ask box, the AI prompt (wave 13 AIUX)
+    ask: () => { open('ask'); if (window.rcAI) window.rcAI.command('ask'); },
     music: () => open('sound'),
     fx: () => open('fx'),
     reset: () => resetLayout(),

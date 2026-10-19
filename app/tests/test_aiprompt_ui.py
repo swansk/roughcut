@@ -754,3 +754,20 @@ def test_ask_about_from_code_pre_scopes_the_prompt(live_server, project, browser
     assert pg.evaluate("rcAI.ask('end on the fall', {kind: 'sequence'})") is True
     assert pg.assist.posts[-1]["scope"]["kind"] == "sequence"
     _close(pg)
+
+
+def test_the_sequence_menus_ask_goes_to_the_prompt(live_server, project, browser):
+    """Sequence › Ask for a change… is the same one ask box as AI › Ask for a change to the
+    cut (wave 13: the Assistant tab's box is a button now): it puts the cursor in the AI
+    prompt, scoped to the sequence, and asks nothing by itself."""
+    pg = _open(browser, live_server, project)
+    posts = []
+    pg.on("request", lambda r: posts.append(r.url) if r.method == "POST" and "/api/assist" in r.url else None)
+    pg.locator('#menubar .menu[data-menu="sequence"] .mtop').click()
+    pg.locator('#menubar button[data-cmd="ask"]').click()
+    pg.wait_for_function("document.activeElement && document.activeElement.dataset.testid === 'ai-prompt-input'",
+                         timeout=3000)
+    assert "Sequence" in pg.locator('[data-testid="ai-scope"]').inner_text()
+    assert pg.evaluate("dock.current()") == "ask"      # the Assistant, where the answer is reviewed
+    assert posts == []
+    pg.context.close()

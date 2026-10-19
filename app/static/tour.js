@@ -152,17 +152,18 @@
     what: 'Ask for any edit in plain words: “tighten the intro to 20 s”, “warm up the snow shots”, “dissolve between 4 and 5”.',
     change: 'Comes back as edits shown before they land; accept or reject each one. Nothing changes until you accept.',
   };
+  // since wave 13 AIUX both buttons only point the AI prompt (Ctrl+J): the ask is the prompt's
   const ASK = {
     name: 'Ask for a change to the cut',
-    what: 'Sends your note and the cut to the AI, which writes a new version of the cut.',
-    change: 'A proposed cut you review shot by shot; nothing changes until you accept.',
-    price: askPriced('full'),
+    what: 'Puts the cursor in the AI prompt (Ctrl+J), scoped to the whole sequence: type what you want and press Enter.',
+    change: 'Nothing by itself; the prompt answers with edits, and nothing changes until you accept.',
+    price: NO_CALL,
   };
   const SHOT = {
     name: 'Ask about this shot',
-    what: 'Ask for a change to one shot: start later, hold through the reaction, keep only the punchline.',
-    change: 'Proposes a new range for this shot only; nothing changes until you accept.',
-    price: askPriced('shot'),
+    what: 'Puts the cursor in the AI prompt scoped to this shot: start later, hold through the reaction, keep only the punchline.',
+    change: 'Nothing by itself; the prompt answers with edits, and nothing changes until you accept.',
+    price: NO_CALL,
   };
   const COLOUR = {
     name: 'Ask for a colour change',
@@ -230,7 +231,6 @@
     }],
     ['#ask', ASK],
     ['#inspector button[data-act="ask"]', SHOT],
-    ['#inspector button[data-act="shotgo"]', { ...SHOT, name: 'Ask' }],
     ['.dv-look', DEEP],
     ['#findDeep', { ...FIND, name: 'Ask the model to find it',
       what: 'One model call that reads every transcript and everything the visual pass saw, to find what word-matching cannot.' }],
@@ -255,7 +255,7 @@
     ['#menubar [data-cmd="ai:find"]', FIND],
     ['#menubar [data-cmd="ai:audit"]', AUDIT],
     ['#menubar [data-cmd="ask"]', { ...ASK, name: 'Ask for a change…',
-      change: 'Opens the Assistant; nothing is asked until you press its Ask.' }],
+      change: 'Puts the cursor in the AI prompt; nothing is asked until you press Enter.' }],
     ['#menubar [data-cmd="fx"]', { ...FX, name: 'Design an effect…',
       change: 'Opens Designed Effects; nothing is designed until you press Design.' }],
   ];

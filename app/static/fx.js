@@ -355,10 +355,18 @@
    * entry named after the effect (redesign wave 12, AIOPS; REDESIGN-GOAL dimension 15:
    * "one accept is one undo step"): Ctrl+Z puts the cut back as it was before Accept,
    * and Ctrl+Shift+Z brings the edit back. */
+  // the undo button reads "undo: effect: <name> (Ctrl+Z)" in ≤ 40 characters, on a whole word
+  // (verdict 9 punch 3: undo labels are never a sentence cut mid-word)
+  function shortName(name, max = 22) {
+    const n = String(name || 'effect').trim().replace(/\s+/g, ' ');
+    if (n.length <= max) return n;
+    const cut = n.slice(0, max + 1).replace(/\s+\S*$/, '');
+    return (cut || n.slice(0, max)).replace(/[\s,;:.\-–—]+$/, '') + '…';
+  }
   const undoWord = () => (/Mac|iPhone|iPad/.test(navigator.platform || '') ? '⌘Z' : 'Ctrl+Z');
   async function refreshCut(e) {
     if (typeof window.roughcutRefresh === 'function') {
-      try { await window.roughcutRefresh({ undo: `effect: ${e.name}` }); return true; } catch (err) { /* reload below */ }
+      try { await window.roughcutRefresh({ undo: `effect: ${shortName(e.name)}` }); return true; } catch (err) { /* reload below */ }
     }
     if (typeof location === 'undefined') return true;
     say(`${e.name}: the cut changed — reloading`);
