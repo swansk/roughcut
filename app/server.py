@@ -5998,7 +5998,7 @@ def bin_telemetry() -> dict[str, dict]:
 # on a small pool, started at configure(); a request waits at most CLIP_FACTS_WAIT_S for
 # the ones still running and answers with the rest as null and `probing` > 0, and the
 # board asks again a second later.
-CLIP_FACTS_WAIT_S = 1.0
+CLIP_FACTS_WAIT_S = 0.2
 CLIP_FACTS_WORKERS = 4
 CLIP_FACTS: dict = {"lock": threading.Lock(), "pool": None, "running": {}}
 
@@ -6035,14 +6035,22 @@ def _probe_clip_facts(clip: str, footage: Path) -> dict | None:
     capture = STATE.setdefault("capture", {})
     tele = STATE.setdefault("telemetry", {})
     if clip not in durations or clip not in capture or clip not in tele:
+        # one ffprobe for these and the picture's facts both, when neither is known (a clip
+        # just imported: verdict 11 punch 4, two ffprobes of a 4 GB GoPro file one after the
+        # other kept its row's facts — and /api/clips, which waits for them — past 300 ms)
+        both = not media_facts_known(src)
         r = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries",
+             (MEDIA_FACTS_ENTRIES + ":format=duration:format_tags=creation_time"
+              ":stream=codec_tag_string") if both else
              "format=duration:format_tags=creation_time:stream=codec_type,codec_tag_string",
              "-of", "json", str(src)], capture_output=True, text=True)
         try:
             info = json.loads(r.stdout or "{}") if r.returncode == 0 else {}
         except ValueError:
             info = {}
+        if both and r.returncode == 0:
+            seed_media_facts(src, info)
         fmt = info.get("format") or {}
         if STATE.get("footage") != footage:
             return None
@@ -8640,6 +8648,20 @@ def _rate(s: str | None) -> float | None:
     return v if math.isfinite(v) and v > 0 else None
 
 
+MEDIA_FACTS_ENTRIES = ("stream=codec_type,codec_name,profile,pix_fmt,width,height,avg_frame_rate,"
+                       "r_frame_rate,channels,sample_rate:stream_tags=timecode:stream_side_data=rotation"
+                       ":format=format_name,bit_rate:format_tags=timecode")
+
+
+def media_facts_known(src: Path) -> bool:
+    try:
+        st = src.stat()
+    except OSError:
+        return False
+    with MEDIA["lock"]:
+        return (str(src), st.st_size, st.st_mtime_ns) in MEDIA["facts"]
+
+
 def media_facts(src: Path) -> dict | None:
     """What a browser needs to know about a file: codecs, profile, size, rotation, fps,
     bitrate; and what the Project panel shows of it: the camera's source timecode (the
@@ -8654,18 +8676,35 @@ def media_facts(src: Path) -> dict | None:
     with MEDIA["lock"]:
         if key in MEDIA["facts"]:
             return MEDIA["facts"][key]
-    r = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries",
-         "stream=codec_type,codec_name,profile,pix_fmt,width,height,avg_frame_rate,"
-         "r_frame_rate,channels,sample_rate:stream_tags=timecode:stream_side_data=rotation"
-         ":format=format_name,bit_rate:format_tags=timecode",
-         "-of", "json", str(src)], capture_output=True, text=True)
-    facts = None
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", MEDIA_FACTS_ENTRIES,
+                        "-of", "json", str(src)], capture_output=True, text=True)
+    info = None
     if r.returncode == 0:
         try:
             info = json.loads(r.stdout or "{}")
         except ValueError:
             info = {}
+    facts = _media_facts_of(info)
+    with MEDIA["lock"]:
+        MEDIA["facts"][key] = facts
+    return facts
+
+
+def seed_media_facts(src: Path, info: dict) -> None:
+    """`media_facts`' cache for `src` from an ffprobe answer that has MEDIA_FACTS_ENTRIES in
+    it already (the clip facts' one probe, `_probe_clip_facts`)."""
+    try:
+        st = src.stat()
+    except OSError:
+        return
+    facts = _media_facts_of(info)
+    with MEDIA["lock"]:
+        MEDIA["facts"].setdefault((str(src), st.st_size, st.st_mtime_ns), facts)
+
+
+def _media_facts_of(info: dict | None) -> dict | None:
+    facts = None
+    if info is not None:
         streams = info.get("streams") or []
         v = next((s for s in streams if s.get("codec_type") == "video"), None)
         a = next((s for s in streams if s.get("codec_type") == "audio"), None)
@@ -8696,8 +8735,6 @@ def media_facts(src: Path) -> dict | None:
                      "timecode": tc or None,
                      "channels": int(a.get("channels") or 0) or None if a else None,
                      "sample_rate": arate or None}
-    with MEDIA["lock"]:
-        MEDIA["facts"][key] = facts
     return facts
 
 

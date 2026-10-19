@@ -490,3 +490,37 @@ def test_a_gap_is_cut_from_the_bins_black_master(tmp_path, project, monkeypatch)
     with TestClient(server.app) as c:
         assert c.post("/api/gap", json={"seconds": 31.0}).status_code == 200
     assert runs and "libx264" in runs[0]
+
+
+def test_a_clips_free_facts_are_one_ffprobe_and_the_list_never_waits_long(tmp_path, project, monkeypatch):
+    """A clip just imported had its free facts probed twice, one ffprobe after the other
+    (length, capture time and telemetry; then the picture's facts), and /api/clips waited
+    up to a second for them: 304-736 ms on Killington right after an import. Now one
+    ffprobe gives both, and the list waits at most CLIP_FACTS_WAIT_S (0.2 s) — a clip
+    still being probed comes with null facts and the board asks again 0.3 s later."""
+    import server
+
+    server.configure(None, project["footage"], None, tmp_path / "work", proxies=False,
+                     visual=tmp_path / "no-visual")
+    probes: list[list[str]] = []
+    real_run = subprocess.run
+    clip = server.footage_clips()[0]
+    src = str(server.clip_path(clip))
+
+    def watched(cmd, *a, **kw):
+        if isinstance(cmd, list) and cmd and cmd[0] == "ffprobe" and src in cmd:
+            probes.append(cmd)
+        return real_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(server.subprocess, "run", watched)
+    for d in ("durations", "capture", "telemetry", "clip_facts"):
+        server.STATE.setdefault(d, {}).pop(clip, None)
+    server.MEDIA["facts"].pop(next((k for k in list(server.MEDIA["facts"]) if k[0] == src), None), None)
+    facts = server._probe_clip_facts(clip, server.STATE["footage"])
+    assert len(probes) == 1, f"{len(probes)} ffprobes for one clip's facts: {probes}"
+    assert facts["fps"] and facts["width"] == 320 and facts["codec"] == "h264", facts
+    assert server.STATE["durations"][clip] and server.STATE["capture"][clip]
+    assert server.media_facts(server.clip_path(clip))["vcodec"] == "h264"
+    assert len(probes) == 1, "media_facts probed again"
+    assert server.CLIP_FACTS_WAIT_S <= 0.2
+

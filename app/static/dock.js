@@ -587,12 +587,20 @@
     if (project.cutsSoon) { const soon = project.cutsSoon; project.cutsSoon = null; await soon; }
     // a newly listed clip gets its facts into the board's clips, where one was stubbed
     project.clips.forEach((c) => { if (stubs.has(c.clip)) ensureClip(c.clip, true); });
+    // the Source's clip opened before its facts were in (a clip just imported): its length
+    // and rate now, so its In / Out and `,` work without opening it again
+    if (source.clip && !(Number(source.clip.duration) > 0)) {
+      const fresh = project.clips.find((x) => x.clip === source.clip.clip);
+      if (fresh && Number(fresh.duration) > 0) { source.clip = fresh; source.paint(); source.publish(); }
+    }
     heardSince();
     subsChanged();
     paintProject();
     loadSprites();
     // facts still being probed: ask again in a second; a clip still being indexed: now and then
-    if (j && j.probing) project.timer = setTimeout(loadClips, 1000);
+    // (wave 15 BUDGET: /api/clips waits at most 0.2 s for a just-imported clip's facts, so
+    // the row's length and rate come with the next look, a third of a second on)
+    if (j && j.probing) project.timer = setTimeout(loadClips, 300);
     else if (project.clips.some((c) => c.media === 'building' || c.media === 'queued')) project.timer = setTimeout(loadClips, 5000);
     else if (project.clips.some((c) => !c.analysed || !c.looked)) project.timer = setTimeout(loadClips, 15000);
     // the Source monitor opens on the clip it showed last, else the first one, so there
