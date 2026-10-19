@@ -49,6 +49,18 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-18 21:35 (box clock): **CANVAS2 merged** `69fb0f0` (lean shaders, the worker's frame queue, the tour ring still
+  while playing, timecode text nodes reused, ruler/meters/playheads throttled while playing, dissolve pairs at MIX_W,
+  followers' rate changes ≤ 4/s, posters `near=1` 29-119 ms on Killington building shots, was 0.7-1.7 s; lead: near=1
+  only while the clip has nothing playable, test_ui_flow's nudge test). **Lead full gate on `69fb0f0`: GREEN** (2310 s;
+  quiet box, no lanes): suite 1645 passed, 0 broken, 2 flaky (status_cheap snapshot, graded dissolve); perf counted run
+  passed at load 6.7 (live 50.0 ms, canvas 50.4 / 57.6 ms), the after-suite run failed at load 8.1 (canvas 67.7 ms at
+  1920); journey 24 steps 53 s; boot 0.64 s. Judge 10 next. Open from CANVAS2 for wave 14: perf is still near its bar
+  at load 8-12 (CANVAS2's A/B 7/15 vs base 8/15 at 11-12); the ungraded dissolve's 83 ms hold just after the outgoing
+  follower's play(); CANVAS2's case that the canvas check should stamp draws by the worker's or the rAF frame clock
+  (the judge's pb9.py already samples grade.draws per rAF) is NOT adopted (a rubric change, for Karl/the judge to
+  weigh); the first seek after load once 318-348 ms vs the 300 ms poster bar (later seeks 16-81 ms); a missing
+  generated clip still "preparing preview…" forever.
 - 2026-10-18 ~21:30 (box clock): **wave 13 merged except CANVAS2**: PRICED `e24e499` (journal hold on priced stages for
   clips joining a running index; released only by the re-run, a new index, or Index; re-run notes name every new clip;
   "Black Video" via `rcClipName`) + lead `ef98558` (Effect Controls / A1 hover names); SMALL4 `1ce93ec` (verdict 9's
