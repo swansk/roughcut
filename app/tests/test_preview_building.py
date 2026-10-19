@@ -833,9 +833,24 @@ def _slow_heads(server, monkeypatch, delay_s: float = HEAD_SLOW_S) -> None:
     real = server.build_preview
 
     def slow(src, dest, orient, span=None):
-        if span is not None:
-            time.sleep(delay_s)
-        return real(src, dest, orient, span=span)
+        if span is None:
+            return real(src, dest, orient, span=span)
+        # as a real head encodes, in delay_s all told: a start-up, then its frames out at an
+        # even pace, each ffmpeg progress report handed on (`preview_progress`, wave 16).
+        # The fixture's own encode (a fraction of a second) is made first, unreported.
+        t0 = time.monotonic()
+        cb = getattr(server._PREVIEW_PROGRESS, "cb", None)
+        with server.preview_progress(None):
+            how = real(src, dest, orient, span=span)
+        rest = max(0.0, delay_s - (time.monotonic() - t0))
+        start = min(0.5, delay_s / 4, rest)
+        time.sleep(start)
+        steps = max(1, int((rest - start) / server.HEAD_PROGRESS_S))
+        for k in range(1, steps + 1):
+            time.sleep((rest - start) / steps)
+            if cb is not None:
+                cb(span[0] + (span[1] - span[0]) * k / steps)
+        return how
 
     monkeypatch.setattr(server, "build_preview", slow)
     # what the box measured a head at: the estimate this test checks against the real wait

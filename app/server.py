@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import ctypes
 import gc
 import json
 import math
@@ -85,6 +86,191 @@ from roughcut import media as mediamod  # noqa: E402
 # Stop means stop (verdict 3, punch 5): a job thread inside a `procscope.active` block
 # starts its tools in their own process groups, and its cancel kills them.
 procscope.install()
+
+# ---------------------------------------------------------------- the server's own memory
+#
+# Verdict 12 punch 7: on Killington the box swapped during the first pass, and the board's
+# holds came with the loop barely on CPU. Measured (wave 16, lane SRVBUDGET2): the server's
+# own RSS went from 105 MB to 330 MB through a pass, ~250 MB of it in glibc's per-thread
+# malloc arenas (sixteen 64 MB arenas, 17-39 MB resident each; 9 700 Python objects live
+# beside the 69 000 frozen at start) — freed buffers (range reads' MiB chunks, sidecar
+# JSON, tool output) kept for a reuse that comes minutes later. Those cold pages are what
+# the kernel swapped out (53 MB of the server), and the next burst faulted them back in
+# with the GIL held: one major fault on a swapping box held the loop 100-700 ms (`cause`
+# "faults" in /api/debug/slow). So the threads share MALLOC_ARENAS arenas (the GIL
+# serialises nearly every allocation anyway), set before any thread exists, and every
+# MEM_TRIM_S what is free goes back to the kernel (`malloc_trim`, off the GIL).
+MALLOC_ARENAS = 2
+MEM_TRIM_S = 20.0
+M_ARENA_MAX = -8
+
+
+def _glibc():
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        lib = ctypes.CDLL("libc.so.6")
+        lib.malloc_trim.argtypes = [ctypes.c_size_t]
+        lib.mallopt.argtypes = [ctypes.c_int, ctypes.c_int]
+        return lib
+    except (OSError, AttributeError):          # not glibc (musl, macOS): nothing to tune
+        return None
+
+
+_LIBC = _glibc()
+MEM: dict = {"arenas": None, "trims": 0, "trimmed_mb": 0.0, "last_trim_mb": None, "thread": None,
+             "locked_mb": None}
+try:
+    _ARENAS = int(os.environ.get("ROUGHCUT_MALLOC_ARENAS", MALLOC_ARENAS))   # 0: glibc's own
+except ValueError:
+    _ARENAS = MALLOC_ARENAS
+if _LIBC is not None and _ARENAS > 0:
+    try:
+        if _LIBC.mallopt(M_ARENA_MAX, _ARENAS):
+            MEM["arenas"] = _ARENAS
+    except (OSError, ctypes.ArgumentError):
+        pass
+
+
+def _rss_mb() -> float | None:
+    try:
+        with open("/proc/self/statm", "rb") as fh:
+            return int(fh.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 2**20
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def mem_trim() -> float | None:
+    """Hand the allocator's free memory back to the kernel now; returns the MB the RSS
+    fell by (None where there is no glibc). ctypes drops the GIL for the call."""
+    if _LIBC is None:
+        return None
+    before = _rss_mb()
+    try:
+        _LIBC.malloc_trim(0)
+    except (OSError, ctypes.ArgumentError):
+        return None
+    after = _rss_mb()
+    MEM["trims"] += 1
+    if before is not None and after is not None:
+        MEM["last_trim_mb"] = round(before - after, 1)
+        MEM["trimmed_mb"] = round(MEM["trimmed_mb"] + max(0.0, before - after), 1)
+        return before - after
+    return None
+
+
+def _mem_trim_loop() -> None:
+    while True:
+        time.sleep(MEM_TRIM_S)
+        mem_trim()
+        if MEM.get("locked_mb"):
+            lock_resident(heap=False)
+
+
+def start_mem_trim() -> None:
+    t = MEM.get("thread")
+    if _LIBC is None or (t is not None and t.is_alive()):
+        return
+    t = MEM["thread"] = threading.Thread(target=_mem_trim_loop, name="mem trim", daemon=True)
+    t.start()
+
+
+# ...and what the loop runs on stays in memory. Trimming leaves nothing cold in the arenas,
+# but the interpreter, the modules and every object frozen at start (the code a poster
+# burst at the pass's end runs, unused for minutes) are as swappable, and the judge's holds
+# at that burst were 0.4-0.9 s with the process all but off the CPU. So once the server is
+# configured, before it serves, those pages are locked as they are (`mlock2`, MLOCK_ONFAULT:
+# nothing not already resident is read in): the main heap, the main thread's stack, the
+# small anonymous maps (the allocator's 1 MiB object arenas) and the shared libraries' —
+# never a thread's 64 MB malloc arena, a thread stack or a big buffer, which the trim hands
+# back instead; and every MEM_TRIM_S the object arenas Python has made since (Killington,
+# wave 16: a 497 ms garbage collection that faulted 119 pages back in). ~120 MB mapped;
+# within RLIMIT_MEMLOCK or not at all (ROUGHCUT_MLOCK=0: off).
+MLOCK_ONFAULT = 1
+LOCK_SMALL_MAP = 4 << 20
+GLIBC_HEAP_MAX = 64 << 20       # a 64-bit glibc's thread arena heap (HEAP_MAX_SIZE)
+
+
+def lock_resident(heap: bool = True) -> float | None:
+    """Lock the pages resident now that the loop runs on (see above); returns the MB of
+    mappings locked, None where it cannot be done (not glibc, off, or refused). Asked
+    again (`heap` False: the trim thread, every MEM_TRIM_S) it locks what has been mapped
+    since — the object arenas Python made since, a library imported late — and leaves the
+    main heap's growth to the trim."""
+    if _LIBC is None or os.environ.get("ROUGHCUT_MLOCK", "1") == "0":
+        return None
+    try:
+        mlock2 = _LIBC.mlock2
+        mlock2.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+        maps = Path("/proc/self/maps").read_text().splitlines()
+    except (AttributeError, OSError):
+        return None
+    exe = os.path.realpath(sys.executable)
+    vmas = []
+    for line in maps:
+        parts = line.split(maxsplit=5)
+        if len(parts) < 5:
+            continue
+        a, b = (int(x, 16) for x in parts[0].split("-"))
+        vmas.append((a, b, parts[1], parts[5].strip() if len(parts) > 5 else ""))
+    # glibc's thread arenas: 64 MB windows, each starting on a 64 MB boundary
+    win = GLIBC_HEAP_MAX
+    heaps = {a for a, _b, _p, name in vmas if not name and a % win == 0}
+    done = 0
+    for a, b, perms, name in vmas:
+        if perms.startswith("---"):
+            continue                                  # a guard or a reservation
+        if name in ("[heap]", "[stack]"):
+            if not heap:
+                continue
+        elif not name:
+            if b - a >= LOCK_SMALL_MAP or (a - a % win) in heaps:
+                continue                              # a malloc arena, a thread stack, a buffer
+        elif not (name == exe or ".so" in Path(name).name):
+            continue                                  # a data file someone mapped: not code
+        if mlock2(a, b - a, MLOCK_ONFAULT) != 0:
+            break                                     # past RLIMIT_MEMLOCK: what is locked stays
+        done += b - a
+    if heap:
+        MEM["locked_mb"] = round(done / 2**20, 1) if done else None
+    else:
+        MEM["relocks"] = MEM.get("relocks", 0) + 1
+    return round(done / 2**20, 1) if done else None
+
+
+class _MallInfo2(ctypes.Structure):
+    _fields_ = [(k, ctypes.c_size_t) for k in ("arena", "ordblks", "smblks", "hblks", "hblkhd",
+                                               "usmblks", "fsmblks", "uordblks", "fordblks",
+                                               "keepcost")]
+
+
+def mem_stats() -> dict:
+    """The allocator's own account (glibc `mallinfo2`): MB in its arenas, in use and free,
+    and in direct mmaps; the arena cap and the trims so far; what is locked (`lock_resident`)
+    and resident locked, and the process's swap."""
+    out: dict = {"arenas_max": MEM["arenas"], "trims": MEM["trims"],
+                 "trimmed_mb": MEM["trimmed_mb"], "last_trim_mb": MEM["last_trim_mb"],
+                 "locked_mb": MEM.get("locked_mb"), "relocks": MEM.get("relocks", 0)}
+    try:
+        for line in Path("/proc/self/smaps_rollup").read_text().splitlines():
+            k, _, v = line.partition(":")
+            if k in ("Locked", "Swap"):
+                out[f"{k.lower()}_resident_mb" if k == "Locked" else "swap_mb"] = \
+                    round(int(v.split()[0]) / 1024, 1)
+    except (OSError, ValueError, IndexError):
+        pass
+    if _LIBC is None:
+        return out
+    try:
+        f = _LIBC.mallinfo2
+        f.restype = _MallInfo2
+        mi = f()
+    except (AttributeError, OSError):
+        return out
+    mb = 2**20
+    out.update(arena_mb=round(mi.arena / mb, 1), in_use_mb=round(mi.uordblks / mb, 1),
+               free_mb=round(mi.fordblks / mb, 1), mmap_mb=round(mi.hblkhd / mb, 1))
+    return out
 
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent / "research" / "tools"
@@ -1815,7 +2001,7 @@ SLOW_KEEP = 50
 SLOW: list[dict] = []
 SLOWEST: dict = {"all": None, "api": None, "loop": None}
 _LOOP_WATCH: dict = {"task": None, "beat": None, "tid": None, "sampler": None, "hold": None,
-                     "cpu_base": None}
+                     "cpu_base": None, "ntid": None, "ring": None}
 # The budget (wave 14, verdict 10 punch 1: "no request > 300 ms and no loop hold > 200
 # ms" during a first pass, an export and an effect check): what is over it is kept apart
 # (`over_budget`, the last 50), each loop hold with `where` the loop was and which threads
@@ -1879,11 +2065,114 @@ def _thread_cpu() -> dict[int, float]:
     return out
 
 
+# What the box did to the process (wave 16, verdict 12 punch 7): the judge's Killington
+# holds (227-651 ms) had the loop "barely on CPU while the box swapped", and a Python
+# sampler cannot say why — it needs the GIL itself. The kernel can: the loop thread's
+# run-queue wait (`/proc/self/task/<tid>/schedstat`: runnable and not run, a starved CPU),
+# the process's major faults (`/proc/self/stat`: pages read back from swap, the GIL held
+# by whoever touched them) and the time this process spent collecting garbage (one thread,
+# the GIL held, every tracked object touched). Each hold and each request over the budget
+# carries the three over its span, and `cause` says which of them explains it.
+GC_WATCH: dict = {"t0": None, "ms": 0.0, "n": 0, "longest": None}
+LOOP_RING_N = 64             # the sampler's last readings (~2.5 s): a request's baseline
+
+
+def _gc_watch(phase: str, info: dict) -> None:
+    if phase == "start":
+        GC_WATCH["t0"] = time.perf_counter()
+        return
+    t0 = GC_WATCH["t0"]
+    if t0 is None:
+        return
+    ms = (time.perf_counter() - t0) * 1000.0
+    GC_WATCH["t0"] = None
+    GC_WATCH["ms"] += ms
+    GC_WATCH["n"] += 1
+    top = GC_WATCH["longest"]
+    if top is None or ms > top["ms"]:
+        GC_WATCH["longest"] = {"ms": round(ms, 1), "generation": info.get("generation"),
+                               "collected": info.get("collected"), "at": time.time()}
+
+
+if _gc_watch not in gc.callbacks:
+    gc.callbacks.append(_gc_watch)
+
+
+def _box_now() -> tuple:
+    """(the loop thread's run-queue wait so far in ms, the process's major faults so far,
+    the garbage collections' time so far in ms); None where /proc does not say (not
+    Linux, or before the watcher knows the loop thread)."""
+    rq = None
+    ntid = _LOOP_WATCH.get("ntid")
+    if ntid is not None:
+        try:
+            with open(f"/proc/self/task/{ntid}/schedstat", "rb") as fh:
+                rq = int(fh.read().split()[1]) / 1e6
+        except (OSError, ValueError, IndexError):
+            rq = None
+    maj = None
+    try:
+        with open("/proc/self/stat", "rb") as fh:
+            st = fh.read()
+        maj = int(st[st.rindex(b")") + 2:].split()[9])
+    except (OSError, ValueError, IndexError):
+        maj = None
+    return rq, maj, GC_WATCH["ms"]
+
+
+def _box_since(base) -> dict:
+    """The run-queue wait, major faults and GC time since `base` (a `_box_now()`)."""
+    if base is None:
+        return {}
+    rq, maj, gcms = _box_now()
+    out: dict = {"gc_ms": round(gcms - base[2], 1)}
+    if rq is not None and base[0] is not None:
+        out["rq_ms"] = round(rq - base[0], 1)
+    if maj is not None and base[1] is not None:
+        out["majflt"] = maj - base[1]
+    return out
+
+
+def _box_before(t: float):
+    """The sampler's last reading taken at or before perf_counter `t` (None: none kept)."""
+    best = None
+    for at, box in list(_LOOP_WATCH.get("ring") or ()):
+        if at > t:
+            break
+        best = box
+    return best
+
+
+def _cause(ms: float, w: dict) -> str:
+    """What explains a hold (or a request) of `ms`: "gc" (this process collecting garbage),
+    "loop" (the loop thread ran server code: sync work on the loop), "thread" (another
+    server thread ran with the GIL), "starved" (the loop thread was runnable and the box
+    did not run it), "faults" (pages read back from swap while the GIL was held) or "?";
+    a request's "server" is the process's own CPU through it (every thread)."""
+    half = 0.5 * ms
+    if float(w.get("gc_ms") or 0) >= half:
+        return "gc"
+    if float(w.get("loop_cpu_ms") or 0) >= half:
+        return "loop"
+    if float(w.get("busy_cpu_ms") or 0) >= half:
+        return "thread"
+    if "loop_cpu_ms" not in w and float(w.get("proc_cpu_ms") or 0) >= half:
+        return "server"              # a request: the process worked through it
+    if float(w.get("rq_ms") or 0) >= half:
+        return "starved"
+    if int(w.get("majflt") or 0) > 0:
+        return "faults"
+    return "?"
+
+
 def _loop_sampler() -> None:
     """A thread beside the loop. While the loop keeps its beat it notes every thread's
-    CPU time (the baseline a hold is measured from); while the loop has missed its beat
-    by more than a tick it notes where the loop thread is — the loop running sync work
-    shows its own frames, a loop waiting for the GIL shows the selector."""
+    CPU time (the baseline a hold is measured from) and what the box has done to the
+    process so far (`_box_now`, kept a few seconds: a request's baseline); while the loop
+    has missed its beat by more than a tick it notes where the loop thread is — the loop
+    running sync work shows its own frames, a loop waiting for the GIL shows the selector."""
+    from collections import deque
+    ring = _LOOP_WATCH["ring"] = deque(maxlen=LOOP_RING_N)
     while True:
         time.sleep(LOOP_SAMPLE_S)
         beat, tid = _LOOP_WATCH.get("beat"), _LOOP_WATCH.get("tid")
@@ -1891,7 +2180,9 @@ def _loop_sampler() -> None:
         if beat is None or tid is None:
             continue
         if now - beat < LOOP_TICK_S * 2:
-            _LOOP_WATCH["cpu_base"] = (beat, _thread_cpu(), time.process_time())
+            box = _box_now()
+            _LOOP_WATCH["cpu_base"] = (beat, _thread_cpu(), time.process_time(), box)
+            ring.append((now, box))
             continue
         frames = sys._current_frames()
         hold = _LOOP_WATCH.get("hold")
@@ -1929,11 +2220,14 @@ def _hold_where(beat: float) -> dict:
     out["busy_cpu_ms"] = round(ran[0][0] * 1000.0, 1) if ran else 0.0
     # the whole process (threads that ended meanwhile, and work beside the GIL too)
     out["proc_cpu_ms"] = round((time.process_time() - base[2]) * 1000.0, 1)
+    # what the box did meanwhile: the loop's run-queue wait, major faults, GC time
+    out.update(_box_since(base[3] if len(base) > 3 else None))
     return out
 
 
 async def _loop_lag() -> None:
     _LOOP_WATCH["tid"] = threading.get_ident()
+    _LOOP_WATCH["ntid"] = threading.get_native_id()
     sampler = _LOOP_WATCH.get("sampler")
     if sampler is None or not sampler.is_alive():
         sampler = _LOOP_WATCH["sampler"] = threading.Thread(
@@ -1949,6 +2243,8 @@ async def _loop_lag() -> None:
         where = _hold_where(t0) if lag >= 20.0 else None
         if lag > 0 and (top is None or lag > top["ms"]):
             SLOWEST["loop"] = {"ms": round(lag, 1), "at": time.time(), "where": where}
+        if where is not None:
+            where["cause"] = _cause(lag, where)
         if lag >= LOOP_BUDGET_MS:
             row = {"method": "LOOP", "path": "(the event loop was held)", "handler": "-",
                    "ms": round(lag, 1), "status": None, "at": time.time(), "where": where}
@@ -1963,6 +2259,8 @@ async def _loop_lag() -> None:
                 del SLOW[:-SLOW_KEEP]
                 w = row["where"] or {}
                 print(f"  !! the event loop was held {lag:.0f} ms"
+                      + (f" ({w.get('cause')}: rq {w.get('rq_ms')} ms, {w.get('majflt')} faults, "
+                         f"gc {w.get('gc_ms')} ms)" if w.get("cause") else "")
                       + (f" — loop at {w.get('loop')}" if w.get("loop") else "")
                       + (f"; ran: {'; '.join(w['busy'])}" if w.get("busy") else ""), flush=True)
 
@@ -2043,20 +2341,60 @@ class RequestTiming:
                         row["load"] = round(os.getloadavg()[0], 1)
                     except OSError:
                         pass
+                    # and what the box did to the process meanwhile (wave 16): the loop's
+                    # run-queue wait, major faults, GC time — from the sampler's last
+                    # reading before the request began
+                    row.update(_box_since(_box_before(t0)))
+                    row["cause"] = _cause(row["ms"], row)
                 note_request(row)
 
 
 app.add_middleware(RequestTiming)
 
 
+def _heap_types(n: int = 25) -> dict:
+    """The live objects the collector tracks, by type: the commonest `n` with their count and
+    shallow size (MB), and the totals."""
+    counts: dict[str, list] = {}
+    objs = gc.get_objects()
+    for o in objs:
+        k = type(o).__name__
+        c = counts.get(k)
+        if c is None:
+            c = counts[k] = [0, 0]
+        c[0] += 1
+        try:
+            c[1] += sys.getsizeof(o)
+        except TypeError:
+            pass
+    top = sorted(counts.items(), key=lambda kv: -kv[1][0])[:n]
+    return {"tracked": len(objs), "frozen": gc.get_freeze_count(),
+            "types": [[k, c, round(b / 2**20, 2)] for k, (c, b) in top]}
+
+
 @app.get("/api/debug/slow")
-def api_debug_slow() -> JSONResponse:
+def api_debug_slow(heap: int = 0) -> JSONResponse:
     """Read-only: the last 50 requests over SLOW_MS (and event-loop holds), and the
     slowest request (`slowest`) and slowest `/api/` request (`slowest_api`) seen; the
     budget (`budget`: a request's first byte within 300 ms, the loop never held 200 ms)
     with the last 50 over it (`over_budget`, holds with `where`) and the longest hold
-    (`slowest_loop`)."""
+    (`slowest_loop`); `gc` (collections, their time, the longest), `rss_mb` and `malloc`
+    (the allocator's arenas, in use / free, and its trims: `mem_stats`). Each row
+    over the budget has `cause` (`_cause`) with the loop's run-queue wait (`rq_ms`), the
+    major faults (`majflt`) and the GC time (`gc_ms`) over its span. `?heap=1` adds the
+    commonest live object types (a walk of every object, the GIL held: a look, not a poll)."""
+    rss = None
+    try:
+        with open("/proc/self/statm", "rb") as fh:
+            rss = round(int(fh.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 2**20, 1)
+    except (OSError, ValueError, IndexError):
+        pass
     return JSONResponse({"threshold_ms": SLOW_MS, "slowest": SLOWEST["all"],
+                         "gc": {"n": GC_WATCH["n"], "ms": round(GC_WATCH["ms"], 1),
+                                "longest": GC_WATCH["longest"], "count": list(gc.get_count()),
+                                "frozen": gc.get_freeze_count()},
+                         "rss_mb": rss, "malloc": mem_stats(),
+                         **({"heap": _heap_types()} if heap else {}),
                          "slowest_api": SLOWEST["api"], "slowest_loop": SLOWEST["loop"],
                          "budget": {"request_ms": REQUEST_BUDGET_MS, "loop_ms": LOOP_BUDGET_MS},
                          "over_budget": list(OVER_BUDGET), "slow": list(SLOW)})
@@ -6166,11 +6504,16 @@ POSTER_AT_S = 1.0
 
 
 def poster_time(clip: str) -> float:
-    """Where a clip's card frame is taken: POSTER_AT_S, or half a shorter clip; 0 while
-    its length is not known yet (cached lengths only — this never probes)."""
+    """Where a clip's card frame is taken: POSTER_AT_S, or half a clip shorter than twice
+    that. Cached lengths only (this never probes), and the same answer before the length
+    is known as after it for every clip of 2 s or more: POSTER_AT_S (wave 16: it said 0
+    until then, so a card drawn while the clip's facts were still being probed on a loaded
+    box kept a `?t=0.00` poster the Project panel, asking a moment later, had at `?t=1.00`
+    — two pictures of one clip, and a frame the walk never pre-builds). A clip found shorter
+    moves once, to its middle; a frame past the end is cut at 0 (build_poster)."""
     d = STATE.get("durations", {}).get(clip)
     if not d:
-        return 0.0
+        return POSTER_AT_S
     return round(min(POSTER_AT_S, float(d) / 2), 2)
 
 
@@ -6236,7 +6579,7 @@ def api_clips() -> JSONResponse:
             "captured": capture_time(clip) if ok else None,
             "session": session_of.get(clip),
             "proxy": (STATE["proxy_dir"] / f"{stem}.mp4").exists(),
-            "poster": poster_url(stem, poster_time(clip) if ok else 0.0),
+            "poster": poster_url(stem, poster_time(clip)),
             "analysed": stem in heard,
             "looked": stem in looked,
             "closed": stem in closed,
@@ -9142,14 +9485,62 @@ def build_preview(src: Path, dest: Path, orient: str,
     tmp = dest.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part.mp4")
     err = ""
     for name, args in paths:
-        r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", *args, *tail,
-                            str(tmp)], capture_output=True, text=True)
-        if r.returncode == 0 and tmp.exists() and tmp.stat().st_size:
+        rc, stderr = _preview_run(["ffmpeg", "-v", "error", "-y", "-nostdin", *args, *tail,
+                                   str(tmp)])
+        if rc == 0 and tmp.exists() and tmp.stat().st_size:
             tmp.replace(dest)
             return name
-        err = r.stderr[-300:]
+        err = stderr[-300:]
         tmp.unlink(missing_ok=True)
     raise RuntimeError(f"preview failed for {src.name}: {err}")
+
+
+_PREVIEW_PROGRESS = threading.local()
+_PROGRESS_LINE = re.compile(r"^[a-z0-9_]+=")
+
+
+@contextmanager
+def preview_progress(cb: Callable[[float], None] | None):
+    """`build_preview` on this thread in the block reports its encode as it goes: `cb(output
+    seconds)` at every ffmpeg progress report (a head's: the wait line's estimate)."""
+    prev = getattr(_PREVIEW_PROGRESS, "cb", None)
+    _PREVIEW_PROGRESS.cb = cb
+    try:
+        yield
+    finally:
+        _PREVIEW_PROGRESS.cb = prev
+
+
+def _preview_run(cmd: list[str]) -> tuple[int, str]:
+    """`cmd` (an ffmpeg) run to its end: (returncode, its error text). With a progress
+    callback on this thread (`preview_progress`), ffmpeg reports every HEAD_PROGRESS_S on its
+    stdout (`-progress pipe:1`, its errors merged in) and each `out_time_us` is handed on as
+    it comes."""
+    cb = getattr(_PREVIEW_PROGRESS, "cb", None)
+    if cb is None:
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        return r.returncode, r.stderr
+    full = [cmd[0], "-progress", "pipe:1", "-stats_period", f"{HEAD_PROGRESS_S:g}", "-nostats",
+            *cmd[1:]]
+    err: list[str] = []
+    proc = subprocess.Popen(full, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, bufsize=1)
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            if line.startswith("out_time_us="):
+                v = line[len("out_time_us="):].strip()
+                if v.lstrip("-").isdigit():
+                    try:
+                        cb(int(v) / 1e6)
+                    except Exception:  # noqa: BLE001 — a report must never cost the encode
+                        pass
+            elif not _PROGRESS_LINE.match(line):
+                err.append(line)
+                del err[:-20]
+    finally:
+        rc = proc.wait()
+    return rc, "".join(err)
 
 
 def needs_preview(clip: str) -> bool:
@@ -9402,14 +9793,36 @@ HEAD_NAME = re.compile(r"^(?P<stem>[A-Za-z0-9._-]+)\.head(?P<a>\d+)\.(?P<v>[a-z0
 # encode is HEAD_START_S of start-up and the measured seconds per footage second
 # (`head_rate`, HEAD_RATE until one is measured: 8 s of a 4K HEVC GoPro clip took 1.8-3.5 s
 # on the GPU here at load 6-14, 0.1-0.3 s a second past the start-up), slower in proportion
-# past HEAD_LOAD_CORES x the cores busy (14 s took 7.3 s at load 16 on 6 cores), and
+# past HEAD_LOAD_CORES x the cores busy (14 s took 7.3 s at load 16 on 6 cores; 8 s took
+# 3.5-4.0 s at load 2.8-14 in wave 16: below that the load says little), and
 # HEAD_PLAY_S more until its first frame is on screen (the board's long-poll answers, the
 # buffer loads the head and shows its frame: 0.3-0.5 s on Killington).
 HEAD_START_S = 1.0
-HEAD_RATE = {True: 0.15, False: 1.0}
-HEAD_PLAY_S = 0.5
-HEAD_LOAD_CORES = 1.5
+# Verdict 12 punch 10: "~3 s" at +0.6 s and "~1 s" at +5 s for a head that played at +5-8 s.
+# The judge's four fresh-import heads (8 s of KX_03, a 4K HEVC GoPro clip, with the bin's
+# own previews being made beside it) took 3.6-4.0 s at load 2.8-9.7, 0.33-0.38 s a footage
+# second past the start-up — not the 0.15 this said before a head was measured. The first
+# head of a session is the one that is waited on, and it is usually never measured (the
+# one made for the clip's end, after the insert, is stopped by the seek). Wave 16's own
+# trials (load 12-19): 3.5-5.4 s.
+HEAD_RATE = {True: 0.36, False: 1.0}
+# ...and from the head made to its picture on the board (the long-poll answers, the buffer
+# loads the head, its frame shows): 0.3-0.5 s on a quiet Killington box, 0.4-0.9 s in
+# wave 16's trials at load 12-19; and between the encode's last report and the head being
+# made (the muxer's faststart rewrite, the GPU's teardown, the process's exit): 0.2-0.6 s,
+# measured per head after the first (`head_tail`).
+HEAD_PLAY_S = 0.6
+HEAD_LOAD_CORES = 2.5
 HEAD_STOP_S = 0.2        # a head for a time the monitor left, stopped before the next starts
+# Once frames flow the estimate is the encode's own: ffmpeg reports its output time every
+# HEAD_PROGRESS_S (`-progress`), and the seconds left are the footage seconds left at the
+# speed it has made them since its first report (after HEAD_PROGRESS_MIN_S of them), plus
+# the tail (`head_tail`, HEAD_TAIL_S until measured). Before then: the prior, never below
+# HEAD_LEFT_MIN_S.
+HEAD_PROGRESS_S = 0.25
+HEAD_PROGRESS_MIN_S = 0.4
+HEAD_TAIL_S = 0.5
+HEAD_LEFT_MIN_S = 1.0
 
 
 def _head_load() -> float:
@@ -9486,15 +9899,40 @@ def heads_building() -> bool:
         return any(str(k).startswith("head:") for k in MEDIA["building"])
 
 
-def _head_est(span: tuple[float, float]) -> float:
+def _head_encode(span: tuple[float, float]) -> float:
+    """The prior for a head's encode once its frames flow (its start-up not counted)."""
     rate = MEDIA.get("head_rate") or HEAD_RATE[bool(MEDIA.get("gpu"))]
-    return HEAD_START_S + max(0.5, span[1] - span[0]) * rate * _head_load()
+    return max(0.5, span[1] - span[0]) * rate * _head_load()
+
+
+def _head_est(span: tuple[float, float]) -> float:
+    return HEAD_START_S + _head_encode(span)
+
+
+def _head_left(build: dict, now: float) -> float:
+    """Encode seconds left of a head under way (`build`: its head_build entry, `t0` set):
+    from its progress once frames flow (`p0`, `p`: (monotonic, footage seconds made) of its
+    first and newest report), else the prior less how long it has run — and while no frame
+    has come out, never less than the encode's own prior: a start-up running long is not
+    nearly done (verdict 12: "~1 s" for seconds on end)."""
+    span = build["span"]
+    p0, p = build.get("p0"), build.get("p")
+    if p0 is not None and p is not None and p[0] - p0[0] >= HEAD_PROGRESS_MIN_S and p[1] > p0[1]:
+        speed = (p[1] - p0[1]) / (p[0] - p0[0])            # footage seconds a second
+        left = (max(0.0, (span[1] - span[0]) - p[1])) / speed - (now - p[0])
+        return max(0.1, left) + (MEDIA.get("head_tail") or HEAD_TAIL_S)
+    left = _head_est(span) - (now - build["t0"])
+    if p is None:                                          # no frame out yet
+        left = max(left, _head_encode(span))
+    elif p[1] > 0:                                         # frames flowing, too soon to time
+        left = max(left, _head_encode(span) * (1.0 - p[1] / max(0.5, span[1] - span[0])))
+    return max(HEAD_LEFT_MIN_S, left)
 
 
 def head_eta(clip: str) -> float | None:
-    """Seconds until the head being made for `clip` plays (its encode's estimate less how
-    long it has run, plus the head encode ahead of it in HEAD_SLOTS), or None when no head
-    is being made for it."""
+    """Seconds until the head being made for `clip` plays (what is left of its encode,
+    `_head_left`: measured from its progress once frames flow; plus the head encode ahead
+    of it in HEAD_SLOTS), or None when no head is being made for it."""
     stem = Path(clip).stem
     now = time.monotonic()
     with MEDIA["lock"]:
@@ -9511,10 +9949,9 @@ def head_eta(clip: str) -> float | None:
         # and the one for the newest time is made next (_build_heads)
         return round(HEAD_STOP_S + _head_est(head_span(clip, want)) + HEAD_PLAY_S, 1)
     if mine.get("t0") is not None:
-        return round(max(1.0, _head_est(mine["span"]) - (now - mine["t0"])) + HEAD_PLAY_S, 1)
+        return round(_head_left(mine, now) + HEAD_PLAY_S, 1)
     # waiting for the one slot: the running head's time left, then its own
-    ahead = [max(0.0, _head_est(b["span"]) - (now - b["t0"])) for b in builds.values()
-             if b.get("t0") is not None]
+    ahead = [_head_left(b, now) for b in builds.values() if b.get("t0") is not None]
     return round(min(ahead, default=0.0) + _head_est(mine["span"]) + HEAD_PLAY_S, 1)
 
 
@@ -9614,7 +10051,22 @@ def _build_head(clip: str, src: Path, dest: Path, span: tuple[float, float], ori
                     cur["t0"] = t0           # the encode began: head_eta counts from here
             if scope.cancelled:
                 raise RuntimeError("stopped before it started")
-            with procscope.active(scope), procscope.tagged(str(preview_path(stem))):
+
+            def made(out_s: float) -> None:
+                # ffmpeg's output time is clip time from the second frame on (build_preview's
+                # setpts puts the head's frames back at a..b; its first is at 0)
+                if out_s < span[0] - 0.05:
+                    return
+                done = min(span[1] - span[0], max(0.0, out_s - span[0]))
+                with MEDIA["lock"]:
+                    cur = (MEDIA.get("head_build") or {}).get(stem)
+                    if cur is not None and cur.get("scope") is scope:
+                        mark = (time.monotonic(), done)
+                        cur.setdefault("p0", mark)
+                        cur["p"] = mark
+
+            with procscope.active(scope), procscope.tagged(str(preview_path(stem))), \
+                    preview_progress(made):
                 how = build_preview(src, dest, orient, span=span)
             took = time.monotonic() - t0
             # what a head costs here, for the wait line's estimate (head_eta)
@@ -9622,6 +10074,11 @@ def _build_head(clip: str, src: Path, dest: Path, span: tuple[float, float], ori
             with MEDIA["lock"]:
                 old = MEDIA.get("head_rate")
                 MEDIA["head_rate"] = round(per if old is None else 0.6 * old + 0.4 * per, 4)
+                last = ((MEDIA.get("head_build") or {}).get(stem) or {}).get("p")
+                if last is not None:          # its last report to made: the tail
+                    tail = min(3.0, max(0.05, time.monotonic() - last[0]))
+                    old = MEDIA.get("head_tail")
+                    MEDIA["head_tail"] = round(tail if old is None else 0.6 * old + 0.4 * tail, 3)
             meta = {"stem": Path(clip).stem, "clip": clip, "a": span[0], "b": span[1],
                     "picture_v": PICTURE_V, "orient": orient, "src": _range_src_id(src),
                     "how": how, "built_s": round(took, 2), "made": time.time()}
@@ -14030,6 +14487,11 @@ def main() -> int:
     # garbage: 44-58 ms a collection, 0 once frozen). What is alive now is kept out of it.
     gc.collect()
     gc.freeze()
+    # wave 16: what the loop runs on stays resident; the allocator's free memory goes back
+    locked = lock_resident()
+    if locked:
+        print(f"  locked {locked:.0f} MB the event loop runs on (never swapped out)", flush=True)
+    start_mem_trim()
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     return 0
 
