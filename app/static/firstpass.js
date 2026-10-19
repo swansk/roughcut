@@ -17,7 +17,7 @@
  *
  * — and one click opens its panel: the steps a run takes now, each with its price on
  * this backend ("free on your plan", the API estimate in the hover), the shots a
- * re-run keeps exactly (the ones edited by hand, named) and how many it may replace,
+ * re-run keeps exactly (the ones cut by hand, named) and how many it may replace,
  * then Run. The result is an ordinary Ask proposal: when it lands it opens in the
  * Assistant (app.js's `rcShowProposal`), with Play it / Accept / Discard as ever.
  *
@@ -116,14 +116,19 @@
     return `${label(s)} — index the footage, rank the picks, propose a rough cut`;
   }
 
-  /* What a re-run keeps, in one line: "Keeps 1 shot you edited by hand · may replace 3". */
+  /* What a re-run keeps, in one line: "Keeps 3 shots you cut by hand · keeps the grade on
+   * every shot it keeps · may replace 19". Only a cut made by hand (a trim, razor, move,
+   * speed change or insert) locks a shot's place; a grade or an effect, by hand or from
+   * the AI, rides on whatever shot survives (verdict 11, punch 6: after an AI Color Match
+   * over the film this read "may replace 0"). */
+  const KEEPS_GRADE = 'keeps the grade on every shot it keeps';
   function keepLine(w) {
     const keep = (w && w.keep) || [], rep = (w && w.replace) || [];
     if (!keep.length && !rep.length) return 'No cut yet — it proposes a first one.';
     if (!FP.keepMine) {
-      return `Keeps none of your shots · may replace all ${keep.length + rep.length}`;
+      return `Keeps none of your hand cuts · ${KEEPS_GRADE} · may replace all ${keep.length + rep.length}`;
     }
-    return `Keeps ${plural(keep.length, 'shot')} you edited by hand · may replace ${rep.length}`;
+    return `Keeps ${plural(keep.length, 'shot')} you cut by hand · ${KEEPS_GRADE} · may replace ${rep.length}`;
   }
 
   /* Verdict 4: a re-run brought back a shot the editor had rejected. What it will not
@@ -343,7 +348,7 @@
         `<li data-shot="${esc(r.id)}">${esc(shotLine(r))}</li>`).join('')}</ul>` : '';
     const toggleKeep = keep.length && !live
       ? `<label class="fp-keepmine"><input type="checkbox" data-fp="keepmine"${FP.keepMine ? ' checked' : ''}>`
-        + ' keep the shots I edited by hand, exactly</label>' : '';
+        + ' keep the shots I cut by hand, exactly</label>' : '';
     const p = s.proposal || {};
     const pending = !live && p.pending && p.job
       ? `<div class="fp-result">${esc(p.sentence || 'A proposed cut is waiting.')} `
@@ -413,7 +418,7 @@
       if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
       FP.watching = d.job;
       const k = (d.keep || []).length;
-      say(`first pass started — ${k ? `keeping ${plural(k, 'shot')} you edited by hand` : 'nothing changes until you accept'}`);
+      say(`first pass started — ${k ? `keeping ${plural(k, 'shot')} you cut by hand` : 'nothing changes until you accept'}`);
     } catch (e) {
       FP.err = `could not start: ${e.message || e}`;
     } finally {

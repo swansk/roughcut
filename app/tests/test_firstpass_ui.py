@@ -403,7 +403,8 @@ def test_run_accept_trim_rerun_keeps_the_trim(page, live):
     pg.evaluate("rcFirstPass.refresh()")
     _label(pg, "Re-run first pass")
     text = _one_click_to_panel(pg)
-    assert "Keeps 0 shots you edited by hand · may replace 2" in text, text
+    assert ("Keeps 0 shots you cut by hand · keeps the grade on every shot it keeps"
+            " · may replace 2") in text, text
     pg.keyboard.press("Escape")
 
     # ---- a manual trim (the board saves the whole cut; this is that save)
@@ -417,7 +418,8 @@ def test_run_accept_trim_rerun_keeps_the_trim(page, live):
     _label(pg, "Re-run first pass")
     assert pg.locator("#firstpass .fp-dot").is_visible(), "stale: the cut changed since"
     text = _one_click_to_panel(pg)
-    assert "Keeps 1 shot you edited by hand · may replace 1" in text, text
+    assert ("Keeps 1 shot you cut by hand · keeps the grade on every shot it keeps"
+            " · may replace 1") in text, text
     kept = pg.locator('[data-testid="firstpass-kept"] li')
     assert kept.count() == 1
     line = kept.first.inner_text()
