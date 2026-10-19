@@ -2013,6 +2013,7 @@ const TX_PRE_OUT = 0.45;
 const TX_RESEEK_S = 0.5;
 const TX_CATCH_S = 0.3;      // a drift is taken out over about this much film
 const TX_STEER = 0.6;        // the rate moves at most this far from the film's
+const TX_RATE_MS = 250;      // a steered rate changes at most this often (txFollow)
 
 function txFollow(el, seg, clipT, play) {
   const spd = speedOf(seg);
@@ -2036,7 +2037,18 @@ function txFollow(el, seg, clipT, play) {
   let k = 1;
   if (Math.abs(d) > 1 / 60) k = Math.max(1 - TX_STEER, Math.min(1 + TX_STEER, 1 - d / TX_CATCH_S));
   k = Math.round(k * 20) / 20;                       // steps of 5 %: no rate change per tick
-  if (Math.abs(el.playbackRate - r * k) > 1e-3) el.playbackRate = r * k;
+  // A rate change is a pipeline call (the renderer's SetPlaybackRate; the video renderer
+  // re-learns its cadence and drops frames meanwhile). Steered every few frames, 0.9 → 1 →
+  // 0.95 → 1 and then 1.1 → 1.15 → 1.2 → 1.15 → 1.25 → 1.2 … through the fixture's
+  // dissolve (traced, wave 13 CANVAS2: 13 changes in 0.6 s, the followers dropping frames
+  // and the live shot holding 83 ms among them). Now a new rate waits TX_RATE_MS after the
+  // last one, unless it is the film's own rate (the drift is gone) or a big step.
+  const want = r * k, cur = el.playbackRate, now = performance.now();
+  if (Math.abs(cur - want) > 1e-3
+      && (k === 1 || Math.abs(cur - want) >= 0.15 * r || now - (el._rateAt || 0) >= TX_RATE_MS)) {
+    el.playbackRate = want;
+    el._rateAt = now;
+  }
   if (el.paused) el.play().catch(() => {});
   return true;
 }
