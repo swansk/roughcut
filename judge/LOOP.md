@@ -49,6 +49,16 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-19 ~04:50 (box clock): **PLAY4 merged** `82d6854` (no `muted` toggles while playing: Chrome's audio clock jumped
+  40-80 ms at every prerolled cut; Killington dissolve plays with a hold > 67 ms 24/96 -> 7/144; a fresh import plays from a
+  360p head in 6.2-6.6 s, was ~21 s; black past the end; "Media offline" for a missing generated clip). **Lead full gate
+  on `82d6854`: RED** (2495 s, quiet box): 1717 passed, 3 broken = 2 stale expectations (fixed next commit) + the perf
+  line (live 83.3 ms in both runs at load 5.7 / 8.8; canvas 72.5 / 91.0 ms). An interleaved A/B on the quiet box,
+  test_latency_under_load: HEAD 1/3, `69fb0f0` 2/3 (load 5.6-8.5 from the test's own encodes): a coin flip on both, not
+  a PLAY4 regression; `69fb0f0`'s GREEN gate was the lucky side of it. **Deviation (again) from Cadence step 3: judge 11
+  launched with the perf line known RED**, because wave 14 is the whole of verdict 10's punch list and the perf bar's
+  flakiness needs the judge's ruling (CANVAS2's frame-clock proposal stays NOT adopted; the record already carries the
+  worker and frame clocks for the judge to read).
 - 2026-10-19 (box clock ~03:00): **wave 14 merged except PLAY4**: AIOPS3 `8f5b441` (verdict 10's lost colour = the AI line's
   clickable Undo under a Timeline-header click with Selects open; now text; Export flushes saves; an unsaved-edit watch
   heals + flags amber > 3 s, `window.saveHeals`; Look/Match Before/After via an in-memory LUT, `POST /api/lut/{sid}`),

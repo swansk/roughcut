@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **Loop state: PLAY4 merged; the lead's gate on 82d6854 RED on the perf line only (a coin flip on old and new code); judge 11 launched** (judge/LOOP.md).
 - **Two stale test expectations after wave 14** (the lead's gate on 82d6854 had them BROKEN): test_timeline_speed expects a generated clip's inspector name "Black Video" (POLISH10's rule), not its file name; test_effect_controls reads a clip's volume through meters.js's `rcAudio.levelOf` (PLAY4 hushes buffers through their GainNode, so the element's own `volume` is no longer the level once audio runs). 7 + 26 passed.
 - **Merge: wave 14 lane PLAY4** (dissolves: buffers go silent through their gain node, never by toggling `muted` while playing (Chrome's audio clock jumped 40-80 ms and dropped frames at every prerolled cut); the outgoing buffer plays the dissolve's outgoing half; ungraded dissolves draw through the canvas; the grade keeps the mix's size near a dissolve. Killington dissolve plays with a hold > 67 ms: 24/96 (25 %) -> 7/144 (4.9 %). A just-imported clip plays from a 360p "head" made where the monitor waits: first frame 6.2-6.6 s after the `,` at load 3.6-10 (was ~21 s). Parked past the end the Program is black; a missing generated clip says "Media offline").
 - **Loop state: wave 14 merged except PLAY4** (judge/LOOP.md).
