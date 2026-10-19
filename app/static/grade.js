@@ -81,19 +81,20 @@
     /* Lumetri beyond Basic (wave 11, LUMETRI): Curves and Color Wheels as one 256-entry
      * table per channel (u_ctab, built from THE formula by LUMETRI below), then the HSL
      * Secondary (u_hsl0..3), then the Vignette (wave 15, VIGNETTE: u_vig0..1, `vigU`
-     * below). roughcut/colour.py has the formula in words and the render's twin; `tex` is
-     * the GLSL texture call of the version. */
-    const CREATIVE = (tex) => `
+     * below) — compiled only into the programs a vignetted frame is drawn with (`vig`), so
+     * no other frame pays for its pow()s (a software GL runs both sides of a branch).
+     * roughcut/colour.py has the formula in words and the render's twin; `tex` is the GLSL
+     * texture call of the version. */
+    const CREATIVE = (tex, vig) => `
       uniform sampler2D u_ctab;
       uniform float u_ctabOn;
       uniform vec4 u_hsl0;      // hue°, width°, hue softness°, sat/light softness
       uniform vec4 u_hsl1;      // sat lo, sat hi, light lo, light hi (0..1)
       uniform vec4 u_hsl2;      // cos(shift), sin(shift), saturation/100
       uniform vec4 u_hsl3;      // the Cb, Cr offsets of temperature and tint
-      uniform float u_hslOn;
+      uniform float u_hslOn;${vig ? `
       uniform vec4 u_vig0;      // sx, p, 1/(sx^p + 1)^(1/p): the shape (THE formula's d)
-      uniform vec4 u_vig1;      // c − h, c + h, |amount|/5, [amount > 0]
-      uniform float u_vigOn;
+      uniform vec4 u_vig1;      // c − h, c + h, |amount|/5, [amount > 0]` : ''}
       float ctabAt(float v, int ch) {
         vec4 t = ${tex}(u_ctab, vec2(clamp(v, 0.0, 1.0) * (255.0 / 256.0) + 0.5 / 256.0, 0.5));
         return ch == 0 ? t.r : (ch == 1 ? t.g : t.b);
@@ -124,14 +125,12 @@
           float r2 = Y + 1.5748 * cr2, b2 = Y + 1.8556 * cb2;
           vec3 o = vec3(r2, (Y - 0.2126 * r2 - 0.0722 * b2) / 0.7152, b2);
           y = clamp(mix(y, o, w), 0.0, 1.0);
-        }
-        if (u_vigOn > 0.5) {
-          // Lumetri › Vignette: d from the centre (0) to a corner (1), w its falloff
-          vec2 q = abs(v_uv * 2.0 - 1.0);
-          float d = pow(pow(u_vig0.x * q.x, u_vig0.y) + pow(q.y, u_vig0.y), 1.0 / u_vig0.y) * u_vig0.z;
-          float s = u_vig1.z * smoothstep(u_vig1.x, u_vig1.y, d);
-          y = y * (1.0 - s) + u_vig1.w * s;
-        }
+        }${vig ? `
+        // Lumetri › Vignette: d from the centre (0) to a corner (1), its falloff, the move
+        vec2 q = abs(v_uv * 2.0 - 1.0);
+        float d = pow(pow(u_vig0.x * q.x, u_vig0.y) + pow(q.y, u_vig0.y), 1.0 / u_vig0.y) * u_vig0.z;
+        float s = u_vig1.z * smoothstep(u_vig1.x, u_vig1.y, d);
+        y = y * (1.0 - s) + u_vig1.w * s;` : ''}
         return y;
       }`;
 
@@ -169,7 +168,7 @@
      * usual played frame (a baked LUT, nothing on top) is not shaded through branches it
      * skips: a software GL shades both sides of a branch for every pixel. The output is the
      * full program's, value for value (each removed step is skipped there too). */
-    const FS2 = (yuv, lean) => `#version 300 es
+    const FS2 = (yuv, lean, vig) => `#version 300 es
       precision mediump float;
       precision mediump sampler3D;
       in vec2 v_uv;
@@ -184,7 +183,7 @@
       uniform vec4 u_tone;      // Lumetri blacks, shadows, highlights, whites, each /100
       uniform float u_toneOn;
       out vec4 outColor;
-      ${lean ? '' : CREATIVE('texture')}
+      ${lean ? '' : CREATIVE('texture', vig)}
       void main() {
         vec3 c = ${yuv ? 'yuvAt(v_uv)' : 'texture(u_video, v_uv).rgb'} * u_pre;${lean ? '' : `
         if (u_knee < 1.0) {
@@ -205,7 +204,7 @@
 
     // WebGL1: the table as an n × n² image. Bilinear inside a blue slice (red across,
     // green down), the blue interpolation by hand between the two neighbouring slices.
-    const FS1 = (lean) => `
+    const FS1 = (lean, vig) => `
       precision mediump float;
       varying vec2 v_uv;
       uniform sampler2D u_video;
@@ -218,7 +217,7 @@
       uniform float u_lift;
       uniform vec4 u_tone;
       uniform float u_toneOn;
-      ${lean ? '' : CREATIVE('texture2D')}
+      ${lean ? '' : CREATIVE('texture2D', vig)}
       void main() {
         vec3 c = texture2D(u_video, v_uv).rgb * u_pre;${lean ? '' : `
         if (u_knee < 1.0) {
@@ -284,7 +283,7 @@
       gl.useProgram(p);
       const U = { p, n: null };
       ['u_n', 'u_pre', 'u_con', 'u_sat', 'u_knee', 'u_lift', 'u_tone', 'u_toneOn',
-       'u_ctabOn', 'u_hsl0', 'u_hsl1', 'u_hsl2', 'u_hsl3', 'u_hslOn', 'u_vig0', 'u_vig1', 'u_vigOn',
+       'u_ctabOn', 'u_hsl0', 'u_hsl1', 'u_hsl2', 'u_hsl3', 'u_hslOn', 'u_vig0', 'u_vig1',
        'u_yuv', 'u_yoff', 'u_nv12'].forEach((k) => { U[k] = gl.getUniformLocation(p, k); });
       // unit 2 is Lumetri's curves table (ctabTex); the planes are on 3-5
       [['u_video', 0], ['u_lut', 1], ['u_ctab', 2], ['u_py', 3], ['u_pu', 4], ['u_pv', 5]].forEach(([k, i]) => {
@@ -312,6 +311,24 @@
       if (a.hsl && a.hsl.length === 16) return false;
       if (a.vig && a.vig[0]) return false;
       return true;
+    }
+    /* The program for a draw: 'lean', 'full', or 'vig' — the full one with Lumetri's
+     * Vignette (wave 15), compiled the first time a vignetted frame is drawn (a failed
+     * compile draws with the full one: the picture without its vignette). */
+    const kindFor = (a) => (a && a.vig && a.vig[0] ? 'vig' : leanFor(a) ? 'lean' : 'full');
+    const VIGP = {};
+    function progFor(yuv, kind) {
+      if (kind === 'vig') {
+        const k = yuv ? 'y' : 'r';
+        if (VIGP[k] === undefined) {
+          try { VIGP[k] = yuv ? (PY && program(FS2(true, false, true))) : program(gl2 ? FS2(false, false, true) : FS1(false, true)); }
+          catch (e) { VIGP[k] = null; }
+        }
+        if (VIGP[k]) return VIGP[k];
+        kind = 'full';
+      }
+      if (yuv) return kind === 'lean' ? PYL : PY;
+      return kind === 'lean' ? PRL : PR;
     }
     let U = PR;                   // the program in use, and its uniforms
     gl.useProgram(PR.p);
@@ -383,12 +400,11 @@
         gl.uniform1f(U.u_hslOn, 1);
       } else gl.uniform1f(U.u_hslOn, 0);
       const vg = a && a.vig;
-      if (vg && vg[0] && cw > 0 && ch > 0) {
+      if (U.u_vig0 && vg && vg[0] && cw > 0 && ch > 0) {      // a 'vig' program's
         const q = vigU(vg, cw, ch);
         gl.uniform4f(U.u_vig0, q[0], q[1], q[2], q[3]);
         gl.uniform4f(U.u_vig1, q[4], q[5], q[6], q[7]);
-        gl.uniform1f(U.u_vigOn, 1);
-      } else gl.uniform1f(U.u_vigOn, 0);
+      }
     }
 
     function texture2d(unit) {
@@ -462,8 +478,8 @@
      * process, measured 3 ms against 7-14 ms a frame at 384 px wide). A parked frame
      * already there (`key`) is not sent again: an Effect Controls change on a paused
      * monitor redraws with new uniforms only. */
-    function upload(src, sw, sh, w, h, key, lean) {
-      if (src && src.yuv) { frameKey = null; return planes(src, lean); }
+    function upload(src, sw, sh, w, h, key, kind) {
+      if (src && src.yuv) { frameKey = null; return planes(src, kind); }
       if (key && key === frameKey) return true;
       frameKey = null;
       try {
@@ -493,7 +509,7 @@
      * 1280x720 proxy in headless Chromium at load 13-20 (wave 11 CANVAS), the worker's own
      * time per frame: 0.4-2.7 ms, where the CPU scale into the 2D stage and its RGBA upload
      * took 10-12 ms (21 ms on the board's busier page). */
-    function planes(f, lean) {
+    function planes(f, kind) {
       if (!PY) return false;
       const nv12 = f.format === 'NV12';
       const filt = f.nearest ? gl.NEAREST : gl.LINEAR;
@@ -524,7 +540,7 @@
         gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
         return false;
       }
-      use(lean ? PYL : PY);
+      use(progFor(true, kind));
       gl.uniformMatrix3fv(U.u_yuv, false, f.mat);
       gl.uniform3f(U.u_yoff, f.off[0], f.off[1], f.off[2]);
       gl.uniform1f(U.u_nv12, nv12 ? 1 : 0);
@@ -542,9 +558,9 @@
       gl.viewport(0, 0, w, h);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, texVideo);
-      const lean = leanFor(adj);
-      if (!upload(src, sw, sh, w, h, parkedKey, lean)) return false;   // no frame yet; the next one will be
-      if (!src.yuv) use(lean ? PRL : PR);
+      const kind = kindFor(adj);
+      if (!upload(src, sw, sh, w, h, parkedKey, kind)) return false;   // no frame yet; the next one will be
+      if (!src.yuv) use(progFor(false, kind));
       if (!lut(key, n, data)) return false;
       current = key;
       if (U.n !== n) { U.n = n; gl.uniform1f(U.u_n, n); }
@@ -569,10 +585,10 @@
     function drawMix(mix, w, h) {
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, texVideo);
-      const lean = leanFor(mix.adj);
-      if (!upload(mix.src, mix.sw, mix.sh, w, h, null, lean)) return;
+      const kind = kindFor(mix.adj);
+      if (!upload(mix.src, mix.sw, mix.sh, w, h, null, kind)) return;
       frameKey = null;                       // the texture holds the other frame now
-      if (!mix.src.yuv) use(lean ? PRL : PR);
+      if (!mix.src.yuv) use(progFor(false, kind));
       if (!lut(mix.key, mix.n, mix.data)) return;
       current = mix.key;
       if (U.n !== mix.n) { U.n = mix.n; gl.uniform1f(U.u_n, mix.n); }
