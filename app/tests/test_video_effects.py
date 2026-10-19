@@ -5,7 +5,8 @@ Premiere's Effects panel › Video Effects: Blur & Sharpen › Gaussian Blur, Di
 Transform, Transform › Crop. Each is dragged from the bin onto a clip (or onto Effect
 Controls, or double-clicked with a clip selected) into that clip's Effect Controls stack,
 below Lumetri Color, with its fx toggle, order, reset, clear and a stopwatch on every
-number; the Program shows it at once (CSS on the picture's layers, effects.js `vfxLook`)
+number; the Program shows it at once (CSS on the picture's layers, effects.js `vfxLook`;
+Gaussian Blur and Sharpen in the grade canvas's shader since wave 16, test_vfx_playback.py)
 and the export draws the same (research/tools/assemble.py `vfx_graph`; roughcut/vfx.py
 has the schema and THE formulas; test_render_vfx.py the export's own measures). Done,
 verdict 10's words: a 10 % left Crop shows a black band in the Program and in the
@@ -233,7 +234,10 @@ def test_a_gaussian_blur_double_clicked_blurs_the_program_and_the_export(board, 
     for dx in range(20, 320, 20):                 # 0.1 a pixel: 30 px of Blurriness
         pg.mouse.move(x + dx, y)
     assert pg.evaluate("effects.value('blurriness@gaussian_blur')") == pytest.approx(30, abs=1)
-    assert "blur(" in pg.evaluate("getComputedStyle(liveVideo()).filter")   # live, mid-drag
+    # live, mid-drag: the grade canvas's shader blurs it (wave 16, VFXPLAY), at σ = Blurriness
+    pg.wait_for_function("grade.adjust && grade.adjust.vfx && grade.adjust.vfx[0].k === 'blur'")
+    st = pg.evaluate("grade.adjust.vfx[0]")
+    assert st["sx"] == st["sy"] == pytest.approx(30, abs=1), st
     pg.mouse.up()
     assert pg.locator("#undo").get_attribute("title").startswith("undo: gaussian blur blurriness")
     settle_program(pg, 2.5)

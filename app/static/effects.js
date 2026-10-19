@@ -517,13 +517,16 @@
    * a Transform is one more transform in the picture's CSS transform, after Motion's
    * (Premiere draws Motion last); a Crop is the picture's clip-path — a polygon, so a
    * Crop under a Transform crops the moved frame — and an Edge Feather its mask's ramps;
-   * a Gaussian Blur a CSS blur() (an SVG feGaussianBlur for one axis) of σ scaled to the
-   * monitor. Why CSS and not the grade worker: grade.js is another lane's, CSS is the
-   * compositor's (no frame upload, no shader pass, nothing on the main thread while it
-   * plays), it composes with Motion's own CSS, and it applies alike to the live video
-   * and the graded canvas. Not exact: a Crop
-   * ABOVE a Gaussian Blur shows its edge sharp (CSS blurs before it clips; the export
-   * blurs the edge); an Edge Feather under a Transform shows hard. */
+   * a Gaussian Blur and a Sharpen are drawn by the grade canvas's shader after the grade
+   * (wave 16, VFXPLAY; verdict 12 punch 2: grade.js's stages from `vfxLook`'s `stages`, THE
+   * formulas, at Playback Resolution while playing). They were a CSS blur() and an SVG
+   * feConvolveMatrix on the picture's layers, which the software compositor ran on every
+   * frame: a sharpened shot played at 5-7 fps. That CSS stays only where no grade canvas
+   * draws: the videos while the canvas is off (no WebGL, the grade toggled off with G) and
+   * the poster still. Crop and Transform stay CSS (the compositor's clip and transform, no
+   * filter pass, composed with Motion's own CSS). Not exact: a Crop ABOVE a Gaussian Blur
+   * shows its edge sharp (the blur is drawn before the clip; the export blurs the edge); an
+   * Edge Feather under a Transform shows hard. */
   const VFX_MIME = 'application/x-roughcut-video-effect';
   const VFX = {
     gaussian_blur: { name: 'Gaussian Blur', folder: 'Blur & Sharpen',
@@ -821,14 +824,19 @@
     if (cm.getAttribute('kernelMatrix') !== km) cm.setAttribute('kernelMatrix', km);
     return `url(#ecvs${i})`;
   }
-  function vfxLook(seg) {
+  /* `css` false (grade.js's per-frame `adjust`): the stages only, no SVG filter made or
+   * touched. `stages` is what grade.js's renderer draws after the grade (wave 16, VFXPLAY):
+   * {k: 'sharp', a: Amount/100} and {k: 'blur', sx, sy: σ in px of the 1920 × 1080 frame,
+   * less the Transforms above it}, top of the stack first; `filter` is their CSS stand-in for
+   * the layers no grade canvas draws (`apply`). */
+  function vfxLook(seg, css = true) {
     const list = seg && !isOv(seg) ? vfxList(seg).filter((e) => !e.off) : [];
     if (!list.length) return null;
     const sp = span(seg);
     const tt = sp ? clamp((TL().state.playhead || 0) - sp.start, 0, sp.dur) : 0;
     const val = (e, key) => { const k = keysOf(seg, `${key}@${e.id}`); return k ? interp(k, tt) : vfxValue(e, key); };
     let M = ID, poly = FRAME_POLY, clipped = false, op = 1, nb = 0, ns = 0;
-    const css = [], filters = [], masks = [];
+    const tf = [], filters = [], masks = [], stages = [];
     const cut = (P) => {
       const before = Math.abs(area(poly));
       poly = clipPoly(poly, P);
@@ -842,7 +850,7 @@
         if (px === 0.5 && py === 0.5 && s === 1 && r === 0) continue;
         const th = r * Math.PI / 180, co = Math.cos(th) * s, si = Math.sin(th) * s;
         const T = [co, si, -si, co, px * FW - (co * FW / 2 - si * FH / 2), py * FH - (si * FW / 2 + co * FH / 2)];
-        css.push(`translate(${r4((px - 0.5) * 100)}%, ${r4((py - 0.5) * 100)}%) rotate(${r4(r)}deg) scale(${r4(s)})`);
+        tf.push(`translate(${r4((px - 0.5) * 100)}%, ${r4((py - 0.5) * 100)}%) rotate(${r4(r)}deg) scale(${r4(s)})`);
         M = mul(T, M);
         const fr = back(FRAME_POLY);
         if (!fr) { poly = []; clipped = true; break; }
@@ -866,26 +874,32 @@
       } else if (e.kind === 'sharpen') {
         const amt = Math.max(0, val(e, 'amount'));
         if (amt <= 0.05) continue;
-        filters.push(sharpFilter(ns, amt));
+        stages.push({ k: 'sharp', a: r4(amt / 100) });
+        if (css) filters.push(sharpFilter(ns, amt));
         ns += 1;
       } else {
         const bl = Math.max(0, val(e, 'blurriness'));
         if (bl <= 0.05) continue;
-        const k = monitorWidth() / FW / Math.sqrt(Math.abs(M[0] * M[3] - M[1] * M[2]) || 1);
-        const sg = bl * k;
+        // σ in the frame's px, less the Transforms above it (the picture is drawn before them)
+        const sf = bl / Math.sqrt(Math.abs(M[0] * M[3] - M[1] * M[2]) || 1);
         const dim = vfxValue(e, 'dimensions');
-        filters.push(dim === 'both' ? `blur(${r4(sg)}px)`
-          : axisBlur(nb, dim === 'horizontal' ? sg : 0, dim === 'vertical' ? sg : 0));
+        stages.push({ k: 'blur', sx: dim === 'vertical' ? 0 : r4(sf), sy: dim === 'horizontal' ? 0 : r4(sf) });
+        if (css) {
+          const sg = sf * monitorWidth() / FW;
+          filters.push(dim === 'both' ? `blur(${r4(sg)}px)`
+            : axisBlur(nb, dim === 'horizontal' ? sg : 0, dim === 'vertical' ? sg : 0));
+        }
         nb += 1;
       }
     }
     const pct = (p) => `${r4(p[0] / FW * 100)}% ${r4(p[1] / FH * 100)}%`;
     return {
-      transform: css.reverse().join(' '),
+      transform: tf.reverse().join(' '),
       clip: !clipped ? '' : poly.length >= 3 ? `polygon(${poly.map(pct).join(', ')})` : 'polygon(0 0, 0 0, 0 0)',
       mask: masks.join(', '),
       filter: filters.join(' '),
       opacity: op,
+      stages,
     };
   }
 
@@ -906,14 +920,20 @@
     const po = ((c.opacity ?? 100) / 100) * (v ? v.opacity : 1);
     const picO = Math.abs(po - 1) > 1e-6 ? String(r4(po)) : '';
     const clip = v ? v.clip : '', mask = v ? v.mask : '', filter = v ? v.filter : '';
-    const key = `${transform}|${opacity}|${picT}|${picO}|${clip}|${mask}|${filter}`;
+    // Sharpen and Gaussian Blur (wave 16, VFXPLAY; verdict 12 punch 2): the grade canvas draws
+    // them in its shader (grade.js's stages), so the canvas never wears their CSS filter (the
+    // software compositor ran it on every frame: 5-7 fps), and the videos wear it only while
+    // the canvas is off (no WebGL, the grade toggled off with G) — and the poster still, at rest
+    const gc = document.getElementById('gradeCanvas');
+    const canvasOn = !!(gc && gc.classList.contains('on'));
+    const key = `${transform}|${opacity}|${picT}|${picO}|${clip}|${mask}|${filter}|${canvasOn}`;
     if (key !== lastStyle) {
       lastStyle = key;
       PICTURE.forEach((s) => document.querySelectorAll(s).forEach((el) => {
         el.style.transform = picT;
         el.style.opacity = picO;
         el.style.clipPath = clip;
-        el.style.filter = filter;
+        el.style.filter = el === gc || (canvasOn && el.tagName === 'VIDEO') ? '' : filter;
         el.style.webkitMaskImage = mask;
         el.style.maskImage = mask;
         el.style.webkitMaskComposite = mask ? 'source-in' : '';
@@ -984,6 +1004,11 @@
       const tt = sp ? clamp((TL().state.playhead || 0) - sp.start, 0, sp.dur) : 0;
       const vg = VIG_KEYS.map((k) => valAt(seg, k, tt));
       if (vg[0]) out.vig = vg;
+    }
+    // Sharpen / Gaussian Blur at the playhead (wave 16): grade.js draws them after the grade
+    if (seg && Array.isArray(c.vfx) && c.vfx.length) {
+      const v = vfxLook(seg, false);
+      if (v && v.stages.length) out.vfx = v.stages;
     }
     const gr = typeof g('gradeApi') === 'function' ? g('gradeApi')() : null;
     const lut = gr ? gr.lut : null;
