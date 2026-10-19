@@ -7893,7 +7893,7 @@ def media_proxy(name: str, request: Request) -> Response:
     if url:
         return Response(status_code=307, headers={
             "location": url, "cache-control": "no-store", "x-roughcut-media": kind})
-    eta = preview_eta(clip) if kind == "building" else None
+    eta = wait_eta(clip) if kind == "building" else None
     if kind == "building":
         hold_media(clip)                 # a monitor waits on this build: never paused
     raise HTTPException(503, f"{stem}: a playable preview is still being made",
@@ -9174,13 +9174,38 @@ def media_fallback(clip: str, wait_s: float = 0.0) -> tuple[str, str | None]:
 # lands. One head per clip, the newest; heads go HEAD_KEEP_S after the clip's preview.
 
 HEAD_PRE_S = 2.0         # a head starts this far before the clip time the monitor waits at
-HEAD_S = 12.0            # and runs this far past it (14 s of a 4K GoPro clip: ~4-6 s of GPU encode)
+# ...and runs this far past it. 8 s of a 4K HEVC GoPro clip is ~2.5 s of GPU encode here at
+# load 7-9 (14 s, the wave 14 head, was 3.2-3.8 s, and 7.3 s at load 16: verdict 11 punch 5,
+# a just-imported clip playing within 10 s at load ~8); the next head is asked HEAD_NEXT_S
+# (app.js, 6 s) before this one ends, so it is made while this one plays.
+HEAD_S = 6.0
 HEAD_FIRST_S = 2.0       # an asked whole preview waits this long for a head to be asked for first
 HEAD_WAIT_S = 15.0       # ...and then for that head's encode, at most this long
 HEAD_HINT_WAIT_S = 8.0   # the board's `?at=` hint is answered when its head is made, or after this
 HEAD_KEEP_S = 120.0      # a clip's heads outlive its whole preview this long (a buffer may hold one)
 HEAD_SLOTS = threading.BoundedSemaphore(1)    # one head encode at a time (each is seconds)
 HEAD_NAME = re.compile(r"^(?P<stem>[A-Za-z0-9._-]+)\.head(?P<a>\d+)\.(?P<v>[a-z0-9]+)\.mp4$")
+# What the wait line says while a head is what will play (verdict 11 punch 5: "~60 s", the
+# whole preview's estimate, over a clip that played ~11 s later from its head): a head's
+# encode is HEAD_START_S of start-up and the measured seconds per footage second
+# (`head_rate`, HEAD_RATE until one is measured: 14 s of a 4K HEVC GoPro clip took 3.8 s
+# on the GPU here at load 7), slower in proportion past HEAD_LOAD_CORES x the cores busy
+# (7.3 s at load 16 on 6 cores), and HEAD_PLAY_S more until its first frame is on screen
+# (~1 s here: the board's long-poll answers, the buffer loads the head and shows its frame).
+HEAD_START_S = 1.0
+HEAD_RATE = {True: 0.2, False: 1.0}
+HEAD_PLAY_S = 1.0
+HEAD_LOAD_CORES = 1.5
+HEAD_STOP_S = 0.3        # a head for a time the monitor left, stopped before the next starts
+
+
+def _head_load() -> float:
+    """How much slower than on an unhurried box a head encodes now: 1, or the 1-minute
+    load past HEAD_LOAD_CORES x the cores."""
+    try:
+        return max(1.0, os.getloadavg()[0] / (HEAD_LOAD_CORES * (os.cpu_count() or 1)))
+    except OSError:
+        return 1.0
 
 
 def head_dir() -> Path:
@@ -9246,6 +9271,38 @@ def _span_holds(clip: str, span: tuple[float, float], t: float) -> bool:
 def heads_building() -> bool:
     with MEDIA["lock"]:
         return any(str(k).startswith("head:") for k in MEDIA["building"])
+
+
+def _head_est(span: tuple[float, float]) -> float:
+    rate = MEDIA.get("head_rate") or HEAD_RATE[bool(MEDIA.get("gpu"))]
+    return HEAD_START_S + max(0.5, span[1] - span[0]) * rate * _head_load()
+
+
+def head_eta(clip: str) -> float | None:
+    """Seconds until the head being made for `clip` plays (its encode's estimate less how
+    long it has run, plus the head encode ahead of it in HEAD_SLOTS), or None when no head
+    is being made for it."""
+    stem = Path(clip).stem
+    now = time.monotonic()
+    with MEDIA["lock"]:
+        if f"head:{stem}" not in MEDIA["building"]:
+            return None
+        builds = {k: dict(v) for k, v in (MEDIA.get("head_build") or {}).items()}
+        want = (MEDIA.get("head_want") or {}).get(stem)
+    mine = builds.get(stem)
+    if mine is None:                       # claimed, its encode not set up yet
+        span = head_span(clip, want if want is not None else 0.0)
+        return round(_head_est(span) + HEAD_PLAY_S, 1)
+    if want is not None and not _span_holds(clip, mine["span"], want):
+        # the one being made is for a time the monitor has left (a seek): it is stopped,
+        # and the one for the newest time is made next (_build_heads)
+        return round(HEAD_STOP_S + _head_est(head_span(clip, want)) + HEAD_PLAY_S, 1)
+    if mine.get("t0") is not None:
+        return round(max(1.0, _head_est(mine["span"]) - (now - mine["t0"])) + HEAD_PLAY_S, 1)
+    # waiting for the one slot: the running head's time left, then its own
+    ahead = [max(0.0, _head_est(b["span"]) - (now - b["t0"])) for b in builds.values()
+             if b.get("t0") is not None]
+    return round(min(ahead, default=0.0) + _head_est(mine["span"]) + HEAD_PLAY_S, 1)
 
 
 def want_head(clip: str, t: float) -> None:
@@ -9324,15 +9381,24 @@ def _build_head(clip: str, src: Path, dest: Path, span: tuple[float, float], ori
     # this one alone (want_head) and a Stop all of them (stop_media)
     scope = procscope.Scope(f"head {stem}")
     with MEDIA["lock"]:
-        MEDIA.setdefault("head_build", {})[stem] = {"scope": scope, "span": span}
+        MEDIA.setdefault("head_build", {})[stem] = {"scope": scope, "span": span, "t0": None}
     try:
         with HEAD_SLOTS:
             t0 = time.monotonic()
+            with MEDIA["lock"]:
+                cur = (MEDIA.get("head_build") or {}).get(stem)
+                if cur is not None and cur.get("scope") is scope:
+                    cur["t0"] = t0           # the encode began: head_eta counts from here
             if scope.cancelled:
                 raise RuntimeError("stopped before it started")
             with procscope.active(scope), procscope.tagged(str(preview_path(stem))):
                 how = build_preview(src, dest, orient, span=span)
             took = time.monotonic() - t0
+            # what a head costs here, for the wait line's estimate (head_eta)
+            per = max(0.02, (took - HEAD_START_S) / max(0.5, span[1] - span[0]) / _head_load())
+            with MEDIA["lock"]:
+                old = MEDIA.get("head_rate")
+                MEDIA["head_rate"] = round(per if old is None else 0.6 * old + 0.4 * per, 4)
             meta = {"stem": Path(clip).stem, "clip": clip, "a": span[0], "b": span[1],
                     "picture_v": PICTURE_V, "orient": orient, "src": _range_src_id(src),
                     "how": how, "built_s": round(took, 2), "made": time.time()}
@@ -9920,6 +9986,20 @@ def media_preview(name: str, request: Request) -> Response:
     return ranged_file(preview_path(stem), request)
 
 
+def wait_eta(clip: str) -> float | None:
+    """How long a monitor waiting on `clip` waits: for the head being made for it (or, made
+    already where it waits, the moment the board takes it to play), else for its whole
+    preview, whichever comes first."""
+    h, p = head_eta(clip), preview_eta(clip)
+    if h is None:
+        stem = Path(clip).stem
+        with MEDIA["lock"]:
+            want = (MEDIA.get("head_want") or {}).get(stem)
+        if want is not None and head_covers(head_record(stem), want):
+            h = HEAD_PLAY_S
+    return h if h is not None and (p is None or h < p) else p
+
+
 @app.get("/media/status/{name}")
 def media_status(name: str, at: float | None = None) -> JSONResponse:
     """What `/media/proxy/<name>` would play now, without waiting — for a board that got
@@ -9951,8 +10031,10 @@ def media_status(name: str, at: float | None = None) -> JSONResponse:
         "head": {"url": head["url"], "a": head["a"], "b": head["b"]} if head else None,
         "head_building": f"head:{stem}" in MEDIA["building"] if kind == "building" else False,
         "clip": clip, "serves": kind,
-        # verdict 8: the board's wait line says how long ("preparing preview… CLIP_09 · ~N s")
-        "eta_s": preview_eta(clip) if kind == "building" else None,
+        # verdict 8: the board's wait line says how long ("preparing preview… CLIP_09 · ~N s"):
+        # the head's time while a head is what will play (verdict 11 punch 5), else the
+        # whole preview's
+        "eta_s": wait_eta(clip) if kind == "building" else None,
         "url": f"/media/proxy/{stem}.mp4" if kind == "proxy" else url,
         "ready": kind in ("proxy", "original", "range", "preview"),
         "proxy": (STATE["proxy_dir"] / f"{stem}.mp4").exists(),

@@ -774,3 +774,100 @@ def test_a_missing_generated_clip_says_what_is_wrong(building):
             assert not [e for e in errors if "Error" in e], errors
         finally:
             browser.close()
+
+
+# ---------------------------------------------------------------- the wait line's estimate
+#
+# Verdict 11 punch 5 (wave 15 BUDGET): a just-imported Killington clip played from its head
+# ~11 s after it went in, while the line said "~60 s" (the whole preview's estimate). While a
+# head is what will play, the line says the head's time: its encode's estimate (start-up +
+# the measured seconds per footage second) less how long it has run, and ~HEAD_PLAY_S once
+# it is made; a seek drops the old place's number until the server says the new one.
+
+HEAD_SLOW_S = 2.5            # the fixture's head encode, made to take a Killington head's time
+
+
+def _slow_heads(server, monkeypatch, delay_s: float = HEAD_SLOW_S) -> None:
+    real = server.build_preview
+
+    def slow(src, dest, orient, span=None):
+        if span is not None:
+            time.sleep(delay_s)
+        return real(src, dest, orient, span=span)
+
+    monkeypatch.setattr(server, "build_preview", slow)
+    # what the box measured a head at: the estimate this test checks against the real wait
+    # (on Killington the rate is measured from the heads it makes: head_rate)
+    span = server.head_span("CLIP_B.MP4", 1.0)
+    monkeypatch.setitem(server.MEDIA, "head_rate",
+                        max(0.02, (delay_s + 0.2 - server.HEAD_START_S) / (span[1] - span[0])))
+    monkeypatch.setattr(server, "_head_load", lambda: 1.0)     # the sleep is the encode here
+    # the whole preview: a long Killington clip's minute
+    monkeypatch.setitem(server.MEDIA, "preview_rate", 10.0)
+
+
+def test_the_status_says_the_heads_time_not_the_whole_previews(building, monkeypatch):
+    building["heads"]()
+    url, server = building["url"], building["server"]
+    _slow_heads(server, monkeypatch)
+    whole = _status(url, "CLIP_B")["eta_s"]
+    assert whole > 30, whole                          # the whole preview: ~a minute
+    asked = time.monotonic()
+    threading.Thread(target=_status, args=(url, "CLIP_B", 1.0), daemon=True).start()   # the hint
+    seen = []
+    while time.monotonic() - asked < 15:
+        st = _status(url, "CLIP_B")
+        seen.append((round(time.monotonic() - asked, 2), st["eta_s"], bool(st["head"])))
+        if st["head"]:
+            break
+        time.sleep(0.25)
+    real = time.monotonic() - asked
+    print(f"head in {real:.2f}s; eta_s as it was made: {seen}")
+    building_etas = [(t, e) for t, e, h in seen if not h and t >= 0.3]
+    assert building_etas, seen
+    for t, e in building_etas:
+        assert e < 10, f"at {t}s the status said the whole preview's {e}s"
+        assert (real - t) / 2 <= e <= 2 * (real - t) + server.HEAD_PLAY_S + 0.5, (t, e, real)
+    assert building_etas[-1][1] < building_etas[0][1] or len(building_etas) == 1, "no count down"
+    # made, where the board waits: it is about to play
+    st = _status(url, "CLIP_B")
+    assert st["head"] and st["eta_s"] <= 1.0, st
+
+
+def test_the_wait_line_says_how_long_the_head_takes(building, monkeypatch):
+    """On the board: a seek onto the building shot; the line's "~N s" is within 2x of the
+    wait until the shot's own frame is on the screen (from its head)."""
+    sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed")
+    import re
+    building["heads"]()
+    server = building["server"]
+    _slow_heads(server, monkeypatch)
+    with sync_api.sync_playwright() as pw:
+        browser, page, errors = _head_board(pw, building["url"])
+        try:
+            page.evaluate("""() => { const O = window.__wl = { lines: [], live: null };
+              let last = null; O.t0 = performance.now();
+              O.timer = setInterval(() => {
+                const w = document.querySelector('#monWait'); const s = w && !w.hidden ? w.textContent.trim() : '';
+                if (s !== last) { O.lines.push([performance.now() - O.t0, s]); last = s; }
+                const v = liveVideo();
+                if (O.live === null && v && /\\/media\\/head\\/CLIP_B/.test(decodeURIComponent(v.currentSrc || ''))
+                    && v.readyState >= 2 && !v._posterUp) O.live = performance.now() - O.t0;
+              }, 30); }""")
+            page.evaluate("cueAt(1, segs[1].in)")            # clip 1.0 s of CLIP_B
+            page.wait_for_function("window.__wl.live !== null", timeout=20000)
+            wl = page.evaluate("() => { clearInterval(window.__wl.timer); return window.__wl; }")
+            lines = [(round(t / 1000, 2), s) for t, s in wl["lines"]]
+            live = wl["live"] / 1000
+            said = [(t, int(m.group(1))) for t, s in lines
+                    if (m := re.search(r"CLIP_B · ~(\d+) s", s))]
+            print(f"picture from the head at {live:.2f}s; the line said {lines}")
+            assert said, lines
+            t, n = said[0]
+            assert t <= 1.0, f"no estimate on the line until {t}s"
+            assert n <= 10, f"the line said the whole preview's ~{n} s"
+            real = live - t
+            assert n / 2 <= real <= 2 * n, f"the line said ~{n} s at {t}s; the picture came {real:.2f}s later"
+            assert not [e for e in errors if "Error" in e], errors
+        finally:
+            browser.close()

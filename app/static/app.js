@@ -1505,8 +1505,14 @@ function mediaWaitFor(v) {
   const src = v.dataset.src;
   if (v.error && v._head) v._head = null;  // a head that would not play: wait for the clip
   if (v._waitStop && v._waitFor === src) {
-    if (v === liveVideo()) { posterUp(v); waitLine(segs[player.idx], v._status); }
+    const hint = v._hint;
     headHint(v, src);                      // a seek while waiting: its head where it is now
+    // Verdict 11 punch 5: the line's "~N s" was for the old place (its head, or the whole
+    // preview), so it goes at once and the server's estimate for the new place replaces it
+    const moved = v._hint !== hint;
+    if (moved && v._status) v._status = { ...v._status, eta_s: null };
+    if (v === liveVideo()) { posterUp(v); waitLine(segs[player.idx], v._status); }
+    if (moved) waitEtaSoon(v, src);
     return;
   }
   if (v._waitStop) v._waitStop();
@@ -1521,6 +1527,7 @@ function mediaWaitFor(v) {
     waitLine(segs[player.idx], v._status);
   }
   headHint(v, src);
+  waitEtaSoon(v, src);                     // the estimate once the server knows where it waits
   v._waitStop = dock.mediaWait(src, () => {
     v._waitStop = null;
     v._status = null;
@@ -1557,10 +1564,29 @@ function mediaWaitFor(v) {
       if (player.off) { player.off = null; pauseCut(); monWait(true); el.textContent = why; }
     }
   }, (j) => {
+    // an answer from before the server had the hint (the first look races it) has the
+    // whole preview's time, not the head's: no number until waitEtaSoon's look
+    if (j && !j.head_building && v._hint && performance.now() - v._hint.ms < WAIT_ETA_MS) j = { ...j, eta_s: null };
     v._status = j;
     if (v === liveVideo() && v.dataset.src === src) waitLine(segs[player.idx], j);
     if (j && j.head && v.dataset.src === src) headLoad(v, src, j.head);
   }, 1500);
+}
+
+/* The wait line's estimate for where the buffer now waits: asked WAIT_ETA_MS after the head
+ * hint (the server has the head under way by then, and says its time rather than the whole
+ * preview's), instead of at the next of the 1.5 s looks. */
+const WAIT_ETA_MS = 300;
+function waitEtaSoon(v, src) {
+  clearTimeout(v._etaSoon);
+  v._etaSoon = setTimeout(() => {
+    if (!v._waitStop || v._waitFor !== src || v.dataset.src !== src) return;
+    fetch(statusUrl(src), { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).then((j) => {
+      if (!j || !v._waitStop || v._waitFor !== src || v.dataset.src !== src || j.serves !== 'building') return;
+      v._status = j;
+      if (v === liveVideo()) waitLine(segs[player.idx], j);
+    }).catch(() => {});
+  }, WAIT_ETA_MS);
 }
 
 /* ---------------------------------------------------------------- a clip's head
