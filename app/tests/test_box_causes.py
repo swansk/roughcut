@@ -101,3 +101,63 @@ def test_a_hold_and_a_slow_request_carry_what_the_box_did(live):
         keep.clear()
         for r in added:
             server.app.router.routes.remove(r)
+
+
+def test_the_allocators_free_memory_goes_back_to_the_kernel():
+    """The pass's freed buffers (range reads, sidecar JSON, tool output) are handed back
+    (`mem_trim`) rather than kept resident for the kernel to swap out and the next burst
+    to fault back in with the GIL held."""
+    import threading
+    import server
+    if server._LIBC is None:
+        pytest.skip("not glibc")
+    assert server.MEM["arenas"] == server.MALLOC_ARENAS     # set at import, before threads
+    keep: list = []
+    drop: list = []
+
+    def churn():                      # on a worker thread, as a sync handler's buffers are
+        for i in range(3000):
+            (keep if i % 2 else drop).append(bytes(64 * 1024))    # malloc's heap, not mmap
+    th = threading.Thread(target=churn)
+    th.start()
+    th.join()
+    before = server.mem_stats()
+    drop.clear()                      # holes between the kept blocks: free() keeps them
+    freed = server.mem_trim()
+    after = server.mem_stats()
+    keep.clear()
+    print("trim freed", freed, "MB;", before, after)
+    assert freed is not None and freed >= 40, (freed, before, after)
+    assert after["trims"] == before["trims"] + 1 and after["last_trim_mb"] >= 40, after
+    for k in ("arena_mb", "in_use_mb", "free_mb", "mmap_mb"):
+        assert k in before, before
+
+
+def test_what_the_loop_runs_on_is_locked_resident_and_the_arenas_are_not():
+    import ctypes
+    import server
+    if server._LIBC is None:
+        pytest.skip("not glibc")
+    try:
+        locked = server.lock_resident()
+        if locked is None:
+            pytest.skip("RLIMIT_MEMLOCK refuses it here")
+        st = server.mem_stats()
+        print("locked", locked, "MB;", st)
+        assert locked >= 10 and st["locked_resident_mb"] >= 10, st
+        # the interpreter's own pages are among them; a thread arena's are not
+        assert st["locked_resident_mb"] <= server._rss_mb(), st
+        keep = []
+
+        def churn():
+            keep.extend(bytes(64 * 1024) for _ in range(800))   # a thread arena's
+        import threading
+        th = threading.Thread(target=churn)
+        th.start()
+        th.join()
+        grew = server.mem_stats()["locked_resident_mb"]
+        assert grew - st["locked_resident_mb"] < 20, (st, grew)  # 50 MB allocated, not locked
+        keep.clear()
+    finally:
+        ctypes.CDLL("libc.so.6").munlockall()
+        server.MEM["locked_mb"] = None

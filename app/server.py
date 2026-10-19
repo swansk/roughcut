@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import ctypes
 import gc
 import json
 import math
@@ -85,6 +86,191 @@ from roughcut import media as mediamod  # noqa: E402
 # Stop means stop (verdict 3, punch 5): a job thread inside a `procscope.active` block
 # starts its tools in their own process groups, and its cancel kills them.
 procscope.install()
+
+# ---------------------------------------------------------------- the server's own memory
+#
+# Verdict 12 punch 7: on Killington the box swapped during the first pass, and the board's
+# holds came with the loop barely on CPU. Measured (wave 16, lane SRVBUDGET2): the server's
+# own RSS went from 105 MB to 330 MB through a pass, ~250 MB of it in glibc's per-thread
+# malloc arenas (sixteen 64 MB arenas, 17-39 MB resident each; 9 700 Python objects live
+# beside the 69 000 frozen at start) — freed buffers (range reads' MiB chunks, sidecar
+# JSON, tool output) kept for a reuse that comes minutes later. Those cold pages are what
+# the kernel swapped out (53 MB of the server), and the next burst faulted them back in
+# with the GIL held: one major fault on a swapping box held the loop 100-700 ms (`cause`
+# "faults" in /api/debug/slow). So the threads share MALLOC_ARENAS arenas (the GIL
+# serialises nearly every allocation anyway), set before any thread exists, and every
+# MEM_TRIM_S what is free goes back to the kernel (`malloc_trim`, off the GIL).
+MALLOC_ARENAS = 2
+MEM_TRIM_S = 20.0
+M_ARENA_MAX = -8
+
+
+def _glibc():
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        lib = ctypes.CDLL("libc.so.6")
+        lib.malloc_trim.argtypes = [ctypes.c_size_t]
+        lib.mallopt.argtypes = [ctypes.c_int, ctypes.c_int]
+        return lib
+    except (OSError, AttributeError):          # not glibc (musl, macOS): nothing to tune
+        return None
+
+
+_LIBC = _glibc()
+MEM: dict = {"arenas": None, "trims": 0, "trimmed_mb": 0.0, "last_trim_mb": None, "thread": None,
+             "locked_mb": None}
+try:
+    _ARENAS = int(os.environ.get("ROUGHCUT_MALLOC_ARENAS", MALLOC_ARENAS))   # 0: glibc's own
+except ValueError:
+    _ARENAS = MALLOC_ARENAS
+if _LIBC is not None and _ARENAS > 0:
+    try:
+        if _LIBC.mallopt(M_ARENA_MAX, _ARENAS):
+            MEM["arenas"] = _ARENAS
+    except (OSError, ctypes.ArgumentError):
+        pass
+
+
+def _rss_mb() -> float | None:
+    try:
+        with open("/proc/self/statm", "rb") as fh:
+            return int(fh.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 2**20
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def mem_trim() -> float | None:
+    """Hand the allocator's free memory back to the kernel now; returns the MB the RSS
+    fell by (None where there is no glibc). ctypes drops the GIL for the call."""
+    if _LIBC is None:
+        return None
+    before = _rss_mb()
+    try:
+        _LIBC.malloc_trim(0)
+    except (OSError, ctypes.ArgumentError):
+        return None
+    after = _rss_mb()
+    MEM["trims"] += 1
+    if before is not None and after is not None:
+        MEM["last_trim_mb"] = round(before - after, 1)
+        MEM["trimmed_mb"] = round(MEM["trimmed_mb"] + max(0.0, before - after), 1)
+        return before - after
+    return None
+
+
+def _mem_trim_loop() -> None:
+    while True:
+        time.sleep(MEM_TRIM_S)
+        mem_trim()
+        if MEM.get("locked_mb"):
+            lock_resident(heap=False)
+
+
+def start_mem_trim() -> None:
+    t = MEM.get("thread")
+    if _LIBC is None or (t is not None and t.is_alive()):
+        return
+    t = MEM["thread"] = threading.Thread(target=_mem_trim_loop, name="mem trim", daemon=True)
+    t.start()
+
+
+# ...and what the loop runs on stays in memory. Trimming leaves nothing cold in the arenas,
+# but the interpreter, the modules and every object frozen at start (the code a poster
+# burst at the pass's end runs, unused for minutes) are as swappable, and the judge's holds
+# at that burst were 0.4-0.9 s with the process all but off the CPU. So once the server is
+# configured, before it serves, those pages are locked as they are (`mlock2`, MLOCK_ONFAULT:
+# nothing not already resident is read in): the main heap, the main thread's stack, the
+# small anonymous maps (the allocator's 1 MiB object arenas) and the shared libraries' —
+# never a thread's 64 MB malloc arena, a thread stack or a big buffer, which the trim hands
+# back instead; and every MEM_TRIM_S the object arenas Python has made since (Killington,
+# wave 16: a 497 ms garbage collection that faulted 119 pages back in). ~120 MB mapped;
+# within RLIMIT_MEMLOCK or not at all (ROUGHCUT_MLOCK=0: off).
+MLOCK_ONFAULT = 1
+LOCK_SMALL_MAP = 4 << 20
+GLIBC_HEAP_MAX = 64 << 20       # a 64-bit glibc's thread arena heap (HEAP_MAX_SIZE)
+
+
+def lock_resident(heap: bool = True) -> float | None:
+    """Lock the pages resident now that the loop runs on (see above); returns the MB of
+    mappings locked, None where it cannot be done (not glibc, off, or refused). Asked
+    again (`heap` False: the trim thread, every MEM_TRIM_S) it locks what has been mapped
+    since — the object arenas Python made since, a library imported late — and leaves the
+    main heap's growth to the trim."""
+    if _LIBC is None or os.environ.get("ROUGHCUT_MLOCK", "1") == "0":
+        return None
+    try:
+        mlock2 = _LIBC.mlock2
+        mlock2.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+        maps = Path("/proc/self/maps").read_text().splitlines()
+    except (AttributeError, OSError):
+        return None
+    exe = os.path.realpath(sys.executable)
+    vmas = []
+    for line in maps:
+        parts = line.split(maxsplit=5)
+        if len(parts) < 5:
+            continue
+        a, b = (int(x, 16) for x in parts[0].split("-"))
+        vmas.append((a, b, parts[1], parts[5].strip() if len(parts) > 5 else ""))
+    # glibc's thread arenas: 64 MB windows, each starting on a 64 MB boundary
+    win = GLIBC_HEAP_MAX
+    heaps = {a for a, _b, _p, name in vmas if not name and a % win == 0}
+    done = 0
+    for a, b, perms, name in vmas:
+        if perms.startswith("---"):
+            continue                                  # a guard or a reservation
+        if name in ("[heap]", "[stack]"):
+            if not heap:
+                continue
+        elif not name:
+            if b - a >= LOCK_SMALL_MAP or (a - a % win) in heaps:
+                continue                              # a malloc arena, a thread stack, a buffer
+        elif not (name == exe or ".so" in Path(name).name):
+            continue                                  # a data file someone mapped: not code
+        if mlock2(a, b - a, MLOCK_ONFAULT) != 0:
+            break                                     # past RLIMIT_MEMLOCK: what is locked stays
+        done += b - a
+    if heap:
+        MEM["locked_mb"] = round(done / 2**20, 1) if done else None
+    else:
+        MEM["relocks"] = MEM.get("relocks", 0) + 1
+    return round(done / 2**20, 1) if done else None
+
+
+class _MallInfo2(ctypes.Structure):
+    _fields_ = [(k, ctypes.c_size_t) for k in ("arena", "ordblks", "smblks", "hblks", "hblkhd",
+                                               "usmblks", "fsmblks", "uordblks", "fordblks",
+                                               "keepcost")]
+
+
+def mem_stats() -> dict:
+    """The allocator's own account (glibc `mallinfo2`): MB in its arenas, in use and free,
+    and in direct mmaps; the arena cap and the trims so far; what is locked (`lock_resident`)
+    and resident locked, and the process's swap."""
+    out: dict = {"arenas_max": MEM["arenas"], "trims": MEM["trims"],
+                 "trimmed_mb": MEM["trimmed_mb"], "last_trim_mb": MEM["last_trim_mb"],
+                 "locked_mb": MEM.get("locked_mb"), "relocks": MEM.get("relocks", 0)}
+    try:
+        for line in Path("/proc/self/smaps_rollup").read_text().splitlines():
+            k, _, v = line.partition(":")
+            if k in ("Locked", "Swap"):
+                out[f"{k.lower()}_resident_mb" if k == "Locked" else "swap_mb"] = \
+                    round(int(v.split()[0]) / 1024, 1)
+    except (OSError, ValueError, IndexError):
+        pass
+    if _LIBC is None:
+        return out
+    try:
+        f = _LIBC.mallinfo2
+        f.restype = _MallInfo2
+        mi = f()
+    except (AttributeError, OSError):
+        return out
+    mb = 2**20
+    out.update(arena_mb=round(mi.arena / mb, 1), in_use_mb=round(mi.uordblks / mb, 1),
+               free_mb=round(mi.fordblks / mb, 1), mmap_mb=round(mi.hblkhd / mb, 1))
+    return out
 
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent / "research" / "tools"
@@ -2192,7 +2378,8 @@ def api_debug_slow(heap: int = 0) -> JSONResponse:
     slowest request (`slowest`) and slowest `/api/` request (`slowest_api`) seen; the
     budget (`budget`: a request's first byte within 300 ms, the loop never held 200 ms)
     with the last 50 over it (`over_budget`, holds with `where`) and the longest hold
-    (`slowest_loop`); `gc` (collections, their time, the longest) and `rss_mb`. Each row
+    (`slowest_loop`); `gc` (collections, their time, the longest), `rss_mb` and `malloc`
+    (the allocator's arenas, in use / free, and its trims: `mem_stats`). Each row
     over the budget has `cause` (`_cause`) with the loop's run-queue wait (`rq_ms`), the
     major faults (`majflt`) and the GC time (`gc_ms`) over its span. `?heap=1` adds the
     commonest live object types (a walk of every object, the GIL held: a look, not a poll)."""
@@ -2206,7 +2393,7 @@ def api_debug_slow(heap: int = 0) -> JSONResponse:
                          "gc": {"n": GC_WATCH["n"], "ms": round(GC_WATCH["ms"], 1),
                                 "longest": GC_WATCH["longest"], "count": list(gc.get_count()),
                                 "frozen": gc.get_freeze_count()},
-                         "rss_mb": rss,
+                         "rss_mb": rss, "malloc": mem_stats(),
                          **({"heap": _heap_types()} if heap else {}),
                          "slowest_api": SLOWEST["api"], "slowest_loop": SLOWEST["loop"],
                          "budget": {"request_ms": REQUEST_BUDGET_MS, "loop_ms": LOOP_BUDGET_MS},
@@ -14050,6 +14237,11 @@ def main() -> int:
     # garbage: 44-58 ms a collection, 0 once frozen). What is alive now is kept out of it.
     gc.collect()
     gc.freeze()
+    # wave 16: what the loop runs on stays resident; the allocator's free memory goes back
+    locked = lock_resident()
+    if locked:
+        print(f"  locked {locked:.0f} MB the event loop runs on (never swapped out)", flush=True)
+    start_mem_trim()
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     return 0
 
